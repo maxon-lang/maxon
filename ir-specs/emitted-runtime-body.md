@@ -23420,7 +23420,7 @@ func @__sched_init_procs {
     x64.callDirect __gt_preempt_self_register
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r12 + 576], rax
-    x64.storeBaseDispReg.word64 [rbx + 184], r12
+    x64.storeBaseDispReg.word64 [rbx + 176], r12
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
     x64.movRegImm32 rdx, 4096
     x64.movRegImm32 rcx, 0
@@ -23443,7 +23443,7 @@ func @__sched_init_procs {
     x64.popReg rbp
     x64.ret
   pbody:
-    x64.movRegImm32 rcx, 2400
+    x64.movRegImm32 rcx, 2392
     x64.callDirect __slab_alloc
     x64.movRegReg r13, r8
     x64.leaRegGlobal rax, __sched_procs
@@ -23486,9 +23486,8 @@ func @__sched_init_procs {
     x64.storeBaseDispReg.word64 [r13 + 160], rax
     x64.leaRegGlobal rax, __sched_pidle
     x64.storeBaseDispReg.word64 [rax + 0], r13
-    x64.movRegImm32 rax, 1
-    x64.leaRegGlobal rcx, __sched_npidle
-    x64.lock add [rcx], rax
+    x64.leaRegGlobal rax, __sched_npidle
+    x64.aluBaseDispImm32.add [rax + 0], 1
     x64.jmp pnext
   pidleputregain:
     x64.loadRegBaseDisp.word64 rcx, [rax + 648]
@@ -26629,16 +26628,17 @@ func @__gt_cell_alloc {
 }
 ```
 
-<!-- test: a-wake-with-no-idle-processor-takes-no-lock -->
-**A PUBLISH THAT HAS NO IDLE PROCESSOR TO WAKE TAKES NO LOCK — Go's `wakep` early-out.** Every green-thread
+<!-- test: a-wake-reserves-its-spinner-without-first-looking-for-an-idle-processor -->
+**A WAKE RESERVES ITS SPINNER BEFORE IT LOOKS FOR AN IDLE PROCESSOR — Go's `wakep`.** Every green-thread
 publish ends in `__sched_wake_or_spawn`, which decides whether another machine must be started for the work
-just published. A machine can only be started on an idle processor, so when `__sched_npidle` reads 0 there
-is nothing to do, and the body returns after one unlocked load, before it reserves a spinner and before
-`__sched_startm` takes `__sched_lock` to look for a processor it would not find. At one processor that is
-every publish of the program's life.
+just published. It reads `__sched_nmspinning` and returns when a machine is already searching; otherwise it
+reserves the one spinning machine this wake may start with a compare-and-swap of that count from 0 to 1, and
+only then calls `__sched_startm`, which takes `__sched_lock` and looks for an idle processor. It reads
+`__sched_npidle` nowhere: a reservation that finds no idle processor gives its unit back and raises
+`__sched_needspinning` for the machine that parks next.
 
-What this pin shows is the order: the `__sched_npidle` load and its test come before the spinner
-reservation's compare-and-swap and before any call that takes `__sched_lock`.
+What this pin shows is the order: the `__sched_nmspinning` load and the reservation's compare-and-swap come
+first, the call that takes `__sched_lock` follows them, and no read of `__sched_npidle` precedes either.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -26845,7 +26845,7 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.jmp tryerr
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-wake-with-no-idle-processor-takes-no-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-wake-reserves-its-spinner-without-first-looking-for-an-idle-processor.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 48
@@ -26914,11 +26914,6 @@ func @__sched_wake_or_spawn {
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, done
-  idletest:
-    x64.leaRegGlobal rax, __sched_npidle
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, done
   spintest:
     x64.leaRegGlobal rax, __sched_nmspinning
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -27114,7 +27109,7 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.jmp tryerr
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-wake-with-no-idle-processor-takes-no-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-wake-reserves-its-spinner-without-first-looking-for-an-idle-processor.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 48
@@ -27183,11 +27178,6 @@ func @__sched_wake_or_spawn {
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, done
-  idletest:
-    x64.leaRegGlobal rax, __sched_npidle
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, done
   spintest:
     x64.leaRegGlobal rax, __sched_nmspinning
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -27380,7 +27370,7 @@ func @main {
     arm64.movRegReg x0, x1
     arm64.b tryerr
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at a-wake-with-no-idle-processor-takes-no-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-wake-reserves-its-spinner-without-first-looking-for-an-idle-processor.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -27444,11 +27434,6 @@ func @__sched_wake_or_spawn {
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.cmp x0, 0
     arm64.b.ne done
-  idletest:
-    arm64.leaGlobal x0, __sched_npidle
-    arm64.ldar.word64 x0, [x0]
-    arm64.cmp x0, 0
-    arm64.b.eq done
   spintest:
     arm64.leaGlobal x0, __sched_nmspinning
     arm64.ldar.word64 x0, [x0]
@@ -27643,7 +27628,7 @@ func @main {
     arm64.movRegReg x0, x1
     arm64.b tryerr
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at a-wake-with-no-idle-processor-takes-no-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-wake-reserves-its-spinner-without-first-looking-for-an-idle-processor.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -27707,11 +27692,6 @@ func @__sched_wake_or_spawn {
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.cmp x0, 0
     arm64.b.ne done
-  idletest:
-    arm64.leaGlobal x0, __sched_npidle
-    arm64.ldar.word64 x0, [x0]
-    arm64.cmp x0, 0
-    arm64.b.eq done
   spintest:
     arm64.leaGlobal x0, __sched_nmspinning
     arm64.ldar.word64 x0, [x0]
@@ -28132,28 +28112,28 @@ func @__gt_strand_next {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rbx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#61
-  __rl_owned#60:
+    x64.jcc notEqual, __rl_slow#68
+  __rl_owned#67:
     x64.storeBaseDispReg.word64 [rbx + 8], rax
-  __rl_cont#59:
+  __rl_cont#66:
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_coro_dequeue
     x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#63
-  __rl_outermost#64:
+    x64.jcc notEqual, __rl_nested#70
+  __rl_outermost#71:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rbx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#62
-    x64.jmp __rl_slow#65
-  __rl_nested#63:
+    x64.jcc equal, __rl_cont#69
+    x64.jmp __rl_slow#72
+  __rl_nested#70:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rbx + 16], rax
-  __rl_cont#62:
+  __rl_cont#69:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -28226,7 +28206,7 @@ func @__gt_strand_next {
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, tshhandover
     x64.jmp tshexamine
-  __rl_owned#67:
+  __rl_owned#74:
     x64.storeBaseDispReg.word64 [rax + 8], rdx
     x64.jmp tshputback
   tshhandover:
@@ -28237,68 +28217,118 @@ func @__gt_strand_next {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rl_owned#77:
+  __rl_owned#84:
     x64.storeBaseDispReg.word64 [rax + 8], rdx
     x64.jmp tshputback
-  __rl_owned#70:
+  __rl_owned#77:
     x64.storeBaseDispReg.word64 [rbx + 8], rax
-    x64.jmp __rl_cont#69
-  __rl_outermost#74:
+    x64.jmp __rl_cont#76
+  __rl_outermost#81:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rbx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#72
-    x64.jmp __rl_slow#75
-  __rl_nested#73:
-    x64.leaRegRegImm32 rax, rax, -1
-    x64.storeBaseDispReg.word64 [rbx + 16], rax
-    x64.jmp __rl_cont#72
-  __rl_outermost#81:
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [rcx + 8], rax
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rcx], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
     x64.jcc equal, __rl_cont#79
     x64.jmp __rl_slow#82
   __rl_nested#80:
     x64.leaRegRegImm32 rax, rax, -1
-    x64.storeBaseDispReg.word64 [rcx + 16], rax
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
     x64.jmp __rl_cont#79
-  __rl_outermost#99:
+  __rl_outermost#88:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#97
-    x64.jmp __rl_slow#100
-  __rl_nested#98:
+    x64.jcc equal, __rl_cont#86
+    x64.jmp __rl_slow#89
+  __rl_nested#87:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rax
-    x64.jmp __rl_cont#97
+    x64.jmp __rl_cont#86
+  hpkeepunlist:
+    x64.leaRegGlobal rax, __sched_nmidle
+    x64.aluBaseDispImm32.add [rax + 0], -1
+    x64.loadRegBaseDisp.word64 rax, [r12 + 600]
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 632]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, munlinkinner#61
+  munlinkhead#60:
+    x64.leaRegGlobal rdx, __sched_midle
+    x64.storeBaseDispReg.word64 [rdx + 0], rax
+    x64.jmp munlinkmend#62
+  munlinkinner#61:
+    x64.storeBaseDispReg.word64 [rcx + 600], rax
+  munlinkmend#62:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, munlinkclear#64
+  munlinknext#63:
+    x64.storeBaseDispReg.word64 [rax + 632], rcx
+  munlinkclear#64:
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r12 + 600], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r12 + 632], rax
+  hpkeepwake:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 560]
+    x64.iatCall 19
+    x64.leaRegGlobal rcx, __sched_lock
+    x64.loadRegBaseDisp.word64 rax, [rcx + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __rl_nested#113
+  __rl_outermost#114:
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.movRegImm32 rdx, 0
+    x64.xchg8 [rcx], rdx <- rdx
+    x64.cmpRegImm32 rdx, 1
+    x64.jcc equal, __rl_cont#112
+    x64.jmp __rl_slow#115
+  __rl_nested#113:
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.storeBaseDispReg.word64 [rcx + 16], rax
+  __rl_cont#112:
+    x64.leaRegGlobal rax, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegGlobal rcx, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.mov rcx, gs:[rcx]
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg notEqual, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg notEqual, rdx
+    x64.andRegReg rax, rax, rdx
+    x64.movRegImm32 rdx, 0
+    x64.subRegReg rdx, rdx, rax
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.leaRegRegImm32 rcx, rcx, 656
+    x64.leaRegGlobal rsi, __sched_lock_depth_sink
+    x64.andRegReg rcx, rcx, rdx
+    x64.andRegReg rsi, rsi, rax
+    x64.orRegReg rcx, rcx, rsi
+    x64.aluBaseDispImm32.add [rcx + 0], -1
+    x64.jmp tshbackoff
   timerdueask:
     x64.callDirect __gt_now_ns
     x64.cmpRegReg r12, r8
     x64.jcc lessEqual, tshfiredue
     x64.jmp tshgiveupstrand
-  __rl_owned#91:
+  __rl_owned#98:
     x64.storeBaseDispReg.word64 [rcx + 8], rax
-    x64.jmp __rl_cont#90
-  __rl_outermost#95:
+    x64.jmp __rl_cont#97
+  __rl_outermost#102:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#93
-    x64.jmp __rl_slow#96
-  __rl_nested#94:
+    x64.jcc equal, __rl_cont#100
+    x64.jmp __rl_slow#103
+  __rl_nested#101:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rax
-    x64.jmp __rl_cont#93
+    x64.jmp __rl_cont#100
   hpheldwork:
     x64.leaRegRdata rcx, [rip + __abort_msg_95]  ; "fatal error: runtime abort 95 (schedulerIdledAProcessorHoldingWork)\x0a"
     x64.movRegImm32 rdx, 68
@@ -28324,9 +28354,8 @@ func @__gt_strand_next {
     x64.storeBaseDispReg.word64 [rcx + 160], rax
     x64.leaRegGlobal rax, __sched_pidle
     x64.storeBaseDispReg.word64 [rax + 0], rcx
-    x64.movRegImm32 rax, 1
-    x64.leaRegGlobal rcx, __sched_npidle
-    x64.lock add [rcx], rax
+    x64.leaRegGlobal rax, __sched_npidle
+    x64.aluBaseDispImm32.add [rax + 0], 1
     x64.jmp pidleputplaced
   pidleputregain:
     x64.loadRegBaseDisp.word64 rdx, [rax + 648]
@@ -28341,19 +28370,19 @@ func @__gt_strand_next {
     x64.leaRegGlobal rcx, __sched_lock
     x64.loadRegBaseDisp.word64 rax, [rcx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#106
-  __rl_outermost#107:
+    x64.jcc notEqual, __rl_nested#109
+  __rl_outermost#110:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#105
-    x64.jmp __rl_slow#108
-  __rl_nested#106:
+    x64.jcc equal, __rl_cont#108
+    x64.jmp __rl_slow#111
+  __rl_nested#109:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rax
-  __rl_cont#105:
+  __rl_cont#108:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -28377,43 +28406,42 @@ func @__gt_strand_next {
     x64.iatCall 19
     x64.callDirect __np_break
     x64.jmp tshgavestrand
-  munlinkhead:
+  munlinkhead#48:
     x64.leaRegGlobal rdi, __sched_midle
     x64.storeBaseDispReg.word64 [rdi + 0], rdx
-    x64.jmp munlinkmend
-  munlinkinner:
+    x64.jmp munlinkmend#50
+  munlinkinner#49:
     x64.storeBaseDispReg.word64 [rsi + 600], rdx
-  munlinkmend:
+  munlinkmend#50:
     x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, munlinkclear
-  munlinknext:
+    x64.jcc equal, munlinkclear#52
+  munlinknext#51:
     x64.storeBaseDispReg.word64 [rdx + 632], rsi
-  munlinkclear:
+  munlinkclear#52:
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [r12 + 600], rdx
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [r12 + 632], rdx
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [rax + 0], rdx
-    x64.storeBaseDispReg.word64 [rcx + 184], rdx
-    x64.storeBaseDispReg.word64 [rcx + 176], rax
+    x64.storeBaseDispReg.word64 [rcx + 176], rdx
     x64.storeBaseDispReg.word64 [r12 + 576], rcx
     x64.leaRegGlobal rcx, __sched_lock
     x64.loadRegBaseDisp.word64 rax, [rcx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#102
-  __rl_outermost#103:
+    x64.jcc notEqual, __rl_nested#105
+  __rl_outermost#106:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#101
-    x64.jmp __rl_slow#104
-  __rl_nested#102:
+    x64.jcc equal, __rl_cont#104
+    x64.jmp __rl_slow#107
+  __rl_nested#105:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rax
-  __rl_cont#101:
+  __rl_cont#104:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -28436,29 +28464,29 @@ func @__gt_strand_next {
     x64.loadRegBaseDisp.word64 rcx, [r12 + 560]
     x64.iatCall 19
     x64.jmp tshgavestrand
-  __rl_owned#84:
+  __rl_owned#91:
     x64.storeBaseDispReg.word64 [rcx + 8], rax
-    x64.jmp __rl_cont#83
-  __rl_outermost#88:
+    x64.jmp __rl_cont#90
+  __rl_outermost#95:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#86
-    x64.jmp __rl_slow#89
-  __rl_nested#87:
+    x64.jcc equal, __rl_cont#93
+    x64.jmp __rl_slow#96
+  __rl_nested#94:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rax
-    x64.jmp __rl_cont#86
-  __rl_slow#61:
+    x64.jmp __rl_cont#93
+  __rl_slow#68:
     x64.movRegReg rcx, rbx
     x64.callDirect __rtlock_enter_slow
-    x64.jmp __rl_cont#59
-  __rl_slow#65:
+    x64.jmp __rl_cont#66
+  __rl_slow#72:
     x64.movRegReg rcx, rbx
     x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#62
+    x64.jmp __rl_cont#69
   tshexamine:
     x64.loadRegBaseDisp.word64 rax, [rcx + 464]
     x64.cmpRegImm32 rax, 1
@@ -28489,8 +28517,8 @@ func @__gt_strand_next {
     x64.movRegImm32 rsi, 1
     x64.xchg8 [rax], rsi <- rsi
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, __rl_owned#67
-  __rl_slow#68:
+    x64.jcc equal, __rl_owned#74
+  __rl_slow#75:
     x64.storeSlotReg slot0, rcx
     x64.movRegReg rcx, rax
     x64.movRegReg rdx, rsi
@@ -28533,8 +28561,8 @@ func @__gt_strand_next {
     x64.movRegImm32 rsi, 1
     x64.xchg8 [rax], rsi <- rsi
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, __rl_owned#77
-  __rl_slow#78:
+    x64.jcc equal, __rl_owned#84
+  __rl_slow#85:
     x64.storeSlotReg slot0, rcx
     x64.movRegReg rcx, rax
     x64.movRegReg rdx, rsi
@@ -28566,22 +28594,22 @@ func @__gt_strand_next {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rbx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, __rl_owned#70
-  __rl_slow#71:
+    x64.jcc equal, __rl_owned#77
+  __rl_slow#78:
     x64.storeSlotReg slot0, rcx
     x64.movRegReg rcx, rbx
     x64.callDirect __rtlock_enter_slow
     x64.loadRegSlot rcx, slot0
-  __rl_cont#69:
+  __rl_cont#76:
     x64.callDirect __gt_coro_enqueue
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __rl_outermost#74
-    x64.jmp __rl_nested#73
-  __rl_slow#75:
+    x64.jcc equal, __rl_outermost#81
+    x64.jmp __rl_nested#80
+  __rl_slow#82:
     x64.movRegReg rcx, rbx
     x64.callDirect __rtlock_release
-  __rl_cont#72:
+  __rl_cont#79:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -28607,11 +28635,11 @@ func @__gt_strand_next {
     x64.leaRegGlobal rcx, __sched_lock
     x64.loadRegBaseDisp.word64 rax, [rcx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __rl_outermost#81
-    x64.jmp __rl_nested#80
-  __rl_slow#82:
+    x64.jcc equal, __rl_outermost#88
+    x64.jmp __rl_nested#87
+  __rl_slow#89:
     x64.callDirect __rtlock_release
-  __rl_cont#79:
+  __rl_cont#86:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -28640,35 +28668,20 @@ func @__gt_strand_next {
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, hpexamine
   hpkeep:
-    x64.leaRegGlobal rcx, __sched_lock
-    x64.loadRegBaseDisp.word64 rax, [rcx + 16]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __rl_outermost#99
-    x64.jmp __rl_nested#98
-  __rl_slow#100:
-    x64.callDirect __rtlock_release
-  __rl_cont#97:
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
+    x64.leaRegGlobal rax, __sched_midle
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.leaRegGlobal rcx, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.mov rcx, gs:[rcx]
-    x64.cmpRegImm32 rax, 0
-    x64.setccReg notEqual, rax
+    x64.cmpRegReg rax, r12
+    x64.setccReg equal, rax
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 632]
     x64.cmpRegImm32 rcx, 0
-    x64.setccReg notEqual, rdx
-    x64.andRegReg rax, rax, rdx
-    x64.movRegImm32 rdx, 0
-    x64.subRegReg rdx, rdx, rax
-    x64.leaRegRegImm32 rax, rax, -1
-    x64.leaRegRegImm32 rcx, rcx, 656
-    x64.leaRegGlobal rsi, __sched_lock_depth_sink
-    x64.andRegReg rcx, rcx, rdx
-    x64.andRegReg rsi, rsi, rax
-    x64.orRegReg rcx, rcx, rsi
-    x64.aluBaseDispImm32.add [rcx + 0], -1
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 560]
-    x64.iatCall 19
+    x64.setccReg notEqual, rcx
+    x64.orRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, hpkeepwake
+    x64.jmp hpkeepunlist
+  __rl_slow#115:
+    x64.callDirect __rtlock_release
+    x64.jmp __rl_cont#112
   tshbackoff:
     x64.movRegImm32 rax, 200
     x64.movRegImm32 rax, 0
@@ -28714,17 +28727,17 @@ func @__gt_strand_next {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, __rl_owned#91
-  __rl_slow#92:
+    x64.jcc equal, __rl_owned#98
+  __rl_slow#99:
     x64.callDirect __rtlock_enter_slow
-  __rl_cont#90:
+  __rl_cont#97:
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_enqueue
     x64.leaRegGlobal rcx, __sched_lock
     x64.loadRegBaseDisp.word64 rax, [rcx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __rl_outermost#95
-    x64.jmp __rl_nested#94
+    x64.jcc equal, __rl_outermost#102
+    x64.jmp __rl_nested#101
   hpexamine:
     x64.leaRegGlobal rdx, __sched_midle
     x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
@@ -28745,28 +28758,27 @@ func @__gt_strand_next {
   hprelease:
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [rax + 0], rdx
-    x64.storeBaseDispReg.word64 [rcx + 184], rdx
-    x64.storeBaseDispReg.word64 [rcx + 176], rax
+    x64.storeBaseDispReg.word64 [rcx + 176], rdx
     x64.storeSlotReg slot0, rcx
     x64.callDirect __sched_runq_empty
     x64.loadRegSlot rcx, slot0
     x64.cmpRegImm32 r8, 1
     x64.jcc notEqual, hpheldwork
     x64.jmp hpidled
-  __rl_slow#108:
+  __rl_slow#111:
     x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#105
+    x64.jmp __rl_cont#108
   hpgive:
     x64.leaRegGlobal rdx, __sched_nmidle
     x64.aluBaseDispImm32.add [rdx + 0], -1
     x64.loadRegBaseDisp.word64 rdx, [r12 + 600]
     x64.loadRegBaseDisp.word64 rsi, [r12 + 632]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, munlinkhead
-    x64.jmp munlinkinner
-  __rl_slow#104:
+    x64.jcc equal, munlinkhead#48
+    x64.jmp munlinkinner#49
+  __rl_slow#107:
     x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#101
+    x64.jmp __rl_cont#104
   tshgavestrand:
     x64.leaRegGlobal rcx, __sched_lock
     x64.leaRegGlobal rax, __sched_tls_teb_offset
@@ -28793,20 +28805,20 @@ func @__gt_strand_next {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, __rl_owned#84
-  __rl_slow#85:
+    x64.jcc equal, __rl_owned#91
+  __rl_slow#92:
     x64.callDirect __rtlock_enter_slow
-  __rl_cont#83:
+  __rl_cont#90:
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_enqueue
     x64.leaRegGlobal rcx, __sched_lock
     x64.loadRegBaseDisp.word64 rax, [rcx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __rl_outermost#88
-    x64.jmp __rl_nested#87
-  __rl_slow#96:
+    x64.jcc equal, __rl_outermost#95
+    x64.jmp __rl_nested#94
+  __rl_slow#103:
     x64.callDirect __rtlock_release
-  __rl_cont#93:
+  __rl_cont#100:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -28834,9 +28846,9 @@ func @__gt_strand_next {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rl_slow#89:
+  __rl_slow#96:
     x64.callDirect __rtlock_release
-  __rl_cont#86:
+  __rl_cont#93:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -30163,28 +30175,28 @@ func @__gt_strand_next {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rbx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#61
-  __rl_owned#60:
+    x64.jcc notEqual, __rl_slow#68
+  __rl_owned#67:
     x64.storeBaseDispReg.word64 [rbx + 8], rax
-  __rl_cont#59:
+  __rl_cont#66:
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_coro_dequeue
     x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#63
-  __rl_outermost#64:
+    x64.jcc notEqual, __rl_nested#70
+  __rl_outermost#71:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rbx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#62
-    x64.jmp __rl_slow#65
-  __rl_nested#63:
+    x64.jcc equal, __rl_cont#69
+    x64.jmp __rl_slow#72
+  __rl_nested#70:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rbx + 16], rax
-  __rl_cont#62:
+  __rl_cont#69:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -30257,7 +30269,7 @@ func @__gt_strand_next {
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, tshhandover
     x64.jmp tshexamine
-  __rl_owned#67:
+  __rl_owned#74:
     x64.storeBaseDispReg.word64 [rax + 8], rdx
     x64.jmp tshputback
   tshhandover:
@@ -30268,68 +30280,118 @@ func @__gt_strand_next {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rl_owned#77:
+  __rl_owned#84:
     x64.storeBaseDispReg.word64 [rax + 8], rdx
     x64.jmp tshputback
-  __rl_owned#70:
+  __rl_owned#77:
     x64.storeBaseDispReg.word64 [rbx + 8], rax
-    x64.jmp __rl_cont#69
-  __rl_outermost#74:
+    x64.jmp __rl_cont#76
+  __rl_outermost#81:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rbx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#72
-    x64.jmp __rl_slow#75
-  __rl_nested#73:
-    x64.leaRegRegImm32 rax, rax, -1
-    x64.storeBaseDispReg.word64 [rbx + 16], rax
-    x64.jmp __rl_cont#72
-  __rl_outermost#81:
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [rcx + 8], rax
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rcx], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
     x64.jcc equal, __rl_cont#79
     x64.jmp __rl_slow#82
   __rl_nested#80:
     x64.leaRegRegImm32 rax, rax, -1
-    x64.storeBaseDispReg.word64 [rcx + 16], rax
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
     x64.jmp __rl_cont#79
-  __rl_outermost#99:
+  __rl_outermost#88:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#97
-    x64.jmp __rl_slow#100
-  __rl_nested#98:
+    x64.jcc equal, __rl_cont#86
+    x64.jmp __rl_slow#89
+  __rl_nested#87:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rax
-    x64.jmp __rl_cont#97
+    x64.jmp __rl_cont#86
+  hpkeepunlist:
+    x64.leaRegGlobal rax, __sched_nmidle
+    x64.aluBaseDispImm32.add [rax + 0], -1
+    x64.loadRegBaseDisp.word64 rax, [r12 + 600]
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 632]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, munlinkinner#61
+  munlinkhead#60:
+    x64.leaRegGlobal rdx, __sched_midle
+    x64.storeBaseDispReg.word64 [rdx + 0], rax
+    x64.jmp munlinkmend#62
+  munlinkinner#61:
+    x64.storeBaseDispReg.word64 [rcx + 600], rax
+  munlinkmend#62:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, munlinkclear#64
+  munlinknext#63:
+    x64.storeBaseDispReg.word64 [rax + 632], rcx
+  munlinkclear#64:
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r12 + 600], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r12 + 632], rax
+  hpkeepwake:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 560]
+    x64.callDirect mrt_host_event_set
+    x64.leaRegGlobal rcx, __sched_lock
+    x64.loadRegBaseDisp.word64 rax, [rcx + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __rl_nested#113
+  __rl_outermost#114:
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.movRegImm32 rdx, 0
+    x64.xchg8 [rcx], rdx <- rdx
+    x64.cmpRegImm32 rdx, 1
+    x64.jcc equal, __rl_cont#112
+    x64.jmp __rl_slow#115
+  __rl_nested#113:
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.storeBaseDispReg.word64 [rcx + 16], rax
+  __rl_cont#112:
+    x64.leaRegGlobal rax, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegGlobal rcx, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.mov rcx, gs:[rcx]
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg notEqual, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg notEqual, rdx
+    x64.andRegReg rax, rax, rdx
+    x64.movRegImm32 rdx, 0
+    x64.subRegReg rdx, rdx, rax
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.leaRegRegImm32 rcx, rcx, 656
+    x64.leaRegGlobal rsi, __sched_lock_depth_sink
+    x64.andRegReg rcx, rcx, rdx
+    x64.andRegReg rsi, rsi, rax
+    x64.orRegReg rcx, rcx, rsi
+    x64.aluBaseDispImm32.add [rcx + 0], -1
+    x64.jmp tshbackoff
   timerdueask:
     x64.callDirect __gt_now_ns
     x64.cmpRegReg r12, r8
     x64.jcc lessEqual, tshfiredue
     x64.jmp tshgiveupstrand
-  __rl_owned#91:
+  __rl_owned#98:
     x64.storeBaseDispReg.word64 [rcx + 8], rax
-    x64.jmp __rl_cont#90
-  __rl_outermost#95:
+    x64.jmp __rl_cont#97
+  __rl_outermost#102:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#93
-    x64.jmp __rl_slow#96
-  __rl_nested#94:
+    x64.jcc equal, __rl_cont#100
+    x64.jmp __rl_slow#103
+  __rl_nested#101:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rax
-    x64.jmp __rl_cont#93
+    x64.jmp __rl_cont#100
   hpheldwork:
     x64.leaRegRdata rcx, [rip + __abort_msg_95]  ; "fatal error: runtime abort 95 (schedulerIdledAProcessorHoldingWork)\x0a"
     x64.movRegImm32 rdx, 68
@@ -30355,9 +30417,8 @@ func @__gt_strand_next {
     x64.storeBaseDispReg.word64 [rcx + 160], rax
     x64.leaRegGlobal rax, __sched_pidle
     x64.storeBaseDispReg.word64 [rax + 0], rcx
-    x64.movRegImm32 rax, 1
-    x64.leaRegGlobal rcx, __sched_npidle
-    x64.lock add [rcx], rax
+    x64.leaRegGlobal rax, __sched_npidle
+    x64.aluBaseDispImm32.add [rax + 0], 1
     x64.jmp pidleputplaced
   pidleputregain:
     x64.loadRegBaseDisp.word64 rdx, [rax + 648]
@@ -30372,19 +30433,19 @@ func @__gt_strand_next {
     x64.leaRegGlobal rcx, __sched_lock
     x64.loadRegBaseDisp.word64 rax, [rcx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#106
-  __rl_outermost#107:
+    x64.jcc notEqual, __rl_nested#109
+  __rl_outermost#110:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#105
-    x64.jmp __rl_slow#108
-  __rl_nested#106:
+    x64.jcc equal, __rl_cont#108
+    x64.jmp __rl_slow#111
+  __rl_nested#109:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rax
-  __rl_cont#105:
+  __rl_cont#108:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -30408,43 +30469,42 @@ func @__gt_strand_next {
     x64.callDirect mrt_host_event_set
     x64.callDirect __np_break
     x64.jmp tshgavestrand
-  munlinkhead:
+  munlinkhead#48:
     x64.leaRegGlobal rdi, __sched_midle
     x64.storeBaseDispReg.word64 [rdi + 0], rdx
-    x64.jmp munlinkmend
-  munlinkinner:
+    x64.jmp munlinkmend#50
+  munlinkinner#49:
     x64.storeBaseDispReg.word64 [rsi + 600], rdx
-  munlinkmend:
+  munlinkmend#50:
     x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, munlinkclear
-  munlinknext:
+    x64.jcc equal, munlinkclear#52
+  munlinknext#51:
     x64.storeBaseDispReg.word64 [rdx + 632], rsi
-  munlinkclear:
+  munlinkclear#52:
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [r12 + 600], rdx
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [r12 + 632], rdx
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [rax + 0], rdx
-    x64.storeBaseDispReg.word64 [rcx + 184], rdx
-    x64.storeBaseDispReg.word64 [rcx + 176], rax
+    x64.storeBaseDispReg.word64 [rcx + 176], rdx
     x64.storeBaseDispReg.word64 [r12 + 576], rcx
     x64.leaRegGlobal rcx, __sched_lock
     x64.loadRegBaseDisp.word64 rax, [rcx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#102
-  __rl_outermost#103:
+    x64.jcc notEqual, __rl_nested#105
+  __rl_outermost#106:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#101
-    x64.jmp __rl_slow#104
-  __rl_nested#102:
+    x64.jcc equal, __rl_cont#104
+    x64.jmp __rl_slow#107
+  __rl_nested#105:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rax
-  __rl_cont#101:
+  __rl_cont#104:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -30467,29 +30527,29 @@ func @__gt_strand_next {
     x64.loadRegBaseDisp.word64 rcx, [r12 + 560]
     x64.callDirect mrt_host_event_set
     x64.jmp tshgavestrand
-  __rl_owned#84:
+  __rl_owned#91:
     x64.storeBaseDispReg.word64 [rcx + 8], rax
-    x64.jmp __rl_cont#83
-  __rl_outermost#88:
+    x64.jmp __rl_cont#90
+  __rl_outermost#95:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#86
-    x64.jmp __rl_slow#89
-  __rl_nested#87:
+    x64.jcc equal, __rl_cont#93
+    x64.jmp __rl_slow#96
+  __rl_nested#94:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rax
-    x64.jmp __rl_cont#86
-  __rl_slow#61:
+    x64.jmp __rl_cont#93
+  __rl_slow#68:
     x64.movRegReg rcx, rbx
     x64.callDirect __rtlock_enter_slow
-    x64.jmp __rl_cont#59
-  __rl_slow#65:
+    x64.jmp __rl_cont#66
+  __rl_slow#72:
     x64.movRegReg rcx, rbx
     x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#62
+    x64.jmp __rl_cont#69
   tshexamine:
     x64.loadRegBaseDisp.word64 rax, [rcx + 464]
     x64.cmpRegImm32 rax, 1
@@ -30520,8 +30580,8 @@ func @__gt_strand_next {
     x64.movRegImm32 rsi, 1
     x64.xchg8 [rax], rsi <- rsi
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, __rl_owned#67
-  __rl_slow#68:
+    x64.jcc equal, __rl_owned#74
+  __rl_slow#75:
     x64.storeSlotReg slot0, rcx
     x64.movRegReg rcx, rax
     x64.movRegReg rdx, rsi
@@ -30564,8 +30624,8 @@ func @__gt_strand_next {
     x64.movRegImm32 rsi, 1
     x64.xchg8 [rax], rsi <- rsi
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, __rl_owned#77
-  __rl_slow#78:
+    x64.jcc equal, __rl_owned#84
+  __rl_slow#85:
     x64.storeSlotReg slot0, rcx
     x64.movRegReg rcx, rax
     x64.movRegReg rdx, rsi
@@ -30597,22 +30657,22 @@ func @__gt_strand_next {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rbx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, __rl_owned#70
-  __rl_slow#71:
+    x64.jcc equal, __rl_owned#77
+  __rl_slow#78:
     x64.storeSlotReg slot0, rcx
     x64.movRegReg rcx, rbx
     x64.callDirect __rtlock_enter_slow
     x64.loadRegSlot rcx, slot0
-  __rl_cont#69:
+  __rl_cont#76:
     x64.callDirect __gt_coro_enqueue
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __rl_outermost#74
-    x64.jmp __rl_nested#73
-  __rl_slow#75:
+    x64.jcc equal, __rl_outermost#81
+    x64.jmp __rl_nested#80
+  __rl_slow#82:
     x64.movRegReg rcx, rbx
     x64.callDirect __rtlock_release
-  __rl_cont#72:
+  __rl_cont#79:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -30638,11 +30698,11 @@ func @__gt_strand_next {
     x64.leaRegGlobal rcx, __sched_lock
     x64.loadRegBaseDisp.word64 rax, [rcx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __rl_outermost#81
-    x64.jmp __rl_nested#80
-  __rl_slow#82:
+    x64.jcc equal, __rl_outermost#88
+    x64.jmp __rl_nested#87
+  __rl_slow#89:
     x64.callDirect __rtlock_release
-  __rl_cont#79:
+  __rl_cont#86:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -30671,35 +30731,20 @@ func @__gt_strand_next {
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, hpexamine
   hpkeep:
-    x64.leaRegGlobal rcx, __sched_lock
-    x64.loadRegBaseDisp.word64 rax, [rcx + 16]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __rl_outermost#99
-    x64.jmp __rl_nested#98
-  __rl_slow#100:
-    x64.callDirect __rtlock_release
-  __rl_cont#97:
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
+    x64.leaRegGlobal rax, __sched_midle
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.leaRegGlobal rcx, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.mov rcx, gs:[rcx]
-    x64.cmpRegImm32 rax, 0
-    x64.setccReg notEqual, rax
+    x64.cmpRegReg rax, r12
+    x64.setccReg equal, rax
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 632]
     x64.cmpRegImm32 rcx, 0
-    x64.setccReg notEqual, rdx
-    x64.andRegReg rax, rax, rdx
-    x64.movRegImm32 rdx, 0
-    x64.subRegReg rdx, rdx, rax
-    x64.leaRegRegImm32 rax, rax, -1
-    x64.leaRegRegImm32 rcx, rcx, 656
-    x64.leaRegGlobal rsi, __sched_lock_depth_sink
-    x64.andRegReg rcx, rcx, rdx
-    x64.andRegReg rsi, rsi, rax
-    x64.orRegReg rcx, rcx, rsi
-    x64.aluBaseDispImm32.add [rcx + 0], -1
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 560]
-    x64.callDirect mrt_host_event_set
+    x64.setccReg notEqual, rcx
+    x64.orRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, hpkeepwake
+    x64.jmp hpkeepunlist
+  __rl_slow#115:
+    x64.callDirect __rtlock_release
+    x64.jmp __rl_cont#112
   tshbackoff:
     x64.movRegImm32 rcx, 200
     x64.movRegImm32 rax, 0
@@ -30743,17 +30788,17 @@ func @__gt_strand_next {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, __rl_owned#91
-  __rl_slow#92:
+    x64.jcc equal, __rl_owned#98
+  __rl_slow#99:
     x64.callDirect __rtlock_enter_slow
-  __rl_cont#90:
+  __rl_cont#97:
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_enqueue
     x64.leaRegGlobal rcx, __sched_lock
     x64.loadRegBaseDisp.word64 rax, [rcx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __rl_outermost#95
-    x64.jmp __rl_nested#94
+    x64.jcc equal, __rl_outermost#102
+    x64.jmp __rl_nested#101
   hpexamine:
     x64.leaRegGlobal rdx, __sched_midle
     x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
@@ -30774,28 +30819,27 @@ func @__gt_strand_next {
   hprelease:
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [rax + 0], rdx
-    x64.storeBaseDispReg.word64 [rcx + 184], rdx
-    x64.storeBaseDispReg.word64 [rcx + 176], rax
+    x64.storeBaseDispReg.word64 [rcx + 176], rdx
     x64.storeSlotReg slot0, rcx
     x64.callDirect __sched_runq_empty
     x64.loadRegSlot rcx, slot0
     x64.cmpRegImm32 r8, 1
     x64.jcc notEqual, hpheldwork
     x64.jmp hpidled
-  __rl_slow#108:
+  __rl_slow#111:
     x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#105
+    x64.jmp __rl_cont#108
   hpgive:
     x64.leaRegGlobal rdx, __sched_nmidle
     x64.aluBaseDispImm32.add [rdx + 0], -1
     x64.loadRegBaseDisp.word64 rdx, [r12 + 600]
     x64.loadRegBaseDisp.word64 rsi, [r12 + 632]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, munlinkhead
-    x64.jmp munlinkinner
-  __rl_slow#104:
+    x64.jcc equal, munlinkhead#48
+    x64.jmp munlinkinner#49
+  __rl_slow#107:
     x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#101
+    x64.jmp __rl_cont#104
   tshgavestrand:
     x64.leaRegGlobal rcx, __sched_lock
     x64.leaRegGlobal rax, __sched_tls_teb_offset
@@ -30822,20 +30866,20 @@ func @__gt_strand_next {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, __rl_owned#84
-  __rl_slow#85:
+    x64.jcc equal, __rl_owned#91
+  __rl_slow#92:
     x64.callDirect __rtlock_enter_slow
-  __rl_cont#83:
+  __rl_cont#90:
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_enqueue
     x64.leaRegGlobal rcx, __sched_lock
     x64.loadRegBaseDisp.word64 rax, [rcx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __rl_outermost#88
-    x64.jmp __rl_nested#87
-  __rl_slow#96:
+    x64.jcc equal, __rl_outermost#95
+    x64.jmp __rl_nested#94
+  __rl_slow#103:
     x64.callDirect __rtlock_release
-  __rl_cont#93:
+  __rl_cont#100:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -30863,9 +30907,9 @@ func @__gt_strand_next {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rl_slow#89:
+  __rl_slow#96:
     x64.callDirect __rtlock_release
-  __rl_cont#86:
+  __rl_cont#93:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -32188,28 +32232,28 @@ func @__gt_strand_next {
     arm64.movImm x1, 1
     arm64.arm64AtomicRmw.exchangeByte x1, [x19], x1
     arm64.cmp x1, 0
-    arm64.b.ne __rl_slow#61
-  __rl_owned#60:
+    arm64.b.ne __rl_slow#68
+  __rl_owned#67:
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
-  __rl_cont#59:
+  __rl_cont#66:
     arm64.movRegReg x0, x19
     arm64.bl __gt_coro_dequeue
     arm64.movRegReg x21, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.b.ne __rl_nested#63
-  __rl_outermost#64:
+    arm64.b.ne __rl_nested#70
+  __rl_outermost#71:
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x19], x0
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#62
-    arm64.b __rl_slow#65
-  __rl_nested#63:
+    arm64.b.eq __rl_cont#69
+    arm64.b __rl_slow#72
+  __rl_nested#70:
     arm64.add x0, x0, -1
     arm64.storeBaseDispReg.word64 [x19 + 16], x0
-  __rl_cont#62:
+  __rl_cont#69:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -32287,7 +32331,7 @@ func @__gt_strand_next {
     arm64.cmp x1, 0
     arm64.b.eq tshhandover
     arm64.b tshexamine
-  __rl_owned#67:
+  __rl_owned#74:
     arm64.storeBaseDispReg.word64 [x1 + 8], x2
     arm64.b tshputback
   tshhandover:
@@ -32296,68 +32340,127 @@ func @__gt_strand_next {
     arm64.loadRegSlot x21, slot4
     arm64.epilogue 64
     arm64.ret
-  __rl_owned#77:
+  __rl_owned#84:
     arm64.storeBaseDispReg.word64 [x1 + 8], x2
     arm64.b tshputback
-  __rl_owned#70:
+  __rl_owned#77:
     arm64.storeBaseDispReg.word64 [x19 + 8], x1
-    arm64.b __rl_cont#69
-  __rl_outermost#74:
+    arm64.b __rl_cont#76
+  __rl_outermost#81:
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x19], x0
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#72
-    arm64.b __rl_slow#75
-  __rl_nested#73:
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x19 + 16], x0
-    arm64.b __rl_cont#72
-  __rl_outermost#81:
-    arm64.movImm x1, 0
-    arm64.storeBaseDispReg.word64 [x0 + 8], x1
-    arm64.movImm x1, 0
-    arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
-    arm64.cmp x1, 1
     arm64.b.eq __rl_cont#79
     arm64.b __rl_slow#82
   __rl_nested#80:
-    arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x0 + 16], x1
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
     arm64.b __rl_cont#79
-  __rl_outermost#99:
+  __rl_outermost#88:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#97
-    arm64.b __rl_slow#100
-  __rl_nested#98:
+    arm64.b.eq __rl_cont#86
+    arm64.b __rl_slow#89
+  __rl_nested#87:
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
-    arm64.b __rl_cont#97
+    arm64.b __rl_cont#86
+  hpkeepunlist:
+    arm64.leaGlobal x0, __sched_nmidle
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x1, x1, -1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 600]
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 632]
+    arm64.cmp x1, 0
+    arm64.b.ne munlinkinner#61
+  munlinkhead#60:
+    arm64.leaGlobal x2, __sched_midle
+    arm64.storeBaseDispReg.word64 [x2 + 0], x0
+    arm64.b munlinkmend#62
+  munlinkinner#61:
+    arm64.storeBaseDispReg.word64 [x1 + 600], x0
+  munlinkmend#62:
+    arm64.cmp x0, 0
+    arm64.b.eq munlinkclear#64
+  munlinknext#63:
+    arm64.storeBaseDispReg.word64 [x0 + 632], x1
+  munlinkclear#64:
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x20 + 600], x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x20 + 632], x0
+  hpkeepwake:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 560]
+    arm64.bl mrt_host_event_set
+    arm64.leaGlobal x0, __sched_lock
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
+    arm64.cmp x1, 0
+    arm64.b.ne __rl_nested#113
+  __rl_outermost#114:
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.movImm x1, 0
+    arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
+    arm64.cmp x1, 1
+    arm64.b.eq __rl_cont#112
+    arm64.b __rl_slow#115
+  __rl_nested#113:
+    arm64.add x1, x1, -1
+    arm64.storeBaseDispReg.word64 [x0 + 16], x1
+  __rl_cont#112:
+    arm64.leaGlobal x0, __sched_tls_teb_offset
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.leaGlobal x1, __sched_tls_teb_offset
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
+    arm64.add x16, x16, x1
+    arm64.cmp x1, 0
+    arm64.cset x17, ne
+    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
+    arm64.mul x1, x16, x17
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cmp x1, 0
+    arm64.cset x2, ne
+    arm64.and x0, x0, x2
+    arm64.movImm x2, 0
+    arm64.sub x2, x2, x0
+    arm64.sub x0, x0, 1
+    arm64.add x1, x1, 656
+    arm64.leaGlobal x3, __sched_lock_depth_sink
+    arm64.and x1, x1, x2
+    arm64.and x0, x3, x0
+    arm64.orr x0, x1, x0
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x1, x1, -1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.b tshbackoff
   timerdueask:
     arm64.bl __gt_now_ns
     arm64.cmp x20, x0
     arm64.b.le tshfiredue
     arm64.b tshgiveupstrand
-  __rl_owned#91:
+  __rl_owned#98:
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
-    arm64.b __rl_cont#90
-  __rl_outermost#95:
+    arm64.b __rl_cont#97
+  __rl_outermost#102:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#93
-    arm64.b __rl_slow#96
-  __rl_nested#94:
+    arm64.b.eq __rl_cont#100
+    arm64.b __rl_slow#103
+  __rl_nested#101:
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
-    arm64.b __rl_cont#93
+    arm64.b __rl_cont#100
   hpheldwork:
     arm64.leaRdata x0, __abort_msg_95  ; "fatal error: runtime abort 95 (schedulerIdledAProcessorHoldingWork)\x0a"
     arm64.movImm x1, 68
@@ -32382,9 +32485,10 @@ func @__gt_strand_next {
     arm64.storeBaseDispReg.word64 [x1 + 160], x0
     arm64.leaGlobal x0, __sched_pidle
     arm64.storeBaseDispReg.word64 [x0 + 0], x1
-    arm64.movImm x0, 1
-    arm64.leaGlobal x1, __sched_npidle
-    arm64.arm64AtomicRmw.add x0, [x1], x0
+    arm64.leaGlobal x0, __sched_npidle
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
     arm64.b pidleputplaced
   pidleputregain:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 648]
@@ -32399,19 +32503,19 @@ func @__gt_strand_next {
     arm64.leaGlobal x0, __sched_lock
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.ne __rl_nested#106
-  __rl_outermost#107:
+    arm64.b.ne __rl_nested#109
+  __rl_outermost#110:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#105
-    arm64.b __rl_slow#108
-  __rl_nested#106:
+    arm64.b.eq __rl_cont#108
+    arm64.b __rl_slow#111
+  __rl_nested#109:
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
-  __rl_cont#105:
+  __rl_cont#108:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -32442,43 +32546,42 @@ func @__gt_strand_next {
     arm64.bl mrt_host_event_set
     arm64.bl __np_break
     arm64.b tshgavestrand
-  munlinkhead:
+  munlinkhead#48:
     arm64.leaGlobal x4, __sched_midle
     arm64.storeBaseDispReg.word64 [x4 + 0], x2
-    arm64.b munlinkmend
-  munlinkinner:
+    arm64.b munlinkmend#50
+  munlinkinner#49:
     arm64.storeBaseDispReg.word64 [x3 + 600], x2
-  munlinkmend:
+  munlinkmend#50:
     arm64.cmp x2, 0
-    arm64.b.eq munlinkclear
-  munlinknext:
+    arm64.b.eq munlinkclear#52
+  munlinknext#51:
     arm64.storeBaseDispReg.word64 [x2 + 632], x3
-  munlinkclear:
+  munlinkclear#52:
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x20 + 600], x2
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x20 + 632], x2
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x0 + 0], x2
-    arm64.storeBaseDispReg.word64 [x1 + 184], x2
-    arm64.storeBaseDispReg.word64 [x1 + 176], x0
+    arm64.storeBaseDispReg.word64 [x1 + 176], x2
     arm64.storeBaseDispReg.word64 [x20 + 576], x1
     arm64.leaGlobal x0, __sched_lock
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.ne __rl_nested#102
-  __rl_outermost#103:
+    arm64.b.ne __rl_nested#105
+  __rl_outermost#106:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#101
-    arm64.b __rl_slow#104
-  __rl_nested#102:
+    arm64.b.eq __rl_cont#104
+    arm64.b __rl_slow#107
+  __rl_nested#105:
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
-  __rl_cont#101:
+  __rl_cont#104:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -32508,29 +32611,29 @@ func @__gt_strand_next {
     arm64.loadRegBaseDisp.word64 x0, [x20 + 560]
     arm64.bl mrt_host_event_set
     arm64.b tshgavestrand
-  __rl_owned#84:
+  __rl_owned#91:
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
-    arm64.b __rl_cont#83
-  __rl_outermost#88:
+    arm64.b __rl_cont#90
+  __rl_outermost#95:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#86
-    arm64.b __rl_slow#89
-  __rl_nested#87:
+    arm64.b.eq __rl_cont#93
+    arm64.b __rl_slow#96
+  __rl_nested#94:
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
-    arm64.b __rl_cont#86
-  __rl_slow#61:
+    arm64.b __rl_cont#93
+  __rl_slow#68:
     arm64.movRegReg x0, x19
     arm64.bl __rtlock_enter_slow
-    arm64.b __rl_cont#59
-  __rl_slow#65:
+    arm64.b __rl_cont#66
+  __rl_slow#72:
     arm64.movRegReg x0, x19
     arm64.bl __rtlock_release
-    arm64.b __rl_cont#62
+    arm64.b __rl_cont#69
   tshexamine:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 464]
     arm64.cmp x1, 1
@@ -32567,8 +32670,8 @@ func @__gt_strand_next {
     arm64.movImm x3, 1
     arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
     arm64.cmp x3, 0
-    arm64.b.eq __rl_owned#67
-  __rl_slow#68:
+    arm64.b.eq __rl_owned#74
+  __rl_slow#75:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x3
@@ -32623,8 +32726,8 @@ func @__gt_strand_next {
     arm64.movImm x3, 1
     arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
     arm64.cmp x3, 0
-    arm64.b.eq __rl_owned#77
-  __rl_slow#78:
+    arm64.b.eq __rl_owned#84
+  __rl_slow#85:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x3
@@ -32663,24 +32766,24 @@ func @__gt_strand_next {
     arm64.movImm x2, 1
     arm64.arm64AtomicRmw.exchangeByte x2, [x19], x2
     arm64.cmp x2, 0
-    arm64.b.eq __rl_owned#70
-  __rl_slow#71:
+    arm64.b.eq __rl_owned#77
+  __rl_slow#78:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_enter_slow
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-  __rl_cont#69:
+  __rl_cont#76:
     arm64.bl __gt_coro_enqueue
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.b.eq __rl_outermost#74
-    arm64.b __rl_nested#73
-  __rl_slow#75:
+    arm64.b.eq __rl_outermost#81
+    arm64.b __rl_nested#80
+  __rl_slow#82:
     arm64.movRegReg x0, x19
     arm64.bl __rtlock_release
-  __rl_cont#72:
+  __rl_cont#79:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -32713,11 +32816,11 @@ func @__gt_strand_next {
     arm64.leaGlobal x0, __sched_lock
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.eq __rl_outermost#81
-    arm64.b __rl_nested#80
-  __rl_slow#82:
+    arm64.b.eq __rl_outermost#88
+    arm64.b __rl_nested#87
+  __rl_slow#89:
     arm64.bl __rtlock_release
-  __rl_cont#79:
+  __rl_cont#86:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -32758,42 +32861,20 @@ func @__gt_strand_next {
     arm64.cmp x1, 0
     arm64.b.ne hpexamine
   hpkeep:
-    arm64.leaGlobal x0, __sched_lock
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
-    arm64.cmp x1, 0
-    arm64.b.eq __rl_outermost#99
-    arm64.b __rl_nested#98
-  __rl_slow#100:
-    arm64.bl __rtlock_release
-  __rl_cont#97:
-    arm64.leaGlobal x0, __sched_tls_teb_offset
+    arm64.leaGlobal x0, __sched_midle
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.leaGlobal x1, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
-    arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
-    arm64.add x16, x16, x1
+    arm64.cmp x0, x20
+    arm64.cset x0, eq
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 632]
     arm64.cmp x1, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x1, x16, x17
+    arm64.cset x1, ne
+    arm64.orr x0, x0, x1
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cmp x1, 0
-    arm64.cset x2, ne
-    arm64.and x0, x0, x2
-    arm64.movImm x2, 0
-    arm64.sub x2, x2, x0
-    arm64.sub x0, x0, 1
-    arm64.add x1, x1, 656
-    arm64.leaGlobal x3, __sched_lock_depth_sink
-    arm64.and x1, x1, x2
-    arm64.and x0, x3, x0
-    arm64.orr x0, x1, x0
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x0 + 0], x1
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 560]
-    arm64.bl mrt_host_event_set
+    arm64.b.eq hpkeepwake
+    arm64.b hpkeepunlist
+  __rl_slow#115:
+    arm64.bl __rtlock_release
+    arm64.b __rl_cont#112
   tshbackoff:
     arm64.movImm x0, 200
     arm64.movImm x1, 0
@@ -32842,18 +32923,18 @@ func @__gt_strand_next {
     arm64.movImm x2, 1
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 0
-    arm64.b.eq __rl_owned#91
-  __rl_slow#92:
+    arm64.b.eq __rl_owned#98
+  __rl_slow#99:
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_enter_slow
-  __rl_cont#90:
+  __rl_cont#97:
     arm64.movRegReg x0, x19
     arm64.bl __gt_enqueue
     arm64.leaGlobal x0, __sched_lock
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.eq __rl_outermost#95
-    arm64.b __rl_nested#94
+    arm64.b.eq __rl_outermost#102
+    arm64.b __rl_nested#101
   hpexamine:
     arm64.leaGlobal x2, __sched_midle
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
@@ -32876,8 +32957,7 @@ func @__gt_strand_next {
   hprelease:
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x0 + 0], x2
-    arm64.storeBaseDispReg.word64 [x1 + 184], x2
-    arm64.storeBaseDispReg.word64 [x1 + 176], x0
+    arm64.storeBaseDispReg.word64 [x1 + 176], x2
     arm64.storeSlotReg slot1, x1
     arm64.movRegReg x0, x1
     arm64.bl __sched_runq_empty
@@ -32885,9 +32965,9 @@ func @__gt_strand_next {
     arm64.cmp x0, 1
     arm64.b.ne hpheldwork
     arm64.b hpidled
-  __rl_slow#108:
+  __rl_slow#111:
     arm64.bl __rtlock_release
-    arm64.b __rl_cont#105
+    arm64.b __rl_cont#108
   hpgive:
     arm64.leaGlobal x2, __sched_nmidle
     arm64.loadRegBaseDisp.word64 x3, [x2 + 0]
@@ -32896,11 +32976,11 @@ func @__gt_strand_next {
     arm64.loadRegBaseDisp.word64 x2, [x20 + 600]
     arm64.loadRegBaseDisp.word64 x3, [x20 + 632]
     arm64.cmp x3, 0
-    arm64.b.eq munlinkhead
-    arm64.b munlinkinner
-  __rl_slow#104:
+    arm64.b.eq munlinkhead#48
+    arm64.b munlinkinner#49
+  __rl_slow#107:
     arm64.bl __rtlock_release
-    arm64.b __rl_cont#101
+    arm64.b __rl_cont#104
   tshgavestrand:
     arm64.leaGlobal x0, __sched_lock
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -32933,21 +33013,21 @@ func @__gt_strand_next {
     arm64.movImm x2, 1
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 0
-    arm64.b.eq __rl_owned#84
-  __rl_slow#85:
+    arm64.b.eq __rl_owned#91
+  __rl_slow#92:
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_enter_slow
-  __rl_cont#83:
+  __rl_cont#90:
     arm64.movRegReg x0, x19
     arm64.bl __gt_enqueue
     arm64.leaGlobal x0, __sched_lock
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.eq __rl_outermost#88
-    arm64.b __rl_nested#87
-  __rl_slow#96:
+    arm64.b.eq __rl_outermost#95
+    arm64.b __rl_nested#94
+  __rl_slow#103:
     arm64.bl __rtlock_release
-  __rl_cont#93:
+  __rl_cont#100:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -32981,9 +33061,9 @@ func @__gt_strand_next {
     arm64.loadRegSlot x21, slot4
     arm64.epilogue 64
     arm64.ret
-  __rl_slow#89:
+  __rl_slow#96:
     arm64.bl __rtlock_release
-  __rl_cont#86:
+  __rl_cont#93:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -34412,28 +34492,28 @@ func @__gt_strand_next {
     arm64.movImm x1, 1
     arm64.arm64AtomicRmw.exchangeByte x1, [x19], x1
     arm64.cmp x1, 0
-    arm64.b.ne __rl_slow#61
-  __rl_owned#60:
+    arm64.b.ne __rl_slow#68
+  __rl_owned#67:
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
-  __rl_cont#59:
+  __rl_cont#66:
     arm64.movRegReg x0, x19
     arm64.bl __gt_coro_dequeue
     arm64.movRegReg x21, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.b.ne __rl_nested#63
-  __rl_outermost#64:
+    arm64.b.ne __rl_nested#70
+  __rl_outermost#71:
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x19], x0
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#62
-    arm64.b __rl_slow#65
-  __rl_nested#63:
+    arm64.b.eq __rl_cont#69
+    arm64.b __rl_slow#72
+  __rl_nested#70:
     arm64.add x0, x0, -1
     arm64.storeBaseDispReg.word64 [x19 + 16], x0
-  __rl_cont#62:
+  __rl_cont#69:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -34511,7 +34591,7 @@ func @__gt_strand_next {
     arm64.cmp x1, 0
     arm64.b.eq tshhandover
     arm64.b tshexamine
-  __rl_owned#67:
+  __rl_owned#74:
     arm64.storeBaseDispReg.word64 [x1 + 8], x2
     arm64.b tshputback
   tshhandover:
@@ -34520,68 +34600,127 @@ func @__gt_strand_next {
     arm64.loadRegSlot x21, slot4
     arm64.epilogue 64
     arm64.ret
-  __rl_owned#77:
+  __rl_owned#84:
     arm64.storeBaseDispReg.word64 [x1 + 8], x2
     arm64.b tshputback
-  __rl_owned#70:
+  __rl_owned#77:
     arm64.storeBaseDispReg.word64 [x19 + 8], x1
-    arm64.b __rl_cont#69
-  __rl_outermost#74:
+    arm64.b __rl_cont#76
+  __rl_outermost#81:
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x19], x0
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#72
-    arm64.b __rl_slow#75
-  __rl_nested#73:
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x19 + 16], x0
-    arm64.b __rl_cont#72
-  __rl_outermost#81:
-    arm64.movImm x1, 0
-    arm64.storeBaseDispReg.word64 [x0 + 8], x1
-    arm64.movImm x1, 0
-    arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
-    arm64.cmp x1, 1
     arm64.b.eq __rl_cont#79
     arm64.b __rl_slow#82
   __rl_nested#80:
-    arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x0 + 16], x1
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
     arm64.b __rl_cont#79
-  __rl_outermost#99:
+  __rl_outermost#88:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#97
-    arm64.b __rl_slow#100
-  __rl_nested#98:
+    arm64.b.eq __rl_cont#86
+    arm64.b __rl_slow#89
+  __rl_nested#87:
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
-    arm64.b __rl_cont#97
+    arm64.b __rl_cont#86
+  hpkeepunlist:
+    arm64.leaGlobal x0, __sched_nmidle
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x1, x1, -1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 600]
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 632]
+    arm64.cmp x1, 0
+    arm64.b.ne munlinkinner#61
+  munlinkhead#60:
+    arm64.leaGlobal x2, __sched_midle
+    arm64.storeBaseDispReg.word64 [x2 + 0], x0
+    arm64.b munlinkmend#62
+  munlinkinner#61:
+    arm64.storeBaseDispReg.word64 [x1 + 600], x0
+  munlinkmend#62:
+    arm64.cmp x0, 0
+    arm64.b.eq munlinkclear#64
+  munlinknext#63:
+    arm64.storeBaseDispReg.word64 [x0 + 632], x1
+  munlinkclear#64:
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x20 + 600], x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x20 + 632], x0
+  hpkeepwake:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 560]
+    arm64.bl mrt_host_event_set
+    arm64.leaGlobal x0, __sched_lock
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
+    arm64.cmp x1, 0
+    arm64.b.ne __rl_nested#113
+  __rl_outermost#114:
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.movImm x1, 0
+    arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
+    arm64.cmp x1, 1
+    arm64.b.eq __rl_cont#112
+    arm64.b __rl_slow#115
+  __rl_nested#113:
+    arm64.add x1, x1, -1
+    arm64.storeBaseDispReg.word64 [x0 + 16], x1
+  __rl_cont#112:
+    arm64.leaGlobal x0, __sched_tls_teb_offset
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.leaGlobal x1, __sched_tls_teb_offset
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.arm64ThreadPointer x16, linuxWritable
+    arm64.add x16, x16, x1
+    arm64.cmp x1, 0
+    arm64.cset x17, ne
+    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
+    arm64.mul x1, x16, x17
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cmp x1, 0
+    arm64.cset x2, ne
+    arm64.and x0, x0, x2
+    arm64.movImm x2, 0
+    arm64.sub x2, x2, x0
+    arm64.sub x0, x0, 1
+    arm64.add x1, x1, 656
+    arm64.leaGlobal x3, __sched_lock_depth_sink
+    arm64.and x1, x1, x2
+    arm64.and x0, x3, x0
+    arm64.orr x0, x1, x0
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x1, x1, -1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.b tshbackoff
   timerdueask:
     arm64.bl __gt_now_ns
     arm64.cmp x20, x0
     arm64.b.le tshfiredue
     arm64.b tshgiveupstrand
-  __rl_owned#91:
+  __rl_owned#98:
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
-    arm64.b __rl_cont#90
-  __rl_outermost#95:
+    arm64.b __rl_cont#97
+  __rl_outermost#102:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#93
-    arm64.b __rl_slow#96
-  __rl_nested#94:
+    arm64.b.eq __rl_cont#100
+    arm64.b __rl_slow#103
+  __rl_nested#101:
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
-    arm64.b __rl_cont#93
+    arm64.b __rl_cont#100
   hpheldwork:
     arm64.leaRdata x0, __abort_msg_95  ; "fatal error: runtime abort 95 (schedulerIdledAProcessorHoldingWork)\x0a"
     arm64.movImm x1, 68
@@ -34606,9 +34745,10 @@ func @__gt_strand_next {
     arm64.storeBaseDispReg.word64 [x1 + 160], x0
     arm64.leaGlobal x0, __sched_pidle
     arm64.storeBaseDispReg.word64 [x0 + 0], x1
-    arm64.movImm x0, 1
-    arm64.leaGlobal x1, __sched_npidle
-    arm64.arm64AtomicRmw.add x0, [x1], x0
+    arm64.leaGlobal x0, __sched_npidle
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
     arm64.b pidleputplaced
   pidleputregain:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 648]
@@ -34623,19 +34763,19 @@ func @__gt_strand_next {
     arm64.leaGlobal x0, __sched_lock
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.ne __rl_nested#106
-  __rl_outermost#107:
+    arm64.b.ne __rl_nested#109
+  __rl_outermost#110:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#105
-    arm64.b __rl_slow#108
-  __rl_nested#106:
+    arm64.b.eq __rl_cont#108
+    arm64.b __rl_slow#111
+  __rl_nested#109:
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
-  __rl_cont#105:
+  __rl_cont#108:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -34666,43 +34806,42 @@ func @__gt_strand_next {
     arm64.bl mrt_host_event_set
     arm64.bl __np_break
     arm64.b tshgavestrand
-  munlinkhead:
+  munlinkhead#48:
     arm64.leaGlobal x4, __sched_midle
     arm64.storeBaseDispReg.word64 [x4 + 0], x2
-    arm64.b munlinkmend
-  munlinkinner:
+    arm64.b munlinkmend#50
+  munlinkinner#49:
     arm64.storeBaseDispReg.word64 [x3 + 600], x2
-  munlinkmend:
+  munlinkmend#50:
     arm64.cmp x2, 0
-    arm64.b.eq munlinkclear
-  munlinknext:
+    arm64.b.eq munlinkclear#52
+  munlinknext#51:
     arm64.storeBaseDispReg.word64 [x2 + 632], x3
-  munlinkclear:
+  munlinkclear#52:
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x20 + 600], x2
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x20 + 632], x2
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x0 + 0], x2
-    arm64.storeBaseDispReg.word64 [x1 + 184], x2
-    arm64.storeBaseDispReg.word64 [x1 + 176], x0
+    arm64.storeBaseDispReg.word64 [x1 + 176], x2
     arm64.storeBaseDispReg.word64 [x20 + 576], x1
     arm64.leaGlobal x0, __sched_lock
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.ne __rl_nested#102
-  __rl_outermost#103:
+    arm64.b.ne __rl_nested#105
+  __rl_outermost#106:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#101
-    arm64.b __rl_slow#104
-  __rl_nested#102:
+    arm64.b.eq __rl_cont#104
+    arm64.b __rl_slow#107
+  __rl_nested#105:
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
-  __rl_cont#101:
+  __rl_cont#104:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -34732,29 +34871,29 @@ func @__gt_strand_next {
     arm64.loadRegBaseDisp.word64 x0, [x20 + 560]
     arm64.bl mrt_host_event_set
     arm64.b tshgavestrand
-  __rl_owned#84:
+  __rl_owned#91:
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
-    arm64.b __rl_cont#83
-  __rl_outermost#88:
+    arm64.b __rl_cont#90
+  __rl_outermost#95:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#86
-    arm64.b __rl_slow#89
-  __rl_nested#87:
+    arm64.b.eq __rl_cont#93
+    arm64.b __rl_slow#96
+  __rl_nested#94:
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
-    arm64.b __rl_cont#86
-  __rl_slow#61:
+    arm64.b __rl_cont#93
+  __rl_slow#68:
     arm64.movRegReg x0, x19
     arm64.bl __rtlock_enter_slow
-    arm64.b __rl_cont#59
-  __rl_slow#65:
+    arm64.b __rl_cont#66
+  __rl_slow#72:
     arm64.movRegReg x0, x19
     arm64.bl __rtlock_release
-    arm64.b __rl_cont#62
+    arm64.b __rl_cont#69
   tshexamine:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 464]
     arm64.cmp x1, 1
@@ -34791,8 +34930,8 @@ func @__gt_strand_next {
     arm64.movImm x3, 1
     arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
     arm64.cmp x3, 0
-    arm64.b.eq __rl_owned#67
-  __rl_slow#68:
+    arm64.b.eq __rl_owned#74
+  __rl_slow#75:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x3
@@ -34847,8 +34986,8 @@ func @__gt_strand_next {
     arm64.movImm x3, 1
     arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
     arm64.cmp x3, 0
-    arm64.b.eq __rl_owned#77
-  __rl_slow#78:
+    arm64.b.eq __rl_owned#84
+  __rl_slow#85:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x3
@@ -34887,24 +35026,24 @@ func @__gt_strand_next {
     arm64.movImm x2, 1
     arm64.arm64AtomicRmw.exchangeByte x2, [x19], x2
     arm64.cmp x2, 0
-    arm64.b.eq __rl_owned#70
-  __rl_slow#71:
+    arm64.b.eq __rl_owned#77
+  __rl_slow#78:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_enter_slow
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-  __rl_cont#69:
+  __rl_cont#76:
     arm64.bl __gt_coro_enqueue
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.b.eq __rl_outermost#74
-    arm64.b __rl_nested#73
-  __rl_slow#75:
+    arm64.b.eq __rl_outermost#81
+    arm64.b __rl_nested#80
+  __rl_slow#82:
     arm64.movRegReg x0, x19
     arm64.bl __rtlock_release
-  __rl_cont#72:
+  __rl_cont#79:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -34937,11 +35076,11 @@ func @__gt_strand_next {
     arm64.leaGlobal x0, __sched_lock
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.eq __rl_outermost#81
-    arm64.b __rl_nested#80
-  __rl_slow#82:
+    arm64.b.eq __rl_outermost#88
+    arm64.b __rl_nested#87
+  __rl_slow#89:
     arm64.bl __rtlock_release
-  __rl_cont#79:
+  __rl_cont#86:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -34982,42 +35121,20 @@ func @__gt_strand_next {
     arm64.cmp x1, 0
     arm64.b.ne hpexamine
   hpkeep:
-    arm64.leaGlobal x0, __sched_lock
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
-    arm64.cmp x1, 0
-    arm64.b.eq __rl_outermost#99
-    arm64.b __rl_nested#98
-  __rl_slow#100:
-    arm64.bl __rtlock_release
-  __rl_cont#97:
-    arm64.leaGlobal x0, __sched_tls_teb_offset
+    arm64.leaGlobal x0, __sched_midle
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.leaGlobal x1, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
-    arm64.arm64ThreadPointer x16, linuxWritable
-    arm64.add x16, x16, x1
+    arm64.cmp x0, x20
+    arm64.cset x0, eq
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 632]
     arm64.cmp x1, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x1, x16, x17
+    arm64.cset x1, ne
+    arm64.orr x0, x0, x1
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cmp x1, 0
-    arm64.cset x2, ne
-    arm64.and x0, x0, x2
-    arm64.movImm x2, 0
-    arm64.sub x2, x2, x0
-    arm64.sub x0, x0, 1
-    arm64.add x1, x1, 656
-    arm64.leaGlobal x3, __sched_lock_depth_sink
-    arm64.and x1, x1, x2
-    arm64.and x0, x3, x0
-    arm64.orr x0, x1, x0
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x0 + 0], x1
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 560]
-    arm64.bl mrt_host_event_set
+    arm64.b.eq hpkeepwake
+    arm64.b hpkeepunlist
+  __rl_slow#115:
+    arm64.bl __rtlock_release
+    arm64.b __rl_cont#112
   tshbackoff:
     arm64.movImm x0, 200
     arm64.movImm x1, 0
@@ -35066,18 +35183,18 @@ func @__gt_strand_next {
     arm64.movImm x2, 1
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 0
-    arm64.b.eq __rl_owned#91
-  __rl_slow#92:
+    arm64.b.eq __rl_owned#98
+  __rl_slow#99:
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_enter_slow
-  __rl_cont#90:
+  __rl_cont#97:
     arm64.movRegReg x0, x19
     arm64.bl __gt_enqueue
     arm64.leaGlobal x0, __sched_lock
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.eq __rl_outermost#95
-    arm64.b __rl_nested#94
+    arm64.b.eq __rl_outermost#102
+    arm64.b __rl_nested#101
   hpexamine:
     arm64.leaGlobal x2, __sched_midle
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
@@ -35100,8 +35217,7 @@ func @__gt_strand_next {
   hprelease:
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x0 + 0], x2
-    arm64.storeBaseDispReg.word64 [x1 + 184], x2
-    arm64.storeBaseDispReg.word64 [x1 + 176], x0
+    arm64.storeBaseDispReg.word64 [x1 + 176], x2
     arm64.storeSlotReg slot1, x1
     arm64.movRegReg x0, x1
     arm64.bl __sched_runq_empty
@@ -35109,9 +35225,9 @@ func @__gt_strand_next {
     arm64.cmp x0, 1
     arm64.b.ne hpheldwork
     arm64.b hpidled
-  __rl_slow#108:
+  __rl_slow#111:
     arm64.bl __rtlock_release
-    arm64.b __rl_cont#105
+    arm64.b __rl_cont#108
   hpgive:
     arm64.leaGlobal x2, __sched_nmidle
     arm64.loadRegBaseDisp.word64 x3, [x2 + 0]
@@ -35120,11 +35236,11 @@ func @__gt_strand_next {
     arm64.loadRegBaseDisp.word64 x2, [x20 + 600]
     arm64.loadRegBaseDisp.word64 x3, [x20 + 632]
     arm64.cmp x3, 0
-    arm64.b.eq munlinkhead
-    arm64.b munlinkinner
-  __rl_slow#104:
+    arm64.b.eq munlinkhead#48
+    arm64.b munlinkinner#49
+  __rl_slow#107:
     arm64.bl __rtlock_release
-    arm64.b __rl_cont#101
+    arm64.b __rl_cont#104
   tshgavestrand:
     arm64.leaGlobal x0, __sched_lock
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -35157,21 +35273,21 @@ func @__gt_strand_next {
     arm64.movImm x2, 1
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 0
-    arm64.b.eq __rl_owned#84
-  __rl_slow#85:
+    arm64.b.eq __rl_owned#91
+  __rl_slow#92:
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_enter_slow
-  __rl_cont#83:
+  __rl_cont#90:
     arm64.movRegReg x0, x19
     arm64.bl __gt_enqueue
     arm64.leaGlobal x0, __sched_lock
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.eq __rl_outermost#88
-    arm64.b __rl_nested#87
-  __rl_slow#96:
+    arm64.b.eq __rl_outermost#95
+    arm64.b __rl_nested#94
+  __rl_slow#103:
     arm64.bl __rtlock_release
-  __rl_cont#93:
+  __rl_cont#100:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -35205,9 +35321,9 @@ func @__gt_strand_next {
     arm64.loadRegSlot x21, slot4
     arm64.epilogue 64
     arm64.ret
-  __rl_slow#89:
+  __rl_slow#96:
     arm64.bl __rtlock_release
-  __rl_cont#86:
+  __rl_cont#93:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -37724,29 +37840,29 @@ func @__gt_runner_done {
     x64.movRegImm32 rsi, 1
     x64.xchg8 [rbx], rsi <- rsi
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __rl_slow#49
-  __rl_owned#48:
+    x64.jcc notEqual, __rl_slow#56
+  __rl_owned#55:
     x64.storeBaseDispReg.word64 [rbx + 8], rax
-  __rl_cont#47:
+  __rl_cont#54:
     x64.loadRegBaseDisp.word64 rsi, [rbx + 120]
     x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, runnerhaveawaiter
   runnernoawaiter:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#51
-  __rl_outermost#52:
+    x64.jcc notEqual, __rl_nested#58
+  __rl_outermost#59:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rbx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#50
-    x64.jmp __rl_slow#53
-  __rl_nested#51:
+    x64.jcc equal, __rl_cont#57
+    x64.jmp __rl_slow#60
+  __rl_nested#58:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rbx + 16], rax
-  __rl_cont#50:
+  __rl_cont#57:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -37782,19 +37898,19 @@ func @__gt_runner_done {
     x64.setccReg equal, rax
     x64.loadRegBaseDisp.word64 rdx, [rbx + 16]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_nested#59
-  __rl_outermost#60:
+    x64.jcc notEqual, __rl_nested#66
+  __rl_outermost#67:
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rdx
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rbx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#58
-    x64.jmp __rl_slow#61
-  __rl_nested#59:
+    x64.jcc equal, __rl_cont#65
+    x64.jmp __rl_slow#68
+  __rl_nested#66:
     x64.leaRegRegImm32 rdx, rdx, -1
     x64.storeBaseDispReg.word64 [rbx + 16], rdx
-  __rl_cont#58:
+  __rl_cont#65:
     x64.leaRegGlobal rdx, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
     x64.leaRegGlobal rsi, __sched_tls_teb_offset
@@ -37822,19 +37938,19 @@ func @__gt_runner_done {
   runnerplainawaiter:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#55
-  __rl_outermost#56:
+    x64.jcc notEqual, __rl_nested#62
+  __rl_outermost#63:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.movRegImm32 rax, 0
     x64.xchg8 [rbx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __rl_cont#54
-    x64.jmp __rl_slow#57
-  __rl_nested#55:
+    x64.jcc equal, __rl_cont#61
+    x64.jmp __rl_slow#64
+  __rl_nested#62:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rbx + 16], rax
-  __rl_cont#54:
+  __rl_cont#61:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -37890,12 +38006,12 @@ func @__gt_runner_done {
     x64.loadRegBaseDisp.word64 rcx, [rbx + 32]
     x64.andRegImm32 rax, rax, 2
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#83
+    x64.jcc notEqual, critsplit#90
   runnersampledepth:
     x64.loadRegBaseDisp.word64 rax, [rbx + 448]
     x64.leaRegRegImm32 rax, rax, 5536
     x64.jmp runnersampled
-  critsplit#83:
+  critsplit#90:
     x64.movRegReg rax, rcx
   runnersampled:
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -37911,10 +38027,10 @@ func @__gt_runner_done {
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, runnerkeepstack
   runnercountsample:
-    x64.aluBaseDispReg.add [rcx + 304], rax
-    x64.loadRegBaseDisp.word64 rax, [rcx + 312]
+    x64.aluBaseDispReg.add [rcx + 296], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 304]
     x64.leaRegRegImm32 rax, rax, 1
-    x64.storeBaseDispReg.word64 [rcx + 312], rax
+    x64.storeBaseDispReg.word64 [rcx + 304], rax
     x64.andRegImm32 rax, rax, 63
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, runnerkeepstack
@@ -37945,10 +38061,10 @@ func @__gt_runner_done {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#64
-  __rl_owned#63:
+    x64.jcc notEqual, __rl_slow#71
+  __rl_owned#70:
     x64.storeBaseDispReg.word64 [rcx + 8], rax
-  __rl_cont#62:
+  __rl_cont#69:
     x64.leaRegGlobal rax, __gt_gfree_head
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.movRegImm32 rax, 0
@@ -37957,19 +38073,19 @@ func @__gt_runner_done {
     x64.leaRegGlobal rcx, __gt_gfree_lock
     x64.loadRegBaseDisp.word64 rdx, [rcx + 16]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_nested#66
-  __rl_outermost#67:
+    x64.jcc notEqual, __rl_nested#73
+  __rl_outermost#74:
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rdx
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#65
-    x64.jmp __rl_slow#68
-  __rl_nested#66:
+    x64.jcc equal, __rl_cont#72
+    x64.jmp __rl_slow#75
+  __rl_nested#73:
     x64.leaRegRegImm32 rdx, rdx, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rdx
-  __rl_cont#65:
+  __rl_cont#72:
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.leaRegGlobal rdx, __sched_tls_teb_offset
@@ -37991,7 +38107,7 @@ func @__gt_runner_done {
     x64.aluBaseDispImm32.add [rdx + 0], -1
     x64.cmpRegImm32 r12, 0
     x64.jcc equal, runnerkeepstack
-  critsplit#84:
+  critsplit#91:
     x64.movRegReg r15, r12
   gfswalkhdr:
     x64.cmpRegImm32 r15, 0
@@ -38022,10 +38138,10 @@ func @__gt_runner_done {
     x64.movRegImm32 rsi, 1
     x64.xchg8 [rcx], rsi <- rsi
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __rl_slow#78
-  __rl_owned#77:
+    x64.jcc notEqual, __rl_slow#81
+  __rl_owned#80:
     x64.storeBaseDispReg.word64 [rcx + 8], rdx
-  __rl_cont#76:
+  __rl_cont#79:
     x64.leaRegGlobal rcx, __gt_gfree_nostack_head
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.storeBaseDispReg.word64 [rax + 80], rcx
@@ -38034,19 +38150,19 @@ func @__gt_runner_done {
     x64.leaRegGlobal rcx, __gt_gfree_lock
     x64.loadRegBaseDisp.word64 rax, [rcx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#80
-  __rl_outermost#81:
+    x64.jcc notEqual, __rl_nested#83
+  __rl_outermost#84:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#79
-    x64.jmp __rl_slow#82
-  __rl_nested#80:
+    x64.jcc equal, __rl_cont#82
+    x64.jmp __rl_slow#85
+  __rl_nested#83:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rax
-  __rl_cont#79:
+  __rl_cont#82:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -38131,34 +38247,68 @@ func @__gt_runner_done {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#71
-  __rl_owned#70:
+    x64.jcc notEqual, __rl_slow#78
+  __rl_owned#77:
     x64.storeBaseDispReg.word64 [rcx + 8], rax
-  __rl_cont#69:
+  __rl_cont#76:
     x64.movRegImm32 rax, 1
     x64.leaRegGlobal rcx, __sched_phase
     x64.storeBaseDispReg.word64 [rcx + 0], rax
     x64.leaRegGlobal rax, __sched_main_m
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegGlobal rcx, __sched_midle
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.cmpRegReg rcx, rax
+    x64.setccReg equal, rcx
+    x64.loadRegBaseDisp.word64 rdx, [rax + 632]
+    x64.cmpRegImm32 rdx, 0
+    x64.setccReg notEqual, rdx
+    x64.orRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, signalmainwake
+  signalmainunlist:
+    x64.leaRegGlobal rcx, __sched_nmidle
+    x64.aluBaseDispImm32.add [rcx + 0], -1
+    x64.loadRegBaseDisp.word64 rcx, [rax + 600]
+    x64.loadRegBaseDisp.word64 rdx, [rax + 632]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, munlinkinner
+  munlinkhead:
+    x64.leaRegGlobal rsi, __sched_midle
+    x64.storeBaseDispReg.word64 [rsi + 0], rcx
+    x64.jmp munlinkmend
+  munlinkinner:
+    x64.storeBaseDispReg.word64 [rdx + 600], rcx
+  munlinkmend:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, munlinkclear
+  munlinknext:
+    x64.storeBaseDispReg.word64 [rcx + 632], rdx
+  munlinkclear:
+    x64.movRegImm32 rcx, 0
+    x64.storeBaseDispReg.word64 [rax + 600], rcx
+    x64.movRegImm32 rcx, 0
+    x64.storeBaseDispReg.word64 [rax + 632], rcx
+  signalmainwake:
     x64.loadRegBaseDisp.word64 rcx, [rax + 560]
     x64.iatCall 19
     x64.callDirect __np_break
     x64.leaRegGlobal rcx, __sched_lock
     x64.loadRegBaseDisp.word64 rax, [rcx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#73
-  __rl_outermost#74:
+    x64.jcc notEqual, __rl_nested#87
+  __rl_outermost#88:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#72
-    x64.jmp __rl_slow#75
-  __rl_nested#73:
+    x64.jcc equal, __rl_cont#86
+    x64.jmp __rl_slow#89
+  __rl_nested#87:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rax
-  __rl_cont#72:
+  __rl_cont#86:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -38183,17 +38333,17 @@ func @__gt_runner_done {
     x64.leaRegRegImm32 rcx, rbx, 408
     x64.lock xadd [rcx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, strandunreffed#37
-  strandlastref#36:
+    x64.jcc notEqual, strandunreffed#44
+  strandlastref#43:
     x64.leaRegRegImm32 rax, rbx, 104
     x64.movRegImm32 rcx, 2
     x64.lock xadd [rax], rcx <- rcx
     x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, strandunreffed#37
-  teardownreclaim#38:
+    x64.jcc notEqual, strandunreffed#44
+  teardownreclaim#45:
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_reclaim
-  strandunreffed#37:
+  strandunreffed#44:
     x64.epilogue 88
     x64.popReg r15
     x64.popReg r14
@@ -38208,7 +38358,7 @@ func @__gt_runner_done {
     x64.lock xadd [rax], rcx <- rcx
     x64.cmpRegImm32 rcx, 1
     x64.jcc notEqual, teardownarrived
-  teardownreclaim#40:
+  teardownreclaim#47:
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_reclaim
   teardownarrived:
@@ -38229,18 +38379,18 @@ func @__gt_runner_done {
     x64.leaRegRegImm32 rcx, rcx, 408
     x64.lock xadd [rcx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, strandunreffed#44
-  strandlastref#43:
+    x64.jcc notEqual, strandunreffed#51
+  strandlastref#50:
     x64.loadRegSlot rax, slot1
     x64.leaRegRegImm32 rax, rax, 104
     x64.movRegImm32 rcx, 2
     x64.lock xadd [rax], rcx <- rcx
     x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, strandunreffed#44
-  teardownreclaim#45:
+    x64.jcc notEqual, strandunreffed#51
+  teardownreclaim#52:
     x64.loadRegSlot rcx, slot1
     x64.callDirect __gt_reclaim
-  strandunreffed#44:
+  strandunreffed#51:
     x64.epilogue 88
     x64.popReg r15
     x64.popReg r14
@@ -38249,7 +38399,7 @@ func @__gt_runner_done {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rl_slow#49:
+  __rl_slow#56:
     x64.storeSlotReg slot2, rcx
     x64.storeSlotReg slot3, rdx
     x64.movRegReg rcx, rbx
@@ -38257,20 +38407,20 @@ func @__gt_runner_done {
     x64.callDirect __rtlock_enter_slow
     x64.loadRegSlot rcx, slot2
     x64.loadRegSlot rdx, slot3
-    x64.jmp __rl_cont#47
-  __rl_slow#53:
+    x64.jmp __rl_cont#54
+  __rl_slow#60:
     x64.movRegReg rcx, rbx
     x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#50
-  __rl_slow#61:
+    x64.jmp __rl_cont#57
+  __rl_slow#68:
     x64.storeSlotReg slot4, rax
     x64.storeSlotReg slot2, rcx
     x64.movRegReg rcx, rbx
     x64.callDirect __rtlock_release
     x64.loadRegSlot rax, slot4
     x64.loadRegSlot rcx, slot2
-    x64.jmp __rl_cont#58
-  __rl_slow#57:
+    x64.jmp __rl_cont#65
+  __rl_slow#64:
     x64.storeSlotReg slot3, rdx
     x64.storeSlotReg slot5, rsi
     x64.movRegReg rcx, rbx
@@ -38278,30 +38428,30 @@ func @__gt_runner_done {
     x64.callDirect __rtlock_release
     x64.loadRegSlot rdx, slot3
     x64.loadRegSlot rsi, slot5
-    x64.jmp __rl_cont#54
-  __rl_slow#64:
-    x64.callDirect __rtlock_enter_slow
-    x64.jmp __rl_cont#62
-  __rl_slow#68:
-    x64.storeSlotReg slot4, rax
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot4
-    x64.jmp __rl_cont#65
-  __rl_slow#78:
-    x64.storeSlotReg slot4, rax
-    x64.movRegReg rdx, rsi
-    x64.callDirect __rtlock_enter_slow
-    x64.loadRegSlot rax, slot4
-    x64.jmp __rl_cont#76
-  __rl_slow#82:
-    x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#79
+    x64.jmp __rl_cont#61
   __rl_slow#71:
     x64.callDirect __rtlock_enter_slow
     x64.jmp __rl_cont#69
   __rl_slow#75:
+    x64.storeSlotReg slot4, rax
     x64.callDirect __rtlock_release
+    x64.loadRegSlot rax, slot4
     x64.jmp __rl_cont#72
+  __rl_slow#81:
+    x64.storeSlotReg slot4, rax
+    x64.movRegReg rdx, rsi
+    x64.callDirect __rtlock_enter_slow
+    x64.loadRegSlot rax, slot4
+    x64.jmp __rl_cont#79
+  __rl_slow#85:
+    x64.callDirect __rtlock_release
+    x64.jmp __rl_cont#82
+  __rl_slow#78:
+    x64.callDirect __rtlock_enter_slow
+    x64.jmp __rl_cont#76
+  __rl_slow#89:
+    x64.callDirect __rtlock_release
+    x64.jmp __rl_cont#86
   readybadstatus:
     x64.leaRegRdata rcx, [rip + __fatal_msg_0]  ; "fatal error: bad green-thread status in ready\x0a"
     x64.movRegImm32 rdx, 46
@@ -38600,29 +38750,29 @@ func @__gt_runner_done {
     x64.movRegImm32 rsi, 1
     x64.xchg8 [rbx], rsi <- rsi
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __rl_slow#49
-  __rl_owned#48:
+    x64.jcc notEqual, __rl_slow#56
+  __rl_owned#55:
     x64.storeBaseDispReg.word64 [rbx + 8], rax
-  __rl_cont#47:
+  __rl_cont#54:
     x64.loadRegBaseDisp.word64 rsi, [rbx + 120]
     x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, runnerhaveawaiter
   runnernoawaiter:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#51
-  __rl_outermost#52:
+    x64.jcc notEqual, __rl_nested#58
+  __rl_outermost#59:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rbx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#50
-    x64.jmp __rl_slow#53
-  __rl_nested#51:
+    x64.jcc equal, __rl_cont#57
+    x64.jmp __rl_slow#60
+  __rl_nested#58:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rbx + 16], rax
-  __rl_cont#50:
+  __rl_cont#57:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -38658,19 +38808,19 @@ func @__gt_runner_done {
     x64.setccReg equal, rax
     x64.loadRegBaseDisp.word64 rdx, [rbx + 16]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_nested#59
-  __rl_outermost#60:
+    x64.jcc notEqual, __rl_nested#66
+  __rl_outermost#67:
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rdx
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rbx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#58
-    x64.jmp __rl_slow#61
-  __rl_nested#59:
+    x64.jcc equal, __rl_cont#65
+    x64.jmp __rl_slow#68
+  __rl_nested#66:
     x64.leaRegRegImm32 rdx, rdx, -1
     x64.storeBaseDispReg.word64 [rbx + 16], rdx
-  __rl_cont#58:
+  __rl_cont#65:
     x64.leaRegGlobal rdx, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
     x64.leaRegGlobal rsi, __sched_tls_teb_offset
@@ -38698,19 +38848,19 @@ func @__gt_runner_done {
   runnerplainawaiter:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#55
-  __rl_outermost#56:
+    x64.jcc notEqual, __rl_nested#62
+  __rl_outermost#63:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.movRegImm32 rax, 0
     x64.xchg8 [rbx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __rl_cont#54
-    x64.jmp __rl_slow#57
-  __rl_nested#55:
+    x64.jcc equal, __rl_cont#61
+    x64.jmp __rl_slow#64
+  __rl_nested#62:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rbx + 16], rax
-  __rl_cont#54:
+  __rl_cont#61:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -38766,12 +38916,12 @@ func @__gt_runner_done {
     x64.loadRegBaseDisp.word64 rcx, [rbx + 32]
     x64.andRegImm32 rax, rax, 2
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#83
+    x64.jcc notEqual, critsplit#90
   runnersampledepth:
     x64.loadRegBaseDisp.word64 rax, [rbx + 448]
     x64.leaRegRegImm32 rax, rax, 928
     x64.jmp runnersampled
-  critsplit#83:
+  critsplit#90:
     x64.movRegReg rax, rcx
   runnersampled:
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -38787,10 +38937,10 @@ func @__gt_runner_done {
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, runnerkeepstack
   runnercountsample:
-    x64.aluBaseDispReg.add [rcx + 304], rax
-    x64.loadRegBaseDisp.word64 rax, [rcx + 312]
+    x64.aluBaseDispReg.add [rcx + 296], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 304]
     x64.leaRegRegImm32 rax, rax, 1
-    x64.storeBaseDispReg.word64 [rcx + 312], rax
+    x64.storeBaseDispReg.word64 [rcx + 304], rax
     x64.andRegImm32 rax, rax, 63
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, runnerkeepstack
@@ -38821,10 +38971,10 @@ func @__gt_runner_done {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#64
-  __rl_owned#63:
+    x64.jcc notEqual, __rl_slow#71
+  __rl_owned#70:
     x64.storeBaseDispReg.word64 [rcx + 8], rax
-  __rl_cont#62:
+  __rl_cont#69:
     x64.leaRegGlobal rax, __gt_gfree_head
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.movRegImm32 rax, 0
@@ -38833,19 +38983,19 @@ func @__gt_runner_done {
     x64.leaRegGlobal rcx, __gt_gfree_lock
     x64.loadRegBaseDisp.word64 rdx, [rcx + 16]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_nested#66
-  __rl_outermost#67:
+    x64.jcc notEqual, __rl_nested#73
+  __rl_outermost#74:
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rdx
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#65
-    x64.jmp __rl_slow#68
-  __rl_nested#66:
+    x64.jcc equal, __rl_cont#72
+    x64.jmp __rl_slow#75
+  __rl_nested#73:
     x64.leaRegRegImm32 rdx, rdx, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rdx
-  __rl_cont#65:
+  __rl_cont#72:
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.leaRegGlobal rdx, __sched_tls_teb_offset
@@ -38867,7 +39017,7 @@ func @__gt_runner_done {
     x64.aluBaseDispImm32.add [rdx + 0], -1
     x64.cmpRegImm32 r12, 0
     x64.jcc equal, runnerkeepstack
-  critsplit#84:
+  critsplit#91:
     x64.movRegReg r15, r12
   gfswalkhdr:
     x64.cmpRegImm32 r15, 0
@@ -38898,10 +39048,10 @@ func @__gt_runner_done {
     x64.movRegImm32 rsi, 1
     x64.xchg8 [rcx], rsi <- rsi
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __rl_slow#78
-  __rl_owned#77:
+    x64.jcc notEqual, __rl_slow#81
+  __rl_owned#80:
     x64.storeBaseDispReg.word64 [rcx + 8], rdx
-  __rl_cont#76:
+  __rl_cont#79:
     x64.leaRegGlobal rcx, __gt_gfree_nostack_head
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.storeBaseDispReg.word64 [rax + 80], rcx
@@ -38910,19 +39060,19 @@ func @__gt_runner_done {
     x64.leaRegGlobal rcx, __gt_gfree_lock
     x64.loadRegBaseDisp.word64 rax, [rcx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#80
-  __rl_outermost#81:
+    x64.jcc notEqual, __rl_nested#83
+  __rl_outermost#84:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#79
-    x64.jmp __rl_slow#82
-  __rl_nested#80:
+    x64.jcc equal, __rl_cont#82
+    x64.jmp __rl_slow#85
+  __rl_nested#83:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rax
-  __rl_cont#79:
+  __rl_cont#82:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -39007,34 +39157,68 @@ func @__gt_runner_done {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#71
-  __rl_owned#70:
+    x64.jcc notEqual, __rl_slow#78
+  __rl_owned#77:
     x64.storeBaseDispReg.word64 [rcx + 8], rax
-  __rl_cont#69:
+  __rl_cont#76:
     x64.movRegImm32 rax, 1
     x64.leaRegGlobal rcx, __sched_phase
     x64.storeBaseDispReg.word64 [rcx + 0], rax
     x64.leaRegGlobal rax, __sched_main_m
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegGlobal rcx, __sched_midle
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.cmpRegReg rcx, rax
+    x64.setccReg equal, rcx
+    x64.loadRegBaseDisp.word64 rdx, [rax + 632]
+    x64.cmpRegImm32 rdx, 0
+    x64.setccReg notEqual, rdx
+    x64.orRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, signalmainwake
+  signalmainunlist:
+    x64.leaRegGlobal rcx, __sched_nmidle
+    x64.aluBaseDispImm32.add [rcx + 0], -1
+    x64.loadRegBaseDisp.word64 rcx, [rax + 600]
+    x64.loadRegBaseDisp.word64 rdx, [rax + 632]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, munlinkinner
+  munlinkhead:
+    x64.leaRegGlobal rsi, __sched_midle
+    x64.storeBaseDispReg.word64 [rsi + 0], rcx
+    x64.jmp munlinkmend
+  munlinkinner:
+    x64.storeBaseDispReg.word64 [rdx + 600], rcx
+  munlinkmend:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, munlinkclear
+  munlinknext:
+    x64.storeBaseDispReg.word64 [rcx + 632], rdx
+  munlinkclear:
+    x64.movRegImm32 rcx, 0
+    x64.storeBaseDispReg.word64 [rax + 600], rcx
+    x64.movRegImm32 rcx, 0
+    x64.storeBaseDispReg.word64 [rax + 632], rcx
+  signalmainwake:
     x64.loadRegBaseDisp.word64 rcx, [rax + 560]
     x64.callDirect mrt_host_event_set
     x64.callDirect __np_break
     x64.leaRegGlobal rcx, __sched_lock
     x64.loadRegBaseDisp.word64 rax, [rcx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#73
-  __rl_outermost#74:
+    x64.jcc notEqual, __rl_nested#87
+  __rl_outermost#88:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#72
-    x64.jmp __rl_slow#75
-  __rl_nested#73:
+    x64.jcc equal, __rl_cont#86
+    x64.jmp __rl_slow#89
+  __rl_nested#87:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rax
-  __rl_cont#72:
+  __rl_cont#86:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -39059,17 +39243,17 @@ func @__gt_runner_done {
     x64.leaRegRegImm32 rcx, rbx, 408
     x64.lock xadd [rcx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, strandunreffed#37
-  strandlastref#36:
+    x64.jcc notEqual, strandunreffed#44
+  strandlastref#43:
     x64.leaRegRegImm32 rax, rbx, 104
     x64.movRegImm32 rcx, 2
     x64.lock xadd [rax], rcx <- rcx
     x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, strandunreffed#37
-  teardownreclaim#38:
+    x64.jcc notEqual, strandunreffed#44
+  teardownreclaim#45:
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_reclaim
-  strandunreffed#37:
+  strandunreffed#44:
     x64.epilogue 88
     x64.popReg r15
     x64.popReg r14
@@ -39084,7 +39268,7 @@ func @__gt_runner_done {
     x64.lock xadd [rax], rcx <- rcx
     x64.cmpRegImm32 rcx, 1
     x64.jcc notEqual, teardownarrived
-  teardownreclaim#40:
+  teardownreclaim#47:
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_reclaim
   teardownarrived:
@@ -39105,18 +39289,18 @@ func @__gt_runner_done {
     x64.leaRegRegImm32 rcx, rcx, 408
     x64.lock xadd [rcx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, strandunreffed#44
-  strandlastref#43:
+    x64.jcc notEqual, strandunreffed#51
+  strandlastref#50:
     x64.loadRegSlot rax, slot1
     x64.leaRegRegImm32 rax, rax, 104
     x64.movRegImm32 rcx, 2
     x64.lock xadd [rax], rcx <- rcx
     x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, strandunreffed#44
-  teardownreclaim#45:
+    x64.jcc notEqual, strandunreffed#51
+  teardownreclaim#52:
     x64.loadRegSlot rcx, slot1
     x64.callDirect __gt_reclaim
-  strandunreffed#44:
+  strandunreffed#51:
     x64.epilogue 88
     x64.popReg r15
     x64.popReg r14
@@ -39125,7 +39309,7 @@ func @__gt_runner_done {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rl_slow#49:
+  __rl_slow#56:
     x64.storeSlotReg slot2, rcx
     x64.storeSlotReg slot3, rdx
     x64.movRegReg rcx, rbx
@@ -39133,20 +39317,20 @@ func @__gt_runner_done {
     x64.callDirect __rtlock_enter_slow
     x64.loadRegSlot rcx, slot2
     x64.loadRegSlot rdx, slot3
-    x64.jmp __rl_cont#47
-  __rl_slow#53:
+    x64.jmp __rl_cont#54
+  __rl_slow#60:
     x64.movRegReg rcx, rbx
     x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#50
-  __rl_slow#61:
+    x64.jmp __rl_cont#57
+  __rl_slow#68:
     x64.storeSlotReg slot4, rax
     x64.storeSlotReg slot2, rcx
     x64.movRegReg rcx, rbx
     x64.callDirect __rtlock_release
     x64.loadRegSlot rax, slot4
     x64.loadRegSlot rcx, slot2
-    x64.jmp __rl_cont#58
-  __rl_slow#57:
+    x64.jmp __rl_cont#65
+  __rl_slow#64:
     x64.storeSlotReg slot3, rdx
     x64.storeSlotReg slot5, rsi
     x64.movRegReg rcx, rbx
@@ -39154,30 +39338,30 @@ func @__gt_runner_done {
     x64.callDirect __rtlock_release
     x64.loadRegSlot rdx, slot3
     x64.loadRegSlot rsi, slot5
-    x64.jmp __rl_cont#54
-  __rl_slow#64:
-    x64.callDirect __rtlock_enter_slow
-    x64.jmp __rl_cont#62
-  __rl_slow#68:
-    x64.storeSlotReg slot4, rax
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot4
-    x64.jmp __rl_cont#65
-  __rl_slow#78:
-    x64.storeSlotReg slot4, rax
-    x64.movRegReg rdx, rsi
-    x64.callDirect __rtlock_enter_slow
-    x64.loadRegSlot rax, slot4
-    x64.jmp __rl_cont#76
-  __rl_slow#82:
-    x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#79
+    x64.jmp __rl_cont#61
   __rl_slow#71:
     x64.callDirect __rtlock_enter_slow
     x64.jmp __rl_cont#69
   __rl_slow#75:
+    x64.storeSlotReg slot4, rax
     x64.callDirect __rtlock_release
+    x64.loadRegSlot rax, slot4
     x64.jmp __rl_cont#72
+  __rl_slow#81:
+    x64.storeSlotReg slot4, rax
+    x64.movRegReg rdx, rsi
+    x64.callDirect __rtlock_enter_slow
+    x64.loadRegSlot rax, slot4
+    x64.jmp __rl_cont#79
+  __rl_slow#85:
+    x64.callDirect __rtlock_release
+    x64.jmp __rl_cont#82
+  __rl_slow#78:
+    x64.callDirect __rtlock_enter_slow
+    x64.jmp __rl_cont#76
+  __rl_slow#89:
+    x64.callDirect __rtlock_release
+    x64.jmp __rl_cont#86
   readybadstatus:
     x64.leaRegRdata rcx, [rip + __fatal_msg_0]  ; "fatal error: bad green-thread status in ready\x0a"
     x64.movRegImm32 rdx, 46
@@ -39474,29 +39658,29 @@ func @__gt_runner_done {
     arm64.movImm x3, 1
     arm64.arm64AtomicRmw.exchangeByte x3, [x19], x3
     arm64.cmp x3, 0
-    arm64.b.ne __rl_slow#49
-  __rl_owned#48:
+    arm64.b.ne __rl_slow#56
+  __rl_owned#55:
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
-  __rl_cont#47:
+  __rl_cont#54:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 120]
     arm64.cmp x0, 0
     arm64.b.ne runnerhaveawaiter
   runnernoawaiter:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.b.ne __rl_nested#51
-  __rl_outermost#52:
+    arm64.b.ne __rl_nested#58
+  __rl_outermost#59:
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x19], x0
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#50
-    arm64.b __rl_slow#53
-  __rl_nested#51:
+    arm64.b.eq __rl_cont#57
+    arm64.b __rl_slow#60
+  __rl_nested#58:
     arm64.add x0, x0, -1
     arm64.storeBaseDispReg.word64 [x19 + 16], x0
-  __rl_cont#50:
+  __rl_cont#57:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -39537,19 +39721,19 @@ func @__gt_runner_done {
     arm64.arm64AtomicCas x1, [x3], x1, x2
     arm64.loadRegBaseDisp.word64 x2, [x19 + 16]
     arm64.cmp x2, 0
-    arm64.b.ne __rl_nested#59
-  __rl_outermost#60:
+    arm64.b.ne __rl_nested#66
+  __rl_outermost#67:
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x2
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x19], x2
     arm64.cmp x2, 1
-    arm64.b.eq __rl_cont#58
-    arm64.b __rl_slow#61
-  __rl_nested#59:
+    arm64.b.eq __rl_cont#65
+    arm64.b __rl_slow#68
+  __rl_nested#66:
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x19 + 16], x2
-  __rl_cont#58:
+  __rl_cont#65:
     arm64.leaGlobal x2, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
     arm64.leaGlobal x3, __sched_tls_teb_offset
@@ -39584,19 +39768,19 @@ func @__gt_runner_done {
   runnerplainawaiter:
     arm64.loadRegBaseDisp.word64 x2, [x19 + 16]
     arm64.cmp x2, 0
-    arm64.b.ne __rl_nested#55
-  __rl_outermost#56:
+    arm64.b.ne __rl_nested#62
+  __rl_outermost#63:
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x2
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x19], x2
     arm64.cmp x2, 1
-    arm64.b.eq __rl_cont#54
-    arm64.b __rl_slow#57
-  __rl_nested#55:
+    arm64.b.eq __rl_cont#61
+    arm64.b __rl_slow#64
+  __rl_nested#62:
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x19 + 16], x2
-  __rl_cont#54:
+  __rl_cont#61:
     arm64.leaGlobal x2, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
     arm64.leaGlobal x3, __sched_tls_teb_offset
@@ -39654,12 +39838,12 @@ func @__gt_runner_done {
     arm64.loadRegBaseDisp.word64 x1, [x19 + 32]
     arm64.and x0, x0, 2
     arm64.cmp x0, 0
-    arm64.b.ne critsplit#83
+    arm64.b.ne critsplit#90
   runnersampledepth:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 448]
     arm64.add x0, x0, 928
     arm64.b runnersampled
-  critsplit#83:
+  critsplit#90:
     arm64.movRegReg x0, x1
   runnersampled:
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -39680,12 +39864,12 @@ func @__gt_runner_done {
     arm64.cmp x1, 0
     arm64.b.eq runnerkeepstack
   runnercountsample:
-    arm64.loadRegBaseDisp.word64 x2, [x1 + 304]
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 296]
     arm64.add x0, x2, x0
-    arm64.storeBaseDispReg.word64 [x1 + 304], x0
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 312]
+    arm64.storeBaseDispReg.word64 [x1 + 296], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 304]
     arm64.add x0, x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 312], x0
+    arm64.storeBaseDispReg.word64 [x1 + 304], x0
     arm64.and x0, x0, 63
     arm64.cmp x0, 0
     arm64.b.ne runnerkeepstack
@@ -39722,10 +39906,10 @@ func @__gt_runner_done {
     arm64.movImm x2, 1
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 0
-    arm64.b.ne __rl_slow#64
-  __rl_owned#63:
+    arm64.b.ne __rl_slow#71
+  __rl_owned#70:
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
-  __rl_cont#62:
+  __rl_cont#69:
     arm64.leaGlobal x0, __gt_gfree_head
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.movImm x0, 0
@@ -39734,19 +39918,19 @@ func @__gt_runner_done {
     arm64.leaGlobal x1, __gt_gfree_lock
     arm64.loadRegBaseDisp.word64 x2, [x1 + 16]
     arm64.cmp x2, 0
-    arm64.b.ne __rl_nested#66
-  __rl_outermost#67:
+    arm64.b.ne __rl_nested#73
+  __rl_outermost#74:
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x1 + 8], x2
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
     arm64.cmp x2, 1
-    arm64.b.eq __rl_cont#65
-    arm64.b __rl_slow#68
-  __rl_nested#66:
+    arm64.b.eq __rl_cont#72
+    arm64.b __rl_slow#75
+  __rl_nested#73:
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x1 + 16], x2
-  __rl_cont#65:
+  __rl_cont#72:
     arm64.leaGlobal x1, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.leaGlobal x2, __sched_tls_teb_offset
@@ -39775,7 +39959,7 @@ func @__gt_runner_done {
     arm64.storeBaseDispReg.word64 [x1 + 0], x2
     arm64.cmp x20, 0
     arm64.b.eq runnerkeepstack
-  critsplit#84:
+  critsplit#91:
     arm64.movRegReg x24, x20
   gfswalkhdr:
     arm64.cmp x24, 0
@@ -39812,10 +39996,10 @@ func @__gt_runner_done {
     arm64.movImm x3, 1
     arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
     arm64.cmp x3, 0
-    arm64.b.ne __rl_slow#78
-  __rl_owned#77:
+    arm64.b.ne __rl_slow#81
+  __rl_owned#80:
     arm64.storeBaseDispReg.word64 [x1 + 8], x2
-  __rl_cont#76:
+  __rl_cont#79:
     arm64.leaGlobal x1, __gt_gfree_nostack_head
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.storeBaseDispReg.word64 [x0 + 80], x1
@@ -39824,19 +40008,19 @@ func @__gt_runner_done {
     arm64.leaGlobal x0, __gt_gfree_lock
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.ne __rl_nested#80
-  __rl_outermost#81:
+    arm64.b.ne __rl_nested#83
+  __rl_outermost#84:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#79
-    arm64.b __rl_slow#82
-  __rl_nested#80:
+    arm64.b.eq __rl_cont#82
+    arm64.b __rl_slow#85
+  __rl_nested#83:
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
-  __rl_cont#79:
+  __rl_cont#82:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -39934,34 +40118,70 @@ func @__gt_runner_done {
     arm64.movImm x2, 1
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 0
-    arm64.b.ne __rl_slow#71
-  __rl_owned#70:
+    arm64.b.ne __rl_slow#78
+  __rl_owned#77:
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
-  __rl_cont#69:
+  __rl_cont#76:
     arm64.movImm x0, 1
     arm64.leaGlobal x1, __sched_phase
     arm64.stlr.word64 [x1], x0
     arm64.leaGlobal x0, __sched_main_m
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.leaGlobal x1, __sched_midle
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.cmp x1, x0
+    arm64.cset x1, eq
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 632]
+    arm64.cmp x2, 0
+    arm64.cset x2, ne
+    arm64.orr x1, x1, x2
+    arm64.cmp x1, 0
+    arm64.b.eq signalmainwake
+  signalmainunlist:
+    arm64.leaGlobal x1, __sched_nmidle
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
+    arm64.add x2, x2, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 600]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 632]
+    arm64.cmp x2, 0
+    arm64.b.ne munlinkinner
+  munlinkhead:
+    arm64.leaGlobal x3, __sched_midle
+    arm64.storeBaseDispReg.word64 [x3 + 0], x1
+    arm64.b munlinkmend
+  munlinkinner:
+    arm64.storeBaseDispReg.word64 [x2 + 600], x1
+  munlinkmend:
+    arm64.cmp x1, 0
+    arm64.b.eq munlinkclear
+  munlinknext:
+    arm64.storeBaseDispReg.word64 [x1 + 632], x2
+  munlinkclear:
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 600], x1
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 632], x1
+  signalmainwake:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 560]
     arm64.bl mrt_host_event_set
     arm64.bl __np_break
     arm64.leaGlobal x0, __sched_lock
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.ne __rl_nested#73
-  __rl_outermost#74:
+    arm64.b.ne __rl_nested#87
+  __rl_outermost#88:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#72
-    arm64.b __rl_slow#75
-  __rl_nested#73:
+    arm64.b.eq __rl_cont#86
+    arm64.b __rl_slow#89
+  __rl_nested#87:
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
-  __rl_cont#72:
+  __rl_cont#86:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -39993,17 +40213,17 @@ func @__gt_runner_done {
     arm64.add x1, x19, 408
     arm64.arm64AtomicRmw.add x0, [x1], x0
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#37
-  strandlastref#36:
+    arm64.b.ne strandunreffed#44
+  strandlastref#43:
     arm64.add x0, x19, 104
     arm64.movImm x1, 2
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#37
-  teardownreclaim#38:
+    arm64.b.ne strandunreffed#44
+  teardownreclaim#45:
     arm64.movRegReg x0, x19
     arm64.bl __gt_reclaim
-  strandunreffed#37:
+  strandunreffed#44:
     arm64.loadRegSlot x19, slot3
     arm64.loadRegSlot x20, slot4
     arm64.loadRegSlot x21, slot5
@@ -40019,7 +40239,7 @@ func @__gt_runner_done {
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.cmp x0, 1
     arm64.b.ne teardownarrived
-  teardownreclaim#40:
+  teardownreclaim#47:
     arm64.movRegReg x0, x19
     arm64.bl __gt_reclaim
   teardownarrived:
@@ -40039,17 +40259,17 @@ func @__gt_runner_done {
     arm64.add x1, x21, 408
     arm64.arm64AtomicRmw.add x0, [x1], x0
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#44
-  strandlastref#43:
+    arm64.b.ne strandunreffed#51
+  strandlastref#50:
     arm64.add x0, x21, 104
     arm64.movImm x1, 2
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#44
-  teardownreclaim#45:
+    arm64.b.ne strandunreffed#51
+  teardownreclaim#52:
     arm64.movRegReg x0, x21
     arm64.bl __gt_reclaim
-  strandunreffed#44:
+  strandunreffed#51:
     arm64.loadRegSlot x19, slot3
     arm64.loadRegSlot x20, slot4
     arm64.loadRegSlot x21, slot5
@@ -40059,7 +40279,7 @@ func @__gt_runner_done {
     arm64.loadRegSlot x25, slot9
     arm64.epilogue 96
     arm64.ret
-  __rl_slow#49:
+  __rl_slow#56:
     arm64.storeSlotReg slot0, x1
     arm64.storeSlotReg slot1, x2
     arm64.movRegReg x0, x19
@@ -40067,61 +40287,61 @@ func @__gt_runner_done {
     arm64.bl __rtlock_enter_slow
     arm64.loadRegSlot x1, slot0
     arm64.loadRegSlot x2, slot1
-    arm64.b __rl_cont#47
-  __rl_slow#53:
-    arm64.movRegReg x0, x19
-    arm64.bl __rtlock_release
-    arm64.b __rl_cont#50
-  __rl_slow#61:
-    arm64.storeSlotReg slot2, x0
-    arm64.storeSlotReg slot0, x1
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_release
-    arm64.movRegReg x2, x0
-    arm64.loadRegSlot x0, slot2
-    arm64.loadRegSlot x1, slot0
-    arm64.b __rl_cont#58
-  __rl_slow#57:
-    arm64.storeSlotReg slot2, x0
-    arm64.storeSlotReg slot0, x1
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_release
-    arm64.movRegReg x2, x0
-    arm64.loadRegSlot x0, slot2
-    arm64.loadRegSlot x1, slot0
     arm64.b __rl_cont#54
+  __rl_slow#60:
+    arm64.movRegReg x0, x19
+    arm64.bl __rtlock_release
+    arm64.b __rl_cont#57
+  __rl_slow#68:
+    arm64.storeSlotReg slot2, x0
+    arm64.storeSlotReg slot0, x1
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x2
+    arm64.bl __rtlock_release
+    arm64.movRegReg x2, x0
+    arm64.loadRegSlot x0, slot2
+    arm64.loadRegSlot x1, slot0
+    arm64.b __rl_cont#65
   __rl_slow#64:
+    arm64.storeSlotReg slot2, x0
+    arm64.storeSlotReg slot0, x1
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x2
+    arm64.bl __rtlock_release
+    arm64.movRegReg x2, x0
+    arm64.loadRegSlot x0, slot2
+    arm64.loadRegSlot x1, slot0
+    arm64.b __rl_cont#61
+  __rl_slow#71:
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_enter_slow
-    arm64.b __rl_cont#62
-  __rl_slow#68:
+    arm64.b __rl_cont#69
+  __rl_slow#75:
     arm64.storeSlotReg slot2, x0
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_release
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot2
-    arm64.b __rl_cont#65
-  __rl_slow#78:
+    arm64.b __rl_cont#72
+  __rl_slow#81:
     arm64.storeSlotReg slot2, x0
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x3
     arm64.bl __rtlock_enter_slow
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot2
-    arm64.b __rl_cont#76
-  __rl_slow#82:
-    arm64.bl __rtlock_release
     arm64.b __rl_cont#79
-  __rl_slow#71:
+  __rl_slow#85:
+    arm64.bl __rtlock_release
+    arm64.b __rl_cont#82
+  __rl_slow#78:
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_enter_slow
-    arm64.b __rl_cont#69
-  __rl_slow#75:
+    arm64.b __rl_cont#76
+  __rl_slow#89:
     arm64.bl __rtlock_release
-    arm64.b __rl_cont#72
+    arm64.b __rl_cont#86
   readybadstatus:
     arm64.leaRdata x0, __fatal_msg_0  ; "fatal error: bad green-thread status in ready\x0a"
     arm64.movImm x1, 46
@@ -40423,29 +40643,29 @@ func @__gt_runner_done {
     arm64.movImm x3, 1
     arm64.arm64AtomicRmw.exchangeByte x3, [x19], x3
     arm64.cmp x3, 0
-    arm64.b.ne __rl_slow#49
-  __rl_owned#48:
+    arm64.b.ne __rl_slow#56
+  __rl_owned#55:
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
-  __rl_cont#47:
+  __rl_cont#54:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 120]
     arm64.cmp x0, 0
     arm64.b.ne runnerhaveawaiter
   runnernoawaiter:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.b.ne __rl_nested#51
-  __rl_outermost#52:
+    arm64.b.ne __rl_nested#58
+  __rl_outermost#59:
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x19], x0
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#50
-    arm64.b __rl_slow#53
-  __rl_nested#51:
+    arm64.b.eq __rl_cont#57
+    arm64.b __rl_slow#60
+  __rl_nested#58:
     arm64.add x0, x0, -1
     arm64.storeBaseDispReg.word64 [x19 + 16], x0
-  __rl_cont#50:
+  __rl_cont#57:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -40486,19 +40706,19 @@ func @__gt_runner_done {
     arm64.arm64AtomicCas x1, [x3], x1, x2
     arm64.loadRegBaseDisp.word64 x2, [x19 + 16]
     arm64.cmp x2, 0
-    arm64.b.ne __rl_nested#59
-  __rl_outermost#60:
+    arm64.b.ne __rl_nested#66
+  __rl_outermost#67:
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x2
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x19], x2
     arm64.cmp x2, 1
-    arm64.b.eq __rl_cont#58
-    arm64.b __rl_slow#61
-  __rl_nested#59:
+    arm64.b.eq __rl_cont#65
+    arm64.b __rl_slow#68
+  __rl_nested#66:
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x19 + 16], x2
-  __rl_cont#58:
+  __rl_cont#65:
     arm64.leaGlobal x2, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
     arm64.leaGlobal x3, __sched_tls_teb_offset
@@ -40533,19 +40753,19 @@ func @__gt_runner_done {
   runnerplainawaiter:
     arm64.loadRegBaseDisp.word64 x2, [x19 + 16]
     arm64.cmp x2, 0
-    arm64.b.ne __rl_nested#55
-  __rl_outermost#56:
+    arm64.b.ne __rl_nested#62
+  __rl_outermost#63:
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x2
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x19], x2
     arm64.cmp x2, 1
-    arm64.b.eq __rl_cont#54
-    arm64.b __rl_slow#57
-  __rl_nested#55:
+    arm64.b.eq __rl_cont#61
+    arm64.b __rl_slow#64
+  __rl_nested#62:
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x19 + 16], x2
-  __rl_cont#54:
+  __rl_cont#61:
     arm64.leaGlobal x2, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
     arm64.leaGlobal x3, __sched_tls_teb_offset
@@ -40603,12 +40823,12 @@ func @__gt_runner_done {
     arm64.loadRegBaseDisp.word64 x1, [x19 + 32]
     arm64.and x0, x0, 2
     arm64.cmp x0, 0
-    arm64.b.ne critsplit#83
+    arm64.b.ne critsplit#90
   runnersampledepth:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 448]
     arm64.add x0, x0, 928
     arm64.b runnersampled
-  critsplit#83:
+  critsplit#90:
     arm64.movRegReg x0, x1
   runnersampled:
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -40629,12 +40849,12 @@ func @__gt_runner_done {
     arm64.cmp x1, 0
     arm64.b.eq runnerkeepstack
   runnercountsample:
-    arm64.loadRegBaseDisp.word64 x2, [x1 + 304]
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 296]
     arm64.add x0, x2, x0
-    arm64.storeBaseDispReg.word64 [x1 + 304], x0
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 312]
+    arm64.storeBaseDispReg.word64 [x1 + 296], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 304]
     arm64.add x0, x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 312], x0
+    arm64.storeBaseDispReg.word64 [x1 + 304], x0
     arm64.and x0, x0, 63
     arm64.cmp x0, 0
     arm64.b.ne runnerkeepstack
@@ -40671,10 +40891,10 @@ func @__gt_runner_done {
     arm64.movImm x2, 1
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 0
-    arm64.b.ne __rl_slow#64
-  __rl_owned#63:
+    arm64.b.ne __rl_slow#71
+  __rl_owned#70:
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
-  __rl_cont#62:
+  __rl_cont#69:
     arm64.leaGlobal x0, __gt_gfree_head
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.movImm x0, 0
@@ -40683,19 +40903,19 @@ func @__gt_runner_done {
     arm64.leaGlobal x1, __gt_gfree_lock
     arm64.loadRegBaseDisp.word64 x2, [x1 + 16]
     arm64.cmp x2, 0
-    arm64.b.ne __rl_nested#66
-  __rl_outermost#67:
+    arm64.b.ne __rl_nested#73
+  __rl_outermost#74:
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x1 + 8], x2
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
     arm64.cmp x2, 1
-    arm64.b.eq __rl_cont#65
-    arm64.b __rl_slow#68
-  __rl_nested#66:
+    arm64.b.eq __rl_cont#72
+    arm64.b __rl_slow#75
+  __rl_nested#73:
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x1 + 16], x2
-  __rl_cont#65:
+  __rl_cont#72:
     arm64.leaGlobal x1, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.leaGlobal x2, __sched_tls_teb_offset
@@ -40724,7 +40944,7 @@ func @__gt_runner_done {
     arm64.storeBaseDispReg.word64 [x1 + 0], x2
     arm64.cmp x20, 0
     arm64.b.eq runnerkeepstack
-  critsplit#84:
+  critsplit#91:
     arm64.movRegReg x24, x20
   gfswalkhdr:
     arm64.cmp x24, 0
@@ -40761,10 +40981,10 @@ func @__gt_runner_done {
     arm64.movImm x3, 1
     arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
     arm64.cmp x3, 0
-    arm64.b.ne __rl_slow#78
-  __rl_owned#77:
+    arm64.b.ne __rl_slow#81
+  __rl_owned#80:
     arm64.storeBaseDispReg.word64 [x1 + 8], x2
-  __rl_cont#76:
+  __rl_cont#79:
     arm64.leaGlobal x1, __gt_gfree_nostack_head
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.storeBaseDispReg.word64 [x0 + 80], x1
@@ -40773,19 +40993,19 @@ func @__gt_runner_done {
     arm64.leaGlobal x0, __gt_gfree_lock
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.ne __rl_nested#80
-  __rl_outermost#81:
+    arm64.b.ne __rl_nested#83
+  __rl_outermost#84:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#79
-    arm64.b __rl_slow#82
-  __rl_nested#80:
+    arm64.b.eq __rl_cont#82
+    arm64.b __rl_slow#85
+  __rl_nested#83:
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
-  __rl_cont#79:
+  __rl_cont#82:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -40883,34 +41103,70 @@ func @__gt_runner_done {
     arm64.movImm x2, 1
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 0
-    arm64.b.ne __rl_slow#71
-  __rl_owned#70:
+    arm64.b.ne __rl_slow#78
+  __rl_owned#77:
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
-  __rl_cont#69:
+  __rl_cont#76:
     arm64.movImm x0, 1
     arm64.leaGlobal x1, __sched_phase
     arm64.stlr.word64 [x1], x0
     arm64.leaGlobal x0, __sched_main_m
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.leaGlobal x1, __sched_midle
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.cmp x1, x0
+    arm64.cset x1, eq
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 632]
+    arm64.cmp x2, 0
+    arm64.cset x2, ne
+    arm64.orr x1, x1, x2
+    arm64.cmp x1, 0
+    arm64.b.eq signalmainwake
+  signalmainunlist:
+    arm64.leaGlobal x1, __sched_nmidle
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
+    arm64.add x2, x2, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 600]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 632]
+    arm64.cmp x2, 0
+    arm64.b.ne munlinkinner
+  munlinkhead:
+    arm64.leaGlobal x3, __sched_midle
+    arm64.storeBaseDispReg.word64 [x3 + 0], x1
+    arm64.b munlinkmend
+  munlinkinner:
+    arm64.storeBaseDispReg.word64 [x2 + 600], x1
+  munlinkmend:
+    arm64.cmp x1, 0
+    arm64.b.eq munlinkclear
+  munlinknext:
+    arm64.storeBaseDispReg.word64 [x1 + 632], x2
+  munlinkclear:
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 600], x1
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 632], x1
+  signalmainwake:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 560]
     arm64.bl mrt_host_event_set
     arm64.bl __np_break
     arm64.leaGlobal x0, __sched_lock
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.ne __rl_nested#73
-  __rl_outermost#74:
+    arm64.b.ne __rl_nested#87
+  __rl_outermost#88:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#72
-    arm64.b __rl_slow#75
-  __rl_nested#73:
+    arm64.b.eq __rl_cont#86
+    arm64.b __rl_slow#89
+  __rl_nested#87:
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
-  __rl_cont#72:
+  __rl_cont#86:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -40942,17 +41198,17 @@ func @__gt_runner_done {
     arm64.add x1, x19, 408
     arm64.arm64AtomicRmw.add x0, [x1], x0
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#37
-  strandlastref#36:
+    arm64.b.ne strandunreffed#44
+  strandlastref#43:
     arm64.add x0, x19, 104
     arm64.movImm x1, 2
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#37
-  teardownreclaim#38:
+    arm64.b.ne strandunreffed#44
+  teardownreclaim#45:
     arm64.movRegReg x0, x19
     arm64.bl __gt_reclaim
-  strandunreffed#37:
+  strandunreffed#44:
     arm64.loadRegSlot x19, slot3
     arm64.loadRegSlot x20, slot4
     arm64.loadRegSlot x21, slot5
@@ -40968,7 +41224,7 @@ func @__gt_runner_done {
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.cmp x0, 1
     arm64.b.ne teardownarrived
-  teardownreclaim#40:
+  teardownreclaim#47:
     arm64.movRegReg x0, x19
     arm64.bl __gt_reclaim
   teardownarrived:
@@ -40988,17 +41244,17 @@ func @__gt_runner_done {
     arm64.add x1, x21, 408
     arm64.arm64AtomicRmw.add x0, [x1], x0
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#44
-  strandlastref#43:
+    arm64.b.ne strandunreffed#51
+  strandlastref#50:
     arm64.add x0, x21, 104
     arm64.movImm x1, 2
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#44
-  teardownreclaim#45:
+    arm64.b.ne strandunreffed#51
+  teardownreclaim#52:
     arm64.movRegReg x0, x21
     arm64.bl __gt_reclaim
-  strandunreffed#44:
+  strandunreffed#51:
     arm64.loadRegSlot x19, slot3
     arm64.loadRegSlot x20, slot4
     arm64.loadRegSlot x21, slot5
@@ -41008,7 +41264,7 @@ func @__gt_runner_done {
     arm64.loadRegSlot x25, slot9
     arm64.epilogue 96
     arm64.ret
-  __rl_slow#49:
+  __rl_slow#56:
     arm64.storeSlotReg slot0, x1
     arm64.storeSlotReg slot1, x2
     arm64.movRegReg x0, x19
@@ -41016,61 +41272,61 @@ func @__gt_runner_done {
     arm64.bl __rtlock_enter_slow
     arm64.loadRegSlot x1, slot0
     arm64.loadRegSlot x2, slot1
-    arm64.b __rl_cont#47
-  __rl_slow#53:
-    arm64.movRegReg x0, x19
-    arm64.bl __rtlock_release
-    arm64.b __rl_cont#50
-  __rl_slow#61:
-    arm64.storeSlotReg slot2, x0
-    arm64.storeSlotReg slot0, x1
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_release
-    arm64.movRegReg x2, x0
-    arm64.loadRegSlot x0, slot2
-    arm64.loadRegSlot x1, slot0
-    arm64.b __rl_cont#58
-  __rl_slow#57:
-    arm64.storeSlotReg slot2, x0
-    arm64.storeSlotReg slot0, x1
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_release
-    arm64.movRegReg x2, x0
-    arm64.loadRegSlot x0, slot2
-    arm64.loadRegSlot x1, slot0
     arm64.b __rl_cont#54
+  __rl_slow#60:
+    arm64.movRegReg x0, x19
+    arm64.bl __rtlock_release
+    arm64.b __rl_cont#57
+  __rl_slow#68:
+    arm64.storeSlotReg slot2, x0
+    arm64.storeSlotReg slot0, x1
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x2
+    arm64.bl __rtlock_release
+    arm64.movRegReg x2, x0
+    arm64.loadRegSlot x0, slot2
+    arm64.loadRegSlot x1, slot0
+    arm64.b __rl_cont#65
   __rl_slow#64:
+    arm64.storeSlotReg slot2, x0
+    arm64.storeSlotReg slot0, x1
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x2
+    arm64.bl __rtlock_release
+    arm64.movRegReg x2, x0
+    arm64.loadRegSlot x0, slot2
+    arm64.loadRegSlot x1, slot0
+    arm64.b __rl_cont#61
+  __rl_slow#71:
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_enter_slow
-    arm64.b __rl_cont#62
-  __rl_slow#68:
+    arm64.b __rl_cont#69
+  __rl_slow#75:
     arm64.storeSlotReg slot2, x0
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_release
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot2
-    arm64.b __rl_cont#65
-  __rl_slow#78:
+    arm64.b __rl_cont#72
+  __rl_slow#81:
     arm64.storeSlotReg slot2, x0
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x3
     arm64.bl __rtlock_enter_slow
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot2
-    arm64.b __rl_cont#76
-  __rl_slow#82:
-    arm64.bl __rtlock_release
     arm64.b __rl_cont#79
-  __rl_slow#71:
+  __rl_slow#85:
+    arm64.bl __rtlock_release
+    arm64.b __rl_cont#82
+  __rl_slow#78:
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_enter_slow
-    arm64.b __rl_cont#69
-  __rl_slow#75:
+    arm64.b __rl_cont#76
+  __rl_slow#89:
     arm64.bl __rtlock_release
-    arm64.b __rl_cont#72
+    arm64.b __rl_cont#86
   readybadstatus:
     arm64.leaRdata x0, __fatal_msg_0  ; "fatal error: bad green-thread status in ready\x0a"
     arm64.movImm x1, 46
@@ -41904,29 +42160,29 @@ func @__gt_runner_done {
     x64.movRegImm32 rsi, 1
     x64.xchg8 [rbx], rsi <- rsi
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __rl_slow#49
-  __rl_owned#48:
+    x64.jcc notEqual, __rl_slow#56
+  __rl_owned#55:
     x64.storeBaseDispReg.word64 [rbx + 8], rax
-  __rl_cont#47:
+  __rl_cont#54:
     x64.loadRegBaseDisp.word64 rsi, [rbx + 120]
     x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, runnerhaveawaiter
   runnernoawaiter:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#51
-  __rl_outermost#52:
+    x64.jcc notEqual, __rl_nested#58
+  __rl_outermost#59:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rbx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#50
-    x64.jmp __rl_slow#53
-  __rl_nested#51:
+    x64.jcc equal, __rl_cont#57
+    x64.jmp __rl_slow#60
+  __rl_nested#58:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rbx + 16], rax
-  __rl_cont#50:
+  __rl_cont#57:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -41962,19 +42218,19 @@ func @__gt_runner_done {
     x64.setccReg equal, rax
     x64.loadRegBaseDisp.word64 rdx, [rbx + 16]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_nested#59
-  __rl_outermost#60:
+    x64.jcc notEqual, __rl_nested#66
+  __rl_outermost#67:
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rdx
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rbx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#58
-    x64.jmp __rl_slow#61
-  __rl_nested#59:
+    x64.jcc equal, __rl_cont#65
+    x64.jmp __rl_slow#68
+  __rl_nested#66:
     x64.leaRegRegImm32 rdx, rdx, -1
     x64.storeBaseDispReg.word64 [rbx + 16], rdx
-  __rl_cont#58:
+  __rl_cont#65:
     x64.leaRegGlobal rdx, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
     x64.leaRegGlobal rsi, __sched_tls_teb_offset
@@ -42002,19 +42258,19 @@ func @__gt_runner_done {
   runnerplainawaiter:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#55
-  __rl_outermost#56:
+    x64.jcc notEqual, __rl_nested#62
+  __rl_outermost#63:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.movRegImm32 rax, 0
     x64.xchg8 [rbx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __rl_cont#54
-    x64.jmp __rl_slow#57
-  __rl_nested#55:
+    x64.jcc equal, __rl_cont#61
+    x64.jmp __rl_slow#64
+  __rl_nested#62:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rbx + 16], rax
-  __rl_cont#54:
+  __rl_cont#61:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -42070,12 +42326,12 @@ func @__gt_runner_done {
     x64.loadRegBaseDisp.word64 rcx, [rbx + 32]
     x64.andRegImm32 rax, rax, 2
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#83
+    x64.jcc notEqual, critsplit#90
   runnersampledepth:
     x64.loadRegBaseDisp.word64 rax, [rbx + 448]
     x64.leaRegRegImm32 rax, rax, 5536
     x64.jmp runnersampled
-  critsplit#83:
+  critsplit#90:
     x64.movRegReg rax, rcx
   runnersampled:
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -42091,10 +42347,10 @@ func @__gt_runner_done {
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, runnerkeepstack
   runnercountsample:
-    x64.aluBaseDispReg.add [rcx + 304], rax
-    x64.loadRegBaseDisp.word64 rax, [rcx + 312]
+    x64.aluBaseDispReg.add [rcx + 296], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 304]
     x64.leaRegRegImm32 rax, rax, 1
-    x64.storeBaseDispReg.word64 [rcx + 312], rax
+    x64.storeBaseDispReg.word64 [rcx + 304], rax
     x64.andRegImm32 rax, rax, 63
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, runnerkeepstack
@@ -42125,10 +42381,10 @@ func @__gt_runner_done {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#64
-  __rl_owned#63:
+    x64.jcc notEqual, __rl_slow#71
+  __rl_owned#70:
     x64.storeBaseDispReg.word64 [rcx + 8], rax
-  __rl_cont#62:
+  __rl_cont#69:
     x64.leaRegGlobal rax, __gt_gfree_head
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.movRegImm32 rax, 0
@@ -42137,19 +42393,19 @@ func @__gt_runner_done {
     x64.leaRegGlobal rcx, __gt_gfree_lock
     x64.loadRegBaseDisp.word64 rdx, [rcx + 16]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_nested#66
-  __rl_outermost#67:
+    x64.jcc notEqual, __rl_nested#73
+  __rl_outermost#74:
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rdx
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#65
-    x64.jmp __rl_slow#68
-  __rl_nested#66:
+    x64.jcc equal, __rl_cont#72
+    x64.jmp __rl_slow#75
+  __rl_nested#73:
     x64.leaRegRegImm32 rdx, rdx, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rdx
-  __rl_cont#65:
+  __rl_cont#72:
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.leaRegGlobal rdx, __sched_tls_teb_offset
@@ -42171,7 +42427,7 @@ func @__gt_runner_done {
     x64.aluBaseDispImm32.add [rdx + 0], -1
     x64.cmpRegImm32 r12, 0
     x64.jcc equal, runnerkeepstack
-  critsplit#84:
+  critsplit#91:
     x64.movRegReg r15, r12
   gfswalkhdr:
     x64.cmpRegImm32 r15, 0
@@ -42202,10 +42458,10 @@ func @__gt_runner_done {
     x64.movRegImm32 rsi, 1
     x64.xchg8 [rcx], rsi <- rsi
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __rl_slow#78
-  __rl_owned#77:
+    x64.jcc notEqual, __rl_slow#81
+  __rl_owned#80:
     x64.storeBaseDispReg.word64 [rcx + 8], rdx
-  __rl_cont#76:
+  __rl_cont#79:
     x64.leaRegGlobal rcx, __gt_gfree_nostack_head
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.storeBaseDispReg.word64 [rax + 80], rcx
@@ -42214,19 +42470,19 @@ func @__gt_runner_done {
     x64.leaRegGlobal rcx, __gt_gfree_lock
     x64.loadRegBaseDisp.word64 rax, [rcx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#80
-  __rl_outermost#81:
+    x64.jcc notEqual, __rl_nested#83
+  __rl_outermost#84:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#79
-    x64.jmp __rl_slow#82
-  __rl_nested#80:
+    x64.jcc equal, __rl_cont#82
+    x64.jmp __rl_slow#85
+  __rl_nested#83:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rax
-  __rl_cont#79:
+  __rl_cont#82:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -42311,34 +42567,68 @@ func @__gt_runner_done {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#71
-  __rl_owned#70:
+    x64.jcc notEqual, __rl_slow#78
+  __rl_owned#77:
     x64.storeBaseDispReg.word64 [rcx + 8], rax
-  __rl_cont#69:
+  __rl_cont#76:
     x64.movRegImm32 rax, 1
     x64.leaRegGlobal rcx, __sched_phase
     x64.storeBaseDispReg.word64 [rcx + 0], rax
     x64.leaRegGlobal rax, __sched_main_m
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegGlobal rcx, __sched_midle
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.cmpRegReg rcx, rax
+    x64.setccReg equal, rcx
+    x64.loadRegBaseDisp.word64 rdx, [rax + 632]
+    x64.cmpRegImm32 rdx, 0
+    x64.setccReg notEqual, rdx
+    x64.orRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, signalmainwake
+  signalmainunlist:
+    x64.leaRegGlobal rcx, __sched_nmidle
+    x64.aluBaseDispImm32.add [rcx + 0], -1
+    x64.loadRegBaseDisp.word64 rcx, [rax + 600]
+    x64.loadRegBaseDisp.word64 rdx, [rax + 632]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, munlinkinner
+  munlinkhead:
+    x64.leaRegGlobal rsi, __sched_midle
+    x64.storeBaseDispReg.word64 [rsi + 0], rcx
+    x64.jmp munlinkmend
+  munlinkinner:
+    x64.storeBaseDispReg.word64 [rdx + 600], rcx
+  munlinkmend:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, munlinkclear
+  munlinknext:
+    x64.storeBaseDispReg.word64 [rcx + 632], rdx
+  munlinkclear:
+    x64.movRegImm32 rcx, 0
+    x64.storeBaseDispReg.word64 [rax + 600], rcx
+    x64.movRegImm32 rcx, 0
+    x64.storeBaseDispReg.word64 [rax + 632], rcx
+  signalmainwake:
     x64.loadRegBaseDisp.word64 rcx, [rax + 560]
     x64.iatCall 19
     x64.callDirect __np_break
     x64.leaRegGlobal rcx, __sched_lock
     x64.loadRegBaseDisp.word64 rax, [rcx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#73
-  __rl_outermost#74:
+    x64.jcc notEqual, __rl_nested#87
+  __rl_outermost#88:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#72
-    x64.jmp __rl_slow#75
-  __rl_nested#73:
+    x64.jcc equal, __rl_cont#86
+    x64.jmp __rl_slow#89
+  __rl_nested#87:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rax
-  __rl_cont#72:
+  __rl_cont#86:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -42363,17 +42653,17 @@ func @__gt_runner_done {
     x64.leaRegRegImm32 rcx, rbx, 408
     x64.lock xadd [rcx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, strandunreffed#37
-  strandlastref#36:
+    x64.jcc notEqual, strandunreffed#44
+  strandlastref#43:
     x64.leaRegRegImm32 rax, rbx, 104
     x64.movRegImm32 rcx, 2
     x64.lock xadd [rax], rcx <- rcx
     x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, strandunreffed#37
-  teardownreclaim#38:
+    x64.jcc notEqual, strandunreffed#44
+  teardownreclaim#45:
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_reclaim
-  strandunreffed#37:
+  strandunreffed#44:
     x64.epilogue 88
     x64.popReg r15
     x64.popReg r14
@@ -42388,7 +42678,7 @@ func @__gt_runner_done {
     x64.lock xadd [rax], rcx <- rcx
     x64.cmpRegImm32 rcx, 1
     x64.jcc notEqual, teardownarrived
-  teardownreclaim#40:
+  teardownreclaim#47:
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_reclaim
   teardownarrived:
@@ -42409,18 +42699,18 @@ func @__gt_runner_done {
     x64.leaRegRegImm32 rcx, rcx, 408
     x64.lock xadd [rcx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, strandunreffed#44
-  strandlastref#43:
+    x64.jcc notEqual, strandunreffed#51
+  strandlastref#50:
     x64.loadRegSlot rax, slot1
     x64.leaRegRegImm32 rax, rax, 104
     x64.movRegImm32 rcx, 2
     x64.lock xadd [rax], rcx <- rcx
     x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, strandunreffed#44
-  teardownreclaim#45:
+    x64.jcc notEqual, strandunreffed#51
+  teardownreclaim#52:
     x64.loadRegSlot rcx, slot1
     x64.callDirect __gt_reclaim
-  strandunreffed#44:
+  strandunreffed#51:
     x64.epilogue 88
     x64.popReg r15
     x64.popReg r14
@@ -42429,7 +42719,7 @@ func @__gt_runner_done {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rl_slow#49:
+  __rl_slow#56:
     x64.storeSlotReg slot2, rcx
     x64.storeSlotReg slot3, rdx
     x64.movRegReg rcx, rbx
@@ -42437,20 +42727,20 @@ func @__gt_runner_done {
     x64.callDirect __rtlock_enter_slow
     x64.loadRegSlot rcx, slot2
     x64.loadRegSlot rdx, slot3
-    x64.jmp __rl_cont#47
-  __rl_slow#53:
+    x64.jmp __rl_cont#54
+  __rl_slow#60:
     x64.movRegReg rcx, rbx
     x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#50
-  __rl_slow#61:
+    x64.jmp __rl_cont#57
+  __rl_slow#68:
     x64.storeSlotReg slot4, rax
     x64.storeSlotReg slot2, rcx
     x64.movRegReg rcx, rbx
     x64.callDirect __rtlock_release
     x64.loadRegSlot rax, slot4
     x64.loadRegSlot rcx, slot2
-    x64.jmp __rl_cont#58
-  __rl_slow#57:
+    x64.jmp __rl_cont#65
+  __rl_slow#64:
     x64.storeSlotReg slot3, rdx
     x64.storeSlotReg slot5, rsi
     x64.movRegReg rcx, rbx
@@ -42458,30 +42748,30 @@ func @__gt_runner_done {
     x64.callDirect __rtlock_release
     x64.loadRegSlot rdx, slot3
     x64.loadRegSlot rsi, slot5
-    x64.jmp __rl_cont#54
-  __rl_slow#64:
-    x64.callDirect __rtlock_enter_slow
-    x64.jmp __rl_cont#62
-  __rl_slow#68:
-    x64.storeSlotReg slot4, rax
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot4
-    x64.jmp __rl_cont#65
-  __rl_slow#78:
-    x64.storeSlotReg slot4, rax
-    x64.movRegReg rdx, rsi
-    x64.callDirect __rtlock_enter_slow
-    x64.loadRegSlot rax, slot4
-    x64.jmp __rl_cont#76
-  __rl_slow#82:
-    x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#79
+    x64.jmp __rl_cont#61
   __rl_slow#71:
     x64.callDirect __rtlock_enter_slow
     x64.jmp __rl_cont#69
   __rl_slow#75:
+    x64.storeSlotReg slot4, rax
     x64.callDirect __rtlock_release
+    x64.loadRegSlot rax, slot4
     x64.jmp __rl_cont#72
+  __rl_slow#81:
+    x64.storeSlotReg slot4, rax
+    x64.movRegReg rdx, rsi
+    x64.callDirect __rtlock_enter_slow
+    x64.loadRegSlot rax, slot4
+    x64.jmp __rl_cont#79
+  __rl_slow#85:
+    x64.callDirect __rtlock_release
+    x64.jmp __rl_cont#82
+  __rl_slow#78:
+    x64.callDirect __rtlock_enter_slow
+    x64.jmp __rl_cont#76
+  __rl_slow#89:
+    x64.callDirect __rtlock_release
+    x64.jmp __rl_cont#86
   readybadstatus:
     x64.leaRegRdata rcx, [rip + __fatal_msg_0]  ; "fatal error: bad green-thread status in ready\x0a"
     x64.movRegImm32 rdx, 46
@@ -43243,29 +43533,29 @@ func @__gt_runner_done {
     x64.movRegImm32 rsi, 1
     x64.xchg8 [rbx], rsi <- rsi
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __rl_slow#49
-  __rl_owned#48:
+    x64.jcc notEqual, __rl_slow#56
+  __rl_owned#55:
     x64.storeBaseDispReg.word64 [rbx + 8], rax
-  __rl_cont#47:
+  __rl_cont#54:
     x64.loadRegBaseDisp.word64 rsi, [rbx + 120]
     x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, runnerhaveawaiter
   runnernoawaiter:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#51
-  __rl_outermost#52:
+    x64.jcc notEqual, __rl_nested#58
+  __rl_outermost#59:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rbx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#50
-    x64.jmp __rl_slow#53
-  __rl_nested#51:
+    x64.jcc equal, __rl_cont#57
+    x64.jmp __rl_slow#60
+  __rl_nested#58:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rbx + 16], rax
-  __rl_cont#50:
+  __rl_cont#57:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -43301,19 +43591,19 @@ func @__gt_runner_done {
     x64.setccReg equal, rax
     x64.loadRegBaseDisp.word64 rdx, [rbx + 16]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_nested#59
-  __rl_outermost#60:
+    x64.jcc notEqual, __rl_nested#66
+  __rl_outermost#67:
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rdx
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rbx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#58
-    x64.jmp __rl_slow#61
-  __rl_nested#59:
+    x64.jcc equal, __rl_cont#65
+    x64.jmp __rl_slow#68
+  __rl_nested#66:
     x64.leaRegRegImm32 rdx, rdx, -1
     x64.storeBaseDispReg.word64 [rbx + 16], rdx
-  __rl_cont#58:
+  __rl_cont#65:
     x64.leaRegGlobal rdx, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
     x64.leaRegGlobal rsi, __sched_tls_teb_offset
@@ -43341,19 +43631,19 @@ func @__gt_runner_done {
   runnerplainawaiter:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#55
-  __rl_outermost#56:
+    x64.jcc notEqual, __rl_nested#62
+  __rl_outermost#63:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.movRegImm32 rax, 0
     x64.xchg8 [rbx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __rl_cont#54
-    x64.jmp __rl_slow#57
-  __rl_nested#55:
+    x64.jcc equal, __rl_cont#61
+    x64.jmp __rl_slow#64
+  __rl_nested#62:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rbx + 16], rax
-  __rl_cont#54:
+  __rl_cont#61:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -43409,12 +43699,12 @@ func @__gt_runner_done {
     x64.loadRegBaseDisp.word64 rcx, [rbx + 32]
     x64.andRegImm32 rax, rax, 2
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#83
+    x64.jcc notEqual, critsplit#90
   runnersampledepth:
     x64.loadRegBaseDisp.word64 rax, [rbx + 448]
     x64.leaRegRegImm32 rax, rax, 928
     x64.jmp runnersampled
-  critsplit#83:
+  critsplit#90:
     x64.movRegReg rax, rcx
   runnersampled:
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -43430,10 +43720,10 @@ func @__gt_runner_done {
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, runnerkeepstack
   runnercountsample:
-    x64.aluBaseDispReg.add [rcx + 304], rax
-    x64.loadRegBaseDisp.word64 rax, [rcx + 312]
+    x64.aluBaseDispReg.add [rcx + 296], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 304]
     x64.leaRegRegImm32 rax, rax, 1
-    x64.storeBaseDispReg.word64 [rcx + 312], rax
+    x64.storeBaseDispReg.word64 [rcx + 304], rax
     x64.andRegImm32 rax, rax, 63
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, runnerkeepstack
@@ -43464,10 +43754,10 @@ func @__gt_runner_done {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#64
-  __rl_owned#63:
+    x64.jcc notEqual, __rl_slow#71
+  __rl_owned#70:
     x64.storeBaseDispReg.word64 [rcx + 8], rax
-  __rl_cont#62:
+  __rl_cont#69:
     x64.leaRegGlobal rax, __gt_gfree_head
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.movRegImm32 rax, 0
@@ -43476,19 +43766,19 @@ func @__gt_runner_done {
     x64.leaRegGlobal rcx, __gt_gfree_lock
     x64.loadRegBaseDisp.word64 rdx, [rcx + 16]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_nested#66
-  __rl_outermost#67:
+    x64.jcc notEqual, __rl_nested#73
+  __rl_outermost#74:
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rdx
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#65
-    x64.jmp __rl_slow#68
-  __rl_nested#66:
+    x64.jcc equal, __rl_cont#72
+    x64.jmp __rl_slow#75
+  __rl_nested#73:
     x64.leaRegRegImm32 rdx, rdx, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rdx
-  __rl_cont#65:
+  __rl_cont#72:
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.leaRegGlobal rdx, __sched_tls_teb_offset
@@ -43510,7 +43800,7 @@ func @__gt_runner_done {
     x64.aluBaseDispImm32.add [rdx + 0], -1
     x64.cmpRegImm32 r12, 0
     x64.jcc equal, runnerkeepstack
-  critsplit#84:
+  critsplit#91:
     x64.movRegReg r15, r12
   gfswalkhdr:
     x64.cmpRegImm32 r15, 0
@@ -43541,10 +43831,10 @@ func @__gt_runner_done {
     x64.movRegImm32 rsi, 1
     x64.xchg8 [rcx], rsi <- rsi
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __rl_slow#78
-  __rl_owned#77:
+    x64.jcc notEqual, __rl_slow#81
+  __rl_owned#80:
     x64.storeBaseDispReg.word64 [rcx + 8], rdx
-  __rl_cont#76:
+  __rl_cont#79:
     x64.leaRegGlobal rcx, __gt_gfree_nostack_head
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.storeBaseDispReg.word64 [rax + 80], rcx
@@ -43553,19 +43843,19 @@ func @__gt_runner_done {
     x64.leaRegGlobal rcx, __gt_gfree_lock
     x64.loadRegBaseDisp.word64 rax, [rcx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#80
-  __rl_outermost#81:
+    x64.jcc notEqual, __rl_nested#83
+  __rl_outermost#84:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#79
-    x64.jmp __rl_slow#82
-  __rl_nested#80:
+    x64.jcc equal, __rl_cont#82
+    x64.jmp __rl_slow#85
+  __rl_nested#83:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rax
-  __rl_cont#79:
+  __rl_cont#82:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -43650,34 +43940,68 @@ func @__gt_runner_done {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#71
-  __rl_owned#70:
+    x64.jcc notEqual, __rl_slow#78
+  __rl_owned#77:
     x64.storeBaseDispReg.word64 [rcx + 8], rax
-  __rl_cont#69:
+  __rl_cont#76:
     x64.movRegImm32 rax, 1
     x64.leaRegGlobal rcx, __sched_phase
     x64.storeBaseDispReg.word64 [rcx + 0], rax
     x64.leaRegGlobal rax, __sched_main_m
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegGlobal rcx, __sched_midle
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.cmpRegReg rcx, rax
+    x64.setccReg equal, rcx
+    x64.loadRegBaseDisp.word64 rdx, [rax + 632]
+    x64.cmpRegImm32 rdx, 0
+    x64.setccReg notEqual, rdx
+    x64.orRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, signalmainwake
+  signalmainunlist:
+    x64.leaRegGlobal rcx, __sched_nmidle
+    x64.aluBaseDispImm32.add [rcx + 0], -1
+    x64.loadRegBaseDisp.word64 rcx, [rax + 600]
+    x64.loadRegBaseDisp.word64 rdx, [rax + 632]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, munlinkinner
+  munlinkhead:
+    x64.leaRegGlobal rsi, __sched_midle
+    x64.storeBaseDispReg.word64 [rsi + 0], rcx
+    x64.jmp munlinkmend
+  munlinkinner:
+    x64.storeBaseDispReg.word64 [rdx + 600], rcx
+  munlinkmend:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, munlinkclear
+  munlinknext:
+    x64.storeBaseDispReg.word64 [rcx + 632], rdx
+  munlinkclear:
+    x64.movRegImm32 rcx, 0
+    x64.storeBaseDispReg.word64 [rax + 600], rcx
+    x64.movRegImm32 rcx, 0
+    x64.storeBaseDispReg.word64 [rax + 632], rcx
+  signalmainwake:
     x64.loadRegBaseDisp.word64 rcx, [rax + 560]
     x64.callDirect mrt_host_event_set
     x64.callDirect __np_break
     x64.leaRegGlobal rcx, __sched_lock
     x64.loadRegBaseDisp.word64 rax, [rcx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#73
-  __rl_outermost#74:
+    x64.jcc notEqual, __rl_nested#87
+  __rl_outermost#88:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#72
-    x64.jmp __rl_slow#75
-  __rl_nested#73:
+    x64.jcc equal, __rl_cont#86
+    x64.jmp __rl_slow#89
+  __rl_nested#87:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rax
-  __rl_cont#72:
+  __rl_cont#86:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -43702,17 +44026,17 @@ func @__gt_runner_done {
     x64.leaRegRegImm32 rcx, rbx, 408
     x64.lock xadd [rcx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, strandunreffed#37
-  strandlastref#36:
+    x64.jcc notEqual, strandunreffed#44
+  strandlastref#43:
     x64.leaRegRegImm32 rax, rbx, 104
     x64.movRegImm32 rcx, 2
     x64.lock xadd [rax], rcx <- rcx
     x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, strandunreffed#37
-  teardownreclaim#38:
+    x64.jcc notEqual, strandunreffed#44
+  teardownreclaim#45:
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_reclaim
-  strandunreffed#37:
+  strandunreffed#44:
     x64.epilogue 88
     x64.popReg r15
     x64.popReg r14
@@ -43727,7 +44051,7 @@ func @__gt_runner_done {
     x64.lock xadd [rax], rcx <- rcx
     x64.cmpRegImm32 rcx, 1
     x64.jcc notEqual, teardownarrived
-  teardownreclaim#40:
+  teardownreclaim#47:
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_reclaim
   teardownarrived:
@@ -43748,18 +44072,18 @@ func @__gt_runner_done {
     x64.leaRegRegImm32 rcx, rcx, 408
     x64.lock xadd [rcx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, strandunreffed#44
-  strandlastref#43:
+    x64.jcc notEqual, strandunreffed#51
+  strandlastref#50:
     x64.loadRegSlot rax, slot1
     x64.leaRegRegImm32 rax, rax, 104
     x64.movRegImm32 rcx, 2
     x64.lock xadd [rax], rcx <- rcx
     x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, strandunreffed#44
-  teardownreclaim#45:
+    x64.jcc notEqual, strandunreffed#51
+  teardownreclaim#52:
     x64.loadRegSlot rcx, slot1
     x64.callDirect __gt_reclaim
-  strandunreffed#44:
+  strandunreffed#51:
     x64.epilogue 88
     x64.popReg r15
     x64.popReg r14
@@ -43768,7 +44092,7 @@ func @__gt_runner_done {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rl_slow#49:
+  __rl_slow#56:
     x64.storeSlotReg slot2, rcx
     x64.storeSlotReg slot3, rdx
     x64.movRegReg rcx, rbx
@@ -43776,20 +44100,20 @@ func @__gt_runner_done {
     x64.callDirect __rtlock_enter_slow
     x64.loadRegSlot rcx, slot2
     x64.loadRegSlot rdx, slot3
-    x64.jmp __rl_cont#47
-  __rl_slow#53:
+    x64.jmp __rl_cont#54
+  __rl_slow#60:
     x64.movRegReg rcx, rbx
     x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#50
-  __rl_slow#61:
+    x64.jmp __rl_cont#57
+  __rl_slow#68:
     x64.storeSlotReg slot4, rax
     x64.storeSlotReg slot2, rcx
     x64.movRegReg rcx, rbx
     x64.callDirect __rtlock_release
     x64.loadRegSlot rax, slot4
     x64.loadRegSlot rcx, slot2
-    x64.jmp __rl_cont#58
-  __rl_slow#57:
+    x64.jmp __rl_cont#65
+  __rl_slow#64:
     x64.storeSlotReg slot3, rdx
     x64.storeSlotReg slot5, rsi
     x64.movRegReg rcx, rbx
@@ -43797,30 +44121,30 @@ func @__gt_runner_done {
     x64.callDirect __rtlock_release
     x64.loadRegSlot rdx, slot3
     x64.loadRegSlot rsi, slot5
-    x64.jmp __rl_cont#54
-  __rl_slow#64:
-    x64.callDirect __rtlock_enter_slow
-    x64.jmp __rl_cont#62
-  __rl_slow#68:
-    x64.storeSlotReg slot4, rax
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot4
-    x64.jmp __rl_cont#65
-  __rl_slow#78:
-    x64.storeSlotReg slot4, rax
-    x64.movRegReg rdx, rsi
-    x64.callDirect __rtlock_enter_slow
-    x64.loadRegSlot rax, slot4
-    x64.jmp __rl_cont#76
-  __rl_slow#82:
-    x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#79
+    x64.jmp __rl_cont#61
   __rl_slow#71:
     x64.callDirect __rtlock_enter_slow
     x64.jmp __rl_cont#69
   __rl_slow#75:
+    x64.storeSlotReg slot4, rax
     x64.callDirect __rtlock_release
+    x64.loadRegSlot rax, slot4
     x64.jmp __rl_cont#72
+  __rl_slow#81:
+    x64.storeSlotReg slot4, rax
+    x64.movRegReg rdx, rsi
+    x64.callDirect __rtlock_enter_slow
+    x64.loadRegSlot rax, slot4
+    x64.jmp __rl_cont#79
+  __rl_slow#85:
+    x64.callDirect __rtlock_release
+    x64.jmp __rl_cont#82
+  __rl_slow#78:
+    x64.callDirect __rtlock_enter_slow
+    x64.jmp __rl_cont#76
+  __rl_slow#89:
+    x64.callDirect __rtlock_release
+    x64.jmp __rl_cont#86
   readybadstatus:
     x64.leaRegRdata rcx, [rip + __fatal_msg_0]  ; "fatal error: bad green-thread status in ready\x0a"
     x64.movRegImm32 rdx, 46
@@ -44651,29 +44975,29 @@ func @__gt_runner_done {
     arm64.movImm x3, 1
     arm64.arm64AtomicRmw.exchangeByte x3, [x19], x3
     arm64.cmp x3, 0
-    arm64.b.ne __rl_slow#49
-  __rl_owned#48:
+    arm64.b.ne __rl_slow#56
+  __rl_owned#55:
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
-  __rl_cont#47:
+  __rl_cont#54:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 120]
     arm64.cmp x0, 0
     arm64.b.ne runnerhaveawaiter
   runnernoawaiter:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.b.ne __rl_nested#51
-  __rl_outermost#52:
+    arm64.b.ne __rl_nested#58
+  __rl_outermost#59:
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x19], x0
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#50
-    arm64.b __rl_slow#53
-  __rl_nested#51:
+    arm64.b.eq __rl_cont#57
+    arm64.b __rl_slow#60
+  __rl_nested#58:
     arm64.add x0, x0, -1
     arm64.storeBaseDispReg.word64 [x19 + 16], x0
-  __rl_cont#50:
+  __rl_cont#57:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -44714,19 +45038,19 @@ func @__gt_runner_done {
     arm64.arm64AtomicCas x1, [x3], x1, x2
     arm64.loadRegBaseDisp.word64 x2, [x19 + 16]
     arm64.cmp x2, 0
-    arm64.b.ne __rl_nested#59
-  __rl_outermost#60:
+    arm64.b.ne __rl_nested#66
+  __rl_outermost#67:
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x2
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x19], x2
     arm64.cmp x2, 1
-    arm64.b.eq __rl_cont#58
-    arm64.b __rl_slow#61
-  __rl_nested#59:
+    arm64.b.eq __rl_cont#65
+    arm64.b __rl_slow#68
+  __rl_nested#66:
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x19 + 16], x2
-  __rl_cont#58:
+  __rl_cont#65:
     arm64.leaGlobal x2, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
     arm64.leaGlobal x3, __sched_tls_teb_offset
@@ -44761,19 +45085,19 @@ func @__gt_runner_done {
   runnerplainawaiter:
     arm64.loadRegBaseDisp.word64 x2, [x19 + 16]
     arm64.cmp x2, 0
-    arm64.b.ne __rl_nested#55
-  __rl_outermost#56:
+    arm64.b.ne __rl_nested#62
+  __rl_outermost#63:
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x2
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x19], x2
     arm64.cmp x2, 1
-    arm64.b.eq __rl_cont#54
-    arm64.b __rl_slow#57
-  __rl_nested#55:
+    arm64.b.eq __rl_cont#61
+    arm64.b __rl_slow#64
+  __rl_nested#62:
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x19 + 16], x2
-  __rl_cont#54:
+  __rl_cont#61:
     arm64.leaGlobal x2, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
     arm64.leaGlobal x3, __sched_tls_teb_offset
@@ -44831,12 +45155,12 @@ func @__gt_runner_done {
     arm64.loadRegBaseDisp.word64 x1, [x19 + 32]
     arm64.and x0, x0, 2
     arm64.cmp x0, 0
-    arm64.b.ne critsplit#83
+    arm64.b.ne critsplit#90
   runnersampledepth:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 448]
     arm64.add x0, x0, 928
     arm64.b runnersampled
-  critsplit#83:
+  critsplit#90:
     arm64.movRegReg x0, x1
   runnersampled:
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -44857,12 +45181,12 @@ func @__gt_runner_done {
     arm64.cmp x1, 0
     arm64.b.eq runnerkeepstack
   runnercountsample:
-    arm64.loadRegBaseDisp.word64 x2, [x1 + 304]
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 296]
     arm64.add x0, x2, x0
-    arm64.storeBaseDispReg.word64 [x1 + 304], x0
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 312]
+    arm64.storeBaseDispReg.word64 [x1 + 296], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 304]
     arm64.add x0, x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 312], x0
+    arm64.storeBaseDispReg.word64 [x1 + 304], x0
     arm64.and x0, x0, 63
     arm64.cmp x0, 0
     arm64.b.ne runnerkeepstack
@@ -44899,10 +45223,10 @@ func @__gt_runner_done {
     arm64.movImm x2, 1
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 0
-    arm64.b.ne __rl_slow#64
-  __rl_owned#63:
+    arm64.b.ne __rl_slow#71
+  __rl_owned#70:
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
-  __rl_cont#62:
+  __rl_cont#69:
     arm64.leaGlobal x0, __gt_gfree_head
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.movImm x0, 0
@@ -44911,19 +45235,19 @@ func @__gt_runner_done {
     arm64.leaGlobal x1, __gt_gfree_lock
     arm64.loadRegBaseDisp.word64 x2, [x1 + 16]
     arm64.cmp x2, 0
-    arm64.b.ne __rl_nested#66
-  __rl_outermost#67:
+    arm64.b.ne __rl_nested#73
+  __rl_outermost#74:
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x1 + 8], x2
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
     arm64.cmp x2, 1
-    arm64.b.eq __rl_cont#65
-    arm64.b __rl_slow#68
-  __rl_nested#66:
+    arm64.b.eq __rl_cont#72
+    arm64.b __rl_slow#75
+  __rl_nested#73:
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x1 + 16], x2
-  __rl_cont#65:
+  __rl_cont#72:
     arm64.leaGlobal x1, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.leaGlobal x2, __sched_tls_teb_offset
@@ -44952,7 +45276,7 @@ func @__gt_runner_done {
     arm64.storeBaseDispReg.word64 [x1 + 0], x2
     arm64.cmp x20, 0
     arm64.b.eq runnerkeepstack
-  critsplit#84:
+  critsplit#91:
     arm64.movRegReg x24, x20
   gfswalkhdr:
     arm64.cmp x24, 0
@@ -44989,10 +45313,10 @@ func @__gt_runner_done {
     arm64.movImm x3, 1
     arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
     arm64.cmp x3, 0
-    arm64.b.ne __rl_slow#78
-  __rl_owned#77:
+    arm64.b.ne __rl_slow#81
+  __rl_owned#80:
     arm64.storeBaseDispReg.word64 [x1 + 8], x2
-  __rl_cont#76:
+  __rl_cont#79:
     arm64.leaGlobal x1, __gt_gfree_nostack_head
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.storeBaseDispReg.word64 [x0 + 80], x1
@@ -45001,19 +45325,19 @@ func @__gt_runner_done {
     arm64.leaGlobal x0, __gt_gfree_lock
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.ne __rl_nested#80
-  __rl_outermost#81:
+    arm64.b.ne __rl_nested#83
+  __rl_outermost#84:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#79
-    arm64.b __rl_slow#82
-  __rl_nested#80:
+    arm64.b.eq __rl_cont#82
+    arm64.b __rl_slow#85
+  __rl_nested#83:
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
-  __rl_cont#79:
+  __rl_cont#82:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -45111,34 +45435,70 @@ func @__gt_runner_done {
     arm64.movImm x2, 1
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 0
-    arm64.b.ne __rl_slow#71
-  __rl_owned#70:
+    arm64.b.ne __rl_slow#78
+  __rl_owned#77:
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
-  __rl_cont#69:
+  __rl_cont#76:
     arm64.movImm x0, 1
     arm64.leaGlobal x1, __sched_phase
     arm64.stlr.word64 [x1], x0
     arm64.leaGlobal x0, __sched_main_m
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.leaGlobal x1, __sched_midle
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.cmp x1, x0
+    arm64.cset x1, eq
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 632]
+    arm64.cmp x2, 0
+    arm64.cset x2, ne
+    arm64.orr x1, x1, x2
+    arm64.cmp x1, 0
+    arm64.b.eq signalmainwake
+  signalmainunlist:
+    arm64.leaGlobal x1, __sched_nmidle
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
+    arm64.add x2, x2, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 600]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 632]
+    arm64.cmp x2, 0
+    arm64.b.ne munlinkinner
+  munlinkhead:
+    arm64.leaGlobal x3, __sched_midle
+    arm64.storeBaseDispReg.word64 [x3 + 0], x1
+    arm64.b munlinkmend
+  munlinkinner:
+    arm64.storeBaseDispReg.word64 [x2 + 600], x1
+  munlinkmend:
+    arm64.cmp x1, 0
+    arm64.b.eq munlinkclear
+  munlinknext:
+    arm64.storeBaseDispReg.word64 [x1 + 632], x2
+  munlinkclear:
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 600], x1
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 632], x1
+  signalmainwake:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 560]
     arm64.bl mrt_host_event_set
     arm64.bl __np_break
     arm64.leaGlobal x0, __sched_lock
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.ne __rl_nested#73
-  __rl_outermost#74:
+    arm64.b.ne __rl_nested#87
+  __rl_outermost#88:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#72
-    arm64.b __rl_slow#75
-  __rl_nested#73:
+    arm64.b.eq __rl_cont#86
+    arm64.b __rl_slow#89
+  __rl_nested#87:
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
-  __rl_cont#72:
+  __rl_cont#86:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -45170,17 +45530,17 @@ func @__gt_runner_done {
     arm64.add x1, x19, 408
     arm64.arm64AtomicRmw.add x0, [x1], x0
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#37
-  strandlastref#36:
+    arm64.b.ne strandunreffed#44
+  strandlastref#43:
     arm64.add x0, x19, 104
     arm64.movImm x1, 2
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#37
-  teardownreclaim#38:
+    arm64.b.ne strandunreffed#44
+  teardownreclaim#45:
     arm64.movRegReg x0, x19
     arm64.bl __gt_reclaim
-  strandunreffed#37:
+  strandunreffed#44:
     arm64.loadRegSlot x19, slot3
     arm64.loadRegSlot x20, slot4
     arm64.loadRegSlot x21, slot5
@@ -45196,7 +45556,7 @@ func @__gt_runner_done {
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.cmp x0, 1
     arm64.b.ne teardownarrived
-  teardownreclaim#40:
+  teardownreclaim#47:
     arm64.movRegReg x0, x19
     arm64.bl __gt_reclaim
   teardownarrived:
@@ -45216,17 +45576,17 @@ func @__gt_runner_done {
     arm64.add x1, x21, 408
     arm64.arm64AtomicRmw.add x0, [x1], x0
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#44
-  strandlastref#43:
+    arm64.b.ne strandunreffed#51
+  strandlastref#50:
     arm64.add x0, x21, 104
     arm64.movImm x1, 2
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#44
-  teardownreclaim#45:
+    arm64.b.ne strandunreffed#51
+  teardownreclaim#52:
     arm64.movRegReg x0, x21
     arm64.bl __gt_reclaim
-  strandunreffed#44:
+  strandunreffed#51:
     arm64.loadRegSlot x19, slot3
     arm64.loadRegSlot x20, slot4
     arm64.loadRegSlot x21, slot5
@@ -45236,7 +45596,7 @@ func @__gt_runner_done {
     arm64.loadRegSlot x25, slot9
     arm64.epilogue 96
     arm64.ret
-  __rl_slow#49:
+  __rl_slow#56:
     arm64.storeSlotReg slot0, x1
     arm64.storeSlotReg slot1, x2
     arm64.movRegReg x0, x19
@@ -45244,61 +45604,61 @@ func @__gt_runner_done {
     arm64.bl __rtlock_enter_slow
     arm64.loadRegSlot x1, slot0
     arm64.loadRegSlot x2, slot1
-    arm64.b __rl_cont#47
-  __rl_slow#53:
-    arm64.movRegReg x0, x19
-    arm64.bl __rtlock_release
-    arm64.b __rl_cont#50
-  __rl_slow#61:
-    arm64.storeSlotReg slot2, x0
-    arm64.storeSlotReg slot0, x1
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_release
-    arm64.movRegReg x2, x0
-    arm64.loadRegSlot x0, slot2
-    arm64.loadRegSlot x1, slot0
-    arm64.b __rl_cont#58
-  __rl_slow#57:
-    arm64.storeSlotReg slot2, x0
-    arm64.storeSlotReg slot0, x1
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_release
-    arm64.movRegReg x2, x0
-    arm64.loadRegSlot x0, slot2
-    arm64.loadRegSlot x1, slot0
     arm64.b __rl_cont#54
+  __rl_slow#60:
+    arm64.movRegReg x0, x19
+    arm64.bl __rtlock_release
+    arm64.b __rl_cont#57
+  __rl_slow#68:
+    arm64.storeSlotReg slot2, x0
+    arm64.storeSlotReg slot0, x1
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x2
+    arm64.bl __rtlock_release
+    arm64.movRegReg x2, x0
+    arm64.loadRegSlot x0, slot2
+    arm64.loadRegSlot x1, slot0
+    arm64.b __rl_cont#65
   __rl_slow#64:
+    arm64.storeSlotReg slot2, x0
+    arm64.storeSlotReg slot0, x1
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x2
+    arm64.bl __rtlock_release
+    arm64.movRegReg x2, x0
+    arm64.loadRegSlot x0, slot2
+    arm64.loadRegSlot x1, slot0
+    arm64.b __rl_cont#61
+  __rl_slow#71:
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_enter_slow
-    arm64.b __rl_cont#62
-  __rl_slow#68:
+    arm64.b __rl_cont#69
+  __rl_slow#75:
     arm64.storeSlotReg slot2, x0
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_release
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot2
-    arm64.b __rl_cont#65
-  __rl_slow#78:
+    arm64.b __rl_cont#72
+  __rl_slow#81:
     arm64.storeSlotReg slot2, x0
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x3
     arm64.bl __rtlock_enter_slow
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot2
-    arm64.b __rl_cont#76
-  __rl_slow#82:
-    arm64.bl __rtlock_release
     arm64.b __rl_cont#79
-  __rl_slow#71:
+  __rl_slow#85:
+    arm64.bl __rtlock_release
+    arm64.b __rl_cont#82
+  __rl_slow#78:
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_enter_slow
-    arm64.b __rl_cont#69
-  __rl_slow#75:
+    arm64.b __rl_cont#76
+  __rl_slow#89:
     arm64.bl __rtlock_release
-    arm64.b __rl_cont#72
+    arm64.b __rl_cont#86
   readybadstatus:
     arm64.leaRdata x0, __fatal_msg_0  ; "fatal error: bad green-thread status in ready\x0a"
     arm64.movImm x1, 46
@@ -46134,29 +46494,29 @@ func @__gt_runner_done {
     arm64.movImm x3, 1
     arm64.arm64AtomicRmw.exchangeByte x3, [x19], x3
     arm64.cmp x3, 0
-    arm64.b.ne __rl_slow#49
-  __rl_owned#48:
+    arm64.b.ne __rl_slow#56
+  __rl_owned#55:
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
-  __rl_cont#47:
+  __rl_cont#54:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 120]
     arm64.cmp x0, 0
     arm64.b.ne runnerhaveawaiter
   runnernoawaiter:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.b.ne __rl_nested#51
-  __rl_outermost#52:
+    arm64.b.ne __rl_nested#58
+  __rl_outermost#59:
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x19], x0
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#50
-    arm64.b __rl_slow#53
-  __rl_nested#51:
+    arm64.b.eq __rl_cont#57
+    arm64.b __rl_slow#60
+  __rl_nested#58:
     arm64.add x0, x0, -1
     arm64.storeBaseDispReg.word64 [x19 + 16], x0
-  __rl_cont#50:
+  __rl_cont#57:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -46197,19 +46557,19 @@ func @__gt_runner_done {
     arm64.arm64AtomicCas x1, [x3], x1, x2
     arm64.loadRegBaseDisp.word64 x2, [x19 + 16]
     arm64.cmp x2, 0
-    arm64.b.ne __rl_nested#59
-  __rl_outermost#60:
+    arm64.b.ne __rl_nested#66
+  __rl_outermost#67:
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x2
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x19], x2
     arm64.cmp x2, 1
-    arm64.b.eq __rl_cont#58
-    arm64.b __rl_slow#61
-  __rl_nested#59:
+    arm64.b.eq __rl_cont#65
+    arm64.b __rl_slow#68
+  __rl_nested#66:
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x19 + 16], x2
-  __rl_cont#58:
+  __rl_cont#65:
     arm64.leaGlobal x2, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
     arm64.leaGlobal x3, __sched_tls_teb_offset
@@ -46244,19 +46604,19 @@ func @__gt_runner_done {
   runnerplainawaiter:
     arm64.loadRegBaseDisp.word64 x2, [x19 + 16]
     arm64.cmp x2, 0
-    arm64.b.ne __rl_nested#55
-  __rl_outermost#56:
+    arm64.b.ne __rl_nested#62
+  __rl_outermost#63:
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x2
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x19], x2
     arm64.cmp x2, 1
-    arm64.b.eq __rl_cont#54
-    arm64.b __rl_slow#57
-  __rl_nested#55:
+    arm64.b.eq __rl_cont#61
+    arm64.b __rl_slow#64
+  __rl_nested#62:
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x19 + 16], x2
-  __rl_cont#54:
+  __rl_cont#61:
     arm64.leaGlobal x2, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
     arm64.leaGlobal x3, __sched_tls_teb_offset
@@ -46314,12 +46674,12 @@ func @__gt_runner_done {
     arm64.loadRegBaseDisp.word64 x1, [x19 + 32]
     arm64.and x0, x0, 2
     arm64.cmp x0, 0
-    arm64.b.ne critsplit#83
+    arm64.b.ne critsplit#90
   runnersampledepth:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 448]
     arm64.add x0, x0, 928
     arm64.b runnersampled
-  critsplit#83:
+  critsplit#90:
     arm64.movRegReg x0, x1
   runnersampled:
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -46340,12 +46700,12 @@ func @__gt_runner_done {
     arm64.cmp x1, 0
     arm64.b.eq runnerkeepstack
   runnercountsample:
-    arm64.loadRegBaseDisp.word64 x2, [x1 + 304]
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 296]
     arm64.add x0, x2, x0
-    arm64.storeBaseDispReg.word64 [x1 + 304], x0
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 312]
+    arm64.storeBaseDispReg.word64 [x1 + 296], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 304]
     arm64.add x0, x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 312], x0
+    arm64.storeBaseDispReg.word64 [x1 + 304], x0
     arm64.and x0, x0, 63
     arm64.cmp x0, 0
     arm64.b.ne runnerkeepstack
@@ -46382,10 +46742,10 @@ func @__gt_runner_done {
     arm64.movImm x2, 1
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 0
-    arm64.b.ne __rl_slow#64
-  __rl_owned#63:
+    arm64.b.ne __rl_slow#71
+  __rl_owned#70:
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
-  __rl_cont#62:
+  __rl_cont#69:
     arm64.leaGlobal x0, __gt_gfree_head
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.movImm x0, 0
@@ -46394,19 +46754,19 @@ func @__gt_runner_done {
     arm64.leaGlobal x1, __gt_gfree_lock
     arm64.loadRegBaseDisp.word64 x2, [x1 + 16]
     arm64.cmp x2, 0
-    arm64.b.ne __rl_nested#66
-  __rl_outermost#67:
+    arm64.b.ne __rl_nested#73
+  __rl_outermost#74:
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x1 + 8], x2
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
     arm64.cmp x2, 1
-    arm64.b.eq __rl_cont#65
-    arm64.b __rl_slow#68
-  __rl_nested#66:
+    arm64.b.eq __rl_cont#72
+    arm64.b __rl_slow#75
+  __rl_nested#73:
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x1 + 16], x2
-  __rl_cont#65:
+  __rl_cont#72:
     arm64.leaGlobal x1, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.leaGlobal x2, __sched_tls_teb_offset
@@ -46435,7 +46795,7 @@ func @__gt_runner_done {
     arm64.storeBaseDispReg.word64 [x1 + 0], x2
     arm64.cmp x20, 0
     arm64.b.eq runnerkeepstack
-  critsplit#84:
+  critsplit#91:
     arm64.movRegReg x24, x20
   gfswalkhdr:
     arm64.cmp x24, 0
@@ -46472,10 +46832,10 @@ func @__gt_runner_done {
     arm64.movImm x3, 1
     arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
     arm64.cmp x3, 0
-    arm64.b.ne __rl_slow#78
-  __rl_owned#77:
+    arm64.b.ne __rl_slow#81
+  __rl_owned#80:
     arm64.storeBaseDispReg.word64 [x1 + 8], x2
-  __rl_cont#76:
+  __rl_cont#79:
     arm64.leaGlobal x1, __gt_gfree_nostack_head
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.storeBaseDispReg.word64 [x0 + 80], x1
@@ -46484,19 +46844,19 @@ func @__gt_runner_done {
     arm64.leaGlobal x0, __gt_gfree_lock
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.ne __rl_nested#80
-  __rl_outermost#81:
+    arm64.b.ne __rl_nested#83
+  __rl_outermost#84:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#79
-    arm64.b __rl_slow#82
-  __rl_nested#80:
+    arm64.b.eq __rl_cont#82
+    arm64.b __rl_slow#85
+  __rl_nested#83:
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
-  __rl_cont#79:
+  __rl_cont#82:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -46594,34 +46954,70 @@ func @__gt_runner_done {
     arm64.movImm x2, 1
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 0
-    arm64.b.ne __rl_slow#71
-  __rl_owned#70:
+    arm64.b.ne __rl_slow#78
+  __rl_owned#77:
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
-  __rl_cont#69:
+  __rl_cont#76:
     arm64.movImm x0, 1
     arm64.leaGlobal x1, __sched_phase
     arm64.stlr.word64 [x1], x0
     arm64.leaGlobal x0, __sched_main_m
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.leaGlobal x1, __sched_midle
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.cmp x1, x0
+    arm64.cset x1, eq
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 632]
+    arm64.cmp x2, 0
+    arm64.cset x2, ne
+    arm64.orr x1, x1, x2
+    arm64.cmp x1, 0
+    arm64.b.eq signalmainwake
+  signalmainunlist:
+    arm64.leaGlobal x1, __sched_nmidle
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
+    arm64.add x2, x2, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 600]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 632]
+    arm64.cmp x2, 0
+    arm64.b.ne munlinkinner
+  munlinkhead:
+    arm64.leaGlobal x3, __sched_midle
+    arm64.storeBaseDispReg.word64 [x3 + 0], x1
+    arm64.b munlinkmend
+  munlinkinner:
+    arm64.storeBaseDispReg.word64 [x2 + 600], x1
+  munlinkmend:
+    arm64.cmp x1, 0
+    arm64.b.eq munlinkclear
+  munlinknext:
+    arm64.storeBaseDispReg.word64 [x1 + 632], x2
+  munlinkclear:
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 600], x1
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 632], x1
+  signalmainwake:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 560]
     arm64.bl mrt_host_event_set
     arm64.bl __np_break
     arm64.leaGlobal x0, __sched_lock
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.ne __rl_nested#73
-  __rl_outermost#74:
+    arm64.b.ne __rl_nested#87
+  __rl_outermost#88:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#72
-    arm64.b __rl_slow#75
-  __rl_nested#73:
+    arm64.b.eq __rl_cont#86
+    arm64.b __rl_slow#89
+  __rl_nested#87:
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
-  __rl_cont#72:
+  __rl_cont#86:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -46653,17 +47049,17 @@ func @__gt_runner_done {
     arm64.add x1, x19, 408
     arm64.arm64AtomicRmw.add x0, [x1], x0
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#37
-  strandlastref#36:
+    arm64.b.ne strandunreffed#44
+  strandlastref#43:
     arm64.add x0, x19, 104
     arm64.movImm x1, 2
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#37
-  teardownreclaim#38:
+    arm64.b.ne strandunreffed#44
+  teardownreclaim#45:
     arm64.movRegReg x0, x19
     arm64.bl __gt_reclaim
-  strandunreffed#37:
+  strandunreffed#44:
     arm64.loadRegSlot x19, slot3
     arm64.loadRegSlot x20, slot4
     arm64.loadRegSlot x21, slot5
@@ -46679,7 +47075,7 @@ func @__gt_runner_done {
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.cmp x0, 1
     arm64.b.ne teardownarrived
-  teardownreclaim#40:
+  teardownreclaim#47:
     arm64.movRegReg x0, x19
     arm64.bl __gt_reclaim
   teardownarrived:
@@ -46699,17 +47095,17 @@ func @__gt_runner_done {
     arm64.add x1, x21, 408
     arm64.arm64AtomicRmw.add x0, [x1], x0
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#44
-  strandlastref#43:
+    arm64.b.ne strandunreffed#51
+  strandlastref#50:
     arm64.add x0, x21, 104
     arm64.movImm x1, 2
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#44
-  teardownreclaim#45:
+    arm64.b.ne strandunreffed#51
+  teardownreclaim#52:
     arm64.movRegReg x0, x21
     arm64.bl __gt_reclaim
-  strandunreffed#44:
+  strandunreffed#51:
     arm64.loadRegSlot x19, slot3
     arm64.loadRegSlot x20, slot4
     arm64.loadRegSlot x21, slot5
@@ -46719,7 +47115,7 @@ func @__gt_runner_done {
     arm64.loadRegSlot x25, slot9
     arm64.epilogue 96
     arm64.ret
-  __rl_slow#49:
+  __rl_slow#56:
     arm64.storeSlotReg slot0, x1
     arm64.storeSlotReg slot1, x2
     arm64.movRegReg x0, x19
@@ -46727,61 +47123,61 @@ func @__gt_runner_done {
     arm64.bl __rtlock_enter_slow
     arm64.loadRegSlot x1, slot0
     arm64.loadRegSlot x2, slot1
-    arm64.b __rl_cont#47
-  __rl_slow#53:
-    arm64.movRegReg x0, x19
-    arm64.bl __rtlock_release
-    arm64.b __rl_cont#50
-  __rl_slow#61:
-    arm64.storeSlotReg slot2, x0
-    arm64.storeSlotReg slot0, x1
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_release
-    arm64.movRegReg x2, x0
-    arm64.loadRegSlot x0, slot2
-    arm64.loadRegSlot x1, slot0
-    arm64.b __rl_cont#58
-  __rl_slow#57:
-    arm64.storeSlotReg slot2, x0
-    arm64.storeSlotReg slot0, x1
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_release
-    arm64.movRegReg x2, x0
-    arm64.loadRegSlot x0, slot2
-    arm64.loadRegSlot x1, slot0
     arm64.b __rl_cont#54
+  __rl_slow#60:
+    arm64.movRegReg x0, x19
+    arm64.bl __rtlock_release
+    arm64.b __rl_cont#57
+  __rl_slow#68:
+    arm64.storeSlotReg slot2, x0
+    arm64.storeSlotReg slot0, x1
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x2
+    arm64.bl __rtlock_release
+    arm64.movRegReg x2, x0
+    arm64.loadRegSlot x0, slot2
+    arm64.loadRegSlot x1, slot0
+    arm64.b __rl_cont#65
   __rl_slow#64:
+    arm64.storeSlotReg slot2, x0
+    arm64.storeSlotReg slot0, x1
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x2
+    arm64.bl __rtlock_release
+    arm64.movRegReg x2, x0
+    arm64.loadRegSlot x0, slot2
+    arm64.loadRegSlot x1, slot0
+    arm64.b __rl_cont#61
+  __rl_slow#71:
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_enter_slow
-    arm64.b __rl_cont#62
-  __rl_slow#68:
+    arm64.b __rl_cont#69
+  __rl_slow#75:
     arm64.storeSlotReg slot2, x0
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_release
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot2
-    arm64.b __rl_cont#65
-  __rl_slow#78:
+    arm64.b __rl_cont#72
+  __rl_slow#81:
     arm64.storeSlotReg slot2, x0
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x3
     arm64.bl __rtlock_enter_slow
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot2
-    arm64.b __rl_cont#76
-  __rl_slow#82:
-    arm64.bl __rtlock_release
     arm64.b __rl_cont#79
-  __rl_slow#71:
+  __rl_slow#85:
+    arm64.bl __rtlock_release
+    arm64.b __rl_cont#82
+  __rl_slow#78:
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_enter_slow
-    arm64.b __rl_cont#69
-  __rl_slow#75:
+    arm64.b __rl_cont#76
+  __rl_slow#89:
     arm64.bl __rtlock_release
-    arm64.b __rl_cont#72
+    arm64.b __rl_cont#86
   readybadstatus:
     arm64.leaRdata x0, __fatal_msg_0  ; "fatal error: bad green-thread status in ready\x0a"
     arm64.movImm x1, 46
@@ -54475,7 +54871,7 @@ func @__gt_stack_alloc {
   stkcached:
     x64.leaRegRegImm32 r13, rdx, -11
     x64.imulRegRegImm32 rcx, r13, 16
-    x64.leaRegRegImm32 rax, rax, 240
+    x64.leaRegRegImm32 rax, rax, 232
     x64.leaRegRegReg r14, rax, rcx
     x64.loadRegBaseDisp.word64 rax, [r14 + 0]
     x64.cmpRegImm32 rax, 0
@@ -54838,7 +55234,7 @@ func @__gt_stack_free {
   stkcached:
     x64.leaRegRegImm32 rsi, rsi, -11
     x64.imulRegRegImm32 r8, rsi, 16
-    x64.leaRegRegImm32 rdx, rdx, 240
+    x64.leaRegRegImm32 rdx, rdx, 232
     x64.leaRegRegReg rdx, rdx, r8
     x64.loadRegBaseDisp.word64 r8, [rdx + 0]
     x64.storeBaseDispReg.word64 [rax + 0], r8
@@ -55310,7 +55706,7 @@ func @__gt_stack_alloc {
   stkcached:
     x64.leaRegRegImm32 r13, rdx, -11
     x64.imulRegRegImm32 rcx, r13, 16
-    x64.leaRegRegImm32 rax, rax, 240
+    x64.leaRegRegImm32 rax, rax, 232
     x64.leaRegRegReg r14, rax, rcx
     x64.loadRegBaseDisp.word64 rax, [r14 + 0]
     x64.cmpRegImm32 rax, 0
@@ -55676,7 +56072,7 @@ func @__gt_stack_free {
   stkcached:
     x64.leaRegRegImm32 rsi, rsi, -11
     x64.imulRegRegImm32 r8, rsi, 16
-    x64.leaRegRegImm32 rdx, rdx, 240
+    x64.leaRegRegImm32 rdx, rdx, 232
     x64.leaRegRegReg rdx, rdx, r8
     x64.loadRegBaseDisp.word64 r8, [rdx + 0]
     x64.storeBaseDispReg.word64 [rax + 0], r8
@@ -56143,7 +56539,7 @@ func @__gt_stack_alloc {
   stkcached:
     arm64.sub x21, x0, 11
     arm64.lsl x0, x21, 4
-    arm64.add x1, x1, 240
+    arm64.add x1, x1, 232
     arm64.add x22, x1, x0
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
     arm64.cmp x0, 0
@@ -56554,7 +56950,7 @@ func @__gt_stack_free {
   stkcached:
     arm64.sub x2, x2, 11
     arm64.lsl x5, x2, 4
-    arm64.add x4, x4, 240
+    arm64.add x4, x4, 232
     arm64.add x4, x4, x5
     arm64.loadRegBaseDisp.word64 x5, [x4 + 0]
     arm64.storeBaseDispReg.word64 [x0 + 0], x5
@@ -57051,7 +57447,7 @@ func @__gt_stack_alloc {
   stkcached:
     arm64.sub x21, x0, 11
     arm64.lsl x0, x21, 4
-    arm64.add x1, x1, 240
+    arm64.add x1, x1, 232
     arm64.add x22, x1, x0
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
     arm64.cmp x0, 0
@@ -57462,7 +57858,7 @@ func @__gt_stack_free {
   stkcached:
     arm64.sub x2, x2, 11
     arm64.lsl x5, x2, 4
-    arm64.add x4, x4, 240
+    arm64.add x4, x4, 232
     arm64.add x4, x4, x5
     arm64.loadRegBaseDisp.word64 x5, [x4 + 0]
     arm64.storeBaseDispReg.word64 [x0 + 0], x5
@@ -58001,9 +58397,9 @@ func @__gt_seed_adapt {
     x64.leaRegGlobal rdi, __sched_procs
     x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
     x64.loadRegBaseIndexScale.word64 rdi, [rdi + rcx*8 + 0]
-    x64.loadRegBaseDisp.word64 r8, [rdi + 304]
+    x64.loadRegBaseDisp.word64 r8, [rdi + 296]
     x64.leaRegRegReg rdx, rdx, r8
-    x64.loadRegBaseDisp.word64 rdi, [rdi + 312]
+    x64.loadRegBaseDisp.word64 rdi, [rdi + 304]
     x64.leaRegRegReg rsi, rsi, rdi
     x64.leaRegRegImm32 rcx, rcx, 1
     x64.jmp seedsumhdr
@@ -58059,29 +58455,29 @@ func @__gt_runner_done {
     x64.movRegImm32 rsi, 1
     x64.xchg8 [rbx], rsi <- rsi
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __rl_slow#49
-  __rl_owned#48:
+    x64.jcc notEqual, __rl_slow#56
+  __rl_owned#55:
     x64.storeBaseDispReg.word64 [rbx + 8], rax
-  __rl_cont#47:
+  __rl_cont#54:
     x64.loadRegBaseDisp.word64 rsi, [rbx + 120]
     x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, runnerhaveawaiter
   runnernoawaiter:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#51
-  __rl_outermost#52:
+    x64.jcc notEqual, __rl_nested#58
+  __rl_outermost#59:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rbx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#50
-    x64.jmp __rl_slow#53
-  __rl_nested#51:
+    x64.jcc equal, __rl_cont#57
+    x64.jmp __rl_slow#60
+  __rl_nested#58:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rbx + 16], rax
-  __rl_cont#50:
+  __rl_cont#57:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -58117,19 +58513,19 @@ func @__gt_runner_done {
     x64.setccReg equal, rax
     x64.loadRegBaseDisp.word64 rdx, [rbx + 16]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_nested#59
-  __rl_outermost#60:
+    x64.jcc notEqual, __rl_nested#66
+  __rl_outermost#67:
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rdx
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rbx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#58
-    x64.jmp __rl_slow#61
-  __rl_nested#59:
+    x64.jcc equal, __rl_cont#65
+    x64.jmp __rl_slow#68
+  __rl_nested#66:
     x64.leaRegRegImm32 rdx, rdx, -1
     x64.storeBaseDispReg.word64 [rbx + 16], rdx
-  __rl_cont#58:
+  __rl_cont#65:
     x64.leaRegGlobal rdx, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
     x64.leaRegGlobal rsi, __sched_tls_teb_offset
@@ -58157,19 +58553,19 @@ func @__gt_runner_done {
   runnerplainawaiter:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#55
-  __rl_outermost#56:
+    x64.jcc notEqual, __rl_nested#62
+  __rl_outermost#63:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.movRegImm32 rax, 0
     x64.xchg8 [rbx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __rl_cont#54
-    x64.jmp __rl_slow#57
-  __rl_nested#55:
+    x64.jcc equal, __rl_cont#61
+    x64.jmp __rl_slow#64
+  __rl_nested#62:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rbx + 16], rax
-  __rl_cont#54:
+  __rl_cont#61:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -58225,12 +58621,12 @@ func @__gt_runner_done {
     x64.loadRegBaseDisp.word64 rcx, [rbx + 32]
     x64.andRegImm32 rax, rax, 2
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#83
+    x64.jcc notEqual, critsplit#90
   runnersampledepth:
     x64.loadRegBaseDisp.word64 rax, [rbx + 448]
     x64.leaRegRegImm32 rax, rax, 5536
     x64.jmp runnersampled
-  critsplit#83:
+  critsplit#90:
     x64.movRegReg rax, rcx
   runnersampled:
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -58246,10 +58642,10 @@ func @__gt_runner_done {
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, runnerkeepstack
   runnercountsample:
-    x64.aluBaseDispReg.add [rcx + 304], rax
-    x64.loadRegBaseDisp.word64 rax, [rcx + 312]
+    x64.aluBaseDispReg.add [rcx + 296], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 304]
     x64.leaRegRegImm32 rax, rax, 1
-    x64.storeBaseDispReg.word64 [rcx + 312], rax
+    x64.storeBaseDispReg.word64 [rcx + 304], rax
     x64.andRegImm32 rax, rax, 63
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, runnerkeepstack
@@ -58280,10 +58676,10 @@ func @__gt_runner_done {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#64
-  __rl_owned#63:
+    x64.jcc notEqual, __rl_slow#71
+  __rl_owned#70:
     x64.storeBaseDispReg.word64 [rcx + 8], rax
-  __rl_cont#62:
+  __rl_cont#69:
     x64.leaRegGlobal rax, __gt_gfree_head
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.movRegImm32 rax, 0
@@ -58292,19 +58688,19 @@ func @__gt_runner_done {
     x64.leaRegGlobal rcx, __gt_gfree_lock
     x64.loadRegBaseDisp.word64 rdx, [rcx + 16]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_nested#66
-  __rl_outermost#67:
+    x64.jcc notEqual, __rl_nested#73
+  __rl_outermost#74:
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rdx
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#65
-    x64.jmp __rl_slow#68
-  __rl_nested#66:
+    x64.jcc equal, __rl_cont#72
+    x64.jmp __rl_slow#75
+  __rl_nested#73:
     x64.leaRegRegImm32 rdx, rdx, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rdx
-  __rl_cont#65:
+  __rl_cont#72:
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.leaRegGlobal rdx, __sched_tls_teb_offset
@@ -58326,7 +58722,7 @@ func @__gt_runner_done {
     x64.aluBaseDispImm32.add [rdx + 0], -1
     x64.cmpRegImm32 r12, 0
     x64.jcc equal, runnerkeepstack
-  critsplit#84:
+  critsplit#91:
     x64.movRegReg r15, r12
   gfswalkhdr:
     x64.cmpRegImm32 r15, 0
@@ -58357,10 +58753,10 @@ func @__gt_runner_done {
     x64.movRegImm32 rsi, 1
     x64.xchg8 [rcx], rsi <- rsi
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __rl_slow#78
-  __rl_owned#77:
+    x64.jcc notEqual, __rl_slow#81
+  __rl_owned#80:
     x64.storeBaseDispReg.word64 [rcx + 8], rdx
-  __rl_cont#76:
+  __rl_cont#79:
     x64.leaRegGlobal rcx, __gt_gfree_nostack_head
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.storeBaseDispReg.word64 [rax + 80], rcx
@@ -58369,19 +58765,19 @@ func @__gt_runner_done {
     x64.leaRegGlobal rcx, __gt_gfree_lock
     x64.loadRegBaseDisp.word64 rax, [rcx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#80
-  __rl_outermost#81:
+    x64.jcc notEqual, __rl_nested#83
+  __rl_outermost#84:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#79
-    x64.jmp __rl_slow#82
-  __rl_nested#80:
+    x64.jcc equal, __rl_cont#82
+    x64.jmp __rl_slow#85
+  __rl_nested#83:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rax
-  __rl_cont#79:
+  __rl_cont#82:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -58466,34 +58862,68 @@ func @__gt_runner_done {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#71
-  __rl_owned#70:
+    x64.jcc notEqual, __rl_slow#78
+  __rl_owned#77:
     x64.storeBaseDispReg.word64 [rcx + 8], rax
-  __rl_cont#69:
+  __rl_cont#76:
     x64.movRegImm32 rax, 1
     x64.leaRegGlobal rcx, __sched_phase
     x64.storeBaseDispReg.word64 [rcx + 0], rax
     x64.leaRegGlobal rax, __sched_main_m
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegGlobal rcx, __sched_midle
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.cmpRegReg rcx, rax
+    x64.setccReg equal, rcx
+    x64.loadRegBaseDisp.word64 rdx, [rax + 632]
+    x64.cmpRegImm32 rdx, 0
+    x64.setccReg notEqual, rdx
+    x64.orRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, signalmainwake
+  signalmainunlist:
+    x64.leaRegGlobal rcx, __sched_nmidle
+    x64.aluBaseDispImm32.add [rcx + 0], -1
+    x64.loadRegBaseDisp.word64 rcx, [rax + 600]
+    x64.loadRegBaseDisp.word64 rdx, [rax + 632]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, munlinkinner
+  munlinkhead:
+    x64.leaRegGlobal rsi, __sched_midle
+    x64.storeBaseDispReg.word64 [rsi + 0], rcx
+    x64.jmp munlinkmend
+  munlinkinner:
+    x64.storeBaseDispReg.word64 [rdx + 600], rcx
+  munlinkmend:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, munlinkclear
+  munlinknext:
+    x64.storeBaseDispReg.word64 [rcx + 632], rdx
+  munlinkclear:
+    x64.movRegImm32 rcx, 0
+    x64.storeBaseDispReg.word64 [rax + 600], rcx
+    x64.movRegImm32 rcx, 0
+    x64.storeBaseDispReg.word64 [rax + 632], rcx
+  signalmainwake:
     x64.loadRegBaseDisp.word64 rcx, [rax + 560]
     x64.iatCall 19
     x64.callDirect __np_break
     x64.leaRegGlobal rcx, __sched_lock
     x64.loadRegBaseDisp.word64 rax, [rcx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#73
-  __rl_outermost#74:
+    x64.jcc notEqual, __rl_nested#87
+  __rl_outermost#88:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#72
-    x64.jmp __rl_slow#75
-  __rl_nested#73:
+    x64.jcc equal, __rl_cont#86
+    x64.jmp __rl_slow#89
+  __rl_nested#87:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rax
-  __rl_cont#72:
+  __rl_cont#86:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -58518,17 +58948,17 @@ func @__gt_runner_done {
     x64.leaRegRegImm32 rcx, rbx, 408
     x64.lock xadd [rcx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, strandunreffed#37
-  strandlastref#36:
+    x64.jcc notEqual, strandunreffed#44
+  strandlastref#43:
     x64.leaRegRegImm32 rax, rbx, 104
     x64.movRegImm32 rcx, 2
     x64.lock xadd [rax], rcx <- rcx
     x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, strandunreffed#37
-  teardownreclaim#38:
+    x64.jcc notEqual, strandunreffed#44
+  teardownreclaim#45:
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_reclaim
-  strandunreffed#37:
+  strandunreffed#44:
     x64.epilogue 88
     x64.popReg r15
     x64.popReg r14
@@ -58543,7 +58973,7 @@ func @__gt_runner_done {
     x64.lock xadd [rax], rcx <- rcx
     x64.cmpRegImm32 rcx, 1
     x64.jcc notEqual, teardownarrived
-  teardownreclaim#40:
+  teardownreclaim#47:
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_reclaim
   teardownarrived:
@@ -58564,18 +58994,18 @@ func @__gt_runner_done {
     x64.leaRegRegImm32 rcx, rcx, 408
     x64.lock xadd [rcx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, strandunreffed#44
-  strandlastref#43:
+    x64.jcc notEqual, strandunreffed#51
+  strandlastref#50:
     x64.loadRegSlot rax, slot1
     x64.leaRegRegImm32 rax, rax, 104
     x64.movRegImm32 rcx, 2
     x64.lock xadd [rax], rcx <- rcx
     x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, strandunreffed#44
-  teardownreclaim#45:
+    x64.jcc notEqual, strandunreffed#51
+  teardownreclaim#52:
     x64.loadRegSlot rcx, slot1
     x64.callDirect __gt_reclaim
-  strandunreffed#44:
+  strandunreffed#51:
     x64.epilogue 88
     x64.popReg r15
     x64.popReg r14
@@ -58584,7 +59014,7 @@ func @__gt_runner_done {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rl_slow#49:
+  __rl_slow#56:
     x64.storeSlotReg slot2, rcx
     x64.storeSlotReg slot3, rdx
     x64.movRegReg rcx, rbx
@@ -58592,20 +59022,20 @@ func @__gt_runner_done {
     x64.callDirect __rtlock_enter_slow
     x64.loadRegSlot rcx, slot2
     x64.loadRegSlot rdx, slot3
-    x64.jmp __rl_cont#47
-  __rl_slow#53:
+    x64.jmp __rl_cont#54
+  __rl_slow#60:
     x64.movRegReg rcx, rbx
     x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#50
-  __rl_slow#61:
+    x64.jmp __rl_cont#57
+  __rl_slow#68:
     x64.storeSlotReg slot4, rax
     x64.storeSlotReg slot2, rcx
     x64.movRegReg rcx, rbx
     x64.callDirect __rtlock_release
     x64.loadRegSlot rax, slot4
     x64.loadRegSlot rcx, slot2
-    x64.jmp __rl_cont#58
-  __rl_slow#57:
+    x64.jmp __rl_cont#65
+  __rl_slow#64:
     x64.storeSlotReg slot3, rdx
     x64.storeSlotReg slot5, rsi
     x64.movRegReg rcx, rbx
@@ -58613,30 +59043,30 @@ func @__gt_runner_done {
     x64.callDirect __rtlock_release
     x64.loadRegSlot rdx, slot3
     x64.loadRegSlot rsi, slot5
-    x64.jmp __rl_cont#54
-  __rl_slow#64:
-    x64.callDirect __rtlock_enter_slow
-    x64.jmp __rl_cont#62
-  __rl_slow#68:
-    x64.storeSlotReg slot4, rax
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot4
-    x64.jmp __rl_cont#65
-  __rl_slow#78:
-    x64.storeSlotReg slot4, rax
-    x64.movRegReg rdx, rsi
-    x64.callDirect __rtlock_enter_slow
-    x64.loadRegSlot rax, slot4
-    x64.jmp __rl_cont#76
-  __rl_slow#82:
-    x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#79
+    x64.jmp __rl_cont#61
   __rl_slow#71:
     x64.callDirect __rtlock_enter_slow
     x64.jmp __rl_cont#69
   __rl_slow#75:
+    x64.storeSlotReg slot4, rax
     x64.callDirect __rtlock_release
+    x64.loadRegSlot rax, slot4
     x64.jmp __rl_cont#72
+  __rl_slow#81:
+    x64.storeSlotReg slot4, rax
+    x64.movRegReg rdx, rsi
+    x64.callDirect __rtlock_enter_slow
+    x64.loadRegSlot rax, slot4
+    x64.jmp __rl_cont#79
+  __rl_slow#85:
+    x64.callDirect __rtlock_release
+    x64.jmp __rl_cont#82
+  __rl_slow#78:
+    x64.callDirect __rtlock_enter_slow
+    x64.jmp __rl_cont#76
+  __rl_slow#89:
+    x64.callDirect __rtlock_release
+    x64.jmp __rl_cont#86
   readybadstatus:
     x64.leaRegRdata rcx, [rip + __fatal_msg_0]  ; "fatal error: bad green-thread status in ready\x0a"
     x64.movRegImm32 rdx, 46
@@ -58935,9 +59365,9 @@ func @__gt_seed_adapt {
     x64.leaRegGlobal rdi, __sched_procs
     x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
     x64.loadRegBaseIndexScale.word64 rdi, [rdi + rcx*8 + 0]
-    x64.loadRegBaseDisp.word64 r8, [rdi + 304]
+    x64.loadRegBaseDisp.word64 r8, [rdi + 296]
     x64.leaRegRegReg rdx, rdx, r8
-    x64.loadRegBaseDisp.word64 rdi, [rdi + 312]
+    x64.loadRegBaseDisp.word64 rdi, [rdi + 304]
     x64.leaRegRegReg rsi, rsi, rdi
     x64.leaRegRegImm32 rcx, rcx, 1
     x64.jmp seedsumhdr
@@ -58993,29 +59423,29 @@ func @__gt_runner_done {
     x64.movRegImm32 rsi, 1
     x64.xchg8 [rbx], rsi <- rsi
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __rl_slow#49
-  __rl_owned#48:
+    x64.jcc notEqual, __rl_slow#56
+  __rl_owned#55:
     x64.storeBaseDispReg.word64 [rbx + 8], rax
-  __rl_cont#47:
+  __rl_cont#54:
     x64.loadRegBaseDisp.word64 rsi, [rbx + 120]
     x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, runnerhaveawaiter
   runnernoawaiter:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#51
-  __rl_outermost#52:
+    x64.jcc notEqual, __rl_nested#58
+  __rl_outermost#59:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rbx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#50
-    x64.jmp __rl_slow#53
-  __rl_nested#51:
+    x64.jcc equal, __rl_cont#57
+    x64.jmp __rl_slow#60
+  __rl_nested#58:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rbx + 16], rax
-  __rl_cont#50:
+  __rl_cont#57:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -59051,19 +59481,19 @@ func @__gt_runner_done {
     x64.setccReg equal, rax
     x64.loadRegBaseDisp.word64 rdx, [rbx + 16]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_nested#59
-  __rl_outermost#60:
+    x64.jcc notEqual, __rl_nested#66
+  __rl_outermost#67:
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rdx
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rbx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#58
-    x64.jmp __rl_slow#61
-  __rl_nested#59:
+    x64.jcc equal, __rl_cont#65
+    x64.jmp __rl_slow#68
+  __rl_nested#66:
     x64.leaRegRegImm32 rdx, rdx, -1
     x64.storeBaseDispReg.word64 [rbx + 16], rdx
-  __rl_cont#58:
+  __rl_cont#65:
     x64.leaRegGlobal rdx, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
     x64.leaRegGlobal rsi, __sched_tls_teb_offset
@@ -59091,19 +59521,19 @@ func @__gt_runner_done {
   runnerplainawaiter:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#55
-  __rl_outermost#56:
+    x64.jcc notEqual, __rl_nested#62
+  __rl_outermost#63:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.movRegImm32 rax, 0
     x64.xchg8 [rbx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __rl_cont#54
-    x64.jmp __rl_slow#57
-  __rl_nested#55:
+    x64.jcc equal, __rl_cont#61
+    x64.jmp __rl_slow#64
+  __rl_nested#62:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rbx + 16], rax
-  __rl_cont#54:
+  __rl_cont#61:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -59159,12 +59589,12 @@ func @__gt_runner_done {
     x64.loadRegBaseDisp.word64 rcx, [rbx + 32]
     x64.andRegImm32 rax, rax, 2
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#83
+    x64.jcc notEqual, critsplit#90
   runnersampledepth:
     x64.loadRegBaseDisp.word64 rax, [rbx + 448]
     x64.leaRegRegImm32 rax, rax, 928
     x64.jmp runnersampled
-  critsplit#83:
+  critsplit#90:
     x64.movRegReg rax, rcx
   runnersampled:
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -59180,10 +59610,10 @@ func @__gt_runner_done {
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, runnerkeepstack
   runnercountsample:
-    x64.aluBaseDispReg.add [rcx + 304], rax
-    x64.loadRegBaseDisp.word64 rax, [rcx + 312]
+    x64.aluBaseDispReg.add [rcx + 296], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 304]
     x64.leaRegRegImm32 rax, rax, 1
-    x64.storeBaseDispReg.word64 [rcx + 312], rax
+    x64.storeBaseDispReg.word64 [rcx + 304], rax
     x64.andRegImm32 rax, rax, 63
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, runnerkeepstack
@@ -59214,10 +59644,10 @@ func @__gt_runner_done {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#64
-  __rl_owned#63:
+    x64.jcc notEqual, __rl_slow#71
+  __rl_owned#70:
     x64.storeBaseDispReg.word64 [rcx + 8], rax
-  __rl_cont#62:
+  __rl_cont#69:
     x64.leaRegGlobal rax, __gt_gfree_head
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.movRegImm32 rax, 0
@@ -59226,19 +59656,19 @@ func @__gt_runner_done {
     x64.leaRegGlobal rcx, __gt_gfree_lock
     x64.loadRegBaseDisp.word64 rdx, [rcx + 16]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_nested#66
-  __rl_outermost#67:
+    x64.jcc notEqual, __rl_nested#73
+  __rl_outermost#74:
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rdx
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#65
-    x64.jmp __rl_slow#68
-  __rl_nested#66:
+    x64.jcc equal, __rl_cont#72
+    x64.jmp __rl_slow#75
+  __rl_nested#73:
     x64.leaRegRegImm32 rdx, rdx, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rdx
-  __rl_cont#65:
+  __rl_cont#72:
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.leaRegGlobal rdx, __sched_tls_teb_offset
@@ -59260,7 +59690,7 @@ func @__gt_runner_done {
     x64.aluBaseDispImm32.add [rdx + 0], -1
     x64.cmpRegImm32 r12, 0
     x64.jcc equal, runnerkeepstack
-  critsplit#84:
+  critsplit#91:
     x64.movRegReg r15, r12
   gfswalkhdr:
     x64.cmpRegImm32 r15, 0
@@ -59291,10 +59721,10 @@ func @__gt_runner_done {
     x64.movRegImm32 rsi, 1
     x64.xchg8 [rcx], rsi <- rsi
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __rl_slow#78
-  __rl_owned#77:
+    x64.jcc notEqual, __rl_slow#81
+  __rl_owned#80:
     x64.storeBaseDispReg.word64 [rcx + 8], rdx
-  __rl_cont#76:
+  __rl_cont#79:
     x64.leaRegGlobal rcx, __gt_gfree_nostack_head
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.storeBaseDispReg.word64 [rax + 80], rcx
@@ -59303,19 +59733,19 @@ func @__gt_runner_done {
     x64.leaRegGlobal rcx, __gt_gfree_lock
     x64.loadRegBaseDisp.word64 rax, [rcx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#80
-  __rl_outermost#81:
+    x64.jcc notEqual, __rl_nested#83
+  __rl_outermost#84:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#79
-    x64.jmp __rl_slow#82
-  __rl_nested#80:
+    x64.jcc equal, __rl_cont#82
+    x64.jmp __rl_slow#85
+  __rl_nested#83:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rax
-  __rl_cont#79:
+  __rl_cont#82:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -59400,34 +59830,68 @@ func @__gt_runner_done {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#71
-  __rl_owned#70:
+    x64.jcc notEqual, __rl_slow#78
+  __rl_owned#77:
     x64.storeBaseDispReg.word64 [rcx + 8], rax
-  __rl_cont#69:
+  __rl_cont#76:
     x64.movRegImm32 rax, 1
     x64.leaRegGlobal rcx, __sched_phase
     x64.storeBaseDispReg.word64 [rcx + 0], rax
     x64.leaRegGlobal rax, __sched_main_m
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegGlobal rcx, __sched_midle
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.cmpRegReg rcx, rax
+    x64.setccReg equal, rcx
+    x64.loadRegBaseDisp.word64 rdx, [rax + 632]
+    x64.cmpRegImm32 rdx, 0
+    x64.setccReg notEqual, rdx
+    x64.orRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, signalmainwake
+  signalmainunlist:
+    x64.leaRegGlobal rcx, __sched_nmidle
+    x64.aluBaseDispImm32.add [rcx + 0], -1
+    x64.loadRegBaseDisp.word64 rcx, [rax + 600]
+    x64.loadRegBaseDisp.word64 rdx, [rax + 632]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, munlinkinner
+  munlinkhead:
+    x64.leaRegGlobal rsi, __sched_midle
+    x64.storeBaseDispReg.word64 [rsi + 0], rcx
+    x64.jmp munlinkmend
+  munlinkinner:
+    x64.storeBaseDispReg.word64 [rdx + 600], rcx
+  munlinkmend:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, munlinkclear
+  munlinknext:
+    x64.storeBaseDispReg.word64 [rcx + 632], rdx
+  munlinkclear:
+    x64.movRegImm32 rcx, 0
+    x64.storeBaseDispReg.word64 [rax + 600], rcx
+    x64.movRegImm32 rcx, 0
+    x64.storeBaseDispReg.word64 [rax + 632], rcx
+  signalmainwake:
     x64.loadRegBaseDisp.word64 rcx, [rax + 560]
     x64.callDirect mrt_host_event_set
     x64.callDirect __np_break
     x64.leaRegGlobal rcx, __sched_lock
     x64.loadRegBaseDisp.word64 rax, [rcx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#73
-  __rl_outermost#74:
+    x64.jcc notEqual, __rl_nested#87
+  __rl_outermost#88:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#72
-    x64.jmp __rl_slow#75
-  __rl_nested#73:
+    x64.jcc equal, __rl_cont#86
+    x64.jmp __rl_slow#89
+  __rl_nested#87:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rax
-  __rl_cont#72:
+  __rl_cont#86:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -59452,17 +59916,17 @@ func @__gt_runner_done {
     x64.leaRegRegImm32 rcx, rbx, 408
     x64.lock xadd [rcx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, strandunreffed#37
-  strandlastref#36:
+    x64.jcc notEqual, strandunreffed#44
+  strandlastref#43:
     x64.leaRegRegImm32 rax, rbx, 104
     x64.movRegImm32 rcx, 2
     x64.lock xadd [rax], rcx <- rcx
     x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, strandunreffed#37
-  teardownreclaim#38:
+    x64.jcc notEqual, strandunreffed#44
+  teardownreclaim#45:
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_reclaim
-  strandunreffed#37:
+  strandunreffed#44:
     x64.epilogue 88
     x64.popReg r15
     x64.popReg r14
@@ -59477,7 +59941,7 @@ func @__gt_runner_done {
     x64.lock xadd [rax], rcx <- rcx
     x64.cmpRegImm32 rcx, 1
     x64.jcc notEqual, teardownarrived
-  teardownreclaim#40:
+  teardownreclaim#47:
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_reclaim
   teardownarrived:
@@ -59498,18 +59962,18 @@ func @__gt_runner_done {
     x64.leaRegRegImm32 rcx, rcx, 408
     x64.lock xadd [rcx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, strandunreffed#44
-  strandlastref#43:
+    x64.jcc notEqual, strandunreffed#51
+  strandlastref#50:
     x64.loadRegSlot rax, slot1
     x64.leaRegRegImm32 rax, rax, 104
     x64.movRegImm32 rcx, 2
     x64.lock xadd [rax], rcx <- rcx
     x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, strandunreffed#44
-  teardownreclaim#45:
+    x64.jcc notEqual, strandunreffed#51
+  teardownreclaim#52:
     x64.loadRegSlot rcx, slot1
     x64.callDirect __gt_reclaim
-  strandunreffed#44:
+  strandunreffed#51:
     x64.epilogue 88
     x64.popReg r15
     x64.popReg r14
@@ -59518,7 +59982,7 @@ func @__gt_runner_done {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rl_slow#49:
+  __rl_slow#56:
     x64.storeSlotReg slot2, rcx
     x64.storeSlotReg slot3, rdx
     x64.movRegReg rcx, rbx
@@ -59526,20 +59990,20 @@ func @__gt_runner_done {
     x64.callDirect __rtlock_enter_slow
     x64.loadRegSlot rcx, slot2
     x64.loadRegSlot rdx, slot3
-    x64.jmp __rl_cont#47
-  __rl_slow#53:
+    x64.jmp __rl_cont#54
+  __rl_slow#60:
     x64.movRegReg rcx, rbx
     x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#50
-  __rl_slow#61:
+    x64.jmp __rl_cont#57
+  __rl_slow#68:
     x64.storeSlotReg slot4, rax
     x64.storeSlotReg slot2, rcx
     x64.movRegReg rcx, rbx
     x64.callDirect __rtlock_release
     x64.loadRegSlot rax, slot4
     x64.loadRegSlot rcx, slot2
-    x64.jmp __rl_cont#58
-  __rl_slow#57:
+    x64.jmp __rl_cont#65
+  __rl_slow#64:
     x64.storeSlotReg slot3, rdx
     x64.storeSlotReg slot5, rsi
     x64.movRegReg rcx, rbx
@@ -59547,30 +60011,30 @@ func @__gt_runner_done {
     x64.callDirect __rtlock_release
     x64.loadRegSlot rdx, slot3
     x64.loadRegSlot rsi, slot5
-    x64.jmp __rl_cont#54
-  __rl_slow#64:
-    x64.callDirect __rtlock_enter_slow
-    x64.jmp __rl_cont#62
-  __rl_slow#68:
-    x64.storeSlotReg slot4, rax
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot4
-    x64.jmp __rl_cont#65
-  __rl_slow#78:
-    x64.storeSlotReg slot4, rax
-    x64.movRegReg rdx, rsi
-    x64.callDirect __rtlock_enter_slow
-    x64.loadRegSlot rax, slot4
-    x64.jmp __rl_cont#76
-  __rl_slow#82:
-    x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#79
+    x64.jmp __rl_cont#61
   __rl_slow#71:
     x64.callDirect __rtlock_enter_slow
     x64.jmp __rl_cont#69
   __rl_slow#75:
+    x64.storeSlotReg slot4, rax
     x64.callDirect __rtlock_release
+    x64.loadRegSlot rax, slot4
     x64.jmp __rl_cont#72
+  __rl_slow#81:
+    x64.storeSlotReg slot4, rax
+    x64.movRegReg rdx, rsi
+    x64.callDirect __rtlock_enter_slow
+    x64.loadRegSlot rax, slot4
+    x64.jmp __rl_cont#79
+  __rl_slow#85:
+    x64.callDirect __rtlock_release
+    x64.jmp __rl_cont#82
+  __rl_slow#78:
+    x64.callDirect __rtlock_enter_slow
+    x64.jmp __rl_cont#76
+  __rl_slow#89:
+    x64.callDirect __rtlock_release
+    x64.jmp __rl_cont#86
   readybadstatus:
     x64.leaRegRdata rcx, [rip + __fatal_msg_0]  ; "fatal error: bad green-thread status in ready\x0a"
     x64.movRegImm32 rdx, 46
@@ -59864,9 +60328,9 @@ func @__gt_seed_adapt {
     arm64.leaGlobal x4, __sched_procs
     arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
     arm64.loadRegBaseIndexScale.word64 x4, [x4 + x1*8 + 0]
-    arm64.loadRegBaseDisp.word64 x5, [x4 + 304]
+    arm64.loadRegBaseDisp.word64 x5, [x4 + 296]
     arm64.add x2, x2, x5
-    arm64.loadRegBaseDisp.word64 x4, [x4 + 312]
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 304]
     arm64.add x3, x3, x4
     arm64.add x1, x1, 1
     arm64.b seedsumhdr
@@ -59926,29 +60390,29 @@ func @__gt_runner_done {
     arm64.movImm x3, 1
     arm64.arm64AtomicRmw.exchangeByte x3, [x19], x3
     arm64.cmp x3, 0
-    arm64.b.ne __rl_slow#49
-  __rl_owned#48:
+    arm64.b.ne __rl_slow#56
+  __rl_owned#55:
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
-  __rl_cont#47:
+  __rl_cont#54:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 120]
     arm64.cmp x0, 0
     arm64.b.ne runnerhaveawaiter
   runnernoawaiter:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.b.ne __rl_nested#51
-  __rl_outermost#52:
+    arm64.b.ne __rl_nested#58
+  __rl_outermost#59:
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x19], x0
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#50
-    arm64.b __rl_slow#53
-  __rl_nested#51:
+    arm64.b.eq __rl_cont#57
+    arm64.b __rl_slow#60
+  __rl_nested#58:
     arm64.add x0, x0, -1
     arm64.storeBaseDispReg.word64 [x19 + 16], x0
-  __rl_cont#50:
+  __rl_cont#57:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -59989,19 +60453,19 @@ func @__gt_runner_done {
     arm64.arm64AtomicCas x1, [x3], x1, x2
     arm64.loadRegBaseDisp.word64 x2, [x19 + 16]
     arm64.cmp x2, 0
-    arm64.b.ne __rl_nested#59
-  __rl_outermost#60:
+    arm64.b.ne __rl_nested#66
+  __rl_outermost#67:
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x2
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x19], x2
     arm64.cmp x2, 1
-    arm64.b.eq __rl_cont#58
-    arm64.b __rl_slow#61
-  __rl_nested#59:
+    arm64.b.eq __rl_cont#65
+    arm64.b __rl_slow#68
+  __rl_nested#66:
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x19 + 16], x2
-  __rl_cont#58:
+  __rl_cont#65:
     arm64.leaGlobal x2, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
     arm64.leaGlobal x3, __sched_tls_teb_offset
@@ -60036,19 +60500,19 @@ func @__gt_runner_done {
   runnerplainawaiter:
     arm64.loadRegBaseDisp.word64 x2, [x19 + 16]
     arm64.cmp x2, 0
-    arm64.b.ne __rl_nested#55
-  __rl_outermost#56:
+    arm64.b.ne __rl_nested#62
+  __rl_outermost#63:
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x2
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x19], x2
     arm64.cmp x2, 1
-    arm64.b.eq __rl_cont#54
-    arm64.b __rl_slow#57
-  __rl_nested#55:
+    arm64.b.eq __rl_cont#61
+    arm64.b __rl_slow#64
+  __rl_nested#62:
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x19 + 16], x2
-  __rl_cont#54:
+  __rl_cont#61:
     arm64.leaGlobal x2, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
     arm64.leaGlobal x3, __sched_tls_teb_offset
@@ -60106,12 +60570,12 @@ func @__gt_runner_done {
     arm64.loadRegBaseDisp.word64 x1, [x19 + 32]
     arm64.and x0, x0, 2
     arm64.cmp x0, 0
-    arm64.b.ne critsplit#83
+    arm64.b.ne critsplit#90
   runnersampledepth:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 448]
     arm64.add x0, x0, 928
     arm64.b runnersampled
-  critsplit#83:
+  critsplit#90:
     arm64.movRegReg x0, x1
   runnersampled:
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -60132,12 +60596,12 @@ func @__gt_runner_done {
     arm64.cmp x1, 0
     arm64.b.eq runnerkeepstack
   runnercountsample:
-    arm64.loadRegBaseDisp.word64 x2, [x1 + 304]
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 296]
     arm64.add x0, x2, x0
-    arm64.storeBaseDispReg.word64 [x1 + 304], x0
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 312]
+    arm64.storeBaseDispReg.word64 [x1 + 296], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 304]
     arm64.add x0, x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 312], x0
+    arm64.storeBaseDispReg.word64 [x1 + 304], x0
     arm64.and x0, x0, 63
     arm64.cmp x0, 0
     arm64.b.ne runnerkeepstack
@@ -60174,10 +60638,10 @@ func @__gt_runner_done {
     arm64.movImm x2, 1
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 0
-    arm64.b.ne __rl_slow#64
-  __rl_owned#63:
+    arm64.b.ne __rl_slow#71
+  __rl_owned#70:
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
-  __rl_cont#62:
+  __rl_cont#69:
     arm64.leaGlobal x0, __gt_gfree_head
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.movImm x0, 0
@@ -60186,19 +60650,19 @@ func @__gt_runner_done {
     arm64.leaGlobal x1, __gt_gfree_lock
     arm64.loadRegBaseDisp.word64 x2, [x1 + 16]
     arm64.cmp x2, 0
-    arm64.b.ne __rl_nested#66
-  __rl_outermost#67:
+    arm64.b.ne __rl_nested#73
+  __rl_outermost#74:
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x1 + 8], x2
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
     arm64.cmp x2, 1
-    arm64.b.eq __rl_cont#65
-    arm64.b __rl_slow#68
-  __rl_nested#66:
+    arm64.b.eq __rl_cont#72
+    arm64.b __rl_slow#75
+  __rl_nested#73:
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x1 + 16], x2
-  __rl_cont#65:
+  __rl_cont#72:
     arm64.leaGlobal x1, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.leaGlobal x2, __sched_tls_teb_offset
@@ -60227,7 +60691,7 @@ func @__gt_runner_done {
     arm64.storeBaseDispReg.word64 [x1 + 0], x2
     arm64.cmp x20, 0
     arm64.b.eq runnerkeepstack
-  critsplit#84:
+  critsplit#91:
     arm64.movRegReg x24, x20
   gfswalkhdr:
     arm64.cmp x24, 0
@@ -60264,10 +60728,10 @@ func @__gt_runner_done {
     arm64.movImm x3, 1
     arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
     arm64.cmp x3, 0
-    arm64.b.ne __rl_slow#78
-  __rl_owned#77:
+    arm64.b.ne __rl_slow#81
+  __rl_owned#80:
     arm64.storeBaseDispReg.word64 [x1 + 8], x2
-  __rl_cont#76:
+  __rl_cont#79:
     arm64.leaGlobal x1, __gt_gfree_nostack_head
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.storeBaseDispReg.word64 [x0 + 80], x1
@@ -60276,19 +60740,19 @@ func @__gt_runner_done {
     arm64.leaGlobal x0, __gt_gfree_lock
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.ne __rl_nested#80
-  __rl_outermost#81:
+    arm64.b.ne __rl_nested#83
+  __rl_outermost#84:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#79
-    arm64.b __rl_slow#82
-  __rl_nested#80:
+    arm64.b.eq __rl_cont#82
+    arm64.b __rl_slow#85
+  __rl_nested#83:
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
-  __rl_cont#79:
+  __rl_cont#82:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -60386,34 +60850,70 @@ func @__gt_runner_done {
     arm64.movImm x2, 1
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 0
-    arm64.b.ne __rl_slow#71
-  __rl_owned#70:
+    arm64.b.ne __rl_slow#78
+  __rl_owned#77:
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
-  __rl_cont#69:
+  __rl_cont#76:
     arm64.movImm x0, 1
     arm64.leaGlobal x1, __sched_phase
     arm64.stlr.word64 [x1], x0
     arm64.leaGlobal x0, __sched_main_m
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.leaGlobal x1, __sched_midle
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.cmp x1, x0
+    arm64.cset x1, eq
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 632]
+    arm64.cmp x2, 0
+    arm64.cset x2, ne
+    arm64.orr x1, x1, x2
+    arm64.cmp x1, 0
+    arm64.b.eq signalmainwake
+  signalmainunlist:
+    arm64.leaGlobal x1, __sched_nmidle
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
+    arm64.add x2, x2, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 600]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 632]
+    arm64.cmp x2, 0
+    arm64.b.ne munlinkinner
+  munlinkhead:
+    arm64.leaGlobal x3, __sched_midle
+    arm64.storeBaseDispReg.word64 [x3 + 0], x1
+    arm64.b munlinkmend
+  munlinkinner:
+    arm64.storeBaseDispReg.word64 [x2 + 600], x1
+  munlinkmend:
+    arm64.cmp x1, 0
+    arm64.b.eq munlinkclear
+  munlinknext:
+    arm64.storeBaseDispReg.word64 [x1 + 632], x2
+  munlinkclear:
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 600], x1
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 632], x1
+  signalmainwake:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 560]
     arm64.bl mrt_host_event_set
     arm64.bl __np_break
     arm64.leaGlobal x0, __sched_lock
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.ne __rl_nested#73
-  __rl_outermost#74:
+    arm64.b.ne __rl_nested#87
+  __rl_outermost#88:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#72
-    arm64.b __rl_slow#75
-  __rl_nested#73:
+    arm64.b.eq __rl_cont#86
+    arm64.b __rl_slow#89
+  __rl_nested#87:
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
-  __rl_cont#72:
+  __rl_cont#86:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -60445,17 +60945,17 @@ func @__gt_runner_done {
     arm64.add x1, x19, 408
     arm64.arm64AtomicRmw.add x0, [x1], x0
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#37
-  strandlastref#36:
+    arm64.b.ne strandunreffed#44
+  strandlastref#43:
     arm64.add x0, x19, 104
     arm64.movImm x1, 2
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#37
-  teardownreclaim#38:
+    arm64.b.ne strandunreffed#44
+  teardownreclaim#45:
     arm64.movRegReg x0, x19
     arm64.bl __gt_reclaim
-  strandunreffed#37:
+  strandunreffed#44:
     arm64.loadRegSlot x19, slot3
     arm64.loadRegSlot x20, slot4
     arm64.loadRegSlot x21, slot5
@@ -60471,7 +60971,7 @@ func @__gt_runner_done {
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.cmp x0, 1
     arm64.b.ne teardownarrived
-  teardownreclaim#40:
+  teardownreclaim#47:
     arm64.movRegReg x0, x19
     arm64.bl __gt_reclaim
   teardownarrived:
@@ -60491,17 +60991,17 @@ func @__gt_runner_done {
     arm64.add x1, x21, 408
     arm64.arm64AtomicRmw.add x0, [x1], x0
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#44
-  strandlastref#43:
+    arm64.b.ne strandunreffed#51
+  strandlastref#50:
     arm64.add x0, x21, 104
     arm64.movImm x1, 2
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#44
-  teardownreclaim#45:
+    arm64.b.ne strandunreffed#51
+  teardownreclaim#52:
     arm64.movRegReg x0, x21
     arm64.bl __gt_reclaim
-  strandunreffed#44:
+  strandunreffed#51:
     arm64.loadRegSlot x19, slot3
     arm64.loadRegSlot x20, slot4
     arm64.loadRegSlot x21, slot5
@@ -60511,7 +61011,7 @@ func @__gt_runner_done {
     arm64.loadRegSlot x25, slot9
     arm64.epilogue 96
     arm64.ret
-  __rl_slow#49:
+  __rl_slow#56:
     arm64.storeSlotReg slot0, x1
     arm64.storeSlotReg slot1, x2
     arm64.movRegReg x0, x19
@@ -60519,61 +61019,61 @@ func @__gt_runner_done {
     arm64.bl __rtlock_enter_slow
     arm64.loadRegSlot x1, slot0
     arm64.loadRegSlot x2, slot1
-    arm64.b __rl_cont#47
-  __rl_slow#53:
-    arm64.movRegReg x0, x19
-    arm64.bl __rtlock_release
-    arm64.b __rl_cont#50
-  __rl_slow#61:
-    arm64.storeSlotReg slot2, x0
-    arm64.storeSlotReg slot0, x1
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_release
-    arm64.movRegReg x2, x0
-    arm64.loadRegSlot x0, slot2
-    arm64.loadRegSlot x1, slot0
-    arm64.b __rl_cont#58
-  __rl_slow#57:
-    arm64.storeSlotReg slot2, x0
-    arm64.storeSlotReg slot0, x1
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_release
-    arm64.movRegReg x2, x0
-    arm64.loadRegSlot x0, slot2
-    arm64.loadRegSlot x1, slot0
     arm64.b __rl_cont#54
+  __rl_slow#60:
+    arm64.movRegReg x0, x19
+    arm64.bl __rtlock_release
+    arm64.b __rl_cont#57
+  __rl_slow#68:
+    arm64.storeSlotReg slot2, x0
+    arm64.storeSlotReg slot0, x1
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x2
+    arm64.bl __rtlock_release
+    arm64.movRegReg x2, x0
+    arm64.loadRegSlot x0, slot2
+    arm64.loadRegSlot x1, slot0
+    arm64.b __rl_cont#65
   __rl_slow#64:
+    arm64.storeSlotReg slot2, x0
+    arm64.storeSlotReg slot0, x1
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x2
+    arm64.bl __rtlock_release
+    arm64.movRegReg x2, x0
+    arm64.loadRegSlot x0, slot2
+    arm64.loadRegSlot x1, slot0
+    arm64.b __rl_cont#61
+  __rl_slow#71:
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_enter_slow
-    arm64.b __rl_cont#62
-  __rl_slow#68:
+    arm64.b __rl_cont#69
+  __rl_slow#75:
     arm64.storeSlotReg slot2, x0
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_release
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot2
-    arm64.b __rl_cont#65
-  __rl_slow#78:
+    arm64.b __rl_cont#72
+  __rl_slow#81:
     arm64.storeSlotReg slot2, x0
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x3
     arm64.bl __rtlock_enter_slow
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot2
-    arm64.b __rl_cont#76
-  __rl_slow#82:
-    arm64.bl __rtlock_release
     arm64.b __rl_cont#79
-  __rl_slow#71:
+  __rl_slow#85:
+    arm64.bl __rtlock_release
+    arm64.b __rl_cont#82
+  __rl_slow#78:
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_enter_slow
-    arm64.b __rl_cont#69
-  __rl_slow#75:
+    arm64.b __rl_cont#76
+  __rl_slow#89:
     arm64.bl __rtlock_release
-    arm64.b __rl_cont#72
+    arm64.b __rl_cont#86
   readybadstatus:
     arm64.leaRdata x0, __fatal_msg_0  ; "fatal error: bad green-thread status in ready\x0a"
     arm64.movImm x1, 46
@@ -60872,9 +61372,9 @@ func @__gt_seed_adapt {
     arm64.leaGlobal x4, __sched_procs
     arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
     arm64.loadRegBaseIndexScale.word64 x4, [x4 + x1*8 + 0]
-    arm64.loadRegBaseDisp.word64 x5, [x4 + 304]
+    arm64.loadRegBaseDisp.word64 x5, [x4 + 296]
     arm64.add x2, x2, x5
-    arm64.loadRegBaseDisp.word64 x4, [x4 + 312]
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 304]
     arm64.add x3, x3, x4
     arm64.add x1, x1, 1
     arm64.b seedsumhdr
@@ -60934,29 +61434,29 @@ func @__gt_runner_done {
     arm64.movImm x3, 1
     arm64.arm64AtomicRmw.exchangeByte x3, [x19], x3
     arm64.cmp x3, 0
-    arm64.b.ne __rl_slow#49
-  __rl_owned#48:
+    arm64.b.ne __rl_slow#56
+  __rl_owned#55:
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
-  __rl_cont#47:
+  __rl_cont#54:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 120]
     arm64.cmp x0, 0
     arm64.b.ne runnerhaveawaiter
   runnernoawaiter:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.b.ne __rl_nested#51
-  __rl_outermost#52:
+    arm64.b.ne __rl_nested#58
+  __rl_outermost#59:
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x19], x0
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#50
-    arm64.b __rl_slow#53
-  __rl_nested#51:
+    arm64.b.eq __rl_cont#57
+    arm64.b __rl_slow#60
+  __rl_nested#58:
     arm64.add x0, x0, -1
     arm64.storeBaseDispReg.word64 [x19 + 16], x0
-  __rl_cont#50:
+  __rl_cont#57:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -60997,19 +61497,19 @@ func @__gt_runner_done {
     arm64.arm64AtomicCas x1, [x3], x1, x2
     arm64.loadRegBaseDisp.word64 x2, [x19 + 16]
     arm64.cmp x2, 0
-    arm64.b.ne __rl_nested#59
-  __rl_outermost#60:
+    arm64.b.ne __rl_nested#66
+  __rl_outermost#67:
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x2
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x19], x2
     arm64.cmp x2, 1
-    arm64.b.eq __rl_cont#58
-    arm64.b __rl_slow#61
-  __rl_nested#59:
+    arm64.b.eq __rl_cont#65
+    arm64.b __rl_slow#68
+  __rl_nested#66:
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x19 + 16], x2
-  __rl_cont#58:
+  __rl_cont#65:
     arm64.leaGlobal x2, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
     arm64.leaGlobal x3, __sched_tls_teb_offset
@@ -61044,19 +61544,19 @@ func @__gt_runner_done {
   runnerplainawaiter:
     arm64.loadRegBaseDisp.word64 x2, [x19 + 16]
     arm64.cmp x2, 0
-    arm64.b.ne __rl_nested#55
-  __rl_outermost#56:
+    arm64.b.ne __rl_nested#62
+  __rl_outermost#63:
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x2
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x19], x2
     arm64.cmp x2, 1
-    arm64.b.eq __rl_cont#54
-    arm64.b __rl_slow#57
-  __rl_nested#55:
+    arm64.b.eq __rl_cont#61
+    arm64.b __rl_slow#64
+  __rl_nested#62:
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x19 + 16], x2
-  __rl_cont#54:
+  __rl_cont#61:
     arm64.leaGlobal x2, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
     arm64.leaGlobal x3, __sched_tls_teb_offset
@@ -61114,12 +61614,12 @@ func @__gt_runner_done {
     arm64.loadRegBaseDisp.word64 x1, [x19 + 32]
     arm64.and x0, x0, 2
     arm64.cmp x0, 0
-    arm64.b.ne critsplit#83
+    arm64.b.ne critsplit#90
   runnersampledepth:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 448]
     arm64.add x0, x0, 928
     arm64.b runnersampled
-  critsplit#83:
+  critsplit#90:
     arm64.movRegReg x0, x1
   runnersampled:
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -61140,12 +61640,12 @@ func @__gt_runner_done {
     arm64.cmp x1, 0
     arm64.b.eq runnerkeepstack
   runnercountsample:
-    arm64.loadRegBaseDisp.word64 x2, [x1 + 304]
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 296]
     arm64.add x0, x2, x0
-    arm64.storeBaseDispReg.word64 [x1 + 304], x0
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 312]
+    arm64.storeBaseDispReg.word64 [x1 + 296], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 304]
     arm64.add x0, x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 312], x0
+    arm64.storeBaseDispReg.word64 [x1 + 304], x0
     arm64.and x0, x0, 63
     arm64.cmp x0, 0
     arm64.b.ne runnerkeepstack
@@ -61182,10 +61682,10 @@ func @__gt_runner_done {
     arm64.movImm x2, 1
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 0
-    arm64.b.ne __rl_slow#64
-  __rl_owned#63:
+    arm64.b.ne __rl_slow#71
+  __rl_owned#70:
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
-  __rl_cont#62:
+  __rl_cont#69:
     arm64.leaGlobal x0, __gt_gfree_head
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.movImm x0, 0
@@ -61194,19 +61694,19 @@ func @__gt_runner_done {
     arm64.leaGlobal x1, __gt_gfree_lock
     arm64.loadRegBaseDisp.word64 x2, [x1 + 16]
     arm64.cmp x2, 0
-    arm64.b.ne __rl_nested#66
-  __rl_outermost#67:
+    arm64.b.ne __rl_nested#73
+  __rl_outermost#74:
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x1 + 8], x2
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
     arm64.cmp x2, 1
-    arm64.b.eq __rl_cont#65
-    arm64.b __rl_slow#68
-  __rl_nested#66:
+    arm64.b.eq __rl_cont#72
+    arm64.b __rl_slow#75
+  __rl_nested#73:
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x1 + 16], x2
-  __rl_cont#65:
+  __rl_cont#72:
     arm64.leaGlobal x1, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.leaGlobal x2, __sched_tls_teb_offset
@@ -61235,7 +61735,7 @@ func @__gt_runner_done {
     arm64.storeBaseDispReg.word64 [x1 + 0], x2
     arm64.cmp x20, 0
     arm64.b.eq runnerkeepstack
-  critsplit#84:
+  critsplit#91:
     arm64.movRegReg x24, x20
   gfswalkhdr:
     arm64.cmp x24, 0
@@ -61272,10 +61772,10 @@ func @__gt_runner_done {
     arm64.movImm x3, 1
     arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
     arm64.cmp x3, 0
-    arm64.b.ne __rl_slow#78
-  __rl_owned#77:
+    arm64.b.ne __rl_slow#81
+  __rl_owned#80:
     arm64.storeBaseDispReg.word64 [x1 + 8], x2
-  __rl_cont#76:
+  __rl_cont#79:
     arm64.leaGlobal x1, __gt_gfree_nostack_head
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.storeBaseDispReg.word64 [x0 + 80], x1
@@ -61284,19 +61784,19 @@ func @__gt_runner_done {
     arm64.leaGlobal x0, __gt_gfree_lock
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.ne __rl_nested#80
-  __rl_outermost#81:
+    arm64.b.ne __rl_nested#83
+  __rl_outermost#84:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#79
-    arm64.b __rl_slow#82
-  __rl_nested#80:
+    arm64.b.eq __rl_cont#82
+    arm64.b __rl_slow#85
+  __rl_nested#83:
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
-  __rl_cont#79:
+  __rl_cont#82:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -61394,34 +61894,70 @@ func @__gt_runner_done {
     arm64.movImm x2, 1
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 0
-    arm64.b.ne __rl_slow#71
-  __rl_owned#70:
+    arm64.b.ne __rl_slow#78
+  __rl_owned#77:
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
-  __rl_cont#69:
+  __rl_cont#76:
     arm64.movImm x0, 1
     arm64.leaGlobal x1, __sched_phase
     arm64.stlr.word64 [x1], x0
     arm64.leaGlobal x0, __sched_main_m
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.leaGlobal x1, __sched_midle
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.cmp x1, x0
+    arm64.cset x1, eq
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 632]
+    arm64.cmp x2, 0
+    arm64.cset x2, ne
+    arm64.orr x1, x1, x2
+    arm64.cmp x1, 0
+    arm64.b.eq signalmainwake
+  signalmainunlist:
+    arm64.leaGlobal x1, __sched_nmidle
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
+    arm64.add x2, x2, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 600]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 632]
+    arm64.cmp x2, 0
+    arm64.b.ne munlinkinner
+  munlinkhead:
+    arm64.leaGlobal x3, __sched_midle
+    arm64.storeBaseDispReg.word64 [x3 + 0], x1
+    arm64.b munlinkmend
+  munlinkinner:
+    arm64.storeBaseDispReg.word64 [x2 + 600], x1
+  munlinkmend:
+    arm64.cmp x1, 0
+    arm64.b.eq munlinkclear
+  munlinknext:
+    arm64.storeBaseDispReg.word64 [x1 + 632], x2
+  munlinkclear:
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 600], x1
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 632], x1
+  signalmainwake:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 560]
     arm64.bl mrt_host_event_set
     arm64.bl __np_break
     arm64.leaGlobal x0, __sched_lock
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.ne __rl_nested#73
-  __rl_outermost#74:
+    arm64.b.ne __rl_nested#87
+  __rl_outermost#88:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#72
-    arm64.b __rl_slow#75
-  __rl_nested#73:
+    arm64.b.eq __rl_cont#86
+    arm64.b __rl_slow#89
+  __rl_nested#87:
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
-  __rl_cont#72:
+  __rl_cont#86:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -61453,17 +61989,17 @@ func @__gt_runner_done {
     arm64.add x1, x19, 408
     arm64.arm64AtomicRmw.add x0, [x1], x0
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#37
-  strandlastref#36:
+    arm64.b.ne strandunreffed#44
+  strandlastref#43:
     arm64.add x0, x19, 104
     arm64.movImm x1, 2
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#37
-  teardownreclaim#38:
+    arm64.b.ne strandunreffed#44
+  teardownreclaim#45:
     arm64.movRegReg x0, x19
     arm64.bl __gt_reclaim
-  strandunreffed#37:
+  strandunreffed#44:
     arm64.loadRegSlot x19, slot3
     arm64.loadRegSlot x20, slot4
     arm64.loadRegSlot x21, slot5
@@ -61479,7 +62015,7 @@ func @__gt_runner_done {
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.cmp x0, 1
     arm64.b.ne teardownarrived
-  teardownreclaim#40:
+  teardownreclaim#47:
     arm64.movRegReg x0, x19
     arm64.bl __gt_reclaim
   teardownarrived:
@@ -61499,17 +62035,17 @@ func @__gt_runner_done {
     arm64.add x1, x21, 408
     arm64.arm64AtomicRmw.add x0, [x1], x0
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#44
-  strandlastref#43:
+    arm64.b.ne strandunreffed#51
+  strandlastref#50:
     arm64.add x0, x21, 104
     arm64.movImm x1, 2
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#44
-  teardownreclaim#45:
+    arm64.b.ne strandunreffed#51
+  teardownreclaim#52:
     arm64.movRegReg x0, x21
     arm64.bl __gt_reclaim
-  strandunreffed#44:
+  strandunreffed#51:
     arm64.loadRegSlot x19, slot3
     arm64.loadRegSlot x20, slot4
     arm64.loadRegSlot x21, slot5
@@ -61519,7 +62055,7 @@ func @__gt_runner_done {
     arm64.loadRegSlot x25, slot9
     arm64.epilogue 96
     arm64.ret
-  __rl_slow#49:
+  __rl_slow#56:
     arm64.storeSlotReg slot0, x1
     arm64.storeSlotReg slot1, x2
     arm64.movRegReg x0, x19
@@ -61527,61 +62063,61 @@ func @__gt_runner_done {
     arm64.bl __rtlock_enter_slow
     arm64.loadRegSlot x1, slot0
     arm64.loadRegSlot x2, slot1
-    arm64.b __rl_cont#47
-  __rl_slow#53:
-    arm64.movRegReg x0, x19
-    arm64.bl __rtlock_release
-    arm64.b __rl_cont#50
-  __rl_slow#61:
-    arm64.storeSlotReg slot2, x0
-    arm64.storeSlotReg slot0, x1
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_release
-    arm64.movRegReg x2, x0
-    arm64.loadRegSlot x0, slot2
-    arm64.loadRegSlot x1, slot0
-    arm64.b __rl_cont#58
-  __rl_slow#57:
-    arm64.storeSlotReg slot2, x0
-    arm64.storeSlotReg slot0, x1
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_release
-    arm64.movRegReg x2, x0
-    arm64.loadRegSlot x0, slot2
-    arm64.loadRegSlot x1, slot0
     arm64.b __rl_cont#54
+  __rl_slow#60:
+    arm64.movRegReg x0, x19
+    arm64.bl __rtlock_release
+    arm64.b __rl_cont#57
+  __rl_slow#68:
+    arm64.storeSlotReg slot2, x0
+    arm64.storeSlotReg slot0, x1
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x2
+    arm64.bl __rtlock_release
+    arm64.movRegReg x2, x0
+    arm64.loadRegSlot x0, slot2
+    arm64.loadRegSlot x1, slot0
+    arm64.b __rl_cont#65
   __rl_slow#64:
+    arm64.storeSlotReg slot2, x0
+    arm64.storeSlotReg slot0, x1
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x2
+    arm64.bl __rtlock_release
+    arm64.movRegReg x2, x0
+    arm64.loadRegSlot x0, slot2
+    arm64.loadRegSlot x1, slot0
+    arm64.b __rl_cont#61
+  __rl_slow#71:
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_enter_slow
-    arm64.b __rl_cont#62
-  __rl_slow#68:
+    arm64.b __rl_cont#69
+  __rl_slow#75:
     arm64.storeSlotReg slot2, x0
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_release
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot2
-    arm64.b __rl_cont#65
-  __rl_slow#78:
+    arm64.b __rl_cont#72
+  __rl_slow#81:
     arm64.storeSlotReg slot2, x0
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x3
     arm64.bl __rtlock_enter_slow
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot2
-    arm64.b __rl_cont#76
-  __rl_slow#82:
-    arm64.bl __rtlock_release
     arm64.b __rl_cont#79
-  __rl_slow#71:
+  __rl_slow#85:
+    arm64.bl __rtlock_release
+    arm64.b __rl_cont#82
+  __rl_slow#78:
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_enter_slow
-    arm64.b __rl_cont#69
-  __rl_slow#75:
+    arm64.b __rl_cont#76
+  __rl_slow#89:
     arm64.bl __rtlock_release
-    arm64.b __rl_cont#72
+    arm64.b __rl_cont#86
   readybadstatus:
     arm64.leaRdata x0, __fatal_msg_0  ; "fatal error: bad green-thread status in ready\x0a"
     arm64.movImm x1, 46
@@ -64937,29 +65473,29 @@ func @__gt_runner_done {
     x64.movRegImm32 rsi, 1
     x64.xchg8 [rbx], rsi <- rsi
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __rl_slow#49
-  __rl_owned#48:
+    x64.jcc notEqual, __rl_slow#56
+  __rl_owned#55:
     x64.storeBaseDispReg.word64 [rbx + 8], rax
-  __rl_cont#47:
+  __rl_cont#54:
     x64.loadRegBaseDisp.word64 rsi, [rbx + 120]
     x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, runnerhaveawaiter
   runnernoawaiter:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#51
-  __rl_outermost#52:
+    x64.jcc notEqual, __rl_nested#58
+  __rl_outermost#59:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rbx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#50
-    x64.jmp __rl_slow#53
-  __rl_nested#51:
+    x64.jcc equal, __rl_cont#57
+    x64.jmp __rl_slow#60
+  __rl_nested#58:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rbx + 16], rax
-  __rl_cont#50:
+  __rl_cont#57:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -64995,19 +65531,19 @@ func @__gt_runner_done {
     x64.setccReg equal, rax
     x64.loadRegBaseDisp.word64 rdx, [rbx + 16]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_nested#59
-  __rl_outermost#60:
+    x64.jcc notEqual, __rl_nested#66
+  __rl_outermost#67:
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rdx
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rbx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#58
-    x64.jmp __rl_slow#61
-  __rl_nested#59:
+    x64.jcc equal, __rl_cont#65
+    x64.jmp __rl_slow#68
+  __rl_nested#66:
     x64.leaRegRegImm32 rdx, rdx, -1
     x64.storeBaseDispReg.word64 [rbx + 16], rdx
-  __rl_cont#58:
+  __rl_cont#65:
     x64.leaRegGlobal rdx, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
     x64.leaRegGlobal rsi, __sched_tls_teb_offset
@@ -65035,19 +65571,19 @@ func @__gt_runner_done {
   runnerplainawaiter:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#55
-  __rl_outermost#56:
+    x64.jcc notEqual, __rl_nested#62
+  __rl_outermost#63:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.movRegImm32 rax, 0
     x64.xchg8 [rbx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __rl_cont#54
-    x64.jmp __rl_slow#57
-  __rl_nested#55:
+    x64.jcc equal, __rl_cont#61
+    x64.jmp __rl_slow#64
+  __rl_nested#62:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rbx + 16], rax
-  __rl_cont#54:
+  __rl_cont#61:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -65103,12 +65639,12 @@ func @__gt_runner_done {
     x64.loadRegBaseDisp.word64 rcx, [rbx + 32]
     x64.andRegImm32 rax, rax, 2
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#83
+    x64.jcc notEqual, critsplit#90
   runnersampledepth:
     x64.loadRegBaseDisp.word64 rax, [rbx + 448]
     x64.leaRegRegImm32 rax, rax, 5536
     x64.jmp runnersampled
-  critsplit#83:
+  critsplit#90:
     x64.movRegReg rax, rcx
   runnersampled:
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -65124,10 +65660,10 @@ func @__gt_runner_done {
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, runnerkeepstack
   runnercountsample:
-    x64.aluBaseDispReg.add [rcx + 304], rax
-    x64.loadRegBaseDisp.word64 rax, [rcx + 312]
+    x64.aluBaseDispReg.add [rcx + 296], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 304]
     x64.leaRegRegImm32 rax, rax, 1
-    x64.storeBaseDispReg.word64 [rcx + 312], rax
+    x64.storeBaseDispReg.word64 [rcx + 304], rax
     x64.andRegImm32 rax, rax, 63
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, runnerkeepstack
@@ -65158,10 +65694,10 @@ func @__gt_runner_done {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#64
-  __rl_owned#63:
+    x64.jcc notEqual, __rl_slow#71
+  __rl_owned#70:
     x64.storeBaseDispReg.word64 [rcx + 8], rax
-  __rl_cont#62:
+  __rl_cont#69:
     x64.leaRegGlobal rax, __gt_gfree_head
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.movRegImm32 rax, 0
@@ -65170,19 +65706,19 @@ func @__gt_runner_done {
     x64.leaRegGlobal rcx, __gt_gfree_lock
     x64.loadRegBaseDisp.word64 rdx, [rcx + 16]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_nested#66
-  __rl_outermost#67:
+    x64.jcc notEqual, __rl_nested#73
+  __rl_outermost#74:
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rdx
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#65
-    x64.jmp __rl_slow#68
-  __rl_nested#66:
+    x64.jcc equal, __rl_cont#72
+    x64.jmp __rl_slow#75
+  __rl_nested#73:
     x64.leaRegRegImm32 rdx, rdx, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rdx
-  __rl_cont#65:
+  __rl_cont#72:
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.leaRegGlobal rdx, __sched_tls_teb_offset
@@ -65204,7 +65740,7 @@ func @__gt_runner_done {
     x64.aluBaseDispImm32.add [rdx + 0], -1
     x64.cmpRegImm32 r12, 0
     x64.jcc equal, runnerkeepstack
-  critsplit#84:
+  critsplit#91:
     x64.movRegReg r15, r12
   gfswalkhdr:
     x64.cmpRegImm32 r15, 0
@@ -65235,10 +65771,10 @@ func @__gt_runner_done {
     x64.movRegImm32 rsi, 1
     x64.xchg8 [rcx], rsi <- rsi
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __rl_slow#78
-  __rl_owned#77:
+    x64.jcc notEqual, __rl_slow#81
+  __rl_owned#80:
     x64.storeBaseDispReg.word64 [rcx + 8], rdx
-  __rl_cont#76:
+  __rl_cont#79:
     x64.leaRegGlobal rcx, __gt_gfree_nostack_head
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.storeBaseDispReg.word64 [rax + 80], rcx
@@ -65247,19 +65783,19 @@ func @__gt_runner_done {
     x64.leaRegGlobal rcx, __gt_gfree_lock
     x64.loadRegBaseDisp.word64 rax, [rcx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#80
-  __rl_outermost#81:
+    x64.jcc notEqual, __rl_nested#83
+  __rl_outermost#84:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#79
-    x64.jmp __rl_slow#82
-  __rl_nested#80:
+    x64.jcc equal, __rl_cont#82
+    x64.jmp __rl_slow#85
+  __rl_nested#83:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rax
-  __rl_cont#79:
+  __rl_cont#82:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -65344,34 +65880,68 @@ func @__gt_runner_done {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#71
-  __rl_owned#70:
+    x64.jcc notEqual, __rl_slow#78
+  __rl_owned#77:
     x64.storeBaseDispReg.word64 [rcx + 8], rax
-  __rl_cont#69:
+  __rl_cont#76:
     x64.movRegImm32 rax, 1
     x64.leaRegGlobal rcx, __sched_phase
     x64.storeBaseDispReg.word64 [rcx + 0], rax
     x64.leaRegGlobal rax, __sched_main_m
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegGlobal rcx, __sched_midle
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.cmpRegReg rcx, rax
+    x64.setccReg equal, rcx
+    x64.loadRegBaseDisp.word64 rdx, [rax + 632]
+    x64.cmpRegImm32 rdx, 0
+    x64.setccReg notEqual, rdx
+    x64.orRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, signalmainwake
+  signalmainunlist:
+    x64.leaRegGlobal rcx, __sched_nmidle
+    x64.aluBaseDispImm32.add [rcx + 0], -1
+    x64.loadRegBaseDisp.word64 rcx, [rax + 600]
+    x64.loadRegBaseDisp.word64 rdx, [rax + 632]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, munlinkinner
+  munlinkhead:
+    x64.leaRegGlobal rsi, __sched_midle
+    x64.storeBaseDispReg.word64 [rsi + 0], rcx
+    x64.jmp munlinkmend
+  munlinkinner:
+    x64.storeBaseDispReg.word64 [rdx + 600], rcx
+  munlinkmend:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, munlinkclear
+  munlinknext:
+    x64.storeBaseDispReg.word64 [rcx + 632], rdx
+  munlinkclear:
+    x64.movRegImm32 rcx, 0
+    x64.storeBaseDispReg.word64 [rax + 600], rcx
+    x64.movRegImm32 rcx, 0
+    x64.storeBaseDispReg.word64 [rax + 632], rcx
+  signalmainwake:
     x64.loadRegBaseDisp.word64 rcx, [rax + 560]
     x64.iatCall 19
     x64.callDirect __np_break
     x64.leaRegGlobal rcx, __sched_lock
     x64.loadRegBaseDisp.word64 rax, [rcx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#73
-  __rl_outermost#74:
+    x64.jcc notEqual, __rl_nested#87
+  __rl_outermost#88:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#72
-    x64.jmp __rl_slow#75
-  __rl_nested#73:
+    x64.jcc equal, __rl_cont#86
+    x64.jmp __rl_slow#89
+  __rl_nested#87:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rax
-  __rl_cont#72:
+  __rl_cont#86:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -65396,17 +65966,17 @@ func @__gt_runner_done {
     x64.leaRegRegImm32 rcx, rbx, 408
     x64.lock xadd [rcx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, strandunreffed#37
-  strandlastref#36:
+    x64.jcc notEqual, strandunreffed#44
+  strandlastref#43:
     x64.leaRegRegImm32 rax, rbx, 104
     x64.movRegImm32 rcx, 2
     x64.lock xadd [rax], rcx <- rcx
     x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, strandunreffed#37
-  teardownreclaim#38:
+    x64.jcc notEqual, strandunreffed#44
+  teardownreclaim#45:
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_reclaim
-  strandunreffed#37:
+  strandunreffed#44:
     x64.epilogue 88
     x64.popReg r15
     x64.popReg r14
@@ -65421,7 +65991,7 @@ func @__gt_runner_done {
     x64.lock xadd [rax], rcx <- rcx
     x64.cmpRegImm32 rcx, 1
     x64.jcc notEqual, teardownarrived
-  teardownreclaim#40:
+  teardownreclaim#47:
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_reclaim
   teardownarrived:
@@ -65442,18 +66012,18 @@ func @__gt_runner_done {
     x64.leaRegRegImm32 rcx, rcx, 408
     x64.lock xadd [rcx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, strandunreffed#44
-  strandlastref#43:
+    x64.jcc notEqual, strandunreffed#51
+  strandlastref#50:
     x64.loadRegSlot rax, slot1
     x64.leaRegRegImm32 rax, rax, 104
     x64.movRegImm32 rcx, 2
     x64.lock xadd [rax], rcx <- rcx
     x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, strandunreffed#44
-  teardownreclaim#45:
+    x64.jcc notEqual, strandunreffed#51
+  teardownreclaim#52:
     x64.loadRegSlot rcx, slot1
     x64.callDirect __gt_reclaim
-  strandunreffed#44:
+  strandunreffed#51:
     x64.epilogue 88
     x64.popReg r15
     x64.popReg r14
@@ -65462,7 +66032,7 @@ func @__gt_runner_done {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rl_slow#49:
+  __rl_slow#56:
     x64.storeSlotReg slot2, rcx
     x64.storeSlotReg slot3, rdx
     x64.movRegReg rcx, rbx
@@ -65470,20 +66040,20 @@ func @__gt_runner_done {
     x64.callDirect __rtlock_enter_slow
     x64.loadRegSlot rcx, slot2
     x64.loadRegSlot rdx, slot3
-    x64.jmp __rl_cont#47
-  __rl_slow#53:
+    x64.jmp __rl_cont#54
+  __rl_slow#60:
     x64.movRegReg rcx, rbx
     x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#50
-  __rl_slow#61:
+    x64.jmp __rl_cont#57
+  __rl_slow#68:
     x64.storeSlotReg slot4, rax
     x64.storeSlotReg slot2, rcx
     x64.movRegReg rcx, rbx
     x64.callDirect __rtlock_release
     x64.loadRegSlot rax, slot4
     x64.loadRegSlot rcx, slot2
-    x64.jmp __rl_cont#58
-  __rl_slow#57:
+    x64.jmp __rl_cont#65
+  __rl_slow#64:
     x64.storeSlotReg slot3, rdx
     x64.storeSlotReg slot5, rsi
     x64.movRegReg rcx, rbx
@@ -65491,30 +66061,30 @@ func @__gt_runner_done {
     x64.callDirect __rtlock_release
     x64.loadRegSlot rdx, slot3
     x64.loadRegSlot rsi, slot5
-    x64.jmp __rl_cont#54
-  __rl_slow#64:
-    x64.callDirect __rtlock_enter_slow
-    x64.jmp __rl_cont#62
-  __rl_slow#68:
-    x64.storeSlotReg slot4, rax
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot4
-    x64.jmp __rl_cont#65
-  __rl_slow#78:
-    x64.storeSlotReg slot4, rax
-    x64.movRegReg rdx, rsi
-    x64.callDirect __rtlock_enter_slow
-    x64.loadRegSlot rax, slot4
-    x64.jmp __rl_cont#76
-  __rl_slow#82:
-    x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#79
+    x64.jmp __rl_cont#61
   __rl_slow#71:
     x64.callDirect __rtlock_enter_slow
     x64.jmp __rl_cont#69
   __rl_slow#75:
+    x64.storeSlotReg slot4, rax
     x64.callDirect __rtlock_release
+    x64.loadRegSlot rax, slot4
     x64.jmp __rl_cont#72
+  __rl_slow#81:
+    x64.storeSlotReg slot4, rax
+    x64.movRegReg rdx, rsi
+    x64.callDirect __rtlock_enter_slow
+    x64.loadRegSlot rax, slot4
+    x64.jmp __rl_cont#79
+  __rl_slow#85:
+    x64.callDirect __rtlock_release
+    x64.jmp __rl_cont#82
+  __rl_slow#78:
+    x64.callDirect __rtlock_enter_slow
+    x64.jmp __rl_cont#76
+  __rl_slow#89:
+    x64.callDirect __rtlock_release
+    x64.jmp __rl_cont#86
   readybadstatus:
     x64.leaRegRdata rcx, [rip + __fatal_msg_0]  ; "fatal error: bad green-thread status in ready\x0a"
     x64.movRegImm32 rdx, 46
@@ -65714,29 +66284,29 @@ func @__gt_runner_done {
     x64.movRegImm32 rsi, 1
     x64.xchg8 [rbx], rsi <- rsi
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __rl_slow#49
-  __rl_owned#48:
+    x64.jcc notEqual, __rl_slow#56
+  __rl_owned#55:
     x64.storeBaseDispReg.word64 [rbx + 8], rax
-  __rl_cont#47:
+  __rl_cont#54:
     x64.loadRegBaseDisp.word64 rsi, [rbx + 120]
     x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, runnerhaveawaiter
   runnernoawaiter:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#51
-  __rl_outermost#52:
+    x64.jcc notEqual, __rl_nested#58
+  __rl_outermost#59:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rbx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#50
-    x64.jmp __rl_slow#53
-  __rl_nested#51:
+    x64.jcc equal, __rl_cont#57
+    x64.jmp __rl_slow#60
+  __rl_nested#58:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rbx + 16], rax
-  __rl_cont#50:
+  __rl_cont#57:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -65772,19 +66342,19 @@ func @__gt_runner_done {
     x64.setccReg equal, rax
     x64.loadRegBaseDisp.word64 rdx, [rbx + 16]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_nested#59
-  __rl_outermost#60:
+    x64.jcc notEqual, __rl_nested#66
+  __rl_outermost#67:
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rdx
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rbx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#58
-    x64.jmp __rl_slow#61
-  __rl_nested#59:
+    x64.jcc equal, __rl_cont#65
+    x64.jmp __rl_slow#68
+  __rl_nested#66:
     x64.leaRegRegImm32 rdx, rdx, -1
     x64.storeBaseDispReg.word64 [rbx + 16], rdx
-  __rl_cont#58:
+  __rl_cont#65:
     x64.leaRegGlobal rdx, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
     x64.leaRegGlobal rsi, __sched_tls_teb_offset
@@ -65812,19 +66382,19 @@ func @__gt_runner_done {
   runnerplainawaiter:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#55
-  __rl_outermost#56:
+    x64.jcc notEqual, __rl_nested#62
+  __rl_outermost#63:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.movRegImm32 rax, 0
     x64.xchg8 [rbx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __rl_cont#54
-    x64.jmp __rl_slow#57
-  __rl_nested#55:
+    x64.jcc equal, __rl_cont#61
+    x64.jmp __rl_slow#64
+  __rl_nested#62:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rbx + 16], rax
-  __rl_cont#54:
+  __rl_cont#61:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -65880,12 +66450,12 @@ func @__gt_runner_done {
     x64.loadRegBaseDisp.word64 rcx, [rbx + 32]
     x64.andRegImm32 rax, rax, 2
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#83
+    x64.jcc notEqual, critsplit#90
   runnersampledepth:
     x64.loadRegBaseDisp.word64 rax, [rbx + 448]
     x64.leaRegRegImm32 rax, rax, 928
     x64.jmp runnersampled
-  critsplit#83:
+  critsplit#90:
     x64.movRegReg rax, rcx
   runnersampled:
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -65901,10 +66471,10 @@ func @__gt_runner_done {
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, runnerkeepstack
   runnercountsample:
-    x64.aluBaseDispReg.add [rcx + 304], rax
-    x64.loadRegBaseDisp.word64 rax, [rcx + 312]
+    x64.aluBaseDispReg.add [rcx + 296], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 304]
     x64.leaRegRegImm32 rax, rax, 1
-    x64.storeBaseDispReg.word64 [rcx + 312], rax
+    x64.storeBaseDispReg.word64 [rcx + 304], rax
     x64.andRegImm32 rax, rax, 63
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, runnerkeepstack
@@ -65935,10 +66505,10 @@ func @__gt_runner_done {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#64
-  __rl_owned#63:
+    x64.jcc notEqual, __rl_slow#71
+  __rl_owned#70:
     x64.storeBaseDispReg.word64 [rcx + 8], rax
-  __rl_cont#62:
+  __rl_cont#69:
     x64.leaRegGlobal rax, __gt_gfree_head
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.movRegImm32 rax, 0
@@ -65947,19 +66517,19 @@ func @__gt_runner_done {
     x64.leaRegGlobal rcx, __gt_gfree_lock
     x64.loadRegBaseDisp.word64 rdx, [rcx + 16]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_nested#66
-  __rl_outermost#67:
+    x64.jcc notEqual, __rl_nested#73
+  __rl_outermost#74:
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rdx
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#65
-    x64.jmp __rl_slow#68
-  __rl_nested#66:
+    x64.jcc equal, __rl_cont#72
+    x64.jmp __rl_slow#75
+  __rl_nested#73:
     x64.leaRegRegImm32 rdx, rdx, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rdx
-  __rl_cont#65:
+  __rl_cont#72:
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.leaRegGlobal rdx, __sched_tls_teb_offset
@@ -65981,7 +66551,7 @@ func @__gt_runner_done {
     x64.aluBaseDispImm32.add [rdx + 0], -1
     x64.cmpRegImm32 r12, 0
     x64.jcc equal, runnerkeepstack
-  critsplit#84:
+  critsplit#91:
     x64.movRegReg r15, r12
   gfswalkhdr:
     x64.cmpRegImm32 r15, 0
@@ -66012,10 +66582,10 @@ func @__gt_runner_done {
     x64.movRegImm32 rsi, 1
     x64.xchg8 [rcx], rsi <- rsi
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __rl_slow#78
-  __rl_owned#77:
+    x64.jcc notEqual, __rl_slow#81
+  __rl_owned#80:
     x64.storeBaseDispReg.word64 [rcx + 8], rdx
-  __rl_cont#76:
+  __rl_cont#79:
     x64.leaRegGlobal rcx, __gt_gfree_nostack_head
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.storeBaseDispReg.word64 [rax + 80], rcx
@@ -66024,19 +66594,19 @@ func @__gt_runner_done {
     x64.leaRegGlobal rcx, __gt_gfree_lock
     x64.loadRegBaseDisp.word64 rax, [rcx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#80
-  __rl_outermost#81:
+    x64.jcc notEqual, __rl_nested#83
+  __rl_outermost#84:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#79
-    x64.jmp __rl_slow#82
-  __rl_nested#80:
+    x64.jcc equal, __rl_cont#82
+    x64.jmp __rl_slow#85
+  __rl_nested#83:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rax
-  __rl_cont#79:
+  __rl_cont#82:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -66121,34 +66691,68 @@ func @__gt_runner_done {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#71
-  __rl_owned#70:
+    x64.jcc notEqual, __rl_slow#78
+  __rl_owned#77:
     x64.storeBaseDispReg.word64 [rcx + 8], rax
-  __rl_cont#69:
+  __rl_cont#76:
     x64.movRegImm32 rax, 1
     x64.leaRegGlobal rcx, __sched_phase
     x64.storeBaseDispReg.word64 [rcx + 0], rax
     x64.leaRegGlobal rax, __sched_main_m
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegGlobal rcx, __sched_midle
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.cmpRegReg rcx, rax
+    x64.setccReg equal, rcx
+    x64.loadRegBaseDisp.word64 rdx, [rax + 632]
+    x64.cmpRegImm32 rdx, 0
+    x64.setccReg notEqual, rdx
+    x64.orRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, signalmainwake
+  signalmainunlist:
+    x64.leaRegGlobal rcx, __sched_nmidle
+    x64.aluBaseDispImm32.add [rcx + 0], -1
+    x64.loadRegBaseDisp.word64 rcx, [rax + 600]
+    x64.loadRegBaseDisp.word64 rdx, [rax + 632]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, munlinkinner
+  munlinkhead:
+    x64.leaRegGlobal rsi, __sched_midle
+    x64.storeBaseDispReg.word64 [rsi + 0], rcx
+    x64.jmp munlinkmend
+  munlinkinner:
+    x64.storeBaseDispReg.word64 [rdx + 600], rcx
+  munlinkmend:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, munlinkclear
+  munlinknext:
+    x64.storeBaseDispReg.word64 [rcx + 632], rdx
+  munlinkclear:
+    x64.movRegImm32 rcx, 0
+    x64.storeBaseDispReg.word64 [rax + 600], rcx
+    x64.movRegImm32 rcx, 0
+    x64.storeBaseDispReg.word64 [rax + 632], rcx
+  signalmainwake:
     x64.loadRegBaseDisp.word64 rcx, [rax + 560]
     x64.callDirect mrt_host_event_set
     x64.callDirect __np_break
     x64.leaRegGlobal rcx, __sched_lock
     x64.loadRegBaseDisp.word64 rax, [rcx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_nested#73
-  __rl_outermost#74:
+    x64.jcc notEqual, __rl_nested#87
+  __rl_outermost#88:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rax
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#72
-    x64.jmp __rl_slow#75
-  __rl_nested#73:
+    x64.jcc equal, __rl_cont#86
+    x64.jmp __rl_slow#89
+  __rl_nested#87:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rax
-  __rl_cont#72:
+  __rl_cont#86:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -66173,17 +66777,17 @@ func @__gt_runner_done {
     x64.leaRegRegImm32 rcx, rbx, 408
     x64.lock xadd [rcx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, strandunreffed#37
-  strandlastref#36:
+    x64.jcc notEqual, strandunreffed#44
+  strandlastref#43:
     x64.leaRegRegImm32 rax, rbx, 104
     x64.movRegImm32 rcx, 2
     x64.lock xadd [rax], rcx <- rcx
     x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, strandunreffed#37
-  teardownreclaim#38:
+    x64.jcc notEqual, strandunreffed#44
+  teardownreclaim#45:
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_reclaim
-  strandunreffed#37:
+  strandunreffed#44:
     x64.epilogue 88
     x64.popReg r15
     x64.popReg r14
@@ -66198,7 +66802,7 @@ func @__gt_runner_done {
     x64.lock xadd [rax], rcx <- rcx
     x64.cmpRegImm32 rcx, 1
     x64.jcc notEqual, teardownarrived
-  teardownreclaim#40:
+  teardownreclaim#47:
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_reclaim
   teardownarrived:
@@ -66219,18 +66823,18 @@ func @__gt_runner_done {
     x64.leaRegRegImm32 rcx, rcx, 408
     x64.lock xadd [rcx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, strandunreffed#44
-  strandlastref#43:
+    x64.jcc notEqual, strandunreffed#51
+  strandlastref#50:
     x64.loadRegSlot rax, slot1
     x64.leaRegRegImm32 rax, rax, 104
     x64.movRegImm32 rcx, 2
     x64.lock xadd [rax], rcx <- rcx
     x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, strandunreffed#44
-  teardownreclaim#45:
+    x64.jcc notEqual, strandunreffed#51
+  teardownreclaim#52:
     x64.loadRegSlot rcx, slot1
     x64.callDirect __gt_reclaim
-  strandunreffed#44:
+  strandunreffed#51:
     x64.epilogue 88
     x64.popReg r15
     x64.popReg r14
@@ -66239,7 +66843,7 @@ func @__gt_runner_done {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rl_slow#49:
+  __rl_slow#56:
     x64.storeSlotReg slot2, rcx
     x64.storeSlotReg slot3, rdx
     x64.movRegReg rcx, rbx
@@ -66247,20 +66851,20 @@ func @__gt_runner_done {
     x64.callDirect __rtlock_enter_slow
     x64.loadRegSlot rcx, slot2
     x64.loadRegSlot rdx, slot3
-    x64.jmp __rl_cont#47
-  __rl_slow#53:
+    x64.jmp __rl_cont#54
+  __rl_slow#60:
     x64.movRegReg rcx, rbx
     x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#50
-  __rl_slow#61:
+    x64.jmp __rl_cont#57
+  __rl_slow#68:
     x64.storeSlotReg slot4, rax
     x64.storeSlotReg slot2, rcx
     x64.movRegReg rcx, rbx
     x64.callDirect __rtlock_release
     x64.loadRegSlot rax, slot4
     x64.loadRegSlot rcx, slot2
-    x64.jmp __rl_cont#58
-  __rl_slow#57:
+    x64.jmp __rl_cont#65
+  __rl_slow#64:
     x64.storeSlotReg slot3, rdx
     x64.storeSlotReg slot5, rsi
     x64.movRegReg rcx, rbx
@@ -66268,30 +66872,30 @@ func @__gt_runner_done {
     x64.callDirect __rtlock_release
     x64.loadRegSlot rdx, slot3
     x64.loadRegSlot rsi, slot5
-    x64.jmp __rl_cont#54
-  __rl_slow#64:
-    x64.callDirect __rtlock_enter_slow
-    x64.jmp __rl_cont#62
-  __rl_slow#68:
-    x64.storeSlotReg slot4, rax
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot4
-    x64.jmp __rl_cont#65
-  __rl_slow#78:
-    x64.storeSlotReg slot4, rax
-    x64.movRegReg rdx, rsi
-    x64.callDirect __rtlock_enter_slow
-    x64.loadRegSlot rax, slot4
-    x64.jmp __rl_cont#76
-  __rl_slow#82:
-    x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#79
+    x64.jmp __rl_cont#61
   __rl_slow#71:
     x64.callDirect __rtlock_enter_slow
     x64.jmp __rl_cont#69
   __rl_slow#75:
+    x64.storeSlotReg slot4, rax
     x64.callDirect __rtlock_release
+    x64.loadRegSlot rax, slot4
     x64.jmp __rl_cont#72
+  __rl_slow#81:
+    x64.storeSlotReg slot4, rax
+    x64.movRegReg rdx, rsi
+    x64.callDirect __rtlock_enter_slow
+    x64.loadRegSlot rax, slot4
+    x64.jmp __rl_cont#79
+  __rl_slow#85:
+    x64.callDirect __rtlock_release
+    x64.jmp __rl_cont#82
+  __rl_slow#78:
+    x64.callDirect __rtlock_enter_slow
+    x64.jmp __rl_cont#76
+  __rl_slow#89:
+    x64.callDirect __rtlock_release
+    x64.jmp __rl_cont#86
   readybadstatus:
     x64.leaRegRdata rcx, [rip + __fatal_msg_0]  ; "fatal error: bad green-thread status in ready\x0a"
     x64.movRegImm32 rdx, 46
@@ -66485,29 +67089,29 @@ func @__gt_runner_done {
     arm64.movImm x3, 1
     arm64.arm64AtomicRmw.exchangeByte x3, [x19], x3
     arm64.cmp x3, 0
-    arm64.b.ne __rl_slow#49
-  __rl_owned#48:
+    arm64.b.ne __rl_slow#56
+  __rl_owned#55:
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
-  __rl_cont#47:
+  __rl_cont#54:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 120]
     arm64.cmp x0, 0
     arm64.b.ne runnerhaveawaiter
   runnernoawaiter:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.b.ne __rl_nested#51
-  __rl_outermost#52:
+    arm64.b.ne __rl_nested#58
+  __rl_outermost#59:
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x19], x0
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#50
-    arm64.b __rl_slow#53
-  __rl_nested#51:
+    arm64.b.eq __rl_cont#57
+    arm64.b __rl_slow#60
+  __rl_nested#58:
     arm64.add x0, x0, -1
     arm64.storeBaseDispReg.word64 [x19 + 16], x0
-  __rl_cont#50:
+  __rl_cont#57:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -66548,19 +67152,19 @@ func @__gt_runner_done {
     arm64.arm64AtomicCas x1, [x3], x1, x2
     arm64.loadRegBaseDisp.word64 x2, [x19 + 16]
     arm64.cmp x2, 0
-    arm64.b.ne __rl_nested#59
-  __rl_outermost#60:
+    arm64.b.ne __rl_nested#66
+  __rl_outermost#67:
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x2
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x19], x2
     arm64.cmp x2, 1
-    arm64.b.eq __rl_cont#58
-    arm64.b __rl_slow#61
-  __rl_nested#59:
+    arm64.b.eq __rl_cont#65
+    arm64.b __rl_slow#68
+  __rl_nested#66:
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x19 + 16], x2
-  __rl_cont#58:
+  __rl_cont#65:
     arm64.leaGlobal x2, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
     arm64.leaGlobal x3, __sched_tls_teb_offset
@@ -66595,19 +67199,19 @@ func @__gt_runner_done {
   runnerplainawaiter:
     arm64.loadRegBaseDisp.word64 x2, [x19 + 16]
     arm64.cmp x2, 0
-    arm64.b.ne __rl_nested#55
-  __rl_outermost#56:
+    arm64.b.ne __rl_nested#62
+  __rl_outermost#63:
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x2
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x19], x2
     arm64.cmp x2, 1
-    arm64.b.eq __rl_cont#54
-    arm64.b __rl_slow#57
-  __rl_nested#55:
+    arm64.b.eq __rl_cont#61
+    arm64.b __rl_slow#64
+  __rl_nested#62:
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x19 + 16], x2
-  __rl_cont#54:
+  __rl_cont#61:
     arm64.leaGlobal x2, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
     arm64.leaGlobal x3, __sched_tls_teb_offset
@@ -66665,12 +67269,12 @@ func @__gt_runner_done {
     arm64.loadRegBaseDisp.word64 x1, [x19 + 32]
     arm64.and x0, x0, 2
     arm64.cmp x0, 0
-    arm64.b.ne critsplit#83
+    arm64.b.ne critsplit#90
   runnersampledepth:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 448]
     arm64.add x0, x0, 928
     arm64.b runnersampled
-  critsplit#83:
+  critsplit#90:
     arm64.movRegReg x0, x1
   runnersampled:
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -66691,12 +67295,12 @@ func @__gt_runner_done {
     arm64.cmp x1, 0
     arm64.b.eq runnerkeepstack
   runnercountsample:
-    arm64.loadRegBaseDisp.word64 x2, [x1 + 304]
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 296]
     arm64.add x0, x2, x0
-    arm64.storeBaseDispReg.word64 [x1 + 304], x0
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 312]
+    arm64.storeBaseDispReg.word64 [x1 + 296], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 304]
     arm64.add x0, x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 312], x0
+    arm64.storeBaseDispReg.word64 [x1 + 304], x0
     arm64.and x0, x0, 63
     arm64.cmp x0, 0
     arm64.b.ne runnerkeepstack
@@ -66733,10 +67337,10 @@ func @__gt_runner_done {
     arm64.movImm x2, 1
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 0
-    arm64.b.ne __rl_slow#64
-  __rl_owned#63:
+    arm64.b.ne __rl_slow#71
+  __rl_owned#70:
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
-  __rl_cont#62:
+  __rl_cont#69:
     arm64.leaGlobal x0, __gt_gfree_head
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.movImm x0, 0
@@ -66745,19 +67349,19 @@ func @__gt_runner_done {
     arm64.leaGlobal x1, __gt_gfree_lock
     arm64.loadRegBaseDisp.word64 x2, [x1 + 16]
     arm64.cmp x2, 0
-    arm64.b.ne __rl_nested#66
-  __rl_outermost#67:
+    arm64.b.ne __rl_nested#73
+  __rl_outermost#74:
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x1 + 8], x2
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
     arm64.cmp x2, 1
-    arm64.b.eq __rl_cont#65
-    arm64.b __rl_slow#68
-  __rl_nested#66:
+    arm64.b.eq __rl_cont#72
+    arm64.b __rl_slow#75
+  __rl_nested#73:
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x1 + 16], x2
-  __rl_cont#65:
+  __rl_cont#72:
     arm64.leaGlobal x1, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.leaGlobal x2, __sched_tls_teb_offset
@@ -66786,7 +67390,7 @@ func @__gt_runner_done {
     arm64.storeBaseDispReg.word64 [x1 + 0], x2
     arm64.cmp x20, 0
     arm64.b.eq runnerkeepstack
-  critsplit#84:
+  critsplit#91:
     arm64.movRegReg x24, x20
   gfswalkhdr:
     arm64.cmp x24, 0
@@ -66823,10 +67427,10 @@ func @__gt_runner_done {
     arm64.movImm x3, 1
     arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
     arm64.cmp x3, 0
-    arm64.b.ne __rl_slow#78
-  __rl_owned#77:
+    arm64.b.ne __rl_slow#81
+  __rl_owned#80:
     arm64.storeBaseDispReg.word64 [x1 + 8], x2
-  __rl_cont#76:
+  __rl_cont#79:
     arm64.leaGlobal x1, __gt_gfree_nostack_head
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.storeBaseDispReg.word64 [x0 + 80], x1
@@ -66835,19 +67439,19 @@ func @__gt_runner_done {
     arm64.leaGlobal x0, __gt_gfree_lock
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.ne __rl_nested#80
-  __rl_outermost#81:
+    arm64.b.ne __rl_nested#83
+  __rl_outermost#84:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#79
-    arm64.b __rl_slow#82
-  __rl_nested#80:
+    arm64.b.eq __rl_cont#82
+    arm64.b __rl_slow#85
+  __rl_nested#83:
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
-  __rl_cont#79:
+  __rl_cont#82:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -66945,34 +67549,70 @@ func @__gt_runner_done {
     arm64.movImm x2, 1
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 0
-    arm64.b.ne __rl_slow#71
-  __rl_owned#70:
+    arm64.b.ne __rl_slow#78
+  __rl_owned#77:
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
-  __rl_cont#69:
+  __rl_cont#76:
     arm64.movImm x0, 1
     arm64.leaGlobal x1, __sched_phase
     arm64.stlr.word64 [x1], x0
     arm64.leaGlobal x0, __sched_main_m
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.leaGlobal x1, __sched_midle
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.cmp x1, x0
+    arm64.cset x1, eq
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 632]
+    arm64.cmp x2, 0
+    arm64.cset x2, ne
+    arm64.orr x1, x1, x2
+    arm64.cmp x1, 0
+    arm64.b.eq signalmainwake
+  signalmainunlist:
+    arm64.leaGlobal x1, __sched_nmidle
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
+    arm64.add x2, x2, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 600]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 632]
+    arm64.cmp x2, 0
+    arm64.b.ne munlinkinner
+  munlinkhead:
+    arm64.leaGlobal x3, __sched_midle
+    arm64.storeBaseDispReg.word64 [x3 + 0], x1
+    arm64.b munlinkmend
+  munlinkinner:
+    arm64.storeBaseDispReg.word64 [x2 + 600], x1
+  munlinkmend:
+    arm64.cmp x1, 0
+    arm64.b.eq munlinkclear
+  munlinknext:
+    arm64.storeBaseDispReg.word64 [x1 + 632], x2
+  munlinkclear:
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 600], x1
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 632], x1
+  signalmainwake:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 560]
     arm64.bl mrt_host_event_set
     arm64.bl __np_break
     arm64.leaGlobal x0, __sched_lock
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.ne __rl_nested#73
-  __rl_outermost#74:
+    arm64.b.ne __rl_nested#87
+  __rl_outermost#88:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#72
-    arm64.b __rl_slow#75
-  __rl_nested#73:
+    arm64.b.eq __rl_cont#86
+    arm64.b __rl_slow#89
+  __rl_nested#87:
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
-  __rl_cont#72:
+  __rl_cont#86:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -67004,17 +67644,17 @@ func @__gt_runner_done {
     arm64.add x1, x19, 408
     arm64.arm64AtomicRmw.add x0, [x1], x0
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#37
-  strandlastref#36:
+    arm64.b.ne strandunreffed#44
+  strandlastref#43:
     arm64.add x0, x19, 104
     arm64.movImm x1, 2
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#37
-  teardownreclaim#38:
+    arm64.b.ne strandunreffed#44
+  teardownreclaim#45:
     arm64.movRegReg x0, x19
     arm64.bl __gt_reclaim
-  strandunreffed#37:
+  strandunreffed#44:
     arm64.loadRegSlot x19, slot3
     arm64.loadRegSlot x20, slot4
     arm64.loadRegSlot x21, slot5
@@ -67030,7 +67670,7 @@ func @__gt_runner_done {
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.cmp x0, 1
     arm64.b.ne teardownarrived
-  teardownreclaim#40:
+  teardownreclaim#47:
     arm64.movRegReg x0, x19
     arm64.bl __gt_reclaim
   teardownarrived:
@@ -67050,17 +67690,17 @@ func @__gt_runner_done {
     arm64.add x1, x21, 408
     arm64.arm64AtomicRmw.add x0, [x1], x0
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#44
-  strandlastref#43:
+    arm64.b.ne strandunreffed#51
+  strandlastref#50:
     arm64.add x0, x21, 104
     arm64.movImm x1, 2
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#44
-  teardownreclaim#45:
+    arm64.b.ne strandunreffed#51
+  teardownreclaim#52:
     arm64.movRegReg x0, x21
     arm64.bl __gt_reclaim
-  strandunreffed#44:
+  strandunreffed#51:
     arm64.loadRegSlot x19, slot3
     arm64.loadRegSlot x20, slot4
     arm64.loadRegSlot x21, slot5
@@ -67070,7 +67710,7 @@ func @__gt_runner_done {
     arm64.loadRegSlot x25, slot9
     arm64.epilogue 96
     arm64.ret
-  __rl_slow#49:
+  __rl_slow#56:
     arm64.storeSlotReg slot0, x1
     arm64.storeSlotReg slot1, x2
     arm64.movRegReg x0, x19
@@ -67078,61 +67718,61 @@ func @__gt_runner_done {
     arm64.bl __rtlock_enter_slow
     arm64.loadRegSlot x1, slot0
     arm64.loadRegSlot x2, slot1
-    arm64.b __rl_cont#47
-  __rl_slow#53:
-    arm64.movRegReg x0, x19
-    arm64.bl __rtlock_release
-    arm64.b __rl_cont#50
-  __rl_slow#61:
-    arm64.storeSlotReg slot2, x0
-    arm64.storeSlotReg slot0, x1
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_release
-    arm64.movRegReg x2, x0
-    arm64.loadRegSlot x0, slot2
-    arm64.loadRegSlot x1, slot0
-    arm64.b __rl_cont#58
-  __rl_slow#57:
-    arm64.storeSlotReg slot2, x0
-    arm64.storeSlotReg slot0, x1
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_release
-    arm64.movRegReg x2, x0
-    arm64.loadRegSlot x0, slot2
-    arm64.loadRegSlot x1, slot0
     arm64.b __rl_cont#54
+  __rl_slow#60:
+    arm64.movRegReg x0, x19
+    arm64.bl __rtlock_release
+    arm64.b __rl_cont#57
+  __rl_slow#68:
+    arm64.storeSlotReg slot2, x0
+    arm64.storeSlotReg slot0, x1
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x2
+    arm64.bl __rtlock_release
+    arm64.movRegReg x2, x0
+    arm64.loadRegSlot x0, slot2
+    arm64.loadRegSlot x1, slot0
+    arm64.b __rl_cont#65
   __rl_slow#64:
+    arm64.storeSlotReg slot2, x0
+    arm64.storeSlotReg slot0, x1
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x2
+    arm64.bl __rtlock_release
+    arm64.movRegReg x2, x0
+    arm64.loadRegSlot x0, slot2
+    arm64.loadRegSlot x1, slot0
+    arm64.b __rl_cont#61
+  __rl_slow#71:
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_enter_slow
-    arm64.b __rl_cont#62
-  __rl_slow#68:
+    arm64.b __rl_cont#69
+  __rl_slow#75:
     arm64.storeSlotReg slot2, x0
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_release
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot2
-    arm64.b __rl_cont#65
-  __rl_slow#78:
+    arm64.b __rl_cont#72
+  __rl_slow#81:
     arm64.storeSlotReg slot2, x0
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x3
     arm64.bl __rtlock_enter_slow
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot2
-    arm64.b __rl_cont#76
-  __rl_slow#82:
-    arm64.bl __rtlock_release
     arm64.b __rl_cont#79
-  __rl_slow#71:
+  __rl_slow#85:
+    arm64.bl __rtlock_release
+    arm64.b __rl_cont#82
+  __rl_slow#78:
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_enter_slow
-    arm64.b __rl_cont#69
-  __rl_slow#75:
+    arm64.b __rl_cont#76
+  __rl_slow#89:
     arm64.bl __rtlock_release
-    arm64.b __rl_cont#72
+    arm64.b __rl_cont#86
   readybadstatus:
     arm64.leaRdata x0, __fatal_msg_0  ; "fatal error: bad green-thread status in ready\x0a"
     arm64.movImm x1, 46
@@ -67331,29 +67971,29 @@ func @__gt_runner_done {
     arm64.movImm x3, 1
     arm64.arm64AtomicRmw.exchangeByte x3, [x19], x3
     arm64.cmp x3, 0
-    arm64.b.ne __rl_slow#49
-  __rl_owned#48:
+    arm64.b.ne __rl_slow#56
+  __rl_owned#55:
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
-  __rl_cont#47:
+  __rl_cont#54:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 120]
     arm64.cmp x0, 0
     arm64.b.ne runnerhaveawaiter
   runnernoawaiter:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.b.ne __rl_nested#51
-  __rl_outermost#52:
+    arm64.b.ne __rl_nested#58
+  __rl_outermost#59:
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x19], x0
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#50
-    arm64.b __rl_slow#53
-  __rl_nested#51:
+    arm64.b.eq __rl_cont#57
+    arm64.b __rl_slow#60
+  __rl_nested#58:
     arm64.add x0, x0, -1
     arm64.storeBaseDispReg.word64 [x19 + 16], x0
-  __rl_cont#50:
+  __rl_cont#57:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -67394,19 +68034,19 @@ func @__gt_runner_done {
     arm64.arm64AtomicCas x1, [x3], x1, x2
     arm64.loadRegBaseDisp.word64 x2, [x19 + 16]
     arm64.cmp x2, 0
-    arm64.b.ne __rl_nested#59
-  __rl_outermost#60:
+    arm64.b.ne __rl_nested#66
+  __rl_outermost#67:
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x2
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x19], x2
     arm64.cmp x2, 1
-    arm64.b.eq __rl_cont#58
-    arm64.b __rl_slow#61
-  __rl_nested#59:
+    arm64.b.eq __rl_cont#65
+    arm64.b __rl_slow#68
+  __rl_nested#66:
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x19 + 16], x2
-  __rl_cont#58:
+  __rl_cont#65:
     arm64.leaGlobal x2, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
     arm64.leaGlobal x3, __sched_tls_teb_offset
@@ -67441,19 +68081,19 @@ func @__gt_runner_done {
   runnerplainawaiter:
     arm64.loadRegBaseDisp.word64 x2, [x19 + 16]
     arm64.cmp x2, 0
-    arm64.b.ne __rl_nested#55
-  __rl_outermost#56:
+    arm64.b.ne __rl_nested#62
+  __rl_outermost#63:
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x2
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x19], x2
     arm64.cmp x2, 1
-    arm64.b.eq __rl_cont#54
-    arm64.b __rl_slow#57
-  __rl_nested#55:
+    arm64.b.eq __rl_cont#61
+    arm64.b __rl_slow#64
+  __rl_nested#62:
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x19 + 16], x2
-  __rl_cont#54:
+  __rl_cont#61:
     arm64.leaGlobal x2, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
     arm64.leaGlobal x3, __sched_tls_teb_offset
@@ -67511,12 +68151,12 @@ func @__gt_runner_done {
     arm64.loadRegBaseDisp.word64 x1, [x19 + 32]
     arm64.and x0, x0, 2
     arm64.cmp x0, 0
-    arm64.b.ne critsplit#83
+    arm64.b.ne critsplit#90
   runnersampledepth:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 448]
     arm64.add x0, x0, 928
     arm64.b runnersampled
-  critsplit#83:
+  critsplit#90:
     arm64.movRegReg x0, x1
   runnersampled:
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -67537,12 +68177,12 @@ func @__gt_runner_done {
     arm64.cmp x1, 0
     arm64.b.eq runnerkeepstack
   runnercountsample:
-    arm64.loadRegBaseDisp.word64 x2, [x1 + 304]
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 296]
     arm64.add x0, x2, x0
-    arm64.storeBaseDispReg.word64 [x1 + 304], x0
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 312]
+    arm64.storeBaseDispReg.word64 [x1 + 296], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 304]
     arm64.add x0, x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 312], x0
+    arm64.storeBaseDispReg.word64 [x1 + 304], x0
     arm64.and x0, x0, 63
     arm64.cmp x0, 0
     arm64.b.ne runnerkeepstack
@@ -67579,10 +68219,10 @@ func @__gt_runner_done {
     arm64.movImm x2, 1
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 0
-    arm64.b.ne __rl_slow#64
-  __rl_owned#63:
+    arm64.b.ne __rl_slow#71
+  __rl_owned#70:
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
-  __rl_cont#62:
+  __rl_cont#69:
     arm64.leaGlobal x0, __gt_gfree_head
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.movImm x0, 0
@@ -67591,19 +68231,19 @@ func @__gt_runner_done {
     arm64.leaGlobal x1, __gt_gfree_lock
     arm64.loadRegBaseDisp.word64 x2, [x1 + 16]
     arm64.cmp x2, 0
-    arm64.b.ne __rl_nested#66
-  __rl_outermost#67:
+    arm64.b.ne __rl_nested#73
+  __rl_outermost#74:
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x1 + 8], x2
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
     arm64.cmp x2, 1
-    arm64.b.eq __rl_cont#65
-    arm64.b __rl_slow#68
-  __rl_nested#66:
+    arm64.b.eq __rl_cont#72
+    arm64.b __rl_slow#75
+  __rl_nested#73:
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x1 + 16], x2
-  __rl_cont#65:
+  __rl_cont#72:
     arm64.leaGlobal x1, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.leaGlobal x2, __sched_tls_teb_offset
@@ -67632,7 +68272,7 @@ func @__gt_runner_done {
     arm64.storeBaseDispReg.word64 [x1 + 0], x2
     arm64.cmp x20, 0
     arm64.b.eq runnerkeepstack
-  critsplit#84:
+  critsplit#91:
     arm64.movRegReg x24, x20
   gfswalkhdr:
     arm64.cmp x24, 0
@@ -67669,10 +68309,10 @@ func @__gt_runner_done {
     arm64.movImm x3, 1
     arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
     arm64.cmp x3, 0
-    arm64.b.ne __rl_slow#78
-  __rl_owned#77:
+    arm64.b.ne __rl_slow#81
+  __rl_owned#80:
     arm64.storeBaseDispReg.word64 [x1 + 8], x2
-  __rl_cont#76:
+  __rl_cont#79:
     arm64.leaGlobal x1, __gt_gfree_nostack_head
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.storeBaseDispReg.word64 [x0 + 80], x1
@@ -67681,19 +68321,19 @@ func @__gt_runner_done {
     arm64.leaGlobal x0, __gt_gfree_lock
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.ne __rl_nested#80
-  __rl_outermost#81:
+    arm64.b.ne __rl_nested#83
+  __rl_outermost#84:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#79
-    arm64.b __rl_slow#82
-  __rl_nested#80:
+    arm64.b.eq __rl_cont#82
+    arm64.b __rl_slow#85
+  __rl_nested#83:
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
-  __rl_cont#79:
+  __rl_cont#82:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -67791,34 +68431,70 @@ func @__gt_runner_done {
     arm64.movImm x2, 1
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 0
-    arm64.b.ne __rl_slow#71
-  __rl_owned#70:
+    arm64.b.ne __rl_slow#78
+  __rl_owned#77:
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
-  __rl_cont#69:
+  __rl_cont#76:
     arm64.movImm x0, 1
     arm64.leaGlobal x1, __sched_phase
     arm64.stlr.word64 [x1], x0
     arm64.leaGlobal x0, __sched_main_m
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.leaGlobal x1, __sched_midle
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.cmp x1, x0
+    arm64.cset x1, eq
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 632]
+    arm64.cmp x2, 0
+    arm64.cset x2, ne
+    arm64.orr x1, x1, x2
+    arm64.cmp x1, 0
+    arm64.b.eq signalmainwake
+  signalmainunlist:
+    arm64.leaGlobal x1, __sched_nmidle
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
+    arm64.add x2, x2, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 600]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 632]
+    arm64.cmp x2, 0
+    arm64.b.ne munlinkinner
+  munlinkhead:
+    arm64.leaGlobal x3, __sched_midle
+    arm64.storeBaseDispReg.word64 [x3 + 0], x1
+    arm64.b munlinkmend
+  munlinkinner:
+    arm64.storeBaseDispReg.word64 [x2 + 600], x1
+  munlinkmend:
+    arm64.cmp x1, 0
+    arm64.b.eq munlinkclear
+  munlinknext:
+    arm64.storeBaseDispReg.word64 [x1 + 632], x2
+  munlinkclear:
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 600], x1
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 632], x1
+  signalmainwake:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 560]
     arm64.bl mrt_host_event_set
     arm64.bl __np_break
     arm64.leaGlobal x0, __sched_lock
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.ne __rl_nested#73
-  __rl_outermost#74:
+    arm64.b.ne __rl_nested#87
+  __rl_outermost#88:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#72
-    arm64.b __rl_slow#75
-  __rl_nested#73:
+    arm64.b.eq __rl_cont#86
+    arm64.b __rl_slow#89
+  __rl_nested#87:
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
-  __rl_cont#72:
+  __rl_cont#86:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -67850,17 +68526,17 @@ func @__gt_runner_done {
     arm64.add x1, x19, 408
     arm64.arm64AtomicRmw.add x0, [x1], x0
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#37
-  strandlastref#36:
+    arm64.b.ne strandunreffed#44
+  strandlastref#43:
     arm64.add x0, x19, 104
     arm64.movImm x1, 2
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#37
-  teardownreclaim#38:
+    arm64.b.ne strandunreffed#44
+  teardownreclaim#45:
     arm64.movRegReg x0, x19
     arm64.bl __gt_reclaim
-  strandunreffed#37:
+  strandunreffed#44:
     arm64.loadRegSlot x19, slot3
     arm64.loadRegSlot x20, slot4
     arm64.loadRegSlot x21, slot5
@@ -67876,7 +68552,7 @@ func @__gt_runner_done {
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.cmp x0, 1
     arm64.b.ne teardownarrived
-  teardownreclaim#40:
+  teardownreclaim#47:
     arm64.movRegReg x0, x19
     arm64.bl __gt_reclaim
   teardownarrived:
@@ -67896,17 +68572,17 @@ func @__gt_runner_done {
     arm64.add x1, x21, 408
     arm64.arm64AtomicRmw.add x0, [x1], x0
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#44
-  strandlastref#43:
+    arm64.b.ne strandunreffed#51
+  strandlastref#50:
     arm64.add x0, x21, 104
     arm64.movImm x1, 2
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.cmp x0, 1
-    arm64.b.ne strandunreffed#44
-  teardownreclaim#45:
+    arm64.b.ne strandunreffed#51
+  teardownreclaim#52:
     arm64.movRegReg x0, x21
     arm64.bl __gt_reclaim
-  strandunreffed#44:
+  strandunreffed#51:
     arm64.loadRegSlot x19, slot3
     arm64.loadRegSlot x20, slot4
     arm64.loadRegSlot x21, slot5
@@ -67916,7 +68592,7 @@ func @__gt_runner_done {
     arm64.loadRegSlot x25, slot9
     arm64.epilogue 96
     arm64.ret
-  __rl_slow#49:
+  __rl_slow#56:
     arm64.storeSlotReg slot0, x1
     arm64.storeSlotReg slot1, x2
     arm64.movRegReg x0, x19
@@ -67924,61 +68600,61 @@ func @__gt_runner_done {
     arm64.bl __rtlock_enter_slow
     arm64.loadRegSlot x1, slot0
     arm64.loadRegSlot x2, slot1
-    arm64.b __rl_cont#47
-  __rl_slow#53:
-    arm64.movRegReg x0, x19
-    arm64.bl __rtlock_release
-    arm64.b __rl_cont#50
-  __rl_slow#61:
-    arm64.storeSlotReg slot2, x0
-    arm64.storeSlotReg slot0, x1
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_release
-    arm64.movRegReg x2, x0
-    arm64.loadRegSlot x0, slot2
-    arm64.loadRegSlot x1, slot0
-    arm64.b __rl_cont#58
-  __rl_slow#57:
-    arm64.storeSlotReg slot2, x0
-    arm64.storeSlotReg slot0, x1
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_release
-    arm64.movRegReg x2, x0
-    arm64.loadRegSlot x0, slot2
-    arm64.loadRegSlot x1, slot0
     arm64.b __rl_cont#54
+  __rl_slow#60:
+    arm64.movRegReg x0, x19
+    arm64.bl __rtlock_release
+    arm64.b __rl_cont#57
+  __rl_slow#68:
+    arm64.storeSlotReg slot2, x0
+    arm64.storeSlotReg slot0, x1
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x2
+    arm64.bl __rtlock_release
+    arm64.movRegReg x2, x0
+    arm64.loadRegSlot x0, slot2
+    arm64.loadRegSlot x1, slot0
+    arm64.b __rl_cont#65
   __rl_slow#64:
+    arm64.storeSlotReg slot2, x0
+    arm64.storeSlotReg slot0, x1
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x2
+    arm64.bl __rtlock_release
+    arm64.movRegReg x2, x0
+    arm64.loadRegSlot x0, slot2
+    arm64.loadRegSlot x1, slot0
+    arm64.b __rl_cont#61
+  __rl_slow#71:
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_enter_slow
-    arm64.b __rl_cont#62
-  __rl_slow#68:
+    arm64.b __rl_cont#69
+  __rl_slow#75:
     arm64.storeSlotReg slot2, x0
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_release
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot2
-    arm64.b __rl_cont#65
-  __rl_slow#78:
+    arm64.b __rl_cont#72
+  __rl_slow#81:
     arm64.storeSlotReg slot2, x0
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x3
     arm64.bl __rtlock_enter_slow
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot2
-    arm64.b __rl_cont#76
-  __rl_slow#82:
-    arm64.bl __rtlock_release
     arm64.b __rl_cont#79
-  __rl_slow#71:
+  __rl_slow#85:
+    arm64.bl __rtlock_release
+    arm64.b __rl_cont#82
+  __rl_slow#78:
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_enter_slow
-    arm64.b __rl_cont#69
-  __rl_slow#75:
+    arm64.b __rl_cont#76
+  __rl_slow#89:
     arm64.bl __rtlock_release
-    arm64.b __rl_cont#72
+    arm64.b __rl_cont#86
   readybadstatus:
     arm64.leaRdata x0, __fatal_msg_0  ; "fatal error: bad green-thread status in ready\x0a"
     arm64.movImm x1, 46
@@ -68373,7 +69049,7 @@ chunk @mrt_write_stream {
     0510: 28 4c 89 5c 24 20 65 48 89 04 25 08 00 00 00 48
     0520: 81 e8 00 00 01 00 65 48 89 04 25 10 00 00 00 65
     0530: 48 89 04 25 78 14 00 00 48 8d 05 00 00 00 00 48
-    0540: 8b 00 65 48 8b 00 4c 8b 18 49 81 83 e0 00 00 00
+    0540: 8b 00 65 48 8b 00 4c 8b 18 49 81 83 d8 00 00 00
     0550: 01 00 00 00 41 bb 05 00 00 00 f0 4c 01 98 60 02
     0560: 00 00 ff 15 00 00 00 00 4c 8d 1d 00 00 00 00 4d
     0570: 8b 1b 65 4d 8b 1b 4d 8b 5b 08 49 8b 8b e0 00 00
@@ -68404,7 +69080,7 @@ chunk @mrt_write_stream {
     0700: 8b 5a 28 4c 89 5c 24 20 65 48 89 04 25 08 00 00
     0710: 00 48 81 e8 00 00 01 00 65 48 89 04 25 10 00 00
     0720: 00 65 48 89 04 25 78 14 00 00 48 8d 05 00 00 00
-    0730: 00 48 8b 00 65 48 8b 00 4c 8b 18 49 81 83 e0 00
+    0730: 00 48 8b 00 65 48 8b 00 4c 8b 18 49 81 83 d8 00
     0740: 00 00 01 00 00 00 41 bb 05 00 00 00 f0 4c 01 98
     0750: 60 02 00 00 ff 15 00 00 00 00 4c 8d 1d 00 00 00
     0760: 00 4d 8b 1b 65 4d 8b 1b 4d 8b 5b 08 49 8b 8b e0
@@ -68433,7 +69109,7 @@ chunk @mrt_write_stream {
     08d0: 89 04 25 08 00 00 00 48 81 e8 00 00 01 00 65 48
     08e0: 89 04 25 10 00 00 00 65 48 89 04 25 78 14 00 00
     08f0: 48 8d 05 00 00 00 00 48 8b 00 65 48 8b 00 4c 8b
-    0900: 18 49 81 83 e0 00 00 00 01 00 00 00 41 bb 05 00
+    0900: 18 49 81 83 d8 00 00 00 01 00 00 00 41 bb 05 00
     0910: 00 00 f0 4c 01 98 60 02 00 00 ff 15 00 00 00 00
     0920: 4c 8d 1d 00 00 00 00 4d 8b 1b 65 4d 8b 1b 4d 8b
     0930: 5b 08 49 8b 8b e0 00 00 00 65 48 89 0c 25 08 00

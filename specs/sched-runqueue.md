@@ -65,12 +65,13 @@ never adds a token; a `spawn` does, so a program that spawns services puts many 
 | **the global queue** | an intrusive FIFO through `GtOffRunqNext` — its own link, because an owner can sit on its strand queue while its token waits here | every mutation under `__sched_lock` |
 | **stealing** | four rounds, each visiting every other ACTIVE P once from a random start, grabbing HALF a victim's ring into the thief's own | the thief, by CAS on the victim's head |
 
-⛔ **WHETHER A SECOND MACHINE EVER RUNS IS DECIDED BY THE WORK, NOT BY `MAXON_MAX_PROCS`.** The only thing
+⛔ **A SECOND MACHINE IS STARTED BY A PUBLISHED TOKEN AND AN IDLE PROCESSOR TO RUN IT ON.** The only thing
 that starts a worker is `__sched_wake_or_spawn`, reached when a token is published — a `spawn`, or a strand
 readied while no machine held it. An `async`-only program has one token, `main`'s: its coroutines are
-readied onto `main`'s strand, and the machine that fires a timer or reaps a child for a strand takes that
-strand's token itself rather than waking another. So a program whose only green thread is `main` keeps one
-M at every `MAXON_MAX_PROCS` (`SchedRuntime.maxon`'s header).
+readied onto `main`'s strand, and the machine that fires a timer or reaps a child for a strand runs that
+strand's token itself and then pays the wake the ready owed, as Go's `wakep` does, which starts a machine
+only on an idle processor. So a program whose only green thread is `main` keeps one M at one processor, and
+above one it may reach a second that has only `main`'s token to run (`SchedRuntime.maxon`'s header).
 
 ⭐ **A `spawn` IS WHAT ADDS TOKENS** (`specs/services.md`, *"A send MOVES, and that is load-bearing"*). `__svc_spawn` calls
 `__gt_spawn_green` and publishes the new green thread's token to a P RING, which is exactly what a ring, a
@@ -116,8 +117,9 @@ member at a time, on one machine at a time, in its own queue's order at any proc
 CAS under contention and the Dekker
 fence on the ring publish are out of reach from a case pinned to one P**; the multi-processor gate is
 `scripts/multicore-stress/pin-matrix.sh`, which drives the `multicore-stress` programs across
-`MAXON_MAX_PROCS ∈ {1, 2, 7, 12}` and asserts `workers=1 steals=0` of every COROUTINE-only program whose
-`monitor=` reading is 0 — a second M comes to such a program only from the system monitor — and
+`MAXON_MAX_PROCS ∈ {1, 2, 7, 12}` and asserts `workers=1 steals=0` at one processor of every COROUTINE-only
+program whose `monitor=` reading is 0 — at one processor a second M comes to such a program only from the
+system monitor, and above one its readings are reported and not judged — and
 `workers >= 2, steals > 0` at N ≥ 2 of every SPAWN-driven one.
 
 ⛔⛔ **`procs: 1` PINS THE PROCESSOR COUNT AND NOTHING ELSE; AN ORDER THAT ALSO ASSUMES `main` KEEPS THAT

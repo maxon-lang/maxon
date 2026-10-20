@@ -7,8 +7,8 @@
 #
 # ⭐ TWO OF THE FOUR NEED A PROGRAM THAT REACHES A WORKER M, WHICH IS WHY THREE ARE BUILT. An `async`
 # frame is a COROUTINE of the green thread that called it — published to that thread's own queue,
-# never to a P ring — so `alloc-torture` runs entirely on one M and can witness neither a second
-# worker nor a cross-P free. `service-torture` and `service-fanin-torture` `spawn` real green threads
+# never to a P ring — so `alloc-torture`'s tasks never leave `main`'s strand and can witness neither
+# a second worker nor a cross-P free. `service-torture` and `service-fanin-torture` `spawn` real green threads
 # and move tens of thousands of heap `String`s between Ms, which IS the remote-free push.
 #
 # ⇒ checks 1 and 3 span both kinds; checks 2 and 4 belong to the service programs alone.

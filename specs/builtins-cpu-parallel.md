@@ -48,8 +48,11 @@ green thread — `main`'s, in an `async`-only program — asking to be put behin
 - **A `Scheduler.yield()` with no sibling coroutine to run** puts the green thread on the global queue the way a
   preemption does (`scheduler-yield.md`).
 
-Each global put pays a wake — Go's `wakep` — and a wake starts a worker M when a processor is idle.
-⇒ **An `async`-only program that never yields alone reads 1 exactly when the monitor's three counters read 0**,
+Each global put pays a wake — Go's `wakep` — and a wake starts a worker M when a processor is idle. So does a
+ready that fires a timer or reaps a child, once the machine that fired it runs the readied strand (Go's
+`resetspinning`).
+⇒ **An `async`-only program that never yields alone and never parks on a timer or a child reads 1 exactly
+when the monitor's three counters read 0**,
 and that conditional — not a bare `workers == 1` a descheduled run can break — is what the case below
 asserts.
 
@@ -65,8 +68,8 @@ stolen, and only by a worker M, which a run that never reaches the scheduler doe
 ⚠ **THAT IS A READING, NOT A PLACEHOLDER.** The body is a `.data` load, and the slot is SEEDED TO 1
 rather than written by an initializer, so a program that never installs the scheduler reads the truth (one
 M: its own) with no code at all. `multicore-stress/pin-matrix.sh` asserts `workers=1` for its coroutine
-family and `workers >= 2` for the spawn family; the coroutine half is asserted only for a row whose
-`monitor=` reading — the three counters' sum — is 0.
+family at one processor and `workers >= 2` for the spawn family above one; the coroutine half is asserted
+only for a row whose `monitor=` reading — the three counters' sum — is 0.
 
 ⚠ **THE SYSTEM MONITOR IS NOT A WORKER M, AND IT IS THE ONE THING THAT COULD MAKE THIS
 LOOK WRONG.** It reads per-machine state and hands a stuck processor on; it never RUNS a green thread and it
@@ -80,12 +83,12 @@ intrinsics. It prints `aggregate=205500`, `workers=1` and the host's `cpucount=`
 
 ⛔ **`workers=1` IS NOT A CONSEQUENCE OF THE PROCESSOR COUNT.** The compiler defaults to the machine's count,
 so this program builds one P per logical CPU. **The `workers=` row is 1 anyway**, because this program's work
-is `async` and an `async` frame is a coroutine of its caller — the P count is not what decides whether a
-worker M starts, the WORK is — and because its run is too short for the monitor to preempt its green thread.
+is `async` and an `async` frame is a coroutine of its caller — no coroutine is published where a worker M
+could take it — and because its run is too short for the monitor to preempt its green thread.
 
-⛔ **NO `MAXON_MAX_PROCS` VALUE GIVES THIS PROGRAM A WORKER M.** Its tasks are coroutines, so
-`multicore-stress/pin-matrix.sh` reads `aggregate=205500`, `workers=1`, exit 42 at every value it sweeps and
-at the default. The allocator is sharded per P (`sched-processor.md`); its cross-P paths are correct and,
+⛔ **NO COROUTINE OF THIS PROGRAM REACHES A WORKER M.** `multicore-stress/pin-matrix.sh` asserts
+`aggregate=205500` and exit 42 at every value it sweeps and at the default, and `workers=1` at one
+processor. The allocator is sharded per P (`sched-processor.md`); its cross-P paths are correct and,
 for THIS program, UNREACHED — `spawn`'s service programs are what reach them.
 
 ### The two land on OPPOSITE sides of the target line, and that is the pair's sharpest property

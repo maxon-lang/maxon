@@ -25,12 +25,11 @@
 // MAXON_MAX_PROCS in {1, 2, 7, 12} — which is what makes a stolen thread having
 // run EXACTLY ONCE a checked property rather than a hope.
 //
-// ⛔⛔ **IT READS `steals=0 workers=1` AT EVERY PROCESSOR COUNT, AND
+// ⛔⛔ **IT READS `steals=0 workers=1` AT ONE PROCESSOR, AND
 // THAT IS THE MEASUREMENT RATHER THAN A FAILURE.** An `async f(...)` call creates
 // a COROUTINE of the green thread that called it, not a green thread: it is
 // published only to its owner's coroutine queue, never to a P ring or the global
-// queue, so `__sched_wake_or_spawn` is never called, no worker M is ever created,
-// and there is nothing anywhere for a thief to find. `producer` still creates all
+// queue, so no coroutine wakes a worker M and no child is ever a thief's to find. `producer` still creates all
 // of the work and `aggregate` is still the proof that every child ran exactly
 // once — the work never leaves the M its owner is running on.
 //
@@ -116,8 +115,8 @@ function main() returns ExitCode
 	// The driver parses these lines. `aggregate` is the core-count-invariant
 	// determinism signal (and the proof every child ran exactly once); `steals`
 	// is the direct reading of the mechanism this program exists for; `workers`
-	// proves more than one M went live; `monitor` is what the pin on those two is
-	// conditional on (`monitor-witness.maxon`); `cpucount` gives the driver ncpu.
+	// proves more than one M went live; `monitor` is what the one-processor pin on those
+	// two is conditional on (`monitor-witness.maxon`); `cpucount` gives the driver ncpu.
 	print("aggregate={total}\n")
 	print("steals={steals}\n")
 	print("workers={workers}\n")

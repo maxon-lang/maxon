@@ -18,7 +18,7 @@ inside a checkout: it locates `stdlib/` relative to itself.
 | Driver | What it answers |
 |---|---|
 | `validate.sh` | is the emitted per-P sharded allocator + multi-M scheduler correct above one P? |
-| `pin-matrix.sh` | is an `async` frame pinned to its green thread — `workers=1`, `steals=0` at every `MAXON_MAX_PROCS` and at the default wherever the system monitor never stepped in (`monitor=0`) — while a SPAWNED one reaches a worker M? |
+| `pin-matrix.sh` | is an `async` frame pinned to its green thread — `workers=1`, `steals=0` at one processor wherever the system monitor never stepped in (`monitor=0`; above one processor those readings are reported, not judged) — while a SPAWNED one reaches a worker M? |
 | `refcount-race.sh` | does a contended refcount word survive, and can the pin be removed to break it? |
 | `awaitany-index-race.sh` | does a machine with nothing runnable OBSERVE a promise another M answered, or wait out its timer instead — read as the SELECT LATENCY, in the exit code |
 | `compile-all.sh` | does every program here still compile, and are the must-not-compile entries (`REFUSED_PROGRAMS` in `lib.sh`) still refused with their declared codes? Runs in CI on every lane |
@@ -46,8 +46,8 @@ header for why).
   unreachable *stdlib* functions, so linking it everywhere would install the scheduler queries into
   binaries whose readings are dated.
 - **`monitor-witness.maxon`** — `monitorActions()`, the system monitor's three counters summed, compiled into
-  the `MONITOR_WITNESS_PROGRAMS` (`lib.sh`) — the coroutine programs whose `workers=`/`steals=` pin is
-  conditional on it.
+  the `MONITOR_WITNESS_PROGRAMS` (`lib.sh`) — the coroutine programs whose one-processor `workers=`/`steals=`
+  pin is conditional on it.
 
 ### ⭐⭐ "A WORKER M RAN" IS BLOCKED ON, NOT SAMPLED
 
@@ -70,8 +70,8 @@ real millisecond and the turn budget IS the timeout.
 ## The programs
 
 An `async f(...)` call creates a COROUTINE of the calling green thread, published only to that
-thread's own queue and never to a P ring, so an `async` program runs on one M whatever
-`MAXON_MAX_PROCS` says unless the system monitor starts another. A `spawn` creates a real green thread that a worker M can take. **Which
+thread's own queue and never to a P ring, so an `async` program's tasks never leave the calling green
+thread's strand, and at one processor it runs on one M unless the system monitor starts another. A `spawn` creates a real green thread that a worker M can take. **Which
 family a program is in decides what its rows mean**, so it is the first column here.
 
 ### `spawn` — reaches a worker M
@@ -133,11 +133,13 @@ family a program is in decides what its rows mean**, so it is the first column h
   build fails **with E3102 as its only error** — a must-not-compile program that fails for the wrong
   reason asserts nothing.
 
-### `async` — one M unless the system monitor starts another
+### `async` — one M at one processor unless the system monitor starts another
 
 Each prints `monitor=` (`monitor-witness.maxon`): the system monitor's preemptions, retakes and machines started
-for overdue timers, the only roads by which a coroutine-only program gets a second M. `pin-matrix.sh` asserts
-`workers=1 steals=0` of a row where it reads 0.
+for overdue timers, the only roads by which a coroutine-only program gets a second M at one processor.
+`pin-matrix.sh` asserts `workers=1 steals=0` of a one-processor row where it reads 0. Above one processor a
+timer ready or a spinner that stops looking wakes a machine as Go's `wakep` does, so those rows' `workers=`
+and `steals=` are printed and not judged.
 
 These still prove determinism, leak-freedom and single-shard allocator churn. ⛔ **NO ROW OF THEIRS
 COVERS A CROSS-P FREE**, and none should be read as doing so.
@@ -149,7 +151,7 @@ COVERS A CROSS-P FREE**, and none should be read as doing so.
 - **`remote-free-torture.maxon`** — the same subject from the allocate-then-sleep side: a green
   thread allocates, parks, and any idle M resumes it, so scope-end release lands on a different P.
 - **`steal-torture.maxon`** — all work created by ONE green thread, so `steals=` is a direct reading
-  of the stealing rounds. It reads 0 at every processor count, and that IS the pin.
+  of the stealing rounds. It reads 0 at one processor, and that IS the pin there.
 - **`drop-running-torture.maxon`** — a promise dropped while its thread executes on another M, the
   one shape the teardown rendezvous was built for and the one no spec case can reach. `leaked=` is
   its assertion: how far the scheduler's record-carve count runs past the most a runtime that

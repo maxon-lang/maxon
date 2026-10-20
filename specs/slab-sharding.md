@@ -30,7 +30,8 @@ that WAITS for the property across up to 500 waves. `pin-matrix.sh:100-137` hits
 other side.
 
 ⚠ **`multicore-stress/alloc-torture.maxon` IS NOT THE MULTI-PROCESSOR GATE.** Its work is `async`, an
-`async` frame is a coroutine of its caller, and that program reads `workers=1` at every count. The
+`async` frame is a coroutine of its caller, and that program is asserted to read `workers=1` at one
+processor. The
 multi-processor readings come from the SPAWN family (`service-torture`, `service-fanin-torture`)
 driven by `multicore-stress/pin-matrix.sh`, which runs standalone and sweeps the count.
 
@@ -399,8 +400,7 @@ is exact too, so this case passes either way and does not claim otherwise.
 
 ⛔ **`multicore-stress/alloc-torture.maxon` DOES NOT PIN IT EITHER.** An `async` task is a coroutine of its
 calling green thread, so its tasks never leave that one green thread, which runs on one M at a
-time — a preemption can move it to another, but never runs it on two — and a run as short as this one's
-reads `workers=1` at every `MAXON_MAX_PROCS`. It proves determinism and leak-freedom; it does not
+time — a preemption or a wake can move it to another, but never runs it on two. It proves determinism and leak-freedom; it does not
 discriminate the `lock` prefix, because no column is ever credited by two machines at once. ⚠ **This does
 NOT mean the raw row is stepped plainly** — its step is atomic wherever the scheduler word is non-zero, and the
 system monitor steps it whatever `async` does. It means the ORACLE for that arm needs

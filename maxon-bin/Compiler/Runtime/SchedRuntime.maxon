@@ -40,9 +40,11 @@
 // ⭐ **BUT THE COUNT IS NOT WHAT STARTS AN M; THE WORK IS.** `__sched_wake_or_spawn` starts one for a strand
 // token published to a run queue — a `spawn`, a strand readied while no machine held it, a strand the monitor
 // preempted or one that yielded with no sibling to run — and `__sysmon` starts one for a processor it retook or
-// a timer it found overdue; the machine that fired a timer or reaped a child for a strand takes that token
-// itself rather than waking another. So a program whose only green thread is `main` keeps one M until the
-// monitor steps in or it yields alone, while a program that spawns services really does run on several.
+// a timer it found overdue. The machine that fired a timer or reaped a child for a strand runs that token
+// itself and then pays the wake the ready owed, as Go's `resetspinning` does, and that wake starts a machine
+// only on an idle processor. So at one processor a program whose only green thread is `main` keeps one M
+// until the monitor steps in; above one it may reach a second, and a program that spawns services really does
+// run on several.
 //
 // `specs/sched-default-procs.md` states the default count as its own subject.
 //
@@ -170,9 +172,7 @@ export enum MultiMSharing
 	// a stale answer costs one spinner too many or one search left to the spinners the cap counted, which is Go's
 	// own reading of the same word (`sched.npidle.Load()`) — and, beside `__sched_nmspinning`, `__sched_retake`'s
 	// retake rule (`rtrule`) and `__sched_handoffp`'s spinning arm (`hopspin`), each of which chooses between two
-	// arms that are both correct, as Go's reading of the same pair does. A fourth,
-	// `__sched_wake_or_spawn`'s `idletest`, skips a wake on a zero count and is correct only by the
-	// Dekker pair argued at that site. One reads `__sched_midle`'s head:
+	// arms that are both correct, as Go's reading of the same pair does. One reads `__sched_midle`'s head:
 	// `__sched_wake_poller`'s peek (`wppeek`), which chooses whether to take the lock and look for a parked
 	// machine, and whose stale "empty" that function argues.
 	//
@@ -429,22 +429,20 @@ let MOffNextP = MOffOsThreadHandle + PointerSlotBytes
 // ⭐⭐ **DOES THIS M HOLD A UNIT OF `__sched_nmspinning`? — Go's `mp.spinning` (`proc.go:3228`).** 1 means
 // *"one unit of the global count belongs to this M"*. See `SchedSpinningLabel` for what the count buys and
 // `emitSchedSpinningTransition`
-// for the four things that can happen to a credit.
+// for the machine's own claim and release of a credit, and `emitSchedHandOverCredit` for a waker's hand-over.
 //
 // `__sched_nmspinning` is a COUNT and a count alone cannot say WHO is counted, so a machine returning from a
 // search has no way to know whether it owes a decrement. This is the bool that says so.
 //
-// ⛔⛔ **BOTH WRITERS USE A CAS, AND THE SECOND WRITER IS WHY.** The owning machine claims a credit at
+// ⛔⛔ **EVERY WRITER USES A CAS, AND THE SECOND WRITER IS WHY.** The owning machine claims a credit at
 // `__sched_find_runnable`'s spinner cap and releases it when it stops searching — but a WAKER also sets this
 // word, HANDING OVER the credit it reserved before signalling (`buildSchedWakeOrSpawn`'s gate reserves at
 // most one spinning machine per wakeup, and the reservation has to survive the whole `osSetEvent`→wake
-// latency or it buys nothing). Those
-// two writers race in exactly one window: a machine whose `osWaitHandle` has returned but which has not yet
-// reached its own claim can be claimed by a waker on the way. A plain test-and-set there loses one of the two
-// decisions and the count DRIFTS UP — and a drifted count suppresses wakeups for the life of the process,
-// which is lost work, not a slow path. With a CAS on both sides exactly one wins: the machine wins and counts
-// its own credit while the waker's becomes surplus and is given back, or the waker wins and the machine
-// silently inherits it.
+// latency or it buys nothing). The waker reaches only a machine it took off `__sched_midle` or has just
+// built, and neither holds a credit, so its CAS always wins and a lost one is fatal. The owning machine's claim is the one that can lose,
+// when a waker handed it a credit before it reached the cap, and it then silently inherits that credit. A
+// plain test-and-set would lose one of the two decisions and the count DRIFTS UP — and a drifted count
+// suppresses wakeups for the life of the process, which is lost work, not a slow path.
 //
 // ⭐ **THE WORD SITS ON THE M, AND THAT IS WHAT KEEPS THE RACE THIS NARROW**: a credit handed to a machine
 // cannot be inherited by a DIFFERENT machine through a P that moved, and the hand-over requires `mget` under
@@ -472,12 +470,12 @@ export let MOffAllNext = MOffSpinning + PointerSlotBytes
 
 // ⭐⭐ **`__sched_midle`'s FORWARD LINK — Go's `m.idleNode.next`.** The list is doubly linked through this
 // word and `MOffIdlePrev`, and both are written only under `__sched_lock` by the list's three doors:
-// `emitSchedMidlePutLocked` (Go's `mput`), `emitSchedMidleUnlinkLocked` (the pop, `mgetSpecific` and a
-// signalled machine's self-removal) and the membership test `emitSchedMidleHolds`.
+// `emitSchedMidlePutLocked` (Go's `mput`), `emitSchedMidleUnlinkLocked` (the pop, and a waker's removal of one
+// particular machine) and the membership test `emitSchedMidleHolds`.
 //
 // ⚠ **THERE IS NO "AM I ON THE IDLE LIST" FLAG BESIDE IT, DELIBERATELY.** Membership of a list guarded by a
-// mutex already answers that question, atomically with the act of joining; `buildSchedLoop`'s park
-// carries the missed-wakeup argument that rests on it. The back-link is what makes the answer O(1).
+// mutex already answers that question, atomically with the act of joining; `wafterwait` reads it to tell a
+// signalled machine from one woken by nobody. The back-link is what makes the answer O(1).
 let MOffIdleNext = MOffAllNext + PointerSlotBytes
 
 // ==========================================================================
@@ -621,9 +619,9 @@ export let MSyscallEnterDelta = MSyscallGenStep + MSyscallInCall
 let MOffSysmonWord = MOffSyscallState + PointerSlotBytes
 let MOffSysmonWhen = MOffSysmonWord + PointerSlotBytes
 
-// ⭐⭐ **`__sched_midle`'s BACK-LINK — Go's `m.idleNode.prev`, and what makes both removals from the middle of
-// the list O(1).** A machine woken by a signal that handed it no processor unlinks itself, and `mgetSpecific`
-// takes one particular machine; a singly linked list could answer either only by walking from the head. 0 on the
+// ⭐⭐ **`__sched_midle`'s BACK-LINK — Go's `m.idleNode.prev`, and what makes a removal from the middle of
+// the list O(1).** A waker that signals one particular machine — the main machine, a pinned thread's owner —
+// takes it off the list first; a singly linked list could do that only by walking from the head. 0 on the
 // head and on every machine that is not on the list, which is why *"on the list"* is `head == m or prev != 0`.
 let MOffIdlePrev = MOffSysmonWhen + PointerSlotBytes
 
@@ -806,16 +804,15 @@ let POffRng = 0x28
 //
 // ⛔⛔ **THE MECHANISM IS ABSENT, NOT RELOCATED.** Such a pair is needed only where the park publishes its
 // intention OUTSIDE any lock and then re-searches, so *"is this M idle?"* and *"has this M gone to sleep yet?"* had to be
-// answerable by a racing enqueuer through one word. With the idle state on the M, the whole park —
-// releasing the processor, the final look at every queue, and joining the idle list — happens inside ONE
-// `__sched_lock` critical section (`buildSchedLoop`'s park), and so does the whole of `wakep`. Two parties
+// answerable by a racing enqueuer through one word. With the idle state on the M, the park's last looks and
+// its release of the processor happen inside ONE `__sched_lock` critical section (`buildSchedLoop`'s park),
+// and so does the whole of `startm`. Two parties
 // serialised by a mutex do not need a Dekker protocol between them, and **a flag beside the list would be a
 // second idle mechanism**, with nothing making the two agree.
 //
-// ⇒ the missed-wakeup argument is *"the re-search and the list-join are one transaction, and `wakep` takes
-// the same lock"*. `buildSchedLoop`'s park states it as an interleaving argument over the two critical
-// sections, and the auto-reset event (`MOffParkEvent`) covers the only window left, between the release and
-// the wait itself.
+// ⇒ the missed-wakeup argument is *"the last look and the release are one transaction, and `startm` takes
+// the same lock"*. `buildSchedLoop`'s park states it, and the auto-reset event (`MOffParkEvent`) covers the
+// window between the idle-list join and the wait itself.
 let POffReservedIdleFlag = 0x30 as ByteOffset
 
 // ⭐⭐ **A RESERVED PER-P WAKE-EVENT SLOT — the park event lives on the M (`MOffParkEvent`).** An M that
@@ -995,22 +992,11 @@ let POffPidleNext = POffRemoteFreeCount + PointerSlotBytes
 // `schedTick`, and a per-P word for `POffStealCount`'s reason.
 let POffGtRecycleCount = POffPidleNext + PointerSlotBytes
 
-// ⭐⭐ **THE MACHINE THAT LAST RELEASED THIS PROCESSOR ONTO `__sched_pidle`, OR 0 — Go's `p.oldm`
-// (`runtime2.go:786`).** `__sched_startm` asks for that machine first (`mgetSpecific`), so a processor goes
-// back to the thread whose core last ran its ring and its allocator shard; any other idle machine will do
-// when that one is busy.
-//
-// ⭐ **A PLAIN POINTER WHERE GO NEEDS A WEAK ONE**, because an M is never freed here: the word always names a
-// real M struct, and the only question a reader asks of it — is that machine on `__sched_midle`? — is answered
-// under the lock by `emitSchedMidleHolds`. Written by `emitSchedReleaseProcLocked` and read by
-// `__sched_startm`, both under `__sched_lock`.
-let POffOldM = POffGtRecycleCount + PointerSlotBytes
-
 // ⭐⭐ **THE MACHINE HOLDING THIS PROCESSOR, OR 0 — Go's `p.m`.** Written beside `M->currentP` by the two doors
 // that move a processor (`emitSchedAdoptProc`, `emitSchedReleaseProcLocked`), and cleared by the retake that wins
 // it. Its one reader is `__sched_retake`, which finds the machines worth asking about by walking the processors
 // and reads it unlocked: that function's header argues why a stale answer is only a candidate.
-let POffM = POffOldM + PointerSlotBytes
+let POffM = POffGtRecycleCount + PointerSlotBytes
 
 // ⭐⭐ **`__sysmon`'s NOTE ON THIS PROCESSOR's SCHEDULE COUNTER — Go's `sysmontick.schedtick`/`schedwhen`.** The
 // `POffSchedTick` it last saw and the time it first saw it. An unchanged tick means one strand has held the
@@ -1241,17 +1227,16 @@ let SchedMaxMachines = 10000
 
 // ⭐⭐⭐ **THE IDLE-M LIST — Go's `sched.midle`, doubly linked through `MOffIdleNext`/`MOffIdlePrev`.** An M
 // with nothing to run puts itself here and blocks on its own `MOffParkEvent`; a `startm` takes one off and
-// hands it a processor. Its doors are its own rather than the shared singly linked pair, because two
-// removals take a machine out of the MIDDLE — `mgetSpecific` and a signalled machine unlinking itself — and
-// the back-link is what makes both O(1). All of them require `__sched_lock` (Go: `assertLockHeld` at `mput`,
-// `mget` and `mgetSpecific` alike).
+// hands it a processor. Its doors are its own rather than the shared singly linked pair, because a waker that
+// signals one particular machine takes it out of the MIDDLE, and the back-link is what makes that O(1). All of
+// them require `__sched_lock` (Go: `assertLockHeld` at `mput` and `mget`).
 //
 // ⭐⭐ **A LIST RATHER THAN A SCAN OF THE PROCESSORS, BECAUSE A PARKED MACHINE HOLDS NO PROCESSOR TO BE FOUND
 // BY.** Membership is decided under the one lock, with no `idleFlag` beside it (`POffReservedIdleFlag`), so
 // there is no fence for a lock-free scan to preserve.
 //
-// `underSchedLock`, for `SchedAllMLabel`'s reason and one more: joining this list and taking the final look
-// at the run queues are ONE transaction, which is what makes the park free of a missed wakeup.
+// `underSchedLock`, for `SchedAllMLabel`'s reason and one more: `__sched_startm` reads it in the hold that
+// takes an idle processor, so a wake finds a parked machine here or creates one (`buildSchedLoop`'s park).
 let SchedMidleLabel = b"__sched_midle"
 
 // ⭐⭐⭐ **THE IDLE-P LIST — Go's `sched.pidle`, threaded through `POffPidleNext`, and the list `handoffp`
@@ -1267,8 +1252,6 @@ let SchedPidleLabel = b"__sched_pidle"
 // two pidle doors.
 //
 // `underSchedLock`, and its unlocked reads are enumerated there (`MultiMSharing.underSchedLock`).
-// The step up is a locked read-modify-write even so: it is the parker's fence in
-// `__sched_wake_or_spawn`'s `idletest` pair.
 let SchedNpidleLabel = b"__sched_npidle"
 
 // ⭐⭐ **HOW MANY GREEN THREADS THE GLOBAL RUN QUEUE HOLDS — Go's `sched.runq.size`.** The global batch's
@@ -1407,11 +1390,12 @@ export let SchedMaxActiveWorkersLabel = b"__sched_max_active_workers"
 //     skips the wake, and the M that would have found the work has already looked. ⇒ if a publisher observed
 //     a non-zero count, the M it counted had not yet decremented when that read happened, so its re-check
 //     strictly follows the publish and cannot miss it. The park's `__sched_any_work` call, after it
-//     releases its processor, is the parking machine's re-check.
+//     releases its processor, is the parking spinner's re-check; a machine that parks without a credit
+//     needs none, because it never stopped a search that a publisher counted.
 //   • **AN M THAT *FINDS* WORK STOPS SEARCHING, SO IT OWES THE SEARCH TO SOMEBODY ELSE** — Go's
 //     `resetspinning` calls `wakep` for exactly this. Without it a spinner that takes one thread off a queue
 //     holding two leaves the second beside a dozen parked Ms until somebody looks again, and one published to a
-//     busy machine's ring until that machine's thread yields. `buildSchedLoop`'s `wrecheck` is that call.
+//     busy machine's ring until that machine's thread yields. `buildSchedLoop`'s `wwakemore` is that call.
 //
 // ⭐⭐ **A RESERVATION THAT FOUND NO PROCESSOR IS THE ONE UNIT NO SPINNER ANSWERS FOR** — the dance's third
 // party, and what `__sched_needspinning` is for. `__sched_wake_or_spawn` counts a unit in before it knows
@@ -1429,7 +1413,8 @@ let SchedSpinningLabel = b"__sched_nmspinning"
 // wake, and the machine that must search is then one already holding a processor — possibly one on its way
 // to release it WITHOUT having spun, whose park re-checks only the global queue. So a machine that parks with
 // no spinning credit reads this in its park's critical section and, finding it raised, searches again as a
-// spinner instead of releasing (`wpark`).
+// spinner instead of releasing (`wpark`). A parking spinner whose re-check found work and no idle processor to
+// run it on raises it as well (`wparkspinnop`), so that work is the next parker's to search for.
 //
 // Cleared by every machine that becomes a spinner (`SpinningTransition.becomeSpinning`), because a spinner
 // re-checks every queue before it stops.
@@ -1437,6 +1422,8 @@ let SchedSpinningLabel = b"__sched_nmspinning"
 // `lastWriterWins`: one word, raised under the lock and cleared outside it. A raise lost to a concurrent clear
 // loses nothing — the clearer is a spinner, and it re-checks every queue before it parks.
 let SchedNeedSpinningLabel = b"__sched_needspinning"
+
+let SchedNeedSpinningRaised = 1
 
 // Set at teardown so a parked worker leaves its loop instead of blocking for ever. ⚠ The worker loop reads
 // it TWICE, because the second read is half of the missed-wakeup argument rather than a duplicate of the
@@ -1788,7 +1775,7 @@ export let SchedWakeNetpollerName = b"__sched_wake_netpoller"
 // header), and a deadline is not work until it fires: the machine that armed it claims the poller itself when it
 // runs out of work, and fires what is due at every schedule before then (`wchecktimers`). A machine started here
 // would be one a program whose only green thread is `main` never needs — its coroutines run on the one machine
-// holding their strand — and is what `multicore-stress/pin-matrix.sh` pins against.
+// holding their strand — and is what `multicore-stress/pin-matrix.sh` pins against at one processor.
 let SchedWakePollerName = b"__sched_wake_poller"
 
 // ⭐ `__sched_stop_workers()` — seal the scheduler and JOIN every worker M out. Called once, from
@@ -1837,8 +1824,8 @@ let SchedPreemptOneMachineParamIndex = 0 as FullRangeInt
 let SchedFindRunnableName = b"__sched_find_runnable"
 
 // ⭐⭐ **`__sched_any_work() -> 1 if the global queue or any ACTIVE processor's ring holds a green thread, else
-// 0` — Go's `checkRunqsNoP` plus its global-queue check.** The re-check every park makes after
-// releasing its processor, and the one `wrecheck` owes once a machine stops spinning. It takes no
+// 0` — Go's `checkRunqsNoP` plus its global-queue check.** The re-check a spinning machine makes at its park
+// after releasing its processor, and the one `emitSchedWakeForWhatRemains` makes. It takes no
 // lock and needs no processor, so a machine that has just released its own may ask it. A processor
 // on `__sched_pidle` is skipped: its ring is empty by `emitSchedPidlePutLocked`'s assertion.
 let SchedAnyWorkName = b"__sched_any_work"
@@ -2828,8 +2815,7 @@ function emitSchedPidlePutLocked(module StdModule, func IrFunction, cur IrBlock,
 	emitStoreField(module, block: idleIt, record: p, offset: POffStatus, value: emitConst(module, block: idleIt, value: PStatusUnused, ids: ids))
 	emitSchedListPush(module, block: idleIt, head: SchedListHead.lockedWord(SchedPidleLabel), linkOffset: POffPidleNext, first: p, last: p, ids: ids)
 
-	// Locked though `__sched_lock` is held: see `SchedNpidleLabel`.
-	_ = emitGlobalAccumulate(module, block: idleIt, label: SchedNpidleLabel, delta: emitConst(module, block: idleIt, value: OneMore, ids: ids), multiM: true, ids: ids)
+	emitSchedStepLockedCount(module, block: idleIt, label: SchedNpidleLabel, delta: OneMore, ids: ids)
 	module.setTerminator(idleIt, op: StdOp.branch(placed.id))
 	return placed
 end 'emitSchedPidlePutLocked'
@@ -2872,8 +2858,8 @@ function emitSchedPidleClaimLocked(module StdModule, block IrBlock, p ValueId, i
 end 'emitSchedPidleClaimLocked'
 
 // ⭐⭐⭐ **"THIS M GIVES UP THIS PROCESSOR" — Go's `releasep` + `pidleput`, and the exact mirror of
-// `emitSchedAdoptProc`.** The machine stops pointing at the processor, the processor records the machine
-// (`POffOldM`), and then the processor is offered to anybody else through `pidleput`.
+// `emitSchedAdoptProc`.** The machine and the processor stop pointing at each other, and then the processor is
+// offered to anybody else through `pidleput`.
 //
 // ⛔ **THE PUSH IS LAST AND THAT IS THE WHOLE ORDERING ARGUMENT.** Membership of `__sched_pidle` is what
 // makes this P claimable; a P published there while `M->currentP` still named it would be handed to a second
@@ -2881,12 +2867,15 @@ end 'emitSchedPidleClaimLocked'
 // believing they hold one processor, which is one allocator shard with two lockless writers
 // (`emitSchedClaimProc`'s history, arriving by a different road).
 function emitSchedReleaseProcLocked(module StdModule, func IrFunction, cur IrBlock, m ValueId, p ValueId, holdsWorkLabel ByteArray, emptyLabel ByteArray, ids ValueMinter) returns IrBlock
-	let nobody = emitConst(module, block: cur, value: 0, ids: ids)
-	emitStoreField(module, block: cur, record: m, offset: MOffCurrentP, value: nobody)
-	emitStoreField(module, block: cur, record: p, offset: POffM, value: nobody)
-	emitStoreField(module, block: cur, record: p, offset: POffOldM, value: m)
+	emitSchedDetachProcLocked(module, block: cur, m: m, p: p, ids: ids)
 	return emitSchedPidlePutLocked(module, func: func, cur: cur, p: p, holdsWorkLabel: holdsWorkLabel, emptyLabel: emptyLabel, ids: ids)
 end 'emitSchedReleaseProcLocked'
+
+function emitSchedDetachProcLocked(module StdModule, block IrBlock, m ValueId, p ValueId, ids ValueMinter)
+	let nobody = emitConst(module, block: block, value: 0, ids: ids)
+	emitStoreField(module, block: block, record: m, offset: MOffCurrentP, value: nobody)
+	emitStoreField(module, block: block, record: p, offset: POffM, value: nobody)
+end 'emitSchedDetachProcLocked'
 
 // Call `__sched_drain_runq(p)` and continue at `cont`. `__sched_lock` held; the callee's header carries what
 // the drain owes `pidleput`'s assertion and why nothing refills the queue under it.
@@ -2933,8 +2922,8 @@ function emitSchedMidleHolds(module StdModule, block IrBlock, m ValueId, ids Val
 	return emitBin(module, block: block, a: isHead, b: hasPrev, opcode: StdBinOpcode.bitOr, ids: ids)
 end 'emitSchedMidleHolds'
 
-// ⭐⭐ **TAKE `m` OFF `__sched_midle` — the one unlink every removal shares: `mget`'s head, `mgetSpecific`'s
-// chosen machine, and a signalled machine taking itself off.** `m` must be on the list. It terminates `cur`
+// ⭐⭐ **TAKE `m` OFF `__sched_midle` — the one unlink every removal shares: `mget`'s head and a waker's chosen
+// machine.** `m` must be on the list. It terminates `cur`
 // and answers the block to continue in.
 //
 // ⚠ Both of `m`'s links are cleared, for `emitSchedListUnlinkHead`'s reason: a machine that leaves
@@ -2975,11 +2964,12 @@ end 'emitSchedMidleUnlinkLocked'
 // block order. Two properties, and neither is optional:
 //
 //   • **AFTER the release**, because the outermost release's compare-and-swap is the StoreLoad
-//     fence `buildSchedWakeOrSpawn`'s `idleFlag` scan depends on, and a nested leave releases
+//     fence `buildSchedWakeOrSpawn`'s read of the spinning count depends on, and a nested leave releases
 //     nothing.
-//   • **ONLY IF OWED**, because an unconditional wake in a coroutine-only program would find no idle M and
-//     then START one on a free P — an OS thread that idles for the life of the process, which is exactly the
-//     `workers` reading `multicore-stress/pin-matrix.sh` pins at 1.
+//   • **ONLY IF OWED**, because a wake that nothing readied owes would take the gate on every publish of a
+//     program that readies nothing, and with an idle processor and no spinner it would START a machine for
+//     it — an OS thread that idles for the life of the process, and the `workers` reading
+//     `multicore-stress/pin-matrix.sh` pins at 1 for a coroutine program at one processor.
 export function emitSchedWakeIfOwed(module StdModule, cur IrBlock, owed ValueId, wake IrBlock, cont IrBlock, ids ValueMinter)
 	emitBranchOnCompare(module, block: cur, value: owed, pred: StdCmpPred.eq, against: WakeDebtNone, whenTrue: cont, whenFalse: wake, ids: ids)
 	emitSchedWakeAnIdleM(module, block: wake, ids: ids)
@@ -3187,8 +3177,9 @@ end 'buildSchedInitProcs'
 //
 // ⇒ **`emitSchedAllocM` runs on the CREATOR and `emitSchedBecomeM` on the thread that will be the M.** The
 // two touch disjoint fields, which is what makes them safe to run concurrently: the creator writes the park
-// event, the handle, `MOffNextP` and the roster link; the new thread writes the syscall stack, `currentGt`,
-// its inline GT's owner and its own TLS slot. No word is written by both.
+// event, the handle, `MOffNextP` and the roster link, and `MOffSpinning` before the thread exists; the new
+// thread writes the syscall stack, `currentGt`, its inline GT's owner, its own TLS slot and, once running,
+// `MOffSpinning`. No word is written by both while both run.
 //
 // ⚠ **A WORKER's M STRUCT COMES OUT OF THE CREATOR's OWN P SHARD.** `SlabRawShardRow` is exercised by other
 // callers: the poller, back from its wait holding no processor, runs `__gt_timer_check`
@@ -4138,7 +4129,7 @@ function isProcessorFieldOfAMachine(offset ByteOffset) returns bool
 end 'isProcessorFieldOfAMachine'
 
 function isMachineFieldOfAProcessor(offset ByteOffset) returns bool
-	return offset == POffM or offset == POffOldM
+	return offset == POffM
 end 'isMachineFieldOfAProcessor'
 
 function isMachineListLabel(label ByteArray) returns bool
@@ -5251,13 +5242,12 @@ end 'buildSchedFindRunnable'
 
 // The walk `SchedAnyWorkName` describes.
 //
-// ⭐⭐ **ITS FIRST READ IS AN ACQUIRE, AND THAT ONE INSTRUCTION IS THE SEARCHER'S BARRIER.** Its callers have
-// just stepped a count with a store-release exclusive — `__sched_nmspinning` down, or in the park
-// `__sched_npidle` up; the acquire load of the processor count is ordered after that store on arm64
-// (x86's `lock` prefix already orders it), and every later load here is ordered after the acquire.
-// So the ring tails and the global head this reads are never older than the step — which is what
-// the Dekker pairs with a publisher's gate need (`SchedSpinningLabel`, `__sched_wake_or_spawn`'s
-// `idletest`).
+// ⭐⭐ **ITS FIRST READ IS AN ACQUIRE, AND THAT ONE INSTRUCTION IS THE SEARCHER'S BARRIER.** A parking spinner
+// asks it just after stepping `__sched_nmspinning` down with a store-release exclusive; the acquire load of the
+// processor count is ordered after that store on arm64 (x86's `lock` prefix already orders it), and every
+// later load here is ordered after the acquire. So the ring tails and the global head this reads are never
+// older than the step — which is what the Dekker pair with a publisher's gate needs (`SchedSpinningLabel`).
+// Its other callers step no spinning count before asking.
 //
 // ⚠ **THE READS ARE UNLOCKED AND ANSWER A QUESTION, NOT A CLAIM.** A stale answer is either a search that finds
 // the work already taken — one extra lap — or a publish too late for this read, which read the count after
@@ -5985,18 +5975,17 @@ end 'emitSchedGtLiveSum'
 //   1. **Get a processor.** The caller's, if it handed one over; otherwise `pidleget`, which marks it taken
 //      and uncounts it in the same critical section that took it off the list. No processor means there is
 //      nowhere to run anything, and a reserved credit goes back with `__sched_needspinning` raised (`smnop`).
-//   2. **Take a machine off `__sched_midle`.** The processor's `POffOldM` if that machine is idle — Go's
-//      `mgetSpecific`, which puts the processor back on the core that last ran its ring and its allocator
-//      shard — and otherwise the head, Go's `mget`.
+//   2. **Take the machine at the head of `__sched_midle`** — Go's `mget`.
 //   3. **Hand over the caller's spinning credit, if it reserved one, and deliver the processor through
 //      `MOffNextP`** under the lock, then signal outside it. Or, with no idle machine, CREATE one on that
 //      processor — which is how a process goes from one M to several, and the only `osThreadCreate` that
 //      creates a machine that RUNS green threads.
 //
-// ⚠ **A NEW MACHINE TOUCHES NO WORD THIS CALL WRITES, WHICH IS WHY `osThreadCreate` MAY SIT INSIDE THE
+// ⚠ **A NEW MACHINE WRITES NO WORD THIS CALL WRITES WHILE BOTH RUN, WHICH IS WHY `osThreadCreate` MAY SIT INSIDE THE
 // CRITICAL SECTION.** `emitSchedAllocM` states the split: the creator writes the park event, the handle,
-// `MOffNextP` and the roster link, and the new thread writes only the syscall stack, `currentGt`, its inline
-// GT's owner and its own TLS slot. No word is written by both, so nothing the new thread does can be
+// `MOffNextP` and the roster link — and, before the thread exists, the spinning credit it is born with — and
+// the new thread writes only the syscall stack, `currentGt`, its inline GT's owner, its own TLS slot and its
+// spinning word. No word is written by both while both run, so nothing the new thread does can be
 // corrupted by this call still running. ⚠ **IT MAY STILL BLOCK ON THIS LOCK A MOMENT LATER** — its first
 // `wloop` reaches `__sched_find_runnable`, which can take it — which is harmless, because this call
 // releases, and is not what the argument needs. What the argument needs is the
@@ -6011,8 +6000,6 @@ function buildSchedStartM(module StdModule, target Target)
 	var tookProc = module.addBlock(func, label: b"smtook", heat: BlockHeat.normal)
 	var haveProc = module.addBlock(func, label: b"smhavep", heat: BlockHeat.normal)
 	var noProc = module.addBlock(func, label: b"smnop", heat: BlockHeat.normal)
-	var askOldM = module.addBlock(func, label: b"smoldm", heat: BlockHeat.normal)
-	var takeHead = module.addBlock(func, label: b"smmget", heat: BlockHeat.normal)
 	var pickMachine = module.addBlock(func, label: b"smpick", heat: BlockHeat.normal)
 	var wakeIt = module.addBlock(func, label: b"smwake", heat: BlockHeat.normal)
 	var handOver = module.addBlock(func, label: b"smhandover", heat: BlockHeat.normal)
@@ -6020,6 +6007,8 @@ function buildSchedStartM(module StdModule, target Target)
 	var spawnIt = module.addBlock(func, label: b"smspawn", heat: BlockHeat.normal)
 	var tooManyMachines = module.addBlock(func, label: b"smmaxm", heat: BlockHeat.normal)
 	var spawnStart = module.addBlock(func, label: b"smspawnstart", heat: BlockHeat.normal)
+	var spawnSpin = module.addBlock(func, label: b"smspawnspin", heat: BlockHeat.normal)
+	var spawnCreate = module.addBlock(func, label: b"smspawncreate", heat: BlockHeat.normal)
 	var spawnOk = module.addBlock(func, label: b"smspawnok", heat: BlockHeat.normal)
 	var spawnFailed = module.addBlock(func, label: b"smspawnfailed", heat: BlockHeat.normal)
 	var spawnFailedDrained = module.addBlock(func, label: b"smfaileddrained", heat: BlockHeat.normal)
@@ -6080,20 +6069,11 @@ function buildSchedStartM(module StdModule, target Target)
 	emitSchedLockLeave(module, block: noProc, ids: ids)
 	module.setTerminator(noProc, op: StdOp.retVoid)
 
-	// Go's `mgetSpecific` before `mget`. A processor no machine has released yet names no `oldm`, and one
-	// whose last machine is busy — running, or inside a kernel call — is not on the list; both take the head.
-	let oldM = emitLoadField(module, block: haveProc, record: chosenProc, offset: POffOldM, ids: ids)
-	emitBranchOnCompare(module, block: haveProc, value: oldM, pred: StdCmpPred.eq, against: 0, whenTrue: takeHead, whenFalse: askOldM, ids: ids)
-
 	let chosenMachine = ids.mint()
 	pickMachine.blockArgs.push(IrBlockArg.create(chosenMachine, argType: StdType.i64))
-	let oldMIdle = emitSchedMidleHolds(module, block: askOldM, m: oldM, ids: ids)
-	emitBranchOnCompare(module, block: askOldM, value: oldMIdle, pred: StdCmpPred.eq, against: 0, whenTrue: takeHead, whenFalse: pickMachine, ids: ids)
-	askOldM.branchEdges.push(BranchEdge.create(pickMachine.id, argIds: argsOf(oldM)))
-
-	let idleHead = emitLoadGlobalWord(module, block: takeHead, label: SchedMidleLabel, ids: ids)
-	module.setTerminator(takeHead, op: StdOp.branch(pickMachine.id))
-	takeHead.branchEdges.push(BranchEdge.create(pickMachine.id, argIds: argsOf(idleHead)))
+	let idleHead = emitLoadGlobalWord(module, block: haveProc, label: SchedMidleLabel, ids: ids)
+	module.setTerminator(haveProc, op: StdOp.branch(pickMachine.id))
+	haveProc.branchEdges.push(BranchEdge.create(pickMachine.id, argIds: argsOf(idleHead)))
 
 	emitBranchOnCompare(module, block: pickMachine, value: chosenMachine, pred: StdCmpPred.eq, against: 0, whenTrue: spawnIt, whenFalse: wakeIt, ids: ids)
 
@@ -6113,8 +6093,7 @@ function buildSchedStartM(module StdModule, target Target)
 	var unlinked = emitSchedMidleUnlinkLocked(module, func: func, cur: wakeIt, m: chosenMachine, ids: ids)
 	emitBranchOnCompare(module, block: unlinked, value: credit, pred: StdCmpPred.eq, against: SchedStartMCredit.unreserved.rawValue, whenTrue: deliver, whenFalse: handOver, ids: ids)
 
-	_ = emitSchedSpinningTransition(module, block: handOver, m: chosenMachine, transition: SpinningTransition.handOverSpinning, ids: ids)
-	module.setTerminator(handOver, op: StdOp.branch(deliver.id))
+	emitSchedHandOverCredit(module, func: func, cur: handOver, m: chosenMachine, cont: deliver, ids: ids)
 
 	emitStoreField(module, block: deliver, record: chosenMachine, offset: MOffNextP, value: chosenProc)
 	let parkEvent = emitLoadField(module, block: deliver, record: chosenMachine, offset: MOffParkEvent, ids: ids)
@@ -6132,27 +6111,22 @@ function buildSchedStartM(module StdModule, target Target)
 	// ⭐⭐⭐ **THE LOCK IS HELD ACROSS `osThreadCreate` DELIBERATELY.** `__sched_stop_workers` sets the shutdown
 	// flag inside this same critical section and then walks `__sched_allm`; holding it here is what makes
 	// *"no machine is created after the flag is set"* a fact rather than a window, and what makes every machine
-	// on the roster already carry the handle that will join it. The new thread touches none of the words
-	// written here (see `emitSchedAllocM`), so it is free to run the moment `osThreadCreate` returns.
+	// on the roster already carry the handle that will join it. The new thread writes none of the words
+	// this call writes after creating it (see `emitSchedAllocM`), so it is free to run the moment `osThreadCreate` returns.
 	//
-	// ⭐⭐ **AND A RESERVED CREDIT IS GIVEN BACK RATHER THAN HANDED OVER** — `credit` is 1 or 0, so the step is
-	// `-credit`. `MOffSpinning` belongs to a struct whose spinning state is meaningful only once the thread
-	// exists, and a credit stamped on a machine that has not started is a unit no CAS can reclaim if
-	// `osThreadCreate` then fails. The new machine claims its own at `__sched_find_runnable`'s spinner cap, if
-	// the cap lets it search.
-	//
-	// ⇒ **The count is therefore 0 rather than 1 for the length of one thread creation**, which can only let a
-	// concurrent publisher issue an EXTRA wakeup — and that wakeup finds `__sched_pidle` empty (this call took
-	// the processor it wanted) and gives its own credit straight back. **The error is in the direction that
-	// cannot lose work**: a suppressed wakeup strands a green thread with no machine coming for it, an extra one
-	// costs two list operations. `SchedSpinningLabel` carries what the suppressed direction costs.
-	emitSchedGiveBackCredit(module, block: spawnStart, credit: credit, ids: ids)
+	// ⭐⭐ **AND A RESERVED CREDIT IS HANDED TO THE NEW MACHINE BEFORE ITS THREAD EXISTS — Go's `newm` with
+	// `mspinning`.** The machine is born spinning, so the unit stays counted for the whole of its creation and
+	// `osThreadCreate` is the only place it can still go wrong: a failed creation gives it back at `smspawnfailed`.
 	let newMachine = emitSchedAllocM(module, block: spawnStart, nextP: chosenProc, ids: ids)
+	emitBranchOnCompare(module, block: spawnStart, value: credit, pred: StdCmpPred.eq, against: SchedStartMCredit.unreserved.rawValue, whenTrue: spawnCreate, whenFalse: spawnSpin, ids: ids)
+
+	emitSchedHandOverCredit(module, func: func, cur: spawnSpin, m: newMachine, cont: spawnCreate, ids: ids)
+
 	let entryPtr = ids.mint()
-	module.appendOp(spawnStart, op: StdOp.funcAddr(entryPtr, funcName: SchedWorkerLoopName))
+	module.appendOp(spawnCreate, op: StdOp.funcAddr(entryPtr, funcName: SchedWorkerLoopName))
 	let threadHandle = ids.mint()
-	module.appendOp(spawnStart, op: StdOp.osThreadCreate(threadHandle, entryPtrId: entryPtr, argId: newMachine))
-	emitBranchOnCompare(module, block: spawnStart, value: threadHandle, pred: StdCmpPred.eq, against: 0, whenTrue: spawnFailed, whenFalse: spawnOk, ids: ids)
+	module.appendOp(spawnCreate, op: StdOp.osThreadCreate(threadHandle, entryPtrId: entryPtr, argId: newMachine))
+	emitBranchOnCompare(module, block: spawnCreate, value: threadHandle, pred: StdCmpPred.eq, against: 0, whenTrue: spawnFailed, whenFalse: spawnOk, ids: ids)
 
 	// ⭐ **THE HANDLE IS STORED AND THE ROSTER IS JOINED IN THAT ORDER, AND ONLY ON SUCCESS.** The roster is
 	// what the teardown joins by, so a machine reachable through it must already carry a joinable handle —
@@ -6167,12 +6141,12 @@ function buildSchedStartM(module StdModule, target Target)
 	// list: without this it is a processor no machine will ever adopt and no `pidleget` can ever find — the box
 	// quietly losing a core for the life of the process, with nothing hanging (the machines already running
 	// still service the queues) and therefore nothing to notice. The M struct and its event are left behind
-	// unreferenced, which is the same non-freeing every other M gets; the credit is already back, so the
-	// processor is all there is to return. ⚠ A processor `handoffp` handed over may still hold the work it was
-	// handed over for, so its ring goes to the global queue first. A reserved wake has started nobody, so
-	// `__sched_needspinning` goes up exactly as at `smnop`.
+	// unreferenced, which is the same non-freeing every other M gets. ⚠ A processor `handoffp` handed over may
+	// still hold the work it was handed over for, so its ring goes to the global queue first. A reserved wake has
+	// started nobody, so its credit goes back and `__sched_needspinning` goes up exactly as at `smnop`.
 	emitSchedDrainRunqLocked(module, block: spawnFailed, p: chosenProc, cont: spawnFailedDrained, ids: ids)
 	var spawnFailedIdled = emitSchedPidlePutLocked(module, func: func, cur: spawnFailedDrained, p: chosenProc, holdsWorkLabel: b"smfailedheldwork", emptyLabel: b"smfailedidle", ids: ids)
+	emitSchedGiveBackCredit(module, block: spawnFailedIdled, credit: credit, ids: ids)
 	emitSchedRaiseNeedSpinningIfReserved(module, block: spawnFailedIdled, credit: credit, ids: ids)
 	emitSchedLockLeave(module, block: spawnFailedIdled, ids: ids)
 	module.setTerminator(spawnFailedIdled, op: StdOp.retVoid)
@@ -6193,39 +6167,33 @@ function emitSchedRaiseNeedSpinningIfReserved(module StdModule, block IrBlock, c
 	emitStoreGlobalWord(module, block: block, label: SchedNeedSpinningLabel, value: emitBin(module, block: block, a: neededBefore, b: credit, opcode: StdBinOpcode.bitOr, ids: ids), ids: ids)
 end 'emitSchedRaiseNeedSpinningIfReserved'
 
+function emitSchedRaiseNeedSpinning(module StdModule, block IrBlock, ids ValueMinter)
+	emitStoreGlobalWord(module, block: block, label: SchedNeedSpinningLabel, value: emitConst(module, block: block, value: SchedNeedSpinningRaised, ids: ids), ids: ids)
+end 'emitSchedRaiseNeedSpinning'
+
 // Call `__sched_startm` on `p` — 0 for *"take one off `__sched_pidle`"*.
 function emitSchedStartM(module StdModule, block IrBlock, p ValueId, credit SchedStartMCredit, ids ValueMinter)
 	let creditArg = emitConst(module, block: block, value: credit.rawValue, ids: ids)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SchedStartMName, args: twoArgs(p, second: creditArg)))
 end 'emitSchedStartM'
 
-// ⭐⭐ **TAKE `m` OFF `__sched_midle` IF IT IS STILL ON IT — the removal a SIGNALLED park needs, and Go's
-// `stopm` does not.** Go wakes an idle machine only after `mget` has taken it off the list, so *"woken"* and
-// *"removed"* are one event. Here a machine is also woken by signals that hand it nothing — the main machine's
-// (`emitSchedSignalMainMachine`) and the teardown's — so a machine can wake on a road no `mget` took it off.
-//
-// ⇒ **the machine takes itself off on EVERY wake, in the same critical section that reads `MOffNextP`**, so
-// the pair (on the list / holding a delivered processor) is read as one transaction. A machine that was
-// taken off finds itself absent and does nothing; one that was only signalled unlinks itself and re-joins
-// before its next wait, which keeps *"on `__sched_midle`" == "blocked on `MOffParkEvent`"* exact.
-//
-// ⭐⭐ **THE WINDOW THIS OPENS LETS THE MACHINE COUNT DRIFT ABOVE THE PROCESSOR COUNT, AND IT IS BOUNDED.**
-// Between `wdowait` returning and `wjoin` re-joining, a machine is off `__sched_midle` AND holds no
-// processor, while the processor it released at `wpark` is still on `__sched_pidle`. A publish landing in
-// that window reaches `__sched_startm`, finds a processor and no idle machine, and creates one — never
-// reclaimed, because an M is never freed. It self-limits (k extra machines need k parking machines inside
-// their windows at once), `multicore-stress/pin-matrix.sh` reads the high-water mark off
-// `__Builtins.schedMaxActiveWorkers()`, and `SchedMaxMachines` is the ceiling. ⚠ **Anything added between
-// `wdowait` and `wjoin` widens the window and owes that reading again.**
-function emitSchedMidleRemoveLocked(module StdModule, func IrFunction, cur IrBlock, m ValueId, cont IrBlock, ids ValueMinter)
-	var stillIdle = module.addBlock(func, label: b"mrmonlist", heat: BlockHeat.normal)
+// ⭐⭐ **SIGNAL MACHINE `m`, FIRST TAKING IT OFF `__sched_midle` IF IT IS ON IT — the removal every waker of
+// a machine on that list makes, so *"woken"* and *"removed"* are one event as they are in Go (`mget`).** The machine
+// does not take itself off on waking: one still on the list at that point was woken by nobody, and waits
+// again. `__sched_lock` held. It terminates `cur` and answers the block to continue in.
+function emitSchedSignalMachineLocked(module StdModule, func IrFunction, cur IrBlock, m ValueId, labelPrefix String, ids ValueMinter) returns IrBlock
+	var unlist = module.addBlock(func, label: "{labelPrefix}unlist".toByteArray(), heat: BlockHeat.normal)
+	var signal = module.addBlock(func, label: "{labelPrefix}wake".toByteArray(), heat: BlockHeat.normal)
 
 	let onList = emitSchedMidleHolds(module, block: cur, m: m, ids: ids)
-	emitBranchOnCompare(module, block: cur, value: onList, pred: StdCmpPred.eq, against: 0, whenTrue: cont, whenFalse: stillIdle, ids: ids)
+	emitBranchOnCompare(module, block: cur, value: onList, pred: StdCmpPred.eq, against: 0, whenTrue: signal, whenFalse: unlist, ids: ids)
 
-	var unlinked = emitSchedMidleUnlinkLocked(module, func: func, cur: stillIdle, m: m, ids: ids)
-	module.setTerminator(unlinked, op: StdOp.branch(cont.id))
-end 'emitSchedMidleRemoveLocked'
+	var unlinked = emitSchedMidleUnlinkLocked(module, func: func, cur: unlist, m: m, ids: ids)
+	module.setTerminator(unlinked, op: StdOp.branch(signal.id))
+
+	emitSchedWakeMachine(module, block: signal, m: m, ids: ids)
+	return signal
+end 'emitSchedSignalMachineLocked'
 
 export function emitSchedStartLockedMachine(module StdModule, func IrFunction, cur IrBlock, owner ValueId, strand ValueId, gave IrBlock, declined IrBlock, ids ValueMinter)
 	var examineProc = module.addBlock(func, label: b"slmproc", heat: BlockHeat.cold)
@@ -6239,16 +6207,17 @@ export function emitSchedStartLockedMachine(module StdModule, func IrFunction, c
 	emitBranchOnCompare(module, block: examineProc, value: p, pred: StdCmpPred.eq, against: 0, whenTrue: declined, whenFalse: giveIt, ids: ids)
 
 	var ended = emitSchedLockedParkEndLocked(module, func: func, cur: giveIt, m: owner, ids: ids)
-	let nobody = emitConst(module, block: ended, value: 0, ids: ids)
 	emitStoreField(module, block: ended, record: owner, offset: MOffLockedStrand, value: strand)
-	emitStoreField(module, block: ended, record: m, offset: MOffCurrentP, value: nobody)
-	emitStoreField(module, block: ended, record: p, offset: POffM, value: nobody)
-	emitStoreField(module, block: ended, record: p, offset: POffOldM, value: m)
-	emitStoreField(module, block: ended, record: owner, offset: MOffNextP, value: p)
-	emitSchedLockLeave(module, block: ended, ids: ids)
-	emitSchedWakeMachine(module, block: ended, m: owner, ids: ids)
+	emitSchedGiveProcessorAndWake(module, block: ended, m: m, p: p, recipient: owner, ids: ids)
 	module.setTerminator(ended, op: StdOp.branch(gave.id))
 end 'emitSchedStartLockedMachine'
+
+function emitSchedGiveProcessorAndWake(module StdModule, block IrBlock, m ValueId, p ValueId, recipient ValueId, ids ValueMinter)
+	emitSchedDetachProcLocked(module, block: block, m: m, p: p, ids: ids)
+	emitStoreField(module, block: block, record: recipient, offset: MOffNextP, value: p)
+	emitSchedLockLeave(module, block: block, ids: ids)
+	emitSchedWakeMachine(module, block: block, m: recipient, ids: ids)
+end 'emitSchedGiveProcessorAndWake'
 
 function emitSchedLockedParkCountLocked(module StdModule, func IrFunction, cur IrBlock, m ValueId, ids ValueMinter) returns IrBlock
 	var counting = module.addBlock(func, label: b"lpcounting", heat: BlockHeat.cold)
@@ -6296,13 +6265,7 @@ export function emitSchedHandProcessorToOwner(module StdModule, func IrFunction,
 	emitBranchOnCompare(module, block: examineOwner, value: onList, pred: StdCmpPred.eq, against: 0, whenTrue: drainIt, whenFalse: giveIt, ids: ids)
 
 	var unlinked = emitSchedMidleUnlinkLocked(module, func: func, cur: giveIt, m: owner, ids: ids)
-	let nobody = emitConst(module, block: unlinked, value: 0, ids: ids)
-	emitStoreField(module, block: unlinked, record: m, offset: MOffCurrentP, value: nobody)
-	emitStoreField(module, block: unlinked, record: p, offset: POffM, value: nobody)
-	emitStoreField(module, block: unlinked, record: p, offset: POffOldM, value: m)
-	emitStoreField(module, block: unlinked, record: owner, offset: MOffNextP, value: p)
-	emitSchedLockLeave(module, block: unlinked, ids: ids)
-	emitSchedWakeMachine(module, block: unlinked, m: owner, ids: ids)
+	emitSchedGiveProcessorAndWake(module, block: unlinked, m: m, p: p, recipient: owner, ids: ids)
 	module.setTerminator(unlinked, op: StdOp.branch(handedOff.id))
 
 	emitSchedDrainRunqLocked(module, block: drainIt, p: p, cont: releaseIt, ids: ids)
@@ -6313,9 +6276,9 @@ export function emitSchedHandProcessorToOwner(module StdModule, func IrFunction,
 	module.appendOp(released, op: StdOp.call(ids.mint(), callee: NetpollBreakName, args: ValueIdArray.create()))
 	module.setTerminator(released, op: StdOp.branch(handedOff.id))
 
-	emitSchedLockLeave(module, block: keepIt, ids: ids)
-	emitSchedWakeMachine(module, block: keepIt, m: owner, ids: ids)
-	module.setTerminator(keepIt, op: StdOp.branch(kept.id))
+	var keepSignalled = emitSchedSignalMachineLocked(module, func: func, cur: keepIt, m: owner, labelPrefix: "hpkeep", ids: ids)
+	emitSchedLockLeave(module, block: keepSignalled, ids: ids)
+	module.setTerminator(keepSignalled, op: StdOp.branch(kept.id))
 end 'emitSchedHandProcessorToOwner'
 
 // ==========================================================================
@@ -6363,18 +6326,20 @@ end 'emitSchedMainLoop'
 // where its event cannot reach it, and asking first would race its claim: the claim reads the count before it
 // stores `__sched_lastpoll`, and a signaller would move the count before reading it — the two reads can pass
 // each other. A break to a poller that is not the main machine, or to none, costs one early return.
-function emitSchedSignalMainMachine(module StdModule, block IrBlock, ids ValueMinter)
-	let mainMachine = emitLoadGlobalWord(module, block: block, label: SchedMainMLabel, ids: ids)
-	module.appendOp(block, op: StdOp.osSetEvent(emitLoadField(module, block: block, record: mainMachine, offset: MOffParkEvent, ids: ids)))
-	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NetpollBreakName, args: ValueIdArray.create()))
+function emitSchedSignalMainMachine(module StdModule, func IrFunction, cur IrBlock, ids ValueMinter) returns IrBlock
+	let mainMachine = emitLoadGlobalWord(module, block: cur, label: SchedMainMLabel, ids: ids)
+	var signalled = emitSchedSignalMachineLocked(module, func: func, cur: cur, m: mainMachine, labelPrefix: "signalmain", ids: ids)
+	module.appendOp(signalled, op: StdOp.call(ids.mint(), callee: NetpollBreakName, args: ValueIdArray.create()))
+	return signalled
 end 'emitSchedSignalMainMachine'
 
 // ⭐⭐ **MOVE THE PROCESS TO `phase` AND WAKE THE MAIN MACHINE, WHOSE LOOP DECIDES BY IT.** `__sched_lock`
 // held. EXPORTED for `GtRuntime.__gt_runner_done`,
-// which moves it when `main` completes; `__sched_checkdead` is the other mover.
-export function emitSchedEnterPhaseLocked(module StdModule, block IrBlock, phase SchedPhase, ids ValueMinter)
-	emitStoreReleaseGlobalWord(module, block: block, label: SchedPhaseLabel, value: emitConst(module, block: block, value: phase.rawValue, ids: ids), ids: ids)
-	emitSchedSignalMainMachine(module, block: block, ids: ids)
+// which moves it when `main` completes; `__sched_checkdead` is the other mover. It terminates `cur` and
+// answers the block to continue in.
+export function emitSchedEnterPhaseLocked(module StdModule, func IrFunction, cur IrBlock, phase SchedPhase, ids ValueMinter) returns IrBlock
+	emitStoreReleaseGlobalWord(module, block: cur, label: SchedPhaseLabel, value: emitConst(module, block: cur, value: phase.rawValue, ids: ids), ids: ids)
+	return emitSchedSignalMainMachine(module, func: func, cur: cur, ids: ids)
 end 'emitSchedEnterPhaseLocked'
 
 // 1 when the loaded phase word `phase` is `want`, else 0.
@@ -6487,16 +6452,16 @@ function buildSchedCheckdead(module StdModule)
 	_ = emitGtReady(module, block: quiescerClaimed, gt: quiescer, gate: GtReadyGate.fromWaiting, ids: ids)
 	emitBranchOnCompare(module, block: quiescerClaimed, value: road, pred: StdCmpPred.eq, against: SchedParkRoad.ordinary.rawValue, whenTrue: quiescerSignalled, whenFalse: doneBlock, ids: ids)
 
-	module.appendOp(quiescerSignalled, op: StdOp.osSetEvent(emitLoadField(module, block: quiescerSignalled, record: m, offset: MOffParkEvent, ids: ids)))
-	module.setTerminator(quiescerSignalled, op: StdOp.branch(doneBlock.id))
+	var quiescerWoken = emitSchedSignalMachineLocked(module, func: func, cur: quiescerSignalled, m: m, labelPrefix: "cdquiesce", ids: ids)
+	module.setTerminator(quiescerWoken, op: StdOp.branch(doneBlock.id))
 
 	emitRuntimeAbort(module, func: func, block: deadlocked, abort: RuntimeAbort.schedulerDeadlock, ids: ids)
 
 	let draining = emitSchedPhaseIs(module, block: notMainRunning, phase: phase, want: SchedPhase.draining, ids: ids)
 	module.setTerminator(notMainRunning, op: StdOp.condBranch(draining, thenBlockId: stuck.id, elseBlockId: doneBlock.id))
 
-	emitSchedEnterPhaseLocked(module, block: stuck, phase: SchedPhase.stuck, ids: ids)
-	module.setTerminator(stuck, op: StdOp.branch(doneBlock.id))
+	var stuckSignalled = emitSchedEnterPhaseLocked(module, func: func, cur: stuck, phase: SchedPhase.stuck, ids: ids)
+	module.setTerminator(stuckSignalled, op: StdOp.branch(doneBlock.id))
 
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
 	module.functions.push(func)
@@ -6549,6 +6514,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	var dequeue = module.addBlock(func, label: b"wdequeue", heat: BlockHeat.normal)
 	var sortWork = module.addBlock(func, label: b"wsortwork", heat: BlockHeat.normal)
 	var handedOffProc = module.addBlock(func, label: b"whandedoff", heat: BlockHeat.cold)
+	var handedOffLocking = module.addBlock(func, label: b"whandedofflock", heat: BlockHeat.cold)
 	var haveWork = module.addBlock(func, label: b"wrun", heat: BlockHeat.normal)
 	var foundWork = module.addBlock(func, label: b"wfound", heat: BlockHeat.normal)
 	var idlePoll = module.addBlock(func, label: b"widlepoll", heat: BlockHeat.normal)
@@ -6556,11 +6522,15 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	var park = module.addBlock(func, label: b"wpark", heat: BlockHeat.normal)
 	var doRelease = module.addBlock(func, label: b"wrelease", heat: BlockHeat.normal)
 	var abandonPark = module.addBlock(func, label: b"wabandon", heat: BlockHeat.normal)
-	var parkDrain = module.addBlock(func, label: b"wparkdrain", heat: BlockHeat.normal)
-	var unspunPark = module.addBlock(func, label: b"wunspun", heat: BlockHeat.normal)
+	var abandonGlobal = module.addBlock(func, label: b"wabandonglobal", heat: BlockHeat.normal)
+	var parkGlobal = module.addBlock(func, label: b"wparkglobal", heat: BlockHeat.normal)
+	var parkNeed = module.addBlock(func, label: b"wparkneed", heat: BlockHeat.normal)
+	var parkRecheck = module.addBlock(func, label: b"wparkrecheck", heat: BlockHeat.normal)
+	var parkSpinRegain = module.addBlock(func, label: b"wparkspinregain", heat: BlockHeat.normal)
+	var parkSpinNoProc = module.addBlock(func, label: b"wparkspinnop", heat: BlockHeat.normal)
+	var parkTail = module.addBlock(func, label: b"wparktail", heat: BlockHeat.normal)
 	var parkCheck = module.addBlock(func, label: b"wparkcheck", heat: BlockHeat.normal)
 	var parkRegain = module.addBlock(func, label: b"wregain", heat: BlockHeat.normal)
-	var parkResume = module.addBlock(func, label: b"wresume", heat: BlockHeat.normal)
 	var parkStopTest = module.addBlock(func, label: b"wstoptest", heat: BlockHeat.normal)
 	var idleTail = module.addBlock(func, label: b"wtail", heat: BlockHeat.normal)
 	var claimPoller = module.addBlock(func, label: b"wclaim", heat: BlockHeat.normal)
@@ -6574,7 +6544,8 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	var parkJoin = module.addBlock(func, label: b"wjoin", heat: BlockHeat.normal)
 	var doWait = module.addBlock(func, label: b"wdowait", heat: BlockHeat.normal)
 	var afterWait = module.addBlock(func, label: b"wafterwait", heat: BlockHeat.normal)
-	var taken = module.addBlock(func, label: b"wtaken", heat: BlockHeat.normal)
+	var rewait = module.addBlock(func, label: b"wrewait", heat: BlockHeat.normal)
+	var delivered = module.addBlock(func, label: b"wdelivered", heat: BlockHeat.normal)
 	var adoptGiven = module.addBlock(func, label: b"wadopt", heat: BlockHeat.normal)
 	var exitBlock = module.addBlock(func, label: b"wexit", heat: BlockHeat.normal)
 
@@ -6658,7 +6629,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	// went idle. The due test reads the published earliest deadline without the lock
 	// (`GtRuntime.emitGtBranchOnTimerDue`), so a schedule takes the lock only when a timer really is due. The
 	// fire's wake debt is not paid here: this machine searches next and finds what it readied, and `wfound`
-	// hands the looking on if more than that remains.
+	// pays it.
 	let owed = ids.mint()
 	dequeue.blockArgs.push(IrBlockArg.create(owed, argType: StdType.i64))
 	let noDebt = emitConst(module, block: checkTimers, value: WakeDebtNone, ids: ids)
@@ -6672,26 +6643,30 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	// ⭐⭐ **THE SEARCH STARTS UNCREDITED, AS GO'S `findRunnable` DOES.** A machine back from running a strand
 	// consults its own ring and the global queue as an ordinary machine; it becomes a SPINNER — one unit of
 	// `__sched_nmspinning` — only when `__sched_find_runnable`'s spinner cap admits it to the steal rounds, or
-	// when a waker handed it a credit before signalling it. `wfound` and `wpark` are the search's two exits and
-	// both release whatever credit the machine holds; `SchedSpinningLabel` carries what a leaked one costs.
+	// when a waker handed it a credit before signalling it. `wfound`, `whandedoff` and the park release
+	// whatever credit the machine holds, except the park's `wabandonglobal`, which searches again and keeps it;
+	// `SchedSpinningLabel` carries what a leaked one costs.
 	let g = emitSchedFindRunnable(module, block: dequeue, m: m, ids: ids)
 	let empty = emitCompareWithConstant(module, block: dequeue, value: g, pred: StdCmpPred.eq, against: 0, ids: ids)
 	emitBranchOnCompare(module, block: dequeue, value: g, pred: StdCmpPred.eq, against: GtProcessorHandedOff, whenTrue: handedOffProc, whenFalse: sortWork, ids: ids)
 	module.setTerminator(sortWork, op: StdOp.condBranch(empty, thenBlockId: idlePoll.id, elseBlockId: foundWork.id))
 
-	_ = emitSchedSpinningTransition(module, block: handedOffProc, m: m, transition: SpinningTransition.stopSpinning, ids: ids)
-	emitSchedLockEnter(module, block: handedOffProc, ids: ids)
-	module.setTerminator(handedOffProc, op: StdOp.branch(parkCheck.id))
+	let handedOffSpinning = emitSchedSpinningTransition(module, block: handedOffProc, m: m, transition: SpinningTransition.stopSpinning, ids: ids)
+	let handedOffHeldNoCredit = emitCasLost(module, block: handedOffProc, result: handedOffSpinning, ids: ids)
+	emitSchedHandOnTheLooking(module, func: func, cur: handedOffProc, nothingSkipped: handedOffHeldNoCredit, cont: handedOffLocking, wakeLabel: b"whandedoffwake", ids: ids)
+
+	emitSchedLockEnter(module, block: handedOffLocking, ids: ids)
+	module.setTerminator(handedOffLocking, op: StdOp.branch(parkCheck.id))
 
 	// ⭐⭐⭐ **FOUND A TOKEN ⇒ A SPINNER HAS STOPPED LOOKING, AND IT OWES THE LOOKING TO SOMEBODY ELSE.** Go's
 	// `resetspinning` — decrement, then `wakep` — for a machine that WAS spinning, and for one whose own fire
 	// readied work and skipped the wake that work owed: either way a publish may be waiting that nobody was
-	// woken for. `emitSchedHandOnTheLooking` carries the re-check.
+	// woken for. `emitSchedHandOnTheLooking` pays the wake.
 	let wasSpinning = emitSchedSpinningTransition(module, block: foundWork, m: m, transition: SpinningTransition.stopSpinning, ids: ids)
 	let heldNoCredit = emitCasLost(module, block: foundWork, result: wasSpinning, ids: ids)
 	let owesNothing = emitCompareWithConstant(module, block: foundWork, value: owed, pred: StdCmpPred.eq, against: WakeDebtNone, ids: ids)
 	let nothingSkipped = emitBin(module, block: foundWork, a: heldNoCredit, b: owesNothing, opcode: StdBinOpcode.bitAnd, ids: ids)
-	emitSchedHandOnTheLooking(module, func: func, cur: foundWork, nothingSkipped: nothingSkipped, cont: haveWork, checkLabel: b"wrecheck", wakeLabel: b"wwakemore", pollerLabel: b"wwakepoller", ids: ids)
+	emitSchedHandOnTheLooking(module, func: func, cur: foundWork, nothingSkipped: nothingSkipped, cont: haveWork, wakeLabel: b"wwakemore", ids: ids)
 
 	emitSchedRunStrand(module, block: haveWork, m: m, g: g, handedOff: handedOffProc, cont: loopTop, ids: ids)
 
@@ -6702,7 +6677,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	// (`GtRuntime.emitGtPollStores`).
 	//
 	// ⭐⭐ **THE WAKE DEBT GOES TO `wdequeue` RATHER THAN BEING PAID.** The thread fired onto this ring is run by
-	// this machine, which searches next; `wfound` hands the looking on if more remains.
+	// this machine, which searches next; `wfound` pays it.
 	emitGtPollStores(module, func: func, cur: idlePoll, cont: idleFire, ids: ids)
 
 	let idleDebt = ids.mint()
@@ -6711,76 +6686,67 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	emitBranchOnCompare(module, block: idleFire, value: firedAny, pred: StdCmpPred.eq, against: 0, whenTrue: park, whenFalse: dequeue, ids: ids)
 	idleFire.branchEdges.push(BranchEdge.create(dequeue.id, argIds: argsOf(idleDebt)))
 
-	// ==================================================================================================
-	// ⭐⭐⭐ THE PARK — ONE CRITICAL SECTION
-	// ==================================================================================================
-	//
-	// ⛔⛔ **THE MISSED-WAKEUP ARGUMENT IS AN INTERLEAVING ARGUMENT OVER TWO CRITICAL SECTIONS.** Giving the
-	// processor up, taking the FINAL look at every queue, and joining `__sched_midle` all happen inside one hold
-	// of `__sched_lock`; `wakep`'s whole body — `pidleget`, `mget`, the delivery of the processor — happens
-	// inside another. Two parties serialised by a mutex interleave in exactly two ways, and this machine is safe
-	// in both:
-	//
-	//   • **THE PUBLISHER GOES FIRST.** Its `pidleget` runs before this processor has been released, so it
-	//     either takes some OTHER idle processor (and that machine finds the work) or finds none and returns.
-	//     Either way its publish is complete and visible before this machine's own critical section begins —
-	//     so the final look below SEES it, and this machine takes a processor back rather than parking.
-	//   • **THIS MACHINE GOES FIRST.** It leaves with its processor on `__sched_pidle` and itself on
-	//     `__sched_midle`. The publisher's `pidleget` then finds that processor and its `mget` finds this
-	//     machine, and it is signalled.
-	//
-	// ⚠ **THE ONE WINDOW LEFT IS BETWEEN THE RELEASE AND THE `osWaitHandle` ITSELF, AND THE AUTO-RESET EVENT
-	// IS WHAT COVERS IT** — a signal that lands there leaves the event signalled and the wait returns at once.
-	//
-	// A publisher that reads `__sched_npidle` as zero enters neither critical section; the re-scan
-	// after the release covers it.
-	//
-	// ⭐⭐ **THE SPINNING CREDIT COMES BACK BEFORE THE LOCK IS TAKEN, AND EVERY PARKER LOOKS AGAIN
-	// EVERYWHERE AFTER IT RELEASES ITS PROCESSOR.** The decrement must precede that look, with a
-	// StoreLoad barrier between; the other order loses work submitted between the search and the
-	// decrement. `SchedSpinningLabel` carries the full dance.
-	let wasSpinningAtPark = emitSchedSpinningTransition(module, block: park, m: m, transition: SpinningTransition.stopSpinning, ids: ids)
-	let hadNoCredit = emitCasLost(module, block: park, result: wasSpinningAtPark, ids: ids)
+	// ⭐⭐ **THE PARK — Go's `findRunnable` tail, then `stopm`.** The ring drain, the global look, the
+	// `__sched_needspinning` test and the release of the processor are one hold of `__sched_lock`, and
+	// `__sched_startm` takes the same lock. A publish after that hold whose wake is not suppressed finds this
+	// processor idle, and `__sched_startm` wakes an idle machine for it or creates one — which is why the
+	// idle-list join may come in a later hold. A wake suppressed because this machine was counted spinning is
+	// the re-check's below; one that found no idle processor raised `__sched_needspinning`, which the test reads.
 	emitSchedLockEnter(module, block: park, ids: ids)
 	let releasing = emitLoadField(module, block: park, record: m, offset: MOffCurrentP, ids: ids)
-	module.setTerminator(park, op: StdOp.condBranch(hadNoCredit, thenBlockId: unspunPark.id, elseBlockId: parkDrain.id))
+
+	// ⭐⭐ **THE RING GOES TO THE GLOBAL QUEUE BEFORE THE PROCESSOR IS IDLED.** `__sched_find_runnable` answered
+	// 0 a moment ago, but a publish can land in this ring between that answer and this lock, and a processor on
+	// `__sched_pidle` must hold nothing (`emitSchedPidlePutLocked`'s assertion). The global look just below sees
+	// the drained work and this machine searches again.
+	emitSchedDrainRunqLocked(module, block: park, p: releasing, cont: parkGlobal, ids: ids)
+
+	let spinningAtPark = emitLoadField(module, block: parkGlobal, record: m, offset: MOffSpinning, ids: ids)
+	let parkedSpinning = emitCompareWithConstant(module, block: parkGlobal, value: spinningAtPark, pred: StdCmpPred.eq, against: MSpinningHeld, ids: ids)
+	let globalWaiting = emitSchedGlobalQueueIs(module, block: parkGlobal, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(parkGlobal, op: StdOp.condBranch(globalWaiting, thenBlockId: abandonGlobal.id, elseBlockId: parkNeed.id))
+
+	emitSchedLockLeave(module, block: abandonGlobal, ids: ids)
+	module.setTerminator(abandonGlobal, op: StdOp.branch(loopTop.id))
 
 	// ⭐⭐ **A MACHINE THAT WAS NOT SPINNING ABANDONS THE PARK WHEN `__sched_needspinning` IS RAISED** — Go's
 	// `findRunnable` before `releasep`. Somebody counted work that no spinner will find and started nobody to
 	// search for it; this machine still holds a processor, so it becomes the spinner. The read is inside the lock
 	// every raise is made under, and a raiser that comes after this section finds the processor this machine
 	// releases idle, so it has nothing to raise.
-	let needed = emitLoadGlobalWord(module, block: unspunPark, label: SchedNeedSpinningLabel, ids: ids)
-	emitBranchOnCompare(module, block: unspunPark, value: needed, pred: StdCmpPred.ne, against: 0, whenTrue: abandonPark, whenFalse: parkDrain, ids: ids)
+	let needed = emitLoadGlobalWord(module, block: parkNeed, label: SchedNeedSpinningLabel, ids: ids)
+	let needsSpinner = emitCompareWithConstant(module, block: parkNeed, value: needed, pred: StdCmpPred.ne, against: 0, ids: ids)
+	let notSpinning = emitCompareWithConstant(module, block: parkNeed, value: parkedSpinning, pred: StdCmpPred.eq, against: 0, ids: ids)
+	let mustSpin = emitBin(module, block: parkNeed, a: needsSpinner, b: notSpinning, opcode: StdBinOpcode.bitAnd, ids: ids)
+	module.setTerminator(parkNeed, op: StdOp.condBranch(mustSpin, thenBlockId: abandonPark.id, elseBlockId: doRelease.id))
 
 	_ = emitSchedSpinningTransition(module, block: abandonPark, m: m, transition: SpinningTransition.becomeSpinning, ids: ids)
 	emitSchedLockLeave(module, block: abandonPark, ids: ids)
 	module.setTerminator(abandonPark, op: StdOp.branch(loopTop.id))
 
-	// ⭐⭐ **THE RING GOES TO THE GLOBAL QUEUE BEFORE THE PROCESSOR IS IDLED.** `__sched_find_runnable` answered
-	// 0 a moment ago, but a publish can land in this ring between that answer and this lock, and a processor on
-	// `__sched_pidle` must hold nothing (`emitSchedPidlePutLocked`'s assertion). The final look then sees the
-	// drained work and this machine takes a processor straight back. No wake is owed: it looks again itself.
-	emitSchedDrainRunqLocked(module, block: parkDrain, p: releasing, cont: doRelease, ids: ids)
-
 	var released = emitSchedReleaseProcLocked(module, func: func, cur: doRelease, m: m, p: releasing, holdsWorkLabel: b"wparkheldwork", emptyLabel: b"wparkidled", ids: ids)
+	emitSchedLockLeave(module, block: released, ids: ids)
+	module.setTerminator(released, op: StdOp.condBranch(parkedSpinning, thenBlockId: parkRecheck.id, elseBlockId: parkTail.id))
 
-	// Every parker, spinning or not, re-scans every run queue after the release, in Go's order:
-	// release first, then look. Two publishers skip their wake on an unlocked count: one that read
-	// `__sched_nmspinning` while this machine was counted, and one that read `__sched_npidle` before
-	// the release stepped it. Each is a Dekker pair: here a locked read-modify-write (the spinning
-	// decrement, the `npidle` step) precedes the scan, there a fenced publish precedes an acquire read
-	// of the count. So either the publisher sees the count or this scan sees its work.
-	//
-	// A positive answer cannot loop in place of a sleep: the machine resumes as a spinner, and a steal
-	// round takes a token from every ring that holds one, so it finds the work unless another machine
-	// took it first.
-	emitSchedBranchOnNoWork(module, block: released, whenNoWork: parkCheck, whenWork: parkRegain, ids: ids)
+	// Only a spinner looks again: a machine that parks uncounted let no publisher skip a wake
+	// (`SchedSpinningLabel`). Work the re-check finds with every processor held is left to the next parker
+	// through `__sched_needspinning` (`wparkspinnop`).
+	_ = emitSchedSpinningTransition(module, block: parkRecheck, m: m, transition: SpinningTransition.stopSpinning, ids: ids)
+	emitSchedBranchOnNoWork(module, block: parkRecheck, whenNoWork: parkTail, whenWork: parkSpinRegain, ids: ids)
+
+	emitSchedLockEnter(module, block: parkSpinRegain, ids: ids)
+	emitSchedRegainProcessor(module, func: func, cur: parkSpinRegain, m: m, resumeAt: loopTop, none: parkSpinNoProc, resumeLabel: b"wparkspinresume", target: target, ids: ids)
+
+	emitSchedRaiseNeedSpinning(module, block: parkSpinNoProc, ids: ids)
+	module.setTerminator(parkSpinNoProc, op: StdOp.branch(parkStopTest.id))
+
+	emitSchedLockEnter(module, block: parkTail, ids: ids)
+	module.setTerminator(parkTail, op: StdOp.branch(parkStopTest.id))
 
 	// ⭐⭐⭐ **THE FINAL LOOK: THE GLOBAL QUEUE.** Every road here arrives holding the lock and holding no
-	// processor, which is this block's whole precondition: a machine that has just released its processor
-	// (`wrelease`), one whose park ended without a processor handed over (`wtaken`), the poller back from its
-	// wait (`wpolledstores`), and the main machine entering its loop without one.
+	// processor, which is this block's whole precondition: a machine whose park ended without a processor
+	// handed over (`wdelivered`), the poller back from its wait (`wpolledstores`), a machine whose processor
+	// was handed off (`whandedoff`), and the main machine entering its loop without one.
 	//
 	// ⛔ **IT CANNOT BE `__sched_find_runnable`**: that function needs a ring, an rng and a tick, and
 	// dereferences `M->currentP` to get them three ops in, before any test. A machine between releasing its
@@ -6789,19 +6755,17 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	// ⭐ **THE GLOBAL QUEUE IS WHAT A PUBLISH OWING THIS MACHINE NO WAKE CAN STILL LEAVE BEHIND**: a yielding
 	// strand's token, the ring's overflow, this machine's own drained ring, and every publish by a party with no
 	// processor at all (the poller's own fire below). A publish to a ring
-	// owes its own wake, and the re-scan after the release is where a skipped one is caught.
+	// owes its own wake.
 	// `__sched_find_runnable`'s global-batch arm takes what this read sees, so a positive answer always makes
 	// progress.
 	let anythingLeft = emitSchedGlobalQueueIs(module, block: parkCheck, pred: StdCmpPred.ne, ids: ids)
 	emitBranchOnCompare(module, block: parkCheck, value: anythingLeft, pred: StdCmpPred.eq, against: 0, whenTrue: parkStopTest, whenFalse: parkRegain, ids: ids)
 
-	// There IS work. Take a processor back and go round again — Go's `checkRunqsNoP` arm. ⚠ **A failure here
+	// There IS work. Take a processor back and go round again. ⚠ **A failure here
 	// is not a contradiction and must not park us in a special way**: it means every processor is now held,
 	// which means every one of them has a machine on its way to `__sched_find_runnable`, so the work has an
 	// owner and this machine may sleep. The road out is `wstoptest`, the same one an empty scheduler takes.
-	let regained = emitSchedPidleGetLocked(module, func: func, cur: parkRegain, got: parkResume, none: parkStopTest, wakesMonitor: targetBracketsBlockingSyscalls(target), ids: ids)
-	emitSchedResumeFromPark(module, block: parkResume, m: m, p: regained, ids: ids)
-	module.setTerminator(parkResume, op: StdOp.branch(loopTop.id))
+	emitSchedRegainProcessor(module, func: func, cur: parkRegain, m: m, resumeAt: loopTop, none: parkStopTest, resumeLabel: b"wresume", target: target, ids: ids)
 
 	// ⭐ **THE EXIT TEST IS INSIDE THE CRITICAL SECTION, WHICH IS WHAT MAKES AN UNTIMED WAIT SAFE.** Whoever
 	// moves what the test reads — `__sched_stop_workers`'s flag, `__gt_runner_done`'s and `__sched_checkdead`'s
@@ -6883,9 +6847,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	module.setTerminator(breakPoller, op: StdOp.branch(parkJoin.id))
 
 	// Go's `stopm`: `mput`, then Go's `checkdead`. This is the instant the machine becomes findable as idle, and
-	// it is the LAST thing done under the lock — everything a waker needs (a processor on `__sched_pidle`, this
-	// machine on `__sched_midle`) is in place together or not at all, and the deadlock check sees this machine
-	// counted idle.
+	// it is the LAST thing done under the lock; the deadlock check sees this machine counted idle.
 	var joined = emitSchedMidlePutLocked(module, func: func, cur: parkJoin, m: m, ids: ids)
 	emitSchedCheckdead(module, block: joined, m: m, road: SchedParkRoad.ordinary, ids: ids)
 	emitSchedLockLeave(module, block: joined, ids: ids)
@@ -6900,22 +6862,23 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	emitSchedStepMachineWord(module, block: doWait, m: m, offset: MOffParkWakes, delta: OneMore, ids: ids)
 	module.setTerminator(doWait, op: StdOp.branch(afterWait.id))
 
-	// ⭐⭐⭐ **LEAVING THE IDLE LIST AND COLLECTING THE DELIVERED PROCESSOR ARE ONE TRANSACTION.** A machine
-	// wakes for two reasons and cannot tell them apart from the wait's own answer: a `__sched_startm` popped it
-	// off `__sched_midle` and stored a processor on `MOffNextP`, or a signal that hands over nothing (the main
-	// machine's, `emitSchedSignalMainMachine`, or the teardown's) ended it — and in the second it is still on the
-	// list. Reading the two facts under one hold of the lock is what makes the pair consistent.
+	// ⭐⭐⭐ **A WAKER TAKES THE MACHINE OFF `__sched_midle` BEFORE IT SIGNALS IT, SO A MACHINE STILL ON THE LIST
+	// WAS WOKEN BY NOBODY.** Whatever ended the wait — a stale signal left on the auto-reset event, say — it
+	// waits again without leaving or rejoining the list. A machine that is off the list was signalled by a
+	// waker that has already stored what it hands over on `MOffNextP`, or that hands over nothing and only
+	// sends it back round the final look. The list test and the read of `MOffNextP` are one hold of the lock.
 	emitSchedLockEnter(module, block: afterWait, ids: ids)
+	let stillListed = emitSchedMidleHolds(module, block: afterWait, m: m, ids: ids)
+	emitBranchOnCompare(module, block: afterWait, value: stillListed, pred: StdCmpPred.eq, against: 0, whenTrue: delivered, whenFalse: rewait, ids: ids)
 
-	// ⚠ Both halves are read HERE, in the block that dominates every exit the removal walk has, rather than
-	// carried as a block arg out of it: the walk's exits are its own blocks and it answers nothing, so a value
-	// defined in `wafterwait` is the only one all of them can see.
-	let givenProc = emitLoadField(module, block: afterWait, record: m, offset: MOffNextP, ids: ids)
-	emitStoreField(module, block: afterWait, record: m, offset: MOffNextP, value: emitConst(module, block: afterWait, value: 0, ids: ids))
-	emitSchedMidleRemoveLocked(module, func: func, cur: afterWait, m: m, cont: taken, ids: ids)
+	emitSchedLockLeave(module, block: rewait, ids: ids)
+	module.setTerminator(rewait, op: StdOp.branch(doWait.id))
+
+	let givenProc = emitLoadField(module, block: delivered, record: m, offset: MOffNextP, ids: ids)
+	emitStoreField(module, block: delivered, record: m, offset: MOffNextP, value: emitConst(module, block: delivered, value: 0, ids: ids))
 
 	// Handed nothing: back round the final look, holding the lock and no processor — its precondition.
-	emitBranchOnCompare(module, block: taken, value: givenProc, pred: StdCmpPred.eq, against: 0, whenTrue: parkCheck, whenFalse: adoptGiven, ids: ids)
+	emitBranchOnCompare(module, block: delivered, value: givenProc, pred: StdCmpPred.eq, against: 0, whenTrue: parkCheck, whenFalse: adoptGiven, ids: ids)
 
 	emitSchedLockLeave(module, block: adoptGiven, ids: ids)
 	emitSchedAdoptProc(module, block: adoptGiven, m: m, p: givenProc)
@@ -6942,28 +6905,18 @@ function emitSchedMainMachineEntry(module StdModule, func IrFunction, entry IrBl
 	module.setTerminator(enterIdle, op: StdOp.branch(noProc.id))
 end 'emitSchedMainMachineEntry'
 
-// ⭐⭐ **HAND THE LOOKING ON IF A PUBLISH MAY HAVE SKIPPED ITS WAKE.** Unless `nothingSkipped`, ask
-// `__sched_any_work` — every source a publisher may have skipped its wake for — and wake an idle M if it
-// answers yes, or `__sched_wake_poller` if it answers no; then continue at `cont`. It terminates `cur`.
-//
-// ⭐ **IT ASKS FIRST WHERE GO'S `resetspinning` WAKES UNCONDITIONALLY.** `wakep` on an empty scheduler is a
-// `SetEvent` plus a woken M's full search plus a `WaitForSingleObject`, paid to discover that there was
-// nothing, and a publish that lands after the read sees the count already down and wakes for itself.
-//
-// ⛔⛔ **IT ASKS EVERY ACTIVE PROCESSOR'S RING, NOT ONLY THIS ONE'S.** A publish to another machine's ring that
-// skipped its wake because this machine was spinning is stranded if nobody else looks: that ring's own machine
-// reaches its search only when its strand gives the machine up, and a strand that runs without parking holds
-// the work there for as long as it runs.
-//
-// ⭐⭐ **AND WITH NO WORK LEFT IT STILL OWES A DEADLINE ITS POLLER.** The poller leaves its role to run what it
-// fired, and resumes as a spinner — so a timer still pending with `__sched_lastpoll` non-zero is a deadline no
-// parked machine will wake for, and a parked one is woken to claim it.
-function emitSchedHandOnTheLooking(module StdModule, func IrFunction, cur IrBlock, nothingSkipped ValueId, cont IrBlock, checkLabel ByteArray, wakeLabel ByteArray, pollerLabel ByteArray, ids ValueMinter)
-	var check = module.addBlock(func, label: checkLabel, heat: BlockHeat.normal)
+// ⭐⭐ **HAND THE LOOKING ON IF A PUBLISH MAY HAVE SKIPPED ITS WAKE — Go's `resetspinning`, whose `wakep` is
+// unconditional.** Unless `nothingSkipped`, pay one wake (`__sched_wake_or_spawn`) and continue at `cont`. The
+// spinning count is already down when this is reached, so the wake starts a searcher unless another one is
+// already counted, and otherwise leaves `__sched_needspinning` raised for the machine that parks next. It
+// terminates `cur`.
+function emitSchedHandOnTheLooking(module StdModule, func IrFunction, cur IrBlock, nothingSkipped ValueId, cont IrBlock, wakeLabel ByteArray, ids ValueMinter)
+	var wake = module.addBlock(func, label: wakeLabel, heat: BlockHeat.normal)
 
-	module.setTerminator(cur, op: StdOp.condBranch(nothingSkipped, thenBlockId: cont.id, elseBlockId: check.id))
+	module.setTerminator(cur, op: StdOp.condBranch(nothingSkipped, thenBlockId: cont.id, elseBlockId: wake.id))
 
-	emitSchedWakeForWhatRemains(module, func: func, check: check, cont: cont, wakeLabel: wakeLabel, pollerLabel: pollerLabel, ids: ids)
+	emitSchedWakeAnIdleM(module, block: wake, ids: ids)
+	module.setTerminator(wake, op: StdOp.branch(cont.id))
 end 'emitSchedHandOnTheLooking'
 
 function emitSchedWakeForWhatRemains(module StdModule, func IrFunction, check IrBlock, cont IrBlock, wakeLabel ByteArray, pollerLabel ByteArray, ids ValueMinter)
@@ -7000,7 +6953,7 @@ function emitSchedMainMachineExit(module StdModule, func IrFunction, exitBlock I
 
 	let wasSpinning = emitSchedSpinningTransition(module, block: exitBlock, m: m, transition: SpinningTransition.stopSpinning, ids: ids)
 	let heldNoCredit = emitCasLost(module, block: exitBlock, result: wasSpinning, ids: ids)
-	emitSchedHandOnTheLooking(module, func: func, cur: exitBlock, nothingSkipped: heldNoCredit, cont: left, checkLabel: b"wexitrecheck", wakeLabel: b"wexitwake", pollerLabel: b"wexitpoller", ids: ids)
+	emitSchedHandOnTheLooking(module, func: func, cur: exitBlock, nothingSkipped: heldNoCredit, cont: left, wakeLabel: b"wexitwake", ids: ids)
 	module.setTerminator(left, op: StdOp.retVoid)
 end 'emitSchedMainMachineExit'
 
@@ -7135,6 +7088,14 @@ function emitSchedResumeFromPark(module StdModule, block IrBlock, m ValueId, p V
 	_ = emitSchedSpinningTransition(module, block: block, m: m, transition: SpinningTransition.becomeSpinning, ids: ids)
 end 'emitSchedResumeFromPark'
 
+function emitSchedRegainProcessor(module StdModule, func IrFunction, cur IrBlock, m ValueId, resumeAt IrBlock, none IrBlock, resumeLabel ByteArray, target Target, ids ValueMinter)
+	var resume = module.addBlock(func, label: resumeLabel, heat: BlockHeat.normal)
+
+	let regained = emitSchedPidleGetLocked(module, func: func, cur: cur, got: resume, none: none, wakesMonitor: targetBracketsBlockingSyscalls(target), ids: ids)
+	emitSchedResumeFromPark(module, block: resume, m: m, p: regained, ids: ids)
+	module.setTerminator(resume, op: StdOp.branch(resumeAt.id))
+end 'emitSchedRegainProcessor'
+
 // ⭐ **THE DEADLINE THE POLLER WAITS FOR: THE EARLIEST TIMER'S, AND NOTHING CAPS IT.** `__sched_lock` held, so
 // the read is exact. It terminates `cur` and reaches `cont` with the deadline as `cont`'s one block argument;
 // with no timer pending that is `TimerWhenEmpty`, which is a wait bounded only by the sources themselves.
@@ -7190,14 +7151,15 @@ function emitSchedWorkerExit(module StdModule, func IrFunction, exitBlock IrBloc
 	emitConstReturn(module, block: exitDone, value: 0, ids: ids)
 end 'emitSchedWorkerExit'
 
-// ⭐⭐⭐ **THE FOUR THINGS THAT CAN HAPPEN TO A SPINNING CREDIT — and they are an enum rather than four
-// bodies because all four are the SAME two instructions with different constants**: one CAS on
-// `m.spinning`, then one atomic step of `__sched_nmspinning` by however much that CAS decided. See
-// `SchedSpinningLabel` for what the count is for and `MOffSpinning` for why the per-MACHINE word exists.
+// ⭐⭐⭐ **THE TWO THINGS A MACHINE DOES TO ITS OWN SPINNING CREDIT — and they are an enum rather than two
+// bodies because both are the SAME two instructions with different constants**: one CAS on
+// `m.spinning`, then one atomic step of `__sched_nmspinning` by however much that CAS decided. A waker's
+// hand-over is `emitSchedHandOverCredit`. See `SchedSpinningLabel` for what the count is for and
+// `MOffSpinning` for why the per-MACHINE word exists.
 enum SpinningTransition
 	// A worker M that `__sched_find_runnable`'s spinner cap admits to the steal rounds (`frspinclaim`). Wins
 	// the word 0 -> 1 and counts itself in. A LOST CAS is not a failure: it means a waker already handed this M
-	// a credit before signalling it, and the M simply inherits it — which is the whole point of the hand-over,
+	// a credit before signalling or creating it, and the M simply inherits it — which is the whole point of the hand-over,
 	// since the reservation must span the entire `SetEvent` -> wake latency to suppress anything.
 	becomeSpinning
 
@@ -7214,22 +7176,27 @@ enum SpinningTransition
 	// not merely untidy: the count never comes back down, so every later publish reads it as *"somebody is
 	// already looking"* and stops waking anybody.
 	stopSpinning
-
-	// A WAKER, on the MACHINE it has just taken exclusive possession of by taking it off `__sched_midle` under
-	// `__sched_lock`. It reserved a credit at the gate; this hands that credit to the machine that is about to
-	// look. A LOST CAS means that M had already counted itself in — the reservation is then surplus and is
-	// given straight back, which is the direction that cannot suppress a wakeup.
-	handOverSpinning
 end 'SpinningTransition'
 
-// ⭐⭐ **THE ONE DOOR A CREDIT CHANGES HANDS THROUGH: CAS `m.spinning`, THEN STEP THE COUNT BY WHAT THE CAS
-// DECIDED.** Branch-free on purpose — the CAS answers 1 or 0 (`AtomicCasSucceeded`/`AtomicCasFailed`, the
+// A lost CAS is fatal rather than absorbed: `MOffSpinning` argues why the recipient cannot hold a credit.
+function emitSchedHandOverCredit(module StdModule, func IrFunction, cur IrBlock, m ValueId, cont IrBlock, ids ValueMinter)
+	var alreadySpinning = module.addBlock(func, label: b"handoveralreadyspinning", heat: BlockHeat.cold)
+
+	let spinningAddr = emitFieldAddr(module, block: cur, record: m, offset: MOffSpinning, ids: ids)
+	let expected = emitConst(module, block: cur, value: MSpinningFree, ids: ids)
+	let replacement = emitConst(module, block: cur, value: MSpinningHeld, ids: ids)
+	let won = emitCasAt(module, block: cur, addr: spinningAddr, expected: expected, replacement: replacement, ids: ids)
+	emitBranchOnCasLost(module, block: cur, result: won, lost: alreadySpinning, won: cont, ids: ids)
+
+	emitRuntimeFatal(module, func: func, block: alreadySpinning, fatal: RuntimeFatal.startmCreditOnASpinningMachine, ids: ids)
+end 'emitSchedHandOverCredit'
+
+// ⭐⭐ **THE DOOR A MACHINE CLAIMS OR RELEASES ITS OWN CREDIT THROUGH: CAS `m.spinning`, THEN STEP THE COUNT BY
+// WHAT THE CAS DECIDED.** Branch-free on purpose — the CAS answers 1 or 0 (`AtomicCasSucceeded`/`AtomicCasFailed`, the
 // contract's own spelling), so each arm's step is that answer put through one subtraction rather than a
-// block per outcome. Four sites' worth of block plumbing saved for two instructions, and a fifth site added
-// later cannot get the pairing wrong because it does not spell it. It answers the CAS — `AtomicCasSucceeded`
-// when this transition moved the word.
+// block per outcome. It answers the CAS — `AtomicCasSucceeded` when this transition moved the word.
 function emitSchedSpinningTransition(module StdModule, block IrBlock, m ValueId, transition SpinningTransition, ids ValueMinter) returns ValueId
-	// One arm RELEASES the word (1 -> 0); the other two CLAIM it (0 -> 1). The direction is asked once here
+	// One arm RELEASES the word (1 -> 0); the other CLAIMS it (0 -> 1). The direction is asked once here
 	// so the two constants cannot disagree about which value means "held".
 	let releasing = transition == SpinningTransition.stopSpinning
 	let spinningAddr = emitFieldAddr(module, block: block, record: m, offset: MOffSpinning, ids: ids)
@@ -7237,12 +7204,10 @@ function emitSchedSpinningTransition(module StdModule, block IrBlock, m ValueId,
 	let replacement = emitConst(module, block: block, value: MSpinningFree if releasing else MSpinningHeld, ids: ids)
 	let won = emitCasAt(module, block: block, addr: spinningAddr, expected: expected, replacement: replacement, ids: ids)
 
-	// An M that wins counts itself in (+1) or out (-1). A waker that wins has handed its reservation on and
-	// owes nothing (0); one that LOSES found the M already counted, so its reservation is surplus (-1).
+	// An M that wins counts itself in (+1) or out (-1).
 	let delta = match transition 'deltaFor'
 		becomeSpinning gives won
 		stopSpinning gives emitBin(module, block: block, a: emitConst(module, block: block, value: 0, ids: ids), b: won, opcode: StdBinOpcode.sub, ids: ids)
-		handOverSpinning gives emitBin(module, block: block, a: won, b: emitConst(module, block: block, value: 1, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
 	end 'deltaFor'
 
 	// ⭐ **THE STEP GOES THROUGH `MmRuntime.emitGlobalAccumulate`, which is ALREADY the door for exactly this
@@ -7251,7 +7216,7 @@ function emitSchedSpinningTransition(module StdModule, block IrBlock, m ValueId,
 	// follows it. `multiM: true` is not a choice: only scheduler bodies name the word, they exist only under
 	// `usesGt`, and a green-thread program is precisely one where a second M can exist. The PRIOR value is discarded — Go
 	// throws on a negative result here (`"wakep: negative nmspinning"`), and what stands in for that assert
-	// is that these three arms and the waker's give-back are the count's only writers, each stepping by what
+	// is that these two arms and the waker's give-back are the count's only writers, each stepping by what
 	// its own CAS decided.
 	_ = emitGlobalAccumulate(module, block: block, label: SchedSpinningLabel, delta: delta, multiM: true, ids: ids)
 
@@ -7288,12 +7253,12 @@ end 'emitSchedRaiseHighWater'
 // does not have. This function is the GATE and nothing else; `__sched_startm` is the rest, and it is a
 // separate function because `handoffp` calls it with a processor of its own.
 //
-// ⭐⭐⭐ **THE GATE IS WHERE THE COST GOES.** An acquire load of `__sched_npidle`, then Go's `wakep`
-// pair: a load of `__sched_nmspinning` as the fast path, then a `CompareAndSwap(0, 1)` that
-// RESERVES the one spinning M this wakeup is allowed to create. Everything below is skipped
-// outright when any of the three answers no, and in a program whose work is finer-grained than a
-// park/unpark round trip that is almost every publish. `SchedSpinningLabel` and the `idletest`
-// block carry the readings that justify it.
+// ⭐⭐⭐ **THE GATE IS WHERE THE COST GOES.** Go's `wakep` pair: a load of `__sched_nmspinning` as the fast
+// path, then a `CompareAndSwap(0, 1)` that RESERVES the one spinning M this wakeup is allowed to create.
+// Everything below is skipped outright when either answers no, and in a program whose work is finer-grained
+// than a park/unpark round trip that is almost every publish. There is no test of `__sched_npidle` before
+// them: a reservation that finds no idle processor raises `__sched_needspinning` for the machine that parks
+// next (`__sched_startm`'s `smnop`). `SchedSpinningLabel` carries the readings that justify the gate.
 //
 // ⚠⚠ **THE QUEUE PUBLISH MUST BE VISIBLE BEFORE THE COUNT IS READ, AND EVERY ARM CARRIES THE FENCE
 // THAT MAKES IT SO.** Otherwise a publisher can skip a wake on the strength of a spinner whose
@@ -7307,16 +7272,14 @@ end 'emitSchedRaiseHighWater'
 // inside it has neither: the `lock xadd` is what covers it, which is why `__gt_timer_check` and the
 // poller's readiness walk may publish inside their walk and wake once after it.
 //
-// ⭐ **AND `__sched_startm` TAKES `__sched_lock` WHILE THIS FUNCTION DOES NOT.** The park is one critical
-// section (`buildSchedLoop`), so there is no fence to preserve by staying outside a lock, and the O(1) idle
-// list is both cheaper than a linear scan and the only thing that can find a P-less machine. The gate above
-// runs lock-free, so a publish that wakes nobody costs its loads.
+// ⭐ **AND `__sched_startm` TAKES `__sched_lock` WHILE THIS FUNCTION DOES NOT.** The O(1) idle list is both
+// cheaper than a linear scan and the only thing that can find a P-less machine. The gate above runs
+// lock-free, so a publish that wakes nobody costs its loads.
 function buildSchedWakeOrSpawn(module StdModule)
 	var func = IrFunction.createFromStd(SchedWakeOrSpawnName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), needsGreenThreadStackGuard: true, pinsItsThread: true)
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var idleTest = module.addBlock(func, label: b"idletest", heat: BlockHeat.normal)
 	var spinTest = module.addBlock(func, label: b"spintest", heat: BlockHeat.normal)
 	var spinClaim = module.addBlock(func, label: b"spinclaim", heat: BlockHeat.normal)
 	var startIt = module.addBlock(func, label: b"wakestart", heat: BlockHeat.normal)
@@ -7326,16 +7289,7 @@ function buildSchedWakeOrSpawn(module StdModule)
 	// authoritative one: `__sched_startm` reads the flag again inside `__sched_lock`, which is the same
 	// critical section `__sched_stop_workers` sets it in, and that is what makes *"no machine is created
 	// after the flag is set"* a fact rather than a window this early read leaves open.
-	emitSchedBranchOnShutdown(module, cur: entry, stopping: doneBlock, live: idleTest, ids: ids)
-
-	// No idle processor means no wake, and the park order is what makes that skip safe. A parker steps
-	// `__sched_npidle` up with a locked read-modify-write and only then re-scans every queue
-	// (`buildSchedLoop`), while this acquire read follows the publish's fence (above). So this read
-	// sees the idle processor, or that re-scan sees the work. ⚠ A plain step up in
-	// `emitSchedPidlePutLocked` would let both miss, and the work would wait for a yield or a
-	// preemption.
-	let idleProcessors = emitLoadAcquireGlobalWord(module, block: idleTest, label: SchedNpidleLabel, ids: ids)
-	emitBranchOnCompare(module, block: idleTest, value: idleProcessors, pred: StdCmpPred.eq, against: 0, whenTrue: doneBlock, whenFalse: spinTest, ids: ids)
+	emitSchedBranchOnShutdown(module, cur: entry, stopping: doneBlock, live: spinTest, ids: ids)
 
 	// ⭐ **THE RESERVATION IS A LOAN, NOT A COUNT OF THIS THREAD.** `__sched_startm` settles it: the machine it
 	// wakes takes it over through `MOffSpinning`, and every other road gives it back inside that call.
@@ -8378,7 +8332,7 @@ end 'buildSchedExitSyscall'
 // clear the stolen bit `exitsyscall` deliberately left standing.
 //
 // ⭐⭐ **IT WAITS ON A LIST OF ITS OWN, NOT ON `__sched_midle`.** A machine on that list is a machine
-// `__sched_startm` may hand a SPINNING CREDIT to (`SpinningTransition.handOverSpinning`), and one it counts
+// `__sched_startm` may hand a SPINNING CREDIT to (`emitSchedHandOverCredit`), and one it counts
 // idle; this machine is neither — it holds a runnable green thread. `__sched_regain_head` is served by
 // `pidleput` before a processor would go idle, and joining it happens in the same hold of `__sched_lock` as the
 // `pidleget` that found nothing, so no processor released after that look can pass it by.
@@ -8655,10 +8609,10 @@ function buildSchedStopWorkers(module StdModule)
 	// walks nothing — the same zero `__sched_steal_count` rests on.
 	emitBranchOnCompare(module, block: wakeHdr, value: wakeCursor, pred: StdCmpPred.eq, against: 0, whenTrue: joinStart, whenFalse: wakeBody, ids: ids)
 
-	module.appendOp(wakeBody, op: StdOp.osSetEvent(emitLoadField(module, block: wakeBody, record: wakeCursor, offset: MOffParkEvent, ids: ids)))
-	let nextWake = emitLoadField(module, block: wakeBody, record: wakeCursor, offset: MOffAllNext, ids: ids)
-	module.setTerminator(wakeBody, op: StdOp.branch(wakeHdr.id))
-	wakeBody.branchEdges.push(BranchEdge.create(wakeHdr.id, argIds: argsOf(nextWake)))
+	var wakeSignalled = emitSchedSignalMachineLocked(module, func: func, cur: wakeBody, m: wakeCursor, labelPrefix: "stopwake", ids: ids)
+	let nextWake = emitLoadField(module, block: wakeSignalled, record: wakeCursor, offset: MOffAllNext, ids: ids)
+	module.setTerminator(wakeSignalled, op: StdOp.branch(wakeHdr.id))
+	wakeSignalled.branchEdges.push(BranchEdge.create(wakeHdr.id, argIds: argsOf(nextWake)))
 
 	// The join is a SECOND walk rather than a step of the first: every machine must have been told to stop
 	// before we block on any one of them, or a machine signalled late would be joined while it was still

@@ -65,13 +65,14 @@ kernel call, or an overdue timer (`builtins-cpu-parallel.md` pins that exactly).
 ⛔ **THAT IS A STATEMENT ABOUT `async`, NOT ABOUT THE PROCESS.** **`spawn` creates real green threads**,
 which is exactly what a ring, a steal and a worker loop schedule, and **the default is the machine's
 processor count** (`sched-default-procs.md`). An ordinary build therefore has one P per processor, and
-whether a second M starts is decided by the WORK — a service program runs on several, an `async`-only
-program runs on one.
+whether a second M starts is decided by the WORK and an idle processor — a service program runs on
+several, and an `async`-only program publishes no coroutine to one, so a second M it reaches has only
+`main`'s token to run.
 
 ⭐ `scripts/multicore-stress/pin-matrix.sh` drives the `multicore-stress` programs across
-`MAXON_MAX_PROCS ∈ {1, 2, 7, 12}` and at the default. `steal-torture` — which is `async` — reads
-`workers=1 steals=0` at every one; the two SPAWN-driven programs read the other way, which is the same
-script's other family.
+`MAXON_MAX_PROCS ∈ {1, 2, 7, 12}` and at the default. `steal-torture` — which is `async` — is asserted to
+read `workers=1 steals=0` at one processor; the two SPAWN-driven programs read the other way, which is the
+same script's other family.
 
 ⚠ **WHAT AN `async`-ONLY PROGRAM EXERCISES IS STILL LESS OF THE STRUCTURE.** `main` is a green thread in
 every green-thread program, so one machine's whole road runs in it and is covered by the cases below: the

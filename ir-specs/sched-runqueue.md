@@ -420,7 +420,7 @@ func @__sched_steal {
     x64.leaRegRegImm32 rax, rcx, -1
     x64.leaRegRegReg rcx, r14, rax
     x64.andRegImm32 rcx, rcx, 255
-    x64.leaRegRegImm32 rdx, rbx, 352
+    x64.leaRegRegImm32 rdx, rbx, 344
     x64.loadRegBaseIndexScale.word64 r8, [rdx + rcx*8 + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, sanswer
@@ -439,11 +439,11 @@ func @__sched_steal {
   scopybody:
     x64.leaRegRegReg rsi, rax, rdx
     x64.andRegImm32 rsi, rsi, 255
-    x64.leaRegRegImm32 rdi, r12, 352
+    x64.leaRegRegImm32 rdi, r12, 344
     x64.loadRegBaseIndexScale.word64 rsi, [rdi + rsi*8 + 0]
     x64.leaRegRegReg rdi, r14, rdx
     x64.andRegImm32 rdi, rdi, 255
-    x64.leaRegRegImm32 r8, rbx, 352
+    x64.leaRegRegImm32 r8, rbx, 344
     x64.storeBaseIndexScaleReg.word64 [r8 + rdi*8 + 0], rsi
     x64.leaRegRegImm32 rdx, rdx, 1
     x64.jmp scopyhdr
@@ -784,7 +784,7 @@ func @__sched_steal {
     x64.leaRegRegImm32 rax, rcx, -1
     x64.leaRegRegReg rcx, r14, rax
     x64.andRegImm32 rcx, rcx, 255
-    x64.leaRegRegImm32 rdx, rbx, 352
+    x64.leaRegRegImm32 rdx, rbx, 344
     x64.loadRegBaseIndexScale.word64 r8, [rdx + rcx*8 + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, sanswer
@@ -803,11 +803,11 @@ func @__sched_steal {
   scopybody:
     x64.leaRegRegReg rsi, rax, rdx
     x64.andRegImm32 rsi, rsi, 255
-    x64.leaRegRegImm32 rdi, r12, 352
+    x64.leaRegRegImm32 rdi, r12, 344
     x64.loadRegBaseIndexScale.word64 rsi, [rdi + rsi*8 + 0]
     x64.leaRegRegReg rdi, r14, rdx
     x64.andRegImm32 rdi, rdi, 255
-    x64.leaRegRegImm32 r8, rbx, 352
+    x64.leaRegRegImm32 r8, rbx, 344
     x64.storeBaseIndexScaleReg.word64 [r8 + rdi*8 + 0], rsi
     x64.leaRegRegImm32 rdx, rdx, 1
     x64.jmp scopyhdr
@@ -1138,7 +1138,7 @@ func @__sched_steal {
     arm64.sub x0, x1, 1
     arm64.add x1, x22, x0
     arm64.and x1, x1, 255
-    arm64.add x2, x19, 352
+    arm64.add x2, x19, 344
     arm64.loadRegBaseIndexScale.word64 x1, [x2 + x1*8 + 0]
     arm64.cmp x0, 0
     arm64.b.eq sanswer
@@ -1157,11 +1157,11 @@ func @__sched_steal {
   scopybody:
     arm64.add x3, x0, x2
     arm64.and x3, x3, 255
-    arm64.add x4, x20, 352
+    arm64.add x4, x20, 344
     arm64.loadRegBaseIndexScale.word64 x3, [x4 + x3*8 + 0]
     arm64.add x4, x22, x2
     arm64.and x4, x4, 255
-    arm64.add x5, x19, 352
+    arm64.add x5, x19, 344
     arm64.storeBaseIndexScaleReg.word64 [x5 + x4*8 + 0], x3
     arm64.add x2, x2, 1
     arm64.b scopyhdr
@@ -1496,7 +1496,7 @@ func @__sched_steal {
     arm64.sub x0, x1, 1
     arm64.add x1, x22, x0
     arm64.and x1, x1, 255
-    arm64.add x2, x19, 352
+    arm64.add x2, x19, 344
     arm64.loadRegBaseIndexScale.word64 x1, [x2 + x1*8 + 0]
     arm64.cmp x0, 0
     arm64.b.eq sanswer
@@ -1515,11 +1515,11 @@ func @__sched_steal {
   scopybody:
     arm64.add x3, x0, x2
     arm64.and x3, x3, 255
-    arm64.add x4, x20, 352
+    arm64.add x4, x20, 344
     arm64.loadRegBaseIndexScale.word64 x3, [x4 + x3*8 + 0]
     arm64.add x4, x22, x2
     arm64.and x4, x4, 255
-    arm64.add x5, x19, 352
+    arm64.add x5, x19, 344
     arm64.storeBaseIndexScaleReg.word64 [x5 + x4*8 + 0], x3
     arm64.add x2, x2, 1
     arm64.b scopyhdr

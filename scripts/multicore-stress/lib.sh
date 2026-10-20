@@ -30,11 +30,11 @@ spawns_green_threads() {
 	list_has "$SPAWNING_PROGRAMS" "$1"
 }
 
-# ⭐ WHICH PROGRAMS PRINT `monitor=` — the system monitor's three counters, which their one-worker pin is
+# ⭐ WHICH PROGRAMS PRINT `monitor=` — the system monitor's three counters, which their one-processor pin is
 # conditional on (`monitor-witness.maxon`). Each calls the prelude, so each is compiled with it.
 #
 # ⚠ **THE LIST IS NOT THE COMPLEMENT OF `SPAWNING_PROGRAMS`, AND `syscall-stack-torture` IS IN BOTH.** A
-# coroutine program needs the reading because a monitor action is the only way it can reach a second M at all;
+# coroutine program needs the reading because a monitor action is the only way it can reach a second M at one processor;
 # that one needs it because its ~24,000 BLOCKING CALLS are retaken, and a retake's `__sched_handoffp` starts a
 # machine on the processor it took — so its `workers` reading at ONE processor is the monitor's doing and not a
 # green thread reaching a worker.

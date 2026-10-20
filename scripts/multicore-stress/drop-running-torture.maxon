@@ -25,8 +25,8 @@
 // twice the bound: only the drops that land on a thread mid-body are exposed, so a
 // defect here strands some of each round's `spawnsPerRound`, not necessarily all.
 //
-// ⛔⛔ **THE SUBJECT IS UNREACHABLE, AND THE PROGRAM READS ITS CONTROL ROW AT EVERY
-// PROCESSOR COUNT — `started=0 steals=0 workers=1 leaked=0`.** An `async` frame is a
+// ⛔⛔ **THE SUBJECT IS UNREACHABLE, AND THE PROGRAM READS ITS CONTROL ROW AT ONE
+// PROCESSOR — `started=0 steals=0 workers=1 leaked=0`.** An `async` frame is a
 // COROUTINE of the green thread that spawned it: published only to that green thread's
 // queue, run wherever that green thread's strand runs, never handed to an M of its own.
 // `main` never yields, so every drop finds its coroutine queued and never-run. `spawn` does not
@@ -190,7 +190,7 @@ function main() returns ExitCode
 	// while main is still in its spawn-delay-drop loop, which is the only road to the
 	// state under test, and each P's counter is written by its own M so the sum is
 	// exact. `started` is the same question asked approximately; `workers` proves more
-	// than one M went live; `monitor` is what the pin on `steals` and `workers` is
+	// than one M went live; `monitor` is what the one-processor pin on `steals` and `workers` is
 	// conditional on (`monitor-witness.maxon`); `cpucount` gives the driver ncpu.
 	print("leaked={leaked}\n")
 	print("carved={carved} bound={bound} rounds={i} sink={sink}\n")

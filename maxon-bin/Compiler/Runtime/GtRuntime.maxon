@@ -2886,6 +2886,7 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, tracing GtTracing, tar
 	end 'markMain'
 
 	let stackBase = emitLoadField(module, block: initBlock, record: gt, offset: GtOffStackBase, ids: ids)
+
 	// The record's size, not `__gt_seed_bytes`: the seed can move after `__gt_free_get` read it, and a
 	// top computed from the new value would lay the first frame outside this stack.
 	let stackSizeVal = emitLoadField(module, block: initBlock, record: gt, offset: GtOffStackSize, ids: ids)
@@ -4980,12 +4981,12 @@ function emitReleaseOwnersAfterDrain(module StdModule, func IrFunction, cur IrBl
 	module.setTerminator(cur, op: StdOp.branch(release.id))
 
 	emitSchedLockEnter(module, block: release, ids: ids)
-	emitSchedEnterPhaseLocked(module, block: release, phase: SchedPhase.draining, ids: ids)
-	emitSchedLockLeave(module, block: release, ids: ids)
+	var entered = emitSchedEnterPhaseLocked(module, func: func, cur: release, phase: SchedPhase.draining, ids: ids)
+	emitSchedLockLeave(module, block: entered, ids: ids)
 
-	emitOwnerReleaseCalls(module, block: release, releasesRegistry: releasesRegistry, releasesGlobals: releasesGlobals, code: code, ids: ids)
-	emitSchedMainLoop(module, block: release, until: SchedMainLoopUntil.drained, ids: ids)
-	return release
+	emitOwnerReleaseCalls(module, block: entered, releasesRegistry: releasesRegistry, releasesGlobals: releasesGlobals, code: code, ids: ids)
+	emitSchedMainLoop(module, block: entered, until: SchedMainLoopUntil.drained, ids: ids)
+	return entered
 end 'emitReleaseOwnersAfterDrain'
 
 function emitOwnerReleaseCalls(module StdModule, block IrBlock, releasesRegistry bool, releasesGlobals bool, code ValueId, ids ValueMinter)
@@ -6055,6 +6056,7 @@ function buildGtPromiseDrop(module StdModule)
 	module.setTerminator(parkMissed, op: StdOp.branch(queuedArm.id))
 
 	emitBranchOnCompare(module, block: notTimerPark, value: parkKind, pred: StdCmpPred.eq, against: GtParkKind.quiesce.rawValue, whenTrue: quiesceParked, whenFalse: unknownPark, ids: ids)
+
 	// A `mailbox` park lands here too, and is unreachable: only `<T>.__loop` calls `__mbox_recv` (its
 	// symbol is `__`-prefixed, E2051), no promise names that thread, and a reply cell runs nothing.
 	emitRuntimeFatal(module, func: func, block: unknownPark, fatal: RuntimeFatal.promiseDroppedInAnUnknownPark, ids: ids)
@@ -6287,9 +6289,9 @@ function buildGtRunnerDone(module StdModule, target Target)
 	// `__sched_checkdead` and the exit drain read it under, and the main machine — which may be parked, or
 	// running some other strand — is signalled so its loop sees it (`SchedRuntime.SchedPhase`).
 	emitSchedLockEnter(module, block: mainDone, ids: ids)
-	emitSchedEnterPhaseLocked(module, block: mainDone, phase: SchedPhase.draining, ids: ids)
-	emitSchedLockLeave(module, block: mainDone, ids: ids)
-	module.setTerminator(mainDone, op: StdOp.branch(greenUnref.id))
+	var phaseEntered = emitSchedEnterPhaseLocked(module, func: func, cur: mainDone, phase: SchedPhase.draining, ids: ids)
+	emitSchedLockLeave(module, block: phaseEntered, ids: ids)
+	module.setTerminator(phaseEntered, op: StdOp.branch(greenUnref.id))
 
 	var greenUnreffed = emitGtStrandUnref(module, func: func, cur: greenUnref, owner: gt, ids: ids)
 	module.setTerminator(greenUnreffed, op: StdOp.retVoid)

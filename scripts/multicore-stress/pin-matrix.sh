@@ -29,11 +29,12 @@
 #      row of one that prints no `leaked=` at all FAILS, because it died before its
 #      reading and an exit code it shares with every other row asserts nothing.
 #   4. ⭐ THE PIN ITSELF, AND IT IS PER FAMILY. A COROUTINE-ONLY
-#      program reads `workers=1` and `steals=0` at every N unless its `monitor=`
-#      reading says the system monitor stepped in (`monitor-witness.maxon`): a
-#      preemption, a retake or a machine started for an overdue timer can each put a
-#      second M to work, which can then steal a green thread readied onto a ring. A
-#      row with `monitor` above 0 is reported and not judged. A SPAWN-DRIVEN one —
+#      program is judged at an EFFECTIVE count of ONE: it reads `workers=1` unless its
+#      `monitor=` reading says the system monitor stepped in (`monitor-witness.maxon`):
+#      a preemption, a retake or a machine started for an overdue timer can each put a
+#      second M to work. A row with `monitor` above 0 is reported and not judged. At
+#      an effective count of two or more its `workers=` and `steals=` are REPORTED
+#      AND NOT JUDGED — the paragraph on Go's wake below says why. A SPAWN-DRIVEN one —
 #      the `SPAWNING_PROGRAMS` list, which is where the fact is written down once —
 #      reads `1/0` at N=1 and `workers >= 2`, `steals > 0` at every N >= 2, which
 #      is this script's own prediction below, cashed. ⚠ THE `1` AT N=1 IS ITSELF
@@ -44,30 +45,43 @@
 #
 # ⭐⭐ ASSERTION 4 IS WHAT THIS SCRIPT EXISTS FOR.
 # Were every `async f(...)` published as a GT to the SCHEDULER, at N >= 2 a
-# worker M would pop, steal and run an `async` frame on a different M than its caller
-# — MEASURED in that arrangement, same box, this script: steal-torture read
-# `workers/steals` of 1/0, 2/24, 7/3997 and 8/3996 at N=1/2/7/12, and
-# drop-running-torture 1/0, 2/6, 7/35 and 11/51.
+# worker M would pop, steal and run an `async` frame on a different M than its caller.
 # With the pin an `async` frame is a coroutine of the green thread that
 # called it: it is published only to that green thread's coroutine queue, never to
-# a P ring or the global queue, so no coroutine ever wakes a worker M. A second M
-# comes only from the system monitor — a preemption, a retake, or a machine started
-# for an overdue timer — so `workers=1 steals=0` at every N where `monitor=0` IS the
-# pin, read directly off the runtime's own counters rather than inferred from timing.
+# a P ring or the global queue, so no COROUTINE ever wakes a worker M. At ONE
+# processor that leaves a second M only to the system monitor — a preemption, a
+# retake, or a machine started for an overdue timer — so `workers=1 steals=0` where
+# `monitor=0` IS the pin, read directly off the runtime's own counters rather than
+# inferred from timing.
 #
-# ⭐ AND THE PIN IS WHAT PRODUCES THOSE NUMBERS, WHICH IS A SEPARATE MEASUREMENT.
-# Sabotaged — `__gt_spawn`'s owner stamp changed to `gt` itself on the FINISHED
-# tree, so every `async` frame is a GREEN THREAD again; one line, nothing else
-# changed — drop-running-torture reads 1/0, 2/6, 7/42 and 11/43 and steal-torture
-# 1/0, 2/52, 7/3970 and 7/3985, with byte-identical aggregates throughout
-# (MEASURED). A gate nobody has seen move is not a gate.
+# ⭐⭐ ABOVE ONE PROCESSOR A COROUTINE PROGRAM'S SECOND M IS NOT EVIDENCE OF A PUBLISHED
+# COROUTINE, SO NOTHING IS JUDGED THERE. `__sched_wake_or_spawn` is Go's `wakep`, and
+# Go's rule is that a machine that stops spinning (`resetspinning`) and every ready
+# that pays a wake debt — a timer firing onto a ring among them — calls it without
+# first asking whether any work is left. With an idle processor, no spinning machine
+# and no idle machine, that wake starts one, so a program that only sleeps reaches a
+# second M with the monitor never stepping in, and that machine may steal the one
+# strand token the program does publish. WHAT GO BOUNDS IS A SHAPE, NOT A COUNT: one machine is
+# being started to spin at a time, a start needs an idle processor, and a machine that
+# finds nothing parks and is reused — and `__sched_startm` creates a machine whenever
+# a processor is idle and the machine that released it has not yet joined the idle
+# list, so no worker count below the processor count is guaranteed. Pinning a number
+# would pin timing. What stays judged is what does not depend on it: the aggregate,
+# the exit code, the leak reading, and the one-processor pin, where a wake finds an
+# idle processor only inside a parking machine's release window and the machines that
+# can publish then (the poller, which pays no wake debt, and a machine regaining a
+# processor after a retake, which the monitor counts) cannot start one.
+#
+# ⚠ A READING THAT TELLS A PUBLISHED COROUTINE FROM A PUBLISHED MAIN TOKEN ABOVE ONE
+# PROCESSOR WOULD BE THE SCHEDULER'S OWN `slices` OR `globalPushes` COUNTER PRINTED BY
+# THE PROGRAMS; NONE PRINTS IT, which is why `workers=` and `steals=` there are reported only.
 #
 # ⭐⭐ A `spawn` FLIPS ASSERTION 4. A `spawn` (`specs/services.md`) creates REAL
 # green threads, which are exactly what the scheduler's ring, its stealing and its
 # worker loop schedule.
 # `service-torture` and `service-fanin-torture` are the producers, and they are the
 # TWO programs here whose rows are asserted the other way; every other program is
-# coroutine-only and reads 1/0.
+# coroutine-only and is judged at one processor only (item 4).
 #
 # MEASURED with the `default` row present, same box, this script (12 services x
 # 400 String sends each): `workers/steals` of 1/0, 2/692, 7/7882, 8/8071 and — on
@@ -174,7 +188,7 @@
 # single run per processor count cannot see it and this script never claims to:
 # `refcount-race.sh` repeats it and tabulates exit codes, which is the reading
 # that discriminates. What it contributes here is one more program whose spawn
-# path is asserted to reach no worker M.
+# path is asserted, at one processor, to reach no worker M.
 #
 # ⭐⭐ AND IT STAYS AN `async` PROGRAM, BECAUSE THE SERVICE FORM OF IT DOES NOT
 # COMPILE. Its twelve tasks read ONE module-level heap `String`; a service would have
@@ -203,9 +217,9 @@
 #
 # ⚠ AND THAT IS ALSO WHAT alloc-torture AND remote-free-torture STILL COST. Both
 # exist to drive the sharded allocator's CROSS-P paths, and both do it by getting
-# worker Ms to run their tasks. Their own rows read `workers=1` at every N unless the
-# monitor stepped in, because their work is `async` and an `async` frame is a coroutine — so they still
-# prove determinism and leak-freedom on ONE M, and no row of theirs below should be
+# worker Ms to run their tasks. Their own rows read `workers=1` at one processor unless
+# the monitor stepped in, because their work is `async` and an `async` frame is a coroutine — so they
+# prove determinism and leak-freedom without a published coroutine, and no row of theirs below should be
 # read as covering a cross-P free.
 #
 # ⭐⭐ THE SUBJECT HAS A PRODUCER SOMEWHERE ELSE IN THIS
@@ -330,6 +344,7 @@ SEGV_EXIT=139
 
 require_compiler
 
+rm -rf "$WORK"
 mkdir -p "$WORK"
 echo "compiler: $MAXON"
 echo "procs:    $PROCS_LIST"
@@ -410,10 +425,11 @@ for prog in $PROGRAMS; do
 				# ⭐⭐ THE `workers` PIN AT ONE PROCESSOR IS CONDITIONAL ON THE MONITOR, FOR THE SAME REASON THE
 				# COROUTINE ROWS BELOW ARE, AND THE ENUMERATION IS EXHAUSTIVE. Every `osThreadCreate` that makes a
 				# green-thread machine is inside `__sched_startm`, which has four callers:
-				# `__sched_wake_or_spawn` (needs an IDLE processor, and at one P the only machine either holds it
-				# or has released it and joined `__sched_midle` in the SAME critical section, so a publish signals
-				# that machine rather than creating one — the exception being a machine waiting in
-				# `__sched_syscall_regain` for a processor a RETAKE took), `__sched_handoffp`'s two arms (reached
+				# `__sched_wake_or_spawn` (needs an IDLE processor, and at one P the only processor is idle only
+				# between a parking machine's release of it and its taking it back, so a start needs a publisher
+				# other than that machine inside the window: the poller pays no wake debt, and a machine waiting in
+				# `__sched_syscall_regain` for a processor a RETAKE took is the monitor's doing),
+				# `__sched_handoffp`'s two arms (reached
 				# from `__sched_retake` alone, which steps `schedRetakeCount()` BEFORE the call), and `__sysmon`'s
 				# overdue-timer arm (which steps `schedTimerStartCount()` before its own). ⇒ at one processor
 				# every machine past the first follows a COUNTED monitor action, so `monitor=0` is exactly the
@@ -439,16 +455,17 @@ for prog in $PROGRAMS; do
 				fi
 			fi
 		elif [ "$wk" != "-" ] || [ "$st" != "-" ]; then
-			# The pin holds exactly while the monitor never stepped in, so a row without its
-			# reading cannot be judged, and a row where it acted is reported, not failed.
+			# At one processor the pin holds exactly while the monitor never stepped in, so a row without
+			# its reading cannot be judged, and a row where it acted is reported, not failed. Above one
+			# processor nothing is judged (see the header): Go's wake starts a second M for a timer ready.
 			if [ "$mon" = "-" ]; then
 				bad "$prog procs=$p prints workers/steals but no monitor= reading — the pin is conditional on it (monitor-witness.maxon)"
-			elif [ "$mon" = 0 ]; then
+			elif [ "$mon" = 0 ] && [ "$effective" = 1 ]; then
 				if [ "$wk" != "-" ] && [ "$wk" != 1 ]; then
-					bad "$prog procs=$p workers=$wk with monitor=0 — a worker M ran though the monitor never stepped in, so something published a coroutine to the scheduler"
+					bad "$prog procs=$p workers=$wk with monitor=0 — a second M was started at one processor though the monitor took no action, so a machine was started on an idle processor outside the monitor's counted actions"
 				fi
 				if [ "$st" != "-" ] && [ "$st" != 0 ]; then
-					bad "$prog procs=$p steals=$st with monitor=0 — a steal needs a second M, and the monitor started none"
+					bad "$prog procs=$p steals=$st with monitor=0 — a steal needs a second P, and there is one processor"
 				fi
 			fi
 		fi
