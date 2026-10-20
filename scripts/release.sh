@@ -29,6 +29,7 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 . scripts/lib/host-binaries.sh
 . scripts/lib/archive.sh
+. scripts/lib/docs-closure.sh
 
 DIST="dist"
 
@@ -112,15 +113,7 @@ package_one() {
 	cp -r examples "$stage/examples" 2>/dev/null || true
 	rm -rf "$stage/examples/.maxon"
 	mkdir "$stage/docs"
-	cp docs/WRITING_MAXON_CODE.md "$stage/docs/"
-	local linked
-	for linked in $(grep -oE '\]\([^)#[:space:]]+' docs/WRITING_MAXON_CODE.md | sed -E 's/^\]\(//' | grep -vE '^[A-Za-z][A-Za-z0-9+.-]*:' | sort -u); do
-		case "$linked" in
-			*/*) echo "release.sh: docs/WRITING_MAXON_CODE.md links to $linked, outside docs/, which the archive does not carry" >&2; return 1 ;;
-		esac
-		cp "docs/$linked" "$stage/docs/" \
-			|| { echo "release.sh: docs/WRITING_MAXON_CODE.md links to docs/$linked, which cannot be copied into the archive" >&2; return 1; }
-	done
+	stage_docs_closure docs WRITING_MAXON_CODE.md "$stage/docs" || return 1
 	cp LICENSE-MIT LICENSE-APACHE README.md "$stage/"
 	write_install_md "$stage/INSTALL.md" "$tgt" "$exe_ext"
 
@@ -161,7 +154,7 @@ This archive holds the \`maxon\` compiler and the standard library it reads.
     maxon$exe_ext     the compiler
     stdlib/           the standard library, as source
     runtime/          the language runtime the compiler links in, as source
-    docs/             the rules for an agent writing Maxon (WRITING_MAXON_CODE.md) and the references it links
+    docs/             the agent rules (WRITING_MAXON_CODE.md) and every document they link, transitively
 
 ⛔ **Keep the first three together.** The compiler finds \`stdlib/\` and \`runtime/\` by walking UP from its
 own executable, so moving \`maxon$exe_ext\` somewhere else on its own leaves it unable to compile at

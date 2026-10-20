@@ -177,7 +177,7 @@ scripts/release.sh --package                      # this host's target
 scripts/release.sh --package --target=arm64-linux # cross-build another
 ```
 
-It builds, **runs the whole suite**, stages `maxon` + `stdlib/` + `runtime/` + `examples/` + `docs/` (WRITING_MAXON_CODE.md and every document it links) + both
+It builds, **runs the whole suite**, stages `maxon` + `stdlib/` + `runtime/` + `examples/` + `docs/` (the agent rules and every document they link, transitively) + both
 licences + a generated `INSTALL.md`, and archives the result into `dist/`.
 
 ⛔ **`stdlib/` AND `runtime/` BOTH SHIP, AS SIBLINGS OF THE BINARY.** The compiler resolves `stdlib/` by
