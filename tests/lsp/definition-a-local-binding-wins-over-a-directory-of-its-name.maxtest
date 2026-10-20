@@ -1,0 +1,20 @@
+let ShadowingRootName = "temp/lsp/definition-a-local-binding-wins-over-a-directory-of-its-name"
+let ShadowingSubDirName = "temp/lsp/definition-a-local-binding-wins-over-a-directory-of-its-name/sub"
+let ShadowingCalcFileName = "calc.maxon"
+let ShadowingMainFileName = "main.maxon"
+let ShadowingCalcSource = "export type Calc\n\texport let v as ExitCode\n\n\texport static function make() returns Calc\n\t\treturn Calc\{v: 0\}\n\tend 'make'\nend 'Calc'\n"
+let ShadowingMainSource = "type Holder\n\texport let Calc as ExitCode\n\n\tstatic function make() returns Holder\n\t\treturn Holder\{Calc: 4\}\n\tend 'make'\nend 'Holder'\n\nfunction main() returns ExitCode\n\tlet sub = Holder.make()\n\treturn sub.Calc + other()\nend 'main'\n\nfunction other() returns ExitCode\n\treturn sub.Calc.make().v\nend 'other'\n"
+let ShadowingMainTail = "definition-a-local-binding-wins-over-a-directory-of-its-name/main.maxon"
+let ShadowingFieldReadLine = 10
+let ShadowingFieldReadCharacter = 13
+let ShadowingFieldDeclarationLine = 1
+
+test 'definition on a local binding named like a directory resolves to its field'
+	let root = stagedCorpusDirectory(ShadowingRootName)
+	let subDirectory = createdStagingDirectory(ShadowingSubDirName, under: Directory.currentPath())
+	writeCorpusFile(subDirectory, fileName: ShadowingCalcFileName, content: ShadowingCalcSource)
+
+	let probe = probeCorpusDefinition(root, fileName: ShadowingMainFileName, content: ShadowingMainSource, line: ShadowingFieldReadLine, character: ShadowingFieldReadCharacter)
+
+	expectDefinitionInFile(probe, fileTail: ShadowingMainTail, startLine: ShadowingFieldDeclarationLine, note: "`Calc` in `sub.Calc`, where `sub` is a local `Holder`, did not resolve to `Holder`'s field `Calc`. The local binding shadows the directory `sub/`, so the read is a field access and not the type `sub/calc.maxon` declares.")
+end 'definition on a local binding named like a directory resolves to its field'

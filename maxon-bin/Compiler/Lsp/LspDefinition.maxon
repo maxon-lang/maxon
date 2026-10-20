@@ -68,6 +68,33 @@ function definitionTarget(tokens TokenArray, at ByteOffset) returns Token throws
 	return try definitionLocalBinding(tokens, before: cursor, name: name) otherwise try definitionDeclarationOf(tokens, name: name)
 end 'definitionTarget'
 
+function definitionBindsLocally(tokens TokenArray, before ElementIndex, name ByteArray) returns bool
+	return (try definitionLocalBinding(tokens, before: before, name: name) otherwise return false).value.equals(name)
+end 'definitionBindsLocally'
+
+module function nameableQualifiedTypeEndingAt(tokens TokenArray, index ElementIndex, signatures ProgramSignatures, readerFilePath FilePath) returns ChainType throws AbsentError
+	let head = chainHeadIndexOf(tokens, index: index)
+
+	if head == index 'noQualifier'
+		throw AbsentError.absent
+	end 'noQualifier'
+
+	let headIsALocal = definitionBindsLocally(tokens, before: head, name: lspTokenAt(tokens, index: head).value)
+
+	match qualifiedTypeSpanning(tokens, head: head, index: index, signatures: signatures, readerFilePath: readerFilePath, headIsAValue: headIsALocal) 'span'
+		within(declaration, endIndex) then return try nameableTypeEndingAt(declaration, endIndex: endIndex, index: index)
+		outside then throw AbsentError.absent
+	end 'span'
+end 'nameableQualifiedTypeEndingAt'
+
+function nameableTypeEndingAt(declaration ChainType, endIndex ElementIndex, index ElementIndex) returns ChainType throws AbsentError
+	if endIndex != index or not declaration.isNameable() 'aQualifierSegmentOrHidden'
+		throw AbsentError.absent
+	end 'aQualifierSegmentOrHidden'
+
+	return declaration
+end 'nameableTypeEndingAt'
+
 // ⭐⭐ **THE SCOPE WALK. Backwards from the cursor, and what makes it a SCOPE walk rather than a
 // nearest-name search is that it steps OVER blocks that had already closed.** Without that, a use
 // after an inner block resolves to the inner block's shadowing declaration instead of the enclosing

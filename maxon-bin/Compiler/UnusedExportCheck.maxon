@@ -831,8 +831,8 @@ function noteTypeNameDenoting(signatures ProgramSignatures, tracked TrackedDecls
 		return
 	end 'alreadyCredited'
 
-	if let nominal = try signatures.qualifiedNominalOf(name) 'writtenQualified'
-		noteQualifiedNominal(signatures, tracked: tracked, name: nominal.name, reader: reader)
+	if let nominal = try qualifiedNominalNamed(signatures, written: name, readerFilePath: reader.path) 'writtenQualified'
+		noteQualifiedNominal(signatures, tracked: tracked, name: nominal.name, declFilePath: nominal.declFilePath, reader: reader)
 		return
 	end 'writtenQualified'
 
@@ -873,20 +873,19 @@ function innerAliasDeclFile(signatures ProgramSignatures, name ByteArray, reader
 	end 'declaration'
 end 'innerAliasDeclFile'
 
-function noteQualifiedNominal(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, reader AuditedFile)
+function noteQualifiedNominal(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, declFilePath FilePath, reader AuditedFile)
 	let contested = signatures.writtenNameIsContestedAcrossKinds(name)
-	let meaningFile = signatures.qualifiedNominalMeaningFile(name, readerFilePath: reader.path)
 
 	if let claimants = try tracked.typeIndex.get(name) 'tracked'
 		for at in claimants 'eachClaimant'
-			if not contested or tracked.at(at).declFile.path.equals(meaningFile) 'theNominalDeclaration'
+			if not contested or tracked.at(at).declFile.path.equals(declFilePath) 'theNominalDeclaration'
 				noteRead(tracked, index: at, reader: reader)
 			end 'theNominalDeclaration'
 		end 'eachClaimant'
 	end 'tracked'
 
-	noteStructFieldTypes(signatures, tracked: tracked, name: name, reader: reader, meaningFile: meaningFile)
-	noteEnumPayloadTypes(signatures, tracked: tracked, name: name, reader: reader, meaningFile: meaningFile)
+	noteStructFieldTypes(signatures, tracked: tracked, name: name, reader: reader, meaningFile: declFilePath)
+	noteEnumPayloadTypes(signatures, tracked: tracked, name: name, reader: reader, meaningFile: declFilePath)
 end 'noteQualifiedNominal'
 
 function declaringAuditedFile(signatures ProgramSignatures, tracked TrackedDecls, declFilePath FilePath, fallback AuditedFile) returns AuditedFile

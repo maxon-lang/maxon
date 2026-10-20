@@ -644,7 +644,7 @@ end 'foldLibraryRemainder'
 function restoreDeclTokenStreams(project Project, signatures ProgramSignatures, streamed FilePathArray) throws CompileError
 	for path in streamed 'eachStream'
 		view tokens = try queryActiveTokens(project, path: path)
-		signatures.restoreDeclTokenStream(path.toString(), tokens: PreparedTokens.create(tokens, qualifiedNominalAt: QualifiedNominalSpellingMap.create(), respelledStarts: RespelledTokenStartSet.create()))
+		signatures.restoreDeclTokenStream(path.toString(), tokens: PreparedTokens.create(tokens, respelledStarts: RespelledTokenStartSet.create()))
 	end 'eachStream'
 end 'restoreDeclTokenStreams'
 
@@ -1434,9 +1434,7 @@ function noteTopLevelTypeDeclaration(signatures ProgramSignatures, header TypeDe
 	signatures.noteWrittenTypeClaim(header.name, claim: claim)
 	signatures.noteHeaderTypeNameDecl(TypeNameDecl.create(header.name, claim: claim, nameLine: header.nameLine, nameColumn: header.nameColumn))
 
-	if not isTypeAliasDecl(header.kind) and (isProgramWideTier(header.visibility) or not isStdlibSource) 'aQualifiedSpellingToNote'
-		signatures.noteQualifiedNominal(qualifierForNamespace(namespaceForModuleDirectory(moduleDirectory)), member: header.name, kind: header.kind, declaredByTheLibrary: isStdlibSource)
-	end 'aQualifiedSpellingToNote'
+	signatures.noteTopLevelTypeClaim(qualifierForNamespace(namespaceForModuleDirectory(moduleDirectory)), name: header.name, claim: claim)
 end 'noteTopLevelTypeDeclaration'
 
 typealias NamespaceDirectorySet = Set with String
@@ -1568,9 +1566,9 @@ end 'declaresANominalTypeName'
 // silent disagreement is detected here and the program is refused, naming the collision.
 //
 // A member access is an identifier PRECEDED by `.`; an argument label is one FOLLOWED by `:`.
-// Scanned only when something is actually contested. A scriptlib file is read over its collapsed
-// qualifiers, as the parser reads it: raw, the `Clock` of `stdlib.Clock` follows a `.` and would read
-// as a member.
+// Scanned only when something is actually contested. A segment of a qualified type is not a member
+// (`segmentOfAQualifiedType`): the `Clock` of `stdlib.Clock` follows a `.` and would otherwise read as
+// one.
 function refuseContestedNamesUsedAsMembers(project Project, signatures ProgramSignatures, stdlibPaths MaxonSourcePathArray) throws CompileError
 	for path in stdlibPaths 'eachStdlibFile'
 		match try contestedMemberIn(project, signatures: signatures, path: path) 'census'
@@ -1601,13 +1599,11 @@ end 'ContestedMember'
 
 function contestedMemberIn(project Project, signatures ProgramSignatures, path FilePath) returns ContestedMember throws CompileError
 	view tokens = try queryActiveTokens(project, path: path)
-	view provenance = fileProvenanceOf(project, path: path)
-	let collapses = Parser.qualifiersCollapseIn(provenance.isStdlibSource, isRuntimeSource: provenance.isRuntimeSource, isScriptlibSource: provenance.isScriptlibSource)
 
-	return contestedMemberAmong(Parser.qualifiedTokens(tokens, signatures: signatures, collapses: collapses, readerFilePath: path).tokens, signatures: signatures)
+	return contestedMemberAmong(tokens, signatures: signatures, readerFilePath: path)
 end 'contestedMemberIn'
 
-function contestedMemberAmong(tokens TokenArray, signatures ProgramSignatures) returns ContestedMember
+function contestedMemberAmong(tokens TokenArray, signatures ProgramSignatures, readerFilePath FilePath) returns ContestedMember
 	for i in 0 upto tokens.count() 'eachToken'
 		let tok = try tokens.get(i) otherwise panic("contestedMemberAmong: tokens.get OOB at {i} below count {tokens.count()}")
 
@@ -1619,7 +1615,7 @@ function contestedMemberAmong(tokens TokenArray, signatures ProgramSignatures) r
 			continue
 		end 'notContested'
 
-		if not tokenIsAMemberSpelling(tokens, index: i) 'notAMember'
+		if not tokenIsAMemberSpelling(tokens, index: i) or segmentOfAQualifiedType(tokens, index: i, signatures: signatures, readerFilePath: readerFilePath) 'notAMember'
 			continue
 		end 'notAMember'
 
@@ -3686,6 +3682,8 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		// that wears no prefix at all. Both clauses forbid a DECLARATION as well as a call, so neither
 		// reading sends the author off to define the function.
 		unknownCompilerIntrinsic(callee, reason, line, column) gives Diagnostic.create(ErrorCode.callUnknownFunction, message: "call to undefined function '{callee}': {reservedNameReason(callee, reason: reason)}", line: line, column: column, filePath: path)
+
+		undefinedQualifiedFunction(callee, qualifier, line, column) gives Diagnostic.create(ErrorCode.callUnknownFunction, message: "call to undefined function '{callee}': {chainNamesNothingText(qualifier.toByteArray())}", line: line, column: column, filePath: path)
 
 		// E3155, the arm above one position over: the same name, the same classifier's reason, no call. It
 		// carries its own code because E3004's subject is a call — see the registry entry, which argues it.

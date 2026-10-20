@@ -2898,6 +2898,25 @@ end 'main'
 1
 ```
 
+<!-- test: top-level-let-name-shadowed-by-a-type-with-a-static-var -->
+A type and a top-level `let` of one name: `Box.m` is the type's static, read and written, exactly as a
+static call on `Box` is, so the immutable `let` is neither blamed nor read.
+```maxon
+type Box
+	static var m = 0 as ExitCode
+end 'Box'
+
+let Box = 5 as ExitCode
+
+function main() returns ExitCode
+	Box.m = 3
+	return Box.m
+end 'main'
+```
+```exitcode
+3
+```
+
 <!-- test: data-section-bool-global-with-green-threads-runs -->
 A program whose own globals end on a 1-byte slot starts the scheduler, whose words it lays out after
 them, and runs a coroutine to completion.

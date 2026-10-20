@@ -2032,7 +2032,10 @@ type Lexer
 		end 'includeLastByte'
 
 		let identBytes = try bytes.slice(startPos, endIndex: identEnd) otherwise panic("Lexer: identifier-slice invariant violated")
-		let kind = keywords.classify(identBytes)
+		let classified = keywords.classify(identBytes)
+		// `export` before a `.` is the project-root qualifier, a name to every token consumer: the parser,
+		// the formatter and the language server.
+		let kind = TokenKind.identifier if classified == TokenKind.export and not atEof and cursor.current() == AsciiByte.dot else classified
 		emitWithSource(kind, value: identBytes, startLine: startLine, startCol: startCol, startByte: startPos, endByte: identEnd)
 
 		if atEof 'identDone'

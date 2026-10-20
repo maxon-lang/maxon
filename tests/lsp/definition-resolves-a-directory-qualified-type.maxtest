@@ -1,0 +1,20 @@
+let QualifiedRootName = "temp/lsp/definition-resolves-a-directory-qualified-type"
+let QualifiedSubDirName = "temp/lsp/definition-resolves-a-directory-qualified-type/sub"
+let QualifiedCalcFileName = "calc.maxon"
+let QualifiedMainFileName = "main.maxon"
+let QualifiedCalcSource = "export type Calc\n\texport let v as ExitCode\n\n\texport static function make() returns Calc\n\t\treturn Calc\{v: 0\}\n\tend 'make'\nend 'Calc'\n"
+let QualifiedMainSource = "function main() returns ExitCode\n\treturn sub.Calc.make().v\nend 'main'\n"
+let QualifiedCalcTail = "definition-resolves-a-directory-qualified-type/sub/calc.maxon"
+let QualifiedTypeLine = 1
+let QualifiedTypeCharacter = 13
+let QualifiedDeclarationLine = 0
+
+test 'definition resolves a directory-qualified type'
+	let root = stagedCorpusDirectory(QualifiedRootName)
+	let subDirectory = createdStagingDirectory(QualifiedSubDirName, under: Directory.currentPath())
+	writeCorpusFile(subDirectory, fileName: QualifiedCalcFileName, content: QualifiedCalcSource)
+
+	let probe = probeCorpusDefinition(root, fileName: QualifiedMainFileName, content: QualifiedMainSource, line: QualifiedTypeLine, character: QualifiedTypeCharacter)
+
+	expectDefinitionInFile(probe, fileTail: QualifiedCalcTail, startLine: QualifiedDeclarationLine, note: "the type named in `sub.Calc.make()` did not resolve to the `Calc` that `sub/calc.maxon` declares.")
+end 'definition resolves a directory-qualified type'

@@ -1880,10 +1880,10 @@ end 'main'
 error E2015: specs/async-await/async-await.error.qualified-spawn-generic-instance-constructor.maxon:13:23: Unsupported: `async StrBox.create(…)` — `StrBox` names a generic INSTANCE, and the promise a spawn mints is typed from the callee's declared return, which names the generic base rather than the instance this alias fixes. Awaiting it would hand back a value at the wrong type. Call it directly
 ```
 
-<!-- test: async-await.error.spawn-longer-chain-is-not-the-qualified-shape -->
-The qualified reading is recognized on the whole `. <member> (` tail, so a LONGER chain is not that
-shape at all: it falls to the free-call reader, which reports the mismatch at the `.` it cannot
-consume. Pinning it keeps the boundary between the two readers explicit.
+<!-- test: async-await.error.an-async-chain-naming-nothing-is-refused -->
+A chain of any length is read the way a direct call reads it. Nothing declares `lib`, so `lib.inner`
+names no binding, directory or type, and the spawn is refused as the same call written without `async`
+would be.
 ```maxon
 function main() returns ExitCode
 	let p = async lib.inner.deep()
@@ -1891,7 +1891,50 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: specs/async-await/async-await.error.spawn-longer-chain-is-not-the-qualified-shape.maxon:3:19: Expected '(' but got '.'
+error E3004: specs/async-await/async-await.error.an-async-chain-naming-nothing-is-refused.maxon:3:26: call to undefined function 'lib.inner.deep': nothing declares a binding, directory or type `lib.inner`
+```
+
+<!-- test: async-await.qualified-spawn-of-a-directory-types-static -->
+A static of a type declared in another directory is spawned by its qualified name, `sub.Calc.seven`, the
+spelling a direct call accepts.
+```maxon
+// --- file: sub/calc.maxon
+export type Calc
+	export static function seven() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return 7
+	end 'seven'
+end 'Calc'
+
+export typealias Integer = int(i64.min to i64.max)
+// --- file: main.maxon
+function main() returns ExitCode
+	let n = await async sub.Calc.seven()
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: async-await.qualified-spawn-of-a-nested-directory-free-function -->
+A free function two directories down is spawned through its whole qualifier, `outer.inner.six`.
+```maxon
+// --- file: outer/inner/math.maxon
+export function six() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 6
+end 'six'
+
+export typealias Integer = int(i64.min to i64.max)
+// --- file: main.maxon
+function main() returns ExitCode
+	let n = await async outer.inner.six()
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+6
 ```
 
 <!-- test: async-await.qualified-spawn-namespace-free-call -->

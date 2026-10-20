@@ -3795,3 +3795,50 @@ end 'main'
 ```exitcode
 7
 ```
+
+### A constraint interface named through its directory
+
+<!-- test: a-where-constraint-names-an-interface-through-its-directory -->
+`Box`'s parameter is constrained by `sub.Digest`, the interface `sub/` declares, and the body dispatches
+the requirement through that constraint (21 × 2).
+```maxon
+// --- file: sub/digest.maxon
+export interface Digest
+	function digest() returns ExitCode
+end 'Digest'
+
+// --- file: main.maxon
+type Point implements sub.Digest
+	let x as ExitCode
+
+	static function create(x ExitCode) returns Self
+		return Self{x: x}
+	end 'create'
+
+	function digest() returns ExitCode
+		return self.x * 2
+	end 'digest'
+end 'Point'
+
+type Box uses T where T is sub.Digest
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function itemDigest() returns ExitCode
+		return self.item.digest()
+	end 'itemDigest'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+function main() returns ExitCode
+	let b = PointBox.create(Point.create(21))
+	return b.itemDigest()
+end 'main'
+```
+```exitcode
+42
+```

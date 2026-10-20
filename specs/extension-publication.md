@@ -474,3 +474,33 @@ end 'main'
 ```exitcode
 44
 ```
+
+### An extension of a type named through its directory
+
+<!-- test: an-extension-of-a-type-named-through-its-directory-publishes-onto-it -->
+`extension sub.Calc` extends the `Calc` that `sub/` declares, so its `doubled` is a method of that type
+at a call through the same chain (20 × 2 + 2).
+```maxon
+// --- file: sub/calc.maxon
+export type Calc
+	export let v as ExitCode
+
+	export static function make() returns Calc
+		return Calc{v: 20}
+	end 'make'
+end 'Calc'
+
+// --- file: main.maxon
+extension sub.Calc
+	function doubled() returns ExitCode
+		return self.v * 2
+	end 'doubled'
+end 'Calc'
+
+function main() returns ExitCode
+	return sub.Calc.make().doubled() + 2
+end 'main'
+```
+```exitcode
+42
+```

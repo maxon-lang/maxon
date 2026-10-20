@@ -1,0 +1,339 @@
+// The one resolver of a qualified chain, `resolveChain`, over the one lookup `lookupQualifiedType`. Every
+// consumer asks them — the parser at each use site, the declaration index, service discovery, the E3112
+// census, unused-export credit and the language server; one that reads a chain itself is free to disagree
+// with them about the same program.
+
+// The two tokens one qualifier segment costs — the `.` and the identifier after it.
+module let TokensPerQualifierSegment = 2
+
+// What a chain is read as: `typeReference` the whole chain as one type; `typeOrMemberType` the whole chain,
+// or an owner type and then a member type of it (`lib.Type.Inner`); `memberReference` every segment but
+// the last, which is the member; `typePrefix` the longest prefix that names a type.
+module enum ChainUse
+	typeReference
+	typeOrMemberType
+	memberReference
+	typePrefix
+end 'ChainUse'
+
+module union ChainStanding
+	nameable
+	hidden(kind HiddenSymbolKind, tier Visibility)
+end 'ChainStanding'
+
+module type ChainType
+	export let kind as TypeDeclKind
+	export let declFilePath as FilePath
+	export let name as ByteArray
+	export let written as ByteArray
+	export let standing as ChainStanding
+
+	static function create(kind TypeDeclKind, declFilePath FilePath, name ByteArray, written ByteArray, standing ChainStanding) returns ChainType
+		return Self{kind: kind, declFilePath: declFilePath, name: name, written: written, standing: standing}
+	end 'create'
+
+	export function nominalNameOr(spelling ByteArray) returns ByteArray
+		return spelling if isTypeAliasDecl(self.kind) else self.name
+	end 'nominalNameOr'
+
+	export function isNameable() returns bool
+		return match self.standing 'standing'
+			nameable gives true
+			hidden gives false
+		end 'standing'
+	end 'isNameable'
+end 'ChainType'
+
+module union ChainResolution
+	unqualified
+	value
+	declaredType(let declaration ChainType, consumed ElementIndex)
+	ambiguous(let written ByteArray, let candidates StringArray)
+	declaredFunction(let callee ByteArray, let written ByteArray)
+	nothing(let qualifier ByteArray)
+end 'ChainResolution'
+
+// Shared because a union value is a heap object even when payload-free, and `resolveChain` answers at
+// every dotted statement and expression.
+module let UnqualifiedChain = ChainResolution.unqualified
+
+let ValueHeadedChain = ChainResolution.value
+
+module enum ChainHeadClaim
+	value
+	nominalType
+	otherType
+	nominalTypeBesideBinding
+	otherTypeBesideBinding
+	unclaimed
+end 'ChainHeadClaim'
+
+module union TypeLookup
+	missing
+	found(let declaration ChainType)
+	ambiguous(let candidates StringArray)
+end 'TypeLookup'
+
+function chainContinuesAt(tokens TokenArray, dotAt ElementIndex) returns bool
+	if (try tokens.get(dotAt) otherwise return false).kind != TokenKind.dot 'noDot'
+		return false
+	end 'noDot'
+
+	return tokenCanBeAName(try tokens.get(dotAt + 1) otherwise return false)
+end 'chainContinuesAt'
+
+module function followsADot(tokens TokenArray, index ElementIndex) returns bool
+	if index == 0 'theFirstToken'
+		return false
+	end 'theFirstToken'
+
+	return (try tokens.get(index - 1) otherwise panic("followsADot: tokens.get OOB at {index - 1}, below the {tokens.count()} tokens it indexes")).kind == TokenKind.dot
+end 'followsADot'
+
+module function chainSegmentsAt(tokens TokenArray, at ElementIndex) returns ElementIndex
+	var segments = 0 as ElementIndex
+
+	while chainContinuesAt(tokens, dotAt: at + 1 + segments * TokensPerQualifierSegment) 'eachSegment'
+		segments = segments + 1
+	end 'eachSegment'
+
+	return segments
+end 'chainSegmentsAt'
+
+module function chainMemberAt(tokens TokenArray, at ElementIndex, segment ElementIndex) returns ByteArray
+	let member = try tokens.get(at + segment * TokensPerQualifierSegment) otherwise panic("chainMemberAt: tokens.get OOB for segment {segment}, which `chainContinuesAt` just found")
+	return member.value
+end 'chainMemberAt'
+
+module function chainSpellingAt(tokens TokenArray, at ElementIndex, segments ElementIndex) returns ByteArray
+	let head = (try tokens.get(at) otherwise panic("chainSpellingAt: tokens.get OOB at {at}, the chain's head")).value
+
+	if segments == 0 'justTheHead'
+		return head
+	end 'justTheHead'
+
+	var spelled = joinQualifiedName(head, member: chainMemberAt(tokens, at: at, segment: 1))
+
+	for segment in 2 upto segments + 1 'eachMoreSegment'
+		spelled = joinQualifiedName(spelled, member: chainMemberAt(tokens, at: at, segment: segment))
+	end 'eachMoreSegment'
+
+	return spelled
+end 'chainSpellingAt'
+
+module function chainNamesNothingText(qualifier ByteArray) returns String
+	return "nothing declares a binding, directory or type `{String.from(qualifier)}`"
+end 'chainNamesNothingText'
+
+module function chainHeadIsAValueText(head ByteArray, qualifier ByteArray) returns String
+	return "`{String.from(head)}` is a value in scope, so `{String.from(qualifier)}` names no type"
+end 'chainHeadIsAValueText'
+
+module function resolveChain(tokens TokenArray, at ElementIndex, signatures ProgramSignatures, readerFilePath FilePath, headIsAValue bool, use ChainUse) returns ChainResolution
+	let head = try tokens.get(at) otherwise return UnqualifiedChain
+	let segments = chainSegmentsAt(tokens, at: at)
+
+	if head.kind != TokenKind.identifier or segments == 0 'notAChain'
+		return UnqualifiedChain
+	end 'notAChain'
+
+	let qualifierSegments = (segments - 1) as ElementIndex if use == ChainUse.memberReference else segments
+
+	// Before `allFilesFolded` a missing name is the sweep's progress, not the program's, and a `nothing`
+	// read off it would refuse a chain the program declares.
+	if use == ChainUse.memberReference and not signatures.allFilesFolded 'theDeclarationsAreStillBeingFolded'
+		return UnqualifiedChain
+	end 'theDeclarationsAreStillBeingFolded'
+
+	let headIsOfUnknownRole = use == ChainUse.memberReference or use == ChainUse.typePrefix
+	let headClaim = classifiedChainHead(signatures, head: head.value, readerFilePath: readerFilePath, headIsAValue: headIsAValue) if headIsOfUnknownRole else ChainHeadClaim.unclaimed
+
+	if headClaim == ChainHeadClaim.value 'aValueHeadsIt'
+		return ValueHeadedChain
+	end 'aValueHeadsIt'
+
+	let headIsNominal = chainHeadIsNominal(headClaim)
+
+	if not signatures.namesANamespace(head.value) 'noDirectoryStartsHere'
+		return unclaimedChain(signatures, tokens: tokens, at: at, head: head.value, qualifierSegments: qualifierSegments, use: use)
+	end 'noDirectoryStartsHere'
+
+	let shortest = qualifierSegments if use == ChainUse.typeReference else 1 as ElementIndex
+	let qualifier = chainSpellingAt(tokens, at: at, segments: qualifierSegments)
+	var spellingEnd = qualifier.count()
+	var consumed = qualifierSegments
+
+	// A struct, enum or union head is never a directory to a TYPE lookup, but it still reaches the directory
+	// function below when the type declares no such member
+	// (`namespace-qualified-resolution/uncontested-free-function-in-a-type-named-directory`).
+	while consumed > 0 and consumed >= shortest and not headIsNominal 'eachLongerSpellingFirst'
+		let written = try qualifier.slice(0, endIndex: spellingEnd) otherwise panic("resolveChain: the spelling end {spellingEnd} left the {qualifier.count()}-byte qualifier it only ever shrinks from")
+		let looked = ownerOnlyWhenPartial(lookupQualifiedType(signatures, written: written, readerFilePath: readerFilePath), partial: use == ChainUse.typeOrMemberType and consumed < qualifierSegments)
+
+		match looked 'lookup'
+			found(declaration) then return ChainResolution.declaredType(declaration, consumed: consumed)
+			ambiguous(candidates) then return ChainResolution.ambiguous(written, candidates: candidates)
+			missing then break
+		end 'lookup'
+
+		spellingEnd = spellingEnd - chainMemberAt(tokens, at: at, segment: consumed).count() - 1
+		consumed = consumed - 1
+	end 'eachLongerSpellingFirst'
+
+	if use != ChainUse.memberReference 'noMemberToResolve'
+		return UnqualifiedChain
+	end 'noMemberToResolve'
+
+	let wholeChain = joinQualifiedName(qualifier, member: chainMemberAt(tokens, at: at, segment: segments))
+
+	match signatures.resolveQualifiedFunctionName(wholeChain, bare: chainMemberAt(tokens, at: at, segment: segments)) 'aDirectoryQualifiedFunction'
+		declaration(callee) then return ChainResolution.declaredFunction(callee, written: wholeChain)
+		ambiguous or
+		undeclared then break
+	end 'aDirectoryQualifiedFunction'
+
+	if qualifierSegments == 0 or headNamesSomethingElse(signatures, head: head.value) or signatures.namesANamespace(qualifier) 'theQualifierNamesSomething'
+		return UnqualifiedChain
+	end 'theQualifierNamesSomething'
+
+	return ChainResolution.nothing(qualifier)
+end 'resolveChain'
+
+module function classifiedChainHead(signatures ProgramSignatures, head ByteArray, readerFilePath FilePath, headIsAValue bool) returns ChainHeadClaim
+	if headIsAValue 'aLocalHeadsIt'
+		return ChainHeadClaim.value
+	end 'aLocalHeadsIt'
+
+	let bindingIsVisible = signatures.topLevelBindingVisibleFrom(head, readerFilePath: readerFilePath)
+
+	match signatures.typeHeadKindOf(head, readerFilePath: readerFilePath) 'typeHead'
+		nominal then return ChainHeadClaim.nominalTypeBesideBinding if bindingIsVisible else ChainHeadClaim.nominalType
+		other then return ChainHeadClaim.otherTypeBesideBinding if bindingIsVisible else ChainHeadClaim.otherType
+		absent then return ChainHeadClaim.value if bindingIsVisible else ChainHeadClaim.unclaimed
+	end 'typeHead'
+end 'classifiedChainHead'
+
+module function chainHeadIsNominal(claim ChainHeadClaim) returns bool
+	return match claim 'claim'
+		nominalType or
+		nominalTypeBesideBinding gives true
+		value or
+		otherType or
+		otherTypeBesideBinding or
+		unclaimed gives false
+	end 'claim'
+end 'chainHeadIsNominal'
+
+function unclaimedChain(signatures ProgramSignatures, tokens TokenArray, at ElementIndex, head ByteArray, qualifierSegments ElementIndex, use ChainUse) returns ChainResolution
+	if use != ChainUse.memberReference or qualifierSegments == 0 or headNamesSomethingElse(signatures, head: head) 'somethingElseClaimsIt'
+		return UnqualifiedChain
+	end 'somethingElseClaimsIt'
+
+	return ChainResolution.nothing(chainSpellingAt(tokens, at: at, segments: qualifierSegments))
+end 'unclaimedChain'
+
+function headNamesSomethingElse(signatures ProgramSignatures, head ByteArray) returns bool
+	return signatures.nameIsDeclared(head) or signatures.declaresCallee(head) or isSizedTypeName(head)
+end 'headNamesSomethingElse'
+
+function ownerOnlyWhenPartial(looked TypeLookup, partial bool) returns TypeLookup
+	if not partial 'theWholeChain'
+		return looked
+	end 'theWholeChain'
+
+	return match looked 'looked'
+		found(declaration) gives TypeLookup.found(declaration) if not isTypeAliasDecl(declaration.kind) else TypeLookup.missing
+		ambiguous(candidates) gives TypeLookup.ambiguous(candidates.clone())
+		missing gives TypeLookup.missing
+	end 'looked'
+end 'ownerOnlyWhenPartial'
+
+module function lookupQualifiedType(signatures ProgramSignatures, written ByteArray, readerFilePath FilePath) returns TypeLookup
+	if not containsQualifier(written) 'aBareName'
+		return TypeLookup.missing
+	end 'aBareName'
+
+	match signatures.namespaceMemberOf(written, readerFilePath: readerFilePath) 'claims'
+		several(candidates) then return TypeLookup.ambiguous(candidates.clone())
+		one(kind, declFilePath, name) then return TypeLookup.found(ChainType.create(kind, declFilePath: declFilePath, name: name, written: written, standing: ChainStanding.nameable))
+		hidden(symbolKind, tier, kind, declFilePath, name) then return TypeLookup.found(ChainType.create(kind, declFilePath: declFilePath, name: name, written: written, standing: ChainStanding.hidden(symbolKind, tier: tier)))
+		none then return TypeLookup.missing
+	end 'claims'
+end 'lookupQualifiedType'
+
+module function spelledTypeName(signatures ProgramSignatures, written ByteArray, readerFilePath FilePath) returns ByteArray
+	return match lookupQualifiedType(signatures, written: written, readerFilePath: readerFilePath) 'lookup'
+		found(declaration) gives declaration.name
+		ambiguous or
+		missing gives written
+	end 'lookup'
+end 'spelledTypeName'
+
+module union QualifiedTypeSpan
+	outside
+	within(let declaration ChainType, endIndex ElementIndex)
+
+	function isWithin() returns bool
+		return match self 'span'
+			outside gives false
+			within gives true
+		end 'span'
+	end 'isWithin'
+end 'QualifiedTypeSpan'
+
+module function chainHeadIndexOf(tokens TokenArray, index ElementIndex) returns ElementIndex
+	var head = index
+
+	while head >= TokensPerQualifierSegment and (try tokens.get(head - 1) otherwise return head).kind == TokenKind.dot and (try tokens.get(head - TokensPerQualifierSegment) otherwise return head).kind == TokenKind.identifier 'backToTheHead'
+		head = head - TokensPerQualifierSegment
+	end 'backToTheHead'
+
+	return head
+end 'chainHeadIndexOf'
+
+module function qualifiedTypeSpanning(tokens TokenArray, head ElementIndex, index ElementIndex, signatures ProgramSignatures, readerFilePath FilePath, headIsAValue bool) returns QualifiedTypeSpan
+	if head == index or headIsAValue 'noQualifierBeforeOrAValueHead'
+		return QualifiedTypeSpan.outside
+	end 'noQualifierBeforeOrAValueHead'
+
+	return spanOfResolution(resolveChain(tokens, at: head, signatures: signatures, readerFilePath: readerFilePath, headIsAValue: headIsAValue, use: ChainUse.typePrefix), head: head, index: index)
+end 'qualifiedTypeSpanning'
+
+module function segmentOfAQualifiedType(tokens TokenArray, index ElementIndex, signatures ProgramSignatures, readerFilePath FilePath) returns bool
+	return qualifiedTypeSpanning(tokens, head: chainHeadIndexOf(tokens, index: index), index: index, signatures: signatures, readerFilePath: readerFilePath, headIsAValue: false).isWithin()
+end 'segmentOfAQualifiedType'
+
+function spanOfResolution(resolution ChainResolution, head ElementIndex, index ElementIndex) returns QualifiedTypeSpan
+	match resolution 'resolution'
+		declaredType(declaration, consumed) then return spanCovering(declaration, endIndex: head + consumed * TokensPerQualifierSegment, index: index)
+		unqualified or
+		value or
+		ambiguous or
+		declaredFunction or
+		nothing then return QualifiedTypeSpan.outside
+	end 'resolution'
+end 'spanOfResolution'
+
+function spanCovering(declaration ChainType, endIndex ElementIndex, index ElementIndex) returns QualifiedTypeSpan
+	if index > endIndex 'pastTheType'
+		return QualifiedTypeSpan.outside
+	end 'pastTheType'
+
+	return QualifiedTypeSpan.within(declaration, endIndex: endIndex)
+end 'spanCovering'
+
+module function qualifiedNominalNamed(signatures ProgramSignatures, written ByteArray, readerFilePath FilePath) returns ChainType throws AbsentError
+	match lookupQualifiedType(signatures, written: written, readerFilePath: readerFilePath) 'lookup'
+		found(declaration) then return try nominalDeclarationOf(declaration)
+		ambiguous or
+		missing then throw AbsentError.absent
+	end 'lookup'
+end 'qualifiedNominalNamed'
+
+function nominalDeclarationOf(declaration ChainType) returns ChainType throws AbsentError
+	if isTypeAliasDecl(declaration.kind) 'anAlias'
+		throw AbsentError.absent
+	end 'anAlias'
+
+	return declaration
+end 'nominalDeclarationOf'

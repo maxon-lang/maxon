@@ -2196,3 +2196,24 @@ splitting / liveness ms at N = 4000:
 Over the 9 programs whose code changed, instructions grow 0.17%, and edge blocks placed before their target
 add about 2% copies by changing the coalescing order. The runtime benchmarks are unchanged and the
 self-compile is 0.45% slower.
+
+### Result — 2026-10-19, one resolver answers what a qualified chain names
+
+`scale-test --rungs=5` on arm64-macos, the tree as pushed (rebased on f42e3815b). Rung 5 is left out
+because it dies in the arm64 backend's branch patching (`arm64PatchBranch19`, a conditional branch
+beyond ±1 MiB), on the control compiler as well as this one.
+
+| rung | allocs | × | bytes | × |
+|---|---:|---:|---:|---:|
+| 0 | 7,990,654 | – | 761,873,103 | – |
+| 1 | 10,751,872 | ×1.34 | 1,122,122,225 | ×1.47 |
+| 2 | 16,283,815 | ×1.51 | 1,840,241,286 | ×1.63 |
+| 3 | 27,385,646 | ×1.68 | 3,306,587,737 | ×1.79 |
+| 4 | 49,719,384 | ×1.81 | 6,275,053,848 | ×1.89 |
+
+The optimizer's A/B on the first implementer round, against 01fe9943e, measured the change's own cost:
++6,332 / +6,879 / +8,022 / +10,148 / +14,504 allocations at rungs 0-4 (about 120 per namespace module in
+`parse`). The later rounds removed a second and third resolution of the same chain and rebuilt the
+prefix walk incrementally; the ladder above is linear. The corpus has one- and two-segment qualified
+type references and qualified calls, but no qualified `spawn`/`async`/statics and no chain naming
+nothing, so those paths are argued from reading only.

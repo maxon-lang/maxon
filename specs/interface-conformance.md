@@ -2258,3 +2258,80 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:6:10: Unsupported: `Glyph` implements `BuiltinCharLiteral`, one of `stdlib/Builtins.maxon`'s literal markers, so its record would be the compiler's own fused byte record rather than the fields it declares. The compiler mints that record only for the two names it owns the record FOR — `String` and `Character` — because a conformer of any other name gets a VALUE whose bytes are a byte record's and whose IDENTITY is a struct's: every declared field the fused record has no slot for is discarded at construction, and the struct cascade that later drops or clones it reads past the record's end
 ```
+
+### An interface named through its directory
+
+<!-- test: a-type-implements-an-interface-named-through-its-directory -->
+`K` implements `sub.Greeter`, the interface `sub/` declares, and is passed where that interface is the
+parameter's type, so its `greet` answers through the conformance.
+```maxon
+// --- file: sub/greeter.maxon
+export interface Greeter
+	function greet() returns ExitCode
+end 'Greeter'
+
+// --- file: main.maxon
+type K implements sub.Greeter
+	let v as ExitCode
+
+	static function make() returns K
+		return K{v: 11}
+	end 'make'
+
+	function greet() returns ExitCode
+		return self.v
+	end 'greet'
+end 'K'
+
+function call(g sub.Greeter) returns ExitCode
+	return g.greet()
+end 'call'
+
+function main() returns ExitCode
+	return call(K.make())
+end 'main'
+```
+```exitcode
+11
+```
+
+<!-- test: an-interface-extends-an-interface-named-through-its-directory -->
+`Both` extends `sub.Base`, so a conformer of `Both` answers `Base`'s requirement through it (5 + 6).
+```maxon
+// --- file: sub/base.maxon
+export interface Base
+	function base() returns ExitCode
+end 'Base'
+
+// --- file: main.maxon
+interface Both extends sub.Base
+	function more() returns ExitCode
+end 'Both'
+
+type K implements Both
+	let v as ExitCode
+
+	static function make() returns K
+		return K{v: 5}
+	end 'make'
+
+	function base() returns ExitCode
+		return self.v
+	end 'base'
+
+	function more() returns ExitCode
+		return self.v + 1
+	end 'more'
+end 'K'
+
+function call(b Both) returns ExitCode
+	return b.base() + b.more()
+end 'call'
+
+function main() returns ExitCode
+	return call(K.make())
+end 'main'
+```
+```exitcode
+11
+```

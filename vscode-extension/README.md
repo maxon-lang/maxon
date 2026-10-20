@@ -17,7 +17,8 @@ Visual Studio Code extension that provides syntax highlighting and Language Serv
   receiver typed by `self`, by a call, by a `try … otherwise`, by a field of the enclosing type, by a
   `for … in` loop variable, by a chain of any of these (`a.b.c`, `a.m().n()`), by a generic-instance type alias, by
   an element taken out of a generic container, or by a service handle, which offers its service's messages
-  plus `shutdown` and `clone`.
+  plus `shutdown` and `clone`. A directory-qualified name (`sub.Calc.make()`) hovers and goes to definition
+  as the compiler resolves it.
 - **Diagnostics that know about your other files**: a name a sibling file of the project declares
   counts as declared. Each buffer is checked on its own at once; in a project with a `.maxproj`, the
   whole project is then compiled with your unsaved text, a moment after you stop typing, and the file

@@ -1,0 +1,20 @@
+let HoverQualifiedRootName = "temp/lsp/hover-resolves-a-directory-qualified-type"
+let HoverQualifiedSubDirName = "temp/lsp/hover-resolves-a-directory-qualified-type/sub"
+let HoverQualifiedCalcFileName = "calc.maxon"
+let HoverQualifiedMainFileName = "main.maxon"
+let HoverQualifiedCalcSource = "export type Calc\n\texport let v as ExitCode\n\n\texport static function make() returns Calc\n\t\treturn Calc\{v: 0\}\n\tend 'make'\nend 'Calc'\n"
+let HoverQualifiedMainSource = "function main() returns ExitCode\n\treturn sub.Calc.make().v\nend 'main'\n"
+let HoverQualifiedTypeLine = 1
+let HoverQualifiedTypeCharacter = 13
+
+test 'hover resolves a directory-qualified type'
+	let root = stagedCorpusDirectory(HoverQualifiedRootName)
+	let subDirectory = createdStagingDirectory(HoverQualifiedSubDirName, under: Directory.currentPath())
+	writeCorpusFile(subDirectory, fileName: HoverQualifiedCalcFileName, content: HoverQualifiedCalcSource)
+	writeCorpusFile(root, fileName: HoverQualifiedMainFileName, content: HoverQualifiedMainSource)
+
+	let uri = fileUriOf(root.join(HoverQualifiedMainFileName))
+	let rendering = hoverRenderingAtUri(uri, source: HoverQualifiedMainSource, line: HoverQualifiedTypeLine, character: HoverQualifiedTypeCharacter)
+
+	Expect.contains(rendering, needle: "type Calc", message: "the type named in `sub.Calc.make()` did not hover as the `Calc` that `sub/calc.maxon` declares. It rendered: {rendering}")
+end 'hover resolves a directory-qualified type'

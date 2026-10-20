@@ -612,3 +612,37 @@ end 'main'
 ```maxoncstderr
 error E2010: specs/top-level-let/error.runtime-init-trailing-tokens.maxon:12:22: Expected 'end of global initializer' but got 'zzz'
 ```
+
+<!-- test: a-top-level-let-is-initialized-by-a-directory-types-static -->
+A top-level `let` is initialized by a static of a type in another directory, through a one-segment
+chain, `sub.Calc`, and a two-segment one, `outer.inner.Deep` (30 + 12).
+```maxon
+// --- file: sub/calc.maxon
+export type Calc
+	export let v as ExitCode
+
+	export static function create() returns Calc
+		return Calc{v: 30}
+	end 'create'
+end 'Calc'
+
+// --- file: outer/inner/calc.maxon
+export type Deep
+	export let v as ExitCode
+
+	export static function create() returns Deep
+		return Deep{v: 12}
+	end 'create'
+end 'Deep'
+
+// --- file: main.maxon
+let t = sub.Calc.create()
+let deep = outer.inner.Deep.create()
+
+function main() returns ExitCode
+	return t.v + deep.v
+end 'main'
+```
+```exitcode
+42
+```

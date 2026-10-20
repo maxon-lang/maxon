@@ -1747,6 +1747,7 @@ export union SourceParseError implements Error
 	// `emitRuntimeCall`. SemanticCheck cannot tell those two apart, which is precisely why its early return
 	// let this class of program through to the backend (see `requireCalleeIsNotReservedName`).
 	unknownCompilerIntrinsic(callee String, reason ReservedCalleeReason, line LineNumber, column ColumnNumber)
+	undefinedQualifiedFunction(callee String, qualifier String, line LineNumber, column ColumnNumber)
 
 	// ⭐ A RESERVED NAME IN *VALUE* POSITION — `let f = __parallel_boundary`. Renders as **E3155**, the
 	// value-position half of the rule `unknownCompilerIntrinsic` states for a CALL, and it carries the same
@@ -5398,15 +5399,12 @@ union CompilerOwnedStaticSurface
 end 'CompilerOwnedStaticSurface'
 
 // ⭐⭐ **THE CALLEE A `<Type>.<member>(…)` NAMES once the compiler-owned surfaces have declined** — the half
-// of the qualified-call resolution that needs the member token. The three arms are three answers to *"whose
-// name is this?"*, which is precisely what the `async` door has to know: a MINTED name is one the door
-// refuses, while the other two are ordinary declared functions a spawn can take the address of.
+// of the qualified-call resolution that needs the member token. The two arms are two answers to *"whose
+// name is this?"*, and the answer is the `CalleeMint` the call carries: `primitiveStatic` for a MINTED
+// name, the head's own mint for a declared one.
 union QualifiedStaticCallee
 	// `int.fromString` → `__int_fromString` (`CalleeMint.primitiveStatic`).
 	minted(let callee ByteArray)
-
-	// `utils.helper()` — a free function reached through its directory qualifier.
-	namespaceQualifiedFree(let callee ByteArray)
 
 	// `File.readText` at its registration key — the ordinary static.
 	declared(let callee ByteArray)
@@ -6243,9 +6241,9 @@ let DetachedBlockLabel = b"detached"
 // E3004 "call to undefined function 'Point.create'", pointing at a call that is perfectly correct.
 //
 // ⚠ **IT MUST ALSO SPELL THE SAME BYTE AS `SignatureIndex.QualifiedAliasSeparator`.**
-// `parseQualifiedCall` probes `resolvesAsNamespaceQualifiedFunction` with the `declaredCallee` it
-// mangled through THIS constant, against a set keyed by `namespaceQualifiedName` →
-// `joinQualifiedName`, which spells the OTHER one. The two remain separate facts — this one is the
+// `resolvesAsNamespaceQualifiedFunction` vetoes a chain through `declaresCallee`, whose `Type.method`
+// keys are mangled through THIS constant, while the chain `ChainResolution.resolveChain` hands it is
+// joined by `joinQualifiedName`, which spells the OTHER one. The two remain separate facts — this one is the
 // byte an emitted SYMBOL carries; that one is the byte the SOURCE writes between two name segments
 // — but they are no longer free to move independently. What keeps them from drifting silently is
 // not this note: it is that every one-dot `dir.fn()` case in `specs/namespaces.md` goes RED the
@@ -6337,18 +6335,6 @@ end 'qualifiedMethodName'
 // type name to one method name and neither may hold a ".". Named rather than written as a bare `1` beside
 // `TokensPerQualifierSegment`'s `2`, where it would read as arithmetic instead of as a rule.
 let MethodQualifierDots = 1
-
-// The two tokens one qualifier segment costs — the `.` and the identifier after it. Named because the
-// dotted-chain walk indexes by it three times (the length probe, the assemble, and the `(` lookahead that
-// terminates them both), and a bare `2` beside `MethodQualifierDots`' `1` would be two unrelated quantities
-// wearing bare literals.
-let TokensPerQualifierSegment = 2
-
-// What a directory-qualified chain stands as: the callee of a call, whose `(` follows it, or a function value.
-enum QualifiedChainUse
-	call
-	value
-end 'QualifiedChainUse'
 
 // ⭐⭐ **`int.fromString(s)` IS `__int_fromString(s)` — THE ONE STATIC-CALL BASE THAT NAMES NO DECLARED
 // TYPE.** A primitive has no `type` declaration to hang a `static function` on, so its statics live in the
@@ -7790,7 +7776,7 @@ end 'pickBound'
 //
 // ⚠ It answers TRUE for `f32`/`f64` as well as the eight integers: `typealias Real = f64` is E2003.
 // The narrower eight-integer roster is not what the corpus pins.
-function isSizedTypeName(name ByteArray) returns bool
+module function isSizedTypeName(name ByteArray) returns bool
 	return match sizedTypeBound(name, wantMax: true) 'kind'
 		value or
 		floatBound gives true
@@ -9917,17 +9903,15 @@ module type SpawnTargetCall
 end 'SpawnTargetCall'
 
 // `<head>(.<name>)+ (`, read off raw tokens: the type is every segment but the last, as written
-// (`stdlib.Range`), and `ServiceCompanions.spawnedTypeNameOf` resolves it. The one reader of a spawn
-// target, for discovery (`Queries.serviceSpawnFollowing`), `defaultDeclarationFrom` and
-// `Parser.parseSpawn`: a shape one accepts and another declines is a spawn nobody minted companions for,
-// or companions nobody spawns.
+// (`stdlib.Range`), and `ServiceCompanions.spawnedTypeNameOf` resolves it. It is discovery's reader
+// (`Queries.serviceSpawnFollowing`); which type a spawn starts is `Parser.parseSpawn`'s resolution of the
+// site.
 //
 // Every name position asks `tokenCanBeAName`, not "is it an identifier": a keyword may be a declared
 // name (a factory spelled `static function from(...)`).
 //
-// ⚠ It reads no scope, so a chain whose head is a binding in scope is still read as a qualified type,
-// where the parser's qualifier collapse reads the binding; discovery and the parser then name
-// different types, and the compile ends in an error.
+// ⚠ It reads no scope, so a chain whose head is a binding still reads as a qualified type and mints that
+// type's companions; `Parser.parseSpawn`, which reads the scope, refuses the site.
 module function spawnTargetCallIn(tokens TokenArray, targetIndex ElementIndex) returns SpawnTargetCall throws NoServiceSpawn
 	let typeTok = try tokens.get(targetIndex) otherwise throw NoServiceSpawn.notOne
 
@@ -9935,7 +9919,7 @@ module function spawnTargetCallIn(tokens TokenArray, targetIndex ElementIndex) r
 		throw NoServiceSpawn.notOne
 	end 'notATypeName'
 
-	let memberSegment = Parser.chainSegmentsAt(tokens, at: targetIndex)
+	let memberSegment = chainSegmentsAt(tokens, at: targetIndex)
 
 	if memberSegment == 0 'notQualified'
 		throw NoServiceSpawn.notOne
@@ -9947,7 +9931,7 @@ module function spawnTargetCallIn(tokens TokenArray, targetIndex ElementIndex) r
 		throw NoServiceSpawn.notOne
 	end 'notACall'
 
-	return SpawnTargetCall.create(Parser.chainSpellingAt(tokens, at: targetIndex, segments: (memberSegment - 1) as ElementIndex), member: Parser.chainMemberAt(tokens, at: targetIndex, segment: memberSegment))
+	return SpawnTargetCall.create(chainSpellingAt(tokens, at: targetIndex, segments: (memberSegment - 1) as ElementIndex), member: chainMemberAt(tokens, at: targetIndex, segment: memberSegment))
 end 'spawnTargetCallIn'
 
 function tokenKindIn(tokens TokenArray, index ElementIndex) returns TokenKind
@@ -10006,16 +9990,8 @@ end 'defaultDeclarationAt'
 module function defaultDeclarationFrom(tokens TokenArray, index ElementIndex, path FilePath, isStdlibSource bool) returns DefaultDeclaration
 	let keyTok = try tokens.get(index + 1) otherwise panic("defaultDeclarationFrom: `defaultDeclarationAt` saw the key at {index + 1}")
 	let exprStart = index + 3
-	let exprEnd = initializerEndIndexIn(tokens, start: exprStart)
-	let startsWithASpawn = exprStart < tokens.count() and tokenIsTheSpawnKeyword(try tokens.get(exprStart) otherwise panic("defaultDeclarationFrom: exprStart below count just checked"))
 
-	if startsWithASpawn 'aSpawnKeyword'
-		if let target = try spawnTargetCallIn(tokens, targetIndex: spawnTargetIndexIn(tokens, spawnIndex: exprStart)) 'aSpawnTarget'
-			return DefaultDeclaration.create(keyTok.value, declFilePath: path, keyRange: SourceRange.ofToken(keyTok), isStdlibSource: isStdlibSource, exprStart: exprStart, exprEnd: exprEnd, spawn: DefaultSpawn.spawns(target.typeName))
-		end 'aSpawnTarget'
-	end 'aSpawnKeyword'
-
-	return DefaultDeclaration.create(keyTok.value, declFilePath: path, keyRange: SourceRange.ofToken(keyTok), isStdlibSource: isStdlibSource, exprStart: exprStart, exprEnd: exprEnd, spawn: DefaultSpawn.value)
+	return DefaultDeclaration.create(keyTok.value, declFilePath: path, keyRange: SourceRange.ofToken(keyTok), isStdlibSource: isStdlibSource, exprStart: exprStart, exprEnd: initializerEndIndexIn(tokens, start: exprStart))
 end 'defaultDeclarationFrom'
 
 // ⭐⭐ **`test`'s SPELLING — AN IDENTIFIER, NEVER A KEYWORD, FOR `module`'s AND `spawn`'s REASON AND WITH
@@ -13717,6 +13693,47 @@ union CaptureScopeResult
 		end 'result'
 	end 'isFound'
 end 'CaptureScopeResult'
+
+union ValueBaseBinding
+	thisFrame
+	captured(frame ElementIndex)
+	unbound
+	alwaysAType
+
+	function isFrameValue() returns bool
+		return match self 'binding'
+			thisFrame or
+			captured gives true
+			unbound or
+			alwaysAType gives false
+		end 'binding'
+	end 'isFrameValue'
+
+	function isThisFrame() returns bool
+		return match self 'binding'
+			thisFrame gives true
+			captured or
+			unbound or
+			alwaysAType gives false
+		end 'binding'
+	end 'isThisFrame'
+
+	function isUnbound() returns bool
+		return match self 'binding'
+			unbound gives true
+			thisFrame or
+			captured or
+			alwaysAType gives false
+		end 'binding'
+	end 'isUnbound'
+end 'ValueBaseBinding'
+
+// Shared for `ChainResolution.UnqualifiedChain`'s reason: `valueBaseAt` answers at every dotted base.
+let ThisFrameValueBase = ValueBaseBinding.thisFrame
+
+let UnboundValueBase = ValueBaseBinding.unbound
+
+let TypeValueBase = ValueBaseBinding.alwaysAType
 
 union EnumAccessorBase
 	thisFrame
@@ -18784,146 +18801,6 @@ union QualifiedTypeBase
 	at(index ElementIndex, let name ByteArray, declFilePath FilePath)
 end 'QualifiedTypeBase'
 
-typealias QualifierHeadNameSet = Set with ByteArray
-typealias QualifierHeadNameSetArray = Array with QualifierHeadNameSet
-
-enum BindingListRole
-	bindsItsNames
-	bindsItsNamesBeforeAnArm
-	bindsNothing
-end 'BindingListRole'
-
-type BindingList
-	export let role as BindingListRole
-	export let pendingFrom as ElementIndex
-
-	static function create(role BindingListRole, pendingFrom ElementIndex) returns BindingList
-		return Self{role: role, pendingFrom: pendingFrom}
-	end 'create'
-end 'BindingList'
-
-typealias BindingListArray = Array with BindingList
-
-function bindingListRoleAt(tokens TokenArray, openAt ElementIndex) returns BindingListRole
-	if openAt == 0 or (try tokens.get(openAt) otherwise panic("bindingListRoleAt: {openAt} is the bracket the walk is standing on")).kind != TokenKind.leftParen 'notAParenthesizedList'
-		return BindingListRole.bindsNothing
-	end 'notAParenthesizedList'
-
-	if openAt >= 2 and functionDeclarationShapeIn(tokens, index: openAt - 2) 'aDeclaredParameterList'
-		return BindingListRole.bindsItsNames
-	end 'aDeclaredParameterList'
-
-	let before = try tokens.get(openAt - 1) otherwise panic("bindingListRoleAt: {openAt - 1} precedes the bracket the walk is standing on")
-
-	if bindingKeywordSpells(before.kind) or before.kind == TokenKind.for or before.kind == TokenKind.otherwise 'aBindingPattern'
-		return BindingListRole.bindsItsNames
-	end 'aBindingPattern'
-
-	if before.kind == TokenKind.function 'aFunctionList'
-		return BindingListRole.bindsNothing if spellsAFunctionType(tokens, functionAt: openAt - 1) else BindingListRole.bindsItsNames
-	end 'aFunctionList'
-
-	return BindingListRole.bindsItsNamesBeforeAnArm if before.kind == TokenKind.identifier else BindingListRole.bindsNothing
-end 'bindingListRoleAt'
-
-function spellsAFunctionType(tokens TokenArray, functionAt ElementIndex) returns bool
-	if functionAt == 0 'atFileStart'
-		return false
-	end 'atFileStart'
-
-	let before = (try tokens.get(functionAt - 1) otherwise panic("spellsAFunctionType: {functionAt - 1} precedes the `function` keyword just read")).kind
-	return before == TokenKind.identifier or before == TokenKind.returns or before == TokenKind.as
-end 'spellsAFunctionType'
-
-function noteBindingAt(lists BindingListArray, pending NameRoster, tokens TokenArray, at ElementIndex, into QualifierHeadNameSet)
-	if at == 0 'atFileStart'
-		return
-	end 'atFileStart'
-
-	let name = (try tokens.get(at) otherwise panic("noteBindingAt: {at} is the identifier the walk is standing on")).value
-	let before = (try tokens.get(at - 1) otherwise panic("noteBindingAt: {at - 1} precedes the identifier the walk is standing on")).kind
-
-	if bindingKeywordSpells(before) or before == TokenKind.for 'aDeclaredName'
-		into.insert(name)
-		return
-	end 'aDeclaredName'
-
-	if before != TokenKind.leftParen and before != TokenKind.comma 'notAListItem'
-		return
-	end 'notAListItem'
-
-	let list = try lists.last() otherwise return
-
-	match list.role 'role'
-		bindsItsNames then into.insert(name)
-		bindsItsNamesBeforeAnArm then pending.push(name)
-		bindsNothing then return
-	end 'role'
-end 'noteBindingAt'
-
-function closeBindingList(lists BindingListArray, pending NameRoster, tokens TokenArray, closeAt ElementIndex, into QualifierHeadNameSet)
-	let list = try lists.pop() otherwise return
-	let after = try tokens.get(closeAt + 1) otherwise panic("closeBindingList: a closing bracket is followed by at least the end-of-file token")
-
-	if list.role == BindingListRole.bindsItsNamesBeforeAnArm and (after.kind == TokenKind.then or after.kind == TokenKind.gives) 'aPayloadPattern'
-		for at in list.pendingFrom upto pending.count() 'eachPayloadName'
-			into.insert(try pending.get(at) otherwise panic("closeBindingList: {at} is below the pending count the loop is bounded by"))
-		end 'eachPayloadName'
-	end 'aPayloadPattern'
-
-	pending.truncate(list.pendingFrom)
-end 'closeBindingList'
-
-type QualifierHeadBindings
-	let segmentStarts as TokenIndexArray
-	let segmentNames as QualifierHeadNameSetArray
-	var segment as ElementIndex
-
-	static function of(tokens TokenArray) returns QualifierHeadBindings
-		var starts = TokenIndexArray.create()
-		var names = QualifierHeadNameSetArray.create()
-		var current = QualifierHeadNameSet.create()
-		var lists = BindingListArray.create()
-		var pending = NameRoster.create()
-		starts.push(0)
-
-		for (iter, tok) in tokens.withIterator() 'eachToken'
-			let at = iter.index()
-
-			if at > 0 and functionDeclarationShapeIn(tokens, index: at) 'aNewSegment'
-				names.push(current)
-				current = QualifierHeadNameSet.create()
-				lists = BindingListArray.create()
-				pending = NameRoster.create()
-				starts.push(at)
-			end 'aNewSegment'
-
-			if tokenKindOpensABracket(tok.kind) 'opensAList'
-				lists.push(BindingList.create(bindingListRoleAt(tokens, openAt: at), pendingFrom: pending.count()))
-			end 'opensAList' else if tokenKindClosesABracket(tok.kind) 'closesAList'
-				closeBindingList(lists, pending: pending, tokens: tokens, closeAt: at, into: current)
-			end 'closesAList' else if tok.kind == TokenKind.identifier 'aName'
-				noteBindingAt(lists, pending: pending, tokens: tokens, at: at, into: current)
-			end 'aName'
-		end 'eachToken'
-
-		return Self.closing(starts, names: names, current: current)
-	end 'of'
-
-	static function closing(starts TokenIndexArray, names QualifierHeadNameSetArray, current QualifierHeadNameSet) returns QualifierHeadBindings
-		names.push(current)
-		return Self{segmentStarts: starts, segmentNames: names, segment: 0}
-	end 'closing'
-
-	function mayBindAt(at ElementIndex, name ByteArray) returns bool
-		while self.segment + 1 < self.segmentStarts.count() and (try self.segmentStarts.get(self.segment + 1) otherwise panic("QualifierHeadBindings.mayBindAt: segmentStarts.get OOB below its own count")) <= at 'intoTheSegmentHoldingIt'
-			self.segment = self.segment + 1
-		end 'intoTheSegmentHoldingIt'
-
-		return (try self.segmentNames.get(self.segment) otherwise panic("QualifierHeadBindings.mayBindAt: one name set is pushed per segment start")).contains(name)
-	end 'mayBindAt'
-end 'QualifierHeadBindings'
-
 export type TypeDeclarationHeader
 	export let name as ByteArray
 	export let kind as TypeDeclKind
@@ -19021,24 +18898,22 @@ function typeNameVerdictOf(hiding TypeNameHiding, noun ByteArray, anchor Token) 
 	end 'hiding'
 end 'typeNameVerdictOf'
 
-union NameableQualifiedType
-	none
-	one(kind TypeDeclKind, let declFilePath FilePath, let name ByteArray, verdict TypeNameVerdict)
+union SpawnedType
+	declared(let declaration ChainType, consumed ElementIndex)
+	named(let typeName ByteArray)
 
-	function nameVerdict() returns TypeNameVerdict
-		return match self 'declared'
-			none gives TypeNameVerdict.nameable
-			one(_, _, _, verdict) gives verdict
-		end 'declared'
-	end 'nameVerdict'
+	function typeName() returns ByteArray
+		return match self 'spawned'
+			declared(declaration, _) gives declaration.name
+			named(typeName) gives typeName
+		end 'spawned'
+	end 'typeName'
+end 'SpawnedType'
 
-	function isDeclared() returns bool
-		return match self 'declared'
-			none gives false
-			one gives true
-		end 'declared'
-	end 'isDeclared'
-end 'NameableQualifiedType'
+union QualifiedTypeChain
+	declared(let declaration ChainType, consumed ElementIndex)
+	notQualified
+end 'QualifiedTypeChain'
 
 type GenericBindingScope
 	export let names as NameRoster
@@ -19086,7 +18961,6 @@ export type Parser
 	var claimOpFloor as ElementIndex
 	var heldAwaits as HeldAwaitArray
 	var qualifiedTypeBase as QualifiedTypeBase
-	let qualifiedNominalAt as QualifiedNominalSpellingMap
 	let respelledStarts as RespelledTokenStartSet
 	var settledTypeNames as SettledTypeNameMap
 	var declaredAliasAnswers as DeclaredAliasAnswerMap
@@ -19656,8 +19530,8 @@ export type Parser
 	let isRuntimeSource as bool
 
 	// Set together with `isStdlibSource`, whose library privileges a scriptlib file shares. It marks the
-	// two places such a file is still the user's: its qualifiers collapse (`qualifiersCollapseIn`), and
-	// a `__` name is the compiler's only where the shadow rename wrote it (`everySpellingIsTheCompilers`).
+	// one place such a file is still the user's: a `__` name is the compiler's only where the shadow rename
+	// wrote it (`everySpellingIsTheCompilers`).
 	let isScriptlibSource as bool
 
 	// ⭐⭐ **THE FIRST MANAGED VALUE THIS RUNTIME FILE BUILDS, HELD UNTIL THE END OF ITS PARSE.**
@@ -19855,7 +19729,7 @@ export type Parser
 		var respelled = RespelledTokenStartSet.create()
 		renamed.reserve(tokens.count())
 
-		for tok in tokens 'eachToken'
+		for (iter, tok) in tokens.withIterator() 'eachToken'
 			if tok.kind != TokenKind.identifier 'notAName'
 				renamed.push(tok)
 				continue
@@ -19863,10 +19737,12 @@ export type Parser
 
 			let name = signatures.interfaceMap().libraryNameOf(tok.value)
 
-			if name.equals(tok.value) 'uncontested'
+			// A name after a `.` stays as written: E3112 has refused every contested member spelling, and a
+			// qualified type segment reaches the moved name through `SignatureIndex.claimedMemberName`.
+			if name.equals(tok.value) or followsADot(tokens, index: iter.index()) 'uncontestedOrAMemberName'
 				renamed.push(tok)
 				continue
-			end 'uncontested'
+			end 'uncontestedOrAMemberName'
 
 			// The name is the token's own copy of the index's rename, which a parse's artifact goes on to hold.
 			// The POSITION is carried over unchanged: a diagnostic raised on this token must still point at
@@ -19881,148 +19757,6 @@ export type Parser
 
 		return ShadowRenamedTokens.create(renamed, respelledStarts: respelled)
 	end 'shadowRenamedTokens'
-
-	// Asked with a `ParseJob`'s bits, whose `isStdlibSource` includes scriptlib, and by the E3112 census
-	// with a `FileProvenance`'s, whose does not; testing `isScriptlibSource` first gives both one answer.
-	export static function qualifiersCollapseIn(isStdlibSource bool, isRuntimeSource bool, isScriptlibSource bool) returns bool
-		return isScriptlibSource or not (isStdlibSource or isRuntimeSource)
-	end 'qualifiersCollapseIn'
-
-	export static function qualifiedTokens(tokens TokenArray, signatures ProgramSignatures, collapses bool, readerFilePath FilePath) returns PreparedTokens
-		var rewrittenAt = QualifiedNominalSpellingMap.create()
-
-		if not collapses or not writesAQualifier(tokens, signatures: signatures) 'nothingToRewrite'
-			return PreparedTokens.create(tokens, qualifiedNominalAt: rewrittenAt, respelledStarts: RespelledTokenStartSet.create())
-		end 'nothingToRewrite'
-
-		var bindings = QualifierHeadBindings.of(tokens)
-		var rewritten = TokenArray.create()
-		rewritten.reserve(tokens.count())
-		var at = 0 as ElementIndex
-
-		while at < tokens.count() 'eachToken'
-			let tok = try tokens.get(at) otherwise panic("Parser.qualifiedTokens: tokens.get OOB at {at} inside its own count()")
-			let segments = qualifiedNominalSegmentsAt(tokens, at: at, signatures: signatures)
-
-			if segments > 0 and not bindings.mayBindAt(at, name: tok.value) and not signatures.topLevelBindingVisibleFrom(tok.value, readerFilePath: readerFilePath) 'aQualifiedNominal'
-				let consumed = 1 + segments * TokensPerQualifierSegment
-				let last = try tokens.get(at + consumed - 1) otherwise panic("Parser.qualifiedTokens: tokens.get OOB at {at + consumed - 1}, the chain's own last segment")
-				let written = chainSpellingAt(tokens, at: at, segments: segments)
-				let nominal = try signatures.qualifiedNominalOf(written) otherwise panic("Parser.qualifiedTokens: the chain at {at} named a nominal declaration a line ago and names none now")
-				rewrittenAt.upsert(rewritten.count(), value: written)
-				rewritten.push(Token.create(TokenKind.identifier, line: tok.line, column: tok.column, value: nominal.name.clone(), startByte: tok.startByte, endByte: last.endByte))
-				at = at + consumed
-				continue
-			end 'aQualifiedNominal'
-
-			rewritten.push(qualifierHeadAsName(tokens, at: at))
-			at = at + 1
-		end 'eachToken'
-
-		return PreparedTokens.create(rewritten, qualifiedNominalAt: rewrittenAt, respelledStarts: RespelledTokenStartSet.create())
-	end 'qualifiedTokens'
-
-	static function writesAQualifier(tokens TokenArray, signatures ProgramSignatures) returns bool
-		for at in 0 upto tokens.count() 'eachToken'
-			if opensARootQualifier(tokens, at: at) or opensAQualifiedNominalChain(tokens, at: at, signatures: signatures) 'found'
-				return true
-			end 'found'
-		end 'eachToken'
-
-		return false
-	end 'writesAQualifier'
-
-	static function qualifierHeadAsName(tokens TokenArray, at ElementIndex) returns Token
-		let tok = try tokens.get(at) otherwise panic("Parser.qualifierHeadAsName: tokens.get OOB at {at} inside the walk's own count()")
-
-		if not opensARootQualifier(tokens, at: at) 'notTheRootQualifier'
-			return tok
-		end 'notTheRootQualifier'
-
-		return Token.create(TokenKind.identifier, line: tok.line, column: tok.column, value: tok.value, startByte: tok.startByte, endByte: tok.endByte)
-	end 'qualifierHeadAsName'
-
-	static function opensAQualifiedNominalChain(tokens TokenArray, at ElementIndex, signatures ProgramSignatures) returns bool
-		let tok = try tokens.get(at) otherwise return false
-
-		if (tok.kind != TokenKind.identifier and not opensARootQualifier(tokens, at: at)) or not chainContinuesAt(tokens, dotAt: at + 1) 'notTheHeadOfAChain'
-			return false
-		end 'notTheHeadOfAChain'
-
-		if at > 0 and (try tokens.get(at - 1) otherwise panic("Parser.opensAQualifiedNominalChain: tokens.get OOB at {at - 1}, below an index just read")).kind == TokenKind.dot 'aMemberOfSomethingElse'
-			return false
-		end 'aMemberOfSomethingElse'
-
-		return signatures.qualifiesANominalType(tok.value)
-	end 'opensAQualifiedNominalChain'
-
-	static function qualifiedNominalSegmentsAt(tokens TokenArray, at ElementIndex, signatures ProgramSignatures) returns ElementIndex
-		if not opensAQualifiedNominalChain(tokens, at: at, signatures: signatures) 'noChainOpensHere'
-			return 0
-		end 'noChainOpensHere'
-
-		var segments = chainSegmentsAt(tokens, at: at)
-
-		while segments > 0 'eachLongerSpellingFirst'
-			if signatures.namesAQualifiedNominal(chainSpellingAt(tokens, at: at, segments: segments)) 'aNominalDeclaration'
-				return segments
-			end 'aNominalDeclaration'
-
-			segments = segments - 1
-		end 'eachLongerSpellingFirst'
-
-		return 0
-	end 'qualifiedNominalSegmentsAt'
-
-	static function chainSegmentsAt(tokens TokenArray, at ElementIndex) returns ElementIndex
-		var segments = 0 as ElementIndex
-
-		while chainContinuesAt(tokens, dotAt: at + 1 + segments * TokensPerQualifierSegment) 'eachSegment'
-			segments = segments + 1
-		end 'eachSegment'
-
-		return segments
-	end 'chainSegmentsAt'
-
-	static function chainContinuesAt(tokens TokenArray, dotAt ElementIndex) returns bool
-		if (try tokens.get(dotAt) otherwise return false).kind != TokenKind.dot 'noDot'
-			return false
-		end 'noDot'
-
-		return tokenCanBeAName(try tokens.get(dotAt + 1) otherwise return false)
-	end 'chainContinuesAt'
-
-	static function chainSpellingAt(tokens TokenArray, at ElementIndex, segments ElementIndex) returns ByteArray
-		let head = (try tokens.get(at) otherwise panic("Parser.chainSpellingAt: tokens.get OOB at {at}, the chain's head")).value
-
-		if segments == 0 'justTheHead'
-			return head
-		end 'justTheHead'
-
-		var spelled = joinQualifiedName(head, member: chainMemberAt(tokens, at: at, segment: 1))
-
-		for segment in 2 upto segments + 1 'eachMoreSegment'
-			spelled = joinQualifiedName(spelled, member: chainMemberAt(tokens, at: at, segment: segment))
-		end 'eachMoreSegment'
-
-		return spelled
-	end 'chainSpellingAt'
-
-	static function chainMemberAt(tokens TokenArray, at ElementIndex, segment ElementIndex) returns ByteArray
-		let member = try tokens.get(at + segment * TokensPerQualifierSegment) otherwise panic("Parser.chainSpellingAt: tokens.get OOB for segment {segment}, which `chainContinuesAt` just found")
-		return member.value
-	end 'chainMemberAt'
-
-	static function opensARootQualifier(tokens TokenArray, at ElementIndex) returns bool
-		let tok = try tokens.get(at) otherwise return false
-
-		if tok.kind != TokenKind.export 'notTheKeyword'
-			return false
-		end 'notTheKeyword'
-
-		let next = try tokens.get(at + 1) otherwise return false
-		return next.kind == TokenKind.dot
-	end 'opensARootQualifier'
 
 	// The last spanned token's end offset is the file's byte count. EOF and every synthetic token carry 0
 	// for both offsets, so the walk is from the end rather than off `last()` — which would answer 0 for
@@ -20042,28 +19776,23 @@ export type Parser
 		return 0
 	end 'sourceByteCountOf'
 
-	// The collapse runs before the rename: a scriptlib file's `stdlib.Clock` must reach the rename as
-	// the one token `Clock`, so it is respelled with every other spelling of the library's name.
 	export static function create(tokens TokenArray, job ParseJob, signatures ProgramSignatures, anchors ParserAnchors) returns Parser
-		let qualified = qualifiedTokens(tokens, signatures: signatures, collapses: qualifiersCollapseIn(job.isStdlibSource, isRuntimeSource: job.isRuntimeSource, isScriptlibSource: job.isScriptlibSource), readerFilePath: job.path)
-
 		if not shadowRenamesTokens(signatures, isStdlibSource: job.isStdlibSource) 'nothingIsRenamed'
-			return createOverPreparedTokens(qualified, job: job, signatures: signatures, anchors: anchors)
+			return structuralReader(tokens, job: job, signatures: signatures, anchors: anchors)
 		end 'nothingIsRenamed'
 
-		let renamed = shadowRenamedTokens(qualified.tokens, signatures: signatures, recordsRespelledStarts: job.isScriptlibSource)
+		let renamed = shadowRenamedTokens(tokens, signatures: signatures, recordsRespelledStarts: job.isScriptlibSource)
 
-		return createOverPreparedTokens(PreparedTokens.create(renamed.tokens, qualifiedNominalAt: qualified.qualifiedNominalAt, respelledStarts: renamed.respelledStarts), job: job, signatures: signatures, anchors: anchors)
+		return createOverPreparedTokens(PreparedTokens.create(renamed.tokens, respelledStarts: renamed.respelledStarts), job: job, signatures: signatures, anchors: anchors)
 	end 'create'
 
 	export static function structuralReader(tokens TokenArray, job ParseJob, signatures ProgramSignatures, anchors ParserAnchors) returns Parser
-		return createOverPreparedTokens(PreparedTokens.create(tokens, qualifiedNominalAt: QualifiedNominalSpellingMap.create(), respelledStarts: RespelledTokenStartSet.create()), job: job, signatures: signatures, anchors: anchors)
+		return createOverPreparedTokens(PreparedTokens.create(tokens, respelledStarts: RespelledTokenStartSet.create()), job: job, signatures: signatures, anchors: anchors)
 	end 'structuralReader'
 
 	export static function createOverPreparedTokens(prepared PreparedTokens, job ParseJob, signatures ProgramSignatures, anchors ParserAnchors) returns Parser
 		return Self{
 			tokens: prepared.tokens,
-			qualifiedNominalAt: prepared.qualifiedNominalAt,
 			respelledStarts: prepared.respelledStarts,
 			settledTypeNames: SettledTypeNameMap.create(),
 			declaredAliasAnswers: DeclaredAliasAnswerMap.create(),
@@ -20612,7 +20341,7 @@ export type Parser
 
 		self.pos = resume
 
-		index.foldFile(entries, aliases: aliases, implementsClauses: self.sweptImplementsClauses, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, extensionSites: extensionSites, conformanceSites: conformanceSites, scanSites: self.descriptorScanSites, bindings: bindings, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, freeFunctionNames: freeFunctionNames, testDecls: testDecls, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTokens: PreparedTokens.create(self.tokens, qualifiedNominalAt: self.qualifiedNominalAt, respelledStarts: self.respelledStarts), fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
+		index.foldFile(entries, aliases: aliases, implementsClauses: self.sweptImplementsClauses, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, extensionSites: extensionSites, conformanceSites: conformanceSites, scanSites: self.descriptorScanSites, bindings: bindings, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, freeFunctionNames: freeFunctionNames, testDecls: testDecls, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTokens: PreparedTokens.create(self.tokens, respelledStarts: self.respelledStarts), fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
 		self.sweptImplementsClauses = AliasImplementsClauseArray.create()
 
 		// ⭐⭐ **WHAT THIS FILE'S TOKENS SAY THE PROGRAM WILL MATERIALIZE — NOTED, NEVER PERFORMED.**
@@ -20810,11 +20539,11 @@ export type Parser
 			return self.qualifiedTypeBaseName()
 		end 'aQualifiedAliasHead'
 
-		return self.typeNameIdentityAt(self.pos, name: self.current().value)
+		return self.signatures.bareWrittenKey(self.current().value, readerFilePath: self.filePath)
 	end 'constructionHeadName'
 
 	function qualifiedTypeHeadAt(index ElementIndex, form TypeNameHeadForm) returns bool
-		if not self.signatures.allFilesFolded or self.kindAt(index) != TokenKind.identifier or self.kindAt(index + 1) != TokenKind.dot or self.baseNamesAValueInScope(self.tokenAt(index)) 'notAQualifiedHead'
+		if not self.signatures.allFilesFolded or self.kindAt(index) != TokenKind.identifier or self.kindAt(index + 1) != TokenKind.dot or self.baseNamesAValueAt(index) 'notAQualifiedHead'
 			return false
 		end 'notAQualifiedHead'
 
@@ -28057,8 +27786,16 @@ export type Parser
 		// there is one place that decides what a scanned signature means. Everything an extension does not
 		// contribute is passed empty; the type-name interner is this reader's own artifact's, exactly as the
 		// per-file sweep passes its own.
-		index.foldFile(entries, aliases: RangedTypeAliasArray.create(), implementsClauses: AliasImplementsClauseArray.create(), functionAliases: functionAliasOut, structs: StructLayoutArray.create(), enums: EnumLayoutArray.create(), genericAliasEntries: genericAliasOut, innerAliasEntries: innerAliasOut, methodInnerAliasParamEntries: methodInnerAliasParamOut, interfaceSites: InterfaceDeclSiteArray.create(), extensionSites: ExtensionDeclSiteArray.create(), conformanceSites: ConformanceClauseDeclSiteArray.create(), scanSites: descriptorScanSiteOut, bindings: TopLevelDeclArray.create(), paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, freeFunctionNames: freeFunctionNameOut, testDecls: DiscoveredTestArray.create(), moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTokens: PreparedTokens.create(self.tokens, qualifiedNominalAt: self.qualifiedNominalAt, respelledStarts: self.respelledStarts), fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
+		index.foldFile(entries, aliases: RangedTypeAliasArray.create(), implementsClauses: AliasImplementsClauseArray.create(), functionAliases: functionAliasOut, structs: StructLayoutArray.create(), enums: EnumLayoutArray.create(), genericAliasEntries: genericAliasOut, innerAliasEntries: innerAliasOut, methodInnerAliasParamEntries: methodInnerAliasParamOut, interfaceSites: InterfaceDeclSiteArray.create(), extensionSites: ExtensionDeclSiteArray.create(), conformanceSites: ConformanceClauseDeclSiteArray.create(), scanSites: descriptorScanSiteOut, bindings: TopLevelDeclArray.create(), paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, freeFunctionNames: freeFunctionNameOut, testDecls: DiscoveredTestArray.create(), moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTokens: PreparedTokens.create(self.tokens, respelledStarts: self.respelledStarts), fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
 	end 'foldExtensionDeclarationInto'
+
+	function consumeExtensionTargetName() returns Token throws SourceParseError
+		if self.dottedChainLengthAt(self.pos) > 0 'aQualifiedName'
+			return try self.consumeQualifiedTypeName()
+		end 'aQualifiedName'
+
+		return try self.consumeTypeBaseToken()
+	end 'consumeExtensionTargetName'
 
 	// ⭐⭐ **`extension <Name> [where <constraints>]` — THE ONE READER OF THE HEADER, for the three passes that
 	// meet it** (conditional extensions). The cursor enters on `extension` and lands on the body's first
@@ -28078,18 +27815,11 @@ export type Parser
 	// `typeParameter` as `typeParamTokenFor(self.enclosingType, paramName: name)` for any `name` in
 	// `enclosingTypeParams`, and `recordStruct`/`recordInterfaceDeclaration` file an owner for exactly the
 	// pairs a DECLARATION makes. Left standing, this assignment publishes the target's parameter names under
-	// an `enclosingType` that is not the target — which is what happened whenever the header belonged to an
-	// INTERFACE EXTENSION NO TYPE IMPLEMENTS: `extensionTargetConformers` is empty, the conformer loop that
-	// would have called `enterTypeScope` never runs, and the names stayed live at FILE SCOPE for the rest of
-	// the parse.
-	// ⚠ MEASURED on the unchanged tree, and the two symptoms are one bug at two depths:
-	//   `function f(x Element) returns Element` after such an extension COMPILED CLEAN — `Element` names no
-	//     declared type;
-	//   the same `f` returning a generic instance PANICKED the compiler at
-	//     `ProgramSignatures.opaqueTypeParamPosition` ("type-parameter token … has no owner"), because
-	//     `SemanticCheck.checkTypeParameterArgsAt` asks that door for the formal's position and no fold ever
-	//     filed an owner for `("", Element)`.
-	// Closing the window makes both the correct **E3011 Unknown type 'Element'**.
+	// an `enclosingType` that is not the target: for an INTERFACE EXTENSION NO TYPE IMPLEMENTS,
+	// `extensionTargetConformers` is empty, the conformer loop that would call `enterTypeScope` never runs,
+	// and the names stay live at FILE SCOPE for the rest of the parse. A later `Element` then compiles though
+	// it names no declared type, or panics `ProgramSignatures.opaqueTypeParamPosition`, where the closed
+	// window reports **E3011 Unknown type 'Element'**.
 	//
 	// ⚠ A `readWhereClause` that THROWS leaves the window open, and that is bounded rather than ignored: a
 	// `SourceParseError` in the real parse abandons the whole file (`abortedParseArtifact`), and in the fold the
@@ -28117,7 +27847,7 @@ export type Parser
 		// `extension` is always at file scope, so that path is `requireEnclosingTypeName`'s positioned
 		// *"'Self' outside a type declaration"* rather than an `E2010`. A strictly better
 		// sentence about the same rejected program; no case in the corpus writes it.
-		let nameTok = try self.consumeTypeBaseToken()
+		let nameTok = try self.consumeExtensionTargetName()
 		var target = self.signatures.extensionTargetOf(nameTok.value)
 
 		// ⭐ **THE `implements` CLAUSE IS READ BEFORE THE `where`, WHICH IS THE ORDER THE LANGUAGE WRITES
@@ -28726,9 +28456,7 @@ export type Parser
 			try self.consume(TokenKind.is)
 
 			while true 'interfaces'
-				let ifaceIndex = self.pos
-				let ifaceTok = try self.consume(TokenKind.identifier)
-				try self.requireNameableTypeNameAt(ifaceIndex, dots: 0, written: ifaceTok.value, anchor: ifaceTok)
+				let ifaceTok = try self.consumeConformedInterfaceName()
 				let bindings = sharedEmptyDeclaredConformances if not self.at(TokenKind.with) else (try self.readWrittenWhereConstraintBindings(ifaceTok.value, admitsAssociatedBindings: admitsAssociatedBindings))
 				constraints.push(WhereConstraint.create(paramIndex, interfaceName: ifaceTok.value, associatedBindings: bindings))
 
@@ -29439,12 +29167,12 @@ export type Parser
 	function recordBaseTypeNameUse(baseIndex ElementIndex, resolved Token)
 		let written = self.tokenAt(baseIndex)
 
-		if written.kind == TokenKind.identifier and not self.baseWasQualifiedAt(baseIndex) 'aWrittenName'
+		if written.kind == TokenKind.identifier and not self.qualifiedTypeBaseIsAt(baseIndex) 'aWrittenName'
 			self.recordTypeNameUse(written.value)
 			return
 		end 'aWrittenName'
 
-		self.recordTypeNameUse(self.typeNameSpellingAt(baseIndex, name: resolved.value))
+		self.recordTypeNameUse(resolved.value)
 	end 'recordBaseTypeNameUse'
 
 	function recordQualifiedTypeNameUse(name ByteArray)
@@ -29649,7 +29377,14 @@ export type Parser
 	end 'defaultKeyValueType'
 
 	function requireDefaultSpawnsAnImplementer(declaration DefaultDeclaration, keyTok Token) throws SourceParseError
-		let spawnedType = try declaration.spawn.spawnedTypeName() otherwise throw SourceParseError.registryRefused(ErrorCode.registryDefaultServiceDoesNotImplementKey, explanation: "the `default` for `{String.from(declaration.key)}` builds no service — `{String.from(declaration.key)}` is an interface, so its default must `spawn` a type that implements it", line: keyTok.line, column: keyTok.column, note: DiagnosticNote.none)
+		let spawnTok = self.tokenAt(declaration.exprStart)
+		let targetIndex = spawnTargetIndexIn(self.tokens, spawnIndex: declaration.exprStart)
+
+		if not tokenIsTheSpawnKeyword(spawnTok) or self.dottedChainLengthAt(targetIndex) == 0 or not self.chainCallFollowsAt(targetIndex) 'buildsNoService'
+			throw SourceParseError.registryRefused(ErrorCode.registryDefaultServiceDoesNotImplementKey, explanation: "the `default` for `{String.from(declaration.key)}` builds no service — `{String.from(declaration.key)}` is an interface, so its default must `spawn` a type that implements it", line: keyTok.line, column: keyTok.column, note: DiagnosticNote.none)
+		end 'buildsNoService'
+
+		let spawnedType = (try self.spawnedTypeAt(targetIndex, spawnTok: spawnTok)).typeName()
 
 		if self.signatures.typeImplementsInterface(spawnedType, interfaceName: declaration.key) and self.signatures.isInterfaceHandle(serviceHandleCompanionName(declaration.key)) 'implementsIt'
 			return
@@ -30339,7 +30074,7 @@ export type Parser
 		let parentTok = try self.consume(TokenKind.identifier)
 		let parentDots = self.dottedChainLengthAt(parentIndex)
 		let writtenParent = self.assembleDottedChainAt(parentIndex, dots: parentDots) if parentDots > 0 else parentTok.value
-		let parentName = writtenParent if parentDots > 0 else self.typeNameIdentityAt(parentIndex, name: parentTok.value)
+		let parentName = writtenParent if parentDots > 0 else self.signatures.bareWrittenKey(parentTok.value, readerFilePath: self.filePath)
 
 		for _ in 0 upto parentDots 'eachParentSegment'
 			try self.consume(TokenKind.dot)
@@ -30355,29 +30090,40 @@ export type Parser
 			return
 		end 'theDeclarationSweep'
 
-		try self.requireNameableTypeNameAt(parentIndex, dots: parentDots, written: writtenParent, anchor: parentTok)
+		if parentDots > 0 'aQualifiedParent'
+			_ = try self.resolvedTypeChainAt(parentIndex, anchor: parentTok, use: ChainUse.typeReference)
+		end 'aQualifiedParent' else 'aBareParent'
+			try self.requireNameableTypeNameAt(parentIndex, written: writtenParent, anchor: parentTok)
+		end 'aBareParent'
+
 		try requireImplementsClauseHolds(self.signatures.aliasImplementsVerdictOf(nameTok.value, declFilePath: self.filePath), nameTok: nameTok, parentName: writtenParent, parentTok: parentTok)
 		self.recordQualifiedTypeNameUse(writtenParent)
 	end 'readAliasImplementsClause'
 
-	function requireNameableTypeNameAt(index ElementIndex, dots ElementIndex, written ByteArray, anchor Token) throws SourceParseError
-		self.recordTypeNameVerdict(try self.typeNameVerdictAt(index, dots: dots, written: written, anchor: anchor))
+	function requireNameableTypeNameAt(index ElementIndex, written ByteArray, anchor Token) throws SourceParseError
+		self.recordTypeNameVerdict(try self.typeNameVerdictAt(index, written: written, anchor: anchor))
 	end 'requireNameableTypeNameAt'
 
-	function typeNameVerdictAt(index ElementIndex, dots ElementIndex, written ByteArray, anchor Token) returns TypeNameVerdict throws SourceParseError
+	function notedTypeChain(declaration ChainType, consumed ElementIndex, anchor Token) returns QualifiedTypeChain
+		self.recordTypeNameVerdict(self.chainTypeVerdict(declaration, anchor: anchor))
+		return QualifiedTypeChain.declared(declaration, consumed: consumed)
+	end 'notedTypeChain'
+
+	function resolvedTypeChainAt(headIndex ElementIndex, anchor Token, use ChainUse) returns QualifiedTypeChain throws SourceParseError
+		match self.resolveChainAt(headIndex, use: use) 'chain'
+			declaredType(declaration, consumed) then return self.notedTypeChain(declaration, consumed: consumed, anchor: anchor)
+			ambiguous(written, candidates) then throw ambiguousTypeNameRefusal(written, candidates: candidates, ownDeclarationUnqualifiable: false, anchor: anchor)
+			unqualified then return QualifiedTypeChain.notQualified
+			value or
+			declaredFunction or
+			nothing then panic("Parser.resolvedTypeChainAt: `resolveChain` answered a type-position chain with a value, a function or nothing — it answers those only for a chain ending in a member")
+		end 'chain'
+	end 'resolvedTypeChainAt'
+
+	function typeNameVerdictAt(index ElementIndex, written ByteArray, anchor Token) returns TypeNameVerdict throws SourceParseError
 		if not self.signatures.allFilesFolded 'theIndexIsStillBeingBuilt'
 			return TypeNameVerdict.nameable
 		end 'theIndexIsStillBeingBuilt'
-
-		if dots > 0 'aQualifiedName'
-			let declared = try self.qualifiedTypeDeclarationAt(written, anchor: anchor)
-			return declared.nameVerdict()
-		end 'aQualifiedName'
-
-		if let collapsed = try self.qualifiedNominalAt.get(index) 'aCollapsedQualifiedNominal'
-			let declared = try self.qualifiedTypeDeclarationAt(collapsed, anchor: anchor)
-			return declared.nameVerdict()
-		end 'aCollapsedQualifiedNominal'
 
 		if self.qualifiedTypeBaseIsAt(index) 'anEnteredQualifiedBase'
 			return TypeNameVerdict.nameable
@@ -32797,14 +32543,11 @@ export type Parser
 	end 'parseCommaSeparatedNames'
 
 	function consumeListedName(namesTypes bool) returns ByteArray throws SourceParseError
-		let index = self.pos
-		let tok = try self.consume(TokenKind.identifier)
-
 		if namesTypes 'aReferenceToADeclaredType'
-			try self.requireNameableTypeNameAt(index, dots: 0, written: tok.value, anchor: tok)
+			return (try self.consumeConformedInterfaceName()).value
 		end 'aReferenceToADeclaredType'
 
-		return tok.value
+		return (try self.consume(TokenKind.identifier)).value
 	end 'consumeListedName'
 
 	// One `[static] function name(params) [returns Type] [throws E]` interface method SIGNATURE (no body).
@@ -33019,9 +32762,7 @@ export type Parser
 	// One `I [with …]` entry of an `implements` list — the interface name and the arguments bound to
 	// its `uses` names, which are only meaningful as a pair (`InterfaceConformance`).
 	function parseOneConformance() returns InterfaceConformance throws SourceParseError
-		let ifaceIndex = self.pos
-		let ifaceTok = try self.consume(TokenKind.identifier)
-		try self.requireNameableTypeNameAt(ifaceIndex, dots: 0, written: ifaceTok.value, anchor: ifaceTok)
+		let ifaceTok = try self.consumeConformedInterfaceName()
 
 		if not self.at(TokenKind.with) 'bindsNothing'
 			return InterfaceConformance.withoutBindings(ifaceTok.value)
@@ -33742,14 +33483,27 @@ export type Parser
 			return writtenName
 		end 'theContestIsNotKnownYet'
 
-		if qualifierDots > 0 and not self.signatures.resolvesAsNamespaceQualifiedFunction(writtenName) 'notADirectoryQualifiedFunction'
-			throw SourceParseError.undefinedVariable(String.from(writtenName), line: functionTok.line, column: functionTok.column)
-		end 'notADirectoryQualifiedFunction'
-
-		let resolved = try self.resolvedFunctionValueName(writtenName, anchor: functionTok, use: FunctionNameUse.enumCaseBacking)
+		let resolved = try self.caseFunctionDeclaration(writtenName, qualifierDots: qualifierDots, functionTok: functionTok)
 		try self.requireNameIsUsableAsFunctionValue(Token.create(TokenKind.identifier, line: caseTok.line, column: caseTok.column, value: writtenName), funcName: resolved)
 		return resolved
 	end 'caseFunctionName'
+
+	function caseFunctionDeclaration(writtenName ByteArray, qualifierDots ElementIndex, functionTok Token) returns ByteArray throws SourceParseError
+		if qualifierDots == 0 'aBareName'
+			return try self.resolvedFunctionValueName(writtenName, anchor: functionTok, use: FunctionNameUse.enumCaseBacking)
+		end 'aBareName'
+
+		let headIndex = (self.pos - (qualifierDots * TokensPerQualifierSegment + 1)) as ElementIndex
+
+		match resolveChain(self.tokens, at: headIndex, signatures: self.signatures, readerFilePath: self.filePath, headIsAValue: false, use: ChainUse.memberReference) 'chain'
+			declaredFunction(callee, _) then return callee
+			unqualified or
+			value or
+			declaredType or
+			ambiguous or
+			nothing then throw SourceParseError.undefinedVariable(String.from(writtenName), line: functionTok.line, column: functionTok.column)
+		end 'chain'
+	end 'caseFunctionDeclaration'
 
 	// ⭐⭐ **THE NAME OF CASE `index`'S BACKING FUNCTION — the ONE reader of the convention that, for this
 	// backing, `caseRawValues` holds a function's name.** The declaration check's two sides, the read's reference
@@ -37394,23 +37148,26 @@ export type Parser
 		let nameTok = try self.consume(TokenKind.identifier)
 
 		if qualifierDots == 0 'aBareName'
-			try self.requireNameableTypeNameAt(headIndex, dots: qualifierDots, written: nameTok.value, anchor: nameTok)
+			try self.requireNameableTypeNameAt(headIndex, written: nameTok.value, anchor: nameTok)
 
-			return ThrowsClause.throwing(String.from(self.typeNameIdentityAt(headIndex, name: nameTok.value)))
+			return ThrowsClause.throwing(String.from(self.signatures.bareWrittenKey(nameTok.value, readerFilePath: self.filePath)))
 		end 'aBareName'
 
 		// Stops PAST the final segment, as the type-reference walk does: nothing downstream of a `throws`
 		// clause consumes that token either. `advance` and not `consume(identifier)`, because a segment may be
 		// a keyword standing as a name.
 		let qualified = self.assembleDottedChainAt(headIndex, dots: qualifierDots)
-		try self.requireNameableTypeNameAt(headIndex, dots: qualifierDots, written: qualified, anchor: nameTok)
+		let chain = try self.resolvedTypeChainAt(headIndex, anchor: nameTok, use: ChainUse.typeReference)
 
 		for _ in 0 upto qualifierDots 'eachSegment'
 			try self.consume(TokenKind.dot)
 			self.advance()
 		end 'eachSegment'
 
-		return ThrowsClause.throwing(String.from(qualified))
+		match chain 'chain'
+			declared(declaration, _) then return ThrowsClause.throwing(String.from(declaration.nominalNameOr(qualified)))
+			notQualified then return ThrowsClause.throwing(String.from(qualified))
+		end 'chain'
 	end 'parseOptionalThrowsClause'
 
 	// ⛔ **A DECLARATION HEADER ENDS AT THE END OF ITS LINE** — a function signature once its optional
@@ -37491,7 +37248,7 @@ export type Parser
 		var bindings = ConformanceBindingArray.create()
 
 		while true 'moreInterfaces'
-			let nameTok = try self.consume(TokenKind.identifier)
+			let nameTok = try self.consumeConformedInterfaceName()
 			names.push(nameTok.value)
 
 			if self.at(TokenKind.with) 'bindsAssociatedTypes'
@@ -37541,6 +37298,7 @@ export type Parser
 			end 'namesNothing'
 
 			self.advance()
+			self.skipQualifierSegments()
 
 			if not self.at(TokenKind.with) 'bindsNothing'
 				continue
@@ -37561,12 +37319,49 @@ export type Parser
 		end 'delimited'
 
 		self.advance()
+		self.skipQualifierSegments()
+	end 'skipOneConformanceArgument'
 
+	function skipQualifierSegments()
 		while self.at(TokenKind.dot) and self.peekKind() == TokenKind.identifier 'dottedChain'
 			self.advance()
 			self.advance()
 		end 'dottedChain'
-	end 'skipOneConformanceArgument'
+	end 'skipQualifierSegments'
+
+	function consumeConformedInterfaceName() returns Token throws SourceParseError
+		if self.dottedChainLengthAt(self.pos) > 0 'aQualifiedName'
+			return try self.consumeQualifiedTypeName()
+		end 'aQualifiedName'
+
+		let headIndex = self.pos
+		let headTok = try self.consume(TokenKind.identifier)
+		try self.requireNameableTypeNameAt(headIndex, written: headTok.value, anchor: headTok)
+
+		return headTok
+	end 'consumeConformedInterfaceName'
+
+	function consumeQualifiedTypeName() returns Token throws SourceParseError
+		let headIndex = self.pos
+		let headTok = try self.consume(TokenKind.identifier)
+		let qualifierDots = self.dottedChainLengthAt(headIndex)
+		let written = self.assembleDottedChainAt(headIndex, dots: qualifierDots)
+		let chain = try self.resolvedTypeChainAt(headIndex, anchor: headTok, use: ChainUse.typeReference)
+		var lastTok = headTok
+
+		for _ in 0 upto qualifierDots 'eachSegment'
+			try self.consume(TokenKind.dot)
+			lastTok = self.current()
+			self.advance()
+		end 'eachSegment'
+
+		let name = match chain 'chain'
+			declared(declaration, _) gives declaration.nominalNameOr(written)
+			notQualified gives written
+		end 'chain'
+
+		return Token.create(TokenKind.identifier, line: headTok.line, column: headTok.column, value: name, startByte: headTok.startByte, endByte: lastTok.endByte)
+	end 'consumeQualifiedTypeName'
 
 	// Does the program state `interfaceName`'s `uses` arity YET? — the one question that decides whether an
 	// unparenthesized `with` has a knowable end (see `readOptionalImplementsClause`). It is the ARITY DOOR's
@@ -37669,16 +37464,53 @@ export type Parser
 		throw SourceParseError.unexpectedToken("a type", got: tokenDisplayText(tok), line: tok.line, column: tok.column)
 	end 'readTypeReference'
 
+	function qualifiedTypeReference(declaration ChainType, consumed ElementIndex, headIndex ElementIndex, qualifierDots ElementIndex, anchor Token) returns MaxonType throws SourceParseError
+		if consumed != qualifierDots 'aMemberTypeOfTheDeclaredType'
+			self.recordTypeNameUse(declaration.written)
+			return try self.memberTypeReference(self.ownedMemberSpelling(declaration.name, headIndex: headIndex, consumed: consumed, qualifierDots: qualifierDots), anchor: anchor)
+		end 'aMemberTypeOfTheDeclaredType'
+
+		if isTypeAliasDecl(declaration.kind) and not self.signatures.allFilesFolded 'anAliasWhoseIdentityTheFoldSettles'
+			return try self.memberTypeReference(declaration.written, anchor: anchor)
+		end 'anAliasWhoseIdentityTheFoldSettles'
+
+		if isTypeAliasDecl(declaration.kind) 'anAliasReference'
+			self.recordQualifiedTypeNameUse(declaration.written)
+			try self.requireInnerAliasNameable(declaration.written, written: declaration.written, anchor: anchor)
+		end 'anAliasReference' else 'aNominalReference'
+			self.recordTypeNameUse(declaration.written)
+		end 'aNominalReference'
+
+		return self.namespaceQualifiedType(declaration.kind, declFilePath: declaration.declFilePath, name: declaration.name)
+	end 'qualifiedTypeReference'
+
+	function ownedMemberSpelling(owner ByteArray, headIndex ElementIndex, consumed ElementIndex, qualifierDots ElementIndex) returns ByteArray
+		var spelled = owner.clone()
+
+		for segment in consumed + 1 upto qualifierDots + 1 'eachMemberSegment'
+			spelled = joinQualifiedName(spelled, member: chainMemberAt(self.tokens, at: headIndex, segment: segment))
+		end 'eachMemberSegment'
+
+		return spelled
+	end 'ownedMemberSpelling'
+
+	function memberTypeReference(qualified ByteArray, anchor Token) returns MaxonType throws SourceParseError
+		self.recordQualifiedTypeNameUse(qualified)
+		try self.requireInnerAliasNameable(qualified, written: qualified, anchor: anchor)
+
+		if self.signatures.allFilesFolded and self.signatures.isGenericAliasInAnyFile(qualified) 'aQualifiedInnerGenericAlias'
+			return self.genericAliasDenotedType(qualified, readerFilePath: self.filePath)
+		end 'aQualifiedInnerGenericAlias'
+
+		return MaxonType.named(self.artifact.typeNames.intern(qualified))
+	end 'memberTypeReference'
+
 	function readNamedTypeReference(qualifierDots ElementIndex) returns MaxonType throws SourceParseError
 		// The head's INDEX, taken before the cursor moves: the dotted-chain walk below is indexed from
 		// the head, exactly as the CALL door's is, so both ask `dottedChainLengthAt` the same question
 		// about the same token.
 		let headIndex = self.pos
 		let tok = try self.consume(TokenKind.identifier)
-
-		if let written = try self.qualifiedNominalAt.get(headIndex) 'aQualifiedNominal'
-			return try self.qualifiedNominalReference(written, nominalName: tok.value, kind: self.qualifiedNominalKindOf(written), headIndex: headIndex, dots: 0, anchor: tok)
-		end 'aQualifiedNominal'
 
 		// ⭐⭐ **AN INTERFACE EXTENSION'S ASSOCIATED TYPE IS THE CONFORMER'S BINDING FOR IT, SUBSTITUTED
 		// HERE AS A NAME AND RESOLVED BY EVERY ARM BELOW UNCHANGED (conditional extensions).** `extension
@@ -37763,42 +37595,12 @@ export type Parser
 				self.advance()
 			end 'eachSegment'
 
-			// ⭐ **THE FINAL SEGMENT IS THE TYPE NAME, AND THE RECORDING ABOVE CAUGHT ONLY THE HEAD.**
-			// `recordTypeNameUse` runs before the chain is assembled, so `api.Score` recorded `api` — the
-			// DIRECTORY — and never `Score`. E3062 could not see the difference (a namespace is not one of
-			// this file's own typealiases either way), but `checkUnusedExports` asks which DECLARATION was
-			// named, and a declaration is registered under its bare name: MEASURED, seven cases across
-			// `typealias-collision` and `namespace-qualified-resolution` reported `export typealias 'Score'`
-			// as unreferenced while their whole subject is that the qualified reference reaches it.
-			if let nominal = try self.signatures.qualifiedNominalOf(qualified) 'aQualifiedNominal'
-				return try self.qualifiedNominalReference(qualified, nominalName: nominal.name, kind: nominal.kind, headIndex: headIndex, dots: qualifierDots, anchor: tok)
-			end 'aQualifiedNominal'
+			let chain = try self.resolvedTypeChainAt(headIndex, anchor: tok, use: ChainUse.typeOrMemberType)
 
-			self.recordQualifiedTypeNameUse(qualified)
-			try self.requireInnerAliasNameable(qualified, written: qualified, anchor: tok)
-
-			// ⭐⭐ **A DIRECTORY-QUALIFIED FUNCTION TYPEALIAS IS A `function` PLACE, exactly as the bare
-			// spelling of it is** — the arm far below, applied to the mirror
-			// `pushNamespaceQualifiedFunctionAlias` files. Without it `legacy.Score` in a parameter
-			// position stayed a bare `named`, which reads as an INT everywhere, so the qualified spelling
-			// E3063 PRESCRIBES was unusable for the one form whose ambiguity made E3063 fire. The ranged
-			// mirror needs no arm here for the same reason a bare ranged alias needs none: it resolves as
-			// `named` and `TypeResolution` erases it.
-			if self.signatures.allFilesFolded 'theWholeProgramIsKnown'
-				let declared = try self.qualifiedTypeDeclarationAt(qualified, anchor: tok)
-				self.recordTypeNameVerdict(declared.nameVerdict())
-
-				match declared 'declared'
-					none then break
-					one(kind, declFilePath, name, _) then return self.namespaceQualifiedType(kind, declFilePath: declFilePath, name: name)
-				end 'declared'
-			end 'theWholeProgramIsKnown'
-
-			if self.signatures.allFilesFolded and self.signatures.isGenericAliasInAnyFile(qualified) 'aQualifiedInnerGenericAlias'
-				return self.genericAliasDenotedType(qualified, readerFilePath: self.filePath)
-			end 'aQualifiedInnerGenericAlias'
-
-			return MaxonType.named(self.artifact.typeNames.intern(qualified))
+			match chain 'chain'
+				declared(declaration, consumed) then return try self.qualifiedTypeReference(declaration, consumed: consumed, headIndex: headIndex, qualifierDots: qualifierDots, anchor: tok)
+				notQualified then return try self.memberTypeReference(qualified, anchor: tok)
+			end 'chain'
 		end 'qualifiedMember'
 
 		// The `String` and `Character` BUILTINS — recognized SYNTACTICALLY, like `Self` below, so they
@@ -38705,6 +38507,10 @@ export type Parser
 			self.mintCovPoint(block, funcName: func.name, flags: MxdbgCovFlagStatement, line: stmtTok.line, col: stmtTok.column, branchLine: 0, branchCol: 0)
 		end 'instrumentThisStatement'
 
+		// Before every arm: a chain naming a declared type leaves the cursor on that type's token, so each arm
+		// reads `sub.Calc.ping()` as it reads `Calc.ping()`.
+		let chain = try self.enterQualifiedChainOfStatement()
+
 		if self.at(TokenKind.return) 'ret'
 			try self.parseReturnStatement(func, block: block)
 		end 'ret' else if bindingKeywordSpells(stmtTok.kind) 'bindingDecl'
@@ -38866,7 +38672,7 @@ export type Parser
 			let staticCallOpFloor = self.artifact.module.ops.count()
 			let staticCallResult = try self.parsePostfix(func, value: try self.parseQualifiedCall(func, resultUsed: false), resultUsed: false)
 			try self.finishCallStatement(func, result: staticCallResult, opFloor: staticCallOpFloor, tempFloor: staticCallTempFloor, anchor: staticCallAnchor)
-		end 'qualifiedStaticCallStmt' else if self.namespaceQualifiedChainDotsAt(self.pos, minimumDots: MethodQualifierDots, use: QualifiedChainUse.call) > 0 'namespaceQualifiedCallStmt'
+		end 'qualifiedStaticCallStmt' else if self.chainIsADirectoryQualifiedCall(chain) 'namespaceQualifiedCallStmt'
 			// ⭐ **`utils.shout()` / `lib.inner.shout()` ON A LINE OF ITS OWN** — a FREE call written with
 			// a directory qualifier, and a free call is exactly what `callStmt` below already admits: the
 			// result is discarded, `resultUsed: false` is what makes a VOID one legal here, and the
@@ -38878,8 +38684,7 @@ export type Parser
 			//
 			// ⚠ **IT IS NOT `Point.create()`'s CASE, AND THE RECOGNIZER IS WHAT KEEPS THEM APART.** A static
 			// call is `qualifiedStaticCallStmt`'s one arm up, and `resolvesAsNamespaceQualifiedFunction`
-			// declines any chain a `Type.method` key already wears, so this arm never sees one. This is also
-			// why ONE dot is admitted here and not in expression position: no arm at this door owns the shape.
+			// declines any chain a `Type.method` key already wears, so this arm never sees one.
 			//
 			// Through `parsePostfix` for `directCallStmt`'s reason: a call whose RESULT is a function value can
 			// carry a trailing `(args)`, which the postfix loop applies as an indirect call. A plain direct
@@ -38887,9 +38692,15 @@ export type Parser
 			let qualifiedAnchor = self.dottedCallNameToken(self.pos)
 			let qualifiedTempFloor = self.bodyState.pendingTempDrops.count()
 			let qualifiedOpFloor = self.artifact.module.ops.count()
-			let qualifiedResult = try self.parsePostfix(func, value: try self.parseNamespaceQualifiedCall(func, resultUsed: false), resultUsed: false)
+			let qualifiedResult = try self.parsePostfix(func, value: try self.parseNamespaceQualifiedCall(func, chain: chain, resultUsed: false), resultUsed: false)
 			try self.finishCallStatement(func, result: qualifiedResult, opFloor: qualifiedOpFloor, tempFloor: qualifiedTempFloor, anchor: qualifiedAnchor)
-		end 'namespaceQualifiedCallStmt' else if self.atSpawnPrefix() 'spawnStmt'
+		end 'namespaceQualifiedCallStmt' else if self.chainHeadsAValue(chain) and self.chainCallFollowsAt(self.pos) 'valueHeadedCallStmt'
+			let valueAnchor = self.dottedCallNameToken(self.pos)
+			let valueTempFloor = self.bodyState.pendingTempDrops.count()
+			let valueOpFloor = self.artifact.module.ops.count()
+			let valueResult = try self.parsePostfix(func, value: try self.parseVariableReference(func), resultUsed: false)
+			try self.finishCallStatement(func, result: valueResult, opFloor: valueOpFloor, tempFloor: valueTempFloor, anchor: valueAnchor)
+		end 'valueHeadedCallStmt' else if self.atSpawnPrefix() 'spawnStmt'
 			// ⭐ **`spawn Calc.create()` ON A LINE OF ITS OWN** — a service started for its EFFECT, its handle
 			// discarded. It needs an arm of its own for `namespaceQualifiedCallStmt`'s reason one arm up: the
 			// `callStmt` lookahead below is `identifier (`, which `spawn Calc` fails, so without this the
@@ -41951,12 +41762,8 @@ export type Parser
 		return self.respelledStarts.contains(token.startByte)
 	end 'wasRespelled'
 
-	function respelledHeadMint(typeTok Token) returns CalleeMint
-		return CalleeMint.resolvedTypeQualifier if self.wasRespelled(typeTok) else CalleeMint.notMinted
-	end 'respelledHeadMint'
-
 	function staticCallHeadMint(baseIndex ElementIndex, typeTok Token) returns CalleeMint
-		return CalleeMint.resolvedTypeQualifier if self.baseWasQualifiedAt(baseIndex) else self.respelledHeadMint(typeTok)
+		return CalleeMint.resolvedTypeQualifier if self.qualifiedTypeBaseIsAt(baseIndex) or self.wasRespelled(typeTok) else CalleeMint.notMinted
 	end 'staticCallHeadMint'
 
 	// ⭐ **THE "UNKNOWN INTRINSIC" ARM OF THE `__Builtins` TABLE — AND OF EVERY OTHER RESERVED CALLEE.**
@@ -42087,7 +41894,7 @@ export type Parser
 		// (`everySpellingIsTheCompilers`): a stdlib file's identifier tokens were rewritten by the contest
 		// before this parse saw them, so nothing it spells is the author's. The other is
 		// `CalleeMint.resolvedTypeQualifier`, stated by the doors that join a resolved type name, or a
-		// head the rename respelled in a scriptlib file (`respelledHeadMint`), to a written member. It is a
+		// head the rename respelled in a scriptlib file (`staticCallHeadMint`), to a written member. It is a
 		// per-SITE fact for `CalleeMint`'s standing reason: the two spellings build the identical callee
 		// bytes, so no name-keyed rule can tell them apart.
 		//
@@ -55423,47 +55230,33 @@ export type Parser
 	function chainBaseBindingBlame(baseIndex ElementIndex) returns WriteBlame
 		let baseTok = self.tokenAt(baseIndex)
 
-		if not self.baseNamesAValueInScope(baseTok) 'notAValueBase'
-			return WriteBlame.unblamed
-		end 'notAValueBase'
-
-		let baseName = self.baseBindingName(baseTok)
-
-		if self.bodyState.scope.contains(baseName) 'localBase'
-			let binding = self.bodyState.scope.getInfo(baseName)
-
-			if binding.isSelfField 'aFieldOfTheReceiver'
-				return WriteBlame.unblamed
-			end 'aFieldOfTheReceiver'
-
-			return self.immutableReceiverNameOf(binding, baseTok: baseTok)
-		end 'localBase'
-
-		match self.captureScopeOf(baseName) 'captured'
-			found(enclosing, _) then return self.capturedBaseBlame(enclosing.getInfo(baseName), baseTok: baseTok)
-			notCaptured then return WriteBlame.unblamed
-		end 'captured'
+		match self.valueBaseAt(baseIndex) 'base'
+			thisFrame then return self.boundBaseBlame(self.thisFrameBindingOf(baseTok), baseTok: baseTok)
+			captured(frame) then return self.boundBaseBlame(self.capturedBindingOf(baseTok, frame: frame), baseTok: baseTok)
+			unbound or
+			alwaysAType then return WriteBlame.unblamed
+		end 'base'
 	end 'chainBaseBindingBlame'
 
-	function capturedBaseBlame(binding VarInfo, baseTok Token) returns WriteBlame
+	function boundBaseBlame(binding VarInfo, baseTok Token) returns WriteBlame
 		if binding.isSelfField 'aFieldOfTheReceiver'
 			return WriteBlame.unblamed
 		end 'aFieldOfTheReceiver'
 
 		return self.immutableReceiverNameOf(binding, baseTok: baseTok)
-	end 'capturedBaseBlame'
+	end 'boundBaseBlame'
 
 	// The chain's base when it names a top-level binding this file may READ but not write through, and
 	// `unblamed` for everything the header above bounds out — a local, a capture, a parameter, `self`.
 	//
-	// ⚠ SCOPE FIRST, exactly as `storageSubjectNameAt` orders the same two lookups and for its reason: a
-	// local that shadows a global's name reads as the local.
+	// ⚠ Asked through `baseNamesModuleLevelAt`, which puts SCOPE FIRST — a local that shadows a global's name
+	// reads as the local — and settles a head a type shares (`moduleLevelBindingHeadsAt`).
 	function immutableTopLevelChainBase(baseIndex ElementIndex) returns WriteBlame
 		let baseTok = self.tokenAt(baseIndex)
 
-		if self.baseNamesAValueInScope(baseTok) 'aBindingOfThisFrame'
+		if not self.baseNamesModuleLevelAt(baseIndex) 'notAModuleLevelName'
 			return WriteBlame.unblamed
-		end 'aBindingOfThisFrame'
+		end 'notAModuleLevelName'
 
 		return WriteBlame.blamed(baseTok.value, holder: WriteBlameHolder.moduleLet) if self.namesImmutableTopLevelBinding(baseTok.value) else WriteBlame.unblamed
 	end 'immutableTopLevelChainBase'
@@ -55501,15 +55294,18 @@ export type Parser
 	//
 	// ⚠ **LOCAL FIRST, which is what keeps a shadowing local a DIFFERENT subject** — the same order
 	// `parseAssignment` resolves an assignment target in, and the reason `shadowed-source-is-writable`
-	// compiles. A name that reaches the second test is one no binding of this frame holds.
+	// compiles. A module-level name is asked through `baseNamesModuleLevelAt`, so a head a type claims names
+	// no subject.
 	function storageSubjectNameAt(baseIndex ElementIndex) returns StorageSubject
+		match self.valueBaseAt(baseIndex) 'base'
+			thisFrame then break
+			unbound then return self.moduleStorageSubjectName(self.tokenAt(baseIndex).value) if self.baseNamesModuleLevelAt(baseIndex) else StorageSubject.none
+			captured or
+			alwaysAType then return StorageSubject.none
+		end 'base'
+
 		let baseName = self.iterationSubjectNameAt(baseIndex)
-
-		if self.bodyState.scope.contains(baseName) 'bindingOfThisFrame'
-			return StorageSubject.storage(baseName)
-		end 'bindingOfThisFrame'
-
-		return self.moduleStorageSubjectName(baseName)
+		return StorageSubject.storage(baseName) if self.bodyState.scope.contains(baseName) else StorageSubject.none
 	end 'storageSubjectNameAt'
 
 	// ⭐ **THE STORAGE SUBJECT A MODULE-STORAGE NAME IS — itself, once it denotes storage a write can reach.**
@@ -55521,11 +55317,10 @@ export type Parser
 	end 'moduleStorageSubjectName'
 
 	// Does the chain base at `index` name a top-level `var` — module storage any function in the program can
-	// write? `namesWritableModuleStorage` with the SCOPE test in front of it, which is what keeps a local
-	// that shadows a global's name reading as the local (`storageSubjectNameAt`'s order, for its reason).
+	// write? `namesWritableModuleStorage` with `baseNamesModuleLevelAt` in front of it, which keeps a local
+	// that shadows a global's name reading as the local and settles a head a type shares.
 	function baseNamesWritableModuleStorage(index ElementIndex) returns bool
-		let baseTok = self.tokenAt(index)
-		return not self.baseNamesAValueInScope(baseTok) and self.namesWritableModuleStorage(baseTok.value)
+		return self.baseNamesModuleLevelAt(index) and self.namesWritableModuleStorage(self.tokenAt(index).value)
 	end 'baseNamesWritableModuleStorage'
 
 	// Does `name` denote a top-level `var` — module storage a body can WRITE? An immutable top-level binding
@@ -64346,18 +64141,16 @@ export type Parser
 		return hiding
 	end 'settledTypeNameHiding'
 
-	function qualifiedTypeDeclarationAt(qualified ByteArray, anchor Token) returns NameableQualifiedType throws SourceParseError
-		match self.signatures.namespaceDeclarationOf(qualified, readerFilePath: self.filePath) 'declared'
-			none then break
-			several(candidates) then throw ambiguousTypeNameRefusal(qualified, candidates: candidates, ownDeclarationUnqualifiable: false, anchor: anchor)
-			one(kind, declFilePath, name) then return NameableQualifiedType.one(kind, declFilePath: declFilePath, name: name, verdict: TypeNameVerdict.nameable)
-		end 'declared'
+	function resolveChainAt(index ElementIndex, use ChainUse) returns ChainResolution
+		return resolveChain(self.tokens, at: index, signatures: self.signatures, readerFilePath: self.filePath, headIsAValue: use == ChainUse.memberReference and self.baseNamesAValueAt(index), use: use)
+	end 'resolveChainAt'
 
-		match self.signatures.hiddenNamespaceMemberOf(qualified, readerFilePath: self.filePath) 'hidden'
-			notHidden then return NameableQualifiedType.none
-			hidden(symbolKind, tier, kind, declFilePath, name) then return NameableQualifiedType.one(kind, declFilePath: declFilePath, name: name, verdict: TypeNameVerdict.hidden(symbolKind, tier: tier, noun: qualified, anchor: anchor))
-		end 'hidden'
-	end 'qualifiedTypeDeclarationAt'
+	function chainTypeVerdict(declaration ChainType, anchor Token) returns TypeNameVerdict
+		return match declaration.standing 'standing'
+			nameable gives TypeNameVerdict.nameable
+			hidden(kind, tier) gives TypeNameVerdict.hidden(kind, tier: tier, noun: declaration.written, anchor: anchor)
+		end 'standing'
+	end 'chainTypeVerdict'
 
 	function namesThisBodysNestedFunctionAlias(name ByteArray) returns bool
 		if not self.signatures.allFilesFolded or not self.signatures.isFunctionAliasInAnyFile(name) 'noFunctionAliasHoldsTheName'
@@ -64381,12 +64174,6 @@ export type Parser
 		end 'kind'
 	end 'namespaceQualifiedType'
 
-	function qualifiedNominalReference(written ByteArray, nominalName ByteArray, kind TypeDeclKind, headIndex ElementIndex, dots ElementIndex, anchor Token) returns MaxonType throws SourceParseError
-		self.recordTypeNameUse(written)
-		try self.requireNameableTypeNameAt(headIndex, dots: dots, written: written, anchor: anchor)
-		return self.qualifiedNominalType(nominalName, kind: kind)
-	end 'qualifiedNominalReference'
-
 	function qualifiedNominalType(name ByteArray, kind TypeDeclKind) returns MaxonType
 		match kind 'kind'
 			structType then return MaxonType.structRef(self.artifact.typeNames.intern(name))
@@ -64400,85 +64187,92 @@ export type Parser
 		end 'kind'
 	end 'qualifiedNominalType'
 
-	function qualifiedNominalKindOf(written ByteArray) returns TypeDeclKind
-		return (try self.signatures.qualifiedNominalOf(written) otherwise panic("Parser.qualifiedNominalKindOf: '{String.from(written)}' was collapsed as a qualified nominal and the index no longer files it")).kind
-	end 'qualifiedNominalKindOf'
-
-	function typeNameSpellingAt(index ElementIndex, name ByteArray) returns ByteArray
-		return try self.qualifiedNominalAt.get(index) otherwise name
-	end 'typeNameSpellingAt'
-
-	function typeNameIdentityAt(index ElementIndex, name ByteArray) returns ByteArray
-		if self.qualifiedNominalAt.contains(index) 'aCollapsedQualifiedNominal'
-			return name
-		end 'aCollapsedQualifiedNominal'
-
-		return self.signatures.bareWrittenKey(name, readerFilePath: self.filePath)
-	end 'typeNameIdentityAt'
-
-	function typeNameReaderAt(index ElementIndex, name ByteArray) returns FilePath
+	function typeNameReaderAt(index ElementIndex) returns FilePath
 		if self.qualifiedTypeBaseIsAt(index) 'theQualifiedBase'
 			return self.qualifiedTypeBaseFile()
 		end 'theQualifiedBase'
 
-		if not self.qualifiedNominalAt.contains(index) 'theReadersOwnMeaning'
-			return self.filePath
-		end 'theReadersOwnMeaning'
-
-		return self.signatures.qualifiedNominalMeaningFile(name, readerFilePath: self.filePath)
+		return self.filePath
 	end 'typeNameReaderAt'
 
-	function enterNamespaceQualifiedTypeBase() throws SourceParseError
-		if not self.signatures.allFilesFolded or self.signatures.containsStructFor(self.current().value, readerFilePath: self.filePath) or self.signatures.containsEnumFor(self.current().value, readerFilePath: self.filePath) 'theHeadIsNoNamespace'
+	function enterQualifiedChainOfStatement() returns ChainResolution throws SourceParseError
+		if not (self.at(TokenKind.identifier) and self.peekKind() == TokenKind.dot) 'notADottedStatement'
+			return UnqualifiedChain
+		end 'notADottedStatement'
+
+		return try self.enterQualifiedChainAtCursor(MethodQualifierDots)
+	end 'enterQualifiedChainOfStatement'
+
+	function enterQualifiedChainAtCursor(minimumDots ElementIndex) returns ChainResolution throws SourceParseError
+		if self.dottedChainLengthAt(self.pos) < minimumDots 'tooShortToResolveHere'
+			return UnqualifiedChain
+		end 'tooShortToResolveHere'
+
+		let chain = self.resolveChainAt(self.pos, use: ChainUse.memberReference)
+
+		match chain 'chain'
+			declaredType(declaration, consumed) then try self.settleTypeNameVerdict(self.enterChainType(declaration, consumed: consumed, anchor: self.current()))
+			ambiguous(written, candidates) then throw ambiguousTypeNameRefusal(written, candidates: candidates, ownDeclarationUnqualifiable: false, anchor: self.current())
+			nothing(qualifier) then try self.requireNoCallToNothing(qualifier)
+			unqualified or
+			value or
+			declaredFunction then break
+		end 'chain'
+
+		return chain
+	end 'enterQualifiedChainAtCursor'
+
+	function settleTypeNameVerdict(verdict TypeNameVerdict) throws SourceParseError
+		if self.foldsAConstantInitializer 'aDiscardedArtifact'
+			try self.requireTypeNameVerdictNameable(verdict)
 			return
-		end 'theHeadIsNoNamespace'
+		end 'aDiscardedArtifact'
 
-		var typeDots = self.dottedChainLengthAt(self.pos)
+		self.recordTypeNameVerdict(verdict)
+	end 'settleTypeNameVerdict'
 
-		while typeDots > 1 'eachLongerNamespaceFirst'
-			typeDots = typeDots - 1
-			let entered = try self.enterQualifiedTypeBaseIfDeclared(typeDots)
+	function requireNoCallToNothing(qualifier ByteArray) throws SourceParseError
+		if not self.chainCallFollowsAt(self.pos) 'notACall'
+			return
+		end 'notACall'
 
-			if entered.isDeclared() 'entered'
-				self.recordTypeNameVerdict(entered.nameVerdict())
-				return
-			end 'entered'
-		end 'eachLongerNamespaceFirst'
-	end 'enterNamespaceQualifiedTypeBase'
+		throw self.chainNamesNothingRefusal(self.pos, qualifier: qualifier)
+	end 'requireNoCallToNothing'
+
+	function chainNamesNothingRefusal(headIndex ElementIndex, qualifier ByteArray) returns SourceParseError
+		let dots = self.dottedChainLengthAt(headIndex)
+		let memberTok = self.tokenAt(headIndex + dots * TokensPerQualifierSegment)
+		return SourceParseError.undefinedQualifiedFunction(String.from(self.assembleDottedChainAt(headIndex, dots: dots)), qualifier: String.from(qualifier), line: memberTok.line, column: memberTok.column)
+	end 'chainNamesNothingRefusal'
 
 	function enterQualifiedTypeHead(form TypeNameHeadForm) returns TypeNameVerdict throws SourceParseError
 		if not self.qualifiedTypeHeadAt(self.pos, form: form) 'noQualifiedHead'
 			return TypeNameVerdict.nameable
 		end 'noQualifiedHead'
 
-		let entered = try self.enterQualifiedTypeBaseIfDeclared(self.dottedChainLengthAt(self.pos))
-		return entered.nameVerdict()
+		match self.resolveChainAt(self.pos, use: ChainUse.typeReference) 'chain'
+			declaredType(declaration, consumed) then return self.enterChainType(declaration, consumed: consumed, anchor: self.current())
+			ambiguous(written, candidates) then throw ambiguousTypeNameRefusal(written, candidates: candidates, ownDeclarationUnqualifiable: false, anchor: self.current())
+			unqualified or
+			value or
+			declaredFunction or
+			nothing then return TypeNameVerdict.nameable
+		end 'chain'
 	end 'enterQualifiedTypeHead'
 
-	function enterQualifiedTypeBaseIfDeclared(typeDots ElementIndex) returns NameableQualifiedType throws SourceParseError
-		let qualified = self.assembleDottedChainAt(self.pos, dots: typeDots)
-		let declared = try self.qualifiedTypeDeclarationAt(qualified, anchor: self.current())
+	function enterChainType(declaration ChainType, consumed ElementIndex, anchor Token) returns TypeNameVerdict
+		let typeIndex = self.pos + consumed * TokensPerQualifierSegment
 
-		match declared 'declared'
-			none then break
-			one(kind, declFilePath, name, _) then self.enterQualifiedTypeBase(qualified, typeDots: typeDots, kind: kind, declFilePath: declFilePath, name: name)
-		end 'declared'
-
-		return declared
-	end 'enterQualifiedTypeBaseIfDeclared'
-
-	function enterQualifiedTypeBase(qualified ByteArray, typeDots ElementIndex, kind TypeDeclKind, declFilePath FilePath, name ByteArray)
-		let typeIndex = self.pos + typeDots * TokensPerQualifierSegment
-
-		if isTypeAliasDecl(kind) 'anAliasBase'
-			self.recordQualifiedTypeNameUse(qualified)
+		if isTypeAliasDecl(declaration.kind) 'anAliasBase'
+			self.recordQualifiedTypeNameUse(declaration.written)
 		end 'anAliasBase' else 'aNominalBase'
-			self.recordWrittenTypeName(qualified)
+			self.recordWrittenTypeName(declaration.written)
 		end 'aNominalBase'
 
-		self.qualifiedTypeBase = QualifiedTypeBase.at(typeIndex, name: self.namespaceQualifiedBaseName(qualified, kind: kind, declFilePath: declFilePath, name: name), declFilePath: declFilePath.clone())
+		self.qualifiedTypeBase = QualifiedTypeBase.at(typeIndex, name: self.namespaceQualifiedBaseName(declaration.written, kind: declaration.kind, declFilePath: declaration.declFilePath, name: declaration.name), declFilePath: declaration.declFilePath.clone())
 		self.pos = typeIndex
-	end 'enterQualifiedTypeBase'
+		return self.chainTypeVerdict(declaration, anchor: anchor)
+	end 'enterChainType'
 
 	function namespaceQualifiedBaseName(qualified ByteArray, kind TypeDeclKind, declFilePath FilePath, name ByteArray) returns ByteArray
 		match kind 'kind'
@@ -64678,13 +64472,16 @@ export type Parser
 			throw SourceParseError.unsupported("`spawn Self.…` — the whole-program walk that decides which types are services reads tokens with no type scope, so `Self` names nothing there. Write the type outright (`spawn Calc.create()`)", line: spawnTok.line, column: spawnTok.column)
 		end 'selfTarget'
 
-		// Through `consumeNameToken`, not `consume(identifier)`: BOTH halves of `<Type>.<factory>` may be
-		// spelled with a keyword, and `stdlib/FilePath.maxon`'s `from` is the live proof for the member
-		// half. It is the same reader every other declaration and member position uses.
-		let baseIndex = self.pos
-		let typeTok = try self.consumeNameToken(NamePosition.declaration)
+		let spawned = try self.spawnedTypeAt(self.pos, spawnTok: spawnTok)
 
-		let written = try spawnTargetCallIn(self.tokens, targetIndex: baseIndex) otherwise throw SourceParseError.serviceNotASpawnTarget(spawnShapeRefusalMessage(String.from(typeTok.value)), line: spawnTok.line, column: spawnTok.column)
+		match spawned 'entry'
+			declared(declaration, consumed) then self.recordTypeNameVerdict(self.enterChainType(declaration, consumed: consumed, anchor: self.current()))
+			named then break
+		end 'entry'
+
+		let baseIndex = self.pos
+		let typeTok = try self.consumeSpawnTypeToken(baseIndex)
+		let typeName = spawned.typeName()
 
 		try self.consume(TokenKind.dot)
 
@@ -64698,7 +64495,7 @@ export type Parser
 		// target this refuses can never be one the sweep minted for, nor the other way round. The verdict is
 		// BOUND rather than matched in place, so each arm hands the WORDS routine the value it matched instead
 		// of rebuilding it — a rebuilt verdict is a second statement of which arm fired.
-		let target = classifyServiceTarget(self.signatures, typeName: written.typeName, member: written.member)
+		let target = classifyServiceTarget(self.signatures, typeName: typeName, member: memberTok.value)
 
 		match target 'target'
 			startsAService then break
@@ -64709,8 +64506,8 @@ export type Parser
 			typeIsNotAStruct or
 			memberIsNotDeclared or
 			memberTakesAReceiver or
-			memberDoesNotReturnTheType then throw SourceParseError.serviceNotASpawnTarget(serviceTargetRefusalMessage(target, typeName: written.typeName, member: written.member), line: spawnTok.line, column: spawnTok.column)
-			typeIsAConstrainedGeneric then throw SourceParseError.unsupported(serviceTargetRefusalMessage(target, typeName: written.typeName, member: written.member), line: spawnTok.line, column: spawnTok.column)
+			memberDoesNotReturnTheType then throw SourceParseError.serviceNotASpawnTarget(serviceTargetRefusalMessage(target, typeName: typeName, member: memberTok.value), line: spawnTok.line, column: spawnTok.column)
+			typeIsAConstrainedGeneric then throw SourceParseError.unsupported(serviceTargetRefusalMessage(target, typeName: typeName, member: memberTok.value), line: spawnTok.line, column: spawnTok.column)
 		end 'target'
 
 		try self.requireServiceRosterIsDispatchable(typeTok.value, knowledge: ServiceRosterKnowledge.declarationOnly, spawnTok: spawnTok)
@@ -64743,6 +64540,41 @@ export type Parser
 		self.releaseHandOffBuildTemps(factoryTempFloor, ownedFloor: factoryOwnedFloor, handedOff: singletonArgs(state), anchor: memberTok)
 		return try self.emitServiceSpawn(typeTok.value, member: memberTok.value, state: state, capacity: capacity, instance: instance, spawnTok: spawnTok, memberTok: memberTok)
 	end 'parseSpawn'
+
+	function spawnedTypeAt(headIndex ElementIndex, spawnTok Token) returns SpawnedType throws SourceParseError
+		let dots = self.dottedChainLengthAt(headIndex)
+
+		if dots == 0 or not self.chainCallFollowsAt(headIndex) 'notATypeAndAFactory'
+			throw SourceParseError.serviceNotASpawnTarget(spawnShapeRefusalMessage(String.from(self.tokenAt(headIndex).value)), line: spawnTok.line, column: spawnTok.column)
+		end 'notATypeAndAFactory'
+
+		if dots == MethodQualifierDots 'aBareTypeName'
+			return SpawnedType.named(self.tokenAt(headIndex).value)
+		end 'aBareTypeName'
+
+		let written = self.assembleDottedChainAt(headIndex, dots: dots)
+		let qualifierText = chainSpellingAt(self.tokens, at: headIndex, segments: (dots - 1) as ElementIndex)
+
+		match self.resolveChainAt(headIndex, use: ChainUse.memberReference) 'chain'
+			declaredType(declaration, consumed) then return SpawnedType.declared(declaration, consumed: consumed)
+			ambiguous(ambiguousWritten, candidates) then throw ambiguousTypeNameRefusal(ambiguousWritten, candidates: candidates, ownDeclarationUnqualifiable: false, anchor: self.tokenAt(headIndex))
+			value then throw SourceParseError.serviceNotASpawnTarget(spawnChainRefusalMessage(written, reason: chainHeadIsAValueText(self.tokenAt(headIndex).value, qualifier: qualifierText)), line: spawnTok.line, column: spawnTok.column)
+			nothing(qualifier) then throw SourceParseError.serviceNotASpawnTarget(spawnChainRefusalMessage(written, reason: chainNamesNothingText(qualifier)), line: spawnTok.line, column: spawnTok.column)
+			unqualified or
+			declaredFunction then return SpawnedType.named(qualifierText)
+		end 'chain'
+	end 'spawnedTypeAt'
+
+	// Through `consumeNameToken`, not `consume(identifier)`: BOTH halves of `<Type>.<factory>` may be
+	// spelled with a keyword, and `stdlib/FilePath.maxon`'s `from` is the live proof for the member
+	// half. It is the same reader every other declaration and member position uses.
+	function consumeSpawnTypeToken(baseIndex ElementIndex) returns Token throws SourceParseError
+		if self.qualifiedTypeBaseIsAt(baseIndex) 'anEnteredQualifiedBase'
+			return try self.consumeTypeBaseToken()
+		end 'anEnteredQualifiedBase'
+
+		return try self.consumeNameToken(NamePosition.declaration)
+	end 'consumeSpawnTypeToken'
 
 	function parseSpawnCapacity(func IrFunction, spawnTok Token) returns ValueId throws SourceParseError
 		if not self.at(TokenKind.leftParen) 'noCapacityGroup'
@@ -71942,29 +71774,20 @@ export type Parser
 		end 'methodCall'
 
 		// A base that names a VALUE — a this-frame binding, or a CAPTURED enclosing one, whose field read
-		// `parseFieldAccess` takes out of the env via `resolveFieldChain`'s captured arm. The two halves are
-		// asked separately because each hands the accessor door a different `EnumAccessorBase`; together they
-		// are `baseNamesAValueInScope`, which is where the shadowing rule lives and `Self` is excluded.
+		// `parseFieldAccess` takes out of the env via `resolveFieldChain`'s captured arm. `valueBaseAt` is where
+		// the shadowing rule lives and `Self` is excluded.
 		// `s.ordinal` on an enum or union value — asked BEFORE the field arm on both routes and never instead
 		// of it. The two are disjoint by the member name, and the order is what matters: an enum base
 		// reaching `parseFieldAccess` is refused by `requireStructBase` (a declared enum has no struct layout
 		// to find), which is the E2015 this arm exists to route past. See `enumMemberReadableOff`.
-		let valueBaseTok = self.current()
+		match self.valueBaseAt(self.pos) 'valueBase'
+			thisFrame then return try self.parseThisFrameDottedPrimary(func)
+			captured(frame) then return try self.parseCapturedDottedPrimary(func, enclosing: self.capturedFrame(frame).scope, frame: frame)
+			unbound or
+			alwaysAType then break
+		end 'valueBase'
 
-		if self.baseNamesAThisFrameValue(valueBaseTok) 'aThisFrameBase'
-			if self.enumMemberReadableOff(self.bodyState.scope.getInfo(self.baseBindingName(valueBaseTok)), atBase: self.pos) 'enumAccessor'
-				return try self.parseEnumAccessor(EnumAccessorBase.thisFrame)
-			end 'enumAccessor'
-
-			return try self.parseFieldAccess(func)
-		end 'aThisFrameBase'
-
-		match self.capturedValueBaseOf(valueBaseTok) 'captured'
-			found(enclosing, frame) then return try self.parseCapturedDottedPrimary(func, enclosing: enclosing, frame: frame)
-			notCaptured then break
-		end 'captured'
-
-		try self.enterNamespaceQualifiedTypeBase()
+		let chain = try self.enterQualifiedChainAtCursor(MethodQualifierDots)
 
 		// ⭐ **EVERY FORM BELOW NAMES A TYPE, AND ITS BASE IS READ THROUGH `typeBaseTokenAt` — WHICH IS WHERE
 		// `Self` BECOMES THE TYPE IT DENOTES.** So `Self.off` inside `enum Toggle` takes the enum-case arm
@@ -71976,7 +71799,7 @@ export type Parser
 		// named after the enclosing type (`let Box = 1` inside `type Box`) shadows `Box.` — that is the "a value
 		// outranks a type name" rule — while `Self.` cannot mean a local under any spelling, and a parameter
 		// named `Self` is admitted by the keyword-as-a-declared-name rule, so the exclusion has to be stated
-		// rather than assumed. It is stated once, in `baseNamesAValueInScope`, with the measurements.
+		// rather than assumed. It is stated once, in `valueBaseAt`.
 		let baseTok = try self.typeBaseTokenAt(self.pos)
 
 		// ⭐ **A DOTTED PRIMARY WHOSE HEAD NAMES A TYPE IS A MENTION OF THAT TYPE** — `Color.blue`,
@@ -71993,7 +71816,7 @@ export type Parser
 		// cross-file reference WORKS. E3062 only ever filters this set against a file's own non-exported
 		// typealiases, so a widened set can make it report LESS, never wrongly — and a name mentioned in
 		// any position is a name the file uses, which is the question E3062 asks too.
-		let baseReader = self.typeNameReaderAt(self.pos, name: baseTok.value)
+		let baseReader = self.typeNameReaderAt(self.pos)
 
 		if self.signatures.containsStructFor(baseTok.value, readerFilePath: baseReader) or self.signatures.containsEnumFor(baseTok.value, readerFilePath: baseReader) 'headNamesAType'
 			self.recordBaseTypeNameUse(self.pos, resolved: baseTok)
@@ -72028,8 +71851,7 @@ export type Parser
 		// ⚡ **THE GATE IS A `count()`, AND THAT IS THE WHOLE COST MODEL** — this line runs at every dotted
 		// primary in every program, and the QUESTION needs two tokens joined into a name. Only a companion type
 		// carries a dot, so `declaresACompanionType` is false for every program with no `spawn` in it and nothing
-		// is built. See `namespaceQualifiedChainDotsAt`'s `minimumDots` paragraph for why an ungated join here is a
-		// LINEAR allocation term across the ladder.
+		// is built.
 		//
 		// ⚠ The trailing `.` is part of the SHAPE and not decoration: `Calc.request` with nothing after it names
 		// a type and denotes no value, which is a different mistake and takes a different arm.
@@ -72037,24 +71859,19 @@ export type Parser
 			return try self.parseCompanionTypeLiteral(func)
 		end 'companionTypeRef'
 
-		// ⭐⭐ **`lib.inner.deepHelper()` — A MULTI-SEGMENT DIRECTORY-QUALIFIED FREE CALL, AND THE FOURTH
-		// CLAIMANT ON THIS `.` IS WHAT MADE IT NEED AN ARM AT ALL.** The `Type.method` arm below is a fixed
-		// THREE-TOKEN lookahead, so a longer chain fell past it to the LAST-RESORT bound arm and was refused as
-		// a malformed `u64.max` (`E2010: Expected ''min' or 'max'' but got 'inner'`) — the SIZED-BOUND grammar.
+		// ⭐⭐ **`utils.helper()` / `lib.inner.deepHelper()` — A DIRECTORY-QUALIFIED FREE CALL, at any segment
+		// count.** Asked above the `Type.method` arm, which mangles a static's callee out of the first two tokens
+		// and has no reading of a free function.
 		//
-		// ⚠ **THE ONE-DOT SHAPE IS DELIBERATELY NOT ASKED FOR HERE** (`MethodQualifierDots + 1`): it belongs to
-		// `parseQualifiedCall` below, which asks the SAME door about the SAME rule with a name it has already
-		// built. See `namespaceQualifiedChainDotsAt` for what asking twice costs.
-		//
-		// ⚠ **THE CLAIMANTS ARE SEPARATED BY ORDER AND BY A REGISTRY, AND NEVER BY "IS THE HEAD A
+		// ⚠ **THE CLAIMANTS ARE SEPARATED BY ORDER AND BY THE RESOLVER, AND NEVER BY "IS THE HEAD A
 		// NAMESPACE?"** A value base and an enum reference are claimed above; this then demands a trailing `(`
-		// (which a bound has not) AND a registered directory-qualified free function (which a bound's `u64` is
-		// not). Anything it declines falls through untouched to the arms that follow.
-		if self.namespaceQualifiedChainDotsAt(self.pos, minimumDots: MethodQualifierDots + 1, use: QualifiedChainUse.call) > 0 'multiSegmentNamespaceCall'
-			return try self.parseNamespaceQualifiedCall(func, resultUsed: resultUsed)
+		// (which a bound has not) AND the directory-qualified free function `resolveChain` answered (which a
+		// bound's `u64` is not). Anything it declines falls through untouched to the arms that follow.
+		if self.chainIsADirectoryQualifiedCall(chain) 'multiSegmentNamespaceCall'
+			return try self.parseNamespaceQualifiedCall(func, chain: chain, resultUsed: resultUsed)
 		end 'multiSegmentNamespaceCall'
 
-		if self.kindAt(self.pos + 3) == TokenKind.leftParen 'qualifiedCall'
+		if self.kindAt(self.pos + 3) == TokenKind.leftParen and not self.chainHeadsAValue(chain) 'qualifiedCall'
 			return try self.parseQualifiedCall(func, resultUsed: resultUsed)
 		end 'qualifiedCall'
 
@@ -72079,10 +71896,14 @@ export type Parser
 			return try self.parseFieldAccess(func)
 		end 'managedTopLevelField'
 
+		if self.chainHeadsAValue(chain) 'aBindingHeadsIt'
+			return try self.parseVariableReference(func)
+		end 'aBindingHeadsIt'
+
 		// `beta.helper` READ AS A VALUE — asked below every type-named arm, so the type reading keeps every chain
-		// it claims, and never of a sized bound's head, so `u64.max` pays no join.
-		if not isSizedTypeName(baseTok.value) and self.namespaceQualifiedChainDotsAt(self.pos, minimumDots: MethodQualifierDots, use: QualifiedChainUse.value) > 0 'namespaceQualifiedFunctionValue'
-			return try self.parseNamespaceQualifiedFunctionValue()
+		// it claims.
+		if self.chainNamesADirectoryQualifiedFunction(chain) and not self.chainCallFollowsAt(self.pos) 'namespaceQualifiedFunctionValue'
+			return try self.parseNamespaceQualifiedFunctionValue(chain)
 		end 'namespaceQualifiedFunctionValue'
 
 		// ⭐ **A BASE NAMING A TYPE THIS FILE MAY NOT SEE IS REFUSED HERE, AT ITS TIER.**
@@ -72092,7 +71913,7 @@ export type Parser
 		// never reach this line, but both read their base through `consumeTypeBaseToken`, which refuses a hidden
 		// type the same way — E3008 "type is not exported" — so an `export`ed static on a hidden type is not
 		// callable from another file. Asked LAST so a visible type still takes whichever arm above claims it.
-		try self.requireTypeNameVerdictNameable(try self.typeNameVerdictAt(self.pos, dots: 0, written: baseTok.value, anchor: baseTok))
+		try self.requireTypeNameVerdictNameable(try self.typeNameVerdictAt(self.pos, written: baseTok.value, anchor: baseTok))
 
 		// ⭐⭐ **A DECLARED TYPE ANSWERS FROM ITS OWN STATIC ROSTER RATHER THAN FROM THE BOUND GRAMMAR.** Asked
 		// LAST among the type-named arms and immediately before the sized-bound last resort, and every step of
@@ -72114,6 +71935,14 @@ export type Parser
 
 		return try self.parseTypeQualifiedBoundExpression()
 	end 'parseDottedPrimary'
+
+	function parseThisFrameDottedPrimary(func IrFunction) returns ValueId throws SourceParseError
+		if self.enumMemberReadableOff(self.thisFrameBindingOf(self.current()), atBase: self.pos) 'enumAccessor'
+			return try self.parseEnumAccessor(EnumAccessorBase.thisFrame)
+		end 'enumAccessor'
+
+		return try self.parseFieldAccess(func)
+	end 'parseThisFrameDottedPrimary'
 
 	// Does `<baseTok> . <member> .` name a declared UNION under its joined name? The SHAPE and the REGISTRY,
 	// both behind the program-wide gate that keeps the join off every other dotted primary's path.
@@ -72148,42 +71977,44 @@ export type Parser
 		end 'declared'
 	end 'parseCompanionTypeLiteral'
 
-	// ⭐ **HOW MANY `.<name>` PAIRS AT `index` FORM A DIRECTORY-QUALIFIED FUNCTION NAME** — `0` when the
-	// tokens are anything else, which is every dotted expression in every program that does not use the form.
-	// `use` says whether the chain must be followed by a call's `(` or stand as a value; the whole chain either
-	// names a function or does not, so no longest-prefix memory is kept.
-	//
-	// ⭐ **ONE RULE, ASKED THROUGH ONE DOOR** — `ProgramSignatures.resolvesAsNamespaceQualifiedFunction`, which
-	// `parseQualifiedCall` also asks. This routine's whole job is turning TOKENS into the name that door
-	// answers about; it decides nothing itself.
-	//
-	// ⚡⚡ **`minimumDots` IS THE CALLER SAYING WHICH SHAPE ANOTHER ARM AT ITS OWN POSITION ALREADY OWNS.** In
-	// EXPRESSION position the one-dot CALL belongs to `parseQualifiedCall`, which holds the joined name already;
-	// assembling it here as well is a join at every `Point.create(…)` in the program, a linear allocation term on
-	// the scale ladder. In STATEMENT position no arm owns any dotted call, so one dot is admitted. No empty-set
-	// short-circuit helps: `stdlib/`'s subdirectories are namespaced in every compile.
-	//
-	// PEEK-ONLY: the cursor is untouched, so a `0` leaves every arm after this one looking at the tokens it
-	// expects. The token walk allocates nothing; only a chain that has already passed the shape test is
-	// assembled.
-	function namespaceQualifiedChainDotsAt(index ElementIndex, minimumDots ElementIndex, use QualifiedChainUse) returns ElementIndex
-		let dots = self.dottedChainLengthAt(index)
+	function chainHeadsAValue(chain ChainResolution) returns bool
+		return match chain 'chain'
+			value gives true
+			unqualified or
+			declaredType or
+			ambiguous or
+			declaredFunction or
+			nothing gives false
+		end 'chain'
+	end 'chainHeadsAValue'
 
-		if dots < minimumDots or (self.kindAt(index + dots * TokensPerQualifierSegment + 1) == TokenKind.leftParen) != (use == QualifiedChainUse.call) 'notThisShape'
-			return 0
-		end 'notThisShape'
+	function chainNamesADirectoryQualifiedFunction(chain ChainResolution) returns bool
+		return match chain 'chain'
+			declaredFunction gives true
+			unqualified or
+			value or
+			declaredType or
+			ambiguous or
+			nothing gives false
+		end 'chain'
+	end 'chainNamesADirectoryQualifiedFunction'
 
-		return dots if self.signatures.resolvesAsNamespaceQualifiedFunction(self.assembleDottedChainAt(index, dots: dots)) else 0
-	end 'namespaceQualifiedChainDotsAt'
+	function chainIsADirectoryQualifiedCall(chain ChainResolution) returns bool
+		return self.chainNamesADirectoryQualifiedFunction(chain) and self.chainCallFollowsAt(self.pos)
+	end 'chainIsADirectoryQualifiedCall'
 
-	// How many `.<name>` pairs follow the identifier at `index` — the peek-only, allocation-free half of the
-	// walk above. `0` for a bare name and for anything that is not an identifier at all.
+	function chainCallFollowsAt(index ElementIndex) returns bool
+		return self.kindAt(index + self.dottedChainLengthAt(index) * TokensPerQualifierSegment + 1) == TokenKind.leftParen
+	end 'chainCallFollowsAt'
+
+	// How many `.<name>` pairs follow the identifier at `index` — the peek-only, allocation-free half of
+	// `assembleDottedChainAt`. `0` for a bare name and for anything that is not an identifier at all.
 	//
-	// ⭐⭐ **TWO POSITIONS ASK IT, AND THEY ARE ONE QUESTION**: the CALL door above, and
-	// `parseTypeReference`'s `Instance.Member` / `dir.Name` arm. They share one walk because two copies
-	// would come apart: `lib.from.helper()` would compile while `21 as lib.from.Score` did not. Two spellings of
-	// "where does a dotted name end" can only ever agree by accident, and neither site reads as wrong on its
-	// own. See `parseTypeReference` for the measurement.
+	// ⭐⭐ **TWO POSITIONS ASK IT, AND THEY ARE ONE QUESTION**: the CALL door
+	// (`parseNamespaceQualifiedCall`), and `parseTypeReference`'s `Instance.Member` / `dir.Name` arm. They
+	// share one walk because two copies would come apart: `lib.from.helper()` would compile while
+	// `21 as lib.from.Score` did not. Two spellings of "where does a dotted name end" can only ever agree by
+	// accident, and neither site reads as wrong on its own. See `parseTypeReference` for the measurement.
 	//
 	// ⚠ **THE HEAD MUST BE A PLAIN IDENTIFIER AND THE SEGMENTS AFTER IT NEED ONLY BE NAMEABLE.**
 	// A trailing segment is the FUNCTION'S OWN NAME, and a declaration may take a keyword — `export
@@ -72303,7 +72134,7 @@ export type Parser
 	// `identifier` — the same asymmetry `dottedChainLengthAt` draws between a chain's head and its trailing
 	// segments, and for the same reason.
 	function couldNameAStaticMember(baseTok Token, memberIndex ElementIndex) returns bool
-		if not self.signatures.containsStructFor(baseTok.value, readerFilePath: self.typeNameReaderAt((memberIndex - TokensPerQualifierSegment) as ElementIndex, name: baseTok.value)) 'notADeclaredTypeBase'
+		if not self.signatures.containsStructFor(baseTok.value, readerFilePath: self.typeNameReaderAt((memberIndex - TokensPerQualifierSegment) as ElementIndex)) 'notADeclaredTypeBase'
 			return false
 		end 'notADeclaredTypeBase'
 
@@ -72356,7 +72187,7 @@ export type Parser
 
 		// A static's declaring file IS its type's — see `ProgramSignatures.declVisibilityFrom` for the case
 		// that makes that a rule rather than an observation.
-		let declFilePath = match self.signatures.structFor(baseTok.value, readerFilePath: self.typeNameReaderAt((memberIndex - TokensPerQualifierSegment) as ElementIndex, name: baseTok.value)) 'layout'
+		let declFilePath = match self.signatures.structFor(baseTok.value, readerFilePath: self.typeNameReaderAt((memberIndex - TokensPerQualifierSegment) as ElementIndex)) 'layout'
 			declared(layout) gives layout.declFilePath
 			undeclared panic("staticRosterVerdictFor: containsStruct answered yes for '{String.from(baseTok.value)}' but structFor answered undeclared — the two read one registry under one key")
 		end 'layout'
@@ -72419,10 +72250,20 @@ export type Parser
 		return assembled
 	end 'assembleDottedChainAt'
 
+	function directoryQualifiedCalleeOf(chain ChainResolution) returns ByteArray
+		return match chain 'chain'
+			declaredFunction(callee, _) gives callee
+			unqualified or
+			value or
+			declaredType or
+			ambiguous or
+			nothing panic("Parser.directoryQualifiedCalleeOf: a chain was admitted as a directory-qualified function and is something else")
+		end 'chain'
+	end 'directoryQualifiedCalleeOf'
+
 	// `utils.helper(…)` / `lib.inner.deepHelper(…)` — consume the qualifier chain and emit the ORDINARY direct
-	// call it names. Reached only through `namespaceQualifiedChainDotsAt`: from the STATEMENT door at any
-	// segment count, and from the EXPRESSION door at TWO OR MORE (a one-dot expression is `parseQualifiedCall`'s,
-	// which reaches the same rule through the same door with a name it had already built — see there).
+	// call it names. Reached only for a chain `resolveChain` answered `declaredFunction`, from the STATEMENT
+	// and EXPRESSION doors alike, at any segment count.
 	//
 	// ⭐ **THE CALLEE IS THE FINAL SEGMENT, AND THAT IS WHY THE EMITTED CODE IS UNTOUCHED.** the compiler's function
 	// registry is bare-name and whole-program (a second declaration of one name is E3006), so `utils.helper`
@@ -72436,18 +72277,16 @@ export type Parser
 	// The chain length is re-read rather than passed in: `dottedChainLengthAt` is a pure token walk that
 	// allocates nothing and cannot disagree with the recognizer, and an `else if` predicate has nowhere to
 	// bind a value for its own body.
-	function parseNamespaceQualifiedCall(func IrFunction, resultUsed bool) returns ValueId throws SourceParseError
+	function parseNamespaceQualifiedCall(func IrFunction, chain ChainResolution, resultUsed bool) returns ValueId throws SourceParseError
 		let headTok = self.current()
 
 		// Bound BEFORE the loop, which moves the cursor: re-reading it from `self.pos` on each iteration
 		// would count a chain that is one segment shorter every time round.
 		let qualifierDots = self.dottedChainLengthAt(self.pos)
 
-		// ⚠ **ASSEMBLED BEFORE THE CURSOR MOVES, for the same reason `qualifierDots` is** — the loop below
-		// walks the chain away, and this is the last position from which the whole of it is readable. WHETHER
-		// the written chain or the bare member ends up the callee is
+		// WHETHER the written chain or the bare member is the callee is
 		// `ProgramSignatures.namespaceQualifiedFunctionName`'s one rule, asked by every directory-qualified door.
-		let writtenName = self.assembleDottedChainAt(self.pos, dots: qualifierDots)
+		let callee = self.directoryQualifiedCalleeOf(chain)
 
 		// Stops ON the final segment rather than past it: `parseCallNamed` consumes that token itself (it may
 		// be a keyword standing as a name) and then the `(`.
@@ -72456,21 +72295,26 @@ export type Parser
 			try self.consume(TokenKind.dot)
 		end 'eachQualifierSegment'
 
-		return try self.parseCallNamed(func, callee: self.signatures.namespaceQualifiedFunctionName(writtenName, bare: self.current().value), anchor: headTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
+		// A one-dot call is positioned at its member and a longer one at its head, each pinned by
+		// `specs/namespace-qualified-resolution.md`.
+		let anchor = headTok if qualifierDots > MethodQualifierDots else self.current()
+
+		return try self.parseCallNamed(func, callee: callee, anchor: anchor, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
 	end 'parseNamespaceQualifiedCall'
 
 	// `beta.helper` and `lib.inner.helper` READ AS A VALUE — the value door's directory-qualified spelling, the
-	// remedy E3095 names. The chain is claimed only where `namespaceQualifiedChainDotsAt` admitted it, so the
+	// remedy E3095 names. The chain is claimed only where `resolveChain` answered `declaredFunction`, so the
 	// written name routes to a free function. Refusals quote the chain as written.
-	function parseNamespaceQualifiedFunctionValue() returns ValueId throws SourceParseError
+	function parseNamespaceQualifiedFunctionValue(chain ChainResolution) returns ValueId throws SourceParseError
 		let headTok = self.current()
 		let qualifierDots = self.dottedChainLengthAt(self.pos)
 		let writtenName = self.assembleDottedChainAt(self.pos, dots: qualifierDots)
 		let memberTok = self.tokenAt(self.pos + qualifierDots * TokensPerQualifierSegment)
+		let callee = self.directoryQualifiedCalleeOf(chain)
 		self.pos = self.pos + qualifierDots * TokensPerQualifierSegment + 1
 
 		let writtenTok = Token.create(TokenKind.identifier, line: headTok.line, column: headTok.column, value: writtenName, startByte: headTok.startByte, endByte: memberTok.endByte)
-		return try self.emitNamedFunctionRef(writtenTok, funcName: self.signatures.namespaceQualifiedFunctionName(writtenName, bare: memberTok.value))
+		return try self.emitNamedFunctionRef(writtenTok, funcName: callee)
 	end 'parseNamespaceQualifiedFunctionValue'
 
 	// `Color.red` — the value of an enum/union case: its TAG, as an i64 `literal` (the raw value for
@@ -74498,20 +74342,6 @@ export type Parser
 			try requirePrimitiveStaticIsResolvable(typeTok, memberTok: memberTok, declaredCallee: declaredCallee)
 		end 'primitiveStatic'
 
-		// ⭐⭐ **`utils.helper()` — A DIRECTORY-QUALIFIED FREE CALL, DECIDED HERE BECAUSE THE NAME IS
-		// ALREADY BUILT.** `declaredCallee` is the mangling this routine links a static by, and it is exactly
-		// the name the namespace index is keyed on — so the one-dot shape costs this arm a probe and not a
-		// join. `parseDottedPrimary`'s multi-segment arm therefore starts at TWO dots on purpose; assembling
-		// this name a second time up there measured a linear term (see `namespaceQualifiedChainDotsAt`).
-		//
-		// The rule itself is `resolvesAsNamespaceQualifiedFunction`'s — the TYPE reading wins wherever there is
-		// one. Which NAME it resolves to is `ProgramSignatures.namespaceQualifiedFunctionName`'s: ordinarily the
-		// bare member, which leaves the emitted code untouched and the visibility decision where it already was;
-		// the written chain when the bare name is contested and no longer names one function.
-		if self.signatures.resolvesAsNamespaceQualifiedFunction(declaredCallee) 'namespaceQualifiedFreeCall'
-			return QualifiedStaticCallee.namespaceQualifiedFree(self.signatures.namespaceQualifiedFunctionName(declaredCallee, bare: memberTok.value))
-		end 'namespaceQualifiedFreeCall'
-
 		// ⭐ `String.create(…)` — an unknown static on a type name the COMPILER owns. LAST of the doors,
 		// so every interception above still wins: it speaks only for a base no file may declare and a member
 		// no file does. See `requireCompilerOwnedStaticIsResolvable` for why this one class is the parser's to
@@ -74920,7 +74750,6 @@ export type Parser
 
 		match try self.qualifiedStaticCallee(typeTok, memberTok: memberTok, aliasName: aliasName) 'callee'
 			minted(minted) then return try self.parseCallNamed(func, callee: minted, anchor: memberTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.primitiveStatic)
-			namespaceQualifiedFree(free) then return try self.parseCallNamed(func, callee: free, anchor: memberTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
 			declared(callee) then return try self.parseDeclaredStaticCall(func, callee: callee, aliasName: aliasName, typeTok: typeTok, memberTok: memberTok, resultUsed: resultUsed, mint: self.staticCallHeadMint(self.pos - TokensPerQualifierSegment, typeTok: typeTok))
 		end 'callee'
 	end 'parseStaticMemberCall'
@@ -75285,15 +75114,8 @@ export type Parser
 	function parseMethodCall(func IrFunction, resultUsed bool) returns ValueId throws SourceParseError
 		let baseTok = self.current()
 
-		if self.bodyState.scope.contains(self.baseBindingName(baseTok)) 'localReceiver'
-			// The subject is read at the cursor, which still sits on the base — the derivation this door made
-			// internally until a receiver arrived whose storage no single token spells (see there).
-			return try self.dispatchMethodOnBinding(func, binding: self.bodyState.scope.getInfo(self.baseBindingName(baseTok)), baseTok: baseTok, subjectName: self.storageSubjectNameAt(self.pos), resultUsed: resultUsed)
-		end 'localReceiver'
-
 		// A CAPTURED enclosing receiver: `b.doubled()` inside a closure that captures the
-		// struct `b`. The base is not in the closure's OWN scope (checked above) but resolves into an
-		// enclosing one.
+		// struct `b`. The base is not in the closure's OWN scope but resolves into an enclosing one.
 		//
 		// ⚠⚠ **IT IS ASKED BEFORE THE TOP-LEVEL FALL-THROUGH, AND THAT ORDER *IS* THE SHADOWING RULE —
 		// ONE RULE, ENCODED IN THREE PLACES, WHICH IS WHY EACH OF THEM SAYS SO.** `parseVariableReference`
@@ -75308,10 +75130,12 @@ export type Parser
 		// GLOBAL for `msg.byteLength()` (yielding 13) — two resolutions of one name, in one expression,
 		// neither of them a compile error. The `var` half is the worse one: a `var` receiver is WRITABLE,
 		// so a mutating method would have written the global while the program named a local.
-		match self.captureScopeOf(self.baseBindingName(baseTok)) 'captured'
-			found(_, frame) then return try self.capturedMethodCall(func, baseTok: baseTok, enclosing: self.capturedFrame(frame).scope, frame: frame, resultUsed: resultUsed)
-			notCaptured then break
-		end 'captured'
+		match self.valueBaseAt(self.pos) 'receiver'
+			thisFrame then return try self.dispatchMethodOnBinding(func, binding: self.thisFrameBindingOf(baseTok), baseTok: baseTok, subjectName: self.storageSubjectNameAt(self.pos), resultUsed: resultUsed)
+			captured(frame) then return try self.capturedMethodCall(func, baseTok: baseTok, enclosing: self.capturedFrame(frame).scope, frame: frame, resultUsed: resultUsed)
+			unbound or
+			alwaysAType then break
+		end 'receiver'
 
 		// ⭐ **A TOP-LEVEL MANAGED BINDING IS A RECEIVER** — a `let` (`Live.count()`, `name.byteLength()`) or a
 		// `var` (`msg.append("!")`, `Buffer.count()`). Neither is a binding in
@@ -76248,7 +76072,7 @@ export type Parser
 	// visible here is `managedReceiverBindingOf`'s answer, and both askers go on to ask it — so a `true`
 	// here is permission to resolve, never a claim on the shape.
 	//
-	// ⭐ **BOTH KINDS ANSWER HERE, THROUGH ONE FILTER AND ONE `staticCallClaimsBase`.** They are the same
+	// ⭐ **BOTH KINDS ANSWER HERE, THROUGH ONE FILTER AND ONE `moduleLevelBindingHeadsAt`.** They are the same
 	// question — "does this base name a managed record rather than a type?" — and asking it twice would
 	// pay the type-reading probe twice for every managed base and, worse, allow a future rule taught to
 	// one door and not the other. Which KIND it is matters only to `parseMethodCall`, where it decides
@@ -76257,13 +76081,11 @@ export type Parser
 	// ⚠⚠ **IT RETURNS A BOOL, AND THAT IS A COST DECISION WITH A MEASUREMENT BEHIND IT.** The obvious
 	// tidier shape is to fold this into `managedReceiverBindingOf` and hand every caller the binding — but
 	// a Maxon union VALUE IS A HEAP OBJECT, including the payload-free `none`, so a union-returning gate
-	// allocates once per DOTTED CALL IN THE PROGRAM rather than once per managed-receiver call site.
-	// MEASURED, by building exactly that and running the scale ladder: +441/+873/+1,737/+3,465 allocations
-	// on rungs 2-5 of a corpus that declares no managed binding at all — doubling with the program,
-	// forever. So the gate that decides "may this allocate?" must not itself allocate to say no.
+	// allocates once per DOTTED CALL IN THE PROGRAM rather than once per managed-receiver call site. So the
+	// gate that decides "may this allocate?" must not itself allocate to say no.
 	//
 	// It takes the base's INDEX rather than its token because the answer needs the MEMBER name too
-	// (`staticCallClaimsBase`), and deriving that from a token would re-assume the cursor is parked on
+	// (`moduleLevelBindingHeadsAt`), and deriving that from a token would re-assume the cursor is parked on
 	// the base — true at both askers today, and exactly the premise that quietly stops holding.
 	//
 	// ⚠ **THE `namesManagedTopLevel` FILTER IS NOT AN OPTIMIZATION, IT IS THE COST MODEL.**
@@ -76271,19 +76093,19 @@ export type Parser
 	// this gate BUILD A STRING KEY (~4 allocations per call — see `fileScopedDeclKey`). In front of it a
 	// base that is not spelled like any managed binding in the program — every static call,
 	// `Widget.create(…)` and `String.from(…)` alike, which is nearly every base that reaches here — costs
-	// ONE hash of bytes it already holds and allocates nothing. `staticCallClaimsBase` sits BEHIND the
+	// ONE hash of bytes it already holds and allocates nothing. `moduleLevelBindingHeadsAt` sits BEHIND the
 	// same filter and inherits the same model: it runs only for a base actually spelled like a managed
-	// binding, so its mangled-callee probe is off the hot path entirely.
+	// binding, so its type-reading probes are off the hot path entirely.
 	//
-	// It is a NAME set rather than a whole-program bool for a measured reason: a bool goes permanently
+	// It is a NAME set rather than a whole-program bool because a bool goes permanently
 	// true at the first managed binding, and every static dotted call in the program then pays the full
 	// probe to be told no. See `ProgramSignatures.managedTopLevelNames`.
 	function managedTopLevelBaseAt(index ElementIndex) returns bool
-		if not self.signatures.namesManagedTopLevel(self.tokenAt(index).value) 'notAManagedName'
+		if self.qualifiedTypeBaseIsAt(index) or not self.signatures.namesManagedTopLevel(self.tokenAt(index).value) 'notAManagedName'
 			return false
 		end 'notAManagedName'
 
-		return not self.staticCallClaimsBase(index)
+		return self.moduleLevelBindingHeadsAt(index)
 	end 'managedTopLevelBaseAt'
 
 	// ⭐ **WHAT A MANAGED TOP-LEVEL NAME DENOTES AT A RECEIVER POSITION — the ONE resolution**, asked by
@@ -81540,8 +81362,8 @@ export type Parser
 		end 'anEnteredQualifiedBase'
 
 		let headTok = try self.consume(TokenKind.identifier)
-		view verdict = try self.typeNameVerdictAt(headIndex, dots: 0, written: headTok.value, anchor: headTok)
-		return TypeNameHead.create(headTok, identity: self.typeNameIdentityAt(headIndex, name: headTok.value), verdict: verdict)
+		view verdict = try self.typeNameVerdictAt(headIndex, written: headTok.value, anchor: headTok)
+		return TypeNameHead.create(headTok, identity: self.signatures.bareWrittenKey(headTok.value, readerFilePath: self.filePath), verdict: verdict)
 	end 'typeNameHeadAtCursor'
 
 	function noteTypeNameMention(index ElementIndex)
@@ -81549,7 +81371,7 @@ export type Parser
 			return
 		end 'anEnteredQualifiedBase'
 
-		self.recordWrittenTypeName(self.typeNameSpellingAt(index, name: self.tokenAt(index).value))
+		self.recordWrittenTypeName(self.tokenAt(index).value)
 	end 'noteTypeNameMention'
 
 	function recordWrittenTypeName(spelling ByteArray)
@@ -84106,7 +83928,7 @@ export type Parser
 			return false
 		end 'notChainMethod'
 
-		// ASK THE SHARED DOOR. Re-deriving `baseNamesAValueInScope`'s two-line test by hand loses its `Self`
+		// ASK THE SHARED DOOR. Re-deriving `valueBaseAt`'s test by hand loses its `Self`
 		// guard: `fieldChainEndAfter` bases the chain test on `tokenCanBeAName`, which ADMITS
 		// `TokenKind.selfType`, and `baseBindingName` special-cases only `TokenKind.self` — so with a
 		// parameter legally bound under the literal name `Self`, a `Self.field.method(…)` chain reads as
@@ -87541,11 +87363,11 @@ export type Parser
 		return SelfParamName if tok.kind == TokenKind.self else tok.value
 	end 'baseBindingName'
 
-	// ⭐⭐ **DOES A DOTTED BASE NAME A VALUE IN SCOPE — a local BINDING or a closure CAPTURE?** The one
-	// answer to the "a value outranks a type name" question, and therefore the one place the shadowing
-	// rule is written. It is defined as its two halves, `baseNamesAThisFrameValue` and
-	// `capturedValueBaseOf`, which `parseDottedPrimary` asks one at a time; a clause added to a hand-spelled
-	// copy alone re-points a name at a different declaration and earns no compile error anywhere.
+	// ⭐⭐ **WHICH BINDING DOES THE DOTTED BASE AT `index` DENOTE — one of this frame, a closure CAPTURE, or
+	// none?** The one answer to the "a value outranks a type name" question, and therefore the one place the
+	// shadowing rule is written; a clause added to a hand-spelled copy alone re-points a name at a different
+	// declaration and earns no compile error anywhere. A base `resolveChain` entered as a type
+	// (`qualifiedTypeBaseIsAt`) is always a type.
 	//
 	// ⚠ **`Self` IS EXCLUDED, AND THAT EXCLUSION *IS* THE RULE THAT `Self` NAMES A TYPE AND NEVER A
 	// VALUE.** It is not a shortcut for a lookup that would have missed: a declaration CAN bind the
@@ -87564,40 +87386,81 @@ export type Parser
 	// compilers run (`Kw.Self`). Reserving the word at `requireUnreservedName` would refuse both. What
 	// is wrong is not the declaration — it is a base position consulting the VALUE namespace about a
 	// token that cannot be in it.
-	function baseNamesAValueInScope(tok Token) returns bool
-		return self.baseNamesAThisFrameValue(tok) or self.capturedValueBaseOf(tok).isFound()
-	end 'baseNamesAValueInScope'
+	function valueBaseAt(index ElementIndex) returns ValueBaseBinding
+		let tok = self.tokenAt(index)
 
-	function baseNamesAThisFrameValue(tok Token) returns bool
-		return not tokenIsTheSelfType(tok) and self.bodyState.scope.contains(self.baseBindingName(tok))
-	end 'baseNamesAThisFrameValue'
-
-	function capturedValueBaseOf(tok Token) returns CaptureScopeResult
-		if tokenIsTheSelfType(tok) 'alwaysAType'
-			return CaptureScopeResult.notCaptured
+		if self.qualifiedTypeBaseIsAt(index) or tokenIsTheSelfType(tok) 'alwaysAType'
+			return TypeValueBase
 		end 'alwaysAType'
 
-		return self.captureScopeOf(self.baseBindingName(tok))
-	end 'capturedValueBaseOf'
+		let name = self.baseBindingName(tok)
 
-	// ⭐ **DOES THE BASE AT `index` NAME A VALUE A FIELD CHAIN CAN START FROM?** `baseNamesAValueInScope`
+		if self.bodyState.scope.contains(name) 'thisFrame'
+			return ThisFrameValueBase
+		end 'thisFrame'
+
+		match self.captureScopeOf(name) 'captured'
+			found(_, frame) then return ValueBaseBinding.captured(frame)
+			notCaptured then return UnboundValueBase
+		end 'captured'
+	end 'valueBaseAt'
+
+	function thisFrameBindingOf(baseTok Token) returns VarInfo
+		return self.bodyState.scope.getInfo(self.baseBindingName(baseTok))
+	end 'thisFrameBindingOf'
+
+	function capturedBindingOf(baseTok Token, frame ElementIndex) returns VarInfo
+		return self.capturedFrame(frame).scope.getInfo(self.baseBindingName(baseTok))
+	end 'capturedBindingOf'
+
+	// The one tie-break between a type and a top-level binding that share a head: the type wins where it
+	// serves the member, the binding everywhere else. Every storage-kind door asks it, through
+	// `managedTopLevelBaseAt` or `baseNamesModuleLevelAt`.
+	function moduleLevelBindingHeadsAt(index ElementIndex) returns bool
+		return match classifiedChainHead(self.signatures, head: self.tokenAt(index).value, readerFilePath: self.filePath, headIsAValue: false) 'claim'
+			value gives true
+			nominalTypeBesideBinding or
+			otherTypeBesideBinding gives not self.typeReadingClaimsMemberAt(index)
+			nominalType or
+			otherType or
+			unclaimed gives false
+		end 'claim'
+	end 'moduleLevelBindingHeadsAt'
+
+	function typeReadingClaimsMemberAt(index ElementIndex) returns bool
+		if self.kindAt(index + 1) != TokenKind.dot 'noMemberForTheTypeToClaim'
+			return false
+		end 'noMemberForTheTypeToClaim'
+
+		return self.namesStaticMemberAt(self.tokenAt(index), memberIndex: index + TokensPerQualifierSegment) or self.staticCallClaimsBase(index)
+	end 'typeReadingClaimsMemberAt'
+
+	function baseNamesModuleLevelAt(index ElementIndex) returns bool
+		return self.valueBaseAt(index).isUnbound() and self.moduleLevelBindingHeadsAt(index)
+	end 'baseNamesModuleLevelAt'
+
+	function baseNamesAValueAt(index ElementIndex) returns bool
+		return self.valueBaseAt(index).isFrameValue()
+	end 'baseNamesAValueAt'
+
+	// ⭐ **DOES THE BASE AT `index` NAME A VALUE A FIELD CHAIN CAN START FROM?** `baseNamesAValueAt`
 	// plus the one base that is neither a local nor a capture: a TOP-LEVEL MANAGED BINDING (spec-port
 	// `map-struct-bytearray`) — `db.sourceFiles.contains(key)`, where `var db = Database.create(…)` is a
-	// struct global. Without it the chain fell past every arm to the SIZED-BOUND reading and was refused as
+	// struct global. Without it the chain falls past every arm to the SIZED-BOUND reading and is refused as
 	// `Expected ''min' or 'max'' but got 'sourceFiles'`.
 	//
 	// ⚠ **THE GLOBAL IS ASKED LAST, AND EVERY TYPE-BASED READING OF THE SHAPE IS ASKED BEFORE IT** — the
-	// precedence `staticCallClaimsBase` already fixes for a one-hop call: a name that is both a declared type
-	// and a global keeps its type reading. That is why the expression door's arm sits BELOW the enum,
-	// namespace-call and static-call arms rather than beside the local one. A LOCAL, by contrast, outranks a
-	// type name (the rule `baseNamesAValueInScope` carries), and the two orders differ for a reason: a local
+	// precedence `moduleLevelBindingHeadsAt` fixes: a name that is both a declared type and a global keeps
+	// its type reading wherever the type serves the member. That is why the expression door's arm sits BELOW
+	// the enum, namespace-call and static-call arms rather than beside the local one. A LOCAL, by contrast,
+	// outranks a type name (the rule `valueBaseAt` carries), and the two orders differ for a reason: a local
 	// is a declaration the reader can see on the page, while a global's spelling can collide with a type's
 	// from another file.
 	//
 	// It costs one hash of bytes already in hand when the scope test declines — `managedTopLevelBaseAt`'s
 	// measured filter — and allocates nothing.
 	function chainBaseNamesAValue(index ElementIndex) returns bool
-		return self.baseNamesAValueInScope(self.tokenAt(index)) or self.managedTopLevelBaseAt(index)
+		return self.baseNamesAValueAt(index) or self.managedTopLevelBaseAt(index)
 	end 'chainBaseNamesAValue'
 
 	// ⭐⭐ **DOES THE IDENTIFIER AT `index` NAME ANYTHING AT ALL — the question that separates a
@@ -87608,14 +87471,14 @@ export type Parser
 	//
 	// ⚠ It resolves nothing of its own: every disjunct is a probe some door already owns, so what is
 	// written here is only the LIST of namespaces a base may live in — a value or capture
-	// (`baseNamesAValueInScope`), a top-level constant or slot (`namesTopLevelBinding`), a type declaration of
+	// (`chainBaseNamesAValue`), a top-level constant or slot (`namesTopLevelBinding`), a type declaration of
 	// any form (`Point.create()`, `Box.seen`), a function used as a base (`inc.field`), and the ten sized
 	// spellings the bound grammar owns (`u64.max`), which no file declares. A namespace a door adds later
 	// belongs in this list, and leaving it out costs a wrong noun rather than a wrong program.
 	function baseNamesNothingAt(index ElementIndex) returns bool
 		let tok = self.tokenAt(index)
 
-		if tok.kind != TokenKind.identifier 'notAPlainName'
+		if tok.kind != TokenKind.identifier or self.qualifiedTypeBaseIsAt(index) 'notAPlainName'
 			return false
 		end 'notAPlainName'
 
@@ -87794,12 +87657,11 @@ export type Parser
 		// chain and the chain-method-call spine, which `fieldChainMethodCallAt` already admits a `self` base to.
 		let baseTok = try self.consumeChainBaseToken()
 
-		// ⭐ **THE GATE IS THE SHARED PREDICATE; THE ARMS INSIDE IT DO THE RESOLVING.** This door needs more
-		// than a bool — a local base wants its `VarInfo`, a captured one its enclosing `Scope` — so it cannot
-		// simply BE `baseNamesAValueInScope`. It can still ASK it, which is what keeps the "a value outranks a
-		// type name" rule single-sourced across all three doors that read it: the statement door
-		// (`methodCallsAt`), the expression door (`parseDottedPrimary`) and this one, which RESOLVES a chain
-		// rather than merely recognizing the shape of one.
+		// ⭐ **THE BASE IS `valueBaseAt`'S ANSWER, AND THE ARMS DO THE RESOLVING** — a local base wants its
+		// `VarInfo`, a captured one its frame. Asking the one door is what keeps the "a value outranks a type
+		// name" rule single-sourced across all three doors that read it: the statement door (`methodCallsAt`),
+		// the expression door (`parseDottedPrimary`) and this one, which RESOLVES a chain rather than merely
+		// recognizing the shape of one.
 		//
 		// ⚠ **`Self` IS THEREFORE EXCLUDED HERE TOO, SO THAT NO DOOR LETS A BINDING SHADOW IT.**
 		// `Self.n = 5` inside `bad(Self Gate)` falls to the tail and reports what the `Gate.n = 5` spelling
@@ -87808,32 +87670,11 @@ export type Parser
 		// every binding a store could have succeeded against is refused elsewhere, since only a PARAMETER may be
 		// named `Self` and a parameter is immutable — but a rule that holds at two doors of three is the shape this
 		// project keeps paying for.
-		//
-		// The gate cannot pass a base the arms then drop: `nameBindsOrIsCaptured` true means
-		// `captureScopeOf` answers `found`, never `notCaptured`.
-		if self.baseNamesAValueInScope(baseTok) 'valueBase'
-			let baseName = self.baseBindingName(baseTok)
-
-			if self.bodyState.scope.contains(baseName) 'localBase'
-				var baseBinding = self.bodyState.scope.getInfo(baseName)
-				var base = try self.requireStructBase(baseBinding, baseTok: baseTok)
-
-				// ⚠ **THE BINDING THREADED ON IS THE MATERIALIZED ONE, NOT THE ONE THE SCOPE HANDED BACK.**
-				// It is what `parseFieldAssignment`'s instance rank asks (`requireWritableInstance`), and for a
-				// self-field alias the scope's binding answers that question `false` whatever the field declares
-				// — `BindingKind.let` by construction and not a parameter. `baseBindingOf` re-derives it from the
-				// box this door already loaded, so nothing is emitted twice and the WRITE door and the METHOD
-				// door read one column (`selfFieldIsWritable`) about one field.
-				return try self.resolveFieldChainFrom(base.box, layout: base.layout, baseTok: baseTok, baseBinding: try self.baseBindingOf(baseBinding, baseTok: baseTok, box: base.box))
-			end 'localBase'
-
-			// A CAPTURED enclosing struct is the base: `level.rawValue` inside a closure that captures
-			// `level`. The base is not in the closure's own scope; `resolveCapturedFieldChain` reads the box out of
-			// the env and resolves its layout the same way `requireStructBase` does.
-			match self.captureScopeOf(baseName) 'captured'
-				found(_, frame) then return try self.resolveCapturedFieldChain(baseTok, enclosing: self.capturedFrame(frame).scope, frame: frame)
-				notCaptured then break
-			end 'captured'
+		match self.valueBaseAt(baseIndex) 'valueBase'
+			thisFrame then return try self.resolveThisFrameFieldChain(baseTok)
+			captured(frame) then return try self.resolveCapturedFieldChain(baseTok, enclosing: self.capturedFrame(frame).scope, frame: frame)
+			unbound or
+			alwaysAType then break
 		end 'valueBase'
 
 		// ⭐ **A STATIC MEMBER IS THE FOURTH BASE** — `Cache.head.n = 42`, where `Cache.head` is module
@@ -87851,9 +87692,11 @@ export type Parser
 		//
 		// Asked with the type-based readings and BEFORE the managed-global arm, the precedence
 		// `chainBaseNamesAValue` states: a name that is both a declared type and a global keeps its type reading.
-		if self.namesStaticMemberAt(baseTok, memberIndex: self.pos + 1) 'staticMemberBase'
+		let typeTok = try self.staticBaseTokenAt(baseIndex)
+
+		if self.namesStaticMemberAt(typeTok, memberIndex: self.pos + 1) 'staticMemberBase'
 			try self.consume(TokenKind.dot)
-			let nameTok = self.staticMemberNameToken(baseTok, memberTok: try self.consumeMemberNameToken())
+			let nameTok = self.staticMemberNameToken(typeTok, memberTok: try self.consumeMemberNameToken())
 
 			match self.managedReceiverBindingOf(nameTok) 'binding'
 				inlineWord(payload, typeName) then return try self.resolveValueFieldChain(nameTok, value: self.emitInlineRecordWord(payload, typeName: typeName, range: SourceRange.ofToken(nameTok)), valueType: self.inlineRecordWordType(typeName), mutable: false)
@@ -87919,6 +87762,13 @@ export type Parser
 		var base = try self.requireStructBase(binding, baseTok: baseTok)
 		return try self.resolveFieldChainFrom(base.box, layout: base.layout, baseTok: baseTok, baseBinding: binding)
 	end 'resolveValueFieldChain'
+
+	function resolveThisFrameFieldChain(baseTok Token) returns FieldChainStep throws SourceParseError
+		var baseBinding = self.thisFrameBindingOf(baseTok)
+		var base = try self.requireStructBase(baseBinding, baseTok: baseTok)
+
+		return try self.resolveFieldChainFrom(base.box, layout: base.layout, baseTok: baseTok, baseBinding: try self.baseBindingOf(baseBinding, baseTok: baseTok, box: base.box))
+	end 'resolveThisFrameFieldChain'
 
 	// ⭐ **RESOLVE A FIELD-ACCESS CHAIN ON A CAPTURED STRUCT BASE.** `level.rawValue` inside a
 	// closure that captures the enclosing struct `level`. The box is READ OUT OF THE ENV (`emitCaptureRead` —
@@ -92672,6 +92522,7 @@ export type Parser
 		self.pos = decl.initStart
 		self.seatInDeclaringTypeBody(decl)
 		try self.enterConstTypeHead(TypeNameHeadForm.construction)
+		try self.enterConstChain()
 
 		// ⭐⭐ **A NODE IS THE INITIALIZER THAT IS NOT A FOLD** (spec-port `map-struct-bytearray`) —
 		// `var db = Database.create(EntryMap.create(), sourcePaths: …)`, `static var origin = Pair{a: 1, b: 2}`,
@@ -93527,6 +93378,7 @@ export type Parser
 		// grammar the author was not writing in, which is the exact misattribution every arm of this fork was
 		// added to cure.
 		try self.enterConstTypeHead(TypeNameHeadForm.construction)
+		try self.enterConstChain()
 
 		if self.atConstNodeInitializer() 'nestedNode'
 			return ConstFactoryArgumentValue.call(try self.evalConstInitializerNodeInto(calls, stack: stack, nested: true))
@@ -94266,6 +94118,12 @@ export type Parser
 		try self.refuseHiddenTypeName(verdict)
 	end 'enterConstTypeHead'
 
+	function enterConstChain() throws ConstEvalError
+		_ = try self.enterQualifiedChainAtCursor(MethodQualifierDots + 1) otherwise (err) 'unresolvable'
+			throw ConstEvalError.defective(err)
+		end 'unresolvable'
+	end 'enterConstChain'
+
 	function requireConstTypeHeadNameable() throws ConstEvalError
 		if not self.atConstTypeNameHead() 'noTypeNameHead'
 			return
@@ -94273,7 +94131,7 @@ export type Parser
 
 		let headTok = self.current()
 
-		view verdict = try self.typeNameVerdictAt(self.pos, dots: 0, written: headTok.value, anchor: headTok) otherwise (err) 'ambiguous'
+		view verdict = try self.typeNameVerdictAt(self.pos, written: headTok.value, anchor: headTok) otherwise (err) 'ambiguous'
 			throw ConstEvalError.defective(err)
 		end 'ambiguous'
 
@@ -98216,10 +98074,10 @@ export type Parser
 		end 'spellsTheRoot'
 
 		let isReceiver = rootTok.kind == TokenKind.self
-		let isLocal = not isReceiver and self.bodyState.scope.contains(rootTok.value)
+		let isLocal = not isReceiver and self.valueBaseAt(i).isThisFrame()
 		let isSelfFieldAlias = isLocal and self.bodyState.scope.isSelfField(rootTok.value)
 
-		if not isReceiver and not isLocal and not self.namesWritableModuleStorage(rootTok.value) 'notStorage'
+		if not isReceiver and not isLocal and not self.baseNamesWritableModuleStorage(i) 'notStorage'
 			throw AbsentError.absent
 		end 'notStorage'
 
@@ -100288,6 +100146,15 @@ export type Parser
 	// `async Calc.request.unionCases.bump()` — is not that shape and falls to the free reader, which reports
 	// the mismatch at the `.` it cannot consume.
 	function asyncSpawnCallee() returns AsyncSpawnCallee throws SourceParseError
+		match try self.enterQualifiedChainAtCursor(MethodQualifierDots) 'chain'
+			value then throw self.instanceSpawnRefusal(self.current())
+			declaredFunction(callee, _) then return self.consumeFunctionChainAsSpawnCallee(callee)
+			unqualified or
+			declaredType or
+			ambiguous or
+			nothing then break
+		end 'chain'
+
 		if self.memberCallFollows(self.pos + 1) 'qualifiedTarget'
 			return try self.qualifiedAsyncSpawnCallee()
 		end 'qualifiedTarget'
@@ -100317,8 +100184,8 @@ export type Parser
 		// call and an interface receiver to a `witnessDispatch`, and neither can be an `asyncCall`.
 		let baseTok = self.current()
 
-		if self.methodCallsAt(self.pos) or self.baseNamesAValueInScope(baseTok) 'instanceSpawn'
-			throw SourceParseError.unsupported("`async {String.from(baseTok.value)}.…` spawns a method on a VALUE, and a spawn has no receiver: its arguments ride the green thread's inline argument region, which the hand-assembled trampoline reads back into the ABI argument registers, and nothing there carries a receiver or its ownership. Spawn a free function or a `Type.staticMethod(…)` that takes the value as an argument", line: baseTok.line, column: baseTok.column)
+		if self.methodCallsAt(self.pos) or self.baseNamesAValueAt(self.pos) 'instanceSpawn'
+			throw self.instanceSpawnRefusal(baseTok)
 		end 'instanceSpawn'
 
 		let baseIndex = self.pos
@@ -100346,10 +100213,20 @@ export type Parser
 
 		match try self.qualifiedStaticCallee(typeTok, memberTok: memberTok, aliasName: aliasName) 'callee'
 			minted(mintedCallee) then return try self.declaredStaticAsyncSpawnCallee(mintedCallee, aliasName: aliasName, typeTok: typeTok, memberTok: memberTok, mint: CalleeMint.primitiveStatic)
-			namespaceQualifiedFree(free) then return AsyncSpawnCallee.create(free, anchor: memberTok, mint: CalleeMint.notMinted)
 			declared(callee) then return try self.declaredStaticAsyncSpawnCallee(callee, aliasName: aliasName, typeTok: typeTok, memberTok: memberTok, mint: self.staticCallHeadMint(baseIndex, typeTok: typeTok))
 		end 'callee'
 	end 'qualifiedAsyncSpawnCallee'
+
+	function instanceSpawnRefusal(baseTok Token) returns SourceParseError
+		return SourceParseError.unsupported("`async {String.from(baseTok.value)}.…` spawns a method on a VALUE, and a spawn has no receiver: its arguments ride the green thread's inline argument region, which the hand-assembled trampoline reads back into the ABI argument registers, and nothing there carries a receiver or its ownership. Spawn a free function or a `Type.staticMethod(…)` that takes the value as an argument", line: baseTok.line, column: baseTok.column)
+	end 'instanceSpawnRefusal'
+
+	function consumeFunctionChainAsSpawnCallee(callee ByteArray) returns AsyncSpawnCallee
+		let dots = self.dottedChainLengthAt(self.pos)
+		let memberTok = self.tokenAt(self.pos + dots * TokensPerQualifierSegment)
+		self.pos = self.pos + dots * TokensPerQualifierSegment + 1
+		return AsyncSpawnCallee.create(callee, anchor: memberTok, mint: CalleeMint.notMinted)
+	end 'consumeFunctionChainAsSpawnCallee'
 
 	function requireCalleeIsASpawnableFunction(callee ByteArray, typeTok Token, memberTok Token) throws SourceParseError
 		if not isBuiltinsIntrinsicCallee(callee) 'aDeclaredFunction'
@@ -102540,22 +102417,12 @@ export type Parser
 	end 'baseBindingIsADeferredCallResult'
 
 	function chainBaseDeferralSource() returns DeferralSource
-		let baseTok = self.current()
-
-		if not self.baseNamesAValueInScope(baseTok) 'notAValueBase'
-			return DeferralSource.none
-		end 'notAValueBase'
-
-		let baseName = self.baseBindingName(baseTok)
-
-		if self.bodyState.scope.contains(baseName) 'localBase'
-			return self.deferralSourceOfBinding(self.bodyState.scope.getInfo(baseName), frame: self.artifact.currentFuncIndex)
-		end 'localBase'
-
-		match self.captureScopeOf(baseName) 'captured'
-			found(enclosing, frame) then return self.deferralSourceOfBinding(enclosing.getInfo(baseName), frame: self.capturedFrame(frame).funcIndex)
-			notCaptured then return DeferralSource.none
-		end 'captured'
+		match self.valueBaseAt(self.pos) 'base'
+			thisFrame then return self.deferralSourceOfBinding(self.thisFrameBindingOf(self.current()), frame: self.artifact.currentFuncIndex)
+			captured(frame) then return self.deferralSourceOfBinding(self.capturedBindingOf(self.current(), frame: frame), frame: self.capturedFrame(frame).funcIndex)
+			unbound or
+			alwaysAType then return DeferralSource.none
+		end 'base'
 	end 'chainBaseDeferralSource'
 
 	// The result of a call to a callee some file DOES declare — where the void/value split is
@@ -104280,7 +104147,7 @@ export type Parser
 	//
 	// ⭐ **A VALUE IN SCOPE OUTRANKS THE TYPE READING, and that test is why this is not merely a shape test.**
 	// A local called `Counter` shadows `Counter.` exactly as a local `OFFSET` shadows a top-level constant of
-	// that name — the rule `baseNamesAValueInScope` carries — so `Counter.count = 1` with such a local in
+	// that name — the rule `valueBaseAt` carries — so `Counter.count = 1` with such a local in
 	// scope is a FIELD store on that local and must fall through to `fieldAssignsAt`. `Self` is excluded from
 	// the shadowing test by that same function, which is what makes `Self.count = 1` inside a static method
 	// reach the static-member doors at all.
@@ -104289,7 +104156,7 @@ export type Parser
 			return false
 		end 'notADottedForm'
 
-		return not self.baseNamesAValueInScope(self.tokenAt(index))
+		return not self.baseNamesAValueAt(index)
 	end 'typeBaseAdmittedAt'
 
 	// `<Type>.<member>` at `index` as the static roster answers it — the STATEMENT door's face of
@@ -104417,13 +104284,12 @@ export type Parser
 		// ⚠ **IT IS NOT AN IDENTITY, AND THAT IS WHAT MAKES THE BARE FORM SAFE** — see
 		// `dispatchArrayMethod`'s `bufferAsAValue` arm, where the receiver's own `ValueId` handed back to a
 		// `let` would make the binding and the array two owners of one record.
-		let baseName = self.baseBindingName(self.tokenAt(index))
-
-		if not self.bodyState.scope.contains(baseName) 'notALocalBinding'
-			return false
-		end 'notALocalBinding'
-
-		return self.typeIsArrayInstance(self.bodyState.scope.getInfo(baseName).varType)
+		match self.valueBaseAt(index) 'base'
+			thisFrame then return self.typeIsArrayInstance(self.thisFrameBindingOf(self.tokenAt(index)).varType)
+			captured or
+			unbound or
+			alwaysAType then return false
+		end 'base'
 	end 'arrayManagedFieldAt'
 
 	// ⭐⭐ **`<enumBinding> . ordinal` — THE ENUM ACCESSOR DOOR, and it needs a predicate of its own for
@@ -104564,7 +104430,7 @@ export type Parser
 	end 'enumAccessorBaseValue'
 
 	function thisFrameEnumBaseValue(baseTok Token) returns ValueId throws SourceParseError
-		var baseBinding = self.bodyState.scope.getInfo(self.baseBindingName(baseTok))
+		var baseBinding = self.thisFrameBindingOf(baseTok)
 
 		// The base is a USE of the binding, so it takes the same liveness/move guard every other read of a
 		// name takes — a moved-from enum binding is dead here exactly as it is at `requireStructBase`.
@@ -105339,10 +105205,10 @@ export type Parser
 		//
 		// ⚠ The managed binding is ALSO the only one of the three whose name can belong to a declared
 		// TYPE as well — which is why it, alone, has to weigh itself against the type-based readings of
-		// this same shape (`staticCallClaimsBase`) rather than simply claiming it.
+		// this same shape (`moduleLevelBindingHeadsAt`) rather than simply claiming it.
 		let baseTok = self.tokenAt(index)
 
-		if self.baseNamesAValueInScope(baseTok) 'localOrCaptured'
+		if self.baseNamesAValueAt(index) 'localOrCaptured'
 			return true
 		end 'localOrCaptured'
 
@@ -105438,7 +105304,8 @@ export type Parser
 		// `E2015: Unsupported: identifier statement`, while `let p = IntPair.create(9)` one line below resolved
 		// perfectly — a call accepted at one door and refused at the other, which is the exact failure this
 		// predicate's header names. `staticCallClaimsBase` asks the same key for the same reason.
-		let baseName = self.signatures.denotedGenericBaseName(self.genericAliasKeyFor(self.tokenAt(index).value), readerFilePath: self.filePath)
+		let baseTok = try self.typeBaseTokenAt(index) otherwise panic("qualifiedStaticCallsAt: typeBaseTokenAt refused the identifier at {index}, and it refuses only a base that is not a name")
+		let baseName = self.signatures.denotedGenericBaseName(self.genericAliasKeyFor(baseTok.value), readerFilePath: self.filePath)
 		let callee = qualifiedMethodName(baseName, methodName: self.tokenAt(index + 2).value)
 
 		if isBuiltinsIntrinsicCallee(callee) 'builtinsIntrinsic'
@@ -105500,7 +105367,7 @@ export type Parser
 			return true
 		end 'aRegistryCall'
 
-		return self.signatures.containsStructFor(baseName, readerFilePath: self.filePath)
+		return self.signatures.containsStructFor(baseName, readerFilePath: self.typeNameReaderAt(index))
 	end 'qualifiedStaticCallsAt'
 
 	// The kind of the token ONE past the cursor. The parser's two-token lookahead:
@@ -105570,6 +105437,16 @@ export type Parser
 		return tok
 	end 'consumeNameToken'
 
+	function staticBaseTokenAt(index ElementIndex) returns Token throws SourceParseError
+		let tok = self.tokenAt(index)
+
+		if self.qualifiedTypeBaseIsAt(index) or tok.kind == TokenKind.identifier or tokenIsTheSelfType(tok) or keywordNamesAPrimitiveType(tok) 'aTypeNameBase'
+			return try self.typeBaseTokenAt(index)
+		end 'aTypeNameBase'
+
+		return tok
+	end 'staticBaseTokenAt'
+
 	// ⭐⭐ **THE TOKEN NAMING A TYPE AT `index`, WITH `Self` ALREADY RESOLVED TO THE NAME IT DENOTES** —
 	// `consumeNameToken`'s sibling for the other half of a dotted expression: that one reads the MEMBER, this
 	// one reads the BASE. It is the ONE place the `Self` keyword becomes the enclosing declaration's own name
@@ -105596,10 +105473,6 @@ export type Parser
 		end 'theQualifiedBase'
 
 		if tok.kind == TokenKind.identifier 'plainTypeName'
-			if self.qualifiedNominalAt.contains(index) 'aQualifiedNominal'
-				return tok
-			end 'aQualifiedNominal'
-
 			let identity = self.signatures.bareWrittenKey(tok.value, readerFilePath: self.filePath)
 
 			if identity.equals(tok.value) 'itsWrittenNameIsItsIdentity'
@@ -105647,18 +105520,12 @@ export type Parser
 		let tok = try self.typeBaseTokenAt(index)
 		self.advance()
 
-		if self.qualifiedNominalAt.contains(index) 'aCollapsedQualifiedNominal'
-			try self.requireNameableTypeNameAt(index, dots: 0, written: tok.value, anchor: self.tokenAt(index))
-		end 'aCollapsedQualifiedNominal' else if not self.qualifiedTypeBaseIsAt(index) 'writtenBare'
+		if not self.qualifiedTypeBaseIsAt(index) 'writtenBare'
 			try self.requireUnambiguousBaseName(self.tokenAt(index) if self.kindAt(index) == TokenKind.identifier else tok)
 		end 'writtenBare'
 
 		return tok
 	end 'consumeTypeBaseToken'
-
-	function baseWasQualifiedAt(index ElementIndex) returns bool
-		return self.qualifiedTypeBaseIsAt(index) or self.qualifiedNominalAt.contains(index)
-	end 'baseWasQualifiedAt'
 
 	function qualifiedTypeBaseIsAt(index ElementIndex) returns bool
 		return match self.qualifiedTypeBase 'qualified'

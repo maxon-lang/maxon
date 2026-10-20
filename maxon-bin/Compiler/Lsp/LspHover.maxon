@@ -864,10 +864,31 @@ module type HoverDocument
 			return HoverType.unknown
 		end 'noTypeHere'
 
-		let base = sourceBetween(opening.startByte, endByte: tokenAt(dottedNameEnd(index)).endByte).toByteArray()
+		let nameEnd = dottedNameEnd(index)
+
+		match self.qualifiedTypeEndingAt(nameEnd) 'qualified'
+			named(declaredName, _, _) then return self.writtenType(declaredName, rendered: sourceBetween(opening.startByte, endByte: typeEndByte(index)))
+			unknown then break
+		end 'qualified'
+
+		let base = sourceBetween(opening.startByte, endByte: tokenAt(nameEnd).endByte).toByteArray()
 
 		return self.writtenType(base, rendered: sourceBetween(opening.startByte, endByte: typeEndByte(index)))
 	end 'declaredTypeAt'
+
+	function qualifiedTypeEndingAt(last ElementIndex) returns HoverType
+		match corpus 'held'
+			loaded(_, signatures, readerPath) then return self.chainTypeEndingAt(signatures, readerPath: readerPath, last: last)
+			unavailable then return HoverType.unknown
+		end 'held'
+	end 'qualifiedTypeEndingAt'
+
+	function chainTypeEndingAt(signatures ProgramSignatures, readerPath FilePath, last ElementIndex) returns HoverType
+		let declaration = try nameableQualifiedTypeEndingAt(tokens, index: last, signatures: signatures, readerFilePath: readerPath) otherwise return HoverType.unknown
+		let declared = declaration.nominalNameOr(declaration.written)
+
+		return HoverType.named(declared, rendered: String.from(declared), written: declared)
+	end 'chainTypeEndingAt'
 
 	function dottedNameEnd(index ElementIndex) returns ElementIndex
 		var last = index
@@ -1223,6 +1244,11 @@ module type HoverDocument
 		if not tokenCanBeAName(tok) 'notANameToResolveOn'
 			return HoverReceiver.nothing
 		end 'notANameToResolveOn'
+
+		match self.qualifiedTypeEndingAt(last) 'qualified'
+			named(declaredName, rendered, written) then return HoverReceiver.typeSurface(HoverType.named(declaredName, rendered: rendered, written: written))
+			unknown then break
+		end 'qualified'
 
 		if memberAccessAt(last) 'aMemberOfSomethingElse'
 			return HoverReceiver.value(memberTypeEndingAt(last, reach: reach))

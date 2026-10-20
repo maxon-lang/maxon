@@ -2814,3 +2814,37 @@ end 'main'
 ```maxoncstderr
 error E2008: <fragment>:16:2: Mismatched end label: expected 'recover', got 'handler'
 ```
+
+<!-- test: a-throws-clause-names-an-error-enum-through-its-directory -->
+`checked` declares `throws sub.Err`, the error enum `sub/` declares, and throws its `tooBig` case; the
+caller's handler decodes the error into that enum and matches it (4 + 20).
+```maxon
+// --- file: sub/err.maxon
+export enum Err implements Error
+	tooBig
+	tooSmall
+end 'Err'
+
+// --- file: main.maxon
+function checked(n ExitCode) returns ExitCode throws sub.Err
+	if n > 10 'big'
+		throw sub.Err.tooBig
+	end 'big'
+
+	return n
+end 'checked'
+
+function main() returns ExitCode
+	let fine = try checked(4) otherwise 0
+	let refused = try checked(50) otherwise (e) 'failed'
+		match e 'which'
+			tooBig then return fine + 20
+			tooSmall then return 1
+		end 'which'
+	end 'failed'
+	return refused
+end 'main'
+```
+```exitcode
+24
+```

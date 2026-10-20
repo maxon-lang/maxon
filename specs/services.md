@@ -314,6 +314,108 @@ end 'main'
 7
 ```
 
+<!-- test: a-spawn-of-a-nested-directory-type-by-its-qualified-name -->
+`Calc` is declared two directories down, in `outer/inner/`, so `main` names it `outer.inner.Calc`, and the
+spawn starts that type as a service exactly as it does for a one-segment qualifier.
+```maxon
+// --- file: outer/inner/calc.maxon
+export type Calc
+	var count as Integer
+
+	export static function create() returns Self
+		return Self{count: 7}
+	end 'create'
+
+	export function total() returns Integer
+		return self.count
+	end 'total'
+end 'Calc'
+
+export typealias Integer = int(i64.min to i64.max)
+// --- file: main.maxon
+function main() returns ExitCode
+	let h = spawn outer.inner.Calc.create()
+	let total = try await h.total() otherwise 0
+	return total as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-default-spawn-of-a-directory-type-by-its-qualified-name -->
+The `default` for `Greeter` spawns `Polite`, declared in `sub/`, by its qualified name `sub.Polite`, and
+the registry hands `main` that service.
+```maxon
+// --- file: sub/polite.maxon
+export type Polite implements Greeter
+	var calls as Integer
+
+	export static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	export function greet() returns Integer
+		self.calls = self.calls + 1
+		return 7
+	end 'greet'
+end 'Polite'
+// --- file: main.maxon
+export interface Greeter
+	function greet() returns Integer
+end 'Greeter'
+
+default Greeter = spawn sub.Polite.create()
+
+function main() returns ExitCode
+	let answer = try await Greeter.current().greet() otherwise 0
+	return answer as ExitCode
+end 'main'
+
+export typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+7
+```
+
+<!-- test: a-spawn-reaches-a-service-in-a-directory-named-like-a-type -->
+`sub/` declares a type `Calc`, and `sub/Calc/` is a directory of its own holding the service `Inner`.
+`Calc` declares no member `Inner`, so `sub.Calc.Inner` is the directory chain and the spawn starts
+`Inner`, while `sub.Calc.make()` still names the type (8 + 1).
+```maxon
+// --- file: sub/calc.maxon
+export type Calc
+	export let v as Integer
+
+	export static function make() returns Calc
+		return Calc{v: 1}
+	end 'make'
+end 'Calc'
+
+export typealias Integer = int(i64.min to i64.max)
+// --- file: sub/Calc/inner.maxon
+export type Inner
+	var count as sub.Integer
+
+	export static function create() returns Self
+		return Self{count: 8}
+	end 'create'
+
+	export function total() returns sub.Integer
+		return self.count
+	end 'total'
+end 'Inner'
+// --- file: main.maxon
+function main() returns ExitCode
+	let h = spawn sub.Calc.Inner.create()
+	let total = try await h.total() otherwise 0
+	return (total + sub.Calc.make().v) as ExitCode
+end 'main'
+```
+```exitcode
+9
+```
+
 <!-- test: error.spawn-of-a-bare-function-refused -->
 ⚖ There is no unstructured green thread in this language. `spawn work()` names no type, so it starts no
 service, and the refusal teaches the one form rather than reporting a syntax error.
@@ -344,6 +446,36 @@ end 'main'
 error E3134: <fragment>:3:10: `spawn Calc.create(…)` does not start a service: nothing declares `type Calc`. `spawn` starts a SERVICE from a static factory of a declared type that returns that type, e.g. `spawn Calc.create()`
 ```
 
+<!-- test: error.a-spawn-whose-head-is-a-binding-is-refused-as-a-value -->
+A chain whose head is a binding in scope is a value expression, so `spawn sub.Calc.create()` names no
+type even though a directory `sub` declares one: the refusal names the value, and no service is
+started for the directory's `Calc`.
+```maxon
+// --- file: sub/calc.maxon
+export type Calc
+	var count as Integer
+
+	export static function create() returns Self
+		return Self{count: 7}
+	end 'create'
+
+	export function total() returns Integer
+		return self.count
+	end 'total'
+end 'Calc'
+
+export typealias Integer = int(i64.min to i64.max)
+// --- file: main.maxon
+function main() returns ExitCode
+	let sub = "a value"
+	let h = spawn sub.Calc.create()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3134: <fragment>:19:10: `spawn sub.Calc.create(…)` does not start a service: `sub` is a value in scope, so `sub.Calc` names no type. `spawn` starts a SERVICE from a static factory of a declared type that returns that type, e.g. `spawn Calc.create()`
+```
+
 <!-- test: error.spawn-of-a-chain-naming-no-type-refused -->
 Nothing declares `foo`, so the qualified chain `foo.bar` names no type to be a service.
 ```maxon
@@ -353,7 +485,65 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3134: <fragment>:3:10: `spawn foo.bar.baz(…)` does not start a service: nothing declares `type foo.bar`. `spawn` starts a SERVICE from a static factory of a declared type that returns that type, e.g. `spawn Calc.create()`
+error E3134: <fragment>:3:10: `spawn foo.bar.baz(…)` does not start a service: nothing declares a binding, directory or type `foo.bar`. `spawn` starts a SERVICE from a static factory of a declared type that returns that type, e.g. `spawn Calc.create()`
+```
+
+<!-- test: error.a-default-spawn-of-a-chain-naming-nothing-is-refused -->
+A `default`'s spawn is read by the same resolver as any other: nothing declares `foo`, so the chain names
+no type, and the refusal is the spawn's own.
+```maxon
+interface Greeter
+	function greet() returns Integer
+end 'Greeter'
+
+default Greeter = spawn foo.bar.baz()
+
+function main() returns ExitCode
+	let answer = try await Greeter.current().greet() otherwise 0
+	return answer as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3134: <fragment>:6:19: `spawn foo.bar.baz(…)` does not start a service: nothing declares a binding, directory or type `foo.bar`. `spawn` starts a SERVICE from a static factory of a declared type that returns that type, e.g. `spawn Calc.create()`
+```
+
+<!-- test: error.a-default-spawn-whose-head-is-a-top-level-binding-is-refused-as-a-value -->
+A top-level `let sub` is in scope at the file's `default`, so `spawn sub.Calc.create()` there is a value
+expression and names no type, though the directory `sub` declares a `Calc` that conforms to `Greeter`.
+```maxon
+// --- file: sub/calc.maxon
+export type Calc implements Greeter
+	var calls as Integer
+
+	export static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	export function greet() returns Integer
+		self.calls = self.calls + 1
+		return 7
+	end 'greet'
+end 'Calc'
+// --- file: main.maxon
+export interface Greeter
+	function greet() returns Integer
+end 'Greeter'
+
+let sub = "a value"
+
+default Greeter = spawn sub.Calc.create()
+
+function main() returns ExitCode
+	print(sub)
+	let answer = try await Greeter.current().greet() otherwise 0
+	return answer as ExitCode
+end 'main'
+
+export typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3134: <fragment>:22:19: `spawn sub.Calc.create(…)` does not start a service: `sub` is a value in scope, so `sub.Calc` names no type. `spawn` starts a SERVICE from a static factory of a declared type that returns that type, e.g. `spawn Calc.create()`
 ```
 
 <!-- test: error.spawn-of-an-instance-method-refused -->

@@ -53,7 +53,9 @@ not 80.
 - `sleep(milliseconds)` parks the current green thread; it takes a `Milliseconds` value.
 - `async` applies to a direct call of a function or a static method. It cannot start a closure, an
   indirect call or an instance method (**E2015**). A generic function is started at the instance its
-  arguments infer, as a call would be.
+  arguments infer, as a call would be. A [qualified](/docs/language/namespaces/#qualified-names) callee reads as the direct call
+  reads it, at any length: `async sub.Calc.seven()` and `async outer.inner.six()` start what those calls
+  name.
 - An argument travels as one integer word: an integer, a `bool`, or a managed value's reference. A `float`
   or a value held at an interface type is **E2015**, unless the callee reassigns that parameter — then the
   argument rides a cell the coroutine owns.
@@ -294,9 +296,11 @@ end 'main'
   Dropping the last handle does the same. A
   queued message always runs, so a reply always resolves.
 - **The target** of `spawn` must be a static factory that returns its own type; anything else — including a
-  bare `spawn f()`, or a qualified chain that names no type — is **E3134**. The type may be
-  [qualified](/docs/language/namespaces/#qualified-names): `spawn sub.Calc.create()` starts a type declared in `sub/`, and
-  `spawn stdlib.Range.create(1, finish: 4)` the library's `Range` in a program that declares its own.
+  bare `spawn f()`, a qualified chain that names no type, or a chain whose head is a binding in scope — is
+  **E3134**, in a `default` as anywhere else. The type may be [qualified](/docs/language/namespaces/#qualified-names), at any length:
+  `spawn sub.Calc.create()` starts a type declared in `sub/`, `spawn outer.inner.Calc.create()` one two
+  directories down, and `spawn stdlib.Range.create(1, finish: 4)` the library's `Range` in a program that
+  declares its own.
 - **Generic services.** A generic type can be spawned; its handle type is spelled through an alias,
   `typealias StringBoxHandle = Box.handle with String`.
 - Services that `await` each other in a cycle are **E3139**.

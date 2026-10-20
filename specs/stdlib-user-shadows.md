@@ -1219,3 +1219,63 @@ end 'main'
 ```maxoncstderr
 error E4006: <fragment>:7:35: Type 'stdlib.Range' has no method named 'nosuch'
 ```
+
+<!-- test: stdlib-user-shadows.a-library-file-names-a-library-type-by-its-qualified-name -->
+A library file reaches another library type through `stdlib.Range`, the spelling an author file writes, and
+the call resolves to the library's `Range` exactly as the bare name would.
+```maxon
+// --- stdlib-overlay: Builtins.maxon
+public function overlayProbe() returns Count
+	let bound = stdlib.Range.create(1, finish: 4)
+	return bound.map(function(x) gives x * 2).count()
+end 'overlayProbe'
+// --- file: main.maxon
+function main() returns ExitCode
+	return overlayProbe() as ExitCode
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: stdlib-user-shadows.an-author-file-names-a-library-type-by-its-qualified-name -->
+With no author declaration of `Range`, `stdlib.Range` in an author file is the library's `Range`, exactly
+as the bare name would be.
+```maxon
+function main() returns ExitCode
+	let bound = stdlib.Range.create(1, finish: 4)
+	return bound.map(function(x) gives x * 2).count() as ExitCode
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: stdlib-user-shadows.a-library-file-names-a-shadowed-library-alias-by-its-qualified-name -->
+A library file names the library's `Count` alias as `stdlib.Count` in a signature, and the program's own `Count`
+type leaves that signature the library's: the program's literal argument reaches it and its answer casts back.
+```maxon
+// --- stdlib-overlay: Builtins.maxon
+public function overlayCount(n stdlib.Count) returns stdlib.Count
+	return n
+end 'overlayCount'
+// --- file: main.maxon
+type Count
+	let y as ExitCode
+
+	static function make() returns Count
+		return Count{y: 0}
+	end 'make'
+
+	function offset() returns ExitCode
+		return self.y
+	end 'offset'
+end 'Count'
+
+function main() returns ExitCode
+	return (overlayCount(3) as ExitCode) + Count.make().offset()
+end 'main'
+```
+```exitcode
+3
+```

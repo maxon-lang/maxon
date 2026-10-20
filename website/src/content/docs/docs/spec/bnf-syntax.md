@@ -370,7 +370,8 @@ interface_decl
                 'end' LABEL
 
 extends_clause
-              = 'extends' IDENTIFIER { ',' IDENTIFIER }
+              = 'extends' IDENTIFIER { '.' IDENTIFIER } { ',' IDENTIFIER { '.' IDENTIFIER } }
+                                                         (* an interface may be qualified *)
 
 interface_method
               = [ 'static' ] 'function' IDENTIFIER
@@ -392,7 +393,7 @@ extension_block
                 { method_decl | static_method_decl }
                 'end' LABEL
 
-type_base     = IDENTIFIER | 'int' | 'float' | 'bool'
+type_base     = IDENTIFIER { '.' IDENTIFIER } | 'int' | 'float' | 'bool'   (* the type may be qualified *)
 
                 (* an extension body declares no stored members: a `var` or `let`, static or not,
                    is E2015; a type extension's member with the name and kind (static or
@@ -486,7 +487,7 @@ conformance_clause
               = 'implements' conformance_entry { ',' conformance_entry }
 
 conformance_entry
-              = IDENTIFIER [ 'with' type_args ]
+              = IDENTIFIER { '.' IDENTIFIER } [ 'with' type_args ]   (* the interface may be qualified *)
 
 type_args     = type_ref
               | '(' type_ref { ',' type_ref } ')'
@@ -496,7 +497,9 @@ where_clause  = 'where' constraint { ',' constraint }
 constraint    = IDENTIFIER 'is' constraint_iface { 'and' constraint_iface }
 
 constraint_iface
-              = IDENTIFIER [ 'with' type_args ]              (* may bind the interface's associated types *)
+              = IDENTIFIER { '.' IDENTIFIER } [ 'with' type_args ]
+                                                         (* may be qualified, and may bind the interface's
+                                                            associated types *)
 
 type_ref      = 'bool'
               | 'cstring'                    (* only in a source file under stdlib/ or runtime/; E3185 elsewhere *)
@@ -943,7 +946,9 @@ try_expr      = 'try' expression 'otherwise' otherwise_clause
 
 ```
 async_expr    = 'async' IDENTIFIER '(' [ arg_list ] ')'    (* start a coroutine, returns promise *)
-              | 'async' IDENTIFIER '.' IDENTIFIER '(' [ arg_list ] ')'  (* the same, on a static method *)
+              | 'async' IDENTIFIER { '.' IDENTIFIER } '.' IDENTIFIER '(' [ arg_list ] ')'
+                                                         (* the same, on a static method; either may be
+                                                            qualified *)
 
 await_expr    = 'await' unary_expr                          (* wait for promise, returns result *)
 

@@ -249,7 +249,7 @@ The program declares no 'main' function.
 
 ### E3004 — `callUnknownFunction`
 
-A call names a function that does not exist -- a typo, or a callee not visible from here. A member called on its result has parameters no declaration states, so it accepts any argument labels and an untyped closure argument; errors inside its arguments are reported as usual.
+A call names a function that does not exist -- a typo, or a callee not visible from here. A dotted call, whether written as an expression, a statement, under `try` or `async`, or in a top-level constant, is reported here when its qualifier names no binding, directory or type (`foo.bar.baz()`: nothing declares `foo.bar`). Correct the qualifier to the directory or type that declares the function. A member called on its result has parameters no declaration states, so it accepts any argument labels and an untyped closure argument; errors inside its arguments are reported as usual.
 
 ### E3005 — `typeMismatch`
 
@@ -626,7 +626,7 @@ A `where` constraint BINDS the constrained interface's associated types -- `wher
 
 ### E3134 — `semanticServiceNotASpawnTarget`
 
-`spawn` starts a SERVICE, and a service is started from a STATIC FACTORY of a declared type that returns that type -- `spawn Calc.create()`. There is exactly one form, and this expression is not it. The cases are: nothing declares the type; the type is declared but nothing declares the member; the member is an INSTANCE method (a `spawn` calls the factory directly, so there is no service yet for a message to reach); or the member is a static that returns something else, which has produced no state for the message loop to own. A bare `spawn f()` over a free function is refused here too, and deliberately: there is no unstructured green thread in this language. The unit of concurrency is a service, whose message surface the compiler can check. The cure is to name a static factory of the type you mean to start.
+`spawn` starts a SERVICE, and a service is started from a STATIC FACTORY of a declared type that returns that type -- `spawn Calc.create()`. There is exactly one form, and this expression is not it. The cases are: nothing declares the type; the type is declared but nothing declares the member; the member is an INSTANCE method (a `spawn` calls the factory directly, so there is no service yet for a message to reach); or the member is a static that returns something else, which has produced no state for the message loop to own. A qualified target is read as any qualified name is: a chain whose qualifier names no binding, directory or type is refused here, and so is one whose head is a binding in scope (with `let sub = …` in scope, `sub.Calc` reads that value). A `default`'s spawn is held to the same rules. A bare `spawn f()` over a free function is refused here too, and deliberately: there is no unstructured green thread in this language. The unit of concurrency is a service, whose message surface the compiler can check. The cure is to name a static factory of the type you mean to start.
 
 ### E3135 — `semanticServiceValueNotTransferable`
 

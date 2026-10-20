@@ -148,9 +148,20 @@ end 'main'
 
 Qualification works for functions and for every kind of type name — typealiases, types, enums, unions and
 interfaces (`lib.fmt.format(x)`, `50 as api.Score`, `api.Point.origin()`) — at every position a type name
-is written: a declaration, a cast, a construction, a static call's base, a `spawn`'s target, a `throws`,
-`implements`, `where` or `extends` clause, and the head of a top-level constant's initializer. It never
-bypasses visibility: a type the referring file may not name is refused qualified exactly as it is bare.
+is written: a declaration, a cast, a construction, a static call's base, a `spawn`'s target, an
+`extension`'s target, a `throws`, `implements`, `where` or `extends` clause, and the head of a top-level
+constant's initializer. Visibility holds through it: a type the referring file may not name is refused
+qualified exactly as it is bare.
+
+A qualified name resolves the same way wherever it is written — an expression, a statement, a `try`, an
+`async` call, a `spawn` or a `default`. A chain names a function (`outer.inner.f()`), a type and its member
+(`sub.Calc.make()`), or a member type (`lib.Type.Inner`, the typealias `Inner` that `lib`'s `Type`
+declares). When a binding in scope — a local, a parameter, or a top-level binding the file sees — has the
+name of the chain's head, the chain starts at that binding: with `let util = 4` in the file, `util.f()` is a
+method call on `util`. A top-level binding that shares its name with a type yields to the type where the
+type declares the member written after it, a static or a static function. A call whose qualifier names
+no binding, directory or type is [E3004](/docs/cli/error-codes/#e3004--callunknownfunction), and the
+message names the qualifier: for `foo.bar.baz()`, nothing declares a binding, directory or type `foo.bar`.
 
 Three qualifiers are reserved. `export.X` names a declaration at the project root, `stdlib.X` one in the
 standard library, and `scriptlib.<package>.X` one in a scriptlib package. A source directory that cannot be

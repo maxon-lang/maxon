@@ -145,50 +145,6 @@ end 'cacheReadSpawnGateDefaultOf'
 
 // @generated library-cache end
 
-export union DefaultSpawn
-	value
-	spawns(let typeName ByteArray)
-
-	export function spawnedTypeName() returns ByteArray throws AbsentError
-		match self 'spawn'
-			value then throw AbsentError.absent
-			spawns(typeName) then return typeName
-		end 'spawn'
-	end 'spawnedTypeName'
-end 'DefaultSpawn'
-
-// @generated library-cache begin
-function cacheWriteDefaultSpawn(writer LibraryCacheWriter, value DefaultSpawn)
-	writer.unsigned(value.ordinal as CacheUnsigned)
-
-	match value 'payload'
-		value then break
-		spawns(a0) then cacheWriteDefaultSpawnSpawns(writer, a0: a0)
-	end 'payload'
-end 'cacheWriteDefaultSpawn'
-
-function cacheWriteDefaultSpawnSpawns(writer LibraryCacheWriter, a0 ByteArray)
-	writer.bytes(a0)
-end 'cacheWriteDefaultSpawnSpawns'
-
-function cacheReadDefaultSpawn(reader LibraryCacheReader) returns DefaultSpawn throws LibraryCacheDamage
-	let tag = try reader.unsigned()
-
-	return match tag 'case'
-		0 gives DefaultSpawn.value
-		1 gives try cacheReadDefaultSpawnSpawns(reader)
-		default throws LibraryCacheDamage.unknownTag(tag)
-	end 'case'
-end 'cacheReadDefaultSpawn'
-
-function cacheReadDefaultSpawnSpawns(reader LibraryCacheReader) returns DefaultSpawn throws LibraryCacheDamage
-	let a0 = try reader.bytes()
-
-	return DefaultSpawn.spawns(a0)
-end 'cacheReadDefaultSpawnSpawns'
-
-// @generated library-cache end
-
 export type DefaultDeclaration
 	export let key as ByteArray
 	export let declFilePath as FilePath
@@ -198,10 +154,9 @@ export type DefaultDeclaration
 	export let isStdlibSource as bool
 	export let exprStart as ElementIndex
 	export let exprEnd as ElementIndex
-	export let spawn as DefaultSpawn
 
-	export static function create(key ByteArray, declFilePath FilePath, keyRange SourceRange, isStdlibSource bool, exprStart ElementIndex, exprEnd ElementIndex, spawn DefaultSpawn) returns DefaultDeclaration
-		return Self{key: key, declFilePath: declFilePath, keyLine: keyRange.line, keyColumn: keyRange.column, keyRange: keyRange, isStdlibSource: isStdlibSource, exprStart: exprStart, exprEnd: exprEnd, spawn: spawn}
+	export static function create(key ByteArray, declFilePath FilePath, keyRange SourceRange, isStdlibSource bool, exprStart ElementIndex, exprEnd ElementIndex) returns DefaultDeclaration
+		return Self{key: key, declFilePath: declFilePath, keyLine: keyRange.line, keyColumn: keyRange.column, keyRange: keyRange, isStdlibSource: isStdlibSource, exprStart: exprStart, exprEnd: exprEnd}
 	end 'create'
 
 	export function isTheSameDeclaration(other DefaultDeclaration) returns bool
@@ -218,7 +173,6 @@ export type DefaultDeclaration
 		writer.flag(self.isStdlibSource)
 		writer.unsigned(self.exprStart as CacheUnsigned)
 		writer.unsigned(self.exprEnd as CacheUnsigned)
-		cacheWriteDefaultSpawn(writer, value: self.spawn)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns DefaultDeclaration throws LibraryCacheDamage
@@ -230,13 +184,12 @@ export type DefaultDeclaration
 		let f_isStdlibSource = try reader.flag()
 		let f_exprStart = (try reader.unsigned()) as ElementIndex
 		let f_exprEnd = (try reader.unsigned()) as ElementIndex
-		let f_spawn = try cacheReadDefaultSpawn(reader)
 
-		return Self{key: f_key, declFilePath: f_declFilePath, keyLine: f_keyLine, keyColumn: f_keyColumn, keyRange: f_keyRange, isStdlibSource: f_isStdlibSource, exprStart: f_exprStart, exprEnd: f_exprEnd, spawn: f_spawn}
+		return Self{key: f_key, declFilePath: f_declFilePath, keyLine: f_keyLine, keyColumn: f_keyColumn, keyRange: f_keyRange, isStdlibSource: f_isStdlibSource, exprStart: f_exprStart, exprEnd: f_exprEnd}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize72
-		return sizeof(DefaultDeclaration) as CacheSize72
+	static function cacheLayoutBytes() returns CacheSize64
+		return sizeof(DefaultDeclaration) as CacheSize64
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -1138,6 +1091,10 @@ module function spawnOpaqueTypeArgumentRefusal(typeName ByteArray, member ByteAr
 	return "`spawn {String.from(typeName)}.{String.from(member)}(…)` fixes `type {String.from(typeName)}`'s type arguments to the enclosing declaration's own type parameters, which name no layout — and `{String.from(serviceLoopSymbol(typeName))}` is synthesized per instantiation, so it has no dictionary to read one from. Spawn the service from a body that knows the concrete type"
 end 'spawnOpaqueTypeArgumentRefusal'
 
+module function spawnChainRefusalMessage(written ByteArray, reason String) returns String
+	return "`spawn {String.from(written)}(…)` does not start a service: {reason}. {SpawnTeachingSentence}"
+end 'spawnChainRefusalMessage'
+
 // ⭐ **THE WORDS FOR A `spawn` WHOSE SHAPE IS NOT `<Type>.<factory>(…)` AT ALL** — a bare `spawn f()`, a
 // `spawn x.y` with no call. It shares `SpawnTeachingSentence` with the verdicts above rather than restating
 // it, because it is the same lesson reached one step earlier: the token shape never named a static.
@@ -1730,15 +1687,8 @@ function serviceRosterOf(signatures ProgramSignatures, liveOnly bool) returns Na
 	return services
 end 'serviceRosterOf'
 
-// A candidate records the target as written, `stdlib.Range` or `sub.Calc`. It resolves through
-// `qualifiedNominalOf`, the table the parser's qualifier collapse reads, so the companions minted here
-// carry the name `Parser.parseSpawn` asks for; a candidate compared by its written spelling misses them.
 function spawnedTypeNameOf(signatures ProgramSignatures, candidate ServiceSpawnCandidate) returns ByteArray
-	if let nominal = try signatures.qualifiedNominalOf(candidate.typeName) 'aQualifiedSpelling'
-		return nominal.name.clone()
-	end 'aQualifiedSpelling'
-
-	return candidate.typeName.clone()
+	return spelledTypeName(signatures, written: candidate.typeName, readerFilePath: candidate.declFilePath).clone()
 end 'spawnedTypeNameOf'
 
 function candidateStartsAService(signatures ProgramSignatures, candidate ServiceSpawnCandidate, typeName ByteArray, liveOnly bool) returns bool

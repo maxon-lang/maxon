@@ -245,6 +245,145 @@ end 'main'
 ```
 
 
+<!-- test: a-nested-directory-types-static-is-called-by-its-qualified-name -->
+A static of a type declared two directories down is called through the whole chain: `outer.inner` is the
+directory, `Calc` the type in it, and `make` its static.
+```maxon
+// --- file: outer/inner/calc.maxon
+export type Calc
+	export let v as ExitCode
+
+	export static function make() returns Calc
+		return Calc{v: 9}
+	end 'make'
+end 'Calc'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return outer.inner.Calc.make().v
+end 'main'
+```
+```exitcode
+9
+```
+
+
+<!-- test: a-call-names-nothing-through-a-dotted-chain -->
+Nothing declares `foo`, so `foo.bar` is no binding, directory or type, and the call is refused naming the
+head of the chain that resolves to nothing.
+```maxon
+function main() returns ExitCode
+	return foo.bar.baz() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:17: call to undefined function 'foo.bar.baz': nothing declares a binding, directory or type `foo.bar`
+```
+
+
+<!-- test: a-void-static-of-a-directory-type-is-called-as-a-statement -->
+A `void` static of a type declared in another directory is called through its directory chain as a
+statement of its own, the only position a `void` call can take.
+```maxon
+// --- file: sub/calc.maxon
+export type Calc
+	export static function ping()
+		print("ping\n")
+	end 'ping'
+end 'Calc'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	sub.Calc.ping()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+ping
+```
+
+
+<!-- test: error.a-statement-call-names-nothing-through-a-dotted-chain -->
+A call written as a statement is read by the same resolver as one written in an expression: nothing
+declares `foo`, so `foo.bar` is no binding, directory or type, and the refusal is the expression's.
+```maxon
+function main() returns ExitCode
+	foo.bar.baz()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'foo.bar.baz': nothing declares a binding, directory or type `foo.bar`
+```
+
+
+<!-- test: a-throwing-static-of-a-directory-type-is-called-under-try -->
+A throwing static reached through its directory chain is a throwing call under `try … otherwise`: `"7"`
+parses and returns 7, and `"x"` throws, so the fallback 30 is taken (7 + 30).
+```maxon
+// --- file: sub/calc.maxon
+export type Calc
+	export static function parse(text String) returns ExitCode throws ParseError
+		let n = try int.fromString(text)
+
+		if n < 0 or n > 255 'outOfRange'
+			throw ParseError.invalidFormat
+		end 'outOfRange'
+
+		return n as ExitCode
+	end 'parse'
+end 'Calc'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let n = try sub.Calc.parse("7") otherwise 0
+	let bad = try sub.Calc.parse("x") otherwise 30
+	return n + bad
+end 'main'
+```
+```exitcode
+37
+```
+
+
+<!-- test: a-types-own-alias-is-named-through-its-directory -->
+A type's own `typealias` named through its directory, `lib.Type.Inner`, is the alias the bare `Type.Inner`
+names: it types a return and a parameter, and the field `make` fills, declared `Inner` inside `Type`, is
+an argument to that parameter with no cast (37 + 5).
+```maxon
+// --- file: lib/t.maxon
+export type Type
+	export typealias Inner = int(0 to 100)
+
+	export let v as Inner
+
+	export static function make() returns Type
+		return Type{v: 5}
+	end 'make'
+end 'Type'
+
+// --- file: main.maxon
+function seed() returns lib.Type.Inner
+	return 37
+end 'seed'
+
+function take(n lib.Type.Inner) returns ExitCode
+	return n as ExitCode
+end 'take'
+
+function main() returns ExitCode
+	let n = seed()
+	return take(n) + take(lib.Type.make().v)
+end 'main'
+```
+```exitcode
+42
+```
+
+
 <!-- test: error.qualified-call-to-non-exported-function -->
 The qualifier is a name LOOKUP, not a visibility bypass: a file-private function named through its
 directory is refused by the tier its declaration wrote, and the message is the one that says what is
@@ -2135,6 +2274,36 @@ end 'main'
 root
 ```
 
+<!-- test: a-root-types-statics-are-called-through-export -->
+A static of a root type is called through `export` both as a statement, the `void` `ping`, and as a value,
+`make`.
+```maxon
+// --- file: root.maxon
+module type Calc
+	export let v as ExitCode
+
+	module static function make() returns Calc
+		return Calc{v: 13}
+	end 'make'
+
+	module static function ping()
+		print("ping\n")
+	end 'ping'
+end 'Calc'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	export.Calc.ping()
+	return export.Calc.make().v
+end 'main'
+```
+```exitcode
+13
+```
+```stdout
+ping
+```
+
 <!-- test: error.a-directory-named-export-cannot-be-a-namespace -->
 A directory is a namespace, so its name must be one a qualified reference can spell. `export` already qualifies
 the project root, so a directory named `export` is refused when the program is loaded, before any reference to
@@ -2397,6 +2566,198 @@ end 'seven'
 ```
 ```exitcode
 37
+```
+
+<!-- test: error.a-top-level-binding-named-like-a-directory-claims-a-call-in-an-expression -->
+The binding claims a CALL through its name as it claims a field: in the file that declares `util`, `util.f()` is
+a method call on the binding's `int`, which supplies no `f`, while a file the binding is hidden from calls the
+directory's function.
+```maxon
+// --- file: util/f.maxon
+export function f() returns ExitCode
+	return 1
+end 'f'
+
+// --- file: app/main.maxon
+let util = 5
+
+function main() returns ExitCode
+	return util.f() + other()
+end 'main'
+
+// --- file: app/other.maxon
+module function other() returns ExitCode
+	return util.f()
+end 'other'
+```
+```maxoncstderr
+error E2015: app/<fragment>:11:14: Unsupported: 'int' has no method named 'f' — a builtin-typed receiver supplies `hash`, `equals`, `compare`, `toString`, `clone`
+```
+
+<!-- test: error.a-top-level-binding-named-like-a-directory-claims-a-call-statement -->
+A call written as a statement resolves its chain as the same call written in an expression does.
+```maxon
+// --- file: util/f.maxon
+export function f() returns ExitCode
+	return 1
+end 'f'
+
+// --- file: app/main.maxon
+let util = 5
+
+function main() returns ExitCode
+	util.f()
+	return other()
+end 'main'
+
+// --- file: app/other.maxon
+module function other() returns ExitCode
+	return util.f()
+end 'other'
+```
+```maxoncstderr
+error E2015: app/<fragment>:11:7: Unsupported: 'int' has no method named 'f' — a builtin-typed receiver supplies `hash`, `equals`, `compare`, `toString`, `clone`
+```
+
+<!-- test: a-local-named-like-a-qualified-type-segment-leaves-a-static-call-statement -->
+A local binding named like the chain's SECOND segment, not its head, binds nothing the chain reads: `sub` is
+the directory, so `sub.Calc.ping()` written as a statement calls the directory type's static, and the bare
+`Calc` beside it reads the local (3 - 3).
+```maxon
+// --- file: sub/calc.maxon
+export type Calc
+	export static function ping()
+		print("ping\n")
+	end 'ping'
+end 'Calc'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let Calc = 3
+	sub.Calc.ping()
+	return (Calc as ExitCode) - 3
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+ping
+```
+
+<!-- test: a-local-named-like-a-qualified-type-segment-leaves-a-static-call-expression -->
+The same local beside the same chain in an expression: `sub.Calc.make()` is the directory type's static, and
+the bare `Calc` reads the local (7 + 3 - 3).
+```maxon
+// --- file: sub/calc.maxon
+export type Calc
+	export let v as ExitCode
+
+	export static function make() returns Calc
+		return Calc{v: 7}
+	end 'make'
+end 'Calc'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let Calc = 3
+	return sub.Calc.make().v + ((Calc as ExitCode) - 3)
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-local-named-like-a-qualified-type-segment-leaves-an-async-static -->
+A spawn reads its chain as a direct call does: `async sub.Calc.seven()` spawns the directory type's static past
+a local named `Calc`, and the bare `Calc` reads the local (7 + 3 - 3).
+```maxon
+// --- file: sub/calc.maxon
+export type Calc
+	export static function seven() returns ExitCode
+		_ = File.exists(FilePath from "noyield.txt")
+		return 7
+	end 'seven'
+end 'Calc'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let Calc = 3
+	let n = await async sub.Calc.seven()
+	return n + ((Calc as ExitCode) - 3)
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-global-named-like-a-qualified-type-segment-leaves-a-static-field -->
+A managed top-level binding named like the chain's second segment binds nothing the chain reads:
+`sub.Calc.n` is the directory type's static field, and the global is read only as a whole value
+(7 + 1 - 1).
+```maxon
+// --- file: sub/calc.maxon
+export type Calc
+	export static var n = 7 as ExitCode
+end 'Calc'
+
+// --- file: main.maxon
+var Calc = FullRangeIntArray from [1]
+
+function size(xs FullRangeIntArray) returns ExitCode
+	return xs.count() as ExitCode
+end 'size'
+
+function main() returns ExitCode
+	return sub.Calc.n + (size(Calc) - 1)
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-parameter-named-like-a-qualified-type-segment-is-not-the-storage-subject -->
+A store through the chain roots at the directory type's static past a parameter named `Calc`: the parameter is
+the stored value, and `sub.Calc.inst` is where it lands.
+```maxon
+// --- file: sub/calc.maxon
+export type Calc
+	export var f as ExitCode
+
+	export static var inst = Calc{f: 0}
+end 'Calc'
+
+// --- file: main.maxon
+function poke(Calc ExitCode) returns ExitCode
+	sub.Calc.inst.f = Calc
+	return sub.Calc.inst.f
+end 'poke'
+
+function main() returns ExitCode
+	return poke(5)
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: a-local-array-named-like-a-qualified-type-segment-leaves-a-managed-static -->
+A method call through a managed static reads the directory type's array past a local array named `Calc`, and
+the bare `Calc.count()` counts the local (3 + 2).
+```maxon
+// --- file: sub/calc.maxon
+export type Calc
+	export static var managed = FullRangeIntArray from [4, 5, 6]
+end 'Calc'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let Calc = [1, 2]
+	return (sub.Calc.managed.count() + Calc.count()) as ExitCode
+end 'main'
+```
+```exitcode
+5
 ```
 
 <!-- test: error.a-keyword-named-directory-cannot-be-a-namespace -->

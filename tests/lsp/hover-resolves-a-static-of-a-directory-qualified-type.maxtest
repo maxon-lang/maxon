@@ -1,0 +1,20 @@
+let HoverQualifiedStaticRootName = "temp/lsp/hover-resolves-a-static-of-a-directory-qualified-type"
+let HoverQualifiedStaticSubDirName = "temp/lsp/hover-resolves-a-static-of-a-directory-qualified-type/sub"
+let HoverQualifiedStaticCalcFileName = "calc.maxon"
+let HoverQualifiedStaticMainFileName = "main.maxon"
+let HoverQualifiedStaticCalcSource = "export type Calc\n\texport let v as ExitCode\n\n\texport static function make() returns Calc\n\t\treturn Calc\{v: 0\}\n\tend 'make'\nend 'Calc'\n"
+let HoverQualifiedStaticMainSource = "function main() returns ExitCode\n\treturn sub.Calc.make().v\nend 'main'\n"
+let HoverQualifiedStaticLine = 1
+let HoverQualifiedStaticCharacter = 18
+
+test 'hover resolves a static of a directory-qualified type'
+	let root = stagedCorpusDirectory(HoverQualifiedStaticRootName)
+	let subDirectory = createdStagingDirectory(HoverQualifiedStaticSubDirName, under: Directory.currentPath())
+	writeCorpusFile(subDirectory, fileName: HoverQualifiedStaticCalcFileName, content: HoverQualifiedStaticCalcSource)
+	writeCorpusFile(root, fileName: HoverQualifiedStaticMainFileName, content: HoverQualifiedStaticMainSource)
+
+	let uri = fileUriOf(root.join(HoverQualifiedStaticMainFileName))
+	let rendering = hoverRenderingAtUri(uri, source: HoverQualifiedStaticMainSource, line: HoverQualifiedStaticLine, character: HoverQualifiedStaticCharacter)
+
+	Expect.contains(rendering, needle: "static function make() returns Calc", message: "the static named in `sub.Calc.make()` did not hover as the `make` that `sub/calc.maxon` declares on `Calc`. It rendered: {rendering}")
+end 'hover resolves a static of a directory-qualified type'
