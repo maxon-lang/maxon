@@ -28,9 +28,6 @@ let LspErrorSeverity = 1
 // What an editor groups and filters these by.
 let DiagnosticSourceName = "maxon"
 
-let DiagnosticNameQuote = "'"
-let QuotedNameSegment = 1
-
 // ⚠ A document that could not be checked publishes nothing, and an empty array would be a wrong
 // answer. `[]` is a positive claim — "this document has no problems" — while a server that could
 // not locate `stdlib/`, or was handed a uri spelling no path, has checked nothing and knows
@@ -452,10 +449,6 @@ function visibleCalleeDeclaringFile(signatures ProgramSignatures, callee ByteArr
 end 'visibleCalleeDeclaringFile'
 
 function diagnosticSubject(diagnostic Diagnostic, tokens TokenArray) returns DiagnosticSubject
-	if diagnostic.code == ErrorCode.unknownType 'anUnknownType'
-		return reconstructedUnknownTypeSubject(diagnostic, tokens: tokens)
-	end 'anUnknownType'
-
 	return match diagnostic.anchor 'anchor'
 		programWide or
 		file gives DiagnosticSubject.unattributable
@@ -478,44 +471,6 @@ function subjectAnchoredAt(tokens TokenArray, line LineNumber, column ColumnNumb
 
 	return DiagnosticSubject.unattributable
 end 'subjectAnchoredAt'
-
-function reconstructedUnknownTypeSubject(diagnostic Diagnostic, tokens TokenArray) returns DiagnosticSubject
-	match quotedNameIn(diagnostic.message) 'quoted'
-		unstated then return DiagnosticSubject.unattributable
-		stated(typeName) then return unknownTypeSubjectNamed(diagnostic, tokens: tokens, typeName: typeName)
-	end 'quoted'
-end 'reconstructedUnknownTypeSubject'
-
-// The sentence is REBUILT through `unknownTypeMessage` and compared whole, never parsed: a quoted name
-// appears in many diagnostics, and attributing one of those to a token it is not about silences a real
-// error. Rebuilding also leaves the wording with one writer rather than a second copy here.
-function unknownTypeSubjectNamed(diagnostic Diagnostic, tokens TokenArray, typeName String) returns DiagnosticSubject
-	if unknownTypeMessage(typeName) != diagnostic.message 'anotherSentenceEntirely'
-		return DiagnosticSubject.unattributable
-	end 'anotherSentenceEntirely'
-
-	let name = typeName.toByteArray()
-
-	for (iter, token) in tokens.withIterator() 'eachToken'
-		if token.kind != TokenKind.identifier or not token.value.equals(name) 'notTheName'
-			continue
-		end 'notTheName'
-
-		return DiagnosticSubject.named(token.value, index: iter.index())
-	end 'eachToken'
-
-	return DiagnosticSubject.unattributable
-end 'unknownTypeSubjectNamed'
-
-function quotedNameIn(message String) returns StatedText
-	let segments = message.split(DiagnosticNameQuote)
-
-	if segments.count() <= QuotedNameSegment 'nothingQuoted'
-		return StatedText.unstated
-	end 'nothingQuoted'
-
-	return StatedText.stated(try segments.get(QuotedNameSegment) otherwise panic("quotedNameIn: the split produced more than {QuotedNameSegment} segments one line above"))
-end 'quotedNameIn'
 
 // ⛔ **THE DOTTED BASE IS ASKED FOR BEFORE THE BARE NAME, AND SWAPPING THE TWO UNDOES THE FEATURE.** The
 // anchor of `CompilePhase.load` is `load`, which IS an identifier — so a bare-name rule asked first

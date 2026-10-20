@@ -25,9 +25,8 @@ folds one artifact at a time, so a field naming a type declared in a file folded
 report a false E3011. The registry is only complete once every artifact is folded — which is
 exactly where `resolveTypes` runs.
 
-The diagnostic is UNPOSITIONED, identically to the parameter/return-type E3011 above it and for
-that one's stated reason: nothing records a source span for a type REFERENCE (only ops and
-parameter NAMES carry one). That is an accepted, documented limitation.
+The diagnostic is positioned at the type name in the field's declaration, as the parameter and
+return-type E3011 above it are positioned at the type name in theirs.
 
 ### The one route the authority cannot reach — and what stands in for it there
 
@@ -94,7 +93,7 @@ the register is not cosmetic.
 **So the doors raise the arm the two `as`-cast sites raise**, **`ParseError.unknownTypeName`**. Its
 payload is not cast-specific — a type name and a position.
 One authority (`denotedNamedType`), one code (E3011), one text (`unknownTypeMessage`), and SIX
-anchors: a parameter, a return type and a field report it unpositioned from `resolveTypes`; a body
+anchors: a parameter, a return type and a field report it from `resolveTypes` at the type name; a body
 `as` cast and a top-level `let`'s cast report it at the `as`; a generic type argument reports it at
 the argument; and these three member-access doors report it at the base. The cast diagnostics are
 pinned by `specs/cast-target-type-resolution.md`, all four of them.
@@ -123,7 +122,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3011: Unknown type 'Nonexistent'
+error E3011: <fragment>:4:18: Unknown type 'Nonexistent'
 ```
 
 <!-- test: field-unknown-type-unread -->
@@ -149,7 +148,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3011: Unknown type 'Nonexistent'
+error E3011: <fragment>:7:20: Unknown type 'Nonexistent'
 ```
 
 <!-- test: param-unknown-type-member-access -->
@@ -230,6 +229,60 @@ end 'main'
 ```
 ```maxoncstderr
 error E3011: <fragment>:6:11: Unknown type 'NoSuchTypeAtAll'
+```
+
+<!-- test: param-unknown-type-unread -->
+A parameter whose undeclared type no member access ever reaches parses, so `resolveTypes` reports it,
+at the type name in the parameter's declaration.
+```maxon
+
+function take(n NoSuchTypeAtAll) returns ExitCode
+	_ = n
+	return 0
+end 'take'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3011: <fragment>:3:17: Unknown type 'NoSuchTypeAtAll'
+```
+
+<!-- test: return-unknown-type -->
+A return type naming no declared type is reported at the type name after `returns`.
+```maxon
+
+function make() returns NoSuchTypeAtAll
+	return 0
+end 'make'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3011: <fragment>:3:25: Unknown type 'NoSuchTypeAtAll'
+```
+
+<!-- test: tuple-element-unknown-type -->
+A tuple type's element is a declaration type position too, so an unknown element type is reported at
+its name inside the tuple.
+```maxon
+
+typealias Small = int(0 to 100)
+
+function take(p (NoSuchElementType, Small)) returns ExitCode
+	_ = p
+	return 0
+end 'take'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3011: <fragment>:5:18: Unknown type 'NoSuchElementType'
 ```
 
 <!-- test: compiler-reserved-base-type-is-nameable-at-a-parameter -->

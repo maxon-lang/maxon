@@ -5938,9 +5938,10 @@ export type FunctionTypeAlias
 	export let declFilePath as FilePath
 	export let visibility as Visibility
 	export let written as WrittenTypeNames
+	export let typeSites as DeclaredTypeSites
 
-	export static function create(name ByteArray, returnTag ValueTypeTag, returnTypeName ByteArray, returnIdentity AliasSlotIdentity, returnAggregateName ByteArray, returnCapability ResultCapability, paramTypes FunctionAliasParamArray, paramSpelling HashDigest, declFilePath FilePath, visibility Visibility, written WrittenTypeNames) returns FunctionTypeAlias
-		return Self{name: name, returnTag: returnTag, returnTypeName: returnTypeName, returnIdentity: returnIdentity, returnAggregateName: returnAggregateName, returnCapability: returnCapability, paramTypes: paramTypes, paramSpelling: paramSpelling, declFilePath: declFilePath, visibility: visibility, written: written}
+	export static function create(name ByteArray, returnTag ValueTypeTag, returnTypeName ByteArray, returnIdentity AliasSlotIdentity, returnAggregateName ByteArray, returnCapability ResultCapability, paramTypes FunctionAliasParamArray, paramSpelling HashDigest, declFilePath FilePath, visibility Visibility, written WrittenTypeNames, typeSites DeclaredTypeSites) returns FunctionTypeAlias
+		return Self{name: name, returnTag: returnTag, returnTypeName: returnTypeName, returnIdentity: returnIdentity, returnAggregateName: returnAggregateName, returnCapability: returnCapability, paramTypes: paramTypes, paramSpelling: paramSpelling, declFilePath: declFilePath, visibility: visibility, written: written, typeSites: typeSites}
 	end 'create'
 
 	// ⭐⭐ **THE SAME DECLARATION UNDER A SECOND KEY.** Two callers mint one, and they are two SCOPES
@@ -5955,7 +5956,7 @@ export type FunctionTypeAlias
 	// between the two copies of ONE fold. A rebuild through `create` with anything defaulted would make the
 	// qualified copy answer a different shape from the bare one for the same written declaration.
 	export function underName(qualifiedName ByteArray) returns FunctionTypeAlias
-		return Self{name: qualifiedName, returnTag: self.returnTag, returnTypeName: self.returnTypeName, returnIdentity: self.returnIdentity.clone(), returnAggregateName: self.returnAggregateName, returnCapability: self.returnCapability, paramTypes: self.paramTypes, paramSpelling: self.paramSpelling, declFilePath: self.declFilePath, visibility: self.visibility, written: self.written}
+		return Self{name: qualifiedName, returnTag: self.returnTag, returnTypeName: self.returnTypeName, returnIdentity: self.returnIdentity.clone(), returnAggregateName: self.returnAggregateName, returnCapability: self.returnCapability, paramTypes: self.paramTypes, paramSpelling: self.paramSpelling, declFilePath: self.declFilePath, visibility: self.visibility, written: self.written, typeSites: self.typeSites}
 	end 'underName'
 
 	export function paramCapabilityAt(position ElementIndex) returns ParamCapability
@@ -5974,7 +5975,7 @@ export type FunctionTypeAlias
 			params.push(FunctionAliasParam.create(param.tag, name: param.name, typeName: param.typeName, identity: remappedAliasSlotIdentity(param.identity, remap: remap), aggregateName: param.aggregateName, capability: param.capability))
 		end 'eachParam'
 
-		return Self{name: self.name, returnTag: self.returnTag, returnTypeName: self.returnTypeName, returnIdentity: remappedAliasSlotIdentity(self.returnIdentity, remap: remap), returnAggregateName: self.returnAggregateName, returnCapability: self.returnCapability, paramTypes: params, paramSpelling: self.paramSpelling, declFilePath: self.declFilePath, visibility: self.visibility, written: self.written}
+		return Self{name: self.name, returnTag: self.returnTag, returnTypeName: self.returnTypeName, returnIdentity: remappedAliasSlotIdentity(self.returnIdentity, remap: remap), returnAggregateName: self.returnAggregateName, returnCapability: self.returnCapability, paramTypes: params, paramSpelling: self.paramSpelling, declFilePath: self.declFilePath, visibility: self.visibility, written: self.written, typeSites: self.typeSites}
 	end 'withInstancesRenumbered'
 
 	// @generated library-cache begin
@@ -5990,6 +5991,7 @@ export type FunctionTypeAlias
 		writer.text(self.declFilePath.toString())
 		writer.unsigned(self.visibility.ordinal as CacheUnsigned)
 		self.written.cacheWrite(writer)
+		self.typeSites.cacheWrite(writer)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns FunctionTypeAlias throws LibraryCacheDamage
@@ -6004,12 +6006,13 @@ export type FunctionTypeAlias
 		let f_declFilePath = try reader.path()
 		let f_visibility = try cacheReadVisibility(reader)
 		let f_written = try WrittenTypeNames.cacheRead(reader)
+		let f_typeSites = try DeclaredTypeSites.cacheRead(reader)
 
-		return Self{name: f_name, returnTag: f_returnTag, returnTypeName: f_returnTypeName, returnIdentity: f_returnIdentity, returnAggregateName: f_returnAggregateName, returnCapability: f_returnCapability, paramTypes: f_paramTypes, paramSpelling: f_paramSpelling, declFilePath: f_declFilePath, visibility: f_visibility, written: f_written}
+		return Self{name: f_name, returnTag: f_returnTag, returnTypeName: f_returnTypeName, returnIdentity: f_returnIdentity, returnAggregateName: f_returnAggregateName, returnCapability: f_returnCapability, paramTypes: f_paramTypes, paramSpelling: f_paramSpelling, declFilePath: f_declFilePath, visibility: f_visibility, written: f_written, typeSites: f_typeSites}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize88
-		return sizeof(FunctionTypeAlias) as CacheSize88
+	static function cacheLayoutBytes() returns CacheSize96
+		return sizeof(FunctionTypeAlias) as CacheSize96
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -7110,6 +7113,7 @@ export type StructLayout
 	// because this column is written by the declaration sweep, before the alias registry can say.
 	export var fieldDeclaredBrands as NameRoster
 	export var fieldSpelledNames as SpelledFieldNameArray
+	export var fieldTypeSites as DeclaredTypeSites
 
 	// ⭐ **THE DERIVED SLOT GEOMETRY — the PREFIX SUM over `fieldSlotCount`, and
 	// the box size that same sum ends at.** Two DERIVED columns, read by `offsetOfField`/`sizeBytes` in O(1).
@@ -7240,7 +7244,7 @@ export type StructLayout
 	// take the columns, deliberately: handing pre-built parallel arrays across a call boundary is
 	// exactly the shape that lets one arrive short.
 	export static function create(name ByteArray, visibility Visibility, declFilePath FilePath) returns StructLayout
-		return Self{name: name, fieldNames: NameRoster.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldVisibility: VisibilityArray.create(), fieldDefaults: FieldDefaultArray.create(), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(), fieldDeclaredBrands: NameRoster.create(), fieldSpelledNames: SpelledFieldNameArray.create(), fieldOffsets: ByteOffsetArray.create(), fieldBitWidths: BitWidthArray.create(), fieldBitOffsets: BitWidthArray.create(), slotBytes: 0, typeParamNames: NameRoster.create(), whereConstraints: WhereConstraintArray.create(), conformsTo: NameRoster.create(), conformanceBindings: ConformanceBindingArray.create(), messageMethodNames: NameRoster.create(), visibility: visibility, declFilePath: declFilePath}
+		return Self{name: name, fieldNames: NameRoster.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldVisibility: VisibilityArray.create(), fieldDefaults: FieldDefaultArray.create(), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(), fieldDeclaredBrands: NameRoster.create(), fieldSpelledNames: SpelledFieldNameArray.create(), fieldTypeSites: DeclaredTypeSites.create(), fieldOffsets: ByteOffsetArray.create(), fieldBitWidths: BitWidthArray.create(), fieldBitOffsets: BitWidthArray.create(), slotBytes: 0, typeParamNames: NameRoster.create(), whereConstraints: WhereConstraintArray.create(), conformsTo: NameRoster.create(), conformanceBindings: ConformanceBindingArray.create(), messageMethodNames: NameRoster.create(), visibility: visibility, declFilePath: declFilePath}
 	end 'create'
 
 	// The layout every COMPILER-SYNTHESIZED type takes: nameable from any file, declared in none. Spelled
@@ -7338,7 +7342,7 @@ export type StructLayout
 
 	// Append one declared field. THE one writer of the columns — every column, one push, so they
 	// cannot drift.
-	export function addField(fieldName ByteArray, declaredType MaxonType, mutable bool, tier Visibility, defaultValue FieldDefault, declaredSurface DeclaredSurface, declaredBrand ByteArray, spelledName SpelledFieldName)
+	export function addField(fieldName ByteArray, declaredType MaxonType, mutable bool, tier Visibility, defaultValue FieldDefault, declaredSurface DeclaredSurface, declaredBrand ByteArray, spelledName SpelledFieldName, typeSite PositionKey = PositionlessSite)
 		self.fieldNames.push(fieldName)
 		self.fieldTypes.push(declaredType)
 		self.fieldMutable.push(mutable)
@@ -7347,6 +7351,7 @@ export type StructLayout
 		self.fieldDeclaredSurfaces.push(declaredSurface)
 		self.fieldDeclaredBrands.push(declaredBrand)
 		self.fieldSpelledNames.push(spelledName)
+		self.fieldTypeSites.noteAt(typeSite)
 
 		// The prefix sum extends by one term: this field starts where the running total stands, and the total
 		// advances by this field's own slot count. Same push, so the derived columns cannot fall out of the
@@ -7673,6 +7678,7 @@ export type StructLayout
 		cacheWriteDeclaredSurfaceArray(writer, value: self.fieldDeclaredSurfaces)
 		cacheWriteNameRoster(writer, value: self.fieldDeclaredBrands)
 		cacheWriteSpelledFieldNameArray(writer, value: self.fieldSpelledNames)
+		self.fieldTypeSites.cacheWrite(writer)
 		cacheWriteByteOffsetArray(writer, value: self.fieldOffsets)
 		writer.flag(self.packsInlineIntoAWord)
 		cacheWriteBitWidthArray(writer, value: self.fieldBitWidths)
@@ -7699,6 +7705,7 @@ export type StructLayout
 		let f_fieldDeclaredSurfaces = try cacheReadDeclaredSurfaceArray(reader)
 		let f_fieldDeclaredBrands = try cacheReadNameRoster(reader)
 		let f_fieldSpelledNames = try cacheReadSpelledFieldNameArray(reader)
+		let f_fieldTypeSites = try DeclaredTypeSites.cacheRead(reader)
 		let f_fieldOffsets = try cacheReadByteOffsetArray(reader)
 		let f_packsInlineIntoAWord = try reader.flag()
 		let f_fieldBitWidths = try cacheReadBitWidthArray(reader)
@@ -7714,11 +7721,11 @@ export type StructLayout
 		let f_declLine = (try reader.unsigned()) as LineNumber
 		let f_declColumn = (try reader.unsigned()) as ColumnNumber
 
-		return Self{name: f_name, fieldNames: f_fieldNames, fieldTypes: f_fieldTypes, fieldMutable: f_fieldMutable, fieldVisibility: f_fieldVisibility, fieldDefaults: f_fieldDefaults, fieldDeclaredSurfaces: f_fieldDeclaredSurfaces, fieldDeclaredBrands: f_fieldDeclaredBrands, fieldSpelledNames: f_fieldSpelledNames, fieldOffsets: f_fieldOffsets, packsInlineIntoAWord: f_packsInlineIntoAWord, fieldBitWidths: f_fieldBitWidths, fieldBitOffsets: f_fieldBitOffsets, slotBytes: f_slotBytes, typeParamNames: f_typeParamNames, whereConstraints: f_whereConstraints, conformsTo: f_conformsTo, conformanceBindings: f_conformanceBindings, messageMethodNames: f_messageMethodNames, visibility: f_visibility, declFilePath: f_declFilePath, declLine: f_declLine, declColumn: f_declColumn}
+		return Self{name: f_name, fieldNames: f_fieldNames, fieldTypes: f_fieldTypes, fieldMutable: f_fieldMutable, fieldVisibility: f_fieldVisibility, fieldDefaults: f_fieldDefaults, fieldDeclaredSurfaces: f_fieldDeclaredSurfaces, fieldDeclaredBrands: f_fieldDeclaredBrands, fieldSpelledNames: f_fieldSpelledNames, fieldTypeSites: f_fieldTypeSites, fieldOffsets: f_fieldOffsets, packsInlineIntoAWord: f_packsInlineIntoAWord, fieldBitWidths: f_fieldBitWidths, fieldBitOffsets: f_fieldBitOffsets, slotBytes: f_slotBytes, typeParamNames: f_typeParamNames, whereConstraints: f_whereConstraints, conformsTo: f_conformsTo, conformanceBindings: f_conformanceBindings, messageMethodNames: f_messageMethodNames, visibility: f_visibility, declFilePath: f_declFilePath, declLine: f_declLine, declColumn: f_declColumn}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize184
-		return sizeof(StructLayout) as CacheSize184
+	static function cacheLayoutBytes() returns CacheSize192
+		return sizeof(StructLayout) as CacheSize192
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -7780,9 +7787,10 @@ export type PayloadField
 	// `ProgramSignatures.payloadSurfaceOf`, which ORs in the element bit the sweep could not answer.
 	export let declaredSurface as DeclaredSurface
 	export let isLet as bool
+	export let typeSite as PositionKey
 
-	export static function create(name ByteArray, declaredType MaxonType, declaredSurface DeclaredSurface, declaredBrand ByteArray, isLet bool) returns PayloadField
-		return Self{name: name, declaredType: declaredType, declaredSurface: declaredSurface, declaredBrand: declaredBrand, isLet: isLet}
+	export static function create(name ByteArray, declaredType MaxonType, declaredSurface DeclaredSurface, declaredBrand ByteArray, isLet bool, typeSite PositionKey = PositionlessSite) returns PayloadField
+		return Self{name: name, declaredType: declaredType, declaredSurface: declaredSurface, declaredBrand: declaredBrand, isLet: isLet, typeSite: typeSite}
 	end 'create'
 
 	// @generated library-cache begin
@@ -7792,6 +7800,7 @@ export type PayloadField
 		writer.bytes(self.declaredBrand)
 		cacheWriteDeclaredSurface(writer, value: self.declaredSurface)
 		writer.flag(self.isLet)
+		writer.unsigned(self.typeSite as CacheUnsigned)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns PayloadField throws LibraryCacheDamage
@@ -7800,12 +7809,13 @@ export type PayloadField
 		let f_declaredBrand = try reader.bytes()
 		let f_declaredSurface = try cacheReadDeclaredSurface(reader)
 		let f_isLet = try reader.flag()
+		let f_typeSite = (try reader.unsigned()) as PositionKey
 
-		return Self{name: f_name, declaredType: f_declaredType, declaredBrand: f_declaredBrand, declaredSurface: f_declaredSurface, isLet: f_isLet}
+		return Self{name: f_name, declaredType: f_declaredType, declaredBrand: f_declaredBrand, declaredSurface: f_declaredSurface, isLet: f_isLet, typeSite: f_typeSite}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize40
-		return sizeof(PayloadField) as CacheSize40
+	static function cacheLayoutBytes() returns CacheSize48
+		return sizeof(PayloadField) as CacheSize48
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -11790,6 +11800,50 @@ function callArgSlot(paramNames NameRoster, argDefaultSlots ParamCountArray, sou
 	return slot
 end 'callArgSlot'
 
+export type UnplacedUnknownType
+	export let message as String
+	export let declaration as ByteArray
+	export let readerFilePath as FilePath
+
+	export static function create(message String, declaration ByteArray, readerFilePath FilePath) returns UnplacedUnknownType
+		return Self{message: message, declaration: declaration, readerFilePath: readerFilePath}
+	end 'create'
+end 'UnplacedUnknownType'
+
+typealias UnplacedUnknownTypeArray = Array with UnplacedUnknownType
+
+typealias ReportedTypeSiteSet = Set with String
+
+typealias ReportedUnknownTypeMessageSet = Set with String
+
+export type UnknownTypeReports
+	var reportedSites as ReportedTypeSiteSet
+	var reportedMessages as ReportedUnknownTypeMessageSet
+	export var unplaced as UnplacedUnknownTypeArray
+
+	export static function create() returns UnknownTypeReports
+		return Self{reportedSites: ReportedTypeSiteSet.create(), reportedMessages: ReportedUnknownTypeMessageSet.create(), unplaced: UnplacedUnknownTypeArray.create()}
+	end 'create'
+
+	// One report per written site: a generic instance or a re-registered tuple layout resolves the same
+	// written slot again.
+	export function claimSite(message String, readerFilePath FilePath, site PositionKey) returns bool
+		let key = "{readerFilePath}:{site}"
+
+		if self.reportedSites.contains(key) 'alreadyReported'
+			return false
+		end 'alreadyReported'
+
+		self.reportedSites.insert(key)
+		self.reportedMessages.insert(message)
+		return true
+	end 'claimSite'
+
+	export function wasReported(message String) returns bool
+		return self.reportedMessages.contains(message)
+	end 'wasReported'
+end 'UnknownTypeReports'
+
 export type Project
 	// Incremental query plumbing (source inputs + memo caches + dep graph).
 	export var db as QueryDatabase
@@ -11866,6 +11920,7 @@ export type Project
 	// targets so a warm rebuild does not double them.
 	export var unusedTypeAliasDiagnostics as DeferredNameDiagnosticArray
 	export var hiddenTypeNameDiagnostics as DiagnosticArray
+	export var unknownTypeReports as UnknownTypeReports
 
 	export var deferredParseErrors as DeferredParseErrorArray
 
@@ -12374,6 +12429,7 @@ export type Project
 			pendingFnMergeChecks: PendingFnMergeCheckArray.create(),
 			unusedTypeAliasDiagnostics: DeferredNameDiagnosticArray.create(),
 			hiddenTypeNameDiagnostics: DiagnosticArray.create(),
+			unknownTypeReports: UnknownTypeReports.create(),
 			deferredParseErrors: DeferredParseErrorArray.create(),
 			genericAliasNamesWrittenByAFile: UsedTypeNameSet.create(),
 			bindingHygieneDiagnostics: DiagnosticArray.create(),

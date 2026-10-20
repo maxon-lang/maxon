@@ -851,8 +851,8 @@ export union SourceParseError implements Error
 	// a type the compiler does not have. Renders as **E3011** with `unknownTypeMessage`, the SAME code and
 	// the SAME wording `TypeResolution` gives the identical fact met at a parameter, a return type or a
 	// field, and from the SAME authority (`denotedNamedType`) — so a name cannot be a type in one position
-	// and not in another. Only the ANCHOR is this arm's contribution: the declaration sites record no span
-	// for a type REFERENCE and report unpositioned, while every raiser here holds a token.
+	// and not in another. Only the ANCHOR is this arm's contribution: the declaration sites report at the
+	// type name the declaration wrote, while every raiser here holds a token of its own.
 	//
 	// ⚠ **IT IS NOT THE CAST'S.** The payload is not cast-specific (a type name and a position), and a
 	// second kind of site besides the two `as` sites raises it: the three MEMBER-ACCESS doors, whose base's
@@ -10585,9 +10585,10 @@ type FieldTypeSpelling
 	export let declaredSurface as DeclaredSurface
 	export let declaredBrand as ByteArray
 	export let spelledName as SpelledFieldName
+	export let typeSite as PositionKey
 
-	static function create(fieldType MaxonType, declaredSurface DeclaredSurface, declaredBrand ByteArray, spelledName SpelledFieldName) returns Self
-		return Self{fieldType: fieldType, declaredSurface: declaredSurface, declaredBrand: declaredBrand, spelledName: spelledName}
+	static function create(fieldType MaxonType, declaredSurface DeclaredSurface, declaredBrand ByteArray, spelledName SpelledFieldName, typeSite PositionKey = PositionlessSite) returns Self
+		return Self{fieldType: fieldType, declaredSurface: declaredSurface, declaredBrand: declaredBrand, spelledName: spelledName, typeSite: typeSite}
 	end 'create'
 end 'FieldTypeSpelling'
 
@@ -28589,7 +28590,7 @@ export type Parser
 			try self.consume(TokenKind.as)
 			let annotation = try self.readWrittenFieldTypeAt(self.pos, layout: layout, fieldName: nameTok.value, voice: BarePrimitiveVoice.asAType)
 			try self.requireFieldLineEnd()
-			layout.addField(nameTok.value, declaredType: annotation.fieldType, mutable: mutable, tier: visibility, defaultValue: FieldDefault.none, declaredSurface: annotation.declaredSurface, declaredBrand: annotation.declaredBrand, spelledName: annotation.spelledName)
+			layout.addField(nameTok.value, declaredType: annotation.fieldType, mutable: mutable, tier: visibility, defaultValue: FieldDefault.none, declaredSurface: annotation.declaredSurface, declaredBrand: annotation.declaredBrand, spelledName: annotation.spelledName, typeSite: annotation.typeSite)
 			return
 		end 'annotated'
 
@@ -28609,7 +28610,7 @@ export type Parser
 		try self.requireDefaultableFieldType(nameTok, equalsTok: equalsTok, layout: layout, fieldType: spelling.fieldType)
 
 		let defaultValue = try self.readInferredFieldDefault(nameTok, layout: layout, inferred: inferred, defaultStart: defaultStart, defaultEnd: defaultEnd)
-		layout.addField(nameTok.value, declaredType: spelling.fieldType, mutable: mutable, tier: visibility, defaultValue: defaultValue, declaredSurface: spelling.declaredSurface, declaredBrand: spelling.declaredBrand, spelledName: spelling.spelledName)
+		layout.addField(nameTok.value, declaredType: spelling.fieldType, mutable: mutable, tier: visibility, defaultValue: defaultValue, declaredSurface: spelling.declaredSurface, declaredBrand: spelling.declaredBrand, spelledName: spelling.spelledName, typeSite: spelling.typeSite)
 	end 'readStructFieldInto'
 
 	// The spelling columns are read before `parseTypeReference`, which folds `__ManagedMemory` into
@@ -28627,7 +28628,7 @@ export type Parser
 		let fieldType = try self.parseTypeReference(voice)
 		try self.requireFieldTypeIsFinite(layout.name, fieldName: fieldName, anchor: fieldTypeTok)
 
-		return FieldTypeSpelling.create(fieldType, declaredSurface: declaredSurface, declaredBrand: declaredBrand, spelledName: spelledName)
+		return FieldTypeSpelling.create(fieldType, declaredSurface: declaredSurface, declaredBrand: declaredBrand, spelledName: spelledName, typeSite: writtenTypeSiteOf(fieldTypeTok))
 	end 'readWrittenFieldTypeAt'
 
 	function readMemberHeadFieldTypeAt(headStart ElementIndex, qualifierDots ElementIndex, layout StructLayout, fieldName ByteArray) returns FieldTypeSpelling throws SourceParseError
@@ -28640,7 +28641,7 @@ export type Parser
 		let fieldType = try self.parseMemberHeadTypeReference(qualifierDots)
 		try self.requireFieldTypeIsFinite(layout.name, fieldName: fieldName, anchor: fieldTypeTok)
 
-		return FieldTypeSpelling.create(fieldType, declaredSurface: declaredSurface, declaredBrand: headName, spelledName: SpelledFieldName.named(headName))
+		return FieldTypeSpelling.create(fieldType, declaredSurface: declaredSurface, declaredBrand: headName, spelledName: SpelledFieldName.named(headName), typeSite: writtenTypeSiteOf(fieldTypeTok))
 	end 'readMemberHeadFieldTypeAt'
 
 	function inferredFieldTypeAt(defaultStart ElementIndex, regionEnd ElementIndex, layout StructLayout, fieldName ByteArray) returns InferredFieldType throws SourceParseError
@@ -29469,7 +29470,7 @@ export type Parser
 
 		self.beginDeclaredBody(0, returnSpelling: EmptySourceText, mayReturnAGlobalAlias: false, returnAlias: self.anchors.undeclaredAlias, paramSites: sharedEmptyParamSites, layoutParam: HiddenWordParam.none, countParam: HiddenWordParam.none, nascentSelfFactory: false, kind: EnclosingBodyKind.declaredFunction, descriptorSource: DescriptorSource.noInstance, witnessParamBase: 0, witnessParamCount: 0)
 
-		var initializer = IrFunction.create(name, maxonReturnType: declaredReturn, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), valueTags: self.bodyState.valueTags, valueNameIds: self.bodyState.valueNameIds, valueBrandIds: self.bodyState.valueBrandIds, valueMintedSole: self.anchors.functions.mintedSole, valueWitnessIds: self.bodyState.valueWitnessIds, declaredAt: SourcePosition.declaredAt(self.job.path, nameTok: anchor), placeholders: self.anchors.functions, throwsTypeName: ThrowsClause.none)
+		var initializer = IrFunction.create(name, maxonReturnType: declaredReturn, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), typeSites: self.anchors.functions.noTypeSites, valueTags: self.bodyState.valueTags, valueNameIds: self.bodyState.valueNameIds, valueBrandIds: self.bodyState.valueBrandIds, valueMintedSole: self.anchors.functions.mintedSole, valueWitnessIds: self.bodyState.valueWitnessIds, declaredAt: SourcePosition.declaredAt(self.job.path, nameTok: anchor), placeholders: self.anchors.functions, throwsTypeName: ThrowsClause.none)
 		initializer.visibility = Visibility.global
 
 		let initializerIndex = self.artifact.module.funcCount()
@@ -31502,12 +31503,13 @@ export type Parser
 		var paramSpelling = Hasher.empty()
 		var writtenNames = NameRoster.create()
 		var writtenEnds = WrittenTypeNameEnds.create()
+		var typeSites = DeclaredTypeSites.create()
 
 		if not self.at(TokenKind.rightParen) 'params'
 			while true 'paramLoop'
 				let paramAnchor = self.tokenAt(self.pos)
 				let paramStart = self.pos
-				let (paramType, paramCapability, paramName) = try self.readFunctionTypeParam(writtenNames)
+				let (paramType, paramCapability, paramName) = try self.readFunctionTypeParam(writtenNames, sites: typeSites)
 
 				// ⛔⛔ **THE BOUNDARY IS FOLDED HERE AND IT IS THE WHOLE ARITY.** Without it the digest is a flat
 				// fold of token texts in which the GROUPING — the only thing the separator means — is absent:
@@ -31550,14 +31552,14 @@ export type Parser
 
 		try self.consume(TokenKind.rightParen)
 
-		view returned = try self.readFunctionTypeReturn(writtenNames, recordSignature: recordSignature)
+		view returned = try self.readFunctionTypeReturn(writtenNames, sites: typeSites, recordSignature: recordSignature)
 
 		writtenEnds.push(writtenNames.count())
 		let written = sharedEmptyWrittenTypeNames if writtenNames.isEmpty() else WrittenTypeNames.create(writtenNames, ends: writtenEnds)
-		return FunctionTypeAlias.create(nameTok.value, returnTag: returned.tag, returnTypeName: returned.typeName, returnIdentity: returned.identity, returnAggregateName: returned.aggregateName, returnCapability: returned.capability, paramTypes: declaredParams, paramSpelling: paramSpelling, declFilePath: self.job.path, visibility: visibility, written: written)
+		return FunctionTypeAlias.create(nameTok.value, returnTag: returned.tag, returnTypeName: returned.typeName, returnIdentity: returned.identity, returnAggregateName: returned.aggregateName, returnCapability: returned.capability, paramTypes: declaredParams, paramSpelling: paramSpelling, declFilePath: self.job.path, visibility: visibility, written: written, typeSites: typeSites)
 	end 'readFunctionTypeAlias'
 
-	function readFunctionTypeReturn(writtenNames NameRoster, recordSignature bool) returns FunctionTypeReturn throws SourceParseError
+	function readFunctionTypeReturn(writtenNames NameRoster, sites DeclaredTypeSites, recordSignature bool) returns FunctionTypeReturn throws SourceParseError
 		if not self.at(TokenKind.returns) 'hasNoReturn'
 			return FunctionTypeReturn.absent()
 		end 'hasNoReturn'
@@ -31565,6 +31567,9 @@ export type Parser
 		let returnsTok = try self.consume(TokenKind.returns)
 		let capability = try self.readResultCapability(QualifierPolicy.admitted)
 		self.appendAuditedTypeNamesHere(writtenNames)
+
+		sites.noteWrittenReturnType(self.current())
+
 		let returnType = try self.parseTypeReference(BarePrimitiveVoice.admitted)
 
 		if recordSignature 'realParse'
@@ -31638,7 +31643,7 @@ export type Parser
 	// its type. A `name Type` param is one where an identifier that is not a qualifier word is followed by
 	// another type-starting token (`function(x Score)`); otherwise the token IS the type (`function(Integer)`,
 	// `function(Integer, Integer)`).
-	function readFunctionTypeParam(writtenNames NameRoster) returns (MaxonType, ParamCapability, ByteArray) throws SourceParseError
+	function readFunctionTypeParam(writtenNames NameRoster, sites DeclaredTypeSites) returns (MaxonType, ParamCapability, ByteArray) throws SourceParseError
 		let named = self.at(TokenKind.identifier) and typeStartsWith(self.peekKind()) and self.paramCapabilityAt(self.pos) == ParamCapability.lent
 		var name = (self.tokenAt(self.pos).value if named else EmptySourceText).clone()
 
@@ -31648,6 +31653,9 @@ export type Parser
 
 		let capability = try self.readParamCapability()
 		self.appendAuditedTypeNamesHere(writtenNames)
+
+		sites.noteWrittenType(self.current())
+
 		return (try self.parseTypeReference(BarePrimitiveVoice.admitted), capability, name)
 	end 'readFunctionTypeParam'
 
@@ -34203,7 +34211,7 @@ export type Parser
 			let declaredBrand = self.typeSpellingAt(self.pos)
 			let fieldType = try self.parseTypeReference(BarePrimitiveVoice.asAType)
 			try self.requireStorableDeclaredType(fieldType, position: DeclaredStoragePosition.unionPayload, line: typeTok.line, column: typeTok.column)
-			fields.push(PayloadField.create(nameTok.value, declaredType: fieldType, declaredSurface: declaredSurface, declaredBrand: declaredBrand, isLet: isLet))
+			fields.push(PayloadField.create(nameTok.value, declaredType: fieldType, declaredSurface: declaredSurface, declaredBrand: declaredBrand, isLet: isLet, typeSite: writtenTypeSiteOf(typeTok)))
 
 			if not self.at(TokenKind.comma) 'endFields'
 				break
@@ -34736,7 +34744,7 @@ export type Parser
 		// `valueTags` and `valueNameIds` are handed over by reference, already seeded with the parameter
 		// types, so every `mintValue` below pushes straight into the function's own type columns. It is
 		// safe because each body state creates its own columns, so nothing aliases these after this body.
-		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramCount, maxonParamTypes: paramTypes, valueTags: self.bodyState.valueTags, valueNameIds: self.bodyState.valueNameIds, valueBrandIds: self.bodyState.valueBrandIds, valueMintedSole: self.anchors.functions.mintedSole, valueWitnessIds: self.bodyState.valueWitnessIds, declaredAt: SourcePosition.declaredAt(self.job.path, nameTok: nameTok), placeholders: self.anchors.functions, throwsTypeName: throwsClause)
+		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramCount, maxonParamTypes: paramTypes, typeSites: self.declaredTypeSites(paramTypeStarts, returnTypeStart: returnTypeStart), valueTags: self.bodyState.valueTags, valueNameIds: self.bodyState.valueNameIds, valueBrandIds: self.bodyState.valueBrandIds, valueMintedSole: self.anchors.functions.mintedSole, valueWitnessIds: self.bodyState.valueWitnessIds, declaredAt: SourcePosition.declaredAt(self.job.path, nameTok: nameTok), placeholders: self.anchors.functions, throwsTypeName: throwsClause)
 		func.visibility = visibility
 		func.reassignedParamMask = byReference
 
@@ -36512,7 +36520,7 @@ export type Parser
 		// leaves the declaring function's pair standing (see `parseClosureExpression`).
 		self.beginDeclaredBody(helperParamCount, returnSpelling: EmptySourceText, mayReturnAGlobalAlias: self.functionMayReturnAGlobalAlias(helperName), returnAlias: self.rangedReturnAlias(returnType), paramSites: sharedEmptyParamSites, layoutParam: layoutParamOf(needsLayoutParam, paramCount: helperParamCount, witnessParamCount: 0, countSlots: countParamCount), countParam: fixedElementCountParamOf(needsCountParam, paramCount: helperParamCount, witnessParamCount: 0), nascentSelfFactory: false, kind: EnclosingBodyKind.declaredFunction, descriptorSource: DescriptorSource.noInstance, witnessParamBase: 0, witnessParamCount: 0)
 
-		var helper = IrFunction.create(helperName, maxonReturnType: returnType, paramCount: helperParamCount, maxonParamTypes: MaxonTypeArray.create(), valueTags: self.bodyState.valueTags, valueNameIds: self.bodyState.valueNameIds, valueBrandIds: self.bodyState.valueBrandIds, valueMintedSole: self.anchors.functions.mintedSole, valueWitnessIds: self.bodyState.valueWitnessIds, declaredAt: SourcePosition.declaredAt(self.job.path, nameTok: anchor), placeholders: self.anchors.functions, throwsTypeName: ThrowsClause.none)
+		var helper = IrFunction.create(helperName, maxonReturnType: returnType, paramCount: helperParamCount, maxonParamTypes: MaxonTypeArray.create(), typeSites: self.anchors.functions.noTypeSites, valueTags: self.bodyState.valueTags, valueNameIds: self.bodyState.valueNameIds, valueBrandIds: self.bodyState.valueBrandIds, valueMintedSole: self.anchors.functions.mintedSole, valueWitnessIds: self.bodyState.valueWitnessIds, declaredAt: SourcePosition.declaredAt(self.job.path, nameTok: anchor), placeholders: self.anchors.functions, throwsTypeName: ThrowsClause.none)
 
 		// The tier the OWNER decided (`parseDefaultHelper`), which is the one fact about a helper that is not
 		// the same for both doors: a parameter's is reachable from every file, a field's from exactly one.
@@ -68518,7 +68526,7 @@ export type Parser
 		end 'eachElement'
 
 		let closeTok = try self.consume(TokenKind.rightParen)
-		view layout = try self.internTupleLayout(elementTypes, brands: elementBrands, anchor: openTok)
+		view layout = try self.internTupleLayout(elementTypes, brands: elementBrands, sites: self.anchors.functions.noTypeSites, anchor: openTok)
 		try self.requireAliasedTupleColumns(layout, elementValues: elementValues, elementStarts: elementStarts, anchor: openTok)
 
 		let literal = try self.emitStructLiteral(layout, fieldValues: elementValues, fieldBareLocal: elementBareLocal, anchor: openTok, range: SourceRange.between(openTok, last: closeTok))
@@ -68553,12 +68561,13 @@ export type Parser
 	//
 	// Both element reads come through this one function so the first element and the rest cannot come to be
 	// checked differently, which is the shape the loop above already had for `parseTypeReference`.
-	function readTupleElementType(voice BarePrimitiveVoice, brands NameRoster) returns MaxonType throws SourceParseError
+	function readTupleElementType(voice BarePrimitiveVoice, brands NameRoster, sites DeclaredTypeSites) returns MaxonType throws SourceParseError
 		let start = self.pos
 		let anchor = self.tokenAt(start)
 		let element = try self.parseTypeReference(voice)
 		try self.requireStorableDeclaredType(element, position: DeclaredStoragePosition.tupleElement, line: anchor.line, column: anchor.column)
 		brands.push(self.writtenElementBrand(start, resolved: element))
+		sites.noteWrittenType(anchor)
 		return element
 	end 'readTupleElementType'
 
@@ -68581,12 +68590,13 @@ export type Parser
 
 		var elements = MaxonTypeArray.create()
 		var brands = NameRoster.create()
-		elements.push(try self.readTupleElementType(voice, brands: brands))
+		var sites = DeclaredTypeSites.create()
+		elements.push(try self.readTupleElementType(voice, brands: brands, sites: sites))
 
 		while self.at(TokenKind.comma) 'eachElement'
 			try self.consume(TokenKind.comma)
 			try requireMemberCount(elements.count() + 1, limit: MaxDeclaredMembers, members: "tuple elements", anchor: openTok)
-			elements.push(try self.readTupleElementType(voice, brands: brands))
+			elements.push(try self.readTupleElementType(voice, brands: brands, sites: sites))
 		end 'eachElement'
 
 		try self.consume(TokenKind.rightParen)
@@ -68597,7 +68607,7 @@ export type Parser
 			throw SourceParseError.unsupported("a one-element tuple type (a tuple has at least {MinTupleArity} elements, and parentheses around a single type would be indistinguishable from grouping)", line: openTok.line, column: openTok.column)
 		end 'singleElement'
 
-		return MaxonType.structRef(self.artifact.typeNames.intern((try self.internTupleLayout(elements, brands: brands, anchor: openTok)).name))
+		return MaxonType.structRef(self.artifact.typeNames.intern((try self.internTupleLayout(elements, brands: brands, sites: sites, anchor: openTok)).name))
 	end 'parseTupleTypeReference'
 
 	// ⭐ **THE ONE DOOR A TUPLE TYPE IS MINTED THROUGH** — a literal, a type annotation, a `typealias` RHS.
@@ -68612,8 +68622,8 @@ export type Parser
 	// resolves them against the index's interner (`ProgramSignatures.fieldTypeOf`'s precondition). Read that
 	// way, a sweep-minted `named` element denotes whichever name the index numbered alike — a record element
 	// classified scalar is stored raw and released at scope exit.
-	function internTupleLayout(elements MaxonTypeArray, brands NameRoster, anchor Token) returns StructLayout throws SourceParseError
-		let name = try self.signatures.internTupleType(elements, written: brands, from: self.artifact.typeNames, slotScopeFilePath: self.job.path) otherwise (rejection) 'rejected'
+	function internTupleLayout(elements MaxonTypeArray, brands NameRoster, sites DeclaredTypeSites, anchor Token) returns StructLayout throws SourceParseError
+		let name = try self.signatures.internTupleType(elements, written: brands, from: self.artifact.typeNames, slotScopeFilePath: self.job.path, sites: sites) otherwise (rejection) 'rejected'
 			throw self.tupleElementError(rejection, anchor: anchor)
 		end 'rejected'
 
@@ -90190,8 +90200,8 @@ export type Parser
 		end 'eachParam'
 
 		match returnType 'returned'
-			void then return FunctionTypeAlias.create(viewName, returnTag: ValueTypeTag.void, returnTypeName: EmptySourceText, returnIdentity: AliasSlotIdentity.nameOnly, returnAggregateName: EmptySourceText, returnCapability: alias.returnCapability, paramTypes: params, paramSpelling: alias.paramSpelling, declFilePath: alias.declFilePath.clone(), visibility: alias.visibility, written: alias.written)
-			value(inner) then return FunctionTypeAlias.create(viewName, returnTag: maxonTypeTag(inner), returnTypeName: self.functionAliasTypeName(inner), returnIdentity: functionAliasSlotIdentity(inner), returnAggregateName: self.erasedAggregateNameOf(inner).clone(), returnCapability: alias.returnCapability, paramTypes: params, paramSpelling: alias.paramSpelling, declFilePath: alias.declFilePath.clone(), visibility: alias.visibility, written: alias.written)
+			void then return FunctionTypeAlias.create(viewName, returnTag: ValueTypeTag.void, returnTypeName: EmptySourceText, returnIdentity: AliasSlotIdentity.nameOnly, returnAggregateName: EmptySourceText, returnCapability: alias.returnCapability, paramTypes: params, paramSpelling: alias.paramSpelling, declFilePath: alias.declFilePath.clone(), visibility: alias.visibility, written: alias.written, typeSites: alias.typeSites)
+			value(inner) then return FunctionTypeAlias.create(viewName, returnTag: maxonTypeTag(inner), returnTypeName: self.functionAliasTypeName(inner), returnIdentity: functionAliasSlotIdentity(inner), returnAggregateName: self.erasedAggregateNameOf(inner).clone(), returnCapability: alias.returnCapability, paramTypes: params, paramSpelling: alias.paramSpelling, declFilePath: alias.declFilePath.clone(), visibility: alias.visibility, written: alias.written, typeSites: alias.typeSites)
 		end 'returned'
 	end 'instanceViewAlias'
 
@@ -92150,6 +92160,7 @@ export type Parser
 		liftedParamTypes.push(MaxonType.integer)
 
 		lifted.maxonParamTypes = liftedParamTypes
+		lifted.typeSites = self.paramTypeSites(paramTypeStarts)
 
 		// Give the `__env` param a source origin (its declaring `function` keyword) so the register-pressure
 		// diagnostic can resolve it, exactly as `bindParameters` records one per user parameter.
@@ -92230,6 +92241,23 @@ export type Parser
 		return result
 	end 'parseClosureExpression'
 
+	function paramTypeSites(paramTypeStarts TokenIndexArray) returns DeclaredTypeSites
+		var sites = DeclaredTypeSites.create()
+
+		for start in paramTypeStarts 'eachParam'
+			sites.noteWrittenType(self.tokenAt(start))
+		end 'eachParam'
+
+		return sites
+	end 'paramTypeSites'
+
+	function declaredTypeSites(paramTypeStarts TokenIndexArray, returnTypeStart ElementIndex) returns DeclaredTypeSites
+		var sites = self.paramTypeSites(paramTypeStarts)
+		sites.noteWrittenReturnType(self.tokenAt(returnTypeStart))
+
+		return sites
+	end 'declaredTypeSites'
+
 	function liftedBodyState(firstValueId ValueId, closureEnv ClosureEnvParam, returnAlias DeclaredAlias, paramSites RangeCheckParamSiteArray, layoutParam HiddenWordParam, countParam HiddenWordParam) returns FunctionBodyState
 		return FunctionBodyState.fresh(self.anchors, firstValueId: firstValueId, returnSpelling: EmptySourceText, provenance: DeferredProvenance.create(self.anchors.functions.provenance), mayReturnAGlobalAlias: false, closureEnv: closureEnv, returnAlias: returnAlias, paramSites: paramSites, layoutParam: layoutParam, countParam: countParam, nascentSelfFactory: false, kind: EnclosingBodyKind.closureBody, descriptorSource: self.bodyState.descriptorSource)
 	end 'liftedBodyState'
@@ -92239,7 +92267,7 @@ export type Parser
 			self.recordParamValueType(paramType)
 		end 'seedParamTypes'
 
-		var lifted = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count() as ParamCount, maxonParamTypes: paramTypes, valueTags: self.bodyState.valueTags, valueNameIds: self.bodyState.valueNameIds, valueBrandIds: self.bodyState.valueBrandIds, valueMintedSole: self.anchors.functions.mintedSole, valueWitnessIds: self.bodyState.valueWitnessIds, declaredAt: SourcePosition.declaredAt(self.job.path, nameTok: anchor), placeholders: self.anchors.functions)
+		var lifted = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count() as ParamCount, maxonParamTypes: paramTypes, typeSites: self.anchors.functions.noTypeSites, valueTags: self.bodyState.valueTags, valueNameIds: self.bodyState.valueNameIds, valueBrandIds: self.bodyState.valueBrandIds, valueMintedSole: self.anchors.functions.mintedSole, valueWitnessIds: self.bodyState.valueWitnessIds, declaredAt: SourcePosition.declaredAt(self.job.path, nameTok: anchor), placeholders: self.anchors.functions)
 		lifted.visibility = Visibility.file
 
 		let index = self.artifact.module.funcCount()

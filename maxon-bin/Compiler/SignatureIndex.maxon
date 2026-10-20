@@ -10932,11 +10932,11 @@ end 'internedNameIsATupleTypeName'
 // what settles a SWEEP-minted spelling, whose elements are still bare names), and `fieldTypeOf` scopes an
 // element read through it. Visibility is `global` — a tuple is nameable wherever its
 // elements are, and the path is read for SCOPING, never for reach.
-function tupleStructLayout(name ByteArray, elements MaxonTypeArray, brands NameRoster, declFilePath FilePath) returns StructLayout
+function tupleStructLayout(name ByteArray, elements MaxonTypeArray, brands NameRoster, declFilePath FilePath, sites DeclaredTypeSites) returns StructLayout
 	var layout = StructLayout.create(name, visibility: Visibility.global, declFilePath: declFilePath)
 
 	for i in 0 upto elements.count() 'eachElement'
-		layout.addField(tupleFieldName("{i}".toByteArray()), declaredType: try elements.get(i) otherwise panic("tupleStructLayout: elements.get OOB at {i} below count {elements.count()}"), mutable: true, tier: Visibility.global, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: try brands.get(i) otherwise panic("tupleStructLayout: brands.get OOB at {i} below count {brands.count()}"), spelledName: SpelledFieldName.unnamed)
+		layout.addField(tupleFieldName("{i}".toByteArray()), declaredType: try elements.get(i) otherwise panic("tupleStructLayout: elements.get OOB at {i} below count {elements.count()}"), mutable: true, tier: Visibility.global, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: try brands.get(i) otherwise panic("tupleStructLayout: brands.get OOB at {i} below count {brands.count()}"), spelledName: SpelledFieldName.unnamed, typeSite: sites.siteAt(i))
 	end 'eachElement'
 
 	return layout
@@ -31975,7 +31975,7 @@ export type ProgramSignatures
 	// a `(a, b)` literal, a `(T, U)` annotation, a `typealias Pair = (…)` — was written in exactly one file,
 	// and an element naming a CONTESTED generic alias means what that file means by it. See
 	// `tupleStructLayout` for why the minted layout carries it too.
-	export function internTupleType(elements MaxonTypeArray, written NameRoster, from TypeNameInterner, slotScopeFilePath FilePath) returns ByteArray throws TupleElementRejection
+	export function internTupleType(elements MaxonTypeArray, written NameRoster, from TypeNameInterner, slotScopeFilePath FilePath, sites DeclaredTypeSites) returns ByteArray throws TupleElementRejection
 		var interned = MaxonTypeArray.create()
 
 		for i in 0 upto elements.count() 'eachElement'
@@ -31990,7 +31990,7 @@ export type ProgramSignatures
 			interned.push(self.canonicalTupleElement(adopted, slotScopeFilePath: slotScopeFilePath))
 		end 'eachElement'
 
-		return self.registerTupleLayout(interned, written: written, declFilePath: slotScopeFilePath)
+		return self.registerTupleLayout(interned, written: written, declFilePath: slotScopeFilePath, sites: sites)
 	end 'internTupleType'
 
 	function registeredLayout(name ByteArray) returns StructLayout throws MapError
@@ -32038,12 +32038,12 @@ export type ProgramSignatures
 	// that name means the same thing by it and the path is never consulted to say otherwise — one layout,
 	// one file, no ambiguity. A SWEEP spelling still holds bare `named`s, so it is keyed per file and there
 	// is again exactly one minter.
-	function registerTupleLayout(elements MaxonTypeArray, written NameRoster, declFilePath FilePath) returns ByteArray
+	function registerTupleLayout(elements MaxonTypeArray, written NameRoster, declFilePath FilePath, sites DeclaredTypeSites) returns ByteArray
 		let instanceBrands = instanceBrandsOf(elements, written: written)
 		let name = self.tupleLayoutNameOf(elements, instanceBrands: instanceBrands, declFilePath: declFilePath)
 
 		if not self.hasRegisteredLayout(name) 'notRegisteredYet'
-			self.mintTupleLayout(elements, instanceBrands: instanceBrands, declFilePath: declFilePath)
+			self.mintTupleLayout(elements, instanceBrands: instanceBrands, declFilePath: declFilePath, sites: sites)
 		end 'notRegisteredYet'
 
 		return name
@@ -32053,12 +32053,12 @@ export type ProgramSignatures
 		return self.sweepScopedTupleName(self.tupleTypeNameOf(elements, instanceBrands: instanceBrands), declFilePath: declFilePath)
 	end 'tupleLayoutNameOf'
 
-	function mintTupleLayout(elements MaxonTypeArray, instanceBrands NameRoster, declFilePath FilePath)
+	function mintTupleLayout(elements MaxonTypeArray, instanceBrands NameRoster, declFilePath FilePath, sites DeclaredTypeSites)
 		let name = self.tupleLayoutNameOf(elements, instanceBrands: instanceBrands, declFilePath: declFilePath)
 
 		// The layout owns its copies: a parse hands in its own types and path, and a layout the journal later removes stays
 		// in its map slot.
-		self.addRegisteredLayout(tupleStructLayout(name, elements: elements.clone(), brands: self.tupleElementBrands(elements, instanceBrands: instanceBrands, declFilePath: declFilePath), declFilePath: declFilePath.clone()))
+		self.addRegisteredLayout(tupleStructLayout(name, elements: elements.clone(), brands: self.tupleElementBrands(elements, instanceBrands: instanceBrands, declFilePath: declFilePath), declFilePath: declFilePath.clone(), sites: sites))
 		self.recordTupleElementToken(name)
 		self.recordSeparatorBearingElementTokens(elements, instanceBrands: instanceBrands)
 	end 'mintTupleLayout'
@@ -32517,7 +32517,7 @@ export type ProgramSignatures
 			canonical.push(self.canonicalTupleElement(element, slotScopeFilePath: layout.declFilePath))
 		end 'eachElement'
 
-		var canonicalName = self.registerTupleLayout(canonical, written: self.writtenBrandsOf(layout, types: layout.fieldTypes), declFilePath: layout.declFilePath)
+		var canonicalName = self.registerTupleLayout(canonical, written: self.writtenBrandsOf(layout, types: layout.fieldTypes), declFilePath: layout.declFilePath, sites: layout.fieldTypeSites)
 		self.tupleCanonicalNames.upsert(layout.name, value: canonicalName.clone())
 		return canonicalName
 	end 'canonicalTupleName'
@@ -32698,7 +32698,7 @@ export type ProgramSignatures
 			adopted.push(self.adoptType(element, into: into))
 		end 'eachElement'
 
-		return tupleStructLayout(name, elements: adopted, brands: layout.fieldDeclaredBrands.clone(), declFilePath: layout.declFilePath)
+		return tupleStructLayout(name, elements: adopted, brands: layout.fieldDeclaredBrands.clone(), declFilePath: layout.declFilePath, sites: layout.fieldTypeSites)
 	end 'adoptTupleLayout'
 
 	// ⭐ **THE MIRROR OF `adoptType`: re-intern an id-bearing type INTO this index's own table.** `adoptType`
@@ -37018,7 +37018,7 @@ export type ProgramSignatures
 
 		for field in payloads 'eachSlot'
 			if let resolved = try self.rewrittenSlotTypeUnder(rule, declared: field.declaredType, slotScopeFilePath: layout.declFilePath) 'theRuleClaimsIt'
-				rewritten.push(PayloadField.create(field.name, declaredType: resolved, declaredSurface: field.declaredSurface, declaredBrand: self.sharedInstanceMintOr(field.declaredBrand, readerFilePath: layout.declFilePath, fallback: field.declaredBrand), isLet: field.isLet))
+				rewritten.push(PayloadField.create(field.name, declaredType: resolved, declaredSurface: field.declaredSurface, declaredBrand: self.sharedInstanceMintOr(field.declaredBrand, readerFilePath: layout.declFilePath, fallback: field.declaredBrand), isLet: field.isLet, typeSite: field.typeSite))
 				changed = true
 			end 'theRuleClaimsIt' else 'unchanged'
 				rewritten.push(field)
@@ -39550,7 +39550,7 @@ export type ProgramSignatures
 		// ⚠ **A REFUSAL HERE IS AN INVARIANT BREAK AND NOT A USER ERROR.** Substitution replaces type parameters
 		// with the concrete types an instance already interned, and `requireTupleElementType` refuses only an
 		// unresolved or void element — neither of which an instance's arguments can be.
-		return try self.internTupleType(substituted, written: substitutedBrands, from: self.typeNames, slotScopeFilePath: layout.declFilePath) otherwise (rejection) 'refused'
+		return try self.internTupleType(substituted, written: substitutedBrands, from: self.typeNames, slotScopeFilePath: layout.declFilePath, sites: layout.fieldTypeSites) otherwise (rejection) 'refused'
 			panic("ProgramSignatures.substituteTupleThroughInstance: the instance view of `{String.from(tupleName)}` was refused as a tuple element list: {tupleElementRejectionSentence(rejection)}")
 		end 'refused'
 	end 'substituteTupleThroughInstance'
@@ -45763,7 +45763,7 @@ export type ProgramSignatures
 
 		for layout in mints.tupleLayouts 'eachTuple'
 			let remapped = remapMaxonTypes(layout.fieldTypes, remap: remap)
-			let registered = self.registerTupleLayout(remapped, written: self.writtenBrandsOf(layout, types: remapped), declFilePath: layout.declFilePath)
+			let registered = self.registerTupleLayout(remapped, written: self.writtenBrandsOf(layout, types: remapped), declFilePath: layout.declFilePath, sites: layout.fieldTypeSites)
 
 			if not registered.equals(layout.name) 'renamedByTheMerge'
 				panic("ProgramSignatures.adoptParseMints: tuple `{String.from(layout.name)}` registered as `{String.from(registered)}` — a tuple's name is built from its elements' names, which no renumbering moves")

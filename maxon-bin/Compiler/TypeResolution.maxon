@@ -46,9 +46,9 @@
 // A named type in none of the four is a USER error (a typo, or a type this slice does not
 // have), not a compiler-invariant violation, and it is E3011. WHERE it is anchored is the
 // asking reader's to decide, which is why `denotedNamedType` raises `UnknownTypeName` rather
-// than reporting: a DECLARATION site reports unpositioned (nothing records a source span for a
-// type reference in a signature or a field — see `resolveNamedType`), while a CAST site is
-// anchored on the `as` the user wrote, because the parser holds that token when it asks.
+// than reporting: a DECLARATION site reports at the type name the declaration wrote (see
+// `resolveNamedType`), while a CAST site is anchored on the `as` the user wrote, because the parser
+// holds that token when it asks.
 //
 // The integer literal `42` is already typed `integer` (→ i64) by the parser, so it
 // needs no resolution.
@@ -338,17 +338,19 @@ module function resolveTypes(project Project, module MaxonModule)
 	// Fetched ONCE for the whole pass, not per named type: `denotedNamedType` reads it for every
 	// reference, and the memoized query is a map probe that has no business being on that path.
 	var signatures = try queryProgramSignatures(project) otherwise panic("resolveTypes: queryProgramSignatures failed — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
+	project.unknownTypeReports = UnknownTypeReports.create()
 
 	// Index-based so each function is a mutable binding (a `for x in ...` loop
 	// var is immutable; field assignment through it is rejected).
 	for i in 0 upto module.functions.count() 'eachFunc'
 		var func = try module.functions.get(i) otherwise panic("resolveTypes: functions.get OOB at {i}")
-		func.maxonReturnType = resolveReturnType(project, signatures: signatures, ret: func.maxonReturnType, readerFilePath: func.sourceFilePath)
+		func.maxonReturnType = resolveReturnType(project, signatures: signatures, ret: func.maxonReturnType, readerFilePath: func.sourceFilePath, site: func.typeSites.returnTypeSite(), declaration: func.name)
 
 		var resolvedParams = MaxonTypeArray.create()
 
-		for pt in func.maxonParamTypes 'eachParam'
-			resolvedParams.push(resolveParamType(project, signatures: signatures, t: pt, readerFilePath: func.sourceFilePath))
+		for position in 0 upto func.maxonParamTypes.count() 'eachParam'
+			let pt = try func.maxonParamTypes.get(position) otherwise panic("resolveTypes: maxonParamTypes.get OOB at {position} below its own count")
+			resolvedParams.push(resolveParamType(project, signatures: signatures, t: pt, readerFilePath: func.sourceFilePath, site: func.typeSites.siteAt(position), declaration: func.name))
 		end 'eachParam'
 
 		func.maxonParamTypes = resolvedParams
@@ -367,6 +369,7 @@ module function resolveTypes(project Project, module MaxonModule)
 	checkStructFieldTypes(project, signatures: signatures)
 	checkEnumPayloadTypes(project, signatures: signatures)
 	project.functionAliasShapes = functionAliasShapesIn(project, signatures: signatures, form: FunctionAliasShapeForm.resolved)
+	requireUnplacedUnknownTypesWereReported(project)
 end 'resolveTypes'
 
 // ⭐⭐ **THE DEFERRED NAME DIAGNOSTICS — UNUSED TYPEALIASES FIRST, HIDDEN TYPE NAMES SECOND.**
@@ -482,11 +485,9 @@ end 'reportedAtTheDeclaration'
 // Interning is idempotent and the names came from files whose own interners already folded in, so this mints
 // no new id in practice; it is what makes the alias's types comparable with a signature's at all.
 //
-// ⚠ Unlike `checkStructFieldTypes` it VALIDATES NOTHING. An undeclared name in a function alias's signature
-// is already E3011 from the site that USES the alias (a parameter/field/return declared with it resolves
-// through `resolveNamedType` on the way in); reporting it a second time here would double every such
-// diagnostic. `resolveType`'s recovery answer for an unknown name is what lands in a resolved
-// shape, and the pipeline's error gate stops the build before anything reads it.
+// ⚠ An undeclared name in a function alias's signature is E3011 here, at the type name in the alias's
+// declaration (`FunctionTypeAlias.typeSites`). `resolveType`'s recovery answer for it is what lands in a
+// resolved shape, and the pipeline's error gate stops the build before anything reads it.
 function functionAliasShapesIn(project Project, signatures ProgramSignatures, form FunctionAliasShapeForm) returns FunctionShapeMap
 	var names = NameRoster.create()
 
@@ -502,12 +503,13 @@ function functionAliasShapesIn(project Project, signatures ProgramSignatures, fo
 		var preErasedNames = NameRoster.create()
 		var capabilities = ParamCapabilityArray.create()
 
-		for param in alias.paramTypes 'eachParam'
+		for position in 0 upto alias.paramTypes.count() 'eachParam'
+			let param = try alias.paramTypes.get(position) otherwise panic("functionAliasShapesIn: paramTypes.get OOB at {position} below its own count")
 			capabilities.push(param.capability)
 
 			// The reader is the alias's OWN declaring file — a function alias's signature is written there
 			// and nowhere else, so a name it spells means what that file means by it.
-			params.push(functionAliasSlotIn(project, signatures: signatures, form: form, t: maxonTypeOfStoredAliasParam(param, typeNames: project.typeNames), declFilePath: alias.declFilePath))
+			params.push(functionAliasSlotIn(project, signatures: signatures, form: form, t: maxonTypeOfStoredAliasParam(param, typeNames: project.typeNames), declFilePath: alias.declFilePath, site: alias.typeSites.siteAt(position), declaration: name))
 
 			// ⚠ **READ, NOT DERIVED.** Deriving it here classifies one parameter a second time — the
 			// declared-function tier asks `Parser.aggregateNameOf` — and a per-instance ranged alias then
@@ -519,7 +521,7 @@ function functionAliasShapesIn(project Project, signatures ProgramSignatures, fo
 
 		let returnType = match maxonTypeOfStoredAliasReturn(alias, typeNames: project.typeNames) 'storedReturn'
 			void gives MaxonReturnType.void
-			value(inner) gives MaxonReturnType.value(functionAliasSlotIn(project, signatures: signatures, form: form, t: inner, declFilePath: alias.declFilePath))
+			value(inner) gives MaxonReturnType.value(functionAliasSlotIn(project, signatures: signatures, form: form, t: inner, declFilePath: alias.declFilePath, site: alias.typeSites.returnTypeSite(), declaration: name))
 		end 'storedReturn'
 
 		shapes.upsert(name, value: FunctionShape.create(params, returnType: returnType, paramAggregateNames: preErasedNames, returnAggregateName: alias.returnAggregateName, paramCapabilities: capabilities, returnCapability: alias.returnCapability))
@@ -533,10 +535,10 @@ enum FunctionAliasShapeForm
 	resolved
 end 'FunctionAliasShapeForm'
 
-function functionAliasSlotIn(project Project, signatures ProgramSignatures, form FunctionAliasShapeForm, t MaxonType, declFilePath FilePath) returns MaxonType
+function functionAliasSlotIn(project Project, signatures ProgramSignatures, form FunctionAliasShapeForm, t MaxonType, declFilePath FilePath, site PositionKey, declaration ByteArray) returns MaxonType
 	return match form 'form'
 		parsed gives resolveNamedStruct(t, typeNames: project.typeNames, signatures: signatures, scopeFilePath: declFilePath)
-		resolved gives resolveType(project, signatures: signatures, t: t, readerFilePath: declFilePath)
+		resolved gives resolveType(project, signatures: signatures, t: t, readerFilePath: declFilePath, site: site, declaration: declaration)
 	end 'form'
 end 'functionAliasSlotIn'
 
@@ -1036,15 +1038,12 @@ function checkStructFieldTypes(project Project, signatures ProgramSignatures)
 	end 'eachDeclaredStruct'
 
 	for layout in layouts 'eachStruct'
-		requireDeclaredTypesResolve(project, signatures: signatures, declared: layout.fieldTypes, readerFilePath: layout.declFilePath)
+		for position in 0 upto layout.fieldTypes.count() 'eachField'
+			let declared = try layout.fieldTypes.get(position) otherwise panic("checkStructFieldTypes: fieldTypes.get OOB at {position} below its own count")
+			_ = resolveType(project, signatures: signatures, t: declared, readerFilePath: layout.declFilePath, site: layout.fieldTypeSites.siteAt(position), declaration: layout.name)
+		end 'eachField'
 	end 'eachStruct'
 end 'checkStructFieldTypes'
-
-function requireDeclaredTypesResolve(project Project, signatures ProgramSignatures, declared MaxonTypeArray, readerFilePath FilePath)
-	for t in declared 'eachDeclared'
-		_ = resolveType(project, signatures: signatures, t: t, readerFilePath: readerFilePath)
-	end 'eachDeclared'
-end 'requireDeclaredTypesResolve'
 
 function checkEnumPayloadTypes(project Project, signatures ProgramSignatures)
 	var layouts = EnumLayoutArray.create()
@@ -1054,15 +1053,11 @@ function checkEnumPayloadTypes(project Project, signatures ProgramSignatures)
 	end 'eachDeclaredEnum'
 
 	for layout in layouts 'eachEnum'
-		var declared = MaxonTypeArray.create()
-
 		for payloads in layout.casePayloads 'eachCase'
 			for payload in payloads 'eachPayload'
-				declared.push(payload.declaredType)
+				_ = resolveType(project, signatures: signatures, t: payload.declaredType, readerFilePath: layout.declFilePath, site: payload.typeSite, declaration: layout.name)
 			end 'eachPayload'
 		end 'eachCase'
-
-		requireDeclaredTypesResolve(project, signatures: signatures, declared: declared, readerFilePath: layout.declFilePath)
 	end 'eachEnum'
 end 'checkEnumPayloadTypes'
 
@@ -1119,18 +1114,18 @@ function sourceParamTypesOf(func IrFunction, declaredCount ParamCount) returns M
 	return sourceParams
 end 'sourceParamTypesOf'
 
-function resolveParamType(project Project, signatures ProgramSignatures, t MaxonType, readerFilePath FilePath) returns MaxonType
+function resolveParamType(project Project, signatures ProgramSignatures, t MaxonType, readerFilePath FilePath, site PositionKey, declaration ByteArray) returns MaxonType
 	if tagIsUnresolved(maxonTypeTag(t)) 'aDeferredClosureParameter'
 		return t
 	end 'aDeferredClosureParameter'
 
-	return resolveType(project, signatures: signatures, t: t, readerFilePath: readerFilePath)
+	return resolveType(project, signatures: signatures, t: t, readerFilePath: readerFilePath, site: site, declaration: declaration)
 end 'resolveParamType'
 
-function resolveReturnType(project Project, signatures ProgramSignatures, ret MaxonReturnType, readerFilePath FilePath) returns MaxonReturnType
+function resolveReturnType(project Project, signatures ProgramSignatures, ret MaxonReturnType, readerFilePath FilePath, site PositionKey, declaration ByteArray) returns MaxonReturnType
 	return match ret 'r'
 		void gives MaxonReturnType.void
-		value(inner) gives MaxonReturnType.value(resolveType(project, signatures: signatures, t: inner, readerFilePath: readerFilePath))
+		value(inner) gives MaxonReturnType.value(resolveType(project, signatures: signatures, t: inner, readerFilePath: readerFilePath, site: site, declaration: declaration))
 	end 'r'
 end 'resolveReturnType'
 
@@ -1140,13 +1135,13 @@ end 'resolveReturnType'
 // be erased exactly as this pass erased every other slot of the shapes being compared. A second erasure
 // written there would be a second answer to "what does this name denote", which is the disagreement this
 // file's header is about.
-export function resolveType(project Project, signatures ProgramSignatures, t MaxonType, readerFilePath FilePath) returns MaxonType
+export function resolveType(project Project, signatures ProgramSignatures, t MaxonType, readerFilePath FilePath, site PositionKey = PositionlessSite, declaration ByteArray = EmptySourceText) returns MaxonType
 	match t 'r'
 		boolean then return t
 		integer then return t
 		float then return t
 		exitCode then return t
-		named(id) then return resolveNamedType(project, signatures: signatures, id: id, readerFilePath: readerFilePath)
+		named(id) then return resolveNamedType(project, signatures: signatures, id: id, readerFilePath: readerFilePath, site: site, declaration: declaration)
 		unresolved then panic("resolveTypes: `unresolved` reached type resolution — a declared type is never `unresolved`, and the one signature slot that may be (a closure parameter typed by a deferred member's argument) is passed through by `resolveParamType` before it reaches here")
 
 		// Already resolved, and by the PARSER: `Parser.parseTypeReference` mints a `structRef`
@@ -1520,8 +1515,8 @@ export function denotedNamedType(signatures ProgramSignatures, name ByteArray, i
 	// A name in NONE of the sources is a USER error — a typo (`Scor` for `Score`), a bare
 	// sized type (`u8` is not a type in Maxon; a ranged alias over it is), or a
 	// user-defined type this slice does not have. Each reader decides what to DO about it:
-	// this pass reports E3011 unpositioned and recovers, the two cast sites raise the same
-	// code anchored on the `as` they were written at.
+	// this pass reports E3011 at the declaration's type name and recovers, the two cast sites raise the
+	// same code anchored on the `as` they were written at.
 	//
 	// ⚠ **A NON-RANGED ALIAS FORM ALSO ARRIVES HERE, AND IT IS NOT A TYPO.** A reference to a function,
 	// generic or tuple alias is re-tagged by `Parser.parseTypeReference` long before this door — the whole
@@ -1590,12 +1585,8 @@ end 'barePrimitiveCastMessage'
 // a return type, a struct field. Each reports and recovers rather than failing the pass, so a file with three
 // undeclared types reports three diagnostics.
 //
-// UNPOSITIONED, exactly like E3001/E3002 — nothing records a source span for a type REFERENCE in a
-// DECLARATION (only ops and parameter NAMES carry one), so there is no line to point at. Positioning
-// it means threading that span from `parseTypeReference` through `FuncSignature` into the registry
-// this pass reads, which is its own piece of work. ⚠ It is NOT a property of the diagnostic: a cast
-// target reaches the same verdict POSITIONED, because the parser holds the `as` token when it asks.
-function resolveNamedType(project Project, signatures ProgramSignatures, id TypeNameId, readerFilePath FilePath) returns MaxonType
+// The caller hands the position of the type name as the declaration wrote it (`DeclaredTypeSites`).
+function resolveNamedType(project Project, signatures ProgramSignatures, id TypeNameId, readerFilePath FilePath, site PositionKey, declaration ByteArray) returns MaxonType
 	let name = try project.typeNames.nameOf(id) otherwise panic("resolveTypes: named type id {id} is not in the project interner (merge did not fold this file's interner)")
 
 	if let declared = try denotedNamedType(signatures, name: name, id: id, readerFilePath: readerFilePath) 'aDeclaredType'
@@ -1603,7 +1594,7 @@ function resolveNamedType(project Project, signatures ProgramSignatures, id Type
 	end 'aDeclaredType'
 
 	return try denotedAliasForm(signatures, name: name, readerFilePath: readerFilePath, into: project.typeNames) otherwise 'undeclared'
-		reportDiagnostic(project, diagnostic: Diagnostic.programWide(ErrorCode.unknownType, message: unknownTypeMessage(signatures.aliasIdentityDisplay(name))))
+		reportUnknownDeclaredType(project, message: unknownTypeMessage(signatures.aliasIdentityDisplay(name)), readerFilePath: readerFilePath, site: site, declaration: declaration)
 
 		// A RECOVERY type, not a sentinel answer: `PassPipeline.run` gates on diagnostics
 		// after EVERY pass and `resolveTypes` IS a pass, so the build throws the moment
@@ -1614,6 +1605,39 @@ function resolveNamedType(project Project, signatures ProgramSignatures, id Type
 		return MaxonType.integer
 	end 'undeclared'
 end 'resolveNamedType'
+
+// A slot with no site is a compiler copy of a written one (a default helper's return, a service
+// payload, a closure parameter typed by an offer). It is reported where it was written, so it is only
+// recorded here and checked by `requireUnplacedUnknownTypesWereReported`.
+function reportUnknownDeclaredType(project Project, message String, readerFilePath FilePath, site PositionKey, declaration ByteArray)
+	let line = positionKeyLine(site)
+	let column = positionKeyColumn(site)
+
+	if not namesASourcePosition(line, column: column) 'copiedByTheCompiler'
+		if declaration.isEmpty() 'noDeclarationToDeferTo'
+			panic("resolveType: {message} in a slot of '{readerFilePath.toString()}' that has no source position and belongs to no declaration being resolved — a late reader hands this door only a type already settled, so the type is a compiler bug")
+		end 'noDeclarationToDeferTo'
+
+		project.unknownTypeReports.unplaced.push(UnplacedUnknownType.create(message, declaration: declaration.clone(), readerFilePath: readerFilePath))
+		return
+	end 'copiedByTheCompiler'
+
+	if not project.unknownTypeReports.claimSite(message, readerFilePath: readerFilePath, site: site) 'reportedAtItsDeclaration'
+		return
+	end 'reportedAtItsDeclaration'
+
+	reportPositioned(project, code: ErrorCode.unknownType, message: message, line: line, column: column, filePath: readerFilePath)
+end 'reportUnknownDeclaredType'
+
+// Runs after every declaration kind is resolved: an unplaced slot's written twin may be any of them,
+// and checking earlier panics on a program that reported it.
+function requireUnplacedUnknownTypesWereReported(project Project)
+	for unplaced in project.unknownTypeReports.unplaced 'eachUnplaced'
+		if not project.unknownTypeReports.wasReported(unplaced.message) 'reportedWhereWritten'
+			panic("resolveTypes: {unplaced.message} reached a slot of '{String.from(unplaced.declaration)}' in '{unplaced.readerFilePath.toString()}' that has no source position, and no written declaration reported it — the slot was synthesized by the compiler from a type no declaration spells")
+		end 'reportedWhereWritten'
+	end 'eachUnplaced'
+end 'requireUnplacedUnknownTypesWereReported'
 
 export function denotedAliasForm(signatures ProgramSignatures, name ByteArray, readerFilePath FilePath, into TypeNameInterner) returns MaxonType throws UnknownTypeName
 	let form = try signatures.aliasFormFor(name, readerFilePath: readerFilePath)

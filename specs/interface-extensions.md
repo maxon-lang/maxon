@@ -528,7 +528,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3011: Unknown type 'Element'
+error E3011: <fragment>:14:14: Unknown type 'Element'
 ```
 
 <!-- test: error.an-unconformed-extension-leak-is-not-a-compiler-panic -->
@@ -574,7 +574,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3011: Unknown type 'Element'
+error E3011: <fragment>:28:14: Unknown type 'Element'
 ```
 
 ### The ORDER of an `implements` clause does not decide which extensions arrive

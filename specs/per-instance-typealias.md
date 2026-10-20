@@ -589,7 +589,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3011: Unknown type 'Idx'
+error E3011: <fragment>:23:26: Unknown type 'Idx'
 ```
 
 ### A member declared in the TYPE's own body is spelled from an extension in another file

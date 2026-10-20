@@ -20,6 +20,10 @@
 let PositionlessLine = 0
 let PositionlessColumn = 0
 
+// `positionKey(PositionlessLine, column: PositionlessColumn)`, as a literal: a global initializer
+// cannot call. `namesASourcePosition` reads a decoded site, so the two must agree.
+export let PositionlessSite = 0 as PositionKey
+
 export type SourceRange
 	export let startByte as ByteOffset
 	export let endByte as ByteOffset
@@ -78,9 +82,70 @@ export type SourceRange
 	// @generated library-cache end
 end 'SourceRange'
 
-function namesASourcePosition(line LineNumber, column ColumnNumber) returns bool
+export function namesASourcePosition(line LineNumber, column ColumnNumber) returns bool
 	return line != PositionlessLine and column != PositionlessColumn
 end 'namesASourcePosition'
+
+// Only an identifier starts a name that can be undeclared. A parameter's type-start token can be
+// the receiver's `(` or the `,` / `)` of a closure parameter whose type is offered, and a site
+// there would put E3011 on punctuation.
+export function writtenTypeSiteOf(typeStart Token) returns PositionKey
+	if typeStart.kind != TokenKind.identifier 'namesNoType'
+		return PositionlessSite
+	end 'namesNoType'
+
+	return positionKey(typeStart.line, column: typeStart.column)
+end 'writtenTypeSiteOf'
+
+export type DeclaredTypeSites
+	var returnSite as PositionKey
+	var sites as PositionKeyArray
+
+	export static function create() returns DeclaredTypeSites
+		return Self{returnSite: PositionlessSite, sites: PositionKeyArray.create()}
+	end 'create'
+
+	export function noteWrittenType(typeStart Token)
+		self.sites.push(writtenTypeSiteOf(typeStart))
+	end 'noteWrittenType'
+
+	export function noteWrittenReturnType(typeStart Token)
+		self.returnSite = writtenTypeSiteOf(typeStart)
+	end 'noteWrittenReturnType'
+
+	export function noteAt(site PositionKey)
+		self.sites.push(site)
+	end 'noteAt'
+
+	// Past the end is a slot no source spells: a hidden parameter (a witness, a layout descriptor,
+	// `__env`) or an element of a tuple literal.
+	export function siteAt(index ElementIndex) returns PositionKey
+		return try self.sites.get(index) otherwise PositionlessSite
+	end 'siteAt'
+
+	export function returnTypeSite() returns PositionKey
+		return self.returnSite
+	end 'returnTypeSite'
+
+	// @generated library-cache begin
+	export function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.returnSite as CacheUnsigned)
+		cacheWritePositionKeyArray(writer, value: self.sites)
+	end 'cacheWrite'
+
+	export static function cacheRead(reader LibraryCacheReader) returns DeclaredTypeSites throws LibraryCacheDamage
+		let f_returnSite = (try reader.unsigned()) as PositionKey
+		let f_sites = try cacheReadPositionKeyArray(reader)
+
+		return Self{returnSite: f_returnSite, sites: f_sites}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(DeclaredTypeSites) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'DeclaredTypeSites'
 
 export union OpPlacement
 	unplaced

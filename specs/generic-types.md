@@ -69,6 +69,35 @@ base, or the wrong number of arguments, is rejected.
 
 ## Tests
 
+<!-- test: a-generic-instance-of-a-file-private-alias-in-another-files-type -->
+A generic type declared in one directory, instantiated in another file with a type argument only that
+file can name: the argument resolves from the instantiating file, so the program compiles and runs.
+```maxon
+// --- file: lib/box.maxon
+export type Box uses T
+	export var value as T
+
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+
+	export function get() returns T
+		return self.value
+	end 'get'
+end 'Box'
+// --- file: main.maxon
+typealias Small = int(0 to 100)
+typealias SmallBox = Box with Small
+
+function main() returns ExitCode
+	let b = SmallBox.create(7 as Small)
+	return b.get() as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
 <!-- test: generic-create-get -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)

@@ -2117,7 +2117,7 @@ end 'TokenSpans'
 export typealias PositionKeyArray = Array with PositionKey
 
 // @generated library-cache begin
-function cacheWritePositionKeyArray(writer LibraryCacheWriter, value PositionKeyArray)
+module function cacheWritePositionKeyArray(writer LibraryCacheWriter, value PositionKeyArray)
 	writer.unsigned(value.count() as CacheUnsigned)
 
 	for item in value 'eachItem'
@@ -2125,7 +2125,7 @@ function cacheWritePositionKeyArray(writer LibraryCacheWriter, value PositionKey
 	end 'eachItem'
 end 'cacheWritePositionKeyArray'
 
-function cacheReadPositionKeyArray(reader LibraryCacheReader) returns PositionKeyArray throws LibraryCacheDamage
+module function cacheReadPositionKeyArray(reader LibraryCacheReader) returns PositionKeyArray throws LibraryCacheDamage
 	let count = try reader.count()
 	var result = PositionKeyArray.create()
 	result.reserve(count)
@@ -2949,9 +2949,11 @@ export type FunctionPlaceholders
 
 	export var noLetCastReads as LetCastReadArray
 
+	export var noTypeSites as DeclaredTypeSites
+
 	export static function create() returns FunctionPlaceholders
 		var provenance = ProvenanceColumns.create()
-		return Self{provenance: provenance, noSites: ProvenanceSites.create(provenance), noFiledProvenance: FiledProvenance.none, paramGuards: RangeCheckParamGuardArray.create(), inlineSites: InlineSiteArray.create(), mintedSole: BoolArray.create(), noArgumentOverlaps: ArgumentOverlapSiteArray.create(), noLiteralCastArguments: LiteralCastMap.create(), noLetCastReads: LetCastReadArray.create()}
+		return Self{provenance: provenance, noSites: ProvenanceSites.create(provenance), noFiledProvenance: FiledProvenance.none, paramGuards: RangeCheckParamGuardArray.create(), inlineSites: InlineSiteArray.create(), mintedSole: BoolArray.create(), noArgumentOverlaps: ArgumentOverlapSiteArray.create(), noLiteralCastArguments: LiteralCastMap.create(), noLetCastReads: LetCastReadArray.create(), noTypeSites: DeclaredTypeSites.create()}
 	end 'create'
 end 'FunctionPlaceholders'
 
@@ -3163,6 +3165,7 @@ export type IrFunction
 	// --- Maxon-phase types (populated by parser, consumed by LowerMaxonToStd) ---
 	export var maxonReturnType as MaxonReturnType
 	export var maxonParamTypes as MaxonTypeArray
+	export var typeSites as DeclaredTypeSites
 
 	// THE MAXON TIER'S PER-VALUE TYPE ORACLE: the source-level type of every SSA value this
 	// function's ops define, DENSE by ValueId (parameter `i` owns id `i`, so `valueTags[i]` is
@@ -3475,7 +3478,7 @@ export type IrFunction
 	//
 	// The name and the signature types are the function's own copies: a function rides its file's artifact, and both
 	// are often records the signature index holds (`ParseStaging.artifactOwnedOp`).
-	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, valueTags ValueTypeTagArray, valueNameIds TypeNameIdArray, valueBrandIds TypeNameIdArray, valueMintedSole BoolArray, valueWitnessIds ValueIdArray, declaredAt SourcePosition, placeholders FunctionPlaceholders, throwsTypeName ThrowsClause = ThrowsClause.none, needsGreenThreadStackGuard bool = false) returns IrFunction
+	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, typeSites DeclaredTypeSites, valueTags ValueTypeTagArray, valueNameIds TypeNameIdArray, valueBrandIds TypeNameIdArray, valueMintedSole BoolArray, valueWitnessIds ValueIdArray, declaredAt SourcePosition, placeholders FunctionPlaceholders, throwsTypeName ThrowsClause = ThrowsClause.none, needsGreenThreadStackGuard bool = false) returns IrFunction
 		return Self{
 			name: name.clone(),
 			visibility: Visibility.file,
@@ -3498,6 +3501,7 @@ export type IrFunction
 			closeColumn: declaredAt.column,
 			maxonReturnType: maxonReturnType.clone(),
 			maxonParamTypes: maxonParamTypes.clone(),
+			typeSites: typeSites,
 			valueTags: valueTags,
 			valueNameIds: valueNameIds,
 			valueBrandIds: valueBrandIds,
@@ -3583,6 +3587,7 @@ export type IrFunction
 			closeColumn: declaredAt.column,
 			maxonReturnType: MaxonReturnType.void,
 			maxonParamTypes: MaxonTypeArray.create(),
+			typeSites: DeclaredTypeSites.create(),
 			valueTags: ValueTypeTagArray.create(),
 			valueNameIds: TypeNameIdArray.create(),
 			valueBrandIds: TypeNameIdArray.create(),
@@ -3656,6 +3661,7 @@ export type IrFunction
 			closeColumn: src.closeColumn,
 			maxonReturnType: src.maxonReturnType,
 			maxonParamTypes: src.maxonParamTypes,
+			typeSites: src.typeSites,
 			valueTags: src.valueTags,
 			debugLocals: src.debugLocals,
 			debugLocalLocations: src.debugLocalLocations,
@@ -4001,6 +4007,7 @@ export type IrFunction
 		cacheWriteClosureStoreSiteArray(writer, value: self.closureStoreSites)
 		cacheWriteMaxonReturnType(writer, value: self.maxonReturnType)
 		cacheWriteMaxonTypeArray(writer, value: self.maxonParamTypes)
+		self.typeSites.cacheWrite(writer)
 		cacheWriteValueTypeTagArray(writer, value: self.valueTags)
 		cacheWriteTypeNameIdArray(writer, value: self.valueNameIds)
 		cacheWriteTypeNameIdArray(writer, value: self.valueBrandIds)
@@ -4064,6 +4071,7 @@ export type IrFunction
 		let f_closureStoreSites = try cacheReadClosureStoreSiteArray(reader)
 		let f_maxonReturnType = try cacheReadMaxonReturnType(reader)
 		let f_maxonParamTypes = try cacheReadMaxonTypeArray(reader)
+		let f_typeSites = try DeclaredTypeSites.cacheRead(reader)
 		let f_valueTags = try cacheReadValueTypeTagArray(reader)
 		let f_valueNameIds = try cacheReadTypeNameIdArray(reader)
 		let f_valueBrandIds = try cacheReadTypeNameIdArray(reader)
@@ -4104,11 +4112,11 @@ export type IrFunction
 		let f_debugLocalLocations = try cacheReadDebugValueLocationArray(reader)
 		let f_debugLocalRanges = try cacheReadDebugValueRangeArray(reader)
 
-		return Self{name: f_name, visibility: f_visibility, sourceFilePath: f_sourceFilePath, paramCount: f_paramCount, blockRefs: f_blockRefs, nextBlockId: f_nextBlockId, nameLine: f_nameLine, nameColumn: f_nameColumn, closeLine: f_closeLine, closeColumn: f_closeColumn, needsGreenThreadStackGuard: f_needsGreenThreadStackGuard, keepsItsOwnFrame: f_keepsItsOwnFrame, pinsItsThread: f_pinsItsThread, returnsByIndirectJump: f_returnsByIndirectJump, mustBeSplicedAtEverySite: f_mustBeSplicedAtEverySite, closureLayout: f_closureLayout, closureFixedElementCount: f_closureFixedElementCount, closureEnvFields: f_closureEnvFields, closureStoreSites: f_closureStoreSites, maxonReturnType: f_maxonReturnType, maxonParamTypes: f_maxonParamTypes, valueTags: f_valueTags, valueNameIds: f_valueNameIds, valueBrandIds: f_valueBrandIds, valueMintedSole: f_valueMintedSole, filedProvenance: f_filedProvenance, valueColumnsArePrivate: f_valueColumnsArePrivate, valueWitnessIds: f_valueWitnessIds, valueExistentialInstances: f_valueExistentialInstances, valueCallInstances: f_valueCallInstances, literalCastArguments: f_literalCastArguments, deferredArgumentBindings: f_deferredArgumentBindings, conditionalOps: f_conditionalOps, conditionalRefusals: f_conditionalRefusals, existentialFieldStores: f_existentialFieldStores, throwsTypeName: f_throwsTypeName, scope: f_scope, returnType: f_returnType, paramTypes: f_paramTypes, varSlotCount: f_varSlotCount, stackSize: f_stackSize, outgoingArgSize: f_outgoingArgSize, closureSubCounter: f_closureSubCounter, writtenParamMask: f_writtenParamMask, writesThroughParamMask: f_writesThroughParamMask, brandOriginValues: f_brandOriginValues, brandOriginKeys: f_brandOriginKeys, writesModuleStorage: f_writesModuleStorage, bodyWasSkippedAsUnreached: f_bodyWasSkippedAsUnreached, bodySplicedAway: f_bodySplicedAway, usesValueTupleReturn: f_usesValueTupleReturn, reassignedParamMask: f_reassignedParamMask, argumentOverlaps: f_argumentOverlaps, letCastReads: f_letCastReads, paramGuards: f_paramGuards, inlineSites: f_inlineSites, debugLocals: f_debugLocals, ownsItsDebugLocals: f_ownsItsDebugLocals, debugLocalLocations: f_debugLocalLocations, debugLocalRanges: f_debugLocalRanges}
+		return Self{name: f_name, visibility: f_visibility, sourceFilePath: f_sourceFilePath, paramCount: f_paramCount, blockRefs: f_blockRefs, nextBlockId: f_nextBlockId, nameLine: f_nameLine, nameColumn: f_nameColumn, closeLine: f_closeLine, closeColumn: f_closeColumn, needsGreenThreadStackGuard: f_needsGreenThreadStackGuard, keepsItsOwnFrame: f_keepsItsOwnFrame, pinsItsThread: f_pinsItsThread, returnsByIndirectJump: f_returnsByIndirectJump, mustBeSplicedAtEverySite: f_mustBeSplicedAtEverySite, closureLayout: f_closureLayout, closureFixedElementCount: f_closureFixedElementCount, closureEnvFields: f_closureEnvFields, closureStoreSites: f_closureStoreSites, maxonReturnType: f_maxonReturnType, maxonParamTypes: f_maxonParamTypes, typeSites: f_typeSites, valueTags: f_valueTags, valueNameIds: f_valueNameIds, valueBrandIds: f_valueBrandIds, valueMintedSole: f_valueMintedSole, filedProvenance: f_filedProvenance, valueColumnsArePrivate: f_valueColumnsArePrivate, valueWitnessIds: f_valueWitnessIds, valueExistentialInstances: f_valueExistentialInstances, valueCallInstances: f_valueCallInstances, literalCastArguments: f_literalCastArguments, deferredArgumentBindings: f_deferredArgumentBindings, conditionalOps: f_conditionalOps, conditionalRefusals: f_conditionalRefusals, existentialFieldStores: f_existentialFieldStores, throwsTypeName: f_throwsTypeName, scope: f_scope, returnType: f_returnType, paramTypes: f_paramTypes, varSlotCount: f_varSlotCount, stackSize: f_stackSize, outgoingArgSize: f_outgoingArgSize, closureSubCounter: f_closureSubCounter, writtenParamMask: f_writtenParamMask, writesThroughParamMask: f_writesThroughParamMask, brandOriginValues: f_brandOriginValues, brandOriginKeys: f_brandOriginKeys, writesModuleStorage: f_writesModuleStorage, bodyWasSkippedAsUnreached: f_bodyWasSkippedAsUnreached, bodySplicedAway: f_bodySplicedAway, usesValueTupleReturn: f_usesValueTupleReturn, reassignedParamMask: f_reassignedParamMask, argumentOverlaps: f_argumentOverlaps, letCastReads: f_letCastReads, paramGuards: f_paramGuards, inlineSites: f_inlineSites, debugLocals: f_debugLocals, ownsItsDebugLocals: f_ownsItsDebugLocals, debugLocalLocations: f_debugLocalLocations, debugLocalRanges: f_debugLocalRanges}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize480
-		return sizeof(IrFunction) as CacheSize480
+	static function cacheLayoutBytes() returns CacheSize488
+		return sizeof(IrFunction) as CacheSize488
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
