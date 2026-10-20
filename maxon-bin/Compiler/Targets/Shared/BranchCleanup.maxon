@@ -472,10 +472,6 @@ end 'markReachable'
 // A block with no terminator op is the exception — it falls into whatever is laid down next — so it
 // and its physical successor move as ONE UNIT, cold only when every block in it is. The entry's unit
 // stays first: the prologue goes there.
-//
-// A sunk arm's branch spans the hot blocks that now sit between it and its guard. On arm64 that is
-// the 19-bit `b.cond` / `cbz` field, and a function carrying more than ±1 MiB of code between the
-// two is refused loudly by `arm64PatchBranch19` rather than mis-encoded.
 function sinkColdBlocks(module TargetModule, func IrFunction)
 	var hot = BlockRefArray.create()
 	var cold = BlockRefArray.create()
@@ -949,11 +945,6 @@ end 'invertCondBranchOntoElse'
 // `mi`'s complement is `pl`, which reads TRUE on NaN, and that is exactly right, because `mi`
 // (float `<`) reads FALSE on NaN. `arm64Cbz`/`arm64Cbnz` complement each other on a register's
 // zeroness and never read the flags at all.
-//
-// ⚠ ON arm64 THE INVERSION MOVES THE ELSE-EDGE ONTO THE 19-BIT `b.cond` (±1 MiB) AND THE THEN-EDGE
-// ONTO A FALL-THROUGH. Either edge could already exceed that reach before this pass — the then-edge
-// rode the same field — so the exposure is swapped rather than widened, and `arm64PatchBranch19`
-// still refuses an out-of-reach displacement loudly.
 function invertedCondBranchOnto(op TargetOp, targetBlockId BlockId, condOpIndex ElementIndex) returns TargetOp
 	return match op 'cond'
 		jcc(cond, _) gives TargetOp.jcc(invertX64Cond(cond), targetBlockId: targetBlockId)

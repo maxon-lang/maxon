@@ -45,7 +45,7 @@ export type Arm64RuntimeAsm
 	export var rdataRelocs as RdataRelocationArray
 	export var funcAdrpRelocs as Arm64FuncAdrpRelocArray
 	export var labelOffsets as BlockOffsetTable
-	export var branchFixups as Arm64BlockBranchFixupArray
+	export var branches as Arm64BlockBranches
 	export var nextLabel as BlockId
 	export var frameBytes as StackSize
 
@@ -93,7 +93,7 @@ export type Arm64RuntimeAsm
 			rdataRelocs: rdataRelocs,
 			funcAdrpRelocs: Arm64FuncAdrpRelocArray.create(),
 			labelOffsets: BlockOffsetTable.create(),
-			branchFixups: Arm64BlockBranchFixupArray.create(),
+			branches: Arm64BlockBranches.create(),
 			nextLabel: 0,
 			frameBytes: frameBytes,
 			outgoingArgBytes: outgoingArgBytes,
@@ -127,7 +127,7 @@ export type Arm64RuntimeAsm
 			rdataRelocs: RdataRelocationArray.create(),
 			funcAdrpRelocs: Arm64FuncAdrpRelocArray.create(),
 			labelOffsets: BlockOffsetTable.create(),
-			branchFixups: Arm64BlockBranchFixupArray.create(),
+			branches: Arm64BlockBranches.create(),
 			nextLabel: 0,
 			frameBytes: 0,
 			outgoingArgBytes: NoOutgoingArgRegion,
@@ -162,7 +162,7 @@ export type Arm64RuntimeAsm
 	// directly rather than passing `finishFunction` a flag — whether the frame comes down at all is the
 	// whole of what a closer decides.
 	export function finishChunk(name ByteArray, guarded bool = false) returns FunctionCodeChunk
-		arm64ResolveBlockBranches(self.code, blockOffsets: self.labelOffsets, fixups: self.branchFixups)
+		arm64ResolveBlockBranches(self.code, blockOffsets: self.labelOffsets, branches: self.branches)
 
 		var chunk = FunctionCodeChunk.createWith(name, code: self.code, callFixups: self.callFixups, rdataRelocs: self.rdataRelocs, iatRelocs: self.iatRelocs)
 		chunk.funcAdrpRelocs = self.funcAdrpRelocs
@@ -328,21 +328,21 @@ export function arm64EmitCmpRuntimeImm32(asm Arm64RuntimeAsm, reg Arm64Register,
 end 'arm64EmitCmpRuntimeImm32'
 
 export function arm64EmitBranchTo(asm Arm64RuntimeAsm, label BlockId)
-	arm64EmitBranch(asm.code, fixups: asm.branchFixups, targetBlock: label)
+	arm64EmitBranch(asm.code, branches: asm.branches, targetBlock: label)
 end 'arm64EmitBranchTo'
 
 export function arm64EmitCondBranchTo(asm Arm64RuntimeAsm, cond Arm64CondCode, label BlockId)
-	arm64EmitCondBranch(asm.code, fixups: asm.branchFixups, cond: cond, targetBlock: label)
+	arm64EmitCondBranch(asm.code, branches: asm.branches, cond: cond, targetBlock: label)
 end 'arm64EmitCondBranchTo'
 
 export function arm64EmitCbzTo(asm Arm64RuntimeAsm, reg Arm64Register, label BlockId)
-	arm64EmitCbz(asm.code, fixups: asm.branchFixups, reg: arm64RuntimeReg(reg), targetBlock: label)
+	arm64EmitCbz(asm.code, branches: asm.branches, reg: arm64RuntimeReg(reg), targetBlock: label)
 end 'arm64EmitCbzTo'
 
 // The complement. A chunk that has both spellings can branch on the case it wants to LEAVE rather than
 // emitting a `cbz` over an unconditional `b`, which is two instructions and an extra label to say one thing.
 export function arm64EmitCbnzTo(asm Arm64RuntimeAsm, reg Arm64Register, label BlockId)
-	arm64EmitCbnz(asm.code, fixups: asm.branchFixups, reg: arm64RuntimeReg(reg), targetBlock: label)
+	arm64EmitCbnz(asm.code, branches: asm.branches, reg: arm64RuntimeReg(reg), targetBlock: label)
 end 'arm64EmitCbnzTo'
 
 // `adrp`+`add` the runtime address of a `.text` symbol into `dest` — how a runtime chunk names another

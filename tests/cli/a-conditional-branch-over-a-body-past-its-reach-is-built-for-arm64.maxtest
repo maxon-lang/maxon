@@ -1,0 +1,72 @@
+// a-conditional-branch-over-a-body-past-its-reach-is-built-for-arm64.maxtest - an arm64 function
+// whose `if` spans more than a conditional branch's ±1 MiB reach builds, and the program answers
+// right with the body skipped and with it entered.
+//
+// The code-size check reads the arm64-linux build, so the reach is crossed on every host. The two
+// runs are of the host build, which exercises the relaxed branch only on an arm64 host.
+
+let CaseDirName = "arm64-branch-relaxation"
+let ProgramName = "wide-body"
+let ArmLinuxTarget = "--target=arm64-linux"
+let ArmLinuxOutputName = "wide-body-arm64-linux"
+let HostOutputName = "wide-body-host"
+let BodyStatementCount = 80000
+let ConditionalBranchReachBytes = 1048576
+let MetricsCodeKind = "code"
+let MetricsUnnamedRow = "-"
+let MetricsBytesField = 5
+let BodyMask = 0xFFFF
+let BodyMultiplier = 31
+let SkippedBodyAnswer = 0
+let EnterBodyArgument = "1"
+let EnterBodySeed = 1
+
+test 'an arm64 function whose conditional branch spans more than its 1 MiB reach is built and runs both ways'
+	let dir = freshCaseDir(CaseDirName)
+	stageProgram(dir, name: ProgramName, source: wideBodySource())
+
+	let metricsFileName = "{ProgramName}-metrics.tsv"
+	let armLinux = runDriver([BuildCommandWord, ProgramName, ArmLinuxTarget, "{OutputOptionPrefix}{dir.join(ArmLinuxOutputName).toString()}", "{MetricsOptionPrefix}{metricsFileName}"], workingDirectory: dir)
+	Expect.equal(armLinux.exitCode(), expected: 0, message: "a function with a {BodyStatementCount}-statement body under one `if` did not build for arm64-linux. It said: {armLinux.stdout}{armLinux.stderr}")
+
+	let table = try File.readText(dir.join(metricsFileName)) otherwise panic("the build wrote no metrics table at {metricsFileName}")
+	let codeBytes = metricsCell(table, kind: MetricsCodeKind, name: MetricsUnnamedRow, field: MetricsBytesField)
+	Expect.isTrue(codeBytes > ConditionalBranchReachBytes + ConditionalBranchReachBytes / 2, message: "the generated program compiled to only {codeBytes} bytes of code, so its `if` no longer spans {ConditionalBranchReachBytes} bytes and the case proves nothing")
+
+	let hostProgram = dir.join("{HostOutputName}{executableSuffix()}")
+	let host = runDriver([BuildCommandWord, ProgramName, "{OutputOptionPrefix}{hostProgram.toString()}"], workingDirectory: dir)
+	Expect.equal(host.exitCode(), expected: 0, message: "the same program did not build for this host. It said: {host.stdout}{host.stderr}")
+
+	let expected = enteredBodyAnswer()
+	Expect.isTrue(expected != SkippedBodyAnswer, message: "the body's answer {expected} equals the answer when it is skipped, so the two runs could not tell the branch's directions apart")
+
+	let skipped = runDriver(ListedWordArray.create(), binary: hostProgram, workingDirectory: dir)
+	Expect.equal(skipped.exitCode(), expected: 0, message: "the program failed with the body skipped. It said: {skipped.stdout}{skipped.stderr}")
+	Expect.equal(skipped.stdout.trim(), expected: "{SkippedBodyAnswer}", message: "the program, run so that the `if` is not entered, did not answer {SkippedBodyAnswer}. It said: {skipped.stdout}{skipped.stderr}")
+
+	let entered = runDriver([EnterBodyArgument], binary: hostProgram, workingDirectory: dir)
+	Expect.equal(entered.exitCode(), expected: 0, message: "the program failed with the body entered. It said: {entered.stdout}{entered.stderr}")
+	Expect.equal(entered.stdout.trim(), expected: "{expected}", message: "the program, run so that the `if` is entered, did not answer {expected}. It said: {entered.stdout}{entered.stderr}")
+end 'an arm64 function whose conditional branch spans more than its 1 MiB reach is built and runs both ways'
+
+function enteredBodyAnswer() returns Count
+	var total = EnterBodySeed as Count
+
+	for index in 0 upto BodyStatementCount 'eachStatement'
+		total = (total * BodyMultiplier + index) and BodyMask
+	end 'eachStatement'
+
+	return total
+end 'enteredBodyAnswer'
+
+function wideBodySource() returns String
+	var out = "typealias Word = int(0 to u32.max)\n\nfunction work(seed Word) returns Word\n\tvar total = seed\n\n\tif seed > 0 'wide'\n"
+
+	for index in 0 upto BodyStatementCount 'eachStatement'
+		out.append("\t\ttotal = (total * {BodyMultiplier} + {index}) and 0xFFFF\n")
+	end 'eachStatement'
+
+	out.append("\tend 'wide'\n\n\treturn total\nend 'work'\n\n")
+	out.append("function main() returns ExitCode\n\tlet seed = try CommandLine.readOptionalIntArgument(1, otherwise: 0) otherwise 0\n\tlet answer = work(seed as Word)\n\n\tprint(\"\{answer\}\\n\")\n\treturn 0\nend 'main'\n")
+	return out
+end 'wideBodySource'

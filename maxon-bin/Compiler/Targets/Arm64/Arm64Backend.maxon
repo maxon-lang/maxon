@@ -552,8 +552,9 @@ let Arm64OpEorVec8b = 0x2E201C00
 module let Arm64AddSubImmWideMax = Arm64ShiftedImm12Max or Arm64ImmMask
 
 // The reach of a `b`/`bl` (imm26 scaled by 4 = ±128 MiB) and of a `b.cond`/`cbz`/`cbnz` (imm19 scaled
-// by 4 = ±1 MiB), as byte counts. Guarded on resolution so an out-of-range branch is a loud link
-// error, never a silently wrapped displacement.
+// by 4 = ±1 MiB), as byte counts. Guarded on resolution so an out-of-range branch is never a silently
+// wrapped displacement: a function chunk relaxes a conditional branch past its reach
+// (`emitArm64FunctionChunk`), and every other out-of-range branch is a loud link error.
 let Arm64BranchByteReach = 0x8000000
 let Arm64CondBranchByteReach = 0x100000
 
@@ -1453,7 +1454,7 @@ end 'arm64NonNegDisp'
 // it targets. `wide` selects the field width — an unconditional `b` carries a 26-bit imm (±128 MiB),
 // a `b.cond`/`cbz`/`cbnz` a 19-bit imm (±1 MiB). A function's blocks are contiguous within its one
 // chunk, so these resolve HERE (like x64's `resolveChunkRel32Fixups`), independent of concat.
-export type Arm64BlockBranchFixup
+type Arm64BlockBranchFixup
 	export let codeOffset as CodeOffset
 	export let targetBlock as BlockId
 	export let wide as bool
@@ -1465,69 +1466,128 @@ end 'Arm64BlockBranchFixup'
 
 export typealias Arm64BlockBranchFixupArray = Array with Arm64BlockBranchFixup
 
-// The four branch instructions with a PLACEHOLDER displacement, each returning its own chunk offset.
+export typealias Arm64BranchSite = int(0 to u64.max)
+
+typealias Arm64BranchSiteSet = Set with Arm64BranchSite
+
+export type Arm64BranchRelaxation
+	var sites = Arm64BranchSiteSet.create()
+
+	export static function create() returns Arm64BranchRelaxation
+		return Self{}
+	end 'create'
+
+	export function isRelaxed(site Arm64BranchSite) returns bool
+		return self.sites.contains(site)
+	end 'isRelaxed'
+
+	export function relax(site Arm64BranchSite)
+		self.sites.insert(site)
+	end 'relax'
+
+	export function count() returns Count
+		return self.sites.count() as Count
+	end 'count'
+end 'Arm64BranchRelaxation'
+
+// A branch site is the index of the fixup it files. A relaxed site files one fixup (its `b`), as a
+// short one does, so each site keeps its index on every pass; a site that filed a different number of
+// fixups, or one emitted only for some layout, would shift every later index and relax the wrong branch.
+export type Arm64BlockBranches
+	export var fixups as Arm64BlockBranchFixupArray
+	export var relaxation as Arm64BranchRelaxation
+
+	export static function create() returns Arm64BlockBranches
+		return Self{fixups: Arm64BlockBranchFixupArray.create(), relaxation: Arm64BranchRelaxation.create()}
+	end 'create'
+
+	export static function relaxing(relaxation Arm64BranchRelaxation) returns Arm64BlockBranches
+		return Self{fixups: Arm64BlockBranchFixupArray.create(), relaxation: relaxation}
+	end 'relaxing'
+
+	export function nextSite() returns Arm64BranchSite
+		return self.fixups.count() as Arm64BranchSite
+	end 'nextSite'
+end 'Arm64BlockBranches'
+
+// A branch instruction with a PLACEHOLDER displacement, returning its own chunk offset.
 //
 // ⚠ **THE PLACEHOLDER IS THE SHARED HALF, AND WHO RESOLVES IT IS THE DIFFERENCE.** A branch to a BLOCK
 // records a fixup and is patched by `arm64ResolveBlockBranches` once the block layout is known; a branch
 // inside ONE macro-op's instruction sequence has no block to name (the Std→Target lowerings cannot create
 // blocks — see `TargetOp.arm64MemFill`) and is patched by that encoder itself, against a byte offset in this
 // same buffer. Both spell the instruction here, once, so the two cannot come to disagree about its bytes.
-function arm64EmitLocalBranch(code ByteArray) returns CodeOffset
-	let site = code.count()
-	emitArm64Insn(code, insn: Arm64OpB)
+function arm64EmitLocalInsn(code ByteArray, insn MachineWord) returns CodeOffset
+	let site = codeHere(code)
+	emitArm64Insn(code, insn: insn)
 	return site
-end 'arm64EmitLocalBranch'
+end 'arm64EmitLocalInsn'
 
-function arm64EmitLocalCondBranch(code ByteArray, cond Arm64CondCode) returns CodeOffset
-	let site = code.count()
-	emitArm64Insn(code, insn: Arm64OpBcond or (cond.rawValue as MachineWord))
-	return site
-end 'arm64EmitLocalCondBranch'
-
-function arm64EmitLocalCbz(code ByteArray, reg MachineWord) returns CodeOffset
-	let site = code.count()
-	emitArm64Insn(code, insn: Arm64OpCbz or reg)
-	return site
-end 'arm64EmitLocalCbz'
-
-function arm64EmitLocalCbnz(code ByteArray, reg MachineWord) returns CodeOffset
-	let site = code.count()
-	emitArm64Insn(code, insn: Arm64OpCbnz or reg)
-	return site
-end 'arm64EmitLocalCbnz'
+function arm64CondBranchInsn(cond Arm64CondCode) returns MachineWord
+	return Arm64OpBcond or (cond.rawValue as MachineWord)
+end 'arm64CondBranchInsn'
 
 // `b` to a block — placeholder imm26, fixup recorded.
-export function arm64EmitBranch(code ByteArray, fixups Arm64BlockBranchFixupArray, targetBlock BlockId)
-	fixups.push(Arm64BlockBranchFixup.create(arm64EmitLocalBranch(code), targetBlock: targetBlock, wide: true))
+export function arm64EmitBranch(code ByteArray, branches Arm64BlockBranches, targetBlock BlockId)
+	branches.fixups.push(Arm64BlockBranchFixup.create(arm64EmitLocalInsn(code, insn: Arm64OpB), targetBlock: targetBlock, wide: true))
 end 'arm64EmitBranch'
 
+function arm64EmitShortBranch(code ByteArray, branches Arm64BlockBranches, instruction MachineWord, inverse MachineWord, targetBlock BlockId)
+	if branches.relaxation.isRelaxed(branches.nextSite()) 'relaxed'
+		let skip = arm64EmitLocalInsn(code, insn: inverse)
+		arm64EmitBranch(code, branches: branches, targetBlock: targetBlock)
+		arm64PatchBranch19(code, codeOffset: skip, targetOffset: codeHere(code))
+	end 'relaxed' else 'short'
+		branches.fixups.push(Arm64BlockBranchFixup.create(arm64EmitLocalInsn(code, insn: instruction), targetBlock: targetBlock, wide: false))
+	end 'short'
+end 'arm64EmitShortBranch'
+
 // `b.cond` to a block — placeholder imm19, condition in the low nibble.
-export function arm64EmitCondBranch(code ByteArray, fixups Arm64BlockBranchFixupArray, cond Arm64CondCode, targetBlock BlockId)
-	fixups.push(Arm64BlockBranchFixup.create(arm64EmitLocalCondBranch(code, cond: cond), targetBlock: targetBlock, wide: false))
+export function arm64EmitCondBranch(code ByteArray, branches Arm64BlockBranches, cond Arm64CondCode, targetBlock BlockId)
+	arm64EmitShortBranch(code, branches: branches, instruction: arm64CondBranchInsn(cond), inverse: arm64CondBranchInsn(invertArm64Cond(cond)), targetBlock: targetBlock)
 end 'arm64EmitCondBranch'
 
 // `cbz`/`cbnz Xt` to a block — a fused zero-test with no preceding compare, placeholder imm19.
-export function arm64EmitCbz(code ByteArray, fixups Arm64BlockBranchFixupArray, reg MachineWord, targetBlock BlockId)
-	fixups.push(Arm64BlockBranchFixup.create(arm64EmitLocalCbz(code, reg: reg), targetBlock: targetBlock, wide: false))
+export function arm64EmitCbz(code ByteArray, branches Arm64BlockBranches, reg MachineWord, targetBlock BlockId)
+	arm64EmitShortBranch(code, branches: branches, instruction: Arm64OpCbz or reg, inverse: Arm64OpCbnz or reg, targetBlock: targetBlock)
 end 'arm64EmitCbz'
 
-export function arm64EmitCbnz(code ByteArray, fixups Arm64BlockBranchFixupArray, reg MachineWord, targetBlock BlockId)
-	fixups.push(Arm64BlockBranchFixup.create(arm64EmitLocalCbnz(code, reg: reg), targetBlock: targetBlock, wide: false))
+export function arm64EmitCbnz(code ByteArray, branches Arm64BlockBranches, reg MachineWord, targetBlock BlockId)
+	arm64EmitShortBranch(code, branches: branches, instruction: Arm64OpCbnz or reg, inverse: Arm64OpCbz or reg, targetBlock: targetBlock)
 end 'arm64EmitCbnz'
 
 // Patch every pending block branch to its target's chunk-local offset. A branch's displacement is
-// PC-relative from the branch itself (not the end of a field, as on x64) and scaled by 4.
-export function arm64ResolveBlockBranches(code ByteArray, blockOffsets BlockOffsetTable, fixups Arm64BlockBranchFixupArray)
-	for fixup in fixups 'resolve'
+// PC-relative from the branch itself (not the end of a field, as on x64) and scaled by 4. A
+// `b.cond`/`cbz`/`cbnz` whose target is past its reach is left unpatched and recorded in
+// `branches.relaxation`.
+function arm64ResolveRelaxableBlockBranches(code ByteArray, blockOffsets BlockOffsetTable, branches Arm64BlockBranches)
+	for site in 0 upto branches.fixups.count() 'resolve'
+		let fixup = try branches.fixups.get(site) otherwise panic("arm64ResolveBlockBranches: branch site {site} past the end of its fixups")
 		let targetOffset = try blockOffsets.get(fixup.targetBlock) otherwise panic("arm64ResolveBlockBranches: branch to block {fixup.targetBlock} with no recorded offset")
 
 		if fixup.wide 'uncond'
 			arm64PatchBranch26(code, codeOffset: fixup.codeOffset, targetOffset: targetOffset)
-		end 'uncond' else 'cond'
+		end 'uncond' else if arm64CondBranchInReach(fixup.codeOffset, targetOffset: targetOffset) 'inReach'
 			arm64PatchBranch19(code, codeOffset: fixup.codeOffset, targetOffset: targetOffset)
-		end 'cond'
+		end 'inReach' else 'outOfReach'
+			branches.relaxation.relax(site as Arm64BranchSite)
+		end 'outOfReach'
 	end 'resolve'
+end 'arm64ResolveRelaxableBlockBranches'
+
+// For a hand-written runtime chunk, which is emitted once and never re-encoded, so a branch past its
+// reach there cannot be relaxed and is a defect in that chunk.
+export function arm64ResolveBlockBranches(code ByteArray, blockOffsets BlockOffsetTable, branches Arm64BlockBranches)
+	arm64ResolveRelaxableBlockBranches(code, blockOffsets: blockOffsets, branches: branches)
+
+	if branches.relaxation.count() > 0 'unrelaxable'
+		panic("arm64ResolveBlockBranches: {branches.relaxation.count()} conditional branches out of ±1 MiB in a chunk that cannot relax them — relocation overflow")
+	end 'unrelaxable'
 end 'arm64ResolveBlockBranches'
+
+function arm64CondBranchInReach(codeOffset CodeOffset, targetOffset CodeOffset) returns bool
+	return not arm64BranchOutOfReach(arm64RelBytes(targetOffset, codeOffset: codeOffset), reach: Arm64CondBranchByteReach)
+end 'arm64CondBranchInReach'
 
 // True when a two's-complement byte displacement falls outside the ±`reach` window — its value is
 // either too-large positive or (as an unsigned wrap) too-large negative. A `String`-free arithmetic
@@ -1597,7 +1657,7 @@ end 'arm64RelInstructions'
 // x64-only arms panic (the x64 encoder owns them — `buildBackend` dispatches on `target.cpu`), and the
 // SHARED arms arm64 reuses (`movRegReg`, the spill/reload and base+disp forms, `xchgRegReg`) are encoded
 // here.
-function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, iatRelocs RelocationArray, funcAdrpRelocs Arm64FuncAdrpRelocArray, branchFixups Arm64BlockBranchFixupArray, jumpTables JumpTablePendingArray, greenThreads bool, atomics Arm64AtomicsMode)
+function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, iatRelocs RelocationArray, funcAdrpRelocs Arm64FuncAdrpRelocArray, branches Arm64BlockBranches, jumpTables JumpTablePendingArray, greenThreads bool, atomics Arm64AtomicsMode)
 	match op 'emit'
 		// --- x64-only control/frame band ---
 		prologue or
@@ -1683,10 +1743,10 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffse
 		// `fcsel`, not one op.
 		// --- arm64 band ---
 		arm64Ret(transfer) then arm64EmitReturnTransfer(code, transfer: transfer)
-		arm64Branch(targetBlockId) then arm64EmitBranch(code, fixups: branchFixups, targetBlock: targetBlockId)
-		arm64CondBranch(cond, targetBlockId) then arm64EmitCondBranch(code, fixups: branchFixups, cond: cond, targetBlock: targetBlockId)
-		arm64Cbz(reg, targetBlockId) then arm64EmitCbz(code, fixups: branchFixups, reg: arm64GprField(reg), targetBlock: targetBlockId)
-		arm64Cbnz(reg, targetBlockId) then arm64EmitCbnz(code, fixups: branchFixups, reg: arm64GprField(reg), targetBlock: targetBlockId)
+		arm64Branch(targetBlockId) then arm64EmitBranch(code, branches: branches, targetBlock: targetBlockId)
+		arm64CondBranch(cond, targetBlockId) then arm64EmitCondBranch(code, branches: branches, cond: cond, targetBlock: targetBlockId)
+		arm64Cbz(reg, targetBlockId) then arm64EmitCbz(code, branches: branches, reg: arm64GprField(reg), targetBlock: targetBlockId)
+		arm64Cbnz(reg, targetBlockId) then arm64EmitCbnz(code, branches: branches, reg: arm64GprField(reg), targetBlock: targetBlockId)
 		arm64MovImm(dest, value) then arm64EmitMovImm(code, rd: arm64GprField(dest), value: value)
 		arm64Prologue(stackSize, recordOffset) then arm64EmitPrologue(code, frameSize: stackSize, recordOffset: recordOffset, probeScratchIsFree: true)
 		arm64Epilogue(stackSize, recordOffset) then arm64EmitEpilogue(code, frameSize: stackSize, recordOffset: recordOffset)
@@ -1766,7 +1826,7 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffse
 		// The dense-match jump table: the imm12-safe cmp/b.hs/adrp+add/ldrsw/add/br sequence, its default-edge
 		// b.hs fixup and table-address ADRP+ADD reloc filed inline, its per-slot block-address relocs recorded
 		// in `jumpTables`. The x64 jump table never reaches the arm64 encoder.
-		arm64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then arm64EmitJumpTable(code, rdataRelocs: rdataRelocs, branchFixups: branchFixups, jumpTables: jumpTables, indexReg: arm64GprField(indexReg), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel)
+		arm64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then arm64EmitJumpTable(code, rdataRelocs: rdataRelocs, branches: branches, jumpTables: jumpTables, indexReg: arm64GprField(indexReg), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel)
 		x64JumpTable then panic("emitArm64TargetOp: an x64 jump table reached the arm64 encoder — the x64 backend encodes `x64JumpTable`")
 		arm64StoreOutgoingArg(slot, srcReg) then arm64EmitStoreOutgoingArg(code, slot: slot, srcReg: srcReg)
 
@@ -1845,10 +1905,10 @@ end 'emitArm64TargetOp'
 // count and does not tie this encoder's correctness to the span-cap constant. x16/x17 are the IP
 // scratch pair (outside the allocatable pool), so the live index reg is
 // provably neither — no aliasing guard needed, unlike x64's r10/r11.
-function arm64EmitJumpTable(code ByteArray, rdataRelocs RdataRelocationArray, branchFixups Arm64BlockBranchFixupArray, jumpTables JumpTablePendingArray, indexReg MachineWord, defaultTarget BlockId, caseTargets BlockIdArray, tableLabel ByteArray)
+function arm64EmitJumpTable(code ByteArray, rdataRelocs RdataRelocationArray, branches Arm64BlockBranches, jumpTables JumpTablePendingArray, indexReg MachineWord, defaultTarget BlockId, caseTargets BlockIdArray, tableLabel ByteArray)
 	arm64EmitMovImm(code, rd: Arm64Ip0, value: caseTargets.count() as MachineWord)
 	arm64EmitCmpReg(code, rn: indexReg, rm: Arm64Ip0)
-	arm64EmitCondBranch(code, fixups: branchFixups, cond: Arm64CondCode.hs, targetBlock: defaultTarget)
+	arm64EmitCondBranch(code, branches: branches, cond: Arm64CondCode.hs, targetBlock: defaultTarget)
 	arm64EmitAdrpAddPair(code, rdataRelocs: rdataRelocs, dest: Arm64Ip1, label: tableLabel, adrpKind: RdataRelocKind.arm64Adrp, pageOffKind: RdataRelocKind.arm64PageOff)
 	emitArm64Insn(code, insn: Arm64OpLdrswRegLsl2 or (indexReg shl Arm64RmShift) or (Arm64Ip1 shl Arm64RnShift) or Arm64Ip0)
 	emitArm64Rrr(code, opcode: Arm64OpAdd, rd: Arm64Ip1, rn: Arm64Ip1, rm: Arm64Ip0)
@@ -1947,13 +2007,13 @@ function arm64EmitMemFill(code ByteArray, fillByte FullRangeInt)
 	// UNSIGNED (`lo`/`hs`) throughout — a byte count is a length, and a signed compare would send a
 	// >= 2^63 count down the wrong arm rather than simply being unreachable.
 	arm64EmitCmpImm(code, rn: Arm64MemFillCount, imm: Arm64MemFillWordBytes)
-	let toByteLoop = arm64EmitLocalCondBranch(code, cond: Arm64CondCode.lo)
+	let toByteLoop = arm64EmitLocalInsn(code, insn: arm64CondBranchInsn(Arm64CondCode.lo))
 	arm64EmitCmpImm(code, rn: Arm64MemFillCount, imm: Arm64MemFillPairBytes)
-	let toOneWord = arm64EmitLocalCondBranch(code, cond: Arm64CondCode.lo)
+	let toOneWord = arm64EmitLocalInsn(code, insn: arm64CondBranchInsn(Arm64CondCode.lo))
 	arm64EmitCmpImm(code, rn: Arm64MemFillCount, imm: Arm64MemFillTwoPairBytes)
-	let toOnePair = arm64EmitLocalCondBranch(code, cond: Arm64CondCode.lo)
+	let toOnePair = arm64EmitLocalInsn(code, insn: arm64CondBranchInsn(Arm64CondCode.lo))
 	arm64EmitCmpImm(code, rn: Arm64MemFillCount, imm: Arm64MemFillLoopStride)
-	let toTwoPairs = arm64EmitLocalCondBranch(code, cond: Arm64CondCode.lo)
+	let toTwoPairs = arm64EmitLocalInsn(code, insn: arm64CondBranchInsn(Arm64CondCode.lo))
 
 	// >= 64: whole 64-byte blocks, then ONE overlapping 64-byte block anchored at the end. The count is at
 	// least 64 on entry, so `[end-64, end)` is always inside the region and needs no remainder test.
@@ -1962,33 +2022,33 @@ function arm64EmitMemFill(code ByteArray, fillByte FullRangeInt)
 	arm64EmitAddImmSigned(code, rd: Arm64MemFillCursor, rn: Arm64MemFillCursor, imm: Arm64MemFillLoopStride)
 	arm64EmitSubImmSigned(code, rd: Arm64MemFillCount, rn: Arm64MemFillCount, imm: Arm64MemFillLoopStride)
 	arm64EmitCmpImm(code, rn: Arm64MemFillCount, imm: Arm64MemFillLoopStride)
-	arm64PatchBranch19(code, codeOffset: arm64EmitLocalCondBranch(code, cond: Arm64CondCode.hs), targetOffset: loopTop as CodeOffset)
+	arm64PatchBranch19(code, codeOffset: arm64EmitLocalInsn(code, insn: arm64CondBranchInsn(Arm64CondCode.hs)), targetOffset: loopTop as CodeOffset)
 	arm64EmitFillPairRun(code, baseReg: Arm64MemFillEnd, startOffset: -(Arm64MemFillLoopStride as Imm32), count: Arm64MemFillLoopStride / Arm64MemFillPairBytes)
-	let doneFromLoop = arm64EmitLocalBranch(code)
+	let doneFromLoop = arm64EmitLocalInsn(code, insn: Arm64OpB)
 
 	arm64PatchBranch19(code, codeOffset: toTwoPairs, targetOffset: codeHere(code))
 	arm64EmitFillOverlappingSpan(code, spanBytes: Arm64MemFillTwoPairBytes)
-	let doneFromTwoPairs = arm64EmitLocalBranch(code)
+	let doneFromTwoPairs = arm64EmitLocalInsn(code, insn: Arm64OpB)
 
 	arm64PatchBranch19(code, codeOffset: toOnePair, targetOffset: codeHere(code))
 	arm64EmitFillOverlappingSpan(code, spanBytes: Arm64MemFillPairBytes)
-	let doneFromOnePair = arm64EmitLocalBranch(code)
+	let doneFromOnePair = arm64EmitLocalInsn(code, insn: Arm64OpB)
 
 	// 8..15: one word from each end. A PAIR does not fit twice here, so this is the one band the STP run
 	// above cannot serve — hence the STR/STUR spelling, and hence `Arm64MemFillWordBytes` existing at all.
 	arm64PatchBranch19(code, codeOffset: toOneWord, targetOffset: codeHere(code))
 	arm64EmitScaledMem(code, opcode: Arm64OpStrX, rt: Arm64MemFillPattern, baseReg: Arm64MemFillCursor, byteOffset: 0, scale: Arm64SlotScale)
 	arm64EmitUnscaledMem(code, opcode: Arm64OpSturX, rt: Arm64MemFillPattern, baseReg: Arm64MemFillEnd, byteOffset: -(Arm64MemFillWordBytes as Imm32))
-	let doneFromOneWord = arm64EmitLocalBranch(code)
+	let doneFromOneWord = arm64EmitLocalInsn(code, insn: Arm64OpB)
 
 	// 0..7: a byte loop. There is no whole word to anchor an overlap on, and this band is the rare one.
 	arm64PatchBranch19(code, codeOffset: toByteLoop, targetOffset: codeHere(code))
-	let doneFromEmpty = arm64EmitLocalCbz(code, reg: Arm64MemFillCount)
+	let doneFromEmpty = arm64EmitLocalInsn(code, insn: Arm64OpCbz or Arm64MemFillCount)
 	let byteLoopTop = code.count()
 	arm64EmitScaledMem(code, opcode: Arm64OpStrB, rt: Arm64MemFillPattern, baseReg: Arm64MemFillCursor, byteOffset: 0, scale: Arm64ByteAccessScale)
 	arm64EmitAddImmSigned(code, rd: Arm64MemFillCursor, rn: Arm64MemFillCursor, imm: 1)
 	arm64EmitSubImmSigned(code, rd: Arm64MemFillCount, rn: Arm64MemFillCount, imm: 1)
-	arm64PatchBranch19(code, codeOffset: arm64EmitLocalCbnz(code, reg: Arm64MemFillCount), targetOffset: byteLoopTop as CodeOffset)
+	arm64PatchBranch19(code, codeOffset: arm64EmitLocalInsn(code, insn: Arm64OpCbnz or Arm64MemFillCount), targetOffset: byteLoopTop as CodeOffset)
 
 	let done = code.count()
 	arm64PatchBranch26(code, codeOffset: doneFromLoop, targetOffset: done as CodeOffset)
@@ -2116,9 +2176,9 @@ function arm64EmitCasLlsc(code ByteArray, dest MachineWord, addrReg MachineWord,
 	let loopTop = code.count()
 	arm64EmitLdaxr(code, rn: addrReg, width: X64AccessWidth.word64)
 	arm64EmitCmpReg(code, rn: Arm64AtomicValue, rm: expectedReg)
-	let toExit = arm64EmitLocalCondBranch(code, cond: Arm64CondCode.ne)
+	let toExit = arm64EmitLocalInsn(code, insn: arm64CondBranchInsn(Arm64CondCode.ne))
 	arm64EmitStlxr(code, rt: replacementReg, rn: addrReg, width: X64AccessWidth.word64)
-	arm64PatchBranch19(code, codeOffset: arm64EmitLocalCbnz(code, reg: Arm64AtomicStatus), targetOffset: loopTop as CodeOffset)
+	arm64PatchBranch19(code, codeOffset: arm64EmitLocalInsn(code, insn: Arm64OpCbnz or Arm64AtomicStatus), targetOffset: loopTop as CodeOffset)
 	arm64PatchBranch19(code, codeOffset: toExit, targetOffset: codeHere(code))
 	arm64EmitCset(code, rd: dest, cond: Arm64CondCode.eq)
 end 'arm64EmitCasLlsc'
@@ -2153,7 +2213,7 @@ function arm64EmitAddLlsc(code ByteArray, dest MachineWord, addrReg MachineWord,
 	arm64EmitLdaxr(code, rn: addrReg, width: X64AccessWidth.word64)
 	emitArm64Rrr(code, opcode: Arm64OpAdd, rd: Arm64AtomicValue, rn: Arm64AtomicValue, rm: operandReg)
 	arm64EmitStlxr(code, rt: Arm64AtomicValue, rn: addrReg, width: X64AccessWidth.word64)
-	arm64PatchBranch19(code, codeOffset: arm64EmitLocalCbnz(code, reg: Arm64AtomicStatus), targetOffset: loopTop as CodeOffset)
+	arm64PatchBranch19(code, codeOffset: arm64EmitLocalInsn(code, insn: Arm64OpCbnz or Arm64AtomicStatus), targetOffset: loopTop as CodeOffset)
 	emitArm64Rrr(code, opcode: Arm64OpSub, rd: dest, rn: Arm64AtomicValue, rm: operandReg)
 end 'arm64EmitAddLlsc'
 
@@ -2161,7 +2221,7 @@ function arm64EmitExchangeByteLlsc(code ByteArray, dest MachineWord, addrReg Mac
 	let loopTop = code.count()
 	arm64EmitLdaxr(code, rn: addrReg, width: X64AccessWidth.byte)
 	arm64EmitStlxr(code, rt: operandReg, rn: addrReg, width: X64AccessWidth.byte)
-	arm64PatchBranch19(code, codeOffset: arm64EmitLocalCbnz(code, reg: Arm64AtomicStatus), targetOffset: loopTop as CodeOffset)
+	arm64PatchBranch19(code, codeOffset: arm64EmitLocalInsn(code, insn: Arm64OpCbnz or Arm64AtomicStatus), targetOffset: loopTop as CodeOffset)
 	arm64EmitMovGpr(code, rd: dest, rn: Arm64AtomicValue)
 end 'arm64EmitExchangeByteLlsc'
 
@@ -2206,9 +2266,9 @@ end 'arm64EmitAtomicLse'
 function arm64EmitAtomicHwcapChecked(code ByteArray, rdataRelocs RdataRelocationArray, op Arm64AtomicOp)
 	arm64EmitAdrpAddPair(code, rdataRelocs: rdataRelocs, dest: Arm64AtomicValue, label: LinuxHwcapAtomicsLabel, adrpKind: RdataRelocKind.dataSectionArm64Adrp, pageOffKind: RdataRelocKind.dataSectionArm64PageOff)
 	arm64EmitScaledMem(code, opcode: Arm64OpLdrB, rt: Arm64AtomicValue, baseReg: Arm64AtomicValue, byteOffset: 0, scale: Arm64ByteAccessScale)
-	let toLlsc = arm64EmitLocalCbz(code, reg: Arm64AtomicValue)
+	let toLlsc = arm64EmitLocalInsn(code, insn: Arm64OpCbz or Arm64AtomicValue)
 	arm64EmitAtomicLse(code, op: op)
-	let toDone = arm64EmitLocalBranch(code)
+	let toDone = arm64EmitLocalInsn(code, insn: Arm64OpB)
 	arm64PatchBranch19(code, codeOffset: toLlsc, targetOffset: codeHere(code))
 	arm64EmitAtomicLlsc(code, op: op)
 	arm64PatchBranch26(code, codeOffset: toDone, targetOffset: codeHere(code))
@@ -2260,7 +2320,7 @@ function arm64EmitCounterIncrementLlsc(code ByteArray, addrReg MachineWord)
 	arm64EmitLdaxr(code, rn: addrReg, width: X64AccessWidth.word64)
 	arm64EmitAddSubImm12(code, opcode: Arm64OpAddImm, rd: Arm64AtomicValue, rn: Arm64AtomicValue, imm12: CovCounterStep, shiftHi: false)
 	arm64EmitStlxr(code, rt: Arm64AtomicValue, rn: addrReg, width: X64AccessWidth.word64)
-	arm64PatchBranch19(code, codeOffset: arm64EmitLocalCbnz(code, reg: Arm64AtomicStatus), targetOffset: loopTop as CodeOffset)
+	arm64PatchBranch19(code, codeOffset: arm64EmitLocalInsn(code, insn: Arm64OpCbnz or Arm64AtomicStatus), targetOffset: loopTop as CodeOffset)
 end 'arm64EmitCounterIncrementLlsc'
 
 function arm64EmitCounterIncrementLse(code ByteArray, addrReg MachineWord)
@@ -2611,9 +2671,9 @@ function arm64EmitStackProbe(code ByteArray, frameSize StackSize)
 	let walkStart = code.count()
 	arm64EmitStackAlloc(code, amount: StackProbeStrideBytes)
 	emitArm64Insn(code, insn: Arm64OpCmpSpReg or (Arm64Ip1 shl Arm64RmShift))
-	let toLanding = arm64EmitLocalCondBranch(code, cond: Arm64CondCode.ls)
+	let toLanding = arm64EmitLocalInsn(code, insn: arm64CondBranchInsn(Arm64CondCode.ls))
 	arm64EmitStoreWord64Sp(code, src: Arm64Ip1, byteOffset: 0)
-	arm64PatchBranch26(code, codeOffset: arm64EmitLocalBranch(code), targetOffset: walkStart as CodeOffset)
+	arm64PatchBranch26(code, codeOffset: arm64EmitLocalInsn(code, insn: Arm64OpB), targetOffset: walkStart as CodeOffset)
 
 	arm64PatchBranch19(code, codeOffset: toLanding, targetOffset: codeHere(code))
 	arm64EmitMovToSp(code, src: Arm64Ip1)
@@ -2738,6 +2798,24 @@ end 'arm64EmitStackFree'
 // than re-derived per function; it decides the prologue stack guard and whether every
 // `arm64ImportCall` goes through the system-stack door (`Arm64GtRuntime.DarwinLibcCallName`).
 export function emitArm64FunctionChunk(module TargetModule, func IrFunction, frameBytes StackSize, encoding FunctionEncodingFacts, greenThreads bool, target Target) returns FunctionCodeChunk
+	var relaxation = Arm64BranchRelaxation.create()
+
+	var chunk = encodeArm64FunctionChunk(module, func: func, frameBytes: frameBytes, encoding: encoding, greenThreads: greenThreads, target: target, relaxation: relaxation)
+	var relaxedBefore = 0 as Count
+
+	// Relaxing a branch grows the code, which can push another branch past its reach, so the offsets
+	// hold only after a pass that relaxed nothing new. The set only grows, so the loop ends.
+	while relaxation.count() != relaxedBefore 'relax'
+		relaxedBefore = relaxation.count()
+		chunk = encodeArm64FunctionChunk(module, func: func, frameBytes: frameBytes, encoding: encoding, greenThreads: greenThreads, target: target, relaxation: relaxation)
+	end 'relax'
+
+	return chunk
+end 'emitArm64FunctionChunk'
+
+// Runs once per relaxation pass, so it writes nothing but the chunk it returns and `relaxation`: an
+// effect on `module` here would happen once per pass.
+function encodeArm64FunctionChunk(module TargetModule, func IrFunction, frameBytes StackSize, encoding FunctionEncodingFacts, greenThreads bool, target Target, relaxation Arm64BranchRelaxation) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
 	var rdataRelocs = RdataRelocationArray.create()
@@ -2751,7 +2829,7 @@ export function emitArm64FunctionChunk(module TargetModule, func IrFunction, fra
 	// Chunk-local like the others; concat rebases each into the writer's slot-indexed relocations, the
 	// same channel the entry stub's `_exit` rides. Empty for a function that touches no OS primitive.
 	var iatRelocs = RelocationArray.create()
-	var branchFixups = Arm64BlockBranchFixupArray.create()
+	var branches = Arm64BlockBranches.relaxing(relaxation)
 
 	// Dense-match jump tables encoded in this chunk, awaiting their per-slot block-address relocations —
 	// resolved after the block loop, when `blockOffsets` holds every block's chunk-local offset.
@@ -2800,7 +2878,7 @@ export function emitArm64FunctionChunk(module TargetModule, func IrFunction, fra
 
 			let opStart = code.count()
 			let op = try module.ops.get(opIdx) otherwise panic("emitArm64FunctionChunk: opIdx {opIdx} not in module.ops")
-			emitArm64TargetOp(op, code: code, covOffsets: covOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branchFixups: branchFixups, jumpTables: jumpTables, greenThreads: greenThreads, atomics: atomics)
+			emitArm64TargetOp(op, code: code, covOffsets: covOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branches: branches, jumpTables: jumpTables, greenThreads: greenThreads, atomics: atomics)
 			runOffsets.note(opIdx, codeStart: opStart as CodeOffset, codeEnd: codeHere(code))
 		end 'eachOp'
 
@@ -2811,7 +2889,7 @@ export function emitArm64FunctionChunk(module TargetModule, func IrFunction, fra
 
 			let termStart = code.count()
 			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("emitArm64FunctionChunk: terminator not in module.ops")
-			emitArm64TargetOp(termOp, code: code, covOffsets: covOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branchFixups: branchFixups, jumpTables: jumpTables, greenThreads: greenThreads, atomics: atomics)
+			emitArm64TargetOp(termOp, code: code, covOffsets: covOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branches: branches, jumpTables: jumpTables, greenThreads: greenThreads, atomics: atomics)
 			runOffsets.note(block.terminatorIndex(), codeStart: termStart as CodeOffset, codeEnd: codeHere(code))
 		end 'hasTerm'
 
@@ -2819,7 +2897,7 @@ export function emitArm64FunctionChunk(module TargetModule, func IrFunction, fra
 		inlineRanges.note(block.inlineSite, codeStart: blockStart as CodeOffset, codeEnd: codeHere(code))
 	end 'eachBlock'
 
-	arm64ResolveBlockBranches(code, blockOffsets: blockOffsets, fixups: branchFixups)
+	arm64ResolveRelaxableBlockBranches(code, blockOffsets: blockOffsets, branches: branches)
 
 	// `funcAdrpRelocs` is assigned after the fact so `createWith`'s signature — shared with the x64
 	// runtimes — stays unchanged (only arm64 chunks carry any).
@@ -2848,7 +2926,7 @@ export function emitArm64FunctionChunk(module TargetModule, func IrFunction, fra
 	end 'debugInfo'
 
 	return chunk
-end 'emitArm64FunctionChunk'
+end 'encodeArm64FunctionChunk'
 
 // Append the entry stub `mrt_start`, to the STILL-EMPTY chunk list so it LEADS `.text` and
 // `LC_MAIN.entryoff = 0` — the opposite placement from x64's
