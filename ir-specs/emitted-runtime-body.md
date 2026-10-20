@@ -47102,7 +47102,7 @@ func @__mbox_close {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 136
+    x64.prologue 120
     x64.leaRegRegImm32 rdx, rcx, 96
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -47126,8 +47126,8 @@ func @__mbox_close {
     x64.movRegImm32 rax, 1
     x64.xchg8 [rdx], rax <- rax
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_slow#43
-  __rl_cont#42:
+    x64.jcc notEqual, __rl_slow#44
+  __rl_cont#43:
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [rcx + 40], rax
     x64.leaRegRegImm32 rsi, rcx, -416
@@ -47173,8 +47173,8 @@ func @__mbox_close {
     x64.movRegImm32 rax, 0
     x64.xchg8 [rdx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __rl_slow#47
-  __rl_cont#46:
+    x64.jcc notEqual, __rl_slow#48
+  __rl_cont#47:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -47203,8 +47203,8 @@ func @__mbox_close {
     x64.movRegImm32 rax, 0
     x64.xchg8 [rdx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __rl_slow#45
-  __rl_cont#44:
+    x64.jcc notEqual, __rl_slow#46
+  __rl_cont#45:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -47250,20 +47250,20 @@ func @__mbox_close {
     x64.callDirect __sched_runq_put
     x64.callDirect __sched_wake_or_spawn
   mboxwoken:
-    x64.movRegReg rax, r12
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, rbx
   closereadyloop:
-    x64.storeSlotReg slot4, rax
-    x64.storeSlotReg slot3, rcx
-    x64.cmpRegImm32 rax, 0
+    x64.storeSlotReg slot4, rcx
+    x64.storeSlotReg slot3, rax
+    x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, closereadyone
   closesettled:
-    x64.cmpRegImm32 rcx, 0
+    x64.cmpRegImm32 rax, 0
     x64.jcc equal, closefinished
   closepaywake:
     x64.callDirect __sched_wake_or_spawn
   closefinished:
-    x64.epilogue 136
+    x64.epilogue 120
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -47272,11 +47272,19 @@ func @__mbox_close {
     x64.popReg rbp
     x64.ret
   closereadyone:
-    x64.loadRegBaseDisp.word64 rcx, [rax + 496]
-    x64.storeSlotReg slot0, rcx
-    x64.movRegImm32 rcx, 0
-    x64.storeBaseDispReg.word64 [rax + 496], rcx
-    x64.leaRegGlobal rcx, __sched_lock
+    x64.loadRegBaseDisp.word64 rax, [rcx + 496]
+    x64.storeSlotReg slot0, rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [rcx + 496], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 512]
+    x64.movRegImm rdx, 9223372036853775807
+    x64.cmpRegReg rax, rdx
+    x64.jcc notEqual, sendwakedisarm
+  sendwakereadyfree:
+    x64.callDirect __gt_ready_locked
+    x64.jmp closereadied
+  sendwakedisarm:
+    x64.leaRegGlobal rax, __sched_lock
     x64.leaRegGlobal rdx, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
     x64.leaRegGlobal rsi, __sched_tls_teb_offset
@@ -47299,25 +47307,20 @@ func @__mbox_close {
     x64.movRegImm32 rdx, 48
     x64.mov rdx, gs:[rdx]
     x64.movRegImm32 rsi, 1
-    x64.xchg8 [rcx], rsi <- rsi
+    x64.xchg8 [rax], rsi <- rsi
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __rl_slow#50
+    x64.jcc notEqual, __rl_slow#51
   __rl_owned:
-    x64.storeBaseDispReg.word64 [rcx + 8], rdx
-  __rl_cont#48:
-    x64.loadRegBaseDisp.word64 rcx, [rax + 512]
-    x64.movRegImm rdx, 9223372036853775807
-    x64.cmpRegReg rcx, rdx
-    x64.jcc equal, sendwakeready
-  sendwakedisarm:
-    x64.leaRegGlobal rcx, __gt_timer_count
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.storeBaseDispReg.word64 [rax + 8], rdx
+  __rl_cont#49:
+    x64.leaRegGlobal rax, __gt_timer_count
+    x64.loadRegBaseDisp.word64 rdx, [rax + 0]
     x64.leaRegGlobal rsi, __gt_timer_heap_base
     x64.loadRegBaseDisp.word64 rsi, [rsi + 0]
     x64.movRegImm32 rdi, 0
   tmscanhdr:
     x64.cmpRegReg rdi, rdx
-    x64.jcc greaterEqual, sendwakeready
+    x64.jcc greaterEqual, sendwakereadylocked
   tmscanbody:
     x64.leaRegGlobal r8, __sched_timer_scan_steps
     x64.aluBaseDispImm32.add [r8 + 0], 1
@@ -47325,7 +47328,7 @@ func @__mbox_close {
     x64.leaRegRegReg r8, rsi, r8
     x64.loadRegBaseDisp.word64 r9, [r8 + 8]
     x64.loadRegBaseDisp.word64 r10, [r8 + 24]
-    x64.cmpRegReg r9, rax
+    x64.cmpRegReg r9, rcx
     x64.setccReg equal, r9
     x64.cmpRegImm32 r10, 3
     x64.setccReg equal, r10
@@ -47333,13 +47336,13 @@ func @__mbox_close {
     x64.cmpRegImm32 r9, 0
     x64.jcc equal, tmadvance
   tmremoveat:
-    x64.leaRegRegImm32 rax, rdx, -1
-    x64.storeSlotReg slot6, rax
-    x64.storeBaseDispReg.word64 [rcx + 0], rax
-    x64.cmpRegReg rdi, rax
+    x64.leaRegRegImm32 rcx, rdx, -1
+    x64.storeSlotReg slot6, rcx
+    x64.storeBaseDispReg.word64 [rax + 0], rcx
+    x64.cmpRegReg rdi, rcx
     x64.jcc greaterEqual, tmrepublish
   tmfillhole:
-    x64.imulRegRegImm32 rax, rax, 32
+    x64.imulRegRegImm32 rax, rcx, 32
     x64.leaRegRegReg rax, rsi, rax
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.loadRegBaseDisp.word64 rdx, [rax + 8]
@@ -47490,12 +47493,12 @@ func @__mbox_close {
     x64.movRegImm rax, 9223372036854775807
     x64.leaRegGlobal rcx, __gt_timer_when
     x64.storeBaseDispReg.word64 [rcx + 0], rax
-    x64.jmp sendwakeready
+    x64.jmp sendwakereadylocked
   timerwhenroot:
     x64.loadRegBaseDisp.word64 rax, [rsi + 0]
     x64.leaRegGlobal rcx, __gt_timer_when
     x64.storeBaseDispReg.word64 [rcx + 0], rax
-  sendwakeready:
+  sendwakereadylocked:
     x64.loadRegSlot rcx, slot4
     x64.callDirect __gt_ready_locked
     x64.leaRegGlobal rcx, __sched_lock
@@ -47508,12 +47511,12 @@ func @__mbox_close {
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#51
-    x64.jmp __rl_slow#54
+    x64.jcc equal, __rl_cont#52
+    x64.jmp __rl_slow#55
   __rl_nested:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rax
-  __rl_cont#51:
+  __rl_cont#52:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -47537,12 +47540,11 @@ func @__mbox_close {
     x64.loadRegSlot rax, slot3
     x64.orRegReg rax, rax, r8
     x64.loadRegSlot rcx, slot0
-    x64.xchgRegReg rax, rcx
     x64.jmp closereadyloop
   tmadvance:
     x64.leaRegRegImm32 rdi, rdi, 1
     x64.jmp tmscanhdr
-  __rl_slow#43:
+  __rl_slow#44:
     x64.storeSlotReg slot7, rcx
     x64.storeSlotReg slot8, rdx
     x64.movRegReg rcx, rdx
@@ -47550,31 +47552,32 @@ func @__mbox_close {
     x64.callDirect __rtlock_acquire
     x64.loadRegSlot rcx, slot7
     x64.loadRegSlot rdx, slot8
-    x64.jmp __rl_cont#42
-  __rl_slow#47:
+    x64.jmp __rl_cont#43
+  __rl_slow#48:
     x64.movRegReg rcx, rdx
     x64.movRegReg rdx, rax
     x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#46
-  __rl_slow#45:
+    x64.jmp __rl_cont#47
+  __rl_slow#46:
     x64.storeSlotReg slot9, rsi
     x64.movRegReg rcx, rdx
     x64.movRegReg rdx, rax
     x64.callDirect __rtlock_release
     x64.loadRegSlot rsi, slot9
-    x64.jmp __rl_cont#44
-  __rl_slow#50:
-    x64.storeSlotReg slot10, rax
+    x64.jmp __rl_cont#45
+  __rl_slow#51:
+    x64.storeSlotReg slot7, rcx
+    x64.movRegReg rcx, rax
     x64.movRegReg rdx, rsi
     x64.callDirect __rtlock_enter_slow
-    x64.loadRegSlot rax, slot10
-    x64.jmp __rl_cont#48
-  __rl_slow#54:
-    x64.storeSlotReg slot11, r8
+    x64.loadRegSlot rcx, slot7
+    x64.jmp __rl_cont#49
+  __rl_slow#55:
+    x64.storeSlotReg slot10, r8
     x64.callDirect __rtlock_release
     x64.movRegReg rax, r8
-    x64.loadRegSlot r8, slot11
-    x64.jmp __rl_cont#51
+    x64.loadRegSlot r8, slot10
+    x64.jmp __rl_cont#52
 }
 ```
 ```TargetIr:x64-linux
@@ -47818,7 +47821,7 @@ func @__mbox_close {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 136
+    x64.prologue 120
     x64.leaRegRegImm32 rdx, rcx, 96
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -47842,8 +47845,8 @@ func @__mbox_close {
     x64.movRegImm32 rax, 1
     x64.xchg8 [rdx], rax <- rax
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_slow#43
-  __rl_cont#42:
+    x64.jcc notEqual, __rl_slow#44
+  __rl_cont#43:
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [rcx + 40], rax
     x64.leaRegRegImm32 rsi, rcx, -416
@@ -47889,8 +47892,8 @@ func @__mbox_close {
     x64.movRegImm32 rax, 0
     x64.xchg8 [rdx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __rl_slow#47
-  __rl_cont#46:
+    x64.jcc notEqual, __rl_slow#48
+  __rl_cont#47:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -47919,8 +47922,8 @@ func @__mbox_close {
     x64.movRegImm32 rax, 0
     x64.xchg8 [rdx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __rl_slow#45
-  __rl_cont#44:
+    x64.jcc notEqual, __rl_slow#46
+  __rl_cont#45:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -47966,20 +47969,20 @@ func @__mbox_close {
     x64.callDirect __sched_runq_put
     x64.callDirect __sched_wake_or_spawn
   mboxwoken:
-    x64.movRegReg rax, r12
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, rbx
   closereadyloop:
-    x64.storeSlotReg slot4, rax
-    x64.storeSlotReg slot3, rcx
-    x64.cmpRegImm32 rax, 0
+    x64.storeSlotReg slot4, rcx
+    x64.storeSlotReg slot3, rax
+    x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, closereadyone
   closesettled:
-    x64.cmpRegImm32 rcx, 0
+    x64.cmpRegImm32 rax, 0
     x64.jcc equal, closefinished
   closepaywake:
     x64.callDirect __sched_wake_or_spawn
   closefinished:
-    x64.epilogue 136
+    x64.epilogue 120
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -47988,11 +47991,19 @@ func @__mbox_close {
     x64.popReg rbp
     x64.ret
   closereadyone:
-    x64.loadRegBaseDisp.word64 rcx, [rax + 496]
-    x64.storeSlotReg slot0, rcx
-    x64.movRegImm32 rcx, 0
-    x64.storeBaseDispReg.word64 [rax + 496], rcx
-    x64.leaRegGlobal rcx, __sched_lock
+    x64.loadRegBaseDisp.word64 rax, [rcx + 496]
+    x64.storeSlotReg slot0, rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [rcx + 496], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 512]
+    x64.movRegImm rdx, 9223372036853775807
+    x64.cmpRegReg rax, rdx
+    x64.jcc notEqual, sendwakedisarm
+  sendwakereadyfree:
+    x64.callDirect __gt_ready_locked
+    x64.jmp closereadied
+  sendwakedisarm:
+    x64.leaRegGlobal rax, __sched_lock
     x64.leaRegGlobal rdx, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
     x64.leaRegGlobal rsi, __sched_tls_teb_offset
@@ -48015,25 +48026,20 @@ func @__mbox_close {
     x64.movRegImm32 rdx, 4088
     x64.mov rdx, gs:[rdx]
     x64.movRegImm32 rsi, 1
-    x64.xchg8 [rcx], rsi <- rsi
+    x64.xchg8 [rax], rsi <- rsi
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __rl_slow#50
+    x64.jcc notEqual, __rl_slow#51
   __rl_owned:
-    x64.storeBaseDispReg.word64 [rcx + 8], rdx
-  __rl_cont#48:
-    x64.loadRegBaseDisp.word64 rcx, [rax + 512]
-    x64.movRegImm rdx, 9223372036853775807
-    x64.cmpRegReg rcx, rdx
-    x64.jcc equal, sendwakeready
-  sendwakedisarm:
-    x64.leaRegGlobal rcx, __gt_timer_count
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.storeBaseDispReg.word64 [rax + 8], rdx
+  __rl_cont#49:
+    x64.leaRegGlobal rax, __gt_timer_count
+    x64.loadRegBaseDisp.word64 rdx, [rax + 0]
     x64.leaRegGlobal rsi, __gt_timer_heap_base
     x64.loadRegBaseDisp.word64 rsi, [rsi + 0]
     x64.movRegImm32 rdi, 0
   tmscanhdr:
     x64.cmpRegReg rdi, rdx
-    x64.jcc greaterEqual, sendwakeready
+    x64.jcc greaterEqual, sendwakereadylocked
   tmscanbody:
     x64.leaRegGlobal r8, __sched_timer_scan_steps
     x64.aluBaseDispImm32.add [r8 + 0], 1
@@ -48041,7 +48047,7 @@ func @__mbox_close {
     x64.leaRegRegReg r8, rsi, r8
     x64.loadRegBaseDisp.word64 r9, [r8 + 8]
     x64.loadRegBaseDisp.word64 r10, [r8 + 24]
-    x64.cmpRegReg r9, rax
+    x64.cmpRegReg r9, rcx
     x64.setccReg equal, r9
     x64.cmpRegImm32 r10, 3
     x64.setccReg equal, r10
@@ -48049,13 +48055,13 @@ func @__mbox_close {
     x64.cmpRegImm32 r9, 0
     x64.jcc equal, tmadvance
   tmremoveat:
-    x64.leaRegRegImm32 rax, rdx, -1
-    x64.storeSlotReg slot6, rax
-    x64.storeBaseDispReg.word64 [rcx + 0], rax
-    x64.cmpRegReg rdi, rax
+    x64.leaRegRegImm32 rcx, rdx, -1
+    x64.storeSlotReg slot6, rcx
+    x64.storeBaseDispReg.word64 [rax + 0], rcx
+    x64.cmpRegReg rdi, rcx
     x64.jcc greaterEqual, tmrepublish
   tmfillhole:
-    x64.imulRegRegImm32 rax, rax, 32
+    x64.imulRegRegImm32 rax, rcx, 32
     x64.leaRegRegReg rax, rsi, rax
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.loadRegBaseDisp.word64 rdx, [rax + 8]
@@ -48206,12 +48212,12 @@ func @__mbox_close {
     x64.movRegImm rax, 9223372036854775807
     x64.leaRegGlobal rcx, __gt_timer_when
     x64.storeBaseDispReg.word64 [rcx + 0], rax
-    x64.jmp sendwakeready
+    x64.jmp sendwakereadylocked
   timerwhenroot:
     x64.loadRegBaseDisp.word64 rax, [rsi + 0]
     x64.leaRegGlobal rcx, __gt_timer_when
     x64.storeBaseDispReg.word64 [rcx + 0], rax
-  sendwakeready:
+  sendwakereadylocked:
     x64.loadRegSlot rcx, slot4
     x64.callDirect __gt_ready_locked
     x64.leaRegGlobal rcx, __sched_lock
@@ -48224,12 +48230,12 @@ func @__mbox_close {
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#51
-    x64.jmp __rl_slow#54
+    x64.jcc equal, __rl_cont#52
+    x64.jmp __rl_slow#55
   __rl_nested:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [rcx + 16], rax
-  __rl_cont#51:
+  __rl_cont#52:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -48253,12 +48259,11 @@ func @__mbox_close {
     x64.loadRegSlot rax, slot3
     x64.orRegReg rax, rax, r8
     x64.loadRegSlot rcx, slot0
-    x64.xchgRegReg rax, rcx
     x64.jmp closereadyloop
   tmadvance:
     x64.leaRegRegImm32 rdi, rdi, 1
     x64.jmp tmscanhdr
-  __rl_slow#43:
+  __rl_slow#44:
     x64.storeSlotReg slot7, rcx
     x64.storeSlotReg slot8, rdx
     x64.movRegReg rcx, rdx
@@ -48266,31 +48271,32 @@ func @__mbox_close {
     x64.callDirect __rtlock_acquire
     x64.loadRegSlot rcx, slot7
     x64.loadRegSlot rdx, slot8
-    x64.jmp __rl_cont#42
-  __rl_slow#47:
+    x64.jmp __rl_cont#43
+  __rl_slow#48:
     x64.movRegReg rcx, rdx
     x64.movRegReg rdx, rax
     x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#46
-  __rl_slow#45:
+    x64.jmp __rl_cont#47
+  __rl_slow#46:
     x64.storeSlotReg slot9, rsi
     x64.movRegReg rcx, rdx
     x64.movRegReg rdx, rax
     x64.callDirect __rtlock_release
     x64.loadRegSlot rsi, slot9
-    x64.jmp __rl_cont#44
-  __rl_slow#50:
-    x64.storeSlotReg slot10, rax
+    x64.jmp __rl_cont#45
+  __rl_slow#51:
+    x64.storeSlotReg slot7, rcx
+    x64.movRegReg rcx, rax
     x64.movRegReg rdx, rsi
     x64.callDirect __rtlock_enter_slow
-    x64.loadRegSlot rax, slot10
-    x64.jmp __rl_cont#48
-  __rl_slow#54:
-    x64.storeSlotReg slot11, r8
+    x64.loadRegSlot rcx, slot7
+    x64.jmp __rl_cont#49
+  __rl_slow#55:
+    x64.storeSlotReg slot10, r8
     x64.callDirect __rtlock_release
     x64.movRegReg rax, r8
-    x64.loadRegSlot r8, slot11
-    x64.jmp __rl_cont#51
+    x64.loadRegSlot r8, slot10
+    x64.jmp __rl_cont#52
 }
 ```
 ```TargetIr:arm64-macos
@@ -48556,8 +48562,8 @@ func @__mbox_close {
     arm64.movImm x2, 1
     arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
     arm64.cmp x2, 0
-    arm64.b.ne __rl_slow#43
-  __rl_cont#42:
+    arm64.b.ne __rl_slow#44
+  __rl_cont#43:
     arm64.movImm x2, 1
     arm64.storeBaseDispReg.word64 [x0 + 40], x2
     arm64.add x2, x0, -416
@@ -48602,8 +48608,8 @@ func @__mbox_close {
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x1], x0
     arm64.cmp x2, 1
-    arm64.b.ne __rl_slow#47
-  __rl_cont#46:
+    arm64.b.ne __rl_slow#48
+  __rl_cont#47:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -48639,8 +48645,8 @@ func @__mbox_close {
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x3, [x1], x0
     arm64.cmp x3, 1
-    arm64.b.ne __rl_slow#45
-  __rl_cont#44:
+    arm64.b.ne __rl_slow#46
+  __rl_cont#45:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -48712,6 +48718,14 @@ func @__mbox_close {
     arm64.loadRegBaseDisp.word64 x20, [x0 + 496]
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 496], x1
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 512]
+    arm64.movImm x2, 9223372036853775807
+    arm64.cmp x1, x2
+    arm64.b.ne sendwakedisarm
+  sendwakereadyfree:
+    arm64.bl __gt_ready_locked
+    arm64.b closereadied
+  sendwakedisarm:
     arm64.leaGlobal x1, __sched_lock
     arm64.leaGlobal x2, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
@@ -48743,15 +48757,10 @@ func @__mbox_close {
     arm64.movImm x3, 1
     arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
     arm64.cmp x3, 0
-    arm64.b.ne __rl_slow#50
+    arm64.b.ne __rl_slow#51
   __rl_owned:
     arm64.storeBaseDispReg.word64 [x1 + 8], x2
-  __rl_cont#48:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 512]
-    arm64.movImm x2, 9223372036853775807
-    arm64.cmp x1, x2
-    arm64.b.eq sendwakeready
-  sendwakedisarm:
+  __rl_cont#49:
     arm64.leaGlobal x1, __gt_timer_count
     arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
     arm64.leaGlobal x3, __gt_timer_heap_base
@@ -48759,7 +48768,7 @@ func @__mbox_close {
     arm64.movImm x4, 0
   tmscanhdr:
     arm64.cmp x4, x2
-    arm64.b.ge sendwakeready
+    arm64.b.ge sendwakereadylocked
   tmscanbody:
     arm64.leaGlobal x5, __sched_timer_scan_steps
     arm64.loadRegBaseDisp.word64 x6, [x5 + 0]
@@ -48921,12 +48930,12 @@ func @__mbox_close {
     arm64.movImm x1, 9223372036854775807
     arm64.leaGlobal x2, __gt_timer_when
     arm64.stlr.word64 [x2], x1
-    arm64.b sendwakeready
+    arm64.b sendwakereadylocked
   timerwhenroot:
     arm64.loadRegBaseDisp.word64 x1, [x3 + 0]
     arm64.leaGlobal x2, __gt_timer_when
     arm64.stlr.word64 [x2], x1
-  sendwakeready:
+  sendwakereadylocked:
     arm64.bl __gt_ready_locked
     arm64.leaGlobal x1, __sched_lock
     arm64.loadRegBaseDisp.word64 x2, [x1 + 16]
@@ -48938,12 +48947,12 @@ func @__mbox_close {
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
     arm64.cmp x2, 1
-    arm64.b.eq __rl_cont#51
-    arm64.b __rl_slow#54
+    arm64.b.eq __rl_cont#52
+    arm64.b __rl_slow#55
   __rl_nested:
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x1 + 16], x2
-  __rl_cont#51:
+  __rl_cont#52:
     arm64.leaGlobal x1, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.leaGlobal x2, __sched_tls_teb_offset
@@ -48977,7 +48986,7 @@ func @__mbox_close {
   tmadvance:
     arm64.add x4, x4, 1
     arm64.b tmscanhdr
-  __rl_slow#43:
+  __rl_slow#44:
     arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot1, x1
     arm64.movRegReg x0, x1
@@ -48986,35 +48995,35 @@ func @__mbox_close {
     arm64.movRegReg x2, x0
     arm64.loadRegSlot x0, slot0
     arm64.loadRegSlot x1, slot1
-    arm64.b __rl_cont#42
-  __rl_slow#47:
+    arm64.b __rl_cont#43
+  __rl_slow#48:
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_release
-    arm64.b __rl_cont#46
-  __rl_slow#45:
+    arm64.b __rl_cont#47
+  __rl_slow#46:
     arm64.storeSlotReg slot2, x2
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x3
     arm64.bl __rtlock_release
     arm64.loadRegSlot x2, slot2
-    arm64.b __rl_cont#44
-  __rl_slow#50:
+    arm64.b __rl_cont#45
+  __rl_slow#51:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x3
     arm64.bl __rtlock_enter_slow
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.b __rl_cont#48
-  __rl_slow#54:
+    arm64.b __rl_cont#49
+  __rl_slow#55:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_release
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.b __rl_cont#51
+    arm64.b __rl_cont#52
 }
 ```
 ```TargetIr:arm64-linux
@@ -49284,8 +49293,8 @@ func @__mbox_close {
     arm64.movImm x2, 1
     arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
     arm64.cmp x2, 0
-    arm64.b.ne __rl_slow#43
-  __rl_cont#42:
+    arm64.b.ne __rl_slow#44
+  __rl_cont#43:
     arm64.movImm x2, 1
     arm64.storeBaseDispReg.word64 [x0 + 40], x2
     arm64.add x2, x0, -416
@@ -49330,8 +49339,8 @@ func @__mbox_close {
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x1], x0
     arm64.cmp x2, 1
-    arm64.b.ne __rl_slow#47
-  __rl_cont#46:
+    arm64.b.ne __rl_slow#48
+  __rl_cont#47:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -49367,8 +49376,8 @@ func @__mbox_close {
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x3, [x1], x0
     arm64.cmp x3, 1
-    arm64.b.ne __rl_slow#45
-  __rl_cont#44:
+    arm64.b.ne __rl_slow#46
+  __rl_cont#45:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -49440,6 +49449,14 @@ func @__mbox_close {
     arm64.loadRegBaseDisp.word64 x20, [x0 + 496]
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 496], x1
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 512]
+    arm64.movImm x2, 9223372036853775807
+    arm64.cmp x1, x2
+    arm64.b.ne sendwakedisarm
+  sendwakereadyfree:
+    arm64.bl __gt_ready_locked
+    arm64.b closereadied
+  sendwakedisarm:
     arm64.leaGlobal x1, __sched_lock
     arm64.leaGlobal x2, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
@@ -49471,15 +49488,10 @@ func @__mbox_close {
     arm64.movImm x3, 1
     arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
     arm64.cmp x3, 0
-    arm64.b.ne __rl_slow#50
+    arm64.b.ne __rl_slow#51
   __rl_owned:
     arm64.storeBaseDispReg.word64 [x1 + 8], x2
-  __rl_cont#48:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 512]
-    arm64.movImm x2, 9223372036853775807
-    arm64.cmp x1, x2
-    arm64.b.eq sendwakeready
-  sendwakedisarm:
+  __rl_cont#49:
     arm64.leaGlobal x1, __gt_timer_count
     arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
     arm64.leaGlobal x3, __gt_timer_heap_base
@@ -49487,7 +49499,7 @@ func @__mbox_close {
     arm64.movImm x4, 0
   tmscanhdr:
     arm64.cmp x4, x2
-    arm64.b.ge sendwakeready
+    arm64.b.ge sendwakereadylocked
   tmscanbody:
     arm64.leaGlobal x5, __sched_timer_scan_steps
     arm64.loadRegBaseDisp.word64 x6, [x5 + 0]
@@ -49649,12 +49661,12 @@ func @__mbox_close {
     arm64.movImm x1, 9223372036854775807
     arm64.leaGlobal x2, __gt_timer_when
     arm64.stlr.word64 [x2], x1
-    arm64.b sendwakeready
+    arm64.b sendwakereadylocked
   timerwhenroot:
     arm64.loadRegBaseDisp.word64 x1, [x3 + 0]
     arm64.leaGlobal x2, __gt_timer_when
     arm64.stlr.word64 [x2], x1
-  sendwakeready:
+  sendwakereadylocked:
     arm64.bl __gt_ready_locked
     arm64.leaGlobal x1, __sched_lock
     arm64.loadRegBaseDisp.word64 x2, [x1 + 16]
@@ -49666,12 +49678,12 @@ func @__mbox_close {
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
     arm64.cmp x2, 1
-    arm64.b.eq __rl_cont#51
-    arm64.b __rl_slow#54
+    arm64.b.eq __rl_cont#52
+    arm64.b __rl_slow#55
   __rl_nested:
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x1 + 16], x2
-  __rl_cont#51:
+  __rl_cont#52:
     arm64.leaGlobal x1, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.leaGlobal x2, __sched_tls_teb_offset
@@ -49705,7 +49717,7 @@ func @__mbox_close {
   tmadvance:
     arm64.add x4, x4, 1
     arm64.b tmscanhdr
-  __rl_slow#43:
+  __rl_slow#44:
     arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot1, x1
     arm64.movRegReg x0, x1
@@ -49714,35 +49726,35 @@ func @__mbox_close {
     arm64.movRegReg x2, x0
     arm64.loadRegSlot x0, slot0
     arm64.loadRegSlot x1, slot1
-    arm64.b __rl_cont#42
-  __rl_slow#47:
+    arm64.b __rl_cont#43
+  __rl_slow#48:
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_release
-    arm64.b __rl_cont#46
-  __rl_slow#45:
+    arm64.b __rl_cont#47
+  __rl_slow#46:
     arm64.storeSlotReg slot2, x2
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x3
     arm64.bl __rtlock_release
     arm64.loadRegSlot x2, slot2
-    arm64.b __rl_cont#44
-  __rl_slow#50:
+    arm64.b __rl_cont#45
+  __rl_slow#51:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x3
     arm64.bl __rtlock_enter_slow
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.b __rl_cont#48
-  __rl_slow#54:
+    arm64.b __rl_cont#49
+  __rl_slow#55:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_release
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.b __rl_cont#51
+    arm64.b __rl_cont#52
 }
 ```
 

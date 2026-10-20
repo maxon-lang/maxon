@@ -492,21 +492,27 @@ function emitMboxClaimFrontSender(module StdModule, func IrFunction, scan IrBloc
 	return front
 end 'emitMboxClaimFrontSender'
 
-// The `TimerTagSend` entry goes before the ready, in the same `__sched_lock` hold: a readied sender
-// may park again at once, and a stale entry would claim that park `timedOut`.
+// A finite deadline's `TimerTagSend` entry goes before the ready, in the same `__sched_lock` hold:
+// a readied sender may park again at once, and a stale entry would claim that park `timedOut`. The
+// unbounded arm takes no lock because `emitMboxSendParkCommit` arms no entry for `GtDeadlineMaxNs`;
+// the two tests must stay on the same word.
 function emitMboxReadyClaimedSender(module StdModule, func IrFunction, cur IrBlock, sender ValueId, cont IrBlock, ids ValueMinter)
 	var disarm = module.addBlock(func, label: b"sendwakedisarm", heat: BlockHeat.normal)
-	var ready = module.addBlock(func, label: b"sendwakeready", heat: BlockHeat.normal)
+	var readyLocked = module.addBlock(func, label: b"sendwakereadylocked", heat: BlockHeat.normal)
+	var readyFree = module.addBlock(func, label: b"sendwakereadyfree", heat: BlockHeat.normal)
 
-	emitSchedLockEnter(module, block: cur, ids: ids)
 	let deadline = emitLoadField(module, block: cur, record: sender, offset: GtOffSendDeadline, ids: ids)
-	emitBranchOnCompare(module, block: cur, value: deadline, pred: StdCmpPred.eq, against: GtDeadlineMaxNs, whenTrue: ready, whenFalse: disarm, ids: ids)
+	emitBranchOnCompare(module, block: cur, value: deadline, pred: StdCmpPred.eq, against: GtDeadlineMaxNs, whenTrue: readyFree, whenFalse: disarm, ids: ids)
 
-	emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: disarm, gt: sender, tag: emitConst(module, block: disarm, value: TimerTagSend, ids: ids), found: ready, missing: ready)
+	emitSchedLockEnter(module, block: disarm, ids: ids)
+	emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: disarm, gt: sender, tag: emitConst(module, block: disarm, value: TimerTagSend, ids: ids), found: readyLocked, missing: readyLocked)
 
-	let debt = emitGtReady(module, block: ready, gt: sender, gate: GtReadyGate.fromWaiting, ids: ids)
-	emitSchedLockLeave(module, block: ready, ids: ids)
-	emitBranchCarrying(module, from: ready, to: cont, value: debt)
+	let lockedDebt = emitGtReady(module, block: readyLocked, gt: sender, gate: GtReadyGate.fromWaiting, ids: ids)
+	emitSchedLockLeave(module, block: readyLocked, ids: ids)
+	emitBranchCarrying(module, from: readyLocked, to: cont, value: lockedDebt)
+
+	let freeDebt = emitGtReady(module, block: readyFree, gt: sender, gate: GtReadyGate.fromWaiting, ids: ids)
+	emitBranchCarrying(module, from: readyFree, to: cont, value: freeDebt)
 end 'emitMboxReadyClaimedSender'
 
 function emitMboxHandOffClaimedSender(module StdModule, func IrFunction, cur IrBlock, mbox ValueId, sender ValueId, cont IrBlock, ids ValueMinter)

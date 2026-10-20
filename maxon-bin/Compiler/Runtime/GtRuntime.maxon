@@ -1255,8 +1255,9 @@ export let GtReadyName = b"__gt_ready"
 // coroutine. It answers `WakeDebtOwed` exactly when it published a token: a caller holding a lock
 // then owes `__sched_wake_or_spawn` AFTER its release (`SchedRuntime.emitSchedWakeIfOwed`), because
 // a wake inside a critical section has no StoreLoad fence and a nested leave of a recursive lock
-// releases nothing. A mailbox-parked service comes here only when its strand is held, and is
-// otherwise readied with no lock (`emitGtReadyParkedService`).
+// releases nothing. Despite its name, it requires no lock of its caller. A mailbox-parked service
+// comes here only when its strand is held, and is otherwise readied with no lock
+// (`emitGtReadyParkedService`).
 //
 // EXPORTED for its callers in `MailboxRuntime` and for the root that keeps it alive for the hand-assembled
 // chunks that name it (`DeadFunctionElimination.seedRoots`).
@@ -2744,9 +2745,8 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 end 'installGtRuntime'
 
 // ⚠ **THE RUN-QUEUE LOCK IS UNCONDITIONAL**: every green-thread program has a second cross-thread mutator (a
-// worker M) as soon as `MAXON_MAX_PROCS` allows one. The queue primitives (`__gt_enqueue`, `__gt_dequeue`,
-// `__gt_ready_locked`) take no lock of their own; the CALLER holds it, so a readiness walk can call them
-// inside its own critical section.
+// worker M) as soon as `MAXON_MAX_PROCS` allows one. `__gt_enqueue` and `__gt_dequeue` take no lock of
+// their own; the CALLER holds it, so a readiness walk can call them inside its own critical section.
 
 // `__gt_init()` — scheduler bring-up, called once by `__gt_run_main` on the main machine's scheduler context
 // before `main`'s green thread exists. Every later scheduler call can therefore take the P/M structure, the
