@@ -307,6 +307,12 @@ nothing to run it releases its processor, so the count settles back at every pro
 bounded budget rather than sampled once: a worker that has just finished a handler is still searching for a
 moment before it parks, and a single read taken in that moment would report a machine that is about to be idle
 as busy.
+
+⭐ **THE WAIT IS A POLL, NOT A SLEEP.** The machine that runs a thread a timer woke first hands its search on,
+as Go's `resetspinning` does, and that starts one spinning machine, which holds a processor until it has
+searched and parked. A loop of `sleep` then a read therefore reads inside that window every turn, however long the
+workers have been idle (`sleep-wake-leaves-no-processor-held` pins that the processor does come back). The
+main thread polls without parking, so nothing it does starts a machine.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias ShareHandleArray = Array with Share.handle
@@ -314,7 +320,7 @@ typealias ReplyPromise = Promise with Integer
 typealias ReplyPromiseArray = Array with ReplyPromise
 
 let shares = 4
-let settleTurns = 3000
+let settleMs = 3000
 
 type Share
 	var id as Integer
@@ -356,18 +362,55 @@ function main() returns ExitCode
 		n = n + 1
 	end 'collect'
 	let everyButMain = (Scheduler.processorCount() as Integer) - 1
-	var turn = 0 as Integer
-	while turn < settleTurns and (Scheduler.counters().idleProcessors as Integer) != everyButMain 'settle'
-		sleep(1)
-		turn = turn + 1
+	let settleStart = Clock.nowMs()
+	var settled = false
+	while not settled and (Clock.elapsedMs(settleStart) as Integer) < settleMs 'settle'
+		settled = (Scheduler.counters().idleProcessors as Integer) == everyButMain
 	end 'settle'
-	let settled = (Scheduler.counters().idleProcessors as Integer) == everyButMain
 	print("total={total} settled={settled}\n")
 	return 0
 end 'main'
 ```
 ```stdout
 total=2400012 settled=true
+```
+```exitcode
+0
+```
+
+<!-- test: sched-processor.sleep-wake-leaves-no-processor-held -->
+<!-- procs: 4 -->
+**A TIMER WAKE HOLDS NO PROCESSOR FOR LONG.** The main thread parks on a timer, is readied by the poller, and
+runs again. The machine its wake starts searches and parks within a moment, so polling the count without
+parking again reads every processor but the main thread's idle. Of the two sleeps, the first wake creates that
+machine and the second wakes it off the idle list. A processor either one took and never gave back would leave
+the count short for as long as the poll runs.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+let settleMs = 3000
+let parkMs = 10
+
+function settledAfterSleep(everyButMain Integer) returns bool
+	sleep(parkMs)
+	let settleStart = Clock.nowMs()
+	var settled = false
+	while not settled and (Clock.elapsedMs(settleStart) as Integer) < settleMs 'settle'
+		settled = (Scheduler.counters().idleProcessors as Integer) == everyButMain
+	end 'settle'
+	return settled
+end 'settledAfterSleep'
+
+function main() returns ExitCode
+	let everyButMain = (Scheduler.processorCount() as Integer) - 1
+	let first = settledAfterSleep(everyButMain)
+	let second = settledAfterSleep(everyButMain)
+	print("first={first} second={second}\n")
+	return 0
+end 'main'
+```
+```stdout
+first=true second=true
 ```
 ```exitcode
 0
