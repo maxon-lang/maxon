@@ -255,26 +255,17 @@ function deferredLibraryPaths(project Project, partition ProgramPartition) retur
 	var library = MaxonSourcePathArray.create()
 	library.append(partition.runtimePaths)
 	library.append(partition.stdlibPaths)
-	let scratch = ProgramSignatures.create(project.target.os)
 
 	for path in library 'eachLibraryFile'
-		let declares = try declaresGenericFunctionTemplate(project, scratch: scratch, path: path)
+		view tokens = try queryActiveTokens(project, path: path)
 
-		if declares 'aTemplate'
+		if tokensDeclareGenericFunctionTemplate(tokens) 'aTemplate'
 			deferred.push(path)
 		end 'aTemplate'
 	end 'eachLibraryFile'
 
 	return deferred
 end 'deferredLibraryPaths'
-
-function declaresGenericFunctionTemplate(project Project, scratch ProgramSignatures, path FilePath) returns bool throws CompileError
-	view tokens = try queryActiveTokens(project, path: path)
-	let prepared = PreparedTokens.create(tokens, respelledStarts: RespelledTokenStartSet.create())
-	view scanner = Parser.createOverPreparedTokens(prepared, job: ParseJob.forConstantInitializer(path, namespace: ""), signatures: scratch, anchors: project.readerAnchors)
-
-	return scanner.declaresGenericFunctionTemplate()
-end 'declaresGenericFunctionTemplate'
 
 function withoutPaths(paths MaxonSourcePathArray, excluded FilePathArray) returns MaxonSourcePathArray
 	var kept = MaxonSourcePathArray.create()

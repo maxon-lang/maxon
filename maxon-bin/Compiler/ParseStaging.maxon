@@ -37,14 +37,95 @@ end 'internedArenaHintFor'
 export type ParseJob
 	export let path as FilePath
 	export let namespace as String
+
+	// ⭐ **IS THE FILE BEING PARSED `stdlib/` OR `scriptlib/` SOURCE?** One bit, decided once per file
+	// by the query that builds this job (`Queries`), because that is the only tier holding the
+	// project. It is the LAYER a declaration belongs to, never a tier: it travels on every
+	// `TypeNameClaim` so a user's declaration of a library name shadows it rather than meeting it, and it
+	// keeps the library out of the E3062 candidate list (see `recordTypeName`).
 	export let isStdlibSource as bool
+
+	// ⭐⭐ **IS THE FILE BEING PARSED A `runtime/` SOURCE FILE?** The tier's own bit, decided once per file
+	// by `Queries` — the only tier holding the project — and read by the three rules that hold nowhere
+	// else: the `__Raw.*` call privilege (E3152 outside it), the managed-value refusal (E3153) and the
+	// `public` refusal (E3154). `coverageActive` reads it beside `isStdlibSource` for a fourth reason —
+	// not a tier privilege, but the library/author split both tiers sit on the same side of.
+	//
+	// ⚠ **IT IS NOT `declaresCompilerInternalNames`, THOUGH THAT ONE IS TRUE OF EVERY RUNTIME FILE TOO.**
+	// That bit answers "may this file DECLARE into the reserved space", which `stdlib/Builtins.maxon` and
+	// `stdlib/Testing.maxon` also may; these three rules are about being the RUNTIME, which neither of
+	// those is. One slot carrying both claims is a semantic slot shared by two facts.
 	export let isRuntimeSource as bool
+
+	// Set together with `isStdlibSource`, whose library privileges a scriptlib file shares. It marks the
+	// one place such a file is still the user's: a `__` name is the compiler's only where the shadow rename
+	// wrote it (`everySpellingIsTheCompilers`).
 	export let isScriptlibSource as bool
+
+	// ⭐ **MAY THIS FILE DECLARE `__`-PREFIXED NAMES?** True for the
+	// modules that DECLARE the reserved space rather than merely using it — `stdlib/Builtins.maxon`
+	// (`__ManagedFileError`, `__int_fromString`) and `stdlib/Testing.maxon` (`__TestReport`) — which is what
+	// each of their own headers calls itself. Decided once per file by `Queries`, the only tier holding the
+	// project, and read by the one choke point every new declaration goes through (`requireUnreservedName`).
+	// See `Queries.TestReportDeclaringModule` for why the set is a LIST of named modules and not the
+	// set of modules the loader takes, nor "any `__` name no intrinsic claims".
+	//
+	// ⚠ **IT IS DELIBERATELY NOT `isStdlibSource`, AND THE TWO ANSWER DIFFERENT QUESTIONS.**
+	// `isStdlibSource` decides VISIBILITY, and its root-inside-`stdlib/` arm hands a project rooted under
+	// `stdlib/` its own files back as the USER's — correctly, for visibility. Reused here it would make
+	// `maxon build stdlib/Builtins.maxon` — the command `StdlibLoader`'s collision rule prescribes for
+	// compiling one stdlib module on its own — refuse the very module the loader is about to load.
+	// Being the compiler's internal bridge is a property of the FILE, not of how a command line spelled it.
 	export let declaresCompilerInternalNames as bool
+
+	// ⭐⭐ **THE RESERVED NAMES THIS COMPILE MINTED INTO THIS FILE — the THIRD provenance the reserved-name
+	// doors read (`Queries.compilerMintedNamesIn`).** Non-empty only for the generated Maxon source a
+	// `maxon test` build stages; empty for every file of every other compile, which is what says the author
+	// wrote every byte of it.
+	//
+	// ⚠ **THE TWO DOORS READ IT AT DIFFERENT GRAIN, AND THAT IS THE WHOLE POINT.** The CALL door asks
+	// only whether the list is non-empty (`fileMayUseReservedNames`), because a generated fragment has
+	// to reach names OTHER files declare and that door already conjoins `declaresCallee`. The
+	// DECLARATION door asks whether the name being declared is IN the list (`requireUnreservedName`),
+	// because a staged `.maxtest` file is the author's own bytes with a dispatcher appended — so a
+	// per-file answer there would hand the author the reserved space.
+	//
+	// ⚠ **IT IS SEPARATE FROM `declaresCompilerInternalNames` EVEN THOUGH THE CALL DOOR TAKES THEIR
+	// DISJUNCTION.** The two are different FACTS — "this is one of the two stdlib modules that declare the
+	// reserved space" and "this compile wrote these names" — and folding them into one slot would be a
+	// semantic slot shared by two claims, which is the shape this project's defect log keeps naming.
 	export let compilerMintedNames as NameRoster
+
+	// ⭐ **IS THIS FILE PHYSICALLY INSIDE `stdlib/`?** True for every module the loader
+	// takes AND for a module named directly on the command line (`maxon build stdlib/URL.maxon`),
+	// because being under `stdlib/` is a property of the FILE. Read by `rawSurfaceIsRefusedHere` (the library
+	// tier, E3185) and by the compiler-owned-name contest (`declarationContestsACompilerOwnedName`).
+	//
+	// ⭐ It is DERIVED, not probed: `isStdlibSource` already answers it except when the project ROOT is
+	// itself under `stdlib/`, and that is a fact about the COMPILE, asked once
+	// (`Queries.livesUnderStdlibDirectory`, which carries the proof and the ladder measurement).
+	//
+	// ⚠ **IT IS DELIBERATELY NOT `isStdlibSource`, FOR `declaresCompilerInternalNames`' REASON.**
+	// Gated on the visibility bit, the refusal would tell
+	// `maxon build stdlib/URL.maxon` that the file "is not stdlib source" — false about that path, and
+	// it would break the one command that finds a module's blockers before it is listed. See
+	// `Queries.livesUnderStdlibDirectory`.
 	export let livesUnderStdlibDirectory as bool
+
+	// Whether this parse builds ops for the file's function bodies. A user file always does; a stdlib
+	// file does once a path from `main` reaches it (see `StdlibSource.growStdlibBodyDemand`). It prunes
+	// ops and nothing else: every declaration is still read, because a declaration can move the emitted
+	// code of a program that never names its module (`StdlibLoader`'s header), while an unreached body
+	// is dropped by `lowerMaxonToStd` and `DeadFunctionElimination` regardless.
 	export let buildsBodies as bool
+
+	// Whether this build writes a `.mxdbg` sidecar (`Project.debugInfo`). A build that records no binding
+	// pays nothing for the debug-locals roster, which is half of what keeps the emitted image
+	// byte-identical with the sidecar and without it.
 	export let capturesDebugLocals as bool
+
+	// Whether this build instruments for code coverage (`Project.coverage`). The parse memo carries a salt
+	// for it, so a warm tree cannot serve an uninstrumented parse to an instrumented build.
 	export let instrumentsCoverage as bool
 	export let foldsAConstantInitializer as bool
 
@@ -52,18 +133,12 @@ export type ParseJob
 		return Self{path: path, namespace: namespace, isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, isScriptlibSource: isScriptlibSource, declaresCompilerInternalNames: declaresCompilerInternalNames, compilerMintedNames: compilerMintedNames, livesUnderStdlibDirectory: livesUnderStdlibDirectory, buildsBodies: buildsBodies, capturesDebugLocals: capturesDebugLocals, instrumentsCoverage: instrumentsCoverage, foldsAConstantInitializer: false}
 	end 'create'
 
-	// ⭐ **THE JOB OF A TOP-LEVEL CONSTANT'S INITIALIZER** (`ProgramSignatures.walkConstInitializer`), and every flag in it
-	// is exact rather than a default, because an initializer is const-FOLDED and declares no name:
-	//   • `isStdlibSource` governs only a `typealias` declaration, which an initializer cannot contain;
-	//   • `declaresCompilerInternalNames` and `compilerMintedNames` admit a reserved DECLARATION or call, and the
-	//     declaration whose initializer this is has been through the real parse's check — generated source declares
-	//     no top-level binding at all;
-	//   • `livesUnderStdlibDirectory` gates two `module`-visible `String` METHODS, and a fold reaches no method dispatch;
-	//   • `instrumentsCoverage` would mint a counter in ops no emitted image holds.
-	// So the walk never asks the project for a path, which would put a `Directory.currentPath()` probe on the
-	// per-declaration path.
-	export static function forConstantInitializer(path FilePath, namespace String) returns ParseJob
-		return Self{path: path, namespace: namespace, isStdlibSource: false, isRuntimeSource: false, isScriptlibSource: false, declaresCompilerInternalNames: false, compilerMintedNames: NameRoster.create(), livesUnderStdlibDirectory: false, buildsBodies: true, capturesDebugLocals: false, instrumentsCoverage: false, foldsAConstantInitializer: true}
+	// The job `ProgramSignatures.walkConstInitializer` folds an initializer under: the declaring file's
+	// own, so the initializer is judged by that file's privileges. Coverage and debug locals are cleared
+	// because the fold's ops reach no emitted image. Derived from the stored job rather than from the
+	// project, which would put a `Directory.currentPath()` probe on the per-declaration path.
+	export function forConstantInitializer() returns ParseJob
+		return Self{path: self.path, namespace: self.namespace, isStdlibSource: self.isStdlibSource, isRuntimeSource: self.isRuntimeSource, isScriptlibSource: self.isScriptlibSource, declaresCompilerInternalNames: self.declaresCompilerInternalNames, compilerMintedNames: self.compilerMintedNames, livesUnderStdlibDirectory: self.livesUnderStdlibDirectory, buildsBodies: true, capturesDebugLocals: false, instrumentsCoverage: false, foldsAConstantInitializer: true}
 	end 'forConstantInitializer'
 end 'ParseJob'
 

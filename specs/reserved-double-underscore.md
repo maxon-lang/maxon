@@ -475,6 +475,31 @@ end 'main'
 42
 ```
 
+<!-- test: a-reserved-space-files-top-level-constant-may-name-its-own-entry-as-a-value -->
+The same exemption for a top-level constant: its initializer is read by the constant evaluator, which
+judges it with the declaring file's own privileges, so `Builtins.maxon` may name its own entry there too.
+```maxon
+// --- stdlib-overlay: Builtins.maxon
+export typealias OverlayTriple = int(0 to 100)
+
+export function __overlayTriple(n OverlayTriple) returns OverlayTriple
+	return n * 3
+end '__overlayTriple'
+
+let overlayTripleFunction = __overlayTriple
+
+export function overlayApplyTriple(n OverlayTriple) returns OverlayTriple
+	return overlayTripleFunction(n)
+end 'overlayApplyTriple'
+// --- file: main.maxon
+function main() returns ExitCode
+	return overlayApplyTriple(14) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
 <!-- test: user-file-named-builtins-cannot-call-a-reserved-name -->
 **THE NEGATIVE CONTROL ON THE CALL-SIDE EXEMPTION, and it is the half that matters** — the exact mirror of
 `user-file-named-builtins-is-not-exempt` one door over. The exemption is keyed on the FILE'S IDENTITY

@@ -450,7 +450,7 @@ module function interpolatedLiteralLastFragment(tokens TokenArray, first Element
 	return last
 end 'interpolatedLiteralLastFragment'
 
-function tokenKindAt(tokens TokenArray, index ElementIndex) returns TokenKind
+module function tokenKindAt(tokens TokenArray, index ElementIndex) returns TokenKind
 	let tok = try tokens.get(index) otherwise return TokenKind.eof
 	return tok.kind
 end 'tokenKindAt'
@@ -2033,6 +2033,7 @@ type Lexer
 
 		let identBytes = try bytes.slice(startPos, endIndex: identEnd) otherwise panic("Lexer: identifier-slice invariant violated")
 		let classified = keywords.classify(identBytes)
+
 		// `export` before a `.` is the project-root qualifier, a name to every token consumer: the parser,
 		// the formatter and the language server.
 		let kind = TokenKind.identifier if classified == TokenKind.export and not atEof and cursor.current() == AsciiByte.dot else classified

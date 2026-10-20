@@ -641,10 +641,17 @@ module function foldLibraryRemainder(project Project, signatures ProgramSignatur
 	try foldFilesInto(project, signatures: signatures, paths: stdlibTierPaths, isStdlibSource: true, extents: extents)
 end 'foldLibraryRemainder'
 
-function restoreDeclTokenStreams(project Project, signatures ProgramSignatures, streamed FilePathArray) throws CompileError
+function restoreDeclTokenStreams(project Project, signatures ProgramSignatures, streamed FilePathArray, remainder FilePathArray) throws CompileError
 	for path in streamed 'eachStream'
+		// The core baseline holds no module directory for a remainder file, so no job can be built for it
+		// here; `foldLibraryRemainder` keeps its stream when it folds the file.
+		if remainder.contains(path) 'foldedLater'
+			continue
+		end 'foldedLater'
+
 		view tokens = try queryActiveTokens(project, path: path)
-		signatures.restoreDeclTokenStream(path.toString(), tokens: PreparedTokens.create(tokens, respelledStarts: RespelledTokenStartSet.create()))
+		let job = parseJobFor(project, signatures: signatures, path: path, isStdlibSource: isStdlibTierSourceFile(project, path: path), buildsBodies: true)
+		signatures.restoreDeclTokenStream(path.toString(), stream: DeclTokenStream.create(PreparedTokens.create(tokens, respelledStarts: RespelledTokenStartSet.create()), job: job))
 	end 'eachStream'
 end 'restoreDeclTokenStreams'
 
@@ -681,7 +688,7 @@ function declarationsFoldedOntoTheLibraryBaseline(project Project) returns Basel
 	let diagnosticsBefore = project.diagnostics.count()
 	var start = try libraryBaselineFor(project, partition: partition)
 	var signatures = start.signatures
-	try restoreDeclTokenStreams(project, signatures: signatures, streamed: start.streamed)
+	try restoreDeclTokenStreams(project, signatures: signatures, streamed: start.streamed, remainder: start.remainder)
 
 	// Before the remainder folds: the deferred files declare generic function templates, and their
 	// fold reads the instances this program requests.

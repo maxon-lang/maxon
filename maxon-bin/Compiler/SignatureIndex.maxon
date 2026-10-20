@@ -2551,7 +2551,7 @@ export type TopLevelDecl
 	// today constructs and returns, so nothing bites; a library that wants a registration effect must state it
 	// where the program can reach it.
 	//
-	// ⭐ **THE BASIS IS THE DECLARING FILE (`Parser.isStdlibSource`), NEVER THIS COMPILE'S ROOT.** The other
+	// ⭐ **THE BASIS IS THE DECLARING FILE (`ParseJob.isStdlibSource`), NEVER THIS COMPILE'S ROOT.** The other
 	// bit, `livesUnderStdlibDirectory`, is `isStdlibSource or rootIsUnderStdlibDirectory` — so a project
 	// ROOTED under `stdlib/` would mark the author's own declarations corpus and silently liveness-gate their
 	// eager init. The question here is who supplied the file, which is exactly the loader's own partition.
@@ -15977,7 +15977,7 @@ end 'sourceSpelledAliasName'
 // "linear in the graph" a fact about this walk rather than a hope.
 typealias StructNameSet = Set with ByteArray
 
-typealias DeclTokenStreamMap = Map with (String, PreparedTokens)
+typealias DeclTokenStreamMap = Map with (String, DeclTokenStream)
 
 export typealias RespelledTokenStartSet = Set with ByteOffset
 
@@ -15989,6 +15989,15 @@ export type PreparedTokens
 		return Self{tokens: tokens, respelledStarts: respelledStarts}
 	end 'create'
 end 'PreparedTokens'
+
+export type DeclTokenStream
+	export let prepared as PreparedTokens
+	export let job as ParseJob
+
+	export static function create(prepared PreparedTokens, job ParseJob) returns DeclTokenStream
+		return Self{prepared: prepared, job: job}
+	end 'create'
+end 'DeclTokenStream'
 
 // ⭐⭐ **WHICH FILE DECLARED A FUNCTION WHOSE RETURN TYPE IS STILL A BARE `named`** — see
 // `ProgramSignatures.funcReturnDeclFiles`. Only those: every other recorded return type is already
@@ -17623,7 +17632,8 @@ export type SettledDeclarations
 	module var libraryFilePaths as LibraryFilePathSet
 
 	// ⭐ **THE TOKEN STREAM OF EVERY FILE THAT DECLARES A TOP-LEVEL BINDING**, keyed by the path's string for the map
-	// above's reason — the shadow-renamed stream its sweep read, which each `TopLevelDecl`'s initializer range indexes.
+	// above's reason — the shadow-renamed stream its sweep read, which each `TopLevelDecl`'s initializer range indexes,
+	// and the `ParseJob` it was read under, whose privileges the constant evaluation judges the initializer by.
 	// Written only by the fold, read only by `resolveDefines` and the constant evaluation, and EMPTIED once
 	// `evaluateInitializers` has settled every declaration: no later reader exists, and the copy
 	// `ProgramSignatures.publishedDeclarations` takes would otherwise copy every stream.
@@ -18840,7 +18850,7 @@ export type ProgramSignatures
 	// The token stream `decl`'s initializer range indexes. A miss is a compiler bug: the fold keeps the stream of every
 	// file it records a binding of, until `evaluateInitializers` has settled every one.
 	function declTokensOf(decl TopLevelDecl) returns TokenArray
-		return self.declPreparedTokensOf(decl).tokens
+		return self.declTokenStreamOf(decl).prepared.tokens
 	end 'declTokensOf'
 
 	export function declTokenStreamPaths() returns FilePathArray
@@ -18853,13 +18863,13 @@ export type ProgramSignatures
 		return paths
 	end 'declTokenStreamPaths'
 
-	export function restoreDeclTokenStream(path String, tokens PreparedTokens)
-		self.mainThreadSettled().declTokenStreams.upsert(path, value: tokens)
+	export function restoreDeclTokenStream(path String, stream DeclTokenStream)
+		self.mainThreadSettled().declTokenStreams.upsert(path, value: stream)
 	end 'restoreDeclTokenStream'
 
-	function declPreparedTokensOf(decl TopLevelDecl) returns PreparedTokens
-		return try self.settledDeclarations().declTokenStreams.get(decl.declFilePath.toString()) otherwise panic("ProgramSignatures.declPreparedTokensOf: '{String.from(decl.name)}' was recorded from {decl.declFilePath}, whose token stream the fold did not keep or the settled evaluation released")
-	end 'declPreparedTokensOf'
+	function declTokenStreamOf(decl TopLevelDecl) returns DeclTokenStream
+		return try self.settledDeclarations().declTokenStreams.get(decl.declFilePath.toString()) otherwise panic("ProgramSignatures.declTokenStreamOf: '{String.from(decl.name)}' was recorded from {decl.declFilePath}, whose token stream the fold did not keep or the settled evaluation released")
+	end 'declTokenStreamOf'
 
 	// The module directory of a file the sweep folded. A MISS IS A COMPILER BUG, not a file at the root: the
 	// root's directory is the empty string and is recorded like any other, so an absent entry means a path
@@ -18887,7 +18897,7 @@ export type ProgramSignatures
 		return moduleDirectoryIn(self.settledDeclarations().fileModuleDirectories, path: pathText)
 	end 'moduleDirectoryOfPathText'
 
-	// The `.`-joined NAMESPACE a file is shown as — what `Parser.create` stamps onto `Parser.namespace`, from
+	// The `.`-joined NAMESPACE a file is shown as — what `Queries.parseJobFor` stamps onto `ParseJob.namespace`, from
 	// which a declaration's qualified spelling is minted (`namespaceQualifiedName`). ⚠ Nothing downstream of
 	// the parser holds a namespace, because a `dir.fn()` reference resolves to the bare declared name at
 	// parse time — there is no `IrFunction.namespace` to read.
@@ -19999,7 +20009,7 @@ export type ProgramSignatures
 	// machinery `mergeArtifact` uses for the identical job — `TypeNameInterner.foldInto` +
 	// `remapMaxonReturnType`. One mechanism, two callers: a second copy of "reconcile a file's ids
 	// into a bigger table" would be free to disagree with this one about what an id means.
-	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, implementsClauses AliasImplementsClauseArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, innerAliasEntries InnerAliasEntryArray, methodInnerAliasParamEntries MethodInnerAliasParamEntryArray, interfaceSites InterfaceDeclSiteArray, extensionSites ExtensionDeclSiteArray, conformanceSites ConformanceClauseDeclSiteArray, scanSites DescriptorScanSiteArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, bodyFacts SweptBodyFactEntryArray, freeFunctionNames NameRoster, testDecls DiscoveredTestArray, moduleDirectory String, filePath FilePath, fileTokens PreparedTokens, fileTypeNames TypeNameInterner, isStdlibSource bool)
+	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, implementsClauses AliasImplementsClauseArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, innerAliasEntries InnerAliasEntryArray, methodInnerAliasParamEntries MethodInnerAliasParamEntryArray, interfaceSites InterfaceDeclSiteArray, extensionSites ExtensionDeclSiteArray, conformanceSites ConformanceClauseDeclSiteArray, scanSites DescriptorScanSiteArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, bodyFacts SweptBodyFactEntryArray, freeFunctionNames NameRoster, testDecls DiscoveredTestArray, moduleDirectory String, filePath FilePath, fileStream DeclTokenStream, fileTypeNames TypeNameInterner, isStdlibSource bool)
 		// Which file holds which declarations decides how other files resolve them, so the boundary
 		// between files rides the hash.
 		self.hash = mixBytes(Hasher.combined(self.hash, value: DeclShapeFileBoundary), bytes: filePath.toString().toByteArray())
@@ -20141,7 +20151,7 @@ export type ProgramSignatures
 		// Only a file that declares a binding keeps its stream: nothing else reads one, and a clone of the index copies
 		// every stream it holds.
 		if not bindings.isEmpty() 'declaresABinding'
-			self.mainThreadSettled().declTokenStreams.upsert(filePath.toString(), value: fileTokens)
+			self.mainThreadSettled().declTokenStreams.upsert(filePath.toString(), value: fileStream)
 		end 'declaresABinding'
 
 		var remap = self.typeNames.foldInto(fileTypeNames)
@@ -24089,7 +24099,8 @@ export type ProgramSignatures
 			flag(value) then return self.settleFoldedValue(decl, value: ConstFoldedValue.scalar(ConstValue.ofBool(value)))
 		end 'defined'
 
-		var parser = Parser.createOverPreparedTokens(self.declPreparedTokensOf(decl), job: ParseJob.forConstantInitializer(decl.declFilePath, namespace: self.namespaceOf(decl.declFilePath)), signatures: self, anchors: anchors)
+		let stream = self.declTokenStreamOf(decl)
+		var parser = Parser.createOverPreparedTokens(stream.prepared, job: stream.job.forConstantInitializer(), signatures: self, anchors: anchors)
 		var folded = try parser.evalConstInitializer(decl, stack: stack) otherwise (err) 'noValue'
 			return self.recordFailure(decl, error: err)
 		end 'noValue'
@@ -26097,7 +26108,7 @@ export type ProgramSignatures
 	// runs code because it calls `equals`/`compare` on the program's own types. Over-reporting only costs
 	// a spec case its batch; under-reporting would print outside every case's markers.
 	function initializerShapeOf(decl TopLevelDecl) returns InitializerShape
-		let tokens = self.declPreparedTokensOf(decl).tokens
+		let tokens = self.declTokenStreamOf(decl).prepared.tokens
 
 		if self.initializerIsALibraryContainerCreate(tokens, decl: decl) 'anEmptyLibraryContainer'
 			return InitializerShape.records
