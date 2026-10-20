@@ -557,9 +557,9 @@ export enum GtParkKind
 	// `__sched_checkdead` writes the answer into `GtOffParkArg` before readying it.
 	quiesce = 11
 
-	// `__mbox_send` on a full mailbox: the argument is the mailbox. Committed by `__gt_run_strand`
-	// (`MailboxRuntime.emitMboxSendParkCommit`) under the same lock-across-the-switch rule as `mailbox`,
-	// so `__gt_register_park` never sees it.
+	// `__mbox_send_queue` on a full mailbox: the argument is the mailbox. Committed by
+	// `__gt_run_strand` (`MailboxRuntime.emitMboxSendParkCommit`) under the same
+	// lock-across-the-switch rule as `mailbox`, so `__gt_register_park` never sees it.
 	mailboxSend = 12
 end 'GtParkKind'
 
@@ -5947,7 +5947,7 @@ function buildGtPromiseDrop(module StdModule)
 	// The renounce mark is stored ahead of every arm below, because each of them readies the
 	// thread (`emitGtRenouncePark`): a mark written past that point races the coroutine's own
 	// resumption, and what slips through the window is a far-end wait this one-shot call can no
-	// longer end. `__gt_io_park`, `__mbox_send` and `__gt_quiesce` read it.
+	// longer end. `__gt_io_park`, `__mbox_send_queue` and `__gt_quiesce` read it.
 	emitStoreField(module, block: entry, record: gt, offset: GtOffRenounced, value: emitConst(module, block: entry, value: GtPromiseGivenUp, ids: ids))
 	module.setTerminator(entry, op: StdOp.condBranch(isReplyCell, thenBlockId: queuedArm.id, elseBlockId: notAReplyCell.id))
 
