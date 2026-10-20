@@ -1229,6 +1229,10 @@ let SchedNpidleLabel = b"__sched_npidle"
 // `underSchedLock`: both doors run under the lock, and so does the one read.
 export let SchedRunqSizeLabel = b"__sched_runq_size"
 
+let SchedLoneTokenCount = 1
+
+let WakeForRestNone = 0
+
 // ⭐⭐ **HOW MANY GREEN THREADS HAVE EVER BEEN PUSHED ONTO THE GLOBAL RUN QUEUE.** `__sched_runq_size` is the
 // population and this is the cumulative traffic, so a program can tell "the queue is empty because nothing was
 // ever put there" from "the queue is empty because everything put there has run" — which is the difference
@@ -6496,6 +6500,9 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	var pollWait = module.addBlock(func, label: b"wpoll", heat: BlockHeat.normal)
 	var polled = module.addBlock(func, label: b"wpolled", heat: BlockHeat.normal)
 	var polledStores = module.addBlock(func, label: b"wpolledstores", heat: BlockHeat.normal)
+	var parkSpinBecome = module.addBlock(func, label: b"wparkspinbecome", heat: BlockHeat.normal)
+	var parkResumed = module.addBlock(func, label: b"wresumed", heat: BlockHeat.normal)
+	var parkResumedWake = module.addBlock(func, label: b"wresumedwake", heat: BlockHeat.normal)
 	var breakCheck = module.addBlock(func, label: b"wbreakcheck", heat: BlockHeat.normal)
 	var breakPoller = module.addBlock(func, label: b"wbreak", heat: BlockHeat.normal)
 	var parkJoin = module.addBlock(func, label: b"wjoin", heat: BlockHeat.normal)
@@ -6507,6 +6514,9 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	var exitBlock = module.addBlock(func, label: b"wexit", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
+
+	let wakeForRest = ids.mint()
+	parkCheck.blockArgs.push(IrBlockArg.create(wakeForRest, argType: StdType.i64))
 
 	let leave = match role 'leaveOf'
 		worker gives SchedLoopLeave.shutdown
@@ -6600,9 +6610,11 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	// ⭐⭐ **THE SEARCH STARTS UNCREDITED, AS GO'S `findRunnable` DOES.** A machine back from running a strand
 	// consults its own ring and the global queue as an ordinary machine; it becomes a SPINNER — one unit of
 	// `__sched_nmspinning` — only when `__sched_find_runnable`'s spinner cap admits it to the steal rounds, or
-	// when a waker handed it a credit before signalling it. `wfound`, `whandedoff` and the park release
-	// whatever credit the machine holds, except the park's `wabandonglobal`, which searches again and keeps it;
-	// `SchedSpinningLabel` carries what a leaked one costs.
+	// when a waker handed it a credit before signalling it, or when its park turned back: on a raised
+	// `__sched_needspinning` (`wabandon`), or as a spinner whose re-check found work (`wparkspinbecome`).
+	// Every other road in, the processor-less ones included, searches uncredited. `wfound`, `whandedoff`
+	// and the park release whatever credit the machine holds, except the park's `wabandonglobal`, which
+	// searches again and keeps it; `SchedSpinningLabel` carries what a leaked one costs.
 	let g = emitSchedFindRunnable(module, block: dequeue, m: m, ids: ids)
 	let empty = emitCompareWithConstant(module, block: dequeue, value: g, pred: StdCmpPred.eq, against: 0, ids: ids)
 	emitBranchOnCompare(module, block: dequeue, value: g, pred: StdCmpPred.eq, against: GtProcessorHandedOff, whenTrue: handedOffProc, whenFalse: sortWork, ids: ids)
@@ -6613,7 +6625,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	emitSchedHandOnTheLooking(module, func: func, cur: handedOffProc, nothingSkipped: handedOffHeldNoCredit, cont: handedOffLocking, wakeLabel: b"whandedoffwake", ids: ids)
 
 	emitSchedLockEnter(module, block: handedOffLocking, ids: ids)
-	module.setTerminator(handedOffLocking, op: StdOp.branch(parkCheck.id))
+	emitBranchCarrying(module, from: handedOffLocking, to: parkCheck, value: emitConst(module, block: handedOffLocking, value: WakeForRestNone, ids: ids))
 
 	// ⭐⭐⭐ **FOUND A TOKEN ⇒ A SPINNER HAS STOPPED LOOKING, AND IT OWES THE LOOKING TO SOMEBODY ELSE.** Go's
 	// `resetspinning` — decrement, then `wakep` — for a machine that WAS spinning, and for one whose own fire
@@ -6692,7 +6704,12 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	emitSchedBranchOnNoWork(module, block: parkRecheck, whenNoWork: parkTail, whenWork: parkSpinRegain, ids: ids)
 
 	emitSchedLockEnter(module, block: parkSpinRegain, ids: ids)
-	emitSchedRegainProcessor(module, func: func, cur: parkSpinRegain, m: m, resumeAt: loopTop, none: parkSpinNoProc, resumeLabel: b"wparkspinresume", target: target, ids: ids)
+	emitSchedRegainProcessor(module, func: func, cur: parkSpinRegain, m: m, resumeAt: parkSpinBecome, none: parkSpinNoProc, resumeLabel: b"wparkspinresume", target: target, ids: ids)
+
+	// The one regain that re-spins: publishes made while this machine was counted spinning may have skipped
+	// their wake, and `wfound` hands the looking on only for a machine that holds the credit.
+	_ = emitSchedSpinningTransition(module, block: parkSpinBecome, m: m, transition: SpinningTransition.becomeSpinning, ids: ids)
+	module.setTerminator(parkSpinBecome, op: StdOp.branch(loopTop.id))
 
 	emitSchedRaiseNeedSpinning(module, block: parkSpinNoProc, ids: ids)
 	module.setTerminator(parkSpinNoProc, op: StdOp.branch(parkStopTest.id))
@@ -6722,7 +6739,15 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	// is not a contradiction and must not park us in a special way**: it means every processor is now held,
 	// which means every one of them has a machine on its way to `__sched_find_runnable`, so the work has an
 	// owner and this machine may sleep. The road out is `wstoptest`, the same one an empty scheduler takes.
-	emitSchedRegainProcessor(module, func: func, cur: parkRegain, m: m, resumeAt: loopTop, none: parkStopTest, resumeLabel: b"wresume", target: target, ids: ids)
+	emitSchedRegainProcessor(module, func: func, cur: parkRegain, m: m, resumeAt: parkResumed, none: parkStopTest, resumeLabel: b"wresume", target: target, ids: ids)
+
+	// The poller's wake for the rest waits for its own processor and the lock's release: the release is the
+	// fence the wake's spinning read needs (`emitSchedWakeIfOwed`), and a wake before the regain could start a
+	// machine for the processor this one is about to take. A regain that finds no idle processor wakes nobody.
+	emitBranchOnCompare(module, block: parkResumed, value: wakeForRest, pred: StdCmpPred.eq, against: WakeForRestNone, whenTrue: loopTop, whenFalse: parkResumedWake, ids: ids)
+
+	emitSchedWakeAnIdleM(module, block: parkResumedWake, ids: ids)
+	module.setTerminator(parkResumedWake, op: StdOp.branch(loopTop.id))
 
 	// ⭐ **THE EXIT TEST IS INSIDE THE CRITICAL SECTION, WHICH IS WHAT MAKES AN UNTIMED WAIT SAFE.** Whoever
 	// moves what the test reads — `__sched_stop_workers`'s flag, `__gt_runner_done`'s and `__sched_checkdead`'s
@@ -6775,18 +6800,26 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	module.setTerminator(pollWait, op: StdOp.branch(polled.id))
 
 	// ⭐⭐ **THE POLLER GIVES THE ROLE BACK, FIRES WHAT IS DUE AND REAPS WHAT EXITED, THEN LOOKS AGAIN.** What it
-	// readies goes to the global queue (it holds no processor), and its wake debt is not paid: `wparkcheck` sees
-	// that queue next and takes a processor to run it, so a program with nothing else running does not start a
-	// machine for work this one is about to do. ⚠ **THIS IS THE PRODUCER FOR `emitSlabResolveShard`'s P-LESS-M
-	// ARM**: anything the two walks allocate is allocated with `M->currentP` at 0, so
-	// `SlabRuntime.emitSlabResolveShard` routes it to the raw row under the slab's own lock. The walks take
-	// `__sched_lock` again, recursively.
+	// readies goes to the global queue (it holds no processor), and its wake debt is paid only for what this
+	// machine will not run itself: `wparkcheck` sees that queue next and takes a processor to run the first, so
+	// a program with nothing else running does not start a machine for work this one is about to do. When the
+	// walks readied more than one, `wresumed` wakes one machine for the rest. ⚠ **THIS IS THE PRODUCER FOR
+	// `emitSlabResolveShard`'s P-LESS-M ARM**: anything the two walks allocate is allocated with
+	// `M->currentP` at 0, so `SlabRuntime.emitSlabResolveShard` routes it to the raw row under the slab's own
+	// lock. The walks take `__sched_lock` again, recursively.
 	emitSchedLockEnter(module, block: polled, ids: ids)
 	emitStoreReleaseGlobalWord(module, block: polled, label: SchedLastPollLabel, value: emitGtNowNs(module, block: polled, ids: ids), ids: ids)
 	emitStoreReleaseGlobalWord(module, block: polled, label: SchedPollUntilLabel, value: emitConst(module, block: polled, value: 0, ids: ids), ids: ids)
+	let queuedBeforePoll = emitLoadGlobalWord(module, block: polled, label: SchedRunqSizeLabel, ids: ids)
 	emitGtPollStores(module, func: func, cur: polled, cont: polledStores, ids: ids)
 	polledStores.blockArgs.push(IrBlockArg.create(ids.mint(), argType: StdType.i64))
-	module.setTerminator(polledStores, op: StdOp.branch(parkCheck.id))
+
+	// The walks' wake debt says only that something was readied, and the queue can already hold others' work,
+	// so what they readied is the size's change across them, exact because both reads are in this one hold.
+	let queuedAfterPoll = emitLoadGlobalWord(module, block: polledStores, label: SchedRunqSizeLabel, ids: ids)
+	let readiedByPoll = emitBin(module, block: polledStores, a: queuedAfterPoll, b: queuedBeforePoll, opcode: StdBinOpcode.sub, ids: ids)
+	let pollReadiedSeveral = emitCompareWithConstant(module, block: polledStores, value: readiedByPoll, pred: StdCmpPred.gt, against: SchedLoneTokenCount, ids: ids)
+	emitBranchCarrying(module, from: polledStores, to: parkCheck, value: pollReadiedSeveral)
 
 	// Somebody else is polling. Its deadline is the earliest there was when it claimed the poller, and every
 	// earlier one armed since broke its wait; this re-check is Go's, and costs a break only in the window between
@@ -6835,7 +6868,9 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	emitStoreField(module, block: delivered, record: m, offset: MOffNextP, value: emitConst(module, block: delivered, value: 0, ids: ids))
 
 	// Handed nothing: back round the final look, holding the lock and no processor — its precondition.
+	let deliveredNoRest = emitConst(module, block: delivered, value: WakeForRestNone, ids: ids)
 	emitBranchOnCompare(module, block: delivered, value: givenProc, pred: StdCmpPred.eq, against: 0, whenTrue: parkCheck, whenFalse: adoptGiven, ids: ids)
+	delivered.branchEdges.push(BranchEdge.create(parkCheck.id, argIds: argsOf(deliveredNoRest)))
 
 	emitSchedLockLeave(module, block: adoptGiven, ids: ids)
 	emitSchedAdoptProc(module, block: adoptGiven, m: m, p: givenProc)
@@ -6859,7 +6894,7 @@ function emitSchedMainMachineEntry(module StdModule, func IrFunction, entry IrBl
 	emitBranchOnCompare(module, block: entry, value: p, pred: StdCmpPred.eq, against: 0, whenTrue: enterIdle, whenFalse: holdingProc, ids: ids)
 
 	emitSchedLockEnter(module, block: enterIdle, ids: ids)
-	module.setTerminator(enterIdle, op: StdOp.branch(noProc.id))
+	emitBranchCarrying(module, from: enterIdle, to: noProc, value: emitConst(module, block: enterIdle, value: WakeForRestNone, ids: ids))
 end 'emitSchedMainMachineEntry'
 
 // ⭐⭐ **HAND THE LOOKING ON IF A PUBLISH MAY HAVE SKIPPED ITS WAKE — Go's `resetspinning`, whose `wakep` is
@@ -7036,20 +7071,14 @@ function emitSchedMainLoopUntilMet(module StdModule, block IrBlock, until ValueI
 	return emitBin(module, block: block, a: drainMet, b: mainMet, opcode: StdBinOpcode.bitOr, ids: ids)
 end 'emitSchedMainLoopUntilMet'
 
-// Leave a park holding processor `p`, which a `pidleget` in the same critical section has just handed this
-// machine: release `__sched_lock`, adopt, and search as a spinner — the queue it saw may hold more than it
-// takes, and no publisher's wake is owed for it (`wpolled`), so `wfound` hands the looking on.
-function emitSchedResumeFromPark(module StdModule, block IrBlock, m ValueId, p ValueId, ids ValueMinter)
-	emitSchedLockLeave(module, block: block, ids: ids)
-	emitSchedAdoptProc(module, block: block, m: m, p: p)
-	_ = emitSchedSpinningTransition(module, block: block, m: m, transition: SpinningTransition.becomeSpinning, ids: ids)
-end 'emitSchedResumeFromPark'
-
+// Continues at `resumeAt` uncredited: a credit makes `wfound` pay a wake, which only `wparkspinbecome`'s
+// road owes, and that block takes the credit itself.
 function emitSchedRegainProcessor(module StdModule, func IrFunction, cur IrBlock, m ValueId, resumeAt IrBlock, none IrBlock, resumeLabel ByteArray, target Target, ids ValueMinter)
 	var resume = module.addBlock(func, label: resumeLabel, heat: BlockHeat.normal)
 
 	let regained = emitSchedPidleGetLocked(module, func: func, cur: cur, got: resume, none: none, wakesMonitor: targetBracketsBlockingSyscalls(target), ids: ids)
-	emitSchedResumeFromPark(module, block: resume, m: m, p: regained, ids: ids)
+	emitSchedLockLeave(module, block: resume, ids: ids)
+	emitSchedAdoptProc(module, block: resume, m: m, p: regained)
 	module.setTerminator(resume, op: StdOp.branch(resumeAt.id))
 end 'emitSchedRegainProcessor'
 
