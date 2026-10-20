@@ -4196,6 +4196,8 @@ function recordSlotGlobalPanic(name ByteArray, tag ValueTypeTag) returns String
 	return "globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a record-valued global's slot holds a POINTER `__module_init` fills, so it is typed by `recordPointerSlotType`; this door answers only for a global whose `.data` bytes ARE its value"
 end 'recordSlotGlobalPanic'
 
+let FirstRunArgumentPosition = 0 as ElementIndex
+
 export function valueTypeOfReturn(returnType MaxonReturnType) returns MaxonType throws AbsentError
 	match returnType 'returned'
 		value(inner) then return inner
@@ -24505,10 +24507,7 @@ export type ProgramSignatures
 	function declaredReturnValueType(callee ByteArray, name ByteArray) returns MaxonType
 		let declared = try self.settledDeclarations().returnTypes.get(callee) otherwise panic("ProgramSignatures.declaredReturnValueType: '{String.from(name)}' names the factory '{String.from(callee)}', which no file declares — the evaluator admits the form only after `declaresCallee` says otherwise")
 
-		match declared 'returns'
-			void then panic("ProgramSignatures.declaredReturnValueType: '{String.from(name)}' is initialized by '{String.from(callee)}', which returns nothing — the evaluator refuses a void factory before it folds one")
-			value(valueType) then return valueType
-		end 'returns'
+		return try valueTypeOfReturn(declared) otherwise panic("ProgramSignatures.declaredReturnValueType: '{String.from(name)}' is initialized by '{String.from(callee)}', which returns nothing — the evaluator refuses a void factory before it folds one")
 	end 'declaredReturnValueType'
 
 	// Settle a decl from the value its initializer FOLDED to — the four non-call answers, each keeping the
@@ -31743,11 +31742,16 @@ export type ProgramSignatures
 		return self.genericInstanceArgIsReadOnly(instance, position: position)
 	end 'typeParameterIsReadOnlyIn'
 
-	export function declaredValueReturnOf(callee ByteArray, into TypeNameInterner) returns MaxonType throws AbsentError
+	export function declaredReturnTypeOf(callee ByteArray, into TypeNameInterner) returns MaxonReturnType throws AbsentError
 		match self.returnTypeOf(callee, into: into) 'callee'
-			declared(returnType) then return try valueTypeOfReturn(returnType)
+			declared(returnType) then return returnType
 			undeclared then throw AbsentError.absent
 		end 'callee'
+	end 'declaredReturnTypeOf'
+
+	export function declaredValueReturnOf(callee ByteArray, into TypeNameInterner) returns MaxonType throws AbsentError
+		let returnType = try self.declaredReturnTypeOf(callee, into: into)
+		return try valueTypeOfReturn(returnType)
 	end 'declaredValueReturnOf'
 
 	// Library members only: a user member whose declared return is a type parameter may hand back its
@@ -37409,10 +37413,7 @@ export type ProgramSignatures
 	// ⚠ **THE RESULT POSITION IS ALWAYS FILLED** — see `PromiseVoidResultName` for why a void thunk gets a
 	// stand-in argument rather than a shorter instance.
 	export function internPromiseInstanceForCallee(callee ByteArray) returns GenericInstanceId
-		let result = match self.returnTypeOf(callee, into: self.typeNames) 'result'
-			declared(returnType) gives returnType
-			undeclared panic("internPromiseInstanceForCallee: '{String.from(callee)}' is declared by no file — `Parser.mintSpawnPromise` gives such a spawn an `unresolved` value and asks for no instance")
-		end 'result'
+		let result = try self.declaredReturnTypeOf(callee, into: self.typeNames) otherwise panic("internPromiseInstanceForCallee: '{String.from(callee)}' is declared by no file — `Parser.mintSpawnPromise` gives such a spawn an `unresolved` value and asks for no instance")
 
 		return self.internPromiseInstanceReturning(result, callee: callee)
 	end 'internPromiseInstanceForCallee'
@@ -37461,10 +37462,7 @@ export type ProgramSignatures
 	// the cell is the only thing the AWAIT still holds when it needs to know — so the substitution happens
 	// here, once, where the promise type is minted.
 	export function internPromiseInstanceForReply(messageKey ByteArray, serviceInstance ServiceStateInstance) returns GenericInstanceId
-		let result = match self.returnTypeOf(messageKey, into: self.typeNames) 'result'
-			declared(returnType) gives returnType
-			undeclared panic("internPromiseInstanceForReply: `{String.from(messageKey)}` declares no return type — a reply cell is minted for a declared message only")
-		end 'result'
+		let result = try self.declaredReturnTypeOf(messageKey, into: self.typeNames) otherwise panic("internPromiseInstanceForReply: `{String.from(messageKey)}` declares no return type — a reply cell is minted for a declared message only")
 
 		return self.internPromiseInstanceOver(self.replyResultArgThrough(self.promiseResultArgFor(result), messageKey: messageKey, serviceInstance: serviceInstance), callee: messageKey)
 	end 'internPromiseInstanceForReply'
@@ -39931,9 +39929,6 @@ export type ProgramSignatures
 		return self.substituteThroughInstanceInterned(self.declaredSlotType(fieldType, into: self.typeNames, slotScopeFilePath: layout.declFilePath), id: id, interner: self.typeNames)
 	end 'substituteInstanceFieldType'
 
-	// Instance `id`'s concrete type argument at type-parameter `position` — what a `T`-typed field
-	// read on a concrete receiver retypes to. `adoptType` re-interns it into the caller's interner. Arity was
-	// checked at instantiation (E2056), so a type-parameter field's position indexes the args in range.
 	// ⭐⭐ **ARE THIS INSTANCE'S TYPE ARGUMENTS A CONTIGUOUS, IN-ORDER RUN OF SOME GENERIC'S OWN PARAMETERS?**
 	// `Cell with T` written inside `type Holder uses T` is one — argument 0 is the parameter at `uses`-list
 	// position 0 — and so is `Cell with U` inside `Holder uses T, U`, whose run starts at position 1. It is the
@@ -39941,39 +39936,39 @@ export type ProgramSignatures
 	// (`MaxonToStdLowering.emitInstanceDescriptorAddr`): a descriptor is a run of per-parameter blocks, so one base
 	// address serves the callee only while the caller's blocks line up with the callee's from some offset on.
 	//
-	// A PERMUTATION (`Slot with (V, K)`) and a MIXED list (`Pair with (Integer, T)`) both answer no. Neither
-	// has a single base — the first would need the blocks re-ordered and the second has no block at all for
-	// its concrete half — and answering yes for either would hand a callee a descriptor whose words describe
-	// other types, which is a wrong destructor rather than a diagnostic.
-	export function genericInstanceArgsAreACallerParameterRun(gid GenericInstanceId) returns bool
+	// A PERMUTATION (`Slot with (V, K)`) and a MIXED list (`Pair with (Integer, T)`) are both absent.
+	// Neither has a single base — the first would need the blocks re-ordered and the second has no block
+	// at all for its concrete half — and a base for either would hand a callee a descriptor whose words
+	// describe other types, which is a wrong destructor rather than a diagnostic.
+	export function genericInstanceCallerParameterRunBase(gid GenericInstanceId) returns ElementIndex throws AbsentError
 		let count = self.genericInstanceArgCount(gid)
 
 		if count == 0 'noArguments'
-			return false
+			throw AbsentError.absent
 		end 'noArguments'
 
-		let base = self.instanceArgType(gid, position: 0)
+		let first = self.instanceArgType(gid, position: FirstRunArgumentPosition)
 
-		if maxonTypeTag(base) != ValueTypeTag.typeParameter 'firstArgumentIsAType'
-			return false
+		if maxonTypeTag(first) != ValueTypeTag.typeParameter 'firstArgumentIsAType'
+			throw AbsentError.absent
 		end 'firstArgumentIsAType'
 
-		let start = self.opaqueTypeParamPosition(base)
+		let base = self.opaqueTypeParamPosition(first)
 
-		for position in 1 upto count 'eachFurtherArg'
+		for position in FirstRunArgumentPosition + 1 upto count 'eachFurtherArg'
 			let arg = self.instanceArgType(gid, position: position)
 
 			if maxonTypeTag(arg) != ValueTypeTag.typeParameter 'concreteArgument'
-				return false
+				throw AbsentError.absent
 			end 'concreteArgument'
 
-			if self.opaqueTypeParamPosition(arg) != start + position 'notTheNextBlock'
-				return false
+			if self.opaqueTypeParamPosition(arg) != base + position 'notTheNextBlock'
+				throw AbsentError.absent
 			end 'notTheNextBlock'
 		end 'eachFurtherArg'
 
-		return true
-	end 'genericInstanceArgsAreACallerParameterRun'
+		return base
+	end 'genericInstanceCallerParameterRunBase'
 
 	// ⭐⭐ **IS THIS INSTANCE A DECLARED GENERIC BUILT ON SOME GENERIC'S OWN TYPE PARAMETERS?** —
 	// the `Inner with Element` a `type Bag uses Element` names through a `typealias EChain = Inner with Element`,
@@ -40029,7 +40024,8 @@ export type ProgramSignatures
 	end 'genericInstanceArgsBuildOnATypeParameter'
 
 	export function instanceDescriptorIsComposedFromTheCaller(gid GenericInstanceId) returns bool
-		return not self.genericInstanceArgsAreACallerParameterRun(gid) and self.instanceIsBuiltOnATypeParameter(gid)
+		try self.genericInstanceCallerParameterRunBase(gid) otherwise return self.instanceIsBuiltOnATypeParameter(gid)
+		return false
 	end 'instanceDescriptorIsComposedFromTheCaller'
 
 	export function instanceIsBuiltOnATypeParameter(gid GenericInstanceId) returns bool
@@ -40510,6 +40506,9 @@ export type ProgramSignatures
 		return self.canonicalTupleStructRef(self.substitutedInstanceArg(id, position: position))
 	end 'canonicalInstanceArg'
 
+	// Instance `id`'s concrete type argument at type-parameter `position` — what a `T`-typed field
+	// read on a concrete receiver retypes to. `adoptType` re-interns it into the caller's interner. Arity was
+	// checked at instantiation (E2056), so a type-parameter field's position indexes the args in range.
 	export function instanceArgType(id GenericInstanceId, position ElementIndex) returns MaxonType
 		return self.typeArgumentType(self.substitutedInstanceArg(id, position: position))
 	end 'instanceArgType'

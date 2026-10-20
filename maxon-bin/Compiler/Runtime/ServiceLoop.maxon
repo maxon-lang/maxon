@@ -310,7 +310,7 @@ function buildMessageArm(fn SynthesizedFunction, signatures ProgramSignatures, f
 	// ⭐ **THE HANDLER'S RETURN TYPE IS DERIVED ONCE AND THREADED.** The call and the completion must agree
 	// about a type this instantiation SUBSTITUTED, and two derivations of one substitution are two chances
 	// to disagree about which register the reply's value word came back in.
-	let returned = serviceHandlerReturnType(signatures, callee: callee, instance: instance, typeNames: signatures.indexTypeNames())
+	let returned = try serviceHandlerReturnType(signatures, callee: callee, instance: instance, typeNames: signatures.indexTypeNames()) otherwise panic("buildMessageArm: '{String.from(callee)}' has a declaration (`serviceFirstDeclOf` just answered) yet records no return type — both read the one declaration sweep")
 	let reply = serviceArmReply(fn, request: request, caseIndex: caseIndex, payloads: payloads, req: req, site: site)
 	view cells = spillReassignedPayloads(fn, byReference: funcNames.byReferenceParamsOf(callee), classes: payloadClasses, types: payloadTypes, args: args, site: site)
 	let outcome = emitServiceHandlerCall(fn, callee: callee, returned: returned, signatures: signatures, args: handlerArgsOf(args, cells: cells), site: site)
@@ -668,14 +668,11 @@ end 'dropUnconsumedPayloads'
 // states the same kind of fact for a witness dispatch.
 let ServiceReceiverArgCount = 1 as ParamCount
 
-// A handler's return type AS THIS LOOP'S INSTANTIATION FIXES IT, `void` for an undeclared callee — which is
-// a program SemanticCheck rejects with E3004, reached here only because this synthesis runs over a module
-// that may still be doomed. The substitution is what gives a `returns T` handler's result the same concrete
-// tag the awaiter reads it back at; the reply cell's own type was substituted through the same instance at
-// the send (`SignatureIndex.internPromiseInstanceForReply`).
-function serviceHandlerReturnType(signatures ProgramSignatures, callee ByteArray, instance ServiceStateInstance, typeNames TypeNameInterner) returns MaxonReturnType
-	return match signatures.returnTypeOf(callee, into: typeNames) 'r'
-		declared(declaredReturn) gives serviceInstanceResolvedReturn(signatures, returnType: declaredReturn, declFilePath: signatures.recordedReturnDeclFileOf(callee), instance: instance)
-		undeclared gives MaxonReturnType.void
-	end 'r'
+// A handler's return type AS THIS LOOP'S INSTANTIATION FIXES IT. The substitution is what gives a
+// `returns T` handler's result the same concrete tag the awaiter reads it back at; the reply cell's
+// own type was substituted through the same instance at the send
+// (`SignatureIndex.internPromiseInstanceForReply`).
+function serviceHandlerReturnType(signatures ProgramSignatures, callee ByteArray, instance ServiceStateInstance, typeNames TypeNameInterner) returns MaxonReturnType throws AbsentError
+	let declaredReturn = try signatures.declaredReturnTypeOf(callee, into: typeNames)
+	return serviceInstanceResolvedReturn(signatures, returnType: declaredReturn, declFilePath: signatures.recordedReturnDeclFileOf(callee), instance: instance)
 end 'serviceHandlerReturnType'

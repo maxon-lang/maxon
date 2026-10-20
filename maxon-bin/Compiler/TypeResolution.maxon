@@ -706,10 +706,10 @@ export function functionShapesAgreeUnderSomeInstantiation(registry FunctionTypeR
 		end 'paramMismatch'
 	end 'eachParam'
 
-	return match declared.returnType 'declaredSlot'
-		void gives isVoidReturnType(got.returnType)
-		value(declaredValue) gives not isVoidReturnType(got.returnType) and positionAgreesUnderSomeInstantiation(registry, signatures: signatures, declaredType: declaredValue, gotType: returnedValueType(got.returnType), declaredIdentity: declared.returnAggregateName, gotIdentity: got.returnAggregateName, readerFilePath: readerFilePath)
-	end 'declaredSlot'
+	let gotValue = try valueTypeOfReturn(got.returnType) otherwise return maxonReturnTypeIsVoid(declared.returnType)
+	let declaredValue = try valueTypeOfReturn(declared.returnType) otherwise return false
+
+	return positionAgreesUnderSomeInstantiation(registry, signatures: signatures, declaredType: declaredValue, gotType: gotValue, declaredIdentity: declared.returnAggregateName, gotIdentity: got.returnAggregateName, readerFilePath: readerFilePath)
 end 'functionShapesAgreeUnderSomeInstantiation'
 
 function positionAgreesUnderSomeInstantiation(registry FunctionTypeRegistry, signatures ProgramSignatures, declaredType MaxonType, gotType MaxonType, declaredIdentity ByteArray, gotIdentity ByteArray, readerFilePath FilePath) returns bool
@@ -825,28 +825,11 @@ let sharedEmptyFunctionTypePairs = FunctionTypePairArray.create()
 // meeting a value (or the reverse) is a real disagreement — a call site that expects a result register from
 // a function that writes none reads whatever was there.
 function returnSlotsMatch(registry FunctionTypeRegistry, signatures ProgramSignatures, declared MaxonReturnType, got MaxonReturnType, pending FunctionTypePairArray, readerFilePath FilePath) returns bool
-	match declared 'declaredSlot'
-		void then return isVoidReturnType(got)
-		value(declaredValue) then return not isVoidReturnType(got) and resolvedTypesMatch(registry, signatures: signatures, declared: declaredValue, got: returnedValueType(got), pending: pending, readerFilePath: readerFilePath)
-	end 'declaredSlot'
+	let gotValue = try valueTypeOfReturn(got) otherwise return maxonReturnTypeIsVoid(declared)
+	let declaredValue = try valueTypeOfReturn(declared) otherwise return false
+
+	return resolvedTypesMatch(registry, signatures: signatures, declared: declaredValue, got: gotValue, pending: pending, readerFilePath: readerFilePath)
 end 'returnSlotsMatch'
-
-// Is this return slot the void arm?
-function isVoidReturnType(ret MaxonReturnType) returns bool
-	return match ret 'r'
-		void gives true
-		value gives false
-	end 'r'
-end 'isVoidReturnType'
-
-// The type a non-void return slot carries. `void` is a caller bug — every caller asks `isVoidReturnType`
-// first — so it panics rather than inventing a type nothing returns.
-function returnedValueType(ret MaxonReturnType) returns MaxonType
-	match ret 'r'
-		value(inner) then return inner
-		void then panic("returnedValueType: a `void` return slot carries no type — ask isVoidReturnType first")
-	end 'r'
-end 'returnedValueType'
 
 // Two types in one registry's form — both resolved, or both parse-time — are the same type: the
 // same tag, and — for the tags that still carry an identity in that form — the same id. Both sides'

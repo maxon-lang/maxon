@@ -3962,7 +3962,7 @@ type MaxonToStdLowering
 	// arguments are a CONTIGUOUS, IN-ORDER RUN of the caller's own parameters — `Cell with T` inside
 	// `Holder uses T` is the run `[0,1)`, and `Cell with U` inside `Holder uses T, U` is the run `[1,2)`, whose
 	// base is block 1. A permutation or a mixed concrete/parameter list has no single base and is not a run
-	// (`genericInstanceArgsAreACallerParameterRun` answers no): its descriptor is composed at the concrete
+	// (`genericInstanceCallerParameterRunBase` answers absent): its descriptor is composed at the concrete
 	// root and read out of the caller's own descriptor table (`emitDescriptorTableRead`), and a genuinely
 	// concrete instance is minted. The blob's own `size@0` describes the CALLER's
 	// box rather than the callee's, and that is sound because nothing reads it: the four words a shared body
@@ -3990,9 +3990,10 @@ type MaxonToStdLowering
 			panic("emitInstanceDescriptorAddr: '{String.from(self.currentFuncName())}' reaches a call on '{String.from(self.signatures.instanceDisplayName(gid))}', whose descriptor is read out of the caller's table, but `planDescriptorTables` filed no entry for it — the plan and the call lowering read the descriptor source through one `layoutSourceOf`, so they must agree")
 		end 'aComposedInstanceTheTableMissed'
 
-		if self.hasImplicitLayout and self.signatures.genericInstanceArgsAreACallerParameterRun(gid) 'forwardsTheCallersOwnRun'
-			// The run's base is argument 0's own `uses`-list position; the predicate above proved the rest follow it.
-			return self.descriptorBlockAddr(layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(self.signatures.instanceArgType(gid, position: 0))), dstBlock: dstBlock)
+		if self.hasImplicitLayout 'forwardsTheCallersOwnRun'
+			if let base = try self.signatures.genericInstanceCallerParameterRunBase(gid) 'aRunOfTheCallersParameters'
+				return self.descriptorBlockAddr(layoutBlockOffsetFor(base), dstBlock: dstBlock)
+			end 'aRunOfTheCallersParameters'
 		end 'forwardsTheCallersOwnRun'
 
 		let descId = self.mintStdValueId()
@@ -4228,11 +4229,8 @@ type MaxonToStdLowering
 	end 'tableOfOwnerForWrite'
 
 	function instanceIsResolvedAtTheConcreteRoot(gid GenericInstanceId) returns bool
-		if self.signatures.genericInstanceArgsAreACallerParameterRun(gid) 'aRunOfTheCallersParameters'
-			return self.descriptorTables.contains(self.signatures.genericInstanceBaseName(gid))
-		end 'aRunOfTheCallersParameters'
-
-		return self.signatures.instanceIsBuiltOnATypeParameter(gid)
+		try self.signatures.genericInstanceCallerParameterRunBase(gid) otherwise return self.signatures.instanceIsBuiltOnATypeParameter(gid)
+		return self.descriptorTables.contains(self.signatures.genericInstanceBaseName(gid))
 	end 'instanceIsResolvedAtTheConcreteRoot'
 
 	function noteTableCandidatesOf(blockRefs BlockRefArray, into DescriptorSubjects)

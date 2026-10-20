@@ -407,19 +407,14 @@ function asyncCellContentOf(signatures ProgramSignatures, typeNames TypeNameInte
 end 'asyncCellContentOf'
 
 // The RESULT slot, if the callee returns a managed value. It reads the return type off the whole-program
-// registry (`returnTypeOf`, remapped `into` the interner the rest of this plan is resolved against) and its
-// pre-erasure identity off `FuncSignature.returnAggregateName` — the return twin of `paramAggregateNames`,
-// and needed for the same reason: a boxed union RETURN resolves to bare `integer` too.
+// registry (`declaredValueReturnOf`, remapped `into` the interner the rest of this plan is resolved
+// against) and its pre-erasure identity off `FuncSignature.returnAggregateName` — the return twin
+// of `paramAggregateNames`, and needed for the same reason: a boxed union RETURN resolves to bare
+// `integer` too.
 function asyncResultSlotsOf(callee ByteArray, sig FuncSignature, signatures ProgramSignatures, typeNames TypeNameInterner) returns AsyncManagedSlotArray
-	let returnType = match signatures.returnTypeOf(callee, into: typeNames) 'r'
-		declared(declaredReturn) gives declaredReturn
-		undeclared gives MaxonReturnType.void
-	end 'r'
+	let resultType = try signatures.declaredValueReturnOf(callee, into: typeNames) otherwise return AsyncManagedSlotArray.create()
 
-	return match returnType 'rt'
-		void gives AsyncManagedSlotArray.create()
-		value(inner) gives asyncResultSlotsOfType(inner, signatures: signatures, typeNames: typeNames, aggregateName: sig.returnAggregateName)
-	end 'rt'
+	return asyncResultSlotsOfType(resultType, signatures: signatures, typeNames: typeNames, aggregateName: sig.returnAggregateName)
 end 'asyncResultSlotsOf'
 
 // A reply held at an interface type is the one result whose drop reads a second word: its witness half, in

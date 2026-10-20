@@ -807,15 +807,6 @@ export function maxonReturnTypeIsVoid(ref MaxonReturnType) returns bool
 	end 'check'
 end 'maxonReturnTypeIsVoid'
 
-// Does this return type name the declaring type's own opaque type parameter — the one shape a CONCRETE
-// instantiation still has to fix before any caller can read the value?
-export function maxonReturnTypeIsATypeParameter(ref MaxonReturnType) returns bool
-	return match ref 'check'
-		void gives false
-		value(inner) gives maxonTypeTag(inner) == ValueTypeTag.typeParameter
-	end 'check'
-end 'maxonReturnTypeIsATypeParameter'
-
 // The `ValueTypeTag` of a function's declared return type — what a `return <expr>` must agree
 // with (TypeRules' `typesAgree`). Void has NO tag: void is not a type, so there is nothing for
 // a value to agree with, and manufacturing a tag for it would be exactly the sentinel this
@@ -823,21 +814,9 @@ end 'maxonReturnTypeIsATypeParameter'
 // `maxonReturnTypeIsVoid` is the gate, and a void `return <expr>` is its own diagnostic
 // (`SourceParseError.returnValueFromVoid`) — so the void arm is a caller bug and panics.
 export function maxonReturnTypeTag(ref MaxonReturnType) returns ValueTypeTag
-	match ref 'k'
-		void then panic("maxonReturnTypeTag: a void return type has no value tag — the caller must gate on maxonReturnTypeIsVoid first")
-		value(inner) then return maxonTypeTag(inner)
-	end 'k'
+	let inner = try valueTypeOfReturn(ref) otherwise panic("maxonReturnTypeTag: a void return type has no value tag — the caller must gate on maxonReturnTypeIsVoid first")
+	return maxonTypeTag(inner)
 end 'maxonReturnTypeTag'
-
-// The declared type itself — what a `return`'s implicit conversion targets (`Parser.admitReturnedAggregate`).
-// Asked only once a value has been found to carry a different identity, so the per-return path stays on the
-// two scalar readers above. Void is the same caller bug it is for them.
-export function maxonReturnTypeInner(ref MaxonReturnType) returns MaxonType
-	match ref 'k'
-		void then panic("maxonReturnTypeInner: a void return type has no value — the caller must gate on maxonReturnTypeIsVoid first")
-		value(inner) then return inner
-	end 'k'
-end 'maxonReturnTypeInner'
 
 // --- MaxonOp ---
 //

@@ -751,7 +751,8 @@ end 'uncarriableReplyResultNoun'
 
 // A non-void reply's declared type, resolved through the swept slot door.
 function declaredReplyType(signatures ProgramSignatures, returnType MaxonReturnType, declFilePath FilePath) returns MaxonType
-	return signatures.declaredSlotType(serviceReturnedType(returnType), into: signatures.indexTypeNames(), slotScopeFilePath: declFilePath)
+	let returned = try valueTypeOfReturn(returnType) otherwise panic("declaredReplyType: asked for the returned type of a VOID message — `uncarriableReplyResultNoun` matches `void` before reaching here")
+	return signatures.declaredSlotType(returned, into: signatures.indexTypeNames(), slotScopeFilePath: declFilePath)
 end 'declaredReplyType'
 
 // ⭐⭐ **WHY THE REPLY'S GRAPH AT AN INSTANTIATION CANNOT BE WALKED.** The loop walks the reply at the type the instantiation substitutes
@@ -876,15 +877,6 @@ function uncarriableReplyErrorNoun(signatures ProgramSignatures, messageKey Byte
 
 	return ServiceCrossing.acceptable
 end 'uncarriableReplyErrorNoun'
-
-// The declared type a non-void return carries. Asked only where the `void` arm has already been taken, so
-// the panic names a caller that skipped its own gate rather than inventing a placeholder.
-function serviceReturnedType(returnType MaxonReturnType) returns MaxonType
-	return match returnType 'r'
-		void panic("serviceReturnedType: asked for the returned type of a VOID message — `uncarriableReplyResultNoun` matches `void` before reaching here")
-		value(declared) gives declared
-	end 'r'
-end 'serviceReturnedType'
 
 // ⭐⭐ **WHAT A PARAMETER *IS* WHEN IT CANNOT CROSS A GREEN THREAD, or EMPTY when it can.** A NOUN and not a
 // spelling, because the sentence has to say why: `'p' is a Promise` is the reason, where `'p' is

@@ -8283,28 +8283,20 @@ export function constantValueTypeIn(tag ValueTypeTag, typeName ByteArray, into T
 	return constantValueType(tag, typeNameId: into.intern(typeName))
 end 'constantValueTypeIn'
 
-// The interned-NAME id of a function's declared return type, for a function KNOWN to return a value —
-// the id half of `maxonReturnTypeTag` (MaxonDialect), read where the aggregate-identity check needs a
-// return type's NAME and a scalar tag carries none. It returns the SCALAR id, never
-// materializing the inner `MaxonType`: `typeNameIdOf` reads the borrowed inner's id, so a
-// scalar-returning function allocates nothing here — the same reason every type rule is stated over
-// the dense `valueTags`/`valueNameIds` columns (see TypeRules' header). Void is a caller bug: every
-// caller is gated on `maxonReturnTypeIsVoid`, and a void `return <expr>` is its own diagnostic.
 // The VALUE half of a declared return type, for a callee the caller already knows produces one. A `void`
 // here is a routing bug — a member routed to a runtime call for its RESULT was declared to return nothing —
 // so it panics rather than inventing a width.
 function requireDeclaredResultValue(ref MaxonReturnType, typeName ByteArray, methodName ByteArray) returns MaxonType
-	match ref 'k'
-		void then panic("requireDeclaredResultValue: `{String.from(typeName)}.{String.from(methodName)}` is declared to return nothing, but its dispatch uses the call for a value")
-		value(inner) then return inner
-	end 'k'
+	return try valueTypeOfReturn(ref) otherwise panic("requireDeclaredResultValue: `{String.from(typeName)}.{String.from(methodName)}` is declared to return nothing, but its dispatch uses the call for a value")
 end 'requireDeclaredResultValue'
 
+// The interned-NAME id of a function's declared return type, for a function KNOWN to return a value —
+// the id half of `maxonReturnTypeTag` (MaxonDialect), read where the aggregate-identity check needs a
+// return type's NAME and a scalar tag carries none. Void is a caller bug: every caller is gated on
+// `maxonReturnTypeIsVoid`, and a void `return <expr>` is its own diagnostic.
 function maxonReturnTypeNameId(ref MaxonReturnType) returns TypeNameId
-	match ref 'k'
-		void then panic("maxonReturnTypeNameId: a void return type has no value — the caller must gate on maxonReturnTypeIsVoid first")
-		value(inner) then return typeNameIdOf(inner)
-	end 'k'
+	let inner = try valueTypeOfReturn(ref) otherwise panic("maxonReturnTypeNameId: a void return type has no value — the caller must gate on maxonReturnTypeIsVoid first")
+	return typeNameIdOf(inner)
 end 'maxonReturnTypeNameId'
 
 // The comparison operators. Each maps to a `MaxonOp.compare`. Classifier shared by
@@ -44454,7 +44446,7 @@ export type Parser
 	// `requireManagedValueMatches` carry the identical note for the identical reason (user ruling,
 	// 2026-08-04): the refusal quotes the alias the author wrote, never the instance mint.
 	function admitReturnedAggregate(func IrFunction, returned ValueId, retTag ValueTypeTag, declaredTag ValueTypeTag, declaredNameId TypeNameId, retStart ElementIndex, anchor Token) returns ValueId throws SourceParseError
-		let declaredType = maxonReturnTypeInner(func.maxonReturnType)
+		let declaredType = try valueTypeOfReturn(func.maxonReturnType) otherwise panic("admitReturnedAggregate: a void return type has no value — the caller must gate on maxonReturnTypeIsVoid first")
 		let value = try self.destinationTemporary(returned, declared: declaredType, anchor: anchor)
 		view declaredReturnName = self.aggregateNameOf(declaredTag, nameId: declaredNameId)
 		view returnedName = self.aggregateNameOf(retTag, nameId: self.valueNameId(value))
@@ -62313,22 +62305,18 @@ export type Parser
 		return id
 	end 'mintValue'
 
+	// ⭐ **THE TYPE A COMPILER-ROUTED BUILTIN METHOD HANDS BACK, READ OFF THE CORPUS DECLARATION.** A method
+	// the compiler serves with a RUNTIME CALL is still one `stdlib/` declares, and the declaration is
+	// the only place a ranged alias's NAME survives: minting the result from a bare tag drops it, and
+	// every rule stated over the alias then has nothing to look up.
+	function declaredRuntimeMethodResult(typeName ByteArray, methodName ByteArray) returns MaxonType
+		let returnType = try self.signatures.declaredReturnTypeOf(qualifiedMethodName(typeName, methodName: methodName), into: self.artifact.typeNames) otherwise panic("declaredRuntimeMethodResult: `{String.from(typeName)}.{String.from(methodName)}` is routed to a runtime call but no file declares it — every member the surface roster admits is one the corpus declares")
+		return requireDeclaredResultValue(returnType, typeName: typeName, methodName: methodName)
+	end 'declaredRuntimeMethodResult'
+
 	// Mint a value whose type is already in hand as a `MaxonType` — a `literal` op's type (the
 	// op stores one anyway), a call's declared return type. It DECOMPOSES an existing union
 	// rather than constructing a new one, so it allocates nothing either.
-	// ⭐ **THE TYPE A COMPILER-ROUTED BUILTIN METHOD HANDS BACK, READ OFF THE CORPUS DECLARATION.** A method
-	// The compiler serves with a RUNTIME CALL is still one `stdlib/` declares, and the declaration is the only place
-	// a ranged alias's NAME survives: minting the result from a bare tag drops it, and every rule stated over
-	// the alias then has nothing to look up. MEASURED without it: `try c.asciiValue() otherwise -1` compiled
-	// clean — a value outside `AsciiValue`'s `0 to 127` reaching the merge — while the identical shape over a
-	// user function returning a ranged alias was refused.
-	function declaredRuntimeMethodResult(typeName ByteArray, methodName ByteArray) returns MaxonType
-		match self.signatures.returnTypeOf(qualifiedMethodName(typeName, methodName: methodName), into: self.artifact.typeNames) 'lookup'
-			undeclared then panic("declaredRuntimeMethodResult: `{String.from(typeName)}.{String.from(methodName)}` is routed to a runtime call but no file declares it — every member the surface roster admits is one the corpus declares")
-			declared(returnType) then return requireDeclaredResultValue(returnType, typeName: typeName, methodName: methodName)
-		end 'lookup'
-	end 'declaredRuntimeMethodResult'
-
 	function mintValueOfType(valueType MaxonType) returns ValueId
 		return self.mintValue(maxonTypeTag(valueType), nameId: typeNameIdOf(valueType))
 	end 'mintValueOfType'
@@ -75504,15 +75492,20 @@ export type Parser
 	// answers `mutable`; a managed constant and an imaged record are `.rdata` and can be written through by
 	// nothing.
 	function dispatchOnManagedTopLevelReceiver(func IrFunction, tok Token, resultUsed bool) returns ManagedTopLevelDispatch throws SourceParseError
-		match self.managedReceiverBindingOf(tok) 'binding'
-			inlineWord(payload, typeName) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: self.emitInlineRecordWord(payload, typeName: typeName, range: SourceRange.ofToken(tok)), varType: self.inlineRecordWordType(typeName), mutable: false, resultUsed: resultUsed))
+		let binding = self.managedReceiverBindingOf(tok)
+
+		match binding 'binding'
+			inlineWord or
+			imageRecord or
+			imageBox then break
 			constant(bytes, kind) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(tok)), varType: self.signatures.managedConstValueType(kind, elementFilePath: self.job.path), mutable: false, resultUsed: resultUsed))
 			global(label, valueType, mutable) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: self.noteGlobalLetMapColumns(self.emitGlobalReceiverLoad(label, valueType: valueType, mutable: mutable, tok: tok), tok: tok, mutable: mutable), varType: valueType, mutable: mutable, resultUsed: resultUsed))
-			imageRecord(image) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: self.recordModuleLetRoot(self.emitImageRecordRead(image, range: SourceRange.ofToken(tok)), name: tok.value, image: true), varType: image.valueType, mutable: false, resultUsed: resultUsed))
-			imageBox(nodes, root, typeName, tag) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: self.recordModuleLetRoot(self.emitImageBoxRead(nodes, root: root, typeName: typeName, tag: tag, range: SourceRange.ofToken(tok)), name: tok.value, image: true), varType: self.imageBoxType(typeName, tag: tag), mutable: false, resultUsed: resultUsed))
 			none or
 			poisoned then return ManagedTopLevelDispatch.notAManagedReceiver
 		end 'binding'
+
+		let (value, valueType) = self.materializeImageOrInlineBinding(binding, tok: tok)
+		return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: value, varType: valueType, mutable: false, resultUsed: resultUsed))
 	end 'dispatchOnManagedTopLevelReceiver'
 
 	// ⭐ **THE SHAPE OF A SYNTHETIC RECEIVER BINDING, DECIDED ONCE.** A top-level managed receiver is not a
@@ -76905,12 +76898,9 @@ export type Parser
 			return
 		end 'aMonomorphicService'
 
-		let declaredReturn = match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'r'
-			declared(returnType) gives returnType
-			undeclared gives MaxonReturnType.void
-		end 'r'
+		let declaredReturn = try self.signatures.declaredValueReturnOf(callee, into: self.artifact.typeNames) otherwise return
 
-		if not maxonReturnTypeIsATypeParameter(declaredReturn) 'theInstantiationFixesNothingHere'
+		if maxonTypeTag(declaredReturn) != ValueTypeTag.typeParameter 'theInstantiationFixesNothingHere'
 			return
 		end 'theInstantiationFixesNothingHere'
 
@@ -76920,11 +76910,8 @@ export type Parser
 	// The SOURCE NAME of the type parameter a reply is declared at — `T`, the spelling the author wrote,
 	// where the type carries only its digest token. A reply this is asked of has already been matched
 	// `typeParameter`, and every such token was filed by `recordStruct` against the declaration it came from.
-	function replyTypeParamName(declaredReturn MaxonReturnType) returns ByteArray
-		let token = match declaredReturn 'r'
-			void panic("replyTypeParamName: asked for the type-parameter name of a VOID reply — the caller matches `maxonReturnTypeIsATypeParameter` first")
-			value(inner) gives typeParamIdOf(inner)
-		end 'r'
+	function replyTypeParamName(declaredReturn MaxonType) returns ByteArray
+		let token = typeParamIdOf(declaredReturn)
 
 		return (try self.signatures.typeParamOwnerOf(token) otherwise panic("replyTypeParamName: type-parameter token {token} names no declaration's parameter — every token was filed by `ProgramSignatures.recordStruct` from the `uses` list that minted it")).paramName
 	end 'replyTypeParamName'
@@ -87999,21 +87986,7 @@ export type Parser
 			try self.consume(TokenKind.dot)
 			let nameTok = self.staticMemberNameToken(typeTok, memberTok: try self.consumeMemberNameToken())
 
-			match self.managedReceiverBindingOf(nameTok) 'binding'
-				inlineWord(payload, typeName) then return try self.resolveValueFieldChain(nameTok, value: self.emitInlineRecordWord(payload, typeName: typeName, range: SourceRange.ofToken(nameTok)), valueType: self.inlineRecordWordType(typeName), mutable: false)
-
-				// A managed CONSTANT (a `String`, a `b"…"`) and an INLINED scalar have no field to chain
-				// through, so both take the `undefinedVariable` an unknown base (`none`) does, spelled at the
-				// QUALIFIED name because that is what this chain is rooted at.
-				constant or
-				none then break
-				poisoned then panic("resolveFieldChain: a poisoned base is answered by `chainBaseDeferralSource` before the chain is resolved, in both the read and the write door")
-				global(label, valueType, mutable) then return try self.resolveGlobalFieldChain(nameTok, label: label, valueType: valueType, mutable: mutable)
-				imageBox(nodes, root, typeName, tag) then return try self.resolveValueFieldChain(nameTok, value: self.recordModuleLetRoot(self.emitImageBoxRead(nodes, root: root, typeName: typeName, tag: tag, range: SourceRange.ofToken(nameTok)), name: nameTok.value, image: true), valueType: self.imageBoxType(typeName, tag: tag), mutable: false)
-				imageRecord(image) then return try self.resolveValueFieldChain(nameTok, value: self.recordModuleLetRoot(self.emitImageRecordRead(image, range: SourceRange.ofToken(nameTok)), name: nameTok.value, image: true), valueType: image.valueType, mutable: false)
-			end 'binding'
-
-			throw SourceParseError.undefinedVariable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
+			return try self.resolveManagedBindingFieldChain(nameTok)
 		end 'staticMemberBase'
 
 		// ⭐ **A TOP-LEVEL MANAGED GLOBAL IS THE THIRD BASE** (spec-port `map-struct-bytearray`) —
@@ -88026,25 +87999,34 @@ export type Parser
 		// — which is exactly the property an intermediate field load already has, so the chain walk below
 		// needs no ownership bookkeeping it did not already have.
 		if self.managedTopLevelBaseAt(baseIndex) 'managedTopLevelBase'
-			match self.managedReceiverBindingOf(baseTok) 'binding'
-				inlineWord(payload, typeName) then return try self.resolveValueFieldChain(baseTok, value: self.emitInlineRecordWord(payload, typeName: typeName, range: SourceRange.ofToken(baseTok)), valueType: self.inlineRecordWordType(typeName), mutable: false)
-
-				// A managed CONSTANT is a `String` or a `b"…"`, which has no field, so it takes the same
-				// `undefinedVariable` an unknown base does rather than an arm that could only refuse. An
-				// IMAGED record MAY have fields — see `ManagedReceiverBinding.imageRecord` — so it chains
-				// through the value like every other base, and a member the record has not got is then the
-				// chain's own diagnostic rather than a claim that the base does not exist.
-				constant or
-				none then break
-				poisoned then panic("resolveFieldChain: a poisoned base is answered by `chainBaseDeferralSource` before the chain is resolved, in both the read and the write door")
-				global(label, valueType, mutable) then return try self.resolveGlobalFieldChain(baseTok, label: label, valueType: valueType, mutable: mutable)
-				imageBox(nodes, root, typeName, tag) then return try self.resolveValueFieldChain(baseTok, value: self.recordModuleLetRoot(self.emitImageBoxRead(nodes, root: root, typeName: typeName, tag: tag, range: SourceRange.ofToken(baseTok)), name: baseTok.value, image: true), valueType: self.imageBoxType(typeName, tag: tag), mutable: false)
-				imageRecord(image) then return try self.resolveValueFieldChain(baseTok, value: self.recordModuleLetRoot(self.emitImageRecordRead(image, range: SourceRange.ofToken(baseTok)), name: baseTok.value, image: true), valueType: image.valueType, mutable: false)
-			end 'binding'
+			return try self.resolveManagedBindingFieldChain(baseTok)
 		end 'managedTopLevelBase'
 
 		throw SourceParseError.undefinedVariable(String.from(baseTok.value), line: baseTok.line, column: baseTok.column)
 	end 'resolveFieldChain'
+
+	function resolveManagedBindingFieldChain(tok Token) returns FieldChainStep throws SourceParseError
+		let binding = self.managedReceiverBindingOf(tok)
+
+		match binding 'binding'
+			inlineWord or
+			imageRecord or
+			imageBox then break
+
+			// A managed CONSTANT is a `String` or a `b"…"`, which has no field, so it takes the same
+			// `undefinedVariable` an unknown base does rather than an arm that could only refuse. An
+			// IMAGED record MAY have fields — see `ManagedReceiverBinding.imageRecord` — so it chains
+			// through the value like every other base, and a member the record has not got is then the
+			// chain's own diagnostic rather than a claim that the base does not exist.
+			constant or
+			none then throw SourceParseError.undefinedVariable(String.from(tok.value), line: tok.line, column: tok.column)
+			poisoned then panic("resolveFieldChain: a poisoned base is answered by `chainBaseDeferralSource` before the chain is resolved, in both the read and the write door")
+			global(label, valueType, mutable) then return try self.resolveGlobalFieldChain(tok, label: label, valueType: valueType, mutable: mutable)
+		end 'binding'
+
+		let (value, valueType) = self.materializeImageOrInlineBinding(binding, tok: tok)
+		return try self.resolveValueFieldChain(tok, value: value, valueType: valueType, mutable: false)
+	end 'resolveManagedBindingFieldChain'
 
 	// An immutable slot's base is marked as a bare read of it is, so a field read through it into a
 	// `var` (`var m = H.index`) is E3078 rather than a second, writable name for the `let`'s record.
@@ -90965,8 +90947,8 @@ export type Parser
 		match self.signatures.constantValueOf(tok.value, readerFilePath: self.job.path) 'constant'
 			found(payload, tag, typeName) then return self.readFoldedConstant(tok, payload: payload, tag: tag, typeName: typeName)
 			foundManaged(bytes, kind) then return self.recordImmutableConstantRead(tok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(tok)))
-			foundImageRecord(image) then return self.recordImmutableConstantRead(tok, value: self.emitImageRecordRead(image, range: SourceRange.ofToken(tok)))
-			foundImageBox(nodes, root, typeName, tag) then return self.recordImmutableConstantRead(tok, value: self.emitImageBoxRead(nodes, root: root, typeName: typeName, tag: tag, range: SourceRange.ofToken(tok)))
+			foundImageRecord(image) then return self.recordImmutableConstantRead(tok, value: self.emitImageRecordRead(image, tok: tok))
+			foundImageBox(nodes, root, typeName, tag) then return self.recordImmutableConstantRead(tok, value: self.emitImageBoxRead(nodes, root: root, typeName: typeName, tag: tag, tok: tok))
 			poisoned then return self.mintDeferredValue()
 			notFound then break
 		end 'constant'
@@ -91030,14 +91012,30 @@ export type Parser
 
 	function recordImmutableConstantRead(tok Token, value ValueId) returns ValueId
 		self.publishBareBindingName(tok, holder: WriteBlameHolder.moduleLet, blamed: true)
-		return self.recordModuleLetRoot(value, name: tok.value, image: true)
+		return self.recordImageRead(value, tok: tok)
 	end 'recordImmutableConstantRead'
 
+	function recordImageRead(value ValueId, tok Token) returns ValueId
+		if self.valueIsAnImageUnionCase(value) 'noFieldsToWrite'
+			return value
+		end 'noFieldsToWrite'
+
+		return self.recordModuleLetRoot(value, name: tok.value)
+	end 'recordImageRead'
+
+	function materializeImageOrInlineBinding(binding ManagedReceiverBinding, tok Token) returns (ValueId, MaxonType)
+		return match binding 'binding'
+			inlineWord(payload, typeName) gives (self.emitInlineRecordWord(payload, typeName: typeName, range: SourceRange.ofToken(tok)), self.inlineRecordWordType(typeName))
+			imageRecord(image) gives (self.recordImageRead(self.emitImageRecordRead(image, tok: tok), tok: tok), image.valueType)
+			imageBox(nodes, root, typeName, tag) gives (self.recordImageRead(self.emitImageBoxRead(nodes, root: root, typeName: typeName, tag: tag, tok: tok), tok: tok), self.imageBoxType(typeName, tag: tag))
+			default panic("materializeImageOrInlineBinding: only an inline word, an imaged record and an imaged box are materialized from the binding — every other arm is answered by its reader before this door")
+		end 'binding'
+	end 'materializeImageOrInlineBinding'
+
 	// ⭐ **A MODULE-LEVEL `let` READ IS AN IMMUTABLE NAME'S RECORD** wherever it is read, and it can never move:
-	// filed for `StorageProvenance`, which refuses it at a mutable door. `image`: the `let` is image data, and an
-	// image union case has no fields a door could write (`emitImageBoxRead`), so it is not filed.
-	function recordModuleLetRoot(value ValueId, name ByteArray, image bool) returns ValueId
-		if self.valueIsManagedHeap(value) and not (image and self.valueIsAnImageUnionCase(value)) and self.bodyState.deferredProvenance is not self.anchors.noDeferredProvenance 'aRecordInABody'
+	// filed for `StorageProvenance`, which refuses it at a mutable door.
+	function recordModuleLetRoot(value ValueId, name ByteArray) returns ValueId
+		if self.valueIsManagedHeap(value) and self.bodyState.deferredProvenance is not self.anchors.noDeferredProvenance 'aRecordInABody'
 			self.bodyState.deferredProvenance.noteModuleLetRead(value, name: name)
 		end 'aRecordInABody'
 
@@ -91093,7 +91091,8 @@ export type Parser
 	// ⚠ **THE IMMUTABLE-GLOBAL MARK IS STILL TAKEN.** Imaging changes where the record LIVES, not what the
 	// language says about the binding: `let` still refuses to be aliased into rebindable storage, and
 	// the mark is what carries that refusal to the escape doors.
-	function emitImageRecordRead(image TopLevelImageRecord, range SourceRange) returns ValueId
+	function emitImageRecordRead(image TopLevelImageRecord, tok Token) returns ValueId
+		let range = SourceRange.ofToken(tok)
 		let result = self.mintValue(maxonTypeTag(image.valueType), nameId: typeNameIdOf(image.valueType))
 		self.brandValue(result, brand: image.brand)
 
@@ -91153,7 +91152,8 @@ export type Parser
 	// ⚠ **NO OWNED TEMP AND NO DROP**, for the twin's reason: an immortal record is never created, so a
 	// statement-end drop on one would be a write to a read-only page. The immutable-global mark is still
 	// taken — imaging changes where the record lives, not what `let` means.
-	function emitImageBoxRead(nodes ImmortalBoxNodeArray, root ElementIndex, typeName ByteArray, tag ValueTypeTag, range SourceRange) returns ValueId
+	function emitImageBoxRead(nodes ImmortalBoxNodeArray, root ElementIndex, typeName ByteArray, tag ValueTypeTag, tok Token) returns ValueId
+		let range = SourceRange.ofToken(tok)
 		let result = self.mintValue(tag, nameId: typeNameIdOf(self.imageBoxType(typeName, tag: tag)))
 		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.immortalStructRecord(result, nodes: nodes, root: root), range: range)
 
@@ -91322,7 +91322,7 @@ export type Parser
 		end 'noRecordToMark'
 
 		self.markImageRecordRead(value)
-		return self.recordModuleLetRoot(value, name: tok.value, image: false)
+		return self.recordModuleLetRoot(value, name: tok.value)
 	end 'recordSlotRead'
 
 	// ⭐⭐ **DID THE WHOLE-PROGRAM SWEEP PUBLISH THIS NAME AS ONE WHOSE RESULT MAY ALIAS A `let`-DECLARED
@@ -100107,11 +100107,7 @@ export type Parser
 		// ⚠ **GATED ON WHAT THE MEMBER RETURNS, NOT ON THE RECEIVER ALONE.** The rule is about handing an
 		// ELEMENT over; a member of the same container that returns something else — `count()`, `push()`,
 		// `clear()` — is untouched by it.
-		let declared = match returnType 'r'
-			value(inner) gives inner
-			void gives MaxonType.integer
-		end 'r'
-
+		let declared = try valueTypeOfReturn(returnType) otherwise return
 		let handedBack = self.slotTypeThroughReceiver(receiver, declared: declared, scopeFilePath: self.signatures.recordedReturnDeclFileOf(callee))
 
 		if not self.typeHandsBackAGreenThread(handedBack) or calleeIsAnElementMoveOut(callee) 'nothingBorrowed'
@@ -101110,10 +101106,8 @@ export type Parser
 	// What `await <reply>` yields: the message's declared return type, repaired through the same swept
 	// walk `calleeReturnType` uses.
 	function serviceReplyResultType(messageName ByteArray, cell ValueId) returns MaxonReturnType
-		return match self.signatures.returnTypeOf(messageName, into: self.artifact.typeNames) 'r'
-			declared(declaredReturn) gives self.fixedReplyResultType(declaredReturn, messageName: messageName, cell: cell)
-			undeclared panic("serviceReplyResultType: `{String.from(messageName)}` declares no return type — a reply cell is minted for a declared message only")
-		end 'r'
+		let declaredReturn = try self.signatures.declaredReturnTypeOf(messageName, into: self.artifact.typeNames) otherwise panic("serviceReplyResultType: `{String.from(messageName)}` declares no return type — a reply cell is minted for a declared message only")
+		return self.fixedReplyResultType(declaredReturn, messageName: messageName, cell: cell)
 	end 'serviceReplyResultType'
 
 	// ⭐⭐ **A RETURN THE INSTANTIATION FIXES IS READ OFF THE CELL, WHICH IS WHERE THE SEND RECORDED IT.**
