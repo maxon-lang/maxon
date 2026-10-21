@@ -22,8 +22,8 @@ jne __im_slow            ; (write)  — or —  je __im_empty ... cmp rax, 0 / j
 ```
 
 `Array with Integer` stamps that field with `TrivialDestructor` (0) in every program that ever runs.
-The stamp is decided by the ELEMENT TYPE — `Parser.arrayElementDestroyValue` writes it from
-`ProgramSignatures.containerElementOwesDrop` — and the compiler has it at the moment it emits the call.
+The stamp is decided by the ELEMENT TYPE — `ProgramSignatures.columnDestroyStamp` decides it from
+`typeOwesDrop` — and the compiler has it at the moment it emits the call.
 
 ### How the fact reaches the pass that needs it
 
@@ -40,13 +40,12 @@ between, `insertRangeChecks`, splits blocks and never clones or replaces a call.
 `element_destroy@40` has two writers — `__managed_create`'s second argument, and
 `BufferOwnership.immortalRecordBytes` for a record that is image data (a managed image record's slot is
 then filled by the `stampOwnershipWord` relocation, which an empty callee leaves at 0) — and every
-producer stamps it from the element type of the record's own instance: a concrete creation site passes
-`arrayElementDestroyValue(giid)`; a creation site inside a SHARED GENERIC BODY reads `destroyFunc@40` of
-the threaded layout descriptor, which is `0` for a trivial instance (`LayoutDescriptor.maxon`); an
-immortal empty container stamps `columnDestroyStamp`, decided by `slotTypeIsManaged`; a view (`slice`,
-`clone`) copies its source record's field. Those are three deciders (`typeOwesDrop` at a concrete site,
-the descriptor's ownership protocol, `slotTypeIsManaged`), not one, and they agree in the direction that
-matters: where `typeOwesDrop` is false the other two answer nothing. So a record typed over an element
+producer stamps it from the element type of the record's own instance: a concrete creation site and an
+immortal empty container both stamp `columnDestroyStamp`, decided by `typeOwesDrop`; a creation site
+inside a SHARED GENERIC BODY reads `destroyFunc@40` of the threaded layout descriptor, which is `0` for a
+trivial instance (`LayoutDescriptor.maxon`); a view (`slice`, `clone`) copies its source record's field.
+Those are two deciders (`typeOwesDrop`, the descriptor's ownership protocol), not one, and they agree in
+the direction that matters: where `typeOwesDrop` is false the descriptor answers nothing. So a record typed over an element
 that owes no drop carries `0` wherever it was born. The trap that makes a BYTE stride untrustworthy — a record
 created at the machine-word slot of a shared body and read back under a substituted type — does not
 arise here: the slot's WIDTH is the body's, but the element's OWNERSHIP is the instantiation's, and the

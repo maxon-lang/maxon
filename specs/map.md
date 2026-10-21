@@ -1000,7 +1000,7 @@ total 42 count 3
 ⛔⛔ **THE OWNERSHIP HALF: ONE PROTOCOL PER VALUE, OR AN OUTRIGHT LEAK (exit 101 instead
 of 42).** The literal desugars to `Map.create()` plus one `Map.upsert(map, key, value:)` per pair —
 an ORDINARY call, whose arguments the ordinary machinery transfers or co-owns (`applyCallerConsume`),
-and nothing else. A second, move-in protocol on the same value (`moveColumnValueIntoTable`, which drains
+and nothing else. A second, move-in protocol on the same value (a parse-time move that drains
 the value from the statement's pending drops) would let the map take its reference while the statement
 skipped releasing its own.
 

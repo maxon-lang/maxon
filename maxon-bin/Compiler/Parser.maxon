@@ -40941,7 +40941,7 @@ export type Parser
 
 		let name = self.valueTypeName(value)
 
-		// ⛔⛔ **A SLOT STANDING AT A BARE TYPE PARAMETER IS NOT A TRIVIAL ELEMENT, AND `structHasManagedField`
+		// ⛔⛔ **A SLOT STANDING AT A BARE TYPE PARAMETER IS NOT A TRIVIAL ELEMENT, AND `structHasFieldOwingDrop`
 		// CANNOT SEE IT.** `typeIsManaged` answers `false` for a `typeParameter`, so a `(K, V)` tuple
 		// read as copyable — and the shallow copy below then took a SECOND pointer to a reference the source
 		// record owns. **MEASURED on the mm-trace: `Map.map` pushed the copy into its result array, the
@@ -81360,7 +81360,7 @@ export type Parser
 		// ⭐ **THE MECHANISM IS WHOLE; THIS DOOR ONLY NAMES THE ELEMENT TYPE.** `typealias L = Array with IntList`
 		// plus `.create()`/`.push()` compiles and runs (2/2/10 on this spec's own program), because a
 		// nested instance is a MANAGED element like any other: `arrayElementSize` stamps the 8-byte pointer slot,
-		// `arrayElementDestroyValue` stamps the element's drop callee, and `containerElementType` reads the
+		// `columnDestroyValue` stamps the element's drop callee, and `containerElementType` reads the
 		// instance back for `get`. What a bare `[…]` cannot do on its own is NAME that element type, exactly as the
 		// `function` arm below records for a function value.
 		//
@@ -81449,7 +81449,7 @@ export type Parser
 	// Emit `__managed_create(elementSize, elementDestroy)` for instance `giid`, yielding the array
 	// record — the shared producer for a literal and an `IntArray.create()`. Element size is a
 	// compile-time constant here (a concrete instance). The element destructor is the ADDRESS of the
-	// element's drop callee for a MANAGED element, stamped into `element_destroy@40` before any
+	// element's drop callee for an element that owes a drop, stamped into `element_destroy@40` before any
 	// element move (`__managed_create` stores it inside its body, so it is set at birth); 0 for a
 	// trivial element. NOT tracked owned — the caller decides that (a literal tracks after its pushes,
 	// a `create()` immediately). A create whose element is composed over the enclosing type's parameters
@@ -81467,7 +81467,7 @@ export type Parser
 		end 'aComposedStamp'
 
 		try self.requireColumnDropIsNameable(giid, range: range)
-		let destroyVal = self.arrayElementDestroyValue(giid, range: range)
+		let destroyVal = self.columnDestroyValue(self.signatures.containerElementType(giid), range: range)
 		return self.emitRuntimeCall(ManagedCreateName, args: pairArgs(sizeVal, second: destroyVal), resultTag: ValueTypeTag.genericInstance, resultNameId: giid as TypeNameId, range: range)
 	end 'emitArrayCreateOp'
 
@@ -81494,33 +81494,6 @@ export type Parser
 			panic("requireDescriptorForOpaqueCreate: an opaque type-parameter `{String.from(containerName)}` is constructed in a body that carries no layout descriptor — the pre-scan reserves one for every method whose tokens construct it (a closure's included, and a closure inherits the reservation), and a `static function` that does not return `Self` is refused before its body is parsed")
 		end 'noDescriptorToReadFrom'
 	end 'requireDescriptorForOpaqueCreate'
-
-	// ⭐ **THE `element_destroy@40` STAMP VALUE.** For a MANAGED-element array it is the RAW
-	// `.text` ADDRESS of the element's drop callee (`__str_decref` / `__destruct_<T>` / `__mm_decref` / nested
-	// `__managed_decref`), which `__managed_decref`'s last-owner walk calls through a `callIndirect` on each live slot;
-	// for a trivial element it is 0 (an inline element owns nothing, so the walk is skipped). A CONCRETE site
-	// knows the element type, so the address is the existing `funcAddr` code→register path — no rdata
-	// reloc, no descriptor `destroyFunc@40` (those are the opaque-`T`-in-a-generic-body case).
-	//
-	// ⚠ **IT ASKS THE TWO `ProgramSignatures` ACCESSORS RATHER THAN A UNION DESCRIBING THE ANSWER, and that
-	// is a measured cost decision.** A top-level array global's record is stamped from the
-	// same pair (`ProgramSignatures.arrayRecordInitializer`), and folding the two into one union-returning
-	// door was tidier — but a Maxon union value is a HEAP OBJECT, and this runs at every array creation SITE
-	// in the program: MEASURED at exactly +1 allocation per site (32 sites → +32, 64 → +64).
-	// The DECISION is single-homed regardless — `containerElementIsManaged`
-	// is the one place "does this element own anything?" is answered, and both sites ask it — so what is
-	// written twice is a three-line composition, not a rule.
-	function arrayElementDestroyValue(giid GenericInstanceId, range SourceRange) returns ValueId
-		// ⚠ **`containerElementOwesDrop`, NOT `containerElementIsManaged` — THE STAMP IS AN OWNERSHIP
-		// QUESTION.** A promise element is not an `__mm` box, so the narrower predicate answers
-		// `false` and this stamped `0`; the record's walk was then skipped and every un-awaited element's
-		// green thread died with the container unreclaimed (exit 75).
-		if self.signatures.containerElementOwesDrop(giid) 'owesDrop'
-			return self.emitCodeAddress(self.signatures.arrayElementDropCallee(giid), range: range)
-		end 'owesDrop'
-
-		return self.emitLiteral(TrivialDestructor, valueType: MaxonType.integer, range: range)
-	end 'arrayElementDestroyValue'
 
 	// Emit the RAW `.text` address of a COMPILER-INTERNAL runtime function (`__str_decref`, `__destruct_<T>`,
 	// `__managed_decref`, `__mm_decref`) as a value. The drop walk invokes it through a plain `callIndirect(ptr)`,
@@ -82129,31 +82102,19 @@ export type Parser
 	//
 	// A declared `Set` builds its own fields in its own `create()`, so the record's `keyDrop@40` is not stamped here.
 
-	// ⭐ **THE `elemDrop@40` STAMP VALUE for a `Set` — the `Set` twin of `arrayElementDestroyValue`.** A
-	// MANAGED key (String) → the RAW `.text` address of its drop callee (`__str_decref`), via the same
-	// `funcAddr` code→register path the array element destructor rides (no rdata reloc, no descriptor); a trivial
-	// int element → 0. `__list_decref`'s teardown walk calls it through a `callIndirect` on each live element.
-	// ⚠ It is keyed on the column's TYPE and not on a `(giid, which-column)` pair, because a `Map` has TWO of
-	// these stamps and a per-column copy is exactly how the key's and the value's teardown would come to
-	// disagree about what "managed" means.
-	//
 	// ⛔ **AN OPAQUE COLUMN HAS NO STAMP HERE** — its destructor is the enclosing instance's
-	// descriptor `destroyFunc@40`, read at run time, so `emitListCreateOp` branches to `emitOpaqueChainCreateOp`
-	// before asking. See `ProgramSignatures.requireStaticColumnStamp`, which is the one sentence saying so and
-	// which the top-level twin of this function asks as well.
+	// descriptor `destroyFunc@40`, read at run time, so each create branches to its opaque form before
+	// asking. See `ProgramSignatures.requireStaticColumnStamp`, which is the one sentence saying so.
 	function columnDestroyValue(columnType MaxonType, range SourceRange) returns ValueId
-		self.signatures.requireStaticColumnStamp(columnType, asker: "Parser.columnDestroyValue")
-
-		if self.signatures.slotTypeIsManaged(columnType) 'managed'
-			return self.emitCodeAddress(self.signatures.slotTypeDropCallee(columnType), range: range)
-		end 'managed'
-
-		return self.emitLiteral(TrivialDestructor, valueType: MaxonType.integer, range: range)
+		return match self.signatures.columnDestroyStamp(columnType) 'stamp'
+			inline(value) gives self.emitLiteral(value, valueType: MaxonType.integer, range: range)
+			dropCallee(callee) gives self.emitCodeAddress(callee, range: range)
+		end 'stamp'
 	end 'columnDestroyValue'
 
 	// ⛔⛔ **A COLUMN WHOSE ELEMENT IS A RECORD OVER THE ENCLOSING TYPE PARAMETER HAS NO STATIC DESTRUCTOR TO
-	// STAMP.** The two producers above end in `managed → drop callee` / `otherwise → 0`, and for
-	// `Array with (Box with Element)` inside `type Bag uses Element` the managed arm answers `__mm_decref` —
+	// STAMP.** `ProgramSignatures.columnDestroyStamp` ends in `owes a drop → drop callee` / `otherwise → 0`, and
+	// for `Array with (Box with Element)` inside `type Bag uses Element` the drop arm answers `__mm_decref` —
 	// because `Box with Element`'s own bare `T` field reads NOT MANAGED through `typeIsManaged`, which is the
 	// one question a shared body cannot answer. Stamping it would free the record and leave the slot it holds.
 	//
@@ -82161,8 +82122,8 @@ export type Parser
 	// lowering reads one out of the descriptor table (`createStampsFromTheBodysDescriptor`). What reaches here
 	// is a body with no descriptor, and it is refused.
 	//
-	// ⭐ It is asked at the two CREATE sites and not inside `columnDestroyValue`, because the stamp producers
-	// are also reached for a top-level global's record, where the shape is structurally impossible (a `.data`
+	// ⭐ It is asked at the two CREATE sites and not inside `columnDestroyValue`, because `columnDestroyStamp`
+	// is also reached for a top-level global's record, where the shape is structurally impossible (a `.data`
 	// global is not inside a generic body) — `requireStaticColumnStamp`'s stated arrangement, one door over.
 	function requireColumnDropIsNameable(giid GenericInstanceId, range SourceRange) throws SourceParseError
 		if not self.signatures.columnElementOwnsAnUnnameableSlot(self.signatures.containerElementType(giid)) 'nameable'
@@ -82328,10 +82289,9 @@ export type Parser
 	// member is held to that type through the SHARED hash-table column door — so a mixed literal is refused
 	// with the sentence a written `s.insert(x)` of the wrong type already gets.
 	//
-	// ⚠ **`consume: false` AT EVERY MEMBER, AND IT IS NOT AN OVERSIGHT.** The corpus `Set.insert` declares its
+	// ⚠ **NO MEMBER IS MOVED AT THE PARSE.** The corpus `Set.insert` declares its
 	// parameter, so the ORDINARY call machinery decides the move — see the note below `emitContainerLiteralCreate` for the leak
-	// a second, parse-time move produces. That also makes the fencing-token ordering `parseHashTableColumnArg`
-	// insists on vacuous here: nothing reads `rhsWasBareLocalReference` on this path.
+	// a second, parse-time move produces.
 	function parseSetMemberList(func IrFunction, setTok Token) returns ValueId throws SourceParseError
 		let range = SourceRange.ofToken(setTok)
 		try self.consume(TokenKind.leftBracket)
@@ -82377,7 +82337,7 @@ export type Parser
 
 		while try self.atAnotherLiteralEntry() 'moreMembers'
 			let memberTok = self.current()
-			let member = try self.parseHashTableColumnArg(func, columnType: keyType, declaredType: declaredType, columnSubject: "`{String.from(SetBuiltinBaseName)} with {columnTypeName(declared, identity: identity)}` requires {articledColumnTypeName(declared, identity: identity)} {HashTableKeyColumnNoun}", consume: false)
+			let member = try self.parseHashTableColumnArg(func, declaredType: declaredType, columnSubject: "`{String.from(SetBuiltinBaseName)} with {columnTypeName(declared, identity: identity)}` requires {articledColumnTypeName(declared, identity: identity)} {HashTableKeyColumnNoun}")
 
 			if self.valueIsDeferred(member) 'aDeferredMember'
 				return try self.deferredLiteralRest(func, entry: LiteralEntryShape.element)
@@ -82485,16 +82445,10 @@ export type Parser
 	end 'parseLiteralInitOperand'
 
 	// ⭐⭐ **ONE HASH-TABLE COLUMN ARGUMENT, PARSED — a `Set`'s key, a `Map`'s key and a `Map`'s VALUE.** Parse
-	// the expression, characterize a lone literal against the column's declared type, refuse a mismatched tag,
-	// and — when the callee KEEPS the value (`consume`) — store it so the table holds its own reference. The
+	// the expression, characterize a lone literal against the column's declared type, and refuse a mismatched
+	// tag. The value is handed back unmoved: the `insert` or `upsert` call that stores it decides the move. The
 	// three columns differ in the column TYPE they read and in the SUBJECT of their refusal, and in nothing
 	// else, which is why those two are parameters and the sequence is not.
-	//
-	// ⚠⚠ **THE MOVE-IN MUST RUN BEFORE THE ARGUMENT'S CLOSING TOKEN IS CONSUMED.** `rhsWasBareLocalReference`
-	// reads `[valueStart, self.pos)` to decide whether the argument is a bare local to POISON, so a `)` — or a
-	// `,` — consumed first widens that window and mis-decides. That is an OWNERSHIP wrong answer with no
-	// compile error to find it by, which is exactly why the callers hand the fencing tokens in rather than this
-	// function consuming them: a `Set` key is fenced by `( … )`, a `Map`'s two columns by `(`, `,` and `)`.
 	//
 	// ⚠ A lone character literal coerces to the column's type when that column is integral — a column
 	// declared over a ranged integer alias — by the rule the `let`/`return`/comparison positions serve
@@ -82519,7 +82473,7 @@ export type Parser
 	//
 	// ⚠ The identity is `declaredColumnIdentity`'s, which the two callers compose their SUBJECTS from, so the
 	// name a refusal prints and the name this comparison read are one string by construction.
-	function parseHashTableColumnArg(func IrFunction, columnType MaxonType, declaredType MaxonType, columnSubject String, consume bool) returns ValueId throws SourceParseError
+	function parseHashTableColumnArg(func IrFunction, declaredType MaxonType, columnSubject String) returns ValueId throws SourceParseError
 		let valueTok = self.current()
 		let valueStart = self.pos
 		let declared = maxonTypeTag(declaredType)
@@ -82533,11 +82487,7 @@ export type Parser
 			throw SourceParseError.unsupported("{columnSubject} — got a '{columnTypeName(valueTag, identity: valueIdentity)}' value", line: valueTok.line, column: valueTok.column)
 		end 'mismatch'
 
-		if not consume 'borrowed'
-			return parsed
-		end 'borrowed'
-
-		return try self.moveColumnValueIntoTable(parsed, columnType: columnType, valueStart: valueStart)
+		return parsed
 	end 'parseHashTableColumnArg'
 
 	// ⭐⭐ **THE NOMINAL IDENTITY OF A COLUMN'S RESOLVED DECLARED TYPE — the ONE expression the three column
@@ -82552,34 +82502,6 @@ export type Parser
 	function declaredColumnIdentity(declaredType MaxonType) returns ByteArray
 		return self.aggregateNameOf(maxonTypeTag(declaredType), nameId: typeNameIdOf(declaredType))
 	end 'declaredColumnIdentity'
-
-	// ⭐ **MOVE A PARSED KEY INTO A MANAGED-KEY SET.** The `Set` twin of `moveElementIntoContainer`:
-	// the table becomes the value's sole owner (its own teardown / dup-drop / remove-drop destroys it), so a
-	// managed (String) key is consumed exactly as an array element is — a borrowed String literal is promoted to
-	// an owned copy, an owned value is transferred (bare local poisoned / temp de-listed) — through the SHARED
-	// `moveManagedValueInto`. A trivial int key owns no heap and passes through unchanged. A `Set` key is always
-	// CONCRETE (int or String), so there is no opaque-`T` case `moveElementIntoContainer` carries.
-	// `valueStart` locates the value's first token — its bare-local source and the diagnostic anchor both.
-	// ⚠ It takes the column's TYPE rather than a `giid`, so a `Set`'s key, a `Map`'s key and a `Map`'s VALUE —
-	// independently managed columns of two containers — ask it without a per-column copy. Whether the column
-	// owns what it holds is DERIVED from that type here, through the same `slotTypeIsManaged` the stamped
-	// destructor is chosen by (`columnDestroyValue`): a caller that passed the answer in would be a second
-	// place deciding which type argument is the key, and the move-in and the stamp could then disagree.
-	function moveColumnValueIntoTable(value ValueId, columnType MaxonType, valueStart ElementIndex) returns ValueId throws SourceParseError
-		if not self.signatures.slotTypeIsManaged(columnType) 'trivial'
-			return value
-		end 'trivial'
-
-		let anchor = self.tokenAt(valueStart)
-
-		// `tagIsByteRecord`, mirroring `moveElementIntoContainer`: the flag names the fused-record COPY
-		// protocol, a question about the key's REPRESENTATION — and a `Set with Character`
-		// reaches it, which is what this spelling is for. A borrowed `.rdata` Character
-		// literal is promoted to an owned copy here; an owned one is CO-OWNED when a live binding keeps it and
-		// ADOPTED when it is a temporary with no other owner.
-		let isString = tagIsByteRecord(maxonTypeTag(columnType))
-		return try self.moveManagedValueInto(value, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: isString, range: SourceRange.ofToken(anchor))
-	end 'moveColumnValueIntoTable'
 
 	// --- The `Map` builtin generic: `create` / `upsert` / `contains` / `get` / `count` ---
 
@@ -82691,12 +82613,12 @@ export type Parser
 		while try self.atAnotherLiteralEntry() 'morePairs'
 			// Every later pair is checked AGAINST the first's columns — the map-literal twin of
 			// `requireArrayLiteralElementMatches` — and rides the ordinary column-argument door, which
-			// characterizes a lone literal, refuses a mismatched tag and moves the value in. A mixed literal is
+			// characterizes a lone literal and refuses a mismatched tag. A mixed literal is
 			// therefore refused by the same sentence a mismatched `upsert` argument is.
-			// ⚠ `consume: false` is the FIRST PAIR's answer one door along: the desugared `Map.upsert` declares
-			// both parameters, so the call machinery takes each column and a parse-time move would leak.
+			// ⚠ The desugared `Map.upsert` declares both parameters, so the call machinery takes each column
+			// and a parse-time move would leak.
 			let keyTok = self.current()
-			let key = try self.parseMapColumnValue(func, giid: giid, position: HashTableKeyArgPosition, columnNoun: HashTableKeyColumnNoun, consume: false)
+			let key = try self.parseMapColumnValue(func, giid: giid, position: HashTableKeyArgPosition, columnNoun: HashTableKeyColumnNoun)
 
 			if self.valueIsDeferred(key) 'aDeferredKey'
 				return try self.deferredMapLiteralFromKey(func)
@@ -82705,7 +82627,7 @@ export type Parser
 			try self.consumePairSeparator()
 			let heldKey = self.holdStorageReadForStatement(key, kind: HoldKind.callOperand, range: SourceRange.ofToken(keyTok), position: OperandSuccession.alwaysFollowed)
 			let valueTok = self.current()
-			let value = try self.parseMapColumnValue(func, giid: giid, position: MapValueArgPosition, columnNoun: HashTableValueColumnNoun, consume: false)
+			let value = try self.parseMapColumnValue(func, giid: giid, position: MapValueArgPosition, columnNoun: HashTableValueColumnNoun)
 
 			if self.valueIsDeferred(value) 'aDeferredValue'
 				return try self.deferredLiteralRest(func, entry: LiteralEntryShape.pair)
@@ -82751,12 +82673,8 @@ export type Parser
 
 	// ONE `Map` column argument — the `Set` key's twin, and it rides the same `parseHashTableColumnArg`: this
 	// end resolves WHICH column (key or value) and composes the `Map`'s own refusal subject, and nothing else.
-	// The key half and the value half differ only in which type argument they read, so they are one function:
-	// a per-column copy is how the two would come to disagree about the move.
-	//
-	// ⚠ The caller consumes the fencing tokens — `(`, the `,` before `value:` and the closing `)` — AFTER this
-	// returns, because the move-in inside must run first (see `parseHashTableColumnArg`'s ordering contract).
-	function parseMapColumnValue(func IrFunction, giid GenericInstanceId, position ElementIndex, columnNoun String, consume bool) returns ValueId throws SourceParseError
+	// The key half and the value half differ only in which type argument they read, so they are one function.
+	function parseMapColumnValue(func IrFunction, giid GenericInstanceId, position ElementIndex, columnNoun String) returns ValueId throws SourceParseError
 		let columnType = self.mapColumnType(giid, position: position)
 
 		// The SUBJECT names the RESOLVED type and its nominal identity for `parseHashTableColumnArg`'s reason:
@@ -82764,7 +82682,7 @@ export type Parser
 		// argues against itself, and a `Kind` column printed the same way about an enum.
 		let declaredType = self.resolvedSlotType(columnType)
 		let declared = maxonTypeTag(declaredType)
-		return try self.parseHashTableColumnArg(func, columnType: columnType, declaredType: declaredType, columnSubject: "this `{String.from(MapBuiltinBaseName)}`'s {columnNoun} is {articledColumnTypeName(declared, identity: self.declaredColumnIdentity(declaredType))}", consume: consume)
+		return try self.parseHashTableColumnArg(func, declaredType: declaredType, columnSubject: "this `{String.from(MapBuiltinBaseName)}`'s {columnNoun} is {articledColumnTypeName(declared, identity: self.declaredColumnIdentity(declaredType))}")
 	end 'parseMapColumnValue'
 
 	// The declared type of map column `position` — a selector rather than a `position` threaded into the index,
@@ -87376,7 +87294,7 @@ export type Parser
 		end 'unsupportedNested'
 	end 'requireArrayElementCopyable'
 
-	// ⭐ **THE ELEMENT-CLONER `funcAddr` STAMP** — the DUAL of `arrayElementDestroyValue`. A
+	// ⭐ **THE ELEMENT-CLONER `funcAddr` STAMP** — the DUAL of `columnDestroyValue`. A
 	// CONCRETE managed element knows its `(box) -> newBox` clone callee at this site (`__str_clone` / `__clone_<T>`
 	// / `__managed_clone` for a trivial-element nested array), so the address rides the `funcAddr` code→register
 	// path — the `_managed` runtime helper `callIndirect`s it per element. `requireArrayElementCopyable` has already

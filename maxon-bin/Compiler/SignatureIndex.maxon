@@ -2365,7 +2365,7 @@ end 'ContainerElementAdd'
 // A union rather than a callee name whose emptiness means "trivial": the two are different instructions to
 // the emitter (a `functionRef` op versus a `literal 0`), and a sentinel would let a genuinely missing name
 // read as a deliberate absence.
-module union ContainerCreateStamp
+export union ContainerCreateStamp
 	// A number the record is born holding — a stride, or the 0 that says a column owns nothing and its
 	// teardown walk is skipped.
 	inline(value FullRangeInt)
@@ -34561,7 +34561,7 @@ export type ProgramSignatures
 	//
 	// The drop callee is the SHARED `managedFieldDropCallee`, so a column's stamped destructor equals the drop
 	// a managed FIELD of the same type gets — the moved-in value and the dropped value agree by construction.
-	// Precondition of the second: `slotTypeIsManaged`.
+	// Precondition of the second: `typeOwesDrop`, which also admits a promise slot.
 	export function slotTypeIsManaged(slotType MaxonType) returns bool
 		return self.typeIsManaged(slotType, from: self.typeNames)
 	end 'slotTypeIsManaged'
@@ -34857,8 +34857,7 @@ export type ProgramSignatures
 	// selectors. A map carries TWO independently stamped destructors (`keyDrop@40`, `valueDrop@56`) — a
 	// `Map with (String, Int)` owns heap keys and trivial values — and a per-column predicate is a second place
 	// that has to know which type argument is the key. Every caller already holds the column TYPE (from
-	// `setKeyType` / `mapKeyType` / `mapValueType`) and asks `slotTypeIsManaged` of it, so the moved-in value
-	// and the stamped destructor read the one answer.
+	// `setKeyType` / `mapKeyType` / `mapValueType`) and asks its question of that type.
 
 	// Is a SINGLE-ELEMENT container's element itself managed (String / struct / boxed union / nested container)?
 	// A trivial element (int / Byte / ranged-int / bool) is stored inline and owns nothing.
@@ -36085,66 +36084,52 @@ export type ProgramSignatures
 		end 'declaration'
 	end 'undeclaredNamedElementSlot'
 
-	// The element DESTRUCTOR callee for a managed-element `Array with T` — the runtime entry the
-	// drop walk calls on each live slot: a String → `__str_decref`, a struct/union that owns managed heap → its
-	// `__destruct_<T>` (a scalar-only struct/union box → the trivial `__mm_decref`), a nested Array → `__managed_decref`.
-	// Routed through the SHARED `managedFieldDropCallee` over the element type, so the stamped element destructor
-	// equals the drop callee any managed FIELD of the same type gets — the moved-in set and the dropped set agree
-	// by construction. Precondition: `containerElementOwesDrop` — the OWNERSHIP question, not the narrower
-	// `containerElementIsManaged`, since a promise element owes this stamp without being a box.
-	export function arrayElementDropCallee(id GenericInstanceId) returns ByteArray
-		return managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: self.containerElementType(id))
-	end 'arrayElementDropCallee'
+	// ⭐ **THE DESTRUCTOR STAMP ONE CONTAINER COLUMN IS BORN WITH** — the one decider for a body's `create()`
+	// (rendered as a value by `Parser.columnDestroyValue`) and for a top-level container global's record
+	// (carried to `ModuleInit`, which has no `ProgramSignatures` to ask), so the two records of one instance
+	// name one destructor. A column that owes a drop carries the drop callee its teardown walk invokes
+	// through a `callIndirect` on each live slot; any other carries 0 and its walk is skipped.
+	//
+	// ⚠ It asks `typeOwesDrop`, the ownership question, and not `slotTypeIsManaged`: a promise element is
+	// not an `__mm` box, so the narrower predicate stamps 0, the walk is skipped, and every un-awaited
+	// element's green thread outlives the container unreclaimed.
+	//
+	// ⚠ It is keyed on the column's TYPE and not on a `(giid, which-column)` pair: a `Map` has TWO of these
+	// stamps, and a per-column copy is exactly how the key's and the value's teardown come to disagree about
+	// what "managed" means.
+	//
+	// ⛔ **AN OPAQUE COLUMN HAS NO STAMP HERE — SEE `requireStaticColumnStamp`.**
+	export function columnDestroyStamp(columnType MaxonType) returns ContainerCreateStamp
+		self.requireStaticColumnStamp(columnType)
 
-	// ⭐ **THE DESTRUCTOR STAMP ONE CONTAINER COLUMN IS BORN WITH, AS A DESCRIPTION** — what a top-level
-	// container global's record carries to `ModuleInit`, which has no `ProgramSignatures` to ask. A MANAGED
-	// column carries the drop
-	// callee its teardown walk invokes through a `callIndirect` on each live slot; a trivial one carries 0
-	// and its walk is skipped.
-	//
-	// It composes the same two accessors `Parser.columnDestroyValue` does, off the same `slotTypeIsManaged`
-	// decision, so the destructor a global's record is stamped with equals the one a body's `create()` of the
-	// same instance gets. It is asked ONCE PER MANAGED GLOBAL, which is why it may box a union where the
-	// parser's per-SITE emitter deliberately does not.
-	//
-	// ⚠ It is keyed on the column's TYPE and not on a `(giid, which-column)` pair, for the reason its value
-	// twin states: a `Map` has TWO of these stamps, and a per-column copy is exactly how the key's and the
-	// value's teardown come to disagree about what "managed" means.
-	//
-	// ⛔ **AN OPAQUE COLUMN HAS NO STAMP HERE AND NEVER HAD ONE — SEE `requireStaticColumnStamp`.**
-	function columnDestroyStamp(columnType MaxonType) returns ContainerCreateStamp
-		self.requireStaticColumnStamp(columnType, asker: "ProgramSignatures.columnDestroyStamp")
-
-		if self.slotTypeIsManaged(columnType) 'managed'
+		if self.typeOwesDrop(columnType, from: self.typeNames) 'owesDrop'
 			return ContainerCreateStamp.dropCallee(self.slotTypeDropCallee(columnType))
-		end 'managed'
+		end 'owesDrop'
 
 		return ContainerCreateStamp.inline(TrivialDestructor)
 	end 'columnDestroyStamp'
 
-	// ⛔⛔ **THE ONE SENTENCE SAYING AN OPAQUE COLUMN HAS NO STATIC DESTRUCTOR STAMP, AND ITS TWO ASKERS ARE THE
-	// TWO PLACES A STAMP IS PRODUCED.** `Parser.columnDestroyValue` (a body's `create()`, as a VALUE) and
-	// `columnDestroyStamp` (a top-level global's record, as a DESCRIPTION) each end in a `managed → drop callee`
-	// / `otherwise → 0` pair, and **a 0 there is not a refusal, it is a leak that compiles**: the teardown walk
-	// reads `element_drop@24` (or `element_destroy@40`) and skips a chain whose elements a managed instantiation
-	// really does own.
+	// ⛔⛔ **THE ONE SENTENCE SAYING AN OPAQUE COLUMN HAS NO STATIC DESTRUCTOR STAMP.** `columnDestroyStamp`, the
+	// one place a stamp is produced, ends in an `owes a drop → drop callee` / `otherwise → 0` pair, and **a 0
+	// there is not a refusal, it is a leak that compiles**: the teardown walk reads `element_drop@24` (or
+	// `element_destroy@40`) and skips a chain whose elements a managed instantiation really does own.
 	//
-	// ⭐ **THAT GATE IS GONE, AND WHAT REPLACES IT IS A BRANCH AT EACH PRODUCER'S CALLER, NOT A
-	// DIFFERENT ANSWER HERE.** An opaque `create` reads `destroyFunc@40` off the enclosing instance's
+	// ⭐ **AN OPAQUE COLUMN IS SERVED BY A BRANCH AT EACH CALLER, NOT BY A DIFFERENT ANSWER HERE.** An
+	// opaque `create` reads `destroyFunc@40` off the enclosing instance's
 	// threaded layout descriptor at RUN TIME
 	// (`Parser.emitOpaqueArrayCreateOp`/`emitOpaqueChainCreateOp` →
 	// `LowerMaxonToStd.appendOpaqueContainerCreate`), so whoever holds an opaque instance takes that
 	// road *before* asking for a stamp. This panic is what makes "the caller branched" a checked
-	// property of both producers rather than a convention one of them could drift out of — the same
+	// property of every caller rather than a convention one of them could drift out of — the same
 	// discipline `isManagedBufferRecordInstance` states for the seed/emit pair.
 	//
-	// ⚠ The top-level asker cannot reach it TODAY for a structural reason worth writing down rather than
+	// ⚠ A top-level global's record cannot reach it, for a structural reason worth writing down rather than
 	// relying on: a `.data` global is not inside a generic body, so no type parameter is in scope for its
 	// element — and `__module_init` carries no layout-descriptor parameter to read one from even if it were.
 	// That is precisely why a silent 0 there would have gone unnoticed.
-	export function requireStaticColumnStamp(columnType MaxonType, asker String)
+	function requireStaticColumnStamp(columnType MaxonType)
 		if self.slotTypeIsOpaque(columnType) 'opaqueColumn'
-			panic("{asker}: an OPAQUE type-parameter column has no statically known destructor to stamp — its `create` reads `destroyFunc@40` off the enclosing instance's layout descriptor at run time, so this producer's caller must branch on `containerElementIsOpaque` before asking. Stamping 0 here is not a refusal, it is a leak that compiles")
+			panic("ProgramSignatures.columnDestroyStamp: an OPAQUE type-parameter column has no statically known destructor to stamp — its `create` reads `destroyFunc@40` off the enclosing instance's layout descriptor at run time, so this producer's caller must branch on `containerElementIsOpaque` before asking. Stamping 0 here is not a refusal, it is a leak that compiles")
 		end 'opaqueColumn'
 	end 'requireStaticColumnStamp'
 
@@ -36458,11 +36443,10 @@ export type ProgramSignatures
 	// holds no index.
 	//
 	// ⚠ **IT IS A SECOND COMPOSITION OF THE SAME DECISIONS, NEVER A SECOND DECIDER.** `Parser`'s body
-	// emitters (`emitArrayCreateOp` / `emitListCreateOp` / `emitSizedContainerRecord`) build the same calls as VALUES and deliberately box no description per site —
-	// MEASURED at +1 allocation per creation site in the program (see `Parser.arrayElementDestroyValue`).
-	// What must not be written twice is the RULE, and none of it is: which container this is
-	// (`instanceCreateIsDeclared`/`isManagedListInstance`/…), which column owns what (`slotTypeIsManaged`), which drop
-	// (`slotTypeDropCallee`) and which stride (`arrayElementSize`) are each answered in one place and read
+	// emitters (`emitArrayCreateOp` / `emitListCreateOp` / `emitSizedContainerRecord`) build the same calls as
+	// VALUES. What must not be written twice is the RULE, and none of it is: which container this is
+	// (`instanceCreateIsDeclared`/`isManagedListInstance`/…), which column owns what and which drop
+	// (`columnDestroyStamp`) and which stride (`arrayElementSize`) are each answered in one place and read
 	// from both sides. This is asked ONCE PER MANAGED GLOBAL.
 	//
 	// ⭐⭐ **A DECLARED GENERIC IS THE SAME DESCRIPTION WITH NO STAMPS** — `var g = StrMap.create()` once
@@ -36549,7 +36533,7 @@ export type ProgramSignatures
 	end 'declaredContainerElementAdd'
 
 	// The element CLONE strategy for a managed-element container instance — the DUAL of
-	// `arrayElementDropCallee`. The front end stamps `funcAddr(<the direct callee>)` into the `_managed`
+	// `slotTypeDropCallee`. The front end stamps `funcAddr(<the direct callee>)` into the `_managed`
 	// array-copy call, exactly as it stamps `funcAddr(<the drop callee>)` into `element_destroy@40`. Routed
 	// through the SAME `managedFieldCascadeStrategy` a managed FIELD of the element's type uses, so the element's
 	// clone matches its own field-clone by construction. Precondition: `sourceCloneVerdictOfType`, which
@@ -36952,7 +36936,7 @@ export type ProgramSignatures
 	// ARGUMENT may itself name a contested alias (`typealias Grid = Array with Slots`), and a nested `named`
 	// argument is exactly the spelling the sweep leaves behind. Both files' `Grid` therefore interned to ONE
 	// instance — `Array with named("Slots")` — so round one saw `Grid` AGREE while its element denoted two
-	// different arrays. MEASURED: `arrayElementDropCallee` took that element straight into
+	// different arrays, and `slotTypeDropCallee` takes that element straight into
 	// `genericAliasInstance`'s refusal. Rescoping the arguments splits `Grid` in two, which makes `Grid`
 	// contested, which can split a `Array with Grid` above it — so the walk repeats until a round contests
 	// nothing new. It terminates because a name only ever moves from agreeing to contested and there are
