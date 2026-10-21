@@ -7759,8 +7759,9 @@ type ConstInitializerCallee
 	// How a diagnostic spells it: `Pair.create` or `buildPair`. Rendered ONCE, where the tokens are.
 	export let display as String
 
-	// Where a refusal points — the METHOD for a qualified call, the NAME itself for a bare one. Stated once
-	// so the sentences below cannot come to disagree about which token a top-level factory blames.
+	// Where a refusal of the callee's declaration points — the METHOD for a qualified call, the
+	// NAME itself for a bare one. Stated once so the sentences below cannot come to disagree about
+	// which token a top-level factory blames.
 	export let anchor as Token
 
 	// A top-level binding this file sees shares the bare name. Whether it is function-typed, and so the
@@ -7768,10 +7769,18 @@ type ConstInitializerCallee
 	// `provisional` and the declaration's defects are carried for `SemanticCheck.checkInitializerCalls`.
 	export let contestedByABinding as bool
 
-	static function create(name ByteArray, display String, anchor Token, contestedByABinding bool) returns ConstInitializerCallee
-		return Self{name: name, display: display, anchor: anchor, contestedByABinding: contestedByABinding}
+	// Where a visibility refusal points: the call's first token, as for a body call. The column
+	// is pinned by `specs/top-level-factory-globals.md`.
+	export let callStart as Token
+
+	static function create(name ByteArray, display String, anchor Token, callStart Token, contestedByABinding bool) returns ConstInitializerCallee
+		return Self{name: name, display: display, anchor: anchor, callStart: callStart, contestedByABinding: contestedByABinding}
 	end 'create'
 end 'ConstInitializerCallee'
+
+function unfoldedUserCall(callee ConstInitializerCallee, args ConstFactoryArgumentArray) returns ConstFactoryCall
+	return ConstFactoryCall.call(callee.name, args: args, mint: CalleeMint.notMinted)
+end 'unfoldedUserCall'
 
 union ConstBareCallee
 	claimed(let key ByteArray)
@@ -27693,7 +27702,7 @@ export type Parser
 	end 'recordScannedFieldDefaultHelper'
 
 	function foldFieldDefaultByCall(calls ConstFactoryCallArray, layout StructLayout, index FieldIndex, helperName ByteArray, fields ConstFactoryArgumentValueArray, filled BoolArray, anchor Token) throws ConstEvalError
-		var helperCall = ConstFactoryCall.call(helperName, args: ConstFactoryArgumentArray.create())
+		var helperCall = ConstFactoryCall.call(helperName, args: ConstFactoryArgumentArray.create(), mint: CalleeMint.fieldDefaultHelper)
 		try self.fillConstFieldDefault(calls, layout: layout, index: index, value: ConstFactoryArgumentValue.call(self.pushConstNode(calls, node: helperCall)), fields: fields, filled: filled, anchor: anchor)
 	end 'foldFieldDefaultByCall'
 
@@ -93798,7 +93807,7 @@ export type Parser
 		var args = ConstFactoryArgumentArray.create()
 		args.push(ConstFactoryArgument.create(EmptySourceText, value: try self.constLiteralInitOperand(form, typeTok: typeTok, callee: callee, calls: calls, stack: stack)))
 
-		return self.pushConstNode(calls, node: ConstFactoryCall.call(callee, args: args))
+		return self.pushConstNode(calls, node: ConstFactoryCall.call(callee, args: args, mint: CalleeMint.stringLiteralInit))
 	end 'evalConstLiteralInitInto'
 
 	// The argument each form hands its `init`. The scalar forms DECODE the literal here rather than carrying the
@@ -93907,9 +93916,9 @@ export type Parser
 		end 'theDeclarationRefusesTheNode'
 
 		if callee.contestedByABinding 'maybeTheBindingsCall'
-			self.initializerCalls.push(InitializerCallSite.provisional(callee.name, written: callee.anchor.value, defect: CarriedDefect.none, readerFilePath: self.job.path, range: SourceRange.ofToken(callee.anchor)))
+			self.initializerCalls.push(InitializerCallSite.provisional(callee.name, written: callee.anchor.value, defect: CarriedDefect.none, readerFilePath: self.job.path, range: SourceRange.ofToken(callee.callStart)))
 		end 'maybeTheBindingsCall' else 'aFactoryNoBindingContests'
-			self.noteFoldableInitializerCall(callee.name, anchor: callee.anchor)
+			self.noteFoldableInitializerCall(callee.name, anchor: callee.callStart)
 		end 'aFactoryNoBindingContests'
 
 		return self.pushConstNode(calls, node: node)
@@ -93928,7 +93937,7 @@ export type Parser
 	end 'carriedOrRaised'
 
 	function carriedDefect(callee ConstInitializerCallee, defect SourceParseError) returns ConstEvalError
-		self.initializerCalls.push(InitializerCallSite.provisional(callee.name, written: callee.anchor.value, defect: CarriedDefect.carried(defect.clone()), readerFilePath: self.job.path, range: SourceRange.ofToken(callee.anchor)))
+		self.initializerCalls.push(InitializerCallSite.provisional(callee.name, written: callee.anchor.value, defect: CarriedDefect.carried(defect.clone()), readerFilePath: self.job.path, range: SourceRange.ofToken(callee.callStart)))
 		return ConstEvalError.deferred
 	end 'carriedDefect'
 
@@ -94032,7 +94041,7 @@ export type Parser
 			required panic("constDefaultArgValue: parameter is `required`, which the caller skips before asking — a slot with no default is left empty on purpose (E3036 reports it from the resolved signature)")
 			callerLine gives ConstFactoryArgumentValue.folded(ConstFoldedValue.scalar(ConstValue.create(anchor.line as FullRangeInt, tag: ValueTypeTag.integer)))
 			callerFile gives ConstFactoryArgumentValue.folded(ConstFoldedValue.managed(self.sourceFileDisplayPath(), kind: ManagedConstKind.string))
-			helper(name) gives ConstFactoryArgumentValue.call(self.pushConstNode(calls, node: ConstFactoryCall.call(name, args: ConstFactoryArgumentArray.create())))
+			helper(name) gives ConstFactoryArgumentValue.call(self.pushConstNode(calls, node: ConstFactoryCall.call(name, args: ConstFactoryArgumentArray.create(), mint: CalleeMint.paramDefaultHelper)))
 		end 'produces'
 	end 'constDefaultArgValue'
 
@@ -94053,11 +94062,11 @@ export type Parser
 	// so raising them here would move the blame to the initializer, which mentions neither.
 	function constFactoryNode(callee ConstInitializerCallee, args ConstFactoryArgumentArray, calls ConstFactoryCallArray) returns ConstFactoryCall throws ConstEvalError
 		if not self.signatures.functionConstructsFromParams(callee.name) 'notAFoldableFactory'
-			return ConstFactoryCall.call(callee.name, args: args)
+			return unfoldedUserCall(callee, args: args)
 		end 'notAFoldableFactory'
 
 		match self.signatures.constFactoryConstructionAmong(self.signatures.declarationsVisibleFrom(callee.name, readerFilePath: self.job.path)) 'known'
-			unfoldable then return ConstFactoryCall.call(callee.name, args: args)
+			unfoldable then return unfoldedUserCall(callee, args: args)
 			folds(layout, paramNames) then return try self.constFactoryConstruction(callee, args: args, calls: calls, layout: layout, paramNames: paramNames)
 		end 'known'
 	end 'constFactoryNode'
@@ -94080,12 +94089,12 @@ export type Parser
 
 		for i in 0 upto args.count() 'eachArgument'
 			let arg = try args.get(i) otherwise panic("constFactoryConstruction: args.get OOB at {i} below count {args.count()}")
-			let slot = try argSlotPosition(paramNames, argIndex: i as ParamCount, label: arg.label) otherwise return ConstFactoryCall.call(callee.name, args: args)
+			let slot = try argSlotPosition(paramNames, argIndex: i as ParamCount, label: arg.label) otherwise return unfoldedUserCall(callee, args: args)
 			let fieldName = try paramNames.get(slot) otherwise panic("constFactoryConstruction: paramNames.get OOB at {slot}, a position argSlotPosition answered inside the list")
-			let index = try layout.indexOfField(fieldName) otherwise return ConstFactoryCall.call(callee.name, args: args)
+			let index = try layout.indexOfField(fieldName) otherwise return unfoldedUserCall(callee, args: args)
 
 			let fitted = try self.requireConstFieldValueFits(calls, layout: layout, index: index, value: arg.value, fieldTok: callee.anchor) otherwise 'doesNotFitTheField'
-				return ConstFactoryCall.call(callee.name, args: args)
+				return unfoldedUserCall(callee, args: args)
 			end 'doesNotFitTheField'
 
 			try fields.set(index, value: fitted) otherwise panic("constFactoryConstruction: fields.set OOB at {index} — the columns are sized to the layout's field count")
@@ -94094,7 +94103,7 @@ export type Parser
 
 		try self.applyConstFieldDefaults(calls, layout: layout, fields: fields, filled: filled, anchor: callee.anchor)
 		try self.requireAllFieldsInitialized(layout, filled: filled, anchor: callee.anchor) otherwise 'aSlotNothingDecided'
-			return ConstFactoryCall.call(callee.name, args: args)
+			return unfoldedUserCall(callee, args: args)
 		end 'aSlotNothingDecided'
 
 		// ⛔⛔ **A FOLD THAT BUYS NO IMAGE MUST NOT HAPPEN, AND THIS IS WHAT KEEPS THE REWRITE FROM CHANGING
@@ -94104,7 +94113,7 @@ export type Parser
 		// compile today and would move where several diagnostics are blamed. Bounded to the case the fold
 		// exists for, the rewrite is invisible except that the global stops being built at all.
 		if not self.signatures.constConstructionIsImageData(layout.name, fields: fields, calls: calls, below: calls.count(), declName: callee.name, elementFilePath: self.job.path) 'notARecordAnImageCanHold'
-			return ConstFactoryCall.call(callee.name, args: args)
+			return unfoldedUserCall(callee, args: args)
 		end 'notARecordAnImageCanHold'
 
 		return ConstFactoryCall.construct(layout.name, fields: fields)
@@ -94121,11 +94130,13 @@ export type Parser
 	// check. A bare call names no type, so it has neither; the CALLEE's own visibility is asked by the
 	// caller for both.
 	function consumeConstInitializerCallee() returns ConstInitializerCallee throws ConstEvalError
+		let startTok = self.current()
+
 		if self.peekKind() != TokenKind.dot 'aFreeFunction'
 			let calleeTok = try self.consumeConst(TokenKind.identifier)
 
 			return match self.claimedConstBareCallee(calleeTok.value) 'callee'
-				claimed(key) gives ConstInitializerCallee.create(key, display: String.from(calleeTok.value), anchor: calleeTok, contestedByABinding: self.signatures.topLevelBindingVisibleFrom(calleeTok.value, readerFilePath: self.job.path))
+				claimed(key) gives ConstInitializerCallee.create(key, display: String.from(calleeTok.value), anchor: calleeTok, callStart: startTok, contestedByABinding: self.signatures.topLevelBindingVisibleFrom(calleeTok.value, readerFilePath: self.job.path))
 				unclaimed panic("consumeConstInitializerCallee: a bare call no declaration claims is never consumed here — `atConstInitializerCall` answers false for it, and its refusal is `SemanticCheck.checkInitializerCalls`'s")
 			end 'callee'
 		end 'aFreeFunction'
@@ -94135,7 +94146,7 @@ export type Parser
 		try self.consumeConstToken(TokenKind.dot)
 		let methodTok = try self.consumeConst(TokenKind.identifier)
 
-		return ConstInitializerCallee.create(self.constQualifiedCalleeKey(headTok, methodTok: methodTok), display: "{String.from(headTok.value)}.{String.from(methodTok.value)}", anchor: methodTok, contestedByABinding: false)
+		return ConstInitializerCallee.create(self.constQualifiedCalleeKey(headTok, methodTok: methodTok), display: "{String.from(headTok.value)}.{String.from(methodTok.value)}", anchor: methodTok, callStart: startTok, contestedByABinding: false)
 	end 'consumeConstInitializerCallee'
 
 	// ⭐⭐ **A TOP-LEVEL FACTORY MUST HAND BACK A RECORD, WHEREVER THE CALL WAS WRITTEN — ONE MATCH, TWO

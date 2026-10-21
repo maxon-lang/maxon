@@ -662,7 +662,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: bin/<fragment>:13:19: function 'Database.create' is not exported
+error E3008: bin/<fragment>:13:10: function 'Database.create' is not exported
 ```
 
 <!-- test: error.cross-file-module-scoped-factory -->
@@ -687,7 +687,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: bin/<fragment>:13:19: function 'Database.create' is module-scoped and not visible from this directory
+error E3088: bin/<fragment>:13:10: function 'Database.create' is module-scoped and not visible from this directory
 ```
 
 <!-- test: stdlib-factory-reached-from-the-initializer -->

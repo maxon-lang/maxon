@@ -3460,6 +3460,23 @@ end 'main'
 empty=0 named=hello
 ```
 
+<!-- test: a-top-level-let-built-by-a-string-literal-init-of-a-library-type-whose-init-is-not-exported -->
+`stdlib/FilePath.maxon` declares its `init` static without `export`, because the construction reaches it through the type's conformance and the author never names it. The global's initializer is the compiler's call to it, so it is not refused for a file that cannot name `init`.
+```maxon
+let source = FilePath from "input.txt"
+
+function main() returns ExitCode
+	print("{source.toString()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+input.txt
+```
+
 <!-- test: error.a-top-level-string-literal-init-still-needs-the-conformance -->
 ⭐ **THE CONTROL, AND IT IS THE HALF A SILENT ACCEPTANCE WOULD COST.** The only difference from the
 case above is the missing `implements` clause. Same code, same sentence, same anchor as the body

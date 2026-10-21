@@ -459,7 +459,7 @@ function emitMapEntryUpsert(fn SynthesizedFunction, add ByteArray, record ValueI
 	labels.push(EmptySourceText)
 	labels.push(entry.key.label)
 	labels.push(entry.value.label)
-	_ = fn.emitCall(add, args: tripleArgs(record, second: key, third: value), argLabels: labels, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, site: site)
+	_ = fn.emitCall(add, args: tripleArgs(record, second: key, third: value), argLabels: labels, mint: CalleeMint.notMinted, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, site: site)
 
 	var borrowed = GlobalInitArgumentArray.create()
 	borrowed.push(entry.key)
@@ -525,7 +525,7 @@ end 'containerStampValue'
 // mint at it identically.
 function initializerNodeRecord(fn SynthesizedFunction, calls GlobalInitCallArray, id ElementIndex, valueType MaxonType, site SynthesizedSite) returns ValueId
 	return match globalInitCallAt(calls, id: id) 'node'
-		call(callee, args) gives calledFactoryRecord(fn, callee: callee, args: args, calls: calls, valueType: valueType, site: site)
+		call(callee, args, mint) gives calledFactoryRecord(fn, callee: callee, mint: mint, args: args, calls: calls, valueType: valueType, site: site)
 		construct(sizeBytes, fields) gives builtStructBox(fn, sizeBytes: sizeBytes, fields: fields, calls: calls, valueType: valueType, site: site)
 		mapLiteral(create, entries) gives builtMapLiteralRecord(fn, create: create, entries: entries, calls: calls, valueType: valueType, site: site)
 		arrayLiteral(create, elements) gives builtArrayLiteralRecord(fn, create: create, elements: elements, calls: calls, valueType: valueType, site: site)
@@ -549,7 +549,7 @@ end 'initializerNodeRecord'
 // this frame owns them; a body's call site hands that job to the statement's own temp list
 // (`Parser.trackOwnedTemp`) and `__module_init` has no statement to end. So each one is dropped right after
 // the call, on the decision the index already made per argument (`GlobalInitArgumentCleanup`).
-function calledFactoryRecord(fn SynthesizedFunction, callee ByteArray, args GlobalInitArgumentArray, calls GlobalInitCallArray, valueType MaxonType, site SynthesizedSite) returns ValueId
+function calledFactoryRecord(fn SynthesizedFunction, callee ByteArray, mint CalleeMint, args GlobalInitArgumentArray, calls GlobalInitCallArray, valueType MaxonType, site SynthesizedSite) returns ValueId
 	var values = ValueIdArray.create()
 	var labels = NameRoster.create()
 
@@ -558,7 +558,7 @@ function calledFactoryRecord(fn SynthesizedFunction, callee ByteArray, args Glob
 		labels.push(arg.label)
 	end 'eachArgument'
 
-	let record = fn.emitCall(callee, args: values, argLabels: labels, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), site: site)
+	let record = fn.emitCall(callee, args: values, argLabels: labels, mint: mint, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), site: site)
 	dropBorrowedArguments(fn, args: args, values: values, site: site)
 	return record
 end 'calledFactoryRecord'
@@ -1077,7 +1077,7 @@ export type SynthesizedFunction
 	// because the runtime is not the only thing it serves: a user factory taking ARGUMENTS goes
 	// to `emitCall` directly, its labels being what `LowerMaxonToStd.lowerCall` reorders against the signature.
 	export function emitPositionalCall(callee ByteArray, args ValueIdArray, resultTag ValueTypeTag, resultNameId TypeNameId, site SynthesizedSite) returns ValueId
-		return self.emitCall(callee, args: args, argLabels: emptyArgLabels(args), resultTag: resultTag, resultNameId: resultNameId, site: site)
+		return self.emitCall(callee, args: args, argLabels: emptyArgLabels(args), mint: CalleeMint.notMinted, resultTag: resultTag, resultNameId: resultNameId, site: site)
 	end 'emitPositionalCall'
 
 	// ⭐ **A POSITIONAL CALL WHOSE RESULT NOBODY READS** — a drop, a runtime step, a mailbox close. It is
@@ -1093,15 +1093,15 @@ export type SynthesizedFunction
 	// two: the runtime has no parameter names for a label to match, while a user factory may be called
 	// `create(a, b: c)` and `LowerMaxonToStd.lowerCall` reorders against its declared signature.
 	//
-	// `CalleeMint.notMinted` because both halves of the name are the AUTHOR'S — the type is one they declared
-	// and the method is one they wrote — which is what the reserved-callee check needs to know to leave a
-	// `__`-prefixed runtime name alone and hold a user name to the rule.
+	// `mint` says who spelled the callee: `notMinted` for a name the author wrote or a runtime
+	// entry, which is what the reserved-callee check needs to leave a `__`-prefixed runtime name
+	// alone and hold a user name to the rule, and the helper's kind for one the compiler spelled.
 	//
 	// `argDefaultSlots` is empty and that is exact: this walk passes every argument the source wrote and
 	// synthesizes none, so there is no supplied default whose declaration slot `slotCallArgs` would need.
-	function emitCall(callee ByteArray, args ValueIdArray, argLabels NameRoster, resultTag ValueTypeTag, resultNameId TypeNameId, site SynthesizedSite) returns ValueId
+	function emitCall(callee ByteArray, args ValueIdArray, argLabels NameRoster, mint CalleeMint, resultTag ValueTypeTag, resultNameId TypeNameId, site SynthesizedSite) returns ValueId
 		let result = self.mint(resultTag, nameId: resultNameId)
-		self.emit(MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: uniformArgRanges(args, range: site.range()), argImmutableNames: NoImmutableArgNames, argDefaultSlots: NoDefaultArgSlots, mint: CalleeMint.notMinted), site: site)
+		self.emit(MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: uniformArgRanges(args, range: site.range()), argImmutableNames: NoImmutableArgNames, argDefaultSlots: NoDefaultArgSlots, mint: mint), site: site)
 		return result
 	end 'emitCall'
 end 'SynthesizedFunction'

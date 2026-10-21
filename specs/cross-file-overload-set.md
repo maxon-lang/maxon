@@ -428,6 +428,175 @@ end 'main'
 1007 5
 ```
 
+<!-- test: a-member-the-calling-file-cannot-name-is-not-bound-by-a-global-initializer -->
+A global initializer's call is made by the compiler's `__module_init`, which no file wrote, so the files it may not name are judged against the file the initializer is written in. `main.maxon` cannot name `types.maxon`'s file-private `create(n Count)`, which would outscore the exported `create(n Integer)` for the `Count` it passes, so `var y = Rec.create(7 as Count)` means the exported member, as the same call in a function body does. It prints `1007 1005`, exit 0.
+```maxon
+// --- file: types.maxon
+export typealias Integer = int(0 to 100000)
+export typealias Count = int(0 to 100) implements Integer
+
+export type Rec
+	export var v as Integer
+
+	static function create(n Count) returns Self
+		return Self{v: n}
+	end 'create'
+
+	export static function create(n Integer) returns Self
+		return Self{v: n + 1000}
+	end 'create'
+
+	export static function create(s String) returns Self
+		return Self{v: s.byteLength() as Integer}
+	end 'create'
+end 'Rec'
+
+// --- file: a.maxon
+export function viaA(n Count) returns Integer
+	return Rec.create(n).v
+end 'viaA'
+
+// --- file: main.maxon
+var y = Rec.create(7 as Count)
+
+function main() returns ExitCode
+	print("{y.v} {viaA(5)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1007 1005
+```
+
+<!-- test: error.a-member-only-a-hidden-overload-serves-is-refused-in-a-global-initializer -->
+`types.maxon`'s `create(n Count)` is file-private and its `create(s String)` is exported. `main.maxon` cannot
+name the first, so the initializer's overload choice is narrowed to the second, which fits no `Count`; the choice
+then widens to the whole set and binds the hidden member, and the initializer is refused for naming it, as the same
+call in a function body is.
+```maxon
+// --- file: types.maxon
+export typealias Integer = int(0 to 100000)
+export typealias Count = int(0 to 100) implements Integer
+
+export type Rec
+	export var v as Integer
+
+	static function create(n Count) returns Self
+		return Self{v: n}
+	end 'create'
+
+	export static function create(s String) returns Self
+		return Self{v: s.byteLength() as Integer}
+	end 'create'
+end 'Rec'
+
+// --- file: main.maxon
+var y = Rec.create(7 as Count)
+
+function main() returns ExitCode
+	print("{y.v}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3008: <fragment>:19:9: function 'Rec.create' is not exported
+```
+
+<!-- test: error.a-global-initializer-call-to-a-set-whose-every-member-is-hidden-is-refused-once -->
+Every `create` of `Rec` is file-private to `types.maxon`, so `main.maxon` can name none of them and its
+initializer's call is refused once, as the written name, not again as the member the choice binds.
+```maxon
+// --- file: types.maxon
+export typealias Integer = int(0 to 100000)
+export typealias Count = int(0 to 100) implements Integer
+
+export type Rec
+	export var v as Integer
+
+	static function create(n Count) returns Self
+		return Self{v: n}
+	end 'create'
+
+	static function create(n Integer) returns Self
+		return Self{v: n + 1000}
+	end 'create'
+end 'Rec'
+
+// --- file: main.maxon
+var y = Rec.create(7 as Count)
+
+function main() returns ExitCode
+	print("{y.v}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3008: <fragment>:19:9: function 'Rec.create' is not exported
+```
+
+<!-- test: a-defaulted-parameter-of-a-factory-in-another-file-fills-in-a-global-initializer -->
+`main.maxon`'s initializer omits `create`'s defaulted `n`, so the compiler calls the default's helper, which `types.maxon` declares. The helper is the compiler's call and no name `main.maxon` wrote, so the initializer is not refused for a file that cannot name it. It prints `6`.
+```maxon
+// --- file: types.maxon
+export typealias Integer = int(0 to 100000)
+
+export type Rec
+	export var v as Integer
+
+	export static function create(n Integer = 5) returns Self
+		return Self{v: n + 1}
+	end 'create'
+end 'Rec'
+
+// --- file: main.maxon
+var r = Rec.create()
+
+function main() returns ExitCode
+	print("{r.v}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6
+```
+
+<!-- test: a-field-default-built-by-a-helper-in-another-file-fills-in-a-global-initializer -->
+`Bag.items` is defaulted by a call, which `types.maxon` declares as a helper. `main.maxon`'s initializer builds a `Bag` without naming that helper, so the compiler's call to it is not refused for a file that cannot name it. It prints `3 0`.
+```maxon
+// --- file: types.maxon
+export typealias Integer = int(0 to 100000)
+export typealias IntArray = Array with Integer
+
+export type Bag
+	export var items = IntArray.create()
+	export var tag as Integer
+
+	export static function create(tag Integer) returns Self
+		return Self{tag: tag}
+	end 'create'
+end 'Bag'
+
+// --- file: main.maxon
+var bag = Bag.create(3)
+
+function main() returns ExitCode
+	print("{bag.tag} {bag.items.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 0
+```
+
 ### A parameter type the decider does not read
 
 <!-- test: error.a-set-with-a-member-the-decider-cannot-read-is-refused -->

@@ -2144,8 +2144,9 @@ module typealias GlobalInitArgumentArray = Array with GlobalInitArgument
 module union GlobalInitCall
 	// `callee` is the mangled `Type.method` name (`qualifiedMethodName`), which is the same key a body's call
 	// site emits and the signature registry files the declaration under — so the argument reordering
-	// `LowerMaxonToStd.lowerCall` does for a labelled call happens here for free.
-	call(let callee ByteArray, let args GlobalInitArgumentArray)
+	// `LowerMaxonToStd.lowerCall` does for a labelled call happens here for free. `mint` is
+	// `ConstFactoryCall.call`'s, carried onto the emitted op.
+	call(let callee ByteArray, let args GlobalInitArgumentArray, let mint CalleeMint)
 
 	// ⭐ **A BOX THE COMPILER FILLS SLOT BY SLOT** — the payload size `__mm_alloc` is asked for, and one
 	// instruction per slot. It serves a STRUCT LITERAL (one instruction per declared field) and a payload-
@@ -2963,10 +2964,12 @@ end 'ConstInitializerValue'
 // nested one — so recording it here too would be the same type written down twice, on two paths that could
 // drift. `ProgramSignatures.constFactoryCallResultType` is the one place either is derived.
 export union ConstFactoryCall
-	// A user static factory: the mangled `Type.method` name (`qualifiedMethodName`, which is the same key a
-	// body's call site emits and the signature registry files the declaration under) and the arguments the
-	// author wrote, in SOURCE order.
-	call(let callee ByteArray, args ConstFactoryArgumentArray)
+	// A call: the mangled `Type.method` name (`qualifiedMethodName`, which is the same key a body's
+	// call site emits and the signature registry files the declaration under) and its arguments, in
+	// SOURCE order. `mint` names a callee the compiler spelled (a literal's `init`, a default
+	// helper) and is `notMinted` for one the author wrote. `SemanticCheck.calleeVisibleFrom` exempts
+	// only the former, so a helper recorded as `notMinted` is refused against the initializer's file.
+	call(let callee ByteArray, args ConstFactoryArgumentArray, mint CalleeMint)
 
 	// ⭐ **A STRUCT LITERAL — `Pair{a: 1, b: 2}` inside `type Pair`'s own body**. `typeName` is the
 	// declared struct's name, and `fields` is LAYOUT-PARALLEL rather than source-ordered: entry `i` is the
@@ -3025,7 +3028,7 @@ function cacheWriteConstFactoryCall(writer LibraryCacheWriter, value ConstFactor
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
-		call(a0, a1) then cacheWriteConstFactoryCallCall(writer, a0: a0, a1: a1)
+		call(a0, a1, a2) then cacheWriteConstFactoryCallCall(writer, a0: a0, a1: a1, a2: a2)
 		construct(a0, a1) then cacheWriteConstFactoryCallConstruct(writer, a0: a0, a1: a1)
 		mapLiteral(a0, a1) then cacheWriteConstFactoryCallMapLiteral(writer, a0: a0, a1: a1)
 		unionCase(a0, a1, a2) then cacheWriteConstFactoryCallUnionCase(writer, a0: a0, a1: a1, a2: a2)
@@ -3034,9 +3037,10 @@ function cacheWriteConstFactoryCall(writer LibraryCacheWriter, value ConstFactor
 	end 'payload'
 end 'cacheWriteConstFactoryCall'
 
-function cacheWriteConstFactoryCallCall(writer LibraryCacheWriter, a0 ByteArray, a1 ConstFactoryArgumentArray)
+function cacheWriteConstFactoryCallCall(writer LibraryCacheWriter, a0 ByteArray, a1 ConstFactoryArgumentArray, a2 CalleeMint)
 	writer.bytes(a0)
 	cacheWriteConstFactoryArgumentArray(writer, value: a1)
+	writer.unsigned(a2.ordinal as CacheUnsigned)
 end 'cacheWriteConstFactoryCallCall'
 
 function cacheWriteConstFactoryCallConstruct(writer LibraryCacheWriter, a0 ByteArray, a1 ConstFactoryArgumentValueArray)
@@ -3081,8 +3085,9 @@ end 'cacheReadConstFactoryCall'
 function cacheReadConstFactoryCallCall(reader LibraryCacheReader) returns ConstFactoryCall throws LibraryCacheDamage
 	let a0 = try reader.bytes()
 	let a1 = try cacheReadConstFactoryArgumentArray(reader)
+	let a2 = try cacheReadCalleeMint(reader)
 
-	return ConstFactoryCall.call(a0, args: a1)
+	return ConstFactoryCall.call(a0, args: a1, mint: a2)
 end 'cacheReadConstFactoryCallCall'
 
 function cacheReadConstFactoryCallConstruct(reader LibraryCacheReader) returns ConstFactoryCall throws LibraryCacheDamage
@@ -3714,7 +3719,10 @@ end 'cacheReadCarriedDefectCarried'
 // @generated library-cache end
 
 // A call in a top-level or `static` initializer. The sweep cannot judge it — binding types are not settled
-// and `__module_init`'s calls are exempt from the body check — so `SemanticCheck.checkInitializerCalls` does.
+// — so `SemanticCheck.checkInitializerCalls` judges the name as written, and is the only check
+// a call folded into image data meets. `validateCall` judges the overload member an unfolded
+// call binds; the error gate after `reportDeferredNames` keeps one call from being refused by
+// both.
 export union InitializerCallSite
 	foldable(let key ByteArray, let readerFilePath FilePath, range SourceRange)
 	provisional(let key ByteArray, let written ByteArray, defect CarriedDefect, let readerFilePath FilePath, range SourceRange)
@@ -24978,7 +24986,7 @@ export type ProgramSignatures
 	// `Pair.create(Pair{…})` type each other's results without either side asking how the other was written.
 	function constFactoryCallResultType(call ConstFactoryCall, name ByteArray) returns MaxonType
 		return match call 'node'
-			call(callee, _) gives self.functionAliasResolved(self.resolvedReturnValueType(callee, name: name))
+			call(callee, _, _) gives self.functionAliasResolved(self.resolvedReturnValueType(callee, name: name))
 			construct(typeName, _) gives MaxonType.structRef(self.typeNames.intern(typeName))
 			functionValue(funcName) gives MaxonType.function(self.typeNames.intern(funcName))
 
@@ -25334,7 +25342,7 @@ export type ProgramSignatures
 
 		match factoryCallAt(calls, id: id) 'node'
 			construct then return self.nestedConstStructFieldSlot(id, calls: calls, declName: declName, elementFilePath: elementFilePath, nodes: nodes)
-			call(callee, args) then return self.helperDefaultFieldSlot(callee, args: args, layout: layout, index: index, nodes: nodes)
+			call(callee, args, _) then return self.helperDefaultFieldSlot(callee, args: args, layout: layout, index: index, nodes: nodes)
 			mapLiteral or
 			unionCase or
 			arrayLiteral or
@@ -26415,7 +26423,7 @@ export type ProgramSignatures
 
 		for call in calls 'eachCall'
 			match call 'node'
-				call(callee, args) then self.appendCallNodeCallees(callees, callee: callee, args: args)
+				call(callee, args, _) then self.appendCallNodeCallees(callees, callee: callee, args: args)
 				construct(_, fields) then self.appendConstructNodeCallees(callees, fields: fields)
 				mapLiteral(giid, entries) then self.appendMapLiteralNodeCallees(callees, giid: giid, entries: entries)
 
@@ -27014,7 +27022,7 @@ export type ProgramSignatures
 
 		for call in calls 'eachCall'
 			match call 'node'
-				call(callee, args) then resolved.push(GlobalInitCall.call(callee, args: self.globalInitArguments(args, callee: callee, calls: calls, declName: declName, elementFilePath: elementFilePath)))
+				call(callee, args, mint) then resolved.push(GlobalInitCall.call(callee, args: self.globalInitArguments(args, callee: callee, calls: calls, declName: declName, elementFilePath: elementFilePath), mint: mint))
 				construct(typeName, fields) then resolved.push(self.globalStructConstruct(typeName, fields: fields, calls: calls, declName: declName, elementFilePath: elementFilePath))
 				mapLiteral(giid, entries) then resolved.push(self.globalMapLiteral(giid, entries: entries, calls: calls, declName: declName, elementFilePath: elementFilePath))
 				unionCase(typeName, caseName, payloads) then resolved.push(self.globalUnionCaseConstruct(typeName, caseName: caseName, payloads: payloads, calls: calls, declName: declName, elementFilePath: elementFilePath))
@@ -28426,7 +28434,7 @@ export type ProgramSignatures
 	// A METHOD rather than a free function for exactly that: mangling an instance needs the registry.
 	function constFactoryCallHashName(call ConstFactoryCall) returns ByteArray
 		return match call 'node'
-			call(callee, _) gives callee
+			call(callee, _, _) gives callee
 			construct(callee, _) gives callee
 
 			// A case fixes its slot's type from the UNION, never from which case was written — the same fact
@@ -36298,10 +36306,9 @@ export type ProgramSignatures
 
 	// ⭐⭐ **MAY `readerFilePath` NAME `callee`?** The function half of `Visibility`, answered off the sweep's
 	// declarations and generic templates, which exist before `FunctionNameIndex` — what
-	// `SemanticCheck.calleeVisibleFrom` reads for a call in a BODY. An initializer's call, which
-	// `__module_init` makes on no file's behalf, is held to this answer by
-	// `SemanticCheck.checkInitializerCalls`. The rule the tiers are fed to is the one `isVisibleFrom` already
-	// owns, so the two askers can disagree about no declaration they both see.
+	// `SemanticCheck.calleeVisibleFrom` reads for a call in a BODY. An initializer's call is held to
+	// this answer by `SemanticCheck.checkInitializerCalls`. The rule the tiers are fed to is the one
+	// `isVisibleFrom` already owns, so the two askers can disagree about no declaration they both see.
 	//
 	// A callee no file declares is VISIBLE: "there is no such function" is a different mistake, and the
 	// caller reports it with its own sentence.

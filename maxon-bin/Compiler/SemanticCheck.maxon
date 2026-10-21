@@ -350,7 +350,7 @@ function resolveOneOverloadedCall(project Project, module MaxonModule, signature
 	view members = try project.overloadSets.get(callee) otherwise return
 	let candidates = overloadCandidates(project, members: members)
 
-	let nameable = membersTheCallerMayName(project, signatures: signatures, funcNames: funcNames, func: func, op: op, candidates: candidates)
+	let nameable = membersTheCallerMayName(project, signatures: signatures, funcNames: funcNames, func: func, callerFilePath: readerFilePath, op: op, candidates: candidates)
 	let narrowed = nameable.count() > 0 and nameable.count() < candidates.count()
 
 	let opaque = opaqueArgumentOf(func, op: op) if candidates.count() > 1 else OpaqueArgument.none
@@ -375,7 +375,7 @@ function resolveOneOverloadedCall(project Project, module MaxonModule, signature
 	retireDisambiguatingLiteralCasts(project, func: func, readerFilePath: readerFilePath, op: op, candidates: pool, pick: pick)
 
 	match pick 'pick'
-		chosen(member) then bindOverloadChoice(project, module: module, signatures: signatures, funcNames: funcNames, func: func, opIndex: opIndex, callee: callee, member: member, valueDefiners: valueDefiners, resolution: resolution)
+		chosen(member) then bindOverloadChoice(project, module: module, signatures: signatures, funcNames: funcNames, func: func, opIndex: opIndex, callerFilePath: readerFilePath, callee: callee, member: member, valueDefiners: valueDefiners, resolution: resolution)
 
 		// ⛔⛔ **AN AMBIGUOUS CALL IS *ALSO* LEFT ON A DECLARED MEMBER, AND LEAVING IT ON THE BARE NAME
 		// EARNS THE AUTHOR A SECOND, WRONG DIAGNOSTIC.** A CONTESTED set has no member under the bare
@@ -526,11 +526,11 @@ export function overloadCandidates(project Project, members NameRoster) returns 
 	return candidates
 end 'overloadCandidates'
 
-function membersTheCallerMayName(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, op MaxonOp, candidates NameRoster) returns NameRoster
+function membersTheCallerMayName(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, callerFilePath FilePath, op MaxonOp, candidates NameRoster) returns NameRoster
 	var nameable = NameRoster.create()
 
 	for member in candidates 'eachCandidate'
-		if not boundMemberIsRefusedAsHidden(project, signatures: signatures, funcNames: funcNames, func: func, op: op, member: member) 'theCallerMayNameIt'
+		if not boundMemberIsRefusedAsHidden(project, signatures: signatures, funcNames: funcNames, func: func, callerFilePath: callerFilePath, op: op, member: member) 'theCallerMayNameIt'
 			nameable.push(member)
 		end 'theCallerMayNameIt'
 	end 'eachCandidate'
@@ -892,9 +892,9 @@ end 'chosenMemberIs'
 // sites are then indistinguishable, so the second claim is refused rather than allowed to overwrite the
 // first. The cure for that residual is to key the site by its call's op index, which is a change to the
 // `RangeCheckArgSite` record and its pass, not to this one.
-function bindOverloadChoice(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, opIndex ElementIndex, callee ByteArray, member ByteArray, valueDefiners FunctionValueOrigins, resolution CallResolution)
+function bindOverloadChoice(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, opIndex ElementIndex, callerFilePath FilePath, callee ByteArray, member ByteArray, valueDefiners FunctionValueOrigins, resolution CallResolution)
 	var op = try module.ops.get(opIndex) otherwise panic("bindOverloadChoice: ops.get({opIndex}) OOB — the index came from liveOpIndices")
-	let reconcilesTheResult = not boundMemberIsRefusedAsHidden(project, signatures: signatures, funcNames: funcNames, func: func, op: op, member: member)
+	let reconcilesTheResult = not boundMemberIsRefusedAsHidden(project, signatures: signatures, funcNames: funcNames, func: func, callerFilePath: callerFilePath, op: op, member: member)
 
 	match overloadCallArgs(op) 'args'
 		supplied(args, _, defaultSlots, _) then bindOverloadChoiceArguments(project, module: module, func: func, opIndex: opIndex, callee: callee, member: member, args: args, defaultSlots: defaultSlots, origins: valueDefiners, reconcilesTheResult: reconcilesTheResult)
@@ -905,13 +905,13 @@ function bindOverloadChoice(project Project, module MaxonModule, signatures Prog
 	commitOverloadChoice(project, module: module, func: func, opIndex: opIndex, member: member, disagreement: sharedCallResultSubject, reconcilesTheResult: reconcilesTheResult)
 end 'bindOverloadChoice'
 
-function boundMemberIsRefusedAsHidden(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, op MaxonOp, member ByteArray) returns bool
+function boundMemberIsRefusedAsHidden(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, callerFilePath FilePath, op MaxonOp, member ByteArray) returns bool
 	if project.libraryFacts.bodyIsSwept(func.name) 'notInTheProgram'
 		return false
 	end 'notInTheProgram'
 
 	match overloadCallArgs(op) 'args'
-		supplied(_, _, _, mint) then return not calleeVisibleFrom(project, signatures: signatures, funcNames: funcNames, callee: member, caller: func, mint: mint)
+		supplied(_, _, _, mint) then return not calleeVisibleFrom(project, signatures: signatures, funcNames: funcNames, callee: member, caller: func, callerFilePath: callerFilePath, mint: mint)
 	end 'args'
 end 'boundMemberIsRefusedAsHidden'
 
@@ -3920,7 +3920,7 @@ function validateCall(project Project, func IrFunction, signatures ProgramSignat
 		return
 	end 'unknownFn'
 
-	if not calleeVisibleFrom(project, signatures: signatures, funcNames: funcNames, callee: callee, caller: func, mint: mint) 'notVisibleHere'
+	if not calleeVisibleFrom(project, signatures: signatures, funcNames: funcNames, callee: callee, caller: func, callerFilePath: filePath, mint: mint) 'notVisibleHere'
 		// A root declaration keeps the bare key, so a bare call can arrive here holding one this file may not
 		// name; it is no candidate, and the visible declarations elsewhere decide the refusal.
 		if reportAmbiguousCrossFileCall(project, signatures: signatures, callee: callee, callRange: callRange, filePath: filePath) 'ambiguousPastAnInvisibleRootDeclaration'
@@ -3956,7 +3956,7 @@ end 'validateCall'
 // comparing its empty path against a real caller's would refuse every call to it. A callee the
 // index does not know at all is exempt for the same reason it cannot be checked: there is no
 // declaration to read a tier off.
-function calleeVisibleFrom(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, callee ByteArray, caller IrFunction, mint CalleeMint) returns bool
+function calleeVisibleFrom(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, callee ByteArray, caller IrFunction, callerFilePath FilePath, mint CalleeMint) returns bool
 	// ⭐ **A CALLEE NAME THE AUTHOR DID NOT WRITE HAS NO VISIBILITY TO ANSWER FOR** — visibility governs what
 	// a file may NAME, and a minted callee is one the compiler spelled out of something else the author
 	// wrote (`int.fromString` ⇒ `__int_fromString`, an omitted argument ⇒ its default helper,
@@ -3965,33 +3965,22 @@ function calleeVisibleFrom(project Project, signatures ProgramSignatures, funcNa
 		return true
 	end 'theCompilersOwnSpelling'
 
-	// ⭐ **AND THE SYMMETRIC HALF: A CALLER WITH NO DECLARING FILE ASKS ON NOBODY'S BEHALF** (spec-port
-	// `map-struct-bytearray`). Visibility governs what a FILE may name, and `__module_init` is a function
-	// no file wrote — it exists because declarations across the WHOLE program asked for their slots to be
-	// filled, so there is no single reader path to hold its calls to, and comparing its empty one against a
-	// real declaration's refuses every call it makes. MEASURED: a same-file `var db = Database.create(…)`
-	// beside a file-private `static function create` reported `E3008 function 'Database.create' is not
-	// exported` — about a program with one file in it.
+	// ⭐ **AND THE SYMMETRIC HALF: A CALL NO FILE WROTE ASKS ON NOBODY'S BEHALF.** `callerFilePath`
+	// is the op's authored file (`authoredFileOf`), not the function's. A call an initializer wrote
+	// sits in `__module_init` filed under its global's declaring file (`SynthesizedSite.declaredAt`),
+	// so it is judged as a body call in that file is; only an op no declaration caused has an empty
+	// path, and its call is the compiler's. Exempting `__module_init` as a whole would make every
+	// globally-built record's factory callable from any file.
 	//
-	// ⛔⛔ **AND IT IS NOT A HOLE, BECAUSE EVERY USER-WRITTEN CALL `__module_init` MAKES IS CHECKED WHERE ITS
-	// READER FILE STILL EXISTS.** Every other op in that function is a runtime call the arm above exempts.
-	// TWO initializer forms write a user call, and both are decided against the declaring file of the BINDING
-	// through this same `isVisibleFrom`: a top-level factory (`var db = Database.create(…)`), whose TYPE half
-	// is `Parser.evalConstFactoryCallInto`'s own, and a DECLARED generic's empty record
-	// (`var g = StrMap.create()`). Their shared METHOD half is `checkInitializerCalls`.
-	// Widening this exemption without those doors in place makes method visibility unaskable for every
-	// globally-built record in the program.
-	//
-	// ⚠ It is asked BEFORE the callee's own path for the caller's-mistake-first reason the header states,
-	// and it is exact rather than defensive: `SourcePosition.synthesized()` is `IrFunction`'s positive claim
-	// that the compiler built the function, and every such function's calls are the compiler's.
-	if caller.isCompilerBuilt() 'callerIsCompilerBuilt'
+	// ⚠ It is asked BEFORE the callee's own path for the caller's-mistake-first reason the header
+	// states.
+	if callerFilePath.isEmpty() 'callerIsCompilerBuilt'
 		return true
 	end 'callerIsCompilerBuilt'
 
 	let declared = try funcNames.funcNamed(callee) otherwise return true
 
-	if declaredIsNameableFrom(signatures, declared: declared, readerFilePath: caller.sourceFilePath) 'theOrdinaryRule'
+	if declaredIsNameableFrom(signatures, declared: declared, readerFilePath: callerFilePath) 'theOrdinaryRule'
 		return true
 	end 'theOrdinaryRule'
 
@@ -5726,7 +5715,7 @@ end 'namedDoorPlace'
 let TargetUnsupportedUnnamedSubject = "this construct"
 
 function opIsTheCompilersOwn(project Project, func IrFunction, opIndex ElementIndex) returns bool
-	return func.isCompilerBuilt() and not project.synthesizedOpFiles.contains(opIndex)
+	return authoredFileOf(project, func: func, opIndex: opIndex).isEmpty()
 end 'opIsTheCompilersOwn'
 
 // ⭐ **REFUSE A CONSTRUCT THE CHOSEN TARGET CANNOT LOWER (E3104), AT THE CALL'S OWN SPAN — OR, FOR A
