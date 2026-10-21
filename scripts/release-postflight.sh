@@ -134,7 +134,8 @@ else
 		esac
 		known=0
 		for target in $MaxonTargets; do
-			if [ "$name" = "$(maxon_archive_file "$version" "$target")" ]; then
+			archive_name="$(maxon_archive_file "$version" "$target")"
+			if [ "$name" = "$archive_name" ]; then
 				known=1
 			fi
 		done

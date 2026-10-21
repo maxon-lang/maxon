@@ -75,10 +75,12 @@ version_from_binary="$(compiler_version)"
 
 package_one() {
 	local tgt="$1" native="$2"
-	local stage archive exe_ext
+	local stage_name archive_name stage archive exe_ext
 
-	stage="$DIST/$(maxon_archive_stem "$version_from_binary" "$tgt")"
-	archive="$DIST/$(maxon_archive_file "$version_from_binary" "$tgt")"
+	stage_name="$(maxon_archive_stem "$version_from_binary" "$tgt")"
+	archive_name="$(maxon_archive_file "$version_from_binary" "$tgt")"
+	stage="$DIST/$stage_name"
+	archive="$DIST/$archive_name"
 	exe_ext="$(maxon_target_exe_ext "$tgt")"
 
 	echo "release.sh: packaging $tgt (version $version_from_binary)"

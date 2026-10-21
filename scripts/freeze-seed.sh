@@ -78,11 +78,14 @@ mkdir -p "$SeedDistDirectory" "$StageDirectory"
 
 freeze_one() {
 	local target="$1"
-	local stage binary archive log
+	local stage_name exe_ext archive_name stage binary archive log
 
-	stage="$StageDirectory/$(maxon_archive_stem "$tag" "$target")"
-	binary="$stage/maxon$(maxon_target_exe_ext "$target")"
-	archive="$SeedDistDirectory/$(maxon_archive_file "$tag" "$target")"
+	stage_name="$(maxon_archive_stem "$tag" "$target")"
+	exe_ext="$(maxon_target_exe_ext "$target")"
+	archive_name="$(maxon_archive_file "$tag" "$target")"
+	stage="$StageDirectory/$stage_name"
+	binary="$stage/maxon$exe_ext"
+	archive="$SeedDistDirectory/$archive_name"
 	log="$SeedWorkDirectory/build-$target.log"
 
 	mkdir -p "$stage"
@@ -104,13 +107,16 @@ archives=()
 
 for target in $MaxonTargets; do
 	freeze_one "$target"
-	archives+=("$(maxon_archive_file "$tag" "$target")")
+	archive_name="$(maxon_archive_file "$tag" "$target")"
+	archives+=("$archive_name")
 done
 
 write_checksums "$SeedDistDirectory" "${archives[@]}"
 
 host_target="$(maxon_host_target)"
-host_binary="$StageDirectory/$(maxon_archive_stem "$tag" "$host_target")/maxon$(maxon_target_exe_ext "$host_target")"
+host_stage_name="$(maxon_archive_stem "$tag" "$host_target")"
+host_exe_ext="$(maxon_target_exe_ext "$host_target")"
+host_binary="$StageDirectory/$host_stage_name/maxon$host_exe_ext"
 seed_version="$("$host_binary" version)"
 
 {

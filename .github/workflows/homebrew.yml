@@ -72,7 +72,8 @@ jobs:
           . scripts/lib/host-binaries.sh
           targets="$(./scripts/targets/matrix.sh list target channels=homebrew)"
           for target in $targets; do
-            gh release download "v${{ steps.v.outputs.version }}" --pattern "$(maxon_archive_file "${{ steps.v.outputs.version }}" "$target")" --dir dist
+            archive="$(maxon_archive_file "${{ steps.v.outputs.version }}" "$target")"
+            gh release download "v${{ steps.v.outputs.version }}" --pattern "$archive" --dir dist
           done
           gh release download "v${{ steps.v.outputs.version }}" --pattern SHA256SUMS --dir dist
           cd dist && sha256sum -c --ignore-missing SHA256SUMS

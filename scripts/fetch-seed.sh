@@ -98,11 +98,12 @@ download_release() {
 }
 
 copy_local_release() {
-	local archive
+	local archive_file archive
 
 	[ -d "$from" ] || { echo "fetch-seed.sh: --from=$from is not a directory" >&2; exit 1; }
 
-	archive="$from/$(maxon_archive_file "$tag" "$target")"
+	archive_file="$(maxon_archive_file "$tag" "$target")"
+	archive="$from/$archive_file"
 	[ -f "$archive" ] || { echo "fetch-seed.sh: $from holds no $(basename "$archive") — no $target archive frozen as $tag" >&2; exit 1; }
 	[ -f "$from/$ChecksumsAsset" ] || { echo "fetch-seed.sh: $from holds no $ChecksumsAsset" >&2; exit 1; }
 
@@ -125,16 +126,19 @@ archive="$(find "$work" -maxdepth 1 -type f -name "*-$target.$archive_ext" | hea
 
 expected="$(awk -v name="$(basename "$archive")" '$2 == name || $2 == "*" name { print $1 }' "$work/$ChecksumsAsset")"
 [ -n "$expected" ] || { echo "fetch-seed.sh: $ChecksumsAsset of $tag does not list $(basename "$archive")" >&2; exit 1; }
-[ "$expected" = "$(sha256_of "$archive")" ] || { echo "fetch-seed.sh: $(basename "$archive") does not match $ChecksumsAsset of $tag" >&2; exit 1; }
+actual="$(sha256_of "$archive")"
+[ "$expected" = "$actual" ] || { echo "fetch-seed.sh: $(basename "$archive") does not match $ChecksumsAsset of $tag" >&2; exit 1; }
 
 unpack_archive "$archive" "$work/unpacked"
 
-binary_name="maxon$(maxon_target_exe_ext "$target")"
+exe_ext="$(maxon_target_exe_ext "$target")"
+binary_name="maxon$exe_ext"
 found="$(find "$work/unpacked" -type f -name "$binary_name" | head -n1)"
 [ -n "$found" ] || { echo "fetch-seed.sh: no maxon binary in $tag's $target archive" >&2; exit 1; }
 
 seed="$(maxon_downloaded_path)"
-[ "$target" = "$(maxon_host_target)" ] || seed=".bootstrap/$(basename "$found")"
+host_target="$(maxon_host_target)"
+[ "$target" = "$host_target" ] || seed=".bootstrap/$(basename "$found")"
 [ -z "$output" ] || seed="$output"
 
 # Replaced by rename, so a failed copy never leaves a truncated seed where a working one stood.
