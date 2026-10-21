@@ -407,6 +407,7 @@ end 'main'
 
 <!-- test: sched-park.a-timer-lap-that-hands-the-processor-to-a-pinned-thread-wakes-a-machine-for-the-rest -->
 <!-- procs: 2 -->
+<!-- preempt: off -->
 **A LAP THAT FIRES TWO TIMERS AND HANDS ITS PROCESSOR TO A PINNED THREAD STILL PAYS THE WAKE THE SECOND TIMER OWES.**
 Both timers are armed while every processor is busy, so no machine is started to poll for them, and both are due
 by the time `main` — the only machine not waiting for a pinned thread — parks. Its loop fires them in deadline
@@ -415,23 +416,26 @@ to another machine, so the lap hands the processor and the token to that machine
 the ring of the processor it handed over, with a machine busy on it and the other processor idle. Go's timer fire
 readies each thread through `goready`, which wakes a machine for it; here that wake is paid on the hand-off, and
 a new machine takes the signaller's token and gives its processor to its owner. Without the wake the signaller
-waits behind the waiter, which is waiting for the signaller: nothing runs it until the waiter's machine is
-preempted, ten milliseconds into the wait.
+waits behind the waiter, which is waiting for the signaller: with preemption off nothing ever runs it.
 
-⚖ **THE ORDER IS BETWEEN TWO EVENTS, NEVER A WALL-CLOCK BUDGET.** The waiter reports whether the signal arrived
-before the scheduler preempted it, and the wait is capped at 1500 ms so a signal that never arrives ends the case.
+⚖ **THE OBSERVABLE IS THE WAKE, NOT A RACE AGAINST PREEMPTION.** `preempt: off` withdraws the one rescue a
+stranded signaller has, so a runtime that pays the wake delivers the signal on every schedule and one that does not
+pays it only in a round the hand-off never reached. The waiter holds its machine and counts turns until the signal
+arrives; the count `handOffTurnCap` ends the wait so a stranded signaller prints the failing round instead of
+hanging. The cap is a number of turns, never a wall-clock budget, and it is far above the turns any
+wake takes.
 
 ⚠ **SIX ROUNDS, BECAUSE ONE LAP MAY NOT BE THE ONE THAT HANDS OFF.** The monitor starting a machine for an overdue
-timer, or a preemption of `main`, can fire the two timers one lap apart, and a round spoiled that way passes without
-reaching the hand-off. Each round is on fresh services, and the case holds only when every round's signaller
-ran in time.
+timer can fire the two timers one lap apart, and a round spoiled that way passes without reaching the hand-off, on a
+runtime that pays the wake and on one that does not. Each round is on fresh services, the case holds only when every
+round's signaller ran, and the rounds end at the first one that did not.
 ```maxon
 typealias HandOffFlag = SharedValue with bool
 typealias HandOffTurns = int(0 to u64.max)
 
 let handOffLeadMs = 50
 let handOffRounds = 6
-let handOffWaitCapMs = 1500
+let handOffTurnCap = 1500000000
 
 function handOffRemaining(target InstantMs) returns Milliseconds
 	let now = Clock.nowMs()
@@ -468,16 +472,13 @@ type HandOffThread
 		armed.publish(true)
 		sleep(handOffRemaining(wakeAt))
 
-		let preemptsBefore = Scheduler.counters().preempts
-		let began = Clock.nowMs()
-
-		while not signalled.current() and Clock.elapsedMs(began) < handOffWaitCapMs 'wait'
+		while not signalled.current() and self.held < handOffTurnCap 'wait'
 			self.held = self.held + 1
 		end 'wait'
 
-		let inTime = signalled.current() and Scheduler.counters().preempts == preemptsBefore
+		let arrived = signalled.current()
 		Scheduler.unpinFromMachine()
-		return inTime
+		return arrived
 	end 'waitForTheSignal'
 
 	export function signalAt(wakeAt InstantMs, signalled HandOffFlag) returns bool
@@ -509,21 +510,24 @@ function handOffRound() returns bool
 	let signalling = try signaller.signalAt(dueAt, signalled: signalled.clone()) otherwise panic("an open mailbox with room takes the send")
 	_ = handOffSpinUntil(dueAt + 2)
 
-	let inTime = await waiting
+	let arrived = await waiting
 	let sent = await signalling
-	return inTime and sent
+	return arrived and sent
 end 'handOffRound'
 
 function main() returns ExitCode
-	var inTime = 0 as HandOffTurns
+	var ran = 0 as HandOffTurns
+	var allRan = true
 
-	for _ in 1 to handOffRounds 'rounds'
-		if handOffRound() 'ranInTime'
-			inTime = inTime + 1
-		end 'ranInTime'
+	while allRan and ran < handOffRounds 'rounds'
+		allRan = handOffRound()
+
+		if allRan 'roundRan'
+			ran = ran + 1
+		end 'roundRan'
 	end 'rounds'
 
-	print("rounds in which the signaller ran while the waiter held its machine: {inTime} of {handOffRounds}\n")
+	print("rounds in which the signaller ran while the waiter held its machine: {ran} of {handOffRounds}\n")
 	return 0
 end 'main'
 ```
