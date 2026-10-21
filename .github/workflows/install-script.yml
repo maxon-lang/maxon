@@ -97,15 +97,25 @@ jobs:
       SYSTEM_PATH: /usr/bin:/bin:/usr/sbin:/sbin
       # The first release that has `maxon upgrade`, so the oldest install one can move forward.
       FIRST_UPGRADE_RELEASE: 0.2.0
-      MIRROR_SH: |
+      RELEASE_HELPERS_SH: |
+        release_version() {
+          local tag
+          tag="$(gh release view --json tagName --jq .tagName)" || return 1
+          printf '%s\n' "${tag#v}"
+        }
+        release_download() {
+          gh release download "v$2" --pattern "$3" --dir "$1"
+        }
+        release_download_asset() {
+          asset="maxon-$2-$3.$4"
+          release_download "$1" "$2" "$asset"
+        }
         mirror_stage() {
-          version="$(gh release view --json tagName --jq .tagName)"
-          version="${version#v}"
-          asset="maxon-$version-$1.$2"
+          version="$(release_version)"
           mirror="$(mktemp -d)"
           release_dir="$mirror/v$version"
           mkdir -p "$release_dir"
-          gh release download "v$version" --pattern "$asset" --dir "$release_dir"
+          release_download_asset "$release_dir" "$version" "$1" "$2"
         }
         mirror_stop() {
           kill "$mirror_server" 2> /dev/null || true
@@ -117,6 +127,7 @@ jobs:
           python3 -u -m http.server "$1" --bind 127.0.0.1 --directory "$mirror" > /dev/null 2> "$mirror_requests" &
           mirror_server=$!
           for _ in $(seq 1 50); do
+            kill -0 "$mirror_server" 2> /dev/null || break
             if curl -fsS -o /dev/null "$mirror_url/" 2> /dev/null; then
               return 0
             fi
@@ -137,12 +148,13 @@ jobs:
       - name: The installed compiler is the latest release
         run: |
           set -euo pipefail
-          latest="$(gh release view --json tagName --jq .tagName)"
+          eval "$RELEASE_HELPERS_SH"
+          latest="$(release_version)"
           reported="$("$HOME/.maxon/bin/maxon" version)"
           echo "$reported"
           case "$reported" in
-            "maxon ${latest#v} "*) ;;
-            *) echo "::error::expected ${latest#v}, the latest release"; exit 1 ;;
+            "maxon $latest "*) ;;
+            *) echo "::error::expected $latest, the latest release"; exit 1 ;;
           esac
 
       # ⛔ EVERY DIRECTORY THE ARCHIVE SHIPS MUST LAND BESIDE THE COMPILER. `stdlib/` and its sibling
@@ -152,9 +164,10 @@ jobs:
       - name: Every directory in the archive is installed beside the compiler
         run: |
           set -euo pipefail
-          latest="$(gh release view --json tagName --jq .tagName)"
+          eval "$RELEASE_HELPERS_SH"
+          latest="$(release_version)"
           work="$(mktemp -d)"
-          gh release download "$latest" --pattern "maxon-${latest#v}-${{ matrix.target }}.${{ matrix.archive }}" --dir "$work"
+          release_download_asset "$work" "$latest" "${{ matrix.target }}" "${{ matrix.archive }}"
           tar -tzf "$work"/maxon-*.tar.gz | awk -F/ 'NF >= 3 && $3 != "" { print $2 }' | sort -u > "$work/dirs"
           cat "$work/dirs"
           [ -s "$work/dirs" ] || { echo "::error::the archive holds no directories at all"; exit 1; }
@@ -268,8 +281,8 @@ jobs:
       - name: maxon upgrade, run through the link, moves an older install to the latest release
         run: |
           set -euo pipefail
-          latest="$(gh release view --json tagName --jq .tagName)"
-          latest="${latest#v}"
+          eval "$RELEASE_HELPERS_SH"
+          latest="$(release_version)"
           if [ "$latest" = "$FIRST_UPGRADE_RELEASE" ]; then
             echo "::notice::the latest release is the first with maxon upgrade, so there is nothing older to upgrade"
             exit 0
@@ -312,14 +325,15 @@ jobs:
       - name: A specific version installs, and --force reinstalls the latest over it
         run: |
           set -euo pipefail
-          latest="$(gh release view --json tagName --jq .tagName)"
+          eval "$RELEASE_HELPERS_SH"
+          latest="$(release_version)"
           env PATH="$SYSTEM_PATH" sh -s -- --version 0.1.0 --no-modify-path < website/public/install.sh
           case "$("$HOME/.maxon/bin/maxon" version 2>/dev/null || true)" in
-            "maxon ${latest#v} "*) echo "::error::--version 0.1.0 left the latest release in place"; exit 1 ;;
+            "maxon $latest "*) echo "::error::--version 0.1.0 left the latest release in place"; exit 1 ;;
           esac
           env PATH="$SYSTEM_PATH" sh -s -- --force --no-modify-path < website/public/install.sh
           case "$("$HOME/.maxon/bin/maxon" version)" in
-            "maxon ${latest#v} "*) ;;
+            "maxon $latest "*) ;;
             *) echo "::error::--force did not install the latest release"; exit 1 ;;
           esac
           leftovers="$(find "$HOME/.maxon" -mindepth 1 -maxdepth 1 -name '.*')"
@@ -385,7 +399,7 @@ jobs:
       - name: A checksum mismatch installs nothing
         run: |
           set -euo pipefail
-          eval "$MIRROR_SH"
+          eval "$RELEASE_HELPERS_SH"
           mirror_stage "${{ matrix.target }}" "${{ matrix.archive }}"
           printf '%064d  %s\n' 0 "$asset" > "$release_dir/SHA256SUMS"
           before="$(cksum < "$HOME/.maxon/bin/maxon")"
@@ -399,9 +413,9 @@ jobs:
       - name: A release whose SHA256SUMS lists no build for this machine installs nothing and downloads no archive
         run: |
           set -euo pipefail
-          eval "$MIRROR_SH"
+          eval "$RELEASE_HELPERS_SH"
           mirror_stage "${{ matrix.target }}" "${{ matrix.archive }}"
-          gh release download "v$version" --pattern SHA256SUMS --dir "$release_dir"
+          release_download "$release_dir" "$version" SHA256SUMS
           { grep -vF -- "$asset" "$release_dir/SHA256SUMS" || [ "$?" -eq 1 ]; } > "$mirror/unlisted"
           mv "$mirror/unlisted" "$release_dir/SHA256SUMS"
           [ -s "$release_dir/SHA256SUMS" ] || { echo "::error::the release lists no other build, so the mirror proves nothing"; exit 1; }
@@ -437,14 +451,26 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       # The first release that has `maxon upgrade`, so the oldest install one can move forward.
       FIRST_UPGRADE_RELEASE: 0.2.0
-      MIRROR_PS: |
+      RELEASE_HELPERS_PS: |
+        function Get-ReleaseVersion {
+          $tag = gh release view --json tagName --jq .tagName
+          if ($LASTEXITCODE -ne 0) { throw 'gh could not read the latest release' }
+          $tag.TrimStart('v')
+        }
+        function Save-ReleaseFile([string]$Dir, [string]$Version, [string]$Pattern) {
+          $null = gh release download "v$Version" --pattern $Pattern --dir $Dir
+          if ($LASTEXITCODE -ne 0) { throw "gh could not download $Pattern from v$Version" }
+        }
+        function Save-ReleaseAsset([string]$Dir, [string]$Version, [string]$Target, [string]$Archive) {
+          $asset = "maxon-$Version-$Target.$Archive"
+          Save-ReleaseFile $Dir $Version $asset
+          $asset
+        }
         function New-Mirror([string]$Name, [string]$Target, [string]$Archive) {
-          $version = (gh release view --json tagName --jq .tagName).TrimStart('v')
-          $asset = "maxon-$version-$Target.$Archive"
+          $version = Get-ReleaseVersion
           $root = Join-Path $env:RUNNER_TEMP $Name
           $dir = (New-Item -ItemType Directory -Force -Path "$root\v$version").FullName
-          $null = gh release download "v$version" --pattern $asset --dir $dir
-          if ($LASTEXITCODE -ne 0) { throw "gh could not download $asset from v$version" }
+          $asset = Save-ReleaseAsset $dir $version $Target $Archive
           [pscustomobject]@{ Version = $version; Asset = $asset; Root = $root; Dir = $dir }
         }
         function Stop-Mirror($Server) {
@@ -456,6 +482,7 @@ jobs:
           $url = "http://127.0.0.1:$Port"
           $server = Start-Process python -ArgumentList '-u', '-m', 'http.server', "$Port", '--bind', '127.0.0.1', '--directory', $Root -PassThru -WindowStyle Hidden -RedirectStandardError $requests
           foreach ($attempt in 1..50) {
+            if ($server.HasExited) { break }
             try {
               $null = Invoke-WebRequest -UseBasicParsing -Uri "$url/" -TimeoutSec 2
               return [pscustomobject]@{ Server = $server; Url = $url; Requests = $requests }
@@ -489,7 +516,8 @@ jobs:
 
       - name: The installed compiler is the latest release
         run: |
-          $latest = (gh release view --json tagName --jq .tagName).TrimStart('v')
+          . ([scriptblock]::Create($env:RELEASE_HELPERS_PS))
+          $latest = Get-ReleaseVersion
           $reported = & "$HOME\.maxon\bin\maxon.exe" version
           $reported
           if ($reported -notlike "maxon $latest *") { throw "expected $latest, the latest release" }
@@ -500,9 +528,10 @@ jobs:
       # would go stale the next time a tier is added.
       - name: Every directory in the archive is installed beside the compiler
         run: |
-          $tag = (gh release view --json tagName --jq .tagName)
+          . ([scriptblock]::Create($env:RELEASE_HELPERS_PS))
+          $latest = Get-ReleaseVersion
           $work = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'shape')
-          gh release download $tag --pattern "maxon-$($tag.TrimStart('v'))-${{ matrix.target }}.${{ matrix.archive }}" --dir $work
+          $null = Save-ReleaseAsset $work $latest '${{ matrix.target }}' '${{ matrix.archive }}'
           $zip = (Get-ChildItem -LiteralPath $work -Filter *.zip)[0].FullName
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $archive = [IO.Compression.ZipFile]::OpenRead($zip)
@@ -611,7 +640,8 @@ jobs:
       - name: maxon upgrade moves an older install to the latest release
         run: |
           $ErrorActionPreference = 'Continue'
-          $latest = (gh release view --json tagName --jq .tagName).TrimStart('v')
+          . ([scriptblock]::Create($env:RELEASE_HELPERS_PS))
+          $latest = Get-ReleaseVersion
           if ($latest -eq $env:FIRST_UPGRADE_RELEASE) {
             Write-Host '::notice::the latest release is the first with maxon upgrade, so there is nothing older to upgrade'
             $global:LASTEXITCODE = 0
@@ -641,7 +671,8 @@ jobs:
       - name: A specific version installs, and -Force reinstalls the latest over it
         run: |
           $install = [scriptblock]::Create((Get-Content -Raw website/public/install.ps1))
-          $latest = (gh release view --json tagName --jq .tagName).TrimStart('v')
+          . ([scriptblock]::Create($env:RELEASE_HELPERS_PS))
+          $latest = Get-ReleaseVersion
           & $install -Version 0.1.0
           if ($LASTEXITCODE -ne 0) { throw '-Version 0.1.0 failed' }
           if ("$(& "$HOME\.maxon\bin\maxon.exe" version)" -like "maxon $latest *") { throw '-Version 0.1.0 left the latest release in place' }
@@ -687,7 +718,7 @@ jobs:
       - name: A checksum mismatch installs nothing
         run: |
           $install = [scriptblock]::Create((Get-Content -Raw website/public/install.ps1))
-          . ([scriptblock]::Create($env:MIRROR_PS))
+          . ([scriptblock]::Create($env:RELEASE_HELPERS_PS))
           $staged = New-Mirror 'mirror' '${{ matrix.target }}' '${{ matrix.archive }}'
           Set-Content -Path "$($staged.Dir)\SHA256SUMS" -Value (('0' * 64) + "  $($staged.Asset)") -Encoding ascii
           $mirror = Start-Mirror $staged.Root 8765
@@ -701,11 +732,11 @@ jobs:
       - name: A release whose SHA256SUMS lists no build for this machine installs nothing and downloads no archive
         run: |
           $script = (Resolve-Path website/public/install.ps1).Path
-          . ([scriptblock]::Create($env:MIRROR_PS))
+          . ([scriptblock]::Create($env:RELEASE_HELPERS_PS))
           $staged = New-Mirror 'mirror-unlisted' '${{ matrix.target }}' '${{ matrix.archive }}'
           $version = $staged.Version
           $asset = $staged.Asset
-          gh release download "v$version" --pattern SHA256SUMS --dir $staged.Dir
+          Save-ReleaseFile $staged.Dir $version SHA256SUMS
           $kept = @(Get-Content -LiteralPath "$($staged.Dir)\SHA256SUMS" | Where-Object { $_ -notlike "*$asset*" })
           if ($kept.Count -eq 0) { throw 'the release lists no other build, so the mirror proves nothing' }
           Set-Content -LiteralPath "$($staged.Dir)\SHA256SUMS" -Value $kept -Encoding ascii
