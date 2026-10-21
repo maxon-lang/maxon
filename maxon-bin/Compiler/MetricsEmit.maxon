@@ -99,6 +99,7 @@ export let MetricsKindTotal = "total"
 export let MetricsKindPhase = "phase"
 export let MetricsKindRegAlloc = "regalloc"
 export let MetricsKindUnattributed = "unattributed"
+export let MetricsKindUpkeep = "upkeep"
 export let MetricsKindCode = "code"
 export let MetricsKindTag = "tag"
 export let MetricsKindChurn = "churn"
@@ -167,6 +168,11 @@ function metricsText(project Project, codeBytes CodeByteCount) returns String
 	// (CompileTimings.unattributedCost, CompileMemory.unattributed) run on every metrics build,
 	// which is what makes them a tripwire rather than a comment.
 	out.append(metricsRow(MetricsKindUnattributed, name: MetricsNoName, cost: timings.unattributedCost(), delta: memory.unattributed(timings.poolRowMask()), residency: PhaseResidency.zero()))
+
+	// The lock-record refreshes, which `total` excludes: a consumer adding this row to the others
+	// counts memory the compile does not report.
+	let upkeep = project.session.treeLock.upkeep()
+	out.append(metricsRow(MetricsKindUpkeep, name: MetricsNoName, cost: PhaseCost.create(upkeep.nanos, cpuTicks: upkeep.cpuTicks), delta: upkeep, residency: PhaseResidency.zero()))
 
 	out.append(metricsRow(MetricsKindCode, name: MetricsNoName, cost: PhaseCost.zero(), delta: PhaseDelta.create(0, cpuTicks: 0, allocs: 0, frees: 0, bytes: codeBytes as HeapByteCount), residency: PhaseResidency.zero()))
 

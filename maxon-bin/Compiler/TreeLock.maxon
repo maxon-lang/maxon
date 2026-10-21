@@ -173,17 +173,25 @@ union HeldCheckoutLock
 	none
 end 'HeldCheckoutLock'
 
+// Armed once in `take` and reopened by every refresh: a probe made per refresh is allocated and freed
+// outside its own bracket, so each refresh would leak it into the compile's `total`.
+union UpkeepMeter
+	idle
+	armed(probe PhaseProbe)
+end 'UpkeepMeter'
+
 type HeldLock
 	var holding as HeldCheckoutLock
 	var lastTouchMs as InstantMs
 	var touchDelayMs as DurationMs
 	var lastRefreshMs as InstantMs
 	var refreshWarned = false
+	var upkeepMeter as UpkeepMeter
 	var upkeepSpan as PhaseDelta
 	var upkeep as PhaseDelta
 
 	static function none() returns HeldLock
-		return Self{holding: HeldCheckoutLock.none, lastTouchMs: 0, touchDelayMs: TouchIntervalMs, lastRefreshMs: 0, upkeepSpan: PhaseDelta.zero(), upkeep: PhaseDelta.zero()}
+		return Self{holding: HeldCheckoutLock.none, lastTouchMs: 0, touchDelayMs: TouchIntervalMs, lastRefreshMs: 0, upkeepMeter: UpkeepMeter.idle, upkeepSpan: PhaseDelta.zero(), upkeep: PhaseDelta.zero()}
 	end 'none'
 
 	function addUpkeepTo(total PhaseDelta)
@@ -202,20 +210,42 @@ type HeldLock
 	// NO lock — every one of the suite's thousands of child compiles reaches `recordPhaseDelta` — so the
 	// common path must be the cheap one: a match on `none`, and no clock read at all.
 	function touch()
-		match self.holding 'holding'
-			none then return
-			held(lock) then self.touchHeld(lock)
-		end 'holding'
+		if not self.refreshDue() 'notDue'
+			return
+		end 'notDue'
+
+		match self.upkeepMeter 'meter'
+			idle then panic("HeldLock.touch: a refresh is due only for a held lock, and taking one arms the meter")
+			armed(probe) then self.refreshMetered(probe)
+		end 'meter'
 	end 'touch'
 
-	function touchHeld(lock OwnedLock)
-		if Clock.elapsedMs(self.lastTouchMs) < self.touchDelayMs 'tooSoon'
-			return
-		end 'tooSoon'
+	function refreshDue() returns bool
+		return match self.holding 'holding'
+			none gives false
+			held gives Clock.elapsedMs(self.lastTouchMs) >= self.touchDelayMs
+		end 'holding'
+	end 'refreshDue'
 
+	function refreshMetered(probe PhaseProbe)
+		probe.reopenCounters()
+		self.refreshHeld()
+		probe.elapsedInto(self.upkeepSpan)
+		self.upkeep.add(self.upkeepSpan)
+	end 'refreshMetered'
+
+	// A call of its own so every local of a refresh, the `OwnedLock` a foreign hold drops included, is
+	// freed before `refreshMetered` closes the bracket; one freed after it counts in `total`.
+	function refreshHeld()
 		self.lastTouchMs = Clock.nowMs()
-		let upkeepProbe = PhaseProbe.beginProcessWideCounters()
 
+		match self.holding 'holding'
+			none then panic("HeldLock.refreshHeld: a refresh is due only for a held lock")
+			held(lock) then self.refreshRecord(lock)
+		end 'holding'
+	end 'refreshHeld'
+
+	function refreshRecord(lock OwnedLock)
 		let refresh = match takeClaim(lock.claimPath) 'claim'
 			held(claimToken) gives refreshUnderClaim(lock, claimToken: claimToken)
 			busy(untouchedSeconds) gives Refresh.contended(heldClaimReason(untouchedSeconds))
@@ -230,10 +260,7 @@ type HeldLock
 			failed(reason) then self.failedRefresh(lock, reason: reason)
 			foreign(found) then self.dropForeignHold(lock, found: found)
 		end 'refresh'
-
-		upkeepProbe.elapsedInto(self.upkeepSpan)
-		self.upkeep.add(self.upkeepSpan)
-	end 'touchHeld'
+	end 'refreshRecord'
 
 	function refreshed(lock OwnedLock)
 		self.lastRefreshMs = Clock.nowMs()
@@ -301,6 +328,7 @@ type HeldLock
 
 	function take(lock OwnedLock)
 		self.holding = HeldCheckoutLock.held(lock)
+		self.upkeepMeter = UpkeepMeter.armed(PhaseProbe.beginProcessWideCounters())
 		self.lastTouchMs = Clock.nowMs()
 		self.refreshWarned = false
 		self.refreshed(lock)

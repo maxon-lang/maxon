@@ -776,10 +776,11 @@ function parseRungMetrics(text String, rung ScaleRung) returns RungResult throws
 		end 'isRegAlloc' else if kind == MetricsKindCode 'isCode'
 			codeBytes = metric.bytes as CodeByteCount
 			codeSeen = true
-		end 'isCode' else if kind == MetricsKindUnattributed 'isUnattributed'
-			// Read and discarded: the compiler emits it so the two reconciliation panics run on
-			// every metrics build (that is what makes them a tripwire), but the curves are fitted from
-			// the phases themselves and from the total, both of which are already here.
+		end 'isCode' else if kind == MetricsKindUnattributed or kind == MetricsKindUpkeep 'isUnattributed'
+			// Read and discarded: the compiler emits `unattributed` so the two reconciliation panics
+			// run on every metrics build (that is what makes them a tripwire), and `upkeep` lies outside
+			// the total, but the curves are fitted from the phases themselves and from the total, both
+			// of which are already here.
 			continue
 		end 'isUnattributed' else if kind == MetricsKindTag or kind == MetricsKindChurn 'isPerBucket'
 			continue

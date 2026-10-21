@@ -105,6 +105,10 @@ export let MetricsKindColumn = "kind"
 export let NameColumn = "name"
 export let AllocsColumn = "allocs"
 export let PhaseRowKind = "phase"
+export let TotalRowKind = "total"
+export let UnattributedRowKind = "unattributed"
+export let WholeCompileRowName = "-"
+export let UpkeepRowKind = "upkeep"
 let MetricsHeaderOpener = "# kind"
 let MetricsKindColumnPosition = 0
 
@@ -152,7 +156,12 @@ end 'no fixture is stored as a source maxon fmt would rewrite'
 // compares two builds gives both the same path and keeps the first with `retainedAside`.
 export function spawnPinnedBuild(staged FilePath, label String, extraArguments StringArray, processors ProcessorPin, wholeDirectory bool = false, privateRunCache bool = false, runCacheDirName String = PrivateRunCacheDirName) returns CollectedOutput
 	let source = staged if wholeDirectory else staged.join("{StagedProgramFileName}")
+	let environment = pinnedEnvironment(staged, processors: processors, privateRunCache: privateRunCache, runCacheDirName: runCacheDirName)
 
+	return spawnBuild(source, staged: staged, output: executableIn(staged, stem: OutputFileStem), label: label, extraArguments: extraArguments, environment: environment)
+end 'spawnPinnedBuild'
+
+function pinnedEnvironment(staged FilePath, processors ProcessorPin, privateRunCache bool, runCacheDirName String) returns Environment
 	var overrides = EnvMap.create()
 
 	match processors 'pin'
@@ -164,10 +173,33 @@ export function spawnPinnedBuild(staged FilePath, label String, extraArguments S
 		overrides.upsert(CacheRootVariable, value: staged.join(runCacheDirName).toString())
 	end 'isolated'
 
-	let environment = Environment.inheritUpdating(overrides) if overrides.count() > 0 else Environment.inherit
+	return Environment.inheritUpdating(overrides) if overrides.count() > 0 else Environment.inherit
+end 'pinnedEnvironment'
 
-	return spawnBuild(source, staged: staged, output: executableIn(staged, stem: OutputFileStem), label: label, extraArguments: extraArguments, environment: environment)
-end 'spawnPinnedBuild'
+#if not os(Windows)
+	let PauseShellCommandFlag = "-c"
+	let PauseShellName = "sh"
+	let PauseScript = "dir=$1; pause=$2; shift 2; \"$@\" & pid=$!; tries=0; until [ -n \"$(find \"$dir\" -name '*.lock' 2>/dev/null)\" ] || [ $tries -ge 400 ]; do sleep 0.05; tries=$((tries + 1)); done; if [ $tries -ge 400 ]; then echo \"no output lock appeared under $dir within 20 s\" >&2; kill $pid; exit 97; fi; (sleep $pause; kill -CONT $pid 2>/dev/null) & resumer=$!; if ! kill -STOP $pid 2>/dev/null; then echo \"the build ended before it could be stopped\" >&2; kill $resumer; exit 98; fi; wait $resumer; wait $pid"
+	let PausedBuildTimeoutMs = 60000
+
+	// Both builds of a comparison come through here, the unpaused one with a 0 s pause: a compile's
+	// counted allocations follow its environment block, and `sh` changes it.
+	export function pausedBuildMetricsTable(staged FilePath, label String, pauseSeconds String) returns MetricsTable throws TestFailure
+		let shell = try FilePath.from(PosixShellPath) otherwise panic("parallel-compile.test: {PosixShellPath} is a spellable path")
+		let build = buildArguments(staged.join(StagedProgramFileName), output: executableIn(staged, stem: OutputFileStem), extraArguments: metricsArguments(staged, extraArguments: StringArray.create()))
+
+		var arguments = [PauseShellCommandFlag, PauseScript, PauseShellName, staged.join(PrivateRunCacheDirName).toString(), pauseSeconds, testedCompilerPath().toString()]
+
+		for word in build 'eachWord'
+			arguments.push(word)
+		end 'eachWord'
+
+		let run = spawnIn(Executable.path(shell), arguments: arguments, staged: staged, what: "the '{label}' build, paused", environment: pinnedEnvironment(staged, processors: ProcessorPin.machine, privateRunCache: true, runCacheDirName: PrivateRunCacheDirName), timeoutMs: PausedBuildTimeoutMs)
+		try requireCompiled(run, label: label)
+
+		return metricsTableOf(staged, label: label)
+	end 'pausedBuildMetricsTable'
+#endif
 
 // ============================================================================================
 // THE POOL LINE
@@ -350,6 +382,13 @@ export function builtMetricsTable(staged FilePath, label String, runCacheDirName
 end 'builtMetricsTable'
 
 export function meteredBuild(staged FilePath, label String, extraArguments StringArray, processors ProcessorPin, wholeDirectory bool, runCacheDirName String = PrivateRunCacheDirName) returns CollectedOutput throws TestFailure
+	let run = spawnPinnedBuild(staged, label: label, extraArguments: metricsArguments(staged, extraArguments: extraArguments), processors: processors, wholeDirectory: wholeDirectory, privateRunCache: true, runCacheDirName: runCacheDirName)
+	try requireCompiled(run, label: label)
+
+	return run
+end 'meteredBuild'
+
+function metricsArguments(staged FilePath, extraArguments StringArray) returns StringArray
 	var arguments = StringArray.create()
 	arguments.push("{MetricsOptionPrefix}{staged.join(MetricsFileName).toString()}")
 
@@ -357,12 +396,13 @@ export function meteredBuild(staged FilePath, label String, extraArguments Strin
 		arguments.push(extra)
 	end 'eachExtra'
 
-	let run = spawnPinnedBuild(staged, label: label, extraArguments: arguments, processors: processors, wholeDirectory: wholeDirectory, privateRunCache: true, runCacheDirName: runCacheDirName)
+	return arguments
+end 'metricsArguments'
+
+function requireCompiled(run CollectedOutput, label String) throws TestFailure
 	let observedExit = run.exitCode()
 	try Expect.equal(observedExit, expected: 0, message: "the '{label}' build did not compile. It wrote to stderr: {run.stderr}")
-
-	return run
-end 'meteredBuild'
+end 'requireCompiled'
 
 export function metricsTableOf(staged FilePath, label String) returns MetricsTable
 	let metricsPath = staged.join(MetricsFileName)

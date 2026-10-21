@@ -30,7 +30,7 @@ export function requireIdenticalMemory(first MetricsTable, second MetricsTable, 
 	try Expect.isEmpty(silent, message: "every compared row of the first {kind} build's metrics table reports 0 in these columns, so the two tables would agree on them whether or not the compiler's memory accounting is deterministic:{silent}")
 
 	let differing = differingReadings(firstReadings, second: secondReadings)
-	try Expect.isEmpty(differing, message: "two {kind} compiles of one program, at one processor count, with one command line, reported different memory for these rows (first vs second). A phase's allocation counts and bytes must not depend on which worker ran which function, or in what order the pool finished:{differing}")
+	try Expect.isEmpty(differing, message: "two {kind} compiles of one program, at one processor count, with one command line, reported different memory for these rows (first vs second). A row's allocation counts and bytes must not depend on which worker ran which function, in what order the pool finished, or how long the compile took:{differing}")
 end 'requireIdenticalMemory'
 
 function comparedColumns() returns StringArray
@@ -38,7 +38,7 @@ function comparedColumns() returns StringArray
 end 'comparedColumns'
 
 function isComparedKind(kind String) returns bool
-	return kind == PhaseRowKind or kind == RegAllocRowKind
+	return kind == PhaseRowKind or kind == RegAllocRowKind or kind == TotalRowKind or kind == UnattributedRowKind
 end 'isComparedKind'
 
 function memoryReadings(table MetricsTable) returns StringArray

@@ -845,8 +845,9 @@ its own case file — `pool-default`, `pool-pinned`, `byte-identical`, `rdata-or
 and for the backend pool's jobs:
 
 - `backend-tail-runs-on-the-pool` — under `--log=compiler:debug` the compile-timings table names `branchCleanup`, `prologueEpilogue` and `encode` as `(pool)` rows: each function's cleanup, frame and encoding run inside its allocation job
-- `identical-compiles-report-identical-memory` — two default-count builds of `uneven-program` (forty tiny functions and four wide ones) report the same allocs, frees, bytes and residency in every `phase` and `regalloc` row of `--metrics`; the builds share a case-private library cache that a third build warms first, because a cold or partly evicted cache moves the front end's rows
+- `identical-compiles-report-identical-memory` — two default-count builds of `uneven-program` (forty tiny functions and four wide ones) report the same allocs, frees, bytes and residency in every `phase`, `regalloc`, `total` and `unattributed` row of `--metrics`; the builds share a case-private library cache that a third build warms first, because a cold or partly evicted cache moves the front end's rows
 - `identical-cold-compiles-report-identical-memory` — the same comparison between two builds that each start from their own empty library cache
+- `lock-heartbeat-leaves-memory-identical` — a build of `uneven-program` stopped for 6.5 s once it holds its output lock (not on Windows: `kill -STOP`/`-CONT` from `sh`) refreshes the lock's record when it resumes, and reports the same allocs, frees and bytes as a build paused for 0 s in every compared row, `total` and `unattributed` included; both go through the same `sh` because a compile's counted allocations follow its environment block, and the `upkeep` row of `--metrics` (the lock refreshes the compile excludes from its totals) is asserted zero in the unpaused build and non-zero in the paused one, so a build that finished before the stop cannot read as agreement
 
 `fixtures/<program>/` holds the programs, each as `<name>.maxon.fixture`. It applies
 rule 1's `.fixture` half only (no `dot-` names), rule 4 (the child runs in its staging directory),

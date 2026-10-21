@@ -71,10 +71,9 @@ backwards makes you optimize the instrument instead of the compiler.
   stream it was added to trace, and a field store that boxed a union at +4 allocations per function.
   **Explain any movement. Attribute it.**
 - ⚠ **An A/B of two binaries' CPU needs several samples per arm**, since a single sample's per-phase
-  ratios wobble up to ±0.5 run to run — but **`--repeat=N` for N≥2 fails as a BROKEN RUN** (the defect
-  below), so take them as separate single-repeat processes, which agree bit for bit on memory, and read
-  the minimum yourself. And **an A/B must be INTERLEAVED** — a stable sign can come from the schedule
-  alone.
+  ratios wobble up to ±0.5 run to run — take them with `--repeat=N`, which reports the least CPU per
+  phase and fails as a BROKEN RUN if a rung's repeats disagree on memory. And **an A/B must be
+  INTERLEAVED** — a stable sign can come from the schedule alone.
 - **The CPU unit is platform-defined and the platforms do not agree** (TSC ticks on Windows,
   nanoseconds on macOS) and there is **no honest conversion** — `QueryPerformanceFrequency` is the
   *performance counter's* rate, not the TSC's. ⇒ **Compare RATIOS between rungs, which are unit-free;
@@ -123,9 +122,8 @@ it is answered by four instruments, none of which is a single command:
 
 ⛔ **NOTHING IN THE TREE PRODUCES A TWO-COMPILER `scale-test` RATIO TABLE** — stage-1 and stage-2
 `scale-test`ed interleaved, so any allocation ratio above 1.00 is a construct this tree's codegen
-allocates for and the seed's does not. Building one is blocked on a separate defect, filed in `todo.md`: `scale-test --repeat=N`
-for N≥2 reports the compiler nondeterministic, and the REPEAT is what is nondeterministic — state carried
-from one compile to the next inside one process. Fix that first or the ratio table cannot be trusted.
+allocates for and the seed's does not. Build one from `scale-test --repeat=N` runs of each compiler,
+interleaved; within a run, every repeat of a rung reports identical memory.
 
 ⚠ **The two-compiler harnesses are `scripts/bench-fannkuch.py`, `scripts/bench-binary-trees.py` and
 `scripts/bench-concurrency.py`**, which share `--ref <sha>` through `scripts/bench_common.py`.

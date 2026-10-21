@@ -1,0 +1,21 @@
+#if not os(Windows)
+	let HeartbeatPauseSeconds = "6.5"
+	let NoPauseSeconds = "0"
+	let NoUpkeep = "0"
+
+	test 'a compile that outlasts the lock heartbeat reports the memory of one that does not'
+		let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "lock-heartbeat-leaves-memory-identical", fixture: "uneven-program")
+
+		_ = builtMetricsTable(staged, label: "library-cache warm-up")
+
+		let prompt = pausedBuildMetricsTable(staged, label: "prompt", pauseSeconds: NoPauseSeconds)
+		let paused = pausedBuildMetricsTable(staged, label: "paused", pauseSeconds: HeartbeatPauseSeconds)
+
+		let promptUpkeep = prompt.cellOf(UpkeepRowKind, name: WholeCompileRowName, column: AllocsColumn)
+		let pausedUpkeep = paused.cellOf(UpkeepRowKind, name: WholeCompileRowName, column: AllocsColumn)
+		Expect.equal(promptUpkeep, expected: NoUpkeep, message: "the build that was not held up refreshed its lock ({promptUpkeep} allocations of upkeep), so the two builds do not differ by a refresh.")
+		Expect.notEqual(pausedUpkeep, expected: NoUpkeep, message: "the build held up for {HeartbeatPauseSeconds} s reported no lock upkeep, so no refresh happened inside it and the two builds would agree whatever the accounting does.")
+
+		requireIdenticalMemory(prompt, second: paused, kind: "paused")
+	end 'a compile that outlasts the lock heartbeat reports the memory of one that does not'
+#endif

@@ -13,18 +13,6 @@
   Needs deciding before building: whether the rule covers all named types or only typealiases, whether
   it reaches struct fields and generic arguments, and a new error code in the 3xxx band.
 - auto-update the install
-- ⛔ `scale-test --repeat=N` (N>=2) REPORTS THE COMPILER NONDETERMINISTIC, and it is the REPEAT that is
-  nondeterministic rather than the compiler. Measured 2026-09-07 on BOTH this tree and a build of
-  origin HEAD, so it is not new: `scale-test --repeat=3` fails as a BROKEN RUN at whichever rung it
-  reaches first, always with the same signature — the later compile of one rung reports exactly +4
-  allocs, +4 frees and +4,453 bytes (e.g. rung 3: 17,098,076/13,355,416/1,366,115,712 then
-  17,098,080/13,355,420/1,366,120,165). ⭐ THREE SEPARATE PROCESSES AGREE BIT FOR BIT
-  (`scale-test --rungs=4 --result-json` x3, identical), so the difference is state carried from one
-  compile to the NEXT INSIDE ONE PROCESS, and it grows rather than shrinks — not a lazily-built cache
-  the first compile pays for. Still failing 2026-09-24 with a different signature, at rung 0:
-  7,719,592 / 7,242,211 / 771,993,049 then 7,719,580 / 7,242,199 / 771,996,347 (allocs / frees /
-  bytes). Consequence: no two-compiler `scale-test` ratio table can be built, and a CPU A/B has to take
-  its samples as separate processes.
 - `tests/ladders/` generators are in the state `genrangesites.sh` documents for itself: several emit
   programs that no longer compile. Measured 2026-09-07 against BOTH this tree and origin HEAD, so
   none of it is new — `genshareddag` (E3012 unused variable `base`), `genclosure` in both `ranged`

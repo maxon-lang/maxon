@@ -153,6 +153,10 @@ export type PhaseProbe
 	export var bytes as HeapByteCount
 	export var source as CounterSource
 
+	// What `reopenCounters` asks, not `source`: a process-wide probe may be counters-only, and those
+	// reopen.
+	let opensSpan as bool
+
 	// Open a bracket, and open the matching TRACE SPAN.
 	//
 	// The span and the counters are opened by the SAME call for the same reason time and memory
@@ -175,7 +179,7 @@ export type PhaseProbe
 
 		// ⭐ THE PROCESS-WIDE COLUMNS, DELIBERATELY. A trace span is the MAIN THREAD's — the pool's workers
 		// open none (see `beginCounters`) — so this bracket is the one that must agree with the run total.
-		return Self.openOn(CounterSource.processWide)
+		return Self.openOn(CounterSource.processWide, opensSpan: true)
 	end 'begin'
 
 	// ⭐ **THE COUNTERS ALONE — no trace span, and therefore no `Project` and no span stack.**
@@ -189,15 +193,15 @@ export type PhaseProbe
 	// ⭐⭐ **AND IT READS THE CALLING THREAD'S COLUMNS, NOT THE PROCESS'S** (`CounterSource.callingThread`):
 	// the rows SUM over the workers, so the per-thread reading is the number a one-processor run reports.
 	export static function beginCounters() returns PhaseProbe
-		return Self.openOn(CounterSource.callingThread)
+		return Self.openOn(CounterSource.callingThread, opensSpan: false)
 	end 'beginCounters'
 
 	export static function beginProcessWideCounters() returns PhaseProbe
-		return Self.openOn(CounterSource.processWide)
+		return Self.openOn(CounterSource.processWide, opensSpan: false)
 	end 'beginProcessWideCounters'
 
-	static function openOn(source CounterSource) returns PhaseProbe
-		var probe = Self{nanos: 0, cpuTicks: 0, allocTotal: 0, freeTotal: 0, bytes: 0, source: source}
+	static function openOn(source CounterSource, opensSpan bool) returns PhaseProbe
+		var probe = Self{nanos: 0, cpuTicks: 0, allocTotal: 0, freeTotal: 0, bytes: 0, source: source, opensSpan: opensSpan}
 		probe.readCounters()
 		return probe
 	end 'openOn'
@@ -210,10 +214,11 @@ export type PhaseProbe
 	// Only a counters-only probe reopens: a span-opening one pairs its BEGIN with the END a recorder emits,
 	// and reopening it would leave that pairing to the caller.
 	export function reopenCounters()
-		match self.source 'source'
-			callingThread then self.readCounters()
-			processWide then panic("PhaseProbe.reopenCounters: this probe opened a trace span (`begin`), and a span is closed by the recorder that ends it — open a fresh one instead")
-		end 'source'
+		if self.opensSpan 'spanned'
+			panic("PhaseProbe.reopenCounters: this probe opened a trace span (`begin`), and a span is closed by the recorder that ends it — open a fresh one instead")
+		end 'spanned'
+
+		self.readCounters()
 	end 'reopenCounters'
 
 	// Memory counters first, clock next, CPU last, exactly as this file's header requires.

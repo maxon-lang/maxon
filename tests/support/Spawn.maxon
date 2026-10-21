@@ -8,6 +8,10 @@ let PosixTouchName = "touch"
 let PosixTouchTimeFlag = "-t"
 let PosixYear2000Stamp = "200001010000"
 
+#if not os(Windows)
+	public let PosixShellPath = "/bin/sh"
+#endif
+
 public let NoTimeoutMs = 0 as DurationMs
 public let CompilerUnderTestName = "the compiler under test"
 
@@ -68,7 +72,7 @@ public function endedProcessId() returns Pid
 		let exe = Executable.name("cmd")
 		let argv = ["/c", "exit", "0"]
 	#else
-		let exe = Executable.path(try FilePath.from("/bin/sh") otherwise panic("/bin/sh is a spellable path"))
+		let exe = Executable.path(try FilePath.from(PosixShellPath) otherwise panic("{PosixShellPath} is a spellable path"))
 		let argv = ["-c", "exit 0"]
 	#endif
 
