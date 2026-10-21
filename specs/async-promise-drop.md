@@ -3253,3 +3253,162 @@ end 'main'
 ```maxoncstderr
 error E3141: <fragment>:43:22: a promise cannot be borrowed through 'watch': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. This argument holds a promise, and a coroutine can still be running after the frame that started it has ended — by then the promise may have been awaited out of what holds it, or its thread reclaimed, and a coroutine that only reads it would read a thread that is gone. Pass the promise itself to a parameter the callee takes (`await`, `.cancel()`, a store or a `return` of it), or pass the result instead
 ```
+
+<!-- test: async-promise-drop.a-tuple-literal-holding-a-spawn-pushed-into-an-array -->
+A tuple is stored in a container as the one record it was built as: the array takes ownership of the promise the
+tuple holds, so the tuple is not copied and its original dropped (which would reclaim the green thread the array
+still names). The promise pops out with its tuple and is awaited.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias Pair = (Integer, IntPromise)
+typealias PairArray = Array with Pair
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function main() returns ExitCode
+	var held = PairArray.create()
+	held.push((1, async work(1)))
+	let (tag, p) = try held.pop() otherwise panic("one pushed")
+	let v = await p
+	print("{tag} {v}\n")
+	return 0
+end 'main'
+```
+```stdout
+1 2
+```
+```exitcode
+0
+```
+
+<!-- test: async-promise-drop.a-tuple-variable-holding-a-spawn-pushed-into-an-array -->
+A tuple held by a binding moves into the array with its promise: the array owns the one record, and awaiting the
+promise out of it is the only consumption.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias Pair = (Integer, IntPromise)
+typealias PairArray = Array with Pair
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function entryFor(n Integer) returns Pair
+	return (n, async work(n))
+end 'entryFor'
+
+function main() returns ExitCode
+	var held = PairArray.create()
+	let entry = entryFor(2)
+	held.push(entry)
+	let (tag, p) = try held.pop() otherwise panic("one pushed")
+	let v = await p
+	print("{tag} {v}\n")
+	return 0
+end 'main'
+```
+```stdout
+2 3
+```
+```exitcode
+0
+```
+
+<!-- test: async-promise-drop.a-tuple-holding-a-spawn-set-at-an-index -->
+A `set` stores the new tuple with its promise and drops the one it replaces, whose green thread is reclaimed
+exactly once.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias Pair = (Integer, IntPromise)
+typealias PairArray = Array with Pair
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function main() returns ExitCode
+	var held = PairArray.create()
+	held.push((1, async work(1)))
+	try held.set(0, value: (5, async work(5))) otherwise panic("index 0 exists")
+	let (tag, p) = try held.pop() otherwise panic("one held")
+	let v = await p
+	print("{tag} {v}\n")
+	return 0
+end 'main'
+```
+```stdout
+5 6
+```
+```exitcode
+0
+```
+
+<!-- test: async-promise-drop.a-map-value-that-is-a-tuple-holding-a-spawn -->
+A `Map` value that is a tuple holding a promise is stored as the one record too; the map releases it, and its
+thread, when the key is replaced, removed, or the map goes out of scope un-awaited. A map hands a value back
+only by a borrow, which a promise refuses (E3141), so the case observes the count.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias Pair = (Integer, IntPromise)
+typealias PairMap = Map with (String, Pair)
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function main() returns ExitCode
+	var m = PairMap.create()
+	m.upsert("a", value: (3, async work(3)))
+	m.upsert("b", value: (4, async work(4)))
+	m.upsert("a", value: (5, async work(5)))
+	let removed = m.remove("b")
+	print("{m.count()} {removed}\n")
+	return 0
+end 'main'
+```
+```stdout
+1 true
+```
+```exitcode
+0
+```
+
+<!-- test: async-promise-drop.a-tuple-holding-two-spawns-pushed-into-an-array -->
+Both promises of a tuple stay with the one record in the array, and each is awaited once.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias Twin = (IntPromise, IntPromise)
+typealias TwinArray = Array with Twin
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function main() returns ExitCode
+	var held = TwinArray.create()
+	held.push((async work(1), async work(10)))
+	let (a, b) = try held.pop() otherwise panic("one pushed")
+	let x = await a
+	let y = await b
+	print("{x} {y}\n")
+	return 0
+end 'main'
+```
+```stdout
+2 11
+```
+```exitcode
+0
+```

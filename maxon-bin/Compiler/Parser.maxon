@@ -40848,7 +40848,7 @@ export type Parser
 		end 'source'
 	end 'destructuredElement'
 
-	// ⭐ **IS `value` A TUPLE THIS RUNG MAY COPY?** — a tuple `structRef` none of whose elements owns heap.
+	// ⭐ **IS `value` A TUPLE THIS RUNG MAY COPY?** — a tuple `structRef` none of whose elements owes a drop.
 	// THE one gate on the value-semantics copy, so its askers cannot come to disagree about which tuples have
 	// value semantics — a disagreement that would not be a missed case but a record freed twice or not at all.
 	// Its askers are the durable-storage move-in (`moveManagedValueInto`),
@@ -40859,8 +40859,8 @@ export type Parser
 	// green thread and co-owns a borrowed trivial tuple, because a tuple aliases at a binding
 	// (`var q = t; q.1 = 55` writes through `t`, and a closure capturing `t` sees the write).
 	//
-	// The managed probe is asked through `structHasManagedField`, the SAME predicate the destructor synthesis
-	// gates on, so "this tuple needs no deep clone" and "this tuple needs no drop cascade" are one answer.
+	// The probe is `structHasFieldOwingDrop`, not `structHasManagedField`: a promise element is no heap box,
+	// but its green thread has one owner, so a copy of its tuple would drop it while the original holds it.
 	function valueIsCopyableTuple(value ValueId) returns bool
 		if not tagNamesADeclaredType(self.tagOf(value)) 'notAStruct'
 			return false
@@ -40876,7 +40876,7 @@ export type Parser
 		// for a String argument), and the array's element was left pointing at a freed 58-byte record.** The
 		// rule this restores is the one this predicate's own header states — only a TRIVIAL-element tuple may
 		// be shallow-copied — over the one element kind the managed test is blind to.
-		return isTupleTypeName(name) and not self.signatures.structHasManagedField(name) and not self.signatures.recordRestsAnOpaqueSlot(name)
+		return isTupleTypeName(name) and not self.signatures.structHasFieldOwingDrop(name) and not self.signatures.recordRestsAnOpaqueSlot(name)
 	end 'valueIsCopyableTuple'
 
 	// A fresh record holding the same elements as `value` — the copy `valueIsCopyableTuple` licenses. It is
@@ -74509,7 +74509,7 @@ export type Parser
 		// trivial tuple's copy exists to prevent, and what `returned-tuple-copies-only-when-trivial` pins from
 		// the other side. A managed-element tuple therefore keeps the struct rules below (share one record,
 		// co-own it) until it has a DEEP clone, the only copy that would mean what a tuple
-		// means.
+		// means. A tuple holding a promise keeps them for good: a green thread cannot be copied at all.
 		if self.valueIsCopyableTuple(arg) 'copyTuple'
 			return self.copyTupleForSink(arg, range: range)
 		end 'copyTuple'
