@@ -104,7 +104,7 @@ every comment anyone touches:
   is a *why* and belongs — but state the constraint that still binds ("callers may hand this an
   unsorted list"), never the edit that introduced it. *(Documentation follows the same rule: it states what
   the software does — not what it used to do, and not what it doesn't do. Commit messages, `docs/optimization-log.md` and a
-  release's changelog entry are where a measurement, an incident and a correction get recorded.)*
+  release's release notes entry are where a measurement, an incident and a correction get recorded.)*
 - **Edit an existing comment only when its CONTENT must change** — a fact made false, history, a fact
   that does not belong. Rewrite the sentences that carry it, or delete them. Formatting alone (bold,
   capitals, wrap width, wording) is never a reason to touch a comment whose content is right.

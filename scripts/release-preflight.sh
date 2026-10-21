@@ -4,7 +4,7 @@
 # commits and publishes nothing.
 #
 # ⭐⭐ **THESE QUESTIONS ARE ALL ASKED AGAIN AT THE TAG, WHERE ANSWERING ONE COSTS A RETRY.**
-# `release.yml`'s guard refuses a tag with no changelog entry or a changed extension whose version did
+# `release.yml`'s guard refuses a tag with no release notes entry or a changed extension whose version did
 # not move, and `website.yml` fails its build on a page that has drifted from `docs/` — by which point
 # the tag is pushed and four runners are building, and the fix means deleting the tag and cutting the
 # release again. Every one of them is a one-line edit while it is still asked here.
@@ -74,9 +74,9 @@ if [ ! -f "$WebsiteDir/$SyncDocsScript" ]; then
 elif ! command -v node >/dev/null 2>&1; then
 	check_fail website-docs-sync "node is not on PATH, so the check that gates the website build cannot run here"
 elif ( cd "$WebsiteDir" && node "$SyncDocsScript" --check ) > "$work/sync.out" 2>&1; then
-	check_pass website-docs-sync "the pages copied from docs/ still match"
+	check_pass website-docs-sync "the pages and generated files copied from docs/ and RELEASE_NOTES.md still match"
 else
-	check_fail website-docs-sync "a page copied from docs/ has drifted — website.yml's build fails on this and its deploy then skips"
+	check_fail website-docs-sync "a page or generated file copied from docs/ or RELEASE_NOTES.md has drifted — website.yml's build fails on this and its deploy then skips"
 	check_detail "$work/sync.out"
 fi
 
@@ -89,13 +89,13 @@ else
 	check_detail "$work/extension.err"
 fi
 
-# ⛔ A RELEASE WITH NO ENTRY DOES NOT SHIP: the maxon.dev post and the site's changelog page are both
+# ⛔ A RELEASE WITH NO ENTRY DOES NOT SHIP: the maxon.dev post and the site's release notes page are both
 # rendered from this section, and the release notes link to them.
-if scripts/changelog.sh --section="$version" >/dev/null 2>"$work/changelog.err"; then
-	check_pass changelog-entry "CHANGELOG.md has an entry for $version"
+if scripts/release-notes.sh --section="$version" >/dev/null 2>"$work/release-notes.err"; then
+	check_pass release-notes-entry "RELEASE_NOTES.md has an entry for $version"
 else
-	check_fail changelog-entry "CHANGELOG.md has no entry for $version"
-	check_detail "$work/changelog.err"
+	check_fail release-notes-entry "RELEASE_NOTES.md has no entry for $version"
+	check_detail "$work/release-notes.err"
 fi
 
 # ⛔ `maxon upgrade` RUNS THIS SCRIPT FROM EVERY SHIPPED COMPILER, so `install-script.yml` lints it on
@@ -113,7 +113,7 @@ gh_unavailable="$(check_gh_reason)"
 
 # ⚠ NOT EVERY COMMIT HAS A RUN, AND THAT IS NOT A VERDICT. `ci.yml` triggers on `main` and on pull
 # requests but not on `release/*`, and its path filter skips a commit that touches nothing it reads —
-# so a changelog commit on a release branch legitimately has none, and the honest answer is "unknown".
+# so a release notes commit on a release branch legitimately has none, and the honest answer is "unknown".
 if [ -n "$gh_unavailable" ]; then
 	check_skip ci-green "$gh_unavailable"
 elif ! ci_run="$(gh run list --commit "$head_commit" --workflow="$CiWorkflow" --limit 1 --json status,conclusion,url --jq '.[] | "\(.status) \(.conclusion) \(.url)"' 2>"$work/ci.err")"; then

@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut a release of the compiler — a release branch, the hand-written changelog entry, the website's release material, then the tag that publishes everything. Use when asked to cut, tag, ship or publish a release, or to rehearse one on a release branch. Invoke as `/release <X.Y.Z>`.
+description: Cut a release of the compiler — a release branch, the hand-written release notes entry, the website's release material, then the tag that publishes everything. Use when asked to cut, tag, ship or publish a release, or to rehearse one on a release branch. Invoke as `/release <X.Y.Z>`.
 ---
 
 # Cut a release
@@ -10,7 +10,7 @@ whole picture — the bootstrap chain, the double self-compile, the platform got
 scripts, the package managers, the verification afterwards. This file is the ORDER of operations
 and the checks, and it links out for every "why".
 
-⛔ **THE TAG IS THE STEP THAT PUBLISHES.** `release.yml`'s `guard` refuses a tag with no changelog
+⛔ **THE TAG IS THE STEP THAT PUBLISHES.** `release.yml`'s `guard` refuses a tag with no release notes
 entry or an unbumped extension before any runner starts, and `publish` runs only after all four
 targets have built and natively suite-tested — so a failed target publishes nothing.
 
@@ -26,7 +26,7 @@ tag: `guard` recognises the ref and sets `publish=no`. ⚠ **Pushing the branch 
 ```bash
 gh workflow run release.yml --ref release/X.Y.Z
 ```
-`guard`'s changelog and extension checks run only on a tag, so no rehearsal reaches them.
+`guard`'s release notes and extension checks run only on a tag, so no rehearsal reaches them.
 
 ## 1 · Cut the branch
 
@@ -40,24 +40,39 @@ from the ref at BUILD time, so a compiler built before the branch existed still 
 §3b's `compiler-version` check refuses it. When the emitted runtime changed since the slot was built,
 `run build` builds a second time by itself and prints why.
 
-## 2 · Write the changelog entry, by hand
+## 2 · Write the release notes entry, by hand
 
 ```bash
-scripts/changelog.sh --commits-since
+scripts/release-notes.sh --commits-since
 ```
 
 ⭐ **THAT LISTING IS REFERENCE MATERIAL, NOT A DRAFT.** A commit subject is written for someone
 changing the compiler; the entry is for someone installing it. Measured on `v0.1.0..HEAD`: 21 commits,
-about six of which mean anything to a reader. Write `## X.Y.Z — YYYY-MM-DD` with
-`### Added` / `### Changed` / `### Fixed` / `### Removed` beneath it.
+about six of which mean anything to a reader. Rename `## Unreleased` — the breaking changes the
+release's commits already recorded — to `## X.Y.Z — YYYY-MM-DD`, or write that heading when the file
+has no `## Unreleased`, and add `### Added` / `### Changed` / `### Fixed` / `### Removed` beneath it.
+`### Breaking changes` comes first.
 
 ⛔ **DO NOT PASTE COMMIT SUBJECTS IN.** That was tried, and generating the entry then correcting it
 meant rewriting seventeen lines of twenty-one.
 
-⛔ **STATE WHAT CHANGED, NEVER HOW TO DO ANYTHING.** No commands, no install steps, no "click More
-info", no warnings about how to use it. Those belong on the website's installation page and in
-each archive's `INSTALL.md`, which already carry them — a changelog is read months later by someone
-asking "what is different", and an instruction in it is either stale or duplicated.
+⛔ **EVERY BREAKING CHANGE CARRIES ITS FIX.** A change that can break an existing project, script or
+workflow — a removed or renamed spelling, command, flag, file name, syntax or stdlib API, or a program
+that is now refused or behaves differently — is a `- ` bullet under `### Breaking changes`, followed by
+an indented `Fix: …` line: concrete, short, and checked against the documentation as it stands. Read
+`--commits-since` for any such change no commit recorded. `node website/scripts/sync-docs.mjs` fails on a
+breaking change without a `Fix:` line, and `scripts/release-notes.sh --section` refuses a file that still
+has `## Unreleased`. The compiler reports these entries to a project built with a newer release, so a
+vague fix fails that project's author.
+
+⚠ **THE REST OF THE ENTRY STATES WHAT CHANGED.** No install steps, no "click More info", no warnings
+about how to use the product. Those belong on the website's installation page and in each archive's
+`INSTALL.md`, which already carry them; an instruction elsewhere in the notes is either stale or
+duplicated. Only a fix for what the release broke is an instruction.
+
+⛔ **THEN `node website/scripts/sync-docs.mjs`, AND COMMIT THE RESULT.** It rewrites
+`maxon-bin/Compiler/BreakingChangesGenerated.maxon` so the compiler lists the new release; the compiler
+built at the tag reports from that file, and the preflight fails on a stale one.
 
 ## 3 · Write the website's release material
 
@@ -65,19 +80,19 @@ asking "what is different", and an instruction in it is either stale or duplicat
 scripts/announce.sh X.Y.Z
 ```
 
-Three files under `website/` — the announcement post, the changelog page, and the `RELEASE_VERSION`
+Three files under `website/` — the announcement post, the release notes page, and the `RELEASE_VERSION`
 the download links are built from. It **commits nothing**.
 
 ⛔ **EVERY `### Added` AND `### Changed` ITEM HAS A PAGE THAT DESCRIBES IT.** The tag deploys maxon.dev, and
-a feature the changelog announces but no page explains sends its reader nowhere. For each item, find the
+a feature the release notes announce but no page explains sends its reader nowhere. For each item, find the
 section of the `docs/` source that describes the shipped behaviour (`website/MAINTAINING.md`'s map says
 which); a missing or false one is written on this branch and synced with
 `node website/scripts/sync-docs.mjs`.
 
-Then commit everything the branch carries — the changelog entry, the website material, any page:
+Then commit everything the branch carries — the release notes entry, the website material, any page:
 
 ```bash
-git add -A && git commit -m 'changelog: X.Y.Z'
+git add -A && git commit -m 'release notes: X.Y.Z'
 ```
 
 ## 3b · Preflight — the checks the tag would otherwise apply
@@ -88,7 +103,7 @@ scripts/release-preflight.sh X.Y.Z
 
 ⛔ **RUN IT, AND RUN IT AFTER THE REBUILD AND THE COMMIT.** Every check here also runs at the tag, where a
 failure costs a re-tag or a release whose links 404. It reads the worktree (`worktree-clean` fails on
-anything uncommitted), the copied docs, the extension gate, the changelog entry, shellcheck, CI at this
+anything uncommitted), the copied docs, the extension gate, the release notes entry, shellcheck, CI at this
 commit, and the built binary's version. A fix made after it is committed and the preflight run again.
 
 ⚠ **SKIPPED IS NOT PASSED.** The summary names every skip; read them rather than the exit code alone.
@@ -101,8 +116,8 @@ git push origin release/X.Y.Z vX.Y.Z
 ```
 
 ⛔ **THE TAG GOES ON THE FINISHED BRANCH TIP.** Everything downstream reads the repository AT THE TAG
-— the maxon.dev post and changelog page, which the release notes link to, take their text from
-`CHANGELOG.md` there, and
+— the maxon.dev post and release notes page, which the release notes link to, take their text from
+`RELEASE_NOTES.md` there, and
 `website.yml` builds the site from there. A fix committed after the tag is a fix nothing ships.
 
 ## 5 · Watch it
@@ -123,7 +138,7 @@ and both still report success. (The VS Code extension fails loudly on one instea
 scripts/release-postflight.sh X.Y.Z
 ```
 
-⛔⛔ **DO NOT MERGE BACK UNTIL THIS IS CLEAN.** §6 commits the release's changelog, website material
+⛔⛔ **DO NOT MERGE BACK UNTIL THIS IS CLEAN.** §6 commits the release's release notes, website material
 and extension version to `main`; run it over a release that has to be cut again and `main` carries a
 published extension version and a superseded entry, which the NEXT release then trips over.
 
@@ -168,7 +183,7 @@ then green before it goes on: the tagged run is a battery, not an acceptance. Th
 - ⛔ **The VS Code extension, if the failed attempt published it** — its `vscode-extension` run logs
   `Published maxon-lang.maxon-lsp-client v<version>`. That version is spent: bump PATCH, with a line in
   `vscode-extension/CHANGELOG.md`, or the retry publishes the compiler and then fails on the extension.
-- **The changelog entry** gains what the fix changed, and its heading takes the retry's date.
+- **The release notes entry** gains what the fix changed, and its heading takes the retry's date.
 - **The website material**: `announce.sh` refuses an existing post, so remove
   `website/src/content/docs/blog/maxon-X-Y-Z.md` and run §3 again.
 
@@ -194,7 +209,7 @@ fi
 point at which the release has succeeded; until then a failure is retried on the branch (§5b). If the
 last arm prints, the branch holds work nothing shipped — leave it and tell the user.
 
-⚠ The merge back is not optional — the changelog entry and the website material exist only at the
+⚠ The merge back is not optional — the release notes entry and the website material exist only at the
 tag until it happens. The TAG is what is merged rather than the branch, because the tag is exactly what
 shipped.
 

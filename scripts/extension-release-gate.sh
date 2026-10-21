@@ -48,7 +48,7 @@ if [ -z "$previous" ]; then
 	exit 0
 fi
 
-# ⛔ THE CHANGELOG IS EXCLUDED, for `changelog.sh`'s reason: regenerating it is not a change to the
+# ⛔ THE EXTENSION'S OWN CHANGELOG IS EXCLUDED: editing it is not a change to the
 # extension, and counting it would demand a version bump for a file the marketplace renders rather
 # than runs.
 changed="$(git log --format='%h %s' "$previous..HEAD" -- "$ExtensionPath" ':(exclude)'"$ExtensionPath/CHANGELOG.md")"

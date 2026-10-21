@@ -68,8 +68,8 @@ generated from that document and compiled into the server.
 
 | Mode | Invocation | Tools |
 |------|------------|-------|
-| Standard | `maxon mcp-server` | 21: `build`, `execute`, `test`, `fmt`, `check`, `dump_ir`, `lookup_error_code`, `info`, and the thirteen `debug_*` tools |
-| Developer | `maxon mcp-server --dev` | 23: the standard tools plus `run_spec_test` and `run_scale_test` |
+| Standard | `maxon mcp-server` | 22: `build`, `execute`, `test`, `fmt`, `check`, `dump_ir`, `lookup_error_code`, `info`, `breaking_changes`, and the thirteen `debug_*` tools |
+| Developer | `maxon mcp-server --dev` | 24: the standard tools plus `run_spec_test` and `run_scale_test` |
 
 ## The HTTP transport
 
@@ -226,6 +226,22 @@ checkout; otherwise `documentationAvailable` is `false`. A number no error code 
 
 Takes no arguments. Returns `name`, `version`, `commit`, `commitDate`, `executable` (the running
 compiler's path) and `hostTarget`.
+
+### `breaking_changes`
+
+Lists the breaking changes, each with its fix, between the release that last built a project and this
+compiler: the [report](/docs/cli/#breaking-changes-since-the-last-build) `maxon build` prints. It writes nothing.
+
+| Argument | Type | Description |
+|----------|------|-------------|
+| `path` | string, required | The project directory, or a file in it: a file's project is the directory of the nearest `.maxproj` at or above it |
+| `since` | string | A release, `X.Y.Z`, to list the changes after in place of the release the project's record holds |
+
+The answer holds `success`, `recordedVersion` (the release the project's compiler-version record holds,
+present when there is a record, or `since` when it is given), `compilerVersion`, and `changes`: one
+`{version, change, fix}` object per breaking change, newest release first. A project with no record
+answers an empty `changes`. A path naming nothing, a file with no `.maxproj` at or above it, a `since`
+that is not a release version, and a malformed record are refused.
 
 ## Debug tools
 

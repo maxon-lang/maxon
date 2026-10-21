@@ -377,10 +377,16 @@ stdlib API; a runtime environment variable; target support; LSP, VS Code or MCP 
    negatives: "never shows", "does not pop up", "is not reported", "sends neither", "rather than X".
    Say where a thing goes and when it happens, and stop there. Grep every doc file you touched for those
    words before reporting, and rewrite a hit in a paragraph you touched, whoever wrote it. The records
-   whose purpose IS history — `docs/optimization-log.md`, a release's changelog entry, a commit
+   whose purpose IS history — `docs/optimization-log.md`, a release's release notes entry, a commit
    message — are the exception.
-8. ⛔ **`CHANGELOG.md` is NOT touched.** `docs/RELEASING.md` makes it a release-time artifact, written
-   at the cut with the whole release in view — never appended to per change.
+8. ⛔ **`RELEASE_NOTES.md` takes one kind of entry per change: a BREAKING one.** A change that can break an
+   existing project, script or workflow (a removed or renamed spelling, command, flag, file name, syntax or
+   stdlib API, or a program now refused or run differently) adds a bullet under `## Unreleased` ›
+   `### Breaking changes`, creating that section as the first in the file when it is absent, followed by an
+   indented `Fix: …` line that is concrete, short and checked against the docs as they stand. Then run
+   `node website/scripts/sync-docs.mjs`, which compiles the entry into the driver and fails on a bullet with
+   no fix. Everything else the release says (Added, Changed, Fixed, Removed) is written at the cut with the
+   whole release in view — never appended to per change. `docs/RELEASING.md` has the format.
 
 ## Verification — a recompile, and nothing else
 

@@ -10,6 +10,10 @@ holds it in `docs/`, beside `stdlib/`, with the documents it links.
 For the full specification see [LANGUAGE_REFERENCE.md](/docs/language/overview/) and [BNF_SYNTAX.md](/docs/spec/bnf-syntax/);
 for the standard library's API see [STDLIB_REFERENCE.md](/docs/stdlib/).
 
+When a build or test run reports breaking changes since the project was last built, call the MCP
+`breaking_changes` tool and apply each change's fix. See
+[Breaking changes since the last build](/docs/cli/#breaking-changes-since-the-last-build).
+
 ## Syntax that DOES NOT EXIST in Maxon
 
 These are the most common mistakes. NEVER use any of these:

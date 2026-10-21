@@ -1,0 +1,48 @@
+let FixLinePrefix = "Fix: "
+let HeaderLineCount = 2
+
+test 'a build after an older release reports the breaking changes since it, once'
+	let staged = stagedProject("a-build-after-an-older-release-reports-its-breaking-changes", fixture: DefaultFixtureName)
+
+	let first = spawnManifestBuild(staged, options: StringArray.create())
+	Expect.equal(first.exitCode(), expected: 0, message: "the first `maxon build` over the default manifest exited {first.exitCode()}. It wrote to stdout: {first.stdout} and to stderr: {first.stderr}")
+
+	let record = soleVersionRecordIn(staged)
+	writeStagedFile(record, content: recordLine(OlderRelease))
+
+	let reported = spawnManifestBuild(staged, options: StringArray.create())
+	let said = "It wrote to stdout: {reported.stdout} and to stderr: {reported.stderr}"
+	let lastBuilt = "{LastBuiltWording} {OlderRelease}."
+
+	Expect.equal(reported.exitCode(), expected: 0, message: "`maxon build` after a build recorded by maxon {OlderRelease} exited {reported.exitCode()}. {said}")
+	requireNoReportInHeader(reported.stdout)
+	Expect.contains(reported.stdout, needle: lastBuilt, message: "`maxon build` after a build recorded by maxon {OlderRelease} did not say `{lastBuilt}`. {said}")
+	Expect.isTrue(hasFixLine(reported.stdout), message: "`maxon build` after a build recorded by maxon {OlderRelease} reported no change with a line opening `{FixLinePrefix}`. {said}")
+
+	let expected = expectedRecordedRelease()
+	Expect.equal(fileText(record), expected: recordLine(expected), message: "a successful build after a build recorded by maxon {OlderRelease} left the record {record.toString()} not holding `{expected}`.")
+
+	let again = spawnManifestBuild(staged, options: StringArray.create())
+	Expect.equal(again.exitCode(), expected: 0, message: "the third `maxon build` exited {again.exitCode()}. It wrote to stdout: {again.stdout} and to stderr: {again.stderr}")
+	Expect.isFalse(again.stdout.contains(LastBuiltWording), message: "a build after the one that reported the breaking changes reported them again. It wrote to stdout: {again.stdout}")
+end 'a build after an older release reports the breaking changes since it, once'
+
+function requireNoReportInHeader(stdout String) throws TestFailure
+	for (iter, line) in outputLines(stdout).withIterator() 'eachHeaderLine'
+		if iter.index() >= HeaderLineCount 'pastTheHeader'
+			break
+		end 'pastTheHeader'
+
+		try Expect.isFalse(line.contains(LastBuiltWording), message: "`maxon build` printed the breaking-change report on line {iter.index() + 1}, inside the two-line header. Its stdout was: {stdout}")
+	end 'eachHeaderLine'
+end 'requireNoReportInHeader'
+
+function hasFixLine(stdout String) returns bool
+	for line in outputLines(stdout) 'eachLine'
+		if line.trim().startsWith(FixLinePrefix) 'aFix'
+			return true
+		end 'aFix'
+	end 'eachLine'
+
+	return false
+end 'hasFixLine'

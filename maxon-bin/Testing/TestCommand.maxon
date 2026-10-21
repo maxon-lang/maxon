@@ -106,8 +106,33 @@ export function runTest(args MaxonArgs) returns ExitCode
 		return reportNothingToRun("no test matched {quotedPatterns(filtered.unmatchedPatterns)}", args: args, color: color)
 	end 'filterMatchedNothing'
 
-	return compileAndRunTests(args, subject: subject, target: target, groups: groups, selected: selected, color: color)
+	if refusedByVersionRecord(subject, args: args) 'refusedRecord'
+		return NothingRanExitCode
+	end 'refusedRecord'
+
+	let exit = compileAndRunTests(args, subject: subject, target: target, groups: groups, selected: selected, color: color)
+
+	if exitSucceeded(exit) 'allPassed'
+		recordProjectRelease(subject)
+	end 'allPassed'
+
+	return exit
 end 'runTest'
+
+// Under `--json` stdout carries exactly one JSON document, so the report goes to stderr.
+function refusedByVersionRecord(subject TestSubject, args MaxonArgs) returns bool
+	return match subject 'where'
+		projectDirectory(dir, _) gives reportBreakingChanges(dir, onto: ReportStream.standardError if args.jsonReport else ReportStream.standardOutput) == VersionRecordVerdict.refused
+		singleFile gives false
+	end 'where'
+end 'refusedByVersionRecord'
+
+function recordProjectRelease(subject TestSubject)
+	match subject 'where'
+		projectDirectory(dir, _) then recordCompilerRelease(dir)
+		singleFile then return
+	end 'where'
+end 'recordProjectRelease'
 
 union TestSubjectRefusal implements Error
 	notAPath(spelled String)
@@ -585,7 +610,7 @@ end 'prepareTestBuildRoot'
 function directoryHolding(subject TestSubject) returns FilePath throws TestStagingError
 	match subject 'where'
 		projectDirectory(dir, _) then return dir
-		singleFile(path) then return try path.resolve(Directory.currentPath()).parent() otherwise throw TestStagingError.refused("could not derive the directory holding {reportPathDisplay(path)}")
+		singleFile(path) then return try directoryHoldingFile(path) otherwise throw TestStagingError.refused("could not derive the directory holding {reportPathDisplay(path)}")
 	end 'where'
 end 'directoryHolding'
 

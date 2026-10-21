@@ -79,6 +79,23 @@ export union RunCacheError implements Error
 	end 'sentence'
 end 'RunCacheError'
 
+// Over the host's comparison spelling, so two spellings of one path share one record and one lock.
+export function pathKeyOf(anchored FilePath) returns String
+	return hexOfLeadingBytes(sha256(anchored.comparisonSpelling().toByteArray()), count: CacheNameDigestBytes)
+end 'pathKeyOf'
+
+export function keepRecordsTidy(directory FilePath, extension String, most ElementIndex, format CacheFormatNumber)
+	discardAllButNewestIn(directory, kept: most, admits: function(entry) gives entry.filename().endsWith(extension))
+	sweepLeftoversOfEndedOwners(directory, livenessOf: leftoverLivenessOf, keyOf: function(entry) gives entry, discardKeyed: removeOwnedFile)
+
+	let formats = try directory.parent() otherwise panic("keepRecordsTidy: {directory.toString()} sits inside its command's directory")
+	discardOlderFormats(formats, than: format)
+end 'keepRecordsTidy'
+
+function leftoverLivenessOf(name String) returns ScratchStanding
+	return standingOfScratchName(name, family: ScratchFamily.beforeSuffix(PendingBuildMarker))
+end 'leftoverLivenessOf'
+
 export function pendingSpellingOf(published String) returns String
 	return "{scratchNameFor(published)}{PendingBuildMarker}"
 end 'pendingSpellingOf'

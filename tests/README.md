@@ -56,15 +56,15 @@ them, and `lsp/` stores a live `LspClient.maxon` the tests import.
 tests/
   support/                       not a corpus: the helpers every corpus shares, all `public`, listed by each `<corpus>.maxproj`
     Host.maxon                   the compiler under test (`TestedCompilerStem`, `testedCompilerPath`), the host's suffix and temp area
-    Staging.maxon                `stagingDir`, `clearStagedFiles`/`clearStagedTree`, `stageStoredTree`, `stagedFixtureTree`, `filesUnder`
+    Staging.maxon                `stagingDir`, `clearStagedFiles`/`clearStagedTree`, `stageStoredTree`, `stagedFixtureTree`, `filesUnder`, `filesUnderEndingWith`
     Spawn.maxon                  `spawnIn`, `spawnCompiler`, `spawnBuild`, `runSystemTool`, `requireBuiltOrPanic`, `endedProcessId`, `backdatedToTheYear2000`
     ScratchNames.maxon           `scratchNameProbe`, `mintedScratchName`, `debugStreamSegmentPrefix`: the scratch-name probe below, built from the checkout's `maxon-bin/Run/ScratchName.maxon`
     scratch-name/main.maxon.fixture   the probe program: `mint` prints a name for given fields, any other word runs one check - stored name only, see rule 1
     OutsideCheckout.maxon        directories under the host's temp area, outside any checkout
     LibraryTier.maxon            `stagedLibraryTierCompiler`, `builtLibraryTierFixture`
-    Text.maxon                   the folds of a captured stream and the readers of a printed number, `joined`, `compareBytes`
+    Text.maxon                   the folds of a captured stream and the readers of a printed number, `joined`, `compareBytes`, `checkoutDocumentText`, `sectionOf`
     StagedSource.maxon           `anchorLine`, `sourceColumnOf`, `linesOfStagedSource`, `buildStagedSource`, `builtTestBinary`, `sidecarOf`
-    RepositoryFacts.maxon        the names of the repository's own files and variables every corpus spells: `SidecarSuffix`, `MaxonSourceSuffix`, `TestSourceSuffix`, `StagedProgramFileName`, `CacheRootVariable`, `StdlibDirName`
+    RepositoryFacts.maxon        the names of the repository's own files and variables every corpus spells: `SidecarSuffix`, `MaxonSourceSuffix`, `TestSourceSuffix`, `StagedProgramFileName`, `CacheRootVariable`, `CacheVendorDirName`, `VersionRecordSuffix`, `StdlibDirName`
   fmt/
     fixtures.maxtest             the fixture corpus: the harness, the guards and 30 tests
     engine-cases.maxtest         the engine corpus: 5 tests, on the staging and spawn the file above exports
@@ -115,7 +115,11 @@ tests/
     reported-on-recheck.maxtest             a refused define is reported by the second check of one project too
     fixtures/<program>/...                  stored names only - see rule 1
   buildManifest/
-    BuildManifestHarness.maxon                          the shared half: the staging, the path-less `build` spawn, the sidecar reader, the held tree lock, the refusal check
+    BuildManifestHarness.maxon                          the shared half: the staging, the path-less `build` spawn, the sidecar reader, the held tree lock, the refusal check, the compiler-version record reader
+    a-project-build-records-the-compiler-release.maxtest      a project build records this compiler's release in the cache root, and writes nothing into the project
+    a-build-after-an-older-release-reports-its-breaking-changes.maxtest      a build over an older release's record reports its breaking changes after the header, each with a fix, records this release, and reports nothing the next time
+    a-failed-build-reports-again-and-keeps-the-record.maxtest      a build that fails after an older release reports the changes and keeps the older record
+    a-malformed-version-record-is-refused.maxtest             a record holding no release version refuses the build, naming the record
     manifest-debug-info-false-writes-no-sidecar.maxtest       `debugInfo: false` in the manifest: an executable and no `.mxdbg`
     manifest-debug-info-false-refuses-coverage.maxtest        `--coverage` over that manifest is refused, and writes nothing
     manifest-no-debug-info-flag-refuses-coverage.maxtest      `--coverage --no-debug-info` over a manifest is refused, and writes nothing
@@ -550,8 +554,9 @@ tests/
     fixtures/<program>/<name>.maxon.fixture stored names only - see rule 1
   mcp/
     McpHarness.maxon                        the shared half: stdio and `--http` sessions, the debug tool readers, the spec-file staging, and JSON helpers
-    standard.maxtest                        standard user-facing MCP server tests (21 standard tools)
-    dev.maxtest                             contributor MCP server tests (23 tools + --dev)
+    standard.maxtest                        standard user-facing MCP server tests (22 standard tools)
+    dev.maxtest                             contributor MCP server tests (24 tools + --dev)
+    breaking-changes-answers-the-changes-since-a-release.maxtest      `breaking_changes` given `since` answers each change with its fix, and writes no record
     scale-defaults-agree-with-help.maxtest       `run_scale_test` states the defaults `help scale-test` states
     rebuild.maxtest                         a running server survives its image being replaced on disk
     rebuild-over-a-running-previous.maxtest      a self-rebuild succeeds while a server runs its `.previous`
@@ -1159,7 +1164,9 @@ so it is held to the same rules as a path build — the sidecar the target turne
 `--coverage` without the sidecar is refused whichever of the two turned it off, a busy checkout refuses
 it, and a description field the driver cannot use is refused, with no default put in its place. The
 `maxproj-*` cases hold the project file's own rules: the default output, target selection by dashed
-word, one build per target, one `.maxproj` per directory, and one project per tree (E2074). The shared
+word, one build per target, one `.maxproj` per directory, and one project per tree (E2074). The `a-*`
+cases hold the compiler-version record a project build keeps under the case's own cache root, and the
+breaking-change report a build gives over an older release's record. The shared
 half lives in `BuildManifestHarness.maxon`; see the note under `debug/`. A fixture may hold
 subdirectories, which is how the nested-project cases stage a project inside another.
 
@@ -1441,11 +1448,11 @@ The Model Context Protocol (MCP) server runs over standard I/O using newline-del
 over loopback HTTP with `--http`. `McpHarness.maxon` provides the shared harness for spawning the compiler
 as an MCP server on either transport, exchanging JSON-RPC messages, and inspecting structured responses.
 
-- `standard.maxtest` gates the default end-user mode (`maxon mcp-server`): the handshake, the 21 tools
-  (`build`, `execute`, `test`, `fmt`, `check`, `dump_ir`, `lookup_error_code`, `info` and the thirteen
-  `debug_*` tools), their schemas, and the refusals — an argument no tool declares, an argument of the
+- `standard.maxtest` gates the default end-user mode (`maxon mcp-server`): the handshake, the 22 tools
+  (`build`, `execute`, `test`, `fmt`, `check`, `dump_ir`, `lookup_error_code`, `info`, `breaking_changes`
+  and the thirteen `debug_*` tools), their schemas, and the refusals — an argument no tool declares, an argument of the
   wrong JSON type, a contributor argument in user mode, and an error code no registry case claims.
-- `dev.maxtest` gates contributor mode (`maxon mcp-server --dev`): the 23 tools, the `repoRoot` and
+- `dev.maxtest` gates contributor mode (`maxon mcp-server --dev`): the 24 tools, the `repoRoot` and
   `from` arguments, checkout validation, and the `repoRoot` ECHO on both an answer and a refusal.
 - The `run-spec-test-*` cases gate `run_spec_test`'s answer: the union a filter array selects, the
   failures listed inline under `maxFailures` with the rest counted, a message bounded at 4000 bytes and
@@ -1499,7 +1506,11 @@ as an MCP server on either transport, exchanging JSON-RPC messages, and inspecti
   `initialize` result's `instructions` string equal to the document's preamble (between its `# ` title line
   and its first `## ` heading) and its `## Scripts and scriptlib` section (its heading line up to the next
   `## ` line), each trimmed and without its closing `---`, joined by a blank line. A document missing either
-  fails saying so. Both cases share `sectionOf` and `checkoutDocumentText` from `McpHarness.maxon`.
+  fails saying so. Both cases share `sectionOf` and `checkoutDocumentText` from `support/Text.maxon`.
+- `breaking-changes-answers-the-changes-since-a-release.maxtest` stages a project and calls
+  `breaking_changes` with `since`: the answer echoes the release as `recordedVersion`, names a
+  `compilerVersion`, lists at least one change with a non-empty `version`, `change` and `fix`, and the
+  call leaves no compiler-version record under the cache root.
 
 ⛔ **EVERY REBUILD CASE STAGES ITS OWN COPY OF THE COMPILER AND REPLACES THAT.** Driving a real
 `build maxon-bin` would rebuild the tree's compiler as a side effect of running the corpus. Testing

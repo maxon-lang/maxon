@@ -106,7 +106,7 @@ sync never touches it. **Quote any `description` containing a colon** — an unq
 a YAML parse error that fails the whole build.
 
 **CI fails on drift.** The `website` workflow runs `sync-docs.mjs --check` on every push and pull request
-that touches `docs/`, the registry or the site, so a source that moved on without its pages is a red
+that touches `docs/`, `RELEASE_NOTES.md`, the registry or the site, so a source that moved on without its pages is a red
 build. Run `node website/scripts/sync-docs.mjs` and commit the regenerated pages with the source change.
 
 **The sync fails closed** and writes nothing while any problem stands, naming each one:
@@ -119,7 +119,10 @@ build. Run `node website/scripts/sync-docs.mjs` and commit the regenerated pages
   page;
 - a registry case with no doc comment, a comment separated from its case by a blank line, a duplicate
   number, or a line that is not a comment, a blank or a case;
-- a file under a generated directory that no source produces.
+- a file under a generated directory that no source produces;
+- in `RELEASE_NOTES.md`, a `## ` heading that is neither `## Unreleased` nor `## X.Y.Z — YYYY-MM-DD`,
+  sections out of newest-first order, a `### ` heading other than Breaking changes, Added, Changed, Fixed
+  or Removed, and a breaking change that is not a `- ` bullet followed by an indented `Fix:` line.
 
 **Links in a source are written for a reader of the repository**, and the sync turns each into the route
 of the page that holds its target:
@@ -129,7 +132,7 @@ of the page that holds its target:
 | A heading in the same file | `[text](#anchor)` |
 | A heading in another synced file | `[text](CLI_REFERENCE.md#anchor)` |
 | An error code on the Error Codes page | `[E3014](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3014)` (the code in lower case; no anchor links the page) |
-| A page written for the site alone (`/docs/getting-started/…`, `/docs/contributing/`, `/docs/about/`, `/docs/changelog/`, `/examples/`, `/blog/`) | its route, e.g. `[Contributing](/docs/contributing/)` |
+| A page written for the site alone (`/docs/getting-started/…`, `/docs/contributing/`, `/docs/about/`, `/docs/release-notes/`, `/examples/`, `/blog/`) | its route, e.g. `[Contributing](/docs/contributing/)` |
 
 ⛔ A route to a generated page (`/docs/cli/…`, `/docs/language/…`, `/docs/stdlib/…`, `/docs/spec/…`,
 `/docs/best-practices/…`) is refused in a source: it is a dead link in the repository, and the heading it
@@ -150,13 +153,14 @@ This is the one map of where the site's documentation comes from.
 | Language server or VS Code behaviour | `docs/CLI_REFERENCE.md`, Editor Support, and `vscode-extension/README.md` |
 | An MCP tool or its arguments | `docs/CLI_REFERENCE.md`, MCP Server |
 | How an agent should use Maxon (MCP `instructions`) | `docs/WRITING_MAXON_CODE.md` (the preamble and Scripts and scriptlib) — the sync also writes `maxon-bin/Compiler/Mcp/McpInstructionsGenerated.maxon`, which `maxon mcp-server` serves |
+| A change that breaks an existing project, script or workflow | `RELEASE_NOTES.md`: an entry under `## Unreleased` › `### Breaking changes`, with the `Fix:` line that follows it — the sync writes `maxon-bin/Compiler/BreakingChangesGenerated.maxon`, which the driver reports from, and fails on an entry with no fix or a heading it cannot read. `scripts/announce.sh` writes the site's release notes page from the same file when a release is cut |
 | The install scripts | `public/install.sh` / `public/install.ps1`, and the pages listed under [Install and build instructions](#install-and-build-instructions-follow-the-scripts-and-the-repository) |
 | The syntax grammar | `vscode-extension/syntaxes/maxon.tmLanguage.json`, then copy it to `src/grammars/maxon.tmLanguage.json` **by hand** |
 | How a part of the compiler works inside | its page in `docs/internals/`, which the site reads directly — see [Shared pages](#shared-pages-docsinternals) |
 | An example program | `examples/*.maxon`, which the Examples page and the tour import directly — re-range the tour's `TourStep`s when `examples/wc.maxon`'s lines move |
 
-The grammar is a manual copy: nothing checks it against its source. The `getting-started/`, `contributing`, `about` and `changelog` pages are written for this site
-and have no upstream source.
+The grammar is a manual copy: nothing checks it against its source. The `getting-started/`, `contributing` and `about` pages are written for this site
+and have no upstream source. The `release-notes` page is written from `RELEASE_NOTES.md` by `scripts/announce.sh` when a release is cut.
 
 **The doc-coverage gates catch what a source is missing**, and run with `maxon test`, not with the site:
 

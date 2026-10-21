@@ -65,8 +65,8 @@ when they drift. Never edit a generated page's body: edit its source and re-run 
 page's front matter is written here.
 
 The example programs are imported from the repository's `examples/`. The syntax grammar
-(`src/grammars/maxon.tmLanguage.json`) is copied by hand, and the `getting-started/`, `contributing`, `about` and `changelog` pages are
-written for this site.
+(`src/grammars/maxon.tmLanguage.json`) is copied by hand, and the `getting-started/`, `contributing` and `about` pages are
+written for this site; the `release-notes` page is written from `RELEASE_NOTES.md` by `scripts/announce.sh` when a release is cut.
 
 [MAINTAINING.md](MAINTAINING.md#content-sync--the-reference-pages-are-generated) has the source map (what
 changed → which file to edit), the sync's rules, and the link forms a source uses.

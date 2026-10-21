@@ -225,8 +225,8 @@ binary, and creates the GitHub release. A `dist/NOTES.md` you wrote by hand wins
 is a floor, not a template to fight.
 
 ⭐ **The generated notes link to maxon.dev rather than copying it**: the release's announcement post,
-the changelog page, and the installation page, then the asset list and a line about `SHA256SUMS`. The
-changelog and the install instructions each live in one place, and notes published once cannot follow
+the release notes page, and the installation page, then the asset list and a line about `SHA256SUMS`. The
+release notes and the install instructions each live in one place, and notes published once cannot follow
 the installation page as it changes. `website.yml` deploys right after the release, so the links go
 live within minutes.
 
@@ -336,37 +336,64 @@ rebuilds.
 
 ---
 
-## The changelog
+## The release notes
 
-**`CHANGELOG.md` is written by hand**, for people installing a compiler rather than changing one.
+**`RELEASE_NOTES.md` is written by hand**, for people installing a compiler rather than changing one.
 
-⭐ **A commit subject is not a changelog entry.** MEASURED on `v0.1.0..HEAD`: 21 commits, of which
+⭐ **A commit subject is not a release note.** MEASURED on `v0.1.0..HEAD`: 21 commits, of which
 about six mean anything to a reader — the rest are CI, spec pins, docs and the release tooling
 itself. Generating the entry and then correcting it means rewriting seventeen lines of twenty-one,
 which is hand-writing with extra ceremony.
 
-Each release gets a `## X.Y.Z — YYYY-MM-DD` heading and `### Added` / `### Changed` / `### Fixed` /
-`### Removed` beneath it.
-
-⛔ **It states what changed and never how to do anything** — no commands, no install steps, no usage
-warnings. Those live on the website's installation page and in each archive's `INSTALL.md`, which
-already carry them; an instruction in a changelog is read months later and is either stale or
-duplicated. Write it at the cut, with the whole release in view, so related changes are
+Each release gets a `## X.Y.Z — YYYY-MM-DD` heading and `### Breaking changes` / `### Added` /
+`### Changed` / `### Fixed` / `### Removed` beneath it, in that order and each only when it has
+something to say. Write the rest at the cut, with the whole release in view, so related changes are
 described together rather than as one bullet each.
 
+⛔ **Every breaking change carries its fix.** A change that can break an existing project, script or
+workflow — a removed or renamed spelling, command, flag, file name, syntax or standard-library API, or a
+program the compiler accepted that it now refuses or runs differently — is a bullet under
+`### Breaking changes`: the change, then an indented `Fix:` line saying how to put the project right.
+
+```markdown
+### Breaking changes
+
+- `Build.buildOne` in a build manifest is renamed `Build.build`.
+  Fix: call `Build.build` with the same arguments.
+```
+
+A bullet and its `Fix:` line may each wrap onto further lines indented two spaces. The fix is concrete
+and short, and is checked against the documentation as it stands. The release notes may say how to fix
+what a release broke; commands, install steps and usage advice for the product as a whole stay on the
+website's installation page and in each archive's `INSTALL.md`.
+
+**The compiler reads these entries.** `node website/scripts/sync-docs.mjs` compiles every release
+heading and every breaking change into `maxon-bin/Compiler/BreakingChangesGenerated.maxon`, which
+`maxon build` and the MCP `breaking_changes` tool answer from, so a project built with a newer
+compiler is told what changed since the release that last built it. The sync fails on a heading that
+is neither `## Unreleased` nor `## X.Y.Z — YYYY-MM-DD`, on sections out of newest-first order, on a
+`###` heading outside the five above, and on a breaking change with no `Fix:` line; `website.yml`
+fails on drift.
+
+**`## Unreleased` holds the breaking changes of the release being prepared.** The change that breaks
+something adds its entry under `## Unreleased` › `### Breaking changes` in the same commit, since it is
+the one that knows the fix. The section is the first in the file and exists only while it holds
+something. Cutting a release renames it to `## X.Y.Z — YYYY-MM-DD` and adds the other subsections.
+
 ```bash
-scripts/changelog.sh --commits-since
+scripts/release-notes.sh --commits-since
 ```
 
 lists what has landed since the last release. ⚠ **It is reference material, not a draft** — read it to
 write the entry; do not paste it into one.
 
 **One file, rendered on the site.** `announce.sh` puts the matching section in the maxon.dev post and in
-the site's `/docs/changelog/` page, and the GitHub release notes link to both. The words therefore
+the site's `/docs/release-notes/` page, and the GitHub release notes link to both. The words therefore
 exist once and cannot come to disagree about what shipped.
 
-⛔ **A release with no entry does not ship.** `scripts/changelog.sh --section=<version>` refuses a
-version the file has no heading for. `release.yml`'s `guard` asks before any runner starts, and
+⛔ **A release with no entry does not ship, and neither does one still holding `## Unreleased`.**
+`scripts/release-notes.sh --section=<version>` refuses a version the file has no heading for and a file
+that still has the `## Unreleased` heading. `release.yml`'s `guard` asks before any runner starts, and
 `release.sh --publish` asks again at the last moment — an authored file's failure mode is that nobody
 wrote it.
 
@@ -412,7 +439,7 @@ git checkout -b release/0.1.1
 ```
 
 ⭐ **The branch is what makes preparation possible.** A release usually takes more than one commit to
-get right — the changelog entry, a last documentation fix, a version-sensitive correction — and a
+get right — the release notes entry, a last documentation fix, a version-sensitive correction — and a
 compiler built on `release/X.Y.Z` already reports `X.Y.Z`, so everything can be rehearsed at the real
 version before anything is public. On such a branch `release.yml` builds and suite-tests all four
 targets and **publishes nothing**.
@@ -420,14 +447,16 @@ targets and **publishes nothing**.
 ⚠ **Pushing the branch does not start it** — `release.yml` triggers on `v*` tags and
 `workflow_dispatch` only. Rehearse with `gh workflow run release.yml --ref release/X.Y.Z`.
 
-### 2. Write the changelog entry
+### 2. Write the release notes entry
 
 ```bash
-scripts/changelog.sh --commits-since
+scripts/release-notes.sh --commits-since
 ```
 
 Read what landed and write the `## 0.1.1` section by hand — what a user would want to know, not what
-each commit did. See **The changelog** above.
+each commit did. See **The release notes** above: rename `## Unreleased` to `## 0.1.1 — YYYY-MM-DD`, whose breaking changes are already in place, and add the other subsections. Then run `node website/scripts/sync-docs.mjs` and commit the regenerated
+`maxon-bin/Compiler/BreakingChangesGenerated.maxon` with the entry: it is how the compiler learns the new
+release, and the preflight fails on a stale one.
 
 ### 3. Write the website's release material
 
@@ -435,12 +464,12 @@ each commit did. See **The changelog** above.
 scripts/announce.sh 0.1.1
 ```
 
-It writes three files under `website/` — the announcement post, the changelog page, and the
+It writes three files under `website/` — the announcement post, the release notes page, and the
 `RELEASE_VERSION` the download links are built from — and **commits nothing**. Commit them with the
-changelog entry and everything else this branch carries, before the preflight:
+release notes entry and everything else this branch carries, before the preflight:
 
 ```bash
-git add -A && git commit -m 'changelog: 0.1.1'
+git add -A && git commit -m 'release notes: 0.1.1'
 ```
 
 ### 3b. Run the preflight
@@ -450,7 +479,7 @@ scripts/release-preflight.sh X.Y.Z
 ```
 
 ⭐ **EVERY CHECK IT RUNS ALSO RUNS AT THE TAG, WHERE FAILING IS EXPENSIVE.** `guard` refuses a tag
-whose changelog entry or extension version is missing, and `website.yml`'s `deploy` is gated on its
+whose release notes entry or extension version is missing, and `website.yml`'s `deploy` is gated on its
 own build: a page that has drifted from `docs/` fails that build, `deploy` SKIPS, and the run still
 reports success — leaving the release notes pointing at a post the site never received. Asking here
 costs seconds and moves all of it before the tag exists.
@@ -471,7 +500,7 @@ git push origin release/0.1.1 v0.1.1
 ```
 
 ⛔ **The tag goes on the finished branch tip.** Everything downstream reads the repository AT THE TAG:
-the maxon.dev post and changelog page take their text from `CHANGELOG.md` there, and `website.yml`
+the maxon.dev post and release notes page take their text from `RELEASE_NOTES.md` there, and `website.yml`
 builds the site from there. A fix committed after the tag is a fix nothing ships.
 
 `release.yml` then fans out over `windows-latest`, `ubuntu-latest`, `macos-15` and
@@ -514,7 +543,7 @@ release skill's §5b carries the commands; this is why each is shaped as it is.
 - **What the failed attempt published is overwritten, not recalled.** `homebrew.yml` commits a new formula
   and `docker.yml` re-pushes `X.Y.Z`, `X.Y` and `latest`, but an archive someone already downloaded no
   longer matches the new `SHA256SUMS`.
-- **The changelog entry and the website material follow the fix**: the entry gains what changed and takes
+- **The release notes entry and the website material follow the fix**: the entry gains what changed and takes
   the retry's date, and `announce.sh`, which refuses to overwrite a post, runs once the old one is removed.
 - **Then the rebuild, the preflight and the tag, exactly as the first time.** The merge back has not run —
   it waits for a clean postflight — so `main` holds nothing of the failed attempt.
@@ -534,7 +563,7 @@ else
 fi
 ```
 
-⛔ **Only once `scripts/release-postflight.sh` is clean.** This commits the release's changelog entry,
+⛔ **Only once `scripts/release-postflight.sh` is clean.** This commits the release's entry in the release notes,
 website material and extension version to `main`; merged ahead of a retry, `main` keeps a spent
 extension version and a superseded entry, and the next release trips on them.
 
@@ -545,11 +574,11 @@ build and test it at the real version — a branch that does not exist cannot ta
 only when its tip IS the tagged commit: a commit past the tag is work nothing shipped, and is left for a
 person.
 
-The changelog entry, the website material and any fixes made while preparing all belong on `main` —
+The release notes entry, the website material and any fixes made while preparing all belong on `main` —
 without this they exist only at a tag nobody builds from again. The TAG is what is merged rather than
 the branch, because the tag is exactly what shipped.
 
-⚠ **Merge, never rebase.** A merge keeps the tag an ancestor of `main`, so `changelog.sh
+⚠ **Merge, never rebase.** A merge keeps the tag an ancestor of `main`, so `release-notes.sh
 --commits-since` starts after it. Rebased copies carry other ids, and the next release's listing would
 offer this one's changes again as new. If `main` has moved since the branch was cut, build the merge and
 run the suite before pushing it — it combines runtime work nobody has tested together.
@@ -569,7 +598,7 @@ scripts/release-postflight.sh X.Y.Z
 
 ⛔⛔ **A GREEN WORKFLOW IS NOT EVIDENCE THAT ANYTHING SHIPPED.** This asks the artifacts instead: the
 four archives and `SHA256SUMS` are attached, `releases/latest` redirects to this tag (which is what
-both installers resolve), the announcement post and changelog page answer 200, the served
+both installers resolve), the announcement post and release notes page answer 200, the served
 `install.sh` and `install.ps1` are byte-identical to this tag's copies — `maxon upgrade` fetches
 those at run time, so a stale one breaks upgrading from every shipped compiler — the website run's
 `deploy` job did not skip and its step logged `Deployment complete`, and all five downstream

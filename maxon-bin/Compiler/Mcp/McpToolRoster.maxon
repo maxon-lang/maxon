@@ -18,6 +18,7 @@ module let CheckToolName = "check"
 module let LookupErrorCodeToolName = "lookup_error_code"
 module let DumpIrToolName = "dump_ir"
 module let InfoToolName = "info"
+module let BreakingChangesToolName = "breaking_changes"
 module let SpecTestToolName = "run_spec_test"
 module let ScaleTestToolName = "run_scale_test"
 
@@ -202,6 +203,11 @@ export function mcpToolRoster() returns McpToolSpecArray
 	tools.push(McpToolSpec.create(DumpIrToolName, description: "Answer the Target IR a Maxon program compiles to for the host, the text `maxon build --emit-ir` writes, without writing anything.", properties: irProps))
 
 	tools.push(McpToolSpec.create(InfoToolName, description: "Get Maxon compiler version, commit, executable path, and host target.", properties: McpPropertyArray.create()))
+
+	var breakingProps = McpPropertyArray.create()
+	breakingProps.push(str("path", description: "The project directory, or a file in it, whose recorded compiler release is compared with this compiler's", required: true))
+	breakingProps.push(str("since", description: "A release (X.Y.Z) to list the changes since, instead of the release the project's record holds"))
+	tools.push(McpToolSpec.create(BreakingChangesToolName, description: "List the breaking changes, each with its fix, between the compiler release that last built a project and this compiler, as `maxon build` reports them. Writes nothing.", properties: breakingProps))
 
 	var specProps = McpPropertyArray.create()
 	specProps.push(textOrList(FilterOption, description: "A pattern, or a list of patterns, each passed as its own --filter=<pattern>: a CASE-SENSITIVE substring of the `<spec>/<test>` label. The run takes every case any pattern selects, and a pattern that selects nothing refuses the run. A comma is part of a pattern.", devOnly: true))

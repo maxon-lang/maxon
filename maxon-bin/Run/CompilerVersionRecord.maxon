@@ -1,0 +1,297 @@
+let VersionRecordFormat = 1
+let ProjectCommandDirName = "project"
+let VersionRecordExtension = ".mxpv"
+
+// Every project built leaves one, and test fixtures build their staged projects against the
+// developer's own cache.
+let MostVersionRecords = 4096
+let RecordLineEnd = "\n"
+let EntryVersionSeparator = ": "
+let FixIndent = "  "
+let FixLabel = "Fix: "
+let ReportHeadPrefix = "This project was last built with maxon "
+let ReportHeadSuffix = ". Breaking changes since then:"
+let ReportEnd = "\n"
+let RecordCure = "Delete it, or run `maxon cache clear`."
+
+export typealias BreakingChangeArray = Array with BreakingChange
+
+export enum ReportStream
+	standardOutput
+	standardError
+end 'ReportStream'
+
+export enum VersionRecordVerdict
+	proceed
+	refused
+end 'VersionRecordVerdict'
+
+export union VersionRecordError implements Error
+	unusable(reason String)
+
+	export function sentence() returns String
+		return match self 'why'
+			unusable(reason) gives reason
+		end 'why'
+	end 'sentence'
+end 'VersionRecordError'
+
+export union RecordedRelease
+	absent
+	recorded(text String, rank ReleaseRank)
+end 'RecordedRelease'
+
+export type ReleaseRank
+	export let components as VersionComponentArray
+	export let unreleased as bool
+
+	export static function ofRelease(dotted String) returns ReleaseRank throws ProductVersionError
+		let parsed = try releaseVersionComponents(dotted)
+
+		return Self{components: parsed, unreleased: false}
+	end 'ofRelease'
+
+	static function afterEveryRelease() returns ReleaseRank
+		return Self{components: VersionComponentArray.create(), unreleased: true}
+	end 'afterEveryRelease'
+
+	function compare(other ReleaseRank) returns Ordering
+		if self.unreleased != other.unreleased 'oneIsUnreleased'
+			return Ordering.greaterThan if self.unreleased else Ordering.lessThan
+		end 'oneIsUnreleased'
+
+		return componentOrder(self.components, right: other.components)
+	end 'compare'
+end 'ReleaseRank'
+
+export type BreakingChange
+	export let version as String
+	export let change as String
+	export let fix as String
+
+	static function create(version String, change String, fix String) returns BreakingChange
+		return Self{version: version, change: change, fix: fix}
+	end 'create'
+end 'BreakingChange'
+
+function componentOrder(left VersionComponentArray, right VersionComponentArray) returns Ordering
+	let width = left.count() if left.count() > right.count() else right.count()
+
+	for position in 0 upto width 'eachPosition'
+		let mine = componentAt(left, position: position)
+		let theirs = componentAt(right, position: position)
+
+		if mine != theirs 'differs'
+			return Ordering.greaterThan if mine > theirs else Ordering.lessThan
+		end 'differs'
+	end 'eachPosition'
+
+	return Ordering.equalTo
+end 'componentOrder'
+
+function componentAt(components VersionComponentArray, position ElementIndex) returns VersionComponent
+	return try components.get(position) otherwise panic("componentAt: position {position} is past the end of a rank, and the ranks compared are all releases, which have the same component count")
+end 'componentAt'
+
+union ThisCompilerRelease
+	released(text String, rank ReleaseRank)
+
+	// A compiler whose version is not an X.Y.Z release records the newest release so the next build can
+	// read the record, and its report has no ceiling because it may carry any `## Unreleased` change.
+	unreleased
+end 'ThisCompilerRelease'
+
+function thisCompilerRelease() returns ThisCompilerRelease
+	let rank = try ReleaseRank.ofRelease(CompilerVersion) otherwise return ThisCompilerRelease.unreleased
+
+	return ThisCompilerRelease.released(CompilerVersion, rank: rank)
+end 'thisCompilerRelease'
+
+function recordedBy(release ThisCompilerRelease) returns String
+	return match release 'release'
+		released(text, _) gives text
+		unreleased gives newestRelease()
+	end 'release'
+end 'recordedBy'
+
+function recordedRankOf(release ThisCompilerRelease) returns ReleaseRank
+	return match release 'release'
+		released(_, rank) gives rank
+		unreleased gives trustedRank(newestRelease())
+	end 'release'
+end 'recordedRankOf'
+
+function ceilingOf(release ThisCompilerRelease) returns ReleaseRank
+	return match release 'release'
+		released(_, rank) gives rank
+		unreleased gives ReleaseRank.afterEveryRelease()
+	end 'release'
+end 'ceilingOf'
+
+function newestRelease() returns String
+	return try ReleasedVersions.get(0) otherwise panic("newestRelease: RELEASE_NOTES.md names a release, so the generated list of them is not empty")
+end 'newestRelease'
+
+function trustedRank(dotted String) returns ReleaseRank
+	return try ReleaseRank.ofRelease(dotted) otherwise (e) 'notARelease'
+		panic("trustedRank: the generated '{dotted}' is not a release version: {productVersionProblem(e)}")
+	end 'notARelease'
+end 'trustedRank'
+
+function rankOfEntry(version String) returns ReleaseRank
+	if version == UnreleasedVersion 'notYetReleased'
+		return ReleaseRank.afterEveryRelease()
+	end 'notYetReleased'
+
+	return trustedRank(version)
+end 'rankOfEntry'
+
+function entryAt(entries StringArray, position ElementIndex) returns String
+	return try entries.get(position) otherwise panic("entryAt: the generated breaking-change lists are parallel, and position {position} is past the end of one")
+end 'entryAt'
+
+export function changesSince(recorded RecordedRelease) returns BreakingChangeArray
+	return match recorded 'standing'
+		absent gives BreakingChangeArray.create()
+		recorded(_, rank) gives breakingChangesAfter(rank)
+	end 'standing'
+end 'changesSince'
+
+function breakingChangesAfter(recorded ReleaseRank) returns BreakingChangeArray
+	var changes = BreakingChangeArray.create()
+
+	let release = thisCompilerRelease()
+
+	// A downgrade reports nothing, and so does a project an unreleased compiler built: it recorded the
+	// newest release itself, and every later build would otherwise repeat its `## Unreleased` changes.
+	if recorded.compare(recordedRankOf(release)) != Ordering.lessThan 'nothingNewer'
+		return changes
+	end 'nothingNewer'
+
+	let ceiling = ceilingOf(release)
+
+	for (iter, version) in BreakingChangeVersions.withIterator() 'eachEntry'
+		let rank = rankOfEntry(version)
+
+		if rank.compare(recorded) == Ordering.greaterThan and rank.compare(ceiling) != Ordering.greaterThan 'inRange'
+			changes.push(BreakingChange.create(version, change: entryAt(BreakingChangeDescriptions, position: iter.index()), fix: entryAt(BreakingChangeFixes, position: iter.index())))
+		end 'inRange'
+	end 'eachEntry'
+
+	return changes
+end 'breakingChangesAfter'
+
+export function directoryHoldingFile(file FilePath) returns FilePath throws FilePathError
+	return try file.resolve(Directory.currentPath()).parent()
+end 'directoryHoldingFile'
+
+function versionRecordDirectoryIn(root FilePath) returns FilePath
+	return root.join(ProjectCommandDirName).join(cacheFormatDirectoryName(VersionRecordFormat))
+end 'versionRecordDirectoryIn'
+
+function versionRecordPathOf(projectDir FilePath) returns FilePath throws RunCacheError
+	let key = pathKeyOf(projectDir.resolve(Directory.currentPath()))
+
+	return versionRecordDirectoryIn(try hostCacheRoot()).join("{key}{VersionRecordExtension}")
+end 'versionRecordPathOf'
+
+export function recordedReleaseOf(projectDir FilePath) returns RecordedRelease throws VersionRecordError
+	let record = try versionRecordPathOf(projectDir) otherwise return RecordedRelease.absent
+
+	if not File.exists(record) 'neverRecorded'
+		return RecordedRelease.absent
+	end 'neverRecorded'
+
+	let content = try File.readText(record) otherwise 'unreadable'
+		// Another build's tidy, or a `maxon cache clear`, can remove it after the check above.
+		if not File.exists(record) 'removedMeanwhile'
+			return RecordedRelease.absent
+		end 'removedMeanwhile'
+
+		throw VersionRecordError.unusable("the compiler-version record {record.toString()} could not be read. {RecordCure}")
+	end 'unreadable'
+
+	let release = content.trim()
+
+	let rank = try ReleaseRank.ofRelease(release) otherwise (e) 'malformed'
+		throw VersionRecordError.unusable("the compiler-version record {record.toString()} holds '{release}', which is not a release version: {productVersionProblem(e)}. {RecordCure}")
+	end 'malformed'
+
+	return RecordedRelease.recorded(release, rank: rank)
+end 'recordedReleaseOf'
+
+function changesReport(recorded String, changes BreakingChangeArray) returns String
+	var report = "{ReportHeadPrefix}{recorded}{ReportHeadSuffix}\n"
+
+	for change in changes 'eachChange'
+		report.append("{change.version}{EntryVersionSeparator}{change.change}\n{FixIndent}{FixLabel}{change.fix}\n")
+	end 'eachChange'
+
+	report.append(ReportEnd)
+
+	return report
+end 'changesReport'
+
+export function reportBreakingChanges(projectDir FilePath, onto ReportStream) returns VersionRecordVerdict
+	let recorded = try recordedReleaseOf(projectDir) otherwise (e) 'unusable'
+		printError("error: {e.sentence()}\n")
+
+		return VersionRecordVerdict.refused
+	end 'unusable'
+
+	match recorded 'standing'
+		absent then return VersionRecordVerdict.proceed
+		recorded(text, rank) then reportChanges(text, changes: breakingChangesAfter(rank), onto: onto)
+	end 'standing'
+
+	return VersionRecordVerdict.proceed
+end 'reportBreakingChanges'
+
+function reportChanges(recorded String, changes BreakingChangeArray, onto ReportStream)
+	if changes.isEmpty() 'nothingToSay'
+		return
+	end 'nothingToSay'
+
+	let report = changesReport(recorded, changes: changes)
+
+	match onto 'stream'
+		standardOutput then print(report)
+		standardError then printError(report)
+	end 'stream'
+end 'reportChanges'
+
+// Called only after a successful build or test run, so a project a breaking change broke keeps
+// reporting it until it builds.
+export function recordCompilerRelease(projectDir FilePath)
+	let record = try versionRecordPathOf(projectDir) otherwise (e) 'noPlaceToKeepIt'
+		noRecordKept(projectDir, reason: e)
+
+		return
+	end 'noPlaceToKeepIt'
+
+	let line = "{recordedBy(thisCompilerRelease())}{RecordLineEnd}"
+
+	if recordHolds(record, line: line) 'alreadyRecorded'
+		return
+	end 'alreadyRecorded'
+
+	let directory = try record.parent() otherwise panic("recordCompilerRelease: {record.toString()} was named inside the version record directory")
+
+	try publishAtomically(directory, name: record.filename(), bytes: line.toByteArray()) otherwise (e) 'notPublished'
+		noRecordKept(projectDir, reason: e)
+
+		return
+	end 'notPublished'
+
+	keepRecordsTidy(directory, extension: VersionRecordExtension, most: MostVersionRecords, format: VersionRecordFormat)
+end 'recordCompilerRelease'
+
+function recordHolds(record FilePath, line String) returns bool
+	let content = try File.readText(record) otherwise return false
+
+	return content == line
+end 'recordHolds'
+
+function noRecordKept(projectDir FilePath, reason RunCacheError)
+	compilerLogger(CompilerLogGroup.compiler).debug("no compiler-version record was kept for {projectDir.toString()}: {reason.sentence()}")
+end 'noRecordKept'

@@ -11,6 +11,9 @@ let DecimalBase = 10
 export typealias VersionComponent = int(0 to 16777215)
 export typealias VersionComponentArray = Array with VersionComponent
 
+let LargestVersionComponent = 16777215
+let ReleaseVersionComponentCount = 3
+
 // A component's value while its digits are read. One digit past any field's limit still fits, and reading
 // stops there.
 typealias VersionNumeral = int(0 to u32.max)
@@ -45,6 +48,7 @@ export union ProductVersionError implements Error
 	notANumber(component String)
 	doesNotFit(component String, position ElementIndex, limit VersionComponent, fieldName String)
 	tooManyComponents(count ElementIndex, held ElementIndex, fieldName String)
+	tooFewComponents(count ElementIndex, needed ElementIndex, fieldName String)
 end 'ProductVersionError'
 
 // The components `dotted` stamps into `target`'s binary: none for an unversioned build or a format with no
@@ -55,6 +59,36 @@ export function productVersionFor(dotted String, target Target) returns VersionC
 		return VersionComponentArray.create()
 	end 'unversioned'
 
+	let components = try decimalComponentsOf(dotted)
+
+	return match versionStampSiteOf(target) 'site'
+		field(layout) gives try componentsFitting(components, layout: layout)
+		noField gives VersionComponentArray.create()
+	end 'site'
+end 'productVersionFor'
+
+export function releaseVersionComponents(dotted String) returns VersionComponentArray throws ProductVersionError
+	let components = try decimalComponentsOf(dotted)
+	let layout = releaseVersionLayout()
+
+	if components.count() < ReleaseVersionComponentCount 'tooFew'
+		throw ProductVersionError.tooFewComponents(components.count(), needed: ReleaseVersionComponentCount, fieldName: layout.name)
+	end 'tooFew'
+
+	return try componentsFitting(components, layout: layout)
+end 'releaseVersionComponents'
+
+function releaseVersionLayout() returns VersionFieldLayout
+	var limits = VersionComponentArray.create()
+
+	for _ in 0 upto ReleaseVersionComponentCount 'eachComponent'
+		limits.push(LargestVersionComponent)
+	end 'eachComponent'
+
+	return VersionFieldLayout.create("a release version", limits: limits)
+end 'releaseVersionLayout'
+
+function decimalComponentsOf(dotted String) returns StringArray throws ProductVersionError
 	let components = dotted.split(VersionSeparator)
 
 	for component in components 'eachComponent'
@@ -63,19 +97,17 @@ export function productVersionFor(dotted String, target Target) returns VersionC
 		end 'notANumber'
 	end 'eachComponent'
 
-	return match versionStampSiteOf(target) 'site'
-		field(layout) gives try componentsFitting(components, layout: layout)
-		noField gives VersionComponentArray.create()
-	end 'site'
-end 'productVersionFor'
+	return components
+end 'decimalComponentsOf'
 
-// The completion of the sentence "<driver file>'s `version` …" that
+// The predicate of a sentence about the version text, such as the "<driver file>'s `version` …" that
 // `Main.reportMalformedManifestField` begins.
 export function productVersionProblem(error ProductVersionError) returns String
 	return match error 'problem'
 		notANumber(component) gives "component `{component}` is not a number"
 		doesNotFit(component, position, limit, fieldName) gives "component `{component}` does not fit {fieldName}, whose component {position} holds 0 to {limit}"
 		tooManyComponents(count, held, fieldName) gives "has {count} components, and {fieldName} holds {held}"
+		tooFewComponents(count, needed, fieldName) gives "has {count} components, and {fieldName} needs {needed}"
 	end 'problem'
 end 'productVersionProblem'
 

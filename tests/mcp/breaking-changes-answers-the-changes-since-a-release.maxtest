@@ -1,0 +1,45 @@
+let CaseDirName = "temp/mcp-breaking-changes-answers-the-changes-since-a-release"
+let ProjectDirName = "project"
+let CacheRootDirName = "cache"
+let ManifestFileName = "app.maxproj"
+let ManifestSource = "export typealias ExitCode = int(0 to 255)\n\nexport function build() returns ExitCode\n\tBuild.build(\".\", output: \"program\")\n\treturn 0\nend 'build'\n"
+let MainSource = "typealias ExitCode = int(0 to 255)\n\nfunction main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let BreakingChangesTool = "breaking_changes"
+let SinceRelease = "0.1.0"
+let ChangesKey = "changes"
+
+test 'breaking_changes answers the changes since a release, and writes no record'
+	let caseDir = stagingDir(CaseDirName)
+	clearStagedFiles(caseDir)
+
+	let project = stagingDir(caseDir.join(ProjectDirName).toString())
+	writeStagedFile(project.join(ManifestFileName), content: ManifestSource)
+	writeStagedFile(project.join(StagedProgramFileName), content: MainSource)
+
+	let cacheRoot = stagingDir(caseDir.join(CacheRootDirName).toString())
+	var overrides = EnvMap.create()
+	overrides.upsert(CacheRootVariable, value: cacheRoot.toString())
+
+	let arguments = argumentsOf([pathMember(project), "\"since\":{Json.quote(SinceRelease)}"])
+	let run = runMcp([initRequest(1), toolCallRequest(2, name: BreakingChangesTool, argumentsJson: arguments)], environment: Environment.inheritUpdating(overrides))
+	let answer = try responseDocs(run).get(1) otherwise panic("no response to tools/call `{BreakingChangesTool}`. The server wrote to stderr: {run.stderr}")
+
+	Expect.isTrue(hasChildKey(answer, parent: answer.root, key: "result"), message: "`{BreakingChangesTool}` was not answered with a result: {Json.stringify(answer)}")
+
+	let text = toolCallText(answer)
+	Expect.isFalse(toolCallIsError(answer), message: "`{BreakingChangesTool}` over a staged project was answered as an error: {text}")
+	Expect.equal(payloadString(answer, key: "recordedVersion"), expected: SinceRelease, message: "`{BreakingChangesTool}` given `since: {SinceRelease}` did not answer it as the recorded version: {text}")
+	Expect.isFalse(payloadString(answer, key: "compilerVersion").isEmpty(), message: "`{BreakingChangesTool}` answered an empty `compilerVersion`: {text}")
+
+	let versions = payloadArrayFields(answer, key: ChangesKey, field: "version")
+	Expect.isFalse(versions.isEmpty(), message: "`{BreakingChangesTool}` given `since: {SinceRelease}` answered no change: {text}")
+
+	for field in ["version", "change", "fix"] 'eachField'
+		for value in payloadArrayFields(answer, key: ChangesKey, field: field) 'eachValue'
+			Expect.isFalse(value.isEmpty(), message: "`{BreakingChangesTool}` answered a change with an empty `{field}`: {text}")
+		end 'eachValue'
+	end 'eachField'
+
+	let records = spacedPaths(filesUnderEndingWith(caseDir, suffix: VersionRecordSuffix))
+	Expect.isEmpty(records, message: "`{BreakingChangesTool}` wrote a compiler-version record: {records}")
+end 'breaking_changes answers the changes since a release, and writes no record'

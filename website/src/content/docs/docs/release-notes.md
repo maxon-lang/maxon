@@ -1,8 +1,54 @@
-# Changelog
+---
+title: Release notes
+description: Every released version of the Maxon compiler and standard library, what changed in it, and how to fix what it broke.
+---
 
-What changed in each release of the Maxon compiler and standard library, newest first.
+Every released version, newest first.
+
+Downloads for each release are on the
+[GitHub releases page](https://github.com/maxon-lang/maxon/releases), and the install instructions are in
+[Installation](/docs/getting-started/installation/).
 
 ## 0.5.0 — 2026-10-08
+
+### Breaking changes
+
+- A typealias's identity is its declaration rather than its spelling: two declarations of one name are two
+  types even over the same range, and a value crossing between them is refused.
+  Fix: declare the alias once and share it, or cast the value across (`x as Name`).
+- A bare type name that reaches more than one visible declaration is E3063 in every file, including a
+  file that declares one of them.
+  Fix: qualify the name as the message lists (`dir.Name`, `export.Name`, `stdlib.Name`), or rename one
+  declaration.
+- A typealias declared inside a type is private to its file unless it carries its own visibility modifier,
+  and naming a file-private one from another file, bare or qualified, is E3008.
+  Fix: give the alias a visibility modifier (`module`, `export` or `public`).
+- E3167 checks every type a signature names, an interface's requirements and the types a named alias
+  reaches included, so a signature that was accepted can be refused.
+  Fix: raise the type to the function's visibility, or narrow the function to the type's.
+- Discarding the result of a pure function (E3064) is refused in more programs: a function that writes only
+  into values it created, one that calls a closure it can name, a search through a container's
+  `withIterator()`, and a `Map` or `Set` lookup.
+  Fix: use the result, or remove the call.
+- A program that declares `BuiltinStringLiteral`, `BuiltinCharLiteral` or `BuiltinArrayLiteral` is
+  refused (E2015).
+  Fix: rename the declaration.
+- Only a `.maxproj` marks a project for the language server; a file with no `.maxproj` above it is checked
+  alone against the standard library, and nothing else of its directory is loaded for it.
+  Fix: add a `<name>.maxproj` file at the project root (`maxon init` writes one).
+- `Utf8ByteCount`, `CodepointCount` and `Utf16UnitCount` are removed.
+  Fix: use `Count`.
+- `==` on two values of a generic type calls the type's `equals`, and is E3005 when the type declares none.
+  Fix: declare `equals` on the type.
+- Writing through a module `let`'s record handed back by a function, and copying a `let`'s field into a
+  `var`, are refused (E3159, E3078).
+  Fix: bind the value with `var`, or write through a `clone()`.
+- A copy that reaches a promise (a `List.clone`, or a generic type copying an array of promises) is E3141,
+  and a borrowed argument (a parameter, a field, an element) passed as a kept argument to a `spawn` factory
+  is E3138.
+  Fix: `await` the promise and copy the value it holds; pass a `spawn` factory a fresh value or a `clone()`.
+- A generic type nested in itself through its own instances is E3184.
+  Fix: declare the field over the type's own parameters (`Nest with T`), or remove the recursion.
 
 ### Added
 
@@ -86,6 +132,63 @@ What changed in each release of the Maxon compiler and standard library, newest 
 - `Utf8ByteCount`, `CodepointCount` and `Utf16UnitCount`, replaced by `Count`.
 
 ## 0.4.0 — 2026-10-04
+
+### Breaking changes
+
+- A project is marked by `<name>.maxproj`, which replaces `build.maxon`; tasks live in `<name>.maxtasks`,
+  and test files are `<name>.maxtest`, no longer `*.test.maxon`. `build.maxon` and `*.test.maxon` are no
+  longer read.
+  Fix: rename `build.maxon` to `<name>.maxproj` (its targets are the exported functions of no parameters
+  returning `ExitCode`, run with `maxon build <target>`), move task functions into `<name>.maxtasks`, and
+  rename each `*.test.maxon` to `*.maxtest`.
+- `maxon run <file>` is `maxon execute <file>`; `maxon run <task>` now runs a task from the `.maxtasks`
+  file.
+  Fix: replace `maxon run <file>` with `maxon execute <file>` in scripts and CI. `maxon <file>.maxon` and
+  `#!/usr/bin/env maxon` are unchanged.
+- Every command-line option is long-form, and the `-o`, `-t`, `--compiler`, `--version`, `-V`, `--help`
+  and `-h` spellings are removed. An option given to a command that does not take it is refused, and so is
+  a bad `--log=` value.
+  Fix: use `--output=` for `-o` and `--filter=` for `-t`, `maxon version` for `--version`, and
+  `maxon help [<command>]` for `--help`, and drop `--compiler=` from `spec-test` command lines (it
+  compiles every case in its own process). `maxon help <command>` lists the options a command takes.
+- `maxon test --filter=` may be repeated, and a pattern that matches no test ends the run.
+  Fix: remove or correct the pattern that matches nothing.
+- `Runtime.yield()` and `Runtime.processorCount()` are `Scheduler.yield()` and `Scheduler.processorCount()`.
+  Fix: rename the calls.
+- The trace-key recorder that was `Log` is `TraceCapture`, and `Log` is now a structured logger.
+  Fix: call `TraceCapture.trace`, `startCapture`, `stopCapture` and `fired` where the program called the
+  same functions on `Log`.
+- Arguments to an `async` call or a service message, and the managed locals a closure captures, are moved;
+  reading one afterwards is a compile error (E3102). The `let`-argument freeze and E3160 are gone.
+  Fix: send or capture a `clone()` when the program still needs the value, or stop reading it after the
+  send.
+- A bare type name with more than one visible declaration is an error (E3063) rather than a silent pick.
+  Fix: qualify it with its directory, `stdlib.` or `export.`, or rename one declaration.
+- A hidden type is hidden at every place a type can be named, along with its fields and methods (E3008).
+  Fix: export the declaration, or reach it through an exported function or interface.
+- A function's parameter, return and `throws` types must be at least as visible as the function (E3167).
+  Fix: raise the type to the function's visibility, or narrow the function to the type's.
+- A function that declares `throws` must be able to throw (E3168).
+  Fix: remove the `throws` clause, or throw from the body.
+- Casting a literal to the type its destination already declares is an error (E3010).
+  Fix: remove the cast.
+- An array index must be the array's `ElementIndex` (a `String` index is refused), `count()` of an array is
+  an `ElementIndex`, and several public stdlib aliases are merged into `ElementIndex`, `EntryCount`,
+  `BytePos`, `Byte` and `NetworkPort`.
+  Fix: index with an `ElementIndex` (cast with `as ElementIndex`), read a string through its views
+  (`bytes()`, `codepoints()`, `utf16()`), and use the merged alias names.
+- An or-pattern binding is refused on any case that does not bind it (E3129).
+  Fix: give the case that disagrees its own arm, or rename the colliding binding.
+- A typealias declared inside a type or extension is a nominal type, and a private ranged alias belongs to
+  its file.
+  Fix: cast values between the alias and another type (`x as Name`), and give an alias that other files use
+  a visibility modifier.
+- A path holding a NUL names no file, and a NUL in a subprocess's program, argument, working directory,
+  environment or redirect path refuses the spawn with `spawnFailed`; a host holding a NUL, or an empty host,
+  is `resolveFailed`.
+  Fix: do not pass NUL or empty strings; handle `spawnFailed` and `resolveFailed`.
+- E3099, E3105 and E3160 are removed.
+  Fix: delete any reference to these codes from scripts, tests and documentation that match on them.
 
 ### Added
 
@@ -237,6 +340,33 @@ What changed in each release of the Maxon compiler and standard library, newest 
 
 ## 0.3.0 — 2026-09-17
 
+### Breaking changes
+
+- A `let` argument to a service message is lent rather than moved, and a write reaching a lent graph
+  through another path is refused (E3160).
+  Fix: write through a `clone()`, or send a `var`, a temporary or a literal, which still move. (0.4.0
+  replaces lending with moves for every argument.)
+- A callee that writes a field of its parameter is refused at the call when the caller's binding is a
+  `let`.
+  Fix: declare the caller's binding `var`, or pass a `clone()`.
+- A handler over a combined error that carries a boxed member must match the error exactly once (E3161).
+  Fix: match the error once and bind in its arms whatever the rest of the handler needs.
+- `HttpClient` refuses any scheme but `http` before it connects, with `HttpError.unsupportedScheme`; an
+  `https` URL was sent as plaintext to port 80 before.
+  Fix: use an `http` URL (the client has no TLS), and handle `unsupportedScheme`.
+- A missing executable is `SubprocessError.executableNotFound` on every operating system, and a working
+  directory that does not exist now fails the spawn where Linux ignored it.
+  Fix: handle `executableNotFound` where the program handled `spawnFailed` for a missing program, and pass
+  an existing working directory or none.
+- A build manifest's `debug_info` is honoured, a manifest build takes the tree lock and applies the same
+  build-option refusals a command-line build does, and a malformed manifest field (a non-string `version`
+  or source, a define with no `=`, a non-array `defines`) is refused.
+  Fix: correct the field the error names (`sources` and `defines` are lists of strings, a define is
+  `name=value`, `version` is a dotted string), and set `debug_info` to what the build should have; see
+  Describing a build in the CLI reference.
+- `optimize` in a build manifest is removed.
+  Fix: delete it.
+
 ### Added
 
 - `maxon cache`, which reports what the run cache holds on this host and which root the next run will
@@ -381,6 +511,13 @@ What changed in each release of the Maxon compiler and standard library, newest 
 
 ## 0.2.0 — 2026-09-14
 
+### Breaking changes
+
+- Mutating a value that a live `let` can still observe is refused, however the value was reached (through a
+  call's result, a closure, an interface method or a union payload as well as a direct field); a write
+  through a method or a field that could reach such a record is E3159.
+  Fix: bind the value with `var`, or write to a `clone()`.
+
 ### Added
 
 - One-line installers for macOS, Linux and Windows, which install the latest release into
@@ -424,6 +561,20 @@ What changed in each release of the Maxon compiler and standard library, newest 
 - `maxon run` failed in deeply nested directories on Windows.
 
 ## 0.1.1 — 2026-09-10
+
+### Breaking changes
+
+- The `--version` and `-V` flags are withdrawn in favour of `maxon version`, and the `--help` and `-h`
+  flags in favour of `maxon help`.
+  Fix: run `maxon version` and `maxon help [<command>]`.
+- `Build.buildOne` in a build manifest is renamed `Build.build`.
+  Fix: call `Build.build` with the same arguments.
+- `maxon fmt` separates groups of declarations with one blank line at every nesting depth, so a file
+  formatted by 0.1.0 is rewritten.
+  Fix: run `maxon fmt` over the project and keep the result.
+- On Linux and macOS, starting a program that cannot be found raises `SubprocessError.executableNotFound`
+  instead of `spawnFailed`.
+  Fix: handle `executableNotFound` where the program handled `spawnFailed` for a missing program.
 
 ### Added
 

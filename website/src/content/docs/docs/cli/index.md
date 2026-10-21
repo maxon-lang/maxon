@@ -412,6 +412,41 @@ maxon build app.maxon --target=wasm32-wasi
 maxon build app.maxon --define=Version=1.4.2
 ```
 
+### Breaking changes since the last build
+
+A project target's build reports the breaking changes made since the compiler release that last built
+the project, on stdout after the version and early-preview lines, and then builds as usual:
+
+```text
+This project was last built with maxon 0.4.0. Breaking changes since then:
+0.5.0: `Utf8ByteCount`, `CodepointCount` and `Utf16UnitCount` are removed.
+  Fix: use `Count`.
+```
+
+Each line pair is one `### Breaking changes` entry of the [release notes](/docs/release-notes/) of a
+release after the recorded one, up to this compiler's, with its fix. The MCP
+[`breaking_changes`](/docs/cli/mcp-server/#breaking_changes) tool answers the same list.
+
+The release is kept in a **compiler-version record** under the cache root, at
+`<cache>/project/v1/<key>.mxpv`, where `<cache>` is the first usable row of the table under
+[The run cache](#the-run-cache) and `<key>` a hash of the project directory's path. It holds one line,
+the release as `X.Y.Z`, and is written after a project's build succeeds and after a project's
+[`maxon test`](#maxon-test) run passes. So:
+
+- a build that fails keeps the record it found, and the report repeats until the project builds;
+- a build by a compiler older than the record's release records that older release;
+- a compiler built from a checkout, which carries no release version, records the newest release the
+  release notes name and reports every breaking change after the recorded release, including the ones
+  listed under `## Unreleased`;
+- the report needs a record: a project's first build on a host, and its first after
+  [`maxon cache clear`](#maxon-cache), writes one.
+
+A record that does not hold a release version is refused, and the build exits 1:
+
+```text
+error: the compiler-version record <path> holds '<text>', which is not a release version: <why>. Delete it, or run `maxon cache clear`.
+```
+
 ### Up to date
 
 A build whose output is current skips the compile: it prints `Up to date -> <path>` and exits 0, leaving
@@ -544,10 +579,11 @@ act on.
 `clear` removes the compiled programs [`maxon execute`](#maxon-execute) and a path-less
 [`maxon build`](#maxon-build) keep, the directories holding them, the inline snippets the
 [MCP server](/docs/cli/mcp-server/) stages, the programs `debug_start` and `maxon dap-server` build for debugging,
-the [library cache](#the-library-cache), the [build records](#up-to-date) `maxon build` keeps, and the
-Maxon directory above all of those. The next `run` or path-less `build` compiles from scratch and fills
-the cache again, the next compile of any kind fills the library cache, and the next `build` of each output
-compiles and records it again.
+the [library cache](#the-library-cache), the [build records](#up-to-date) `maxon build` keeps, the
+[compiler-version records](#breaking-changes-since-the-last-build) of every project, and the Maxon
+directory above all of those. The next `run` or path-less `build` compiles from scratch and fills the
+cache again, the next compile of any kind fills the library cache, the next `build` of each output
+compiles and records it again, and the next successful build of each project records its release.
 
 **A [build lock](/docs/cli/project-structure/#the-build-lock) a live build holds stays**, with its claim file and the directories
 above it, and `clear` ends its report with a `Kept <n> files a live build is using` line. Each lock is
@@ -709,6 +745,12 @@ normally with `maxon build`.
 
 The run is serial; there is no `--workers` option.
 
+**Breaking changes.** A project's run prints the
+[breaking-change report](#breaking-changes-since-the-last-build) `maxon build` prints, before its tests
+run: on stdout, or on stderr under `--json` so stdout stays one JSON document. A run in which every
+test passes records this compiler's release for the project, and a compiler-version record that does
+not hold a release version ends the run with its error and exit 2.
+
 **Where it runs.** The test binary runs in the directory `maxon test` was invoked from, so a relative
 path in a test means what it means in your shell. The build lives in `<project>/.maxon/test/`, or for a
 test file run alone in `<its directory>/.maxon/test/<file name>/`, under a `.maxonignore` that keeps
@@ -736,7 +778,7 @@ process from the start.
 |------|---------|
 | `0` | Every test passed |
 | `1` | A test failed, crashed, timed out, leaked or did not run, **or no tests were found** |
-| `2` | The run could not happen: a bad option, a compile error, no source files, no such project, a project file that gave no sources, or several targets and no target word |
+| `2` | The run could not happen: a bad option, a compile error, no source files, no such project, a project file that gave no sources, several targets and no target word, or a malformed compiler-version record |
 
 A run that finds no tests exits 1 on purpose, so a suite that silently stopped containing tests does
 not read as green. A source file that does not tokenize is a compile error like any other: the run

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Write the website's release material: the announcement post, the changelog page, and the version
+# Write the website's release material: the announcement post, the release notes page, and the version
 # the download links are built from.
 #
 # ⭐⭐ **IT WRITES FILES AND STOPS. IT DOES NOT COMMIT, AND IT DOES NOT PUSH.** This runs while a
@@ -9,12 +9,12 @@
 # `release: published`, building from the tag. There is nothing here to get out of step with the
 # release, because it is part of it.
 #
-# ⭐ **THE CHANGES COME FROM `CHANGELOG.md`.** The post and the site's changelog page are two renderings
+# ⭐ **THE CHANGES COME FROM `RELEASE_NOTES.md`.** The post and the site's release notes page are two renderings
 # of one hand-written source and cannot come to disagree about what shipped; the GitHub release notes
 # link to both rather than carrying a third copy.
 #
 # ⚠ **THREE FILES, THREE DIFFERENT JOBS.** The post announces THIS release and is never touched
-# again; the changelog page carries EVERY release and is rewritten each time; `version.ts` is what
+# again; the release notes page carries EVERY release and is rewritten each time; `version.ts` is what
 # the installation page's download links are built from, so skipping it would leave every one pointing
 # at the previous release's filenames.
 #
@@ -37,9 +37,9 @@ InstallationPath="/docs/getting-started/installation/"
 
 WebsiteDir="website"
 BlogSubdir="$WebsiteDir/src/content/docs/blog"
-ChangelogPagePath="$WebsiteDir/src/content/docs/docs/changelog.md"
+ReleaseNotesPagePath="$WebsiteDir/src/content/docs/docs/release-notes.md"
 VersionModulePath="$WebsiteDir/src/version.ts"
-ChangelogFile="CHANGELOG.md"
+ReleaseNotesFile="RELEASE_NOTES.md"
 
 version=""
 dry_run=0
@@ -59,8 +59,8 @@ done
 # release is already public; the worst outcome here is an announcement that has to be written by hand.
 warn() { echo "announce.sh: $*" >&2; }
 
-body="$(scripts/changelog.sh --section="$version")" || {
-	warn "CHANGELOG.md has no section for $version — regenerate it before announcing"
+body="$(scripts/release-notes.sh --section="$version")" || {
+	warn "RELEASE_NOTES.md has no section for $version — write it before announcing"
 	exit 1
 }
 
@@ -89,22 +89,22 @@ shows how to install a specific release.
 EOF
 }
 
-# ⭐ THE DATE IS TODAY'S HERE, DELIBERATELY, AND UNLIKE EVERYWHERE ELSE IN THIS TOOLING. A changelog
+# ⭐ THE DATE IS TODAY'S HERE, DELIBERATELY, AND UNLIKE EVERYWHERE ELSE IN THIS TOOLING. A release note
 # entry is dated by the history it describes; a blog post is dated by the day it was published, which
 # is what a reader of a feed expects.
 
-# ⭐⭐ **THE SITE'S CHANGELOG PAGE — EVERY RELEASE, REWRITTEN WHOLE EACH TIME.** The blog post answers
+# ⭐⭐ **THE SITE'S RELEASE NOTES PAGE — EVERY RELEASE, REWRITTEN WHOLE EACH TIME.** The blog post answers
 # *"what changed in 0.1.1"*; this answers *"has the thing I need landed yet"*, which is the question a
 # reader arrives with when they are deciding whether to upgrade. Both are renderings of the same
-# `CHANGELOG.md`, so neither can drift from what shipped.
+# `RELEASE_NOTES.md`, so neither can drift from what shipped.
 #
 # ⚠ THE SOURCE FILE'S OWN HEADER IS DROPPED AND REPLACED, so the page can say where the downloads and
-# the install instructions are — which the changelog itself deliberately never does.
-changelog_page() {
+# the install instructions are — which `RELEASE_NOTES.md` deliberately never carries.
+release_notes_page() {
 	cat <<EOF
 ---
-title: Changelog
-description: Every released version of the Maxon compiler and standard library, and what changed in it.
+title: Release notes
+description: Every released version of the Maxon compiler and standard library, what changed in it, and how to fix what it broke.
 ---
 
 Every released version, newest first.
@@ -116,22 +116,22 @@ Downloads for each release are on the
 EOF
 	# From the first version heading to the end: the headings and bullets, without the contributor
 	# preamble above them.
-	sed -n '/^## /,$p' "$ChangelogFile"
+	sed -n '/^## /,$p' "$ReleaseNotesFile"
 }
 
 if [ "$dry_run" -eq 1 ]; then
 	post_markdown
 	echo
-	echo "───────────────────────── $ChangelogPagePath ─────────────────────────"
+	echo "───────────────────────── $ReleaseNotesPagePath ─────────────────────────"
 	echo
-	changelog_page
+	release_notes_page
 	exit 0
 fi
 [ -d "$BlogSubdir" ] || { warn "'$BlogSubdir' does not exist"; exit 1; }
-[ -d "$(dirname "$ChangelogPagePath")" ] || { warn "'$(dirname "$ChangelogPagePath")' does not exist"; exit 1; }
+[ -d "$(dirname "$ReleaseNotesPagePath")" ] || { warn "'$(dirname "$ReleaseNotesPagePath")' does not exist"; exit 1; }
 
 # ⛔ **THE SITE NAMES THE RELEASED VERSION IN ITS DOWNLOAD LINKS, and a stale one is a 404 rather than
-# a cosmetic slip.** The asset filenames carry the version, so a release that updated the changelog and
+# a cosmetic slip.** The asset filenames carry the version, so a release that updated the release notes and
 # not this leaves every download link pointing at the previous release's files. The site keeps it in
 # one module for exactly this reason, and every page that names the version reads it from there.
 [ -f "$VersionModulePath" ] || { warn "'$VersionModulePath' does not exist"; exit 1; }
@@ -151,9 +151,9 @@ post_markdown > "$post"
 echo "announce.sh: wrote $post"
 
 # ⚠ THE PAGE IS REWRITTEN, NOT APPENDED TO — unlike the post, which is refused if it exists. It is
-# generated in full from `CHANGELOG.md` every time, so there is nothing hand-written in it to lose.
-changelog_page > "$ChangelogPagePath"
-echo "announce.sh: wrote $ChangelogPagePath"
+# generated in full from `RELEASE_NOTES.md` every time, so there is nothing hand-written in it to lose.
+release_notes_page > "$ReleaseNotesPagePath"
+echo "announce.sh: wrote $ReleaseNotesPagePath"
 
 sed -i "s/RELEASE_VERSION = '[^']*'/RELEASE_VERSION = '$version'/" "$VersionModulePath"
 echo "announce.sh: set RELEASE_VERSION to $version in $VersionModulePath"

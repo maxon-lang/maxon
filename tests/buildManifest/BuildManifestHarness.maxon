@@ -624,3 +624,128 @@ function builtProductsIn(staged FilePath) returns String
 
 	return spacedPaths(found)
 end 'builtProductsIn'
+
+export let OlderRelease = "0.1.0"
+export let LastBuiltWording = "This project was last built with maxon"
+
+let ProjectRecordDirName = "project"
+let ProjectRecordLayoutDirName = "v1"
+let ProjectRecordKeyDigits = 16
+let HexLetters = "abcdefABCDEF"
+let ReleaseNotesDocument = "RELEASE_NOTES.md"
+let ReleaseHeadingPrefix = "## "
+let ReleaseHeadingDateSeparator = " — "
+let ReleaseComponentSeparator = "."
+let ReleaseComponentCount = 3
+
+export function recordLine(release String) returns String
+	return "{release}{RecordLineEnd}"
+end 'recordLine'
+
+export function soleVersionRecordIn(staged FilePath) returns FilePath throws TestFailure
+	let cacheRoot = privateCacheRoot(staged)
+	let records = filesUnderEndingWith(cacheRoot, suffix: VersionRecordSuffix)
+
+	try Expect.equal(records.count(), expected: 1, message: "a successful build of one project left {records.count()} compiler-version records (`*{VersionRecordSuffix}`) under the cache root {cacheRoot.toString()}, where one project has one: {spacedPaths(records)}")
+
+	let record = try records.get(0) otherwise panic("build-manifest tests: a list holding one record has a first")
+	let recordDir = cacheRoot.join(CacheVendorDirName).join(ProjectRecordDirName).join(ProjectRecordLayoutDirName)
+	let parent = try record.parent() otherwise panic("build-manifest tests: a file found under a directory has a parent: {record.toString()}")
+
+	try Expect.equal(parent.toString(), expected: recordDir.toString(), message: "the compiler-version record {record.toString()} is not in {recordDir.toString()}.")
+
+	let key = record.filename().replace(VersionRecordSuffix, with: "")
+	try Expect.isTrue(isHexKey(key), message: "the compiler-version record's name `{record.filename()}` is not {ProjectRecordKeyDigits} hex digits and `{VersionRecordSuffix}`.")
+
+	return record
+end 'soleVersionRecordIn'
+
+function isHexKey(key String) returns bool
+	if key.byteLength() != ProjectRecordKeyDigits 'wrongLength'
+		return false
+	end 'wrongLength'
+
+	for c in key 'eachDigit'
+		if not Ascii.isDigit(c) and not HexLetters.contains(c.toString()) 'notHex'
+			return false
+		end 'notHex'
+	end 'eachDigit'
+
+	return true
+end 'isHexKey'
+
+export function expectedRecordedRelease() returns String throws TestFailure
+	let line = spawnCompiler([VersionCommandName]).stdout.trim()
+	let token = try whitespaceTokens(line).get(1) otherwise panic("build-manifest tests: the gate could not run — `maxon {VersionCommandName}` printed `{line}`, which names no version after its first word.")
+
+	if isDottedRelease(token) 'aRelease'
+		return token
+	end 'aRelease'
+
+	return try newestReleaseInNotes()
+end 'expectedRecordedRelease'
+
+function newestReleaseInNotes() returns String throws TestFailure
+	let notes = try FilePath.from(ReleaseNotesDocument) otherwise panic("build-manifest tests: the gate could not run — '{ReleaseNotesDocument}' is not a spellable path")
+	try Expect.isTrue(File.exists(notes), message: "a dev compiler records the newest release {ReleaseNotesDocument} names, and the checkout holds no {ReleaseNotesDocument}.")
+
+	var newest = ""
+
+	for line in outputLines(checkoutDocumentText(ReleaseNotesDocument)) 'eachLine'
+		if not line.startsWith(ReleaseHeadingPrefix) or not line.contains(ReleaseHeadingDateSeparator) 'notAReleaseHeading'
+			continue
+		end 'notAReleaseHeading'
+
+		let heading = line.replaceFirst(ReleaseHeadingPrefix, with: "")
+		let release = try heading.split(ReleaseHeadingDateSeparator).get(0) otherwise panic("build-manifest tests: a split always yields a first part")
+
+		if isDottedRelease(release) and (newest.isEmpty() or isNewerRelease(release, than: newest)) 'newer'
+			newest = release
+		end 'newer'
+	end 'eachLine'
+
+	try Expect.isFalse(newest.isEmpty(), message: "{ReleaseNotesDocument} names no release in a `{ReleaseHeadingPrefix}X.Y.Z{ReleaseHeadingDateSeparator}<date>` heading, so there is no release a dev compiler records.")
+
+	return newest
+end 'newestReleaseInNotes'
+
+function isDottedRelease(text String) returns bool
+	let parts = text.split(ReleaseComponentSeparator)
+
+	if parts.count() != ReleaseComponentCount 'wrongShape'
+		return false
+	end 'wrongShape'
+
+	for part in parts 'eachPart'
+		if part.isEmpty() 'emptyPart'
+			return false
+		end 'emptyPart'
+
+		for c in part 'eachCharacter'
+			if not Ascii.isDigit(c) 'notADigit'
+				return false
+			end 'notADigit'
+		end 'eachCharacter'
+	end 'eachPart'
+
+	return true
+end 'isDottedRelease'
+
+function isNewerRelease(candidate String, than String) returns bool
+	let theirs = than.split(ReleaseComponentSeparator)
+
+	for (iter, part) in candidate.split(ReleaseComponentSeparator).withIterator() 'eachComponent'
+		let mine = releaseComponent(part)
+		let other = releaseComponent(try theirs.get(iter.index()) otherwise panic("build-manifest tests: both releases were held to {ReleaseComponentCount} components"))
+
+		if mine != other 'differs'
+			return mine > other
+		end 'differs'
+	end 'eachComponent'
+
+	return false
+end 'isNewerRelease'
+
+function releaseComponent(part String) returns FullRangeInt
+	return try int.fromString(part) otherwise panic("build-manifest tests: '{part}' was held to digits and is not a number")
+end 'releaseComponent'

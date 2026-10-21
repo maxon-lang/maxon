@@ -1,0 +1,20 @@
+let FailingMainSource = "typealias ExitCode = int(0 to 255)\n\nfunction main() returns ExitCode\n\treturn undeclaredName\nend 'main'\n"
+
+test 'a failed build reports the breaking changes and keeps the older record'
+	let staged = stagedProject("a-failed-build-reports-again-and-keeps-the-record", fixture: DefaultFixtureName)
+
+	let first = spawnManifestBuild(staged, options: StringArray.create())
+	Expect.equal(first.exitCode(), expected: 0, message: "the first `maxon build` over the default manifest exited {first.exitCode()}. It wrote to stdout: {first.stdout} and to stderr: {first.stderr}")
+
+	let record = soleVersionRecordIn(staged)
+	writeStagedFile(record, content: recordLine(OlderRelease))
+	writeStagedFile(staged.join(StagedProgramFileName), content: FailingMainSource)
+
+	let failed = spawnManifestBuild(staged, options: StringArray.create())
+	let said = "It wrote to stdout: {failed.stdout} and to stderr: {failed.stderr}"
+	let lastBuilt = "{LastBuiltWording} {OlderRelease}."
+
+	Expect.equal(failed.exitCode(), expected: 1, message: "`maxon build` of a project whose source does not compile exited {failed.exitCode()}. {said}")
+	Expect.contains(failed.stdout, needle: lastBuilt, message: "a failed `maxon build` after a build recorded by maxon {OlderRelease} did not say `{lastBuilt}`. {said}")
+	Expect.equal(fileText(record), expected: recordLine(OlderRelease), message: "a failed build rewrote the compiler-version record {record.toString()}, which must keep `{OlderRelease}` until a build succeeds.")
+end 'a failed build reports the breaking changes and keeps the older record'

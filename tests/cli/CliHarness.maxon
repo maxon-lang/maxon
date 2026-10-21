@@ -41,20 +41,14 @@ export let ScaleTestCommandWord = "scale-test"
 export let TestCommandWord = "test"
 export let VersionCommandWord = "version"
 
-// The command that fills the cache, the command that empties it, and the variable naming the directory
-// the cache is kept under. Respelled here because this corpus is a separate program and cannot read the
-// driver's own constants.
+// The command that fills the cache and the command that empties it. Respelled here because this corpus
+// is a separate program and cannot read the driver's own constants.
 export let ExecuteCommandWord = "execute"
 export let CacheCommandWord = "cache"
 export let CacheClearVerb = "clear"
 
-// ⭐ **THE ONE DIRECTORY MAXON OWNS UNDER THE ROOT THAT VARIABLE NAMES.** Everything the cache holds sits
-// below it and nothing else in that root is Maxon's, so a case asks about THIS directory rather than
-// respelling the slot layout under it — and the caller's own root, which the cache may not touch, is the
-// directory above.
-export let CacheVendorDirName = "maxon"
-
-// ⚠ **THE OTHER VARIABLES THE DRIVER CONSULTS FOR A CACHE ROOT, RESPELLED FOR THE REASON ABOVE**, and it
+// ⚠ **THE VARIABLES BESIDE `CacheRootVariable` THE DRIVER CONSULTS FOR A CACHE ROOT, RESPELLED FOR THE
+// REASON ABOVE**, and it
 // reads a different set per host. `HomeDirectoryVariable` and `HostTempVariable` are exported because a
 // case fills the cache one of them names, or points two of them at one directory.
 #if os(Windows)
@@ -1110,13 +1104,7 @@ let BuildRecordDirName = "build"
 let BuildRecordExtension = ".mxbr"
 
 export function soleBuildRecordIn(dir FilePath) returns FilePath throws TestFailure
-	var records = FilePathArray.create()
-
-	for file in filesUnder(cacheRootIn(dir).join(CacheVendorDirName).join(BuildRecordDirName)) 'eachCachedFile'
-		if file.filename().endsWith(BuildRecordExtension) 'aRecord'
-			records.push(file)
-		end 'aRecord'
-	end 'eachCachedFile'
+	let records = filesUnderEndingWith(cacheRootIn(dir).join(CacheVendorDirName).join(BuildRecordDirName), suffix: BuildRecordExtension)
 
 	try Expect.equal(records.count(), expected: 1, message: "the first build under an empty cache root left {records.count()} build records, where one output has one.")
 

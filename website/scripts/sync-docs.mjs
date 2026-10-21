@@ -1,5 +1,6 @@
-// Generate the site's reference pages, and the MCP server's `instructions` in
-// `maxon-bin/Compiler/Mcp/McpInstructionsGenerated.maxon`, from the repository's own documentation.
+// Generate the site's reference pages, the MCP server's `instructions` in
+// `maxon-bin/Compiler/Mcp/McpInstructionsGenerated.maxon`, and the compiler's breaking-change data in
+// `maxon-bin/Compiler/BreakingChangesGenerated.maxon`, from the repository's own documentation.
 //
 //     node website/scripts/sync-docs.mjs           # rewrite the outputs
 //     node website/scripts/sync-docs.mjs --check   # report drift, change nothing (exit 1 if any)
@@ -124,6 +125,18 @@ const STAGE_BANDS_SOURCE = 'maxon-bin/Compiler/Mcp/McpErrorCodes.maxon';
 const AGENT_INSTRUCTIONS_PARTS = [PREAMBLE, 'Scripts and scriptlib'];
 const AGENT_INSTRUCTIONS_OUTPUT = 'maxon-bin/Compiler/Mcp/McpInstructionsGenerated.maxon';
 const AGENT_INSTRUCTIONS_CONSTANT = 'McpAgentInstructions';
+
+const RELEASE_NOTES_SOURCE = 'RELEASE_NOTES.md';
+const BREAKING_CHANGES_OUTPUT = 'maxon-bin/Compiler/BreakingChangesGenerated.maxon';
+const UNRELEASED_HEADING = 'Unreleased';
+const UNRELEASED_VERSION = UNRELEASED_HEADING;
+const BREAKING_CHANGES_HEADING = 'Breaking changes';
+const RELEASE_SUBSECTIONS = [BREAKING_CHANGES_HEADING, 'Added', 'Changed', 'Fixed', 'Removed'];
+const UNRELEASED_VERSION_CONSTANT = 'UnreleasedVersion';
+const RELEASED_VERSIONS_CONSTANT = 'ReleasedVersions';
+const CHANGE_VERSIONS_CONSTANT = 'BreakingChangeVersions';
+const CHANGE_DESCRIPTIONS_CONSTANT = 'BreakingChangeDescriptions';
+const CHANGE_FIXES_CONSTANT = 'BreakingChangeFixes';
 
 // Every file in these directories must be a page this script produces; anything else is hand-written
 // content that no sync would ever correct.
@@ -691,12 +704,154 @@ function errorCodesBody() {
   return sections.join('\n\n');
 }
 
-const maxonStringLiteral = (text) => {
+const maxonStringLiteral = (text, source) => {
   const escapes = { '\\': '\\\\', '"': '\\"', '{': '\\{', '}': '\\}', '\n': '\\n', '\t': '\\t' };
   const hasControlCharacter = /[\u0000-\u0008\u000b-\u001f\u007f]/.test(text);
-  if (hasControlCharacter) fail(`${AGENT_RULES_SOURCE}: the MCP instructions hold a control character a Maxon string literal cannot spell`);
+  if (hasControlCharacter) fail(`${source}: a string compiled into the driver holds a control character a Maxon string literal cannot spell`);
   return '"' + text.replace(/[\\"{}\n\t]/g, (character) => escapes[character]) + '"';
 };
+
+const maxonStringArray = (texts, source) => '[' + texts.map((text) => maxonStringLiteral(text, source)).join(', ') + ']';
+
+const compareReleaseVersions = (left, right) => {
+  const leftFields = left.split('.').map(Number);
+  const rightFields = right.split('.').map(Number);
+  return leftFields.reduce((result, field, index) => (result !== 0 ? result : field - rightFields[index]), 0);
+};
+
+function parseBreakingChanges(lines, first, last, where) {
+  const entries = [];
+  let entry = null;
+  let part = null;
+
+  const finish = () => {
+    if (entry === null) return;
+    if (entry.fix === null) fail(`${where}: the breaking change starting on line ${entry.line} has no "  Fix: …" line saying how to fix it`);
+    else if (entry.fix === '') fail(`${where}: the breaking change starting on line ${entry.line} has an empty "Fix:"`);
+    entries.push({ change: entry.change, fix: entry.fix ?? '' });
+    entry = null;
+  };
+
+  for (let index = first; index < last; index += 1) {
+    const line = lines[index];
+    const here = `${where}:${index + 1}`;
+
+    if (line.trim() === '') {
+      finish();
+      continue;
+    }
+
+    const bullet = /^- (\S.*)$/.exec(line);
+    if (bullet) {
+      finish();
+      entry = { line: index + 1, change: bullet[1].trim(), fix: null };
+      part = 'change';
+      continue;
+    }
+
+    const continuation = /^  (\S.*)$/.exec(line);
+    if (!continuation || entry === null) {
+      fail(`${here}: a breaking change is a "- " bullet, then an indented "  Fix: …" line; not: ${line}`);
+      continue;
+    }
+
+    const fixLine = /^Fix:(?: (.*))?$/.exec(continuation[1]);
+    if (fixLine) {
+      if (entry.fix !== null) fail(`${here}: the breaking change starting on line ${entry.line} has two "Fix:" lines`);
+      entry.fix = (fixLine[1] ?? '').trim();
+      part = 'fix';
+    } else if (part === 'change') {
+      entry.change += ' ' + continuation[1].trim();
+    } else {
+      entry.fix += ' ' + continuation[1].trim();
+    }
+  }
+
+  finish();
+  return entries;
+}
+
+function readReleaseNotes() {
+  const lines = readRepoText(RELEASE_NOTES_SOURCE).split('\n');
+  const { headings } = scanMarkdown(lines);
+  const releasedVersions = [];
+  const changes = [];
+
+  const titles = headings.filter((heading) => heading.depth === 1);
+  if (titles.length !== 1 || headings[0] !== titles[0]) {
+    fail(`${RELEASE_NOTES_SOURCE}: must open with its one "# " title (found ${titles.length} H1 heading(s))`);
+    return null;
+  }
+
+  const sections = headings.filter((heading) => heading.depth === 2);
+  const seen = new Set();
+
+  sections.forEach((section, position) => {
+    const where = `${RELEASE_NOTES_SOURCE}:${section.index + 1}`;
+    const released = /^(\d+\.\d+\.\d+) — \d{4}-\d{2}-\d{2}$/.exec(section.text);
+
+    if (!released && section.text !== UNRELEASED_HEADING) {
+      fail(`${where}: "## ${section.text}" is neither "## ${UNRELEASED_HEADING}" nor "## X.Y.Z — YYYY-MM-DD"`);
+      return;
+    }
+
+    const version = released ? released[1] : UNRELEASED_VERSION;
+    if (seen.has(version)) fail(`${where}: "${version}" has more than one section`);
+    seen.add(version);
+
+    if (!released && position !== 0) fail(`${where}: "## ${UNRELEASED_HEADING}" must be the first section`);
+    if (released) {
+      if (releasedVersions.length > 0 && compareReleaseVersions(releasedVersions[releasedVersions.length - 1], version) <= 0) {
+        fail(`${where}: ${version} is not older than the section above it; sections run newest first`);
+      }
+      releasedVersions.push(version);
+    }
+
+    const sectionEnd = sections[position + 1]?.index ?? lines.length;
+    const subsections = headings.filter((heading) => heading.depth > 2 && heading.index > section.index && heading.index < sectionEnd);
+    const subsectionNames = new Set();
+
+    subsections.forEach((subsection, subsectionPosition) => {
+      const subsectionWhere = `${RELEASE_NOTES_SOURCE}:${subsection.index + 1}`;
+
+      if (subsection.depth !== 3 || !RELEASE_SUBSECTIONS.includes(subsection.text)) {
+        fail(`${subsectionWhere}: "${'#'.repeat(subsection.depth)} ${subsection.text}" is not one of ${RELEASE_SUBSECTIONS.map((name) => `"### ${name}"`).join(', ')}`);
+        return;
+      }
+      if (subsectionNames.has(subsection.text)) fail(`${subsectionWhere}: "### ${subsection.text}" appears twice in "${version}"`);
+      subsectionNames.add(subsection.text);
+
+      if (subsection.text !== BREAKING_CHANGES_HEADING) return;
+
+      const end = subsections[subsectionPosition + 1]?.index ?? sectionEnd;
+      const entries = parseBreakingChanges(lines, subsection.index + 1, end, RELEASE_NOTES_SOURCE);
+      if (entries.length === 0) fail(`${subsectionWhere}: "### ${BREAKING_CHANGES_HEADING}" lists no change; remove the heading`);
+      for (const entry of entries) changes.push({ version, ...entry });
+    });
+  });
+
+  if (releasedVersions.length === 0) fail(`${RELEASE_NOTES_SOURCE}: no "## X.Y.Z — YYYY-MM-DD" release section`);
+  if (changes.length === 0) fail(`${RELEASE_NOTES_SOURCE}: no breaking change is listed, so the compiled-in arrays would have no element to type them by`);
+
+  return { releasedVersions, changes };
+}
+
+function breakingChangesFile() {
+  const notes = readReleaseNotes();
+  if (notes === null) return null;
+
+  const { releasedVersions, changes } = notes;
+
+  return [
+    `// @generated by website/scripts/sync-docs.mjs from ${RELEASE_NOTES_SOURCE} (its release headings and the "${BREAKING_CHANGES_HEADING}" entries under them); edit that document and run the script, never this file`,
+    `export let ${UNRELEASED_VERSION_CONSTANT} = ${maxonStringLiteral(UNRELEASED_VERSION, RELEASE_NOTES_SOURCE)}`,
+    `export let ${RELEASED_VERSIONS_CONSTANT} = ${maxonStringArray(releasedVersions, RELEASE_NOTES_SOURCE)}`,
+    `export let ${CHANGE_VERSIONS_CONSTANT} = ${maxonStringArray(changes.map((change) => change.version), RELEASE_NOTES_SOURCE)}`,
+    `export let ${CHANGE_DESCRIPTIONS_CONSTANT} = ${maxonStringArray(changes.map((change) => change.change), RELEASE_NOTES_SOURCE)}`,
+    `export let ${CHANGE_FIXES_CONSTANT} = ${maxonStringArray(changes.map((change) => change.fix), RELEASE_NOTES_SOURCE)}`,
+    '',
+  ].join('\n');
+}
 
 function agentInstructionsFile(model) {
   const texts = [];
@@ -714,7 +869,7 @@ function agentInstructionsFile(model) {
 
   return [
     `// @generated by website/scripts/sync-docs.mjs from ${AGENT_RULES_SOURCE} (${AGENT_INSTRUCTIONS_PARTS.map((key) => (key === PREAMBLE ? 'its preamble' : `its "## ${key}" section`)).join(' and ')}); edit that document and run the script, never this file`,
-    `export let ${AGENT_INSTRUCTIONS_CONSTANT} = ${maxonStringLiteral(texts.join('\n\n'))}`,
+    `export let ${AGENT_INSTRUCTIONS_CONSTANT} = ${maxonStringLiteral(texts.join('\n\n'), AGENT_RULES_SOURCE)}`,
     '',
   ].join('\n');
 }
@@ -802,6 +957,13 @@ async function main() {
     const path = join(repoRoot, AGENT_INSTRUCTIONS_OUTPUT);
     const current = existsSync(path) ? readText(path) : null;
     writes.push({ label: AGENT_INSTRUCTIONS_OUTPUT, from: AGENT_RULES_SOURCE, path, current, next: instructions });
+  }
+
+  const breakingChanges = breakingChangesFile();
+  if (breakingChanges !== null) {
+    const path = join(repoRoot, BREAKING_CHANGES_OUTPUT);
+    const current = existsSync(path) ? readText(path) : null;
+    writes.push({ label: BREAKING_CHANGES_OUTPUT, from: RELEASE_NOTES_SOURCE, path, current, next: breakingChanges });
   }
 
   if (problems.length > 0) {

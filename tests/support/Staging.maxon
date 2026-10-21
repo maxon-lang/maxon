@@ -184,6 +184,18 @@ public function filesUnder(dir FilePath) returns FilePathArray
 	return found
 end 'filesUnder'
 
+public function filesUnderEndingWith(dir FilePath, suffix String) returns FilePathArray
+	var found = FilePathArray.create()
+
+	for file in filesUnder(dir) 'eachFile'
+		if file.filename().endsWith(suffix) 'matches'
+			found.push(file)
+		end 'matches'
+	end 'eachFile'
+
+	return found
+end 'filesUnderEndingWith'
+
 public function retainedAside(path FilePath, aside FilePath) returns FilePath
 	try File.writeBinary(aside, content: fileBytes(path)) otherwise panic("the gate could not run — could not retain {path.toString()} as {aside.toString()}.")
 	try File.delete(path) otherwise panic("the gate could not run — could not clear {path.toString()}, so the next build cannot be handed that path.")

@@ -39,7 +39,7 @@ UntestedMarkerSuffix=".untested"
 
 # Where the release notes send a reader. `announce.sh` writes each release's post as `maxon-X-Y-Z`.
 SiteUrl="https://maxon.dev"
-ChangelogUrl="$SiteUrl/docs/changelog/"
+ReleaseNotesUrl="$SiteUrl/docs/release-notes/"
 InstallationUrl="$SiteUrl/docs/getting-started/installation/"
 
 mode=""
@@ -208,7 +208,7 @@ EOF
 
 # Release notes: where to read what changed and how to install, then what is attached.
 #
-# ⭐ **THE CHANGELOG AND THE INSTALL INSTRUCTIONS LIVE ON maxon.dev, AND THE NOTES LINK TO THEM.** A
+# ⭐ **THE RELEASE NOTES AND THE INSTALL INSTRUCTIONS LIVE ON maxon.dev, AND THE NOTES LINK TO THEM.** A
 # copy here is a second place for either to be wrong: the installation page changes between releases,
 # and notes published once never do. The site deploys right after the release, so the links go live
 # within minutes of the notes.
@@ -225,7 +225,7 @@ write_default_notes() {
 
 	{
 		echo "- [What's new in Maxon $version_from_binary]($SiteUrl/blog/maxon-${version_from_binary//./-}/)"
-		echo "- [Changelog]($ChangelogUrl), every release"
+		echo "- [Release notes]($ReleaseNotesUrl), every release"
 		echo "- [Installation]($InstallationUrl)"
 		echo
 		echo "## Assets"
@@ -310,10 +310,10 @@ sed 's/^/  /' "$DIST/$ChecksumsAsset"
 # and the one thing a reader wants — which file is theirs, and what to do with it — is exactly what the
 # filenames do not say. A `dist/NOTES.md` placed by hand wins: this is a floor, not a template to
 # fight.
-# ⛔ A RELEASE WITH NO CHANGELOG ENTRY DOES NOT SHIP: the post and the changelog page the notes link to
+# ⛔ A RELEASE WITH NO RELEASE NOTES ENTRY DOES NOT SHIP: the post and the release notes page the notes link to
 # are built from it. `release.yml`'s guard asks before any runner starts; this asks again at the last
 # moment, and `--section` refuses a version the file has no heading for.
-scripts/changelog.sh --section="$version_from_binary" > /dev/null
+scripts/release-notes.sh --section="$version_from_binary" > /dev/null
 
 if [ ! -f "$DIST/NOTES.md" ]; then
 	echo "release.sh: writing default notes to $DIST/NOTES.md"

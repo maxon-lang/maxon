@@ -22,6 +22,9 @@ maxonGrammar.name = 'maxon';
 
 export default defineConfig({
   site: 'https://maxon.dev',
+  redirects: {
+    '/docs/changelog': '/docs/release-notes/',
+  },
   markdown: {
     processor: satteri({ mdastPlugins: [sharedDocsLinks(new URL('./', import.meta.url))] }),
   },
@@ -123,7 +126,7 @@ export default defineConfig({
         {
           label: 'Project',
           items: [
-            { label: 'Changelog', link: '/docs/changelog/' },
+            { label: 'Release notes', link: '/docs/release-notes/' },
             { label: 'Contributing', link: '/docs/contributing/' },
             { label: 'About', link: '/docs/about/' },
             { label: 'Source on GitHub', link: 'https://github.com/maxon-lang/maxon' },

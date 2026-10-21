@@ -168,11 +168,6 @@ function locksDirectoryIn(root FilePath) returns FilePath
 	return root.join(BuildCommandDirName).join(BuildLocksDirName)
 end 'locksDirectoryIn'
 
-// Over the host's comparison spelling, so two spellings of one file share one record and one lock.
-function outputKeyOf(anchored FilePath) returns String
-	return hexOfLeadingBytes(sha256(anchored.comparisonSpelling().toByteArray()), count: CacheNameDigestBytes)
-end 'outputKeyOf'
-
 export function recordLockPathOf(output FilePath) returns FilePath throws RunCacheError
 	let directory = locksDirectoryIn(try hostCacheRoot())
 
@@ -180,7 +175,7 @@ export function recordLockPathOf(output FilePath) returns FilePath throws RunCac
 		throw RunCacheError.unavailable("could not create {directory.toString()}, where build locks are kept")
 	end 'unusable'
 
-	return outputLockPathIn(directory, key: outputKeyOf(anchoredOutputOf(output)))
+	return outputLockPathIn(directory, key: pathKeyOf(anchoredOutputOf(output)))
 end 'recordLockPathOf'
 
 export function isBuildLocksDirectory(path FilePath) returns bool
@@ -204,7 +199,7 @@ function anchoredOutputOf(output FilePath) returns FilePath
 end 'anchoredOutputOf'
 
 function recordPathOf(anchored FilePath) returns FilePath throws RunCacheError
-	return recordDirectoryIn(try hostCacheRoot()).join("{outputKeyOf(anchored)}{BuildRecordExtension}")
+	return recordDirectoryIn(try hostCacheRoot()).join("{pathKeyOf(anchored)}{BuildRecordExtension}")
 end 'recordPathOf'
 
 export function buildRecordOf(request BuildRecordRequest) returns PendingBuildRecord
@@ -796,7 +791,7 @@ export function publishBuildRecord(record BuildRecord, started Timestamp)
 		return
 	end 'notPublished'
 
-	keepRecordsTidy(recordDirectoryOf(record.path))
+	keepRecordsTidy(recordDirectoryOf(record.path), extension: BuildRecordExtension, most: MostBuildRecords, format: BuildRecordFormat)
 end 'publishBuildRecord'
 
 export function discardBuildRecordOf(output FilePath)
@@ -810,15 +805,3 @@ export function discardBuildRecordsNamed(stem FilePath)
 		discardBuildRecordOf(try FilePath.from("{stem.toString()}{executableExtension(os)}") otherwise panic("discardBuildRecordsNamed: {stem.toString()} with an executable extension appended is a spellable path"))
 	end 'eachTarget'
 end 'discardBuildRecordsNamed'
-
-function keepRecordsTidy(directory FilePath)
-	discardAllButNewestIn(directory, kept: MostBuildRecords, admits: function(entry) gives entry.filename().endsWith(BuildRecordExtension))
-	sweepLeftoversOfEndedOwners(directory, livenessOf: leftoverLivenessOf, keyOf: function(entry) gives entry, discardKeyed: removeOwnedFile)
-
-	let formats = try directory.parent() otherwise panic("keepRecordsTidy: {directory.toString()} sits inside the build directory")
-	discardOlderFormats(formats, than: BuildRecordFormat)
-end 'keepRecordsTidy'
-
-function leftoverLivenessOf(name String) returns ScratchStanding
-	return standingOfScratchName(name, family: ScratchFamily.beforeSuffix(PendingBuildMarker))
-end 'leftoverLivenessOf'

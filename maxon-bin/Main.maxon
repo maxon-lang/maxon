@@ -510,14 +510,29 @@ function buildDescribed(described DescribedBuild, args MaxonArgs, voice Manifest
 		defines.push(supplied)
 	end 'eachCommandLineDefine'
 
+	let projectDir = try directoryHoldingFile(described.manifest) otherwise 'noDirectory'
+		printError("error: could not derive the directory holding {reportPathDisplay(described.manifest)}\n")
+
+		return OwnFailureExit
+	end 'noDirectory'
+
+	if reportBreakingChanges(projectDir, onto: ReportStream.standardOutput) == VersionRecordVerdict.refused 'refusedRecord'
+		return OwnFailureExit
+	end 'refusedRecord'
+
 	let outcome = buildAndReport(described.sources, target: target, args: args, outputOverride: outputOverride, debugInfo: manifestWantsDebugInfo and args.debugInfo, productVersion: productVersion, defines: defines)
+
+	match outcome 'outcome'
+		built then recordCompilerRelease(projectDir)
+		failed then break
+	end 'outcome'
 
 	// An up-to-date output is repeated too: a second stage builds its own running image and keeps no
 	// record, so a record that still matches means the second stage never ran over this output.
-	return match outcome 'outcome'
+	return match outcome 'repeated'
 		built(written) gives repeatedWithOutput(written, target: target) if described.rebuildWithOutput else SucceededExit
 		failed(code) gives code
-	end 'outcome'
+	end 'repeated'
 end 'buildDescribed'
 
 // Called after `buildAndReport` has released the tree lock and the output's build lock, which the second

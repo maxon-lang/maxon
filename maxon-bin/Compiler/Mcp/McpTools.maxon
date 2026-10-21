@@ -568,6 +568,75 @@ export function executeInfoTool(reqDoc JsonDoc, idNode JsonNodeId, exePath FileP
 	return toolResultText(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: false)
 end 'executeInfoTool'
 
+export function executeBreakingChangesTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode) returns String
+	let pathArg = requiredStringArg(reqDoc, args: args, key: "path")
+
+	let path = try FilePath.from(pathArg) otherwise return toolErrorText(reqDoc, idNode: idNode, message: "`{pathArg}` is not a valid filesystem path", repoRoot: ActingTree.host)
+
+	if not Directory.isDirectory(path) and not File.exists(path) 'nothingThere'
+		return toolErrorText(reqDoc, idNode: idNode, message: "no such file or directory: {pathArg}", repoRoot: ActingTree.host)
+	end 'nothingThere'
+
+	if let since = try statedStringArg(reqDoc, args: args, key: "since") 'sinceGiven'
+		let rank = try ReleaseRank.ofRelease(since) otherwise (e) 'notARelease'
+			return toolErrorText(reqDoc, idNode: idNode, message: "`since` is '{since}', which is not a release version: {productVersionProblem(e)}", repoRoot: ActingTree.host)
+		end 'notARelease'
+
+		return breakingChangesReply(reqDoc, idNode: idNode, recorded: RecordedRelease.recorded(since, rank: rank))
+	end 'sinceGiven'
+
+	let projectDir = try projectDirectoryNamedBy(path) otherwise return toolErrorText(reqDoc, idNode: idNode, message: "no `{ProjectFileExtension}` file is in the directory holding {pathArg} or above it, so it belongs to no project", repoRoot: ActingTree.host)
+
+	let recorded = try recordedReleaseOf(projectDir) otherwise (e) 'unusable'
+		return toolErrorText(reqDoc, idNode: idNode, message: e.sentence(), repoRoot: ActingTree.host)
+	end 'unusable'
+
+	return breakingChangesReply(reqDoc, idNode: idNode, recorded: recorded)
+end 'executeBreakingChangesTool'
+
+function projectDirectoryNamedBy(path FilePath) returns FilePath throws AbsentError
+	if Directory.isDirectory(path) 'aDirectory'
+		return path
+	end 'aDirectory'
+
+	let startDirectory = try directoryHoldingFile(path) otherwise throw AbsentError.absent
+
+	match nearestProjectFile(startDirectory, ceiling: ProjectClimbCeiling.none) 'manifest'
+		found(manifest) then return try directoryHoldingFile(manifest) otherwise throw AbsentError.absent
+		none then throw AbsentError.absent
+	end 'manifest'
+end 'projectDirectoryNamedBy'
+
+function breakingChangesReply(reqDoc JsonDoc, idNode JsonNodeId, recorded RecordedRelease) returns String
+	var doc = JsonDoc.create()
+	var payload = JsonObjectBuilder.create()
+	payload.addBool(doc, key: "success", value: true)
+
+	match recorded 'standing'
+		recorded(text, _) then payload.addString(doc, key: "recordedVersion", value: text)
+		absent then break
+	end 'standing'
+
+	payload.addString(doc, key: "compilerVersion", value: CompilerVersion)
+	payload.addNode("changes", node: breakingChangeArray(doc, changes: changesSince(recorded)))
+
+	return toolResultText(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: false)
+end 'breakingChangesReply'
+
+function breakingChangeArray(doc JsonDoc, changes BreakingChangeArray) returns JsonNodeId
+	var ids = JsonNodeIdArray.create()
+
+	for change in changes 'eachChange'
+		var entry = JsonObjectBuilder.create()
+		entry.addString(doc, key: "version", value: change.version)
+		entry.addString(doc, key: "change", value: change.change)
+		entry.addString(doc, key: "fix", value: change.fix)
+		ids.push(entry.build(doc))
+	end 'eachChange'
+
+	return doc.add(JsonNode.arrayNode(ids))
+end 'breakingChangeArray'
+
 // =============================================================================
 // Contributor tools
 // =============================================================================

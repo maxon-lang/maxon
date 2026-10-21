@@ -179,17 +179,17 @@ else
 	check_detail "$work/curl.err"
 fi
 
-# The site's changelog page carries every release, so this release's own number appearing in it is
+# The site's release notes page carries every release, so this release's own number appearing in it is
 # what says the deploy built from the tag rather than from something older.
-changelog_url="$SiteUrl/docs/changelog/"
-changelog_status="$(http_status_into "$changelog_url" "$work/changelog.html")"
-if [ "$changelog_status" != 200 ]; then
-	check_fail changelog-page "$changelog_url returns $changelog_status"
+release_notes_url="$SiteUrl/docs/release-notes/"
+release_notes_status="$(http_status_into "$release_notes_url" "$work/release-notes.html")"
+if [ "$release_notes_status" != 200 ]; then
+	check_fail release-notes-page "$release_notes_url returns $release_notes_status"
 	check_detail "$work/curl.err"
-elif grep -F -- "$version" "$work/changelog.html" >/dev/null; then
-	check_pass changelog-page "$changelog_url names $version"
+elif grep -F -- "$version" "$work/release-notes.html" >/dev/null; then
+	check_pass release-notes-page "$release_notes_url names $version"
 else
-	check_fail changelog-page "$changelog_url is served but does not name $version — it was built before the tag"
+	check_fail release-notes-page "$release_notes_url is served but does not name $version — it was built before the tag"
 fi
 
 # ⛔ **THE SERVED INSTALLERS PROVE THE DEPLOY HAPPENED, AND NOTHING ELSE DOES.** `maxon upgrade` fetches
