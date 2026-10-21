@@ -61,6 +61,60 @@ end 'main'
 118
 ```
 
+<!-- test: file-private-same-name-same-directory-through-a-generic-instance -->
+Two files of ONE directory each declare a file-private `limit`, `tag` and `var calls`. A generic type
+declared in `a.maxon` has a method that reads them, and `main.maxon` instantiates it and calls that method
+from beside its own three declarations of the same names. The method reads `a.maxon`'s declarations
+whichever file instantiated it or called it, and bumps `a.maxon`'s `calls`, never `main.maxon`'s.
+
+The answers are distinct on purpose: `weighA` is `5 + 2 + 3`, and the method's second call is
+`5 + 3 + 3`, so reading `main.maxon`'s `limit` or `tag` or bumping its `calls` changes the total.
+```maxon
+// --- file: a.maxon
+let limit = 5
+let tag = b"AAA"
+var calls = 1 as Count
+
+export type Box uses T
+	export var value as T
+
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+
+	export function weigh() returns Count
+		calls = calls + 1
+		return limit + calls + tag.count()
+	end 'weigh'
+end 'Box'
+
+export typealias CountBox = Box with Count
+
+export function weighA() returns Count
+	let box = CountBox.create(1)
+	return box.weigh()
+end 'weighA'
+
+// --- file: main.maxon
+let limit = 70
+let tag = b"BBBBBB"
+var calls = 500 as Count
+
+function weighMain() returns Count
+	let box = CountBox.create(2)
+	calls = calls + 1
+	return box.weigh() + limit + calls + tag.count()
+end 'weighMain'
+
+function main() returns ExitCode
+	print("{weighA()} {weighMain()}\n")
+	return 0
+end 'main'
+```
+```stdout
+10 588
+```
+
 
 <!-- test: error.exported-global-in-two-directories -->
 The INVERSE of the rule above, and the reason that rule needs the word "file-private". An

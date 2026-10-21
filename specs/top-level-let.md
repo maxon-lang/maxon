@@ -364,6 +364,76 @@ end 'main'
 92
 ```
 
+<!-- test: file-private-same-name-same-directory-every-kind -->
+Three files of ONE directory each declare file-private `let`s of the same names, of every kind a `let`
+can be: a number, a constant derived from it, a `String`, a byte string, an array and a record built by a
+factory. Each file's reads, in its own functions, resolve to its OWN declaration; the file that
+declares nothing but `main` reads the third pair of declarations. The order the files arrive in does not
+change an answer.
+```maxon
+// --- file: a.maxon
+let base = 5
+let derived = base * 2
+let name = "first"
+let label = b"alpha"
+let table = [base, derived, 3]
+let anchor = Tag.create(base)
+
+type Tag
+	var weight as Count
+
+	static function create(weight Count) returns Self
+		return Self{weight: weight}
+	end 'create'
+
+	function value() returns Count
+		return self.weight
+	end 'value'
+end 'Tag'
+
+export function describeA() returns String
+	return "{name} {String.from(label)} {derived} {table.count()} {anchor.value()}"
+end 'describeA'
+
+// --- file: b.maxon
+let base = 7
+let derived = base * 3
+let name = "second"
+let label = b"beta"
+let table = [base, derived, 3, 4]
+let anchor = Pin.create(base)
+
+type Pin
+	var weight as Count
+
+	static function create(weight Count) returns Self
+		return Self{weight: weight}
+	end 'create'
+
+	function value() returns Count
+		return self.weight
+	end 'value'
+end 'Pin'
+
+export function describeB() returns String
+	return "{name} {String.from(label)} {derived} {table.count()} {anchor.value()}"
+end 'describeB'
+
+// --- file: main.maxon
+let base = 11
+let name = "third"
+
+function main() returns ExitCode
+	print("{describeA()}\n{describeB()}\n{name} {base}\n")
+	return 0
+end 'main'
+```
+```stdout
+first alpha 10 3 5
+second beta 21 4 7
+third 11
+```
+
 <!-- test: from-literal-initializer -->
 Top-level let with `Type from "literal"` syntax (runtime-initialized via `__module_init`).
 ```maxon

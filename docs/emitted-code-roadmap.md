@@ -652,11 +652,9 @@ stage-2 self-compile.
 `emitStrideDispatch`'s two constants now come out of `singleOpStrideBytes` too, so the two stamps are
 written ONCE and the compile-time answer cannot disagree with the runtime compares it replaces.
 
-⛔ **A LABEL COLLISION WAS FOUND AND THE UNDERLYING DEFECT IS NOT FIXED.** `InlineManagedPrimitives` and
-`InlineLeaves` each declared a file-level `let InlineContLabel` / `InlineSlowLabel`, and the compiler resolved
-both files to ONE of them: this pass had been emitting `__il_cont` / `__il_slow` — measured on a program
-whose log reads `inlineLeaves: 0 site(s) inlined`. Renamed here; **the compiler silently unifying two
-same-named non-`export` file-level `let`s in different files is a separate rung.**
+Two same-named non-`export` file-level `let`s in different files each resolve to their own declaration, so
+this pass's labels and `InlineLeaves`' cannot collide;
+`top-level-let/file-private-same-name-same-directory-every-kind` pins it.
 
 **Left open**: the byte arm above; block REORDERING, whose clearest exhibit this loop was and no longer is;
 and the type/layout incoherence itself — a container declared over a type parameter genuinely has a
