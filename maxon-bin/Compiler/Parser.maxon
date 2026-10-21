@@ -13468,19 +13468,6 @@ end 'PromiseConsumeRecord'
 
 typealias PromiseConsumeRecordArray = Array with readonly PromiseConsumeRecord
 
-typealias LoopNesting = int(0 to u64.max)
-
-type PromiseSlotRead
-	export let value as ValueId
-	export let loopNesting as LoopNesting
-
-	static function create(value ValueId, loopNesting LoopNesting) returns PromiseSlotRead
-		return Self{value: value, loopNesting: loopNesting}
-	end 'create'
-end 'PromiseSlotRead'
-
-typealias PromiseSlotReadArray = Array with PromiseSlotRead
-
 // ⭐⭐ **ONE ENUM-ACCESSOR READ, the fact E3097 is decided from.** Keyed on the accessor result's own
 // `ValueId` and never on a NAME — that value IS the read's identity, and a `let o = c.ordinal` binds it
 // verbatim, so one record answers for the read and for every name of it at once. `PromiseConsumeRecord`
@@ -18333,11 +18320,10 @@ type FunctionBodyState
 	// columns are set. Retiring the siblings of a consumed slot walks this instead of the dense per-value
 	// column, which is asked once per consume and would otherwise be quadratic in a body's SSA values.
 	//
-	// ⛔ **NOTHING IS EVER REMOVED FROM IT.** An entry carries the read's loop nesting, which the vacate
-	// still needs after the read has been retired, and a compaction keyed on a path-sensitive fact could not
-	// be rewound at a join. Recreated — never cleared in place — at each per-body reset, because a closure
+	// ⛔ **NOTHING IS EVER REMOVED FROM IT.** A compaction keyed on a path-sensitive fact could not be
+	// rewound at a join. Recreated — never cleared in place — at each per-body reset, because a closure
 	// body saves and restores the enclosing body's array.
-	export var promiseSlotCarriers as PromiseSlotReadArray
+	export var promiseSlotCarriers as ValueIdArray
 
 	// ⭐⭐ **WHICH VALUES WEAR A RANGED ALIAS NOTHING PROVED THEY SATISFY** — the column that stops a
 	// DECLARED type being read as a statement about a value's RANGE. Same lockstep as `valuePromiseMarks`:
@@ -19046,7 +19032,7 @@ type FunctionBodyState
 			promiseSlotContainer: ValueIdArray.create(),
 			promiseSlotIndex: ValueIdArray.create(),
 			promiseSlotIsAField: BoolArray.create(),
-			promiseSlotCarriers: PromiseSlotReadArray.create(),
+			promiseSlotCarriers: ValueIdArray.create(),
 			aliasUnprovenMarks: BoolArray.create(),
 			valueWitnessIds: ValueIdArray.create(),
 			inMatchArmBody: false,
@@ -51696,18 +51682,8 @@ export type Parser
 		try self.bodyState.promiseSlotContainer.set(value, value: container) otherwise panic("recordConsumablePromiseSlot: v{value} has no promise-slot entry — every SSA value must be minted through mintValue, which seeds the columns")
 		try self.bodyState.promiseSlotIndex.set(value, value: index) otherwise panic("recordConsumablePromiseSlot: v{value} has no promise-slot index entry — every SSA value must be minted through mintValue, which seeds the columns")
 		try self.bodyState.promiseSlotIsAField.set(value, value: isField) otherwise panic("recordConsumablePromiseSlot: v{value} has no promise-slot kind entry — every SSA value must be minted through mintValue, which seeds the columns")
-		self.bodyState.promiseSlotCarriers.push(PromiseSlotRead.create(value, loopNesting: self.bodyState.loops.count() as LoopNesting))
+		self.bodyState.promiseSlotCarriers.push(value)
 	end 'recordConsumablePromiseSlot'
-
-	function promiseSlotReadNesting(value ValueId) returns LoopNesting
-		for read in self.bodyState.promiseSlotCarriers 'eachRead'
-			if read.value == value 'thisRead'
-				return read.loopNesting
-			end 'thisRead'
-		end 'eachRead'
-
-		panic("promiseSlotReadNesting: v{value} is not in promiseSlotCarriers — every value whose slot columns are set was pushed there by `recordConsumablePromiseSlot`, and nothing removes an entry")
-	end 'promiseSlotReadNesting'
 
 	// Does this value still name a container slot it was read out of, and not yet vacated? NOT-SET is the
 	// value's own id — see the columns' header.
@@ -51827,7 +51803,7 @@ export type Parser
 		var reads = ValueIdArray.create()
 
 		for position in 0 upto self.bodyState.promiseSlotCarriers.count() 'eachCarrier'
-			let other = (try self.bodyState.promiseSlotCarriers.get(position) otherwise panic("pendingReadsOfSlot: promiseSlotCarriers.get OOB at {position} on a walk bounded by its own count")).value
+			let other = try self.bodyState.promiseSlotCarriers.get(position) otherwise panic("pendingReadsOfSlot: promiseSlotCarriers.get OOB at {position} on a walk bounded by its own count")
 
 			let otherContainer = try self.carriedContainerSlotOf(other) otherwise continue
 			let otherIndex = try self.bodyState.promiseSlotIndex.get(other) otherwise panic("pendingReadsOfSlot: the slot columns move in lockstep")

@@ -1891,6 +1891,338 @@ end 'main'
 error E3102: <fragment>:22:14: use of moved value 'p': it was moved in an earlier iteration of this loop
 ```
 
+<!-- test: async-promise-drop.error.a-slot-read-awaited-inside-a-nested-loop-it-was-read-outside -->
+A slot read taken in the OUTER loop's body and awaited in the INNER loop is spent by the inner loop's first
+trip, so the inner loop's back edge is the refusal, exactly as for a read taken outside every loop.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+function main() returns ExitCode
+	var a = IntPromiseArray.create()
+	a.push(async plain(7))
+	a.push(async plain(8))
+
+	var acc = 0 as Integer
+	var i = 0 as Integer
+
+	while i < 2 'outer'
+		let p = try a.get(i as ElementIndex) otherwise panic("in range")
+		var j = 0 as Integer
+
+		while j < 2 'inner'
+			acc = acc + (await p)
+			j = j + 1
+		end 'inner'
+
+		i = i + 1
+	end 'outer'
+
+	return acc as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3100: <fragment>:24:17: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
+```
+
+<!-- test: async-promise-drop.error.a-slot-read-stored-inside-a-nested-loop-it-was-read-outside -->
+The store twin of the case above: the inner loop stores the outer body's slot read on every trip, so its
+second trip reads a value the first moved.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+function main() returns ExitCode
+	var a = IntPromiseArray.create()
+	a.push(async plain(7))
+	a.push(async plain(8))
+
+	var b = IntPromiseArray.create()
+	var i = 0 as Integer
+
+	while i < 2 'outer'
+		let p = try a.get(i as ElementIndex) otherwise panic("in range")
+		var j = 0 as Integer
+
+		while j < 2 'inner'
+			b.push(p)
+			j = j + 1
+		end 'inner'
+
+		i = i + 1
+	end 'outer'
+
+	return b.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:24:11: use of moved value 'p': it was moved in an earlier iteration of this loop
+```
+
+<!-- test: async-promise-drop.a-get-awaited-at-one-index-every-iteration-aborts -->
+A `get(0)` INSIDE the loop is a fresh read on every trip, so the compiler has no name that was moved twice; the
+first trip's await empties the slot and the second trip's read finds it empty at run time, which aborts with
+**118** (`RuntimeAbort.promiseSlotConsumedTwice`) before anything is awaited, reclaimed or leaked.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+function main() returns ExitCode
+	var a = IntPromiseArray.create()
+	a.push(async plain(7))
+
+	var acc = 0 as Integer
+	var i = 0 as Integer
+
+	while i < 2 'loop'
+		let p = try a.get(0) otherwise panic("has one")
+		acc = acc + (await p)
+		i = i + 1
+	end 'loop'
+
+	return acc as ExitCode
+end 'main'
+```
+```exitcode
+118
+```
+```stderr
+fatal error: runtime abort 118 (promiseSlotConsumedTwice)
+```
+
+<!-- test: async-promise-drop.a-get-stored-at-one-index-every-iteration-aborts -->
+The store twin of the case above: the first trip moves the thread into `b` and empties `a`'s slot, so the second
+trip's read of it aborts with **118** rather than storing a second reference to one thread.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+function main() returns ExitCode
+	var a = IntPromiseArray.create()
+	a.push(async plain(7))
+
+	var b = IntPromiseArray.create()
+	var i = 0 as Integer
+
+	while i < 2 'loop'
+		b.push(try a.get(0) otherwise panic("has one"))
+		i = i + 1
+	end 'loop'
+
+	return b.count() as ExitCode
+end 'main'
+```
+```exitcode
+118
+```
+```stderr
+fatal error: runtime abort 118 (promiseSlotConsumedTwice)
+```
+
+<!-- test: async-promise-drop.a-field-awaited-every-iteration-aborts -->
+A field read inside the loop is a fresh read of the same slot on every trip, so the second trip's await finds the
+field emptied by the first and aborts with **118**.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+type Holder
+	public var p as IntPromise
+
+	static function of(p IntPromise) returns Holder
+		return Holder{p: p}
+	end 'of'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.of(async plain(7))
+
+	var acc = 0 as Integer
+	var i = 0 as Integer
+
+	while i < 2 'loop'
+		acc = acc + (await h.p)
+		i = i + 1
+	end 'loop'
+
+	return acc as ExitCode
+end 'main'
+```
+```exitcode
+118
+```
+```stderr
+fatal error: runtime abort 118 (promiseSlotConsumedTwice)
+```
+
+<!-- test: async-promise-drop.a-field-stored-every-iteration-aborts -->
+The store twin of the case above: the second trip's read of the emptied field aborts with **118**.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+type Holder
+	public var p as IntPromise
+
+	static function of(p IntPromise) returns Holder
+		return Holder{p: p}
+	end 'of'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.of(async plain(7))
+
+	var b = IntPromiseArray.create()
+	var i = 0 as Integer
+
+	while i < 2 'loop'
+		b.push(h.p)
+		i = i + 1
+	end 'loop'
+
+	return b.count() as ExitCode
+end 'main'
+```
+```exitcode
+118
+```
+```stderr
+fatal error: runtime abort 118 (promiseSlotConsumedTwice)
+```
+
+<!-- test: async-promise-drop.a-slot-rearmed-between-moves-in-a-loop-answers-every-trip -->
+**CONTROL for the four aborts above.** A slot written again between two moves holds a NEW thread, so a loop that
+awaits `a.get(0)` and an array slot, and a field, and re-arms each before the next trip, answers every trip:
+(1 + 10) + (1 + 10) + (2 + 10) = 34.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+type Holder
+	public var p as IntPromise
+
+	static function of(p IntPromise) returns Holder
+		return Holder{p: p}
+	end 'of'
+end 'Holder'
+
+function main() returns ExitCode
+	var a = IntPromiseArray.create()
+	a.push(async plain(1))
+
+	var h = Holder.of(async plain(10))
+
+	var acc = 0 as Integer
+	var i = 0 as Integer
+
+	while i < 3 'loop'
+		let p = try a.get(0) otherwise panic("has one")
+		acc = acc + (await p)
+		try a.set(0, value: async plain(1 + i)) otherwise panic("in range")
+
+		acc = acc + (await h.p)
+		h.p = async plain(10)
+
+		i = i + 1
+	end 'loop'
+
+	return acc as ExitCode
+end 'main'
+```
+```exitcode
+34
+```
+
+<!-- test: async-promise-drop.a-distinct-slot-moved-on-every-nested-iteration-answers-every-trip -->
+**CONTROL.** A nested loop whose inner body reads a DIFFERENT slot on every trip, and both awaits it and
+hands another on, moves every thread exactly once: 7 + 8 + 9 + 10 awaited, four more handed to `b`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+function main() returns ExitCode
+	var a = IntPromiseArray.create()
+	var seed = 0 as Integer
+
+	while seed < 8 'fill'
+		a.push(async plain(7 + seed))
+		seed = seed + 1
+	end 'fill'
+
+	var b = IntPromiseArray.create()
+	var acc = 0 as Integer
+	var i = 0 as Integer
+
+	while i < 2 'outer'
+		var j = 0 as Integer
+
+		while j < 2 'inner'
+			let slot = i * 2 + j
+			let p = try a.get(slot as ElementIndex) otherwise panic("in range")
+			acc = acc + (await p)
+
+			let q = try a.get((slot + 4) as ElementIndex) otherwise panic("in range")
+			b.push(q)
+			j = j + 1
+		end 'inner'
+
+		i = i + 1
+	end 'outer'
+
+	return (acc + (b.count() as Integer)) as ExitCode
+end 'main'
+```
+```exitcode
+38
+```
+
 <!-- test: async-promise-drop.a-returned-spawn-is-the-callers-to-await -->
 ⭐⭐ **A `return` HANDS THE GREEN THREAD TO THE CALLER, SO THE CALLEE'S EXIT MUST NOT DROP IT.** The spawn is
 the callee's pending temporary until the `return` moves it out, exactly as a returned heap value leaves the
