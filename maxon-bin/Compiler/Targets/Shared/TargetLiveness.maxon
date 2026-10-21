@@ -1746,7 +1746,7 @@ function checkCondBranchIndex(module TargetModule, block IrBlock, funcName ByteA
 	for opIdx in block.bodyOps() 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("checkCondBranchIndex: opIdx {opIdx} not in module.ops")
 
-		if opIsCondBranch(op) 'isCond'
+		if opControlRole(op) == OpControlRole.condBranch 'isCond'
 			seen = seen + 1
 			seenIdx = opIdx
 		end 'isCond'
@@ -1778,12 +1778,16 @@ function checkCondBranchIndex(module TargetModule, block IrBlock, funcName ByteA
 	end 'noBranchTerminator'
 end 'checkCondBranchIndex'
 
-function opIsCondBranch(op TargetOp) returns bool
+enum OpControlRole
+	plain
+	condBranch
+	blockEnd
+end 'OpControlRole'
+
+function opControlRole(op TargetOp) returns OpControlRole
 	return match op 'check'
 		prologue or
 		epilogue or
-		ret or
-		jmp or
 		movRegImm or
 		movRegImm32 or
 		movRegReg or
@@ -1839,8 +1843,6 @@ function opIsCondBranch(op TargetOp) returns bool
 		minMaxSdRegReg or
 		movqXmmGpr or
 		negF64RegReg or
-		arm64Ret or
-		arm64Branch or
 		arm64MovImm or
 		arm64Prologue or
 		arm64Epilogue or
@@ -1892,8 +1894,6 @@ function opIsCondBranch(op TargetOp) returns bool
 		leaRegFunc or
 		callReg or
 		x64Syscall or
-		x64JumpTable or
-		arm64JumpTable or
 		callMem or
 		arm64StoreOutgoingArg or
 		arm64LoadIncomingArg or
@@ -1921,13 +1921,19 @@ function opIsCondBranch(op TargetOp) returns bool
 		arm64Mulh or
 		covInc or
 		x64AluBaseDispReg or
-		x64AluBaseDispImm32 gives false
+		x64AluBaseDispImm32 gives OpControlRole.plain
 		jcc or
 		arm64CondBranch or
 		arm64Cbz or
-		arm64Cbnz gives true
+		arm64Cbnz gives OpControlRole.condBranch
+		ret or
+		jmp or
+		arm64Ret or
+		arm64Branch or
+		x64JumpTable or
+		arm64JumpTable gives OpControlRole.blockEnd
 	end 'check'
-end 'opIsCondBranch'
+end 'opControlRole'
 
 // The one roster for "where does this block's terminator send control?" — the successor walk, the
 // frame passes (`terminatorReturns`) and `BranchCleanup` all ask it, and none may restate the arm
@@ -5190,7 +5196,8 @@ end 'confiningImplicitDefsOf'
 // register the NEXT capture reads — and opens none. An op that DEFINES A VIRTUAL and also writes
 // scratch implicitly (`negF64RegReg`'s xmm scratch, the arm64 atomics' x16/x17) is `none`: a value
 // born inside a run would have no save point before it, so such an op is kept out of every run and
-// its scratch stays CONFINING (`opClobberMask`). `buf` must already hold `op`'s operands.
+// its scratch stays CONFINING (`opClobberMask`). So is an op that ENDS ITS BLOCK (a return, a branch, a
+// jump table): no op follows it for a bracket to protect. `buf` must already hold `op`'s operands.
 export enum ColdRunOpKind
 	none
 	clobber
@@ -5200,6 +5207,10 @@ export enum ColdRunOpKind
 end 'ColdRunOpKind'
 
 export function coldRunOpKind(op TargetOp, buf OperandList, opFacts OpVariantFacts) returns ColdRunOpKind
+	if opFacts.endsBlockOf(op) 'blockEnd'
+		return ColdRunOpKind.none
+	end 'blockEnd'
+
 	if isCaptureMove(op) 'capture'
 		return ColdRunOpKind.capture
 	end 'capture'
@@ -5341,7 +5352,7 @@ export type ColdBlockRuns
 			targetOpOperands(terminator, buf: buf)
 
 			if coldRunOpKind(terminator, buf: buf, opFacts: opFacts) != ColdRunOpKind.none 'aRunOpTerminates'
-				panic("ColdBlockRuns.rebuild: the terminator of cold block '{String.from(block.label)}' is a run op — a terminator reads or writes no register a bracket could save, so every consumer of the runs takes it for `none`")
+				panic("ColdBlockRuns.rebuild: the terminator of cold block '{String.from(block.label)}' is a run op — a terminator ends the block and no op follows it for a bracket to protect, so every consumer of the runs takes it for `none`")
 			end 'aRunOpTerminates'
 		end 'terminated'
 	end 'rebuild'
@@ -6025,6 +6036,7 @@ export type OpVariantFacts
 	var implicitUses as RegMaskColumn
 	var slotRole as OpSlotRoleColumn
 	var isCall as BoolArray
+	var endsBlock as BoolArray
 
 	// Has this variant been seen? A parallel flag rather than an out-of-band value in the columns
 	// above: 0 is a legitimate implicit mask (every op but a call and `idiv` has one), so no mask can
@@ -6032,12 +6044,13 @@ export type OpVariantFacts
 	var known as BoolArray
 
 	export static function create() returns OpVariantFacts
-		var facts = Self{implicitDefs: RegMaskColumn.create(), implicitUses: RegMaskColumn.create(), slotRole: OpSlotRoleColumn.create(), isCall: BoolArray.create(), known: BoolArray.create()}
+		var facts = Self{implicitDefs: RegMaskColumn.create(), implicitUses: RegMaskColumn.create(), slotRole: OpSlotRoleColumn.create(), isCall: BoolArray.create(), endsBlock: BoolArray.create(), known: BoolArray.create()}
 		let variantCount = TargetOp.unionCases.allCases.count()
 		facts.implicitDefs.growFilled(variantCount, value: 0)
 		facts.implicitUses.growFilled(variantCount, value: 0)
 		facts.slotRole.growFilled(variantCount, value: OpSlotRole.touchesNoSlot)
 		facts.isCall.growFilled(variantCount, value: false)
+		facts.endsBlock.growFilled(variantCount, value: false)
 		facts.known.growFilled(variantCount, value: false)
 		return facts
 	end 'create'
@@ -6053,6 +6066,12 @@ export type OpVariantFacts
 	export function isCallOf(op TargetOp) returns bool
 		return try self.isCall.get(self.learn(op)) otherwise panic("OpVariantFacts.isCallOf: isCall.get OOB — `create` sizes every column to the whole union")
 	end 'isCallOf'
+
+	// Does `op` end its block (a branch, a jump table or a return)? Nothing follows it in the block, so
+	// what it writes implicitly is no run op's clobber.
+	export function endsBlockOf(op TargetOp) returns bool
+		return try self.endsBlock.get(self.learn(op)) otherwise panic("OpVariantFacts.endsBlockOf: endsBlock.get OOB — `create` sizes every column to the whole union")
+	end 'endsBlockOf'
 
 	// Registers `op` READS without naming them as an explicit operand — `ret`'s R8, an `idiv`'s
 	// RAX/RDX; 0 for every other op.
@@ -6084,11 +6103,12 @@ export type OpVariantFacts
 		try self.implicitUses.set(variant, value: op.rawValue.implicitUses) otherwise panic("OpVariantFacts.learn: implicitUses.set OOB at variant {variant}")
 		try self.slotRole.set(variant, value: deriveSlotRole(op)) otherwise panic("OpVariantFacts.learn: slotRole.set OOB at variant {variant}")
 		try self.isCall.set(variant, value: op.rawValue.isCall) otherwise panic("OpVariantFacts.learn: isCall.set OOB at variant {variant}")
+		try self.endsBlock.set(variant, value: opControlRole(op) == OpControlRole.blockEnd) otherwise panic("OpVariantFacts.learn: endsBlock.set OOB at variant {variant}")
 		try self.known.set(variant, value: true) otherwise panic("OpVariantFacts.learn: known.set OOB at variant {variant}")
 		return variant
 	end 'learn'
 
-	// VERIFY MODE's whole body: re-derive all four facts from the op in hand and compare them against
+	// VERIFY MODE's whole body: re-derive all five facts from the op in hand and compare them against
 	// what this variant's entry holds. See `VerifyOpVariantFacts`.
 	function verifyAgainst(op TargetOp, variant TargetOpVariant)
 		requireMaskUnchanged(try self.implicitDefs.get(variant) otherwise panic("OpVariantFacts.verifyAgainst: implicitDefs.get OOB at variant {variant}"), reread: op.rawValue.implicitDefs, field: "implicitDefs", variant: variant)
@@ -6099,6 +6119,12 @@ export type OpVariantFacts
 		if memoCall != op.rawValue.isCall 'callDiverged'
 			panic("OpVariantFacts: variant {variant} memoized isCall {memoCall} but this op reads {op.rawValue.isCall} — the memo's premise is that a variant's metadata is a property of the CASE, and it is not")
 		end 'callDiverged'
+
+		let memoEnds = try self.endsBlock.get(variant) otherwise panic("OpVariantFacts.verifyAgainst: endsBlock.get OOB at variant {variant}")
+
+		if memoEnds != (opControlRole(op) == OpControlRole.blockEnd) 'endsDiverged'
+			panic("OpVariantFacts: variant {variant} memoized endsBlock {memoEnds} but this op classifies otherwise — `opControlRole` must read the op's CASE and never its payload")
+		end 'endsDiverged'
 
 		let memoRole = try self.slotRole.get(variant) otherwise panic("OpVariantFacts.verifyAgainst: slotRole.get OOB at variant {variant}")
 		let rederivedRole = deriveSlotRole(op)
@@ -6122,7 +6148,7 @@ end 'requireMaskUnchanged'
 // from the op it was asked about and compared, on every lookup; a divergence PANICS at the op that
 // caused it.
 //
-// It exists because the memo rests on ONE premise — that these four facts depend on an op's CASE and
+// It exists because the memo rests on ONE premise — that these five facts depend on an op's CASE and
 // on nothing else — and a premise that fails does not fail a test. A variant whose real clobber mask
 // differed from the first instance's would hand a value a caller-saved register across a call, and the
 // program would miscompile silently, in a way no spec test is obliged to notice. The premise is

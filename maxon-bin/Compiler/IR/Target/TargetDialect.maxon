@@ -437,9 +437,10 @@ export union TargetOp
 	// r8, retval` return move. (A union-backing literal cannot reference a named
 	// `let`, so the mask is written inline.)
 	//
-	// implicitDefs stays 0 although an `indirectJump` return writes rax: a clobbering terminator would be
-	// a cold-block run op, which `ColdBlockRuns.rebuild` refuses, and nothing is live after a return.
-	ret(transfer ReturnTransfer) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0x100, implicitDefs: 0}
+	// implicitDefs = 0x1 = the rax bit: the `indirectJump` form is `pop rax; jmp rax`. Metadata is per case,
+	// so the `returnInstruction` form, which writes nothing, declares it too. Held equal to
+	// `x64ReturnScratchMask()` by `assertEncoderScratchMasks`.
+	ret(transfer ReturnTransfer) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0x100, implicitDefs: 0x1}
 
 	// Unconditional near jump to a block (`jmp rel32`, 0xE9). `targetBlockId` names a
 	// function-local block; emitFunctionChunk resolves it to a chunk-local rel32 (a

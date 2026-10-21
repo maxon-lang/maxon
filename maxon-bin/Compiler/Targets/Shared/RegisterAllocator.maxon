@@ -803,10 +803,10 @@ function assertArm64CallClobbers(pool RegMask)
 end 'assertArm64CallClobbers'
 
 // ⭐⭐ **EVERY MACRO-OP WHOSE ENCODER WRITES FIXED REGISTERS, AGAINST THE `implicitDefs` LITERAL THAT
-// IS WHAT KEEPS A LIVE VALUE OUT OF THEM.** Five families answer here — the jump tables (r10/r11 on
+// IS WHAT KEEPS A LIVE VALUE OUT OF THEM.** Six families answer here — the jump tables (r10/r11 on
 // x64, x16/x17 on arm64), the byte-fill ladders (rax/rcx/rdx/rdi, x0..x3), the arm64 atomics
-// (x16/x17), the x64 f64 negate's mask register (xmm5) and the x64 unsigned int → f64 sequence
-// (r11) — and they share ONE guard because they share one hazard, stated once: the inline
+// (x16/x17), the x64 f64 negate's mask register (xmm5), the x64 unsigned int → f64 sequence
+// (r11) and the indirect-jump return (rax on x64, nothing on arm64) — and they share ONE guard because they share one hazard, stated once: the inline
 // `TargetOpMeta` literal is what `forbidOperandsFromImplicit` and the liveness clobber census read,
 // the ENCODER is what actually writes those registers, and a drift between the two is a silent
 // miscompile — a live value coloured onto a register the encoder then destroys. Two byte-identical
@@ -834,6 +834,7 @@ function assertX64EncoderScratchMasks()
 	// The f64 negate's mask register is ALLOCATABLE (xmm5 is a float argument register), so this is the
 	// fill ladder's case rather than the jump table's: the declaration genuinely reserves it at the op.
 	assertEncoderScratchMask(TargetOp.negF64RegReg(TargetVReg.virtual(0), src: TargetVReg.virtual(0)), name: "negF64RegReg", expected: x64NegF64ScratchMask(), hazard: "the operand, or a value live across the negate, could be colored onto the XMM the sign-mask build clobbers")
+	assertEncoderScratchMask(TargetOp.ret(ReturnTransfer.indirectJump), name: "ret", expected: x64ReturnScratchMask(), hazard: "the return jump would write a register the allocator and the prologue census believe it leaves alone")
 end 'assertX64EncoderScratchMasks'
 
 function assertArm64EncoderScratchMasks()
@@ -845,6 +846,9 @@ function assertArm64EncoderScratchMasks()
 	// the jump table uses, which is why one `let` serves all three.
 	assertEncoderScratchMask(TargetOp.arm64AtomicCas(TargetVReg.virtual(0), addrReg: TargetVReg.virtual(0), expectedReg: TargetVReg.virtual(0), replacementReg: TargetVReg.virtual(0)), name: "arm64AtomicCas", expected: ipPair, hazard: "an operand of the retry loop could be colored onto a register the loop clobbers before its last read")
 	assertEncoderScratchMask(TargetOp.arm64AtomicRmw(TargetVReg.virtual(0), addrReg: TargetVReg.virtual(0), operandReg: TargetVReg.virtual(0), opcode: StdAtomicRmwOpcode.add), name: "arm64AtomicRmw", expected: ipPair, hazard: "an operand of the retry loop could be colored onto a register the loop clobbers before its last read")
+
+	// `br x30` reads the link register and writes none, so the return declares no scratch.
+	assertEncoderScratchMask(TargetOp.arm64Ret(ReturnTransfer.indirectJump), name: "arm64Ret", expected: 0, hazard: "the return jump would write a register the allocator and the prologue census believe it leaves alone")
 end 'assertArm64EncoderScratchMasks'
 
 // `hazard` names what a drift would actually COST, because a union case cannot name itself and a panic
