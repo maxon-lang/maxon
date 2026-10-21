@@ -12,13 +12,14 @@
 // THE ENTRY STUB IS NOT HERE. Unlike arm64 — whose macOS stub terminates through a dyld-bound GOT slot
 // that has no `TargetOp` channel, forcing a hand-assembled chunk in `Arm64Runtime` — the x64-linux exit
 // route IS a `TargetOp` (`x64Syscall`), so the Linux entry stub `mrt_start` is built from `TargetOp`s in
-// `BackendDispatch.prependLinuxEntryStub`, exactly as the Windows stub is. This file holds only the
-// syscall-ABI facts that stub and the three OS-primitive lowerings consult.
+// `BackendDispatch.prependLinuxEntryStub`, exactly as the Windows stub is. This file holds the
+// syscall-ABI facts that stub and the OS-primitive lowerings consult, and the Linux runtime chunks.
 
 // How the x64 backend reaches the OS. ONE door, asked by every OS-primitive lowering
-// (`lowerOsExit`/`lowerOsWriteStdout`/`lowerOsAllocPages` in `StdToX64Conversion`), so those three sites
-// cannot drift on which OSes this backend supports or on how each one gets there. The macho/wasi arms
-// panic because x64 serves neither: macOS dispatches to the arm64 backend, and wasm has no Target tier.
+// (`lowerOsExit`, `lowerOsWriteStream`, `lowerOsAllocPages` and the rest in `StdToX64Conversion`),
+// so those sites cannot drift on which OSes this backend supports or on how each one gets there.
+// The macho/wasi arms panic because x64 serves neither: macOS dispatches to the arm64 backend, and
+// wasm has no Target tier.
 export enum X64OsCallKind
 	// An IAT-indirect import call (`call [rip + disp32]` through an Import Address Table slot the PE
 	// writer binds — `iatCall`). Windows's only route.
@@ -102,7 +103,7 @@ export let X64LinuxSyscallExitGroup = 231
 // backing while keeping the mapping. Both carry the arch prefix for the reason above: they are 215 and 233 on
 // AArch64 (`Arm64Runtime`'s twin block), so an unprefixed name is a collision that silently miscompiles
 // this backend. There is deliberately NO recommit number — a `MADV_DONTNEED`ed page refaults on the next touch,
-// so re-backing one is a Windows-only call (see `lowerOsRecommitPages`).
+// and re-backing a range is `lowerOsCommitPages`, a `MAP_FIXED` `mmap` on this lane.
 export let X64LinuxSyscallMunmap = 11
 export let X64LinuxSyscallMadvise = 28
 

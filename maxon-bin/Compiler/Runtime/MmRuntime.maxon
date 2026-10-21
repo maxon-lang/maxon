@@ -695,7 +695,7 @@ export type ValueMinter
 	end 'nextId'
 end 'ValueMinter'
 
-// Install the runtime into the lowered Std module. Called only when `moduleUsesHeap` held.
+// Install the runtime into the lowered Std module. Called only when `usage.usesHeap` held.
 //
 // The functions are APPENDED, not prepended: only `mrt_start` must lay out first (its `.text`
 // offset is the PE entry point), and that is `augmentWithRuntime`'s job at the Target tier. Order
@@ -808,8 +808,8 @@ end 'twoI64Params'
 
 // One f64 parameter — the synthesized `float.hash(self)`. The f64 sibling of
 // `oneI64Param`, and it exists for `twoF64Params`' reason: the DECLARED f64 is what makes the ABI
-// agree at both ends, `calleeParamClass` routing the argument into an XMM register and `lowerParam`
-// capturing it from one.
+// agree at both ends, `calleeArgFloatMask` routing the argument into an XMM register and
+// `lowerParam` capturing it from one.
 export function oneF64Param() returns StdTypeArray
 	var types = StdTypeArray.create()
 	types.push(StdType.f64)
@@ -818,8 +818,9 @@ end 'oneF64Param'
 
 // Two f64 parameters — the synthesized `float.equals(self, other)` / `float.compare(self, other)`.
 // It joins the i64 family here rather than beside its caller for that family's
-// reason, and the DECLARED f64 is what makes the ABI agree at both ends: `calleeParamClass` reads these
-// types to route each ARGUMENT into an XMM register, and `lowerParam` reads them to capture it from one.
+// reason, and the DECLARED f64 is what makes the ABI agree at both ends: `calleeArgFloatMask` reads
+// these types to route each ARGUMENT into an XMM register, and `lowerParam` reads them to capture
+// it from one.
 export function twoF64Params() returns StdTypeArray
 	var types = StdTypeArray.create()
 	types.push(StdType.f64)
@@ -1361,13 +1362,6 @@ end 'buildStrCopy'
 // ⭐ **THE TWO WORDS A STD-TIER PREDICATE RETURNS — 1 for yes, 0 for no — WRITTEN DOWN ONCE.** They live
 // beside `emitConstReturn` because they are the same fact it is: with no `setcc` at this tier a bool is a
 // returned CONSTANT, and which constant means true is not a property of any one runtime family.
-//
-// ⚠ **THIS WAS FIVE NAMED PAIRS AND TWO PAIRS OF BARE LITERALS, FOR ONE FACT.** `StrPredicateTrue`/`False`,
-// `GraphemeTrue`/`False`, `EqualsTrue`/`False`, `ContainsFound`/`Missing`,
-// and raw `0`/`1` at the hash-table and set `contains` returns. Each copy carried the same argument — that a
-// caller must not read one function's "true" as another's "false" — while being the very thing that could
-// make them disagree. The per-family pairs declined to share only because the HELPER was not shared either;
-// now that it is, the constants ride the same base layer every runtime family already depends on.
 export let PredicateTrue = 1 as FullRangeInt
 export let PredicateFalse = 0 as FullRangeInt
 
@@ -4895,7 +4889,7 @@ export function fourArgs(first ValueId, second ValueId, third ValueId, fourth Va
 	return args
 end 'fourArgs'
 
-// Five positional call arguments — `__gt_subp_yield_read(readEnd, buf, cap, bytesOutPtr, ownsPipe)`.
+// Five positional call arguments — `__mbox_iface_send`'s.
 export function fiveArgs(first ValueId, second ValueId, third ValueId, fourth ValueId, fifth ValueId) returns ValueIdArray
 	var args = ValueIdArray.create()
 	args.push(first)

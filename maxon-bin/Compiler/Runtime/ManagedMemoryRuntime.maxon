@@ -101,8 +101,8 @@ export let NoBufferAllocated = 0 as FullRangeInt
 // CHECKED RATHER THAN HOPED FOR.** A `Byte = int(0 to u8.max)` element is one byte wide by the ranged-alias
 // storage rule (`rangedAliasStorageBytes`), so a `.create()`d array and a literal agree by construction.
 // This constant is also the number the parser's gate compares that rule's answer against
-// (`byteStringBlobStrideMessage`): a program that
-// declares `Byte` WIDER than one byte cannot hold both records at one type, and is refused at the literal.
+// (`Parser.requireBytePackedRecordStridesLikeThisFilesByte`): a program that declares `Byte` WIDER
+// than one byte cannot hold both records at one type, and is refused at the literal.
 // ⚠ **AND THE STRING RECORD'S `element_size@24` IS THE SAME FACT, SO IT READS THIS CONSTANT.** A
 // String IS its `__ManagedMemory with Byte`, so the stride the four String producers stamp — a
 // literal's record, an owned inline record, an interpolation's record and the byte view — is the
@@ -268,8 +268,7 @@ function stringTableBufferBytes(globalData GlobalDataTable, elementLabels String
 end 'stringTableBufferBytes'
 
 // ⭐ **THE ABORT CODES THIS FILE DIVERGES WITH ARE `RuntimeAbort`'s, NOT ITS OWN.** A file-local `let`
-// picked against a file-local list is how two aborts come to share a number — it is what put this
-// file's element-size-zero code and `GtRuntime.ProcStoreOverflowExitCode` both on 70. The registry is
+// picked against a file-local list is how two aborts come to share a number. The registry is
 // one declaration site whose duplicate check is the language's (an enum's raw values must be distinct
 // — E3031), so a collision cannot survive a build. Four aborts live here, each stopping an operation that must never proceed:
 //
@@ -286,8 +285,9 @@ end 'stringTableBufferBytes'
 //     bytes across a seam where they do not OVER-READS the narrower source and splices garbage in.
 //     ⚠ **IT IS A LAST RESORT**: a byte-string literal and a `.create()`d `Array with Byte` both
 //     stride 1, and a program whose `Byte` is WIDER than one byte is refused at the literal
-//     (`Parser.byteStringBlobStrideMessage`), so no front-end rule lets a stamp divergence reach
-//     it. An element-wise WIDENING append across differing strides is a distinct mechanism.
+//     (`Parser.requireBytePackedRecordStridesLikeThisFilesByte`), so no front-end rule lets a stamp
+//     divergence reach it. An element-wise WIDENING append across differing strides is a distinct
+//     mechanism.
 //   * `arrayNegativeResize` — the one with a contract argument behind it, immediately below.
 
 // `arrayNegativeResize` — `__managed_resize` asked for a NEGATIVE length. A length is a count, so a
@@ -438,7 +438,7 @@ export let ManagedDecrefName = b"__managed_decref"
 // managed cases).
 //
 // ⚖ **`append` IS NON-THROWING ON THE `__ManagedMemory` SURFACE TOO, AND THIS ENTRY SERVES BOTH.** It is the
-// ONE mm mutator with no `throwsType`, where `set`/`grow`/`setByte`/`slice` all carry `mmErr`. The
+// ONE mm mutator with no `throwsTypeName`, where `set`/`grow`/`setByte`/`slice` all carry one. The
 // `try a.append(b) otherwise …` in `specs/managed-memory-builtin.md` is not evidence against that: that file
 // is `status: selfhosted`, a lane that merely TOLERATES a redundant `try` where the compiler refuses one (E3055).
 //
@@ -526,9 +526,9 @@ export let ManagedIncrefName = b"__managed_incref"
 // 0 slot (a trivial instantiation — a scalar element byte-copies correctly, or a non-copied managed element
 // whose base the front end rejected) routes to the trivial `__managed_{slice,append}` (the COW/block-copy); a
 // non-zero slot (a managed instantiation) routes to the α `__managed_{slice,append}_managed` with the
-// descriptor's cloner as `elemCloneFn`, so it NEVER `callIndirect(0)`. `slice` is THROWING (it forwards the
-// bounds `errorReturn` of whichever inner slice it calls), `append` is not — exactly the inner operations'
-// shapes.
+// descriptor's cloner as `cloneFn`, so it NEVER `callIndirect(0)`. `slice` is THROWING (it forwards
+// the bounds `errorReturn` of whichever inner slice it calls), `append` is not — exactly the inner
+// operations' shapes.
 //
 // ⚠ **THERE IS NO `__managed_clone_opaque`.** `Array.clone` is `stdlib/Array.maxon:140` and its body is `managed.slice(0, len)`, so an
 // opaque-element clone reaches the descriptor through `__managed_slice_opaque` like every other corpus copy —
@@ -1783,8 +1783,9 @@ end 'emitStoreElem'
 // pop/remove of a trivial element. Byte `i` is `load_u8(addr+i) <<logical i·8`, OR-accumulated. On
 // completion the loop branches to the caller-created `exit` block and the accumulated value is RETURNED
 // (the loop-header accumulator, which the header dominates, so it is live on `exit` — the same domination
-// `buildIntToString` relies on). The caller owns `exit` (a `var`), which is why it is passed IN rather
-// than returned: a returned block cannot then be re-mutated by the caller under the ownership model.
+// `StringRuntime.buildIntegerToString` relies on). The caller owns `exit` (a `var`), which is why
+// it is passed IN rather than returned: a returned block cannot then be re-mutated by the caller
+// under the ownership model.
 function emitLoadElem(module StdModule, func IrFunction, cur IrBlock, exit IrBlock, addr ValueId, size ValueId, ids ValueMinter) returns ValueId
 	var header = module.addBlock(func, label: b"ldeh", heat: BlockHeat.normal)
 	var body = module.addBlock(func, label: b"ldeb", heat: BlockHeat.normal)
@@ -1893,9 +1894,9 @@ end 'emitManagedReserve'
 //      element load, the element store, `__managed_fill`'s three per-stride loops, and the inline
 //      pass one tier up.
 //   2. **A MANAGED ELEMENT**, which is never packed by construction
-//      (`ProgramSignatures.arrayElementPackedBits` answers `NotSubBytePacked` for it before it reads
-//      anything else) — the destroy walk, the deep-clone walk, and the `_managed` slice/append the parser
-//      routes a managed element to instead of the trivial path.
+//      (`ProgramSignatures.arrayElementPackedBits` answers `ElementPacking.byteStrided` for it
+//      before it reads anything else) — the destroy walk, the deep-clone walk, and the `_managed`
+//      slice/append the parser routes a managed element to instead of the trivial path.
 //   3. **A CALLER WHOSE `elementSize` IS A COMPILE-TIME CONSTANT THE STRIDE FORK ALREADY PROVED** —
 //      `emitViewRecordHead` reached from `StringRuntime.__str_bytes_view` (a compile-time 1), and
 //      `InlineManagedPrimitives`' four fast arms, which pass the constant of the arm `emitStrideDispatch`
@@ -2514,19 +2515,20 @@ function emitPackedFieldStore(module StdModule, block IrBlock, buffer ValueId, i
 	module.appendOp(block, op: StdOp.storeIndirect(addr, offset: 0, valueId: merged, valueType: StdType.u8))
 end 'emitPackedFieldStore'
 
-// ⭐⭐ **`__managed_move_elems(destBuf, destIdx, srcBuf, srcIdx, count, es)` — MOVE A RUN OF ELEMENTS, AND THE
-// ONE REPLACEMENT FOR EVERY BYTE `memmove` THIS FILE USED TO SCALE BY `element_size`.** `insert` shifts its
-// tail UP one slot, `remove` shifts it DOWN one, `append` copies a whole source past a destination's live
-// end, and a packed slice materializes its window; all four are this call.
+// ⭐⭐ **`__managed_move_elems(destBuf, destIdx, srcBuf, srcIdx, count, es)` — MOVE A RUN OF
+// ELEMENTS, THE ONE ELEMENT MOVE THIS FILE HAS.** `insert` shifts its tail UP one slot, `remove`
+// shifts it DOWN one, `append` copies a whole source past a destination's live end, and a packed
+// slice materializes its window; all four are this call.
 //
-// ⚠⚠ **IT IS A RUNTIME FUNCTION AND NOT AN EMITTED-INLINE HELPER, AND THAT IS A MEASURED CONSTRAINT RATHER
-// THAN A PREFERENCE.** Inlined at its four sites, the packed loop carried its CALLER's live values on top of
-// its own — a slice holds `newRec`, `newBuf`, `srcBuffer`, `start`, `sliceLen` and `es` across it — and the
-// register allocator refused the result outright: `RegisterPressureDiagnostic` E5001, on 260 spec cases at
-// once. ⚠ **And E5001 is unfixable from inside a COMPILER-EMITTED function**: its whole contract is to name
-// the user values to delete, so in a synthesized body it does not merely report badly, it PANICS (RULE 3 —
-// no blocking value has a source span there). A call caps the live set at the six arguments. It also
-// collapses four inlined copies of one loop into one, which is the reason that would have applied anyway.
+// ⚠⚠ **IT IS A RUNTIME FUNCTION AND NOT AN EMITTED-INLINE HELPER, AND THAT IS A CONSTRAINT RATHER
+// THAN A PREFERENCE.** Inlined at its four sites, the packed loop carries its CALLER's live values
+// on top of its own — a slice holds `newRec`, `newBuf`, `srcBuffer`, `start`, `sliceLen` and `es`
+// across it — and the register allocator refuses the result outright: `RegisterPressureDiagnostic`
+// E5001. ⚠ **And E5001 is unfixable from inside a COMPILER-EMITTED function**: its whole contract
+// is to name the user values to delete, so in a synthesized body it does not merely report badly,
+// it PANICS (RULE 3 — no blocking value has a source span there). A call caps the live set at the
+// six arguments. It also collapses four inlined copies of one loop into one, which is the reason
+// that would have applied anyway.
 //
 // ⚠ **THE OVERLAP DIRECTION IS DERIVED ONCE, NOT DECLARED FOUR TIMES.** A shift UP within one buffer must
 // run from the top down or it overwrites what it has not read; a shift DOWN, or a copy between distinct
@@ -3843,7 +3845,7 @@ function emitElementStoreAndOkReturn(module StdModule, func IrFunction, store Ir
 end 'emitElementStoreAndOkReturn'
 
 // ⭐⭐ **DESTROY AN ELEMENT THE SETTER REFUSED TO STORE — THE THROW PATH'S HALF OF THE MOVE-IN CONTRACT.**
-// `Parser.parseArraySetOrInsert` MOVES the value into the call (`moveElementIntoContainer`), so
+// `Parser.parseArraySet` MOVES the value into the call (`moveElementIntoContainer`), so
 // from that point the callee owns it and the caller's scope-exit drop is suppressed. On the success
 // path the array becomes the owner; on the out-of-range path nothing does, and without this the
 // element leaks (exit 101 on a managed element, 0 on a trivial one). `Array.set` and
@@ -4490,7 +4492,7 @@ function buildManagedMemCreate(module StdModule)
 	//
 	// ⚠ **PUBLISHING `count` AS THE LENGTH IS WHAT `create-and-length` REFUSES.** It would make the
 	// create-then-`setByte`-then-`setLength` idiom legal by the wrong half: what makes that idiom legal is
-	// the SETTER's bound, which is CAPACITY and not length (`emitByteRangeGuard`).
+	// the SETTER's bound, which is CAPACITY and not length (`emitBufferAccessGuard`).
 	let dtor = emitConst(module, block: build, value: TrivialElementDestroy, ids: ids)
 	let rec = ids.mint()
 	module.appendOp(build, op: StdOp.call(rec, callee: ManagedCreateName, args: twoArgs(elementSize, second: dtor)))
@@ -5891,14 +5893,14 @@ end 'buildManagedAppendManaged'
 // `LowerMaxonToStd.opaqueCopyArgsWithDescriptor`), reads `copyFunc@32`, and branches ONCE on it: a 0 slot
 // (a TRIVIAL instantiation — a scalar element byte-copies correctly) routes to the trivial COW/block-copy
 // helper; a non-zero slot (a MANAGED instantiation) routes to the α deep-clone helper with the descriptor's
-// cloner as `elemCloneFn`. The branch is the run-time analogue of `emitDestroyRangeIfManaged`'s
+// cloner as `cloneFn`. The branch is the run-time analogue of `emitDestroyRangeIfManaged`'s
 // `destroyFunc@40 == 0` skip, so the wrapper NEVER `callIndirect(0)`.
 
 // Load `copyFunc@32` from the wrapper's `descriptor` parameter and set `entry`'s terminator to branch to
 // `managedId` when it is non-zero (a managed instantiation with a real element cloner) or `trivialId` when it
 // is 0 (a trivial instantiation). Returns the loaded cloner value, which the managed branch passes as
-// `elemCloneFn`. The ONE home of the copyFunc load+branch, shared by all three wrappers so they cannot drift
-// on which slot they read or which way 0 routes.
+// `cloneFn`. The ONE home of the copyFunc load+branch, shared by all three wrappers so they cannot
+// drift on which slot they read or which way 0 routes.
 function emitCopyFuncBranch(module StdModule, entry IrBlock, descriptor ValueId, trivialId BlockId, managedId BlockId, ids ValueMinter) returns ValueId
 	let copyFn = ids.mint()
 	module.appendOp(entry, op: StdOp.loadIndirect(copyFn, addrId: descriptor, offset: LAYOUT_OFFSET_COPY_FUNC, valueType: StdType.i64))

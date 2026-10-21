@@ -357,7 +357,7 @@ export typealias RegMask = bits(64)
 // A spill-slot index: the k-th 8-byte slot the cold-spill live-range splitter
 // (SplitLiveRanges) reserves in a function's frame. It is a dense per-function
 // index — slot 0, 1, 2, … — NOT a byte displacement; the x64 encoder turns it into
-// a `[rsp + disp]` displacement (`spillSlotDisp`) at emit time, so the frame layout
+// a `[rsp + disp]` displacement (`slotDisplacement`) at emit time, so the frame layout
 // (shadow space, alignment) lives in one place. Each spilled VALUE gets its own
 // slot, and exactly one: its store is anchored at its def, which dominates every
 // reload, so a value relieved at a SECOND peak reloads out of the slot it already
@@ -844,11 +844,11 @@ export union TargetOp
 	// ⚠ IT IS **NOT** A CONST MATERIALIZATION, and it inherits `leaRegGlobal`'s reasoning
 	// verbatim — read that comment in `opIsConstMaterialization`. It reads no register and its
 	// value cannot change, so it IS rematerializable *in principle*. But that predicate asks a
-	// NARROWER question: *"can this def be rebuilt by `constValueOfDef` + a `movRegImm`?"* An
+	// NARROWER question: *"can this def be rebuilt by `constDefInfo` + a `movRegImm`?"* An
 	// f64 constant lives behind a RIP-relative RELOCATION into `.rdata`, so rebuilding it means
 	// re-emitting the `movsd` AND a fresh relocation — which the remat path has no way to
 	// express, and there is no `movsd xmm, imm64` to fall back on. Answering `true` would send
-	// it to `constValueOfDef`, which would PANIC.
+	// it to `constDefInfo`, which would PANIC.
 	// ⇒ It is a real missed optimization, and it is the SAME one `leaRegGlobal` already prices:
 	// taking either means generalizing remat from "a constant value" to "an op with no register
 	// inputs". Not taken here. Recorded rather than silently ranged over.
@@ -1399,11 +1399,12 @@ export union TargetOp
 	// --- The fused witness call's memory-indirect call (x64) ---
 	//
 	//
-	// Memory-indirect call `call qword [baseReg + disp]` (`FF /2`, mod=01/10) — the memory-operand twin of
-	// `callReg`, and the whole point of the fused `StdOp.witnessCall`: the callee pointer is read from
-	// `[witnessAddr + witnessMethodSlotOffset(methodIndex)]` BY THE CALL ITSELF, so it never occupies a virtual register (never
-	// virtualized). `baseReg` (the witness-table address) is a genuine value USE — it must be live at the call —
-	// exactly like `callReg`'s `reg`; `disp` is the constant slot offset. `encodeCallMem` emits it.
+	// Memory-indirect call `call qword [baseReg + disp]` (`FF /2`, mod=01/10) — the memory-operand
+	// twin of `callReg`, and the whole point of the fused `StdOp.witnessCall`: the callee pointer is
+	// read from `[witnessAddr + witnessMethodSlotOffset(methodIndex)]` BY THE CALL ITSELF, so it never
+	// occupies a virtual register (never virtualized). `baseReg` (the witness-table address) is a
+	// genuine value USE — it must be live at the call — exactly like `callReg`'s `reg`; `disp` is the
+	// constant slot offset. `encodeModRmExtBaseDisp` emits it.
 	//
 	// ⚠⚠ THE SAME CLOBBER MASK AS `callDirect`/`callReg`/`iatCall`, AND IT MUST STAY THAT WAY. A call destroys
 	// the caller-saved set whether the target is a name, a register or a memory operand, so `implicitDefs` is
@@ -1586,8 +1587,9 @@ export union TargetOp
 	// `src` outlives the op, which is the same saving `binOpImm`'s word-ALU forms already take.
 	x64LockXadd(dest TargetVReg, src TargetVReg, addrReg TargetVReg) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0}
 
-	// `lock add [addrReg], srcReg` (`F0 REX.W 01 /r`) — the same atomic add with its PRIOR value DISCARDED.
-	// Emitted where nothing reads the RMW's result, which is `atomicInc`/`atomicDec`'s whole shape.
+	// `lock add [addrReg], srcReg` (`F0 REX.W 01 /r`) — the same atomic add with its PRIOR value
+	// DISCARDED. Emitted where nothing reads the RMW's result, which is the whole shape of an
+	// increment or decrement (`atomicRmw(_, addr, ±1, add)`).
 	//
 	// ⭐ **IT EXISTS TO SPEND NO REGISTER, NOT TO SAVE A BYTE.** Its two-address twin above must have the
 	// addend in the destination, so a discarded result still costs a live register plus the allocator's
@@ -1855,7 +1857,7 @@ export let CoverageImageGlobal = "__cov_image"
 //
 // A TARGET-tier enum rather than reusing `StdType`, and the narrowness is the point: it is the
 // exact domain `encodeLoadRegBaseDisp`/`encodeMovzxRegByteBaseDisp` cover, so the conversion from
-// a Std type is a CHECKED decision at one door (`x64AccessWidthFor`) that names what it cannot yet
+// a Std type is a CHECKED decision at one door (`accessWidthFor`) that names what it cannot yet
 // encode. Passing a `StdType` straight through would let an `i16` or an `f64` reach an encoder with
 // no form for it and emit a silently wrong-width access. It grows a case per width the encoders
 // grow a form for.

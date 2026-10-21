@@ -619,9 +619,8 @@ export enum ErrorCode
 	// A match arm's payload-binding pattern supplies the wrong number of bindings for the case's payload.
 	// a match-arm payload-binding pattern (`case(x, y)`) supplies
 	// the wrong number of bindings for the case's declared payload. Emitted
-	// by `parseCaseBindingPattern` when an arity check can be performed at
-	// parse time, or deferred to TypeResolution when the case's owning
-	// union isn't yet known.
+	// at parse time by `parseCasePayloadBindings`, and by
+	// `requireErrorUnionBindingCount` for an error-union pattern.
 	enumWrongBindingCount = "E3035"
 
 	// A call passes a different number of arguments than the callee declares parameters.
@@ -752,7 +751,7 @@ export enum ErrorCode
 	// synthesized equality -- a new case can't be added without every match site
 	// being forced to handle it, so the only way to inspect a union is `match`.
 	// Enums (which auto-implement Equatable) are unaffected. Stdlib source is
-	// exempt (trusted). Emitted from `maybeRewriteCmpToEquals` in TypeResolution.
+	// exempt (trusted). Emitted from `Parser.emitComparableCompare`.
 	semanticEnumNotComparable = "E3066"
 
 	// a textual self-assignment (`x = x`, `p.x = p.x`) or a
@@ -900,8 +899,8 @@ export enum ErrorCode
 	// a labeled control-flow block (`if`/`else`/`while`/`for`) has no
 	// statements between its header and matching `end`. Refused so dead
 	// control-flow can't sneak past a refactor; emitted
-	// from `parseBodyOrEmpty` after `parseScopedStatements` reports no
-	// statements were consumed.
+	// from `parseBlockBody` when the token after the header is the
+	// block's `end`.
 	semanticEmptyBlock = "E3082"
 
 	// a block-form `try 'label' ... end` body contains no throwing
@@ -1024,8 +1023,7 @@ export enum ErrorCode
 	// Erasing the error is the root of a family of bugs, all of which this refusal turns into impossibilities:
 	// - `otherwise (e)` has no type to give `e`, and silently hands back the raw i64
 	// promise handle typed `int`;
-	// - an associated-value error's payload has no static type to mm_decref, so it LEAKS
-	// (only a runtime `errorIsHeapPtr` bit in the box approximates the answer);
+	// - an associated-value error's payload has no static type to mm_decref, so it LEAKS;
 	// - propagation (a bare `try await p` inside a `throws` function) has no error type to
 	// check the enclosing function's `throws` against, so a thunk throwing A can be
 	// awaited inside a function throwing B and A's ordinals reinterpreted as B's tags.

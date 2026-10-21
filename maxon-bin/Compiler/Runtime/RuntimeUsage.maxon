@@ -31,7 +31,7 @@
 
 // --- Which compiler-internal runtime functions a module references ---
 //
-// ⭐ ONE WALK, THREE ANSWERS. `moduleUsesHeap`'s job (does this program touch the heap?) and the two
+// ⭐ ONE WALK, THREE ANSWERS. `usesHeap`'s job (does this program touch the heap?) and the two
 // String questions (does it print? does it compare strings?) are the SAME traversal — every call op,
 // once — so they are answered together rather than by three near-identical walks. Each answer keys a
 // DIFFERENT installation, and the heap answer stays `__mm_`-specific: a print-only program must carry
@@ -42,7 +42,7 @@
 // `.data` layout, and all three drive which functions get installed into the Std module.
 
 // The set of `__destruct_<U>` symbols a module CALLS. A SET, not a list, because both
-// `noteUnionDestructorUsage` and
+// `noteDestructorUsage` and
 // `installUnionDestructors` walk EVERY union (`project.enumTypes`) and ask "is this union's destructor
 // referenced?" — a per-union membership test. Against a per-drop-site list that is an O(unions × drop
 // sites) scan (the classic linear-lookup-in-a-linear-walk quadratic); against a set it is O(1) each, so
@@ -231,7 +231,7 @@ export type RuntimeUsage
 	export var usesManagedGlobals as bool
 
 	// The `__destruct_<U>` symbols this module CALLS — collected from the drop sites so
-	// `installUnionDestructors` synthesizes only the referenced ones, and `noteUnionDestructorUsage`
+	// `installUnionDestructors` synthesizes only the referenced ones, and `noteDestructorUsage`
 	// can classify their transitive `__str_decref`/`__mm_free` needs. Full symbols (not names): the
 	// consumers query them against `destructorSymbol(name)`, avoiding a byte-substring extract. A
 	// SET so that per-union query is O(1) — see `DestructorSet`.
@@ -1163,7 +1163,7 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	// A managed-payload union's scope-exit drop (`__destruct_<U>`). It frees the box (`__mm_free` — heap)
 	// and, for a String field, calls `__str_decref` — but those live in the SYNTHESIZED body this scan
 	// cannot see, so the symbol is recorded and its transitive needs are declared by
-	// `noteUnionDestructorUsage` (which has the signatures/interner to classify the fields).
+	// `noteDestructorUsage` (which has the signatures/interner to classify the fields).
 	if bytesStartWith(callee, prefix: DestructorPrefix) 'uniondtor'
 		usage.usesHeap = true
 		usage.neededDestructors.insert(callee)
@@ -1336,7 +1336,7 @@ end 'recordGraphemeUsage'
 // without being told: what a corpus function needs is found, not declared. What this closure holds is the
 // residue with no corpus counterpart — the `Character` mint and the three array-filling views.
 // ⚠ **AND NO Std BODY HERE CALLS INTO THE CORPUS.** Such an edge is the one thing a scan of the Maxon module
-// cannot see, and it would have to be declared by `StdlibSource.markCorpusCalleesOfSynthesizedRuntime` — a
+// cannot see, and it would have to be declared as a seed of `StdlibSource`'s reachability walk — a
 // body added here that CALLS a corpus function needs that seed, because this closure declares runtime-usage
 // BITS and cannot declare a stdlib function's REACHABILITY, which is why the two are not one place.
 function closeGraphemeNeeds(usage RuntimeUsage)

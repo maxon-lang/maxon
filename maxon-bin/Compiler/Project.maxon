@@ -857,8 +857,9 @@ export type VarInfo
 	// / parameter of a build writing a sidecar and for nothing else. `boundValue` is the CURRENT value and
 	// is overwritten in place, so it alone cannot say where a debugger should look: a `var` written in both
 	// arms of an `if` and read past the join is three values under one name, and the value the read holds
-	// is the one the merge minted rather than the one the declaration produced. `Parser.recordRebind`
-	// is what keeps the whole sequence, and this is what tells it which record to keep it in.
+	// is the one the merge minted rather than the one the declaration produced.
+	// `Parser.recordDebugRebind` is what keeps the whole sequence, and this is what tells it which
+	// record to keep it in.
 	export var debugLocalRecorded = false
 	export var debugLocalSlot = 0 as DebugLocalSlot
 
@@ -5940,7 +5941,7 @@ export typealias FunctionValueShapeMap = Map with (ByteArray, FunctionValueShape
 // It carries the WHOLE declared signature — the return type AND the parameter types — because a
 // function value's declared type is what every use of it is checked and lowered against: an indirect
 // call's arity and argument types (`SemanticCheck.checkIndirectCall`), the int→float widening of its
-// arguments (`LowerMaxonToStd.widenIndirectCallArgs`), and the agreement of a function VALUE with the
+// arguments (`LowerMaxonToStd.crossFloatDomainArgs`), and the agreement of a function VALUE with the
 // function-typed place it flows into (`SemanticCheck.checkFunctionTypeDoors`). Both halves are stored
 // INTERNER-FREE — a TAG plus the NAME behind a `named`/`structRef`/`function` type, empty for a
 // primitive — so they ride the no-remap alias fold (`ProgramSignatures.recordFunctionTypeAlias` and
@@ -8543,7 +8544,7 @@ let EnumNameMemberName = b"name"
 // ⭐ **`s.rawValue` — WHAT THE CASE WAS DECLARED AS, IN THE DOMAIN ITS BACKING NAMES.** The one accessor whose
 // RESULT TYPE depends on `EnumLayout.backing`: an `int` for an integer (or unnumbered) backing, a `float` for
 // a float one, a `Character` for a char one, a `String` for a string one. For the three backings whose tag IS
-// the raw value (`tagCarriesRawValue`) the tag is the answer, decoded into that domain; for a string backing
+// the raw value (`EnumRawValueIdentity.theTag`) the tag is the answer, decoded into that domain; for a string backing
 // the tag is only a declaration index and the value rides `caseRawValues`, selected the same way `.name` is.
 export let EnumRawValueMemberName = b"rawValue"
 
@@ -8865,17 +8866,13 @@ export let EnumAllCaseNamesMemberName = b"allCaseNames"
 // not a number at all, so a string-backed case takes the auto-increment DECLARATION INDEX as its tag and
 // its raw value rides `caseRawValues` instead.
 //
-// ⚠ **THE ORDER IS LOAD-BEARING: the three tag-carrying backings are ADJACENT** so
-// `EnumLayout.tagCarriesRawValue` classifies them in one arm rather than two giving one answer. A backing added later belongs beside the group it joins, and it must be added to BOTH exhaustive
-// matches over this enum (here via that predicate, and `enumBackingDiscriminator`).
+// ⚠ A backing added later must be added to BOTH exhaustive matches over this enum:
+// `EnumLayout.rawValueIdentity` and `enumBackingDiscriminator`.
 //
-// ⛔ **APPEND IT, OR PUT IT BEFORE `integer` — DO NOT INSERT ONE INSIDE EITHER RUN.**
-// `enumBackingDiscriminator` names every arm and so cannot build without the new one; `tagCarriesRawValue`
-// spells BOTH groups as RANGES (`integer to character` true, `string to function` false), and a range is
-// the one arm shape that can absorb a member silently. At either END of this enum it stops building, which
-// is what is wanted. Inserted mid-run it compiles and answers whichever group swallowed it for a backing
-// nobody classified, which is a wrong answer (a duplicate-raw-value scan comparing declaration indices)
-// rather than the compile error the `match` is here to force.
+// ⛔ **BOTH NAME EVERY ARM, AND NEITHER USES A RANGE.** A range is the one arm shape that can absorb a
+// member silently: a new backing would compile and answer whichever group swallowed it, which is a wrong
+// answer (a duplicate-raw-value scan comparing declaration indices) rather than the compile error the
+// `match` is here to force. Spelled arm by arm, neither builds until the new backing is classified.
 //
 // ⭐ **`functionRef` JOINS `string` ON THE "the tag is only an index" SIDE**, and is appended past it for
 // that reason: a case backed by a function REFERENCE (`doubleOp = doubleFn`) has no number to be a tag, so
@@ -8887,11 +8884,9 @@ export let EnumAllCaseNamesMemberName = b"allCaseNames"
 // would have to be written in every `match` over this enum in a position the grammar reads as a
 // declaration. The word a DIAGNOSTIC uses is still "function" — see `enumBackingNoun`, which is the one
 // place the spelling a reader sees is decided.
-// ⭐ **`structRecord` JOINS `string` AND `functionRef` ON THE "the tag is only an index" SIDE**, and is
-// APPENDED past them for the reason the ⛔ paragraph above gives: appending it leaves it outside BOTH of
-// `rawValueIdentity`'s ranges, so that classifier stops building until this backing is answered there.
-// (Inserted between `string` and `functionRef` it would have been swallowed by a range and answered
-// `recordedText` — a wrong answer, since a struct-backed case records no text at all.)
+// ⭐ **`structRecord` JOINS `string` AND `functionRef` ON THE "the tag is only an index" SIDE**, but
+// `rawValueIdentity` answers it on an arm of its own: `recordedText` would be a wrong answer, since a
+// struct-backed case records no text at all.
 //
 // A case backed by a compile-time constant STRUCT (`add = Meta{value: 1}`, `add = Meta.create(1)`) has no
 // number to be a tag, so it takes the auto-increment declaration index; the per-field constants ride
@@ -9029,13 +9024,13 @@ export function enumBackingNoun(backing EnumBacking, backingStruct EnumBackingSt
 	return String.from(try backingStruct.typeName() otherwise panic("enumBackingNoun: a `structRecord` backing is called by its struct type's NAME and none was supplied — every producer of this backing reads the name off the type token the case wrote (`Parser.appendStructBackedEnumCase`), so there is no route to this backing without one"))
 end 'enumBackingNoun'
 
-// ⭐⭐ **WHAT MAKES TWO CASES' RAW VALUES THE SAME VALUE — the THREE-WAY answer that replaced a bool.** Two
+// ⭐⭐ **WHAT MAKES TWO CASES' RAW VALUES THE SAME VALUE — a THREE-WAY answer.** Two
 // readers with nothing else in common ask it: E3031's collision test
 // (`Parser.EnumCaseLedger.rawValueIsClaimed`) and the decl-shape content hash
 // (`ProgramSignatures.mixEnumCase`), and both must be exhaustive over it.
 //
-// ⛔ **IT WAS `tagCarriesRawValue`, A BOOL, AND A THIRD ANSWER DOES NOT FIT IN ONE.** A struct backing
-// records no comparable raw value at all, which is neither of the two the bool could say — and either
+// ⛔ **IT IS NOT A BOOL, BECAUSE A THIRD ANSWER DOES NOT FIT IN ONE.** A struct backing
+// records no comparable raw value at all, which is neither of the two a bool could say — and either
 // answer is a WRONG ANSWER rather than a compile error. `theTag` would compare declaration indices (never
 // equal, so E3031 could never fire for anything) and `recordedText` would compare an empty column and
 // report EVERY second struct-backed case as a duplicate.
@@ -9106,7 +9101,7 @@ export type EnumLayout
 	export var declColumn = 0 as ColumnNumber
 
 	// ⭐ **WHAT KIND OF NUMBER `caseTags` HOLDS** (see `EnumBacking`). Written by the case reader as each
-	// case fixes or re-confirms it (`Parser.requireIntBacking`/`requireFloatBacking`, which raise E3032 on a
+	// case fixes or re-confirms it (`Parser.requireEnumBacking`, which raises E3032 on a
 	// mismatch), and read at every site that consumes an enum VALUE as a number rather than as an identity.
 	export var backing as EnumBacking
 
@@ -9983,7 +9978,7 @@ end 'seedCompilerOwnedErrorEnums'
 //
 // ⭐⭐ **THE DROP IS A PROVENANCE TEST, BECAUSE THE COMPILER *READS* TWO OF THESE NAMES.**
 // `Ordering` and `IterationError` are declared in `stdlib/Interfaces.maxon` and are not transcribed
-// into this file (`declaredBuiltinEnum`); dropping every compiler-owned layout would drop the very
+// into this file (`requireCorpusDeclaredEnum` reads them); dropping every compiler-owned layout would drop the very
 // declarations the compare cascade and the cursor protocol are built from. So the rule is the one
 // sentence it means: **a compiler-owned type name may be declared by the CORPUS and by nothing else.**
 // A user declaration is dropped at this single write — the collision stays unrepresentable rather than
@@ -10336,8 +10331,8 @@ export type FuncSignature
 	// Does any parameter declare a bare type parameter (`create(v T)`) — i.e. is this the SHARED body of a
 	// generic type's method, whose signature cannot say what its arguments must be? The
 	// allocation-free gate `checkTypeParameterArgs` asks before deriving the call's concrete instance, the
-	// twin of `ProgramSignatures.hasInnerAliasParams`: a `CallGenericInstance` is a Maxon union VALUE and so
-	// a heap box, and every call in a generics-free program would mint one just to read `none`.
+	// twin of `ProgramSignatures.hasInnerAliasParams`: deriving it mints a `CallSubject`, a Maxon union
+	// VALUE and so a heap box, and every call in a generics-free program would mint one for nothing.
 	export function hasTypeParameterParam() returns bool
 		for paramType in self.paramTypes 'each'
 			if maxonTypeTag(paramType) == ValueTypeTag.typeParameter 'opaque'
@@ -10725,7 +10720,7 @@ let AsciiSmallZ = 122
 
 // ⭐ **THE MINT: the registration name a `test` named `prose` takes.** Every character outside
 // `[A-Za-z0-9_]` becomes `_`, which is `docs/LANGUAGE_REFERENCE.md`'s rule. THE one producer —
-// `Parser.parseTestDeclaration` mints with it and the declaration
+// `Parser.readFunctionHead` mints with it and the declaration
 // SWEEP files the same declaration under it, and two spellings of the derivation would file a test under a
 // name the real parse never registers.
 export function testFunctionRegistrationName(prose ByteArray) returns ByteArray
@@ -11768,7 +11763,7 @@ end 'argDuplicateMessage'
 // `paramNames[argIndex]` equals the label then `positionOfName` cannot answer any position but
 // `argIndex`: there is no earlier match for it to find. A signature that DID carry a duplicate belongs
 // to an already-refused program, so the tie-break could only change which diagnostic that program
-// gets — the same reasoning `SemanticCheck.indexModuleFunctionsByName` states for first-index-wins.
+// gets.
 //
 // ⚠ **`_` IS THE ONE NAME A SIGNATURE MAY REPEAT, AND THE SLOTTING IS STILL EXACT.** The ignore name is
 // exempt from that E2014 — `Parser.parseFunctionParameters` admits `make(_ Integer = 1, _ String =
@@ -11918,7 +11913,7 @@ export type Project
 	export var stdlibDir as FilePath
 
 	// The checkout's `runtime/` directory — the language runtime, the second source tier every compile
-	// loads. DERIVED from `stdlibDir`'s location rather than located on its own (`locateRuntimeDir`), so
+	// loads. DERIVED from `stdlibDir`'s location (`runtimeDirBeside`) rather than located on its own, so
 	// a compile cannot pair one tree's stdlib with another tree's runtime.
 	export let runtimeDir as FilePath
 

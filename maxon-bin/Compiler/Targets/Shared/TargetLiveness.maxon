@@ -22,7 +22,7 @@
 // and `as` is the one door; a NARROWER range, like `RegNum`, is checked as well, at run time.
 //
 // The columns all share ONE representation — a flat `Array` of non-negative ints — which is what
-// lets `filledColumn` / `zeroColumn` / `buildCsr` be one implementation each rather than one per
+// lets `zeroColumn` / `buildCsr` be one implementation each rather than one per
 // column. The names say what the ENTRIES MEAN; the representation is common on purpose.
 
 // The non-negative-integer REPRESENTATION every index space in this file shares, and the dense
@@ -32,8 +32,7 @@
 //
 // A QUANTITY is always spelled with its purpose alias. `DenseInt` appears only where the code is
 // deliberately generic OVER those spaces and has no one purpose to name — the column builders, which
-// fill a colour column and a Hall matching alike, and `maxOf`, which takes the larger of a value id
-// or of a register pressure.
+// fill a colour column and a Hall matching alike.
 export typealias DenseInt = int(0 to u64.max)
 export typealias DenseColumn = Array with DenseInt
 
@@ -270,15 +269,15 @@ end 'classRowTotal'
 
 // The register FILE a VIRTUAL operand's value lives in — its declared class.
 //
-// ⚠ ONLY VIRTUAL OPERANDS REACH HERE, AND THAT IS WHY IT NEEDS NO TARGET FILE. Every caller guards on
-// `operandIsVirtual` before asking (`recordDefLiveAfter`, `addOpTransientPressure` and its
-// `anyVirtualUseDiesAt` — the census tracks only value ids, never physical registers), so a PHYSICAL
-// operand is a bug, not the "classify
-// a register number" case. Handling that here means the x64 boundary unconditionally
-// (`regClassOf(operandRegister(o).rawValue)`), which would misclassify an arm64 GPR in
-// x19..x28 and panic on an arm64 SIMD number (>31) that `X64Register.fromRawValue` cannot name — a
-// latent per-ISA hazard on a branch nothing reaches. A physical register's class is the ENCODER's
-// concern (`regClassIn` on the target file), not the pressure census's; here it panics loudly.
+// ⚠ ONLY VIRTUAL OPERANDS REACH HERE, AND THAT IS WHY IT NEEDS NO TARGET FILE. Every caller guards
+// on `operandIsVirtual` before asking (`recordDefLiveAfter`, `addOpTransientPressure` and its
+// `anyVirtualUseDiesAt` — the census tracks only value ids, never physical registers), so a
+// PHYSICAL operand is a bug, not the "classify a register number" case. Handling that here means
+// the x64 boundary unconditionally (`regClassOf` over an `X64Register` decoding of the operand),
+// which would misclassify an arm64 GPR in x19..x28 and panic on an arm64 SIMD number (>31) that
+// `X64Register.fromRawValue` cannot name — a latent per-ISA hazard on a branch nothing reaches. A
+// physical register's class is the ENCODER's concern (`regClassIn` on the target file), not the
+// pressure census's; here it panics loudly.
 export function operandClass(o Operand, classes ValueClassColumn) returns RegClass
 	if not operandIsVirtual(o) 'physical'
 		panic("operandClass: a PHYSICAL operand (payload {operandPayload(o)}) reached the pressure census — its two callers guard on `operandIsVirtual`, so this is a bug. A physical register's file is classified by the encoder (`regClassIn` on the target file), never here.")
@@ -335,10 +334,8 @@ end 'seedClassLive'
 // contents are recomputed from scratch each time anyway. Only the STORAGE is reused; never a value:
 // `refill` writes EVERY entry in [0, count), so nothing is inherited from the column's last life.
 //
-// It replaced THREE hand-written copies of itself — `refillColumn` (an 8-byte int column),
-// `refillBoolColumn` (a bool one), and `resetRow` in SplitLiveRanges (a bit-word one) — which existed
-// only because a free function cannot be generic over an array's element type, and which nothing made
-// agree. A METHOD knows its own element type, so one of it serves every column here.
+// It is a METHOD because a free function cannot be generic over an array's element type; a method
+// knows its own, so one of it serves every column here.
 
 // A dense column of `count` ZEROES — just the resize: a lengthening `resize` exposes zeroes by the
 // capacity-slot invariant (ManagedMemoryRuntime.maxon: every slot in [length, capacity) reads zero, upheld by
@@ -359,9 +356,8 @@ end 'zeroColumn'
 // quadratic on precisely the shape that splits most. `growFilled` grows capacity geometrically and
 // initialises only the entries the growth added, which is what this allocator wants at every one of
 // its call sites. It is on `Array` (`stdlib/Array.maxon`) rather than here because a METHOD knows its
-// own element type: the pair of hand-rolled `DenseColumn`/`BoolArray` helpers this replaced existed
-// only because a free function cannot be generic over one — which is the same reason `Array.refill`
-// replaced the THREE hand-rolled copies of the whole-column fill (see `filledColumn` above).
+// own element type, and a free function cannot be generic over one — the same reason `Array.refill`
+// is a method (see above).
 //
 // It hid because the allocation COUNT stays low: one realloc per split, not thousands. The ladder's
 // BYTE column is what caught it (`regalloc:splitting` grew ×6.75 per doubling of the program, where
@@ -461,7 +457,7 @@ end 'emptyListColumn'
 //
 // It stays a free function because it is not generic over anything it needs to be: every list it is
 // used on IS a `DenseColumn`. Handing it a narrower column is a compile error (E3005), not the silent
-// width corruption a type-erased `refillColumn` can be tricked into — see `HallScratch.regOfValue`.
+// width corruption a free function sizing a `DenseColumn` risks — see `HallScratch.regOfValue`.
 function removeFromDenseList(list ValueIdArray, value ValueId) returns bool
 	for i in 0 upto list.count() 'each'
 		let entry = try list.get(i) otherwise panic("removeFromDenseList: list.get({i}) OOB")
@@ -5579,7 +5575,7 @@ end 'OperandCensus'
 //
 // A physical operand's register number is a target-neutral `RegNum`, NOT an `X64Register`: this SHARED
 // census sees arm64 SIMD arg registers (d1..d7 = 32..38) a multi-float-argument call emits, which lie
-// outside the x64 `operandRegister`/`X64Register.fromRawValue` door's range.
+// outside the x64 `X64Register.fromRawValue` door's range.
 module function physicalOperandMask(buf OperandList, census OperandCensus) returns RegMask
 	let everyOperand = census == OperandCensus.everyColoured
 	let defs = census == OperandCensus.writtenByName
@@ -5964,9 +5960,8 @@ end 'forbidOperandsFromImplicit'
 // What role an op plays in the SPILL-SLOT model — the ONE place "did the splitter put a value in a
 // stack slot here, and did this op WRITE it there?" is decided, so no consumer can drift on it.
 //
-// It replaces a pair of `ValueSpillSlot`-returning classifiers (`spillStoreSlotOf` and its wider twin
-// `slotResidencyOf`) that answered the two halves of this question separately. THREE cases is what
-// they were between them, and stating it as three has two consequences neither had:
+// It states the question's THREE cases as one enum rather than as a `ValueSpillSlot`-returning
+// classifier per half, and that has two consequences:
 //
 //  • THE SLOT LEAVES THE ANSWER. A `ValueSpillSlot` is a payload-carrying union, so Maxon heap-boxes
 //    EVERY value of it — `ValueSpillSlot.none` included (measured: a payload-free case of such a union
@@ -6348,7 +6343,7 @@ function maxValueId(a ValueId, b ValueId) returns ValueId
 	return a if a >= b else b
 end 'maxValueId'
 
-// Smaller of two non-negative integers — `maxOf`'s twin, and generic over the same index spaces.
+// Smaller of two element indices — the twin of `maxRegCount` and `maxValueId`.
 function minOf(a ElementIndex, b ElementIndex) returns ElementIndex
 	return a if a <= b else b
 end 'minOf'

@@ -9,11 +9,11 @@
 // answering "where does this label live?" by scanning is Θ(payloads × references), which is the
 // shape every index in this file exists to kill.
 //
-// ⭐ **A RUNTIME'S OWN COUNTER IMAGE — a coverage `.mxcov` header plus its counters — IS A
-// `.data` RUN, NOT A SECTION OF ITS OWN.** `.data` is writable and every writer already reaches
-// it (`dataSectionRipRelDisp32`, `dataSectionArm64Adrp`+`PageOff`), so a private section would
-// buy a reloc kind and a writer arm per format, plus an extra loadable segment, for no
-// capability this table does not already have.
+// ⭐ **A RUNTIME'S OWN COUNTER IMAGE — a coverage `.mxcov` header plus its counters — IS A `.data`
+// RUN, NOT A SECTION OF ITS OWN.** `.data` is writable and every writer already reaches it
+// (`dataSectionRipRelDisp32`, `dataSectionArm64Adrp`+`dataSectionArm64PageOff`), so a private
+// section would buy a reloc kind and a writer arm per format, plus an extra loadable segment, for
+// no capability this table does not already have.
 
 // `nameIndex`: registered global name → its index in `names`/`values` (O(1)
 // membership + lookup). `valueDedup`: a previously-registered byte payload →
@@ -92,13 +92,13 @@ end 'floatConstantLabel'
 // `leaRegRdata` naming eight opaque bytes and cannot tell a String's text from its 56-byte record, from a
 // jump table, from a witness table's zero-filled blob.
 //
-// ⚠ **IT IS NOT DERIVED FROM THE LABEL, AND THAT IS THE WHOLE POINT.** Routing by name is a rule this
-// compiler refuses: the section a payload lands in is decided by its RELOCATION KIND —
-// `RdataRelocKind.ripRelDisp32` for an island, `dataSectionRipRelDisp32` for a global — and the label's
-// TEXT is never consulted on the way. `SignatureIndex.DataLabelPrefix` carries the MEASUREMENT that
-// settled it (set to `"zzz_"`, the suite's globals still land in `.data` and still answer right) and the
-// `classifyGlobalLabel` that stands in its place. ⚠ It is stated HERE, beside the kind it justifies,
-// rather than a second time in the two isels' own float-prefix headers.
+// ⚠ **IT IS NOT DERIVED FROM THE LABEL, AND THAT IS THE WHOLE POINT.** Routing by name is a rule
+// this compiler refuses: the section a payload lands in is decided by its RELOCATION KIND —
+// `RdataRelocKind.ripRelDisp32` for an island, `dataSectionRipRelDisp32` for a global — and the
+// label's TEXT is never consulted on the way. `SignatureIndex.DataLabelPrefix` carries the
+// MEASUREMENT that settled it (set to `"zzz_"`, the suite's globals still land in `.data` and still
+// answer right). ⚠ It is stated HERE, beside the kind it justifies, rather than a second time in
+// the two isels' own float-prefix headers.
 //
 // A prefix test would also fail OPEN: a payload registered under a structural label
 // (`__layout_Sizer_bool`, a witness table) wears no prefix a matcher could enumerate, and a NEW producer
@@ -479,7 +479,7 @@ export type GlobalDataTable
 	export var valueDedup as GlobalDedupMap
 
 	// The `.data` slots, IN LAYOUT ORDER — which is the order the image is written in and the
-	// order `RequiredData` pins. `layOutDataSection` is the single writer of both this array's
+	// order `RequiredData` pins. `layOut` is the single writer of both this array's
 	// order and every entry's `offset`.
 	export var dataSection as DataSectionEntryArray
 	export var dataIndex as DataSectionIndexMap

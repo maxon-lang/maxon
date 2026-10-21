@@ -473,7 +473,7 @@ function appendPanicRuntime(builder WasmModuleBuilder, funcNames FunctionNameInd
 	body.endOp()
 
 	// `blocking-write-and-flush(get-stderr(), ptr, cursor - ptr, retArea)` — the same four-operand
-	// shape and the same fire-and-forget return area as `emitOsWriteStdout`, over the stderr handle.
+	// shape and the same fire-and-forget return area as `emitOsWriteStream`, over the stderr handle.
 	body.call(GetStderrImportFuncIdx)
 	body.localGet(WasmPanicMsgPtrLocal)
 	body.localGet(WasmPanicCursorLocal)
@@ -1136,10 +1136,10 @@ end 'indirectCallParamValTypes'
 // `indirectCallResultValTypes` exists to prevent on the RESULT half — and a disagreement between them is not a
 // compile error at either site, it is a `wasm trap: indirect call type mismatch` at run time.
 //
-// ⭐⭐ **THERE WAS A SECOND, PER-ARGUMENT *WIDTH* BIT HERE, AND ERASURE IS WHY IT COULD NOT WORK (WASM3).**
-// `ArgNarrowMask` declared argument k an `i32` when the DECLARED parameter type was an `i1`/`u32`, so that the
-// call site would name the same functype the target's real widths give. That is exact only while both ends read
-// the SAME declaration — and a shared generic body does not. `Holder.apply(f Transform)` with
+// ⭐⭐ **NO PER-ARGUMENT *WIDTH* BIT IS CARRIED, AND ERASURE IS WHY (WASM3).** Declaring argument k an
+// `i32` when the DECLARED parameter type is an `i1`/`u32`, so that the call site names the same
+// functype the target's real widths give, is exact only while both ends read the SAME declaration —
+// and a shared generic body does not. `Holder.apply(f Transform)` with
 // `typealias Transform = function(Element) returns Element` is compiled ONCE for `Holder with Integer`,
 // `Holder with bool` and `Holder with String`: inside it `Element` is opaque, so the call site declares a
 // machine word, while `__fnref_flip` — minted from `flip(b bool) returns bool`'s own declaration — was typed
@@ -1241,7 +1241,7 @@ end 'isWideInt'
 //
 // ⚠ **A PER-SITE WIDTH AT A CALL BOUNDARY IS UNSOUND UNDER ERASURE, MEASURED** — see
 // `indirectCallArgValType` for the shared generic body that declared one width while its callee's own
-// declaration gave another, and for why `ArgNarrowMask` was deleted rather than repaired.
+// declaration gave another, and for why no per-argument width is carried.
 //
 // ⛔⛔ **AND IT TAKES AN INSTRUMENT WITH IT: a Std-tier WIDTH disagreement is invisible on every target.**
 // Several fixes in this tree were FOUND because a wrong `StdType` on one end of a call surfaced as
@@ -3706,11 +3706,11 @@ type WasmFuncEmitter
 		self.emitSwitchBoundsGuard(subjectId, span: caseTargets.count())
 
 		// In range: the low 32 bits ARE the index (the guard proved `< span < 2^32`). An i64 subject is
-		// narrowed and an i32 one is already the index — exactly `pushOperandAt`'s contract, so it is ASKED
-		// rather than restated (the `emitSwitchIndex` helper this replaced hand-rolled `localGet` +
-		// `i32WrapI64`, a second spelling of the one coercion door and the weaker one: an f64 subject went
-		// through untouched). `br_table` to each slot's landing depth; its own default is the default
-		// landing (unreachable after the guard, correct anyway).
+		// narrowed and an i32 one is already the index — exactly `pushOperandAt`'s contract, so it is
+		// ASKED rather than restated (a hand-rolled `localGet` + `i32WrapI64` would be a second spelling
+		// of the one coercion door and the weaker one: an f64 subject would go through untouched).
+		// `br_table` to each slot's landing depth; its own default is the default landing (unreachable
+		// after the guard, correct anyway).
 		self.pushOperandAt(subjectId, targetVt: WasmValType.i32)
 		self.body.brTable(self.slotLandingDepths(caseTargets, distinct: distinct), defaultTarget: 0)
 

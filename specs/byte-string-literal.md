@@ -537,8 +537,8 @@ A detached literal's `capacity@16` is not the rdata sentinel, so its drop legiti
 the buffer — the one it allocated, never the blob. Five detach-and-drop rounds make either mistake loud:
 a missed free leaks (exit 101) and a freed blob corrupts the allocator.
 
-⚠ **ITS EMITTED CODE CARRIES A NARROWING GUARD IN A PROGRAM THAT NEVER MENTIONS `File`.** `stdlib/File.maxon`
-supplies `export typealias Byte = int(0 to u8.max)` (`:45`), so a `b"…"` literal's element has a DECLARED
+⚠ **ITS EMITTED CODE CARRIES A NARROWING GUARD IN A PROGRAM THAT NEVER WRITES `Byte`.** `stdlib/String.maxon`
+supplies `public typealias Byte = int(0 to u8.max)` (`:22`), so a `b"…"` literal's element has a DECLARED
 RANGE and `a.set(0, value: n)` — an `int` into a `Byte` slot — gets the narrowing guard. The slot before
 `__managed_set` holds `cmpRegImm32 rbx, 0` / `cmpRegImm32 rbx, 255` / `mrt_panic`, and the
 `movRegReg rcx, r12` / `__managed_set` sequence follows under the `__rc_ok` label; with `Byte` UNDECLARED

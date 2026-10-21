@@ -1391,7 +1391,7 @@ type MaxonToStdLowering
 	var typeNames as TypeNameInterner
 
 	// The name of the function CURRENTLY being lowered — re-pointed per function, for the diagnostics the
-	// dictionary-passing invariant checks raise (`bindImplicitLayoutParam` / `forwardCallerLayout`).
+	// dictionary-passing invariant checks raise (`forwardCallerWitness` / `forwardCallerLayout`).
 	var currentFunction as LoweredFunction
 	var currentSourceFilePath as FilePath
 
@@ -1974,10 +1974,6 @@ type MaxonToStdLowering
 		end 'lower'
 	end 'lowerOp'
 
-	// Point the coverage-slot rebase at THIS function's file. A compiler-synthesized function has an empty
-	// `sourceFilePath` and holds no coverage point, so it needs no base; every parsed function's file was
-	// merged, and `mergeArtifact` records a base for every file it merges, so a miss there is an invariant
-	// break rather than an uninstrumented file.
 	function currentFuncName() returns ByteArray
 		match self.currentFunction 'lowered'
 			none then panic("MaxonToStdLowering.currentFuncName: asked outside the lowering of any function")
@@ -1985,6 +1981,10 @@ type MaxonToStdLowering
 		end 'lowered'
 	end 'currentFuncName'
 
+	// Point the coverage-slot rebase at THIS function's file. A compiler-synthesized function has an empty
+	// `sourceFilePath` and holds no coverage point, so it needs no base; every parsed function's file was
+	// merged, and `mergeArtifact` records a base for every file it merges, so a miss there is an invariant
+	// break rather than an uninstrumented file.
 	function bindCovPointBase(srcFunc IrFunction)
 		self.currentCovPointBase = 0
 
@@ -4823,10 +4823,10 @@ type MaxonToStdLowering
 	// full condition. Reading the conjunction here instead would mean threading `RuntimeUsage` into a pass
 	// that runs before the usage scan's answer is anyone else's business.
 	//
-	// ⚠ A DROPPED marker leaves its `result` ValueId undefined, which is correct rather than tolerated: the
-	// four emitting members are VOID (`Parser.emitDebugStreamEmit` mints `ValueTypeTag.void`), so nothing can
-	// read it — a void result is a discarded statement result and can never be an operand
-	// (`valueTagToStdType`'s own `void` arm says so).
+	// ⚠ A DROPPED marker leaves its `result` ValueId undefined, which is correct rather than
+	// tolerated: the four emitting members are VOID (`Parser.emitScalarIntrinsicCall` mints them
+	// `ValueTypeTag.void`), so nothing can read it — a void result is a discarded statement result and
+	// can never be an operand (`valueTagToStdType`'s own `void` arm says so).
 	function lowerDebugStreamEmit(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
 		if not self.debugStream 'untracedBuild'
 			if callee.equals(DsLogEnabledMarkerName) 'enabled'
@@ -5213,11 +5213,11 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: fullArgs))
 	end 'appendTypeParamDescriptor'
 
-	// Emit `__destruct_dict_<mangled>(descriptor, box)` — prepend the CURRENT function's WHOLE layout descriptor
-	// to the single box argument the parser emitted. The descriptor parameter is guaranteed by the same
-	// reservation `__drop_type_param` rests on, and by the same refusal when it is missing
-	// (`Parser.dropReadsTheLayoutDescriptor` puts both families through one test), so its absence here is a
-	// parser/lowering divergence — a loud bug, not a silent wrong load.
+	// Emit `__destruct_dict_<mangled>(descriptor, box)` — prepend the CURRENT function's WHOLE layout
+	// descriptor to the single box argument the parser emitted. The descriptor parameter is guaranteed
+	// by the same reservation `__drop_type_param` rests on, and `Parser.instanceBoxDropCallee` picks
+	// this callee only where that descriptor exists, so its absence here is a parser/lowering
+	// divergence — a loud bug, not a silent wrong load.
 	function appendWholeLayoutDescriptor(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
 		if not self.hasImplicitLayout 'noLayout'
 			panic("appendWholeLayoutDescriptor: `{String.from(callee)}` in '{String.from(self.currentFuncName())}' but the function carries no layout descriptor parameter — the parser's descriptor-need seed and this lowering disagree")
@@ -5336,9 +5336,10 @@ type MaxonToStdLowering
 		match op 'ic'
 			// ⚠ The arm HANDS `args` straight to a helper and does nothing else with it — the miscompile
 			// this function's header warns of (a tail-slot `Array` bound in this arm) is sidestepped only
-			// while the arm's body is a single function call, so the `stdTypeOf`/`indirectCallParamTypes`
-			// work (which also reads `args`) MUST live in the helper, not inline here. Inlining it
-			// re-triggers the scrutinee-decref corruption (a `mm_decref` underflow tearing the module down).
+			// while the arm's body is a single function call, so the
+			// `stdTypeOf`/`indirectCalleeParamTypes` work (which also reads `args`) MUST live in the
+			// helper, not inline here. Inlining it re-triggers the scrutinee-decref corruption (a
+			// `mm_decref` underflow tearing the module down).
 			indirectCall(result, callee, args, _) then self.appendCallIndirect(dstBlock, result: result, callee: callee, args: args)
 			default panic("lowerIndirectCall: expected an `indirectCall` op, got a different MaxonOp variant — `lowerOp` routes only `indirectCall` here")
 		end 'ic'
@@ -5664,12 +5665,13 @@ type MaxonToStdLowering
 	// spelling, so the tag on the value IS the interface's own answer already, the formals rule arriving by a
 	// shorter road rather than a second source. `where-clauses.witness-exitcode-return-high` pins it.
 	//
-	// ⚠ The road does NOT reach a return the interface leaves to a conformer. An ASSOCIATED return type
-	// spells only the `uses` name, so that door answers `named` → `int` while the impl returns whatever was
-	// bound — MEASURED at 35 on x64 where the program computes 31, and a trap on wasm. Fixing it needs the
-	// binding at PARSE time, which no store holds mid-parse, so it is REFUSED instead: E3120, in
-	// `ConformanceCheck.checkAssociatedReturnIsMachineWord`. Every return that reaches here is therefore one
-	// the interface itself names, and this reads the right width for all of them.
+	// ⚠ The road does NOT reach a return the interface leaves to a conformer. An ASSOCIATED return
+	// type spells only the `uses` name, so that door answers `named` → `int` while the impl returns
+	// whatever was bound — MEASURED at 35 on x64 where the program computes 31, and a trap on wasm.
+	// Fixing it needs the binding at PARSE time, which no store holds mid-parse, so it is REFUSED
+	// instead: E3120, in `ConformanceCheck.checkAssociatedReturnIsUnmanagedMachineWord`. Every return
+	// that reaches here is therefore one the interface itself names, and this reads the right width
+	// for all of them.
 	function witnessCallResultType(result ValueId, isVoid bool) returns StdReturnType
 		return StdReturnType.void if isVoid else StdReturnType.value(self.stdTypeOf(result))
 	end 'witnessCallResultType'
@@ -5732,9 +5734,10 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(funcPtr, funcName: callee))
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: GtSpawnName, args: argsOf(funcPtr)))
 
-		// Fill the struct's inline arg region: one store per argument at `result + GtOffArgInline + k * GtArgSlotBytes`.
-		// `__gt_spawn` set `gt.argBuf` to a self-pointer at `GtOffArgInline`, and the allocator's zeroing left the
-		// unfilled slots at 0 (harmlessly loaded into unread argument registers).
+		// Fill the struct's inline arg region: one store per argument at
+		// `result + GtOffArgInline + k * GtArgSlotBytes`. `__gt_spawn` set `GtOffArgBuf` to a
+		// self-pointer at `GtOffArgInline`, and the allocator's zeroing left the unfilled slots at 0
+		// (harmlessly loaded into unread argument registers).
 		//
 		// ⚠⚠ **THE GT IS NOT DISCOVERABLE UNTIL `__gt_ready` BELOW, AND THAT ORDER IS THE WHOLE OF THIS
 		// SEQUENCE'S CORRECTNESS.** Run these stores AFTER `__gt_spawn` has enqueued the thread and a worker M
@@ -5814,7 +5817,7 @@ type MaxonToStdLowering
 	// `funcAddr` naming a symbol nothing built is a link failure with no line on it.
 	//
 	// ⚠ The loop is ROOTED by this `funcAddr`, which `DeadFunctionElimination` treats as a static
-	// edge (`funcAddrCalleeEdge`). It is reachable from nothing else at all, which is what keeps a
+	// edge (`stdFunctionReferenceOf`). It is reachable from nothing else at all, which is what keeps a
 	// service-free program's output byte-identical.
 	function lowerServiceSpawn(hlOp MaxonOp, dstBlock IrBlock)
 		match hlOp 's'

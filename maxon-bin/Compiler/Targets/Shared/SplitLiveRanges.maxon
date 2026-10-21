@@ -98,7 +98,7 @@
 //
 // Rebuilding liveness AND re-sweeping the whole function for pressure after every split is K splits ×
 // O(function) = O(function × splits), and K grows with the function, so it is a genuine QUADRATIC —
-// and pure waste. The scale suite's `pressuredLoops` shape says why: ONE function with N
+// and pure waste. The scale suite's `pressuredLoopsSource` shape says why: ONE function with N
 // loops, each holding 8 accumulators live across a call, each needing ~5 forced spills. Loop i's
 // accumulators are live ONLY inside loop i — they are disjoint from loop j's — so spilling one in loop
 // 3 cannot change the pressure anywhere in loops 0..2 or 4..63. The old driver re-read all 64 loops
@@ -451,7 +451,7 @@ end 'PeakRank'
 //        fits the machine — see `SplitDriver.repairByEvictingOccupant`.
 //      · a FULL-POOL peak in a function the COMPILER EMITTED, where the refusal (E5001) is an
 //        instruction to an author who does not exist — see `SplitDriver.relievePressure`'s
-//        `noAuthorToRefuse`.
+//        `forcedRatherThanRefused`.
 //
 //    PLACEMENT is not SCOPE. This says the spill code may land inside a loop; `SplitScope` says which
 //    uses it serves. A value read only AFTER the clobber gets the store/reload bracket around it; one
@@ -524,8 +524,8 @@ type SplitAnchor
 	//
 	// The placement is passed rather than derived here because it is not a property of the peak alone:
 	// `placementOf` is the rule for a peak in AUTHORED code, and a full-pool peak in a function the
-	// compiler emitted overrides it (see `relievePressure`'s `noAuthorToRefuse`). Deriving it in here
-	// would put that decision in two places, and the one in here cannot see whose code it is.
+	// compiler emitted overrides it (see `relievePressure`'s `forcedRatherThanRefused`). Deriving it
+	// in here would put that decision in two places, and the one in here cannot see whose code it is.
 	function takePeak(peak PressurePeak, cutPlacement SpillPlacement)
 		self.blockLocal = peak.blockLocal
 		self.seq = peak.peakSeq
@@ -4085,7 +4085,7 @@ export type SplitDriver
 			// the same peak (`var target = peak`) MOVES the loop-carried value out of the loop, which is
 			// E2015; and the alias bought nothing, because the full-pool peak is not read again on the path
 			// that takes the confined one. The path that does read it — the unrelievable retry below — keeps
-			// it by never reassigning. Discarding the ranked peak here is safe: `PressureAnchor.takePeak`
+			// it by never reassigning. Discarding the ranked peak here is safe: `SplitAnchor.takePeak`
 			// copied the three scalars it needs out of it, so nothing holds its live row.
 			var choice = chooseVictim(module, index: index, liveness: funcLiveness, peak: peak, pool: self.pool, scratch: work, placement: placementOf(peak))
 
@@ -4336,11 +4336,11 @@ export type SplitDriver
 		self.buildSplitIndexOnce(module)
 
 		// `v`'s live REGION, as blocks. `walkValue` in the ADDING direction over a value that is ALREADY
-		// marked is a no-op on the live sets (`LiveSets.addLiveIn`/`addLiveOut` are idempotent) and fills
-		// `touched` with exactly the blocks the value occupies — so the search below is bounded by the
-		// live range rather than by the function, and it reuses THE liveness walk instead of a second
-		// copy of it. It must run BEFORE `beginSplit`, whose walk clears the very live sets the span
-		// endpoints are read from.
+		// marked is a no-op on the live sets (`LivenessMarkScratch.installVisited` installs nothing for a
+		// value that already has a range) and fills `touched` with exactly the blocks the value occupies
+		// — so the search below is bounded by the live range rather than by the function, and it reuses
+		// THE liveness walk instead of a second copy of it. It must run BEFORE `beginSplit`, whose walk
+		// clears the very live sets the span endpoints are read from.
 		work.dirty.clear()
 		collectVictimRegion(index, liveness: funcLiveness, scratch: work, victim: v, adding: true)
 
@@ -5497,13 +5497,14 @@ function noVictimAtPeak(module TargetModule, refusal RegAllocRefusalSite, func I
 		panic("noVictimAtPeak: '{String.from(func.name)}' has a CONFINED overflow ({peak.pressure} values confined to the {regMaskPopcount(peak.witness)} registers of witness {peak.witness}, which the full {peak.witnessClass.name} pool of {classPoolSizeOf(pool, class: peak.witnessClass, file: liveness.registerFile)} would fit) yet `chooseVictim` refused every one of them ({scratch.unrelievableAtLastPeak} of them excluded by `unrelievableAtPeak`). The invariant that must hold: a confined value the peak op does not itself read is ALWAYS relievable — it has a store anchor (an op def or a phi block entry), its store fits the pool (full-pool peaks are relieved FIRST, so no def point is over-pool by now), and reloading its after-peak uses — or, when a before-peak use is still reachable from the peak around a back edge, EVERY use — makes it dead across the peak. The tight set outnumbers the witness and the peak op names at most two virtual registers, so candidates always remain. Refusing them all is a SPLITTER BUG in `hasStoreAnchor` / `storeFitsPool` / `killsValueAtPeak` / `analyzePressure` — not user register pressure. It must never surface as E5001: this program fits the machine.")
 	end 'splitterBug'
 
-	// ⛔ **E5001 IS NEVER RAISED FOR A FUNCTION THE COMPILER EMITTED**, and this is where that contract is
-	// enforced rather than hoped for. `relievePressure` has already retried such a function's full-pool peak
-	// under the FORCED bracket (`noAuthorToRefuse`), which is total over the values a function defines — every
-	// one of them has a store anchor, and one whose store does not fit the pool yet is relieved by a later
-	// iteration. So arriving here with no victim is a splitter bug, and reporting it as user register pressure
-	// is not an option that exists: the message names a source line the function does not have, and
-	// `defRangeOf` panics building it (RULE 3) rather than emitting one.
+	// ⛔ **E5001 IS NEVER RAISED FOR A FUNCTION THE COMPILER EMITTED**, and this is where that contract
+	// is enforced rather than hoped for. `relievePressure` has already retried such a function's
+	// full-pool peak under the FORCED bracket (`forcedRatherThanRefused`), which is total over the
+	// values a function defines — every one of them has a store anchor, and one whose store does not
+	// fit the pool yet is relieved by a later iteration. So arriving here with no victim is a splitter
+	// bug, and reporting it as user register pressure is not an option that exists: the message names
+	// a source line the function does not have, and `defRangeOf` panics building it (RULE 3) rather
+	// than emitting one.
 	if not hasAuthor 'emittedByTheCompiler'
 		panic("noVictimAtPeak: '{String.from(func.name)}' is a function the COMPILER emitted — it has no source and so no author — yet `chooseVictim` refused every one of the {peak.pressure} {peak.witnessClass.name} value(s) at its FULL-POOL peak, under the forced bracket `relievePressure` retries such a function with. That bracket is total over the values a function defines: each has a store anchor (an op def or a phi block entry), and reloading every use makes it dead across the peak whatever `killsValueAtPeak` says. Under a forced placement the only gate left is `hasStoreAnchor` — tier 4 takes anything memory already holds and tier 5 takes the rest — so refusing them all is a SPLITTER BUG in `hasStoreAnchor` or in `analyzePressure`'s live row. It must never surface as E5001: there is nobody to address that error to, and no source span to anchor it at.")
 	end 'emittedByTheCompiler'
@@ -5719,7 +5720,7 @@ end 'rankOutranks'
 //  1. EFFECTIVE pressure carries the SAME corrections TargetLiveness folds into `maxPressure`:
 //     the reuse-copy transient (`reuseInputOutlivesOp` — a two-address input that outlives its
 //     op costs one extra register for the `mov dest,input` the colorer inserts before it) and
-//     the per-block dead-phi count (`deadPhiCountForBlock` — the colorer reserves a register for
+//     the per-block dead-phi count (`deadPhiCountOf` — the colorer reserves a register for
 //     each dead block-arg across the whole block). Without them a transient/dead-phi overflow
 //     enters the driver loop yet finds no RAW peak here — a false panic.
 //
@@ -6486,9 +6487,9 @@ end 'recordDefLiveAfter'
 //
 // `placement` is the DRIVER's, not the peak's: it is `placementOf(peak)` for every peak in code an
 // author wrote, and `forced` for a full-pool peak in code the COMPILER emitted, which has no author
-// E5001 could instruct (`relievePressure`'s `noAuthorToRefuse`). It is what tiers 3 and 4 gate on, so
-// "CONFINED-only" below means "forced-placement only" — the two coincide everywhere an author is
-// involved, which is everywhere the wording was written for.
+// E5001 could instruct (`relievePressure`'s `forcedRatherThanRefused`). It is what tiers 3 and 4
+// gate on, so "CONFINED-only" below means "forced-placement only" — the two coincide everywhere an
+// author is involved, which is everywhere the wording was written for.
 //
 // FIVE TIERS, IN STRICT ORDER — and the order is the whole cost model:
 //
@@ -7359,9 +7360,9 @@ end 'isForcedPlacement'
 // because refusing it is a message to the author and the message is the remedy.
 //
 // It takes the PEAK alone, so it cannot answer for the one case where whose code it is decides: a
-// full-pool peak in a function the compiler emitted also gets the forced bracket, because there is no
-// author to refuse to. That override is `relievePressure`'s (`noAuthorToRefuse`) — the only party that
-// holds the function — and it passes the result in rather than re-deriving it here.
+// full-pool peak in a function the compiler emitted also gets the forced bracket, because there is
+// no author to refuse to. That override is `relievePressure`'s (`forcedRatherThanRefused`) — the
+// only party that holds the function — and it passes the result in rather than re-deriving it here.
 function placementOf(peak PressurePeak) returns SpillPlacement
 	return SpillPlacement.forced if peak.clobberOnly else SpillPlacement.cold
 end 'placementOf'
@@ -7492,10 +7493,10 @@ module function opIsConstMaterialization(module TargetModule, opIdx ElementIndex
 		// ⚠ `leaRegGlobal` is the interesting `false` here. It reads NO register and computes a
 		// value that cannot change, so it IS rematerializable in principle — which is exactly what
 		// `StdOp.globalAddr`'s `isPure: true` says. But THIS predicate asks a narrower question:
-		// "can this def be rebuilt by `constValueOfDef` + a `movRegImm`?" A global's address is a
+		// "can this def be rebuilt by `constDefInfo` + a `movRegImm`?" A global's address is a
 		// LINK-TIME address, not an integer the compiler holds, so rebuilding it means re-emitting
 		// the `lea` AND a fresh relocation — which this remat path has no way to express. Answering
-		// `true` would send it to `constValueOfDef`, which would panic.
+		// `true` would send it to `constDefInfo`, which would panic.
 		//
 		// So it is a real missed optimization (a spilled global address would reload from the stack
 		// where it could re-`lea` for the same size and no slot), and it is priced: taking it means
@@ -7506,7 +7507,7 @@ module function opIsConstMaterialization(module TargetModule, opIdx ElementIndex
 		// reason. An f64 constant reads no register and cannot change, but it lives behind a
 		// RIP-relative relocation into `.rdata`, so rebuilding it needs the `movsd` AND a fresh
 		// relocation — and there is no `movsd xmm, imm64` to rebuild it with even if the IEEE bits
-		// ARE an integer the compiler holds. `constValueOfDef` would panic. When someone
+		// ARE an integer the compiler holds. `constDefInfo` would panic. When someone
 		// generalizes remat to "an op with no register inputs", it buys BOTH of these at once.
 		andRegReg or
 		orRegReg or
@@ -7604,7 +7605,7 @@ module function opIsConstMaterialization(module TargetModule, opIdx ElementIndex
 
 		// The function-value band (x64). `leaRegFunc` is the third instance of the
 		// `leaRegGlobal`/`leaRegRdata`/`movsdRegRip` `false`: it reads no register and its `.text` address
-		// cannot change, but it lives behind a relocation, not an integer `constValueOfDef` holds, so this
+		// cannot change, but it lives behind a relocation, not an integer `constDefInfo` holds, so this
 		// integer-remat predicate answers `false`. `callReg` reads its callee register and is a call —
 		// not a const materialization either. The Linux `x64Syscall` is a call, likewise `false`.
 		leaRegFunc or
@@ -8392,10 +8393,11 @@ function rewriteEdgeArgsIn(module TargetModule, topo FuncTopology, blockLocal El
 	end 'eachEdge'
 end 'rewriteEdgeArgsIn'
 
-// Insert `storeSlotReg(slot, valueId)` right after `afterOpIdx` — the op that DEFINES the value, so
-// it is live there by construction and the store reads it from its own register. For a value a CAPTURE
-// defines that is between the capture and the next one of its `tryCall`; the value then holds no
-// register across that next capture, and the cold run carries the store (`ColdRunOpKind.store`).
+// Insert `storeSlotReg(slot, valueId)` right after the op that DEFINES the value
+// (`pressure.defSlotOf`), so it is live there by construction and the store reads it from its own
+// register. For a value a CAPTURE defines that is between the capture and the next one of its
+// `tryCall`; the value then holds no register across that next capture, and the cold run carries
+// the store (`ColdRunOpKind.store`).
 function insertStoreAfter(module TargetModule, cfg FuncCfg, pressure PressureIndex, valueId ValueId, blockLocal ElementIndex, slot SpillSlot, placement SpillPlacement, edits SplitEdits)
 	assertPlacementLegal(module, cfg: cfg, blockLocal: blockLocal, valueId: valueId, what: SplitPlacementOp.store, placement: placement)
 	spliceOp(module, at: pressure.positionOfSlot(blockLocal, slot: pressure.defSlotOf(valueId)) + 1, op: TargetOp.storeSlotReg(slot, srcReg: TargetVReg.virtual(valueId)), blockLocal: blockLocal, edits: edits)

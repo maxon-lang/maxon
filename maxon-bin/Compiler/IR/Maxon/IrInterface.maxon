@@ -154,14 +154,14 @@ end 'witnessMethodSlotOffset'
 // names its own.
 //
 // ⭐ **THE WHOLE BLOCK IS ALLOCATED, NOT JUST THE HELD POSITIONS, AND THAT IS DELIBERATE.** A dense
-// held-position index would be a SECOND numbering beside `associatedTypeNames`, computed at the mint and
-// re-computed at every load, and the two would be free to disagree about a slot that is 8 opaque bytes to
-// every reader. `position` is the interface's own, so there is one numbering. An interface with NO held
-// position gets no block at all (`associatedSlotCount` is 0), so every witness table in a program that does
-// not use the feature is byte-identical to what it was.
+// held-position index would be a SECOND numbering beside `associatedTypeNames`, computed at the
+// mint and re-computed at every load, and the two would be free to disagree about a slot that is 8
+// opaque bytes to every reader. `position` is the interface's own, so there is one numbering. An
+// interface with NO held position gets no block at all (`LowerMaxonToStd.heldAssociatedSlotCount`
+// is 0), so a program that does not use the feature pays nothing in any witness table.
 //
 // ⚠ **THE SLOT HOLDS A SELF-RELATIVE BYTE OFFSET, NOT AN ADDRESS** — see
-// `GlobalDataTable.recordRdataSelfRelativeOffset` for why `.rdata` cannot point at itself with any
+// `GlobalDataTable.PendingRdataSelfRelReloc` for why `.rdata` cannot point at itself with any
 // relocation this compiler has, and why a distance can.
 export function witnessAssociatedSlotOffset(methodCount WitnessMethodIndex, position ElementIndex) returns ByteOffset
 	return witnessMethodSlotOffset(methodCount + (position as WitnessMethodIndex))
@@ -245,7 +245,7 @@ end 'witnessSlotImplKey'
 // ⭐⭐ **THE `.text` NAME OF THE ABI ADAPTER A WITNESS SLOT MAY NEED** — a real function, one per
 // `(conformer, interface, method)` triple, whose signature IS the requirement's and whose body forwards to
 // the impl with the impl's hidden dictionary arguments supplied. See
-// `LowerMaxonToStd.witnessSlotAdapterCallee` for when a slot needs one and what it passes.
+// `LowerMaxonToStd.witnessSlotCallee` for when a slot needs one and what it passes.
 //
 // It is BUILT ON `witnessSlotImplKey` rather than joining the triple a third time, for that function's own
 // stated reason: the triple's injectivity is a property of ONE join, and a second join free to drift from it
@@ -917,12 +917,12 @@ end 'Array'
 // makes the bare keyword ILLEGAL in exactly that position, so a float formal can ONLY arrive as an alias
 // NAME. A corpus that writes the keyword wherever the rule permits it hides the hole.
 //
-// ⚠ **AN INT ALIAS IS DELIBERATELY LEFT ALONE**, and `isFloatAlias`'s own header carries the reason: `named`
-// already reads as an integer everywhere, and its NAME is what carries the range and the signedness the range
-// checks read off it. A FLOAT alias is the ONE that cannot be left overloaded, because the overloading is a
-// register file rather than a range. Same asymmetry, same reason, as `Parser.floatResolvedTagOfNameFrom`.
-// The name is resolved in `readerFilePath`, because two files may declare one private name over `int`
-// and `float`.
+// ⚠ **AN INT ALIAS IS DELIBERATELY LEFT ALONE**, and `isFloatAliasFor`'s own header carries the
+// reason: `named` already reads as an integer everywhere, and its NAME is what carries the range
+// and the signedness the range checks read off it. A FLOAT alias is the ONE that cannot be left
+// overloaded, because the overloading is a register file rather than a range. Same asymmetry, same
+// reason, as `Parser.floatResolvedTagOfNameFrom`. The name is resolved in `readerFilePath`, because
+// two files may declare one private name over `int` and `float`.
 export function renderedTypeNameAbiType(name ByteArray, readerFilePath FilePath, signatures ProgramSignatures) returns MaxonType
 	let tag = builtinTypeNameTag(name)
 
@@ -2151,13 +2151,13 @@ end 'BuiltinInterfaceKind'
 // MEANS (a user's typo'd interface name is `E3015`; a witness table naming an unresolvable interface is an
 // internal invariant break), so the miss stays theirs and only the lookup is shared.
 //
-// ⚠⚠ **THE PARSER ASKS THIS SAME FUNCTION, OF A DIFFERENT MAP.** A second spelling of the rule at the
-// parser (over `ProgramSignatures.interfaceOf`), defended as a phase split, is live duplication rather than
-// latent: a witness dispatch resolves
-// its CONSTRAINT's interface through the parser's spelling and every `extends` PARENT through this one, a
-// single call apart. Two rules that agree today and would diverge silently: a parent that resolves for the
-// slot walk but not for the constraint is a wrong slot COUNT, and a wrong count is a wrong function pointer
-// rather than a diagnostic.
+// ⚠⚠ **THE PARSER ASKS THIS SAME FUNCTION, OF A DIFFERENT MAP.** A second spelling of the rule at
+// the parser (over `ProgramSignatures.interfaceMap`), defended as a phase split, is live
+// duplication rather than latent: a witness dispatch resolves its CONSTRAINT's interface through
+// the parser's spelling and every `extends` PARENT through this one, a single call apart. Two rules
+// that agree today and would diverge silently: a parent that resolves for the slot walk but not for
+// the constraint is a wrong slot COUNT, and a wrong count is a wrong function pointer rather than a
+// diagnostic.
 //
 // **The PHASE distinction is real and is carried by WHICH MAP the caller
 // holds** (`ProgramSignatures.interfaceMap` mid-parse, before any file has merged; `project.interfaces`
@@ -2712,13 +2712,14 @@ end 'conformanceSelfTypeNameOf'
 // It is one fact, which is why no method LIST is needed here and why one must not be added: "and these three
 // methods" would be a second copy of `builtinConformerMethod`'s answer.
 //
-// ⚠⚠ **THE FOUR QUALIFIERS BUY THAT FACT TWO DIFFERENT WAYS, AND THE SECOND WAY IS A DEPENDENCY, NOT A
-// RESTATEMENT.** `int`, `float` and `bool` are KEYWORDS (`Lexer.keywordTable`), so the LEXER makes a user
-// declaration under one impossible and nothing further is needed. `String` is an ordinary identifier and
-// buys it from the RESERVATION instead: `TypeResolution.isCompilerOwnedTypeName` refuses any declaration
-// that would bind the name, so no user `type String` exists to carry a `hash()` and no user
-// method symbol can wear `String.`. **Remove `String` from that list and this line becomes false**, in the
-// silent direction — see that function for the two wrong answers measured without the name covered.
+// ⚠⚠ **THE FOUR QUALIFIERS BUY THAT FACT TWO DIFFERENT WAYS, AND THE SECOND WAY IS A DEPENDENCY,
+// NOT A RESTATEMENT.** `int`, `float` and `bool` are KEYWORDS (`Lexer.KeywordTable`), so the LEXER
+// makes a user declaration under one impossible and nothing further is needed. `String` is an
+// ordinary identifier and buys it from the RESERVATION instead:
+// `TypeResolution.isCompilerOwnedTypeName` refuses any declaration that would bind the name, so no
+// user `type String` exists to carry a `hash()` and no user method symbol can wear `String.`.
+// **Remove `String` from that list and this line becomes false**, in the silent direction — see
+// that function for the two wrong answers measured without the name covered.
 //
 // ⛔⛔ **A SOURCE-WRITTEN `String.<member>(…)` REACHES THE RESERVED-CALLEE GATE.** It is not intercepted
 // away from it: `Parser.parseStringStaticCall`'s corpus fall-through forwards a
@@ -2994,10 +2995,7 @@ export function builtinConformerDispatchMethodNames(typeName ByteArray) returns 
 end 'builtinConformerDispatchMethodNames'
 
 // ⭐ **JOIN ALREADY-RENDERED PHRASES INTO A DIAGNOSTIC'S LIST** — `", "`, in one place, for the rosters that
-// are DERIVED from the very table their door tests against and so cannot be written out as prose. Its
-// entries are phrases rather than names because not every admitted thing HAS a name: a hash table's key
-// roster (`Parser.hashTableAdmittedKeys`) ends in a SHAPE, and quoting that as an identifier would print a
-// type nobody declared.
+// are DERIVED from the very table their door tests against and so cannot be written out as prose.
 function renderPhraseList(phrases StringArray) returns String
 	var rendered = ""
 

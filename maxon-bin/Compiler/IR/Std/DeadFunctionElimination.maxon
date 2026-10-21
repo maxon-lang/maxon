@@ -84,8 +84,7 @@
 // the pruning is what makes the index built above stale — positions move. So the fresh one is built HERE,
 // billed to this phase, by the pass that invalidated the old one: a backend cannot then be handed a
 // module without an index, and the index it is handed cannot describe a different array than the module
-// it accompanies. The map it replaces is `buildCalleeResultClasses`, which walked the same array to store
-// a value the index can already reach in two O(1) steps.
+// it accompanies.
 //
 // ⭐ **AND THE `.data` LABELS THE SURVIVORS NAME COME BACK WITH IT**, collected by the same op walk that
 // finds the call edges, so the layout that reads them cannot count a body this pass did not.
@@ -596,12 +595,12 @@ end 'StdFunctionReference'
 //
 //   * `call` / `tryCall` — the direct call graph.
 //   * `funcAddr` — a function's ADDRESS, and it is a STATIC edge even though the call that consumes it
-//     is indirect. It is the whole of the compiler's first-class-function support: `let f = triple` lowers to
-//     `funcAddr(__fnref_triple)`, whose thunk body then `call`s `triple`; an async spawn takes the
-//     spawned function's bare address; an element destructor is stamped into a descriptor slot the same
-//     way. ⚠ This arm is load-bearing: a `funcAddr` target is NOT already rooted by a `funcRef` that
-//     produced its value — that is false for a directly-emitted one, and the destructor is then
-//     pruned.
+//     is indirect. It is the whole of the compiler's first-class-function support: `let f = triple`
+//     lowers to `funcAddr(__fnref_triple)`, whose thunk body then `call`s `triple`; an async spawn
+//     takes the spawned function's bare address; an element destructor is stamped into a descriptor
+//     slot the same way. ⚠ This arm is load-bearing: a `funcAddr` target is NOT already rooted by a
+//     `functionRef` that produced its value — that is false for a directly-emitted one, and the
+//     destructor is then pruned.
 //
 // `callIndirect`, `witnessCall` and `witnessTryCall` deliberately name NO callee: they consume a
 // code pointer that some `funcAddr` (named above) or some `.rdata` slot (rooted in `seedRoots`)

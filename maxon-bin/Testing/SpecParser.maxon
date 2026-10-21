@@ -533,8 +533,8 @@ let FragmentHeaderLines = 1 as ElementIndex
 
 // ⭐⭐ **THE STDLIB-OVERLAY MARKER — how a case reaches a rule that only `<stdlibDir>/Builtins.maxon`
 // can trip.** Its value is a path RELATIVE TO `stdlib/`, and the section's text is written at the TOP
-// of the runner's private copy of that file (`SpecTestRunner.stageStdlibOverlay`, which states the
-// isolation argument and why the position is a contract rather than a detail).
+// of the runner's private copy of that file (`SpecTestRunner.stageSourceTiers` states the isolation
+// argument, and `applyOverlaySections` why the position is a contract rather than a detail).
 //
 // It exists because three of `reserved-double-underscore.md`'s own findings were recorded as SHELL
 // TRANSCRIPTS: every route to E4015 through `FunctionNameIndex` needs a declaration carrying the
@@ -2500,21 +2500,15 @@ export let LineSeparator = "\n"
 
 // Parts joined by a separator, with no leading and no trailing copy of it.
 //
-// The suite accumulates separated text in three places — a spec's fenced blocks (`readFence`, below),
-// a worker's whole stderr (`drainChildStderr`, SpecWorkerPool) and an `<!-- Args: … -->` payload
-// written back out (`renderProgramArgs`) — and the first two hand-rolled this dance identically before
-// it existed. Those two are also UNBOUNDED in their input: a fence is a whole test program, a drain is
-// everything a crashed child said. So the accumulator is a `StringBuilder`, because a `String` owns
-// exactly the bytes it holds and its `append` recopies all of them (stdlib/String.maxon), making a join
-// Θ(n²) in its own output.
-//
-// ⚠ IT CARRIES THE SEPARATOR RATHER THAN ASSUMING A NEWLINE, and the third caller is why: an argv
-// payload is joined by a SPACE and is the same dance in every other respect. A second joiner beside
-// this one would be one fact written twice — the failure the first two callers had already shipped.
+// The suite accumulates separated text in several places, among them a spec's fenced blocks
+// (`readFence`, below) and a worker's whole stderr (`drainChildStderr`, SpecWorkerPool). Those two
+// are UNBOUNDED in their input: a fence is a whole test program, a drain is everything a crashed
+// child said. So the accumulator is a `StringBuilder`, because a `String` owns exactly the bytes it
+// holds and its `append` recopies all of them (stdlib/String.maxon), making a join Θ(n²) in its own
+// output.
 //
 // `hasPart` is NOT `out.isEmpty()`. A first part that is itself EMPTY leaves the builder empty and must
-// still be separated from the part after it — a spec fence opening on a blank line is ordinary, and an
-// empty argv argument is a case `/specs` actually writes (`command-line-args.empty-string-arg`) — so
+// still be separated from the part after it — a spec fence opening on a blank line is ordinary — so
 // inferring the flag from the buffer would silently eat that separator.
 export type TextJoiner
 	var out as StringBuilder

@@ -984,15 +984,11 @@ end 'cacheReadIrBlockArray'
 
 // @generated library-cache end
 
-// ⛔ There is deliberately NO `resolveBlockLabel(blockId, blocks)` here any more.
-//
-// It answered a branch target with the target block's `label`, which is NOT a block's identity: a
-// label is minted per CONSTRUCT (`ifcont`, `tryerr`, `__rc_panic`), so one function holds several
-// blocks of one name and the answer could not name which. Naming a block for PRINTING is the
-// printer's own concern and needs the whole function in view to disambiguate — it lives in
-// `TargetPrinter.buildBlockPrintNames`, which builds one injective table per function and is read by
-// the block header and every branch operand alike. That also retired this scan, which ran once per
-// branch operand and made printing a function quadratic in its own block count.
+// ⛔ A block's `label` is NOT its identity: a label is minted per CONSTRUCT (`ifcont`, `tryerr`,
+// `__rc_panic`), so one function holds several blocks of one name. Naming a block for PRINTING
+// needs the whole function in view to disambiguate, so it is the printer's:
+// `TargetPrinter.buildBlockPrintNames` builds one injective table per function, read by the block
+// header and every branch operand alike.
 
 // A batch this small is inserted one shift of the suffix at a time: a bounded number of shifts
 // keeps it Θ(M), and for a few ops that is cheaper than the grow-and-fill pass.

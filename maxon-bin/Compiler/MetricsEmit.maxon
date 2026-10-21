@@ -43,20 +43,20 @@
 // THE FORMAT, NAMED ONCE — this file is the WRITER, and every READER reads these same names
 // ============================================================================================
 //
-// There are TWO readers now, in two different suites: `ScaleTestRunner.parseRungMetrics` (the
-// whole table, one rung at a time) and `SpecTestRunner.readCompileCpu` (the `total` row's CPU
-// column, once per spec-suite compile). A separator, a comment marker or a column index spelled
-// at a reader instead of here is a copy of this format that nothing forces to agree with it —
-// and the failure mode is not a compile error, it is a reader that silently parses the wrong
-// column. So the punctuation and the column positions live at the WRITER, where a change to the
-// row shape and a change to the constant are the same edit.
+// The reader is `ScaleTestRunner.parseRungMetrics` (the whole table, one rung at a time); the spec
+// suite takes its CPU from `CompileProduct.totalCpuTicks` and reads no file. A separator, a comment
+// marker or a column index spelled at a reader instead of here is a copy of this format that
+// nothing forces to agree with it — and the failure mode is not a compile error, it is a reader
+// that silently parses the wrong column. So the punctuation and the column positions live at the
+// WRITER, where a change to the row shape and a change to the constant are the same edit.
 export let MetricsColumnSep = "\t"
 
-// What ends a row — and it is exactly as much of the contract as the column separator beside it, for
-// the same reason: a reader splits the file on this before it splits a row on that, so a writer and a
-// reader that disagreed about it would not fail to compile, they would agree about columns inside
-// rows that were never the same rows. `metricsRow` terminates with it and both readers split on it, so
-// there is one spelling of "where a row stops" in the tree rather than one per end of the pipe.
+// What ends a row — and it is exactly as much of the contract as the column separator beside it,
+// for the same reason: a reader splits the file on this before it splits a row on that, so a writer
+// and a reader that disagreed about it would not fail to compile, they would agree about columns
+// inside rows that were never the same rows. `metricsRow` terminates with it and the reader splits
+// on it, so there is one spelling of "where a row stops" in the tree rather than one per end of the
+// pipe.
 export let MetricsRowSep = "\n"
 
 // A row a reader must SKIP. Both header lines carry it, and nothing else in the file does.
@@ -121,9 +121,9 @@ let MetricsNoName = "-"
 // ⚠ AND IT IS WRITTEN ONLY BY A COMPILE THAT SUCCEEDED. This call is the last step of
 // `compileMeasured`, so every throwing exit — a parse error, a semantic error, an E5001 — leaves no
 // file at all, even though that compile burned real CPU. The spec suite's cumulative-CPU indicator
-// reads this file per test and therefore CANNOT see the error-path compiles; it counts them
-// separately and prints the count, rather than reporting a total that quietly omits them (see
-// `SpecTestRunner.readCompileCpu`).
+// has no measurement for those compiles either, since a compile that threw returns no
+// `CompileProduct`; it counts them separately and prints the count, rather than reporting a total
+// that quietly omits them (see `SpecTestRunner.CompileCpu`).
 export function writeMetrics(project Project, metricsPath String, codeBytes CodeByteCount)
 	let path = try FilePath.from(metricsPath) otherwise 'badPath'
 		compilerLogger(CompilerLogGroup.compiler).error("Invalid --metrics path '{metricsPath}'")

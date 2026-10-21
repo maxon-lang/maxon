@@ -550,10 +550,10 @@ end 'requireEveryNameRendered'
 //
 // A `runtime/` body proves it without a name, which is why tier membership is its own disjunct:
 // `LibraryFacts.runtimeTier` is the provenance fact `SemanticCheck.calleeYields` and
-// `calleeShowsAnEffect` read for the same question. `maxon_force_segfault` forces the point — the
-// backtrace prints its name, so it can never take a prefix, and under the conjunction it would
-// carry a green-thread stack guard and be marked `asyncPreemptible`. This admits no user function:
-// no user file may declare into `runtime/` (E2051, and
+// `EffectSummaryBuilder.walkCall` read for the same question. `maxon_force_segfault` forces the
+// point — the backtrace prints its name, so it can never take a prefix, and under the conjunction
+// it would carry a green-thread stack guard and be marked `asyncPreemptible`. This admits no user
+// function: no user file may declare into `runtime/` (E2051, and
 // `Parser.requireFreeFunctionNameIsNotTheFaultProbe` for the one unbanded entry) or call into it
 // (E3004, and `calleeVisibleFrom`'s admit-list).
 //
@@ -632,16 +632,16 @@ typealias BlockPrintNames = Map with (BlockId, String)
 // The names already handed out, so the injectivity claim above is CHECKED rather than asserted.
 typealias BlockPrintNameSet = Set with String
 
-// ⛔⛔ **A BLOCK'S `label` IS NOT ITS IDENTITY, AND PRINTING IT AS ONE MADE THE DUMP LIE.**
+// ⛔⛔ **A BLOCK'S `label` IS NOT ITS IDENTITY, AND PRINTING IT AS ONE MAKES THE DUMP LIE.**
 //
-// Labels are minted per CONSTRUCT, not per block: `parseIf` names every continuation `ifcont`, a
-// `try` names every pair `tryerr`/`tryok`, the range-check names every trio `__rc_chk`/`__rc_ok`/
-// `__rc_panic`. One function therefore routinely holds several blocks of one name. The printer used
-// to render `block.label` in the header AND resolve a branch target to `block.label` too — a LOSSY
-// KEY USED AS AN IDENTITY, and not merely ambiguous: in `buildFor`
-// (`specs/refcount-global-getter-forward.md`) two blocks are both `ifcont` and the FIRST ends
-// in `jmp ifcont` targeting the SECOND, so the only reading available to a reader — the label above
-// the jump — says self-loop where the code is a forward jump.
+// Labels are minted per CONSTRUCT, not per block: `Parser.finalizeIfElse`/`finalizeIfNoElse` name
+// every continuation `ifcont`, a `try` names every pair `tryerr`/`tryok`, the range-check names
+// every trio `__rc_chk`/`__rc_ok`/`__rc_panic`. One function therefore routinely holds several
+// blocks of one name. A bare `block.label` in the header and in a branch target is a LOSSY KEY USED
+// AS AN IDENTITY, and not merely ambiguous: in `buildFor`
+// (`specs/refcount-global-getter-forward.md`) two blocks are both `ifcont` and the FIRST ends in a
+// jump to the SECOND, so the label above the jump would say self-loop where the code is a forward
+// jump.
 //
 // The disambiguator is the block's own `id`, which IS injective — it is minted per function, and
 // `PruneDeadBlockArgs.buildBlockIdIndex` already treats `func.nextBlockId` as that id space's bound.

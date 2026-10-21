@@ -29,14 +29,15 @@
 // code before control returns. So every register the colorer believes survives a call must be saved here
 // EXPLICITLY, and that set is exactly the two ordered lists below.
 
-// The callee-saved registers the context switch saves and restores: the GPRs in push order (pop order is the
-// exact reverse), then the XMMs into a `sub rsp` area written with `movsd` — the SAME `calleeSavedOrder` and
-// `calleeSavedXmmOrder` the ordinary prologue/epilogue preserves (X64PrologueEpilogue), so the switch
-// preserves EXACTLY what any call preserves, from two shared lists rather than second copies. Their sizes are
-// the contract `__gt_spawn`'s initial frame layout byte-matches: `GtInitialFrameBytes` = the GPR words + the
-// XMM words + the return-address word, and the trampoline address sits in that top word so the first
-// switch-in's jump enters the trampoline. `assertGtFrameConsistent` (below) enforces that byte-match at
-// chunk-build time, deriving it from BOTH lists.
+// The callee-saved registers the context switch saves and restores: the GPRs in push order (pop
+// order is the exact reverse), then the XMMs into a `sub rsp` area written with `movsd` — the SAME
+// `calleeSavedOrder` and `calleeSavedXmmOrder` the ordinary prologue/epilogue preserves
+// (X64PrologueEpilogue), so the switch preserves EXACTLY what any call preserves, from two shared
+// lists rather than second copies. Their sizes are the contract `__gt_spawn`'s initial frame layout
+// byte-matches: `X64GtInitialFrameBytes` = the GPR words + the XMM words + the return-address word,
+// and the trampoline address sits in that top word so the first switch-in's jump enters the
+// trampoline. `assertGtFrameConsistent` (below) enforces that byte-match at chunk-build time,
+// deriving it from BOTH lists.
 //
 // ⚠ ONE `XmmSaveSlotBytes` WORD PER XMM — the SAME constant the prologue's slots stride by, not a second 8
 // that happens to agree. The low 64 bits ARE the value in the compiler (no type is wider, and nothing reads bits
@@ -169,12 +170,12 @@ function gtXmmSaveAreaBytes() returns StackSize
 	return (calleeSavedXmmOrder.count() as StackSize) * XmmSaveSlotBytes
 end 'gtXmmSaveAreaBytes'
 
-// ⭐ Enforce the ONE fact the Std-tier frame builder (`__gt_spawn` in GtRuntime, which lays `GtInitialFrameBytes`)
-// and this Target-tier byte code SHARE: a fresh GT's initial context-switch frame is every callee-saved
-// register plus one return-address word. If a register is added to or removed from EITHER callee-saved list
-// without moving `GtInitialFrameBytes` in lockstep, the first switch-in pops the wrong number of bytes and
-// jumps to a WILD address. This turns that silent cross-tier drift into a compile-time panic on every
-// async compile.
+// ⭐ Enforce the ONE fact the Std-tier frame builder (`__gt_spawn` in GtRuntime, which lays
+// `gtInitialFrameBytes`) and this Target-tier byte code SHARE: a fresh GT's initial context-switch
+// frame is every callee-saved register plus one return-address word. If a register is added to or
+// removed from EITHER callee-saved list without moving `X64GtInitialFrameBytes` in lockstep, the
+// first switch-in pops the wrong number of bytes and jumps to a WILD address. This turns that
+// silent cross-tier drift into a compile-time panic on every async compile.
 //
 // ⚠⚠ IT IS DERIVED FROM **BOTH** LISTS. The GPRs are pushed words; the XMMs are `movsd` words in a `sub rsp`
 // area, because x86-64 has no `push xmm`. An assert over `calleeSavedOrder` alone would keep passing while
@@ -2011,8 +2012,9 @@ function emitX64PreemptInject(asm X64RuntimeAsm, fileSlot StackSize, spOffset Im
 	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: pcOffset, srcReg: X64Register.rdx, wide: true)
 end 'emitX64PreemptInject'
 
-// CAS(m.signalPending, free → held) on the machine in `m`, branching to `alreadyOutstanding` when a stop is
-// already in flight against it. Clobbers rax and rdx, which every caller has just finished with.
+// CAS(`MOffSignalPending`, free → held) on the machine in `m`, branching to `alreadyOutstanding`
+// when a stop is already in flight against it. Clobbers rax and rdx, which every caller has just
+// finished with.
 function emitX64PreemptClaim(asm X64RuntimeAsm, m X64Register, alreadyOutstanding BlockId)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PreemptClaimFree)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: PreemptClaimHeld)
@@ -2063,13 +2065,13 @@ end 'buildPreemptSelfRegisterChunk'
 
 // `__gt_preempt_m(rcx = m)`; see `SchedRuntime.PreemptMachineName`.
 //
-// The order of the two claims is the protocol. The machine's `signalPending` goes up first, so at
-// most one stop is in flight against one machine and the trampoline's clear re-arms it; then the
-// process-wide `preemptExtLock`, which `__gt_exit_process` takes and never releases, because a
-// thread suspended inside `ExitProcess` holds the loader lock the terminating thread needs and the
-// process hangs silently.
+// The order of the two claims is the protocol. The machine's `MOffSignalPending` goes up first, so
+// at most one stop is in flight against one machine and the trampoline's clear re-arms it; then the
+// process-wide `__sched_preempt_ext_lock`, which `__gt_exit_process` takes and never releases,
+// because a thread suspended inside `ExitProcess` holds the loader lock the terminating thread
+// needs and the process hangs silently.
 //
-// Every road that does not inject must hand `signalPending` back, or that machine is never
+// Every road that does not inject must hand `MOffSignalPending` back, or that machine is never
 // preempted again. Only the road that reaches `SetThreadContext` successfully leaves it raised,
 // because only then does a trampoline run and clear it.
 //
@@ -2137,8 +2139,8 @@ function buildPreemptMachineChunk(context HostContextLayout) returns FunctionCod
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtCmp, reg: X64Register.rax, imm: Win32False as Imm32)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: PreemptResumeLabel)
 
-	// The stop has landed: resume the thread and release the window — and leave `signalPending` raised,
-	// because the trampoline that is about to run is what clears it.
+	// The stop has landed: resume the thread and release the window — and leave `MOffSignalPending`
+	// raised, because the trampoline that is about to run is what clears it.
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotHandle), wide: true)
 	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.ResumeThread))
 	emitPreemptReleaseExtLock(asm)
@@ -2153,7 +2155,7 @@ function buildPreemptMachineChunk(context HostContextLayout) returns FunctionCod
 	asm.placeLabel(PreemptUnlockLabel)
 	emitPreemptReleaseExtLock(asm)
 
-	// giveBack: nothing is held but this machine's `signalPending`.
+	// giveBack: nothing is held but this machine's `MOffSignalPending`.
 	asm.placeLabel(PreemptGiveBackLabel)
 	emitX64PreemptGiveBack(asm, machineSlot: SlotMachine)
 
@@ -2338,9 +2340,10 @@ end 'buildExitProcessGateChunk'
 // delivery is shared: the poison still authorises the stop, `__gt_preempt_safe` still judges it, and the
 // same `__gt_async_preempt` is what the thread resumes into.
 //
-// ⛔ **NO `preemptExtLock` AND NO EXIT GATE HERE.** Both exist on the suspending lane because a thread
-// suspended inside `ExitProcess` holds the loader lock the terminating thread needs. Nothing is suspended
-// here: a signal handler runs to completion on the signalled thread and blocks no other.
+// ⛔ **NO `__sched_preempt_ext_lock` AND NO EXIT GATE HERE.** Both exist on the suspending lane
+// because a thread suspended inside `ExitProcess` holds the loader lock the terminating thread
+// needs. Nothing is suspended here: a signal handler runs to completion on the signalled thread and
+// blocks no other.
 
 // `__gt_preempt_self_register(rcx = m)` on the signalling lane — see `SchedRuntime.PreemptSelfRegisterName`.
 // The thread id is the whole of it: `MOffPreemptThreadHandle` stays 0 because a signal is addressed to the
@@ -2362,10 +2365,10 @@ end 'buildLinuxPreemptSelfRegisterChunk'
 
 // `__gt_preempt_m(rcx = m)` on the signalling lane — Go's `preemptM` (`signal_unix.go`).
 //
-// ⛔ **EVERY ROAD THAT DOES NOT DELIVER MUST HAND `signalPending` BACK**, or that machine is never preempted
-// again for the life of the process. Only a `tgkill` the kernel accepted leaves it raised, because only then
-// is a handler going to run — and the handler either injects and lets the trampoline clear it, or declines
-// and clears it itself.
+// ⛔ **EVERY ROAD THAT DOES NOT DELIVER MUST HAND `MOffSignalPending` BACK**, or that machine is
+// never preempted again for the life of the process. Only a `tgkill` the kernel accepted leaves it
+// raised, because only then is a handler going to run — and the handler either injects and lets the
+// trampoline clear it, or declines and clears it itself.
 //
 // ⚠ **A REFUSED `tgkill` IS A THREAD THAT IS GONE**, which is the one failure this can meet: the id was
 // recorded by the thread itself and an M is never freed.
@@ -2436,7 +2439,7 @@ function buildLinuxPreemptHandlerChunk() returns FunctionCodeChunk
 	// monitor performs on a `CONTEXT`, through the one emitter both come to.
 	emitX64PreemptInject(asm, fileSlot: SlotUcontext, spOffset: X64LinuxUContextRspOffset, pcOffset: X64LinuxUContextRipOffset)
 
-	// The stop has landed: `signalPending` stays raised for the trampoline to clear.
+	// The stop has landed: `MOffSignalPending` stays raised for the trampoline to clear.
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: PreemptDoneLabel)
 
 	// Declined: this instant is no safe point, so the machine is re-armed for the monitor's next poll.

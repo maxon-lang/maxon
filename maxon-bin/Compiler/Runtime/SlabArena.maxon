@@ -181,10 +181,10 @@ let UnreservedArenaChunkCount = 64
 typealias ArenaChunkCount = int(1 to u64.max)
 
 // ⭐ **EVERYTHING AN ARENA'S SIZE DECIDES, CARRIED TOGETHER SO THE PIECES CANNOT BE ASKED SEPARATELY.**
-// `buildSlabArenaNew` emits the reservation size and the bitmap's byte count; `buildSlabArenaAllocChunks`
-// and `buildSlabArenaFreeChunks` emit the scan bound. Handed the raw chunk count instead, each would derive
-// its own — and a builder deriving `bitmapWords` from one geometry while its neighbour derives the scan
-// bound from another is an allocator that hands one chunk out twice, with nothing to catch it.
+// `checkArenaGeometryForLane` asserts the reservation size, the bitmap widths and their offsets
+// against each other from this one derivation. Asked of the raw chunk count separately,
+// `bitmapWords` derived from one geometry beside a scan bound derived from another is an allocator
+// that hands one chunk out twice, with nothing to catch it.
 type SlabArenaGeometry
 	// Chunks in one arena. Every other figure here is derived from it.
 	export let chunkCount as ArenaChunkCount
@@ -220,12 +220,12 @@ type SlabArenaGeometry
 	export let bytes as FullRangeInt
 
 	// ⭐⭐ **WHAT `__slab_arena_new` ASKS `osReservePages` FOR — `bytes` PLUS THE ROOM THE ALIGN-UP NEEDS.**
-	// The base the OS answers is raised to the next commit granule (see `buildSlabArenaNew` for why it must
-	// be), which can move it by as much as `SlabArenaCommitGranuleBytes - 1`; the arena then runs `bytes`
-	// from there. Reserving only `bytes` would put the arena's last granule OUTSIDE the reservation, and on
-	// the POSIX lanes that granule's commit is a `MAP_FIXED` re-map — a silent clobber of whatever the
-	// process had at that address, not a refusal. Carried rather than derived at the one call site so
-	// `checkArenaGeometryForLane` can assert the two against each other.
+	// The base the OS answers is raised to the next commit granule (see `__slab_arena_new` for why it
+	// must be), which can move it by as much as `SlabArenaCommitGranuleBytes - 1`; the arena then runs
+	// `bytes` from there. Reserving only `bytes` would put the arena's last granule OUTSIDE the
+	// reservation, and on the POSIX lanes that granule's commit is a `MAP_FIXED` re-map — a silent
+	// clobber of whatever the process had at that address, not a refusal. Carried rather than derived
+	// at the one call site so `checkArenaGeometryForLane` can assert the two against each other.
 	export let reservationBytes as FullRangeInt
 
 	// ⭐ Which lane this geometry IS, carried rather than passed alongside. `checkArenaMapCoupling` asks a
@@ -480,9 +480,9 @@ export function checkSlabArenaGeometry(signatures ProgramSignatures, tierPath Fi
 		panic("slab arena: a commit granule of {SlabArenaCommitGranuleBytes} bytes is not a whole number of {SlabPageBytes}-byte chunks")
 	end 'granuleNotWholeChunks'
 
-	// The two shifts a granule is reached by. `emitCommitGranulesFor` divides a CHUNK index by the first and
-	// `buildSlabArenaScavenge` multiplies a GRANULE index by the second, so a shift that stopped matching its
-	// width would commit one granule and decommit another.
+	// The two shifts a granule is reached by. The tier's `slabArenaCommitGranulesFor` divides a CHUNK
+	// index by the first and `__slab_arena_scavenge` multiplies a GRANULE index by the second, so a
+	// shift that stopped matching its width would commit one granule and decommit another.
 	requireShiftMatchesWidth("commit granule chunks", shift: SlabArenaCommitGranuleChunksShift, width: SlabArenaCommitGranuleChunks)
 	requireShiftMatchesWidth("commit granule bytes", shift: SlabArenaCommitGranuleShift, width: SlabArenaCommitGranuleBytes)
 

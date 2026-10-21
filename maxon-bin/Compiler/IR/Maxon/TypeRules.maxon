@@ -435,8 +435,8 @@ end 'DeclaredTypeMatch'
 // exactly as two different structs share `structRef`.
 //
 // It is a `bool` and it is asked FIRST, before anything is built, for the reason
-// `ProgramSignatures.isFunctionAlias` is a bool twin: these doors are every assignment and every `return` in
-// the program, and the overwhelming majority are neither side a function.
+// `ProgramSignatures.isFunctionAliasInAnyFile` is a bool twin: these doors are every assignment and
+// every `return` in the program, and the overwhelming majority are neither side a function.
 export function isFunctionTypeDoor(declared ValueTypeTag, got ValueTypeTag) returns bool
 	return declared == ValueTypeTag.function and got == ValueTypeTag.function
 end 'isFunctionTypeDoor'
@@ -608,11 +608,11 @@ export let FunctionValueMisuseSuffix = "a function value is only usable where a 
 // the callee's parameter at the type parameter too compiles and runs, and so does making the call from a
 // concrete instantiation.
 //
-// ⚠ **ONLY THE ARGUMENT DOOR QUOTES IT TODAY.** The verdict is shared by four doors, but the sentences for
-// the `return` and the global/local store are rendered in `Queries.renderParseError` and the field store's in
-// `Parser.slotMismatchError`, so those three say only the head. That is
-// a sentence owed, not a second rule: the tail lives here precisely so adopting it there is a reference and
-// never a re-authoring.
+// ⚠ **ONLY THE ARGUMENT DOOR QUOTES IT TODAY.** The verdict is shared by four doors, but the
+// sentences for the `return` and the global/local store are rendered in `Queries.reportParseError`
+// and the field store's in `Parser.slotMismatchError`, so those three say only the head. That is a
+// sentence owed, not a second rule: the tail lives here precisely so adopting it there is a
+// reference and never a re-authoring.
 export let OpaqueValueMisuseSuffix = "a generic body is compiled ONCE, against the declaration view, so a type parameter is an opaque machine word here and nothing has fixed what it points at — this is refused even where every 'with' in the program binds it to that very type. Declare the place at the type parameter too, or make the call from a concrete instantiation, where the type argument is known"
 
 // ⭐⭐ **THE SAME RULE READ THE OTHER WAY: A CONCRETE VALUE ARRIVING AT AN OPAQUE PLACE.** The tail of the
@@ -656,11 +656,12 @@ export let ConcreteValueAtOpaquePlaceSuffix = "one body serves every instantiati
 // `ExitCode`, is refused with "'int' and 'int'").
 //
 // ⭐⭐ **TWO ASKERS, AND THEY ASK IT AT OPPOSITE ENDS OF THE SAME PASS BOUNDARY.**
-// `SemanticCheck.requireOverloadResultTagAgrees` asks it of a value the parser already typed against the
-// member resolution chose — the CHECK. `Parser.maxonReturnTypesMatch` asks it of two DECLARED return types,
-// to find out whether the whole-program index's one-entry-per-key answer can be trusted for this name at all
-// — the GATE. A set the gate calls agreeing is exactly a set the check can never report, and that is why the
-// two share this rule rather than each spelling one.
+// `SemanticCheck.requireOverloadResultTagAgrees` asks it of a value the parser already typed
+// against the member resolution chose — the CHECK. `Parser.returnAnswersAreInterchangeable` asks it
+// of two DECLARED return types, to find out whether the whole-program index's one-entry-per-key
+// answer can be trusted for this name at all — the GATE. A set the gate calls agreeing is exactly a
+// set the check can never report, and that is why the two share this rule rather than each spelling
+// one.
 //
 // So agreement is the language's own coercion rule, plus the one thing that rule cannot see: a float and an
 // int AGREE under it (they must, or `5 + 2.0` would not compile) while living in DIFFERENT REGISTER FILES, so
@@ -1010,10 +1011,10 @@ end 'tagIsInteger'
 // `Parser.arrayLiteralInstanceFor`'s ⭐ block and the packing ladder it turns on). Folding `named` in here
 // would silently retype every ranged-alias literal.
 //
-// ⚠ **THE `boolean`-INCLUSIVE SET IS A DIFFERENT ONE AND IS DELIBERATELY NOT THIS FUNCTION.** Three sites
-// spell `integer or boolean or exitCode` (`Parser.matchScrutineeIsPlainInteger`-shaped arms and
-// `SemanticCheck`); they are asking "does this lower to a GPR", not "is this an integer", and merging the two
-// would put a `bool` where an arithmetic domain is meant.
+// ⚠ **THE `boolean`-INCLUSIVE SET IS A DIFFERENT ONE AND IS DELIBERATELY NOT THIS FUNCTION.** Two
+// sites spell `integer or boolean or exitCode` (`Parser.matchUsesIntervalPlan` and
+// `SemanticCheck.tagIsPlainOverloadScalar`); they are asking "does this lower to a GPR", not "is
+// this an integer", and merging the two would put a `bool` where an arithmetic domain is meant.
 export function tagIsPlainInteger(tag ValueTypeTag) returns bool
 	return tagIsInteger(tag) or tag == ValueTypeTag.exitCode
 end 'tagIsPlainInteger'
@@ -1632,7 +1633,8 @@ end 'isLegalBitWidth'
 
 // The inclusive top of a `bits(n)` pattern. At 64 that is the wrapped `u64.max` the whole file already
 // carries as `UnsignedFullUpperPattern`, so a raw word stores the range an `int(0 to u64.max)` quantity
-// stores — which is why the two are told apart by `rawBitWidth` and never by their bounds.
+// stores — which is why the two are told apart by `RangedAliasDomain.pattern` and never by their
+// bounds.
 export function rawPatternUpperBound(width FullRangeInt) returns FullRangeInt
 	if width == 64 'theWholeWord'
 		return UnsignedFullUpperPattern
@@ -2913,7 +2915,7 @@ export function comparableOperands(left ValueTypeTag, right ValueTypeTag) return
 	// ORDERING one (which has no meaning on a byte pointer) or a `string`-vs-non-`string` mismatch
 	// (already rejected by the agreement gate above). Both are `false`.
 	//
-	// ⚠⚠ **IT ASKS `operandsAreText`, NOT `operandsAreByteRecord`, AND THAT NARROWING IS THE TYPE RULE.**
+	// ⚠⚠ **IT ASKS `operandsAreText`, NOT `tagIsByteRecord`, AND THAT NARROWING IS THE TYPE RULE.**
 	// Asking the REPRESENTATION question here would refuse `c < d` for a type the corpus declares
 	// `Comparable`; asking it in `lacksIntegralReading` is right, because neither byte record is a MAGNITUDE.
 	// **A rule keyed on the representation and a rule keyed on the type are two questions, and this is the

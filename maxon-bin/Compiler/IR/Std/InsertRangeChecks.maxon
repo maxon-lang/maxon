@@ -380,8 +380,9 @@ type RangeCheckEmitter
 	// ---- alias-named sites (cast, struct-literal field, field store, field default, array element) ----
 
 	// The site rule for a position that holds an alias NAME: it resolves the declaration and asks
-	// `runtimeHalfOf`, which an `alias` site holding its resolved declaration asks directly. It raises the compile-time E3005 on its way to its answer and says
-	// whether the RUNTIME half is owed too.
+	// `needsRuntimeGuard`, which an `alias` site holding its resolved declaration asks directly. It
+	// raises the compile-time E3005 on its way to its answer and says whether the RUNTIME half is owed
+	// too.
 	//
 	// ⚠ **`needsRuntimeGuard` IS ASKED FIRST AND UNCONDITIONALLY, INCLUDING FOR A POSITION THAT WILL NEVER
 	// EMIT ONE**, because raising that E3005 for a folded literal is what it does on the way to its answer.
@@ -1076,10 +1077,11 @@ type RangeCheckEmitter
 		end 'o'
 	end 'comparedValue'
 
-	// Load what a by-reference parameter's cell holds, appended to `head`. The one place this pass reads
-	// through a pointer, for `emitZeroConstOf`'s reason: a second spelling of the offset or the width would
-	// be a second answer to "what does a cell hold". The offset is `ParameterCellValueOffset`, the
-	// same named constant the parser's own cell load and store address through.
+	// Load what a by-reference parameter's cell holds, appended to `head`. The one place this pass
+	// reads through a pointer, for `appendZeroConst`'s reason: a second spelling of the offset or the
+	// width would be a second answer to "what does a cell hold". The offset is
+	// `ParameterCellValueOffset`, the same named constant the parser's own cell load and store address
+	// through.
 	function emitCellLoad(head IrBlock, cell ValueId, isFloat bool) returns ValueId
 		let loaded = self.mintDerived(cell)
 		self.module.appendOp(head, op: StdOp.loadIndirect(loaded, addrId: cell, offset: ParameterCellValueOffset, valueType: StdType.f64 if isFloat else StdType.i64))

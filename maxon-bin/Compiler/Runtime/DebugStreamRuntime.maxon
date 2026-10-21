@@ -366,7 +366,7 @@ let DsLogTextMaxBytes = DsMaxAlignedEntryBytes - DsLogTextFixedBytes
 // non-empty; filling that array is the whole of the producer's side.
 //
 // Format: `[magic(10)][count:u16][len0:u16][name0]…[lenN:u16][nameN]`, little-endian.
-// ⚠ **INDEX 0 MEANS "NO NAME"** — the monitor's own rule (`ResolveInternedName`), which is why
+// ⚠ **INDEX 0 MEANS "NO NAME"** — the monitor's own rule (`resolveInternedName`), which is why
 // `MmTag.Untagged` occupies it and why its blob entry is written EMPTY rather than with its case name.
 export let DsTagBlobMagic = b"MXDS_TAGS\0"
 
@@ -378,7 +378,7 @@ export let DsTagBlobMagic = b"MXDS_TAGS\0"
 //
 // ⚠ **TWO BLOBS, ONE WRITER.** They differ in exactly one thing — these ten magic bytes — so
 // `debugStreamNameBlob` takes the magic and there is no second byte-splitting loop to drift from this one.
-// The MONITOR finds each by SCANNING the section for its magic (`DebugStreamDecode.ScanForNameBlob`), so
+// The MONITOR finds each by SCANNING the section for its magic (`InternedNameBlob.nameBlobIn`), so
 // the two may sit end to end in one `symdataImage` here.
 export let DsStrBlobMagic = b"MXDS_STRS\0"
 
@@ -470,12 +470,12 @@ export type DebugStreamNameTable
 	// Its inverse, so interning an already-seen name is O(1) rather than a scan of `names`.
 	var byName as DebugStreamNameIndexMap
 
-	// ⚠ **THE SEED IS INDEXED TOO, WHICH IS WHAT MAKES INDEX 0 UNREACHABLE BY INTERNING.** Both rosters
-	// reserve index 0 for the monitor's "no name" (`ResolveInternedName` skips it), and mapping the seed
-	// means a later `intern` of the same spelling ANSWERS 0 rather than minting a second entry for it. For
-	// the tag table that is unreachable — no type is named `""`. For the interned-name table it is the
-	// answer `__DebugStream.nameId("")` gets, and it is the right one: an empty name IS no name.
-	// `specs/debugstream-name-id.md` pins that answer.
+	// ⚠ **THE SEED IS INDEXED TOO, WHICH IS WHAT MAKES INDEX 0 UNREACHABLE BY INTERNING.** Both
+	// rosters reserve index 0 for the monitor's "no name" (`resolveInternedName` skips it), and
+	// mapping the seed means a later `intern` of the same spelling ANSWERS 0 rather than minting a
+	// second entry for it. For the tag table that is unreachable — no type is named `""`. For the
+	// interned-name table it is the answer `__DebugStream.nameId("")` gets, and it is the right one:
+	// an empty name IS no name. `specs/debugstream-name-id.md` pins that answer.
 	export static function create(seed StringArray) returns DebugStreamNameTable
 		var byName = DebugStreamNameIndexMap.create()
 
@@ -506,10 +506,10 @@ end 'DebugStreamNameTable'
 // What lives here is the FORMAT: the table KIND above, the rosters each instance is seeded with, and the
 // bytes they render to.
 
-// The names the table starts with, in wire order. Index 0 is the monitor's "no name" and carries an EMPTY
-// entry rather than the `Untagged` case's own spelling — which would otherwise print as a type name for
-// an allocation that has none. The rule is the CONSUMER's (`ResolveInternedName` skips index 0), asked
-// here rather than restated as a second convention.
+// The names the table starts with, in wire order. Index 0 is the monitor's "no name" and carries an
+// EMPTY entry rather than the `Untagged` case's own spelling — which would otherwise print as a
+// type name for an allocation that has none. The rule is the CONSUMER's (`resolveInternedName`
+// skips index 0), asked here rather than restated as a second convention.
 export function mmTagRosterNames() returns StringArray
 	var names = StringArray.create()
 
@@ -1242,16 +1242,18 @@ end 'emitReserveEntry'
 // property of the RUN — the same reason the timestamp goes. The stamp is EXERCISED by all 17
 // `debugstream-log-events` cases and its VALUE is pinned by the measurement above and nothing else.
 //
-// ⚠ **THE CURRENT GT IS READ ONLY WHEN THIS BUILD CARRIES THE SCHEDULER.** The read goes through the P
-// (`SchedRuntime`), whose `.data` word is `usesGt`'s (`Compiler.maxon`'s `gtGlobals` arm), so naming it in a
-// scalar program would name a slot the image does not have and the backend would panic at the relocation —
-// the trap `emitMmEvent`'s header records for `__ds_base` in an untraced build, one family over. A scalar
-// program HAS no green thread, so zero is again the true answer rather than a stand-in.
+// ⚠ **THE CURRENT GT IS READ ONLY WHEN THIS BUILD CARRIES THE SCHEDULER.** The read goes through
+// the P (`SchedRuntime`), whose `.data` word is `usesGt`'s (`Compiler.maxon`'s `installGt` arm), so
+// naming it in a scalar program would name a slot the image does not have and the backend would
+// panic at the relocation — the trap `emitMmEvent`'s header records for `__ds_base` in an untraced
+// build, one family over. A scalar program HAS no green thread, so zero is again the true answer
+// rather than a stand-in.
 //
-// ⛔⛔ **AND IT IS THE `OrZero` READ, NOT THE PLAIN ONE.** User code reaches a log event only after
-// `__gt_init`, but that is a fact about the ENTRY STUB, which this file cannot see — and the price of the plain
-// read's precondition failing is a wild load through `NT_TIB.ExceptionList`, MEASURED as a segfault under
-// `maxon monitor`, rather than a zero identity. Three branches buy the event its own guarantee.
+// ⛔⛔ **AND IT IS THE `emitLoadCurrentGtAndProcIdOrZero` READ, NOT THE PLAIN ONE.** User code
+// reaches a log event only after `__gt_init`, but that is a fact about the ENTRY STUB, which this
+// file cannot see — and the price of the plain read's precondition failing is a wild load through
+// `NT_TIB.ExceptionList`, MEASURED as a segfault under `maxon monitor`, rather than a zero
+// identity. Three branches buy the event its own guarantee.
 //
 // It returns the block to continue in, because the guarded read branches.
 function emitStoreLogIdentity(module StdModule, func IrFunction, block IrBlock, entryPtr ValueId, usesGt bool, ids ValueMinter) returns IrBlock

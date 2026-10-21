@@ -48,21 +48,20 @@
 // for a parameter and `Parser.requireAsyncResult` for the result) rather than left to read the wrong
 // register file, which an argument check cannot catch because an int legally coerces to a float parameter.
 //
-// ⭐ RELOCATING STACKS. Each GT starts on a seed stack of `__gt_seed_bytes` (its record's kept one, or
-// a fresh `__gt_stack_alloc`), a size that follows the stacks recent threads finished with
-// (`__gt_seed_adapt`, Go's `startingStackSize`);
-// every guarded function's prologue projects its frame against `gt.stackGuard` (X64GtRuntime's
-// `emitGtStackGuard`) and, when it would overflow, reaches the hand-assembled `__gt_morestack`,
-// which doubles the size until the requesting frame fits (up to `GtMaxStackBytes`) and moves the
-// thread onto the larger stack (`__gt_stack_relocate`: copy the live region, walk the saved
-// frame-pointer chain fixing every interior pointer by the relocation offset). A parked thread
-// using under a quarter of its stack is moved onto one half the size (`__gt_stack_shrink`, Go's
-// `shrinkstack`). So deep recursion inside an `async` body just works, and a thread that once
-// recursed deep does not keep that stack for life. The GT record comes from the scheduler's record
-// arena and its stack from the stack pool, both INVISIBLE to the heap leak gate's tracked live
-// column (`SchedRuntime.MOffGtLive` is the gate for them). A finished GT's stack stays with its record when
-// it is the seed's size and otherwise goes back to the pool on completion (`__gt_runner_done` →
-// `__gt_stack_free`).
+// ⭐ RELOCATING STACKS. Each GT starts on a seed stack of `__gt_seed_bytes` (its record's kept one,
+// or a fresh `__gt_stack_alloc`), a size that follows the stacks recent threads finished with
+// (`__gt_seed_adapt`, Go's `startingStackSize`); every guarded function's prologue projects its
+// frame against the GT's `GtOffStackGuard` word (X64GtRuntime's `emitGtStackGuard`) and, when it
+// would overflow, reaches the hand-assembled `__gt_morestack`, which doubles the size until the
+// requesting frame fits (up to `GtMaxStackBytes`) and moves the thread onto the larger stack
+// (`__gt_stack_relocate`: copy the live region, walk the saved frame-pointer chain fixing every
+// interior pointer by the relocation offset). A parked thread using under a quarter of its stack is
+// moved onto one half the size (`__gt_stack_shrink`, Go's `shrinkstack`). So deep recursion inside
+// an `async` body just works, and a thread that once recursed deep does not keep that stack for
+// life. The GT record comes from the scheduler's record arena and its stack from the stack pool,
+// both INVISIBLE to the heap leak gate's tracked live column (`SchedRuntime.MOffGtLive` is the gate
+// for them). A finished GT's stack stays with its record when it is the seed's size and otherwise
+// goes back to the pool on completion (`__gt_runner_done` → `__gt_stack_free`).
 
 // --- GreenThread struct offsets ---
 // Each offset is derived from the field before it, and `requireGtRecordLayout` refuses a layout whose fields
@@ -303,9 +302,10 @@ export let GtOffIoMode = GtOffIoHandle + PointerFieldBytes
 // moves the two bounds above, so the three always name one stack.
 export let GtOffTibDeallocation = GtOffIoMode + PointerFieldBytes
 
-// ⭐ **THE INLINE ARGUMENT REGION.** MaxAsyncArgs i64 slots inside the GT struct, so a spawn needs NO
-// separate argument buffer — `__gt_spawn` sets `gt.argBuf` to a SELF-POINTER `gt + GtOffArgInline`,
-// and the trampoline dereferences that self-pointer as it would a separate buffer.
+// ⭐ **THE INLINE ARGUMENT REGION.** MaxAsyncArgs i64 slots inside the GT struct, so a spawn needs
+// NO separate argument buffer — `__gt_spawn` sets `GtOffArgBuf` to a SELF-POINTER
+// `gt + GtOffArgInline`, and the trampoline dereferences that self-pointer as it would a separate
+// buffer.
 //
 // ⚠⚠ **THE REGION IS INLINE RATHER THAN A SEPARATELY ALLOCATED BUFFER.** A separate buffer is a SECOND
 // allocation and a SECOND lifetime per spawn, and the second lifetime is the expensive half — the releaser
@@ -526,8 +526,8 @@ export enum GtParkKind
 
 	// `__mbox_recv`: the argument is the mailbox. `__gt_run_strand` commits this park itself
 	// (`MailboxRuntime.emitMboxParkCommit`), so `__gt_register_park` never sees it. The receiver is
-	// published as `parkedGt` before its registers are saved, which is sound only because it holds the
-	// mailbox lock across the switch and every waker must take that lock first.
+	// published in `MboxOffParkedGt` before its registers are saved, which is sound only because it
+	// holds the mailbox lock across the switch and every waker must take that lock first.
 	mailbox = 4
 
 	// `__gt_await` / `__gt_try_await`: the argument is the awaited GT.
@@ -1022,12 +1022,12 @@ end 'emitTimerTagOfNetpollMode'
 export let TimerWhenEmpty = 0x7FFFFFFFFFFFFFFF as FullRangeInt
 
 // --- Win32 wait / process constants ---
-// `WAIT_OBJECT_0` (0) is what `WaitForSingleObject` returns for a SIGNALED handle (an exited child); the
-// collect loop polls a handle with a zero timeout and tests for it.
-// EXPORTED because the arm64-macOS lane EMULATES these waits over a pthread condition variable
-// (`Arm64DarwinRuntime`'s `DarwinWaitObject`), so its chunk has to ANSWER the same two codes the Std tier
-// tests for. A second spelling on that side would be one fact written twice, in a place where the two
-// copies disagreeing means a poll that never sees a signalled handle.
+// `WAIT_OBJECT_0` (0) is what `WaitForSingleObject` returns for a SIGNALED handle (an exited
+// child); the collect loop polls a handle with a zero timeout and tests for it. EXPORTED because
+// the arm64-macOS lane EMULATES these waits over a pthread condition variable
+// (`Arm64DarwinRuntime.buildArm64DarwinWaitOneChunk`), so its chunk has to ANSWER the same two
+// codes the Std tier tests for. A second spelling on that side would be one fact written twice, in
+// a place where the two copies disagreeing means a poll that never sees a signalled handle.
 export let WaitObject0 = 0
 
 // `WAIT_TIMEOUT` — what a wait that ran out of time answers. Windows numbers it 258, and the value is not
@@ -1480,14 +1480,15 @@ export let GtDrainAtExitName = b"__gt_drain_at_exit"
 // ⭐ **IT TAKES NO TIMER SLOT, WHICH IS THE WHOLE POINT VERSUS `sleep(0)`**: N green threads each yielding once
 // occupy no store at all.
 //
-// EXPORTED because the front end targets it directly — `Parser.emitYield` lowers `__Builtins.yield()` to a
-// call on this name, exactly as `emitSleep` targets `GtSleepName`.
+// EXPORTED because the front end targets it directly — `Parser.parseCallNamed`'s `yield` arm lowers
+// `__Builtins.yield()` to a call on this name, exactly as `emitSleep` targets `GtSleepName`.
 export let GtReschedName = b"__gt_resched"
 
-// ⭐⭐ **`__gt_io_park()` — THE FILESYSTEM YIELD POINT.** Every `__mf_*`/`__md_*` runtime function that makes a
-// kernel filesystem call opens with a call to this, so a green thread that touches the disk genuinely SUSPENDS
-// there and other green threads run. It is what makes `async` over `File.exists` mean something, and what lets
-// E3073's yield roster (`SemanticCheck.ioYieldingRuntimeCallees`) describe real behaviour rather than a model.
+// ⭐⭐ **`__gt_io_park()` — THE FILESYSTEM YIELD POINT.** Every `__mf_*`/`__md_*` runtime function
+// that makes a kernel filesystem call opens with a call to this, so a green thread that touches the
+// disk genuinely SUSPENDS there and other green threads run. It is what makes `async` over
+// `File.exists` mean something, and what lets E3073's yield roster
+// (`SemanticCheck.ioYieldingRuntimeCallee`) describe real behaviour rather than a model.
 //
 // ⚠⚠ **IT IS A COOPERATIVE YIELD AROUND THE CALL, NOT OVERLAPPED I/O, AND THAT IS DELIBERATE.** Real overlap
 // means submitting the file work to an IOCP completion port plus a pool of sync-fallback OS threads
@@ -1517,10 +1518,11 @@ export let GtReschedName = b"__gt_resched"
 // so it parks on a deadline of `now` and comes back through the timer store, a genuine suspension every time.
 let GtIoParkName = b"__gt_io_park"
 
-// ⭐⭐ **THE ASYNC TRACE (`--async-trace`).** `__gt_trace_emit(tagRecord, value, suffixRecord)` prints one line
-// — `<tag><value><suffix?>\n` — to stderr, and the six sites that call it (`spawn #`, `io_yield #`,
-// `io_resume #`, `sleep_yield #`, `sleep_resume #`, `await #`) are what `specs/async-await.md`'s `trace-yield`
-// and `specs/http-client.md`'s `async-trace-interleave` cases pin between them.
+// ⭐⭐ **THE ASYNC TRACE (`--async-trace`).**
+// `__gt_trace_emit(tagPtr, tagLen, value, suffixPtr, suffixLen)` prints one line —
+// `<tag><value><suffix?>\n` — to stderr, and the six sites that call it (`spawn #`, `io_yield #`,
+// `io_resume #`, `sleep_yield #`, `sleep_resume #`, `await #`) are what `specs/async-await.md`'s
+// `trace-yield` and `specs/http-client.md`'s `async-trace-interleave` cases pin between them.
 //
 // ⭐ **THE TRACE CALLS ARE GATED AT COMPILE TIME, NOT BY A RUNTIME FLAG WORD.** The calls are simply not
 // EMITTED unless the build asked for them, so there is no enabled-flag global and no per-spawn branch, and
@@ -1539,9 +1541,9 @@ let GtTraceEmitArity = 5
 // travels in everywhere else here. An UNTRACED park takes zero — see `buildGtIoPark`.
 let IoParkSuffixArity = 2 as ParamCount
 
-// The tag TEXTS, spelled once. Each becomes an immortal `.rdata` String record whose label the emitting sites
-// carry (`GtTraceTags`). They are the wire format the spec compares against, so a change here is a change to
-// what `trace-yield` asserts.
+// The tag TEXTS, spelled once. Each becomes a raw `.rdata` blob whose label and length the emitting
+// sites carry (`GtTraceTag`, `GtTraceTags`). They are the wire format the spec compares against, so
+// a change here is a change to what `trace-yield` asserts.
 let GtTraceSpawnText = b"spawn #"
 let GtTraceAwaitText = b"await #"
 
@@ -2844,12 +2846,13 @@ end 'gtSpawnNameOf'
 
 // `__gt_spawn(funcPtr) -> gt` — create a ready green thread. Takes a GT struct with its seed stack
 // from `__gt_free_get`, lays the initial context-switch frame so the first switch-in `ret`s into
-// the trampoline, and points `gt.argBuf` at the struct's OWN inline arg region. Returns the GT
-// pointer as the promise handle.
+// the trampoline, and points the GT's `GtOffArgBuf` word at the struct's OWN inline arg region.
+// Returns the GT pointer as the promise handle.
 //
-// ⭐ **THE ARG BUFFER IS NOT A PARAMETER.** It lives INLINE at `gt + GtOffArgInline` (the slots the lowering
-// fills after this returns, safe because a spawned GT does not run until it is published); `gt.argBuf` is
-// set to that self-pointer. See `GtOffArgInline` for why the region is inline.
+// ⭐ **THE ARG BUFFER IS NOT A PARAMETER.** It lives INLINE at `gt + GtOffArgInline` (the slots the
+// lowering fills after this returns, safe because a spawned GT does not run until it is published);
+// the GT's `GtOffArgBuf` word is set to that self-pointer. See `GtOffArgInline` for why the region
+// is inline.
 //
 // It does NOT run the GT — a spawned GT runs only once `__gt_ready` has published it.
 //
@@ -2872,8 +2875,9 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, tracing GtTracing, tar
 	emitGtSpawnZeroing(module, block: initBlock, gt: gt, kind: kind, ids: ids)
 
 	// gt.argBuf = gt + GtOffArgInline — a SELF-POINTER into this struct's own inline arg region.
-	// The trampoline reads `gt.argBuf` as a pointer and loads the slots from there, so pointing it at the inline
-	// region makes the buffer part of the struct — one allocation, one lifetime, one free.
+	// The trampoline reads the GT's `GtOffArgBuf` word as a pointer and loads the slots from there, so
+	// pointing it at the inline region makes the buffer part of the struct — one allocation, one
+	// lifetime, one free.
 	let argInlineOffConst = ids.mint()
 	module.appendOp(initBlock, op: StdOp.const(argInlineOffConst, value: GtOffArgInline, valueType: StdType.i64))
 	let argInlinePtr = ids.mint()
@@ -4242,10 +4246,6 @@ end 'buildGtNowNs'
 // pair, a pop moves the last entry over the root, `__gt_promise_drop`'s remove moves it over an arbitrary
 // hole. Each of those is `emitTimerEntryLoad` + `emitTimerEntryStore`, so adding a field to the entry is an
 // edit to exactly those two functions and every mover learns about it at once.
-//
-// ⚠ It REPLACES `emitTimerSwapDown`, which enumerated the fields for a one-directional COPY. That was the
-// same anti-duplication device for the one mover the flat store had; a heap has three, and one of them is an
-// exchange rather than a copy, so a copy-shaped helper would have needed a second enumeration beside it.
 type TimerEntry
 	export let deadline as ValueId
 	export let gt as ValueId
@@ -7884,9 +7884,9 @@ function buildGtSeedScan(module StdModule, target Target)
 	module.functions.push(func)
 end 'buildGtSeedScan'
 
-// `__gt_trace_emit(tagRecord, value, suffixRecord)` — print one async-trace line to stderr:
-// `<tag><value><suffix?>\n`. `tagRecord`/`suffixRecord` are immortal `.rdata` String records (see
-// `GtTraceTags`); a suffix of 0 means "no suffix". See `GtTraceEmitName` for the compile-time gating.
+// `__gt_trace_emit(tagPtr, tagLen, value, suffixPtr, suffixLen)` — print one async-trace line to
+// stderr: `<tag><value><suffix?>\n`. The tag and suffix are raw `.rdata` bytes (see `GtTraceTags`);
+// a suffix of length 0 means "no suffix". See `GtTraceEmitName` for the compile-time gating.
 //
 // ⭐ **IT ALLOCATES NOTHING AND RELEASES NOTHING, AND THAT IS WHY IT MAY SIT INSIDE THE SCHEDULER.** Turning
 // the id into digits reuses `__int_to_string`, which is correct for every i64 including `i64.min` and fills a
@@ -8342,10 +8342,10 @@ function buildGtProcessRun(module StdModule, commandShape SubprocessCommandShape
 	// `__gt_process_run` calls share nothing.
 	//
 	// ⭐ **AND NO RE-ZEROING STORES, BECAUSE A FRESH SLOT ARRIVES ZEROED.** `startup.cb` is the only
-	// field CreateProcessW reads that is not zero; `procInfo.hProcess` is the spawn-failure sentinel and must be
-	// 0 going in; `cmBuf[cmdlineLen]` is the command line's terminator. A REUSED buffer arrives holding the
-	// previous call's bytes and would need each of those written again — a fresh slot does
-	// not.
+	// field CreateProcessW reads that is not zero; PROCESS_INFORMATION's `hProcess` is the
+	// spawn-failure sentinel and must be 0 going in; `cmBuf[cmdlineLen]` is the command line's
+	// terminator. A REUSED buffer arrives holding the previous call's bytes and would need each of
+	// those written again — a fresh slot does not.
 	let startupSizeConst = ids.mint()
 	module.appendOp(entry, op: StdOp.const(startupSizeConst, value: StartupInfoSize, valueType: StdType.i64))
 	let startupPtr = emitSlabAlloc(module, block: entry, bytes: startupSizeConst, kind: SlabBufferKind.subprocessState, ids: ids)
@@ -8851,8 +8851,8 @@ let SubpSlotGeneration = 128
 // all three by hand. `subprocessGetPid`, `StdinKind.bytes` and `OutputDestination.collect(limit)` are three
 // promises of the fourteen-argument contract, and each is a fact about the HANDLE rather than about a call.
 //
-// `stdinPend` is a POINTER into the caller's payload and `SubpSlotStdinRemaining` the count of
-// its bytes still to push; the drain loop advances the one and shrinks the other until the count
+// `SubpSlotStdinPend` is a POINTER into the caller's payload and `SubpSlotStdinRemaining` the count
+// of its bytes still to push; the drain loop advances the one and shrinks the other until the count
 // is 0, so a NUL in the payload is pushed like any other byte. A pointer of 0 means "nothing
 // queued", which is what every non-`bytes` stdin kind leaves it. The two limits are capture
 // ceilings in bytes, 0 meaning uncapped.
@@ -9801,11 +9801,10 @@ export let SubpOutCollect = 2 as FullRangeInt
 // INSTEAD OF SEEING EOF.** `StreamingSubprocess` wants exactly that (a pipe with no payload preloaded), and so
 // does `stdlib/Subprocess.maxon`'s `InputSource.hold`.
 //
-// ⚠⚠ **IT WAS `SubpStdinPipe`, *"the compiler's own fifth stdin kind with no surface spelling"*, AND THAT SENTENCE
-// EXPIRED WHEN THE SURFACE ARRIVED.** `StdinKind.hold` was deliberately given the value **4** — its own
-// declaration says *"the number is 4 because that is the value the compiler's runtime already decodes"* — so the two
-// were one fact under two names, and the name that survives is the one the language spells. Renaming it is
-// what stops the next reader from concluding that `hold` is unimplemented here because no constant says so.
+// ⚠⚠ **IT IS `StdinKind.hold`'s VALUE, 4, UNDER THE NAME THE LANGUAGE SPELLS.** That declaration
+// says *"the number is 4 because that is the value the compiler's runtime decodes"*, so the two are
+// one fact, and spelling it `hold` here is what stops a reader from concluding that `hold` is
+// unimplemented because no constant says so.
 export let SubpStdinHold = 4 as FullRangeInt
 
 // ⭐⭐ **`delayed` — `hold`'s PIPE, THEN `bytes`'s PAYLOAD, fed `SubpStdinDelayedFeedMs` after the child's first
@@ -10867,9 +10866,7 @@ end 'buildSubpReadLine'
 //
 // ⭐⭐ **WHY A COUNT IS A DIFFERENT QUESTION FROM A LINE.** A framed protocol puts its body length in a
 // header — `Content-Length: N\r\n\r\n<body>`, the LSP framing — and the body carries NO trailing newline. A
-// line reader asked for it blocks for ever on a terminator the sender will never write, and
-// `subpReadLineCapped`'s cap does not help: that cap is consulted only when a refill is needed and then
-// answers the whole buffered remainder, so it is a CEILING, not a length.
+// line reader asked for it blocks for ever on a terminator the sender will never write.
 //
 // ⭐⭐ **IT READS THE SAME PER-HANDLE BUFFER `buildSubpReadLine` DOES, AND THAT IS LOAD-BEARING.** Such a
 // client alternates the two — headers by line, body by count — and the line reader pulls a whole 4 KiB chunk

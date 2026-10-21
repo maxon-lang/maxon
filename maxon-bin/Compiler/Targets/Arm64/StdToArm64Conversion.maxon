@@ -531,7 +531,7 @@ export type StdToArm64Lowering
 		view returnType = srcFunc.returnType
 
 		// This function's OWN parameter files, folded ONCE — every `param` op then reads a scalar instead of
-		// re-walking the parameter types, which is what the per-parameter `computeParamSlotIndex` did.
+		// re-walking the parameter types.
 		let paramFloatMask = floatParamMaskOf(srcFunc.paramTypes)
 		var outgoingArgBytes = 0 as StackSize
 
@@ -888,16 +888,15 @@ export type StdToArm64Lowering
 
 			// ⭐ **A PIPE IS A PIPE; A COMPLETION PORT IS NOT.** `osPipeCreate`'s name, security
 			// attributes, port and sync-silencing operands are Windows shapes with nothing to bind to here — see
-			// `Arm64DarwinRuntime.buildArm64DarwinPipeChunk` — so only the two out-params are passed on. A read
+			// `Arm64PosixRuntime.buildArm64PosixPipeChunk` — so only the two out-params are passed on. A read
 			// here completes in its caller, so the caller's seeded silencing answer is already true.
 			osPipeCreate(_, _, _, readPtrId, writePtrId, _) then self.emitHostCall(dstRef, callee: Arm64HostCallee.chunk(HostPipeName), args: twoArgs(readPtrId, second: writePtrId))
 
-			// ⭐⭐ **The P/M tier's own five ops, which sit INSIDE the IOCP band by declaration order and
-			// have nothing to do with IOCP.** `__sched_init_procs` builds them unconditionally under `usesGt`,
-			// so every one is reachable in a plain `async` program: the run-queue lock, each MACHINE's own
-			// park event and a worker M's birth. See
-			// `Arm64DarwinRuntime`'s `DarwinWaitObject` for why an event is a condition variable here and why
-			// one object serves both kinds of handle.
+			// ⭐⭐ **The P/M tier's own five ops, which sit INSIDE the IOCP band by declaration order and have
+			// nothing to do with IOCP.** `__sched_init_procs` builds them unconditionally under `usesGt`, so
+			// every one is reachable in a plain `async` program: the run-queue lock, each MACHINE's own park
+			// event and a worker M's birth. See `Arm64DarwinRuntime`'s wait object (`DarwinWaitObjectBytes`)
+			// for why an event is a condition variable here and why one object serves both kinds of handle.
 			osEventCreate(resultId) then self.lowerOsEventCreate(resultId, dstRef: dstRef)
 			osThreadCreate(resultId, entryPtrId, argId) then self.lowerOsThreadCreate(resultId, entryPtrId: entryPtrId, argId: argId, dstRef: dstRef)
 			osLockInit(lockPtrId) then self.lowerOsLockInit(lockPtrId, dstRef: dstRef)
@@ -926,7 +925,7 @@ export type StdToArm64Lowering
 			osCancelIo then self.lowerRuntimeAbort(dstRef, message: PosixNoCancelIoMessage)
 
 			// ⭐ The PROCESS ID. It sits inside the IOCP band because the pipe-name uniquifier minted it
-			// (`GtRuntime.emitGtPipeNameUniquifier`), but the question it asks is the OS's and not the
+			// (`GtRuntime.buildPipeName`), but the question it asks is the OS's and not the
 			// scheduler's — `getpid()` here, `GetCurrentProcessId()` there.
 			osGetPid(resultId) then self.lowerOsGetPid(resultId, dstRef: dstRef)
 
@@ -2154,7 +2153,7 @@ export type StdToArm64Lowering
 	// Both lanes have the primitive — libSystem's `getpid` through the GOT and AArch64's syscall 172 —
 	// and nothing must outlive the call, so it needs no chunk. It matters that the route is asked
 	// through `hostCalleeOn`: builder-built Std emits this op itself in
-	// `GtRuntime.emitGtPipeNameUniquifier`, where no callee-name gate can see it.
+	// `GtRuntime.buildPipeName`, where no callee-name gate can see it.
 	//
 	// ⚠ `getpid()` answers a 32-bit `pid_t` and the upper half of x0 is unspecified, so the import's
 	// answer is widened (`emitCaptureImportAnswer`); `specs/process-id.md`'s `fits-in-a-dword` asserts
@@ -2426,7 +2425,7 @@ export type StdToArm64Lowering
 		end 'route'
 	end 'lowerOsSocketResolve'
 
-	// The libSystem arm. The `int` is WIDENED for `lowerOsFileOpenDarwin`'s reason: the Std tier compares the
+	// The libSystem arm. The `int` is WIDENED for `emitWidenedCallResult`'s reason: the Std tier compares the
 	// answer against 0, and a stale high word makes a successful resolve read as a failed one.
 	function lowerOsSocketResolveDarwin(resultId ValueId, hostPtrId ValueId, hintsPtrId ValueId, outPtrId ValueId, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(hostPtrId)))

@@ -26,7 +26,7 @@
 // array — so they cannot come to disagree about which tokens exist. That is a structural guarantee,
 // not a thing to verify at each call site, and it reaches the walks a per-loop arm would still have
 // missed: `scanDescriptorNeedsInto`, the lazy sibling-receiver scan, `buildBlockExtentIndex`,
-// `assignedBindingsIn`, `fileNamesStringIndexProducer`, and the constant evaluator's transient
+// `assignedBindingsIn`, `fileNamesProducerMask`, and the constant evaluator's transient
 // `Parser` over `ProgramSignatures.declTokensOf` (which IS the declaring file's array, so it inherits the filtering).
 //
 // **The semantics this pass implements:**
@@ -71,8 +71,8 @@ export union DirectiveError implements Error
 end 'DirectiveError'
 
 // One open `#if`. `branchLive` already folds in the enclosing region's liveness (see
-// `pushConditional`), so "is the cursor in live code?" is a read of the innermost frame alone and
-// never a walk of the stack.
+// `filterConditionalTokens`), so "is the cursor in live code?" is a read of the innermost frame
+// alone and never a walk of the stack.
 type DirectiveFrame
 	// Is the branch currently being walked emitted?
 	export var branchLive as bool

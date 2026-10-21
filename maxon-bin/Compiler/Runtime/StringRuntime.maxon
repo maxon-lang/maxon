@@ -73,8 +73,8 @@ export let StringRecordBytes = ManagedRecordBytes + ManagedRecordSlotBytes
 // SECOND CONSTANT FOR IT.** A String IS its `__ManagedMemory with Byte`, so the stride its four producers
 // stamp at `element_size@24` IS an `Array with Byte`'s — and only the shared constant carries a derivation:
 // `ByteStringElementSize` is CHECKED against `ProgramSignatures.arrayElementSize`'s answer for that
-// instance, and is the number `byteStringBlobStrideMessage`'s gate compares against. A bare literal here
-// would be that number written twice.
+// instance, and is the number `Parser.requireBytePackedRecordStridesLikeThisFilesByte` compares
+// against. A bare literal here would be that number written twice.
 //
 // ⭐ **A LITERAL'S `capacity@16`/`parent@32` ARE THE SHARED BUFFER-OWNERSHIP ENCODING'S** (`BufferOwnership`),
 // not this file's invention and not the Array record's either: `ImmortalRecordCapacity` says the buffer is an
@@ -197,9 +197,7 @@ let StringRecordPrefix = "__str_rec_"
 //
 // ⚠ **`StreamWrite…`, NOT `WriteStderrName` — that spelling IS TAKEN, by the thing these must not be
 // confused with.** `BacktraceFormat.WriteStderrName` is `mrt_write_cstr_stderr`, the hand-assembled
-// NUL-terminated panic writer (see `StdOp.osWriteStderr` for why it cannot serve this). Naming a second
-// constant that would be the same near-name trap as `X64Runtime.emitPrintString` against
-// `buildPrintString`, one namespace collision closer.
+// NUL-terminated panic writer (see `StdOp.osWriteStderr` for why it cannot serve this).
 export let StreamWriteStdoutName = b"__write_stdout"
 export let StreamWriteStderrName = b"__write_stderr"
 export let StrEqName = b"__str_eq"
@@ -350,9 +348,9 @@ export let StrOfBufferName = b"__str_of_buffer"
 // `s.cstr()` leaves `capacity == length`, which the terminator-slot router (rightly) refuses to probe, so
 // the receiver takes the copy and leaks it. And the leak is REACHED: `stdlib/String.maxon`'s `cstr()` is
 // `public`, `stdlib/Subprocess.maxon` calls it at seven sites, and an ordinary user program reaches it
-// (`toCString()` is refused outside `stdlib/` by
-// `Parser.requireStdlibOnlyBufferMethod`, but `cstr()` is the corpus's own public forwarder, so that gate
-// is on the SPELLING and never was one on reachability).
+// (`toCString()` is refused outside `stdlib/` by `Parser.requireArrayMemberIsNotRawSurface`, but
+// `cstr()` is the corpus's own public forwarder, so that gate is on the SPELLING and never was one
+// on reachability).
 export let MmToCStringName = b"__mm_to_cstring"
 
 // ⭐⭐ **`__mm_from_cstring(cstr) -> arrRecord` — `__ManagedMemory.fromCString(cstr)`, AND IT IS
@@ -723,7 +721,8 @@ end 'buildStreamWrite'
 // operator path (`installStringRuntime`) AND under `String.equals` for the `Equatable` witness path
 // (`installBuiltinConformanceRuntime`), because the witness reloc names the impl `String.equals`
 // (`qualifiedMethodName("String", "equals")`), NOT `__str_eq`. Same byte-compare, two `.text` symbols — the
-// `buildIntEquals` pattern (which builds `int.equals` fresh), so the two paths cannot drift a byte apart.
+// `BuiltinConformanceRuntime.buildBuiltinEquals` pattern (which builds `int.equals` fresh), so the
+// two paths cannot drift a byte apart.
 //
 // A length check, then a byte loop — NOT the enum `memcmp`
 // helper. It allocates nothing. Empty strings: length 0 == length 0 → the loop runs zero times →
@@ -735,8 +734,8 @@ end 'buildStreamWrite'
 // `builtinProtocolResultStdType` gives that declaration, an `i1`. Declared `i64` it agreed on the register
 // targets (a `bool` rides a 64-bit register) and trapped `indirect call type mismatch` on wasm. The `__str_eq`
 // name shares the declaration for the reason it shares the body: ONE graph cannot have two signatures, and
-// the operator path already types its result `boolean` at the call site (`Parser.emitStringEquality`), so
-// this is the type it was always claiming to return.
+// the operator path already types its result `boolean` at the call site (`Parser.emitStrEqCall`),
+// so this is the type it was always claiming to return.
 export function buildStrEq(module StdModule, name ByteArray)
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(BoolConformerName)), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
@@ -857,12 +856,8 @@ function buildIntegerToString(module StdModule, signedness IntegerSignedness)
 	var writeSetup = module.addBlock(func, label: b"writeSetup", heat: BlockHeat.normal)
 
 	// The write loop is HEADER-GUARDED (test at the top), following `buildStrEq`/`buildStrCopy`'s shape so
-	// the three string builders read the same way. It is a STYLE choice, not a correctness one. A fused
-	// loop-test `cmp` whose boolean is a function's highest-numbered value once tripped the value-class
-	// column — `setValueClass` sized it off the target OPERANDS, and a flags-only compare is not among them
-	// — and this shape happened to dodge it by keeping the loop body's values minted last. That column now
-	// GROWS to cover every DEFINED id (see `setValueClass` in StdToX64Conversion), so the dodge is
-	// unnecessary and a bottom-tested loop would compile too; the shared shape stays for consistency.
+	// the three string builders read the same way. It is a STYLE choice, not a correctness one: a
+	// bottom-tested loop would compile too.
 	var writeHeader = module.addBlock(func, label: b"writeHeader", heat: BlockHeat.normal)
 	var writeBody = module.addBlock(func, label: b"writeBody", heat: BlockHeat.normal)
 	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
@@ -1034,8 +1029,7 @@ end 'emitI64BinOp'
 
 // `__bool_to_string(value, dest) -> len` — render a bool as "true" (4 bytes) or "false" (5). The value is
 // 0 or 1, so a single branch picks the rendering; each branch writes its bytes with fixed offsets and
-// returns its length. The last value minted in each branch is the length const (returned, so materialized),
-// never the entry `cmp`, so the value-class column is sized right (see `buildIntToString`'s header).
+// returns its length.
 function buildBoolToString(module StdModule)
 	var func = IrFunction.createFromStd(BoolToStringName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
@@ -1459,8 +1453,8 @@ function buildMmToCString(module StdModule)
 
 	// Ask for `len + 1` ELEMENTS, which is `len + 1` BYTES for every record that can reach this door: a
 	// String record's `element_size@24` is 1 and so is a `ByteArray`'s, which are the only two shapes
-	// `toCString()` accepts (`Parser.requireStdlibOnlyBufferMethod` guards the spelling; the `cstring` type
-	// itself is a byte pointer).
+	// `toCString()` accepts (`Parser.requireArrayMemberIsNotRawSurface` guards the spelling; the
+	// `cstring` type itself is a byte pointer).
 	let one = emitConst(module, block: terminateInPlace, value: 1, ids: ids)
 	let withNul = emitBin(module, block: terminateInPlace, a: len, b: one, opcode: StdBinOpcode.add, ids: ids)
 	emitManagedReserve(module, block: terminateInPlace, record: src, elementCount: withNul, ids: ids)
@@ -1555,15 +1549,6 @@ function buildStrBytesView(module StdModule)
 
 	module.functions.push(func)
 end 'buildStrBytesView'
-
-// ⚠⚠ **A `throws` STAMP THAT DISAGREES WITH THE PREDICATE DECIDING `try`-NESS IS INVISIBLE TO A SUITE.**
-// Two spellings of one fact diverge only on an input that actually reaches the failing path, and no
-// committed input reaches an out-of-range byte index — a stamp removed with the predicate left alone leaves
-// **all 13 `stdlib-loading` cases GREEN**. Build the fact once and derive the rest, which is what
-// `isThrowingStringRuntimeCallee` is for.
-//
-// ⚠ **AN `export` OUTLIVES ITS LAST CROSS-FILE CALLER SILENTLY** — nothing in this language reports one —
-// so a retirement has to go looking for its readers by name.
 
 // Store one constant byte at `dest[offset]`. The shape a fixed-text renderer (`__bool_to_string`) writes
 // each of its bytes with — a `const` typed i64, stored as a `u8` (the store keeps the low byte).

@@ -44,15 +44,16 @@
 // rather than emitting a misleading location.
 //
 // ⛔⛔ **THE FOUR ROUTES COVER EVERY VALUE OF A FUNCTION THAT WAS PARSED, AND NOTHING MORE — SO THIS
-// PANIC IS REACHABLE.** Every one of them ends in a table only the
-// parser fills (`ParamOriginTable`, `ValueOriginTable`, `project.opRanges`), so for a function the
-// COMPILER emitted they ALL answer nothing and the panic fires on the FIRST live value, whatever it is.
-// MEASURED: a four-line `sleep(1)` program, where `__gt_timer_check`'s heap walk holds 18 GPRs against
-// a pool of 14 — no green-thread program could be compiled, the compiler's own self-compile included.
-// ⇒ **WHAT MAKES THE PANIC A BACKSTOP IS NOT THE ROUTES, IT IS THAT E5001 IS NEVER RAISED FOR A
-// FUNCTION WITHOUT SOURCE**, and that is `SplitLiveRanges`' guarantee, not this file's: such a peak is
-// relieved by the forced bracket instead of refused (`relievePressure`'s `noAuthorToRefuse`), and
-// `noVictimAtPeak` panics as a splitter bug rather than calling in here if it ever is not.
+// PANIC IS REACHABLE.** Every one of them ends in a table only the parser fills
+// (`ParamOriginTable`, `ValueOriginTable`, `project.opRanges`), so for a function the COMPILER
+// emitted they ALL answer nothing and the panic fires on the FIRST live value, whatever it is.
+// MEASURED: a four-line `sleep(1)` program, where `__gt_timer_check`'s heap walk holds 18 GPRs
+// against a pool of 14 — no green-thread program could be compiled, the compiler's own self-compile
+// included. ⇒ **WHAT MAKES THE PANIC A BACKSTOP IS NOT THE ROUTES, IT IS THAT E5001 IS NEVER RAISED
+// FOR A FUNCTION WITHOUT SOURCE**, and that is `SplitLiveRanges`' guarantee, not this file's: such
+// a peak is relieved by the forced bracket instead of refused (`relievePressure`'s
+// `forcedRatherThanRefused`), and `noVictimAtPeak` panics as a splitter bug rather than calling in
+// here if it ever is not.
 //
 // ⚠ **THE PANIC IS A BACKSTOP, NOT THE ENFORCEMENT.** Reaching this file at all is
 // already the decision that the author must act; a value the author cannot act on has to be relieved

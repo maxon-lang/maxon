@@ -31,8 +31,8 @@
 // reason.
 //
 // ⚠ BOTH PARKS CARRY THE MAILBOX LOCK ACROSS `__gt_context_switch`. `__mbox_recv` publishes itself
-// as `parkedGt`, and `__mbox_send_queue` appends itself to the sender queue, and each parks holding
-// the lock; `__gt_run_strand` leaves it in the park commit (`emitMboxParkCommit`,
+// as `MboxOffParkedGt`, and `__mbox_send_queue` appends itself to the sender queue, and each parks
+// holding the lock; `__gt_run_strand` leaves it in the park commit (`emitMboxParkCommit`,
 // `emitMboxSendParkCommit`) on the same OS thread, before that thread runs any other green thread.
 // The lock is exclusive, so a green thread run there while the hold was still open would wait for
 // ever on a holder that cannot run.
@@ -46,11 +46,11 @@ let MboxOffRingSlots = 0x08
 let MboxOffHead = 0x10
 let MboxOffCount = 0x18
 
-// ⚠ **NAMED `parkedGt` AND NOT `waiter`, BECAUSE `GtOffWaiter` IS A DIFFERENT FACT ABOUT THE SAME THREAD.**
-// A GT's `waiter` is the scheduler context that switched it in — who to context-switch back to.
-// This is the green thread parked in `__mbox_recv` on THIS mailbox, i.e. who to make `ready` when a
-// request arrives. Two fields called `waiter` in one wake sequence is exactly the confusion that
-// writes a status into the wrong struct.
+// ⚠ **NAMED `MboxOffParkedGt` AND NOT `waiter`, BECAUSE `GtOffWaiter` IS A DIFFERENT FACT ABOUT THE
+// SAME THREAD.** A GT's `waiter` is the scheduler context that switched it in — who to
+// context-switch back to. This is the green thread parked in `__mbox_recv` on THIS mailbox, i.e.
+// who to make `ready` when a request arrives. Two fields called `waiter` in one wake sequence is
+// exactly the confusion that writes a status into the wrong struct.
 let MboxOffParkedGt = 0x20
 
 // Non-zero once the mailbox has been closed — by the last handle drop, or by `h.shutdown()`. A send
@@ -845,7 +845,8 @@ function buildMboxSend(module StdModule)
 	emitMboxRefuse(module, block: refuseClosed, mbox: mbox, holder: MboxLockHolder.machine(machine), status: MboxSendStatus.stopped, ids: ids)
 
 	// Handing past the ring keeps FIFO order only because a receiver parks on an empty, open mailbox
-	// alone, so a non-zero `parkedGt` under the lock means nothing is queued ahead of this request.
+	// alone, so a non-zero `MboxOffParkedGt` under the lock means nothing is queued ahead of this
+	// request.
 	let parked = emitMboxBranchOnParkedReceiver(module, cur: route, mbox: mbox, noReceiver: firstCheck, handoff: handoff, ids: ids)
 
 	var delivered = emitMboxFillInbox(module, func: func, cur: handoff, mbox: mbox, msg: msg, byteCount: bytes, ids: ids)

@@ -38,8 +38,8 @@
 // ⚠ **A FULLY FREE SPAN IS DESTROYED RATHER THAN HAVING ITS FOOTPRINT DECOMMITTED.** Its chunks go back to
 // the arena and the decommit happens at the arena's 64 KiB commit granule. The reason is not taste: a span's
 // footprint is 8 KiB-granular, `madvise` refuses an address that is not page-aligned, and arm64-macOS's
-// page is 16 KiB — see `SlabArena.buildSlabArenaScavenge` for the two ways a per-span decommit goes wrong
-// there and for why Go answers the same question at the page layer too.
+// page is 16 KiB — see `runtime/SlabArena.maxon`'s `__slab_arena_scavenge` for the two ways a
+// per-span decommit goes wrong there.
 //
 // ⭐⭐ **THE CENTREPIECE: A SPAN CARRIES BOTH A FREE LIST AND A VIRGIN BUMP REGION.**
 // A slot reaches a caller from one of two places, and they differ in whether the memory is DIRTY:
@@ -285,8 +285,9 @@ export let SlabStateLabel = b"__slab_state"
 // The region's fixed head, then the three arrays. `SlabStateMcentralOffset` onwards are DERIVED from the
 // class count so a regenerated ladder moves them rather than leaving a stale stride behind.
 //
-// ⭐ **`metaFree` EXISTS BECAUSE SOMETHING DESTROYS SPANS — the free that returns a span's last slot.**
-// Without it every span reclaimed that way would leak its header for the life of the process.
+// ⭐ **`SlabStateMetaFreeOffset` EXISTS BECAUSE SOMETHING DESTROYS SPANS — the free that returns a
+// span's last slot.** Without it every span reclaimed that way would leak its header for the life
+// of the process.
 // ⚠ **THE THREE ARE `runtime/SlabRuntime.maxon`'s TO READ AND WRITE, AND ARE DECLARED HERE BECAUSE THE
 // LOCK OFFSET BELOW IS DERIVED FROM THEM.** The tier restates the head; `checkSlabRuntimeGeometry` pins
 // the lock offset and the totals both sides derive, which is what a drift moves.
@@ -2000,7 +2001,7 @@ function buildSlabRefill(module StdModule, model MachineModel)
 	emitStoreField(module, block: cut, record: span, offset: MspanRemoteCountOffset, value: none)
 
 	// Every page of the run maps to this span, which is what lets a free of a pointer anywhere INSIDE it
-	// find its owner (`SlabArena.buildSlabArenaMapSet`). Chunks and pages are the same 8 KiB unit.
+	// find its owner (`__slab_arena_map_set`). Chunks and pages are the same 8 KiB unit.
 	module.appendOp(cut, op: StdOp.call(ids.mint(), callee: SlabArenaMapSetName, args: threeArgs(pageBase, second: numChunks, third: span)))
 	module.setTerminator(cut, op: StdOp.branch(install.id))
 	cut.branchEdges.push(BranchEdge.create(install.id, argIds: argsOf(span)))

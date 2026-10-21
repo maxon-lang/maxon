@@ -96,12 +96,12 @@ export enum OsImportSlot
 
 	// --- The green-thread floor's libSystem substrate ---
 	//
-	// ⭐⭐ **FIFTEEN SLOTS BECAUSE WIN32 ANSWERS THIS FAMILY WITH KERNEL OBJECTS AND POSIX ANSWERS IT WITH
-	// STRUCTS THE CALLER OWNS.** `CreateEventA`/`SetEvent`/`WaitForSingleObject` are three imports over an
-	// opaque HANDLE; the POSIX shape of the same auto-reset event is a counting condition variable — a mutex,
-	// a condvar and a count in memory the program allocates — which is `pthread_mutex_*` + `pthread_cond_*` +
-	// `malloc`. `Arm64DarwinRuntime`'s `DarwinWaitObject` carries the layout and Go's `semasleep`/`semawakeup`
-	// the shape.
+	// ⭐⭐ **FIFTEEN SLOTS BECAUSE WIN32 ANSWERS THIS FAMILY WITH KERNEL OBJECTS AND POSIX ANSWERS IT
+	// WITH STRUCTS THE CALLER OWNS.** `CreateEventA`/`SetEvent`/`WaitForSingleObject` are three
+	// imports over an opaque HANDLE; the POSIX shape of the same auto-reset event is a counting
+	// condition variable — a mutex, a condvar and a count in memory the program allocates — which is
+	// `pthread_mutex_*` + `pthread_cond_*` + `malloc`. `Arm64DarwinRuntime`'s wait object
+	// (`DarwinWaitObjectBytes`) carries the layout and Go's `semasleep`/`semawakeup` the shape.
 	//
 	// ⛔⛔ **NOT `dispatch_semaphore`, AND THIS PROJECT HAS THE SCAR.** A Mach-port-backed semaphore is
 	// not async-signal-safe and wedges processes in macOS's unkillable `UE` state on a kill;
@@ -227,7 +227,7 @@ export enum OsImportSlot
 	// `pipe` is the anonymous pair Win32 spells as a uniquely-named named pipe. `waitpid` is
 	// `WaitForSingleObject` + `GetExitCodeProcess` in one call — POSIX fuses "has it exited?" with "what did
 	// it answer?", which is why a child's handle on this lane is an OBJECT that caches the reaped status
-	// rather than a bare pid (see `DarwinWaitKindProcess`). `kill` is `TerminateProcess`. `_NSGetEnviron`
+	// rather than a bare pid (see `PosixWaitKindProcess`). `kill` is `TerminateProcess`. `_NSGetEnviron`
 	// answers the address of `environ`, which a Mach-O main executable may not name directly.
 	pipe
 	poll

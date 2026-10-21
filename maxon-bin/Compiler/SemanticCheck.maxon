@@ -5948,12 +5948,6 @@ function requireFunctionValueTargetTakesNoWitness(project Project, func IrFuncti
 	end 'eachParam'
 end 'requireFunctionValueTargetTakesNoWitness'
 
-// ⚠ **`targetHasWin32Substrate` STOOD HERE AND IS GONE.** It answered *"is this x64-windows?"* under a
-// capability's name, which was true only while x64-windows was the one target that provided anything.
-// `TargetFacilities.targetProvidesEveryFacility` asks the same question HONESTLY — by walking the facility
-// table rather than by naming a CPU and an OS — so the day a second lane completes that table it becomes
-// true by measurement instead of by someone remembering to widen a hard-coded pair.
-//
 // ⚠ **THE E3104 VERDICT IS THE SPEC HARNESS'S ONLY ANSWER TO *"CAN THIS CASE RUN ON THIS TARGET?"*, AND
 // NOTHING MAY PREDICT IT FROM A CALLEE ROSTER INSTEAD.** A callee-name pair answers only for the callees it
 // names: it can neither see a case reaching a substrate nobody thought to list nor express a PARTIAL
@@ -6425,10 +6419,10 @@ function checkTypeParameterArgs(project Project, func IrFunction, result ValueId
 		return
 	end 'noOpaqueParams'
 
-	// ⭐ The instance is read off a VALUE this pass already holds, so the answer costs no heap object. A
-	// `CallGenericInstance` union would not: a Maxon union value IS a heap box, minted once per call
-	// into a shared generic body just to be matched and dropped (measured: 1 allocation / 16 bytes per such
-	// call, on a path that is every array operation). A `ValueId` is a scalar.
+	// ⭐ The instance is read off a VALUE this pass already holds (`callInstanceSubject`). That subject
+	// is a `CallSubject`, a payload-carrying union and so a heap box per call, which is why the
+	// `hasTypeParameterParam` test above runs first: a call with no opaque parameter allocates nothing
+	// here.
 	let subject = callInstanceSubject(sig, result: result, argIds: argIds)
 
 	// ⚠ **PANIC, NOT `otherwise return`.** `subject` is an SSA value of THIS function — a call's `result`

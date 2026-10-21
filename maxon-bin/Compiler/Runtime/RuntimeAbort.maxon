@@ -70,13 +70,11 @@ export enum RuntimeAbort
 	// another abort's number). Pinned by `async-promise-drop`'s never-ran/completed/parked cases.
 	greenThreadLeak = 75
 
-	// ⚠ **76 IS RETIRED, NOT REUSABLE.** It was `hashTableInsertNoFreeSlot` — the shared
-	// `__set_insert`/`__map_upsert` probe walking every slot without meeting an Empty one or a reusable
-	// tombstone. `HashTableRuntime` is deleted, so nothing emits that `osExit` and a live registry may not go
-	// on claiming the number. It is left VACANT rather than handed to the next abort, for this registry's
-	// founding reason: an exit code is read by a debugger against whatever the tree said at the time, and a
-	// recycled number makes two different faults indistinguishable in an old log. The corpus `Set.insert` /
-	// `Map.upsert` reach the same invariant through an ordinary `panic`, with a message and a source line.
+	// ⚠ **76 IS RETIRED, NOT REUSABLE.** Nothing emits it, and it is left VACANT rather than handed to
+	// the next abort, for this registry's founding reason: an exit code is read by a debugger against
+	// whatever the tree said at the time, and a recycled number makes two different faults
+	// indistinguishable in an old log. The corpus `Set.insert` / `Map.upsert` refuse a probe that
+	// meets no vacant slot through an ordinary `panic`, with a message and a source line.
 	// `__mf_stat_field` / `__mf_stat_free`: a NULL stat buffer. It is a stdlib-only INVARIANT violation
 	// rather than a catchable error (`__ManagedFile.statField`/`statFree` are registered non-throwing),
 	// and `__mm_free` is not null-safe — without the guard the free writes to the
@@ -96,12 +94,13 @@ export enum RuntimeAbort
 	// a `__ManagedListNode` type, so the handle checks out at the call.
 	//
 	// ⚠ **IT ABORTS BY NUMBER RATHER THAN THROUGH `osPanic`, FOR THIS FILE'S OWN RECORDED REASON** — a
-	// synthesized runtime function has no source line and no message to bake (see the `stringByteAtOutOfRange`
-	// note above). ⚖ WHAT `list.remove(nodeOfAnother)` SHOULD MEAN — refuse earlier, or deliberately retarget
-	// — is a semantic question `/specs/managed-list.md` does not answer and this abort does not decide; it
-	// only stops the corruption. The front end refuses every spelling it can see (`dispatchManagedListMethod`'s
-	// markability guard catches the inline `a.remove(b.insertLast(x))`), so reaching here needs two named
-	// chains and a handle carried between them.
+	// synthesized runtime function has no source line and no message to bake (see the note on 80
+	// above). ⚖ WHAT `list.remove(nodeOfAnother)` SHOULD MEAN — refuse earlier, or deliberately
+	// retarget — is a semantic question `/specs/managed-list.md` does not answer and this abort does
+	// not decide; it only stops the corruption. The front end refuses every spelling it can see
+	// (`dispatchManagedListMethod`'s markability guard catches the inline
+	// `a.remove(b.insertLast(x))`), so reaching here needs two named chains and a handle carried
+	// between them.
 	managedListNodeNotInThisChain = 77
 
 	// `__list_node_value`: the node's element slot is EMPTY on a chain whose element is MANAGED — the state

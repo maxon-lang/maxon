@@ -81,16 +81,16 @@
 // deterministic, so the corpus is a pure function of this file, and this file IS the corpus.
 // `--emit-corpus=<dir>` dumps a ladder anywhere you want to look at it.
 //
-// THE SUBSET: The compiler implements `int` AND `float` arithmetic (including integer `/` and `mod`),
-// functions (<=6 params), `if`, `while`, `break`, `return`, body-local `let`/`var`, TOP-LEVEL
-// `let`/`var`, `type` declarations with field reads AND writes, structs across a call, `enum` + `match`,
-// `String`, `Array`, the `__ManagedMemory` BUFFER SURFACE over one, unconstrained generics, interfaces
-// with concrete dispatch, `print`, `or`/`xor`/`not`, `as` casts, bitwise + shifts (`and`/`shl`/`shr`),
-// ranged typealiases, and NAMESPACES — a file's directory, the `module` visibility tier over it, and
-// `dir.Name` / `dir.fn()` references at every segment count.
-// No `for`, no closures, no async, no witness-table dispatch. Everything below
-// stays inside it — and `printCorpusManifest` states exactly this boundary on every run, so a construct
-// outside it (and the codegen change to it that would be invisible) is NAMED rather than silently absent.
+// THE SUBSET: The compiler implements `int` AND `float` arithmetic (including integer `/` and
+// `mod`), functions (<=6 params), `if`, `while`, `break`, `return`, body-local `let`/`var`,
+// TOP-LEVEL `let`/`var`, `type` declarations with field reads AND writes, structs across a call,
+// `enum` + `match`, `String`, `Array`, unconstrained generics, interfaces with concrete dispatch,
+// `print`, `or`/`xor`/`not`, `as` casts, bitwise + shifts (`and`/`shl`/`shr`), ranged typealiases,
+// and NAMESPACES — a file's directory, the `module` visibility tier over it, and `dir.Name` /
+// `dir.fn()` references at every segment count. No `for`, no closures, no async, no witness-table
+// dispatch. Everything below stays inside it — and `printCorpusManifest` states exactly this
+// boundary on every run, so a construct outside it (and the codegen change to it that would be
+// invisible) is NAMED rather than silently absent.
 //
 // ⚠ THE SUBSET AND THE CORPUS ARE TWO DIFFERENT SETS, AND THE GAP BETWEEN THEM IS WHERE BUGS LIVE.
 // This is the file's most durable defect, and the eight bullets below are its recurrences:
@@ -114,8 +114,8 @@
 //     member roster on one type, eight `markBufferSurface` call sites in seven parser functions — was in
 //     neither list. Measured on the ladder as it stood: `.managed` 0, `ByteArray` 0, `toByteArray` 0,
 //     `addressableBytes` 0, `__ManagedMemory` 0, at rung 0 and rung 5 alike, so the value-position
-//     mechanism shipped against a ladder that read Δ0 and could not have read anything else. See
-//     `BufferSurfaceSitesBase`. ⚠ **A FAMILY WHOSE NEIGHBOUR IS COVERED IS THE HARDEST KIND TO SEE** — the
+//     mechanism shipped against a ladder that read Δ0 and could not have read anything else.
+//     ⚠ **A FAMILY WHOSE NEIGHBOUR IS COVERED IS THE HARDEST KIND TO SEE** — the
 //     same shape as `RangedReturnSitesBase`, where the cast door was priced and the `return` door was not,
 //     and the manifest line above it read as covering both.
 //   • ⭐ AND THE SEVENTH IS THE ONE NO KNOB COULD HAVE CLOSED, BECAUSE IT WAS THE DIRECTORY LAYOUT
@@ -217,7 +217,7 @@ typealias KnobIndex = int(0 to 1048575) implements ElementIndex
 let FunctionsBase = 16
 
 // Real source FILES, not one big one: this is what exercises `load`, `merge`, and the query spine,
-// none of which a single-file corpus would touch at all. The `manyFunctions` above are distributed
+// none of which a single-file corpus would touch at all. The `FunctionsBase` above are distributed
 // across them, so functions-per-file stays constant as both double.
 let FilesBase = 4
 
@@ -260,7 +260,7 @@ let PressuredLoopsBase = 2
 // ⚠⚠ **IT EXISTS BECAUSE NO OTHER KNOB REACHES THE COLORER'S EXHAUSTION PATH AT ANY RUNG, SO A LADDER
 // WITHOUT IT READS Δ0 ABOUT A MECHANISM THAT NEVER RAN — the instrument's BLIND SPOT rather than the
 // cost.** Every column — allocations, bytes AND cpu — would report "nothing moved". That is the failure
-// this file's `floatSpill` knob sat in at a count too small to force a single spill.
+// this file's `FloatSpillLoopsBase` knob sat in at a count too small to force a single spill.
 //
 // THE SHAPE, and every part of it is load-bearing — `ir-specs/register-pressure.md`'s
 // `confined-reuse-defs-*` cases are the same program written by hand:
@@ -283,19 +283,20 @@ let PressuredLoopsBase = 2
 //    that point is FEASIBLE; the greedy simply cannot get there, and the repair splits one.
 //  • the SUM, which is what keeps every unconstrained value live right up to the call.
 //
-// Groups use FRESH NAMES, so their live ranges do not overlap and peak pressure stays at ONE group's
-// worth however many groups there are — `pressuredLoops`' rule. So repairs are Θ(groups) against a
-// function of size Θ(groups), which is exactly the reading this ladder is for: ×2 per doubling is the
-// BATCHED repair loop, ×4 would be a per-repair re-colour.
+// Groups use FRESH NAMES, so their live ranges do not overlap and peak pressure stays at ONE
+// group's worth however many groups there are — `PressuredLoopsBase`'s rule. So repairs are
+// Θ(groups) against a function of size Θ(groups), which is exactly the reading this ladder is for:
+// ×2 per doubling is the BATCHED repair loop, ×4 would be a per-repair re-colour.
 let ConfinedDefsBase = 2
 
-// ONE function, ONE chain of loops NESTED to depth N — distinct from `pressuredLoops`, which grows
-// loop COUNT at depth 1. Depth is what the loop-phi token pre-scan climbs: `parseWhileStatement`
-// re-derives each loop's extent from the tokens (`blockStatementEndIndex`) and reads its carried set off
-// them (`assignedBindingsIn`), and a loop NESTED inside another has its tokens re-scanned once per
-// enclosing loop. So D nested loops make the scan O(depth x tokens) — quadratic in TIME. ⚠ **STILL TRUE
-// AFTER 2026-07-28**, which removed a DIFFERENT quadratic from the same function (the O(vars in scope)
-// filter) and left the token walk exactly as it was; `gennest.sh` is the ladder that isolates this one.
+// ONE function, ONE chain of loops NESTED to depth N — distinct from `PressuredLoopsBase`, which
+// grows loop COUNT at depth 1. Depth is what the loop-phi token pre-scan climbs:
+// `parseWhileStatement` re-derives each loop's extent from the tokens (`blockStatementEndIndex`)
+// and reads its carried set off them (`assignedBindingsIn`), and a loop NESTED inside another has
+// its tokens re-scanned once per enclosing loop. So D nested loops make the scan O(depth x tokens)
+// — quadratic in TIME. ⚠ **STILL TRUE AFTER 2026-07-28**, which removed a DIFFERENT quadratic from
+// the same function (the O(vars in scope) filter) and left the token walk exactly as it was;
+// `gennest.sh` is the ladder that isolates this one.
 //
 // ⚠ IT WILL READ ~LINEAR IN THE ALLOCATION COLUMN ANYWAY, AND THAT IS A LIMIT OF THAT COLUMN RATHER
 // THAN OF THIS KNOB. The scan allocates one small position list per loop and mints one phi per
@@ -344,7 +345,7 @@ let FloatSpillLoopsBase = 2
 // `RegisterFileSize - FirstXmmRegisterNumber`. Small on purpose: the straight-line
 // arithmetic must never spill, so this knob measures float ARITHMETIC and cannot quietly become a
 // second spill knob. That shape is `scaleFloatSpill`'s job, and holding the two apart is the same
-// separation `WorkingLocalsPerFunction` keeps against `pressuredLoops`.
+// separation `WorkingLocalsPerFunction` keeps against `PressuredLoopsBase`.
 let WorkingFloatsPerFunction = 4 as KnobSize
 
 // THE FLOAT-SPILL KNOB'S WIDTH — spelled below as a HEADROOM constant plus a DERIVED half-width,
@@ -352,9 +353,9 @@ let WorkingFloatsPerFunction = 4 as KnobSize
 // across its call: enough to OVERFLOW the callee-saved XMM half, because that half is now where a
 // cross-call float lives.
 //
-// ⚠⚠ IT NEEDS A HEADROOM CALCULATION, BECAUSE xmm6–15 ARE CALLEE-SAVED: a count that fits in
-// that half generates a loop that spills NOTHING, measuring the force-spill path by not exercising
-// it. That is the failure this corpus exists to end (see the `pressuredLoops` note): an instrument
+// ⚠⚠ IT NEEDS A HEADROOM CALCULATION, BECAUSE xmm6–15 ARE CALLEE-SAVED: a count that fits in that
+// half generates a loop that spills NOTHING, measuring the force-spill path by not exercising it.
+// That is the failure this corpus exists to end (see the `PressuredLoopsBase` note): an instrument
 // that cannot express the feature reports Δ0 and the Δ0 reads as evidence.
 //
 // So it is the float twin of `PressuredValuesPerLoop` in the way that matters: the width of the
@@ -389,10 +390,11 @@ function floatsLivePerSpillLoop() returns KnobSize
 	return (calleeSavedXmms as KnobSize) + FloatSpillHeadroom
 end 'floatsLivePerSpillLoop'
 
-// THE `confinedDefs` KNOB'S TWO WIDTHS, both DERIVED from the allocator's own x64 masks for the reason
-// `floatsLivePerSpillLoop` records paying for: a number that is right today and written down here goes
-// stale silently, and a knob that has gone blind that way once will go blind that way again. What the
-// derivation does NOT do is follow the HOST — see `ConfinedDefsBase`, which states the consequence.
+// THE `ConfinedDefsBase` KNOB'S TWO WIDTHS, both DERIVED from the allocator's own x64 masks for the
+// reason `floatsLivePerSpillLoop` records paying for: a number that is right today and written down
+// here goes stale silently, and a knob that has gone blind that way once will go blind that way
+// again. What the derivation does NOT do is follow the HOST — see `ConfinedDefsBase`, which states
+// the consequence.
 //
 // The unconstrained count is the WHOLE GPR pool — the threshold at which the machine is full at the
 // moment the confined values are born.
@@ -431,12 +433,12 @@ let GlobalConstModulus = 1000
 // ONE file, N top-level `var`s — `.data` slots, `GlobalDataTable.layOut`, and a
 // `globalAddr`/`loadIndirect`/`storeIndirect` triple per access.
 //
-// ⚠ NOT `globalConsts` WITH A DIFFERENT KEYWORD. The two share a syntax and NOTHING else, which is
-// exactly the trap that let both go unmeasured behind one manifest line. A `let` is folded into its
-// uses and has NO BACKEND AT ALL; a `var` is storage that survives to the linker, lays out a section,
-// and loads through an impure op. A change to the data-section layout moves this knob and cannot move
-// that one. Two knobs that a future change must be free to move independently are not one knob — the
-// rule `floatSpill` states against `pressuredLoops`.
+// ⚠ NOT `GlobalConstsBase` WITH A DIFFERENT KEYWORD. The two share a syntax and NOTHING else, which
+// is exactly the trap that let both go unmeasured behind one manifest line. A `let` is folded into
+// its uses and has NO BACKEND AT ALL; a `var` is storage that survives to the linker, lays out a
+// section, and loads through an impure op. A change to the data-section layout moves this knob and
+// cannot move that one. Two knobs that a future change must be free to move independently are not
+// one knob — the rule `FloatSpillLoopsBase` states against `PressuredLoopsBase`.
 let GlobalVarsBase = 32
 
 // The value each global `var` is seeded with, cycled so the `.data` image is not one repeated byte
@@ -467,7 +469,7 @@ let StructTypesBase = 8
 // ⚠ NOT `structTypes` WITH A BIGGER NUMBER. One knob grows how many types the compiler must LAY OUT;
 // this one grows how many times a type is BUILT. A change to field WRITES moves this one and not
 // that one; a change to the layout descriptor moves that one and not this one. Same rule as
-// `globalVars` above, and as `floatSpill` against `pressuredLoops`.
+// `GlobalVarsBase` above, and as `FloatSpillLoopsBase` against `PressuredLoopsBase`.
 let StructAllocsBase = 32
 
 // The bounded set of types `scaleStructAllocs` rotates over. CONSTANT on purpose: were the alloc knob
@@ -593,7 +595,7 @@ let RangedReturnSitesBase = 8
 //
 // ⚠ THIS DOUBLES BECAUSE A CORPUS WITH A FIXED V IS BLIND IN THE ONE DIMENSION IT NAMES ITSELF FOR.
 // The parser builds SSA on the fly at a cost O(vars-in-scope) per branch, and a snapshot taken per
-// `ParseExpression` (of the variable registry) or per `if` (of the whole mutable-var set) puts that
+// `parseExpression` (of the variable registry) or per `if` (of the whole mutable-var set) puts that
 // cost in BYTES. Both such costs hide behind a `longFunction` or `deepBlocks` carrying a FIXED handful
 // of locals: V never grows, so no
 // O(V·anything) cost can surface. **A fixed V is a V dimension the ladder cannot climb**, and
@@ -602,14 +604,14 @@ let RangedReturnSitesBase = 8
 // the instrument sees nothing. `longFunction` already does this with 3,200 `if`s; this does it with locals.
 //
 // So V doubles, and the base is picked so the TOP rung reaches ~4,096 locals — into the thousands,
-// which is where a per-`ParseExpression` snapshot's O(V) cost actually bites (~4,000). Real
+// which is where a per-`parseExpression` snapshot's O(V) cost actually bites (~4,000). Real
 // functions top out near ~30 locals (measured across maxon + stdlib: p99 = 16, max = 44), so
 // this is deliberately super-realistic in magnitude and realistic in shape.
 //
 // WHAT THE LADDER NOW SEES (measured on current `main`, both V and the ifs doubling) — and this knob is
 // now a REGRESSION GUARD on two fixes it first exposed:
-//   • `phase:parse` ALLOCATIONS grow x2.00 — LINEAR. The `ParseExpression` HashSet snapshot that went
-//     O(V) per call is GONE (deleted with the ternary short-circuit); its being linear confirms that.
+//   • `phase:parse` ALLOCATIONS grow x2.00 — LINEAR: no `parseExpression` call snapshots the
+//     variable registry.
 //   • `phase:parse` BYTES grow ~x2.0 — LINEAR too. This knob EXPOSED an O(V·ifs) BYTE
 //     quadratic here (parse bytes read x3.9): each `if` snapshotted the whole mutable-var set — O(V) per
 //     branch × O(ifs) = O(V·ifs) — invisible until V doubled. FIXED the way loops were: an
@@ -627,12 +629,13 @@ let LocalsPerFunctionBase = 128
 // The BOUNDED set of accumulators the generated branches actually MUTATE — the "assigned" set, held
 // apart from the "in-scope" set above so the two dimensions stay distinct.
 //
-// It is a small constant on purpose: values live across the branches must fit the 14-GPR pool, so the
-// knob measures the PARSER (O(vars in scope)) and never accidentally becomes a second `pressuredLoops`
-// by spilling. The V scope-fillers each fold into one of these the instant they are declared (see
-// `fillerLocalsDecl`), so a filler's live range is length ~1 and the machine only ever holds these
-// six — while all V+6 remain IN SCOPE for every branch's snapshot. That gap between "in scope" (V+6)
-// and "live" (6) is the whole trick that lets V climb into the thousands without tripping E5001.
+// It is a small constant on purpose: values live across the branches must fit the 14-GPR pool, so
+// the knob measures the PARSER (O(vars in scope)) and never accidentally becomes a second
+// `PressuredLoopsBase` by spilling. The V scope-fillers each fold into one of these the instant
+// they are declared (see `fillerLocalsDecl`), so a filler's live range is length ~1 and the machine
+// only ever holds these six — while all V+6 remain IN SCOPE for every branch's snapshot. That gap
+// between "in scope" (V+6) and "live" (6) is the whole trick that lets V climb into the thousands
+// without tripping E5001.
 let WorkingLocalsPerFunction = 6 as KnobSize
 
 // One tracked working accumulator, by slot. The two halves of the tracker are a pair — a read that
@@ -1018,11 +1021,12 @@ end 'neutralizeText'
 // ONE file, N `enum` declarations, each matched exhaustively once — the PER-TYPE cost: the enum
 // registry, its case table, and the tag's scalar backing.
 //
-// ⚠ NOT `matchSites` WITH A DIFFERENT NUMBER, and the separation is the same one `structTypes` keeps
-// against `structAllocs`. This knob grows how many enums the compiler must DECLARE and lay out; that one
-// grows how many `match` SITES dispatch over a fixed set of them. A change to enum declaration or tag
-// layout moves this column and not that one; a change to the dispatch STRATEGY moves that one and not
-// this one. Two knobs that a future change must be free to move independently are not one knob.
+// ⚠ NOT `MatchSitesBase` WITH A DIFFERENT NUMBER, and the separation is the same one
+// `StructTypesBase` keeps against `StructAllocsBase`. This knob grows how many enums the compiler
+// must DECLARE and lay out; that one grows how many `match` SITES dispatch over a fixed set of
+// them. A change to enum declaration or tag layout moves this column and not that one; a change to
+// the dispatch STRATEGY moves that one and not this one. Two knobs that a future change must be
+// free to move independently are not one knob.
 let EnumTypesBase = 4
 
 // How many cases each generated enum declares.
@@ -1067,15 +1071,17 @@ let StringOpsBase = 8
 // THE FOUR KNOBS FOR THE REST OF `String`'S MEMBER SURFACE
 // ===========================================================================================
 //
-// ⚠ **THIS FILE'S FOUNDING DEFECT AGAIN, AND IT IS PAID FOR ONE WAVE AT A TIME.** `stringOps` above generates a literal, an interpolation, `.append`, `.byteLength()` and `==`.
-// It generates NOT ONE of the twenty-odd other members `dispatchStringMethod` answers — no predicate, no
-// case conversion, no `replace`/`split`, no trim, no `StringIndex` producer or consumer, no materializer,
-// no `isEmpty`/`clone`. Every one of them is in the subset (each has live, enabled cases in
-// `specs/string-methods-ascii.md`, `string-index.md`, `string-trim.md` and `string-views.md`), and
-// every one of them is about to be RETIRED from the compiler's synthesized surface onto
-// `stdlib/String.maxon`'s bodies. Without these knobs every retirement wave would read a flat delta of
-// ZERO in allocations, in bytes AND in CPU alike — the reading the header's seven other entries all
-// describe, arriving in a programme whose whole point is that the cost be readable.
+// ⚠ **THIS FILE'S FOUNDING DEFECT AGAIN, AND IT IS PAID FOR ONE WAVE AT A TIME.** `StringOpsBase`
+// above generates a literal, an interpolation, `.append`, `.byteLength()` and `==`. It generates
+// NOT ONE of the twenty-odd other members `dispatchStringMethod` answers — no predicate, no case
+// conversion, no `replace`/`split`, no trim, no `StringIndex` producer or consumer, no
+// materializer, no `isEmpty`/`clone`. Every one of them is in the subset (each has live, enabled
+// cases in `specs/string-methods-ascii.md`, `string-index.md`, `string-trim.md` and
+// `string-views.md`), and every one of them is about to be RETIRED from the compiler's synthesized
+// surface onto `stdlib/String.maxon`'s bodies. Without these knobs every retirement wave would read
+// a flat delta of ZERO in allocations, in bytes AND in CPU alike — the reading the header's seven
+// other entries all describe, arriving in a programme whose whole point is that the cost be
+// readable.
 //
 // ⭐ **FOUR KNOBS RATHER THAN ONE, AND THE SPLIT IS `dispatchStringMethod`'S OWN.** Its arms are grouped
 // and labelled by the slice that built them, and the grouping is not cosmetic: each is a different piece
@@ -1159,19 +1165,19 @@ let StringViewOpsBase = 8
 // file's header calls its founding defect; the reading is only worth what the
 // corpus can express.
 //
-// ⚠ **NOT `stringOps` WITH A NARROWER LITERAL.** The two types share the 56-byte record and every rule
-// but one, and that one is the point: a `Character` is `Comparable` and a `String` is not, so `c < d`
-// lowers to a `__char_cmp` call plus an `Ordering` verdict where `s < t` is a diagnostic. A change to
-// `buildByteRecordCompare`, to the character `match` compare chain or to `retypeCharLiteralAsCodepoint`
-// moves this column and leaves the String one flat.
+// ⚠ **NOT `StringOpsBase` WITH A NARROWER LITERAL.** The two types share the 56-byte record and
+// every rule but one, and that one is the point: a `Character` is `Comparable` and a `String` is
+// not, so `c < d` lowers to a `__char_cmp` call plus an `Ordering` verdict where `s < t` is a
+// diagnostic. A change to `buildByteRecordCompare`, to the character `match` compare chain or to
+// `retypeCharLiteralAsCodepoint` moves this column and leaves the String one flat.
 let CharOpsBase = 8
 
 // ONE file, N types each owning a `String` field, each built once and dropped at scope exit — the
 // PER-TYPE cost of the SYNTHESIZED destructor cascade (`__destruct_<T>`, which frees the field).
 //
-// ⚠ NOT `stringOps` WITH A STRUCT AROUND IT. That knob grows how many times String CODE runs; this one
-// grows how many distinct `__destruct_<T>` bodies the compiler must SYNTHESIZE and root. A change to
-// `installStructDestructors` moves this column and not that one.
+// ⚠ NOT `StringOpsBase` WITH A STRUCT AROUND IT. That knob grows how many times String CODE runs;
+// this one grows how many distinct `__destruct_<T>` bodies the compiler must SYNTHESIZE and root. A
+// change to `installStructDestructors` moves this column and not that one.
 let ManagedStructTypesBase = 4
 
 // ONE file, M TRIVIAL-element `Array` operation groups — `create`/`reserve`/`push`/`get`/`count`, plus
@@ -1186,11 +1192,11 @@ let ArrayOpsBase = 8
 // `Array with <struct owning a String>`: the element-destructor threading, and the RETAIN a `get` of a
 // managed element owes.
 //
-// ⚠ NOT `arrayOps` WITH A DIFFERENT ELEMENT TYPE, for the reason the two struct knobs are not one: the
-// managed path stores an element DROP function in the array record and calls it per slot, and a change
-// to that threading moves this column while leaving the trivial one flat. (OPAQUE-`T` managed elements —
-// the descriptor-gated `funcAbs64InRdata` path — are x64-only and deliberately absent; see this
-// section's header.)
+// ⚠ NOT `ArrayOpsBase` WITH A DIFFERENT ELEMENT TYPE, for the reason the two struct knobs are not
+// one: the managed path stores an element DROP function in the array record and calls it per slot,
+// and a change to that threading moves this column while leaving the trivial one flat. (OPAQUE-`T`
+// managed elements — the descriptor-gated `funcAbs64InRdata` path — are x64-only and deliberately
+// absent; see this section's header.)
 let ManagedArrayOpsBase = 4
 
 // ONE file, N generic BASE declarations, alternating `uses T` and `uses A, B`, each instantiated once —
@@ -1262,7 +1268,7 @@ let TryCoOwnSpellingCount = 2 as KnobSize
 // N interfaces and their conforming types — the PER-CONFORMANCE cost: `ConformanceCheck`'s declared-
 // conformance index, the method-requirement match, and one compiled method body per requirement.
 //
-// ⚠ THIS KNOB GROWS FILES, DELIBERATELY, AND IT IS THE ONLY ONE BESIDES `manyFiles` THAT DOES.
+// ⚠ THIS KNOB GROWS FILES, DELIBERATELY, AND IT IS THE ONLY ONE BESIDES `FilesBase` THAT DOES.
 // `Parser.requireInterfaceForParse` scans the CURRENT FILE's interfaces once per `where`-constraint
 // site, so interfaces-per-file is a measured cost multiplier — and the standing instruction from the
 // triage that filed it is not to land many protocol interfaces in one artifact. Holding
@@ -1278,13 +1284,13 @@ let InterfacesPerFile = 4 as KnobSize
 // per-SITE cost of CONCRETE interface dispatch, which is a direct call to a known body and NOT a
 // witness-table lookup (that is `where T is I`, x64-only, and absent — see this section's header).
 //
-// ⚠ NOT `interfaceTypes` WITH A DIFFERENT NUMBER: a change to conformance CHECKING moves that column,
-// a change to how an interface method CALL lowers moves this one.
+// ⚠ NOT `InterfaceTypesBase` WITH A DIFFERENT NUMBER: a change to conformance CHECKING moves that
+// column, a change to how an interface method CALL lowers moves this one.
 let IfaceDispatchBase = 8
 
 // The bounded set of conforming types `ifaceDispatchSource` rotates its call sites over. CONSTANT for
 // the reason `AllocStructTypeCount` is: were the dispatch knob to grow its own conformances it would BE
-// `interfaceTypes`, and the separation defended above would exist only in the comments.
+// `InterfaceTypesBase`, and the separation defended above would exist only in the comments.
 let IfaceDispatchTypeCount = 4 as KnobSize
 
 // ===========================================================================================
@@ -1308,10 +1314,10 @@ let IfaceDispatchTypeCount = 4 as KnobSize
 // comparable to rows minted after it. That is the price of curing a blind spot and it is paid once.
 //
 // ⭐ **IT IS A DIRECTORY KNOB, WHICH IS WHY IT GROWS FILES — AND IT IS THE THIRD THAT DOES** (after
-// `manyFiles` and `interfaceTypes`). A namespace is not a syntactic decoration this generator could
-// emit into an existing file: it IS the directory a file sits in, so the only way to double the number
-// of namespaces is to double the number of directories. Two files per module, both of them load-bearing
-// and neither of them padding — see `writeNamespacedModules`.
+// `FilesBase` and `InterfaceTypesBase`). A namespace is not a syntactic decoration this generator
+// could emit into an existing file: it IS the directory a file sits in, so the only way to double
+// the number of namespaces is to double the number of directories. Two files per module, both of
+// them load-bearing and neither of them padding — see `writeNamespacedModules`.
 //
 // FOUR, the per-TYPE band's base (`EnumTypesBase`, `ManagedStructTypesBase`, `GenericBasesBase`), and
 // for the same test: a module is a DECLARING unit, not a call site. It grows how many namespaces the
@@ -1456,7 +1462,7 @@ export function generateCorpus(root FilePath, rungs RungCount) returns ScaleRung
 end 'generateCorpus'
 
 // Generate one rung: a DIRECTORY of `.maxon` files (the compiler's `build <dir>` walks them recursively),
-// so the `manyFiles` knob is expressed as real files on disk rather than simulated.
+// so the `FilesBase` knob is expressed as real files on disk rather than simulated.
 function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws ScaleError
 	let dirName = try FilePath.from("{RungDirPrefix}{rung}") otherwise panic("ScaleCorpus: rung dir name must be valid")
 	let dir = root.join(dirName)
@@ -1812,7 +1818,7 @@ function opaqueCalleeValue(argument TrackedValue) returns TrackedValue
 	return argument + 1
 end 'opaqueCalleeValue'
 
-// The `manyFunctions` + `manyFiles` knobs, which are one piece of work: N functions spread over M
+// The `FunctionsBase` + `FilesBase` knobs, which are one piece of work: N functions spread over M
 // real files. Both double per rung, so functions-per-file is constant and the two knobs stay
 // independent — M is what `load`/`merge`/the query spine see, N is what the pass pipeline sees.
 //
@@ -2079,7 +2085,7 @@ let MinCallChainLength = 2 as KnobSize
 
 let PressuredDriver = "scalePressured"
 
-// The `pressuredLoops` knob: ONE function, N loops, each holding PressuredValuesPerLoop
+// The `PressuredLoopsBase` knob: ONE function, N loops, each holding PressuredValuesPerLoop
 // accumulators live across a call to `scaleOpaque`. The splitter must spill the accumulators that do
 // not fit the five callee-saved registers, so this is the knob that exercises the splitter hardest.
 //
@@ -2144,19 +2150,20 @@ end 'pressuredLoopsSource'
 
 let ConfinedDefsDriver = "scaleConfinedDefs"
 
-// The `confinedDefs` knob — see `ConfinedDefsBase` for the shape and for why it exists.
+// The confined-defs knob — see `ConfinedDefsBase` for the shape and for why it exists.
 //
-// ⚠ WHY IT IS NOT `pressuredLoopsSource` WITH ANOTHER PARAMETER, though both end in "values live across
-// a call": they provoke DIFFERENT PASSES, and the difference is the whole reason for a second knob.
-// `pressuredLoops` makes the SPLITTER work — its accumulators genuinely outnumber the callee-saved half
-// at a point, so the peak-finder sees an over-pool point and Hall's verdict there is OVERFLOW. Here the
-// verdict at every point is FEASIBLE and the splitter owes nothing; what fails is the greedy's ORDER,
-// and the only pass that runs is the colorer's repair. Merging them would make one knob whose tuning
-// decides which of two passes it measures, and the two must move independently.
+// ⚠ WHY IT IS NOT `pressuredLoopsSource` WITH ANOTHER PARAMETER, though both end in "values live
+// across a call": they provoke DIFFERENT PASSES, and the difference is the whole reason for a
+// second knob. `PressuredLoopsBase` makes the SPLITTER work — its accumulators genuinely outnumber
+// the callee-saved half at a point, so the peak-finder sees an over-pool point and Hall's verdict
+// there is OVERFLOW. Here the verdict at every point is FEASIBLE and the splitter owes nothing;
+// what fails is the greedy's ORDER, and the only pass that runs is the colorer's repair. Merging
+// them would make one knob whose tuning decides which of two passes it measures, and the two must
+// move independently.
 //
-// It is STRAIGHT-LINE, deliberately: a loop would put the confined values on a back edge and turn them
-// into phis, which is `pressuredLoops`' shape again. The confinement here is created by ordinary
-// sequential code, which is the point of the defect it was written for.
+// It is STRAIGHT-LINE, deliberately: a loop would put the confined values on a back edge and turn
+// them into phis, which is `PressuredLoopsBase`'s shape again. The confinement here is created by
+// ordinary sequential code, which is the point of the defect it was written for.
 function confinedDefsSource(groupCount KnobSize) returns String
 	var out = StringBuilder.create()
 
@@ -2172,7 +2179,8 @@ function confinedDefsSource(groupCount KnobSize) returns String
 
 	for groupIndex in 0 upto groupCount as ElementIndex 'eachGroup'
 		// Fresh names per group, so the groups' live ranges do not overlap and peak pressure stays at one
-		// group's worth however many groups there are — `pressuredLoops`' rule, in straight-line code.
+		// group's worth however many groups there are — `PressuredLoopsBase`'s rule, in straight-line
+		// code.
 		out.append("\tlet n{groupIndex} = {OpaqueCalleeName}(a)\n")
 		let base = opaqueCalleeValue(corpusSeedValue())
 
@@ -2223,9 +2231,10 @@ let NestedLoopLimit = 1000000
 let NestedDriver = "scaleNested"
 
 // The `loopNest` knob: ONE function, ONE chain of loops NESTED to `depth`. Distinct from
-// `pressuredLoops` (loop COUNT at depth 1): this grows loop DEPTH, which is what the loop-phi token
-// pre-scan climbs — `parseWhileStatement` re-scans a loop's whole token extent, and a loop nested
-// inside another is re-scanned once per enclosing loop, so this drives that scan O(depth x tokens).
+// `PressuredLoopsBase` (loop COUNT at depth 1): this grows loop DEPTH, which is what the loop-phi
+// token pre-scan climbs — `parseWhileStatement` re-scans a loop's whole token extent, and a loop
+// nested inside another is re-scanned once per enclosing loop, so this drives that scan O(depth x
+// tokens).
 //
 // EVERY loop tests and mutates the SINGLE carried accumulator `acc`. That is deliberate: it keeps peak
 // register pressure at one value however deep the nest goes (a per-level counter would be live across
@@ -2297,7 +2306,7 @@ end 'nestedLoopsSource'
 //
 // It is also the int→float promotion itself (`5 + 2.0` is 7.0 — specs/float-type.md's
 // `float-promotion`), so the way into the float domain is exercised by the same line that defeats
-// the folder. `trunc` is the way out, and `floatSumAndReturn` is where every float function takes it.
+// the folder. `trunc` is the way out, and `floatSumAndWitness` is where every float function takes it.
 // One tracked float accumulator, boxed.
 //
 // ⚠ A ONE-FIELD RECORD BECAUSE `Array with float` IS E2062 BY POLICY (`Parser.maxon`), and an
@@ -2407,8 +2416,9 @@ end 'floatSumAndWitness'
 
 let FloatsDriver = "scaleFloats"
 
-// The `floatOps` knob: ONE function, N groups of float arithmetic and float compares over a bounded
-// set of float accumulators. The float twin of `longFunction` — it grows float ops along a chain.
+// The `FloatOpsBase` knob: ONE function, N groups of float arithmetic and float compares over a
+// bounded set of float accumulators. The float twin of `longFunction` — it grows float ops along a
+// chain.
 //
 // Each group covers, deliberately, the things a float codegen change can move:
 //   • ALL FOUR arithmetic ops. `/` matters most: it is the ONE operator whose float form is a
@@ -2474,10 +2484,10 @@ end 'floatOpsSource'
 
 let FloatSpillDriver = "scaleFloatSpill"
 
-// The `floatSpill` knob: ONE function, N loops, each holding `floatsLivePerSpillLoop()` floats live
-// across a call to `scaleOpaque` — `FloatSpillHeadroom` more than the callee-saved XMM half is wide,
-// so at least that many spill in every loop. See `floatsLivePerSpillLoop` for why that count is
-// DERIVED from the allocator's masks rather than chosen.
+// The `FloatSpillLoopsBase` knob: ONE function, N loops, each holding `floatsLivePerSpillLoop()`
+// floats live across a call to `scaleOpaque` — `FloatSpillHeadroom` more than the callee-saved XMM
+// half is wide, so at least that many spill in every loop. See `floatsLivePerSpillLoop` for why
+// that count is DERIVED from the allocator's masks rather than chosen.
 //
 // The call is an INTEGER function: it is precisely the shape that forces the spill, because the
 // floats are live across the bracket and have nowhere caller-saved to survive it.
@@ -2488,10 +2498,10 @@ let FloatSpillDriver = "scaleFloatSpill"
 // SHAPE (declare, loop, call, update, sum). They are the same shape asked of two register files that
 // answer it DIFFERENTLY, and the difference is the entire point of having both:
 //
-//   • `pressuredLoops` measures a CHOICE. Its eight GPRs have five callee-saved registers to compete
-//     for, so the allocator decides which three go to memory, and the knob is tuned (eight, against a
-//     14-GPR pool) to make exactly five spills fall out of that competition.
-//   • `floatSpill` measures the SAME choice in the OTHER FILE. Its floats compete for
+//   • `PressuredLoopsBase` measures a CHOICE. Its eight GPRs have five callee-saved registers to
+//     compete for, so the allocator decides which three go to memory, and the knob is tuned (eight,
+//     against a 14-GPR pool) to make exactly five spills fall out of that competition.
+//   • `FloatSpillLoopsBase` measures the SAME choice in the OTHER FILE. Its floats compete for
 //     ten callee-saved XMMs exactly as the GPRs compete for five, so the knob is tuned (twelve,
 //     against a 16-XMM file) to make the overflow fall out of that competition.
 //
@@ -2515,8 +2525,8 @@ function floatSpillSource(loopCount KnobSize) returns String
 	var total = 0.0 as TrackedFloatValue
 
 	for loopIndex in 0 upto loopCount as ElementIndex 'eachLoop'
-		// Fresh names per loop, so the loops' live ranges do not overlap and peak XMM pressure stays
-		// at one loop's worth however many loops there are — `pressuredLoops`' rule, in the other file.
+		// Fresh names per loop, so the loops' live ranges do not overlap and peak XMM pressure stays at
+		// one loop's worth however many loops there are — `PressuredLoopsBase`'s rule, in the other file.
 		var live = TrackedFloatArray.create()
 
 		for v in 0 upto floatsPerLoop as ElementIndex 'declValues'
@@ -2536,8 +2546,9 @@ function floatSpillSource(loopCount KnobSize) returns String
 		out.append("\tend 'q{loopIndex}'\n")
 
 		// The loop above runs `GeneratedLoopTrips` times with its counter as `scaleOpaque`'s argument —
-		// `pressuredLoops`' tracking, in the other register file. Every value here is a quarter-integer
-		// and stays under 2^40, so every float step is EXACT and `trunc` is not a rounding question.
+		// `PressuredLoopsBase`'s tracking, in the other register file. Every value here is a
+		// quarter-integer and stays under 2^40, so every float step is EXACT and `trunc` is not a
+		// rounding question.
 		for trip in 0 upto GeneratedLoopTrips 'eachTrip'
 			for v in 0 upto floatsPerLoop as ElementIndex 'perTrip'
 				trackedFloatSet(live, slot: v as KnobIndex, value: trackedFloatAt(live, slot: v as KnobIndex) + ((opaqueCalleeValue(trip) + 0.5) as TrackedFloatValue))
@@ -2565,8 +2576,8 @@ let AllocTypePrefix = "ScaleAlloc"
 
 let GlobalConstsDriver = "scaleGlobalConsts"
 
-// The `globalConsts` knob: N top-level `let`s, each derived from the TWO below it, and a function
-// that reads every one of them.
+// The `GlobalConstsBase` knob: N top-level `let`s, each derived from the TWO below it, and a
+// function that reads every one of them.
 //
 // ⚠ THIS KNOB EMITS ALMOST NO CODE FOR ITS SIZE, AND THAT IS THE FOLDER DOING ITS JOB RATHER THAN
 // BEATING THE CORPUS. This file's founding trap — a benchmark that folds away — does NOT apply here,
@@ -2628,7 +2639,8 @@ let GlobalConstSeedHigh = 2
 
 let GlobalVarsDriver = "scaleGlobalVars"
 
-// The `globalVars` knob: N top-level `var`s, each stored to and loaded back through the opaque seed.
+// The `GlobalVarsBase` knob: N top-level `var`s, each stored to and loaded back through the opaque
+// seed.
 //
 // ⚠ A GLOBAL IS FOLD-RESISTANT FOR FREE, AND IT HAS TO BE, BECAUSE IT CANNOT BE SEEDED. A top-level
 // `var`'s initializer must be a CONSTANT expression — `var b = scaleSeed()` is E2045, and even
@@ -2756,8 +2768,8 @@ end 'structReaderName'
 // safe to lean on a construct carrying a claimed gap.
 //
 // The `if` is SCOPE SCAFFOLDING, not a CFG dimension — `deepBlocks` owns that one, and this adds ~1
-// branch per site against its ~3 blocks per if/else. `pressuredLoops` uses `while` the same way, for
-// the same reason: a knob may spend control flow to set up the thing it actually measures.
+// branch per site against its ~3 blocks per if/else. `PressuredLoopsBase` uses `while` the same
+// way, for the same reason: a knob may spend control flow to set up the thing it actually measures.
 //
 // The condition is `acc > 0` in every caller, which is why it is not a parameter: `acc` is the opaque
 // accumulator every generated driver declares, so the guard is unfoldable and the block is unremovable.
@@ -2832,19 +2844,14 @@ let StringTypeSpelling = "String"
 // part of the shape rather than filler.
 //
 // SHARED BY THE FOUR KNOBS THAT NEED A MANAGED AGGREGATE, and they need the same one: the
-// managed-struct knob (which grows how many such types EXIST), the managed-array knob (whose ELEMENT is
-// one), the generic-instances knob (whose managed type ARGUMENT is one) and the buffer-surface knob
-// (whose holder carries a field DECLARED `__ManagedMemory`). Four near-copies is four places for the
-// shape to drift, and the drift would be silent — each knob would still compile and each would be
-// measuring a slightly different declaration.
+// managed-struct knob (which grows how many such types EXIST), the managed-array knob (whose
+// ELEMENT is one), the generic-instances knob (whose managed type ARGUMENT is one) and the
+// try-co-own knob (whose substituted `T` is one). Four near-copies is four places for the shape to
+// drift, and the drift would be silent — each knob would still compile and each would be measuring
+// a slightly different declaration.
 //
 // The trivial field is a `ScaleInt`: every knob reads it into a `ScaleInt` accumulator, and a per-knob
 // twin of that alias would be a second name for the same domain that no operator could meet it in.
-//
-// ⚠ THE MANAGED FIELD'S TYPE IS A PARAMETER, AND THAT IS THE WHOLE OF WHY THIS IS ONE EMITTER AND NOT
-// TWO. `String` and `__ManagedMemory` are two different managed types over ONE declaration shape; the
-// destructor cascade the shape exists to measure does not care which, and the buffer knob needs the
-// FIELD SPELLING (`Parser.markDeclaredSurface`'s struct-field carrier) rather than a new layout.
 function managedFieldTypeDecl(name String, managedFieldName String, managedTypeName String) returns String
 	var out = StringBuilder.create()
 	out.append("\ntype {name}\n")
@@ -2869,8 +2876,8 @@ union GenericBoxFetch
 	// calls would price a cost their dimension does not claim to carry.
 	none
 
-	// A `fetch() returns T throws <errorTypeName>` beside `get` — the `tryCoOwn` knob's shape, and the
-	// only route in this corpus to a substituted MANAGED `T` result under a `try`.
+	// A `fetch() returns T throws <errorTypeName>` beside `get` — the `TryCoOwnSitesBase` knob's
+	// shape, and the only route in this corpus to a substituted MANAGED `T` result under a `try`.
 	throwing(errorTypeName String)
 end 'GenericBoxFetch'
 
@@ -2883,10 +2890,10 @@ end 'GenericBoxFetch'
 // declaration twice would let the two knobs measure different bases while claiming to isolate the two
 // costs of the same one.
 //
-// ⭐ **AND SHARED BY THE `tryCoOwn` KNOB THROUGH ITS `fetch` PARAMETER RATHER THAN BY A THIRD COPY.**
-// That knob needs the identical base with one THROWING method added; a near-copy would be a fourth
-// declaration of one shape, and the drift would be silent — each knob would go on compiling while
-// measuring a base slightly different from the one the manifest describes.
+// ⭐ **AND SHARED BY THE `TryCoOwnSitesBase` KNOB THROUGH ITS `fetch` PARAMETER RATHER THAN BY A
+// THIRD COPY.** That knob needs the identical base with one THROWING method added; a near-copy
+// would be a fourth declaration of one shape, and the drift would be silent — each knob would go on
+// compiling while measuring a base slightly different from the one the manifest describes.
 function genericBoxDecl(name String, fetch GenericBoxFetch) returns String
 	var out = StringBuilder.create()
 	out.append("\ntype {name} uses T\n")
@@ -2966,12 +2973,13 @@ let StructTypesDriver = "scaleStructTypes"
 // evaporate silently. That is `mainSource`'s rule one level down: an unbuilt type is an uncalled
 // function's twin.
 //
-// ⚠ NO `__destruct_<T>` CASCADE RIDES THIS KNOB, and that is a property of the TYPE it emits, not of the
-// compiler: `structTypeDecl` declares two `int` fields, so the type owns nothing and its drop is trivial.
-// The SYNTHESIZED cascade does exist (`installStructDestructors` — one `__destruct_<T>` body
-// per managed-field type, rooted and installed), and the knob that doubles it is `managedStructTypes`,
-// whose types own a `String`. Keep the two apart: a change to destructor synthesis must move that column
-// and leave this one flat, which is the whole reason both knobs exist.
+// ⚠ NO `__destruct_<T>` CASCADE RIDES THIS KNOB, and that is a property of the TYPE it emits, not
+// of the compiler: `structTypeDecl` declares two `int` fields, so the type owns nothing and its
+// drop is trivial. The SYNTHESIZED cascade does exist (`installStructDestructors` — one
+// `__destruct_<T>` body per managed-field type, rooted and installed), and the knob that doubles it
+// is `ManagedStructTypesBase`, whose types own a `String`. Keep the two apart: a change to
+// destructor synthesis must move that column and leave this one flat, which is the whole reason
+// both knobs exist.
 //
 // A gap named with a reason that has stopped being true is this file's worst failure mode, because the
 // reason is what a reader uses to decide the gap is not theirs to close.
@@ -2996,7 +3004,7 @@ end 'structTypesSource'
 
 let StructAllocsDriver = "scaleStructAllocs"
 
-// The `structAllocs` knob: M `create` sites over a FIXED `AllocStructTypeCount` types.
+// The `StructAllocsBase` knob: M `create` sites over a FIXED `AllocStructTypeCount` types.
 //
 // The per-SITE cost is the point — an `__mm_alloc` call, a field store per field, and the release the
 // value's death forces — so what doubles is the number of ALLOCATION SITES while the number of types
@@ -3039,7 +3047,7 @@ let DivideDriver = "scaleDivide"
 // written the same way. The quotient adopts the divisor's alias and is cast back per group.
 let DivideDividendGlobal = "scaleDividend"
 
-// The `intDivide` knob: N `/` and `mod` groups over a divisor derived from the opaque seed.
+// The `IntDivideBase` knob: N `/` and `mod` groups over a divisor derived from the opaque seed.
 //
 // BOTH OPERATORS, because they share one `idiv` and read DIFFERENT result registers — the quotient
 // from RAX, the remainder from RDX. A corpus with only one of them measures half the lowering.
@@ -3076,7 +3084,8 @@ end 'intDivideSource'
 
 let CheckedDivideDriver = "scaleCheckedDivide"
 
-// ⭐ **THE `checkedDivide` KNOB: N `try (a / d) otherwise …` / `try (a mod d) otherwise …` groups.**
+// ⭐ **THE `CheckedDivideBase` KNOB: N `try (a / d) otherwise …` / `try (a mod d) otherwise …`
+// groups.**
 //
 // The divisor is derived from the seed and DELIBERATELY NOT CAST, which is the whole difference from
 // `intDivideSource` above: uncast it is `possiblyZero`, so each group becomes a checked divide — three
@@ -3394,9 +3403,9 @@ let ShiftHighBitOffset = 100
 //   • A loop that actually `break`s. `break` was in the subset and the manifest said, in plain
 //     text, "in the subset, but no generated loop exits early": a loop EXIT phi carrying live values is a
 //     different merge from a loop header phi, and no knob was minting one.
-//   • A struct-typed FIELD written through the loaded box (`o.inner.x = ...`). This is a SHAPE, not a
-//     dimension — `structAllocs` already doubles the create-site count, and nesting depth is capped at 2
-//     on purpose, so what matters here is that the shape exists at all.
+//   • A struct-typed FIELD written through the loaded box (`o.inner.x = ...`). This is a SHAPE, not
+//     a dimension — `StructAllocsBase` already doubles the create-site count, and nesting depth is
+//     capped at 2 on purpose, so what matters here is that the shape exists at all.
 function scalarCoverageSource() returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: scalar + aggregate COVERAGE (fixed, not scaled) — logical and bitwise or/xor/not, an `as` guard, print, a break, a nested field write.\n")
@@ -3764,10 +3773,11 @@ function enumPickerCase(salt KnobIndex) returns KnobIndex
 	return 0
 end 'enumPickerCase'
 
-// The `matchSites` knob: M `match` sites over a FIXED pair of enums, ROTATING OVER ALL THREE DISPATCH
-// STRATEGIES — because `Parser.emitDispatchRange` picks one of three from the normalized interval list,
-// and a corpus that generated only one of them would measure a third of the lowering. (That is exactly
-// what `IntDivideBase` records: the corpus was full of `/` and every one of them was a FLOAT `/`.)
+// The `MatchSitesBase` knob: M `match` sites over a FIXED pair of enums, ROTATING OVER ALL THREE
+// DISPATCH STRATEGIES — because `Parser.emitDispatchRange` picks one of three from the normalized
+// interval list, and a corpus that generated only one of them would measure a third of the
+// lowering. (That is exactly what `IntDivideBase` records: the corpus was full of `/` and every one
+// of them was a FLOAT `/`.)
 //
 //   • SHAPE 0 — STATEMENT form (`then`), `EnumCasesPerType` explicit arms over CONTIGUOUS ordinals. Four
 //     intervals covering four slots is 100% dense, so this is the JUMP TABLE: an `.rdata` slot table and
@@ -3899,7 +3909,8 @@ function matchExpressionSite(index KnobIndex, pickName String, arms String, give
 	return out.build()
 end 'matchExpressionSite'
 
-// The `stringOps` knob: M String operation groups, each in its own block for `ownedSiteBlock`'s reason.
+// The `StringOpsBase` knob: M String operation groups, each in its own block for `ownedSiteBlock`'s
+// reason.
 //
 // ⚠ THIS FILE'S FOUNDING TRAP BITES STRINGS HARDEST, AND NOT THE WAY IT LOOKS. A pile of string LITERALS
 // does not fold — there is no string folding — but it also measures almost nothing that a real program
@@ -4011,7 +4022,7 @@ function searchPayloadText(index KnobIndex) returns String
 	return out.build()
 end 'searchPayloadText'
 
-// The `stringSearchOps` knob: M groups of the BYTE/ASCII family, in two blocks per group.
+// The `StringSearchOpsBase` knob: M groups of the BYTE/ASCII family, in two blocks per group.
 //
 // TWO BLOCKS, because they are two halves of the family and a change may move one without the other: the
 // PREDICATES and case conversions read the receiver and answer a bool or a same-length String, while the
@@ -4106,7 +4117,7 @@ function indexPayloadText(index KnobIndex) returns String
 	return "{indexPayloadHead(index)}{IndexNeedle}{IndexMiddleText}{IndexNeedle}{IndexTailText}"
 end 'indexPayloadText'
 
-// The `stringIndexOps` knob: M groups of the `StringIndex` family, in three blocks per group.
+// The `StringIndexOpsBase` knob: M groups of the `StringIndex` family, in three blocks per group.
 //
 // THREE BLOCKS, and the split is by what the compiler must do rather than by member count: the two ENDS
 // are pure construction (`startIndex` is two literals and no call at all), the two SEARCHES and
@@ -4276,7 +4287,7 @@ function trimSchemeBlocks(index KnobIndex, padding TrimPadding, core String) ret
 	return out.build()
 end 'trimSchemeBlocks'
 
-// The `stringTrimOps` knob: M groups of the three trims, over BOTH argument forms.
+// The `StringTrimOpsBase` knob: M groups of the three trims, over BOTH argument forms.
 //
 // The two schemes are the two argument FORMS rather than two of the members: with no argument the call
 // site builds the default `CharacterSet.whitespacesAndNewlines()`, and with one it does not. That is a
@@ -4329,7 +4340,7 @@ function viewPayloadText(index KnobIndex) returns String
 	return "view {index} {ViewSegmentText} tail"
 end 'viewPayloadText'
 
-// The `stringViewOps` knob: M groups of the materializers, plus `isEmpty` and `clone`.
+// The `StringViewOpsBase` knob: M groups of the materializers, plus `isEmpty` and `clone`.
 //
 // TWO BLOCKS: the four COUNTS, which each walk the receiver's bytes under a different rule, and the two
 // LEFTOVERS, which do not walk at all — `isEmpty()` is a field load and a compare, and `clone()` is a
@@ -4461,7 +4472,8 @@ let CharRangeTrips = 5 as TrackedValue
 // The one character inside that range the USED-element loop tests for, so exactly one trip of five hits.
 let CharRangeHit = "c"
 
-// The `charOps` knob: M `Character` operation groups, each in its own block for `ownedSiteBlock`'s reason.
+// The `CharOpsBase` knob: M `Character` operation groups, each in its own block for
+// `ownedSiteBlock`'s reason.
 //
 // The five shapes are the five distinct things a character literal can do, each reaching a
 // different piece of the compiler:
@@ -4545,7 +4557,8 @@ function charOpsSource(groupCount KnobSize) returns String
 	return out.build()
 end 'charOpsSource'
 
-// The `managedStructTypes` knob: N types each owning a `String` field, each built once and dropped.
+// The `ManagedStructTypesBase` knob: N types each owning a `String` field, each built once and
+// dropped.
 //
 // The per-TYPE cost is the point — one SYNTHESIZED `__destruct_<T>` body per type, rooted and installed —
 // so what doubles is how many distinct cascades exist, not how hard any one of them is used. Each is
@@ -4580,8 +4593,8 @@ function managedStructTypesSource(typeCount KnobSize) returns String
 	return out.build()
 end 'managedStructTypesSource'
 
-// The `arrayOps` knob: M TRIVIAL-element Array groups. Two blocks per group, and they are two blocks
-// rather than one because they measure two different halves of the type:
+// The `ArrayOpsBase` knob: M TRIVIAL-element Array groups. Two blocks per group, and they are two
+// blocks rather than one because they measure two different halves of the type:
 //
 //   • The GROWTH half — `create`/`reserve`/`push`/`get`/`count`. `reserve` is a distinct path from the
 //     implicit growth a bare `push` triggers, so both are here.
@@ -4643,7 +4656,8 @@ function arrayOpsSource(groupCount KnobSize) returns String
 	return out.build()
 end 'arrayOpsSource'
 
-// The `managedArrayOps` knob: M CONCRETE-MANAGED-element Array groups, over both managed element shapes.
+// The `ManagedArrayOpsBase` knob: M CONCRETE-MANAGED-element Array groups, over both managed
+// element shapes.
 //
 // TWO ELEMENT SHAPES, because the element's drop is reached differently for each: an `Array with String`
 // calls `__str_decref` per slot, while an `Array with <struct owning a String>` calls that struct's
@@ -4697,8 +4711,8 @@ function managedArrayOpsSource(groupCount KnobSize) returns String
 	return out.build()
 end 'managedArrayOpsSource'
 
-// The `genericBases` knob: N generic BASE declarations, alternating `uses T` and `uses A, B`, each
-// instantiated once with a trivial argument.
+// The `GenericBasesBase` knob: N generic BASE declarations, alternating `uses T` and `uses A, B`,
+// each instantiated once with a trivial argument.
 //
 // The per-BASE cost is the point. The compiler is DICTIONARY-PASSING, not monomorphizing, so a base compiles ONE
 // shared method body however many instantiations it has — which is exactly why the base count and the
@@ -4898,7 +4912,8 @@ function tryCoOwnPayloadText(index KnobIndex) returns String
 	return "try co-own payload {index}: long enough to leave the inline string record"
 end 'tryCoOwnPayloadText'
 
-// The `tryCoOwn` knob: M `try` SITES over a substituted MANAGED `T` return — see `TryCoOwnSitesBase`.
+// The try-co-own knob: M `try` SITES over a substituted MANAGED `T` return — see
+// `TryCoOwnSitesBase`.
 //
 // Each site spends the mechanism three times, and the third is a CONTROL rather than a repeat:
 //
@@ -5298,8 +5313,8 @@ function qualifiedReferenceGroup(m KnobIndex) returns String
 	return out.build()
 end 'qualifiedReferenceGroup'
 
-// The `interfaceTypes` knob: N interfaces and their conforming types, spread `InterfacesPerFile` to a
-// file — the per-CONFORMANCE cost.
+// The `InterfaceTypesBase` knob: N interfaces and their conforming types, spread
+// `InterfacesPerFile` to a file — the per-CONFORMANCE cost.
 //
 // ⭐ IT WRITES AND REGISTERS IN ONE FUNCTION, for `writeManyFunctions`' and `writeCallChain`'s reason:
 // this knob's per-file driver names are known only inside the loop that mints them, so each is read OFF
@@ -5394,13 +5409,13 @@ function interfaceConformancePair(interfaceName String, typeName String, salt Kn
 end 'interfaceConformancePair'
 
 // One CONCRETE interface-dispatch site: build a conforming instance and call both of its interface
-// methods, one with no arguments and one with an argument. Shared by both interface knobs for the reason
-// `structCreateInBlock` is shared by both struct knobs.
-// ⚠ `salt` IS THE CONFORMER'S SALT, NOT THIS SITE'S INDEX, and the two are not the same number. The
-// conformance pair's `probe()` returns `base + salt mod 7 + 1` for the salt IT was declared with, and
-// `ifaceDispatch` rotates M sites over a FIXED set of conformances — so site 9 there calls the type
-// declared with salt `9 mod IfaceDispatchTypeCount`. Reading the site index instead would have been right
-// for `interfaceTypes`, where the two coincide, and quietly wrong for every rung of the other knob.
+// methods, one with no arguments and one with an argument. Shared by both interface knobs for the
+// reason `structCreateInBlock` is shared by both struct knobs. ⚠ `salt` IS THE CONFORMER'S SALT,
+// NOT THIS SITE'S INDEX, and the two are not the same number. The conformance pair's `probe()`
+// returns `base + salt mod 7 + 1` for the salt IT was declared with, and `IfaceDispatchBase`
+// rotates M sites over a FIXED set of conformances — so site 9 there calls the type declared with
+// salt `9 mod IfaceDispatchTypeCount`. Reading the site index instead would have been right for
+// `InterfaceTypesBase`, where the two coincide, and quietly wrong for every rung of the other knob.
 function interfaceDispatchSite(index KnobIndex, typeName String, binding String, label String, salt KnobIndex) returns String
 	let scaleArgument = index mod 5 + 1
 
@@ -5416,13 +5431,13 @@ function interfaceDispatchSite(index KnobIndex, typeName String, binding String,
 	return ownedSiteBlock(label, body: body.build())
 end 'interfaceDispatchSite'
 
-// The `ifaceDispatch` knob: M CONCRETE dispatch SITES over a FIXED set of conformances.
+// The `IfaceDispatchBase` knob: M CONCRETE dispatch SITES over a FIXED set of conformances.
 //
-// The per-SITE cost is the point — the receiver's construction and the method call's lowering — so what
-// doubles is the number of call sites while the number of conformances stays put. That is the whole of
-// the difference from `interfaceTypes`, and the reason the two are not one knob with a bigger number:
-// this is the column that moves when interface-method CALL lowering changes, and that one is the column
-// that moves when `ConformanceCheck` does.
+// The per-SITE cost is the point — the receiver's construction and the method call's lowering — so
+// what doubles is the number of call sites while the number of conformances stays put. That is the
+// whole of the difference from `InterfaceTypesBase`, and the reason the two are not one knob with a
+// bigger number: this is the column that moves when interface-method CALL lowering changes, and
+// that one is the column that moves when `ConformanceCheck` does.
 //
 // It declares its OWN fixed conformances rather than reaching for the other knob's, exactly as
 // `structAllocsSource` declares its own types: a knob that read another knob's declarations would move
@@ -5449,7 +5464,7 @@ end 'ifaceDispatchSource'
 // `main`, which threads the seed through every generated function.
 //
 // It calls all of them ON PURPOSE. An uncalled function is a function a future dead-code pass could
-// legitimately delete, and the day that pass lands, the `manyFunctions` knob would silently
+// legitimately delete, and the day that pass lands, the `FunctionsBase` knob would silently
 // evaporate and the ladder would go flat — reporting perfect linearity because it had stopped
 // compiling anything. Threading `acc` through every call makes each one load-bearing.
 //
@@ -5600,12 +5615,12 @@ end 'codeGrowthAt'
 //     all, and a codegen change to any of them moves no number here.
 //   • ONLY WHAT THE LADDER TRIGGERS — the blind spot the CPU column does NOT touch, in ANY column.
 //     A construct the generator never emits, or a knob set too low to reach the cost it exists to
-//     measure, reads a flat zero in allocations, in bytes AND in CPU ticks alike. `FloatsLivePerSpillLoop`
-//     was 4, which stopped overflowing the callee-saved XMM half the day that half existed, so the
-//     knob whose whole job is forcing a float spill forced none and a genuinely quadratic path read
-//     FLAT. A delta of zero from an instrument that cannot express the feature is not evidence of
-//     anything, and no amount of measuring can distinguish it from a delta of zero that means the
-//     compiler did not change.
+//     measure, reads a flat zero in allocations, in bytes AND in CPU ticks alike.
+//     `floatsLivePerSpillLoop()` was 4, which stopped overflowing the callee-saved XMM half the day
+//     that half existed, so the knob whose whole job is forcing a float spill forced none and a
+//     genuinely quadratic path read FLAT. A delta of zero from an instrument that cannot express
+//     the feature is not evidence of anything, and no amount of measuring can distinguish it from a
+//     delta of zero that means the compiler did not change.
 export function printCorpusManifest()
 	print("\n")
 	print("scale-test: CORPUS MANIFEST — what this ladder exercises, and what it structurally cannot see.\n")

@@ -577,7 +577,7 @@ function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byN
 		if block.hasTerminatorOp() 'terminated'
 			ops = ops + 1
 
-			// A `tailCall`-shaped terminator refuses the leaf rule as any call does.
+			// A terminator that calls refuses the leaf rule as any call does.
 			match terminatorRole(module.getOp(block.terminatorIndex()), func: func, meta: meta) 'termRole'
 				body then break
 				calling or
@@ -606,7 +606,7 @@ end 'countedBodyOps'
 //   • A `calling` op refuses — which is what makes ownership free here, a retain, a release and a scope
 //     drop all being calls — UNLESS this body and the callee both declare the row. That edge is spliced
 //     away before this body is copied anywhere (`spliceAlwaysSplicedCallees`), and the cascade terminates
-//     because a cycle among those edges is refused rather than capped (`alwaysSplicedSpliceOrder`).
+//     because a cycle among those edges is refused rather than capped (`AlwaysSplicedPlan`).
 //
 // ⛔ `refusing` is the dialect's own `isUnsupportedInInlineBody`, which no row overrides.
 function leafOpRefusesTheBody(role InlineOpRole, op StdOp, module StdModule, alwaysSpliced bool, byName FunctionNameIndex, reference StdFunctionReference) returns bool
@@ -4172,14 +4172,14 @@ function assertParamOpMatchesConvention(op StdOp, calleeFunc IrFunction)
 	end 'p'
 end 'assertParamOpMatchesConvention'
 
-// The backstop every non-terminator arm of `copyBlockExit` shares — ONE string, for `notTheSplitCall`'s
-// reason. Which op it was is not worth naming: any of them in a terminator slot is the same broken
-// block, and `scanSpliceableShape` has already refused every op a body may not hold.
+// The backstop every non-terminator arm of `copyBlockExit` shares — ONE string. Which op it was is
+// not worth naming: any of them in a terminator slot is the same broken block, and
+// `scanSpliceableShape` has already refused every op a body may not hold.
 function refuseNotATerminator(calleeFunc IrFunction)
 	panic("SiteSplicer.copyBlockExit: an op that is not a terminator is in the terminator slot of '{String.from(calleeFunc.name)}'")
 end 'refuseNotATerminator'
 
-// The backstop the two non-`param` arms share — ONE string, for `notTheSplitCall`'s reason.
+// The backstop the non-`param` arms share — ONE string.
 function refuseNotAParamOp()
 	panic("assertParamOpMatchesConvention: asked of an op that is not a `param` — its one caller has already classified it as one through `inlineOpRole`")
 end 'refuseNotAParamOp'

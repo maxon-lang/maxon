@@ -974,8 +974,8 @@ export type StdToX64Lowering
 	// from hundreds of sites.
 	var stdModule as StdModule
 
-	// The compilation target — read for its OS by the three OS-primitive lowerings
-	// (`lowerOsExit`/`lowerOsWriteStdout`/`lowerOsAllocPages`), which route through `x64OsCallKind` to a
+	// The compilation target — read for its OS by every OS-primitive lowering (`lowerOsExit`,
+	// `lowerOsWriteStream`, `lowerOsAllocPages` and the rest), which route through `x64OsCallKind` to a
 	// Windows IAT call or a raw Linux syscall. The arm64 isel carries the same field for the same reason.
 	var target as Target
 
@@ -1350,8 +1350,8 @@ export type StdToX64Lowering
 		var outgoingArgBytes = 0 as StackSize
 
 		// This function's OWN parameter files, folded ONCE — every `param` op then reads a scalar instead of
-		// re-walking the parameter types, which is what the per-parameter `computeParamSlotIndex` did (Θ(params²)
-		// per function, for an answer that never changes within one).
+		// re-walking the parameter types (Θ(params²) per function, for an answer that never changes within
+		// one).
 		let paramFloatMask = floatParamMaskOf(srcFunc.paramTypes)
 
 		for i in 0 upto originalBlockCount 'eachBlock'
@@ -2410,7 +2410,7 @@ export type StdToX64Lowering
 	//   • The GT stack guard and `__gt_morestack` cannot destroy it. Morestack COPIES the whole GT stack
 	//     and rebases the saved-rbp chain, and this argument lives in the caller's frame ON that stack —
 	//     so it moves with the copy and the rebased rbp still names it. (The register arguments are what
-	//     had to be saved by hand; see `morestackSavedGprOrder`.)
+	//     had to be saved by hand; see `morestackSavedGprs`.)
 	//   • The float case needs no separate path: the load is `word64`, and `emitWord64Load` picks `movsd`
 	//     from the DESTINATION's class, which the value-class column set from the f64 Std type.
 	function lowerParam(resultId ValueId, index ParamCount, paramType StdType, paramFloatMask ArgFloatMask, dstBlock IrBlock)
@@ -3545,10 +3545,10 @@ export type StdToX64Lowering
 	// so they are written once. Two copies is how one of them would quietly acquire a different
 	// `hTemplateFile`.
 	//
-	// Stack args 5-7 first (rax scratch, while every argument register is still free), then the register
-	// args — the ordering `lowerOsPipeCreateWin64` establishes and for its reason. The access mask uses the
-	// 64-bit `movRegImm` because `GENERIC_READ` is `0x80000000`, which reads as a sign bit in an imm32
-	// spelling; one form for both keeps the two opens byte-comparable.
+	// Stack args 5-7 first (rax scratch, while every argument register is still free), then the
+	// register args — the ordering `lowerOsProcessSpawnWin64` establishes and for its reason. The
+	// access mask uses the 64-bit `movRegImm` because `GENERIC_READ` is `0x80000000`, which reads as a
+	// sign bit in an imm32 spelling; one form for both keeps the two opens byte-comparable.
 	function emitWin64CreateFile(resultId ValueId, pathPtrId ValueId, access MachineWord, disposition MachineWord, dstBlock IrBlock)
 		self.emitWin64StackArgImm(dstBlock, slot: 0, value: disposition)
 		self.emitWin64StackArgImm(dstBlock, slot: 1, value: FileAttributeNormal)
@@ -3563,7 +3563,7 @@ export type StdToX64Lowering
 	// --- The socket band: `ws2_32` on Windows, raw syscalls on Linux ---
 	//
 	// ⭐ Each spells the API constants its Std op deliberately does not carry, exactly as
-	// `emitWin64CreateFileA` spells `GENERIC_READ`. What differs between the two routes is more than the
+	// `lowerOsFileOpenRead` spells `GENERIC_READ`. What differs between the two routes is more than the
 	// call: Win64 passes arguments in rcx/rdx/r8/r9 and the syscall ABI in rdi/rsi/rdx/r10/r8/r9, so every
 	// op below splits into two argument sequences rather than sharing one.
 	//
@@ -4054,8 +4054,8 @@ export type StdToX64Lowering
 		self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.chunk(posixTraceChunk(service)), args: fourArgs(a0Id, second: a1Id, third: a2Id, fourth: a3Id), dstBlock: dstBlock)
 	end 'lowerOsHostProcessLinux'
 
-	// The stack words go down first, while every argument register is still free — `lowerOsPipeCreateWin64`'s
-	// order and for its reason.
+	// The stack words go down first, while every argument register is still free —
+	// `lowerOsProcessSpawnWin64`'s order and for its reason.
 	function lowerOsHostProcessWin64(resultId ValueId, service HostProcessCall, a0Id ValueId, a1Id ValueId, a2Id ValueId, a3Id ValueId, a4Id ValueId, a5Id ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(HostSampleArg5Slot), src: TargetVReg.virtual(a4Id), width: X64AccessWidth.word64))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(HostSampleArg6Slot), src: TargetVReg.virtual(a5Id), width: X64AccessWidth.word64))

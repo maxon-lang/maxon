@@ -866,11 +866,11 @@ end 'arm64WidestGuardedFrame'
 // Emit the guard at the very start of a guarded function's entry block, before the prologue, for a
 // user function of a green-thread module that reserves a frame. When the running green thread's
 // projected SP would dip below its stack guard the cold path runs; otherwise it is a handful of
-// instructions that fall through. A no-op for a P's inline scheduler GT (`stackGuard` is the slab
-// zero, so the `hs` is always taken) and off a green thread entirely (the three null tests bail).
-// At a function entry the cold path calls `__gt_guard_tripped` and runs the whole guard again;
-// a guard that may not park (`guardSiteMayPark`) withdraws a preemption request and calls
-// `__gt_morestack` directly. x64's twin carries why both shapes are sound.
+// instructions that fall through. A no-op for a P's inline scheduler GT (its `GtOffStackGuard` word
+// is the slab zero, so the `hs` is always taken) and off a green thread entirely (the three null
+// tests bail). At a function entry the cold path calls `__gt_guard_tripped` and runs the whole
+// guard again; a guard that may not park (`guardSiteMayPark`) withdraws a preemption request and
+// calls `__gt_morestack` directly. x64's twin carries why both shapes are sound.
 //
 // ⚠ It preserves x30 itself, which is the whole shape difference from x64's — see this file's
 // header.
@@ -1447,10 +1447,10 @@ end 'emitArm64DarwinUniqueThreadId'
 
 // `__gt_preempt_m(x0 = m)` — see `SchedRuntime.PreemptMachineName`. Go's `preemptM` (`signal_unix.go`).
 //
-// ⛔ **EVERY ROAD THAT DOES NOT DELIVER MUST HAND `signalPending` BACK**, or that machine is never preempted
-// again for the life of the process. Only a send the kernel accepted leaves it raised, because only then is
-// a handler going to run — and the handler either injects and lets the trampoline clear it, or declines and
-// clears it itself.
+// ⛔ **EVERY ROAD THAT DOES NOT DELIVER MUST HAND `MOffSignalPending` BACK**, or that machine is
+// never preempted again for the life of the process. Only a send the kernel accepted leaves it
+// raised, because only then is a handler going to run — and the handler either injects and lets the
+// trampoline clear it, or declines and clears it itself.
 //
 // ⚠ **`__sysmon` IS ITS ONLY CALLER**, and the monitor runs no green thread: it runs on a real OS-thread stack
 // with none to switch off, which is what lets the Darwin arm reach libSystem through the ordinary
@@ -1467,7 +1467,8 @@ function buildArm64PreemptMachineChunk(os Os) returns FunctionCodeChunk
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotMachine)
 
-	// CAS(m.signalPending, free -> held). A loss means a stop is already outstanding against this machine.
+	// CAS(`MOffSignalPending`, free -> held). A loss means a stop is already outstanding against this
+	// machine.
 	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x1, base: Arm64Register.x0, imm: MOffSignalPending as Imm32)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PreemptClaimFree)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PreemptClaimHeld)
@@ -1565,7 +1566,7 @@ function buildArm64PreemptHandlerChunk(os Os) returns FunctionCodeChunk
 	arm64EmitLeaRuntimeFuncAddr(asm, dest: Arm64Register.x2, funcName: AsyncPreemptName)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x2, base: Arm64Register.x3, byteOffset: saved.pc)
 
-	// The stop has landed: `signalPending` stays raised for the trampoline to clear.
+	// The stop has landed: `MOffSignalPending` stays raised for the trampoline to clear.
 	arm64EmitBranchTo(asm, label: done)
 
 	// Declined: this instant is no safe point, so the machine is re-armed for the monitor's next poll.

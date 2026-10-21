@@ -18,7 +18,7 @@
 //     still in view, which is here. `u64.max shr 60` is 15 or -1 depending on it.
 //
 //   • A TOP-LEVEL CONSTANT'S VALUE. A `let` at module scope is a COMPILE-TIME CONSTANT that every
-//     use INLINES as a literal (`Parser.topLevelConstantReference`), so the parser needs the NUMBER,
+//     use INLINES as a literal (`Parser.topLevelBindingReference`), so the parser needs the NUMBER,
 //     not a promise of one. It cannot fold the initializer itself: a forward reference
 //     (`let TOTAL = FIRST + SECOND` above `let FIRST = 30`) and a cross-file `export let` are both
 //     ordinary, and neither is in view while one file is parsed. So the fold happens HERE, after
@@ -300,7 +300,7 @@ end 'cacheEnumTablesAgreeInCompilerSignatureIndex'
 // ⭐ **THE `implements` LIST'S CONTRIBUTION TO A DECLARATION'S CONTENT HASH — ONE STATEMENT, BOTH KINDS AND
 // BOTH HALVES.** The reason the list must ride is the same on each and it is `recordStruct`'s rule: a
 // conformance changes what ANOTHER file compiles to while that file's own bytes never move. For an enum it
-// decides whether a `throws E` conformance is accepted (`ConformanceCheck.requireImplErrorConformsToRequirement`);
+// decides whether a `throws E` conformance is accepted (`ConformanceCheck.requireImplErrorConformsAndIsScalar`);
 // for a `type` it decides which INTERFACE EXTENSION methods that type has at all, which is a whole set of
 // functions appearing in or vanishing from the program — and, through the `with` BINDINGS, which of a
 // CONDITIONAL extension's methods survive its `where` clause. `shape` names which half is being mixed.
@@ -2348,9 +2348,7 @@ end 'ContainerCreateCall'
 // container's add is `(record, value)` and every caller may build that argument list from a single element; a
 // map's is `(record, key, value:)`, three arguments of which one is LABELLED. Folding the two into `push`
 // would leave every reader to re-derive the arity from the callee's spelling — and `ModuleInit`'s one-column
-// emitter would then have silently passed a key where a value belongs. The sentence *"a `Map` global is only
-// ever `MapAlias.create()` (there is no top-level map literal)"* stood in this header until the top-level map
-// literal arrived; it is what this arm replaces.
+// emitter would then have silently passed a key where a value belongs.
 module union ContainerElementAdd
 	push(let callee ByteArray)
 	unsupported
@@ -5475,7 +5473,7 @@ end 'OpaqueSlotDeclaration'
 // feeds decides whether the shared body enrols it owned, whether the method reserves a layout
 // descriptor to drop it through, and what a BORROWED argument at that position costs the caller.
 //
-// ⚠ **`ParamConsumeInfo.isInstanceMethod()` IS A LOSSY KEY FOR IT.** It is exact only while the recognizer
+// ⚠ **`ParamConsumeEntry.takesReceiver` IS A LOSSY KEY FOR IT.** It is exact only while the recognizer
 // sees `self`-headed stores alone: `Self{f: p}` feeds marked for receiverless
 // functions only (`scanBodyFacts`'s `detectFieldStores`) and array/field-reassign feeds only under a literal
 // `self` token make "is there a receiver" and "which sink" agree by accident. A STATIC that pushes its
@@ -6099,7 +6097,7 @@ end 'ParamReassignInfo'
 //
 // ⚠ **THE `self.` ARM IS SOUND BECAUSE THE SWEEP ENTERS EACH CONFORMER'S SCOPE, NOT THE INTERFACE'S**, and
 // that was CHECKED rather than assumed: an interface extension's default body is swept once per conformer
-// under `enterTypeScope(conformer)` (`Parser.foldExtensionDeclaration`, the same loop the real parse runs),
+// under `enterTypeScope(conformer)` (`Parser.foldExtensionDeclarationInto`, the same loop the real parse runs),
 // so a `self.f()` inside one is recorded against the CONFORMER — which is also the type its own declaration
 // is filed under. An `interface` declaration itself carries signatures and no bodies, so it records no edge
 // at all. There is no route by which `self.f()` names a method of a type other than the one enclosing it.
@@ -8036,7 +8034,7 @@ end 'StoreCandidate'
 
 typealias StoreCandidateArray = Array with StoreCandidate
 
-// The `<T>.handle` names one program mints — see `ProgramSignatures.serviceHandleNames`. Keyed by NAME
+// The `<T>.handle` names one program mints — see `ProgramSignatures.serviceHandleOwners`. Keyed by NAME
 // for `DisagreeingThrowsNameSet`'s reason: a companion has a nominal identity and nothing finer to compare.
 typealias ServiceHandleOwnerMap = Map with (ByteArray, readonly ByteArray)
 
@@ -9570,152 +9568,32 @@ export let ManagedMemoryCursorBuiltinBaseName = b"__ManagedMemoryCursor"
 // how `current()` is emitted through the SAME element accessor an `Array`'s `get` is.
 let ManagedMemoryCursorTypeParamCount = 1
 
-// ⭐⭐ **THE FIFTH COMPILER-OWNED CONTAINER: `Vector with <N> <Element>`, A FIXED-SIZE ARRAY.**
-// `stdlib/Vector.maxon` declares one, and the compiler synthesizes its own instead.
+// ⭐⭐ **THE FIFTH COMPILER-OWNED CONTAINER: `Vector with <N> <Element>`, A FIXED-SIZE ARRAY.** The
+// compiler owns its record; `stdlib/Vector.maxon` declares the type and supplies every member body.
 //
-// ⛔⛔ **THE THREE-CLAUSE ARGUMENT FOR NOT READING THAT FILE IS MEASURED FALSE IN EVERY CLAUSE.** It says
-// the file cannot be READ, because
-// (a) `var managed as __ManagedMemory with Element` is `E2055` against the compiler's arity-ZERO
-// `__ManagedMemory`; (b) `create()`'s `return Self{}` is `E3086`; and (c) a generic type holding a
-// compiler-owned container over its own type parameter erases the element's managed-ness and
-// access-violates at teardown. MEASURED on this tree:
-//   • **(a) and (b) DO NOT FIRE.** `maxon build stdlib/Vector.maxon` exits 1 with
-//     **`E3001: No 'main' function found` and nothing else**, and the injection control FIRES
-//     (`let bogus = NoSuchType.definitelyUndefined(1)` in `count()`'s body, on a copy outside `stdlib/`,
-//     answers `E3001` **+ `E3004`**), so its bodies really are analyzed. (a) died when `Array.maxon` was
-//     listed and `__ManagedMemory` became a one-parameter fold; (b) died with the empty-container
-//     family. **The file the note said the compiler CANNOT READ type-checks clean.**
-//   • **(c) IS UNREACHABLE, so it is a prediction and not a measurement.** Two refusals stand in front of
-//     it — `Parser.requireVectorElementType`'s opaque arm and its managed arm — and with
-//     the module listed neither is what the compile dies of. Its REASON is sound and its refusal is kept:
-//     an inline buffer that publishes every slot at `create()` while `element_destroy@40` stays 0 really
-//     would leak a `String` element. It is simply not why `Vector` is synthesized.
+// ⭐ **ONE CORPUS BODY SERVES EVERY SIZE.** `Self` inside `type Vector uses Element` is the
+// declaration's own instance over its own parameters (`ownRecordSelfInstance`) — a vector with NO
+// count — while every value a program holds states one, because the count is part of the intern KEY
+// (`fixedSizes`, below). `substitutedShape` gives a declaration's own countless `Self` the SIZE of
+// the receiver it is viewed through, so a sized receiver matches a corpus method's `self`. The rule
+// is confined to a declaration's own `Self`, which is why `/specs/vector.md`'s
+// `error.wrong-size-vector-argument` stays refused.
 //
-// ⛔⛔⛔ **THE REAL REASON IS ONE FACT, AND IT IS ABOUT THE SIZE RATHER THAN ABOUT THE ELEMENT: A CORPUS
-// `Vector` METHOD'S `self` CAN NEVER MATCH ITS RECEIVER.** `Self` inside `type Vector uses Element` is the
-// declaration's own instance over its own parameters (`ownRecordSelfInstance`) — a vector with **NO
-// count** — while every value a program holds states one, because the count is part of the intern KEY
-// (`fixedSizes`, below). MEASURED with `stdlib/Vector.maxon` listed and a member struck from the
-// (now retired) `Parser.vectorSurfaceMemberNames`, on `--filter=vector` (47 cases, base 47/0):
-// **8 passed, 39 failed, every one of them `E3005 argument type mismatch for 'self': expected 'Vector_Int',
-// got 'Vec3'`.** The same wall stands in front of the traversal: letting `for … in` take the corpus
-// `createIterator()` — which needs no roster strike at all, only the declaration being visible — is
-// `expected 'Vector_Int', got 'Vec4'`.
+// ⭐ **`create()` NEEDS THE COUNT AND ITS BODY CANNOT NAME IT.** `return Self{}` means *"N
+// zero-initialized elements"*, so the count travels in a hidden parameter of its own
+// (`fixedElementCountNeeds`, which says why the layout descriptor is the wrong carrier), and
+// `Parser.emitSizedContainerRecord` publishes the slots for the corpus's `return Self{}`.
 //
-// ⇒ **SO THE RESIDUE IS ALL SIX MEMBERS, FOR ONE CAUSE AND NOT SIX** (a roster is the residue of
-// what could not retire). `count` `get` `set` `createIterator` are blocked by the `self` wall
-// above. The two STATICS take `Self` in RETURN position instead, so the wall reaches them from the
-// other side, and they are not blocked alike — a distinction worth keeping, because it is what
-// sizes the work:
-//   • **`create()` carries a SECOND, independent fact.** `return Self{}` means *"N zero-initialized
-//     elements"* and the body has no way to name N — there is no size type parameter to name it with —
-//     so even a matching `Self` would give a `Vec3.create()` a 0-slot vector.
-//   • **`init(managed)` carries no such fact.** It ADOPTS a buffer that already states N in its own
-//     `length@8`, so its body never needs to name the count; what it needs is for the fused-wrapper
-//     identity arm to RETYPE its countless `Self{managed: managed}` to the receiver's sized instance,
-//     which is the `firstFieldIsItsOwnBuffer` mechanism listed below and not this bullet's fact.
-//
-// ✅✅ **CURE 1 IS BUILT, AND THE WALL ABOVE IS GONE.** `substitutedShape` gives a declaration's
-// own countless `Self` the SIZE of the receiver it is viewed through, so one corpus body serves every size —
-// and the roster strike this header measured at **8 passed, 39 failed** re-runs at **54 passed, 1 failed**,
-// the one being the roster's own rendered sentence.
-//
-// ✅✅✅ **AND THE RESIDUE IS NOW EMPTY: `create`, `count`, `get` AND `set` ARE ALL
-// `stdlib/Vector.maxon`'s, AND NEITHER CANDIDATE CURE BELOW IS WHAT CLOSED `create`.** This header had
-// isolated its fact correctly — *"its answer IS the size, the size is at the CALL, and one body cannot name
-// it"* — and then named MONOMORPHIZATION as the only way out, carrying the count in the LAYOUT
-// DESCRIPTOR. **That route was BUILT AND MEASURED WRONG**: a descriptor word describes
-// the type ARGUMENT and is FORWARDED wholesale to a callee whose instance is written over the caller's
-// parameters, so a `Vector with 4 Element` reached from inside `type Holder uses Element` read HOLDER's
-// count — 0 where 4 is the answer. The count travels in its OWN hidden parameter instead
-// (`fixedElementCountNeeds`), which one shared body can read and every call site can fill in from the
-// instance it holds; `Parser.emitSizedContainerRecord` is what publishes the slots for the corpus's own
-// `return Self{}`.
-//
-// ⭐ **THE TWO CANDIDATE CURES AS THEY WERE NAMED, KEPT FOR THE REASONING TRAIL — AND AS A RECORD THAT A
-// HEADER NAMING THE ONLY WAY OUT WAS WRONG ABOUT IT.**
-//   1. **Size-polymorphic `Self`** — let a sized instance satisfy the declaration's countless `Self` at a
-//      parameter position. This is built. `count()` did stop folding to a constant and is a
-//      `length@8` load through the declared `Vector.count`; `error.wrong-size-vector-argument` goes on
-//      failing, because the rule is confined to a declaration's own `Self`.
-//   2. **Monomorphize the corpus body over (element, SIZE)**: `/specs/vector.md`'s
-//      `RequiredIR` shows `x64.call Vector.create` taking a `__layout_Vector_N3_Int` descriptor, i.e. the
-//      count travels in the LAYOUT DESCRIPTOR. **NOT TAKEN, AND NOT MERELY UNBUILT** — see the measurement
-//      above: the compiler's forward makes a descriptor the wrong carrier for a fact about the INSTANCE, whatever
-//      the ABI cost of per-size copies would have been.
-//
-// ⚠ **AND REACHING THE MODULE COST THREE MECHANISMS BEFORE ANY OF THAT.** What follows is a
-// MEASURED ORDER rather than a list. It is a reasoning trail from when the loader still carried a
-// whitelist and `stdlib/Vector.maxon` was outside it; the loader takes every file under `stdlib/`
-// now, so there is no line to add and the order below is history, not a plan.
-//
-//   1. **`ProgramSignatures.noteArrayLiteralConformer` — BUILT AND LANDED, and not on the stdlib
-//      route's account.** A second STDLIB conformer steals `corpusArrayRecordName` and every program in the
-//      tree fails to compile. **The USER route needs no stdlib module at all** — a
-//      program declaring `type Vector uses Element implements BuiltinArrayLiteral` grew a fixed-size vector
-//      through the array surface on `main`, silently. See that function's header for both measurements.
-//   2. **`firstFieldIsItsOwnBuffer` + `Parser.emitFusedWrapperLiteral` — the identity arm must admit a
-//      `Vector` base and RETYPE its result.** MEASURED past (1) with the module listed:
-//      **`E3005 stdlib/Vector.maxon:14:3: Cannot return 'Vector.ElementMemory' from function declared to
-//      return 'Vector_T…'`** — `init`'s `Self{managed: managed}`. ⚠ **And the
-//      skip in (1) is WHY the buffer's type reads as the raw inner alias**: the in-body `__ManagedMemory`
-//      fold learns its target from the conformer set (`array-declared-record`'s
-//      `a-generic-conformer-of-another-name-is-the-record-too`), and a `Vector` is not in it. So (2)
-//      owes the fold target too, not only the retype — a fact (1) created and nobody would predict.
-//   3. **`requireVectorElementType`** — an instance stating NO count publishes no slots, so the element rule
-//      is vacuous and `create()`'s `Self{}` is `E2015` without it. NOT reached: the wall
-//      below stops the compile first.
-//
-// ⛔⛔ **AND PAST ALL THREE THE `self` WALL STANDS — MEASURED AT THE DOOR WITH NO ROSTER STRIKE AT
-// ALL.** With (1) landed and (2) probed in, `--filter=vector` is **51 passed, 4 failed** against a
-// base of 55/0, and all four are this wall: `argument type mismatch for 'self': expected
-// 'Vector_Int', got 'Vec3'` /`'Vec4'`, and `expected 'Vector_int', got 'Vector_N4_int'` / `expected
-// 'Vector_bool', got 'Vector_N9_bool'` — the mangled receiver spelling the size the declaration's
-// own `Self` does not. ⚠ **A ROSTER STRIKE IS NOT THE TRIGGER, ONLY AN AMPLIFIER**: `for … in`
-// (through the corpus `createIterator`), `Vector from […]` (through the corpus `init`) and a
-// VARIABLE-index `set` (through the throwing accessor) all reach the declaration on VISIBILITY
-// alone. The two candidate cures above are unchanged and neither is built.
-//
-// ⚠⚠ **AND A FOURTH THING IT OWES IS NOT A MECHANISM AT ALL — IT IS A DECISION ABOUT THE `for … in` FORM,
-// WHICH FLIPS ON VISIBILITY ALONE.** `Parser.parseForIn`'s own header states, as a
-// present fact, that a counter is *"every source that supplies no cursor of its own: a `Vector`, whose
-// record IS an array's and which is compiler-served with no `createIterator`"*, and that `stdlib/Array.maxon`
-// being LISTED is exactly why an array is not one. So listing this module needs no roster strike and
-// no `self` match to change what a loop emits: `materializeIterableIterationSource` would rewrite a vector
-// source to the `ArrayIterator` the corpus `createIterator()` returns, trading a counted read against a
-// size that is a CONSTANT for a per-loop iterator struct and a call per step.
-//
-// ⇒ **Decide it deliberately, in both directions, and fix that header in the same edit** — it is a third
-// copy of this one fact, and nothing catches it turning false the day the module becomes reachable.
-// The trade may well be worth taking for uniformity with `Array`; what must not happen is its
-// arriving as a side effect of a file appearing under `stdlib/`.
-//
-// ⚠ **REACHING THE MODULE IS NOT THE DELIVERABLE AND THE ENTRY THAT DID IT WAS WITHDRAWN TWICE.**
-// With the module loaded and nothing retired the differing-declarations control comes back INERT:
-// `stdlib/Vector.maxon`'s `count()` rewritten to `return managed.length() + 100` leaves a
-// `Vec3.create()`+`set`+`get`+`count()` program answering **8**, byte-for-byte identical at
-// **11,795 bytes**; an UNDEFINED CALL in that same body compiles clean and still answers 8. Loading
-// it is byte-neutral (`return 7` identical at 5,567 bytes) and buys nothing.
-//
-// ⭐ **THAT CONTROL, RE-RUN WITH MECHANISMS (1) AND (2) ABOVE IN PLACE — i.e. with the corpus `init`
-// GENUINELY REACHED — and it is still INERT for the members that matter.** Same sabotage, same program
-// answering **8** at an identical **5,650 code bytes**, and the undefined-call injection still compiles
-// clean. So it does not become worth taking one door earlier: everything it makes REACHABLE is red on
-// the `self` wall, and everything that still PASSES is passing from the synthesized surface.
+// ⚠ **`for … in` OVER A VECTOR RUNS THE CORPUS `createIterator`**, on the module's VISIBILITY
+// alone; `Parser.parseForStatement`'s header states the trade.
 //
 // ⭐ **ITS RUNTIME REPRESENTATION IS AN `Array`'s, EXACTLY — the 48-byte `ManagedRecordBytes` fused record, the
 // `__managed_*` helpers, `__managed_decref`.** A fixed-size buffer and a growable one differ in what may be DONE to
 // them, not in how the bytes sit, so a second record would have been the same six slots under a second
 // name: `genericInstanceBoxSize` and `genericInstanceBoxDropCallee` answer a Vector with the `Array` row.
 //
-// ⛔⛔ **HOW A VECTOR'S RECORD IS BUILT IS `Parser.emitSizedContainerRecord`'s TO STATE, AND THIS HEADER
-// STATED IT TOO — WRONGLY (found in review).** It said *"one `__managed_mem_create(N, elementSize)` —
-// the entry that PUBLISHES `N` zero-initialized elements"*, which is the shape that emitter's own ⚠
-// paragraph records TRYING and MEASURING as **E3057 throwing function requires try: 'create'** on every case
-// in `/specs/vector.md`, because that entry THROWS. What is emitted is `__managed_create` then
-// `__managed_resize(N)`, which throws nothing. Two headers, one fact, opposite answers — and the copy a
-// reader lands on first was the one naming the route already known not to work. The emitter is the one
-// place that says it now.
+// ⛔ **HOW A VECTOR'S RECORD IS BUILT IS `Parser.emitSizedContainerRecord`'s TO STATE**, and it is
+// stated only there.
 //
 // ⭐⭐ **WHAT IS `Vector`'s ALONE IS THE SIZE, AND IT LIVES IN THE INSTANCE'S IDENTITY** —
 // `GenericInstanceRegistry.fixedSizes`, part of the intern KEY, so `Vector with 3 Int` and
@@ -9961,7 +9839,7 @@ let BareIntegerElementLow = i64.min as FullRangeInt
 let BareIntegerElementHigh = i64.max as FullRangeInt
 
 // A ranged alias's declared bounds as a value set — `notIntegerValued` for a FLOAT alias, whose `low`/`high`
-// are IEEE-754 bit patterns and order nothing like integers (`floatBoundOrderKey` is where that is spelled
+// are IEEE-754 bit patterns and order nothing like integers (`floatOrderKey` is where that is spelled
 // out), so the honest answer is that there is no comparison to make rather than an invented one.
 //
 // ⚠ The float arm is LIVE — `typealias Reals = Array with Real` is a spellable element — and
@@ -10670,9 +10548,8 @@ export let ArrayPopMethod = b"pop"
 export let RemoveMethod = b"remove"
 export let SliceMethod = b"slice"
 
-// ⚠ **`insert` JOINED THIS BLOCK WHEN `Map.insert` WAS BUILT**, for the block's own reason: it is the second
-// throwing entry point a `Map` had while its runtime existed, so the deleted `mapSourceMethodName` had to name the very byte
-// string the parser's dispatch matched. `Array`, `Set` and `Map` all spell it, which is why it carries no
+// ⚠ **`insert` IS IN THIS BLOCK FOR THE BLOCK'S OWN REASON**: it is the very byte string the
+// parser's dispatch matches. `Array`, `Set` and `Map` all spell it, which is why it carries no
 // family prefix — the rule `set`/`append`/`slice`/`remove` above it already state.
 export let InsertMethod = b"insert"
 
@@ -10693,8 +10570,7 @@ export let MapUpsertValueLabel = b"value"
 let MapKeyUpsertArgIndex = 1
 let MapValueUpsertArgIndex = 2
 
-// ⚠ **`byteAt` JOINED THIS BLOCK WHEN `String.byteAt` WAS BUILT, AND IT WAS SPELLED
-// `ManagedMemoryByteAtMethod` ONE SURFACE ABOVE UNTIL THEN.** It belongs here for the same reason `set`,
+// ⚠ **`byteAt` IS IN THIS BLOCK.** It belongs here for the same reason `set`,
 // `append` and `slice` do — the buffer and the `String` spell it identically and the parser dispatches both
 // on this one byte string — and a family-prefixed constant serving two families is the drift these blocks
 // exist to prevent, one rename away from a second `b"byteAt"` beside the first.
@@ -12615,9 +12491,10 @@ end 'cacheReadTupleElementTokenMap'
 // name digesting to a live token stops the compile at the WRITE; a citation whose token does not lead back
 // to the citing name stops it at the READ.
 //
-// The same index + reverse-index arrangement `CanonicalInstanceNameSet` carries for generic instances, and
-// for a related reason: a question you cannot ask of a map in the direction it is keyed is not a question
-// you may answer by walking it.
+// The same index + reverse-index arrangement `CanonicalInstanceNameMap` and
+// `CanonicalInstanceNameIndex` carry for generic instances, and for a related reason: a question
+// you cannot ask of a map in the direction it is keyed is not a question you may answer by walking
+// it.
 typealias TupleElementTokenOwnerMap = Map with (ByteArray, readonly ByteArray)
 
 // @generated library-cache begin
@@ -12649,7 +12526,7 @@ end 'cacheReadTupleElementTokenOwnerMap'
 export typealias CursorFieldIndexArray = Array with FieldIndex
 
 // The NAMES every top-level MANAGED binding in the program is declared under — `let` and `var`
-// alike — the filter `Parser.managedTopLevelReceiverAt` asks before it will build a file-scoped
+// alike — the filter `Parser.managedTopLevelBaseAt` asks before it will build a file-scoped
 // key. See `ProgramSignatures.managedTopLevelNames` for why the answer has to be a name and not a
 // bool.
 typealias ManagedTopLevelNameSet = Set with ByteArray
@@ -14323,7 +14200,7 @@ export type GenericAliasEntry
 	export let sweptInstanceRecorded as bool
 
 	// ⭐ **THE SIZE A SIZED DECLARATION WROTE** — `typealias Vec3 = Vector with 3 Int`'s 3, read off the
-	// literal by `Parser.readSizedGenericArgs` and carried here because `recordGenericAlias` is where the
+	// literal by `Parser.readSizedBaseElementCount` and carried here because `recordGenericAlias` is where the
 	// instance is interned and the size is half of that instance's identity. `unsized` for every other
 	// declaration, which is every declaration whose base is not `Vector`.
 	export var shape as InstanceShape
@@ -15271,8 +15148,7 @@ end 'cacheReadConformanceClauseDeclSiteArray'
 // ⭐ **ONLY A GENERIC TYPE IS RECORDED, AND THAT IS WHAT KEEPS THE COST OFF EVERY OTHER PROGRAM.** A
 // descriptor exists to carry a TYPE PARAMETER's layout at run time, so a type with no `uses` clause can
 // never need one — and a program that declares no generic type records no site, which makes
-// `foldDescriptorNeeds` an empty-array test that allocates nothing. That is `typeDescriptorNeeds`' old
-// "a non-generic type allocates NOTHING here" property, moved up a level and made whole-program.
+// `foldDescriptorNeeds` an empty-array test that allocates nothing.
 export type DescriptorScanSite
 	export var path as FilePath
 
@@ -16677,7 +16553,7 @@ end 'cacheReadFunctionDeclSiteMap'
 // mis-index.
 //
 // ⚠ **A PARAMETER THE SWEEP COULD NOT READ IS `MaxonType.unresolved`** (`Parser.sweptParamTypeAt`), and a
-// declaration carrying one is UNSCOREABLE rather than matching. See `overloadReturnTypeFor`.
+// declaration carrying one is UNSCOREABLE rather than matching. See `SweptOverloadFit`.
 // ⭐ **THE ANSWER `ProgramSignatures.constFactoryConstructionAmong` GIVES — a factory the const evaluator may
 // rewrite into a construction, with the two facts that rewriting needs, or nothing.** One union
 // rather than two accessors because the layout and the parameter names are only meaningful together: the
@@ -18002,7 +17878,7 @@ export type SettledDeclarations
 
 	// ⭐ **THE NAMES OF EVERY MANAGED TOP-LEVEL BINDING IN THE PROGRAM** — `let` AND `var` — written
 	// once per managed binding by `settleManagedValue`, read once per probe by
-	// `Parser.managedTopLevelReceiverAt`. It covers both kinds because the evaluator settles both the
+	// `Parser.managedTopLevelBaseAt`. It covers both kinds because the evaluator settles both the
 	// same way and the probe behind it has to consider both: `msg.append("!")` on a managed `var`
 	// receiver has the identical token shape `Live.count()` on a managed `let` does.
 	//
@@ -18124,7 +18000,7 @@ export type SettledDeclarations
 	module var serviceSpawnCandidateKeys as ServiceSpawnCandidateKeySet
 
 	// ⭐⭐ **THE `<T>.handle` NAMES THIS SWEEP MINTED** — the exact set, filled by the one act
-	// that creates them (`recordServiceCompanions`), so `isServiceHandle` answers by MEMBERSHIP rather than by
+	// that creates them (`recordServiceHandle`), so `isServiceHandle` answers by MEMBERSHIP rather than by
 	// recognising a spelling. A name-shaped test would claim every `X.handle` a future companion scheme might
 	// mint, and would answer for one no `spawn` produced.
 	//
@@ -19491,16 +19367,16 @@ export type ProgramSignatures
 		return SymbolVisibility.hidden(visibility)
 	end 'symbolVisibility'
 
-	// ⭐ **MAY `readerFilePath` NAME THIS RANGED ALIAS?** The alias-shaped face of `isVisibleFrom`, kept
-	// as its own name because the two answers it separates are the point: a hidden alias is still FOUND, which
-	// is what tells "no declaration binds this name anywhere" (E3011, at the `as`) from "one does, elsewhere,
-	// and did not export it" (E2003, at the target name). Folding the test into `lookup` would collapse the two
-	// into the sharper one's wording and report the wrong mistake.
+	// ⭐ **MAY `readerFilePath` NAME THIS RANGED ALIAS?** The alias-shaped face of `isVisibleFrom`,
+	// kept as its own name because the two answers it separates are the point: a hidden alias is still
+	// FOUND, which is what tells "no declaration binds this name anywhere" (E3011, at the `as`) from
+	// "one does, elsewhere, and did not export it" (E3008, or E3088 for a module-scoped one, at the
+	// target name). Folding the test into `lookup` would collapse the two into the sharper one's
+	// wording and report the wrong mistake.
 	//
-	// ⚠ **AND IT IS ASKED ONLY AT AN `as` CAST TARGET** (`Parser.hiddenAliasCastTarget`), which is the
-	// position the corpus pins. A hidden alias written as a PARAMETER or FIELD type still resolves;
-	// widening that is a cross-file name-resolution change, not a line here, because the message this
-	// reports names the `as` and there is no wording for the other positions.
+	// ⚠ **ITS ONE CALLER IS THE LSP** (`visibleAliasFile`), which must not point a reader at a
+	// declaration it may not name. The compile refuses a hidden type name through
+	// `Parser.bareTypeNameVerdict`, at every position a type is written.
 	export function aliasVisibleFrom(alias RangedTypeAlias, readerFilePath FilePath) returns bool
 		return self.isVisibleFrom(alias.visibility, declFilePath: alias.declFilePath, readerFilePath: readerFilePath)
 	end 'aliasVisibleFrom'
@@ -20228,7 +20104,7 @@ export type ProgramSignatures
 	// ⭐ **THE SERVICE A HANDLE TYPE BELONGS TO** — the second question the one registry answers, asked by
 	// `Parser.dispatchOnServiceHandle` to reach the request union and the message's qualified name. It PANICS
 	// rather than answering a default: every caller has just been through `isServiceHandle`, and a handle with
-	// no owner would be a companion something other than `recordServiceCompanions` minted.
+	// no owner would be a companion something other than `recordServiceHandle` minted.
 	export function serviceOfHandle(handleName ByteArray) returns ByteArray
 		return try self.settledDeclarations().serviceHandleOwners.get(handleName) otherwise panic("serviceOfHandle: `{String.from(handleName)}` is filed under no service — `recordServiceHandle` is the one act that registers a handle type, and it files the owner in the same statement")
 	end 'serviceOfHandle'
@@ -23333,7 +23209,7 @@ export type ProgramSignatures
 	// has parsed, so this map is the only interface store that exists mid-parse.
 	//
 	// ⚠ **THE STORE, NOT AN `interfaceOf(name)` ANSWER.** A one-name accessor would make its caller
-	// (`Parser.lookupInterfaceForParse`) spell the "synthesized protocol FIRST, then the store" rule
+	// (`Parser.requireInterfaceForParse`) spell the "synthesized protocol FIRST, then the store" rule
 	// for itself — a second spelling of `IrInterface.lookupInterface`. A witness dispatch resolves its
 	// CONSTRAINT's interface through the parser's spelling and every `extends` PARENT through
 	// `lookupInterface`, one call apart, and a parent that resolves for the slot walk but not for the
@@ -23850,7 +23726,7 @@ export type ProgramSignatures
 	end 'internNestedNode'
 
 	// Fold one case's NAME, TAG and PAYLOAD SLOTS into the enum's hash. Split out so the SIGNED tag
-	// (`FullRangeInt`) crosses to the UNSIGNED hash domain through a local — `recordAlias`/`mixDefaultPayload`
+	// (`FullRangeInt`) crosses to the UNSIGNED hash domain through a local — `recordAlias`/`mixDefaultLiteral`
 	// have the same two lines for the same reason (a cast written inline as a nested `Hasher.combined`
 	// argument draws a false E3010, unneeded cast).
 	function mixEnumCase(state HashDigest, layout EnumLayout, index CaseIndex) returns HashDigest
@@ -24025,9 +23901,10 @@ export type ProgramSignatures
 
 		// ⭐ **VISIBILITY RIDES FOR THE RANGE'S OWN REASON**:
 		// widening a range changes what a `shr` on a value of the alias means, and adding or removing
-		// `export` changes what ANOTHER file's `as` cast to the name means (E2003, `visibleFrom`) and
-		// whether this file's own declaration can be reported unused (E3062, `recordTypeName`). Both are
-		// decisions a memoized parse of a DIFFERENT file bakes in, so both must move its memo key.
+		// `export` changes whether ANOTHER file may name it at all (E3008/E3088,
+		// `Parser.bareTypeNameVerdict`) and whether this file's own declaration can be reported unused
+		// (E3062, `recordTypeName`). Both are decisions a memoized parse of a DIFFERENT file bakes in, so
+		// both must move its memo key.
 		//
 		// ⚠ **THE WHOLE TIER, NOT ONE BIT.** It was one bit while every reader asked `!= Visibility.file`
 		// and the only way to get `global` was to be a stdlib file, which no edit can change. Now `module` is a
@@ -24626,7 +24503,7 @@ export type ProgramSignatures
 	// ⭐⭐ **ONE STORED SIGNATURE SLOT FOLDED INTO THE HASH, AND ITS ARMS ARE `maxonTypeOfStoredTypeName`'s ARMS
 	// OVER THE SAME COLUMNS — WHICH IS A BUILD FAILURE TO GET WRONG RATHER THAN A HEADER PROMISE.**
 	// The two dispatches genuinely cannot share a body (see `AliasSlotIdentity` for the measurement that killed
-	// the obvious unification), so they share the CLASSIFIER instead: both match `aliasSlotIdentity`
+	// the obvious unification), so they share the CLASSIFIER instead: both match `AliasSlotIdentity`
 	// exhaustively, and a fourth identity column stops BOTH from compiling.
 	//
 	// The tag and the name are not the whole type: a `typeParameter`'s digest and a `genericInstance`'s
@@ -24636,7 +24513,7 @@ export type ProgramSignatures
 	//
 	// ⚠ **AND THAT STATE ARISES FOR EXACTLY ONE POPULATION, WHICH IS NARROWER THAN THE SENTENCE ABOVE READS
 	// ON ITS OWN.** Only the `extension`-body nested alias reaches here `genericInstance`-tagged at all; every
-	// FILE-SCOPE function alias arrives `named` + `NoGenericInstance`, because its fold runs ABOVE
+	// FILE-SCOPE function alias arrives `named` + `AliasSlotIdentity.nameOnly`, because its fold runs ABOVE
 	// `signatures.allFilesFolded` and `parseTypeReference`'s alias registries sit behind that gate. So the
 	// hole was real and was one population wide — recorded here so a later reader does not conclude it was
 	// broader, and does not conclude from a file-scope program's green run that the arm is dead.
@@ -25146,7 +25023,7 @@ export type ProgramSignatures
 	end 'resolvedReturnValueType'
 
 	// The VALUE type `callee` returns, in this index's own interner. The evaluator has already established
-	// that the callee is declared and that its return type is a managed value (`Parser.requireGlobalFactory`),
+	// that the callee is declared and that its return type is a managed value (`Parser.requireFactoryReturnsARecord`),
 	// so both refusals here are invariant breaks rather than cases a program can reach.
 	function declaredReturnValueType(callee ByteArray, name ByteArray) returns MaxonType
 		let declared = try self.settledDeclarations().returnTypes.get(callee) otherwise panic("ProgramSignatures.declaredReturnValueType: '{String.from(name)}' names the factory '{String.from(callee)}', which no file declares — the evaluator admits the form only after `declaresCallee` says otherwise")
@@ -25479,7 +25356,7 @@ export type ProgramSignatures
 	// — `FieldDefault.bareCreateHelper`'s whole reason for being a distinct arm, spent here as it is at
 	// `boxSlot` one shape over. Every other call is code, and code has no bytes.
 	//
-	// ⚠ **THE ARENA NODE IS LEFT WHERE IT IS.** `factoryInitializerCallees` walks it to name everything a
+	// ⚠ **THE ARENA NODE IS LEFT WHERE IT IS.** `factoryInitializerCall` walks it to name everything a
 	// top-level initializer calls, which is what roots the synthesized helper for the branch where this
 	// record is built before `main`; reading the default here does not unroot it.
 	function helperDefaultFieldSlot(callee ByteArray, args ConstFactoryArgumentArray, layout StructLayout, index FieldIndex, nodes ImmortalBoxNodeArray) returns ConstFieldImageSlot
@@ -26092,7 +25969,7 @@ export type ProgramSignatures
 	// at COMPILE TIME into bytes in the
 	// `.data` image, while a var's value is whatever the program last STORED there. Reading one from
 	// the other would bake a snapshot of a mutable location into the image and call it a constant.
-	// So `mutableIsInvisible` filters the lookup, and the reader gets the same `notFound` it would
+	// So `constantDeclFor` filters the lookup, and the reader gets the same `notFound` it would
 	// get for a name nobody declared.
 	export function evaluateNamed(name ByteArray, readerFilePath FilePath, stack TopLevelDeclIndexArray, anchors ParserAnchors) returns ConstEvalOutcome
 		match self.constantDeclFor(name, readerFilePath: readerFilePath) 'lookup'
@@ -26113,7 +25990,7 @@ export type ProgramSignatures
 	end 'notedConstantEvaluation'
 
 	// The value `name` denotes when read from `readerFilePath` — the door a USE SITE asks through
-	// (`Parser.topLevelConstantReference`), after every constant has been evaluated.
+	// (`Parser.topLevelBindingReference`), after every constant has been evaluated.
 	//
 	// A constant that FAILED reads as `notFound`, so its reader reports a plain undefined-name error
 	// rather than inlining a value that does not exist. The declaration's own diagnostic has already
@@ -28402,7 +28279,7 @@ export type ProgramSignatures
 
 			// ⭐ **A CONTAINER FACTORY MIXES ITS INSTANCE, ITS BRAND AND ITS STORAGE MODEL — AND HAS NO CONTENT
 			// TO MIX AT ALL.** The instance is stated outright instead of inferred from an element kind, and
-			// the BRAND rides beside it because two aliases spell one instance and `globalLookup` hands the
+			// the BRAND rides beside it because two aliases spell one instance and `globalDeclFor` hands the
 			// brand back: a reader's coercion verdict moves when it changes, so a key that dropped it would
 			// serve an answer naming the wrong alias.
 			//
@@ -29280,11 +29157,12 @@ export type ProgramSignatures
 		return self.declaredParamAliasAt(decl, position: position)
 	end 'declaredAliasAtArgument'
 
-	// ⭐⭐ **THE `Array` INSTANCE `callee` DECLARES AT ONE ARGUMENT POSITION — what an array literal written
-	// there has to be BUILT at (`Parser.stateArrayLiteralTargetForArgument`, the only asker).** An element
-	// type is a LAYOUT and not a label: `Array with int(0 to 1000)` strides 2 bytes where `Array with int`
-	// strides 8, so a literal typed by its own elements and only then compared against the slot is a record at
-	// the wrong stride — which is why the slot has to answer BEFORE the literal is built.
+	// ⭐⭐ **THE `Array` INSTANCE `callee` DECLARES AT ONE ARGUMENT POSITION — what an array literal
+	// written there has to be BUILT at (`Parser.arrayTargetForArgument`, and the constant evaluator's
+	// `Parser.evalConstInitArrayOperand`).** An element type is a LAYOUT and not a label:
+	// `Array with int(0 to 1000)` strides 2 bytes where `Array with int` strides 8, so a literal typed
+	// by its own elements and only then compared against the slot is a record at the wrong stride —
+	// which is why the slot has to answer BEFORE the literal is built.
 	//
 	// ⚠ **THE SPELLING IS RESOLVED FROM THE FILE THAT WROTE IT**, `firstParamAliasOf`'s rule above and for its
 	// measured reason: a typealias is file-scoped, so a parameter type read from the CALLER's file resolves to
@@ -30052,8 +29930,7 @@ export type ProgramSignatures
 	// the file being parsed by asking `enumInAnyFile`: in a file meaning `typealias Container = int(0 to 5)`
 	// it found ANOTHER file's `union Container`, `isBoxed()` said yes, and the return path emitted
 	// **`__mm_retain` on the integer 1** — a segfault (exit 139) in a function whose own file has no union
-	// in it. The bare doors were already named `InAnyFile` by then; what was missing was somewhere for a
-	// reader-holding caller to GO.
+	// in it.
 	export function structFor(name ByteArray, readerFilePath FilePath) returns DeclaredStruct
 		if self.aliasShadowsNominalFor(name, readerFilePath: readerFilePath) 'anotherDeclarationAnswersHere'
 			return DeclaredStruct.undeclared
@@ -30347,7 +30224,7 @@ export type ProgramSignatures
 		end 'anEnumOrUnion'
 	end 'readersOwnFileDeclaresANominal'
 
-	// ⭐ **`isFunctionAlias`, WITH THE CONTEST APPLIED** — the door every FORM probe that has a reader file
+	// ⭐ **`isFunctionAliasInAnyFile`, WITH THE CONTEST APPLIED** — the door every FORM probe that has a reader file
 	// asks, so `a.maxon`'s `5 as Handler` means `a.maxon`'s ranged alias while `b.maxon`'s `f Handler`
 	// means `b.maxon`'s function one. The bare twin stays, and stays correct, for the readers that hold no
 	// file (a `StructLayout`'s field types record none — see `aliasUnderlyingInAnyFile`).
@@ -30432,11 +30309,10 @@ export type ProgramSignatures
 	end 'aliasUnderlyingFor'
 
 	// Is `name` a ranged FLOAT typealias (`typealias Weight = float(f64.min to f64.max)`) as
-	// `readerFilePath` resolves it? The `bool` half of `aliasUnderlyingFor`, and the sibling of `isFunctionAlias`/`isGenericAlias` — the three
-	// questions `fieldTypeOf` asks of a field declared with a bare NAME, whose meaning the declaration
-	// SWEEP that recorded the layout could not yet know.
+	// `readerFilePath` resolves it? The `bool` half of `aliasUnderlyingFor`, and the reader-aware
+	// sibling of `isFunctionAliasFor`/`isAliasOfFormFor`.
 	//
-	// ⚠ An INT alias is deliberately NOT re-tagged by any of them: `named` already reads as an integer
+	// ⚠ An INT alias is deliberately NOT re-tagged by `floatAliasResolved`: `named` already reads as an integer
 	// everywhere (`tagIsIntegral`), and its NAME is what carries the range and the signedness that
 	// `valueIsUnsigned` and the range checks read off it. A FLOAT alias is the one `named` type whose
 	// VALUE lives in a different register file, so it is the one that cannot be left overloaded.
@@ -30491,7 +30367,7 @@ export type ProgramSignatures
 	// (`Parser.publishNestedFunctionAlias` files `<Type>.<member>` beside the bare name). The question
 	// this asks is not "is the name keyed?" but "is it a MEMBER of the type?" — every caller uses the answer
 	// to reach the per-instance machinery, and a function alias is not per-instance: it declares a file-scope
-	// name too, and its qualified copy carries the identical signature. `isFunctionAlias` is the door for it.
+	// name too, and its qualified copy carries the identical signature. `isFunctionAliasFor` is the door for it.
 	//
 	// ⚠ **THE FOURTH SOURCE IS A NAME SET RATHER THAN A REGISTRY, AND IT IS WHAT MAKES THE ANSWER WHOLE-PROGRAM
 	// FOR AN `extension` BODY.** `foldExtensionDeclarations` fills the three registries above one site at
@@ -31244,13 +31120,14 @@ export type ProgramSignatures
 		return self.settledDeclarations().functionTypeAliases.lookup(name, readerFilePath: readerFilePath)
 	end 'functionAliasFrom'
 
-	// Is `name` a declared FUNCTION typealias — the `bool` half of `functionAliasOf`, and a HOT-PATH
-	// allocation guard, exactly like `containsStruct`/`containsEnum` are for their `*Of` twins. Asked of
-	// EVERY `named` type REFERENCE (`parseTypeReference`), field READ (`fieldTypeOf`) and call RESULT
-	// (`resolveNamedAlias`) — most of them ranged int aliases, none of them function aliases — so it
-	// must not pay `functionAliasOf`'s `DeclaredFunctionAlias` box (a Maxon union value is a heap object
-	// EVERY case, `undeclared` included) just to throw it away. A `Map.contains` allocates nothing. Only
-	// the cold indirect-call return-type recovery, which needs the alias itself, calls `functionAliasOf`.
+	// Is `name` a declared FUNCTION typealias — the `bool` half of `functionAliasInAnyFile`, and a
+	// HOT-PATH allocation guard, exactly like `containsStruct`/`containsEnum` are for their `*Of`
+	// twins. Asked of EVERY `named` type REFERENCE (`parseTypeReference`), field READ (`fieldTypeOf`)
+	// and call RESULT (`resolveNamedAlias`) — most of them ranged int aliases, none of them function
+	// aliases — so it must not pay `functionAliasInAnyFile`'s `DeclaredFunctionAlias` box (a Maxon
+	// union value is a heap object EVERY case, `undeclared` included) just to throw it away. A
+	// `Map.contains` allocates nothing. Only a reader that needs the alias itself calls
+	// `functionAliasInAnyFile`.
 	export function isFunctionAliasInAnyFile(name ByteArray) returns bool
 		return self.settledDeclarations().functionTypeAliases.contains(name)
 	end 'isFunctionAliasInAnyFile'
@@ -31488,7 +31365,7 @@ export type ProgramSignatures
 	// door erases BOTH domains to their underlying primitive, and an int alias's NAME is what carries the
 	// range the argument check reads (`checkArgAgainstDeclaredTag` is handed the substituted type for exactly
 	// that). A FLOAT alias is the one `named` type whose VALUE lives in a different register file — see
-	// `isFloatAlias` — so it is the one that may not stay overloaded.
+	// `isFloatAliasFor` — so it is the one that may not stay overloaded.
 	export function floatAliasResolved(t MaxonType, readerFilePath FilePath) returns MaxonType
 		if maxonTypeTag(t) != ValueTypeTag.named 'notANamedLeaf'
 			return t
@@ -31735,7 +31612,7 @@ export type ProgramSignatures
 		// call is a clean `E2015 'int' has no method named …`, never a wrong answer. That is the same
 		// documented gap `structConformersOf`'s own ⚠ grants `enum` and `union`, and it is a REFUSAL, so
 		// it is a capability that is absent rather than half-built.
-		// ⚠ **ASKED FIRST, AND NOTHING CAN SHADOW IT, BECAUSE THE THREE NAMES ARE KEYWORDS** (`Lexer.keywordTable`):
+		// ⚠ **ASKED FIRST, AND NOTHING CAN SHADOW IT, BECAUSE THE THREE NAMES ARE KEYWORDS** (`KeywordTable`):
 		// no declaration can bind `int`, `float` or `bool`, so there is no struct and no interface for this to
 		// pre-empt. `byte` is an ordinary identifier and is NOT in this table (`primitiveTagOfTypeName` states
 		// why), so a user's `type byte` still resolves through the struct arm below.
@@ -32099,7 +31976,7 @@ export type ProgramSignatures
 	// whole-program at exactly the moment it is first needed.
 	//
 	// ⚠ **AFTER `foldInterfaceDeclarations` AND `normalizeSweptInterfaceTypes`**: the first is what fills the
-	// interface registry `heldInterfaceNameOfArg` asks, and the second settles the one spelling every other
+	// interface registry `instanceArgHeldInterfaceName` asks, and the second settles the one spelling every other
 	// reader sees. A FIRST-WINS record — two sites naming different interfaces for one position are E3125's
 	// to report, which needs the settled answer to compare against, so the settle may not refuse.
 	export function settleAssociatedTypeHoldings()
@@ -32284,11 +32161,11 @@ export type ProgramSignatures
 	// The COMPILED name of instance `gid`'s type argument at `position` — `mangleTypeArg`'s
 	// answer, so a struct/named arg reads as its bare name and a NESTED instance as its mangled form.
 	//
-	// ⚠ **IT IS THE `.rdata`-LABEL SPELLING AND ITS ONE CALLER WANTS EXACTLY THAT**: `ParseStaging`'s E3006
-	// pair-collision message, where the compiled join is the SUBJECT of the sentence (see
-	// `renderInstantiation`). It was named `instanceArgTypeName` and read by three DIAGNOSTICS as well, which
-	// is how `Box_Leaf` — a string no source line holds — reached `expected 'Box_Leaf'`. Those three now ask
-	// `instanceArgDisplayName`; this one keeps the mint because the mint is what collided.
+	// ⚠ **IT IS THE `.rdata`-LABEL SPELLING AND ITS ONE CALLER WANTS EXACTLY THAT**: `ParseStaging`'s
+	// E3006 pair-collision message, where the compiled join is the SUBJECT of the sentence (see
+	// `renderInstantiation`). A diagnostic that names a type argument asks `instanceArgDisplayName`
+	// instead, because `Box_Leaf` is a string no source line holds; this one keeps the mint because
+	// the mint is what collided.
 	export function instanceArgCompiledName(gid GenericInstanceId, position ElementIndex) returns ByteArray
 		return self.mangleTypeArg(self.substitutedInstanceArg(gid, position: position)).toByteArray()
 	end 'instanceArgCompiledName'
@@ -32425,13 +32302,13 @@ export type ProgramSignatures
 	// COMMON no answer (`resolveNamedStruct` asks it of every `named` parameter/return type,
 	// most of them ranged int aliases) must not pay that box just to throw it away. A `Map.contains`
 	// allocates nothing.
-	// ⚠⚠ **`InAnyFile` IS A WARNING IN THE NAME, AND IT WAS ADDED BECAUSE A ROSTER OF DOORS WAS WRONG
-	// TWICE IN ONE CHANGE.** This registry is keyed by the BARE name and answers for the whole program, so
-	// once a `type` in one file and a `typealias` in another may both stand (`typeNamePairMayCoexist`) a
-	// bare read claims the name for every file. The reader-aware twin is `containsStructFor`; the rename is
-	// what makes choosing between them a decision the COMPILER forces at every call site instead of one a
-	// human list has to remember. Where a caller genuinely has no reading file — the managed classifiers,
-	// the drop and clone routers — this spelling is the right one and now says so in the source forever.
+	// ⚠⚠ **`InAnyFile` IS A WARNING IN THE NAME.** This registry is keyed by the BARE name and answers
+	// for the whole program, so once a `type` in one file and a `typealias` in another may both stand
+	// (`typeNamePairMayCoexist`) a bare read claims the name for every file. The reader-aware twin is
+	// `containsStructFor`; the suffix is what makes choosing between them a decision the COMPILER
+	// forces at every call site instead of one a human list has to remember. Where a caller genuinely
+	// has no reading file — the managed classifiers, the drop and clone routers — this spelling is the
+	// right one and says so in the source.
 	export function containsStructInAnyFile(name ByteArray) returns bool
 		return self.hasRegisteredLayout(name)
 	end 'containsStructInAnyFile'
@@ -32625,7 +32502,7 @@ export type ProgramSignatures
 	end 'corpusDeclaredFusedWrapper'
 
 	// ⭐ **REGISTER THE COMPILER-OWNED `__ManagedFile` TYPE** — the last of these, called by the
-	// declaration SWEEP when a file's tokens name a producer (`Parser.fileNamesManagedFileProducer`).
+	// declaration SWEEP when a file's tokens name a producer (`Parser.atManagedFileProducer`).
 	// Idempotent, so the sweep is the WRITE and every parser read is a pure read.
 	//
 	// ⚠ It registers under the name the SOURCE SPELLS (`__ManagedFile`): see `ManagedFileTypeName` —
@@ -33436,8 +33313,9 @@ export type ProgramSignatures
 	end 'canonicalTupleName'
 
 	// Record `typealias <name> = (<elements>)`. Written by BOTH the declaration sweep and the real
-	// parse from the same reader, exactly as every other alias registry is; the value is whichever spelling
-	// the writing pass could produce, and `tupleAliasTarget` canonicalizes on the way out.
+	// parse from the same reader, exactly as every other alias registry is; the value is whichever
+	// spelling the writing pass could produce, and `tupleAliasTargetFrom`/`tupleAliasTargetInAnyFile`
+	// canonicalize on the way out.
 	export function recordTupleAlias(name ByteArray, tupleName ByteArray, declFilePath FilePath, visibility Visibility)
 		// Copies, for `registerTupleLayout`'s reason.
 		self.writeTupleAlias(name.clone(), alias: DeclaredTupleAlias.create(tupleName.clone(), claim: self.typeNameClaim(TypeDeclKind.tupleAlias, visibility: visibility, declFilePath: declFilePath.clone())))
@@ -34077,11 +33955,12 @@ export type ProgramSignatures
 	// CAN be structural has been made structural; the other half becomes so on the day the fold learns its
 	// target from the conformance rather than from a constant, and then this line is the one that goes.
 	//
-	// ⚠ **IT LIVES HERE, NOT IN THE PARSER, BECAUSE THE INDEX ITSELF HAS TO ASK IT.** It began as
-	// `Parser.arrayNameIsItsOwnRecord`, serving the construction doors; `typeParamOwnershipProtocol` then needed
-	// the same fact to decide whether a DESCRIPTOR carries ownership words, and a second spelling of "is this
-	// declaration the record?" is exactly how the construction door and the descriptor stamp would come to
-	// disagree about one type — with the disagreement spending itself as a double free rather than a diagnostic.
+	// ⚠ **IT LIVES HERE, NOT IN THE PARSER, BECAUSE THE INDEX ITSELF HAS TO ASK IT.** It serves the
+	// parser's construction doors, and `typeParamOwnershipProtocol` asks the same fact to decide
+	// whether a DESCRIPTOR carries ownership words, and a second spelling of "is this declaration the
+	// record?" is exactly how the construction door and the descriptor stamp would come to disagree
+	// about one type — with the disagreement spending itself as a double free rather than a
+	// diagnostic.
 	export function declarationIsTheManagedRecord(name ByteArray) returns bool
 		return match self.structInAnyFile(name) 'declaration'
 			declared(layout) gives layout.fieldCount() == 1 and self.firstFieldIsItsOwnBuffer(layout)
@@ -34158,12 +34037,12 @@ export type ProgramSignatures
 
 	// ⛔⛔ **IT IS THE CORPUS'S DECLARATION AND NOT ANY DECLARATION OF THAT NAME, WHICH IS THE WHOLE
 	// DIFFERENCE BETWEEN THIS AND `isVectorBaseName`.** That predicate is deliberately WIDE — it
-	// answers for the container's own name AND for this compile's mint of it — because it decides what a
-	// `Vector with N T` MEANS. This one decides who owns the RECORD, and a user's `type Vector uses Element
-	// implements BuiltinArrayLiteral` is shaped identically to the corpus's to the field: same sole `managed`,
-	// same `__ManagedMemory with Element`. Admitting it is the wrong answer `Parser.requireNameIsNotABuiltin`
-	// `ContainerBase` exists to refuse — a user vector grown from three elements to nine through
-	// `push`/`resize`, compiling clean.
+	// answers for the container's own name AND for this compile's mint of it — because it decides what
+	// a `Vector with N T` MEANS. This one decides who owns the RECORD, and a user's
+	// `type Vector uses Element implements BuiltinArrayLiteral` is shaped identically to the corpus's
+	// to the field: same sole `managed`, same `__ManagedMemory with Element`. Admitting it is the
+	// wrong answer `Parser.requireNameIsNotABuiltinContainerBase` exists to refuse — a user vector
+	// grown from three elements to nine through `push`/`resize`, compiling clean.
 	//
 	// ⚠ **MEASURED when this read `isVectorBaseName`**: the delegating user conformer in
 	// `array-declared-record.error.a-conformer-named-for-a-container-that-constructs-nothing-…` had its
@@ -34623,31 +34502,15 @@ export type ProgramSignatures
 		return self.settledDeclarations().typeAliases.lookup(self.nameOfId(typeNameIdOf(element)), readerFilePath: readerFilePath)
 	end 'arrayElementAliasOf'
 
-	// --- The `Set` builtin generic ---
+	// --- The `Set` generic ---
 	//
-	// The hash-table twin of the `Array` section above: `Set` WAS a BUILTIN generic with one type parameter
-	// `Element`, synthesized rather than declared, so its instances (`Set with Int`) intern like any other but
-	// have no base `StructLayout`. The same three query doors an `Array` instance special-cases — box size,
-	// per-instance drop, the managed-field gate — special-case such a `Set` instance here (its box is the
-	// fixed fused hash-table record, and it dropped through `__set_decref`).
-	//
-	// ⭐⭐ **AND `stdlib/Set.maxon` IS LISTED, SO IN THIS CHECKOUT NONE OF THAT IS REACHED.** Every one
-	// of those doors was gated on `isSetBaseName`, which answered FALSE the moment a file declared `type Set` —
-	// so a `Set with T` is an ordinary declared generic instance with a real `StructLayout`, a
-	// `__destruct_Set_<T>` cascade and corpus `create`/`insert`/`contains`/`remove`/`count` bodies. The arms
-	// below are what a program declaring no `Set` would get, and they are kept for exactly the reason the
-	// `Map` section's are: the switch is a property of the PROGRAM, not of this checkout.
+	// The hash-table twin of the `Array` section above. `stdlib/Set.maxon` declares `Set`, so a `Set
+	// with T` is an ordinary declared generic instance with a real `StructLayout`, a
+	// `__destruct_Set_<T>` cascade and corpus `create`/`insert`/`contains`/`remove`/`count` bodies.
 
-	// ⚠⚠ **THE RETIREMENT SWITCH IS GONE, AND WITH IT `isSetBaseName` / `isMapBaseName` / `isSetInstance` /
-	// `isMapInstance` / `isMapInstanceAt`.** `isUnretiredBuiltinBaseName` asked *"does no file declare
-	// a type of this name?"*, and a TRUE answer selected the SYNTHESIZED record — the `__set_*` / `__map_*`
-	// runtime, its fixed box size and its per-container drop callee. That runtime is deleted, so there is no
-	// second regime for a switch to choose between, and a predicate whose true arm selects something that no
-	// longer exists is a trap rather than a spare.
-	//
-	// ⇒ **THE SHAPE QUESTIONS ARE THE ONLY ONES**: `isSetShapedInstance` and
-	// `isMapShapedInstanceAt` ask what the container IS, off the base NAME, which is the question every
-	// surviving caller had.
+	// ⇒ **THE SHAPE QUESTIONS ARE THE ONLY ONES**: `isSetShapedInstance` and `isMapShapedInstanceAt`
+	// ask what the container IS, off the base NAME. Every `Set` and `Map` is served by its declared
+	// record, so there is no second regime for a predicate to choose between.
 
 	// ⭐⭐ **DOES INSTANCE `id` DENOTE THE `Set` CONTAINER — WHOEVER SERVES IT?** The SHAPE question,
 	// `isMapShapedInstanceAt`'s twin. `Parser.namesContainerInstanceAlias` asks it of a `from` head: asked
@@ -34745,24 +34608,13 @@ export type ProgramSignatures
 		return maxonTypeTag(slotType) == ValueTypeTag.typeParameter
 	end 'slotTypeIsOpaque'
 
-	// --- The `Map` builtin generic ---
+	// --- The `Map` generic ---
 	//
-	// ⭐ **A `Map with (Key, Value)` IS THE `Set` ABOVE WITH A PARALLEL VALUE COLUMN**, and that is a
-	// REPRESENTATION claim about the DELETED synthesized records, not a metaphor: a map record's first 48 bytes
-	// were byte-identical to a set record's, so both tables shared one probe, one grow and one teardown walk
-	// (`HashTableRuntime`). What is different here is exactly the ARITY — two type arguments instead
-	// of one — so every `Set` door above that reads "the sole argument" splits in two: a KEY half
-	// (which must be `Hashable`/`Equatable`, since the probe hashes and compares it) and a VALUE half
-	// (which needs only a drop callee).
-	//
-	// ⚠ **`Map` IS SYNTHESIZED HERE, NOT READ FROM `stdlib/Map.maxon`, AND THE REASON IS MEASURED.** That
-	// file's `Map` is written against dictionary-passing generics — four `Array with Key` fields, a
-	// `typealias Entry = (Key, Value)` and an `Iterable` conformance — and the compiler cannot compile it: five
-	// separate mechanisms are missing (a tuple over type parameters, expression field defaults, `Array{}`
-	// construction of a builtin, `__ManagedMemory with Key` fields, and the transitive-consume fixpoint), and
-	// the one shape that DOES compile — a generic type holding an `Array with T` over a managed `T` —
-	// ACCESS-VIOLATES at teardown. Synthesizing is what `Array`,
-	// `String`, `Character` and `Set` already do, and it is the only route with no wrong answer in it.
+	// ⭐ **A `Map with (Key, Value)` IS THE `Set` ABOVE WITH A PARALLEL VALUE COLUMN**, declared by
+	// `stdlib/Map.maxon`. What is different here is exactly the ARITY — two type arguments instead of
+	// one — so every `Set` door above that reads "the sole argument" splits in two: a KEY half (which
+	// must be `Hashable`/`Equatable`, since the probe hashes and compares it) and a VALUE half (which
+	// needs only a drop callee).
 
 	// ⭐⭐ **DOES THIS (tag, id) DENOTE THE `Map` CONTAINER — WHOEVER SERVES IT?** The SHAPE question, and the
 	// only one there is: there is no synthesized `Map` record for a counterpart predicate to ask about.
@@ -34813,7 +34665,7 @@ export type ProgramSignatures
 		return self.isManagedListBaseName(self.genericInstanceBaseName(id))
 	end 'isManagedListInstance'
 
-	// ⭐ **DOES THIS (tag, id) PAIR DENOTE A `__ManagedList with T`?** — `isListInstanceAt`'s twin, needed for
+	// ⭐ **DOES THIS (tag, id) PAIR DENOTE A `__ManagedList with T`?** — `isArrayInstanceAt`'s twin, needed for
 	// its measured reason: a `TypeNameId` and a `GenericInstanceId` share one numeric space, so the id alone
 	// can answer TRUE about an instance the caller never had. Its caller is the receiver dispatch, which
 	// holds a value's (tag, nameId) pair.
@@ -34832,7 +34684,7 @@ export type ProgramSignatures
 	end 'isManagedListNodeInstance'
 
 	// ⭐ **DOES THIS (tag, id) PAIR DENOTE A NODE HANDLE?** — the receiver dispatch's door, and the (tag, id)
-	// form for `isListInstanceAt`'s reason.
+	// form for `isArrayInstanceAt`'s reason.
 	export function isManagedListNodeInstanceAt(tag ValueTypeTag, nameId TypeNameId) returns bool
 		return tag == ValueTypeTag.genericInstance and self.isManagedListNodeInstance(nameId as GenericInstanceId)
 	end 'isManagedListNodeInstanceAt'
@@ -34857,7 +34709,7 @@ export type ProgramSignatures
 	end 'isManagedMemoryCursorInstance'
 
 	// ⭐ **DOES THIS (tag, id) PAIR DENOTE A CURSOR?** — the receiver dispatch's door, and the (tag, id) form
-	// for `isListInstanceAt`'s measured reason: a `TypeNameId` and a `GenericInstanceId` share one numeric
+	// for `isArrayInstanceAt`'s measured reason: a `TypeNameId` and a `GenericInstanceId` share one numeric
 	// space, so the id alone can answer TRUE about an instance the caller never had.
 	export function isManagedMemoryCursorInstanceAt(tag ValueTypeTag, nameId TypeNameId) returns bool
 		return tag == ValueTypeTag.genericInstance and self.isManagedMemoryCursorInstance(nameId as GenericInstanceId)
@@ -34978,7 +34830,7 @@ export type ProgramSignatures
 	// The `Vector with <size> <element>` instance — the SIZED twin of `builtinInstanceForElement`, and the one
 	// door that mints one. Its two callers are the alias fold (`recordGenericAlias`, off a declaration) and the
 	// declaration sweep's `Vector from […]` pre-intern, which must agree on the instance or the parser's own
-	// read would be the first write to the shared registry mid-parse (`Parser.atSetFromConstruction`'s rule).
+	// read would be the first write to the shared registry mid-parse (`Parser.atContainerFromConstruction`'s rule).
 	export function vectorInstanceForElement(element MaxonType, size FixedElementCount) returns GenericInstanceId
 		var args = MaxonTypeArray.create()
 		args.push(element)
@@ -34995,9 +34847,9 @@ export type ProgramSignatures
 	// Is a SINGLE-ELEMENT container's element itself managed (String / struct / boxed union / nested container)?
 	// A trivial element (int / Byte / ranged-int / bool) is stored inline and owns nothing.
 	//
-	// ⚠ **`container`, NOT `array`, AND THE NAME IS LOAD-BEARING.** It reads through `containerElementType`, so
-	// a `List` giid answers here exactly as an `Array` one does — and `Parser.dispatchListMethod` and the list
-	// move-in/borrow doors ask it that way. Named for `Array` it invited an `isListInstance` arm nobody needs.
+	// ⚠ **`container`, NOT `array`, AND THE NAME IS LOAD-BEARING.** It reads through
+	// `containerElementType`, so a `List` giid answers here exactly as an `Array` one does — and
+	// `Parser.dispatchManagedListNodeMethod` and the list move-in/borrow doors ask it that way.
 	export function containerElementIsManaged(id GenericInstanceId) returns bool
 		return self.typeIsManaged(self.containerElementType(id), from: self.typeNames)
 	end 'containerElementIsManaged'
@@ -35552,7 +35404,7 @@ export type ProgramSignatures
 	// ⭐ **THE DECISION IS MADE AT `__managed_create`, NOT AT FIRST `grow`, AND `LayoutDescriptor`'s
 	// `bit1=bitPacked` FLAG IS RESERVED.** The create sites already hold the CONCRETE instance — the parser
 	// mints it (`Parser.emitArrayCreateOp`) and the global initializer resolves it off the same registry
-	// (`arrayRecordInitializer`) — so the record is never briefly unpacked, no descriptor is read at run
+	// (`containerCreateCall`) — so the record is never briefly unpacked, no descriptor is read at run
 	// time, and there is no second stamp site for the two to disagree at.
 	export function arrayElementPackedBits(id GenericInstanceId) returns ElementPacking
 		if self.containerElementIsManaged(id) 'managed'
@@ -35813,18 +35665,17 @@ export type ProgramSignatures
 		return false
 	end 'inferredIntColumnBoundaryAdmits'
 
+	function instancesShareAShape(declaredNameId TypeNameId, gotNameId TypeNameId) returns bool
+		return self.genericInstances.instanceShape(declaredNameId as GenericInstanceId).sameAs(self.genericInstances.instanceShape(gotNameId as GenericInstanceId))
+	end 'instancesShareAShape'
+
 	// ⭐ **ONE COLUMN OF THE DOOR ABOVE.** Two columns denote one slot when they are the SAME type — compared
 	// on the (tag, id) pair `GenericInstanceRegistry.instanceKey` already treats as a type's whole identity,
 	// so this cannot call two types one where the interner calls them two — or when the arriving one is the
 	// compiler's own `integer` inference and the declared one is a ranged alias that adds nothing to `int`.
 	//
 	// A name NO file declares as a ranged alias is a struct / union / interface column, which an integer slot
-	// is not — the same `Map.get` channel `rosterElementHoldsEveryByte` reads, with the opposite default,
-	// because here a missing declaration means "not an int alias" rather than "the compiler's own".
-	function instancesShareAShape(declaredNameId TypeNameId, gotNameId TypeNameId) returns bool
-		return self.genericInstances.instanceShape(declaredNameId as GenericInstanceId).sameAs(self.genericInstances.instanceShape(gotNameId as GenericInstanceId))
-	end 'instancesShareAShape'
-
+	// is not, so a registry miss (`spansEveryIntInEveryFile`'s `MapError`) answers false.
 	function columnsDenoteOneSlot(declaredColumn MaxonType, gotColumn MaxonType) returns bool
 		if maxonTypeTag(declaredColumn) == maxonTypeTag(gotColumn) and typeNameIdOf(declaredColumn) == typeNameIdOf(gotColumn) 'oneAndTheSameType'
 			return true
@@ -35878,21 +35729,14 @@ export type ProgramSignatures
 		return tag == ValueTypeTag.named and self.isFunctionAliasInAnyFile(self.nameOfId(typeNameIdOf(slotType)))
 	end 'slotTypeIsAFunctionValue'
 
-	// The BOUNDS half of the declared side, over a name the roster has already accepted. The registry MISS
-	// arm is the same split `undeclaredNamedElementSlot` makes and for the same reason: the two
-	// roster names are exactly the ones NO file declares in the general case — `__ManagedByte` is
-	// compiler-owned and unspellable, and `Byte` is undeclared in a program whose only `Array with Byte` is
-	// the one a `b"…"` literal minted for itself — so what they hold is the COMPILER's to state, and a
-	// compiler-minted byte is a whole byte. Every other roster name reaching here IS declared, and its own
-	// declarations answer.
 	// IS THE DECLARED ELEMENT A BYTE ELEMENT? -- asked of its RANGE, deliberately not of its SPELLING.
 	//
-	// The byte boundary is about what a slot can HOLD: a one-byte stride whose every value is a byte value.
-	// `typealias ByteVal = int(0 to u8.max)` strides and holds exactly as `Byte` does, and the synthesized
-	// buffer behind a `String` must reach either. The range answers that for every spelling at once, and it
-	// SUBSUMES a name test rather than dropping one: a name test answers `true` for a name that is no ranged
-	// alias at all, so only a range can bound the door. Asked as one question with
-	// no `otherwise true`, a non-alias element is refused where before it depended on being spelled `Byte`.
+	// The byte boundary is about what a slot can HOLD: a one-byte stride whose every value is a byte
+	// value. `typealias ByteVal = int(0 to u8.max)` strides and holds exactly as `Byte` does, and the
+	// synthesized buffer behind a `String` must reach either. The range answers that for every
+	// spelling at once, and it SUBSUMES a name test rather than dropping one: a name test answers
+	// `true` for a name that is no ranged alias at all, so only a range can bound the door. Asked as
+	// one question with no `otherwise true`, a non-alias element is refused whatever it is spelled.
 	//
 	// The compiler's own mint is admitted by name because it IS a name and not a declaration: nothing
 	// registers `__ManagedByte` as a ranged typealias, so there is no range to ask about. It reaches here
@@ -35905,10 +35749,11 @@ export type ProgramSignatures
 		return try self.settledDeclarations().typeAliases.holdsEveryByteInEveryFile(element) otherwise false
 	end 'declaredByteElementHoldsEveryByte'
 
-	// ⭐⭐ **MAY `append` COPY FROM THIS ARRAY INTO A RECEIVER OF `receiverGiid`? — THE NINTH COERCION SITE,
-	// ASKED IN ONE PLACE FOR BOTH SURFACES OF THE RECORD.** `Array.append` and the buffer surface's
-	// `append` are one operation with one precondition and two diagnostics (`Parser.requireArrayAppendArg`
-	// and `requireManagedMemoryAppendArg`, which differ only in the type each one's SIGNATURE names).
+	// ⭐⭐ **MAY `append` COPY FROM THIS ARRAY INTO A RECEIVER OF `receiverGiid`? — THE NINTH COERCION
+	// SITE, ASKED IN ONE PLACE FOR BOTH SURFACES OF THE RECORD.** `Array.append` and the buffer
+	// surface's `append` are one operation with one precondition and two diagnostics
+	// (`Parser.requireAppendArg`, whose `appendArgMismatch` picks the sentence by the type each
+	// surface's SIGNATURE names).
 	//
 	// ⭐ **IT IS NOT THE WHOLE-ARRAY COERCION A DECLARED PARAMETER ASKS, AND THAT IS THE WHOLE SEPARATION.**
 	// A parameter HANDS THE CONTAINER OVER — the callee may push into it, and what it pushes is read back
@@ -35966,7 +35811,7 @@ export type ProgramSignatures
 		// answer TRUE by coincidence — never a compile error, and a non-`Array` argument would be admitted.
 		// `isArrayInstanceAt` is what pins `argNameId` to a generic instance; hoisting this arm above it
 		// would reintroduce that exact wrong answer.
-		// ⚠ The opaque arm lives HERE and not as a separately spelled arm in `requireArrayAppendArg`: it
+		// ⚠ The opaque arm lives HERE and not as a separately spelled arm in `Parser.requireAppendArg`: it
 		// states the SAME rule — identical giid — and two spellings of one rule are free to disagree.
 		if self.containerElementIsManaged(receiverGiid) or self.containerElementIsOpaque(receiverGiid) 'receiverCopiesThroughItsOwnElement'
 			return argNameId == receiverGiid as TypeNameId
@@ -36268,12 +36113,14 @@ export type ProgramSignatures
 	// reads `element_drop@24` (or `element_destroy@40`) and skips a chain whose elements a managed instantiation
 	// really does own.
 	//
-	// ⭐ **THAT GATE IS GONE, AND WHAT REPLACES IT IS A BRANCH AT EACH PRODUCER'S CALLER, NOT A DIFFERENT
-	// ANSWER HERE.** An opaque `create` reads `destroyFunc@40` off the enclosing instance's threaded layout
-	// descriptor at RUN TIME (`Parser.emitOpaqueContainerCreateOp` → `LowerMaxonToStd.appendOpaqueContainerCreate`),
-	// so whoever holds an opaque instance takes that road *before* asking for a stamp. This panic is what makes
-	// "the caller branched" a checked property of both producers rather than a convention one of them could
-	// drift out of — the same discipline `isManagedBufferRecordInstance` states for the seed/emit pair.
+	// ⭐ **THAT GATE IS GONE, AND WHAT REPLACES IT IS A BRANCH AT EACH PRODUCER'S CALLER, NOT A
+	// DIFFERENT ANSWER HERE.** An opaque `create` reads `destroyFunc@40` off the enclosing instance's
+	// threaded layout descriptor at RUN TIME
+	// (`Parser.emitOpaqueArrayCreateOp`/`emitOpaqueChainCreateOp` →
+	// `LowerMaxonToStd.appendOpaqueContainerCreate`), so whoever holds an opaque instance takes that
+	// road *before* asking for a stamp. This panic is what makes "the caller branched" a checked
+	// property of both producers rather than a convention one of them could drift out of — the same
+	// discipline `isManagedBufferRecordInstance` states for the seed/emit pair.
 	//
 	// ⚠ The top-level asker cannot reach it TODAY for a structural reason worth writing down rather than
 	// relying on: a `.data` global is not inside a generic body, so no type parameter is in scope for its
@@ -36599,7 +36446,7 @@ export type ProgramSignatures
 	// emitters (`emitArrayCreateOp` / `emitListCreateOp` / `emitSizedContainerRecord`) build the same calls as VALUES and deliberately box no description per site —
 	// MEASURED at +1 allocation per creation site in the program (see `Parser.arrayElementDestroyValue`).
 	// What must not be written twice is the RULE, and none of it is: which container this is
-	// (`instanceCreateIsDeclared`/`isListInstance`/…), which column owns what (`slotTypeIsManaged`), which drop
+	// (`instanceCreateIsDeclared`/`isManagedListInstance`/…), which column owns what (`slotTypeIsManaged`), which drop
 	// (`slotTypeDropCallee`) and which stride (`arrayElementSize`) are each answered in one place and read
 	// from both sides. This is asked ONCE PER MANAGED GLOBAL.
 	//
@@ -36628,11 +36475,12 @@ export type ProgramSignatures
 		// `Set` and `Map` are declared generics and return through the `declaredGeneric` arm with no
 		// stamps: a declared `create()` builds its own fields.
 
-		// A `__ManagedList` names none either, and for the `Map`'s reason rather than a shape one: `__list_append`
-		// IS the `(record, value)` pair this description carries, but no top-level form hands a chain elements —
-		// the one bracketed chain construction there ever was, `List from […]`, is a function body's
-		// (`atListFromConstruction`) and now desugars to the corpus type's own `create`/`append` besides — so
-		// naming a callee here would be a route nothing takes. See `ContainerElementAdd`.
+		// A `__ManagedList` names none either, and for the `Map`'s reason rather than a shape one:
+		// `__list_append` IS the `(record, value)` pair this description carries, but no top-level form
+		// hands a chain elements — the bracketed chain construction, `List from […]`, is a function
+		// body's (`Parser.atContainerFromConstruction`) and desugars to the corpus type's own
+		// `create`/`append` — so naming a callee here would be a route nothing takes. See
+		// `ContainerElementAdd`.
 		//
 		// ⚠ **NO `List` ARM.** A `ListAlias.create()` in a global's initializer is a DECLARED generic's
 		// `create()`, so it returns
@@ -37610,7 +37458,7 @@ export type ProgramSignatures
 	// ⚠⚠ **AND IT CLAIMS AN ALREADY-`structRef` TUPLE TOO, BECAUSE A SWEPT `structRef` IS NOT NECESSARILY
 	// THE CANONICAL SPELLING.** `parseTypeReference`'s tuple arm is deliberately OUTSIDE
 	// the `allFilesFolded` gate its neighbours sit behind, so during the sweep a `returns Tagged` already
-	// resolves to `structRef` — through `tupleAliasTarget` → `canonicalNameOfStruct`, which is itself gated
+	// resolves to `structRef` — through `tupleAliasTargetFrom` → `canonicalNameOfStruct`, which is itself gated
 	// on `allFilesFolded` and therefore hands back the RAW spelling at that moment. The recorded type is
 	// then concrete and WRONG-NAMED: `__Tuple2.String.Num` where every value of that tuple, and the
 	// destructor synthesized for it, carry `__Tuple2.String.int`.
@@ -38290,11 +38138,11 @@ export type ProgramSignatures
 	// possible element instances (`internLiteralContainerInstances`) and the parser looks up whichever the
 	// first element resolves to. Idempotent, so the sweep is the WRITE and the parser a pure READ.
 	//
-	// ⚠ **IT IS ONE FUNCTION BECAUSE THE THREE CONTAINERS WERE ALREADY ONE FACT** — it was
-	// `arrayInstanceForString` and `setInstanceForString`, two identical three-line bodies differing only in
-	// the base name, whose headers each said the other was its "twin". The KEYING is the load-bearing part
-	// (a String as `MaxonType.string`, so a literal-built container and a typealias-backed one of the same
-	// element share ONE gid), and it is exactly what a third copy would have been free to get subtly wrong.
+	// ⚠ **IT IS ONE FUNCTION BECAUSE THE THREE CONTAINERS ARE ONE FACT** — per container it would be
+	// three identical lines differing only in the base name. The KEYING is the load-bearing part (a
+	// String as `MaxonType.string`, so a literal-built container and a typealias-backed one of the
+	// same element share ONE gid), and it is exactly what a per-container copy would be free to get
+	// subtly wrong.
 	//
 	// ⭐ **IT TAKES THE ELEMENT AS A RESOLVED `MaxonType`, NOT AS A NAME**, because `List from […]` reads its
 	// element straight off the SOURCE ARRAY's instance (`containerElementType`) — already `MaxonType.string`
@@ -38361,7 +38209,7 @@ export type ProgramSignatures
 	// A declared struct/union is `named` — that is what `Array with Item`'s alias arg is, which is why a
 	// `[<Item>…]` literal and `ItemArray` have always been one type. A synthesized TUPLE is `structRef`:
 	// `Parser.parseTypeReference` mints a tuple type that way at every spelling (`(Num, Num)`, and a tuple
-	// `typealias` through `tupleAliasTarget`), so `named` here would be a SECOND spelling of one type with
+	// `typealias` through `tupleAliasTargetFrom`), so `named` here would be a SECOND spelling of one type with
 	// nothing to make the two agree. MEASURED: `typealias PairArray = Array with Pair` plus any
 	// `[<identifier>…]` literal in the program was rejected with that spurious E3006.
 	export function builtinInstanceForNamedElement(baseName ByteArray, element ByteArray, asSpeculative bool = false) returns GenericInstanceId
@@ -38765,8 +38613,7 @@ export type ProgramSignatures
 		end 'managedList'
 
 		// A node handle IS the node, so its "box" is the node the chain allocated — 40 bytes of `next`, `prev`,
-		// `value`, `element_drop` and `owner`. It briefly answered a separate handle record's 16 while a handle
-		// was a box holding `list`/`node`; that box is gone with the ruling that required it.
+		// `value`, `element_drop` and `owner`.
 		if self.isManagedListNodeInstance(id) 'managedListNode'
 			return ListNodeBytes as ByteOffset
 		end 'managedListNode'
@@ -38903,8 +38750,7 @@ export type ProgramSignatures
 	// materialization (`materializeWitnessArg`), so the conformance lookup, the table label, and the impl
 	// symbol cannot disagree on whether a `Box with Integer` conforms via `int`. Distinct from
 	// `instanceArgDisplayName`, which keeps the SOURCE spelling (`Integer`) for the E3017 MESSAGE — this
-	// canonicalizes only the identity the comparison rests on, exactly as `ConformanceCheck.canonicalTypeName`
-	// does for a method-signature type name.
+	// canonicalizes only the identity the comparison rests on.
 	export function conformerTypeArgName(gid GenericInstanceId, position ElementIndex) returns String
 		// An instance's stored ARGUMENT was interned by this index, so its ids are this index's own.
 		return self.conformerNameOfType(self.substitutedInstanceArg(gid, position: position), idsFrom: self.typeNames, readerFilePath: CompilerOwnedDeclFilePath)
@@ -39948,26 +39794,23 @@ export type ProgramSignatures
 	// CONFLATING THEM IS WHAT CRASHED THE COMPILER.** A generic instance's base has no `StructLayout` for
 	// exactly two reasons, and they are not the same reason:
 	//
-	//   • **SYNTHESIZED** — `Array` / `Set` / `Map` / `List`. The compiler reads no stdlib and emits their runtime
-	//     records itself, so no `type Array uses Element` declaration exists to carry a layout. The type is
-	//     LEGAL and the program is fine; it simply has no fields.
+	//   • **SYNTHESIZED** — a base `isBuiltinGenericBaseName` accepts (`Array`, `Vector`, the
+	//     `__ManagedList` chain). The compiler emits their runtime records itself, so no declared
+	//     layout is read for them — `stdlib/Array.maxon` declares `Array`, but its record IS its
+	//     buffer. The type is LEGAL and the program is fine; it simply has no fields.
 	//   • **UNDECLARED** — `Foo with Int`, `Int with Int`. Nothing declares the base at all. The program is
 	//     MALFORMED, and `Parser.checkGenericInstance` has already recorded E2055 against the `with` that
 	//     wrote it.
 	//
 	// Every walk over an instance's fields must stop for BOTH, because in both cases there are no fields to
-	// read. Four such walks spelled the stop condition as `isArrayInstance(id) or isSetInstance(id)` — the
-	// SYNTHESIZED half, four times over, each blind to the UNDECLARED half — so an undeclared base fell
-	// through into `baseLayoutOf` and the compiler died with a stack trace on a program whose real
-	// diagnostic was already written and never printed (measured on `typealias IntMap = Map with (Int, Int)`
-	// and on a bare `Foo with Int`: `panic ProgramSignatures.baseLayoutOf`, exit 1, no `error E….`).
+	// read.
 	//
 	// So the stop condition is `not genericInstanceHasBaseLayout(id)`, written once, and it is exactly
 	// `baseLayoutOf`'s precondition. The synthesized half keeps its own name because two callers genuinely
 	// need to tell the reasons apart rather than merely stop: `Parser.structLayoutOfType`, whose
 	// diagnostic must say "a builtin with no fields YET" for one and "no such type" for the other, and the
 	// per-builtin routers below (`genericInstanceBoxSize`, `genericInstanceBoxDropCallee`), which do not stop
-	// at all — they answer each of the four builtin containers differently from the others.
+	// at all — they answer each builtin container differently from the others.
 
 	// Is `name` a BUILTIN generic base — one the compiler synthesizes rather than reads a declaration for, so no
 	// `StructLayout` exists for it and none is missing. The ONE home of the builtin-container disjunction —
@@ -40054,7 +39897,7 @@ export type ProgramSignatures
 		end 'array'
 
 		// ⚠ **A `Vector`'s SIZE IS NOT COUNTED HERE, and that is what makes this arm a 1 rather than a 2.**
-		// `Vector with 3 Int` supplies one TYPE argument; the 3 is consumed by `readSizedGenericArgs` before
+		// `Vector with 3 Int` supplies one TYPE argument; the 3 is consumed by `readSizedBaseElementCount` before
 		// the argument list is parsed at all, so the `argCount` this is compared against never saw it.
 		if self.isVectorBaseName(name) 'vector'
 			return VectorTypeParamCount
@@ -40147,7 +39990,7 @@ export type ProgramSignatures
 	// `SemanticCheck.checkTypeParameterArgsAt` subscript through here.
 	//
 	// ⚠ **`substituteThroughInstance` DELIBERATELY DOES NOT, AND THAT IS NOT A SECOND DERIVATION.** It reads the
-	// whole `typeParamOwner` record because it needs the OWNER as well as the position — a token belonging to
+	// whole `TypeParamOwner` record because it needs the OWNER as well as the position — a token belonging to
 	// another declaration must pass through unchanged rather than be indexed into this instance's argument list.
 	// This function cannot answer that, by construction: it projects the record down to the position alone.
 	//
@@ -42636,7 +42479,7 @@ export type ProgramSignatures
 	//
 	// **`MapError` IS AN ANSWER, NOT A GAP.** Three names denote nothing this door can re-tag, and each is
 	// deliberate: a ranged INT alias (its NAME is what carries the range and the signedness — see
-	// `isFloatAlias`), an enum/union name (a `named` IS its type — a payload-free enum's value is its i64
+	// `isFloatAliasFor`), an enum/union name (a `named` IS its type — a payload-free enum's value is its i64
 	// tag and a boxed one's is its box), and a name no file declares (E3011's subject). All three are
 	// correctly left as the bare `named` they arrived as, which is why the caller's fallthrough — an
 	// `adoptType` here, an enum lookup at the payload classifier — is the rest of the answer and not a
@@ -43122,7 +42965,7 @@ export type ProgramSignatures
 	// `typeIsManagedFor`'s header calls the struct-field cascade and the destructor stamp "genuinely
 	// file-less" callers. They are not: a field's declared type is a name spelled in the struct's OWN file,
 	// so the file that decides what it means is `layout.declFilePath` — the same reader `resolveTypes`
-	// already passes for the field types themselves (`TypeResolution.resolveStructFieldTypes`).
+	// already passes for the field types themselves (`TypeResolution.checkStructFieldTypes`).
 	//
 	// MEASURED with a name-only control: `stdlib/Builtins.maxon`'s `type __UnsignedDigitStep` declares
 	// `public var quotient as FullRangeInt`, its own file-private `typealias FullRangeInt = int(...)`. A user
@@ -43301,8 +43144,7 @@ export type ProgramSignatures
 	// `named("IntArr")` where an `items as Array with Int` field arrives already tagged `genericInstance`;
 	// a generic instance's stored type ARGUMENT carries the same two spellings for the same reason
 	// (`conformerNameOfDeclaredName`'s alias arm). One resolution serves both, so a rule written for one
-	// spelling cannot miss the other — which is how an array `Map` key spelled through an alias
-	// (the deleted `Parser.requireHashTableKeyType`) and an array FIELD stay one question.
+	// spelling cannot miss the other.
 	//
 	// ⚠ **A SUPERSEDED SPELLING ANSWERS `false` RATHER THAN REACHING `genericAliasInstance` (which PANICS on
 	// one).** That door refuses a name two files contest because it can name no reader to choose between
@@ -43598,19 +43440,14 @@ export type ProgramSignatures
 	// This index's own callers pass `self.typeNames`; a caller holding a type that has been ADOPTED into a
 	// file-local artifact interner (`fieldTypeOf(…, into:)`) passes THAT one. It is the same discipline
 	// `classifyUnionPayload`, `managedFieldDropCallee` and `foreignNameOf` already state — a type crossing
-	// into this index carries the interner named alongside it — and this was the ONE type-taking query
-	// that did not, which is exactly how it went wrong:
+	// into this index carries the interner named alongside it.
 	//
-	// **MEASURED, a cross-file directory project, both directions and both silent.** The parser's
-	// field-read guard resolved an artifact-interned id against `self.typeNames`, so the classification
-	// followed whatever name held that NUMBER in the program-wide table:
-	//   • a scalar `int(0 to 1000)`-alias field (and a payload-free `enum` field) read MANAGED, and a legal
-	//     `Gate.twice(21).n` was refused `E2015` — while the byte-identical single-file program ran 42,
-	//     because a single file's two tables are folded in the same order and every id coincides;
-	//   • a boxed-UNION field read SCALAR, so `requireFieldOutlivesItsRead` ADMITTED the borrow out of a
-	//     temporary that rule exists to refuse — the program compiled and HUNG on the freed box. The
-	//     verdict flipped at the FOURTH unrelated `typealias` in the reading file.
-	// Both are pinned by `specs/cross-file-field-classification.md`.
+	// An artifact-interned id resolved against `self.typeNames` classifies by whatever name holds that
+	// NUMBER in the program-wide table, silently and in both directions: a scalar alias or
+	// payload-free `enum` field reads MANAGED and a legal read is refused, and a boxed-UNION field
+	// reads SCALAR and a read out of a temporary is left holding a freed box. A single-file program
+	// cannot show it, because its two tables are folded in the same order and every id coincides. Both
+	// directions are pinned by `specs/cross-file-field-classification.md`.
 	//
 	// It is answered allocation-free for the overwhelming scalar-field majority — a tag test, then
 	// `declaredFormOf`'s `Map.contains`/`Map.get` probes over a payload-free enum, which is a scalar — which

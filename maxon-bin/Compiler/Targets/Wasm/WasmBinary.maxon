@@ -153,8 +153,8 @@ let opDrop = 0x1A
 // The UNTYPED `select` (0x1B) — pops an i32 condition and the two candidate values below it, and
 // pushes the one chosen. It is valid for exactly the NUMERIC types (i32/i64/f32/f64), which is all
 // the backend has; the TYPED form (0x1C, carrying an explicit valtype vector) exists only for
-// reference types, which this backend does not emit. Its one user is the `min` intrinsic
-// (`StdToWasm.emitFloatMin`).
+// reference types, which this backend does not emit. Its one user is the float `min`/`max`
+// intrinsic pair (`StdToWasm.emitFloatMinMax`).
 let opSelect = 0x1B
 
 // The block signature byte shared by block/loop/if. Every block this backend emits is a VOID
@@ -432,7 +432,7 @@ export type WasmBody
 
 	// `select` — pops (condition i32, valueIfFalse, valueIfTrue) and pushes `valueIfTrue` when the
 	// condition is non-zero. Both candidates must already be the SAME numeric type; the caller owns
-	// that (see `StdToWasm.emitFloatMin`, which pushes two f64s).
+	// that (see `StdToWasm.emitFloatMinMax`, which pushes two f64s).
 	export function select()
 		self.buf.push(opSelect)
 	end 'select'

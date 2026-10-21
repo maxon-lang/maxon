@@ -187,11 +187,11 @@ end 'unsignedStdTypeOf'
 // from both operands' declared ranges (`TypeRules`' ⭐⭐ THE DIVISION SIGNEDNESS RULE and its ⭐⭐
 // ORDERING-COMPARISON twin) and carried down on the op.
 //
-// ⚠ **IT WAS `DivideSignedness` AND THE DIVIDE IS NO LONGER ITS ONLY READER** — three families read it
-// now, and each is a place where one bit pattern has two honest answers: the DIVIDE (`idiv` vs `div`),
-// the DECIMAL RENDERER (`-1` vs `18446744073709551615`), and the four ORDERING COMPARISONS (`jl`
-// vs `jb`). The renaming is not cosmetic: a reader of `MaxonOp.compare`'s field who found a type named
-// for division would reasonably conclude the field was in the wrong place.
+// ⚠ **THE DIVIDE IS NOT ITS ONLY READER, WHICH IS WHY IT IS NAMED FOR THE READING AND NOT THE
+// DIVIDE** — three families read it, and each is a place where one bit pattern has two honest
+// answers: the DIVIDE (`idiv` vs `div`), the DECIMAL RENDERER (`-1` vs `18446744073709551615`), and
+// the four ORDERING COMPARISONS (`jl` vs `jb`). A reader of `MaxonOp.compare`'s field who found a
+// type named for division would reasonably conclude the field was in the wrong place.
 //
 // ⭐ **A FIELD ON `StdOp.div`/`mod`, NOT TWO MORE VARIANTS — and the reason is the band-append
 // invariant, not brevity.** `shr`/`shrLogical` split into two OPCODES one tier up because the Maxon
@@ -1550,7 +1550,7 @@ export union StdOp
 	//
 	// ⭐ IT CARRIES THE FUNCTION VALUE'S SIGNATURE — `resultType` (the result's return type) and
 	// `argFloatMask` (bit k set iff argument k is a float) — because, unlike a direct `call`, there is NO
-	// callee NAME to recover it from (the name index / `calleeParamClasses` are keyed by name).
+	// callee NAME to recover it from (the name index / `CalleeAbiTable` are keyed by name).
 	// Without it every backend assumed an INTEGER result and integer args, so a float-returning or
 	// float-taking function value colored a move across register files. The FRONT END already
 	// types the result value and every arg value, so `lowerIndirectCall` reads both straight off `stdTypeOf`
@@ -1619,13 +1619,14 @@ export union StdOp
 	// `Targets/Windows/PeWriter.maxon`), keeping the Win32 import table out of the target-neutral tier. Full
 	// call-barrier metadata: it IS a call once lowered, exactly like `osAllocPages`.
 	//
-	// `osReadClock(ticksPtr, freqPtr)` writes QueryPerformanceCounter's tick count to `[ticksPtr]` and
-	// QueryPerformanceFrequency's frequency to `[freqPtr]` — two VALUE operands (the out-param addresses,
-	// computed by the builder via `globalAddr` of two `.data` scratch slots), no result. The
-	// ticks→nanoseconds arithmetic stays BUILDER-BUILT (`__gt_now_ns` in GtRuntime.maxon) using the split
-	// identity `ns = (ticks/freq)*1e9 + ((ticks mod freq)*1e9)/freq`, which is overflow-safe in plain 64-bit
-	// Std ops for any realistic QPF (≤ a few GHz) and centuries of uptime — so no 128-bit MUL/DIV, and no new
-	// Target op, is needed. It keeps the clock math in the Std tier the rewrite's thesis puts it in.
+	// `osReadClock(ticksPtrId, freqPtrId)` writes QueryPerformanceCounter's tick count to
+	// `[ticksPtrId]` and QueryPerformanceFrequency's frequency to `[freqPtrId]` — two VALUE operands
+	// (the out-param addresses, computed by the builder via `globalAddr` of two `.data` scratch
+	// slots), no result. The ticks→nanoseconds arithmetic stays BUILDER-BUILT (`__gt_now_ns` in
+	// GtRuntime.maxon) using the split identity `ns = (ticks/freq)*1e9 + ((ticks mod freq)*1e9)/freq`,
+	// which is overflow-safe in plain 64-bit Std ops for any realistic QPF (≤ a few GHz) and centuries
+	// of uptime — so no 128-bit MUL/DIV, and no new Target op, is needed. It keeps the clock math in
+	// the Std tier the rewrite's thesis puts it in.
 	osReadClock(ticksPtrId ValueId, freqPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// --- the OS-import primitives the green-thread SUBPROCESS substrate needs ---
@@ -1787,7 +1788,7 @@ export union StdOp
 	// in op form.
 	// ⭐⭐ **SCHEDULING PRIORITY — THE CONTRACT EVERY THREAD THIS OP MINTS INHERITS, AND THE ONE PLACE IT
 	// CAN BE STATED.** This op is the ONLY way an emitted program acquires an OS thread, at two sites:
-	// `SchedRuntime.emitSchedWakeOrSpawn`'s worker M and `emitSchedSysmonStart`'s syscall monitor.
+	// `SchedRuntime.buildSchedStartM`'s worker M and `emitSchedSysmonStart`'s syscall monitor.
 	// So a thread born here runs at whatever priority `__proc_bg_priority` last set for the process — and on
 	// the two WHOLE-PROCESS lanes, that holds with NOTHING EMITTED HERE: `SetPriorityClass` sets a PROCESS
 	// class covering threads created before and after it, and Darwin scopes a `nice` value to the process in
@@ -1857,7 +1858,7 @@ export union StdOp
 	// whole body of `__proc_pid`.
 	//
 	// ⚠ **THE FIRST PRODUCER IS COMPILER-INSERTED AND NO CALLEE-NAME GATE CAN SEE IT**
-	// (`GtRuntime.emitGtPipeNameUniquifier`), so a backend arm for this op must refuse a lane it cannot serve
+	// (`GtRuntime.buildPipeName`), so a backend arm for this op must refuse a lane it cannot serve
 	// ITSELF rather than trusting `TargetFacilities` to have refused upstream. `lowerOsGetPid` on arm64
 	// carries that argument in full; `StdOp.osCpuCount` records the measurement that made it a rule.
 	//
@@ -2547,16 +2548,17 @@ export union StdOp
 	// `memFill(dest, byteCount, value)` overwrites `byteCount` bytes at `dest` with the low byte of `value`.
 	// A `byteCount` of 0 writes nothing.
 	//
-	// ⭐⭐ **IT IS AN OP BECAUSE THE THING IT LOWERS TO IS A SIZE LADDER, AND STD IR CANNOT SPELL ONE.** This
-	// replaced a hand-built Std-IR loop (`MmRuntime.emitFillRange`) that cost one `storeIndirect u8` plus an
-	// add, a compare and a branch PER BYTE — on the three hottest paths the runtime has: the zeroing a
-	// recycled free-list slot owes (docs/internals/memory-allocator.md, The zeroing contract), `__mm_free`'s
-	// poison of the whole dead payload, and the array capacity-slot eraser. A recycled 32 KB slot was 32,768
-	// iterations of it. A backend can do the same work in a handful of stores because it may CHOOSE an
-	// instruction sequence by SIZE — straight-line overlapping stores in the small bands, a block loop in the
-	// middle, `rep stosq` at the top — and "eight overlapping qword stores" is not a thing this tier has the
-	// vocabulary to say. ⇒ the size dispatch is the backend's, and this op is the request. The per-target
-	// ladders are specified in docs/internals/memory-allocator.md, memFill and the fill ladders.
+	// ⭐⭐ **IT IS AN OP BECAUSE THE THING IT LOWERS TO IS A SIZE LADDER, AND STD IR CANNOT SPELL ONE.**
+	// A hand-built Std-IR loop costs one `storeIndirect u8` plus an add, a compare and a branch PER
+	// BYTE — on the three hottest paths the runtime has: the zeroing a recycled free-list slot owes
+	// (docs/internals/memory-allocator.md, The zeroing contract), `__mm_free`'s poison of the whole
+	// dead payload, and the array capacity-slot eraser. A recycled 32 KB slot is 32,768 iterations of
+	// it. A backend can do the same work in a handful of stores because it may CHOOSE an instruction
+	// sequence by SIZE — straight-line overlapping stores in the small bands, a block loop in the
+	// middle, `rep stosq` at the top — and "eight overlapping qword stores" is not a thing this tier
+	// has the vocabulary to say. ⇒ the size dispatch is the backend's, and this op is the request. The
+	// per-target ladders are specified in docs/internals/memory-allocator.md, memFill and the fill
+	// ladders.
 	//
 	// ⭐ **`value` IS A COMPILE-TIME `FullRangeInt`, NOT A `ValueId`, AND THAT IS WHAT MAKES THE FILL PATTERN
 	// FREE.** Every call site passes a literal (0 to restore the zeroing contract, `PoisonByte` to poison a
@@ -2615,15 +2617,16 @@ export union StdOp
 	// three lanes and green on the one most likely to be tested. `SlabArena` commits strictly above a per-arena
 	// watermark, so it can never ask.
 	//
-	// ⭐ **`osRecommitPages` IS DELETED, FOLDED INTO `osCommitPages`, AND THE FOLD IS A DECISION.** Go keeps
-	// `sysMap` and `sysUsed` separate because it commits at TWO granularities — an arena region at `mheap.grow`
-	// and a page run at `pageAlloc.allocRange` — and on each OS exactly one of the two does the work (`sysMapOS`
-	// is EMPTY on Windows; `sysUsedOS` is empty on Linux). the compiler's page layer has ONE granularity, so it has one
-	// place that says "make this range usable", and one place deserves one op: a second variant whose Windows
-	// lowering is character-for-character its neighbour's, and whose only producer would be a scavenger that does
-	// not exist, is the duplication this file's neighbours refuse everywhere else. The price is named: a future
-	// POSIX scavenger's reback costs one `mmap` where Go's `sysUsed` costs nothing, on a path that has just paid
-	// for a `madvise`.
+	// ⭐ **THERE IS NO SEPARATE RECOMMIT OP — A REBACK IS AN `osCommitPages` — AND THAT IS A
+	// DECISION.** Go keeps `sysMap` and `sysUsed` separate because it commits at TWO granularities —
+	// an arena region at `mheap.grow` and a page run at `pageAlloc.allocRange` — and on each OS
+	// exactly one of the two does the work (`sysMapOS` is EMPTY on Windows; `sysUsedOS` is empty on
+	// Linux). The compiler's page layer has ONE granularity, so it has one place that says "make this
+	// range usable", and one place deserves one op: a second variant whose Windows lowering is
+	// character-for-character its neighbour's, and whose only producer would be a scavenger that does
+	// not exist, is the duplication this file's neighbours refuse everywhere else. The price is named:
+	// a future POSIX scavenger's reback costs one `mmap` where Go's `sysUsed` costs nothing, on a path
+	// that has just paid for a `madvise`.
 	//
 	// ⚠ **wasm32-wasi HAS NO RESERVATION TO MAKE, AND THAT IS AN ISA FACT RATHER THAN A GAP.** Linear memory is
 	// one contiguous region that only ever GROWS, and `memory.grow` both takes the address range and backs it —
@@ -2893,13 +2896,14 @@ export union StdOp
 	// `storeRelease` and a reader that observes with `loadAcquire` therefore agree on everything the writer
 	// wrote before publishing — which is the entire property `gt.result` / `gt.threw` depend on.
 	//
-	// ⛔⛔ **THEY EXIST BECAUSE `StdOp.atomicCas`'s NEIGHBOURING NOTE PREDICTED THE EXACT SHAPE THAT WOULD
-	// NEED THEM AND IT ARRIVED.** That note licenses no fence for the Treiber stack (*"on arm64 the CAS
-	// publishes with `STLXR`, a store-RELEASE"*) and names the shape to watch for: *"a store-load pair with
-	// no CAS between them"*. A green thread's `completed` publication IS that pair — three plain stores and
-	// a plain load, with no atomic anywhere between them — and it stopped being latent when the scheduler
-	// grew genuinely concurrent worker Ms on two weakly-ordered lanes (`pthread_create` on arm64-macOS,
-	// `clone` on arm64-linux). See `GtRuntime.emitGtStoreStatus` for the publication and its checker.
+	// ⛔⛔ **THEY EXIST BECAUSE `StdOp.atomicCas`'s NEIGHBOURING NOTE PREDICTED THE EXACT SHAPE THAT
+	// WOULD NEED THEM AND IT ARRIVED.** That note licenses no fence for the Treiber stack (*"on arm64
+	// the CAS publishes with `STLXR`, a store-RELEASE"*) and names the shape to watch for: *"a
+	// store-load pair with no CAS between them"*. A green thread's `completed` publication IS that
+	// pair — three plain stores and a plain load, with no atomic anywhere between them — and it
+	// stopped being latent when the scheduler grew genuinely concurrent worker Ms on two
+	// weakly-ordered lanes (`pthread_create` on arm64-macOS, `clone` on arm64-linux). See
+	// `GtRuntime.emitGtPublishCompleted` for the publication and its checker.
 	//
 	// ⭐⭐ **AN ORDERED FLAVOUR RATHER THAN A STANDALONE FENCE OP, AND THE REASON IS THE ISA.** A fence would
 	// be `DMB ISH` on arm64 — a FULL barrier ordering every access in both directions — where `STLR`/`LDAR`

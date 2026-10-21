@@ -151,16 +151,13 @@ export let NoImmortalBlob = 0 as ByteOffset
 
 // --- ⭐⭐ THE BUFFER RECORD, DECLARED ONCE AND EMBEDDED WHOLE BY THE STRING RECORD ---
 //
-// **The String record and the Array record agree on ALL SIX slots, and `__mm_cow_detach` is what
-// turned that agreement from a coincidence into a rule.** Until it existed, the emitters below took a
-// `BufferRecordSlots` value that each runtime built from its own constants, and the header here said the
-// two sets "coincide today and nothing here relies on that". Something does now: ONE emitted runtime
-// function reads these offsets out of BOTH records, so a divergence would not be a second value flowing
-// through a parameter — it would be a wrong load in a function that cannot tell which record it was
-// handed. ⇒ the offsets are declared HERE, so the numbers exist once and the parameter that could only ever
-// carry one value is gone. `StringRuntime` derives its own names from them (`StringBufferOffset`, …) because
-// a String record is a DIFFERENT record and its spelling still says something; `ManagedMemoryRuntime` names
-// these constants directly rather than aliasing them.
+// **The String record and the Array record agree on ALL SIX slots, and `__mm_cow_detach` makes that
+// agreement a rule.** ONE emitted runtime function reads these offsets out of BOTH records, so a
+// divergence would be a wrong load in a function that cannot tell which record it was handed. ⇒ the
+// offsets are declared HERE, so the numbers exist once. `StringRuntime` derives its own names from
+// them (`StringBufferOffset`, …) because a String record is a DIFFERENT record and its spelling
+// still says something; `ManagedMemoryRuntime` names these constants directly rather than aliasing
+// them.
 //
 // ⭐⭐ **THE SIXTH SLOT IS PART OF THE PREFIX, AND THAT IS THE WHOLE THESIS.** `@40` holding
 // `singleByteGraphemes` in a String record and `element_destroy` in an Array record would be genuinely
@@ -497,20 +494,19 @@ end 'emitCapacityIsSentinel'
 //     precisely so the terminator slot is the record's own; the slab's zeroing contract supplies the zero.
 //   * `ImmortalRecordCapacity` — a String LITERAL, whose blob `StringRuntime.stringBlobBytes` NUL-terminates
 //     inside `.rdata`. Same immutability argument as the rdata blob, plus a guaranteed zero.
-//     ⚠ **THE GUARANTEE IS THE STRING PRODUCER'S ALONE.** A module-level byte-array constant's record carries
-//     this same sentinel and its blob is `registerByteArrayLiteralBlob`'s, which appends no NUL — so this arm
-//     would vouch a terminator that is not there. Nothing reaches it: `toCString` is stdlib-only
-//     (`Parser.requireStdlibOnlyBufferMethod`) and no `stdlib/` module calls it on an array. A `stdlib/`
-//     caller that did would need the blob NUL-terminated, not this admit-list widened — the record is
-//     read-only, so the `unvouched` route cannot serve it either.
+//     ⚠ **THE GUARANTEE IS THE STRING PRODUCER'S ALONE.** A module-level byte-array constant's
+//     record carries this same sentinel and its blob is `registerByteArrayLiteralBlob`'s, which
+//     appends no NUL — so this arm would vouch a terminator that is not there. Nothing reaches it:
+//     `toCString` is stdlib-only (`Parser.requireArrayMemberIsNotRawSurface`) and no `stdlib/`
+//     module calls it on an array. A `stdlib/` caller that did would need the blob NUL-terminated,
+//     not this admit-list widened — the record is read-only, so the `unvouched` route cannot serve
+//     it either.
 //
 // ⛔⛔ **THE TWO IT REFUSES, AND WHY NEITHER IS AN EDGE CASE.**
 //
 //   * a VIEW (`ViewBufferCapacity`) — its bytes are a window into someone else's buffer, so the byte after
 //     the window is not the view's, and when the window reaches its parent's end it is not the parent's
-//     either. ⚠ `Parser.requireStdlibOnlyBufferMethod` records an exit-101 MEASURED on a view here, but
-//     that number is a leaked COPY and does not reproduce — the record is grown in place. What the view is
-//     refused for is the READ, which no exit code has ever shown.
+//     either. What the view is refused for is the READ, which no exit code has ever shown.
 //   * an EXACTLY-FULL OWNED buffer (`capacity == length`) — the ORDINARY state, not a corner.
 //     `__managed_grown_cap` takes an ask that outruns doubling at face value, and a first append onto a
 //     non-owned buffer always does (`doubled` is negative), so `var s = ""` + `s.append("hello world")`

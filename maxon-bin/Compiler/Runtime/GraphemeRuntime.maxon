@@ -15,11 +15,10 @@
 // `String.count()` is a corpus body calling a corpus body, so every edge is one the reachability
 // walk follows for itself. A `StdOp` segmenter here would be a second implementation of one table.
 //
-// ⚠⚠ **NO BODY IN THIS FILE NAMES A CORPUS FUNCTION, WHICH IS THE STATE TO KNOW BEFORE ADDING ONE.** A Std
-// body naming a corpus callee does it from inside a graph no Maxon module contains, so the edge does not
-// exist when reachability is computed and it has to be declared —
-// `StdlibSource.markCorpusCalleesOfSynthesizedRuntime` is the seed that would have to be rebuilt; see the
-// paragraph `StdlibSource` keeps where it stood, which records the two things it paid for.
+// ⚠⚠ **NO BODY IN THIS FILE NAMES A CORPUS FUNCTION, WHICH IS THE STATE TO KNOW BEFORE ADDING
+// ONE.** A Std body naming a corpus callee does it from inside a graph no Maxon module contains, so
+// the edge does not exist when reachability is computed and it has to be declared as a seed of
+// `StdlibSource`'s walk.
 
 // ⭐⭐ **THE UTF-8 ENCODING'S BIT LAYOUT — THE ONE DECLARATION, `export`ed, exactly as `StringRuntime`
 // exports the fused record's field offsets** (`stdlib/helpers/string/utf8.maxon`, verbatim). The three
@@ -29,16 +28,12 @@
 // `Character.codepoint` (`stdlib/Character.maxon:127-146`) already uses for the identical decode — same
 // arithmetic, and the form a machine-word graph wants.
 //
-// ⚠ **THIS FILE'S RUNTIME DECODER AND THE PARSER'S COMPILE-TIME ONE ARE TWO IMPLEMENTATIONS OF ONE
-// SPECIFICATION, AND THEY HELD TWO COPIES OF THE NUMBERS.** The compiler decodes UTF-8 in two places for two
-// genuinely different reasons — `Parser.decodeUtf8Sequence`/`appendUtf8Encoded` work on source bytes at
-// COMPILE time (a character literal, a `\uNNNN` escape), `__utf8_cp_at`/`__utf8_len_at` work on a record's
-// buffer at RUN time — and each had declared the same seven masks and shifts for itself, in a different
-// BASE (`0x3F` there, `63` here), plus a third spelling of 128 (`Utf8AsciiLimit` beside
-// `Utf8OneByteCeiling`) and two names apiece for 0xE0/0xF0. Nothing made the copies agree, and a
-// threshold corrected in one and not the other is exactly the failure `emitUtf8LeadLadder`'s header
-// describes one level down: a literal whose bytes the compiler writes one way and the segmenter reads
-// another, with no error raised anywhere. One declaration, read by both.
+// ⚠ **THE PARSER'S COMPILE-TIME CODEC AND THIS FILE'S RUNTIME ENCODER ARE TWO IMPLEMENTATIONS OF
+// ONE SPECIFICATION.** `Parser.decodeUtf8Sequence`/`appendUtf8Encoded` work on source bytes at
+// COMPILE time (a character literal, a `\uNNNN` escape); `__char_from_cp` encodes a codepoint at
+// RUN time. A threshold held in two copies and corrected in one is a literal whose bytes the
+// compiler writes one way and the program reads another, with no error raised anywhere. One
+// declaration, read by both.
 export let Utf8ContinuationMask = 0x3F as FullRangeInt
 export let Utf8ContinuationBits = 6 as FullRangeInt
 export let Utf8LeadTwoByteMask = 0x1F as FullRangeInt
@@ -47,21 +42,18 @@ export let Utf8LeadFourByteMask = 0x07 as FullRangeInt
 export let Utf8ThreeByteHighShift = 12 as FullRangeInt
 export let Utf8FourByteHighShift = 18 as FullRangeInt
 
-// The LEAD-BYTE floors. `Utf8LeadThreeByteFloor`/`Utf8LeadFourByteFloor` are also the upper limits of the
-// 2-byte / 3-byte bands, which is how the DECODER reads them (`emitUtf8LeadLadder`'s `lead < limit`) —
-// one boundary, one number, whichever side of it a reader stands on.
-//
-// ⚠ `Utf8LeadTwoByteFloor` (0xC0) is the only one the runtime ladder does NOT test: the compile-time
-// decoder refuses a bare continuation byte as a lead, while the runtime one classifies 0x80..0xDF as a
-// 2-byte sequence, matching the reference. That is a real difference in what the two decoders CHECK, not
-// a difference in what the encoding IS, so it lives in the code and not in the numbers.
+// The LEAD-BYTE floors. `Utf8LeadThreeByteFloor`/`Utf8LeadFourByteFloor` are also the upper limits
+// of the 2-byte / 3-byte bands, which is how the DECODER reads them (`Parser.decodeUtf8Sequence`'s
+// `b0 < Utf8LeadThreeByteFloor`) — one boundary, one number, whichever side of it a reader stands
+// on.
 export let Utf8LeadTwoByteFloor = 0xC0 as FullRangeInt
 export let Utf8LeadThreeByteFloor = 0xE0 as FullRangeInt
 export let Utf8LeadFourByteFloor = 0xF0 as FullRangeInt
 
 // The CODEPOINT ceilings that pick an encoding's width, and the continuation byte's `0b10` tag.
-// `Utf8OneByteCeiling` doubles as the ASCII boundary — the same 128 both decoders fork on, and the
-// number `Parser.AsciiCeiling` states about a source BYTE rather than a codepoint.
+// `Utf8OneByteCeiling` doubles as the ASCII boundary — the 128 both encoders
+// (`buildCharFromCodepoint`, `Parser.appendUtf8Encoded`) and `buildCharAscii` test, and the number
+// `Parser.AsciiCeiling` states about a source BYTE rather than a codepoint.
 export let Utf8OneByteCeiling = 128 as FullRangeInt
 export let Utf8TwoByteCeiling = 2048 as FullRangeInt
 export let Utf8ThreeByteCeiling = 65536 as FullRangeInt
@@ -76,30 +68,10 @@ let Utf8TwoByteLength = 2
 let Utf8ThreeByteLength = 3
 let Utf8FourByteLength = 4
 
-// ⭐ **`GraphemeState` PACKED INTO ONE MACHINE WORD**, because a Std runtime function returns exactly one
-// value and the state has two fields, `riCount` and `inEmojiSeq` (`grapheme.maxon`'s `GraphemeStateBits`
-// packs them the same way). Bit 0 is `inEmojiSeq`; the remaining bits are `riCount`.
-//
-// The COUNT is carried in full rather than just its parity, even though `isGraphemeBreak` reads only
-// `riCount mod 2`: keeping the field the rules are written against means a future GB rule that needs the
-// count finds it, and a shift costs exactly what a parity toggle would. A run long enough to overflow the
-// shift is a run of 2^63 regional indicators.
-
 // ⭐ **THE ENTRY POINTS.** All `__`-prefixed compiler-internal (`isCompilerInternalCallee` — no E3004, no
 // signature slotting) but NOT `__mm_`-prefixed, so none of them widens the heap decision by its prefix;
 // each declares its own transitive floor in `recordCallUsage` exactly as the String family does.
 //
-//   * `__gbp(cp)` — the Grapheme_Cluster_Break property, 0..13. ALSO user-callable as the bare free
-//     function `graphemeBreakProperty(cp)`, which is how the corpus tests it.
-//   * `__ext_pict(cp)` — Extended_Pictographic. User-callable as `isExtendedPictographic(cp)`.
-//   * `__utf8_cp_at(addr)` / `__utf8_len_at(addr)` — decode / sequence length at a raw ADDRESS rather than
-//     at a `(String, pos)` pair, because every caller here has already resolved a buffer and an offset and
-//     passing the record would make them re-derive what they hold.
-//   * `__gr_break(prevGbp, currGbp, currCp, state)` — the GB3–GB999 rules.
-//   * `__gr_state(state, gbp, cp)` — the RI-parity + emoji-ZWJ state transition.
-//   * `__gr_end(strRec, startPos)` — the END of the cluster starting at `startPos`. THE segmenter; both
-//     `count()` and `for c in s` go through it, which is what makes them agree (divergence 1).
-//   * `__gr_count(strRec)` — the cluster count, i.e. `String.count()`.
 //   * `__char_at(strRec, startPos, endPos)` — mint an OWNED `Character` from the byte range `[startPos,
 //     endPos)`. The ONE door a Character is born through.
 //   * `__char_from_cp(cp)` — mint an OWNED `Character` from a CODEPOINT, `__char_at`'s dual: it ENCODES
@@ -349,7 +321,7 @@ end 'emitOneByteCharArm'
 
 // One rung of the encoder's width ladder: `cp < ceiling` picks `narrow`, anything else `wider`. Three
 // identical forks written once, so a ceiling cannot be tested with the wrong predicate in one arm and the
-// right one in another (`emitRangeTable`'s reason, one function up).
+// right one in another.
 function emitUtf8WidthFork(module StdModule, block IrBlock, cp ValueId, ceiling FullRangeInt, narrow IrBlock, wider IrBlock, ids ValueMinter)
 	emitBranchOnCompare(module, block: block, value: cp, pred: StdCmpPred.lt, against: ceiling, whenTrue: narrow, whenFalse: wider, ids: ids)
 end 'emitUtf8WidthFork'

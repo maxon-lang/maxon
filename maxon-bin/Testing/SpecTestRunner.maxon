@@ -282,7 +282,7 @@ let WslExecFlag = "-e"
 // for the script and the binaries, and it is also the cwd every test program inherits. Those have
 // different right answers: the binaries live in the spec's scratch directory, and a test program must
 // stand in `specRunWorkingDir()` — `<checkoutRoot>/temp/` — like every program the other three lanes
-// spawn (`spawnOneRun` passes it as `workingDirectory`).
+// spawn (`spawnExecution` passes it as `workingDirectory`).
 //
 // ⛔ **MEASURED: pointing `--cd` at the scratch directory silently gave this lane a DIFFERENT cwd from
 // every other, and four `directory.md` cases read `../bin` and found nothing.** They failed as a wrong
@@ -293,11 +293,12 @@ let WslExecFlag = "-e"
 // path the script names afterwards is anchored at `$R` so the step cannot move it.
 let GuestRootShellName = "R"
 
-// ⭐⭐ **THE `<!-- stdin: … -->` MARKER, CARRIED INTO THE BATCH — because a facility the direct-spawn path
-// honours and the batch path drops is a WRONG ANSWER, not a missing feature.** `spawnOneRun` hands each
-// child an `InputSource` built by `runStdinFor`; the batch execs its binaries from a shell, so the same
-// three shapes are built out of a redirection instead. One token per arm, dispatched by a `case` in the
-// script, so a fourth arm cannot be added to `SpecStdin` without this table failing to compile.
+// ⭐⭐ **THE `<!-- stdin: … -->` MARKER, CARRIED INTO THE BATCH — because a facility the direct-spawn
+// path honours and the batch path drops is a WRONG ANSWER, not a missing feature.**
+// `spawnExecution` hands each child an `InputSource` built by `runStdinFor`; the batch execs its
+// binaries from a shell, so the same three shapes are built out of a redirection instead. One token
+// per arm, dispatched by a `case` in the script, so a fourth arm cannot be added to `SpecStdin`
+// without this table failing to compile.
 //
 // ⛔ **MEASURED: without this, the three `sched-syscall-handoff` cases carrying `stdin: delayed` read EOF
 // at once on x64-linux** — `read=0` where the case pins `read=5`, and the sentinel/reader ORDER the case
@@ -376,11 +377,11 @@ end 'wslProbeScript'
 // program the SAME working directory a per-test path would, test for test — which is the only
 // reason batching is a speed change and not a behaviour change.
 //
-// ⭐ **THE RESULTS COME BACK THROUGH FILES, NOT A DELIMITED STDOUT STREAM.** A stream needs framing and
-// escaping, and a test program emits arbitrary bytes — the worker wire protocol already had to escape
-// backslash-laden diagnostics for exactly this reason. Three files per test need no framing, no
-// escaping and no ordering assumption, and they are KEYED BY THE BINARY'S OWN FILENAME (`batchKeyFor`),
-// which is why reading them back needs no index bookkeeping at all.
+// ⭐ **THE RESULTS COME BACK THROUGH FILES, NOT A DELIMITED STDOUT STREAM.** A stream needs framing
+// and escaping, and a test program emits arbitrary bytes — the worker wire protocol already had to
+// escape backslash-laden diagnostics for exactly this reason. Three files per test need no framing,
+// no escaping and no ordering assumption, and they are KEYED BY THE BINARY'S OWN FILENAME
+// (`Execution.key`), which is why reading them back needs no index bookkeeping at all.
 //
 // ⚠ **THEY LIVE IN A SUBDIRECTORY OF THE SCRATCH DIR, NOT IN IT.** `<test>.out` beside the binaries
 // would share a namespace with the compiler's own outputs, where `<name>.ir` and `<name>.metrics`
@@ -1341,7 +1342,7 @@ end 'chosenByFilter'
 // measurement of somebody else's uptime wearing this compiler's name.
 //
 // ⚠ **AND UNLIKE `markerAllowsTarget`, A CASE IT GATES OUT IS NEVER SILENT** (see
-// `reportNetworkExclusions`). A target restriction excludes a case that this machine could not have
+// `reportExclusions`). A target restriction excludes a case that this machine could not have
 // judged either way; this excludes one that WOULD have run, on a machine that could have run it, because
 // the operator did not ask for it. That is coverage a reader has to be told they are not getting.
 function networkModeAllows(test SpecTest, includeNetwork bool) returns bool
@@ -3455,7 +3456,7 @@ end 'checkCompilerError'
 
 // The executable + argv pair one RUN goes through, whichever target produced the binary. The host's
 // own binary runs with no argv; a wasm module goes behind wasmtime and its flags; an ELF goes behind
-// `orb run`. One type so the single `runProcess` call in `spawnOneRun` is target-agnostic.
+// `orb run`. One type so the single `runProcess` call in `spawnExecution` is target-agnostic.
 //
 // `exe` is an `Executable`, not a `FilePath`, because the three runners are found in genuinely
 // different ways and the stdlib already names that difference: a built binary and the VENDORED
@@ -3612,9 +3613,9 @@ function buildRunCommand(modulePath FilePath, effectiveTarget Target, programArg
 		wsl panic("SpecTestRunner: the {targetToString(effectiveTarget)} lane runs a whole spec in one {WslExecutableName} entry (see runWslBatch), so it has no per-test run command — `runStrategyFor` and `buildRunCommand` disagree about this target")
 
 		// ⛔ NOT A GAP EITHER, and the same disagreement said the other way round: nothing on this host
-		// can spawn such a binary, so `runStrategyFor` routes the whole lane to `unrunnableHere` and no
-		// execution is ever attempted. Reaching here means a run WAS attempted for a target the table
-		// had just said had no runner.
+		// can spawn such a binary, so `runStrategyFor` routes the whole lane to `RunStrategy.noneHere`
+		// and no execution is ever attempted. Reaching here means a run WAS attempted for a target the
+		// table had just said had no runner.
 		unspawnable panic("SpecTestRunner: nothing on this host can execute a {targetToString(effectiveTarget)} binary, so there is no run command to build — `runStrategyFor` and `buildRunCommand` disagree about this target")
 	end 'runner'
 
@@ -3627,10 +3628,10 @@ end 'buildRunCommand'
 
 // ⭐ `maxon monitor --filter=<family> <exe> [args…]` — the capture command.
 //
-// ⚠ **THE MONITOR'S EXIT CODE IS THE CHILD'S** (`DebugStreamMonitor.Run` returns `process.ExitCode`), so
-// an ```exitcode block on a capture case is checked against the same number it would have been without
-// the monitor — EXCEPT when the monitor itself died, which is exactly why the exit code is checked FIRST.
-// See `checkTraceCapture`.
+// ⚠ **THE MONITOR'S EXIT CODE IS THE CHILD'S** (`MonitorCommand.watchTarget` returns the child's),
+// so an ```exitcode block on a capture case is checked against the same number it would have been
+// without the monitor — EXCEPT when the monitor itself died, which is exactly why the exit code is
+// checked FIRST. See `checkTraceCapture`.
 //
 // ⚠ It is the HOST path only, and it has to be: the monitor SPAWNS the binary, so a capture case on a
 // target this host cannot run is skipped before it is ever compiled (`targetCanCaptureTrace`).
@@ -4355,7 +4356,7 @@ let SpecStdinDelayedLine = "hello\n"
 // in the kernel AND RETURNS, so the program exits on its own and the case pins an answer instead of a
 // timeout — and a program slow to reach its first print is fed no earlier for it, so a case that prints a
 // ready line immediately before its read can pin that the read genuinely blocked. The runtime demands a
-// collected stdout for that anchor, which `spawnOneRun` always gives.
+// collected stdout for that anchor, which `spawnExecution` always gives.
 //
 // ⛔ **IT MAY NOT BE DONE BY LEAVING THE PIPE TO THE PARENT'S OWN STDIN**, for `runEnvironmentFor`'s
 // reason one field over: that would make the answer a property of how the SUITE was invoked — a pipe
@@ -4649,8 +4650,9 @@ function guestRootPath(scratch String) returns String
 	return "${GuestRootShellName}{PathSeparator}{scratch}"
 end 'guestRootPath'
 
-// The delayed line's file, on the guest side — `batchStdinFilePath`'s twin, and a pair for the reason
-// `guestCapturePath` and `batchCapturePath` are one: the writer and the reader must name one file.
+// The delayed line's file, on the guest side — the twin of `launchBatch`'s `stdinPath`, and a pair
+// for the reason `guestCapturePath` and `batchCapturePath` are one: the writer and the reader must
+// name one file.
 function guestStdinPath(scratch String) returns String
 	return "{guestRootPath(scratch)}{PathSeparator}{BatchSubdirName}{PathSeparator}{BatchStdinFileName}"
 end 'guestStdinPath'

@@ -501,8 +501,7 @@ let MOffIdleNext = MOffAllNext + PointerSlotBytes
 // machine claim it, be handed a different processor, and enter call *N+1*. Its state word reads `Active`
 // again, so the CAS SUCCEEDS — against a different call, on a processor a second machine is now running.
 // The handoff that follows would start a machine on a ring another machine already owns: two lock-free
-// writers on one ring and one allocator shard, which is `emitSchedClaimProc`'s heap corruption arriving by
-// a new road.
+// writers on one ring and one allocator shard.
 //
 // ⇒ **the value sysmon compare-and-swaps must be one NO SUBSEQUENT CALL CAN PRESENT**, which is what Go's
 // generation counter is for and why `setBlockOnExitSyscall` re-validates `g→m→p` under a lock bit at all.
@@ -749,13 +748,15 @@ let MStructSize = ((MOffPreemptOff + PointerSlotBytes) as FullRangeInt)
 // than omitted, for the reason `GtRuntime` reserves the GT's 0x60–0xA0 window: a field added later at a
 // different offset is a layout fork, and a layout fork under a shared reader is a silent wrong answer.
 //
-// ⚠⚠ **A P IS NOT ITS M, WHICH IS WHY THREE FIELDS SIT ON THE M INSTEAD.** A P bound to one OS thread for
-// life keeps `currentGt` at 0x18, a system stack at 0x70 and an inline `mainThread` at 0x80; a P that can
-// be HANDED to another M cannot, so those three live on the M (see its section above) and their P slots are
-// reserved rather than reused. `id`, `rng`, `idleFlag`, `wakeEvent`, `osThreadHandle` and `status` stay exactly
-// where they are. ⚠ **SIX header words are RESERVED and read a permanent zero rather than a value** —
-// `currentGt`, the system stack, `idleFlag`, `wakeEvent`, `osThreadHandle` and 0x50 — which is worth saying
-// plainly to anyone grafting a reader onto this header.
+// ⚠⚠ **A P IS NOT ITS M, WHICH IS WHY THREE FIELDS SIT ON THE M INSTEAD.** A P bound to one OS
+// thread for life keeps `currentGt` at 0x18, a system stack at 0x70 and an inline `mainThread` at
+// 0x80; a P that can be HANDED to another M cannot, so those three live on the M (see its section
+// above) and their P slots are reserved rather than reused. `id`, `rng`, `POffReservedIdleFlag`,
+// `POffReservedWakeEvent`, `POffReservedOsThreadHandle` and `status` stay exactly where they are.
+// ⚠ **EVERY `POffReserved*` header word reads a permanent zero rather than a value** — the
+// local-queue length at 0x10, `currentGt`, `POffReservedIdleFlag`, `POffReservedWakeEvent`,
+// `POffReservedOsThreadHandle`, 0x50, the system stack and the remote-free head — which is worth
+// saying plainly to anyone grafting a reader onto this header.
 //
 // ⚠⚠ **THE TAIL CARRIES A 256-SLOT RING**, which a linked local queue has no equivalent of, so only the
 // HEADER is portable; the tail grafts onto nothing and the total size is its own.
@@ -801,7 +802,7 @@ export let POffId = 0x20 as ByteOffset
 let POffRng = 0x28
 
 // ⭐⭐ **A RESERVED PARK-FLAG SLOT, AND NOTHING HERE HAS A TWIN OF IT.** It would be one half of a Dekker
-// pair: 1 meaning *"this M has published that it is about to block on `wakeEvent`"*,
+// pair: 1 meaning *"this M has published that it is about to block on `MOffParkEvent`"*,
 // written to 1 by the parking M with a `lock cmpxchg` (the LOCK prefix being the StoreLoad fence) and taken
 // 1 -> 0 by whichever enqueuer won the right to signal.
 //
@@ -907,7 +908,7 @@ let POffSchedTick = 0x80 as ByteOffset
 // per-P word and not a `.data` counter because a `.data` word is
 // visible in the rendered Target IR's `data {` section, so one added here would move the emitted
 // image of every green-thread program to carry a number nothing but a torture harness reads.
-// Owner-written, like `schedTick`, and summed across `__sched_procs` by `__sched_steal_count`.
+// Owner-written, like `POffSchedTick`, and summed across `__sched_procs` by `__sched_steal_count`.
 let POffStealCount = POffSchedTick + PointerSlotBytes
 
 // ⭐⭐ **HOW MANY TIMES THIS PROCESSOR HAS BEEN RETAKEN FROM A MACHINE STUCK IN A KERNEL CALL — the reading
@@ -992,7 +993,7 @@ let POffPidleNext = POffRemoteFreeCount + PointerSlotBytes
 
 // ⭐ **HOW MANY GT RECORDS THIS P's FREE LIST HAS SERVED — the reading `__Builtins.schedGtRecycleCount()`
 // sums.** Stepped by `__gt_free_get` on every allocation its local list answered, owner-written like
-// `schedTick`, and a per-P word for `POffStealCount`'s reason.
+// `POffSchedTick`, and a per-P word for `POffStealCount`'s reason.
 let POffGtRecycleCount = POffPidleNext + PointerSlotBytes
 
 // ⭐⭐ **THE MACHINE HOLDING THIS PROCESSOR, OR 0 — Go's `p.m`.** Written beside `M->currentP` by the two doors
@@ -1206,8 +1207,8 @@ let SchedMaxMachines = 10000
 // them require `__sched_lock` (Go: `assertLockHeld` at `mput` and `mget`).
 //
 // ⭐⭐ **A LIST RATHER THAN A SCAN OF THE PROCESSORS, BECAUSE A PARKED MACHINE HOLDS NO PROCESSOR TO BE FOUND
-// BY.** Membership is decided under the one lock, with no `idleFlag` beside it (`POffReservedIdleFlag`), so
-// there is no fence for a lock-free scan to preserve.
+// BY.** Membership is decided under the one lock, with no idle flag beside it
+// (`POffReservedIdleFlag`), so there is no fence for a lock-free scan to preserve.
 //
 // `underSchedLock`, for `SchedAllMLabel`'s reason and one more: `__sched_startm` reads it in the hold that
 // takes an idle processor, so a wake finds a parked machine here or creates one (`buildSchedLoop`'s park).
@@ -2833,7 +2834,7 @@ end 'emitSchedStepLockedCount'
 // ⭐⭐⭐ **GO'S `pidleput` — "THIS PROCESSOR IS IDLE".** Membership of `__sched_pidle`, `POffStatus` and
 // `__sched_npidle` are one fact written in three places, so they move together or not at all;
 // `emitSchedPidleGetLocked` is the other half, and the two are the only doors to all three. **A writer of
-// `POffStatus` outside this pair is what restores `emitSchedClaimProc`'s heap corruption.**
+// `POffStatus` outside this pair is how one processor comes to be held by two machines.**
 //
 // ⚠ The status is written before the push. Membership is what makes this processor claimable, so it may not
 // be published while the word beside it still says a machine is here.
@@ -2920,8 +2921,7 @@ end 'emitSchedPidleClaimLocked'
 // ⛔ **THE PUSH IS LAST AND THAT IS THE WHOLE ORDERING ARGUMENT.** Membership of `__sched_pidle` is what
 // makes this P claimable; a P published there while `M->currentP` still named it would be handed to a second
 // M whose `emitSchedAdoptProc` then overwrites a word the first M is still about to clear — two machines
-// believing they hold one processor, which is one allocator shard with two lockless writers
-// (`emitSchedClaimProc`'s history, arriving by a different road).
+// believing they hold one processor, which is one allocator shard with two lockless writers.
 function emitSchedReleaseProcLocked(module StdModule, func IrFunction, cur IrBlock, m ValueId, p ValueId, holdsWorkLabel ByteArray, emptyLabel ByteArray, ids ValueMinter) returns IrBlock
 	emitSchedDetachProcLocked(module, block: cur, m: m, p: p, ids: ids)
 	return emitSchedPidlePutLocked(module, func: func, cur: cur, p: p, holdsWorkLabel: holdsWorkLabel, emptyLabel: emptyLabel, ids: ids)

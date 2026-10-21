@@ -290,9 +290,9 @@ end 'referencedBuiltinImpls'
 // The candidate impls no function in the module already defines — see `referencedBuiltinImpls`' second
 // warning for the wrong answer this exists to prevent.
 //
-// ⭐ **ONE WALK OF `module.functions`, NOT ONE PER CANDIDATE.** A `moduleDefinesFunction` helper asked per
-// impl rescans the WHOLE array each time — O(impls × functions), which with a constant eleven candidates is
-// ELEVEN full walks of every compile's function array.
+// ⭐ **ONE WALK OF `module.functions`, NOT ONE PER CANDIDATE.** A lookup asked per impl rescans the
+// WHOLE array each time — O(impls × functions), which with a constant eleven candidates is ELEVEN
+// full walks of every compile's function array.
 //
 // The eleven questions are the same question asked of one array, so it is asked once per FUNCTION instead:
 // the outer walk reads each `IrFunction` record exactly once — the expensive half — and the inner test is
@@ -552,7 +552,7 @@ end 'emitFloatBitsFold'
 // ⚠ **THE PARAMETER IS DECLARED f64, WHICH IS WHY THIS USES `emitTypedParams` AND NOT `emitParams`.**
 // The all-i64 `emitParams` states the GPR-only internal ABI every other one-parameter runtime chunk
 // uses; here the receiver arrives in an XMM register, and the declared type is what both ends read
-// (`calleeParamClass` to route the argument, `lowerParam` to capture it). The RESULT is still the
+// (`calleeArgFloatMask` to route the argument, `lowerParam` to capture it). The RESULT is still the
 // uniform `builtinProtocolResultStdType(HashValue)` = i64 — one spelling, as every witness-visible
 // impl's must be.
 //
@@ -615,11 +615,11 @@ function emitLow32Masked(module StdModule, block IrBlock, value ValueId, ids Val
 	return emitBin(module, block: block, a: value, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
 end 'emitLow32Masked'
 
-// The two-operand Std function every builtin `equals`/`compare` impl is: two parameters of its OWN operand
-// type, returning the type the INTERFACE METHOD it implements declares. ONE place where the declared ABI and
-// the operand width meet, so a caller cannot pair an f64 compare with i64 parameters — which would route the
-// arguments through the WRONG register file at every call site (`calleeParamClass` reads exactly these
-// declared types) with nothing to report it.
+// The two-operand Std function every builtin `equals`/`compare` impl is: two parameters of its OWN
+// operand type, returning the type the INTERFACE METHOD it implements declares. ONE place where the
+// declared ABI and the operand width meet, so a caller cannot pair an f64 compare with i64
+// parameters — which would route the arguments through the WRONG register file at every call site
+// (`calleeArgFloatMask` reads exactly these declared types) with nothing to report it.
 //
 // ⭐ **THE RESULT TYPE IS THE INTERFACE'S, NOT A UNIFORM MACHINE WORD, AND THAT IS A WITNESS-TABLE
 // OBLIGATION.** These impls are installed into a witness table typed by the interface,

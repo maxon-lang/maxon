@@ -129,9 +129,10 @@ export union MaxonType
 	// `id` is the interned name that GOVERNS the value's signature: the FUNCTION's own name for a
 	// `functionRef` (`let f = double` → `function(intern("double"))`), or a function-TYPEALIAS name
 	// for a declared place (`f UnaryOp` → `function(intern("UnaryOp"))`). An indirect call recovers
-	// the return type by that name (`ProgramSignatures.returnTypeOf` / `functionAliasReturnOf`), which
-	// is why the id is a real interned NAME and rides the value column's name slot exactly as
-	// `named`/`structRef` do — it interns, remaps and hashes by the same machinery.
+	// the return type by that name (`ProgramSignatures.returnTypeOf` /
+	// `maxonTypeOfStoredAliasReturn`), which is why the id is a real interned NAME and rides the value
+	// column's name slot exactly as `named`/`structRef` do — it interns, remaps and hashes by the same
+	// machinery.
 	//
 	// It is its OWN arm, NEVER `named`, for the identical reason `structRef`/`string` are: the five
 	// rules that read `named` (`typeClassOf`, `tagIsIntegral`, `typeTagName`, `notOperatorFor`,
@@ -1378,7 +1379,7 @@ export enum CalleeMint
 	paramDefaultHelper
 
 	// ⭐ `FilePath from "C:\x.txt"` → `FilePath.init(…)`, minted by
-	// `Parser.parseStringLiteralInitConstruction`.
+	// `Parser.parseLiteralInitConstruction`.
 	//
 	// It exists because the author writes NO MEMBER NAME in this form — the `init` is the
 	// `InitableFromStringLiteral` requirement the compiler dispatches to — so cross-file VISIBILITY has
@@ -1906,7 +1907,7 @@ export union MaxonOp
 	//
 	// The ADDRESS of a data-section global. `label` is identifier TEXT (a NAME, looked up —
 	// not a value), per the MaxonOp header's value/name split, and it is the storage label
-	// `ProgramSignatures` derived — see `SignatureIndex.dataLabelFor`.
+	// `ProgramSignatures` derived — see `SignatureIndex.assignDataLabels`.
 	globalAddr(result ValueId, let label ByteArray) = MaxonOpMeta{category: OpCategory.varAccess}
 
 	// Read a `valueType` value from `addr + offset`. `valueType` is the SOURCE-level type
@@ -2030,11 +2031,12 @@ export union MaxonOp
 	// SPAWN a green thread running `callee(args…)` and yield a Promise handle. The Maxon-tier twin of
 	// `call` — same (callee NAME, args, `name:` labels, ranges) shape, so lowering slots the labelled
 	// args into parameter order exactly as `lowerCall` does — but instead of RUNNING the call it
-	// lowers to `__gt_spawn(funcAddr(callee), argBuf)`, spilling the scalar args into `argBuf`.
-	// `result` is the i64 promise handle (the spawned GT's pointer). The parser rejects an async arg
-	// or result that does not ride the GPR channel (`tagRidesAsyncGprChannel`) before this op is
-	// emitted, so every `args` value and the callee's return are GPR words. `argImmutableNames`
-	// carries the same per-argument blame names a plain `call` does — see there.
+	// lowers to `__gt_spawn(funcAddr(callee))`, spilling the scalar args into the spawned GT's inline
+	// arg region (`GtOffArgInline`). `result` is the i64 promise handle (the spawned GT's pointer).
+	// The parser rejects an async arg or result that does not ride the GPR channel
+	// (`tagRidesAsyncGprChannel`) before this op is emitted, so every `args` value and the callee's
+	// return are GPR words. `argImmutableNames` carries the same per-argument blame names a plain
+	// `call` does — see there.
 	asyncCall(result ValueId, let callee ByteArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, let argImmutableNames WriteBlameArray, argDefaultSlots ParamCountArray, mint CalleeMint) = MaxonOpMeta{category: OpCategory.awaiting}
 
 	// AWAIT `promise`'s green thread and yield its result. `promise` is the i64 handle `asyncCall` produced;

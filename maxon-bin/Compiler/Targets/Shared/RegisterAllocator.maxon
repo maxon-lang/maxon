@@ -1715,13 +1715,14 @@ end 'StuckValues'
 // is an expected outcome, not a bug: it is relieved by splitting (`SplitDriver.repairAtExhaustion`) and
 // the function is coloured again.
 //
-// ⚠⚠ **IT BATCHES, AND THAT IS THE WHOLE COST ARGUMENT.** One repair per re-colour is
-// O(repairs × function), and repairs are NOT O(1): `Testing/ScaleCorpus`'s `pressuredLoops` and
-// `floatSpill` are ONE function with N loops each holding K values live across a call, so a single knob
-// gives R = Θ(N) against a function of size Θ(N). That is the exact quadratic `SplitLiveRanges`'s header
-// records REMOVING from the splitter (*"K splits × O(function) … a genuine QUADRATIC, and pure waste"*),
-// and reintroducing it one pass over would be no better. So ONE colouring pass collects EVERY stuck
-// value, the driver applies all their splits, and ONE re-colour follows.
+// ⚠⚠ **IT BATCHES, AND THAT IS THE WHOLE COST ARGUMENT.** One repair per re-colour is O(repairs ×
+// function), and repairs are NOT O(1): `Testing/ScaleCorpus`'s `pressuredLoopsSource` and
+// `floatSpillSource` emit ONE function with N loops each holding K values live across a call, so a
+// single knob gives R = Θ(N) against a function of size Θ(N). That is the exact quadratic
+// `SplitLiveRanges`'s header records REMOVING from the splitter (*"K splits × O(function) … a
+// genuine QUADRATIC, and pure waste"*), and reintroducing it one pass over would be no better. So
+// ONE colouring pass collects EVERY stuck value, the driver applies all their splits, and ONE
+// re-colour follows.
 //
 // ⚠ **THE BATCH BOUNDS THE COMMON CASE, NOT THE WORST ONE, AND THAT IS DELIBERATE.** A pass that gets
 // stuck gives the value a PROVISIONAL register so the sweep can carry on (see `reportExhaustion`), which
@@ -2350,7 +2351,7 @@ end 'allocateDef'
 // ⚠ IT CANNOT CATCH A MIS-DECLARED CLASS. It compares the colour against the DECLARED class, so a
 // float that was never declared `xmm` is coloured into a GPR and agrees with itself here. Declaring
 // the class correctly is the op's job and nothing downstream can check it — see
-// `TargetLiveness.makeRegClassColumn`.
+// `TargetLiveness.assertClassColumnCovers`.
 function assertColouredInClass(v ValueId, reg RegNum, class RegClass, file RegisterFile)
 	if regClassIn(reg, file: file) != class 'wrongFile'
 		panic("assertColouredInClass: value {v} is a {class.name} value but was coloured into register {reg}, which is in the {regClassIn(reg, file: file).name} file — a route to a register bypassed the class filter in `allocateDef`'s `blocked` mask. An int in an XMM (or a float in a GPR) encodes to a different instruction, so this is a silent miscompile, not a performance bug.")

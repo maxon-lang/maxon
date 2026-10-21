@@ -66,18 +66,17 @@
 //      reachability rather than as membership precisely because the fix outlives this file.
 //
 // ⛔⛔ **THE INVARIANT IS ABOUT CODE, AND IT CANNOT BE ABOUT DECLARED NAMES.** Both mechanisms above
-// prune what a program does not CALL. Neither can prune what a program does not SPELL, because a name is
-// resolved before there is any code to eliminate: a `typealias` in a stdlib module is nameable from every
-// program the moment the FILE lands, and SO IS ITS RANGE. MEASURED: `stdlib/File.maxon:45` writes
-// `export typealias Byte = int(0 to u8.max)` and is the only stdlib module that declares `Byte` at all
-// (checked at the source — `helpers/url/urlHelpers.maxon`'s is `ByteValue`, a different name). A `b"…"`
-// literal's element is that same user-visible `Byte` BY DESIGN (`SignatureIndex.isByteElementName`'s
-// roster), so a byte literal's element carries declared BOUNDS and `a.set(0, value: n)` carries the
-// narrowing check they imply — which moves the emitted code of
-// `byte-string-literal.detached-literal-drops-clean`, a program that never mentions `File`. The
-// move is a PURE INSERTION and the program's meaning is unchanged (its `n` is 0…4 against
-// `0 to 255`, so the guard cannot fire; same stdout, same exit code) — but the emitted bytes DID
-// move, and the sentence above says they may not.
+// prune what a program does not CALL. Neither can prune what a program does not SPELL, because a
+// name is resolved before there is any code to eliminate: a `typealias` in a stdlib module is
+// nameable from every program the moment the FILE lands, and SO IS ITS RANGE.
+// `stdlib/String.maxon:22` writes `public typealias Byte = int(0 to u8.max)` and is the only stdlib
+// module that declares `Byte` at all. A `b"…"` literal's element is that same user-visible `Byte`
+// BY DESIGN (`SignatureIndex.isByteElementName`'s roster), so a byte literal's element carries
+// declared BOUNDS and `a.set(0, value: n)` carries the narrowing check they imply — in the emitted
+// code of `byte-string-literal.detached-literal-drops-clean`, a program that never writes `Byte`.
+// The guard is a PURE INSERTION and the program's meaning is unchanged (its `n` is 0…4 against `0
+// to 255`, so the guard cannot fire; same stdout, same exit code) — but it is emitted code the
+// program did not ask for, which the sentence above says a module may not add.
 //
 // ⇒ **READ IT AS: adding a module changes nothing for a program that does not use it, EXCEPT through the
 // names it DECLARES — and a declared name is not something a program opts into.** That is not a loophole

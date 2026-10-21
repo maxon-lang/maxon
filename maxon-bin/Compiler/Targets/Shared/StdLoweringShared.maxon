@@ -475,7 +475,7 @@ end 'runtimeChunkArgFloatMask'
 // silent wrong answer, never a compile error. So the rule is stated here exactly once and both ends
 // consult it.
 //
-// ⚠ STATING IT TWICE — a recomputing `computeParamSlotIndex` on the callee side and a running-counter
+// ⚠ STATING IT TWICE — a recomputing slot index on the callee side and a running-counter
 // twin of it inside each backend's argument loop — is survivable only while every argument fits a
 // register, because two monotone counters over the same list cannot disagree. It stops being survivable
 // the moment an argument can OVERFLOW, because "which slot" then means two different things — an index within one
@@ -903,9 +903,9 @@ export type ScaledIndexFolds
 	var arithDefBlock as BlockRefArray
 	var arithDefs as StdValueUseSet
 
-	// The two scratch records the walk refills per op. Fields rather than locals for
-	// `StdToX64Conversion.fuseIfDefines`' measured reason: a fresh heap object per op of every function
-	// the backend lowers cost ~3,500 allocations on the SMALLEST scale rung.
+	// The two scratch records the walk refills per op. Fields rather than locals for the reason
+	// `fuseIfDefines` gives: a local would be a fresh heap object per op of every function the
+	// backend lowers.
 	var operands as StdArithOperands
 	var scaleMatch as MemoryIndexScaleMatch
 
@@ -1488,14 +1488,13 @@ typealias BodyOpPositionArray = Array with ElementIndex
 
 // Record `condId` as fusable, but only when `pred`'s compare is the one that DEFINES it.
 //
-// NO `Optional`-shaped return anywhere in this analysis, and that is a MEASURED constraint
+// NO `Optional`-shaped return anywhere in this analysis, and that is a cost constraint
 // rather than a style preference. A payload-carrying union is HEAP-BOXED in Maxon (see
 // StdDialect's header), and the natural spelling of the two questions this analysis asks —
 // "what value does this compare define?" and "what predicate does it carry?" — asks them
 // ONCE PER STD OP, which puts a fresh heap object on every op of every function the backend
-// lowers. The first cut of this pass did exactly that, and `scale-test` charged it ~3,500
-// allocations on the SMALLEST rung. So every classifier here either returns a `bool` or
-// writes its answer through an accumulator it is handed, and allocates nothing.
+// lowers. So every classifier here either returns a `bool` or writes its answer through an
+// accumulator it is handed, and allocates nothing.
 // Both columns are written HERE, by this one call, which is what keeps them in lockstep — the
 // predicate and the float-ness of the compare carrying it can never disagree, because nothing
 // can write one without the other.
@@ -1512,9 +1511,9 @@ function fuseIfDefines(fused FusedPredColumn, floatCmps StdValueUseSet, unsigned
 	//
 	// ⭐ **THE SIGNEDNESS IS THE THIRD COLUMN AND IT IS THE VALUE's FOR THE SAME REASON THE FLOAT-NESS
 	// IS.** Both are projections of the ONE `operandType` the defining op carries, taken here because
-	// this is the one place that op is in hand; both are read only after a `cmpPreds` hit; and both are
-	// dense bool columns rather than a stored `StdType` for `fusedFloatCmps`' measured reason — a
-	// program with no unsigned ordering compare inserts nothing and allocates no backing array.
+	// this is the one place that op is in hand; both are read only after a `FusedPredColumn` hit; and
+	// both are dense bool columns rather than a stored `StdType` for the reason `fusedFloatCmps` gives
+	// — a program with no unsigned ordering compare inserts nothing and allocates no backing array.
 	//
 	// ⚠ THE TWO ARE DISJOINT BY CONSTRUCTION, not by a rule anyone maintains: `stdTypeIsUnsigned` is
 	// false for every float `StdType`, and `comparisonSignedness` never routes a float here at all.
@@ -1561,8 +1560,8 @@ export type CompareFusionCensus
 	// — the condition-code family and x64's parity split — need to know only whether the compare is
 	// a float one; nobody asks f32-vs-f64 or i8-vs-i64. A `Map with (ValueId, StdType)` here would
 	// store a full type per compare so that every reader could immediately throw all but one bit
-	// of it away, and MEASURED it cost ~4.7 allocations PER FUSED COMPARE — ~1,300 of a +1,528
-	// rung-0 delta — on a corpus that contains no float at all. A column nobody reads is not free.
+	// of it away, and would allocate per fused compare even in a program that contains no float.
+	// A column nobody reads is not free.
 	//
 	// A dense bool column (`StdValueUseSet`), so an all-integer function inserts NOTHING and the
 	// backing array is never allocated: the cost is zero for programs that use no floats, rather
@@ -1573,9 +1572,10 @@ export type CompareFusionCensus
 	// dense set): dropping the `fusedPreds` entry makes the entry here unreachable.
 	var fusedFloatCmps as StdValueUseSet
 
-	// ⭐ THE FUSED COMPARES WHOSE ORDERING IS UNSIGNED — `fusedPreds`' THIRD column, written at the same
-	// instant by the same call (`fuseIfDefines`), and a dense bool column for `fusedFloatCmps`' measured
-	// reason. A program whose every ordering compare is signed inserts nothing into it.
+	// ⭐ THE FUSED COMPARES WHOSE ORDERING IS UNSIGNED — `fusedPreds`' THIRD column, written at the
+	// same instant by the same call (`fuseIfDefines`), and a dense bool column for the reason
+	// `fusedFloatCmps` gives. A program whose every ordering compare is signed inserts nothing into
+	// it.
 	var fusedUnsignedCmps as StdValueUseSet
 
 	// Every value this function reads AS A VALUE — out of a REGISTER, rather than as the flags a
@@ -1625,7 +1625,7 @@ export type CompareFusionCensus
 	end 'fusedComparePositionOf'
 
 	// Whether the fused compare defining `valueId` compared FLOATS, which selects the NaN-safe condition
-	// family. Only ever asked after a `blockFusesCompare` hit — see `floatCmps`.
+	// family. Only ever asked after a `blockFusesCompare` hit — see `fusedFloatCmps`.
 	export function fusedCompareIsFloat(valueId ValueId) returns bool
 		return self.fusedFloatCmps.contains(valueId)
 	end 'fusedCompareIsFloat'

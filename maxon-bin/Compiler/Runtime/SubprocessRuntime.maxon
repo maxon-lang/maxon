@@ -11,10 +11,10 @@
 // `__gt_subp_spawn_core` creates the pipes, fills a `STARTUPINFO`, calls `CreateProcessW` with
 // `bInheritHandles=TRUE` and claims a slot in the 64-entry handle table — with the register-pressure
 // discipline, the slot GENERATION and the buffer reuse. Every spelling a
-// program can spawn a child with fills a REQUEST RECORD (`SubpReqCommand`) and calls that one core, so both
-// spawns claim a slot in the SAME table and `subprocessReleaseHandle` / `subprocessCloseStdin` serve either
-// without knowing which minted the handle. Two cores would have been two places for the pipe-inheritance
-// rules to drift apart.
+// program can spawn a child with fills a REQUEST RECORD (`GtRuntime`'s `SubpReq…` fields) and calls
+// that one core, so both spawns claim a slot in the SAME table and `subprocessReleaseHandle` /
+// `subprocessCloseStdin` serve either without knowing which minted the handle. Two cores would have
+// been two places for the pipe-inheritance rules to drift apart.
 //
 // ⭐⭐ **EVERY ENTRY HERE IS A Std-IR GRAPH.** There is no hand-emitted machine-code tier: the runtime is
 // Std-IR graphs a backend then lowers.
@@ -249,9 +249,9 @@ let ResErrBuf = 40
 let ResErrLen = 48
 let ResBytes = 56
 
-// ⭐ **THE COMMAND-LINE BUILDER'S STATE, IN MEMORY** — this file's header again. `needsQuote` and `scanStart`
-// are per-ARGUMENT and live across the inner scan, which is exactly what a block argument could not carry
-// without threading it through every block of both loops.
+// ⭐ **THE COMMAND-LINE BUILDER'S STATE, IN MEMORY** — this file's header again. `ClNeedsQuote` and
+// `ClScanStart` are per-ARGUMENT and live across the inner scan, which is exactly what a block
+// argument could not carry without threading it through every block of both loops.
 let ClArgvBuf = 0
 let ClArgc = 8
 let ClOut = 16
@@ -681,10 +681,10 @@ let AvBytes = 40
 // BLOCK turned into a NULL-terminated pointer vector, with NO copying.
 //
 // The block is `NAME=VALUE` entries back to back, each NUL-terminated, then one more NUL
-// (`stdlib/Subprocess.maxon`'s `buildEnvBlock`), which is already the byte layout an `envp[]` points INTO —
-// so each slot addresses the block itself, exactly as `buildSubpArgvVector`'s slots address the argv blob,
-// and for the same reason: the block is a buffer the caller holds for the whole spawn, which is how long
-// `execve` reads it for.
+// (`stdlib/Subprocess.maxon`'s `spawnEnvironmentFor`), which is already the byte layout an `envp[]`
+// points INTO — so each slot addresses the block itself, exactly as `buildSubpArgvVector`'s slots
+// address the argv blob, and for the same reason: the block is a buffer the caller holds for the
+// whole spawn, which is how long `execve` reads it for.
 //
 // ⚠ **THE BLOCK CARRIES NO COUNT, WHERE THE ARGV BLOB ARRIVES WITH ITS `argc`**, so the entries have to be
 // counted before the vector can be sized. The walk therefore runs TWICE over ONE emitted loop rather than
@@ -2097,8 +2097,9 @@ function emitSubpGiveChildSourceBack(module StdModule, func IrFunction, ids Valu
 end 'emitSubpGiveChildSourceBack'
 
 // Push one chunk of a queued `StdinKind.bytes` or `StdinKind.delayed` payload into the child's stdin, and
-// close the pipe once the payload is spent. `stdinPend` is 0 for every stdin kind that carries no payload,
-// which is what makes this a pointer test rather than a kind test repeated a pass later.
+// close the pipe once the payload is spent. `SubpSlotStdinPend` is 0 for every stdin kind that
+// carries no payload, which is what makes this a pointer test rather than a kind test repeated a
+// pass later.
 //
 // The write end is non-blocking here, so a full pipe answers would-block or a short write. That
 // pass sets `WcStdinBlocked` and the idle arm waits for the pipe to drain, by poller or by backoff,

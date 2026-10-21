@@ -1,8 +1,7 @@
 // PassPipeline — the stateful driver for a compilation. It owns the evolving IR
-// modules (one per tier), the scheduled pass list, and a `dispatch` that runs each
-// pass by reading one module field and writing the next. Callers build a
-// PassPipeline, push the passes they want via `addPass`/`addPasses`, and call
-// `run()`.
+// modules (one per tier) and a `dispatch` that runs each pass by reading one module
+// field and writing the next. Callers build a PassPipeline and hand `run()` a
+// schedule (`buildMaxonTierPasses`, `buildLoweringPasses`).
 //
 // Pipeline phases (3-level IR: Maxon → Std → Target):
 //   Phase 2  Maxon-level  : resolveTypes, semanticCheck  (operate on maxonModule)
@@ -668,8 +667,7 @@ end 'buildEmittedBandPasses'
 //
 // It owns NO target module: the pipeline's last tier is Std, and the backend is
 // driven backend-direct (`buildBackend` returns a CodeResult, which is not an IR
-// module). A `targetModule` field here would be write-once-read-never — the same
-// vestigial-tier residue the `mirModule` field was.
+// module). A `targetModule` field here would be write-once-read-never.
 export type PassPipeline
 	// The project owns the shared state the Maxon-tier passes read/write
 	// (interner, registries, diagnostics). resolveTypes/semanticCheck need it, and the

@@ -129,13 +129,11 @@
 // `__im_` (inline-managed, disjoint from `InsertRangeChecks`' `__rc_`), and each names WHAT THE BLOCK IT
 // LABELS DOES rather than which guard sent control there.
 //
-// ⛔⛔ **THE NAMES MUST BE UNIQUE ACROSS BOTH INLINERS, BECAUSE THE COMPILER CANNOT KEEP THEM APART.**
-// `InlineLeaves` declares file-level `let`s of its own, and the compiler resolves two same-named
-// non-`export` file-level `let`s in different files to ONE of them, silently. MEASURED: spelled
-// `InlineContLabel` / `InlineSlowLabel` here, this pass emits `__il_cont` and `__il_slow` — on
-// `temp/codegen-probe/arr.maxon` the log reads `inlineLeaves: 0 site(s) inlined` while its `@sum` carries
-// an `__il_cont` and an `__il_slow` around blocks only this pass mints. Nothing else catches it: the two
-// that collide are the two both inliners happen to need.
+// ⛔⛔ **THE NAMES MUST BE UNIQUE ACROSS BOTH INLINERS, BECAUSE THE COMPILER CANNOT KEEP THEM
+// APART.** `InlineLeaves` declares file-level `let`s of its own, and the compiler resolves two
+// same-named non-`export` file-level `let`s in different files to ONE of them, silently: spelled
+// `InlineContLabel` here, this pass can emit `InlineLeaves`' `__il_cont` around blocks only this
+// pass mints, and nothing else catches it.
 // ⚠ The underlying defect is the compiler's, not this file's, and is NOT fixed here.
 let ManagedContLabel = b"__im_cont"
 let ManagedSlowLabel = b"__im_slow"

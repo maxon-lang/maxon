@@ -52,15 +52,16 @@
 // ⛔⛔ **THE `Arm64` PREFIX IS LOAD-BEARING, NOT DECORATION.** Maxon's top-level name space is FLAT: a
 // declaration's directory grants it nothing, `export` publishes to the whole program, and two exported
 // globals of one name are resolved SILENTLY BY FILE ORDER with no diagnostic (the reader's own directory
-// is irrelevant, and the winner follows POSITION, not value). Bare `LinuxSyscallWrite`/`LinuxSyscallMmap`/
-// `LinuxSyscallExitGroup` collide with `Targets/X64/X64LinuxRuntime`'s spellings of the x86-64 numbers,
-// and file order is a property of the CHECKOUT — so a collision makes the emitted code depend on which
+// is irrelevant, and the winner follows POSITION, not value). A bare `LinuxSyscallWrite`,
+// `LinuxSyscallMmap` or `LinuxSyscallExitGroup` in both arch files would collide, which is why
+// `Targets/X64/X64LinuxRuntime` spells the x86-64 numbers `X64LinuxSyscall*`. File order is a
+// property of the CHECKOUT — so a collision makes the emitted code depend on which
 // box compiled the compiler, and the two hosts need not even lose the same declaration.
 //
 // ⚠ **A COLLISION HERE FAILS SILENTLY, WHICH IS WHY THE CURE IS A NAME AND NOT A COMMENT.** MEASURED on
 // arm64-linux under one, by disassembling every `svc #0` in a cross-compiled binary:
-// `StdToArm64Conversion.lowerOsExit`/`lowerPanic` emitted **231**, `lowerOsWrite` **1** and
-// `lowerOsMmap` **9** — the x86-64 numbers. On AArch64 those are `munlockall`, `io_destroy` and
+// `StdToArm64Conversion.lowerOsExit`/`lowerPanic` emitted **231**, `lowerOsWriteStream` **1** and
+// `lowerMmap` **9** — the x86-64 numbers. On AArch64 those are `munlockall`, `io_destroy` and
 // `lgetxattr`: none exits, writes or maps, and none fails loudly, so a violated range guard did not
 // abort at all — it fell through to `mov x0, xzr; ret` and the program carried on with a zero. Only a
 // file's own declaration shadows the import, so the entry stub's use below is the one a collision leaves

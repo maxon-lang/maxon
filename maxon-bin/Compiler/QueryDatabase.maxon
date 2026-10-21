@@ -1,5 +1,5 @@
-// QueryDatabase — the incremental query system's storage: source inputs, the
-// per-query memo caches, and the dependency graph.
+// QueryDatabase — the incremental query system's storage: source inputs and the
+// per-query memo caches.
 //
 // **Content-hash-keyed, NOT revision-counter-keyed**. Each memo
 // stamps the hash of the input it was derived from (`keyHash`), and a memo is
@@ -13,24 +13,13 @@
 // an equality test on a hash and never a graph walk. Dependencies are DERIVED from the input,
 // not RECORDED as it is read; that is what makes the per-file caches trivially parallel-safe.
 //
-// A graph WAS recorded here — `depIndex` (a map from a query to the queries it read), fed by
-// `recordDependency` off an `activeQueryStack`. **Nothing ever read a bucket.** It was kept
-// against the day "a query genuinely depends on another file's DERIVED state, so the wiring is
-// already there".
-//
-// **THAT DAY CAME, on 2026-07-14, AND THE WIRING WAS NOT USED.** `queryParseOps` came to depend
-// on `queryProgramSignatures` — one file's parse against every other file's declarations, exactly
-// the case — and the fix was to MIX THE INDEX'S HASH INTO THE PARSE MEMO'S KEY. Not
-// one line consulted the graph. The commit did add an EDGE to it, under a comment explaining why
-// the edge mattered to a consumer that did not exist.
-//
-// So it went, for the reason its own other half went one commit earlier: **written, never read,
-// and therefore quietly wrong.** Unread, it had already rotted — `queryKeyString` advertised an
-// "edge dedup" nothing performed — and a graph nothing validates is not wiring, it is a structure
-// whose bugs are simply unpaid. It cost a `String` render plus two `Map` operations on every
-// dependency edge, on a compiler's hot path, to answer no question. If a query ever does need a
-// dynamic edge, add the index WITH its reader, in one commit, and let the two be reviewed
-// together.
+// **A QUERY THAT DEPENDS ON ANOTHER FILE'S DERIVED STATE MIXES THAT STATE'S HASH INTO ITS KEY.**
+// `queryParseOps` depends on `queryProgramSignatures` — one file's parse against every other file's
+// declarations — and its memo key carries `ProgramSignatures.hash`. A recorded graph nothing reads
+// is not wiring, it is a structure whose bugs are simply unpaid, and it would cost a render and two
+// `Map` operations on every dependency edge, on a compiler's hot path, to answer no question. If a
+// query ever does need a dynamic edge, add the index WITH its reader, in one commit, and let the
+// two be reviewed together.
 
 // Per-file memo: the tokenized form, stamped with the source hash it came from.
 export type TokenMemo
@@ -892,9 +881,8 @@ export type QueryDatabase
 	export var allModuleCache as ModuleMemo
 
 	// Cache hit/miss counters. **These are what the warm-rebuild gate reads** — the property
-	// "edit one file → only its queries re-run" is a statement about hits and misses, and it
-	// was always these that proved it, never the dependency graph that claimed to be here for
-	// it (see this file's header).
+	// "edit one file → only its queries re-run" is a statement about hits and misses, and these
+	// are what prove it.
 	export var tokenHits as QueryCount
 	export var tokenMisses as QueryCount
 	export var activeTokenHits as QueryCount

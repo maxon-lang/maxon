@@ -285,7 +285,7 @@ end 'buildArm64DarwinSleepChunk'
 
 // Fill the caller's buffer with the running image's CANONICAL absolute path and answer the byte count,
 // NOT counting the NUL — `GetModuleFileNameW`'s convention, which is `StdOp.osExecutablePath`'s contract
-// and which `ProcessRuntime.buildProcessExecutablePath` classifies through
+// and which `ProcessRuntime.buildProcessFill` classifies through
 // `ManagedDirectoryRuntime.emitFilledBufferVerdict`: `0` is unavailable, `< capacity` fits, anything else
 // is truncation and the Std loop doubles. So this chunk answers `strlen` on success and `bufLen` on
 // too-small, and the retry loop above it is untouched.
@@ -467,7 +467,7 @@ function arm64DarwinCallBootSessionSysctl(asm Arm64RuntimeAsm, globalData Global
 end 'arm64DarwinCallBootSessionSysctl'
 
 // ==========================================================================
-// The green-thread floor's HOST OBJECTS: `DarwinWaitObject`
+// The green-thread floor's HOST OBJECTS: the wait object
 // ==========================================================================
 
 // ⭐⭐⭐ **ONE HEAP OBJECT SERVES BOTH THINGS WIN32 CALLS A "HANDLE" IN THIS SCHEDULER, AND IT HAS TO,
@@ -558,8 +558,9 @@ end 'arm64DarwinLockObject'
 // mrt_host_wait_new(x0 = kind) -> x0 = object
 // ==========================================================================
 
-// Allocate and initialise one `DarwinWaitObject`. Shared by `osEventCreate` and `osThreadCreate`, because
-// both mint a waitable handle and only the kind (and, for a thread, one extra call) differs.
+// Allocate and initialise one wait object (`DarwinWaitObjectBytes`). Shared by `osEventCreate` and
+// `osThreadCreate`, because both mint a waitable handle and only the kind (and, for a thread, one
+// extra call) differs.
 //
 // ⚠ **`malloc` RATHER THAN `__slab_alloc`.** The slab is Std-tier and reachable only through a `bl` the
 // Std-tier reachability walk cannot see, so a chunk calling it would be relying on some OTHER function
@@ -593,9 +594,10 @@ function buildArm64DarwinWaitNewChunk(globalData GlobalDataTable) returns Functi
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: PosixWaitOffSignal)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: PosixWaitOffThread)
 
-	// The child-process four: a process object's pid, the status it will report, whether a kill chose that
-	// status, and the signal that ended it. Written for EVERY kind, because `malloc` does not zero and a
-	// garbage `childKilled` would make an ordinary child report whatever the heap held.
+	// The child-process four: a process object's pid, the status it will report, whether a kill chose
+	// that status, and the signal that ended it. Written for EVERY kind, because `malloc` does not
+	// zero and a garbage `PosixWaitOffChildKilled` word would make an ordinary child report whatever
+	// the heap held.
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: PosixWaitOffChildPid)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: PosixWaitOffChildStatus)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: PosixWaitOffChildKilled)
