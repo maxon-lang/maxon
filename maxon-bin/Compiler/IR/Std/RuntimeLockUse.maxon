@@ -54,6 +54,17 @@ function isIndirectCall(op StdOp) returns bool
 	return op.rawValue.category == StdOpCategory.call and op.rawValue.role == OpRole.plain
 end 'isIndirectCall'
 
+function widenLockSet(sets LockSetArray, position ElementIndex, by LockSet) returns bool
+	let before = try sets.get(position) otherwise panic("widenLockSet: sets.get OOB at {position}")
+
+	if (before or by) == before 'unchanged'
+		return false
+	end 'unchanged'
+
+	try sets.set(position, value: before or by) otherwise panic("widenLockSet: sets.set OOB at {position}")
+	return true
+end 'widenLockSet'
+
 function blockAtIndex(module StdModule, func IrFunction, index ElementIndex) returns IrBlock
 	let ref = try func.blockRefs.get(index) otherwise panic("blockAtIndex: blockRefs.get OOB at {index}")
 	return module.getBlock(ref)
@@ -79,19 +90,23 @@ type HeldLockCheck
 	let byName as FuncIndexByName
 	var labels as ExclusiveLockLabelArray
 	var directTakes as LockSetArray
+	var directReleases as LockSetArray
 	var requires as LockSetArray
 	var takes as LockSetArray
 	var returnsHolding as LockSetArray
+	var alwaysReturnsHolding as LockSetArray
 	var addressTaken as BoolArray
+	var callsThroughPointer as BoolArray
 	var edgeStart as FuncIndexArray
 	var edges as FuncIndexArray
 	var indirectTakes as LockSet
+	var indirectRequires as LockSet
 	var sawAbort as bool
 	export var refusal as String
 	export var refusalCode as ErrorCode
 
 	static function create(first ElementIndex, sites RuntimeLockSiteByOp, byName FuncIndexByName) returns HeldLockCheck
-		return Self{first: first, sites: sites, byName: byName, labels: ExclusiveLockLabelArray.create(), directTakes: LockSetArray.create(), requires: LockSetArray.create(), takes: LockSetArray.create(), returnsHolding: LockSetArray.create(), addressTaken: BoolArray.create(), edgeStart: FuncIndexArray.create(), edges: FuncIndexArray.create(), indirectTakes: NoLocks, sawAbort: false, refusal: "", refusalCode: ErrorCode.nestedExclusiveLockTake}
+		return Self{first: first, sites: sites, byName: byName, labels: ExclusiveLockLabelArray.create(), directTakes: LockSetArray.create(), directReleases: LockSetArray.create(), requires: LockSetArray.create(), takes: LockSetArray.create(), returnsHolding: LockSetArray.create(), alwaysReturnsHolding: LockSetArray.create(), addressTaken: BoolArray.create(), callsThroughPointer: BoolArray.create(), edgeStart: FuncIndexArray.create(), edges: FuncIndexArray.create(), indirectTakes: NoLocks, indirectRequires: NoLocks, sawAbort: false, refusal: "", refusalCode: ErrorCode.nestedExclusiveLockTake}
 	end 'create'
 
 	function bitOfLabel(label ByteArray) returns LockSet
@@ -133,6 +148,7 @@ type HeldLockCheck
 		let count = module.funcCount()
 		self.addressTaken.resize(count)
 		self.returnsHolding.resize(count)
+		self.alwaysReturnsHolding.resize(count)
 		self.requires.resize(count)
 
 		for position in 0 upto count 'eachFunc'
@@ -143,18 +159,26 @@ type HeldLockCheck
 			var valueLabels = ValueLabelMap.create()
 			var labelled = false
 			var direct = NoLocks
+			var released = NoLocks
+			var indirect = false
 
 			for opIdx in ops 'eachOp'
 				if mayBeMarked 'bandOp'
 					if let site = try self.sites.get(opIdx) 'aMark'
-						if site.mark == RuntimeLockMark.enterExclusive 'aTake'
+						if markIsExclusive(site.mark) 'anExclusiveMark'
 							if not labelled 'needLabels'
 								valueLabels = valueLabelsOf(module, ops: ops)
 								labelled = true
 							end 'needLabels'
 
-							direct = direct or self.exclusiveLockBit(site, valueLabels: valueLabels)
-						end 'aTake'
+							let bit = self.exclusiveLockBit(site, valueLabels: valueLabels)
+
+							if site.mark == RuntimeLockMark.enterExclusive 'aTake'
+								direct = direct or bit
+							end 'aTake' else 'aRelease'
+								released = released or bit
+							end 'aRelease'
+						end 'anExclusiveMark'
 
 						continue
 					end 'aMark'
@@ -176,9 +200,13 @@ type HeldLockCheck
 				if reference.kind != StdFunctionReferenceKind.none 'anAddress'
 					self.noteAddressTaken(module, position: reference.funcIndex)
 				end 'anAddress'
+
+				indirect = indirect or isIndirectCall(op)
 			end 'eachOp'
 
 			self.directTakes.push(direct)
+			self.directReleases.push(released)
+			self.callsThroughPointer.push(indirect)
 		end 'eachFunc'
 
 		self.edgeStart.push(self.edges.count())
@@ -229,6 +257,7 @@ type HeldLockCheck
 
 			if escapes 'anEscapee'
 				self.indirectTakes = self.indirectTakes or (try self.takes.get(position) otherwise panic("HeldLockCheck.propagate: takes.get OOB at {position}"))
+				self.indirectRequires = self.indirectRequires or (try self.requires.get(position) otherwise panic("HeldLockCheck.propagate: requires.get OOB at {position}"))
 			end 'anEscapee'
 		end 'eachAddress'
 	end 'propagate'
@@ -252,10 +281,13 @@ type HeldLockCheck
 
 	function mustBeWalked(position ElementIndex) returns bool
 		let direct = try self.directTakes.get(position) otherwise panic("HeldLockCheck.mustBeWalked: directTakes.get OOB at {position}")
+		let released = try self.directReleases.get(position) otherwise panic("HeldLockCheck.mustBeWalked: directReleases.get OOB at {position}")
 		let required = try self.requires.get(position) otherwise panic("HeldLockCheck.mustBeWalked: requires.get OOB at {position}")
-		return direct != NoLocks or required != NoLocks or self.callsALockedFunction(position)
+		let indirect = try self.callsThroughPointer.get(position) otherwise panic("HeldLockCheck.mustBeWalked: callsThroughPointer.get OOB at {position}")
+		return direct != NoLocks or released != NoLocks or required != NoLocks or self.callsALockedFunction(position) or (indirect and self.indirectRequires != NoLocks)
 	end 'mustBeWalked'
 
+	// Both summaries grow from empty, so a recursion cannot prove a hold it never took.
 	function summarize(module StdModule)
 		var changed = true
 
@@ -267,15 +299,16 @@ type HeldLockCheck
 					continue
 				end 'nothingHeld'
 
-				let exitHeld = try self.walk(module, position: position, summarizing: true) otherwise panic("HeldLockCheck.summarize: a summarizing walk refused, and only a checking walk refuses")
+				let (exitMay, exitMust) = try self.walk(module, position: position, summarizing: true) otherwise panic("HeldLockCheck.summarize: a summarizing walk refused, and only a checking walk refuses")
 				let required = try self.requires.get(position) otherwise panic("HeldLockCheck.summarize: requires.get OOB at {position}")
-				let acquired = exitHeld xor (exitHeld and required)
-				let before = try self.returnsHolding.get(position) otherwise panic("HeldLockCheck.summarize: returnsHolding.get OOB at {position}")
 
-				if (before or acquired) != before 'grew'
-					try self.returnsHolding.set(position, value: before or acquired) otherwise panic("HeldLockCheck.summarize: returnsHolding.set OOB at {position}")
+				if widenLockSet(self.returnsHolding, position: position, by: exitMay xor (exitMay and required)) 'mayGrew'
 					changed = true
-				end 'grew'
+				end 'mayGrew'
+
+				if widenLockSet(self.alwaysReturnsHolding, position: position, by: exitMust xor (exitMust and required)) 'mustGrew'
+					changed = true
+				end 'mustGrew'
 			end 'eachFunc'
 		end 'toTheFixpoint'
 	end 'summarize'
@@ -300,9 +333,9 @@ type HeldLockCheck
 
 	// A lock is may-held at a block when some path into it holds it, which is all a second take needs
 	// to deadlock (E5005), so paths merge by union. It is must-held when every path holds it, which is
-	// all that satisfies a requires-held callee (E5006), so paths merge by intersection. A function
+	// all that satisfies a requires-held callee or a release (E5006), so paths merge by intersection. A function
 	// registered as requiring a lock enters holding it, because E5006 proves that of every caller.
-	function walk(module StdModule, position ElementIndex, summarizing bool) returns LockSet throws HeldLockRefusal
+	function walk(module StdModule, position ElementIndex, summarizing bool) returns (LockSet, LockSet) throws HeldLockRefusal
 		let func = module.getFunc(position)
 		var ops = OpIndexArray.create()
 		module.collectLiveOpIndices(func, into: ops)
@@ -325,7 +358,9 @@ type HeldLockCheck
 		var work = BlockPositionArray.create()
 		var successors = BlockIdArray.create()
 		var blockOps = OpIndexArray.create()
-		var exitHeld = NoLocks
+		var exitMay = NoLocks
+		var exitMust = NoLocks
+		var anyReturn = false
 
 		try mayAtEntry.set(0, value: contract) otherwise panic("HeldLockCheck.walk: mayAtEntry.set OOB at the entry block")
 		try mustAtEntry.set(0, value: contract) otherwise panic("HeldLockCheck.walk: mustAtEntry.set OOB at the entry block")
@@ -344,7 +379,9 @@ type HeldLockCheck
 			let (leavingMay, leavingMust) = try self.transfer(module, func: func, valueLabels: valueLabels, blockOps: blockOps, enteringMay: enteringMay, enteringMust: enteringMust, summarizing: summarizing)
 
 			if self.blockReturns(module, block: block) 'returns'
-				exitHeld = exitHeld or leavingMay
+				exitMay = exitMay or leavingMay
+				exitMust = (exitMust and leavingMust) if anyReturn else leavingMust
+				anyReturn = true
 
 				if not summarizing and (leavingMust and contract) != contract 'releasedTheContract'
 					try self.refuseReleasedAtReturn(func, bit: self.lowestLockIn(contract xor (leavingMust and contract)))
@@ -371,7 +408,7 @@ type HeldLockCheck
 			end 'eachSuccessor'
 		end 'eachPending'
 
-		return exitHeld
+		return (exitMay, exitMust)
 	end 'walk'
 
 	function transfer(module StdModule, func IrFunction, valueLabels ValueLabelMap, blockOps OpIndexArray, enteringMay LockSet, enteringMust LockSet, summarizing bool) returns (LockSet, LockSet) throws HeldLockRefusal
@@ -394,13 +431,13 @@ type HeldLockCheck
 			classifyCallOperands(op, call: call)
 
 			if call.namesACallee() 'aCall'
-				may = try self.applyCall(module, func: func, callee: call.callee, may: may, must: must, summarizing: summarizing)
+				(may, must) = try self.applyCall(module, func: func, callee: call.callee, may: may, must: must, summarizing: summarizing)
 				continue
 			end 'aCall'
 
-			if isIndirectCall(op) and not summarizing and (may and self.indirectTakes) != NoLocks 'anIndirectTake'
-				try self.refuseIndirectCall(module, func: func, bit: self.lowestLockIn(may and self.indirectTakes))
-			end 'anIndirectTake'
+			if isIndirectCall(op) and not summarizing 'anIndirectCall'
+				try self.checkIndirectCall(module, func: func, may: may, must: must)
+			end 'anIndirectCall'
 		end 'eachOp'
 
 		return (may, must)
@@ -408,6 +445,10 @@ type HeldLockCheck
 
 	function applyMark(func IrFunction, site RuntimeLockSite, bit LockSet, may LockSet, must LockSet, summarizing bool) returns (LockSet, LockSet) throws HeldLockRefusal
 		if site.mark == RuntimeLockMark.leaveExclusive 'releasing'
+			if not summarizing and (must and bit) == NoLocks 'unheld'
+				try self.refuseUnheldRelease(func, bit: bit)
+			end 'unheld'
+
 			return (may xor (may and bit), must xor (must and bit))
 		end 'releasing'
 
@@ -418,35 +459,52 @@ type HeldLockCheck
 		return (may or bit, must or bit)
 	end 'applyMark'
 
-	// A call only adds to the caller's may-held set and leaves must-held alone: a callee that releases a
-	// lock its caller took goes unseen, so a requires-held call after it passes E5006.
-	function applyCall(module StdModule, func IrFunction, callee ByteArray, may LockSet, must LockSet, summarizing bool) returns LockSet throws HeldLockRefusal
+	// A callee adds the locks it returns holding on some path to may-held and those it returns holding on
+	// every path to must-held. It never takes must-held away: a release needs the lock must-held
+	// (`applyMark`) and a function that requires a lock must return holding it (`walk`), so no callee
+	// leaves a lock its caller holds free.
+	function applyCall(module StdModule, func IrFunction, callee ByteArray, may LockSet, must LockSet, summarizing bool) returns (LockSet, LockSet) throws HeldLockRefusal
 		if callee.equals(RuntimeAbortName) 'diverges'
 			self.sawAbort = true
-			return may
+			return (may, must)
 		end 'diverges'
 
-		let position = try self.byName.get(callee) otherwise return may
+		let position = try self.byName.get(callee) otherwise return (may, must)
+
+		if not summarizing 'checked'
+			try self.checkCall(module, func: func, calleePosition: position, may: may, must: must)
+		end 'checked'
+
 		let leftHolding = try self.returnsHolding.get(position) otherwise panic("HeldLockCheck.applyCall: returnsHolding.get OOB at {position}")
+		let surelyHolding = try self.alwaysReturnsHolding.get(position) otherwise panic("HeldLockCheck.applyCall: alwaysReturnsHolding.get OOB at {position}")
+		return (may or leftHolding, must or surelyHolding)
+	end 'applyCall'
 
-		if summarizing 'notChecked'
-			return may or leftHolding
-		end 'notChecked'
-
-		let taken = try self.takes.get(position) otherwise panic("HeldLockCheck.applyCall: takes.get OOB at {position}")
+	function checkCall(module StdModule, func IrFunction, calleePosition ElementIndex, may LockSet, must LockSet) throws HeldLockRefusal
+		let taken = try self.takes.get(calleePosition) otherwise panic("HeldLockCheck.checkCall: takes.get OOB at {calleePosition}")
 
 		if (may and taken) != NoLocks 'takesItAgain'
-			try self.refuseCall(module, func: func, calleePosition: position, bit: self.lowestLockIn(may and taken))
+			try self.refuseCall(module, func: func, calleePosition: calleePosition, bit: self.lowestLockIn(may and taken))
 		end 'takesItAgain'
 
-		let required = try self.requires.get(position) otherwise panic("HeldLockCheck.applyCall: requires.get OOB at {position}")
+		let required = try self.requires.get(calleePosition) otherwise panic("HeldLockCheck.checkCall: requires.get OOB at {calleePosition}")
 
 		if (must and required) != required 'unheld'
-			try self.refuseUnheldCall(module, func: func, calleePosition: position, bit: self.lowestLockIn(required xor (must and required)))
+			try self.refuseUnheldCall(module, func: func, calleePosition: calleePosition, bit: self.lowestLockIn(required xor (must and required)))
 		end 'unheld'
+	end 'checkCall'
 
-		return may or leftHolding
-	end 'applyCall'
+	// A call through a pointer may reach any function whose address is taken, so it must satisfy all of
+	// them: take nothing one takes and hold everything one requires.
+	function checkIndirectCall(module StdModule, func IrFunction, may LockSet, must LockSet) throws HeldLockRefusal
+		if (may and self.indirectTakes) != NoLocks 'anIndirectTake'
+			try self.refuseIndirectCall(module, func: func, bit: self.lowestLockIn(may and self.indirectTakes))
+		end 'anIndirectTake'
+
+		if (must and self.indirectRequires) != self.indirectRequires 'anIndirectRequirement'
+			try self.refuseIndirectUnheldCall(module, func: func, bit: self.lowestLockIn(self.indirectRequires xor (must and self.indirectRequires)))
+		end 'anIndirectRequirement'
+	end 'checkIndirectCall'
 
 	function lowestLockIn(set LockSet) returns LockSet
 		for index in 0 upto self.labels.count() 'eachLock'
@@ -482,8 +540,17 @@ type HeldLockCheck
 		try self.refuse(ErrorCode.nestedExclusiveLockTake, message: "'{String.from(func.name)}' calls '{self.nameAt(module, position: calleePosition)}' while it holds '{self.lockName(bit)}', and that call takes it again ({self.chainFrom(module, start: calleePosition, bit: bit)}) — the lock is not recursive, so the second take waits on the first for ever")
 	end 'refuseCall'
 
+	function refuseUnheldRelease(func IrFunction, bit LockSet) throws HeldLockRefusal
+		try self.refuse(ErrorCode.callRequiresRuntimeLockHeld, message: "'{String.from(func.name)}' releases '{self.lockName(bit)}' where '{self.lockName(bit)}' may be free — a function releases only a lock it took itself or one it is registered as requiring held, so that its callers know the lock is gone")
+	end 'refuseUnheldRelease'
+
+	function refuseIndirectUnheldCall(module StdModule, func IrFunction, bit LockSet) throws HeldLockRefusal
+		let escapee = self.firstEscapeeIn(self.requires, bit: bit)
+		try self.refuse(ErrorCode.callRequiresRuntimeLockHeld, message: "'{String.from(func.name)}' calls through a function pointer where '{self.lockName(bit)}' may be free, and '{self.nameAt(module, position: escapee)}', a function whose address is taken, requires it held — take the lock before the call on every path that reaches it")
+	end 'refuseIndirectUnheldCall'
+
 	function refuseIndirectCall(module StdModule, func IrFunction, bit LockSet) throws HeldLockRefusal
-		let escapee = self.firstEscapeeTaking(bit)
+		let escapee = self.firstEscapeeIn(self.takes, bit: bit)
 		try self.refuse(ErrorCode.nestedExclusiveLockTake, message: "'{String.from(func.name)}' calls through a function pointer while it holds '{self.lockName(bit)}', and '{self.nameAt(module, position: escapee)}', a function whose address is taken, takes it ({self.chainFrom(module, start: escapee, bit: bit)}) — the lock is not recursive, so the second take waits on the first for ever")
 	end 'refuseIndirectCall'
 
@@ -495,18 +562,18 @@ type HeldLockCheck
 		try self.refuse(ErrorCode.callRequiresRuntimeLockHeld, message: "'{String.from(func.name)}' requires '{self.lockName(bit)}' held, and it returns where '{self.lockName(bit)}' may be free — its callers go on as though the lock were still held")
 	end 'refuseReleasedAtReturn'
 
-	function firstEscapeeTaking(bit LockSet) returns ElementIndex
-		for position in 0 upto self.takes.count() 'eachFunc'
-			let escapes = try self.addressTaken.get(position) otherwise panic("HeldLockCheck.firstEscapeeTaking: addressTaken.get OOB at {position}")
-			let taken = try self.takes.get(position) otherwise panic("HeldLockCheck.firstEscapeeTaking: takes.get OOB at {position}")
+	function firstEscapeeIn(sets LockSetArray, bit LockSet) returns ElementIndex
+		for position in 0 upto sets.count() 'eachFunc'
+			let escapes = try self.addressTaken.get(position) otherwise panic("HeldLockCheck.firstEscapeeIn: addressTaken.get OOB at {position}")
+			let locks = try sets.get(position) otherwise panic("HeldLockCheck.firstEscapeeIn: sets.get OOB at {position}")
 
-			if escapes and (taken and bit) != NoLocks 'found'
+			if escapes and (locks and bit) != NoLocks 'found'
 				return position
 			end 'found'
 		end 'eachFunc'
 
-		panic("HeldLockCheck.firstEscapeeTaking: no function whose address is taken takes the lock the indirect-call set named")
-	end 'firstEscapeeTaking'
+		panic("HeldLockCheck.firstEscapeeIn: no function whose address is taken is in the set that named the lock the indirect-call set named")
+	end 'firstEscapeeIn'
 
 	function refuse(code ErrorCode, message String) throws HeldLockRefusal
 		self.refusalCode = code
