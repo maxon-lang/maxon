@@ -23259,21 +23259,13 @@ export type Parser
 				// element of `for … in self`, which `walksAnOwnedOpaqueElement` below already seeds off
 				// `receiverCursorElementIsOpaque`. A conformer whose element IS opaque (`Bag with String`)
 				// therefore keeps its reservation through that seed; `Map`, whose element is the tuple `Entry`,
-				// does not — and must not.
+				// does not.
 				//
 				// ⛔ **MEASURED, and it is why the gate is the EXTENSION and not the predicate alone:**
 				// `methodCanForwardABorrowedOpaque` on every body refuses `Container.copyInto`
 				// (`generic-type-nested-array-typealias/push-for-element-into-second-opaque-array`), whose
 				// `dst.push(e)` reads `e` out of `self.items` — a route neither a parameter at `Element` nor a
 				// field at `Element` describes. A TYPE body keeps the unnarrowed seed for exactly that reason.
-				//
-				// ⚠ **IT IS A CONTAINMENT OF THE CHAIN, NOT A FIX OF IT.** `Map.map` handed a REAL descriptor
-				// makes `MapIterator.current` CLONE each key into the `(Key, Value)` tuple it returns, and that
-				// tuple then enters a container whose element destructor is ONE STAMPED WORD called with the
-				// element alone — so there is nowhere to carry the descriptor its release needs. Both endings
-				// are measured: with the shallow tuple copy the array's element points at a freed record, and
-				// with the copy co-owning instead the record leaks (exit 101). The chain is sound only while it
-				// is inert on BOTH ends, which is what this keeps.
 				let storesBorrowedOpaqueElement = scan.storesContainerElement and reachable and holdsADescriptorSource and (not site.bodyIsAnInterfaceExtension or self.signatures.methodCanForwardABorrowedOpaque(qualified, typeName: site.typeName))
 
 				// ⭐⭐ **A `for … in self` OWNS ITS ELEMENT FOR ONE TRIP, AND RELEASES IT THROUGH THE
@@ -25348,14 +25340,9 @@ export type Parser
 	// enclosing type's own parameter owes a `__drop_type_param` per trip, and one whose cursor yields anything
 	// else owes nothing at all.
 	//
-	// ⛔⛔ **IT IS A NARROWING THAT IS LOAD-BEARING, NOT A TIDY-UP — MEASURED.** `stdlib/Map.maxon`'s cursor
-	// yields the tuple `Entry`, so `Map.map`'s per-trip element is concrete and no descriptor is owed. Seeded
-	// anyway, `Map.map` gains a slot, and `LowerMaxonToStd.emitInstanceDescriptorAddr` then FORWARDS a real descriptor
-	// into a `MapIterator with (Key, Value)` chain whose own header records that it is deliberately inert on
-	// both ends — *"forwarding a real descriptor into half of such a chain would make the retains fire while
-	// the drops still read the mint"*. **MEASURED: `interface-extensions/stdlib-map-on-map-with-function`
-	// exits 101 where 6 is correct.** So over-reserving is NOT free for this signal, which is exactly why it
-	// asks about the element instead of about the loop.
+	// `stdlib/Map.maxon`'s cursor yields the tuple `Entry`, so `Map.map`'s per-trip element is
+	// concrete and owes no per-trip drop. `Map.map` still carries a descriptor, reserved by the
+	// `ElementArray{}` it builds (`opaqueContainerConstructionAt`), not by this signal.
 	//
 	// ⚠ **NOT `StructLayout.bindingsForInterface("Iterable")`, WHICH IS THE OBVIOUS KEY AND IS THE WRONG
 	// ONE** — it answers only when the type names that interface LAST, so `implements Iterable with (…),
@@ -68916,13 +68903,6 @@ export type Parser
 			if not self.bodyState.carriesLayoutParam() 'noDescriptor'
 				throw SourceParseError.unsupported("sizeof of a type parameter in a function that carries no layout descriptor to read the size from — the descriptor is handed in by the call site or the caller, and this function reserves none", line: sizeofTok.line, column: sizeofTok.column)
 			end 'noDescriptor'
-
-			// ⚠ **SINGLE-TYPE-PARAMETER ONLY.** The layout descriptor carries ONE `elementLogicalSize`
-			// slot, so `sizeof(K)` in a `uses K, V` generic — which would need a per-parameter size — is a
-			// clean E2015 here, not a lowering panic.
-			if self.enclosingTypeParams.count() > 1 'multiParamGeneric'
-				throw SourceParseError.unsupported("sizeof of a type parameter of a MULTI-parameter generic type (its layout descriptor carries a single element size, so it cannot answer for each parameter); sizeof(T) on a single-type-parameter generic is supported", line: sizeofTok.line, column: sizeofTok.column)
-			end 'multiParamGeneric'
 
 			if not self.closureEnclosingFrames.isEmpty() 'readInsideAClosure'
 				_ = self.closureHiddenWordSlot(ClosureHiddenWord.descriptor)

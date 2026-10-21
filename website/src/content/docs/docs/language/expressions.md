@@ -194,7 +194,9 @@ Both take a **type** and produce a compile-time `Count`.
 
 - `sizeof(T)` is the size of a value of type `T` in bytes: `sizeof(int)` and `sizeof(float)` are `8`,
   `sizeof(bool)` is `1`, and a record type is the size of its fields — except an
-  [inline packed record](/docs/language/composite-types/#inline-packed-records), which is `8` whatever its fields sum to.
+  [inline packed record](/docs/language/composite-types/#inline-packed-records), which is `8` whatever its fields sum to. Inside a
+  generic body, `sizeof` of any of its type parameters is the size of that parameter's argument: in
+  `type Holder uses T, U`, `sizeof(T)` and `sizeof(U)` each answer for their own argument.
 - `countof(T)` is the number of elements a **fixed-size** container type holds: `countof(Vector with 3 Int)`
   is `3`. Inside such a container's own body, `countof(Self)` is the count of the instance a method is
   called on, or that a `static function`'s call names. A type with no fixed

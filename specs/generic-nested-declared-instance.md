@@ -362,3 +362,54 @@ end 'main'
 ```exitcode
 6
 ```
+
+### An instance over the SECOND of two parameters reads that parameter's size
+
+`Wrapper with (Small, String)` hands `Slot with U` the block of `U`, so `sizeof(V)` inside `Slot` is `String`'s.
+
+<!-- test: an-instance-over-the-second-parameter-of-two-reads-that-parameters-size -->
+```maxon
+typealias Small = int(0 to 255)
+
+type Slot uses V
+	export var v as V
+
+	static function create(first V) returns Self
+		return Self{v: first}
+	end 'create'
+
+	function slotSize() returns Count
+		return sizeof(V)
+	end 'slotSize'
+end 'Slot'
+
+type Wrapper uses T, U
+	export typealias Inner = Slot with U
+	var tag as T
+	var inner as Inner
+
+	static function create(t T, u U) returns Self
+		return Self{tag: t, inner: Inner.create(u)}
+	end 'create'
+
+	function ownSize() returns Count
+		return self.inner.slotSize()
+	end 'ownSize'
+end 'Wrapper'
+
+typealias StrSlot = Slot with String
+typealias SmallStrWrapper = Wrapper with (Small, String)
+
+function main() returns ExitCode
+	let w = SmallStrWrapper.create(3, u: "alpha {40 + 2} value long enough for a heap record")
+	let concrete = StrSlot.create("x")
+	print("{w.ownSize()} {concrete.slotSize()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+56 56
+```

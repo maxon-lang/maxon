@@ -470,3 +470,160 @@ end 'main'
 ```maxoncstderr
 error E3005: <fragment>:9:2: argument type mismatch for 'v': expected 'Score', got 'Count'
 ```
+
+### `sizeof` of each parameter of a two-parameter generic
+
+Each parameter's block of the descriptor holds that parameter's own size.
+
+<!-- test: sizeof-of-each-parameter-of-a-two-parameter-generic -->
+```maxon
+typealias Small = int(0 to 255)
+
+type Holder uses T, U
+	var tag as T
+	var held as U
+
+	static function create(t T, u U) returns Self
+		return Self{tag: t, held: u}
+	end 'create'
+
+	function sizeOfFirst() returns Count
+		return sizeof(T)
+	end 'sizeOfFirst'
+
+	function sizeOfSecond() returns Count
+		return sizeof(U)
+	end 'sizeOfSecond'
+
+	function bothSizes() returns Count
+		return sizeof(T) * 1000 + sizeof(U)
+	end 'bothSizes'
+end 'Holder'
+
+typealias SmallStrHolder = Holder with (Small, String)
+
+function main() returns ExitCode
+	let h = SmallStrHolder.create(3, u: "alpha {40 + 2} value long enough for a heap record")
+	print("{h.sizeOfFirst()} {h.sizeOfSecond()} {h.bothSizes()} {sizeof(Small)} {sizeof(String)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8 56 8056 8 56
+```
+
+### `sizeof` of a two-parameter generic's parameter reached through forwarded descriptors
+
+A sibling call forwards the whole descriptor, and a nested instance over a run of the caller's parameters forwards the block the run begins at.
+
+<!-- test: sizeof-of-a-two-parameter-generic-through-forwarded-descriptors -->
+```maxon
+typealias Small = int(0 to 255)
+
+type Probe uses A, B
+	var a as A
+	var b as B
+
+	static function create(a A, b B) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+
+	function sizes() returns Count
+		return sizeof(A) * 1000 + sizeof(B)
+	end 'sizes'
+end 'Probe'
+
+type Holder uses T, U
+	typealias Straight = Probe with (T, U)
+	var straight as Straight
+
+	static function create(t T, u U) returns Self
+		return Self{straight: Straight.create(t, b: u)}
+	end 'create'
+
+	function sizeOfSecond() returns Count
+		return sizeof(U)
+	end 'sizeOfSecond'
+
+	function viaSibling() returns Count
+		return self.sizeOfSecond()
+	end 'viaSibling'
+
+	function viaNested() returns Count
+		return self.straight.sizes()
+	end 'viaNested'
+end 'Holder'
+
+typealias SmallStrHolder = Holder with (Small, String)
+
+function main() returns ExitCode
+	let h = SmallStrHolder.create(3, u: "alpha {40 + 2} value long enough for a heap record")
+	print("{h.viaSibling()} {h.viaNested()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+56 8056
+```
+
+### `sizeof` of a two-parameter generic's parameter through a permuted instance, a closure and a static
+
+<!-- test: sizeof-of-a-two-parameter-generic-through-a-permutation-a-closure-and-a-static -->
+```maxon
+typealias Small = int(0 to 255)
+
+type Probe uses A, B
+	var a as A
+	var b as B
+
+	static function create(a A, b B) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+
+	function sizes() returns Count
+		return sizeof(A) * 1000 + sizeof(B)
+	end 'sizes'
+end 'Probe'
+
+type Holder uses T, U
+	typealias Swapped = Probe with (U, T)
+	var swapped as Swapped
+
+	static function create(t T, u U) returns Self
+		return Self{swapped: Swapped.create(u, b: t)}
+	end 'create'
+
+	static function widthOfSecond(n Count) returns Count
+		return sizeof(U) + n
+	end 'widthOfSecond'
+
+	function viaSwapped() returns Count
+		return self.swapped.sizes()
+	end 'viaSwapped'
+
+	function viaClosure() returns Count
+		let f = function() gives sizeof(U)
+		return f()
+	end 'viaClosure'
+end 'Holder'
+
+typealias SmallStrHolder = Holder with (Small, String)
+
+function main() returns ExitCode
+	let h = SmallStrHolder.create(3, u: "alpha {40 + 2} value long enough for a heap record")
+	print("{h.viaSwapped()} {h.viaClosure()} {SmallStrHolder.widthOfSecond(1)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+56008 56 57
+```

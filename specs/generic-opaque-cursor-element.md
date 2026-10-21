@@ -42,8 +42,8 @@ built; see `error.a-cursor-over-a-parameter-is-still-refused` below.
 
 Nor does the reservation follow from the LOOP alone: it is taken only when the cursor genuinely yields a
 bare type parameter. A conformer whose element is concrete — `Map`, whose `MapIterator.current()` hands
-back a `(Key, Value)` tuple — owes no `__drop_type_param` at all, and handing it a descriptor would feed a
-real one into a chain that is deliberately inert on both ends.
+back a `(Key, Value)` tuple — owes no `__drop_type_param` at all. Its `map` carries a descriptor for the
+`ElementArray{}` it builds, not for the loop.
 
 ### A cursor has TWO spellings, and the reservation is a property of the TYPE, not of the spelling
 

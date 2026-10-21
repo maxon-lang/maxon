@@ -813,3 +813,87 @@ end 'main'
 ```stdout
 7 -7
 ```
+
+### `Iterable` extension methods run on a two-parameter `Map` and on a `Set`
+
+The extension bodies walk an iterator instance over the collection's own parameters, and `map` and `filter` forward the descriptor they are handed to that iterator.
+
+<!-- test: iterable-extension-methods-run-on-a-map-and-a-set -->
+```maxon
+function main() returns ExitCode
+	let m = ["a": 1, "b": 2]
+	let s = Set from [1, 2]
+	var total = 0 as Count
+
+	for (_, p) in m.withIterator() 'eachPair'
+		total = total + p.1
+	end 'eachPair'
+
+	for (_, x) in s.withIterator() 'eachElement'
+		total = total + x
+	end 'eachElement'
+
+	let pairs = m.map(function(p) gives p)
+	let kept = m.filter(function(p) gives p.1 == 2)
+	let doubled = s.map(function(x) gives x + x)
+	let big = s.filter(function(x) gives x == 2)
+
+	return (total + pairs.count() + kept.count() + doubled.count() + big.count()) as ExitCode
+end 'main'
+```
+```exitcode
+12
+```
+
+### A user `Iterable` over two parameters answers an extension predicate
+
+<!-- test: a-two-parameter-iterable-answers-an-extension-predicate -->
+```maxon
+public typealias Int = int(i64.min to i64.max)
+
+public type BagIter uses E, F implements Iterator with Int
+	typealias EArray = Array with E
+	typealias FArray = Array with F
+	var items as EArray
+	var more as FArray
+	var i as Int
+
+	public static function create() returns Self
+		return Self{items: EArray.create(), more: FArray.create(), i: 3}
+	end 'create'
+
+	public function current() returns Int
+		return i
+	end 'current'
+
+	public function advance() throws IterationError
+		i = i - 1
+		if i <= 0 'exhausted'
+			throw IterationError.exhausted
+		end 'exhausted'
+	end 'advance'
+end 'BagIter'
+
+public type Bag uses A, B implements Iterable with (Int, BIter)
+	public typealias BIter = BagIter with (A, B)
+	var n as Int
+
+	public static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	public function createIterator() returns BIter throws IterationError
+		return BIter.create()
+	end 'createIterator'
+end 'Bag'
+
+typealias StrBag = Bag with (Int, String)
+
+function main() returns ExitCode
+	let b = StrBag.create()
+	return 3 if b.contains(function(x Int) gives x == 2) else 4
+end 'main'
+```
+```exitcode
+3
+```

@@ -4616,8 +4616,8 @@ freed by another. The keys here are HEAP Strings (a `Map` copies a literal key i
 stranded reference is a real leak and the runner's exit code says so.
 
 ⚠ **A SECOND DECLARED INSTANTIATION IS PART OF THE CASE.** `typealias EnvMap = Map with String, String`
-is what makes `Map` answer `genericTypeIsInstantiated`, which is what gives `Map.map` a descriptor to
-forward into the iterator chain instead of the inert parameterised blob it would otherwise mint.
+instantiates `Map` by a declaration beside the literal. `Map.map` carries a descriptor under both, because
+its `ElementArray{}` is composed over `Map`'s parameters, and forwards it into the iterator chain.
 
 <!-- test: mapping-a-map-releases-the-entry-tuples-it-built -->
 ```maxon

@@ -1223,7 +1223,7 @@ type MaxonToStdLowering
 
 	// The whole-program signature index (`queryProgramSignatures`) — the source for a generic
 	// instance's `(baseId, args)` payload: `ensureLayoutDescriptor` sizes and mangles a descriptor
-	// through `genericInstanceBoxSize` / `genericInstanceSoleArgLogicalSize` / `mangleGenericInstance`.
+	// through `genericInstanceBoxSize` / `genericInstanceArgLogicalSize` / `mangleGenericInstance`.
 	var signatures as ProgramSignatures
 
 	// The current function's by-reference parameter mask and parameter count — see `stdTypeOf`. Both
@@ -3990,18 +3990,12 @@ type MaxonToStdLowering
 	// ever loads are `copyFunc@32`, `destroyFunc@40`, `elementLogicalSize@56` and `retainFunc@64`, and every
 	// one of them is a fact about the type ARGUMENT, which the run makes identical on both sides.
 	//
-	// ⛔⛔ **A CALLER THAT CARRIES NO DESCRIPTOR HAS NOTHING TO FORWARD, AND IT KEEPS THE MINT.**
-	// `stdlib/Interfaces.maxon`'s `extension Iterable` gives `Map` a `map` whose body walks a
-	// `MapIterator with (Key, Value)` — an instance over `Map`'s own parameters — yet `Map.map` reserves
-	// nothing: its need comes from a call on ANOTHER type's instance, and the descriptor-need fixpoint follows
-	// SELF-calls only (`Parser.solveDescriptorNeeds`), so no edge reaches it. Such a chain keeps what it has
-	// always had, a blob minted for the parameterised gid whose every ownership word is 0
-	// (`typeParamOwnershipProtocol` answers `none` for a type-parameter argument) — INERT, and inert on BOTH
-	// sides, because the retain and the drop read the same zero words. Forwarding a real descriptor into half
-	// of such a chain would make the retains fire while the drops still read the mint, which trades an inert
-	// pair for an unbalanced one. The forwarding edge is drawn only from a call whose receiver RESOLVES to such an
-	// instance (`Parser.nestedInstanceReceiverAt`), and the emitted cursor calls `Map.map` makes resolve to
-	// nothing — so that chain keeps both of its inert ends.
+	// A caller that carries no descriptor has nothing to forward and takes the mint below, which
+	// writes each argument's size and so panics on an instance over type parameters
+	// (`ProgramSignatures.genericInstanceArgLogicalSize`). `Map.map`, whose `extension Iterable` body
+	// walks a `MapIterator with (Key, Value)`, carries one: its `ElementArray{}` is composed over
+	// `Map`'s parameters, which seeds it directly (`Parser.opaqueContainerConstructionAt`), and its
+	// cursor calls forward that descriptor at block 0.
 	function emitInstanceDescriptorAddr(gid GenericInstanceId, dstBlock IrBlock) returns ValueId
 		if self.hasImplicitLayout and self.descriptorTableHolds(gid) 'resolvedAtTheConcreteRoot'
 			return self.emitDescriptorTableRead(gid, dstBlock: dstBlock)
@@ -4515,10 +4509,11 @@ type MaxonToStdLowering
 	end 'nullLayoutHolderSentence'
 
 	// The `.rdata` label of `gid`'s descriptor blob, emitting it on first reference. The blob is PURE DATA —
-	// box size, alignment, the T-slot storage width, and the source-level `elementLogicalSize` that
-	// `sizeof(T)` reads. Every function-pointer slot is 0 on disk; when `gid` holds an opaque-`T` `Array` or
-	// bare field whose SUBSTITUTED argument owns a record (`Container with String`), a
-	// `funcAbs64InRdata` relocation is recorded so the x64 writer patches `destroyFunc@40` with that
+	// box size, alignment, the T-slot storage width, and in each parameter's block the source-level
+	// `elementLogicalSize` that `sizeof` of that parameter reads. Every function-pointer slot is 0 on
+	// disk; when `gid` holds an opaque-`T` `Array` or bare field whose SUBSTITUTED argument owns a
+	// record (`Container with String`), a `funcAbs64InRdata` relocation is recorded so the x64 writer
+	// patches `destroyFunc@40` with that
 	// argument's destructor `.text` VA — the value the shared opaque `__managed_create` reads back into its
 	// record's `element_destroy@40`. An argument owning NO record (a scalar, a ranged alias, a payload-free
 	// enum) records nothing and the slot stays 0, so its walk is skipped. Idempotent: a gid referenced at
@@ -4536,37 +4531,21 @@ type MaxonToStdLowering
 			return self.layoutDescriptors.labelFor(gid)
 		end 'cached'
 
-		// ⭐⭐ **`elementLogicalSize` IS A QUESTION ONLY A SINGLE-PARAMETER INSTANCE HAS AN ANSWER TO, AND A
-		// MULTI-PARAMETER ONE STILL NEEDS THE REST OF THE DESCRIPTOR.**
-		//
-		// The slot exists for `sizeof(T)` — one type parameter, one size. `Map with (Key, Value)` has two, so
-		// there is no single element to size, so `genericInstanceSoleArgLogicalSize` has no answer for one.
-		// Panicking there would make every two-parameter generic holding a container over one of its
-		// parameters uncompilable — `type Map uses Key, Value` with `var keys as Array with Key` is exactly that shape,
-		// and it is why `stdlib/Map.maxon` could not be instantiated at all.
-		//
-		// ⚠ **THE OTHER THREE FIELDS ARE STILL MEANINGFUL AND STILL NEEDED**: the box size, the alignment and
-		// the type-parameter slot width are per-INSTANCE facts, and the destructor relocation below hangs off
-		// this same blob. Refusing to build a descriptor because ONE of its four fields has no answer denied
-		// the instance the three that do.
-		//
-		// ⚠ **WHY WRITING `LAYOUT_NO_SOLE_ELEMENT` HERE IS SOUND RATHER THAN A SENTINEL NOBODY CHECKS**: the
-		// only reader of this field is a shared body's `sizeof(T)`, and `parseSizeof` REFUSES `sizeof` of a
-		// multi-parameter generic's type parameter with a positioned `E2015` — before any descriptor is asked
-		// for. So the field is unreachable for exactly the instances that write it. The guarantee is the
-		// refusal, not a convention: delete that refusal and this becomes a wrong answer, which is why the two
-		// are named in each other's comments.
-		let soleArgLogicalSize = self.signatures.genericInstanceSoleArgLogicalSizeOrNone(gid)
-		let descriptor = LayoutDescriptor.create(self.signatures.genericInstanceBoxSize(gid) as MachineWord, alignment: LAYOUT_MIN_ALIGNMENT, elementSize: LAYOUT_TYPE_PARAM_SLOT_BYTES, elementLogicalSize: soleArgLogicalSize as MachineWord)
+		let descriptor = LayoutDescriptor.create(self.signatures.genericInstanceBoxSize(gid) as MachineWord, alignment: LAYOUT_MIN_ALIGNMENT, elementSize: LAYOUT_TYPE_PARAM_SLOT_BYTES)
 
 		// ⭐ ONE BLOCK PER TYPE PARAMETER — see `layoutDescriptorBytesFor` for the wild free a single shared
-		// `destroyFunc@40` caused on a two-parameter generic. A one-parameter instance emits one block and is
-		// byte-identical to what it always emitted.
+		// `destroyFunc@40` caused on a two-parameter generic.
 		let paramCount = self.signatures.genericInstanceArgCount(gid)
+		var logicalSizes = ByteOffsetArray.create()
+
+		for position in 0 upto paramCount 'eachLogicalSize'
+			logicalSizes.push(self.signatures.genericInstanceArgLogicalSize(gid, position: position))
+		end 'eachLogicalSize'
+
 		view filed = self.tableOfBase(gid)
 		view table = filed.instances
 		view witnesses = filed.witnesses
-		var image = encodeLayoutDescriptor(descriptor, typeParamCount: paramCount)
+		var image = encodeLayoutDescriptor(descriptor, elementLogicalSizes: logicalSizes)
 		appendLayoutTableSlots(image, entryCount: table.count() + witnesses.count())
 		let label = self.globalData.registerRdataConstantLabeled("__layout_{String.from(self.signatures.mangleGenericInstance(gid))}", bytes: image, kind: RdataPayloadKind.layoutDescriptor)
 		self.layoutDescriptors.record(gid, label: label)
@@ -4642,10 +4621,11 @@ type MaxonToStdLowering
 		self.globalData.recordRdataAbs64InRdata(self.ensureWitnessTable(entry.conformer, instance: WitnessTableInstance.perInstance(resolved), interfaceName: entry.interfaceName), rdataLabel: label, offsetInLabel: offsetInLabel)
 	end 'stampWitnessTableEntry'
 
-	// Lower `sizeof(T)` to a runtime read of `elementLogicalSize@56` from the CURRENT function's
-	// layout descriptor. The parser folds every CONCRETE sizeof to a literal, so this op only ever carries
-	// a typeParameter; and it reserved the descriptor parameter whenever a body reads sizeof(T), so reaching
-	// here without one is a pre-scan/op-scan divergence — a loud bug, not a silent wrong load.
+	// Lower `sizeof(T)` to a runtime read of `elementLogicalSize@56` from `T`'s own block of the
+	// CURRENT function's layout descriptor. The parser folds every CONCRETE sizeof to a literal, so
+	// this op only ever carries a typeParameter; and it reserved the descriptor parameter whenever a
+	// body reads sizeof(T), so reaching here without one is a pre-scan/op-scan divergence — a loud
+	// bug, not a silent wrong load.
 	function lowerSizeofType(result ValueId, targetType MaxonType, dstBlock IrBlock)
 		if maxonTypeTag(targetType) != ValueTypeTag.typeParameter 'notTypeParam'
 			panic("lowerSizeofType: sizeofType carries a {maxonTypeTag(targetType).name} operand — the parser folds every concrete sizeof to a literal, so only the type-parameter case reaches this op")
@@ -4655,7 +4635,8 @@ type MaxonToStdLowering
 			panic("lowerSizeofType: sizeof(T) in '{String.from(self.currentFuncName())}' but the function carries no layout descriptor parameter — the parser's slot reservation and this lowering's op-scan disagree")
 		end 'noLayout'
 
-		self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(result, addrId: self.implicitLayoutValueId, offset: LAYOUT_OFFSET_ELEMENT_LOGICAL_SIZE, valueType: StdType.i64))
+		let blockOffset = layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(targetType))
+		self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(result, addrId: self.implicitLayoutValueId, offset: blockOffset + LAYOUT_OFFSET_ELEMENT_LOGICAL_SIZE, valueType: StdType.i64))
 	end 'lowerSizeofType'
 
 	// Lower a Maxon `call` to `StdOp.call`. The parser recorded the argument SSA values

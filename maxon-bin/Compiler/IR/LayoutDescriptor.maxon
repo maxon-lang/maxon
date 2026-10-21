@@ -3,9 +3,9 @@
 // ⭐ **The compiler does NOT monomorphize a generic body.** `Sizer.typeSize` compiles ONCE against an
 // opaque `T` (an i64), and everything the body needs to know about the concrete `T` at a given
 // call site arrives at RUNTIME through a hidden trailing parameter: the address of a fixed-shape
-// 72-byte descriptor blob in `.rdata`. `sizeof(T)` inside the shared body is a LOAD of this blob's
-// `elementLogicalSize@56` slot; the caller passes the address of the descriptor for its concrete
-// instance (`__layout_Sizer_bool`). This is the "dictionary-passing" model.
+// 72-byte descriptor blob in `.rdata`. `sizeof(T)` inside the shared body is a LOAD of the
+// `elementLogicalSize@56` slot in `T`'s own block; the caller passes the address of the descriptor
+// for its concrete instance (`__layout_Sizer_bool`). This is the "dictionary-passing" model.
 //
 // ⚠ **The byte shape is an ABI between two ends** — `LowerMaxonToStd` WRITES the blob
 // (`encodeLayoutDescriptor`) and READS it back (`sizeof(T)` → a load at a constant offset). Its first
@@ -20,8 +20,8 @@
 //   +32  copyFunc           u64   0 for a trivial instance (no copy thunk)
 //   +40  destroyFunc        u64   0 for a trivial instance (no destroy thunk)
 //   +48  fieldOffsetsPtr    u64   0 (no per-field-offset blob)
-//   +56  elementLogicalSize u64   source-level `sizeof` of the single type arg (bool=1, a 2-int
-//                                 Pair=16); the ONE slot `sizeof(T)` reads
+//   +56  elementLogicalSize u64   source-level `sizeof` of the block's own type arg (bool=1, a
+//                                 2-int Pair=16); the slot `sizeof(T)` reads
 //   +64  retainFunc         u64   0 when the type ARGUMENT owns nothing; how a shared body takes a
 //                                 REFERENCE to a borrowed opaque `T` it stores
 //
@@ -41,18 +41,13 @@
 // `layoutDescriptorBytesFor` for the wild free a single shared pair causes, and `layoutBlockOffsetFor`
 // for how a reader addresses parameter `i`'s block. A ONE-parameter instance is one block and is
 // byte-identical to everything above.
-//
-// ⚠ `elementLogicalSize@56` answers only for a SOLE parameter (`LAYOUT_NO_SOLE_ELEMENT`), even
-// though block `i` has somewhere to put parameter `i`'s size: filling it would be a widening of
-// what `sizeof(T)` means in a multi-parameter body, which `parseSizeof` refuses today. The slot and the
-// refusal are named in each other's comments precisely so that pair moves together or not at all.
 
 // The fixed on-disk size of ONE descriptor block — one type parameter's dictionary. Every field is a
 // machine word (8 bytes), and there are nine of them.
 let LAYOUT_DESCRIPTOR_BYTE_SIZE = 72
 
-// The byte offset of the `elementLogicalSize` slot — the source-level `sizeof` of the single type
-// arg. `sizeof(T)` inside a shared generic body lowers to a load of `[descriptor + this]`. `module`
+// The byte offset of the `elementLogicalSize` slot — the source-level `sizeof` of the block's type
+// arg. `sizeof(T)` inside a shared generic body lowers to a load of `[T's block + this]`. `module`
 // rather than `export`: its one reader, `LowerMaxonToStd`, is inside this directory.
 module let LAYOUT_OFFSET_ELEMENT_LOGICAL_SIZE = 56 as ByteOffset
 
@@ -131,20 +126,6 @@ module let LAYOUT_MIN_ALIGNMENT = 8 as MachineWord
 // full SOURCE size). For a `bool` argument they diverge (8 vs 1), exactly where the descriptor header
 // says the two concepts must stay separate.
 export let LAYOUT_TYPE_PARAM_SLOT_BYTES = 8 as MachineWord
-
-// ⭐⭐ **WHAT `elementLogicalSize@56` HOLDS FOR AN INSTANCE THAT HAS NO SINGLE ELEMENT** — `Map with (Key,
-// Value)` and every other multi-parameter generic.
-//
-// The field answers `sizeof(T)`, which presupposes ONE `T`. A two-parameter instance has no such size, and
-// the other three fields of its descriptor (box size, alignment, slot width) are needed exactly as much as
-// a one-parameter instance's — the element-destructor relocation hangs off the same blob.
-//
-// ⚠ **THIS IS UNREADABLE RATHER THAN MERELY UNREAD, AND THAT IS THE WHOLE ARGUMENT.** `parseSizeof` refuses
-// `sizeof` of a multi-parameter generic's type parameter with a positioned `E2015`, so the one consumer of
-// this field cannot be reached for the instances that write this value. It is a guarantee held by a
-// refusal, not a convention — relax that refusal and this becomes a wrong answer, so the two are named in
-// each other's comments (`ProgramSignatures.genericInstanceSoleArgLogicalSizeOrNone`).
-export let LAYOUT_NO_SOLE_ELEMENT = 0 as MachineWord
 
 // The MACHINE WORD every value with no narrower home occupies — a bare `int`, a `float`, a function
 // pointer, a managed box's pointer, and a ranged alias whose range does not fit a narrower slot. Named
@@ -707,9 +688,11 @@ let LAYOUT_ZERO_SLOTS_MID = 4 as ByteOffset
 // number covering both would have to be read against the field order to be understood.
 let LAYOUT_ZERO_SLOTS_TAIL = 1 as ByteOffset
 
-// The data model for one instance's descriptor. Only the four slots carrying a value are fields; the
-// four zero slots are supplied by the encoder (they carry no information, and inventing fields to
-// hold a constant 0 would be a place for the encoder and the model to disagree).
+// The data model for one instance's descriptor. Only the three slots that are the same in
+// every block are fields; each block's `elementLogicalSize@56` is handed to the encoder per
+// parameter, and the zero slots are supplied by the encoder (they carry no information, and
+// inventing fields to hold a constant 0 would be a place for the encoder and the model to
+// disagree).
 //
 // ⚠ `elementSize` and `elementLogicalSize` are DISTINCT and must stay so: the first
 // is the arg's STORAGE width in the box (8 for an opaque `T` slot, whatever the arg), the second is
@@ -719,22 +702,23 @@ module type LayoutDescriptor
 	export let size as MachineWord
 	export let alignment as MachineWord
 	export let elementSize as MachineWord
-	export let elementLogicalSize as MachineWord
 
-	module static function create(size MachineWord, alignment MachineWord, elementSize MachineWord, elementLogicalSize MachineWord) returns LayoutDescriptor
-		return Self{size: size, alignment: alignment, elementSize: elementSize, elementLogicalSize: elementLogicalSize}
+	module static function create(size MachineWord, alignment MachineWord, elementSize MachineWord) returns LayoutDescriptor
+		return Self{size: size, alignment: alignment, elementSize: elementSize}
 	end 'create'
 end 'LayoutDescriptor'
 
-// Encode a LayoutDescriptor into its fixed 72-byte `.rdata` image — nine little-endian machine
-// words. The three function-pointer slots (+32 copyFunc, +40 destroyFunc, +64 retainFunc) and the
-// field-offsets slot (+48) are zero on disk for a trivial instance: it has no thunk, owes no reference and
-// has no field-offset blob, so nothing patches them and the blob needs no relocation.
-module function encodeLayoutDescriptor(d LayoutDescriptor, typeParamCount ElementIndex) returns ByteArray
+// Encode a LayoutDescriptor as one 72-byte block of nine little-endian machine words per entry of
+// `elementLogicalSizes`, which is in type-parameter order: block `i` is what `sizeof` of
+// parameter `i` reads. The three function-pointer slots (+32 copyFunc, +40 destroyFunc, +64
+// retainFunc) and the field-offsets slot (+48) are zero on disk for a trivial instance: it has no
+// thunk, owes no reference and has no field-offset blob, so nothing patches them and the blob needs
+// no relocation.
+module function encodeLayoutDescriptor(d LayoutDescriptor, elementLogicalSizes ByteOffsetArray) returns ByteArray
 	var buf = ByteArray.create()
-	buf.reserve(layoutDescriptorBytesFor(typeParamCount))
+	buf.reserve(layoutDescriptorBytesFor(elementLogicalSizes.count() as ElementIndex))
 
-	for _ in 0 upto typeParamCount 'eachTypeParam'
+	for logicalSize in elementLogicalSizes 'eachTypeParam'
 		writeLayoutWord(buf, value: d.size)
 		writeLayoutWord(buf, value: d.alignment)
 		writeLayoutWord(buf, value: d.elementSize)
@@ -743,7 +727,7 @@ module function encodeLayoutDescriptor(d LayoutDescriptor, typeParamCount Elemen
 			writeLayoutWord(buf, value: 0)
 		end 'zeroSlots'
 
-		writeLayoutWord(buf, value: d.elementLogicalSize)
+		writeLayoutWord(buf, value: logicalSize as MachineWord)
 
 		for _ in 0 upto LAYOUT_ZERO_SLOTS_TAIL 'tailZeroSlots'
 			writeLayoutWord(buf, value: 0)
@@ -774,9 +758,9 @@ end 'encodeLayoutDescriptor'
 // and no second offset argument; the caller, which knows `i` statically, hands them the right block. A
 // ONE-parameter instance has one block at offset 0.
 //
-// The header fields (size, alignment, elementSize, elementLogicalSize) are the INSTANCE's and are the
-// same in every block, so block `i` is a complete dictionary for parameter `i` and a reader never has
-// to hold two pointers.
+// The header fields (size, alignment, elementSize) are the INSTANCE's and are the same in every
+// block, and `elementLogicalSize@56` is parameter `i`'s own, so block `i` is a complete dictionary
+// for parameter `i` and a reader never has to hold two pointers.
 function layoutDescriptorBytesFor(typeParamCount ElementIndex) returns ByteOffset
 	return LAYOUT_DESCRIPTOR_BYTE_SIZE * (typeParamCount as ByteOffset)
 end 'layoutDescriptorBytesFor'
