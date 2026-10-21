@@ -932,7 +932,7 @@ function retireDisambiguatingLiteralCasts(project Project, func IrFunction, read
 	end 'args'
 
 	for argId in args 'retireEach'
-		_ = func.literalCastArguments.remove(argId)
+		func.retireLiteralCast(argId)
 	end 'retireEach'
 end 'retireDisambiguatingLiteralCasts'
 
@@ -1157,7 +1157,7 @@ end 'bindTransferredArgument'
 
 function replaceDeferredArgument(args ValueIdArray, func IrFunction, column ParamCount, value ValueId)
 	let passed = try args.get(column) otherwise panic("replaceDeferredArgument: column {column} is outside the call's {args.count()} arguments")
-	moveLiteralCastEntry(func.literalCastArguments, from: passed, to: value)
+	func.moveLiteralCast(passed, to: value)
 	try args.set(column, value: value) otherwise panic("replaceDeferredArgument: args.set OOB at {column}")
 end 'replaceDeferredArgument'
 
@@ -1214,44 +1214,54 @@ function bindOverloadChoiceArguments(project Project, module MaxonModule, func I
 	retargetArgRangeSites(project, func: func, opIndex: opIndex, callee: callee, member: member, args: args)
 end 'bindOverloadChoiceArguments'
 
-// Point every constant-argument range-check site this call owns at the member it resolved to. A function with
+// File, in `Project.rangeSiteFacts`, the member each constant-argument range-check site this call
+// owns resolved to; the site itself is the parse artifact's and stays as parsed. A function with
 // no such site files no entry at all (`Parser.commitRangeChecks`), which is the common case and costs one
 // lookup.
 function retargetArgRangeSites(project Project, func IrFunction, opIndex ElementIndex, callee ByteArray, member ByteArray, args ValueIdArray)
-	var checks = try project.rangeChecks.get(func.name) otherwise return
+	view checks = try project.rangeChecks.get(func.name) otherwise return
 
-	// Index-based, so `site` is a mutable binding: the retarget writes the record's own `callee` field, and a
-	// `for x in …` loop variable is immutable. `checks` is a `var` for the same write, which lands in its sites.
 	for i in 0 upto checks.argSites.count() 'eachSite'
-		var site = try checks.argSites.get(i) otherwise panic("retargetArgRangeSites: argSites.get OOB at {i} inside its own count()")
+		view site = try checks.argSites.get(i) otherwise panic("retargetArgRangeSites: argSites.get OOB at {i} inside its own count()")
 
-		// ⭐ **A SITE OF A DIFFERENT CALL IS NOT THIS ONE'S TO CLAIM OR TO COMPLAIN ABOUT.** The match below
-		// is by argument VALUE, which a binding passed to two calls shares — so without this the second call
-		// reads the first's already-retargeted site as claimed by a foreign member. `bareCallee` is the name
-		// the source wrote and is never rewritten; see `RangeCheckArgSite` for the twenty refusals it fixes.
-		if not site.parameter.bareCalleeIs(callee) 'aSiteOfADifferentCall'
+		if let retargeted = try project.rangeSiteFacts.retargetedParameter(func.name, index: i) 'alreadyRetargeted'
+			claimArgSite(project, func: func, opIndex: opIndex, callee: callee, member: member, args: args, argSites: checks.argSites, index: i, parameter: retargeted)
 			continue
-		end 'aSiteOfADifferentCall'
+		end 'alreadyRetargeted'
 
-		if not valueIdArrayContains(args, value: site.value) 'notThisCall'
-			continue
-		end 'notThisCall'
-
-		view resolved = site.parameter.resolvedCallee()
-
-		if resolved.equals(callee) 'stillBare'
-			site.parameter = site.parameter.retargetedTo(member)
-			continue
-		end 'stillBare'
-
-		// Already claimed — by this same member (a second argument of one call, or a re-run of this pass over
-		// the memoized module) or, the residual the header names, by a DIFFERENT member.
-		if not resolved.equals(member) 'claimedByAnotherMember'
-			let range = project.opRanges.get(opIndex)
-			reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "two calls to different overloads of '{String.from(callee)}' pass the SAME binding as a constant argument whose range must be checked against the callee's declared parameter type. That check is recorded against the argument's value, before any overload is known, so the two calls cannot be told apart and one would be checked against the other's parameters. Bind the argument separately for each call, or give the overloads distinct names", line: range.line, column: range.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
-		end 'claimedByAnotherMember'
+		claimArgSite(project, func: func, opIndex: opIndex, callee: callee, member: member, args: args, argSites: checks.argSites, index: i, parameter: site.parameter)
 	end 'eachSite'
 end 'retargetArgRangeSites'
+
+function claimArgSite(project Project, func IrFunction, opIndex ElementIndex, callee ByteArray, member ByteArray, args ValueIdArray, argSites RangeCheckArgSiteArray, index ElementIndex, parameter ArgSiteParameter)
+	view site = try argSites.get(index) otherwise panic("claimArgSite: argSites.get OOB at {index}")
+
+	// ⭐ **A SITE OF A DIFFERENT CALL IS NOT THIS ONE'S TO CLAIM OR TO COMPLAIN ABOUT.** The match below
+	// is by argument VALUE, which a binding passed to two calls shares — so without this the second call
+	// reads the first's already-retargeted site as claimed by a foreign member. `bareCallee` is the name
+	// the source wrote and is never rewritten; see `RangeCheckArgSite` for the twenty refusals it fixes.
+	if not parameter.bareCalleeIs(callee) 'aSiteOfADifferentCall'
+		return
+	end 'aSiteOfADifferentCall'
+
+	if not valueIdArrayContains(args, value: site.value) 'notThisCall'
+		return
+	end 'notThisCall'
+
+	view resolved = parameter.resolvedCallee()
+
+	if resolved.equals(callee) 'stillBare'
+		project.rangeSiteFacts.retargetArgParameter(func.name, argSites: argSites, index: index, to: parameter.retargetedTo(member))
+		return
+	end 'stillBare'
+
+	// Already claimed — by this same member (a second argument of one call, or a re-run of this pass over
+	// the memoized module) or, the residual the header names, by a DIFFERENT member.
+	if not resolved.equals(member) 'claimedByAnotherMember'
+		let range = project.opRanges.get(opIndex)
+		reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "two calls to different overloads of '{String.from(callee)}' pass the SAME binding as a constant argument whose range must be checked against the callee's declared parameter type. That check is recorded against the argument's value, before any overload is known, so the two calls cannot be told apart and one would be checked against the other's parameters. Bind the argument separately for each call, or give the overloads distinct names", line: range.line, column: range.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
+	end 'claimedByAnotherMember'
+end 'claimArgSite'
 
 // Is `value` one of these ids? A linear scan over an argument list, which is tiny — and asked only for a call
 // that resolved to a mangled overload member in a function that has a range-check site at all.

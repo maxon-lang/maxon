@@ -1123,6 +1123,7 @@ type HoldResolver
 	var accFlags as HoldWord
 	var accEarlierEnds as ElementIndex
 	var prober as ElementIndex
+	var rangePositions as RangeSitePositionArray
 
 	var functions as IrFunctionArray
 	var projectionRead as BoolArray
@@ -1139,7 +1140,7 @@ type HoldResolver
 		projectionBegin.growFilled(functions.count(), value: 0)
 		var projectionEnd = HoldIndexColumn.create()
 		projectionEnd.growFilled(functions.count(), value: 0)
-		return Self{functions: functions, projectionRead: projectionRead, projectionBegin: projectionBegin, projectionEnd: projectionEnd, projectionOffsets: HoldIndexColumn.create(), receiverLoadResults: ValueIdArray.create(), receiverLoadOffsets: HoldIndexColumn.create(), project: project, module: module, judge: judge, events: events, tally: HoldTally.create(), entryOps: HoldIndexColumn.create(), entryBlocks: HoldIndexColumn.create(), entryPositions: HoldIndexColumn.create(), entryHelds: ValueIdArray.create(), entryIsEnd: BoolArray.create(), siteEntries: HoldIndexColumn.create(), siteSources: ValueIdArray.create(), siteReplacing: BoolArray.create(), siteKinds: HoldKindArray.create(), siteVerdicts: HoldVerdictColumn.create(), siteOfHeld: HoldIndexColumn.create(), isSiteResult: BoolArray.create(), defKnown: BoolArray.create(), defOps: HoldIndexColumn.create(), isBlockArg: BoolArray.create(), chainCursor: 0, chainTop: false, chainHasElement: false, chainHasWildElement: false, hopEvents: HoldIndexColumn.create(), nodeKeys: HoldKeyColumn.create(), visited: HoldIndexColumn.create(), stack: HoldIndexColumn.create(), stackFroms: HoldIndexColumn.create(), successors: BlockIdArray.create(), blockIndex: BlockIndexById.create(), deletedKeys: HoldKeyColumn.create(), siteMasks: HoldWordColumn.create(), siteTokenBegin: HoldIndexColumn.create(), siteTokens: HoldIndexColumn.create(), chainStamp: 0, hopLocals: HoldStampedIndex.create(), nodeSlots: HoldEventIds.create(), nodeLocals: HoldStampedIndex.create(), hopLocalEvents: HoldIndexColumn.create(), hopLocalBits: HoldIndexColumn.create(), localCount: 0, wordsPerSummary: 0, summaryWords: HoldWordColumn.create(), summaryFlags: HoldWordColumn.create(), summaryEarlierEnds: HoldIndexColumn.create(), summaryEndBegin: HoldIndexColumn.create(), summaryEndStop: HoldIndexColumn.create(), jumpedStamps: HoldIndexColumn.create(), endBlocks: HoldIndexColumn.create(), endPositions: HoldIndexColumn.create(), calleeTokenSlots: HoldStampedIndex.create(), calleeTokenBegin: HoldIndexColumn.create(), calleeTokenStop: HoldIndexColumn.create(), calleeTokens: HoldIndexColumn.create(), accWords: HoldWordColumn.create(), accFlags: 0, accEarlierEnds: 0, prober: 0}
+		return Self{functions: functions, projectionRead: projectionRead, projectionBegin: projectionBegin, projectionEnd: projectionEnd, projectionOffsets: HoldIndexColumn.create(), receiverLoadResults: ValueIdArray.create(), receiverLoadOffsets: HoldIndexColumn.create(), project: project, module: module, judge: judge, events: events, tally: HoldTally.create(), entryOps: HoldIndexColumn.create(), entryBlocks: HoldIndexColumn.create(), entryPositions: HoldIndexColumn.create(), entryHelds: ValueIdArray.create(), entryIsEnd: BoolArray.create(), siteEntries: HoldIndexColumn.create(), siteSources: ValueIdArray.create(), siteReplacing: BoolArray.create(), siteKinds: HoldKindArray.create(), siteVerdicts: HoldVerdictColumn.create(), siteOfHeld: HoldIndexColumn.create(), isSiteResult: BoolArray.create(), defKnown: BoolArray.create(), defOps: HoldIndexColumn.create(), isBlockArg: BoolArray.create(), chainCursor: 0, chainTop: false, chainHasElement: false, chainHasWildElement: false, hopEvents: HoldIndexColumn.create(), nodeKeys: HoldKeyColumn.create(), visited: HoldIndexColumn.create(), stack: HoldIndexColumn.create(), stackFroms: HoldIndexColumn.create(), successors: BlockIdArray.create(), blockIndex: BlockIndexById.create(), deletedKeys: HoldKeyColumn.create(), siteMasks: HoldWordColumn.create(), siteTokenBegin: HoldIndexColumn.create(), siteTokens: HoldIndexColumn.create(), chainStamp: 0, hopLocals: HoldStampedIndex.create(), nodeSlots: HoldEventIds.create(), nodeLocals: HoldStampedIndex.create(), hopLocalEvents: HoldIndexColumn.create(), hopLocalBits: HoldIndexColumn.create(), localCount: 0, wordsPerSummary: 0, summaryWords: HoldWordColumn.create(), summaryFlags: HoldWordColumn.create(), summaryEarlierEnds: HoldIndexColumn.create(), summaryEndBegin: HoldIndexColumn.create(), summaryEndStop: HoldIndexColumn.create(), jumpedStamps: HoldIndexColumn.create(), endBlocks: HoldIndexColumn.create(), endPositions: HoldIndexColumn.create(), calleeTokenSlots: HoldStampedIndex.create(), calleeTokenBegin: HoldIndexColumn.create(), calleeTokenStop: HoldIndexColumn.create(), calleeTokens: HoldIndexColumn.create(), accWords: HoldWordColumn.create(), accFlags: 0, accEarlierEnds: 0, prober: 0, rangePositions: RangeSitePositionArray.create()}
 	end 'create'
 
 	function resolveFunction(func IrFunction, index ElementIndex)
@@ -2139,33 +2140,30 @@ type HoldResolver
 	end 'removeDeletedOps'
 
 	function adjustRangeSites(func IrFunction)
-		var checks = try self.project.rangeChecks.get(func.name) otherwise return
+		view checks = try self.project.rangeChecks.get(func.name) otherwise return
 
 		if checks.sites.count() == 0 'noSites'
 			return
 		end 'noSites'
 
-		var shifts = HoldIndexColumn.create()
+		self.project.rangeSiteFacts.fillMaxonPositions(self.rangePositions, name: func.name, sites: checks.sites)
 		var anyShifted = false
 
-		for site in checks.sites 'eachSite'
+		for index in 0 upto checks.sites.count() 'eachSite'
+			view site = try checks.sites.get(index) otherwise panic("HoldResolver.adjustRangeSites: sites.get OOB at {index}")
+			let position = try self.rangePositions.get(index) otherwise panic("HoldResolver.adjustRangeSites: positions.get OOB at {index}, filled one per site")
 			let sitePosition = self.positionOfBlock(site.block)
-			let below = countKeysBelow(self.deletedKeys, target: holdKey(sitePosition, position: site.maxonOpPos)) - countKeysBelow(self.deletedKeys, target: holdKey(sitePosition, position: 0))
-			shifts.push(below)
+			let below = countKeysBelow(self.deletedKeys, target: holdKey(sitePosition, position: position)) - countKeysBelow(self.deletedKeys, target: holdKey(sitePosition, position: 0))
 
 			if below > 0 'shifted'
+				try self.rangePositions.set(index, value: position - below) otherwise panic("HoldResolver.adjustRangeSites: positions.set OOB at {index}, which the read above just found in range")
 				anyShifted = true
 			end 'shifted'
 		end 'eachSite'
 
-		if not anyShifted 'nothingShifts'
-			return
-		end 'nothingShifts'
-
-		for index in 0 upto checks.sites.count() 'eachAdjustedSite'
-			var site = try checks.sites.get(index) otherwise panic("HoldResolver.adjustRangeSites: sites.get OOB at {index}")
-			site.maxonOpPos = site.maxonOpPos - (try shifts.get(index) otherwise panic("HoldResolver.adjustRangeSites: shifts.get OOB at {index}"))
-		end 'eachAdjustedSite'
+		if anyShifted 'somethingShifted'
+			self.project.rangeSiteFacts.shiftedMaxonPositions.upsert(func.name, value: self.rangePositions.clone())
+		end 'somethingShifted'
 	end 'adjustRangeSites'
 
 	function logTally()

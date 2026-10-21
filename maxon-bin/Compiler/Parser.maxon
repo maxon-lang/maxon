@@ -20093,6 +20093,12 @@ export type Parser
 		// `checkUnusedExports` needs both to answer one question; kept apart because they are two facts (see
 		// `Parser.memberAccessedTypeNames`).
 		self.artifact.memberAccessedTypeNames = self.memberAccessedTypeNames
+
+		for position in 0 upto self.artifact.module.functions.count() 'eachFunction'
+			var published = try self.artifact.module.functions.get(position) otherwise panic("parseModule: functions.get OOB at {position}")
+			published.surrenderColumns()
+		end 'eachFunction'
+
 		return self.artifact
 	end 'parseModule'
 
@@ -45275,7 +45281,7 @@ export type Parser
 	// `popBodyOp` / `setBodyOp` is what enumerates them.
 	function rehomeArmRangeSites(fromBlock BlockId, toBlock BlockId, opShift ElementIndex, firstSite ElementIndex, endSite ElementIndex)
 		for i in firstSite upto endSite 'eachArmSite'
-			var site = try self.bodyState.rangeCheckSites.get(i) otherwise panic("rehomeArmRangeSites: rangeCheckSites.get OOB at {i}, inside the range the ternary's own marks bound")
+			view site = try self.bodyState.rangeCheckSites.get(i) otherwise panic("rehomeArmRangeSites: rangeCheckSites.get OOB at {i}, inside the range the ternary's own marks bound")
 
 			if site.block != fromBlock 'recordedInAnInnerArmBlock'
 				continue
@@ -45285,8 +45291,7 @@ export type Parser
 				panic("rehomeArmRangeSites: a site recorded during the true arm names position {site.maxonOpPos} of block {fromBlock}, which already held {opShift} ops when the arm began — a block's ordinals only grow while the parser is inside it, so a site recorded after the mark cannot stand before it")
 			end 'aheadOfTheArm'
 
-			site.block = toBlock
-			site.maxonOpPos = site.maxonOpPos - opShift
+			try self.bodyState.rangeCheckSites.set(i, value: site.placedAt(toBlock, atOrdinal: site.maxonOpPos - opShift)) otherwise panic("rehomeArmRangeSites: rangeCheckSites.set OOB at {i}, which the read above just found in range")
 		end 'eachArmSite'
 	end 'rehomeArmRangeSites'
 
@@ -99738,13 +99743,13 @@ export type Parser
 		_ = try self.bodyState.currentBlock.popBodyOp() otherwise panic("removeCurrentBlockOpAt: popBodyOp on a block the caller proved holds position {removedAt}")
 
 		for i in siteMark upto self.bodyState.rangeCheckSites.count() 'eachSiteSinceTheOpWasAppended'
-			var site = try self.bodyState.rangeCheckSites.get(i) otherwise panic("removeCurrentBlockOpAt: rangeCheckSites.get OOB at {i} of {self.bodyState.rangeCheckSites.count()}")
+			view site = try self.bodyState.rangeCheckSites.get(i) otherwise panic("removeCurrentBlockOpAt: rangeCheckSites.get OOB at {i} of {self.bodyState.rangeCheckSites.count()}")
 
 			if site.block != self.bodyState.currentBlock.id or site.maxonOpPos <= removedAt 'unmovedByTheRemoval'
 				continue
 			end 'unmovedByTheRemoval'
 
-			site.maxonOpPos = site.maxonOpPos - 1
+			try self.bodyState.rangeCheckSites.set(i, value: site.placedAt(site.block, atOrdinal: site.maxonOpPos - 1)) otherwise panic("removeCurrentBlockOpAt: rangeCheckSites.set OOB at {i}, which the read above just found in range")
 		end 'eachSiteSinceTheOpWasAppended'
 	end 'removeCurrentBlockOpAt'
 

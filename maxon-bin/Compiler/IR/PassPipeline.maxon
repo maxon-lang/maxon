@@ -53,10 +53,11 @@ export union PassKind
 	//
 	// ⚠ **IT RUNS AFTER `insertRangeChecks`, AND THAT IS FORCED RATHER THAN CHOSEN.** A range-check site is
 	// recorded as `(blockId, stdOpPos)` in the coordinate space `lowerMaxonToStd` left the block in
-	// (`RangeCheckSite.stdOpPos`), and this pass SPLITS blocks and removes an op from one — so a site
-	// recorded past a split point would land in a block that no longer holds it, or trip `guardSiteAt`'s
-	// own `pastTheBlock` panic. Running after leaves that coordinate space untouched and costs nothing:
-	// the guards this pass emits are ordinary loads and compares, of no interest to a narrowing check.
+	// (`RangeSiteFacts.stdPositions`), and this pass SPLITS blocks and removes an op from one — so a
+	// site recorded past a split point would land in a block that no longer holds it, or trip
+	// `guardSiteAt`'s own `pastTheBlock` panic. Running after leaves that coordinate space untouched
+	// and costs nothing: the guards this pass emits are ordinary loads and compares, of no interest to
+	// a narrowing check.
 	//
 	// ⭐⭐ **AND IT RUNS BEFORE `inlineLeaves`, WHICH IS THE WHOLE OF THAT ROW.** `__managed_count`
 	// is the one primitive this pass rewrites IN PLACE — into a single `loadIndirect` — and every accessor
@@ -869,8 +870,10 @@ export type PassPipeline
 	// frees its ops, blocks and spans and nothing else. The Maxon-tier COLUMNS ride on functions the back
 	// end still holds.
 	export function releaseMaxonTier()
+		var emptyScope = Scope.create()
+
 		for func in self.stdModule.functions 'eachFunc'
-			func.releaseMaxonTierData()
+			func.releaseMaxonTierData(emptyScope)
 		end 'eachFunc'
 
 		self.maxonModule.releaseWholly()

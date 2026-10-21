@@ -15,7 +15,12 @@ export let VerifyCommandName = "verify-warm-rebuild"
 // What the driver prints for the verdict over every property.
 export let VerdictPassLine = "verify-warm-rebuild: PASS"
 
+let ImmutablePassLine = "PASS immutable:"
+
 // `<compiler> verify-warm-rebuild <staged>`, run in the staging tree.
-export function spawnVerify(staged FilePath) returns CollectedOutput
-	return spawnCompiler([VerifyCommandName, staged.toString()], staged: staged, what: "`{VerifyCommandName}`")
+export function spawnVerify(staged FilePath) returns CollectedOutput throws TestFailure
+	let run = spawnCompiler([VerifyCommandName, staged.toString()], staged: staged, what: "`{VerifyCommandName}`")
+
+	try Expect.contains(run.stdout, needle: ImmutablePassLine, message: "`{TestedCompilerStem} {VerifyCommandName}` did not report the reused parse artifacts unchanged. It printed: {run.stdout} — and wrote to stderr: {run.stderr}")
+	return run
 end 'spawnVerify'

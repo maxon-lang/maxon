@@ -617,7 +617,7 @@ is not a weak result, it is the wrong corpus for it**: nbody and fannkuch's `__m
 **WHERE THE FACT COMES FROM, AND WHY IT IS NOT ON THE OP.** `StdOp.call` carries `callee` and `args` and
 NO type — the Std tier is deliberately type-free — so the tier that still HAS the container's type is
 `LowerMaxonToStd`, which writes the stamp against the **Std op index** of the call it is appending
-(`Project.stdOpElementStrides`). A `(blockId, stdOpPos)` table like `RangeCheckSite`'s could not survive:
+(`Project.stdOpElementStrides`). A `(blockId, stdOpPos)` table like the range-check sites' could not survive:
 `insertRangeChecks` and `inlineLeaves` both split blocks. The op index does, and for a stated reason —
 `IrModule.ops` allocates indices by `push`, and **a leaf holds no call by rule** (`LeafOpRole.calling`
 refuses the callee outright), so `inlineLeaves` can neither clone nor re-issue a managed primitive.

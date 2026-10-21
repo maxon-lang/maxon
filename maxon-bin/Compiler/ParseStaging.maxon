@@ -419,9 +419,9 @@ module typealias FuncSignatureFloorMap = Map with (ByteArray, FuncSignatureEntry
 // `commitRangeChecks` — the same NEVER-touch-Project discipline the other `*Entry` families
 // follow. The alias/site NAMES are plain ByteArrays and the value ids are function-local, so —
 // like a `FunctionTypeAlias` — this rides the merge with NO interner remap.
-// ⚠ NOT exported: the entry is built here and drained by `commitRangeChecks` here, so only
-// `FunctionRangeCheckEntryArray` crosses a file boundary. `checkUnusedExports` (E3092) is what says so.
-type FunctionRangeCheckEntry
+// ⚠ `module`, not `export`: its readers outside this file are `VerifyWarmRebuild`'s parse digests,
+// which sit under `Compiler/`. `checkUnusedExports` (E3093) is what says so.
+module type FunctionRangeCheckEntry
 	export let name as ByteArray
 	export var checks as FunctionRangeChecks
 
@@ -491,11 +491,13 @@ export type FileParseArtifact
 
 	// ⭐⭐ **HAVE THIS ARTIFACT'S NAME IDS ALREADY BEEN FOLDED INTO THE PROJECT INTERNER?**
 	//
-	// The merge rewrites a file's LOCAL type-name ids into PROJECT-GLOBAL ones in place — the struct/enum
-	// LAYOUTS included, which the project registries then hold BY REFERENCE (`commitStructTypes` upserts the
-	// artifact's own object) — so a second fold of the same artifact must not rewrite them again. That is exact
-	// rather than defensive: `Queries.resetMergeTargets` does NOT reset `project.typeNames`, so the interner
-	// they were folded into is the one still in hand, across the stdlib body-demand fixpoint's re-folds.
+	// The merge rewrites a file's LOCAL type-name ids into PROJECT-GLOBAL ones in place — the
+	// struct/enum LAYOUTS included, which the project registries then hold BY REFERENCE
+	// (`commitStructTypes` upserts the artifact's own object, or a settled clone of an inline
+	// record's) — so a second fold of the same artifact must not rewrite them again. That is exact
+	// rather than defensive: `Queries.resetMergeTargets` does NOT reset `project.typeNames`, so the
+	// interner they were folded into is the one still in hand, across the stdlib body-demand
+	// fixpoint's re-folds.
 	//
 	// ⚠ **A RE-PARSE CLEARS IT FOR FREE**: a fresh parse builds a fresh artifact through `create` below, with
 	// file-local ids and this flag `false`.
@@ -993,7 +995,7 @@ export type FileParseArtifact
 	// a cast into a ranged alias or a ranged `return` — a function with neither files nothing, so
 	// the registry stays proportional to the range checks a program contains, not its function count.
 	export function recordFunctionRangeChecks(name ByteArray, checks FunctionRangeChecks)
-		self.rangeChecks.push(FunctionRangeCheckEntry.create(name.clone(), checks: checks.clone()))
+		self.rangeChecks.push(FunctionRangeCheckEntry.create(name.clone(), checks: checks))
 	end 'recordFunctionRangeChecks'
 
 	// Record a ranged-typealias declaration as this file's contribution to the
@@ -1315,7 +1317,7 @@ function commitArtifactRegistries(project Project, artifact FileParseArtifact, o
 	commitRangeChecks(project, artifact: artifact)
 	commitTypeAliases(project, artifact: artifact)
 	commitFunctionTypeAliases(project, artifact: artifact, signatures: signatures)
-	commitStructTypes(project, artifact: artifact)
+	commitStructTypes(project, artifact: artifact, signatures: signatures)
 	commitWrittenTupleTypes(project, artifact: artifact)
 	commitEnumTypes(project, artifact: artifact)
 	commitInterfaces(project, artifact: artifact)
@@ -1855,11 +1857,25 @@ end 'renderInstantiation'
 // ⇒ **a contested layout cannot reach this loop**, and a drop written here would be unreachable rather
 // than defensive. The enum twin's call is not the same shape: `upsertDeclaredEnum` is the ONE upsert both
 // enum registries share, so the rule rides it once for the sweep's sake and this site inherits it.
-function commitStructTypes(project Project, artifact FileParseArtifact)
+function commitStructTypes(project Project, artifact FileParseArtifact, signatures ProgramSignatures)
 	for layout in artifact.structTypes 'each'
-		project.structTypes.upsert(layout.name, value: layout)
+		project.structTypes.upsert(layout.name, value: committedStructLayout(layout, signatures: signatures))
 	end 'each'
 end 'commitStructTypes'
+
+// An inline record's packing is settled from this compile's widths onto a clone, because the
+// layout is the parse artifact's. `MmRuntime.installStructRuntimeEntries` stamps the runtime's
+// entries off `project.structTypes`, and left unsettled it answers a box's `sizeBytes()` for a
+// type whose value is a word.
+function committedStructLayout(layout StructLayout, signatures ProgramSignatures) returns StructLayout
+	if not signatures.nameIsInlineRecord(layout.name) 'aHeapRecord'
+		return layout
+	end 'aHeapRecord'
+
+	var settled = layout.clone()
+	settled.settleInlinePacking(signatures.inlineBitWidthsOf(layout.name))
+	return settled
+end 'committedStructLayout'
 
 function commitWrittenTupleTypes(project Project, artifact FileParseArtifact)
 	for written in artifact.writtenTupleTypes 'each'

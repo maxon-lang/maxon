@@ -49,12 +49,13 @@
 // ⚠ **WHERE IT IS SCHEDULED, AND WHY.** It runs AFTER
 // `insertRangeChecks` and before `pruneDeadBlockArgs`/`foldConstOperands`. Before the range checks it
 // CANNOT go: a range-check site is recorded as `(blockId, stdOpPos)` in the coordinate space
-// `lowerMaxonToStd` left the block in (`RangeCheckSite.stdOpPos`, `Project.maxon`), and this pass SPLITS
-// blocks and removes an op from one — so every site recorded past a split point would either land in a
-// block that no longer holds it or trip `guardSiteAt`'s own `pastTheBlock` panic. Running after costs
-// nothing and keeps that coordinate space untouched. Before `foldConstOperands` it must go: every bound
-// and stride this pass emits is a `const`, and the fold is what turns them
-// into `cmpImm`/`binOpImm` operands so they never occupy a register in the loops this pass makes hotter.
+// `lowerMaxonToStd` left the block in (`RangeSiteFacts.stdPositions`, `Project.maxon`), and this
+// pass SPLITS blocks and removes an op from one — so every site recorded past a split point would
+// either land in a block that no longer holds it or trip `guardSiteAt`'s own `pastTheBlock` panic.
+// Running after costs nothing and keeps that coordinate space untouched. Before `foldConstOperands`
+// it must go: every bound and stride this pass emits is a `const`, and the fold is what turns them
+// into `cmpImm`/`binOpImm` operands so they never occupy a register in the loops this pass makes
+// hotter.
 //
 // ⚠ **REGISTER PRESSURE IS THE COST, AND IT IS PAID IN THE LOOPS THE ALLOCATOR REFUSES TO SPILL.** Each
 // fast arm holds a handful of values live across its guard chain. They are kept to the minimum that is

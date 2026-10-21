@@ -106,7 +106,9 @@ pass that writes into a structure it got from a memo corrupts what the next comp
 The merged module is the one exception, and it is handled by dropping it: type resolution and managed-global
 setup do mutate it, so `invalidateAllModuleCache` discards it as each compile takes it. Re-folding it is cheap,
 and every expensive memo underneath survives. Parse artifacts are also rewritten on their first merge, which
-is safe only within one `Project`.
+is safe only within one `Project`, and that renumbering is the only write a parse artifact takes. A fact a
+later pass derives about a parse goes in a `Project` table the fold resets (`Project.rangeSiteFacts`), and a
+function copied out of a parse copies a column before its first write to it (`IrFunction.makePrivate`).
 
 Across `Project`s, the store a `CompileSession` carries (`CompileSession.fileMemos`) — one per spec worker
 process, one for the language server's document projects, one per MCP session — holds the library's tokens,
@@ -183,8 +185,8 @@ Two gates exercise the spine the spec suite cannot:
 
 - **`verify-warm-rebuild`** checks that two cold compiles are byte-identical; that re-asking every query on
   an unchanged `Project` hits every memo; that each kind of edit invalidates exactly the memos it should;
-  that a warm compile after an edit equals a cold one; and that later programs in one session are served
-  every library parse and still equal a cold compile of each.
+  that a warm compile after an edit equals a cold one and leaves every parse it reuses as merged; and that
+  later programs in one session are served every library parse and still equal a cold compile of each.
 - **`verify-recheck`** runs the whole pipeline repeatedly on one `Project`, as an editor does: the diagnostic
   count must be stable, an error that is fixed must stop being reported, and two live `Project`s checked in
   turn must not affect each other.

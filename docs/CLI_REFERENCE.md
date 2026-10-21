@@ -2988,7 +2988,11 @@ maxon verify-recheck <file|dir>
 - **`verify-warm-rebuild`** checks that the query layer is deterministic (two cold compiles agree byte
   for byte) and incremental (a rebuild reuses cached work, and each kind of edit invalidates exactly what
   it should), and that a compile reusing the memos of files an edit left alone emits exactly what a cold
-  compile of the edited program emits. It also compiles, in one session, a second program (the file plus a
+  compile of the edited program emits. Across that warm compile it checks that each reused parse stays as
+  the first merge left it: the same parse object before and after the edit, with every function, range-check
+  record, struct layout and run of blocks and ops reading the same after each pipeline and after the second
+  merge. That check prints `PASS immutable:`, or one `FAIL immutable:` line per change naming the file, the
+  stage that made it and the part it changed. It also compiles, in one session, a second program (the file plus a
   probe that declares its own types and an interface) and a third that shares none of the file's type
   names, and checks that both are served every library file's parse from the session's store and emit what
   a cold compile of each emits; for a program that shadows a library type, or declares a name the library

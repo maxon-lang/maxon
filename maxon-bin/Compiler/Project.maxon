@@ -4830,13 +4830,11 @@ end 'RangeCheckGuard'
 // that spends its value is emitted. An int->int cast emits no op at all, so a MAXON ordinal is the only
 // anchor there is.
 //
-// ⭐ **TWO POSITIONS, TWO TIERS, AND THE SITE CARRIES BOTH.** `maxonOpPos` is the PARSER's answer and
-// means nothing at the Std tier, where each Maxon op has become N; `stdOpPos` is `LowerMaxonToStd`'s
-// translation of it (`RangeSiteWalk`), and it is what `InsertRangeChecks` splits at. They are separate
-// fields rather than one rewritten in place because a field that changes meaning at a tier boundary is
-// a field the next reader has to date. `stdOpPos` is 0 until the lowering fills it, which
-// `FunctionRangeChecks.positionsResolved` is the presence bit for — a `0` is a legitimate position (a
-// guard at the very top of its block), so no value of it can mean "unset".
+// ⭐ **TWO POSITIONS, TWO TIERS.** `maxonOpPos` is the PARSER's answer and means nothing at the
+// Std tier, where each Maxon op has become N; the Std position is `LowerMaxonToStd`'s translation
+// of it (`RangeSiteWalk`), and it is what `InsertRangeChecks` splits at. The site carries only the
+// parser's: it belongs to the parse artifact, so this compile's positions live in
+// `Project.rangeSiteFacts`.
 // ⚠ **IT CARRIES NO `RangeCheckGuard`, AND CANNOT.** Every position that records one of these owes
 // BOTH halves — the array element's guard goes at the STORE (`Parser.requireContainerElementType`).
 // A field holding one value at every site is a fact written twice, and the copy that goes stale is
@@ -4848,18 +4846,20 @@ end 'RangeCheckGuard'
 // receiver instance's substituted type argument, which the call site holds. So it is an ordinary
 // alias-named door like every other, and it owes both halves like every other.
 export type RangeCheckSite
-	export var value as ValueId
-	export var target as RangeCheckSiteTarget
-	export var block as BlockId
-	export var maxonOpPos as ElementIndex
-	export var stdOpPos as ElementIndex
-	export var line as LineNumber
-	export var column as ColumnNumber
+	export let value as ValueId
+	export let target as RangeCheckSiteTarget
+	export let block as BlockId
+	export let maxonOpPos as ElementIndex
+	export let line as LineNumber
+	export let column as ColumnNumber
 
-	// `stdOpPos` is not a parameter: it is the LOWERING's to write, and the parser has no way to know it.
 	export static function create(value ValueId, target RangeCheckSiteTarget, block BlockId, maxonOpPos ElementIndex, line LineNumber, column ColumnNumber) returns RangeCheckSite
-		return Self{value: value, target: target, block: block, maxonOpPos: maxonOpPos, stdOpPos: 0, line: line, column: column}
+		return Self{value: value, target: target, block: block, maxonOpPos: maxonOpPos, line: line, column: column}
 	end 'create'
+
+	export function placedAt(inBlock BlockId, atOrdinal ElementIndex) returns RangeCheckSite
+		return Self{value: self.value, target: self.target, block: inBlock, maxonOpPos: atOrdinal, line: self.line, column: self.column}
+	end 'placedAt'
 
 	// @generated library-cache begin
 	function cacheWrite(writer LibraryCacheWriter)
@@ -4867,7 +4867,6 @@ export type RangeCheckSite
 		cacheWriteRangeCheckSiteTarget(writer, value: self.target)
 		writer.unsigned(self.block as CacheUnsigned)
 		writer.unsigned(self.maxonOpPos as CacheUnsigned)
-		writer.unsigned(self.stdOpPos as CacheUnsigned)
 		writer.unsigned(self.line as CacheUnsigned)
 		writer.unsigned(self.column as CacheUnsigned)
 	end 'cacheWrite'
@@ -4877,15 +4876,14 @@ export type RangeCheckSite
 		let f_target = try cacheReadRangeCheckSiteTarget(reader)
 		let f_block = (try reader.unsigned()) as BlockId
 		let f_maxonOpPos = (try reader.unsigned()) as ElementIndex
-		let f_stdOpPos = (try reader.unsigned()) as ElementIndex
 		let f_line = (try reader.unsigned()) as LineNumber
 		let f_column = (try reader.unsigned()) as ColumnNumber
 
-		return Self{value: f_value, target: f_target, block: f_block, maxonOpPos: f_maxonOpPos, stdOpPos: f_stdOpPos, line: f_line, column: f_column}
+		return Self{value: f_value, target: f_target, block: f_block, maxonOpPos: f_maxonOpPos, line: f_line, column: f_column}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize56
-		return sizeof(RangeCheckSite) as CacheSize56
+	static function cacheLayoutBytes() returns CacheSize48
+		return sizeof(RangeCheckSite) as CacheSize48
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -5102,12 +5100,12 @@ end 'cacheReadRangeCheckSiteArray'
 // compile-time half and nothing else, so an argument no constant folds to can produce no diagnostic and
 // there is nothing for a site to say about it.
 export type RangeCheckArgSite
-	export var value as ValueId
+	export let value as ValueId
 
 	// A witness dispatch names no callee whose `paramSites` could be read, but its formal is the
 	// interface's, which the parse can resolve — in the interface's declaring file — so the site
 	// carries it.
-	export var parameter as ArgSiteParameter
+	export let parameter as ArgSiteParameter
 
 	// ⚠ **WRITTEN AND NEVER READ, AND IT IS STALE FOR ONE CONSTRUCT IF A READER EVER APPEARS.** A call
 	// argument owes the compile-time half alone, so nothing spends this block today. But it is recorded at
@@ -5116,9 +5114,9 @@ export type RangeCheckArgSite
 	// (`Parser.rehomeArmRangeSites`). This column is not, because re-homing a field with no reader would
 	// only pretend one exists. ⇒ **A future reader that spends it as a position owes itself the same
 	// re-home** — or, better, this field's deletion.
-	export var block as BlockId
-	export var line as LineNumber
-	export var column as ColumnNumber
+	export let block as BlockId
+	export let line as LineNumber
+	export let column as ColumnNumber
 
 	export static function create(value ValueId, parameter ArgSiteParameter, block BlockId, line LineNumber, column ColumnNumber) returns RangeCheckArgSite
 		return Self{value: value, parameter: parameter, block: block, line: line, column: column}
@@ -5153,9 +5151,10 @@ end 'RangeCheckArgSite'
 export union ArgSiteParameter
 	// ⭐⭐ **`bareCallee` IS WHICH CALL THIS SITE CAME FROM — the name the SOURCE wrote, and the one
 	// field of the pair that is never rewritten.** `callee` is RETARGETED to the resolved overload
-	// member (`SemanticCheck.retargetArgRangeSites`), so after a retarget it no longer answers *"whose
-	// call was this?"* — and that retarget finds its sites by matching the argument's `value`, which a
-	// `let` binding passed to two different calls shares. Without `bareCallee`, two DIFFERENT
+	// member in the copy `Project.rangeSiteFacts` files (`SemanticCheck.retargetArgRangeSites`), so
+	// after a retarget that copy no longer answers *"whose call was this?"* — and that retarget finds
+	// its sites by matching the argument's `value`, which a `let` binding passed to two different
+	// calls shares. Without `bareCallee`, two DIFFERENT
 	// overloaded functions sharing one `let` argument would read each other's sites as claimed by
 	// another member and refuse a legal program with E2015.
 	//
@@ -5279,10 +5278,10 @@ end 'cacheReadRangeCheckArgSiteArray'
 // emitted it — not the block the `return` keyword was parsed in. The scope drops a hand-off emits
 // first can branch, and a block a drop left behind carries no exit.
 export type RangeCheckReturnSite
-	export var value as ValueId
-	export var block as BlockId
-	export var line as LineNumber
-	export var column as ColumnNumber
+	export let value as ValueId
+	export let block as BlockId
+	export let line as LineNumber
+	export let column as ColumnNumber
 
 	export static function create(value ValueId, block BlockId, line LineNumber, column ColumnNumber) returns RangeCheckReturnSite
 		return Self{value: value, block: block, line: line, column: column}
@@ -5591,10 +5590,10 @@ end 'provenFloatRangeOf'
 // argument onto. A dense column would pad every unranged parameter with an entry carrying a position
 // nothing may read; the sparse form has no padding to describe and no lie to tell.
 export type RangeCheckParamSite
-	export var index as ParamCount
-	export var alias as RangedTypeAlias
-	export var line as LineNumber
-	export var column as ColumnNumber
+	export let index as ParamCount
+	export let alias as RangedTypeAlias
+	export let line as LineNumber
+	export let column as ColumnNumber
 
 	export static function create(index ParamCount, alias RangedTypeAlias, line LineNumber, column ColumnNumber) returns RangeCheckParamSite
 		return Self{index: index, alias: alias, line: line, column: column}
@@ -5735,22 +5734,13 @@ end 'cacheReadRangeCheckParamGuardArray'
 
 // @generated library-cache end
 
-// Every range-check site in one function. `filePath` is stamped by `mergeArtifact` (the
-// function's file); `returnAlias` is `undeclared` unless the function returns a ranged alias.
+// Every range-check site in one function. `returnAlias` is `undeclared` unless the function
+// returns a ranged alias.
 export type FunctionRangeChecks
-	export var filePath as FilePath
+	export let filePath as FilePath
 	export var sites as RangeCheckSiteArray
-
-	// ⭐ **HAS `LowerMaxonToStd` FILLED EVERY SITE'S `stdOpPos` YET?** The presence bit `stdOpPos` cannot
-	// carry itself, per function rather than per site because the lowering walks a function whole: it
-	// fills all of that function's sites or none of them. `InsertRangeChecks` refuses to spend a position
-	// without it, so a function that reached the guard pass unlowered fails LOUDLY instead of silently
-	// anchoring every guard at the top of its block. A bool, not a column: an entry is filed for every
-	// function that merely passes a constant argument, and a per-function ARRAY here would be one
-	// allocation for each of them (MEASURED at +1,133/+31,079 across the scale ladder as exactly that).
-	export var positionsResolved as bool
 	export var argSites as RangeCheckArgSiteArray
-	export var returnAlias as DeclaredAlias
+	export let returnAlias as DeclaredAlias
 	export var returnSites as RangeCheckReturnSiteArray
 
 	// The function's narrowed-range parameters — see `RangeCheckParamSite`. Empty (the shared array) for a
@@ -5785,7 +5775,7 @@ export type FunctionRangeChecks
 	export var borrowOperands as BorrowOperandsColumn
 
 	export static function create(filePath FilePath, sites RangeCheckSiteArray, argSites RangeCheckArgSiteArray, returnAlias DeclaredAlias, returnSites RangeCheckReturnSiteArray, paramSites RangeCheckParamSiteArray, provenValueRanges ProvenIntRangeColumn, provenFloatRanges ProvenFloatRangeColumn, writtenNegativeLiterals ValueMarkColumn, unsignedMaxLiterals ValueMarkColumn, unsignedPatternValues ValueMarkColumn, checkedCalls ValueMarkColumn, borrowOperands BorrowOperandsColumn) returns FunctionRangeChecks
-		return Self{filePath: filePath, sites: sites, positionsResolved: false, argSites: argSites, returnAlias: returnAlias, returnSites: returnSites, paramSites: paramSites, provenValueRanges: provenValueRanges, provenFloatRanges: provenFloatRanges, writtenNegativeLiterals: writtenNegativeLiterals, unsignedMaxLiterals: unsignedMaxLiterals, unsignedPatternValues: unsignedPatternValues, checkedCalls: checkedCalls, borrowOperands: borrowOperands}
+		return Self{filePath: filePath, sites: sites, argSites: argSites, returnAlias: returnAlias, returnSites: returnSites, paramSites: paramSites, provenValueRanges: provenValueRanges, provenFloatRanges: provenFloatRanges, writtenNegativeLiterals: writtenNegativeLiterals, unsignedMaxLiterals: unsignedMaxLiterals, unsignedPatternValues: unsignedPatternValues, checkedCalls: checkedCalls, borrowOperands: borrowOperands}
 	end 'create'
 
 	export function paramAliasAt(slot ParamCount) returns RangedTypeAlias throws MapError
@@ -5802,7 +5792,6 @@ export type FunctionRangeChecks
 	module function cacheWrite(writer LibraryCacheWriter)
 		writer.text(self.filePath.toString())
 		cacheWriteRangeCheckSiteArray(writer, value: self.sites)
-		writer.flag(self.positionsResolved)
 		cacheWriteRangeCheckArgSiteArray(writer, value: self.argSites)
 		cacheWriteDeclaredAlias(writer, value: self.returnAlias)
 		cacheWriteRangeCheckReturnSiteArray(writer, value: self.returnSites)
@@ -5819,7 +5808,6 @@ export type FunctionRangeChecks
 	module static function cacheRead(reader LibraryCacheReader) returns FunctionRangeChecks throws LibraryCacheDamage
 		let f_filePath = try reader.path()
 		let f_sites = try cacheReadRangeCheckSiteArray(reader)
-		let f_positionsResolved = try reader.flag()
 		let f_argSites = try cacheReadRangeCheckArgSiteArray(reader)
 		let f_returnAlias = try cacheReadDeclaredAlias(reader)
 		let f_returnSites = try cacheReadRangeCheckReturnSiteArray(reader)
@@ -5832,11 +5820,11 @@ export type FunctionRangeChecks
 		let f_checkedCalls = try cacheReadValueMarkColumn(reader)
 		let f_borrowOperands = try cacheReadBorrowOperandsColumn(reader)
 
-		return Self{filePath: f_filePath, sites: f_sites, positionsResolved: f_positionsResolved, argSites: f_argSites, returnAlias: f_returnAlias, returnSites: f_returnSites, paramSites: f_paramSites, provenValueRanges: f_provenValueRanges, provenFloatRanges: f_provenFloatRanges, writtenNegativeLiterals: f_writtenNegativeLiterals, unsignedMaxLiterals: f_unsignedMaxLiterals, unsignedPatternValues: f_unsignedPatternValues, checkedCalls: f_checkedCalls, borrowOperands: f_borrowOperands}
+		return Self{filePath: f_filePath, sites: f_sites, argSites: f_argSites, returnAlias: f_returnAlias, returnSites: f_returnSites, paramSites: f_paramSites, provenValueRanges: f_provenValueRanges, provenFloatRanges: f_provenFloatRanges, writtenNegativeLiterals: f_writtenNegativeLiterals, unsignedMaxLiterals: f_unsignedMaxLiterals, unsignedPatternValues: f_unsignedPatternValues, checkedCalls: f_checkedCalls, borrowOperands: f_borrowOperands}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize112
-		return sizeof(FunctionRangeChecks) as CacheSize112
+	static function cacheLayoutBytes() returns CacheSize104
+		return sizeof(FunctionRangeChecks) as CacheSize104
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -5846,6 +5834,78 @@ end 'FunctionRangeChecks'
 // file's artifact; read by `InsertRangeChecks` (Std tier). Keyed by name — unique per program
 // (E3006) — so it survives the merge with no id remap, exactly like `funcSignatures`.
 export typealias RangeCheckPlanMap = Map with (ByteArray, FunctionRangeChecks)
+
+export typealias RangeSitePositionArray = Array with ElementIndex
+
+export typealias RangeSitePositionMap = Map with (ByteArray, RangeSitePositionArray)
+
+typealias ArgSiteParameterArray = Array with ArgSiteParameter
+
+typealias RetargetedArgParameterMap = Map with (ByteArray, ArgSiteParameterArray)
+
+// This compile's facts about `Project.rangeChecks`' sites, keyed by function name. A site
+// belongs to the parse artifact a warm compile reuses, so no pass writes one;
+// `Queries.resetMergeTargets` resets these with the fold. ⚠ Read a site's Maxon ordinal through
+// `fillMaxonPositions`: once hold resolution has deleted ops, `maxonOpPos` is the parse's
+// ordinal, and a guard placed by it lands on the wrong statement.
+export type RangeSiteFacts
+	export var shiftedMaxonPositions as RangeSitePositionMap
+	export var stdPositions as RangeSitePositionMap
+	var retargetedArgParameters as RetargetedArgParameterMap
+
+	export static function create() returns RangeSiteFacts
+		return Self{shiftedMaxonPositions: RangeSitePositionMap.create(), stdPositions: RangeSitePositionMap.create(), retargetedArgParameters: RetargetedArgParameterMap.create()}
+	end 'create'
+
+	export function fillMaxonPositions(into RangeSitePositionArray, name ByteArray, sites RangeCheckSiteArray)
+		var positions = into
+		positions.clear()
+
+		if self.shiftedMaxonPositions.count() > 0 'someFunctionShifted'
+			if let shifted = try self.shiftedMaxonPositions.get(name) 'shifted'
+				positions.append(shifted)
+				return
+			end 'shifted'
+		end 'someFunctionShifted'
+
+		for site in sites 'eachSite'
+			positions.push(site.maxonOpPos)
+		end 'eachSite'
+	end 'fillMaxonPositions'
+
+	export function openStdPositions(name ByteArray, count ElementIndex) returns RangeSitePositionArray
+		var positions = RangeSitePositionArray.create()
+		positions.growFilled(count, value: 0)
+		self.stdPositions.upsert(name, value: positions)
+		return positions
+	end 'openStdPositions'
+
+	export function retargetedParameter(name ByteArray, index ElementIndex) returns ArgSiteParameter throws MapError
+		if self.retargetedArgParameters.count() == 0 'noFunctionRetargeted'
+			throw MapError.keyNotFound
+		end 'noFunctionRetargeted'
+
+		let parameters = try self.retargetedArgParameters.get(name)
+		return try parameters.get(index) otherwise throw MapError.keyNotFound
+	end 'retargetedParameter'
+
+	export function retargetArgParameter(name ByteArray, argSites RangeCheckArgSiteArray, index ElementIndex, to ArgSiteParameter)
+		var parameters = try self.retargetedArgParameters.get(name) otherwise self.openArgParameters(name, argSites: argSites)
+		try parameters.set(index, value: to) otherwise panic("RangeSiteFacts.retargetArgParameter: '{String.from(name)}' has {parameters.count()} argument sites and the caller named site {index}")
+	end 'retargetArgParameter'
+
+	function openArgParameters(name ByteArray, argSites RangeCheckArgSiteArray) returns ArgSiteParameterArray
+		var parameters = ArgSiteParameterArray.create()
+		parameters.reserve(argSites.count())
+
+		for site in argSites 'eachSite'
+			parameters.push(site.parameter.clone())
+		end 'eachSite'
+
+		self.retargetedArgParameters.upsert(name, value: parameters)
+		return parameters
+	end 'openArgParameters'
+end 'RangeSiteFacts'
 
 // ⭐ WHAT A FUNCTION VALUE TAKES AND RETURNS, AND WHOSE SLOT THOSE TYPES ARE — what
 // `Parser.functionValueShape` answers in one walk. They travel together because the scope is only
@@ -10930,9 +10990,9 @@ export typealias FunctionTypePairArray = Array with FunctionTypePair
 // id — like `paramAggregateNames`), so the record survives the merge with no remap.
 export type PendingFnMergeCheck
 	export let armNames as NameRoster
-	export var line as LineNumber
-	export var column as ColumnNumber
-	export var filePath as FilePath
+	export let line as LineNumber
+	export let column as ColumnNumber
+	export let filePath as FilePath
 	export let isTernary as bool
 
 	export static function create(armNames NameRoster, line LineNumber, column ColumnNumber, filePath FilePath, isTernary bool) returns PendingFnMergeCheck
@@ -11175,15 +11235,15 @@ export type PendingFunctionTypeDoor
 
 	// The NAME of the place written into, for an assignment-shaped door. `unnamed` for a cast, a `return`
 	// and a container element, which name no place.
-	export var place as FunctionTypeDoorPlace
-	export var line as LineNumber
-	export var column as ColumnNumber
+	export let place as FunctionTypeDoorPlace
+	export let line as LineNumber
+	export let column as ColumnNumber
 
 	// Where the value was handed over, the anchor of a broken capability boundary (E3189); `line` and
 	// `column` anchor the shape refusal at the door.
-	export var handedLine as LineNumber
-	export var handedColumn as ColumnNumber
-	export var filePath as FilePath
+	export let handedLine as LineNumber
+	export let handedColumn as ColumnNumber
+	export let filePath as FilePath
 
 	export static function create(gotName ByteArray, declaredName ByteArray, door FunctionTypeDoor, place FunctionTypeDoorPlace, line LineNumber, column ColumnNumber, handedLine LineNumber, handedColumn ColumnNumber, filePath FilePath) returns PendingFunctionTypeDoor
 		return Self{gotName: gotName, declaredName: declaredName, door: door, place: place, line: line, column: column, handedLine: handedLine, handedColumn: handedColumn, filePath: filePath}
@@ -11974,6 +12034,7 @@ export type Project
 	// because that registry is COLLAPSED to primitives by `resolveTypes`, which discards the
 	// alias name a check needs; this one is written once at merge and never resolved away.
 	export var rangeChecks as RangeCheckPlanMap
+	export var rangeSiteFacts as RangeSiteFacts
 
 	// Declared FUNCTION typealiases, keyed by name (see FunctionTypeAlias). Its OWN registry,
 	// not folded into `typeAliases`, because a function alias is not a ranged numeric one (see
@@ -12446,6 +12507,7 @@ export type Project
 			typeNameDecls: TypeNameRegistry.create(),
 			signatureTypeDemands: SignatureTypeDemandArray.create(),
 			rangeChecks: RangeCheckPlanMap.create(),
+			rangeSiteFacts: RangeSiteFacts.create(),
 			functionTypeAliases: FunctionTypeAliasMap.create(),
 			functionAliasShapes: FunctionShapeMap.create(),
 			structTypes: StructLayoutMap.create(),

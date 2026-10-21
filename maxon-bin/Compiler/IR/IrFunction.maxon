@@ -2927,6 +2927,62 @@ export type ProvenanceColumns
 	// @generated library-cache end
 end 'ProvenanceColumns'
 
+export enum SharedColumn
+	valueColumns
+	literalCasts
+	debugLocals
+	paramGuards
+	inlineSites
+	closureStoreSites
+	filedProvenance
+end 'SharedColumn'
+
+typealias OwnedColumnBits = int(0 to 127)
+
+let EveryColumnOwnedBits = 127
+
+type ColumnOwnership
+	let bits as OwnedColumnBits
+
+	static function nothing() returns ColumnOwnership
+		return Self{bits: 0}
+	end 'nothing'
+
+	static function everything() returns ColumnOwnership
+		return Self{bits: EveryColumnOwnedBits}
+	end 'everything'
+
+	function owns(column SharedColumn) returns bool
+		return (self.bits and Self.bitOf(column)) != 0
+	end 'owns'
+
+	function claiming(column SharedColumn) returns ColumnOwnership
+		return Self{bits: (self.bits or Self.bitOf(column)) as OwnedColumnBits}
+	end 'claiming'
+
+	static function bitOf(column SharedColumn) returns OwnedColumnBits
+		return (1 shl column.ordinal) as OwnedColumnBits
+	end 'bitOf'
+end 'ColumnOwnership'
+
+function heldDebugLocalsCopy(held DebugLocalDeclArray) returns DebugLocalDeclArray
+	var copy = DebugLocalDeclArray.create()
+	copy.reserve(held.count() + 1)
+
+	for local in held 'eachHeld'
+		copy.push(local)
+	end 'eachHeld'
+
+	return copy
+end 'heldDebugLocalsCopy'
+
+function filedProvenanceCopy(filed FiledProvenance) returns FiledProvenance
+	return match filed 'filed'
+		none gives FiledProvenance.none
+		filed(sites) gives FiledProvenance.filed(sites.clone())
+	end 'filed'
+end 'filedProvenanceCopy'
+
 // ⭐ **THE PLACEHOLDERS EVERY FUNCTION ONE PARSER BUILDS STARTS FROM** — `create`'s share of `createFromStd`'s
 // fresh ones, held by the parser for all of its functions so a function that fills none of them allocates none.
 // Each is replaced before it is written, never written through.
@@ -2940,7 +2996,7 @@ export type FunctionPlaceholders
 	export var inlineSites as InlineSiteArray
 
 	// The sole-owner column of a function `StorageProvenance` does not trace (`IrFunction.valueMintedSole`), which a
-	// post-parse writer replaces before it writes (`IrFunction.makeValueColumnsPrivate`).
+	// post-parse writer replaces before it writes (`IrFunction.makePrivate`).
 	export var mintedSole as BoolArray
 
 	export var noArgumentOverlaps as ArgumentOverlapSiteArray
@@ -3222,9 +3278,10 @@ export type IrFunction
 
 	export var filedProvenance as FiledProvenance
 
-	// Whether the four dense value columns above are this function's alone
-	// (`makeValueColumnsPrivate`).
-	var valueColumnsArePrivate = false
+	// ⚠ A function whose columns another holds owns none of them: a parsed one once `parseModule`
+	// surrenders them, and every `shallowCopy`. A copy that inherited its source's claims would write
+	// in place into the parse memo.
+	var ownership = ColumnOwnership.everything()
 
 	// ⭐⭐ **THE PER-VALUE WITNESS-PAIRING COLUMN, DENSE by ValueId.** For a
 	// value tagged `interfaceRef` it holds the ValueId of the fat pointer's OTHER half — the
@@ -3431,8 +3488,6 @@ export type IrFunction
 	// without them leaves a name on another value's location.
 	export var debugLocals as DebugLocalDeclArray
 
-	var ownsItsDebugLocals = false
-
 	// ⭐ **WHERE EACH OF THOSE BINDINGS' VALUES ENDED UP** — flat, in `debugLocals` order and within each
 	// record in its `valueIds` order, spliced home from the backend pool (`spliceBackendUnit`). Kept
 	// beside the roster it answers rather than inside it, because the two are filled by tiers a worker-pool
@@ -3534,6 +3589,7 @@ export type IrFunction
 			usesValueTupleReturn: false,
 			argumentOverlaps: placeholders.noArgumentOverlaps,
 			letCastReads: placeholders.noLetCastReads,
+			ownership: ColumnOwnership.nothing(),
 			paramGuards: placeholders.paramGuards,
 			inlineSites: placeholders.inlineSites,
 			debugLocals: DebugLocalDeclArray.create(),
@@ -3697,6 +3753,7 @@ export type IrFunction
 			usesValueTupleReturn: src.usesValueTupleReturn,
 			argumentOverlaps: src.argumentOverlaps,
 			letCastReads: src.letCastReads,
+			ownership: ColumnOwnership.nothing(),
 			// NOT carried, and it cannot need to be: every copy of a function is made at or before the
 			// lowering (`relocateFunction` is `IrModule.merge`'s), and this column is filled by
 			// `InsertRangeChecks`, which runs after the last of them. A copy that carried it would carry
@@ -3709,24 +3766,64 @@ export type IrFunction
 		}
 	end 'shallowCopy'
 
-	// ⭐ **THE ONE DOOR A POST-PARSE WRITE OF THE DENSE VALUE COLUMNS GOES THROUGH.** The merged module's copy of a
-	// function shares those columns with the memoized parse artifact (`shallowCopy`), and a write into them would
-	// outlive this compile — so the first writer replaces all six with private copies, together, because they are
-	// read in lockstep.
-	export function makeValueColumnsPrivate()
-		if self.valueColumnsArePrivate 'alreadyPrivate'
+	export function surrenderColumns()
+		self.ownership = ColumnOwnership.nothing()
+	end 'surrenderColumns'
+
+	// The one door a post-parse write of a shared column goes through. A function shares its
+	// columns with the parse artifact it was copied from (`shallowCopy`) or with its parser's
+	// placeholders, and a write into either would outlive this compile, so the first writer takes a
+	// private copy. `valueColumns` are copied together because they are read in lockstep.
+	export function makePrivate(column SharedColumn)
+		if self.ownership.owns(column) 'alreadyPrivate'
 			return
 		end 'alreadyPrivate'
 
+		match column 'column'
+			valueColumns then self.cloneValueColumns()
+			literalCasts then self.literalCastArguments = self.literalCastArguments.clone()
+			debugLocals then self.debugLocals = heldDebugLocalsCopy(self.debugLocals)
+			paramGuards then self.paramGuards = self.paramGuards.clone()
+			inlineSites then self.inlineSites = self.inlineSites.clone()
+			closureStoreSites then self.closureStoreSites = self.closureStoreSites.clone()
+			filedProvenance then self.filedProvenance = filedProvenanceCopy(self.filedProvenance)
+		end 'column'
+
+		self.ownership = self.ownership.claiming(column)
+	end 'makePrivate'
+
+	function cloneValueColumns()
 		self.valueTags = self.valueTags.clone()
 		self.valueNameIds = self.valueNameIds.clone()
 		self.valueBrandIds = self.valueBrandIds.clone()
 		self.valueMintedSole = self.valueMintedSole.clone()
-		self.valueColumnsArePrivate = true
-	end 'makeValueColumnsPrivate'
+	end 'cloneValueColumns'
+
+	export function retireLiteralCast(argument ValueId)
+		if not self.literalCastArguments.contains(argument) 'noCastToRetire'
+			return
+		end 'noCastToRetire'
+
+		self.makePrivate(SharedColumn.literalCasts)
+		_ = self.literalCastArguments.remove(argument)
+	end 'retireLiteralCast'
+
+	export function moveLiteralCast(from ValueId, to ValueId)
+		if not self.literalCastArguments.contains(from) 'noCastToMove'
+			return
+		end 'noCastToMove'
+
+		self.makePrivate(SharedColumn.literalCasts)
+		moveLiteralCastEntry(self.literalCastArguments, from: from, to: to)
+	end 'moveLiteralCast'
+
+	export function replaceDebugLocal(position ElementIndex, local DebugLocalDecl)
+		self.makePrivate(SharedColumn.debugLocals)
+		try self.debugLocals.set(position, value: local) otherwise panic("IrFunction.replaceDebugLocal: debugLocals.set OOB at {position} of {self.debugLocals.count()} in '{String.from(self.name)}'")
+	end 'replaceDebugLocal'
 
 	export function retypeValueInPrivateColumns(value ValueId, tag ValueTypeTag, nameId TypeNameId)
-		self.makeValueColumnsPrivate()
+		self.makePrivate(SharedColumn.valueColumns)
 		try self.valueTags.set(value, value: tag) otherwise panic("IrFunction.retypeValueInPrivateColumns: valueTags.set({value}) OOB — v{value} was never minted in '{String.from(self.name)}'")
 		try self.valueNameIds.set(value, value: nameId) otherwise panic("IrFunction.retypeValueInPrivateColumns: valueNameIds.set({value}) OOB — the two type columns are minted in lockstep")
 	end 'retypeValueInPrivateColumns'
@@ -3816,49 +3913,26 @@ export type IrFunction
 		return relocated
 	end 'relocateFunction'
 
-	// Record one emitted parameter cascade. COPY-ON-WRITE off the shared empty, exactly as the parser's
-	// value columns are and for their reason: the overwhelming majority of functions declare no narrowed
-	// parameter and must not pay an allocation to say so. Keyed on EMPTINESS rather than on one anchor's
-	// identity, because the column may be any owner's shared empty and a column this writes is never empty.
 	export function declarationSite() returns ByteArray
 		return declarationSiteKey(self.sourceFilePath, line: self.nameLine, column: self.nameColumn)
 	end 'declarationSite'
 
 	export function recordParamGuard(index ParamCount, alias RangedTypeAlias, headBlockId BlockId, okBlockId BlockId, ownedBlockIds BlockIdArray)
-		if self.paramGuards.isEmpty() 'stillShared'
-			self.paramGuards = RangeCheckParamGuardArray.create()
-		end 'stillShared'
-
+		self.makePrivate(SharedColumn.paramGuards)
 		self.paramGuards.push(RangeCheckParamGuard.create(index, alias: alias, headBlockId: headBlockId, okBlockId: okBlockId, ownedBlockIds: ownedBlockIds))
 	end 'recordParamGuard'
 
-	// Record one splice into this function and answer the site its copied blocks carry. Copy-on-write
-	// off the shared empty, for `recordParamGuard`'s reason and on its emptiness key.
+	// Record one splice into this function and answer the site its copied blocks carry.
 	export function recordInlineSite(site InlineSite) returns InlineSiteRef
-		if self.inlineSites.isEmpty() 'stillShared'
-			self.inlineSites = InlineSiteArray.create()
-		end 'stillShared'
+		self.makePrivate(SharedColumn.inlineSites)
 
 		let index = self.inlineSites.count()
 		self.inlineSites.push(site)
 		return InlineSiteRef.site(index)
 	end 'recordInlineSite'
 
-	// Copy-on-write: `debugLocals` may be the array of the function this one was copied from, and
-	// appending to it in place would hand this splice's bindings to that function too.
 	export function recordSplicedLocal(local DebugLocalDecl)
-		if not self.ownsItsDebugLocals 'sharedWithItsSource'
-			var owned = DebugLocalDeclArray.create()
-			owned.reserve(self.debugLocals.count() + 1)
-
-			for held in self.debugLocals 'eachHeld'
-				owned.push(held)
-			end 'eachHeld'
-
-			self.debugLocals = owned
-			self.ownsItsDebugLocals = true
-		end 'sharedWithItsSource'
-
+		self.makePrivate(SharedColumn.debugLocals)
 		self.debugLocals.push(local)
 	end 'recordSplicedLocal'
 
@@ -3923,10 +3997,7 @@ export type IrFunction
 	end 'fileCallProvenance'
 
 	export function noteClosureStoreSite(site ClosureStoreSite)
-		if self.closureStoreSites.isEmpty() 'firstSite'
-			self.closureStoreSites = ClosureStoreSiteArray.create()
-		end 'firstSite'
-
+		self.makePrivate(SharedColumn.closureStoreSites)
 		self.closureStoreSites.push(site)
 	end 'noteClosureStoreSite'
 
@@ -3935,8 +4006,9 @@ export type IrFunction
 		sites.writeThroughSites = writeThroughSites
 	end 'fileWriteThroughSites'
 
-	// COPY-ON-WRITE off the shared empty, for `recordParamGuard`'s reason.
 	function provenanceSitesForWrite(empty ProvenanceColumns) returns ProvenanceSites
+		self.makePrivate(SharedColumn.filedProvenance)
+
 		match self.filedProvenance 'filed'
 			filed(sites) then return sites
 			none then break
@@ -3947,15 +4019,7 @@ export type IrFunction
 		return sites
 	end 'provenanceSitesForWrite'
 
-	// Drop the front-end `Scope` symbol table once lowering has snapshotted the
-	// per-slot data it needs. No Std/backend pass reads `scope`, so resetting
-	// it frees the internal `vars` map + frame stacks while leaving a valid
-	// (empty) Scope in place.
-	export function releaseScope()
-		self.scope.reset()
-	end 'releaseScope'
-
-	export function releaseMaxonTierData()
+	export function releaseMaxonTierData(emptyScope Scope)
 		// ⛔ `maxonReturnType` is NOT released, and it is the one field here that may not be.
 		// `irFunctionUsesSecondaryReturnSlot` reads it for wasm's `funcSignatureResultValTypes`, which runs in
 		// the BACKEND — so a released reading of `void` declares a functype with one result for a body that
@@ -3976,8 +4040,11 @@ export type IrFunction
 		self.conditionalRefusals = ConditionalRefusalArray.create()
 		self.existentialFieldStores = ExistentialFieldStoreArray.create()
 		self.filedProvenance = FiledProvenance.none
-		self.valueColumnsArePrivate = false
-		self.releaseScope()
+		self.ownership = ColumnOwnership.nothing()
+
+		// No Std or backend pass reads `scope`. It is replaced rather than reset because `shallowCopy`
+		// shares it with the parse artifact.
+		self.scope = emptyScope
 	end 'releaseMaxonTierData'
 
 	export function isCompilerBuilt() returns bool
@@ -4013,7 +4080,6 @@ export type IrFunction
 		cacheWriteTypeNameIdArray(writer, value: self.valueBrandIds)
 		cacheWriteBoolArray(writer, value: self.valueMintedSole)
 		cacheWriteFiledProvenance(writer, value: self.filedProvenance)
-		writer.flag(self.valueColumnsArePrivate)
 		cacheWriteValueIdArray(writer, value: self.valueWitnessIds)
 		cacheWriteValueExistentialInstanceMap(writer, value: self.valueExistentialInstances)
 		cacheWriteValueCallInstanceMap(writer, value: self.valueCallInstances)
@@ -4044,7 +4110,6 @@ export type IrFunction
 		cacheWriteRangeCheckParamGuardArray(writer, value: self.paramGuards)
 		cacheWriteInlineSiteArray(writer, value: self.inlineSites)
 		cacheWriteDebugLocalDeclArray(writer, value: self.debugLocals)
-		writer.flag(self.ownsItsDebugLocals)
 		cacheWriteDebugValueLocationArray(writer, value: self.debugLocalLocations)
 		cacheWriteDebugValueRangeArray(writer, value: self.debugLocalRanges)
 	end 'cacheWrite'
@@ -4077,7 +4142,6 @@ export type IrFunction
 		let f_valueBrandIds = try cacheReadTypeNameIdArray(reader)
 		let f_valueMintedSole = try cacheReadBoolArray(reader)
 		let f_filedProvenance = try cacheReadFiledProvenance(reader)
-		let f_valueColumnsArePrivate = try reader.flag()
 		let f_valueWitnessIds = try cacheReadValueIdArray(reader)
 		let f_valueExistentialInstances = try cacheReadValueExistentialInstanceMap(reader)
 		let f_valueCallInstances = try cacheReadValueCallInstanceMap(reader)
@@ -4108,15 +4172,14 @@ export type IrFunction
 		let f_paramGuards = try cacheReadRangeCheckParamGuardArray(reader)
 		let f_inlineSites = try cacheReadInlineSiteArray(reader)
 		let f_debugLocals = try cacheReadDebugLocalDeclArray(reader)
-		let f_ownsItsDebugLocals = try reader.flag()
 		let f_debugLocalLocations = try cacheReadDebugValueLocationArray(reader)
 		let f_debugLocalRanges = try cacheReadDebugValueRangeArray(reader)
 
-		return Self{name: f_name, visibility: f_visibility, sourceFilePath: f_sourceFilePath, paramCount: f_paramCount, blockRefs: f_blockRefs, nextBlockId: f_nextBlockId, nameLine: f_nameLine, nameColumn: f_nameColumn, closeLine: f_closeLine, closeColumn: f_closeColumn, needsGreenThreadStackGuard: f_needsGreenThreadStackGuard, keepsItsOwnFrame: f_keepsItsOwnFrame, pinsItsThread: f_pinsItsThread, returnsByIndirectJump: f_returnsByIndirectJump, mustBeSplicedAtEverySite: f_mustBeSplicedAtEverySite, closureLayout: f_closureLayout, closureFixedElementCount: f_closureFixedElementCount, closureEnvFields: f_closureEnvFields, closureStoreSites: f_closureStoreSites, maxonReturnType: f_maxonReturnType, maxonParamTypes: f_maxonParamTypes, typeSites: f_typeSites, valueTags: f_valueTags, valueNameIds: f_valueNameIds, valueBrandIds: f_valueBrandIds, valueMintedSole: f_valueMintedSole, filedProvenance: f_filedProvenance, valueColumnsArePrivate: f_valueColumnsArePrivate, valueWitnessIds: f_valueWitnessIds, valueExistentialInstances: f_valueExistentialInstances, valueCallInstances: f_valueCallInstances, literalCastArguments: f_literalCastArguments, deferredArgumentBindings: f_deferredArgumentBindings, conditionalOps: f_conditionalOps, conditionalRefusals: f_conditionalRefusals, existentialFieldStores: f_existentialFieldStores, throwsTypeName: f_throwsTypeName, scope: f_scope, returnType: f_returnType, paramTypes: f_paramTypes, varSlotCount: f_varSlotCount, stackSize: f_stackSize, outgoingArgSize: f_outgoingArgSize, closureSubCounter: f_closureSubCounter, writtenParamMask: f_writtenParamMask, writesThroughParamMask: f_writesThroughParamMask, brandOriginValues: f_brandOriginValues, brandOriginKeys: f_brandOriginKeys, writesModuleStorage: f_writesModuleStorage, bodyWasSkippedAsUnreached: f_bodyWasSkippedAsUnreached, bodySplicedAway: f_bodySplicedAway, usesValueTupleReturn: f_usesValueTupleReturn, reassignedParamMask: f_reassignedParamMask, argumentOverlaps: f_argumentOverlaps, letCastReads: f_letCastReads, paramGuards: f_paramGuards, inlineSites: f_inlineSites, debugLocals: f_debugLocals, ownsItsDebugLocals: f_ownsItsDebugLocals, debugLocalLocations: f_debugLocalLocations, debugLocalRanges: f_debugLocalRanges}
+		return Self{name: f_name, visibility: f_visibility, sourceFilePath: f_sourceFilePath, paramCount: f_paramCount, blockRefs: f_blockRefs, nextBlockId: f_nextBlockId, nameLine: f_nameLine, nameColumn: f_nameColumn, closeLine: f_closeLine, closeColumn: f_closeColumn, needsGreenThreadStackGuard: f_needsGreenThreadStackGuard, keepsItsOwnFrame: f_keepsItsOwnFrame, pinsItsThread: f_pinsItsThread, returnsByIndirectJump: f_returnsByIndirectJump, mustBeSplicedAtEverySite: f_mustBeSplicedAtEverySite, closureLayout: f_closureLayout, closureFixedElementCount: f_closureFixedElementCount, closureEnvFields: f_closureEnvFields, closureStoreSites: f_closureStoreSites, maxonReturnType: f_maxonReturnType, maxonParamTypes: f_maxonParamTypes, typeSites: f_typeSites, valueTags: f_valueTags, valueNameIds: f_valueNameIds, valueBrandIds: f_valueBrandIds, valueMintedSole: f_valueMintedSole, filedProvenance: f_filedProvenance, ownership: ColumnOwnership.everything(), valueWitnessIds: f_valueWitnessIds, valueExistentialInstances: f_valueExistentialInstances, valueCallInstances: f_valueCallInstances, literalCastArguments: f_literalCastArguments, deferredArgumentBindings: f_deferredArgumentBindings, conditionalOps: f_conditionalOps, conditionalRefusals: f_conditionalRefusals, existentialFieldStores: f_existentialFieldStores, throwsTypeName: f_throwsTypeName, scope: f_scope, returnType: f_returnType, paramTypes: f_paramTypes, varSlotCount: f_varSlotCount, stackSize: f_stackSize, outgoingArgSize: f_outgoingArgSize, closureSubCounter: f_closureSubCounter, writtenParamMask: f_writtenParamMask, writesThroughParamMask: f_writesThroughParamMask, brandOriginValues: f_brandOriginValues, brandOriginKeys: f_brandOriginKeys, writesModuleStorage: f_writesModuleStorage, bodyWasSkippedAsUnreached: f_bodyWasSkippedAsUnreached, bodySplicedAway: f_bodySplicedAway, usesValueTupleReturn: f_usesValueTupleReturn, reassignedParamMask: f_reassignedParamMask, argumentOverlaps: f_argumentOverlaps, letCastReads: f_letCastReads, paramGuards: f_paramGuards, inlineSites: f_inlineSites, debugLocals: f_debugLocals, debugLocalLocations: f_debugLocalLocations, debugLocalRanges: f_debugLocalRanges}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize488
-		return sizeof(IrFunction) as CacheSize488
+	static function cacheLayoutBytes() returns CacheSize480
+		return sizeof(IrFunction) as CacheSize480
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

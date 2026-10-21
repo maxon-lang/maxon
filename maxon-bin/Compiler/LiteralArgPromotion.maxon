@@ -557,7 +557,7 @@ end 'appendPromotionRuntimeCall'
 // ⚠ **AND THE DENSE COLUMNS ARE ALIASED WITH THE FILE'S PARSE ARTIFACT**, which `queryAllModule` hands back on a
 // cache hit and the stdlib body-demand fixpoint re-folds — so a push onto the merged function's column would
 // lengthen the ARTIFACT's, and every later fold would inherit values no op defines. Each mint therefore writes
-// through `IrFunction.makeValueColumnsPrivate`; a function this pass does not change never mints, so it never
+// through `IrFunction.makePrivate`; a function this pass does not change never mints, so it never
 // copies.
 //
 // `valueWitnessIds` is deliberately not among them: it is grown on demand and stops at its highest paired
@@ -577,7 +577,7 @@ type PromotedValueMinter
 	// returns `void`, none of which is a `named`/`structRef` value — the only tags whose name column is
 	// ever read.
 	function mint(tag ValueTypeTag) returns ValueId
-		self.func.makeValueColumnsPrivate()
+		self.func.makePrivate(SharedColumn.valueColumns)
 
 		let id = self.func.valueTags.count()
 		self.func.valueTags.push(tag)

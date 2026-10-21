@@ -250,8 +250,8 @@ export function insertRangeChecks(project Project, module StdModule)
 		end 'noChecks'
 
 		let checks = try project.rangeChecks.get(func.name) otherwise panic("insertRangeChecks: rangeChecks.contains said yes but get failed for '{String.from(func.name)}'")
-		var emitter = RangeCheckEmitter.create(project, module: module, func: func, funcIndex: funcIndex, waivers: waivers, spellings: spellings)
-		emitter.run(checks)
+		var emitter = RangeCheckEmitter.create(project, module: module, func: func, funcIndex: funcIndex, checks: checks, waivers: waivers, spellings: spellings)
+		emitter.run()
 	end 'eachFunc'
 end 'insertRangeChecks'
 
@@ -272,15 +272,7 @@ type RangeCheckEmitter
 	var intConsts as ConstValueMap
 	var floatConsts as ConstValueMap
 
-	// ⭐ **WHICH OF THIS FUNCTION'S CONSTANTS THE SOURCE WROTE AS NEGATIVE NUMBERS** — the one fact about a
-	// constant that this tier cannot recover from the constant, because `-1`, `u64.max` and
-	// `0xFFFFFFFFFFFFFFFE` are the same 64 bits. Handed over by the parser on `FunctionRangeChecks` and
-	// stashed in `run` beside `collectConsts`, for the same reason: `needsRuntimeGuard` asks it per value
-	// and does not otherwise hold the function's checks. See `Parser.writtenNegativeLiterals`.
-	var writtenNegativeLiterals as ValueMarkColumn
-	var unsignedMaxLiterals as ValueMarkColumn
-
-	var borrowOperands as BorrowOperandsColumn
+	let functionChecks as FunctionRangeChecks
 
 	// Where each of this function's blocks currently ENDS — a blockRef index (+1,
 	// `buildBlockIdIndex`'s sentinel encoding) per block id. It starts as the plain block-id =>
@@ -292,12 +284,12 @@ type RangeCheckEmitter
 
 	// ⭐ **WHERE EACH CHAIN-END BLOCK BEGINS, IN ITS ORIGINAL BLOCK'S COORDINATES** — one position per
 	// block id, and the other half of what makes site positions and the guard CHAIN compose. A site's
-	// recorded position (`RangeCheckSite.stdOpPos`) is an offset into the block as the LOWERING left
-	// it; but the k-th guard SPLITS that block, so the (k+1)-th site's op now sits in the continuation
-	// at `position - base`, where `base` is where the last split cut. Zero until a block's first guard
-	// splits it, and moved to the split point by every split after that. Built exactly as
-	// `guardChainTail` is — the three chain columns are one index in three columns, so one `isEmpty`
-	// decides all of them.
+	// recorded position (`RangeSiteFacts.stdPositions`) is an offset into the block as the LOWERING
+	// left it; but the k-th guard SPLITS that block, so the (k+1)-th site's op now sits in the
+	// continuation at `position - base`, where `base` is where the last split cut. Zero until a
+	// block's first guard splits it, and moved to the split point by every split after that. Built
+	// exactly as `guardChainTail` is — the three chain columns are one index in three columns, so one
+	// `isEmpty` decides all of them.
 	var guardChainBase as BlockOpPosArray
 
 	// ⭐⭐ **THE OP LIST EACH GUARDED BLOCK HELD BEFORE ITS FIRST GUARD SPLIT IT — THE ONE LIST EVERY
@@ -307,7 +299,7 @@ type RangeCheckEmitter
 	// `materializeChainTails` places them, once, when no further split can move them. Over k guards in a
 	// block of B ops that copies B op refs in total rather than Θ(k × B) — see `splitChainEnd`.
 	//
-	// It is also the coordinate space a site's recorded `stdOpPos` is written in, which is why
+	// It is also the coordinate space a site's recorded Std position is written in, which is why
 	// `guardSiteAt` bounds-checks against it and not against a block whose front the splits have
 	// carved away. Built exactly as the two columns above are.
 	var guardChainSource as PreSplitOpsByBlock
@@ -315,8 +307,8 @@ type RangeCheckEmitter
 	var waivers as EntryGuardWaivers
 	var spellings as DeclarationQualifierMemo
 
-	static function create(project Project, module StdModule, func IrFunction, funcIndex ElementIndex, waivers EntryGuardWaivers, spellings DeclarationQualifierMemo) returns RangeCheckEmitter
-		return Self{project: project, module: module, func: func, funcIndex: funcIndex, waivers: waivers, ids: ValueMinter.resuming(nextFreeValueId(module, func: func)), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), writtenNegativeLiterals: noValueMarks, unsignedMaxLiterals: noValueMarks, borrowOperands: noBorrowOperands, guardChainTail: ValueIdArray.create(), guardChainBase: BlockOpPosArray.create(), guardChainSource: PreSplitOpsByBlock.create(), spellings: spellings}
+	static function create(project Project, module StdModule, func IrFunction, funcIndex ElementIndex, checks FunctionRangeChecks, waivers EntryGuardWaivers, spellings DeclarationQualifierMemo) returns RangeCheckEmitter
+		return Self{project: project, module: module, func: func, funcIndex: funcIndex, functionChecks: checks, waivers: waivers, ids: ValueMinter.resuming(nextFreeValueId(module, func: func)), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), guardChainTail: ValueIdArray.create(), guardChainBase: BlockOpPosArray.create(), guardChainSource: PreSplitOpsByBlock.create(), spellings: spellings}
 	end 'create'
 
 	// A fresh ValueId for a guard op. The colored register file / dense value columns downstream grow to
@@ -340,34 +332,25 @@ type RangeCheckEmitter
 	// free — then returns, which therefore read the chain index those splits have already advanced
 	// (`retBlockOf`). The literal/const map is built ONCE over the original ops — the values a site checks
 	// are original, never the guard consts this pass appends afterward.
-	export function run(checks FunctionRangeChecks)
-		// The parser's answers to what a constant's 64 bits cannot say — stashed beside the const maps
-		// because `needsRuntimeGuard` asks both per value and holds neither otherwise. See
-		// `writtenNegativeLiterals`. Loaded BEFORE `collectConsts`, which reads `unsignedMaxLiterals` to
-		// record the folds the parser marked; loaded after, those folds reach their sites as runtime
-		// values rather than literals.
-		self.writtenNegativeLiterals = checks.writtenNegativeLiterals
-		self.unsignedMaxLiterals = checks.unsignedMaxLiterals
-		self.borrowOperands = checks.borrowOperands
+	export function run()
 		self.collectConsts()
-		self.checkLiteralUses(checks)
+		self.checkLiteralUses()
 
-		// A site's `stdOpPos` is `lowerMaxonToStd`'s answer rather than the parser's (see `RangeSiteWalk`),
-		// and 0 is a legitimate one — so the promise is checked HERE, once per function, rather than
-		// per site: a function that reached this pass unlowered would otherwise anchor every one of its
-		// guards at the top of its block, silently.
-		if not checks.sites.isEmpty() and not checks.positionsResolved 'unlowered'
-			panic("run: '{String.from(self.func.name)}' has {checks.sites.count()} range-check site(s) whose Std positions `lowerMaxonToStd` never filled — this pass runs over the module that lowering just produced, so every function it walks was walked there first")
-		end 'unlowered'
+		// A site's Std position is `lowerMaxonToStd`'s answer rather than the parser's (see
+		// `RangeSiteWalk`), so the promise is checked HERE, once per function, rather than per site: a
+		// function that reached this pass unlowered would otherwise anchor every one of its guards at the
+		// top of its block, silently.
+		view stdPositions = self.stdPositionsOf()
 
 		// ⚠ **BEFORE EVERY OTHER SITE IN THE FUNCTION, AND THAT IS AN ORDERING REQUIREMENT RATHER THAN A
 		// preference.** An entry guard splits the entry block at the end of its `param` ops, which is a
 		// position at or before every body site's — and `guardSiteAt` refuses a position that has fallen
 		// BEHIND its block's chain base, because sites are consumed in source order.
-		self.guardRangedParams(checks)
+		self.guardRangedParams()
 
-		for site in checks.sites 'eachSite'
-			self.processSite(site, filePath: checks.filePath)
+		for index in 0 upto self.functionChecks.sites.count() 'eachSite'
+			view site = try self.functionChecks.sites.get(index) otherwise panic("run: sites.get OOB at {index}")
+			self.processSite(site, stdOpPos: try stdPositions.get(index) otherwise panic("run: '{String.from(self.func.name)}' recorded {stdPositions.count()} Std position(s) for {self.functionChecks.sites.count()} range-check site(s)"), filePath: self.functionChecks.filePath)
 		end 'eachSite'
 
 		// ⚠ **AFTER THE LAST ALIAS-NAMED SITE AND BEFORE THE RETURN SITES, AND BOTH HALVES ARE
@@ -378,12 +361,21 @@ type RangeCheckEmitter
 		// guard.
 		self.materializeChainTails()
 
-		for argSite in checks.argSites 'eachArgSite'
-			self.processArgSite(argSite, filePath: checks.filePath)
+		for index in 0 upto self.functionChecks.argSites.count() 'eachArgSite'
+			view argSite = try self.functionChecks.argSites.get(index) otherwise panic("run: argSites.get OOB at {index}")
+			self.processArgSite(argSite, index: index, filePath: self.functionChecks.filePath)
 		end 'eachArgSite'
 
-		self.processReturnSites(checks)
+		self.processReturnSites()
 	end 'run'
+
+	function stdPositionsOf() returns RangeSitePositionArray
+		if self.functionChecks.sites.isEmpty() 'noSiteToPlace'
+			return noStdPositions
+		end 'noSiteToPlace'
+
+		return try self.project.rangeSiteFacts.stdPositions.get(self.func.name) otherwise panic("stdPositionsOf: '{String.from(self.func.name)}' has {self.functionChecks.sites.count()} range-check site(s) whose Std positions `lowerMaxonToStd` never filled — this pass runs over the module that lowering just produced, so every function it walks was walked there first")
+	end 'stdPositionsOf'
 
 	// ---- alias-named sites (cast, struct-literal field, field store, field default, array element) ----
 
@@ -419,27 +411,27 @@ type RangeCheckEmitter
 		return RangeGuardVerdict.guard(alias)
 	end 'guardVerdict'
 
-	// A range site: the site's own `stdOpPos` is where in its block the guard goes. An `alias` site is
-	// guarded against its alias; a `callArgument` site is a full-unsigned parameter's call-site check
-	// (`guardCallArgument`). Every one of them owes the runtime half, so no site carries a
-	// `RangeCheckGuard` to be asked for.
+	// A range site: `stdOpPos`, the site's Std position, is where in its block the guard goes. An
+	// `alias` site is guarded against its alias; a `callArgument` site is a full-unsigned
+	// parameter's call-site check (`guardCallArgument`). Every one of them owes the runtime half, so
+	// no site carries a `RangeCheckGuard` to be asked for.
 	//
 	// The two files are not always one here. The cast and the array element resolve their alias in
 	// this function's own file, a field in its declaring file, and the arm-served index in the
 	// callee's (`Parser.requireArmServedIndexArgument`), so the site carries the declaration it
 	// resolved (`RangeCheckSiteTarget.alias`).
-	function processSite(site RangeCheckSite, filePath FilePath)
+	function processSite(site RangeCheckSite, stdOpPos ElementIndex, filePath FilePath)
 		match site.target 'target'
-			alias(alias) then self.guardSiteAgainst(site, alias: alias, filePath: filePath)
-			callArgument(callResult, argIndex, label, sourceMayBeNegative) then self.guardCallArgument(site, callResult: callResult, argIndex: argIndex, label: label, sourceMayBeNegative: sourceMayBeNegative, filePath: filePath)
+			alias(alias) then self.guardSiteAgainst(site, stdOpPos: stdOpPos, alias: alias, filePath: filePath)
+			callArgument(callResult, argIndex, label, sourceMayBeNegative) then self.guardCallArgument(site, stdOpPos: stdOpPos, callResult: callResult, argIndex: argIndex, label: label, sourceMayBeNegative: sourceMayBeNegative, filePath: filePath)
 			literalUse then break
 		end 'target'
 	end 'processSite'
 
-	function checkLiteralUses(checks FunctionRangeChecks)
+	function checkLiteralUses()
 		var literalSites = RangeCheckSiteArray.create()
 
-		for site in checks.sites 'eachSite'
+		for site in self.functionChecks.sites 'eachSite'
 			if siteIsALiteralUse(site) 'aLiteralUse'
 				literalSites.push(site)
 			end 'aLiteralUse'
@@ -464,24 +456,24 @@ type RangeCheckEmitter
 			let high = scratch.probeHigh(ordinal) if reached else i64.max
 
 			match site.target 'target'
-				literalUse(alias) then self.checkLiteralUseAgainst(checks, site: site, alias: alias, low: low, high: high)
+				literalUse(alias) then self.checkLiteralUseAgainst(site, alias: alias, low: low, high: high)
 				alias or
 				callArgument then panic("checkLiteralUses: a site that is not a literal use was filed with the literal uses")
 			end 'target'
 		end 'eachProbe'
 	end 'checkLiteralUses'
 
-	function checkLiteralUseAgainst(checks FunctionRangeChecks, site RangeCheckSite, alias RangedTypeAlias, low FullRangeInt, high FullRangeInt)
+	function checkLiteralUseAgainst(site RangeCheckSite, alias RangedTypeAlias, low FullRangeInt, high FullRangeInt)
 		if aliasIsFloat(alias) 'aFloatTarget'
-			self.reportFloatLiteralUseOutside(checks, site: site, alias: alias)
+			self.reportFloatLiteralUseOutside(site, alias: alias)
 			return
 		end 'aFloatTarget'
 
-		self.reportLiteralUseOutside(site, alias: alias, bounds: provedWithin(checks, value: site.value, low: low, high: high), filePath: checks.filePath)
+		self.reportLiteralUseOutside(site, alias: alias, bounds: provedWithin(self.functionChecks, value: site.value, low: low, high: high), filePath: self.functionChecks.filePath)
 	end 'checkLiteralUseAgainst'
 
-	function reportFloatLiteralUseOutside(checks FunctionRangeChecks, site RangeCheckSite, alias RangedTypeAlias)
-		let proven = try provenFloatRangeOf(checks.provenFloatRanges, value: site.value) otherwise return
+	function reportFloatLiteralUseOutside(site RangeCheckSite, alias RangedTypeAlias)
+		let proven = try provenFloatRangeOf(self.functionChecks.provenFloatRanges, value: site.value) otherwise return
 		let lowFits = literalInRange(proven.low, low: alias.low, high: alias.high, isFloat: true, writtenNegative: false, writtenAboveSignedMax: false)
 		let highFits = literalInRange(proven.high, low: alias.low, high: alias.high, isFloat: true, writtenNegative: false, writtenAboveSignedMax: false)
 
@@ -490,7 +482,7 @@ type RangeCheckEmitter
 		end 'nothingOutside'
 
 		let offending = proven.low if not lowFits else proven.high
-		reportPositioned(self.project, code: ErrorCode.typeMismatch, message: literalOutOfRangeMessage(offending, aliasName: aliasSpelledForReader(self.project, alias: alias, readerFilePath: checks.filePath, memo: self.spellings), low: alias.low, high: alias.high, isFloat: true, writtenNegative: false, domain: alias.domain), line: site.line, column: site.column, filePath: checks.filePath)
+		reportPositioned(self.project, code: ErrorCode.typeMismatch, message: literalOutOfRangeMessage(offending, aliasName: aliasSpelledForReader(self.project, alias: alias, readerFilePath: self.functionChecks.filePath, memo: self.spellings), low: alias.low, high: alias.high, isFloat: true, writtenNegative: false, domain: alias.domain), line: site.line, column: site.column, filePath: self.functionChecks.filePath)
 	end 'reportFloatLiteralUseOutside'
 
 	function reportLiteralUseOutside(site RangeCheckSite, alias RangedTypeAlias, bounds ProvenIntRange, filePath FilePath)
@@ -505,21 +497,21 @@ type RangeCheckEmitter
 		reportPositioned(self.project, code: ErrorCode.typeMismatch, message: literalOutOfRangeMessage(offending, aliasName: aliasSpelledForReader(self.project, alias: alias, readerFilePath: filePath, memo: self.spellings), low: alias.low, high: alias.high, isFloat: false, writtenNegative: offending < 0, domain: alias.domain), line: site.line, column: site.column, filePath: filePath)
 	end 'reportLiteralUseOutside'
 
-	function guardSiteAgainst(site RangeCheckSite, alias RangedTypeAlias, filePath FilePath)
+	function guardSiteAgainst(site RangeCheckSite, stdOpPos ElementIndex, alias RangedTypeAlias, filePath FilePath)
 		match self.guardVerdict(site.value, alias: alias, guard: RangeCheckGuard.runtime, line: site.line, column: site.column, filePath: filePath) 'verdict'
 			noGuard then return
-			guard(guarded) then _ = self.emitGuardAt(self.guardSiteAt(site.block, stdOpPos: site.stdOpPos), operand: GuardedOperand.asIs(site.value), alias: guarded, chain: GuardChain.blockChain(site.block), filePath: filePath, line: site.line, column: site.column)
+			guard(guarded) then _ = self.emitGuardAt(self.guardSiteAt(site.block, stdOpPos: stdOpPos), operand: GuardedOperand.asIs(site.value), alias: guarded, chain: GuardChain.blockChain(site.block), filePath: filePath, line: site.line, column: site.column)
 		end 'verdict'
 	end 'guardSiteAgainst'
 
-	function guardCallArgument(site RangeCheckSite, callResult ValueId, argIndex ParamCount, label ByteArray, sourceMayBeNegative bool, filePath FilePath)
+	function guardCallArgument(site RangeCheckSite, stdOpPos ElementIndex, callResult ValueId, argIndex ParamCount, label ByteArray, sourceMayBeNegative bool, filePath FilePath)
 		if not sourceMayBeNegative or self.intConsts.contains(site.value) 'nothingToTestAtRunTime'
 			return
 		end 'nothingToTestAtRunTime'
 
 		match self.waivers.waivedParamOfCall(self.funcIndex, callResult: callResult, argIndex: argIndex, label: label, project: self.project) 'param'
 			none then return
-			found(param) then self.guardSiteAgainst(site, alias: param.alias, filePath: filePath)
+			found(param) then self.guardSiteAgainst(site, stdOpPos: stdOpPos, alias: param.alias, filePath: filePath)
 		end 'param'
 	end 'guardCallArgument'
 
@@ -556,16 +548,16 @@ type RangeCheckEmitter
 	// `x64.prologue 32` / `x64.epilogue 32` around a body that still ends in the same bare `idiv`. That is
 	// a per-FUNCTION cost paid on the in-range path, not an instruction count on the failing one, and it
 	// is the honest price of the elision the guard makes legitimate.
-	function guardRangedParams(checks FunctionRangeChecks)
-		if checks.paramSites.isEmpty() 'noRangedParam'
+	function guardRangedParams()
+		if self.functionChecks.paramSites.isEmpty() 'noRangedParam'
 			return
 		end 'noRangedParam'
 
 		let entryRef = try self.func.blockRefs.get(0) otherwise panic("guardRangedParams: '{String.from(self.func.name)}' declares a ranged parameter but has no entry block")
 		let entryId = self.module.getBlock(entryRef).id
 
-		for site in checks.paramSites 'eachRangedParam'
-			self.guardRangedParam(site, entryId: entryId, filePath: checks.filePath)
+		for site in self.functionChecks.paramSites 'eachRangedParam'
+			self.guardRangedParam(site, entryId: entryId, filePath: self.functionChecks.filePath)
 		end 'eachRangedParam'
 	end 'guardRangedParams'
 
@@ -837,8 +829,8 @@ type RangeCheckEmitter
 	// ⚠ The alias is the CALLEE's declaration, never one this function's file resolves: the range a
 	// parameter was declared with is the one visible where the FUNCTION was written. The diagnostic's
 	// file stays this function's — see `guardVerdict`.
-	function processArgSite(site RangeCheckArgSite, filePath FilePath)
-		var alias = try self.paramAliasOf(site) otherwise return
+	function processArgSite(site RangeCheckArgSite, index ElementIndex, filePath FilePath)
+		var alias = try self.paramAliasOf(site, index: index) otherwise return
 		self.checkArgAgainstParamRange(site, alias: alias, filePath: filePath)
 	end 'processArgSite'
 
@@ -853,12 +845,20 @@ type RangeCheckEmitter
 		end 'verdict'
 	end 'checkArgAgainstParamRange'
 
-	function paramAliasOf(site RangeCheckArgSite) returns RangedTypeAlias throws MapError
-		match site.parameter 'parameter'
+	function paramAliasOf(site RangeCheckArgSite, index ElementIndex) returns RangedTypeAlias throws MapError
+		let retargeted = try self.project.rangeSiteFacts.retargetedParameter(self.func.name, index: index) otherwise 'notRetargeted'
+			return try self.aliasOfParameter(site.parameter)
+		end 'notRetargeted'
+
+		return try self.aliasOfParameter(retargeted)
+	end 'paramAliasOf'
+
+	function aliasOfParameter(parameter ArgSiteParameter) returns RangedTypeAlias throws MapError
+		match parameter 'parameter'
 			ofCallee(_, callee, argIndex, label) then return try self.calleeParamAliasOf(callee, argIndex: argIndex, label: label)
 			slotAlias(alias) then return alias
 		end 'parameter'
-	end 'paramAliasOf'
+	end 'aliasOfParameter'
 
 	// The ranged alias the argument's PARAMETER was declared with. A miss covers every ordinary call:
 	// a callee with no ranged parameter at all files no `paramSites`, and an argument landing on an
@@ -882,33 +882,31 @@ type RangeCheckEmitter
 	// ---- return sites ----
 
 	// A ranged `return` is checked against the range declared where the FUNCTION was written, which
-	// the parser resolved into `checks.returnAlias`. It takes the whole `FunctionRangeChecks` because
-	// `guardReturns` needs the PARAMETER sites too (see `entryGuardAlreadyCovers`), and threading a
-	// fifth field through would leave the two halves of one question arriving separately.
-	function processReturnSites(checks FunctionRangeChecks)
-		match checks.returnAlias 'bounds'
+	// the parser resolved into `FunctionRangeChecks.returnAlias`.
+	function processReturnSites()
+		match self.functionChecks.returnAlias 'bounds'
 			undeclared then return
-			declared(alias) then self.guardReturns(alias, checks: checks)
+			declared(alias) then self.guardReturns(alias)
 		end 'bounds'
 	end 'processReturnSites'
 
-	function guardReturns(alias RangedTypeAlias, checks FunctionRangeChecks)
-		for site in checks.returnSites 'eachSite'
+	function guardReturns(alias RangedTypeAlias)
+		for site in self.functionChecks.returnSites 'eachSite'
 			// Asked first and unconditionally: it raises the compile-time E3005 on its way to an answer
 			// (`guardVerdict` keeps the same discipline), and it is what makes the elision below legitimate.
 			// Clause 4 is that the parameter is guarded, and only this function answering `false` for the
 			// same value against the same alias could have stopped its entry guard existing.
-			if not self.needsRuntimeGuard(site.value, alias: alias, line: site.line, column: site.column, filePath: checks.filePath) 'noGuard'
+			if not self.needsRuntimeGuard(site.value, alias: alias, line: site.line, column: site.column, filePath: self.functionChecks.filePath) 'noGuard'
 				continue
 			end 'noGuard'
 
-			if self.entryGuardAlreadyCovers(site.value, alias: alias, checks: checks) 'guardedAtTheEntry'
+			if self.entryGuardAlreadyCovers(site.value, alias: alias) 'guardedAtTheEntry'
 				continue
 			end 'guardedAtTheEntry'
 
 			match self.retBlockOf(site) 'ret'
 				notFound then break
-				found(retBlock) then _ = self.emitGuardAt(GuardSite.create(retBlock, position: retBlock.bodyOpCount()), operand: GuardedOperand.asIs(site.value), alias: alias, chain: GuardChain.retChain, filePath: checks.filePath, line: site.line, column: site.column)
+				found(retBlock) then _ = self.emitGuardAt(GuardSite.create(retBlock, position: retBlock.bodyOpCount()), operand: GuardedOperand.asIs(site.value), alias: alias, chain: GuardChain.retChain, filePath: self.functionChecks.filePath, line: site.line, column: site.column)
 			end 'ret'
 		end 'eachSite'
 	end 'guardReturns'
@@ -943,8 +941,8 @@ type RangeCheckEmitter
 	// parameter, never per parameter), so this walks at most the function's ranged parameters, which
 	// is usually one and never more than `MaxAbiArgs`. It is the same bound `paramAliasAt`'s scan
 	// already has and adds no growth shape a call did not have.
-	function entryGuardAlreadyCovers(value ValueId, alias RangedTypeAlias, checks FunctionRangeChecks) returns bool
-		for paramSite in checks.paramSites 'eachRangedParam'
+	function entryGuardAlreadyCovers(value ValueId, alias RangedTypeAlias) returns bool
+		for paramSite in self.functionChecks.paramSites 'eachRangedParam'
 			if rangedParamValue(paramSite) == value and paramSite.alias.isTheSameDeclarationAs(alias) 'sameValueSameAlias'
 				return true
 			end 'sameValueSameAlias'
@@ -979,9 +977,9 @@ type RangeCheckEmitter
 
 		if literals.contains(value) 'literal'
 			let v = literals.constantOf(value)
-			let writtenNegative = valueIsMarked(self.writtenNegativeLiterals, value: value)
+			let writtenNegative = valueIsMarked(self.functionChecks.writtenNegativeLiterals, value: value)
 
-			if not literalInRange(v, low: alias.low, high: alias.high, isFloat: isFloat, writtenNegative: writtenNegative, writtenAboveSignedMax: valueIsMarked(self.unsignedMaxLiterals, value: value)) 'outOfRange'
+			if not literalInRange(v, low: alias.low, high: alias.high, isFloat: isFloat, writtenNegative: writtenNegative, writtenAboveSignedMax: valueIsMarked(self.functionChecks.unsignedMaxLiterals, value: value)) 'outOfRange'
 				reportPositioned(self.project, code: ErrorCode.typeMismatch, message: literalOutOfRangeMessage(v, aliasName: aliasSpelledForReader(self.project, alias: alias, readerFilePath: filePath, memo: self.spellings), low: alias.low, high: alias.high, isFloat: isFloat, writtenNegative: writtenNegative, domain: alias.domain), line: line, column: column, filePath: filePath)
 			end 'outOfRange'
 
@@ -1043,7 +1041,7 @@ type RangeCheckEmitter
 	// `(~lhs & rhs) | (~(lhs ^ rhs) & difference)` is that borrow, so the cascade's sign test reads it;
 	// `TypeRules.unsignedSubtractionBorrows` folds the same identity and the two must agree.
 	function borrowWitnessOf(difference ValueId, head IrBlock) returns ValueId
-		view recorded = match self.borrowOperands 'column'
+		view recorded = match self.functionChecks.borrowOperands 'column'
 			unwritten gives sharedNoBorrowOperands
 			entries(byDifference) gives byDifference
 		end 'column'
@@ -1172,8 +1170,9 @@ type RangeCheckEmitter
 		return ok
 	end 'splitChainEnd'
 
-	// The op list the site block held BEFORE any guard split it — the coordinate space a site's recorded
-	// `stdOpPos` is written in, and the one list every segment of that block's chain is carved out of.
+	// The op list the site block held BEFORE any guard split it — the coordinate space a site's
+	// recorded Std position is written in, and the one list every segment of that block's chain is
+	// carved out of.
 	//
 	// ⚠ **"HAS A SPLIT MOVED PAST THIS BLOCK YET" IS DERIVED, NOT A FOURTH COLUMN.** `guardChainTail`
 	// starts every block as its own chain end and a split is exactly what moves it off itself, so a chain
@@ -1610,7 +1609,7 @@ type RangeCheckEmitter
 	end 'collectConsts'
 
 	function recordUnsignedFold(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, operandType StdType)
-		if stdTypeIsFloat(operandType) or not valueIsMarked(self.unsignedMaxLiterals, value: resultId) or not self.intConsts.contains(lhs) or not self.intConsts.contains(rhs) 'notAnUnsignedFold'
+		if stdTypeIsFloat(operandType) or not valueIsMarked(self.functionChecks.unsignedMaxLiterals, value: resultId) or not self.intConsts.contains(lhs) or not self.intConsts.contains(rhs) 'notAnUnsignedFold'
 			return
 		end 'notAnUnsignedFold'
 
@@ -2185,6 +2184,8 @@ type EntryGuardWaivers
 end 'EntryGuardWaivers'
 
 let sharedNoCallArgumentSites = RangeCheckSiteArray.create()
+
+let noStdPositions = RangeSitePositionArray.create()
 
 function indexCallArgumentSite(recorded RecordedCallArguments, site RangeCheckSite)
 	match site.target 'target'

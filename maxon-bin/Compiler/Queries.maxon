@@ -22,19 +22,6 @@ export union LexSource
 	pooled(outcome LexOutcome)
 end 'LexSource'
 
-// `project.structTypes` holds COMMITTED CLONES of the index's layouts, and `MmRuntime.installStructRuntimeEntries`
-// stamps the runtime's entries off that registry — so both copies are settled from the one set of widths.
-// Left unsettled, the clone answers a box's `sizeBytes()` for a type whose value is a word.
-function settleProjectInlineRecordGeometry(project Project, signatures ProgramSignatures)
-	for (name, layout) in project.structTypes 'eachCommittedLayout'
-		if not signatures.nameIsInlineRecord(name) 'aHeapRecord'
-			continue
-		end 'aHeapRecord'
-
-		layout.settleInlinePacking(signatures.inlineBitWidthsOf(name))
-	end 'eachCommittedLayout'
-end 'settleProjectInlineRecordGeometry'
-
 // Tokenizing reads ONE input — the file — so the memo's key is that file's content hash and nothing
 // else. Contrast `queryParseOps`, whose key mixes in the signature index.
 module function queryTokens(project Project, path FilePath, lexing LexSource = LexSource.onThisThread) returns TokenArray throws CompileError
@@ -353,7 +340,6 @@ function foldExtensionsOfUserFiles(project Project, signatures ProgramSignatures
 	signatures.internLiteralContainerInstances()
 	signatures.rewriteRecordedReturnTypes(RecordedReturnTypeRule.declaredStruct)
 	signatures.settleInlineRecordGeometry()
-	settleProjectInlineRecordGeometry(project, signatures: signatures)
 	try foldInterfaceDeclarations(project, signatures: signatures)
 	try foldConformanceClauses(project, signatures: signatures)
 	try foldExtensionDeclarations(project, signatures: signatures)
@@ -828,7 +814,6 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// run at `StructLayout.addField` either — a field's ranged alias is not resolvable until every file
 	// has been swept.
 	signatures.settleInlineRecordGeometry()
-	settleProjectInlineRecordGeometry(project, signatures: signatures)
 
 	// ⚠ The initializer DFS has no depth bound: a deep enough forward-reference chain exhausts the
 	// stack and the compiler dies with SIGSEGV and no diagnostic. Depth is what matters, not the number
@@ -3230,6 +3215,7 @@ function resetMergeTargets(project Project, signatures ProgramSignatures)
 	// already claimed by its own declaration and report the whole program as duplicates.
 	project.typeNameDecls = TypeNameRegistry.create()
 	project.rangeChecks = RangeCheckPlanMap.create()
+	project.rangeSiteFacts = RangeSiteFacts.create()
 	project.structTypes = StructLayoutMap.create()
 	project.writtenTupleTypes = WrittenTupleTypeArray.create()
 	project.enumTypes = createEnumRegistry(project.interfaces)
@@ -3238,10 +3224,10 @@ function resetMergeTargets(project Project, signatures ProgramSignatures)
 	// ⛔ `project.typeNames` is deliberately NOT reset, the one registry here that must not be. Every
 	// other line in this function drops a table the coming fold rebuilds from the artifacts, but
 	// `mergeArtifact` has already rewritten the artifacts' `named(id)`s to index THIS table in place,
-	// and the project's struct/enum layouts ARE the artifacts' own objects. Emptying it would leave
-	// those ids pointing into a table that no longer holds the name — silently for a re-fold that
-	// happened to intern the same names in the same order, and as an out-of-range id for one that did
-	// not.
+	// and the project's struct/enum layouts ARE the artifacts' own objects or clones of them. Emptying
+	// it would leave those ids pointing into a table that no longer holds the name — silently for a
+	// re-fold that happened to intern the same names in the same order, and as an out-of-range id for
+	// one that did not.
 	//
 	// ⚠ It is a NAME TABLE, so keeping it across a rebuild is not carrying stale state: ids are only
 	// ever handed out, never reused, and a name that no source still spells is simply never looked up.

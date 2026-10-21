@@ -40,12 +40,12 @@
 //   A pass MUST NOT mutate `blockArgs`, `branchEdges`, or an edge's `argIds` in place.
 //   To change the phi model, BUILD A FRESH ARRAY AND ASSIGN THE FIELD.
 //
-// Every pass already obeys it. `pruneDeadBlockArgs` (Std) rebuilds both lists and
-// field-assigns them onto the Std block. `extractPredEdge` / `clearPhiModel` (Target)
-// field-assign a rebuilt `BranchEdgeArray`. The ONE in-place writer in the whole
-// compiler is `rewriteEdgeArgsIn` (Target), and it de-aliases — it clones an edge's
-// `argIds` before its first write to it. A pass that CREATES phis must follow the
-// same discipline.
+// Every pass obeys it. `retypeBlockArgs` (lowering) and `pruneDeadBlockArgs` (Std)
+// rebuild the lists they change and field-assign them onto the block.
+// `extractPredEdge` / `clearPhiModel` (Target) field-assign a rebuilt `BranchEdgeArray`.
+// The ONE in-place writer in the whole compiler is `rewriteEdgeArgsIn` (Target), and it
+// de-aliases — it clones an edge's `argIds` before its first write to it. A pass that
+// CREATES phis must follow the same discipline.
 
 // Role tag for an IrBlockArg: that a continuation-block arg stands in for what would
 // otherwise be a value captured from a multi-value-return register, so a coalescer
@@ -118,8 +118,8 @@ end 'cacheEnumTablesAgreeInCompilerIRIrBlock'
 // parser's on-the-fly SSA at the Maxon phase (see this file's header) and
 // carried down through the Std and Target phases.
 export type IrBlockArg
-	export var valueId as ValueId
-	export var argType as StdType
+	export let valueId as ValueId
+	export let argType as StdType
 
 	// `none` from every producer there is — see `BlockArgReturnRole`, which
 	// records that the compiler has neither a producer of another value nor a reader.
@@ -185,7 +185,7 @@ end 'cacheReadIrBlockArgArray'
 // carry only the target block id, so this metadata lives on the predecessor's
 // IrBlock instead.
 export type BranchEdge
-	export var targetBlockId as BlockId
+	export let targetBlockId as BlockId
 	export var argIds as ValueIdArray
 
 	export static function create(targetBlockId BlockId, argIds ValueIdArray) returns BranchEdge

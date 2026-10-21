@@ -9,7 +9,8 @@
 //   3. Invalidation (soundness): a re-query over CHANGED input must land as a MISS —
 //      and only the memos that actually read that input may miss.
 //   4. Warm equals cold: a compile that reuses the memos of files an edit did not touch must emit
-//      exactly what a cold compile of the edited program emits.
+//      exactly what a cold compile of the edited program emits, and leave every parse artifact it
+//      reuses as the first merge left it.
 //   5. Library reuse: a second program (the input plus a probe declaring its own interface) and a
 //      third declaring none of the input's type names, compiled in one session, are served every
 //      library parse with no footprint drift and emit what a cold compile of each emits. A program
@@ -739,6 +740,7 @@ end 'verifyInvalidation'
 // misses and cannot see that; only comparing what the two compiles EMIT can.
 function verifyWarmCompileMatchesCold(inputPath FilePath, target Target) returns bool throws CompileError
 	var warm = try loadProject([inputPath], target: target, session: CompileSession.printingWithoutLibraryCache())
+	warm.debugInfo = true
 	let edited = try lastAuthoredSourceOf(warm)
 
 	if warm.db.sourcePaths.count() - warm.librarySourcePaths.count() < MinFilesForInvalidation 'cannotProve'
@@ -746,21 +748,250 @@ function verifyWarmCompileMatchesCold(inputPath FilePath, target Target) returns
 		return false
 	end 'cannotProve'
 
-	_ = try compileToCodeResult(warm)
-	let editedContent = "{edited.content}\n{BytesOnlyEditText}\n"
+	_ = try queryAllModule(warm, directories: NamespaceDirectoryCheck.unchecked)
+	view merged = snapshotParses(warm)
 
+	_ = try compileToCodeResult(warm)
+	view piped = snapshotParses(warm)
+
+	let editedContent = "{edited.content}\n{BytesOnlyEditText}\n"
 	fileChanged(warm, path: edited.path, content: editedContent)
+	_ = try queryAllModule(warm, directories: NamespaceDirectoryCheck.unchecked)
+	view remerged = snapshotParses(warm)
+
 	view warmResult = try compileToCodeResult(warm)
+	view repiped = snapshotParses(warm)
 
 	var cold = try loadProject([inputPath], target: target, session: CompileSession.printingWithoutLibraryCache())
+	cold.debugInfo = true
 	fileChanged(cold, path: edited.path, content: editedContent)
 	view coldResult = try compileToCodeResult(cold)
 
+	let parsesUnchanged = reusedParsesStayAsMerged(merged, piped: piped, remerged: remerged, repiped: repiped, editedPath: edited.path)
+
 	return match compareCodeResults(warmResult, right: coldResult) 'outcome'
-		allIdentical(totalBytes) gives reportWarmPass(totalBytes)
-		sectionDiffers(detail) gives reportWarmFail(detail)
+		allIdentical(totalBytes) gives reportWarmPass(totalBytes) and parsesUnchanged
+		sectionDiffers(detail) gives reportWarmFail(detail) and parsesUnchanged
 	end 'outcome'
 end 'verifyWarmCompileMatchesCold'
+
+let OpsPerDigest = 256
+let BlocksPerDigest = 32
+
+typealias PartDigestArray = Array with HashDigest
+
+type ParseSnapshot
+	export var artifact as FileParseArtifact
+	export var digests as PartDigestArray
+
+	static function create(artifact FileParseArtifact, digests PartDigestArray) returns ParseSnapshot
+		return Self{artifact: artifact, digests: digests}
+	end 'create'
+end 'ParseSnapshot'
+
+typealias ParseSnapshotMap = Map with (FilePath, ParseSnapshot)
+
+typealias ParseChangeArray = Array with String
+
+function snapshotParses(project Project) returns ParseSnapshotMap
+	var snapshot = ParseSnapshotMap.create()
+
+	for (path, memo) in project.db.parseCache 'eachParse'
+		snapshot.upsert(path, value: ParseSnapshot.create(memo.value, digests: partDigests(memo.value)))
+	end 'eachParse'
+
+	return snapshot
+end 'snapshotParses'
+
+function digestOf(bytes ByteArray) returns HashDigest
+	return Hasher.combined(Hasher.empty(), bytes: bytes)
+end 'digestOf'
+
+function partDigests(artifact FileParseArtifact) returns PartDigestArray
+	var digests = PartDigestArray.create()
+
+	for func in artifact.module.functions 'eachFunction'
+		var one = IrFunctionArray.create()
+		one.push(func)
+		var writer = LibraryCacheWriter.create()
+		cacheWriteIrFunctionArray(writer, value: one)
+		digests.push(digestOf(writer.payload()))
+	end 'eachFunction'
+
+	for entry in artifact.rangeChecks 'eachRangeCheckEntry'
+		var writer = LibraryCacheWriter.create()
+		entry.checks.cacheWrite(writer)
+		digests.push(digestOf(writer.payload()))
+	end 'eachRangeCheckEntry'
+
+	for layout in artifact.structTypes 'eachStructLayout'
+		var one = StructLayoutArray.create()
+		one.push(layout)
+		var writer = LibraryCacheWriter.create()
+		cacheWriteStructLayoutArray(writer, value: one)
+		digests.push(digestOf(writer.payload()))
+	end 'eachStructLayout'
+
+	var first = 0 as ElementIndex
+
+	while first < artifact.module.blocks.count() 'eachBlockChunk'
+		var chunk = IrBlockArray.create()
+
+		for position in first upto chunkLimit(first, size: BlocksPerDigest, total: artifact.module.blocks.count()) 'eachBlock'
+			chunk.push(try artifact.module.blocks.get(position) otherwise panic("partDigests: blocks.get OOB at {position}"))
+		end 'eachBlock'
+
+		var writer = LibraryCacheWriter.create()
+		cacheWriteIrBlockArray(writer, value: chunk)
+		digests.push(digestOf(writer.payload()))
+		first = first + BlocksPerDigest
+	end 'eachBlockChunk'
+
+	first = 0
+
+	while first < artifact.module.ops.count() 'eachOpChunk'
+		var writer = LibraryCacheWriter.create()
+
+		for position in first upto chunkLimit(first, size: OpsPerDigest, total: artifact.module.ops.count()) 'eachOp'
+			cacheWriteMaxonOp(writer, value: try artifact.module.ops.get(position) otherwise panic("partDigests: ops.get OOB at {position}"))
+		end 'eachOp'
+
+		digests.push(digestOf(writer.payload()))
+		first = first + OpsPerDigest
+	end 'eachOpChunk'
+
+	var whole = LibraryCacheWriter.create()
+	artifact.cacheWrite(whole)
+	digests.push(digestOf(whole.payload()))
+	return digests
+end 'partDigests'
+
+function chunkLimit(first ElementIndex, size ElementIndex, total ElementIndex) returns ElementIndex
+	let limit = first + size
+	return total if limit > total else limit
+end 'chunkLimit'
+
+function chunkCount(total ElementIndex, size ElementIndex) returns ElementIndex
+	var chunks = 0 as ElementIndex
+	var covered = 0 as ElementIndex
+
+	while covered < total 'eachChunk'
+		chunks = chunks + 1
+		covered = covered + size
+	end 'eachChunk'
+
+	return chunks
+end 'chunkCount'
+
+function describePart(artifact FileParseArtifact, index ElementIndex) returns String
+	var rest = index
+
+	if rest < artifact.module.functions.count() 'aFunction'
+		let func = try artifact.module.functions.get(rest) otherwise panic("describePart: functions.get OOB at {rest}")
+		return "function '{String.from(func.name)}'"
+	end 'aFunction'
+
+	rest = rest - artifact.module.functions.count()
+
+	if rest < artifact.rangeChecks.count() 'aRangeCheckEntry'
+		let entry = try artifact.rangeChecks.get(rest) otherwise panic("describePart: rangeChecks.get OOB at {rest}")
+		return "range checks of '{String.from(entry.name)}'"
+	end 'aRangeCheckEntry'
+
+	rest = rest - artifact.rangeChecks.count()
+
+	if rest < artifact.structTypes.count() 'aStructLayout'
+		let layout = try artifact.structTypes.get(rest) otherwise panic("describePart: structTypes.get OOB at {rest}")
+		return "struct layout '{String.from(layout.name)}'"
+	end 'aStructLayout'
+
+	rest = rest - artifact.structTypes.count()
+	let blockChunks = chunkCount(artifact.module.blocks.count(), size: BlocksPerDigest)
+
+	if rest < blockChunks 'aBlockChunk'
+		return "blocks {rest * BlocksPerDigest} onward"
+	end 'aBlockChunk'
+
+	rest = rest - blockChunks
+	let opChunks = chunkCount(artifact.module.ops.count(), size: OpsPerDigest)
+
+	if rest < opChunks 'anOpChunk'
+		return "ops {rest * OpsPerDigest} onward"
+	end 'anOpChunk'
+
+	return "a field of the artifact outside its functions, range checks, struct layouts, blocks and ops"
+end 'describePart'
+
+union ParseComparison
+	unchanged
+	changedAt(part ElementIndex)
+	reshaped(before ElementIndex, after ElementIndex)
+end 'ParseComparison'
+
+function firstChangedPart(before PartDigestArray, after PartDigestArray) returns ParseComparison
+	if before.count() != after.count() 'aPartAppearedOrVanished'
+		return ParseComparison.reshaped(before.count(), after: after.count())
+	end 'aPartAppearedOrVanished'
+
+	for (iter, digest) in before.withIterator() 'eachPart'
+		if digest != (try after.get(iter.index()) otherwise panic("firstChangedPart: after.get({iter.index()}) OOB below the shared count {after.count()}")) 'aPartMoved'
+			return ParseComparison.changedAt(iter.index())
+		end 'aPartMoved'
+	end 'eachPart'
+
+	return ParseComparison.unchanged
+end 'firstChangedPart'
+
+function noteChange(changes ParseChangeArray, path FilePath, stage String, before ParseSnapshot, after ParseSnapshot)
+	match firstChangedPart(before.digests, after: after.digests) 'verdict'
+		unchanged then return
+		changedAt(part) then changes.push("{path.toString()} {stage}: {describePart(after.artifact, index: part)}")
+		reshaped(held, now) then changes.push("{path.toString()} {stage}: it held {held} digested parts and now holds {now}")
+	end 'verdict'
+end 'noteChange'
+
+let FirstPipelineStage = "was written by the first pipeline"
+let RemergeStage = "was changed by the merge after the bytes-only edit, which moves no id and so owes the artifact no renumbering"
+let SecondPipelineStage = "was written by the second pipeline"
+
+function reusedParsesStayAsMerged(merged ParseSnapshotMap, piped ParseSnapshotMap, remerged ParseSnapshotMap, repiped ParseSnapshotMap, editedPath FilePath) returns bool
+	var compared = 0 as Count
+	var digested = 0 as Count
+	var changes = ParseChangeArray.create()
+
+	for (path, first) in merged 'eachParse'
+		if path.equals(editedPath) 'theEditedFile'
+			continue
+		end 'theEditedFile'
+
+		view afterPipeline = try piped.get(path) otherwise panic("reusedParsesStayAsMerged: the parse of {path.toString()} left the memo during the first pipeline")
+		view afterRemerge = try remerged.get(path) otherwise panic("reusedParsesStayAsMerged: the parse of {path.toString()} left the memo across a bytes-only edit of another file")
+		view afterSecond = try repiped.get(path) otherwise panic("reusedParsesStayAsMerged: the parse of {path.toString()} left the memo during the second pipeline")
+		compared = compared + 1
+		digested = digested + first.digests.count()
+
+		if not (afterPipeline.artifact is first.artifact and afterRemerge.artifact is first.artifact and afterSecond.artifact is first.artifact) 'reparsed'
+			changes.push("{path.toString()} was parsed again although only another file was edited, so it is not a reused parse")
+			continue
+		end 'reparsed'
+
+		noteChange(changes, path: path, stage: FirstPipelineStage, before: first, after: afterPipeline)
+		noteChange(changes, path: path, stage: RemergeStage, before: afterPipeline, after: afterRemerge)
+		noteChange(changes, path: path, stage: SecondPipelineStage, before: afterRemerge, after: afterSecond)
+	end 'eachParse'
+
+	if not changes.isEmpty() 'someChanged'
+		for change in changes 'eachChange'
+			printError("FAIL immutable: {change}\n")
+		end 'eachChange'
+
+		printError("FAIL immutable: {changes.count()} changes across {compared} reused parse artifacts, so a pass wrote into an object the parse cache owns\n")
+		return false
+	end 'someChanged'
+
+	print("PASS immutable: {compared} reused parse artifacts, {digested} digested parts, the same objects before and after the edit and unchanged by both pipelines and by the second merge\n")
+	return true
+end 'reusedParsesStayAsMerged'
 
 function reportWarmPass(totalBytes BytePos) returns bool
 	print("PASS warm: {totalBytes} bytes identical between a warm compile after a bytes-only edit and a cold compile of the edited program\n")

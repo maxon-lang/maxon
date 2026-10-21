@@ -524,9 +524,11 @@ tests/
     bench-concurrency-thread-ring.maxtest   1000 passes round 503 services at MAXON_MAX_PROCS=1 and 4 name Go's holder, 498
     bench-concurrency-worker-pool.maxtest   16 tasks of 1000 kernel rounds at MAXON_MAX_PROCS=1 and 4 print Go's sum
   warmRebuild/
-    WarmRebuildHarness.maxon                the shared half: the `verify-warm-rebuild` spawn
+    WarmRebuildHarness.maxon                the shared half: the `verify-warm-rebuild` spawn, which asserts `PASS immutable:`
     warm-equals-cold.maxtest                `verify-warm-rebuild` holds on a program whose parses mint instances
     filed-type-reuse.maxtest                a bytes-only edit re-parses one file when a parse files a type
+    a-literal-cast-picking-an-overload-leaves-the-reused-parse-as-merged.maxtest a literal cast that picks an overload leaves the reused parse as merged
+    an-inline-record-keeps-its-reused-layout-as-merged.maxtest an inline record leaves its reused layout as merged
     a-second-program-reuses-library-parses.maxtest    a second program in one session reuses every library parse and equals its cold compile
     a-shadowing-program-parses-the-library-cold.maxtest a program shadowing a library type parses the library cold, still equal to cold
     fixtures/<program>/<name>.maxon.fixture stored names only - see rule 1
@@ -1372,6 +1374,12 @@ after the reused artifact, which is where an instance id could be claimed twice.
 `filed/` (`filed-type-reuse.maxtest`) has a generic type whose only instance is an argument-inferred call, so
 the front end files it and settles the index again. The filed type is part of the key every parse memo reads, so
 the case asserts the driver's invalidation property: the edit re-parses the edited file and no other.
+
+Every case also asserts the driver's `PASS immutable:` line (`spawnVerify`): each parse the warm compile
+reuses is the same object the first merge left, and every part of it reads the same after both pipelines
+and the second merge. Two fixtures exist for it, each in a file the edit leaves alone: `literal-casts/`
+passes a cast literal to one of two overloads whose parameters are ranged, and `inline-record/` declares a
+record of three `int(0 to 255)` fields, whose packing each compile settles.
 
 The `a-…-reuses-library-parses` cases assert the driver's library-reuse property: in one session, later
 programs are served every library file's parse from the shared store and still emit what a cold compile of

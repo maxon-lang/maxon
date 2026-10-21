@@ -38,6 +38,7 @@ SKIPPED_FIELDS = {
     ("VarInfo", "isEnrolled"): "false",
     ("VarInfo", "enrolledAt"): "0",
     ("IrBlock", "opsHeld"): "false",
+    ("IrFunction", "ownership"): "ColumnOwnership.everything()",
 }
 
 FIELD_READERS = {
