@@ -156,7 +156,10 @@ jobs:
         working-directory: .
         env:
           SINCE: ${{ inputs.since }}
-        run: echo "decision=$(./scripts/extension-release-gate.sh $SINCE)" >> "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          decision="$(./scripts/extension-release-gate.sh ${SINCE:+"$SINCE"})"
+          echo "decision=$decision" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v5
         with:
