@@ -34543,9 +34543,8 @@ export type ProgramSignatures
 	// container.** An `Array`'s element, a `Set`'s key, a `Map`'s key and a `Map`'s VALUE are four columns
 	// asking one pair of questions — *does this slot own heap?* and *what drops it?* — and the answer must be
 	// the same for all four or a value moved in through one door and dropped through another leaks or
-	// double-frees. `Map` is what forced the split: it is the first container with TWO independently managed
-	// columns, so a per-container `…KeyIsManaged` / `…KeyDropCallee` pair would have had to be written twice
-	// in one type.
+	// double-frees. `Map` has TWO independently managed columns, so the pair is keyed on the type: a
+	// per-container `…KeyIsManaged` / `…KeyDropCallee` pair would be written twice in one type.
 	//
 	// The drop callee is the SHARED `managedFieldDropCallee`, so a column's stamped destructor equals the drop
 	// a managed FIELD of the same type gets — the moved-in value and the dropped value agree by construction.
@@ -34594,8 +34593,8 @@ export type ProgramSignatures
 	// ⛔⛔ **THIS SAYS WHAT MAY *BE* A COLUMN; `TypeRules.columnValueTagMatches` SAYS WHAT MAY BE *WRITTEN* TO
 	// ONE. WIDEN THIS AND GO THERE.** They are two facts in two files with nothing but each other's headers
 	// holding them together, and a tag admitted here that no arm answers there is admitted at the `typealias`
-	// and refused at every write, with a sentence that argues against itself. MEASURED on `boolean`, which
-	// this line admitted while that predicate's integral fall-through refused `m.upsert("a", value: true)` as
+	// and refused at every write, with a sentence that argues against itself: `boolean` is admitted here, so
+	// that predicate answers it in its own arm, and without one `m.upsert("a", value: true)` would read
 	// *"this `Map`'s value is a bool — got a 'bool' value"*.
 	export function slotTypeFitsOneWord(slotType MaxonType) returns bool
 		if self.slotTypeIsManaged(slotType) 'managedSlot'
@@ -34631,15 +34630,11 @@ export type ProgramSignatures
 	// `inferredIntColumnBoundaryAdmits` asks how many COLUMNS a container has, so that a
 	// `[1: 1]` literal's inferred `Map with (int, int)` reaches a parameter declared through a
 	// `typealias IntMap = Map with (Integer, Integer)`. That has nothing to do with which runtime serves the
-	// record — and reading the retirement gate there re-broke the very program its own header records having
-	// been built for: **MEASURED, `map.md`'s `for-in.nested` and `tuples`' `for-in-over-map-allocates-no-tuple`
-	// both answered `E3005: argument type mismatch for 'm': expected 'IntMap', got 'Map_int_int'`.**
+	// record: a door that asked a runtime question there would answer `E3005: argument type mismatch for 'm':
+	// expected 'IntMap', got 'Map_int_int'` for `map.md`'s `for-in.nested` and `tuples`'
+	// `for-in-over-map-allocates-no-tuple`.
 	//
-	// ⇒ **A DOOR MUST ASK WHAT THE CONTAINER *IS*, NEVER WHAT WILL EXECUTE IT.** There is one question and
-	// this is it; a door that starts asking a RUNTIME question of a container is the shape that breaks those
-	// two programs, whatever the predicate is called at the time.
-	//
-	// ⛔ **THERE IS NO `isMapInstanceAt` — do not name one.**
+	// ⇒ **A DOOR MUST ASK WHAT THE CONTAINER *IS*, NEVER WHAT WILL EXECUTE IT.**
 	export function isMapShapedInstanceAt(tag ValueTypeTag, nameId TypeNameId) returns bool
 		return tag == ValueTypeTag.genericInstance and self.genericInstanceBaseName(nameId as GenericInstanceId).equals(MapBuiltinBaseName)
 	end 'isMapShapedInstanceAt'

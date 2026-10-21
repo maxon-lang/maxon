@@ -2498,7 +2498,7 @@ end 'parseProgramArgs'
 // kind of literal that gets retyped rather than referenced — one fact, one spelling.
 export let LineSeparator = "\n"
 
-// Parts joined by a separator, with no leading and no trailing copy of it.
+// Parts joined by `LineSeparator`, with no leading and no trailing copy of it.
 //
 // The suite accumulates separated text in several places, among them a spec's fenced blocks
 // (`readFence`, below) and a worker's whole stderr (`drainChildStderr`, SpecWorkerPool). Those two
@@ -2512,16 +2512,15 @@ export let LineSeparator = "\n"
 // inferring the flag from the buffer would silently eat that separator.
 export type TextJoiner
 	var out as StringBuilder
-	let separator as String
 	var hasPart as bool
 
-	export static function create(separator String) returns TextJoiner
-		return TextJoiner{out: StringBuilder.create(), separator: separator, hasPart: false}
+	export static function create() returns TextJoiner
+		return TextJoiner{out: StringBuilder.create(), hasPart: false}
 	end 'create'
 
 	export function push(part String)
 		if hasPart 'separate'
-			out.append(separator)
+			out.append(LineSeparator)
 		end 'separate'
 
 		out.append(part)
@@ -2542,7 +2541,7 @@ end 'TextJoiner'
 // name (SpecTestRunner's `fragmentSource`).
 function readFence(lines StringArray, openIndex ElementIndex, specPath FilePath) returns FenceBlock
 	let lineCount = lines.count()
-	var text = TextJoiner.create(LineSeparator)
+	var text = TextJoiner.create()
 	var i = openIndex + 1
 
 	while i < lineCount 'read'

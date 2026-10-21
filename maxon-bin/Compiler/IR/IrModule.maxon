@@ -238,29 +238,11 @@ export type IrModule uses Op
 		return self.ops.count()
 	end 'opCount'
 
-	// Count ops that are still reachable from any block — i.e., the size
-	// of the `block.opRefs` union plus one per block that has a terminator
-	// op. This differs from `opCount` (which is just the underlying array
-	// size) because a pass that rebuilds a block clears its
-	// `opRefs` and appends fresh ops to `module.ops`, leaving the
-	// previous entries as orphans. The orphans never reach codegen but
-	// inflate `opCount` and make the per-pass IR-summary log line read
-	// like ops doubled when in fact the live set shrank.
-	export function liveOpCount() returns ElementIndex
-		var count = 0 as ElementIndex
-
-		for func in self.functions 'eachFunc'
-			count = count + self.liveOpIndices(func).count()
-		end 'eachFunc'
-
-		return count
-	end 'liveOpCount'
-
 	// THE block-reachability walk: every op index reachable from `func`, in
 	// execution order (each block's `opRefs`, then its terminator). Every consumer
 	// that needs "the ops that are actually live" goes through here rather than
 	// hand-rolling the funcs → blockRefs → blocks → opRefs+terminator descent —
-	// `liveOpCount` above and the backend's `assertNoSugarOps` gate both do.
+	// the backend's `assertNoSugarOps` gate does.
 	//
 	// This is NOT interchangeable with iterating `self.ops`. That flat array is
 	// append-only: every block-rebuilding pass clears a block's `opRefs` and
@@ -468,7 +450,7 @@ export type IrModule uses Op
 	// orphans accumulate across passes — during the backend phase they bloat
 	// `self.ops` to many times its live size, exhausting the commit limit on a
 	// large compile (e.g. the compiler compiling itself) even though the working
-	// set stays small. `liveOpCount` already documents and measures the gap.
+	// set stays small.
 	//
 	// Compaction is done strictly IN PLACE: the live ops are moved leftward
 	// within the existing backing array and the tail is truncated, so no second

@@ -8,13 +8,10 @@
 // along that are COVERAGE, not knobs — they are fixed-size and do not double; see `shiftCoverageSource`
 // and `scalarCoverageSource`.)
 //
-// ⚠ THIS PARAGRAPH USED TO SAY "twenty-five", AND SO DID THE HEADING OVER THE KNOB LIST. THE FILE HAD
-// TWENTY-SIX when that was last read, and has twenty-seven now. A COUNT IS A DERIVED FACT, and one
-// written into prose is a fact nothing can keep true — so the count is gone rather than corrected. The
-// live spelling is `grep -c 'knobAt(' ` over `generateRung`, and it cannot drift because it IS the
-// enumeration.
+// The number of knobs is a derived fact: `grep -c 'knobAt(' ` over `generateRung` enumerates them, so no
+// count is written here to drift.
 //
-// ⚠ THE CORPUS NOW DECLARES ITSELF. Every run prints `printCorpusManifest` — the constructs it
+// ⚠ THE CORPUS DECLARES ITSELF. Every run prints `printCorpusManifest` — the constructs it
 // generates, the dimensions it scales, and, load-bearing, the ones it structurally CANNOT see (it
 // measures allocations, bytes and the compiling thread's CPU time, never WALL time; it compiles a
 // subset of Maxon, not the whole language; and no column of it can see a cost the generated programs
@@ -93,49 +90,24 @@
 // invisible) is NAMED rather than silently absent.
 //
 // ⚠ THE SUBSET AND THE CORPUS ARE TWO DIFFERENT SETS, AND THE GAP BETWEEN THEM IS WHERE BUGS LIVE.
-// This is the file's most durable defect, and the eight bullets below are its recurrences:
-//   • `float` was in the subset before one line of this file generated any. See
-//     `FloatOpsBase` for what that cost (a panicking emitter, shipped).
-//   • integer `/` and `mod` were in it — the entire `idiv` fixed-register path — while
-//     every `/` the corpus emitted was a FLOAT `/`. See `IntDivideBase`.
-//   • top-level `let` and `var` were in it with 36 spec tests' worth. See `GlobalConstsBase`.
-//   • `type` declarations were in it from the time the compiler had a HEAP. See `StructTypesBase`.
-//   • ⭐ AND THEN TEN CONSTRUCTS AT ONCE. `match`, `enum`, `String`, `Array`, generics and interfaces —
-//     the whole middle of the language — were in the subset and the corpus generated NOT ONE of them.
-//     Measured on the ladder this file shipped with: `match` 0, `enum` 0, `String` 0, `Array with` 0,
-//     `type ... uses` 0, `interface` 0, `implements` 0, `print(` 0, ` or ` 0, ` xor ` 0, struct field
-//     WRITE 0 — at rung 0 AND at rung 5, in 109,697 lines. So the one artifact that answers *"what has
-//     this compiler's cost actually done, change by change"* was measuring the compiler roughly as it
-//     stood a dozen changes back, and every recorded result read `scale allocsΔ0 … the corpus is
-//     generics-free / Set-free / conformance-free` — which is not evidence of anything. Every optimizer
-//     instead built a throwaway ladder of its own and discarded it. See `EnumTypesBase` onwards.
-//   • ⭐ AND THE SIXTH IS THE ONE THE FIFTH'S OWN FIX WALKED PAST. `Array` moved to CONSTRUCTS GENERATED
-//     with two knobs behind it, and the `__ManagedMemory` BUFFER SURFACE over that same record — a second
-//     member roster on one type, eight `markBufferSurface` call sites in seven parser functions — was in
-//     neither list. Measured on the ladder as it stood: `.managed` 0, `ByteArray` 0, `toByteArray` 0,
-//     `addressableBytes` 0, `__ManagedMemory` 0, at rung 0 and rung 5 alike, so the value-position
-//     mechanism shipped against a ladder that read Δ0 and could not have read anything else.
-//     ⚠ **A FAMILY WHOSE NEIGHBOUR IS COVERED IS THE HARDEST KIND TO SEE** — the
-//     same shape as `RangedReturnSitesBase`, where the cast door was priced and the `return` door was not,
-//     and the manifest line above it read as covering both.
-//   • ⭐ AND THE SEVENTH IS THE ONE NO KNOB COULD HAVE CLOSED, BECAUSE IT WAS THE DIRECTORY LAYOUT
-//     ITSELF. Every rung's files went into ONE FLAT DIRECTORY, so `deriveModuleDirectory` answered `""`
-//     for every source file in every rung and the ENTIRE namespace mechanism — the `module` visibility
-//     tier, the qualified-alias mirror, the namespace-qualified function set, the dotted-chain
-//     recognizer and the multi-segment walk — ran zero times at rung 0 and zero times at rung 5. This
-//     one was NAMED BY ITS OWN IMPLEMENTER before it shipped, which is why it is the one that cost nothing to find. See
+// A construct the compiler implements and no knob generates reads Δ0 in all three columns at every rung,
+// which is indistinguishable from a compiler that did not change. Each family has a knob of its own:
+//   • `float` — `FloatOpsBase`.
+//   • integer `/` and `mod`, the `idiv` fixed-register path — `IntDivideBase`.
+//   • top-level `let` and `var` — `GlobalConstsBase`, `GlobalVarsBase`.
+//   • `type` declarations — `StructTypesBase`.
+//   • `match`, `enum`, `String`, `Array with`, `type ... uses`, `interface`, `implements`, `print`, `or`,
+//     `xor` and struct field writes — `EnumTypesBase` onwards.
+//   • namespaces — the `module` visibility tier, the qualified-alias mirror, the namespace-qualified
+//     function set, the dotted-chain recognizer and the multi-segment walk all need a rung that is not
+//     one flat directory, because `deriveModuleDirectory` answers `""` for every file in one. See
 //     `NamespacedModulesBase`.
-//   • ⭐ AND THE EIGHTH IS THE ONE THAT LOOKED COVERED, WHICH IS THE HARDEST KIND. There WAS a String
-//     knob — the fifth recurrence's own fix — and it generated a literal, an interpolation, `.append`,
-//     `.byteLength()` and `==`. `dispatchStringMethod` answers about twenty-five members; the other
-//     twenty generated NOTHING at any rung: no predicate, no case conversion, no `replace`/`split`, no
-//     trim, no `StringIndex` producer or consumer, no materializer, no `isEmpty`/`clone`. Every one has
-//     live spec cases, and every one is being RETIRED onto `stdlib/String.maxon`'s bodies one wave at a
-//     time — so every wave would have read Δ0 in all three columns off a knob whose name says "String".
-//     A knob is not coverage of the TYPE it is named for; it is coverage of the members it spells. See
-//     `StringSearchOpsBase`, whose first ladder run found a cost nobody had priced:
-//     `CharacterSet.whitespacesAndNewlines()` is materialized INLINE at every
-//     trim site, 194 ops a call, enough to take the register allocator out of memory at rung 4.
+//   • the `String` member surface — `StringSearchOpsBase` and its siblings. A knob covers the members it
+//     spells, not the type it is named for: `dispatchStringMethod` answers about twenty-five members, and
+//     a literal, an interpolation, `.append`, `.byteLength()` and `==` cover five of them.
+//   • a family whose neighbour is covered is the hardest kind to see: `RangedReturnSitesBase` prices the
+//     `return` door of a ranged alias beside the cast door, and a manifest line over the cast door alone
+//     reads as covering both.
 //
 // ⚠ A manifest that names a gap with the WRONG reason is worse than one that omits it, because the
 // reason is what a reader uses to decide whether to close it: a family listed under NOT GENERATED
@@ -145,11 +117,8 @@
 // See `printCorpusManifest`, which is the load-bearing half of this file rather than its
 // documentation.
 //
-// For the SIXTH the manifest was silent in all three headings at once — `__ManagedMemory` appeared under
-// neither CONSTRUCTS GENERATED nor NOT GENERATED nor the cost dimensions — which is the failure the rule
-// two paragraphs up already forbids ("every construct in the subset appears under EXACTLY ONE heading")
-// and which nothing checks. The list is hand-maintained; that is the price, and stating it is the only
-// mitigation this file has.
+// Every construct in the subset appears under exactly one manifest heading, and nothing checks it: the
+// list is hand-maintained, and stating that is the only mitigation this file has.
 
 // Which rung of the ladder, and how many of them. A rung DOUBLES the one below it, so these are
 // exponents, not sizes: `--rungs=20` would not be a big run, it would be a program a hundred
@@ -1005,9 +974,9 @@ end 'neutralizeText'
 // The ten knobs for the middle of the language
 // ===========================================================================================
 //
-// ⚠ THIS IS THE LARGEST RECURRENCE OF THIS FILE'S FOUNDING DEFECT — TEN RUNGS DEEP. See the header for the measurement: `match`, `enum`, `String`, `Array`, generics, interfaces,
-// `print`, `or`/`xor`, and struct field WRITES were all in the subset and the corpus generated ZERO of
-// each, at every rung. The knobs below close it.
+// ⚠ THIS IS THE LARGEST GAP BETWEEN THE SUBSET AND THE CORPUS — TEN CONSTRUCTS DEEP. `match`, `enum`,
+// `String`, `Array`, generics, interfaces, `print`, `or`/`xor`, and struct field WRITES are all in the
+// subset, and a corpus without the knobs below would generate ZERO of each at every rung.
 //
 // EVERY ONE OF THEM IS CROSS-TARGET-SAFE, AND THAT IS A HARD CONSTRAINT, NOT A PREFERENCE. `compileRung`
 // spawns `build` with NO `--target`, so the ladder always compiles for the HOST — and `witnessCall` on
@@ -1297,7 +1266,7 @@ let IfaceDispatchTypeCount = 4 as KnobSize
 // The NAMESPACE knob — SUBDIRECTORIES, and references written `dir.fn()` / `dir.Name`
 // ===========================================================================================
 //
-// ⚠ **A RECURRENCE OF THIS FILE'S FOUNDING DEFECT.** A file's DIRECTORY is its namespace, and
+// ⚠ **A GAP BETWEEN THE SUBSET AND THE CORPUS.** A file's DIRECTORY is its namespace, and
 // `dir.Name` / `dir.fn()` resolve against it — but a generator writing every rung's files
 // into ONE FLAT DIRECTORY makes `deriveModuleDirectory` answer `""` for every source file in every rung,
 // leaves `ParseJob.namespace` empty everywhere, and runs the whole user half of that work — the
@@ -5797,10 +5766,6 @@ export function printCorpusManifest()
 	print("    INSTANTIATION count (per layout descriptor, over a FIXED base), interface CONFORMANCE count\n")
 	print("    — which also doubles the FILE count, deliberately, to keep interfaces-per-file constant —\n")
 	print("    and interface DISPATCH SITE count over a FIXED set of conformances,\n")
-	print("    BUFFER-SURFACE group count (per-SITE, over the fixed aliases above: it grows how many places a\n")
-	print("    buffer is PRODUCED and how many marks one file's mark set holds, against the array-method\n")
-	print("    dispatches in that same file that ASK about them — the product both halves of a value-keyed\n")
-	print("    regression would cost, which is why they are one file),\n")
 	print("    TRY-CO-OWN SITE count (per-SITE, over FIXED instances — one aggregate and one String — so it\n")
 	print("    grows how many `try` sites carry a substituted managed result and NOT how many instances\n")
 	print("    exist, which is the generic-instances column beside it),\n")

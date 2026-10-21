@@ -27393,7 +27393,7 @@ export type Parser
 	// services instead of the token error it is. Requiring the qualifier keeps the widening to exactly the
 	// shape a keyword-named type produces.
 	function atSpawnPrefix() returns bool
-		if not self.spawnKeywordAt(self.pos) 'notTheWord'
+		if not tokenIsTheSpawnKeyword(self.tokenAt(self.pos)) 'notTheWord'
 			return false
 		end 'notTheWord'
 
@@ -27406,13 +27406,6 @@ export type Parser
 
 		return tokenCanBeAName(self.tokenAt(targetIndex)) and self.kindAt(targetIndex + 1) == TokenKind.dot
 	end 'atSpawnPrefix'
-
-	// Is the token at `index` the WORD `spawn`? The whole-program discovery walk
-	// (`Queries.discoveredTokenFactsOf`) asks the same question of a raw `TokenArray` through
-	// `tokenIsTheSpawnKeyword`, the one spelling this reads.
-	function spawnKeywordAt(index ElementIndex) returns bool
-		return tokenIsTheSpawnKeyword(self.tokenAt(index))
-	end 'spawnKeywordAt'
 
 	// ⭐ **WHICH WORDS ARE VISIBILITY MODIFIERS — ASKED ONCE, BY THE LOOK-AHEAD DOORS.**
 	// `atTypeAliasDeclaration` needs "is a modifier here, whatever it is?" before it can look past it
@@ -29824,10 +29817,7 @@ export type Parser
 
 		try self.parseCheckedValueReturn(initializer, block: entry, anchor: anchor)
 
-		if self.pos != declaration.exprEnd 'trailingTokens'
-			let stray = self.current()
-			throw SourceParseError.unexpectedToken("end of default value", got: tokenDisplayText(stray), line: stray.line, column: stray.column)
-		end 'trailingTokens'
+		try self.requireDefaultValueEnded(declaration.exprEnd)
 
 		self.publishExistentialInstances(initializer)
 		self.fileDeferredProvenance(initializer)
@@ -95178,7 +95168,7 @@ export type Parser
 
 		if deferred 'runsBeforeMain'
 			// The phrase is written out here exactly as its sibling `"end of default value"` is
-			// (`requireDefaultValueEnded`, `parseDefaultInitializer`): `Lexer.expectationDisplayText`'s
+			// (`requireDefaultValueEnded`): `Lexer.expectationDisplayText`'s
 			// header names these two and `'interpolation end'` as canonical's three hand-typed expectation
 			// PHRASES. A named constant would be a second spelling of a sentence nothing else says.
 			throw ConstEvalError.defective(SourceParseError.unexpectedToken("end of global initializer", got: tokenDisplayText(tok), line: tok.line, column: tok.column))
@@ -96110,8 +96100,8 @@ export type Parser
 	//
 	// ⭐⭐⭐ **A SIBLING IS ANY METHOD THE ENCLOSING TYPE HAS, AND A TOKEN WALK CANNOT SEE THEM ALL.**
 	// `ensureSiblingReceivers` reads ONE declaration's member list, which is the right list only when every
-	// method of the type is written in it. An `extension` breaks that in both directions, and both were
-	// MEASURED as `E3004 call to undefined function` on programs whose `self.<name>()` spelling compiled:
+	// method of the type is written in it. An `extension` breaks that in both directions, and each answers
+	// `E3004 call to undefined function` for a program whose `self.<name>()` spelling compiles:
 	//
 	//   • inside an `extension` body the walk starts at the EXTENSION's members, so the CONFORMER's own
 	//     methods are invisible — a different declaration, possibly in a different file;
@@ -96213,10 +96203,10 @@ export type Parser
 		// ⚠ DECIDE EXISTENCE WITHOUT THE THROWING RESOLVER. `requireReceiverValue` fails for two structurally
 		// different reasons — there is no receiver at all (a static function), and the receiver exists but is
 		// only reachable through a NON-IMMEDIATE enclosing frame (the nested-capture refusal, general to
-		// every capture). A blanket `otherwise` here caught both and turned the second into `none`, so a
-		// sibling call from a doubly-nested closure reported the arity error `'T.helper' expects 1 argument(s)
+		// every capture). A blanket `otherwise` would catch both and turn the second into `none`, so a
+		// sibling call from a doubly-nested closure would report the arity error `'T.helper' expects 1 argument(s)
 		// but 0 were provided` — the receiver counted as the missing argument — instead of the honest
-		// "unsupported nested capture". Measured.
+		// "unsupported nested capture".
 		if not self.nameBindsOrIsCaptured(SelfParamName) 'noReceiver'
 			return ReceiverArg.none
 		end 'noReceiver'
@@ -96239,11 +96229,11 @@ export type Parser
 	// (`ProgramSignatures.siblingKindFrom`), for that same reason.
 	//
 	// ⚠⚠ **AN `enum`/`union` BODY'S MEMBER LIST IS NOT BLOCK STRUCTURE, AND A CASE MAY BE SPELLED WITH A
-	// KEYWORD** — the rule the depth-0 arm below applies, and the one `keywordIsANameAt`'s case-list
-	// shape applies to the block-extent walk. MEASURED without this arm: a case named `end` closed
-	// the walk early, so a bare sibling call to a method declared after it reported
-	// `E3004 call to undefined function 'inner'`; a case named `while` did the opposite, running PAST the
-	// enum's own `end` and adopting a LATER type's `helper` as a sibling. Both are legal programs, refused.
+	// KEYWORD** — the rule `keywordIsANameAt`'s case-list shape applies to the block-extent walk, and the
+	// one `opensBlockAt` and `closesBlockAt` apply here through `keywordIsAName`. Without it a case named
+	// `end` closes the walk early, so a bare sibling call to a method declared after it reports
+	// `E3004 call to undefined function 'inner'`; a case named `while` does the opposite, running PAST the
+	// enum's own `end` and adopting a LATER type's `helper` as a sibling. Both are legal programs.
 	function ensureSiblingReceivers()
 		if self.siblingReceiverScanType.names(self.enclosingTypeName()) and self.siblingReceiverScanBody == self.enclosingTypeBodyStart 'memoHit'
 			return

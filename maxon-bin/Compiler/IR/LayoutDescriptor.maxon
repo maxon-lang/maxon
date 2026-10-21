@@ -115,7 +115,7 @@ export let LAYOUT_OFFSET_DESTROY_FUNC = 40 as ByteOffset
 export let LAYOUT_OFFSET_RETAIN_FUNC = 64 as ByteOffset
 
 // The number of little-endian bytes in one descriptor field.
-let LAYOUT_FIELD_BYTES = 8 as ByteOffset
+let LAYOUT_FIELD_BYTES = 8
 
 // The alignment (`alignment@8`) every trivial-arg generic box takes — one machine word. The box is a
 // row of 8-byte slots (`StructLayout` lays fields out at 8-byte strides), so it aligns to 8.
@@ -719,18 +719,18 @@ module function encodeLayoutDescriptor(d LayoutDescriptor, elementLogicalSizes B
 	buf.reserve(layoutDescriptorBytesFor(elementLogicalSizes.count() as ElementIndex))
 
 	for logicalSize in elementLogicalSizes 'eachTypeParam'
-		writeLayoutWord(buf, value: d.size)
-		writeLayoutWord(buf, value: d.alignment)
-		writeLayoutWord(buf, value: d.elementSize)
+		appendLittleEndianScalar(buf, value: d.size as FullRangeInt, byteCount: LAYOUT_FIELD_BYTES)
+		appendLittleEndianScalar(buf, value: d.alignment as FullRangeInt, byteCount: LAYOUT_FIELD_BYTES)
+		appendLittleEndianScalar(buf, value: d.elementSize as FullRangeInt, byteCount: LAYOUT_FIELD_BYTES)
 
 		for _ in 0 upto LAYOUT_ZERO_SLOTS_MID 'zeroSlots'
-			writeLayoutWord(buf, value: 0)
+			appendLittleEndianScalar(buf, value: 0, byteCount: LAYOUT_FIELD_BYTES)
 		end 'zeroSlots'
 
-		writeLayoutWord(buf, value: logicalSize as MachineWord)
+		appendLittleEndianScalar(buf, value: logicalSize as FullRangeInt, byteCount: LAYOUT_FIELD_BYTES)
 
 		for _ in 0 upto LAYOUT_ZERO_SLOTS_TAIL 'tailZeroSlots'
-			writeLayoutWord(buf, value: 0)
+			appendLittleEndianScalar(buf, value: 0, byteCount: LAYOUT_FIELD_BYTES)
 		end 'tailZeroSlots'
 	end 'eachTypeParam'
 
@@ -773,20 +773,13 @@ end 'layoutBlockOffsetFor'
 
 module function appendLayoutTableSlots(buf ByteArray, entryCount ElementIndex)
 	for _ in 0 upto entryCount 'eachEntry'
-		writeLayoutWord(buf, value: 0)
+		appendLittleEndianScalar(buf, value: 0, byteCount: LAYOUT_FIELD_BYTES)
 	end 'eachEntry'
 end 'appendLayoutTableSlots'
 
 module function layoutTableSlotOffset(typeParamCount ElementIndex, entry ElementIndex) returns ByteOffset
 	return layoutDescriptorBytesFor(typeParamCount) + LAYOUT_FIELD_BYTES * (entry as ByteOffset)
 end 'layoutTableSlotOffset'
-
-// Append one machine word as `LAYOUT_FIELD_BYTES` little-endian bytes.
-function writeLayoutWord(buf ByteArray, value MachineWord)
-	for i in 0 upto LAYOUT_FIELD_BYTES 'eachByte'
-		buf.push((value shr (i * 8)) and 0xFF)
-	end 'eachByte'
-end 'writeLayoutWord'
 
 // The per-`GenericInstanceId` descriptor-label registry — `Box with Integer`'s gid ⇒ the `.rdata`
 // label `__layout_Box_Integer` that names its blob. It is what threads the two ends of the ABI: the
