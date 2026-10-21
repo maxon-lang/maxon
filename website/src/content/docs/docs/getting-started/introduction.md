@@ -16,7 +16,7 @@ Maxon is a compiled programming language with from-scratch native backends. It c
 directly to standalone native executables, and to WebAssembly — no LLVM, no virtual machine,
 and no external runtime.
 
-Two things follow from the philosophy:
+Three things follow from the philosophy:
 
 - **It was written by AI.** The compiler, the standard library, and this documentation were
   authored by AI coding agents. Maxon is a working demonstration of a complete toolchain —
@@ -24,6 +24,10 @@ Two things follow from the philosophy:
 - **It is designed to be checked.** The same explicitness that makes code easy to review makes
   it hard to get wrong: there is no null, fallible operations must be resolved explicitly,
   numeric domain constraints live in the type system, and every block names what it closes.
+- **It breaks compatibility to get better.** A language that refuses breaking changes cannot
+  improve, and an agent can fix what a release breaks. Every breaking change ships with its fix
+  in the [release notes](/docs/release-notes/), and the first build of a project with a new
+  release lists the ones that apply to it.
 
 ## What that buys you
 

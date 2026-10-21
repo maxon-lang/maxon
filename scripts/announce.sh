@@ -34,6 +34,7 @@ ReleasesUrl="https://github.com/maxon-lang/maxon/releases"
 # ⚠ POSTS LINK TO THE INSTALLATION PAGE AND CARRY NO INSTRUCTIONS OF THEIR OWN. A post is never edited
 # once published, and the install commands change between releases; the page is kept current.
 InstallationPath="/docs/getting-started/installation/"
+IntroductionPath="/docs/getting-started/introduction/"
 
 WebsiteDir="website"
 BlogSubdir="$WebsiteDir/src/content/docs/blog"
@@ -108,6 +109,10 @@ description: Every released version of the Maxon compiler and standard library, 
 ---
 
 Every released version, newest first.
+
+Maxon breaks compatibility whenever a change makes the language better ([why]($IntroductionPath)), and
+every breaking change below carries its fix. The first build of a project with a new release lists the
+ones since the release that last built it, and the MCP \`breaking_changes\` tool answers the same.
 
 Downloads for each release are on the
 [GitHub releases page]($ReleasesUrl), and the install instructions are in

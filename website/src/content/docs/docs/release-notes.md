@@ -5,6 +5,10 @@ description: Every released version of the Maxon compiler and standard library, 
 
 Every released version, newest first.
 
+Maxon breaks compatibility whenever a change makes the language better ([why](/docs/getting-started/introduction/)), and
+every breaking change below carries its fix. The first build of a project with a new release lists the
+ones since the release that last built it, and the MCP `breaking_changes` tool answers the same.
+
 Downloads for each release are on the
 [GitHub releases page](https://github.com/maxon-lang/maxon/releases), and the install instructions are in
 [Installation](/docs/getting-started/installation/).

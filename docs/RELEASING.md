@@ -350,6 +350,10 @@ Each release gets a `## X.Y.Z — YYYY-MM-DD` heading and `### Breaking changes`
 something to say. Write the rest at the cut, with the whole release in view, so related changes are
 described together rather than as one bullet each.
 
+**A release breaks whatever it has to.** Maxon never holds back an improvement to stay compatible, and
+never ships a deprecation period: an agent applies the fix the release notes give, and the compiler shows
+each project the fixes it owes on its first build with the new release.
+
 ⛔ **Every breaking change carries its fix.** A change that can break an existing project, script or
 workflow — a removed or renamed spelling, command, flag, file name, syntax or standard-library API, or a
 program the compiler accepted that it now refuses or runs differently — is a bullet under

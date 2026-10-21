@@ -2,6 +2,10 @@
 
 What changed in each release of the Maxon compiler and standard library, newest first.
 
+Maxon breaks compatibility whenever a change makes the language better ([why](https://maxon.dev/docs/getting-started/introduction/)).
+The first build of a project with a new release lists the breaking changes since the release that last
+built it, and the MCP `breaking_changes` tool answers the same.
+
 A change that can break an existing project, script or workflow is listed under `### Breaking changes`,
 one `- ` bullet each: the change, then an indented `Fix:` line saying how to put the project right.
 `## Unreleased`, when present, holds the breaking changes of the release being prepared and takes the

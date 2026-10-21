@@ -16,6 +16,12 @@ hook deletes any `temp/` entry untouched for three days.
 
 There are no time constraints. Complexity doesn't matter. If you are fixing an issue then fix it properly. No workarounds.
 
+**Maxon never avoids a breaking change.** A language that refuses to break cannot improve, and Maxon is
+written with agents, which fix what a release breaks. Make the better design: keep no old spelling, no
+compatibility shim, no deprecation period, and never reject a design because existing code would have to
+change. What a break owes is its entry under `## Unreleased` in `RELEASE_NOTES.md` — the change and its
+`Fix:` — in the same commit (`docs/RELEASING.md`, "The release notes").
+
 ## Where the rules live
 
 This file holds what binds EVERY tree in the repository. The compiler is a project inside it, with its
