@@ -1340,8 +1340,7 @@ Stack trace:
 
 <!-- test: force-segfault -->
 <!-- tier: stdlib -->
-<!-- unsupported-targets: arm64-macos, wasm32-wasi -->
-On wasm32-wasi the run exits 0 where the case pins exit 1.
+<!-- unsupported-targets: arm64-macos -->
 
 ⭐⭐ **THE ONLY CASE THAT CAN REACH THE FAULT HANDLER ON PURPOSE.** Every other route into
 `mrt_fault_thunk` is a compiler BUG, so without `__Builtins.forceSegfault()` the whole thunk would be code
@@ -1352,6 +1351,7 @@ EXCEPTION_ACCESS_VIOLATION arm turns into this line, this backtrace and exit 1.
 
 `__Builtins` is callable only from a source file under `stdlib/` or `runtime/` (E3185), and the intrinsic has
 no public replacement, so this case and the three below that call it compile as library-tier source.
+`wasm32-wasi` installs no fault handler, and a store through address 0 succeeds in linear memory, so the intrinsic is refused there with E3104 and these cases are counted skips.
 
 ⚠ **THE ENTRY POINT IS A FUNCTION AND NOT A STORE INLINED AT THE CALL SITE, BECAUSE THE FRAME LIST IS WHAT
 THIS ASSERTS.** Inlined, frame 0 would be `main` and the case would stop saying that the walk crosses a frame
@@ -1376,8 +1376,7 @@ Stack trace:
 
 <!-- test: force-segfault-macos -->
 <!-- tier: stdlib -->
-<!-- unsupported-targets: x64-windows, x64-linux, arm64-linux, wasm32-wasi -->
-On wasm32-wasi the run exits 0 where the case pins exit 1.
+<!-- unsupported-targets: x64-windows, x64-linux, arm64-linux -->
 
 ### Deliberate access violation produces a clean panic (arm64-macOS)
 ⚠⚠ **A Mach-O RUNS ONLY ON macOS**, so on any other host the runner reports this NOT RUN and refuses to

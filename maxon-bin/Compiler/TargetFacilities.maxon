@@ -209,6 +209,11 @@ export enum HostFacility
 	// above's CPU argument binds here too: a stop's register file is a fixed per-CPU record, so the row is
 	// about a CPU as well as an OS even where the mechanism is not a debug port.
 	processDebug
+
+	// The runtime's fault handler, which turns a hardware trap into `panic: nil pointer or invalid memory
+	// access`, a backtrace and exit 1. The fault probe (`maxon_force_segfault`) exists to reach it, and
+	// wasm32-wasi installs none: its store through address 0 lands in linear memory and traps nothing.
+	faultHandler
 end 'HostFacility'
 
 // The answer `calleeHostFacility` returns. A union rather than a bool-plus-out-param so that "this callee
@@ -257,6 +262,9 @@ end 'CalleeFacility'
 //   • `__thread_*` — `osThreadCpuTicks`'s `QueryThreadCycleTime` (`__Builtins.threadCpuTicks()`). The
 //     THREAD-COST query, and `ClockRuntime`'s second band. Its own band-mate `__clock_*` is already here,
 //     one bullet up; the two are split by which IMPORT they reach, not by whether they lower.
+//   • `maxon_force_segfault` — the fault probe (`__Builtins.forceSegfault()`), named exactly because the
+//     tier declares it and nothing else. It lowers on every lane, and what it needs is the HANDLER its
+//     fault reaches: wasm32-wasi has none, and a store through address 0 there succeeds.
 //
 // ⚠ `__gt_io_park` — the filesystem yield — is deliberately ABSENT, and by this set's own rule: SOURCE never
 // names it. It is reachable only from the `__mf_*`/`__md_*` bodies, and those are already refused below by
@@ -407,6 +415,10 @@ function calleeHostFacility(callee ByteArray) returns CalleeFacility
 	if callee.equals(GtReschedName) 'resched'
 		return CalleeFacility.needs(HostFacility.reschedule)
 	end 'resched'
+
+	if callee.equals(ForceSegfaultName) 'faultProbe'
+		return CalleeFacility.needs(HostFacility.faultHandler)
+	end 'faultProbe'
 
 	if callee.equals(GtAwaitAnyName) or callee.equals(GtQuiesceName) 'select'
 		return CalleeFacility.needs(HostFacility.greenThreads)
@@ -639,6 +651,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			managedSocket or
 			terminalDetection or
 			sharedMemory or
+			faultHandler or
 			uptimeClock gives true
 
 			// ⛔ `processSampling` and `processDebug`: the register file is the wrong shape. `thread_get_state`
@@ -710,6 +723,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			managedSocket or
 			terminalDetection or
 			sharedMemory or
+			faultHandler or
 			uptimeClock gives true
 
 			processDebug gives true
@@ -768,6 +782,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			managedSocket or
 			terminalDetection or
 			sharedMemory or
+			faultHandler or
 			uptimeClock gives true
 
 			processDebug gives true
@@ -817,7 +832,8 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			terminalDetection or
 			sharedMemory or
 			processSampling or
-			processDebug gives false
+			processDebug or
+			faultHandler gives false
 		end 'f'
 	end 'wasmWasi'
 

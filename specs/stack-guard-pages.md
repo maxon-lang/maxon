@@ -354,7 +354,7 @@ the stack would step over the guard and write below it; the arm64 prologue's pag
 first, so the run stops with `panic: stack overflow`. x64 walks frames over one page already, so this case
 can only be red on the arm64 lanes. x64-windows gives the main thread a 1 MiB stack, so its trace is 49
 `deep` frames and no elision line.
-wasm32-wasi has no guard pages and no `panic: stack overflow` for a main-thread recursion; the run ends with exit 3, so the case is pinned on the native lanes.
+On wasm32-wasi the engine owns the call stack: a recursion that outgrows it ends in wasmtime's `call stack exhausted` trap, whose exit status is the host's (3 on Windows), because a guest cannot observe how much of the engine's stack is left. The case is pinned on the native lanes.
 ```maxon
 typealias Depth = int(0 to i64.max)
 typealias Integer = int(i64.min to i64.max)
