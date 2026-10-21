@@ -6518,7 +6518,9 @@ end 'buildSchedCheckdead'
 function emitSchedRunStrand(module StdModule, block IrBlock, m ValueId, g ValueId, handedOff IrBlock, cont IrBlock, ids ValueMinter)
 	let ranStrand = ids.mint()
 	module.appendOp(block, op: StdOp.call(ranStrand, callee: GtRunStrandName, args: twoArgs(m, second: g)))
+	let noDebt = emitConst(module, block: block, value: WakeDebtNone, ids: ids)
 	emitBranchOnCompare(module, block: block, value: ranStrand, pred: StdCmpPred.eq, against: GtProcessorHandedOff, whenTrue: handedOff, whenFalse: cont, ids: ids)
+	block.branchEdges.push(BranchEdge.create(handedOff.id, argIds: argsOf(noDebt)))
 end 'emitSchedRunStrand'
 
 // ⭐⭐⭐ **A MACHINE's SCHEDULER LOOP — Go's `schedule()`.** Fire what is due, search, run the strand whose
@@ -6682,7 +6684,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	// went idle. The due test reads the published earliest deadline without the lock
 	// (`GtRuntime.emitGtBranchOnTimerDue`), so a schedule takes the lock only when a timer really is due. The
 	// fire's wake debt is not paid here: this machine searches next and finds what it readied, and `wfound`
-	// pays it.
+	// pays it, or `whandedoff` when the search hands the processor to a pinned thread's owner.
 	let owed = ids.mint()
 	dequeue.blockArgs.push(IrBlockArg.create(owed, argType: StdType.i64))
 	emitGtPollStores(module, func: func, cur: checkTimers, cont: dequeue, hold: SchedLockHold.free, ids: ids)
@@ -6698,11 +6700,12 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	let g = emitSchedFindRunnable(module, block: dequeue, m: m, ids: ids)
 	let empty = emitCompareWithConstant(module, block: dequeue, value: g, pred: StdCmpPred.eq, against: 0, ids: ids)
 	emitBranchOnCompare(module, block: dequeue, value: g, pred: StdCmpPred.eq, against: GtProcessorHandedOff, whenTrue: handedOffProc, whenFalse: sortWork, ids: ids)
+	dequeue.branchEdges.push(BranchEdge.create(handedOffProc.id, argIds: argsOf(owed)))
 	module.setTerminator(sortWork, op: StdOp.condBranch(empty, thenBlockId: idlePoll.id, elseBlockId: foundWork.id))
 
-	let handedOffSpinning = emitSchedSpinningTransition(module, block: handedOffProc, m: m, transition: SpinningTransition.stopSpinning, ids: ids)
-	let handedOffHeldNoCredit = emitCasLost(module, block: handedOffProc, result: handedOffSpinning, ids: ids)
-	emitSchedHandOnTheLooking(module, func: func, cur: handedOffProc, nothingSkipped: handedOffHeldNoCredit, cont: handedOffLocking, wakeLabel: b"whandedoffwake", ids: ids)
+	let handedOffOwed = ids.mint()
+	handedOffProc.blockArgs.push(IrBlockArg.create(handedOffOwed, argType: StdType.i64))
+	emitSchedResetSpinning(module, func: func, cur: handedOffProc, m: m, owed: handedOffOwed, cont: handedOffLocking, wakeLabel: b"whandedoffwake", ids: ids)
 
 	emitSchedLockEnter(module, block: handedOffLocking, ids: ids)
 	emitBranchCarrying(module, from: handedOffLocking, to: parkCheck, value: emitConst(module, block: handedOffLocking, value: WakeForRestNone, ids: ids))
@@ -6710,12 +6713,8 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	// ⭐⭐⭐ **FOUND A TOKEN ⇒ A SPINNER HAS STOPPED LOOKING, AND IT OWES THE LOOKING TO SOMEBODY ELSE.** Go's
 	// `resetspinning` — decrement, then `wakep` — for a machine that WAS spinning, and for one whose own fire
 	// readied work and skipped the wake that work owed: either way a publish may be waiting that nobody was
-	// woken for. `emitSchedHandOnTheLooking` pays the wake.
-	let wasSpinning = emitSchedSpinningTransition(module, block: foundWork, m: m, transition: SpinningTransition.stopSpinning, ids: ids)
-	let heldNoCredit = emitCasLost(module, block: foundWork, result: wasSpinning, ids: ids)
-	let owesNothing = emitCompareWithConstant(module, block: foundWork, value: owed, pred: StdCmpPred.eq, against: WakeDebtNone, ids: ids)
-	let nothingSkipped = emitBin(module, block: foundWork, a: heldNoCredit, b: owesNothing, opcode: StdBinOpcode.bitAnd, ids: ids)
-	emitSchedHandOnTheLooking(module, func: func, cur: foundWork, nothingSkipped: nothingSkipped, cont: haveWork, wakeLabel: b"wwakemore", ids: ids)
+	// woken for. `emitSchedResetSpinning` pays the wake.
+	emitSchedResetSpinning(module, func: func, cur: foundWork, m: m, owed: owed, cont: haveWork, wakeLabel: b"wwakemore", ids: ids)
 
 	emitSchedRunStrand(module, block: haveWork, m: m, g: g, handedOff: handedOffProc, cont: loopTop, ids: ids)
 
@@ -6726,7 +6725,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	// (`GtRuntime.emitGtPollStores`).
 	//
 	// ⭐⭐ **THE WAKE DEBT GOES TO `wdequeue` RATHER THAN BEING PAID.** The thread fired onto this ring is run by
-	// this machine, which searches next; `wfound` pays it.
+	// this machine, which searches next; `wfound` pays it, or `whandedoff` when the search hands the processor away.
 	emitGtPollStores(module, func: func, cur: idlePoll, cont: idleFire, hold: SchedLockHold.free, ids: ids)
 
 	let idleDebt = ids.mint()
@@ -6990,6 +6989,18 @@ function emitSchedHandOnTheLooking(module StdModule, func IrFunction, cur IrBloc
 	emitSchedWakeAnIdleM(module, block: wake, ids: ids)
 	module.setTerminator(wake, op: StdOp.branch(cont.id))
 end 'emitSchedHandOnTheLooking'
+
+// Go's `resetspinning` for a machine that found a token: it stops looking, and pays the wake if it was counted
+// spinning or `owed` is a debt its own timer fire left unpaid. Every road that stops searching with a fire's
+// debt in hand comes through here, because nothing after it pays that debt.
+function emitSchedResetSpinning(module StdModule, func IrFunction, cur IrBlock, m ValueId, owed ValueId, cont IrBlock, wakeLabel ByteArray, ids ValueMinter)
+	let wasSpinning = emitSchedSpinningTransition(module, block: cur, m: m, transition: SpinningTransition.stopSpinning, ids: ids)
+	let heldNoCredit = emitCasLost(module, block: cur, result: wasSpinning, ids: ids)
+	let owesNothing = emitCompareWithConstant(module, block: cur, value: owed, pred: StdCmpPred.eq, against: WakeDebtNone, ids: ids)
+	let nothingSkipped = emitBin(module, block: cur, a: heldNoCredit, b: owesNothing, opcode: StdBinOpcode.bitAnd, ids: ids)
+
+	emitSchedHandOnTheLooking(module, func: func, cur: cur, nothingSkipped: nothingSkipped, cont: cont, wakeLabel: wakeLabel, ids: ids)
+end 'emitSchedResetSpinning'
 
 function emitSchedWakeForWhatRemains(module StdModule, func IrFunction, check IrBlock, cont IrBlock, wakeLabel ByteArray, pollerLabel ByteArray, ids ValueMinter)
 	var wake = module.addBlock(func, label: wakeLabel, heat: BlockHeat.normal)

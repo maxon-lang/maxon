@@ -404,3 +404,132 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: sched-park.a-timer-lap-that-hands-the-processor-to-a-pinned-thread-wakes-a-machine-for-the-rest -->
+<!-- procs: 2 -->
+**A LAP THAT FIRES TWO TIMERS AND HANDS ITS PROCESSOR TO A PINNED THREAD STILL PAYS THE WAKE THE SECOND TIMER OWES.**
+Both timers are armed while every processor is busy, so no machine is started to poll for them, and both are due
+by the time `main` — the only machine not waiting for a pinned thread — parks. Its loop fires them in deadline
+order: the signaller's thread, then the waiter's. The waiter's token is the one the search finds, and it belongs
+to another machine, so the lap hands the processor and the token to that machine; the signaller's token is left on
+the ring of the processor it handed over, with a machine busy on it and the other processor idle. Go's timer fire
+readies each thread through `goready`, which wakes a machine for it; here that wake is paid on the hand-off, and
+a new machine takes the signaller's token and gives its processor to its owner. Without the wake the signaller
+waits behind the waiter, which is waiting for the signaller: nothing runs it until the waiter's machine is
+preempted, ten milliseconds into the wait.
+
+⚖ **THE ORDER IS BETWEEN TWO EVENTS, NEVER A WALL-CLOCK BUDGET.** The waiter reports whether the signal arrived
+before the scheduler preempted it, and the wait is capped at 1500 ms so a signal that never arrives ends the case.
+
+⚠ **SIX ROUNDS, BECAUSE ONE LAP MAY NOT BE THE ONE THAT HANDS OFF.** The monitor starting a machine for an overdue
+timer, or a preemption of `main`, can fire the two timers one lap apart, and a round spoiled that way passes without
+reaching the hand-off. Each round is on fresh services, and the case holds only when every round's signaller
+ran in time.
+```maxon
+typealias HandOffFlag = SharedValue with bool
+typealias HandOffTurns = int(0 to u64.max)
+
+let handOffLeadMs = 50
+let handOffRounds = 6
+let handOffWaitCapMs = 1500
+
+function handOffRemaining(target InstantMs) returns Milliseconds
+	let now = Clock.nowMs()
+
+	if now >= target 'past'
+		return 0
+	end 'past'
+
+	return (target - now) as Milliseconds
+end 'handOffRemaining'
+
+function handOffSpinUntil(deadline InstantMs) returns HandOffTurns
+	var turns = 0 as HandOffTurns
+
+	while Clock.nowMs() < deadline 'spin'
+		turns = turns + 1
+	end 'spin'
+
+	return turns
+end 'handOffSpinUntil'
+
+type HandOffThread
+	var held as HandOffTurns
+
+	static function create() returns Self
+		return Self{held: 0}
+	end 'create'
+
+	export function waitForTheSignal(wakeAt InstantMs, signalled HandOffFlag, armed HandOffFlag) returns bool
+		if not Scheduler.pinToMachine() 'refused'
+			return false
+		end 'refused'
+
+		armed.publish(true)
+		sleep(handOffRemaining(wakeAt))
+
+		let preemptsBefore = Scheduler.counters().preempts
+		let began = Clock.nowMs()
+
+		while not signalled.current() and Clock.elapsedMs(began) < handOffWaitCapMs 'wait'
+			self.held = self.held + 1
+		end 'wait'
+
+		let inTime = signalled.current() and Scheduler.counters().preempts == preemptsBefore
+		Scheduler.unpinFromMachine()
+		return inTime
+	end 'waitForTheSignal'
+
+	export function signalAt(wakeAt InstantMs, signalled HandOffFlag) returns bool
+		if not Scheduler.pinToMachine() 'refused'
+			return false
+		end 'refused'
+
+		sleep(handOffRemaining(wakeAt))
+		signalled.publish(true)
+		Scheduler.unpinFromMachine()
+		return true
+	end 'signalAt'
+end 'HandOffThread'
+
+function handOffRound() returns bool
+	let signalled = HandOffFlag.create(false)
+	let armed = HandOffFlag.create(false)
+	let dueAt = Clock.nowMs() + handOffLeadMs
+	let waiter = spawn HandOffThread.create()
+	let signaller = spawn HandOffThread.create()
+	let waiting = try waiter.waitForTheSignal(dueAt + 1, signalled: signalled.clone(), armed: armed.clone()) otherwise panic("an open mailbox with room takes the send")
+	var looks = 0 as HandOffTurns
+
+	while not armed.current() 'armWaiter'
+		looks = looks + 1
+	end 'armWaiter'
+
+	_ = handOffSpinUntil(Clock.nowMs() + 2)
+	let signalling = try signaller.signalAt(dueAt, signalled: signalled.clone()) otherwise panic("an open mailbox with room takes the send")
+	_ = handOffSpinUntil(dueAt + 2)
+
+	let inTime = await waiting
+	let sent = await signalling
+	return inTime and sent
+end 'handOffRound'
+
+function main() returns ExitCode
+	var inTime = 0 as HandOffTurns
+
+	for _ in 1 to handOffRounds 'rounds'
+		if handOffRound() 'ranInTime'
+			inTime = inTime + 1
+		end 'ranInTime'
+	end 'rounds'
+
+	print("rounds in which the signaller ran while the waiter held its machine: {inTime} of {handOffRounds}\n")
+	return 0
+end 'main'
+```
+```stdout
+rounds in which the signaller ran while the waiter held its machine: 6 of 6
+```
+```exitcode
+0
+```
