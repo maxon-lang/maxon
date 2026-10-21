@@ -2139,12 +2139,18 @@ function encodeX64MoveLengthToRsi(code ByteArray, length X64MapLength)
 	end 'source'
 end 'encodeX64MoveLengthToRsi'
 
-// `munmap(base, byteSize)` where the base is in a frame slot — the release every failure arm and every
-// object close performs, written once because four sites do it and each had to reload the base first.
+// `munmap(base, byteSize)` where the base is in a frame slot — the release the thread-create failure arm
+// performs for its slot block and its stack region, written once because each had to reload the base first.
 function x64LinuxEmitUnmapSlot(asm X64RuntimeAsm, baseSlot StackSize, byteSize MachineWord)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(baseSlot), wide: true)
 	encodeX64MunmapBaseInRdi(asm.code, length: X64MapLength.fixed(byteSize))
 end 'x64LinuxEmitUnmapSlot'
+
+function x64LinuxEmitReleaseObjectPage(asm X64RuntimeAsm, handleSlot StackSize)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(handleSlot), wide: true)
+	x64LinuxEmitUntagHandle(asm, reg: X64Register.rdi)
+	encodeX64MunmapBaseInRdi(asm.code, length: X64MapLength.fixed(LinuxHostObjectPageBytes))
+end 'x64LinuxEmitReleaseObjectPage'
 
 // `futex(uaddr, op, val, timeout, uaddr2, val3)` — the one call shape all four users below marshal, with the
 // address taken from a frame slot because every caller has just clobbered the register it arrived in.
@@ -2482,7 +2488,7 @@ function buildX64LinuxThreadCreateChunk() returns FunctionCodeChunk
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: cloneFailed)
 
-	// PARENT: the tagged handle is the answer, and `__sched_wake_or_spawn` stores it in the P it just claimed.
+	// PARENT: the tagged handle is the answer, and `__sched_startm` stores it in the M it just made.
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), wide: true)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: done)
 
@@ -2500,8 +2506,8 @@ function buildX64LinuxThreadCreateChunk() returns FunctionCodeChunk
 	// this call took, in the reverse of the order it took it, and answer the NULL handle `spawnIt` reads as
 	// "no thread started" (it releases the P it claimed for this M).
 	asm.placeLabel(cloneFailed)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), wide: true)
-	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostWaitCloseName)
+	// Not `mrt_host_wait_close`: its static reach of `mrt_host_proc_reap` overflows the E5004 margin.
+	x64LinuxEmitReleaseObjectPage(asm, handleSlot: SlotObj)
 	x64LinuxEmitUnmapSlot(asm, baseSlot: SlotTls, byteSize: LinuxHostObjectPageBytes)
 
 	asm.placeLabel(releaseStack)
@@ -2721,7 +2727,7 @@ function buildX64LinuxWaitCloseChunk() returns FunctionCodeChunk
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostProcReapName)
 
 	asm.placeLabel(unmapObject)
-	x64LinuxEmitUnmapSlot(asm, baseSlot: SlotObj, byteSize: LinuxHostObjectPageBytes)
+	x64LinuxEmitReleaseObjectPage(asm, handleSlot: SlotObj)
 
 	asm.placeLabel(closed)
 	return asm.finishFunction(HostWaitCloseName)

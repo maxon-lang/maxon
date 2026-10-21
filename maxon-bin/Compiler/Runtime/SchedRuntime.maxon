@@ -7305,8 +7305,10 @@ end 'emitSchedRaiseHighWater'
 // ⭐ **AND `__sched_startm` TAKES `__sched_lock` WHILE THIS FUNCTION DOES NOT.** The O(1) idle list is both
 // cheaper than a linear scan and the only thing that can find a P-less machine. The gate above runs
 // lock-free, so a publish that wakes nobody costs its loads.
+//
+// Unguarded, so an owed wake pays no prologue guard; E5004 proves its chain fits the margin.
 function buildSchedWakeOrSpawn(module StdModule)
-	var func = IrFunction.createFromStd(SchedWakeOrSpawnName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), needsGreenThreadStackGuard: true, pinsItsThread: true)
+	var func = IrFunction.createFromStd(SchedWakeOrSpawnName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)

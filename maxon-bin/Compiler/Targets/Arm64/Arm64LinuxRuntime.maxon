@@ -1731,6 +1731,13 @@ function arm64LinuxEmitMapAnon(asm Arm64RuntimeAsm, byteSize MachineWord)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallMmap)
 end 'arm64LinuxEmitMapAnon'
 
+function arm64LinuxEmitReleaseObjectPage(asm Arm64RuntimeAsm, handleSlot StackSize)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: handleSlot)
+	arm64PosixUntagHandle(asm, reg: Arm64Register.x0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: LinuxHostObjectPageBytes as MachineWord)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallMunmap)
+end 'arm64LinuxEmitReleaseObjectPage'
+
 // ==========================================================================
 // mrt_host_thread_create(x0 = entry, x1 = arg) -> x0 = the tagged object handle | 0
 // ==========================================================================
@@ -1845,7 +1852,7 @@ function buildArm64LinuxThreadCreateChunk(globalData GlobalDataTable) returns Fu
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: cloneFailed)
 
-	// PARENT: the tagged handle is the answer, and `__sched_wake_or_spawn` stores it in the P it just claimed.
+	// PARENT: the tagged handle is the answer, and `__sched_startm` stores it in the M it just made.
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
 	arm64EmitBranchTo(asm, label: done)
 
@@ -1864,8 +1871,8 @@ function buildArm64LinuxThreadCreateChunk(globalData GlobalDataTable) returns Fu
 	// this call took, in the reverse of the order it took it, and answer the NULL handle `spawnIt` already
 	// reads as "no thread started" (it releases the P it claimed for this M).
 	asm.placeLabel(cloneFailed)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
-	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostWaitCloseName)
+	// Not `mrt_host_wait_close`: its static reach of `mrt_host_proc_reap` overflows the E5004 margin.
+	arm64LinuxEmitReleaseObjectPage(asm, handleSlot: SlotObj)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotTls)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: LinuxHostObjectPageBytes as MachineWord)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallMunmap)
@@ -2088,8 +2095,6 @@ function buildArm64LinuxWaitCloseChunk() returns FunctionCodeChunk
 	//
 	// ⚠ **A THREAD OBJECT RELEASES THE PAGE AND NOT THE M's STACK OR SLOT BLOCK**, which are process-lifetime
 	// (`buildArm64LinuxThreadCreateChunk` carries why an exiting thread cannot unmap the stack under itself).
-	// The only caller that closes one is `mrt_host_thread_create`'s own clone-failure arm, where no thread was
-	// ever started and that arm unmaps both itself.
 	//
 	// ⚠ **A CHILD IS REAPED FIRST.** Without a non-blocking `wait4` an exited child that nobody waited on
 	// stays a zombie for the parent's whole life, which a spawn/release loop turns into one per iteration. A
@@ -2104,9 +2109,7 @@ function buildArm64LinuxWaitCloseChunk() returns FunctionCodeChunk
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostProcReapName)
 
 	asm.placeLabel(unmapObject)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: LinuxHostObjectPageBytes as MachineWord)
-	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallMunmap)
+	arm64LinuxEmitReleaseObjectPage(asm, handleSlot: SlotObj)
 
 	asm.placeLabel(closed)
 	return asm.finishFunction(HostWaitCloseName)
