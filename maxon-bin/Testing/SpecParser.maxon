@@ -2192,12 +2192,18 @@ end 'carriesDirective'
 function parseUnsupportedTargetKeys(opening String, specPath FilePath, testName String) returns TargetKeyArray
 	var result = TargetKeyArray.create()
 	let rawValue = markerValueOf(opening)
+	let spelledIn = "`{UnsupportedTargetsMarker} … -->`"
 
 	for part in rawValue.split(TargetSeparator) 'eachTarget'
 		let trimmed = part.trim()
 
 		if not trimmed.isEmpty() 'nonEmpty'
-			requireSupportedTargetKey(trimmed, spelledIn: "`{UnsupportedTargetsMarker} … -->`", specPath: specPath, testName: testName)
+			requireSupportedTargetKey(trimmed, spelledIn: spelledIn, specPath: specPath, testName: testName)
+
+			if result.contains(trimmed) 'repeatedKey'
+				panic("SpecParser: {specPath.toString()}: test '{testName}' carries {spelledIn} naming '{trimmed}' more than once. A key written twice excludes nothing the first did not, so the marker reads as ruling out more lanes than it does. Keep one of the two")
+			end 'repeatedKey'
+
 			result.push(trimmed)
 		end 'nonEmpty'
 	end 'eachTarget'

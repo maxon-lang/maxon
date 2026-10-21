@@ -253,8 +253,9 @@ String case failing on wasm is a BUG on that lane, not an out-of-slice case to r
 
 ⭐ **THE MARKER NAMES THE LANES THAT CANNOT SERVE A CASE, NEVER THE ONES THAT CAN**, so a backend that
 lands inherits every unmarked case instead of being excluded from all of them at once. The harness
-REFUSES a key naming no supported target, refuses a marker that excludes every one of them (a case that
-runs nowhere is fixed or deleted), and refuses the retired `<!-- targets: -->` spelling.
+REFUSES a key naming no supported target or named twice, refuses a marker that excludes every one of
+them (a case that runs nowhere is fixed or deleted), and refuses the retired `<!-- targets: -->`
+spelling.
 
 ⛔⛔ **DO NOT MARK A CASE THE COMPILER ALREADY REFUSES.** A lane with no substrate answers **E3104**, and
 the harness reports that as a counted **SKIP** naming the case; a marker removes the case from selection
