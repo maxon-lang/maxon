@@ -6772,7 +6772,7 @@ typealias MethodNodesByName = Map with (ByteArray, CsrColumn)
 // ⭐⭐ **THE NODE SPACE `closeByRefForwarding` CLOSES OVER — ONE NODE PER DECLARATION, THREE WAYS TO FIND
 // IT.** A declaration gets exactly one node (that is what makes a mark on it mean one thing); which INDEX
 // it is filed in is `ParamReassignInfo.callability`, and which indexes an EDGE consults is
-// `ForwardCall`'s shape. The two meet in `forwardCallTargets`, which is the ONLY place the shape→node rule
+// `ForwardCall`'s shape. The two meet in `targetsOf`, which is the ONLY place the shape→node rule
 // is written.
 //
 // ⚠ **ONE NODE PER DECLARATION IS A CORRECTNESS PROPERTY, NOT A TIDINESS ONE.** Filing a method under both
@@ -17714,7 +17714,7 @@ export type SettledDeclarations
 
 	// ⭐ Function name -> its per-parameter CONSUME bits — what `consumeOf(callee)` answers a call site
 	// asking "does the callee take ownership of my argument at position i?". Filled by
-	// `recordParamConsume` from each file's `scanParamConsumes`; last-wins on a duplicate name,
+	// `recordParamConsume` as each file is folded; last-wins on a duplicate name,
 	// exactly as `returnTypes` is. `declParamConsumes` keeps the same facts per declaration SITE, so
 	// each member of an overload set keeps its own (`consumeOfDeclaration`).
 	module var funcParamConsumes as ParamConsumeMap
@@ -17724,8 +17724,8 @@ export type SettledDeclarations
 	// filed under each registration key, so each member of an overload set keeps its own ABI.
 	// `byRefOf` / `byRefOfDeclaration` answer BOTH ends of the ABI — the callee's own
 	// `bindParameters`, deciding whether a parameter arrives as a cell address, and the call site,
-	// deciding whether to hand one over. Filled by `recordParamReassign` from each file's
-	// `scanReassignedParams`. Only a function with something to state is recorded — the "absence is
+	// deciding whether to hand one over. Filled by `recordParamReassign` as each file is folded. Only a
+	// function with something to state is recorded — the "absence is
 	// the answer" default `funcParamConsumes` rests on.
 	//
 	// ⚠ **"SOMETHING TO STATE" INCLUDES MERELY FORWARDING, SO THIS MAP IS NOT EMPTY ON A PROGRAM THAT
@@ -22327,24 +22327,13 @@ export type ProgramSignatures
 	// fixpoints already close through. A bare name takes something by reference iff it REASSIGNS (the seed) or
 	// forwards into a name that does, which is exactly "reaches a seed over the forwarding edges".
 	//
-	// ⚠⚠ **IT WAS A ROUND-BASED FIXPOINT — RE-SCAN EVERY RECORDED FUNCTION UNTIL NOTHING CHANGES — AND THAT IS
-	// O(depth x recorded), WITH THE SOURCE PROGRAM'S OWN CALL DEPTH AS THE MULTIPLIER.** The recorded set is not
-	// small and is not the user's program: a function is recorded merely for HANDING A PARAMETER ON, so all of
-	// `stdlib` that forwards an argument is in it (`Array.sort` handing `cmp` to `driftsortRange` is the case
-	// `programTakesAParamByRef` already records), and every round re-walked all of it plus a
-	// `byRefForwardingLive` lookup per entry.
+	// ⚠⚠ **A ROUND-BASED FIXPOINT — RE-SCAN EVERY RECORDED FUNCTION UNTIL NOTHING CHANGES — IS O(depth x
+	// recorded), WITH THE SOURCE PROGRAM'S OWN CALL DEPTH AS THE MULTIPLIER.** The recorded set is not small and
+	// is not the user's program: a function is recorded merely for HANDING A PARAMETER ON, so all of `stdlib`
+	// that forwards an argument is in it (`Array.sort` handing `cmp` to `driftsortRange`).
 	//
-	// MEASURED on the round-based version, at a CONSTANT 512-function program where only WHICH function each
-	// one forwards to changed — same tokens, same declarations, same emitted code:
-	//
-	//   forwarding depth    2      16      64     128     256     512
-	//   phase:parse CPU   199M    207M    229M    262M    322M    452M
-	//
-	// The cost doubled with the DEPTH at a fixed program size, which is the multiplier stated as a measurement;
-	// grown together (depth proportional to program) it read x2.9 per doubling against a flat control's x1.2.
-	// The scale-test ladder cannot see any of it, and that is the CORPUS's silence rather than the code's:
-	// COUNTED, not assumed — 191 function declarations across the 49 generated files, and not one reassigns a
-	// parameter, so `sawParamReassignment` is false at every rung and this returns before the graph exists.
+	// The scale-test ladder cannot see this cost: its corpus reassigns no parameter, so `sawParamReassignment`
+	// is false at every rung and this returns before the graph exists.
 	//
 	// ⚠ **THE MATCH IS ON WHAT THE SOURCE WROTE, NEVER ON A RESOLUTION** — see `ForwardCall`. An edge carries
 	// only the spelling before the `(`, so widening is what lets this stay a closure over recorded edges
@@ -22353,9 +22342,7 @@ export type ProgramSignatures
 	//
 	// ⭐⭐ **BUT A SPELLING IS NOT THE WHOLE NODE, AND THE REST OF IT IS THE RECEIVER.** Nodes and the rule
 	// that maps a call onto them live in `DeclNodeSpace`; `targetsOf` is the ONE place the mapping is
-	// written, and both the edge build and the per-key publish below spend it. Without that split, `stdlib`'s
-	// `Array.swap` shared a node with a user program's free `swap`, inherited its by-reference-ness and
-	// carried it up to the overloaded `Array.sort`, which E2015 then refused.
+	// written, and both the edge build and the per-key publish below spend it.
 	function closeByRefForwarding()
 		if self.byRefForwardingClosed 'alreadySettled'
 			return
@@ -42809,12 +42796,13 @@ export type ProgramSignatures
 	// ⭐⭐ **WHAT A WITNESS TABLE'S `destroyFunc@8` HOLDS FOR CONFORMER `typeName` — or EMPTY when the
 	// conformer owns nothing droppable, which the table records as the 0 `__drop_existential` treats as
 	// inert.** ONE answer, read by the site that STAMPS the reloc
-	// (`LowerMaxonToStd.ensureWitnessTable`) and by the site that ROOTS its target (`MmRuntime.rootConformerDrops`),
-	// so the symbol a table names and the symbol the pipeline installs cannot come apart — the arrangement
-	// `typeParamDropCallee` already has for the layout descriptor's `destroyFunc@40`.
+	// (`LowerMaxonToStd.ensureWitnessTable`), and the stamped reloc is what roots its target
+	// (`MmRuntime.noteRelocatedFunctionUsage`), so the symbol a table names and the symbol the pipeline
+	// installs cannot come apart — the arrangement `typeParamDropCallee` already has for the layout
+	// descriptor's `destroyFunc@40`.
 	//
 	// ⚠ **`inert` IS THE ANSWER** — "this conformer has no destructor" is a real
-	// state of the world with a real encoding in the table (the zero word), and both callers act on it as such.
+	// state of the world with a real encoding in the table (the zero word).
 	export function existentialDestroyCallee(typeName ByteArray) returns OwnershipCallee
 		match self.existentialOwnershipProtocol(typeName) 'protocol'
 			byteRecord then return OwnershipCallee.named(StrDecrefName)
@@ -42968,9 +42956,8 @@ export type ProgramSignatures
 	// block of the ENCLOSING GENERIC INSTANCE the compiled-once body belongs to — and a SYNTHESIZED
 	// `Array`/`Set`/`Map` record has no such body: it is served by the runtime off its own stamps. Stamping them
 	// on an `Array with String` would bake relocations nothing loads, and the callee they name is a HEAP one,
-	// so `MmRuntime.rootManagedOpaqueArrayElementDrops` would then set `usesHeap` for programs that allocate
-	// nothing: MEASURED at review, `function main() returns ExitCode return 7 end` grew 1,592 → **1,672** bytes
-	// on exactly that.
+	// so `MmRuntime.noteRelocatedFunctionUsage`, which roots every relocated callee, would then set `usesHeap`
+	// for programs that allocate nothing.
 	//
 	// ⭐⭐⭐ **BUT "AN `Array` HAS NO SHARED BODY" IS FALSE, AND THE GAP IS A DOUBLE FREE.** A gate of
 	// `genericInstanceHasBaseLayout` alone rests on the premise quoted above, that only a declared
@@ -42999,19 +42986,15 @@ export type ProgramSignatures
 	// predicates agreeing. That is the invariant `managedOpaqueArrayElementOf` states, and the arrangement the
 	// witness table's `destroyFunc@8`/`retainFunc@16` pair holds.
 	//
-	// ⛔⛔ **IT WAS GATED ON THE INSTANCE HAVING AN OPAQUE `Array with T` OR BARE `T` FIELD, AND THE RETAIN WAS
-	// NOT — SO THE STATED INVARIANT WAS FALSE AND THE GAP LEAKED (found at review).** `retainFunc@64` is a fact
-	// about the ARGUMENT; the old drop gate (`genericInstanceHasManagedOpaqueArrayField`) was a fact about the
-	// base's FIELD LIST, and a generic that stores a borrowed `T` into a record it builds needs no `T`-typed
-	// field at all. `type Pack uses T` with only `var n as Integer`, an instance method doing
-	// `let pair = (t, n)` over a borrowed `T`, at `Pack with String` prints `7` and must exit 0; under the
-	// old gate it printed `7` and exited **101**. The
-	// store took `__str_clone` through `retainFunc@64`; `emitOpaqueSlotReleases` called `__drop_type_param`,
-	// which loaded a ZERO `destroyFunc@40` and did nothing.
+	// ⛔⛔ **NEITHER WORD MAY BE GATED ON THE BASE'S FIELD LIST.** `retainFunc@64` is a fact about the
+	// ARGUMENT, and a generic that stores a borrowed `T` into a record it builds needs no `T`-typed field at
+	// all: `type Pack uses T` with only `var n as Integer`, an instance method doing `let pair = (t, n)` over a
+	// borrowed `T`. The store takes `__str_clone` through `retainFunc@64` at `Pack with String`, and
+	// `emitOpaqueSlotReleases` calls `__drop_type_param`, which reads this word — a zero here leaks (exit 101).
 	//
-	// ⭐ It also fills a slot that was 0 for an opaque `Array with T` built as a LOCAL rather than held as a
-	// field — the shared body's `__managed_create` reads its `element_destroy@40` out of this same word, and a base
-	// with no such field left it 0, so that array's elements were never walked.
+	// ⭐ An opaque `Array with T` built as a LOCAL rather than held as a field reads this word too: the shared
+	// body's `__managed_create` takes its `element_destroy@40` from it, and a zero leaves that array's elements
+	// unwalked.
 	//
 	// `inert` is the ANSWER for an argument that owns no record: `stampOwnershipWord` leaves the
 	// zero both `__drop_type_param` and the array walk treat as inert — the identical encoding the retain uses.

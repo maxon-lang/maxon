@@ -11260,13 +11260,12 @@ let TypeWhereClauseOwner = "this type"
 // **The boundary is real; the conclusion is false for these.** What
 // `emitCall` decides by bare name is a closed list — `fillOmittedArgDefaults`, `mintCallResult`,
 // `enrolOwnedCallTemp`, `markDeclaredSurface`, `applyCallerConsume`, `routeBareThrowingCall` —
-// and four of the six facts behind it are ALREADY refused outright for any overload set by
-// `requireOverloadableName` (a consuming parameter, a `throws` clause, a `__ManagedMemory` return surface,
-// a defaulted parameter). The fifth, the return TYPE, is reconciled or refused per call by
-// `SemanticCheck.reconcileOverloadResultType`. An overload set that gets through agrees on all six, so the
-// early choice cannot differ from the late one — which is not an argument to be re-derived by the next
-// reader, because each of the six is a CHECKED refusal rather than a claim, including an overload set
-// disagreeing about whether it returns a value AT ALL (`requireOverloadVoidResult`).
+// and each fact behind it is guarded for an overload set. `requireOverloadableName` refuses a
+// disagreeing `throws` clause and any `__ManagedMemory` return surface, `captureParamDefault` a
+// disagreeing default, and `applyCallerConsume` reads the consume facts of each declaration the call may
+// bind rather than the bare name's. The return TYPE is reconciled or refused per call by
+// `SemanticCheck.reconcileOverloadResultType`, including an overload set disagreeing about whether it
+// returns a value AT ALL (`requireOverloadVoidResult`).
 //
 // ⇒ **The rule is "a member may be served by the corpus once every fact `emitCall` reads by its name is
 // guarded", not "once its corpus declaration is unambiguous".** A future overload pair is refused, not
@@ -21273,7 +21272,7 @@ export type Parser
 
 	// A template's by-reference facts, read once from its own body and filed under its SITE key: every
 	// instance shares the template's calling convention, and a call on an instance looks them up under that
-	// key (`ProgramSignatures.byRefKeyOf`).
+	// key (`ProgramSignatures.byRefOfDeclaration`).
 	function recordTemplateParamReassigns(template GenericFunctionTemplate, bareName ByteArray, bodyStart ElementIndex, paramReassigns ParamReassignEntryArray)
 		var unreadConsumes = ParamConsumeEntryArray.create()
 		var unreadAliasReturns = GlobalAliasReturnEntryArray.create()
@@ -27062,28 +27061,13 @@ export type Parser
 		return self.signatures.isCrossFileOverloadedFreeFunction(nameTok.value, moduleDirectory: self.signatures.moduleDirectoryOf(self.job.path))
 	end 'namesACrossFileOverloadedFreeFunction'
 
-	// The pre-parse declaration sweep publishes these facts under the bare name the source wrote, so
-	// two declarations of one name leave one entry, and the parser commits to it at both ends of a
-	// call:
+	// The pre-parse declaration sweep publishes a function's `throws` clause and its declared return
+	// surface under the bare name the source wrote, so two declarations of one name leave one entry,
+	// and the parser commits to it when the call is parsed: the clause decides the error-flag ABI at
+	// both ends and the type an `otherwise (e)` recovers, and the surface decides which member roster
+	// the result carries.
 	//
-	//   • ownership facts (consume, feed and hand-back bits) decide whether a call moves its argument
-	//     (`applyCallerConsume`) and whether the callee owns its parameter (`bindParameters`). One
-	//     member's facts applied at a call to another is a leak one way and a use-after-free the
-	//     other, and nothing can diagnose it later because the drops are already emitted or already
-	//     absent;
-	//   • the `throws` clause decides the error-flag ABI at both ends and the type an `otherwise (e)`
-	//     recovers.
-	//
-	// The throws half refuses only a set whose clauses disagree
-	// (`ProgramSignatures.throwsClauseCollide`): an agreeing set recovers one error type whichever
-	// member wins. The ownership half refuses whenever the entry holds a fact some member has a
-	// parameter to act on (`ownershipReachOf`), the conservative direction for a divergence that is a
-	// leak or a double free. The sweep sets consume bits for a scalar `Self{f: p}` store too, so
-	// without the reach a scalar-only set such as the two `Counter.create`s `specs/structs.md` pins
-	// would be refused over bits no call acts on. The reach is widened over every member, so the set
-	// is refused whichever order its members are written in.
-	//
-	// Lifting any of these refusals needs per-member facts in the sweep.
+	// Lifting either refusal needs per-member facts in the sweep.
 	// `ProgramSignatures.overloadedDeclsOf` carries each declaration's types, but these tables are
 	// read at a call by name, before a member is chosen.
 	//
@@ -27104,13 +27088,11 @@ export type Parser
 		// misses is that when every member of an overload SET states the same clause there is nothing per-member
 		// left to be told apart: the `try` recovers that one error type whichever member wins, and no re-point
 		// after resolution is needed — unlike the defaults twin, whose default EXPRESSION does belong to one
-		// member. MEASURED against the oracle, which accepts what the compiler refused: two `Chk.want` statics both
-		// `throws Boom`, returning 5 and 9, each called under `try … otherwise 0`, answer **14**.
+		// member.
 		//
-		// ⚠ **THE ORACLE ACCEPTS THE DISAGREEING SETS TOO** (measured: `throws Boom` beside `throws Splat`
-		// answers 14, and a throwing member beside a non-throwing one likewise), so this is a CONSERVATIVE
+		// ⚠ **THE ORACLE ACCEPTS THE DISAGREEING SETS TOO**, so this is a CONSERVATIVE
 		// refusal rather than a rule of the language. Lifting it needs per-MEMBER facts in the sweep — the
-		// boundary this function's header states for all four of these refusals — not a better test. Per-KEY
+		// boundary this function's header states — not a better test. Per-KEY
 		// facts, which the sweep supplies, are a different thing: they separate two DECLARATIONS wearing one
 		// source name, not two members of one overload set, which share a registration key by design.
 		if self.signatures.throwsClauseCollide(base) 'declarationsDisagree'
@@ -27125,16 +27107,14 @@ export type Parser
 			throw SourceParseError.unsupported("overloading '{String.from(base)}' — one of its declarations NAMES `{String.from(ManagedMemoryTypeName)}` in its return type, and the whole-program declaration sweep publishes that SPELLING under the name the source wrote, so a call to this name cannot be told whether its result carries the buffer's member roster or the `Array`'s. The surface is chosen when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give the overloads distinct names", line: nameTok.line, column: nameTok.column)
 		end 'bufferReturningOverload'
 
-		// ⭐⭐ **PARAMETER DEFAULTS ARE NOT A FIFTH BLANKET REFUSAL HERE.** The sentence the four above are refused on holds for
+		// ⭐⭐ **PARAMETER DEFAULTS ARE NOT A BLANKET REFUSAL HERE.** The sentence the two above are refused on holds for
 		// them too — a default is published under the name the SOURCE wrote, and the omitted argument is filled when
 		// the call is PARSED, a whole pass before `resolveOverloadedCalls` picks a member — but the conclusion does not:
 		// it is only unanswerable when the members DISAGREE, and the fill commits to nothing an
 		// agreeing set can be wrong about (`SignatureIndex.ParamDefaultInfo.matches` states exactly which
 		// facts those are). So the question is the SWEEP's, which sees every declaration of the name in
 		// the whole program rather than the ones this file happens to hold, and the refusal is at the `=`
-		// that writes the disagreeing default (`captureParamDefault`). MEASURED against the oracle, which
-		// accepts the disagreeing set too: two `Expect.equal` overloads with `message String = "ni"` and
-		// `= "nope"`, each returning `message.count()`, answer **6**.
+		// that writes the disagreeing default (`captureParamDefault`).
 	end 'requireOverloadableName'
 
 	// Record `name` as claimed by this file, installing the roster on the first declaration.
@@ -35204,10 +35184,9 @@ export type Parser
 		// (a reassignment is E2013); mutating a parameter needs a local shadow. Runs after the push +
 		// `currentFuncIndex` stamp above so each parameter's `recordParamOrigin` is filed under this
 		// function's real index.
-		// `sourceName`, not `name`: the declaration sweep publishes the parameters' ownership facts under
-		// the name the source wrote, never an overload's registration name. `requireOverloadableName`
-		// refuses an overload set whose entry holds a fact a member could act on, so this per-name answer
-		// cannot be one sibling's read as another's.
+		// `sourceName`, not `name`: the declaration sweep files the parameters' ownership facts under
+		// the name the source wrote and this declaration's site (`declarationConsume`), never an
+		// overload's registration name.
 		// ⭐ Which of this body's local names need a cell, decided from tokens before the body is parsed
 		// (see `cellLocalNamesIn` for why it is one walk per body and not one per declaration).
 		self.bodyState.bodyStart = self.pos
@@ -35303,12 +35282,11 @@ export type Parser
 		// (`overloadRegistrationName` below), while the sweep keeps publishing the BARE name; the two are
 		// reconciled at the call site by `SemanticCheck.resolveOverloadedCalls`.
 		//
-		// ⚠ **"THE SWEEP CANNOT SEE PARAMETER TYPES" WAS THE SENTENCE HERE AND IT IS NO LONGER TRUE.** It
-		// publishes each declaration's parameter types beside its return type
+		// The sweep publishes each declaration's parameter types beside its return type
 		// (`ProgramSignatures.overloadedDeclsOf`), which is what lets a call read the return type of the
-		// overload it MEANS. What it still keys by the bare name is the return type ITSELF and the four
-		// ownership/ABI facts `requireOverloadableName` refuses on — so the registration name a
-		// declaration takes is still the parser's, and the sweep's tables are still one entry per key.
+		// overload it MEANS. What it keys by the bare name is the return type ITSELF and the facts
+		// `requireOverloadableName` refuses on — so the registration name a declaration takes is the
+		// parser's, and the sweep's tables are one entry per key.
 		let sourceName = try self.genericInstanceName.instanceName() otherwise self.declaredMethodName(nameTok)
 
 		// ⭐ **THE RECEIVER IS AN ORDINARY PARAMETER, PUSHED FIRST.** That is the entire mechanism:
@@ -37026,19 +37004,11 @@ export type Parser
 			// ⭐⭐ **IS THIS PARAMETER PASSED BY REFERENCE?** The whole-program answer, asked of the
 			// declaration sweep under the name the SOURCE wrote — exactly as the consume facts below are, and for
 			// the identical reason: the sweep never sees an overload's mangled registration name.
-			// `requireOverloadableName` refuses an overload set that states by-reference facts at all, so this
-			// per-name answer can never be one sibling's read as another's.
 			//
 			// ⚠ **IT IS ASKED AT POSITION `i` OF THE CALL-ALIGNED LIST, WHICH IS THIS LOOP'S OWN INDEX.** An
 			// instance method's `paramNames` already carries `__self` at 0 by the time it reaches here
 			// (`parseFunction` prepends it), which is the same alignment the sweep recorded and the same one a
 			// receiver-prepending call site slots against.
-			// ⚡ **THE SCALAR GATE IS ASKED FIRST, AND THAT IS THE MEASURED SHAPE THIS FILE ALREADY WARNS
-			// ABOUT ONE COLUMN OVER.** `paramIsByRef` is a whole-program map lookup that returns a UNION, and
-			// `paramFeedOf`'s header records what that costs when asked per parameter per function: two
-			// allocations EVERY TIME, on a corpus that uses none of the feature. `programTakesAParamByRef` is
-			// a `count()` on a set that is EMPTY for a program with no by-reference parameter, so the
-			// overwhelmingly common function pays one integer comparison per parameter and nothing else.
 			let paramIsByRef = maskHasParam(func.reassignedParamMask, param: param)
 
 			// E3159's seed for a plain reassignment. `writtenParamMask` answers "does passing an
@@ -37251,14 +37221,6 @@ export type Parser
 			// (which needs `valueIsManagedHeap`, false for a `typeParameter`), so no parameter is ever enrolled
 			// twice, and it pins the drop router's `typeParameter` arm to exactly what is enrolled here.
 			//
-			// ⚡ **THE TAG IS ASKED FIRST, AND THE ORDER IS THE WHOLE OPTIMIZATION.** `tagOf` is a dense
-			// per-value array read; `paramFeedOf` is a whole-program map lookup that returns two unions, and
-			// MEASURED it costs 2 allocations EVERY TIME IT IS ASKED — +2 per single-parameter function and
-			// +6 per three-parameter one, on a corpus with no generics anywhere in it. A per-FUNCTION boolean such as
-			// `isInstanceMethod` is not that guard: it is the wrong question, and it would skip the lookup only for
-			// receiverless functions. The tag is the guard that belongs
-			// here — it is local, it is exact (a feed parameter is type-parameter-typed by construction, stated
-			// two paragraphs up), and it is already a required conjunct, so asking it first adds no test at all.
 			// Co-owned for the branch above's reason, which does not depend on the tag: a feed parameter's
 			// concrete call site may have increfed a borrow to pay for the slot.
 			if self.tagOf(paramId) == ValueTypeTag.typeParameter and consume.feedAt(param).answers(FeedSinkQuery.calleeStorageSink) 'opaqueFeed'
@@ -37271,7 +37233,7 @@ export type Parser
 			// be the second. But the STORE that puts it there must equally not take a reference for it: the
 			// concrete call site already consumed the argument to pay for that slot. So the fact is recorded for
 			// `moveOpaqueValueInto` to read, which is the one place that has to tell this parameter from a
-			// borrow the body itself produced. Guarded by the same tag test, first, for its measured reason.
+			// borrow the body itself produced. Guarded by the same tag test.
 			if self.tagOf(paramId) == ValueTypeTag.typeParameter and consume.feedAt(param).isFeed() 'anyOpaqueFeed'
 				self.bodyState.constructorFeedParams = withValueMarked(self.bodyState.constructorFeedParams, value: paramId)
 			end 'anyOpaqueFeed'
@@ -41625,10 +41587,9 @@ export type Parser
 	// cell, so the FINAL occupant — whether the callee replaced it or not — is released exactly once. A
 	// promise some binding or slot still owns is LENT instead: the cell holds the handle without taking it,
 	// is marked in `borrowedScratchCells`, and releases only its box.
-	// That is precisely the discipline `specs/refcount-byref-rvalue-scratch-slot.md` describes, and
-	// the bugs that spec records are in machinery this shape does not need: it identifies the slot by
-	// WHAT IT IS rather than by an id ordering (`isByRefRvalueScratchSlot`'s `slotId >=
-	// slotMaxonTypes.count()`), so there is no sweep to widen and no uninitialised stack to decref —
+	// That is precisely the discipline `specs/refcount-byref-rvalue-scratch-slot.md` describes. This
+	// shape identifies the slot by WHAT IT IS rather than by an id ordering, so there is no sweep to
+	// widen and no uninitialised stack to decref —
 	// the cell is written by the spill before anything can read it, and it is a fresh allocation
 	// rather than a slot the entry zero-init loop might or might not cover. `buildClosureEnv`'s env
 	// block is the same "anonymous owned thing on the binding stack" shape.

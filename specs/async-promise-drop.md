@@ -2217,8 +2217,9 @@ error E3141: <fragment>:13:2: a promise cannot be borrowed through 'return': it 
 
 <!-- test: async-promise-drop.error.an-alias-of-a-promise-parameter-is-returned -->
 A `let` alias of a promise parameter names the parameter's thread without owning it, and the declaration sweep
-reads a hand-back only off the parameter's own name — the rule `await` follows too. Returned, the caller
-adopted a second owner of its own spawn, **exit 92**.
+reads a hand-back only off the parameter's own name — the rule `await` follows too. So returning the alias
+is refused: handed back, the caller would adopt a second owner of the thread its own spawn still owns, and
+its `await` would never return, **exit 92**.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
