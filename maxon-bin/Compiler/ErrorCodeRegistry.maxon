@@ -1008,13 +1008,19 @@ export enum ErrorCode
 	// through). Comparing the derived string/int accessor bypasses that.
 	semanticEnumAccessorComparison = "E3097"
 
-	// A promise is stored in a Promise type that does not name the error its thunk throws.
+	// A promise is stored in a slot -- a container, field, tuple, union payload or array literal -- or handed
+	// to a parameter or a generic container's method, whose `Promise` type is not the promise's own. A slot
+	// takes any promise the storing function owns (an `async` spawn, a service reply, a parameter, the return
+	// of a call, one moved out of storage) provided the types agree, and the message names what differs.
+	//
 	// `Promise` is parameterised by BOTH what its thunk returns and what its thunk throws:
 	// `Promise with T` is a NON-throwing promise, `Promise with (T, E)` one that throws E.
-	// Storing a promise in the wrong one is refused here -- including, in particular, storing
-	// a THROWING promise in a `Promise with T`, which ERASES the error type.
-	// That erasure is the root of a family of bugs, all of which this refusal (plus the
-	// two-parameter form that makes it avoidable) turns into impossibilities:
+	// Two promise types are one type only when both agree, so the refusal is one of:
+	// - the result type differs, and `await` would hand back a value under a type the thunk never returned;
+	// - the error type differs: the slot drops it, which ERASES it, names another enum, or names one the
+	// promise does not throw.
+	//
+	// Erasing the error is the root of a family of bugs, all of which this refusal turns into impossibilities:
 	// - `otherwise (e)` has no type to give `e`, and silently hands back the raw i64
 	// promise handle typed `int`;
 	// - an associated-value error's payload has no static type to mm_decref, so it LEAKS
@@ -1022,11 +1028,10 @@ export enum ErrorCode
 	// - propagation (a bare `try await p` inside a `throws` function) has no error type to
 	// check the enclosing function's `throws` against, so a thunk throwing A can be
 	// awaited inside a function throwing B and A's ordinals reinterpreted as B's tags.
-	// The fix a diagnostic can name is the point: it says which two-parameter type to write.
 	// A service reply kept with `let p = try h.m(x)` is a promise of the handler's own error alone -- the
 	// send's error is the `try`'s -- so it is stored as `Promise with (T, E)` when the message throws `E`,
 	// and as `Promise with T` when it throws nothing.
-	promiseErrorTypeMismatch = "E3098"
+	promiseStorageMismatch = "E3098"
 
 	// A promise is awaited a SECOND time. `await` is LINEAR: a promise is awaited exactly once.
 	// The thunk owns its result and HANDS IT OVER at the await -- that is the ownership model the
@@ -2042,7 +2047,9 @@ export enum ErrorCode
 	// names the conformer (`'Doubler.bump' writes its parameter 'n', but 'bump' passes it the
 	// immutable 'x'`). A function handed to a callback parameter is refused where it is handed in when
 	// it writes a read-only value the callee passes it (`'isBig' writes its parameter 'n', but
-	// 'Array.filter' passes it the immutable 'item'`).
+	// 'Array.filter' passes it the immutable 'item'`). A promise an array or a record still owns, read out of
+	// it and handed to a parameter the callee reassigns, is refused the same way: the reassignment would drop
+	// a thread the container still names.
 	semanticWriteThroughImmutableRecord = "E3159"
 
 	// A handler over a combined error -- a block-form `try` whose calls throw several error types, at least one
@@ -2285,6 +2292,10 @@ export enum ErrorCode
 	// declared; a generic function's body is held to its own `returns` qualifier the same way. A function value
 	// typed by one alias converts to another -- by a `return`, a store or an argument -- only when it keeps no
 	// parameter the target does not declare and declares at least the result capability the target declares.
+	// A promise parameter is held to its own rule: the function type declares it `keep` or `sole` exactly when
+	// the callee takes it, because a call through the type moves the promise into the callee only then; a
+	// function that takes a promise the type leaves unqualified, or a type that declares one the function only
+	// reads, breaks it.
 	// Reported at the conversion, or at the name of the function that breaks its declaration. Declare the
 	// qualifier on the boundary, or change the body to keep to it.
 	semanticCapabilityDeclarationBroken = "E3189"

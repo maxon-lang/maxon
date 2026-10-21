@@ -4781,3 +4781,45 @@ end 'main'
 ```stdout
 dup 42 value long enough for a heap record dup 42 value long enough for a heap record
 ```
+
+<!-- test: a-generic-type-hands-its-value-parameter-to-a-map-upsert -->
+A generic method that hands its type-parameter value to a map's `upsert` hands the map ownership of it, so the caller's heap string is released once.
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Registry uses Value
+	typealias ValueMap = Map with (String, Value)
+
+	var entries as ValueMap
+
+	static function create() returns Self
+		return Self{entries: ValueMap.create()}
+	end 'create'
+
+	function put(key String, item Value)
+		self.entries.upsert(key, value: item)
+	end 'put'
+
+	function count() returns Count
+		return self.entries.count()
+	end 'count'
+end 'Registry'
+
+typealias StringRegistry = Registry with String
+
+function main() returns ExitCode
+	var registry = StringRegistry.create()
+	registry.put("a", item: "hello {1 + 1}")
+	registry.put("b", item: "world {2 + 2}")
+	registry.put("a", item: "again {3 + 3}")
+
+	if registry.count() == 2 'check'
+		return 0
+	end 'check'
+
+	return 1
+end 'main'
+```
+```exitcode
+0
+```

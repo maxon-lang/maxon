@@ -130,9 +130,28 @@ The awaited form may be parenthesized: `try (await p) otherwise …` is `try awa
 
 ## Promises in Collections and Fields
 
-A promise can be stored when its type is named: `Promise with T` for a function returning `T`, and
-`Promise with (T, E)` for one that also throws `E`. Storing a throwing promise under a type that omits the
-error is **E3098**.
+A promise can be stored in a container, a field, a tuple, a union payload or an array literal, captured by a
+closure, or held by a generic type, when its type is named: `Promise with T` for a function returning `T`,
+and `Promise with (T, E)` for one that also throws `E`. A store takes any promise the storing function owns:
+
+- an `async` spawn, or a service reply received in that function;
+- a promise parameter;
+- a promise a call returned;
+- a promise moved out of storage by `pop`, `remove` or a `match` arm, or yielded by `try … otherwise`.
+
+The store moves the promise: the container or field now owns the thread, and the function's own name for it
+is spent (**E3102**). The one condition is that the types agree, and **E3098** names what differs when they
+do not: a result type other than the slot's, or an error type the slot drops, changes or adds. A promise
+handed to a parameter, or to a container's method such as `Map.upsert`, is held to the same rule. A call
+through a function value hands a promise over exactly where the function type says the callee takes it (see
+[Capability Qualifiers](/docs/language/functions/#capability-qualifiers-keep-sole-returns-readonly)).
+
+A promise parameter the callee reassigns (`q = async work()`) writes into the caller's own variable: the
+callee drops the thread the variable held, the variable takes the new one, and the caller awaits it as any
+other promise name. The same holds through a function that only hands the parameter on, and at a position a
+function type passes by reference. The argument is a `var` the caller owns: a `let`, a `let` field, a name a
+closure captured, or a promise an array still holds is **E3159**. Inside a loop, `await x` after such a call
+spends `x`, so the call on the next iteration is **E3102**.
 
 ```maxon
 typealias Tag = int(0 to 100)
@@ -180,8 +199,11 @@ alive to the end of the enclosing scope, so the promise outlives the expression 
 **Consuming a promise.** `await`, `.cancel()`, a `push` or `set` into another container, a store into a field
 or a union case, and passing it to a parameter the callee takes all consume it: each empties the slot the
 promise was read out of, and hands the thread either back to the runtime or to its new owner. A callee takes
-a promise parameter it awaits, cancels, stores or returns; a promise passed to a parameter the callee only
-reads stays with the caller. Where the overloads a call may bind differ about taking it, the overload the
+a promise parameter it awaits, cancels, stores or returns, or hands on to a callee that takes it; a promise
+passed to a parameter the callee only reads stays with the caller. A call of `push`, `set`, `insert`,
+`upsert`, `append` or `prepend` stores its bare arguments whatever the receiver is, so a function that
+hands its promise parameter to such a method takes the promise even where the receiver's own method only
+reads it. Where the overloads a call may bind differ about taking it, the overload the
 call binds decides. An `async` call is stricter (see [Starting a Coroutine](#starting-a-coroutine)): every
 overload must take the promise. A store into a promise field also releases the thread that field was
 holding, exactly once. Three refusals follow:
@@ -189,14 +211,16 @@ holding, exactly once. Three refusals follow:
 - **E3141** — the slot a read came out of has already been spent, at any of those doors. Two reads of one slot
   hold one promise, so only one of them may be consumed; where the compiler cannot see that both name one slot,
   the program aborts at run time with exit code **118** instead, and so does `p.isComplete()` on such a read.
-  An `async` call that hands a promise to a parameter the callee only reads is **E3141** too.
+  An `async` call that hands a promise to a parameter the callee only reads is **E3141** too, and so is a
+  store of a conditional expression (`h.p = a if c else b`): store on each branch instead.
 - **E3102** — a promise already moved into storage is used again afterwards, or one promise is passed at two
   arguments of one call where a parameter takes it.
 - **E2015** — a promise read outside a loop is given away inside it, or inside a `while` condition. Read it
   inside the loop instead.
 
 **Returning a promise.** A function may return a promise it owns — a spawn, a bound spawn, one taken with
-`pop`/`remove`, or a promise parameter — and the caller then owns it, to await, cancel or drop. A `return` of
+`pop`/`remove`, or a promise parameter — and the caller then owns it, to await, cancel, drop or
+[store](#promises-in-collections-and-fields). A `return` of
 a promise no frame owns is **E3141**: one read out of a container that still holds it, a merge of two
 promises (`p if c else q`), or a second name for a parameter.
 

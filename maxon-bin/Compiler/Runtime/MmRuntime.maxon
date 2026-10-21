@@ -3050,7 +3050,7 @@ function declareInstanceFieldDropNeeds(usage RuntimeUsage, id GenericInstanceId,
 	// is one field classified in two places, agreeing today with nothing making them agree tomorrow. A field
 	// is accounted for under exactly the callee the cascade drops it through.
 	for i in 0 upto signatures.genericInstanceFieldCount(id) 'eachField'
-		if not signatures.genericInstanceFieldIsManaged(id, index: i) 'scalar'
+		if not signatures.genericInstanceFieldOwesDrop(id, index: i) 'scalar'
 			continue
 		end 'scalar'
 
@@ -3290,7 +3290,7 @@ end 'addNestedUnionDestructors'
 // field's `__str_decref` and a trivial box's `__mm_decref` are leaf drops and add nothing. No `project`:
 // every fact is answered inside `signatures`, over its own interner.
 function addNestedInstanceDestructors(usage RuntimeUsage, id GenericInstanceId, signatures ProgramSignatures, work CascadeWorklist)
-	// ⚠ One of the three sites needing the no-layout early-out — `genericInstanceHasManagedField` and this
+	// ⚠ One of the three sites needing the no-layout early-out — `genericInstanceOwesADrop` and this
 	// walk's own bit-declaring dual `declareInstanceFieldDropNeeds` are the others: a node is expanded as soon
 	// as its SYMBOL is needed, and the field walk below reads a base struct a layout-less instance does not
 	// have. Without the guard the walk panics in `ProgramSignatures.baseLayoutOf`, with no diagnostic.
@@ -3304,7 +3304,7 @@ function addNestedInstanceDestructors(usage RuntimeUsage, id GenericInstanceId, 
 	end 'noSynthesizedCascade'
 
 	for i in 0 upto signatures.genericInstanceFieldCount(id) 'eachField'
-		if not signatures.genericInstanceFieldIsManaged(id, index: i) 'scalar'
+		if not signatures.genericInstanceFieldOwesDrop(id, index: i) 'scalar'
 			continue
 		end 'scalar'
 
@@ -3630,7 +3630,7 @@ function synthesizeGenericInstanceDestructor(module StdModule, id GenericInstanc
 	var drops = ManagedFieldDropArray.create()
 
 	for i in 0 upto signatures.genericInstanceFieldCount(id) 'eachField'
-		if not signatures.genericInstanceFieldIsManaged(id, index: i) 'scalarField'
+		if not signatures.genericInstanceFieldOwesDrop(id, index: i) 'scalarField'
 			continue
 		end 'scalarField'
 
@@ -3660,7 +3660,7 @@ end 'instanceFieldDropKind'
 // `closeDestructorNeeds` grew the set over). Appended already-lowered after the pipeline.
 export function installGenericInstanceDestructors(module StdModule, signatures ProgramSignatures, needed DestructorSet)
 	for id in 0 upto signatures.genericInstanceCount() 'each'
-		if not signatures.genericInstanceHasManagedField(id) 'noManaged'
+		if not signatures.genericInstanceOwesADrop(id) 'noManaged'
 			continue
 		end 'noManaged'
 
@@ -3796,7 +3796,7 @@ end 'nestedViewRestingAt'
 function fieldOwesDrop(signatures ProgramSignatures, source CascadeFieldSource, index FieldIndex) returns bool
 	return match source 'source'
 		declaredRecord(entry) gives signatures.structFieldOwesDrop(entry.layout.name, index: index)
-		genericInstance(id) gives signatures.genericInstanceFieldIsManaged(id, index: index)
+		genericInstance(id) gives signatures.genericInstanceFieldOwesDrop(id, index: index)
 	end 'source'
 end 'fieldOwesDrop'
 

@@ -2276,20 +2276,6 @@ function payloadsAgree(payloads PayloadFieldArray, other PayloadFieldArray) retu
 	return true
 end 'payloadsAgree'
 
-function throwsClausesAgree(clause ThrowsClause, other ThrowsClause) returns bool
-	return match clause 'clause'
-		none gives not throwsClauseIsThrowing(other)
-		throwing(name) gives throwsClauseNames(other, name: name)
-	end 'clause'
-end 'throwsClausesAgree'
-
-function throwsClauseNames(clause ThrowsClause, name String) returns bool
-	return match clause 'clause'
-		none gives false
-		throwing(declared) gives declared.equals(name)
-	end 'clause'
-end 'throwsClauseNames'
-
 function awaitedServiceOf(route MessageRoute, typeName ByteArray) returns ByteArray
 	return match route 'route'
 		mailbox gives typeName
@@ -3126,6 +3112,41 @@ let sharedEmptyRequirementSlots = CollectedInterfaceMethodArray.create()
 // floor that keeps both reads inside the token array.
 let PromiseCancelReceiverBack = 2
 let PromiseCancelQualifierBack = 3
+
+enum PromiseStoreShape
+	notAStore
+	fieldInit
+	assignment
+	tupleElement
+	containerCall
+	callHead
+	literalElement
+end 'PromiseStoreShape'
+
+function promiseCarrierPositions(types MaxonTypeArray, takesReceiver bool) returns ParamPositionMask
+	var carriers = NoParamPositions
+	var position = 1 as ParamCount if takesReceiver else 0 as ParamCount
+
+	for declared in types 'eachParameter'
+		if declaredTypeMayCarryAPromise(declared) 'aPossibleCarrier'
+			carriers = maskWithParam(carriers, param: position)
+		end 'aPossibleCarrier'
+
+		position = position + 1
+	end 'eachParameter'
+
+	return carriers
+end 'promiseCarrierPositions'
+
+function aliasPromisesTaken(alias FunctionTypeAlias) returns BoolArray
+	var taken = BoolArray.create()
+
+	for position in 0 upto alias.paramTypes.count() 'eachParameter'
+		taken.push(alias.paramCapabilityAt(position) != ParamCapability.lent)
+	end 'eachParameter'
+
+	return taken
+end 'aliasPromisesTaken'
 
 // ⭐ THE ONE "the sweep did not read this parameter's type" value, shared — see `Parser.sweptParamTypeAt`.
 // A payload-free `MaxonType` case is still a heap object in Maxon, and this is pushed once per parameter of
@@ -4703,6 +4724,17 @@ type BareTypeParamArg
 end 'BareTypeParamArg'
 
 typealias BareTypeParamArgArray = Array with BareTypeParamArg
+
+type BareParamArg
+	export let paramIndex as ParamCount
+	export let valuePos as ElementIndex
+
+	static function create(paramIndex ParamCount, valuePos ElementIndex) returns BareParamArg
+		return Self{paramIndex: paramIndex, valuePos: valuePos}
+	end 'create'
+end 'BareParamArg'
+
+typealias BareParamArgArray = Array with BareParamArg
 
 // ⭐ **ONE GENERIC METHOD's FEED SIGNALS for the transitive array-feed fixpoint** — its
 // parameter names and type-parameter positions, the DIRECT array-mutator feeds its body performs
@@ -12219,15 +12251,6 @@ let StringLiteralRequirement = "string literal"
 let RawConstantOperandRequirement = "a compile-time integer constant"
 let RawScratchSizeRequirement = "a positive whole number of 8-byte slots"
 
-// ⭐ **WHAT A PROMISE-STORAGE MISMATCH SENTENCE CALLS THE PROMISE, ON THE SPAWN ROAD** — beside the phrase
-// above for the same reason: it is a wording a `maxoncstderr` BLOCK pins, so it is a constant
-// rather than a literal at the one call site that supplies it. `specs/async-await.md`'s two `E3098`
-// cases quote it exactly.
-//
-// ⚠ The REPLY road names the MESSAGE instead (`requirePromiseStorageDescribesReply`), because *"this
-// promise's function"* would be the handler.
-let PromiseStorageSubjectIsTheCallee = "this promise's function"
-
 // ⭐ **THE `panic at <file>:<line>: <text>\n` LINE A `panic(…)` HANDS THE RUNTIME, IN THE ONE OF TWO FORMS
 // ITS ARGUMENT ADMITS.** `mrt_panic` reads a NUL-terminated cstr and does not care which; what differs is
 // only WHERE the bytes are, and therefore which op carries them.
@@ -18445,6 +18468,7 @@ type FunctionBodyState
 	export var letCasts as LetCastTracking
 	export var scratchCellFills as ScratchCellFillTable
 	export var argumentStorage as ValueMarkColumn
+	export var borrowedScratchCells as ValueMarkColumn
 	export var deferredArgumentBindings as DeferredArgumentBindingColumn
 	export var conditionalGives as ConditionalGiveArray
 	export var conditionalOps as ConditionalOpColumn
@@ -19069,6 +19093,7 @@ type FunctionBodyState
 			letCasts: noLetCasts,
 			scratchCellFills: noScratchCellFills,
 			argumentStorage: noValueMarks,
+			borrowedScratchCells: noValueMarks,
 			deferredArgumentBindings: DeferredArgumentBindingColumn.unwritten,
 			conditionalGives: ConditionalGiveArray.create(),
 			conditionalOps: ConditionalOpColumn.unwritten,
@@ -21291,7 +21316,7 @@ export type Parser
 		var unreadConsumes = ParamConsumeEntryArray.create()
 		var unreadAliasReturns = GlobalAliasReturnEntryArray.create()
 		var unreadBodyFacts = SweptBodyFactEntryArray.create()
-		self.scanBodyFacts(template.siteKey(), declarationSite: template.siteKey(), funcBareName: bareName, paramNames: sweptParamNamesFor(template.paramNames, takesReceiver: template.takesReceiver), typeParamPositions: self.emptyTypeParamPositions, bodyStart: bodyStart, paramConsumes: unreadConsumes, paramReassigns: paramReassigns, globalAliasReturns: unreadAliasReturns, bodyFacts: unreadBodyFacts, declaresThrows: false, declaredSole: false, detectFieldStores: false, takesReceiver: template.takesReceiver)
+		self.scanBodyFacts(template.siteKey(), declarationSite: template.siteKey(), funcBareName: bareName, paramNames: sweptParamNamesFor(template.paramNames, takesReceiver: template.takesReceiver), typeParamPositions: self.emptyTypeParamPositions, bodyStart: bodyStart, paramConsumes: unreadConsumes, paramReassigns: paramReassigns, globalAliasReturns: unreadAliasReturns, bodyFacts: unreadBodyFacts, declaresThrows: false, declaredSole: false, detectFieldStores: false, takesReceiver: template.takesReceiver, promiseCarriers: NoParamPositions)
 	end 'recordTemplateParamReassigns'
 
 	function openGenericInstance(template GenericFunctionTemplate, position ElementIndex)
@@ -21420,6 +21445,7 @@ export type Parser
 
 		let sourceParamNames = self.paramNamesIn(paramsStart, typeParamPositionsOut: scannedTypeParamPositions, collectTypeParamFlags: inGenericScope, typesOut: sweptParamTypes, collectTypes: true, spellingsOut: sweptParamSpellings, collectSpellings: isAMessage)
 		let scannedParamNames = sweptParamNamesFor(sourceParamNames, takesReceiver: takesReceiver)
+		let promiseCarriers = promiseCarrierPositions(sweptParamTypes, takesReceiver: takesReceiver)
 		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: self.opaqueParamsDeclaredBy(scannedParamNames, positions: scannedTypeParamPositions), paramNames: sourceParamNames, paramTypes: sweptParamTypes, paramDeclaredBrands: sweptParamSpellings, returnAliasName: returnAliasName, nameLine: nameTok.line, nameColumn: nameTok.column))
 
 		// ⭐⭐ **EVERY FREE FUNCTION'S BARE NAME** — recorded
@@ -21525,7 +21551,7 @@ export type Parser
 		// `specs/pass-by-reference.md`'s transitive cases are exactly that program), and a method that awaits
 		// the promise it is handed owns it as much as a free function does — so both halves read every
 		// declaration, through one call and one list.
-		self.scanBodyFacts(funcName, declarationSite: declarationSiteKey(self.job.path, line: nameTok.line, column: nameTok.column), funcBareName: nameTok.value, paramNames: scannedParamNames, typeParamPositions: scannedTypeParamPositions, bodyStart: self.pos, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, bodyFacts: bodyFacts, declaresThrows: declaresThrows, declaredSole: qualifiedReturn.capability == ResultCapability.sole, detectFieldStores: not takesReceiver, takesReceiver: takesReceiver)
+		self.scanBodyFacts(funcName, declarationSite: declarationSiteKey(self.job.path, line: nameTok.line, column: nameTok.column), funcBareName: nameTok.value, paramNames: scannedParamNames, typeParamPositions: scannedTypeParamPositions, bodyStart: self.pos, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, bodyFacts: bodyFacts, declaresThrows: declaresThrows, declaredSole: qualifiedReturn.capability == ResultCapability.sole, detectFieldStores: not takesReceiver, takesReceiver: takesReceiver, promiseCarriers: promiseCarriers)
 	end 'recordScannedSignature'
 
 	// ⭐ **THE DECLARATION'S OPAQUE-PARAMETER RECORD, OR THE SHARED "NONE"** — see `OpaqueParamInfo`
@@ -21765,18 +21791,20 @@ export type Parser
 	end 'pushReceiverTypeParamSlot'
 
 	// One walk over the body collects every fact the sweep publishes about it: which parameters it
-	// takes ownership of (a field store, a promise consume door), hands back (a bare `return p`),
-	// feeds or passes by reference, and what it returns. They share the walk because it already
+	// takes ownership of (a field store, a promise consume door), hands on (a bare `return p`, a store of a
+	// parameter that may hold a promise), feeds or passes by reference, and what it returns. They share the walk because it already
 	// carries the bracket and block-depth state a second walk would have to rebuild.
 	//
 	// The ownership facts are a sound approximation, not an oracle. The callee-side move
 	// (`moveInPayload`) refuses a parameter that is not enrolled owned, so an under-detected consume
 	// is a clean E2015 rather than a double free; an over-detected one makes the callee own and drop
 	// the value once while its caller was poisoned, which is stricter but sound. A parameter forwarded
-	// to a consuming callee is left to the borrowed-value refusal. A bare reference strips surrounding
+	// to a consuming callee is left to the borrowed-value refusal, except one that may hold a promise: it
+	// is recorded as a `ForwardedStore`, which `ProgramSignatures.closeForwardedStores` settles once every
+	// file is in. A bare reference strips surrounding
 	// parens as the real parse's `rhsWasBareLocalReference` does (`parenStrippedParamAt`), so the two
 	// agree on what a bare-parameter value is.
-	function scanBodyFacts(funcName ByteArray, declarationSite ByteArray, funcBareName ByteArray, paramNames NameRoster, typeParamPositions TypeParamSlots, bodyStart ElementIndex, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, bodyFacts SweptBodyFactEntryArray, declaresThrows bool, declaredSole bool, detectFieldStores bool, takesReceiver bool)
+	function scanBodyFacts(funcName ByteArray, declarationSite ByteArray, funcBareName ByteArray, paramNames NameRoster, typeParamPositions TypeParamSlots, bodyStart ElementIndex, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, bodyFacts SweptBodyFactEntryArray, declaresThrows bool, declaredSole bool, detectFieldStores bool, takesReceiver bool, promiseCarriers ParamPositionMask)
 		// ⚠ **ONE CALL-ALIGNED NAME LIST, READ BY BOTH HALVES** (`sweptParamNamesFor` builds it). The consume
 		// half and the by-reference half ask the same question of the same tokens — which parameter does this
 		// name denote — and every declaration shape owes both answers: an instance method forwards a parameter
@@ -21796,7 +21824,8 @@ export type Parser
 		// Every per-parameter bit column starts empty and is grown at the fact; see `setParamBit` for
 		// why.
 		var consumed = BoolArray.create()
-		var handedBack = BoolArray.create()
+		var handedOn = BoolArray.create()
+		var forwardedStores = ForwardedStoreArray.create()
 
 		// ⛔⛔ **WHICH PARAMETER NAMES DENOTE SOMETHING ELSE WHERE THE WALK IS STANDING.** A local that rebinds
 		// a parameter's name takes the name with it, and EVERY fact read off a name has to stop there: a
@@ -22041,11 +22070,15 @@ export type Parser
 				end 'opensAPromiseDoor'
 
 				if let returnedParam = try self.handedBackParamAt(q, paramNames: paramNames) 'returnsAParameter'
-					if paramNameStillDenotesTheParameter(shadowedInBlock, shadowedOnLine: shadowedOnLine, index: returnedParam) 'handedBackByAReturn'
-						setParamBit(handedBack, index: returnedParam)
+					if paramNameStillDenotesTheParameter(shadowedInBlock, shadowedOnLine: shadowedOnLine, index: returnedParam) and maskHasParam(promiseCarriers, param: returnedParam) 'handedBackByAReturn'
+						setParamBit(handedOn, index: returnedParam)
 						any = true
 					end 'handedBackByAReturn'
 				end 'returnsAParameter'
+
+				if self.notePromiseStoresAt(q, inMethod: takesReceiver, paramNames: paramNames, carriers: promiseCarriers, braceStack: braceStack, openBrackets: openBrackets, shadowedInBlock: shadowedInBlock, shadowedOnLine: shadowedOnLine, handedOn: handedOn, forwardedStores: forwardedStores) 'storesAParameter'
+					any = true
+				end 'storesAParameter'
 
 				if detectFieldStores and kind == TokenKind.colon and self.braceStackInnermostIsBrace(braceStack) 'fieldSep'
 					if let idx = try self.consumedParamAfterColon(q, paramNames: paramNames) 'movesAParameter'
@@ -22211,7 +22244,7 @@ export type Parser
 		end 'constructsFromItsParameters'
 
 		if any 'consumes'
-			paramConsumes.push(ParamConsumeEntry.create(funcName, site: declarationSite, info: ParamConsumeInfo.create(paramNames, bits: consumed, feeds: feeds, handedBack: handedBack), takesReceiver: takesReceiver))
+			paramConsumes.push(ParamConsumeEntry.create(funcName, site: declarationSite, info: ParamConsumeInfo.create(paramNames, bits: consumed, feeds: feeds, handedOn: handedOn, forwardedStores: forwardedStores), takesReceiver: takesReceiver))
 		end 'consumes'
 
 		// A body that neither reassigns nor forwards a parameter states nothing, exactly as a non-consuming one
@@ -22879,28 +22912,6 @@ export type Parser
 
 		return DeclCallability.bareCallOrDirectoryRoute if not self.job.namespace.isEmpty() else DeclCallability.bareCallOnly
 	end 'declarationCallability'
-
-	// ⭐⭐ **RECORD ONE PARAMETER'S BIT IN A SWEEP COLUMN, GROWING THE COLUMN TO REACH IT** — the ONE writer of
-	// the three (the consume column and the two by-reference ones), paired with the ONE reader every consumer
-	// goes through (`SignatureIndex.bitAt` / `ParamConsumeInfo.isConsumed`). A column reaches only as far as the
-	// highest position that has a fact, which is exactly what those readers already mean by a SHORT column:
-	// *"a position past either column is a parameter the sweep recorded nothing for"*. So a pre-fill would be
-	// writing out, per parameter of every declaration in the program, the very default its readers supply free.
-	//
-	// ⛔⛔ **THE COLUMNS START FROM A FRESH ARRAY AND NEVER FROM A SHARED MODULE-LEVEL EMPTY ONE.** The sweep WRITES
-	// them, and a shared empty handed to a name it then writes is a `let` global's record handed to a name that is
-	// written through: the rule that a value which may alias a `let` global's record may not be written through
-	// refuses that (E3159). A column that is always fresh can alias nothing, and costs one empty record.
-	//
-	// ⚡ The descriptor scan's edge columns keep their shared anchor instead (`edgeColumnSnapshot`): nearly
-	// every body records no edge, so a fresh column there would be an allocation per body for nothing.
-	function setParamBit(column BoolArray, index ParamCount)
-		while column.count() as ParamCount <= index 'reach'
-			column.push(false)
-		end 'reach'
-
-		try column.set(index, value: true) otherwise panic("setParamBit: column.set OOB at {index} despite the growth above reaching it")
-	end 'setParamBit'
 
 	// `setParamBit`'s twin for the type-parameter FEED column, read under the same rule —
 	// `ParamConsumeInfo.typeParamFeedOf` answers `none` for a position past the end, *"exactly as `isConsumed`
@@ -25763,10 +25774,10 @@ export type Parser
 	// The parameter a promise consume door reclaims at `q`; throws when the token opens no such door.
 	// `await p` takes the thread's result and `p.cancel()` takes nothing, and both
 	// hand the green thread back to the runtime (`consumePromiseThread`). A frame that does that owns
-	// the promise, so the parameter is a consume exactly as a durable store is.
+	// the promise, exactly as one that stores or returns it does.
 	//
 	// It has to be swept because ownership is decided before the body is parsed: `bindParameters`
-	// enrols a promise parameter owned only where `calleeTakesPromiseAt` says so, and a body that
+	// enrols a promise parameter owned only where `takesPromiseAt` says so, and a body that
 	// awaits one nothing enrolled meets E3141 at its own `await`. The caller moves a promise argument
 	// at exactly the positions the same predicate names (`transferConsumedArgs`), so a later read of
 	// the source is E3102/E3142.
@@ -25796,6 +25807,191 @@ export type Parser
 		throw MapError.keyNotFound
 	end 'promiseConsumeDoorParamAt'
 
+	function notePromiseStoresAt(q ElementIndex, inMethod bool, paramNames NameRoster, carriers ParamPositionMask, braceStack BoolArray, openBrackets TokenIndexArray, shadowedInBlock ParamShadowColumn, shadowedOnLine BoolArray, handedOn BoolArray, forwardedStores ForwardedStoreArray) returns bool
+		let shape = self.promiseStoreShapeAt(q, inMethod: inMethod, braceStack: braceStack, openBrackets: openBrackets)
+
+		if shape == PromiseStoreShape.notAStore 'nothingStored'
+			return false
+		end 'nothingStored'
+
+		var any = false
+
+		for site in self.storedParamsAt(q, shape: shape, paramNames: paramNames) 'eachSite'
+			if not paramNameStillDenotesTheParameter(shadowedInBlock, shadowedOnLine: shadowedOnLine, index: site.paramIndex) or not maskHasParam(carriers, param: site.paramIndex) 'notOneThatCanCarryAPromise'
+				continue
+			end 'notOneThatCanCarryAPromise'
+
+			if site.shape == ForwardShape.outright 'storedOutright'
+				setParamBit(handedOn, index: site.paramIndex)
+			end 'storedOutright' else 'forwarded'
+				forwardedStores.push(site)
+			end 'forwarded'
+
+			any = true
+		end 'eachSite'
+
+		return any
+	end 'notePromiseStoresAt'
+
+	// ⚠ `containerCall` resolves no receiver (`isContainerMoveInCallHeadAt`), so `x.push(p)` stores `p`
+	// whatever `x` is: a user type whose `push` only reads its argument still takes the promise from the
+	// caller, whose later use of it is E3102.
+	function promiseStoreShapeAt(q ElementIndex, inMethod bool, braceStack BoolArray, openBrackets TokenIndexArray) returns PromiseStoreShape
+		let kind = self.kindAt(q)
+
+		if kind == TokenKind.colon and self.braceStackInnermostIsBrace(braceStack) 'fieldInit'
+			return PromiseStoreShape.fieldInit
+		end 'fieldInit'
+
+		if kind == TokenKind.equals and self.assignmentHeadEndsAt(q, inMethod: inMethod) 'assignment'
+			return PromiseStoreShape.assignment
+		end 'assignment'
+
+		if (kind == TokenKind.leftParen and self.tupleLiteralOpensAt(q)) or (kind == TokenKind.comma and self.insideATupleLiteral(braceStack, openBrackets: openBrackets)) 'tupleElement'
+			return PromiseStoreShape.tupleElement
+		end 'tupleElement'
+
+		if kind == TokenKind.leftBracket and self.bracketOpensALiteralAt(q) 'literalElement'
+			return PromiseStoreShape.literalElement
+		end 'literalElement'
+
+		if self.isContainerMoveInCallHeadAt(q) 'containerCall'
+			return PromiseStoreShape.containerCall
+		end 'containerCall'
+
+		if self.isCallHeadAt(q) 'callHead'
+			return PromiseStoreShape.callHead
+		end 'callHead'
+
+		return PromiseStoreShape.notAStore
+	end 'promiseStoreShapeAt'
+
+	function storedParamsAt(q ElementIndex, shape PromiseStoreShape, paramNames NameRoster) returns ForwardedStoreArray
+		var found = ForwardedStoreArray.create()
+
+		match shape 'shape'
+			notAStore then break
+			fieldInit then self.noteStoredOperand(found, start: q + 1, paramNames: paramNames, closer: TokenKind.rightBrace)
+			tupleElement then self.noteStoredOperand(found, start: q + 1, paramNames: paramNames, closer: TokenKind.comma if self.kindAt(q) == TokenKind.leftParen else TokenKind.rightParen)
+			assignment then self.noteAssignedOperand(found, start: q + 1, paramNames: paramNames)
+			containerCall then self.noteOutrightOperands(found, argsStart: q + 2, paramNames: paramNames, nestsAllBrackets: true)
+			literalElement then self.noteOutrightOperands(found, argsStart: q + 1, paramNames: paramNames, nestsAllBrackets: true)
+			callHead then self.noteForwardedOperands(found, head: q, paramNames: paramNames)
+		end 'shape'
+
+		return found
+	end 'storedParamsAt'
+
+	function outrightStoreOf(parameter ParamCount) returns ForwardedStore
+		return ForwardedStore.create(parameter, shape: ForwardShape.outright, typeName: EmptySourceText, memberName: EmptySourceText, column: 0, label: EmptySourceText, calleeParam: 0)
+	end 'outrightStoreOf'
+
+	function noteStoredOperand(found ForwardedStoreArray, start ElementIndex, paramNames NameRoster, closer TokenKind)
+		let (index, past) = try self.parenStrippedParamAt(start, paramNames: paramNames) otherwise return
+
+		if self.kindAt(past) == TokenKind.comma or self.kindAt(past) == closer 'aWholeOperand'
+			found.push(self.outrightStoreOf(index))
+		end 'aWholeOperand'
+	end 'noteStoredOperand'
+
+	function noteAssignedOperand(found ForwardedStoreArray, start ElementIndex, paramNames NameRoster)
+		let (index, past) = try self.parenStrippedParamAt(start, paramNames: paramNames) otherwise return
+
+		if self.statementEndsAt(past) 'aWholeStatement'
+			found.push(self.outrightStoreOf(index))
+		end 'aWholeStatement'
+	end 'noteAssignedOperand'
+
+	function noteOutrightOperands(found ForwardedStoreArray, argsStart ElementIndex, paramNames NameRoster, nestsAllBrackets bool)
+		for arg in self.bareParamArgsIn(argsStart, paramNames: paramNames, nestsAllBrackets: nestsAllBrackets) 'eachBareParam'
+			found.push(self.outrightStoreOf(arg.paramIndex))
+		end 'eachBareParam'
+	end 'noteOutrightOperands'
+
+	function noteForwardedOperands(found ForwardedStoreArray, head ElementIndex, paramNames NameRoster)
+		for arg in self.bareParamArgsIn(head + 2, paramNames: paramNames, nestsAllBrackets: true) 'eachBareParam'
+			found.push(self.forwardedStoreOf(arg, head: head, paramNames: paramNames))
+		end 'eachBareParam'
+	end 'noteForwardedOperands'
+
+	function forwardedStoreOf(arg BareParamArg, head ElementIndex, paramNames NameRoster) returns ForwardedStore
+		let member = self.tokenAt(head).value
+		let column = self.functionValueSlotAt(head + 1, argument: arg.valuePos).position
+		let label = self.argLabelBefore(arg.valuePos)
+
+		if self.kindAt((head - 1) as ElementIndex) != TokenKind.dot 'noReceiver'
+			if let ownParameter = try paramNames.positionOfName(member) 'aFunctionTypedParameter'
+				return ForwardedStore.create(arg.paramIndex, shape: ForwardShape.throughParameter, typeName: EmptySourceText, memberName: member, column: column, label: label, calleeParam: ownParameter as ParamCount)
+			end 'aFunctionTypedParameter'
+
+			return ForwardedStore.create(arg.paramIndex, shape: ForwardShape.bare, typeName: EmptySourceText, memberName: member, column: column, label: label, calleeParam: 0)
+		end 'noReceiver'
+
+		let receiver = self.kindAt((head - 2) as ElementIndex)
+
+		if receiver == TokenKind.self and self.enclosingType.isType() 'theReceiverItself'
+			return ForwardedStore.create(arg.paramIndex, shape: ForwardShape.throughSelf, typeName: self.enclosingTypeName(), memberName: member, column: column, label: label, calleeParam: 0)
+		end 'theReceiverItself'
+
+		if receiver == TokenKind.selfType and self.enclosingType.isType() 'theEnclosingType'
+			return ForwardedStore.create(arg.paramIndex, shape: ForwardShape.throughSelfType, typeName: self.enclosingTypeName(), memberName: member, column: column, label: label, calleeParam: 0)
+		end 'theEnclosingType'
+
+		if receiver == TokenKind.identifier and not self.isMemberAccessAt((head - 2) as ElementIndex) 'aLoneName'
+			return ForwardedStore.create(arg.paramIndex, shape: ForwardShape.qualified, typeName: self.tokenAt((head - 2) as ElementIndex).value, memberName: member, column: column, label: label, calleeParam: 0)
+		end 'aLoneName'
+
+		return ForwardedStore.create(arg.paramIndex, shape: ForwardShape.throughReceiver, typeName: EmptySourceText, memberName: member, column: column, label: label, calleeParam: 0)
+	end 'forwardedStoreOf'
+
+	function isMemberAccessAt(namePos ElementIndex) returns bool
+		return namePos > 0 and self.kindAt((namePos - 1) as ElementIndex) == TokenKind.dot
+	end 'isMemberAccessAt'
+
+	function isCallHeadAt(headPos ElementIndex) returns bool
+		return headPos > 0 and self.kindAt(headPos) == TokenKind.identifier and self.kindAt(headPos + 1) == TokenKind.leftParen and self.kindAt((headPos - 1) as ElementIndex) != TokenKind.function
+	end 'isCallHeadAt'
+
+	function assignmentHeadEndsAt(equalsPos ElementIndex, inMethod bool) returns bool
+		if equalsPos < 2 or not tokenCanBeAName(self.tokenAt((equalsPos - 1) as ElementIndex)) 'noTargetName'
+			return false
+		end 'noTargetName'
+
+		let before = self.kindAt((equalsPos - 2) as ElementIndex)
+
+		if before == TokenKind.dot 'aFieldOfSomething'
+			return true
+		end 'aFieldOfSomething'
+
+		return inMethod and not bindingKeywordSpells(before) and before != TokenKind.as
+	end 'assignmentHeadEndsAt'
+
+	function bracketOpensALiteralAt(openPos ElementIndex) returns bool
+		if openPos == 0 'noPrecedingToken'
+			return false
+		end 'noPrecedingToken'
+
+		let before = self.kindAt((openPos - 1) as ElementIndex)
+		return before == TokenKind.from or before == TokenKind.leftBracket or self.tupleLiteralOpensAt(openPos)
+	end 'bracketOpensALiteralAt'
+
+	function tupleLiteralOpensAt(openPos ElementIndex) returns bool
+		if openPos == 0 'noPrecedingToken'
+			return false
+		end 'noPrecedingToken'
+
+		let before = self.kindAt((openPos - 1) as ElementIndex)
+		return before == TokenKind.equals or before == TokenKind.return or before == TokenKind.comma or before == TokenKind.leftParen or before == TokenKind.colon or before == TokenKind.gives or before == TokenKind.then
+	end 'tupleLiteralOpensAt'
+
+	function insideATupleLiteral(braceStack BoolArray, openBrackets TokenIndexArray) returns bool
+		if openBrackets.count() == 0 or self.braceStackInnermostIsBrace(braceStack) 'noParenOpen'
+			return false
+		end 'noParenOpen'
+
+		return self.tupleLiteralOpensAt(try openBrackets.get(openBrackets.count() - 1) otherwise panic("insideATupleLiteral: openBrackets.get OOB on a stack whose count was just read as non-zero"))
+	end 'insideATupleLiteral'
+
 	function handedBackParamAt(q ElementIndex, paramNames NameRoster) returns ParamCount throws MapError
 		if self.kindAt(q) != TokenKind.return 'notAReturn'
 			throw MapError.keyNotFound
@@ -25820,11 +26016,12 @@ export type Parser
 		return (try paramNames.positionOfName(self.tokenAt(p).value)) as ParamCount
 	end 'bareParamReferenceAt'
 
-	// ⭐⭐ **MARK EACH BARE TYPE-PARAMETER ARGUMENT of a `<receiver> . push/set/insert ( … )` CALL AS A
+	// ⭐⭐ **MARK EACH BARE TYPE-PARAMETER ARGUMENT of a `<receiver> . push/set/insert/upsert ( … )` CALL AS A
 	// CALLEE-STORAGE FEED**, returning whether any was marked. Cursor `mutatorPos` is the
 	// method-name token. `paramNames`/`typeParamPositions` are CALL-ALIGNED (self at slot 0 for an instance
 	// method), so a feed lands at the argument's own call-site position. Only a BARE type-parameter argument is
-	// fed (a `push`'s sole positional argument, a `set`/`insert`'s labelled `value:` element); an index
+	// fed (a `push`'s sole positional argument, a `set`/`insert`'s labelled `value:` element, an `upsert`'s
+	// key and value); an index
 	// expression, a chain or a `value` label token is not.
 	//
 	// ⚠⚠ **THE RECEIVER IS DELIBERATELY NOT RESOLVED.** Demanding a literal `self . <field> .` head would
@@ -25842,19 +26039,14 @@ export type Parser
 	// ⚠ **A NON-ARRAY RECEIVER CAN REACH HERE.** A user generic type may declare its own `push(x T)`, and one
 	// that merely BORROWS its argument marks that argument a feed here, which enrols it owned in a callee that
 	// never moves it. Ownership still BALANCES — the
-	// argument a feed here, which enrols it owned in a callee that never moves it. Ownership still BALANCES — the
 	// enrolled parameter is released once at the method's exit — but that release is
 	// `__drop_type_param`, which needs a layout descriptor a straight-line body reserves none of. That
 	// disagreement is caught and REFUSED once the body is emitted (`requireDescriptorForOpaqueDrops`); it is not
 	// swallowed here, because nothing at sweep time can resolve the receiver's type.
 	function markOpaqueContainerMutatorFeeds(mutatorPos ElementIndex, paramNames NameRoster, typeParamPositions TypeParamSlots, feeds TypeParamFeedArray, shadowedInBlock ParamShadowColumn, shadowedOnLine BoolArray) returns bool
-		if not self.isDotMethodCallHeadAt(mutatorPos) or not tokenCanBeAName(self.tokenAt(mutatorPos)) 'notMethodCall'
+		if not self.isContainerMoveInCallHeadAt(mutatorPos) 'notMoveInCall'
 			return false
-		end 'notMethodCall'
-
-		if not self.isContainerMoveInMutator(self.tokenAt(mutatorPos).value) 'notMoveInMutator'
-			return false
-		end 'notMoveInMutator'
+		end 'notMoveInCall'
 
 		var any = false
 
@@ -25871,36 +26063,46 @@ export type Parser
 		return any
 	end 'markOpaqueContainerMutatorFeeds'
 
-	// ⭐ **THE BARE TYPE-PARAMETER ARGUMENTS of ONE call's argument list**, whose first argument token is at
-	// `argsStart` (just past the `(`). An argument qualifies when it is the WHOLE of its argument slot
-	// (`isBareArgValueAt` — so an index expression, a `.`-chain hop and a label token are all excluded), names a
-	// caller parameter, and that parameter is type-parameter-typed (a plain-typed one cannot BE a feed). Nested
-	// parens are tracked so only top-level arguments are considered.
+	// ⭐ **THE BARE TYPE-PARAMETER ARGUMENTS of ONE call's argument list** — the `bareParamArgsIn` arguments
+	// whose parameter is type-parameter-typed (a plain-typed one cannot BE a feed).
+	function bareTypeParamArgsIn(argsStart ElementIndex, paramNames NameRoster, typeParamPositions TypeParamSlots) returns BareTypeParamArgArray
+		var found = BareTypeParamArgArray.create()
+
+		for arg in self.bareParamArgsIn(argsStart, paramNames: paramNames, nestsAllBrackets: false) 'eachBareParam'
+			if let typeParamPosition = try typeParamPositions.positionAt(arg.paramIndex) 'typeParamArg'
+				found.push(BareTypeParamArg.create(arg.paramIndex, typeParamPosition: typeParamPosition, valuePos: arg.valuePos))
+			end 'typeParamArg'
+		end 'eachBareParam'
+
+		return found
+	end 'bareTypeParamArgsIn'
+
+	// The bare parameter arguments of ONE call's argument list, whose first argument token is at `argsStart`
+	// (just past the `(`, or past an array literal's `[`). An argument qualifies when it is the WHOLE of its argument slot (`isBareArgValueAt`
+	// — so an index expression, a `.`-chain hop and a label token are all excluded) and names a caller
+	// parameter. Nested parens — and with `nestsAllBrackets`, brackets and braces — are tracked so only
+	// top-level arguments are considered.
 	//
 	// A parameter's name may be a KEYWORD, so the bare reference to it is one too — read through
 	// `tokenCanBeAName`, `consumedParamAfterColon`'s rule and for its measured reason (a missed feed leaves the
 	// concrete call site BORROWING a managed argument the owner then destroys).
-	function bareTypeParamArgsIn(argsStart ElementIndex, paramNames NameRoster, typeParamPositions TypeParamSlots) returns BareTypeParamArgArray
-		var found = BareTypeParamArgArray.create()
+	function bareParamArgsIn(argsStart ElementIndex, paramNames NameRoster, nestsAllBrackets bool) returns BareParamArgArray
+		var found = BareParamArgArray.create()
 		var depth = 1 as NestingDepth
 		var p = argsStart
 
 		while depth > 0 and self.kindAt(p) != TokenKind.eof 'args'
 			let kind = self.kindAt(p)
 
-			if kind == TokenKind.leftParen 'openNested'
+			if kind == TokenKind.leftParen or (nestsAllBrackets and (kind == TokenKind.leftBracket or kind == TokenKind.leftBrace)) 'openNested'
 				depth = depth + 1
 			end 'openNested' else 'notOpen'
-				if kind == TokenKind.rightParen 'closeArg'
+				if kind == TokenKind.rightParen or (nestsAllBrackets and (kind == TokenKind.rightBracket or kind == TokenKind.rightBrace)) 'closeArg'
 					depth = depth - 1
 				end 'closeArg' else 'notClose'
-					if depth == 1 and tokenCanBeAName(self.tokenAt(p)) and self.isBareArgValueAt(p) 'candidate'
+					if depth == 1 and tokenCanBeAName(self.tokenAt(p)) and self.isBareArgValueAt(p, inALiteral: nestsAllBrackets) 'candidate'
 						if let position = try paramNames.positionOfName(self.tokenAt(p).value) 'namesAParameter'
-							let idx = position as ParamCount
-
-							if let typeParamPosition = try typeParamPositions.positionAt(idx) 'typeParamArg'
-								found.push(BareTypeParamArg.create(idx, typeParamPosition: typeParamPosition, valuePos: p))
-							end 'typeParamArg'
+							found.push(BareParamArg.create(position as ParamCount, valuePos: p))
 						end 'namesAParameter'
 					end 'candidate'
 				end 'notClose'
@@ -25910,7 +26112,7 @@ export type Parser
 		end 'args'
 
 		return found
-	end 'bareTypeParamArgsIn'
+	end 'bareParamArgsIn'
 
 	// ⭐ **`self.<opaqueField> = param` — REASSIGNING A BARE OPAQUE-`T` FIELD IS A FEED.** A
 	// generic instance method that reassigns a bare type-parameter field of `self` from a type-parameter argument
@@ -25959,11 +26161,16 @@ export type Parser
 		return true
 	end 'markOpaqueFieldReassignFeed'
 
+	function isContainerMoveInCallHeadAt(mutatorPos ElementIndex) returns bool
+		return self.isDotMethodCallHeadAt(mutatorPos) and tokenCanBeAName(self.tokenAt(mutatorPos)) and self.isContainerMoveInMutator(self.tokenAt(mutatorPos).value)
+	end 'isContainerMoveInCallHeadAt'
+
 	// The container mutators that MOVE an element in, all of which transfer ownership of that element to the
 	// container: the `Array`'s `push` (its sole argument) and `set` / `insert` (their
-	// labelled `value:` argument), and the CHAIN's four — `append` / `prepend` on the `List` surface,
-	// `insertFirst` / `insertLast` on the `__ManagedList` one, each taking the element as its sole argument.
-	// `reserve`/`resize`/`clear` take no element, so none feeds.
+	// labelled `value:` argument), the `Map`'s `upsert` (its key and its labelled `value:`), and the CHAIN's
+	// four — `append` / `prepend` on the `List` surface, `insertFirst` / `insertLast` on the `__ManagedList`
+	// one, each taking the element as its sole argument. `reserve`/`resize`/`clear` take no element, so none
+	// feeds.
 	//
 	// ⚠ **`append` IS ALSO AN `Array` METHOD, WHERE IT BORROWS ANOTHER ARRAY RATHER THAN MOVING AN ELEMENT —
 	// AND SHARING THE NAME COSTS NOTHING, BECAUSE BOTH READERS ASK A SECOND QUESTION THE ARRAY'S ANSWERS NO.**
@@ -25979,7 +26186,7 @@ export type Parser
 	// pre-scan resolves no receiver, so it is over-approximate BY DESIGN and errs toward reserving one. The
 	// other direction is a MISSING descriptor, which is a fault.
 	function isContainerMoveInMutator(name ByteArray) returns bool
-		return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(InsertMethod) or self.isChainMoveInMutator(name)
+		return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(InsertMethod) or name.equals(UpsertMethod) or self.isChainMoveInMutator(name)
 	end 'isContainerMoveInMutator'
 
 	// The chain's four END insertions, split out because they are the ones whose receiver is a
@@ -26004,13 +26211,14 @@ export type Parser
 
 	// Is the identifier at `p` a BARE argument value — the whole of its argument slot? True iff it is bounded
 	// by an argument delimiter on both sides: `(`, a top-level `,`, or a label `:` before it, and a `,` or the
-	// closing `)` after it. So `push(item)`'s `item` and `set(i, value: item)`'s `item` match, while an index
-	// expression, a `.`-chain hop, or a label token (`value`, which is followed by `:`) does not.
-	function isBareArgValueAt(p ElementIndex) returns bool
+	// closing `)` after it — and `inALiteral`, an array literal's `[` and `]` too. So `push(item)`'s `item` and
+	// `set(i, value: item)`'s `item` match, while an index expression, a `.`-chain hop, or a label token
+	// (`value`, which is followed by `:`) does not.
+	function isBareArgValueAt(p ElementIndex, inALiteral bool) returns bool
 		let before = self.kindAt(p - 1)
 		let after = self.kindAt(p + 1)
-		let leftBounded = before == TokenKind.leftParen or before == TokenKind.comma or before == TokenKind.colon
-		let rightBounded = after == TokenKind.comma or after == TokenKind.rightParen
+		let leftBounded = before == TokenKind.leftParen or before == TokenKind.comma or before == TokenKind.colon or (inALiteral and before == TokenKind.leftBracket)
+		let rightBounded = after == TokenKind.comma or after == TokenKind.rightParen or (inALiteral and after == TokenKind.rightBracket)
 		return leftBounded and rightBounded
 	end 'isBareArgValueAt'
 
@@ -26337,7 +26545,7 @@ export type Parser
 		// An EMPTY facts record says exactly that and is not a placeholder: `isConsumed` / `typeParamFeedOf` read
 		// every index past their own column as `false` / `none`, which is the content of "the sweep recorded
 		// nothing here".
-		paramConsumes.push(ParamConsumeEntry.create(scan.funcName, site: scan.site, info: self.feedsMergedOnto(ParamConsumeInfo.create(scan.paramNames, bits: BoolArray.create(), feeds: TypeParamFeedArray.create(), handedBack: BoolArray.create()), scan: scan, nodeBase: nodeBase, isFeed: isFeed), takesReceiver: scan.takesReceiver))
+		paramConsumes.push(ParamConsumeEntry.create(scan.funcName, site: scan.site, info: self.feedsMergedOnto(ParamConsumeInfo.create(scan.paramNames, bits: BoolArray.create(), feeds: TypeParamFeedArray.create(), handedOn: BoolArray.create(), forwardedStores: ForwardedStoreArray.create()), scan: scan, nodeBase: nodeBase, isFeed: isFeed), takesReceiver: scan.takesReceiver))
 	end 'mergeGainedFeedsInto'
 
 	// `prior` with this method's solved feed nodes turned ON: a node the fixpoint marked becomes a CALLEE-STORAGE
@@ -26357,7 +26565,7 @@ export type Parser
 			end 'sweptParam'
 		end 'buildFeeds'
 
-		return ParamConsumeInfo.create(scan.paramNames, bits: prior.bits, feeds: feeds, handedBack: prior.handedBack)
+		return ParamConsumeInfo.create(scan.paramNames, bits: prior.bits, feeds: feeds, handedOn: prior.handedOn, forwardedStores: prior.forwardedStores)
 	end 'feedsMergedOnto'
 
 	// ⭐ **READ A PARAMETER LIST IN ONE WALK** — the ordered NAMES out of the `(…)` beginning at
@@ -37050,9 +37258,9 @@ export type Parser
 				self.enrolOwnedBinding(binding)
 			end 'consumedManaged'
 
-			// A promise parameter is owned by the callee exactly where `calleeTakesPromiseAt` says so: a
-			// body that moves it on (into a field or a container, through `await` or `cancel`) or hands it
-			// back with a `return` takes ownership and must drop it on a path that does not; a body that
+			// A promise parameter is owned by the callee exactly where `takesPromiseAt` says so: a
+			// body that moves it on (into a field or a container, through `await` or `cancel`, or to a
+			// callee that takes it) or hands it back with a `return` takes ownership and must drop it on a path that does not; a body that
 			// only looks at it leaves it with the caller. The caller's move asks the same predicate
 			// (`transferConsumedArgs`), so the green thread has one owner.
 			//
@@ -41389,8 +41597,9 @@ export type Parser
 	// ⚠ **THE ONE READER THAT MUST NOT BELIEVE IT IS THE DROP ROUTER, AND IT IS HANDLED WHERE IT LIVES.**
 	// `decrefCalleeFor` routes on the tag, so a `Node`-tagged cell would be freed through `__destruct_Node` —
 	// running a struct's cascade over a cell. `emitScopeRelease`'s cell arm therefore frees the box
-	// EXPLICITLY (`__mm_decref`) instead of asking the router, and releases the occupant through the router
-	// by LOADING it first — which is the value the router is actually right about.
+	// EXPLICITLY (`__mm_decref`) instead of asking the router, and releases the occupant through
+	// `emitCellOccupantRelease`, which hands the router the LOADED record — the value the router is actually
+	// right about — and releases a promise occupant in place.
 	//
 	// The ABI is unaffected: which parameters are addresses is `IrFunction.reassignedParamMask`'s answer, and
 	// the lowering reads that rather than a tag.
@@ -41403,11 +41612,16 @@ export type Parser
 	// SCRATCH cell's spill. Both owe the identical three steps (allocate, take ownership, store), and the
 	// ownership step is the one that must not be written twice: a managed value moved into durable storage
 	// has to be de-listed from the statement's pending drops, or the statement end frees what the cell holds.
+	// A scratch cell that only lends a promise skips the take and fills through `fillCellWith`.
 	function fillFreshCell(value ValueId, declared MaxonType, crossesByReference bool, rhsWasBareLocal bool, anchor Token) returns FilledCell throws SourceParseError
+		let stored = try self.valueACellTakes(value, varType: declared, crossesByReference: crossesByReference, rhsWasBareLocal: rhsWasBareLocal, anchor: anchor)
+		return self.fillCellWith(value, stored: stored, declared: declared, anchor: anchor)
+	end 'fillFreshCell'
+
+	function fillCellWith(value ValueId, stored ValueId, declared MaxonType, anchor Token) returns FilledCell
 		let range = SourceRange.ofToken(anchor)
 		let cell = self.allocateCell(declared, range: range)
 		self.wearAliasOf(cell, source: value)
-		let stored = try self.valueACellTakes(value, varType: declared, crossesByReference: crossesByReference, rhsWasBareLocal: rhsWasBareLocal, anchor: anchor)
 
 		self.storeCellOccupant(cell, cellType: declared, value: stored, range: range)
 
@@ -41418,7 +41632,7 @@ export type Parser
 
 		self.markValueOwnsHeap(cell, exclusivity: OwnedHeapExclusivity.sole)
 		return FilledCell.create(cell, epoch: self.mintCellEpoch(self.storedOccupantExclusivity(stored)))
-	end 'fillFreshCell'
+	end 'fillCellWith'
 
 	function storedOccupantExclusivity(stored ValueId) returns CellOccupantExclusivity
 		return CellOccupantExclusivity.sole if self.valueIsSolelyOwnedHere(stored) else CellOccupantExclusivity.coOwned
@@ -41459,7 +41673,9 @@ export type Parser
 	//
 	// ⭐ **THE SLOT IS AN ANONYMOUS CELL BINDING, NOT A THIRD KIND OF TEMPORARY**, which is what gives
 	// it a correct drop for free: `emitScopeRelease` already releases a cell's occupant and then the
-	// cell, so the FINAL occupant — whether the callee replaced it or not — is released exactly once.
+	// cell, so the FINAL occupant — whether the callee replaced it or not — is released exactly once. A
+	// promise some binding or slot still owns is LENT instead: the cell holds the handle without taking it,
+	// is marked in `borrowedScratchCells`, and releases only its box.
 	// That is precisely the discipline `specs/refcount-byref-rvalue-scratch-slot.md` describes, and
 	// the bugs that spec records are in machinery this shape does not need: it identifies the slot by
 	// WHAT IT IS rather than by an id ordering (`isByRefRvalueScratchSlot`'s `slotId >=
@@ -41472,9 +41688,16 @@ export type Parser
 	// needed and is the conservative direction: the callee may have stored the argument somewhere the caller
 	// still reads through this statement, and a block is the smallest region the drop machinery indexes.
 	function materializeByRefScratchCell(value ValueId, cellType MaxonType, anchor Token) returns ValueId throws SourceParseError
-		// An r-value is not a bare local reference by construction — the call site only reaches here when the
-		// argument did NOT resolve to a cell-resident binding — so it moves nothing out of another name.
-		let filled = try self.fillFreshCell(value, declared: cellType, crossesByReference: true, rhsWasBareLocal: false, anchor: anchor)
+		// The call site reaches here only when the argument did NOT resolve to a cell-resident binding, so an
+		// owned value moves in as an r-value and moves nothing out of another name.
+		let lendsAPromise = self.cellHoldsAPromise(cellType) and self.valueIsPromise(value) and not self.pendingTempsContain(value)
+
+		let filled = self.fillCellWith(value, stored: value, declared: cellType, anchor: anchor) if lendsAPromise else try self.fillFreshCell(value, declared: cellType, crossesByReference: true, rhsWasBareLocal: false, anchor: anchor)
+
+		if lendsAPromise 'theCellOnlyLendsTheHandle'
+			self.bodyState.borrowedScratchCells = withValueMarked(self.bodyState.borrowedScratchCells, value: filled.cell)
+		end 'theCellOnlyLendsTheHandle'
+
 		self.enrolOwnedBinding(VarInfo.createCellBinding(EmptySourceText, varType: cellType, kind: BindingKind.let, cell: filled.cell, epoch: filled.epoch, isParameter: false, crossesByReference: true))
 		self.bodyState.scratchCellFills = withScratchCellFill(self.bodyState.scratchCellFills, cell: filled.cell, value: value)
 		return filled.cell
@@ -41504,20 +41727,40 @@ export type Parser
 	end 'scratchCellFillOf'
 
 	// The one ownership test the fill, the rebind and the scope drop share, so a cell never releases what it
-	// did not take. An opaque `T` cell whose owner type nothing instantiates owns nothing: no call site can
+	// did not take; the scope drop also skips the occupant of a cell that only lends a promise
+	// (`borrowedScratchCells`). An opaque `T` cell whose owner type nothing instantiates owns nothing: no call site can
 	// supply the descriptor its take and release would go through.
 	function cellOwnsItsOccupant(varType MaxonType, crossesByReference bool) returns bool
 		if maxonTypeTag(varType) == ValueTypeTag.typeParameter 'anOpaqueOccupant'
 			return crossesByReference and self.signatures.typeParamOwnerIsInstantiated(typeParamIdOf(varType))
 		end 'anOpaqueOccupant'
 
-		return self.signatures.typeIsManagedFor(varType, from: self.artifact.typeNames, readerFilePath: self.job.path)
+		return self.signatures.typeOwesDropFor(varType, from: self.artifact.typeNames, readerFilePath: self.job.path)
 	end 'cellOwnsItsOccupant'
+
+	function cellHoldsAPromise(varType MaxonType) returns bool
+		return self.signatures.typeIsAGreenThreadHandle(varType, from: self.artifact.typeNames)
+	end 'cellHoldsAPromise'
+
+	function emitCellOccupantRelease(varType MaxonType, box ValueId, range SourceRange)
+		if self.cellHoldsAPromise(varType) 'aPromiseOccupant'
+			let offset = ParameterCellValueOffset
+			self.emitPromiseFieldRelease(box, offset: offset, range: range)
+			self.retireEveryPendingReadOfSlot(box, index: self.emitLiteral(offset as FullRangeInt, valueType: MaxonType.integer, range: range))
+			return
+		end 'aPromiseOccupant'
+
+		self.emitDecref(self.emitCellLoad(varType, box: box, range: range), range: range)
+	end 'emitCellOccupantRelease'
 
 	function valueACellTakes(value ValueId, varType MaxonType, crossesByReference bool, rhsWasBareLocal bool, anchor Token) returns ValueId throws SourceParseError
 		if not self.cellOwnsItsOccupant(varType, crossesByReference: crossesByReference) 'ownsNothing'
 			return value
 		end 'ownsNothing'
+
+		if self.cellHoldsAPromise(varType) 'aPromiseOccupant'
+			return try self.storedPromiseValue(value, storage: genericInstanceIdOf(self.resolvedSlotType(varType)), anchor: anchor, range: SourceRange.ofToken(anchor))
+		end 'aPromiseOccupant'
 
 		let taken = try self.ownedValueACellTakes(value, varType: varType, rhsWasBareLocal: rhsWasBareLocal, anchor: anchor)
 		self.carryValueFacts(taken, from: value, source: self.bodyState, path: ValueCarryPath.value)
@@ -41583,7 +41826,7 @@ export type Parser
 		// two are stated together because "a rebind moves" is true of one door and false of this one.
 		let owned = try self.valueACellTakes(value, varType: binding.varType, crossesByReference: crossesByReference, rhsWasBareLocal: rhsBareLocalName.isLocal(), anchor: nameTok)
 
-		self.emitDecref(self.emitCellLoad(binding.varType, box: binding.boundValue, range: range), range: range)
+		self.emitCellOccupantRelease(binding.varType, box: binding.boundValue, range: range)
 		self.emitCellStore(binding, value: owned, range: range)
 		self.noteWritableValue(func, value: owned, name: nameTok.value)
 		stored.cellEpoch = CellEpoch.current(self.mintCellEpoch(self.storedOccupantExclusivity(owned)))
@@ -46834,8 +47077,7 @@ export type Parser
 			panic("moveGreenThreadResultIntoPhi: v{result} was on the pending list without owning heap, and a promise is the only other value `enrolOwnedCallTemp` enrols there")
 		end 'notAGreenThread'
 
-		try self.requireConsumedPromiseIsOwned(otherwiseValue, anchor: tryTok, door: TokenKind.otherwise.rawValue.toByteArray())
-		self.consumePromiseThread(otherwiseValue, range: SourceRange.ofToken(tryTok), reclaimedBy: PromiseConsume.notConsumed)
+		try self.takeOwnedPromise(otherwiseValue, anchor: tryTok, range: SourceRange.ofToken(tryTok), door: TokenKind.otherwise.rawValue.toByteArray())
 	end 'moveGreenThreadResultIntoPhi'
 
 	// Hand the merge phi exactly one owned reference from the error edge. `finishValueTry` drops the
@@ -49066,7 +49308,7 @@ export type Parser
 			return ReleaseShape.plain
 		end 'aRecord'
 
-		return ReleaseShape.cellWithOccupant if self.cellOwnsItsOccupant(binding.varType, crossesByReference: binding.cellCrossesByReference) else ReleaseShape.cellBox
+		return ReleaseShape.cellWithOccupant if self.cellOwnsItsOccupant(binding.varType, crossesByReference: binding.cellCrossesByReference) and not valueIsMarked(self.bodyState.borrowedScratchCells, value: binding.boundValue) else ReleaseShape.cellBox
 	end 'releaseShapeAt'
 
 	function emitScopeRelease(position ElementIndex, value ValueId, anchor Token)
@@ -49078,8 +49320,9 @@ export type Parser
 			return
 		end 'aRecord'
 
-		// ⭐⭐ **A CELL IS DROPPED IN TWO STEPS, BECAUSE IT OWNS TWO THINGS** — the record it holds
-		// and the box holding it. The occupant is LOADED rather than remembered, for
+		// ⭐⭐ **A CELL IS DROPPED IN TWO STEPS, BECAUSE IT OWNS TWO THINGS** — the occupant it holds
+		// and the box holding it; a cell that only lends a promise (`borrowedScratchCells`) owns its box
+		// alone. The occupant is LOADED rather than remembered, for
 		// `reassignCellBinding`'s reason: a callee may have replaced it through the very pointer this
 		// binding hands out, so the value the parser last saw is not what the cell contains. Releasing that
 		// would free a record the cell no longer holds and leak the one it does — which is exactly the leak
@@ -49088,7 +49331,7 @@ export type Parser
 		// ⚠ Only a cell this frame OWNS reaches here: a by-reference PARAMETER's cell is the caller's and is
 		// never enrolled (`bindParameters`), so `ownedBindings` holds only locals and r-value scratch cells.
 		if shape == ReleaseShape.cellWithOccupant 'cellHoldsAManagedRecord'
-			self.emitDecref(self.emitCellLoad(self.ownedBindingAt(position).varType, box: value, range: range), range: range)
+			self.emitCellOccupantRelease(self.ownedBindingAt(position).varType, box: value, range: range)
 		end 'cellHoldsAManagedRecord'
 
 		// The BOX, freed explicitly rather than through `emitDecref` — see `allocateCell` for why the
@@ -51586,6 +51829,7 @@ export type Parser
 		let container = try self.bodyState.promiseSlotContainer.get(value) otherwise panic("vacateConsumedPromiseSlot: v{value} has no promise-slot entry — the check above just read it")
 		let index = try self.bodyState.promiseSlotIndex.get(value) otherwise panic("vacateConsumedPromiseSlot: v{value} has no promise-slot index entry — the columns move in lockstep")
 		self.emitSlotVacate(value, range: range)
+		self.noteCellPromiseTaken(container)
 		self.recordPromiseConsume(value, kind: PromiseConsume.movedIntoStorage if reclaimedBy == PromiseConsume.notConsumed else reclaimedBy)
 		self.retireEveryPendingReadOfSlot(container, index: index)
 	end 'vacateConsumedPromiseSlot'
@@ -51595,12 +51839,39 @@ export type Parser
 		let index = try self.bodyState.promiseSlotIndex.get(value) otherwise panic("emitSlotVacate: v{value} has no promise-slot index entry — the columns move in lockstep")
 		let slotIsAField = try self.bodyState.promiseSlotIsAField.get(value) otherwise panic("emitSlotVacate: v{value} has no promise-slot kind entry — the columns move in lockstep")
 
+		self.emitVacateCall(GtPromiseFieldVacateName if slotIsAField else ManagedVacateName, container: container, index: index, read: value, range: range)
+	end 'emitSlotVacate'
+
+	function emitVacateCall(callee ByteArray, container ValueId, index ValueId, read ValueId, range SourceRange)
 		var args = ValueIdArray.create()
 		args.push(container)
 		args.push(index)
-		args.push(value)
-		_ = self.emitRuntimeCall(GtPromiseFieldVacateName if slotIsAField else ManagedVacateName, args: args, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
-	end 'emitSlotVacate'
+		args.push(read)
+		_ = self.emitRuntimeCall(callee, args: args, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+	end 'emitVacateCall'
+
+	function holdScratchCellsEmptiedWhenTheMemberTakesTheValue(pending PendingArgumentBindingArray, callResult ValueId, anchor Token)
+		for binding in pending 'eachPlace'
+			match binding.storage 'storage'
+				cell(storage) then self.holdScratchCellEmptiedWhenTaken(storage, column: binding.column, callResult: callResult, anchor: anchor)
+				none then break
+			end 'storage'
+		end 'eachPlace'
+	end 'holdScratchCellsEmptiedWhenTheMemberTakesTheValue'
+
+	function holdScratchCellEmptiedWhenTaken(cell ValueId, column ParamCount, callResult ValueId, anchor Token)
+		if not self.cellHoldsAPromise(self.typeOf(cell)) or valueIsMarked(self.bodyState.borrowedScratchCells, value: cell) 'notAnOwningPromiseCell'
+			return
+		end 'notAnOwningPromiseCell'
+
+		let spawn = try self.scratchCellFillOf(cell) otherwise return
+		var whenTaken = ArgumentHandoffArray.create()
+		whenTaken.push(ArgumentHandoff.create(callResult, column: column))
+		let range = SourceRange.ofToken(anchor)
+		let firstOp = self.artifact.module.ops.count()
+		self.emitVacateCall(GtPromiseFieldVacateName, container: cell, index: self.emitLiteral(ParameterCellValueOffset as FullRangeInt, valueType: MaxonType.integer, range: range), read: spawn, range: range)
+		self.holdConditionalOp(self.opResultsSince(firstOp), keptWhileNoneTaken: noHandoffs, keptOnlyIfAnyTaken: whenTaken)
+	end 'holdScratchCellEmptiedWhenTaken'
 
 	// ⚠ **THE UNCHECKED EMPTY, and its one caller is why it is not the checked vacate.**
 	// `claimWithIteratorPromiseSlot` empties a pair's element field as bookkeeping — the field never owned
@@ -74100,17 +74371,18 @@ export type Parser
 		// the move IS the consume — the word is stored as it stands and this frame stops naming the thread.
 		//
 		// ⛔ **WITHOUT IT THE PAYLOAD FALLS TO THE `scalar` RETURN AND THE SPAWN IS CANCELLED UNDER THE UNION.**
-		// `Slot.held(async plain())` left the spawn a statement-scoped pending temporary of the CONSTRUCTING
-		// frame, so the drain reclaimed it at the end of that statement; the payload kept a dead handle and
-		// the `match`ed-out promise was awaited after cancellation. MEASURED at **exit 92**.
-		//
-		// ⚠ `notConsumed`: the union BOX becomes the thread's owner and the thread runs on, so a later read of
-		// the source name is an ordinary use-after-move (E3102) and not the spent-thread refusal E3142.
-		if payloadClassIsAGreenThread(class) 'aGreenThread'
-			try self.requireConsumedPromiseIsOwned(arg, anchor: anchor, door: anchor.value)
-			self.consumePromiseThread(arg, range: range, reclaimedBy: PromiseConsume.notConsumed)
-			return arg
-		end 'aGreenThread'
+		// `Slot.held(async plain())` would leave the spawn a statement-scoped pending temporary of the
+		// CONSTRUCTING frame, whose drain reclaims it at the end of that statement, and the payload would keep a
+		// dead handle.
+		match class 'promiseSlot'
+			greenThread(storage) then return try self.storedPromiseValue(arg, storage: genericInstanceIdOf(storage), anchor: anchor, range: range)
+			managed or
+			scalar or
+			nestedUnion or
+			existential or
+			undeclaredName or
+			typeParam then break
+		end 'promiseSlot'
 
 		// ⭐ **A CONCRETE CONFORMER WIDENED INTO AN INTERFACE-TYPED SLOT MOVES IN BY ITS OWN TYPE'S PROTOCOL.** The
 		// slot's class says only "existential", while an `int` conformer owns nothing and a `String` one is a byte
@@ -77428,7 +77700,7 @@ export type Parser
 	// which is what lets a reply be stored in the type that names it.
 	//
 	// ⚠ **`markValuePromise` STAYS, AND IT IS NOT REDUNDANT WITH THE TYPE.** The mark answers *"does THIS
-	// frame owe a `__gt_promise_drop`?"* (`decrefCalleeFor`, `storedPromiseValue`), which a type cannot: a
+	// frame owe a `__gt_promise_drop`?"* (`decrefCalleeFor`), which a type cannot: a
 	// promise read back out of a container carries the very same type and owes nothing.
 	function mintServiceReplyCell(slot PayloadSlotIndex, callee ByteArray, awaitedService ByteArray, instance ServiceStateInstance, slotValues ValueIdArray, filled BoolArray, range SourceRange) returns ServiceReplyValue
 		let cell = self.mintValue(ValueTypeTag.genericInstance, nameId: self.signatures.internPromiseInstanceForReply(callee, serviceInstance: instance) as TypeNameId)
@@ -80425,6 +80697,12 @@ export type Parser
 	// oracle has no answer here to match: `ByteArray from ["a", "b"]` crashes it with an internal E9001.)
 	function admitArrayLiteralElement(value ValueId, giid GenericInstanceId, elemTok Token, valueStart ElementIndex) returns ValueId throws SourceParseError
 		let indexSpaceElement = self.signatures.containerElementType(giid)
+		let declaredElement = self.resolvedSlotType(indexSpaceElement)
+
+		if self.valueIsPromise(value) and typeIsPromiseStorage(self.signatures, t: declaredElement) 'aPromiseElement'
+			return try self.storedPromiseValue(value, storage: genericInstanceIdOf(declaredElement), anchor: elemTok, range: SourceRange.ofToken(elemTok))
+		end 'aPromiseElement'
+
 		view targetAlias = self.declaredAliasOfIndexSpaceType(indexSpaceElement)
 
 		// ⚠ **THE ELEMENT TYPE HAS TO BE RE-SPELLED IN THIS FILE'S INTERNER BEFORE ANY DOOR BELOW SEES IT.**
@@ -82910,7 +83188,7 @@ export type Parser
 		let valueStart = self.pos
 		self.stateContainerElementArrayLiteralTarget(giid, valueStart: valueStart)
 		let raw = try self.parseExpression(func, block: self.bodyState.currentBlock)
-		let checked = try self.requireContainerElementType(func, giid: giid, value: raw, valueStart: valueStart, methodTok: methodTok)
+		let checked = try self.storedContainerElement(giid, value: raw, valueStart: valueStart, methodTok: methodTok)
 		let value = try self.moveElementIntoContainer(checked, giid: giid, valueStart: valueStart, destination: self.elementStoreDestination)
 		try self.consume(TokenKind.rightParen)
 
@@ -85768,7 +86046,7 @@ export type Parser
 			let valueStart = self.pos
 			self.stateContainerElementArrayLiteralTarget(giid, valueStart: valueStart)
 			let raw = try self.parseExpression(func, block: self.bodyState.currentBlock)
-			let checked = try self.requireContainerElementType(func, giid: giid, value: raw, valueStart: valueStart, methodTok: methodTok)
+			let checked = try self.requireContainerElementType(giid, value: raw, valueStart: valueStart, methodTok: methodTok)
 			try self.consume(TokenKind.rightParen)
 			let element = self.containerElementWord(checked, giid: giid, range: SourceRange.ofToken(self.tokenAt(valueStart)))
 			return self.emitRuntimeCall(ManagedFillName, args: quadArgs(arr, second: start, third: count, fourth: element), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
@@ -87250,7 +87528,7 @@ export type Parser
 	// an array of a ranged integer alias reaches the same codepoint conversion every other declared slot makes
 	// (`integerizedOperand`). It needs the value's TOKEN SPAN, which is why the callers hand over `valueStart`
 	// (the same position `moveElementIntoContainer` reads).
-	function requireContainerElementType(func IrFunction, giid GenericInstanceId, value ValueId, valueStart ElementIndex, methodTok Token) returns ValueId throws SourceParseError
+	function requireContainerElementType(giid GenericInstanceId, value ValueId, valueStart ElementIndex, methodTok Token) returns ValueId throws SourceParseError
 		if self.signatures.containerElementIsReadOnly(giid) and self.valueIsARecordAStoreAliases(value) 'storesIntoAReadOnlyElementType'
 			try self.requireValueMeetsLetFieldRules(value, valueStart: valueStart, place: String.from(methodTok.value), into: ReadOnlyRootKind.readOnlyElement, anchor: methodTok)
 		end 'storesIntoAReadOnlyElementType' else if self.valueIsReadOnlyIn(value, class: ReadOnlyClass.readOnly) and not self.valueMayAliasAnImmutableGlobal(value) and self.valueIsARecordAStoreAliases(value) and not self.valueIsOpaque(value) 'aReadOnlyElement'
@@ -87265,13 +87543,12 @@ export type Parser
 
 		let declared = self.resolvedSlotType(self.signatures.containerElementType(giid))
 
-		// ⭐ **A `Promise` ELEMENT IS THE ONE SLOT WHOSE VALUE CHANGES TYPE ON THE WAY IN** — a
-		// spawn's handle is minted `integer` and the storage names `Promise with (T[, E])`, so the door that
-		// checks the element is also the door that retypes it. It is `assignableValue`'s "verdict and
-		// coercion in ONE call" shape, which is why it is asked HERE and not by the two arms below: they both
-		// compare a tag the promise deliberately does not carry.
-		if typeIsPromiseStorage(self.signatures, t: declared) 'promiseElement'
-			return try self.storedPromiseValue(func, value: value, storage: genericInstanceIdOf(declared), anchor: methodTok)
+		// A promise element is compared by its whole promise type, here and not by the two arms below: they
+		// compare a tag, and the type's result and error are what must agree. The check only checks; taking the
+		// promise is `storedContainerElement`'s.
+		if self.valueIsPromise(value) and self.containerElementHoldsPromises(giid) 'promiseElement'
+			try self.requirePromiseSlotAgrees(value, storage: genericInstanceIdOf(declared), anchor: methodTok)
+			return value
 		end 'promiseElement'
 
 		let element = try self.integerizedOperand(value, expected: maxonTypeTag(declared), start: valueStart, pastEnd: self.pos)
@@ -87312,198 +87589,71 @@ export type Parser
 		return stored
 	end 'requireContainerElementType'
 
-	// ⭐⭐ **STORE A SPAWN'S HANDLE IN A `Promise with (T[, E])` SLOT.** The value that comes back
-	// is the SAME machine word — the compiler stores the green-thread handle rather than boxing it (see
-	// `PromiseType.maxon`) — retyped at the storage instance, which is what carries the result type and the
-	// error type past this frame.
-	//
-	// ⭐ **THE THREE COMPARISONS ARE THE WHOLE FEATURE.** A `Promise` type is a CLAIM about the thunk, and
-	// every downstream answer — what `await` yields, what `(e)` binds, what `try` propagates — is read off
-	// the claim rather than off the callee, because the callee is unreachable from a container. So the claim
-	// is checked once, HERE, at the only door a promise can enter storage through, and after that no
-	// consumer needs to re-derive anything:
-	//
-	//   • the RESULT type, or `await` types its value at a type the thunk never returned — a `String`-typed
-	//     read of an `Integer` handle is a wild pointer;
-	//   • THROWS-NESS, both ways: a throwing thunk in a `Promise with T` erases the error (the erasure this
-	//     whole check exists to make unrepresentable), and a non-throwing thunk in a `Promise with (T, E)`
-	//     hands `try await` a `gt.threw` word the trampoline never wrote — `AsyncReleaser.maxon`'s header
-	//     records that it is GARBAGE for a non-throwing callee;
-	//   • the ERROR type itself, or one enum's ordinals are decoded under another's name.
-	//
-	// ⭐ **AND THE STORAGE ADOPTS THE THREAD.** `consumePromiseThread` is the same door `await` uses: the
-	// handle leaves this frame's ownership, so the statement-end drain does not `__gt_promise_drop` a thread
-	// the container now holds. The drop travels with it — the container's element destructor reclaims an
-	// element nothing ever awaited, exactly as an owned binding's scope exit does.
-	function storedPromiseValue(func IrFunction, value ValueId, storage GenericInstanceId, anchor Token) returns ValueId throws SourceParseError
-		// A promise read back OUT of storage and put into another slot of the same type carries its claim
-		// already — it was checked when it was first stored, and there is no `asyncCall` left to re-check it
-		// against. Same instance means same claim, so this is an identity rather than a second verdict; the
-		// check below cannot serve instead, because on such a value `promiseSourceStoredHere` has no source
-		// to name and refuses a legal program.
-		//
-		// ⛔ **IT IS STILL A GIVE-AWAY AND STILL CONSUMES.** A slot read carries no ownership mark, so this
-		// arm answers for every container-to-container store; returning without the consume leaves the source
-		// slot naming the thread the destination now holds, and the two walks reclaim it twice (exit 75).
-		//
-		// ⛔⛔ **BUT "READ BACK OUT OF STORAGE" IS THE OWNERSHIP MARK, NOT THE TYPE — THE TYPE IS THE ONE THING A
-		// STORE SITE OVERWRITES.** `retypeValue` below stamps the storage instance onto the SPAWN's own ValueId,
-		// so a spawn stored through TWO doors — `push` on one arm of a branch, `set` on the other — arrives at
-		// whichever door the parser reads SECOND already wearing the type this test reads. Taking the identity
-		// path there skips `consumePromiseThread`, so that path never records the move; `reconcileMovesAtMerge`
-		// then finds the binding live on that edge and emits `__gt_promise_drop`, which CANCELS the thread the
-		// container is now holding. The slot keeps a handle that never completes, and a non-blocking poller
-		// (`Testing/SpecWorkerPool`'s `drain.isComplete()`) waits on it forever.
-		//
-		// ⚠ **MEASURED: THAT WEDGES `SpecWorkerPool`.** `SpecWorkerPool.sendAndDrain` arms a slot with
-		// `push` on its first dispatch and with `set` on every dispatch after, so the compiler-compiled harness
-		// completed EXACTLY ONE job per worker and then stalled on a cancelled drain — deterministically, with
-		// the watchdog's `drain complete: no` naming the symptom and nothing naming the cause.
-		//
-		// `valueOwnsGreenThread` is the question actually meant here (its own header: *"does THIS frame owe a
-		// `__gt_promise_drop`?"*): the spawn sets it, a container read never does, and no store site rewrites
-		// it — so unlike the type it answers the same at the first door and at the fifth.
-		// `specs/async-promise-drop.md`'s two `branch-store-into-a-container-*` cases pin both orders.
-		//
-		// A deferred value owns no thread and carries no claim to check, so it takes the identity path
-		// too, leaving the program to the E3004 its deferral waits for.
-		let ofNothing = self.valueIsDeferred(value)
+	function containerElementHoldsPromises(giid GenericInstanceId) returns bool
+		return not self.signatures.containerElementIsOpaque(giid) and typeIsPromiseStorage(self.signatures, t: self.resolvedSlotType(self.signatures.containerElementType(giid)))
+	end 'containerElementHoldsPromises'
 
-		if not ofNothing 'anOwnerToRequire'
-			try self.requireConsumedPromiseIsOwned(value, anchor: anchor, door: anchor.value)
+	function storedContainerElement(giid GenericInstanceId, value ValueId, valueStart ElementIndex, methodTok Token) returns ValueId throws SourceParseError
+		let checked = try self.requireContainerElementType(giid, value: value, valueStart: valueStart, methodTok: methodTok)
+
+		if self.valueIsPromise(checked) and self.containerElementHoldsPromises(giid) 'promiseElement'
+			try self.takeOwnedPromise(checked, anchor: methodTok, range: SourceRange.ofToken(methodTok), door: methodTok.value)
+		end 'promiseElement'
+
+		return checked
+	end 'storedContainerElement'
+
+	// Every door that gives a promise a new owner — a store, a capture, a callee that takes it — takes it here.
+	// `notConsumed`: the new owner holds a thread that runs on, so a later read of the source name is an
+	// ordinary use-after-move (E3102) and not the spent-thread refusal E3142.
+	function takeOwnedPromise(promise ValueId, anchor Token, range SourceRange, door ByteArray) throws SourceParseError
+		if not self.valueIsDeferred(promise) 'anOwnerToRequire'
+			try self.requireConsumedPromiseIsOwned(promise, anchor: anchor, door: door)
 		end 'anOwnerToRequire'
 
-		if ofNothing or (not self.valueOwnsGreenThread(value) and self.valueIsInstance(value, giid: storage)) 'alreadyStored'
-			self.consumePromiseThread(value, range: SourceRange.ofToken(anchor), reclaimedBy: PromiseConsume.notConsumed)
-			return value
-		end 'alreadyStored'
+		self.consumePromiseThread(promise, range: range, reclaimedBy: PromiseConsume.notConsumed)
+	end 'takeOwnedPromise'
 
-		let source = try self.promiseSourceStoredHere(func, value: value, storage: storage, anchor: anchor)
-		try self.requirePromiseStorageDescribesSource(source, cell: value, storage: storage, anchor: anchor)
-
-		// `notConsumed` for `moveInPayload`'s reason: the CONTAINER takes ownership of a thread that is still
-		// running, so the source's later use is E3102 rather than E3142.
-		self.consumePromiseThread(value, range: SourceRange.ofToken(anchor), reclaimedBy: PromiseConsume.notConsumed)
-		self.retypeValue(value, valueType: MaxonType.genericInstance(storage))
+	function storedPromiseValue(value ValueId, storage GenericInstanceId, anchor Token, range SourceRange) returns ValueId throws SourceParseError
+		try self.requirePromiseSlotAgrees(value, storage: storage, anchor: anchor)
+		try self.takeOwnedPromise(value, anchor: anchor, range: range, door: anchor.value)
 		return value
 	end 'storedPromiseValue'
 
-	// What `value` IS — the one thing a storage claim can be checked against. Anything that is neither an
-	// `async` spawn's handle nor a service reply is refused here rather than by the tag doors below, whose
-	// sentence would compare a `Promise with …` against an `int` and tell the author nothing about why.
-	function promiseSourceStoredHere(func IrFunction, value ValueId, storage GenericInstanceId, anchor Token) returns AsyncCalleeLookup throws SourceParseError
-		if self.valueOwnsGreenThread(value) 'aSpawnOrAReply'
-			let source = self.asyncCallCalleeOf(func, promise: value)
+	function requirePromiseSlotAgrees(value ValueId, storage GenericInstanceId, anchor Token) throws SourceParseError
+		let held = self.valueMaxonType(value)
 
-			match source 'known'
-				found or
-				serviceReply then return source
-				none then break
-			end 'known'
-		end 'aSpawnOrAReply'
+		if maxonTypeTag(held) == ValueTypeTag.unresolved 'reportedElsewhere'
+			return
+		end 'reportedElsewhere'
 
-		throw SourceParseError.promiseStorageMismatch("only an `async` spawn or a service reply can be stored in '{String.from(self.signatures.instanceDisplayName(storage))}' — the value here is {self.valueDisplayTypeName(value)}", line: anchor.line, column: anchor.column)
-	end 'promiseSourceStoredHere'
-
-	function requirePromiseStorageDescribesSource(source AsyncCalleeLookup, cell ValueId, storage GenericInstanceId, anchor Token) throws SourceParseError
-		match source 'road'
-			found(callee) then try self.requirePromiseStorageDescribesSpawn(callee, cell: cell, storage: storage, anchor: anchor)
-			serviceReply(messageName, _) then try self.requirePromiseStorageDescribesReply(messageName, cell: cell, storage: storage, anchor: anchor)
-			none then panic("requirePromiseStorageDescribesSource: `promiseSourceStoredHere` throws on `none` and is this function's only caller")
-		end 'road'
-	end 'requirePromiseStorageDescribesSource'
-
-	function requirePromiseStorageDescribesSpawn(callee ByteArray, cell ValueId, storage GenericInstanceId, anchor Token) throws SourceParseError
-		try self.requirePromiseStorageDescribes(self.spawnPromiseReturnType(cell), throwsClause: self.signatures.throwsOf(callee), subject: PromiseStorageSubjectIsTheCallee, storage: storage, anchor: anchor)
-	end 'requirePromiseStorageDescribesSpawn'
-
-	function requirePromiseStorageDescribesReply(messageName ByteArray, cell ValueId, storage GenericInstanceId, anchor Token) throws SourceParseError
-		try self.requirePromiseStorageDescribes(self.serviceReplyResultType(messageName, cell: cell), throwsClause: self.signatures.throwsOf(messageName), subject: "a reply from '{String.from(messageName)}'", storage: storage, anchor: anchor)
-	end 'requirePromiseStorageDescribesReply'
-
-	// The two comparisons `storedPromiseValue`'s header sets out, in the order an author most wants to hear
-	// them: what it returns, then what it throws.
-	function requirePromiseStorageDescribes(returnType MaxonReturnType, throwsClause ThrowsClause, subject String, storage GenericInstanceId, anchor Token) throws SourceParseError
-		try self.requirePromiseStorageResult(returnType, subject: subject, storage: storage, anchor: anchor)
-		try self.requirePromiseStorageError(throwsClause, subject: subject, storage: storage, anchor: anchor)
-	end 'requirePromiseStorageDescribes'
-
-	// The RESULT half. Both sides are adopted into THIS file's interner before they are compared — the
-	// storage's argument through `resolvedSlotType` (which is what `requireContainerElementType` resolves the
-	// element itself through) and the promise's return type through `spawnPromiseReturnType` (the
-	// spawn's own instance, through `resolvedSlotType` too) / `serviceReplyResultType`
-	// (`returnTypeOf(…, into: self.artifact.typeNames)`) — so the
-	// `(tag, nameId)` pair is a comparison of two types and not of two tables' numbering. A VOID promise
-	// cannot arrive: `Promise with <nothing>` is unspellable, so a void spawn has no storage type to be
-	// stored in and reaches the sentence below naming its own absence. ⚠ A message that returns nothing AND
-	// throws nothing carries no reply slot at all and is not a promise (E2015 at the send), so the void arm
-	// is the spawn road's alone.
-	function requirePromiseStorageResult(returnType MaxonReturnType, subject String, storage GenericInstanceId, anchor Token) throws SourceParseError
-		let claimed = self.resolvedSlotType(self.signatures.substitutedInstanceArg(storage, position: PromiseResultArgPosition))
-
-		match returnType 'r'
-			void then throw SourceParseError.promiseStorageMismatch(self.promiseStorageResultDetail(storage, claimed: claimed, subject: subject, actual: "nothing (it returns no value)"), line: anchor.line, column: anchor.column)
-			value(returned) then try self.requirePromiseStorageResultAgrees(returned, claimed: claimed, subject: subject, storage: storage, anchor: anchor)
-		end 'r'
-	end 'requirePromiseStorageResult'
-
-	// The comparison itself, split out because the arm above is a `match` arm and this needs a labelled `if`.
-	function requirePromiseStorageResultAgrees(returned MaxonType, claimed MaxonType, subject String, storage GenericInstanceId, anchor Token) throws SourceParseError
-		if maxonTypeTag(returned) == maxonTypeTag(claimed) and typeNameIdOf(returned) == typeNameIdOf(claimed) 'agrees'
+		if typeIsPromiseStorage(self.signatures, t: held) and promiseStoragesAgree(self.signatures, a: genericInstanceIdOf(held), b: storage) 'agrees'
 			return
 		end 'agrees'
 
-		throw SourceParseError.promiseStorageMismatch(self.promiseStorageResultDetail(storage, claimed: claimed, subject: subject, actual: "'{self.displayTypeNameOf(maxonTypeTag(returned), nameId: typeNameIdOf(returned))}'"), line: anchor.line, column: anchor.column)
-	end 'requirePromiseStorageResultAgrees'
+		throw SourceParseError.promiseStorageMismatch(promiseStorageMismatchDetail(self.storedValueDisplay(held), slot: String.from(self.signatures.instanceDisplayName(storage)), slotClaim: self.promiseClaimDisplay(storage)), line: anchor.line, column: anchor.column)
+	end 'requirePromiseSlotAgrees'
 
-	function promiseStorageResultDetail(storage GenericInstanceId, claimed MaxonType, subject String, actual String) returns String
-		return "'{String.from(self.signatures.instanceDisplayName(storage))}' names the result type '{self.displayTypeNameOf(maxonTypeTag(claimed), nameId: typeNameIdOf(claimed))}', but {subject} returns {actual}"
-	end 'promiseStorageResultDetail'
+	function storedValueDisplay(held MaxonType) returns String
+		if typeIsPromiseStorage(self.signatures, t: held) 'aPromise'
+			return promiseHeldDisplay(self.promiseClaimDisplay(genericInstanceIdOf(held)))
+		end 'aPromise'
 
-	// The THROWS half — three outcomes, and the two mismatched ones are different mistakes with different
-	// cures, which is why they are two sentences on one code.
-	function requirePromiseStorageError(clause ThrowsClause, subject String, storage GenericInstanceId, anchor Token) throws SourceParseError
-		let storageName = String.from(self.signatures.instanceDisplayName(storage))
+		return "a value of type '{self.displayTypeNameOf(maxonTypeTag(held), nameId: typeNameIdOf(held))}'"
+	end 'storedValueDisplay'
 
-		match promiseStorageThrows(self.signatures, gid: storage) 'claimed'
-			// `Promise with T` — the storage names no error, so the thunk must throw none. A throwing one
-			// stored here is THE erasure: `try await` would have no type to bind `e` at, no static payload
-			// type to release, and nothing to check the enclosing `throws` against.
-			none then try self.requirePromiseStorageErrorless(clause, storageName: storageName, anchor: anchor)
-			throwing(claimedError) then try self.requirePromiseStorageErrorMatches(clause, claimedError: claimedError, subject: subject, storageName: storageName, anchor: anchor)
-		end 'claimed'
-	end 'requirePromiseStorageError'
+	function promiseClaimDisplay(gid GenericInstanceId) returns String
+		return promiseClaimText(self.promiseResultDisplay(gid), throwing: promiseStorageThrows(self.signatures, gid: gid))
+	end 'promiseClaimDisplay'
 
-	function requirePromiseStorageErrorless(clause ThrowsClause, storageName String, anchor Token) throws SourceParseError
-		if not throwsClauseIsThrowing(clause) 'agrees'
-			return
-		end 'agrees'
+	function promiseResultDisplay(gid GenericInstanceId) returns String
+		if self.signatures.promiseAwaits(gid, returnType: MaxonReturnType.void) 'nothing'
+			return PromiseOfNothingDisplay
+		end 'nothing'
 
-		let thrown = try throwsClauseName(clause) otherwise panic("requirePromiseStorageErrorless: a clause `throwsClauseIsThrowing` accepted has a name")
-		throw SourceParseError.promiseStorageMismatch("cannot store a promise from a function that throws '{thrown}' in '{storageName}': it names the result type only, which would erase the error type — declare the storage as 'Promise with (T, {thrown})' so 'try await' can bind and release the error", line: anchor.line, column: anchor.column)
-	end 'requirePromiseStorageErrorless'
-
-	// The storage names an error type, so the thunk must throw exactly it.
-	//
-	// ⚠ **THE NON-THROWING ARM IS NOT A COURTESY.** `gt.threw` is written unconditionally by the trampoline
-	// and is GARBAGE for a non-throwing callee (`Runtime/AsyncReleaser.maxon`'s header), so a `try await`
-	// admitted on this claim would branch on that garbage and hand its `otherwise (e)` a fabricated error.
-	//
-	// ⚠ **A REPLY'S ERROR WORD IS WRITTEN BY `__gt_cell_complete` FOR EVERY MESSAGE**, so the non-throwing
-	// arm is the trampoline's garbage word only for a spawn.
-	function requirePromiseStorageErrorMatches(clause ThrowsClause, claimedError String, subject String, storageName String, anchor Token) throws SourceParseError
-		if not throwsClauseIsThrowing(clause) 'calleeThrowsNothing'
-			throw SourceParseError.promiseStorageMismatch("'{storageName}' names the error type '{claimedError}', but {subject} does not throw — store it in a 'Promise with T' instead", line: anchor.line, column: anchor.column)
-		end 'calleeThrowsNothing'
-
-		let thrown = try throwsClauseName(clause) otherwise panic("requirePromiseStorageErrorMatches: a clause `throwsClauseIsThrowing` accepted has a name")
-
-		if thrown.equals(claimedError) 'agrees'
-			return
-		end 'agrees'
-
-		throw SourceParseError.promiseStorageMismatch("'{storageName}' names the error type '{claimedError}', but {subject} throws '{thrown}'", line: anchor.line, column: anchor.column)
-	end 'requirePromiseStorageErrorMatches'
+		let result = self.resolvedSlotType(self.signatures.substitutedInstanceArg(gid, position: PromiseResultArgPosition))
+		return "'{self.displayTypeNameOf(maxonTypeTag(result), nameId: typeNameIdOf(result))}'"
+	end 'promiseResultDisplay'
 
 	// ⛔⛔ **THERE IS NO BOUNDS-CHECK ELISION AT THIS DOOR.** ⚖ USER RULING, 2026-08-06: *"we should be able to add an
 	// optimization to remove the bounds check when using static indexes on a vector (fixed size)"*. The
@@ -87678,7 +87828,7 @@ export type Parser
 		let valueStart = self.pos
 		self.stateContainerElementArrayLiteralTarget(giid, valueStart: valueStart)
 		let raw = try self.parseExpression(func, block: self.bodyState.currentBlock)
-		let checked = try self.requireContainerElementType(func, giid: giid, value: raw, valueStart: valueStart, methodTok: methodTok)
+		let checked = try self.storedContainerElement(giid, value: raw, valueStart: valueStart, methodTok: methodTok)
 		let value = try self.moveElementIntoContainer(checked, giid: giid, valueStart: valueStart, destination: self.elementStoreDestination)
 		try self.consume(TokenKind.rightParen)
 
@@ -87720,7 +87870,7 @@ export type Parser
 		// would hold a slot it does not own, released a second time when the binding drops at scope exit (a
 		// double-free / over-release, exit 101). The op that goes missing under the 2026-08-12 ruling is an
 		// `__mm_incref` rather than a move poison; the ordering requirement is the same either way.
-		let checked = try self.requireContainerElementType(func, giid: giid, value: value, valueStart: valueStart, methodTok: methodTok)
+		let checked = try self.storedContainerElement(giid, value: value, valueStart: valueStart, methodTok: methodTok)
 		let moved = try self.moveElementIntoContainer(checked, giid: giid, valueStart: valueStart, destination: self.elementStoreDestination)
 		try self.consume(TokenKind.rightParen)
 		return moved
@@ -90799,6 +90949,10 @@ export type Parser
 			self.markOverwritableSlotRead(loaded)
 		end 'managedOccupant'
 
+		if self.cellHoldsAPromise(cellVarType) 'aPromiseOccupant'
+			self.recordConsumablePromiseSlot(loaded, container: box, index: self.emitLiteral(ParameterCellValueOffset as FullRangeInt, valueType: MaxonType.integer, range: range), isField: true)
+		end 'aPromiseOccupant'
+
 		// ⭐⭐ **THE IMMUTABLE-GLOBAL MARK COMES BACK OUT OF THE CELL.** A cell holding an immutable global's record
 		// hands that same record to every reader, so the load inherits the mark the STORE put on the cell. Its
 		// absence was a wrong answer and not a cosmetic gap: a `var` that a closure captures becomes
@@ -92687,7 +92841,7 @@ export type Parser
 		// `declaredExistentialInstanceAt` to read.
 		var signature = FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramNames, paramTypes: paramTypes, paramTypeStarts: paramTypeStarts), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: GenericInstanceIdArray.create(), extensionConstraints: WhereConstraintArray.create(), writtenTypeNames: sharedEmptyWrittenTypeNames, selfSpelledParams: NoParamPositions)
 		self.publishLiftedBody(lifted, returnType: returnType, signature: signature, anchor: functionTok, synthesized: false)
-		self.closureShapes.upsert(closureName, value: FunctionValueShape.create(signature.paramTypes, returnType: returnType, scopeFilePath: self.job.path))
+		self.closureShapes.upsert(closureName, value: FunctionValueShape.create(signature.paramTypes, returnType: returnType, scopeFilePath: self.job.path, promisesTaken: BoolArray.create()))
 
 		// Commit the closure's OWN range-check sites under its OWN lifted name, so `InsertRangeChecks`
 		// resolves them against the function whose SSA space numbered them. It sits here — after the body,
@@ -98595,7 +98749,7 @@ export type Parser
 					managedCount = managedCount + 1
 				end 'aManagedArgument'
 
-				pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, value: heldPassed, label: label, range: SourceRange.ofToken(argFirstTok), immutableName: self.expressionImmutableBlame(valueTok, valueStart: valueStart, value: value), anchorIndex: valueStart)
+				pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, value: heldPassed, label: label, range: SourceRange.ofToken(argFirstTok), immutableName: self.argumentBlame(valueTok, valueStart: valueStart, value: value), anchorIndex: valueStart)
 
 				argIndex = argIndex + 1
 
@@ -98951,12 +99105,30 @@ export type Parser
 		self.bodyState.argumentStorage = withValueMarked(self.bodyState.argumentStorage, value: storage)
 	end 'markArgumentStorage'
 
+	function argumentBlame(valueTok Token, valueStart ElementIndex, value ValueId) returns WriteBlame
+		let blame = self.expressionImmutableBlame(valueTok, valueStart: valueStart, value: value)
+
+		if blame.isBlamed() or not self.valueIsPromise(value) or self.pendingTempsContain(value) or not self.promiseValueCarriesAContainerSlot(value) 'nothingToBlameForTheContainer'
+			return blame
+		end 'nothingToBlameForTheContainer'
+
+		let container = try self.carriedContainerSlotOf(value) otherwise return blame
+
+		if self.cellHoldsAPromise(self.typeOf(container)) 'theBindingsOwnCell'
+			return blame
+		end 'theBindingsOwnCell'
+
+		return WriteBlame.blamed(EmptySourceText, holder: WriteBlameHolder.heldPromise)
+	end 'argumentBlame'
+
 	function placeStorageFor(place PlaceArgument) returns ValueId throws SourceParseError
 		match place.storage 'storage'
 			handed(storage) then return storage
 			notHanded or
-			unreachable then return try self.materializeByRefScratchCell(place.value, cellType: self.typeOf(place.value), anchor: place.anchor)
+			unreachable then break
 		end 'storage'
+
+		return try self.materializeByRefScratchCell(place.value, cellType: self.typeOf(place.value), anchor: place.anchor)
 	end 'placeStorageFor'
 
 	function byRefConventionsOfTarget(target CallArgTarget) returns ByRefConventionArray
@@ -99418,6 +99590,7 @@ export type Parser
 		// managed heap — is moved (poisoned / drained); a borrowed one is refused. Done BEFORE the op is
 		// emitted so a refused call emits nothing.
 		let transfers = try self.applyCallerConsume(callee, declarations: declarations, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructed, callResult: result, spawned: spawned)
+		self.holdScratchCellsEmptiedWhenTheMemberTakesTheValue(placeBindings.pending, callResult: result, anchor: anchor)
 		self.recordDeferredArgumentBindings(placeBindings.pending, transfers: transfers, callResult: result)
 
 		// ⭐ An INFERRED instance is stamped on the result for the reason `retypeGenericAliasConstructorResult`
@@ -101506,22 +101679,6 @@ export type Parser
 		end 'pick'
 	end 'spawnedReturnType'
 
-	function spawnPromiseReturnType(spawn ValueId) returns MaxonReturnType
-		let promiseType = self.valueMaxonType(spawn)
-
-		if not typeIsPromiseStorage(self.signatures, t: promiseType) 'notMintedAtItsPromise'
-			panic("spawnPromiseReturnType: a spawn of a declared callee is minted at its promise instance (`mintSpawnPromise`), and this one carries no promise type")
-		end 'notMintedAtItsPromise'
-
-		let gid = typeNameIdOf(promiseType) as GenericInstanceId
-
-		if self.signatures.promiseAwaits(gid, returnType: MaxonReturnType.void) 'aVoidSpawn'
-			return MaxonReturnType.void
-		end 'aVoidSpawn'
-
-		return MaxonReturnType.value(self.resolvedSlotType(self.signatures.substitutedInstanceArg(gid, position: PromiseResultArgPosition)))
-	end 'spawnPromiseReturnType'
-
 	function emitAwait(func IrFunction, promise ValueId, awaitTok Token) returns ValueId throws SourceParseError
 		match try self.awaitOperandOf(func, promise: promise, awaitTok: awaitTok) 'operand'
 			promise(facts) then return try self.emitRoutedAwait(promise, facts: facts, awaitTok: awaitTok)
@@ -101861,6 +102018,10 @@ export type Parser
 		let argValue = try args.get(column) otherwise panic("transferConsumedColumn: args.get OOB at {column}")
 
 		if valueIsMarked(self.bodyState.argumentStorage, value: argValue) 'theCallersOwnCell'
+			if info.takesPromiseAt(position) 'aPromiseCellTheCalleeEmpties'
+				try self.takePromiseOutOfCell(argValue, column: column, args: args, argRanges: argRanges, anchor: anchor)
+			end 'aPromiseCellTheCalleeEmpties'
+
 			return
 		end 'theCallersOwnCell'
 
@@ -101937,9 +102098,8 @@ export type Parser
 	end 'requirePromiseNamedOnceInTheCall'
 
 	function takePromiseIntoCallee(promise ValueId, column ParamCount, args ValueIdArray, argRanges SourceRangeArray, anchor Token) throws SourceParseError
-		try self.requireConsumedPromiseIsOwned(promise, anchor: anchor, door: anchor.value)
 		try self.requirePromiseNamedOnceInTheCall(promise, column: column, args: args, argRanges: argRanges)
-		self.consumePromiseThread(promise, range: SourceRange.ofToken(anchor), reclaimedBy: PromiseConsume.notConsumed)
+		try self.takeOwnedPromise(promise, anchor: anchor, range: SourceRange.ofToken(anchor), door: anchor.value)
 	end 'takePromiseIntoCallee'
 
 	function requireConsumedArgumentStillOwned(argValue ValueId, consumedOwned ValueIdArray, range SourceRange) throws SourceParseError
@@ -102048,7 +102208,7 @@ export type Parser
 	// retain — see `coOwnConcreteRecordForSink`, which is why this hands back a ValueId at all.
 	//
 	// The released end is the container's own drop, on the SAME `typeIsManaged` boundary this retain implies —
-	// a direct field through `genericInstanceFieldIsManaged`, an opaque column through the descriptor's
+	// a direct field through `genericInstanceFieldOwesDrop`, an opaque column through the descriptor's
 	// `destroyFunc@40` (`managedOpaqueArrayElementOf`, which carries the measurement of what the two reading
 	// different boundaries cost).
 	function coOwnConcreteAggregateFeed(argValue ValueId, anchor Token) returns ValueId
@@ -102228,7 +102388,8 @@ export type Parser
 
 		if handOffIsAClosureCapture(door) 'aCapture'
 			if self.valueIsPromise(value) 'aPromise'
-				try self.requireConsumedPromiseIsOwned(value, anchor: anchor, door: anchor.value)
+				try self.takeOwnedPromise(value, anchor: anchor, range: SourceRange.ofToken(anchor), door: anchor.value)
+				self.noteMovedThrough(door, value: value)
 				return HandOffTake.promiseMovedIn
 			end 'aPromise'
 
@@ -102371,7 +102532,7 @@ export type Parser
 			anOpaqueReference then return self.coOwnBorrowedOpaque(value, range: SourceRange.ofToken(argument.anchor))
 			promotedLiteral then return self.handOverPromotedLiteral(value, door: argument.door, anchor: argument.anchor)
 			cellOccupant(read, exclusivity) then return self.handCellOccupantOver(read, exclusivity: exclusivity, argument: argument)
-			promiseMovedIn then return self.handPromiseIntoClosure(value, anchor: argument.anchor)
+			promiseMovedIn then return value
 			sharedReadOnly then return self.shareReadOnlyWithTheService(argument)
 			movedOut then break
 		end 'take'
@@ -102409,12 +102570,6 @@ export type Parser
 		self.emitTransferGraphProof(argument.value, handOff: GreenThreadHandOff.share, root: TransferRootProof.provedAtRunTime, anchor: argument.anchor)
 		return self.transferConsumedArg(argument.value, anchor: argument.anchor)
 	end 'shareReadOnlyWithTheService'
-
-	function handPromiseIntoClosure(promise ValueId, anchor Token) returns ValueId
-		self.consumePromiseThread(promise, range: SourceRange.ofToken(anchor), reclaimedBy: PromiseConsume.notConsumed)
-		self.noteMovedThrough(ThreadHandOffDoor.closureCapture(anchor.value), value: promise)
-		return promise
-	end 'handPromiseIntoClosure'
 
 	function noteMovedThrough(door ThreadHandOffDoor, value ValueId)
 		if handOffIsAClosureCapture(door) 'intoAClosure'
@@ -103525,11 +103680,13 @@ export type Parser
 
 		var args = ValueIdArray.create()
 		var argImmutableNames = WriteBlameArray.create()
-		let places = try self.parseIndirectCallArgs(func, callee: callee, args: args, names: argImmutableNames, anchor: anchor, calleeName: calleeTok.value)
+		var argRanges = SourceRangeArray.create()
+		let places = try self.parseIndirectCallArgs(func, callee: callee, args: args, names: argImmutableNames, argRanges: argRanges, anchor: anchor, calleeName: calleeTok.value)
 		let argsAreChecked = self.indirectArgumentsAreChecked(callee, args: args, anchor: anchor)
 
 		let rparenTok = try self.consume(TokenKind.rightParen)
 		self.widenFunctionValueArgs(callee, args: args, anchor: anchor, rparenTok: rparenTok)
+		try self.takePromisesTheFunctionTypeTakes(callee, args: args, argRanges: argRanges, anchor: anchor)
 
 		// ⭐ **THE FUNCTION RECORD IS THE TRAILING ARGUMENT — UNIFORMLY.** The callee reads its captures
 		// out of the record it was called through, which is what lets a callee only known to be
@@ -103539,6 +103696,7 @@ export type Parser
 
 		let result = try self.mintIndirectCallResult(callee, resultUsed: resultUsed, anchor: anchor)
 		let pending = try self.pendingIndirectPlaces(places)
+		try self.notePromiseCellsTheFunctionTypeTakes(callee, pending: pending, args: args, argRanges: argRanges, anchor: anchor)
 
 		// The indirect twin of `emitCall`'s enrolment, and in the same place — between the mint and the op.
 		// No retype stands in between here (a function VALUE's return type is already concrete), so the
@@ -103703,7 +103861,7 @@ export type Parser
 	// TYPE has no parameter names, so `indirectCall` carries no `argLabels`/`argRanges`; see MaxonDialect).
 	// `parseValueExpression` (the climber plus a trailing ternary), not `parseExpression`, for
 	// `parseCallArgs`' reason: an argument is parsed inside an expression that already seeded `currentBlock`.
-	function parseIndirectCallArgs(func IrFunction, callee ValueId, args ValueIdArray, names WriteBlameArray, anchor Token, calleeName ByteArray) returns PlaceArgumentArray throws SourceParseError
+	function parseIndirectCallArgs(func IrFunction, callee ValueId, args ValueIdArray, names WriteBlameArray, argRanges SourceRangeArray, anchor Token, calleeName ByteArray) returns PlaceArgumentArray throws SourceParseError
 		var places = PlaceArgumentColumn.unwritten
 
 		if self.at(TokenKind.rightParen) 'noArgs'
@@ -103724,8 +103882,9 @@ export type Parser
 			self.cellArgumentToken = CellArgumentToken.none
 			self.cellArgumentWantsAPlace = false
 			view handedPlace = self.takeHandedPlaceStorage()
+			argRanges.push(SourceRange.ofToken(valueTok))
 			args.push(self.holdStorageReadForStatement(value, kind: operandHoldKindOf(OperandPassing.intoPlace if readsAPlace else OperandPassing.asValue, valueKind: HoldKind.callOperand), range: SourceRange.ofToken(valueTok), position: OperandSuccession.alwaysFollowed))
-			names.push(self.expressionImmutableBlame(valueTok, valueStart: valueStart, value: value))
+			names.push(self.argumentBlame(valueTok, valueStart: valueStart, value: value))
 
 			if let name = try self.bareBindingNamedBy(valueStart).localName() 'aNamedLocalToAFunctionValue'
 				self.noteKeptArgumentSite(func, value: value, callee: calleeName, anchor: anchor, name: name)
@@ -103848,7 +104007,7 @@ export type Parser
 			// `maxonTypeOfStoredAliasReturn` is the one rebuild of a stored alias return; it recovers
 			// `ExitCode`'s u32 width from the stored name, which a second spelling would drop to a `named`
 			// i64.
-			declared(alias) then return FunctionValueShape.create(self.aliasParamTypes(alias), returnType: maxonTypeOfStoredAliasReturn(alias, typeNames: self.artifact.typeNames), scopeFilePath: alias.declFilePath)
+			declared(alias) then return FunctionValueShape.create(self.aliasParamTypes(alias), returnType: maxonTypeOfStoredAliasReturn(alias, typeNames: self.artifact.typeNames), scopeFilePath: alias.declFilePath, promisesTaken: aliasPromisesTaken(alias))
 			undeclared then break
 		end 'alias'
 
@@ -103864,11 +104023,66 @@ export type Parser
 		// file. When the declaring file refused the case (E3095, E2004), the call defers and that refusal
 		// reports it.
 		if self.signatures.backsAFunctionBackedEnumCase(name) 'aRefusedEnumCaseBacking'
-			return FunctionValueShape.create(MaxonTypeArray.create(), returnType: MaxonReturnType.value(MaxonType.unresolved), scopeFilePath: self.job.path)
+			return FunctionValueShape.create(MaxonTypeArray.create(), returnType: MaxonReturnType.value(MaxonType.unresolved), scopeFilePath: self.job.path, promisesTaken: BoolArray.create())
 		end 'aRefusedEnumCaseBacking'
 
 		panic("functionValueShape: a `function`-tagged value's governing name '{String.from(name)}' is neither a lifted closure, a function alias, a declared function, nor a function-backed enum case's backing name — every function value is minted from one of the four (parseClosureExpression / parseTypeReference / emitFunctionRef / a function-backed enum's `.rawValue`)")
 	end 'functionValueShape'
+
+	function takePromiseOutOfCell(cell ValueId, column ParamCount, args ValueIdArray, argRanges SourceRangeArray, anchor Token) throws SourceParseError
+		if valueIsMarked(self.bodyState.borrowedScratchCells, value: cell) and self.cellHoldsAPromise(self.typeOf(cell)) 'theCellOnlyLentTheHandle'
+			let lent = try self.scratchCellFillOf(cell) otherwise panic("takePromiseOutOfCell: a borrowed scratch cell v{cell} has no recorded fill")
+			try self.takePromiseIntoCallee(lent, column: column, args: args, argRanges: argRanges, anchor: anchor)
+			return
+		end 'theCellOnlyLentTheHandle'
+
+		self.noteCellPromiseTaken(cell)
+	end 'takePromiseOutOfCell'
+
+	function notePromiseCellsTheFunctionTypeTakes(callee ValueId, pending PendingArgumentBindingArray, args ValueIdArray, argRanges SourceRangeArray, anchor Token) throws SourceParseError
+		view shape = self.functionValueShape(callee)
+
+		for binding in pending 'eachPlace'
+			if not shape.takesPromiseAt(binding.column) 'notTaken'
+				continue
+			end 'notTaken'
+
+			match binding.storage 'storage'
+				cell(storage) then try self.takePromiseOutOfCell(storage, column: binding.column, args: args, argRanges: argRanges, anchor: anchor)
+				none then break
+			end 'storage'
+		end 'eachPlace'
+	end 'notePromiseCellsTheFunctionTypeTakes'
+
+	function noteCellPromiseTaken(cell ValueId)
+		if not self.cellHoldsAPromise(self.typeOf(cell)) 'notAPromiseCell'
+			return
+		end 'notAPromiseCell'
+
+		let index = try self.liveOwnerIndexOf(cell) otherwise return
+		var owned = try self.bodyState.ownedBindings.get(index) otherwise panic("noteCellPromiseTaken: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf`")
+
+		if not owned.isCellBinding 'notACell'
+			return
+		end 'notACell'
+
+		owned.setMovedFrom(true, ledger: self.bodyState.moveLedger)
+	end 'noteCellPromiseTaken'
+
+	function takePromisesTheFunctionTypeTakes(callee ValueId, args ValueIdArray, argRanges SourceRangeArray, anchor Token) throws SourceParseError
+		view shape = self.functionValueShape(callee)
+		let byRefPositions = self.indirectByRefPositionsAt(args.count() as ParamCount)
+
+		for position in 0 upto args.count() 'eachArgument'
+			let arg = try args.get(position) otherwise panic("takePromisesTheFunctionTypeTakes: args.get OOB at {position}")
+
+			if not self.valueIsPromise(arg) or not shape.takesPromiseAt(position) or maskHasParam(byRefPositions, param: position as ParamCount) 'notTaken'
+				continue
+			end 'notTaken'
+
+			try self.takePromiseIntoCallee(arg, column: position as ParamCount, args: args, argRanges: argRanges, anchor: anchor)
+		end 'eachArgument'
+	end 'takePromisesTheFunctionTypeTakes'
 
 	function aliasParamTypes(alias FunctionTypeAlias) returns MaxonTypeArray
 		var paramTypes = MaxonTypeArray.create()
@@ -103901,8 +104115,19 @@ export type Parser
 			paramTypes.push(self.sweptParamType(swept, scopeFilePath: decl.declFilePath))
 		end 'eachParam'
 
-		return FunctionValueShape.create(paramTypes, returnType: self.signatures.adoptReturnType(decl.returnType, into: self.artifact.typeNames), scopeFilePath: decl.declFilePath)
+		return FunctionValueShape.create(paramTypes, returnType: self.signatures.adoptReturnType(decl.returnType, into: self.artifact.typeNames), scopeFilePath: decl.declFilePath, promisesTaken: self.promisesTakenBy(decl, count: paramTypes.count()))
 	end 'functionValueShapeOf'
+
+	function promisesTakenBy(decl OverloadedDecl, count ElementIndex) returns BoolArray
+		let consume = self.signatures.consumeOfDeclaration(decl.site)
+		var taken = BoolArray.create()
+
+		for position in 0 upto count 'eachPosition'
+			taken.push(consume.takesPromiseAt(position as ParamCount))
+		end 'eachPosition'
+
+		return taken
+	end 'promisesTakenBy'
 
 	// Parse an integer literal token into a `literal` op, and return the value it defines.
 	// The token's text becomes a number through the shared `intLiteralValue`, so a literal

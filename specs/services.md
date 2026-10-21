@@ -10186,7 +10186,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3098: <fragment>:32:5: 'ReplyPromise' names the error type 'OtherError', but a reply from 'Calc.divide' throws 'MathError'
+error E3098: <fragment>:32:5: a promise of 'Integer' throwing 'MathError' cannot be stored in 'ReplyPromise', which holds 'Integer' throwing 'OtherError'
 ```
 
 <!-- test: a-stopped-service-stores-no-reply-and-its-send-fails-serviceStopped -->
@@ -10268,7 +10268,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3098: <fragment>:28:5: cannot store a promise from a function that throws 'SlowError' in 'BarePromise': it names the result type only, which would erase the error type — declare the storage as 'Promise with (T, SlowError)' so 'try await' can bind and release the error
+error E3098: <fragment>:28:5: a promise of 'Integer' throwing 'SlowError' cannot be stored in 'BarePromise', which holds 'Integer'
 ```
 
 <!-- test: a-generic-service-is-supported -->

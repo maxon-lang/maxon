@@ -2372,6 +2372,7 @@ function buildFunctionValueConventions(project Project, module MaxonModule, sign
 		end 'readsNoCell'
 
 		conventions.noteCellLoads(body.name, types: cellLoadTypesFor(project, signatures: signatures, name: body.name, paramTypes: body.maxonParamTypes, readerFilePath: body.sourceFilePath, conventions: conventions))
+		conventions.noteCellsEmptied(body.name, mask: promiseCellsTheBodyTakes(project, signatures: signatures, body: body, conventions: conventions))
 	end 'eachThunkedBody'
 
 	for name in calls.bodilessFunctionValueNames() 'eachBodilessTarget'
@@ -2384,6 +2385,23 @@ function buildFunctionValueConventions(project Project, module MaxonModule, sign
 
 	return conventions
 end 'buildFunctionValueConventions'
+
+function promiseCellsTheBodyTakes(project Project, signatures ProgramSignatures, body IrFunction, conventions FunctionValueConventions) returns ParamPositionMask
+	var taken = NoParamPositions
+	let adapted = adaptedPositionsOf(conventions, name: body.name)
+
+	for i in 0 upto body.maxonParamTypes.count() 'eachDeclaredParameter'
+		if not maskHasParam(adapted, param: i as ParamCount) 'readsNoCellHere'
+			continue
+		end 'readsNoCellHere'
+
+		if signatures.typeIsAGreenThreadHandle(try body.maxonParamTypes.get(i) otherwise panic("promiseCellsTheBodyTakes: maxonParamTypes.get OOB at {i}"), from: project.typeNames) and functionTakesPromiseAt(signatures, func: body, position: i) 'aPromiseTheBodyKeeps'
+			taken = maskWithParam(taken, param: i as ParamCount)
+		end 'aPromiseTheBodyKeeps'
+	end 'eachDeclaredParameter'
+
+	return taken
+end 'promiseCellsTheBodyTakes'
 
 function functionValueBodySignature(project Project, name ByteArray) returns FuncSignature
 	return try project.funcSignatures.get(name) otherwise panic("functionValueBodySignature: '{String.from(name)}' is a function-value body with a signature, and has none")
@@ -4636,6 +4654,10 @@ function checkValueKeepsTheBoundary(project Project, provenance ProvenanceTracer
 			return true
 		end 'keptUndeclared'
 
+		if reportPromiseOwnershipDisagreement(project, func: func, sig: sig, declaredName: declaredName, declared: declared, line: line, column: column, filePath: filePath) 'promiseOwnershipDisagrees'
+			return true
+		end 'promiseOwnershipDisagrees'
+
 		if not provenance.resultMeetsCapability(index, capability: declared.returnCapability) 'resultBreaksIt'
 			reportPositioned(project, code: ErrorCode.semanticCapabilityDeclarationBroken, message: resultBreaksBoundaryMessage("'{functionSourceName(project, func: func)}'", boundary: aliasDisplayOf(project, name: declaredName), capability: declared.returnCapability), line: line, column: column, filePath: filePath)
 			return true
@@ -4658,6 +4680,11 @@ function checkValueKeepsTheBoundary(project Project, provenance ProvenanceTracer
 			reportPositioned(project, code: ErrorCode.semanticCapabilityDeclarationBroken, message: parameterDemandMessage("function value of type '{aliasDisplayOf(project, name: gotName)}'", verb: verb, parameter: aliasParameterText(functionTypeAliasOf(project, name: gotName), position: position), boundary: aliasDisplayOf(project, name: declaredName), qualifier: qualifier), line: line, column: column, filePath: filePath)
 			return true
 		end 'declaredLessThanItNeeds'
+
+		if needed == ParamCapability.lent and declared.paramCapabilityAt(position) != ParamCapability.lent and shapeParameterIsAPromise(project, shape: got, position: position) 'declaresAPromiseTakenThatItLeaves'
+			reportPositioned(project, code: ErrorCode.semanticCapabilityDeclarationBroken, message: boundaryDisagreementMessage("function value of type '{aliasDisplayOf(project, name: gotName)}'", claim: "does not take its promise parameter '{aliasParameterText(functionTypeAliasOf(project, name: gotName), position: position)}'", boundary: aliasDisplayOf(project, name: declaredName), stance: "declares it `keep` or `sole`, so a call through the type hands the promise over and nothing would drop it"), line: line, column: column, filePath: filePath)
+			return true
+		end 'declaresAPromiseTakenThatItLeaves'
 	end 'eachAliasParameter'
 
 	if resultStrength(got.returnCapability) < resultStrength(declared.returnCapability) 'resultPromisesLess'
@@ -4667,6 +4694,41 @@ function checkValueKeepsTheBoundary(project Project, provenance ProvenanceTracer
 
 	return false
 end 'checkValueKeepsTheBoundary'
+
+function reportPromiseOwnershipDisagreement(project Project, func IrFunction, sig FuncSignature, declaredName ByteArray, declared FunctionShape, line LineNumber, column ColumnNumber, filePath FilePath) returns bool
+	var signatures = programSignaturesIn(project, asker: "reportPromiseOwnershipDisagreement")
+
+	for position in 0 upto sig.paramCount() 'eachParameter'
+		if not signatures.typeIsAGreenThreadHandle(try sig.paramTypes.get(position) otherwise panic("reportPromiseOwnershipDisagreement: paramTypes.get OOB at {position}"), from: project.typeNames) 'notAPromise'
+			continue
+		end 'notAPromise'
+
+		let takes = functionTakesPromiseAt(signatures, func: func, position: position)
+		let declaresTaken = declared.paramCapabilityAt(position) != ParamCapability.lent
+		let parameter = displayParamName(try sig.paramNames.get(position) otherwise panic("reportPromiseOwnershipDisagreement: paramNames.get OOB at {position}"))
+
+		if takes and not declaresTaken 'takenButUndeclared'
+			reportPositioned(project, code: ErrorCode.semanticCapabilityDeclarationBroken, message: keptUndeclaredMessage("function value for '{aliasDisplayOf(project, name: declaredName)}'", parameter: parameter, boundary: aliasDisplayOf(project, name: declaredName)), line: line, column: column, filePath: filePath)
+			return true
+		end 'takenButUndeclared'
+
+		if declaresTaken and not takes 'declaredButNotTaken'
+			reportPositioned(project, code: ErrorCode.semanticCapabilityDeclarationBroken, message: boundaryDisagreementMessage("'{functionSourceName(project, func: func)}'", claim: "only reads its promise parameter '{parameter}'", boundary: aliasDisplayOf(project, name: declaredName), stance: "declares it `keep` or `sole`, so a call through the type hands the promise over and nothing would drop it"), line: line, column: column, filePath: filePath)
+			return true
+		end 'declaredButNotTaken'
+	end 'eachParameter'
+
+	return false
+end 'reportPromiseOwnershipDisagreement'
+
+function functionTakesPromiseAt(signatures ProgramSignatures, func IrFunction, position ElementIndex) returns bool
+	return signatures.consumeOfDeclaration(func.declarationSite()).takesPromiseAt(position as ParamCount)
+end 'functionTakesPromiseAt'
+
+function shapeParameterIsAPromise(project Project, shape FunctionShape, position ElementIndex) returns bool
+	var signatures = programSignaturesIn(project, asker: "shapeParameterIsAPromise")
+	return signatures.typeIsAGreenThreadHandle(try shape.paramTypes.get(position) otherwise panic("shapeParameterIsAPromise: paramTypes.get OOB at {position}"), from: project.typeNames)
+end 'shapeParameterIsAPromise'
 
 function aliasDisplayOf(project Project, name ByteArray) returns String
 	return programSignaturesIn(project, asker: "aliasDisplayOf").aliasIdentityDisplay(name)
@@ -6292,6 +6354,11 @@ function checkImmutableArgToMutatingParam(project Project, func IrFunction, call
 	end 'eachArg'
 end 'checkImmutableArgToMutatingParam'
 
+function blameIsOnlyAHeldPromise(blame WriteBlame) returns bool
+	let holder = try blame.blamedHolder() otherwise return false
+	return holder == WriteBlameHolder.heldPromise
+end 'blameIsOnlyAHeldPromise'
+
 union ReportSite
 	atTheCall
 	handedIn(range SourceRange, writer String, callee String)
@@ -6307,7 +6374,13 @@ function refuseImmutableArgAtWrittenParam(project Project, func IrFunction, argI
 
 	if not blamed.isBlamed() 'noNamedBinding'
 		blamed = provenance.immutableRootWrittenThrough(func, value: argId, call: callRange)
-	end 'noNamedBinding'
+	end 'noNamedBinding' else if blameIsOnlyAHeldPromise(blamed) 'onlyTheContainer'
+		var rooted = provenance.immutableRootWrittenThrough(func, value: argId, call: callRange)
+
+		if rooted.isBlamed() 'aSharperRoot'
+			blamed = rooted
+		end 'aSharperRoot'
+	end 'onlyTheContainer'
 
 	if not blamed.isBlamed() 'writableArgument'
 		return false
@@ -6616,6 +6689,10 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 		// is cheaper than threading it into two. It is a dense array read on a path that already does four,
 		// and `checkArgTypes` fetches the same name unconditionally for every argument of every call.
 		let paramName = try sig.paramNames.get(i) otherwise panic("checkTypeParameterArgsAt: paramNames.get OOB at {i}")
+
+		if refusePromiseOfAnotherType(project, slotType: substituted, argId: argId, argTag: argTag, argNameId: argNameId, callRange: callRange, filePath: filePath, provenance: provenance) 'promiseMeetsAnotherPromise'
+			return
+		end 'promiseMeetsAnotherPromise'
 
 		// ⚠ **`aggregatesConflict`, NOT the bare rule — the SAME door every other coercion site uses.**
 		// The wrapper adds the per-instance-alias decay: a PER-INSTANCE alias (`WA.Idx`) meeting a target
@@ -8098,6 +8175,10 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 		return
 	end 'existentialParam'
 
+	if refusePromiseOfAnotherType(project, slotType: paramType, argId: argId, argTag: argTag, argNameId: argNameId, callRange: callRange, filePath: filePath, provenance: provenance) 'promiseMeetsAnotherPromise'
+		return
+	end 'promiseMeetsAnotherPromise'
+
 	// ⭐ A DIFFERENT named aggregate passed where one is declared shares the scalar tag — two STRUCTS
 	// both `structRef`, two boxed UNIONS both erased to `integer` — so the `checkDeclaredType` tag
 	// check below would ACCEPT it, and at a CONSUMING argument (a constructor storing it into a field)
@@ -8423,6 +8504,41 @@ function typeDisplayName(project Project, tag ValueTypeTag, nameId TypeNameId, r
 	// integer meeting a union parameter).
 	return programSignaturesIn(project, asker: "typeDisplayName").displayNameOfAggregate(tag, aggregate: aggregateNameFor(project, tag: tag, nameId: nameId, readerFilePath: readerFilePath))
 end 'typeDisplayName'
+
+function refusePromiseOfAnotherType(project Project, slotType MaxonType, argId ValueId, argTag ValueTypeTag, argNameId TypeNameId, callRange SourceRange, filePath FilePath, provenance ProvenanceTracer) returns bool
+	var signatures = programSignaturesIn(project, asker: "refusePromiseOfAnotherType")
+
+	if argTag != ValueTypeTag.genericInstance or not typeIsPromiseStorage(signatures, t: slotType) 'notTwoPromises'
+		return false
+	end 'notTwoPromises'
+
+	let got = argNameId as GenericInstanceId
+	let slot = genericInstanceIdOf(slotType)
+
+	if not signatures.instanceIsPromiseHandle(got) or promiseStoragesAgree(signatures, a: got, b: slot) 'agreeing'
+		return false
+	end 'agreeing'
+
+	let detail = promiseStorageMismatchDetail(promiseHeldDisplay(promiseClaimDisplayIn(project, gid: got, readerFilePath: filePath)), slot: String.from(signatures.instanceDisplayName(slot)), slotClaim: promiseClaimDisplayIn(project, gid: slot, readerFilePath: filePath))
+	reportPositioned(project, code: ErrorCode.promiseStorageMismatch, message: detail, line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArguments(singletonArgs(argId)))
+	return true
+end 'refusePromiseOfAnotherType'
+
+function promiseClaimDisplayIn(project Project, gid GenericInstanceId, readerFilePath FilePath) returns String
+	var signatures = programSignaturesIn(project, asker: "promiseClaimDisplayIn")
+	return promiseClaimText(promiseResultDisplayIn(project, gid: gid, readerFilePath: readerFilePath), throwing: promiseStorageThrows(signatures, gid: gid))
+end 'promiseClaimDisplayIn'
+
+function promiseResultDisplayIn(project Project, gid GenericInstanceId, readerFilePath FilePath) returns String
+	var signatures = programSignaturesIn(project, asker: "promiseResultDisplayIn")
+
+	if signatures.promiseAwaits(gid, returnType: MaxonReturnType.void) 'nothing'
+		return PromiseOfNothingDisplay
+	end 'nothing'
+
+	let result = signatures.declaredSlotType(signatures.substitutedInstanceArg(gid, position: PromiseResultArgPosition), into: project.typeNames, slotScopeFilePath: readerFilePath)
+	return "'{typeDisplayName(project, tag: maxonTypeTag(result), nameId: typeNameIdOf(result), readerFilePath: readerFilePath)}'"
+end 'promiseResultDisplayIn'
 
 // ⭐⭐ **HOW THE *PARAMETER* SIDE OF AN ARGUMENT REFUSAL IS SPELLED — the display door's other half.** It
 // cannot simply be `typeDisplayName` of the parameter's type, because `resolveTypes` has already run over a

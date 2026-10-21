@@ -290,7 +290,8 @@ end 'main'
 ```
 
 Omit `returns` for a function type that returns nothing: `typealias Callback = function()`. A function type cannot express `throws`, so a
-throwing function cannot be used as a value (**E3101**) — wrap it in a function that handles the error.
+throwing function cannot be used as a value (**E3101**) — wrap it in a function that handles the error. A function type says
+which promise parameters its callee takes: see [Capability Qualifiers](#capability-qualifiers-keep-sole-returns-readonly).
 Function-type aliases are [brands](/docs/language/ranged-typealiases/#generic-instance-and-function-type-aliases-are-brands).
 
 ## Capability Qualifiers (`keep`, `sole`, `returns readonly`)
@@ -331,6 +332,12 @@ end 'Source'
   or a `let` or `var` at its last use (a later use is **E3102**); a read-only value, a parameter, a field of a
   record that stays reachable, or a `var` a [view](/docs/language/variables/#views-view) has seen is **E3078**. The `let` of a
   `returns sole` result is fresh, and a `let` of a `returns readonly` result is read-only.
+- A promise parameter of a function type is taken by the callee when it is written `keep` or `sole`, and only
+  then: a call through the type moves the promise into the callee, which stores, awaits, cancels or returns it,
+  and an unqualified promise parameter stays with the caller, who still owns it after the call. A named
+  function used as a value has its own type, so the call honours what the function does. A function value
+  converted to an alias whose qualifier disagrees with the function — it takes a promise the alias leaves
+  unqualified, or the alias declares `keep` or `sole` on a promise the function only reads — is **E3189**.
 - A function value converted to the alias, a conformer's method, or a generic function's body that does more
   than its boundary declares — keeps a parameter not declared `keep` or `sole`, or returns state something may
   write where `returns sole` or `returns readonly` is declared — is **E3189**. A function value typed by one

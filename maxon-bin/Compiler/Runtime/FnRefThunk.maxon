@@ -33,11 +33,12 @@ export type FunctionValueConventions
 	var arityOfBody as ConventionArityMap
 	var ownByName as ConventionMaskMap
 	var loadTypes as CellLoadTypeMap
+	var emptiedByName as ConventionMaskMap
 	var settled as bool
 	var takesAnyCell as bool
 
 	export static function none() returns FunctionValueConventions
-		return Self{maskByArity: ParamPositionMaskArray.create(), arityNoted: BoolArray.create(), arityOfBody: ConventionArityMap.create(), ownByName: ConventionMaskMap.create(), loadTypes: CellLoadTypeMap.create(), settled: false, takesAnyCell: false}
+		return Self{maskByArity: ParamPositionMaskArray.create(), arityNoted: BoolArray.create(), arityOfBody: ConventionArityMap.create(), ownByName: ConventionMaskMap.create(), loadTypes: CellLoadTypeMap.create(), emptiedByName: ConventionMaskMap.create(), settled: false, takesAnyCell: false}
 	end 'none'
 
 	export function settle()
@@ -86,6 +87,15 @@ export type FunctionValueConventions
 	export function noteCellLoads(name ByteArray, types StdTypeArray)
 		self.loadTypes.upsert(name, value: types)
 	end 'noteCellLoads'
+
+	export function noteCellsEmptied(name ByteArray, mask ParamPositionMask)
+		self.emptiedByName.upsert(name, value: mask)
+	end 'noteCellsEmptied'
+
+	function cellIsEmptiedAt(name ByteArray, position ParamCount) returns bool
+		let mask = try self.emptiedByName.get(name) otherwise return false
+		return maskHasParam(mask, param: position)
+	end 'cellIsEmptiedAt'
 
 	export function arityOf(name ByteArray) returns ParamCount
 		return try self.arityOfBody.get(name) otherwise panic("FunctionValueConventions.arityOf: '{String.from(name)}' is no function-value body this program noted")
@@ -148,6 +158,13 @@ export function appendCellOccupantLoads(module StdModule, block IrBlock, ids Val
 		if let loadType = try conventions.cellOccupantTypeAt(target, arity: arity, position: i as ParamCount) 'readTheCell'
 			let occupant = ids.mint()
 			module.appendOp(block, op: cellOccupantLoad(occupant, address: arg, valueType: loadType))
+
+			if conventions.cellIsEmptiedAt(target, position: i as ParamCount) 'theTargetTakesTheThread'
+				let emptied = ids.mint()
+				module.appendOp(block, op: StdOp.const(emptied, value: 0, valueType: StdType.i64))
+				module.appendOp(block, op: StdOp.storeIndirect(arg, offset: ParameterCellValueOffset, valueId: emptied, valueType: StdType.i64))
+			end 'theTargetTakesTheThread'
+
 			occupants.push(occupant)
 			continue
 		end 'readTheCell'

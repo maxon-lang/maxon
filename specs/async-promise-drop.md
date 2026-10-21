@@ -52,8 +52,8 @@ waits in `__gt_subp_wait_collect`, which drains the child's pipes while it waits
 child out (the program lives as long as the child does), so it exercises another road than the one these cases
 pin.
 
-A promise handed to a call moves into a parameter the callee takes (one it awaits, cancels, stores or returns)
-and stays with the caller at a parameter that only reads it; where the overloads a call may bind differ, the
+A promise handed to a call moves into a parameter the callee takes (one it awaits, cancels, stores or returns,
+or hands on to a callee that takes it) and stays with the caller at a parameter that only reads it; where the overloads a call may bind differ, the
 overload it binds decides. An `async` call moves a promise only into a parameter every overload takes: the
 coroutine can outlive the frame that started it, so a promise, or a value whose type holds one, at a parameter
 that only reads it is E3141. A coroutine dropped before it runs reclaims the promise it was handed. One promise
@@ -732,11 +732,10 @@ end 'main'
 ```
 
 <!-- test: async-promise-drop.branch-store-into-a-container-reads-the-doors-in-either-order -->
-The mirror of the case above, and the reason it is a second case rather than a second assertion: the defect it
-pins is ORDER-DEPENDENT — a first store door that retyped the spawn's value to the storage instance would
-make the SECOND one mistake it for a promise already read back out of a container and skip the move. So the arms are written the other way round here, `set` first and `push` second, which makes `push`
-the door that is read second and taken FIRST at run time. Same two threads, same 42: whichever door the parser
-happens to read second must still consume the thread it stores.
+The mirror of the case above, and a second case rather than a second assertion because what it pins is
+ORDER-DEPENDENT: every store door consumes the thread it stores, whichever door the parser reads first. So the
+arms are written the other way round here, `set` first and `push` second, which makes `push` the door that is
+read second and taken FIRST at run time. Same two threads, same 42.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer

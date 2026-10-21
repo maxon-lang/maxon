@@ -280,6 +280,10 @@ module function cacheEnumTablesAgreeInCompilerSignatureIndex() returns bool
 		return false
 	end 'disagreesCacheTableAgreesFeedSink'
 
+	if not cacheTableAgreesForwardShape() 'disagreesCacheTableAgreesForwardShape'
+		return false
+	end 'disagreesCacheTableAgreesForwardShape'
+
 	if not cacheTableAgreesHashEventSource() 'disagreesCacheTableAgreesHashEventSource'
 		return false
 	end 'disagreesCacheTableAgreesHashEventSource'
@@ -525,8 +529,9 @@ let DeclShapeMutable = 13 as HashDigest
 let DeclShapeParamConsume = 24 as HashDigest
 let ConsumeBitSet = 25 as HashDigest
 let ConsumeBitClear = 26 as HashDigest
-let HandedBackBitSet = 124 as HashDigest
-let HandedBackBitClear = 125 as HashDigest
+let HandedOnBitSet = 124 as HashDigest
+let HandedOnBitClear = 125 as HashDigest
+let ForwardedStoreDiscriminator = 137 as HashDigest
 
 // A function's `throws E` clause discriminator. Its own discriminator for `DeclShapeAlias`'s
 // reason: a callee that GAINS or CHANGES a throws type changes whether each call site needs a `try`
@@ -4852,7 +4857,7 @@ export function payloadClassIsManaged(class PayloadClass) returns bool
 		// ⚠ `false` is the declaration view's answer rather than the slot's. Every reader here is a
 		// declaration-view drop question — the base struct's own cascade, the usage gates,
 		// `caseHasManagedField` — and a `T` slot is dropped by none of them:
-		// `genericInstanceFieldIsManaged` answers the substituted question for the per-instance cascade
+		// `genericInstanceFieldOwesDrop` answers the substituted question for the per-instance cascade
 		// that does drop it. Answering `true` would give `type Box uses T` a `__destruct_Box` that
 		// decrefs an opaque word, which for a trivial instantiation is a raw scalar. The store-side
 		// reference the slot does owe is taken by `Parser.moveInPayload`, which routes on this case by
@@ -5651,42 +5656,170 @@ export enum FeedSinkQuery
 	constructedValueSink
 end 'FeedSinkQuery'
 
+export enum ForwardShape
+	outright
+	bare
+	throughSelf
+	throughSelfType
+	throughReceiver
+	qualified
+	throughParameter
+end 'ForwardShape'
+
+// @generated library-cache begin
+let CacheCasesForwardShape = [ForwardShape.outright, ForwardShape.bare, ForwardShape.throughSelf, ForwardShape.throughSelfType, ForwardShape.throughReceiver, ForwardShape.qualified, ForwardShape.throughParameter]
+
+function cacheReadForwardShape(reader LibraryCacheReader) returns ForwardShape throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesForwardShape.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadForwardShape'
+
+function cacheTableAgreesForwardShape() returns bool
+	let declared = ForwardShape.allCases
+
+	if CacheCasesForwardShape.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesForwardShape.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesForwardShape'
+
+// @generated library-cache end
+
+export type ForwardedStore
+	export let paramIndex as ParamCount
+	export let shape as ForwardShape
+	export let typeName as ByteArray
+	export let memberName as ByteArray
+	export let column as ParamCount
+	export let label as ByteArray
+	export let calleeParam as ParamCount
+
+	export static function create(paramIndex ParamCount, shape ForwardShape, typeName ByteArray, memberName ByteArray, column ParamCount, label ByteArray, calleeParam ParamCount) returns ForwardedStore
+		return Self{paramIndex: paramIndex, shape: shape, typeName: typeName, memberName: memberName, column: column, label: label, calleeParam: calleeParam}
+	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.paramIndex as CacheUnsigned)
+		writer.unsigned(self.shape.ordinal as CacheUnsigned)
+		writer.bytes(self.typeName)
+		writer.bytes(self.memberName)
+		writer.unsigned(self.column as CacheUnsigned)
+		writer.bytes(self.label)
+		writer.unsigned(self.calleeParam as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns ForwardedStore throws LibraryCacheDamage
+		let f_paramIndex = (try reader.unsigned()) as ParamCount
+		let f_shape = try cacheReadForwardShape(reader)
+		let f_typeName = try reader.bytes()
+		let f_memberName = try reader.bytes()
+		let f_column = (try reader.unsigned()) as ParamCount
+		let f_label = try reader.bytes()
+		let f_calleeParam = (try reader.unsigned()) as ParamCount
+
+		return Self{paramIndex: f_paramIndex, shape: f_shape, typeName: f_typeName, memberName: f_memberName, column: f_column, label: f_label, calleeParam: f_calleeParam}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize56
+		return sizeof(ForwardedStore) as CacheSize56
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'ForwardedStore'
+
+export typealias ForwardedStoreArray = Array with ForwardedStore
+
+// @generated library-cache begin
+function cacheWriteForwardedStoreArray(writer LibraryCacheWriter, value ForwardedStoreArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteForwardedStoreArray'
+
+function cacheReadForwardedStoreArray(reader LibraryCacheReader) returns ForwardedStoreArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ForwardedStoreArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try ForwardedStore.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadForwardedStoreArray'
+
+// @generated library-cache end
+
 // A function's per-parameter ownership facts: `paramNames` in order, so a call site can slot a
 // labelled argument to its position before the `FuncSignature` is built; `bits[i]`, parameter `i`
 // is consumed (moved into a non-type-parameter field, so the callee owns it whatever the concrete
 // type); `feeds[i]`, the type-parameter position parameter `i` fills, for the concrete-site managed
-// consume; and `handedBack[i]`, a bare `return` of parameter `i`. The sweep computes them from
-// tokens, the only whole-program input a per-file parse may read, records one entry per function
-// with any such fact, and publishes them by name with no interner, like `enumTypes`. `feeds` is
-// empty for a non-generic function.
+// consume; `handedOn[i]`, parameter `i` may hold a promise and is returned, stored, or handed to a
+// callee that takes it; and `forwardedStores`, the bare arguments of calls the sweep cannot resolve,
+// which `ProgramSignatures.closeForwardedStores` turns into `handedOn` bits once every file is in. The
+// sweep computes them from tokens, the only whole-program input a per-file parse may read, records one
+// entry per function with any such fact, and publishes them by name with no interner, like `enumTypes`.
+// `feeds` is empty for a non-generic function.
 export type ParamConsumeInfo
 	export let paramNames as NameRoster
 	export let bits as BoolArray
 	export let feeds as TypeParamFeedArray
-	export let handedBack as BoolArray
+	export let handedOn as BoolArray
+	export let forwardedStores as ForwardedStoreArray
 
-	export static function create(paramNames NameRoster, bits BoolArray, feeds TypeParamFeedArray, handedBack BoolArray) returns ParamConsumeInfo
-		return Self{paramNames: paramNames, bits: bits, feeds: feeds, handedBack: handedBack}
+	export static function create(paramNames NameRoster, bits BoolArray, feeds TypeParamFeedArray, handedOn BoolArray, forwardedStores ForwardedStoreArray) returns ParamConsumeInfo
+		return Self{paramNames: paramNames, bits: bits, feeds: feeds, handedOn: handedOn, forwardedStores: forwardedStores}
 	end 'create'
 
 	export function isConsumed(index ParamCount) returns bool
 		return bitAt(self.bits, index: index)
 	end 'isConsumed'
 
-	export function isHandedBack(index ParamCount) returns bool
-		return bitAt(self.handedBack, index: index)
-	end 'isHandedBack'
+	export function isHandedOn(index ParamCount) returns bool
+		return bitAt(self.handedOn, index: index)
+	end 'isHandedOn'
 
-	// The caller's promise move (`transferConsumedArgs`) and the callee's ownership (`bindParameters`)
-	// both ask this, so a promise argument has exactly one owner; two answers would leak it or free it
-	// twice.
+	// The caller's promise move (`transferConsumedArgs`), the callee's ownership (`bindParameters`), a
+	// spawn's release plan (`asyncReleasePlanFor`) and a function value's `promisesTaken` all ask this, so a
+	// promise argument has exactly one owner; two answers would leak it or free it twice.
 	export function takesPromiseAt(index ParamCount) returns bool
-		return self.isConsumed(index) or self.isHandedBack(index) or self.typeParamFeedOf(index).isFeed()
+		return self.isConsumed(index) or self.isHandedOn(index) or self.typeParamFeedOf(index).isFeed()
 	end 'takesPromiseAt'
 
-	export function handsBackAParameter() returns bool
-		return anyBitSet(self.handedBack)
-	end 'handsBackAParameter'
+	export function isEmpty() returns bool
+		return not anyBitSet(self.bits) and not anyBitSet(self.handedOn) and self.forwardedStores.count() == 0 and not self.anyFeed(FeedSinkQuery.anySink)
+	end 'isEmpty'
+
+	export function promiseFactsDifferFrom(other ParamConsumeInfo) returns bool
+		if self.forwardedStores.count() != other.forwardedStores.count() 'differentStores'
+			return true
+		end 'differentStores'
+
+		let reach = self.handedOn.count() if self.handedOn.count() > other.handedOn.count() else other.handedOn.count()
+
+		for position in 0 upto reach 'eachPosition'
+			if self.isHandedOn(position as ParamCount) != other.isHandedOn(position as ParamCount) 'differentBit'
+				return true
+			end 'differentBit'
+		end 'eachPosition'
+
+		return false
+	end 'promiseFactsDifferFrom'
 
 	export function transfersAParameter() returns bool
 		return anyBitSet(self.bits) or self.anyFeed(FeedSinkQuery.anySink)
@@ -5718,20 +5851,22 @@ export type ParamConsumeInfo
 		cacheWriteNameRoster(writer, value: self.paramNames)
 		cacheWriteBoolArray(writer, value: self.bits)
 		cacheWriteTypeParamFeedArray(writer, value: self.feeds)
-		cacheWriteBoolArray(writer, value: self.handedBack)
+		cacheWriteBoolArray(writer, value: self.handedOn)
+		cacheWriteForwardedStoreArray(writer, value: self.forwardedStores)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns ParamConsumeInfo throws LibraryCacheDamage
 		let f_paramNames = try cacheReadNameRoster(reader)
 		let f_bits = try cacheReadBoolArray(reader)
 		let f_feeds = try cacheReadTypeParamFeedArray(reader)
-		let f_handedBack = try cacheReadBoolArray(reader)
+		let f_handedOn = try cacheReadBoolArray(reader)
+		let f_forwardedStores = try cacheReadForwardedStoreArray(reader)
 
-		return Self{paramNames: f_paramNames, bits: f_bits, feeds: f_feeds, handedBack: f_handedBack}
+		return Self{paramNames: f_paramNames, bits: f_bits, feeds: f_feeds, handedOn: f_handedOn, forwardedStores: f_forwardedStores}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize32
-		return sizeof(ParamConsumeInfo) as CacheSize32
+	static function cacheLayoutBytes() returns CacheSize40
+		return sizeof(ParamConsumeInfo) as CacheSize40
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -5828,21 +5963,13 @@ export typealias ParamConsumeInfoArray = Array with ParamConsumeInfo
 // is per-BODY rather than per-parameter: a body that forwards nothing to a reassigning name is untouched,
 // which is every function in `stdlib/` on every program written so far.
 //
-// ⛔⛔ **BUT THE BARE NAME ALONE IS NOT A SOUND *WIDENING*, IT IS A FALSE REJECT, AND THE STDLIB PAYS IT.**
-// *"A cell is always a legal way to hold a value ... wasteful, never wrong"* justifies the whole
-// over-approximation and is a claim about CODEGEN, where it is true; it is NOT a claim about
-// DIAGNOSTICS, and `Parser.requireOverloadableName` turns "this name takes a parameter by reference" into a
-// hard E2015 the moment the name is overloaded. MEASURED: a user program declaring a free `swap` that
-// reassigns a parameter fails to compile with *"overloading 'Array.sort'"* — because `stdlib`'s
-// `Array.swap` wears the bare name `swap`, inherits the user's by-reference-ness, and carries it up
-// `reverseRange` → `naturalRunLen` → `createRun` → `driftsortRange` → the overloaded `Array.sort`.
-// The identical program with the user's function spelled `zzz` compiles. ⇒ **the widening must not
-// cross a boundary the SOURCE SYNTAX already draws**, which is what `ForwardCall` below is.
+// ⛔⛔ **BUT THE BARE NAME ALONE WIDENS ACROSS A BOUNDARY THE SOURCE SYNTAX ALREADY DRAWS.** A user program
+// declaring a free `swap` that reassigns a parameter would widen `stdlib`'s `Array.swap`, which wears the
+// bare name `swap`, and carry the by-reference-ness up `reverseRange` → `naturalRunLen` → `createRun` →
+// `driftsortRange` → `Array.sort`. `ForwardCall` below partitions the match by call shape so it stops there.
 //
-// ⛔ **AND IT IS NOT WHOLLY CLOSED — `Parser.requireOverloadableName` carries the exact residual and the
-// measured program.** Two declarations a SPELLING cannot tell apart still share a node, so a user METHOD
-// whose name reaches a `stdlib` method through a non-`self` dotted call is still refused. Do not read the
-// paragraph above as "fixed"; read it as "fixed for the shapes named at that refusal".
+// ⚠ Two declarations a SPELLING cannot tell apart still share a node, so a user METHOD whose name reaches a
+// `stdlib` method through a non-`self` dotted call still widens that method.
 //
 // ⚠ **THE WIDENING IS PER-BODY, SO A BODY THAT FORWARDS ANYTHING TO A REASSIGNING NAME HAS *ALL* ITS
 // FORWARDED PARAMETERS WIDENED.** `helper(cur, f, replacement)` forwarding `cur` and `replacement` into a
@@ -6281,6 +6408,33 @@ function bitAt(column BoolArray, index ParamCount) returns bool
 
 	return try column.get(index) otherwise panic("bitAt: column.get OOB at {index} despite index < count")
 end 'bitAt'
+
+function forwardedStoreIsTakenBy(callee ParamConsumeInfo, column ParamCount, label ByteArray, alsoHandedOn BoolArray) returns bool
+	let position = try argSlotPosition(callee.paramNames, argIndex: column, label: label) otherwise return false
+	return callee.takesPromiseAt(position) or bitAt(alsoHandedOn, index: position)
+end 'forwardedStoreIsTakenBy'
+
+// ⭐⭐ **RECORD ONE PARAMETER'S BIT IN A SWEEP COLUMN, GROWING THE COLUMN TO REACH IT** — the ONE writer of
+// the bit columns (consume, hand-on and the two by-reference ones), paired with the ONE reader every consumer
+// goes through (`bitAt` / `ParamConsumeInfo.isConsumed`). A column reaches only as far as the
+// highest position that has a fact, which is exactly what those readers already mean by a SHORT column:
+// *"a position past either column is a parameter the sweep recorded nothing for"*. So a pre-fill would be
+// writing out, per parameter of every declaration in the program, the very default its readers supply free.
+//
+// ⛔⛔ **THE COLUMNS START FROM A FRESH ARRAY AND NEVER FROM A SHARED MODULE-LEVEL EMPTY ONE.** The sweep WRITES
+// them, and a shared empty handed to a name it then writes is a `let` global's record handed to a name that is
+// written through: the rule that a value which may alias a `let` global's record may not be written through
+// refuses that (E3159). A column that is always fresh can alias nothing, and costs one empty record.
+//
+// ⚡ The descriptor scan's edge columns keep their shared anchor instead (`Parser.edgeColumnSnapshot`): nearly
+// every body records no edge, so a fresh column there would be an allocation per body for nothing.
+export function setParamBit(column BoolArray, index ParamCount)
+	while column.count() as ParamCount <= index 'reach'
+		column.push(false)
+	end 'reach'
+
+	try column.set(index, value: true) otherwise panic("setParamBit: column.set OOB at {index} despite the growth above reaching it")
+end 'setParamBit'
 
 // Is any bit of `column` set? The shared body of the whole-column questions above, so "this function states
 // something" and "this function seeds the closure" cannot come to read the columns differently.
@@ -7313,7 +7467,7 @@ end 'cacheReadContestedOpaqueParamNameSet'
 // The answer for every declaration that takes no bare type-parameter argument — which is every function in a
 // program that declares no generic type, and most methods of one. Shared because an instance per declaration would be one allocation per function in the program, on the sweep's
 // hottest path, for a record that says "nothing to do". It is READ-ONLY at every holder, which is what
-// separates a safe shared anchor from one a sweep writes through (see `Parser.setParamBit`).
+// separates a safe shared anchor from one a sweep writes through (see `setParamBit`).
 export let sharedNoOpaqueParams = OpaqueParamInfo.create(NameRoster.create(), positions: TypeParamSlots.create(), typeParamCount: 0)
 
 // ⭐ **THE NAMES WHOSE DECLARATIONS DISAGREE ABOUT THEIR DEFAULT SHAPE.** The defaults registry is
@@ -7834,6 +7988,53 @@ typealias UnsettledTargetCountArray = Array with UnsettledTargetCount
 
 // Target key → the forwarders still waiting for every declaration of that key to publish.
 typealias FreshReturnWaiterMap = Map with (ByteArray, FreshReturnForwarderIndexArray)
+
+type Forwarder
+	export let key as ByteArray
+	export let decl as OverloadedDecl
+	export let info as ParamConsumeInfo
+
+	static function create(key ByteArray, decl OverloadedDecl, info ParamConsumeInfo) returns Forwarder
+		return Self{key: key, decl: decl, info: info}
+	end 'create'
+end 'Forwarder'
+
+typealias ForwarderArray = Array with Forwarder
+typealias ForwarderSiteMap = Map with (ByteArray, ElementIndex)
+typealias PromiseTypeAnswerMap = Map with (TypeNameId, bool)
+
+union PromiseFactVerdict
+	none
+	unchanged
+	narrower(pruned ParamConsumeInfo)
+end 'PromiseFactVerdict'
+
+typealias ParamBitColumnArray = Array with BoolArray
+typealias DeclarationsByMemberName = Map with (ByteArray, OverloadedDeclArray)
+
+type StoreTarget
+	export let store as ForwardedStore
+	export let callee as ByteArray
+	export let receiverOffset as ParamCount
+
+	static function create(store ForwardedStore, callee ByteArray, receiverOffset ParamCount) returns StoreTarget
+		return Self{store: store, callee: callee, receiverOffset: receiverOffset}
+	end 'create'
+end 'StoreTarget'
+
+typealias StoreTargetArray = Array with StoreTarget
+typealias StoreTargetColumnArray = Array with StoreTargetArray
+
+type StoreCandidate
+	export let decl as OverloadedDecl
+	export let receiverOffset as ParamCount
+
+	static function create(decl OverloadedDecl, receiverOffset ParamCount) returns StoreCandidate
+		return Self{decl: decl, receiverOffset: receiverOffset}
+	end 'create'
+end 'StoreCandidate'
+
+typealias StoreCandidateArray = Array with StoreCandidate
 
 // The `<T>.handle` names one program mints — see `ProgramSignatures.serviceHandleNames`. Keyed by NAME
 // for `DisagreeingThrowsNameSet`'s reason: a companion has a nominal identity and nothing finer to compare.
@@ -18670,6 +18871,8 @@ export type ProgramSignatures
 	// answer. `byRefForwardingClosed`'s discipline, one map over.
 	var freshReturnForwardsClosed as bool
 
+	var forwardedStoresClosed as bool
+
 	// The content hash OF THE DECLARATIONS — not of the source they were read from. This is the
 	// second half of a parse memo's key (`QueryEngine.parseMemoKey`), and hashing the folded
 	// ENTRIES rather than the FILES is the whole point of it:
@@ -18795,7 +18998,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{ownSettled: SettledDeclarations.create(os), sharedSettled: SettledDeclarations.unused(), readsPublishedView: false, genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), multiplyDeclaredTupleAliases: MultiplyDeclaredTupleAliasMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, sawManagedHostResourceProducer: false, divergedGenericAliasDecl: AliasCycleResult.none, cascadeWalkRoots: NameRoster.create(), cascadeBreakReached: CascadeWalkBreak.nothingBroke(), interfaceCloneAnswers: DeepCloneAnswerMap.create(), someRecordHoldsAnInterfaceValue: false, recordsHoldingAnInterfaceValueCounted: false, typeNames: TypeNameInterner.createForSource(0), crossFileConstantReads: NameInFileArray.create(), sawParamReassignment: false, byRefForwardingClosed: false, deepCloneAnswers: DeepCloneAnswerMap.create(), transferWalkAnswers: DeepCloneAnswerMap.create(), deepCloneWalkReadInstances: false, sawGlobalNameReturn: false, globalAliasReturnsClosed: false, freshReturnForwardsClosed: false, hash: Hasher.empty(), hashSource: HashEventSource.whole, authorChainState: Hasher.empty(), libraryChainState: Hasher.empty(), wholeChainState: Hasher.empty(), libraryHash: Hasher.empty(), libraryParseSharing: LibraryParseSharing.undecided, authorNameMeantByTheLibrary: false, storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, projectRootModuleDirectory: "", arrayByteInstance: 0, arrayByteInstanceComputed: false, hasNonCorpusArrayConformer: false, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed()}
+		return Self{ownSettled: SettledDeclarations.create(os), sharedSettled: SettledDeclarations.unused(), readsPublishedView: false, genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), multiplyDeclaredTupleAliases: MultiplyDeclaredTupleAliasMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, sawManagedHostResourceProducer: false, divergedGenericAliasDecl: AliasCycleResult.none, cascadeWalkRoots: NameRoster.create(), cascadeBreakReached: CascadeWalkBreak.nothingBroke(), interfaceCloneAnswers: DeepCloneAnswerMap.create(), someRecordHoldsAnInterfaceValue: false, recordsHoldingAnInterfaceValueCounted: false, typeNames: TypeNameInterner.createForSource(0), crossFileConstantReads: NameInFileArray.create(), sawParamReassignment: false, byRefForwardingClosed: false, deepCloneAnswers: DeepCloneAnswerMap.create(), transferWalkAnswers: DeepCloneAnswerMap.create(), deepCloneWalkReadInstances: false, sawGlobalNameReturn: false, globalAliasReturnsClosed: false, freshReturnForwardsClosed: false, forwardedStoresClosed: false, hash: Hasher.empty(), hashSource: HashEventSource.whole, authorChainState: Hasher.empty(), libraryChainState: Hasher.empty(), wholeChainState: Hasher.empty(), libraryHash: Hasher.empty(), libraryParseSharing: LibraryParseSharing.undecided, authorNameMeantByTheLibrary: false, storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, projectRootModuleDirectory: "", arrayByteInstance: 0, arrayByteInstanceComputed: false, hasNonCorpusArrayConformer: false, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed()}
 	end 'freshIndexes'
 
 	module function settledDeclarations() returns SettledDeclarations
@@ -21373,6 +21576,7 @@ export type ProgramSignatures
 	function recordParamConsume(name ByteArray, site ByteArray, info ParamConsumeInfo)
 		self.mainThreadSettled().funcParamConsumes.upsert(name, value: info)
 		self.mainThreadSettled().declParamConsumes.upsert(site, value: info)
+		self.forwardedStoresClosed = false
 		var state = mixBytes(mixBytes(Hasher.combined(self.hash, value: DeclShapeParamConsume), bytes: name), bytes: site)
 
 		// The param NAMES ride too: a rename changes which labelled argument a caller slots to a consumed
@@ -21382,8 +21586,12 @@ export type ProgramSignatures
 			let paramName = try info.paramNames.get(i) otherwise panic("recordParamConsume: paramNames.get OOB at {i} despite i < count")
 			let bit = info.isConsumed(i as ParamCount)
 			state = Hasher.combined(mixBytes(state, bytes: paramName), value: ConsumeBitSet if bit else ConsumeBitClear)
-			state = Hasher.combined(state, value: HandedBackBitSet if info.isHandedBack(i as ParamCount) else HandedBackBitClear)
+			state = Hasher.combined(state, value: HandedOnBitSet if info.isHandedOn(i as ParamCount) else HandedOnBitClear)
 		end 'eachName'
+
+		for store in info.forwardedStores 'eachForwardedStore'
+			state = Hasher.combined(mixBytes(mixBytes(mixBytes(Hasher.combined(Hasher.combined(Hasher.combined(Hasher.combined(state, value: store.paramIndex as HashDigest), value: store.shape.ordinal as HashDigest), value: store.calleeParam as HashDigest), value: store.column as HashDigest), bytes: store.typeName), bytes: store.memberName), bytes: store.label), value: ForwardedStoreDiscriminator)
+		end 'eachForwardedStore'
 
 		// The TYPE-PARAMETER FEEDS ride too: which position a parameter feeds decides whether a
 		// caller consumes a managed argument there, so a change to it must move the caller's parse memo. Only a
@@ -21454,6 +21662,355 @@ export type ProgramSignatures
 		let info = try self.settledDeclarations().funcParamConsumes.get(callee) otherwise return CalleeConsume.borrowsAll
 		return CalleeConsume.consumes(info)
 	end 'consumeOf'
+
+	function closeForwardedStores()
+		if self.forwardedStoresClosed 'alreadySettled'
+			return
+		end 'alreadySettled'
+
+		self.forwardedStoresClosed = true
+
+		var memo = PromiseTypeAnswerMap.create()
+		var forwarders = ForwarderArray.create()
+		var siteIndex = ForwarderSiteMap.create()
+		var narrowed = ForwarderArray.create()
+		var emptied = ForwarderArray.create()
+
+		for (key, declarations) in self.settledDeclarations().overloadedDecls 'eachKey'
+			for declaration in declarations 'eachDeclaration'
+				let info = try self.settledDeclarations().declParamConsumes.get(declaration.site) otherwise continue
+
+				if not anyBitSet(info.handedOn) and info.forwardedStores.count() == 0 'nothingPromiseShaped'
+					continue
+				end 'nothingPromiseShaped'
+
+				match self.promiseFactsThatCanCarry(info, declaration: declaration, memo: memo) 'verdict'
+					none then emptied.push(Forwarder.create(key, decl: declaration, info: info))
+					unchanged then self.noteForwarder(forwarders, siteIndex: siteIndex, forwarder: Forwarder.create(key, decl: declaration, info: info))
+					narrower(pruned) then self.noteNarrowedForwarder(narrowed, forwarders: forwarders, siteIndex: siteIndex, forwarder: Forwarder.create(key, decl: declaration, info: pruned))
+				end 'verdict'
+			end 'eachDeclaration'
+		end 'eachKey'
+
+		for forwarder in narrowed 'eachNarrowed'
+			self.publishForwardedInfo(forwarder, info: forwarder.info)
+		end 'eachNarrowed'
+
+		for forwarder in emptied 'eachEmptied'
+			_ = self.mainThreadSettled().declParamConsumes.remove(forwarder.decl.site)
+
+			if self.keyNamesOneDeclaration(forwarder.key) 'theOnlyDeclarationOfItsName'
+				_ = self.mainThreadSettled().funcParamConsumes.remove(forwarder.key)
+			end 'theOnlyDeclarationOfItsName'
+		end 'eachEmptied'
+
+		if forwarders.count() > 0 'somethingForwards'
+			self.propagateForwardedStores(forwarders, siteIndex: siteIndex)
+		end 'somethingForwards'
+	end 'closeForwardedStores'
+
+	function noteForwarder(forwarders ForwarderArray, siteIndex ForwarderSiteMap, forwarder Forwarder)
+		if forwarder.info.forwardedStores.count() == 0 'forwardsNothing'
+			return
+		end 'forwardsNothing'
+
+		siteIndex.upsert(forwarder.decl.site, value: forwarders.count() as ElementIndex)
+		forwarders.push(forwarder)
+	end 'noteForwarder'
+
+	function noteNarrowedForwarder(narrowed ForwarderArray, forwarders ForwarderArray, siteIndex ForwarderSiteMap, forwarder Forwarder)
+		narrowed.push(forwarder)
+		self.noteForwarder(forwarders, siteIndex: siteIndex, forwarder: forwarder)
+	end 'noteNarrowedForwarder'
+
+	function propagateForwardedStores(forwarders ForwarderArray, siteIndex ForwarderSiteMap)
+		let members = self.instanceMethodsByMemberName() if self.anyStoreResolvesByMemberName(forwarders) else DeclarationsByMemberName.create()
+		var handed = ParamBitColumnArray.create()
+		var targets = StoreTargetColumnArray.create()
+		var waiters = FreshReturnWaiterMap.create()
+		var ready = FreshReturnForwarderIndexArray.create()
+
+		for index in 0 upto forwarders.count() 'eachForwarder'
+			view forwarder = try forwarders.get(index) otherwise panic("propagateForwardedStores: forwarders.get OOB at {index}")
+			var bits = forwarder.info.handedOn.clone()
+			var mine = StoreTargetArray.create()
+
+			for store in forwarder.info.forwardedStores 'eachStore'
+				if self.forwardedStoreIsTakenOutright(store, forwarder: forwarder) 'outright'
+					setParamBit(bits, index: store.paramIndex)
+					continue
+				end 'outright'
+
+				for candidate in self.forwardedStoreCandidates(store, forwarder: forwarder, members: members) 'eachCandidate'
+					mine.push(StoreTarget.create(store, callee: candidate.decl.site, receiverOffset: candidate.receiverOffset))
+
+					if siteIndex.contains(candidate.decl.site) 'aForwarderItself'
+						if var waiting = try waiters.get(candidate.decl.site) 'anotherWaiter'
+							waiting.push(index as ElementIndex)
+						end 'anotherWaiter' else 'firstWaiter'
+							var first = FreshReturnForwarderIndexArray.create()
+							first.push(index as ElementIndex)
+							waiters.upsert(candidate.decl.site, value: first)
+						end 'firstWaiter'
+					end 'aForwarderItself'
+				end 'eachCandidate'
+			end 'eachStore'
+
+			handed.push(bits)
+			targets.push(mine)
+			ready.push(index as ElementIndex)
+		end 'eachForwarder'
+
+		while ready.count() > 0 'propagating'
+			let node = try ready.pop() otherwise panic("propagateForwardedStores: pop from a non-empty worklist")
+
+			if not self.forwarderLearnedSomething(node, forwarders: forwarders, handed: handed, targets: targets, siteIndex: siteIndex) 'nothingNew'
+				continue
+			end 'nothingNew'
+
+			view site = (try forwarders.get(node) otherwise panic("propagateForwardedStores: forwarders.get OOB at {node}")).decl.site
+
+			if let waiting = try waiters.get(site) 'someoneWaits'
+				for waiter in waiting 'eachWaiter'
+					ready.push(waiter)
+				end 'eachWaiter'
+			end 'someoneWaits'
+		end 'propagating'
+
+		for index in 0 upto forwarders.count() 'eachResult'
+			view forwarder = try forwarders.get(index) otherwise panic("propagateForwardedStores: forwarders.get OOB at {index}")
+			view bits = try handed.get(index) otherwise panic("propagateForwardedStores: handed.get OOB at {index}")
+			self.publishForwardedInfo(forwarder, info: ParamConsumeInfo.create(forwarder.info.paramNames, bits: forwarder.info.bits, feeds: forwarder.info.feeds, handedOn: bits.clone(), forwardedStores: forwarder.info.forwardedStores))
+		end 'eachResult'
+	end 'propagateForwardedStores'
+
+	function publishForwardedInfo(forwarder Forwarder, info ParamConsumeInfo)
+		self.mainThreadSettled().declParamConsumes.upsert(forwarder.decl.site, value: info)
+
+		if self.keyNamesOneDeclaration(forwarder.key) 'theOnlyDeclarationOfItsName'
+			self.mainThreadSettled().funcParamConsumes.upsert(forwarder.key, value: info)
+		end 'theOnlyDeclarationOfItsName'
+	end 'publishForwardedInfo'
+
+	function forwarderLearnedSomething(node ElementIndex, forwarders ForwarderArray, handed ParamBitColumnArray, targets StoreTargetColumnArray, siteIndex ForwarderSiteMap) returns bool
+		var learned = false
+		var bits = try handed.get(node) otherwise panic("forwarderLearnedSomething: handed.get OOB at {node}")
+
+		for target in try targets.get(node) otherwise panic("forwarderLearnedSomething: targets.get OOB at {node}") 'eachTarget'
+			if bitAt(bits, index: target.store.paramIndex) or not self.forwardedTargetTakes(target, forwarders: forwarders, handed: handed, siteIndex: siteIndex) 'nothingToLearn'
+				continue
+			end 'nothingToLearn'
+
+			setParamBit(bits, index: target.store.paramIndex)
+			learned = true
+		end 'eachTarget'
+
+		return learned
+	end 'forwarderLearnedSomething'
+
+	function forwardedTargetTakes(target StoreTarget, forwarders ForwarderArray, handed ParamBitColumnArray, siteIndex ForwarderSiteMap) returns bool
+		let column = target.store.column + target.receiverOffset
+
+		if let calleeNode = try siteIndex.get(target.callee) 'aForwarderBeingClosed'
+			view callee = try forwarders.get(calleeNode) otherwise panic("forwardedTargetTakes: forwarders.get OOB at {calleeNode}")
+			return forwardedStoreIsTakenBy(callee.info, column: column, label: target.store.label, alsoHandedOn: try handed.get(calleeNode) otherwise panic("forwardedTargetTakes: handed.get OOB at {calleeNode}"))
+		end 'aForwarderBeingClosed'
+
+		return match self.consumeOfDeclaration(target.callee) 'consume'
+			borrowsAll gives false
+			consumes(info) gives forwardedStoreIsTakenBy(info, column: column, label: target.store.label, alsoHandedOn: info.handedOn)
+		end 'consume'
+	end 'forwardedTargetTakes'
+
+	function forwardedStoreIsTakenOutright(store ForwardedStore, forwarder Forwarder) returns bool
+		return match store.shape 'shape'
+			qualified gives store.typeName.count() > 0 and self.namesAUnionCase(store.typeName, caseName: store.memberName)
+			throughParameter gives self.parameterTypeTakesPromiseAt(store, forwarder: forwarder)
+			outright gives true
+			bare or
+			throughSelf or
+			throughSelfType or
+			throughReceiver gives false
+		end 'shape'
+	end 'forwardedStoreIsTakenOutright'
+
+	function parameterTypeTakesPromiseAt(store ForwardedStore, forwarder Forwarder) returns bool
+		let name = try forwarder.info.paramNames.get(store.calleeParam) otherwise return false
+		let index = try forwarder.decl.paramNames.positionOfName(name) otherwise return false
+		let declared = try forwarder.decl.paramTypes.get(index) otherwise return false
+		let aliasName = try self.typeNames.nameOf(typeNameIdOf(declared)) otherwise return false
+
+		return match self.functionAliasFrom(aliasName, readerFilePath: forwarder.decl.declFilePath) 'alias'
+			declared(alias) gives store.column < alias.paramTypes.count() as ParamCount and alias.paramCapabilityAt(store.column) != ParamCapability.lent
+			undeclared gives false
+		end 'alias'
+	end 'parameterTypeTakesPromiseAt'
+
+	function forwardedStoreCandidates(store ForwardedStore, forwarder Forwarder, members DeclarationsByMemberName) returns StoreCandidateArray
+		var found = StoreCandidateArray.create()
+
+		match store.shape 'shape'
+			bare then self.noteCandidates(found, from: self.declarationsVisibleFrom(self.nameABareCallBinds(store.memberName, readerFilePath: forwarder.decl.declFilePath), readerFilePath: forwarder.decl.declFilePath), instanceMethods: false)
+			throughSelf then self.noteCandidates(found, from: self.overloadedDeclsOf(qualifiedMethodName(store.typeName, methodName: store.memberName)), instanceMethods: true)
+			throughSelfType then self.noteCandidates(found, from: self.overloadedDeclsOf(qualifiedMethodName(store.typeName, methodName: store.memberName)), instanceMethods: false)
+			qualified then self.noteQualifiedCandidates(found, store: store, members: members)
+			throughReceiver then self.noteCandidates(found, from: try members.get(store.memberName) otherwise sharedNoOverloadedDecls, instanceMethods: true)
+			throughParameter or
+			outright then break
+		end 'shape'
+
+		return found
+	end 'forwardedStoreCandidates'
+
+	function noteQualifiedCandidates(found StoreCandidateArray, store ForwardedStore, members DeclarationsByMemberName)
+		self.noteCandidates(found, from: self.overloadedDeclsOf(qualifiedMethodName(self.aliasBaseTypeName(store.typeName), methodName: store.memberName)), instanceMethods: false)
+
+		if found.count() == 0 'nameIsNotATypeWithThatMember'
+			self.noteCandidates(found, from: try members.get(store.memberName) otherwise sharedNoOverloadedDecls, instanceMethods: true)
+		end 'nameIsNotATypeWithThatMember'
+	end 'noteQualifiedCandidates'
+
+	function noteCandidates(found StoreCandidateArray, from OverloadedDeclArray, instanceMethods bool)
+		for declaration in from 'eachDeclaration'
+			if declaration.takesReceiver == instanceMethods 'theCallShapeFits'
+				found.push(StoreCandidate.create(declaration, receiverOffset: 1 if instanceMethods else 0))
+			end 'theCallShapeFits'
+		end 'eachDeclaration'
+	end 'noteCandidates'
+
+	function aliasBaseTypeName(name ByteArray) returns ByteArray
+		let instance = try self.liveGenericAliasInstance(name) otherwise return name
+		return self.genericInstanceBaseName(instance)
+	end 'aliasBaseTypeName'
+
+	function instanceMethodsByMemberName() returns DeclarationsByMemberName
+		var members = DeclarationsByMemberName.create()
+
+		for (key, declarations) in self.settledDeclarations().overloadedDecls 'eachKey'
+			let member = unqualifiedMemberOf(key)
+
+			for declaration in declarations 'eachDeclaration'
+				if not declaration.takesReceiver 'notAMethod'
+					continue
+				end 'notAMethod'
+
+				if var named = try members.get(member) 'anotherOfItsName'
+					named.push(declaration)
+				end 'anotherOfItsName' else 'firstOfItsName'
+					var first = OverloadedDeclArray.create()
+					first.push(declaration)
+					members.upsert(member, value: first)
+				end 'firstOfItsName'
+			end 'eachDeclaration'
+		end 'eachKey'
+
+		return members
+	end 'instanceMethodsByMemberName'
+
+	function promiseFactsThatCanCarry(info ParamConsumeInfo, declaration OverloadedDecl, memo PromiseTypeAnswerMap) returns PromiseFactVerdict
+		var kept = false
+		var dropped = false
+
+		for position in 0 upto info.paramNames.count() 'eachHandedOn'
+			if not info.isHandedOn(position as ParamCount) 'notHandedOn'
+				continue
+			end 'notHandedOn'
+
+			if self.parameterMayCarryAPromise(declaration, name: try info.paramNames.get(position) otherwise panic("promiseFactsThatCanCarry: paramNames.get OOB at {position}"), memo: memo) 'aCarrier'
+				kept = true
+			end 'aCarrier' else 'aValue'
+				dropped = true
+			end 'aValue'
+		end 'eachHandedOn'
+
+		for store in info.forwardedStores 'eachStore'
+			if self.parameterMayCarryAPromise(declaration, name: try info.paramNames.get(store.paramIndex) otherwise panic("promiseFactsThatCanCarry: paramNames.get OOB at {store.paramIndex}"), memo: memo) 'aCarrier'
+				kept = true
+			end 'aCarrier' else 'aValue'
+				dropped = true
+			end 'aValue'
+		end 'eachStore'
+
+		if not kept 'nothingPromiseShapedRemains'
+			let ownershipOnly = self.withOnlyPromiseCarriers(info, declaration: declaration, memo: memo)
+			return PromiseFactVerdict.none if ownershipOnly.isEmpty() else PromiseFactVerdict.narrower(ownershipOnly)
+		end 'nothingPromiseShapedRemains'
+
+		if not dropped 'everythingStays'
+			return PromiseFactVerdict.unchanged
+		end 'everythingStays'
+
+		return PromiseFactVerdict.narrower(self.withOnlyPromiseCarriers(info, declaration: declaration, memo: memo))
+	end 'promiseFactsThatCanCarry'
+
+	function withOnlyPromiseCarriers(info ParamConsumeInfo, declaration OverloadedDecl, memo PromiseTypeAnswerMap) returns ParamConsumeInfo
+		var carried = BoolArray.create()
+		var stores = ForwardedStoreArray.create()
+
+		for position in 0 upto info.paramNames.count() 'eachPosition'
+			if info.isHandedOn(position as ParamCount) and self.parameterMayCarryAPromise(declaration, name: try info.paramNames.get(position) otherwise panic("withOnlyPromiseCarriers: paramNames.get OOB at {position}"), memo: memo) 'aCarrierIsHandedOn'
+				setParamBit(carried, index: position as ParamCount)
+			end 'aCarrierIsHandedOn'
+		end 'eachPosition'
+
+		for store in info.forwardedStores 'eachStore'
+			if self.parameterMayCarryAPromise(declaration, name: try info.paramNames.get(store.paramIndex) otherwise panic("withOnlyPromiseCarriers: paramNames.get OOB at {store.paramIndex}"), memo: memo) 'aCarrierForwards'
+				stores.push(store)
+			end 'aCarrierForwards'
+		end 'eachStore'
+
+		return ParamConsumeInfo.create(info.paramNames, bits: info.bits, feeds: info.feeds, handedOn: carried, forwardedStores: stores)
+	end 'withOnlyPromiseCarriers'
+
+	function parameterMayCarryAPromise(declaration OverloadedDecl, name ByteArray, memo PromiseTypeAnswerMap) returns bool
+		let index = try declaration.paramNames.positionOfName(name) otherwise return false
+		let declared = try declaration.paramTypes.get(index) otherwise panic("parameterMayCarryAPromise: paramTypes.get OOB at {index} — the sweep records a type for every parameter name it records")
+
+		if not declaredTypeMayCarryAPromise(declared) 'noPromiseTypeLooksLikeThis'
+			return false
+		end 'noPromiseTypeLooksLikeThis'
+
+		if maxonTypeTag(declared) == ValueTypeTag.typeParameter 'anOpaqueValue'
+			return true
+		end 'anOpaqueValue'
+
+		return self.declaredTypeIsAPromise(declared, memo: memo)
+	end 'parameterMayCarryAPromise'
+
+	function declaredTypeIsAPromise(declared MaxonType, memo PromiseTypeAnswerMap) returns bool
+		if maxonTypeTag(declared) != ValueTypeTag.named 'resolvedWithoutAName'
+			return self.typeIsAGreenThreadHandle(declared, from: self.typeNames)
+		end 'resolvedWithoutAName'
+
+		let id = typeNameIdOf(declared)
+
+		if let known = try memo.get(id) 'alreadyAsked'
+			return known
+		end 'alreadyAsked'
+
+		let answer = self.typeIsAGreenThreadHandle(declared, from: self.typeNames)
+		memo.upsert(id, value: answer)
+		return answer
+	end 'declaredTypeIsAPromise'
+
+	function anyStoreResolvesByMemberName(forwarders ForwarderArray) returns bool
+		for forwarder in forwarders 'eachForwarder'
+			for store in forwarder.info.forwardedStores 'eachStore'
+				if store.shape == ForwardShape.throughReceiver or store.shape == ForwardShape.qualified 'resolvesThroughMembers'
+					return true
+				end 'resolvesThroughMembers'
+			end 'eachStore'
+		end 'eachForwarder'
+
+		return false
+	end 'anyStoreResolvesByMemberName'
+
+	function namesAUnionCase(typeName ByteArray, caseName ByteArray) returns bool
+		match self.enumInAnyFile(typeName) 'declared'
+			declared(layout) then return layout.isUnion and layout.hasCase(caseName)
+			undeclared then return false
+		end 'declared'
+	end 'namesAUnionCase'
 
 	// Add one function's by-reference columns to the index AND fold them into the hash — the one write, for
 	// `recordParamConsume`'s reason, and here that reason is at its strongest: this table decides an ABI, so a
@@ -40626,11 +41183,11 @@ export type ProgramSignatures
 	end 'genericInstanceFieldOffset'
 
 	// ⭐ **DOES A TYPE ARGUMENT REQUIRE A CALL-SITE CONSUME (a MOVE into the box)?** — the CONSUME boundary,
-	// DELIBERATELY NARROWER than both `typeIsManaged` and the box's own field DROP. A TRIVIAL type argument (a
+	// DELIBERATELY NARROWER than the box's own field DROP. A TRIVIAL type argument (a
 	// scalar, or an all-scalar struct/instance like `Point`/`IntBox`) is NOT consumed: the caller keeps it
-	// usable (`PointBox.create(p); … p.getX()`, `generic-trivial-struct-arg`). B2 flips this ONLY for an
-	// argument that itself owns managed heap — a `String`, a struct WITH a managed field, a boxed union, or a
-	// nested instance that owns managed heap — which the box MOVES in and the caller may not reuse.
+	// usable (`PointBox.create(p); … p.getX()`, `generic-trivial-struct-arg`). It answers yes ONLY for an
+	// argument that itself owes a drop — a promise, a `String`, a struct WITH a managed field, a boxed union,
+	// or a nested instance that owes one — which the box MOVES in and the caller may not reuse.
 	//
 	// ⚠ **THIS IS NOT THE DROP BOUNDARY.** A trivial `T` argument treated as a
 	// pure BORROW — not consumed AND not dropped — dangles when the container OUTLIVES the borrowed
@@ -40642,7 +41199,7 @@ export type ProgramSignatures
 	// `Self{item: v}` constructor and the callee-storage `keys.set(…)` alike; a second sink taking no
 	// reference is what makes a trivial-keyed `Map` lose every entry), so the box holds a
 	// REAL second reference — CO-OWNED, not
-	// borrowed. The DROP boundary therefore moved to `typeIsManaged` (`genericInstanceFieldIsManaged`), which
+	// borrowed. The DROP boundary is therefore `typeIsManaged` (`genericInstanceFieldOwesDrop`), which
 	// releases that reference at the box's destruction, while THIS consume boundary stays put so the caller's
 	// own `p` is still live and dropped once. So the three questions now split three ways on a trivial struct:
 	// NOT consumed (borrowed-and-kept), YES dropped (co-owned via retain), and the retain fills the gap between
@@ -40652,13 +41209,17 @@ export type ProgramSignatures
 	export function typeArgIsOwned(t MaxonType) returns bool
 		let tag = maxonTypeTag(t)
 
+		if self.typeIsAGreenThreadHandle(t, from: self.typeNames) 'aGreenThread'
+			return true
+		end 'aGreenThread'
+
 		// `tagIsByteRecord`: a Character argument is an owned record exactly as a String one is.
 		if tagIsByteRecord(tag) 'byteRecord'
 			return true
 		end 'byteRecord'
 
 		if tag == ValueTypeTag.genericInstance 'instance'
-			return self.genericInstanceHasManagedField(genericInstanceIdOf(t))
+			return self.genericInstanceOwesADrop(genericInstanceIdOf(t))
 		end 'instance'
 
 		if not tagMayNameAggregate(tag) 'notNamedStruct'
@@ -40724,7 +41285,7 @@ export type ProgramSignatures
 
 			// A SUPERSEDED spelling consumes nothing — no call site can name it. See
 			// `genericAliasSpellingIsSuperseded`, which records the two walks that reach this arm with one.
-			genericAlias then return self.genericInstanceHasManagedField(try self.liveGenericAliasInstance(name) otherwise return false)
+			genericAlias then return self.genericInstanceOwesADrop(try self.liveGenericAliasInstance(name) otherwise return false)
 
 			// A tuple IS a struct box, and `denotedSlotAggregateName` above has already resolved the alias to
 			// the tuple's own canonical name — so this arm is reached only if that resolution is ever
@@ -40917,7 +41478,7 @@ export type ProgramSignatures
 	// unchanged plain store). HOW the instances are found is `instanceWithTypeArgKind`'s business and is
 	// described there once; what this gate adds is the KIND — each instance's argument at `position` read
 	// through the SAME `typeArgIsOwned` boundary the box's own per-field drop gate
-	// (`genericInstanceFieldIsManaged`) uses, so the reject and the destructor agree on what "managed" means.
+	// (`genericInstanceFieldOwesDrop`) uses, so the reject and the destructor agree on what "managed" means.
 	export function genericTypeFieldHasManagedInstantiation(param TypeParamId) returns bool
 		return self.anyInstanceTypeArgHasKind(param, kind: TypeArgInstantiationKind.consumeMoved)
 	end 'genericTypeFieldHasManagedInstantiation'
@@ -40992,7 +41553,7 @@ export type ProgramSignatures
 	// ⭐ **DOES ANY INTERNED INSTANCE OF THE TYPE THAT DECLARES `param` MAKE THAT PARAMETER A CO-OWNED
 	// TRIVIAL STRUCT?** A trivial struct/instance argument (`Box with
 	// Point`) is BORROWED at the call site (`typeArgIsOwned` false — the caller keeps it) yet CO-OWNED by the
-	// box (`typeIsManaged` true — `genericInstanceFieldIsManaged` drops it, balanced by the feed's
+	// box (`typeIsManaged` true — `genericInstanceFieldOwesDrop` drops it, balanced by the feed's
 	// `__mm_retain`). That co-ownership is sound for a field set ONCE at construction, but a SHARED-body
 	// REASSIGNMENT of it (`self.saved = next`) has no way to drop the field's OLD co-owned value: the opaque
 	// body cannot emit a trivial struct's `__mm_decref` directly, and the two gates the reassign site routes
@@ -41371,7 +41932,8 @@ export type ProgramSignatures
 		return self.declaredSlotType(try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.declaredSlotTypeOfField: fieldTypes.get OOB at {index} despite index < fieldCount"), into: self.typeNames, slotScopeFilePath: layout.declFilePath)
 	end 'declaredSlotTypeOfField'
 
-	// Is instance field `index` DROPPED by the box once its args are substituted — the per-field drop gate.
+	// Is instance field `index` a managed record once its args are substituted — the per-field drop gate's
+	// managed half, to which `genericInstanceFieldOwesDrop` adds a promise.
 	// A type-PARAMETER field is dropped iff its substituted argument is a HEAP AGGREGATE (`typeIsManaged`), the
 	// SAME gate a DIRECT field uses. That is DELIBERATELY BROADER than the CONSUME boundary (`typeArgIsOwned`):
 	// a trivial `Box with Point` is CO-OWNED, not consumed — its `Point` is `__mm_retain`'d at the FEED
@@ -41403,6 +41965,10 @@ export type ProgramSignatures
 	export function genericInstanceFieldIsManaged(id GenericInstanceId, index FieldIndex) returns bool
 		return self.typeIsManaged(self.substituteInstanceFieldType(id, index: index), from: self.typeNames)
 	end 'genericInstanceFieldIsManaged'
+
+	export function genericInstanceFieldOwesDrop(id GenericInstanceId, index FieldIndex) returns bool
+		return self.typeOwesDrop(self.substituteInstanceFieldType(id, index: index), from: self.typeNames)
+	end 'genericInstanceFieldOwesDrop'
 
 	// The drop callee for managed instance field `index` — routed through the shared `managedFieldDropCallee`
 	// over the SUBSTITUTED concrete type (a String → `__str_decref`, a struct/boxed-union → its
@@ -41444,9 +42010,10 @@ export type ProgramSignatures
 		return maxonTypeTag(self.substituteInstanceFieldType(id, index: index)) == ValueTypeTag.interfaceRef
 	end 'genericInstanceFieldIsExistential'
 
-	// Does instance `id` own ANY managed field once substituted — the gate deciding whether it needs a
-	// `__destruct_<instance>` cascade at all (else its box drop is the trivial `__mm_decref`).
-	export function genericInstanceHasManagedField(id GenericInstanceId) returns bool
+	// Does ANY field of instance `id` owe a drop once substituted (`typeOwesDrop`: a managed record or a
+	// promise) — the gate deciding whether it needs a `__destruct_<instance>` cascade at all (else its box
+	// drop is the trivial `__mm_decref`).
+	export function genericInstanceOwesADrop(id GenericInstanceId) returns bool
 		// A base-layout-less instance owns no field this cascade could drop. An `Array`/`Set` instance is
 		// dropped through its own box-drop callee (`__managed_decref` / a `__destruct_<T>` cascade, routed by
 		// `genericInstanceBoxDropCallee`), NOT a synthesized per-instance `__destruct_<mangled>`, so `false`
@@ -41473,13 +42040,13 @@ export type ProgramSignatures
 		end 'noFields'
 
 		for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
-			if self.genericInstanceFieldIsManaged(id, index: i) 'managed'
+			if self.genericInstanceFieldOwesDrop(id, index: i) 'owesADrop'
 				return true
-			end 'managed'
+			end 'owesADrop'
 		end 'eachField'
 
 		return false
-	end 'genericInstanceHasManagedField'
+	end 'genericInstanceOwesADrop'
 
 	// ⭐ **THE DROP CALLEE FOR AN OWNED INSTANCE BOX** — its own `__destruct_<mangled>` cascade when it owns
 	// managed heap, else the trivial `__mm_decref`. The generic-instance twin of `unionBoxDropCallee`, and
@@ -41543,7 +42110,7 @@ export type ProgramSignatures
 
 		// ⭐ **THE OMISSION A ROUTER WOULD OTHERWISE SWALLOW, MADE LOUD** — its two sibling routers
 		// (`builtinGenericTypeParamCount`, `genericInstanceBoxSize`) panic on a builtin they have no arm
-		// for, and so does this one. A builtin base has NO layout, so `genericInstanceHasManagedField`
+		// for, and so does this one. A builtin base has NO layout, so `genericInstanceOwesADrop`
 		// answers `false` for it by its own early-out and a fallthrough would hand back `__mm_decref` — which frees
 		// the record and walks NOTHING, leaking every buffer, node and managed element the container links. A
 		// leak with no diagnostic, in the one family where a fifth container is the expected next change.
@@ -41554,7 +42121,7 @@ export type ProgramSignatures
 		// A generic service's handle lands here, and it carries its instantiation, so the tag decides and no
 		// name is asked. Its one field is the mailbox word (`buildServiceHandleStruct` panics on a second), so
 		// it takes the plain decref, and the box's own destructor releases the mailbox.
-		if self.genericInstanceHasManagedField(id) 'managed'
+		if self.genericInstanceOwesADrop(id) 'managed'
 			return destructorSymbol(self.mangleGenericInstance(id))
 		end 'managed'
 
@@ -41595,7 +42162,7 @@ export type ProgramSignatures
 				continue
 			end 'noFields'
 
-			if not self.genericInstanceFieldIsManaged(id, index: index) 'thisInstantiationOwesNoDrop'
+			if not self.genericInstanceFieldOwesDrop(id, index: index) 'thisInstantiationOwesNoDrop'
 				return true
 			end 'thisInstantiationOwesNoDrop'
 
@@ -45636,7 +46203,7 @@ export type ProgramSignatures
 	end 'adopting'
 
 	static function reassembled(template ProgramSignatures, own SettledDeclarations, shared SettledDeclarations, readsPublishedView bool) returns ProgramSignatures
-		return Self{ownSettled: own, sharedSettled: shared, readsPublishedView: readsPublishedView, structSlots: template.structSlots, mintedTupleLayouts: template.mintedTupleLayouts, published: template.published, genericInstances: template.genericInstances, compiledInstanceNames: template.compiledInstanceNames, canonicalInstanceNames: template.canonicalInstanceNames, substitutedInstanceOrigins: template.substitutedInstanceOrigins, canonicalInstanceNameIndex: template.canonicalInstanceNameIndex, canonicalNamesIndexedThrough: template.canonicalNamesIndexedThrough, tupleCanonicalNames: template.tupleCanonicalNames, tupleElementTokens: template.tupleElementTokens, tupleElementTokenOwners: template.tupleElementTokenOwners, tupleAliases: template.tupleAliases, multiplyDeclaredTupleAliases: template.multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: template.sawAggregateArrayLiteral, sawListFromConstruction: template.sawListFromConstruction, sawEnumAllCasesAccess: template.sawEnumAllCasesAccess, sawIntArrayLiteral: template.sawIntArrayLiteral, sawByteStringLiteral: template.sawByteStringLiteral, sawStringArrayLiteral: template.sawStringArrayLiteral, sawSetFromConstruction: template.sawSetFromConstruction, sawManagedFileProducer: template.sawManagedFileProducer, sawManagedDirectoryProducer: template.sawManagedDirectoryProducer, sawManagedSocketProducer: template.sawManagedSocketProducer, sawManagedHostResourceProducer: template.sawManagedHostResourceProducer, divergedGenericAliasDecl: template.divergedGenericAliasDecl, cascadeWalkRoots: template.cascadeWalkRoots, cascadeBreakReached: template.cascadeBreakReached, interfaceCloneAnswers: template.interfaceCloneAnswers, someRecordHoldsAnInterfaceValue: template.someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: template.recordsHoldingAnInterfaceValueCounted, typeNames: template.typeNames, crossFileConstantReads: template.crossFileConstantReads, sawParamReassignment: template.sawParamReassignment, byRefForwardingClosed: template.byRefForwardingClosed, sawGlobalNameReturn: template.sawGlobalNameReturn, globalAliasReturnsClosed: template.globalAliasReturnsClosed, deepCloneAnswers: template.deepCloneAnswers, deepCloneWalkReadInstances: template.deepCloneWalkReadInstances, transferWalkAnswers: template.transferWalkAnswers, freshReturnForwardsClosed: template.freshReturnForwardsClosed, hash: template.hash, hashSource: template.hashSource, authorChainState: template.authorChainState, libraryChainState: template.libraryChainState, wholeChainState: template.wholeChainState, libraryHash: template.libraryHash, libraryParseSharing: template.libraryParseSharing, authorNameMeantByTheLibrary: template.authorNameMeantByTheLibrary, storedGlobalCount: template.storedGlobalCount, allFilesFolded: template.allFilesFolded, inlineGeometrySettled: template.inlineGeometrySettled, rangeContestsSettled: template.rangeContestsSettled, rootIsUnderStdlibDirectory: template.rootIsUnderStdlibDirectory, projectRootModuleDirectory: template.projectRootModuleDirectory, arrayByteInstance: template.arrayByteInstance, arrayByteInstanceComputed: template.arrayByteInstanceComputed, spawnsAnyServiceSettled: template.spawnsAnyServiceSettled, spawnsAnyServiceAnswer: template.spawnsAnyServiceAnswer, byRefMasksSettled: template.byRefMasksSettled, byRefMaskColumn: template.byRefMaskColumn, witnessByRefMasks: template.witnessByRefMasks, byRefConventionDigestAnswer: template.byRefConventionDigestAnswer, functionValuedFieldNames: template.functionValuedFieldNames, liveDefaultKeyNames: template.liveDefaultKeyNames, liveKeyAdoptions: template.liveKeyAdoptions, hasNonCorpusArrayConformer: template.hasNonCorpusArrayConformer, recordsTypeClaims: template.recordsTypeClaims, baseline: template.baseline, journal: template.journal, rowSetLog: RowSetLog.closed(), holdsAMerge: template.holdsAMerge, genericInstancesDigest: template.genericInstancesDigest}
+		return Self{ownSettled: own, sharedSettled: shared, readsPublishedView: readsPublishedView, structSlots: template.structSlots, mintedTupleLayouts: template.mintedTupleLayouts, published: template.published, genericInstances: template.genericInstances, compiledInstanceNames: template.compiledInstanceNames, canonicalInstanceNames: template.canonicalInstanceNames, substitutedInstanceOrigins: template.substitutedInstanceOrigins, canonicalInstanceNameIndex: template.canonicalInstanceNameIndex, canonicalNamesIndexedThrough: template.canonicalNamesIndexedThrough, tupleCanonicalNames: template.tupleCanonicalNames, tupleElementTokens: template.tupleElementTokens, tupleElementTokenOwners: template.tupleElementTokenOwners, tupleAliases: template.tupleAliases, multiplyDeclaredTupleAliases: template.multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: template.sawAggregateArrayLiteral, sawListFromConstruction: template.sawListFromConstruction, sawEnumAllCasesAccess: template.sawEnumAllCasesAccess, sawIntArrayLiteral: template.sawIntArrayLiteral, sawByteStringLiteral: template.sawByteStringLiteral, sawStringArrayLiteral: template.sawStringArrayLiteral, sawSetFromConstruction: template.sawSetFromConstruction, sawManagedFileProducer: template.sawManagedFileProducer, sawManagedDirectoryProducer: template.sawManagedDirectoryProducer, sawManagedSocketProducer: template.sawManagedSocketProducer, sawManagedHostResourceProducer: template.sawManagedHostResourceProducer, divergedGenericAliasDecl: template.divergedGenericAliasDecl, cascadeWalkRoots: template.cascadeWalkRoots, cascadeBreakReached: template.cascadeBreakReached, interfaceCloneAnswers: template.interfaceCloneAnswers, someRecordHoldsAnInterfaceValue: template.someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: template.recordsHoldingAnInterfaceValueCounted, typeNames: template.typeNames, crossFileConstantReads: template.crossFileConstantReads, sawParamReassignment: template.sawParamReassignment, byRefForwardingClosed: template.byRefForwardingClosed, sawGlobalNameReturn: template.sawGlobalNameReturn, globalAliasReturnsClosed: template.globalAliasReturnsClosed, deepCloneAnswers: template.deepCloneAnswers, deepCloneWalkReadInstances: template.deepCloneWalkReadInstances, transferWalkAnswers: template.transferWalkAnswers, freshReturnForwardsClosed: template.freshReturnForwardsClosed, forwardedStoresClosed: template.forwardedStoresClosed, hash: template.hash, hashSource: template.hashSource, authorChainState: template.authorChainState, libraryChainState: template.libraryChainState, wholeChainState: template.wholeChainState, libraryHash: template.libraryHash, libraryParseSharing: template.libraryParseSharing, authorNameMeantByTheLibrary: template.authorNameMeantByTheLibrary, storedGlobalCount: template.storedGlobalCount, allFilesFolded: template.allFilesFolded, inlineGeometrySettled: template.inlineGeometrySettled, rangeContestsSettled: template.rangeContestsSettled, rootIsUnderStdlibDirectory: template.rootIsUnderStdlibDirectory, projectRootModuleDirectory: template.projectRootModuleDirectory, arrayByteInstance: template.arrayByteInstance, arrayByteInstanceComputed: template.arrayByteInstanceComputed, spawnsAnyServiceSettled: template.spawnsAnyServiceSettled, spawnsAnyServiceAnswer: template.spawnsAnyServiceAnswer, byRefMasksSettled: template.byRefMasksSettled, byRefMaskColumn: template.byRefMaskColumn, witnessByRefMasks: template.witnessByRefMasks, byRefConventionDigestAnswer: template.byRefConventionDigestAnswer, functionValuedFieldNames: template.functionValuedFieldNames, liveDefaultKeyNames: template.liveDefaultKeyNames, liveKeyAdoptions: template.liveKeyAdoptions, hasNonCorpusArrayConformer: template.hasNonCorpusArrayConformer, recordsTypeClaims: template.recordsTypeClaims, baseline: template.baseline, journal: template.journal, rowSetLog: RowSetLog.closed(), holdsAMerge: template.holdsAMerge, genericInstancesDigest: template.genericInstancesDigest}
 	end 'reassembled'
 
 	export function releaseTypeNameViews()
@@ -45658,6 +46225,7 @@ export type ProgramSignatures
 		self.closeByRefForwarding()
 		self.settleByRefConventions()
 		self.closeFreshReturnForwards()
+		self.closeForwardedStores()
 		_ = self.conformerIndexWithExtensions()
 		self.indexCanonicalInstanceNames()
 
@@ -46518,6 +47086,7 @@ export type ProgramSignatures
 		fingerprint.note("funcReturnsFreshRecord", value: declarations.funcReturnsFreshRecord.count())
 		fingerprint.note("funcFreshReturnForwards", value: declarations.funcFreshReturnForwards.count())
 		fingerprint.noteFlag("freshReturnForwardsClosed", flag: self.freshReturnForwardsClosed)
+		fingerprint.noteFlag("forwardedStoresClosed", flag: self.forwardedStoresClosed)
 		fingerprint.note("funcFreshReturningDeclarationCounts", value: declarations.funcFreshReturningDeclarationCounts.count())
 		fingerprint.note("funcConstructsFromParams", value: declarations.funcConstructsFromParams.count())
 		fingerprint.note("funcConstructingDeclarationCounts", value: declarations.funcConstructingDeclarationCounts.count())
@@ -46656,6 +47225,7 @@ export type ProgramSignatures
 		writer.flag(self.deepCloneWalkReadInstances)
 		cacheWriteDeepCloneAnswerMap(writer, value: self.transferWalkAnswers)
 		writer.flag(self.freshReturnForwardsClosed)
+		writer.flag(self.forwardedStoresClosed)
 		writer.unsigned(self.hash as CacheUnsigned)
 		writer.unsigned(self.hashSource.ordinal as CacheUnsigned)
 		writer.unsigned(self.authorChainState as CacheUnsigned)
@@ -46728,6 +47298,7 @@ export type ProgramSignatures
 		let f_deepCloneWalkReadInstances = try reader.flag()
 		let f_transferWalkAnswers = try cacheReadDeepCloneAnswerMap(reader)
 		let f_freshReturnForwardsClosed = try reader.flag()
+		let f_forwardedStoresClosed = try reader.flag()
 		let f_hash = (try reader.unsigned()) as HashDigest
 		let f_hashSource = try cacheReadHashEventSource(reader)
 		let f_authorChainState = (try reader.unsigned()) as HashDigest
@@ -46758,11 +47329,11 @@ export type ProgramSignatures
 		let f_holdsAMerge = try reader.flag()
 		let f_genericInstancesDigest = (try reader.unsigned()) as HashDigest
 
-		return Self{ownSettled: f_ownSettled, sharedSettled: SettledDeclarations.unused(), readsPublishedView: false, structSlots: f_structSlots, mintedTupleLayouts: StructLayoutArray.create(), published: SettledCellArray.create(), genericInstances: f_genericInstances, compiledInstanceNames: f_compiledInstanceNames, canonicalInstanceNames: f_canonicalInstanceNames, substitutedInstanceOrigins: f_substitutedInstanceOrigins, canonicalInstanceNameIndex: f_canonicalInstanceNameIndex, canonicalNamesIndexedThrough: f_canonicalNamesIndexedThrough, tupleCanonicalNames: f_tupleCanonicalNames, tupleElementTokens: f_tupleElementTokens, tupleElementTokenOwners: f_tupleElementTokenOwners, tupleAliases: f_tupleAliases, multiplyDeclaredTupleAliases: f_multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: f_sawAggregateArrayLiteral, sawListFromConstruction: f_sawListFromConstruction, sawEnumAllCasesAccess: f_sawEnumAllCasesAccess, sawIntArrayLiteral: f_sawIntArrayLiteral, sawByteStringLiteral: f_sawByteStringLiteral, sawStringArrayLiteral: f_sawStringArrayLiteral, sawSetFromConstruction: f_sawSetFromConstruction, sawManagedFileProducer: f_sawManagedFileProducer, sawManagedDirectoryProducer: f_sawManagedDirectoryProducer, sawManagedSocketProducer: f_sawManagedSocketProducer, sawManagedHostResourceProducer: f_sawManagedHostResourceProducer, divergedGenericAliasDecl: f_divergedGenericAliasDecl, cascadeWalkRoots: f_cascadeWalkRoots, cascadeBreakReached: f_cascadeBreakReached, interfaceCloneAnswers: f_interfaceCloneAnswers, someRecordHoldsAnInterfaceValue: f_someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: f_recordsHoldingAnInterfaceValueCounted, typeNames: f_typeNames, crossFileConstantReads: f_crossFileConstantReads, sawParamReassignment: f_sawParamReassignment, byRefForwardingClosed: f_byRefForwardingClosed, sawGlobalNameReturn: f_sawGlobalNameReturn, globalAliasReturnsClosed: f_globalAliasReturnsClosed, deepCloneAnswers: f_deepCloneAnswers, deepCloneWalkReadInstances: f_deepCloneWalkReadInstances, transferWalkAnswers: f_transferWalkAnswers, freshReturnForwardsClosed: f_freshReturnForwardsClosed, hash: f_hash, hashSource: f_hashSource, authorChainState: f_authorChainState, libraryChainState: f_libraryChainState, wholeChainState: f_wholeChainState, libraryHash: f_libraryHash, libraryParseSharing: f_libraryParseSharing, authorNameMeantByTheLibrary: f_authorNameMeantByTheLibrary, storedGlobalCount: f_storedGlobalCount, allFilesFolded: f_allFilesFolded, inlineGeometrySettled: f_inlineGeometrySettled, rangeContestsSettled: f_rangeContestsSettled, rootIsUnderStdlibDirectory: f_rootIsUnderStdlibDirectory, projectRootModuleDirectory: f_projectRootModuleDirectory, arrayByteInstance: f_arrayByteInstance, arrayByteInstanceComputed: f_arrayByteInstanceComputed, spawnsAnyServiceSettled: f_spawnsAnyServiceSettled, spawnsAnyServiceAnswer: f_spawnsAnyServiceAnswer, byRefMasksSettled: f_byRefMasksSettled, byRefMaskColumn: f_byRefMaskColumn, functionValuedFieldNames: f_functionValuedFieldNames, witnessByRefMasks: f_witnessByRefMasks, byRefConventionDigestAnswer: f_byRefConventionDigestAnswer, liveDefaultKeyNames: f_liveDefaultKeyNames, liveKeyAdoptions: f_liveKeyAdoptions, hasNonCorpusArrayConformer: f_hasNonCorpusArrayConformer, recordsTypeClaims: f_recordsTypeClaims, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed(), holdsAMerge: f_holdsAMerge, genericInstancesDigest: f_genericInstancesDigest}
+		return Self{ownSettled: f_ownSettled, sharedSettled: SettledDeclarations.unused(), readsPublishedView: false, structSlots: f_structSlots, mintedTupleLayouts: StructLayoutArray.create(), published: SettledCellArray.create(), genericInstances: f_genericInstances, compiledInstanceNames: f_compiledInstanceNames, canonicalInstanceNames: f_canonicalInstanceNames, substitutedInstanceOrigins: f_substitutedInstanceOrigins, canonicalInstanceNameIndex: f_canonicalInstanceNameIndex, canonicalNamesIndexedThrough: f_canonicalNamesIndexedThrough, tupleCanonicalNames: f_tupleCanonicalNames, tupleElementTokens: f_tupleElementTokens, tupleElementTokenOwners: f_tupleElementTokenOwners, tupleAliases: f_tupleAliases, multiplyDeclaredTupleAliases: f_multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: f_sawAggregateArrayLiteral, sawListFromConstruction: f_sawListFromConstruction, sawEnumAllCasesAccess: f_sawEnumAllCasesAccess, sawIntArrayLiteral: f_sawIntArrayLiteral, sawByteStringLiteral: f_sawByteStringLiteral, sawStringArrayLiteral: f_sawStringArrayLiteral, sawSetFromConstruction: f_sawSetFromConstruction, sawManagedFileProducer: f_sawManagedFileProducer, sawManagedDirectoryProducer: f_sawManagedDirectoryProducer, sawManagedSocketProducer: f_sawManagedSocketProducer, sawManagedHostResourceProducer: f_sawManagedHostResourceProducer, divergedGenericAliasDecl: f_divergedGenericAliasDecl, cascadeWalkRoots: f_cascadeWalkRoots, cascadeBreakReached: f_cascadeBreakReached, interfaceCloneAnswers: f_interfaceCloneAnswers, someRecordHoldsAnInterfaceValue: f_someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: f_recordsHoldingAnInterfaceValueCounted, typeNames: f_typeNames, crossFileConstantReads: f_crossFileConstantReads, sawParamReassignment: f_sawParamReassignment, byRefForwardingClosed: f_byRefForwardingClosed, sawGlobalNameReturn: f_sawGlobalNameReturn, globalAliasReturnsClosed: f_globalAliasReturnsClosed, deepCloneAnswers: f_deepCloneAnswers, deepCloneWalkReadInstances: f_deepCloneWalkReadInstances, transferWalkAnswers: f_transferWalkAnswers, freshReturnForwardsClosed: f_freshReturnForwardsClosed, forwardedStoresClosed: f_forwardedStoresClosed, hash: f_hash, hashSource: f_hashSource, authorChainState: f_authorChainState, libraryChainState: f_libraryChainState, wholeChainState: f_wholeChainState, libraryHash: f_libraryHash, libraryParseSharing: f_libraryParseSharing, authorNameMeantByTheLibrary: f_authorNameMeantByTheLibrary, storedGlobalCount: f_storedGlobalCount, allFilesFolded: f_allFilesFolded, inlineGeometrySettled: f_inlineGeometrySettled, rangeContestsSettled: f_rangeContestsSettled, rootIsUnderStdlibDirectory: f_rootIsUnderStdlibDirectory, projectRootModuleDirectory: f_projectRootModuleDirectory, arrayByteInstance: f_arrayByteInstance, arrayByteInstanceComputed: f_arrayByteInstanceComputed, spawnsAnyServiceSettled: f_spawnsAnyServiceSettled, spawnsAnyServiceAnswer: f_spawnsAnyServiceAnswer, byRefMasksSettled: f_byRefMasksSettled, byRefMaskColumn: f_byRefMaskColumn, functionValuedFieldNames: f_functionValuedFieldNames, witnessByRefMasks: f_witnessByRefMasks, byRefConventionDigestAnswer: f_byRefConventionDigestAnswer, liveDefaultKeyNames: f_liveDefaultKeyNames, liveKeyAdoptions: f_liveKeyAdoptions, hasNonCorpusArrayConformer: f_hasNonCorpusArrayConformer, recordsTypeClaims: f_recordsTypeClaims, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed(), holdsAMerge: f_holdsAMerge, genericInstancesDigest: f_genericInstancesDigest}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize608
-		return sizeof(ProgramSignatures) as CacheSize608
+	static function cacheLayoutBytes() returns CacheSize616
+		return sizeof(ProgramSignatures) as CacheSize616
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

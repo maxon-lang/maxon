@@ -221,3 +221,54 @@ export function promiseStorageThrows(signatures ProgramSignatures, gid GenericIn
 
 	return ThrowsClause.throwing(String.from(signatures.instanceArgDisplayName(gid, position: PromiseErrorArgPosition)))
 end 'promiseStorageThrows'
+
+export let PromiseOfNothingDisplay = "nothing"
+
+export function promiseClaimText(result String, throwing ThrowsClause) returns String
+	return "{result}{promiseErrorClaim(throwing)}"
+end 'promiseClaimText'
+
+function promiseErrorClaim(throwing ThrowsClause) returns String
+	return match throwing 'error'
+		none gives ""
+		throwing(name) gives " throwing '{name}'"
+	end 'error'
+end 'promiseErrorClaim'
+
+export function promiseStorageMismatchDetail(held String, slot String, slotClaim String) returns String
+	return "{held} cannot be stored in '{slot}', which holds {slotClaim}"
+end 'promiseStorageMismatchDetail'
+
+export function promiseHeldDisplay(claim String) returns String
+	return "a promise of {claim}"
+end 'promiseHeldDisplay'
+
+export function throwsClausesAgree(clause ThrowsClause, other ThrowsClause) returns bool
+	return match clause 'clause'
+		none gives not throwsClauseIsThrowing(other)
+		throwing(name) gives throwsClauseNames(other, name: name)
+	end 'clause'
+end 'throwsClausesAgree'
+
+function throwsClauseNames(clause ThrowsClause, name String) returns bool
+	return match clause 'clause'
+		none gives false
+		throwing(declared) gives declared.equals(name)
+	end 'clause'
+end 'throwsClauseNames'
+
+export function declaredTypeMayCarryAPromise(declared MaxonType) returns bool
+	let tag = maxonTypeTag(declared)
+	return tag == ValueTypeTag.named or tag == ValueTypeTag.genericInstance or tag == ValueTypeTag.typeParameter
+end 'declaredTypeMayCarryAPromise'
+
+export function promiseStoragesAgree(signatures ProgramSignatures, a GenericInstanceId, b GenericInstanceId) returns bool
+	if a == b 'sameInstance'
+		return true
+	end 'sameInstance'
+
+	let aResult = signatures.canonicalTypeArg(signatures.substitutedInstanceArg(a, position: PromiseResultArgPosition))
+	let bResult = signatures.canonicalTypeArg(signatures.substitutedInstanceArg(b, position: PromiseResultArgPosition))
+
+	return maxonTypesDenoteSame(aResult, b: bResult) and signatures.instanceArgBrand(a, position: PromiseResultArgPosition).equals(signatures.instanceArgBrand(b, position: PromiseResultArgPosition)) and throwsClausesAgree(promiseStorageThrows(signatures, gid: a), other: promiseStorageThrows(signatures, gid: b))
+end 'promiseStoragesAgree'

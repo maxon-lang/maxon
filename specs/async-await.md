@@ -660,7 +660,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3098: specs/async-await/async-await.error.storage-erases-error-type.maxon:17:7: cannot store a promise from a function that throws 'TaskError' in 'BadPromise': it names the result type only, which would erase the error type — declare the storage as 'Promise with (T, TaskError)' so 'try await' can bind and release the error
+error E3098: specs/async-await/async-await.error.storage-erases-error-type.maxon:17:7: a promise of 'Integer' throwing 'TaskError' cannot be stored in 'BadPromise', which holds 'Integer'
 ```
 
 <!-- test: async-await.error.storage-names-wrong-error-type -->
@@ -692,7 +692,2363 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3098: specs/async-await/async-await.error.storage-names-wrong-error-type.maxon:21:7: 'WrongPromise' names the error type 'OtherError', but this promise's function throws 'TaskError'
+error E3098: specs/async-await/async-await.error.storage-names-wrong-error-type.maxon:21:7: a promise of 'Integer' throwing 'TaskError' cannot be stored in 'WrongPromise', which holds 'Integer' throwing 'OtherError'
+```
+
+<!-- test: async-await.a-promise-parameter-can-be-stored-in-an-array -->
+A promise a function was handed is the function's to store: its declared type states what it carries, so a
+container whose type agrees takes it, exactly as it takes a spawn made in the function. The array then owns
+the thread, and the loop awaits it out of the array.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function park(p IntPromise) returns Integer
+	var pending = IntPromiseArray.create()
+	pending.push(p)
+
+	var sum = 0 as Integer
+
+	for q in pending 'drain'
+		sum = sum + await q
+	end 'drain'
+
+	return sum
+end 'park'
+
+function main() returns ExitCode
+	let total = park(async work())
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: async-await.a-promise-parameter-can-be-stored-in-a-field -->
+A promise parameter is stored in a field by a struct literal, by `self.p = next` in a method and by `h.p = next`
+in a function. Each store releases the thread the field was holding, so the two promises that were replaced are
+dropped and only the last is awaited.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+type Holder
+	public var p as IntPromise
+
+	static function of(p IntPromise) returns Self
+		return Self{p: p}
+	end 'of'
+
+	function rearm(next IntPromise)
+		self.p = next
+	end 'rearm'
+end 'Holder'
+
+function swap(h Holder, next IntPromise)
+	h.p = next
+end 'swap'
+
+function main() returns ExitCode
+	var holder = Holder.of(async work())
+	holder.rearm(async work())
+	swap(holder, next: async work())
+	print("{await holder.p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: async-await.error.a-promise-parameter-is-stored-only-under-a-type-that-agrees-with-its-own -->
+A promise parameter is checked against its DECLARED type, the same two comparisons a spawn is checked
+against its callee: the result type, then the error type. A `Promise with String` parameter stored in an
+array of `Promise with Integer` would hand `await` a string under an integer's name.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias StrPromise = Promise with String
+typealias IntPromiseArray = Array with IntPromise
+
+function park(p StrPromise) returns Integer
+	var pending = IntPromiseArray.create()
+	pending.push(p)
+	return 0
+end 'park'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3098: specs/async-await/async-await.error.a-promise-parameter-is-stored-only-under-a-type-that-agrees-with-its-own.maxon:9:10: a promise of 'String' cannot be stored in 'IntPromise', which holds 'Integer'
+```
+
+<!-- test: async-await.error.a-throwing-promise-parameter-cannot-be-stored-under-a-type-that-omits-its-error -->
+A parameter typed `Promise with (T, E)` throws `E`, so storing it in a `Promise with T` would erase the
+error type exactly as storing a throwing spawn does.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias ThrowingPromise = Promise with (Integer, TaskError)
+typealias IntPromiseArray = Array with IntPromise
+
+enum TaskError implements Error
+	crashed
+end 'TaskError'
+
+function park(p ThrowingPromise) returns Integer
+	var pending = IntPromiseArray.create()
+	pending.push(p)
+	return 0
+end 'park'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3098: specs/async-await/async-await.error.a-throwing-promise-parameter-cannot-be-stored-under-a-type-that-omits-its-error.maxon:13:10: a promise of 'Integer' throwing 'TaskError' cannot be stored in 'IntPromise', which holds 'Integer'
+```
+
+<!-- test: async-await.a-promise-a-helper-returned-can-be-stored-in-an-array -->
+A promise the storing function owns is storable whatever made it, so a helper's return goes into an array like a spawn made on the spot. The array then owns the thread, and the loop awaits it out of the array.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function ask() returns IntPromise
+	return async work()
+end 'ask'
+
+function main() returns ExitCode
+	var pending = IntPromiseArray.create()
+	pending.push(ask())
+	pending.push(ask())
+
+	var sum = 0 as Integer
+
+	for p in pending 'drain'
+		sum = sum + await p
+	end 'drain'
+
+	print("{sum}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+14
+```
+
+<!-- test: async-await.a-promise-a-helper-returned-can-be-stored-in-a-field -->
+A promise field takes a helper's return as it takes a spawn, and the store releases the thread the field held.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function ask() returns IntPromise
+	return async work()
+end 'ask'
+
+type Cell
+	public var p as IntPromise
+
+	static function of(p IntPromise) returns Self
+		return Self{p: p}
+	end 'of'
+end 'Cell'
+
+function main() returns ExitCode
+	var cell = Cell.of(async work())
+	cell.p = ask()
+	print("{await cell.p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: async-await.a-promise-a-helper-returned-can-be-stored-in-an-array-held-by-a-field -->
+A container held in a field is the same storage.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function ask() returns IntPromise
+	return async work()
+end 'ask'
+
+type Holder
+	public var pending as IntPromiseArray
+
+	static function create() returns Self
+		return Self{pending: IntPromiseArray.create()}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	var holder = Holder.create()
+	holder.pending.push(ask())
+
+	var sum = 0 as Integer
+
+	for p in holder.pending 'drain'
+		sum = sum + await p
+	end 'drain'
+
+	print("{sum}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: async-await.a-promise-a-helper-returned-can-be-stored-in-a-map -->
+A map keeps the promises it is given and drops the ones nobody took out. A map has no slot a read could name, so the promise stays in it and the run is leak-free.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias PromiseMap = Map with (String, IntPromise)
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function ask() returns IntPromise
+	return async work()
+end 'ask'
+
+function main() returns ExitCode
+	var m = PromiseMap.create()
+	m.upsert("a", value: ask())
+	m.upsert("b", value: async work())
+	print("{m.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2
+```
+
+<!-- test: async-await.error.a-promise-stored-in-a-map-cannot-be-read-back-out -->
+A map has no slot a read could name, so reading a promise value out of it would leave two owners and is refused.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias PromiseMap = Map with (String, IntPromise)
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function main() returns ExitCode
+	var m = PromiseMap.create()
+	m.upsert("a", value: async work())
+	let p = try m.get("a") otherwise panic("a is present")
+	print("{await p}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:14:16: a promise cannot be borrowed through 'get': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. Read it through a door that names its slot (`get(i)`, `first()`, `for … in`, or an array's cursor), or move it out with `pop`/`remove`
+```
+
+<!-- test: async-await.error.a-stored-parameter-awaited-afterwards-is-use-after-move -->
+Storing a parameter moves it into the container, so the function's own name for it is spent.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function park(p IntPromise) returns Integer
+	var pending = IntPromiseArray.create()
+	pending.push(p)
+	return await p
+end 'park'
+
+function main() returns ExitCode
+	print("{park(async work())}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:14:15: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: async-await.error.a-parameter-stored-twice-is-use-after-move -->
+One thread has one owner, so the second store of the same parameter is refused.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function park(p IntPromise) returns Integer
+	var pending = IntPromiseArray.create()
+	pending.push(p)
+	pending.push(p)
+	return pending.count() as Integer
+end 'park'
+
+function main() returns ExitCode
+	print("{park(async work())}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:14:15: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: async-await.a-parameter-stored-on-one-branch-only-runs-clean -->
+A parameter stored on one branch only is owned on the other, which drops it at the function's end: both runs leave no thread behind.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function park(p IntPromise, keep bool) returns Integer
+	var pending = IntPromiseArray.create()
+
+	if keep 'store'
+		pending.push(p)
+	end 'store'
+
+	return pending.count() as Integer
+end 'park'
+
+function main() returns ExitCode
+	print("{park(async work(), keep: true)} {park(async work(), keep: false)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 0
+```
+
+<!-- test: async-await.error.a-promise-used-after-it-was-pushed-by-a-callee-is-use-after-move -->
+The caller handed the promise to a function that stores it, so the caller's name for it is spent.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function park(pending IntPromiseArray, p IntPromise)
+	pending.push(p)
+end 'park'
+
+function main() returns ExitCode
+	var pending = IntPromiseArray.create()
+	let p = async work()
+	park(pending, p: p)
+	print("{await p}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:19:16: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: async-await.error.a-promise-used-after-it-was-stored-in-a-field-by-a-callee-is-use-after-move -->
+The same holds for a callee that stores the promise in a field.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+type Cell
+	public var p as IntPromise
+
+	static function of(p IntPromise) returns Self
+		return Self{p: p}
+	end 'of'
+end 'Cell'
+
+function main() returns ExitCode
+	let p = async work()
+	let cell = Cell.of(p)
+	print("{await p}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:21:16: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: async-await.a-popped-promise-can-be-stored-in-a-field -->
+A promise moved out of an array by `pop` is the storing function's own, so a field takes it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+type Cell
+	public var p as IntPromise
+
+	static function of(p IntPromise) returns Self
+		return Self{p: p}
+	end 'of'
+end 'Cell'
+
+function main() returns ExitCode
+	var source = IntPromiseArray.create()
+	source.push(async work())
+
+	let popped = try source.pop() otherwise panic("one element was pushed")
+	var cell = Cell.of(async work())
+	cell.p = popped
+	print("{await cell.p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: async-await.a-matched-promise-payload-can-be-wrapped-in-a-union-again -->
+A promise bound by a `match` arm is moved out of the union it was in, so it can be wrapped in another.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+union Slot
+	held(p IntPromise)
+	empty
+end 'Slot'
+
+function main() returns ExitCode
+	let first = Slot.held(async work())
+
+	match first 'unwrap'
+		held(p) then print("{rewrap(p)}\n")
+		empty then print("empty\n")
+	end 'unwrap'
+
+	return 0
+end 'main'
+
+function rewrap(p IntPromise) returns Integer
+	let again = Slot.held(p)
+
+	match again 'inner'
+		held(q) then return await q
+		empty then return 0
+	end 'inner'
+end 'rewrap'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: async-await.a-promise-taken-through-try-otherwise-can-be-stored -->
+The promise a `try … otherwise` merge yields is the function's own, so a container takes it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function main() returns ExitCode
+	var source = IntPromiseArray.create()
+	source.push(async work())
+
+	var sink = IntPromiseArray.create()
+	let moved = try source.pop() otherwise async work()
+	sink.push(moved)
+
+	var sum = 0 as Integer
+
+	for p in sink 'drain'
+		sum = sum + await p
+	end 'drain'
+
+	print("{sum}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: async-await.a-promise-storing-function-called-through-a-function-value-takes-the-promise -->
+A function value of a named function has that function's own type, and the type says which promise parameters the callee takes. A call through it hands the promise over exactly where the function takes it, so the array owns the thread and the caller does not drop it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function keep(pending IntPromiseArray, p IntPromise)
+	pending.push(p)
+end 'keep'
+
+function main() returns ExitCode
+	var pending = IntPromiseArray.create()
+	let f = keep
+	f(pending, async work())
+
+	var sum = 0 as Integer
+
+	for q in pending 'drain'
+		sum = sum + await q
+	end 'drain'
+
+	print("{sum}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: async-await.a-promise-awaiting-function-called-through-a-function-value-awaits-the-promise -->
+The same holds for a function that awaits its promise parameter: the callee reclaims the thread, and the caller must not.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function take(p IntPromise) returns Integer
+	return await p
+end 'take'
+
+function main() returns ExitCode
+	let f = take
+	print("{f(async work())}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: async-await.a-function-type-qualifier-says-a-promise-parameter-is-taken -->
+A function-type alias declares a promise parameter `keep` or `sole` when the callee takes it. A call through a parameter of that type hands the promise over, and a function that takes its promise converts to it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+typealias Sink = function(pending IntPromiseArray, p keep IntPromise)
+
+function keep(pending IntPromiseArray, p IntPromise)
+	pending.push(p)
+end 'keep'
+
+function drive(sink Sink, pending IntPromiseArray)
+	sink(pending, async work())
+end 'drive'
+
+function main() returns ExitCode
+	var pending = IntPromiseArray.create()
+	drive(keep, pending: pending)
+
+	var sum = 0 as Integer
+
+	for q in pending 'drain'
+		sum = sum + await q
+	end 'drain'
+
+	print("{sum}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: async-await.error.a-function-that-takes-a-promise-does-not-convert-to-a-type-that-does-not-say-so -->
+A function that takes a promise parameter breaks a function type that leaves the parameter unqualified, because a call through the type would not hand the promise over.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+typealias Sink = function(pending IntPromiseArray, p IntPromise)
+
+function keep(pending IntPromiseArray, p IntPromise)
+	pending.push(p)
+end 'keep'
+
+function drive(sink Sink, pending IntPromiseArray)
+	sink(pending, async work())
+end 'drive'
+
+function main() returns ExitCode
+	var pending = IntPromiseArray.create()
+	drive(keep, pending: pending)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3189: <fragment>:23:8: function value for 'Sink' keeps its parameter 'p', but 'Sink' does not declare it `keep`
+```
+
+<!-- test: async-await.error.a-function-that-only-reads-a-promise-does-not-convert-to-a-type-that-takes-it -->
+A function type that declares a promise parameter `keep` hands the promise over at every call, so a function that only reads it would leave nobody to drop it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+typealias Sink = function(pending IntPromiseArray, p keep IntPromise) returns Count
+
+function look(pending IntPromiseArray, p IntPromise) returns Count
+	if p.isComplete() 'done'
+		return pending.count()
+	end 'done'
+
+	return 0
+end 'look'
+
+function drive(sink Sink, pending IntPromiseArray) returns Count
+	return sink(pending, async work())
+end 'drive'
+
+function main() returns ExitCode
+	var pending = IntPromiseArray.create()
+	print("{drive(look, pending: pending)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3189: <fragment>:27:16: 'look' only reads its promise parameter 'p', but 'Sink' declares it `keep` or `sole`, so a call through the type hands the promise over and nothing would drop it
+```
+
+<!-- test: async-await.a-promise-parameter-forwarded-to-a-callee-that-stores-it-is-handed-on -->
+A parameter handed to a callee that takes it is handed on itself, however many calls deep: the caller moves its promise into the outermost function, and the innermost one stores it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+type Cell
+	public var p as IntPromise
+
+	static function of(p IntPromise) returns Self
+		return Self{p: p}
+	end 'of'
+end 'Cell'
+
+function middle(p IntPromise) returns Cell
+	return Cell.of(p)
+end 'middle'
+
+function outer(p IntPromise) returns Cell
+	return middle(p)
+end 'outer'
+
+function main() returns ExitCode
+	let cell = outer(async work())
+	print("{await cell.p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: async-await.a-promise-parameter-forwarded-to-a-callee-that-only-reads-it-stays-with-the-caller -->
+Forwarding to a callee that only reads the promise hands nothing on, so the caller still owns the promise afterwards and awaits it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function peek(p IntPromise) returns bool
+	return p.isComplete()
+end 'peek'
+
+function relay(p IntPromise) returns bool
+	return peek(p)
+end 'relay'
+
+function main() returns ExitCode
+	let p = async work()
+	_ = relay(p)
+	print("{await p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: async-await.a-user-generic-type-over-a-promise-owns-it -->
+A generic type instantiated at a promise owns the thread it is given: its constructor takes the promise, a reassignment of the field drops the thread it held, and the box's destructor drops the last one. The run is leak-free.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function ask() returns IntPromise
+	return async work()
+end 'ask'
+
+type Box uses T
+	public var value as T
+
+	static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+
+	function replace(v T)
+		self.value = v
+	end 'replace'
+end 'Box'
+
+typealias PromiseBox = Box with IntPromise
+
+function main() returns ExitCode
+	var box = PromiseBox.create(async work())
+	box.replace(ask())
+	box.replace(async work())
+	print("{box.value.isComplete() or true}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true
+```
+
+<!-- test: async-await.a-promise-parameter-can-be-stored-by-an-instance-method -->
+A promise parameter is stored by a struct literal in an instance method and by an assignment to a field of `self`, as it is by a static factory.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function w() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'w'
+
+type Cell
+	public var p as IntPromise
+
+	static function of(p IntPromise) returns Self
+		return Self{p: p}
+	end 'of'
+
+	function again(next IntPromise) returns Cell
+		return Self{p: next}
+	end 'again'
+
+	function rearm(next IntPromise)
+		p = next
+	end 'rearm'
+end 'Cell'
+
+function main() returns ExitCode
+	var c = Cell.of(async w())
+	let d = c.again(async w())
+	c.rearm(async w())
+	print("{await c.p} {await d.p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 7
+```
+
+<!-- test: async-await.a-promise-parameter-can-be-stored-in-a-tuple -->
+A promise parameter is stored in a tuple slot.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function w() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'w'
+
+function pair(p IntPromise) returns (IntPromise, Integer)
+	return (p, 1)
+end 'pair'
+
+function main() returns ExitCode
+	let (q, n) = pair(async w())
+	print("{await q} {n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 1
+```
+
+<!-- test: async-await.a-promise-parameter-can-be-stored-in-a-union-payload -->
+A promise parameter is stored in a union payload.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function w() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'w'
+
+union Slot
+	held(p IntPromise)
+	empty
+end 'Slot'
+
+function roundTrip(p IntPromise) returns Integer
+	let s = Slot.held(p)
+
+	match s 'unwrap'
+		held(q) then return await q
+		empty then return 0
+	end 'unwrap'
+end 'roundTrip'
+
+function main() returns ExitCode
+	print("{roundTrip(async w())}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: async-await.a-promise-parameter-can-be-stored-by-a-parenthesised-assignment -->
+A parenthesised right-hand side stores the parameter as the bare name does.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function w() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'w'
+
+type Cell
+	public var p as IntPromise
+
+	static function of(p IntPromise) returns Self
+		return Self{p: p}
+	end 'of'
+end 'Cell'
+
+function swap(h Cell, next IntPromise)
+	h.p = (next)
+end 'swap'
+
+function main() returns ExitCode
+	var h = Cell.of(async w())
+	swap(h, next: async w())
+	print("{await h.p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: async-await.a-promise-parameter-can-be-stored-in-a-map -->
+A map takes a promise parameter through `upsert`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias PromiseMap = Map with (String, IntPromise)
+
+function w() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'w'
+
+function park(m PromiseMap, p IntPromise)
+	m.upsert("k", value: p)
+end 'park'
+
+function main() returns ExitCode
+	var m = PromiseMap.create()
+	park(m, p: async w())
+	print("{m.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: async-await.an-array-literal-of-promises-owns-its-elements -->
+An array literal stores its elements, so it takes ownership of each promise it is given, whatever made it. The loop awaits them out of the array, and the run is leak-free.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function ask() returns IntPromise
+	return async work()
+end 'ask'
+
+function gather(p IntPromise) returns Integer
+	let pending = IntPromiseArray from [p, ask(), async work()]
+	var sum = 0 as Integer
+
+	for q in pending 'drain'
+		sum = sum + await q
+	end 'drain'
+
+	return sum
+end 'gather'
+
+function main() returns ExitCode
+	print("{gather(async work())}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+21
+```
+
+<!-- test: async-await.error.an-array-literal-of-promises-must-match-the-array-type -->
+A promise in a literal is checked against the array's element type like a promise pushed into it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+enum TaskError implements Error
+	crashed
+end 'TaskError'
+
+function mayFail() returns Integer throws TaskError
+	_ = File.exists(FilePath from "noyield.txt")
+	throw TaskError.crashed
+end 'mayFail'
+
+function main() returns ExitCode
+	var pending = IntPromiseArray from [async mayFail()]
+	pending.clear()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3098: <fragment>:16:38: a promise of 'Integer' throwing 'TaskError' cannot be stored in 'IntPromise', which holds 'Integer'
+```
+
+<!-- test: async-await.error.a-throwing-promise-given-to-a-map-of-plain-promises-is-refused -->
+A map's `upsert` is an ordinary call, so the value's promise type is compared with the map's by the call's argument check, and a disagreement is the same E3098 a store reports: two promise types are one type only when their result and error are the same.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias PromiseMap = Map with (String, IntPromise)
+
+enum TaskError implements Error
+	crashed
+end 'TaskError'
+
+function mayFail() returns Integer throws TaskError
+	_ = File.exists(FilePath from "noyield.txt")
+	throw TaskError.crashed
+end 'mayFail'
+
+function main() returns ExitCode
+	var m = PromiseMap.create()
+	m.upsert("a", value: async mayFail())
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3098: <fragment>:17:4: a promise of 'Integer' throwing 'TaskError' cannot be stored in 'IntPromise', which holds 'Integer'
+```
+
+<!-- test: async-await.error.a-throwing-promise-given-to-a-parameter-that-omits-its-error-is-refused -->
+A call's argument is compared with the parameter's promise type by the same rule a store applies, so a promise that throws is not accepted by a parameter that names no error, and the refusal says what the argument is and what the parameter holds.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+enum TaskError implements Error
+	crashed
+end 'TaskError'
+
+function mayFail() returns Integer throws TaskError
+	_ = File.exists(FilePath from "noyield.txt")
+	throw TaskError.crashed
+end 'mayFail'
+
+function look(p IntPromise) returns bool
+	return p.isComplete()
+end 'look'
+
+function main() returns ExitCode
+	let p = async mayFail()
+	_ = look(p)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3098: <fragment>:20:6: a promise of 'Integer' throwing 'TaskError' cannot be stored in 'IntPromise', which holds 'Integer'
+```
+
+<!-- test: async-await.error.an-alias-value-converted-to-an-alias-that-takes-the-promise-is-refused -->
+A function type that leaves a promise parameter unqualified hands nothing over, so a value of that type does not convert to one that declares it `keep`: the callee through the second type would borrow a promise nobody drops.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+typealias Plain = function(p IntPromise)
+typealias Taking = function(p keep IntPromise)
+
+function promote(plain Plain) returns Taking
+	return plain
+end 'promote'
+
+function look(p IntPromise)
+	if p.isComplete() 'done'
+		print("done\n")
+	end 'done'
+end 'look'
+
+function main() returns ExitCode
+	let sink = promote(look)
+	sink(async work())
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3189: <fragment>:14:9: function value of type 'Plain' does not take its promise parameter 'p', but 'Taking' declares it `keep` or `sole`, so a call through the type hands the promise over and nothing would drop it
+```
+
+<!-- test: async-await.error.a-promise-named-twice-in-a-call-through-a-function-type-is-refused -->
+A promise has one owner, so a call through a function type may not name it at two positions when one of them hands it over.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+typealias Sink = function(pending IntPromiseArray, a IntPromise, b keep IntPromise)
+
+function park(pending IntPromiseArray, a IntPromise, b IntPromise)
+	pending.push(b)
+	print("{a.isComplete()}\n")
+end 'park'
+
+function drive(sink Sink, pending IntPromiseArray)
+	let p = async work()
+	sink(pending, p, p)
+end 'drive'
+
+function main() returns ExitCode
+	var pending = IntPromiseArray.create()
+	drive(park, pending: pending)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:20:19: use of moved value 'p': it is passed at two arguments of this call, and handing it to a parameter that takes it moves it
+```
+
+<!-- test: async-await.error.an-overloaded-function-that-awaits-its-promise-does-not-convert-to-an-unqualified-type -->
+Two files may each declare a private function of one name; the one a file means is read by its own declaration, so the conversion door judges the function the shape judges.
+```maxon
+// --- file: awaiting.maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+typealias Plain = function(p IntPromise) returns Integer
+
+function take(p IntPromise) returns Integer
+	return await p
+end 'take'
+
+function drive(sink Plain) returns Integer
+	return sink(async work())
+end 'drive'
+
+function main() returns ExitCode
+	print("{drive(take)}\n")
+	return 0
+end 'main'
+
+// --- file: other.maxon
+function take(name String) returns String
+	return name
+end 'take'
+```
+```maxoncstderr
+error E3189: <fragment>:22:16: function value for 'Plain' keeps its parameter 'p', but 'Plain' does not declare it `keep`
+```
+
+<!-- test: async-await.a-promise-parameter-handed-through-self-to-a-storing-method-is-handed-on -->
+A method that hands its parameter to a sibling through `self` takes it exactly when the sibling does.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+type Cell
+	public var p as IntPromise
+
+	static function of(p IntPromise) returns Self
+		return Self{p: p}
+	end 'of'
+
+	function hold(next IntPromise)
+		self.p = next
+	end 'hold'
+
+	function holdVia(next IntPromise)
+		self.hold(next)
+	end 'holdVia'
+end 'Cell'
+
+function main() returns ExitCode
+	var cell = Cell.of(async work())
+	cell.holdVia(async work())
+	print("{await cell.p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: async-await.a-promise-parameter-handed-to-a-method-of-another-value-is-handed-on -->
+A call through some other value takes its argument exactly when the method that value dispatches to does.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+type Cell
+	public var p as IntPromise
+
+	static function of(p IntPromise) returns Self
+		return Self{p: p}
+	end 'of'
+
+	function hold(next IntPromise)
+		self.p = next
+	end 'hold'
+end 'Cell'
+
+function relay(cell Cell, next IntPromise)
+	cell.hold(next)
+end 'relay'
+
+function main() returns ExitCode
+	var cell = Cell.of(async work())
+	relay(cell, next: async work())
+	print("{await cell.p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: async-await.a-promise-parameter-handed-to-an-aliased-generic-constructor-is-handed-on -->
+A generic alias names the constructor of its base type, so handing a parameter to `PromiseBox.create` hands it to `Box.create`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+type Box uses T
+	public var value as T
+
+	static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+
+typealias PromiseBox = Box with IntPromise
+
+function wrap(p IntPromise) returns PromiseBox
+	return PromiseBox.create(p)
+end 'wrap'
+
+function main() returns ExitCode
+	let box = wrap(async work())
+	print("{box.value.isComplete() or true}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true
+```
+
+<!-- test: async-await.a-promise-parameter-handed-to-a-function-typed-parameter-that-keeps-it-is-handed-on -->
+A function-typed parameter that declares the promise `keep` takes it, so a function that forwards its own parameter to it takes it too.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+typealias Sink = function(pending IntPromiseArray, p keep IntPromise)
+
+function keep(pending IntPromiseArray, p IntPromise)
+	pending.push(p)
+end 'keep'
+
+function relay(sink Sink, pending IntPromiseArray, p IntPromise)
+	sink(pending, p)
+end 'relay'
+
+function main() returns ExitCode
+	var pending = IntPromiseArray.create()
+	relay(keep, pending: pending, p: async work())
+
+	var sum = 0 as Integer
+
+	for q in pending 'drain'
+		sum = sum + await q
+	end 'drain'
+
+	print("{sum}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: async-await.a-promise-parameter-forwarded-to-an-overloaded-callee-is-handed-on -->
+A call that could bind either of two overloads is judged by what they do with the position: the one that stores the promise makes the forwarder take it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+type Cell
+	public var p as IntPromise
+
+	static function of(p IntPromise) returns Self
+		return Self{p: p}
+	end 'of'
+end 'Cell'
+
+function build(p IntPromise) returns Cell
+	return Cell.of(p)
+end 'build'
+
+function build(n Integer) returns Integer
+	return n
+end 'build'
+
+function relay(p IntPromise) returns Cell
+	return build(p)
+end 'relay'
+
+function main() returns ExitCode
+	let cell = relay(async work())
+	print("{await cell.p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: async-await.a-named-function-that-only-reads-its-promise-leaves-it-with-the-caller -->
+A function value of a function that only reads its promise parameter hands nothing over: the caller still owns the promise after the call and awaits it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function look(p IntPromise) returns bool
+	return p.isComplete()
+end 'look'
+
+function main() returns ExitCode
+	let f = look
+	let p = async work()
+	_ = f(p)
+	print("{await p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: async-await.a-forwarder-and-the-function-it-forwards-to-in-two-files-are-closed-forwarder-first -->
+The forwarder and the function that stores the promise live in two files, and the whole program is closed over both whichever file the compiler reads first.
+```maxon
+// --- file: forwarder.maxon
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function relay(p IntPromise) returns Cell
+	return Cell.of(p)
+end 'relay'
+
+function main() returns ExitCode
+	let cell = relay(async work())
+	print("{await cell.p}\n")
+	return 0
+end 'main'
+
+// --- file: callee.maxon
+export typealias Integer = int(i64.min to i64.max)
+export typealias IntPromise = Promise with Integer
+
+export type Cell
+	export var p as IntPromise
+
+	export static function of(p IntPromise) returns Self
+		return Self{p: p}
+	end 'of'
+end 'Cell'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: async-await.a-forwarder-and-the-function-it-forwards-to-in-two-files-are-closed-callee-first -->
+The same two files, read in the other order.
+```maxon
+// --- file: callee.maxon
+export typealias Integer = int(i64.min to i64.max)
+export typealias IntPromise = Promise with Integer
+
+export type Cell
+	export var p as IntPromise
+
+	export static function of(p IntPromise) returns Self
+		return Self{p: p}
+	end 'of'
+end 'Cell'
+
+// --- file: forwarder.maxon
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function relay(p IntPromise) returns Cell
+	return Cell.of(p)
+end 'relay'
+
+function main() returns ExitCode
+	let cell = relay(async work())
+	print("{await cell.p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: async-await.error.a-promise-stored-through-a-conditional-expression-is-refused -->
+A conditional expression joins two promise values with no single slot to empty, so storing its result is refused rather than leaving one branch unaccounted for.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+type Cell
+	public var p as IntPromise
+
+	static function of(p IntPromise) returns Self
+		return Self{p: p}
+	end 'of'
+end 'Cell'
+
+function choose(c Cell, a IntPromise, b IntPromise, first bool)
+	c.p = a if first else b
+end 'choose'
+
+function main() returns ExitCode
+	var cell = Cell.of(async work())
+	choose(cell, a: async work(), b: async work(), first: true)
+	print("{await cell.p}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:19:4: a promise cannot be borrowed through 'p': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. No frame owns this one: either the slot it was read from has already been consumed by another read of it, or it reached here through a branch or loop join — and a merge has no single slot to empty, because the paths can name different ones. Consume each read once, and do it before the paths join
+```
+
+<!-- test: async-await.a-promise-parameter-forwarded-to-a-same-named-function-in-another-directory-is-handed-on -->
+Two directories may each export a function of one name; a forwarder that qualifies the call is judged by the function it names, and the other directory's function of that name is left out of the answer.
+```maxon
+// --- file: alpha/lib.maxon
+export typealias Integer = int(i64.min to i64.max)
+export typealias IntPromise = Promise with Integer
+
+export type Cell
+	export var p as IntPromise
+
+	export static function of(p IntPromise) returns Self
+		return Self{p: p}
+	end 'of'
+end 'Cell'
+
+export function stash(p IntPromise) returns Cell
+	return Cell.of(p)
+end 'stash'
+
+// --- file: beta/lib.maxon
+export function stash(n Integer) returns Integer
+	return n
+end 'stash'
+
+// --- file: main.maxon
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function relay(p IntPromise) returns Cell
+	return alpha.stash(p)
+end 'relay'
+
+function main() returns ExitCode
+	print("{beta.stash(1)}\n")
+	let cell = relay(async work())
+	print("{await cell.p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+7
+```
+
+<!-- test: async-await.a-promise-forwarded-beside-a-reassigned-parameter-is-handed-on -->
+A parameter another function reassigns is passed by reference, and the program-wide widening that carries a reassigned parameter through its forwarders leaves a promise parameter alone: a promise has no cell, so the forwarder still owns it and hands it on.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function stash(dest String, pending IntPromiseArray, p IntPromise)
+	dest = "changed {1 + 1}"
+	pending.push(p)
+end 'stash'
+
+function relay(dest String, pending IntPromiseArray, p IntPromise)
+	stash(dest, pending: pending, p: p)
+end 'relay'
+
+function main() returns ExitCode
+	var pending = IntPromiseArray.create()
+	var word = "hello {2 + 2}"
+	relay(word, pending: pending, p: async work())
+	print("{word}\n")
+
+	var sum = 0 as Integer
+
+	for q in pending 'drain'
+		sum = sum + await q
+	end 'drain'
+
+	print("{sum}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+changed 2
+7
+```
+
+<!-- test: async-await.a-promise-handed-to-a-function-typed-parameter-beside-a-reassigned-parameter-is-handed-on -->
+The same widening reaches a call through a function type, whose by-reference positions are those of every function of its arity; the promise position keeps its ownership.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+typealias Sink = function(pending IntPromiseArray, p keep IntPromise)
+
+function keep(pending IntPromiseArray, p IntPromise)
+	pending.push(p)
+end 'keep'
+
+function relay(sink Sink, pending IntPromiseArray, p IntPromise)
+	sink(pending, p)
+end 'relay'
+
+function zap(dest String, n Integer)
+	dest = "filled {n}"
+end 'zap'
+
+function main() returns ExitCode
+	var pending = IntPromiseArray.create()
+	relay(keep, pending: pending, p: async work())
+
+	var sum = 0 as Integer
+
+	for q in pending 'drain'
+		sum = sum + await q
+	end 'drain'
+
+	var word = "x {1 + 1}"
+	zap(word, n: 2)
+	print("{sum} {word}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 filled 2
+```
+
+<!-- test: async-await.a-promise-parameter-the-callee-reassigns-is-seen-by-its-caller -->
+A promise parameter the callee reassigns is the caller's own storage: the callee drops the thread the cell held and the cell takes the new one, so the caller awaits the new thread and no thread is left over.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function reset(q IntPromise)
+	q = async work()
+end 'reset'
+
+function main() returns ExitCode
+	var x = async work()
+	reset(x)
+	print("{await x}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: async-await.a-write-through-a-forwarded-promise-parameter-reaches-the-callers-variable -->
+A function that only hands its promise parameter on to one that reassigns it passes the caller's storage through, so the write lands in the variable the outermost caller named.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function inner(q IntPromise)
+	q = async work()
+end 'inner'
+
+function relay(p IntPromise)
+	inner(p)
+end 'relay'
+
+function main() returns ExitCode
+	var x = async work()
+	relay(x)
+	print("{await x}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: async-await.a-promise-at-a-by-reference-function-type-position-is-handed-on -->
+A call through a function type passes by reference the positions some function of that arity reassigns, and a promise at one of them is held in the caller's storage and still handed on to the callee that keeps it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+typealias Sink = function(pending IntPromiseArray, p keep IntPromise)
+
+function keep(pending IntPromiseArray, p IntPromise)
+	pending.push(p)
+end 'keep'
+
+function relay(sink Sink, pending IntPromiseArray, p IntPromise)
+	sink(pending, p)
+end 'relay'
+
+function zap(n Integer, dest String)
+	dest = "filled {n}"
+end 'zap'
+
+function main() returns ExitCode
+	var pending = IntPromiseArray.create()
+	relay(keep, pending: pending, p: async work())
+
+	var sum = 0 as Integer
+
+	for q in pending 'drain'
+		sum = sum + await q
+	end 'drain'
+
+	var word = "x {1 + 1}"
+	zap(2, dest: word)
+	print("{sum} {word}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 filled 2
+```
+
+<!-- test: async-await.a-cell-resident-promise-its-owner-rebinds-drops-the-thread-it-held -->
+A promise variable handed to a parameter the callee reassigns lives in a cell, and the owner's own rebind of it is the same three steps a field rebind is: the old thread is dropped, the new one is taken, and the cell owns it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function reset(q IntPromise)
+	q = async work()
+end 'reset'
+
+function main() returns ExitCode
+	var x = async work()
+	reset(x)
+	x = async work()
+	print("{await x}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: async-await.a-cell-resident-promise-nobody-awaits-is-dropped-with-its-cell -->
+The cell owns the promise it holds, so a variable whose callee re-armed it and that is never awaited releases the thread at the end of its scope.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function reset(q IntPromise)
+	q = async work()
+end 'reset'
+
+function main() returns ExitCode
+	var x = async work()
+	reset(x)
+	print("done\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+done
+```
+
+<!-- test: async-await.error.a-cell-resident-promise-awaited-twice-is-refused -->
+Awaiting a cell-resident promise empties its cell and spends the variable, so a second await names a moved value.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function reset(q IntPromise)
+	q = async work()
+end 'reset'
+
+function main() returns ExitCode
+	var x = async work()
+	reset(x)
+	print("{await x}\n")
+	print("{await x}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:18:16: use of moved value 'x': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: async-await.error.an-alias-of-a-cell-resident-promise-is-refused-once-the-cell-is-rebound -->
+A second name for the thread a cell holds does not own it, and rebinding the cell drops that thread, so the alias is refused rather than left naming a dropped thread.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function reset(q IntPromise)
+	q = async work()
+end 'reset'
+
+function main() returns ExitCode
+	var x = async work()
+	reset(x)
+	let y = x
+	x = async work()
+	print("{await y}\n")
+	print("{await x}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:19:10: a promise cannot be borrowed through 'await': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. No frame owns this one: either the slot it was read from has already been consumed by another read of it, or it reached here through a branch or loop join — and a merge has no single slot to empty, because the paths can name different ones. Consume each read once, and do it before the paths join
+```
+
+<!-- test: async-await.an-overload-set-that-disagrees-about-passing-a-promise-by-reference-hands-a-spawn-to-the-member-that-takes-it -->
+Two overloads differ in whether they write the promise parameter, so the argument is held in a cell until the call is resolved; when the chosen member takes the promise by value the cell gives the thread up and only the member owns it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function put(q IntPromise, n Integer) returns Integer
+	q = async work()
+	return n
+end 'put'
+
+function put(q IntPromise, n String) returns Integer
+	let size = n.byteLength() as Integer
+	return size + (await q)
+end 'put'
+
+function main() returns ExitCode
+	print("{put(async work(), n: "x")}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8
+```
+
+<!-- test: async-await.an-overload-set-that-disagrees-about-passing-a-promise-by-reference-keeps-a-spawn-in-the-cell-of-the-member-that-writes-it -->
+The same two overloads with the writing member chosen: the cell owns the spawn, the member drops it when it reassigns the parameter, and the cell releases the new thread at the end of the call.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function put(q IntPromise, n Integer) returns Integer
+	q = async work()
+	return n
+end 'put'
+
+function put(q IntPromise, n String) returns Integer
+	let size = n.byteLength() as Integer
+	return size + (await q)
+end 'put'
+
+function main() returns ExitCode
+	print("{put(async work(), n: 5)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5
+```
+
+<!-- test: async-await.error.a-let-promise-called-through-a-function-value-that-reassigns-it-is-refused -->
+A promise held by a `let` is lent to a by-reference position, and a callee that writes the parameter would drop the thread the `let` still names, so the write is refused at the call whichever way the function is reached.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function reset(q IntPromise)
+	q = async work()
+end 'reset'
+
+function main() returns ExitCode
+	let x = async work()
+	let r = reset
+	r(x)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:17:3: cannot pass 'x', which is read-only (a `let` binding), to a function that writes parameter 'q' (in main); pass a clone()
+```
+
+<!-- test: async-await.error.a-let-promise-handed-to-a-function-typed-parameter-bound-to-a-reassigning-function-is-refused -->
+The function that reaches the writer is a parameter of function type, so only the type says the position is passed by reference; the `let` is refused all the same.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function reset(q IntPromise)
+	q = async work()
+end 'reset'
+
+typealias Resetter = function(q IntPromise)
+
+function apply(r Resetter, x IntPromise)
+	r(x)
+end 'apply'
+
+function main() returns ExitCode
+	let x = async work()
+	apply(reset, x: x)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:22:2: cannot pass 'x', which is read-only (a `let` binding), to a function that writes parameter 'x' (in main); pass a clone()
+```
+
+<!-- test: async-await.error.a-promise-in-a-let-field-passed-to-a-function-that-reassigns-it-is-refused -->
+A `let` field has no other writer, so a callee that reassigns the parameter cannot be handed the promise it holds.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function reset(q IntPromise)
+	q = async work()
+end 'reset'
+
+type Holder
+	export let p as IntPromise
+
+	static function of(p IntPromise) returns Self
+		return Self{p: p}
+	end 'of'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.of(async work())
+	reset(h.p)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:24:2: cannot pass a `let` field of 'h', which is read-only, to a function that writes parameter 'q' (in main); pass a clone()
+```
+
+<!-- test: async-await.error.a-for-loop-promise-passed-to-a-function-that-reassigns-it-is-refused -->
+The loop variable names a thread the array still owns, so a callee that reassigns its parameter is refused.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function reset(q IntPromise)
+	q = async work()
+end 'reset'
+
+function main() returns ExitCode
+	var a = IntPromiseArray.create()
+	a.push(async work())
+
+	for q in a 'each'
+		reset(q)
+	end 'each'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:20:3: cannot pass a value read out of a container that still owns the promise, which is read-only, to a function that writes parameter 'q' (in main); pass a clone()
+```
+
+<!-- test: async-await.error.a-let-promise-captured-by-a-closure-that-reassigns-it-is-refused -->
+A closure holds its own copy of what it captures, so a write through the closure's call cannot reach the original and is refused.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function reset(q IntPromise)
+	q = async work()
+end 'reset'
+
+function reset2(q IntPromise) returns Integer
+	q = async work()
+	return 1
+end 'reset2'
+
+function main() returns ExitCode
+	let x = async work()
+	let f = function() gives reset2(x)
+	print("{f()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:21:27: cannot pass 'x' to a function that writes parameter 'q' (in main$closure_0): the closure holds its own copy of 'x', so a write through 'q' cannot reach the original; pass a clone()
+```
+
+<!-- test: async-await.error.a-promise-still-held-by-an-array-passed-to-a-function-that-reassigns-it-is-refused -->
+An element read out of an array is neither a `let` nor a variable of this frame, so the promise it names is blamed as one the array still owns, and a callee that reassigns its parameter is refused.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function reset(q IntPromise)
+	q = async work()
+end 'reset'
+
+function main() returns ExitCode
+	var a = IntPromiseArray.create()
+	a.push(async work())
+	reset(try a.get(0) otherwise panic("empty"))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:18:2: cannot pass a value read out of a container that still owns the promise, which is read-only, to a function that writes parameter 'q' (in main); pass a clone()
+```
+
+<!-- test: async-await.a-spawn-handed-to-a-function-typed-parameter-bound-to-a-reassigning-function-is-owned-by-the-cell -->
+A spawn has no other name, so the cell the by-reference position needs owns it: the callee drops it when it reassigns the parameter and the cell releases the replacement.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function reset(q IntPromise)
+	q = async work()
+end 'reset'
+
+typealias Resetter = function(q IntPromise)
+
+function apply(r Resetter, x IntPromise)
+	r(x)
+end 'apply'
+
+function main() returns ExitCode
+	apply(reset, x: async work())
+	print("done\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+done
+```
+
+<!-- test: async-await.a-var-promise-handed-to-an-overload-set-that-disagrees-about-writing-it-follows-the-member-chosen -->
+A variable is already a cell, so an overload set that disagrees about passing the promise by reference hands the cell itself to the writing member and the thread to the member that takes it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function reset(q IntPromise)
+	q = async work()
+end 'reset'
+
+function put(q IntPromise, n Integer) returns Integer
+	q = async work()
+	return n
+end 'put'
+
+function put(q IntPromise, n String) returns Integer
+	let size = n.byteLength() as Integer
+	return size + (await q)
+end 'put'
+
+function main() returns ExitCode
+	var x = async work()
+	print("{put(x, n: "x")}\n")
+	var y = async work()
+	print("{put(y, n: 5)}\n")
+	print("{await y}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8
+5
+7
+```
+
+<!-- test: async-await.a-promise-an-array-still-owns-is-lent-to-a-function-type-position-the-callee-only-reads -->
+When some function of an arity reassigns its parameter, a call through a function type of that arity passes the position by reference; a callee that only reads the promise sees the array's own thread, leaves it with the array, and the array still hands it out afterwards.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'work'
+
+function reset(q IntPromise)
+	q = async work()
+end 'reset'
+
+function look(q IntPromise) returns bool
+	return q.isComplete() or true
+end 'look'
+
+function main() returns ExitCode
+	var pending = IntPromiseArray.create()
+	pending.push(async work())
+	var x = async work()
+	reset(x)
+	print("{await x}\n")
+	let f = look
+
+	for q in pending 'each'
+		print("{f(q)}\n")
+	end 'each'
+
+	var sum = 0 as Integer
+
+	for q in pending 'drain'
+		sum = sum + await q
+	end 'drain'
+
+	print("{sum}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+true
+7
 ```
 
 <!-- test: async-await.error.propagate-type-mismatch -->

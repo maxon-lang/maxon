@@ -18,10 +18,11 @@ export enum ReadOnlyRootKind
 	sharedView
 	view
 	destructuredTuple
+	heldPromise
 end 'ReadOnlyRootKind'
 
 // @generated library-cache begin
-let CacheCasesReadOnlyRootKind = [ReadOnlyRootKind.letBinding, ReadOnlyRootKind.forElement, ReadOnlyRootKind.loopVariable, ReadOnlyRootKind.ifLetBinding, ReadOnlyRootKind.matchBinding, ReadOnlyRootKind.letField, ReadOnlyRootKind.letPayload, ReadOnlyRootKind.readOnlyElement, ReadOnlyRootKind.storedMapKey, ReadOnlyRootKind.storedSetElement, ReadOnlyRootKind.moduleLet, ReadOnlyRootKind.sharedView, ReadOnlyRootKind.view, ReadOnlyRootKind.destructuredTuple]
+let CacheCasesReadOnlyRootKind = [ReadOnlyRootKind.letBinding, ReadOnlyRootKind.forElement, ReadOnlyRootKind.loopVariable, ReadOnlyRootKind.ifLetBinding, ReadOnlyRootKind.matchBinding, ReadOnlyRootKind.letField, ReadOnlyRootKind.letPayload, ReadOnlyRootKind.readOnlyElement, ReadOnlyRootKind.storedMapKey, ReadOnlyRootKind.storedSetElement, ReadOnlyRootKind.moduleLet, ReadOnlyRootKind.sharedView, ReadOnlyRootKind.view, ReadOnlyRootKind.destructuredTuple, ReadOnlyRootKind.heldPromise]
 
 module function cacheReadReadOnlyRootKind(reader LibraryCacheReader) returns ReadOnlyRootKind throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()
@@ -74,6 +75,7 @@ export function readOnlyRootDescription(root ReadOnlyRootKind) returns String
 		sharedView gives "a `SharedValue` or registry value"
 		view gives "a `view`"
 		destructuredTuple gives "a destructured `let` tuple"
+		heldPromise gives "a container that still owns the promise"
 	end 'kind'
 end 'readOnlyRootDescription'
 
@@ -182,6 +184,7 @@ export function deepLetStoredRootSubject(name String, kind ReadOnlyRootKind) ret
 		storedMapKey or
 		storedSetElement or
 		destructuredTuple or
+		heldPromise or
 		sharedView gives readOutOfSubject(kind)
 	end 'kind'
 end 'deepLetStoredRootSubject'
@@ -313,6 +316,7 @@ export function rootKindOfHolder(holder WriteBlameHolder) returns ReadOnlyRootKi
 		moduleLet gives ReadOnlyRootKind.moduleLet
 		sharedView gives ReadOnlyRootKind.sharedView
 		view gives ReadOnlyRootKind.view
+		heldPromise gives ReadOnlyRootKind.heldPromise
 	end 'holder'
 end 'rootKindOfHolder'
 
@@ -332,6 +336,7 @@ export function holderOfRootKind(kind ReadOnlyRootKind) returns WriteBlameHolder
 		sharedView gives WriteBlameHolder.sharedView
 		view gives WriteBlameHolder.view
 		destructuredTuple gives WriteBlameHolder.binding
+		heldPromise gives WriteBlameHolder.heldPromise
 	end 'kind'
 end 'holderOfRootKind'
 
@@ -350,6 +355,7 @@ export function moveDestinationOfLetSlot(slot ReadOnlyRootKind, movesAVar bool) 
 		moduleLet or
 		sharedView or
 		destructuredTuple or
+		heldPromise or
 		view panic("moveDestinationOfLetSlot: '{slot.name}' is not a place a store keeps a value in")
 	end 'slot'
 end 'moveDestinationOfLetSlot'
@@ -369,6 +375,7 @@ export function holderIsPermanent(holder WriteBlameHolder) returns bool
 		storedMapKey or
 		storedSetElement or
 		moduleLet or
+		heldPromise or
 		sharedView gives true
 	end 'holder'
 end 'holderIsPermanent'
