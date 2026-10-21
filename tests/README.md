@@ -764,7 +764,8 @@ exit code and output. The shared half is `SpecHarness.maxon`.
   one, plain run cases that batch into programs
   by type name and keep their own names, a case declaring a module `var` and a case spawning a service
   kept in separate programs, the cases that stay out of it, `--batch=off` running every case
-  alone, a crash mid-batch attributed to its own case, a batched case's services finishing before its end
+  alone, a crash mid-batch attributed to its own case (on `--target=wasm32-wasi` too, where no case of a
+  batch can be selected again, so the siblings are recompiled and run alone), a batched case's services finishing before its end
   marker, a case that passes alone but fails batched reported as a batching gap, a case marked
   `process: own` running in a program of its own, output outside the case markers failing every case of
   its program, a case staged below a `.maxonignore`d directory compiling its own files, a shared library
@@ -790,6 +791,11 @@ never contend, the compiler needs no exemption for these runs, and nothing a run
 `temp/` — lands in `tests/`. `SpecHarness` refuses to stage anywhere a `stdlib/` sits
 above, and refuses a fixture holding a subdirectory, so every run starts from the fixture's spec files
 and nothing else.
+
+⚠ **THE wasm32-wasi GATE RUNS FROM THE CHECKOUT.** `findWasmtimePath` walks up from the working directory
+to `vendor/wasmtime/`, which a staged copy under the host temp area has no ancestor holding, so that
+gate stages its fixture there and spawns `spec-test` with the checkout as the working directory
+(`runGateFixtureOnceFromTheCheckout`). It needs `vendor/` staged, which `ci.yml` does before this corpus.
 
 ⚠ **THE COMPILER'S REPORT TEXT IS SPELLED HERE AS LITERALS.** A test program cannot import compiler
 source, so the verdict line, the result-note entry, the census entry and its headline, and the batch

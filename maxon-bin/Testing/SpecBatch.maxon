@@ -15,7 +15,8 @@
 // never recompiled. The default `Log` sink is a registry-owned service alive until exit, so a case
 // that logs through it reads a count of 1 and reruns alone; that is why the count is a marker field
 // and not an exit code. On a target with no command line (wasm32) the entry cannot read
-// `--select=`, so it runs every case and a case it cannot read fails.
+// `--select=`, so it runs every case and a case it cannot read is compiled and run alone instead
+// (`withBatchedFailuresDiagnosed`), since only a recompile can run one case of the program again.
 //
 // Batching recovers nothing silently. Output outside every marker fails every case of the program:
 // some case ran code before `main` that the up-front checks missed, and the runner must be fixed to
@@ -1070,6 +1071,15 @@ module typealias BatchReadingArray = Array with readonly BatchReading
 
 let OutsideTheMarkers = "the batch program printed outside the case markers — a case runs code before main that the batching checks did not catch; the runner must keep it out of batches"
 let UnreadableOnThisTarget = "the batch program's output for this case could not be read (a crash, or no end marker), and this target cannot run a single case of the program again"
+
+module function isUnisolatedBatchMember(observation RunObservation) returns bool
+	return match observation 'observed'
+		failed(reason) gives reason == UnreadableOnThisTarget
+		completed or
+		notRequired or
+		notRunnableHere gives false
+	end 'observed'
+end 'isUnisolatedBatchMember'
 
 module function readBatch(batch ProcessCapture, caseCount ElementIndex, selects bool) returns BatchReadingArray
 	var readings = BatchReadingArray.create()

@@ -984,7 +984,14 @@ function noteFailedBatched(failed TestRunIndexArray, reasons BatchedFailureMap, 
 		return
 	end 'ranAlone'
 
-	match finishPendingRun(pending, observation: observationAt(observations, index: at), effectiveTarget: effectiveTarget).outcome 'outcome'
+	let observation = observationAt(observations, index: at)
+
+	if isUnisolatedBatchMember(observation) 'diedWithTheProgram'
+		failed.push(at)
+		return
+	end 'diedWithTheProgram'
+
+	match finishPendingRun(pending, observation: observation, effectiveTarget: effectiveTarget).outcome 'outcome'
 		fail(reason) then noteBatchedFailure(failed, reasons: reasons, at: at, reason: reason)
 		pass or
 		skipped or
@@ -1022,7 +1029,9 @@ function batchedShare(prepared PreparedTestArray, programCount ElementIndex) ret
 end 'batchedShare'
 
 // A batched FAIL is compiled alone only to diagnose it, never to recover it: a solo PASS becomes a FAIL
-// naming the batching gap (`batchingGapVerdict`), and a solo FAIL is the case's verdict.
+// naming the batching gap (`batchingGapVerdict`), and a solo FAIL is the case's verdict. The exception is
+// a member the program's death left unreadable on a target that cannot run one case again
+// (`isUnisolatedBatchMember`): it is no gap, so its solo verdict stands whichever way it falls.
 function withBatchedFailuresDiagnosed(performed RunsPerformed, prepared PreparedTestArray, programCount ElementIndex, tests SpecTestArray, actions IrActionArray, specName String, specDirName String, tempDir FilePath, exeExtension String, runWorkingDir FilePath, effectiveTarget Target, fileMemos SharedFileMemoMap) returns RunsPerformed
 	var failed = TestRunIndexArray.create()
 	var reasons = BatchedFailureMap.create()

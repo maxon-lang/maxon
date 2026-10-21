@@ -76,6 +76,13 @@ module function runGateFixtureOnce(extraArguments StringArray, environment Envir
 	return runOnceThenDiscard(stagedGateFixture(caller), extraArguments: extraArguments, environment: environment)
 end 'runGateFixtureOnce'
 
+module function runGateFixtureOnceFromTheCheckout(extraArguments StringArray, caller String = __file__) returns CollectedOutput
+	let staged = stagedGateFixture(caller)
+	let run = runSpecTest(staged, includeNetwork: false, extraArguments: extraArguments, fromTheCheckout: true)
+	discardOutsideCheckoutDir(staged)
+	return run
+end 'runGateFixtureOnceFromTheCheckout'
+
 module function requireMarkerShapeRan(label String, caller String = __file__) throws TestFailure
 	let said = saidByOneGateRun(caller)
 	let ranVerdict = failVerdictPrefix(label)
@@ -83,7 +90,7 @@ module function requireMarkerShapeRan(label String, caller String = __file__) th
 	try Expect.isTrue(said.contains(ranVerdict), message: "the fixture did NOT run '{label}': the compiler no longer reads this marker shape the way the reference does, and the case is simply GONE. Expected '{ranVerdict}', and it said:\n{said}")
 end 'requireMarkerShapeRan'
 
-module function runSpecTest(staged FilePath, includeNetwork bool, extraArguments StringArray = StringArray.create(), environment Environment = Environment.inherit, binary FilePath = testedCompilerPath()) returns CollectedOutput
+module function runSpecTest(staged FilePath, includeNetwork bool, extraArguments StringArray = StringArray.create(), environment Environment = Environment.inherit, binary FilePath = testedCompilerPath(), fromTheCheckout bool = false) returns CollectedOutput
 	var arguments = StringArray.create()
 	arguments.push(SpecTestCommandWord)
 	arguments.push(staged.toString())
@@ -96,7 +103,8 @@ module function runSpecTest(staged FilePath, includeNetwork bool, extraArguments
 		arguments.push(extra)
 	end 'eachExtra'
 
-	let run = spawnCompiler(arguments, staged: staged, what: "`{SpecTestCommandWord}` at {staged.toString()}", binary: binary, environment: environment)
+	let workingDirectory = Directory.currentPath() if fromTheCheckout else staged
+	let run = spawnCompiler(arguments, staged: workingDirectory, what: "`{SpecTestCommandWord}` at {staged.toString()}", binary: binary, environment: environment)
 
 	return CollectedOutput.create(run.status, stdout: withoutCarriageReturns(run.stdout), stderr: withoutCarriageReturns(run.stderr), pid: run.pid, durationMs: run.durationMs)
 end 'runSpecTest'

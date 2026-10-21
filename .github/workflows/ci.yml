@@ -213,6 +213,14 @@ jobs:
         if: steps.seed.outputs.seeded == 'yes'
         run: ./maxon-bin/.maxon/maxon test tests/fmt
 
+      # `tests/specHarness` runs a spec batch under wasm32-wasi, and `tests/cli` builds wasm32-wasi from this
+      # checkout: wrapping the core module into a component needs `vendor/wasm-tools` (E6005 without it),
+      # and the wasm32-wasi suite below runs its programs under `vendor/wasmtime`. `vendor/` is gitignored,
+      # so nothing else stages it.
+      - name: Stage vendor
+        if: steps.seed.outputs.seeded == 'yes'
+        run: ./scripts/fetch-vendor.sh ${{ matrix.target }}
+
       - name: Spec harness corpus
         if: steps.seed.outputs.seeded == 'yes'
         run: ./maxon-bin/.maxon/maxon test tests/specHarness
@@ -268,13 +276,6 @@ jobs:
       - name: MCP corpus
         if: steps.seed.outputs.seeded == 'yes' && matrix.debugger == 'yes'
         run: ./maxon-bin/.maxon/maxon test tests/mcp
-
-      # `tests/cli` builds wasm32-wasi from this checkout, and wrapping the core module into a
-      # component needs `vendor/wasm-tools` (E6005 without it); the wasm32-wasi suite below runs its
-      # programs under `vendor/wasmtime`. `vendor/` is gitignored, so nothing else stages it.
-      - name: Stage vendor
-        if: steps.seed.outputs.seeded == 'yes'
-        run: ./scripts/fetch-vendor.sh ${{ matrix.target }}
 
       - name: CLI corpus
         if: steps.seed.outputs.seeded == 'yes'
