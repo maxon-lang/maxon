@@ -6357,6 +6357,13 @@ export type GlobalAliasReturnInfo
 		return returnedNames.count() > 0 or returnCalls.count() > 0
 	end 'statesAnything'
 
+	// The closure interns a declaration's node from `bareName` (`closeGlobalAliasReturns`), so an
+	// info filed under any other key must carry that key: otherwise no call reaches its node and
+	// the mark is lost.
+	export function declaredAs(declaredName ByteArray) returns GlobalAliasReturnInfo
+		return Self.create(self.returnedNames, returnCalls: self.returnCalls, bareName: declaredName, callability: self.callability, declFilePath: self.declFilePath)
+	end 'declaredAs'
+
 	// @generated library-cache begin
 	function cacheWrite(writer LibraryCacheWriter)
 		cacheWriteNameRoster(writer, value: self.returnedNames)
@@ -6791,9 +6798,9 @@ let sharedEmptyMethodNodes = CsrColumn.create()
 // answers exhaustive, so every reader must `match` and none can fall through to reading a
 // caller-location slot as "no default".
 // ⚠ **THE THREE ARMS THAT SYNTHESIZE NOTHING ARE DECLARED FIRST AND CONTIGUOUSLY**, so the readers that
-// care only whether a slot OWNS A FUNCTION — `renameParamDefaultHelpers`, and any future walk of the
-// synthesized set — say `required to callerFile` in one arm rather than listing the three and being free to
-// forget the one added next.
+// care only whether a slot OWNS A FUNCTION — `renameContestedParamDefaultHelpers`, and any future
+// walk of the synthesized set — say `required to callerFile` in one arm rather than listing the
+// three and being free to forget the one added next.
 export union ParamDefaultProducer
 	required
 	callerLine
@@ -6931,8 +6938,8 @@ export type ParamDefaultInfo
 	end 'producerFor'
 
 	// ⭐ **RE-POINT ONE SLOT AT A DIFFERENTLY-NAMED HELPER** — the one mutation this record admits, and it
-	// exists for exactly one caller: `ProgramSignatures.renameParamDefaultHelpers`, which follows a
-	// contested free function's declaration onto its directory-qualified registration name.
+	// exists for exactly one caller: `ProgramSignatures.fileDefaultHelperUnder`, which follows a
+	// contested declaration onto its registration name.
 	// Written here rather than as a field poke so the slot index is bounds-checked by the record that owns
 	// the list, exactly as `producerFor` reads it.
 	export function renameHelper(index ParamCount, renamedTo ByteArray)
@@ -7005,29 +7012,58 @@ function paramDefaultProducersAgree(producer ParamDefaultProducer, other ParamDe
 		required or
 		callerLine or
 		callerFile gives true
-		helper(name) gives name.equals(paramDefaultHelperNameOf(other))
+		helper(name) gives producesHelperNamed(other, helperName: name)
 	end 'produces'
 end 'paramDefaultProducersAgree'
 
-// The helper name a producer the caller has ALREADY established to be a `helper` carries — the extraction the
-// comparison above cannot spell inline, because a `match` binding does not outlive the arm that binds it.
-function paramDefaultHelperNameOf(producer ParamDefaultProducer) returns ByteArray
+function producesHelperNamed(producer ParamDefaultProducer, helperName ByteArray) returns bool
 	return match producer 'produces'
 		required or
 		callerLine or
-		callerFile panic("paramDefaultHelperNameOf: asked of a producer that synthesizes no function — the caller compares `defaultProducerMark` first, which is what establishes that both sides are helpers")
-		helper(name) gives name
+		callerFile gives false
+		helper(name) gives name.equals(helperName)
 	end 'produces'
-end 'paramDefaultHelperNameOf'
+end 'producesHelperNamed'
+
+export union DefaultHelperAliasReturn
+	statesNothing
+	states(let info GlobalAliasReturnInfo)
+end 'DefaultHelperAliasReturn'
+
+export type SweptDefaultHelper
+	export let slot as ParamCount
+	export let signature as FuncReturnTypeEntry
+	export let aliasReturn as DefaultHelperAliasReturn
+
+	export static function create(slot ParamCount, signature FuncReturnTypeEntry, aliasReturn DefaultHelperAliasReturn) returns SweptDefaultHelper
+		return Self{slot: slot, signature: signature, aliasReturn: aliasReturn}
+	end 'create'
+end 'SweptDefaultHelper'
+
+export typealias SweptDefaultHelperArray = Array with SweptDefaultHelper
+
+function anyDefaultHelperStatesAGlobalAliasReturn(paramDefaults ParamDefaultEntryArray) returns bool
+	for entry in paramDefaults 'eachDefaultingDeclaration'
+		for helper in entry.helpers 'eachSynthesizedHelper'
+			match helper.aliasReturn 'aliasReturn'
+				statesNothing then continue
+				states then return true
+			end 'aliasReturn'
+		end 'eachSynthesizedHelper'
+	end 'eachDefaultingDeclaration'
+
+	return false
+end 'anyDefaultHelperStatesAGlobalAliasReturn'
 
 // `takesReceiver` rides for `ParamConsumeEntry`'s reason — see there.
 export type ParamDefaultEntry
 	export let name as ByteArray
 	export var info as ParamDefaultInfo
 	export let takesReceiver as bool
+	export let helpers as SweptDefaultHelperArray
 
-	export static function create(name ByteArray, info ParamDefaultInfo, takesReceiver bool) returns ParamDefaultEntry
-		return Self{name: name, info: info, takesReceiver: takesReceiver}
+	export static function create(name ByteArray, info ParamDefaultInfo, takesReceiver bool, helpers SweptDefaultHelperArray) returns ParamDefaultEntry
+		return Self{name: name, info: info, takesReceiver: takesReceiver, helpers: helpers}
 	end 'create'
 end 'ParamDefaultEntry'
 
@@ -12499,13 +12535,8 @@ end 'cacheReadExtensionMethodNameSet'
 
 // @generated library-cache end
 
-enum DeclarationFactTransfer
-	move
-	copy
-end 'DeclarationFactTransfer'
-
-// Every per-declaration map the sweep files under a declaration's swept key, which a re-key moves
-// and a helper rename copies. The writers take their values directly and are not routed through
+// Every per-declaration map the sweep files under a declaration's swept key, which a re-key and a
+// helper rename move. The writers take their values directly and are not routed through
 // this roster, so a new map of that kind is carried only once it has a case here; left out, a
 // re-key leaves its entry on the source key for the next declaration filed there to inherit. Not
 // here: `hash` (mixed, never moved); `staticInstanceContests` (keyed by the contest's source name);
@@ -12546,29 +12577,32 @@ enum DeclarationSweepFact
 end 'DeclarationSweepFact'
 
 extension Map
-	function transferEntry(from Key, to Key, transfer DeclarationFactTransfer)
+	function moveEntry(from Key, to Key)
+		if from == to 'ontoItself'
+			panic("Map.moveEntry: moving an entry onto its own key would delete it")
+		end 'ontoItself'
+
 		if let value = try self.get(from) 'present'
 			self.upsert(to, value: value)
 		end 'present'
 
-		if transfer == DeclarationFactTransfer.move 'strikeTheSource'
-			_ = self.remove(from)
-		end 'strikeTheSource'
-	end 'transferEntry'
+		_ = self.remove(from)
+	end 'moveEntry'
 end 'Map'
 
 extension Set
-	function transferMember(from Element, to Element, transfer DeclarationFactTransfer)
+	function moveMember(from Element, to Element)
+		if from == to 'ontoItself'
+			panic("Set.moveMember: moving a member onto itself would delete it")
+		end 'ontoItself'
+
 		if not self.contains(from) 'absent'
 			return
 		end 'absent'
 
 		self.insert(to)
-
-		if transfer == DeclarationFactTransfer.move 'strikeTheSource'
-			_ = self.remove(from)
-		end 'strikeTheSource'
-	end 'transferMember'
+		_ = self.remove(from)
+	end 'moveMember'
 end 'Set'
 
 // One key per member kind for the extension-publication and shadow sets. Unlike
@@ -18581,7 +18615,7 @@ export type ProgramSignatures
 	// fact arrives. Reachability from an empty seed set marks nothing, so a false here means
 	// `closeByRefForwarding` returns without building its graph.
 	//
-	// A stale true is harmless and a stale false is a wrong ABI. `transferDeclarationSweepFacts` also
+	// A stale true is harmless and a stale false is a wrong ABI. `moveDeclarationSweepFacts` also
 	// writes `funcParamReassigns`, but only an info `recordParamReassign` already saw, so it cannot
 	// introduce a reassignment this has not witnessed.
 	var sawParamReassignment as bool
@@ -20451,25 +20485,9 @@ export type ProgramSignatures
 			self.recordGenericAlias(genericAlias, remap: remap)
 		end 'eachGenericAlias'
 
-		// The remap is loop-INVARIANT, so the identity test is hoisted OUT of the per-declaration
-		// loop rather than asked once per function — the same shape `mergeArtifact` uses for the same
-		// fold. And the identity case is not merely a shortcut, it avoids an ALLOCATION per declared
-		// function in the program: `remapMaxonReturnType` CONSTRUCTS a `MaxonReturnType`, and a Maxon
-		// union value is a heap object (every case), so remapping ids that did not move would allocate
-		// a fresh copy of the object it was handed, for nothing.
-		//
-		// ⚠ Written as two loops over one `record`, NOT as `x if not remap.movesAnything() else remap(x)`. The
-		// ternary form LEAKS — its arms mix a BORROWED field read with a freshly-OWNED value, and the
-		// conditional does not reconcile the two ownerships, so the build exits 101.
-		if not remap.movesAnything() 'idsUnchanged'
-			for entry in scanned 'eachUnmapped'
-				self.record(entry.name, moduleDirectory: moduleDirectory, returnType: entry.returnType, declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: filePath, takesReceiver: entry.takesReceiver, opaqueParams: entry.opaqueParams, paramNames: entry.paramNames, paramTypes: entry.paramTypes, paramDeclaredBrands: entry.paramDeclaredBrands, returnAliasName: entry.returnAliasName, nameLine: entry.nameLine, nameColumn: entry.nameColumn)
-			end 'eachUnmapped'
-		end 'idsUnchanged' else 'idsMoved'
-			for entry in scanned 'eachRemapped'
-				self.record(entry.name, moduleDirectory: moduleDirectory, returnType: remapMaxonReturnType(entry.returnType, remap: remap), declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: filePath, takesReceiver: entry.takesReceiver, opaqueParams: entry.opaqueParams, paramNames: entry.paramNames, paramTypes: remapMaxonTypes(entry.paramTypes, remap: remap), paramDeclaredBrands: entry.paramDeclaredBrands, returnAliasName: entry.returnAliasName, nameLine: entry.nameLine, nameColumn: entry.nameColumn)
-			end 'eachRemapped'
-		end 'idsMoved'
+		for entry in scanned 'eachScannedSignature'
+			self.recordScannedSignature(entry, name: entry.name, moduleDirectory: moduleDirectory, declFilePath: filePath, remap: remap)
+		end 'eachScannedSignature'
 
 		// ⭐⭐ **THE FOUR BY-NAME FOLDS, AND THEY RUN *AFTER* THE DECLARATION LOOP ABOVE.** Each keys
 		// through `sweepRegistrationKey`, so a declaration's consume facts, by-reference columns, parameter
@@ -20507,7 +20525,7 @@ export type ProgramSignatures
 		// them; folding it per entry meant a `String.toByteArray()` — a `managed.slice` COPY plus a
 		// `ByteArray.init` — per DECLARATION, for a fact that changes per FILE. The hash still distinguishes two
 		// files stating identical bodies, which is the whole reason the file rides.
-		if globalAliasReturns.count() > 0 'thisFileStatesOne'
+		if globalAliasReturns.count() > 0 or anyDefaultHelperStatesAGlobalAliasReturn(paramDefaults) 'thisFileStatesOne'
 			self.hash = mixBytes(Hasher.combined(self.hash, value: DeclShapeGlobalAliasReturn), bytes: filePath.toString().toByteArray())
 		end 'thisFileStatesOne'
 
@@ -20515,8 +20533,26 @@ export type ProgramSignatures
 			self.recordGlobalAliasReturn(self.sweepRegistrationKey(entry.name, moduleDirectory: moduleDirectory, takesReceiver: entry.takesReceiver), info: entry.info)
 		end 'eachGlobalAliasReturn'
 
+		// A helper's NAME was minted by the token SCAN, from the name the source wrote, a pass before
+		// any contest was known — two directories each declaring a defaulting `pick` both mint
+		// `__paramDefault#pick#0`, and a `static`/instance pair's two members mint one
+		// `__paramDefault#T.m#0` between them. Filed under that name, the second declaration's helper
+		// would overwrite the first's facts, and the drain would emit two definitions of a symbol no
+		// source wrote (E3006).
+		//
+		// ⚠ The helpers are filed before `recordParamDefaults`, so the info it compares already names
+		// their registration-key spellings. Otherwise two declarations under one contested key disagree
+		// about a name the contest changes, not about their defaults (a false E2015). Like every by-name
+		// fold this runs after `record`, so a `static`/instance pair's key exists. A later file's contest
+		// moves an incumbent's helpers in `renameContestedParamDefaultHelpers`.
+		//
+		// It walks `paramDefaults` rather than the file's free-function names because BOTH contests re-key a
+		// helper and only this array knows which declarations have one; a program that declares no default
+		// does not enter the loop at all.
 		for entry in paramDefaults 'eachParamDefault'
-			self.recordParamDefaults(self.sweepRegistrationKey(entry.name, moduleDirectory: moduleDirectory, takesReceiver: entry.takesReceiver), info: entry.info)
+			view key = self.sweepRegistrationKey(entry.name, moduleDirectory: moduleDirectory, takesReceiver: entry.takesReceiver)
+			self.recordSweptDefaultHelpers(entry.info, helpers: entry.helpers, bareName: entry.name, registrationName: key, moduleDirectory: moduleDirectory, declFilePath: filePath, remap: remap)
+			self.recordParamDefaults(key, info: entry.info)
 		end 'eachParamDefault'
 
 		for entry in throwsEntries 'eachThrows'
@@ -20538,33 +20574,46 @@ export type ProgramSignatures
 				returnsAFieldOfItsReceiver then self.recordSweptBodyFact(factKey, marked: self.mainThreadSettled().funcReturnsReceiverField, counts: self.mainThreadSettled().funcReceiverFieldReturningDeclarationCounts, shape: DeclShapeReturnsReceiverField)
 			end 'which'
 		end 'eachProvedBodyFact'
-
-		// ⭐⭐ **THIS FILE'S OWN RE-KEYED DECLARATIONS: THE ONE THING THE LOOPS ABOVE COULD NOT KEY FOR
-		// THEMSELVES — THE NAME OF A SYNTHESIZED DEFAULT HELPER.**
-		//
-		// Everything else is already keyed: every recorder above files under `sweepRegistrationKey`'s answer.
-		// A helper is different because its NAME was minted by the token SCAN, from the name the source wrote,
-		// a pass before any contest was known — two directories each declaring a defaulting `pick` both minted
-		// `__paramDefault#pick#0`, MEASURED as
-		// `E3006: duplicate definition of function '__paramDefault#pick#0'` against a program the rule accepts,
-		// and a `static`/instance pair's two members mint one `__paramDefault#T.m#0` between them.
-		//
-		// ⚠ **IT HAS TO BE HERE, AFTER THE `record` LOOP**, because the rename moves the helper's OWN swept
-		// signature with it and that signature is written by that loop.
-		//
-		// It walks `paramDefaults` rather than the file's free-function names because BOTH contests re-key a
-		// helper and only this array knows which declarations have one; a program that declares no default
-		// does not enter the loop at all.
-		for entry in paramDefaults 'eachDeclarationThatDefaultsSomething'
-			view key = self.sweepRegistrationKey(entry.name, moduleDirectory: moduleDirectory, takesReceiver: entry.takesReceiver)
-
-			if key.equals(entry.name) 'theHelperKeepsTheNameTheScanMintedForIt'
-				continue
-			end 'theHelperKeepsTheNameTheScanMintedForIt'
-
-			self.renameParamDefaultHelpers(entry.info, bareName: entry.name, registrationName: key)
-		end 'eachDeclarationThatDefaultsSomething'
 	end 'foldFile'
+
+	// The identity case is not merely a shortcut, it avoids an ALLOCATION per declared function in
+	// the program: `remapMaxonReturnType` CONSTRUCTS a `MaxonReturnType`, and a Maxon union value is
+	// a heap object (every case), so remapping ids that did not move would allocate a fresh copy of
+	// the object it was handed, for nothing.
+	//
+	// ⚠ Written as two `record` calls, NOT as `x if not remap.movesAnything() else remap(x)`. The
+	// ternary form LEAKS — its arms mix a BORROWED field read with a freshly-OWNED value, and the
+	// conditional does not reconcile the two ownerships, so the build exits 101.
+	function recordScannedSignature(entry FuncReturnTypeEntry, name ByteArray, moduleDirectory String, declFilePath FilePath, remap TypeIdRemap)
+		if not remap.movesAnything() 'idsUnchanged'
+			self.record(name, moduleDirectory: moduleDirectory, returnType: entry.returnType, declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: declFilePath, takesReceiver: entry.takesReceiver, opaqueParams: entry.opaqueParams, paramNames: entry.paramNames, paramTypes: entry.paramTypes, paramDeclaredBrands: entry.paramDeclaredBrands, returnAliasName: entry.returnAliasName, nameLine: entry.nameLine, nameColumn: entry.nameColumn)
+			return
+		end 'idsUnchanged'
+
+		self.record(name, moduleDirectory: moduleDirectory, returnType: remapMaxonReturnType(entry.returnType, remap: remap), declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: declFilePath, takesReceiver: entry.takesReceiver, opaqueParams: entry.opaqueParams, paramNames: entry.paramNames, paramTypes: remapMaxonTypes(entry.paramTypes, remap: remap), paramDeclaredBrands: entry.paramDeclaredBrands, returnAliasName: entry.returnAliasName, nameLine: entry.nameLine, nameColumn: entry.nameColumn)
+	end 'recordScannedSignature'
+
+	function recordSweptDefaultHelpers(info ParamDefaultInfo, helpers SweptDefaultHelperArray, bareName ByteArray, registrationName ByteArray, moduleDirectory String, declFilePath FilePath, remap TypeIdRemap)
+		for helper in helpers 'eachSynthesizedHelper'
+			let helperName = self.fileDefaultHelperUnder(info, slot: helper.slot, sweptName: helper.signature.name, bareName: bareName, registrationName: registrationName)
+			self.recordScannedSignature(helper.signature, name: helperName, moduleDirectory: moduleDirectory, declFilePath: declFilePath, remap: remap)
+
+			match helper.aliasReturn 'aliasReturn'
+				statesNothing then continue
+				states(aliasInfo) then self.recordGlobalAliasReturn(helperName, info: aliasInfo.declaredAs(helperName))
+			end 'aliasReturn'
+		end 'eachSynthesizedHelper'
+	end 'recordSweptDefaultHelpers'
+
+	function fileDefaultHelperUnder(info ParamDefaultInfo, slot ParamCount, sweptName ByteArray, bareName ByteArray, registrationName ByteArray) returns ByteArray
+		if registrationName.equals(bareName) 'theHelperKeepsTheNameTheScanMintedForIt'
+			return sweptName
+		end 'theHelperKeepsTheNameTheScanMintedForIt'
+
+		let renamed = paramDefaultHelperName(registrationName, paramIndex: slot)
+		info.renameHelper(slot, renamedTo: renamed.clone())
+		return renamed
+	end 'fileDefaultHelperUnder'
 
 	// Add one declaration to the index AND fold it into the hash. The one write, so the table and the
 	// hash that keys every parse memo on it can never disagree about what the index contains.
@@ -23797,49 +23846,49 @@ export type ProgramSignatures
 	// ⚠ Every fact is struck from the source key. A fact left behind is answered for a declaration
 	// that never stated it — another declaration's parameter default, `throws` clause or return type.
 	function rekeyDeclarationSweepEntries(from ByteArray, to ByteArray)
-		self.transferDeclarationSweepFacts(from, to: to, transfer: DeclarationFactTransfer.move)
+		self.moveDeclarationSweepFacts(from, to: to)
 		self.renameContestedParamDefaultHelpers(from, registrationName: to)
 	end 'rekeyDeclarationSweepEntries'
 
-	function transferDeclarationSweepFacts(from ByteArray, to ByteArray, transfer DeclarationFactTransfer)
+	function moveDeclarationSweepFacts(from ByteArray, to ByteArray)
 		for fact in DeclarationSweepFact.allCases 'eachFact'
-			self.transferDeclarationSweepFact(fact, from: from, to: to, transfer: transfer)
+			self.moveDeclarationSweepFact(fact, from: from, to: to)
 		end 'eachFact'
-	end 'transferDeclarationSweepFacts'
+	end 'moveDeclarationSweepFacts'
 
-	function transferDeclarationSweepFact(fact DeclarationSweepFact, from ByteArray, to ByteArray, transfer DeclarationFactTransfer)
+	function moveDeclarationSweepFact(fact DeclarationSweepFact, from ByteArray, to ByteArray)
 		match fact 'fact'
-			returnType then self.mainThreadSettled().returnTypes.transferEntry(from, to: to, transfer: transfer)
-			returnAliasName then self.mainThreadSettled().funcReturnAliasNames.transferEntry(from, to: to, transfer: transfer)
-			returnSurface then self.mainThreadSettled().declaredReturnSurfaces.transferEntry(from, to: to, transfer: transfer)
-			returnDeclFile then self.mainThreadSettled().funcReturnDeclFiles.transferEntry(from, to: to, transfer: transfer)
-			declarationSite then self.mainThreadSettled().funcDeclSites.transferEntry(from, to: to, transfer: transfer)
+			returnType then self.mainThreadSettled().returnTypes.moveEntry(from, to: to)
+			returnAliasName then self.mainThreadSettled().funcReturnAliasNames.moveEntry(from, to: to)
+			returnSurface then self.mainThreadSettled().declaredReturnSurfaces.moveEntry(from, to: to)
+			returnDeclFile then self.mainThreadSettled().funcReturnDeclFiles.moveEntry(from, to: to)
+			declarationSite then self.mainThreadSettled().funcDeclSites.moveEntry(from, to: to)
 			overloadedDeclarations then self.moveOverloadedDecls(from, to: to)
-			opaqueParams then self.mainThreadSettled().funcOpaqueParams.transferEntry(from, to: to, transfer: transfer)
-			opaqueParamsDisagree then self.mainThreadSettled().contestedOpaqueParams.transferMember(from, to: to, transfer: transfer)
-			paramConsumes then self.mainThreadSettled().funcParamConsumes.transferEntry(from, to: to, transfer: transfer)
-			paramReassigns then self.mainThreadSettled().byRefSitesOfKey.transferEntry(from, to: to, transfer: transfer)
-			globalAliasReturn then self.mainThreadSettled().funcGlobalAliasReturns.transferEntry(from, to: to, transfer: transfer)
-			paramDefaults then self.mainThreadSettled().funcParamDefaults.transferEntry(from, to: to, transfer: transfer)
-			throwsClause then self.mainThreadSettled().funcThrows.transferEntry(from, to: to, transfer: transfer)
-			declarationCount then self.mainThreadSettled().funcDeclarationCounts.transferEntry(from, to: to, transfer: transfer)
-			defaultingDeclarationCount then self.mainThreadSettled().funcDefaultingDeclarationCounts.transferEntry(from, to: to, transfer: transfer)
-			paramDefaultsDisagree then self.mainThreadSettled().disagreeingParamDefaults.transferMember(from, to: to, transfer: transfer)
-			throwingDeclarationCount then self.mainThreadSettled().funcThrowingDeclarationCounts.transferEntry(from, to: to, transfer: transfer)
-			throwsClausesDisagree then self.mainThreadSettled().disagreeingThrows.transferMember(from, to: to, transfer: transfer)
-			diverges then self.mainThreadSettled().funcDiverges.transferMember(from, to: to, transfer: transfer)
-			divergingDeclarationCount then self.mainThreadSettled().funcDivergingDeclarationCounts.transferEntry(from, to: to, transfer: transfer)
-			alwaysThrows then self.mainThreadSettled().funcAlwaysThrows.transferMember(from, to: to, transfer: transfer)
-			alwaysThrowingDeclarationCount then self.mainThreadSettled().funcAlwaysThrowingDeclarationCounts.transferEntry(from, to: to, transfer: transfer)
-			returnsFreshRecord then self.mainThreadSettled().funcReturnsFreshRecord.transferMember(from, to: to, transfer: transfer)
-			freshReturnForwards then self.mainThreadSettled().funcFreshReturnForwards.transferEntry(from, to: to, transfer: transfer)
-			freshReturningDeclarationCount then self.mainThreadSettled().funcFreshReturningDeclarationCounts.transferEntry(from, to: to, transfer: transfer)
-			constructsFromParams then self.mainThreadSettled().funcConstructsFromParams.transferMember(from, to: to, transfer: transfer)
-			constructingDeclarationCount then self.mainThreadSettled().funcConstructingDeclarationCounts.transferEntry(from, to: to, transfer: transfer)
-			returnsReceiverField then self.mainThreadSettled().funcReturnsReceiverField.transferMember(from, to: to, transfer: transfer)
-			receiverFieldReturningDeclarationCount then self.mainThreadSettled().funcReceiverFieldReturningDeclarationCounts.transferEntry(from, to: to, transfer: transfer)
+			opaqueParams then self.mainThreadSettled().funcOpaqueParams.moveEntry(from, to: to)
+			opaqueParamsDisagree then self.mainThreadSettled().contestedOpaqueParams.moveMember(from, to: to)
+			paramConsumes then self.mainThreadSettled().funcParamConsumes.moveEntry(from, to: to)
+			paramReassigns then self.mainThreadSettled().byRefSitesOfKey.moveEntry(from, to: to)
+			globalAliasReturn then self.mainThreadSettled().funcGlobalAliasReturns.moveEntry(from, to: to)
+			paramDefaults then self.mainThreadSettled().funcParamDefaults.moveEntry(from, to: to)
+			throwsClause then self.mainThreadSettled().funcThrows.moveEntry(from, to: to)
+			declarationCount then self.mainThreadSettled().funcDeclarationCounts.moveEntry(from, to: to)
+			defaultingDeclarationCount then self.mainThreadSettled().funcDefaultingDeclarationCounts.moveEntry(from, to: to)
+			paramDefaultsDisagree then self.mainThreadSettled().disagreeingParamDefaults.moveMember(from, to: to)
+			throwingDeclarationCount then self.mainThreadSettled().funcThrowingDeclarationCounts.moveEntry(from, to: to)
+			throwsClausesDisagree then self.mainThreadSettled().disagreeingThrows.moveMember(from, to: to)
+			diverges then self.mainThreadSettled().funcDiverges.moveMember(from, to: to)
+			divergingDeclarationCount then self.mainThreadSettled().funcDivergingDeclarationCounts.moveEntry(from, to: to)
+			alwaysThrows then self.mainThreadSettled().funcAlwaysThrows.moveMember(from, to: to)
+			alwaysThrowingDeclarationCount then self.mainThreadSettled().funcAlwaysThrowingDeclarationCounts.moveEntry(from, to: to)
+			returnsFreshRecord then self.mainThreadSettled().funcReturnsFreshRecord.moveMember(from, to: to)
+			freshReturnForwards then self.mainThreadSettled().funcFreshReturnForwards.moveEntry(from, to: to)
+			freshReturningDeclarationCount then self.mainThreadSettled().funcFreshReturningDeclarationCounts.moveEntry(from, to: to)
+			constructsFromParams then self.mainThreadSettled().funcConstructsFromParams.moveMember(from, to: to)
+			constructingDeclarationCount then self.mainThreadSettled().funcConstructingDeclarationCounts.moveEntry(from, to: to)
+			returnsReceiverField then self.mainThreadSettled().funcReturnsReceiverField.moveMember(from, to: to)
+			receiverFieldReturningDeclarationCount then self.mainThreadSettled().funcReceiverFieldReturningDeclarationCounts.moveEntry(from, to: to)
 		end 'fact'
-	end 'transferDeclarationSweepFact'
+	end 'moveDeclarationSweepFact'
 
 	// ⭐⭐ **CLAIM THE DIRECTORY-QUALIFIED KEY THIS FILE'S DECLARATIONS OF A CONTESTED NAME WILL BE FILED
 	// UNDER — AND RECORD WHETHER IT WAS ALREADY SOMEBODY ELSE'S.**
@@ -23895,49 +23944,36 @@ export type ProgramSignatures
 	// which is what makes it this declaration's by construction: nothing else files there. A name whose
 	// declaration states no default has no entry and no helper, so the common contested name costs one map
 	// miss.
+	//
+	// The helper's facts are moved, not copied, because when this runs the swept name holds only the
+	// incumbent's: the contestant that triggered it files its own helpers later in its fold
+	// (`recordSweptDefaultHelpers`), after the contest is settled. The moved alias-return info is
+	// refiled through `declaredAs` for that function's reason.
 	function renameContestedParamDefaultHelpers(bareName ByteArray, registrationName ByteArray)
-		if let defaults = try self.mainThreadSettled().funcParamDefaults.get(registrationName) 'hasParameterDefaults'
-			self.renameParamDefaultHelpers(defaults, bareName: bareName, registrationName: registrationName)
-		end 'hasParameterDefaults'
-	end 'renameContestedParamDefaultHelpers'
+		var info = try self.mainThreadSettled().funcParamDefaults.get(registrationName) otherwise return
 
-	// A contested function's synthesized default helpers are renamed with it. The sweep runs before
-	// any contest is known and mints `__paramDefault#pick#0` for every directory declaring a
-	// defaulting `pick`, while `Project.paramDefaultHelperName` assumes a function name is unique
-	// whole-program; unrenamed, that is E3006 on a symbol absent from the source.
-	//
-	// The helper's swept facts go with its name: the real parse synthesizes the body under the name it
-	// reads back from here (`Parser.requireSweptHelperName`) and refuses one the sweep never
-	// published. They are copied, not moved, because two declarations can mint one swept helper name —
-	// a root and a subdirectory contestant, or the two members of a `static`/instance pair — and
-	// striking the source would strand the one not renamed.
-	//
-	// The old name is re-minted from the bare name rather than read out of the info, so both spellings
-	// come from one join. Both callers reach this while the swept name holds this declaration's facts:
-	// the end-of-fold rename (`foldFile`), right after this file's own `record` for the helper, and
-	// the incumbent refile, where only the incumbent directory has folded. The `funcParamDefaults`
-	// entry is read under the registration key, which no other declaration writes.
-	function renameParamDefaultHelpers(info ParamDefaultInfo, bareName ByteArray, registrationName ByteArray)
 		for i in 0 upto info.producers.count() 'eachCallAlignedSlot'
 			let slot = i as ParamCount
 
-			// A caller-location slot has no synthesized function to rename, so the transfer would find
+			// A caller-location slot has no synthesized function to rename, so the move would find
 			// nothing and `renameHelper` would invent a helper the drain never declared.
 			match info.producerFor(slot) 'produces'
 				required or
 				callerLine or
 				callerFile then continue
-				helper then break
+				helper(name) then self.refileContestedDefaultHelper(info, slot: slot, sweptName: name.clone(), bareName: bareName, registrationName: registrationName)
 			end 'produces'
-
-			let swept = paramDefaultHelperName(bareName, paramIndex: slot)
-			let renamed = paramDefaultHelperName(registrationName, paramIndex: slot)
-
-			self.transferDeclarationSweepFacts(swept, to: renamed, transfer: DeclarationFactTransfer.copy)
-
-			info.renameHelper(slot, renamedTo: renamed)
 		end 'eachCallAlignedSlot'
-	end 'renameParamDefaultHelpers'
+	end 'renameContestedParamDefaultHelpers'
+
+	function refileContestedDefaultHelper(info ParamDefaultInfo, slot ParamCount, sweptName ByteArray, bareName ByteArray, registrationName ByteArray)
+		let renamed = self.fileDefaultHelperUnder(info, slot: slot, sweptName: sweptName, bareName: bareName, registrationName: registrationName)
+		self.moveDeclarationSweepFacts(sweptName, to: renamed)
+
+		if let aliasReturn = try self.mainThreadSettled().funcGlobalAliasReturns.get(renamed) 'returnsAGlobalOrACall'
+			self.mainThreadSettled().funcGlobalAliasReturns.upsert(renamed, value: aliasReturn.declaredAs(renamed))
+		end 'returnsAGlobalOrACall'
+	end 'refileContestedDefaultHelper'
 
 	// Add one FREE function's namespace-qualified spelling to the index AND fold it into the hash —
 	// `recordAlias`'s discipline, one write, so the set and the hash that keys every parse memo on it cannot

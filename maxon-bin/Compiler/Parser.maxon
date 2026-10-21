@@ -21343,11 +21343,13 @@ export type Parser
 		end 'aFreeFunction'
 
 		// ⭐ **PARAMETER DEFAULTS** — recorded from the SAME token walk, and the ONLY place
-		// the whole program learns that a call may legally omit an argument. It also publishes each
-		// synthesized helper's RETURN TYPE into `entries`, which is what lets a call site in another file
-		// type the call it emits to that helper (`mintCallResult`) — and, since a default expression is a
-		// `return` in every respect that matters here, its `let`-global-alias shape into `globalAliasReturns`.
-		self.recordScannedParamDefaults(funcName, paramsStart: paramsStart, takesReceiver: takesReceiver, visibility: visibility, entries: entries, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults)
+		// the whole program learns that a call may legally omit an argument. It also carries each
+		// synthesized helper's RETURN TYPE, which is what lets a call site in another file type the
+		// call it emits to that helper (`mintCallResult`) — and, since a default expression is a
+		// `return` in every respect that matters here, its `let`-global-alias shape. Both ride the
+		// `ParamDefaultEntry` rather than `entries` and `globalAliasReturns`: the helper's final name
+		// waits on a contest only the fold can see (`ProgramSignatures.recordSweptDefaultHelpers`).
+		self.recordScannedParamDefaults(funcName, paramsStart: paramsStart, takesReceiver: takesReceiver, visibility: visibility, paramDefaults: paramDefaults)
 
 		// The `throws E` clause follows the return type; parsed BEFORE the consume-scan so the cursor lands
 		// past it. Only a THROWING function gets an entry (its absence is "does not throw"), mirroring
@@ -21459,13 +21461,14 @@ export type Parser
 	//
 	// A helper is published at the DECLARING function's own tier, which is the only true statement about it:
 	// nobody writes its name, so no file can be refused it, and every call to it is the compiler's own mint.
-	function recordScannedParamDefaults(funcName ByteArray, paramsStart ElementIndex, takesReceiver bool, visibility Visibility, entries FuncReturnTypeEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray)
+	function recordScannedParamDefaults(funcName ByteArray, paramsStart ElementIndex, takesReceiver bool, visibility Visibility, paramDefaults ParamDefaultEntryArray)
 		if not self.paramListDeclaresDefault(paramsStart) 'noDefaults'
 			return
 		end 'noDefaults'
 
 		var names = NameRoster.create()
 		var producers = ParamDefaultProducerArray.create()
+		var helpers = SweptDefaultHelperArray.create()
 
 		if takesReceiver 'prependReceiver'
 			names.push(SelfParamName)
@@ -21509,7 +21512,8 @@ export type Parser
 					// cannot key on different numbers. (They did: minted from the SOURCE index, a defaulted
 					// instance method published `#0` and its declaration looked up `#1`, and the divergence
 					// surfaced as a backend `call to unknown function` with no source position at all.)
-					let helperName = paramDefaultHelperName(funcName, paramIndex: producers.count() as ParamCount)
+					let slot = producers.count() as ParamCount
+					let helperName = paramDefaultHelperName(funcName, paramIndex: slot)
 					producers.push(ParamDefaultProducer.helper(helperName))
 
 					// ⭐ **AND ITS PRE-ERASURE SPELLING RIDES TOO.** The helper's return type IS the
@@ -21523,8 +21527,7 @@ export type Parser
 					// `slotElementsFromAliases: false` for `returnDeclaredSurface`'s reason, and it is the same
 					// reason: this helper is published by the SWEEP, whose copy is the one the whole-program index
 					// stores, so a SLOT's element bit read here would be how far the sweep had got.
-					entries.push(FuncReturnTypeEntry.create(helperName, returnType: MaxonReturnType.value(paramType), declaredSurface: self.declaredSurfaceAt(typeStart, slotElementsFromAliases: false), visibility: visibility))
-					self.recordDefaultHelperGlobalAliasReturn(helperName, valueStart: typeEnd + 1, exprEnd: itemEnd, globalAliasReturns: globalAliasReturns)
+					helpers.push(SweptDefaultHelper.create(slot, signature: FuncReturnTypeEntry.create(helperName, returnType: MaxonReturnType.value(paramType), declaredSurface: self.declaredSurfaceAt(typeStart, slotElementsFromAliases: false), visibility: visibility), aliasReturn: self.defaultHelperGlobalAliasReturn(helperName, valueStart: typeEnd + 1, exprEnd: itemEnd)))
 				end 'synthesizedHelper'
 			end 'hasDefault'
 
@@ -21537,7 +21540,7 @@ export type Parser
 
 		self.pos = resume
 
-		paramDefaults.push(ParamDefaultEntry.create(funcName, info: ParamDefaultInfo.create(names, producers: producers), takesReceiver: takesReceiver))
+		paramDefaults.push(ParamDefaultEntry.create(funcName, info: ParamDefaultInfo.create(names, producers: producers), takesReceiver: takesReceiver, helpers: helpers))
 	end 'recordScannedParamDefaults'
 
 	// ⭐⭐ **THE `let`-GLOBAL ALIAS SEED FOR THE OTHER `return` IN THE LANGUAGE: A PARAMETER DEFAULT.** The captured expression becomes
@@ -21555,16 +21558,17 @@ export type Parser
 	//     helper returns an already-owned call result and never reaches the promotion — so this door had to be
 	//     opened for soundness and not only to lift a refusal.
 	//
-	// ⚠ **KEYED BY THE HELPER NAME THE SWEEP ITSELF MINTS, WHICH IS AN OVERLOAD SET'S FIRST MEMBER'S.**
-	// A later member re-points its own helper to a name derived from its REGISTRATION name
-	// (`declaredParamDefaultHelperName`), which no entry here is filed under — so that member's default is
-	// refused E2015 rather than admitted unmarked. That is the family rule holding in the one place a key can
-	// be wrong: the sweep publishes ONE entry per bare name, and the direction it errs in is a REFUSAL.
+	// ⚠ Keyed by the name the fold files the helper under (`ProgramSignatures.recordSweptDefaultHelpers`),
+	// which is an overload set's first member's. A later member re-points its own helper to a name derived
+	// from its REGISTRATION name (`declaredParamDefaultHelperName`), which no entry here is filed under — so
+	// that member's default is refused E2015 rather than admitted unmarked. That is the family rule holding
+	// in the one place a key can be wrong: the sweep publishes ONE entry per registration key, and the
+	// direction it errs in is a REFUSAL.
 	//
 	// ⚡ Four columns per default expression, unconditionally. The per-BODY twin had to be gated behind a
 	// `sawAReturn` flag because every function in the program walks it; this one is reached only for a
 	// parameter that declares an expression default, of which a program has tens.
-	function recordDefaultHelperGlobalAliasReturn(helperName ByteArray, valueStart ElementIndex, exprEnd ElementIndex, globalAliasReturns GlobalAliasReturnEntryArray)
+	function defaultHelperGlobalAliasReturn(helperName ByteArray, valueStart ElementIndex, exprEnd ElementIndex) returns DefaultHelperAliasReturn
 		var returnedNames = NameRoster.create()
 		var returnedHeads = NameRoster.create()
 		var returnedAt = TokenIndexArray.create()
@@ -21580,15 +21584,15 @@ export type Parser
 		// empty (`parseDefaultHelperBody`), so there is nothing it could bind and no local for a name to
 		// resolve to ahead of the global.
 		if not GlobalAliasReturnInfo.statesAnything(returnedNames, returnCalls: returnCalls) 'statesNothing'
-			return
+			return DefaultHelperAliasReturn.statesNothing
 		end 'statesNothing'
 
 		// `bareCallOnly` and no receiver: the helper is a free function whose name is in the reserved `__`
 		// space with a `#` in it (`Project.paramDefaultHelperName`), so it wears its own node in the closure's
 		// graph and no call any source can write reaches it. Its own forwarding EDGES are ordinary and are
 		// what carries the mark up from a default that calls an accessor.
-		globalAliasReturns.push(GlobalAliasReturnEntry.create(helperName, info: GlobalAliasReturnInfo.create(returnedNames, returnCalls: returnCalls, bareName: helperName, callability: DeclCallability.bareCallOnly, declFilePath: self.job.path), takesReceiver: false))
-	end 'recordDefaultHelperGlobalAliasReturn'
+		return DefaultHelperAliasReturn.states(GlobalAliasReturnInfo.create(returnedNames, returnCalls: returnCalls, bareName: helperName, callability: DeclCallability.bareCallOnly, declFilePath: self.job.path))
+	end 'defaultHelperGlobalAliasReturn'
 
 	// Does the parameter list at `parenPos` declare a default on ANY parameter? A peek-only, allocation-free
 	// walk asked once per declared function.
@@ -36602,7 +36606,7 @@ export type Parser
 		//
 		// The global-alias answer is asked of the helper's own minted name, which separates the two
 		// default doors. A parameter default's helper is published by the sweep
-		// (`recordDefaultHelperGlobalAliasReturn`), so `f(p T = A)` is admitted and its call site marks
+		// (`defaultHelperGlobalAliasReturn`), so `f(p T = A)` is admitted and its call site marks
 		// the argument as the written-out `f(A)` is. A field default's is not, so
 		// `ownedFormOfBorrowedValue` keeps the E2015 at its return. ⚠ The asymmetry is deliberate. The
 		// parameter door hands the record to a call argument, where the mark is read

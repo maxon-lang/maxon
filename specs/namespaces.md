@@ -482,3 +482,173 @@ end 'pick'
 ```maxoncstderr
 error E3036: specs/namespaces/error.root-declaration-owns-the-bare-key-parameter-defaults.maxon:10:10: 'pick' expects 1 argument(s) but 0 were provided
 ```
+
+
+<!-- test: root-declaration-owns-the-bare-key-default-helper -->
+Both declarations default their first parameter, so the scan names both synthesized default helpers
+alike. The root's call is filled with the root's `String` default and the subdirectory's with its own.
+```maxon
+// --- file: main.maxon
+typealias Level = int(0 to 125)
+
+function pick(word String = "abc") returns Level
+	return word.count() as Level
+end 'pick'
+
+function main() returns ExitCode
+	print("{pick()} {sub.pick()}\n")
+	return 0
+end 'main'
+
+// --- file: sub/helper.maxon
+export typealias SubLevel = int(0 to 125)
+
+export function pick(n SubLevel = 5) returns SubLevel
+	return n
+end 'pick'
+```
+```exitcode
+0
+```
+```stdout
+3 5
+```
+
+
+<!-- test: root-declaration-owns-the-bare-key-default-helper-whatever-the-fold-order -->
+The same program with the SUBDIRECTORY declared first.
+```maxon
+// --- file: sub/helper.maxon
+export typealias SubLevel = int(0 to 125)
+
+export function pick(n SubLevel = 5) returns SubLevel
+	return n
+end 'pick'
+
+// --- file: main.maxon
+typealias Level = int(0 to 125)
+
+function pick(word String = "abc") returns Level
+	return word.count() as Level
+end 'pick'
+
+function main() returns ExitCode
+	print("{pick()} {sub.pick()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 5
+```
+
+
+<!-- test: contested-subdirectory-default-helpers-keep-their-own-types -->
+Two subdirectories default the same position at different types. The first directory's helper is moved
+onto its qualified name when the second directory makes the name contested.
+```maxon
+// --- file: alpha/a.maxon
+export typealias AlphaLevel = int(0 to 125)
+
+export function pick(word String = "abc") returns AlphaLevel
+	return word.count() as AlphaLevel
+end 'pick'
+
+// --- file: beta/b.maxon
+export typealias BetaLevel = int(0 to 125)
+
+export function pick(n BetaLevel = 5) returns BetaLevel
+	return n
+end 'pick'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("{alpha.pick()} {beta.pick()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 5
+```
+
+
+<!-- test: root-declaration-owns-the-bare-key-default-helper-global-alias -->
+A subdirectory's default hands back a top-level `let` record and a root declaration declared after it
+defaults to a top-level `var` one, which its function then writes. Moving the subdirectory's helper onto
+its qualified name must not leave the root's answering for the `let`.
+```maxon
+// --- file: alpha/a.maxon
+export function pick(r Rec = TheLetRec) returns Level
+	return r.v
+end 'pick'
+
+// --- file: main.maxon
+var SpareRec = Rec.create()
+
+function pick(r Rec = SpareRec) returns Level
+	r.v = 4
+	return r.v
+end 'pick'
+
+function main() returns ExitCode
+	print("{alpha.pick()} {pick()}\n")
+	return 0
+end 'main'
+
+// --- file: rec.maxon
+export typealias Level = int(0 to 125)
+
+export type Rec
+	export var v as Level
+
+	export static function create() returns Rec
+		return Rec{v: 1}
+	end 'create'
+end 'Rec'
+
+module let TheLetRec = Rec.create()
+```
+```exitcode
+0
+```
+```stdout
+1 4
+```
+
+
+<!-- test: contested-subdirectory-overloads-in-two-files-agree-about-their-defaults -->
+`beta/` declares two overloads of a contested `pick` in two files, and they agree about their defaults.
+Both are filed under `beta.pick`, and they must still be read as agreeing.
+```maxon
+// --- file: alpha/a.maxon
+export function pick() returns String
+	return "alpha"
+end 'pick'
+
+// --- file: beta/b1.maxon
+export function pick(a bool, word String = "abc") returns String
+	return "{a}{word}"
+end 'pick'
+
+// --- file: beta/b2.maxon
+export function pick(a String, word String = "abc") returns String
+	return "{a}{word}"
+end 'pick'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("{alpha.pick()} {beta.pick(true)} {beta.pick("x")}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+alpha trueabc xabc
+```

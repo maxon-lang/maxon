@@ -434,3 +434,288 @@ end 'main'
 ```maxoncstderr
 error E3057: specs/same-name-methods/error.same-name-methods.throwing-static-names-its-callee.maxon:25:13: throwing function requires try: 'Box.getValue'
 ```
+
+<!-- test: same-name-methods.defaults-at-one-slot-instance-first -->
+An instance method's defaulted `n` and a static's defaulted `word` sit at the same call-aligned position, so
+the scan names both of their synthesized default helpers alike. Each call must still be filled with its own
+member's default, at its own member's type.
+```maxon
+typealias Level = int(0 to 125)
+
+type Gauge
+	var base as Level
+
+	static function create(b Level) returns Gauge
+		return Gauge{base: b}
+	end 'create'
+
+	function make(n Level = 5) returns Level
+		return self.base + n
+	end 'make'
+
+	static function make(a Level, word String = "abc") returns Level
+		return a + word.count() as Level
+	end 'make'
+end 'Gauge'
+
+function main() returns ExitCode
+	let g = Gauge.create(0)
+	print("{Gauge.make(10)} {g.make()}\n")
+	return 0
+end 'main'
+```
+```stdout
+13 5
+```
+```exitcode
+0
+```
+
+<!-- test: same-name-methods.defaults-at-one-slot-static-first -->
+The same pair with the static declared first.
+```maxon
+typealias Level = int(0 to 125)
+
+type Gauge
+	var base as Level
+
+	static function create(b Level) returns Gauge
+		return Gauge{base: b}
+	end 'create'
+
+	static function make(a Level, word String = "abc") returns Level
+		return a + word.count() as Level
+	end 'make'
+
+	function make(n Level = 5) returns Level
+		return self.base + n
+	end 'make'
+end 'Gauge'
+
+function main() returns ExitCode
+	let g = Gauge.create(0)
+	print("{Gauge.make(10)} {g.make()}\n")
+	return 0
+end 'main'
+```
+```stdout
+13 5
+```
+```exitcode
+0
+```
+
+<!-- test: same-name-methods.defaults-at-one-slot-across-files -->
+The same pair with the static in the type's file and the instance method in an extension in another file.
+```maxon
+// --- file: gauge.maxon
+module typealias Level = int(0 to 125)
+
+module type Gauge
+	module var base as Level
+
+	module static function create(b Level) returns Gauge
+		return Gauge{base: b}
+	end 'create'
+
+	module static function make(a Level, word String = "abc") returns Level
+		return a + word.count() as Level
+	end 'make'
+end 'Gauge'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let g = Gauge.create(0)
+	print("{Gauge.make(10)} {g.make()}\n")
+	return 0
+end 'main'
+
+// --- file: scale.maxon
+extension Gauge
+	module function make(n Level = 5) returns Level
+		return self.base + n
+	end 'make'
+end 'Gauge'
+```
+```stdout
+13 5
+```
+```exitcode
+0
+```
+
+<!-- test: same-name-methods.defaults-at-one-slot-in-a-generic-type -->
+The same pair declared in a generic type.
+```maxon
+typealias Level = int(0 to 125)
+
+type Gauge uses T
+	var item as T
+	var base as Level
+
+	static function create(item T, b Level) returns Self
+		return Self{item: item, base: b}
+	end 'create'
+
+	function make(n Level = 5) returns Level
+		return self.base + n
+	end 'make'
+
+	static function make(a Level, word String = "abc") returns Level
+		return a + word.count() as Level
+	end 'make'
+end 'Gauge'
+
+typealias LevelGauge = Gauge with Level
+
+function main() returns ExitCode
+	let g = LevelGauge.create(7, b: 0)
+	print("{LevelGauge.make(10)} {g.make()}\n")
+	return 0
+end 'main'
+```
+```stdout
+13 5
+```
+```exitcode
+0
+```
+
+<!-- test: same-name-methods.defaults-at-one-slot-keep-their-own-global-alias -->
+The static's default hands back a top-level `let` record and the instance method's a top-level `var` one.
+The instance method writes its parameter, which a `let` record may not reach, so its default must not be
+taken for the static's.
+```maxon
+typealias Level = int(0 to 125)
+
+type Rec
+	export var v as Level
+
+	static function create() returns Rec
+		return Rec{v: 1}
+	end 'create'
+end 'Rec'
+
+let TheLetRec = Rec.create()
+var SpareRec = Rec.create()
+
+type Gauge
+	var base as Level
+
+	static function create(b Level) returns Gauge
+		return Gauge{base: b}
+	end 'create'
+
+	static function make(a Level, r Rec = TheLetRec) returns Level
+		return a + r.v
+	end 'make'
+
+	function make(r Rec = SpareRec) returns Level
+		r.v = 4
+		return self.base + r.v
+	end 'make'
+end 'Gauge'
+
+function main() returns ExitCode
+	let g = Gauge.create(0)
+	print("{Gauge.make(10)} {g.make()}\n")
+	return 0
+end 'main'
+```
+```stdout
+11 4
+```
+```exitcode
+0
+```
+
+<!-- test: same-name-methods.defaults-at-one-slot-keep-their-own-global-alias-across-files -->
+The same pair with the static in the type's file and the instance method in an extension in a later file.
+```maxon
+// --- file: gauge.maxon
+module typealias Level = int(0 to 125)
+
+module type Rec
+	module var v as Level
+
+	module static function create() returns Rec
+		return Rec{v: 1}
+	end 'create'
+end 'Rec'
+
+let TheLetRec = Rec.create()
+
+module type Gauge
+	module var base as Level
+
+	module static function create(b Level) returns Gauge
+		return Gauge{base: b}
+	end 'create'
+
+	module static function make(a Level, r Rec = TheLetRec) returns Level
+		return a + r.v
+	end 'make'
+end 'Gauge'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let g = Gauge.create(0)
+	print("{Gauge.make(10)} {g.make()}\n")
+	return 0
+end 'main'
+
+// --- file: scale.maxon
+var SpareRec = Rec.create()
+
+extension Gauge
+	module function make(r Rec = SpareRec) returns Level
+		r.v = 4
+		return self.base + r.v
+	end 'make'
+end 'Gauge'
+```
+```stdout
+11 4
+```
+```exitcode
+0
+```
+
+<!-- test: same-name-methods.defaults-at-one-slot-instance-in-an-earlier-file -->
+The pair with the instance method in an extension in an earlier file than the type and its static.
+```maxon
+// --- file: aext.maxon
+extension Gauge
+	module function make(n Level = 5) returns Level
+		return self.base + n
+	end 'make'
+end 'Gauge'
+
+// --- file: gauge.maxon
+module typealias Level = int(0 to 125)
+
+module type Gauge
+	module var base as Level
+
+	module static function create(b Level) returns Gauge
+		return Gauge{base: b}
+	end 'create'
+
+	module static function make(a Level, word String = "abc") returns Level
+		return a + word.count() as Level
+	end 'make'
+end 'Gauge'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let g = Gauge.create(0)
+	print("{Gauge.make(10)} {g.make()}\n")
+	return 0
+end 'main'
+```
+```stdout
+13 5
+```
+```exitcode
+0
+```
