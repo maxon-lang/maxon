@@ -743,3 +743,38 @@ n=4 polled=true
 ```exitcode
 0
 ```
+
+<!-- test: streaming-subprocess.windows-a-parked-line-read-needs-no-rescue -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
+<!-- procs: 1 -->
+⭐ **THE OVERLAPPED PIPE READ IS NOT A BRACKETED KERNEL CALL, SO THE SYSTEM MONITOR HAS NOTHING TO RETAKE.**
+This is `posix-a-parked-line-read-needs-no-rescue` on the lane whose read is an overlapped `ReadFile`: it
+answers `ERROR_IO_PENDING` at once and the thread parks on the completion port, so the call never waits and
+must not be wrapped in the syscall bracket. The synchronous `ReadFile` that reads standard input shares the
+function but not the import slot, and stays bracketed.
+
+The child delays about two seconds (`ping -n 3`), so the read is certainly outstanding when the scheduler
+runs out of other work, and the window brackets `subpReadLine` alone so the spawn's own retake falls outside
+it. Both witnesses are EXACTLY ZERO: a bracketed call, however short, is one `__sysmon` takes the only
+processor out of whenever two of its laps land inside it, and a tolerance would admit that arrangement.
+```maxon
+function main() returns ExitCode
+	let h = subpSpawn("cmd /c ping -n 3 127.0.0.1 >nul & echo hi")
+	let before = Scheduler.counters()
+	let line = subpReadLine(h)
+	let after = Scheduler.counters()
+	let rescued = after.retakes > before.retakes
+	let brackets = after.syscalls - before.syscalls
+	let n = line.byteLength()
+	print("rescued={rescued} brackets={brackets}\n")
+	_ = subpWait(h)
+	subpRelease(h)
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+4
+```
+```stdout
+rescued=false brackets=0
+```

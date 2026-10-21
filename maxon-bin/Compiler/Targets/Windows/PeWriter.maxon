@@ -125,8 +125,8 @@ let ImportThunkPasses = 2  // the IAT and the ILT hold identical thunks
 
 // --- IAT slots ---
 // The Win32 imports the emitted runtime needs. Each case is named EXACTLY as its Win32
-// symbol, so `.name` is the import string and `.ordinal` is the IAT slot index — the two
-// facets the call-site relocation and the import-table builder need, with no parallel
+// symbol, so `.name` is the import string (`importSymbolOf` names the one exception) and `.ordinal` is the
+// IAT slot index — the two facets the call-site relocation and the import-table builder need, with no parallel
 // array to keep in lockstep. GROWS one appended case per new import;
 // everything downstream (the thunk table, the Hint/Name table, the IAT size) sizes itself
 // off `allCases`, so appending a case is the whole change.
@@ -238,8 +238,8 @@ export enum IatSlot
 	// `dwFileAttributes` word whose directory bit is the whole of `exists`'s answer, so importing a second
 	// entry point would be two ways to ask one question — and two ways can disagree.
 	//
-	// ⚠ `ReadFile` is NOT here: it is imported for the IOCP substrate, and `osReadFile` reuses that slot
-	// rather than taking a second one for the same entry point.
+	// ⚠ `ReadFile` is NOT here: it is imported for the IOCP substrate, and the synchronous `osReadFile`
+	// reuses that slot. The overlapped read has a slot of its own, `ReadFileOverlapped`.
 	GetFileSizeEx = IatSlotMeta{dll: ImportDll.kernel32}
 	DeleteFileW = IatSlotMeta{dll: ImportDll.kernel32}
 	MoveFileExW = IatSlotMeta{dll: ImportDll.kernel32}
@@ -578,6 +578,13 @@ export enum IatSlot
 	UpdateProcThreadAttribute = IatSlotMeta{dll: ImportDll.kernel32}
 	DeleteProcThreadAttributeList = IatSlotMeta{dll: ImportDll.kernel32}
 
+	// ⭐ **A SECOND `ReadFile` THUNK, BECAUSE THE SHIM CLASSIFIES BY SLOT.** The overlapped pipe read answers
+	// `ERROR_IO_PENDING` at once and the thread parks on the completion port, so it must not be a bracketed
+	// call, while the synchronous `ReadFile` on standard input and on files really can wait and must stay
+	// one. The two share an entry point and so need two slots (`gtShimSyscallClassOf`). Its producer exists
+	// only with the scheduler, so it joins the OPTIONAL TRAILING BAND beside `PeekNamedPipe`.
+	ReadFileOverlapped = IatSlotMeta{dll: ImportDll.kernel32}
+
 	// The ws2_32 run sits after every kernel32 slot, which keeps kernel32's run contiguous so
 	// `iatSlotByteOffset` needs one gap term per DLL. A kernel32 import declared below this line would
 	// split ws2_32's run, and the loader would bind the slots on either side of it to the wrong
@@ -767,6 +774,7 @@ export function importAnswerOf(slot IatSlot) returns ImportAnswer
 		SetNamedPipeHandleState or
 		InitializeProcThreadAttributeList or
 		UpdateProcThreadAttribute or
+		ReadFileOverlapped or
 		ProcessPrng gives ImportAnswer.signedDword
 	end 'answer'
 end 'importAnswerOf'
@@ -903,6 +911,7 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 		InitializeProcThreadAttributeList or
 		UpdateProcThreadAttribute or
 		DeleteProcThreadAttributeList or
+		ReadFileOverlapped or
 		RegGetValueW gives true
 
 		// The ws2_32 and ntdll slots in this arm answer `false` because `dllIsEmitted` gates each of
@@ -980,6 +989,15 @@ end 'isOptionalTrailingImport'
 // `ImportDll` case — but ranged rather than bare so a future DLL cannot silently overflow a tighter type.
 typealias DllTally = int(0 to 16)
 
+// The string the Hint/Name table carries for `slot`: its case name, except where two slots import one entry point.
+function importSymbolOf(slot IatSlot) returns String
+	if slot == IatSlot.ReadFileOverlapped 'overlapped'
+		return IatSlot.ReadFile.name
+	end 'overlapped'
+
+	return slot.name
+end 'importSymbolOf'
+
 // The imports `dll` contributes, in slot (declaration) order, minus any optional trailing band this build
 // carries no producer for. ⭐ **ONE WALK SERVES BOTH DLLs** — the previous `kernel32ImportNames` hard-coded
 // the single-DLL assumption in its name, and a second copy for ws2_32 is exactly the one-fact-written-twice
@@ -989,7 +1007,7 @@ function importNamesFor(dll ImportDll, optionalImports bool) returns StringArray
 
 	for slot in IatSlot.allCases 'each'
 		if slotDll(slot) == dll and slotIsEmitted(slot, optionalImports: optionalImports) 'include'
-			names.push(slot.name)
+			names.push(importSymbolOf(slot))
 		end 'include'
 	end 'each'
 

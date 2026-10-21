@@ -536,7 +536,8 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 
 		CreateFileW gives CreateFileStackArgWords
 		CreateThread gives CreateThreadStackArgWords
-		ReadFile gives ReadFileStackArgWords
+		ReadFile or
+		ReadFileOverlapped gives ReadFileStackArgWords
 		MapViewOfFile gives MapViewOfFileStackArgWords  // 5: hFileMappingObject, dwDesiredAccess, dwFileOffsetHigh, dwFileOffsetLow, dwNumberOfBytesToMap
 		RegGetValueW gives RegGetValueStackArgWords
 		UpdateProcThreadAttribute gives UpdateProcThreadAttributeStackArgWords
@@ -702,7 +703,7 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 
 		// `__con_read_stdin` is a synchronous read with no park (`ConsoleRuntime`), so a green thread
 		// inside it holds its OS thread until the user presses return;
-		// `specs/sched-syscall-handoff.md`'s ordering case measures it.
+		// `specs/sched-syscall-handoff.md`'s ordering case measures it. The file reads share the slot.
 		ReadFile or
 
 		// The file-system family. Every one can reach a cold disk, a network share or a stalled device.
@@ -789,6 +790,11 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 
 		// A peek answers how many bytes a pipe holds at once and never waits for the writer.
 		PeekNamedPipe or
+
+		// The pipe read is issued with an OVERLAPPED, answers `ERROR_IO_PENDING` at once and parks the
+		// thread on the completion port, so it never waits. The synchronous `ReadFile` slot above stays
+		// `blocking`.
+		ReadFileOverlapped or
 
 		// The raw OS lock pair (`__Raw.osLock*`) waits on a holder exactly as a runtime lock does; it
 		// must stay `schedulerBound`.
