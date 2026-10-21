@@ -1,0 +1,359 @@
+public typealias OwnerProcessId = int(1 to i32.max)
+
+public enum OwnerLiveness
+	notOwned
+	ownerAlive
+	ownerGone
+end 'OwnerLiveness'
+
+public enum ScratchStanding
+	outsideFamily
+	running
+	ended
+	unjudgeable
+	unmarked
+end 'ScratchStanding'
+
+public union LeftoverOwner
+	notOwned
+	process(pid OwnerProcessId)
+end 'LeftoverOwner'
+
+public function livenessOfOwner(owner LeftoverOwner) returns OwnerLiveness
+	return match owner 'owner'
+		notOwned gives OwnerLiveness.notOwned
+		process(pid) gives OwnerLiveness.ownerAlive if Process.isAlive(pid as Pid) else OwnerLiveness.ownerGone
+	end 'owner'
+end 'livenessOfOwner'
+
+let ScratchSeparator = "."
+let Base36 = 36
+let ZeroByte = 48
+let NineByte = 57
+let LowerABytes = 97
+let LowerZByte = 122
+let FirstLetterDigit = 10
+let TagDigestBytes = 4
+let ByteRadix = 256
+let MicrosPerNano = 1000
+
+// Fixed widths keep the block `ScratchBlockBytes` long for any pid or serial. A shared segment's name
+// spends the last of its 31 bytes on it (`SegmentNamePrefix`), so widening a field fails
+// tests/cli/scratch-name-segment-form-fits-the-portable-name-limit.
+public let ScratchTagWidth = 4
+public let ScratchStampWidth = 8
+public let ScratchPidWidth = 7
+public let ScratchSerialWidth = 5
+public let ScratchSeparatorCount = 4
+public let ScratchBlockBytes = ScratchTagWidth + ScratchStampWidth + ScratchPidWidth + ScratchSerialWidth + ScratchSeparatorCount
+public let StrangerLeftoverAgeSeconds = 604800
+
+public typealias ScratchFieldValue = int(0 to u64.max)
+typealias ScratchFieldWidth = int(0 to 12)
+typealias ScratchSerialCell = SharedValue with ScratchFieldValue
+
+function usableTagCount() returns ScratchFieldValue
+	return base36Space(ScratchTagWidth) - 1
+end 'usableTagCount'
+
+// The serial leads with a letter because an older compiler reads the last field of these names as a
+// decimal pid; a lettered one it reads as no owner, and leaves the file alone.
+function serialLetterOffset() returns ScratchFieldValue
+	return FirstLetterDigit * base36Space(ScratchSerialWidth - 1)
+end 'serialLetterOffset'
+
+public function serialSpan() returns ScratchFieldValue
+	return (Base36 - FirstLetterDigit) * base36Space(ScratchSerialWidth - 1)
+end 'serialSpan'
+
+function remainderWithin(value ScratchFieldValue, modulus ScratchFieldValue) returns ScratchFieldValue
+	return try (value mod modulus) otherwise panic("remainderWithin: the moduli of a scratch name are products of widths and are never zero")
+end 'remainderWithin'
+
+function base36Space(width ScratchFieldWidth) returns ScratchFieldValue
+	var space = 1 as ScratchFieldValue
+
+	for _ in 0 upto width 'eachPlace'
+		space = space * Base36
+	end 'eachPlace'
+
+	return space
+end 'base36Space'
+
+// The serial restarts with each process, so the start stamp is what keeps a process that reuses an
+// ended one's pid from minting that process's names again.
+public type ScratchIdentity
+	public let tag as ScratchFieldValue
+	public let startedMicros as ScratchFieldValue
+	public let canProbePids as bool
+	let serials as ScratchSerialCell
+
+	static function create(serials ScratchSerialCell, host HostIdentity, startedMicros ScratchFieldValue) returns ScratchIdentity
+		return Self{tag: tagOf(host), startedMicros: startedMicros, canProbePids: host.canProbe(), serials: serials}
+	end 'create'
+
+	public function nextSerial() returns ScratchFieldValue
+		while true 'untilItLands'
+			let issued = self.serials.current()
+			let following = remainderWithin(issued + 1, modulus: serialSpan())
+
+			if self.serials.publish(following, replacing: issued) 'landed'
+				return following
+			end 'landed'
+		end 'untilItLands'
+
+		panic("ScratchIdentity.nextSerial: the retry loop leaves only by returning")
+	end 'nextSerial'
+end 'ScratchIdentity'
+
+default ScratchIdentity = ScratchIdentity.create(ScratchSerialCell.create(0 as ScratchFieldValue), host: thisHostIdentity(), startedMicros: microsSinceEpoch(WallClock.nowUnixNanos()))
+
+function tagOf(host HostIdentity) returns ScratchFieldValue
+	return match host 'host'
+		known(text) gives scratchTagOf(text)
+		unknown gives 0
+	end 'host'
+end 'tagOf'
+
+function microsSinceEpoch(nanos UnixNanos) returns ScratchFieldValue
+	if nanos < 0 'beforeTheEpoch'
+		return 0
+	end 'beforeTheEpoch'
+
+	return (nanos / MicrosPerNano) as ScratchFieldValue
+end 'microsSinceEpoch'
+
+public function scratchTagOf(hostIdentity String) returns ScratchFieldValue
+	let digest = sha256(hostIdentity.toByteArray())
+	var word = 0 as ScratchFieldValue
+
+	for (position, byte) in digest.withIterator() 'eachByte'
+		if position.index() < TagDigestBytes 'inTheTag'
+			word = word * ByteRadix + (byte as ScratchFieldValue)
+		end 'inTheTag'
+	end 'eachByte'
+
+	return 1 + remainderWithin(word, modulus: usableTagCount())
+end 'scratchTagOf'
+
+public function scratchNameFor(base String) returns String
+	let identity = ScratchIdentity.current()
+
+	return scratchNameFrom(base, tag: identity.tag, startedMicros: identity.startedMicros, pid: Process.id() as ScratchFieldValue, serial: identity.nextSerial())
+end 'scratchNameFor'
+
+public function scratchNameFrom(base String, tag ScratchFieldValue, startedMicros ScratchFieldValue, pid ScratchFieldValue, serial ScratchFieldValue) returns String
+	let lettered = serialLetterOffset() + remainderWithin(serial, modulus: serialSpan())
+
+	return "{base}{ScratchSeparator}{base36Field(tag, width: ScratchTagWidth)}{ScratchSeparator}{base36Field(startedMicros, width: ScratchStampWidth)}{ScratchSeparator}{base36Field(pid, width: ScratchPidWidth)}{ScratchSeparator}{base36Field(lettered, width: ScratchSerialWidth)}"
+end 'scratchNameFrom'
+
+function base36Field(value ScratchFieldValue, width ScratchFieldWidth) returns String
+	var remaining = value
+	var digits = ByteArray.create()
+
+	for _ in 0 upto width 'eachDigit'
+		digits.insert(0, value: base36Byte(remaining mod Base36))
+		remaining = remaining / Base36
+	end 'eachDigit'
+
+	return String.from(digits)
+end 'base36Field'
+
+function base36Byte(digit ScratchFieldValue) returns Byte
+	if digit < FirstLetterDigit 'numeral'
+		return (ZeroByte + digit) as Byte
+	end 'numeral'
+
+	return (LowerABytes + digit - FirstLetterDigit) as Byte
+end 'base36Byte'
+
+function isBase36Byte(byte Byte) returns bool
+	return (byte >= ZeroByte and byte <= NineByte) or (byte >= LowerABytes and byte <= LowerZByte)
+end 'isBase36Byte'
+
+function isBase36Field(text String, width ScratchFieldWidth) returns bool
+	if text.byteLength() != (width as BytePos) 'wrongWidth'
+		return false
+	end 'wrongWidth'
+
+	for byte in text.bytes() 'eachByte'
+		if not isBase36Byte(byte) 'foreign'
+			return false
+		end 'foreign'
+	end 'eachByte'
+
+	return true
+end 'isBase36Field'
+
+function base36DigitOf(byte Byte) returns ScratchFieldValue
+	if byte >= ZeroByte and byte <= NineByte 'numeral'
+		return (byte as ScratchFieldValue) - ZeroByte
+	end 'numeral'
+
+	if byte >= LowerABytes and byte <= LowerZByte 'letter'
+		return (byte as ScratchFieldValue) - LowerABytes + FirstLetterDigit
+	end 'letter'
+
+	panic("base36DigitOf: byte {byte} is not a base-36 digit, and every caller has held its text to isBase36Field")
+end 'base36DigitOf'
+
+function base36ValueOf(text String) returns ScratchFieldValue
+	var value = 0 as ScratchFieldValue
+
+	for byte in text.bytes() 'eachByte'
+		value = value * Base36 + base36DigitOf(byte)
+	end 'eachByte'
+
+	return value
+end 'base36ValueOf'
+
+public union ScratchFamily
+	afterBase(base String)
+	beforeSuffix(suffix String)
+end 'ScratchFamily'
+
+public union ScratchName
+	minted(stem String, owner LeftoverOwner)
+	unminted
+end 'ScratchName'
+
+union ScratchBlock
+	located(stem String, tag String, stamp String, pid String, serial String)
+	absent
+end 'ScratchBlock'
+
+public function parsedScratchName(name String, family ScratchFamily) returns ScratchName
+	match blockOf(name, family: family) 'block'
+		located(stem, tag, stamp, pid, serial) then return mintedBy(stem, tag: tag, stamp: stamp, pid: pid, serial: serial)
+		absent then return ScratchName.unminted
+	end 'block'
+end 'parsedScratchName'
+
+function blockOf(name String, family ScratchFamily) returns ScratchBlock
+	match family 'family'
+		afterBase(base) then return blockAfter(name, base: base)
+		beforeSuffix(suffix) then return blockBefore(name, suffix: suffix)
+	end 'family'
+end 'blockOf'
+
+function blockAfter(name String, base String) returns ScratchBlock
+	if not name.startsWith(base) 'otherFamily'
+		return ScratchBlock.absent
+	end 'otherFamily'
+
+	let fields = name.replaceFirst(base, with: "").split(ScratchSeparator)
+
+	if fields.count() < ScratchSeparatorCount + 1 'tooFewFields'
+		return ScratchBlock.absent
+	end 'tooFewFields'
+
+	let leading = try fields.get(0) otherwise panic("blockAfter: a split answers at least one field")
+	let tag = try fields.get(1) otherwise panic("blockAfter: the count was just held to {ScratchSeparatorCount + 1}")
+	let stamp = try fields.get(2) otherwise panic("blockAfter: the count was just held to {ScratchSeparatorCount + 1}")
+	let pid = try fields.get(3) otherwise panic("blockAfter: the count was just held to {ScratchSeparatorCount + 1}")
+	let serial = try fields.get(4) otherwise panic("blockAfter: the count was just held to {ScratchSeparatorCount + 1}")
+
+	if not leading.isEmpty() 'noSeparatorAfterTheBase'
+		return ScratchBlock.absent
+	end 'noSeparatorAfterTheBase'
+
+	return ScratchBlock.located("{base}{ScratchSeparator}{tag}{ScratchSeparator}{stamp}{ScratchSeparator}{pid}{ScratchSeparator}{serial}", tag: tag, stamp: stamp, pid: pid, serial: serial)
+end 'blockAfter'
+
+function blockBefore(name String, suffix String) returns ScratchBlock
+	if not name.endsWith(suffix) 'otherFamily'
+		return ScratchBlock.absent
+	end 'otherFamily'
+
+	let head = name.slice(name.startIndex(), length: name.count() - suffix.count())
+	let fields = head.split(ScratchSeparator)
+	let count = fields.count()
+
+	if count < ScratchSeparatorCount + 1 'tooFewFields'
+		return ScratchBlock.absent
+	end 'tooFewFields'
+
+	let tag = try fields.get(count - 4) otherwise panic("blockBefore: the count was just held to {ScratchSeparatorCount + 1}")
+	let stamp = try fields.get(count - 3) otherwise panic("blockBefore: the count was just held to {ScratchSeparatorCount + 1}")
+	let pid = try fields.get(count - 2) otherwise panic("blockBefore: the count was just held to {ScratchSeparatorCount + 1}")
+	let serial = try fields.get(count - 1) otherwise panic("blockBefore: the count was just held to {ScratchSeparatorCount + 1}")
+
+	return ScratchBlock.located(head, tag: tag, stamp: stamp, pid: pid, serial: serial)
+end 'blockBefore'
+
+function mintedBy(stem String, tag String, stamp String, pid String, serial String) returns ScratchName
+	let wellFormed = isBase36Field(tag, width: ScratchTagWidth) and isBase36Field(stamp, width: ScratchStampWidth) and isBase36Field(pid, width: ScratchPidWidth) and isBase36Field(serial, width: ScratchSerialWidth)
+
+	if not wellFormed or base36ValueOf(serial) < serialLetterOffset() 'notOurs'
+		return ScratchName.unminted
+	end 'notOurs'
+
+	return ScratchName.minted(stem, owner: ownerOf(base36ValueOf(tag), pid: base36ValueOf(pid)))
+end 'mintedBy'
+
+function ownerOf(tag ScratchFieldValue, pid ScratchFieldValue) returns LeftoverOwner
+	let identity = ScratchIdentity.current()
+
+	if not identity.canProbePids or tag != identity.tag or pid == 0 or pid > i32.max 'notProbeable'
+		return LeftoverOwner.notOwned
+	end 'notProbeable'
+
+	return LeftoverOwner.process(pid as OwnerProcessId)
+end 'ownerOf'
+
+public function standingOfScratchName(name String, family ScratchFamily) returns ScratchStanding
+	if not belongsTo(name, family: family) 'otherFamily'
+		return ScratchStanding.outsideFamily
+	end 'otherFamily'
+
+	return match parsedScratchName(name, family: family) 'parsed'
+		minted(_, owner) gives standingOf(owner)
+		unminted gives ScratchStanding.unmarked
+	end 'parsed'
+end 'standingOfScratchName'
+
+function standingOf(owner LeftoverOwner) returns ScratchStanding
+	return match livenessOfOwner(owner) 'liveness'
+		notOwned gives ScratchStanding.unjudgeable
+		ownerAlive gives ScratchStanding.running
+		ownerGone gives ScratchStanding.ended
+	end 'liveness'
+end 'standingOf'
+
+function belongsTo(name String, family ScratchFamily) returns bool
+	return match family 'family'
+		afterBase(base) gives name.startsWith(base)
+		beforeSuffix(suffix) gives name.endsWith(suffix)
+	end 'family'
+end 'belongsTo'
+
+// An unjudgeable name's pid belongs to another host's pid space, or to one this host cannot identify,
+// where its owner may still run, so it is kept whatever its age. An unmarked one has no owner to ask, so only its age retires it.
+public function leftoverIsAbandoned(entry FilePath, standing ScratchStanding) returns bool
+	return match standing 'standing'
+		ended gives true
+		unmarked gives isStaleStranger(entry, olderThanSeconds: StrangerLeftoverAgeSeconds)
+		outsideFamily or
+		unjudgeable or
+		running gives false
+	end 'standing'
+end 'leftoverIsAbandoned'
+
+public function isStaleStranger(path FilePath, olderThanSeconds ScratchFieldValue) returns bool
+	let info = try File.info(path) otherwise return false
+	let now = WallClock.nowUnixSeconds()
+
+	if now < 0 'beforeTheEpoch'
+		return false
+	end 'beforeTheEpoch'
+
+	let modified = info.modifiedTime as ScratchFieldValue
+	let present = now as ScratchFieldValue
+
+	if modified > present 'writtenInTheFuture'
+		return false
+	end 'writtenInTheFuture'
+
+	return present - modified >= olderThanSeconds
+end 'isStaleStranger'

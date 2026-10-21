@@ -1,0 +1,60 @@
+let AgeSweepStagingDir = "temp/mcp-old-format-leftovers"
+let SnippetDirName = "mcp-snippet"
+let SnippetStem = "mcp-snippet"
+let DebuggeeStem = "debuggee-0000"
+let PlantedText = "left by an older compiler"
+let AnotherHost = "another-os/another-host/another-namespace"
+let AgeProbeLabel = "mcp-old-format-leftovers"
+let OldFormatStamp = 1700000000
+let ForeignSerial = 7
+
+function plantedAged(directory FilePath, name String)
+	writeStagedFile(directory.join(name), content: PlantedText)
+	backdatedToTheYear2000(directory.join(name))
+end 'plantedAged'
+
+test 'a server starts over old-format snippets and debug builds and sweeps the week-old ones, and keeps what another host minted'
+	let cacheRoot = stagingDir(AgeSweepStagingDir)
+	clearStagedFiles(cacheRoot)
+	_ = stagingDir("{AgeSweepStagingDir}/{CacheVendorDirName}")
+	let snippets = stagingDir("{AgeSweepStagingDir}/{CacheVendorDirName}/{SnippetDirName}")
+	let builds = stagingDir("{AgeSweepStagingDir}/{CacheVendorDirName}/{DebugBuildDirName}")
+
+	let ended = endedProcessId()
+	let oldSnippet = "{SnippetStem}-{ended}-1{MaxonSourceSuffix}"
+	let oldSnippetProduct = "{SnippetStem}-{ended}-1.record"
+	let youngSnippet = "{SnippetStem}-{ended}-2{MaxonSourceSuffix}"
+	let foreignSnippet = "{mintedScratchName(AgeProbeLabel, base: SnippetStem, namespace: AnotherHost, pid: ended, serial: ForeignSerial)}{MaxonSourceSuffix}"
+	let oldBuild = "{DebuggeeStem}-{ended}-{OldFormatStamp}-1{executableSuffix()}"
+	let oldSidecar = "{DebuggeeStem}-{ended}-{OldFormatStamp}-2{executableSuffix()}{SidecarSuffix}"
+	let youngBuild = "{DebuggeeStem}-{ended}-{OldFormatStamp}-3{executableSuffix()}"
+	let foreignBuild = "{mintedScratchName(AgeProbeLabel, base: DebuggeeStem, namespace: AnotherHost, pid: ended, serial: ForeignSerial)}{executableSuffix()}"
+
+	plantedAged(snippets, name: oldSnippet)
+	plantedAged(snippets, name: oldSnippetProduct)
+	plantedAged(snippets, name: foreignSnippet)
+	writeStagedFile(snippets.join(youngSnippet), content: PlantedText)
+	plantedAged(builds, name: oldBuild)
+	plantedAged(builds, name: oldSidecar)
+	plantedAged(builds, name: foreignBuild)
+	writeStagedFile(builds.join(youngBuild), content: PlantedText)
+
+	var environment = EnvMap.create()
+	environment.upsert(CacheRootVariable, value: cacheRoot.toString())
+	let docs = responseDocs(runMcp([initRequest(1)], environment: Environment.inheritUpdating(environment)))
+
+	try Expect.equal(docs.count(), expected: 1, message: "the server must start over old-format leftovers whose key it derives from the name, and answer its `initialize`")
+
+	for name in [oldSnippet, oldSnippetProduct] 'eachOldSnippet'
+		try Expect.isFalse(File.exists(snippets.join(name)), message: "{name} claims no owner this compiler can read and is a week old, so the sweep must remove it")
+	end 'eachOldSnippet'
+
+	for name in [oldBuild, oldSidecar] 'eachOldBuild'
+		try Expect.isFalse(File.exists(builds.join(name)), message: "{name} claims no owner this compiler can read and is a week old, so the sweep must remove it")
+	end 'eachOldBuild'
+
+	try Expect.isTrue(File.exists(snippets.join(youngSnippet)), message: "{youngSnippet} claims no owner but is not yet a week old, and the sweep removed it")
+	try Expect.isTrue(File.exists(builds.join(youngBuild)), message: "{youngBuild} claims no owner but is not yet a week old, and the sweep removed it")
+	try Expect.isTrue(File.exists(snippets.join(foreignSnippet)), message: "{foreignSnippet} names another host's process, which only that host can judge, and age alone must not remove it")
+	try Expect.isTrue(File.exists(builds.join(foreignBuild)), message: "{foreignBuild} names another host's process, which only that host can judge, and age alone must not remove it")
+end 'a server starts over old-format snippets and debug builds and sweeps the week-old ones, and keeps what another host minted'

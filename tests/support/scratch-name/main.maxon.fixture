@@ -1,0 +1,276 @@
+// Drives `maxon-bin/Run/ScratchName.maxon`, staged beside this file as it stands in the checkout.
+//
+// `mint <base> <namespace> <pid> <serial>` prints the name that module mints for those fields, the
+// namespace `own` standing for this host. Any other first argument names a check, the second argument is
+// the id of a process that has ended and the third is the prefix the debug-stream decoder names its
+// shared segments with: a check prints `ok` and exits 0, or prints what it found and exits 1.
+
+let SnippetStem = "mcp-snippet"
+let SegmentBytes = 64
+let SegmentProbeMostBytes = 64
+let SegmentProbeLimitStem = "lim"
+let MintCount = 5000
+let LargestFieldValue = 18446744073709551615 as ScratchFieldValue
+let AnotherHost = "another-os/another-host/another-namespace"
+let OwnHost = "own"
+let CommandArgument = 1
+let MintBaseArgument = 2
+let MintNamespaceArgument = 3
+let MintPidArgument = 4
+let MintSerialArgument = 5
+let EndedPidArgument = 2
+let SegmentPrefixArgument = 3
+let MintCommand = "mint"
+let HostIdentityCommand = "host-identity"
+let UnknownHostWord = "unknown"
+let NumberedBlock = "0001.00000001.0000001.00001"
+let LetteredBlock = "0001.00000001.0000001.a0001"
+let FieldSeparator = "."
+let TripleSeparator = "-"
+let IdentitySeparator = "/"
+let AcrossTheWrapSerials = 300
+
+typealias NameSet = Set with String
+
+function main() returns ExitCode
+	let arguments = CommandLine.args()
+	let command = try arguments.get(CommandArgument) otherwise return failed("no command was named")
+
+	if command == MintCommand 'minting'
+		return mint(arguments)
+	end 'minting'
+
+	if command == HostIdentityCommand 'naming'
+		return nameThisHost()
+	end 'naming'
+
+	let endedText = try arguments.get(EndedPidArgument) otherwise return failed("no ended process id was given")
+	let endedPid = try int.fromString(endedText) otherwise return failed("the ended process id is not a number")
+	let segmentPrefix = try arguments.get(SegmentPrefixArgument) otherwise return failed("no segment prefix was given")
+	let problem = problemOf(command, endedPid: endedPid as ScratchFieldValue, segmentPrefix: segmentPrefix)
+
+	if problem.isEmpty() 'passed'
+		print("ok\n")
+
+		return 0
+	end 'passed'
+
+	return failed(problem)
+end 'main'
+
+function nameThisHost() returns ExitCode
+	return match thisHostIdentity() 'host'
+		known(text) gives printed("{text}\n")
+		unknown gives printed("{UnknownHostWord}\n")
+	end 'host'
+end 'nameThisHost'
+
+function printed(line String) returns ExitCode
+	print(line)
+
+	return 0
+end 'printed'
+
+function tagOfHost(namespace String) returns ScratchFieldValue
+	return ScratchIdentity.current().tag if namespace == OwnHost else scratchTagOf(namespace)
+end 'tagOfHost'
+
+function mint(arguments StringArray) returns ExitCode
+	let base = try arguments.get(MintBaseArgument) otherwise return failed("no base was given")
+	let namespace = try arguments.get(MintNamespaceArgument) otherwise return failed("no namespace was given")
+	let pidText = try arguments.get(MintPidArgument) otherwise return failed("no pid was given")
+	let serialText = try arguments.get(MintSerialArgument) otherwise return failed("no serial was given")
+	let pid = try int.fromString(pidText) otherwise return failed("the pid is not a number")
+	let serial = try int.fromString(serialText) otherwise return failed("the serial is not a number")
+
+	print("{scratchNameFrom(base, tag: tagOfHost(namespace), startedMicros: 1, pid: pid as ScratchFieldValue, serial: serial as ScratchFieldValue)}\n")
+
+	return 0
+end 'mint'
+
+function problemOf(check String, endedPid ScratchFieldValue, segmentPrefix String) returns String
+	return match check 'which'
+		"segment" gives segmentNameProblem(segmentPrefix)
+		"round-trip" gives roundTripProblem(endedPid)
+		"refusals" gives refusalProblem()
+		"distinct" gives distinctProblem()
+		"stale" gives staleProblem()
+		"older-parsers" gives olderParsersProblem()
+		"host-spelling" gives hostSpellingProblem()
+		default panic("no check is named {check}")
+	end 'which'
+end 'problemOf'
+
+function failed(problem String) returns ExitCode
+	print("{problem}\n")
+
+	return 1
+end 'failed'
+
+function largestAcceptedSegmentNameBytes() returns BytePos
+	var name = scratchNameFor(SegmentProbeLimitStem)
+	var accepted = 0 as BytePos
+
+	while name.byteLength() <= SegmentProbeMostBytes 'eachLength'
+		var segment = try SharedSegment.publish(name, bytes: SegmentBytes) otherwise break
+
+		segment.close()
+		accepted = name.byteLength()
+		name.append("z")
+	end 'eachLength'
+
+	return accepted
+end 'largestAcceptedSegmentNameBytes'
+
+function segmentNameProblem(prefix String) returns String
+	let worstCase = scratchNameFrom(prefix, tag: LargestFieldValue, startedMicros: LargestFieldValue, pid: LargestFieldValue, serial: LargestFieldValue)
+	let smallest = scratchNameFrom(prefix, tag: 0, startedMicros: 0, pid: 0, serial: 0)
+	let minted = scratchNameFor(prefix)
+	let expectedBytes = prefix.byteLength() + ScratchBlockBytes
+
+	if worstCase.byteLength() != expectedBytes or smallest.byteLength() != expectedBytes or minted.byteLength() != expectedBytes 'notFixed'
+		return "every field is rendered at its fixed width, so {worstCase}, {smallest} and {minted} must all be {expectedBytes} bytes"
+	end 'notFixed'
+
+	let limit = largestAcceptedSegmentNameBytes()
+
+	if limit < worstCase.byteLength() 'tooLong'
+		return "{worstCase} is {worstCase.byteLength()} bytes and the shared-memory library accepts a segment name of at most {limit}"
+	end 'tooLong'
+
+	var segment = try SharedSegment.publish(worstCase, bytes: SegmentBytes) otherwise (e) 'refused'
+		return "the shared-memory library refused the worst-case name {worstCase}: {e.name}"
+	end 'refused'
+
+	segment.close()
+
+	return ""
+end 'segmentNameProblem'
+
+function stemProblem(parsed ScratchName, expectedStem String, from String) returns String
+	return match parsed 'parsed'
+		minted(stem, _) gives "" if stem == expectedStem else "the stem read {from} was {stem}, not {expectedStem}"
+		unminted gives "the name read {from} was minted by the function that parses it"
+	end 'parsed'
+end 'stemProblem'
+
+function standingProblem(name String, expected ScratchStanding, family ScratchFamily) returns String
+	let observed = standingOfScratchName(name, family: family)
+
+	return "" if observed == expected else "{name} was judged {observed.name}, not {expected.name}. "
+end 'standingProblem'
+
+function roundTripProblem(endedPid ScratchFieldValue) returns String
+	let own = tagOfHost(OwnHost)
+	let snippets = ScratchFamily.afterBase(SnippetStem)
+	let name = "{scratchNameFrom(SnippetStem, tag: own, startedMicros: 12345, pid: 4194303, serial: serialSpan() - 1)}.maxon"
+	let expectedStem = name.replaceFirst(".maxon", with: "")
+	let anotherHosts = scratchNameFrom(SnippetStem, tag: tagOfHost(AnotherHost), startedMicros: 1, pid: endedPid, serial: 1)
+	let ended = scratchNameFrom(SnippetStem, tag: own, startedMicros: 1, pid: endedPid, serial: 1)
+	let running = scratchNameFrom(SnippetStem, tag: own, startedMicros: 1, pid: Process.id() as ScratchFieldValue, serial: 1)
+
+	var report = stemProblem(parsedScratchName(name, family: snippets), expectedStem: expectedStem, from: "from the start")
+	report.append(stemProblem(parsedScratchName(name, family: ScratchFamily.beforeSuffix(".maxon")), expectedStem: expectedStem, from: "from the end"))
+	report.append(standingProblem(anotherHosts, expected: ScratchStanding.unjudgeable, family: snippets))
+	report.append(standingProblem(scratchNameFrom(SnippetStem, tag: 0, startedMicros: 1, pid: endedPid, serial: 1), expected: ScratchStanding.unjudgeable, family: snippets))
+	report.append(standingProblem(scratchNameFrom(SnippetStem, tag: 0, startedMicros: 1, pid: Process.id() as ScratchFieldValue, serial: 1), expected: ScratchStanding.unjudgeable, family: snippets))
+	report.append(standingProblem(ended, expected: ScratchStanding.ended, family: snippets))
+	report.append(standingProblem(running, expected: ScratchStanding.running, family: snippets))
+
+	return report
+end 'roundTripProblem'
+
+function refusalProblem() returns String
+	let snippets = ScratchFamily.afterBase(SnippetStem)
+	let pending = ScratchFamily.beforeSuffix(".tmp")
+
+	var report = standingProblem("{scratchNameFor(SnippetStem)}.maxon", expected: ScratchStanding.running, family: snippets)
+	report.append(standingProblem("{SnippetStem}X.{LetteredBlock}.maxon", expected: ScratchStanding.unmarked, family: snippets))
+	report.append(standingProblem("{SnippetStem}-123-4.maxon", expected: ScratchStanding.unmarked, family: snippets))
+	report.append(standingProblem("{SnippetStem}.0001.00000001.0000001.a001.maxon", expected: ScratchStanding.unmarked, family: snippets))
+	report.append(standingProblem("{SnippetStem}.0001.00000001.0000001.a00011.maxon", expected: ScratchStanding.unmarked, family: snippets))
+	report.append(standingProblem("{SnippetStem}.0001.0000000A.0000001.a0001.maxon", expected: ScratchStanding.unmarked, family: snippets))
+	report.append(standingProblem("{SnippetStem}.{NumberedBlock}.maxon", expected: ScratchStanding.unmarked, family: snippets))
+	report.append(standingProblem("other.{LetteredBlock}.maxon", expected: ScratchStanding.outsideFamily, family: snippets))
+	report.append(standingProblem("notes.txt", expected: ScratchStanding.outsideFamily, family: pending))
+	report.append(standingProblem("x.123.tmp", expected: ScratchStanding.unmarked, family: pending))
+
+	return report
+end 'refusalProblem'
+
+function olderParsersProblem() returns String
+	var report = ""
+
+	for step in 0 upto AcrossTheWrapSerials 'eachSerial'
+		let serial = serialSpan() - AcrossTheWrapSerials / 2 + (step as ScratchFieldValue)
+		let name = scratchNameFrom(SnippetStem, tag: 1, startedMicros: 1, pid: 1, serial: serial)
+		let lastField = try name.split(FieldSeparator).get(ScratchSeparatorCount) otherwise panic("a minted name has {ScratchSeparatorCount + 1} fields")
+		let claimed = try int.fromString(lastField) otherwise continue
+
+		report.append("{name} ends in {lastField}, which a parser of a decimal last field reads as {claimed}. ")
+	end 'eachSerial'
+
+	return report
+end 'olderParsersProblem'
+
+function hostSpellingProblem() returns String
+	let target = detectHostTarget()
+	let osWord = String.from(osCanonicalName(target.os))
+	let spelled = targetToString(target)
+	let expectedTriple = "{String.from(cpuCanonicalName(target.cpu))}{TripleSeparator}{osWord}"
+	var hosts = TargetArray.create()
+	hosts.push(target)
+
+	if spelled != expectedTriple or hosts.count() != 1 or executableExtension(target.os) != hostExecutableExtension() 'targetMisspelled'
+		return "the host target is spelled {spelled}, not {expectedTriple}"
+	end 'targetMisspelled'
+
+	return match thisHostIdentity() 'host'
+		known(text) gives "" if text.startsWith("{osWord}{IdentitySeparator}") else "the host identity {text} does not begin with the target's operating system word {osWord}"
+		unknown gives ""
+	end 'host'
+end 'hostSpellingProblem'
+
+function distinctProblem() returns String
+	var seen = NameSet.create()
+
+	for _ in 0 upto MintCount 'eachMint'
+		let name = scratchNameFor(SnippetStem)
+
+		if seen.contains(name) 'repeated'
+			return "{name} was minted twice by one process"
+		end 'repeated'
+
+		seen.insert(name)
+	end 'eachMint'
+
+	return ""
+end 'distinctProblem'
+
+function staleProblem() returns String
+	let file = try FilePath.from("stranger.maxon") otherwise return "a relative path is a path"
+
+	try File.writeText(file, content: "left by an older compiler") otherwise return "the stranger could not be written"
+
+	let young = isStaleStranger(file, olderThanSeconds: StrangerLeftoverAgeSeconds)
+	let anyAge = isStaleStranger(file, olderThanSeconds: 0)
+	let youngUnmarked = leftoverIsAbandoned(file, standing: ScratchStanding.unmarked)
+	let unjudgeable = leftoverIsAbandoned(file, standing: ScratchStanding.unjudgeable)
+	let ended = leftoverIsAbandoned(file, standing: ScratchStanding.ended)
+	let running = leftoverIsAbandoned(file, standing: ScratchStanding.running)
+	let outside = leftoverIsAbandoned(file, standing: ScratchStanding.outsideFamily)
+
+	try File.delete(file) otherwise return "the stranger could not be deleted"
+
+	let absent = isStaleStranger(file, olderThanSeconds: 0)
+
+	if young or not anyAge or absent 'wrong'
+		return "a file just written is not stale at {StrangerLeftoverAgeSeconds} s ({young}), is at least as old as no age ({anyAge}), and a file that is gone is nothing to remove ({absent})"
+	end 'wrong'
+
+	if youngUnmarked or unjudgeable or not ended or running or outside 'misjudged'
+		return "a young file is abandoned when unmarked ({youngUnmarked}), always when its owner ended ({ended}), and never when its owner is another host's or unknown ({unjudgeable}), while it runs ({running}) or when it is outside the family ({outside})"
+	end 'misjudged'
+
+	return ""
+end 'staleProblem'

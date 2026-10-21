@@ -79,8 +79,8 @@ each other only. On x64 the ordered accesses are plain loads and stores.
 ## The monitor
 
 `maxon monitor` creates and seeds the segment — magic, version, ring size, start timestamp — before it
-spawns the program with `MAXON_DEBUGSTREAM` naming it (`maxon_ds_<pid>_<nonce>`), because a program that
-attaches to a half-written header traces nothing. It refuses a producer announcing another schema version.
+spawns the program with `MAXON_DEBUGSTREAM` naming it (`mds.<tag>.<start>.<pid>.<serial>`, 31 bytes),
+because a program that attaches to a half-written header traces nothing. It refuses a producer announcing another schema version.
 
 Each drain reads the committed prefix of the ring, stops at the first uncommitted entry, copies it out in at
 most two pieces across the wrap, and publishes the read cursor. An uncommitted entry left by a producer that

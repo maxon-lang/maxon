@@ -72,26 +72,28 @@ function probeFormatting(source String, insertSpaces bool) returns FormattingPro
 end 'probeFormatting'
 
 function collectFormatting(client LspClient, source String, insertSpaces bool) returns FormattingProbe
-	// Assigned on every path — the body's last statement and each arm of its handler. The sentence is
-	// what a reader would be shown if a later edit added a path that reported nothing.
-	var probe = FormattingProbe.broke(UnreportedRequestEnding)
-
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
-		client.openDocument(FormattingDocumentUri, content: source)
-		let result = client.formatting(FormattingDocumentUri, tabSize: FormattingTabSize, insertSpaces: insertSpaces)
-		probe = formattingProbeOf(result)
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse then probe = FormattingProbe.broke(e.explained())
-			serverRefused(code, message) then probe = FormattingProbe.refused(code, message: message)
-		end 'reason'
+	if let result = try formattingAnswer(client, source: source, insertSpaces: insertSpaces) 'answered'
+		return formattingProbeOf(result)
+	end 'answered' else (e) 'failed'
+		return formattingProbeOfFailure(e)
 	end 'failed'
-
-	return probe
 end 'collectFormatting'
+
+function formattingAnswer(client LspClient, source String, insertSpaces bool) returns FormattingResult throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(FormattingDocumentUri, content: source)
+
+	return try client.formatting(FormattingDocumentUri, tabSize: FormattingTabSize, insertSpaces: insertSpaces)
+end 'formattingAnswer'
+
+function formattingProbeOfFailure(e LspClientError) returns FormattingProbe
+	return match e 'reason'
+		transportFailed or
+		malformedResponse gives FormattingProbe.broke(e.explained())
+		serverRefused(code, message) gives FormattingProbe.refused(code, message: message)
+	end 'reason'
+end 'formattingProbeOfFailure'
 
 function formattingProbeOf(result FormattingResult) returns FormattingProbe
 	let editCount = result.edits.count()

@@ -66,40 +66,36 @@ end 'probeHover'
 // server that cannot hold a session at all, and reporting that as a hover refusal would name the wrong
 // subject.
 function collectHover(client LspClient, uri String, source String, line LspCoordinate, character LspCoordinate) returns HoverProbe
-	var outcome = HoverProbe.broke(UnreportedSessionEnding)
-
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
-		client.openDocument(uri, content: source)
-		outcome = askHover(client, uri: uri, line: line, character: character)
-	end 'session' otherwise (e) 'sessionBroke'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then outcome = HoverProbe.broke("before hover was asked: {e.explained()}")
-		end 'reason'
+	if let outcome = try openedForHover(client, uri: uri, source: source, line: line, character: character) 'asked'
+		return outcome
+	end 'asked' else (e) 'sessionBroke'
+		return HoverProbe.broke("before hover was asked: {e.explained()}")
 	end 'sessionBroke'
-
-	return outcome
 end 'collectHover'
 
+function openedForHover(client LspClient, uri String, source String, line LspCoordinate, character LspCoordinate) returns HoverProbe throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(uri, content: source)
+
+	return askHover(client, uri: uri, line: line, character: character)
+end 'openedForHover'
+
 function askHover(client LspClient, uri String, line LspCoordinate, character LspCoordinate) returns HoverProbe
-	var outcome = HoverProbe.broke(UnreportedRequestEnding)
-
-	try 'ask'
-		let answer = client.hover(uri, line: line, character: character)
-		outcome = HoverProbe.answered(answer)
-	end 'ask' otherwise (e) 'notAnswered'
-		match e 'reason'
-			transportFailed or
-			malformedResponse then outcome = HoverProbe.broke("during `textDocument/hover`: {e.explained()}")
-			serverRefused(code, message) then outcome = HoverProbe.refused(code, message: message)
-		end 'reason'
+	if let answer = try client.hover(uri, line: line, character: character) 'answered'
+		return HoverProbe.answered(answer)
+	end 'answered' else (e) 'notAnswered'
+		return hoverProbeOfFailure(e)
 	end 'notAnswered'
-
-	return outcome
 end 'askHover'
+
+function hoverProbeOfFailure(e LspClientError) returns HoverProbe
+	return match e 'reason'
+		transportFailed or
+		malformedResponse gives HoverProbe.broke("during `textDocument/hover`: {e.explained()}")
+		serverRefused(code, message) gives HoverProbe.refused(code, message: message)
+	end 'reason'
+end 'hoverProbeOfFailure'
 
 function presentRendering(result HoverResult) returns String throws TestFailure
 	try Expect.isTrue(result.isPresent, message: "the server answered `textDocument/hover` with nothing at this position. The position is transcribed from the recovered test and the ASCII ruler above the call is how it is checked.")

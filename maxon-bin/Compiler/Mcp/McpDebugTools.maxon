@@ -105,7 +105,7 @@ end 'debugStartReadOf'
 function builtAndLaunched(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, program String, argument DebugProgramArgument, targetEnv EnvMap, stopTimeoutMs StopTimeoutMs, exePath FilePath, debug DebugSessionSlot) returns String
 	let traced = getOptionalBoolArg(reqDoc, args: args, key: "trace", defaultVal: false)
 
-	return match debugProgramFor(program, compiler: exePath, traced: traced, argument: argument, timeoutMs: childTimeoutMsOf(reqDoc, args: args, unasked: CompilerChildTimeoutMs), serial: debug.serials.mint()) 'resolved'
+	return match debugProgramFor(program, compiler: exePath, traced: traced, argument: argument, timeoutMs: childTimeoutMsOf(reqDoc, args: args, unasked: CompilerChildTimeoutMs)) 'resolved'
 		failed(diagnostics) gives toolErrorText(reqDoc, idNode: idNode, message: "{DebugStartToolName}: {diagnostics}", repoRoot: ActingTree.host)
 		ready(image) gives launchedInPlaceOfTheLive(reqDoc, idNode: idNode, args: args, image: image, targetEnv: targetEnv, stopTimeoutMs: stopTimeoutMs, traced: traced, debug: debug)
 	end 'resolved'

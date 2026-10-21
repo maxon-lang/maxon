@@ -1,10 +1,6 @@
 // diagnostics-probe.maxtest — one scripted `publishDiagnostics` session, written once, for every
 // `diagnostics-*` file. It declares no tests.
 //
-// ⭐ **ONE SCRIPTED RUNNER, BECAUSE THE HANDLER MAY NOT BE FACTORED OUT OF IT.** A block-form `try` must
-// `match` its error binding in the handler itself (E3084), so a runner per test would be one copy of that
-// match per test — and one chance each for a transport failure to be swallowed as a wrong answer.
-//
 // The client, the release discipline and the SUBJECT/RUNNER split are `LspClient.maxon`'s.
 
 export typealias SymbolTally = int(0 to i64.max)
@@ -72,36 +68,45 @@ end 'SessionOutcome'
 // outcome is returned, so an `Expect` that throws cannot skip the release.
 export function runSession(script SessionStepArray) returns SessionOutcome
 	var client = LspClient.start()
-	var outcome = SessionOutcome.broke(UnreportedSessionEnding)
+	let outcome = collectSession(client, script: script)
+	client.release()
+
+	return outcome
+end 'runSession'
+
+function collectSession(client LspClient, script SessionStepArray) returns SessionOutcome
+	if let outcome = try scriptedSession(client, script: script) 'answered'
+		return outcome
+	end 'answered' else (e) 'failed'
+		return SessionOutcome.broke(e.explained())
+	end 'failed'
+end 'collectSession'
+
+function scriptedSession(client LspClient, script SessionStepArray) returns SessionOutcome throws LspClientError
 	var publishes = PublishedDiagnosticsArray.create()
 	var symbolCount = 0 as SymbolTally
 
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
+	_ = try client.initialize()
+	try client.initialized()
 
-		for step in script 'eachStep'
-			match step 'kind'
-				open(content) then client.openDocument(DiagnosticsUri, content: content)
-				change(content, version) then client.changeDocument(DiagnosticsUri, content: content, version: version)
-				close then client.closeDocument(DiagnosticsUri)
-				takePublish then publishes.push(client.awaitPublishedDiagnostics(DiagnosticsUri))
-				takeSymbolCount then symbolCount = client.documentSymbols(DiagnosticsUri).symbols.count() as SymbolTally
-			end 'kind'
-		end 'eachStep'
+	for step in script 'eachStep'
+		match step 'kind'
+			open(content) then try client.openDocument(DiagnosticsUri, content: content)
+			change(content, version) then try client.changeDocument(DiagnosticsUri, content: content, version: version)
+			close then try client.closeDocument(DiagnosticsUri)
+			takePublish then publishes.push(try client.awaitPublishedDiagnostics(DiagnosticsUri))
+			takeSymbolCount then symbolCount = try openSymbolCount(client)
+		end 'kind'
+	end 'eachStep'
 
-		outcome = SessionOutcome.observed(symbolCount, publishes: publishes)
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then outcome = SessionOutcome.broke(e.explained())
-		end 'reason'
-	end 'failed'
+	return SessionOutcome.observed(symbolCount, publishes: publishes)
+end 'scriptedSession'
 
-	client.release()
-	return outcome
-end 'runSession'
+function openSymbolCount(client LspClient) returns SymbolTally throws LspClientError
+	let outline = try client.documentSymbols(DiagnosticsUri)
+
+	return outline.symbols.count() as SymbolTally
+end 'openSymbolCount'
 
 // --- Reading an outcome -----------------------------------------------------------------------
 

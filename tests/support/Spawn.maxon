@@ -1,6 +1,13 @@
 public let BuildCommandName = "build"
 public let OutputOptionPrefix = "--output="
 
+let WindowsShellName = "powershell"
+let WindowsShellNoProfileFlag = "-NoProfile"
+let WindowsShellCommandFlag = "-Command"
+let PosixTouchName = "touch"
+let PosixTouchTimeFlag = "-t"
+let PosixYear2000Stamp = "200001010000"
+
 public let NoTimeoutMs = 0 as DurationMs
 public let CompilerUnderTestName = "the compiler under test"
 
@@ -30,6 +37,14 @@ public function runSystemTool(tool String, arguments StringArray, what String) r
 
 	return ran
 end 'runSystemTool'
+
+public function backdatedToTheYear2000(path FilePath)
+	#if os(Windows)
+		_ = runSystemTool(WindowsShellName, arguments: [WindowsShellNoProfileFlag, WindowsShellCommandFlag, "(Get-Item -LiteralPath '{path.toString()}').LastWriteTime = Get-Date -Year 2000 -Month 1 -Day 1"], what: "setting the modified time of {path.toString()}")
+	#else
+		_ = runSystemTool(PosixTouchName, arguments: [PosixTouchTimeFlag, PosixYear2000Stamp, path.toString()], what: "setting the modified time of {path.toString()}")
+	#endif
+end 'backdatedToTheYear2000'
 
 public function buildArguments(source FilePath, output FilePath, extraArguments StringArray) returns StringArray
 	var arguments = StringArray.create()

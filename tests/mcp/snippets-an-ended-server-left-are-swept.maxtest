@@ -4,15 +4,21 @@ let SnippetStem = "mcp-snippet"
 let PlantedText = "not really a program"
 let StagedSnippetSerial = 1
 let OrphanedSnippetSerial = 2
+let AnotherHost = "another-os/another-host/another-namespace"
+let SnippetProbeLabel = "mcp-snippet-sweep"
 
 typealias PlantedSerial = int(1 to 2)
 
 function plantedSnippetFile(directory FilePath, owner Pid, serial PlantedSerial, suffix String) returns String
-	let name = "{SnippetStem}-{owner}-{serial}{suffix}"
+	return plantedSnippetFileIn(directory, namespace: OwnHostNamespace, owner: owner, serial: serial, suffix: suffix)
+end 'plantedSnippetFile'
+
+function plantedSnippetFileIn(directory FilePath, namespace String, owner Pid, serial PlantedSerial, suffix String) returns String
+	let name = "{mintedScratchName(SnippetProbeLabel, base: SnippetStem, namespace: namespace, pid: owner, serial: serial as Count)}{suffix}"
 	writeStagedFile(directory.join(name), content: PlantedText)
 
 	return name
-end 'plantedSnippetFile'
+end 'plantedSnippetFileIn'
 
 test 'a server sweeps the snippets and snippet builds whose server has ended, and keeps a live one s'
 	let cacheRoot = stagingDir(SnippetSweepStagingDir)
@@ -30,6 +36,11 @@ test 'a server sweeps the snippets and snippet builds whose server has ended, an
 	var liveFiles = StringArray.create()
 	liveFiles.push(plantedSnippetFile(snippets, owner: live, serial: StagedSnippetSerial, suffix: MaxonSourceSuffix))
 	liveFiles.push(plantedSnippetFile(snippets, owner: live, serial: StagedSnippetSerial, suffix: executableSuffix()))
+	liveFiles.push(plantedSnippetFileIn(snippets, namespace: AnotherHost, owner: ended, serial: StagedSnippetSerial, suffix: MaxonSourceSuffix))
+
+	let legacyName = "{SnippetStem}-{ended}-{StagedSnippetSerial}{MaxonSourceSuffix}"
+	writeStagedFile(snippets.join(legacyName), content: PlantedText)
+	liveFiles.push(legacyName)
 
 	var environment = EnvMap.create()
 	environment.upsert(CacheRootVariable, value: cacheRoot.toString())
@@ -44,6 +55,6 @@ test 'a server sweeps the snippets and snippet builds whose server has ended, an
 	try Expect.isFalse(File.exists(snippets.join(orphanedProduct)), message: "{orphanedProduct} is a build of a snippet whose source is already gone and whose server has ended; nothing names it any longer, so the sweep must remove it on its own")
 
 	for name in liveFiles 'eachLive'
-		try Expect.isTrue(File.exists(snippets.join(name)), message: "{name} names a server that is still running, whose call may be using it right now; the sweep must leave it")
+		try Expect.isTrue(File.exists(snippets.join(name)), message: "{name} names a server that is still running, another host's, or an older compiler's server (judged only once it is stale); the sweep must leave it")
 	end 'eachLive'
 end 'a server sweeps the snippets and snippet builds whose server has ended, and keeps a live one s'

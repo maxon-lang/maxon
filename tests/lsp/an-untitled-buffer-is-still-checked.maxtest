@@ -1,35 +1,26 @@
 let UntitledCheckedUri = "untitled:Untitled-1"
 let UntitledCheckedBareIntErrorCode = "E3005"
 
-union UntitledCheckedOutcome
-	published(items PublishedDiagnosticArray)
-	broke(detail String)
-end 'UntitledCheckedOutcome'
-
 test 'non-file document: an unsaved scratch buffer is still checked against the library tiers'
 	var client = LspClient.start()
-	var outcome = UntitledCheckedOutcome.broke(UnreportedSessionEnding)
 
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
-		client.openDocument(UntitledCheckedUri, content: brokenDocument())
-		outcome = UntitledCheckedOutcome.published(client.awaitPublishedDiagnostics(UntitledCheckedUri).items)
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then outcome = UntitledCheckedOutcome.broke(e.explained())
-		end 'reason'
+	if let items = try scratchBufferDiagnostics(client) 'answered'
+		client.release()
+		requireTheScratchBufferWasChecked(items)
+	end 'answered' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "a document opened at `{UntitledCheckedUri}` — the unsaved scratch buffer an editor opens with one keystroke — was never published for", afterwards: ". ⛔ NO PUBLISH AT ALL IS THE REGRESSION THIS CASE EXISTS TO CATCH, and it is what `publishBufferDiagnostics` does for a document it refuses. A path-less document is compiled against `stdlib/` and `runtime/` alone, which is the right corpus for a buffer that belongs to no project, and it is the whole of why this server may not be narrowed to `file:` uris: a client that filters no schemes of its own — Neovim, Helix, Emacs — forwards whatever uri the buffer carries, and refusing them costs the author every squiggle in an unsaved file while every other feature keeps working.")
 	end 'failed'
-
-	client.release()
-
-	match outcome 'outcome'
-		published(items) then requireTheScratchBufferWasChecked(items)
-		broke(detail) then Expect.fail("a document opened at `{UntitledCheckedUri}` — the unsaved scratch buffer an editor opens with one keystroke — was never published for: {detail}. ⛔ NO PUBLISH AT ALL IS THE REGRESSION THIS CASE EXISTS TO CATCH, and it is what `publishBufferDiagnostics` does for a document it refuses. A path-less document is compiled against `stdlib/` and `runtime/` alone, which is the right corpus for a buffer that belongs to no project, and it is the whole of why this server may not be narrowed to `file:` uris: a client that filters no schemes of its own — Neovim, Helix, Emacs — forwards whatever uri the buffer carries, and refusing them costs the author every squiggle in an unsaved file while every other feature keeps working.")
-	end 'outcome'
 end 'non-file document: an unsaved scratch buffer is still checked against the library tiers'
+
+function scratchBufferDiagnostics(client LspClient) returns PublishedDiagnosticArray throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(UntitledCheckedUri, content: brokenDocument())
+
+	let published = try client.awaitPublishedDiagnostics(UntitledCheckedUri)
+
+	return published.items
+end 'scratchBufferDiagnostics'
 
 function requireTheScratchBufferWasChecked(items PublishedDiagnosticArray) throws TestFailure
 	try Expect.equal(items.count(), expected: 1, message: "the scratch buffer holds `function main() returns int`, which does not compile, and the publish for it carried {items.count()} diagnostics. ⭐ AN EMPTY `items` IS NOT A PASS HERE: it is a publish saying NOTHING IS WRONG about a buffer with a real error in it, which is what a server that answered the open by giving up on the document — dropping its corpus, or checking it against nothing — would send while still looking alive on the wire.")

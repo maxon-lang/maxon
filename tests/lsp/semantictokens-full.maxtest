@@ -49,60 +49,37 @@ typealias DecodedSemanticTokenArray = Array with DecodedSemanticToken
 // tally of what this file counted is a different quantity from a value the server sent.
 typealias TokenTally = int(0 to i64.max)
 
-union SemanticTokensDataOutcome
-	observed(data SemanticTokenValueArray)
-	broke(detail String)
-end 'SemanticTokensDataOutcome'
-
 test 'semantic tokens returns token data'
 	var client = LspClient.start()
-	var outcome = SemanticTokensDataOutcome.broke(UnreportedSessionEnding)
 
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
-		client.openDocument(SemanticTokensUri, content: semanticTokensVariableFixture())
-		outcome = SemanticTokensDataOutcome.observed(client.semanticTokensFull(SemanticTokensUri).data)
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then outcome = SemanticTokensDataOutcome.broke(e.explained())
-		end 'reason'
+	if let data = try semanticTokensOf(client, source: semanticTokensVariableFixture()) 'tokens'
+		client.release()
+		assertSemanticTokensWellFormed(data)
+	end 'tokens' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "the semantic-tokens request did not complete")
 	end 'failed'
-
-	client.release()
-
-	match outcome 'tokens'
-		observed(data) then assertSemanticTokensWellFormed(data)
-		broke(detail) then Expect.fail("the semantic-tokens request did not complete: {detail}")
-	end 'tokens'
 end 'semantic tokens returns token data'
 
 test 'semantic tokens treats enum members as enumMember not keywords'
 	var client = LspClient.start()
-	var outcome = SemanticTokensDataOutcome.broke(UnreportedSessionEnding)
 
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
-		client.openDocument(SemanticTokensUri, content: semanticTokensEnumFixture())
-		outcome = SemanticTokensDataOutcome.observed(client.semanticTokensFull(SemanticTokensUri).data)
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then outcome = SemanticTokensDataOutcome.broke(e.explained())
-		end 'reason'
+	if let data = try semanticTokensOf(client, source: semanticTokensEnumFixture()) 'tokens'
+		client.release()
+		assertSemanticTokensEnumMembers(data)
+	end 'tokens' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "the semantic-tokens request did not complete")
 	end 'failed'
-
-	client.release()
-
-	match outcome 'tokens'
-		observed(data) then assertSemanticTokensEnumMembers(data)
-		broke(detail) then Expect.fail("the semantic-tokens request did not complete: {detail}")
-	end 'tokens'
 end 'semantic tokens treats enum members as enumMember not keywords'
+
+function semanticTokensOf(client LspClient, source String) returns SemanticTokenValueArray throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(SemanticTokensUri, content: source)
+
+	let tokens = try client.semanticTokensFull(SemanticTokensUri)
+
+	return tokens.data
+end 'semanticTokensOf'
 
 function assertSemanticTokensWellFormed(data SemanticTokenValueArray) throws TestFailure
 	let observedLength = data.count()

@@ -9,11 +9,6 @@ let GrantedTrustMainSource = "function main() returns ExitCode\n\treturn sharedA
 let GrantedTrustSharedSource = "export function sharedAnswer() returns ExitCode\n\treturn 0\nend 'sharedAnswer'\n"
 let GrantedTrustUndefinedCode = "E3004"
 
-union GrantedTrustProbe
-	published(untrustedFast ProjectDiagnosticsProbe, untrustedChecked ProjectDiagnosticsProbe, trustedChecked ProjectDiagnosticsProbe)
-	broke(detail String)
-end 'GrantedTrustProbe'
-
 test 'project diagnostics: granting workspace trust applies the sources the project file lists'
 	let staged = freshOutsideCheckoutDir(GrantedTrustDirName)
 	let project = staged.join(GrantedTrustProjectDirName)
@@ -29,14 +24,16 @@ test 'project diagnostics: granting workspace trust applies the sources the proj
 	writeCorpusFile(project, fileName: GrantedTrustMainFileName, content: GrantedTrustMainSource)
 	writeCorpusFile(shared, fileName: GrantedTrustSharedFileName, content: GrantedTrustSharedSource)
 
-	let probe = probeGrantedTrust(project)
+	var client = LspClient.start()
 
-	discardOutsideCheckoutDir(staged)
-
-	match probe 'probe'
-		broke(detail) then Expect.fail("the session did not complete: {detail}")
-		published(untrustedFast, untrustedChecked, trustedChecked) then expectTrustApplied(untrustedFast, untrustedChecked: untrustedChecked, trustedChecked: trustedChecked)
-	end 'probe'
+	if let published = try publishesAcrossTheGrant(client, project: project) 'answered'
+		client.release()
+		discardOutsideCheckoutDir(staged)
+		let (untrustedFast, untrustedChecked, trustedChecked) = published
+		expectTrustApplied(untrustedFast, untrustedChecked: untrustedChecked, trustedChecked: trustedChecked)
+	end 'answered' else (e) 'failed'
+		abandonedStagedSession(client, staged: staged, failure: e, doing: "the session did not complete")
+	end 'failed'
 end 'project diagnostics: granting workspace trust applies the sources the project file lists'
 
 function expectTrustApplied(untrustedFast ProjectDiagnosticsProbe, untrustedChecked ProjectDiagnosticsProbe, trustedChecked ProjectDiagnosticsProbe) throws TestFailure
@@ -52,30 +49,20 @@ function expectTrustApplied(untrustedFast ProjectDiagnosticsProbe, untrustedChec
 	try expectNoProjectDiagnostics(trustedChecked, note: applied)
 end 'expectTrustApplied'
 
-function probeGrantedTrust(project FilePath) returns GrantedTrustProbe
-	var client = LspClient.start()
+function publishesAcrossTheGrant(client LspClient, project FilePath) returns (ProjectDiagnosticsProbe, ProjectDiagnosticsProbe, ProjectDiagnosticsProbe) throws LspClientError
 	let uri = fileUriOf(project.join(GrantedTrustMainFileName))
-	var probe = GrantedTrustProbe.broke(UnreportedSessionEnding)
 
-	try 'session'
-		_ = client.initializeAtRootWithTrust(project, trusted: false)
-		client.initialized()
-		client.openDocument(uri, content: GrantedTrustMainSource)
-		var untrustedFast = ProjectDiagnosticsProbe.published(client.awaitPublishedDiagnostics(uri).items)
-		var untrustedChecked = ProjectDiagnosticsProbe.published(client.awaitProjectCheckPublishAfterTheFastOne(uri).items)
-		client.discardProjectCheckReports(uri)
-		client.grantWorkspaceTrust()
-		var trustedChecked = ProjectDiagnosticsProbe.published(client.awaitSettledProjectCheckSet(uri).items)
-		probe = GrantedTrustProbe.published(untrustedFast, untrustedChecked: untrustedChecked, trustedChecked: trustedChecked)
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then probe = GrantedTrustProbe.broke(e.explained())
-		end 'reason'
-	end 'failed'
+	_ = try client.initializeAtRootWithTrust(project, trusted: false)
+	try client.initialized()
+	try client.openDocument(uri, content: GrantedTrustMainSource)
 
-	client.release()
+	let untrustedFast = try client.awaitPublishedDiagnostics(uri)
+	let untrustedChecked = try client.awaitProjectCheckPublishAfterTheFastOne(uri)
 
-	return probe
-end 'probeGrantedTrust'
+	try client.discardProjectCheckReports(uri)
+	try client.grantWorkspaceTrust()
+
+	let trustedChecked = try client.awaitSettledProjectCheckSet(uri)
+
+	return (ProjectDiagnosticsProbe.published(untrustedFast.items), ProjectDiagnosticsProbe.published(untrustedChecked.items), ProjectDiagnosticsProbe.published(trustedChecked.items))
+end 'publishesAcrossTheGrant'

@@ -21,23 +21,26 @@ end 'GenerateIrProbe'
 // Spawn, drive, release. The probe is a VALUE, so no assertion can run before the handle is freed.
 export function probeGenerateIr(source String) returns GenerateIrProbe
 	var client = LspClient.start()
-	var probe = GenerateIrProbe.unanswered(UnreportedRequestEnding)
-
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
-		probe = GenerateIrProbe.answered(client.generateIr(source, filename: ExplorerFilename))
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then probe = GenerateIrProbe.unanswered("`maxon/generateIR`, which the Compiler Explorer panel sends, got no answer it can show: {e.explained()}")
-		end 'reason'
-	end 'failed'
-
+	let probe = collectGenerateIr(client, source: source)
 	client.release()
+
 	return probe
 end 'probeGenerateIr'
+
+function collectGenerateIr(client LspClient, source String) returns GenerateIrProbe
+	if let result = try generateIrAnswer(client, source: source) 'answered'
+		return GenerateIrProbe.answered(result)
+	end 'answered' else (e) 'failed'
+		return GenerateIrProbe.unanswered("`maxon/generateIR`, which the Compiler Explorer panel sends, got no answer it can show: {e.explained()}")
+	end 'failed'
+end 'collectGenerateIr'
+
+function generateIrAnswer(client LspClient, source String) returns GenerateIrResult throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+
+	return try client.generateIr(source, filename: ExplorerFilename)
+end 'generateIrAnswer'
 
 // Every error an answer carried, for a report.
 export function renderedIrErrors(result GenerateIrResult) returns String

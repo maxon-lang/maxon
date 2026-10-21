@@ -125,7 +125,7 @@ index 30d39dea7..e3c3c663d 100644
  
  function announceAndSummarizeSteps(members StdFanOutStepArray, tallies StdPassTallyArray, funcCount ElementIndex, reducesDivision bool)
 diff --git a/maxon-bin/Compiler/Lsp/LspArrivals.maxon b/maxon-bin/Compiler/Lsp/LspArrivals.maxon
-index 7b294d438..95d28831e 100644
+index d2a689c3c..36d55ac47 100644
 --- a/maxon-bin/Compiler/Lsp/LspArrivals.maxon
 +++ b/maxon-bin/Compiler/Lsp/LspArrivals.maxon
 @@ -5,7 +5,7 @@ module union LspArrival
@@ -307,7 +307,7 @@ index 2dbedc2b0..857467444 100644
  	checked(diagnostics DiagnosticArray)
  	unbuilt(failures StringArray)
 diff --git a/maxon-bin/Compiler/Lsp/LspServer.maxon b/maxon-bin/Compiler/Lsp/LspServer.maxon
-index 072d0659a..d77dbce0a 100644
+index 9bfd4d925..f23070fd2 100644
 --- a/maxon-bin/Compiler/Lsp/LspServer.maxon
 +++ b/maxon-bin/Compiler/Lsp/LspServer.maxon
 @@ -92,13 +92,13 @@ type LspSession
@@ -326,7 +326,7 @@ index 072d0659a..d77dbce0a 100644
  	end 'awaitNextFrame'
  
  	function dispatch(arrival LspArrival)
-@@ -147,7 +147,7 @@ type LspSession
+@@ -157,7 +157,7 @@ type LspSession
  		self.documents.upsert(uri, value: text)
  		self.nextDocumentVersion = self.nextDocumentVersion + 1
  		let version = self.nextDocumentVersion
@@ -335,7 +335,7 @@ index 072d0659a..d77dbce0a 100644
  
  		match publishBufferDiagnostics(self.workspace, uri: uri, text: text, arrival: arrival) 'publish'
  			unchecked then return
-@@ -169,7 +169,7 @@ type LspSession
+@@ -179,7 +179,7 @@ type LspSession
  			return
  		end 'stillResolving'
  
@@ -344,7 +344,7 @@ index 072d0659a..d77dbce0a 100644
  	end 'requestCheckOnceResolved'
  
  	function exitCode() returns ExitCode
-@@ -341,7 +341,7 @@ type LspSession
+@@ -351,7 +351,7 @@ type LspSession
  	function closeDocument(doc JsonDoc) throws LspParamsError
  		let (_, _, uri) = try notifiedDocument(doc)
  		_ = self.documents.remove(uri)
@@ -354,10 +354,10 @@ index 072d0659a..d77dbce0a 100644
  	end 'closeDocument'
  
 diff --git a/maxon-bin/Compiler/Lsp/LspWorkspace.maxon b/maxon-bin/Compiler/Lsp/LspWorkspace.maxon
-index 39aee6560..f251a124c 100644
+index 9b5e696db..ee8473f7a 100644
 --- a/maxon-bin/Compiler/Lsp/LspWorkspace.maxon
 +++ b/maxon-bin/Compiler/Lsp/LspWorkspace.maxon
-@@ -351,13 +351,13 @@ module type LspWorkspaceState
+@@ -352,7 +352,7 @@ module type LspWorkspaceState
  		let taken = LspFrameSlot if frame.isComplete() else ready
  		let arrival = try self.arrivals.remove(taken) otherwise panic("LspWorkspaceState.nextArrival: awaitAny named a slot of the array it was asked about")
  
@@ -366,18 +366,20 @@ index 39aee6560..f251a124c 100644
  	end 'nextArrival'
  
  	function requestResolution(dir FilePath) returns ResolutionTicket
- 		self.nextResolutionTicket = self.nextResolutionTicket + 1
+@@ -360,7 +360,7 @@ module type LspWorkspaceState
  		let ticket = self.nextResolutionTicket
--		self.arrivals.push(try self.resolver.resolve(dir.clone(), ticket: ticket, sendTimeout: ForeverMs) otherwise panic("LspWorkspaceState.requestResolution: a send that waits forever for room, to a resolver this workspace holds, was refused"))
-+		self.arrivals.push(self.resolver.resolve(dir.clone(), ticket: ticket))
+ 		var root = self.held.rootAt(dir.toString())
+ 		var resolver = root.resolver.obtained(function() gives spawn LspProjectResolver.create())
+-		self.arrivals.push(try resolver.resolve(dir.clone(), ticket: ticket, sendTimeout: ForeverMs) otherwise panic("LspWorkspaceState.requestResolution: a send that waits forever for room, to a resolver this workspace holds, was refused"))
++		self.arrivals.push(resolver.resolve(dir.clone(), ticket: ticket))
  
  		return ticket
  	end 'requestResolution'
 diff --git a/maxon-bin/Compiler/Project.maxon b/maxon-bin/Compiler/Project.maxon
-index 9f468ea60..b50da293e 100644
+index 9f4cb318c..9d4aed6a2 100644
 --- a/maxon-bin/Compiler/Project.maxon
 +++ b/maxon-bin/Compiler/Project.maxon
-@@ -12532,7 +12532,7 @@ export union CompileInterest
+@@ -12535,7 +12535,7 @@ export union CompileInterest
  	export function stillWanted() returns bool
  		match self 'interest'
  			always then return true

@@ -223,10 +223,10 @@ index 2af584d..033a038 100644
  		if tagRowRank(ahead, against: row, order: order) == Ordering.lessThan 'inPlace'
  			break
 diff --git a/maxon-bin/Compiler/Compiler.maxon b/maxon-bin/Compiler/Compiler.maxon
-index 16e0dbd..494852a 100644
+index a8246de..d7b8476 100644
 --- a/maxon-bin/Compiler/Compiler.maxon
 +++ b/maxon-bin/Compiler/Compiler.maxon
-@@ -657,7 +657,7 @@ end 'CheckedCompile'
+@@ -664,7 +664,7 @@ end 'CheckedCompile'
  // under edit and a tool asked to check a file, both of which want what was wrong; `compileToCodeResult`
  // reports and throws by design, and both of its paths leave `project.diagnostics` standing.
  module function checkWithoutWriting(project Project) returns CheckedCompile
@@ -235,7 +235,7 @@ index 16e0dbd..494852a 100644
  		project.retiredWorkers.release()
  		return CheckedCompile.refused
  	end 'refused'
-@@ -1393,9 +1393,9 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
+@@ -1400,9 +1400,9 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
  	var pipeline = lowered.pipeline
  	var usage = lowered.usage
  	var signatures = lowered.signatures
@@ -248,7 +248,7 @@ index 16e0dbd..494852a 100644
  	let parksOnIo = lowered.parksOnIo
  
  	// ⚠ After the WHOLE lowering list and not after `lowerMaxonToStd`: `ValueTupleReturn` is the last pass
-@@ -1418,13 +1418,13 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
+@@ -1425,13 +1425,13 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
  	// program declaring `implements Iterable` — which expands `stdlib/Interfaces.maxon`'s `extension
  	// Iterable` onto the conformer and so can fail inside that file — would die with this panic INSTEAD of
  	// the diagnostic naming the real fault. Below the gate, that compile has already refused and said why.
@@ -264,7 +264,7 @@ index 16e0dbd..494852a 100644
  
  	// ⭐ **THE `.rdata` SLOTS ARE FILLED NOW, AND WHAT THEY NAME MUST BE INSTALLED.**
  	// Lowering is what decides which witness tables and layout descriptors a program gets, so the
-@@ -1879,7 +1879,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
+@@ -1886,7 +1886,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
  	// them apart, and at its root set, for the half of that rule with no pair to count. Passing
  	// `project` is also what gives the allocator the `opRanges`/`valueOrigins` tables it
  	// maps a Target ValueId back to its source span through.
@@ -450,7 +450,7 @@ index c8c3304..d96702e 100644
  end 'signatureMatches'
  
 diff --git a/maxon-bin/Compiler/Debug/MxdbgEmit.maxon b/maxon-bin/Compiler/Debug/MxdbgEmit.maxon
-index 85297e5..2b2d41d 100644
+index 45aa7dc..2f71c91 100644
 --- a/maxon-bin/Compiler/Debug/MxdbgEmit.maxon
 +++ b/maxon-bin/Compiler/Debug/MxdbgEmit.maxon
 @@ -319,7 +319,7 @@ function writeFunctionLocals(project Project, signatures ProgramSignatures, writ
@@ -1702,10 +1702,10 @@ index c1dd175..348780d 100644
  		var declaring = HoverDocument.ofTokens(entry.content, tokens: declTokens, keywords: reading, corpus: corpus)
  
 diff --git a/maxon-bin/Compiler/Lsp/LspWorkspace.maxon b/maxon-bin/Compiler/Lsp/LspWorkspace.maxon
-index f251a12..9539585 100644
+index ee8473f..dc32040 100644
 --- a/maxon-bin/Compiler/Lsp/LspWorkspace.maxon
 +++ b/maxon-bin/Compiler/Lsp/LspWorkspace.maxon
-@@ -243,7 +243,7 @@ type HeldWorkspace
+@@ -244,7 +244,7 @@ type HeldWorkspace
  
  	function announcedSwept(root WorkspaceRoot, key String, selection SourceSelection, tiers LibraryTiers, request SweepRequest, workspace LspWorkspaceState) returns SweptProject
  		writeProjectLoadingNotification(workspace.writer, rootPath: key, loading: true)
@@ -1714,7 +1714,7 @@ index f251a12..9539585 100644
  		writeProjectLoadingNotification(workspace.writer, rootPath: key, loading: false)
  
  		return swept
-@@ -1145,7 +1145,7 @@ extension Project
+@@ -1238,7 +1238,7 @@ extension Project
  	function sweptForReader(walk SourceSweep, readerPath FilePath) returns SweptProject
  		let reader = try self.refreshFromWalk(walk, readerPath: readerPath, unreadable: UnreadableSource.skipped) otherwise panic("sweptForReader: a corpus skips a source it cannot read, so its refresh refuses nothing")
  
@@ -1724,10 +1724,10 @@ index f251a12..9539585 100644
  		return SweptProject.read(self, signatures: signatures, readerPath: reader)
  	end 'sweptForReader'
 diff --git a/maxon-bin/Compiler/Mcp/McpHttpServer.maxon b/maxon-bin/Compiler/Mcp/McpHttpServer.maxon
-index a65b782..cef7d0a 100644
+index dcab402..94d0126 100644
 --- a/maxon-bin/Compiler/Mcp/McpHttpServer.maxon
 +++ b/maxon-bin/Compiler/Mcp/McpHttpServer.maxon
-@@ -196,7 +196,7 @@ type McpHttpHandler implements HttpHandler
+@@ -195,7 +195,7 @@ type McpHttpHandler implements HttpHandler
  	end 'create'
  
  	static function servedSessions(handler McpHttpHandler) returns McpHttpWake
@@ -1736,7 +1736,7 @@ index a65b782..cef7d0a 100644
  		handler.rearm()
  		var outcome = server.serve(handler)
  
-@@ -236,7 +236,7 @@ type McpHttpHandler implements HttpHandler
+@@ -235,7 +235,7 @@ type McpHttpHandler implements HttpHandler
  	end 'settleAfterHandling'
  
  	function answer(exchange HttpExchange) throws HttpServerError
@@ -1746,10 +1746,10 @@ index a65b782..cef7d0a 100644
  		if not hostNamesThisServer(request, port: self.port) 'foreignHost'
  			try refuse(exchange, code: StatusCode.forbidden, reason: "this transport serves {McpLoopbackAddress} and {McpLocalhostName} only")
 diff --git a/maxon-bin/Compiler/Mcp/McpTools.maxon b/maxon-bin/Compiler/Mcp/McpTools.maxon
-index f0a9030..e4f3f2d 100644
+index 111b806..e98bcb7 100644
 --- a/maxon-bin/Compiler/Mcp/McpTools.maxon
 +++ b/maxon-bin/Compiler/Mcp/McpTools.maxon
-@@ -53,7 +53,7 @@ module type ToolContext
+@@ -50,7 +50,7 @@ module type ToolContext
  end 'ToolContext'
  
  typealias ToolAnswer = function(StringArray, CollectedOutput, DurationMs) returns String
@@ -1758,7 +1758,7 @@ index f0a9030..e4f3f2d 100644
  
  function runCompilerThen(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, argv StringArray, what String, answer ToolAnswer) returns String
  	let startTime = Clock.nowMs()
-@@ -687,7 +687,7 @@ function specTestArgv(reqDoc JsonDoc, args OptionalNode, directory String, filte
+@@ -682,7 +682,7 @@ function specTestArgv(reqDoc JsonDoc, args OptionalNode, directory String, filte
  	return argv
  end 'specTestArgv'
  
@@ -8184,10 +8184,10 @@ index 8e076ce..52ef699 100644
  		if not self.trace.resume(thread as DebuggeeThreadId, signal: ptraceFirstSignalOf(owed) as DebuggeeSignal, stepping: asAStep) 'theKernelRefused'
  			return false
 diff --git a/maxon-bin/Debug/Dap/DapServer.maxon b/maxon-bin/Debug/Dap/DapServer.maxon
-index 103a840..a71740f 100644
+index 4860584..781b8e6 100644
 --- a/maxon-bin/Debug/Dap/DapServer.maxon
 +++ b/maxon-bin/Debug/Dap/DapServer.maxon
-@@ -530,7 +530,7 @@ type DapAdapter
+@@ -528,7 +528,7 @@ type DapAdapter
  	end 'configurationDone'
  
  	function threads(request DapRequest, session DebugToolSession)
@@ -8196,7 +8196,7 @@ index 103a840..a71740f 100644
  
  		if self.answeredAfterTheEnd(request) 'itEndedWhileWeAsked'
  			return
-@@ -538,7 +538,7 @@ type DapAdapter
+@@ -536,7 +536,7 @@ type DapAdapter
  
  		var doc = JsonDoc.create()
  
@@ -8205,7 +8205,7 @@ index 103a840..a71740f 100644
  			none gives DebugThreadRowArray.create()
  			listed(roster) gives roster.rows
  		end 'listed'
-@@ -565,7 +565,7 @@ type DapAdapter
+@@ -563,7 +563,7 @@ type DapAdapter
  			return
  		end 'noSuchThread'
  
@@ -8214,7 +8214,7 @@ index 103a840..a71740f 100644
  
  		if self.answeredAfterTheEnd(request) 'itEndedWhileWeAsked'
  			return
-@@ -620,7 +620,7 @@ type DapAdapter
+@@ -618,7 +618,7 @@ type DapAdapter
  			return
  		end 'noSuchReference'
  
@@ -8223,7 +8223,7 @@ index 103a840..a71740f 100644
  
  		match held 'which'
  			frameLocals(frame) then self.respondFrameLocals(request, session: session, frame: frame)
-@@ -642,7 +642,7 @@ type DapAdapter
+@@ -640,7 +640,7 @@ type DapAdapter
  	end 'respondFrameLocals'
  
  	function respondChildren(request DapRequest, tree ElementIndex, node ElementIndex)
@@ -8232,7 +8232,7 @@ index 103a840..a71740f 100644
  		let children = held.nodeAt(node).children.clone()
  		self.respondValues(request, tree: tree, indices: children)
  	end 'respondChildren'
-@@ -658,7 +658,7 @@ type DapAdapter
+@@ -656,7 +656,7 @@ type DapAdapter
  		var nodes = JsonNodeIdArray.create()
  
  		for index in indices 'eachValue'
@@ -8241,7 +8241,7 @@ index 103a840..a71740f 100644
  			nodes.push(dapVariableNode(doc, value: value, reference: self.childReference(tree, node: index, value: value)))
  		end 'eachValue'
  
-@@ -680,7 +680,7 @@ type DapAdapter
+@@ -678,7 +678,7 @@ type DapAdapter
  		let context = try request.arguments.textOr(ContextArgument, fallback: WatchContext)
  
  		if context == ReplContext 'aDebuggerCommand'
@@ -8250,7 +8250,7 @@ index 103a840..a71740f 100644
  			var doc = JsonDoc.create()
  			self.writer.respond(request, doc: doc, body: DapBody.object(dapEvaluateBody(doc, result: answers.transcript(), reference: NoChildren)))
  
-@@ -698,7 +698,7 @@ type DapAdapter
+@@ -696,7 +696,7 @@ type DapAdapter
  		if var tree = try answers.trees.get(0) 'rendered'
  			let treeIndex = self.held(tree)
  			let root = try tree.roots.get(0) otherwise panic("DapAdapter.evaluate: a `value` reply carries exactly one root")
@@ -8259,7 +8259,7 @@ index 103a840..a71740f 100644
  			var doc = JsonDoc.create()
  			self.writer.respond(request, doc: doc, body: DapBody.object(dapEvaluateBody(doc, result: dapValueText(value), reference: self.childReference(treeIndex, node: root, value: value))))
  
-@@ -711,7 +711,7 @@ type DapAdapter
+@@ -709,7 +709,7 @@ type DapAdapter
  	function moveThen(request DapRequest, session DebugToolSession, command DebugCommand)
  		self.lifecycle = DapLifecycle.live
  		self.emitProgramOutput(session.engine.takeOutput())
@@ -8357,7 +8357,7 @@ index 260fb60..5848157 100644
  		self.heldBytes = 0
  		self.dropped = 0
 diff --git a/maxon-bin/Main.maxon b/maxon-bin/Main.maxon
-index 061663b..a21a288 100644
+index 1d64653..99cf296 100644
 --- a/maxon-bin/Main.maxon
 +++ b/maxon-bin/Main.maxon
 @@ -302,7 +302,7 @@ function main() returns ExitCode

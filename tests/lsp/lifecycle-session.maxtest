@@ -7,8 +7,7 @@
 // first when the suite goes red.
 //
 // Release discipline — why every session is driven into a VALUE before anything is asserted — is
-// stated once, in `LspClient.maxon`'s hazard 1. The three arms of every `otherwise` are what E3084 requires of
-// a handler that binds the error.
+// stated once, in `LspClient.maxon`'s hazard 1.
 
 // The one uri this suite drives. It never touches the filesystem — full-text sync carries the content,
 // so the server is told the text rather than asked to read it.
@@ -21,136 +20,94 @@ let LifecycleSecondVersion = 2
 // `shutdown`, and 1 for both `exit` without one and stdin EOF.
 let LifecycleCleanExitCode = 0 as ProcessExitCode
 
-union LifecycleCapabilitiesOutcome
-	observed(textDocumentSync bool, completionProvider bool)
-	broke(detail String)
-end 'LifecycleCapabilitiesOutcome'
-
-union LifecycleTerminationOutcome
-	exited(code ProcessExitCode)
-	broke(detail String)
-end 'LifecycleTerminationOutcome'
-
-union LifecycleWorkflowOutcome
-	offered(labels StringArray)
-	broke(detail String)
-end 'LifecycleWorkflowOutcome'
-
-union LifecycleDocumentOutcome
-	hovered(isPresent bool, contents String)
-	broke(detail String)
-end 'LifecycleDocumentOutcome'
-
 test 'initialize returns capabilities'
 	var client = LspClient.start()
-	var outcome = LifecycleCapabilitiesOutcome.broke(UnreportedSessionEnding)
 
-	try 'session'
-		let advertised = client.initialize()
-		client.initialized()
-		outcome = LifecycleCapabilitiesOutcome.observed(advertised.hasTextDocumentSync, completionProvider: advertised.hasCompletionProvider)
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then outcome = LifecycleCapabilitiesOutcome.broke(e.explained())
-		end 'reason'
+	if let advertised = try advertisedCapabilities(client) 'advertised'
+		client.release()
+		assertLifecycleAdvertisement(advertised.hasTextDocumentSync, completionProvider: advertised.hasCompletionProvider)
+	end 'advertised' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "the `initialize` handshake did not complete")
 	end 'failed'
-
-	client.release()
-
-	match outcome 'advertisement'
-		observed(textDocumentSync, completionProvider) then assertLifecycleAdvertisement(textDocumentSync, completionProvider: completionProvider)
-		broke(detail) then Expect.fail("the `initialize` handshake did not complete: {detail}")
-	end 'advertisement'
 end 'initialize returns capabilities'
 
 test 'shutdown and exit terminate cleanly'
 	var client = LspClient.start()
-	var outcome = LifecycleTerminationOutcome.broke(UnreportedSessionEnding)
 
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
-		client.shutdown()
-		client.exit()
-		outcome = LifecycleTerminationOutcome.exited(client.waitForExit())
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then outcome = LifecycleTerminationOutcome.broke(e.explained())
-		end 'reason'
+	if let code = try exitCodeAfterShutdown(client) 'exited'
+		client.release()
+		assertLifecycleCleanExit(code)
+	end 'exited' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "the shutdown sequence did not complete", afterwards: ". `waitForExit` carries its own deadline, so this sentence also covers a server that had to be waited out rather than exiting on its own.")
 	end 'failed'
-
-	client.release()
-
-	match outcome 'termination'
-		exited(code) then assertLifecycleCleanExit(code)
-		broke(detail) then Expect.fail("the shutdown sequence did not complete: {detail}. `waitForExit` carries its own deadline, so this sentence also covers a server that had to be waited out rather than exiting on its own.")
-	end 'termination'
 end 'shutdown and exit terminate cleanly'
 
 test 'server handles full workflow'
 	var client = LspClient.start()
-	var outcome = LifecycleWorkflowOutcome.broke(UnreportedSessionEnding)
 
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
-		client.openDocument(LifecycleUri, content: lifecycleMainWithVariable())
-		client.changeDocument(LifecycleUri, content: lifecycleMainWithArray(), version: LifecycleSecondVersion)
-
-		// Request completion after "arr." (line 2, column 8)
-		let answered = client.completionWithTrigger(LifecycleUri, line: 2, character: 8, triggerCharacter: ".")
-		client.closeDocument(LifecycleUri)
-		outcome = LifecycleWorkflowOutcome.offered(lifecycleLabelsOf(answered))
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then outcome = LifecycleWorkflowOutcome.broke(e.explained())
-		end 'reason'
+	if let labels = try labelsOfTheWorkflow(client) 'offered'
+		client.release()
+		assertLifecycleArrayCompletion(labels)
+	end 'offered' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "the open / change / complete / close workflow did not complete")
 	end 'failed'
-
-	client.release()
-
-	match outcome 'workflow'
-		offered(labels) then assertLifecycleArrayCompletion(labels)
-		broke(detail) then Expect.fail("the open / change / complete / close workflow did not complete: {detail}")
-	end 'workflow'
 end 'server handles full workflow'
 
 test 'full lifecycle with document'
 	var client = LspClient.start()
-	var outcome = LifecycleDocumentOutcome.broke(UnreportedSessionEnding)
 
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
-		client.openDocument(LifecycleUri, content: lifecycleMainWithXOne())
-
-		// Request hover on 'x' variable at line 1, character 8
-		// Line 1: "    var x = 1" - 'x' is at position 8
-		let answered = client.hover(LifecycleUri, line: 1, character: 8)
-		client.changeDocument(LifecycleUri, content: lifecycleMainWithXTwo(), version: LifecycleSecondVersion)
-		client.closeDocument(LifecycleUri)
-		outcome = LifecycleDocumentOutcome.hovered(answered.isPresent, contents: answered.contents)
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then outcome = LifecycleDocumentOutcome.broke(e.explained())
-		end 'reason'
+	if let hovered = try hoverAcrossTheLifecycle(client) 'hovered'
+		client.release()
+		assertLifecycleVariableHover(hovered.isPresent, contents: hovered.contents)
+	end 'hovered' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "the open / hover / change / close session did not complete")
 	end 'failed'
-
-	client.release()
-
-	match outcome 'session'
-		hovered(isPresent, contents) then assertLifecycleVariableHover(isPresent, contents: contents)
-		broke(detail) then Expect.fail("the open / hover / change / close session did not complete: {detail}")
-	end 'session'
 end 'full lifecycle with document'
+
+function advertisedCapabilities(client LspClient) returns InitializeResult throws LspClientError
+	let advertised = try client.initialize()
+	try client.initialized()
+
+	return advertised
+end 'advertisedCapabilities'
+
+function exitCodeAfterShutdown(client LspClient) returns ProcessExitCode throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.shutdown()
+	try client.exit()
+
+	return try client.waitForExit()
+end 'exitCodeAfterShutdown'
+
+function labelsOfTheWorkflow(client LspClient) returns StringArray throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(LifecycleUri, content: lifecycleMainWithVariable())
+	try client.changeDocument(LifecycleUri, content: lifecycleMainWithArray(), version: LifecycleSecondVersion)
+
+	// Request completion after "arr." (line 2, column 8)
+	let answered = try client.completionWithTrigger(LifecycleUri, line: 2, character: 8, triggerCharacter: ".")
+
+	try client.closeDocument(LifecycleUri)
+
+	return lifecycleLabelsOf(answered)
+end 'labelsOfTheWorkflow'
+
+function hoverAcrossTheLifecycle(client LspClient) returns HoverResult throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(LifecycleUri, content: lifecycleMainWithXOne())
+
+	// Request hover on 'x' variable at line 1, character 8
+	// Line 1: "    var x = 1" - 'x' is at position 8
+	let answered = try client.hover(LifecycleUri, line: 1, character: 8)
+
+	try client.changeDocument(LifecycleUri, content: lifecycleMainWithXTwo(), version: LifecycleSecondVersion)
+	try client.closeDocument(LifecycleUri)
+
+	return answered
+end 'hoverAcrossTheLifecycle'
 
 function assertLifecycleAdvertisement(textDocumentSync bool, completionProvider bool) throws TestFailure
 	try Expect.isTrue(textDocumentSync, message: "the `initialize` reply did not advertise `textDocumentSync`. The client declared support for it, and without it no document can be sent at all — so every language method is unreachable behind this one capability.")

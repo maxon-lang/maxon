@@ -6,11 +6,6 @@ let ScriptlibGreetingPackageFileName = "Greeting.maxon"
 let ScriptlibGreetingPackageSource = "public function greeting() returns String\n\treturn \"hello from scriptlib\"\nend 'greeting'\n"
 let ScriptlibScriptSource = "#!/usr/bin/env maxon\n\nfunction main() returns ExitCode\n\tprint(\"\{greeting()\}\\n\")\n\treturn 0\nend 'main'\n"
 
-union ScriptlibDiagnosticsOutcome
-	published(items PublishedDiagnosticArray)
-	broke(detail String)
-end 'ScriptlibDiagnosticsOutcome'
-
 test 'a script calling a scriptlib package function publishes no diagnostics'
 	let dir = freshOutsideCheckoutDir(ScriptlibCaseDirName)
 	let compiler = stagedLibraryTierCompiler(dir.join(StagedTierDirName), staged: dir)
@@ -21,29 +16,25 @@ test 'a script calling a scriptlib package function publishes no diagnostics'
 	let uri = fileUriOf(scriptDir.join(ScriptlibScriptFileName))
 
 	var client = LspClient.start(compiler)
-	var outcome = ScriptlibDiagnosticsOutcome.broke(UnreportedSessionEnding)
 
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
-		client.openDocument(uri, content: ScriptlibScriptSource)
-		outcome = ScriptlibDiagnosticsOutcome.published(client.awaitPublishedDiagnostics(uri).items)
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then outcome = ScriptlibDiagnosticsOutcome.broke(e.explained())
-		end 'reason'
+	if let items = try scriptDiagnostics(client, uri: uri) 'answered'
+		client.release()
+		discardOutsideCheckoutDir(dir)
+		Expect.equal(items.count(), expected: 0, message: "a script calling `greeting()`, which `scriptlib/{ScriptlibGreetingPackageName}/{ScriptlibGreetingPackageFileName}` beside the server's library declares `public`, published {items.count()} diagnostic(s):{describedScriptlibDiagnostics(items)}. An open script is checked with the scriptlib packages, as `maxon execute` of it compiles them.")
+	end 'answered' else (e) 'failed'
+		abandonedStagedSession(client, staged: dir, failure: e, doing: "the script was never published for")
 	end 'failed'
-
-	client.release()
-	discardOutsideCheckoutDir(dir)
-
-	match outcome 'outcome'
-		published(items) then Expect.equal(items.count(), expected: 0, message: "a script calling `greeting()`, which `scriptlib/{ScriptlibGreetingPackageName}/{ScriptlibGreetingPackageFileName}` beside the server's library declares `public`, published {items.count()} diagnostic(s):{describedScriptlibDiagnostics(items)}. An open script is checked with the scriptlib packages, as `maxon execute` of it compiles them.")
-		broke(detail) then Expect.fail("the script was never published for: {detail}")
-	end 'outcome'
 end 'a script calling a scriptlib package function publishes no diagnostics'
+
+function scriptDiagnostics(client LspClient, uri String) returns PublishedDiagnosticArray throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(uri, content: ScriptlibScriptSource)
+
+	let published = try client.awaitPublishedDiagnostics(uri)
+
+	return published.items
+end 'scriptDiagnostics'
 
 function describedScriptlibDiagnostics(items PublishedDiagnosticArray) returns String
 	var described = ""

@@ -22,7 +22,8 @@
 // The ladder names a project's directory and nothing more. Which files the project holds, and the
 // root its namespaces are measured from, is `projectSourcesIn`'s answer: the `sources` its
 // `.maxproj` lists, as `maxon build` reads them, or the directory's walk. The `.maxproj` is run
-// only in a trusted workspace, and off the session loop (`LspProjectResolver`).
+// only in a trusted workspace, and off the session loop by that project's own resolver
+// (`HeldRoot.resolver`).
 //
 // The named roots change mid-session: `workspace/didChangeWorkspaceFolders` adds and removes them, and
 // a removed root takes every project held under it. The sweep under a root prunes a directory holding
@@ -306,7 +307,8 @@ typealias HeldProjectKeyArray = Array with String
 // out, so a session that wanders cannot grow the process without bound and the root the author is
 // working in is not evicted by a detour through the library. Overflowing this costs a re-fold
 // rather than a re-read: a rebuilt `Project` still hits the shared file memos (`lspFileMemos`). A held
-// root carries its project checker too (`HeldRoot`), so an evicted root's next check builds cold.
+// root carries its project checker and its resolver too (`HeldRoot`), so an evicted root's next check
+// builds cold.
 let HeldProjectCapacity = 8
 
 let WorkspaceResweepIntervalMs = 1000
@@ -325,12 +327,11 @@ module type LspWorkspaceState
 	module var namedRoots as LspClientRootArray
 	module var fileMemos as SharedFileMemoMap
 	module let writer as LspStdoutWriter.handle
-	module let resolver as LspProjectResolver.handle
 	module var arrivals as LspArrivalPromiseArray
 	var nextResolutionTicket as ResolutionTicket
 
-	module static function create(writer LspStdoutWriter.handle, resolver LspProjectResolver.handle) returns LspWorkspaceState
-		return Self{held: RecentHeldRoots.create(), trusted: true, namedRoots: LspClientRootArray.create(), fileMemos: SharedFileMemoMap.create(), writer: writer, resolver: resolver, arrivals: LspArrivalPromiseArray.create(), nextResolutionTicket: 0}
+	module static function create(writer LspStdoutWriter.handle) returns LspWorkspaceState
+		return Self{held: RecentHeldRoots.create(), trusted: true, namedRoots: LspClientRootArray.create(), fileMemos: SharedFileMemoMap.create(), writer: writer, arrivals: LspArrivalPromiseArray.create(), nextResolutionTicket: 0}
 	end 'create'
 
 	module function projectInputsOf(dir FilePath) returns ProjectInputsAnswer
@@ -357,7 +358,9 @@ module type LspWorkspaceState
 	function requestResolution(dir FilePath) returns ResolutionTicket
 		self.nextResolutionTicket = self.nextResolutionTicket + 1
 		let ticket = self.nextResolutionTicket
-		self.arrivals.push(try self.resolver.resolve(dir.clone(), ticket: ticket, sendTimeout: ForeverMs) otherwise panic("LspWorkspaceState.requestResolution: a send that waits forever for room, to a resolver this workspace holds, was refused"))
+		var root = self.held.rootAt(dir.toString())
+		var resolver = root.resolver.obtained(function() gives spawn LspProjectResolver.create())
+		self.arrivals.push(try resolver.resolve(dir.clone(), ticket: ticket, sendTimeout: ForeverMs) otherwise panic("LspWorkspaceState.requestResolution: a send that waits forever for room, to a resolver this workspace holds, was refused"))
 
 		return ticket
 	end 'requestResolution'
@@ -600,17 +603,9 @@ function writeProjectLoadingNotification(writer LspStdoutWriter.handle, rootPath
 end 'writeProjectLoadingNotification'
 
 module function lspProjectCheckerFor(workspace LspWorkspaceState, dir FilePath, tiers LibraryTiers) returns LspProjectChecker.handle
-	var held = workspace.held.rootAt(dir.toString())
+	var root = workspace.held.rootAt(dir.toString())
 
-	match held.checker 'checker'
-		spawned(checker) then return checker.clone()
-		notSpawned then break
-	end 'checker'
-
-	let checker = spawn LspProjectChecker.create(dir.clone(), stdlibDir: tiers.stdlibDir.clone(), runtimeDir: tiers.runtimeDir.clone(), writer: workspace.writer.clone())
-	held.checker = HeldCheckerSlot.spawned(checker.clone())
-
-	return checker
+	return root.checker.obtained(function() gives spawn LspProjectChecker.create(dir.clone(), stdlibDir: tiers.stdlibDir.clone(), runtimeDir: tiers.runtimeDir.clone(), writer: workspace.writer.clone()))
 end 'lspProjectCheckerFor'
 
 union HeldWorkspaceSlot
@@ -618,20 +613,67 @@ union HeldWorkspaceSlot
 	built(workspace HeldWorkspace)
 end 'HeldWorkspaceSlot'
 
-union HeldCheckerSlot
-	notSpawned
-	spawned(checker LspProjectChecker.handle)
-end 'HeldCheckerSlot'
+type HeldService uses Handle
+	typealias Spawner = function() returns Handle
+	typealias HandleColumn = Array with Handle
+
+	var held as HandleColumn
+
+	static function create() returns Self
+		return Self{held: HandleColumn.create()}
+	end 'create'
+
+	function obtained(spawner Spawner) returns Handle
+		if self.held.isEmpty() 'notSpawned'
+			self.held.push(spawner())
+		end 'notSpawned'
+
+		return try self.held.get(0) otherwise panic("HeldService.obtained: a service was held or spawned a line above")
+	end 'obtained'
+end 'HeldService'
+
+typealias HeldChecker = HeldService with LspProjectChecker.handle
+
+typealias HeldResolver = HeldService with LspProjectResolver.handle
 
 type HeldRoot
 	module var workspace as HeldWorkspaceSlot
-	module var checker as HeldCheckerSlot
+	module var checker as HeldChecker
+	module var resolver as HeldResolver
 	module var inputs as ProjectInputsMemo
 
 	static function create() returns HeldRoot
-		return Self{workspace: HeldWorkspaceSlot.notBuilt, checker: HeldCheckerSlot.notSpawned, inputs: ProjectInputsMemo.create()}
+		return Self{workspace: HeldWorkspaceSlot.notBuilt, checker: HeldChecker.create(), resolver: HeldResolver.create(), inputs: ProjectInputsMemo.create()}
 	end 'create'
+
+	function demote()
+		self.workspace = HeldWorkspaceSlot.notBuilt
+		self.checker = HeldChecker.create()
+	end 'demote'
 end 'HeldRoot'
+
+module union InputsChange
+	everyProject
+	oneProject(key String)
+end 'InputsChange'
+
+module function inputsChangeReachesDocument(change InputsChange, workspace LspWorkspaceState, uri String, search LspRootSearch) returns bool
+	match change 'change'
+		everyProject then return true
+		oneProject(key) then return documentIsInProject(workspace, uri: uri, key: key, search: search)
+	end 'change'
+end 'inputsChangeReachesDocument'
+
+function documentIsInProject(workspace LspWorkspaceState, uri String, key String, search LspRootSearch) returns bool
+	let readerPath = try FilePath.from(uri) otherwise return false
+
+	return match lspProjectFactsOf(workspace, readerPath: readerPath, search: search) 'facts'
+		swept(root, _) gives root.toString() == key
+		unswept(root) gives root.toString() == key
+		singleFile or
+		unlocated gives false
+	end 'facts'
+end 'documentIsInProject'
 
 typealias HeldRootMap = Map with (String, HeldRoot)
 
@@ -658,12 +700,23 @@ module type RecentHeldRoots
 		return held
 	end 'recentAt'
 
-	module function forgetCorpora()
-		for key in self.order 'eachKey'
-			var held = try self.roots.get(key) otherwise continue
-			held.workspace = HeldWorkspaceSlot.notBuilt
-		end 'eachKey'
+	module function forgetCorpora(change InputsChange)
+		match change 'change'
+			everyProject then self.forgetEveryCorpus()
+			oneProject(key) then self.forgetCorpusAt(key)
+		end 'change'
 	end 'forgetCorpora'
+
+	function forgetEveryCorpus()
+		for key in self.order 'eachKey'
+			self.forgetCorpusAt(key)
+		end 'eachKey'
+	end 'forgetEveryCorpus'
+
+	function forgetCorpusAt(key String)
+		var held = try self.roots.get(key) otherwise return
+		held.workspace = HeldWorkspaceSlot.notBuilt
+	end 'forgetCorpusAt'
 
 	function holdWorkspace(key String, workspace HeldWorkspace)
 		var held = self.rootAt(key)
@@ -687,19 +740,52 @@ module type RecentHeldRoots
 
 		while kept.count() > HeldProjectCapacity 'overCapacity'
 			let evicted = try kept.remove(0) otherwise panic("RecentHeldRoots.use: the order is over capacity, so it holds a first element")
-			_ = self.roots.remove(evicted)
+			self.evict(evicted)
 		end 'overCapacity'
 
 		self.order = kept
 	end 'use'
 
+	// A root awaiting its resolution keeps its memo until the answer lands (`releaseIfDemoted`):
+	// `projectResolved` drops an answer for a root this map no longer holds, and the documents that
+	// asked would never be checked against it.
+	function evict(key String)
+		var held = try self.roots.get(key) otherwise panic("RecentHeldRoots.evict: '{key}' is in the order, so it is in the map")
+
+		if held.inputs.isAwaitingResolution() 'awaitsItsResolver'
+			held.demote()
+			return
+		end 'awaitsItsResolver'
+
+		_ = self.roots.remove(key)
+	end 'evict'
+
+	module function releaseIfDemoted(key String)
+		if self.order.contains(key) 'stillHeld'
+			return
+		end 'stillHeld'
+
+		_ = self.roots.remove(key)
+	end 'releaseIfDemoted'
+
+	// Walks the map, not the order: a demoted root is in the map alone, and goes with its folder too.
 	function dropUnder(dir FilePath)
+		var gone = HeldProjectKeyArray.create()
+
+		for (key, _) in self.roots 'eachRoot'
+			if heldProjectIsUnder(key, dir: dir) 'goesWithTheFolder'
+				gone.push(key.clone())
+			end 'goesWithTheFolder'
+		end 'eachRoot'
+
+		for key in gone 'eachGone'
+			_ = self.roots.remove(key)
+		end 'eachGone'
+
 		var kept = HeldProjectKeyArray.create()
 
 		for key in self.order 'eachKey'
-			if heldProjectIsUnder(key, dir: dir) 'goesWithTheFolder'
-				_ = self.roots.remove(key)
-			end 'goesWithTheFolder' else 'staysHeld'
+			if self.roots.contains(key) 'staysHeld'
 				kept.push(key)
 			end 'staysHeld'
 		end 'eachKey'
@@ -953,7 +1039,7 @@ type ProjectInputsMemo
 	end 'request'
 
 	// A reply carrying any ticket but the awaited one answers a request made before the `.maxproj`
-	// text or the trust last changed, and is dropped.
+	// text or the trust last changed, or before this root was released and held afresh, and is dropped.
 	function hold(answer ProjectInputsAnswer, ticket ResolutionTicket) returns bool
 		if not self.awaits(ticket) 'superseded'
 			return false
@@ -964,6 +1050,13 @@ type ProjectInputsMemo
 
 		return true
 	end 'hold'
+
+	function isAwaitingResolution() returns bool
+		return match self.requested 'requested'
+			noRequest gives false
+			requested gives true
+		end 'requested'
+	end 'isAwaitingResolution'
 
 	function awaits(ticket ResolutionTicket) returns bool
 		return match self.requested 'requested'

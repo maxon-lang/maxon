@@ -398,8 +398,8 @@ end 'outputIsRunningImage'
 //
 // ⚠ **AN OLDER `.previous` MAY ITSELF BE RUNNING** — an `mcp-server` or `lsp-server` started before the
 // last rebuild — and then it cannot be deleted either. It is renamed aside to a unique
-// `<stem>.retired-<stamp><ext>` instead, and every self-rebuild first sweeps the retired images nothing
-// holds any longer.
+// `<stem>.retired.<scratch block><ext>` instead, and every self-rebuild first sweeps the retired images
+// nothing holds any longer.
 //
 // When the image cannot be vacated the refusal is made HERE: `discardPreviousOutput`'s would blame a
 // spec-test.
@@ -437,10 +437,8 @@ function restoreVacatedImage(outputPath FilePath)
 	compilerLogger(CompilerLogGroup.compiler).info("the build failed: moved the running compiler back to {outputPath.toString()}")
 end 'restoreVacatedImage'
 
-// The stamp keeps two held backups apart, and it is digits only so `isRetiredImageName` can tell a retired
-// image from any other file that shares the stem.
 function retireHeldImage(project Project, held FilePath, outputPath FilePath) throws CompileError
-	let retired = siblingImagePath(outputPath, infix: "{RetiredImageInfix}{Clock.nowNanos()}")
+	let retired = siblingImagePath(outputPath, infix: scratchNameFor(RetiredImageInfix))
 
 	try File.rename(held, to: retired) otherwise 'unmovable'
 		try refuseUnvacatedImage(project, outputPath: outputPath, held: held)
@@ -458,16 +456,25 @@ function sweepRetiredImages(outputPath FilePath)
 	let ext = outputPath.fileExtension()
 
 	for entry in entries 'eachEntry'
-		if isRetiredImageName(entry.filename(), stem: stem, ext: ext) 'retired'
+		if isRetiredImage(entry, stem: stem, ext: ext) 'retired'
 			try File.delete(entry) otherwise ignore
 		end 'retired'
 	end 'eachEntry'
 end 'sweepRetiredImages'
 
-// `<stem>.retired-<digits><ext>` or its `.mxdbg` sidecar, and nothing else: the sweep deletes what this
-// answers yes to. The digits are ASCII because the stamp is; `decimalDigits()` would admit every Unicode Nd.
-function isRetiredImageName(name String, stem String, ext String) returns bool
-	let prefix = "{stem}{RetiredImageInfix}"
+function isRetiredImage(entry FilePath, stem String, ext String) returns bool
+	let name = entry.filename()
+
+	match parsedScratchName(name, family: ScratchFamily.afterBase("{stem}{RetiredImageInfix}")) 'parsed'
+		minted(retiredStem, _) then return isImageSuffixOrItsSidecar(name.replaceFirst(retiredStem, with: ""), image: ext)
+		unminted then return isNumberedRetiredImage(name, stem: stem, ext: ext)
+	end 'parsed'
+end 'isRetiredImage'
+
+// `<stem>.retired-<digits><ext>` or its sidecar, the name an older compiler retires an image under.
+// ASCII digits only: `decimalDigits()` would admit every Unicode Nd.
+function isNumberedRetiredImage(name String, stem String, ext String) returns bool
+	let prefix = "{stem}{NumberedRetiredImageInfix}"
 
 	if not name.startsWith(prefix) 'otherFile'
 		return false
@@ -477,7 +484,7 @@ function isRetiredImageName(name String, stem String, ext String) returns bool
 	let tail = stamped.trimStart(asciiDecimalDigits())
 
 	return tail.byteLength() < stamped.byteLength() and isImageSuffixOrItsSidecar(tail, image: ext)
-end 'isRetiredImageName'
+end 'isNumberedRetiredImage'
 
 export function asciiDecimalDigits() returns CharacterSet
 	return CharacterSet.from(CharSet from ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'])
@@ -2319,7 +2326,8 @@ end 'stampRegisteredSource'
 // Where a self-rebuild parks the image it is running from, and where it moves an older one another
 // process is still running. See `vacateRunningImage`.
 let PreviousImageSuffix = ".previous"
-let RetiredImageInfix = ".retired-"
+let RetiredImageInfix = ".retired"
+let NumberedRetiredImageInfix = ".retired-"
 
 export let ProjectFileExtension = ".maxproj"
 

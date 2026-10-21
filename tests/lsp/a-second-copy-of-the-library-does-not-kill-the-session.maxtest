@@ -20,28 +20,27 @@ function probeASweptSibling(root FilePath, siblingFile FilePath, siblingSource S
 end 'probeASweptSibling'
 
 function collectSweptSiblingOutcome(client LspClient, root FilePath, siblingUri String, siblingSource String) returns SweptSiblingOutcome
-	var outcome = SweptSiblingOutcome.broke(UnreportedSessionEnding)
+	if let outcome = try sweptSiblingSession(client, root: root, siblingUri: siblingUri, siblingSource: siblingSource) 'answered'
+		return outcome
+	end 'answered' else (e) 'failed'
+		return SweptSiblingOutcome.broke(e.explained())
+	end 'failed'
+end 'collectSweptSiblingOutcome'
+
+function sweptSiblingSession(client LspClient, root FilePath, siblingUri String, siblingSource String) returns SweptSiblingOutcome throws LspClientError
 	let readerUri = fileUriOf(root.join(SweptSiblingReaderFileName))
 
-	try 'session'
-		_ = client.initializeAtWorkspaceFolders(projectRootsFolders(root))
-		client.initialized()
+	_ = try client.initializeAtWorkspaceFolders(projectRootsFolders(root))
+	try client.initialized()
 
-		client.openDocument(readerUri, content: SweptSiblingReaderSource)
-		let reader = client.awaitPublishedDiagnostics(readerUri).items
+	try client.openDocument(readerUri, content: SweptSiblingReaderSource)
+	let reader = try client.awaitPublishedDiagnostics(readerUri)
 
-		client.openDocument(siblingUri, content: siblingSource)
-		outcome = SweptSiblingOutcome.published(reader, sibling: client.awaitPublishedDiagnostics(siblingUri).items)
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then outcome = SweptSiblingOutcome.broke(e.explained())
-		end 'reason'
-	end 'failed'
+	try client.openDocument(siblingUri, content: siblingSource)
+	let sibling = try client.awaitPublishedDiagnostics(siblingUri)
 
-	return outcome
-end 'collectSweptSiblingOutcome'
+	return SweptSiblingOutcome.published(reader.items, sibling: sibling.items)
+end 'sweptSiblingSession'
 
 function requireOnlyTheSiblingRefused(outcome SweptSiblingOutcome, note String) throws TestFailure
 	match outcome 'outcome'

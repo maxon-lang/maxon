@@ -1,0 +1,77 @@
+public let ScratchNameProbeFixtureDir = "tests/support/scratch-name"
+public let ScratchNameSourcePaths = ["maxon-bin/Run/ScratchName.maxon", "maxon-bin/Run/HostIdentity.maxon", "maxon-bin/Compiler/Target.maxon"]
+public let ScratchNameProbeStagingDir = "temp/scratch-name"
+public let OwnHostNamespace = "own"
+public let DebugStreamDecoderSourcePath = "maxon-bin/Debug/DebugStreamDecoder.maxon"
+
+let ProbeExecuteWord = "execute"
+let ProbeCacheDirName = "cache"
+let ProbeSourcesDirName = "sources"
+let ProbeMintWord = "mint"
+let ProbeHostIdentityWord = "host-identity"
+let ProbeUnknownHostWord = "unknown"
+let SegmentPrefixDeclaration = "let SegmentNamePrefix = \""
+let SourceLineSeparator = "\n"
+let QuoteMark = "\""
+
+public function scratchNameProbe(caseLabel String, arguments StringArray) returns CollectedOutput
+	let caseDir = stagingDir("{ScratchNameProbeStagingDir}/{caseLabel}")
+	let sources = freshStagingDir("{ScratchNameProbeStagingDir}/{caseLabel}/{ProbeSourcesDirName}")
+	let cache = stagingDir("{ScratchNameProbeStagingDir}/{caseLabel}/{ProbeCacheDirName}")
+
+	stageStoredTree(fixtureDir(ScratchNameProbeFixtureDir), into: sources)
+
+	for sourcePath in ScratchNameSourcePaths 'eachSource'
+		let source = Directory.currentPath().join(sourcePath)
+
+		writeStagedFile(sources.join(source.filename()), content: fileText(source))
+	end 'eachSource'
+
+	var argv = StringArray.create()
+	argv.push(ProbeExecuteWord)
+	argv.push(sources.toString())
+	argv.append(arguments)
+
+	return spawnCompiler(argv, staged: caseDir, what: "the scratch-name probe", environment: Environment.inheritUpdating([CacheRootVariable: cache.toString()]))
+end 'scratchNameProbe'
+
+public function debugStreamSegmentPrefix() returns String
+	for line in fileText(Directory.currentPath().join(DebugStreamDecoderSourcePath)).split(SourceLineSeparator) 'eachLine'
+		if line.startsWith(SegmentPrefixDeclaration) 'declared'
+			return line.replaceFirst(SegmentPrefixDeclaration, with: "").replaceFirst(QuoteMark, with: "")
+		end 'declared'
+	end 'eachLine'
+
+	panic("{DebugStreamDecoderSourcePath} declares no `{SegmentPrefixDeclaration}`")
+end 'debugStreamSegmentPrefix'
+
+public function thisHostIdentityText(caseLabel String) returns String
+	var arguments = StringArray.create()
+	arguments.push(ProbeHostIdentityWord)
+
+	let ran = scratchNameProbe(caseLabel, arguments: arguments)
+	let identity = ran.stdout.trim()
+
+	if ran.exitCode() != 0 or identity == ProbeUnknownHostWord 'unnamed'
+		panic("the gate could not run — this host names itself nowhere the driver reads, so no lock record can claim it: {ran.stdout}{ran.stderr}")
+	end 'unnamed'
+
+	return identity
+end 'thisHostIdentityText'
+
+public function mintedScratchName(caseLabel String, base String, namespace String, pid Pid, serial Count) returns String
+	var arguments = StringArray.create()
+	arguments.push(ProbeMintWord)
+	arguments.push(base)
+	arguments.push(namespace)
+	arguments.push("{pid}")
+	arguments.push("{serial}")
+
+	let ran = scratchNameProbe(caseLabel, arguments: arguments)
+
+	if ran.exitCode() != 0 'refused'
+		panic("the gate could not run — the scratch-name probe minted nothing: {ran.stdout}{ran.stderr}")
+	end 'refused'
+
+	return ran.stdout.trim()
+end 'mintedScratchName'

@@ -138,26 +138,20 @@ function requireCorpusLocation(uri String, range LspRange, fileTail String, star
 end 'requireCorpusLocation'
 
 function collectCorpusDefinitions(client LspClient, root CorpusSessionRoot, uri String, content String, points CorpusProbePointArray) returns CorpusDefinitionProbeArray
-	var probes = CorpusDefinitionProbeArray.create()
-
-	try 'session'
-		openCorpusSession(client, root: root)
-		client.initialized()
-		client.openDocument(uri, content: content)
-
-		for point in points 'eachPoint'
-			probes.push(corpusProbeAt(client, point: point))
-		end 'eachPoint'
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then probes = corpusProbesAllSaying(corpusProbeOfFailure(e), count: points.count())
-		end 'reason'
+	if let probes = try corpusDefinitionsSession(client, root: root, uri: uri, content: content, points: points) 'answered'
+		return probes
+	end 'answered' else (e) 'failed'
+		return corpusProbesAllSaying(corpusProbeOfFailure(e), count: points.count())
 	end 'failed'
-
-	return probes
 end 'collectCorpusDefinitions'
+
+function corpusDefinitionsSession(client LspClient, root CorpusSessionRoot, uri String, content String, points CorpusProbePointArray) returns CorpusDefinitionProbeArray throws LspClientError
+	try openCorpusSession(client, root: root)
+	try client.initialized()
+	try client.openDocument(uri, content: content)
+
+	return try corpusProbesAt(client, points: points)
+end 'corpusDefinitionsSession'
 
 function corpusProbesAllSaying(probe CorpusDefinitionProbe, count Count) returns CorpusDefinitionProbeArray
 	var probes = CorpusDefinitionProbeArray.create()
@@ -265,29 +259,27 @@ export function runCorpusStaleSourceSession(run CorpusStaleSourceRun) returns Co
 end 'runCorpusStaleSourceSession'
 
 function collectCorpusStaleSourceSession(client LspClient, run CorpusStaleSourceRun) returns CorpusStaleSourceAnswers
-	var answers = corpusAnswersThatAllSay(CorpusDefinitionProbe.broke(UnreportedSessionEnding), run: run)
-
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
-		client.openDocument(run.reader.uri, content: run.readerSource)
-
-		let before = corpusProbeAt(client, point: run.reader)
-
-		applyCorpusDiskEdits(run.edits)
-
-		let after = corpusAnswerAcrossTheWindow(client, run: run)
-		answers = CorpusStaleSourceAnswers.of(before, after: after, alsoAsked: corpusProbesAt(client, points: run.alsoAsk))
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then answers = corpusAnswersThatAllSay(corpusProbeOfFailure(e), run: run)
-		end 'reason'
+	if let answers = try corpusStaleSourceSession(client, run: run) 'answered'
+		return answers
+	end 'answered' else (e) 'failed'
+		return corpusAnswersThatAllSay(corpusProbeOfFailure(e), run: run)
 	end 'failed'
-
-	return answers
 end 'collectCorpusStaleSourceSession'
+
+function corpusStaleSourceSession(client LspClient, run CorpusStaleSourceRun) returns CorpusStaleSourceAnswers throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(run.reader.uri, content: run.readerSource)
+
+	let before = try corpusProbeAt(client, point: run.reader)
+
+	applyCorpusDiskEdits(run.edits)
+
+	let after = try corpusAnswerAcrossTheWindow(client, run: run)
+	let alsoAsked = try corpusProbesAt(client, points: run.alsoAsk)
+
+	return CorpusStaleSourceAnswers.of(before, after: after, alsoAsked: alsoAsked)
+end 'corpusStaleSourceSession'
 
 function corpusAnswersThatAllSay(probe CorpusDefinitionProbe, run CorpusStaleSourceRun) returns CorpusStaleSourceAnswers
 	var alsoAsked = CorpusDefinitionProbeArray.create()
@@ -326,7 +318,7 @@ function corpusAnswerAcrossTheWindow(client LspClient, run CorpusStaleSourceRun)
 	return latest
 end 'corpusAnswerAcrossTheWindow'
 
-function corpusProbesAt(client LspClient, points CorpusProbePointArray) returns CorpusDefinitionProbeArray throws LspClientError
+export function corpusProbesAt(client LspClient, points CorpusProbePointArray) returns CorpusDefinitionProbeArray throws LspClientError
 	var probes = CorpusDefinitionProbeArray.create()
 
 	for point in points 'eachPoint'

@@ -1131,23 +1131,6 @@ export let OutputLockEndedHolderWording = "has ended without releasing it"
 let OutputLockSuffix = ".lock"
 let BuildLocksDirName = "locks"
 let OutputLockToken = "cli-output-lock"
-let HostIdentitySeparator = "/"
-
-#if os(Windows)
-	let HostNameVariable = "COMPUTERNAME"
-	let HostOsName = "windows"
-#endif
-
-#if os(Linux)
-	let KernelHostNamePath = "/proc/sys/kernel/hostname"
-	let MachineIdPath = "/etc/machine-id"
-	let DbusMachineIdPath = "/var/lib/dbus/machine-id"
-	let HostOsName = "linux"
-#endif
-
-#if os(Macos)
-	let HostOsName = "macos"
-#endif
 
 export function buildLocksDirIn(dir FilePath) returns FilePath
 	return cacheRootIn(dir).join(CacheVendorDirName).join(BuildRecordDirName).join(BuildLocksDirName)
@@ -1160,12 +1143,12 @@ export function outputLockOf(record FilePath) returns FilePath
 	return builds.join(BuildLocksDirName).join("{record.stem()}{OutputLockSuffix}")
 end 'outputLockOf'
 
-export function plantLockOfALiveHolder(lock FilePath)
-	plantOutputLock(lock, content: lockRecordOf(Process.id(), host: thisLockHostIdentity()))
+export function plantLockOfALiveHolder(lock FilePath, caseLabel String)
+	plantOutputLock(lock, content: lockRecordOf(Process.id(), host: thisHostIdentityText(caseLabel)))
 end 'plantLockOfALiveHolder'
 
-export function plantLockOfAnEndedHolder(lock FilePath)
-	plantOutputLock(lock, content: lockRecordOf(endedVersionRunProcessId(), host: thisLockHostIdentity()))
+export function plantLockOfAnEndedHolder(lock FilePath, caseLabel String)
+	plantOutputLock(lock, content: lockRecordOf(endedVersionRunProcessId(), host: thisHostIdentityText(caseLabel)))
 end 'plantLockOfAnEndedHolder'
 
 export function removePlantedLock(lock FilePath)
@@ -1187,46 +1170,6 @@ end 'lockRecordOf'
 export function endedVersionRunProcessId() returns Pid
 	return spawnCompiler([VersionCommandWord]).pid
 end 'endedVersionRunProcessId'
-
-function thisLockHostIdentity() returns String
-	#if os(Windows)
-		let hostName = try Process.environmentVariable(HostNameVariable) otherwise panic("CliHarness: the gate could not run - {HostNameVariable} is not set, so this host names itself nowhere the driver reads.")
-		return hostIdentityOf([hostName, Process.namespace()])
-	#endif
-
-	#if os(Linux)
-		return hostIdentityOf([firstNamedIn([KernelHostNamePath]), firstNamedIn([MachineIdPath, DbusMachineIdPath]), Process.namespace()])
-	#endif
-
-	#if os(Macos)
-		return hostIdentityOf([Process.namespace()])
-	#endif
-end 'thisLockHostIdentity'
-
-#if os(Linux)
-	function firstNamedIn(locations StringArray) returns String
-		for location in locations 'eachLocation'
-			let path = try FilePath.from(location) otherwise panic("CliHarness: '{location}' is not a valid path")
-			let text = try File.readText(path) otherwise continue
-
-			if not text.trim().isEmpty() 'named'
-				return text
-			end 'named'
-		end 'eachLocation'
-
-		panic("CliHarness: the gate could not run - this host names itself in none of {locations.count()} places the driver reads.")
-	end 'firstNamedIn'
-#endif
-
-function hostIdentityOf(parts StringArray) returns String
-	var identity = HostOsName
-
-	for part in parts 'eachPart'
-		identity.append("{HostIdentitySeparator}{part.trim()}")
-	end 'eachPart'
-
-	return identity
-end 'hostIdentityOf'
 
 export function requireASecondBuildIsUpToDate(dir FilePath, output String, options StringArray) throws TestFailure
 	stageSettledProgram(dir, name: SettledProgramDirName, source: TrivialProgramSource)
@@ -1861,3 +1804,15 @@ export function requireDeclarationRefused(caseDirName String, source String, ref
 	try Expect.isFalse(run.stderr.contains(CompilerPanicPhrase), message: "a declaration of {DeclaredMemberCount} members ({caseDirName}) panicked the compiler. It said: {run.stderr}")
 	try Expect.contains(run.stderr, needle: refusal, message: "a declaration of {DeclaredMemberCount} members ({caseDirName}) is not refused as `{refusal}`. It said: {run.stderr}")
 end 'requireDeclarationRefused'
+
+export function requireScratchNameCheckPasses(check String) throws TestFailure
+	var arguments = StringArray.create()
+	arguments.push(check)
+	arguments.push("{endedProcessId()}")
+	arguments.push(debugStreamSegmentPrefix())
+
+	let ran = scratchNameProbe("cli-scratch-name-{check}", arguments: arguments)
+
+	try Expect.equal(ran.exitCode(), expected: 0, message: "the `{check}` check of maxon-bin/Run/ScratchName.maxon failed: {ran.stdout}{ran.stderr}")
+	try Expect.equal(ran.stdout.trim(), expected: "ok", message: "the `{check}` check did not report ok: {ran.stdout}{ran.stderr}")
+end 'requireScratchNameCheckPasses'

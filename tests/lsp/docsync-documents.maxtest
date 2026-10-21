@@ -18,94 +18,78 @@ let DocSyncSecondVersion = 2
 // SymbolKind: function = 12
 let DocSyncFunctionSymbolKind = 12 as SymbolKindCode
 
-union DocSyncRoundOutcome
-	observed(symbols DocumentSymbolArray)
-	broke(detail String)
-end 'DocSyncRoundOutcome'
-
-union DocSyncRoundPairOutcome
-	observed(before DocumentSymbolArray, after DocumentSymbolArray)
-	broke(detail String)
-end 'DocSyncRoundPairOutcome'
-
 test 'didOpen registers document'
 	var client = LspClient.start()
-	var outcome = DocSyncRoundOutcome.broke(UnreportedSessionEnding)
 
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
-		client.openDocument(DocSyncUri, content: docSyncMainReturningZero())
-		outcome = DocSyncRoundOutcome.observed(client.documentSymbols(DocSyncUri).symbols)
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then outcome = DocSyncRoundOutcome.broke(e.explained())
-		end 'reason'
+	if let symbols = try symbolsOfTheOpenedDocument(client) 'opened'
+		client.release()
+		assertDocSyncOpenedDocumentIsKnown(symbols)
+	end 'opened' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "the open-then-ask-for-symbols session did not complete")
 	end 'failed'
-
-	client.release()
-
-	match outcome 'opened'
-		observed(symbols) then assertDocSyncOpenedDocumentIsKnown(symbols)
-		broke(detail) then Expect.fail("the open-then-ask-for-symbols session did not complete: {detail}")
-	end 'opened'
 end 'didOpen registers document'
 
 test 'didChange updates document content'
 	var client = LspClient.start()
-	var outcome = DocSyncRoundPairOutcome.broke(UnreportedSessionEnding)
 
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
-		client.openDocument(DocSyncUri, content: docSyncOneFunction())
-		let before = client.documentSymbols(DocSyncUri).symbols
-		client.changeDocument(DocSyncUri, content: docSyncTwoFunctions(), version: DocSyncSecondVersion)
-		outcome = DocSyncRoundPairOutcome.observed(before, after: client.documentSymbols(DocSyncUri).symbols)
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then outcome = DocSyncRoundPairOutcome.broke(e.explained())
-		end 'reason'
+	if let symbols = try symbolsAcrossTheChange(client) 'changed'
+		client.release()
+		let (before, after) = symbols
+		assertDocSyncChangedDocumentIsReread(before, after: after)
+	end 'changed' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "the open / ask / change / ask session did not complete")
 	end 'failed'
-
-	client.release()
-
-	match outcome 'changed'
-		observed(before, after) then assertDocSyncChangedDocumentIsReread(before, after: after)
-		broke(detail) then Expect.fail("the open / ask / change / ask session did not complete: {detail}")
-	end 'changed'
 end 'didChange updates document content'
 
 test 'didClose removes document'
 	var client = LspClient.start()
-	var outcome = DocSyncRoundPairOutcome.broke(UnreportedSessionEnding)
 
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
-		client.openDocument(DocSyncUri, content: docSyncMainReturningZero())
-		let whileOpen = client.documentSymbols(DocSyncUri).symbols
-		client.closeDocument(DocSyncUri)
-		outcome = DocSyncRoundPairOutcome.observed(whileOpen, after: client.documentSymbols(DocSyncUri).symbols)
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then outcome = DocSyncRoundPairOutcome.broke(e.explained())
-		end 'reason'
+	if let symbols = try symbolsAcrossTheClose(client) 'closed'
+		client.release()
+		let (whileOpen, afterClose) = symbols
+		assertDocSyncClosedDocumentIsForgotten(whileOpen, afterClose: afterClose)
+	end 'closed' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "the open / ask / close / ask session did not complete")
 	end 'failed'
-
-	client.release()
-
-	match outcome 'closed'
-		observed(whileOpen, afterClose) then assertDocSyncClosedDocumentIsForgotten(whileOpen, afterClose: afterClose)
-		broke(detail) then Expect.fail("the open / ask / close / ask session did not complete: {detail}")
-	end 'closed'
 end 'didClose removes document'
+
+function symbolsOfTheOpenedDocument(client LspClient) returns DocumentSymbolArray throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(DocSyncUri, content: docSyncMainReturningZero())
+
+	let outline = try client.documentSymbols(DocSyncUri)
+
+	return outline.symbols
+end 'symbolsOfTheOpenedDocument'
+
+function symbolsAcrossTheChange(client LspClient) returns (DocumentSymbolArray, DocumentSymbolArray) throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(DocSyncUri, content: docSyncOneFunction())
+
+	let before = try client.documentSymbols(DocSyncUri)
+
+	try client.changeDocument(DocSyncUri, content: docSyncTwoFunctions(), version: DocSyncSecondVersion)
+
+	let after = try client.documentSymbols(DocSyncUri)
+
+	return (before.symbols, after.symbols)
+end 'symbolsAcrossTheChange'
+
+function symbolsAcrossTheClose(client LspClient) returns (DocumentSymbolArray, DocumentSymbolArray) throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(DocSyncUri, content: docSyncMainReturningZero())
+
+	let whileOpen = try client.documentSymbols(DocSyncUri)
+
+	try client.closeDocument(DocSyncUri)
+
+	let afterClose = try client.documentSymbols(DocSyncUri)
+
+	return (whileOpen.symbols, afterClose.symbols)
+end 'symbolsAcrossTheClose'
 
 // The count is asserted BEFORE the loop, so a body that runs the wrong number of times has already
 // failed by the time it runs at all — which is why no element is reached for by index.

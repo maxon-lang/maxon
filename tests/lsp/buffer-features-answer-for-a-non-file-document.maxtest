@@ -8,37 +8,28 @@ let NonFileBufferFunctionName = "nonFileBufferMain"
 
 let NonFileBufferQuintupleWidth = 5
 
-union NonFileBufferOutcome
-	observed(symbols DocumentSymbolArray, tokens SemanticTokenValueArray)
-	broke(detail String)
-end 'NonFileBufferOutcome'
-
 test 'non-file document: documentSymbol and semanticTokens answer out of the buffer alone'
 	var client = LspClient.start()
-	var outcome = NonFileBufferOutcome.broke(UnreportedSessionEnding)
 
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
-		client.openDocument(NonFileBufferUri, content: nonFileBufferFixture())
-
-		let symbols = client.documentSymbols(NonFileBufferUri).symbols
-		outcome = NonFileBufferOutcome.observed(symbols, tokens: client.semanticTokensFull(NonFileBufferUri).data)
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then outcome = NonFileBufferOutcome.broke(e.explained())
-		end 'reason'
+	if let observed = try nonFileBufferAnswers(client) 'answered'
+		client.release()
+		let (symbols, tokens) = observed
+		requireTheBufferWasRead(symbols, tokens: tokens)
+	end 'answered' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "a document opened at `{NonFileBufferUri}` was asked for its outline and its semantic tokens, and the session did not answer", afterwards: ". ⭐ NEITHER REQUEST NEEDS A PATH: both are computed from the buffer's own text and tokens, with no project, no corpus and no file on disk anywhere in them. A document whose URI names no file is a document with no path, and that is a reason to answer nothing about its PROJECT — it is not a reason to stop reading the text the client just sent.")
 	end 'failed'
-
-	client.release()
-
-	match outcome 'outcome'
-		observed(symbols, tokens) then requireTheBufferWasRead(symbols, tokens: tokens)
-		broke(detail) then Expect.fail("a document opened at `{NonFileBufferUri}` was asked for its outline and its semantic tokens, and the session did not answer: {detail}. ⭐ NEITHER REQUEST NEEDS A PATH: both are computed from the buffer's own text and tokens, with no project, no corpus and no file on disk anywhere in them. A document whose URI names no file is a document with no path, and that is a reason to answer nothing about its PROJECT — it is not a reason to stop reading the text the client just sent.")
-	end 'outcome'
 end 'non-file document: documentSymbol and semanticTokens answer out of the buffer alone'
+
+function nonFileBufferAnswers(client LspClient) returns (DocumentSymbolArray, SemanticTokenValueArray) throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(NonFileBufferUri, content: nonFileBufferFixture())
+
+	let outline = try client.documentSymbols(NonFileBufferUri)
+	let colours = try client.semanticTokensFull(NonFileBufferUri)
+
+	return (outline.symbols, colours.data)
+end 'nonFileBufferAnswers'
 
 function requireTheBufferWasRead(symbols DocumentSymbolArray, tokens SemanticTokenValueArray) throws TestFailure
 	try Expect.equal(symbols.count(), expected: 2, message: "the buffer declares one type and one function at the top level, and the outline held {symbols.count()} symbols. ⭐ ANSWERING IS NOT ENOUGH — an empty outline is a well-formed reply that leaves the editor's breadcrumb bar and outline pane blank, which is exactly what a server that quietly gave up on a path-less document would send.")

@@ -84,35 +84,32 @@ function warmSession(directory FilePath, rewriteBetaBetween bool) returns WarmPr
 end 'warmSession'
 
 function collectWarmSession(client LspClient, directory FilePath, rewriteBetaBetween bool) returns WarmProbe
-	var probe = WarmProbe.broke(UnreportedSessionEnding)
+	if let probe = try warmSessionAnswers(client, directory: directory, rewriteBetaBetween: rewriteBetaBetween) 'answered'
+		return probe
+	end 'answered' else (e) 'failed'
+		return WarmProbe.broke("while asking `textDocument/definition`: {e.explained()}")
+	end 'failed'
+end 'collectWarmSession'
 
+function warmSessionAnswers(client LspClient, directory FilePath, rewriteBetaBetween bool) returns WarmProbe throws LspClientError
 	let alphaUri = fileUriOf(directory.join(WarmAlphaName))
 	let betaUri = fileUriOf(directory.join(WarmBetaName))
 
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
+	_ = try client.initialize()
+	try client.initialized()
 
-		client.openDocument(alphaUri, content: WarmAlphaSource)
-		let first = corpusProbeOf(client.definition(alphaUri, line: WarmCallLine, character: WarmCallCharacter))
+	try client.openDocument(alphaUri, content: WarmAlphaSource)
+	let first = corpusProbeOf(try client.definition(alphaUri, line: WarmCallLine, character: WarmCallCharacter))
 
-		if rewriteBetaBetween 'betaMoves'
-			writeCorpusFile(directory, fileName: WarmBetaName, content: WarmBetaRewritten)
-			let second = corpusProbeOf(client.definition(alphaUri, line: WarmCallLine, character: WarmCallCharacter))
-			probe = WarmProbe.answered(first, second: second)
-			return probe
-		end 'betaMoves'
+	if rewriteBetaBetween 'betaMoves'
+		writeCorpusFile(directory, fileName: WarmBetaName, content: WarmBetaRewritten)
+		let second = corpusProbeOf(try client.definition(alphaUri, line: WarmCallLine, character: WarmCallCharacter))
 
-		client.openDocument(betaUri, content: WarmBetaSource)
-		let second = corpusProbeOf(client.definition(betaUri, line: WarmCallLine, character: WarmCallCharacter))
-		probe = WarmProbe.answered(first, second: second)
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then probe = WarmProbe.broke("while asking `textDocument/definition`: {e.explained()}")
-		end 'reason'
-	end 'failed'
+		return WarmProbe.answered(first, second: second)
+	end 'betaMoves'
 
-	return probe
-end 'collectWarmSession'
+	try client.openDocument(betaUri, content: WarmBetaSource)
+	let second = corpusProbeOf(try client.definition(betaUri, line: WarmCallLine, character: WarmCallCharacter))
+
+	return WarmProbe.answered(first, second: second)
+end 'warmSessionAnswers'

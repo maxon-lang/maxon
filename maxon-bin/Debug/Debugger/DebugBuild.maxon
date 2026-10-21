@@ -3,10 +3,6 @@
 
 let DebugBuildDirectory = "debug-builds"
 let DebugBuildStemDigestBytes = 4
-let DebugBuildNameSeparator = "-"
-let DebugBuildNameFieldsPastTheStem = 3
-let DebugBuildMintedField = 2
-let DebugBuildOwnerField = 3
 
 export enum DebugProgramArgument
 	program
@@ -43,7 +39,7 @@ union DebugBuildOutput
 	unavailable(reason String)
 end 'DebugBuildOutput'
 
-export function debugProgramFor(spelled String, compiler FilePath, traced bool, argument DebugProgramArgument, timeoutMs DurationMs, serial MintedSerial) returns DebugBuildOutcome
+export function debugProgramFor(spelled String, compiler FilePath, traced bool, argument DebugProgramArgument, timeoutMs DurationMs) returns DebugBuildOutcome
 	let named = try FilePath.from(spelled) otherwise return DebugBuildOutcome.failed("`{spelled}` is not a spellable path")
 
 	if isTestSourceName(spelled) 'aTestFile'
@@ -73,15 +69,15 @@ export function debugProgramFor(spelled String, compiler FilePath, traced bool, 
 		return DebugBuildOutcome.failed("there is nothing to build at {spelled}")
 	end 'noSource'
 
-	return match debugBuildOutputFor(program, serial: serial) 'staged'
+	return match debugBuildOutputFor(program) 'staged'
 		unavailable(reason) gives DebugBuildOutcome.failed(reason)
 		at(output) gives buildForDebugging(program, compiler: compiler, output: output, traced: traced, timeoutMs: timeoutMs)
 	end 'staged'
 end 'debugProgramFor'
 
-// The fields past the stem are read back by `debugBuildOwnerOf`: the owner's process id is how
+// The scratch block past the stem is read back by `debugBuildLivenessOf`: its owner is how
 // `sweepStaleDebugBuilds` and `maxon cache clear` tell a live session's build from a leftover.
-function debugBuildOutputFor(source FilePath, serial MintedSerial) returns DebugBuildOutput
+function debugBuildOutputFor(source FilePath) returns DebugBuildOutput
 	let root = try hostCacheRoot() otherwise (e) 'noCache'
 		return DebugBuildOutput.unavailable("this host has no Maxon cache directory to build into: {e.name}")
 	end 'noCache'
@@ -92,7 +88,7 @@ function debugBuildOutputFor(source FilePath, serial MintedSerial) returns Debug
 		return DebugBuildOutput.unavailable("could not create {directory.path}, where a debug session stages the program it builds")
 	end 'unusable'
 
-	return DebugBuildOutput.at(directory.join("{debugBuildStem(source)}{DebugBuildNameSeparator}{Process.id()}{DebugBuildNameSeparator}{WallClock.nowUnixSeconds()}{DebugBuildNameSeparator}{serial}{hostExecutableExtension()}"))
+	return DebugBuildOutput.at(directory.join("{scratchNameFor(debugBuildStem(source))}{hostExecutableExtension()}"))
 end 'debugBuildOutputFor'
 
 export function sweepStaleDebugBuilds()
@@ -107,36 +103,14 @@ end 'debugImageOf'
 export function isHeldByALiveDebugSession(path FilePath) returns bool
 	let directory = try path.parent() otherwise return false
 
-	return directory.filename() == DebugBuildDirectory and debugBuildLivenessOf(path.filename()) == OwnerLiveness.ownerAlive
+	return directory.filename() == DebugBuildDirectory and debugBuildLivenessOf(path.filename()) == ScratchStanding.running
 end 'isHeldByALiveDebugSession'
 
-function debugBuildLivenessOf(name String) returns OwnerLiveness
-	return livenessOfOwner(debugBuildOwnerOf(name))
+function debugBuildLivenessOf(name String) returns ScratchStanding
+	let suffix = imageOrSidecarSuffixOf(name, image: hostExecutableExtension())
+
+	return standingOfScratchName(name, family: ScratchFamily.beforeSuffix(suffix))
 end 'debugBuildLivenessOf'
-
-function debugBuildOwnerOf(name String) returns LeftoverOwner
-	let fields = name.split(DebugBuildNameSeparator)
-
-	if fields.count() <= DebugBuildNameFieldsPastTheStem 'noStem'
-		return LeftoverOwner.notOwned
-	end 'noStem'
-
-	let serialAndExtension = try fields.get(fields.count() - 1) otherwise panic("debugBuildOwnerOf: a name split into {fields.count()} fields has a last one")
-	let minted = try fields.get(fields.count() - DebugBuildMintedField) otherwise panic("debugBuildOwnerOf: a name split into {fields.count()} fields has one {DebugBuildMintedField} from the end")
-	let owner = try fields.get(fields.count() - DebugBuildOwnerField) otherwise panic("debugBuildOwnerOf: a name split into {fields.count()} fields has one {DebugBuildOwnerField} from the end")
-	let trailing = serialAndExtension.trimStart(asciiDecimalDigits())
-	let image = hostExecutableExtension()
-
-	if trailing.byteLength() == serialAndExtension.byteLength() or not isImageSuffixOrItsSidecar(trailing, image: image) 'notOurExtension'
-		return LeftoverOwner.notOwned
-	end 'notOurExtension'
-
-	if not isDecimal(minted) 'notOurFields'
-		return LeftoverOwner.notOwned
-	end 'notOurFields'
-
-	return ownerProcessNamed(owner)
-end 'debugBuildOwnerOf'
 
 function buildForDebugging(source FilePath, compiler FilePath, output FilePath, traced bool, timeoutMs DurationMs) returns DebugBuildOutcome
 	var argv = StringArray.create()

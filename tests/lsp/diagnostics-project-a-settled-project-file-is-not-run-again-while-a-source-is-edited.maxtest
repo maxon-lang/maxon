@@ -8,11 +8,6 @@ let EditedEditPauseMs = 1000
 let EditedSettleMs = 2000
 let EditedOpeningVersion = 1
 
-union EditedProbe
-	finished
-	broke(detail String)
-end 'EditedProbe'
-
 function editedMainSource(edit ElementIndex) returns String
 	return "function main() returns ExitCode\n\treturn {edit}\nend 'main'\n"
 end 'editedMainSource'
@@ -22,15 +17,19 @@ test 'project diagnostics: a settled project file is not run again while a sourc
 	writeCorpusFile(root, fileName: EditedManifestFileName, content: EditedManifestSource)
 	writeCorpusFile(root, fileName: EditedMainFileName, content: editedMainSource(0))
 
-	let probe = probeEditedSource(root)
+	var client = LspClient.start()
+
+	if let _ = try editTheSource(client, root: root) 'finished'
+		client.release()
+	end 'finished' else (e) 'failed'
+		abandonedStagedSession(client, staged: root, failure: e, doing: "the session did not complete")
+	end 'failed'
+
 	let runs = markerRuns(root.join(EditedMarkerFileName))
 
 	discardOutsideCheckoutDir(root)
 
-	match probe 'probe'
-		broke(detail) then Expect.fail("the session did not complete: {detail}")
-		finished then Expect.equal(runs, expected: 1, message: "`{EditedManifestFileName}` states a project that did not change, so the server runs it once while a source of the project is opened and edited for longer than the retry interval of a project that failed to load. It ran {runs} times.")
-	end 'probe'
+	Expect.equal(runs, expected: 1, message: "`{EditedManifestFileName}` states a project that did not change, so the server runs it once while a source of the project is opened and edited for longer than the retry interval of a project that failed to load. It ran {runs} times.")
 end 'project diagnostics: a settled project file is not run again while a source of the project is edited'
 
 function markerRuns(marker FilePath) returns ElementIndex
@@ -50,34 +49,22 @@ function markerRuns(marker FilePath) returns ElementIndex
 	return runs
 end 'markerRuns'
 
-function probeEditedSource(root FilePath) returns EditedProbe
-	var client = LspClient.start()
+function editTheSource(client LspClient, root FilePath) returns DocumentSymbolArray throws LspClientError
 	let uri = fileUriOf(root.join(EditedMainFileName))
-	var probe = EditedProbe.broke(UnreportedSessionEnding)
 
-	try 'session'
-		_ = client.initializeAtRoot(root)
-		client.initialized()
-		client.openDocument(uri, content: editedMainSource(0))
+	_ = try client.initializeAtRoot(root)
+	try client.initialized()
+	try client.openDocument(uri, content: editedMainSource(0))
 
-		for edit in 1 to EditedEditCount 'eachEdit'
-			sleep(EditedEditPauseMs)
-			client.changeDocument(uri, content: editedMainSource(edit as ElementIndex), version: (EditedOpeningVersion + edit) as DocumentVersion)
-			_ = client.documentSymbols(uri)
-		end 'eachEdit'
+	for edit in 1 to EditedEditCount 'eachEdit'
+		sleep(EditedEditPauseMs)
+		try client.changeDocument(uri, content: editedMainSource(edit as ElementIndex), version: (EditedOpeningVersion + edit) as DocumentVersion)
+		_ = try client.documentSymbols(uri)
+	end 'eachEdit'
 
-		sleep(EditedSettleMs)
-		_ = client.documentSymbols(uri)
-		probe = EditedProbe.finished
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then probe = EditedProbe.broke(e.explained())
-		end 'reason'
-	end 'failed'
+	sleep(EditedSettleMs)
 
-	client.release()
+	let outline = try client.documentSymbols(uri)
 
-	return probe
-end 'probeEditedSource'
+	return outline.symbols
+end 'editTheSource'

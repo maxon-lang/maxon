@@ -1,0 +1,55 @@
+let StagedDirName = "temp/mcp-rebuild-sweeps-retired-images"
+let ProbeLabel = "mcp-rebuild-sweeps-retired-images"
+let CompilerStem = "maxon"
+let RetiredBase = "maxon.retired"
+let NumberedRetiredBase = "maxon.retired-"
+let ProgramFileName = "program.maxon"
+let KnownLine = "built beside retired images"
+let PlantedSerial = 7
+let PlantedText = "left by an earlier build"
+
+test 'a self-rebuild deletes the retired images and sidecars of both spellings, and keeps every other file that shares the stem'
+	let dir = stagingDir(StagedDirName)
+	clearStagedFiles(dir)
+
+	let imageName = "{CompilerStem}{executableSuffix()}"
+	let compiler = stagedCopyOf(testedCompilerPath(), dir: dir, name: CompilerStem)
+	let program = dir.join(ProgramFileName)
+	writeStagedFile(program, content: printingProgramSource(KnownLine))
+
+	let mintedName = mintedScratchName(ProbeLabel, base: RetiredBase, namespace: OwnHostNamespace, pid: endedProcessId(), serial: PlantedSerial)
+	let mintedByAnotherHost = mintedScratchName(ProbeLabel, base: RetiredBase, namespace: "another-os/another-host/another-namespace", pid: endedProcessId(), serial: PlantedSerial + 1)
+	let retired = [
+		"{mintedName}{executableSuffix()}",
+		"{mintedName}{executableSuffix()}{SidecarSuffix}",
+		"{mintedByAnotherHost}{executableSuffix()}",
+		"{NumberedRetiredBase}123{executableSuffix()}",
+		"{NumberedRetiredBase}123{executableSuffix()}{SidecarSuffix}"
+	]
+
+	let kept = [
+		"{NumberedRetiredBase}notes.txt",
+		"{NumberedRetiredBase}123notes.txt",
+		"{mintedName}.notes.txt",
+		"{RetiredBase}.notes.txt"
+	]
+
+	for name in retired 'eachRetired'
+		writeStagedFile(dir.join(name), content: PlantedText)
+	end 'eachRetired'
+
+	for name in kept 'eachKept'
+		writeStagedFile(dir.join(name), content: PlantedText)
+	end 'eachKept'
+
+	let rebuilt = rebuildOwnImage(dir, compiler: compiler, program: program)
+	Expect.equal(rebuilt.exitCode(), expected: 0, message: "`{BuildCommandName} {ProgramFileName} {OutputOptionPrefix}{imageName}`, run by {imageName} itself, exited {rebuilt.exitCode()}. The compiler said: {rebuilt.stderr}")
+
+	for name in retired 'eachRetiredName'
+		Expect.isFalse(File.exists(dir.join(name)), message: "{name} is a retired image of {imageName}, which every self-rebuild sweeps, and it is still there")
+	end 'eachRetiredName'
+
+	for name in kept 'eachKeptName'
+		Expect.isTrue(File.exists(dir.join(name)), message: "{name} only shares the stem of {imageName}, it is not a retired image, and the self-rebuild deleted it")
+	end 'eachKeptName'
+end 'a self-rebuild deletes the retired images and sidecars of both spellings, and keeps every other file that shares the stem'

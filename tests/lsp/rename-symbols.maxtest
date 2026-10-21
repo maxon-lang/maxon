@@ -17,64 +17,39 @@
 
 let RenameUri = "file:///test.maxon"
 
-union RenameEditsOutcome
-	observed(edits TextEditArray)
-	broke(detail String)
-end 'RenameEditsOutcome'
-
 test 'rename block identifier updates all occurrences'
 	var client = LspClient.start()
-	var outcome = RenameEditsOutcome.broke(UnreportedSessionEnding)
 
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
-		client.openDocument(RenameUri, content: renameMyBlockFixture())
-
-		// Request rename on 'myBlock' (line 1, col 14)
-		outcome = RenameEditsOutcome.observed(client.rename(RenameUri, line: 1, character: 14, newName: "newBlock").edits)
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then outcome = RenameEditsOutcome.broke(e.explained())
-		end 'reason'
+	// Request rename on 'myBlock' (line 1, col 14)
+	if let edits = try renameEditsAt(client, source: renameMyBlockFixture(), line: 1, character: 14, newName: "newBlock") 'renamed'
+		client.release()
+		assertRenameOfBlockLabel(edits)
+	end 'renamed' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "renaming a block label did not complete")
 	end 'failed'
-
-	client.release()
-
-	match outcome 'blockRename'
-		observed(edits) then assertRenameOfBlockLabel(edits)
-		broke(detail) then Expect.fail("renaming a block label did not complete: {detail}")
-	end 'blockRename'
 end 'rename block identifier updates all occurrences'
 
 test 'rename function updates function name and end label'
 	var client = LspClient.start()
-	var outcome = RenameEditsOutcome.broke(UnreportedSessionEnding)
 
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
-		client.openDocument(RenameUri, content: renameOldNameFixture())
-
-		// Request rename on 'oldName' (line 0, col 12)
-		outcome = RenameEditsOutcome.observed(client.rename(RenameUri, line: 0, character: 12, newName: "newName").edits)
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then outcome = RenameEditsOutcome.broke(e.explained())
-		end 'reason'
+	// Request rename on 'oldName' (line 0, col 12)
+	if let edits = try renameEditsAt(client, source: renameOldNameFixture(), line: 0, character: 12, newName: "newName") 'renamed'
+		client.release()
+		assertRenameOfFunction(edits)
+	end 'renamed' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "renaming a function did not complete")
 	end 'failed'
-
-	client.release()
-
-	match outcome 'functionRename'
-		observed(edits) then assertRenameOfFunction(edits)
-		broke(detail) then Expect.fail("renaming a function did not complete: {detail}")
-	end 'functionRename'
 end 'rename function updates function name and end label'
+
+function renameEditsAt(client LspClient, source String, line LspCoordinate, character LspCoordinate, newName String) returns TextEditArray throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(RenameUri, content: source)
+
+	let renamed = try client.rename(RenameUri, line: line, character: character, newName: newName)
+
+	return renamed.edits
+end 'renameEditsAt'
 
 function assertRenameOfBlockLabel(edits TextEditArray) throws TestFailure
 	// Should have edits for both occurrences

@@ -55,7 +55,6 @@ let ChainSeparator = ", then "
 //
 // ⛔ **NOTHING PUBLISHED CAN END IN THE PENDING MARKER**, which is what keeps a half-written file out of
 // every hit test: a published name ends in its key's hex digits or its own extension, and `p` is not one.
-let PendingWriterSeparator = "."
 module let PendingBuildMarker = ".tmp"
 
 // Manifest fields are tab-separated and one fact per line, because a path may contain a space.
@@ -81,20 +80,8 @@ export union RunCacheError implements Error
 end 'RunCacheError'
 
 export function pendingSpellingOf(published String) returns String
-	return "{published}{PendingWriterSeparator}{Process.id()}{PendingBuildMarker}"
+	return "{scratchNameFor(published)}{PendingBuildMarker}"
 end 'pendingSpellingOf'
-
-module function leftoverOwnerOf(name String) returns LeftoverOwner
-	if not name.endsWith(PendingBuildMarker) 'notPending'
-		return LeftoverOwner.notOwned
-	end 'notPending'
-
-	let withoutMarker = name.slice(name.startIndex(), length: name.count() - PendingBuildMarker.count())
-	let separator = try withoutMarker.findLast(PendingWriterSeparator) otherwise return LeftoverOwner.notOwned
-	let ownerStarts = try withoutMarker.indexAfter(separator) otherwise return LeftoverOwner.notOwned
-
-	return ownerProcessNamed(withoutMarker.slice(ownerStarts, endIndex: withoutMarker.endIndex()))
-end 'leftoverOwnerOf'
 
 // One manifest line: a label and its fields. Everything a key or a record is computed over comes through
 // here, so no caller assembles a separator of its own.

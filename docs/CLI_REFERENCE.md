@@ -98,8 +98,9 @@ built from changes:
   does.
 - **The key is the file name.** A cache hit is that file existing, so two runs of one program cannot
   serve each other a stale build. A fresh build is written under a temporary name and renamed into
-  place, so simultaneous cold runs never share an output path. Superseded builds, and builds an older
-  cache format left, are removed on a best-effort basis.
+  place, so simultaneous cold runs never share an output path. Superseded builds, builds an older
+  cache format left, and temporary builds a process that has ended left (see
+  [`maxon cache`](#maxon-cache)) are removed on a best-effort basis.
 - **The path is anchored at the working directory, and only its `.` components, repeated separators and
   a trailing separator are folded.** `x.maxon` and `./x.maxon` share one cache slot, and `a/../x.maxon` gets another: through
   a symbolic link, `a/..` need not be the working directory. That costs an extra compile, never a wrong
@@ -552,15 +553,22 @@ judged and removed while `clear` holds its claim file, so a build starting meanw
 as the first thing that stayed, and the command exits 1.
 
 **A debug build a live session is using stays**, with its sidecar and the directories above it, and
-`clear` ends its report with a `Kept <n> files a live debug session is using` line. Each debug build's
-file name carries the process id of the `maxon mcp-server` or `maxon dap-server` that built it, and the
-build belongs to a live session while a process with that id exists. A server removes the debug builds
-and the staged snippets it made when the session or call that needed them ends, and each
-`maxon mcp-server` and `maxon dap-server` removes, as it starts, those whose owning process has ended —
-the leftovers of a server that was killed. The owner is known by its process id alone, so an owner in another pid
-namespace, such as a container sharing this cache directory, reads as ended when no process here has
-its id and as alive when an unrelated process here does; an ended owner whose id the system has reused
-reads as alive until that process ends.
+`clear` ends its report with a `Kept <n> files a live debug session is using` line. A debug build
+belongs to a live session while the `maxon mcp-server` or `maxon dap-server` that built it runs on this
+host, in this pid namespace. A server removes the debug builds and the staged snippets it made when the
+session or call that needed them ends.
+
+**A file one process leaves for itself is swept by the name it carries.** A debug build, a staged
+snippet, an MCP result document and a build still being written into the run cache each end their name
+in `<tag>.<start>.<pid>.<serial>`: a tag for the host and pid namespace, the start time and id of the
+process that wrote it, and a serial. Each `maxon mcp-server` and `maxon dap-server` removes, as it
+starts, the debug builds and snippets whose owner has ended — the leftovers of a server that was killed —
+and a run that publishes a build removes the builds an ended process was writing into that program's
+slot. Only an owner with this host's tag is judged: the files of another pid namespace, such as a
+container sharing this cache directory, stay for that namespace to sweep, a host that cannot identify
+itself (a Linux system with no machine id) judges no owner at all, and an ended owner whose id
+the system has reused reads as alive until that process ends. A file in those places whose name carries
+no owner, such as one an older Maxon wrote, is removed once it is 7 days old.
 
 It removes **only what Maxon created**. `MAXON_RUN_CACHE_ROOT` may name a directory that is already
 somebody's — a shared build area, or your own scratch directory — so the clear reaches only the Maxon
@@ -892,7 +900,8 @@ brings back the build output `execute` otherwise keeps quiet.
 Log lines go to stderr, prefixed with the category and level (`[CMP] INFO: …`). An unrecognized spec
 stops the command before it runs, with `error: invalid option value: <arg>` and exit 1 (2 for
 `maxon test`). `maxon test` lowers the level to `error` unless you pass
-`--log=`, so its stdout is only the report.
+`--log=`, so its stdout is only the report, and `maxon lsp-server` lowers it the same way for its whole
+session.
 
 ```bash
 maxon build app.maxon --log=codegen:trace
@@ -1226,8 +1235,8 @@ A build whose output is the compiler running the command (such as the Maxon repo
 build. Once the compile succeeds, the compiler renames its running image to `maxon.previous`
 (`maxon.previous.exe` on Windows) and writes the new binary into the empty slot. If an older
 `maxon.previous` is itself still running, for example an editor's language server, it is renamed aside to
-`maxon.retired-<stamp>` and deleted by a later rebuild. A **failed** build leaves the running compiler in
-place. Such a build always compiles: every build of the compiler changes the compiler identity a
+`maxon.retired.<tag>.<start>.<pid>.<serial>` and deleted by a later rebuild. A **failed** build leaves
+the running compiler in place. Such a build always compiles: every build of the compiler changes the compiler identity a
 [build record](#up-to-date) would be checked against.
 
 #### Building again with the written program
@@ -2049,7 +2058,7 @@ maxon lsp-server
 ```
 
 Speaks the Language Server Protocol over stdin and stdout: JSON-RPC messages with `Content-Length`
-headers. It takes no arguments and is normally started by an editor, not by hand.
+headers. Its one option is [`--log=`](#logging), and it is normally started by an editor, not by hand.
 
 **Lifecycle.** `initialize` returns the server's capabilities and its `serverInfo`: `name` is
 `maxon`, and `version` is the line `maxon version` prints. `initialized` is accepted. `shutdown`
@@ -2130,8 +2139,9 @@ targets the project holds the sources of every one. A `.maxproj` that declares n
 with no `.maxproj`, and a project file that does not compile are each their directory's walk.
 
 The project file runs beside the session, for up to 30 seconds, and every request is answered
-meanwhile. The project check of a document in that project starts once the answer arrives, and every
-open document is then checked again. An answer holds until the `.maxproj` text changes; a project file
+meanwhile. Each project's file runs on its own, so a slow one holds up only its own project's answer.
+The project check of a document in that project starts once the answer arrives, and every open document
+in that project is then checked again. An answer holds until the `.maxproj` text changes; a project file
 that failed to compile, failed, or was refused is run again after ten seconds. A project file that fails
 or describes no usable build — no build, or no `sources` — is a refusal: the line `maxon build` prints
 for it is published on the `.maxproj` document, and with the project check of each document in the
@@ -2822,8 +2832,8 @@ last 4 KiB of output, starting on a character boundary).
   `{spec, test, status}`, where `status` is `PASS`, `FAIL`, `SKIP` or `NOTRUN`. It is complete whatever
   `maxFailures` is.
 - The answer is read from the run's [`--result-json`](#maxon-spec-test) document, written to
-  `.spec-tmp/spec-result-<pid>-<serial>.json` in the checkout, one per call, and deleted when the call
-  ends. A run that writes no document is answered with a tool error carrying `rawTail`.
+  `.spec-tmp/spec-result.<tag>.<start>.<pid>.<serial>.json` in the checkout, one per call, and deleted
+  when the call ends. A run that writes no document is answered with a tool error carrying `rawTail`.
 
 | Argument | Type | Description |
 |----------|------|-------------|
@@ -2844,8 +2854,8 @@ last 4 KiB of output, starting on a character boundary).
 
 Runs `maxon scale-test`, the scaling instrument, and returns its whole result document as `result`. It
 has no verdict: the ratio between rungs is the reading (×2 linear, ×4 quadratic). The document is written
-to `.scale-tmp/scale-result-<pid>-<serial>.json` in the checkout, one per call, and deleted when the call
-ends.
+to `.scale-tmp/scale-result.<tag>.<start>.<pid>.<serial>.json` in the checkout, one per call, and
+deleted when the call ends.
 
 | Argument | Type | Description |
 |----------|------|-------------|
@@ -2863,9 +2873,9 @@ The server is the compiler, so building the compiler (for example with the `buil
 `path: "maxon-bin"`) replaces the executable the server runs from. That works: once the compile
 succeeds, the running image is renamed to `maxon.previous` and the new compiler is written in its
 place, and the server keeps answering from the renamed image. A server started before an earlier
-rebuild is running an older `maxon.previous`; that file is renamed aside to `maxon.retired-<stamp>` and
-deleted by a later rebuild once the server has exited. A failed build leaves the running compiler in the
-slot.
+rebuild is running an older `maxon.previous`; that file is renamed aside to
+`maxon.retired.<tag>.<start>.<pid>.<serial>` and deleted by a later rebuild once the server has exited.
+A failed build leaves the running compiler in the slot.
 
 **The running server is still the compiler it was started as.** Restart it when you want the newly
 built compiler to answer.

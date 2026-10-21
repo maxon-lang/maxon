@@ -25,9 +25,9 @@ let MaxDelegationDepth = 8 as DelegationDepth
 let DescribedBuildsOpen = "["
 let DescribedBuildsClose = "]"
 
-// One resolver runs every project file the editor asks about (`LspProjectResolver`), so a
-// `.maxproj` that never exits would leave every later project's answer pending for the rest of the
-// session.
+// A project's resolver (`LspProjectResolver`) runs its project file's resolutions one at a time, so a
+// `.maxproj` that never exits would leave every later answer for that project pending for the rest of
+// the session.
 let EditorManifestRunTimeoutMs = 30000
 
 export typealias DelegationDepth = int(0 to 64)
@@ -47,6 +47,18 @@ export enum ManifestAudience
 	commandLine
 	editor
 end 'ManifestAudience'
+
+union ChatterQuieting
+	untouched
+	quieted(inForce LogLevel)
+
+	function restored()
+		match self 'quieting'
+			untouched then return
+			quieted(inForce) then Log.setLevel(inForce)
+		end 'quieting'
+	end 'restored'
+end 'ChatterQuieting'
 
 export type ManifestVoice
 	export let speaker as String
@@ -119,6 +131,13 @@ export type ManifestVoice
 			editor then self.sayAll(capturedRosterError(e))
 		end 'audience'
 	end 'reportRoster'
+
+	function quietedChatter() returns ChatterQuieting
+		return match self.audience 'audience'
+			commandLine gives ChatterQuieting.quieted(quietTheBuildChatter(self.logOverridden))
+			editor gives ChatterQuieting.untouched
+		end 'audience'
+	end 'quietedChatter'
 
 	function compileSession() returns CompileSession
 		return match self.audience 'audience'
@@ -430,21 +449,23 @@ end 'describedNoBuild'
 // path inside the project is written by every concurrent build of it, and which lock would apply is
 // known only once the manifest has run.
 //
-// Only this compile is silenced, and the level goes back before the next one. The build the manifest
-// goes on to describe is what the caller asked for, and its own report is their answer.
+// On the command line only this compile is silenced, and the level goes back before the next one. The
+// build the manifest goes on to describe is what the caller asked for, and its own report is their
+// answer. The level is process-wide and each editor project resolves on its own, so the editor's is
+// set once for the session by `runLspServer` and left alone here.
 export function runManifestProgram(manifest FilePath, entry ByteArray, base ManifestBase, arguments StringArray, voice ManifestVoice) returns ManifestProgramRun
-	let spoke = quietTheBuildChatter(voice.logOverridden)
+	let spoke = voice.quietedChatter()
 	var session = voice.compileSession()
 
 	let runner = try cachedBuild(manifest, isProject: false, target: detectHostTarget(), entryFunction: entry, speaker: voice.speaker, session: session) otherwise 'manifestNotBuilt'
-		Log.setLevel(spoke)
+		spoke.restored()
 		voice.markFileBroken()
 		voice.adopt(session)
 		voice.say("error: {manifest.filename()} could not be built — the reason is above")
 		return ManifestProgramRun.notRun
 	end 'manifestNotBuilt'
 
-	Log.setLevel(spoke)
+	spoke.restored()
 
 	if voice.announce 'tellTheReader'
 		reportBuildRunner(runner.compiled, manifest: manifest)
@@ -482,10 +503,12 @@ export function runningCompilerPath() returns FilePath
 	return try Process.executablePath() otherwise panic("runningCompilerPath: this compiler found its stdlib by walking up from its own executable, so the host has already named that executable")
 end 'runningCompilerPath'
 
-// The name carries this process's id because two concurrent builds of one manifest share the cache
-// slot the runner lives in, and each would otherwise read back the other's description.
+// A scratch name, because two concurrent builds of one manifest share the cache slot the runner lives
+// in, and each would otherwise read back the other's description.
 function buildDescriptionPath(runner CachedProgram) returns FilePath
-	return try FilePath.from("{runner.executable.toString()}.{Process.id()}{BuildDescriptionSuffix}") otherwise panic("buildDescriptionPath: '{runner.executable.toString()}' is a path, so it is one with a suffix on the end")
+	let unique = scratchNameFor(runner.executable.toString())
+
+	return try FilePath.from("{unique}{BuildDescriptionSuffix}") otherwise panic("buildDescriptionPath: '{runner.executable.toString()}' is a path, so it is one with a suffix on the end")
 end 'buildDescriptionPath'
 
 function discardDescription(description FilePath)

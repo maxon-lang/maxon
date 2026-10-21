@@ -27,17 +27,16 @@ let MethodNotFoundMessagePrefix = "Method not found"
 // LSP's own rule: the process exits 0 only when the client asked for a shutdown before the session ended.
 let CleanExitCode = 0 as ProcessExitCode
 
-// What one full session observed, or why it could not finish one.
-union SmokeOutcome
-	completed(syncAdvertised bool, refusalCode JsonRpcErrorCode, refusalMessage String, exitCode ProcessExitCode)
-	broke(detail String)
-end 'SmokeOutcome'
-
 test 'the client round-trips a whole LSP session with the language server'
-	match driveSmokeSession() 'outcome'
-		completed(syncAdvertised, refusalCode, refusalMessage, exitCode) then assertSession(syncAdvertised, refusalCode: refusalCode, refusalMessage: refusalMessage, exitCode: exitCode)
-		broke(detail) then Expect.fail("the smoke session did not complete: {detail}. The client spawns `lsp-server` from the CHECKOUT ROOT and speaks Content-Length-framed JSON-RPC over its pipes; a break here is the transport, not a language feature.")
-	end 'outcome'
+	var client = LspClient.start()
+
+	if let observed = try smokeSession(client) 'completed'
+		client.release()
+		let (syncAdvertised, refusalCode, refusalMessage, exitCode) = observed
+		assertSession(syncAdvertised, refusalCode: refusalCode, refusalMessage: refusalMessage, exitCode: exitCode)
+	end 'completed' else (e) 'broke'
+		abandonedSession(client, failure: e, doing: "the smoke session did not complete: during the session's lifecycle", afterwards: ". The client spawns `lsp-server` from the CHECKOUT ROOT and speaks Content-Length-framed JSON-RPC over its pipes; a break here is the transport, not a language feature.")
+	end 'broke'
 end 'the client round-trips a whole LSP session with the language server'
 
 function assertSession(syncAdvertised bool, refusalCode JsonRpcErrorCode, refusalMessage String, exitCode ProcessExitCode) throws TestFailure
@@ -54,41 +53,22 @@ function assertSession(syncAdvertised bool, refusalCode JsonRpcErrorCode, refusa
 	try Expect.equal(observedExit, expected: expectedExit, message: "the server did not exit 0 after `shutdown` then `exit`. LSP reserves 0 for exactly that order, so a different code means the session ended some other way — and the exit code is the half of this a script reads.")
 end 'assertSession'
 
-// Spawn, drive, release. The release is unconditional: the outcome is a VALUE, so no assertion can run
-// before the handle is freed.
-function driveSmokeSession() returns SmokeOutcome
-	var client = LspClient.start()
-	let outcome = collectSession(client)
-	client.release()
-	return outcome
-end 'driveSmokeSession'
+function smokeSession(client LspClient) returns (bool, JsonRpcErrorCode, String, ProcessExitCode) throws LspClientError
+	let advertised = try client.initialize()
+	try client.initialized()
+	try client.openDocument(SmokeDocumentUri, content: openedDocument())
+	try client.changeDocument(SmokeDocumentUri, content: changedDocument(), version: SecondDocumentVersion)
 
-function collectSession(client LspClient) returns SmokeOutcome
-	// Assigned on every path — the body's last statement, and each arm of its handler. The sentence is
-	// what a reader would be shown if a later edit added a path that reported nothing.
-	var outcome = SmokeOutcome.broke(UnreportedSessionEnding)
+	let (refusalCode, refusalMessage) = try smokeUnservedMethodRefusal(client)
 
-	try 'session'
-		let advertised = client.initialize()
-		client.initialized()
-		client.openDocument(SmokeDocumentUri, content: openedDocument())
-		client.changeDocument(SmokeDocumentUri, content: changedDocument(), version: SecondDocumentVersion)
-		let (refusalCode, refusalMessage) = smokeUnservedMethodRefusal(client)
-		client.closeDocument(SmokeDocumentUri)
-		client.shutdown()
-		client.exit()
-		let exitCode = client.waitForExit()
-		outcome = SmokeOutcome.completed(advertised.hasTextDocumentSync, refusalCode: refusalCode, refusalMessage: refusalMessage, exitCode: exitCode)
-	end 'session' otherwise (e) 'broke'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then outcome = SmokeOutcome.broke("during the session's lifecycle: {e.explained()}")
-		end 'reason'
-	end 'broke'
+	try client.closeDocument(SmokeDocumentUri)
+	try client.shutdown()
+	try client.exit()
 
-	return outcome
-end 'collectSession'
+	let exitCode = try client.waitForExit()
+
+	return (advertised.hasTextDocumentSync, refusalCode, refusalMessage, exitCode)
+end 'smokeSession'
 
 // The code and sentence an UNSERVED method answers with. A method that ANSWERS instead is the finding,
 // so it is reported as one rather than passing quietly.

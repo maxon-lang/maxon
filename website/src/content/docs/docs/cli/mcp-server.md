@@ -375,8 +375,8 @@ last 4 KiB of output, starting on a character boundary).
   `{spec, test, status}`, where `status` is `PASS`, `FAIL`, `SKIP` or `NOTRUN`. It is complete whatever
   `maxFailures` is.
 - The answer is read from the run's [`--result-json`](/docs/cli/compiler-development/#maxon-spec-test) document, written to
-  `.spec-tmp/spec-result-<pid>-<serial>.json` in the checkout, one per call, and deleted when the call
-  ends. A run that writes no document is answered with a tool error carrying `rawTail`.
+  `.spec-tmp/spec-result.<tag>.<start>.<pid>.<serial>.json` in the checkout, one per call, and deleted
+  when the call ends. A run that writes no document is answered with a tool error carrying `rawTail`.
 
 | Argument | Type | Description |
 |----------|------|-------------|
@@ -397,8 +397,8 @@ last 4 KiB of output, starting on a character boundary).
 
 Runs `maxon scale-test`, the scaling instrument, and returns its whole result document as `result`. It
 has no verdict: the ratio between rungs is the reading (×2 linear, ×4 quadratic). The document is written
-to `.scale-tmp/scale-result-<pid>-<serial>.json` in the checkout, one per call, and deleted when the call
-ends.
+to `.scale-tmp/scale-result.<tag>.<start>.<pid>.<serial>.json` in the checkout, one per call, and
+deleted when the call ends.
 
 | Argument | Type | Description |
 |----------|------|-------------|
@@ -416,9 +416,9 @@ The server is the compiler, so building the compiler (for example with the `buil
 `path: "maxon-bin"`) replaces the executable the server runs from. That works: once the compile
 succeeds, the running image is renamed to `maxon.previous` and the new compiler is written in its
 place, and the server keeps answering from the renamed image. A server started before an earlier
-rebuild is running an older `maxon.previous`; that file is renamed aside to `maxon.retired-<stamp>` and
-deleted by a later rebuild once the server has exited. A failed build leaves the running compiler in the
-slot.
+rebuild is running an older `maxon.previous`; that file is renamed aside to
+`maxon.retired.<tag>.<start>.<pid>.<serial>` and deleted by a later rebuild once the server has exited.
+A failed build leaves the running compiler in the slot.
 
 **The running server is still the compiler it was started as.** Restart it when you want the newly
 built compiler to answer.

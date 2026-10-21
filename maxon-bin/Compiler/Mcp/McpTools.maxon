@@ -8,7 +8,6 @@ let ResultExtension = ".json"
 let SnippetStem = "mcp-snippet"
 let SnippetExtension = ".maxon"
 let SnippetStagedSeparator = "."
-let StagedNameSeparator = "-"
 let FromArgument = "from"
 
 module let ChildTimeoutOption = "timeoutSeconds"
@@ -23,8 +22,6 @@ module let RebuildOption = "rebuild"
 module let LogOption = "log"
 module let NoteOption = "note"
 module let EmitCorpusOption = "emitCorpus"
-
-typealias StagedSerial = int(0 to u64.max)
 
 // =============================================================================
 // Spawning
@@ -145,32 +142,19 @@ enum StagedFamily
 		end 'family'
 	end 'directoryUnder'
 
-	function prefix() returns String
-		return "{self.stem()}{StagedNameSeparator}"
-	end 'prefix'
-
-	function livenessOf(name String) returns OwnerLiveness
-		if not name.startsWith(self.prefix()) 'notStagedHere'
-			return OwnerLiveness.notOwned
-		end 'notStagedHere'
-
-		let owner = try name.replaceFirst(self.prefix(), with: "").split(StagedNameSeparator).get(0) otherwise panic("StagedFamily.livenessOf: a split answers at least one piece")
-
-		return livenessOfOwner(ownerProcessNamed(owner))
+	function livenessOf(name String) returns ScratchStanding
+		return standingOfScratchName(name, family: ScratchFamily.afterBase(self.stem()))
 	end 'livenessOf'
 
 	function reserveIn(dir FilePath, content String) returns FilePath throws FileWriteError
-		var serial = Clock.nowNanos() as StagedSerial
-
 		while true 'untilReserved'
-			let candidate = childPath(dir, segment: "{self.prefix()}{Process.id()}{StagedNameSeparator}{serial}{self.suffix()}")
+			let candidate = childPath(dir, segment: "{scratchNameFor(self.stem())}{self.suffix()}")
 
 			try File.createText(candidate, content: content) otherwise (e) 'notCreated'
 				if e != FileWriteError.alreadyExists 'unusable'
 					throw e
 				end 'unusable'
 
-				serial = serial + 1
 				continue
 			end 'notCreated'
 
@@ -187,12 +171,23 @@ export function sweepStaleSnippets()
 end 'sweepStaleSnippets'
 
 function snippetSourceOf(staged FilePath) returns FilePath
-	let name = staged.filename()
-	let stemEnds = try name.findFirst(SnippetStagedSeparator) otherwise name.endIndex()
 	let directory = try staged.parent() otherwise panic("snippetSourceOf: {staged.path} was listed inside the snippet directory")
 
-	return directory.join("{name.slice(name.startIndex(), endIndex: stemEnds)}{SnippetExtension}")
+	let name = staged.filename()
+
+	match parsedScratchName(name, family: ScratchFamily.afterBase(StagedFamily.snippet.stem())) 'parsed'
+		minted(stem, _) then return directory.join("{stem}{SnippetExtension}")
+		unminted then return directory.join("{unmintedSnippetStem(name)}{SnippetExtension}")
+	end 'parsed'
 end 'snippetSourceOf'
+
+// A name with no scratch block is an older format's, swept by age; its source and its products agree
+// up to the first separator.
+function unmintedSnippetStem(name String) returns String
+	let stemEnds = try name.findFirst(SnippetStagedSeparator) otherwise name.endIndex()
+
+	return name.slice(name.startIndex(), endIndex: stemEnds)
+end 'unmintedSnippetStem'
 
 function discardSnippet(source FilePath)
 	let slot = discardRunSlotOf(source, entryFunction: MainFunctionName)

@@ -10,26 +10,24 @@ let SlowAnswerBudgetMs = 2500
 let SlowFinishBoundMs = 30000
 let SlowFinishPollMs = 200
 
-union SlowProbe
-	answered(symbols ElementIndex, tookMs DurationMs, finishedMeanwhile bool)
-	broke(detail String)
-end 'SlowProbe'
-
 test 'project diagnostics: a slow project file does not stall a request on another open document'
 	let root = freshOutsideCheckoutDir(SlowProjectDirName)
 	writeCorpusFile(root, fileName: SlowManifestFileName, content: SlowManifestSource)
 	writeCorpusFile(root, fileName: SlowMainFileName, content: SlowMainSource)
 	writeCorpusFile(root, fileName: SlowOtherFileName, content: SlowOtherSource)
 
-	let probe = probeSlowProject(root)
+	var client = LspClient.start()
 
-	waitForTheManifestToFinish(root.join(SlowFinishedFileName))
-	discardOutsideCheckoutDir(root)
-
-	match probe 'probe'
-		broke(detail) then Expect.fail("the session did not complete: {detail}")
-		answered(symbols, tookMs, finishedMeanwhile) then expectAnsweredWhileResolving(symbols, tookMs: tookMs, finishedMeanwhile: finishedMeanwhile)
-	end 'probe'
+	if let answered = try symbolsWhileResolving(client, root: root) 'answered'
+		client.release()
+		waitForTheManifestToFinish(root.join(SlowFinishedFileName))
+		discardOutsideCheckoutDir(root)
+		let (symbols, tookMs, finishedMeanwhile) = answered
+		expectAnsweredWhileResolving(symbols, tookMs: tookMs, finishedMeanwhile: finishedMeanwhile)
+	end 'answered' else (e) 'failed'
+		waitForTheManifestToFinish(root.join(SlowFinishedFileName))
+		abandonedStagedSession(client, staged: root, failure: e, doing: "the session did not complete")
+	end 'failed'
 end 'project diagnostics: a slow project file does not stall a request on another open document'
 
 function expectAnsweredWhileResolving(symbols ElementIndex, tookMs DurationMs, finishedMeanwhile bool) throws TestFailure
@@ -48,32 +46,18 @@ function waitForTheManifestToFinish(marker FilePath)
 	sleep(SlowFinishPollMs)
 end 'waitForTheManifestToFinish'
 
-function probeSlowProject(root FilePath) returns SlowProbe
-	var client = LspClient.start()
+function symbolsWhileResolving(client LspClient, root FilePath) returns (ElementIndex, DurationMs, bool) throws LspClientError
 	let mainUri = fileUriOf(root.join(SlowMainFileName))
 	let otherUri = fileUriOf(root.join(SlowOtherFileName))
-	var probe = SlowProbe.broke(UnreportedSessionEnding)
 
-	try 'session'
-		_ = client.initializeAtRoot(root)
-		client.initialized()
-		client.openDocument(otherUri, content: SlowOtherSource)
-		client.openDocument(mainUri, content: SlowMainSource)
+	_ = try client.initializeAtRoot(root)
+	try client.initialized()
+	try client.openDocument(otherUri, content: SlowOtherSource)
+	try client.openDocument(mainUri, content: SlowMainSource)
 
-		let started = Clock.nowMs()
-		let answer = client.documentSymbols(otherUri)
-		let took = Clock.elapsedMs(started)
+	let started = Clock.nowMs()
+	let answer = try client.documentSymbols(otherUri)
+	let took = Clock.elapsedMs(started)
 
-		probe = SlowProbe.answered(answer.symbols.count(), tookMs: took, finishedMeanwhile: File.exists(root.join(SlowFinishedFileName)))
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then probe = SlowProbe.broke(e.explained())
-		end 'reason'
-	end 'failed'
-
-	client.release()
-
-	return probe
-end 'probeSlowProject'
+	return (answer.symbols.count(), took, File.exists(root.join(SlowFinishedFileName)))
+end 'symbolsWhileResolving'

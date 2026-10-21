@@ -58,11 +58,11 @@ let TrustedWorkspaceKey = "trustedWorkspace"
 let TrustedKey = "trusted"
 
 // Run the server until the client ends the session, and report how it ended.
-export function runLspServer() returns ExitCode
+export function runLspServer(args MaxonArgs) returns ExitCode
+	_ = quietTheBuildChatter(args.logOverridden)
 	let writer = spawn LspStdoutWriter.create()
-	let resolver = spawn LspProjectResolver.create()
 	let stdinReader = spawn LspStdinReader.create()
-	var session = LspSession.create(writer, stdinReader: stdinReader, resolver: resolver)
+	var session = LspSession.create(writer, stdinReader: stdinReader)
 	return session.run()
 end 'runLspServer'
 
@@ -79,8 +79,8 @@ type LspSession
 	// one of its own for a project check to learn it was superseded.
 	var nextDocumentVersion as LspDocumentVersion
 
-	static function create(writer LspStdoutWriter.handle, stdinReader LspStdinReader.handle, resolver LspProjectResolver.handle) returns LspSession
-		return Self{documents: LspDocumentTextMap.create(), keywords: KeywordTable.create(), stdinReader: stdinReader, workspace: LspWorkspaceState.create(writer, resolver: resolver), nextDocumentVersion: 0}
+	static function create(writer LspStdoutWriter.handle, stdinReader LspStdinReader.handle) returns LspSession
+		return Self{documents: LspDocumentTextMap.create(), keywords: KeywordTable.create(), stdinReader: stdinReader, workspace: LspWorkspaceState.create(writer), nextDocumentVersion: 0}
 	end 'create'
 
 	// The message pump. One turn reads one framed message; the session ends when the client says so
@@ -128,20 +128,30 @@ type LspSession
 
 	function projectResolved(dir FilePath, answer ProjectInputsAnswer, ticket ResolutionTicket)
 		if self.workspace.projectResolved(dir, answer: answer, ticket: ticket) 'awaitedAnswer'
-			self.projectInputsChanged()
+			let key = dir.toString()
+			self.projectInputsChanged(InputsChange.oneProject(key.clone()))
+
+			// Released after the re-arrivals: one that reaches the project uses its root again and
+			// keeps the answer held, where a root released first is held afresh and runs its
+			// `.maxproj` again.
+			self.workspace.held.releaseIfDemoted(key)
 		end 'awaitedAnswer'
 	end 'projectResolved'
 
-	function projectInputsChanged()
-		self.workspace.held.forgetCorpora()
-		self.rearriveEveryDocument()
+	function projectInputsChanged(change InputsChange)
+		self.workspace.held.forgetCorpora(change)
+		self.rearriveReachedDocuments(change)
 	end 'projectInputsChanged'
 
-	function rearriveEveryDocument()
+	function rearriveReachedDocuments(change InputsChange)
+		let search = lspRootSearch()
+
 		for (uri, text) in self.documents.clone() 'eachOpenDocument'
-			self.documentArrived(uri, text: text, arrival: BufferArrival.edited, clientVersion: ClientDocumentVersion.unstated)
+			if inputsChangeReachesDocument(change, workspace: self.workspace, uri: uri, search: search) 'reached'
+				self.documentArrived(uri, text: text, arrival: BufferArrival.edited, clientVersion: ClientDocumentVersion.unstated)
+			end 'reached'
 		end 'eachOpenDocument'
-	end 'rearriveEveryDocument'
+	end 'rearriveReachedDocuments'
 
 	function documentArrived(uri String, text String, arrival BufferArrival, clientVersion ClientDocumentVersion)
 		self.documents.upsert(uri, value: text)
@@ -311,7 +321,7 @@ type LspSession
 		end 'unchanged'
 
 		self.workspace.trusted = trusted
-		self.projectInputsChanged()
+		self.projectInputsChanged(InputsChange.everyProject)
 	end 'changeWorkspaceTrust'
 
 	function openDocument(doc JsonDoc) throws LspParamsError

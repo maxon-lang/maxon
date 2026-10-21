@@ -16,35 +16,26 @@ let SymbolsUri = "file:///test.maxon"
 let SymbolsStructKind = 23
 let SymbolsFunctionKind = 12
 
-union SymbolsOutlineOutcome
-	observed(symbols DocumentSymbolArray)
-	broke(detail String)
-end 'SymbolsOutlineOutcome'
-
 test 'documentSymbol returns symbols'
 	var client = LspClient.start()
-	var outcome = SymbolsOutlineOutcome.broke(UnreportedSessionEnding)
 
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
-		client.openDocument(SymbolsUri, content: symbolsPointAndMainFixture())
-		outcome = SymbolsOutlineOutcome.observed(client.documentSymbols(SymbolsUri).symbols)
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then outcome = SymbolsOutlineOutcome.broke(e.explained())
-		end 'reason'
+	if let symbols = try outlineOfPointAndMain(client) 'outlined'
+		client.release()
+		assertSymbolsOutline(symbols)
+	end 'outlined' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "the document-symbol request did not complete")
 	end 'failed'
-
-	client.release()
-
-	match outcome 'outline'
-		observed(symbols) then assertSymbolsOutline(symbols)
-		broke(detail) then Expect.fail("the document-symbol request did not complete: {detail}")
-	end 'outline'
 end 'documentSymbol returns symbols'
+
+function outlineOfPointAndMain(client LspClient) returns DocumentSymbolArray throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(SymbolsUri, content: symbolsPointAndMainFixture())
+
+	let outline = try client.documentSymbols(SymbolsUri)
+
+	return outline.symbols
+end 'outlineOfPointAndMain'
 
 function assertSymbolsOutline(symbols DocumentSymbolArray) throws TestFailure
 	// Should have exactly Point type and main function

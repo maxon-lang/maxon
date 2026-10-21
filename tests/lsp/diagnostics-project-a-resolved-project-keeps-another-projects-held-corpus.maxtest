@@ -1,0 +1,78 @@
+let KeptWorkspaceDirName = "diagnostics-project-keeps-held-corpus"
+let KeptHeldDirName = "held"
+let KeptResolvedDirName = "resolved"
+let KeptManifestFileName = "app.maxproj"
+let KeptMainFileName = "main.maxon"
+let KeptHelperFileName = "helper.maxon"
+let KeptManifestSource = "export function build() returns ExitCode\n\tBuild.build(\".\")\n\treturn 0\nend 'build'\n"
+let KeptHeldMainSource = "function main() returns ExitCode\n\treturn heldHelper()\nend 'main'\n"
+let KeptHeldHelperSource = "export function heldHelper() returns ExitCode\n\treturn 0\nend 'heldHelper'\n"
+let KeptResolvedMainSource = "function main() returns ExitCode\n\treturn resolvedHelper()\nend 'main'\n"
+let KeptResolvedHelperSource = "export function resolvedHelper() returns ExitCode\n\treturn 0\nend 'resolvedHelper'\n"
+let KeptNoticesAroundOneLoad = 2
+
+test 'project diagnostics: resolving one project keeps the corpus another project holds'
+	let workspace = freshOutsideCheckoutDir(KeptWorkspaceDirName)
+	let held = workspace.join(KeptHeldDirName)
+	let resolved = workspace.join(KeptResolvedDirName)
+
+	for directory in [held, resolved] 'eachDirectory'
+		if not Directory.create(directory) 'couldNotCreate'
+			panic("the test could not run: could not create {directory.toString()}")
+		end 'couldNotCreate'
+	end 'eachDirectory'
+
+	writeCorpusFile(held, fileName: KeptManifestFileName, content: KeptManifestSource)
+	writeCorpusFile(held, fileName: KeptMainFileName, content: KeptHeldMainSource)
+	writeCorpusFile(held, fileName: KeptHelperFileName, content: KeptHeldHelperSource)
+	writeCorpusFile(resolved, fileName: KeptManifestFileName, content: KeptManifestSource)
+	writeCorpusFile(resolved, fileName: KeptMainFileName, content: KeptResolvedMainSource)
+	writeCorpusFile(resolved, fileName: KeptHelperFileName, content: KeptResolvedHelperSource)
+
+	var client = LspClient.start()
+
+	if let afterResolution = try noticesAfterResolving(client, workspace: workspace, held: held, resolved: resolved) 'observed'
+		client.release()
+		discardOutsideCheckoutDir(workspace)
+		requireOnlyTheResolvedProjectReloaded(afterResolution)
+	end 'observed' else (e) 'failed'
+		abandonedStagedSession(client, staged: workspace, failure: e, doing: "the session did not complete")
+	end 'failed'
+end 'project diagnostics: resolving one project keeps the corpus another project holds'
+
+function noticesNaming(notices ProjectLoadingNoticeArray, dirName String) returns ProjectLoadingNoticeArray
+	var named = ProjectLoadingNoticeArray.create()
+
+	for notice in notices 'eachNotice'
+		if foldedRootPath(notice.rootPath).endsWith("{outsideCheckoutDirName(KeptWorkspaceDirName)}/{dirName}") 'aNoticeForIt'
+			named.push(notice.clone())
+		end 'aNoticeForIt'
+	end 'eachNotice'
+
+	return named
+end 'noticesNaming'
+
+function requireOnlyTheResolvedProjectReloaded(afterResolution ProjectLoadingNoticeArray) throws TestFailure
+	let ofResolved = noticesNaming(afterResolution, dirName: KeptResolvedDirName)
+
+	try Expect.atLeast(ofResolved.count(), than: KeptNoticesAroundOneLoad, message: "`{KeptResolvedDirName}` was opened and its project file resolved, which forgets its own corpus, and `{KeptResolvedDirName}/{KeptMainFileName}` calls a function only a sibling file declares, so its next arrival reloads the project. No reload was announced, so this case would pass with nothing captured at all. Arrived: {afterResolution.count()} notice(s).")
+
+	try requireNoAnnouncedLoad(noticesNaming(afterResolution, dirName: KeptHeldDirName), note: "`{KeptHeldDirName}/{KeptMainFileName}` calls a function only a sibling file declares, so every arrival of it reads the project's corpus. `{KeptHeldDirName}` was opened and resolved, then `{KeptResolvedDirName}` was opened and its project file resolved. Resolving `{KeptResolvedDirName}` changes nothing about `{KeptHeldDirName}`, so its corpus stays held.")
+end 'requireOnlyTheResolvedProjectReloaded'
+
+function noticesAfterResolving(client LspClient, workspace FilePath, held FilePath, resolved FilePath) returns ProjectLoadingNoticeArray throws LspClientError
+	let heldUri = fileUriOf(held.join(KeptMainFileName))
+	let resolvedUri = fileUriOf(resolved.join(KeptMainFileName))
+
+	_ = try client.initializeAtRoot(workspace)
+	try client.initialized()
+	try client.openDocument(heldUri, content: KeptHeldMainSource)
+	_ = try client.awaitSettledProjectCheckSet(heldUri)
+	_ = try client.takeProjectLoadingNotices()
+
+	try client.openDocument(resolvedUri, content: KeptResolvedMainSource)
+	_ = try client.awaitSettledProjectCheckSet(resolvedUri)
+	_ = try client.documentSymbols(heldUri)
+
+	return try client.takeProjectLoadingNotices()
+end 'noticesAfterResolving'

@@ -1,0 +1,60 @@
+let EvictedWorkspaceDirName = "diagnostics-project-evicted-resolution"
+let EvictedProjectCount = 10
+let EvictedMainFileName = "main.maxon"
+let EvictedMainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+
+typealias EvictedProjectIndex = int(0 to 9)
+
+function evictedProjectDir(workspace FilePath, index EvictedProjectIndex) returns FilePath
+	return workspace.join("p{index}")
+end 'evictedProjectDir'
+
+test 'project diagnostics: a project evicted while its project file runs still answers its documents'
+	let workspace = freshOutsideCheckoutDir(EvictedWorkspaceDirName)
+
+	for index in 0 upto EvictedProjectCount 'eachProject'
+		let project = evictedProjectDir(workspace, index: index)
+
+		if not Directory.create(project) 'couldNotCreate'
+			panic("the test could not run: could not create {project.toString()}")
+		end 'couldNotCreate'
+
+		writeCorpusFile(project, fileName: GatedManifestFileName, content: GatedManifestSource if index == 0 else UngatedManifestSource)
+		writeCorpusFile(project, fileName: EvictedMainFileName, content: EvictedMainSource)
+	end 'eachProject'
+
+	let gated = evictedProjectDir(workspace, index: 0)
+	var client = LspClient.start()
+
+	if let answered = try gatedProjectAnswersAfterEviction(client, workspace: workspace) 'answered'
+		client.release()
+		releaseGatedManifest(gated)
+		discardOutsideCheckoutDir(workspace)
+		expectNoProjectDiagnostics(ProjectDiagnosticsProbe.published(answered), note: "`p0` was opened while its project file waited on a gate, then {EvictedProjectCount - 1} other projects were opened and resolved, which evicts `p0` from the {EvictedProjectCount} projects the server holds before its project file finishes. Once the gate opens, `p0`'s open document is checked against the answer.")
+	end 'answered' else (e) 'failed'
+		releaseGatedManifest(gated)
+		abandonedStagedSession(client, staged: workspace, failure: e, doing: "`p0`, whose project file was still running when {EvictedProjectCount - 1} other projects pushed it out of the held projects, never had its open document checked against the answer")
+	end 'failed'
+end 'project diagnostics: a project evicted while its project file runs still answers its documents'
+
+function gatedProjectAnswersAfterEviction(client LspClient, workspace FilePath) returns PublishedDiagnosticArray throws LspClientError
+	let gated = evictedProjectDir(workspace, index: 0)
+	let gatedUri = fileUriOf(gated.join(EvictedMainFileName))
+
+	_ = try client.initializeAtRoot(workspace)
+	try client.initialized()
+	try client.openDocument(gatedUri, content: EvictedMainSource)
+
+	for index in 1 upto EvictedProjectCount 'eachOtherProject'
+		let uri = fileUriOf(evictedProjectDir(workspace, index: index).join(EvictedMainFileName))
+
+		try client.openDocument(uri, content: EvictedMainSource)
+		_ = try client.awaitSettledProjectCheckSet(uri)
+	end 'eachOtherProject'
+
+	writeCorpusFile(gated, fileName: GatedReleaseFileName, content: "go")
+
+	let settled = try client.awaitSettledProjectCheckSet(gatedUri)
+
+	return settled.items
+end 'gatedProjectAnswersAfterEviction'

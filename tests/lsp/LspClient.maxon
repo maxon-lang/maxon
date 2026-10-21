@@ -89,9 +89,22 @@ public typealias ProcessExitCode = int(i64.min to i64.max)
 // outside either enumeration and cannot be mistaken for one of its members.
 public let UnspecifiedKind = 0 as JsonInt
 
-// An outcome starts broken with one of these, so a path that never reports fails, never passes.
-public let UnreportedSessionEnding = "the session ended without saying how"
-public let UnreportedRequestEnding = "the request ended without saying how"
+public function abandonedSession(client LspClient, failure LspClientError, doing String, afterwards String = "") throws TestFailure
+	client.release()
+
+	try failedWith(failure, doing: doing, afterwards: afterwards)
+end 'abandonedSession'
+
+public function abandonedStagedSession(client LspClient, staged FilePath, failure LspClientError, doing String, afterwards String = "") throws TestFailure
+	client.release()
+	discardOutsideCheckoutDir(staged)
+
+	try failedWith(failure, doing: doing, afterwards: afterwards)
+end 'abandonedStagedSession'
+
+function failedWith(failure LspClientError, doing String, afterwards String) throws TestFailure
+	try Expect.fail("{doing}: {failure.explained()}{afterwards}")
+end 'failedWith'
 
 public typealias CompletionItemArray = Array with CompletionItem
 public typealias TextEditArray = Array with TextEdit

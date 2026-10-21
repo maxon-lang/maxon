@@ -1,0 +1,48 @@
+let ParallelWorkspaceDirName = "diagnostics-project-parallel-resolution"
+let ParallelSlowDirName = "slow"
+let ParallelQuickDirName = "quick"
+let ParallelMainFileName = "main.maxon"
+let ParallelMainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+
+test 'project diagnostics: a slow project file does not delay another project from resolving'
+	let workspace = freshOutsideCheckoutDir(ParallelWorkspaceDirName)
+	let slow = workspace.join(ParallelSlowDirName)
+	let quick = workspace.join(ParallelQuickDirName)
+
+	for directory in [slow, quick] 'eachDirectory'
+		if not Directory.create(directory) 'couldNotCreate'
+			panic("the test could not run: could not create {directory.toString()}")
+		end 'couldNotCreate'
+	end 'eachDirectory'
+
+	writeCorpusFile(slow, fileName: GatedManifestFileName, content: GatedManifestSource)
+	writeCorpusFile(slow, fileName: ParallelMainFileName, content: ParallelMainSource)
+	writeCorpusFile(quick, fileName: GatedManifestFileName, content: UngatedManifestSource)
+	writeCorpusFile(quick, fileName: ParallelMainFileName, content: ParallelMainSource)
+
+	var client = LspClient.start()
+
+	if let slowFinishedMeanwhile = try quickSettlesWhileSlowResolves(client, workspace: workspace, slow: slow, quick: quick) 'settled'
+		client.release()
+		releaseGatedManifest(slow)
+		discardOutsideCheckoutDir(workspace)
+		Expect.isFalse(slowFinishedMeanwhile, message: "`{ParallelSlowDirName}/{GatedManifestFileName}` waits for `{GatedReleaseFileName}`, which the test writes only after `{ParallelQuickDirName}` has been checked against its own project file, and it had finished by then.")
+	end 'settled' else (e) 'failed'
+		releaseGatedManifest(slow)
+		abandonedStagedSession(client, staged: workspace, failure: e, doing: "the session did not complete")
+	end 'failed'
+end 'project diagnostics: a slow project file does not delay another project from resolving'
+
+function quickSettlesWhileSlowResolves(client LspClient, workspace FilePath, slow FilePath, quick FilePath) returns bool throws LspClientError
+	let slowUri = fileUriOf(slow.join(ParallelMainFileName))
+	let quickUri = fileUriOf(quick.join(ParallelMainFileName))
+
+	_ = try client.initializeAtRoot(workspace)
+	try client.initialized()
+	try client.openDocument(slowUri, content: ParallelMainSource)
+	try client.openDocument(quickUri, content: ParallelMainSource)
+
+	_ = try client.awaitSettledProjectCheckSet(quickUri)
+
+	return File.exists(slow.join(GatedFinishedFileName))
+end 'quickSettlesWhileSlowResolves'

@@ -10,11 +10,6 @@ let UnionAlphaSource = "export function alphaAnswer() returns ExitCode\n\treturn
 let UnionBetaSource = "export function betaAnswer() returns ExitCode\n\treturn 0\nend 'betaAnswer'\n"
 let UnionSourceFileName = "answer.maxon"
 
-union UnionProbe
-	published(checked ProjectDiagnosticsProbe)
-	broke(detail String)
-end 'UnionProbe'
-
 test 'project diagnostics: a .maxproj with several targets holds the union of their sources'
 	let staged = freshOutsideCheckoutDir(UnionProjectDirName)
 	let project = staged.join(UnionProjectSubdirName)
@@ -32,14 +27,15 @@ test 'project diagnostics: a .maxproj with several targets holds the union of th
 	writeCorpusFile(alpha, fileName: UnionSourceFileName, content: UnionAlphaSource)
 	writeCorpusFile(beta, fileName: UnionSourceFileName, content: UnionBetaSource)
 
-	let probe = probeUnion(project)
+	var client = LspClient.start()
 
-	discardOutsideCheckoutDir(staged)
-
-	match probe 'probe'
-		broke(detail) then Expect.fail("the session did not complete: {detail}")
-		published(checked) then expectUnionPublishedNothing(checked)
-	end 'probe'
+	if let items = try unionSettledSet(client, project: project) 'answered'
+		client.release()
+		discardOutsideCheckoutDir(staged)
+		expectUnionPublishedNothing(ProjectDiagnosticsProbe.published(items))
+	end 'answered' else (e) 'failed'
+		abandonedStagedSession(client, staged: staged, failure: e, doing: "the session did not complete")
+	end 'failed'
 end 'project diagnostics: a .maxproj with several targets holds the union of their sources'
 
 function expectUnionPublishedNothing(checked ProjectDiagnosticsProbe) throws TestFailure
@@ -48,26 +44,14 @@ function expectUnionPublishedNothing(checked ProjectDiagnosticsProbe) throws Tes
 	try expectNoProjectDiagnostics(checked, note: note)
 end 'expectUnionPublishedNothing'
 
-function probeUnion(project FilePath) returns UnionProbe
-	var client = LspClient.start()
+function unionSettledSet(client LspClient, project FilePath) returns PublishedDiagnosticArray throws LspClientError
 	let uri = fileUriOf(project.join(UnionMainFileName))
-	var probe = UnionProbe.broke(UnreportedSessionEnding)
 
-	try 'session'
-		_ = client.initializeAtRoot(project)
-		client.initialized()
-		client.openDocument(uri, content: UnionMainSource)
-		var checked = ProjectDiagnosticsProbe.published(client.awaitSettledProjectCheckSet(uri).items)
-		probe = UnionProbe.published(checked)
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then probe = UnionProbe.broke(e.explained())
-		end 'reason'
-	end 'failed'
+	_ = try client.initializeAtRoot(project)
+	try client.initialized()
+	try client.openDocument(uri, content: UnionMainSource)
 
-	client.release()
+	let settled = try client.awaitSettledProjectCheckSet(uri)
 
-	return probe
-end 'probeUnion'
+	return settled.items
+end 'unionSettledSet'

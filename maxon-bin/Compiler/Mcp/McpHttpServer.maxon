@@ -17,6 +17,7 @@ let OriginHeaderName = "origin"
 let HostHeaderName = "host"
 let JsonContentType = "application/json"
 let SessionIdBytes = 16
+let McpSessionSeedBase = "mcp-session"
 let ContentTypeHeaderName = "content-type"
 let ClearedAcceptDeadline = 0 as SocketDeadlineMs
 let SoonestAcceptDeadline = 1 as SocketDeadlineMs
@@ -55,8 +56,8 @@ type McpHttpSession
 	export var debug as DebugSessionSlot
 	export var fileMemos as SharedFileMemoMap
 
-	static function create(id String, nowMs SessionMillis, serials SerialMint) returns McpHttpSession
-		return Self{id: id, lastSeenMs: nowMs, debug: DebugSessionSlot.create(serials), fileMemos: SharedFileMemoMap.create()}
+	static function create(id String, nowMs SessionMillis) returns McpHttpSession
+		return Self{id: id, lastSeenMs: nowMs, debug: DebugSessionSlot.create(), fileMemos: SharedFileMemoMap.create()}
 	end 'create'
 
 	export function touch()
@@ -183,8 +184,6 @@ end 'reportedListenerFailure'
 
 type McpHttpHandler implements HttpHandler
 	export var sessions as McpHttpSessionList
-	var requests as SerialMint
-	var serials as SerialMint
 	let devMode as bool
 	let exePath as FilePath
 	var caps as McpHttpOptions
@@ -192,7 +191,7 @@ type McpHttpHandler implements HttpHandler
 	var server as HttpServer
 
 	static function create(devMode bool, exePath FilePath, caps McpHttpOptions, port NetworkPort, server HttpServer) returns McpHttpHandler
-		return Self{sessions: McpHttpSessionList.create(), requests: SerialMint.create(), serials: SerialMint.create(), devMode: devMode, exePath: exePath, caps: caps, port: port, server: server}
+		return Self{sessions: McpHttpSessionList.create(), devMode: devMode, exePath: exePath, caps: caps, port: port, server: server}
 	end 'create'
 
 	static function servedSessions(handler McpHttpHandler) returns McpHttpWake
@@ -259,7 +258,7 @@ type McpHttpHandler implements HttpHandler
 		self.sweep()
 
 		match request.method() 'verb'
-			post then try servePostedMessage(exchange, request: request, sessions: self.sessions, devMode: self.devMode, exePath: self.exePath, caps: self.caps, serial: self.requests.mint(), serials: self.serials)
+			post then try servePostedMessage(exchange, request: request, sessions: self.sessions, devMode: self.devMode, exePath: self.exePath, caps: self.caps)
 			delete then try serveSessionDelete(exchange, request: request, sessions: self.sessions)
 			get then try refuse(exchange, code: StatusCode.methodNotAllowed, reason: "this transport carries no server-to-client stream")
 			put or
@@ -352,12 +351,12 @@ function reapSessions(sessions McpHttpSessionList, ending SessionEnds) returns S
 	return reaped
 end 'reapSessions'
 
-function servePostedMessage(exchange HttpExchange, request HttpRequest, sessions McpHttpSessionList, devMode bool, exePath FilePath, caps McpHttpOptions, serial MintedSerial, serials SerialMint) throws HttpServerError
+function servePostedMessage(exchange HttpExchange, request HttpRequest, sessions McpHttpSessionList, devMode bool, exePath FilePath, caps McpHttpOptions) throws HttpServerError
 	var posted = postedMessageOf(request.body())
 
 	match posted 'posted'
 		notOneObject then try refuse(exchange, code: StatusCode.badRequest, reason: "the body is not one JSON-RPC object")
-		message(doc) then try serveMessage(exchange, doc: doc, offered: sessionOfferedBy(request), sessions: sessions, devMode: devMode, exePath: exePath, caps: caps, serial: serial, serials: serials)
+		message(doc) then try serveMessage(exchange, doc: doc, offered: sessionOfferedBy(request), sessions: sessions, devMode: devMode, exePath: exePath, caps: caps)
 	end 'posted'
 end 'servePostedMessage'
 
@@ -371,7 +370,7 @@ function postedMessageOf(body String) returns PostedMessage
 	return PostedMessage.message(doc)
 end 'postedMessageOf'
 
-function serveMessage(exchange HttpExchange, doc JsonDoc, offered OfferedSession, sessions McpHttpSessionList, devMode bool, exePath FilePath, caps McpHttpOptions, serial MintedSerial, serials SerialMint) throws HttpServerError
+function serveMessage(exchange HttpExchange, doc JsonDoc, offered OfferedSession, sessions McpHttpSessionList, devMode bool, exePath FilePath, caps McpHttpOptions) throws HttpServerError
 	if rpcNamesMethod(doc, method: RpcInitializeMethod) 'initializing'
 		if rpcIsNotification(doc) 'asksForNothing'
 			try answerWith(exchange, code: StatusCode.accepted, body: McpAnswerBody.empty, minted: OfferedSession.absent)
@@ -379,7 +378,7 @@ function serveMessage(exchange HttpExchange, doc JsonDoc, offered OfferedSession
 			return
 		end 'asksForNothing'
 
-		try serveInitialize(exchange, doc: doc, offered: offered, sessions: sessions, devMode: devMode, exePath: exePath, caps: caps, serial: serial, serials: serials)
+		try serveInitialize(exchange, doc: doc, offered: offered, sessions: sessions, devMode: devMode, exePath: exePath, caps: caps)
 
 		return
 	end 'initializing'
@@ -394,7 +393,7 @@ end 'serveMessage'
 
 // An `initialize` carrying any session id is refused: honoured under a live id, it would replace
 // that session and orphan its debuggee.
-function serveInitialize(exchange HttpExchange, doc JsonDoc, offered OfferedSession, sessions McpHttpSessionList, devMode bool, exePath FilePath, caps McpHttpOptions, serial MintedSerial, serials SerialMint) throws HttpServerError
+function serveInitialize(exchange HttpExchange, doc JsonDoc, offered OfferedSession, sessions McpHttpSessionList, devMode bool, exePath FilePath, caps McpHttpOptions) throws HttpServerError
 	if namesASession(offered) 'alreadyInASession'
 		try refuse(exchange, code: StatusCode.badRequest, reason: "`initialize` opens a session and must carry no Mcp-Session-Id")
 
@@ -407,7 +406,7 @@ function serveInitialize(exchange HttpExchange, doc JsonDoc, offered OfferedSess
 		return
 	end 'full'
 
-	var session = McpHttpSession.create(mintSessionId(serial), nowMs: Clock.nowMs() as SessionMillis, serials: serials)
+	var session = McpHttpSession.create(mintSessionId(), nowMs: Clock.nowMs() as SessionMillis)
 	sessions.append(session)
 
 	try serveOnSession(exchange, doc: doc, session: session, devMode: devMode, exePath: exePath, minted: OfferedSession.named(session.id))
@@ -524,8 +523,8 @@ function loopbackAuthorities(port NetworkPort) returns StringArray
 end 'loopbackAuthorities'
 
 // Hashed so the next id cannot be read off one a caller already holds.
-function mintSessionId(serial MintedSerial) returns String
-	let seed = "{Process.id()}-{Clock.nowNanos()}-{serial}"
+function mintSessionId() returns String
+	let seed = "{scratchNameFor(McpSessionSeedBase)}-{Clock.nowNanos()}"
 
 	return hexOfLeadingBytes(sha256(seed.toByteArray()), count: SessionIdBytes)
 end 'mintSessionId'

@@ -411,6 +411,27 @@ export function plantCachedBuild(staged StagedCase, slotPath String) returns Fil
 	return build
 end 'plantCachedBuild'
 
+export typealias PlantedPendingSerial = int(1 to 9)
+
+// A build still being written, as a process with id `owner` in `namespace` would have left it in the
+// sole slot's directory.
+export function plantPendingBuild(caseLabel String, staged StagedCase, namespace String, owner Pid, serial PlantedPendingSerial) returns FilePath
+	let name = mintedScratchName(caseLabel, base: PlantedBuildStem, namespace: namespace, pid: owner, serial: serial as Count)
+
+	return plantedPendingFile(staged, name: "{name}{pendingBuildSuffix()}")
+end 'plantPendingBuild'
+
+export function plantPendingBuildOfAnOlderCompiler(staged StagedCase, owner Pid) returns FilePath
+	return plantedPendingFile(staged, name: "{PlantedBuildStem}.{owner}{pendingBuildSuffix()}")
+end 'plantPendingBuildOfAnOlderCompiler'
+
+function plantedPendingFile(staged StagedCase, name String) returns FilePath
+	let pending = soleSlotDir(staged).join(name)
+	writeStagedFile(pending, content: PlantedBuildContent)
+
+	return pending
+end 'plantedPendingFile'
+
 // The directory the driver keeps its slots under, in the case's private cache.
 function runCacheRoot(staged StagedCase) returns FilePath
 	return staged.cache.join("{CacheVendorDirName}").join("{CacheCommandDirName}")

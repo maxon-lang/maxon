@@ -1,24 +1,11 @@
-typealias OwnerProcessId = int(1 to i32.max)
-
-export enum OwnerLiveness
-	notOwned
-	ownerAlive
-	ownerGone
-end 'OwnerLiveness'
-
-export union LeftoverOwner
-	notOwned
-	process(pid OwnerProcessId)
-end 'LeftoverOwner'
-
-export typealias LeftoverLivenessOf = function(String) returns OwnerLiveness
+export typealias LeftoverLivenessOf = function(String) returns ScratchStanding
 export typealias LeftoverKeyOf = function(FilePath) returns FilePath
 export typealias LeftoverDiscard = function(FilePath)
 
-/// Removes what processes that have ended left in `directory`. `livenessOf` reads an entry's owner
-/// from its name, and an entry whose owner runs or cannot be read is left alone. `keyOf` maps an
-/// entry to the file it belongs with: a key goes through `discardKeyed`, and any other entry goes
-/// once its key is gone.
+/// Removes what processes that have ended left in `directory`. `livenessOf` judges an entry by its
+/// name, and `leftoverIsAbandoned` decides which judgments are removed. `keyOf` maps an entry to the
+/// file it belongs with: a key goes through `discardKeyed`, and any other entry goes once its key is
+/// gone.
 export function sweepLeftoversOfEndedOwners(directory FilePath, livenessOf LeftoverLivenessOf, keyOf LeftoverKeyOf, discardKeyed LeftoverDiscard)
 	if not Directory.isDirectory(directory) 'nothingLeftYet'
 		return
@@ -31,29 +18,24 @@ export function sweepLeftoversOfEndedOwners(directory FilePath, livenessOf Lefto
 	end 'unlisted'
 
 	for entry in entries 'eachEntry'
-		if livenessOf(entry.filename()) != OwnerLiveness.ownerGone 'itsOwnerRunsOrIsUnknown'
-			continue
-		end 'itsOwnerRunsOrIsUnknown'
-
-		let key = keyOf(entry)
-
-		if key.equals(entry) 'theKey'
-			discardKeyed(entry)
-			continue
-		end 'theKey'
-
-		if not File.exists(key) 'orphaned'
-			removeOwnedFile(entry)
-		end 'orphaned'
+		if leftoverIsAbandoned(entry, standing: livenessOf(entry.filename())) 'abandoned'
+			discardLeftoverOf(entry, keyOf: keyOf, discardKeyed: discardKeyed)
+		end 'abandoned'
 	end 'eachEntry'
 end 'sweepLeftoversOfEndedOwners'
 
-export function livenessOfOwner(owner LeftoverOwner) returns OwnerLiveness
-	return match owner 'owner'
-		notOwned gives OwnerLiveness.notOwned
-		process(pid) gives OwnerLiveness.ownerAlive if Process.isAlive(pid as Pid) else OwnerLiveness.ownerGone
-	end 'owner'
-end 'livenessOfOwner'
+function discardLeftoverOf(entry FilePath, keyOf LeftoverKeyOf, discardKeyed LeftoverDiscard)
+	let key = keyOf(entry)
+
+	if key.equals(entry) 'theKey'
+		discardKeyed(entry)
+		return
+	end 'theKey'
+
+	if not File.exists(key) 'orphaned'
+		removeOwnedFile(entry)
+	end 'orphaned'
+end 'discardLeftoverOf'
 
 export function ownerProcessNamed(field String) returns LeftoverOwner
 	if not isDecimal(field) 'notDigits'
@@ -69,7 +51,7 @@ export function ownerProcessNamed(field String) returns LeftoverOwner
 	return LeftoverOwner.process(pid as OwnerProcessId)
 end 'ownerProcessNamed'
 
-export function isDecimal(text String) returns bool
+function isDecimal(text String) returns bool
 	return not text.isEmpty() and text.trimStart(asciiDecimalDigits()).isEmpty()
 end 'isDecimal'
 

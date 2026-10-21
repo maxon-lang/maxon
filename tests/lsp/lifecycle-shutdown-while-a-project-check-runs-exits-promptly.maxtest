@@ -7,48 +7,32 @@ export let BusyCheckPastTheDebounceMs = 1000 as Milliseconds
 export let BusyCheckPublishFailureBoundMs = 60000 as DurationMs
 let BusyCheckCleanExitCode = 0 as ProcessExitCode
 
-union BusyCheckOutcome
-	exited(code ProcessExitCode)
-	broke(detail String)
-end 'BusyCheckOutcome'
-
 test 'shutdown while a project check runs exits promptly and clean'
 	let root = stagedBusyCheckProject(BusyCheckDirName)
 
 	var client = LspClient.start()
-	let outcome = shutDownDuringTheCheck(client, root: root)
-	client.release()
 
-	discardOutsideCheckoutDir(root)
-
-	match outcome 'termination'
-		exited(code) then Expect.equal(code, expected: BusyCheckCleanExitCode, message: "the server did not exit 0 after `shutdown` then `exit` sent while its project check of {BusyCheckSiblingFileCount} sibling files was running.")
-		broke(detail) then Expect.fail("the shutdown sequence did not complete while a project check was running: {detail}. `waitForExit` gives the server {ServerExitDeadlineMs} ms, far less than the check takes, so a server that waits the check out before exiting fails here.")
-	end 'termination'
+	if let code = try shutDownDuringTheCheck(client, root: root) 'exited'
+		client.release()
+		discardOutsideCheckoutDir(root)
+		Expect.equal(code, expected: BusyCheckCleanExitCode, message: "the server did not exit 0 after `shutdown` then `exit` sent while its project check of {BusyCheckSiblingFileCount} sibling files was running.")
+	end 'exited' else (e) 'failed'
+		abandonedStagedSession(client, staged: root, failure: e, doing: "the shutdown sequence did not complete while a project check was running", afterwards: ". `waitForExit` gives the server {ServerExitDeadlineMs} ms, far less than the check takes, so a server that waits the check out before exiting fails here.")
+	end 'failed'
 end 'shutdown while a project check runs exits promptly and clean'
 
-function shutDownDuringTheCheck(client LspClient, root FilePath) returns BusyCheckOutcome
+function shutDownDuringTheCheck(client LspClient, root FilePath) returns ProcessExitCode throws LspClientError
 	let uri = fileUriOf(root.join(BusyCheckBufferFileName))
-	var outcome = BusyCheckOutcome.broke(UnreportedSessionEnding)
 
-	try 'session'
-		_ = client.initializeAtRoot(root)
-		client.initialized()
-		client.openDocument(uri, content: BusyCheckBufferSource)
-		_ = client.awaitPublishedDiagnostics(uri)
-		sleep(BusyCheckPastTheDebounceMs)
-		client.shutdown()
-		client.exit()
-		outcome = BusyCheckOutcome.exited(client.waitForExit())
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then outcome = BusyCheckOutcome.broke(e.explained())
-		end 'reason'
-	end 'failed'
+	_ = try client.initializeAtRoot(root)
+	try client.initialized()
+	try client.openDocument(uri, content: BusyCheckBufferSource)
+	_ = try client.awaitPublishedDiagnostics(uri)
+	sleep(BusyCheckPastTheDebounceMs)
+	try client.shutdown()
+	try client.exit()
 
-	return outcome
+	return try client.waitForExit()
 end 'shutDownDuringTheCheck'
 
 export function stagedBusyCheckProject(dirName String) returns FilePath

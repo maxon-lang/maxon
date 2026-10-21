@@ -93,8 +93,6 @@ export let PastTheAbandonmentWindowSeconds = 120
 let SecondsPerMinute = 60
 
 #if os(Windows)
-	let HostNameVariable = "COMPUTERNAME"
-	let HostOsName = "windows"
 	let ShellName = "powershell"
 	let ShellCommandFlag = "-Command"
 	let ShellNoProfileFlag = "-NoProfile"
@@ -112,15 +110,16 @@ let SecondsPerMinute = 60
 	let RootUserId = "0"
 #endif
 
+#if os(Windows)
+	let HostPartCount = 2
+#endif
+
 #if os(Linux)
-	let KernelHostNamePath = "/proc/sys/kernel/hostname"
-	let MachineIdPath = "/etc/machine-id"
-	let DbusMachineIdPath = "/var/lib/dbus/machine-id"
-	let HostOsName = "linux"
+	let HostPartCount = 3
 #endif
 
 #if os(Macos)
-	let HostOsName = "macos"
+	let HostPartCount = 1
 #endif
 
 #if os(Linux) or os(Macos)
@@ -286,7 +285,7 @@ export function plantHeldCheckoutLock(staged FilePath)
 end 'plantHeldCheckoutLock'
 
 export function plantTreeLockOfEndedHolder(staged FilePath)
-	plantTreeLock(staged, record: endedHoldersRecord(thisLockHost(), token: "build-manifest-ended-holder"))
+	plantTreeLock(staged, record: endedHoldersRecord(thisLockHost(staged), token: "build-manifest-ended-holder"))
 end 'plantTreeLockOfEndedHolder'
 
 export function plantTreeLockOfAnotherHostsHolder(staged FilePath)
@@ -294,7 +293,7 @@ export function plantTreeLockOfAnotherHostsHolder(staged FilePath)
 end 'plantTreeLockOfAnotherHostsHolder'
 
 export function plantTreeLockOfThisRunningProcess(staged FilePath)
-	plantTreeLock(staged, record: lockRecord(Process.id(), token: ThisProcessToken, host: thisLockHost()))
+	plantTreeLock(staged, record: lockRecord(Process.id(), token: ThisProcessToken, host: thisLockHost(staged)))
 end 'plantTreeLockOfThisRunningProcess'
 
 export function ageTreeLock(staged FilePath, seconds AgeSeconds)
@@ -302,23 +301,18 @@ export function ageTreeLock(staged FilePath, seconds AgeSeconds)
 end 'ageTreeLock'
 
 export function plantTreeLockOfThisHostWithout(staged FilePath, dropped HostIdentityPart)
+	let fields = hostFieldsOf(staged)
 	var kept = StringArray.create()
 
-	for named in thisHostParts() 'eachPart'
+	for named in thisHostParts(fields) 'eachPart'
 		keepUnlessNaming(kept, named: named, dropped: dropped)
 	end 'eachPart'
 
-	plantTreeLock(staged, record: endedHoldersRecord(lockHostOf(kept), token: "build-manifest-without-{dropped.name}"))
+	plantTreeLock(staged, record: endedHoldersRecord(lockHostOf(hostField(fields, at: 0), parts: kept), token: "build-manifest-without-{dropped.name}"))
 end 'plantTreeLockOfThisHostWithout'
 
-function thisLockHost() returns String
-	var whole = StringArray.create()
-
-	for named in thisHostParts() 'eachPart'
-		whole.push(named.text)
-	end 'eachPart'
-
-	return lockHostOf(whole)
+function thisLockHost(staged FilePath) returns String
+	return thisHostIdentityText("host-{staged.filename()}")
 end 'thisLockHost'
 
 function keepUnlessNaming(kept StringArray, named NamedPart, dropped HostIdentityPart)
@@ -473,7 +467,7 @@ end 'recordOf'
 	let OwnProcessToken = "build-manifest-reused-id"
 
 	export function spawnManifestBuildUnderARecordOfItsOwnPid(staged FilePath) returns CollectedOutput
-		return spawnInStaged(staged, executable: Executable.name(PosixShellName), arguments: [PosixShellCommandFlag, ExecWithOwnPidScript, PosixShellName, OwnProcessToken, thisLockHost(), treeLockOf(staged).toString(), testedCompilerPath().toString()], environment: EnvMap.create())
+		return spawnInStaged(staged, executable: Executable.name(PosixShellName), arguments: [PosixShellCommandFlag, ExecWithOwnPidScript, PosixShellName, OwnProcessToken, thisLockHost(staged), treeLockOf(staged).toString(), testedCompilerPath().toString()], environment: EnvMap.create())
 	end 'spawnManifestBuildUnderARecordOfItsOwnPid'
 
 	export function spawnManifestBuildInAReadOnlyCheckout(caseLabel String) returns CollectedOutput
@@ -527,65 +521,44 @@ end 'recordOf'
 	end 'changeMode'
 #endif
 
-// Must spell the identity `TreeLock.thisLockHost` computes. The `…-is-not-probed` cases pass for
-// any identity that differs from it, so only the cases that expect this host's holder probed catch
-// a drift.
-function thisHostParts() returns NamedPartArray
+function hostFieldsOf(staged FilePath) returns StringArray
+	let identity = thisLockHost(staged)
+	let fields = identity.split(HostIdentitySeparator)
+
+	if fields.count() != HostPartCount + 1 'unexpectedShape'
+		panic("build-manifest tests: the gate could not run — the host identity {identity} is not an operating system word and {HostPartCount} parts")
+	end 'unexpectedShape'
+
+	return fields
+end 'hostFieldsOf'
+
+function hostField(fields StringArray, at ElementIndex) returns String
+	return try fields.get(at) otherwise panic("build-manifest tests: the host identity was just held to {HostPartCount + 1} fields")
+end 'hostField'
+
+function thisHostParts(fields StringArray) returns NamedPartArray
 	#if os(Windows)
-		let hostName = try Process.environmentVariable(HostNameVariable) otherwise panic("build-manifest tests: the gate could not run — {HostNameVariable} is not set, so this host names itself nowhere the driver reads")
-		return [NamedPart.create(hostName, names: HostIdentityParts.create()), NamedPart.create(Process.namespace(), names: [HostIdentityPart.machine, HostIdentityPart.pidSpace])]
+		return [NamedPart.create(hostField(fields, at: 1), names: HostIdentityParts.create()), NamedPart.create(hostField(fields, at: 2), names: [HostIdentityPart.machine, HostIdentityPart.pidSpace])]
 	#endif
 
 	#if os(Linux)
-		return [NamedPart.create(firstNamedIn([KernelHostNamePath]), names: HostIdentityParts.create()), NamedPart.create(firstNamedIn([MachineIdPath, DbusMachineIdPath]), names: [HostIdentityPart.machine]), NamedPart.create(Process.namespace(), names: [HostIdentityPart.pidSpace])]
+		return [NamedPart.create(hostField(fields, at: 1), names: HostIdentityParts.create()), NamedPart.create(hostField(fields, at: 2), names: [HostIdentityPart.machine]), NamedPart.create(hostField(fields, at: 3), names: [HostIdentityPart.pidSpace])]
 	#endif
 
 	#if os(Macos)
-		return [NamedPart.create(Process.namespace(), names: [HostIdentityPart.machine, HostIdentityPart.pidSpace])]
+		return [NamedPart.create(hostField(fields, at: 1), names: [HostIdentityPart.machine, HostIdentityPart.pidSpace])]
 	#endif
 end 'thisHostParts'
 
-#if os(Linux)
-	function firstNamedIn(locations StringArray) returns String
-		for location in locations 'eachLocation'
-			let path = try FilePath.from(location) otherwise panic("build-manifest tests: '{location}' is not a valid path")
-
-			let text = try File.readText(path) otherwise (e) 'unread'
-				if e == FileReadError.notFound 'notHere'
-					continue
-				end 'notHere'
-
-				panic("build-manifest tests: the gate could not run — {location} could not be read ({e.name}), and the driver refuses to name its host from a place it cannot read")
-			end 'unread'
-
-			if not text.trim().isEmpty() 'named'
-				return text
-			end 'named'
-		end 'eachLocation'
-
-		panic("build-manifest tests: the gate could not run — this host names itself in none of {locations.count()} places the driver reads, so no lock record can claim it")
-	end 'firstNamedIn'
-#endif
-
-function lockHostOf(parts StringArray) returns String
-	var identity = HostOsName
+function lockHostOf(osWord String, parts StringArray) returns String
+	var identity = osWord.clone()
 
 	for part in parts 'eachPart'
-		identity.append("{HostIdentitySeparator}{namedPart(part)}")
+		identity.append("{HostIdentitySeparator}{part}")
 	end 'eachPart'
 
 	return identity
 end 'lockHostOf'
-
-function namedPart(part String) returns String
-	let trimmed = part.trim()
-
-	if trimmed.isEmpty() 'namesNothing'
-		panic("build-manifest tests: the gate could not run — this host names itself nowhere the driver reads, so no lock record can claim it")
-	end 'namesNothing'
-
-	return trimmed
-end 'namedPart'
 
 function plantTreeLock(staged FilePath, record String)
 	writeStagedFile(treeLockOf(staged), content: record)

@@ -62,8 +62,8 @@ not discard a declared callee's result; a new unprefixed tier entry owes the dec
 > AFTER THE COMPILE SUCCEEDS**, so a FAILED build (a compile error included) leaves the running compiler
 > in the slot, able to build the fix; a write that fails after the rename moves it back. An older
 > `.previous` that another process is still running (an `mcp-server` or `lsp-server` started before the
-> last rebuild) is renamed aside to `maxon.retired-<stamp>`, and every self-rebuild deletes the retired
-> images nothing holds any longer.
+> last rebuild) is renamed aside to `maxon.retired.<block>` (`Run/ScratchName.maxon`), and every
+> self-rebuild deletes the retired images nothing holds any longer.
 >
 >
 > ⛔ **A CHANGE TO EMITTED RUNTIME — `Compiler/Runtime/` OR `Compiler/Targets/*/*Runtime*.maxon` — NEEDS

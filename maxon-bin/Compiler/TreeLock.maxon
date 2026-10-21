@@ -110,22 +110,12 @@ let NotRefreshedOutcome = "was not refreshed this time"
 
 let PidField = "pid"
 let TokenField = "token"
+let TokenBase = "lock"
 let SinceField = "sinceUnix"
 let HeldField = "heldSeconds"
 let ArgvField = "argv"
 let HostField = "host"
 let FieldSeparator = "="
-let HostIdentitySeparator = "/"
-
-#if os(Windows)
-	let HostNameVariable = "COMPUTERNAME"
-#endif
-
-#if os(Linux)
-	let KernelHostNamePath = "/proc/sys/kernel/hostname"
-	let MachineIdPath = "/etc/machine-id"
-	let DbusMachineIdPath = "/var/lib/dbus/machine-id"
-#endif
 
 let RecordLineSeparator = "\n"
 let ArgvWordSeparator = " "
@@ -157,10 +147,10 @@ type OwnedLock
 	export let claimPath as FilePath
 	export let token as String
 	export let sinceUnix as UnixSeconds
-	export let host as LockHost
+	export let host as HostIdentity
 	export let kind as LockKind
 
-	static function create(path FilePath, claimPath FilePath, token String, sinceUnix UnixSeconds, host LockHost, kind LockKind) returns OwnedLock
+	static function create(path FilePath, claimPath FilePath, token String, sinceUnix UnixSeconds, host HostIdentity, kind LockKind) returns OwnedLock
 		return Self{path: path, claimPath: claimPath, token: token, sinceUnix: sinceUnix, host: host, kind: kind}
 	end 'create'
 end 'OwnedLock'
@@ -169,89 +159,14 @@ type Acquisition
 	export let lockPath as FilePath
 	export let claimPath as FilePath
 	export let claimToken as String
-	export let host as LockHost
+	export let host as HostIdentity
 	export let subject as String
 	export let kind as LockKind
 
-	static function create(lockPath FilePath, claimPath FilePath, claimToken String, host LockHost, subject String, kind LockKind) returns Acquisition
+	static function create(lockPath FilePath, claimPath FilePath, claimToken String, host HostIdentity, subject String, kind LockKind) returns Acquisition
 		return Self{lockPath: lockPath, claimPath: claimPath, claimToken: claimToken, host: host, subject: subject, kind: kind}
 	end 'create'
 end 'Acquisition'
-
-union LockHost
-	known(identity String)
-	unknown
-
-	function recorded(identity String) returns bool
-		return match self 'host'
-			known(own) gives own == identity
-			unknown gives false
-		end 'host'
-	end 'recorded'
-end 'LockHost'
-
-// A pid is probed only when a record's host identity equals this one (`holderOf`), so the identity
-// names the machine AND its pid space: probing another machine's or container's pid would find it
-// ended and take over a live lock. A part that cannot be read leaves the host unknown, which is
-// never probed.
-function thisLockHost() returns LockHost
-	#if os(Windows)
-		let hostName = try Process.environmentVariable(HostNameVariable) otherwise return LockHost.unknown
-		return lockHostNamed([hostName, Process.namespace()])
-	#endif
-
-	#if os(Linux)
-		let kernelName = try firstNamedIn([KernelHostNamePath]) otherwise return LockHost.unknown
-		let machineId = try firstNamedIn([MachineIdPath, DbusMachineIdPath]) otherwise return LockHost.unknown
-		return lockHostNamed([kernelName, machineId, Process.namespace()])
-	#endif
-
-	#if os(Macos)
-		return lockHostNamed([Process.namespace()])
-	#endif
-
-	#if os(Wasi)
-		return LockHost.unknown
-	#endif
-end 'thisLockHost'
-
-#if os(Linux)
-	function firstNamedIn(locations StringArray) returns String throws AbsentError
-		for location in locations 'eachLocation'
-			let path = try FilePath.from(location) otherwise panic("TreeLock: '{location}' is not a valid path")
-
-			let text = try File.readText(path) otherwise (e) 'unread'
-				if faultOf(e.failure()) == FileFault.gone 'notHere'
-					continue
-				end 'notHere'
-
-				throw AbsentError.absent
-			end 'unread'
-
-			if not text.trim().isEmpty() 'named'
-				return text
-			end 'named'
-		end 'eachLocation'
-
-		throw AbsentError.absent
-	end 'firstNamedIn'
-#endif
-
-function lockHostNamed(parts StringArray) returns LockHost
-	var identity = String.from(osCanonicalName(detectHostTarget().os))
-
-	for part in parts 'eachPart'
-		let trimmed = part.trim()
-
-		if trimmed.isEmpty() 'namesNoHost'
-			return LockHost.unknown
-		end 'namesNoHost'
-
-		identity.append("{HostIdentitySeparator}{trimmed}")
-	end 'eachPart'
-
-	return LockHost.known(identity)
-end 'lockHostNamed'
 
 union HeldCheckoutLock
 	held(lock OwnedLock)
@@ -725,7 +640,7 @@ end 'discardLockUnlessInUse'
 
 function discardUnderClaim(lockPath FilePath, kind LockKind, claimPath FilePath, claimToken String) returns LockUse
 	let use = match agedText(lockPath, what: lockPartWhat(lockPath, part: LockPart.lock), clock: ClockSource.heldClaim(claimPath)) 'existing'
-		present(text, untouchedSeconds) gives useAfter(decideOverExisting(lockPath, kind: kind, record: text, untouchedSeconds: untouchedSeconds, host: thisLockHost()))
+		present(text, untouchedSeconds) gives useAfter(decideOverExisting(lockPath, kind: kind, record: text, untouchedSeconds: untouchedSeconds, host: thisHostIdentity()))
 		fault(fileFault, _) gives faultUse(fileFault)
 	end 'existing'
 
@@ -765,7 +680,7 @@ end 'useAfter'
 
 function acquireLock(lockPath FilePath, kind LockKind, subject String, into LockHold) returns ExitCode
 	let claimPath = claimPathFor(lockPath)
-	let host = thisLockHost()
+	let host = thisHostIdentity()
 
 	return match takeClaim(claimPath) 'claim'
 		held(claimToken) gives acquireUnderClaim(Acquisition.create(lockPath, claimPath: claimPath, claimToken: claimToken, host: host, subject: subject, kind: kind), into: into)
@@ -829,7 +744,7 @@ function releaseClaimThenFail(acquisition Acquisition, reason String) returns Ex
 	return reportLockFailure(acquisition.kind, subject: acquisition.subject, reason: reason, remedy: acquisition.kind.remedy())
 end 'releaseClaimThenFail'
 
-function decideOverExisting(lockPath FilePath, kind LockKind, record String, untouchedSeconds LockSeconds, host LockHost) returns AcquireDecision
+function decideOverExisting(lockPath FilePath, kind LockKind, record String, untouchedSeconds LockSeconds, host HostIdentity) returns AcquireDecision
 	let holder = holderOf(record, host: host)
 
 	if holderIsThisProcess(holder) 'reusedId'
@@ -1549,10 +1464,10 @@ function lockPartWhat(path FilePath, part LockPart) returns String
 end 'lockPartWhat'
 
 function freshToken() returns String
-	return "{Process.id()}-{WallClock.nowUnixSeconds()}-{Clock.nowNanos()}"
+	return scratchNameFor(TokenBase)
 end 'freshToken'
 
-function recordText(token String, sinceUnix UnixSeconds, heldSeconds LockSeconds, host LockHost) returns String
+function recordText(token String, sinceUnix UnixSeconds, heldSeconds LockSeconds, host HostIdentity) returns String
 	var text = StringBuilder.create()
 	appendField(text, key: PidField, value: "{Process.id()}")
 	appendField(text, key: TokenField, value: token)
@@ -1635,7 +1550,7 @@ function livenessLine(holder LeftoverOwner, liveness OwnerLiveness) returns Stri
 	end 'liveness'
 end 'livenessLine'
 
-function holderOf(record String, host LockHost) returns LeftoverOwner
+function holderOf(record String, host HostIdentity) returns LeftoverOwner
 	let recordedHost = try fieldValue(record, key: HostField) otherwise return LeftoverOwner.notOwned
 
 	if not host.recorded(recordedHost) 'anotherHost'

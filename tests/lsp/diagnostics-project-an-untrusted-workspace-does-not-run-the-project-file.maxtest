@@ -6,11 +6,6 @@ let UntrustedManifestSource = "export function build() returns ExitCode\n\tlet m
 let UntrustedNoteNeedle = "once the workspace is trusted"
 let InformationSeverity = 3
 
-union UntrustedProbe
-	published(items PublishedDiagnosticArray)
-	broke(detail String)
-end 'UntrustedProbe'
-
 test 'project diagnostics: an untrusted workspace never runs the project file and says its source list waits for trust'
 	let staged = freshOutsideCheckoutDir(UntrustedProjectDirName)
 	let project = staged.join(UntrustedProjectSubdirName)
@@ -21,17 +16,20 @@ test 'project diagnostics: an untrusted workspace never runs the project file an
 
 	writeCorpusFile(project, fileName: UntrustedManifestFileName, content: UntrustedManifestSource)
 
-	let probe = probeUntrustedManifest(project)
-	let ran = File.exists(project.join(UntrustedMarkerFileName))
+	var client = LspClient.start()
 
-	discardOutsideCheckoutDir(staged)
+	if let items = try untrustedManifestDiagnostics(client, project: project) 'answered'
+		client.release()
 
-	match probe 'probe'
-		broke(detail) then Expect.fail("the session did not complete: {detail}")
-		published(items) then expectOneInformationNote(items)
-	end 'probe'
+		let ran = File.exists(project.join(UntrustedMarkerFileName))
 
-	Expect.isFalse(ran, message: "an untrusted workspace never runs `{UntrustedManifestFileName}`, but it wrote `{UntrustedMarkerFileName}` beside itself")
+		discardOutsideCheckoutDir(staged)
+
+		expectOneInformationNote(items)
+		Expect.isFalse(ran, message: "an untrusted workspace never runs `{UntrustedManifestFileName}`, but it wrote `{UntrustedMarkerFileName}` beside itself")
+	end 'answered' else (e) 'failed'
+		abandonedStagedSession(client, staged: staged, failure: e, doing: "the session did not complete")
+	end 'failed'
 end 'project diagnostics: an untrusted workspace never runs the project file and says its source list waits for trust'
 
 function expectOneInformationNote(items PublishedDiagnosticArray) throws TestFailure
@@ -46,25 +44,14 @@ function expectOneInformationNote(items PublishedDiagnosticArray) throws TestFai
 	try Expect.contains(note.message, needle: UntrustedNoteNeedle, message: "the note does not say the source list applies once the workspace is trusted: {note.message}")
 end 'expectOneInformationNote'
 
-function probeUntrustedManifest(project FilePath) returns UntrustedProbe
-	var client = LspClient.start()
+function untrustedManifestDiagnostics(client LspClient, project FilePath) returns PublishedDiagnosticArray throws LspClientError
 	let uri = fileUriOf(project.join(UntrustedManifestFileName))
-	var probe = UntrustedProbe.broke(UnreportedSessionEnding)
 
-	try 'session'
-		_ = client.initializeAtRootWithTrust(project, trusted: false)
-		client.initialized()
-		client.openDocument(uri, content: UntrustedManifestSource)
-		probe = UntrustedProbe.published(client.awaitPublishedDiagnostics(uri).items)
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then probe = UntrustedProbe.broke(e.explained())
-		end 'reason'
-	end 'failed'
+	_ = try client.initializeAtRootWithTrust(project, trusted: false)
+	try client.initialized()
+	try client.openDocument(uri, content: UntrustedManifestSource)
 
-	client.release()
+	let published = try client.awaitPublishedDiagnostics(uri)
 
-	return probe
-end 'probeUntrustedManifest'
+	return published.items
+end 'untrustedManifestDiagnostics'

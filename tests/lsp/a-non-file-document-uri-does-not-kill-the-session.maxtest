@@ -6,37 +6,28 @@ let NonFileSessionOpenedSource = "function nonFileSessionHelper() returns ExitCo
 
 let NonFileSessionBareIntErrorCode = "E3005"
 
-union NonFileSessionOutcome
-	published(items PublishedDiagnosticArray)
-	broke(detail String)
-end 'NonFileSessionOutcome'
-
 test 'non-file document: a didOpen under a scheme that is not file leaves the session serving'
 	var client = LspClient.start()
-	var outcome = NonFileSessionOutcome.broke(UnreportedSessionEnding)
 
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
-		client.openDocument(NonFileSessionGitQueryUri, content: NonFileSessionOpenedSource)
-		client.openDocument(NonFileSessionGitAuthorityUri, content: NonFileSessionOpenedSource)
-		client.openDocument(NonFileSessionSurvivorUri, content: brokenDocument())
-		outcome = NonFileSessionOutcome.published(client.awaitPublishedDiagnostics(NonFileSessionSurvivorUri).items)
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then outcome = NonFileSessionOutcome.broke(e.explained())
-		end 'reason'
+	if let items = try survivorsDiagnostics(client) 'answered'
+		client.release()
+		requireTheSurvivorWasChecked(items)
+	end 'answered' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "two documents were opened under schemes that are not `file:` — `{NonFileSessionGitQueryUri}` and `{NonFileSessionGitAuthorityUri}` — and then an ordinary `file:` document was opened and never answered", afterwards: ". ⛔ THE STREAM ENDING IS THE SERVER PROCESS ENDING: a `didOpen` whose uri does not spell a filesystem path must not be able to take the editor's language support down for the rest of the session. This server documents itself as serving any editor with an LSP client and states no scheme restriction anywhere, so a client that filters nothing of its own — Neovim, Helix, Emacs — forwards whatever uri the buffer carries, and neither of these is a document the author did anything unusual to open.")
 	end 'failed'
-
-	client.release()
-
-	match outcome 'outcome'
-		published(items) then requireTheSurvivorWasChecked(items)
-		broke(detail) then Expect.fail("two documents were opened under schemes that are not `file:` — `{NonFileSessionGitQueryUri}` and `{NonFileSessionGitAuthorityUri}` — and then an ordinary `file:` document was opened and never answered: {detail}. ⛔ THE STREAM ENDING IS THE SERVER PROCESS ENDING: a `didOpen` whose uri does not spell a filesystem path must not be able to take the editor's language support down for the rest of the session. This server documents itself as serving any editor with an LSP client and states no scheme restriction anywhere, so a client that filters nothing of its own — Neovim, Helix, Emacs — forwards whatever uri the buffer carries, and neither of these is a document the author did anything unusual to open.")
-	end 'outcome'
 end 'non-file document: a didOpen under a scheme that is not file leaves the session serving'
+
+function survivorsDiagnostics(client LspClient) returns PublishedDiagnosticArray throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(NonFileSessionGitQueryUri, content: NonFileSessionOpenedSource)
+	try client.openDocument(NonFileSessionGitAuthorityUri, content: NonFileSessionOpenedSource)
+	try client.openDocument(NonFileSessionSurvivorUri, content: brokenDocument())
+
+	let survivor = try client.awaitPublishedDiagnostics(NonFileSessionSurvivorUri)
+
+	return survivor.items
+end 'survivorsDiagnostics'
 
 function requireTheSurvivorWasChecked(items PublishedDiagnosticArray) throws TestFailure
 	try Expect.equal(items.count(), expected: 1, message: "the `file:` document opened AFTER the two path-less ones does not compile, so exactly one diagnostic must be published for it. The server published {items.count()}. ⭐ SURVIVING IS NOT ENOUGH — a server that answered the path-less opens by wedging its checker, dropping its corpus or publishing an empty array would still be standing here while giving the author a file with no squiggles on it, which is indistinguishable from a file with no errors.")

@@ -100,7 +100,7 @@ maxon lsp-server
 ```
 
 Speaks the Language Server Protocol over stdin and stdout: JSON-RPC messages with `Content-Length`
-headers. It takes no arguments and is normally started by an editor, not by hand.
+headers. Its one option is [`--log=`](/docs/cli/#logging), and it is normally started by an editor, not by hand.
 
 **Lifecycle.** `initialize` returns the server's capabilities and its `serverInfo`: `name` is
 `maxon`, and `version` is the line `maxon version` prints. `initialized` is accepted. `shutdown`
@@ -181,8 +181,9 @@ targets the project holds the sources of every one. A `.maxproj` that declares n
 with no `.maxproj`, and a project file that does not compile are each their directory's walk.
 
 The project file runs beside the session, for up to 30 seconds, and every request is answered
-meanwhile. The project check of a document in that project starts once the answer arrives, and every
-open document is then checked again. An answer holds until the `.maxproj` text changes; a project file
+meanwhile. Each project's file runs on its own, so a slow one holds up only its own project's answer.
+The project check of a document in that project starts once the answer arrives, and every open document
+in that project is then checked again. An answer holds until the `.maxproj` text changes; a project file
 that failed to compile, failed, or was refused is run again after ten seconds. A project file that fails
 or describes no usable build — no build, or no `sources` — is a refusal: the line `maxon build` prints
 for it is published on the `.maxproj` document, and with the project check of each document in the

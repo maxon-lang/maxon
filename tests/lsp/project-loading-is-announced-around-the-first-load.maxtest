@@ -6,11 +6,6 @@ let AnnouncedLoadMainSource = "function main() returns ExitCode\n\treturn announ
 let AnnouncedLoadCallLine = 1
 let AnnouncedLoadCallCharacter = 12
 
-union AnnouncedLoadProbe
-	observed(firstLoad ProjectLoadingNoticeArray, heldProject ProjectLoadingNoticeArray)
-	broke(detail String)
-end 'AnnouncedLoadProbe'
-
 test 'project loading is announced around the first load'
 	let root = stagedProjectDiagnosticsRoot(AnnouncedLoadDirName)
 
@@ -18,40 +13,31 @@ test 'project loading is announced around the first load'
 	writeCorpusFile(root, fileName: AnnouncedLoadMainFileName, content: AnnouncedLoadMainSource)
 
 	var client = LspClient.start()
-	let probe = collectAnnouncedLoadNotices(client, root: root, uri: fileUriOf(root.join(AnnouncedLoadMainFileName)))
-	client.release()
 
-	discardOutsideCheckoutDir(root)
-
-	match probe 'probe'
-		observed(firstLoad, heldProject) then requireLoadAnnouncedOnlyAroundTheFirstLoad(firstLoad, heldProject: heldProject)
-		broke(detail) then Expect.fail("the session broke before the `maxon/projectLoading` notices could be read: {detail}")
-	end 'probe'
+	if let notices = try noticesAroundTheFirstLoad(client, root: root, uri: fileUriOf(root.join(AnnouncedLoadMainFileName))) 'observed'
+		client.release()
+		discardOutsideCheckoutDir(root)
+		let (firstLoad, heldProject) = notices
+		requireLoadAnnouncedOnlyAroundTheFirstLoad(firstLoad, heldProject: heldProject)
+	end 'observed' else (e) 'failed'
+		abandonedStagedSession(client, staged: root, failure: e, doing: "the session broke before the `maxon/projectLoading` notices could be read")
+	end 'failed'
 end 'project loading is announced around the first load'
 
-function collectAnnouncedLoadNotices(client LspClient, root FilePath, uri String) returns AnnouncedLoadProbe
-	var probe = AnnouncedLoadProbe.broke(UnreportedSessionEnding)
+function noticesAroundTheFirstLoad(client LspClient, root FilePath, uri String) returns (ProjectLoadingNoticeArray, ProjectLoadingNoticeArray) throws LspClientError
+	_ = try client.initializeAtRoot(root)
+	try client.initialized()
+	try client.openDocument(uri, content: AnnouncedLoadMainSource)
+	_ = try client.definition(uri, line: AnnouncedLoadCallLine, character: AnnouncedLoadCallCharacter)
 
-	try 'session'
-		_ = client.initializeAtRoot(root)
-		client.initialized()
-		client.openDocument(uri, content: AnnouncedLoadMainSource)
-		_ = client.definition(uri, line: AnnouncedLoadCallLine, character: AnnouncedLoadCallCharacter)
+	let firstLoad = try client.takeProjectLoadingNotices()
 
-		let firstLoad = client.takeProjectLoadingNotices()
+	_ = try client.definition(uri, line: AnnouncedLoadCallLine, character: AnnouncedLoadCallCharacter)
 
-		_ = client.definition(uri, line: AnnouncedLoadCallLine, character: AnnouncedLoadCallCharacter)
-		probe = AnnouncedLoadProbe.observed(firstLoad, heldProject: client.takeProjectLoadingNotices())
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then probe = AnnouncedLoadProbe.broke(e.explained())
-		end 'reason'
-	end 'failed'
+	let heldProject = try client.takeProjectLoadingNotices()
 
-	return probe
-end 'collectAnnouncedLoadNotices'
+	return (firstLoad, heldProject)
+end 'noticesAroundTheFirstLoad'
 
 function requireLoadAnnouncedOnlyAroundTheFirstLoad(firstLoad ProjectLoadingNoticeArray, heldProject ProjectLoadingNoticeArray) throws TestFailure
 	try requireOneAnnouncedLoad(firstLoad, expectedTail: outsideCheckoutDirName(AnnouncedLoadDirName), note: "a document was opened in a project the server did not yet hold, and a `textDocument/definition` was asked there; the notices were read once its reply had arrived. The open builds the project and the definition is answered out of it.")

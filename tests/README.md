@@ -56,7 +56,9 @@ tests/
   support/                       not a corpus: the helpers every corpus shares, all `public`, listed by each `<corpus>.maxproj`
     Host.maxon                   the compiler under test (`TestedCompilerStem`, `testedCompilerPath`), the host's suffix and temp area
     Staging.maxon                `stagingDir`, `clearStagedFiles`/`clearStagedTree`, `stageStoredTree`, `stagedFixtureTree`, `filesUnder`
-    Spawn.maxon                  `spawnIn`, `spawnCompiler`, `spawnBuild`, `runSystemTool`, `requireBuiltOrPanic`, `endedProcessId`
+    Spawn.maxon                  `spawnIn`, `spawnCompiler`, `spawnBuild`, `runSystemTool`, `requireBuiltOrPanic`, `endedProcessId`, `backdatedToTheYear2000`
+    ScratchNames.maxon           `scratchNameProbe`, `mintedScratchName`, `debugStreamSegmentPrefix`: the scratch-name probe below, built from the checkout's `maxon-bin/Run/ScratchName.maxon`
+    scratch-name/main.maxon.fixture   the probe program: `mint` prints a name for given fields, any other word runs one check - stored name only, see rule 1
     OutsideCheckout.maxon        directories under the host's temp area, outside any checkout
     LibraryTier.maxon            `stagedLibraryTierCompiler`, `builtLibraryTierFixture`
     Text.maxon                   the folds of a captured stream and the readers of a printed number, `joined`, `compareBytes`
@@ -93,7 +95,7 @@ tests/
     gates/<case>.maxtest         a well-formed spec it must ACCEPT, then REPORT something about
     gates/<case>/                the gate's one or two `.md`
   lsp/
-    LspClient.maxon              a live JSON-RPC client the tests import - see rule 1
+    LspClient.maxon              a live JSON-RPC client the tests import - see rule 1; `abandonedSession` and `abandonedStagedSession` release a session that failed, then fail the test naming what it was doing
     <area>.maxtest               one LSP method area per file
   ladders/                       hand-built scaling generators + the README indexing them
     index.maxtest                the README's rows against the scripts beside it
@@ -434,6 +436,13 @@ tests/
     build-a-file-sees-scriptlib.maxtest                     an install-shaped `build <file>` compiles the `scriptlib/` package the file calls, and the executable prints its answer
     check-scriptlib-reports-a-broken-package.maxtest        `check-scriptlib` builds a package body nothing calls, exits 1 and names `bad/Bad.maxon`
     check-scriptlib-passes-clean-packages.maxtest           `check-scriptlib` over two clean packages and no `main` exits 0 with nothing on stderr
+    scratch-name-mints-distinct-names.maxtest               names one process mints one after another never repeat
+    scratch-name-round-trips-through-its-parser.maxtest     a minted name gives back its stem and, on its own host, its owner
+    scratch-name-parser-refuses-what-it-did-not-mint.maxtest   the parser judges only a name of its family and of the fixed width, and calls the rest unmarked
+    scratch-name-older-parsers-cannot-claim-it.maxtest      a minted name's last field is no decimal number, across the serial's wrap
+    scratch-name-segment-form-fits-the-portable-name-limit.maxtest   a shared segment's minted name fits 31 bytes for any pid and serial
+    scratch-name-stranger-goes-stale-by-age.maxtest         a file is a stale stranger once it is as old as the age asked, and not before
+    scratch-name-host-identity-leads-with-the-target-os-word.maxtest   the host identity a lock record and a scratch-name tag are made from begins with the target's OS word
   profile/
     ProfileHarness.maxon                    the shared half: the profiler run, the report readers
     profile-hot-ordering.maxtest            the busier function ranks first in every section
@@ -454,6 +463,7 @@ tests/
     cache-default-root-is-the-maxon-user-directory.maxtest   with no cache root named, the build lands under the home directory's `.maxon/cache/run/`
     cache-miss-edit.maxtest                 an edited one is, and the new answer runs
     cache-sweeps-older-formats.maxtest      a published build discards an older cache format's builds and keeps a newer one's
+    cache-sweeps-pending-builds-of-ended-processes.maxtest   a published build discards a pending build whose writer ended on this host, and keeps a live writer's, another host's and a young unmarked one
     concurrent.maxtest                      simultaneous cold runs of one program each behave like the only one
     directory.maxtest                       a directory is compiled as ONE project
     wordless.maxtest                        a `.maxon` first argument IS `execute` - the shebang door
@@ -528,6 +538,7 @@ tests/
     rebuild.maxtest                         a running server survives its image being replaced on disk
     rebuild-over-a-running-previous.maxtest      a self-rebuild succeeds while a server runs its `.previous`
     rebuild-with-a-compile-error.maxtest         a self-rebuild that fails to compile leaves the slot untouched
+    rebuild-sweeps-retired-images.maxtest        a self-rebuild deletes retired images and sidecars of both spellings, and keeps every other file sharing the stem
     reference-documents-every-tool.maxtest       docs/CLI_REFERENCE.md's `## MCP Server` section names every tool and argument `--dev` advertises
     reference-documents-the-agent-instructions.maxtest       `initialize`'s `instructions` are docs/WRITING_MAXON_CODE.md's preamble and its `## Scripts and scriptlib` section
     check-reports-a-type-error-and-writes-nothing.maxtest      `check` answers a type error's code, is not the warm-rebuild gate, and writes nothing
@@ -555,7 +566,8 @@ tests/
     debug-start-refuses-a-test-file-by-name.maxtest      `debug_start` refuses a test file as an executable or a source, and names the test build
     debug-start-over-a-live-session-answers-its-final-lines.maxtest      a `debug_start` over a live session answers what the replaced program wrote since the last call
     debug-output-is-bounded.maxtest              debuggee output nobody has taken is bounded, the oldest lines dropped and the drop announced ahead of what is kept
-    debug-builds-are-swept.maxtest               a server sweeps exactly the debug builds whose owner has ended, whatever their age
+    debug-builds-are-swept.maxtest               a server sweeps exactly the debug builds whose owner has ended on its own host
+    old-format-leftovers-are-swept-by-age.maxtest   a server sweeps week-old snippets and debug builds of an older name format, and keeps young ones and another host's
     a-staged-snippet-is-removed-after-its-call.maxtest      a snippet staged for a tool call, and everything built from it, is gone once the call answers
     snippets-an-ended-server-left-are-swept.maxtest      a server sweeps the snippets and snippet builds an ended server left, and keeps a live server's
     run-spec-test-filter-union.maxtest           `run_spec_test` given a filter array runs the union of the specs those filters name
@@ -1402,10 +1414,11 @@ as an MCP server on either transport, exchanging JSON-RPC messages, and inspecti
   is stopped and answered, a debuggee's untaken output is capped with the drop announced, a stop timeout
   in fractional seconds is honoured down to a millisecond, and a fraction given to a whole-number
   argument is refused by name.
-- `debug-builds-are-swept.maxtest`, `a-staged-snippet-is-removed-after-its-call.maxtest` and
-  `snippets-an-ended-server-left-are-swept.maxtest` gate what a server leaves under the cache root: a
-  snippet goes when its call answers, and a server sweeps the debug builds and snippets whose owning
-  process has ended, keeping every live owner's.
+- `debug-builds-are-swept.maxtest`, `a-staged-snippet-is-removed-after-its-call.maxtest`,
+  `snippets-an-ended-server-left-are-swept.maxtest` and `old-format-leftovers-are-swept-by-age.maxtest`
+  gate what a server leaves under the cache root: a snippet goes when its call answers, and a server
+  sweeps the debug builds and snippets whose owning process has ended on its own host, keeping every
+  live owner's and another host's, and sweeps a name that carries no owner once it is a week old.
 - The `http-*` cases gate the HTTP transport itself: the roster it serves, its routes, its sessions and
   their idle sweep, a long call's session kept alive with every request queued behind it, the options
   that belong to `--http`, and the `Origin`/`Host` checks that keep a browser page from driving it.

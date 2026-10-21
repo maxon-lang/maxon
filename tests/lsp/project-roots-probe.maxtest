@@ -151,35 +151,38 @@ end 'ceilingControl'
 
 export function listProjectsIn(session ProjectRootsSession, documents WorkspaceFolderDocumentArray) returns ListProjectsProbe
 	var client = LspClient.start()
-	var probe = ListProjectsProbe.unanswered(UnreportedSessionEnding)
-
-	try 'session'
-		openProjectRootsSession(client, session: session)
-		client.initialized()
-
-		for document in documents 'eachDocument'
-			client.openDocument(document.uri, content: document.content)
-			followUpTheOpen(client, document: document)
-		end 'eachDocument'
-
-		removeTheSessionsFolders(client, session: session)
-
-		// Asked before the stash is read: its reply follows every notice the opens sent, and a stash
-		// read first can miss them, which a test expecting no load reads as a pass.
-		let projects = client.listProjects()
-		probe = ListProjectsProbe.answered(projects, notices: client.takeProjectLoadingNotices())
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then probe = ListProjectsProbe.unanswered("`maxon/listProjects`, which the VS Code extension sends for its status bar, got no answer: {e.explained()}")
-		end 'reason'
-	end 'failed'
-
+	let probe = collectListedProjects(client, session: session, documents: documents)
 	client.release()
 
 	return probe
 end 'listProjectsIn'
+
+function collectListedProjects(client LspClient, session ProjectRootsSession, documents WorkspaceFolderDocumentArray) returns ListProjectsProbe
+	if let probe = try listedProjectsSession(client, session: session, documents: documents) 'answered'
+		return probe
+	end 'answered' else (e) 'failed'
+		return ListProjectsProbe.unanswered("`maxon/listProjects`, which the VS Code extension sends for its status bar, got no answer: {e.explained()}")
+	end 'failed'
+end 'collectListedProjects'
+
+function listedProjectsSession(client LspClient, session ProjectRootsSession, documents WorkspaceFolderDocumentArray) returns ListProjectsProbe throws LspClientError
+	try openProjectRootsSession(client, session: session)
+	try client.initialized()
+
+	for document in documents 'eachDocument'
+		try client.openDocument(document.uri, content: document.content)
+		try followUpTheOpen(client, document: document)
+	end 'eachDocument'
+
+	try removeTheSessionsFolders(client, session: session)
+
+	// Asked before the stash is read: its reply follows every notice the opens sent, and a stash
+	// read first can miss them, which a test expecting no load reads as a pass.
+	let projects = try client.listProjects()
+	let notices = try client.takeProjectLoadingNotices()
+
+	return ListProjectsProbe.answered(projects, notices: notices)
+end 'listedProjectsSession'
 
 function openProjectRootsSession(client LspClient, session ProjectRootsSession) throws LspClientError
 	match session 'session'
@@ -222,46 +225,54 @@ end 'probesAnswered'
 
 export function definitionsAcrossWorkspaceFolders(initialFolders WorkspaceFolderRootArray, addedFolders WorkspaceFolderRootArray, removedFolders WorkspaceFolderRootArray, documents WorkspaceFolderDocumentArray, positions CorpusProbePointArray) returns WorkspaceFolderDefinitionOutcome
 	var client = LspClient.start()
-	var probes = CorpusDefinitionProbeArray.create()
-	var outcome = WorkspaceFolderDefinitionOutcome.broke(UnreportedSessionEnding)
-
-	try 'session'
-		_ = client.initializeAtWorkspaceFolders(initialFolders)
-		client.initialized()
-
-		if addedFolders.count() > 0 'announceTheAddition'
-			client.changeWorkspaceFolders(addedFolders, removed: WorkspaceFolderRootArray.create())
-		end 'announceTheAddition'
-
-		for document in documents 'eachDocument'
-			client.openDocument(document.uri, content: document.content)
-		end 'eachDocument'
-
-		for position in positions 'eachPosition'
-			probes.push(corpusProbeOf(client.definition(position.uri, line: position.line, character: position.character)))
-		end 'eachPosition'
-
-		if removedFolders.count() > 0 'announceTheRemoval'
-			client.changeWorkspaceFolders(WorkspaceFolderRootArray.create(), removed: removedFolders)
-
-			for position in positions 'eachPositionAgain'
-				probes.push(corpusProbeOf(client.definition(position.uri, line: position.line, character: position.character)))
-			end 'eachPositionAgain'
-		end 'announceTheRemoval'
-
-		outcome = WorkspaceFolderDefinitionOutcome.answered(probes)
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse then outcome = WorkspaceFolderDefinitionOutcome.broke("the session broke before an answer arrived: {e.explained()}")
-			serverRefused(code, message) then outcome = WorkspaceFolderDefinitionOutcome.broke(corpusRefusalSentence(code, message: message))
-		end 'reason'
-	end 'failed'
-
+	let outcome = collectWorkspaceFolderDefinitions(client, initialFolders: initialFolders, addedFolders: addedFolders, removedFolders: removedFolders, documents: documents, positions: positions)
 	client.release()
 
 	return outcome
 end 'definitionsAcrossWorkspaceFolders'
+
+function collectWorkspaceFolderDefinitions(client LspClient, initialFolders WorkspaceFolderRootArray, addedFolders WorkspaceFolderRootArray, removedFolders WorkspaceFolderRootArray, documents WorkspaceFolderDocumentArray, positions CorpusProbePointArray) returns WorkspaceFolderDefinitionOutcome
+	if let probes = try workspaceFolderDefinitionsSession(client, initialFolders: initialFolders, addedFolders: addedFolders, removedFolders: removedFolders, documents: documents, positions: positions) 'answered'
+		return WorkspaceFolderDefinitionOutcome.answered(probes)
+	end 'answered' else (e) 'failed'
+		return workspaceFolderOutcomeOfFailure(e)
+	end 'failed'
+end 'collectWorkspaceFolderDefinitions'
+
+function workspaceFolderDefinitionsSession(client LspClient, initialFolders WorkspaceFolderRootArray, addedFolders WorkspaceFolderRootArray, removedFolders WorkspaceFolderRootArray, documents WorkspaceFolderDocumentArray, positions CorpusProbePointArray) returns CorpusDefinitionProbeArray throws LspClientError
+	var probes = CorpusDefinitionProbeArray.create()
+
+	_ = try client.initializeAtWorkspaceFolders(initialFolders)
+	try client.initialized()
+
+	if addedFolders.count() > 0 'announceTheAddition'
+		try client.changeWorkspaceFolders(addedFolders, removed: WorkspaceFolderRootArray.create())
+	end 'announceTheAddition'
+
+	for document in documents 'eachDocument'
+		try client.openDocument(document.uri, content: document.content)
+	end 'eachDocument'
+
+	let beforeTheRemoval = try corpusProbesAt(client, points: positions)
+	probes.append(beforeTheRemoval)
+
+	if removedFolders.count() > 0 'announceTheRemoval'
+		try client.changeWorkspaceFolders(WorkspaceFolderRootArray.create(), removed: removedFolders)
+
+		let afterTheRemoval = try corpusProbesAt(client, points: positions)
+		probes.append(afterTheRemoval)
+	end 'announceTheRemoval'
+
+	return probes
+end 'workspaceFolderDefinitionsSession'
+
+function workspaceFolderOutcomeOfFailure(e LspClientError) returns WorkspaceFolderDefinitionOutcome
+	return match e 'reason'
+		transportFailed or
+		malformedResponse gives WorkspaceFolderDefinitionOutcome.broke("the session broke before an answer arrived: {e.explained()}")
+		serverRefused(code, message) gives WorkspaceFolderDefinitionOutcome.broke(corpusRefusalSentence(code, message: message))
+	end 'reason'
+end 'workspaceFolderOutcomeOfFailure'
 
 export function soleProbeAnswered(outcome WorkspaceFolderDefinitionOutcome) returns CorpusDefinitionProbe throws TestFailure
 	let probes = try probesAnswered(outcome)

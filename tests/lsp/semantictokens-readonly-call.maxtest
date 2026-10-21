@@ -21,44 +21,36 @@ end 'ReadonlyCallToken'
 
 typealias ReadonlyCallTokenArray = Array with ReadonlyCallToken
 
-union ReadonlyCallOutcome
-	observed(data SemanticTokenValueArray)
-	broke(detail String)
-end 'ReadonlyCallOutcome'
+function readonlyCallTokensOf(client LspClient, source String) returns SemanticTokenValueArray throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(ReadonlyCallUri, content: source)
 
-function readonlyCallOutcomeOf(source String) returns ReadonlyCallOutcome
-	var client = LspClient.start()
-	var outcome = ReadonlyCallOutcome.broke(UnreportedSessionEnding)
+	let tokens = try client.semanticTokensFull(ReadonlyCallUri)
 
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
-		client.openDocument(ReadonlyCallUri, content: source)
-		outcome = ReadonlyCallOutcome.observed(client.semanticTokensFull(ReadonlyCallUri).data)
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then outcome = ReadonlyCallOutcome.broke(e.explained())
-		end 'reason'
-	end 'failed'
-
-	client.release()
-	return outcome
-end 'readonlyCallOutcomeOf'
+	return tokens.data
+end 'readonlyCallTokensOf'
 
 test 'semantic tokens colour a call named readonly as a name and a readonly qualifier as a keyword'
-	match readonlyCallOutcomeOf(readonlyCallFixture()) 'tokens'
-		observed(data) then assertReadonlyCallColours(readonlyCallDecode(data))
-		broke(detail) then Expect.fail("the semantic-tokens request did not complete: {detail}")
-	end 'tokens'
+	var client = LspClient.start()
+
+	if let data = try readonlyCallTokensOf(client, source: readonlyCallFixture()) 'tokens'
+		client.release()
+		assertReadonlyCallColours(readonlyCallDecode(data))
+	end 'tokens' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "the semantic-tokens request did not complete")
+	end 'failed'
 end 'semantic tokens colour a call named readonly as a name and a readonly qualifier as a keyword'
 
 test 'semantic tokens keep colouring a readonly qualifier after an unclosed bracket'
-	match readonlyCallOutcomeOf(readonlyDriftFixture()) 'tokens'
-		observed(data) then assertReadonlyDriftColours(readonlyCallDecode(data))
-		broke(detail) then Expect.fail("the semantic-tokens request did not complete: {detail}")
-	end 'tokens'
+	var client = LspClient.start()
+
+	if let data = try readonlyCallTokensOf(client, source: readonlyDriftFixture()) 'tokens'
+		client.release()
+		assertReadonlyDriftColours(readonlyCallDecode(data))
+	end 'tokens' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "the semantic-tokens request did not complete")
+	end 'failed'
 end 'semantic tokens keep colouring a readonly qualifier after an unclosed bracket'
 
 function assertReadonlyDriftColours(tokens ReadonlyCallTokenArray) throws TestFailure

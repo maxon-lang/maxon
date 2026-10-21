@@ -90,18 +90,13 @@ module typealias DecodedEventArray = Array with DecodedEvent
 	let SegmentCreateCallName = "no WASI named-section primitive"
 #endif
 
-// The stem of the segment name. It carries this process's id and a nonce, because twelve spec-test workers
+// The stem of the segment name, which `scratchNameFor` makes unique, because twelve spec-test workers
 // each spawn a monitor and a colliding name would map two of them onto ONE ring — `CreateFileMappingW`
 // hands back the existing section rather than failing, and a POSIX create unlinks the name first.
 //
-// ⚠ **THE WHOLE NAME MUST FIT 31 BYTES**, which is Darwin's `PSHMNAMLEN` (measured: a 32-byte name is
-// ENAMETOOLONG). This stem plus a five-digit pid, an underscore and eight hex digits is 23.
-let SegmentNamePrefix = "maxon_ds_"
-
-// The nonce's width: the low 32 bits of the high-resolution counter, rendered as 8 hex digits. It is
-// belt-and-braces beside the process id, which is already unique among LIVING processes — a monitor whose
-// child outlives it is the case the id alone would not cover.
-let SegmentNonceMask = 0xFFFFFFFF
+// ⚠ **THE WHOLE NAME MUST FIT 31 BYTES**, which is Darwin's `PSHMNAMLEN`. This stem, a separator and
+// the 28-byte scratch block are exactly 31, so the stem cannot grow.
+let SegmentNamePrefix = "mds"
 
 // How many bytes of the mapping the ring's own buffer occupies, and the AND that takes a ring position
 // down to an offset within it. The ring is a power of two, which is what makes the modulo one instruction
@@ -234,7 +229,7 @@ module type DebugStreamDecoder
 	/// it, it is a run that would print `tag=1` for every event and a capture block that would fail
 	/// without ever saying why.
 	module static function create(target FilePath, filter FamilyFilter) returns DebugStreamDecoder throws DecoderError
-		var segment = try SharedSegment.publish(mintSharedSegmentName(SegmentNamePrefix), bytes: DsSharedMemoryBytes) otherwise (e) 'noSegment'
+		var segment = try SharedSegment.publish(scratchNameFor(SegmentNamePrefix), bytes: DsSharedMemoryBytes) otherwise (e) 'noSegment'
 			throw DecoderError.segmentUnavailable(e)
 		end 'noSegment'
 
@@ -459,13 +454,6 @@ end 'copySegmentBytes'
 // ============================================================================
 // The segment: naming and seeding
 // ============================================================================
-
-// A fresh section name for a driver that is about to hand it to a child. The process id is unique among
-// living processes and the nonce covers the rest — see `SegmentNamePrefix`.
-function mintSharedSegmentName(prefix String) returns String
-	let nonce = Clock.nowNanos() and SegmentNonceMask
-	return "{prefix}{Process.id()}_{nonce:08x}"
-end 'mintSharedSegmentName'
 
 // ⭐ Every header field the producer reads, written before it can read any of them.
 //

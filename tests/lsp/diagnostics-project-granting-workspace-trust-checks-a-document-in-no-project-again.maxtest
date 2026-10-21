@@ -1,0 +1,29 @@
+let TrustedAgainDirName = "diagnostics-project-trust-rechecks-every-document"
+let TrustedAgainScratchUri = "untitled:Untitled-1"
+let TrustedAgainBareIntSource = "function main() returns int\n\treturn 0\nend 'main'\n"
+let TrustedAgainDiagnosticCount = 1
+
+test 'project diagnostics: granting workspace trust checks a document that belongs to no project again'
+	let root = freshOutsideCheckoutDir(TrustedAgainDirName)
+	var client = LspClient.start()
+
+	if let items = try publishAfterTheGrant(client, root: root) 'answered'
+		client.release()
+		discardOutsideCheckoutDir(root)
+		Expect.equal(items.count(), expected: TrustedAgainDiagnosticCount, message: "the second publish for `{TrustedAgainScratchUri}` carries the one bare `int` error its text holds")
+	end 'answered' else (e) 'failed'
+		abandonedStagedSession(client, staged: root, failure: e, doing: "`{TrustedAgainScratchUri}` belongs to no project, and granting workspace trust changes every project's inputs, so every open document is checked again; no second publish arrived")
+	end 'failed'
+end 'project diagnostics: granting workspace trust checks a document that belongs to no project again'
+
+function publishAfterTheGrant(client LspClient, root FilePath) returns PublishedDiagnosticArray throws LspClientError
+	_ = try client.initializeAtRootWithTrust(root, trusted: false)
+	try client.initialized()
+	try client.openDocument(TrustedAgainScratchUri, content: TrustedAgainBareIntSource)
+	_ = try client.awaitPublishedDiagnostics(TrustedAgainScratchUri)
+	try client.grantWorkspaceTrust()
+
+	let again = try client.awaitPublishOfSize(TrustedAgainScratchUri, size: TrustedAgainDiagnosticCount)
+
+	return again.items
+end 'publishAfterTheGrant'

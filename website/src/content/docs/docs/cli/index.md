@@ -101,8 +101,9 @@ built from changes:
   does.
 - **The key is the file name.** A cache hit is that file existing, so two runs of one program cannot
   serve each other a stale build. A fresh build is written under a temporary name and renamed into
-  place, so simultaneous cold runs never share an output path. Superseded builds, and builds an older
-  cache format left, are removed on a best-effort basis.
+  place, so simultaneous cold runs never share an output path. Superseded builds, builds an older
+  cache format left, and temporary builds a process that has ended left (see
+  [`maxon cache`](#maxon-cache)) are removed on a best-effort basis.
 - **The path is anchored at the working directory, and only its `.` components, repeated separators and
   a trailing separator are folded.** `x.maxon` and `./x.maxon` share one cache slot, and `a/../x.maxon` gets another: through
   a symbolic link, `a/..` need not be the working directory. That costs an extra compile, never a wrong
@@ -555,15 +556,22 @@ judged and removed while `clear` holds its claim file, so a build starting meanw
 as the first thing that stayed, and the command exits 1.
 
 **A debug build a live session is using stays**, with its sidecar and the directories above it, and
-`clear` ends its report with a `Kept <n> files a live debug session is using` line. Each debug build's
-file name carries the process id of the `maxon mcp-server` or `maxon dap-server` that built it, and the
-build belongs to a live session while a process with that id exists. A server removes the debug builds
-and the staged snippets it made when the session or call that needed them ends, and each
-`maxon mcp-server` and `maxon dap-server` removes, as it starts, those whose owning process has ended —
-the leftovers of a server that was killed. The owner is known by its process id alone, so an owner in another pid
-namespace, such as a container sharing this cache directory, reads as ended when no process here has
-its id and as alive when an unrelated process here does; an ended owner whose id the system has reused
-reads as alive until that process ends.
+`clear` ends its report with a `Kept <n> files a live debug session is using` line. A debug build
+belongs to a live session while the `maxon mcp-server` or `maxon dap-server` that built it runs on this
+host, in this pid namespace. A server removes the debug builds and the staged snippets it made when the
+session or call that needed them ends.
+
+**A file one process leaves for itself is swept by the name it carries.** A debug build, a staged
+snippet, an MCP result document and a build still being written into the run cache each end their name
+in `<tag>.<start>.<pid>.<serial>`: a tag for the host and pid namespace, the start time and id of the
+process that wrote it, and a serial. Each `maxon mcp-server` and `maxon dap-server` removes, as it
+starts, the debug builds and snippets whose owner has ended — the leftovers of a server that was killed —
+and a run that publishes a build removes the builds an ended process was writing into that program's
+slot. Only an owner with this host's tag is judged: the files of another pid namespace, such as a
+container sharing this cache directory, stay for that namespace to sweep, a host that cannot identify
+itself (a Linux system with no machine id) judges no owner at all, and an ended owner whose id
+the system has reused reads as alive until that process ends. A file in those places whose name carries
+no owner, such as one an older Maxon wrote, is removed once it is 7 days old.
 
 It removes **only what Maxon created**. `MAXON_RUN_CACHE_ROOT` may name a directory that is already
 somebody's — a shared build area, or your own scratch directory — so the clear reaches only the Maxon
@@ -895,7 +903,8 @@ brings back the build output `execute` otherwise keeps quiet.
 Log lines go to stderr, prefixed with the category and level (`[CMP] INFO: …`). An unrecognized spec
 stops the command before it runs, with `error: invalid option value: <arg>` and exit 1 (2 for
 `maxon test`). `maxon test` lowers the level to `error` unless you pass
-`--log=`, so its stdout is only the report.
+`--log=`, so its stdout is only the report, and `maxon lsp-server` lowers it the same way for its whole
+session.
 
 ```bash
 maxon build app.maxon --log=codegen:trace

@@ -78,10 +78,9 @@ end 'RunSlot'
 // ⚠ **THE STEM IS THERE FOR A READER AND FOR THE PROGRAM'S OWN `argv[0]`**, never for finding the build:
 // one slot directory holds one program's builds, so the key alone would locate them.
 //
-// ⭐ **THE PENDING NAME CARRIES THE PROCESS ID, WHICH IS WHAT MAKES IT ONE WRITER'S.** No two live
-// processes share an id, and a process fills at most one slot per program: `maxon execute` builds its
-// one program and `maxon build` its one manifest, each once. A pending file a DEAD process left under a reused
-// id is overwritten, which costs nothing — its writer is gone.
+// ⭐ **THE PENDING NAME IS A SCRATCH NAME (`pendingSpellingOf`), WHICH IS WHAT MAKES IT ONE WRITER'S.**
+// Its block names the writer's host, start and id and a serial, so no two writers share it, and a
+// pending file a DEAD writer left is swept by name (`pendingBuildIsAbandoned`).
 module function locateRunSlot(spelled FilePath, isProject bool, target Target, entryFunction ByteArray) returns RunSlot throws RunCacheError
 	let program = spelled.anchoredAt(Directory.currentPath())
 	let key = try freshnessKey(program, target: target, entryFunction: entryFunction)
@@ -137,8 +136,8 @@ end 'publishDebugSidecar'
 // Every failure is ignored and none reaches a stream: a superseded build another run is executing
 // cannot be removed on Windows, and the run doing the removing has already built what it was asked for.
 //
-// A pending name is left alone because another run is writing it. Removing one costs that run its
-// rename, which it would then report as a failure with nothing published.
+// A pending name is left alone while its writer may still be writing it. Removing one costs that run
+// its rename, which it would then report as a failure with nothing published.
 function discardSupersededBuilds(slot RunSlot)
 	let current = slot.executable.filename()
 
@@ -193,7 +192,7 @@ enum PendingBuilds
 end 'PendingBuilds'
 
 // A slot's files, but for `kept` and, under `PendingBuilds.leftInPlace`, any build still being
-// written. A non-directory `dir` lists nothing and is left alone.
+// written by a writer that is not abandoned. A non-directory `dir` lists nothing and is left alone.
 //
 // The emptied directory goes with them, or a slot costs a name for the life of the install, one per
 // program ever run. The removal is asked for unconditionally because `Directory.delete` refuses a
@@ -204,7 +203,7 @@ function discardSlotBuilds(dir FilePath, binarySuffix String, kept BuildNameArra
 	for entry in entries 'eachEntry'
 		let name = entry.filename()
 
-		if kept.contains(name) or (pending == PendingBuilds.leftInPlace and isPendingBuildName(name, binarySuffix: binarySuffix)) 'leftInPlace'
+		if kept.contains(name) or (pending == PendingBuilds.leftInPlace and isPendingBuildName(name, binarySuffix: binarySuffix) and not pendingBuildIsAbandoned(entry, binarySuffix: binarySuffix)) 'leftInPlace'
 			continue
 		end 'leftInPlace'
 
@@ -243,7 +242,7 @@ end 'isPublishedBuildName'
 // is the only one a key can follow.
 //
 // A sidecar and a build still being written both fail on the same evidence: what stands there is `.mxdbg`
-// or the writer's process id, so the span is the wrong length and its characters are not all hex.
+// or the writer's scratch block, so the span is the wrong length and its characters are not all hex.
 function endsInSlotKey(name String, binarySuffix String) returns bool
 	let separator = try name.findLast(SlotKeySeparator) otherwise return false
 	let keyStarts = try name.indexAfter(separator) otherwise return false
@@ -273,9 +272,19 @@ end 'endsInSlotKey'
 // A build still being written, or its sidecar. The hit test cannot match one, and removing it costs its
 // writer the rename that publishes it.
 function isPendingBuildName(name String, binarySuffix String) returns bool
-	let pending = "{PendingBuildMarker}{binarySuffix}"
-	return name.endsWith(pending) or name.endsWith(sidecarNameOf(pending))
+	return name.endsWith(pendingBuildSuffix(binarySuffix)) or name.endsWith(sidecarNameOf(pendingBuildSuffix(binarySuffix)))
 end 'isPendingBuildName'
+
+function pendingBuildSuffix(binarySuffix String) returns String
+	return "{PendingBuildMarker}{binarySuffix}"
+end 'pendingBuildSuffix'
+
+function pendingBuildIsAbandoned(entry FilePath, binarySuffix String) returns bool
+	let name = entry.filename()
+	let suffix = imageOrSidecarSuffixOf(name, image: pendingBuildSuffix(binarySuffix))
+
+	return leftoverIsAbandoned(entry, standing: standingOfScratchName(name, family: ScratchFamily.beforeSuffix(suffix)))
+end 'pendingBuildIsAbandoned'
 
 // A build that never took its name, sidecar included. What survives is a pending name, which the hit test
 // structurally cannot match.

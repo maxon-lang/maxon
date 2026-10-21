@@ -9,35 +9,26 @@
 
 let FoldingUri = "file:///test.maxon"
 
-union FoldingRangesOutcome
-	observed(ranges FoldingRangeArray)
-	broke(detail String)
-end 'FoldingRangesOutcome'
-
 test 'foldingRange returns ranges'
 	var client = LspClient.start()
-	var outcome = FoldingRangesOutcome.broke(UnreportedSessionEnding)
 
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
-		client.openDocument(FoldingUri, content: foldingFunctionWithIfBlockFixture())
-		outcome = FoldingRangesOutcome.observed(client.foldingRange(FoldingUri).ranges)
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then outcome = FoldingRangesOutcome.broke(e.explained())
-		end 'reason'
+	if let ranges = try foldingRangesOfTheFixture(client) 'answered'
+		client.release()
+		assertFoldingRangesOfFile(ranges)
+	end 'answered' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "the folding-range request did not complete")
 	end 'failed'
-
-	client.release()
-
-	match outcome 'folding'
-		observed(ranges) then assertFoldingRangesOfFile(ranges)
-		broke(detail) then Expect.fail("the folding-range request did not complete: {detail}")
-	end 'folding'
 end 'foldingRange returns ranges'
+
+function foldingRangesOfTheFixture(client LspClient) returns FoldingRangeArray throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(FoldingUri, content: foldingFunctionWithIfBlockFixture())
+
+	let folded = try client.foldingRange(FoldingUri)
+
+	return folded.ranges
+end 'foldingRangesOfTheFixture'
 
 function assertFoldingRangesOfFile(ranges FoldingRangeArray) throws TestFailure
 	// Should have folding ranges for function (lines 0-5) and if block (lines 1-3)

@@ -12,37 +12,27 @@
 
 let CodeActionUri = "file:///test.maxon"
 
-union CodeActionOffersOutcome
-	observed(actions CodeActionItemArray)
-	broke(detail String)
-end 'CodeActionOffersOutcome'
-
 test 'code action offers fix for unused variable'
 	var client = LspClient.start()
-	var outcome = CodeActionOffersOutcome.broke(UnreportedSessionEnding)
 
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
-		client.openDocument(CodeActionUri, content: codeActionUnusedVariableFixture())
-
-		// Request code actions on the unused variable line
-		outcome = CodeActionOffersOutcome.observed(client.codeAction(CodeActionUri, startLine: 1, startCharacter: 4, endLine: 1, endCharacter: 19).actions)
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-			malformedResponse or
-			serverRefused then outcome = CodeActionOffersOutcome.broke(e.explained())
-		end 'reason'
+	if let actions = try codeActionsOnTheUnusedLine(client) 'answered'
+		client.release()
+		assertCodeActionOffered(actions)
+	end 'answered' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "the code-action request did not complete")
 	end 'failed'
-
-	client.release()
-
-	match outcome 'offered'
-		observed(actions) then assertCodeActionOffered(actions)
-		broke(detail) then Expect.fail("the code-action request did not complete: {detail}")
-	end 'offered'
 end 'code action offers fix for unused variable'
+
+function codeActionsOnTheUnusedLine(client LspClient) returns CodeActionItemArray throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(CodeActionUri, content: codeActionUnusedVariableFixture())
+
+	// Request code actions on the unused variable line
+	let offered = try client.codeAction(CodeActionUri, startLine: 1, startCharacter: 4, endLine: 1, endCharacter: 19)
+
+	return offered.actions
+end 'codeActionsOnTheUnusedLine'
 
 function assertCodeActionOffered(actions CodeActionItemArray) throws TestFailure
 	// Should have at least one code action (e.g., remove unused variable)

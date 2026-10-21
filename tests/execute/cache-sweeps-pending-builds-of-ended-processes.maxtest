@@ -1,0 +1,28 @@
+let PendingSweepCaseLabel = "cache-sweeps-pending-builds-of-ended-processes"
+let EndedOwnerSerial = 1
+let LiveOwnerSerial = 2
+let AnotherHostSerial = 3
+let AnotherHost = "another-os/another-host/another-namespace"
+
+test 'publishing a build discards a pending build whose process ended on this host, and keeps the rest'
+	let staged = stageCase(PendingSweepCaseLabel, fixture: HelloFixtureName)
+	let program = stagedMain(staged)
+
+	let first = runProgram(staged, program: program)
+	Expect.equal(first.exitCode(), expected: 0, message: "the first run failed, so there is no slot to plant a pending build in. It said: {first.stdout}{first.stderr}")
+
+	let ended = plantPendingBuild(PendingSweepCaseLabel, staged: staged, namespace: OwnHostNamespace, owner: endedProcessId(), serial: EndedOwnerSerial)
+	let live = plantPendingBuild(PendingSweepCaseLabel, staged: staged, namespace: OwnHostNamespace, owner: Process.id(), serial: LiveOwnerSerial)
+	let elsewhere = plantPendingBuild(PendingSweepCaseLabel, staged: staged, namespace: AnotherHost, owner: endedProcessId(), serial: AnotherHostSerial)
+	let olderCompiler = plantPendingBuildOfAnOlderCompiler(staged, owner: endedProcessId())
+
+	rewriteStagedMain(staged, replacing: HelloGreeting, becoming: "{HelloGreeting} again")
+
+	let second = runProgram(staged, program: program)
+	Expect.equal(second.exitCode(), expected: 0, message: "the run after the edit failed, so it published nothing that could have swept the slot. It said: {second.stdout}{second.stderr}")
+
+	Expect.isFalse(File.exists(ended), message: "{ended.toString()} is a build whose writer has ended on this host, so nothing will ever rename it into place, and a published build left it in the slot.")
+	Expect.isTrue(File.exists(live), message: "{live.toString()} names a process that is still running, whose rename into place may be pending, and a published build discarded it.")
+	Expect.isTrue(File.exists(elsewhere), message: "{elsewhere.toString()} was minted on another host, where its pid may be a process that is still writing it, and a published build discarded it on this host's say-so.")
+	Expect.isTrue(File.exists(olderCompiler), message: "{olderCompiler.toString()} carries no owner this compiler can read and is not yet stale, and a published build discarded it.")
+end 'publishing a build discards a pending build whose process ended on this host, and keeps the rest'

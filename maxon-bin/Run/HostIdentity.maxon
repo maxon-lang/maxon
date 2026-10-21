@@ -1,0 +1,101 @@
+let HostIdentitySeparator = "/"
+
+#if os(Windows)
+	let HostNameVariable = "COMPUTERNAME"
+#endif
+
+#if os(Linux)
+	let KernelHostNamePath = "/proc/sys/kernel/hostname"
+	let MachineIdPath = "/etc/machine-id"
+	let DbusMachineIdPath = "/var/lib/dbus/machine-id"
+#endif
+
+public union HostIdentity
+	known(text String)
+	unknown
+
+	public function canProbe() returns bool
+		return match self 'host'
+			known gives true
+			unknown gives false
+		end 'host'
+	end 'canProbe'
+
+	public function recorded(identity String) returns bool
+		return self.canProbe() and self.sameTextAs(identity)
+	end 'recorded'
+
+	function sameTextAs(identity String) returns bool
+		return match self 'host'
+			known(own) gives own == identity
+			unknown gives false
+		end 'host'
+	end 'sameTextAs'
+end 'HostIdentity'
+
+enum UnreadablePart implements Error
+	absent
+end 'UnreadablePart'
+
+// A pid is probed only under an identity equal to this one (`TreeLock.holderOf`, and the tag of a
+// scratch name), so the identity names the machine AND its pid space: probing another machine's or
+// container's pid would find it ended and take over what is live. A part that cannot be read leaves
+// the host unknown, which `recorded` matches to no record.
+public function thisHostIdentity() returns HostIdentity
+	#if os(Windows)
+		let hostName = try Process.environmentVariable(HostNameVariable) otherwise return HostIdentity.unknown
+		return hostIdentityNamed([hostName, Process.namespace()])
+	#endif
+
+	#if os(Linux)
+		let kernelName = try firstNamedIn([KernelHostNamePath]) otherwise return HostIdentity.unknown
+		let machineId = try firstNamedIn([MachineIdPath, DbusMachineIdPath]) otherwise return HostIdentity.unknown
+		return hostIdentityNamed([kernelName, machineId, Process.namespace()])
+	#endif
+
+	#if os(Macos)
+		return hostIdentityNamed([Process.namespace()])
+	#endif
+
+	#if os(Wasi)
+		return HostIdentity.unknown
+	#endif
+end 'thisHostIdentity'
+
+#if os(Linux)
+	function firstNamedIn(locations StringArray) returns String throws UnreadablePart
+		for location in locations 'eachLocation'
+			let path = try FilePath.from(location) otherwise panic("HostIdentity: '{location}' is not a valid path")
+
+			let text = try File.readText(path) otherwise (e) 'unread'
+				if e.failure() == FileFailure.notFound 'notHere'
+					continue
+				end 'notHere'
+
+				throw UnreadablePart.absent
+			end 'unread'
+
+			if not text.trim().isEmpty() 'named'
+				return text
+			end 'named'
+		end 'eachLocation'
+
+		throw UnreadablePart.absent
+	end 'firstNamedIn'
+#endif
+
+function hostIdentityNamed(parts StringArray) returns HostIdentity
+	var identity = String.from(osCanonicalName(detectHostTarget().os))
+
+	for part in parts 'eachPart'
+		let trimmed = part.trim()
+
+		if trimmed.isEmpty() 'namesNoHost'
+			return HostIdentity.unknown
+		end 'namesNoHost'
+
+		identity.append("{HostIdentitySeparator}{trimmed}")
+	end 'eachPart'
+
+	return HostIdentity.known(identity)
+end 'hostIdentityNamed'
