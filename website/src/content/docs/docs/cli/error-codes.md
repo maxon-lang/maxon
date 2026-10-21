@@ -325,7 +325,7 @@ A match arm names a case the scrutinee's enum does not have.
 
 ### E3035 — `enumWrongBindingCount`
 
-A match arm's payload-binding pattern supplies the wrong number of bindings for the case's payload. a match-arm payload-binding pattern (`case(x, y)`) supplies the wrong number of bindings for the case's declared payload. Emitted by `parseCaseBindingPattern` when an arity check can be performed at parse time, or deferred to TypeResolution when the case's owning union isn't yet known.
+A match arm's payload-binding pattern supplies the wrong number of bindings for the case's payload. a match-arm payload-binding pattern (`case(x, y)`) supplies the wrong number of bindings for the case's declared payload. Emitted at parse time by `parseCasePayloadBindings`, and by `requireErrorUnionBindingCount` for an error-union pattern.
 
 ### E3036 — `callArgCountMismatch`
 
@@ -381,7 +381,7 @@ an impure-function call's result was discarded without the explicit `_ =` opt-in
 
 ### E3066 — `semanticEnumNotComparable`
 
-A 'union' value is compared with '=='/'!='. Unions carry no synthesized equality; use 'match'. a `union` value was compared with `==` / `!=`. Unions carry no synthesized equality -- a new case can't be added without every match site being forced to handle it, so the only way to inspect a union is `match`. Enums (which auto-implement Equatable) are unaffected. Stdlib source is exempt (trusted). Emitted from `maybeRewriteCmpToEquals` in TypeResolution.
+A 'union' value is compared with '=='/'!='. Unions carry no synthesized equality; use 'match'. a `union` value was compared with `==` / `!=`. Unions carry no synthesized equality -- a new case can't be added without every match site being forced to handle it, so the only way to inspect a union is `match`. Enums (which auto-implement Equatable) are unaffected. Stdlib source is exempt (trusted). Emitted from `Parser.emitComparableCompare`.
 
 ### E3067 — `semanticSelfAssignment`
 
@@ -429,7 +429,7 @@ A match arm binds a case's payload values and then never reads them. Drop the bi
 
 ### E3082 — `semanticEmptyBlock`
 
-a labeled control-flow block (`if`/`else`/`while`/`for`) has no statements between its header and matching `end`. Refused so dead control-flow can't sneak past a refactor; emitted from `parseBodyOrEmpty` after `parseScopedStatements` reports no statements were consumed.
+a labeled control-flow block (`if`/`else`/`while`/`for`) has no statements between its header and matching `end`. Refused so dead control-flow can't sneak past a refactor; emitted from `parseBlockBody` when the token after the header is the block's `end`.
 
 ### E3083 — `tryBlockNoThrows`
 
@@ -491,7 +491,7 @@ A promise is stored in a slot -- a container, field, tuple, union payload or arr
 Erasing the error is the root of a family of bugs, all of which this refusal turns into impossibilities:
 
 - `otherwise (e)` has no type to give `e`, and silently hands back the raw i64 promise handle typed `int`;
-- an associated-value error's payload has no static type to mm\_decref, so it LEAKS (only a runtime `errorIsHeapPtr` bit in the box approximates the answer);
+- an associated-value error's payload has no static type to mm\_decref, so it LEAKS;
 - propagation (a bare `try await p` inside a `throws` function) has no error type to check the enclosing function's `throws` against, so a thunk throwing A can be awaited inside a function throwing B and A's ordinals reinterpreted as B's tags. A service reply kept with `let p = try h.m(x)` is a promise of the handler's own error alone -- the send's error is the `try`'s -- so it is stored as `Promise with (T, E)` when the message throws `E`, and as `Promise with T` when it throws nothing.
 
 ### E3100 — `promiseAlreadyAwaited`
