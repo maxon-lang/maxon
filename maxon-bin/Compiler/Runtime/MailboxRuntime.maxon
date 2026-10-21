@@ -915,7 +915,8 @@ function buildMboxSendQueue(module StdModule)
 	// A scheduler context has no green thread to park, and a renounced coroutine is never awaited, so
 	// both answer `full` at once. No drop can land between this read and the park commit: a dropper
 	// runs on the machine holding this sender's strand, which is busy running the sender
-	// (`__gt_promise_drop` checks it).
+	// (`__gt_promise_drop` checks it). The unlocked read is current for a drop that came earlier,
+	// because the strand changes machines only through its holder word's release and acquire.
 	let selfGt = emitLoadCurrentGt(module, block: waitCheck, ids: ids)
 	let stackBase = emitLoadField(module, block: waitCheck, record: selfGt, offset: GtOffStackBase, ids: ids)
 	let onGreenStack = emitCompareWithConstant(module, block: waitCheck, value: stackBase, pred: StdCmpPred.ne, against: 0, ids: ids)

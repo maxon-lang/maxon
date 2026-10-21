@@ -5948,6 +5948,11 @@ end 'buildGtCellComplete'
 // these reads and the arm's acts. The premise is checked against `SchedRuntime.MOffHeldStrand`, and
 // a drop on any other machine is fatal. A waker on another machine can still move `waiting` to
 // `ready` meanwhile, which the found-or-missed rule above answers.
+//
+// A send park's note is stable for the same reason: no waker rewrites `GtOffParkArg` (the mailbox
+// it names), and every waker of a sender claims `GtOffSendOutcome` by CAS, which an abandon that
+// arrives second loses. The mailbox record outlives the abandon because the parked sender's frame
+// holds the handle share it sends through, and the frame cannot unwind until this strand is given up.
 function buildGtPromiseDrop(module StdModule)
 	var func = IrFunction.createFromStd(GtPromiseDropName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
 	var ids = ValueMinter.create(1)
@@ -5963,8 +5968,6 @@ function buildGtPromiseDrop(module StdModule)
 	var notAwaiting = module.addBlock(func, label: b"droppednotawaiting", heat: BlockHeat.normal)
 	var pollerParked = module.addBlock(func, label: b"droppedpollerpark", heat: BlockHeat.normal)
 	var readParked = module.addBlock(func, label: b"droppedreadpark", heat: BlockHeat.normal)
-	var readCancel = module.addBlock(func, label: b"droppedreadcancel", heat: BlockHeat.normal)
-	var readMovedOn = module.addBlock(func, label: b"droppedreadmovedon", heat: BlockHeat.normal)
 	var netpollParked = module.addBlock(func, label: b"droppednetpoll", heat: BlockHeat.normal)
 	var netpollOwned = module.addBlock(func, label: b"droppednetpollowned", heat: BlockHeat.normal)
 	var notNetpollPark = module.addBlock(func, label: b"droppednotnetpoll", heat: BlockHeat.normal)
@@ -6045,35 +6048,16 @@ function buildGtPromiseDrop(module StdModule)
 	let inFlightSource = emitLoadField(module, block: pollerParked, record: gt, offset: GtOffIoSource, ids: ids)
 	emitBranchOnCompare(module, block: pollerParked, value: inFlightSource, pred: StdCmpPred.ne, against: 0, whenTrue: readParked, whenFalse: netpollParked, ids: ids)
 
-	// ⛔⛔ **THE CANCEL MUST NAME THE OPERATION THIS THREAD IS PARKED ON, AND ONLY A RE-READ UNDER THE LOCK SAYS
-	// SO.** The status this arm was chosen on was read without the lock: a packet landing since readies the
-	// thread, which can resume, finish its operation, give its source back and ISSUE ANOTHER on the same
-	// OVERLAPPED — and the cancel would then abort a request nobody dropped. Under the lock a `waiting` status
-	// is exact, because the only party that ends a poller park is a readiness walk and it holds this lock; and a
-	// thread that is `waiting` is not running, so its own `io_source` and `io_handle` cannot move either.
-	//
-	// ⛔ **AND THE CANCEL IS ISSUED UNDER THE SAME HOLD, BECAUSE THE PROOF EXPIRES THE INSTANT IT IS RELEASED.**
-	// Dropping the lock between the re-read and `CancelIoEx` is the very race the re-read closes. It costs
-	// nothing to hold it: the call is `SyscallClass.schedulerBound`, so no handoff happens inside it, and
-	// `CancelIoEx` only MARKS the request — it never waits on the poller that is waiting on this lock.
-	// ⚠ **`ManagedSocketRuntime.emitSocketOverlappedTransfer`'s cancel is outside the lock for a reason that does
-	// not apply here**: there a thread cancels its OWN in-flight request, so no second party can retire it
-	// underneath.
-	emitSchedLockEnter(module, block: readParked, ids: ids)
-	let readStatus = emitLoadField(module, block: readParked, record: gt, offset: GtOffStatus, ids: ids)
-	let stillReading = emitGtStatusEquals(module, block: readParked, status: readStatus, want: GtStatus.waiting, ids: ids)
-	module.setTerminator(readParked, op: StdOp.condBranch(stillReading, thenBlockId: readCancel.id, elseBlockId: readMovedOn.id))
-
-	let readHandle = emitLoadField(module, block: readCancel, record: gt, offset: GtOffIoHandle, ids: ids)
-	let readOvl = emitBin(module, block: readCancel, a: gt, b: emitConst(module, block: readCancel, value: GtOffOverlapped as FullRangeInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
-	module.appendOp(readCancel, op: StdOp.osCancelIo(readHandle, ovlId: readOvl))
-	emitSchedLockLeave(module, block: readCancel, ids: ids)
-	module.setTerminator(readCancel, op: StdOp.branch(queuedArm.id))
-
-	// The completion got there first, so the thread is queued and owes this dropper nothing but the consumer's
-	// half — the same fall-through every arm below makes.
-	emitSchedLockLeave(module, block: readMovedOn, ids: ids)
-	module.setTerminator(readMovedOn, op: StdOp.branch(queuedArm.id))
+	// ⛔ **THE CANCEL IS UNCONDITIONAL AND TAKES NO LOCK, AND A GUARD ON `waiting` WOULD BE A DEFECT.** The thread
+	// cannot run while this machine holds its strand, so `io_handle` and the embedded OVERLAPPED name the one
+	// request it issued last: either still in flight, or finished, and `CancelIoEx` on a finished request finds
+	// nothing and posts nothing. A thread readied by something other than its own packet — a socket's wait is
+	// readied by a readiness its request did not produce, and `emitSocketOverlappedTransfer` then waits again —
+	// would otherwise resume with the request still in flight and no one left to cancel it.
+	let readHandle = emitLoadField(module, block: readParked, record: gt, offset: GtOffIoHandle, ids: ids)
+	let readOvl = emitBin(module, block: readParked, a: gt, b: emitConst(module, block: readParked, value: GtOffOverlapped as FullRangeInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	module.appendOp(readParked, op: StdOp.osCancelIo(readHandle, ovlId: readOvl))
+	module.setTerminator(readParked, op: StdOp.branch(queuedArm.id))
 
 	// The poller's expiry takes the thread off its direction word and marks the wait, so its resumption answers
 	// `timedOut` rather than re-issuing a syscall on a descriptor nobody wants.
