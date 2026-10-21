@@ -115,6 +115,7 @@ tool_version() {
 		wasmtime)   echo "$WASMTIME_VERSION" ;;
 		wasm-tools) echo "$WASM_TOOLS_VERSION" ;;
 		wasm-opt)   echo "$BINARYEN_VERSION" ;;
+		*) echo "fetch-vendor.sh: no version is pinned for $1" >&2; return 1 ;;
 	esac
 }
 
