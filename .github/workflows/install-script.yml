@@ -15,9 +15,9 @@ name: install-script
 on:
   push:
     branches: [main]
-    paths: ['website/public/install.sh', 'website/public/install.ps1', 'website/public/_headers', '.github/workflows/install-script.yml']
+    paths: &installer-inputs ['website/public/install.sh', 'website/public/install.ps1', 'website/public/_headers', '.github/workflows/install-script.yml', 'maxon-bin/targets.tsv', 'scripts/targets/matrix.sh', 'scripts/lib/host-binaries.sh']
   pull_request:
-    paths: ['website/public/install.sh', 'website/public/install.ps1', 'website/public/_headers', '.github/workflows/install-script.yml']
+    paths: *installer-inputs
   workflow_dispatch:
 
 permissions:
@@ -57,20 +57,35 @@ jobs:
           $findings | Format-Table -AutoSize -Wrap
           if ($findings) { throw "PSScriptAnalyzer reported $(@($findings).Count) findings" }
 
+  targets:
+    runs-on: ubuntu-latest
+    outputs:
+      unix: ${{ steps.matrix.outputs.unix }}
+      windows: ${{ steps.matrix.outputs.windows }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            maxon-bin/targets.tsv
+            scripts/lib/host-binaries.sh
+            scripts/targets/matrix.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Read the installable targets from the table
+        id: matrix
+        run: |
+          unix="$(./scripts/targets/matrix.sh json channels=install-sh)"
+          windows="$(./scripts/targets/matrix.sh json --with edition=powershell,pwsh channels=install-ps1)"
+          {
+            echo "unix=$unix"
+            echo "windows=$windows"
+          } >> "$GITHUB_OUTPUT"
+
   install:
+    needs: targets
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15
-            target: arm64-macos
-            shell: zsh
-          - runner: ubuntu-latest
-            target: x64-linux
-            shell: bash
-          - runner: ubuntu-24.04-arm
-            target: arm64-linux
-            shell: bash
+      matrix: ${{ fromJSON(needs.targets.outputs.unix) }}
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -110,7 +125,7 @@ jobs:
           set -euo pipefail
           latest="$(gh release view --json tagName --jq .tagName)"
           work="$(mktemp -d)"
-          gh release download "$latest" --pattern "maxon-${latest#v}-${{ matrix.target }}.tar.gz" --dir "$work"
+          gh release download "$latest" --pattern "maxon-${latest#v}-${{ matrix.target }}.${{ matrix.archive }}" --dir "$work"
           tar -tzf "$work"/maxon-*.tar.gz | awk -F/ 'NF >= 3 && $3 != "" { print $2 }' | sort -u > "$work/dirs"
           cat "$work/dirs"
           [ -s "$work/dirs" ] || { echo "::error::the archive holds no directories at all"; exit 1; }
@@ -343,7 +358,7 @@ jobs:
           set -euo pipefail
           version="$(gh release view --json tagName --jq .tagName)"
           version="${version#v}"
-          asset="maxon-$version-${{ matrix.target }}.tar.gz"
+          asset="maxon-$version-${{ matrix.target }}.${{ matrix.archive }}"
           mirror="$(mktemp -d)"
           mkdir -p "$mirror/v$version"
           gh release download "v$version" --pattern "$asset" --dir "$mirror/v$version"
@@ -356,15 +371,63 @@ jobs:
           after="$(cksum < "$HOME/.maxon/bin/maxon")"
           [ "$before" = "$after" ] || { echo "::error::the failed install changed the existing one"; exit 1; }
 
+      - name: A release whose SHA256SUMS lists no build for this machine installs nothing and downloads no archive
+        run: |
+          set -euo pipefail
+          version="$(gh release view --json tagName --jq .tagName)"
+          version="${version#v}"
+          asset="maxon-$version-${{ matrix.target }}.${{ matrix.archive }}"
+          mirror="$(mktemp -d)"
+          mkdir -p "$mirror/v$version"
+          gh release download "v$version" --pattern "$asset" --dir "$mirror/v$version"
+          gh release download "v$version" --pattern SHA256SUMS --dir "$mirror/v$version"
+          { grep -vF -- "$asset" "$mirror/v$version/SHA256SUMS" || [ "$?" -eq 1 ]; } > "$mirror/unlisted"
+          mv "$mirror/unlisted" "$mirror/v$version/SHA256SUMS"
+          [ -s "$mirror/v$version/SHA256SUMS" ] || { echo "::error::the release lists no other build, so the mirror proves nothing"; exit 1; }
+          requests="$mirror/requests.log"
+          python3 -u -m http.server 8765 --bind 127.0.0.1 --directory "$mirror" > /dev/null 2> "$requests" &
+          server=$!
+          ready=no
+          for _ in $(seq 1 50); do
+            if curl -fsS -o /dev/null http://127.0.0.1:8765/ 2> /dev/null; then
+              ready=yes
+              break
+            fi
+            sleep 0.2
+          done
+          if [ "$ready" != yes ]; then
+            kill "$server" 2> /dev/null || true
+            echo "::error::the mirror never came up"
+            exit 1
+          fi
+          before="$(cksum < "$HOME/.maxon/bin/maxon")"
+          status=0
+          out="$(MAXON_DOWNLOAD_BASE=http://127.0.0.1:8765 sh -s -- --version "$version" --force < website/public/install.sh 2>&1)" || status=$?
+          kill "$server" 2> /dev/null || true
+          wait "$server" 2> /dev/null || true
+          echo "$out"
+          [ "$status" -ne 0 ] || { echo "::error::an install with no listed build succeeded"; exit 1; }
+          case "$out" in
+            *"Maxon v$version has no build for ${{ matrix.target }}"*) ;;
+            *) echo "::error::the refusal did not say that v$version has no build for ${{ matrix.target }}"; exit 1 ;;
+          esac
+          grep -qF "/v$version/SHA256SUMS" "$requests" || { echo "::error::the installer never read SHA256SUMS"; exit 1; }
+          if grep -qF "$asset" "$requests"; then
+            echo "::error::the installer asked the mirror for $asset"
+            exit 1
+          fi
+          after="$(cksum < "$HOME/.maxon/bin/maxon")"
+          [ "$before" = "$after" ] || { echo "::error::the refused install changed the existing one"; exit 1; }
+
   windows:
+    needs: targets
     strategy:
       fail-fast: false
-      matrix:
-        shell: [powershell, pwsh]
-    runs-on: windows-latest
+      matrix: ${{ fromJSON(needs.targets.outputs.windows) }}
+    runs-on: ${{ matrix.runner }}
     defaults:
       run:
-        shell: ${{ matrix.shell }}
+        shell: ${{ matrix.edition }}
     env:
       GH_TOKEN: ${{ github.token }}
       # The first release that has `maxon upgrade`, so the oldest install one can move forward.
@@ -405,7 +468,7 @@ jobs:
         run: |
           $tag = (gh release view --json tagName --jq .tagName)
           $work = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'shape')
-          gh release download $tag --pattern "maxon-$($tag.TrimStart('v'))-x64-windows.zip" --dir $work
+          gh release download $tag --pattern "maxon-$($tag.TrimStart('v'))-${{ matrix.target }}.${{ matrix.archive }}" --dir $work
           $zip = (Get-ChildItem -LiteralPath $work -Filter *.zip)[0].FullName
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $archive = [IO.Compression.ZipFile]::OpenRead($zip)
@@ -591,7 +654,7 @@ jobs:
         run: |
           $install = [scriptblock]::Create((Get-Content -Raw website/public/install.ps1))
           $version = (gh release view --json tagName --jq .tagName).TrimStart('v')
-          $asset = "maxon-$version-x64-windows.zip"
+          $asset = "maxon-$version-${{ matrix.target }}.${{ matrix.archive }}"
           $mirror = Join-Path $env:RUNNER_TEMP 'mirror'
           $dir = New-Item -ItemType Directory -Force -Path "$mirror\v$version"
           gh release download "v$version" --pattern $asset --dir $dir
@@ -604,6 +667,57 @@ jobs:
           if ($LASTEXITCODE -ne 1) { throw 'a tampered SHA256SUMS was accepted' }
           if ((Get-FileHash "$HOME\.maxon\bin\maxon.exe").Hash -ne $before) { throw 'the failed install changed the existing one' }
           $global:LASTEXITCODE = 0
+
+      - name: A release whose SHA256SUMS lists no build for this machine installs nothing and downloads no archive
+        run: |
+          $script = (Resolve-Path website/public/install.ps1).Path
+          $version = (gh release view --json tagName --jq .tagName).TrimStart('v')
+          $asset = "maxon-$version-${{ matrix.target }}.${{ matrix.archive }}"
+          $mirror = Join-Path $env:RUNNER_TEMP 'mirror-unlisted'
+          $dir = (New-Item -ItemType Directory -Force -Path "$mirror\v$version").FullName
+          gh release download "v$version" --pattern $asset --dir $dir
+          gh release download "v$version" --pattern SHA256SUMS --dir $dir
+          $kept = @(Get-Content -LiteralPath "$dir\SHA256SUMS" | Where-Object { $_ -notlike "*$asset*" })
+          if ($kept.Count -eq 0) { throw 'the release lists no other build, so the mirror proves nothing' }
+          Set-Content -LiteralPath "$dir\SHA256SUMS" -Value $kept -Encoding ascii
+          $requests = Join-Path $env:RUNNER_TEMP 'mirror-unlisted.log'
+          $server = Start-Process python -ArgumentList '-u', '-m', 'http.server', '8766', '--bind', '127.0.0.1', '--directory', $mirror -PassThru -WindowStyle Hidden -RedirectStandardError $requests
+          $ready = $false
+          foreach ($attempt in 1..50) {
+            try {
+              $null = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8766/' -TimeoutSec 2
+              $ready = $true
+              break
+            } catch {
+              Start-Sleep -Milliseconds 200
+            }
+          }
+          if (-not $ready) {
+            Stop-Process -Id $server.Id -ErrorAction SilentlyContinue
+            throw 'the mirror never came up'
+          }
+          $before = (Get-FileHash "$HOME\.maxon\bin\maxon.exe").Hash
+          $env:MAXON_DOWNLOAD_BASE = 'http://127.0.0.1:8766'
+          $command = "& ([scriptblock]::Create((Get-Content -Raw '$script'))) -Version $version -Force -NoPathUpdate; exit `$LASTEXITCODE"
+          $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+          $info = New-Object Diagnostics.ProcessStartInfo '${{ matrix.edition }}.exe', "-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded"
+          $info.UseShellExecute = $false
+          $info.RedirectStandardError = $true
+          try {
+            $child = [Diagnostics.Process]::Start($info)
+            $err = $child.StandardError.ReadToEnd()
+            $child.WaitForExit()
+          } finally {
+            Stop-Process -Id $server.Id -ErrorAction SilentlyContinue
+            $server.WaitForExit()
+          }
+          $err
+          if ($child.ExitCode -eq 0) { throw 'an install with no listed build succeeded' }
+          if ($err -notlike "*Maxon v$version has no build for ${{ matrix.target }}*") { throw "the refusal did not say that v$version has no build for ${{ matrix.target }}" }
+          $served = Get-Content -Raw -LiteralPath $requests
+          if ($served -notlike "*/v$version/SHA256SUMS*") { throw 'the installer never read SHA256SUMS' }
+          if ($served -like "*$asset*") { throw "the installer asked the mirror for $asset" }
+          if ((Get-FileHash "$HOME\.maxon\bin\maxon.exe").Hash -ne $before) { throw 'the refused install changed the existing one' }
 
       - name: A scriptlib package the new compiler rejects is reported, and the install still succeeds
         run: |

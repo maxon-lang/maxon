@@ -1,0 +1,29 @@
+// Not in `Target.maxon`: `tests/support/ScratchNames.maxon` compiles that file without the rest of the
+// compiler, where these exports would be unused (E3092).
+
+export union TargetResolution
+	resolved(target Target)
+	unrecognized(spec String)
+end 'TargetResolution'
+
+// Matched against `targetToString`, so a target is accepted in exactly the spelling every roster and
+// refusal prints.
+export function resolveTarget(spelling String, among TargetArray) returns TargetResolution
+	for candidate in among 'eachCandidate'
+		if targetToString(candidate) == spelling 'spelledSo'
+			return TargetResolution.resolved(candidate)
+		end 'spelledSo'
+	end 'eachCandidate'
+
+	return TargetResolution.unrecognized(spelling)
+end 'resolveTarget'
+
+export function targetRoster(among TargetArray) returns String
+	var spellings = StringArray.create()
+
+	for target in among 'eachTarget'
+		spellings.push(targetToString(target))
+	end 'eachTarget'
+
+	return joinedWith(spellings, separator: ListSeparator)
+end 'targetRoster'

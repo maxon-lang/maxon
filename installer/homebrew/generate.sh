@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Generate the Homebrew formula for a built release, into dist/homebrew/: arm64 macOS, x64 and arm64 Linux.
+# Generate the Homebrew formula for a built release, into dist/homebrew/, for every target whose
+# `channels` cell in maxon-bin/targets.tsv holds `homebrew`.
 #
 # ⭐ HOMEBREW MAKES MAXON USABLE IN THE SHELL THAT INSTALLED IT. `brew install` links the binary into
 # Homebrew's `bin` — `/opt/homebrew/bin` on macOS, `/home/linuxbrew/.linuxbrew/bin` on Linux — which is
@@ -36,32 +37,129 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$repo_root"
 
+# shellcheck source=scripts/lib/host-binaries.sh
+. scripts/lib/host-binaries.sh
+
 DIST="dist"
 OUT="$DIST/homebrew"
 REPO="maxon-lang/maxon"
 
-# One archive per platform the formula serves. Intel Macs have no build, so the formula refuses them
-# on macOS rather than naming a download that does not exist.
 archive_for() {
-	local found
-	found="$(find "$DIST" -maxdepth 1 -type f -name "maxon-*-$1.tar.gz" | head -n1 || true)"
-	[ -n "$found" ] || { echo "homebrew: no $1 archive in $DIST — download the release's archives first" >&2; exit 1; }
+	local archive_ext matches found
+
+	archive_ext="$(maxon_target_archive_ext "$1")" || { echo "homebrew: $1 has no archive extension in $MAXON_TARGETS_TABLE" >&2; exit 1; }
+	matches="$(find "$DIST" -maxdepth 1 -type f -name "maxon-*-$1.$archive_ext" | sort)" || { echo "homebrew: could not search $DIST for the $1 archive" >&2; exit 1; }
+	found="${matches%%$'\n'*}"
+	[ -n "$found" ] || { echo "homebrew: no $1 archive (maxon-*-$1.$archive_ext) in $DIST — download the release's archives first" >&2; exit 1; }
 	echo "$found"
 }
 
-macos_archive="$(archive_for arm64-macos)"
-linux_x64_archive="$(archive_for x64-linux)"
-linux_arm_archive="$(archive_for arm64-linux)"
+cpu_of() { echo "${1%%-*}"; }
+os_of() { echo "${1#*-}"; }
+
+formula_os_block() {
+	case "$1" in
+		macos) echo "on_macos" ;;
+		linux) echo "on_linux" ;;
+		*) echo "homebrew: the formula has no block for the operating system '$1'" >&2; exit 1 ;;
+	esac
+}
+
+formula_cpu_block() {
+	case "$1" in
+		x64)   echo "on_intel" ;;
+		arm64) echo "on_arm" ;;
+		*) echo "homebrew: the formula has no block for the cpu '$1'" >&2; exit 1 ;;
+	esac
+}
+
+formula_cpu_symbol() {
+	case "$1" in
+		x64)   echo "x86_64" ;;
+		arm64) echo "arm64" ;;
+		*) echo "homebrew: the formula has no architecture symbol for the cpu '$1'" >&2; exit 1 ;;
+	esac
+}
+
+homebrew_rows="$(maxon_table_select target channels=homebrew)"
+[ -n "$homebrew_rows" ] || { echo "homebrew: $MAXON_TARGETS_TABLE lists no target in the homebrew channel" >&2; exit 1; }
+
+FormulaOperatingSystems="macos linux"
+FormulaCpus="x64 arm64"
+
+for target in $homebrew_rows; do
+	formula_os_block "$(os_of "$target")" > /dev/null
+	formula_cpu_block "$(cpu_of "$target")" > /dev/null
+	formula_cpu_symbol "$(cpu_of "$target")" > /dev/null
+done
+
+targets=()
+archives=()
+operating_systems=()
+
+homebrew_targets=" $(printf '%s' "$homebrew_rows" | tr '\n' ' ') "
+
+for operating_system in $FormulaOperatingSystems; do
+	for cpu in $FormulaCpus; do
+		case "$homebrew_targets" in
+			*" $cpu-$operating_system "*) ;;
+			*) continue ;;
+		esac
+
+		archive="$(archive_for "$cpu-$operating_system")"
+		targets+=("$cpu-$operating_system")
+		archives+=("$archive")
+
+		case " ${operating_systems[*]-} " in
+			*" $operating_system "*) ;;
+			*) operating_systems+=("$operating_system") ;;
+		esac
+	done
+done
 
 version="${1:-}"
 if [ -z "$version" ]; then
-	version="$(basename "$macos_archive" .tar.gz)"
+	version="$(basename "${archives[0]}")"
 	version="${version#maxon-}"
-	version="${version%-arm64-macos}"
+	version="${version%-"${targets[0]}".*}"
 fi
 
 url_of() { echo "https://github.com/$REPO/releases/download/v$version/$(basename "$1")"; }
 sha_of() { sha256sum "$1" | cut -d' ' -f1; }
+
+emit_os_block() {
+	local operating_system="$1" index cpu_count=0
+
+	for index in "${!targets[@]}"; do
+		if [ "$(os_of "${targets[$index]}")" = "$operating_system" ]; then
+			cpu_count=$((cpu_count + 1))
+		fi
+	done
+
+	echo "  $(formula_os_block "$operating_system") do"
+
+	# An operating system served on one cpu only pins it, so Homebrew refuses the other cpu there rather
+	# than resolving a formula with no download.
+	if [ "$cpu_count" -eq 1 ]; then
+		for index in "${!targets[@]}"; do
+			if [ "$(os_of "${targets[$index]}")" = "$operating_system" ]; then
+				echo "    depends_on arch: :$(formula_cpu_symbol "$(cpu_of "${targets[$index]}")")"
+			fi
+		done
+	fi
+
+	for index in "${!targets[@]}"; do
+		if [ "$(os_of "${targets[$index]}")" = "$operating_system" ]; then
+			echo "    $(formula_cpu_block "$(cpu_of "${targets[$index]}")") do"
+			echo "      url \"$(url_of "${archives[$index]}")\""
+			echo "      sha256 \"$(sha_of "${archives[$index]}")\""
+			echo "    end"
+		fi
+	done
+
+	echo "  end"
+	echo
+}
 
 mkdir -p "$OUT"
 formula="$OUT/maxon.rb"
@@ -74,26 +172,11 @@ class Maxon < Formula
   homepage "https://maxon.dev"
   license any_of: ["MIT", "Apache-2.0"]
 
-  on_macos do
-    depends_on arch: :arm64
-    on_arm do
-      url "$(url_of "$macos_archive")"
-      sha256 "$(sha_of "$macos_archive")"
-    end
-  end
-
-  on_linux do
-    on_intel do
-      url "$(url_of "$linux_x64_archive")"
-      sha256 "$(sha_of "$linux_x64_archive")"
-    end
-    on_arm do
-      url "$(url_of "$linux_arm_archive")"
-      sha256 "$(sha_of "$linux_arm_archive")"
-    end
-  end
-
 EOF
+
+	for operating_system in "${operating_systems[@]}"; do
+		emit_os_block "$operating_system"
+	done
 
 	cat <<'EOF'
   def install
@@ -124,9 +207,9 @@ EOF
 } > "$formula"
 
 echo "homebrew: wrote $formula for $version"
-echo "  arm64-macos: $(basename "$macos_archive")"
-echo "  x64-linux:   $(basename "$linux_x64_archive")"
-echo "  arm64-linux: $(basename "$linux_arm_archive")"
+for index in "${!targets[@]}"; do
+	printf '  %-12s %s\n' "${targets[$index]}:" "$(basename "${archives[$index]}")"
+done
 echo
 echo "⚠ The release must be live before the formula resolves. To publish it:"
 echo "    commit this file to maxon-lang/homebrew-tap as Formula/maxon.rb"

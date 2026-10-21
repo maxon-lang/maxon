@@ -1,4 +1,4 @@
-# Every push and pull request: build the compiler and run the whole suite, on all four targets.
+# Every push and pull request: build the compiler and run the whole suite, on every native target.
 #
 # ⭐⭐ EACH TARGET IS BUILT AND TESTED ON ITS OWN ARCHITECTURE, for the release workflow's reason: a
 # green matrix that cross-compiled three of its lanes reports coverage it never had.
@@ -18,8 +18,8 @@
 # editor and agent config, and projects with workflows of their own. `tests/` and `scripts/`
 # are excluded because no job here runs the rest of them, so a run on their change reports on code it
 # never touched; the corpora and scripts a job does run are re-included, and so are the website pages
-# whose snippets `tests/examples` compiles. A step that starts running
-# another script needs that script re-included here.
+# whose snippets `tests/examples` compiles and the workflows and installers `tests/targets` reads. A
+# step that starts running another script needs that script re-included here.
 #
 # ⛔ THE LIST IS EXCLUSIONS, AND A RE-INCLUSION IS WRITTEN ONLY FOR A PATH A JOB READS. A new
 # directory therefore runs CI until someone decides it need not, rather than being skipped silently
@@ -66,6 +66,7 @@ on:
       - 'tests/examples/**'
       - 'tests/emittedRuntime/**'
       - 'tests/support/**'
+      - 'tests/targets/**'
       - '!scripts/**'
       - 'scripts/fetch-seed.sh'
       - 'scripts/seed-tag'
@@ -78,9 +79,14 @@ on:
       - 'scripts/multicore-stress/**'
       - 'scripts/library-cache/**'
       - 'scripts/seed-shim/**'
+      - 'scripts/targets/**'
+      - 'installer/docker/Dockerfile'
+      - 'installer/homebrew/generate.sh'
       - '!.github/**'
-      - '.github/workflows/ci.yml'
+      - '.github/workflows/*.yml'
       - 'README.md'
+      - 'website/public/install.sh'
+      - 'website/public/install.ps1'
       - 'website/src/pages/index.astro'
       - 'website/src/content/docs/docs/getting-started/first-program.md'
       - 'website/src/content/docs/docs/getting-started/introduction.md'
@@ -111,23 +117,30 @@ permissions:
   contents: read
 
 jobs:
+  targets:
+    runs-on: ubuntu-latest
+    outputs:
+      native: ${{ steps.matrix.outputs.native }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            maxon-bin/targets.tsv
+            scripts/lib/host-binaries.sh
+            scripts/targets/matrix.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Read the native targets from the table
+        id: matrix
+        run: |
+          matrix="$(./scripts/targets/matrix.sh json native)"
+          echo "native=$matrix" >> "$GITHUB_OUTPUT"
+
   suite:
+    needs: targets
     strategy: &lanes
       fail-fast: false
-      matrix:
-        include:
-          - target: x64-windows
-            runner: windows-latest
-            debugger: yes
-          - target: x64-linux
-            runner: ubuntu-latest
-            debugger: yes
-          - target: arm64-macos
-            runner: macos-15
-            debugger: yes
-          - target: arm64-linux
-            runner: ubuntu-24.04-arm
-            debugger: yes
+      matrix: ${{ fromJSON(needs.targets.outputs.native) }}
     runs-on: ${{ matrix.runner }}
     defaults: &bash-steps
       run:
@@ -135,8 +148,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # A role is matched with a comma on each side, so a role named inside another cannot select a lane.
       - name: Runner CPU
-        if: matrix.target == 'x64-windows'
+        if: contains(format(',{0},', matrix.roles), ',cpu-probe,')
         continue-on-error: true
         shell: pwsh
         run: |
@@ -165,7 +179,7 @@ jobs:
           exit 0
 
       - name: Library cache codecs
-        if: matrix.target == 'x64-linux'
+        if: contains(format(',{0},', matrix.roles), ',codecs,')
         run: python3 scripts/library-cache/generate-codecs.py --check
 
       # The seed is the binary alone; `scripts/fetch-seed.sh` says why and is the one place that fetches it.
@@ -213,9 +227,9 @@ jobs:
         if: steps.seed.outputs.seeded == 'yes'
         run: ./maxon-bin/.maxon/maxon test tests/fmt
 
-      # `tests/specHarness` runs a spec batch under wasm32-wasi, and `tests/cli` builds wasm32-wasi from this
+      # `tests/specHarness` runs a spec batch under the wasm target, and `tests/cli` builds it from this
       # checkout: wrapping the core module into a component needs `vendor/wasm-tools` (E6005 without it),
-      # and the wasm32-wasi suite below runs its programs under `vendor/wasmtime`. `vendor/` is gitignored,
+      # and the cross-target suite below runs its programs under `vendor/wasmtime`. `vendor/` is gitignored,
       # so nothing else stages it.
       - name: Stage vendor
         if: steps.seed.outputs.seeded == 'yes'
@@ -283,9 +297,22 @@ jobs:
 
       # One lane: its programs run under `vendor/wasmtime`, staged above, rather than on the runner's
       # OS, so no lane's host changes what they run on.
-      - name: wasm32-wasi suite
-        if: steps.seed.outputs.seeded == 'yes' && matrix.target == 'x64-linux'
-        run: ./maxon-bin/.maxon/maxon spec-test --target=wasm32-wasi
+      - name: Cross-target suites
+        if: steps.seed.outputs.seeded == 'yes' && contains(format(',{0},', matrix.roles), ',cross-suite,')
+        run: |
+          set -euo pipefail
+          targets="$(./scripts/targets/matrix.sh list target cross)"
+          for target in $targets; do
+            ./maxon-bin/.maxon/maxon spec-test --target="$target"
+          done
+
+      - name: Targets table is generated and agrees with the compiler
+        if: steps.seed.outputs.seeded == 'yes' && contains(format(',{0},', matrix.roles), ',targets-gate,')
+        run: ./scripts/targets/generate.sh --check
+
+      - name: Targets corpus
+        if: steps.seed.outputs.seeded == 'yes' && contains(format(',{0},', matrix.roles), ',targets-gate,')
+        run: ./maxon-bin/.maxon/maxon test tests/targets
 
       # ⭐ THE FIXPOINT IS THE ONE CHECK A GREEN SUITE CANNOT STAND IN FOR. Every stage shares the
       # compiler's logic, so the suite exercises the same behaviour whichever stage ran it; only the
@@ -334,7 +361,7 @@ jobs:
         if: steps.decide.outputs.freeze == 'yes'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./scripts/fetch-seed.sh x64-linux
+        run: ./scripts/fetch-seed.sh
 
       - name: Build
         if: steps.decide.outputs.freeze == 'yes'
@@ -354,7 +381,7 @@ jobs:
           if-no-files-found: error
 
   prove:
-    needs: freeze
+    needs: [targets, freeze]
     if: needs.freeze.outputs.freeze == 'yes'
     strategy: *lanes
     runs-on: ${{ matrix.runner }}

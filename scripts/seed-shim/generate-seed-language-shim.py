@@ -81,7 +81,11 @@ from maxon_source import FieldDefaultShapeError, field_default_type
 
 PATCH_NAME = "0010-withdraw-the-language-forms-the-seed-cannot-parse-from-the-first-build.patch"
 SOURCE_DIRS = ["maxon-bin", "stdlib", "runtime"]
-NATIVE_TARGETS = ["x64-windows", "x64-linux", "arm64-macos", "arm64-linux"]
+TARGETS_TABLE = os.path.join("maxon-bin", "targets.tsv")
+TABLE_SEPARATOR = "\t"
+NO_VALUE = "-"
+TARGET_COLUMN = "target"
+RUNNER_COLUMN = "runner"
 MAX_ROUNDS = 800
 MAX_ATTEMPTS_PER_SITE = 10
 VIEW_DIR = "view"
@@ -2745,6 +2749,41 @@ def withdraw_older_seed_forms(work):
 	return 0
 
 
+def native_targets(tree):
+	def refuse(reason):
+		raise SystemExit(f"generate-seed-language-shim.py: {TARGETS_TABLE} {reason}")
+
+	with open(os.path.join(tree, TARGETS_TABLE), encoding="utf-8") as table:
+		lines = [(number, line.rstrip("\r\n")) for number, line in enumerate(table, start=1) if line.strip()]
+
+	if not lines:
+		refuse("is empty")
+
+	header = lines[0][1].split(TABLE_SEPARATOR)
+
+	for column in (TARGET_COLUMN, RUNNER_COLUMN):
+		if column not in header:
+			refuse(f"has no `{column}` column")
+
+	target_at = header.index(TARGET_COLUMN)
+	runner_at = header.index(RUNNER_COLUMN)
+	natives = []
+
+	for number, line in lines[1:]:
+		row = line.split(TABLE_SEPARATOR)
+
+		if len(row) != len(header):
+			refuse(f"row {number} has {len(row)} fields but the header has {len(header)}: {line}")
+
+		if row[runner_at] != NO_VALUE:
+			natives.append(row[target_at])
+
+	if not natives:
+		refuse("lists no native target")
+
+	return natives
+
+
 def main():
 	started = time.monotonic()
 	here = os.path.dirname(os.path.abspath(__file__))
@@ -2787,9 +2826,10 @@ def main():
 	rewriter = Rewriter(work, parents, ranges, view_names, view_sources)
 	rounds = 0
 	verified = {}
+	lanes = native_targets(tree)
 
-	while any(verified.get(lane) != rewriter.generation for lane in NATIVE_TARGETS):
-		stale = next(lane for lane in NATIVE_TARGETS if verified.get(lane) != rewriter.generation)
+	while any(verified.get(lane) != rewriter.generation for lane in lanes):
+		stale = next(lane for lane in lanes if verified.get(lane) != rewriter.generation)
 		rounds = converge(work, os.path.basename(seed), [stale], rewriter, rounds, started, verified)
 
 		if rounds is None:

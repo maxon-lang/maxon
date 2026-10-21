@@ -27,9 +27,9 @@ on:
         required: false
   push:
     branches: [main]
-    paths: ['installer/docker/**', '.github/workflows/docker.yml']
+    paths: &docker-inputs ['installer/docker/**', '.github/workflows/docker.yml', 'maxon-bin/targets.tsv', 'scripts/targets/matrix.sh', 'scripts/lib/host-binaries.sh']
   pull_request:
-    paths: ['installer/docker/**', '.github/workflows/docker.yml']
+    paths: *docker-inputs
 
 permissions:
   contents: read
@@ -74,18 +74,35 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "version $version, publish $publish, newest release $newest"
 
+  targets:
+    runs-on: ubuntu-latest
+    outputs:
+      images: ${{ steps.matrix.outputs.images }}
+      platforms: ${{ steps.matrix.outputs.platforms }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            maxon-bin/targets.tsv
+            scripts/lib/host-binaries.sh
+            scripts/targets/matrix.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Read the image platforms from the table
+        id: matrix
+        run: |
+          images="$(./scripts/targets/matrix.sh json --with variant=debian,distroless channels=docker)"
+          platforms="$(./scripts/targets/matrix.sh json channels=docker)"
+          {
+            echo "images=$images"
+            echo "platforms=$platforms"
+          } >> "$GITHUB_OUTPUT"
+
   build:
-    needs: plan
+    needs: [plan, targets]
     strategy:
       fail-fast: false
-      matrix:
-        variant: [debian, distroless]
-        arch: [amd64, arm64]
-        include:
-          - arch: amd64
-            runner: ubuntu-latest
-          - arch: arm64
-            runner: ubuntu-24.04-arm
+      matrix: ${{ fromJSON(needs.targets.outputs.images) }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -102,7 +119,7 @@ jobs:
         with:
           context: installer/docker
           target: ${{ matrix.variant }}
-          platforms: linux/${{ matrix.arch }}
+          platforms: linux/${{ matrix.docker }}
           build-args: VERSION=${{ env.VERSION }}
           load: true
           tags: maxon-test:${{ matrix.variant }}
@@ -147,7 +164,7 @@ jobs:
         with:
           context: installer/docker
           target: ${{ matrix.variant }}
-          platforms: linux/${{ matrix.arch }}
+          platforms: linux/${{ matrix.docker }}
           build-args: VERSION=${{ env.VERSION }}
           labels: org.opencontainers.image.version=${{ env.VERSION }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
@@ -163,7 +180,7 @@ jobs:
       - uses: actions/upload-artifact@v6
         if: needs.plan.outputs.publish == 'yes'
         with:
-          name: digest-${{ matrix.variant }}-${{ matrix.arch }}
+          name: digest-${{ matrix.variant }}-${{ matrix.docker }}
           path: digests/*
           if-no-files-found: error
 
@@ -217,14 +234,13 @@ jobs:
 
   # What a user pulls, by the tag they would use, on both architectures.
   verify:
-    needs: [plan, merge]
+    needs: [plan, merge, targets]
     permissions:
       contents: read
       packages: read
     strategy:
       fail-fast: false
-      matrix:
-        runner: [ubuntu-latest, ubuntu-24.04-arm]
+      matrix: ${{ fromJSON(needs.targets.outputs.platforms) }}
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: docker/login-action@v3

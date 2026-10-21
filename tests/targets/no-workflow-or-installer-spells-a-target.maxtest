@@ -1,0 +1,42 @@
+let WorkflowsDir = ".github/workflows"
+let WorkflowSuffix = ".yml"
+let FirstLineNumber = 1
+
+function installerPaths() returns StringArray
+	return ["website/public/install.sh", "website/public/install.ps1", "installer/docker/Dockerfile", "installer/homebrew/generate.sh"]
+end 'installerPaths'
+
+test 'no workflow or installer spells a target'
+	let targets = tableTargets()
+	Expect.isTrue(targets.count() > 0, message: "{TargetsTablePath} lists no target, so the search below would be vacuous.")
+
+	let workflows = try FilePath.from(WorkflowsDir) otherwise panic("the gate could not run — '{WorkflowsDir}' is not a spellable path.")
+	var files = StringArray.create()
+
+	for entry in listing(workflows) 'eachEntry'
+		if entry.filename().endsWith(WorkflowSuffix) 'aWorkflow'
+			files.push("{WorkflowsDir}{PortablePathSeparator}{entry.filename()}")
+		end 'aWorkflow'
+	end 'eachEntry'
+
+	Expect.isTrue(files.count() > 0, message: "{WorkflowsDir} holds no *{WorkflowSuffix} file, so the search below would miss every workflow.")
+
+	files.append(installerPaths())
+	files.sort()
+
+	var findings = StringArray.create()
+
+	for file in files 'eachFile'
+		let path = try FilePath.from(file) otherwise panic("the gate could not run — '{file}' is not a spellable path.")
+
+		for (iter, line) in outputLines(fileText(path)).withIterator() 'eachLine'
+			for target in targets 'eachTarget'
+				if line.contains(target) 'spellsIt'
+					findings.push("{file}:{iter.index() + FirstLineNumber}: `{target}`")
+				end 'spellsIt'
+			end 'eachTarget'
+		end 'eachLine'
+	end 'eachFile'
+
+	Expect.isTrue(findings.isEmpty(), message: "these lines spell a target {TargetsTablePath} lists instead of reading it from the table:{renderedFindings(findings)}")
+end 'no workflow or installer spells a target'

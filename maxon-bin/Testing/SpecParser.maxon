@@ -1508,13 +1508,13 @@ type CaseBuilder
 
 	function readTargetIrPin(lines StringArray, index ElementIndex, fenceLine String) returns ElementIndex
 		if fenceLine == TargetIrFence 'unqualified'
-			panic("SpecParser: {specPath.toString()}:{index + 1}: test '{name}' opens a bare `{TargetIrFence}` fence. A Target IR pin is always qualified by the lane it was rendered for (`{TargetIrQualifiedFencePrefix}<target>`, one of {pinnableTargetKeyList()}), because the text of one lane means nothing on another")
+			panic("SpecParser: {specPath.toString()}:{index + 1}: test '{name}' opens a bare `{TargetIrFence}` fence. A Target IR pin is always qualified by the lane it was rendered for (`{TargetIrQualifiedFencePrefix}<target>`, one of {targetRoster(pinnableTargets())}), because the text of one lane means nothing on another")
 		end 'unqualified'
 
 		let qualifier = valueAfterKey(fenceLine, key: TargetIrQualifiedFencePrefix)
 
 		if not namesPinnableTarget(qualifier) 'unpinnableLane'
-			panic("SpecParser: {specPath.toString()}:{index + 1}: test '{name}' carries the fence '{fenceLine}' naming '{qualifier}', which is not a lane that renders Target IR ({pinnableTargetKeyList()}). A pin nothing can compare changes nothing while reading as a gate")
+			panic("SpecParser: {specPath.toString()}:{index + 1}: test '{name}' carries the fence '{fenceLine}' naming '{qualifier}', which is not a lane that renders Target IR ({targetRoster(pinnableTargets())}). A pin nothing can compare changes nothing while reading as a gate")
 		end 'unpinnableLane'
 
 		self.claimBlock(fenceLine, lineIndex: index)
@@ -2203,63 +2203,39 @@ function parseUnsupportedTargetKeys(opening String, specPath FilePath, testName 
 	end 'eachTarget'
 
 	if result.count() == supportedTargets().count() 'excludesEverything'
-		panic("SpecParser: {specPath.toString()}: test '{testName}' excludes every supported target ({supportedTargetKeyList()}), so it runs nowhere. A case no target runs tests nothing while reading as coverage — fix it so some target can run it, or delete it")
+		panic("SpecParser: {specPath.toString()}: test '{testName}' excludes every supported target ({targetRoster(supportedTargets())}), so it runs nowhere. A case no target runs tests nothing while reading as coverage — fix it so some target can run it, or delete it")
 	end 'excludesEverything'
 
 	return result
 end 'parseUnsupportedTargetKeys'
 
 function requireSupportedTargetKey(key String, spelledIn String, specPath FilePath, testName String)
-	if not namesSupportedTarget(key) 'unknownKey'
-		panic("SpecParser: {specPath.toString()}: test '{testName}' carries {spelledIn} naming '{key}', which is not a target this compiler supports ({supportedTargetKeyList()}). A key nothing matches changes which lanes run the case while reading as though it described them, so it is refused here rather than tolerated")
-	end 'unknownKey'
+	match resolveTarget(key, among: supportedTargets()) 'known'
+		resolved then return
+		unrecognized then panic("SpecParser: {specPath.toString()}: test '{testName}' carries {spelledIn} naming '{key}', which is not a target this compiler supports ({targetRoster(supportedTargets())}). A key nothing matches changes which lanes run the case while reading as though it described them, so it is refused here rather than tolerated")
+	end 'known'
 end 'requireSupportedTargetKey'
 
 // Asked of the compiler's own roster rather than a table here, so a target that lands or leaves
 // cannot leave this check describing the old set.
 function namesPinnableTarget(key String) returns bool
-	for candidate in supportedTargets() 'each'
-		if targetToString(candidate) == key and emitsTargetIr(candidate) 'hit'
-			return true
-		end 'hit'
-	end 'each'
-
-	return false
+	return match resolveTarget(key, among: pinnableTargets()) 'known'
+		resolved gives true
+		unrecognized gives false
+	end 'known'
 end 'namesPinnableTarget'
 
-function pinnableTargetKeyList() returns String
-	var keys = StringArray.create()
+function pinnableTargets() returns TargetArray
+	var pinnable = TargetArray.create()
 
 	for candidate in supportedTargets() 'each'
 		if emitsTargetIr(candidate) 'pinnable'
-			keys.push(targetToString(candidate))
+			pinnable.push(candidate)
 		end 'pinnable'
 	end 'each'
 
-	return joinedWith(keys, separator: RosterSeparator)
-end 'pinnableTargetKeyList'
-
-function namesSupportedTarget(key String) returns bool
-	for candidate in supportedTargets() 'each'
-		if targetToString(candidate) == key 'hit'
-			return true
-		end 'hit'
-	end 'each'
-
-	return false
-end 'namesSupportedTarget'
-
-// The supported roster as a comma-separated list, for the two panics above to quote. A reader handed a
-// refused key needs the legal ones in the same breath, and neither panic may spell the roster itself.
-function supportedTargetKeyList() returns String
-	var keys = StringArray.create()
-
-	for candidate in supportedTargets() 'each'
-		keys.push(targetToString(candidate))
-	end 'each'
-
-	return joinedWith(keys, separator: RosterSeparator)
-end 'supportedTargetKeyList'
+	return pinnable
+end 'pinnableTargets'
 
 union UnreadCommentSite
 	insideCase(name String)

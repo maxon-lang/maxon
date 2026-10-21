@@ -10,7 +10,7 @@
 #
 #   & ([scriptblock]::Create((irm https://maxon.dev/install.ps1))) -Version 0.1.1
 #
-# Downloads the x64 Windows release from GitHub, checks it against the release's SHA256SUMS, and
+# Downloads the Windows release for this machine from GitHub, checks it against the release's SHA256SUMS, and
 # installs it into %USERPROFILE%\.maxon: the compiler in .maxon\bin, beside the release's stdlib\,
 # runtime\, examples\ and docs\. Adds .maxon\bin to the user PATH and to
 # the PATH of the session it runs in; no administrator rights are needed. Running it again installs the
@@ -57,7 +57,6 @@ function Install-Maxon {
     # The progress bar slows Invoke-WebRequest by an order of magnitude on Windows PowerShell 5.1.
     $ProgressPreference = 'SilentlyContinue'
     $repo = 'maxon-lang/maxon'
-    $target = 'x64-windows'
     $installEntries = @('stdlib', 'runtime', 'examples', 'docs')
 
     function Say([string]$message) { Write-Host "maxon-install: $message" }
@@ -89,7 +88,12 @@ function Install-Maxon {
         # The registry answers for the machine; $env:PROCESSOR_ARCHITECTURE answers for this process,
         # which reports AMD64 under emulation on an ARM64 machine.
         $key = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
-        return (Get-ItemProperty -Path $key -Name PROCESSOR_ARCHITECTURE).PROCESSOR_ARCHITECTURE
+        $architecture = (Get-ItemProperty -Path $key -Name PROCESSOR_ARCHITECTURE).PROCESSOR_ARCHITECTURE
+        switch ($architecture) {
+            'AMD64' { return 'x64' }
+            'ARM64' { return 'arm64' }
+            default { return $architecture.ToLowerInvariant() }
+        }
     }
 
     # The newest release, from where GitHub redirects /releases/latest: no API call, so no rate limit.
@@ -154,8 +158,7 @@ function Install-Maxon {
         }
     }
 
-    function Test-Checksum([string]$sums, [string]$file) {
-        $name = Split-Path -Leaf $file
+    function Get-ExpectedChecksum([string]$sums, [string]$name) {
         $expected = $null
         foreach ($line in Get-Content -LiteralPath $sums) {
             # `*` before a name is sha256sum's binary-mode marker.
@@ -163,6 +166,12 @@ function Install-Maxon {
                 $expected = $Matches[1].ToLowerInvariant()
             }
         }
+        return $expected
+    }
+
+    function Test-Checksum([string]$sums, [string]$file) {
+        $name = Split-Path -Leaf $file
+        $expected = Get-ExpectedChecksum $sums $name
         if ($null -eq $expected) {
             throw "SHA256SUMS lists no $name"
         }
@@ -354,10 +363,7 @@ function Install-Maxon {
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
         throw 'this installer is for Windows; on macOS or Linux run: curl -fsSL https://maxon.dev/install.sh | sh'
     }
-    $architecture = Get-Architecture
-    if ($architecture -ne 'AMD64') {
-        throw "there is no Maxon build for Windows on $architecture"
-    }
+    $target = "$(Get-Architecture)-windows"
 
     $root = Get-InstallRoot
     $bin = Join-Path $root 'bin'
@@ -411,8 +417,14 @@ function Install-Maxon {
             $asset = "maxon-$release-$target.zip"
             $zip = Join-Path $staging $asset
             $sums = Join-Path $staging 'SHA256SUMS'
-            Get-Download "$base/v$release/$asset" $zip
+            # SHA256SUMS before the archive: it lists exactly the builds this release has, so a machine it
+            # does not list is refused by name before its archive is requested. install-script.yml's mirror
+            # tests pin that order.
             Get-Download "$base/v$release/SHA256SUMS" $sums
+            if ($null -eq (Get-ExpectedChecksum $sums $asset)) {
+                throw "Maxon v$release has no build for $target"
+            }
+            Get-Download "$base/v$release/$asset" $zip
             Test-Checksum $sums $zip
 
             $expanded = Join-Path $staging 'expanded'

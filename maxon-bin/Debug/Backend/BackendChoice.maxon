@@ -39,20 +39,39 @@ union DebugStubSearch
 end 'DebugStubSearch'
 
 export function backendForHost(host String) returns BackendChoice
-	if host == WindowsBackendTriple 'theNativeDebugApi'
-		return BackendChoice.served(WindowsBackendTriple)
+	match resolveTarget(host, among: debuggerTargets()) 'listed'
+		resolved then break
+		unrecognized then return BackendChoice.unserved("the debugger drives a program through its host's own debug interface, and {host} has no backend in this build")
+	end 'listed'
+
+	return match debugInterfaceOf(host) 'interface'
+		debugPort or
+		processTrace gives BackendChoice.served(host)
+		remoteStub gives servedIfTheStubIsInstalled()
+	end 'interface'
+end 'backendForHost'
+
+enum DebugInterface
+	debugPort
+	processTrace
+	remoteStub
+end 'DebugInterface'
+
+function debugInterfaceOf(triple String) returns DebugInterface
+	if triple == WindowsBackendTriple 'theNativeDebugApi'
+		return DebugInterface.debugPort
 	end 'theNativeDebugApi'
 
-	if hostIsTraced(host) 'theProcessTrace'
-		return BackendChoice.served(host)
+	if hostIsTraced(triple) 'theProcessTrace'
+		return DebugInterface.processTrace
 	end 'theProcessTrace'
 
-	if host == RemoteStubTriple 'theRemoteStub'
-		return servedIfTheStubIsInstalled()
+	if triple == RemoteStubTriple 'theRemoteStub'
+		return DebugInterface.remoteStub
 	end 'theRemoteStub'
 
-	return BackendChoice.unserved("the debugger drives a program through its host's own debug interface, and {host} has no backend in this build")
-end 'backendForHost'
+	panic("BackendChoice: maxon-bin/targets.tsv marks {triple} debugger=yes but no debug interface in BackendChoice serves it, so the table and BackendChoice disagree")
+end 'debugInterfaceOf'
 
 // ⛔ **A HOST WITH NO STUB IS REFUSED BY NAME, BEFORE ANYTHING IS LAUNCHED.** There is no mach backend to
 // fall back to on this lane — the entitlement `task_for_pid` needs is a code-signing identity a release
@@ -64,23 +83,13 @@ function servedIfTheStubIsInstalled() returns BackendChoice
 	end 'installed'
 end 'servedIfTheStubIsInstalled'
 
-// ⭐⭐ **THE ONE SITE THAT PICKS A BACKEND, AND IT PICKS OFF THE TRIPLE `backendForHost` VOUCHED.** A host
-// whose triple reaches neither arm was refused before the spawn, so this panic reports a vouch and a
-// construction that have drifted apart rather than an unsupported host.
+// ⭐⭐ **THE ONE SITE THAT PICKS A BACKEND, AND IT PICKS OFF THE TRIPLE `backendForHost` VOUCHED.**
 export function backendFor(triple String) returns DebugBackend
-	if triple == WindowsBackendTriple 'theNativeDebugApi'
-		return DebugBackend.debugPort(WindowsBackend.create())
-	end 'theNativeDebugApi'
-
-	if hostIsTraced(triple) 'theProcessTrace'
-		return DebugBackend.processTrace(PtraceBackend.create())
-	end 'theProcessTrace'
-
-	if triple == RemoteStubTriple 'theRemoteStub'
-		return DebugBackend.remoteStub(GdbRemoteBackend.create(vouchedDebugStub()))
-	end 'theRemoteStub'
-
-	panic("backendFor: `{triple}` reaches no backend, and `backendForHost` answered `served` for it — the vouch and the construction read the same three triples and must agree")
+	return match debugInterfaceOf(triple) 'interface'
+		debugPort gives DebugBackend.debugPort(WindowsBackend.create())
+		processTrace gives DebugBackend.processTrace(PtraceBackend.create())
+		remoteStub gives DebugBackend.remoteStub(GdbRemoteBackend.create(vouchedDebugStub()))
+	end 'interface'
 end 'backendFor'
 
 function vouchedDebugStub() returns FilePath

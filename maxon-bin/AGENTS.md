@@ -206,6 +206,13 @@ and no `--debug-info`; it does have `--network`.
 The compiler emits `x64-windows`, `x64-linux`, `arm64-macos`, `arm64-linux` and **`wasm32-wasi`** (a
 WASI Preview2 component).
 
+⛔ **`targets.tsv` IS THE ONE PLACE A TARGET IS LISTED.** `scripts/targets/generate.sh` writes
+`Compiler/TargetsGenerated.maxon` from it (`supportedTargets()`, `debuggerTargets()`) — run it after
+editing the table, never edit its output; `--check` is CI's drift gate. The scripts, workflows and
+installers read the same table. What a target MEANS — its `CpuArch`/`Os` case, backend, runtime and
+debug interface — stays compiler code, so a row naming a cpu or os the compiler lacks fails the build.
+`docs/RELEASING.md` owns adding a target.
+
 > #### ⛔⛔ `--target=` CROSS-COMPILES THE PROGRAMS. IT NEVER HOSTS THE COMPILER.
 >
 > `spec-test --target=x64-linux` on a Windows host builds and runs the TEST binaries for Linux while
@@ -288,7 +295,8 @@ facts worth knowing before you get there:
   ```
   ⚠ **CI runs eight of them on every lane** — `tests/lsp`, `tests/fmt`, `tests/specHarness`, `tests/ladders`, `tests/examples`, `tests/buildManifest`,
   `tests/emittedRuntime` and `tests/cli` — plus `tests/debug`,
-  `tests/dap` and `tests/mcp` on every native lane, each through its own host's debug backend, and `/land`'s battery runs `fmt`, `specHarness`,
+  `tests/dap` and `tests/mcp` on every native lane, each through its own host's debug backend, and `tests/targets` on
+  one lane (the `targets-gate` role in `targets.tsv`), and `/land`'s battery runs `fmt`, `specHarness`,
   `ladders`, `examples` and `emittedRuntime` beside the suite and the self-compile. Every other corpus runs only when someone names it.
   Both also run `scripts/multicore-stress/compile-all.sh`, which builds every torture program in that directory.
 - ⛔ **EXPECTATIONS ARE GENERATED, NEVER HAND-WRITTEN** — e.g. `python

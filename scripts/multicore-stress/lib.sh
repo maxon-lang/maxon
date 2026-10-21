@@ -5,6 +5,7 @@
 
 MULTICORE_HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MULTICORE_REPO="$(cd "$MULTICORE_HERE/../.." && pwd)"
+MAXON_TARGETS_TABLE="${MAXON_TARGETS_TABLE:-$MULTICORE_REPO/maxon-bin/targets.tsv}"
 # shellcheck source=scripts/lib/host-binaries.sh
 . "$MULTICORE_REPO/scripts/lib/host-binaries.sh"
 

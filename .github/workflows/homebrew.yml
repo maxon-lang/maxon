@@ -26,9 +26,9 @@ on:
         required: false
   push:
     branches: [main]
-    paths: ['installer/homebrew/**', '.github/workflows/homebrew.yml']
+    paths: &homebrew-inputs ['installer/homebrew/**', '.github/workflows/homebrew.yml', 'maxon-bin/targets.tsv', 'scripts/targets/matrix.sh', 'scripts/lib/host-binaries.sh']
   pull_request:
-    paths: ['installer/homebrew/**', '.github/workflows/homebrew.yml']
+    paths: *homebrew-inputs
 
 permissions:
   contents: read
@@ -69,8 +69,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          for target in arm64-macos x64-linux arm64-linux; do
-            gh release download "v${{ steps.v.outputs.version }}" --pattern "*$target.tar.gz" --dir dist
+          . scripts/lib/host-binaries.sh
+          targets="$(./scripts/targets/matrix.sh list target channels=homebrew)"
+          for target in $targets; do
+            gh release download "v${{ steps.v.outputs.version }}" --pattern "$(maxon_archive_file "${{ steps.v.outputs.version }}" "$target")" --dir dist
           done
           gh release download "v${{ steps.v.outputs.version }}" --pattern SHA256SUMS --dir dist
           cd dist && sha256sum -c --ignore-missing SHA256SUMS
@@ -84,12 +86,30 @@ jobs:
           path: dist/homebrew/maxon.rb
           if-no-files-found: error
 
+  targets:
+    runs-on: ubuntu-latest
+    outputs:
+      homebrew: ${{ steps.matrix.outputs.homebrew }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            maxon-bin/targets.tsv
+            scripts/lib/host-binaries.sh
+            scripts/targets/matrix.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Read the Homebrew targets from the table
+        id: matrix
+        run: |
+          matrix="$(./scripts/targets/matrix.sh json channels=homebrew)"
+          echo "homebrew=$matrix" >> "$GITHUB_OUTPUT"
+
   test:
-    needs: formula
+    needs: [formula, targets]
     strategy:
       fail-fast: false
-      matrix:
-        runner: [macos-15, ubuntu-latest, ubuntu-24.04-arm]
+      matrix: ${{ fromJSON(needs.targets.outputs.homebrew) }}
     runs-on: ${{ matrix.runner }}
     defaults:
       run:

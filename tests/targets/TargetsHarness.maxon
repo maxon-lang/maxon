@@ -1,0 +1,77 @@
+export let TargetsTablePath = "maxon-bin/targets.tsv"
+export let TargetColumnName = "target"
+
+let RunnerColumnName = "runner"
+let NoneMark = "-"
+let HeaderRowIndex = 0
+
+export function tableTargets() returns StringArray
+	return targetsTableColumn(TargetColumnName)
+end 'tableTargets'
+
+export function nativeTargets() returns StringArray
+	let targets = tableTargets()
+	let runners = targetsTableColumn(RunnerColumnName)
+	var natives = StringArray.create()
+
+	for (iter, target) in targets.withIterator() 'eachTarget'
+		let runner = try runners.get(iter.index()) otherwise panic("the gate could not run — {TargetsTablePath} read {targets.count()} targets but only {runners.count()} runners.")
+
+		if runner != NoneMark 'native'
+			natives.push(target)
+		end 'native'
+	end 'eachTarget'
+
+	return natives
+end 'nativeTargets'
+
+function targetsTableRows() returns StringArray
+	let path = try FilePath.from(TargetsTablePath) otherwise panic("the gate could not run — '{TargetsTablePath}' is not a spellable path.")
+
+	if not File.exists(path) 'missing'
+		panic("the gate could not run — there is no {TargetsTablePath}, the table every target of the compiler is read from. Every path here is relative to the CHECKOUT ROOT; run it from there.")
+	end 'missing'
+
+	var rows = StringArray.create()
+
+	for line in outputLines(fileText(path)) 'eachLine'
+		if not line.isEmpty() 'aRow'
+			rows.push(line)
+		end 'aRow'
+	end 'eachLine'
+
+	return rows
+end 'targetsTableRows'
+
+function targetsTableColumn(name String) returns StringArray
+	let rows = targetsTableRows()
+	let header = try rows.first() otherwise panic("the gate could not run — {TargetsTablePath} is empty: it has no header row.")
+	let column = columnIndex(header.split(Tab), name: name)
+	var values = StringArray.create()
+
+	for (iter, row) in rows.withIterator() 'eachRow'
+		if iter.index() == HeaderRowIndex 'theHeader'
+			continue
+		end 'theHeader'
+
+		let fields = row.split(Tab)
+		let value = try fields.get(column) otherwise panic("the gate could not run — row {iter.index()} of {TargetsTablePath} has no `{name}` field: '{row}'.")
+		values.push(value)
+	end 'eachRow'
+
+	if values.isEmpty() 'noRows'
+		panic("the gate could not run — {TargetsTablePath} has a header and no target rows.")
+	end 'noRows'
+
+	return values
+end 'targetsTableColumn'
+
+function columnIndex(header StringArray, name String) returns ElementIndex
+	for (iter, field) in header.withIterator() 'eachField'
+		if field == name 'found'
+			return iter.index()
+		end 'found'
+	end 'eachField'
+
+	panic("the gate could not run — the header of {TargetsTablePath} has no `{name}` column. It reads: {joined(header, separator: Space)}")
+end 'columnIndex'

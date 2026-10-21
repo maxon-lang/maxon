@@ -97,10 +97,14 @@ main() {
 	rm -rf "$staging"
 	mkdir "$staging"
 
-	fetch "$base/v$version/$asset" "$tmp/$asset" \
-		|| fail "could not download $asset — is $version a published release with a $target build?"
+	# SHA256SUMS before the archive: it lists exactly the builds this release has, so a machine it does
+	# not list is refused by name before its archive is requested. install-script.yml's mirror tests pin
+	# that order.
 	fetch "$base/v$version/SHA256SUMS" "$tmp/SHA256SUMS" \
-		|| fail "could not download SHA256SUMS for $version"
+		|| fail "could not download SHA256SUMS for $version — is it a published release?"
+	[ -n "$(expected_checksum "$tmp" "$asset")" ] || fail "Maxon v$version has no build for $target"
+	fetch "$base/v$version/$asset" "$tmp/$asset" \
+		|| fail "could not download $asset"
 	verify_checksum "$tmp" "$asset"
 
 	tar -xzf "$tmp/$asset" -C "$staging"
@@ -250,29 +254,28 @@ detect_target() {
 	arch="$(uname -m)"
 	case "$os" in
 		Darwin)
+			os="macos"
 			# A shell running under Rosetta reports x86_64 on Apple silicon; the hardware is what matters.
 			if [ "$arch" = "x86_64" ] && [ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" = "1" ]; then
 				arch="arm64"
 			fi
-			case "$arch" in
-				arm64) echo "arm64-macos" ;;
-				*)     fail "Maxon runs on Apple silicon Macs only; this one reports $arch" ;;
-			esac
 			;;
 		Linux)
-			case "$arch" in
-				x86_64|amd64)  echo "x64-linux" ;;
-				aarch64|arm64) echo "arm64-linux" ;;
-				*)             fail "there is no Maxon build for Linux on $arch" ;;
-			esac
+			os="linux"
 			;;
 		MINGW*|MSYS*|CYGWIN*)
 			fail "on Windows, install with: powershell -c \"irm https://maxon.dev/install.ps1 | iex\""
 			;;
 		*)
-			fail "there is no Maxon build for $os"
+			os="$(printf '%s' "$os" | tr '[:upper:]' '[:lower:]')"
 			;;
 	esac
+	case "$arch" in
+		x86_64|amd64)  arch="x64" ;;
+		aarch64|arm64) arch="arm64" ;;
+		*)             arch="$(printf '%s' "$arch" | tr '[:upper:]' '[:lower:]')" ;;
+	esac
+	echo "$arch-$os"
 }
 
 # The newest release, from where GitHub redirects /releases/latest — no API call, so no rate limit.
@@ -286,11 +289,15 @@ latest_version() {
 	esac
 }
 
+expected_checksum() {
+	# `*` before a name is sha256sum's binary-mode marker.
+	awk -v f="$2" '{ name = $2; sub(/^\*/, "", name) } name == f { print $1 }' "$1/SHA256SUMS"
+}
+
 verify_checksum() {
 	dir="$1"
 	file="$2"
-	# `*` before a name is sha256sum's binary-mode marker.
-	expected="$(awk -v f="$file" '{ name = $2; sub(/^\*/, "", name) } name == f { print $1 }' "$dir/SHA256SUMS")"
+	expected="$(expected_checksum "$dir" "$file")"
 	[ -n "$expected" ] || fail "SHA256SUMS lists no $file"
 
 	if command -v sha256sum >/dev/null 2>&1; then

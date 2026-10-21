@@ -332,7 +332,7 @@ module function executeBuildToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args O
 	// A triple is a flag and a target name a positional: `maxon build` reads a bare word as a target
 	// or else a source path, so a triple pushed positionally would compile a file named `wasm32-wasi`.
 	if let targetArg = try statedStringArg(reqDoc, args: args, key: TargetOption) 'hasTgt'
-		match parseBuildTarget(targetArg) 'targetKind'
+		match resolveTarget(targetArg, among: supportedTargets()) 'targetKind'
 			resolved then argv.push("{TargetFlagPrefix}{targetArg}")
 			unrecognized then argv.push(targetArg)
 		end 'targetKind'

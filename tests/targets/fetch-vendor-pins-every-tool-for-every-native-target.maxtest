@@ -1,0 +1,109 @@
+let FetchVendorScriptPath = "scripts/fetch-vendor.sh"
+let UrlFunctionName = "artifact_url"
+let HashFunctionName = "artifact_sha256"
+let FunctionOpenerSuffix = "() \{"
+let FunctionCloser = "\}"
+let ArmCloser = ")"
+let ArmKeySeparator = "/"
+let ArmKeyPieces = 2
+let ToolPiece = 0
+let TargetPiece = 1
+
+test 'fetch-vendor pins every tool for every native target'
+	let script = fileText(try FilePath.from(FetchVendorScriptPath) otherwise panic("the gate could not run — '{FetchVendorScriptPath}' is not a spellable path."))
+	let urlArms = armKeysOf(script, functionName: UrlFunctionName)
+	let hashArms = armKeysOf(script, functionName: HashFunctionName)
+
+	var tools = StringArray.create()
+
+	for key in urlArms 'eachUrlArm'
+		let tool = armPiece(key, index: ToolPiece)
+
+		if not tools.contains(tool) 'newTool'
+			tools.push(tool)
+		end 'newTool'
+	end 'eachUrlArm'
+
+	Expect.isTrue(tools.count() > 0, message: "no tool was read off `{UrlFunctionName}` in {FetchVendorScriptPath}, so the comparison below would be vacuous.")
+
+	let natives = nativeTargets()
+	Expect.isTrue(natives.count() > 0, message: "{TargetsTablePath} lists no native target, so the comparison below would be vacuous.")
+
+	var findings = StringArray.create()
+
+	for tool in tools 'eachTool'
+		for target in natives 'eachNative'
+			let key = "{tool}{ArmKeySeparator}{target}"
+
+			if not urlArms.contains(key) 'noUrl'
+				findings.push("`{UrlFunctionName}` has no `{key}{ArmCloser}` arm.")
+			end 'noUrl'
+
+			if not hashArms.contains(key) 'noHash'
+				findings.push("`{HashFunctionName}` has no `{key}{ArmCloser}` arm.")
+			end 'noHash'
+		end 'eachNative'
+	end 'eachTool'
+
+	noteForeignTargets(findings, arms: urlArms, functionName: UrlFunctionName, natives: natives)
+	noteForeignTargets(findings, arms: hashArms, functionName: HashFunctionName, natives: natives)
+
+	Expect.isTrue(findings.isEmpty(), message: "{FetchVendorScriptPath} does not pin exactly the native targets {TargetsTablePath} lists:{renderedFindings(findings)}")
+end 'fetch-vendor pins every tool for every native target'
+
+function noteForeignTargets(findings StringArray, arms StringArray, functionName String, natives StringArray)
+	for key in arms 'eachArm'
+		let target = armPiece(key, index: TargetPiece)
+
+		if not natives.contains(target) 'foreign'
+			findings.push("`{functionName}` has a `{key}{ArmCloser}` arm, but {TargetsTablePath} does not list `{target}` as a native target.")
+		end 'foreign'
+	end 'eachArm'
+end 'noteForeignTargets'
+
+function armPiece(key String, index ElementIndex) returns String
+	return try key.split(ArmKeySeparator).get(index) otherwise panic("the gate could not run — the arm key '{key}' has no piece {index}.")
+end 'armPiece'
+
+function armKeysOf(script String, functionName String) returns StringArray
+	let opener = "{functionName}{FunctionOpenerSuffix}"
+	var keys = StringArray.create()
+	var inside = false
+	var closed = false
+
+	for line in outputLines(script) 'eachLine'
+		if not inside 'outside'
+			inside = line == opener
+			continue
+		end 'outside'
+
+		if line == FunctionCloser 'ends'
+			closed = true
+			break
+		end 'ends'
+
+		let trimmed = line.trim()
+
+		if not trimmed.contains(ArmCloser) 'notAnArm'
+			continue
+		end 'notAnArm'
+
+		let key = try trimmed.split(ArmCloser).first() otherwise panic("the gate could not run — '{trimmed}' split into nothing.")
+
+		if key.split(ArmKeySeparator).count() != ArmKeyPieces 'notAToolArm'
+			continue
+		end 'notAToolArm'
+
+		keys.push(key)
+	end 'eachLine'
+
+	if not closed 'noFunction'
+		panic("the gate could not run — {FetchVendorScriptPath} has no `{opener}` ... `{FunctionCloser}` function.")
+	end 'noFunction'
+
+	if keys.isEmpty() 'noArms'
+		panic("the gate could not run — `{functionName}` in {FetchVendorScriptPath} has no `<tool>{ArmKeySeparator}<target>{ArmCloser}` arm.")
+	end 'noArms'
+
+	return keys
+end 'armKeysOf'

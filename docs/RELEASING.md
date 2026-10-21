@@ -51,10 +51,10 @@ and exits 0 unpublished, and the later commit's run decides the next seed. A pin
 already exists, so a pin that fails after publishing — its release does not fetch back, or `main` refuses the
 push — leaves the release orphaned: delete the release and its tag before re-running the `pin` job.
 
-`scripts/freeze-seed.sh` builds `maxon-bin` for `x64-windows`, `x64-linux`, `arm64-macos` and `arm64-linux`
+`scripts/freeze-seed.sh` builds `maxon-bin` for every native target in `maxon-bin/targets.tsv`
 with the slot compiler (`maxon run build --target=<t> --output=<stage>/maxon`, the way
-`release.sh --package --target=` cross-builds), packages each as `maxon-<tag>-<target>` (`.zip` for Windows,
-`.tar.gz` for the rest, the binary alone), writes `SHA256SUMS` and the notes into `temp/seed/dist/`, and
+`release.sh --package --target=` cross-builds), packages each as `maxon-<tag>-<target>` (in the table's `archive` format, the
+binary alone), writes `SHA256SUMS` and the notes into `temp/seed/dist/`, and
 **prints the `gh release create` command without running it**:
 
 ```bash
@@ -232,6 +232,42 @@ live within minutes.
 
 ---
 
+## Targets are rows of `maxon-bin/targets.tsv`
+
+Every target the compiler accepts is one row of `maxon-bin/targets.tsv`, and the compiler, the scripts, the
+workflows and the installers read their targets from it. It is TAB-separated with a header row, `-` marks an
+empty cell, and a cell that holds several values is a comma list. Readers find a column by its header name.
+
+| Column | Holds |
+|---|---|
+| `target` | `<cpu>-<os>`, as `--target=` spells it |
+| `runner` | the GitHub runner that builds and suite-tests it natively. `-` makes it a cross target, whose suite runs on the `cross-suite` lane |
+| `executable` | the extension of its executables |
+| `archive` | the extension of its release archive |
+| `debugger` | `yes` when `maxon debug` serves a program on that host, else `no` |
+| `channels` | where a release ships it: `release`, `homebrew`, `install-sh`, `install-ps1`, `docker` |
+| `docker` | its Docker platform architecture |
+| `shell` | the login shell `install-script.yml` runs `install.sh` under |
+| `roles` | the single-lane CI steps it hosts: `cpu-probe`, `codecs`, `cross-suite`, `targets-gate` |
+
+Workflows build their matrices with `scripts/targets/matrix.sh`, which selects rows by `native`, `cross`
+or `COLUMN=VALUE`.
+
+### Adding a target
+
+1. Add its row.
+2. Run `scripts/targets/generate.sh`. It rewrites `maxon-bin/Compiler/TargetsGenerated.maxon`, the
+   compiler's `supportedTargets()` and `debuggerTargets()`; `ci.yml` runs it with `--check` and fails on
+   drift. A row naming a cpu or os with no `CpuArch` or `Os` case fails the build: what a target means —
+   its backend, its runtime, and the debug interface `debugInterfaceOf` in
+   `maxon-bin/Debug/Backend/BackendChoice.maxon` picks for a `debugger=yes` row — is compiler code.
+3. Build, run `maxon test tests/targets`, and fix what it names: `scripts/fetch-vendor.sh` needs a URL and a
+   hash for every tool on every native target.
+
+The installers take the new target from the release itself, whose `SHA256SUMS` lists its archive.
+
+---
+
 ## Platform-specific facts that have bitten
 
 - ⛔ **On macOS, build the binary AS `maxon` and never rename it afterwards.** `MachOWriter` bakes the
@@ -264,6 +300,11 @@ deploy, as `text/plain` (`website/public/_headers`). They read the newest versio
 `~/.maxon`. So a release is installable by script the moment it is published, with nothing to
 regenerate.
 
+Each script derives this machine's `<cpu>-<os>` and reads `SHA256SUMS`
+first: it is that release's exact list of builds, so a machine it does not name is refused with
+`Maxon v<version> has no build for <cpu>-<os>` before any archive is downloaded. The Docker image does the
+same with the platform it is built for.
+
 The swap replaces `bin/`, `stdlib/`, `runtime/`, `examples/` and `docs/` (a release that ships no `docs/`
 leaves none), and `~/.maxon/scriptlib/`, the user's
 own packages, stays as it is. After a successful swap each script runs the new compiler's
@@ -289,8 +330,8 @@ rebuilds.
 
 | | |
 |---|---|
-| **Homebrew** | `installer/homebrew/generate.sh` → `dist/homebrew/maxon.rb`, for arm64 macOS and x64/arm64 Linux. `homebrew.yml` installs and `brew test`s it on all three before committing it to `maxon-lang/homebrew-tap` as `Formula/maxon.rb`. ⛔ Installs as `maxon-lang/tap/maxon` and cannot be shortened: bare `maxon` is Maxon Computer's **cask**. |
-| **Docker** | `installer/docker/Dockerfile`, built by `docker.yml` from the release's own archives into `ghcr.io/maxon-lang/maxon` — `debian` (the default) and `distroless` variants, amd64 and arm64, each built on its own runner and tested before anything is pushed. Tags `X.Y.Z` and `X.Y` (plus `X` from 1.0), with `-distroless` for the second variant; `latest` and `distroless` move only when the version is the newest release. ⚠ GHCR creates the package private: make it public once, in the organisation's package settings. |
+| **Homebrew** | `installer/homebrew/generate.sh` → `dist/homebrew/maxon.rb`, for the targets whose `channels` cell in `maxon-bin/targets.tsv` holds `homebrew`. `homebrew.yml` installs and `brew test`s it on each of them before committing it to `maxon-lang/homebrew-tap` as `Formula/maxon.rb`. ⛔ Installs as `maxon-lang/tap/maxon` and cannot be shortened: bare `maxon` is Maxon Computer's **cask**. |
+| **Docker** | `installer/docker/Dockerfile`, built by `docker.yml` from the release's own archives into `ghcr.io/maxon-lang/maxon` — `debian` (the default) and `distroless` variants, for each target whose `channels` cell holds `docker`, on the platform its `docker` column names, each built on its own runner and tested before anything is pushed. Tags `X.Y.Z` and `X.Y` (plus `X` from 1.0), with `-distroless` for the second variant; `latest` and `distroless` move only when the version is the newest release. ⚠ GHCR creates the package private: make it public once, in the organisation's package settings. |
 | **VS Code** | `vscode-extension/`, published to the Marketplace and Open VSX from the same `.vsix`. Its version is a calendar version, `YEAR.MONTH.PATCH` (`2026.9.0`), independent of the compiler's so the two are never confused: a release takes the month it ships in, a second that month bumps PATCH, no leading zeros. `scripts/extension-release-gate.sh` refuses a changed extension whose version did not move. |
 
 ---

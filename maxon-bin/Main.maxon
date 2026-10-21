@@ -345,45 +345,6 @@ function main() returns ExitCode
 	end 'cmd'
 end 'main'
 
-module union TargetResolution
-	resolved(target Target)
-	unrecognized(spec String)
-end 'TargetResolution'
-
-// Matched against `targetToString`, so the parser accepts exactly the spellings the printer
-// produces.
-module function parseBuildTarget(spec String) returns TargetResolution
-	for candidate in supportedTargets() 'each'
-		if targetToString(candidate) == spec 'match'
-			return TargetResolution.resolved(candidate)
-		end 'match'
-	end 'each'
-
-	return TargetResolution.unrecognized(spec)
-end 'parseBuildTarget'
-
-// The one list. `SpecVerdictSelfTest` sweeps it, and must cover every target or it is scoped to
-// whichever its author thought of.
-module function supportedTargets() returns TargetArray
-	return [Target.create(CpuArch.x64, os: Os.windows), Target.create(CpuArch.x64, os: Os.linux), Target.create(CpuArch.arm64, os: Os.macos), Target.create(CpuArch.arm64, os: Os.linux), Target.create(CpuArch.wasm32, os: Os.wasi)]
-end 'supportedTargets'
-
-// Spelled from `supportedTargets()`, so every message naming the set gains the next backend when it
-// lands.
-function supportedTargetList() returns String
-	var out = ""
-
-	for candidate in supportedTargets() 'each'
-		if out.isEmpty() 'first'
-			out = targetToString(candidate)
-		end 'first' else 'rest'
-			out = "{out}, {targetToString(candidate)}"
-		end 'rest'
-	end 'each'
-
-	return out
-end 'supportedTargetList'
-
 module let SolePositionalIndex = 0 as ElementIndex
 let FirstWordCount = 1 as ElementIndex
 
@@ -431,9 +392,9 @@ end 'TargetFlagError'
 module function commandLineTarget(stated StatedText) returns Target throws TargetFlagError
 	let spec = try stated.text() otherwise return detectHostTarget()
 
-	match parseBuildTarget(spec) 'targetSel'
+	match resolveTarget(spec, among: supportedTargets()) 'targetSel'
 		resolved(t) then return t
-		unrecognized(unknown) then printError("error: unknown --target '{unknown}' (expected one of: {supportedTargetList()})\n")
+		unrecognized(unknown) then printError("error: unknown --target '{unknown}' (expected one of: {targetRoster(supportedTargets())})\n")
 	end 'targetSel'
 
 	throw TargetFlagError.unrecognized
@@ -1958,7 +1919,7 @@ function optionReference(option HelpOption) returns OptionReference
 		output gives OptionReference.create("{OutputFlagPrefix}<path>", description: "Output executable path (default: derived from input).", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.prefixed(OutputFlagPrefix)])
 		emitIr gives OptionReference.create(EmitIrFlag, description: "Also write the lowered Target IR beside the exe as <output>.ir.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.exactly(EmitIrFlag)])
 		emitIrRuntime gives OptionReference.create("{EmitIrRuntimeFlagPrefix}<a>,<b>", description: "Render these compiler-emitted functions in that IR too. A list of functions to print is a request for the printing, so it implies {EmitIrFlag}.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.prefixed(EmitIrRuntimeFlagPrefix)])
-		target gives OptionReference.create("{TargetFlagPrefix}<cpu>-<os>", description: "Use this target instead of the host, one of: {supportedTargetList()} (default: the host target). For {SpecTestCommandName} a cross target cross-compiles each selected test and runs it under the vendored runtime. For {TestCommandName} it builds the test binary for that target and then SPAWNS it, so a target this host cannot execute reports every test as not run.", commands: [MaxonCommand.build, MaxonCommand.run, MaxonCommand.specTest, MaxonCommand.test], arrivals: [OptionArrival.prefixed(TargetFlagPrefix)])
+		target gives OptionReference.create("{TargetFlagPrefix}<cpu>-<os>", description: "Use this target instead of the host, one of: {targetRoster(supportedTargets())} (default: the host target). For {SpecTestCommandName} a cross target cross-compiles each selected test and runs it under the vendored runtime. For {TestCommandName} it builds the test binary for that target and then SPAWNS it, so a target this host cannot execute reports every test as not run.", commands: [MaxonCommand.build, MaxonCommand.run, MaxonCommand.specTest, MaxonCommand.test], arrivals: [OptionArrival.prefixed(TargetFlagPrefix)])
 		debugBatch gives OptionReference.create(BatchOption, description: "Drive the session from {CommandsOptionPrefix} instead of a prompt, and write one JSON object per line on stdout. The program's own stdout and stderr both go to this driver's STDERR, so stdout stays pure JSON. The driver exits 0 when the session completed - the program's own code is DATA in the `exit` event - and 1 on a timeout, a refused session or a crash.", commands: [MaxonCommand.debug], arrivals: [OptionArrival.exactly(BatchOption)])
 		debugCommands gives OptionReference.create("{CommandsOptionPrefix}<cmd;cmd;...|@file>", description: "The commands {BatchOption} runs, separated by `;`, or `@<path>` to read them from a file one per line.", commands: [MaxonCommand.debug], arrivals: [OptionArrival.prefixed(CommandsOptionPrefix)])
 		debugComplete gives OptionReference.create("{CompleteOptionPrefix}<partial line>", description: "Print the completions for a partially typed debugger line, one per line, and run nothing. The first word completes to the command vocabulary, aliases included; a break target completes to the functions the program holds.", commands: [MaxonCommand.debug], arrivals: [OptionArrival.prefixed(CompleteOptionPrefix)])

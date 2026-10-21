@@ -1,0 +1,41 @@
+let UnknownTargetName = "no-such-target"
+let TargetOptionPrefix = "--target="
+let BuildSourceDir = "tests/targets"
+let RefusalPrefix = "error: unknown --target '"
+let ExpectedListOpener = "(expected one of: "
+let ExpectedListCloser = ")"
+let ListSeparator = ", "
+let RefusedExit = 1
+let ListAfterOpenerPiece = 1
+
+test 'the compiler accepts exactly the targets the table lists'
+	let refused = spawnCompiler([BuildCommandName, BuildSourceDir, "{TargetOptionPrefix}{UnknownTargetName}"])
+	let said = "{refused.stdout}{refused.stderr}"
+
+	Expect.equal(refused.exitCode(), expected: RefusedExit, message: "`maxon {BuildCommandName} {TargetOptionPrefix}{UnknownTargetName}` did not refuse the target. It said: {said}")
+
+	let accepted = acceptedTargetsIn(said)
+	Expect.isTrue(accepted.count() > 0, message: "no accepted target was read off the refusal of `{TargetOptionPrefix}{UnknownTargetName}`, so the comparison below would be vacuous. It said: {said}")
+
+	let listed = tableTargets()
+	let acceptedText = joined(accepted, separator: ListSeparator)
+	let listedText = joined(listed, separator: ListSeparator)
+
+	Expect.equal(acceptedText, expected: listedText, message: "the compiler accepts `{acceptedText}` but the `{TargetColumnName}` column of {TargetsTablePath} lists `{listedText}`; both must name the same targets in the same order.")
+end 'the compiler accepts exactly the targets the table lists'
+
+function acceptedTargetsIn(said String) returns StringArray
+	for line in outputLines(said) 'eachLine'
+		if not line.startsWith(RefusalPrefix) 'notTheRefusal'
+			continue
+		end 'notTheRefusal'
+
+		let pieces = line.split(ExpectedListOpener)
+		let afterOpener = try pieces.get(ListAfterOpenerPiece) otherwise panic("the gate could not run — the refusal '{line}' does not spell `{ExpectedListOpener}`.")
+		let list = try afterOpener.split(ExpectedListCloser).first() otherwise panic("the gate could not run — the refusal '{line}' has an empty target list.")
+
+		return list.split(ListSeparator)
+	end 'eachLine'
+
+	panic("the gate could not run — no line of the compiler's output starts `{RefusalPrefix}`. It said: {said}")
+end 'acceptedTargetsIn'

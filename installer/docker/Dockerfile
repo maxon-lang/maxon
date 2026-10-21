@@ -35,22 +35,22 @@ RUN apt-get update \
 RUN set -eu; \
     [ -n "$VERSION" ] || { echo "--build-arg VERSION=X.Y.Z is required" >&2; exit 1; }; \
     case "$TARGETARCH" in \
-      amd64) arch=x64 ;; \
-      arm64) arch=arm64 ;; \
-      *) echo "there is no Maxon build for linux/$TARGETARCH" >&2; exit 1 ;; \
+      amd64) cpu=x64 ;; \
+      *) cpu="$TARGETARCH" ;; \
     esac; \
-    asset="maxon-$VERSION-$arch-linux.tar.gz"; \
+    target="$cpu-linux"; \
+    asset="maxon-$VERSION-$target.tar.gz"; \
     base="https://github.com/maxon-lang/maxon/releases/download/v$VERSION"; \
     cd /tmp; \
-    curl --proto '=https' --tlsv1.2 -fsSLO "$base/$asset"; \
     curl --proto '=https' --tlsv1.2 -fsSLO "$base/SHA256SUMS"; \
     awk -v f="$asset" '{ name = $2; sub(/^\*/, "", name) } name == f { print $1 "  " f }' SHA256SUMS > expected; \
-    [ -s expected ] || { echo "SHA256SUMS lists no $asset" >&2; exit 1; }; \
+    [ -s expected ] || { echo "Maxon v$VERSION has no build for $target" >&2; exit 1; }; \
+    curl --proto '=https' --tlsv1.2 -fsSLO "$base/$asset"; \
     sha256sum -c expected; \
     tar -xzf "$asset"; \
     mkdir -p /opt/maxon/bin; \
-    mv "maxon-$VERSION-$arch-linux/maxon" /opt/maxon/bin/maxon; \
-    mv "maxon-$VERSION-$arch-linux/stdlib" "maxon-$VERSION-$arch-linux/examples" /opt/maxon/;     if [ -d "maxon-$VERSION-$arch-linux/runtime" ]; then mv "maxon-$VERSION-$arch-linux/runtime" /opt/maxon/; fi
+    mv "maxon-$VERSION-$target/maxon" /opt/maxon/bin/maxon; \
+    mv "maxon-$VERSION-$target/stdlib" "maxon-$VERSION-$target/examples" /opt/maxon/;     if [ -d "maxon-$VERSION-$target/runtime" ]; then mv "maxon-$VERSION-$target/runtime" /opt/maxon/; fi
 # One compile as root, here, leaves the standard library's build cache in /opt/maxon, so a compile by
 # an unprivileged user in the final image reads it instead of needing to write it.
 RUN set -eu; \

@@ -6,7 +6,7 @@ reach `stdlib/` and nothing else. **A DRIVER COMMAND is not that** (user ruling,
 a fixture project and asserting what it reports. This directory is where those
 fixtures live.
 
-Twenty-one corpora live here, one directory each, every path into one spelled from the CHECKOUT
+Twenty-two corpora live here, one directory each, every path into one spelled from the CHECKOUT
 ROOT — the working directory every driver inherits, and the contract
 `SpecTestRunner.specRunWorkingDir` states, along with why it is deliberately not `specDir.parent()`.
 
@@ -39,6 +39,7 @@ SERVER its tests spawn.
 | `docs/` | `maxon test`, under the compiler | `StdlibReferenceDocument` in `stdlib-reference-documents-every-public-api.maxtest` — the document it reads; it spawns nothing, and reads `stdlib/` through `StdlibDir` |
 | `examples/` | `maxon test`, under the compiler | `TestedCompilerStem` in `support/Host.maxon` — the binary it spawns: the compiler under test, which builds every program in the checkout's `examples/` (reached through `ExamplesDirName`) and every complete program a document shows a reader |
 | `warmRebuild/` | `maxon test`, under the compiler | `TestedCompilerStem` in `support/Host.maxon` — the binary it spawns: the compiler under test, which is also the `verify-warm-rebuild` driver whose properties are under test |
+| `targets/` | `maxon test`, under the compiler | `TargetsTablePath` in `TargetsHarness.maxon` — the table it reads; one case spawns the compiler under test (`TestedCompilerStem`) for its `--target` refusal |
 
 ⚠ **`ladders/` is cited from outside the code that reads it.** Roughly twenty
 measurement-provenance comments across the compiler and
@@ -47,7 +48,7 @@ names the former path in every row minted before 2026-09-02 — a dated record, 
 rows stay as written.
 
 ⚠ **The six rules below are the `fmt/` corpus's**, and each is written against the
-command `fmt` is. Each of the other twenty takes them up case by case: `test-fixtures/`
+command `fmt` is. Each of the other twenty-one takes them up case by case: `test-fixtures/`
 deliberately stores LIVE `*.maxtest` sources, because the command under test compiles
 them, and `lsp/` stores a live `LspClient.maxon` the tests import.
 
@@ -591,6 +592,11 @@ tests/
   docs/
     stdlib-reference-documents-every-public-api.maxtest      docs/STDLIB_REFERENCE.md names every `public` declaration in `stdlib/*.maxon`
     each-shared-harness-helper-is-defined-once.maxtest       every `public function` in `tests/support/*.maxon` is declared by that one file and by no other `.maxon` or `.maxtest` under `tests/`
+  targets/
+    TargetsHarness.maxon                                             the shared half: the columns of `maxon-bin/targets.tsv`, read by header name
+    the-compiler-accepts-exactly-the-targets-the-table-lists.maxtest     `--target`'s refusal lists the table's `target` column, in its order
+    fetch-vendor-pins-every-tool-for-every-native-target.maxtest         `scripts/fetch-vendor.sh` has a URL and a hash for every tool on exactly the native targets
+    no-workflow-or-installer-spells-a-target.maxtest                     no `.github/workflows/*.yml` line and no installer line names a target the table lists
 ```
 
 ## The six rules, and the hazard each one answers
@@ -620,8 +626,8 @@ import — and `debug/DebugHarness.maxon`, `debug/ImageIdentity.maxon`, `dap/Dap
 `coverage/CoverageHarness.maxon`, `profile/ProfileHarness.maxon`, `execute/ExecuteHarness.maxon`,
 `cli/CliHarness.maxon`, `define/DefineHarness.maxon`, `buildManifest/BuildManifestHarness.maxon`,
 `examples/ExamplesHarness.maxon`, `warmRebuild/WarmRebuildHarness.maxon`,
-`emittedRuntime/EmittedRuntimeHarness.maxon`, `specHarness/SpecHarness.maxon` and `mcp/McpHarness.maxon`
-are their corpora's shared halves, `.maxon` files that `maxon test` compiles beside the `.maxtest` files
+`emittedRuntime/EmittedRuntimeHarness.maxon`, `specHarness/SpecHarness.maxon`, `mcp/McpHarness.maxon` and
+`targets/TargetsHarness.maxon` are their corpora's shared halves, `.maxon` files that `maxon test` compiles beside the `.maxtest` files
 as helpers. That follows from the rule's own reason: the hazard above is `fmt` rewriting an ORACLE, and
 these corpora keep their oracles elsewhere — `lsp/`'s are `b"…"` byte literals inside its test files,
 `examples/`'s are string constants inside its case files, and the rest assert properties. A helper that
@@ -1471,9 +1477,9 @@ as an MCP server on either transport, exchanging JSON-RPC messages, and inspecti
 on a copy costs a file write rather than 25 s, and the whole corpus therefore runs at the default deadline: `maxon test tests/mcp`.
 
 
-## `docs/` — the stdlib reference names every public declaration
+## `docs/` — the stdlib reference names every public declaration, and every shared helper has one home
 
-One case, and it spawns nothing: it reads every top-level `stdlib/*.maxon` and `docs/STDLIB_REFERENCE.md`, and
+Two cases, and neither spawns anything. `stdlib-reference-documents-every-public-api.maxtest` reads every top-level `stdlib/*.maxon` and `docs/STDLIB_REFERENCE.md`, and
 fails listing, file by file, each `public` declaration name the document does not contain as a whole word.
 `stdlib/Builtins.maxon` is excluded with its reason in the case, and `stdlib/helpers/` is not descended
 into; a name in the `__` band, and everything declared inside one, is compiler machinery and is left out.
@@ -1481,5 +1487,25 @@ into; a name in the `__` band, and everything declared inside one, is compiler m
 ⛔ **A `public` LINE WHOSE NAME THE SCANNER CANNOT READ PANICS**, naming its file and line. A shape it
 skipped would drop out of the roster and read exactly like a documented name.
 
-It is the one corpus whose case reads the checkout rather than a fixture or a spawned driver, so it has no
-shared half and no staging. Run it as `maxon test tests/docs`.
+`each-shared-harness-helper-is-defined-once.maxtest` reads every `public function` in `tests/support/*.maxon`
+and fails naming each one that another `.maxon` or `.maxtest` under `tests/` declares again.
+
+Its cases read the checkout itself, so the corpus is two files with no shared half and no staging. Run it as `maxon test tests/docs`.
+
+## `targets/` — every target is named once, in `maxon-bin/targets.tsv`
+
+The compiler, the scripts, the workflows and the installers read their targets from the table, and these
+three cases fail on whatever still names one itself. They read the checkout, so they stage nothing; run them
+from the checkout root as `maxon test tests/targets`. `ci.yml` runs the corpus, and
+`scripts/targets/generate.sh --check`, on the lane whose `roles` cell holds `targets-gate`.
+
+- **`the-compiler-accepts-exactly-the-targets-the-table-lists.maxtest`** asks the compiler under test to build
+  for a target that does not exist and compares the list its refusal prints with the table's `target`
+  column, order included.
+- **`fetch-vendor-pins-every-tool-for-every-native-target.maxtest`** reads the `<tool>/<target>)` arms of
+  `artifact_url` and `artifact_sha256` in `scripts/fetch-vendor.sh` and fails on a native target with no
+  arm for some tool, or an arm for a target the table does not list as native.
+- **`no-workflow-or-installer-spells-a-target.maxtest`** fails naming each line of a workflow,
+  `website/public/install.sh`, `website/public/install.ps1`, `installer/docker/Dockerfile` or
+  `installer/homebrew/generate.sh` that contains a target name, comments included.
+

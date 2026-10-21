@@ -77,20 +77,30 @@ jobs:
         if: steps.ref.outputs.publish == 'yes'
         run: ./scripts/extension-release-gate.sh >/dev/null
 
+  targets:
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.matrix.outputs.release }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            maxon-bin/targets.tsv
+            scripts/lib/host-binaries.sh
+            scripts/targets/matrix.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Read the release targets from the table
+        id: matrix
+        run: |
+          matrix="$(./scripts/targets/matrix.sh json channels=release)"
+          echo "release=$matrix" >> "$GITHUB_OUTPUT"
+
   package:
-    needs: guard
+    needs: [guard, targets]
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - target: x64-windows
-            runner: windows-latest
-          - target: x64-linux
-            runner: ubuntu-latest
-          - target: arm64-macos
-            runner: macos-15
-          - target: arm64-linux
-            runner: ubuntu-24.04-arm
+      matrix: ${{ fromJSON(needs.targets.outputs.release) }}
     runs-on: ${{ matrix.runner }}
     # ⚠ EVERY MATRIX LEG ANSWERS THE SAME QUESTION ("is there a release to seed from?"), so which leg
     # writes this is immaterial. The downstream jobs read it rather than re-asking, which keeps one
@@ -195,8 +205,14 @@ jobs:
       - name: Collect the archives
         run: |
           set -euo pipefail
+          . scripts/lib/archive.sh
           mkdir -p dist
-          find staged -type f \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.untested' \) -exec cp {} dist/ \;
+          for lane in staged/*/; do
+            archives_in "$lane" | while IFS= read -r archive; do
+              cp "$archive" dist/
+            done
+          done
+          find staged -type f -name '*.untested' -exec cp {} dist/ \;
           ls -la dist/
 
       # ⭐⭐ **THE VERSION IS READ OFF A COMPILER, SO THIS JOB HAS TO HAVE ONE.** `release.sh` asks the
@@ -206,7 +222,7 @@ jobs:
       # ⛔ **IT MUST BE THIS RELEASE'S OWN COMPILER, NOT THE SEED.** `package` seeds from
       # the pinned seed release because it needs something that can BUILD; this job needs something
       # that can ANSWER, and the seed answers with its own number — which
-      # `release.sh` would then correctly refuse. The x64-linux archive sitting in `dist/` was built
+      # `release.sh` would then correctly refuse. This runner's own archive sitting in `dist/` was built
       # from this very tag, so the compiler inside it is the one whose word is being taken.
       #
       # ⚠ The glob avoids naming a version this step has no business knowing, and the binary lands
@@ -214,8 +230,11 @@ jobs:
       - name: Seed the compiler from this release's own archive
         run: |
           set -euo pipefail
-          archive="$(find dist -maxdepth 1 -type f -name 'maxon-*-x64-linux.tar.gz' | head -n1)"
-          [ -n "$archive" ] || { echo "::error::no x64-linux archive in dist/ to read the version from"; exit 1; }
+          . scripts/lib/host-binaries.sh
+          host_target="$(maxon_host_target)"
+          archive_ext="$(maxon_target_archive_ext "$host_target")"
+          archive="$(find dist -maxdepth 1 -type f -name "maxon-*-$host_target.$archive_ext" | head -n1)"
+          [ -n "$archive" ] || { echo "::error::no $host_target archive in dist/ to read the version from"; exit 1; }
           work="$(mktemp -d)"
           tar -xzf "$archive" -C "$work"
           binary="$(find "$work" -type f -name maxon | head -n1)"
