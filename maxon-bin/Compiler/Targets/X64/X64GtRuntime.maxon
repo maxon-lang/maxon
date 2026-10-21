@@ -722,9 +722,8 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		OpenFileMappingW or
 		MapViewOfFile or
 
-		// Spawning a child image and peeking a child's pipe both wait on another process.
+		// Spawning a child image waits on another process.
 		CreateProcessW or
-		PeekNamedPipe or
 
 		// A child wait (`osWaitChild`) lowers to this slot rather than `WaitForSingleObject` so that
 		// this table, keyed on the slot, can bracket it while the scheduler's own waits stay
@@ -787,6 +786,9 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		accept or
 		getsockname or
 		shutdown or
+
+		// A peek answers how many bytes a pipe holds at once and never waits for the writer.
+		PeekNamedPipe or
 
 		// The raw OS lock pair (`__Raw.osLock*`) waits on a holder exactly as a runtime lock does; it
 		// must stay `schedulerBound`.

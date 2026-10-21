@@ -74,9 +74,9 @@ this lane can express carries a `posix-…` sibling marked `arm64-macos`, exactl
 
 ⚠ **A READ PARKS HERE TOO, ON A POLL DESCRIPTOR RATHER THAN AN OVERLAPPED.** The pipe's read end is
 non-blocking and carries a poll source, so `subpReadLine` gives its machine up until the poller
-reports the descriptor ready. `posix-a-parked-line-read-needs-no-rescue` measures exactly that: the
-retake delta across one `subpReadLine` whose child delays a second is ZERO, so the machine was
-released deliberately rather than rescued out of a blocking call.
+reports the descriptor ready. `posix-a-parked-line-read-needs-no-rescue` measures exactly that: across
+one `subpReadLine` whose child delays a second, no bracketed kernel call is entered and no processor is
+retaken, so the machine was released deliberately rather than rescued out of a blocking call.
 
 ⛔ **THREE WINDOWS CASES BELOW HAVE NO SIBLING, AND THAT IS A GAP RATHER THAN A LANE FACT.**
 `interleave-with-sleep`, `drop-reader-then-reread` and `release-while-parked-then-reuse-slot`
@@ -155,27 +155,34 @@ AND reads in one call, so a bracket around it counts the SPAWN — `osProcessSpa
 `SyscallClass.blocking`, and at ONE processor the machine inside `clone`+`execve` holds the only P, so
 `__sched_retake`'s `(nmspinning + npidle) > 0` term is zero and the retake always fires. That retake is
 correct; it is what lets anything else run while a child is being spawned. Here the two are SEPARATE calls,
-so `beforeRetake` … `Scheduler.counters().retakes - beforeRetake` brackets `subpReadLine` ALONE and the spawn's
-retake falls outside it. The idiom is `netpoll-socket`'s verbatim.
+so `before` … `after` brackets `subpReadLine` ALONE and the spawn's retake falls outside it. The idiom is
+`netpoll-socket`'s verbatim.
 
 The child delays a second before its line, so the read is certainly outstanding when the scheduler runs out
 of other work. `rescued=false` then says the reader went onto its poll descriptor and gave the machine up
 deliberately, rather than sitting inside `read(2)` for `__sysmon` to rescue. The line's byte length is the
 exit code (`hello\n`, SIX), so a read that returned nothing cannot pass the case.
 
-⚠ **A READ THAT BLOCKED ITS MACHINE WOULD MAKE THE DELTA AT LEAST ONE.** Blocked inside `read(2)`,
-`subpReadLine` would be observed by `__sysmon` twice in the same bracketed call and the processor taken back. The
-witness is EXACTLY ZERO for the reason `netpoll-socket`'s `stuck=` witness is: a tolerance would admit
-precisely the arrangement the case exists to refuse.
+⭐⭐ **`brackets=0` IS WHAT MAKES `rescued=false` A FACT RATHER THAN A LIKELIHOOD.** The read issues two
+`read(2)`s on its non-blocking descriptor — the one that answers `EAGAIN` and the one after the poller's wake —
+and neither may wait, so neither is a bracketed call (`StdDialect.stdOpSyscallClassOf`). A bracketed call, however
+short, is one `__sysmon` takes the only processor out of whenever two of its laps land inside it, which a
+loaded host makes rare rather than impossible. With no bracket in the window there is nothing to retake.
+
+⚠ **A READ THAT BLOCKED ITS MACHINE WOULD MOVE BOTH.** Blocked inside `read(2)`, `subpReadLine` would enter a
+bracketed call and be observed by `__sysmon` twice in it, and the processor taken back. Both witnesses are
+EXACTLY ZERO for the reason `netpoll-socket`'s `stuck=` witness is: a tolerance would admit precisely the
+arrangement the case exists to refuse.
 ```maxon
 function main() returns ExitCode
 	let h = subpSpawn("sleep 1; echo hello")
-	let beforeRetake = Scheduler.counters().retakes
+	let before = Scheduler.counters()
 	let line = subpReadLine(h)
-	let delta = Scheduler.counters().retakes - beforeRetake
-	let rescued = delta > 0
+	let after = Scheduler.counters()
+	let rescued = after.retakes > before.retakes
+	let brackets = after.syscalls - before.syscalls
 	let n = line.byteLength()
-	print("rescued={rescued}\n")
+	print("rescued={rescued} brackets={brackets}\n")
 	_ = subpWait(h)
 	subpRelease(h)
 	return n as ExitCode
@@ -185,7 +192,7 @@ end 'main'
 6
 ```
 ```stdout
-rescued=false
+rescued=false brackets=0
 ```
 
 <!-- test: streaming-subprocess.posix-a-drained-child-costs-no-timer-scan -->

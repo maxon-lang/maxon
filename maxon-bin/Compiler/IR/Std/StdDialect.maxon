@@ -3165,13 +3165,18 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		// The socket descriptor band leads them: the bracket exists so `__sysmon` can take a processor
 		// away from a machine stuck in the kernel, and around a call that cannot be stuck it costs a
 		// retake, which `specs/netpoll-socket.md`'s first case counts. `getsockopt`, the verdict of a
-		// non-blocking connect, reads a word the kernel already holds.
+		// non-blocking connect, reads a word the kernel already holds. A child's output pipe is read the
+		// same way, so its read and its zero-timeout peek join the band (`osSocketResolve` carries the
+		// lane argument).
 		osSocketCreate or
 		osSocketConnect or
 		osSocketError or
 		osSocketSend or
 		osSocketRecv or
 		osSocketClose or
+
+		osReadOverlapped or
+		osPipePeek or
 
 		// Every lane that consults this table lowers the startup to a constant and enters no kernel.
 		osSocketStartup or
@@ -3288,10 +3293,8 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 
 		// `__con_read_stdin` is a plain synchronous read of standard input with no park
 		// (`ConsoleRuntime`), so a green thread inside it holds its OS thread in the kernel until the
-		// user presses return — which `specs/sched-syscall-handoff.md`'s ordering case measures. The
-		// overlapped spelling completes synchronously on every POSIX lane.
+		// user presses return — which `specs/sched-syscall-handoff.md`'s ordering case measures.
 		osReadFile or
-		osReadOverlapped or
 
 		// The file-system family: every one of them can reach a cold disk, a network share or a
 		// stalled device.
@@ -3313,22 +3316,21 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		osOpenNamedSegment or
 		osMapNamedSegment or
 
-		// Spawning a child image, making a pipe, peeking a child's pipe and waiting for a child all wait
-		// on another process.
+		// Spawning a child image, making a pipe and waiting for a child all wait on another process.
 		osProcessSpawn or
 		osProcessSpawnInherit or
 		osPipeCreate or
 		osPipeCreateOutbound or
-		osPipePeek or
 		osWaitChild or
 
 		// The one socket call that really does wait on another party: resolution speaks to a resolver.
 		//
-		// ⚠ The descriptor ops are not here, and that is this table's one lane-shaped entry. Every lane
+		// ⚠ The descriptor ops are not here, and they are this table's lane-shaped entries. Every lane
 		// that reaches `StdLoweringShared.opTakesSyscallBracket` drives its sockets non-blocking
-		// (`ManagedSocketRuntime.SocketWaitShape.polled`), so `socket`, `connect`, `send`, `recv` and
-		// `close` answer at once — `EAGAIN` rather than a wait — and the green thread suspends on the
-		// poller. x64-windows suspends on the poller too, one operation at a time, and classifies its
+		// (`ManagedSocketRuntime.SocketWaitShape.polled`) and a child's output pipes too
+		// (`NetpollRuntime.__np_pipe_open`), so `socket`, `connect`, `send`, `recv`, `close`, a pipe read
+		// and a pipe peek answer at once — `EAGAIN` rather than a wait — and the green thread suspends on
+		// the poller. x64-windows suspends on the poller too, one operation at a time, and classifies its
 		// own imports through `X64GtRuntime.gtShimSyscallClassOf`.
 		osSocketResolve or
 
