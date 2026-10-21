@@ -4825,7 +4825,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			notQualified panic("ProvenanceTracer.decideSharedSend: the handler '{String.from(site.destination)}' is not a qualified message name")
 		end 'handler'
 
-		let blame = serviceSendArgumentBlame(handlerType, methodName: handlerMember, paramName: site.source)
+		let parameterSpelling = argLabelSpelling(site.source)
+		let blame = serviceSendArgumentBlame(handlerType, methodName: handlerMember, paramName: parameterSpelling)
 
 		let aParameter = valueIsAParameter(site.value, paramCount: func.paramCount)
 
@@ -4835,14 +4836,14 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'theSenderWritesIt'
 
 		if self.handlerWritesOrKeeps(mutationSummary, handler: site.destination, parameter: site.source) 'theHandlerWritesIt'
-			self.refuse(site.line, column: site.column, code: ErrorCode.semanticServiceArgumentNotUnique, message: serviceSharedValueHandledMessage(blame, handler: String.from(site.destination), parameter: String.from(site.source), shared: "a PARAMETER" if aParameter else "a read-only value"))
+			self.refuse(site.line, column: site.column, code: ErrorCode.semanticServiceArgumentNotUnique, message: serviceSharedValueHandledMessage(blame, handler: String.from(site.destination), parameter: String.from(parameterSpelling), shared: "a PARAMETER" if aParameter else "a read-only value"))
 		end 'theHandlerWritesIt'
 	end 'decideSharedSend'
 
 	function handlerWritesOrKeeps(mutationSummary ParamMutationSummary, handler ByteArray, parameter ByteArray) returns bool
 		let handlerIndex = try mutationSummary.funcIndexByName.get(handler) otherwise return true
 		let sig = try self.project.funcSignatures.get(handler) otherwise return true
-		let position = (try sig.paramNames.positionOfName(parameter) otherwise return true) as ParamCount
+		let position = try positionOfArgLabel(sig.paramNames, label: parameter) otherwise return true
 		let (mask, recordMask) = mutationSummary.writesOf(handler)
 
 		return maskHasParam(mask or recordMask or self.keptParameters(handlerIndex, paramCount: sig.paramCount()), param: position)

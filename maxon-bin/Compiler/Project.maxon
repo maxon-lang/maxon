@@ -11730,14 +11730,6 @@ export function argDuplicateMessage(callee String, paramName String) returns Str
 	return "duplicate argument for parameter '{paramName}' of '{callee}'"
 end 'argDuplicateMessage'
 
-// Slot a call's `args` (in source order, each paired with its `argLabels` entry — the
-// empty string for a positional argument) into the callee's DECLARATION order, given the
-// callee's `paramNames`. A positional argument at index `i` fills parameter position `i`;
-// a labelled argument `name: value` fills the position of the parameter named `name`. The
-// parser has already enforced the label GRAMMAR (which arguments may carry one). Returns
-// the reordered value list, or the first slotting error found (arity, unknown label, or two
-// arguments targeting one parameter). THE one place the label→position mapping lives — shared
-// by call validation, call lowering, the parser's consume transfer and witness dispatch.
 // ⭐ **THE LABEL→POSITION MAPPING ITSELF, allocation-free** — a positional argument at index `i` fills
 // parameter `i`; a labelled one fills the position of the parameter it names. An argument that fills no
 // parameter (an unknown label, or a positional index past the last parameter) throws: `slotCallArgs`
@@ -11765,15 +11757,13 @@ end 'argDuplicateMessage'
 // to an already-refused program, so the tie-break could only change which diagnostic that program
 // gets.
 //
-// ⚠ **`_` IS THE ONE NAME A SIGNATURE MAY REPEAT, AND THE SLOTTING IS STILL EXACT.** The ignore name is
-// exempt from that E2014 — `Parser.parseFunctionParameters` admits `make(_ Integer = 1, _ String =
-// "n", item T)` — so `paramNames` can carry several. It changes
-// nothing here, because the ONLY way a repeat is observable is a call that LABELS `_`, and the loop
-// below refuses the outcome directly: whichever `_` the scan picks, filling a slot twice is
-// `ArgSlotResult.duplicateArg`, reporting `parameter '_' already has a value (passed positionally)`
-// at the CALL and nothing at the declaration.
-// A call that does not label `_` never asks about it at all — a positional argument returns at the
-// `label.isEmpty()` line above.
+// ⚠ `_` is the one name a signature may repeat: it is exempt from that E2014, so
+// `Parser.parseFunctionParameters` admits `make(_ Integer = 1, _ String = "n", item T)`, and a name
+// lookup answers only the first. A synthesized default for a `_` slot is therefore labelled by
+// `slotArgLabel` with `_` and one `#` per `_` up to and including that slot, which
+// `positionOfArgLabel` decodes back to the slot. No source label can spell it, since `#` opens a
+// directive and never appears in an identifier. An author's own `_:` label resolves to the first `_`,
+// and filling a slot twice is `ArgSlotResult.duplicateArg` at the call.
 export function argSlotPosition(paramNames NameRoster, argIndex ParamCount, label ByteArray) returns ParamCount throws MapError
 	if label.isEmpty() 'positional'
 		if argIndex >= paramNames.count() 'pastTheLastParameter'
@@ -11789,15 +11779,116 @@ export function argSlotPosition(paramNames NameRoster, argIndex ParamCount, labe
 		end 'labelsInDeclarationOrder'
 	end 'aParameterAtItsOwnPosition'
 
-	return (try paramNames.positionOfName(label)) as ParamCount
+	return try positionOfArgLabel(paramNames, label: label)
 end 'argSlotPosition'
 
-// ⭐ **`argDefaultSlots` IS THE COMPILER'S OWN ANSWER FOR THE ARGUMENTS IT SUPPLIED** — see `MaxonOp.call`.
-// One entry per synthesized parameter default, and they are the TRAILING run of `args`, so the argument at
-// `sourceCount + k` fills slot `argDefaultSlots[k]` and no name is consulted for it. Everything before
-// `sourceCount` is the author's and resolves through `argSlotPosition`. A caller with no synthesized
-// defaults (every witness dispatch, every lowering) passes the shared empty array.
-export function slotCallArgs(paramNames NameRoster, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray) returns ArgSlotResult
+export function positionOfArgLabel(paramNames NameRoster, label ByteArray) returns ParamCount throws MapError
+	if let ordinal = try discardOrdinalOf(label) 'aSynthesizedDiscardLabel'
+		return try discardedParamPosition(paramNames, ordinal: ordinal)
+	end 'aSynthesizedDiscardLabel'
+
+	return (try paramNames.positionOfName(label)) as ParamCount
+end 'positionOfArgLabel'
+
+export function slotArgLabel(paramNames NameRoster, slot ParamCount) returns ByteArray
+	let name = try paramNames.get(slot) otherwise panic("slotArgLabel: paramNames.get OOB at {slot}")
+
+	if not name.equals(DiscardBindingName) 'aNamedParameter'
+		return name
+	end 'aNamedParameter'
+
+	let mark = AsciiByte.hash.rawValue as Byte
+	var label = DiscardBindingName.clone()
+	label.push(mark)
+
+	for earlier in 0 upto slot 'eachEarlierParameter'
+		if (try paramNames.get(earlier) otherwise panic("slotArgLabel: paramNames.get OOB at {earlier}")).equals(DiscardBindingName) 'anEarlierDiscard'
+			label.push(mark)
+		end 'anEarlierDiscard'
+	end 'eachEarlierParameter'
+
+	return label
+end 'slotArgLabel'
+
+export function argLabelSpelling(label ByteArray) returns ByteArray
+	return DiscardBindingName if isDiscardLabel(label) else label
+end 'argLabelSpelling'
+
+let NoSynthesizedSlots = ParamCountArray.create()
+
+export function synthesizedArgIndex(argCount Count, defaultedArgs ParamCount, k ParamCount) returns ParamCount
+	return (argCount as ParamCount) - defaultedArgs + k
+end 'synthesizedArgIndex'
+
+export function synthesizedArgSlots(paramNames NameRoster, argLabels NameRoster, defaultedArgs ParamCount) returns ParamCountArray
+	if defaultedArgs == NoDefaultedArgs 'nothingSynthesized'
+		return NoSynthesizedSlots
+	end 'nothingSynthesized'
+
+	var slots = ParamCountArray.create()
+
+	for k in 0 upto defaultedArgs 'eachSynthesizedArg'
+		let argIndex = synthesizedArgIndex(argLabels.count(), defaultedArgs: defaultedArgs, k: k as ParamCount)
+		let label = try argLabels.get(argIndex) otherwise panic("synthesizedArgSlots: argLabels.get OOB at {argIndex}")
+		slots.push(try argSlotPosition(paramNames, argIndex: argIndex, label: label) otherwise panic("synthesizedArgSlots: the synthesized argument {argIndex} (label '{String.from(argLabelSpelling(label))}') fills no parameter of the signature the call was slotted against"))
+	end 'eachSynthesizedArg'
+
+	return slots
+end 'synthesizedArgSlots'
+
+function isDiscardLabel(label ByteArray) returns bool
+	let prefixLength = DiscardBindingName.count()
+
+	if label.count() <= prefixLength or not bytesStartWith(label, prefix: DiscardBindingName) 'notADiscardLabel'
+		return false
+	end 'notADiscardLabel'
+
+	for i in prefixLength upto label.count() 'eachMark'
+		if (try label.get(i) otherwise panic("isDiscardLabel: label.get OOB at {i}")) != AsciiByte.hash 'notAMark'
+			return false
+		end 'notAMark'
+	end 'eachMark'
+
+	return true
+end 'isDiscardLabel'
+
+function discardOrdinalOf(label ByteArray) returns ParamCount throws MapError
+	if not isDiscardLabel(label) 'notADiscardLabel'
+		throw MapError.keyNotFound
+	end 'notADiscardLabel'
+
+	return (label.count() - DiscardBindingName.count() - 1) as ParamCount
+end 'discardOrdinalOf'
+
+function discardedParamPosition(paramNames NameRoster, ordinal ParamCount) returns ParamCount throws MapError
+	var remaining = ordinal
+
+	for i in 0 upto paramNames.count() 'eachParameter'
+		let name = try paramNames.get(i) otherwise panic("discardedParamPosition: paramNames.get OOB at {i}")
+
+		if not name.equals(DiscardBindingName) 'aNamedParameter'
+			continue
+		end 'aNamedParameter'
+
+		if remaining == 0 'theOneAsked'
+			return i as ParamCount
+		end 'theOneAsked'
+
+		remaining = remaining - 1
+	end 'eachParameter'
+
+	throw MapError.keyNotFound
+end 'discardedParamPosition'
+
+// Slot a call's `args` (in source order, each paired with its `argLabels` entry — the
+// empty string for a positional argument) into the callee's DECLARATION order, given the
+// callee's `paramNames`. A positional argument at index `i` fills parameter position `i`;
+// a labelled argument `name: value` fills the position of the parameter named `name`. The
+// parser has already enforced the label GRAMMAR (which arguments may carry one). Returns
+// the reordered value list, or the first slotting error found (arity, unknown label, or two
+// arguments targeting one parameter). Shared by call validation, call lowering, the parser's
+// consume transfer and witness dispatch; the label→position mapping itself is `argSlotPosition`.
+export function slotCallArgs(paramNames NameRoster, args ValueIdArray, argLabels NameRoster) returns ArgSlotResult
 	let paramCount = paramNames.count()
 
 	if args.count() != paramCount 'arity'
@@ -11815,22 +11906,11 @@ export function slotCallArgs(paramNames NameRoster, args ValueIdArray, argLabels
 		filled.push(false)
 	end 'initSlots'
 
-	// The author's arguments are everything before the compiler's trailing run of defaults. The subtraction
-	// cannot underflow (`ParamCount` is unsigned, so it would be a range panic rather than a wrap): every
-	// entry of `argDefaultSlots` was pushed by `Parser.fillArgsFromParamDefaults` in lockstep with an
-	// argument APPENDED to this same list, so the column is never longer than `args`. That invariant is
-	// stated where the column is declared (`MaxonOp.call`) and named here because this is where it is spent.
-	let sourceCount = args.count() - argDefaultSlots.count()
-
 	for i in 0 upto args.count() 'placeArgs'
 		let argIndex = i as ParamCount
 		let argId = try args.get(i) otherwise panic("slotCallArgs: args.get OOB at {i}")
 		let label = try argLabels.get(i) otherwise panic("slotCallArgs: argLabels.get OOB at {i}")
-
-		// A SYNTHESIZED default names its slot outright; only a SOURCE-written argument is resolved by label.
-		// That split is what keeps two `_` parameters apart: `_` binds nothing, so a signature may declare it
-		// twice, and a name lookup then cannot tell the two apart (`MaxonOp.call`'s `argDefaultSlots`).
-		let pos = try callArgSlot(paramNames, argDefaultSlots: argDefaultSlots, sourceCount: sourceCount, argIndex: argIndex, label: label) otherwise return ArgSlotResult.unknownLabel(argIndex, label: String.from(label))
+		let pos = try argSlotPosition(paramNames, argIndex: argIndex, label: label) otherwise return ArgSlotResult.unknownLabel(argIndex, label: String.from(argLabelSpelling(label)))
 
 		let alreadyFilled = try filled.get(pos) otherwise panic("slotCallArgs: filled.get OOB at {pos}")
 
@@ -11845,22 +11925,6 @@ export function slotCallArgs(paramNames NameRoster, args ValueIdArray, argLabels
 
 	return ArgSlotResult.ordered(slotIds)
 end 'slotCallArgs'
-
-// A synthesized default's slot is checked against `paramNames` because the parser filled the defaults
-// from one overload member, and the member resolved later can declare fewer parameters.
-function callArgSlot(paramNames NameRoster, argDefaultSlots ParamCountArray, sourceCount ElementIndex, argIndex ParamCount, label ByteArray) returns ParamCount throws MapError
-	if argIndex < sourceCount 'sourceWritten'
-		return try argSlotPosition(paramNames, argIndex: argIndex, label: label)
-	end 'sourceWritten'
-
-	let slot = try argDefaultSlots.get(argIndex - sourceCount) otherwise panic("callArgSlot: argDefaultSlots.get OOB at {argIndex - sourceCount} — the synthesized defaults are the trailing run of args")
-
-	if slot >= paramNames.count() 'pastTheResolvedSignature'
-		throw MapError.keyNotFound
-	end 'pastTheResolvedSignature'
-
-	return slot
-end 'callArgSlot'
 
 export type UnplacedUnknownType
 	export let message as String

@@ -1798,32 +1798,16 @@ export union MaxonOp
 	// `__`-prefixed and in no signature registry — and of most user calls, so a shared empty array
 	// serves them all and the op costs nothing. `immutableArgNameAt` is the one reader and decodes both
 	// shapes.
-	// ⭐⭐ **`argDefaultSlots` — THE DECLARATION SLOT OF EACH ARGUMENT THE COMPILER SUPPLIED, and the reason it
-	// exists is that a NAME cannot address a parameter position.** A parameter default is materialized by
-	// `Parser.fillArgsFromParamDefaults` and appended with the parameter's own name as its label, which
-	// `slotCallArgs` then resolves back to a position — and `_`, the ignore name, may be declared MORE THAN
-	// ONCE in one signature (it binds nothing, so two of them cannot collide). A name lookup answers the
-	// FIRST occurrence, so `create(_ Integer = 1, _ String = "n", item T)` called `create(2, item: s)` would
-	// send slot 1's default to slot 0 and report `E3038 duplicate argument for parameter '_'`.
-	//
-	// ⭐ **ONE ENTRY PER SYNTHESIZED ARGUMENT, AND THEY ARE THE TRAILING RUN OF `args`** — `fillArgsFromParamDefaults`
-	// is the only writer and it APPENDS, so argument `args.count() - argDefaultSlots.count() + k` is the default
-	// for slot `argDefaultSlots[k]`. That shape needs no per-argument optional and no sentinel: a source-written
-	// argument simply is not in the run. EMPTY (the shared `NoDefaultArgSlots`) for every call that omitted no
-	// defaulted argument, which is nearly all of them.
-	//
-	// ⚠ **THE LABEL STAYS ON THE SYNTHESIZED ARGUMENT, AND THIS COLUMN IS AUTHORITATIVE ONLY FOR `slotCallArgs`.**
-	// Four other readers bridge an argument index to a position through `argSlotPosition` alone
-	// (`SemanticCheck.addCallParamEdges`, `checkImmutableArgToMutatingParam`, `Parser.transferConsumedArgs`,
-	// `InsertRangeChecks`), and none is threaded this column — because none CAN be wrong for the only name a
-	// signature may repeat. `_` binds nothing, so no body mentions it, so every analysis keyed on what the body
-	// does with a parameter (mutates it, consumes it, feeds it, blames it) answers "nothing" for a `_` slot
-	// whichever `_` a name lookup picks. Only `slotCallArgs` places a VALUE, and only it needs the exact slot.
+	// `defaultedArgs` counts the arguments the compiler supplied from parameter defaults. They are the
+	// trailing run of `args`, because both default fillers append (`Parser.fillArgsFromParamDefaults`, and
+	// `Parser.appendConstFactoryArgDefaults` for a module-scope factory call); `synthesizedArgIndex` and
+	// `synthesizedArgSlots` rely on that. Each carries the label `slotArgLabel` gives its slot, so every
+	// label reader places it exactly, a `_` slot included — see `argSlotPosition`.
 	//
 	// `mint` says whether `callee` is bytes the author wrote or a name the compiler minted from a spelling
 	// that shares none of them — see `CalleeMint`. It is the LAST field for the reason a new op is appended at
 	// its band's end: every existing destructuring reads its operands positionally.
-	call(result ValueId, let callee ByteArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, let argImmutableNames WriteBlameArray, argDefaultSlots ParamCountArray, mint CalleeMint) = MaxonOpMeta{category: OpCategory.callFree}
+	call(result ValueId, let callee ByteArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, let argImmutableNames WriteBlameArray, defaultedArgs ParamCount, mint CalleeMint) = MaxonOpMeta{category: OpCategory.callFree}
 
 	// --- band: plain ---
 	// Integer literal materialization. `value` is the already-parsed i64 (the
@@ -1945,7 +1929,7 @@ export union MaxonOp
 	// PARSER emits (`compare(errorFlag != 0)` + `condBranch`) is what reads the flag; the value is used
 	// on the success edge. Category `callFree`, the same band as `call` — it IS `call` plus the flag def.
 	// `argImmutableNames` carries the same per-argument blame names a plain `call` does — see there.
-	tryCall(result ValueId, errorFlag ValueId, let callee ByteArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, let argImmutableNames WriteBlameArray, argDefaultSlots ParamCountArray, mint CalleeMint) = MaxonOpMeta{category: OpCategory.callFree}
+	tryCall(result ValueId, errorFlag ValueId, let callee ByteArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, let argImmutableNames WriteBlameArray, defaultedArgs ParamCount, mint CalleeMint) = MaxonOpMeta{category: OpCategory.callFree}
 
 	// THROW an error — a `throw E.case` / `throw U.case(x)` or `otherwise (e) throw e`. TERMINATOR (control
 	// leaves the function via the error edge). `errorValue` is either the enum ORDINAL (a SCALAR error) or a
@@ -2037,7 +2021,7 @@ export union MaxonOp
 	// (`tagRidesAsyncGprChannel`) before this op is emitted, so every `args` value and the callee's
 	// return are GPR words. `argImmutableNames` carries the same per-argument blame names a plain
 	// `call` does — see there.
-	asyncCall(result ValueId, let callee ByteArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, let argImmutableNames WriteBlameArray, argDefaultSlots ParamCountArray, mint CalleeMint) = MaxonOpMeta{category: OpCategory.awaiting}
+	asyncCall(result ValueId, let callee ByteArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, let argImmutableNames WriteBlameArray, defaultedArgs ParamCount, mint CalleeMint) = MaxonOpMeta{category: OpCategory.awaiting}
 
 	// AWAIT `promise`'s green thread and yield its result. `promise` is the i64 handle `asyncCall` produced;
 	// `result` is the awaited scalar. Lowers to `__gt_await(promise)`.
@@ -2424,14 +2408,14 @@ export function cacheWriteMaxonOp(writer LibraryCacheWriter, value MaxonOp)
 	end 'payload'
 end 'cacheWriteMaxonOp'
 
-function cacheWriteMaxonOpCall(writer LibraryCacheWriter, a0 ValueId, a1 ByteArray, a2 ValueIdArray, a3 NameRoster, a4 SourceRangeArray, a5 WriteBlameArray, a6 ParamCountArray, a7 CalleeMint)
+function cacheWriteMaxonOpCall(writer LibraryCacheWriter, a0 ValueId, a1 ByteArray, a2 ValueIdArray, a3 NameRoster, a4 SourceRangeArray, a5 WriteBlameArray, a6 ParamCount, a7 CalleeMint)
 	writer.unsigned(a0 as CacheUnsigned)
 	writer.bytes(a1)
 	cacheWriteValueIdArray(writer, value: a2)
 	cacheWriteNameRoster(writer, value: a3)
 	cacheWriteSourceRangeArray(writer, value: a4)
 	cacheWriteWriteBlameArray(writer, value: a5)
-	cacheWriteParamCountArray(writer, value: a6)
+	writer.unsigned(a6 as CacheUnsigned)
 	writer.unsigned(a7.ordinal as CacheUnsigned)
 end 'cacheWriteMaxonOpCall'
 
@@ -2500,7 +2484,7 @@ function cacheWriteMaxonOpStringLiteral(writer LibraryCacheWriter, a0 ValueId, a
 	writer.bytes(a1)
 end 'cacheWriteMaxonOpStringLiteral'
 
-function cacheWriteMaxonOpTryCall(writer LibraryCacheWriter, a0 ValueId, a1 ValueId, a2 ByteArray, a3 ValueIdArray, a4 NameRoster, a5 SourceRangeArray, a6 WriteBlameArray, a7 ParamCountArray, a8 CalleeMint)
+function cacheWriteMaxonOpTryCall(writer LibraryCacheWriter, a0 ValueId, a1 ValueId, a2 ByteArray, a3 ValueIdArray, a4 NameRoster, a5 SourceRangeArray, a6 WriteBlameArray, a7 ParamCount, a8 CalleeMint)
 	writer.unsigned(a0 as CacheUnsigned)
 	writer.unsigned(a1 as CacheUnsigned)
 	writer.bytes(a2)
@@ -2508,7 +2492,7 @@ function cacheWriteMaxonOpTryCall(writer LibraryCacheWriter, a0 ValueId, a1 Valu
 	cacheWriteNameRoster(writer, value: a4)
 	cacheWriteSourceRangeArray(writer, value: a5)
 	cacheWriteWriteBlameArray(writer, value: a6)
-	cacheWriteParamCountArray(writer, value: a7)
+	writer.unsigned(a7 as CacheUnsigned)
 	writer.unsigned(a8.ordinal as CacheUnsigned)
 end 'cacheWriteMaxonOpTryCall'
 
@@ -2538,14 +2522,14 @@ function cacheWriteMaxonOpIndirectCall(writer LibraryCacheWriter, a0 ValueId, a1
 	cacheWriteWriteBlameArray(writer, value: a3)
 end 'cacheWriteMaxonOpIndirectCall'
 
-function cacheWriteMaxonOpAsyncCall(writer LibraryCacheWriter, a0 ValueId, a1 ByteArray, a2 ValueIdArray, a3 NameRoster, a4 SourceRangeArray, a5 WriteBlameArray, a6 ParamCountArray, a7 CalleeMint)
+function cacheWriteMaxonOpAsyncCall(writer LibraryCacheWriter, a0 ValueId, a1 ByteArray, a2 ValueIdArray, a3 NameRoster, a4 SourceRangeArray, a5 WriteBlameArray, a6 ParamCount, a7 CalleeMint)
 	writer.unsigned(a0 as CacheUnsigned)
 	writer.bytes(a1)
 	cacheWriteValueIdArray(writer, value: a2)
 	cacheWriteNameRoster(writer, value: a3)
 	cacheWriteSourceRangeArray(writer, value: a4)
 	cacheWriteWriteBlameArray(writer, value: a5)
-	cacheWriteParamCountArray(writer, value: a6)
+	writer.unsigned(a6 as CacheUnsigned)
 	writer.unsigned(a7.ordinal as CacheUnsigned)
 end 'cacheWriteMaxonOpAsyncCall'
 
@@ -2734,10 +2718,10 @@ function cacheReadMaxonOpCall(reader LibraryCacheReader) returns MaxonOp throws 
 	let a3 = try cacheReadNameRoster(reader)
 	let a4 = try cacheReadSourceRangeArray(reader)
 	let a5 = try cacheReadWriteBlameArray(reader)
-	let a6 = try cacheReadParamCountArray(reader)
+	let a6 = (try reader.unsigned()) as ParamCount
 	let a7 = try cacheReadCalleeMint(reader)
 
-	return MaxonOp.call(a0, callee: a1, args: a2, argLabels: a3, argRanges: a4, argImmutableNames: a5, argDefaultSlots: a6, mint: a7)
+	return MaxonOp.call(a0, callee: a1, args: a2, argLabels: a3, argRanges: a4, argImmutableNames: a5, defaultedArgs: a6, mint: a7)
 end 'cacheReadMaxonOpCall'
 
 function cacheReadMaxonOpLiteral(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
@@ -2835,10 +2819,10 @@ function cacheReadMaxonOpTryCall(reader LibraryCacheReader) returns MaxonOp thro
 	let a4 = try cacheReadNameRoster(reader)
 	let a5 = try cacheReadSourceRangeArray(reader)
 	let a6 = try cacheReadWriteBlameArray(reader)
-	let a7 = try cacheReadParamCountArray(reader)
+	let a7 = (try reader.unsigned()) as ParamCount
 	let a8 = try cacheReadCalleeMint(reader)
 
-	return MaxonOp.tryCall(a0, errorFlag: a1, callee: a2, args: a3, argLabels: a4, argRanges: a5, argImmutableNames: a6, argDefaultSlots: a7, mint: a8)
+	return MaxonOp.tryCall(a0, errorFlag: a1, callee: a2, args: a3, argLabels: a4, argRanges: a5, argImmutableNames: a6, defaultedArgs: a7, mint: a8)
 end 'cacheReadMaxonOpTryCall'
 
 function cacheReadMaxonOpThrowError(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
@@ -2884,10 +2868,10 @@ function cacheReadMaxonOpAsyncCall(reader LibraryCacheReader) returns MaxonOp th
 	let a3 = try cacheReadNameRoster(reader)
 	let a4 = try cacheReadSourceRangeArray(reader)
 	let a5 = try cacheReadWriteBlameArray(reader)
-	let a6 = try cacheReadParamCountArray(reader)
+	let a6 = (try reader.unsigned()) as ParamCount
 	let a7 = try cacheReadCalleeMint(reader)
 
-	return MaxonOp.asyncCall(a0, callee: a1, args: a2, argLabels: a3, argRanges: a4, argImmutableNames: a5, argDefaultSlots: a6, mint: a7)
+	return MaxonOp.asyncCall(a0, callee: a1, args: a2, argLabels: a3, argRanges: a4, argImmutableNames: a5, defaultedArgs: a6, mint: a7)
 end 'cacheReadMaxonOpAsyncCall'
 
 function cacheReadMaxonOpAwait(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
@@ -3392,9 +3376,9 @@ export function withRewrittenCallee(op MaxonOp, callee ByteArray) returns MaxonO
 		// name E2051 bars from the reserved space, so a minted callee can never be its subject. Resetting the
 		// mint here would hide that if it ever changed; carrying it makes `primitiveStaticSourceSpelling`'s
 		// re-mint check panic on the spot.
-		call(result, _, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) gives MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
-		tryCall(result, errorFlag, _, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) gives MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
-		asyncCall(result, _, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) gives MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
+		call(result, _, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) gives MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mint: mint)
+		tryCall(result, errorFlag, _, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) gives MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mint: mint)
+		asyncCall(result, _, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) gives MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mint: mint)
 
 		// ⚠ **`serviceSend` IS `direct` AND IS DELIBERATELY ABSENT.** Only overload resolution rewrites a
 		// callee, and a message's name can never be an overload set's key: `classifyServiceRoster` refuses
@@ -3633,7 +3617,7 @@ end 'cacheReadWriteBlameArray'
 // @generated library-cache end
 
 // The same op with its ARGUMENT LIST and blame names replaced — every other operand, the parallel
-// label / range / default-slot columns included, carried through verbatim. `withRewrittenCallee`'s
+// label / range columns and `defaultedArgs` included, carried through verbatim. `withRewrittenCallee`'s
 // twin one operand over, and it exists for the same reason: `LiteralArgPromotion` substitutes a
 // writable record for an immortal or merged one at a call, `SemanticCheck.bindDeferredArguments`
 // binds the arguments the parser left to overload resolution, and doing either at the call
@@ -3646,9 +3630,9 @@ end 'cacheReadWriteBlameArray'
 // project. The caller pairs this with `module.ops.set`, which replaces only the merged module's slot.
 export function withRewrittenArgs(op MaxonOp, args ValueIdArray, argImmutableNames WriteBlameArray) returns MaxonOp
 	return match op 'op'
-		call(result, callee, _, argLabels, argRanges, _, argDefaultSlots, mint) gives MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
-		tryCall(result, errorFlag, callee, _, argLabels, argRanges, _, argDefaultSlots, mint) gives MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
-		asyncCall(result, callee, _, argLabels, argRanges, _, argDefaultSlots, mint) gives MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
+		call(result, callee, _, argLabels, argRanges, _, defaultedArgs, mint) gives MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mint: mint)
+		tryCall(result, errorFlag, callee, _, argLabels, argRanges, _, defaultedArgs, mint) gives MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mint: mint)
+		asyncCall(result, callee, _, argLabels, argRanges, _, defaultedArgs, mint) gives MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mint: mint)
 		indirectCall(result, callee, _, _) gives MaxonOp.indirectCall(result, callee: callee, args: args, argImmutableNames: argImmutableNames)
 		default panic("withRewrittenArgs: asked of an op that supplies no substitutable argument list — only the three direct-call variants and the indirect call carry one")
 

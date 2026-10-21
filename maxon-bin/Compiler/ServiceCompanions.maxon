@@ -992,18 +992,6 @@ module function fieldIsAServiceWitnessHalf(field PayloadField) returns bool
 	return bytesStartWith(field.name, prefix: ServiceWitnessHalfSlotPrefix)
 end 'fieldIsAServiceWitnessHalf'
 
-module function bindablePayloadCount(payloads PayloadFieldArray) returns PayloadSlotIndex
-	var bindable = 0 as PayloadSlotIndex
-
-	for field in payloads 'eachSlot'
-		if not fieldIsAServiceWitnessHalf(field) 'anArgument'
-			bindable = bindable + 1
-		end 'anArgument'
-	end 'eachSlot'
-
-	return bindable
-end 'bindablePayloadCount'
-
 // ⭐ **THE PAYLOAD SLOT OF A MESSAGE'S PARAMETER `paramIndex`** — its position plus one for every
 // interface-typed parameter before it, whose witness half takes the slot after it. The send slots
 // an argument through it and the loop loads one through it, so the two cannot come to name
@@ -1027,6 +1015,28 @@ module function serviceParamPayloadSlot(payloads PayloadFieldArray, paramIndex P
 
 	panic("serviceParamPayloadSlot: a variant of {payloads.count()} payload slot(s) holds no parameter {paramIndex} — `serviceRequestPayloads` gives every declared parameter a slot")
 end 'serviceParamPayloadSlot'
+
+module function serviceParamIndexOfPayload(payloads PayloadFieldArray, slot ElementIndex) returns ParamCount
+	if slot < payloads.count() 'aSlotOfTheVariant'
+		let named = try payloads.get(slot) otherwise panic("serviceParamIndexOfPayload: payloads.get OOB at {slot} below the count")
+
+		if fieldIsAServiceWitnessHalf(named) or fieldIsTheServiceReplySlot(named) 'aCompilersSlot'
+			panic("serviceParamIndexOfPayload: payload slot {slot} is the compiler's own ({String.from(named.name)}), which no message parameter occupies")
+		end 'aCompilersSlot'
+	end 'aSlotOfTheVariant'
+
+	var seen = 0 as ParamCount
+
+	for earlier in 0 upto slot 'eachEarlierSlot'
+		let field = try payloads.get(earlier) otherwise panic("serviceParamIndexOfPayload: payloads.get OOB at {earlier} below slot {slot}")
+
+		if not fieldIsAServiceWitnessHalf(field) 'aParameterSlot'
+			seen = seen + 1
+		end 'aParameterSlot'
+	end 'eachEarlierSlot'
+
+	return seen
+end 'serviceParamIndexOfPayload'
 
 // ⭐⭐ **THE FIRST DECLARATION WEARING A SERVICE KEY — the ONE statement of the invariant that makes every
 // `.get(0)` on this path safe.** `classifyServiceTarget`, `classifyServiceRoster`, `serviceRequestPayloads`

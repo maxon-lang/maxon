@@ -2124,14 +2124,16 @@ end 'ManagedGlobalRecord'
 // argument, exactly the "no label" spelling `MaxonOp.call`'s `argLabels` uses), the value, the TYPE that
 // value is minted at — which the synthesis needs and cannot re-derive, an argument's type being a fact about
 // the initializer that produced it rather than about the global's own slot — and WHO FREES IT.
+// `synthesized` is carried from the `ConstFactoryArgument` it was built from.
 module type GlobalInitArgument
 	export let label as ByteArray
 	export let value as GlobalInitArgumentValue
 	export let valueType as MaxonType
 	export let cleanup as GlobalInitArgumentCleanup
+	export let synthesized as bool
 
-	module static function create(label ByteArray, value GlobalInitArgumentValue, valueType MaxonType, cleanup GlobalInitArgumentCleanup) returns GlobalInitArgument
-		return Self{label: label, value: value, valueType: valueType, cleanup: cleanup}
+	module static function create(label ByteArray, value GlobalInitArgumentValue, valueType MaxonType, cleanup GlobalInitArgumentCleanup, synthesized bool) returns GlobalInitArgument
+		return Self{label: label, value: value, valueType: valueType, cleanup: cleanup, synthesized: synthesized}
 	end 'create'
 end 'GlobalInitArgument'
 
@@ -3332,30 +3334,39 @@ end 'cacheReadConstFoldedValueBoxedUnionCase'
 
 // ONE argument of a top-level factory call, as the evaluator walked it: the source-level `name:` LABEL
 // (empty for a positional argument) and the value. The `GlobalInitArgument` this becomes carries a TYPE as
-// well, resolved on the index's side against its own interner.
+// well, resolved on the index's side against its own interner. `synthesized` marks a parameter default
+// `Parser.appendConstFactoryArgDefaults` supplied, whose label is `slotArgLabel`'s; `calledFactoryRecord`
+// counts them into the call's `defaultedArgs`.
 export type ConstFactoryArgument
 	export let label as ByteArray
 	export let value as ConstFactoryArgumentValue
+	export let synthesized as bool
 
 	export static function create(label ByteArray, value ConstFactoryArgumentValue) returns ConstFactoryArgument
-		return Self{label: label, value: value}
+		return Self{label: label, value: value, synthesized: false}
 	end 'create'
+
+	export static function synthesizedDefault(label ByteArray, value ConstFactoryArgumentValue) returns ConstFactoryArgument
+		return Self{label: label, value: value, synthesized: true}
+	end 'synthesizedDefault'
 
 	// @generated library-cache begin
 	function cacheWrite(writer LibraryCacheWriter)
 		writer.bytes(self.label)
 		cacheWriteConstFactoryArgumentValue(writer, value: self.value)
+		writer.flag(self.synthesized)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns ConstFactoryArgument throws LibraryCacheDamage
 		let f_label = try reader.bytes()
 		let f_value = try cacheReadConstFactoryArgumentValue(reader)
+		let f_synthesized = try reader.flag()
 
-		return Self{label: f_label, value: f_value}
+		return Self{label: f_label, value: f_value, synthesized: f_synthesized}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize16
-		return sizeof(ConstFactoryArgument) as CacheSize16
+	static function cacheLayoutBytes() returns CacheSize24
+		return sizeof(ConstFactoryArgument) as CacheSize24
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -6932,7 +6943,7 @@ let sharedEmptyMethodNodes = CsrColumn.create()
 // `ParamDefaultProducer.callerLine` / `.callerFile` at that slot and the fill emits a `literal` /
 // `stringLiteral` op at the call — the very ops the caller would have emitted had it written the value
 // out. So the two doors meet at `ParamDefaultProducer` and share everything downstream of it (the
-// call-aligned slotting, the label, `argDefaultSlots`, the arity gate), and differ only in what produces
+// call-aligned slotting, the label, `defaultedArgs`, the arity gate), and differ only in what produces
 // the value.
 //
 // ⚠ There is no constant fast path. One mechanism means one place a default's value is produced: a
@@ -21781,9 +21792,7 @@ export type ProgramSignatures
 	end 'forwardedStoreIsTakenOutright'
 
 	function parameterTypeTakesPromiseAt(store ForwardedStore, forwarder Forwarder) returns bool
-		let name = try forwarder.info.paramNames.get(store.calleeParam) otherwise return false
-		let index = try forwarder.decl.paramNames.positionOfName(name) otherwise return false
-		let declared = try forwarder.decl.paramTypes.get(index) otherwise return false
+		let declared = try self.declaredTypeAtCallPosition(forwarder.decl, position: store.calleeParam) otherwise return false
 		let aliasName = try self.typeNames.nameOf(typeNameIdOf(declared)) otherwise return false
 
 		return match self.functionAliasFrom(aliasName, readerFilePath: forwarder.decl.declFilePath) 'alias'
@@ -21862,7 +21871,7 @@ export type ProgramSignatures
 				continue
 			end 'notHandedOn'
 
-			if self.parameterMayCarryAPromise(declaration, name: try info.paramNames.get(position) otherwise panic("promiseFactsThatCanCarry: paramNames.get OOB at {position}"), memo: memo) 'aCarrier'
+			if self.parameterMayCarryAPromise(declaration, position: position as ParamCount, memo: memo) 'aCarrier'
 				kept = true
 			end 'aCarrier' else 'aValue'
 				dropped = true
@@ -21870,7 +21879,7 @@ export type ProgramSignatures
 		end 'eachHandedOn'
 
 		for store in info.forwardedStores 'eachStore'
-			if self.parameterMayCarryAPromise(declaration, name: try info.paramNames.get(store.paramIndex) otherwise panic("promiseFactsThatCanCarry: paramNames.get OOB at {store.paramIndex}"), memo: memo) 'aCarrier'
+			if self.parameterMayCarryAPromise(declaration, position: store.paramIndex, memo: memo) 'aCarrier'
 				kept = true
 			end 'aCarrier' else 'aValue'
 				dropped = true
@@ -21894,13 +21903,13 @@ export type ProgramSignatures
 		var stores = ForwardedStoreArray.create()
 
 		for position in 0 upto info.paramNames.count() 'eachPosition'
-			if info.isHandedOn(position as ParamCount) and self.parameterMayCarryAPromise(declaration, name: try info.paramNames.get(position) otherwise panic("withOnlyPromiseCarriers: paramNames.get OOB at {position}"), memo: memo) 'aCarrierIsHandedOn'
+			if info.isHandedOn(position as ParamCount) and self.parameterMayCarryAPromise(declaration, position: position as ParamCount, memo: memo) 'aCarrierIsHandedOn'
 				setParamBit(carried, index: position as ParamCount)
 			end 'aCarrierIsHandedOn'
 		end 'eachPosition'
 
 		for store in info.forwardedStores 'eachStore'
-			if self.parameterMayCarryAPromise(declaration, name: try info.paramNames.get(store.paramIndex) otherwise panic("withOnlyPromiseCarriers: paramNames.get OOB at {store.paramIndex}"), memo: memo) 'aCarrierForwards'
+			if self.parameterMayCarryAPromise(declaration, position: store.paramIndex, memo: memo) 'aCarrierForwards'
 				stores.push(store)
 			end 'aCarrierForwards'
 		end 'eachStore'
@@ -21908,9 +21917,13 @@ export type ProgramSignatures
 		return ParamConsumeInfo.create(info.paramNames, bits: info.bits, feeds: info.feeds, handedOn: carried, forwardedStores: stores)
 	end 'withOnlyPromiseCarriers'
 
-	function parameterMayCarryAPromise(declaration OverloadedDecl, name ByteArray, memo PromiseTypeAnswerMap) returns bool
-		let index = try declaration.paramNames.positionOfName(name) otherwise return false
-		let declared = try declaration.paramTypes.get(index) otherwise panic("parameterMayCarryAPromise: paramTypes.get OOB at {index} — the sweep records a type for every parameter name it records")
+	function declaredTypeAtCallPosition(declaration OverloadedDecl, position ParamCount) returns MaxonType throws AbsentError
+		let column = try columnOfCallPosition(declaration.takesReceiver, position: position)
+		return try declaration.paramTypes.get(column) otherwise panic("declaredTypeAtCallPosition: paramTypes.get OOB at {column} — call position {position} is past the {declaration.paramTypes.count()} declared parameters")
+	end 'declaredTypeAtCallPosition'
+
+	function parameterMayCarryAPromise(declaration OverloadedDecl, position ParamCount, memo PromiseTypeAnswerMap) returns bool
+		let declared = try self.declaredTypeAtCallPosition(declaration, position: position) otherwise return false
 
 		if not declaredTypeMayCarryAPromise(declared) 'noPromiseTypeLooksLikeThis'
 			return false
@@ -27082,7 +27095,7 @@ export type ProgramSignatures
 		let produced = self.globalInitValue(arg.value, calls: calls, declName: declName, elementFilePath: elementFilePath)
 		return match produced.value 'produced'
 			// A scalar owns nothing, so it needs no cleanup.
-			scalar gives GlobalInitArgument.create(arg.label, value: produced.value, valueType: produced.valueType, cleanup: GlobalInitArgumentCleanup.none)
+			scalar gives GlobalInitArgument.create(arg.label, value: produced.value, valueType: produced.valueType, cleanup: GlobalInitArgumentCleanup.none, synthesized: arg.synthesized)
 			record gives self.ownedRecordArgument(arg, consume: consume, argIndex: argIndex, valueType: produced.valueType, value: produced.value)
 
 			// ⛔ **A CALL DOES NOT IMPLY A RECORD, AND ASSUMING IT DID WAS A PANIC.** A nested FACTORY call is
@@ -27594,14 +27607,14 @@ export type ProgramSignatures
 	// back a number. Only the first can be dropped, and only the first needs to be.
 	function calledArgument(arg ConstFactoryArgument, consume CalleeConsume, argIndex ParamCount, valueType MaxonType, value GlobalInitArgumentValue) returns GlobalInitArgument
 		if not typeIsManaged(valueType, from: self.typeNames) 'ownsNothing'
-			return GlobalInitArgument.create(arg.label, value: value, valueType: valueType, cleanup: GlobalInitArgumentCleanup.none)
+			return GlobalInitArgument.create(arg.label, value: value, valueType: valueType, cleanup: GlobalInitArgumentCleanup.none, synthesized: arg.synthesized)
 		end 'ownsNothing'
 
 		return self.ownedRecordArgument(arg, consume: consume, argIndex: argIndex, valueType: valueType, value: value)
 	end 'calledArgument'
 
 	function ownedRecordArgument(arg ConstFactoryArgument, consume CalleeConsume, argIndex ParamCount, valueType MaxonType, value GlobalInitArgumentValue) returns GlobalInitArgument
-		return GlobalInitArgument.create(arg.label, value: value, valueType: valueType, cleanup: self.recordArgumentCleanup(consume, argIndex: argIndex, label: arg.label, valueType: valueType))
+		return GlobalInitArgument.create(arg.label, value: value, valueType: valueType, cleanup: self.recordArgumentCleanup(consume, argIndex: argIndex, label: arg.label, valueType: valueType), synthesized: arg.synthesized)
 	end 'ownedRecordArgument'
 
 	// ⭐ **WHO FREES THIS RECORD ARGUMENT?** A CONSUMED parameter is the callee's — it stored the record, and
@@ -46379,13 +46392,8 @@ export type ProgramSignatures
 	export function genericInstanceBindsParam(callee ByteArray, position ParamCount) returns bool
 		let instance = try self.settledDeclarations().genericInstancesByName.get(callee) otherwise return false
 		let template = self.templateOfInstance(instance)
-		let firstUser = firstUserParamIndex(template.takesReceiver)
-
-		if position < firstUser 'theReceiver'
-			return false
-		end 'theReceiver'
-
-		let slot = try template.paramSlots.get(position - firstUser) otherwise panic("ProgramSignatures.genericInstanceBindsParam: position {position} is past the {template.paramSlots.count()} parameters of '{String.from(callee)}'")
+		let column = try columnOfCallPosition(template.takesReceiver, position: position) otherwise return false
+		let slot = try template.paramSlots.get(column) otherwise panic("ProgramSignatures.genericInstanceBindsParam: position {position} is past the {template.paramSlots.count()} parameters of '{String.from(callee)}'")
 		return slot == GenericParamSlot.typeParameter
 	end 'genericInstanceBindsParam'
 

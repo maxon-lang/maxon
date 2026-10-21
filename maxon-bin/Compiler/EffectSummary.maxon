@@ -1402,8 +1402,8 @@ type EffectSummaryBuilder
 	function taintOp(origins ValueOrigins, op MaxonOp, func IrFunction)
 		match op 'op'
 			storeIndirect(addr, _, value, _) then origins.storeInto(addr, value: value, func: func)
-			call(result, callee, args, argLabels, _, _, argDefaultSlots, _) then self.taintCall(origins, func: func, result: result, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
-			tryCall(result, _, callee, args, argLabels, _, _, argDefaultSlots, _) then self.taintCall(origins, func: func, result: result, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
+			call(result, callee, args, argLabels, _, _, _, _) then self.taintCall(origins, func: func, result: result, callee: callee, args: args, argLabels: argLabels)
+			tryCall(result, _, callee, args, argLabels, _, _, _, _) then self.taintCall(origins, func: func, result: result, callee: callee, args: args, argLabels: argLabels)
 			indirectCall then self.taintIndirectCall(origins, op: op)
 			witnessDispatch(_, args, _, _, _, _, _, _) then self.taintArguments(origins, args: args)
 			witnessTryDispatch(_, _, args, _, _, _, _, _) then self.taintArguments(origins, args: args)
@@ -1464,7 +1464,7 @@ type EffectSummaryBuilder
 		end 'eachArgument'
 	end 'taintArguments'
 
-	function taintCall(origins ValueOrigins, func IrFunction, result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray)
+	function taintCall(origins ValueOrigins, func IrFunction, result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster)
 		if retainsItsOperand(callee) and originIsLocal(origins.originOf(result)) 'aSecondNameForARecordOfThisBody'
 			origins.unify(result, b: try args.get(0) otherwise panic("EffectSummaryBuilder.taintCall: '{String.from(callee)}' retains an operand but the call carries none"))
 			return
@@ -1480,7 +1480,7 @@ type EffectSummaryBuilder
 		end 'writesOnlyItsReceiver'
 
 		let calleeIndex = try self.funcIndexByName.get(callee) otherwise return
-		let ordered = try self.orderedArguments(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) otherwise return
+		let ordered = try self.orderedArguments(callee, args: args, argLabels: argLabels) otherwise return
 		let calleeNode = self.calleeNode(calleeIndex, callee: callee, ordered: ordered, func: func, result: result, origins: origins)
 		let receivesInto = self.calleeFacts.importsOwnAt(calleeNode)
 		let receivesBelow = self.calleeFacts.importsBelowAt(calleeNode)
@@ -1719,8 +1719,8 @@ type EffectSummaryBuilder
 
 	function walkOp(op MaxonOp, node ElementIndex, func IrFunction)
 		match op 'op'
-			call(result, callee, args, argLabels, _, _, argDefaultSlots, _) then self.walkCall(node, func: func, result: result, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
-			tryCall(result, _, callee, args, argLabels, _, _, argDefaultSlots, _) then self.walkCall(node, func: func, result: result, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
+			call(result, callee, args, argLabels, _, _, _, _) then self.walkCall(node, func: func, result: result, callee: callee, args: args, argLabels: argLabels)
+			tryCall(result, _, callee, args, argLabels, _, _, _, _) then self.walkCall(node, func: func, result: result, callee: callee, args: args, argLabels: argLabels)
 			storeIndirect(addr, _, value, _) then self.noteStore(node, addr: addr, value: value, func: func)
 			indirectCall then self.walkIndirectCall(node, func: func, op: op)
 			witnessDispatch(_, args, _, _, methodIndex, interfaceDeclIndex, _, _) then self.walkDispatch(node, func: func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
@@ -1761,7 +1761,7 @@ type EffectSummaryBuilder
 		end 'op'
 	end 'walkOp'
 
-	function walkCall(node ElementIndex, func IrFunction, result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray)
+	function walkCall(node ElementIndex, func IrFunction, result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster)
 		if self.releasesWhatItMayNotOwn(func, callee: callee, args: args) 'dropsAResource'
 			self.markHard(node)
 			return
@@ -1792,7 +1792,7 @@ type EffectSummaryBuilder
 			return
 		end 'undeclared'
 
-		let ordered = try self.orderedArguments(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) otherwise 'unslotted'
+		let ordered = try self.orderedArguments(callee, args: args, argLabels: argLabels) otherwise 'unslotted'
 			self.markHard(node)
 			return
 		end 'unslotted'
@@ -1800,10 +1800,10 @@ type EffectSummaryBuilder
 		self.recordSite(node, callee: self.calleeNode(calleeIndex, callee: callee, ordered: ordered, func: func, result: result, origins: self.facts), args: ordered)
 	end 'walkCall'
 
-	function orderedArguments(callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray) returns ValueIdArray throws AbsentError
+	function orderedArguments(callee ByteArray, args ValueIdArray, argLabels NameRoster) returns ValueIdArray throws AbsentError
 		let sig = try self.funcSignatures.get(callee) otherwise return args
 
-		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'slotted'
+		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels) 'slotted'
 			ordered(argIds) then return argIds
 			arityMismatch or
 			unknownLabel or

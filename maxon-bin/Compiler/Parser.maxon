@@ -4537,7 +4537,9 @@ type IndirectCallScan
 		var names = CellLocalNameSet.create()
 
 		for param in params 'eachParameter'
-			names.insert(param)
+			if bodyCanReadName(param) 'aReadableParameter'
+				names.insert(param)
+			end 'aReadableParameter'
 		end 'eachParameter'
 
 		match enclosing 'chain'
@@ -5605,6 +5607,20 @@ union TupleAliasOwner
 	end 'isFileScope'
 end 'TupleAliasOwner'
 
+// A body token reaches a parameter only through these and `bodyCanReadName`: `_` is never bound, so a
+// token spelling it denotes no parameter, and a body scan asking `paramNames` directly would find one.
+function bodyNamesAParam(paramNames NameRoster, name ByteArray) returns bool
+	return bodyCanReadName(name) and paramNames.contains(name)
+end 'bodyNamesAParam'
+
+function bodyParamPosition(paramNames NameRoster, name ByteArray) returns ElementIndex throws MapError
+	if not bodyNamesAParam(paramNames, name: name) 'namesNoParameter'
+		throw MapError.keyNotFound
+	end 'namesNoParameter'
+
+	return try paramNames.positionOfName(name)
+end 'bodyParamPosition'
+
 // ⭐ **WHAT ONE POSITION OF A TUPLE-ASSIGNMENT TARGET LIST DOES WITH ITS ELEMENT** (`specs/tuple-assign.md`).
 // Three answers and only three: rebind a binding already in scope, declare a fresh one, or throw the element
 // away. `tupleAssignTargetAt` is the single reader that decides which, off the tokens.
@@ -6075,10 +6091,11 @@ module let MaxBoundField = b"max"
 let ParameterBindingKind = BindingKind.let
 
 // The discard binding name — `walk(_)` matches the case but binds no payload. It is an ordinary
-// identifier to the lexer (`_` is a legal identifier), so the payload-binding reader recognizes it
-// by TEXT and skips the load + declaration for that slot. A constant because it is a language fact
+// identifier to the lexer (`_` is a legal identifier), so every door that binds a name — a match
+// payload, a parameter, a destructured element — recognizes it by TEXT and declares nothing for that
+// slot. A constant because it is a language fact
 // (`_` means discard), spelled once.
-let DiscardBindingName = b"_"
+export let DiscardBindingName = b"_"
 
 // ⭐⭐ **THE TWO CALLER-LOCATION KEYWORDS** — `specs/source-location-defaults.md`. They are ORDINARY
 // IDENTIFIER tokens, not a lexer keyword pair, and that is deliberate: `__`-prefixed names are already
@@ -6397,7 +6414,7 @@ let MethodNameSeparatorBytes = b"."
 // program's.
 function callWithCallee(op MaxonOp, callee ByteArray) returns MaxonOp
 	return match op 'c'
-		call(result, _, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) gives MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
+		call(result, _, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) gives MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mint: mint)
 		default panic("callWithCallee: the op is not a `call`, so it has no callee to replace — every caller reads an index filed by the site that appended a call at it")
 	end 'c'
 end 'callWithCallee'
@@ -6822,6 +6839,20 @@ end 'bareMethodName'
 export function firstUserParamIndex(takesReceiver bool) returns ParamCount
 	return 1 if takesReceiver else 0
 end 'firstUserParamIndex'
+
+function callPositionOfColumn(takesReceiver bool, column ParamCount) returns ParamCount
+	return column + firstUserParamIndex(takesReceiver)
+end 'callPositionOfColumn'
+
+export function columnOfCallPosition(takesReceiver bool, position ParamCount) returns ParamCount throws AbsentError
+	let receiverSlots = firstUserParamIndex(takesReceiver)
+
+	if position < receiverSlots 'theReceiver'
+		throw AbsentError.absent
+	end 'theReceiver'
+
+	return position - receiverSlots
+end 'columnOfCallPosition'
 
 // The LABEL half of an overload key: every parameter's declared NAME, receiver excluded. The
 // escalation the TYPE half falls back to when two overloads' parameter types are spelled
@@ -11739,21 +11770,67 @@ export let NoImmutableArgNames = WriteBlameArray.create()
 // fact about the argument array THIS emitter builds and nothing outside it has one.
 let MapUpsertValueArgSlot = 2 as FieldIndex
 
-// ⭐ **THE DEFAULT `argLabels` OF A COMPILER-EMITTED CALL: "all positional".** Shared and empty for
-// `NoImmutableArgNames`'s reason — nothing ever reads or mutates it, since `emitRuntimeCall` materializes a
-// real per-argument column the moment it sees this one is empty. It is a DISTINCT constant from
-// `NoImmutableArgNames` rather than the same empty array reused, because the two answer different questions
-// and a shared name would make a reader check whether one had grown a per-argument meaning.
-// The `argDefaultSlots` column of a call that omitted no defaulted argument — which is nearly every call in
-// any program. Read-only (its readers only index it), so ONE allocation serves them all, exactly as
-// `NoImmutableArgNames` does for its own column. See `MaxonOp.call`.
-export let NoDefaultArgSlots = ParamCountArray.create()
+export let NoDefaultedArgs = 0 as ParamCount
 
 let NoReceiverSlots = 0
 
 function omittedParametersRemain(declared Count, written Count, receiverSlots ParamCount) returns bool
 	return written + receiverSlots < declared
 end 'omittedParametersRemain'
+
+type PlannedDefaultArg
+	export let label as ByteArray
+	export let producer as ParamDefaultProducer
+
+	static function create(label ByteArray, producer ParamDefaultProducer) returns PlannedDefaultArg
+		return Self{label: label, producer: producer}
+	end 'create'
+end 'PlannedDefaultArg'
+
+typealias PlannedDefaultArgArray = Array with PlannedDefaultArg
+
+function plannedDefaultArgs(info ParamDefaultInfo, written NameRoster, receiverSlots ParamCount) returns PlannedDefaultArgArray
+	var planned = PlannedDefaultArgArray.create()
+	let paramCount = info.paramNames.count()
+
+	if not omittedParametersRemain(paramCount, written: written.count(), receiverSlots: receiverSlots) 'nothingOmitted'
+		return planned
+	end 'nothingOmitted'
+
+	var filled = BoolArray.create()
+
+	for _ in 0 upto paramCount 'initSlots'
+		filled.push(false)
+	end 'initSlots'
+
+	for i in 0 upto written.count() 'markSupplied'
+		view label = try written.get(i) otherwise panic("plannedDefaultArgs: written.get OOB at {i} below count {written.count()}")
+		let suppliedSlot = try argSlotPosition(info.paramNames, argIndex: (i as ParamCount) + receiverSlots, label: label) otherwise return PlannedDefaultArgArray.create()
+		try filled.set(suppliedSlot, value: true) otherwise panic("plannedDefaultArgs: filled.set OOB at {suppliedSlot} — filled holds one entry per parameter name")
+	end 'markSupplied'
+
+	for slot in 0 upto paramCount 'planDefaults'
+		let supplied = try filled.get(slot) otherwise panic("plannedDefaultArgs: filled.get OOB at {slot} despite slot < paramCount")
+
+		if supplied 'alreadyGiven'
+			continue
+		end 'alreadyGiven'
+
+		let producer = info.producerFor(slot as ParamCount)
+
+		if producerIsRequired(producer) 'noDefault'
+			continue
+		end 'noDefault'
+
+		planned.push(PlannedDefaultArg.create(slotArgLabel(info.paramNames, slot: slot as ParamCount), producer: producer))
+	end 'planDefaults'
+
+	return planned
+end 'plannedDefaultArgs'
+
+function bodyCanReadName(name ByteArray) returns bool
+	return not name.equals(DiscardBindingName)
+end 'bodyCanReadName'
 
 // The name an E3159 would blame for argument `index` of a call, or `unblamed`. Decodes BOTH shapes
 // of the column — parallel-to-`args`, or the shared empty one above — so no reader has to know
@@ -21985,7 +22062,7 @@ export type Parser
 				// rebound by `p = f()` and not by `(p, _) = f()` — one operation, two answers decided by spelling.
 				// See `tupleAssignRebindsANameAt` for why the enclosing `(` is free here.
 				if self.rebindsANameAt(q) or self.tupleAssignRebindsANameAt(q, openBrackets: openBrackets) 'rebindsAName'
-					if let position = try paramNames.positionOfName(self.tokenAt(q).value) 'namesAParameter'
+					if let position = try bodyParamPosition(paramNames, name: self.tokenAt(q).value) 'namesAParameter'
 						let target = position as ParamCount
 
 						if paramNameStillDenotesTheParameter(shadowedInBlock, shadowedOnLine: shadowedOnLine, index: target) 'ofOwnParameter'
@@ -21999,7 +22076,7 @@ export type Parser
 				// the callee's NAME are recorded together; whether the edge is LIVE is settled whole-program by
 				// `ProgramSignatures.closeByRefForwarding`, which is the only party that can see what the callee does.
 				if self.bareCallArgumentAt(q, braceStack: braceStack) 'handedOn'
-					if let position = try paramNames.positionOfName(self.tokenAt(q).value) 'namesAParameter'
+					if let position = try bodyParamPosition(paramNames, name: self.tokenAt(q).value) 'namesAParameter'
 						let forwarded = position as ParamCount
 
 						if paramNameStillDenotesTheParameter(shadowedInBlock, shadowedOnLine: shadowedOnLine, index: forwarded) 'ofOwnParameter'
@@ -22823,7 +22900,7 @@ export type Parser
 		var bound = BoolArray.create()
 
 		for candidateHead in returnedHeads 'eachHead'
-			bound.push(paramNames.contains(candidateHead))
+			bound.push(bodyNamesAParam(paramNames, name: candidateHead))
 		end 'eachHead'
 
 		var depth = 0 as BlockDepth
@@ -22892,7 +22969,7 @@ export type Parser
 	// The FIRST rebinding wins: an inner block that rebinds a name an outer one already took must not shorten
 	// the outer one's reach when the inner block closes.
 	function noteParameterShadowedInBlock(namePos ElementIndex, paramNames NameRoster, depth BlockDepth, shadowedInBlock ParamShadowColumn)
-		let position = try paramNames.positionOfName(self.tokenAt(namePos).value) otherwise return
+		let position = try bodyParamPosition(paramNames, name: self.tokenAt(namePos).value) otherwise return
 		let index = position as ParamCount
 
 		while shadowedInBlock.count() as ParamCount <= index 'reach'
@@ -22909,7 +22986,7 @@ export type Parser
 	// The LINE-scoped twin — a match arm's payload and a closure's parameter, which bind for one expression.
 	// A plain bit, because a line has no depth to remember and the whole column is cleared at the newline.
 	function noteParameterShadowedOnLine(namePos ElementIndex, paramNames NameRoster, shadowedOnLine BoolArray)
-		let position = try paramNames.positionOfName(self.tokenAt(namePos).value) otherwise return
+		let position = try bodyParamPosition(paramNames, name: self.tokenAt(namePos).value) otherwise return
 		setParamBit(shadowedOnLine, index: position as ParamCount)
 	end 'noteParameterShadowedOnLine'
 
@@ -22988,13 +23065,8 @@ export type Parser
 	end 'argumentStartsOf'
 
 	function calleeIsOwnParameter(name ByteArray, paramNames NameRoster, shadowedInBlock ParamShadowColumn, shadowedOnLine BoolArray) returns bool
-		for position in 0 upto paramNames.count() 'eachParam'
-			if (try paramNames.get(position) otherwise panic("calleeIsOwnParameter: paramNames.get OOB at {position}")).equals(name) 'thisParameter'
-				return self.paramNameStillDenotesTheParameter(shadowedInBlock, shadowedOnLine: shadowedOnLine, index: position as ParamCount)
-			end 'thisParameter'
-		end 'eachParam'
-
-		return false
+		let position = try bodyParamPosition(paramNames, name: name) otherwise return false
+		return self.paramNameStillDenotesTheParameter(shadowedInBlock, shadowedOnLine: shadowedOnLine, index: position as ParamCount)
 	end 'calleeIsOwnParameter'
 
 	function paramNameStillDenotesTheParameter(shadowedInBlock ParamShadowColumn, shadowedOnLine BoolArray, index ParamCount) returns bool
@@ -25053,7 +25125,7 @@ export type Parser
 	function noteOpaqueBinding(q ElementIndex, facts FeedShapeFacts)
 		let name = self.tokenAt(q).value
 
-		if let index = try facts.params.positionOfName(name) 'aParameter'
+		if let index = try bodyParamPosition(facts.params, name: name) 'aParameter'
 			facts.markParamRebound(index as ParamCount)
 			return
 		end 'aParameter'
@@ -25066,7 +25138,7 @@ export type Parser
 	function noteValueBinding(q ElementIndex, start ElementIndex, stop ElementIndex, facts FeedShapeFacts)
 		let name = self.tokenAt(q).value
 
-		if let index = try facts.params.positionOfName(name) 'aParameter'
+		if let index = try bodyParamPosition(facts.params, name: name) 'aParameter'
 			facts.markParamRebound(index as ParamCount)
 			return
 		end 'aParameter'
@@ -25081,7 +25153,7 @@ export type Parser
 
 	function fieldValueIsTheFeedShape(start ElementIndex, stop ElementIndex, facts FeedShapeFacts, node CsrIndex) returns bool
 		if stop == start + 1 and tokenCanBeAName(self.tokenAt(start)) 'oneName'
-			if let index = try facts.params.positionOfName(self.tokenAt(start).value) 'aParameter'
+			if let index = try bodyParamPosition(facts.params, name: self.tokenAt(start).value) 'aParameter'
 				return not facts.paramIsRebound(index as ParamCount)
 			end 'aParameter'
 		end 'oneName'
@@ -25112,7 +25184,7 @@ export type Parser
 				return true
 			end 'aConstant'
 
-			if not tokenCanBeAName(self.tokenAt(start)) or facts.params.contains(self.tokenAt(start).value) 'notALocal'
+			if not tokenCanBeAName(self.tokenAt(start)) or bodyNamesAParam(facts.params, name: self.tokenAt(start).value) 'notALocal'
 				return false
 			end 'notALocal'
 
@@ -25589,7 +25661,7 @@ export type Parser
 			throw MapError.keyNotFound
 		end 'notAName'
 
-		let idx = (try paramNames.positionOfName(self.tokenAt(q).value)) as ParamCount
+		let idx = (try bodyParamPosition(paramNames, name: self.tokenAt(q).value)) as ParamCount
 
 		q = q + 1
 
@@ -25866,7 +25938,7 @@ export type Parser
 		let label = self.argLabelBefore(arg.valuePos)
 
 		if self.kindAt((head - 1) as ElementIndex) != TokenKind.dot 'noReceiver'
-			if let ownParameter = try paramNames.positionOfName(member) 'aFunctionTypedParameter'
+			if let ownParameter = try bodyParamPosition(paramNames, name: member) 'aFunctionTypedParameter'
 				return ForwardedStore.create(arg.paramIndex, shape: ForwardShape.throughParameter, typeName: EmptySourceText, memberName: member, column: column, label: label, calleeParam: ownParameter as ParamCount)
 			end 'aFunctionTypedParameter'
 
@@ -25959,7 +26031,7 @@ export type Parser
 			throw MapError.keyNotFound
 		end 'notAName'
 
-		return (try paramNames.positionOfName(self.tokenAt(p).value)) as ParamCount
+		return (try bodyParamPosition(paramNames, name: self.tokenAt(p).value)) as ParamCount
 	end 'bareParamReferenceAt'
 
 	// ⭐⭐ **MARK EACH BARE TYPE-PARAMETER ARGUMENT of a `<receiver> . push/set/insert/upsert ( … )` CALL AS A
@@ -26047,7 +26119,7 @@ export type Parser
 					depth = depth - 1
 				end 'closeArg' else 'notClose'
 					if depth == 1 and tokenCanBeAName(self.tokenAt(p)) and self.isBareArgValueAt(p, inALiteral: nestsAllBrackets) 'candidate'
-						if let position = try paramNames.positionOfName(self.tokenAt(p).value) 'namesAParameter'
+						if let position = try bodyParamPosition(paramNames, name: self.tokenAt(p).value) 'namesAParameter'
 							found.push(BareParamArg.create(position as ParamCount, valuePos: p))
 						end 'namesAParameter'
 					end 'candidate'
@@ -26093,7 +26165,7 @@ export type Parser
 			return false
 		end 'notBareMove'
 
-		let position = try paramNames.positionOfName(self.tokenAt(selfPos + 4).value) otherwise return false
+		let position = try bodyParamPosition(paramNames, name: self.tokenAt(selfPos + 4).value) otherwise return false
 		let idx = position as ParamCount
 
 		let feedPos = try typeParamPositions.positionAt(idx) otherwise return false
@@ -30072,12 +30144,12 @@ export type Parser
 		end 'callee'
 	end 'emitOptionalFuncAddr'
 
-	function widenArgsToInterfaceHandles(callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray, anchor Token, rparenTok Token)
+	function widenArgsToInterfaceHandles(callee ByteArray, args ValueIdArray, argLabels NameRoster, anchor Token, rparenTok Token)
 		if not self.signatures.declaresAnInterfaceHandle() 'noInterfaceHandle'
 			return
 		end 'noInterfaceHandle'
 
-		match self.sweptDeclarationOf(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'declaration'
+		match self.sweptDeclarationOf(callee, args: args, argLabels: argLabels) 'declaration'
 			undecided then return
 			chosen(decl) then self.widenArgsToDeclaration(decl, args: args, argLabels: argLabels, anchor: anchor, rparenTok: rparenTok)
 		end 'declaration'
@@ -36300,24 +36372,16 @@ export type Parser
 			// nothing has to be put back. That also gives the default the scope it needs: the helper's body
 			// cannot see the callee's parameters or locals, nor its enclosing `type`, because a default is
 			// evaluated at the call site and belongs to neither frame.
-			// ⭐ **`_` IS EXEMPT, AND IT IS THE ONLY EXEMPTION.** Two `_` parameters DO collide in
-			// `Scope.vars` — `bindParameters` installs each through `declareParameterBinding` like any other
-			// parameter, and `Scope.install` upserts, so the second displaces the first. What makes that
-			// harmless is not that the collision is absent but that NOTHING CAN OBSERVE WHICH ONE WON: both
-			// denote the same discard, no body may name `_` to read it, and neither is an E3012 candidate. A
-			// signature needs one `_` per parameter it does not want, and `function make(_ Integer = 1, _
-			// String = "n", item T)` is the ordinary spelling of "two defaults ahead of the one that
-			// matters". Refusing it `E2014 duplicate parameter name '_'` would reject a legal declaration.
+			// ⭐ **`_` IS EXEMPT, AND IT IS THE ONLY EXEMPTION.** Two `_` parameters cannot collide:
+			// `bindParameters` binds neither, so no body can read one (E2004). A signature needs one `_` per
+			// parameter it does not want, and `function make(_ Integer = 1, _ String = "n", item T)` is the
+			// ordinary spelling of "two defaults ahead of the one that matters". Refusing it
+			// `E2014 duplicate parameter name '_'` would reject a legal declaration.
 			//
 			// Keyed on the name being EXACTLY `_`: an underscore PREFIX is an ordinary identifier, so two `_x`
 			// parameters are still E2014, as is any repeat of a real name.
 			//
-			// ⚠ **THE AMBIGUITY THIS SEEMS TO OPEN IS CAUGHT AT THE CALL, WHICH IS WHERE IT ACTUALLY OCCURS.**
-			// `_` IS a legal argument label (measured: `make(6, _: 3)` runs), so two `_` parameters mean a
-			// label that no longer names one position. `slotCallArgs` already refuses a slot filled twice
-			// (`ArgSlotResult.duplicateArg`) — and the oracle reports that same program at that same point
-			// (`E3005 … parameter '_' already has a value (passed positionally)`), never at the declaration.
-			// So the declaration-time check was never what protected the slotting; see `argSlotPosition`.
+			// A call reaches each `_` slot separately; see `argSlotPosition`.
 			if not nameTok.value.equals(DiscardBindingName) and paramNames.contains(nameTok.value) 'duplicate'
 				throw SourceParseError.duplicateParameter(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 			end 'duplicate'
@@ -37094,16 +37158,25 @@ export type Parser
 			// `paramDeclaredNames` column (`paramDeclaredNamesOf`), read off the same token.
 			view paramBrand = self.declaredParamBrand(paramTypeStarts, position: i, resolved: paramType)
 			self.brandValue(paramId, brand: paramBrand)
+
+			// Parameter `i` owns ValueId `i`; record its declaration span so the register-pressure
+			// diagnostic can resolve the parameter to source (it is minted by no op — see
+			// ParamOriginTable — so it has no `emitOp` origin).
+			self.artifact.recordParamOrigin(paramId, range: paramRange)
+
+			// After the origin, which a `_` parameter's slot still needs: only its name goes unbound.
+			if paramName.equals(DiscardBindingName) 'aDiscardedParameter'
+				continue
+			end 'aDiscardedParameter'
+
 			var binding = try self.declareParameterOrCellBinding(paramName, paramType: paramType, paramKind: paramKind, paramIsByRef: paramIsByRef, paramValue: paramValue, brandId: self.brandIdOf(paramId)) otherwise throw SourceParseError.localShadowsSelfField(String.from(paramName), typeName: String.from(self.enclosingTypeName()), line: paramRange.line, column: paramRange.column)
 
-			// ⭐ **E3012 CANDIDATE: A DECLARED PARAMETER MUST BE READ** (`reportUnusedBindings`). Two names are
-			// not candidates and neither is a policy choice: `__self` is the RECEIVER the parser itself pushed,
-			// which no source token declares and a bare field read never mentions, so every instance method
-			// would report it; and `_` is the language's discard, which says in as many words that the author
-			// wants the slot and not the name.
+			// ⭐ **E3012 CANDIDATE: A DECLARED PARAMETER MUST BE READ** (`reportUnusedBindings`). `__self` is not
+			// a candidate, and that is not a policy choice: it is the RECEIVER the parser itself pushed, which no
+			// source token declares and a bare field read never mentions, so every instance method would report it.
 			self.trackDebugLocal(binding)
 
-			if not paramName.equals(SelfParamName) and not paramName.equals(DiscardBindingName) 'checkedForUse'
+			if not paramName.equals(SelfParamName) 'checkedForUse'
 				self.bodyState.unusedCandidates.push(UnusedBindingCandidate.create(binding, nameRange: paramRange, kind: UnusedBindingKind.parameter, declToken: self.pos))
 			end 'checkedForUse'
 
@@ -37134,11 +37207,6 @@ export type Parser
 					self.recordValueExistentialInstance(paramId, claim: claim)
 				end 'namesAnInstantiation'
 			end 'declaredAtAnInterface'
-
-			// Parameter `i` owns ValueId `i`; record its declaration span so the register-pressure
-			// diagnostic can resolve the parameter to source (it is minted by no op — see
-			// ParamOriginTable — so it has no `emitOp` origin).
-			self.artifact.recordParamOrigin(paramId, range: paramRange)
 
 			// ⭐ **A CONSUMED MANAGED PARAMETER IS ENROLLED AS OWNED**. The consume analysis
 			// marked it moved-into-durable-storage, so the caller transfers ownership at the call site and
@@ -40350,6 +40418,11 @@ export type Parser
 
 		for i in 0 upto nameToks.count() 'eachName'
 			let nameTok = try nameToks.get(i) otherwise panic("parseDestructuringBinding: nameToks.get OOB at {i} below count {nameToks.count()}")
+
+			if nameTok.value.equals(DiscardBindingName) 'aDiscardedElement'
+				continue
+			end 'aDiscardedElement'
+
 			try self.declareDestructuredElement(func, nameTok: nameTok, element: self.destructuredElement(value, source: source, index: i as FieldIndex, range: SourceRange.between(keywordTok, last: nameTok)), sourceName: sourceName, kind: kind)
 		end 'eachName'
 	end 'parseDestructuringBinding'
@@ -43659,12 +43732,12 @@ export type Parser
 		end 'aMixedExpression'
 	end 'shedOperandAliasSet'
 
-	function admitOperandAliasSetArgs(callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray, anchor Token) throws SourceParseError
+	function admitOperandAliasSetArgs(callee ByteArray, args ValueIdArray, argLabels NameRoster, anchor Token) throws SourceParseError
 		if not self.someArgNeedsItsDestinationsType(args) 'noMixedExpression'
 			return
 		end 'noMixedExpression'
 
-		match self.sweptDeclarationOf(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'declaration'
+		match self.sweptDeclarationOf(callee, args: args, argLabels: argLabels) 'declaration'
 			undecided then return
 			chosen(decl) then try self.admitOperandAliasSetArgsTo(decl, args: args, argLabels: argLabels, anchor: anchor)
 		end 'declaration'
@@ -45700,9 +45773,8 @@ export type Parser
 	//     operand is defined in `ternarytrue`, which `startBlock` dominates — a use above its def. Liveness
 	//     propagates the operand out of the entry block and the register allocator refuses the function
 	//     outright: *"seedInUse: value N is live-in to block 0 but was never colored"*.
-	//     `stdlib/Array.maxon`'s ranged `ElementIndex` puts a guard on every computed array index, and
-	//     `Project.slotCallArgs` writes exactly this shape
-	//     (`argDefaultSlots.get(i - sourceCount)` in a conditional expression's true arm).
+	//     `stdlib/Array.maxon`'s ranged `ElementIndex` puts a guard on every computed array index, so an
+	//     `a.get(i - n)` in a conditional expression's true arm is this shape.
 	//   * **The checked value is computed EARLIER** (a parameter, or anything from a dominating block).
 	//     Nothing is out of order, so nothing complains — the guard simply runs on BOTH edges, which is the
 	//     wrong answer: `(i as Small) if flag else 7` with `flag` FALSE and an out-of-range `i` must print
@@ -46429,13 +46501,13 @@ export type Parser
 	// the noun its E3036 would name does not change because the error flag became a second result.
 	function commitTryCallRewrite(opIdx ElementIndex, errorFlag ValueId) returns ByteArray
 		match try self.artifact.module.ops.get(opIdx) otherwise panic("commitTryCallRewrite: opRef {opIdx} not in module.ops") 'rewrite'
-			call(result, callee, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) then return self.commitTryCallOp(opIdx, result: result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
+			call(result, callee, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) then return self.commitTryCallOp(opIdx, result: result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mint: mint)
 			default panic("commitTryCallRewrite: the op at {opIdx} is not a `call` — `routableOpAt` classified it as one")
 		end 'rewrite'
 	end 'commitTryCallRewrite'
 
-	function commitTryCallOp(opIdx ElementIndex, result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, argDefaultSlots ParamCountArray, mint CalleeMint) returns ByteArray
-		try self.artifact.module.ops.set(opIdx, value: MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)) otherwise panic("commitTryCallOp: module.ops.set OOB at {opIdx}")
+	function commitTryCallOp(opIdx ElementIndex, result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, defaultedArgs ParamCount, mint CalleeMint) returns ByteArray
+		try self.artifact.module.ops.set(opIdx, value: MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mint: mint)) otherwise panic("commitTryCallOp: module.ops.set OOB at {opIdx}")
 		return callee
 	end 'commitTryCallOp'
 
@@ -50786,7 +50858,7 @@ export type Parser
 		// `notMinted`: a runtime entry's callee is not the author's bytes either, but its noun is a question
 		// about the NAME — `GtRuntime.runtimeCalleeSourceMethod` answers it, keyed by name, and may be. Only the
 		// primitive-static mint needs the per-SITE bit. See `CalleeMint`.
-		self.emitDirectCallOp(MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames, argDefaultSlots: NoDefaultArgSlots, mint: CalleeMint.notMinted), callee: callee, callResult: result, args: args, argLabels: argLabels, range: range)
+		self.emitDirectCallOp(MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames, defaultedArgs: NoDefaultedArgs, mint: CalleeMint.notMinted), callee: callee, callResult: result, args: args, argLabels: argLabels, range: range)
 
 		// The call door for every compiler-emitted callee, which is how `arr.get(i)`, `map.get(k)` and a
 		// checked divide reach an enclosing `try` block or a test body's implied handler. It declines on
@@ -61248,7 +61320,8 @@ export type Parser
 	// exact: a binding list is `( name [, name]* )` and every element is a single identifier (or `_`), so the
 	// identifiers between the parens ARE the bindings.
 	function requireErrorUnionBindingCount(member TryBlockErrorMember, caseIndex CaseIndex, caseTok Token) throws SourceParseError
-		let declared = bindablePayloadCount(member.layout.payloadsAt(caseIndex))
+		let declaredPayloads = member.layout.payloadsAt(caseIndex)
+		let declared = serviceParamIndexOfPayload(declaredPayloads, slot: declaredPayloads.count()) as PayloadSlotIndex
 		var supplied = 0 as ElementIndex
 		var scan = self.pos + 1
 
@@ -61394,7 +61467,7 @@ export type Parser
 		// (`payloads.get` has nothing past it) while the arity diagnostic names how many the author
 		// wrote, so a name past the end is counted but neither bound nor reserved-name checked. Judged
 		// once, below, so both directions carry one code.
-		let bindable = bindablePayloadCount(payloads)
+		let bindable = serviceParamIndexOfPayload(payloads, slot: payloads.count()) as PayloadSlotIndex
 		let declaredArity = CheckedBindingNames.leading(bindable)
 		let names = try self.parseBindingNameList(declaredArity)
 
@@ -74091,7 +74164,7 @@ export type Parser
 
 		for plan in plans 'eachPlan'
 			match plan.take 'take'
-				sharedReadOnly then self.fileSharedSendSite(plan.argument, handler: qualifiedMethodName(serviceTypeName, methodName: caseTok.value), parameter: (try payloads.get(plan.argument.position) otherwise panic("moveMessagePayloads: payloads.get OOB at {plan.argument.position} — the plan came from this very list")).name, handBack: handBack)
+				sharedReadOnly then self.fileSharedSendSite(plan.argument, handler: qualifiedMethodName(serviceTypeName, methodName: caseTok.value), payloads: payloads, handBack: handBack)
 
 				copied or
 				cellOccupant or
@@ -74189,13 +74262,14 @@ export type Parser
 		return self.signatures.isServiceSendError(layout.name) and self.typeCannotBeCloned(slotType)
 	end 'sendErrorSlotIsCoOwnedByType'
 
-	function fileSharedSendSite(argument HandedOffArgument, handler ByteArray, parameter ByteArray, handBack SharedSlotHandBackArray)
+	function fileSharedSendSite(argument HandedOffArgument, handler ByteArray, payloads PayloadFieldArray, handBack SharedSlotHandBackArray)
 		try handBack.set(argument.position, value: self.sharedSlotHandBack(argument)) otherwise panic("fileSharedSendSite: handBack.set OOB at {argument.position} — the column is sized to the variant's payload count and the position came from that list")
 
 		if self.bodyState.deferredProvenance is self.anchors.noDeferredProvenance 'noBody'
 			return
 		end 'noBody'
 
+		let parameter = slotArgLabel(self.serviceMessageParamNames(handler), slot: serviceParamIndexOfPayload(payloads, slot: argument.position))
 		var site = MoveSite.create(argument.value, source: parameter, sourceValue: argument.value, sourceIsMutable: false, destination: handler, line: argument.anchor.line, column: argument.anchor.column, token: self.pos)
 		site.destinationKind = MoveDestinationKind.sharedSend
 		self.bodyState.deferredProvenance.noteMoveSite(site)
@@ -75174,7 +75248,7 @@ export type Parser
 	//
 	// Asked after the factory inference, because arguments that fix every parameter to a concrete type build
 	// that instance and leave no bare subject; and before the result is minted, so a refused call emits nothing.
-	function requireBareGenericSubjectIsBound(callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray, constructed ConstructorInstance, inferInstanceOf FactoryInference, anchor Token) throws SourceParseError
+	function requireBareGenericSubjectIsBound(callee ByteArray, args ValueIdArray, argLabels NameRoster, constructed ConstructorInstance, inferInstanceOf FactoryInference, anchor Token) throws SourceParseError
 		let inAGenericTypeBody = not self.enclosingTypeParams.isEmpty()
 
 		// An instance method named statically (`Vector.get(v, index: 1)`) takes its receiver as the first argument,
@@ -75183,7 +75257,7 @@ export type Parser
 			if not self.calleeTakesReceiver(callee) 'aStaticCallOnAGenericBase'
 				match constructed 'arguments'
 					instance then return
-					none then try self.requireBareGenericBaseIsBound(base, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, anchor: anchor, inAGenericTypeBody: inAGenericTypeBody)
+					none then try self.requireBareGenericBaseIsBound(base, callee: callee, args: args, argLabels: argLabels, anchor: anchor, inAGenericTypeBody: inAGenericTypeBody)
 				end 'arguments'
 
 				return
@@ -75207,7 +75281,7 @@ export type Parser
 		end 'nothingToRefuseOutside'
 
 		if self.calleeTakesReceiver(callee) 'aReceiverCall'
-			try self.requireBareGenericBaseIsBound(self.internedName(self.valueNameId(first)), callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, anchor: anchor, inAGenericTypeBody: inAGenericTypeBody)
+			try self.requireBareGenericBaseIsBound(self.internedName(self.valueNameId(first)), callee: callee, args: args, argLabels: argLabels, anchor: anchor, inAGenericTypeBody: inAGenericTypeBody)
 		end 'aReceiverCall'
 	end 'requireBareGenericSubjectIsBound'
 
@@ -75318,13 +75392,13 @@ export type Parser
 		return firstMember.takesReceiver
 	end 'calleeTakesReceiver'
 
-	function requireBareGenericBaseIsBound(base ByteArray, callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray, anchor Token, inAGenericTypeBody bool) throws SourceParseError
+	function requireBareGenericBaseIsBound(base ByteArray, callee ByteArray, args ValueIdArray, argLabels NameRoster, anchor Token, inAGenericTypeBody bool) throws SourceParseError
 		// The scope's own name means `Self`, whose descriptor this frame does carry.
 		if self.namesEnclosingType(base) or not self.signatures.structDeclaresTypeParams(base) 'notABareGenericBase'
 			return
 		end 'notABareGenericBase'
 
-		if inAGenericTypeBody and self.bareGenericBaseIsFedAnEnclosingParameter(base, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'fed'
+		if inAGenericTypeBody and self.bareGenericBaseIsFedAnEnclosingParameter(base, callee: callee, args: args, argLabels: argLabels) 'fed'
 			throw self.bareGenericSubjectRefusal(base, callee: callee, use: BareGenericSubjectUse.fedAnEnclosingParameter, anchor: anchor, inAGenericTypeBody: inAGenericTypeBody)
 		end 'fed'
 
@@ -75341,11 +75415,11 @@ export type Parser
 	// argument outside the base's own slots passes the fit test resolution applies. A slot written over the base's
 	// parameters is exempt from that test, because nothing binds those parameters: no argument fits one, and the
 	// mismatch is exactly what this refuses.
-	function bareGenericBaseIsFedAnEnclosingParameter(base ByteArray, callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray) returns bool
+	function bareGenericBaseIsFedAnEnclosingParameter(base ByteArray, callee ByteArray, args ValueIdArray, argLabels NameRoster) returns bool
 		var anyMemberFills = false
 
 		for decl in self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path) 'eachMember'
-			let feed = self.memberFeed(base, decl: decl, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
+			let feed = self.memberFeed(base, decl: decl, args: args, argLabels: argLabels)
 
 			if feed == MemberFeed.notFed 'thisMemberIsNotFed'
 				return false
@@ -75359,8 +75433,8 @@ export type Parser
 		return anyMemberFills
 	end 'bareGenericBaseIsFedAnEnclosingParameter'
 
-	function memberFeed(base ByteArray, decl OverloadedDecl, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray) returns MemberFeed
-		match slotCallArgs(sweptSlotNames(decl), args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'slot'
+	function memberFeed(base ByteArray, decl OverloadedDecl, args ValueIdArray, argLabels NameRoster) returns MemberFeed
+		match slotCallArgs(sweptSlotNames(decl), args: args, argLabels: argLabels) 'slot'
 			ordered(slotted) then return self.slottedMemberFeed(base, decl: decl, slotted: slotted)
 
 			// A label no parameter carries, or a count no parameter list takes, is the argument check's refusal.
@@ -75373,7 +75447,6 @@ export type Parser
 	// Inside a generic type body a value that is not fully concrete is one written over the enclosing type's
 	// parameters. A parameter type the sweep could not read cannot refuse the member, so it is not judged.
 	function slottedMemberFeed(base ByteArray, decl OverloadedDecl, slotted ValueIdArray) returns MemberFeed
-		let firstUser = firstUserParamIndex(decl.takesReceiver)
 		var fed = false
 
 		for i in 0 upto decl.paramTypes.count() 'eachUserParam'
@@ -75384,7 +75457,7 @@ export type Parser
 			end 'theSweepDidNotReadThisParameterType'
 
 			let declared = self.sweptParamType(swept, scopeFilePath: decl.declFilePath)
-			let argument = try slotted.get(firstUser + i) otherwise panic("slottedMemberFeed: slotted.get OOB at {firstUser + i} — `slotCallArgs` answered `ordered`, so the counts agree")
+			let argument = try slotted.get(callPositionOfColumn(decl.takesReceiver, column: i as ParamCount)) otherwise panic("slottedMemberFeed: slotted.get OOB at column {i} — `slotCallArgs` answered `ordered`, so the counts agree")
 
 			if self.typeIsWrittenOverTheBase(declared, base: base) 'aSlotOfTheBase'
 				fed = fed or not self.signatures.argIsFullyConcrete(self.valueMaxonType(argument))
@@ -77520,14 +77593,14 @@ export type Parser
 
 		for i in 0 upto args.count() 'eachArg'
 			let label = try argLabels.get(i) otherwise panic("slotMessageArgs: argLabels.get OOB at {i} — args and argLabels are pushed in lockstep")
-			let parameter = try argSlotPosition(paramNames, argIndex: i as ParamCount, label: label) otherwise throw SourceParseError.unknownField(String.from(callee), fieldName: String.from(label), line: memberTok.line, column: memberTok.column)
+			let parameter = try argSlotPosition(paramNames, argIndex: i as ParamCount, label: label) otherwise throw SourceParseError.unknownField(String.from(callee), fieldName: String.from(argLabelSpelling(label)), line: memberTok.line, column: memberTok.column)
 
 			let position = serviceParamPayloadSlot(payloads, paramIndex: parameter)
 
 			let alreadyFilled = try filled.get(position) otherwise panic("slotMessageArgs: filled.get OOB at {position} — the columns are sized to the variant's payload count, which is the parameter count plus at most a reply slot")
 
 			if alreadyFilled 'twice'
-				throw SourceParseError.duplicateFieldInitializer(String.from(callee), fieldName: String.from(label), line: memberTok.line, column: memberTok.column)
+				throw SourceParseError.duplicateFieldInitializer(String.from(callee), fieldName: String.from(argLabelSpelling(label)), line: memberTok.line, column: memberTok.column)
 			end 'twice'
 
 			try slotValues.set(position, value: try args.get(i) otherwise panic("slotMessageArgs: args.get OOB at {i}")) otherwise panic("slotMessageArgs: slotValues.set OOB at {position}")
@@ -83866,7 +83939,7 @@ export type Parser
 	// `args[j+1]` convention that `requireGenuineSelfArgs`, `floatWidenedWitnessArgs` and
 	// `emitWitnessDispatch` all index by — none of which is label-aware, and none of which needs to be.
 	function slottedWitnessArgs(target WitnessDispatchTarget, receiver ValueId, userArgs ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, methodTok Token) returns ValueIdArray throws SourceParseError
-		match slotCallArgs(target.paramNames, args: userArgs, argLabels: argLabels, argDefaultSlots: NoDefaultArgSlots) 'slot'
+		match slotCallArgs(target.paramNames, args: userArgs, argLabels: argLabels) 'slot'
 			ordered(ids) then return withWitnessReceiver(receiver, ordered: ids)
 
 			// The ARITY error blames the call, the two LABEL errors blame the offending argument — the same
@@ -93928,9 +94001,10 @@ export type Parser
 	// call every other position in the language admits.
 	//
 	// ⭐ **THE TWO DOORS DIFFER IN WHAT THEY BUILD AND IN NOTHING ELSE.** A body emits ops
-	// (`fillArgsFromParamDefaults`); this appends arena entries. Both compute the occupied slots through
-	// `argSlotPosition` — the same label→position mapping `slotCallArgs` will validate against, so a call cannot
-	// be filled against one slotting and checked against another — and both spend the same three producers.
+	// (`fillArgsFromParamDefaults`); this appends arena entries. Both take their plan from `plannedDefaultArgs`,
+	// which computes the occupied slots through `argSlotPosition` — the same label→position mapping `slotCallArgs`
+	// will validate against, so a call cannot be filled against one slotting and checked against another — and
+	// both spend the same three producers.
 	//
 	// ⚠ **A SLOT WITH NEITHER AN ARGUMENT NOR A DEFAULT IS LEFT EMPTY ON PURPOSE**, and so is a call whose
 	// label resolves to no parameter: E3036 and E3037 own those, from the RESOLVED signature rather than from
@@ -93948,43 +94022,18 @@ export type Parser
 		end 'defaults'
 	end 'fillConstFactoryArgDefaults'
 
-	// Each filled slot is appended with the parameter's own NAME as its label, so it lands in the right
-	// position whatever order the written arguments came in — the same device the body fill uses, and the
-	// reason neither needs the defaults to be a trailing run of the declaration.
+	// Each filled slot is appended with `slotArgLabel`'s label for it, so it lands in its own position
+	// whatever order the written arguments came in, and neither door needs the defaults to be a trailing run
+	// of the declaration.
 	function appendConstFactoryArgDefaults(info ParamDefaultInfo, calls ConstFactoryCallArray, anchor Token, args ConstFactoryArgumentArray)
-		let paramCount = info.paramNames.count()
+		var written = NameRoster.create()
 
-		if not omittedParametersRemain(paramCount, written: args.count(), receiverSlots: NoReceiverSlots) 'nothingOmitted'
-			return
-		end 'nothingOmitted'
+		for arg in args 'eachWrittenLabel'
+			written.push(arg.label)
+		end 'eachWrittenLabel'
 
-		var filled = BoolArray.create()
-
-		for _ in 0 upto paramCount 'initSlots'
-			filled.push(false)
-		end 'initSlots'
-
-		for i in 0 upto args.count() 'markSupplied'
-			let written = try args.get(i) otherwise panic("appendConstFactoryArgDefaults: args.get OOB at {i} below count {args.count()}")
-			let suppliedSlot = try argSlotPosition(info.paramNames, argIndex: i as ParamCount, label: written.label) otherwise return
-			try filled.set(suppliedSlot, value: true) otherwise panic("appendConstFactoryArgDefaults: filled.set OOB at {suppliedSlot} — filled holds one entry per parameter name")
-		end 'markSupplied'
-
-		for slot in 0 upto paramCount 'fillDefaults'
-			let supplied = try filled.get(slot) otherwise panic("appendConstFactoryArgDefaults: filled.get OOB at {slot} despite slot < paramCount")
-
-			if supplied 'alreadyGiven'
-				continue
-			end 'alreadyGiven'
-
-			let producer = info.producerFor(slot as ParamCount)
-
-			if producerIsRequired(producer) 'noDefault'
-				continue
-			end 'noDefault'
-
-			let paramName = try info.paramNames.get(slot) otherwise panic("appendConstFactoryArgDefaults: paramNames.get OOB at {slot} despite slot < paramCount")
-			args.push(ConstFactoryArgument.create(paramName, value: self.constDefaultArgValue(producer, calls: calls, anchor: anchor)))
+		for fill in plannedDefaultArgs(info, written: written, receiverSlots: NoReceiverSlots) 'fillDefaults'
+			args.push(ConstFactoryArgument.synthesizedDefault(fill.label, value: self.constDefaultArgValue(fill.producer, calls: calls, anchor: anchor)))
 		end 'fillDefaults'
 	end 'appendConstFactoryArgDefaults'
 
@@ -99067,12 +99116,12 @@ export type Parser
 		return conventions
 	end 'byRefConventionsReachableFrom'
 
-	function declarationsTheCallMayBind(callee ByteArray, places PlaceArgumentArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray) returns DeclarationFactsArray
+	function declarationsTheCallMayBind(callee ByteArray, places PlaceArgumentArray, args ValueIdArray, argLabels NameRoster) returns DeclarationFactsArray
 		if places.isEmpty() and self.signatures.overloadedDeclsOf(callee).count() < 2 'oneDeclarationAnswers'
 			return noDeclarationFacts
 		end 'oneDeclarationAnswers'
 
-		return self.declarationFactsBoundBy(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
+		return self.declarationFactsBoundBy(callee, args: args, argLabels: argLabels)
 	end 'declarationsTheCallMayBind'
 
 	function consumeOfTheOneDeclaration(callee ByteArray, declarations DeclarationFactsArray) returns CalleeConsume
@@ -99080,7 +99129,7 @@ export type Parser
 		return only.consume
 	end 'consumeOfTheOneDeclaration'
 
-	function declarationFactsBoundBy(callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray) returns DeclarationFactsArray
+	function declarationFactsBoundBy(callee ByteArray, args ValueIdArray, argLabels NameRoster) returns DeclarationFactsArray
 		if let site = try self.artifact.requestedGenericInstanceSiteKey(callee) 'aGenericInstance'
 			let byRef = self.signatures.byRefOfDeclaration(site)
 			return singleDeclarationFacts(DeclarationFacts.create(site, byRef: byRef, consume: self.signatures.consumeOf(callee)))
@@ -99095,7 +99144,7 @@ export type Parser
 		var slotted = OverloadedDeclArray.create()
 
 		for decl in callable 'eachDeclaration'
-			match slotCallArgs(sweptSlotNames(decl), args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'slot'
+			match slotCallArgs(sweptSlotNames(decl), args: args, argLabels: argLabels) 'slot'
 				ordered then slotted.push(decl)
 				arityMismatch or
 				unknownLabel or
@@ -99415,22 +99464,22 @@ export type Parser
 		// and the emit below see `args`, a defaulted argument is indistinguishable from a written one, which
 		// is what makes the consume transfer, the drop enrollment and `slotCallArgs`' arity gate correct for
 		// it with no change to any of them.
-		let argDefaultSlots = try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, receiverSlots: NoReceiverSlots)
-		view declarations = self.declarationsTheCallMayBind(callee, places: places, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
+		let defaultedArgs = try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, receiverSlots: NoReceiverSlots)
+		view declarations = self.declarationsTheCallMayBind(callee, places: places, args: args, argLabels: argLabels)
 		let placeBindings = try self.bindPlaceArguments(places, declarations: declarations, args: args, argLabels: argLabels)
-		self.widenArgsToInterfaceHandles(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, anchor: anchor, rparenTok: rparenTok)
-		try self.admitOperandAliasSetArgs(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, anchor: anchor)
+		self.widenArgsToInterfaceHandles(callee, args: args, argLabels: argLabels, anchor: anchor, rparenTok: rparenTok)
+		try self.admitOperandAliasSetArgs(callee, args: args, argLabels: argLabels, anchor: anchor)
 
 		// ⭐ **A FACTORY CALL ON A BARE GENERIC BASE HAS ITS INSTANCE FIXED BY ITS ARGUMENTS**, and this is the
 		// first line at which they are all in hand — the fill above included, so a DEFAULTED argument fixes a
 		// type parameter exactly as a written one does. Every other caller gets back what it supplied.
 		let constructed = try self.spawnFactoryConstructorInstance(constructorInstance, inferInstanceOf: inferInstanceOf, callee: callee, args: args, argLabels: argLabels, anchor: anchor, spawned: spawned)
-		try self.requireBareGenericSubjectIsBound(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, constructed: constructed, inferInstanceOf: inferInstanceOf, anchor: anchor)
+		try self.requireBareGenericSubjectIsBound(callee, args: args, argLabels: argLabels, constructed: constructed, inferInstanceOf: inferInstanceOf, anchor: anchor)
 		try self.requireADescriptorToComposeFrom(callee, args: args, constructed: constructed, anchor: anchor)
 		try self.requireALayoutSourceForAStaticCall(callee, constructed: constructed, anchor: anchor)
 		try self.requireACountSourceForAStaticCall(callee, constructed: constructed, anchor: anchor)
 		try self.requireWitnessTablesForAStaticCall(callee, constructed: constructed, anchor: anchor)
-		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
+		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed, args: args, argLabels: argLabels)
 		self.adoptPendingOverlaps(result, mint: mint, anchor: anchor)
 		let opaqueWordReading = try self.retypeOpaqueMethodResult(result, callee: callee, args: args, anchor: anchor)
 		self.noteLiteralColumnsCorpusCall(result, callee: callee, args: args)
@@ -99525,7 +99574,7 @@ export type Parser
 		self.recordConstantArgRangeChecks(callee, args: args, argLabels: argLabels, anchor: anchor)
 		self.recordOpaqueArgRangeChecks(callee, args: args, argLabels: argLabels, anchor: anchor, constructorInstance: constructed)
 		let opIdx = self.artifact.module.ops.count()
-		self.emitDirectCallOp(MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(placeBindings.argImmutableNamesFor(argImmutableNames)), argDefaultSlots: argDefaultSlots, mint: mint), callee: callee, callResult: result, args: args, argLabels: argLabels, range: SourceRange.between(anchor, last: rparenTok))
+		self.emitDirectCallOp(MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(placeBindings.argImmutableNamesFor(argImmutableNames)), defaultedArgs: defaultedArgs, mint: mint), callee: callee, callResult: result, args: args, argLabels: argLabels, range: SourceRange.between(anchor, last: rparenTok))
 
 		// ⭐ **AND WHERE THAT OP LANDED, WHEN IT IS ONE A LATER FOLD MAY DROP.** Only the two index accessors
 		// over a known-bytes receiver answer true here — `recordConstStringIndexResult` above is the sole
@@ -99668,11 +99717,10 @@ export type Parser
 	end 'nonGenericDeclarationFitsExactly'
 
 	function declarationFitsExactly(decl OverloadedDecl, args ValueIdArray, argLabels NameRoster) returns bool
-		let firstUser = firstUserParamIndex(decl.takesReceiver)
-
-		for argIndex in firstUser upto args.count() 'eachArgument'
+		for argIndex in firstUserParamIndex(decl.takesReceiver) upto args.count() 'eachArgument'
 			let label = try argLabels.get(argIndex) otherwise panic("declarationFitsExactly: argLabels holds {argLabels.count()} entries for {args.count()} arguments — the two columns are parallel")
-			let paramIndex = try argSlotPosition(decl.paramNames, argIndex: argIndex - firstUser, label: label) otherwise return false
+			let column = try columnOfCallPosition(decl.takesReceiver, position: argIndex as ParamCount) otherwise panic("declarationFitsExactly: argument {argIndex} is the receiver, which the loop starts past")
+			let paramIndex = try argSlotPosition(decl.paramNames, argIndex: column, label: label) otherwise return false
 
 			let swept = try decl.paramTypes.get(paramIndex) otherwise return false
 			let paramType = self.sweptParamType(swept, scopeFilePath: decl.declFilePath)
@@ -99691,7 +99739,6 @@ export type Parser
 	end 'declarationFitsExactly'
 
 	function inferGenericInstance(template GenericFunctionTemplate, args ValueIdArray, argLabels NameRoster, anchor Token, refuse bool) returns GenericInference throws SourceParseError
-		let firstUser = firstUserParamIndex(template.takesReceiver)
 		let functionName = (bareMethodName(template.key))
 		var arguments = GenericFunctionArgumentArray.create()
 
@@ -99699,9 +99746,10 @@ export type Parser
 			let paramName = String.from(try template.typeParamNames.get(position) otherwise panic("inferGenericInstance: typeParamNames.get OOB at {position}"))
 			var values = ValueIdArray.create()
 
-			for argIndex in firstUser upto args.count() 'eachArgument'
+			for argIndex in firstUserParamIndex(template.takesReceiver) upto args.count() 'eachArgument'
 				let label = try argLabels.get(argIndex) otherwise panic("inferGenericInstance: argLabels holds {argLabels.count()} entries for {args.count()} arguments — the two columns are parallel")
-				let paramIndex = try argSlotPosition(template.paramNames, argIndex: argIndex - firstUser, label: label) otherwise continue
+				let column = try columnOfCallPosition(template.takesReceiver, position: argIndex as ParamCount) otherwise panic("inferGenericInstance: argument {argIndex} is the receiver, which the loop starts past")
+				let paramIndex = try argSlotPosition(template.paramNames, argIndex: column, label: label) otherwise continue
 
 				let slot = try template.paramSlots.get(paramIndex) otherwise continue
 				let bound = try template.paramTypeParams.get(paramIndex) otherwise panic("inferGenericInstance: paramTypeParams is parallel to paramSlots")
@@ -100181,14 +100229,14 @@ export type Parser
 	end 'recordAccessorBytePos'
 
 	// ⭐ **SUPPLY EVERY ARGUMENT THE CALL OMITTED AND THE DECLARATION DEFAULTS** — each one
-	// becomes a call to the declaration's synthesized helper, appended with the parameter's own NAME as its
-	// label, so `slotCallArgs` puts it in the right position whatever order the written arguments came in.
+	// becomes a call to the declaration's synthesized helper, appended with `slotArgLabel`'s label for its
+	// slot, so `slotCallArgs` puts it in the right position whatever order the written arguments came in.
 	//
 	// ⚠ **IT FILLS BY SLOT, NOT BY TRAILING RUN, AND THAT IS WHAT MAKES A NON-TRAILING DEFAULT WORK.**
 	// `choose(flag bool = true, a Integer = 40, b Integer = 10)` called `choose()` fills all three; the same
-	// declaration called `choose(false, b: 7)` fills only `a`. The occupied slots are computed through
-	// `argSlotPosition` — the SAME label→position mapping `slotCallArgs` will use — so a call cannot be
-	// filled against one slotting and validated against another.
+	// declaration called `choose(false, b: 7)` fills only `a`. The occupied slots are computed by
+	// `plannedDefaultArgs` through `argSlotPosition` — the SAME label→position mapping `slotCallArgs` will
+	// use — so a call cannot be filled against one slotting and validated against another.
 	//
 	// ⚠ **A SLOT WITH NEITHER AN ARGUMENT NOR A DEFAULT IS LEFT EMPTY ON PURPOSE**, and so is a call whose
 	// label resolves to no parameter. Both are diagnostics that already exist, own their wording and their
@@ -100200,17 +100248,17 @@ export type Parser
 	// `self`, which a send never carries — so the written arguments are slotted from there. A direct
 	// method call has its receiver in `args` already and passes `NoReceiverSlots`; passing that for a
 	// message would fill every default one slot early.
-	function fillOmittedArgDefaults(callee ByteArray, anchor Token, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, receiverSlots ParamCount) returns ParamCountArray throws SourceParseError
+	function fillOmittedArgDefaults(callee ByteArray, anchor Token, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, receiverSlots ParamCount) returns ParamCount throws SourceParseError
 		// ⚡ The gate is the allocation-free PRESENCE test, not `defaultsOf` itself: this runs at every call
 		// in the program, and a payload-free union case still heap-allocates in Maxon — an `allRequired`
 		// minted per parsed call is the constant factor that reverted the math-intrinsic resolver
 		// (`parseCallNamed`). Only a callee that genuinely declares a default pays for the union.
 		if not self.signatures.declaresParamDefaults(callee) 'everyParameterRequired'
-			return NoDefaultArgSlots
+			return NoDefaultedArgs
 		end 'everyParameterRequired'
 
 		match self.signatures.defaultsOf(callee) 'defaults'
-			allRequired then return NoDefaultArgSlots
+			allRequired then return NoDefaultedArgs
 			defaults(info) then return try self.fillArgsFromParamDefaults(info, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, receiverSlots: receiverSlots)
 		end 'defaults'
 	end 'fillOmittedArgDefaults'
@@ -100259,70 +100307,26 @@ export type Parser
 		end 'refused'
 	end 'requireFirstArgLabelHasDefault'
 
-	// ⭐ **RETURNS THE SLOT OF EVERY ARGUMENT IT APPENDED, IN APPEND ORDER** — `MaxonOp.call`'s
-	// `argDefaultSlots`. The label it also writes is the parameter's NAME, which is what every by-name reader
-	// downstream still bridges through; the slots are what `slotCallArgs` uses, because a name cannot address
-	// a position when the signature declares `_` more than once. See the op's own header for why exactly one
-	// reader needs the exact answer.
-	function fillArgsFromParamDefaults(info ParamDefaultInfo, anchor Token, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, receiverSlots ParamCount) returns ParamCountArray throws SourceParseError
-		let paramCount = info.paramNames.count()
+	// Returns how many arguments it appended, which the call records as its `defaultedArgs` — see
+	// `MaxonOp.call`.
+	function fillArgsFromParamDefaults(info ParamDefaultInfo, anchor Token, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, receiverSlots ParamCount) returns ParamCount throws SourceParseError
+		if argLabels.count() != args.count() 'labelsOutOfStep'
+			panic("fillArgsFromParamDefaults: {argLabels.count()} labels for {args.count()} arguments — the label column is pushed in lockstep with args")
+		end 'labelsOutOfStep'
 
-		if not omittedParametersRemain(paramCount, written: args.count(), receiverSlots: receiverSlots) 'nothingOmitted'
-			return NoDefaultArgSlots
-		end 'nothingOmitted'
+		view planned = plannedDefaultArgs(info, written: argLabels, receiverSlots: receiverSlots)
 
-		var filled = BoolArray.create()
-
-		for _ in 0 upto paramCount 'initSlots'
-			filled.push(false)
-		end 'initSlots'
-
-		for i in 0 upto args.count() 'markSupplied'
-			view label = try argLabels.get(i) otherwise panic("fillArgsFromParamDefaults: argLabels.get OOB at {i} — the label column is pushed in lockstep with args")
-			let suppliedSlot = try argSlotPosition(info.paramNames, argIndex: (i as ParamCount) + receiverSlots, label: label) otherwise return NoDefaultArgSlots
-			try filled.set(suppliedSlot, value: true) otherwise panic("fillArgsFromParamDefaults: filled.set OOB at {suppliedSlot} — filled holds one entry per parameter name")
-		end 'markSupplied'
-
-		// ⚠ **THE COLUMN IS BUILT OWNED AND THE SHARED EMPTY ONE IS SUBSTITUTED AT THE RETURN** — it may
-		// NOT be seeded with `NoDefaultArgSlots` and pushed into later. That constant is a module-level
-		// `let`, and a `var` reaching it is a MUTABLE name for an IMMUTABLE value, which single ownership
-		// refuses (E3159 at the `push`, since `push` mutates its receiver) — the guard that made the seed
-		// safe at runtime is invisible to a static rule, and rightly so: the rule is about what the name
-		// CAN reach, not what this path happens to do. The shared column still leaves this function for
-		// every call that fills no default, so nothing downstream changes; only calls that omitted an
-		// argument with no default pay a transient empty array, and they are the error paths.
-		var defaultSlots = ParamCountArray.create()
-
-		for slot in 0 upto paramCount 'fillDefaults'
-			let supplied = try filled.get(slot) otherwise panic("fillArgsFromParamDefaults: filled.get OOB at {slot} despite slot < paramCount")
-
-			if supplied 'alreadyGiven'
-				continue
-			end 'alreadyGiven'
-
-			let producer = info.producerFor(slot as ParamCount)
-
-			if producerIsRequired(producer) 'noDefault'
-				continue
-			end 'noDefault'
-
-			defaultSlots.push(slot)
-
-			let paramName = try info.paramNames.get(slot) otherwise panic("fillArgsFromParamDefaults: paramNames.get OOB at {slot} despite slot < paramCount")
-			let value = try self.emitDefaultArgValue(producer, anchor: anchor)
-			pushDefaultedCallArg(args, argLabels: argLabels, argRanges: argRanges, value: value, label: paramName, range: SourceRange.ofToken(anchor))
+		for fill in planned 'fillDefaults'
+			let value = try self.emitDefaultArgValue(fill.producer, anchor: anchor)
+			pushDefaultedCallArg(args, argLabels: argLabels, argRanges: argRanges, value: value, label: fill.label, range: SourceRange.ofToken(anchor))
 		end 'fillDefaults'
 
-		if defaultSlots.count() == 0 'noneFillable'
-			return NoDefaultArgSlots
-		end 'noneFillable'
-
-		return defaultSlots
+		return planned.count() as ParamCount
 	end 'fillArgsFromParamDefaults'
 
 	// ⭐⭐ **THE VALUE ONE OMITTED ARGUMENT TAKES — THE POINT THE LANGUAGE'S TWO DEFAULT DOORS DIVERGE, AND
-	// THE ONLY ONE.** Everything around it — the slot bookkeeping, the parameter-name label,
-	// `argDefaultSlots`, and every check downstream that cannot tell a defaulted argument from a written one
+	// THE ONLY ONE.** Everything around it — the slot bookkeeping, the slot label,
+	// `defaultedArgs`, and every check downstream that cannot tell a defaulted argument from a written one
 	// — is shared, because what differs between the doors is exactly and only what produces the value.
 	//
 	// ⚠ **A CALLER-LOCATION DEFAULT EMITS THE OPS THE CALLER WOULD HAVE EMITTED HAD IT WRITTEN THE VALUE
@@ -101173,7 +101177,7 @@ export type Parser
 		// `f()` is. It sits BEFORE the scalar check on purpose: the helper's result is an ordinary value and
 		// must meet the async argument rule exactly as a written argument does, so a MANAGED default earns
 		// the existing refusal below rather than a second one worded here.
-		let argDefaultSlots = try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, receiverSlots: NoReceiverSlots)
+		let defaultedArgs = try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, receiverSlots: NoReceiverSlots)
 		let conventions = self.spawnedCalleeConventions(callee, writtenCallee: writtenCallee)
 
 		for i in 0 upto args.count() 'eachArg'
@@ -101215,7 +101219,7 @@ export type Parser
 		try self.transferAsyncSpawnArgs(callee, args: args, argImmutableNames: argImmutableNames, argAnchors: argAnchors, anchor: anchor)
 
 		let result = match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'spawned'
-			declared(returnType) gives try self.spawnAtItsPromiseInstance(callee, declaredReturn: returnType, args: args, argLabels: argLabels, argRanges: argRanges, argDefaultSlots: argDefaultSlots, anchor: anchor)
+			declared(returnType) gives try self.spawnAtItsPromiseInstance(callee, declaredReturn: returnType, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor)
 			undeclared gives self.mintDeferredValue()
 		end 'spawned'
 
@@ -101234,7 +101238,7 @@ export type Parser
 
 		// Immediately before the emit, so the site keys the op that emit is about to append.
 		self.artifact.recordAsyncSpawnSite(spawnSite)
-		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(argImmutableNames), argDefaultSlots: argDefaultSlots, mint: mint), range: SourceRange.between(anchor, last: rparenTok))
+		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(argImmutableNames), defaultedArgs: defaultedArgs, mint: mint), range: SourceRange.between(anchor, last: rparenTok))
 		let callSpan = SourceRange.between(anchor, last: rparenTok)
 		self.noteCallToken(callSpan, args: args, start: callSpan)
 		return result
@@ -101242,11 +101246,11 @@ export type Parser
 
 	// One pick serves the result gate and the minted instance, so an overloaded callee is checked and
 	// awaited at the same declaration.
-	function spawnAtItsPromiseInstance(callee ByteArray, declaredReturn MaxonReturnType, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argDefaultSlots ParamCountArray, anchor Token) returns ValueId throws SourceParseError
-		let pick = self.returnDecidingDeclaration(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
+	function spawnAtItsPromiseInstance(callee ByteArray, declaredReturn MaxonReturnType, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, anchor Token) returns ValueId throws SourceParseError
+		let pick = self.returnDecidingDeclaration(callee, args: args, argLabels: argLabels)
 
 		try self.requireAsyncResult(callee, returnType: self.spawnedReturnType(callee, declaredReturn: declaredReturn, pick: pick), anchor: anchor)
-		try self.transferAsyncPromiseArgs(callee, args: args, argLabels: argLabels, argRanges: argRanges, argDefaultSlots: argDefaultSlots, anchor: anchor)
+		try self.transferAsyncPromiseArgs(callee, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor)
 
 		return self.mintSpawnPromise(callee, pick: pick)
 	end 'spawnAtItsPromiseInstance'
@@ -101321,7 +101325,7 @@ export type Parser
 	// only reads the promise would read a thread this frame reclaims. The E3141 waits for the loop, so a
 	// promise also handed to a taking parameter is E3102 at its second argument, as
 	// `specs/async-promise-drop.md` pins.
-	function transferAsyncPromiseArgs(callee ByteArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argDefaultSlots ParamCountArray, anchor Token) throws SourceParseError
+	function transferAsyncPromiseArgs(callee ByteArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, anchor Token) throws SourceParseError
 		var promiseColumns = ParamCountArray.create()
 
 		for column in 0 upto args.count() as ParamCount 'eachArg'
@@ -101334,7 +101338,7 @@ export type Parser
 			return
 		end 'noPromiseTravels'
 
-		let declarations = self.declarationFactsBoundBy(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
+		let declarations = self.declarationFactsBoundBy(callee, args: args, argLabels: argLabels)
 		var borrowedColumns = ParamCountArray.create()
 
 		for column in promiseColumns 'eachPromiseColumn'
@@ -102881,7 +102885,7 @@ export type Parser
 	// one member nameable from either file, so no type has to be compared to know which one a call means. The
 	// DISAGREEMENT is still read across ALL declarations, because it is `returnTypeOf`'s answer that the
 	// member this file cannot name is what spoils.
-	function overloadedCallResultType(callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray) returns SweptOverloadPick
+	function overloadedCallResultType(callee ByteArray, args ValueIdArray, argLabels NameRoster) returns SweptOverloadPick
 		// ⚡ **THE COST GATE, and it is the first thing this function does because it runs at EVERY call in the
 		// program.** A name with one declaration — which is nearly every callee, every builtin and every
 		// runtime symbol — leaves here on a count, having allocated nothing: `overloadedDeclsOf` answers a
@@ -102892,7 +102896,7 @@ export type Parser
 		// duplicates then compare as agreeing (they are the same declaration), so the set still lands on
 		// `undecided` and the by-name answer still serves. The gate is a cost gate; it is not what makes a
 		// double-fold safe.
-		return match self.returnDecidingDeclaration(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'pick'
+		return match self.returnDecidingDeclaration(callee, args: args, argLabels: argLabels) 'pick'
 			// ADOPTED into this file's interner, exactly as `returnTypeOf` adopts the by-name answer: the
 			// index's ids are its own, and a `named`/`structRef` return read raw would name whatever this
 			// file's table happens to hold at that id.
@@ -102901,7 +102905,7 @@ export type Parser
 		end 'pick'
 	end 'overloadedCallResultType'
 
-	function returnDecidingDeclaration(callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray) returns SweptDeclarationPick
+	function returnDecidingDeclaration(callee ByteArray, args ValueIdArray, argLabels NameRoster) returns SweptDeclarationPick
 		view candidates = self.signatures.overloadedDeclsOf(callee)
 
 		if candidates.count() < 2 'oneDeclarationWearsThisName'
@@ -102912,20 +102916,20 @@ export type Parser
 			return sharedUndecidedDeclarationPick
 		end 'oneAnswerHoweverItResolves'
 
-		return self.sweptOverloadAmong(self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path), args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
+		return self.sweptOverloadAmong(self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path), args: args, argLabels: argLabels)
 	end 'returnDecidingDeclaration'
 
-	function sweptDeclarationOf(callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray) returns SweptDeclarationPick
+	function sweptDeclarationOf(callee ByteArray, args ValueIdArray, argLabels NameRoster) returns SweptDeclarationPick
 		view candidates = self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path)
 
 		if candidates.count() == 1 'oneDeclaration'
 			return SweptDeclarationPick.chosen(try candidates.get(0) otherwise panic("sweptDeclarationOf: one declaration was just counted"))
 		end 'oneDeclaration'
 
-		return self.sweptOverloadAmong(candidates, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
+		return self.sweptOverloadAmong(candidates, args: args, argLabels: argLabels)
 	end 'sweptDeclarationOf'
 
-	function sweptOverloadAmong(candidates OverloadedDeclArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray) returns SweptDeclarationPick
+	function sweptOverloadAmong(candidates OverloadedDeclArray, args ValueIdArray, argLabels NameRoster) returns SweptDeclarationPick
 		var picked = SweptDeclarationPick.undecided
 		var best = NoCompatibleOverloadScore
 		var holdingBest = 0 as OverloadCandidateCount
@@ -102933,7 +102937,7 @@ export type Parser
 		for candidate in candidates 'eachCandidate'
 			var score = NoCompatibleOverloadScore
 
-			match self.sweptOverloadFit(candidate, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'fit'
+			match self.sweptOverloadFit(candidate, args: args, argLabels: argLabels) 'fit'
 				// A parameter the sweep did not read leaves this whole set unjudgeable: a candidate that cannot
 				// be refused cannot be outranked either, so a winner here would be a claim about the members this
 				// door happened to be able to read.
@@ -102971,8 +102975,8 @@ export type Parser
 	// registry), so what they share is the ORDER, which is the part that has to agree: a member this door
 	// picks and that pass does not is a call typed from a return type it never gets, and the program earns
 	// `reportOverloadReturnDisagreement` for something the author got right.
-	function sweptOverloadFit(candidate OverloadedDecl, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray) returns SweptOverloadFit
-		match slotCallArgs(sweptSlotNames(candidate), args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'slot'
+	function sweptOverloadFit(candidate OverloadedDecl, args ValueIdArray, argLabels NameRoster) returns SweptOverloadFit
+		match slotCallArgs(sweptSlotNames(candidate), args: args, argLabels: argLabels) 'slot'
 			ordered(slotted) then return self.sweptOverloadArgFit(candidate, slotted: slotted)
 
 			// An arity mismatch, a label naming no parameter, or two arguments at one parameter: this call was
@@ -102984,7 +102988,6 @@ export type Parser
 	end 'sweptOverloadFit'
 
 	function sweptOverloadArgFit(candidate OverloadedDecl, slotted ValueIdArray) returns SweptOverloadFit
-		let firstUser = firstUserParamIndex(candidate.takesReceiver)
 		var score = NoCompatibleOverloadScore
 
 		for i in 0 upto candidate.paramTypes.count() 'eachUserParam'
@@ -102995,7 +102998,7 @@ export type Parser
 			end 'theSweepDidNotReadThisParameterType'
 
 			let paramType = self.sweptParamType(swept, scopeFilePath: candidate.declFilePath)
-			let argValue = try slotted.get(firstUser + i) otherwise panic("sweptOverloadArgFit: slotted.get OOB at {firstUser + i} — `slotCallArgs` answered `ordered`, so the counts agree, and `paramNames`/`paramTypes` are pushed in lockstep by the one walk that fills them")
+			let argValue = try slotted.get(callPositionOfColumn(candidate.takesReceiver, column: i as ParamCount)) otherwise panic("sweptOverloadArgFit: slotted.get OOB at column {i} — `slotCallArgs` answered `ordered`, so the counts agree, and `paramNames`/`paramTypes` are pushed in lockstep by the one walk that fills them")
 
 			if self.handleWidensToSlot(argValue, declared: paramType) 'aHandleConversion'
 				score = score + WideningArgScore
@@ -103064,13 +103067,13 @@ export type Parser
 		return not self.signatures.aggregatesConflict(self.aggregateNameOf(paramTag, nameId: typeNameIdOf(paramType)), expectedTag: paramTag, expectedNameId: typeNameIdOf(paramType), expectedBrand: EmptySourceText, got: self.aggregateNameOf(argTag, nameId: argNameId), gotTag: argTag, gotNameId: argNameId, gotBrand: self.operandAliasSetOf(argValue), readerFilePath: self.job.path)
 	end 'sweptArgumentFits'
 
-	function mintCallResult(callee ByteArray, anchor Token, resultUsed bool, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray) returns ValueId throws SourceParseError
+	function mintCallResult(callee ByteArray, anchor Token, resultUsed bool, args ValueIdArray, argLabels NameRoster) returns ValueId throws SourceParseError
 		// ⭐⭐ **AN OVERLOAD SET WHOSE MEMBERS DISAGREE ABOUT WHAT THEY RETURN IS ASKED FIRST, AND ONLY THEN.**
 		// `returnTypeOf` records ONE return type per registration key and is LAST-WINS over the declarations
 		// wearing it, which is exactly right for every name whose declarations agree — every name in every
 		// program the corpus compiles — and is a wrong answer for one whose declarations do not. See
 		// `overloadedCallResultType` for what it will and will not decide.
-		match self.overloadedCallResultType(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'overloaded'
+		match self.overloadedCallResultType(callee, args: args, argLabels: argLabels) 'overloaded'
 			resolved(returnType) then return try self.mintDeclaredCallResult(callee, anchor: anchor, returnType: returnType, resultUsed: resultUsed)
 			undecided then break
 		end 'overloaded'
@@ -104326,22 +104329,18 @@ export type Parser
 	// `let (x, y) = t` the keyword sits before the PAREN and never before a name, so every name would
 	// classify as a REBIND here.
 	//
-	// ⚠ **THE QUALIFIER IS TESTED BEFORE THE DISCARD NAME, so `(let _, y) = f()` DECLARES a binding called
-	// `_` and pays a field read where `(_, y)` does neither.** That is the opposite order from `parseAssignment`
-	// and the `for` pattern, and it is deliberate: it makes this form agree with `let (a, _) = t`, where the
-	// declaring pattern also declares `_` (`parseDestructuringNames` runs every name through
-	// `declareInitializedBinding`). One spelling of "declare a name I will not read", answering the same way
-	// in both destructuring forms, beats agreeing with the doors that have no declarator to test.
+	// The discard name is tested before the qualifier, so `(let _, y) = f()` discards its first element as
+	// `(_, y) = f()` and `let (a, _) = t` do: `_` declares no binding in any destructuring form.
 	function tupleAssignTargetAt(nameIndex ElementIndex) returns TupleAssignTarget
 		let qualifier = self.kindAt(nameIndex - 1)
-
-		if bindingKeywordSpells(qualifier) 'declaresAName'
-			return TupleAssignTarget.declares(bindingKindOfKeyword(qualifier))
-		end 'declaresAName'
 
 		if self.tokenAt(nameIndex).value.equals(DiscardBindingName) 'discards'
 			return TupleAssignTarget.discards
 		end 'discards'
+
+		if bindingKeywordSpells(qualifier) 'declaresAName'
+			return TupleAssignTarget.declares(bindingKindOfKeyword(qualifier))
+		end 'declaresAName'
 
 		return TupleAssignTarget.rebinds
 	end 'tupleAssignTargetAt'

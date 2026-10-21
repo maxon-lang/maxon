@@ -2290,9 +2290,9 @@ Stack trace:
 ⛔ The same defect's louder half: when the guarded value is COMPUTED in the arm rather than merely read
 there, the misplaced cascade READS a value defined in a block it dominates, and the register allocator
 refuses the function outright — *"seedInUse: value N is live-in to block 0 but was never colored"*, so
-the program does not build at all. The compiler's own source has this shape, because `stdlib/Array.maxon`'s
-`ElementIndex` puts a guard on every computed array index: `Project.slotCallArgs` indexes
-`argDefaultSlots` by a subtraction inside a conditional expression's true arm. The second call also
+the program does not build at all. The shape is an ordinary one, because `stdlib/Array.maxon`'s
+`ElementIndex` puts a guard on every computed array index: `a.get(i - n)` inside a conditional
+expression's true arm has it. The second call also
 carries an OUT-OF-RANGE value down the arm that is NOT selected, so a guard that merely survived in the
 wrong block would be caught here too and not only by the compile.
 ```maxon

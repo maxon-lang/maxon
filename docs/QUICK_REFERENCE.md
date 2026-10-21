@@ -182,7 +182,7 @@ points.push(Point.create(3, y: 4))
 print("{first.x}\n")    // reads through the view; first.x = 1 is E3159
 ```
 
-All variables must be used (E3012). The exact name `_` is a discard identifier -- it creates no binding and is exempt from unused checks. Names like `_x` are regular variables and must be used. Self-assignment (`x = x`) is an error (E3067). `_ =` requires a function call on the right-hand side (`_ = 42` is an error).
+All variables must be used (E3012). The exact name `_` is a discard identifier -- it creates no binding and is exempt from unused checks; reading a `_` parameter is E2004. Names like `_x` are regular variables and must be used. Self-assignment (`x = x`) is an error (E3067). `_ =` requires a function call on the right-hand side (`_ = 42` is an error).
 
 **Assignment semantics:** A record is stored by reference: a record pushed into a container, stored in a field or passed to a call is shared, and a field write through one holder is visible through every other. `var b = a` and `let b = a` from a `var a` MOVE the record (reading `a` afterwards is E3102). Reassignment (`b = Point.create(...)`) rebinds without affecting the record `b` held. Use `a.clone()` for an independent deep copy (the type must be `Cloneable`). Primitives are always copied by value.
 

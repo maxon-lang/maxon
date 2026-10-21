@@ -1877,7 +1877,7 @@ type MaxonToStdLowering
 	// set.
 	function lowerOp(hlOp MaxonOp, dstBlock IrBlock)
 		match hlOp 'lower'
-			call(result, callee, args, argLabels, _, _, argDefaultSlots, _) then self.lowerCall(result, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, dstBlock: dstBlock)
+			call(result, callee, args, argLabels, _, _, _, _) then self.lowerCall(result, callee: callee, args: args, argLabels: argLabels, dstBlock: dstBlock)
 			literal(result, value, litType) then self.lowerLiteral(result, value: value, litType: litType, dstBlock: dstBlock)
 			ret(retVal) then self.emitRetOrErrorReturn(retVal, dstBlock: dstBlock, asTerminator: false)
 			retVoid then self.emitRetVoidOrErrorReturn(dstBlock, asTerminator: false)
@@ -1898,7 +1898,7 @@ type MaxonToStdLowering
 			rawIntrinsic(result, intrinsic, args, constant) then self.lowerRawIntrinsic(result, intrinsic: intrinsic, args: args, constant: constant, dstBlock: dstBlock)
 
 			// A throwing call: like `call`, plus the second `errorFlag` result (the Std `tryCall`).
-			tryCall(result, errorFlag, callee, args, argLabels, _, _, argDefaultSlots, _) then self.lowerTryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, dstBlock: dstBlock)
+			tryCall(result, errorFlag, callee, args, argLabels, _, _, _, _) then self.lowerTryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, dstBlock: dstBlock)
 			panicAbort(message) then self.lowerPanicAbort(message, dstBlock: dstBlock)
 
 			// A function VALUE (the address of its record) or a bare code address — see `lowerFunctionRef`.
@@ -1915,7 +1915,7 @@ type MaxonToStdLowering
 			// `async f(…)` spills its scalar args into a slab argument buffer and spawns a green
 			// thread; `await p` drives the scheduler until the promise completes. `args` is safe to bind in
 			// this big match because a later field (`argLabels`/`argRanges`) follows it — see lowerIndirectCall.
-			asyncCall(result, callee, args, argLabels, _, _, argDefaultSlots, _) then self.lowerAsyncCall(result, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, dstBlock: dstBlock)
+			asyncCall(result, callee, args, argLabels, _, _, _, _) then self.lowerAsyncCall(result, callee: callee, args: args, argLabels: argLabels, dstBlock: dstBlock)
 			await (result, promise) then self.lowerAwait(result, promise: promise, dstBlock: dstBlock)
 			tryAwait(result, errorFlag, promise) then self.lowerTryAwait(result, errorFlag: errorFlag, promise: promise, dstBlock: dstBlock)
 
@@ -4264,15 +4264,15 @@ type MaxonToStdLowering
 		end 'notADirectCall'
 
 		match op 'callShape'
-			call(result, callee, args, argLabels, _, _, argDefaultSlots, _) then self.noteTableCandidateOfCall(result, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, into: into)
-			tryCall(result, _, callee, args, argLabels, _, _, argDefaultSlots, _) then self.noteTableCandidateOfCall(result, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, into: into)
+			call(result, callee, args, argLabels, _, _, _, _) then self.noteTableCandidateOfCall(result, callee: callee, args: args, argLabels: argLabels, into: into)
+			tryCall(result, _, callee, args, argLabels, _, _, _, _) then self.noteTableCandidateOfCall(result, callee: callee, args: args, argLabels: argLabels, into: into)
 			asyncCall or
 			serviceSend then return
 			default panic("noteTableCandidateOfOp: maxonOpCalleeKind answers direct for an op that is not call, tryCall, asyncCall or serviceSend")
 		end 'callShape'
 	end 'noteTableCandidateOfOp'
 
-	function noteTableCandidateOfCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray, into DescriptorSubjects)
+	function noteTableCandidateOfCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, into DescriptorSubjects)
 		let composedStamp = self.createTakesItsElementStampFromADescriptor(callee, result: result)
 
 		if composedStamp 'aComposedElementStamp'
@@ -4291,7 +4291,7 @@ type MaxonToStdLowering
 			return
 		end 'nothingToPlan'
 
-		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'slot'
+		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels) 'slot'
 			ordered(argIds) then self.planHiddenArguments(argIds, sig: sig, result: result, callee: callee, readsATable: readsATable, passesADescriptor: passesADescriptor, into: into)
 			arityMismatch or
 			unknownLabel or
@@ -4647,7 +4647,7 @@ type MaxonToStdLowering
 	// here is a compiler-invariant violation and panics rather than emitting wrong code.
 	// The `argRanges` on the Maxon op are diagnostics-only (consumed by SemanticCheck),
 	// so lowering ignores them.
-	function lowerCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray, dstBlock IrBlock)
+	function lowerCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, dstBlock IrBlock)
 		// ⭐ A COMPILER-EMITTED CALL HAS NO SIGNATURE TO SLOT AGAINST, and needs none:
 		// `Parser.emitRuntimeCall` wrote its arguments itself, positionally, in declaration order — so
 		// the reordering below would be the identity, and the registry lookup it needs first would panic
@@ -4662,7 +4662,7 @@ type MaxonToStdLowering
 
 		view sig = try self.funcSignatures.get(callee) otherwise panic("lowerCall: callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
 
-		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'slot'
+		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels) 'slot'
 			ordered(argIds) then self.lowerSlottedCall(result, callee: callee, sig: sig, argIds: argIds, dstBlock: dstBlock)
 			arityMismatch then panic("lowerCall: arity mismatch for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 			unknownLabel then panic("lowerCall: unknown argument label for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
@@ -5698,10 +5698,10 @@ type MaxonToStdLowering
 	// trampoline's integer channel and `SemanticCheck.requireAsyncScalarParams` refuses it — so the slotted
 	// args pass through as i64 without the float widening. A MANAGED argument is accepted and is one
 	// such i64: its box pointer.
-	function lowerAsyncCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray, dstBlock IrBlock)
+	function lowerAsyncCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, dstBlock IrBlock)
 		view sig = try self.funcSignatures.get(callee) otherwise panic("lowerAsyncCall: async callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
 
-		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'slot'
+		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels) 'slot'
 			ordered(argIds) then self.emitAsyncSpawn(result, callee: callee, argIds: argIds, dstBlock: dstBlock)
 			arityMismatch then panic("lowerAsyncCall: arity mismatch for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 			unknownLabel then panic("lowerAsyncCall: unknown argument label for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
@@ -6543,7 +6543,7 @@ type MaxonToStdLowering
 	// DECLARED throwing function, so it takes `appendThrowingCall`'s slotting path like every other `try f(…)`. The
 	// discriminator is `isSignaturelessCompilerCallee`, `lowerCall`'s exactly — this is the throwing twin of
 	// that site and the two must part company on the same fact.
-	function lowerTryCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray, dstBlock IrBlock)
+	function lowerTryCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, dstBlock IrBlock)
 		// ⭐ **A CHECKED DIVIDE IS EXPANDED, NOT CALLED.** Asked FIRST, and exhaustively, so a checked
 		// division callee can never fall through to the `StdOp.tryCall` `appendThrowingCall` emits — there is no `__checked_div`
 		// function for such a call to reach, and the linker's "call to unknown function" would be the failure.
@@ -6563,13 +6563,13 @@ type MaxonToStdLowering
 			quotient then self.lowerDivisionExpansion(result, expansion: DivisionExpansion.checkedQuotient(errorFlag), signedness: divisionCalleeSignedness(callee), args: args, dstBlock: dstBlock)
 			remainder then self.lowerDivisionExpansion(result, expansion: DivisionExpansion.checkedRemainder(errorFlag), signedness: divisionCalleeSignedness(callee), args: args, dstBlock: dstBlock)
 			guardedRemainder then panic("lowerTryCall: a TOTAL `__guarded_mod` reached the throwing call path — `isThrowingDivisionRuntimeCallee` answers false for it, so `Parser.requireThrowingNamedTryTarget` must have refused the `try` before lowering")
-			notCheckedDivision then self.appendThrowingCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, dstBlock: dstBlock)
+			notCheckedDivision then self.appendThrowingCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, dstBlock: dstBlock)
 		end 'checkedDivision'
 	end 'lowerTryCall'
 
 	// Emit the `StdOp.tryCall` for every throwing callee that is not an expanded division — verbatim
 	// arguments for a compiler-owned one, label-slotted for a declared one.
-	function appendThrowingCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray, dstBlock IrBlock)
+	function appendThrowingCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, dstBlock IrBlock)
 		if isSignaturelessCompilerCallee(callee, funcSignatures: self.funcSignatures) 'compilerOwnTryCall'
 			requireRuntimeCallPositional(callee, argLabels: argLabels)
 
@@ -6590,7 +6590,7 @@ type MaxonToStdLowering
 
 		view sig = try self.funcSignatures.get(callee) otherwise panic("appendThrowingCall: throwing callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
 
-		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'slot'
+		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels) 'slot'
 			ordered(argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: self.finalizeCallArgsWithLayout(argIds, sig: sig, callee: callee, result: result, dstBlock: dstBlock)))
 			arityMismatch then panic("appendThrowingCall: arity mismatch for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 			unknownLabel then panic("appendThrowingCall: unknown argument label for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")

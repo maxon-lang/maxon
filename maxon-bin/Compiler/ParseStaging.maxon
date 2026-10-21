@@ -1237,13 +1237,13 @@ function artifactOwnedHold(op MaxonOp) returns MaxonOp
 end 'artifactOwnedHold'
 
 // A call's names are copied and its value-id columns kept: the parser builds `args`, `argRanges` and
-// `argDefaultSlots` for this op, while a label or a blamed name may be a parameter name the index holds. Bound in a
+// `defaultedArgs` for this op, while a label or a blamed name may be a parameter name the index holds. Bound in a
 // match of its own, for `LowerMaxonToStd.lowerIndirectCall`'s reason.
 function artifactOwnedCall(op MaxonOp) returns MaxonOp
 	match op 'call'
-		call(result, callee, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) then return MaxonOp.call(result, callee: callee.clone(), args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedBlames(argImmutableNames), argDefaultSlots: argDefaultSlots, mint: mint)
-		tryCall(result, errorFlag, callee, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) then return MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee.clone(), args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedBlames(argImmutableNames), argDefaultSlots: argDefaultSlots, mint: mint)
-		asyncCall(result, callee, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) then return MaxonOp.asyncCall(result, callee: callee.clone(), args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedBlames(argImmutableNames), argDefaultSlots: argDefaultSlots, mint: mint)
+		call(result, callee, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) then return MaxonOp.call(result, callee: callee.clone(), args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedBlames(argImmutableNames), defaultedArgs: defaultedArgs, mint: mint)
+		tryCall(result, errorFlag, callee, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) then return MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee.clone(), args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedBlames(argImmutableNames), defaultedArgs: defaultedArgs, mint: mint)
+		asyncCall(result, callee, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) then return MaxonOp.asyncCall(result, callee: callee.clone(), args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedBlames(argImmutableNames), defaultedArgs: defaultedArgs, mint: mint)
 		default panic("artifactOwnedCall: reached with an op that is not a named call — `artifactOwnedOp` routes only `call`, `tryCall` and `asyncCall` here")
 	end 'call'
 end 'artifactOwnedCall'
