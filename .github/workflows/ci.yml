@@ -7,6 +7,10 @@
 # compiles Maxon, so a runner needs a compiler before it can build one and takes the seed that
 # `scripts/seed-tag` pins. A fork without that release would fail every job on a condition no contributor
 # can fix — so the seed step SKIPS the run and writes a notice instead.
+#
+# On `main`, `freeze`, `prove` and `pin` replace the pinned seed when the tree carries a
+# `scripts/seed-shim/` patch, or when a run is dispatched with `freeze_seed`.
+# `docs/RELEASING.md` owns the procedure.
 
 # ⭐ A COMMIT THAT TOUCHES NOTHING THIS WORKFLOW READS DOES NOT RUN IT. The build reads `maxon-bin/`,
 # `stdlib/`, `runtime/`, `vendor/`, `project.maxon` and the scripts re-included below; the jobs read
@@ -67,6 +71,8 @@ on:
       - 'scripts/seed-tag'
       - 'scripts/build-from-seed.sh'
       - 'scripts/fetch-vendor.sh'
+      - 'scripts/freeze-seed.sh'
+      - 'scripts/pin-seed.sh'
       - 'scripts/fixpoint.sh'
       - 'scripts/lib/**'
       - 'scripts/multicore-stress/**'
@@ -81,6 +87,11 @@ on:
   pull_request:
     paths: *ci-inputs
   workflow_dispatch:
+    inputs:
+      freeze_seed:
+        description: Freeze this commit as the bootstrap seed, prove it on every target, and pin it
+        type: boolean
+        default: false
 
 # ⭐ A PULL REQUEST CANCELS ITS OWN OLDER RUNS; `main` NEVER CANCELS. Superseding is right on a
 # branch still being pushed to — the verdict anyone wants is about the commit that gets MERGED, and a
@@ -101,7 +112,7 @@ permissions:
 
 jobs:
   suite:
-    strategy:
+    strategy: &lanes
       fail-fast: false
       matrix:
         include:
@@ -118,7 +129,7 @@ jobs:
             runner: ubuntu-24.04-arm
             debugger: yes
     runs-on: ${{ matrix.runner }}
-    defaults:
+    defaults: &bash-steps
       run:
         shell: bash
     steps:
@@ -282,3 +293,115 @@ jobs:
       - name: Fixpoint
         if: steps.seed.outputs.seeded == 'yes'
         run: ./scripts/fixpoint.sh
+
+  freeze:
+    if: github.repository == 'maxon-lang/maxon' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.freeze_seed))
+    runs-on: ubuntu-latest
+    defaults: *bash-steps
+    outputs:
+      freeze: ${{ steps.decide.outputs.freeze }}
+      tag: ${{ steps.freeze.outputs.tag }}
+      sha: ${{ github.sha }}
+    steps:
+      - name: Require the main branch
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$REF" != refs/heads/main ]; then
+            echo "::error::freeze_seed was asked for on $REF — a seed is frozen from refs/heads/main only, so nothing was frozen, proved or pinned"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v5
+
+      # A shim patch exists only while the pinned seed refuses the tree, so a tree carrying one
+      # is owed a new seed.
+      - name: Decide whether to freeze
+        id: decide
+        env:
+          FORCED: ${{ inputs.freeze_seed }}
+        run: |
+          set -euo pipefail
+          . scripts/lib/seed.sh
+          if [ -n "$(seed_shim_patches)" ] || [ "$FORCED" = true ]; then
+            echo "freeze=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "freeze=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Seed from the pinned seed release
+        if: steps.decide.outputs.freeze == 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/fetch-seed.sh x64-linux
+
+      - name: Build
+        if: steps.decide.outputs.freeze == 'yes'
+        run: ./scripts/build-from-seed.sh
+
+      - name: Freeze
+        id: freeze
+        if: steps.decide.outputs.freeze == 'yes'
+        run: ./scripts/freeze-seed.sh
+
+      - name: Upload the frozen seed
+        if: steps.decide.outputs.freeze == 'yes'
+        uses: actions/upload-artifact@v6
+        with:
+          name: seed-dist
+          path: temp/seed/dist
+          if-no-files-found: error
+
+  prove:
+    needs: freeze
+    if: needs.freeze.outputs.freeze == 'yes'
+    strategy: *lanes
+    runs-on: ${{ matrix.runner }}
+    defaults: *bash-steps
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.freeze.outputs.sha }}
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: seed-dist
+          path: temp/seed/dist
+
+      - name: Seed from the frozen archives
+        env:
+          TAG: ${{ needs.freeze.outputs.tag }}
+        run: ./scripts/fetch-seed.sh "$TAG" ${{ matrix.target }} --from=temp/seed/dist
+
+      # The pin deletes every patch, so each archive builds the tree with none, on its own
+      # architecture, before anything is published.
+      - name: Build with no shim
+        run: ./scripts/build-from-seed.sh --unshimmed
+
+  pin:
+    needs: [suite, freeze, prove]
+    if: needs.freeze.outputs.freeze == 'yes'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    # A pin cancelled between publishing and pushing would leave a published seed that nothing pins.
+    concurrency:
+      group: seed-pin
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: seed-dist
+          path: temp/seed/dist
+
+      - name: Publish the seed and pin it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.freeze.outputs.sha }}
+          TAG: ${{ needs.freeze.outputs.tag }}
+        run: ./scripts/pin-seed.sh --sha="$SHA" --tag="$TAG"

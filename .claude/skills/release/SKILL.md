@@ -206,10 +206,9 @@ merge keeps the tag an ancestor of `main`; rebased copies would reappear in the 
 
 The seed is the `seed-*` pre-release that `scripts/seed-tag` pins, frozen and independent of releases:
 cutting one changes nothing about what builds `main`, and there is nothing to refresh locally. A new seed
-is made only when the tree needs one — `scripts/freeze-seed.sh` builds the four binaries and prints the
-`gh release create` command, which is the user's to run; the pin moves in the commit that relies on it, with
-every `scripts/seed-shim/*.patch` the new seed makes dead deleted (`scripts/seed-shim/README.md`: a dead
-patch stops applying and hides the next genuine refusal). `docs/RELEASING.md` owns the procedure.
+is made only when the tree needs one, and CI makes it: a `main` push whose tree carries a
+`scripts/seed-shim/*.patch` freezes, proves and pins a new seed, in a bot commit that deletes every patch.
+`docs/RELEASING.md` owns the procedure.
 
 ## What this skill may not do
 

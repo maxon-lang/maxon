@@ -36,10 +36,10 @@ not discard a declared callee's result; a new unprefixed tier entry owes the dec
   implementation here — a previous build of this compiler is the only thing that can build it.
   ⛔ **A TREE THAT DECLARES WHAT THE PINNED SEED DOES NOT KNOW IS REFUSED BY THE SEED** — E2015 on a
   `__Managed*` entry this tree adds, or E3004 on a `__Builtins` intrinsic the stdlib calls, which no
-  re-fetch can cure. The cure is a new seed: `scripts/freeze-seed.sh` builds the four binaries from the
-  tree, prints the command that publishes them as a `seed-*` pre-release, and the pin moves to it.
-  `scripts/build-from-seed.sh` stages `scripts/seed-shim/` over the first build when a plain build is
-  refused (the directory holds no patch while the pin is current); `docs/RELEASING.md` owns the rule.
+  re-fetch can cure. The cure is a new seed, and CI makes it from a `scripts/seed-shim/` patch landed
+  with the change: `scripts/build-from-seed.sh` stages the shim over the first build when a plain build is
+  refused, and a `main` push that carries a patch makes CI freeze, prove and pin a new seed, deleting every
+  patch. A refusal no patch covers needs `scripts/freeze-seed.sh` by hand; `docs/RELEASING.md` owns the rule.
   ⛔ **NAME THE OUTPUT WHEN YOU BUILD WITH THE SEED, ALWAYS:**
   ```
   ./.bootstrap/maxon.exe build maxon-bin --output=maxon-bin/.maxon/maxon

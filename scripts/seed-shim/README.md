@@ -19,9 +19,8 @@ refuses the tree with E3004 at that call, not at the declaration. Withdrawing th
 standing, so `C1` knows the intrinsic and compiles the unshimmed tree into `C2`; the first build is merely
 one whose instrument reports nothing. Keep such a patch to the single function that calls, so what the
 shimmed build loses is stated by the patch itself. A method call on an enum a closure captured is the same case
-in a different spelling: the seed refuses the call with E2015 at the call site, the patch routes it through a module
-function the seed can compile (`0007-withdraw-the-method-call-on-a-captured-enum-from-the-first-build.patch`), and
-`C1` knows the construct.
+in a different spelling: a seed that predates it refuses the call with E2015 at the call site, the patch routes it
+through a module function the seed can compile, and `C1` knows the construct.
 
 ⭐ **A VISIBILITY TIER IS THE THIRD CASE, AND IT SPANS MANY DECLARATIONS.** A rule about what a
 signature may name decides a declaration's tier, so a seed that predates the rule audits those tiers
@@ -110,34 +109,30 @@ that binding's scope covers both calls. The seed must then refuse each of them t
 one it would have asked for. When the seed refuses a line holding such a cast, the cast is taken back, and that
 speculation is retired for the file.
 
-⭐ **A CONSTRUCT THE SEED MISCOMPILES IS THE SEVENTH CASE.** The seed also compiles a comparison against a literal
-from 2^63 up as a signed one, so a `C1` it builds derives wrong division constants and panics in
-`deriveSignedMagic`. `0006-withdraw-the-division-strength-reduction-from-the-first-build.patch` makes
-`classifyDivision` decline every divisor, so `C1` emits plain divides and builds the unshimmed tree into a correct
-`C2`. It is hand-written, and like the second case it withdraws behaviour in one function and leaves every table
-standing.
+⭐ **A CONSTRUCT THE SEED MISCOMPILES IS THE SEVENTH CASE.** A seed that compiles a comparison against a literal
+from 2^63 up as a signed one builds a `C1` that derives wrong division constants and panics in
+`deriveSignedMagic`. The patch for it makes `classifyDivision` decline every divisor, so `C1` emits plain divides
+and builds the unshimmed tree into a correct `C2`. Such a patch is hand-written, and like the second case it
+withdraws behaviour in one function and leaves every table standing.
 
 ⭐ **A RUNTIME-TIER GEOMETRY THE SEED'S PINS REFUSE IS THE EIGHTH CASE.** The seed checks the geometry
 `runtime/SlabRuntime.maxon` restates against its own (`checkSlabRuntimeGeometry`), and its allocator emits the
 slow-path lock it was built with, so a tree that changes the lock's width or how the lock is initialised is
-refused in the first build. `0008-withdraw-the-slab-lock-geometry-from-the-first-build.patch` writes the tier back
-to the seed's geometry and lock initialisation for that build only, so the tier `C1` carries matches the
-allocator the seed emits into it; the restore runs first, and `C1` builds `C2` from the tree's geometry. It is
-`git diff HEAD -R` of the tier file, regenerated after every edit to that file, and the freeze that pins a seed
-built from the tree makes it dead.
+refused in the first build. The patch for it writes the tier back to the seed's geometry and lock initialisation
+for that build only, so the tier `C1` carries matches the allocator the seed emits into it; the restore runs
+first, and `C1` builds `C2` from the tree's geometry. It is `git diff HEAD -R` of the tier file, regenerated after
+every edit to that file.
 
 ⭐ **A SEND THE SEED READS BY ITS OLDER RULE IS THE NINTH CASE.** The tree's sends fail: a full mailbox answers
 `mailboxFull` and a stopped one `serviceStopped`, so every send site is a `try`, a reply-bearing message's promise
-names only its own error type, and `stdlib/Builtins.maxon` declares no `ServiceError`. The seed refuses `try` on a
-send (E2015) and expects `ServiceError` in the library. `0009-withdraw-the-failable-send-from-the-first-build.patch`
-writes the send sites back to the seed's form — the compiler's pools (`FrontEndPool`, `StdPassPool`,
-`BackendPool`), its log handler, the LSP writer and checker with their callers, and `stdlib/Log.maxon` and
-`stdlib/TraceCapture.maxon` — and declares `ServiceError` again. It touches no compiler logic: the parser,
-lowering and runtime that teach `C1` failable sends stay, so `C1` compiles the unshimmed tree into `C2`, and only
-`C1`'s own services and library send by the seed's rule. Like 0008 it is hand-written over the committed tree, and
-`scripts/freeze-seed.sh`, which pins a seed built from the tree, makes it dead.
+names only its own error type, and `stdlib/Builtins.maxon` declares no `ServiceError`. A seed that predates
+failable sends refuses `try` on a send (E2015) and expects `ServiceError` in the library. The patch for it writes
+every send site back to the seed's form and declares `ServiceError` again. It touches no compiler logic: the
+parser, lowering and runtime that teach `C1` failable sends stay, so `C1` compiles the unshimmed tree into `C2`,
+and only `C1`'s own services and library send by the seed's rule. Like the eighth case's, it is hand-written over
+the committed tree.
 
-⛔ **Delete a patch once the pinned seed accepts what it withdraws.** `scripts/freeze-seed.sh` makes that seed from the tree,
-so the patches a freeze makes dead are all of them: the directory holds none while the pin is current. A patch is dead
-from that moment — the plain build succeeds and nothing here is read — and a patch that no longer
-applies turns the next genuine refusal into a confusing failure.
+⛔ **The commit that pins a new seed deletes every patch.** A patch here is what makes CI freeze, prove and pin
+that seed (`docs/RELEASING.md`), and `scripts/pin-seed.sh` deletes them all in the pinning commit once the seed
+has built the tree with none. A patch is dead from that moment — the plain build succeeds before anything here
+is read — and one left to stop applying turns the next genuine refusal into a confusing failure.

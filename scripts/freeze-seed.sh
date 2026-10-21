@@ -3,12 +3,14 @@
 # Freeze this tree's compiler as the bootstrap seed: build it for the four native targets, package each
 # like a release archive, write SHA256SUMS and the release notes, and PRINT the `gh release create`
 # command that publishes them as a `seed-*` pre-release. It publishes nothing and does not move the pin:
-# `scripts/seed-tag` is bumped by hand once the pre-release exists, in the commit that relies on it.
+# in CI, `scripts/pin-seed.sh` does both once every archive has built the tree with no shim; a seed
+# frozen by hand is published with the printed command and pinned in the commit that relies on it.
 #
 # ⭐ A SEED IS A COMPILER THAT ACCEPTS THE TREE IT BUILDS. `scripts/fetch-seed.sh` downloads the tag
-# `scripts/seed-tag` names, and `scripts/build-from-seed.sh` builds the tree with it. Run this when the
-# tree needs something the pinned seed does not know — a declaration, a language form, a rule — and a
-# `scripts/seed-shim/` patch is no longer the right answer.
+# `scripts/seed-tag` names, and `scripts/build-from-seed.sh` builds the tree with it. CI's `freeze`
+# job runs this on `main` whenever the tree carries a `scripts/seed-shim/` patch. Run it by hand
+# when the pinned seed refuses the tree and no patch covers the refusal, since CI then builds no
+# compiler to freeze.
 #
 # ⛔ THE SEED IS THE BINARY ALONE. Each archive holds one directory with `maxon` (`maxon.exe` for
 # x64-windows) and nothing else: the compiler resolves `stdlib/` and `runtime/` by walking up from its own
@@ -16,11 +18,12 @@
 # sources are read.
 #
 # ⛔ THE COMPILER THAT RUNS THIS MUST BE BUILT FROM THE COMMIT IT FREEZES: the slot at
-# `maxon-bin/.maxon/` after `maxon run build`. The seed is whatever that compiler writes for each target,
-# so a slot older than a source it compiles freezes a compiler the tree no longer describes. This script
-# refuses a slot older than any source under `maxon-bin/`, `stdlib/` or `runtime/` (prose is not source), and refuses an
-# uncommitted change under those directories, because the tag is cut at `HEAD` and a seed built from
-# more than `HEAD` is not reproducible from it.
+# `maxon-bin/.maxon/` after `maxon run build` or `scripts/build-from-seed.sh`. The seed is whatever
+# that compiler writes for each target, so a slot older than a source it compiles freezes a compiler
+# the tree no longer describes. This script refuses a slot older than any source under `maxon-bin/`,
+# `stdlib/` or `runtime/` (prose is not source), and refuses an uncommitted change under those
+# directories, because the tag is cut at `HEAD` and a seed built from more than `HEAD` is not
+# reproducible from it.
 #
 # ⚠ THE BINARIES ARE BUILT UNDER THEIR FINAL NAME. `MachOWriter` bakes the output file name into the
 # macOS code-signature identifier, so a post-build rename leaves a signature naming a file that no longer
@@ -28,8 +31,8 @@
 # `scripts/release.sh --package --target=` cross-builds, so the version it reports is the git-derived one.
 #
 # Usage:
-#   scripts/freeze-seed.sh                       # tag seed-<today>
-#   scripts/freeze-seed.sh --date=2026-10-14     # tag seed-2026-10-14
+#   scripts/freeze-seed.sh                       # tag seed-<today>-<first 12 of HEAD>
+#   scripts/freeze-seed.sh --date=2026-10-14     # tag seed-2026-10-14-<first 12 of HEAD>
 #
 # Writes under `temp/seed/`: `dist/` (the four archives, SHA256SUMS, NOTES.md), `stage/` (scratch),
 # `build-<target>.log` and `publish.txt` (the command this script prints).
@@ -40,16 +43,11 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 . scripts/lib/host-binaries.sh
 . scripts/lib/archive.sh
+. scripts/lib/seed.sh
 
-SeedTagPrefix="seed"
-SeedTargets="x64-windows x64-linux arm64-macos arm64-linux"
 CompilerSourceDirectories="maxon-bin stdlib runtime"
-WorkDirectory="temp/seed"
-DistDirectory="$WorkDirectory/dist"
-StageDirectory="$WorkDirectory/stage"
-NotesFile="$DistDirectory/NOTES.md"
-ChecksumsFile="$DistDirectory/SHA256SUMS"
-PublishFile="$WorkDirectory/publish.txt"
+StageDirectory="$SeedWorkDirectory/stage"
+PublishFile="$SeedWorkDirectory/publish.txt"
 BuildNice=10
 
 date_stamp="$(date +%Y-%m-%d)"
@@ -61,9 +59,9 @@ for argument in "$@"; do
 	esac
 done
 
-tag="$SeedTagPrefix-$date_stamp"
 maxon="$(maxon_compiler_path .)"
 commit="$(git rev-parse HEAD)"
+tag="$(seed_tag "$date_stamp" "$commit")"
 
 [ -x "$maxon" ] || { echo "freeze-seed.sh: no compiler at $maxon — run: ./maxon-bin/.maxon/maxon run build" >&2; exit 1; }
 command -v nice >/dev/null 2>&1 || { echo "freeze-seed.sh: nice is not on PATH" >&2; exit 1; }
@@ -74,10 +72,8 @@ dirty="$(git status --porcelain -- $CompilerSourceDirectories ':!*.md')"
 newer="$(find $CompilerSourceDirectories -path '*/.maxon' -prune -o -type f ! -name '*.md' -newer "$maxon" -print | head -n1)"
 [ -z "$newer" ] || { echo "freeze-seed.sh: $newer is newer than $maxon — rebuild it first: ./maxon-bin/.maxon/maxon run build" >&2; exit 1; }
 
-rm -rf "$DistDirectory" "$StageDirectory"
-mkdir -p "$DistDirectory" "$StageDirectory"
-
-archive_name() { printf 'maxon-seed-%s-%s' "$date_stamp" "$1"; }
+rm -rf "$SeedDistDirectory" "$StageDirectory"
+mkdir -p "$SeedDistDirectory" "$StageDirectory"
 
 seed_binary_name() {
 	case "$1" in
@@ -88,12 +84,12 @@ seed_binary_name() {
 
 freeze_one() {
 	local target="$1"
-	local name stage binary archive log
+	local stage binary archive log
 
-	name="$(archive_name "$target")"
-	stage="$StageDirectory/$name"
+	stage="$StageDirectory/$(seed_archive_stem "$tag" "$target")"
 	binary="$stage/$(seed_binary_name "$target")"
-	log="$WorkDirectory/build-$target.log"
+	archive="$SeedDistDirectory/$(seed_archive_file "$tag" "$target")"
+	log="$SeedWorkDirectory/build-$target.log"
 
 	mkdir -p "$stage"
 	echo "freeze-seed.sh: building $target (log: $log)"
@@ -104,27 +100,27 @@ freeze_one() {
 	find "$stage" -maxdepth 1 -type f -name '*.mxdbg' -delete
 	chmod +x "$binary"
 
-	case "$target" in
-		*-windows)
-			archive="$DistDirectory/$name.zip"
-			make_zip "$archive" "$stage" ;;
-		*)
-			archive="$DistDirectory/$name.tar.gz"
-			make_tar "$archive" "$stage" ;;
+	case "$archive" in
+		*.zip)    make_zip "$archive" "$stage" ;;
+		*.tar.gz) make_tar "$archive" "$stage" ;;
+		*) echo "freeze-seed.sh: no packer writes $archive" >&2; return 1 ;;
 	esac
 
 	[ -s "$archive" ] || { echo "freeze-seed.sh: packaging $target wrote no $archive" >&2; return 1; }
 	echo "freeze-seed.sh: wrote $archive"
 }
 
+archives=()
+
 for target in $SeedTargets; do
 	freeze_one "$target"
+	archives+=("$(seed_archive_file "$tag" "$target")")
 done
 
-( cd "$DistDirectory" && sha256sum maxon-seed-*.zip maxon-seed-*.tar.gz > "$(basename "$ChecksumsFile")" )
+( cd "$SeedDistDirectory" && sha256sum "${archives[@]}" > "$SeedChecksumsAsset" )
 
 host_target="$(maxon_host_target)"
-host_binary="$StageDirectory/$(archive_name "$host_target")/$(seed_binary_name "$host_target")"
+host_binary="$StageDirectory/$(seed_archive_stem "$tag" "$host_target")/$(seed_binary_name "$host_target")"
 seed_version="$("$host_binary" version)"
 
 {
@@ -135,21 +131,26 @@ seed_version="$("$host_binary" version)"
 	printf 'resolves to it. Never move this tag or replace an asset: the pin means exactly these bytes.\n\n'
 	printf 'Compiler: %s\n\n' "$seed_version"
 	printf '`SHA256SUMS` lists the archives.\n'
-} > "$NotesFile"
+} > "$SeedNotesFile"
 
-assets="$(find "$DistDirectory" -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz' \) | LC_ALL=C sort | tr '\n' ' ')"
+seed_release_create_command "$tag" "$commit"
 
 {
-	printf 'gh release create %s --prerelease --target %s --title "Maxon bootstrap seed %s" --notes-file %s %s%s\n' \
-		"$tag" "$commit" "$date_stamp" "$NotesFile" "$assets" "$ChecksumsFile"
+	printf '%q' "${seed_release_create[0]}"
+	printf ' %q' "${seed_release_create[@]:1}"
+	printf '\n'
 } > "$PublishFile"
 
 echo
 echo "freeze-seed.sh: $tag is ready and NOT published. Compiler: $seed_version"
-sed 's/^/  /' "$ChecksumsFile"
+sed 's/^/  /' "$SeedChecksumsFile"
 echo
 echo "To publish (after $commit is on the remote, since --target names it):"
 sed 's/^/  /' "$PublishFile"
 echo
 echo "Then pin it, in the commit that relies on it:"
-echo "  printf '%s\\n' $tag > scripts/seed-tag"
+echo "  printf '%s\\n' $tag > $SeedPinFile"
+
+if [ -n "${GITHUB_OUTPUT:-}" ]; then
+	printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+fi

@@ -102,8 +102,9 @@ scripts/mac-host.sh drop <session> <KEY>
 ## Freezing a bootstrap seed
 
 The seed that builds every commit is the `seed-*` pre-release `scripts/seed-tag` pins (`docs/RELEASING.md`
-owns the rule). Freeze a new one when the pinned seed refuses the tree — E2015 or E3004 from
-`build-from-seed.sh` that no `scripts/seed-shim/` patch covers.
+owns the rule). ⭐ **CI freezes, proves and pins it** on the first green `main` push whose tree carries a
+`scripts/seed-shim/*.patch`, so the usual cure for E2015 or E3004 from `build-from-seed.sh` is a shim patch
+landed with the change. Freeze by hand only when the pinned seed refuses the tree and no patch covers it.
 
 ```
 ./maxon-bin/.maxon/maxon run build        # the slot must be built from HEAD; the script refuses a stale one
@@ -115,13 +116,13 @@ the `gh release create` command **without running it**. Publishing, tagging and 
 user's. Before the pin moves, prove the seed accepts the tree with NO shim:
 
 - **Windows:** a fresh clone of `HEAD` at a short path (`git clone --no-hardlinks . /c/s1`), every
-  `scripts/seed-shim/*.patch` deleted, the archive's `maxon.exe` at `.bootstrap/maxon.exe`
-  (`scripts/fetch-seed.sh x64-windows --output=/c/s1/.bootstrap/maxon.exe` reads a pre-release; a local
-  `gh` stand-in on `PATH` serving `temp/seed/dist/` exercises the script before anything is published), then
-  `bash scripts/build-from-seed.sh` in the clone: exit 0.
-- **x64-linux:** the same clone and the archive's `maxon`, but run under WSL as in the section above
-  (`wsl -- bash scripts/build-from-seed.sh` from the clone, with `.bootstrap/maxon` executable there).
-- The arm64 archives cannot run on an x64 host; their proof is CI's seed step on the commit that moves the pin.
+  `scripts/seed-shim/*.patch` deleted, then in the clone
+  `bash scripts/fetch-seed.sh <tag> x64-windows --from=<the dist directory>` and
+  `bash scripts/build-from-seed.sh --unshimmed`: exit 0. `--from` reads the unpublished archives.
+- **x64-linux:** the same clone, run under WSL as in the section above
+  (`wsl -- bash scripts/fetch-seed.sh <tag> x64-linux --from=…`, then `wsl -- bash scripts/build-from-seed.sh --unshimmed`).
+- The arm64 archives run only on arm64, so from an x64 host their proof is CI's seed step on the commit that
+  moves the pin.
 
 ## Staging `vendor/`
 

@@ -27,27 +27,46 @@ match the release's `SHA256SUMS`.
 ### Freezing a new seed
 
 A tree needs a new seed when it uses something the pinned one does not accept — a declaration, a language
-form, a rule. `scripts/freeze-seed.sh` is the procedure, run in a checkout whose slot compiler was built from
-`HEAD` with `maxon run build`:
+form, a rule. Until one is pinned, a `scripts/seed-shim/` patch (below) is what lets the pinned seed build the
+tree, so **a tree that carries a patch is owed a new seed, and CI freezes and pins it**:
+
+1. **`freeze`.** On every push to `main` that runs CI, the job looks for a `scripts/seed-shim/*.patch`. When it
+   finds one — or when `ci.yml` is dispatched on `main` with `freeze_seed` set; on any other ref that input
+   fails the run — it builds the tree from the pinned seed with the shim and runs `scripts/freeze-seed.sh`.
+2. **`prove`.** Each archive is installed on its own target's runner
+   (`scripts/fetch-seed.sh <tag> <target> --from=temp/seed/dist`) and must build the tree with
+   `scripts/build-from-seed.sh --unshimmed`, which fails at the first refusal: the new seed builds the tree
+   with no patch, on all four architectures, before anything is published.
+3. **`pin`**, once the suite, `freeze` and `prove` are green. `scripts/pin-seed.sh` publishes the pre-release
+   at the frozen commit, commits the tag to `scripts/seed-tag` with every `scripts/seed-shim/*.patch`
+   deleted, pushes that commit to `main` as `github-actions[bot]`, and dispatches CI on `main`, because GitHub
+   ignores a push made with `GITHUB_TOKEN`.
+
+⚠ **A pin is superseded when `main` has moved past the frozen commit and changed `scripts/seed-shim/` or
+`scripts/seed-tag`.** The patches it would delete were judged against the older tree, so it writes a notice
+and exits 0 unpublished, and the later commit's run decides the next seed. A pin refuses a tag or release that
+already exists.
+
+`scripts/freeze-seed.sh` builds `maxon-bin` for `x64-windows`, `x64-linux`, `arm64-macos` and `arm64-linux`
+with the slot compiler (`maxon run build --target=<t> --output=<stage>/maxon`, the way
+`release.sh --package --target=` cross-builds), packages each as `maxon-<tag>-<target>` (`.zip` for Windows,
+`.tar.gz` for the rest, the binary alone), writes `SHA256SUMS` and the notes into `temp/seed/dist/`, and
+**prints the `gh release create` command without running it**:
 
 ```bash
-scripts/freeze-seed.sh                      # tag seed-<today>; --date=YYYY-MM-DD names another day
+scripts/freeze-seed.sh        # tag seed-<today>-<first 12 hex digits of HEAD>; --date=YYYY-MM-DD names another day
 ```
 
-It builds `maxon-bin` for `x64-windows`, `x64-linux`, `arm64-macos` and `arm64-linux` with the slot compiler
-(`maxon run build --target=<t> --output=<stage>/maxon`, the way `release.sh --package --target=` cross-builds),
-packages each as `maxon-seed-<date>-<target>` (`.zip` for Windows, `.tar.gz` for the rest, the binary alone),
-writes `SHA256SUMS` and the notes into `temp/seed/dist/`, and **prints the `gh release create` command without
-running it**. The steps after it are the maintainer's:
+The commit in the tag keeps two freezes on one day apart and names the commit the seed was frozen from.
 
-1. Push the commit the seed was built from, so `--target` names a commit the remote has.
-2. Run the printed command. It creates the `seed-<date>` tag as a pre-release at that commit.
-3. Put the tag in `scripts/seed-tag`, delete every `scripts/seed-shim/*.patch` the new seed makes dead, and
-   commit both with the change that needed the seed. Verify first, from a fresh clone at a short path with
-   the new seed's binary as `.bootstrap/maxon` and no patch left: `scripts/build-from-seed.sh` must exit 0.
-
-The arm64 binaries cannot be run on an x64 host, so the first run of those two is CI's seed step on the
-commit that moves the pin; an unusable one fails that lane at its first build.
+⛔ **CI freezes only a tree the pinned seed builds, with or without the shim.** For a refusal no patch covers,
+either write the patch (below) and let CI freeze, or freeze by hand: run `scripts/freeze-seed.sh` in a
+checkout whose slot compiler was built from `HEAD`, push that commit so `--target` names a commit the remote
+has, run the printed command, and commit the tag to `scripts/seed-tag` with every `scripts/seed-shim/*.patch`
+deleted. Prove it first in a fresh clone at a short path with no patch left:
+`scripts/fetch-seed.sh <tag> --from=<the dist directory>` then `scripts/build-from-seed.sh --unshimmed`. The
+arm64 archives run only on arm64, so on an x64 host their first run is CI's seed step on the commit that
+moves the pin.
 
 ### ⛔ A tree can declare something its own seed refuses, and a shim is how it is still built
 
@@ -59,8 +78,7 @@ before one exists.
 
 `scripts/seed-shim/` closes it. Each patch there withdraws one thing the seed refuses, and
 `scripts/build-from-seed.sh` stages them only when a plain seed build has already been refused, then
-restores every file before `C1` builds `C2`. The directory holds no patch while the pinned seed accepts the
-tree.
+restores every file before `C1` builds `C2`. The commit that pins the next seed deletes every patch.
 
 ⭐ **A patch never withdraws the tables that teach `C1` the entry**, which is what makes this sound rather
 than a way of shipping a hobbled compiler: the seed accepts the compiler's own parser arm, runtime
@@ -98,9 +116,10 @@ The sixth is the RUNTIME TIER's GEOMETRY: the seed pins the layout `runtime/Slab
 the allocator lock it was built with, so a tree that changes either has its tier written back to the seed's
 geometry for the first build, and `C1` builds `C2` from the tree's.
 
-⛔ **Delete a patch when the pin moves to a seed that accepts what it withdraws.** It is inert from that
-moment — the plain build succeeds and the directory is never read — and a patch left to rot no longer
-applies, turning the next genuine refusal into a confusing failure.
+⛔ **The commit that pins a new seed deletes every patch**, by `pin-seed.sh` or by hand, once that seed
+has built the tree with none. A patch is inert from that moment — the plain build succeeds before the
+directory is read — and one left to rot stops applying, turning the next genuine refusal into a confusing
+failure.
 
 ---
 

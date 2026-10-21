@@ -21,11 +21,10 @@
 #
 # ⛔ **A TREE DECLARING WHAT THE PINNED SEED DOES NOT KNOW CANNOT BE BUILT BY IT**, and the seed is the one
 # compiler nothing here can regenerate — every CI lane and every release runner starts with this script,
-# so a refusal is four red lanes that no later commit can fix. The cure is a new seed:
-# `scripts/freeze-seed.sh` builds one from the tree, and the pin moves to it. `scripts/seed-shim/` holds
-# the patches that withdraw such a declaration when a new seed is not yet published; they are staged only
-# after a plain build has been tried and refused, and the directory holds none while the pinned seed
-# accepts the tree.
+# so a refusal is four red lanes that no later commit can fix. The cure is a new seed.
+# `scripts/seed-shim/` holds the patches that withdraw such a declaration until one is pinned; they
+# are staged only after a plain build has been tried and refused. A patch there is what makes CI
+# freeze and pin the next seed, and the pin deletes every patch (`docs/RELEASING.md`).
 #
 # ⛔ **THE SHIM IS WITHDRAWN BEFORE `C1` BUILDS `C2`, AND THAT IS WHAT MAKES IT SOUND.** A patch
 # withdraws a DECLARATION the seed refuses, a CALL SITE in compiler source the seed refuses the tree at,
@@ -37,16 +36,28 @@
 #
 # Usage:
 #   scripts/build-from-seed.sh
+#   scripts/build-from-seed.sh --unshimmed       # a refusal fails the build: proves a seed
+#                                                # accepts the tree with no patch, before the
+#                                                # pin deletes them
 
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 . scripts/lib/host-binaries.sh
+. scripts/lib/seed.sh
+
+unshimmed=0
+
+for argument in "$@"; do
+	case "$argument" in
+		--unshimmed) unshimmed=1 ;;
+		*) echo "build-from-seed.sh: unknown argument: $argument" >&2; exit 2 ;;
+	esac
+done
 
 seed="$(maxon_downloaded_path)"
 built="$(maxon_compiler_path)"
-shim_dir="scripts/seed-shim"
 
 [ -x "$seed" ] || { echo "build-from-seed.sh: no seed at $seed — run scripts/fetch-seed.sh" >&2; exit 1; }
 
@@ -73,13 +84,10 @@ stage_shim() {
 	local file
 	local touched=""
 
-	patches=""
-	if [ -d "$shim_dir" ]; then
-		patches="$(find "$shim_dir" -name '*.patch' -type f | LC_ALL=C sort)"
-	fi
+	patches="$(seed_shim_patches)"
 
 	if [ -z "$patches" ]; then
-		echo "build-from-seed.sh: the seed refused this tree and $shim_dir holds no patch withdrawing what it does not know — freeze a new seed with scripts/freeze-seed.sh" >&2
+		echo "build-from-seed.sh: the seed refused this tree and $SeedShimDirectory holds no patch withdrawing what it does not know — add one and CI freezes a new seed from main, or freeze one by hand with scripts/freeze-seed.sh" >&2
 		exit 1
 	fi
 
@@ -98,7 +106,7 @@ stage_shim() {
 		done < <(git apply --numstat -- "$patch" | cut -f3)
 	done < <(printf '%s\n' "$patches")
 
-	echo "build-from-seed.sh: the seed refused this tree — staging $shim_dir over the first build only" >&2
+	echo "build-from-seed.sh: the seed refused this tree — staging $SeedShimDirectory over the first build only" >&2
 
 	while IFS= read -r patch; do
 		[ -n "$patch" ] || continue
@@ -109,6 +117,7 @@ stage_shim() {
 }
 
 if ! "$seed" build maxon-bin --output="$built"; then
+	[ "$unshimmed" = 0 ] || { echo "build-from-seed.sh: the seed refused this tree and --unshimmed forbids staging $SeedShimDirectory" >&2; exit 1; }
 	stage_shim
 	"$seed" build maxon-bin --output="$built"
 	withdraw_shim
