@@ -1893,6 +1893,302 @@ end 'main'
 error E3004: specs/async-await/async-await.error.an-async-chain-naming-nothing-is-refused.maxon:3:26: call to undefined function 'lib.inner.deep': nothing declares a binding, directory or type `lib.inner`
 ```
 
+<!-- test: async-await.error.a-spawn-of-an-undeclared-function-that-is-never-awaited-is-undefined -->
+The refusal is the call's, whether or not anything awaits the handle.
+```maxon
+function main() returns ExitCode
+	let p = async nosuch(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:16: call to undefined function 'nosuch'
+```
+
+<!-- test: async-await.error.a-try-await-of-an-undeclared-spawn-is-undefined -->
+A `try await` over the handle of a spawn nothing declares reports the call, not the await.
+```maxon
+function main() returns ExitCode
+	let p = async nosuch(1)
+	return try await p otherwise 1
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:16: call to undefined function 'nosuch'
+```
+
+<!-- test: async-await.error.an-await-of-an-undeclared-spawn-written-in-place-is-undefined -->
+Awaiting the spawn where it is written reports the call as well.
+```maxon
+function main() returns ExitCode
+	return await async nosuch(1)
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:21: call to undefined function 'nosuch'
+```
+
+<!-- test: async-await.error.a-try-await-of-a-call-nothing-declares-is-undefined -->
+A `try await` over a call nothing declares reports the call.
+```maxon
+function main() returns ExitCode
+	return try await nosuch(1) otherwise 1
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:19: call to undefined function 'nosuch'
+```
+
+<!-- test: async-await.error.a-try-await-of-a-binding-of-a-call-nothing-declares-is-undefined -->
+A `try await` over a binding of a call nothing declares reports the call.
+```maxon
+function main() returns ExitCode
+	let v = nosuch(1)
+	return try await v otherwise 1
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'nosuch'
+```
+
+<!-- test: async-await.error.a-spawn-of-nothing-stored-in-a-promise-array-is-undefined -->
+A spawn nothing declares, stored in a promise array and awaited from it, reports the call.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function main() returns ExitCode
+	var promises = IntPromiseArray.create()
+	promises.push(async nosuch(1))
+
+	for p in promises 'each'
+		_ = await p
+	end 'each'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:8:22: call to undefined function 'nosuch'
+```
+
+<!-- test: async-await.error.a-promise-var-rearmed-with-a-spawn-of-nothing-is-undefined -->
+Re-arming a promise var with a spawn nothing declares reports that call and the assignment it feeds, and
+nothing at the later await.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function f(n Integer) returns Integer
+	Scheduler.yield()
+	return n
+end 'f'
+
+function main() returns ExitCode
+	var p = async f(1)
+	_ = await p
+	p = async nosuch(2)
+	let v = await p
+	print("{v}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:12:12: call to undefined function 'nosuch'
+error E3005: <fragment>:12:2: cannot assign a value of type 'unknown' to variable 'p', which holds 'Promise with int(-9223372036854775808 to 9223372036854775807)'
+```
+
+<!-- test: async-await.error.a-promise-var-rearmed-on-one-branch-with-a-spawn-of-nothing-is-undefined -->
+The same re-arm on one arm of a branch reports the call and the assignment, and nothing at the merge.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function f(n Integer) returns Integer
+	Scheduler.yield()
+	return n
+end 'f'
+
+function main() returns ExitCode
+	var p = async f(1)
+	let n = f(2)
+
+	if n == 2 'pick'
+		_ = await p
+		p = async nosuch(2)
+	end 'pick' else 'other'
+		_ = await p
+		p = async f(3)
+	end 'other'
+
+	let v = await p
+	print("{v}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:15:13: call to undefined function 'nosuch'
+error E3005: <fragment>:15:3: cannot assign a value of type 'unknown' to variable 'p', which holds 'Promise with int(-9223372036854775808 to 9223372036854775807)'
+```
+
+<!-- test: async-await.error.a-moved-string-var-assigned-a-call-nothing-declares-is-undefined -->
+A `var` whose value moved away and is assigned a call nothing declares holds that unknown value, so reading
+it reports nothing beyond the call.
+```maxon
+function main() returns ExitCode
+	var s = "a string padded out long enough to heap allocate"
+	let t = s
+	s = nosuch(1)
+	print("{s}{t}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:5:6: call to undefined function 'nosuch'
+```
+
+<!-- test: async-await.error.a-moved-struct-var-assigned-a-call-nothing-declares-is-undefined -->
+A struct `var` whose value moved away and is assigned a call nothing declares holds that unknown value, so
+reading it reports nothing beyond the call and the assignment.
+```maxon
+type Box
+	export var name as String
+
+	static function create() returns Self
+		return Self{name: "a string padded out long enough to heap allocate"}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	var box = Box.create()
+	let other = box
+	box = nosuch(1)
+	print("{box.name}{other.name}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:13:8: call to undefined function 'nosuch'
+error E3005: <fragment>:13:2: cannot assign a value of type 'unknown' to variable 'box', which holds 'Box'
+```
+
+<!-- test: async-await.error.a-tuple-assignment-of-a-call-nothing-declares-to-a-moved-var-is-undefined -->
+A tuple assignment gives a moved `var` the same unknown value a plain assignment does.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	var s = "a string padded out long enough to heap allocate"
+	var n = 0 as Integer
+	let t = s
+	(s, n) = nosuch(1)
+	print("{s}{t}{n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:8:11: call to undefined function 'nosuch'
+```
+
+<!-- test: async-await.error.a-captured-var-assigned-a-call-nothing-declares-is-undefined -->
+A cell-resident `var` assigned a call nothing declares reports the call and nothing at the closure's read.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function fill(dest String, n Integer)
+	dest = "filled {n} padded out long enough to heap allocate"
+end 'fill'
+
+function main() returns ExitCode
+	var word = "hello padded out long enough to heap allocate"
+	fill(word, n: 2)
+	let peek = function() gives word.byteLength()
+	word = nosuch(1)
+	print("{peek()} {word}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:12:9: call to undefined function 'nosuch'
+```
+
+<!-- test: async-await.error.a-field-and-an-element-assigned-a-call-nothing-declares-are-undefined -->
+A field store and an element store of a call nothing declares report each call and the store it feeds, and
+nothing at the reads.
+```maxon
+typealias NameArray = Array with String
+
+type Box
+	export var name as String
+
+	static function create() returns Self
+		return Self{name: "a string padded out long enough to heap allocate"}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	var box = Box.create()
+	box.name = nosuch(1)
+	var names = NameArray.create()
+	names.push(nosuch(2))
+	print("{box.name}{names.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:14:13: call to undefined function 'nosuch'
+error E3004: <fragment>:16:13: call to undefined function 'nosuch'
+error E3005: <fragment>:14:6: cannot assign a value of type 'unknown' to field 'name' of 'Box', which holds 'String'
+error E3005: <fragment>:16:8: argument type mismatch for 'value': expected 'String', got 'unknown'
+```
+
+<!-- test: async-await.error.a-call-nothing-declares-stored-in-a-promise-array-is-undefined -->
+A call nothing declares, stored in a promise array without `async`, reports the call and nothing about
+what the array may hold.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function main() returns ExitCode
+	var ps = IntPromiseArray.create()
+	ps.push(nosuch(1))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:8:10: call to undefined function 'nosuch'
+```
+
+<!-- test: async-await.error.a-captured-struct-var-assigned-a-call-nothing-declares-is-undefined -->
+A cell-resident struct `var` assigned a call nothing declares reports the call and the assignment, and
+nothing at the closure's read through it.
+```maxon
+type Box
+	export var name as String
+
+	static function create() returns Self
+		return Self{name: "a string padded out long enough to heap allocate"}
+	end 'create'
+end 'Box'
+
+function refill(dest Box)
+	dest = Box.create()
+end 'refill'
+
+function main() returns ExitCode
+	var box = Box.create()
+	refill(box)
+	let peek = function() gives box.name.byteLength()
+	box = nosuch(1)
+	print("{peek()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:18:8: call to undefined function 'nosuch'
+error E3005: <fragment>:18:2: cannot assign a value of type 'unknown' to variable 'box', which holds 'Box'
+```
+
 <!-- test: async-await.qualified-spawn-of-a-directory-types-static -->
 A static of a type declared in another directory is spawned by its qualified name, `sub.Calc.seven`, the
 spelling a direct call accepts.

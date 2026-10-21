@@ -930,11 +930,9 @@ export union SourceParseError implements Error
 	// (a bare-call STATEMENT, whose whole purpose is to discard the result, and a call inside an
 	// EXPRESSION, which needs one), and `parseCall`'s `resultUsed` is that distinction.
 	//
-	// It was silently ACCEPTED before the signature index, and the deferral is not what broke it:
-	// `calleeResultType` reported a void callee as `MaxonType.unresolved` — the SAME sentinel it
-	// used for "I could not see this callee" — so TypeRules classified "there is no value" as "I
-	// cannot judge this value", and every rule correctly deferred on it. One sentinel, two
-	// meanings. `ValueTypeTag.void` is now the other one.
+	// A void callee's result is tagged `ValueTypeTag.void`, apart from the deferred `unresolved`
+	// value a call to an undeclared callee gets: TypeRules defers on `unresolved`, so a void result
+	// carrying it would pass every rule.
 	voidCallResultUsed(name String, line LineNumber, column ColumnNumber)
 
 	// A character literal whose body is not one character: `''`, or a `\` escape the
@@ -13761,7 +13759,7 @@ end 'ifConditionCatches'
 // display name is DERIVABLE from the key (`tryTargetNamedNoun`) and a second field would be that derivation
 // stored — one fact in two places, filled in at every emission site, wrong at whichever one forgot.
 union TryTarget
-	// A DIRECT call or an `await`ed SPAWN: the callee NAME, which the signature index answers for. ⚠ The
+	// A DIRECT call: the callee NAME, which the signature index answers for. ⚠ The
 	// EMITTED symbol for a builtin — `tryTargetNamedNoun` turns it back into the author's spelling.
 	named(let callee ByteArray)
 
@@ -13769,11 +13767,11 @@ union TryTarget
 	// interface's own declared `throws` clause — the only carrier of that fact.
 	witness(let methodName ByteArray, let throwsClause ThrowsClause)
 
-	// An `await` of a promise out of storage: the storage type's name for diagnostics, and the
+	// An `await` of a promise typed at a `Promise` instance — one out of storage, or a declared spawn,
+	// which `mintSpawnPromise` mints at its instance: the instance's name for diagnostics, and the
 	// `throws` clause its `ErrorType` argument spells, the only carrier of that fact — a container
-	// holds no `asyncCall` to recover a callee from. A spawn awaited directly has a callee, so it
-	// takes `named` or `deferred` from `tryTargetOfCallee`, and an undeclared one is reported as E3004
-	// rather than E3055.
+	// holds no `asyncCall` to recover a callee from. An undeclared spawn's await takes `deferred`, so
+	// it is reported as E3004 rather than E3055.
 	promise(let storageName ByteArray, let throwsClause ThrowsClause)
 
 	serviceReply(let messageName ByteArray, let awaitedService ByteArray)
@@ -13782,32 +13780,36 @@ union TryTarget
 
 	send(let messageName ByteArray, let throwsClause ThrowsClause)
 
-	// A call to a callee nothing defines: its `unresolved` result is a deferral to E3004, so every
-	// door passes it through (see `deferredUnresolvedMemberResult`).
+	// A call to a callee nothing defines, or the await of a spawn of one: its `unresolved` result is a
+	// deferral to E3004, so every door passes it through (see `deferredUnresolvedMemberResult`).
 	deferred
 end 'TryTarget'
 
 // ⭐⭐ **WHAT AN `await` NEEDS TO KNOW ABOUT ITS PROMISE, FROM WHICHEVER SOURCE HAS IT.** A
-// promise reaches an `await` by one of two roads and the two carry the facts in different places — a SPAWN
-// in this frame carries them on the callee its defining `asyncCall` names, a promise out of STORAGE carries
-// them in its own type's arguments — so the three await doors (`emitAwait`'s E3057 reject, `emitAwaitOp`'s
-// result mint, `commitTryAwaitRewrite`'s desugar target) ask ONE function and none of them contains a
-// second copy of the road split.
+// service reply carries the facts on the message its defining cell names, and any other promise — a
+// spawn or one out of storage — in its own `Promise` instance's arguments, so the three await doors
+// (`emitAwait`'s E3057 reject, `emitAwaitOp`'s result mint, `commitTryAwaitRewrite`'s desugar
+// target) ask ONE function and none of them contains a second copy of the road split.
 //
 // ⚠ **THE `throws` CLAUSE IS NOT A FIELD HERE, AND DELIBERATELY SO.** It is `tryTargetThrows(tryTarget)` —
 // the accessor the `try` desugar already reads it through — so a promise's throws-ness cannot be one thing
 // to the plain-`await` reject and another to the `otherwise (e)` binding it produces.
 type AwaitedPromise
-	// What `await p` yields. `MaxonReturnType` and not a bare type because a VOID `async` is awaitable and
-	// has no result type at all (`await p` as a statement) — a stored promise is never void, but the spawn
-	// road is, and one record serves both.
-	export var result as MaxonReturnType
+	// What `await p` yields. `declared` carries a `MaxonReturnType` and not a bare type because a VOID
+	// `async` is awaitable and has no result type at all (`await p` as a statement); `deferred` is the
+	// await of a spawn nothing declares.
+	export var result as AwaitedResult
 	export var tryTarget as TryTarget
 
-	static function create(result MaxonReturnType, tryTarget TryTarget) returns AwaitedPromise
+	static function create(result AwaitedResult, tryTarget TryTarget) returns AwaitedPromise
 		return Self{result: result, tryTarget: tryTarget}
 	end 'create'
 end 'AwaitedPromise'
+
+union AwaitedResult
+	declared(let returnType MaxonReturnType)
+	deferred
+end 'AwaitedResult'
 
 union AwaitOperand
 	promise(facts AwaitedPromise)
@@ -41126,6 +41128,13 @@ export type Parser
 			let declaredShown = self.brandedDisplayTypeName(declaredTag, nameId: typeNameIdOf(binding.varType), brand: declaredBrand)
 			let paired = self.pairedDisplays(value, declaredTag: declaredTag, declaredNameId: typeNameIdOf(binding.varType), declaredBrand: declaredBrand, declaredIdentity: declaredAggregate, declaredShown: declaredShown)
 			try self.refuseUnlessDeferred(SourceParseError.assignTypeMismatch(assignedPlacePhrase(FunctionTypeDoor.variable, name: nameTok.value, owner: SlotOwner.unowned), got: paired.got, gotNote: paired.gotNote, expected: paired.declared, expectedNote: paired.declaredNote, line: nameTok.line, column: nameTok.column), value: value)
+
+			// The local takes the deferred value, so its later reads raise no E3142/E3102 behind the
+			// E3004 the deferral waits for.
+			if not binding.isCellBinding 'aLocalTakesTheDeferredValue'
+				try self.reassignBindingValue(func, binding: binding, nameTok: nameTok, value: value, rhsBareLocalName: rhsBareLocalName)
+			end 'aLocalTakesTheDeferredValue'
+
 			return
 		end 'aggregateReassignMismatch'
 
@@ -41588,6 +41597,23 @@ export type Parser
 		end 'theCallersName'
 	end 'reassignCellBinding'
 
+	// The binding STAYS in `ownedBindings` (mid-stack removal would desync the block/loop drop marks),
+	// so it is marked MOVED to make `emitScopeDrops` skip it — a value owning nothing must not be
+	// `__mm_decref`'d.
+	//
+	// ⚠ **READS STILL WORK, AND THAT RESTS ON `setValue` RUNNING FIRST.** `requireUnmovedAtUse`'s
+	// escape excludes a PROMISE-valued binding, so what admits this one is that `setValue` has ALREADY
+	// re-pointed `boundValue` at the new value: the binding being asked about is no longer a promise.
+	// (A consume record an earlier `await` made is keyed on the OLD value and stays there — correctly,
+	// since an alias may still name that thread.)
+	function rebindToAValueOwningNothing(binding VarInfo, nameTok Token, value ValueId)
+		self.recordDebugRebindByName(nameTok.value, value: value)
+		self.bodyState.scope.setValue(nameTok.value, value: value, ledger: self.bodyState.moveLedger)
+		binding.setMovedFrom(true, ledger: self.bodyState.moveLedger)
+		binding.partiallyMoved = false
+		self.removeFromPendingTemps(value)
+	end 'rebindToAValueOwningNothing'
+
 	function reassignBindingValue(func IrFunction, binding VarInfo, nameTok Token, value ValueId, rhsBareLocalName SourceBinding) throws SourceParseError
 		let oldValue = binding.boundValue
 		let rhsWasBareLocal = rhsBareLocalName.isLocal()
@@ -41665,34 +41691,26 @@ export type Parser
 				self.emitDecref(oldValue, range: SourceRange.ofToken(nameTok))
 			end 'dropOldThread'
 
+			if not newIsPromise 'becameScalar'
+				// A non-promise value (`p = 5` after a consuming `await`, or after the live thread was dropped
+				// just above): the binding now owns nothing droppable.
+				self.rebindToAValueOwningNothing(binding, nameTok: nameTok, value: value)
+				return
+			end 'becameScalar'
+
 			let alreadyInSet = self.bindingIsOwned(binding) or binding.movedFrom
 			self.recordDebugRebindByName(nameTok.value, value: value)
 			self.bodyState.scope.setValue(nameTok.value, value: value, ledger: self.bodyState.moveLedger)
 
-			if newIsPromise 'revivePromise'
-				// The binding owns the fresh thread — revive it for reads and its scope-exit drop, and enrol
-				// once (a re-armed promise is already in the set as a moved ghost; a non-promise binding first
-				// taking a promise — `var x = 5; x = async f()` — joins now).
-				binding.setMovedFrom(false, ledger: self.bodyState.moveLedger)
-				binding.partiallyMoved = false
+			// The binding owns the fresh thread — revive it for reads and its scope-exit drop, and enrol
+			// once (a re-armed promise is already in the set as a moved ghost; a non-promise binding first
+			// taking a promise — `var x = 5; x = async f()` — joins now).
+			binding.setMovedFrom(false, ledger: self.bodyState.moveLedger)
+			binding.partiallyMoved = false
 
-				if not alreadyInSet 'enrolPromise'
-					self.enrolOwnedBinding(binding)
-				end 'enrolPromise'
-			end 'revivePromise' else 'becameScalar'
-				// A non-promise value (`p = 5` after a consuming `await`, or after the live thread was dropped
-				// just above): the binding now owns nothing droppable. It STAYS in `ownedBindings` (mid-stack
-				// removal would desync the block/loop drop marks), so it is marked MOVED to make `emitScopeDrops`
-				// skip it — a bare scalar must not be `__mm_decref`'d.
-				//
-				// ⚠ **READS STILL WORK, AND THAT RESTS ON THE ORDER OF THE TWO LINES ABOVE.**
-				// `requireBindingLive`'s scalar escape excludes a PROMISE-valued binding, so what admits
-				// this one is that `setValue` has ALREADY re-pointed `boundValue` at the scalar: the binding
-				// being asked about is no longer a promise. (A consume record an earlier `await` made is keyed
-				// on the OLD value and stays there — correctly, since an alias may still name that thread.)
-				binding.setMovedFrom(true, ledger: self.bodyState.moveLedger)
-				binding.partiallyMoved = false
-			end 'becameScalar'
+			if not alreadyInSet 'enrolPromise'
+				self.enrolOwnedBinding(binding)
+			end 'enrolPromise'
 
 			self.removeFromPendingTemps(value)
 			return
@@ -41726,6 +41744,15 @@ export type Parser
 		let wasMovedFrom = binding.movedFrom
 		let wasOwned = not wasMovedFrom and self.bindingIsOwned(binding)
 		let inOwnedSet = wasOwned or wasMovedFrom
+
+		if inOwnedSet and self.valueIsDeferred(value) 'aDeferredValueOwnsNothing'
+			if wasOwned 'dropOldOwner'
+				self.emitDecref(oldValue, range: SourceRange.ofToken(nameTok))
+			end 'dropOldOwner'
+
+			self.rebindToAValueOwningNothing(binding, nameTok: nameTok, value: value)
+			return
+		end 'aDeferredValueOwnsNothing'
 
 		// Promote a borrowed value assigned to a binding that is (or stays) in the owned set, so the
 		// binding keeps owning a droppable one rather than being deleted from the middle of the
@@ -45588,7 +45615,9 @@ export type Parser
 
 			match try self.awaitOperandOf(func, promise: promise, awaitTok: awaitTok) 'operand'
 				promise(facts) then return (try self.emitAwaitOp(promise, facts: self.holdTheSendOfAnAwait(promise, facts: facts), awaitTok: awaitTok)).0
-				deferred(result) then return result
+
+				// Derived as a call, so `rewriteLastCallToTryCall` answers it `TryTarget.deferred`.
+				deferred(result) then return self.deferredValueFrom(self.artifact.currentFuncIndex, sourceId: result, chainCalls: DeferredChainCalls.lastLinkIsACall)
 			end 'operand'
 		end 'awaitTarget'
 
@@ -87335,9 +87364,16 @@ export type Parser
 		// `__gt_promise_drop`?"*): the spawn sets it, a container read never does, and no store site rewrites
 		// it — so unlike the type it answers the same at the first door and at the fifth.
 		// `specs/async-promise-drop.md`'s two `branch-store-into-a-container-*` cases pin both orders.
-		try self.requireConsumedPromiseIsOwned(value, anchor: anchor, door: anchor.value)
+		//
+		// A deferred value owns no thread and carries no claim to check, so it takes the identity path
+		// too, leaving the program to the E3004 its deferral waits for.
+		let ofNothing = self.valueIsDeferred(value)
 
-		if not self.valueOwnsGreenThread(value) and self.valueIsInstance(value, giid: storage) 'alreadyStored'
+		if not ofNothing 'anOwnerToRequire'
+			try self.requireConsumedPromiseIsOwned(value, anchor: anchor, door: anchor.value)
+		end 'anOwnerToRequire'
+
+		if ofNothing or (not self.valueOwnsGreenThread(value) and self.valueIsInstance(value, giid: storage)) 'alreadyStored'
 			self.consumePromiseThread(value, range: SourceRange.ofToken(anchor), reclaimedBy: PromiseConsume.notConsumed)
 			return value
 		end 'alreadyStored'
@@ -87378,10 +87414,6 @@ export type Parser
 	end 'requirePromiseStorageDescribesSource'
 
 	function requirePromiseStorageDescribesSpawn(callee ByteArray, cell ValueId, storage GenericInstanceId, anchor Token) throws SourceParseError
-		if not self.signatures.declaresCallee(callee) 'undeclaredCallee'
-			return
-		end 'undeclaredCallee'
-
 		try self.requirePromiseStorageDescribes(self.spawnPromiseReturnType(cell), throwsClause: self.signatures.throwsOf(callee), subject: PromiseStorageSubjectIsTheCallee, storage: storage, anchor: anchor)
 	end 'requirePromiseStorageDescribesSpawn'
 
@@ -87398,8 +87430,9 @@ export type Parser
 
 	// The RESULT half. Both sides are adopted into THIS file's interner before they are compared — the
 	// storage's argument through `resolvedSlotType` (which is what `requireContainerElementType` resolves the
-	// element itself through) and the promise's return type through `calleeReturnType` /
-	// `serviceReplyResultType` (both `returnTypeOf(…, into: self.artifact.typeNames)`) — so the
+	// element itself through) and the promise's return type through `spawnPromiseReturnType` (the
+	// spawn's own instance, through `resolvedSlotType` too) / `serviceReplyResultType`
+	// (`returnTypeOf(…, into: self.artifact.typeNames)`) — so the
 	// `(tag, nameId)` pair is a comparison of two types and not of two tables' numbering. A VOID promise
 	// cannot arrive: `Promise with <nothing>` is unspellable, so a void spawn has no storage type to be
 	// stored in and reaches the sentence below naming its own absence. ⚠ A message that returns nothing AND
@@ -89628,9 +89661,10 @@ export type Parser
 		// dense-column read (measured below), and the alternative is a silent hole the next road to mint one
 		// falls into.
 		//
-		// What remains is the case the arm is about: a promise binding REASSIGNED to a bare
-		// scalar (`p = 5`), whose `movedFrom` means "owns nothing droppable" rather than "was moved from".
-		// `reassignBindingValue` re-points `boundValue` at the scalar BEFORE setting that bit, so the binding
+		// What remains is the case the arm is about: a binding rebound to a value owning nothing — a
+		// promise binding REASSIGNED to a bare scalar (`p = 5`), or a binding handed a deferred value —
+		// whose `movedFrom` means "owns nothing droppable" rather than "was moved from".
+		// `rebindToAValueOwningNothing` re-points `boundValue` BEFORE setting that bit, so the binding
 		// asked about here is no longer a promise and the escape still admits it.
 		// ⚠ **THE MARK (`valueOwnsGreenThread`) AND NOT THE WIDER `valueIsPromise`, AND THE DIFFERENCE IS ONE
 		// ALLOCATION PER SCALAR READ.** `valueIsPromise` is `valueOwnsGreenThread(v) or typeIsPromiseStorage(…,
@@ -89656,7 +89690,7 @@ export type Parser
 		// `valueIsPromise` spelling cost **+8,176 allocations at the smallest size rising to +173,953 at the largest**
 		// (x1.65 x1.79 x1.88 x1.94 x1.97 — linear, a per-read constant, +0.37% of the compile at the largest size);
 		// the mark spelling costs a dense-column read and the ladder returns to the control's numbers.
-		if tagOwnsNoHeapValue(self.tagOf(binding.boundValue)) and not self.valueOwnsGreenThread(binding.boundValue) 'scalarBinding'
+		if (tagOwnsNoHeapValue(self.tagOf(binding.boundValue)) or self.valueIsDeferred(binding.boundValue)) and not self.valueOwnsGreenThread(binding.boundValue) 'scalarBinding'
 			return
 		end 'scalarBinding'
 
@@ -101027,7 +101061,7 @@ export type Parser
 	// ⭐ **THE REFUSALS ARE THEREFORE DERIVED, NOT ENUMERATED.** Every position that wants an `Integer`
 	// already knows how to refuse something that is not one, so there is no roster of promise-misuse
 	// positions to keep in step with the language — which is the property a roster can never have.
-	// `await`/`try await` recover the awaited result type from the callee.
+	// `await`/`try await` recover the awaited result type from the handle's `Promise` instance.
 	function spawnedCalleeConventions(callee ByteArray, writtenCallee ByteArray) returns ByRefConventionArray
 		if callee.equals(writtenCallee) 'notAnInstance'
 			return self.byRefConventionsReachableFrom(callee)
@@ -101068,9 +101102,8 @@ export type Parser
 			// Through `rangedAliasResolvedTag`, for `requireAsyncResult`'s reason mirrored onto the argument
 			// side: a value of a ranged-int alias type carries tag `named` with its alias name in the parallel
 			// name column, so the bare tag cannot tell `Integer` from a `String`. `let r1 = await p1` produces
-			// exactly such a value (`awaitedResultTag` types it at the callee's declared `Integer`), so
-			// `async step(r1)` — the whole shape of `specs/async-await.md`'s `sequence` — was refused for an
-			// argument that is an ordinary i64.
+			// exactly such a value, and `async step(r1)` — the whole shape of `specs/async-await.md`'s
+			// `sequence` — passes an argument that is an ordinary i64.
 			if not tagRidesAsyncGprChannel(self.rangedAliasResolvedTag(self.tagOf(argValue), nameId: self.valueNameId(argValue))) 'unfittableArg'
 				throw SourceParseError.unsupported("an `async` call argument must ride the green thread's integer channel — a `float` travels in an XMM register the hand-assembled trampoline never fills, a value held at an interface type is released through a witness table and one held at an opaque type parameter through a layout descriptor, and the green-thread struct carries neither. A managed String/struct/array argument is one heap pointer and is accepted, and so is a float or an interface value handed to a parameter the callee reassigns, which rides a cell the coroutine owns", line: anchor.line, column: anchor.column)
 			end 'unfittableArg'
@@ -101086,20 +101119,22 @@ export type Parser
 		//
 		// ⚠ It is a positioned diagnostic HERE rather than a compiler PANIC in
 		// `LowerMaxonToStd.emitAsyncSpawn`, because ordinary source reaches it: the other two async refusals
-		// (a managed argument, a non-scalar result) sit here for the same reason. The panic stays as the
-		// structural backstop.
+		// (an argument or a result the integer channel cannot carry) are positioned for the same reason.
+		// The panic stays as the structural backstop.
 		if args.count() > MaxAsyncArgs 'tooManyAsyncArgs'
 			throw SourceParseError.unsupported("`async {String.from(callee)}(…)` passes {args.count()} arguments — more than the {MaxAsyncArgs} a spawn can carry. A spawned call's arguments ride the green thread's inline argument region, which the hand-assembled trampoline reads back into the argument registers, so a spawn has no stack-argument path even though an ordinary call does. Call it directly, or pass fewer arguments", line: anchor.line, column: anchor.column)
 		end 'tooManyAsyncArgs'
-
-		try self.requireAsyncResult(callee, returnType: self.spawnedReturnType(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots), anchor: anchor)
 
 		// ⭐⭐ **THE GREEN THREAD IS A DURABLE SINK, SO THE SPAWN HANDS IT ITS OWN REFERENCE.** Runs AFTER
 		// both gates, so only arguments that fit the channel are ever transferred — and after
 		// `fillOmittedArgDefaults`, so a MANAGED default is transferred exactly as a written argument is.
 		try self.transferAsyncSpawnArgs(callee, args: args, argImmutableNames: argImmutableNames, argAnchors: argAnchors, anchor: anchor)
-		try self.transferAsyncPromiseArgs(callee, args: args, argLabels: argLabels, argRanges: argRanges, argDefaultSlots: argDefaultSlots, anchor: anchor)
-		let result = self.mintSpawnPromise(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
+
+		let result = match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'spawned'
+			declared(returnType) gives try self.spawnAtItsPromiseInstance(callee, declaredReturn: returnType, args: args, argLabels: argLabels, argRanges: argRanges, argDefaultSlots: argDefaultSlots, anchor: anchor)
+			undeclared gives self.mintDeferredValue()
+		end 'spawned'
+
 		self.markValuePromise(result)
 
 		// ⭐ The spawn OWNS a green thread. Enrol it as a statement-scoped pending temporary,
@@ -101121,12 +101156,19 @@ export type Parser
 		return result
 	end 'emitAsyncCall'
 
-	function mintSpawnPromise(callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray) returns ValueId
-		if not self.signatures.declaresCallee(callee) 'undeclaredCallee'
-			return self.mintDeferredValue()
-		end 'undeclaredCallee'
+	// One pick serves the result gate and the minted instance, so an overloaded callee is checked and
+	// awaited at the same declaration.
+	function spawnAtItsPromiseInstance(callee ByteArray, declaredReturn MaxonReturnType, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argDefaultSlots ParamCountArray, anchor Token) returns ValueId throws SourceParseError
+		let pick = self.returnDecidingDeclaration(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
 
-		let promise = match self.returnDecidingDeclaration(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'pick'
+		try self.requireAsyncResult(callee, returnType: self.spawnedReturnType(callee, declaredReturn: declaredReturn, pick: pick), anchor: anchor)
+		try self.transferAsyncPromiseArgs(callee, args: args, argLabels: argLabels, argRanges: argRanges, argDefaultSlots: argDefaultSlots, anchor: anchor)
+
+		return self.mintSpawnPromise(callee, pick: pick)
+	end 'spawnAtItsPromiseInstance'
+
+	function mintSpawnPromise(callee ByteArray, pick SweptDeclarationPick) returns ValueId
+		let promise = match pick 'pick'
 			chosen(decl) gives self.signatures.internPromiseInstanceReturning(decl.returnType, callee: callee)
 			undecided gives self.signatures.internPromiseInstanceForCallee(callee)
 		end 'pick'
@@ -101136,9 +101178,8 @@ export type Parser
 
 	// Refuse an `async callee(…)` whose awaited result has no GPR channel (`tagRidesAsyncGprChannel`).
 	// It asks `asyncCarriedResultTag`, not the raw tag: `returnTypeOf` answers before alias
-	// resolution, so a ranged int alias arrives as the same `named` a `String` and a struct do. An
-	// undeclared callee's `unresolved` result passes, leaving the program to E3004. Void passes: the
-	// awaiter discards a void async's R8.
+	// resolution, so a ranged int alias arrives as the same `named` a `String` and a struct do. Void
+	// passes: the awaiter discards a void async's R8.
 	function requireAsyncResult(callee ByteArray, returnType MaxonReturnType, anchor Token) throws SourceParseError
 		let resultTag = self.asyncCarriedResultTag(returnType)
 
@@ -101197,10 +101238,6 @@ export type Parser
 	// promise also handed to a taking parameter is E3102 at its second argument, as
 	// `specs/async-promise-drop.md` pins.
 	function transferAsyncPromiseArgs(callee ByteArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argDefaultSlots ParamCountArray, anchor Token) throws SourceParseError
-		if not self.signatures.declaresCallee(callee) 'anUndeclaredCallee'
-			return
-		end 'anUndeclaredCallee'
-
 		var promiseColumns = ParamCountArray.create()
 
 		for column in 0 upto args.count() as ParamCount 'eachArg'
@@ -101336,27 +101373,22 @@ export type Parser
 	end 'cellOccupantMoves'
 
 	// ⭐⭐ **THE TWO FACTS AN `await` NEEDS, FROM WHICHEVER ROAD ITS PROMISE CAME BY** — see
-	// `AwaitedPromise`, which carries the argument. A SPAWN in this frame is described by the callee its
-	// defining `asyncCall` names; a promise out of STORAGE is described by its own type's arguments, because
-	// no `asyncCall` is reachable from a container.
+	// `AwaitedPromise`, which carries the argument.
 	//
-	// ⚠⚠ **IT ANSWERS THE TYPE AND NOT THE TAG, AND THAT IS A MISCOMPILE FIX, NOT A REFACTOR.** A bare
-	// `ValueTypeTag` has `emitAwaitOp` mint the await's result with that tag beside `nameId: UnnamedTypeId`
-	// — a `named` tag carrying the FILLER id. `declaredAliasOfNameId`'s header states the consequence
-	// exactly: `UnnamedTypeId` is 0 and a `TypeNameInterner` starts empty, so id 0 is **the first name the
-	// file mentions**. An `async` returning a ranged alias then produces an await result typed after
-	// whatever name that happens to be — measured as
-	// `Cannot return 'FilePath' from function declared to return 'int'` on `specs/async-await.md`'s
-	// `nested-void`, where `File.exists(FilePath from …)` interns `FilePath` first. It is unreachable only
-	// while `requireAsyncResult` refuses every `named` return before this line can run, so the moment that
-	// refusal learns to resolve a ranged alias the filler becomes reachable — a latent wrong answer sprung
-	// by a change in a different function. The name has to come from the callee's return type, the only
-	// place it exists.
+	// ⚠⚠ **IT ANSWERS THE TYPE AND NOT THE TAG.** A bare `ValueTypeTag` has `emitAwaitOp` mint the
+	// await's result with that tag beside `nameId: UnnamedTypeId` — a `named` tag carrying the FILLER
+	// id. `declaredAliasOfNameId`'s header states the consequence exactly: `UnnamedTypeId` is 0 and a
+	// `TypeNameInterner` starts empty, so id 0 is **the first name the file mentions**, and an `async`
+	// returning a ranged alias produces an await result typed after whatever name that happens to be.
 	function awaitedPromiseFacts(func IrFunction, promise ValueId) returns AwaitedPromise
+		if self.valueIsDeferred(promise) 'aSpawnOfNothing'
+			return AwaitedPromise.create(AwaitedResult.deferred, tryTarget: TryTarget.deferred)
+		end 'aSpawnOfNothing'
+
 		let source = self.asyncCallCalleeOf(func, promise: promise)
 
-		// The third road, a service reply, is asked first. Its result is the message's declared return
-		// type, as a spawn's is its callee's; the difference is the error type, which is
+		// A service reply is asked before the `Promise` instance below. Its result is the message's
+		// declared return type, as a spawn's is its callee's; the difference is the error type, which is
 		// `tryTargetThrows`' to derive.
 		//
 		// ⚠ A reply cell is itself typed `Promise with (T, E)`, so it answers `typeIsPromiseStorage`
@@ -101367,29 +101399,21 @@ export type Parser
 		match source 'reply'
 			found or
 			none then break
-			serviceReply(messageName, awaitedService) then return AwaitedPromise.create(self.serviceReplyResultType(messageName, cell: promise), tryTarget: TryTarget.serviceReply(messageName, awaitedService: awaitedService))
+			serviceReply(messageName, awaitedService) then return AwaitedPromise.create(AwaitedResult.declared(self.serviceReplyResultType(messageName, cell: promise)), tryTarget: TryTarget.serviceReply(messageName, awaitedService: awaitedService))
 		end 'reply'
 
-		// ⭐ **THE STORAGE ROAD BEATS THE SPAWN ROAD, AND IT HAS TO.** A spawn stored into a container keeps
-		// its promise MARK (nothing clears it — the mark is what said this frame once owned the thread), so a
-		// value can answer to both roads; the one that is TRUE of it is the type it now carries, because the
-		// storage door checked that claim against the callee and the callee is no longer what describes it.
 		let promiseType = self.valueMaxonType(promise)
 
 		if typeIsPromiseStorage(self.signatures, t: promiseType) 'fromStorage'
 			let storage = typeNameIdOf(promiseType)
-			return AwaitedPromise.create(MaxonReturnType.value(self.resolvedSlotType(self.signatures.substitutedInstanceArg(storage as GenericInstanceId, position: PromiseResultArgPosition))), tryTarget: TryTarget.promise(self.signatures.instanceDisplayName(storage as GenericInstanceId), throwsClause: promiseStorageThrows(self.signatures, gid: storage as GenericInstanceId)))
+			return AwaitedPromise.create(AwaitedResult.declared(MaxonReturnType.value(self.resolvedSlotType(self.signatures.substitutedInstanceArg(storage as GenericInstanceId, position: PromiseResultArgPosition)))), tryTarget: TryTarget.promise(self.signatures.instanceDisplayName(storage as GenericInstanceId), throwsClause: promiseStorageThrows(self.signatures, gid: storage as GenericInstanceId)))
 		end 'fromStorage'
 
-		match source 'callee'
-			found(callee) then return AwaitedPromise.create(self.calleeReturnType(callee), tryTarget: self.tryTargetOfCallee(callee))
-			serviceReply then panic("awaitedPromiseFacts: promise v{promise} took the reply arm above, which returns")
-			none then panic("awaitedPromiseFacts: promise v{promise} is neither a stored promise nor defined by an `asyncCall` or a `serviceReplyCell` — `valueIsPromise` admits exactly those three, and every caller gates on it")
-		end 'callee'
+		panic("awaitedPromiseFacts: promise v{promise} is neither a service reply nor typed at a `Promise` instance — `mintSpawnPromise` mints every declared spawn at its instance, and an undeclared one is a deferred value, answered at the top")
 	end 'awaitedPromiseFacts'
 
 	// What `await <reply>` yields: the message's declared return type, repaired through the same swept
-	// walk `calleeReturnType` uses.
+	// walk `spawnedReturnType` uses.
 	function serviceReplyResultType(messageName ByteArray, cell ValueId) returns MaxonReturnType
 		let declaredReturn = try self.signatures.declaredReturnTypeOf(messageName, into: self.artifact.typeNames) otherwise panic("serviceReplyResultType: `{String.from(messageName)}` declares no return type — a reply cell is minted for a declared message only")
 		return self.fixedReplyResultType(declaredReturn, messageName: messageName, cell: cell)
@@ -101443,33 +101467,15 @@ export type Parser
 		return self.rangedAliasResolvedTag(self.tagOf(value), nameId: self.valueNameId(value)).name
 	end 'awaitOperandKindName'
 
-	// The declared return type of `callee`, void included, and `unresolved` for an undeclared callee —
-	// the deferral its direct call's result gets, so an `async` of it reaches E3004 as the call does.
-	// The one registry read both async result questions are answered from — the type the await's
-	// result carries (`awaitedPromiseFacts`) and what the spawn's result channel must carry
-	// (`asyncCarriedResultTag`) — so the two cannot come to describe different callees.
-	//
 	// The whole-program sweep records a return type before the aliases are known
 	// (`parseTypeReference`'s generic-alias arm is gated on `allFilesFolded`, and `adoptType`
 	// re-interns by name), so `returns StringArray` arrives here as a bare `named` and is repaired
 	// here, as an ordinary call's result is at its read door (`mintOwnedCallResult` →
-	// `repairSweptType`). `requirePromiseStorageResult` resolves the claimed type through
-	// `resolvedSlotType` and compares it with this answer, so repairing at this one read is what keeps
-	// both sides of that comparison the same question.
+	// `repairSweptType`).
 	//
 	// A ranged int alias is untouched by the repair (`repairSweptType` never resolves one), so the
 	// await's result keeps its `named` tag and the alias name stays available to every downstream
 	// range check.
-	function calleeReturnType(callee ByteArray) returns MaxonReturnType
-		return match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'r'
-			declared(returnType) gives self.repairSweptReturnType(returnType, scopeFilePath: self.signatures.recordedReturnDeclFileOf(callee))
-			undeclared gives MaxonReturnType.value(MaxonType.unresolved)
-		end 'r'
-	end 'calleeReturnType'
-
-	// The swept-type repair applied to a RETURN type — see `calleeReturnType`'s header for the two wrong
-	// answers an unrepaired one produced. Split out because the reply road (`serviceReplyResultType`) owes
-	// exactly the same repair and differs only in what it answers for a name nothing declares.
 	function repairSweptReturnType(swept MaxonReturnType, scopeFilePath FilePath) returns MaxonReturnType
 		return match swept 'repair'
 			void gives swept
@@ -101477,9 +101483,9 @@ export type Parser
 		end 'repair'
 	end 'repairSweptReturnType'
 
-	// What the spawn's result channel carries: `calleeReturnType`'s answer with a ranged alias reduced
-	// to the primitive it underlies (`Integer` → `integer`, `Percent` → `float`). Void answers `void`,
-	// which the gate admits.
+	// What the spawn's result channel carries: `spawnedReturnType`'s answer with a ranged alias
+	// reduced to the primitive it underlies (`Integer` → `integer`, `Percent` → `float`). Void answers
+	// `void`, which the gate admits.
 	//
 	// ⚠ Kept apart from the type the await's result carries (`awaitedPromiseFacts`), which must keep a
 	// ranged int's `named` tag or every downstream reader of the alias — `declaredAliasOfValue`, the
@@ -101493,10 +101499,10 @@ export type Parser
 		end 'r'
 	end 'asyncCarriedResultTag'
 
-	function spawnedReturnType(callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray) returns MaxonReturnType
-		return match self.returnDecidingDeclaration(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'pick'
+	function spawnedReturnType(callee ByteArray, declaredReturn MaxonReturnType, pick SweptDeclarationPick) returns MaxonReturnType
+		return match pick 'pick'
 			chosen(decl) gives self.repairSweptReturnType(self.signatures.adoptReturnType(decl.returnType, into: self.artifact.typeNames), scopeFilePath: decl.declFilePath)
-			undecided gives self.calleeReturnType(callee)
+			undecided gives self.repairSweptReturnType(declaredReturn, scopeFilePath: self.signatures.recordedReturnDeclFileOf(callee))
 		end 'pick'
 	end 'spawnedReturnType'
 
@@ -101581,14 +101587,15 @@ export type Parser
 
 	// Emit the `await` op for a validated promise operand — the shared core of plain `await`
 	// (`emitRoutedAwait`) and the `try await` target (`parseTryTargetExpression`). The result tag is
-	// the awaited result type (recovered from the callee — the handle carries only `integer`), so a
-	// void async yields a void await result the desugar handles and a scalar async yields its scalar.
+	// the awaited result type `awaitedPromiseFacts` answers, so a void async yields a void await
+	// result the desugar handles and a scalar async yields its scalar.
 	function emitAwaitOp(promise ValueId, facts AwaitedPromise, awaitTok Token) returns (ValueId, ElementIndex) throws SourceParseError
-		// ⭐ MINTED FROM THE CALLEE'S RETURN **TYPE**, its interner name included — see `awaitedResultType`
-		// for the filler-name-id wrong answer that minting from the bare tag produced.
+		// ⭐ MINTED FROM THE AWAITED RESULT'S **TYPE**, its interner name included — see
+		// `awaitedPromiseFacts` for the filler-name-id wrong answer that minting from the bare tag
+		// produces.
 		let result = match facts.result 'r'
-			void gives self.mintValue(ValueTypeTag.void, nameId: UnnamedTypeId)
-			value(inner) gives self.mintValueOfType(inner)
+			declared(returnType) gives self.mintAwaitedValue(returnType)
+			deferred gives self.mintDeferredValue()
 		end 'r'
 
 		// A reply held at an interface type brings its witness half back beside it
@@ -101629,6 +101636,13 @@ export type Parser
 		self.consumePromiseThread(promise, range: SourceRange.ofToken(awaitTok), reclaimedBy: PromiseConsume.awaited)
 		return (result, opIdx)
 	end 'emitAwaitOp'
+
+	function mintAwaitedValue(returnType MaxonReturnType) returns ValueId
+		return match returnType 'r'
+			void gives self.mintValue(ValueTypeTag.void, nameId: UnnamedTypeId)
+			value(inner) gives self.mintValueOfType(inner)
+		end 'r'
+	end 'mintAwaitedValue'
 
 	// File the `await` whose promise is a SERVICE REPLY, so `checkServiceCallCycles` can seed its graph from
 	// it. A promise from any other road records nothing, which is every `async` program in the corpus.
@@ -102760,11 +102774,8 @@ export type Parser
 	// below it, or in another file entirely.
 	//
 	// The index answers with the DECLARATION, undistorted, which is what makes the two cases below
-	// distinguishable at all. The shipped code asked a file-local table and mapped BOTH "this file
-	// does not declare it" and "it declares nothing to return" onto one `MaxonType.unresolved` — a
-	// sentinel with two meanings, and TypeRules' `unknown` (which agrees with everything) is what it
-	// became. That is how `isReady()` from another file added to 41 and made 42, and how
-	// `let x = noop()` then `x + 4` compiled at all.
+	// distinguishable at all: "no file declares it" is `undeclared` and "it declares nothing to
+	// return" is `declared(void)`.
 	// ⭐⭐⭐ **WHICH OVERLOAD'S RETURN TYPE THIS CALL READS — the CALL half of a cross-file overload set, and
 	// the only decision the parser has to take about a set it does not resolve.**
 	//
