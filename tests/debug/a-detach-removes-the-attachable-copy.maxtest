@@ -1,0 +1,23 @@
+let DetachRemovesCopyCaseLabel = "a-detach-removes-the-attachable-copy"
+let DetachRemovesCopyAnchorName = "hot"
+let AttachedCopySuffix = ".attached"
+
+test 'a session that detaches leaves no attachable copy of the program beside it'
+	let staged = builtFixture(DetachRemovesCopyCaseLabel, fixture: HeaplessFixtureName)
+	let hotLine = anchorLine(staged.join(StagedProgramFileName), anchor: DetachRemovesCopyAnchorName)
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(hotLine)}", RunCommand, "detach"])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	Expect.equal(session.exitCode(), expected: 0, message: "a session that detached on purpose exits 0. {said}")
+
+	var copies = StringArray.create()
+
+	for entry in listing(staged) 'eachEntry'
+		if entry.filename().endsWith(AttachedCopySuffix) 'aCopy'
+			copies.push(entry.filename())
+		end 'aCopy'
+	end 'eachEntry'
+
+	Expect.isTrue(copies.isEmpty(), message: "the session detached from the program and left the attachable copy it ran from beside the original: {listedLines(copies)}. {said}")
+end 'a session that detaches leaves no attachable copy of the program beside it'

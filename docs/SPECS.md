@@ -329,6 +329,10 @@ A case holds one block of each kind: one ` ```maxon ` program, one ` ```exitcode
 Prose blocks, a bare ` ``` ` fence or ` ```text `, are skipped whole wherever they sit in the region, so
 a marker or fence quoted inside one reads as prose.
 
+On `arm64-macos`, a case whose program takes another process's task port runs from an image the harness
+re-signs in place with the `get-task-allow` entitlement, which macOS requires before one process may take
+that port. No marker asks for it; the compiler reports whether the program reaches a task port.
+
 The harness reads a spec strictly. A claim a spec file makes is honoured or refused, and each refusal is a
 parse failure naming the file and line. It refuses:
 
@@ -522,9 +526,10 @@ when no other file uses it (E3092, E3094); and a `main` that is not exactly
 `function main() returns ExitCode` or `function main()` with one `end 'main'`. So does a case whose source
 names one of these words anywhere, a `typealias` included: `CommandLine` or `executablePath`, which read
 the batch program's own argv and path; a `HeapStats` call or one of the `Scheduler` and `Clock` calls that read process-wide runtime state (`Scheduler.counters()`, `Scheduler.currentStackBytes()`, `Scheduler.quiesce()`, `Scheduler.currentMachine()`, `Clock.threadCpuTicks()`), which earlier cases move;
-`__DebugStream`, whose name-id table is numbered across the whole program; and `Log`, `Logger`, `LogSink`,
-`TraceCapture`, `enterBackgroundPriority`, `pinToMachine` or `unpinFromMachine`, which set state the whole
-process shares. A case declaring any name the standard library
+`__DebugStream`, whose name-id table is numbered across the whole program; `SampledProcess`, which takes
+another process's task port from an image the harness re-signs; and `Log`, `Logger`, `LogSink`,
+`TraceCapture`, `enterBackgroundPriority`, `pinToMachine`, `unpinFromMachine` or `MachinePin`, which set state
+the whole process shares. A case declaring any name the standard library
 also declares (an enum such as `StringError`, an alias such as `ByteArray`, an interface such as
 `InitableFromStringLiteral`) runs alone too, because every other case's use of that name would change meaning.
 

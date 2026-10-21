@@ -2132,7 +2132,7 @@ export type StdToArm64Lowering
 	// which is a `CallFixup` that `arm64ResolveCallFixups` panics on.
 	function lowerOsHostProcess(resultId ValueId, service HostProcessCall, operands ValueIdArray, dstRef ElementIndex)
 		match arm64OsCallKind(self.target.os) 'route'
-			importCall then panic("lowerOsHostProcess: `{service.name}` drives another process from outside it, and this lane reaches its inferior through Apple's `debugserver` over the GDB remote protocol rather than through a lowered host call — `TargetFacilities.targetProvidesFacility` withholds `HostFacility.processDebug` here, so SemanticCheck refuses such a program at its own source span (E3104) and this is the backstop for a compiler bug that got one past that gate")
+			importCall then self.lowerHostValue(resultId, callee: Arm64HostCallee.import(machHostProcessSlot(service)), args: operands, dstRef: dstRef)
 			syscall then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(posixTraceChunk(service)), args: operands, dstRef: dstRef)
 		end 'route'
 	end 'lowerOsHostProcess'
@@ -3018,6 +3018,52 @@ function arm64HostCallOp(callee Arm64HostCallee) returns TargetOp
 		syscall(number) gives TargetOp.arm64Syscall(number)
 	end 'which'
 end 'arm64HostCallOp'
+
+function machHostProcessSlot(service HostProcessCall) returns OsImportSlot
+	return match service 'slot'
+		machSelfTask gives OsImportSlot.machTaskSelf
+		machTaskForPid gives OsImportSlot.taskForPid
+		machTaskThreads gives OsImportSlot.taskThreads
+		machThreadInfo gives OsImportSlot.threadInfo
+		machThreadSuspend gives OsImportSlot.threadSuspend
+		machThreadResume gives OsImportSlot.threadResume
+		machThreadState gives OsImportSlot.threadGetState
+		machThreadSelf gives OsImportSlot.machThreadSelf
+		machReadMemory gives OsImportSlot.machVmReadOverwrite
+		machTaskInfo gives OsImportSlot.taskInfo
+		machReleasePort gives OsImportSlot.machPortDeallocate
+		machReleaseMemory gives OsImportSlot.machVmDeallocate
+
+		openProcess or
+		nextThread or
+		threadId or
+		suspendThread or
+		resumeThread or
+		threadContext or
+		queryRegion or
+		readProcessMemory or
+		createHighResTimer or
+		setAbsoluteTimer or
+		moduleSnapshot or
+		moduleFirst or
+		moduleNext or
+		writeProcessMemory or
+		writeThreadContext or
+		attachToProcess or
+		detachFromProcess or
+		waitForDebugEvent or
+		continueDebugEvent or
+		breakProcess or
+		protectRegion or
+		flushCode or
+		closeHandle or
+		traceRequest or
+		traceeMemoryRead or
+		awaitTracee or
+		threadGroupSignal or
+		processSignal panic("machHostProcessSlot: `{service.name}` is a Win32 or ptrace primitive, and this lane reaches another process through Mach task ports — `ProfileRuntime.profileHostShapeOf` builds the Mach entries for it, and `HostFacility.machTaskPorts` is what refuses a program that names one on a lane without them (E3104), so reaching here is a compiler bug that got past both")
+	end 'slot'
+end 'machHostProcessSlot'
 
 function dwordExtensionOp(answer ImportAnswer, into TargetVReg, src TargetVReg) returns TargetOp
 	return match answer 'extension'

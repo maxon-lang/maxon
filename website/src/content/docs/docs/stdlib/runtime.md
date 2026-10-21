@@ -100,8 +100,8 @@ Output: `2024-10-04 11017`, then `2023-11-14T22:13:20.123Z`.
 | `Scheduler.currentStackBytes()` | The calling green thread's current stack size in bytes, a `StackByteCount` (`int(0 to u64.max)`). A stack grows on demand and halves once the thread has been idle with most of it unused. |
 | `Scheduler.quiesce()` | Park the caller until every machine is idle and nothing pending can run again, and answer how many other green threads are still owned — a service still running, or a promise neither awaited nor dropped — as a `GreenThreadCount` (`int(0 to u64.max)`): `0` when every one has finished, or the count left. A machine waiting for its pinned thread's next turn counts as idle, and a coroutine still unwinding after its promise was dropped keeps the wait open until it finishes. A coroutine whose promise has been dropped answers at once, with the count at that moment. The program carries on afterwards unchanged; services stay running. |
 | `Scheduler.parallelBoundary()` | A compile-time marker with no run-time effect. A CPU-bound function calls it to mark a spawn of itself as deliberate, which satisfies [E3073](/docs/cli/error-codes/#e3073--asyncnonyielding) for a function that only computes. |
-| `Scheduler.pinToMachine()` | Bind the calling green thread to the machine (OS thread) running it, and answer whether it did. A pinned thread that parks resumes on the same machine. |
-| `Scheduler.unpinFromMachine()` | Release the calling green thread from its machine. |
+| `Scheduler.pinToMachine()` | Bind the calling green thread to the machine (OS thread) running it, and answer whether it did. A pinned thread that parks resumes on the same machine. Pins nest: each one taken is released once. |
+| `Scheduler.unpinFromMachine()` | Release one pin the calling green thread took; the last release frees it from its machine. Called by a green thread that holds no pin, it is a fatal runtime error. |
 | `Scheduler.currentMachine()` | The machine running the calling green thread, as a `MachineIndex` (`int(0 to u64.max)`); `0` is no machine. |
 
 On `wasm32-wasi` `parallelBoundary()` compiles and every other member is refused (E3104). Green threads,
@@ -124,6 +124,22 @@ end 'main'
 ```
 
 Output: `worker` then `main`.
+
+### MachinePin
+
+`MachinePin` is a pin of the calling green thread to its machine, held as a value: it takes one pin the way
+`Scheduler.pinToMachine()` does, and releases it when it is released or dropped, whichever comes first.
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `MachinePin.acquire()` | `MachinePin` | Pin the calling green thread to the machine running it. |
+| `held()` | `bool` | True while the pin is held; false when there was no machine to pin to, and after `release()`. |
+| `release()` | — | Release the pin. A later `release()` or drop finds it released and returns. |
+| `clone()` | — | Panics: a pin is released once, so it is held in one place. |
+
+Releasing a held pin is a fatal runtime error in three cases, each with its own message: from code that is
+not running on a green-thread machine, from a green thread other than the one that took it, and when that
+green thread holds no pin any longer (a `Scheduler.unpinFromMachine()` already released it).
 
 ### SchedulerCounters
 

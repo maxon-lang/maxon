@@ -3492,7 +3492,6 @@ function buildX64LinuxAwaitTraceeChunk(errnoHome LinuxErrnoHome) returns Functio
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotPid), wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rdi, src: X64Register.rdi, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: anyChild)
-	encodeGrp3Reg(asm.code, ext: Grp3ExtNeg, reg: X64Register.rdi)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: selected)
 
 	asm.placeLabel(anyChild)
@@ -4367,7 +4366,7 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 		chunks.push(buildX64LinuxProcTerminateChunk(errnoHome))
 	end 'childPipes'
 
-	if usage.usesProcessDebug 'processTrace'
+	if linuxUsesTraceBand(usage) 'processTrace'
 		chunks.push(buildX64LinuxTraceRequestChunk(errnoHome))
 		chunks.push(buildX64LinuxTraceeReadChunk(errnoHome))
 		chunks.push(buildX64LinuxAwaitTraceeChunk(errnoHome))

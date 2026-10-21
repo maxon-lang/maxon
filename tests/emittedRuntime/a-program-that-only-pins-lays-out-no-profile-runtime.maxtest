@@ -1,0 +1,49 @@
+let CaseLabel = "pin-only"
+
+let PinDestructName = "__gt_pin_destruct"
+let ProfileCloseName = "__prof_close"
+let PinOnlyFixtureName = "pin-only"
+let BuildTargetOption = "--target="
+let EmitRuntimeOption = "--emit-ir-runtime="
+let HeldLine = "held true"
+let RunDeadline = 30000
+let SoleProcessor = 1
+
+let PinReason = "A machine pin is a green-thread object: the destructor that unpins it is in the scheduler's runtime band and its facility is the green-thread floor. A program that only pins must not install the profiler's runtime, whose host-handle close serves processes it samples and has no business in a program that never samples one."
+
+test 'a program that only pins lays out the pin destructor and no profile runtime'
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: CaseLabel, fixture: PinOnlyFixtureName)
+	let executable = buildStagedForHost(staged, caseLabel: CaseLabel)
+	let run = runStagedForHost(executable, staged: staged, procs: SoleProcessor, deadlineMs: RunDeadline, standardInput: InputSource.none)
+
+	Expect.equal(run.exitCode(), expected: 0, message: "the pin-only program exited {run.exitCode()}; stderr: {run.stderr}")
+	Expect.isTrue(run.stdout.contains(HeldLine), message: "the pin-only program said `{oneLine(run.stdout)}` where it says `{HeldLine}` when its pin was taken")
+
+	var findings = StringArray.create()
+	notePinDestructor(findings, staged: staged, target: MacosTargetName)
+	notePinDestructor(findings, staged: staged, target: LinuxTargetName)
+	noteNoProfileRuntime(findings, staged: staged, target: MacosTargetName)
+	noteNoProfileRuntime(findings, staged: staged, target: LinuxTargetName)
+
+	Expect.isTrue(findings.isEmpty(), message: "a program that only pins did not lay out the runtime a pin needs and nothing else:{renderedFindings(findings)}\n\n  {PinReason}")
+end 'a program that only pins lays out the pin destructor and no profile runtime'
+
+function notePinDestructor(findings StringArray, staged FilePath, target String)
+	let body = functionBody(irLines(buildStagedProgram(staged, caseLabel: CaseLabel, target: target, functionName: PinDestructName)), functionName: PinDestructName, target: target)
+
+	if body.isEmpty() 'empty'
+		findings.push("on {target}, the emitted `{PinDestructName}` is empty")
+	end 'empty'
+end 'notePinDestructor'
+
+function noteNoProfileRuntime(findings StringArray, staged FilePath, target String)
+	var extra = StringArray.create()
+	extra.push("{BuildTargetOption}{target}")
+	extra.push("{EmitRuntimeOption}{ProfileCloseName}")
+
+	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, output: staged.join("{OutputFileStem}-{CaseLabel}-profile-{target}"), label: CaseLabel, extraArguments: extra)
+
+	if build.exitCode() == 0 'laidOut'
+		findings.push("on {target}, a program that only pins carries `{ProfileCloseName}`, the profiler's host-handle close")
+	end 'laidOut'
+end 'noteNoProfileRuntime'

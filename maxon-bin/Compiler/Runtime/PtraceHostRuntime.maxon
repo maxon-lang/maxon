@@ -1,0 +1,210 @@
+export let ProfileSeizedOpenName = b"__prof_seized_open"
+export let ProfileSeizedReleaseName = b"__prof_seized_release"
+export let ProfileSeizedKillName = b"__prof_seized_kill"
+
+let SeizedScratchBytes = 16
+let SeizedIndexSlot = 0 as SpillSlot
+let SeizedStatusSlot = 1 as SpillSlot
+
+let SeizedKillThreadText = b"sampler: thread "
+let SeizedKillProcessText = b" of process "
+let SeizedKillBudgetText = b" could not be detached within "
+let SeizedKillEndText = b" ms, so the process was killed rather than left stopped\n"
+let SeizedKillLineBytes = 192
+let SeizedKillLineSlot = 0 as SpillSlot
+let SeizedKillWordBytes = 8
+let SeizedKillByteBits = 8
+let SeizedKilled = 1
+
+export function installPtraceHostRuntime(module StdModule, layout HostContextLayout)
+	buildSeizedOpen(module, layout: layout)
+	buildSeizedRelease(module, layout: layout)
+	buildSeizedKill(module, layout: layout)
+end 'installPtraceHostRuntime'
+
+// The caller surrenders its machine pin to the table, so a table that cannot be mapped unpins it here.
+function buildSeizedOpen(module StdModule, layout HostContextLayout)
+	var func = IrFunction.createFromStd(ProfileSeizedOpenName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var mapped = module.addBlock(func, label: b"szmapped", heat: BlockHeat.normal)
+	var refused = module.addBlock(func, label: b"szrefused", heat: BlockHeat.normal)
+	var refusedUnpin = module.addBlock(func, label: b"szrefusedunpin", heat: BlockHeat.normal)
+	var refusedDone = module.addBlock(func, label: b"szrefuseddone", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 2)
+	let pid = 0
+	let pinToken = 1
+
+	let bytes = emitConst(module, block: entry, value: layout.seizedTableBytes, ids: ids)
+	let base = ids.mint()
+	module.appendOp(entry, op: StdOp.osAllocPages(base, sizeId: bytes))
+	emitBranchOnCompare(module, block: entry, value: base, pred: StdCmpPred.eq, against: 0, whenTrue: refused, whenFalse: mapped, ids: ids)
+
+	emitStoreField(module, block: mapped, record: base, offset: layout.seizedPidOffset as ByteOffset, value: pid)
+	emitStoreField(module, block: mapped, record: base, offset: layout.seizedCountOffset as ByteOffset, value: emitConst(module, block: mapped, value: 0, ids: ids))
+	emitStoreField(module, block: mapped, record: base, offset: layout.seizedPinOffset as ByteOffset, value: pinToken)
+	module.setTerminator(mapped, op: StdOp.ret(base))
+
+	emitBranchOnCompare(module, block: refused, value: pinToken, pred: StdCmpPred.ne, against: 0, whenTrue: refusedUnpin, whenFalse: refusedDone, ids: ids)
+
+	module.appendOp(refusedUnpin, op: StdOp.call(ids.mint(), callee: GtUnpinOwnerName, args: argsOf(pinToken)))
+	module.setTerminator(refusedUnpin, op: StdOp.branch(refusedDone.id))
+
+	emitConstReturn(module, block: refusedDone, value: 0, ids: ids)
+
+	module.functions.push(func)
+end 'buildSeizedOpen'
+
+// Detach every thread, then unpin, then free. The unpin comes after the detaches because `ptrace` answers
+// only the OS thread that attached: unpinned first, the green thread could move to a machine whose detach
+// the kernel refuses, leaving the tracees stopped. A detach is refused while a tracee runs, so a refused
+// one is interrupted, awaited and asked again, and a thread that still refuses has its process killed.
+function buildSeizedRelease(module StdModule, layout HostContextLayout)
+	var func = IrFunction.createFromStd(ProfileSeizedReleaseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var next = module.addBlock(func, label: b"szhead", heat: BlockHeat.normal)
+	var more = module.addBlock(func, label: b"szmore", heat: BlockHeat.normal)
+	var step = module.addBlock(func, label: b"szstep", heat: BlockHeat.normal)
+	var stop = module.addBlock(func, label: b"szstop", heat: BlockHeat.normal)
+	var probe = module.addBlock(func, label: b"szprobe", heat: BlockHeat.normal)
+	var kill = module.addBlock(func, label: b"szkill", heat: BlockHeat.normal)
+	var unpin = module.addBlock(func, label: b"szunpin", heat: BlockHeat.normal)
+	var unpinCall = module.addBlock(func, label: b"szunpincall", heat: BlockHeat.normal)
+	var free = module.addBlock(func, label: b"szfree", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let base = 0
+
+	func.stackSize = SeizedScratchBytes
+	let indexPtr = ids.mint()
+	module.appendOp(entry, op: StdOp.stackRecordAddr(indexPtr, slot: SeizedIndexSlot))
+	let statusPtr = ids.mint()
+	module.appendOp(entry, op: StdOp.stackRecordAddr(statusPtr, slot: SeizedStatusSlot))
+
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let bytes = emitConst(module, block: entry, value: layout.seizedTableBytes, ids: ids)
+	let seizedCount = emitLoadField(module, block: entry, record: base, offset: layout.seizedCountOffset as ByteOffset, ids: ids)
+	emitStoreField(module, block: entry, record: indexPtr, offset: 0, value: seizedCount)
+	module.setTerminator(entry, op: StdOp.branch(next.id))
+
+	let killed = emitLoadField(module, block: next, record: base, offset: layout.seizedKilledOffset as ByteOffset, ids: ids)
+	emitBranchOnCompare(module, block: next, value: killed, pred: StdCmpPred.ne, against: 0, whenTrue: unpin, whenFalse: more, ids: ids)
+
+	let remaining = emitLoadField(module, block: more, record: indexPtr, offset: 0, ids: ids)
+	emitBranchOnCompare(module, block: more, value: remaining, pred: StdCmpPred.eq, against: 0, whenTrue: unpin, whenFalse: step, ids: ids)
+
+	let lastIndex = emitBin(module, block: step, a: remaining, b: emitConst(module, block: step, value: 1, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	emitStoreField(module, block: step, record: indexPtr, offset: 0, value: lastIndex)
+	let slotOffset = emitBin(module, block: step, a: lastIndex, b: emitConst(module, block: step, value: layout.seizedWordBytes, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
+	let threadsStart = emitBin(module, block: step, a: base, b: emitConst(module, block: step, value: layout.seizedThreadsOffset, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let slotAddress = emitBin(module, block: step, a: threadsStart, b: slotOffset, opcode: StdBinOpcode.add, ids: ids)
+	let thread = emitLoadField(module, block: step, record: slotAddress, offset: 0, ids: ids)
+	let pid = emitLoadField(module, block: step, record: base, offset: layout.seizedPidOffset as ByteOffset, ids: ids)
+	let detachRequest = emitConst(module, block: step, value: layout.ptraceDetach, ids: ids)
+	let detached = emitHostSample(module, block: step, service: HostProcessCall.traceRequest, a0: detachRequest, a1: thread, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
+	emitBranchOnCompare(module, block: step, value: detached, pred: StdCmpPred.ne, against: 0, whenTrue: next, whenFalse: stop, ids: ids)
+
+	let interruptRequest = emitConst(module, block: stop, value: layout.ptraceInterrupt, ids: ids)
+	_ = emitHostSample(module, block: stop, service: HostProcessCall.traceRequest, a0: interruptRequest, a1: thread, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
+	emitStoreField(module, block: stop, record: statusPtr, offset: 0, value: zero)
+	let budget = emitConst(module, block: stop, value: layout.traceStopBudgetMillis, ids: ids)
+	_ = emitHostSample(module, block: stop, service: HostProcessCall.awaitTracee, a0: statusPtr, a1: budget, a2: thread, a3: zero, a4: zero, a5: zero, ids: ids)
+	let detachedAfterStopping = emitHostSample(module, block: stop, service: HostProcessCall.traceRequest, a0: detachRequest, a1: thread, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
+	emitBranchOnCompare(module, block: stop, value: detachedAfterStopping, pred: StdCmpPred.ne, against: 0, whenTrue: next, whenFalse: probe, ids: ids)
+
+	let stillThere = emitHostSample(module, block: probe, service: HostProcessCall.threadGroupSignal, a0: pid, a1: thread, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
+	emitBranchOnCompare(module, block: probe, value: stillThere, pred: StdCmpPred.ne, against: 0, whenTrue: kill, whenFalse: next, ids: ids)
+
+	module.appendOp(kill, op: StdOp.call(ids.mint(), callee: ProfileSeizedKillName, args: twoArgs(base, second: thread)))
+	module.setTerminator(kill, op: StdOp.branch(next.id))
+
+	let pinToken = emitLoadField(module, block: unpin, record: base, offset: layout.seizedPinOffset as ByteOffset, ids: ids)
+	emitBranchOnCompare(module, block: unpin, value: pinToken, pred: StdCmpPred.ne, against: 0, whenTrue: unpinCall, whenFalse: free, ids: ids)
+
+	module.appendOp(unpinCall, op: StdOp.call(ids.mint(), callee: GtUnpinOwnerName, args: argsOf(pinToken)))
+	module.setTerminator(unpinCall, op: StdOp.branch(free.id))
+
+	module.appendOp(free, op: StdOp.osFreePages(base, sizeId: bytes))
+	module.setTerminator(free, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildSeizedRelease'
+
+// Once per table: after the first kill every thread it still holds belongs to a dead process, so the
+// stderr line names the first thread alone. Its wording is pinned by `specs/debuggee-sampler.md`.
+function buildSeizedKill(module StdModule, layout HostContextLayout)
+	var func = IrFunction.createFromStd(ProfileSeizedKillName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), needsGreenThreadStackGuard: true)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var first = module.addBlock(func, label: b"szkfirst", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"szkdone", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 2)
+	let base = 0
+	let thread = 1
+
+	func.stackSize = SeizedKillLineBytes
+	let killed = emitLoadField(module, block: entry, record: base, offset: layout.seizedKilledOffset as ByteOffset, ids: ids)
+	emitBranchOnCompare(module, block: entry, value: killed, pred: StdCmpPred.ne, against: 0, whenTrue: done, whenFalse: first, ids: ids)
+
+	emitStoreField(module, block: first, record: base, offset: layout.seizedKilledOffset as ByteOffset, value: emitConst(module, block: first, value: SeizedKilled, ids: ids))
+	let pid = emitLoadField(module, block: first, record: base, offset: layout.seizedPidOffset as ByteOffset, ids: ids)
+
+	let line = ids.mint()
+	module.appendOp(first, op: StdOp.stackRecordAddr(line, slot: SeizedKillLineSlot))
+	var cursor = line
+	cursor = emitSeizedKillText(module, block: first, ids: ids, cursor: cursor, text: SeizedKillThreadText)
+	cursor = emitSeizedKillNumber(module, block: first, ids: ids, cursor: cursor, value: thread)
+	cursor = emitSeizedKillText(module, block: first, ids: ids, cursor: cursor, text: SeizedKillProcessText)
+	cursor = emitSeizedKillNumber(module, block: first, ids: ids, cursor: cursor, value: pid)
+	cursor = emitSeizedKillText(module, block: first, ids: ids, cursor: cursor, text: SeizedKillBudgetText)
+	cursor = emitSeizedKillNumber(module, block: first, ids: ids, cursor: cursor, value: emitConst(module, block: first, value: layout.traceStopBudgetMillis, ids: ids))
+	cursor = emitSeizedKillText(module, block: first, ids: ids, cursor: cursor, text: SeizedKillEndText)
+	let length = emitBin(module, block: first, a: cursor, b: line, opcode: StdBinOpcode.sub, ids: ids)
+	module.appendOp(first, op: StdOp.osWriteStderr(ids.mint(), bufId: line, lenId: length))
+
+	let zero = emitConst(module, block: first, value: 0, ids: ids)
+	let killSignal = emitConst(module, block: first, value: layout.traceKillSignal, ids: ids)
+	_ = emitHostSample(module, block: first, service: HostProcessCall.processSignal, a0: pid, a1: killSignal, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
+	module.setTerminator(first, op: StdOp.branch(done.id))
+
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildSeizedKill'
+
+function emitSeizedKillText(module StdModule, block IrBlock, ids ValueMinter, cursor ValueId, text ByteArray) returns ValueId
+	var offset = 0 as ElementIndex
+
+	while offset < text.count() 'eachWord'
+		let address = emitBin(module, block: block, a: cursor, b: emitConst(module, block: block, value: offset as FullRangeInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+		emitStoreField(module, block: block, record: address, offset: 0, value: emitConst(module, block: block, value: seizedKillWordOf(text, at: offset), ids: ids))
+		offset = offset + SeizedKillWordBytes
+	end 'eachWord'
+
+	return emitBin(module, block: block, a: cursor, b: emitConst(module, block: block, value: text.count() as FullRangeInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+end 'emitSeizedKillText'
+
+function seizedKillWordOf(text ByteArray, at ElementIndex) returns FullRangeInt
+	var word = 0 as FullRangeInt
+
+	for position in 0 upto SeizedKillWordBytes 'eachByte'
+		let byte = try text.get(at + position) otherwise 0
+
+		word = word or ((byte as FullRangeInt) shl ((position as FullRangeInt) * SeizedKillByteBits))
+	end 'eachByte'
+
+	return word
+end 'seizedKillWordOf'
+
+function emitSeizedKillNumber(module StdModule, block IrBlock, ids ValueMinter, cursor ValueId, value ValueId) returns ValueId
+	let written = ids.mint()
+	module.appendOp(block, op: StdOp.call(written, callee: IntToStringName, args: twoArgs(value, second: cursor)))
+
+	return emitBin(module, block: block, a: cursor, b: written, opcode: StdBinOpcode.add, ids: ids)
+end 'emitSeizedKillNumber'

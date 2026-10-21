@@ -1,0 +1,24 @@
+test 'the program the profiler launches runs from a copy beside the original and sees the original directory around it'
+	let staged = buildSelfCopyProgram("profile-launches-a-copy-beside-the-original")
+	let launched = profileSelfCopyProgram(staged)
+
+	Expect.equal(launched.run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb}` did not complete a measurement. It printed:{LineFeed}{launched.run.stdout}{LineFeed}— and wrote to stderr: {launched.run.stderr}")
+
+	let seenExecutable = try FilePath.from(factOf(launched.facts, key: "executable")) otherwise panic("profile tests: the gate could not run — the program reported an executable path that is not spellable.")
+	let seenArgv0 = factOf(launched.facts, key: "argv0")
+	let seenDirectory = try seenExecutable.parent() otherwise panic("profile tests: the gate could not run — the reported executable has no directory.")
+
+	Expect.equal(factOf(launched.facts, key: "neighbour"), expected: "true", message: "the program looked for {NeighbourFileName} beside its own executable and did not find it. A program that reads its own directory must see the directory of the original. It reported {seenExecutable.toString()}.")
+	Expect.equal(seenDirectory.toString(), expected: staged.anchoredAt(Directory.currentPath()).toString(), message: "the program's executable sits in {seenDirectory.toString()}, not in the original's directory {staged.toString()}.")
+	Expect.equal(seenArgv0, expected: seenExecutable.toString(), message: "the program's argv[0] is {seenArgv0}, not the path of the executable it runs from, {seenExecutable.toString()}.")
+
+	#if os(Macos)
+		Expect.notEqual(seenExecutable.filename(), expected: launched.executable.filename(), message: "on macOS the program ran from the original, {launched.executable.toString()}, which carries no entitlement, so the profiler could not have had its task port.")
+		Expect.isTrue(seenExecutable.filename().startsWith(launched.executable.filename()), message: "the copy {seenExecutable.filename()} is not named after the original {launched.executable.filename()}.")
+		Expect.isTrue(seenExecutable.filename().endsWith(AttachedCopySuffix), message: "the copy {seenExecutable.filename()} does not end in {AttachedCopySuffix}.")
+	#else
+		Expect.equal(seenExecutable.filename(), expected: launched.executable.filename(), message: "off macOS the program runs from the original, but it ran from {seenExecutable.toString()}.")
+	#endif
+
+	Expect.isTrue(attachedCopiesIn(staged).isEmpty(), message: "the profiler left an attachable copy behind in {staged.toString()} after the run ended: {listedLines(attachedCopiesIn(staged))}")
+end 'the program the profiler launches runs from a copy beside the original and sees the original directory around it'

@@ -156,7 +156,7 @@ at the call site, rather than failing at run time:
 | Refused on `wasm32-wasi` | Error |
 |--------------------------|-------|
 | `File`, `Directory`, `Console`, `CommandLine` | E3104 |
-| `Clock`, `WallClock`, `sleep`, every `Scheduler` member but `parallelBoundary` | E3104 |
+| `Clock`, `WallClock`, `sleep`, `MachinePin`, every `Scheduler` member but `parallelBoundary` | E3104 |
 | `Log`, `Logger`, `LogSink` and the log handlers: logging runs on services, which need green threads | E3104 |
 | `TcpClient`, `TcpListener`, `HttpClient`, `HttpServer` | E3104 |
 | `Process.executablePath`, `SharedSegment` | E3104 |
@@ -193,8 +193,8 @@ The raw surface the library is written against belongs to the library tier: a so
 - `.managed`, `__ManagedMemory` and `__ManagedMemoryCursor`;
 - `String.cstr()` and `cstring`;
 - `Promise.inner`;
-- the raw handle types `__ManagedFile`, `__ManagedDirectory`, `__ManagedSocket`, `__ManagedPages` and
-  `__ManagedHandle`.
+- the raw handle types `__ManagedFile`, `__ManagedDirectory`, `__ManagedSocket`, `__ManagedPages`,
+  `__ManagedHandle` and `__ManagedPin`.
 
 A program reaches the same facilities through the library:
 
@@ -203,7 +203,7 @@ A program reaches the same facilities through the library:
 | The allocator's counters, levels, census and scavenger | [HeapStats](/docs/stdlib/runtime/#heapstats) |
 | The machine's uptime, a thread's CPU time | `Clock.osTickMs()`, `Clock.threadCpuTicks()` |
 | This process's id, namespace and priority; another process's liveness | `Process.id()`, `Process.namespace()`, `Process.enterBackgroundPriority()`, `Process.isAlive(pid)` |
-| Logical CPUs, scheduler counters, stack size, pinning | `Scheduler.machineCpuCount()`, `Scheduler.counters()`, `Scheduler.currentStackBytes()`, `Scheduler.pinToMachine()` |
+| Logical CPUs, scheduler counters, stack size, pinning | `Scheduler.machineCpuCount()`, `Scheduler.counters()`, `Scheduler.currentStackBytes()`, `Scheduler.pinToMachine()`, [`MachinePin`](/docs/stdlib/runtime/#machinepin) |
 | A float's IEEE 754 bits | `Math.bitsOf(x)`, `Math.fromBits(bits)` |
 | Terminal colour, raw standard input | `Console.stdoutWantsColor()`, `Console.stdin().readBytes(n)` |
 | Whether a promise has finished; the first of several | `p.isComplete()`, `promises.awaitAny()` |

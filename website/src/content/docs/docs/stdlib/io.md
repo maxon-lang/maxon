@@ -1024,6 +1024,15 @@ The `CONTEXT` accessors throw `outOfBounds` for a block of any other size.
 | `setRegisters(thread DebuggeeThreadId, block RegisterBlock)` | — | `DebuggeeError.unwritable` | Set them from a block of that size. |
 | `vectorRegisters(thread DebuggeeThreadId)` | `RegisterBlock` | `DebuggeeError.unreadable` | The thread's floating-point and vector registers. |
 
+Three public constants name where the general-register block keeps the registers a frame walk starts from,
+as byte offsets for the architecture the program is built for:
+
+| Constant | arm64 | x64 |
+|----------|-------|-----|
+| `TraceFramePointerOffset` | 232 (`x29`) | 32 (`rbp`) |
+| `TraceStackPointerOffset` | 248 (`sp`) | 152 (`rsp`) |
+| `TraceProgramCounterOffset` | 256 (`pc`) | 128 (`rip`) |
+
 | `TraceReport` case | Meaning |
 |--------------------|---------|
 | `nothing` | The budget passed with the debuggee silent. |
@@ -1046,55 +1055,72 @@ The `CONTEXT` accessors throw `outOfBounds` for a block of any other size.
 
 ## Sampler
 
-A sampling profiler's view of another process, on `x64-windows`. `SampledProcess` suspends a thread
+A sampling profiler's view of another process, on every native target. `SampledProcess` stops a thread
 briefly, copies its registers and the top of its stack, and lets it run on; `SampleTimer` paces the samples.
+A thread is stopped through its thread handle on `x64-windows`, its Mach thread port on `arm64-macos`, and
+`ptrace` on `arm64-linux` and `x64-linux`.
 
 | `SampledProcess` member | Returns | Throws | Description |
 |-------------------------|---------|--------|-------------|
-| `SampledProcess.open(pid Pid)` | `SampledProcess` | `SamplerError.noSuchProcess`, `.noScratch` | Open process `pid` for sampling and reserve its scratch regions. |
+| `SampledProcess.open(pid Pid)` | `SampledProcess` | `SamplerError.noSuchProcess`, `.noScratch`, `.accessDenied`, `.threadNotPinned` | Open process `pid` for sampling and reserve its scratch regions. `accessDenied`: macOS refused the process's task port, or Linux refused to trace it. `threadNotPinned`: on Linux the calling green thread could not be pinned to its machine, which `ptrace` needs because it answers only the OS thread that attached. On Linux, a main thread in uninterruptible sleep is waited on for up to 10 seconds and then taken as traceable. |
+| `SampledProcess.cyclesAreNanoseconds()` | `bool` | — | True on macOS and Linux, where `cycles` and `suspendedCycles` are CPU nanoseconds; false on Windows, where they are the thread's cycle counter. |
+| `SampledProcess.foreignCodeKeepsTheFrameChain()` | `bool` | — | True on macOS and Linux, where a frame-pointer walk may continue through code outside the sampled program; false on Windows. |
 | `threads()` | `SampledThreadArray` | — | Open every thread the process has now. Each stays open until `release` or `close`. |
 | `release(thread SampledThread)` | — | — | Close one thread this sampler opened. |
-| `cycles(thread SampledThread)` | `SampleCycles` | `SamplerError.unknownThread` | CPU cycles the thread has consumed. |
-| `capture(thread SampledThread)` | `SampleCapture` | `SamplerError.unknownThread`, `.callingThread` | Sample one thread. `callingThread` refuses the thread making the call, which would suspend itself. |
-| `modules()` | `SampledModuleArray` | `SamplerError.moduleListUnavailable` | Every module loaded in the process, retried while the OS's module snapshot is unavailable. |
-| `close()` | — | — | Close every open thread, the process and the scratch regions. |
+| `cycles(thread SampledThread)` | `SampleCycles` | `SamplerError.unknownThread` | CPU time the thread has consumed, in the unit `cyclesAreNanoseconds()` names. On macOS and Linux a running thread is stopped to read it, and the next `capture` of that thread answers from the same stop. |
+| `capture(thread SampledThread)` | `SampleCapture` | `SamplerError.unknownThread`, `.callingThread` | Sample one thread. `unknownThread` refuses a thread `threads()` did not hand out or `release` let go; `callingThread` refuses the thread making the call, which would stop itself. On Linux a thread in uninterruptible sleep answers `unreadable`. |
+| `modules()` | `SampledModuleArray` | `SamplerError.moduleListUnavailable` | Every module loaded in the process: the module snapshot on Windows and the dyld image list on macOS, each retried while the OS cannot answer yet. On Linux, whose images are static, an empty array while the process lives. |
+| `close()` | — | — | Close every open thread, the process and the scratch regions. On Linux it detaches every thread it stopped, then unpins the calling green thread; call it on the green thread that opened the sampler. |
 | `clone()` | — | — | Panics: a sampler owns one process's handles, so it is held in one place. |
+
+On Linux a thread that cannot be detached within 10 seconds has its process killed rather than left
+stopped, and stderr carries one line per process:
+`sampler: thread <tid> of process <pid> could not be detached within 10000 ms, so the process was killed rather than left stopped`.
 
 | `SampleCapture` case | Meaning |
 |----------------------|---------|
 | `threadGone` | The thread exited. |
-| `unreadable(allocationBase, suspendedCycles)` | The thread was suspended, and its registers were unreadable. |
+| `unreadable(reservation, suspendedCycles)` | The thread was stopped, and its registers were unreadable. |
 | `captured(stack)` | A `SampledStack`. |
 
-A `SampledStack` has `programCounter`, `framePointer` and `stackPointer`; `allocationBase`, the base of the
-stack's reservation; `suspendedCycles`, the thread's cycle count read while it was suspended; and `window`,
-a `StackWindow` holding up to 64 KiB copied from the thread's stack. A `StackWindow` stays readable until the
+A `SampledStack` has `programCounter`, `framePointer` and `stackPointer`; `reservation`, a
+`StackReservation`; `suspendedCycles`, the thread's CPU time read while it was stopped; and `window`, a
+`StackWindow` holding up to 64 KiB copied from the thread's stack. A `StackWindow` stays readable until the
 sampler's next `capture`: `byteCount()` is the bytes copied, 0 once a later capture has replaced them, and
 `word(offset StackWindowOffset)` is the word `offset` bytes in, throwing `SamplerError.outOfWindow` outside the
 copy or after a later capture.
 
-`SampledThread` has a public `id` (`SampledThreadId`). `SampledModule` has `base`, `limit` and `name`, with
-each UTF-16 unit above ASCII in the name read as `?`.
+| `StackReservation` case | Meaning |
+|-------------------------|---------|
+| `base(address)` | The base of the reservation the stack lives in, unique to each live stack. Windows reports it. |
+| `unreported` | The reservation is unknown, as on macOS and Linux. |
+
+`SampledThread` has a public `id` (`SampledThreadId`). `SampledModule` has `base`, `limit`, `name` and
+`fileType`. On Windows each UTF-16 unit above ASCII in the name reads as `?`, and `fileType` is 0; on macOS
+the name is the last component of the image's path and `fileType` is its Mach-O header's file type (2 for
+the executable).
 
 | `SampleTimer` member | Returns | Throws | Description |
 |----------------------|---------|--------|-------------|
-| `SampleTimer.create(interval SampleIntervalNanos)` | `SampleTimer` | `SamplerError.noTimer` | A periodic timer, rounded to 100 ns steps. |
-| `wait()` | — | — | Sleep until the next tick: each deadline is the previous one plus the interval, so the samples keep their rate. Panics after `close()`. |
+| `SampleTimer.create(interval SampleIntervalNanos)` | `SampleTimer` | — | A periodic timer. On Windows its steps are rounded to 100 ns; elsewhere each wait sleeps to its deadline, rounded up to a microsecond. |
+| `ready()` | `bool` | — | True when the host gave the timer `create` asked for; on Windows a refused timer reads false. |
+| `wait()` | — | — | Sleep until the next tick: each deadline is the previous one plus the interval, so the samples keep their rate. Panics after `close()`, and on a timer that is not `ready()`. |
 | `close()` | — | — | Release the timer. |
 
 ```maxon
 enum SamplerError implements Error
 	noSuchProcess
 	noScratch
-	noTimer
 	unknownThread
 	outOfWindow
 	moduleListUnavailable
 	callingThread
+	accessDenied
+	threadNotPinned
 end 'SamplerError'
 ```
 
 `SampleCycles`, `SampledThreadId` are `int(0 to u64.max)`; `SampleIntervalNanos` is `int(1 to u64.max)`;
 `StackWindowOffset` is `int(0 to i64.max)`; `SampledThreadArray` and `SampledModuleArray` are arrays of
-`SampledThread` and `SampledModule`. The module is declared under `#if os(Windows) and arch(x64)`, so its
-names exist on `x64-windows` alone.
+`SampledThread` and `SampledModule`. The module is declared under `#if not os(Wasi)`, so its names exist on
+every native target.

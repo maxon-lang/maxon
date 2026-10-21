@@ -147,10 +147,10 @@ let OptionPrefix = "-"
 // after `=`, and the description column starts after a gap of two spaces or more.
 let LabelAlternativeSeparator = ", "
 
-// Declared in both arms because its reader outside this file is itself x64-windows-only: exported
-// everywhere, it is an export with nothing to reference it on the other lanes, and E3092 refuses the
-// whole corpus there.
-#if os(Windows) and arch(x64)
+// Declared in both arms because its reader outside this file is itself gated out on wasm32-wasi: exported
+// everywhere, it is an export with nothing to reference it on that lane, and E3092 refuses the whole
+// corpus there.
+#if not os(Wasi)
 	export let OptionValueSeparator = "="
 #else
 	let OptionValueSeparator = "="
@@ -732,7 +732,7 @@ end 'optionSpellingsIn'
 
 // Exported only where its outside reader is compiled, for `OptionValueSeparator`'s reason. The body is
 // one text, spelled once: `optionSpellingOf` below calls it on every lane.
-#if os(Windows) and arch(x64)
+#if not os(Wasi)
 	export function optionSpellingOf(alternative String) returns String
 		return spellingOfAlternative(alternative)
 	end 'optionSpellingOf'

@@ -314,6 +314,8 @@ union EngineWalk
 end 'EngineWalk'
 
 export type DebugEngine implements DebugMemory
+	var pin as MachinePin
+	var launched as AttachableImage
 	var backend as DebugBackend
 	var target as DebugTarget
 	var contract as DebugRuntimeContract
@@ -346,14 +348,16 @@ export type DebugEngine implements DebugMemory
 	export static function start(program FilePath, reader MxdbgReader, textBytes DebugAddress, arguments StringArray, workingDirectory FilePath, targetEnv EnvMap, routing ChildOutputRouting, stopTimeoutMs StopTimeoutMs, traced bool) returns EngineStart
 		requireEngineBoundsMatchTheBackend()
 
-		if not Scheduler.pinToMachine() 'noPin'
+		var pin = MachinePin.acquire()
+
+		if not pin.held() 'noPin'
 			return EngineStart.refused("this driver could not pin its own green thread to the machine the debug interface answers on")
 		end 'noPin'
 
 		var backend = backendFor(targetToString(detectHostTarget()))
 
 		if not backend.holdsItsScratch() 'noScratch'
-			return refusedBeforeLaunch(BackendScratchRefusal)
+			return refusedBeforeLaunch(BackendScratchRefusal, pin: pin)
 		end 'noScratch'
 
 		var environment = EnvMap.create()
@@ -361,6 +365,10 @@ export type DebugEngine implements DebugMemory
 		for (name, value) in targetEnv 'eachVariable'
 			environment.upsert(name, value: value)
 		end 'eachVariable'
+
+		let launched = try attachableImageOf(program) otherwise (e) 'unattachable'
+			return refusedUnattachable(e.displayReason(), backend: backend, pin: pin)
+		end 'unattachable'
 
 		var trace = openedTraceRing(program, traced: traced)
 
@@ -370,10 +378,11 @@ export type DebugEngine implements DebugMemory
 			ring(collector) then environment.upsert(DsActivationEnvVar, value: collector.segmentName())
 		end 'ring'
 
-		var target = try DebugTarget.launchTraced(program, arguments: arguments, workingDirectory: workingDirectory, environment: environment, routing: routing) otherwise (e) 'noChild'
+		var target = try DebugTarget.launchTraced(launched.launchPath, arguments: arguments, workingDirectory: workingDirectory, environment: environment, routing: routing) otherwise (e) 'noChild'
 			backend.close()
 			closeTraceRing(trace)
-			Scheduler.unpinFromMachine()
+			launched.release()
+			pin.release()
 
 			return EngineStart.refused("could not launch the program ({e.displayReason()})")
 		end 'noChild'
@@ -381,12 +390,12 @@ export type DebugEngine implements DebugMemory
 		var placement = BackendImagePlacement.asLinked
 
 		match backend.adoptLaunchedProgram(target.processId()) 'adopted'
-			refused(reason) then return refusedAfterLaunch(reason, backend: backend, target: target, trace: trace)
+			refused(reason) then return refusedAfterLaunch(reason, backend: backend, target: target, trace: trace, launched: launched, pin: pin)
 			ready(placed) then placement = placed
 		end 'adopted'
 
 		var contract = DebugRuntimeContract.readFrom(reader, textBytes: textBytes, placement: placement)
-		var engine = Self{backend: backend, target: target, contract: contract, stopTimeoutMs: stopTimeoutMs, lastStopSeq: 0, breakpoints: EngineBreakpointArray.create(), returnPoints: EngineReturnPointArray.create(), textBase: contract.textBase(), textSize: contract.textSize(), cacheBase: 0, cacheBytes: ByteArray.create(), cacheFilled: false, trace: trace, routing: routing, registers: DebugRegisterFile.create(), stopThread: 0, stopped: false, answeredUnder: 0, liftedTraps: EngineLiftedTrapArray.create(), detached: false, closed: false, holdArmed: false, lastReason: 0, lastFault: 0, lastPc: 0, lastConditionMissed: false, pausePending: false, readerStep: EngineReaderStep.none}
+		var engine = Self{pin: pin, launched: launched, backend: backend, target: target, contract: contract, stopTimeoutMs: stopTimeoutMs, lastStopSeq: 0, breakpoints: EngineBreakpointArray.create(), returnPoints: EngineReturnPointArray.create(), textBase: contract.textBase(), textSize: contract.textSize(), cacheBase: 0, cacheBytes: ByteArray.create(), cacheFilled: false, trace: trace, routing: routing, registers: DebugRegisterFile.create(), stopThread: 0, stopped: false, answeredUnder: 0, liftedTraps: EngineLiftedTrapArray.create(), detached: false, closed: false, holdArmed: false, lastReason: 0, lastFault: 0, lastPc: 0, lastConditionMissed: false, pausePending: false, readerStep: EngineReaderStep.none}
 
 		return engine.awaitEntryStop()
 	end 'start'
@@ -483,7 +492,8 @@ export type DebugEngine implements DebugMemory
 		var outcome = self.target.settle(how)
 		self.target.pump()
 		closeTraceRing(self.trace)
-		Scheduler.unpinFromMachine()
+		self.launched.release()
+		self.pin.release()
 
 		return outcome
 	end 'closedWith'
@@ -1862,15 +1872,21 @@ export type DebugEngine implements DebugMemory
 	end 'liftEveryHold'
 end 'DebugEngine'
 
-function refusedBeforeLaunch(reason String) returns EngineStart
-	Scheduler.unpinFromMachine()
+function refusedBeforeLaunch(reason String, pin MachinePin) returns EngineStart
+	pin.release()
 
 	return EngineStart.refused(reason)
 end 'refusedBeforeLaunch'
 
+function refusedUnattachable(reason String, backend DebugBackend, pin MachinePin) returns EngineStart
+	backend.close()
+
+	return refusedBeforeLaunch("the program cannot be debugged: {reason}", pin: pin)
+end 'refusedUnattachable'
+
 // The program exists by the time a backend can be refused, so it is ended before the refusal is
 // reported, in `closedWith`'s order.
-function refusedAfterLaunch(reason String, backend DebugBackend, target DebugTarget, trace DebugTraceState) returns EngineStart
+function refusedAfterLaunch(reason String, backend DebugBackend, target DebugTarget, trace DebugTraceState, launched AttachableImage, pin MachinePin) returns EngineStart
 	if backend.endsTheProgramItself() 'theBackendEndsTheProgramItself'
 		_ = backend.killTheProgram()
 	end 'theBackendEndsTheProgramItself'
@@ -1878,8 +1894,9 @@ function refusedAfterLaunch(reason String, backend DebugBackend, target DebugTar
 	backend.close()
 	_ = target.settle(TargetSettling.reaped)
 	closeTraceRing(trace)
+	launched.release()
 
-	return refusedBeforeLaunch(reason)
+	return refusedBeforeLaunch(reason, pin: pin)
 end 'refusedAfterLaunch'
 
 function wordIn(record ByteArray, at DebugAddress) returns DebugAddress

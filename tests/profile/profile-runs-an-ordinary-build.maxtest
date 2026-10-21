@@ -1,0 +1,11 @@
+test 'the profiler measures an ordinary build with no flag and no rebuild'
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "profile-runs-an-ordinary-build", fixture: HotWarmFixtureName)
+	let executable = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: HotWarmFixtureName)
+
+	Expect.isFalse(namesGetTaskAllow(executable), message: "the program {executable.toString()} was built by an ordinary `maxon build` and already names {GetTaskAllowEntitlement}, so this case would not show that the profiler signs a copy.")
+
+	let run = runProfiler(staged, extraArguments: StringArray.create())
+
+	Expect.equal(run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb}` did not complete a measurement of an ordinary build. It printed:{LineFeed}{run.stdout}{LineFeed}— and wrote to stderr: {run.stderr}")
+	Expect.isTrue(reportHasLine(outputLines(run.stdout), wanted: HotFunctionsHeader), message: "the report of an ordinary build carries no '{HotFunctionsHeader}' section. It printed:{LineFeed}{run.stdout}")
+end 'the profiler measures an ordinary build with no flag and no rebuild'

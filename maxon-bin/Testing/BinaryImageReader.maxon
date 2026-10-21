@@ -1,5 +1,6 @@
-// Testing/BinaryImageReader.maxon — the little-endian scalar reads the spec suite's THREE
-// executable-format readers share (`PeSectionReader`, `MachoSectionReader`, `ElfSectionReader`).
+// Testing/BinaryImageReader.maxon — the scalar reads the spec suite's THREE executable-format readers
+// share (`PeSectionReader`, `MachoSectionReader`, `ElfSectionReader`), and that the Mach-O writer's re-sign
+// shares through `MachoSectionReader`.
 //
 // ⭐ WHAT IS SHARED HERE, AND WHAT DELIBERATELY IS NOT.
 //
@@ -8,7 +9,8 @@
 // very code that encoded it could only ever prove the writer agrees with itself. That independence
 // is a property of the FORMAT knowledge — the field offsets, the header walk, the size rule (PE's
 // virtual-vs-raw `min`, Mach-O's direct file offset, ELF's section header table). None of that
-// lives here, none of it is shared between the readers, and none of it is shared with any writer.
+// lives here, none of it is shared between the readers, and none of it is shared with what any writer encodes.
+// The Mach-O writer's re-sign only READS an existing image, through `MachoSectionReader`.
 //
 // "Byte `n+1` of a little-endian word is the high half" is not format knowledge. It is arithmetic,
 // and this file is its one copy: `imageReadU16`/`imageReadU32`/`byteAt`/`slice` for all three
@@ -32,6 +34,10 @@ end 'imageReadU16'
 export function imageReadU32(image ByteArray, at ByteOffset) returns MachineWord
 	return imageReadU16(image, at: at) or (imageReadU16(image, at: at + 2) shl 16)
 end 'imageReadU32'
+
+export function imageReadU32BigEndian(image ByteArray, at ByteOffset) returns MachineWord
+	return (imageByteAt(image, at: at) shl 24) or (imageByteAt(image, at: at + 1) shl 16) or (imageByteAt(image, at: at + 2) shl 8) or imageByteAt(image, at: at + 3)
+end 'imageReadU32BigEndian'
 
 export function imageReadU64(image ByteArray, at ByteOffset) returns MachineWord
 	return imageReadU32(image, at: at) or (imageReadU32(image, at: at + 4) shl 32)

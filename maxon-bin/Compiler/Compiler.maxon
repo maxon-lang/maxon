@@ -97,8 +97,10 @@ export type CompileProduct
 
 	export let sidecar as SidecarOutcome
 
-	export static function create(outputPath FilePath, irText TargetIrText, codeBytes CodeByteCount, totalNanos DurationNanos, totalCpuTicks CpuTicks, sidecar SidecarOutcome) returns CompileProduct
-		return Self{outputPath: outputPath, irText: irText, codeBytes: codeBytes, totalNanos: totalNanos, totalCpuTicks: totalCpuTicks, sidecar: sidecar}
+	export let drivesOtherProcesses as bool
+
+	export static function create(outputPath FilePath, irText TargetIrText, codeBytes CodeByteCount, totalNanos DurationNanos, totalCpuTicks CpuTicks, sidecar SidecarOutcome, drivesOtherProcesses bool) returns CompileProduct
+		return Self{outputPath: outputPath, irText: irText, codeBytes: codeBytes, totalNanos: totalNanos, totalCpuTicks: totalCpuTicks, sidecar: sidecar, drivesOtherProcesses: drivesOtherProcesses}
 	end 'create'
 end 'CompileProduct'
 
@@ -344,7 +346,7 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	end 'metrics'
 
 	compilerLogger(CompilerLogGroup.compiler).info("Wrote {codeBytes} bytes of code to {outputPath} (compiled in {formatSeconds((total.nanos / NanosPerMs) as DurationMs)})")
-	return CompileProduct.create(outputPath, irText: irText, codeBytes: codeBytes, totalNanos: total.nanos, totalCpuTicks: total.cpuTicks, sidecar: sidecar)
+	return CompileProduct.create(outputPath, irText: irText, codeBytes: codeBytes, totalNanos: total.nanos, totalCpuTicks: total.cpuTicks, sidecar: sidecar, drivesOtherProcesses: codeResult.stdModule.usesMachTaskPorts)
 end 'compileMeasured'
 
 // For a bracket whose code logs: the flush keeps the handling of its records inside it (see
@@ -1512,6 +1514,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	pipeline.stdModule.usesProcessSampling = usage.usesProcessSampling
 
 	pipeline.stdModule.usesProcessDebug = usage.usesProcessDebug
+	pipeline.stdModule.usesMachTaskPorts = usage.usesMachTaskPorts
 
 	// ⭐ **AND ANOTHER PRODUCER OF THAT BAND**, on the same seam and for the same reason as its neighbours.
 	// `__thread_cpu_ticks` needs `QueryThreadCycleTime`, which lives at the end of kernel32's run (see
@@ -1694,7 +1697,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// already-lowered way, on its own `usesProcessSampling` bit. It sits beside the shared-memory family
 	// because both reach the host through one op apiece and neither builds anything managed; unlike every
 	// install around it, it needs none of the array or string helpers, which is why it is a leaf here too.
-	installProfileRuntime(pipeline.stdModule, usage: usage, context: project.hostContext)
+	installProfileRuntime(pipeline.stdModule, usage: usage, context: project.hostContext, target: project.target)
 
 	installDebugHostRuntime(pipeline.stdModule, usage: usage, target: project.target)
 

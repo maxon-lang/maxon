@@ -63,8 +63,6 @@ let GdbLoadAddressKey = "load_address"
 let GdbMachHeaderKey = "mach_header"
 let GdbFileTypeKey = "filetype"
 
-let MachOExecutableFileType = 2
-
 let GdbVectorRegisterPrefix = "v"
 let GdbGeneralRegisterPrefix = "x"
 let GdbFramePointerName = "fp"
@@ -1734,7 +1732,7 @@ end 'gdbExecutableLoadAddress'
 function gdbIsTheExecutable(doc JsonDoc, image JsonNodeId) returns bool
 	let header = try doc.getChild(image, key: GdbMachHeaderKey) otherwise return false
 
-	return (try doc.getInt(header, key: GdbFileTypeKey) otherwise return false) == MachOExecutableFileType
+	return isTheMachOExecutable((try doc.getInt(header, key: GdbFileTypeKey) otherwise return false) as FullRangeInt)
 end 'gdbIsTheExecutable'
 
 function gdbSlideOf(doc JsonDoc, image JsonNodeId) returns BackendAdoption
@@ -1746,7 +1744,7 @@ function gdbSlideOf(doc JsonDoc, image JsonNodeId) returns BackendAdoption
 		return BackendAdoption.refused("the debug stub reports the program's image loaded at {loaded}, which is no address")
 	end 'notAnAddress'
 
-	return BackendAdoption.ready(BackendImagePlacement.loadedAt(loaded as DebugAddress))
+	return executablePlacementOf(detectHostTarget(), loadedAt: loaded as DebugAddress)
 end 'gdbSlideOf'
 
 #if arch(arm64)

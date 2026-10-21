@@ -10,8 +10,8 @@ category: memory
 ## Documentation
 
 A `SharedSegment`, a `DebugPort` or a `SampleTimer` owns an operating-system resource: a mapping, a window of
-scratch pages, a timer handle. `close()` hands the resource back, and a method that lets the kernel fill the
-scratch pages writes them. Neither stores into a field, but both change what the value stands for, so the
+scratch pages, a timer handle on Windows. `close()` hands the resource back, and a method that lets the kernel
+fill the scratch pages writes them. Neither stores into a field, but both change what the value stands for, so the
 compiler counts them as writes of the receiver, exactly as it counts `push` on an array.
 
 A write needs a value nothing else can read at the same moment. A `let` binding, a `let` field, a registry
@@ -45,6 +45,21 @@ end 'main'
 ```
 ```maxoncstderr
 error E3159: <fragment>:5:26: cannot pass a value read out of a `SharedValue` or registry value, which is read-only, to a function that writes parameter 'self' (in main); pass a clone()
+```
+
+<!-- test: error.a-let-pin-cannot-be-released -->
+<!-- unsupported-targets: wasm32-wasi -->
+A `MachinePin` owns the binding of a green thread to its machine, and `release()` hands it back. A `let` pin is read-only, so the call that unpins is refused.
+wasm32-wasi has no green threads, so it answers `E3104` for `MachinePin` before it reaches this refusal; the case is pinned on the native lanes.
+```maxon
+function main() returns ExitCode
+	let pin = MachinePin.acquire()
+	pin.release()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:4:6: cannot pass 'pin', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
 ```
 
 <!-- test: a-var-segment-is-closed-by-its-owner -->
@@ -97,15 +112,15 @@ false
 ```
 
 <!-- test: error.a-let-sample-timer-cannot-be-closed -->
-<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+<!-- unsupported-targets: wasm32-wasi -->
 wasm32-wasi declares no SampleTimer, so the call is refused with E3004 (call to undefined function 'SampleTimer.create'), not E3104.
 
-A `SampleTimer` closes its handle, so a `let` timer refuses `close()`.
-`SampledProcess` and `SampleTimer` exist only on x64-windows, so the other lanes do not compile the program.
+A `SampleTimer`'s `close()` writes it — it marks the timer closed, and on Windows releases its timer handle — so a
+`let` timer refuses `close()`.
 
 ```maxon
 function main() returns ExitCode
-	let timer = try SampleTimer.create(1000000) otherwise return 1
+	let timer = SampleTimer.create(1000000)
 	timer.close()
 	return 0
 end 'main'

@@ -1,0 +1,14 @@
+test 'profiling a program changes neither its image nor its sidecar'
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "profile-leaves-the-profiled-image-unchanged", fixture: HotWarmFixtureName)
+	let executable = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: HotWarmFixtureName)
+	let sidecar = sidecarOf(executable)
+
+	let imageBefore = imageBytes(executable)
+	let sidecarBefore = imageBytes(sidecar)
+
+	let run = runProfiler(staged, extraArguments: StringArray.create())
+	Expect.equal(run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb}` did not complete a measurement. It printed:{LineFeed}{run.stdout}{LineFeed}— and wrote to stderr: {run.stderr}")
+
+	Expect.isTrue(imageBytes(executable).equals(imageBefore), message: "the program {executable.toString()} differs from what `maxon build` wrote after `{ProfileSubcommandName} {ProfileRunVerb}` ran it. The profiler signs a copy and leaves the original alone.")
+	Expect.isTrue(imageBytes(sidecar).equals(sidecarBefore), message: "the sidecar {sidecar.toString()} differs from what `maxon build` wrote after `{ProfileSubcommandName} {ProfileRunVerb}` read it.")
+end 'profiling a program changes neither its image nor its sidecar'

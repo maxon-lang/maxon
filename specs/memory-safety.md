@@ -656,6 +656,65 @@ end 'main'
 error E2015: <fragment>:41:12: Unsupported: `clone` on `Holder`, whose field `shape` holds a `Shape` value that may be a `Tap`, which owns an OS handle (`__ManagedSocket`) and cannot be duplicated
 ```
 
+<!-- test: error.clone-of-a-record-holding-an-interface-whose-conformer-owns-a-machine-pin-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
+### The clone is admitted only if EVERY conformer can be copied
+The conformer a field holds is not known until it runs, so the gate is the whole program's roster of
+conformers. One that cannot be duplicated refuses the clone at compile time, naming the field, the
+interface and the conformer that fails it — here `Tap`, which holds a `MachinePin`, although the only
+`Holder` the program builds holds a `Square`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Square implements Shape
+	var side as Integer
+
+	static function create(side Integer) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Integer
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+type Tap implements Shape
+	var pin as MachinePin
+
+	static function create(pin MachinePin) returns Self
+		return Self{pin: pin}
+	end 'create'
+
+	function area() returns Integer
+		return 1
+	end 'area'
+end 'Tap'
+
+type Holder
+	export var shape as Shape
+
+	static function create(shape Shape) returns Self
+		return Self{shape: shape}
+	end 'create'
+end 'Holder'
+
+function areaOfACopy(a Holder) returns ExitCode
+	let b = a.clone()
+	return b.shape.area() as ExitCode
+end 'areaOfACopy'
+
+function main() returns ExitCode
+	return areaOfACopy(Holder.create(Square.create(2)))
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:41:12: Unsupported: `clone` on `Holder`, whose field `shape` holds a `Shape` value that may be a `Tap`, which owns a machine pin (`__ManagedPin`) and cannot be duplicated
+```
+
 <!-- test: clone-of-a-record-holding-a-record-that-holds-an-interface-value-is-deep -->
 ### A nested record's interface-typed field is reached too
 The field is found at any depth: a record whose field is a record whose field is held at an interface

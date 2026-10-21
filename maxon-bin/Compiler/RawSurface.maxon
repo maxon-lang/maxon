@@ -21,33 +21,28 @@ export union RawSurfaceDoor
 	handleType(let written ByteArray)
 end 'RawSurfaceDoor'
 
-export function isRawHandleTypeName(name ByteArray) returns bool
-	return name.equals(ManagedFileTypeName) or name.equals(ManagedDirectoryTypeName) or name.equals(ManagedSocketTypeName) or name.equals(ManagedPagesTypeName) or name.equals(ManagedHandleTypeName)
-end 'isRawHandleTypeName'
-
 function rawHandleTypeMessage(written ByteArray) returns String
-	if written.equals(ManagedFileTypeName) 'aFile'
-		return rawTypeNamedMessage(String.from(written), what: "the raw OS file handle type", tail: "use 'File'")
-	end 'aFile'
-
-	if written.equals(ManagedDirectoryTypeName) 'aDirectory'
-		return rawTypeNamedMessage(String.from(written), what: "the raw OS directory handle type", tail: "use 'Directory'")
-	end 'aDirectory'
-
-	if written.equals(ManagedSocketTypeName) 'aSocket'
-		return rawTypeNamedMessage(String.from(written), what: "the raw OS socket handle type", tail: "use 'TcpClient' or 'TcpListener'")
-	end 'aSocket'
-
-	if written.equals(ManagedPagesTypeName) 'aPageReservation'
-		return rawTypeNamedMessage(String.from(written), what: "the raw page-reservation handle type", tail: NoPublicReplacement)
-	end 'aPageReservation'
-
-	if written.equals(ManagedHandleTypeName) 'anOsHandle'
-		return rawTypeNamedMessage(String.from(written), what: "the raw OS handle type", tail: NoPublicReplacement)
-	end 'anOsHandle'
-
-	panic("rawHandleTypeMessage: '{String.from(written)}' is not one of the runtime's OS handle types")
+	return match rawHandleNamed(written) 'lookup'
+		named(kind) gives rawHandleKindMessage(kind, written: written)
+		notOne panic("rawHandleTypeMessage: '{String.from(written)}' is not one of the runtime's OS handle types")
+	end 'lookup'
 end 'rawHandleTypeMessage'
+
+function rawHandleKindMessage(kind CompilerOwnedAggregate, written ByteArray) returns String
+	let name = String.from(written)
+
+	return match kind 'kind'
+		managedFile gives rawTypeNamedMessage(name, what: "the raw OS file handle type", tail: "use 'File'")
+		managedDirectory gives rawTypeNamedMessage(name, what: "the raw OS directory handle type", tail: "use 'Directory'")
+		managedSocket gives rawTypeNamedMessage(name, what: "the raw OS socket handle type", tail: "use 'TcpClient' or 'TcpListener'")
+		managedPages gives rawTypeNamedMessage(name, what: "the raw page-reservation handle type", tail: NoPublicReplacement)
+		managedHandle gives rawTypeNamedMessage(name, what: "the raw OS handle type", tail: NoPublicReplacement)
+		managedPin gives rawTypeNamedMessage(name, what: "the raw machine-pin handle type", tail: "use 'MachinePin'")
+
+		serviceHandle or
+		userDeclared panic("rawHandleKindMessage: `{kind.name}` is not a raw handle type")
+	end 'kind'
+end 'rawHandleKindMessage'
 
 export function rawSurfaceRefusalMessage(door RawSurfaceDoor) returns String
 	let buffer = String.from(ManagedMemoryTypeName)

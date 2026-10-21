@@ -387,8 +387,8 @@ uses it.
 | `--define=<name>=<value>` | Replace a top-level `String` constant's written-out default with `<value>`. Repeatable. See [Defines](#defines). |
 | `--metrics=<path>` | Write this compile's per-phase time and memory to `<path>` as TSV. Each row's first field is its kind: `phase`, `regalloc`, `total`, `unattributed`, `code`, `tag` when `--census-by-tag` is given, and `churn` when `--allocations-by-tag` is. `--log=compiler:debug` prints the same numbers as a table, and adds a residency table — what the heap was *holding* at each phase boundary, rather than what the phase asked for. The TSV's five residency columns are filled only when it or `--census-by-tag` is given; on their own they are zero. |
 
-`--debugstream`, `--async-trace` and `--coverage` are opt-in **per build**. Without the flag, none of
-that machinery is emitted.
+`--debugstream`, `--async-trace` and `--coverage` are opt-in **per build**: each adds its machinery
+only to a build that names it.
 
 A build prints the compiler's version and an early-preview warning to stdout, then
 `Compiled -> <path>` when it compiled or `Up to date -> <path>` when its output was already current (see
@@ -426,8 +426,8 @@ of the output's path. It records:
 - every source of the program, every standard-library and runtime source, and the Unicode tables the
   compiler embeds, each with its modification time — and on `wasm32-wasi`, `vendor/wasm-tools` and the
   files under `vendor/wasi-wit`;
-- the target, whether the debug-info sidecar is written, `--coverage`, `--debugstream`, `--async-trace`,
-  the product version, and every define;
+- the target, whether the debug-info sidecar is written, `--coverage`, `--debugstream`,
+  `--async-trace`, the product version, and every define;
 - the compiler's path, size and modification time;
 - the size and modification time of the output and of its `.mxdbg` sidecar, and the time the compile
   started, read from the cache root's filesystem.
@@ -1384,8 +1384,8 @@ Compiled -> app.exe
 ```
 
 On Linux and macOS the executable is `app` and the sidecar `app.mxdbg`. No sidecar is written for
-`wasm32-wasi`. The executable is **byte-identical** with or without the sidecar, so the binary you debug is
-the binary you ship.
+`wasm32-wasi`. The executable is **byte-identical** with or without the sidecar, so the code you debug is
+the code you ship.
 
 The sidecar maps machine code back to the source. It records the target, a **build id** (a hash of
 the executable's code section) and the directory the build ran in, then the source files, functions with
@@ -1481,7 +1481,8 @@ hardware fault reach the program's own handler; where an older one is found the 
 
 `detach` restores every byte the debugger wrote, lifts every held green thread, puts asynchronous
 preemption back and lets the program run on under its own steam; the session then waits for the program's
-own ending and reports it. `quit` ends the program.
+own ending and reports it. On `arm64-macos` the re-signed copy the program was launched from is removed at
+the detach, and the program keeps running from the file it already has open. `quit` ends the program.
 
 `break <target> if <local> <op> <literal>` arms a conditional breakpoint the driver judges at the stop, so a
 hit that fails it resumes at once; a condition over a float, a `String`, a field path, a constant or a local
@@ -1811,12 +1812,38 @@ Each event line names the green thread and processor that emitted it (`gt=0x0 P0
 
 ### `maxon profile`
 
-Launches a program and samples where its CPU time goes. The program needs no instrumentation and no
-rebuild: only its `.mxdbg` sidecar is read, so you measure the binary you ship. The program's own output
-goes to stderr, so stdout is only the report.
+Launches a program and samples where its CPU time goes. The program needs no instrumentation: only its
+`.mxdbg` sidecar is read, so you measure the code you ship. The program's own output goes to stderr, so
+stdout is only the report.
 
-**x64-windows only.** Sampling suspends the program's threads and reads their x64 register state. A
-compiler for any other host refuses the command.
+It runs on every native host — `x64-windows`, `arm64-macos`, `arm64-linux` and `x64-linux` — and profiles
+a program built for that host. Each tick stops a thread, reads its registers, copies its stack and lets it
+go: through thread handles on Windows, Mach task and thread ports on macOS, and `ptrace` on Linux.
+
+- **arm64-macos** hands out a program's task port only when its image is signed with the
+  `com.apple.security.get-task-allow` entitlement and the user has Developer Tools Access
+  (`DevToolsSecurity -status`). No build carries the entitlement, so `maxon profile`, `maxon debug`,
+  `maxon dap-server` and the MCP `debug_*` tools launch a re-signed copy of the program, made in process
+  without recompiling. Only the copy's code signature differs from the original. The copy sits **beside the
+  original**, in the same directory, named `<program>.<block>.attached`, so a program that looks beside its
+  own executable finds what the original has there. The program sees the copy's path as its executable
+  (`Process.executablePath()`) and as `argv[0]`; the debug-info sidecar, the build identity and the name in a
+  report are the original's. The tool deletes the copy when the run ends or the session detaches, and removes
+  the copies of runs that ended without doing so, found by the owner recorded in the name, at the start of
+  its next run in that directory. A directory the tool cannot write the copy into is refused, naming the
+  directory. A program that is not an arm64 Mach-O this compiler wrote, or whose signature is malformed, is
+  refused with the reason.
+- **arm64-linux and x64-linux** attach with `ptrace`, which `kernel.yama.ptrace_scope` 0 or 1 allows for
+  the profiler's own child. A thread is stopped only for its tick and detached before the next. A thread
+  that cannot be detached within 10 seconds has its whole process killed rather than left stopped, and
+  stderr says so in one line per process:
+  `sampler: thread <tid> of process <pid> could not be detached within 10000 ms, so the process was killed rather than left stopped`.
+- A thread in uninterruptible sleep (`D` in `/proc/<pid>/task/<tid>/stat`) is waited on when it is the
+  program's main thread at the start, for the same 10 seconds, and then treated as traceable. Any other
+  thread found in that state on a tick is counted as an unreadable stack for that tick.
+
+On Windows a thread's time is read from its cycle counter, calibrated against the clock before the run; on
+macOS and Linux it is read as CPU nanoseconds.
 
 ```bash
 maxon profile run <exe> [--json|--folded] [--rate=<hz>] [--min-percent=<share>] [--timeout=<seconds>] [--target-env=<NAME>=<VALUE>]... [args...]
@@ -1837,6 +1864,7 @@ profile: busy.exe
 target exit code: 0
 samples: 2204 from 2060 captures at 1000 Hz over 2.3066124s (requested 1000 Hz)
 unsymbolized: 2 samples (0.1%)
+runtime: 0 samples (0.0%) in the runtime's own machinery, which no row below lists
 stacks: 0 truncated, 1 unreadable
 
 === hot functions (self time) ===
@@ -1863,14 +1891,18 @@ mrt_start;main;spin 10
 mrt_start;main;spin;mix 2194
 ```
 
+The `runtime:` line counts the samples whose stack ran only the runtime's own code, such as the loop a
+scheduler worker runs between green threads. Those samples are counted on that line alone.
+
 `--json` prints one object with `exe`, `targetExitCode`, `runCompleted`, `achievedRateHz`,
-`requestedRateHz`, `samples`, `captures` and related counts, and the arrays `functions`
-(`name`, `selfSamples`, `totalSamples`), `tree` and `stacks`.
+`requestedRateHz`, `samples`, `captures`, `samplesUnsymbolized`, `samplesInRuntime` and related counts, and
+the arrays `functions` (`name`, `selfSamples`, `totalSamples`), `tree` and `stacks`.
 
 **Exit codes:** `0` when the measurement completed. `1` for a refusal (no such executable, no sidecar, a
-sidecar from a different build, a program that ended before sampling began) and for a run stopped by
-`--timeout`, whose partial report is still printed. The program's own status is the `target exit code`
-line.
+sidecar from a different build, an `arm64-macos` image it cannot re-sign or a directory it cannot write
+the signed copy into, a host that refuses to let the profiler attach, a program that ended before sampling began)
+and for a run stopped by `--timeout`, whose partial report is still printed. The program's own status is
+the `target exit code` line.
 
 ### `maxon coverage`
 
@@ -1957,7 +1989,7 @@ points=1000 worker=42
 2. **Green threads that stall or run out of order:** build with `--async-trace`.
 3. **Memory:** build with `--debugstream` and run `maxon monitor --filter=mm`. Exit code 101 is the leak
    check.
-4. **Slow:** `maxon profile run` (x64-windows), or `--folded` into a flame graph.
+4. **Slow:** `maxon profile run`, or `--folded` into a flame graph.
 5. **Untested code:** build with `--coverage` and run `maxon coverage run`.
 6. **What the compiler emitted:** `maxon build --emit-ir`.
 
@@ -2418,7 +2450,9 @@ differences a program can meet are:
 
 - **x64-windows needs Windows 8 or later**: its executables read the wall clock through
   `GetSystemTimePreciseAsFileTime`.
-- **`maxon profile`** runs only on x64-windows. Elsewhere it is refused.
+- **`maxon profile`** samples a program built for the host's own native target: through thread handles
+  on x64-windows, `ptrace` on x64-linux and arm64-linux, and Mach task ports on arm64-macos, which
+  `maxon profile` takes of a temporary copy re-signed with the `get-task-allow` entitlement.
 - **The interactive debugger** — `maxon debug`, `maxon dap-server` and the MCP `debug_*` tools — debugs a
   program built for the host's own native target, through that host's debug interface: a debug port on
   x64-windows, `ptrace` on x64-linux and arm64-linux, and Apple's `debugserver` on arm64-macos, where a

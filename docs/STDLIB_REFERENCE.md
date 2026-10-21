@@ -151,7 +151,7 @@ at the call site, rather than failing at run time:
 | Refused on `wasm32-wasi` | Error |
 |--------------------------|-------|
 | `File`, `Directory`, `Console`, `CommandLine` | E3104 |
-| `Clock`, `WallClock`, `sleep`, every `Scheduler` member but `parallelBoundary` | E3104 |
+| `Clock`, `WallClock`, `sleep`, `MachinePin`, every `Scheduler` member but `parallelBoundary` | E3104 |
 | `Log`, `Logger`, `LogSink` and the log handlers: logging runs on services, which need green threads | E3104 |
 | `TcpClient`, `TcpListener`, `HttpClient`, `HttpServer` | E3104 |
 | `Process.executablePath`, `SharedSegment` | E3104 |
@@ -188,8 +188,8 @@ The raw surface the library is written against belongs to the library tier: a so
 - `.managed`, `__ManagedMemory` and `__ManagedMemoryCursor`;
 - `String.cstr()` and `cstring`;
 - `Promise.inner`;
-- the raw handle types `__ManagedFile`, `__ManagedDirectory`, `__ManagedSocket`, `__ManagedPages` and
-  `__ManagedHandle`.
+- the raw handle types `__ManagedFile`, `__ManagedDirectory`, `__ManagedSocket`, `__ManagedPages`,
+  `__ManagedHandle` and `__ManagedPin`.
 
 A program reaches the same facilities through the library:
 
@@ -198,7 +198,7 @@ A program reaches the same facilities through the library:
 | The allocator's counters, levels, census and scavenger | [HeapStats](#heapstats) |
 | The machine's uptime, a thread's CPU time | `Clock.osTickMs()`, `Clock.threadCpuTicks()` |
 | This process's id, namespace and priority; another process's liveness | `Process.id()`, `Process.namespace()`, `Process.enterBackgroundPriority()`, `Process.isAlive(pid)` |
-| Logical CPUs, scheduler counters, stack size, pinning | `Scheduler.machineCpuCount()`, `Scheduler.counters()`, `Scheduler.currentStackBytes()`, `Scheduler.pinToMachine()` |
+| Logical CPUs, scheduler counters, stack size, pinning | `Scheduler.machineCpuCount()`, `Scheduler.counters()`, `Scheduler.currentStackBytes()`, `Scheduler.pinToMachine()`, [`MachinePin`](#machinepin) |
 | A float's IEEE 754 bits | `Math.bitsOf(x)`, `Math.fromBits(bits)` |
 | Terminal colour, raw standard input | `Console.stdoutWantsColor()`, `Console.stdin().readBytes(n)` |
 | Whether a promise has finished; the first of several | `p.isComplete()`, `promises.awaitAny()` |
@@ -2159,6 +2159,15 @@ The `CONTEXT` accessors throw `outOfBounds` for a block of any other size.
 | `setRegisters(thread DebuggeeThreadId, block RegisterBlock)` | — | `DebuggeeError.unwritable` | Set them from a block of that size. |
 | `vectorRegisters(thread DebuggeeThreadId)` | `RegisterBlock` | `DebuggeeError.unreadable` | The thread's floating-point and vector registers. |
 
+Three public constants name where the general-register block keeps the registers a frame walk starts from,
+as byte offsets for the architecture the program is built for:
+
+| Constant | arm64 | x64 |
+|----------|-------|-----|
+| `TraceFramePointerOffset` | 232 (`x29`) | 32 (`rbp`) |
+| `TraceStackPointerOffset` | 248 (`sp`) | 152 (`rsp`) |
+| `TraceProgramCounterOffset` | 256 (`pc`) | 128 (`rip`) |
+
 | `TraceReport` case | Meaning |
 |--------------------|---------|
 | `nothing` | The budget passed with the debuggee silent. |
@@ -2181,58 +2190,75 @@ The `CONTEXT` accessors throw `outOfBounds` for a block of any other size.
 
 ## Sampler
 
-A sampling profiler's view of another process, on `x64-windows`. `SampledProcess` suspends a thread
+A sampling profiler's view of another process, on every native target. `SampledProcess` stops a thread
 briefly, copies its registers and the top of its stack, and lets it run on; `SampleTimer` paces the samples.
+A thread is stopped through its thread handle on `x64-windows`, its Mach thread port on `arm64-macos`, and
+`ptrace` on `arm64-linux` and `x64-linux`.
 
 | `SampledProcess` member | Returns | Throws | Description |
 |-------------------------|---------|--------|-------------|
-| `SampledProcess.open(pid Pid)` | `SampledProcess` | `SamplerError.noSuchProcess`, `.noScratch` | Open process `pid` for sampling and reserve its scratch regions. |
+| `SampledProcess.open(pid Pid)` | `SampledProcess` | `SamplerError.noSuchProcess`, `.noScratch`, `.accessDenied`, `.threadNotPinned` | Open process `pid` for sampling and reserve its scratch regions. `accessDenied`: macOS refused the process's task port, or Linux refused to trace it. `threadNotPinned`: on Linux the calling green thread could not be pinned to its machine, which `ptrace` needs because it answers only the OS thread that attached. On Linux, a main thread in uninterruptible sleep is waited on for up to 10 seconds and then taken as traceable. |
+| `SampledProcess.cyclesAreNanoseconds()` | `bool` | — | True on macOS and Linux, where `cycles` and `suspendedCycles` are CPU nanoseconds; false on Windows, where they are the thread's cycle counter. |
+| `SampledProcess.foreignCodeKeepsTheFrameChain()` | `bool` | — | True on macOS and Linux, where a frame-pointer walk may continue through code outside the sampled program; false on Windows. |
 | `threads()` | `SampledThreadArray` | — | Open every thread the process has now. Each stays open until `release` or `close`. |
 | `release(thread SampledThread)` | — | — | Close one thread this sampler opened. |
-| `cycles(thread SampledThread)` | `SampleCycles` | `SamplerError.unknownThread` | CPU cycles the thread has consumed. |
-| `capture(thread SampledThread)` | `SampleCapture` | `SamplerError.unknownThread`, `.callingThread` | Sample one thread. `callingThread` refuses the thread making the call, which would suspend itself. |
-| `modules()` | `SampledModuleArray` | `SamplerError.moduleListUnavailable` | Every module loaded in the process, retried while the OS's module snapshot is unavailable. |
-| `close()` | — | — | Close every open thread, the process and the scratch regions. |
+| `cycles(thread SampledThread)` | `SampleCycles` | `SamplerError.unknownThread` | CPU time the thread has consumed, in the unit `cyclesAreNanoseconds()` names. On macOS and Linux a running thread is stopped to read it, and the next `capture` of that thread answers from the same stop. |
+| `capture(thread SampledThread)` | `SampleCapture` | `SamplerError.unknownThread`, `.callingThread` | Sample one thread. `unknownThread` refuses a thread `threads()` did not hand out or `release` let go; `callingThread` refuses the thread making the call, which would stop itself. On Linux a thread in uninterruptible sleep answers `unreadable`. |
+| `modules()` | `SampledModuleArray` | `SamplerError.moduleListUnavailable` | Every module loaded in the process: the module snapshot on Windows and the dyld image list on macOS, each retried while the OS cannot answer yet. On Linux, whose images are static, an empty array while the process lives. |
+| `close()` | — | — | Close every open thread, the process and the scratch regions. On Linux it detaches every thread it stopped, then unpins the calling green thread; call it on the green thread that opened the sampler. |
 | `clone()` | — | — | Panics: a sampler owns one process's handles, so it is held in one place. |
+
+On Linux a thread that cannot be detached within 10 seconds has its process killed rather than left
+stopped, and stderr carries one line per process:
+`sampler: thread <tid> of process <pid> could not be detached within 10000 ms, so the process was killed rather than left stopped`.
 
 | `SampleCapture` case | Meaning |
 |----------------------|---------|
 | `threadGone` | The thread exited. |
-| `unreadable(allocationBase, suspendedCycles)` | The thread was suspended, and its registers were unreadable. |
+| `unreadable(reservation, suspendedCycles)` | The thread was stopped, and its registers were unreadable. |
 | `captured(stack)` | A `SampledStack`. |
 
-A `SampledStack` has `programCounter`, `framePointer` and `stackPointer`; `allocationBase`, the base of the
-stack's reservation; `suspendedCycles`, the thread's cycle count read while it was suspended; and `window`,
-a `StackWindow` holding up to 64 KiB copied from the thread's stack. A `StackWindow` stays readable until the
+A `SampledStack` has `programCounter`, `framePointer` and `stackPointer`; `reservation`, a
+`StackReservation`; `suspendedCycles`, the thread's CPU time read while it was stopped; and `window`, a
+`StackWindow` holding up to 64 KiB copied from the thread's stack. A `StackWindow` stays readable until the
 sampler's next `capture`: `byteCount()` is the bytes copied, 0 once a later capture has replaced them, and
 `word(offset StackWindowOffset)` is the word `offset` bytes in, throwing `SamplerError.outOfWindow` outside the
 copy or after a later capture.
 
-`SampledThread` has a public `id` (`SampledThreadId`). `SampledModule` has `base`, `limit` and `name`, with
-each UTF-16 unit above ASCII in the name read as `?`.
+| `StackReservation` case | Meaning |
+|-------------------------|---------|
+| `base(address)` | The base of the reservation the stack lives in, unique to each live stack. Windows reports it. |
+| `unreported` | The reservation is unknown, as on macOS and Linux. |
+
+`SampledThread` has a public `id` (`SampledThreadId`). `SampledModule` has `base`, `limit`, `name` and
+`fileType`. On Windows each UTF-16 unit above ASCII in the name reads as `?`, and `fileType` is 0; on macOS
+the name is the last component of the image's path and `fileType` is its Mach-O header's file type (2 for
+the executable).
 
 | `SampleTimer` member | Returns | Throws | Description |
 |----------------------|---------|--------|-------------|
-| `SampleTimer.create(interval SampleIntervalNanos)` | `SampleTimer` | `SamplerError.noTimer` | A periodic timer, rounded to 100 ns steps. |
-| `wait()` | — | — | Sleep until the next tick: each deadline is the previous one plus the interval, so the samples keep their rate. Panics after `close()`. |
+| `SampleTimer.create(interval SampleIntervalNanos)` | `SampleTimer` | — | A periodic timer. On Windows its steps are rounded to 100 ns; elsewhere each wait sleeps to its deadline, rounded up to a microsecond. |
+| `ready()` | `bool` | — | True when the host gave the timer `create` asked for; on Windows a refused timer reads false. |
+| `wait()` | — | — | Sleep until the next tick: each deadline is the previous one plus the interval, so the samples keep their rate. Panics after `close()`, and on a timer that is not `ready()`. |
 | `close()` | — | — | Release the timer. |
 
 ```maxon
 enum SamplerError implements Error
 	noSuchProcess
 	noScratch
-	noTimer
 	unknownThread
 	outOfWindow
 	moduleListUnavailable
 	callingThread
+	accessDenied
+	threadNotPinned
 end 'SamplerError'
 ```
 
 `SampleCycles`, `SampledThreadId` are `int(0 to u64.max)`; `SampleIntervalNanos` is `int(1 to u64.max)`;
 `StackWindowOffset` is `int(0 to i64.max)`; `SampledThreadArray` and `SampledModuleArray` are arrays of
-`SampledThread` and `SampledModule`. The module is declared under `#if os(Windows) and arch(x64)`, so its
-names exist on `x64-windows` alone.
+`SampledThread` and `SampledModule`. The module is declared under `#if not os(Wasi)`, so its names exist on
+every native target.
 
 ## TcpClient
 
@@ -2924,8 +2950,8 @@ Output: `2024-10-04 11017`, then `2023-11-14T22:13:20.123Z`.
 | `Scheduler.currentStackBytes()` | The calling green thread's current stack size in bytes, a `StackByteCount` (`int(0 to u64.max)`). A stack grows on demand and halves once the thread has been idle with most of it unused. |
 | `Scheduler.quiesce()` | Park the caller until every machine is idle and nothing pending can run again, and answer how many other green threads are still owned — a service still running, or a promise neither awaited nor dropped — as a `GreenThreadCount` (`int(0 to u64.max)`): `0` when every one has finished, or the count left. A machine waiting for its pinned thread's next turn counts as idle, and a coroutine still unwinding after its promise was dropped keeps the wait open until it finishes. A coroutine whose promise has been dropped answers at once, with the count at that moment. The program carries on afterwards unchanged; services stay running. |
 | `Scheduler.parallelBoundary()` | A compile-time marker with no run-time effect. A CPU-bound function calls it to mark a spawn of itself as deliberate, which satisfies [E3073](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3073) for a function that only computes. |
-| `Scheduler.pinToMachine()` | Bind the calling green thread to the machine (OS thread) running it, and answer whether it did. A pinned thread that parks resumes on the same machine. |
-| `Scheduler.unpinFromMachine()` | Release the calling green thread from its machine. |
+| `Scheduler.pinToMachine()` | Bind the calling green thread to the machine (OS thread) running it, and answer whether it did. A pinned thread that parks resumes on the same machine. Pins nest: each one taken is released once. |
+| `Scheduler.unpinFromMachine()` | Release one pin the calling green thread took; the last release frees it from its machine. Called by a green thread that holds no pin, it is a fatal runtime error. |
 | `Scheduler.currentMachine()` | The machine running the calling green thread, as a `MachineIndex` (`int(0 to u64.max)`); `0` is no machine. |
 
 On `wasm32-wasi` `parallelBoundary()` compiles and every other member is refused (E3104). Green threads,
@@ -2948,6 +2974,22 @@ end 'main'
 ```
 
 Output: `worker` then `main`.
+
+### MachinePin
+
+`MachinePin` is a pin of the calling green thread to its machine, held as a value: it takes one pin the way
+`Scheduler.pinToMachine()` does, and releases it when it is released or dropped, whichever comes first.
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `MachinePin.acquire()` | `MachinePin` | Pin the calling green thread to the machine running it. |
+| `held()` | `bool` | True while the pin is held; false when there was no machine to pin to, and after `release()`. |
+| `release()` | — | Release the pin. A later `release()` or drop finds it released and returns. |
+| `clone()` | — | Panics: a pin is released once, so it is held in one place. |
+
+Releasing a held pin is a fatal runtime error in three cases, each with its own message: from code that is
+not running on a green-thread machine, from a green thread other than the one that took it, and when that
+green thread holds no pin any longer (a `Scheduler.unpinFromMachine()` already released it).
 
 ### SchedulerCounters
 

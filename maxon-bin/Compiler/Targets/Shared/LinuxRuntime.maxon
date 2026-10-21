@@ -134,6 +134,10 @@ export let LinuxSockCloexec = 0x80000
 // one lane's runtime reaches any image.
 export let LinuxErrnoLabel = b"__mrt_errno"
 
+export function linuxUsesTraceBand(usage RuntimeUsage) returns bool
+	return usage.usesProcessDebug or usage.usesProcessSampling
+end 'linuxUsesTraceBand'
+
 // ⭐ **WHO READS THE errno WORD — the union of the facilities that emit `StdOp.osLastError`, and therefore
 // the gate on `mrt_host_last_error` itself.** `usesChildPipes` is among them: `__gt_subp_yield_read` classifies a
 // failed pipe read with it, and a spawn failure is reported through it.
@@ -148,18 +152,18 @@ end 'linuxUsesHostSurface'
 // `__gt_process_run` unconditionally, so `mrt_host_spawn` — whose failure arm stashes an errno — is laid out
 // in every green-thread program, including one that reads no pipe and opens no file.
 //
-// ⛔ **THE TRACE BAND IS A THIRD STASH-ONLY PRODUCER.** `usesProcessDebug` lays out the `ptrace`, tracee-read,
+// ⛔ **THE TRACE BAND IS A THIRD STASH-ONLY PRODUCER.** `linuxUsesTraceBand` lays out the `ptrace`, tracee-read,
 // await and signal chunks, and each ends in the syscall tail that stashes a failed call's reason, so a program
-// that only drives a `ProcessTrace` touches errno.
+// that only drives a `ProcessTrace` or a `SampledProcess` touches errno.
 //
-// ⚠ **BOTH LINUX LANES ASK THESE TWO, AND NEITHER OWNS THEM.** The question is about `RuntimeUsage` and
+// ⚠ **BOTH LINUX LANES ASK THESE THREE, AND NEITHER OWNS THEM.** The question is about `RuntimeUsage` and
 // names no instruction set; a second copy beside one assembler is a facility added to one lane's gate and
 // not the other's, which is that lane's `.data` word missing under a chunk that stashes into it.
 // ⚠ **THE SOCKET BAND IS A SECOND STASH-ONLY PRODUCER**, for the reason `PosixRuntime.posixOpensFiles`
 // states: its resolver opens `/etc/hosts` through `mrt_host_file_open`, whose failure arm stashes an errno
 // nothing in a socket program will ever read back.
 function linuxTouchesErrnoWord(usage RuntimeUsage) returns bool
-	return linuxUsesHostSurface(usage) or usage.usesGt or usage.usesManagedSocket or usage.usesProcessDebug
+	return linuxUsesHostSurface(usage) or usage.usesGt or usage.usesManagedSocket or linuxUsesTraceBand(usage)
 end 'linuxTouchesErrnoWord'
 
 // Where errno lives, fixed per program at emit time. A program carrying the host lock gives every OS thread

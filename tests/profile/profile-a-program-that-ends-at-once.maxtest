@@ -1,0 +1,14 @@
+let EndedBeforeAttachWords = "ended before the sampler attached"
+let AccessDeniedWords = "refused"
+
+test 'a program that ends before the profiler attaches is reported as ended, never as an access refusal'
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "profile-a-program-that-ends-at-once", fixture: EndsAtOnceFixtureName)
+	_ = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: EndsAtOnceFixtureName)
+
+	let run = runProfiler(staged, extraArguments: StringArray.create())
+
+	if run.exitCode() != 0 'refused'
+		Expect.isTrue(run.stderr.contains(EndedBeforeAttachWords), message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb}` refused a program that returns at once, and not with the sentence for a program that ended first. It wrote to stderr: {run.stderr}")
+		Expect.isFalse(run.stderr.contains(AccessDeniedWords), message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb}` blamed the host's attach policy for a program that had simply ended. It wrote to stderr: {run.stderr}")
+	end 'refused'
+end 'a program that ends before the profiler attaches is reported as ended, never as an access refusal'

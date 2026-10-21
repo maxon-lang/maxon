@@ -62,11 +62,14 @@ Such a patch rewrites the library BODY to calls the seed knows, and withdraws th
 produce together with the arms that name them. The restore runs before the second build, so `C1` compiles
 `C2` against the unshimmed library, and only `C1`'s own behaviour is weaker.
 
-A handle type is the standing example. `stdlib/Debuggee.maxon` and `stdlib/Sampler.maxon` own a page
-reservation and an OS handle through `__ManagedPages` and `__ManagedHandle`, which the seed refuses by name
-(E3004, E3011). The patch gives each file a stand-in type with the same member names over the
-`__Builtins.profile*` intrinsics the seed knows, and renames the mentions. `C1` then releases its pages and
-handles by their owner's `release()` and not by a drop; it runs no debugger or profiler session while it
+The handle types are the standing example. The seed knows `__ManagedPages` and `__ManagedHandle` and lowers
+them on x64-windows alone, refusing their use on any other lane with E3104, so a library that samples on
+every native lane is refused on the lanes the seed predates.
+`0001-withdraw-the-profiler-lanes-from-the-first-build.patch` gates `stdlib/Sampler.maxon` and the
+`maxon-bin/Profile/` driver to `os(Windows) and arch(x64)`, so `C1` carries the profiler on x64-windows alone. `__ManagedPin` is a raw handle the seed does not
+know at all, so `0002-withdraw-the-pin-handle-from-the-first-build.patch` writes `MachinePin` over the
+`__Builtins.pinToMachine` and `__Builtins.unpinFromMachine` intrinsics the seed knows, and `Scheduler.pinDepth`
+as 0. `C1`'s `MachinePin` unpins at `release()` alone, and `C1` runs no debugger or profiler session while it
 builds `C2`.
 
 ⭐ **A RULE THE TREE HAS DELETED AND THE SEED STILL ENFORCES IS THE SIXTH CASE, AND ITS REWRITES ARE

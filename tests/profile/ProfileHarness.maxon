@@ -2,9 +2,9 @@
 // profiler at a built fixture and reading back the report.
 //
 // `maxon profile run <exe>` launches a program, samples where its CPU time goes, and prints a report. It
-// needs no instrumentation and no rebuild: the only thing read besides the running process is the `.mxdbg`
-// sidecar an ordinary build already writes, which leaves the executable byte-identical. So the binary
-// measured is the binary that ships.
+// needs no instrumentation: the only thing read besides the running process is the `.mxdbg` sidecar an
+// ordinary build already writes. On macOS the profiler launches a temporary copy of the program re-signed
+// with the `get-task-allow` entitlement, so an ordinary build is all a case stages.
 //
 // ⭐⭐ **THE RUNNER AND THE SUBJECT ARE THE SAME BINARY, AND NOTHING OUTSIDE CLOSES THAT.** `maxon test
 // tests/profile` both runs these cases and provides the compiler and profiler they spawn — named by
@@ -51,6 +51,8 @@ export let StagingRootDirName = "temp/profile"
 // The programs this corpus stages, by their fixture directory names.
 export let HotWarmFixtureName = "hotwarm"
 export let GreenThreadsFixtureName = "greenthreads"
+let SelfCopyFixtureName = "selfcopy"
+export let EndsAtOnceFixtureName = "endsatonce"
 
 // The profiler's surface. One verb only.
 export let ProfileSubcommandName = "profile"
@@ -58,6 +60,25 @@ export let ProfileRunVerb = "run"
 export let FoldedFlag = "--folded"
 export let MinPercentFlagPrefix = "--min-percent="
 export let TargetEnvFlagPrefix = "--target-env="
+
+let MacosTargetOption = "--target=arm64-macos"
+export let LinuxTargetOption = "--target=x64-linux"
+export let GetTaskAllowEntitlement = "com.apple.security.get-task-allow"
+let MacosImageFileName = "macos-image"
+let PlistKeyClose = "</key>"
+let PlistTrue = "<true/>"
+let DerTagBoolean = 0x01
+let DerTagUtf8String = 0x0C
+let DerBooleanLength = 0x01
+
+export typealias MagicWord = int(0 to u32.max)
+
+export let SuperBlobMagic = 0xFADE0CC0
+export let CodeDirectoryMagic = 0xFADE0C02
+let SpoiledMagicDistance = 1
+let BigEndianWordBytes = 4
+let ByteBits = 8
+let ByteMask = 0xFF
 
 // The share every run here asks the tool to summarize below: NONE of it. See this file's header — the
 // floor that matters is the case's, taken against the samples that run actually collected.
@@ -69,6 +90,7 @@ export let HotFunctionsHeader = "=== hot functions (self time) ==="
 export let CallTreeHeader = "=== call tree ==="
 export let StacksHeader = "=== stacks ==="
 let SamplesLinePrefix = "samples: "
+export let RuntimeLinePrefix = "runtime: "
 export let TooFewSamplesPrefix = "TOO FEW SAMPLES:"
 
 // Which word of `samples: N at R Hz over Ts (requested H Hz)` carries the count.
@@ -87,6 +109,8 @@ export let WarmFunctionName = "warm"
 
 // Spelled as a number rather than as a character literal, which a receiver position cannot carry.
 let AsciiSpace = 32
+let AsciiLineFeed = 10
+let AsciiTab = 9
 
 // ⭐ **HOW SMALL A ROW MAY BE AND STILL BE ASSERTED ABOUT: a twentieth of the run.** See the header for why
 // the floor is the case's rather than `--min-percent`'s, and for the measured margins on either side of it.
@@ -115,6 +139,207 @@ export function runProfiler(staged FilePath, extraArguments StringArray) returns
 
 	return spawnCompiler(arguments, staged: staged, what: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb}`")
 end 'runProfiler'
+
+export function imageForTarget(source FilePath, staged FilePath, targetOption String, imageName String) returns FilePath
+	var arguments = StringArray.create()
+	arguments.push(targetOption)
+
+	let image = staged.join(imageName)
+	let build = spawnBuild(source, staged: staged, output: image, label: "{targetOption} image", extraArguments: arguments)
+	requireBuiltOrPanic(build, output: image, what: "the {targetOption} image build")
+
+	return image
+end 'imageForTarget'
+
+export let AttachedCopySuffix = ".attached"
+export let NeighbourFileName = "neighbour.txt"
+let CopiedImageFileName = "image-as-launched"
+let FactsFileName = "facts.txt"
+let FactSeparator = "="
+
+export type SelfCopyRun
+	export let run as CollectedOutput
+	export let executable as FilePath
+	export let copiedImage as FilePath
+	export let facts as FilePath
+
+	static function of(run CollectedOutput, executable FilePath, copiedImage FilePath, facts FilePath) returns SelfCopyRun
+		return Self{run: run, executable: executable, copiedImage: copiedImage, facts: facts}
+	end 'of'
+end 'SelfCopyRun'
+
+export function stagedSelfCopyTree(caseLabel String) returns FilePath
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: caseLabel, fixture: SelfCopyFixtureName)
+	writeStagedFile(staged.join(NeighbourFileName), content: "present\n")
+
+	return staged
+end 'stagedSelfCopyTree'
+
+export function buildSelfCopyProgram(caseLabel String) returns FilePath
+	let staged = stagedSelfCopyTree(caseLabel)
+	_ = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: SelfCopyFixtureName)
+
+	return staged
+end 'buildSelfCopyProgram'
+
+export function profileSelfCopyProgram(staged FilePath) returns SelfCopyRun
+	var arguments = StringArray.create()
+	arguments.push(staged.join(CopiedImageFileName).toString())
+	arguments.push(staged.join(FactsFileName).toString())
+
+	return SelfCopyRun.of(runProfiler(staged, extraArguments: arguments), executable: builtExecutable(staged), copiedImage: staged.join(CopiedImageFileName), facts: staged.join(FactsFileName))
+end 'profileSelfCopyProgram'
+
+export function factOf(facts FilePath, key String) returns String
+	for line in outputLines(fileText(facts)) 'eachLine'
+		if line.startsWith("{key}{FactSeparator}") 'found'
+			return line.replaceFirst("{key}{FactSeparator}", with: "")
+		end 'found'
+	end 'eachLine'
+
+	panic("profile tests: the gate could not run — {facts.toString()} states no `{key}`.")
+end 'factOf'
+
+export function attachedCopiesIn(directory FilePath) returns StringArray
+	var names = StringArray.create()
+
+	for entry in listing(directory) 'eachEntry'
+		if entry.filename().endsWith(AttachedCopySuffix) 'aCopy'
+			names.push(entry.filename())
+		end 'aCopy'
+	end 'eachEntry'
+
+	return names
+end 'attachedCopiesIn'
+
+export function macosImageOf(source FilePath, staged FilePath) returns FilePath
+	return imageForTarget(source, staged: staged, targetOption: MacosTargetOption, imageName: MacosImageFileName)
+end 'macosImageOf'
+
+union NeedleSearch
+	at(start ElementIndex)
+	absent
+end 'NeedleSearch'
+
+export function namesGetTaskAllow(image FilePath) returns bool
+	return match searchBytes(imageBytes(image), needle: GetTaskAllowEntitlement.toByteArray()) 'found'
+		at gives true
+		absent gives false
+	end 'found'
+end 'namesGetTaskAllow'
+
+export function grantsGetTaskAllow(image FilePath) returns bool
+	let bytes = imageBytes(image)
+
+	return plistGrants(bytes) and derGrants(bytes)
+end 'grantsGetTaskAllow'
+
+function plistGrants(bytes ByteArray) returns bool
+	let key = "<key>{GetTaskAllowEntitlement}{PlistKeyClose}".toByteArray()
+
+	return match searchBytes(bytes, needle: key) 'found'
+		at(start) gives bytesMatchAt(bytes, needle: PlistTrue.toByteArray(), start: afterWhitespace(bytes, from: start + key.count()))
+		absent gives false
+	end 'found'
+end 'plistGrants'
+
+function afterWhitespace(bytes ByteArray, from ElementIndex) returns ElementIndex
+	var position = from
+
+	while isWhitespace(try bytes.get(position) otherwise 0) 'skip'
+		position = position + 1
+	end 'skip'
+
+	return position
+end 'afterWhitespace'
+
+function isWhitespace(byte Byte) returns bool
+	return byte == AsciiSpace or byte == AsciiLineFeed or byte == AsciiTab
+end 'isWhitespace'
+
+function derGrants(bytes ByteArray) returns bool
+	let needle = derGetTaskAllowKey()
+
+	return match searchBytes(bytes, needle: needle) 'found'
+		at(start) gives (try bytes.get(start + needle.count()) otherwise 0) != 0
+		absent gives false
+	end 'found'
+end 'derGrants'
+
+function derGetTaskAllowKey() returns ByteArray
+	var key = ByteArray.create()
+	key.push(DerTagUtf8String)
+	key.push(GetTaskAllowEntitlement.toByteArray().count())
+	key.append(GetTaskAllowEntitlement.toByteArray())
+	key.push(DerTagBoolean)
+	key.push(DerBooleanLength)
+
+	return key
+end 'derGetTaskAllowKey'
+
+export function carriesBlob(image FilePath, magic MagicWord) returns bool
+	return match searchBytes(imageBytes(image), needle: bigEndianBytesOf(magic)) 'found'
+		at gives true
+		absent gives false
+	end 'found'
+end 'carriesBlob'
+
+export function spoilBlobMagic(image FilePath, magic MagicWord, what String)
+	var bytes = imageBytes(image)
+
+	match searchBytes(bytes, needle: bigEndianBytesOf(magic)) 'found'
+		absent then panic("profile tests: the gate could not run — {image.toString()} carries no {what} to spoil.")
+		at(start) then overwriteBytes(bytes, at: start, replacement: bigEndianBytesOf((magic + SpoiledMagicDistance) as MagicWord))
+	end 'found'
+
+	writeImage(image, bytes: bytes)
+end 'spoilBlobMagic'
+
+function bigEndianBytesOf(word MagicWord) returns ByteArray
+	var bytes = ByteArray.create()
+
+	for shift in 0 upto BigEndianWordBytes 'eachByte'
+		bytes.push(((word shr ((BigEndianWordBytes - 1 - shift) * ByteBits)) and ByteMask) as Byte)
+	end 'eachByte'
+
+	return bytes
+end 'bigEndianBytesOf'
+
+function writeImage(image FilePath, bytes ByteArray)
+	try File.writeBinary(image, content: bytes, mode: FilePermission.executable) otherwise panic("profile tests: the gate could not run — could not write {image.toString()} back.")
+end 'writeImage'
+
+export function imageBytes(image FilePath) returns ByteArray
+	return try File.readBinary(image) otherwise panic("profile tests: the gate could not run — {image.toString()} was built and cannot be read back.")
+end 'imageBytes'
+
+function searchBytes(bytes ByteArray, needle ByteArray) returns NeedleSearch
+	for start in 0 upto bytes.count() - needle.count() + 1 'eachStart'
+		if bytesMatchAt(bytes, needle: needle, start: start) 'found'
+			return NeedleSearch.at(start)
+		end 'found'
+	end 'eachStart'
+
+	return NeedleSearch.absent
+end 'searchBytes'
+
+function overwriteBytes(bytes ByteArray, at ElementIndex, replacement ByteArray)
+	for (iter, replacementByte) in replacement.withIterator() 'eachByte'
+		try bytes.set(at + iter.index(), value: replacementByte) otherwise panic("profile tests: the gate could not run — the replacement runs past the image.")
+	end 'eachByte'
+end 'overwriteBytes'
+
+function bytesMatchAt(bytes ByteArray, needle ByteArray, start ElementIndex) returns bool
+	for (iter, expected) in needle.withIterator() 'eachByte'
+		let actual = try bytes.get(start + iter.index()) otherwise return false
+
+		if actual != expected 'differs'
+			return false
+		end 'differs'
+	end 'eachByte'
+
+	return true
+end 'bytesMatchAt'
 
 // The three words every profiler invocation opens with, so the verb and the subcommand have one spelling
 // even where a case deliberately spoils one of them.
@@ -307,16 +532,25 @@ end 'positionOf'
 // ⭐ **HOW MANY SAMPLES THIS RUN TOOK.** It is the denominator every share in the report was computed
 // against and the basis of this corpus's own reporting floor — never a quantity a case asserts about.
 export function totalSamples(report String, profilerLabel String) returns PrintedNumber
+	return countOnLine(report, prefix: SamplesLinePrefix, profilerLabel: profilerLabel)
+end 'totalSamples'
+
+// How many of those samples the profiler counted in the runtime's own machinery rather than in a row.
+export function runtimeSamples(report String, profilerLabel String) returns PrintedNumber
+	return countOnLine(report, prefix: RuntimeLinePrefix, profilerLabel: profilerLabel)
+end 'runtimeSamples'
+
+function countOnLine(report String, prefix String, profilerLabel String) returns PrintedNumber
 	for line in outputLines(report) 'eachLine'
-		if not line.startsWith(SamplesLinePrefix) 'notTheCountLine'
+		if not line.startsWith(prefix) 'notTheCountLine'
 			continue
 		end 'notTheCountLine'
 
 		let tokens = whitespaceTokens(line)
-		let count = try tokens.get(SamplesLineCountField) otherwise panic("profile tests: the gate could not run — '{profilerLabel}' printed '{line}', which opens with '{SamplesLinePrefix}' and spells no count after it.")
+		let count = try tokens.get(SamplesLineCountField) otherwise panic("profile tests: the gate could not run — '{profilerLabel}' printed '{line}', which opens with '{prefix}' and spells no count after it.")
 
 		return wholeDecimalValue(count, what: "the sample count '{profilerLabel}' printed in '{line}'")
 	end 'eachLine'
 
-	panic("profile tests: the gate could not run — '{profilerLabel}' printed no '{SamplesLinePrefix}' line, so how many readings its report rests on is unknown. It printed:{LineFeed}{report}")
-end 'totalSamples'
+	panic("profile tests: the gate could not run — '{profilerLabel}' printed no '{prefix}' line, so how many readings its report rests on is unknown. It printed:{LineFeed}{report}")
+end 'countOnLine'

@@ -3,21 +3,23 @@
 //
 // ⭐ **WHAT IT SERVES.** `stdlib/Sampler.maxon` is library-tier Maxon calling `__Builtins.profile*`,
 // and `maxon-bin/Profile/` is a program over its public API; every `__Builtins.profile*` lowers to
-// an entry point here, and each entry is a thin Std graph over `StdOp.osHostProcess` — the one op
-// whose `HostProcessCall` roster names the host services this file asks for. Everything ABOVE these
-// entries — the tick schedule, the thread table, the frame walk, the aggregation, the report — is
-// plain Maxon, exactly as the FILETIME arithmetic stays out of `osReadWallClock`.
+// an entry point here or in its two per-host siblings (`MachHostRuntime`, `PtraceHostRuntime`), and each
+// entry is a thin Std graph over `StdOp.osHostProcess` — the one op whose `HostProcessCall` roster names
+// the host services these files ask for. `profileHostShapeOf` picks which set a lane builds. Everything
+// ABOVE these entries — the tick schedule, the thread table, the frame walk, the aggregation, the report —
+// is plain Maxon, exactly as the FILETIME arithmetic stays out of `osReadWallClock`.
 //
 // ⚠ **THE LANES THAT SERVE THIS ARE `TargetFacilities.processSampling`'s, and a call site on any other is
 // refused** with E3104, matched on the `__prof_` PREFIX — so an entry point added here later is gated by
-// construction rather than by memory. That row names a CPU as well as an OS: the register file arrives as a
-// `CONTEXT`, whose RIP/RSP/RBP displacements are x64's.
+// construction rather than by memory. That row names a CPU as well as an OS: the register file arrives in
+// the host's per-CPU record, whose program-counter, stack and frame displacements are that CPU's.
 //
-// ⭐⭐ **THE SCRATCH REGIONS ARE PAGES, NOT MANAGED BUFFERS, AND THAT IS WHAT MAKES `GetThreadContext`
-// WORK.** A `CONTEXT` carries XMM state and the API REJECTS a pointer that is not 16-byte aligned; a managed
-// byte buffer promises nothing about its alignment, so a hand-rolled fixup would be the "fails on one
-// machine and not another" shape. `osAllocPages` answers a page boundary, which is 16-byte aligned by
-// construction — and the same call gives the 64 KB stack window its own reservation.
+// ⭐⭐ **THE SCRATCH REGIONS ARE PAGES, NOT MANAGED BUFFERS, AND THAT IS WHAT MAKES WIN32'S
+// `GetThreadContext` WORK.** A `CONTEXT` carries XMM state and the API REJECTS a pointer that is not
+// 16-byte aligned; a managed byte buffer promises nothing about its alignment, so a hand-rolled fixup
+// would be the "fails on one machine and not another" shape. `osAllocPages` answers a page boundary,
+// which is 16-byte aligned by construction — and the same call gives the 64 KB stack window its own
+// reservation.
 
 // The `__prof_` prefix that identifies EVERY sampling entry point — the one test `scanRuntimeUsage` reads to
 // set `usesProcessSampling`, and the one `TargetFacilities` reads for E3104.
@@ -36,6 +38,7 @@ export let ProfileSampleName = b"__prof_sample"
 // The tick.
 let ProfileTimerCreateName = b"__prof_timer_create"
 export let ProfileTimerWaitName = b"__prof_timer_wait"
+export let ProfileSleepName = b"__prof_sleep_us"
 
 // The module map that names a foreign leaf.
 export let ProfileModuleSnapshotName = b"__prof_module_snapshot"
@@ -103,14 +106,14 @@ let SnapModule32 = 0x00000010
 let ModuleSnapshotFlags = SnapModule or SnapModule32
 
 // ⚠⚠ **THE WIN32 LAYOUT CONSTANTS BELOW ARE PRIVATE, AND THE FEW THE PROFILER ALSO READS ARE NOT HERE
-// AT ALL.** This file compiles on EVERY lane; `maxon-bin/Profile/` is gated to the one lane that can
-// sample, so an `export` here whose only reader is over there is an export with no reader anywhere else —
-// E3092, and only at the self-compile. What both sides need is `module`-visible from the root instead
-// (`ProfileSampleContract.maxon`), which is the one place a gated-out directory and this one can share a
+// AT ALL.** This file compiles on EVERY lane; `maxon-bin/Profile/` is gated out on wasm32-wasi, which cannot
+// sample, so an `export` here whose only reader is over there is an export with no reader on that lane —
+// E3092, and only at the self-compile. What both sides need is read from `stdlib/Debuggee.maxon` and
+// `stdlib/Sampler.maxon` through `HostContextLayout`, the one place the compiler and the library share a
 // number rather than each restate it.
 
 // The two `CONTEXT` families `GetThreadContext` is asked to fill here: CONTEXT_CONTROL supplies RIP and RSP,
-// CONTEXT_INTEGER supplies RBP. The record's own displacements are `ProfileSampleContract`'s, which is where
+// CONTEXT_INTEGER supplies RBP. The record's own displacements are `HostContextLayout`'s, which is where
 // the scheduler's monitor reads them from too.
 
 // `VirtualQueryEx` answers the number of bytes it wrote, so zero is its failure.
@@ -137,6 +140,21 @@ export function isProfileRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: ProfileRuntimePrefix)
 end 'isProfileRuntimeCallee'
 
+export union ProfileHostShape
+	win32
+	mach
+	ptrace
+end 'ProfileHostShape'
+
+export function profileHostShapeOf(target Target) returns ProfileHostShape
+	return match target.os 'os'
+		windows gives ProfileHostShape.win32
+		macos gives ProfileHostShape.mach
+		linux gives ProfileHostShape.ptrace
+		wasi panic("profileHostShapeOf: {targetToString(target)} provides no way to sample another process, and `targetProvidesFacility` answers `processSampling` false for it — a program reaching here would be built asking for entries this lane lays out no chunk for")
+	end 'os'
+end 'profileHostShapeOf'
+
 export function isHostScratchRuntimeCallee(callee ByteArray) returns bool
 	return callee.equals(ProfileReadWordName) or callee.equals(ProfileWriteWordName) or bytesStartWith(callee, prefix: ProfilePagesPrefix)
 end 'isHostScratchRuntimeCallee'
@@ -151,7 +169,7 @@ end 'isHostResourceReadingRuntimeCallee'
 
 // One `osHostProcess`, with all six words marshalled. The op's arity is fixed at its widest member's, so a
 // narrower service is handed zeros for the operands it does not read — see `StdOp.osHostProcess`.
-function emitHostSample(module StdModule, block IrBlock, service HostProcessCall, a0 ValueId, a1 ValueId, a2 ValueId, a3 ValueId, a4 ValueId, a5 ValueId, ids ValueMinter) returns ValueId
+module function emitHostSample(module StdModule, block IrBlock, service HostProcessCall, a0 ValueId, a1 ValueId, a2 ValueId, a3 ValueId, a4 ValueId, a5 ValueId, ids ValueMinter) returns ValueId
 	let answer = ids.mint()
 	module.appendOp(block, op: StdOp.osHostProcess(answer, service: service, a0Id: a0, a1Id: a1, a2Id: a2, a3Id: a3, a4Id: a4, a5Id: a5))
 
@@ -450,6 +468,19 @@ function buildProfileTimerWait(module StdModule)
 	module.functions.push(func)
 end 'buildProfileTimerWait'
 
+function buildProfileSleep(module StdModule)
+	var func = IrFunction.createFromStd(ProfileSleepName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let microseconds = 0
+	_ = emitNetpoll(module, block: entry, verb: NetpollVerb.shortSleep, operands: argsOf(microseconds), ids: ids)
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildProfileSleep'
+
 // `__prof_module_snapshot(pid) -> HANDLE` — the target's OWN loaded modules.
 //
 // ⚠ Unlike the thread flag, `TH32CS_SNAPMODULE` HONOURS the process id, so this walks the target's ~10
@@ -512,8 +543,22 @@ function buildProfileModuleNext(module StdModule)
 	module.functions.push(func)
 end 'buildProfileModuleNext'
 
+function emitProfileHandleClose(module StdModule, block IrBlock, handle ValueId, shape ProfileHostShape, ids ValueMinter)
+	match shape 'release'
+		win32 then module.appendOp(block, op: StdOp.osCloseHandle(handle))
+		mach then emitMachPortRelease(module, block: block, port: handle, ids: ids)
+		ptrace then module.appendOp(block, op: StdOp.call(ids.mint(), callee: ProfileSeizedReleaseName, args: argsOf(handle)))
+	end 'release'
+end 'emitProfileHandleClose'
+
+function emitMachPortRelease(module StdModule, block IrBlock, port ValueId, ids ValueMinter)
+	let zero = emitConst(module, block: block, value: 0, ids: ids)
+	let selfTask = emitHostSample(module, block: block, service: HostProcessCall.machSelfTask, a0: zero, a1: zero, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
+	_ = emitHostSample(module, block: block, service: HostProcessCall.machReleasePort, a0: selfTask, a1: port, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
+end 'emitMachPortRelease'
+
 // `__prof_close(handle)` — a zero handle is a no-op, so a failed open flows through here untested.
-function buildProfileClose(module StdModule)
+function buildProfileClose(module StdModule, shape ProfileHostShape)
 	var func = IrFunction.createFromStd(ProfileCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
@@ -522,11 +567,11 @@ function buildProfileClose(module StdModule)
 	var nothing = module.addBlock(func, label: b"pfcnone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let handle = 0 as ValueId
+	let handle = 0
 
 	emitBranchOnCompare(module, block: entry, value: handle, pred: StdCmpPred.eq, against: 0, whenTrue: nothing, whenFalse: live, ids: ids)
 
-	module.appendOp(live, op: StdOp.osCloseHandle(handle))
+	emitProfileHandleClose(module, block: live, handle: handle, shape: shape, ids: ids)
 	module.setTerminator(live, op: StdOp.retVoid)
 
 	module.setTerminator(nothing, op: StdOp.retVoid)
@@ -579,7 +624,7 @@ function buildProfilePagesRelease(module StdModule)
 	module.functions.push(func)
 end 'buildProfilePagesRelease'
 
-function buildProfileBoxDestruct(module StdModule, name ByteArray, release ByteArray)
+export function buildBoxDestruct(module StdModule, name ByteArray, release ByteArray)
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
@@ -597,9 +642,9 @@ function buildProfileBoxDestruct(module StdModule, name ByteArray, release ByteA
 	module.setTerminator(drop, op: StdOp.retVoid)
 
 	module.functions.push(func)
-end 'buildProfileBoxDestruct'
+end 'buildBoxDestruct'
 
-function buildProfileBoxWordGetter(module StdModule, name ByteArray, offset ByteOffset)
+export function buildBoxWordGetter(module StdModule, name ByteArray, offset ByteOffset)
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
@@ -612,7 +657,7 @@ function buildProfileBoxWordGetter(module StdModule, name ByteArray, offset Byte
 	module.setTerminator(entry, op: StdOp.ret(word))
 
 	module.functions.push(func)
-end 'buildProfileBoxWordGetter'
+end 'buildBoxWordGetter'
 
 function buildProfileHandleAdopt(module StdModule)
 	var func = IrFunction.createFromStd(ProfileHandleAdoptName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
@@ -705,33 +750,62 @@ function buildProfileWriteWord(module StdModule)
 	module.functions.push(func)
 end 'buildProfileWriteWord'
 
-export function installProfileRuntime(module StdModule, usage RuntimeUsage, context HostContextLayout)
+export function installProfileRuntime(module StdModule, usage RuntimeUsage, context HostContextLayout, target Target)
 	if not usage.usesProcessSampling 'noSampling'
 		return
 	end 'noSampling'
 
+	buildProfilePagesReserve(module)
+	buildProfilePagesRelease(module)
+	buildBoxDestruct(module, name: ProfilePagesDestructName, release: ProfilePagesReleaseName)
+	buildBoxWordGetter(module, name: ProfilePagesBaseName, offset: ManagedPagesBaseOffset)
+	buildBoxWordGetter(module, name: ProfilePagesBytesName, offset: ManagedPagesBytesOffset)
+	buildBoxWordGetter(module, name: ProfilePagesLendName, offset: ManagedPagesBaseOffset)
+	buildProfileReadWord(module)
+	buildProfileWriteWord(module)
+
+	// The helpers above need only `pageMemory` (`isHostScratchRuntimeCallee`), which wasm32-wasi
+	// provides, so they are built on every lane; the host entries below only where the target samples
+	// processes.
+	if not targetProvidesFacility(target, facility: HostFacility.processSampling) 'noSamplingSubstrate'
+		return
+	end 'noSamplingSubstrate'
+
+	let shape = profileHostShapeOf(target)
+
+	match shape 'shape'
+		win32 then installWin32SamplingEntries(module, layout: context)
+		mach then installMachSamplingEntries(module, layout: context)
+		ptrace then installPtraceSamplingEntries(module, layout: context)
+	end 'shape'
+
+	buildProfileClose(module, shape: shape)
+	buildProfileHandleAdopt(module)
+	buildProfileHandleRelease(module)
+	buildBoxDestruct(module, name: ProfileHandleDestructName, release: ProfileHandleReleaseName)
+	buildBoxWordGetter(module, name: ProfileHandleWordName, offset: ManagedHandleWordOffset)
+end 'installProfileRuntime'
+
+function installWin32SamplingEntries(module StdModule, layout HostContextLayout)
 	buildProfileOpenTarget(module)
 	buildProfileNextThread(module)
 	buildProfileThreadId(module)
 	buildProfileThreadCycles(module)
-	buildProfileSample(module, layout: context)
+	buildProfileSample(module, layout: layout)
 	buildProfileTimerCreate(module)
 	buildProfileTimerWait(module)
+	buildProfileTimerOpen(module)
 	buildProfileModuleSnapshot(module)
 	buildProfileModuleFirst(module)
 	buildProfileModuleNext(module)
-	buildProfileClose(module)
-	buildProfilePagesReserve(module)
-	buildProfilePagesRelease(module)
-	buildProfileBoxDestruct(module, name: ProfilePagesDestructName, release: ProfilePagesReleaseName)
-	buildProfileBoxWordGetter(module, name: ProfilePagesBaseName, offset: ManagedPagesBaseOffset)
-	buildProfileBoxWordGetter(module, name: ProfilePagesBytesName, offset: ManagedPagesBytesOffset)
-	buildProfileBoxWordGetter(module, name: ProfilePagesLendName, offset: ManagedPagesBaseOffset)
-	buildProfileHandleAdopt(module)
-	buildProfileTimerOpen(module)
-	buildProfileHandleRelease(module)
-	buildProfileBoxDestruct(module, name: ProfileHandleDestructName, release: ProfileHandleReleaseName)
-	buildProfileBoxWordGetter(module, name: ProfileHandleWordName, offset: ManagedHandleWordOffset)
-	buildProfileReadWord(module)
-	buildProfileWriteWord(module)
-end 'installProfileRuntime'
+end 'installWin32SamplingEntries'
+
+function installPtraceSamplingEntries(module StdModule, layout HostContextLayout)
+	installPtraceHostRuntime(module, layout: layout)
+	buildProfileSleep(module)
+end 'installPtraceSamplingEntries'
+
+function installMachSamplingEntries(module StdModule, layout HostContextLayout)
+	installMachHostRuntime(module, layout: layout)
+	buildProfileSleep(module)
+end 'installMachSamplingEntries'

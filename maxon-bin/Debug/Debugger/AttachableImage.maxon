@@ -1,0 +1,119 @@
+let AttachedCopySuffix = ".attached"
+
+export type AttachableImage
+	export let launchPath as FilePath
+	let temporary as bool
+
+	export static function asBuilt(path FilePath) returns AttachableImage
+		return Self{launchPath: path, temporary: false}
+	end 'asBuilt'
+
+	static function copyAt(path FilePath) returns AttachableImage
+		return Self{launchPath: path, temporary: true}
+	end 'copyAt'
+
+	export function release()
+		if self.temporary 'aCopy'
+			discardAttachedCopy(self.launchPath)
+		end 'aCopy'
+	end 'release'
+end 'AttachableImage'
+
+export union AttachableRefusal implements Error
+	refused(reason String)
+
+	export function displayReason() returns String
+		return match self 'k'
+			refused(reason) gives reason
+		end 'k'
+	end 'displayReason'
+end 'AttachableRefusal'
+
+export function attachableImageOf(original FilePath) returns AttachableImage throws AttachableRefusal
+	if not attachNeedsAnEntitlement(detectHostTarget()) 'nothingToSign'
+		return AttachableImage.asBuilt(original)
+	end 'nothingToSign'
+
+	// The copy shares the original's directory, so a program that looks beside its own executable
+	// finds what the original has there.
+	let directory = try original.anchoredAt(Directory.currentPath()).parent() otherwise throw AttachableRefusal.refused("the program has no directory to place an attachable copy in")
+
+	// A run killed before it released its copy leaves the copy behind, and the next run in this
+	// directory is the first that can remove it.
+	sweepEndedAttachedCopies(directory)
+
+	let bytes = try resignedBytesOf(original)
+
+	return try writtenCopy(directory, name: "{scratchNameFor(original.filename())}{AttachedCopySuffix}", bytes: bytes)
+end 'attachableImageOf'
+
+export function resignInPlace(image FilePath) throws AttachableRefusal
+	let bytes = try resignedBytesOf(image)
+
+	// Deleted and written anew rather than overwritten: macOS caches a code signature with the file it
+	// validated it on, and an image rewritten in place can be killed at launch against the stale one.
+	try File.delete(image) otherwise (e) 'undeletable'
+		throw AttachableRefusal.refused("the attachable image could not replace the original ({e.name})")
+	end 'undeletable'
+
+	try File.writeBinary(image, content: bytes, mode: FilePermission.executable) otherwise (e) 'unwritten'
+		throw AttachableRefusal.refused("the attachable image could not be written ({e.name})")
+	end 'unwritten'
+end 'resignInPlace'
+
+export function attachedCopyStandingOf(name String) returns ScratchStanding
+	return standingOfScratchName(name, family: ScratchFamily.beforeSuffix(AttachedCopySuffix))
+end 'attachedCopyStandingOf'
+
+export function isAttachedCopyName(name String) returns bool
+	return name.endsWith(AttachedCopySuffix)
+end 'isAttachedCopyName'
+
+function sweepEndedAttachedCopies(directory FilePath)
+	sweepLeftoversOfEndedOwners(directory, livenessOf: endedCopyStandingOf, keyOf: attachedCopyItself, discardKeyed: discardAttachedCopy)
+end 'sweepEndedAttachedCopies'
+
+function endedCopyStandingOf(name String) returns ScratchStanding
+	if not isAttachedCopyName(name) 'notACopy'
+		return ScratchStanding.outsideFamily
+	end 'notACopy'
+
+	let standing = attachedCopyStandingOf(name)
+
+	// The program's directory is the user's, so a `.attached` file with no owner in its name is
+	// theirs and is never aged out the way a stranger in a tool-owned directory is
+	// (`leftoverIsAbandoned`).
+	if standing == ScratchStanding.unmarked 'notOurs'
+		return ScratchStanding.outsideFamily
+	end 'notOurs'
+
+	return standing
+end 'endedCopyStandingOf'
+
+function attachedCopyItself(entry FilePath) returns FilePath
+	return entry
+end 'attachedCopyItself'
+
+function discardAttachedCopy(copy FilePath)
+	removeOwnedFile(copy)
+end 'discardAttachedCopy'
+
+function resignedBytesOf(image FilePath) returns ByteArray throws AttachableRefusal
+	let bytes = try File.readBinary(image) otherwise throw AttachableRefusal.refused("the image cannot be read")
+
+	return try resignedWithGetTaskAllow(bytes) otherwise (e) 'unsignable'
+		throw AttachableRefusal.refused("the image cannot be made attachable: {e.displayReason()}")
+	end 'unsignable'
+end 'resignedBytesOf'
+
+function writtenCopy(directory FilePath, name String, bytes ByteArray) returns AttachableImage throws AttachableRefusal
+	let copy = directory.join(name)
+
+	try File.writeBinary(copy, content: bytes, mode: FilePermission.executable) otherwise (e) 'unwritten'
+		discardAttachedCopy(copy)
+
+		throw AttachableRefusal.refused("the attachable copy cannot be written beside the program, in {directory.path} ({e.name}). macOS hands out a program's task port only to a program signed with the get-task-allow entitlement, so the tool launches a re-signed copy next to the original, and that directory must be writable")
+	end 'unwritten'
+
+	return AttachableImage.copyAt(copy)
+end 'writtenCopy'

@@ -303,8 +303,8 @@ to the library tier: source files under `stdlib/` and `runtime/`. In any other c
 - `.managed`, `__ManagedMemory` and `__ManagedMemoryCursor`, and the methods of a value of either type;
 - `cstr()` and `cstring`;
 - `Promise.inner`;
-- the raw handle types `__ManagedFile`, `__ManagedDirectory`, `__ManagedSocket`, `__ManagedPages` and
-  `__ManagedHandle`.
+- the raw handle types `__ManagedFile`, `__ManagedDirectory`, `__ManagedSocket`, `__ManagedPages`,
+  `__ManagedHandle` and `__ManagedPin`.
 
 The diagnostic names the safe API that replaces the member, where there is one (`Process.id()` for
 `__Builtins.currentProcessId`, `HeapStats.slab()` for the slab counters).

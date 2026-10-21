@@ -1,9 +1,10 @@
 // Profile/ProfileCommand.maxon — `maxon profile run <exe>`: launch a program, sample where its CPU time
 // goes, and print a report.
 //
-// ⭐⭐ **IT PROFILES A PRISTINE BINARY.** No instrumentation, no rebuild, no flag at build time: the only
-// thing read besides the running process is the `.mxdbg` sidecar an ordinary build already writes, which
-// leaves the executable byte-identical. So the program measured is the program that ships.
+// ⭐⭐ **IT PROFILES THE BINARY THAT SHIPS.** No instrumentation: the only thing read besides the running
+// process is the `.mxdbg` sidecar an ordinary build already writes. On macOS the program runs from a
+// temporary copy re-signed with the `get-task-allow` entitlement, because the host hands a task port only
+// to an image that carries it.
 //
 // Every refusal here is the reference driver's own sentence, and that is a contract: a report is a
 // measurement no two runs agree on, so a refusal is the only part of this tool two implementations can
@@ -19,8 +20,8 @@
 // ⭐ **THIS TOOL'S OWN EXIT CODE ANSWERS ONE QUESTION: DID THE MEASUREMENT COMPLETE.** The measured
 // program's status is DATA, reported as `target exit code:` in the text. One integer cannot answer both.
 //
-// The gate and every conjunct of its reason are `ProfileModel`'s.
-#if os(Windows) and arch(x64)
+// The gate and its reason are `ProfileModel`'s.
+#if not os(Wasi)
 	// How this driver names itself and its subcommand in everything it prints. The subcommand word is the
 	// SUBJECT of every refusal (`profile: …`) and the driver name is the one thing the corpus normalizes
 	// away before comparing this tool's transcripts.
@@ -260,10 +261,10 @@
 	// ========================================================================================
 
 	// What a run needs before anything is launched, or the sentence naming what is missing. There is no
-	// partly-trusted path: either the binary, its placement and its sidecar all describe one build, or no
+	// partly-trusted path: either the binary and its sidecar describe one build, or no
 	// program is started at all.
 	union ProfileSubject
-		ready(placement ProfilePlacement, sidecar MxdbgReader)
+		ready(sidecar MxdbgReader, textBytes DebugAddress)
 		refused(reason String)
 	end 'ProfileSubject'
 
@@ -279,15 +280,15 @@
 			return ProfileSubject.refused("no such executable: {reportPathDisplay(exePath)}")
 		end 'noSuchExecutable'
 
-		return match readProfilePlacement(binary) 'placed'
+		return match binaryCodeSection(binary) 'code'
 			refused(reason) gives ProfileSubject.refused(reason)
-			found(placement) gives profileSubjectWithSidecar(binary, placement: placement)
-		end 'placed'
+			found(code) gives profileSubjectWithSidecar(binary, code: code)
+		end 'code'
 	end 'profileSubjectOf'
 
 	// ⚠ The build-id refusal deliberately names the FACT and not the two ids: they are a build-machine detail
 	// a reader can do nothing with, and printing them would make every refusal transcript machine-specific.
-	function profileSubjectWithSidecar(binary FilePath, placement ProfilePlacement) returns ProfileSubject
+	function profileSubjectWithSidecar(binary FilePath, code ByteArray) returns ProfileSubject
 		let sidecarPath = sidecarPathOf(binary)
 
 		if not File.exists(sidecarPath) 'noSidecar'
@@ -300,42 +301,57 @@
 			return ProfileSubject.refused("cannot read {reportPathDisplay(sidecarPath)}: {e.displayReason()}")
 		end 'badImage'
 
-		if sidecar.buildId != codeBuildId(placement.codeBytes) 'differentBuild'
+		if sidecar.buildId != codeBuildId(code) 'differentBuild'
 			return ProfileSubject.refused("the .mxdbg sidecar describes a different build of this binary — rebuild it")
 		end 'differentBuild'
 
-		return ProfileSubject.ready(placement, sidecar: sidecar)
+		return ProfileSubject.ready(sidecar, textBytes: code.count() as DebugAddress)
 	end 'profileSubjectWithSidecar'
 
 	function measureProfile(request ProfileRequest) returns ExitCode
 		return match profileSubjectOf(request.exePath()) 'subject'
 			refused(reason) gives refuseProfile(reason)
-			ready(placement, sidecar) gives launchAndSample(request, placement: placement, sidecar: sidecar)
+			ready(sidecar, textBytes) gives launchAndSample(request, sidecar: sidecar, textBytes: textBytes)
 		end 'subject'
 	end 'measureProfile'
 
-	function launchAndSample(request ProfileRequest, placement ProfilePlacement, sidecar MxdbgReader) returns ExitCode
+	function launchAndSample(request ProfileRequest, sidecar MxdbgReader, textBytes DebugAddress) returns ExitCode
 		let target = try FilePath.from(request.exePath()) otherwise return refuseProfile("'{request.exePath()}' is not a spellable path")
+
+		if SampledProcess.cyclesAreNanoseconds() 'exactClock'
+			return launchAndSampleCalibrated(request, target: target, sidecar: sidecar, textBytes: textBytes, cyclesPerTick: profileIntervalNanos(request.rateHz) as ProfileCyclesPerTick)
+		end 'exactClock'
 
 		return match measureProfileCyclesPerTick(request.rateHz) 'calibration'
 			counterStood gives refuseProfile("this host's per-thread cycle counter did not advance while the sampler's own thread spun, so no thread's CPU can be measured here — a virtual machine or emulator that does not virtualize it")
-			measured(cyclesPerTick) gives launchAndSampleCalibrated(request, target: target, placement: placement, sidecar: sidecar, cyclesPerTick: cyclesPerTick)
+			measured(cyclesPerTick) gives launchAndSampleCalibrated(request, target: target, sidecar: sidecar, textBytes: textBytes, cyclesPerTick: cyclesPerTick)
 		end 'calibration'
 	end 'launchAndSample'
 
-	function launchAndSampleCalibrated(request ProfileRequest, target FilePath, placement ProfilePlacement, sidecar MxdbgReader, cyclesPerTick ProfileCyclesPerTick) returns ExitCode
+	function launchAndSampleCalibrated(request ProfileRequest, target FilePath, sidecar MxdbgReader, textBytes DebugAddress, cyclesPerTick ProfileCyclesPerTick) returns ExitCode
+		let image = try attachableImageOf(target) otherwise (e) 'unattachable'
+			return refuseProfile("{reportPathDisplay(request.exePath())}: {e.displayReason()}")
+		end 'unattachable'
+
+		return launchAndSampleImage(request, image: image, sidecar: sidecar, textBytes: textBytes, cyclesPerTick: cyclesPerTick)
+	end 'launchAndSampleCalibrated'
+
+	function launchAndSampleImage(request ProfileRequest, image AttachableImage, sidecar MxdbgReader, textBytes DebugAddress, cyclesPerTick ProfileCyclesPerTick) returns ExitCode
 		// Rooted, because a spawn resolves a bare program name against PATH rather than against the
 		// working directory, so `dir/prog.exe` would be reported missing by the OS moments after this
 		// file found it.
-		var child = try StreamingSubprocess.spawnWithEnvironment(Executable.path(target.anchoredAt(Directory.currentPath())), arguments: request.targetArgs, workingDirectory: inheritedWorkingDirectory(), environment: profileChildEnvironment(request)) otherwise (e) 'didNotStart'
+		var child = try StreamingSubprocess.spawnWithEnvironment(Executable.path(image.launchPath.anchoredAt(Directory.currentPath())), arguments: request.targetArgs, workingDirectory: inheritedWorkingDirectory(), environment: profileChildEnvironment(request)) otherwise (e) 'didNotStart'
+			image.release()
+
 			return refuseProfile("could not run {reportPathDisplay(request.exePath())}: {e.displayReason()}")
 		end 'didNotStart'
 
-		let outcome = sampleUntilItEnds(request, placement: placement, sidecar: sidecar, child: child, cyclesPerTick: cyclesPerTick)
+		let outcome = sampleUntilItEnds(request, sidecar: sidecar, textBytes: textBytes, child: child, cyclesPerTick: cyclesPerTick)
 		child.release()
+		image.release()
 
 		return outcome
-	end 'launchAndSampleCalibrated'
+	end 'launchAndSampleImage'
 
 	// `--target-env` applied over the INHERITED environment rather than replacing it.
 	function profileChildEnvironment(request ProfileRequest) returns Environment
@@ -347,20 +363,32 @@
 	end 'profileChildEnvironment'
 
 	let ProfileNoSamplerReason = "the sampler could not take the timer and scratch pages it ticks on, so this run could not be measured at all"
+	let ProfileNotPinnedReason = "the sampler could not bind its thread to one machine, and ptrace answers only the operating-system thread that attached, so this run could not be measured at all"
+
+	function profileAccessDeniedHint(os Os) returns String
+		return match os 'host'
+			macos gives "the host refused the program's task port. macOS hands one out only for a program signed with the {GetTaskAllowEntitlement} entitlement, which the copy this tool launches carries, and only to a user with Developer Tools Access (see `DevToolsSecurity -status`)."
+			linux gives "ptrace refused to attach to the program's threads. The sampler runs the program as its own child, which kernel.yama.ptrace_scope=1 allows; a value of 2 or 3, a container without CAP_SYS_PTRACE, or a seccomp profile that blocks ptrace refuses it."
+
+			windows or
+			wasi panic("profileAccessDeniedHint: {os.name} opens a process by handle, and a refusal there is not SamplerError.accessDenied")
+		end 'host'
+	end 'profileAccessDeniedHint'
 
 	// ⭐ Everything that can fail is asked HERE, before a single tick, so a refusal names the missing mechanism
 	// rather than a profile coming back mysteriously empty.
 	//
 	// ⚠ The session is built into a LOCAL `var` rather than handed back inside a union: it is written on
 	// every tick, and a value bound by a `match` arm is immutable (E3063).
-	function sampleUntilItEnds(request ProfileRequest, placement ProfilePlacement, sidecar MxdbgReader, child StreamingSubprocess, cyclesPerTick ProfileCyclesPerTick) returns ExitCode
+	function sampleUntilItEnds(request ProfileRequest, sidecar MxdbgReader, textBytes DebugAddress, child StreamingSubprocess, cyclesPerTick ProfileCyclesPerTick) returns ExitCode
 		let pid = try child.processId() otherwise panic("ProfileCommand.sampleUntilItEnds: the child was spawned for this session and is released only after sampling, so the spawn recorded a process id for it")
 
 		let process = try SampledProcess.open(pid) otherwise (e) 'cannotOpen'
 			match e 'why'
 				noSuchProcess then return refuseProfileAfterKilling(child, reason: "{reportPathDisplay(request.exePath())} could not be sampled: it ended before the sampler attached. Profile a program that runs long enough to be measured.")
 				noScratch then return refuseProfileAfterKilling(child, reason: ProfileNoSamplerReason)
-				noTimer or
+				accessDenied then return refuseProfileAfterKilling(child, reason: "{reportPathDisplay(request.exePath())} could not be sampled: {profileAccessDeniedHint(detectHostTarget().os)}")
+				threadNotPinned then return refuseProfileAfterKilling(child, reason: ProfileNotPinnedReason)
 				unknownThread or
 				outOfWindow or
 				moduleListUnavailable or
@@ -370,7 +398,7 @@
 
 		var session = ProfileSession.create(process, cyclesPerTick: cyclesPerTick)
 
-		let outcome = match profileImageFor(session, placement: placement, sidecar: sidecar) 'symbols'
+		let outcome = match profileImageFor(session, sidecar: sidecar, textBytes: textBytes) 'symbols'
 			refused(reason) gives refuseProfileAfterKilling(child, reason: reason)
 			loaded(image) gives runProfileTicks(request, child: child, session: session, image: image)
 		end 'symbols'
@@ -384,7 +412,12 @@
 		var accumulator = ProfileAccumulator.create()
 		var frames = ProfileStringArray.create()
 
-		var timer = try SampleTimer.create(profileIntervalNanos(request.rateHz)) otherwise return refuseProfileAfterKilling(child, reason: ProfileNoSamplerReason)
+		var timer = SampleTimer.create(profileIntervalNanos(request.rateHz))
+
+		if not timer.ready() 'noTimer'
+			return refuseProfileAfterKilling(child, reason: ProfileNoSamplerReason)
+		end 'noTimer'
+
 		let deadlineNanos = trunc(request.timeoutSeconds * MillisecondsPerSecond * NanosPerMilli) as DurationNanos
 		let started = Clock.nowNanos()
 		var lastRefresh = started
@@ -512,11 +545,11 @@
 	end 'refuseProfileUsage'
 #else
 	/// Refused by name rather than absent, as `monitor` is. Sampling suspends another process's
-	/// threads and reads its register file as an x64 `CONTEXT` (`TargetFacilities.processSampling`),
-	/// which a compiler without that intrinsic cannot serve. The driver's command match is exhaustive,
+	/// threads and reads their registers (`TargetFacilities.processSampling`), which a WASI component
+	/// cannot serve. The driver's command match is exhaustive,
 	/// so a caller who typed `profile` is owed the reason rather than a usage listing.
 	export function runProfile(args MaxonArgs) returns ExitCode
-		printError("maxon profile: unavailable in this build. Sampling suspends the target's threads and reads an x64 CONTEXT record, which only an x64-Windows compiler can do — so the {args.paths.count()} argument(s) after `profile` name a program it cannot measure.\n")
+		printError("maxon profile: unavailable in this build. Sampling stops the target's threads and reads their registers, which needs a native process host and a WASI component has none — so the {args.paths.count()} argument(s) after `profile` name a program it cannot measure.\n")
 
 		return OwnFailureExit
 	end 'runProfile'

@@ -62,7 +62,9 @@ let MainSignatureQualifiers = ["export ", "module ", "public ", "async "]
 let CommandLineReader = "CommandLine"
 let ExecutablePathReader = "executablePath"
 let DebugStreamReader = "__DebugStream"
-let ProcessStateWriters = ["Log", "Logger", "LogSink", "TraceCapture", "enterBackgroundPriority", "pinToMachine", "unpinFromMachine"]
+let ProcessStateWriters = ["Log", "Logger", "LogSink", "TraceCapture", "enterBackgroundPriority", "pinToMachine", "unpinFromMachine", "MachinePin"]
+let ProcessDrivers = ["SampledProcess"]
+let DrivesOtherProcessesGap = "a batch program reaches another process, but placement keeps such a case out of every batch: add the name that reached it to ProcessDrivers"
 let GreenThreadQuiesceCall = "Scheduler.quiesce()"
 let BatchNothingOutstanding = 0
 let FileMacro = "__file__"
@@ -86,6 +88,10 @@ module enum SoloReason
 	// `Log`, `Logger`, `LogSink`, `TraceCapture`, the process priority and a machine pin set process-wide
 	// state a later case would inherit.
 	sharesProcessState
+
+	// A program that takes another process's task port runs from an image `compileOneTest` re-signs,
+	// and a batch image is not re-signed.
+	drivesOtherProcesses
 
 	// A multi-file program refuses an export nothing uses (E3092, E3094).
 	exportsFromItsFile
@@ -514,6 +520,10 @@ function claimedPlacementFor(member BatchMember, claims SourceClaims) returns Cl
 		return ClaimedPlacement.apart(SoloReason.sharesProcessState)
 	end 'sharesProcessState'
 
+	if namesAny(claims, words: ProcessDrivers) 'drivesOtherProcesses'
+		return ClaimedPlacement.apart(SoloReason.drivesOtherProcesses)
+	end 'drivesOtherProcesses'
+
 	if namesAny(claims, words: [DebugStreamReader]) 'numbersNamesProgramWide'
 		return ClaimedPlacement.apart(SoloReason.numbersNamesProgramWide)
 	end 'numbersNamesProgramWide'
@@ -732,6 +742,12 @@ function buildBatch(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray,
 		let answer = CompileAnswer.create(compileVerdictOf(e), diagnostics: session.diagnostics.text())
 		return BatchBuild.notBuilt(answer, refused: membersNamedIn(answer.diagnostics, ordinal: ordinal, count: members.count()))
 	end 'didNotCompile'
+
+	if product.drivesOtherProcesses 'aGapInPlacement'
+		try File.delete(exePath) otherwise ignore
+
+		return BatchBuild.notBuilt(CompileAnswer.create(CompileVerdict.driverFailed, diagnostics: DrivesOtherProcessesGap), refused: TestRunIndexArray.create())
+	end 'aGapInPlacement'
 
 	var written = FilePathArray.create()
 

@@ -1,8 +1,6 @@
 module typealias PtraceRegOffsetArray = Array with BackendWord
 
 #if arch(arm64)
-	let StackPointerOffset = 248
-	let ProgramCounterOffset = 256
 	let StatusWordOffset = 264
 
 	let VectorLaneBase = 0
@@ -10,8 +8,6 @@ module typealias PtraceRegOffsetArray = Array with BackendWord
 #endif
 
 #if not arch(arm64)
-	let StackPointerOffset = 152
-	let ProgramCounterOffset = 128
 	let StatusWordOffset = 144
 
 	let VectorLaneBase = 160
@@ -21,7 +17,6 @@ module typealias PtraceRegOffsetArray = Array with BackendWord
 	let UserRegsR14 = 8
 	let UserRegsR13 = 16
 	let UserRegsR12 = 24
-	let UserRegsRbp = 32
 	let UserRegsRbx = 40
 	let UserRegsR11 = 48
 	let UserRegsR10 = 56
@@ -39,11 +34,11 @@ module function ptraceBlockWord(block RegisterBlock, at BackendWord) returns Bac
 end 'ptraceBlockWord'
 
 module function ptraceStackPointerOf(block RegisterBlock) returns BackendWord
-	return ptraceBlockWord(block, at: StackPointerOffset)
+	return ptraceBlockWord(block, at: TraceStackPointerOffset)
 end 'ptraceStackPointerOf'
 
 module function ptraceProgramCounterOf(block RegisterBlock) returns BackendWord
-	return ptraceBlockWord(block, at: ProgramCounterOffset)
+	return ptraceBlockWord(block, at: TraceProgramCounterOffset)
 end 'ptraceProgramCounterOf'
 
 module function ptraceStatusWordOf(block RegisterBlock) returns BackendWord
@@ -55,7 +50,7 @@ module function ptraceVectorLaneOf(block RegisterBlock, lane BackendWord) return
 end 'ptraceVectorLaneOf'
 
 module function ptraceWithProgramCounter(block RegisterBlock, address BackendWord) returns RegisterBlock throws DebuggeeError
-	return try block.with(ProgramCounterOffset as RegisterOffset, word: address as RegisterWord)
+	return try block.with(TraceProgramCounterOffset as RegisterOffset, word: address as RegisterWord)
 end 'ptraceWithProgramCounter'
 
 module function ptraceGprBlockOffsets() returns PtraceRegOffsetArray
@@ -72,8 +67,8 @@ module function ptraceGprBlockOffsets() returns PtraceRegOffsetArray
 		offsets.push(UserRegsRcx)
 		offsets.push(UserRegsRdx)
 		offsets.push(UserRegsRbx)
-		offsets.push(StackPointerOffset)
-		offsets.push(UserRegsRbp)
+		offsets.push(TraceStackPointerOffset)
+		offsets.push(TraceFramePointerOffset)
 		offsets.push(UserRegsRsi)
 		offsets.push(UserRegsRdi)
 		offsets.push(UserRegsR8)

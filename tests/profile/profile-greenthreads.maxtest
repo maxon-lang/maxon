@@ -12,7 +12,8 @@
 //      to enumerate them, which matters because the only mechanism that CAN enumerate green threads is the
 //      debugger's, answered exclusively by a STOPPED target, and stopping a program once per sample is a
 //      design this tree has already refused;
-//   3. `__sched_worker_loop` appears NOWHERE — at any reporting floor, in any section, in any rendering.
+//   3. `__sched_worker_loop` appears NOWHERE — at any reporting floor, in any section, in any rendering —
+//      and the samples a worker spends in it are counted on the `runtime:` line, at most a quarter of the run.
 //
 // ⛔ **THAT ABSENCE IS ONLY WORTH ASSERTING BECAUSE THE SYMBOL COULD BE NAMED.** `__sched_worker_loop` is a
 // real function in the emitted runtime and it is listed in the `.mxdbg` sidecar of this very fixture, so a
@@ -46,6 +47,8 @@ let SchedulerWorkerLoopName = "__sched_worker_loop"
 // the profiler.
 let PinnedProcessorCount = "MAXON_MAX_PROCS=2"
 let GreenThreadStackCount = 2
+
+let MaxRuntimeShareDivisor = 4
 
 test 'two green threads are profiled as themselves and the scheduler is not'
 	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "profile-greenthreads", fixture: GreenThreadsFixtureName)
@@ -84,10 +87,11 @@ test 'two green threads are profiled as themselves and the scheduler is not'
 	let stackNames = rowNames(significantRows(sectionRows(lines, header: StacksHeader), totalSamples: samples))
 	Expect.equal(stackNames.count(), expected: GreenThreadStackCount, message: "the report lists {stackNames.count()} stack(s) above this corpus's floor, and the fixture runs {GreenThreadStackCount} green threads on {PinnedProcessorCount}. ONE would mean both tasks were folded onto the worker that happened to run them, which is the whole failure this case exists to catch. It listed:{LineFeed}{terminatedLines(stackNames)}")
 
-	// ⭐⭐ CLAIM 3 — and the scheduler is nowhere, at any floor, in any section. Asserted over the WHOLE report
-	// rather than over the rows above a floor: a scheduler summarized into a "not shown" count is still a
-	// scheduler that was sampled.
+	// ⭐ CLAIM 3 — the scheduler nowhere, and its own samples on the `runtime:` line.
 	Expect.isFalse(withoutCarriageReturns(run.stdout).contains(SchedulerWorkerLoopName), message: "`{SchedulerWorkerLoopName}` appears in the profile. It is the loop a worker runs BETWEEN green threads, and a sampler that attributed a task's samples to it would report every Maxon program as spending its life in the scheduler — burying the work under the machinery that dispatched it. The symbol is in this fixture's own sidecar, so naming it is something the profiler can do and must not. It printed:{LineFeed}{run.stdout}")
+	Expect.isTrue(reportHasLineStartingWith(lines, prefix: RuntimeLinePrefix), message: "the report carries no '{RuntimeLinePrefix}' line, which states how many samples fell in the runtime's own machinery — a line that is always printed, as zero when there were none. It printed:{LineFeed}{run.stdout}")
+	let counted = runtimeSamples(run.stdout, profilerLabel: TestedCompilerStem)
+	Expect.isTrue(counted * MaxRuntimeShareDivisor <= samples, message: "the report counts {counted} of its {samples} samples in the runtime's own machinery, more than one in {MaxRuntimeShareDivisor}. The fixture's two tasks do arithmetic for the whole run and the scheduler only dispatches between them, so a larger share means the profiler folded the tasks' own samples into the runtime. It printed:{LineFeed}{run.stdout}")
 end 'two green threads are profiled as themselves and the scheduler is not'
 
 // Both tasks present, and the busier one first — asked of two sections, so it is written once.

@@ -833,7 +833,7 @@ A field of a generic type holds that same type again over a type built from its 
 
 ### E3185 — `rawSurfaceOutsideLibraryTier`
 
-A source file outside `stdlib/` and `runtime/` reached the raw memory surface: a `__Builtins` call, a `.managed` field, a `__ManagedMemory` or `__ManagedMemoryCursor` type or method, `.cstr()` or the `cstring` type, a promise's `.inner` handle, or a raw OS handle type (`__ManagedFile`, `__ManagedDirectory`, `__ManagedSocket`, `__ManagedPages`, `__ManagedHandle`). These read and write memory with no bounds or ownership check, so only the library tiers may name them; a program reaches the same facilities through the standard library's checked APIs, which the message names where there is one (`Process.id()`, `HeapStats.slab()`, `Scheduler.counters()`, `File`, `isComplete()`). Reported once per file, at its first raw use. `__Raw` is narrower still: E3152.
+A source file outside `stdlib/` and `runtime/` reached the raw memory surface: a `__Builtins` call, a `.managed` field, a `__ManagedMemory` or `__ManagedMemoryCursor` type or method, `.cstr()` or the `cstring` type, a promise's `.inner` handle, or a raw handle type (`__ManagedFile`, `__ManagedDirectory`, `__ManagedSocket`, `__ManagedPages`, `__ManagedHandle`, `__ManagedPin`). These read and write memory with no bounds or ownership check, so only the library tiers may name them; a program reaches the same facilities through the standard library's checked APIs, which the message names where there is one (`Process.id()`, `HeapStats.slab()`, `Scheduler.counters()`, `File`, `isComplete()`). Reported once per file, at its first raw use. `__Raw` is narrower still: E3152.
 
 ### E3186 — `argumentOverlapsWrittenParameter`
 

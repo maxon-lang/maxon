@@ -4,7 +4,10 @@
 // Produces a PIE, ad-hoc-signed `MH_EXECUTE`: __PAGEZERO / __TEXT / __DATA /
 // __LINKEDIT, dyld chained-fixup imports through a __got, and an embedded ad-hoc
 // code signature (an unsigned arm64 binary is SIGKILL'd by AMFI on Apple
-// Silicon). ARM64 patching goes through the reach-guarded helpers in
+// Silicon). A build's signature carries no entitlement; `resignedWithGetTaskAllow`
+// rewrites the signature of an image this writer produced so that it also carries the
+// `get-task-allow` entitlement, which `task_for_pid` requires of the image it is
+// asked for. ARM64 patching goes through the reach-guarded helpers in
 // BinaryHelpers.
 //
 // It handles what the CodeResult carries: __text, rdata (float constants + String
@@ -90,7 +93,28 @@ let SAttrSomeInstructions = 0x00000400
 // --- Code signing constants (the whole blob is BIG-ENDIAN) ---
 let CsMagicEmbeddedSignature = 0xFADE0CC0
 let CsMagicCodeDirectory = 0xFADE0C02
+let CsMagicEmbeddedEntitlements = 0xFADE7171
+let CsMagicEmbeddedDerEntitlements = 0xFADE7172
 let CsSlotCodeDirectory = 0
+let CsSlotEntitlements = 5
+let CsSlotDerEntitlements = 7
+let CsBlobHeaderSize = 8
+let CsSuperBlobFixedSize = 12
+let CsBlobIndexSize = 8
+let CsCodeDirectoryBlobCount = 1
+
+let EntitlementsPlistDocumentType = "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">"
+
+let DerTagApplication16 = 0x70
+let DerTagInteger = 0x02
+let DerTagContext16 = 0xB0
+let DerTagSequence = 0x30
+let DerTagUtf8String = 0x0C
+let DerTagBoolean = 0x01
+let DerBooleanTrue = 0xFF
+let DerByteMask = 0xFF
+let DerEntitlementsVersion = 1
+let DerShortLengthLimit = 128
 let CsAdhoc = 0x2
 let CsLinkerSigned = 0x20000
 let CsHashTypeSha256 = 2
@@ -108,9 +132,6 @@ let CsExecSegMainBinary = 0x1
 // CodeDirectory version 0x20400 is the first that carries the execSeg fields.
 let CsCodeDirectoryVersion = 0x20400
 let CodeDirectoryHeaderSize = 88
-
-// SuperBlob header (magic+length+count = 12) + one BlobIndex (type+offset = 8).
-let SuperBlobHeaderSize = 20
 
 // --- Chained fixups ---
 // Pointer format 6 = DYLD_CHAINED_PTR_64_OFFSET, the slide-safe 64-bit format this
@@ -322,6 +343,18 @@ function machoImportSymbol(slot OsImportSlot) returns String
 		pthreadKill gives "_pthread_kill"
 		kqueue gives "_kqueue"
 		kevent gives "_kevent"
+		machTaskSelf gives "_mach_task_self"
+		taskForPid gives "_task_for_pid"
+		taskThreads gives "_task_threads"
+		threadInfo gives "_thread_info"
+		threadSuspend gives "_thread_suspend"
+		threadResume gives "_thread_resume"
+		threadGetState gives "_thread_get_state"
+		machThreadSelf gives "_mach_thread_self"
+		machVmReadOverwrite gives "_mach_vm_read_overwrite"
+		taskInfo gives "_task_info"
+		machPortDeallocate gives "_mach_port_deallocate"
+		machVmDeallocate gives "_mach_vm_deallocate"
 	end 'sym'
 end 'machoImportSymbol'
 
@@ -354,7 +387,7 @@ function writeMachoName(buf ByteArray, name String)
 		written = written + 1
 	end 'chars'
 
-	while written < 16 'pad'
+	while written < MachoNameFieldBytes 'pad'
 		buf.push(0)
 		written = written + 1
 	end 'pad'
@@ -718,41 +751,51 @@ end 'patchImportRelocations'
 // --- Code signature ---
 
 // Build the embedded ad-hoc signature: an EmbeddedSignature SuperBlob wrapping a
-// single CodeDirectory that SHA-256-hashes the file in 4 KiB pages up to
-// `codeLimit` (the signature's own offset). All multi-byte fields are big-endian.
+// CodeDirectory that SHA-256-hashes the file in 4 KiB pages up to `codeLimit` (the
+// signature's own offset), and for a re-signed image the plist and DER entitlement blobs the
+// CodeDirectory's special slots vouch for. Both forms are written and must agree: the kernel reads
+// the DER one. All multi-byte fields are big-endian.
 // The circularity — the signature covers the file, which contains the signature —
 // is broken by up-front deterministic layout: `codeLimit` and every size are known
 // before a byte is written, the signature is appended last, and the signed region
 // is exactly `[0, codeLimit)`.
-function buildCodeSignature(fileData ByteArray, codeLimit MachineWord, execSegLimit MachineWord, identifier String) returns ByteArray
+function buildCodeSignature(fileData ByteArray, execSegLimit MachineWord, layout CodeSignatureLayout) returns ByteArray
 	let hashPageSize = 1 shl CsPageSizeLog2
-	let nCodeSlots = (codeLimit + hashPageSize - 1) / hashPageSize
-
-	let identifierBytes = identifier.toByteArray()
-	let identLen = identifierBytes.count() + 1  // NUL-terminated
-
-	let hashOffset = CodeDirectoryHeaderSize + identLen
-	let cdSize = hashOffset as MachineWord + nCodeSlots * CsSha256Len
-	let codeSignatureSize = SuperBlobHeaderSize + cdSize
+	let nCodeSlots = layout.codeSlots
+	let codeLimit = layout.codeLimit
+	let identifierBytes = layout.identifier.toByteArray()
+	let blobs = layout.blobs
+	let specialSlotCount = specialSlotCountOf(blobs)
+	let headerSize = superBlobHeaderSizeOf(blobs)
+	let hashOffset = hashesOffsetOf(layout.identLen, blobs: blobs)
+	let cdSize = codeDirectorySizeOf(layout.identLen, codeSlots: nCodeSlots as BytePos, blobs: blobs) as MachineWord
+	let codeSignatureSize = layout.size
 
 	var sig = ByteArray.create()
 	sig.reserve(codeSignatureSize as ElementIndex)
 
-	// SuperBlob header + BlobIndex[0].
 	writeDwordBE(sig, value: CsMagicEmbeddedSignature)
-	writeDwordBE(sig, value: codeSignatureSize)
-	writeDwordBE(sig, value: 1)  // blob count
+	writeDwordBE(sig, value: codeSignatureSize as MachineWord)
+	writeDwordBE(sig, value: (CsCodeDirectoryBlobCount + blobs.count()) as MachineWord)
 	writeDwordBE(sig, value: CsSlotCodeDirectory)
-	writeDwordBE(sig, value: SuperBlobHeaderSize)  // offset to the CodeDirectory
+	writeDwordBE(sig, value: headerSize as MachineWord)
+
+	var blobOffset = headerSize as MachineWord + cdSize
+
+	for blob in blobs 'blobIndex'
+		writeDwordBE(sig, value: blob.slot)
+		writeDwordBE(sig, value: blobOffset)
+		blobOffset = blobOffset + blob.bytes.count() as MachineWord
+	end 'blobIndex'
 
 	// CodeDirectory header.
 	writeDwordBE(sig, value: CsMagicCodeDirectory)
 	writeDwordBE(sig, value: cdSize)
 	writeDwordBE(sig, value: CsCodeDirectoryVersion)
-	writeDwordBE(sig, value: CsAdhoc or CsLinkerSigned)  // flags
+	writeDwordBE(sig, value: layout.flags)
 	writeDwordBE(sig, value: hashOffset as MachineWord)
 	writeDwordBE(sig, value: CodeDirectoryHeaderSize)  // identOffset
-	writeDwordBE(sig, value: 0)  // nSpecialSlots
+	writeDwordBE(sig, value: specialSlotCount as MachineWord)  // nSpecialSlots
 	writeDwordBE(sig, value: nCodeSlots)
 	writeDwordBE(sig, value: codeLimit)
 	sig.push(CsSha256Len)  // hashSize
@@ -771,6 +814,11 @@ function buildCodeSignature(fileData ByteArray, codeLimit MachineWord, execSegLi
 	// Identifier, NUL-terminated.
 	sig.append(identifierBytes)
 	sig.push(0)
+
+	// Special-slot hashes, slot -7 first; a slot that names no blob hashes to zeros.
+	for special in 0 upto specialSlotCount 'specialSlots'
+		sig.append(specialSlotHash(blobs, slot: (specialSlotCount - special) as MachineWord))
+	end 'specialSlots'
 
 	// Page hashes: SHA-256 of each 4 KiB page; the last page hashed at its real
 	// (short) length, not padded.
@@ -795,8 +843,171 @@ function buildCodeSignature(fileData ByteArray, codeLimit MachineWord, execSegLi
 		sig.append(sha256(pageData))
 	end 'hashPages'
 
+	for blob in blobs 'blobBodies'
+		sig.append(blob.bytes)
+	end 'blobBodies'
+
+	if sig.count() != codeSignatureSize as ElementIndex 'sizeDrifted'
+		panic("buildCodeSignature: the signature came out {sig.count()} bytes against the {codeSignatureSize} its layout reserved in __LINKEDIT — the size formulas and the writer disagree")
+	end 'sizeDrifted'
+
 	return sig
 end 'buildCodeSignature'
+
+type CodeSignatureLayout
+	module let identifier as String
+	module let identLen as BytePos
+	module let codeLimit as MachineWord
+	module let codeSlots as MachineWord
+	module let blobs as SignedBlobArray
+	module let flags as MachineWord
+	module let size as BytePos
+
+	static function planned(identifier String, codeLimit MachineWord, blobs SignedBlobArray) returns CodeSignatureLayout
+		let identLen = (identifier.toByteArray().count() + 1) as BytePos
+		let hashPageSize = 1 shl CsPageSizeLog2
+		let codeSlots = (codeLimit + hashPageSize - 1) / hashPageSize
+		let size = codeSignatureSizeOf(identLen, codeSlots: codeSlots as BytePos, blobs: blobs)
+
+		return Self{identifier: identifier, identLen: identLen, codeLimit: codeLimit, codeSlots: codeSlots, blobs: blobs, flags: codeDirectoryFlagsFor(blobs), size: size}
+	end 'planned'
+end 'CodeSignatureLayout'
+
+type SignedBlob
+	module let slot as MachineWord
+	module let bytes as ByteArray
+
+	static function create(slot MachineWord, bytes ByteArray) returns SignedBlob
+		return Self{slot: slot, bytes: bytes}
+	end 'create'
+end 'SignedBlob'
+
+typealias SignedBlobArray = Array with SignedBlob
+
+// macOS takes no entitlement from a linker-signed signature, so a signature that carries the
+// entitlement blobs is plain ad-hoc.
+function codeDirectoryFlagsFor(blobs SignedBlobArray) returns MachineWord
+	if blobs.isEmpty() 'linkerSigned'
+		return CsAdhoc or CsLinkerSigned
+	end 'linkerSigned'
+
+	return CsAdhoc
+end 'codeDirectoryFlagsFor'
+
+function isWrittenCodeDirectoryFlags(flags MachineWord) returns bool
+	return flags == codeDirectoryFlagsFor(SignedBlobArray.create()) or flags == codeDirectoryFlagsFor(getTaskAllowBlobs())
+end 'isWrittenCodeDirectoryFlags'
+
+function getTaskAllowBlobs() returns SignedBlobArray
+	var blobs = SignedBlobArray.create()
+	blobs.push(SignedBlob.create(CsSlotEntitlements, bytes: entitlementsPlistBlob()))
+	blobs.push(SignedBlob.create(CsSlotDerEntitlements, bytes: entitlementsDerBlob()))
+
+	return blobs
+end 'getTaskAllowBlobs'
+
+function linkeditFileSizeFor(linkeditFileOff BytePos, signatureEnd BytePos) returns BytePos
+	return alignUp(signatureEnd - linkeditFileOff, alignment: MachoPageSize)
+end 'linkeditFileSizeFor'
+
+function appendSignature(image ByteArray, execSegLimit MachineWord, layout CodeSignatureLayout, paddedTo BytePos)
+	image.append(buildCodeSignature(image, execSegLimit: execSegLimit, layout: layout))
+	padTo(image, size: paddedTo)
+end 'appendSignature'
+
+function specialSlotCountOf(blobs SignedBlobArray) returns BytePos
+	var count = 0 as BytePos
+
+	for blob in blobs 'eachBlob'
+		if blob.slot as BytePos > count 'higher'
+			count = blob.slot as BytePos
+		end 'higher'
+	end 'eachBlob'
+
+	return count
+end 'specialSlotCountOf'
+
+function superBlobHeaderSizeOf(blobs SignedBlobArray) returns BytePos
+	return CsSuperBlobFixedSize + (CsCodeDirectoryBlobCount + blobs.count()) * CsBlobIndexSize
+end 'superBlobHeaderSizeOf'
+
+function specialSlotHash(blobs SignedBlobArray, slot MachineWord) returns ByteArray
+	for blob in blobs 'eachBlob'
+		if blob.slot == slot 'named'
+			return sha256(blob.bytes)
+		end 'named'
+	end 'eachBlob'
+
+	var unused = ByteArray.create()
+	writeZeros(unused, n: CsSha256Len)
+
+	return unused
+end 'specialSlotHash'
+
+function hashesOffsetOf(identLen BytePos, blobs SignedBlobArray) returns BytePos
+	return CodeDirectoryHeaderSize + identLen + specialSlotCountOf(blobs) * CsSha256Len
+end 'hashesOffsetOf'
+
+function codeDirectorySizeOf(identLen BytePos, codeSlots BytePos, blobs SignedBlobArray) returns BytePos
+	return hashesOffsetOf(identLen, blobs: blobs) + codeSlots * CsSha256Len
+end 'codeDirectorySizeOf'
+
+function codeSignatureSizeOf(identLen BytePos, codeSlots BytePos, blobs SignedBlobArray) returns BytePos
+	var bodies = 0 as BytePos
+
+	for blob in blobs 'eachBlob'
+		bodies = bodies + blob.bytes.count() as BytePos
+	end 'eachBlob'
+
+	return superBlobHeaderSizeOf(blobs) + codeDirectorySizeOf(identLen, codeSlots: codeSlots, blobs: blobs) + bodies
+end 'codeSignatureSizeOf'
+
+function entitlementsBlob(magic MachineWord, payload ByteArray) returns ByteArray
+	var blob = ByteArray.create()
+	blob.reserve((CsBlobHeaderSize + payload.count()) as ElementIndex)
+	writeDwordBE(blob, value: magic)
+	writeDwordBE(blob, value: (CsBlobHeaderSize + payload.count()) as MachineWord)
+	blob.append(payload)
+
+	return blob
+end 'entitlementsBlob'
+
+function entitlementsPlistBlob() returns ByteArray
+	let document = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n{EntitlementsPlistDocumentType}\n<plist version=\"1.0\"><dict><key>{GetTaskAllowEntitlement}</key><true/></dict></plist>\n"
+
+	return entitlementsBlob(CsMagicEmbeddedEntitlements, payload: document.toByteArray())
+end 'entitlementsPlistBlob'
+
+function entitlementsDerBlob() returns ByteArray
+	var entry = ByteArray.create()
+	entry.append(derElement(DerTagUtf8String, content: GetTaskAllowEntitlement.toByteArray()))
+	entry.append(derElement(DerTagBoolean, content: derByteArrayOf(DerBooleanTrue)))
+
+	var version = derElement(DerTagInteger, content: derByteArrayOf(DerEntitlementsVersion))
+	version.append(derElement(DerTagContext16, content: derElement(DerTagSequence, content: entry)))
+
+	return entitlementsBlob(CsMagicEmbeddedDerEntitlements, payload: derElement(DerTagApplication16, content: version))
+end 'entitlementsDerBlob'
+
+function derByteArrayOf(value MachineWord) returns ByteArray
+	var bytes = ByteArray.create()
+	bytes.push(value and DerByteMask)
+
+	return bytes
+end 'derByteArrayOf'
+
+function derElement(tag MachineWord, content ByteArray) returns ByteArray
+	if content.count() >= DerShortLengthLimit 'longForm'
+		panic("derElement: a {content.count()}-byte element needs DER's long length form, and the one entitlement this writer signs in never does")
+	end 'longForm'
+
+	var element = ByteArray.create()
+	element.push(tag and DerByteMask)
+	element.push(content.count() and DerByteMask)
+	element.append(content)
+
+	return element
+end 'derElement'
 
 // --- Symbol table (debugger-only; the loader ignores it) ---
 
@@ -987,15 +1198,10 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	// --- Code signature: offset and size known up front (the layout is circular
 	// only if you patch after the fact; here every size is deterministic). ---
 	let codeSignatureOff = alignUp(strtabOff + strtabSize as BytePos, alignment: 16)
-	let identifier = outputPath.stem()
-	let identLen = identifier.toByteArray().count() + 1
-	let csHashPageSize = 1 shl CsPageSizeLog2
-	let csNCodeSlots = (codeSignatureOff + csHashPageSize - 1) / csHashPageSize
-	let csCdSize = CodeDirectoryHeaderSize + identLen as BytePos + csNCodeSlots * CsSha256Len
-	let codeSignatureSize = SuperBlobHeaderSize + csCdSize
+	let signatureLayout = CodeSignatureLayout.planned(outputPath.stem(), codeLimit: codeSignatureOff as MachineWord, blobs: SignedBlobArray.create())
+	let codeSignatureSize = signatureLayout.size
 
-	let linkeditEnd = codeSignatureOff + codeSignatureSize
-	let linkeditFileSize = alignUp(linkeditEnd - linkeditFileOff, alignment: MachoPageSize)
+	let linkeditFileSize = linkeditFileSizeFor(linkeditFileOff, signatureEnd: codeSignatureOff + codeSignatureSize)
 
 	// --- Patch relocations into the code image (before it is written) ---
 	patchImportRelocations(code, relocations: codeResult.relocations, textSectionVmAddr: textSectionVmAddr, gotSectionVmAddr: gotSectionVmAddr)
@@ -1182,9 +1388,7 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	padTo(macho, size: codeSignatureOff)
 
 	// --- Sign, append, finalize ---
-	let sig = buildCodeSignature(macho, codeLimit: codeSignatureOff as MachineWord, execSegLimit: textSegmentFileSize as MachineWord, identifier: identifier)
-	macho.append(sig)
-	padTo(macho, size: linkeditFileOff + linkeditFileSize)
+	appendSignature(macho, execSegLimit: textSegmentFileSize as MachineWord, layout: signatureLayout, paddedTo: linkeditFileOff + linkeditFileSize)
 
 	// ⛔ THE FAILURE ARM RETURNS. Falling through logs `write complete: <n> bytes` about a file that was
 	// never written — MEASURED on a fresh clone, where `maxon-bin/.maxon/` does not exist: the writer
@@ -1211,3 +1415,184 @@ function writeMachoLcString(buf ByteArray, text String, commandSize BytePos, nam
 	let written = nameOffset + bytes.count() as BytePos + 1
 	writeZeros(buf, n: commandSize - written)
 end 'writeMachoLcString'
+
+// --- Re-signing an image this writer produced ---
+
+let MachoNameFieldBytes = 16
+let MhCpuTypeField = 4
+let MhFileTypeField = 12
+let CsSuperBlobLengthField = 4
+let CsSuperBlobCountField = 8
+let CsBlobIndexOffsetField = 4
+let CdLengthField = 4
+let CdVersionField = 8
+let CdFlagsField = 12
+let CdIdentOffsetField = 20
+let CdCodeLimitField = 32
+let CdHashSizeField = 36
+let CdHashTypeField = 37
+let CdPageSizeField = 39
+
+export union MachOResignError implements Error
+	notAMachOImage
+	foreignImage(reason String)
+	malformedImage(reason String)
+
+	export function displayReason() returns String
+		return match self 'k'
+			notAMachOImage gives "it is not a 64-bit Mach-O image"
+			foreignImage(reason) gives "it is not an image this compiler wrote ({reason})"
+			malformedImage(reason) gives "it is malformed ({reason})"
+		end 'k'
+	end 'displayReason'
+end 'MachOResignError'
+
+type SignedImageLayout
+	module let identifier as String
+	module let signatureOffset as BytePos
+	module let signatureCommand as ByteOffset
+	module let linkeditCommand as ByteOffset
+	module let linkeditFileOff as BytePos
+	module let execSegLimit as MachineWord
+
+	static function over(identifier String, signatureOffset BytePos, signatureCommand ByteOffset, linkeditCommand ByteOffset, linkeditFileOff BytePos, execSegLimit MachineWord) returns SignedImageLayout
+		return Self{identifier: identifier, signatureOffset: signatureOffset, signatureCommand: signatureCommand, linkeditCommand: linkeditCommand, linkeditFileOff: linkeditFileOff, execSegLimit: execSegLimit}
+	end 'over'
+end 'SignedImageLayout'
+
+export function resignedWithGetTaskAllow(image ByteArray) returns ByteArray throws MachOResignError
+	if image.count() < MachHeaderSize or imageReadU32(image, at: 0) != MhMagic64 'notMachO'
+		throw MachOResignError.notAMachOImage
+	end 'notMachO'
+
+	if imageReadU32(image, at: MhCpuTypeField) != CpuTypeArm64 or imageReadU32(image, at: MhFileTypeField) != MhExecute 'notArm64Executable'
+		throw MachOResignError.foreignImage("it is not an arm64 executable")
+	end 'notArm64Executable'
+
+	let layout = try signedImageLayoutOf(image)
+	let signatureLayout = CodeSignatureLayout.planned(layout.identifier, codeLimit: layout.signatureOffset as MachineWord, blobs: getTaskAllowBlobs())
+	let linkeditFileSize = linkeditFileSizeFor(layout.linkeditFileOff, signatureEnd: layout.signatureOffset + signatureLayout.size)
+
+	var resigned = try image.slice(0, endIndex: layout.signatureOffset as ElementIndex) otherwise panic("resignedWithGetTaskAllow: the signature offset {layout.signatureOffset} was held inside the {image.count()}-byte image")
+	patchDword(resigned, offset: layout.signatureCommand + LcSignatureDataSizeField, value: signatureLayout.size as MachineWord)
+	patchQword(resigned, offset: layout.linkeditCommand + SegVmsizeOffset, value: linkeditFileSize as MachineWord)
+	patchQword(resigned, offset: layout.linkeditCommand + SegFilesizeOffset, value: linkeditFileSize as MachineWord)
+	appendSignature(resigned, execSegLimit: layout.execSegLimit, layout: signatureLayout, paddedTo: layout.linkeditFileOff + linkeditFileSize)
+
+	return resigned
+end 'resignedWithGetTaskAllow'
+
+function signedImageLayoutOf(image ByteArray) returns SignedImageLayout throws MachOResignError
+	let commands = machoLoadCommandsOf(image)
+	let text = try commandFound(commands.segmentNamed(image, name: "__TEXT"), what: "a __TEXT segment")
+	let linkedit = try commandFound(commands.segmentNamed(image, name: "__LINKEDIT"), what: "a __LINKEDIT segment")
+	let signature = try commandFound(commands.commandOfKind(LcCodeSignature), what: "an LC_CODE_SIGNATURE command")
+
+	if signature.size < CodeSignatureCommandSize 'shortSignatureCommand'
+		throw MachOResignError.malformedImage("the code-signature load command is {signature.size} bytes, shorter than the {CodeSignatureCommandSize} that name the signature")
+	end 'shortSignatureCommand'
+
+	let total = image.count() as BytePos
+	let signatureOffset = imageReadU32(image, at: signature.start + LcSignatureDataOffsetField) as BytePos
+	let signatureSize = imageReadU32(image, at: signature.start + LcSignatureDataSizeField) as BytePos
+	let linkeditFileOff = imageReadU64(image, at: linkedit.start + SegFileoffOffset) as BytePos
+	let linkeditFileSize = imageReadU64(image, at: linkedit.start + SegFilesizeOffset) as BytePos
+	let execSegLimit = imageReadU64(image, at: text.start + SegFilesizeOffset)
+
+	if not spanFitsWithin(signatureOffset as ByteOffset, count: signatureSize, total: total) 'signaturePastTheFile'
+		throw MachOResignError.malformedImage("the signature region runs past the end of the file")
+	end 'signaturePastTheFile'
+
+	if execSegLimit == 0 or execSegLimit > signatureOffset as MachineWord 'textPastTheSignature'
+		throw MachOResignError.malformedImage("the __TEXT segment is {execSegLimit} bytes in a file whose signature starts at {signatureOffset}")
+	end 'textPastTheSignature'
+
+	// `linkeditFileOff > signatureOffset` is tested first: it is what keeps both subtractions after it
+	// from going below zero, so a malformed image is refused here rather than trapping.
+	if linkeditFileOff > signatureOffset or linkeditFileSize != total - linkeditFileOff or linkeditFileSize != linkeditFileSizeFor(linkeditFileOff, signatureEnd: signatureOffset + signatureSize) 'signatureNotLast'
+		throw MachOResignError.foreignImage("its signature is not the last thing in __LINKEDIT")
+	end 'signatureNotLast'
+
+	return SignedImageLayout.over(try identifierOfAdhocSignature(image, offset: signatureOffset, size: signatureSize), signatureOffset: signatureOffset, signatureCommand: signature.start, linkeditCommand: linkedit.start, linkeditFileOff: linkeditFileOff, execSegLimit: execSegLimit)
+end 'signedImageLayoutOf'
+
+function commandFound(lookup MachoCommandLookup, what String) returns MachoLoadCommand throws MachOResignError
+	match lookup 'lookup'
+		found(command) then return command
+		absent then throw MachOResignError.foreignImage("it has no {what}")
+		malformed then throw MachOResignError.malformedImage("the load commands run past the end of the file")
+	end 'lookup'
+end 'commandFound'
+
+function identifierOfAdhocSignature(image ByteArray, offset BytePos, size BytePos) returns String throws MachOResignError
+	let start = offset as ByteOffset
+
+	if size < CsSuperBlobFixedSize or imageReadU32BigEndian(image, at: start) != CsMagicEmbeddedSignature 'notASuperBlob'
+		throw MachOResignError.malformedImage("the signature does not open with an embedded-signature SuperBlob")
+	end 'notASuperBlob'
+
+	if imageReadU32BigEndian(image, at: start + CsSuperBlobLengthField) as BytePos != size 'lengthDisagrees'
+		throw MachOResignError.malformedImage("the SuperBlob declares a length other than the {size} bytes its load command names")
+	end 'lengthDisagrees'
+
+	let blobCount = imageReadU32BigEndian(image, at: start + CsSuperBlobCountField)
+
+	if blobCount > ((size - CsSuperBlobFixedSize) / CsBlobIndexSize) as MachineWord 'moreBlobsThanFit'
+		throw MachOResignError.malformedImage("the SuperBlob indexes {blobCount} blobs, more than its {size} bytes can hold")
+	end 'moreBlobsThanFit'
+
+	for index in 0 upto blobCount 'eachBlob'
+		let entry = start + CsSuperBlobFixedSize + (index as ByteOffset) * CsBlobIndexSize
+
+		if imageReadU32BigEndian(image, at: entry) == CsSlotCodeDirectory 'theCodeDirectory'
+			return try identifierOfCodeDirectory(image, directory: imageReadU32BigEndian(image, at: entry + CsBlobIndexOffsetField) as BytePos, signature: offset, signatureSize: size)
+		end 'theCodeDirectory'
+	end 'eachBlob'
+
+	throw MachOResignError.foreignImage("its signature has no CodeDirectory")
+end 'identifierOfAdhocSignature'
+
+function identifierOfCodeDirectory(image ByteArray, directory BytePos, signature BytePos, signatureSize BytePos) returns String throws MachOResignError
+	if not spanFitsWithin(directory as ByteOffset, count: CodeDirectoryHeaderSize, total: signatureSize) 'headerPastTheSignature'
+		throw MachOResignError.malformedImage("the CodeDirectory starts past the end of the signature")
+	end 'headerPastTheSignature'
+
+	let start = (signature + directory) as ByteOffset
+
+	if imageReadU32BigEndian(image, at: start) != CsMagicCodeDirectory 'wrongMagic'
+		throw MachOResignError.malformedImage("the blob for the CodeDirectory slot does not carry the CodeDirectory magic")
+	end 'wrongMagic'
+
+	let length = imageReadU32BigEndian(image, at: start + CdLengthField) as BytePos
+
+	if length < CodeDirectoryHeaderSize or not spanFitsWithin(directory as ByteOffset, count: length, total: signatureSize) 'directoryPastTheSignature'
+		throw MachOResignError.malformedImage("the CodeDirectory runs past the end of the signature")
+	end 'directoryPastTheSignature'
+
+	let adhoc = imageReadU32BigEndian(image, at: start + CdVersionField) == CsCodeDirectoryVersion and isWrittenCodeDirectoryFlags(imageReadU32BigEndian(image, at: start + CdFlagsField))
+	let sha256Pages = imageByteAt(image, at: start + CdHashSizeField) == CsSha256Len and imageByteAt(image, at: start + CdHashTypeField) == CsHashTypeSha256 and imageByteAt(image, at: start + CdPageSizeField) == CsPageSizeLog2
+
+	if not adhoc or not sha256Pages or imageReadU32BigEndian(image, at: start + CdCodeLimitField) as BytePos != signature 'notOurs'
+		throw MachOResignError.foreignImage("its code signature is not the ad-hoc SHA-256 signature this compiler writes")
+	end 'notOurs'
+
+	let identStart = imageReadU32BigEndian(image, at: start + CdIdentOffsetField) as BytePos
+
+	if identStart < CodeDirectoryHeaderSize or identStart >= length 'identPastTheDirectory'
+		throw MachOResignError.malformedImage("the CodeDirectory names its identifier outside itself")
+	end 'identPastTheDirectory'
+
+	var identifier = ByteArray.create()
+
+	for position in identStart upto length 'eachIdentifierByte'
+		let byte = imageByteAt(image, at: start + position)
+
+		if byte == 0 'terminated'
+			return String.from(identifier)
+		end 'terminated'
+
+		identifier.push(byte)
+	end 'eachIdentifierByte'
+
+	throw MachOResignError.malformedImage("the CodeDirectory's identifier has no terminator")
+end 'identifierOfCodeDirectory'

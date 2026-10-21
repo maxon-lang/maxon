@@ -2674,6 +2674,9 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtInit(module)
 	buildGtPinMachine(module)
 	buildGtUnpinMachine(module)
+	buildGtUnpinOwner(module)
+	buildGtPinDepth(module)
+	buildGtPinHandle(module)
 	buildGtCurrentMachine(module)
 
 	// ⭐ ALL THREE spawn doors, from one body. Whether a program can REACH one is `DeadFunctionElimination`'s
@@ -3661,6 +3664,10 @@ export let GtPinMachineName = b"__gt_pin_m"
 
 export let GtUnpinMachineName = b"__gt_unpin_m"
 
+export let GtUnpinOwnerName = b"__gt_unpin_owner"
+
+export let GtPinDepthName = b"__gt_pin_depth"
+
 export let GtCurrentMachineName = b"__gt_current_m"
 
 function buildGtCurrentMachine(module StdModule)
@@ -3718,7 +3725,7 @@ function buildGtPinMachine(module StdModule)
 	_ = emitGlobalAccumulate(module, block: armRestraint, label: GtHoldEpochLabel, delta: emitConst(module, block: armRestraint, value: GtRestraintArmed, ids: ids), multiM: true, ids: ids)
 	module.setTerminator(armRestraint, op: StdOp.branch(pinTaken.id))
 
-	emitConstReturn(module, block: pinTaken, value: 1, ids: ids)
+	module.setTerminator(pinTaken, op: StdOp.ret(gt))
 
 	emitConstReturn(module, block: refused, value: 0, ids: ids)
 
@@ -3733,9 +3740,6 @@ function buildGtUnpinMachine(module StdModule)
 	var haveOffset = module.addBlock(func, label: b"unpinoffset", heat: BlockHeat.normal)
 	var haveMachine = module.addBlock(func, label: b"unpinmachine", heat: BlockHeat.normal)
 	var haveThread = module.addBlock(func, label: b"unpinthread", heat: BlockHeat.normal)
-	var haveHold = module.addBlock(func, label: b"unpinhold", heat: BlockHeat.normal)
-	var releaseIt = module.addBlock(func, label: b"unpinrelease", heat: BlockHeat.normal)
-	var keepOne = module.addBlock(func, label: b"unpinkeepone", heat: BlockHeat.normal)
 	var doneBlock = module.addBlock(func, label: b"unpindone", heat: BlockHeat.normal)
 
 	let m = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: doneBlock, bailValues: FullRangeIntArray.create(), ids: ids)
@@ -3743,8 +3747,43 @@ function buildGtUnpinMachine(module StdModule)
 	emitBranchOnCompare(module, block: haveMachine, value: running, pred: StdCmpPred.eq, against: 0, whenTrue: doneBlock, whenFalse: haveThread, ids: ids)
 
 	let gt = emitLoadField(module, block: haveThread, record: running, offset: GtOffOwner, ids: ids)
-	let heldDepth = emitLoadField(module, block: haveThread, record: gt, offset: GtOffPinDepth, ids: ids)
-	emitBranchOnCompare(module, block: haveThread, value: heldDepth, pred: StdCmpPred.le, against: 0, whenTrue: doneBlock, whenFalse: haveHold, ids: ids)
+	module.appendOp(haveThread, op: StdOp.call(ids.mint(), callee: GtUnpinOwnerName, args: argsOf(gt)))
+	module.setTerminator(haveThread, op: StdOp.branch(doneBlock.id))
+
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildGtUnpinMachine'
+
+function buildGtUnpinOwner(module StdModule)
+	var func = IrFunction.createFromStd(GtUnpinOwnerName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var haveOffset = module.addBlock(func, label: b"unpinownoffset", heat: BlockHeat.normal)
+	var haveMachine = module.addBlock(func, label: b"unpinownmachine", heat: BlockHeat.normal)
+	var haveThread = module.addBlock(func, label: b"unpinownthread", heat: BlockHeat.normal)
+	var ownThread = module.addBlock(func, label: b"unpinownmine", heat: BlockHeat.normal)
+	var noMachine = module.addBlock(func, label: b"unpinownnomachine", heat: BlockHeat.cold)
+	var wrongThread = module.addBlock(func, label: b"unpinownwrong", heat: BlockHeat.cold)
+	var noPin = module.addBlock(func, label: b"unpinownnopin", heat: BlockHeat.cold)
+	var haveHold = module.addBlock(func, label: b"unpinownhold", heat: BlockHeat.normal)
+	var releaseIt = module.addBlock(func, label: b"unpinownrelease", heat: BlockHeat.normal)
+	var keepOne = module.addBlock(func, label: b"unpinownkeepone", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"unpinowndone", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let gt = 0
+
+	let m = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: noMachine, bailValues: FullRangeIntArray.create(), ids: ids)
+	let running = emitLoadField(module, block: haveMachine, record: m, offset: MOffCurrentGt, ids: ids)
+	emitBranchOnCompare(module, block: haveMachine, value: running, pred: StdCmpPred.eq, against: 0, whenTrue: noMachine, whenFalse: haveThread, ids: ids)
+
+	let runningOwner = emitLoadField(module, block: haveThread, record: running, offset: GtOffOwner, ids: ids)
+	emitBranchOnCompareValues(module, block: haveThread, a: runningOwner, pred: StdCmpPred.eq, b: gt, whenTrue: ownThread, whenFalse: wrongThread, ids: ids)
+
+	let heldDepth = emitLoadField(module, block: ownThread, record: gt, offset: GtOffPinDepth, ids: ids)
+	emitBranchOnCompare(module, block: ownThread, value: heldDepth, pred: StdCmpPred.le, against: 0, whenTrue: noPin, whenFalse: haveHold, ids: ids)
 
 	emitBranchOnCompare(module, block: haveHold, value: heldDepth, pred: StdCmpPred.eq, against: 1, whenTrue: releaseIt, whenFalse: keepOne, ids: ids)
 
@@ -3754,10 +3793,117 @@ function buildGtUnpinMachine(module StdModule)
 	emitStoreField(module, block: keepOne, record: gt, offset: GtOffPinDepth, value: emitBin(module, block: keepOne, a: heldDepth, b: emitConst(module, block: keepOne, value: 1, ids: ids), opcode: StdBinOpcode.sub, ids: ids))
 	module.setTerminator(keepOne, op: StdOp.branch(doneBlock.id))
 
+	emitRuntimeFatal(module, func: func, block: noMachine, fatal: RuntimeFatal.pinReleasedWithNoMachine, ids: ids)
+	emitRuntimeFatal(module, func: func, block: wrongThread, fatal: RuntimeFatal.pinReleasedByAnotherGreenThread, ids: ids)
+	emitRuntimeFatal(module, func: func, block: noPin, fatal: RuntimeFatal.pinReleasedWithNoPinHeld, ids: ids)
+
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
 
 	module.functions.push(func)
-end 'buildGtUnpinMachine'
+end 'buildGtUnpinOwner'
+
+function buildGtPinDepth(module StdModule)
+	var func = IrFunction.createFromStd(GtPinDepthName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var haveOffset = module.addBlock(func, label: b"depthoffset", heat: BlockHeat.normal)
+	var haveMachine = module.addBlock(func, label: b"depthmachine", heat: BlockHeat.normal)
+	var haveThread = module.addBlock(func, label: b"depththread", heat: BlockHeat.normal)
+	var noThread = module.addBlock(func, label: b"depthnone", heat: BlockHeat.normal)
+
+	let m = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: noThread, bailValues: FullRangeIntArray.create(), ids: ids)
+	let running = emitLoadField(module, block: haveMachine, record: m, offset: MOffCurrentGt, ids: ids)
+	emitBranchOnCompare(module, block: haveMachine, value: running, pred: StdCmpPred.eq, against: 0, whenTrue: noThread, whenFalse: haveThread, ids: ids)
+
+	let gt = emitLoadField(module, block: haveThread, record: running, offset: GtOffOwner, ids: ids)
+	let depth = emitLoadField(module, block: haveThread, record: gt, offset: GtOffPinDepth, ids: ids)
+	module.setTerminator(haveThread, op: StdOp.ret(depth))
+
+	emitConstReturn(module, block: noThread, value: 0, ids: ids)
+
+	module.functions.push(func)
+end 'buildGtPinDepth'
+
+export let GtPinAcquireName = b"__gt_pin_acquire"
+
+export let GtPinTokenName = b"__gt_pin_token"
+
+export let GtPinReleaseName = b"__gt_pin_release"
+
+export let GtPinSurrenderName = b"__gt_pin_surrender"
+
+export let GtPinDestructName = b"__gt_pin_destruct"
+
+export let ManagedPinTokenOffset = 0 as ByteOffset
+export let ManagedPinBoxBytes = 8 as FullRangeInt
+
+export function isMachineBindingCallee(callee ByteArray) returns bool
+	return callee.equals(GtPinMachineName) or callee.equals(GtUnpinMachineName) or callee.equals(GtCurrentMachineName) or callee.equals(GtPinDepthName) or callee.equals(GtPinAcquireName) or callee.equals(GtPinTokenName) or callee.equals(GtPinReleaseName) or callee.equals(GtPinSurrenderName) or callee.equals(GtPinDestructName)
+end 'isMachineBindingCallee'
+
+function buildGtPinHandle(module StdModule)
+	buildGtPinAcquire(module)
+	buildBoxWordGetter(module, name: GtPinTokenName, offset: ManagedPinTokenOffset)
+	buildGtPinRelease(module)
+	buildGtPinSurrender(module)
+	buildBoxDestruct(module, name: GtPinDestructName, release: GtPinReleaseName)
+end 'buildGtPinHandle'
+
+function buildGtPinAcquire(module StdModule)
+	var func = IrFunction.createFromStd(GtPinAcquireName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	let token = ids.mint()
+	module.appendOp(entry, op: StdOp.call(token, callee: GtPinMachineName, args: ValueIdArray.create()))
+	let boxBytes = emitConst(module, block: entry, value: ManagedPinBoxBytes, ids: ids)
+	let box = emitRawAlloc(module, block: entry, byteCount: boxBytes, ids: ids)
+	emitStoreField(module, block: entry, record: box, offset: ManagedPinTokenOffset, value: token)
+	module.setTerminator(entry, op: StdOp.ret(box))
+
+	module.functions.push(func)
+end 'buildGtPinAcquire'
+
+function buildGtPinRelease(module StdModule)
+	var func = IrFunction.createFromStd(GtPinReleaseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var held = module.addBlock(func, label: b"pinrelheld", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"pinreldone", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let box = 0
+
+	let token = emitLoadField(module, block: entry, record: box, offset: ManagedPinTokenOffset, ids: ids)
+	emitBranchOnCompare(module, block: entry, value: token, pred: StdCmpPred.ne, against: 0, whenTrue: held, whenFalse: done, ids: ids)
+
+	emitStoreField(module, block: held, record: box, offset: ManagedPinTokenOffset, value: emitConst(module, block: held, value: 0, ids: ids))
+	module.appendOp(held, op: StdOp.call(ids.mint(), callee: GtUnpinOwnerName, args: argsOf(token)))
+	module.setTerminator(held, op: StdOp.branch(done.id))
+
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildGtPinRelease'
+
+function buildGtPinSurrender(module StdModule)
+	var func = IrFunction.createFromStd(GtPinSurrenderName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let box = 0
+
+	let token = emitLoadField(module, block: entry, record: box, offset: ManagedPinTokenOffset, ids: ids)
+	emitStoreField(module, block: entry, record: box, offset: ManagedPinTokenOffset, value: emitConst(module, block: entry, value: 0, ids: ids))
+	module.setTerminator(entry, op: StdOp.ret(token))
+
+	module.functions.push(func)
+end 'buildGtPinSurrender'
 
 export function emitGtAllGAppend(module StdModule, func IrFunction, cur IrBlock, gt ValueId, ids ValueMinter) returns IrBlock
 	var grow = module.addBlock(func, label: b"allggrow", heat: BlockHeat.cold)

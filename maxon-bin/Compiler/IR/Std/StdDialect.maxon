@@ -914,9 +914,9 @@ end 'stdOpMayWriteMemory'
 // in dozens of exhaustive matches spread over a dozen files: a roster of separate ops multiplies that, and
 // a missed arm surfaces only when the whole compiler is rebuilt.
 //
-// ⚠ The roster is closed, which is what makes the x64 map total. `hostProcessCallSlot` is exhaustive over
-// this enum, so a service added without an import fails to compile at the map rather than reaching a
-// backend as a silent no-op.
+// ⚠ The roster is closed, which is what makes each lane's map total. `hostProcessCallSlot`,
+// `machHostProcessSlot` and `posixTraceChunk` are exhaustive over this enum, so a service added without an
+// import fails to compile at each map rather than reaching a backend as a silent no-op.
 export enum HostProcessCall
 	// A handle to the process being sampled, and the walk over its threads. The walk hands back handles that
 	// already carry the access mask asked for, which is why there is no "open thread" service here.
@@ -960,6 +960,19 @@ export enum HostProcessCall
 	awaitTracee
 	threadGroupSignal
 	processSignal
+
+	machSelfTask
+	machTaskForPid
+	machTaskThreads
+	machThreadInfo
+	machThreadSuspend
+	machThreadResume
+	machThreadState
+	machThreadSelf
+	machReadMemory
+	machTaskInfo
+	machReleasePort
+	machReleaseMemory
 end 'HostProcessCall'
 
 // ⭐⭐ **WHICH VERB ONE `osNetpoll` ASKS FOR — Go's netpoll verbs (`netpollinit`, `netpollBreak`, `netpoll`),
@@ -3046,19 +3059,20 @@ export union StdOp
 	// service it asked and reads the answer in that service's own vocabulary.
 	//
 	// ⭐ **THERE IS NO OUT-PARAM OP, AND THAT IS WHY THE CONTEXT AND THE REGION QUERY FIT.** Both fill a
-	// caller-owned buffer whose LAYOUT is Win32's; the buffer arrives as an operand address and the caller
-	// reads it back with `loadIndirect`, exactly as `__shm_read_word` reads a mapped section. A foreign
-	// struct never enters this tier — only a pointer to one does.
+	// caller-owned buffer whose LAYOUT is the host's (Win32's, Mach's); the buffer arrives as an operand
+	// address and the caller reads it back with `loadIndirect`, exactly as `__shm_read_word` reads a mapped
+	// section. A foreign struct never enters this tier — only a pointer to one does.
 	//
-	// ⚠ `isStore: true`: three of the services write through a pointer the caller owns (the context, the
-	// region query, the memory copy), so the op must order against every load and store around it. Full
-	// call-barrier metadata otherwise: it IS an indirect call once lowered.
+	// ⚠ `isStore: true`: many of the services write through a pointer the caller owns (a register file, a
+	// region query, a memory copy, a thread list), so the op must order against every load and store around
+	// it. Full call-barrier metadata otherwise: it IS an indirect call once lowered.
 	//
-	// ⭐ x64-WINDOWS ONLY, gated by `HostFacility.processSampling` for the sampler's services and
-	// `HostFacility.processDebug` for the debugger's — and both gates name the CPU as well as the OS, because
-	// the register file either one reads has `CONTEXT`'s x64 layout. Every other backend's arm is a refusal
-	// rather than a stub: a stub would symbolize three unrelated words as RIP/RSP/RBP and hand back a
-	// confident profile of nothing.
+	// ⭐ Gated by `HostFacility.processSampling` and `HostFacility.machTaskPorts` for the sampler's services
+	// and `HostFacility.processDebug` for the debugger's — and the gates name the CPU as well as the OS,
+	// because the register file each reads is a per-CPU record. A backend lowers the services its lane
+	// serves (Win32 imports on x64-windows, the Mach calls on arm64-macOS, the `ptrace` chunks on Linux) and
+	// panics on the rest rather than stubbing them: a stub would symbolize unrelated words as a program
+	// counter and a frame chain and hand back a confident profile of nothing.
 	osHostProcess(resultId ValueId, service HostProcessCall, a0Id ValueId, a1Id ValueId, a2Id ValueId, a3Id ValueId, a4Id ValueId, a5Id ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// ⭐⭐ **THE SCHEDULER'S POLLER AND ITS CLOCK, AS ONE FAMILY OP** — `osNetpoll(result, verb, a0…a4) -> the

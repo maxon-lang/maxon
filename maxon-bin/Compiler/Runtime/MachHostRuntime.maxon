@@ -1,0 +1,272 @@
+let MachHostBuiltinPrefix = "__Builtins.profileMach"
+let MachHostRuntimePrefix = "__prof_mach_"
+
+// The services Maxon may call as `__Builtins.profileMach*`. Suspend, resume, thread state and the self-thread
+// query are absent: they run only inside `__prof_mach_sample`, so no library code can suspend a thread and
+// then fail before resuming it.
+function machHostServices() returns MachHostServiceArray
+	var services = MachHostServiceArray.create()
+	services.push(HostProcessCall.machSelfTask)
+	services.push(HostProcessCall.machTaskForPid)
+	services.push(HostProcessCall.machTaskThreads)
+	services.push(HostProcessCall.machThreadInfo)
+	services.push(HostProcessCall.machReadMemory)
+	services.push(HostProcessCall.machTaskInfo)
+	services.push(HostProcessCall.machReleasePort)
+	services.push(HostProcessCall.machReleaseMemory)
+
+	return services
+end 'machHostServices'
+
+typealias MachHostServiceArray = Array with HostProcessCall
+
+function machHostSpelling(service HostProcessCall) returns String
+	return match service 'spelling'
+		machSelfTask gives "SelfTask"
+		machTaskForPid gives "TaskForPid"
+		machTaskThreads gives "TaskThreads"
+		machThreadInfo gives "ThreadInfo"
+		machReadMemory gives "ReadMemory"
+		machTaskInfo gives "TaskInfo"
+		machReleasePort gives "ReleasePort"
+		machReleaseMemory gives "ReleaseMemory"
+
+		machThreadSelf or
+		machThreadSuspend or
+		machThreadResume or
+		machThreadState or
+		openProcess or
+		nextThread or
+		threadId or
+		suspendThread or
+		resumeThread or
+		threadContext or
+		queryRegion or
+		readProcessMemory or
+		createHighResTimer or
+		setAbsoluteTimer or
+		moduleSnapshot or
+		moduleFirst or
+		moduleNext or
+		writeProcessMemory or
+		writeThreadContext or
+		attachToProcess or
+		detachFromProcess or
+		waitForDebugEvent or
+		continueDebugEvent or
+		breakProcess or
+		protectRegion or
+		flushCode or
+		closeHandle or
+		traceRequest or
+		traceeMemoryRead or
+		awaitTracee or
+		threadGroupSignal or
+		processSignal panic("machHostSpelling: `{service.name}` is not a Mach service")
+	end 'spelling'
+end 'machHostSpelling'
+
+function machHostBuiltinName(service HostProcessCall) returns ByteArray
+	return "{MachHostBuiltinPrefix}{machHostSpelling(service)}".toByteArray()
+end 'machHostBuiltinName'
+
+export function machHostRuntimeName(service HostProcessCall) returns ByteArray
+	return "{MachHostRuntimePrefix}{machHostSpelling(service).toLower()}".toByteArray()
+end 'machHostRuntimeName'
+
+export function machHostWords(service HostProcessCall) returns ParamCount
+	return match service 'words'
+		machSelfTask gives HostProcessNoWords
+		machReleasePort gives HostProcessTwoWords
+		machTaskForPid or
+		machTaskThreads or
+		machReleaseMemory gives HostProcessThreeWords
+		machThreadInfo or
+		machTaskInfo gives HostProcessFourWords
+		machReadMemory gives HostProcessFiveWords
+
+		machThreadSelf or
+		machThreadSuspend or
+		machThreadResume or
+		machThreadState or
+		openProcess or
+		nextThread or
+		threadId or
+		suspendThread or
+		resumeThread or
+		threadContext or
+		queryRegion or
+		readProcessMemory or
+		createHighResTimer or
+		setAbsoluteTimer or
+		moduleSnapshot or
+		moduleFirst or
+		moduleNext or
+		writeProcessMemory or
+		writeThreadContext or
+		attachToProcess or
+		detachFromProcess or
+		waitForDebugEvent or
+		continueDebugEvent or
+		breakProcess or
+		protectRegion or
+		flushCode or
+		closeHandle or
+		traceRequest or
+		traceeMemoryRead or
+		awaitTracee or
+		threadGroupSignal or
+		processSignal panic("machHostWords: `{service.name}` is not a Mach service")
+	end 'words'
+end 'machHostWords'
+
+export function machHostServiceNamed(builtin ByteArray) returns HostProcessCall throws AbsentError
+	if not bytesStartWith(builtin, prefix: MachHostBuiltinPrefix.toByteArray()) 'someOtherBuiltin'
+		throw AbsentError.absent
+	end 'someOtherBuiltin'
+
+	for service in machHostServices() 'eachService'
+		if builtin.equals(machHostBuiltinName(service)) 'thisOne'
+			return service
+		end 'thisOne'
+	end 'eachService'
+
+	throw AbsentError.absent
+end 'machHostServiceNamed'
+
+export function isMachHostRuntimeCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: MachHostRuntimePrefix.toByteArray())
+end 'isMachHostRuntimeCallee'
+
+export function installMachHostRuntime(module StdModule, layout HostContextLayout)
+	for service in machHostServices() 'eachService'
+		buildHostProcessEntry(module, name: machHostRuntimeName(service), words: machHostWords(service), service: service)
+	end 'eachService'
+
+	buildMachSample(module, layout: layout)
+end 'installMachHostRuntime'
+
+export let MachSampleName = b"__prof_mach_sample"
+
+let MachSampleScratchBytes = 40
+let MachSampleResultSlot = 0 as SpillSlot
+let MachSampleCountSlot = 1 as SpillSlot
+let MachSampleSizeSlot = 2 as SpillSlot
+let MachSampleCopiedSlot = 3 as SpillSlot
+let MachSampleWantSlot = 4 as SpillSlot
+
+// The whole suspended window as one entry, stack copy included: every path after a successful suspend
+// reaches `resume`. The calling thread is refused first, because a thread that suspends itself never runs
+// its own resume. Linux copies in Maxon instead (`SampledProcess.copyStack`), over a tracee that stays
+// stopped until the sampler detaches it.
+function buildMachSample(module StdModule, layout HostContextLayout)
+	var func = IrFunction.createFromStd(MachSampleName, returnType: StdReturnType.value(StdType.i64), paramCount: 6, paramTypes: sixI64Params())
+	var ids = ValueMinter.create(6)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var suspend = module.addBlock(func, label: b"mssusp", heat: BlockHeat.normal)
+	var callingThread = module.addBlock(func, label: b"msself", heat: BlockHeat.normal)
+	var readState = module.addBlock(func, label: b"msstate", heat: BlockHeat.normal)
+	var copyStart = module.addBlock(func, label: b"mscopy", heat: BlockHeat.normal)
+	var copyLoop = module.addBlock(func, label: b"mshead", heat: BlockHeat.normal)
+	var copyStep = module.addBlock(func, label: b"msstep", heat: BlockHeat.normal)
+	var copyBoundary = module.addBlock(func, label: b"msbound", heat: BlockHeat.normal)
+	var copyRemaining = module.addBlock(func, label: b"msleft", heat: BlockHeat.normal)
+	var copyRead = module.addBlock(func, label: b"msread", heat: BlockHeat.normal)
+	var copyAdvance = module.addBlock(func, label: b"msnext", heat: BlockHeat.normal)
+	var copyEnd = module.addBlock(func, label: b"msend", heat: BlockHeat.normal)
+	var readInfo = module.addBlock(func, label: b"msinfo", heat: BlockHeat.normal)
+	var resume = module.addBlock(func, label: b"msres", heat: BlockHeat.normal)
+	var answer = module.addBlock(func, label: b"msret", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 6)
+	let task = 0
+	let thread = 1
+	let statePtr = 2
+	let infoPtr = 3
+	let windowPtr = 4
+	let windowCap = 5
+
+	func.stackSize = MachSampleScratchBytes
+	let resultPtr = ids.mint()
+	module.appendOp(entry, op: StdOp.stackRecordAddr(resultPtr, slot: MachSampleResultSlot))
+	let countPtr = ids.mint()
+	module.appendOp(entry, op: StdOp.stackRecordAddr(countPtr, slot: MachSampleCountSlot))
+	let sizePtr = ids.mint()
+	module.appendOp(entry, op: StdOp.stackRecordAddr(sizePtr, slot: MachSampleSizeSlot))
+	let copiedPtr = ids.mint()
+	module.appendOp(entry, op: StdOp.stackRecordAddr(copiedPtr, slot: MachSampleCopiedSlot))
+	let wantPtr = ids.mint()
+	module.appendOp(entry, op: StdOp.stackRecordAddr(wantPtr, slot: MachSampleWantSlot))
+
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let threadGone = emitConst(module, block: entry, value: layout.sampleThreadGone, ids: ids)
+	emitStoreField(module, block: entry, record: resultPtr, offset: 0, value: threadGone)
+
+	let ownThread = emitHostSample(module, block: entry, service: HostProcessCall.machThreadSelf, a0: zero, a1: zero, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
+	let ownTask = emitHostSample(module, block: entry, service: HostProcessCall.machSelfTask, a0: zero, a1: zero, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
+	_ = emitHostSample(module, block: entry, service: HostProcessCall.machReleasePort, a0: ownTask, a1: ownThread, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
+	emitBranchOnCompareValues(module, block: entry, a: thread, pred: StdCmpPred.eq, b: ownThread, whenTrue: callingThread, whenFalse: suspend, ids: ids, operandType: StdType.u64)
+
+	emitStoreField(module, block: callingThread, record: resultPtr, offset: 0, value: emitConst(module, block: callingThread, value: layout.sampleCallingThread, ids: ids))
+	module.setTerminator(callingThread, op: StdOp.branch(answer.id))
+
+	let suspended = emitHostSample(module, block: suspend, service: HostProcessCall.machThreadSuspend, a0: thread, a1: zero, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
+	emitBranchOnCompare(module, block: suspend, value: suspended, pred: StdCmpPred.eq, against: layout.machSuccess, whenTrue: readState, whenFalse: answer, ids: ids)
+
+	let noRegisters = emitConst(module, block: readState, value: layout.sampleNoRegisters, ids: ids)
+	emitStoreField(module, block: readState, record: resultPtr, offset: 0, value: noRegisters)
+	emitStoreField(module, block: readState, record: countPtr, offset: 0, value: emitConst(module, block: readState, value: layout.machThreadStateWords, ids: ids))
+	let stateFlavor = emitConst(module, block: readState, value: layout.machThreadStateFlavor, ids: ids)
+	let gotState = emitHostSample(module, block: readState, service: HostProcessCall.machThreadState, a0: thread, a1: stateFlavor, a2: statePtr, a3: countPtr, a4: zero, a5: zero, ids: ids)
+	emitBranchOnCompare(module, block: readState, value: gotState, pred: StdCmpPred.eq, against: layout.machSuccess, whenTrue: copyStart, whenFalse: readInfo, ids: ids)
+
+	emitStoreField(module, block: copyStart, record: resultPtr, offset: 0, value: zero)
+	emitStoreField(module, block: copyStart, record: copiedPtr, offset: 0, value: zero)
+	let stackPointer = emitLoadField(module, block: copyStart, record: statePtr, offset: layout.machStateStackPointerOffset as ByteOffset, ids: ids)
+	module.setTerminator(copyStart, op: StdOp.branch(copyLoop.id))
+
+	let copiedSoFar = emitLoadField(module, block: copyLoop, record: copiedPtr, offset: 0, ids: ids)
+	emitBranchOnCompareValues(module, block: copyLoop, a: copiedSoFar, pred: StdCmpPred.lt, b: windowCap, whenTrue: copyStep, whenFalse: copyEnd, ids: ids, operandType: StdType.u64)
+
+	let copiedNow = emitLoadField(module, block: copyStep, record: copiedPtr, offset: 0, ids: ids)
+	let address = emitBin(module, block: copyStep, a: stackPointer, b: copiedNow, opcode: StdBinOpcode.add, ids: ids)
+	let chunkBytes = emitConst(module, block: copyStep, value: layout.machChunkBytes, ids: ids)
+	let chunkMask = emitConst(module, block: copyStep, value: layout.machChunkBytes - 1, ids: ids)
+	let offsetInChunk = emitBin(module, block: copyStep, a: address, b: chunkMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let toBoundary = emitBin(module, block: copyStep, a: chunkBytes, b: offsetInChunk, opcode: StdBinOpcode.sub, ids: ids)
+	let remaining = emitBin(module, block: copyStep, a: windowCap, b: copiedNow, opcode: StdBinOpcode.sub, ids: ids)
+	emitBranchOnCompareValues(module, block: copyStep, a: toBoundary, pred: StdCmpPred.lt, b: remaining, whenTrue: copyBoundary, whenFalse: copyRemaining, ids: ids, operandType: StdType.u64)
+
+	emitStoreField(module, block: copyBoundary, record: wantPtr, offset: 0, value: toBoundary)
+	module.setTerminator(copyBoundary, op: StdOp.branch(copyRead.id))
+
+	emitStoreField(module, block: copyRemaining, record: wantPtr, offset: 0, value: remaining)
+	module.setTerminator(copyRemaining, op: StdOp.branch(copyRead.id))
+
+	let want = emitLoadField(module, block: copyRead, record: wantPtr, offset: 0, ids: ids)
+	let destination = emitBin(module, block: copyRead, a: windowPtr, b: copiedNow, opcode: StdBinOpcode.add, ids: ids)
+	let moved = emitHostSample(module, block: copyRead, service: HostProcessCall.machReadMemory, a0: task, a1: address, a2: want, a3: destination, a4: sizePtr, a5: zero, ids: ids)
+	emitBranchOnCompare(module, block: copyRead, value: moved, pred: StdCmpPred.eq, against: layout.machSuccess, whenTrue: copyAdvance, whenFalse: copyEnd, ids: ids)
+
+	let copiedBefore = emitLoadField(module, block: copyAdvance, record: copiedPtr, offset: 0, ids: ids)
+	emitStoreField(module, block: copyAdvance, record: copiedPtr, offset: 0, value: emitBin(module, block: copyAdvance, a: copiedBefore, b: want, opcode: StdBinOpcode.add, ids: ids))
+	module.setTerminator(copyAdvance, op: StdOp.branch(copyLoop.id))
+
+	let copiedTotal = emitLoadField(module, block: copyEnd, record: copiedPtr, offset: 0, ids: ids)
+	emitStoreField(module, block: copyEnd, record: resultPtr, offset: 0, value: copiedTotal)
+	module.setTerminator(copyEnd, op: StdOp.branch(readInfo.id))
+
+	emitStoreField(module, block: readInfo, record: countPtr, offset: 0, value: emitConst(module, block: readInfo, value: layout.machThreadInfoWords, ids: ids))
+	let infoFlavor = emitConst(module, block: readInfo, value: layout.machThreadInfoFlavor, ids: ids)
+	_ = emitHostSample(module, block: readInfo, service: HostProcessCall.machThreadInfo, a0: thread, a1: infoFlavor, a2: infoPtr, a3: countPtr, a4: zero, a5: zero, ids: ids)
+	module.setTerminator(readInfo, op: StdOp.branch(resume.id))
+
+	_ = emitHostSample(module, block: resume, service: HostProcessCall.machThreadResume, a0: thread, a1: zero, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
+	module.setTerminator(resume, op: StdOp.branch(answer.id))
+
+	let result = emitLoadField(module, block: answer, record: resultPtr, offset: 0, ids: ids)
+	module.setTerminator(answer, op: StdOp.ret(result))
+
+	module.functions.push(func)
+end 'buildMachSample'

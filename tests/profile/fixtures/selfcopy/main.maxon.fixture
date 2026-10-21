@@ -1,0 +1,28 @@
+// The profiled program the attachable-copy cases run. It reports what it can see of itself — its own path, its
+// argv[0], whether a neighbour file sits beside its executable — and writes the image it runs from, so a case can
+// read the bytes the profiler actually launched.
+
+typealias ExitCode = int(0 to 255)
+
+let SampleWindowMs = 400
+let NeighbourFileName = "neighbour.txt"
+
+function main() returns ExitCode
+	let arguments = CommandLine.args()
+	let copySpelled = try arguments.get(1) otherwise return 2
+	let factsSpelled = try arguments.get(2) otherwise return 2
+	let copyPath = try FilePath.from(copySpelled) otherwise return 3
+	let factsPath = try FilePath.from(factsSpelled) otherwise return 3
+	let running = try Process.executablePath() otherwise return 4
+	let directory = try running.parent() otherwise return 4
+	let image = try File.readBinary(running) otherwise return 5
+
+	try File.writeBinary(copyPath, content: image) otherwise return 6
+
+	let facts = "executable={running.toString()}\nargv0={try arguments.get(0) otherwise ""}\nneighbour={File.exists(directory.join(NeighbourFileName))}\n"
+	try File.writeText(factsPath, content: facts) otherwise return 6
+
+	sleep(SampleWindowMs)
+
+	return 0
+end 'main'

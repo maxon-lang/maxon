@@ -16,12 +16,11 @@
 // resolves the same way on every run, which is most of what a profile is for: a report whose row order
 // flipped between runs could not be diffed.
 //
-// ⛔ **THE WHOLE FILE IS GATED, AND BOTH CONJUNCTS ARE LOAD-BEARING.** `os(Windows) and arch(x64)` is
-// `TargetFacilities.processSampling`'s row, and a lane off that row has nothing to build a report out of:
-// the symbols below are all `module`-tier, so ungated they would be module symbols with no reader outside
-// their own file on every other lane — E3094 at the self-compile, which is the only gate that runs
-// `checkUnusedExports` at all.
-#if os(Windows) and arch(x64)
+// ⛔ **THE WHOLE FILE IS GATED.** `not os(Wasi)` is `TargetFacilities.processSampling`'s row, and a lane
+// off that row has nothing to build a report out of: the symbols below are all `module`-tier, so ungated
+// they would be module symbols with no reader outside their own file there — E3094 at the self-compile,
+// which is the only gate that runs `checkUnusedExports` at all.
+#if not os(Wasi)
 	// How many samples something was given, and how many ticks the loop took.
 	export typealias ProfileTally = int(0 to u64.max)
 
@@ -180,6 +179,7 @@
 		export var samples as ProfileTally
 		export var captures as ProfileTally
 		export var samplesUnsymbolized as ProfileTally
+		export var samplesInRuntime as ProfileTally
 		export var stacksUnreadable as ProfileTally
 		export var stacksTruncated as ProfileTally
 		export var minPercent as ProfileShare
@@ -187,8 +187,8 @@
 		export var nodes as ProfileNodeArray
 		export var stacks as ProfileStackArray
 
-		static function create(exePath String, targetStatus ProfileTargetStatus, runCompleted bool, requestedRateHz ProfileRate, ticks ProfileTally, durationSeconds ProfileSeconds, samples ProfileTally, captures ProfileTally, samplesUnsymbolized ProfileTally, stacksUnreadable ProfileTally, stacksTruncated ProfileTally, minPercent ProfileShare, functions ProfileFunctionArray, nodes ProfileNodeArray, stacks ProfileStackArray) returns ProfileReport
-			return Self{exePath: exePath, targetStatus: targetStatus, runCompleted: runCompleted, requestedRateHz: requestedRateHz, ticks: ticks, durationSeconds: durationSeconds, samples: samples, captures: captures, samplesUnsymbolized: samplesUnsymbolized, stacksUnreadable: stacksUnreadable, stacksTruncated: stacksTruncated, minPercent: minPercent, functions: functions, nodes: nodes, stacks: stacks}
+		static function create(exePath String, targetStatus ProfileTargetStatus, runCompleted bool, requestedRateHz ProfileRate, ticks ProfileTally, durationSeconds ProfileSeconds, samples ProfileTally, captures ProfileTally, samplesUnsymbolized ProfileTally, samplesInRuntime ProfileTally, stacksUnreadable ProfileTally, stacksTruncated ProfileTally, minPercent ProfileShare, functions ProfileFunctionArray, nodes ProfileNodeArray, stacks ProfileStackArray) returns ProfileReport
+			return Self{exePath: exePath, targetStatus: targetStatus, runCompleted: runCompleted, requestedRateHz: requestedRateHz, ticks: ticks, durationSeconds: durationSeconds, samples: samples, captures: captures, samplesUnsymbolized: samplesUnsymbolized, samplesInRuntime: samplesInRuntime, stacksUnreadable: stacksUnreadable, stacksTruncated: stacksTruncated, minPercent: minPercent, functions: functions, nodes: nodes, stacks: stacks}
 		end 'create'
 
 		// A handful of captured stacks can be ranked in any order at all, however many samples they carry, so
@@ -228,11 +228,12 @@
 		var samples as ProfileTally
 		var captures as ProfileTally
 		var unsymbolized as ProfileTally
+		var inRuntime as ProfileTally
 		var unreadable as ProfileTally
 		var truncated as ProfileTally
 
 		export static function create() returns ProfileAccumulator
-			return Self{selfByName: ProfileTallyMap.create(), totalByName: ProfileTallyMap.create(), pathTotal: ProfileTallyMap.create(), pathSelf: ProfileTallyMap.create(), stackTotal: ProfileTallyMap.create(), samples: 0, captures: 0, unsymbolized: 0, unreadable: 0, truncated: 0}
+			return Self{selfByName: ProfileTallyMap.create(), totalByName: ProfileTallyMap.create(), pathTotal: ProfileTallyMap.create(), pathSelf: ProfileTallyMap.create(), stackTotal: ProfileTallyMap.create(), samples: 0, captures: 0, unsymbolized: 0, inRuntime: 0, unreadable: 0, truncated: 0}
 		end 'create'
 
 		// ⭐ Accept ONE captured stack, carrying `charged` samples — the ticks of CPU its thread was charged when
@@ -283,8 +284,15 @@
 			bumpProfileTally(self.stackTotal, key: "{stackIdentity}{ProfilePathSeparator}{profileOutermostNamedFrame(frames)}", by: weight)
 		end 'accept'
 
+		export function acceptRuntime(charged ProfileCharges)
+			let weight = charged as ProfileTally
+			self.samples = self.samples + weight
+			self.captures = self.captures + 1
+			self.inRuntime = self.inRuntime + weight
+		end 'acceptRuntime'
+
 		export function finish(exePath String, targetStatus ProfileTargetStatus, runCompleted bool, requestedRateHz ProfileRate, ticks ProfileTally, durationSeconds ProfileSeconds, minPercent ProfileShare) returns ProfileReport
-			return ProfileReport.create(exePath, targetStatus: targetStatus, runCompleted: runCompleted, requestedRateHz: requestedRateHz, ticks: ticks, durationSeconds: durationSeconds, samples: self.samples, captures: self.captures, samplesUnsymbolized: self.unsymbolized, stacksUnreadable: self.unreadable, stacksTruncated: self.truncated, minPercent: minPercent, functions: rankedProfileFunctions(self.selfByName, totals: self.totalByName), nodes: rankedProfileNodes(self.pathTotal, leaves: self.pathSelf), stacks: rankedProfileStacks(self.stackTotal))
+			return ProfileReport.create(exePath, targetStatus: targetStatus, runCompleted: runCompleted, requestedRateHz: requestedRateHz, ticks: ticks, durationSeconds: durationSeconds, samples: self.samples, captures: self.captures, samplesUnsymbolized: self.unsymbolized, samplesInRuntime: self.inRuntime, stacksUnreadable: self.unreadable, stacksTruncated: self.truncated, minPercent: minPercent, functions: rankedProfileFunctions(self.selfByName, totals: self.totalByName), nodes: rankedProfileNodes(self.pathTotal, leaves: self.pathSelf), stacks: rankedProfileStacks(self.stackTotal))
 		end 'finish'
 	end 'ProfileAccumulator'
 
@@ -416,6 +424,7 @@
 		// whether to trust the rest, and a line that appears only when it is bad teaches a reader that its
 		// absence means something else.
 		out.append("unsymbolized: {report.samplesUnsymbolized} samples ({profilePercentText(report.samplesUnsymbolized, total: report.samples)}){ProfileLineFeed}")
+		out.append("runtime: {report.samplesInRuntime} samples ({profilePercentText(report.samplesInRuntime, total: report.samples)}) in the runtime's own machinery, which no row below lists{ProfileLineFeed}")
 		out.append("stacks: {report.stacksTruncated} truncated, {report.stacksUnreadable} unreadable{ProfileLineFeed}")
 
 		out.append(renderProfileFunctions(report))
@@ -624,7 +633,7 @@
 		out.append("\"runCompleted\":{report.runCompleted},")
 		out.append("\"achievedRateHz\":{reportWholeNumberText(report.achievedRateHz() as ReportNumber)},\"requestedRateHz\":{reportWholeNumberText(report.requestedRateHz as ReportNumber)},")
 		out.append("\"ticks\":{report.ticks},\"durationSeconds\":{reportWholeNumberText(report.durationSeconds as ReportNumber)},")
-		out.append("\"samples\":{report.samples},\"captures\":{report.captures},\"samplesUnsymbolized\":{report.samplesUnsymbolized},")
+		out.append("\"samples\":{report.samples},\"captures\":{report.captures},\"samplesUnsymbolized\":{report.samplesUnsymbolized},\"samplesInRuntime\":{report.samplesInRuntime},")
 		out.append("\"stacksUnreadable\":{report.stacksUnreadable},\"stacksTruncated\":{report.stacksTruncated},")
 
 		// Written only where it is TRUE, so it states a fact rather than being a field that reads false on

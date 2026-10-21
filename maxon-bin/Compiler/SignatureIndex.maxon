@@ -8437,6 +8437,7 @@ function managedNameRetainCallee(signatures ProgramSignatures, declaredName Byte
 		managedSocket or
 		managedPages or
 		managedHandle or
+		managedPin or
 		serviceHandle or
 		userDeclared gives plainBoxRetainCallee(result)
 	end 'compilerOwned'
@@ -8514,10 +8515,12 @@ function managedNameDropCallee(signatures ProgramSignatures, declaredName ByteAr
 		//     process lifetime, which the exit-101 gate cannot see at all.
 		managedSocket then return ManagedSocketDestructName
 
-		//   • **`__ManagedPages` AND `__ManagedHandle` OWN A PAGE RESERVATION AND A TIMER HANDLE, NEITHER OF WHICH
-		//     IS MEMORY THE BOX FREE RETURNS** — the file bullet's argument, one type over each.
+		//   • **`__ManagedPages`, `__ManagedHandle` AND `__ManagedPin` OWN A PAGE RESERVATION, AN OS HANDLE AND A
+		//     MACHINE PIN, NONE OF WHICH IS MEMORY THE BOX FREE RETURNS** — the file bullet's argument, one type
+		//     over each.
 		managedPages then return ProfilePagesDestructName
 		managedHandle then return ProfileHandleDestructName
+		managedPin then return GtPinDestructName
 
 		//   • A `<T>.handle` takes the plain decref: its box is minted with `__mbox_handle_destruct` as its
 		//     destructor, which steps the mailbox's `handles` and `refs` shares when the box's own count reaches
@@ -8818,6 +8821,7 @@ end 'CascadeWalkFrame'
 union OwnedOsHandle
 	none
 	handle(let name ByteArray)
+	pin(let name ByteArray)
 end 'OwnedOsHandle'
 
 // ⭐ **HOW A MANAGED FIELD OF DECLARED TYPE `fieldType` IS CLONED OR PROVED SOLE.** The exact STRUCTURAL DUAL
@@ -9052,7 +9056,8 @@ function managedNameCascadeStrategy(signatures ProgramSignatures, declaredName B
 		managedDirectory or
 		managedSocket or
 		managedPages or
-		managedHandle then return ManagedCascadeStrategy.unsupported
+		managedHandle or
+		managedPin then return ManagedCascadeStrategy.unsupported
 
 		// ⭐ **A HANDLE IS THE ONE COMPILER-OWNED AGGREGATE THAT CLONES**, and its clone is the design's own
 		// `handle.clone()`: a SECOND HANDLE to the same service, which steps both mailbox counts and mints a
@@ -9101,28 +9106,28 @@ end 'managedNameCascadeStrategy'
 //
 // It is asked by `managedNameDropCallee` (each takes its own compiler-owned entry), by
 // `managedNameCascadeStrategy` (none is deep-cloneable) and by `ProgramSignatures.typeSupportsDeepClone` (the
-// gate in front of that strategy). The drop door had the list; the other two did not, and the missing copy
-// was a backend panic.
-enum CompilerOwnedAggregate
+// gate in front of that strategy).
+export enum CompilerOwnedAggregate
 	managedFile
 	managedDirectory
 
-	// ⚠ **KEPT ADJACENT TO ITS TWO SIBLINGS ON PURPOSE.** Every reader below answers the same way for all
-	// three, so they are matched as ONE RANGE — which is also what makes a FOURTH compiler-owned aggregate
+	// ⚠ **KEPT ADJACENT TO ITS SIBLINGS ON PURPOSE.** Every reader below answers the same way for all of
+	// them, so they are matched as ONE RANGE — which is also what makes a further compiler-owned aggregate
 	// that needs a different answer fail to compile at each of those arms rather than inherit theirs.
 	managedSocket
 	managedPages
 	managedHandle
+	managedPin
 
-	// ⭐⭐ **A FOURTH THAT NEEDS A DIFFERENT ANSWER.** A `<T>.handle`
+	// ⭐⭐ **ONE THAT NEEDS A DIFFERENT ANSWER.** A `<T>.handle`
 	// box holds one machine word — the mailbox pointer — and its DROP is what shuts a service down: the last
 	// handle to go closes the mailbox, and the last reference to go frees it. Its CLONE is a second handle to
 	// the SAME service, never a second service. Neither is expressible as a synthesized per-type entry, and
 	// neither is the plain `__mm_decref` a scalar-fielded struct box would otherwise take — which would free
 	// eight bytes and leave a green thread parked on a mailbox nobody can ever close.
 	//
-	// ⚠ It is DELIBERATELY OUTSIDE the `managedFile to managedSocket` range: it is the one compiler-owned
-	// aggregate that IS deep-clonable, so a reader answering "not clonable" for the three must not answer it
+	// ⚠ It is DELIBERATELY OUTSIDE the `managedFile to managedPin` range: it is the one compiler-owned
+	// aggregate that IS deep-clonable, so a reader answering "not clonable" for the rest must not answer it
 	// for this one. That is the sentence above, spent.
 	serviceHandle
 
@@ -9130,31 +9135,80 @@ enum CompilerOwnedAggregate
 	userDeclared
 end 'CompilerOwnedAggregate'
 
-function compilerOwnedAggregateOf(signatures ProgramSignatures, name ByteArray) returns CompilerOwnedAggregate
+export union RawHandleLookup
+	named(kind CompilerOwnedAggregate)
+	notOne
+end 'RawHandleLookup'
+
+// The one roster of raw handle types. The raw-surface refusal (E3185), the host-resource producer test and
+// `compilerOwnedAggregateOf` all read it, so a type added here is refused, routed and dropped everywhere.
+export function rawHandleNamed(name ByteArray) returns RawHandleLookup
 	if name.equals(ManagedFileTypeName) 'managedFile'
-		return CompilerOwnedAggregate.managedFile
+		return RawHandleLookup.named(CompilerOwnedAggregate.managedFile)
 	end 'managedFile'
 
 	if name.equals(ManagedDirectoryTypeName) 'managedDirectory'
-		return CompilerOwnedAggregate.managedDirectory
+		return RawHandleLookup.named(CompilerOwnedAggregate.managedDirectory)
 	end 'managedDirectory'
 
 	if name.equals(ManagedSocketTypeName) 'managedSocket'
-		return CompilerOwnedAggregate.managedSocket
+		return RawHandleLookup.named(CompilerOwnedAggregate.managedSocket)
 	end 'managedSocket'
 
 	if name.equals(ManagedPagesTypeName) 'managedPages'
-		return CompilerOwnedAggregate.managedPages
+		return RawHandleLookup.named(CompilerOwnedAggregate.managedPages)
 	end 'managedPages'
 
 	if name.equals(ManagedHandleTypeName) 'managedHandle'
-		return CompilerOwnedAggregate.managedHandle
+		return RawHandleLookup.named(CompilerOwnedAggregate.managedHandle)
 	end 'managedHandle'
 
-	// ⚠ **ASKED OF THE REGISTRY AND NOT OF THE SPELLING, WHICH IS WHY THIS FUNCTION NOW TAKES THE INDEX.**
-	// The three names above are compiler constants; a handle's is `<T>.handle`, one per service, minted by
-	// `ServiceCompanions` from a type the program spawns. A suffix test would be a second statement of what a
-	// companion is named — and would answer `true` for a name no `spawn` ever produced.
+	if name.equals(ManagedPinTypeName) 'managedPin'
+		return RawHandleLookup.named(CompilerOwnedAggregate.managedPin)
+	end 'managedPin'
+
+	return RawHandleLookup.notOne
+end 'rawHandleNamed'
+
+export function isRawHandleName(name ByteArray) returns bool
+	return match rawHandleNamed(name) 'lookup'
+		named gives true
+		notOne gives false
+	end 'lookup'
+end 'isRawHandleName'
+
+export function isHostResourceHandleName(name ByteArray) returns bool
+	return match rawHandleNamed(name) 'lookup'
+		named(kind) gives isHostResourceAggregate(kind)
+		notOne gives false
+	end 'lookup'
+end 'isHostResourceHandleName'
+
+function isHostResourceAggregate(kind CompilerOwnedAggregate) returns bool
+	return match kind 'kind'
+		managedPages or
+		managedHandle or
+		managedPin gives true
+
+		managedFile or
+		managedDirectory or
+		managedSocket gives false
+
+		serviceHandle or
+		userDeclared panic("isHostResourceAggregate: `{kind.name}` is not a raw handle type, and `rawHandleNamed` answers only the six that are")
+	end 'kind'
+end 'isHostResourceAggregate'
+
+function compilerOwnedAggregateOf(signatures ProgramSignatures, name ByteArray) returns CompilerOwnedAggregate
+	match rawHandleNamed(name) 'rawHandle'
+		named(kind) then return kind
+		notOne then break
+	end 'rawHandle'
+
+	// ⚠ **ASKED OF THE REGISTRY AND NOT OF THE SPELLING, WHICH IS WHY THIS FUNCTION TAKES THE INDEX.** The
+	// raw handle names `rawHandleNamed` answers are compiler constants; a handle's is `<T>.handle`, one per
+	// service, minted by `ServiceCompanions` from a type the program spawns. A suffix test would be a second
+	// statement of what a companion is named — and would answer `true` for a name no `spawn` ever produced.
 	if signatures.isAnyServiceHandle(name) 'serviceHandle'
 		return CompilerOwnedAggregate.serviceHandle
 	end 'serviceHandle'
@@ -10878,7 +10932,7 @@ export let ManagedMemoryFieldName = b"managed"
 // bare alias) and they are asked at different doors for different reasons; merging them would give one
 // predicate two meanings and make the next `CharacterSet`-shaped misreport inevitable.
 export function isBuiltinManagedTypeName(name ByteArray) returns bool
-	return name.equals(ManagedFileTypeName) or name.equals(ManagedDirectoryTypeName) or name.equals(ManagedMemoryTypeName) or name.equals(ManagedSocketTypeName) or name.equals(ManagedPagesTypeName) or name.equals(ManagedHandleTypeName)
+	return isRawHandleName(name) or name.equals(ManagedMemoryTypeName)
 end 'isBuiltinManagedTypeName'
 
 // Its one field, per the spec's "Type Structure". Unexported and immutable: the corpus never reads or
@@ -11097,6 +11151,14 @@ export let ManagedHandleAdoptMethod = b"adopting"
 export let ManagedHandleWordParamName = b"handle"
 export let ManagedHandleWordMethod = b"handle"
 export let ManagedHandleReleaseMethod = b"release"
+
+export let ManagedPinTypeName = b"__ManagedPin"
+let ManagedPinTokenFieldName = b"_token"
+let ManagedPinTokenFieldIndex = 0
+export let ManagedPinAcquireMethod = b"acquire"
+export let ManagedPinTokenMethod = b"token"
+export let ManagedPinReleaseMethod = b"release"
+export let ManagedPinSurrenderMethod = b"surrender"
 
 // ⭐ **THE ERROR A POSSIBLY-ZERO `/` OR `mod` THROWS**, and the type an `otherwise (e)` handler's
 // `match e` discriminates. Its ONE case lives with the layout, in `Project.builtinDivisionByZeroErrorEnum`.
@@ -32718,6 +32780,7 @@ export type ProgramSignatures
 
 		self.addRegisteredLayout(managedPagesLayout())
 		self.addRegisteredLayout(managedHandleLayout())
+		self.addRegisteredLayout(managedPinLayout())
 	end 'registerManagedHostResourceTypes'
 
 	function managedPagesLayout() returns StructLayout
@@ -32754,6 +32817,21 @@ export type ProgramSignatures
 
 		return layout
 	end 'managedHandleLayout'
+
+	function managedPinLayout() returns StructLayout
+		var layout = StructLayout.createCompilerOwned(ManagedPinTypeName)
+		layout.addField(ManagedPinTokenFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, spelledName: SpelledFieldName.unnamed)
+
+		if layout.offsetOfField(ManagedPinTokenFieldIndex) != ManagedPinTokenOffset 'offsetDrift'
+			panic("managedPinLayout: the struct layout puts `_token` at {layout.offsetOfField(ManagedPinTokenFieldIndex)} but the runtime reads it at {ManagedPinTokenOffset} — the front end's shape and the runtime's field access have drifted")
+		end 'offsetDrift'
+
+		if layout.sizeBytes() as FullRangeInt != ManagedPinBoxBytes 'sizeDrift'
+			panic("managedPinLayout: the struct layout is {layout.sizeBytes()} bytes but the runtime allocates {ManagedPinBoxBytes} — the box the runtime builds and the shape the front end states have drifted")
+		end 'sizeDrift'
+
+		return layout
+	end 'managedPinLayout'
 
 	// The `Set with Character` instance a `CharSet from [...]` constructs — the
 	// `builtinInstanceForElement` twin. Keyed as `MaxonType.character`, the SAME arg a
@@ -44165,6 +44243,7 @@ export type ProgramSignatures
 			managedSocket or
 			managedPages or
 			managedHandle or
+			managedPin or
 			serviceHandle then return false
 
 			userDeclared then break
@@ -44551,6 +44630,7 @@ export type ProgramSignatures
 
 		match self.osHandleOwnedBy(self.denotedAggregateName(typeName), visited: ClonerSet.create()) 'handle'
 			handle(handleName) then return "owns an OS handle (`{String.from(handleName)}`) and cannot be duplicated"
+			pin(pinName) then return "owns a machine pin (`{String.from(pinName)}`) and cannot be duplicated"
 			none then break
 		end 'handle'
 
@@ -44564,6 +44644,7 @@ export type ProgramSignatures
 			managedSocket or
 			managedPages or
 			managedHandle then return OwnedOsHandle.handle(name)
+			managedPin then return OwnedOsHandle.pin(name)
 
 			serviceHandle or
 			userDeclared then break
@@ -44583,7 +44664,8 @@ export type ProgramSignatures
 			var nested = self.osHandleInSlot(fieldTypeOf(layout, structName: name, index: i), visited: visited)
 
 			match nested 'nested'
-				handle then return nested
+				handle or
+				pin then return nested
 				none then break
 			end 'nested'
 		end 'eachField'
@@ -44622,7 +44704,8 @@ export type ProgramSignatures
 			var nested = self.osHandleInSlot(self.substituteInstanceFieldType(id, index: i), visited: visited)
 
 			match nested 'nested'
-				handle then return nested
+				handle or
+				pin then return nested
 				none then break
 			end 'nested'
 		end 'eachField'
@@ -44641,7 +44724,8 @@ export type ProgramSignatures
 				var nested = self.osHandleInSlot(field.declaredType, visited: visited)
 
 				match nested 'nested'
-					handle then return nested
+					handle or
+					pin then return nested
 					none then break
 				end 'nested'
 			end 'eachPayload'
@@ -44768,6 +44852,7 @@ export type ProgramSignatures
 			managedSocket or
 			managedPages or
 			managedHandle or
+			managedPin or
 			serviceHandle then return false
 
 			userDeclared then break
@@ -45079,7 +45164,8 @@ export type ProgramSignatures
 			managedDirectory or
 			managedSocket or
 			managedPages or
-			managedHandle then return false
+			managedHandle or
+			managedPin then return false
 
 			// A handle's clone is a real entry (`managedNameCascadeStrategy`), so the GATE must admit what the
 			// STRATEGY answers — this arm and that one are the divergence this function exists to prevent.
@@ -45435,6 +45521,7 @@ export type ProgramSignatures
 			managedSocket or
 			managedPages or
 			managedHandle or
+			managedPin or
 			serviceHandle then within.anything = true
 
 			userDeclared then self.addRecordKindsWithinDeclaration(name, within: within, visited: visited, settledFree: settledFree)

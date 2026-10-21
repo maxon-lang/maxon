@@ -2393,6 +2393,12 @@ function compileOneTest(test SpecTest, staged StagedTest, exeBase FilePath, exeP
 		return CompiledTest.create(test, staged: staged, compile: CompileAnswer.create(compileVerdictOf(e), diagnostics: session.diagnostics.text()), cpu: CompileCpu.unreported, irText: StatedText.unstated, exePath: exePath)
 	end 'compileFailed'
 
+	if product.drivesOtherProcesses and attachNeedsAnEntitlement(effectiveTarget) 'needsTheEntitlement'
+		try resignInPlace(exePath) otherwise (e) 'unattachable'
+			return CompiledTest.create(test, staged: staged, compile: CompileAnswer.create(CompileVerdict.driverFailed, diagnostics: e.displayReason()), cpu: CompileCpu.reported(product.totalCpuTicks), irText: StatedText.unstated, exePath: exePath)
+		end 'unattachable'
+	end 'needsTheEntitlement'
+
 	// A compile asked for no IR (`emitIr` false), or for a target that renders none, answers unstated.
 	let irText = match product.irText 'ir'
 		notRendered gives StatedText.unstated

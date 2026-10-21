@@ -349,6 +349,42 @@ end 'main'
 error E3104: <fragment>:3:20: this construct lowers to the runtime entry '__cpu_count', which has no wasm32-wasi implementation
 ```
 
+<!-- test: builtins-cpu-parallel.a-machine-pin-is-refused-on-wasm -->
+<!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+WASI has no green threads, so there is no machine to bind one to. `MachinePin.acquire()` is refused at its source span
+with `E3104`, never by a panic from inside the wasm backend.
+```maxon
+function main() returns ExitCode
+	var pin = MachinePin.acquire()
+	pin.release()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:3:23: 'MachinePin.acquire' lowers to the runtime entry '__gt_pin_acquire', which has no wasm32-wasi implementation
+error E3104: <fragment>:4:6: 'MachinePin.release' lowers to the runtime entry '__gt_pin_release', which has no wasm32-wasi implementation
+```
+
+<!-- test: builtins-cpu-parallel.the-raw-pin-pair-is-refused-on-wasm -->
+<!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+`Scheduler.pinToMachine()`, `Scheduler.unpinFromMachine()` and `Scheduler.currentMachine()` are refused on WASI at their
+own spans for the same reason.
+```maxon
+function main() returns ExitCode
+	if not Scheduler.pinToMachine() 'refused'
+		return 1
+	end 'refused'
+
+	Scheduler.unpinFromMachine()
+	return Scheduler.currentMachine() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:3:19: 'Scheduler.pinToMachine' lowers to the runtime entry '__gt_pin_m', which has no wasm32-wasi implementation
+error E3104: <fragment>:7:12: 'Scheduler.unpinFromMachine' lowers to the runtime entry '__gt_unpin_m', which has no wasm32-wasi implementation
+error E3104: <fragment>:8:19: 'Scheduler.currentMachine' lowers to the runtime entry '__gt_current_m', which has no wasm32-wasi implementation
+```
+
 <!-- test: builtins-cpu-parallel.sched-max-active-workers-is-one -->
 <!-- tier: stdlib -->
 A program that never spawns anything runs on one M — its own — whatever processor count the scheduler
@@ -597,6 +633,25 @@ on a machine true, stayed true
 ```
 ```exitcode
 0
+```
+
+<!-- test: builtins-cpu-parallel.an-unpin-by-a-thread-that-holds-no-pin-aborts -->
+<!-- unsupported-targets: wasm32-wasi -->
+`Scheduler.unpinFromMachine()` releases a pin the calling green thread holds. A thread that holds none has
+nothing to release, and an unpin there is a fatal error rather than a silent no-op, because it would release a
+pin that another owner of the same thread took.
+```maxon
+function main() returns ExitCode
+	Scheduler.unpinFromMachine()
+
+	return 0
+end 'main'
+```
+```stderr
+fatal error: a machine pin was released by a green thread that holds none
+```
+```exitcode
+70
 ```
 
 <!-- test: builtins-cpu-parallel.a-pinned-service-outlives-main-and-resumes-on-its-machine -->

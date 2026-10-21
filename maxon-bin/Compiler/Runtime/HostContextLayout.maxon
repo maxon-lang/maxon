@@ -19,25 +19,66 @@ let Win64MbiRegionSizeOffsetName = "Win64MbiRegionSizeOffset"
 let ProfileRegionSuspendedCyclesOffsetName = "ProfileRegionSuspendedCyclesOffset"
 let ProfileSampleThreadGoneName = "ProfileSampleThreadGone"
 let ProfileSampleNoRegistersName = "ProfileSampleNoRegisters"
+let ProfileSampleCallingThreadName = "ProfileSampleCallingThread"
 
-// The Win64 `CONTEXT` and region-record layout the runtime shares with `stdlib/Debuggee.maxon` and
-// `stdlib/Sampler.maxon`, read from those files' own constants so the compiler holds no second copy
-// to drift.
+let MachSuccessName = "MachSuccess"
+let MachThreadStateFlavorName = "MachArmThreadState64"
+let MachThreadStateWordsName = "MachArmThreadState64Words"
+let MachStateStackPointerOffsetName = "MachStateStackPointerOffset"
+let MachThreadInfoFlavorName = "MachThreadBasicInfo"
+let MachThreadInfoWordsName = "MachThreadBasicInfoWords"
+let StackReadChunkBytesName = "StackReadChunkBytes"
+
+let SeizedTableBytesName = "SeizedTableBytes"
+let SeizedTablePidOffsetName = "SeizedTablePidOffset"
+let SeizedTableCountOffsetName = "SeizedTableCountOffset"
+let SeizedTablePinOffsetName = "SeizedTablePinOffset"
+let SeizedTableKilledOffsetName = "SeizedTableKilledOffset"
+let SeizedTableThreadsOffsetName = "SeizedTableThreadsOffset"
+let SeizedWordBytesName = "SeizedWordBytes"
+let TraceKillSignalName = "TraceKillSignal"
+let PtraceDetachName = "PtraceDetach"
+let PtraceInterruptName = "PtraceInterrupt"
+let TraceStopBudgetMillisName = "TraceStopBudgetMillis"
+
+// The Win64 `CONTEXT` and region-record layout, the Mach thread-state layout and the ptrace seized-thread
+// table that the runtime shares with `stdlib/Debuggee.maxon` and `stdlib/Sampler.maxon`, read from those
+// files' own constants so the compiler holds no second copy to drift. Which sampler layout a lane reads is
+// `ProfileRuntime.profileHostShapeOf`'s answer, the one the entries are built by.
 export type HostContextLayout
-	export let contextFlagsOffset as FullRangeInt
-	export let contextControl as FullRangeInt
-	export let contextInteger as FullRangeInt
-	export let contextRipOffset as FullRangeInt
-	export let contextRspOffset as FullRangeInt
-	export let contextRbpOffset as FullRangeInt
-	export let suspendThreadFailed as FullRangeInt
-	export let regionRecordBytes as FullRangeInt
-	export let mbiBaseAddressOffset as FullRangeInt
-	export let regionAllocationBaseOffset as FullRangeInt
-	export let mbiRegionSizeOffset as FullRangeInt
-	export let regionSuspendedCyclesOffset as FullRangeInt
-	export let sampleThreadGone as FullRangeInt
-	export let sampleNoRegisters as FullRangeInt
+	export var contextFlagsOffset as FullRangeInt
+	export var contextControl as FullRangeInt
+	export var contextInteger as FullRangeInt
+	export var contextRipOffset as FullRangeInt
+	export var contextRspOffset as FullRangeInt
+	export var contextRbpOffset as FullRangeInt
+	export var suspendThreadFailed as FullRangeInt
+	export var regionRecordBytes as FullRangeInt
+	export var mbiBaseAddressOffset as FullRangeInt
+	export var regionAllocationBaseOffset as FullRangeInt
+	export var mbiRegionSizeOffset as FullRangeInt
+	export var regionSuspendedCyclesOffset as FullRangeInt
+	export var sampleThreadGone as FullRangeInt
+	export var sampleNoRegisters as FullRangeInt
+	export var sampleCallingThread as FullRangeInt
+	export var machSuccess as FullRangeInt
+	export var machThreadStateFlavor as FullRangeInt
+	export var machThreadStateWords as FullRangeInt
+	export var machStateStackPointerOffset as FullRangeInt
+	export var machThreadInfoFlavor as FullRangeInt
+	export var machThreadInfoWords as FullRangeInt
+	export var machChunkBytes as FullRangeInt
+	export var seizedTableBytes as FullRangeInt
+	export var seizedPidOffset as FullRangeInt
+	export var seizedCountOffset as FullRangeInt
+	export var seizedPinOffset as FullRangeInt
+	export var seizedKilledOffset as FullRangeInt
+	export var seizedThreadsOffset as FullRangeInt
+	export var seizedWordBytes as FullRangeInt
+	export var traceKillSignal as FullRangeInt
+	export var ptraceDetach as FullRangeInt
+	export var ptraceInterrupt as FullRangeInt
+	export var traceStopBudgetMillis as FullRangeInt
 
 	export static function read(signatures ProgramSignatures, target Target, project Project) returns HostContextLayout
 		let debuggee = librarySourcePath(project, fileName: DebuggeeStdlibFileName)
@@ -45,34 +86,72 @@ export type HostContextLayout
 		let rspOffset = signatures.integerConstantIn(Win64ContextRspOffsetName, filePath: debuggee)
 		let rbpOffset = signatures.integerConstantIn(Win64ContextRbpOffsetName, filePath: debuggee)
 
-		var regionRecordBytes = 0 as FullRangeInt
-		var mbiBaseAddressOffset = 0 as FullRangeInt
-		var regionAllocationBaseOffset = 0 as FullRangeInt
-		var mbiRegionSizeOffset = 0 as FullRangeInt
-		var regionSuspendedCyclesOffset = 0 as FullRangeInt
-		var sampleThreadGone = 0 as FullRangeInt
-		var sampleNoRegisters = 0 as FullRangeInt
+		var layout = Self.unread()
+		layout.contextFlagsOffset = signatures.integerConstantIn(Win64ContextFlagsOffsetName, filePath: debuggee)
+		layout.contextControl = signatures.integerConstantIn(Win64ContextControlName, filePath: debuggee)
+		layout.contextInteger = signatures.integerConstantIn(Win64ContextIntegerName, filePath: debuggee)
+		layout.contextRipOffset = ripOffset
+		layout.contextRspOffset = rspOffset
+		layout.contextRbpOffset = rbpOffset
+		layout.suspendThreadFailed = signatures.integerConstantIn(SuspendThreadFailedName, filePath: debuggee)
 
-		if targetProvidesFacility(target, facility: HostFacility.processSampling) 'aSamplingLane'
-			let sampler = librarySourcePath(project, fileName: SamplerStdlibFileName)
+		if not targetProvidesFacility(target, facility: HostFacility.processSampling) 'noSampler'
+			return layout
+		end 'noSampler'
 
-			if signatures.integerConstantIn(SampleContextRipOffsetName, filePath: sampler) != ripOffset or signatures.integerConstantIn(SampleContextRspOffsetName, filePath: sampler) != rspOffset or signatures.integerConstantIn(SampleContextRbpOffsetName, filePath: sampler) != rbpOffset 'contextOffsetsDrifted'
-				panic("HostContextLayout.read: {SamplerStdlibFileName} states the CONTEXT register offsets differently from {DebuggeeStdlibFileName} — the debugger and the sampler read one Win64 CONTEXT record, so the two files' constants must agree")
-			end 'contextOffsetsDrifted'
+		let sampler = librarySourcePath(project, fileName: SamplerStdlibFileName)
 
-			regionRecordBytes = signatures.integerConstantIn(ProfileRegionRecordBytesName, filePath: sampler)
-			mbiBaseAddressOffset = signatures.integerConstantIn(Win64MbiBaseAddressOffsetName, filePath: sampler)
-			regionAllocationBaseOffset = signatures.integerConstantIn(ProfileRegionAllocationBaseOffsetName, filePath: sampler)
-			mbiRegionSizeOffset = signatures.integerConstantIn(Win64MbiRegionSizeOffsetName, filePath: sampler)
-			regionSuspendedCyclesOffset = signatures.integerConstantIn(ProfileRegionSuspendedCyclesOffsetName, filePath: sampler)
-			sampleThreadGone = signatures.integerConstantIn(ProfileSampleThreadGoneName, filePath: sampler)
-			sampleNoRegisters = signatures.integerConstantIn(ProfileSampleNoRegistersName, filePath: sampler)
-		end 'aSamplingLane'
+		match profileHostShapeOf(target) 'shape'
+			win32 then layout.readWin32Sampler(signatures, sampler: sampler, debuggeeRip: ripOffset, debuggeeRsp: rspOffset, debuggeeRbp: rbpOffset)
+			mach then layout.readMachSampler(signatures, sampler: sampler)
+			ptrace then layout.readPtraceSampler(signatures, sampler: sampler, debuggee: debuggee)
+		end 'shape'
 
-		return Self{contextFlagsOffset: signatures.integerConstantIn(Win64ContextFlagsOffsetName, filePath: debuggee), contextControl: signatures.integerConstantIn(Win64ContextControlName, filePath: debuggee), contextInteger: signatures.integerConstantIn(Win64ContextIntegerName, filePath: debuggee), contextRipOffset: ripOffset, contextRspOffset: rspOffset, contextRbpOffset: rbpOffset, suspendThreadFailed: signatures.integerConstantIn(SuspendThreadFailedName, filePath: debuggee), regionRecordBytes: regionRecordBytes, mbiBaseAddressOffset: mbiBaseAddressOffset, regionAllocationBaseOffset: regionAllocationBaseOffset, mbiRegionSizeOffset: mbiRegionSizeOffset, regionSuspendedCyclesOffset: regionSuspendedCyclesOffset, sampleThreadGone: sampleThreadGone, sampleNoRegisters: sampleNoRegisters}
+		return layout
 	end 'read'
 
+	function readWin32Sampler(signatures ProgramSignatures, sampler FilePath, debuggeeRip FullRangeInt, debuggeeRsp FullRangeInt, debuggeeRbp FullRangeInt)
+		if signatures.integerConstantIn(SampleContextRipOffsetName, filePath: sampler) != debuggeeRip or signatures.integerConstantIn(SampleContextRspOffsetName, filePath: sampler) != debuggeeRsp or signatures.integerConstantIn(SampleContextRbpOffsetName, filePath: sampler) != debuggeeRbp 'contextOffsetsDrifted'
+			panic("HostContextLayout.read: {SamplerStdlibFileName} states the CONTEXT register offsets differently from {DebuggeeStdlibFileName} — the debugger and the sampler read one Win64 CONTEXT record, so the two files' constants must agree")
+		end 'contextOffsetsDrifted'
+
+		self.regionRecordBytes = signatures.integerConstantIn(ProfileRegionRecordBytesName, filePath: sampler)
+		self.mbiBaseAddressOffset = signatures.integerConstantIn(Win64MbiBaseAddressOffsetName, filePath: sampler)
+		self.regionAllocationBaseOffset = signatures.integerConstantIn(ProfileRegionAllocationBaseOffsetName, filePath: sampler)
+		self.mbiRegionSizeOffset = signatures.integerConstantIn(Win64MbiRegionSizeOffsetName, filePath: sampler)
+		self.regionSuspendedCyclesOffset = signatures.integerConstantIn(ProfileRegionSuspendedCyclesOffsetName, filePath: sampler)
+		self.sampleThreadGone = signatures.integerConstantIn(ProfileSampleThreadGoneName, filePath: sampler)
+		self.sampleNoRegisters = signatures.integerConstantIn(ProfileSampleNoRegistersName, filePath: sampler)
+	end 'readWin32Sampler'
+
+	function readMachSampler(signatures ProgramSignatures, sampler FilePath)
+		self.sampleThreadGone = signatures.integerConstantIn(ProfileSampleThreadGoneName, filePath: sampler)
+		self.sampleNoRegisters = signatures.integerConstantIn(ProfileSampleNoRegistersName, filePath: sampler)
+		self.sampleCallingThread = signatures.integerConstantIn(ProfileSampleCallingThreadName, filePath: sampler)
+		self.machSuccess = signatures.integerConstantIn(MachSuccessName, filePath: sampler)
+		self.machThreadStateFlavor = signatures.integerConstantIn(MachThreadStateFlavorName, filePath: sampler)
+		self.machThreadStateWords = signatures.integerConstantIn(MachThreadStateWordsName, filePath: sampler)
+		self.machStateStackPointerOffset = signatures.integerConstantIn(MachStateStackPointerOffsetName, filePath: sampler)
+		self.machThreadInfoFlavor = signatures.integerConstantIn(MachThreadInfoFlavorName, filePath: sampler)
+		self.machThreadInfoWords = signatures.integerConstantIn(MachThreadInfoWordsName, filePath: sampler)
+		self.machChunkBytes = signatures.integerConstantIn(StackReadChunkBytesName, filePath: sampler)
+	end 'readMachSampler'
+
+	function readPtraceSampler(signatures ProgramSignatures, sampler FilePath, debuggee FilePath)
+		self.seizedTableBytes = signatures.integerConstantIn(SeizedTableBytesName, filePath: sampler)
+		self.seizedPidOffset = signatures.integerConstantIn(SeizedTablePidOffsetName, filePath: sampler)
+		self.seizedCountOffset = signatures.integerConstantIn(SeizedTableCountOffsetName, filePath: sampler)
+		self.seizedPinOffset = signatures.integerConstantIn(SeizedTablePinOffsetName, filePath: sampler)
+		self.seizedKilledOffset = signatures.integerConstantIn(SeizedTableKilledOffsetName, filePath: sampler)
+		self.seizedThreadsOffset = signatures.integerConstantIn(SeizedTableThreadsOffsetName, filePath: sampler)
+		self.seizedWordBytes = signatures.integerConstantIn(SeizedWordBytesName, filePath: sampler)
+		self.traceKillSignal = signatures.integerConstantIn(TraceKillSignalName, filePath: sampler)
+		self.ptraceDetach = signatures.integerConstantIn(PtraceDetachName, filePath: debuggee)
+		self.ptraceInterrupt = signatures.integerConstantIn(PtraceInterruptName, filePath: debuggee)
+		self.traceStopBudgetMillis = signatures.integerConstantIn(TraceStopBudgetMillisName, filePath: sampler)
+	end 'readPtraceSampler'
+
 	export static function unread() returns HostContextLayout
-		return Self{contextFlagsOffset: 0, contextControl: 0, contextInteger: 0, contextRipOffset: 0, contextRspOffset: 0, contextRbpOffset: 0, suspendThreadFailed: 0, regionRecordBytes: 0, mbiBaseAddressOffset: 0, regionAllocationBaseOffset: 0, mbiRegionSizeOffset: 0, regionSuspendedCyclesOffset: 0, sampleThreadGone: 0, sampleNoRegisters: 0}
+		return Self{contextFlagsOffset: 0, contextControl: 0, contextInteger: 0, contextRipOffset: 0, contextRspOffset: 0, contextRbpOffset: 0, suspendThreadFailed: 0, regionRecordBytes: 0, mbiBaseAddressOffset: 0, regionAllocationBaseOffset: 0, mbiRegionSizeOffset: 0, regionSuspendedCyclesOffset: 0, sampleThreadGone: 0, sampleNoRegisters: 0, sampleCallingThread: 0, machSuccess: 0, machThreadStateFlavor: 0, machThreadStateWords: 0, machStateStackPointerOffset: 0, machThreadInfoFlavor: 0, machThreadInfoWords: 0, machChunkBytes: 0, seizedTableBytes: 0, seizedPidOffset: 0, seizedCountOffset: 0, seizedPinOffset: 0, seizedKilledOffset: 0, seizedThreadsOffset: 0, seizedWordBytes: 0, traceKillSignal: 0, ptraceDetach: 0, ptraceInterrupt: 0, traceStopBudgetMillis: 0}
 	end 'unread'
 end 'HostContextLayout'

@@ -1,0 +1,28 @@
+let ChmodPath = "/bin/chmod"
+let ReadOnlyDirectoryMode = "555"
+let WritableDirectoryMode = "755"
+let UnwritableWords = "cannot be written beside the program"
+
+function setDirectoryMode(directory FilePath, mode String)
+	let changed = try Subprocess.run(Executable.path(try FilePath.from(ChmodPath) otherwise panic("profile tests: {ChmodPath} is a spellable path")), arguments: [mode, directory.toString()]) otherwise panic("profile tests: the gate could not run — could not run {ChmodPath}.")
+
+	if not changed.succeeded() 'refused'
+		panic("profile tests: the gate could not run — {ChmodPath} {mode} {directory.toString()} failed: {changed.stderr}")
+	end 'refused'
+end 'setDirectoryMode'
+
+test 'the profiler refuses on macOS a program whose directory it cannot write the attachable copy into, naming the directory'
+	#if os(Macos)
+		let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "profile-refuses-a-directory-it-cannot-write-a-copy-in", fixture: HotWarmFixtureName)
+		_ = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: HotWarmFixtureName)
+
+		setDirectoryMode(staged, mode: ReadOnlyDirectoryMode)
+		let run = runProfiler(staged, extraArguments: StringArray.create())
+		setDirectoryMode(staged, mode: WritableDirectoryMode)
+
+		Expect.notEqual(run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb}` completed a measurement of a program in a directory it cannot write a copy into. It printed:{LineFeed}{run.stdout}")
+		Expect.isTrue(run.stderr.contains(UnwritableWords), message: "the refusal does not say the copy {UnwritableWords}. It wrote to stderr: {run.stderr}")
+		Expect.isTrue(run.stderr.contains(staged.anchoredAt(Directory.currentPath()).toString()), message: "the refusal does not name the directory {staged.toString()}. It wrote to stderr: {run.stderr}")
+		Expect.isTrue(attachedCopiesIn(staged).isEmpty(), message: "a refused run left an attachable copy in {staged.toString()}: {listedLines(attachedCopiesIn(staged))}")
+	#endif
+end 'the profiler refuses on macOS a program whose directory it cannot write the attachable copy into, naming the directory'

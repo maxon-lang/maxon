@@ -67,7 +67,9 @@ differences a program can meet are:
 
 - **x64-windows needs Windows 8 or later**: its executables read the wall clock through
   `GetSystemTimePreciseAsFileTime`.
-- **`maxon profile`** runs only on x64-windows. Elsewhere it is refused.
+- **`maxon profile`** samples a program built for the host's own native target: through thread handles
+  on x64-windows, `ptrace` on x64-linux and arm64-linux, and Mach task ports on arm64-macos, which
+  `maxon profile` takes of a temporary copy re-signed with the `get-task-allow` entitlement.
 - **The interactive debugger** — `maxon debug`, `maxon dap-server` and the MCP `debug_*` tools — debugs a
   program built for the host's own native target, through that host's debug interface: a debug port on
   x64-windows, `ptrace` on x64-linux and arm64-linux, and Apple's `debugserver` on arm64-macos, where a

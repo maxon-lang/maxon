@@ -12,6 +12,10 @@ public typealias GreenThreadCount = int(0 to u64.max)
 
 public typealias MachineIndex = int(0 to u64.max)
 
+module typealias PinDepth = int(0 to u64.max)
+
+module typealias PinToken = int(0 to u64.max)
+
 public type SchedulerCounters
 	public let steals as SchedulerEventCount
 	public let retakes as SchedulerEventCount
@@ -94,12 +98,46 @@ public type Scheduler
 		return __Builtins.pinToMachine() != 0
 	end 'pinToMachine'
 
+	/// Release one pin the calling green thread took; pins nest, and the last release frees it from its
+	/// machine. A green thread that holds no pin is a fatal runtime error.
 	public static function unpinFromMachine()
 		__Builtins.unpinFromMachine()
 	end 'unpinFromMachine'
+
+	module static function pinDepth() returns PinDepth
+		return __Builtins.pinDepth() as PinDepth
+	end 'pinDepth'
 
 	/// The machine running the calling green thread; 0 is no machine.
 	public static function currentMachine() returns MachineIndex
 		return __Builtins.currentMachine() as MachineIndex
 	end 'currentMachine'
 end 'Scheduler'
+
+/// A pin of the calling green thread to its machine, as `Scheduler.pinToMachine()` takes, released by
+/// `release()` or the drop, whichever comes first. `held()` is false when there was no machine to pin to.
+/// Releasing it from another green thread, off any green-thread machine, or after
+/// `Scheduler.unpinFromMachine()` undid the pin is a fatal runtime error.
+public type MachinePin
+	var pin as __ManagedPin
+
+	public static function acquire() returns MachinePin
+		return Self{pin: __ManagedPin.acquire()}
+	end 'acquire'
+
+	public function held() returns bool
+		return self.pin.token() != 0
+	end 'held'
+
+	public function release()
+		self.pin.release()
+	end 'release'
+
+	module function surrender() returns PinToken
+		return self.pin.surrender() as PinToken
+	end 'surrender'
+
+	public function clone() returns Self
+		panic("MachinePin.clone: a pin binds one green thread to one machine and is released once — hold it in one place")
+	end 'clone'
+end 'MachinePin'

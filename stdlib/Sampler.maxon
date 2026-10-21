@@ -1,63 +1,191 @@
-#if os(Windows) and arch(x64)
+#if not os(Wasi)
 	public typealias SampleCycles = int(0 to u64.max)
 	public typealias SampledThreadId = int(0 to u64.max)
 	public typealias SampleIntervalNanos = int(1 to u64.max)
 	public typealias StackWindowOffset = int(0 to i64.max)
 	typealias CaptureSerial = int(0 to u64.max)
 	typealias CaptureSerialCell = SharedValue with CaptureSerial
-	typealias UnitShift = int(0 to 48)
 
 	public enum SamplerError implements Error
 		noSuchProcess
 		noScratch
-		noTimer
 		unknownThread
 		outOfWindow
 		moduleListUnavailable
 		callingThread
+		accessDenied
+		threadNotPinned
 	end 'SamplerError'
 
 	let SampleProcessScratchBytes = 8192
 	let SampleWindowBytes = 65536
-	let SampleContextSlot = 0 as ScratchOffset
-	let SampleRegionSlot = 2048 as ScratchOffset
-	let SampleModuleEntrySlot = 4096
-
-	let SampleContextRspOffset = 0x98
-	let SampleContextRbpOffset = 0xA0
-	let SampleContextRipOffset = 0xF8
-	let SampleContextRspSlot = (SampleContextSlot + SampleContextRspOffset) as ScratchOffset
-	let SampleContextRbpSlot = (SampleContextSlot + SampleContextRbpOffset) as ScratchOffset
-	let SampleContextRipSlot = (SampleContextSlot + SampleContextRipOffset) as ScratchOffset
-
-	let ProfileRegionRecordBytes = 48
-	let Win64MbiBaseAddressOffset = 0
-	let ProfileRegionAllocationBaseOffset = 8
-	let Win64MbiRegionSizeOffset = 24
-	let ProfileRegionSuspendedCyclesOffset = ProfileRegionRecordBytes
 	let ProfileSampleThreadGone = 0 - 1
 	let ProfileSampleNoRegisters = 0 - 2
+	let ProfileSampleCallingThread = 0 - 3
 
-	let SampleRegionAllocationBaseSlot = (SampleRegionSlot + ProfileRegionAllocationBaseOffset) as ScratchOffset
-	let SampleRegionSuspendedCyclesSlot = (SampleRegionSlot + ProfileRegionSuspendedCyclesOffset) as ScratchOffset
+	#if os(Windows) and arch(x64)
+		typealias UnitShift = int(0 to 48)
 
-	let ModuleEntryBytes = 1080
-	let ModuleEntrySizeSlot = 4096
-	let ModuleEntryBaseSlot = (4096 + 24) as ScratchOffset
-	let ModuleEntryExtentSlot = (4096 + 32) as ScratchOffset
-	let ModuleEntryNameOffset = 48
-	let ModuleSnapshotAttempts = 20
-	let ModuleSnapshotRetryMs = 5
-	let InvalidHandle = 0 - 1
-	let CurrentThreadPseudoHandle = 0 - 2
+		let SampleContextSlot = 0 as ScratchOffset
+		let SampleRegionSlot = 2048 as ScratchOffset
+		let SampleModuleEntrySlot = 4096
 
-	let Utf16UnitMask = 0xFFFF
-	let Utf16UnitBits = 16
-	let Utf16UnitsPerWord = 4
-	let AsciiCeiling = 128
-	let NonAsciiPlaceholder = 0x3F
+		let SampleContextRspOffset = 0x98
+		let SampleContextRbpOffset = 0xA0
+		let SampleContextRipOffset = 0xF8
+		let SampleContextRspSlot = (SampleContextSlot + SampleContextRspOffset) as ScratchOffset
+		let SampleContextRbpSlot = (SampleContextSlot + SampleContextRbpOffset) as ScratchOffset
+		let SampleContextRipSlot = (SampleContextSlot + SampleContextRipOffset) as ScratchOffset
 
-	let NanosPerFileTimeTick = 100
+		let ProfileRegionRecordBytes = 48
+		let Win64MbiBaseAddressOffset = 0
+		let ProfileRegionAllocationBaseOffset = 8
+		let Win64MbiRegionSizeOffset = 24
+		let ProfileRegionSuspendedCyclesOffset = ProfileRegionRecordBytes
+
+		let SampleRegionAllocationBaseSlot = (SampleRegionSlot + ProfileRegionAllocationBaseOffset) as ScratchOffset
+		let SampleRegionSuspendedCyclesSlot = (SampleRegionSlot + ProfileRegionSuspendedCyclesOffset) as ScratchOffset
+
+		let ModuleEntryBytes = 1080
+		let ModuleEntrySizeSlot = 4096
+		let ModuleEntryBaseSlot = (4096 + 24) as ScratchOffset
+		let ModuleEntryExtentSlot = (4096 + 32) as ScratchOffset
+		let ModuleEntryNameOffset = 48
+		let ModuleSnapshotAttempts = 20
+		let ModuleSnapshotRetryMs = 5
+		let InvalidHandle = 0 - 1
+		let CurrentThreadPseudoHandle = 0 - 2
+
+		let Utf16UnitMask = 0xFFFF
+		let Utf16UnitBits = 16
+		let Utf16UnitsPerWord = 4
+		let AsciiCeiling = 128
+		let NonAsciiPlaceholder = 0x3F
+
+		let NanosPerFileTimeTick = 100
+		let ModuleHasNoFileType = 0
+	#endif
+
+	#if os(Macos)
+		let MachSuccess = 0
+		let MachPortBytes = 4
+		let MachPortBits = 32
+		let MachPortsPerWord = 2
+		let MachHighHalfShift = 32
+		let MachLowHalfMask = 0xFFFFFFFF
+		let MachThreadBasicInfo = 3
+		let MachThreadBasicInfoWords = 10
+		let MachThreadIdentifierInfo = 4
+		let MachThreadIdentifierInfoWords = 6
+		let MachArmThreadState64 = 6
+		let MachArmThreadState64Words = 68
+		let MachTaskDyldInfo = 17
+		let MachTaskDyldInfoWords = 5
+		let MachImageListAttempts = 40
+		let MachImageListRetryMs = 5
+
+		let MachStateFramePointerOffset = 232
+		let MachStateStackPointerOffset = 248
+		let MachStateProgramCounterOffset = 256
+
+		let MachPortSlot = 0
+		let MachArraySlot = 8
+		let MachArrayCountSlot = 16
+		let MachCountSlot = 24
+		let MachReadSizeSlot = 32
+		let MachDyldInfoSlot = 64
+		let MachInfoSlot = 256
+		let MachStateSlot = 512
+		let MachStateFramePointerSlot = (MachStateSlot + MachStateFramePointerOffset) as ScratchOffset
+		let MachStateStackPointerSlot = (MachStateSlot + MachStateStackPointerOffset) as ScratchOffset
+		let MachStateProgramCounterSlot = (MachStateSlot + MachStateProgramCounterOffset) as ScratchOffset
+
+		let MachNanosPerSecond = 1000000000
+		let MachNanosPerMicro = 1000
+		let MachInfoSecondSlot = (MachInfoSlot + 8) as ScratchOffset
+		let MachInfoStateSlot = (MachInfoSlot + 24) as ScratchOffset
+		let MachStateRunning = 1
+
+		let MachHeaderCommandsWord = 16
+		let MachHeaderFileTypeWord = 8
+		let MachHeaderBytes = 32
+		let MachLoadCommandSegment64 = 0x19
+		let MachSegmentNameOffset = 8
+		let MachSegmentSizeOffset = 32
+		let MachTextSegmentNameWord = 0x545845545F5F
+		let MachMaxCommandBytes = 16384
+		let MachMaxModules = 1024
+		let MachImageInfoBytes = 24
+		let MachImageInfoHeaderBytes = 16
+		let MachImageArrayOffset = 8
+		let MachImagePathOffset = 8
+		let MachPortWordBytes = 8
+		let MacosMaxPathLength = 1024
+		let MachPathChunkBytes = 64
+		let MachPathSeparator = 47
+	#endif
+
+	#if os(Linux)
+		let TraceStopBudgetMillis = 10000
+		let TraceStopBudgetNanos = TraceStopBudgetMillis * SamplerNanosPerMilli
+		let TraceStopSpinNanos = 100000
+		let TraceStopPollMicros = 100
+		let ProcTaskRoot = "/proc"
+		let ProcTaskDirectory = "task"
+		let ProcStatFile = "stat"
+		let ProcSchedStatFile = "schedstat"
+		let ProcStateRunning = "R"
+		let ProcStateZombie = "Z"
+		let ProcStateUninterruptible = "D"
+		let ProcStateDead = "X"
+		let ProcCommandEnd = ")"
+		let ProcFieldSeparator = " "
+
+		let TraceKillSignal = 9
+		let SeizedTableBytes = 32768
+		let SeizedTablePidOffset = 0
+		let SeizedTableCountOffset = 8
+		let SeizedTablePinOffset = 16
+		let SeizedTableKilledOffset = 24
+		let SeizedTableThreadsOffset = 32
+		let SeizedWordBytes = 8
+		let SeizedTableCapacity = (SeizedTableBytes - SeizedTableThreadsOffset) / SeizedWordBytes
+
+		module typealias SeizedCount = int(0 to u64.max)
+
+		union SeizedSlot
+			none
+			at(index SeizedCount)
+		end 'SeizedSlot'
+
+		enum SeizeOutcome
+			held
+			gone
+			uninterruptible
+		end 'SeizeOutcome'
+
+		enum TraceProbe
+			traceable
+			refused
+			killed
+		end 'TraceProbe'
+
+		union CpuNanos
+			read(nanos SampleCycles)
+			unreadable
+		end 'CpuNanos'
+
+		union ThreadState
+			absent
+			present(code String)
+		end 'ThreadState'
+	#endif
+
+	#if not os(Windows)
+		let StackReadChunkBytes = 4096
+		let SamplerNanosPerMicro = 1000
+		let SamplerNanosPerMilli = 1000000
+	#endif
 
 	public type SampledThread
 		public let id as SampledThreadId
@@ -74,15 +202,20 @@
 
 	type OpenThread
 		let id as SampledThreadId
+		let raw as RegisterWord
 		var handle as __ManagedHandle
 
-		static function holding(handle __ManagedHandle, id SampledThreadId) returns OpenThread
-			return Self{id: id, handle: handle}
+		static function holding(raw RegisterWord, owning __ManagedHandle, id SampledThreadId) returns OpenThread
+			return Self{id: id, raw: raw, handle: owning}
 		end 'holding'
 
 		function names(thread SampledThread) returns bool
-			return (self.handle.handle() as RegisterWord) == thread.rawHandle() and self.id == thread.id
+			return self.raw == thread.rawHandle() and self.id == thread.id
 		end 'names'
+
+		function identity() returns SampledThreadId
+			return self.id
+		end 'identity'
 
 		function release()
 			self.handle.release()
@@ -91,15 +224,166 @@
 
 	typealias OpenThreadArray = Array with OpenThread
 
+	#if os(Linux)
+		module type SeizedThreads
+			var table as __ManagedHandle
+
+			module static function open(process Pid, pin MachinePin) returns SeizedThreads
+				return Self{table: __ManagedHandle.adopting(__Builtins.profileSeizedOpen(process as RegisterWord, pin.surrender() as RegisterWord))}
+			end 'open'
+
+			module function held() returns bool
+				return self.table.handle() != 0
+			end 'held'
+
+			function base() returns RegisterWord
+				if self.table.handle() == 0 'notHeld'
+					panic("SeizedThreads: the table was asked of a set that is not held — a caller used it before opening it or after releasing it")
+				end 'notHeld'
+
+				return self.table.handle() as RegisterWord
+			end 'base'
+
+			function word(offset RegisterWord) returns RegisterWord
+				return __Builtins.profileReadWord(self.base(), offset) as RegisterWord
+			end 'word'
+
+			function setWord(offset RegisterWord, value RegisterWord)
+				__Builtins.profileWriteWord(self.base(), offset, value)
+			end 'setWord'
+
+			module function count() returns SeizedCount
+				return self.word(SeizedTableCountOffset) as SeizedCount
+			end 'count'
+
+			function slotOf(index SeizedCount) returns RegisterWord
+				return SeizedTableThreadsOffset + (index as RegisterWord) * SeizedWordBytes
+			end 'slotOf'
+
+			function indexOf(thread DebuggeeThreadId) returns SeizedSlot
+				for index in 0 upto self.count() 'eachSeized'
+					if self.word(self.slotOf(index)) == (thread as RegisterWord) 'thisOne'
+						return SeizedSlot.at(index)
+					end 'thisOne'
+				end 'eachSeized'
+
+				return SeizedSlot.none
+			end 'indexOf'
+
+			module function contains(thread DebuggeeThreadId) returns bool
+				return match self.indexOf(thread) 'found'
+					none gives false
+					at gives true
+				end 'found'
+			end 'contains'
+
+			module function add(thread DebuggeeThreadId)
+				if self.contains(thread) 'alreadyHeld'
+					return
+				end 'alreadyHeld'
+
+				let count = self.count()
+
+				if count >= SeizedTableCapacity 'full'
+					panic("SeizedThreads.add: {SeizedTableCapacity} threads are seized at once, and a thread seized past that could not be detached by this table's release")
+				end 'full'
+
+				self.setWord(self.slotOf(count), value: thread as RegisterWord)
+				self.setWord(SeizedTableCountOffset, value: (count + 1) as RegisterWord)
+			end 'add'
+
+			module function remove(thread DebuggeeThreadId)
+				match self.indexOf(thread) 'found'
+					none then return
+					at(index) then self.removeAt(index)
+				end 'found'
+			end 'remove'
+
+			function removeAt(index SeizedCount)
+				let last = self.count() - 1
+				self.setWord(self.slotOf(index), value: self.word(self.slotOf(last)))
+				self.setWord(SeizedTableCountOffset, value: last as RegisterWord)
+			end 'removeAt'
+
+			module function killProcessHolding(thread DebuggeeThreadId)
+				self.remove(thread)
+				__Builtins.profileSeizedKill(self.base(), thread as RegisterWord)
+			end 'killProcessHolding'
+
+			module function release()
+				self.table.release()
+			end 'release'
+
+			module function clone() returns Self
+				panic("SeizedThreads.clone: a seized set owns the detaching of its threads, which a second copy could neither share nor perform — hold it in one place")
+			end 'clone'
+		end 'SeizedThreads'
+	#endif
+
 	public typealias SampledThreadArray = Array with SampledThread
+
+	#if not os(Windows)
+		type ThreadWatch
+			module let id as SampledThreadId
+			module var cycles as SampleCycles
+
+			static function starting(id SampledThreadId, cycles SampleCycles) returns ThreadWatch
+				return Self{id: id, cycles: cycles}
+			end 'starting'
+		end 'ThreadWatch'
+
+		typealias ThreadWatchArray = Array with ThreadWatch
+
+		union ThreadReading
+			running
+			idle(cpuNanos SampleCycles)
+			unreadable
+		end 'ThreadReading'
+
+		enum StopKind
+			nothing
+			gone
+			unreadable
+			registers
+			calling
+		end 'StopKind'
+
+		type PendingStop
+			module let id as SampledThreadId
+			module let kind as StopKind
+			module let programCounter as RegisterWord
+			module let framePointer as RegisterWord
+			module let stackPointer as RegisterWord
+			module let copied as RegisterWord
+			module let serial as CaptureSerial
+			module let cycles as SampleCycles
+
+			static function none() returns PendingStop
+				return Self{id: 0, kind: StopKind.nothing, programCounter: 0, framePointer: 0, stackPointer: 0, copied: 0, serial: 0, cycles: 0}
+			end 'none'
+
+			static function unreadable(id SampledThreadId, serial CaptureSerial, cycles SampleCycles) returns PendingStop
+				return Self{id: id, kind: StopKind.unreadable, programCounter: 0, framePointer: 0, stackPointer: 0, copied: 0, serial: serial, cycles: cycles}
+			end 'unreadable'
+
+			static function lost(id SampledThreadId) returns PendingStop
+				return Self{id: id, kind: StopKind.gone, programCounter: 0, framePointer: 0, stackPointer: 0, copied: 0, serial: 0, cycles: 0}
+			end 'lost'
+
+			static function of(id SampledThreadId, kind StopKind, programCounter RegisterWord, framePointer RegisterWord, stackPointer RegisterWord, copied RegisterWord, serial CaptureSerial, cycles SampleCycles) returns PendingStop
+				return Self{id: id, kind: kind, programCounter: programCounter, framePointer: framePointer, stackPointer: stackPointer, copied: copied, serial: serial, cycles: cycles}
+			end 'of'
+		end 'PendingStop'
+	#endif
 
 	public type SampledModule
 		public let base as RegisterWord
 		public let limit as RegisterWord
 		public let name as String
+		public let fileType as RegisterWord
 
-		static function spanning(base RegisterWord, limit RegisterWord, name String) returns SampledModule
-			return Self{base: base, limit: limit, name: name}
+		static function spanning(base RegisterWord, limit RegisterWord, name String, fileType RegisterWord) returns SampledModule
+			return Self{base: base, limit: limit, name: name, fileType: fileType}
 		end 'spanning'
 	end 'SampledModule'
 
@@ -132,22 +416,29 @@
 		end 'word'
 	end 'StackWindow'
 
+	/// The base of the reservation a sampled stack lives in, unique to each live stack, where the host
+	/// reports one (Windows); `unreported` elsewhere.
+	public union StackReservation
+		unreported
+		base(address RegisterWord)
+	end 'StackReservation'
+
 	public type SampledStack
 		public let programCounter as RegisterWord
 		public let framePointer as RegisterWord
 		public let stackPointer as RegisterWord
-		public let allocationBase as RegisterWord
+		public let reservation as StackReservation
 		public let suspendedCycles as RegisterWord
 		public let window as StackWindow
 
-		static function of(programCounter RegisterWord, framePointer RegisterWord, stackPointer RegisterWord, allocationBase RegisterWord, suspendedCycles RegisterWord, window StackWindow) returns SampledStack
-			return Self{programCounter: programCounter, framePointer: framePointer, stackPointer: stackPointer, allocationBase: allocationBase, suspendedCycles: suspendedCycles, window: window}
+		static function of(programCounter RegisterWord, framePointer RegisterWord, stackPointer RegisterWord, reservation StackReservation, suspendedCycles RegisterWord, window StackWindow) returns SampledStack
+			return Self{programCounter: programCounter, framePointer: framePointer, stackPointer: stackPointer, reservation: reservation, suspendedCycles: suspendedCycles, window: window}
 		end 'of'
 	end 'SampledStack'
 
 	public union SampleCapture
 		threadGone
-		unreadable(allocationBase RegisterWord, suspendedCycles RegisterWord)
+		unreadable(reservation StackReservation, suspendedCycles RegisterWord)
 		captured(stack SampledStack)
 	end 'SampleCapture'
 
@@ -156,50 +447,198 @@
 		at(index ElementIndex)
 	end 'SampledThreadSlot'
 
-	/// Samples the threads of another process, on x64 Windows only. `close()` releases the handles and
-	/// scratch regions it holds.
+	/// Samples the threads of another process. `close()` releases the handles and scratch regions it holds;
+	/// on Linux it also detaches every thread it stopped and unpins the green thread that opened it, so it is
+	/// called on that green thread.
 	public type SampledProcess
-		var process as __ManagedHandle
+		#if not os(Linux)
+			var process as __ManagedHandle
+		#endif
+
 		let pid as RegisterWord
 		var scratch as ScratchPages
 		var window as ScratchPages
 		var openThreads as OpenThreadArray
 		let captures as CaptureSerialCell
 
+		#if not os(Windows)
+			var watches as ThreadWatchArray
+			var pending as PendingStop
+		#endif
+
+		#if os(Linux)
+			var trace as ProcessTrace
+			var seized as SeizedThreads
+		#endif
+
+		/// True where `cycles` and `suspendedCycles` are CPU nanoseconds (macOS, Linux); false on Windows,
+		/// where they are the thread's cycle counter.
+		public static function cyclesAreNanoseconds() returns bool
+			#if os(Windows)
+				return false
+			#else
+				return true
+			#endif
+		end 'cyclesAreNanoseconds'
+
+		/// True where a frame-pointer walk may continue through code outside the sampled program (macOS,
+		/// Linux); false on Windows, where such code need not keep the chain.
+		public static function foreignCodeKeepsTheFrameChain() returns bool
+			#if os(Windows)
+				return false
+			#else
+				return true
+			#endif
+		end 'foreignCodeKeepsTheFrameChain'
+
 		public static function open(pid Pid) returns SampledProcess throws SamplerError
-			let process = __ManagedHandle.adopting(__Builtins.profileOpenTarget(pid))
+			#if os(Windows) and arch(x64)
+				let process = __ManagedHandle.adopting(__Builtins.profileOpenTarget(pid))
 
-			if process.handle() == 0 'noSuchProcess'
-				throw SamplerError.noSuchProcess
-			end 'noSuchProcess'
+				if process.handle() == 0 'noSuchProcess'
+					throw SamplerError.noSuchProcess
+				end 'noSuchProcess'
 
-			var sampled = Self{process: process, pid: pid as RegisterWord, scratch: ScratchPages.reserve(SampleProcessScratchBytes), window: ScratchPages.reserve(SampleWindowBytes as ScratchBytes), openThreads: OpenThreadArray.create(), captures: CaptureSerialCell.create(0 as CaptureSerial)}
+				var sampled = Self{process: process, pid: pid as RegisterWord, scratch: ScratchPages.reserve(SampleProcessScratchBytes), window: ScratchPages.reserve(SampleWindowBytes as ScratchBytes), openThreads: OpenThreadArray.create(), captures: CaptureSerialCell.create(0 as CaptureSerial)}
 
-			if not sampled.scratch.held() or not sampled.window.held() 'noPages'
-				sampled.close()
+				if not sampled.scratch.held() or not sampled.window.held() 'noPages'
+					sampled.close()
 
-				throw SamplerError.noScratch
-			end 'noPages'
+					throw SamplerError.noScratch
+				end 'noPages'
 
-			return sampled
+				return sampled
+			#endif
+
+			#if os(Macos)
+				var scratch = ScratchPages.reserve(SampleProcessScratchBytes)
+				var window = ScratchPages.reserve(SampleWindowBytes as ScratchBytes)
+
+				if not scratch.held() or not window.held() 'noPages'
+					scratch.release()
+					window.release()
+
+					throw SamplerError.noScratch
+				end 'noPages'
+
+				scratch.setWord(MachPortSlot, value: 0)
+				let status = __Builtins.profileMachTaskForPid(__Builtins.profileMachSelfTask(), pid, scratch.addressOf(MachPortSlot))
+				let port = scratch.word(MachPortSlot) and MachLowHalfMask
+
+				if status != MachSuccess or port == 0 'refused'
+					scratch.release()
+					window.release()
+
+					if not Process.isAlive(pid) 'gone'
+						throw SamplerError.noSuchProcess
+					end 'gone'
+
+					throw SamplerError.accessDenied
+				end 'refused'
+
+				let sampled = Self{process: __ManagedHandle.adopting(port), pid: pid as RegisterWord, scratch: scratch, window: window, openThreads: OpenThreadArray.create(), captures: CaptureSerialCell.create(0 as CaptureSerial), watches: ThreadWatchArray.create(), pending: PendingStop.none()}
+
+				return sampled
+			#endif
+
+			#if os(Linux)
+				if not Process.isAlive(pid) 'gone'
+					throw SamplerError.noSuchProcess
+				end 'gone'
+
+				var pin = MachinePin.acquire()
+
+				if not pin.held() 'unpinnable'
+					throw SamplerError.threadNotPinned
+				end 'unpinnable'
+
+				var sampled = Self{pid: pid as RegisterWord, scratch: ScratchPages.reserve(SampleProcessScratchBytes), window: ScratchPages.reserve(SampleWindowBytes as ScratchBytes), openThreads: OpenThreadArray.create(), captures: CaptureSerialCell.create(0 as CaptureSerial), watches: ThreadWatchArray.create(), pending: PendingStop.none(), trace: ProcessTrace.create(), seized: SeizedThreads.open(pid, pin: pin)}
+
+				if not sampled.scratch.held() or not sampled.window.held() or not sampled.trace.isReady() or not sampled.seized.held() 'noPages'
+					sampled.close()
+
+					throw SamplerError.noScratch
+				end 'noPages'
+
+				let probe = sampled.canBeTraced()
+
+				if probe != TraceProbe.traceable 'untraceable'
+					sampled.close()
+
+					if probe == TraceProbe.killed 'killedWhileProbing'
+						throw SamplerError.noSuchProcess
+					end 'killedWhileProbing'
+
+					throw SamplerError.accessDenied
+				end 'untraceable'
+
+				return sampled
+			#endif
 		end 'open'
+
+		function track(found SampledThreadArray, handle RegisterWord, id SampledThreadId)
+			#if os(Linux)
+				self.openThreads.push(OpenThread.holding(handle, owning: __ManagedHandle.adopting(0), id: id))
+			#else
+				self.openThreads.push(OpenThread.holding(handle, owning: __ManagedHandle.adopting(handle), id: id))
+			#endif
+
+			found.push(SampledThread.identified(handle, id: id))
+		end 'track'
 
 		public function threads() returns SampledThreadArray
 			var found = SampledThreadArray.create()
-			var cursor = 0 as RegisterWord
 
-			while true 'eachThread'
-				let handle = __Builtins.profileNextThread(self.process.handle() as RegisterWord, cursor) as RegisterWord
+			#if os(Windows) and arch(x64)
+				var cursor = 0 as RegisterWord
 
-				if handle == 0 'endOfTheList'
-					break
-				end 'endOfTheList'
+				while true 'eachThread'
+					let handle = __Builtins.profileNextThread(self.process.handle() as RegisterWord, cursor) as RegisterWord
 
-				let id = __Builtins.profileThreadId(handle) as SampledThreadId
-				self.openThreads.push(OpenThread.holding(__ManagedHandle.adopting(handle), id: id))
-				found.push(SampledThread.identified(handle, id: id))
-				cursor = handle
-			end 'eachThread'
+					if handle == 0 'endOfTheList'
+						break
+					end 'endOfTheList'
+
+					self.track(found, handle: handle, id: __Builtins.profileThreadId(handle) as SampledThreadId)
+					cursor = handle
+				end 'eachThread'
+			#endif
+
+			#if os(Macos)
+				self.scratch.setWord(MachArraySlot, value: 0)
+				self.scratch.setWord(MachArrayCountSlot, value: 0)
+				let task = self.process.handle() as RegisterWord
+
+				if __Builtins.profileMachTaskThreads(task, self.scratch.addressOf(MachArraySlot), self.scratch.addressOf(MachArrayCountSlot)) != MachSuccess 'listFailed'
+					return found
+				end 'listFailed'
+
+				let array = self.scratch.word(MachArraySlot)
+				let count = self.scratch.word(MachArrayCountSlot) and MachLowHalfMask
+
+				for index in 0 upto count 'eachPort'
+					let packed = __Builtins.profileReadWord(array, (index / MachPortsPerWord) * MachPortWordBytes) as RegisterWord
+					let port = (packed shr ((index mod MachPortsPerWord) * MachPortBits)) and MachLowHalfMask
+
+					if let id = try self.machThreadIdentifier(port) 'identified'
+						self.track(found, handle: port, id: id)
+					end 'identified' else 'exitedWhileListed'
+						_ = __Builtins.profileMachReleasePort(__Builtins.profileMachSelfTask(), port)
+					end 'exitedWhileListed'
+				end 'eachPort'
+
+				_ = __Builtins.profileMachReleaseMemory(__Builtins.profileMachSelfTask(), array, count * MachPortBytes)
+			#endif
+
+			#if os(Linux)
+				let directory = try FilePath.from("{ProcTaskRoot}/{self.pid}/{ProcTaskDirectory}") otherwise return found
+				let entries = try Directory.list(directory) otherwise return found
+
+				for entry in entries 'eachEntry'
+					let id = try int.fromString(entry.filename()) otherwise continue
+					self.track(found, handle: id as RegisterWord, id: id as SampledThreadId)
+				end 'eachEntry'
+			#endif
 
 			return found
 		end 'threads'
@@ -236,8 +675,98 @@
 		public function cycles(thread SampledThread) returns SampleCycles throws SamplerError
 			try self.requireHeld(thread)
 
-			return __Builtins.profileThreadCycles(thread.rawHandle()) as SampleCycles
+			return self.cyclesOf(thread)
 		end 'cycles'
+
+		function cyclesOf(thread SampledThread) returns SampleCycles
+			#if os(Windows) and arch(x64)
+				return __Builtins.profileThreadCycles(thread.rawHandle()) as SampleCycles
+			#endif
+
+			#if not os(Windows)
+				self.pending = PendingStop.none()
+
+				match self.threadReading(thread) 'reading'
+					running then return self.cyclesAtAStop(thread)
+					idle(cpuNanos) then return self.settleWatch(thread.id, exact: cpuNanos)
+					unreadable then return self.lastCycles(thread.id)
+				end 'reading'
+			#endif
+		end 'cyclesOf'
+
+		#if not os(Windows)
+			function watchSlotOf(id SampledThreadId) returns SampledThreadSlot
+				for (iter, watch) in self.watches.withIterator() 'eachWatch'
+					if watch.id == id 'thisOne'
+						return SampledThreadSlot.at(iter.index())
+					end 'thisOne'
+				end 'eachWatch'
+
+				return SampledThreadSlot.none
+			end 'watchSlotOf'
+
+			function lastCycles(id SampledThreadId) returns SampleCycles
+				match self.watchSlotOf(id) 'known'
+					none then return 0
+					at(index) then return (try self.watches.get(index) otherwise panic("SampledProcess.lastCycles: index {index} came from a search of the table")).cycles
+				end 'known'
+			end 'lastCycles'
+
+			function settleWatch(id SampledThreadId, exact SampleCycles) returns SampleCycles
+				match self.watchSlotOf(id) 'known'
+					none then return self.startWatch(id, exact: exact)
+					at(index) then return self.settledWatch(index, exact: exact)
+				end 'known'
+			end 'settleWatch'
+
+			function startWatch(id SampledThreadId, exact SampleCycles) returns SampleCycles
+				self.watches.push(ThreadWatch.starting(id, cycles: exact))
+
+				return exact
+			end 'startWatch'
+
+			function settledWatch(index ElementIndex, exact SampleCycles) returns SampleCycles
+				var watch = try self.watches.get(index) otherwise panic("SampledProcess.settledWatch: index {index} came from a search of the table")
+
+				if exact > watch.cycles 'ranSinceTheLastReading'
+					watch.cycles = exact
+					try self.watches.set(index, value: watch) otherwise panic("SampledProcess.settledWatch: index {index} came from a search of the table")
+				end 'ranSinceTheLastReading'
+
+				return watch.cycles
+			end 'settledWatch'
+
+			function cyclesAtAStop(thread SampledThread) returns SampleCycles
+				#if os(Linux)
+					self.pending = self.stopThread(thread, stateKnown: true)
+				#else
+					self.pending = self.stopThread(thread)
+				#endif
+
+				return self.lastCycles(thread.id)
+			end 'cyclesAtAStop'
+
+			function takePendingStop(id SampledThreadId) returns PendingStop
+				if self.pending.id != id 'someoneElses'
+					return PendingStop.none()
+				end 'someoneElses'
+
+				let taken = PendingStop.of(self.pending.id, kind: self.pending.kind, programCounter: self.pending.programCounter, framePointer: self.pending.framePointer, stackPointer: self.pending.stackPointer, copied: self.pending.copied, serial: self.pending.serial, cycles: self.pending.cycles)
+				self.pending = PendingStop.none()
+
+				return taken
+			end 'takePendingStop'
+
+			function captureOfStop(stop PendingStop) returns SampleCapture throws SamplerError
+				match stop.kind 'which'
+					calling then throw SamplerError.callingThread
+					gone then return SampleCapture.threadGone
+					unreadable then return SampleCapture.unreadable(StackReservation.unreported, suspendedCycles: stop.cycles as RegisterWord)
+					registers then return self.capturedStack(stop.programCounter, framePointer: stop.framePointer, stackPointer: stop.stackPointer, copied: stop.copied, serial: stop.serial, suspendedCycles: stop.cycles as RegisterWord)
+					nothing then panic("SampledProcess.captureOfStop: a stop that stopped nothing reached a capture")
+				end 'which'
+			end 'captureOfStop'
+		#endif
 
 		/// Read `thread`'s registers and copy its stack into the window. Throws `unknownThread` for a
 		/// thread `threads()` did not hand out or `release` let go, and `callingThread` for the thread
@@ -245,27 +774,43 @@
 		public function capture(thread SampledThread) returns SampleCapture throws SamplerError
 			try self.requireHeld(thread)
 
-			if thread.id == (__Builtins.profileThreadId(CurrentThreadPseudoHandle) as SampledThreadId) 'suspendsItself'
-				throw SamplerError.callingThread
-			end 'suspendsItself'
+			#if os(Windows) and arch(x64)
+				if thread.id == (__Builtins.profileThreadId(CurrentThreadPseudoHandle) as SampledThreadId) 'suspendsItself'
+					throw SamplerError.callingThread
+				end 'suspendsItself'
 
-			let serial = self.nextCapture()
-			let windowBytes = __Builtins.profileSample(self.process.handle() as RegisterWord, thread.rawHandle(), self.scratch.addressOf(SampleContextSlot), self.scratch.addressOf(SampleRegionSlot), self.window.addressOf(0), SampleWindowBytes)
+				let serial = self.nextCapture()
+				let windowBytes = __Builtins.profileSample(self.process.handle() as RegisterWord, thread.rawHandle(), self.scratch.addressOf(SampleContextSlot), self.scratch.addressOf(SampleRegionSlot), self.window.addressOf(0), SampleWindowBytes)
 
-			if windowBytes == ProfileSampleThreadGone 'exited'
-				return SampleCapture.threadGone
-			end 'exited'
+				if windowBytes == ProfileSampleThreadGone 'exited'
+					return SampleCapture.threadGone
+				end 'exited'
 
-			let allocationBase = self.scratch.word(SampleRegionAllocationBaseSlot)
-			let suspendedCycles = self.scratch.word(SampleRegionSuspendedCyclesSlot)
+				let allocationBase = self.scratch.word(SampleRegionAllocationBaseSlot)
+				let suspendedCycles = self.scratch.word(SampleRegionSuspendedCyclesSlot)
 
-			if windowBytes == ProfileSampleNoRegisters 'nothingToRead'
-				return SampleCapture.unreadable(allocationBase, suspendedCycles: suspendedCycles)
-			end 'nothingToRead'
+				if windowBytes == ProfileSampleNoRegisters 'nothingToRead'
+					return SampleCapture.unreadable(StackReservation.base(allocationBase), suspendedCycles: suspendedCycles)
+				end 'nothingToRead'
 
-			let copiedStack = StackWindow.over(self.window.readHandle(), copied: windowBytes as RegisterWord, serial: serial, captures: self.captures)
+				let copiedStack = StackWindow.over(self.window.readHandle(), copied: windowBytes as RegisterWord, serial: serial, captures: self.captures)
 
-			return SampleCapture.captured(SampledStack.of(self.scratch.word(SampleContextRipSlot), framePointer: self.scratch.word(SampleContextRbpSlot), stackPointer: self.scratch.word(SampleContextRspSlot), allocationBase: allocationBase, suspendedCycles: suspendedCycles, window: copiedStack))
+				return SampleCapture.captured(SampledStack.of(self.scratch.word(SampleContextRipSlot), framePointer: self.scratch.word(SampleContextRbpSlot), stackPointer: self.scratch.word(SampleContextRspSlot), reservation: StackReservation.base(allocationBase), suspendedCycles: suspendedCycles, window: copiedStack))
+			#endif
+
+			#if not os(Windows)
+				let stop = self.takePendingStop(thread.id)
+
+				if stop.kind != StopKind.nothing 'stoppedThisTick'
+					return try self.captureOfStop(stop)
+				end 'stoppedThisTick'
+
+				#if os(Linux)
+					return try self.captureOfStop(self.stopThread(thread, stateKnown: false))
+				#else
+					return try self.captureOfStop(self.stopThread(thread))
+				#endif
+			#endif
 		end 'capture'
 
 		function nextCapture() returns CaptureSerial
@@ -275,115 +820,595 @@
 			return next
 		end 'nextCapture'
 
+		#if not os(Windows)
+			function capturedStack(programCounter RegisterWord, framePointer RegisterWord, stackPointer RegisterWord, copied RegisterWord, serial CaptureSerial, suspendedCycles RegisterWord) returns SampleCapture
+				let copiedStack = StackWindow.over(self.window.readHandle(), copied: copied, serial: serial, captures: self.captures)
+
+				return SampleCapture.captured(SampledStack.of(programCounter, framePointer: framePointer, stackPointer: stackPointer, reservation: StackReservation.unreported, suspendedCycles: suspendedCycles, window: copiedStack))
+			end 'capturedStack'
+		#endif
+
+		#if os(Macos)
+			function readRemote(address RegisterWord, windowOffset RegisterWord, count RegisterWord) returns bool
+				return __Builtins.profileMachReadMemory(self.process.handle() as RegisterWord, address, count, self.window.addressOf(windowOffset as ScratchOffset), self.scratch.addressOf(MachReadSizeSlot)) == MachSuccess
+			end 'readRemote'
+
+			function machThreadIdentifier(port RegisterWord) returns SampledThreadId throws SamplerError
+				self.scratch.setWord(MachCountSlot, value: MachThreadIdentifierInfoWords)
+
+				if __Builtins.profileMachThreadInfo(port, MachThreadIdentifierInfo, self.scratch.addressOf(MachInfoSlot), self.scratch.addressOf(MachCountSlot)) != MachSuccess 'unidentified'
+					throw SamplerError.unknownThread
+				end 'unidentified'
+
+				return self.scratch.word(MachInfoSlot) as SampledThreadId
+			end 'machThreadIdentifier'
+
+			function machReadBasicInfo(port RegisterWord) returns bool
+				self.scratch.setWord(MachCountSlot, value: MachThreadBasicInfoWords)
+
+				return __Builtins.profileMachThreadInfo(port, MachThreadBasicInfo, self.scratch.addressOf(MachInfoSlot), self.scratch.addressOf(MachCountSlot)) == MachSuccess
+			end 'machReadBasicInfo'
+
+			function machInfoCpuNanos() returns SampleCycles
+				let user = self.scratch.word(MachInfoSlot)
+				let system = self.scratch.word(MachInfoSecondSlot)
+				let seconds = (user and MachLowHalfMask) + (system and MachLowHalfMask)
+				let micros = (user shr MachHighHalfShift) + (system shr MachHighHalfShift)
+
+				return (seconds * MachNanosPerSecond + micros * MachNanosPerMicro) as SampleCycles
+			end 'machInfoCpuNanos'
+
+			function threadReading(thread SampledThread) returns ThreadReading
+				if not self.machReadBasicInfo(thread.rawHandle()) 'unreadable'
+					return ThreadReading.unreadable
+				end 'unreadable'
+
+				let cpuNanos = self.machInfoCpuNanos()
+				let running = (self.scratch.word(MachInfoStateSlot) and MachLowHalfMask) == MachStateRunning
+
+				if running 'canBeStopped'
+					return ThreadReading.running
+				end 'canBeStopped'
+
+				return ThreadReading.idle(cpuNanos)
+			end 'threadReading'
+
+			function callerCycles(thread SampledThread) returns SampleCycles
+				if not self.machReadBasicInfo(thread.rawHandle()) 'unreadable'
+					return self.lastCycles(thread.id)
+				end 'unreadable'
+
+				return self.settleWatch(thread.id, exact: self.machInfoCpuNanos())
+			end 'callerCycles'
+
+			function stopThread(thread SampledThread) returns PendingStop
+				let serial = self.nextCapture()
+				self.scratch.setWord(MachInfoSlot, value: 0)
+				self.scratch.setWord(MachInfoSecondSlot, value: 0)
+
+				let windowBytes = __Builtins.profileMachSample(self.process.handle() as RegisterWord, thread.rawHandle(), self.scratch.addressOf(MachStateSlot), self.scratch.addressOf(MachInfoSlot), self.window.addressOf(0), SampleWindowBytes)
+
+				if windowBytes == ProfileSampleThreadGone 'exited'
+					return PendingStop.lost(thread.id)
+				end 'exited'
+
+				if windowBytes == ProfileSampleCallingThread 'callersOwn'
+					return PendingStop.of(thread.id, kind: StopKind.calling, programCounter: 0, framePointer: 0, stackPointer: 0, copied: 0, serial: serial, cycles: self.callerCycles(thread))
+				end 'callersOwn'
+
+				let suspendedCycles = self.settleWatch(thread.id, exact: self.machInfoCpuNanos())
+
+				if windowBytes == ProfileSampleNoRegisters 'nothingToRead'
+					return PendingStop.unreadable(thread.id, serial: serial, cycles: suspendedCycles)
+				end 'nothingToRead'
+
+				return PendingStop.of(thread.id, kind: StopKind.registers, programCounter: self.scratch.word(MachStateProgramCounterSlot), framePointer: self.scratch.word(MachStateFramePointerSlot), stackPointer: self.scratch.word(MachStateStackPointerSlot), copied: windowBytes as RegisterWord, serial: serial, cycles: suspendedCycles)
+			end 'stopThread'
+		#endif
+
+		#if os(Linux)
+			function readRemote(address RegisterWord, windowOffset RegisterWord, count RegisterWord) returns bool
+				return self.trace.copyFrom(self.pid as DebuggeeProcessId, address: address as DebuggeeAddress, destination: self.window.addressOf(windowOffset as ScratchOffset), count: count)
+			end 'readRemote'
+
+			function schedulerNanos(thread SampledThread) returns CpuNanos
+				let path = try FilePath.from("{ProcTaskRoot}/{self.pid}/{ProcTaskDirectory}/{thread.rawHandle()}/{ProcSchedStatFile}") otherwise return CpuNanos.unreadable
+				let text = try File.readText(path) otherwise return CpuNanos.unreadable
+				let onCpu = try text.split(ProcFieldSeparator).get(0) otherwise return CpuNanos.unreadable
+				let nanos = try int.fromString(onCpu.trim()) otherwise return CpuNanos.unreadable
+
+				return CpuNanos.read(nanos as SampleCycles)
+			end 'schedulerNanos'
+
+			function settledSchedulerCycles(thread SampledThread) returns SampleCycles
+				return match self.schedulerNanos(thread) 'reading'
+					read(nanos) gives self.settleWatch(thread.id, exact: nanos)
+					unreadable gives self.lastCycles(thread.id)
+				end 'reading'
+			end 'settledSchedulerCycles'
+
+			function threadState(id RegisterWord) returns ThreadState
+				let path = try FilePath.from("{ProcTaskRoot}/{self.pid}/{ProcTaskDirectory}/{id}/{ProcStatFile}") otherwise return ThreadState.absent
+				let text = try File.readText(path) otherwise return ThreadState.absent
+				let parts = text.split(ProcCommandEnd)
+				let afterCommand = try parts.get(parts.count() - 1) otherwise return ThreadState.absent
+
+				return ThreadState.present(afterCommand.trim())
+			end 'threadState'
+
+			function threadIsUninterruptible(id RegisterWord) returns bool
+				return match self.threadState(id) 'state'
+					absent gives false
+					present(code) gives code.startsWith(ProcStateUninterruptible)
+				end 'state'
+			end 'threadIsUninterruptible'
+
+			function threadHasExited(id RegisterWord) returns bool
+				return match self.threadState(id) 'state'
+					absent gives true
+					present(code) gives code.startsWith(ProcStateZombie) or code.startsWith(ProcStateDead)
+				end 'state'
+			end 'threadHasExited'
+
+			function threadReading(thread SampledThread) returns ThreadReading
+				return match self.threadState(thread.rawHandle()) 'state'
+					absent gives ThreadReading.unreadable
+					present(code) gives self.readingOfLiveThread(thread, code: code)
+				end 'state'
+			end 'threadReading'
+
+			function readingOfLiveThread(thread SampledThread, code String) returns ThreadReading
+				if code.startsWith(ProcStateRunning) 'running'
+					return ThreadReading.running
+				end 'running'
+
+				return match self.schedulerNanos(thread) 'accounted'
+					read(nanos) gives ThreadReading.idle(nanos)
+					unreadable gives ThreadReading.unreadable
+				end 'accounted'
+			end 'readingOfLiveThread'
+
+			// Copied here, in Maxon, because a ptrace-stopped thread stays stopped until this process detaches
+			// it. macOS copies inside `__prof_mach_sample` instead, the one graph whose every path reaches the
+			// resume.
+			function copyStack(stackPointer RegisterWord) returns RegisterWord
+				var copied = 0 as RegisterWord
+
+				while copied < SampleWindowBytes 'eachChunk'
+					let address = stackPointer + copied
+					let toBoundary = StackReadChunkBytes - (address mod StackReadChunkBytes)
+					let wanted = toBoundary if toBoundary < SampleWindowBytes - copied else SampleWindowBytes - copied
+
+					if not self.readRemote(address, windowOffset: copied, count: wanted) 'unmapped'
+						break
+					end 'unmapped'
+
+					copied = copied + wanted
+				end 'eachChunk'
+
+				return copied
+			end 'copyStack'
+
+			function stopThread(thread SampledThread, stateKnown bool) returns PendingStop
+				let serial = self.nextCapture()
+				let id = thread.rawHandle() as DebuggeeThreadId
+
+				match self.seizeForStop(id, stateKnown: stateKnown) 'seized'
+					uninterruptible then return PendingStop.unreadable(thread.id, serial: serial, cycles: self.lastCycles(thread.id))
+					gone then return PendingStop.lost(thread.id)
+					held then break
+				end 'seized'
+
+				let stopped = self.trace.interrupt(id) and self.awaitStop(id)
+				var programCounter = 0 as RegisterWord
+				var framePointer = 0 as RegisterWord
+				var stackPointer = 0 as RegisterWord
+				var copied = 0 as RegisterWord
+
+				if stopped 'registersAreHeld'
+					programCounter = self.trace.generalRegister(TraceProgramCounterOffset as ScratchOffset)
+					framePointer = self.trace.generalRegister(TraceFramePointerOffset as ScratchOffset)
+					stackPointer = self.trace.generalRegister(TraceStackPointerOffset as ScratchOffset)
+					copied = self.copyStack(stackPointer)
+				end 'registersAreHeld'
+
+				_ = self.letGo(id)
+
+				var suspendedCycles = self.lastCycles(thread.id)
+
+				if stopped 'settledByTheStop'
+					suspendedCycles = self.settledSchedulerCycles(thread)
+				end 'settledByTheStop'
+
+				if not stopped 'nothingToRead'
+					return PendingStop.unreadable(thread.id, serial: serial, cycles: suspendedCycles)
+				end 'nothingToRead'
+
+				return PendingStop.of(thread.id, kind: StopKind.registers, programCounter: programCounter, framePointer: framePointer, stackPointer: stackPointer, copied: copied, serial: serial, cycles: suspendedCycles)
+			end 'stopThread'
+
+			function canBeTraced() returns TraceProbe
+				let leader = self.pid as DebuggeeThreadId
+				var outcome = self.seizeForStop(leader, stateKnown: false)
+				let started = Clock.nowNanos()
+
+				while outcome == SeizeOutcome.uninterruptible and Clock.elapsedNanos(started) <= TraceStopBudgetNanos 'untilItWakes'
+					self.pauseAfterSpinning(started)
+					outcome = self.seizeForStop(leader, stateKnown: false)
+				end 'untilItWakes'
+
+				match outcome 'seized'
+					gone then return TraceProbe.killed if self.threadHasExited(self.pid) else TraceProbe.refused
+					uninterruptible then return TraceProbe.traceable
+					held then break
+				end 'seized'
+
+				if self.trace.interrupt(leader) 'asked'
+					_ = self.awaitStop(leader)
+				end 'asked'
+
+				return TraceProbe.traceable if self.letGo(leader) else TraceProbe.killed
+			end 'canBeTraced'
+
+			function seizeForStop(thread DebuggeeThreadId, stateKnown bool) returns SeizeOutcome
+				if not stateKnown and self.threadIsUninterruptible(thread as RegisterWord) 'asleepInTheKernel'
+					return SeizeOutcome.uninterruptible
+				end 'asleepInTheKernel'
+
+				if not self.holdForStop(thread) 'refused'
+					return SeizeOutcome.gone
+				end 'refused'
+
+				return SeizeOutcome.held
+			end 'seizeForStop'
+
+			function holdForStop(thread DebuggeeThreadId) returns bool
+				if self.seized.contains(thread) 'alreadyHeld'
+					return true
+				end 'alreadyHeld'
+
+				if not self.trace.seize(thread) 'refused'
+					return false
+				end 'refused'
+
+				self.seized.add(thread)
+
+				return true
+			end 'holdForStop'
+
+			function detachedOrGone(thread DebuggeeThreadId) returns bool
+				if self.trace.detach(thread, signal: NoTraceSignal) or ((thread as RegisterWord) != self.pid and self.trace.reapedGone(thread)) or self.threadHasExited(thread as RegisterWord) 'noLongerHeld'
+					self.seized.remove(thread)
+
+					return true
+				end 'noLongerHeld'
+
+				return false
+			end 'detachedOrGone'
+
+			function letGo(thread DebuggeeThreadId) returns bool
+				let started = Clock.nowNanos()
+
+				while not self.detachedOrGone(thread) 'untilItHasStopped'
+					if Clock.elapsedNanos(started) > TraceStopBudgetNanos 'outOfTime'
+						self.seized.killProcessHolding(thread)
+
+						return false
+					end 'outOfTime'
+
+					self.pauseAfterSpinning(started)
+				end 'untilItHasStopped'
+
+				return true
+			end 'letGo'
+
+			function pauseAfterSpinning(started InstantNanos)
+				if Clock.elapsedNanos(started) > TraceStopSpinNanos 'spunLongEnough'
+					__Builtins.profileSleepMicros(TraceStopPollMicros)
+				end 'spunLongEnough'
+			end 'pauseAfterSpinning'
+
+			function awaitStop(thread DebuggeeThreadId) returns bool
+				let started = Clock.nowNanos()
+
+				while Clock.elapsedNanos(started) <= TraceStopBudgetNanos 'untilItHasStopped'
+					if self.trace.readGeneralRegisters(thread) 'stopped'
+						return true
+					end 'stopped'
+
+					if Clock.elapsedNanos(started) > TraceStopSpinNanos and self.threadHasExited(thread as RegisterWord) 'exited'
+						return false
+					end 'exited'
+
+					self.pauseAfterSpinning(started)
+				end 'untilItHasStopped'
+
+				return false
+			end 'awaitStop'
+		#endif
+
 		public function modules() returns SampledModuleArray throws SamplerError
-			var attempt = 0 as Count
+			#if os(Windows) and arch(x64)
+				var attempt = 0 as Count
 
-			while attempt < ModuleSnapshotAttempts 'retry'
-				attempt = attempt + 1
-				let snapshot = __Builtins.profileModuleSnapshot(self.pid) as RegisterWord
+				while attempt < ModuleSnapshotAttempts 'retry'
+					attempt = attempt + 1
+					let snapshot = __Builtins.profileModuleSnapshot(self.pid) as RegisterWord
 
-				if snapshot == InvalidHandle or snapshot == 0 'notYet'
-					sleep(ModuleSnapshotRetryMs)
-					continue
-				end 'notYet'
+					if snapshot == InvalidHandle or snapshot == 0 'notYet'
+						sleep(ModuleSnapshotRetryMs)
+						continue
+					end 'notYet'
 
-				let walked = self.walkedModules(snapshot)
-				__Builtins.profileClose(snapshot)
+					let walked = self.walkedModules(snapshot)
+					__Builtins.profileClose(snapshot)
 
-				return walked
-			end 'retry'
+					return walked
+				end 'retry'
 
-			throw SamplerError.moduleListUnavailable
+				throw SamplerError.moduleListUnavailable
+			#endif
+
+			#if os(Macos)
+				var attempt = 0 as Count
+
+				while attempt < MachImageListAttempts 'retry'
+					attempt = attempt + 1
+					let images = self.machImages()
+
+					if images.count() > 0 'listed'
+						return images
+					end 'listed'
+
+					sleep(MachImageListRetryMs)
+				end 'retry'
+
+				throw SamplerError.moduleListUnavailable
+			#endif
+
+			#if os(Linux)
+				if not Process.isAlive(self.pid as Pid) 'gone'
+					throw SamplerError.moduleListUnavailable
+				end 'gone'
+
+				return SampledModuleArray.create()
+			#endif
 		end 'modules'
 
-		function walkedModules(snapshot RegisterWord) returns SampledModuleArray
-			var modules = SampledModuleArray.create()
-			self.scratch.setWord(ModuleEntrySizeSlot, value: ModuleEntryBytes)
-			var more = __Builtins.profileModuleFirst(snapshot, self.scratch.addressOf(SampleModuleEntrySlot))
+		#if os(Macos)
+			function machImages() returns SampledModuleArray
+				var modules = SampledModuleArray.create()
+				_ = self.nextCapture()
+				self.scratch.setWord(MachCountSlot, value: MachTaskDyldInfoWords)
 
-			while more != 0 'eachModule'
-				let base = self.scratch.word(ModuleEntryBaseSlot)
-				modules.push(SampledModule.spanning(base, limit: base + (self.scratch.word(ModuleEntryExtentSlot) and u32.max), name: self.moduleName()))
-				more = __Builtins.profileModuleNext(snapshot, self.scratch.addressOf(SampleModuleEntrySlot))
-			end 'eachModule'
+				if __Builtins.profileMachTaskInfo(self.process.handle() as RegisterWord, MachTaskDyldInfo, self.scratch.addressOf(MachDyldInfoSlot), self.scratch.addressOf(MachCountSlot)) != MachSuccess or not self.readRemote(self.scratch.word(MachDyldInfoSlot), windowOffset: 0, count: MachImageInfoHeaderBytes) 'noImageList'
+					return modules
+				end 'noImageList'
 
-			return modules
-		end 'walkedModules'
+				let imageCount = self.window.word(0) shr MachHighHalfShift
+				let imageArray = self.window.word(MachImageArrayOffset)
+				var index = 0 as RegisterWord
 
-		function moduleName() returns String
-			var name = ByteArray.create()
-			var offset = ModuleEntryNameOffset as ScratchOffset
+				while index < imageCount and index < MachMaxModules 'eachImage'
+					let entry = imageArray + index * MachImageInfoBytes
+					index = index + 1
 
-			while offset < ModuleEntryBytes 'eachWord'
-				let packed = self.scratch.word(SampleModuleEntrySlot + offset)
+					if not self.readRemote(entry, windowOffset: 0, count: MachImageInfoBytes) 'unreadableEntry'
+						continue
+					end 'unreadableEntry'
 
-				for unit in 0 upto Utf16UnitsPerWord 'eachUnit'
-					let code = (packed shr ((unit * Utf16UnitBits) as UnitShift)) and Utf16UnitMask
+					let base = self.window.word(0)
+					let path = self.window.word(MachImagePathOffset)
+					let extent = self.machTextExtent(base)
 
-					if code == 0 'endOfName'
-						return String.from(name)
-					end 'endOfName'
+					if extent == 0 'noSegment'
+						continue
+					end 'noSegment'
 
-					name.push((code if code < AsciiCeiling else NonAsciiPlaceholder) as Byte)
-				end 'eachUnit'
+					let fileType = self.window.word(MachHeaderFileTypeWord) shr MachHighHalfShift
+					modules.push(SampledModule.spanning(base, limit: base + extent, name: self.machBaseName(path), fileType: fileType))
+				end 'eachImage'
 
-				offset = offset + (sizeof(RegisterWord) as ScratchOffset)
-			end 'eachWord'
+				return modules
+			end 'machImages'
+		#endif
 
-			return String.from(name)
-		end 'moduleName'
+		#if os(Windows) and arch(x64)
+			function walkedModules(snapshot RegisterWord) returns SampledModuleArray
+				var modules = SampledModuleArray.create()
+				self.scratch.setWord(ModuleEntrySizeSlot, value: ModuleEntryBytes)
+				var more = __Builtins.profileModuleFirst(snapshot, self.scratch.addressOf(SampleModuleEntrySlot))
+
+				while more != 0 'eachModule'
+					let base = self.scratch.word(ModuleEntryBaseSlot)
+					modules.push(SampledModule.spanning(base, limit: base + (self.scratch.word(ModuleEntryExtentSlot) and u32.max), name: self.moduleName(), fileType: ModuleHasNoFileType))
+					more = __Builtins.profileModuleNext(snapshot, self.scratch.addressOf(SampleModuleEntrySlot))
+				end 'eachModule'
+
+				return modules
+			end 'walkedModules'
+
+			function moduleName() returns String
+				var name = ByteArray.create()
+				var offset = ModuleEntryNameOffset as ScratchOffset
+
+				while offset < ModuleEntryBytes 'eachWord'
+					let packed = self.scratch.word(SampleModuleEntrySlot + offset)
+
+					for unit in 0 upto Utf16UnitsPerWord 'eachUnit'
+						let code = (packed shr ((unit * Utf16UnitBits) as UnitShift)) and Utf16UnitMask
+
+						if code == 0 'endOfName'
+							return String.from(name)
+						end 'endOfName'
+
+						name.push((code if code < AsciiCeiling else NonAsciiPlaceholder) as Byte)
+					end 'eachUnit'
+
+					offset = offset + (sizeof(RegisterWord) as ScratchOffset)
+				end 'eachWord'
+
+				return String.from(name)
+			end 'moduleName'
+		#endif
+
+		#if os(Macos)
+			function machTextExtent(base RegisterWord) returns RegisterWord
+				if not self.readRemote(base, windowOffset: 0, count: MachHeaderBytes) 'noHeader'
+					return 0
+				end 'noHeader'
+
+				let commandBytes = self.window.word(MachHeaderCommandsWord) shr MachHighHalfShift
+
+				if commandBytes > MachMaxCommandBytes or not self.readRemote(base + MachHeaderBytes, windowOffset: MachHeaderBytes, count: commandBytes) 'noCommands'
+					return 0
+				end 'noCommands'
+
+				var offset = MachHeaderBytes as RegisterWord
+
+				while offset < MachHeaderBytes + commandBytes 'eachCommand'
+					let command = self.window.word(offset as ScratchOffset)
+					let kind = command and MachLowHalfMask
+					let size = command shr MachHighHalfShift
+
+					if size == 0 'malformed'
+						return 0
+					end 'malformed'
+
+					if kind == MachLoadCommandSegment64 and self.window.word((offset + MachSegmentNameOffset) as ScratchOffset) == MachTextSegmentNameWord 'theTextSegment'
+						return self.window.word((offset + MachSegmentSizeOffset) as ScratchOffset)
+					end 'theTextSegment'
+
+					offset = offset + size
+				end 'eachCommand'
+
+				return 0
+			end 'machTextExtent'
+
+			function machBaseName(path RegisterWord) returns String
+				var name = ByteArray.create()
+				var address = path
+
+				while address - path < MacosMaxPathLength 'eachChunk'
+					let chunk = MachPathChunkBytes - (address mod MachPathChunkBytes)
+
+					if not self.readRemote(address, windowOffset: 0, count: chunk) 'unreadable'
+						break
+					end 'unreadable'
+
+					let bytes = self.window.bytesAt(0, count: chunk as DebuggeeByteCount)
+
+					for byte in bytes 'eachByte'
+						if byte == 0 'endOfPath'
+							return String.from(name)
+						end 'endOfPath'
+
+						if byte == MachPathSeparator 'newComponent'
+							name.clear()
+						end 'newComponent' else 'ordinaryByte'
+							name.push(byte)
+						end 'ordinaryByte'
+					end 'eachByte'
+
+					address = address + chunk
+				end 'eachChunk'
+
+				return String.from(name)
+			end 'machBaseName'
+		#endif
 
 		public function clone() returns Self
 			panic("SampledProcess.clone: a sampled process owns the handles of one process and one table of the threads opened on it, which a second copy could neither share nor close — hold it in one place")
 		end 'clone'
 
 		public function close()
+			#if os(Linux)
+				self.seized.release()
+			#endif
+
 			for thread in self.openThreads 'eachThread'
 				thread.release()
 			end 'eachThread'
 
 			self.openThreads.clear()
-			self.process.release()
+
+			#if not os(Linux)
+				self.process.release()
+			#endif
+
 			self.scratch.release()
 			self.window.release()
+
+			#if os(Linux)
+				self.trace.close()
+			#endif
 		end 'close'
 	end 'SampledProcess'
 
 	public typealias SampledModuleArray = Array with SampledModule
 
-	/// A periodic timer: each `wait()` blocks until `interval` past the previous deadline, at 100 ns
-	/// resolution. `wait()` after `close()` panics.
+	/// A periodic timer: each `wait()` blocks until `interval` past the previous deadline. `wait()` after
+	/// `close()` panics.
 	public type SampleTimer
-		var timer as __ManagedHandle
-		let stepTicks as RegisterWord
-		var deadline as RegisterWord
+		#if os(Windows) and arch(x64)
+			var timer as __ManagedHandle
+			let stepTicks as RegisterWord
+			var deadline as RegisterWord
+		#else
+			let stepNanos as SampleIntervalNanos
+			var deadline as InstantNanos
+		#endif
 
-		public static function create(interval SampleIntervalNanos) returns SampleTimer throws SamplerError
-			let timer = __ManagedHandle.timer()
+		var closed as bool
 
-			if timer.handle() == 0 'noTimer'
-				throw SamplerError.noTimer
-			end 'noTimer'
+		public static function create(interval SampleIntervalNanos) returns SampleTimer
+			#if os(Windows) and arch(x64)
+				let ticks = (interval / NanosPerFileTimeTick) as RegisterWord
+				let step = ticks if ticks > 0 else 1
 
-			let ticks = (interval / NanosPerFileTimeTick) as RegisterWord
-			let step = ticks if ticks > 0 else 1
-
-			return Self{timer: timer, stepTicks: step, deadline: (__Builtins.profileNowFileTime() as RegisterWord) + step}
+				return Self{timer: __ManagedHandle.timer(), stepTicks: step, deadline: (__Builtins.profileNowFileTime() as RegisterWord) + step, closed: false}
+			#else
+				return Self{stepNanos: interval, deadline: Clock.nowNanos() + (interval as InstantNanos), closed: false}
+			#endif
 		end 'create'
 
-		public function wait()
-			let handle = self.timer.handle() as RegisterWord
+		/// False when the host refused the timer `create` asked for; `wait()` panics on such a timer.
+		public function ready() returns bool
+			#if os(Windows) and arch(x64)
+				return self.timer.handle() != 0
+			#else
+				return true
+			#endif
+		end 'ready'
 
-			if handle == 0 'closed'
+		public function wait()
+			if self.closed 'closed'
 				panic("SampleTimer.wait: the timer was closed")
 			end 'closed'
 
-			self.deadline = self.deadline + self.stepTicks
-			__Builtins.profileTimerWait(handle, self.deadline)
+			if not self.ready() 'neverOpened'
+				panic("SampleTimer.wait: the timer never opened — a caller checks ready() after create")
+			end 'neverOpened'
+
+			#if os(Windows) and arch(x64)
+				self.deadline = self.deadline + self.stepTicks
+				__Builtins.profileTimerWait(self.timer.handle() as RegisterWord, self.deadline)
+			#else
+				self.deadline = self.deadline + (self.stepNanos as InstantNanos)
+				let now = Clock.nowNanos()
+
+				if self.deadline > now 'early'
+					__Builtins.profileSleepMicros(((self.deadline - now + SamplerNanosPerMicro - 1) / SamplerNanosPerMicro) as RegisterWord)
+				end 'early'
+			#endif
 		end 'wait'
 
 		public function close()
-			self.timer.release()
+			#if os(Windows) and arch(x64)
+				self.timer.release()
+			#endif
+
+			self.closed = true
 		end 'close'
 	end 'SampleTimer'
 #endif

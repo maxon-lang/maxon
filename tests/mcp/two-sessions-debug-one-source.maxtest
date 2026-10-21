@@ -2,6 +2,12 @@ let TwoSessionsStagingDir = "temp/mcp-two-sessions"
 let OkStatus = 200 as HttpAnswerStatus
 let SessionsDebuggingOneSource = 2
 
+#if os(Macos)
+	let ImagesPerLiveSession = 2
+#else
+	let ImagesPerLiveSession = 1
+#endif
+
 test 'two debug sessions of one source each stop in their own build, and closing one removes its build'
 	let program = stagedProgram(TwoSessionsStagingDir, fileName: "main.maxon", source: debuggableProgramSource())
 	let anchored = anchorLine(program, anchor: DebuggableProgramAnchor)
@@ -33,8 +39,8 @@ test 'two debug sessions of one source each stop in their own build, and closing
 	try Expect.isFalse(toolCallIsError(secondStarted), message: "the second session's `{DebugStartTool}` builds the same source while the first session's program runs, and must not build over the image that program runs from: {toolCallText(secondStarted)}")
 	try Expect.isTrue(debugEventLines(firstContinued, kind: DebugStopEventName).contains("{anchored}"), message: "the first session must stop at the anchored line {anchored}; it answered {toolCallText(firstContinued)}")
 	try Expect.isTrue(debugEventLines(secondContinued, kind: DebugStopEventName).contains("{anchored}"), message: "the second session must stop at the anchored line {anchored}; it answered {toolCallText(secondContinued)}")
-	try Expect.equal(imagesWhileLive.count(), expected: SessionsDebuggingOneSource, message: "each live session debugs a build of its own; {builds.toString()} held{joined(imagesWhileLive, separator: Space)}")
-	try Expect.equal(imagesAfterFirst.count(), expected: (SessionsDebuggingOneSource - 1), message: "`{DebugStopTool}` removes the image its session built and no other; {builds.toString()} held{joined(imagesAfterFirst, separator: Space)}")
+	try Expect.equal(imagesWhileLive.count(), expected: SessionsDebuggingOneSource * ImagesPerLiveSession, message: "each live session debugs a build of its own, and on macOS the signed copy of it that it launches; {builds.toString()} held{joined(imagesWhileLive, separator: Space)}")
+	try Expect.equal(imagesAfterFirst.count(), expected: (SessionsDebuggingOneSource - 1) * ImagesPerLiveSession, message: "`{DebugStopTool}` removes the images its session held and no other's; {builds.toString()} held{joined(imagesAfterFirst, separator: Space)}")
 	try Expect.isEmpty(joined(leftAfterBoth, separator: Space), message: "once both sessions have ended nothing they built is left in {builds.toString()}; it held {joined(leftAfterBoth, separator: Space)}")
 end 'two debug sessions of one source each stop in their own build, and closing one removes its build'
 

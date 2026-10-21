@@ -14,6 +14,11 @@
 // `BinaryImageReader`, shared with the PE and ELF readers — see that file's header for why sharing
 // it costs the independence nothing and why keeping three copies of it cost something real.
 //
+// `machoLoadCommandsOf` and the lookups on its result are the one load-command walk, and
+// `MachOWriter.resignedWithGetTaskAllow` uses them to find the commands of an image it only reads back. That is
+// the writer calling the reader, which the independence above does not forbid: the reader still calls nothing
+// the writer encodes with.
+//
 // Mach-O section headers carry a section's file offset and size DIRECTLY (there is no PE
 // virtual/raw split), so the reader walks: mach_header_64 → the LC_SEGMENT_64 named `__DATA` →
 // its `__data` section header → the `size` bytes at `offset`.
@@ -60,10 +65,16 @@ let MhNcmdsOffset = 16
 let LcSegment64 = 0x19
 let LcCmdOffset = 0
 let LcCmdSizeOffset = 4
+let LcCommandHeaderBytes = 8
+export let LcSignatureDataOffsetField = 8
+export let LcSignatureDataSizeField = 12
 
 // segment_command_64 field offsets, measured from the command's start. Its header is 72 bytes;
 // the `section_64` headers follow immediately after.
 let SegSegnameOffset = 8
+export let SegVmsizeOffset = 32
+export let SegFileoffOffset = 40
+export let SegFilesizeOffset = 48
 let SegNsectsOffset = 64
 let SegmentCommandBaseSize = 72
 
@@ -101,6 +112,84 @@ export union MachoReadError implements Error
 	end 'displayReason'
 end 'MachoReadError'
 
+export type MachoLoadCommand
+	export let kind as MachineWord
+	export let start as ByteOffset
+	export let size as BytePos
+
+	static function spanning(kind MachineWord, start ByteOffset, size BytePos) returns MachoLoadCommand
+		return Self{kind: kind, start: start, size: size}
+	end 'spanning'
+end 'MachoLoadCommand'
+
+typealias MachoLoadCommandArray = Array with MachoLoadCommand
+
+export type MachoLoadCommands
+	export let commands as MachoLoadCommandArray
+	export let complete as bool
+
+	static function walked(commands MachoLoadCommandArray, complete bool) returns MachoLoadCommands
+		return Self{commands: commands, complete: complete}
+	end 'walked'
+
+	export function commandOfKind(kind MachineWord) returns MachoCommandLookup
+		for command in self.commands 'eachCommand'
+			if command.kind == kind 'thisCommand'
+				return MachoCommandLookup.found(command)
+			end 'thisCommand'
+		end 'eachCommand'
+
+		return self.notFound()
+	end 'commandOfKind'
+
+	export function segmentNamed(image ByteArray, name String) returns MachoCommandLookup
+		for command in self.commands 'eachCommand'
+			if isSegmentNamed(image, command: command, name: name) 'thisSegment'
+				return MachoCommandLookup.found(command)
+			end 'thisSegment'
+		end 'eachCommand'
+
+		return self.notFound()
+	end 'segmentNamed'
+
+	function notFound() returns MachoCommandLookup
+		return MachoCommandLookup.malformed if not self.complete else MachoCommandLookup.absent
+	end 'notFound'
+end 'MachoLoadCommands'
+
+export function machoLoadCommandsOf(image ByteArray) returns MachoLoadCommands
+	var commands = MachoLoadCommandArray.create()
+	let commandCount = imageReadU32(image, at: MhNcmdsOffset)
+	var cmdStart = MachHeaderSize as ByteOffset
+
+	for _ in 0 upto commandCount 'eachCommand'
+		if not spanFitsWithin(cmdStart, count: LcCommandHeaderBytes, total: image.count() as BytePos) 'headerPastTheImage'
+			return MachoLoadCommands.walked(commands, complete: false)
+		end 'headerPastTheImage'
+
+		let size = imageReadU32(image, at: cmdStart + LcCmdSizeOffset) as BytePos
+
+		if size < LcCommandHeaderBytes or not spanFitsWithin(cmdStart, count: size, total: image.count() as BytePos) 'commandPastTheImage'
+			return MachoLoadCommands.walked(commands, complete: false)
+		end 'commandPastTheImage'
+
+		commands.push(MachoLoadCommand.spanning(imageReadU32(image, at: cmdStart + LcCmdOffset), start: cmdStart, size: size))
+		cmdStart = cmdStart + (size as ByteOffset)
+	end 'eachCommand'
+
+	return MachoLoadCommands.walked(commands, complete: true)
+end 'machoLoadCommandsOf'
+
+function isSegmentNamed(image ByteArray, command MachoLoadCommand, name String) returns bool
+	return command.kind == LcSegment64 and command.size >= SegmentCommandBaseSize and imageNameIs(image, at: command.start + SegSegnameOffset, maxBytes: MachoNameBytes, name: name)
+end 'isSegmentNamed'
+
+export union MachoCommandLookup
+	found(command MachoLoadCommand)
+	absent
+	malformed
+end 'MachoCommandLookup'
+
 // The bytes of the `sectname` section within the `segname` segment of the Mach-O at `path`.
 //
 // It reads the section header's FILE `offset` + `size` directly (Mach-O carries both, unlike PE's
@@ -115,18 +204,18 @@ export function readMachoSectionData(path FilePath, segname String, sectname Str
 		throw MachoReadError.notAMachoFile(path)
 	end 'notMacho'
 
-	let ncmds = imageReadU32(image, at: MhNcmdsOffset)
-	var cmdStart = MachHeaderSize as ByteOffset
+	let walked = machoLoadCommandsOf(image)
 
-	for _ in 0 upto ncmds 'eachCommand'
-		let cmd = imageReadU32(image, at: cmdStart + LcCmdOffset)
-		let cmdSize = imageReadU32(image, at: cmdStart + LcCmdSizeOffset)
+	for command in walked.commands 'eachCommand'
+		if isSegmentNamed(image, command: command, name: segname) 'thisSegment'
+			let nsects = imageReadU32(image, at: command.start + SegNsectsOffset)
 
-		if cmd == LcSegment64 and imageNameIs(image, at: cmdStart + SegSegnameOffset, maxBytes: MachoNameBytes, name: segname) 'thisSegment'
-			let nsects = imageReadU32(image, at: cmdStart + SegNsectsOffset)
+			if nsects > ((command.size - SegmentCommandBaseSize) / SectionHeaderSize) as MachineWord 'moreSectionsThanFit'
+				throw MachoReadError.truncated(path, sectionName: sectname)
+			end 'moreSectionsThanFit'
 
 			for s in 0 upto nsects 'eachSection'
-				let sectStart = cmdStart + SegmentCommandBaseSize + (s as ByteOffset) * SectionHeaderSize
+				let sectStart = command.start + SegmentCommandBaseSize + (s as ByteOffset) * SectionHeaderSize
 
 				if not imageNameIs(image, at: sectStart + SectSectnameOffset, maxBytes: MachoNameBytes, name: sectname) 'notThisSection'
 					continue
@@ -144,9 +233,11 @@ export function readMachoSectionData(path FilePath, segname String, sectname Str
 
 			throw MachoReadError.sectionMissing(path, segmentName: segname, sectionName: sectname)
 		end 'thisSegment'
-
-		cmdStart = cmdStart + (cmdSize as ByteOffset)
 	end 'eachCommand'
+
+	if not walked.complete 'commandsRunPastTheFile'
+		throw MachoReadError.truncated(path, sectionName: sectname)
+	end 'commandsRunPastTheFile'
 
 	throw MachoReadError.segmentMissing(path, segmentName: segname)
 end 'readMachoSectionData'

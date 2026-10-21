@@ -1,0 +1,27 @@
+let NotMachOWord = "Mach-O"
+let CodeDirectoryWord = "CodeDirectory"
+
+test 'the profiler refuses a macOS program that is not a Mach-O this compiler wrote, and says why'
+	let foreign = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "profile-refuses-an-image-this-compiler-did-not-write-elf", fixture: HotWarmFixtureName)
+	let elf = imageForTarget(foreign.join(StagedProgramFileName), staged: foreign, targetOption: LinuxTargetOption, imageName: OutputFileStem)
+	Expect.isFalse(carriesBlob(elf, magic: SuperBlobMagic), message: "the x64-linux image {elf.toString()} carries a Mach-O code signature, so it is not the foreign image this case needs.")
+
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "profile-refuses-an-image-this-compiler-did-not-write-codedirectory", fixture: HotWarmFixtureName)
+	let macos = macosImageOf(staged.join(StagedProgramFileName), staged: staged)
+	Expect.isTrue(carriesBlob(macos, magic: CodeDirectoryMagic), message: "the arm64-macos image {macos.toString()} holds no CodeDirectory, so there is none to spoil.")
+	spoilBlobMagic(macos, magic: CodeDirectoryMagic, what: "CodeDirectory")
+	Expect.isFalse(carriesBlob(macos, magic: CodeDirectoryMagic), message: "the arm64-macos image {macos.toString()} still holds a CodeDirectory after the harness spoiled it.")
+
+	#if os(Macos)
+		let elfRun = runProfiler(foreign, extraArguments: StringArray.create())
+		Expect.notEqual(elfRun.exitCode(), expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb}` completed a measurement of an x64-linux image on a macOS host. It printed:{LineFeed}{elfRun.stdout}")
+		Expect.isTrue(elfRun.stderr.contains(NotMachOWord), message: "the refusal of an ELF image does not say it is not a {NotMachOWord} image. It wrote to stderr: {elfRun.stderr}")
+
+		let executable = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: HotWarmFixtureName)
+		spoilBlobMagic(executable, magic: CodeDirectoryMagic, what: "CodeDirectory")
+
+		let spoiledRun = runProfiler(staged, extraArguments: StringArray.create())
+		Expect.notEqual(spoiledRun.exitCode(), expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb}` completed a measurement of a program whose signature holds no CodeDirectory. It printed:{LineFeed}{spoiledRun.stdout}")
+		Expect.isTrue(spoiledRun.stderr.contains(CodeDirectoryWord), message: "the refusal does not name the {CodeDirectoryWord} the signature lacks. It wrote to stderr: {spoiledRun.stderr}")
+	#endif
+end 'the profiler refuses a macOS program that is not a Mach-O this compiler wrote, and says why'

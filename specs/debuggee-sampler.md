@@ -10,7 +10,7 @@ category: system
 ## Documentation
 
 `DebugPort` (Windows) and `ProcessTrace` (Linux) drive a debuggee, and `SampledProcess` and `SampleTimer`
-(Windows, x64) sample a process. Each owns a scratch region that `close()` releases; a call that needs the region
+(every native lane) sample a process. Each owns a scratch region that `close()` releases; a call that needs the region
 after `close()` panics. Every figure a debuggee hands back is a `RegisterBlock`, a record of words read at a
 word-aligned byte offset:
 
@@ -375,9 +375,8 @@ Stack trace:
 ```
 
 <!-- test: a-sampled-process-that-does-not-exist-throws-no-such-process -->
-<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+<!-- unsupported-targets: wasm32-wasi -->
 There is no process 4000000000, so opening it throws.
-`SampledProcess` and `SampleTimer` exist only on x64-windows, so the other lanes do not compile the program.
 
 ```maxon
 function main() returns ExitCode
@@ -398,10 +397,10 @@ noSuchProcess
 ```
 
 <!-- test: a-sampled-process-lists-its-threads-and-modules -->
-<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+<!-- unsupported-targets: x64-linux, arm64-linux, wasm32-wasi -->
 The program samples itself: it has threads and modules, a thread it releases is no longer known to the sample, and
-`close` releases the rest.
-`SampledProcess` and `SampleTimer` exist only on x64-windows, so the other lanes do not compile the program.
+`close` releases the rest. Linux refuses a process the right to trace its own threads, so that lane samples a child
+instead, in the cases below.
 
 ```maxon
 function main() returns ExitCode
@@ -433,15 +432,20 @@ unknownThread
 ```
 
 <!-- test: a-sample-timer-ticks-and-closes -->
-<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+<!-- unsupported-targets: wasm32-wasi -->
 wasm32-wasi declares no SampleTimer, so the call is refused with E3004 (call to undefined function 'SampleTimer.create'), not E3104.
 
-A timer waits for its next deadline, and `close` releases its handle once.
-`SampledProcess` and `SampleTimer` exist only on x64-windows, so the other lanes do not compile the program.
+A timer waits for its next deadline, and `close` releases its handle once. A timer reports through `ready` whether
+the host gave it the handle it waits on.
 
 ```maxon
 function main() returns ExitCode
-	var timer = try SampleTimer.create(1000000) otherwise return 1
+	var timer = SampleTimer.create(1000000)
+
+	if not timer.ready() 'notReady'
+		return 1
+	end 'notReady'
+
 	timer.wait()
 	timer.wait()
 	timer.close()
@@ -459,15 +463,14 @@ closed
 ```
 
 <!-- test: a-closed-sample-timer-panics-when-it-waits -->
-<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+<!-- unsupported-targets: wasm32-wasi -->
 wasm32-wasi declares no SampleTimer, so the call is refused with E3004 (call to undefined function 'SampleTimer.create'), not E3104.
 
 A wait on a closed timer is a bug in the caller, so it panics.
-`SampledProcess` and `SampleTimer` exist only on x64-windows, so the other lanes do not compile the program.
 
 ```maxon
 function main() returns ExitCode
-	var timer = try SampleTimer.create(1000000) otherwise return 1
+	var timer = SampleTimer.create(1000000)
 	timer.close()
 	timer.wait()
 
@@ -478,11 +481,304 @@ end 'main'
 1
 ```
 ```stderr
-panic at Sampler.maxon:378: SampleTimer.wait: the timer was closed
+panic at Sampler.maxon:1386: SampleTimer.wait: the timer was closed
 Stack trace:
   in SampleTimer.wait
   in main
   in mrt_start
+```
+
+<!-- test: a-sampled-child-yields-its-threads-and-a-stack -->
+<!-- unsupported-targets: wasm32-wasi -->
+<!-- process: own -->
+The program runs itself as a child that waits, opens the child, and lists its threads; a capture of the first
+thread answers the program counter and the stack bytes it copied, and `close` releases the sample.
+```maxon
+function main() returns ExitCode
+	let arguments = CommandLine.args()
+
+	if arguments.count() > 1 'asTheChild'
+		sleep(60000)
+
+		return 0
+	end 'asTheChild'
+
+	let me = try Process.executablePath() otherwise return 1
+	var childArguments = StringArray.create()
+	childArguments.push("child")
+	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
+	sleep(300)
+	let pid = try child.processId() otherwise return 3
+	var sampled = try SampledProcess.open(pid) otherwise return 4
+	let threads = sampled.threads()
+	print("threads {threads.count() > 0}\n")
+
+	let first = try threads.get(0) otherwise return 5
+	let captured = try sampled.capture(first) otherwise return 6
+
+	match captured 'result'
+		threadGone then print("gone\n")
+		unreadable then print("unreadable\n")
+		captured(stack) then print("captured {stack.programCounter != 0} {stack.window.byteCount() > 0}\n")
+	end 'result'
+
+	sampled.close()
+	_ = try child.waitWithTimeout(1) otherwise 0
+	child.release()
+
+	return 0
+end 'main'
+```
+```stdout
+threads true
+captured true true
+```
+```exitcode
+0
+```
+
+<!-- test: a-process-cannot-sample-its-own-threads-on-linux -->
+<!-- unsupported-targets: x64-windows, arm64-macos, wasm32-wasi -->
+Linux refuses a process the right to trace a thread of its own group, so opening the program's own id throws
+`accessDenied`.
+
+```maxon
+function main() returns ExitCode
+	try SampledProcess.open(Process.id()) otherwise (e) 'refused'
+		print("{e.name}\n")
+
+		return 0
+	end 'refused'
+
+	return 1
+end 'main'
+```
+```stdout
+accessDenied
+```
+```exitcode
+0
+```
+
+<!-- test: a-dropped-seized-set-detaches-the-threads-it-holds -->
+<!-- tier: stdlib -->
+<!-- unsupported-targets: x64-windows, arm64-macos, wasm32-wasi -->
+<!-- process: own -->
+The program runs itself as a child that waits, seizes the child's thread under a pin, records it in a
+`SeizedThreads` that takes the pin over, and drops the set without releasing it. The drop detaches the thread and
+then unpins: the child has a tracer while the set holds it and none after, and the caller is left unpinned.
+
+```maxon
+function main() returns ExitCode
+	let arguments = CommandLine.args()
+
+	if arguments.count() > 1 'asTheChild'
+		sleep(60000)
+
+		return 0
+	end 'asTheChild'
+
+	let me = try Process.executablePath() otherwise return 1
+	var childArguments = StringArray.create()
+	childArguments.push("child")
+	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
+	sleep(300)
+	let pid = try child.processId() otherwise return 3
+	let status = seizeAndDrop(pid)
+	print("traced after the drop {isTraced(pid)}\n")
+	print("pin depth after the drop {Scheduler.pinDepth()}\n")
+	_ = try child.waitWithTimeout(1) otherwise 0
+	child.release()
+
+	return status
+end 'main'
+
+function seizeAndDrop(pid Pid) returns ExitCode
+	var pin = MachinePin.acquire()
+	var trace = ProcessTrace.create()
+	var seized = SeizedThreads.open(pid, pin: pin)
+	let thread = pid as DebuggeeThreadId
+
+	if not trace.seize(thread) 'refused'
+		return 5
+	end 'refused'
+
+	seized.add(thread)
+	print("traced while held {isTraced(pid)}\n")
+
+	return 0
+end 'seizeAndDrop'
+
+function isTraced(pid Pid) returns bool
+	let path = try FilePath.from("/proc/{pid}/status") otherwise panic("a process id spells a path")
+	let text = try File.readText(path) otherwise panic("the child's status file is readable while the child lives")
+
+	for line in text.split("\n") 'eachLine'
+		if line.startsWith("TracerPid:") 'thisOne'
+			let value = try line.split("\t").get(1) otherwise panic("a tracer line carries a value")
+
+			return value.trim() != "0"
+		end 'thisOne'
+	end 'eachLine'
+
+	panic("a status file names its tracer")
+end 'isTraced'
+```
+```stdout
+traced while held true
+traced after the drop false
+pin depth after the drop 0
+```
+```exitcode
+0
+```
+
+<!-- test: a-dropped-seized-set-kills-the-process-whose-thread-it-cannot-detach -->
+<!-- tier: stdlib -->
+<!-- unsupported-targets: x64-windows, arm64-macos, wasm32-wasi -->
+<!-- process: own -->
+A thread the set holds that was never seized cannot be detached when the set is dropped, and a thread must not be
+left held: the drop kills the process it belongs to, which ends with the kill signal's status, and says on stderr
+which thread of which process it could not detach, once. The program runs the sampler as a child of its own so the
+line can be pinned exactly.
+
+```maxon
+function main() returns ExitCode
+	let arguments = CommandLine.args()
+
+	if arguments.count() > 2 'asTheSampler'
+		let target = try int.fromString(try arguments.get(2) otherwise return 1) otherwise return 2
+		holdAndDrop(target as Pid)
+
+		return 0
+	end 'asTheSampler'
+
+	if arguments.count() > 1 'asTheTarget'
+		sleep(60000)
+
+		return 0
+	end 'asTheTarget'
+
+	let me = try Process.executablePath() otherwise return 1
+	var targetArguments = StringArray.create()
+	targetArguments.push("target")
+	var target = try StreamingSubprocess.spawn(Executable.path(me), arguments: targetArguments) otherwise return 2
+	sleep(300)
+	let pid = try target.processId() otherwise return 3
+	var samplerArguments = StringArray.create()
+	samplerArguments.push("sampler")
+	samplerArguments.push("{pid}")
+	let sampler = try Subprocess.run(Executable.path(me), arguments: samplerArguments) otherwise return 4
+	print("stderr is the one line {sampler.stderr == "sampler: thread {pid} of process {pid} could not be detached within 10000 ms, so the process was killed rather than left stopped\n"}\n")
+
+	if let code = try target.waitWithTimeout(3000) 'ended'
+		print("ended {code}\n")
+	end 'ended' else 'survived'
+		print("survived\n")
+	end 'survived'
+
+	target.release()
+
+	return 0
+end 'main'
+
+function holdAndDrop(pid Pid)
+	var pin = MachinePin.acquire()
+	var seized = SeizedThreads.open(pid, pin: pin)
+	seized.add(pid as DebuggeeThreadId)
+end 'holdAndDrop'
+```
+```stdout
+stderr is the one line true
+ended 137
+```
+```exitcode
+0
+```
+
+<!-- test: a-dropped-machine-pin-unpins-its-green-thread -->
+<!-- tier: stdlib -->
+<!-- unsupported-targets: wasm32-wasi -->
+A `MachinePin` that is never released is dropped like any record, and the drop unpins the green thread that took
+it: the pin depth is one while the pin lives and zero after.
+
+```maxon
+function main() returns ExitCode
+	pinAndDrop()
+	print("depth after the drop {Scheduler.pinDepth()}\n")
+
+	return 0
+end 'main'
+
+function pinAndDrop()
+	let pin = MachinePin.acquire()
+	print("held {pin.held()} depth {Scheduler.pinDepth()}\n")
+end 'pinAndDrop'
+```
+```stdout
+held true depth 1
+depth after the drop 0
+```
+```exitcode
+0
+```
+
+<!-- test: a-process-sampling-its-own-threads-never-suspends-its-caller -->
+<!-- unsupported-targets: x64-linux, arm64-linux, wasm32-wasi -->
+<!-- procs: 4 -->
+<!-- process: own -->
+The program opens itself on one green thread and hands the sampler to another, which the scheduler runs on a
+different machine while the first keeps its machine busy. The OS thread that captures is not the one that opened,
+and a capture of the thread it is running on is refused with `callingThread`; one that suspended it would never
+return.
+
+```maxon
+typealias ExitCode = int(0 to 255)
+typealias Round = int(0 to 1000)
+
+let HeldNanos = 200000000
+
+function captureEverything(sampled SampledProcess) returns Round
+	let threads = sampled.threads()
+	var refusals = 0 as Round
+
+	for thread in threads 'eachThread'
+		if let _ = try sampled.capture(thread) 'sampled'
+			refusals = refusals + 0
+		end 'sampled' else (e) 'refused'
+			if e != SamplerError.callingThread 'unexpected'
+				panic("an own-process capture failed with {e.name}")
+			end 'unexpected'
+
+			refusals = refusals + 1
+		end 'refused'
+	end 'eachThread'
+
+	sampled.close()
+
+	return refusals
+end 'captureEverything'
+
+function main() returns ExitCode
+	var sampled = try SampledProcess.open(Process.id()) otherwise return 1
+	let work = async captureEverything(sampled)
+	let started = Clock.nowNanos()
+
+	while Clock.elapsedNanos(started) < HeldNanos 'holdTheMachine'
+		_ = started
+	end 'holdTheMachine'
+
+	let refusals = await work
+	print("survived {refusals > 0}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+survived true
+```
+```exitcode
+0
 ```
 
 <!-- test: a-dropped-page-reservation-releases-its-pages -->
@@ -642,16 +938,16 @@ ready true
 ```
 
 <!-- test: a-sample-timer-dropped-without-close-leaks-nothing -->
-<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+<!-- unsupported-targets: wasm32-wasi -->
 wasm32-wasi declares no SampleTimer, so the call is refused with E3004 (call to undefined function 'SampleTimer.create'), not E3104.
 
 A `SampleTimer` that is never closed is dropped like any record: its timer handle is closed with it and the leak
 gate finds nothing.
-`SampledProcess` and `SampleTimer` exist only on x64-windows, so the other lanes do not compile the program.
 
 ```maxon
 function main() returns ExitCode
-	_ = try SampleTimer.create(1000000) otherwise return 1
+	_ = SampleTimer.create(1000000)
+
 	print("created\n")
 
 	return 0
@@ -665,44 +961,92 @@ created
 ```
 
 <!-- test: a-sampled-process-dropped-without-close-leaks-nothing -->
-<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+<!-- tier: stdlib -->
+<!-- unsupported-targets: wasm32-wasi -->
+<!-- process: own -->
 A `SampledProcess` that is never closed is dropped like any record: its process handle, every thread handle it
-opened and both scratch reservations are released with it, and the leak gate finds nothing.
-`SampledProcess` and `SampleTimer` exist only on x64-windows, so the other lanes do not compile the program.
+opened and both scratch reservations are released with it, and the leak gate finds nothing. On Linux the drop
+also detaches every thread the sampler still holds seized and unbinds the sampling thread from its machine.
 
 ```maxon
 function main() returns ExitCode
-	var sampled = try SampledProcess.open(Process.id()) otherwise return 1
+	let arguments = CommandLine.args()
+
+	if arguments.count() > 1 'asTheChild'
+		sleep(60000)
+
+		return 0
+	end 'asTheChild'
+
+	let me = try Process.executablePath() otherwise return 1
+	var childArguments = StringArray.create()
+	childArguments.push("child")
+	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
+	sleep(300)
+	let pid = try child.processId() otherwise return 3
+	let status = openAndDrop(pid)
+	print("caller pin depth {Scheduler.pinDepth()}\n")
+	_ = try child.waitWithTimeout(1) otherwise 0
+	child.release()
+
+	return status
+end 'main'
+
+function openAndDrop(pid Pid) returns ExitCode
+	var sampled = try SampledProcess.open(pid) otherwise return 4
 	let threads = sampled.threads()
 	print("opened {threads.count() > 0}\n")
 
 	return 0
-end 'main'
+end 'openAndDrop'
 ```
 ```stdout
 opened true
+caller pin depth 0
 ```
 ```exitcode
 0
 ```
 
 <!-- test: a-sampled-process-with-a-released-thread-dropped-leaks-nothing -->
-<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+<!-- unsupported-targets: wasm32-wasi -->
+<!-- process: own -->
 A thread released early closes its handle once; the drop that follows releases only the handles still open.
-`SampledProcess` and `SampleTimer` exist only on x64-windows, so the other lanes do not compile the program.
 
 ```maxon
 function main() returns ExitCode
-	var sampled = try SampledProcess.open(Process.id()) otherwise return 1
+	let arguments = CommandLine.args()
+
+	if arguments.count() > 1 'asTheChild'
+		sleep(60000)
+
+		return 0
+	end 'asTheChild'
+
+	let me = try Process.executablePath() otherwise return 1
+	var childArguments = StringArray.create()
+	childArguments.push("child")
+	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
+	sleep(300)
+	let pid = try child.processId() otherwise return 3
+	let status = releaseAndDrop(pid)
+	_ = try child.waitWithTimeout(1) otherwise 0
+	child.release()
+
+	return status
+end 'main'
+
+function releaseAndDrop(pid Pid) returns ExitCode
+	var sampled = try SampledProcess.open(pid) otherwise return 4
 	let threads = sampled.threads()
-	let first = try threads.get(0) otherwise return 2
+	let first = try threads.get(0) otherwise return 5
 	sampled.release(first)
 	sampled.release(first)
 
 	print("released {threads.count() > 0}\n")
 
 	return 0
-end 'main'
+end 'releaseAndDrop'
 ```
 ```stdout
 released true
@@ -712,20 +1056,42 @@ released true
 ```
 
 <!-- test: a-closed-sampled-process-dropped-leaks-nothing -->
-<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+<!-- unsupported-targets: wasm32-wasi -->
+<!-- process: own -->
 `close` is an early release, so the drop after it has only the boxes left to free.
-`SampledProcess` and `SampleTimer` exist only on x64-windows, so the other lanes do not compile the program.
 
 ```maxon
 function main() returns ExitCode
-	var sampled = try SampledProcess.open(Process.id()) otherwise return 1
+	let arguments = CommandLine.args()
+
+	if arguments.count() > 1 'asTheChild'
+		sleep(60000)
+
+		return 0
+	end 'asTheChild'
+
+	let me = try Process.executablePath() otherwise return 1
+	var childArguments = StringArray.create()
+	childArguments.push("child")
+	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
+	sleep(300)
+	let pid = try child.processId() otherwise return 3
+	let status = closeAndDrop(pid)
+	_ = try child.waitWithTimeout(1) otherwise 0
+	child.release()
+
+	return status
+end 'main'
+
+function closeAndDrop(pid Pid) returns ExitCode
+	var sampled = try SampledProcess.open(pid) otherwise return 4
 	_ = sampled.threads()
 	sampled.close()
 	sampled.close()
 	print("closed\n")
 
 	return 0
-end 'main'
+end 'closeAndDrop'
 ```
 ```stdout
 closed

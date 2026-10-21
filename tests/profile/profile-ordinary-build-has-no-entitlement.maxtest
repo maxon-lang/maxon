@@ -1,0 +1,7 @@
+test 'an ordinary arm64-macos build carries no get-task-allow entitlement'
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "profile-ordinary-build-has-no-entitlement", fixture: HotWarmFixtureName)
+	let image = macosImageOf(staged.join(StagedProgramFileName), staged: staged)
+
+	Expect.isTrue(carriesBlob(image, magic: SuperBlobMagic), message: "the arm64-macos image {image.toString()} carries no embedded code signature, so the absence of {GetTaskAllowEntitlement} from it proves nothing.")
+	Expect.isFalse(namesGetTaskAllow(image), message: "the arm64-macos image {image.toString()} was built by an ordinary `maxon build` and still carries {GetTaskAllowEntitlement} in its code signature. No build lets another process take its task port: `maxon profile` and `maxon debug` sign a temporary copy.")
+end 'an ordinary arm64-macos build carries no get-task-allow entitlement'

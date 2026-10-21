@@ -178,6 +178,7 @@ tests/
     a-program-with-no-agent-in-it-stops-at-a-breakpoint.maxtest      a debuggee carries no `__dbg_` symbol and stops all the same
     a-sidecar-names-the-globals-and-layout-tables.maxtest      the sidecar publishes the `.data` words and the record geometry a foreign debugger reads by
     a-detached-program-runs-to-completion.maxtest      `detach` leaves the program running and the session reports its own ending
+    a-detach-removes-the-attachable-copy.maxtest       a session that detaches leaves no re-signed copy of the program beside it
     a-fault-stops-before-it-is-passed-on.maxtest      a fault stops the debugger first and reaches the runtime at the resume
     a-breakpoint-past-any-fixed-table-size-is-armed.maxtest      the number of instructions armed at once is bounded by the program alone
     a-roster-past-any-fixed-window-lists-every-worker.maxtest      a listing answers for every live green thread, however many there are
@@ -349,7 +350,7 @@ tests/
     help-reference.maxtest                  the reference leads with the short list, then what it hides
     help-per-command.maxtest                every documented command answers `help <command>` for itself
     help-lists-trace-flags.maxtest          `help build` lists `--async-trace` and `--debugstream`, which the parser accepts
-    profile-usage-names-every-option.maxtest      every option `profile`'s usage body documents is in its `Usage:` line (x64-windows only, as `profile` is)
+    profile-usage-names-every-option.maxtest      every option `profile`'s usage body documents is in its `Usage:` line (every native lane, as `profile` is)
     hidden-command-still-parses.maxtest     a command left off the short LIST is still a command
     unknown-command-refused.maxtest         a word naming no command fails at both doors
     an-option-of-another-command-is-refused.maxtest         an option only other commands take is refused, naming the option, the command and the takers
@@ -363,7 +364,7 @@ tests/
     upgrade-takes-no-arguments.maxtest                      a positional argument and a foreign option are both refused
     spec-test-refuses-a-batch-value-other-than-on-or-off.maxtest   a `--batch=` value other than on or off, and `--rewrite-drifted-goldens`, are refused, naming the option
     reference-documents-every-command.maxtest               docs/CLI_REFERENCE.md has a `###` heading naming `maxon <command>` for every command `help` documents, and spells every option it lists
-    reference-documents-only-real-options.maxtest           every `--option` that document shows is listed by `help` or a subcommand's own usage (x64-windows only, as `profile` is)
+    reference-documents-only-real-options.maxtest           every `--option` that document shows is listed by `help` or a subcommand's own usage (every native lane, as `profile` is)
     build-directory-without-output-names-the-directory.maxtest      `build <dir>` with no `--output=` writes `<dir>/<dirname><ext>`, staged outside the checkout
     build-compiles-an-old-project-maxon-as-ordinary-source.maxtest   a `project.maxon` and a `tasks.maxon` are compiled as ordinary sources
     build-leaves-a-maxtest-out-of-the-program.maxtest       a directory build compiles its `.maxon` sources and leaves a `.maxtest` beside them out
@@ -449,8 +450,20 @@ tests/
     profile-hot-ordering.maxtest            the busier function ranks first in every section
     profile-folded.maxtest                  collapsed stacks carry every path, whatever the floor
     profile-greenthreads.maxtest            two green threads as themselves, the scheduler absent
+    profile-ordinary-build-has-no-entitlement.maxtest    an ordinary arm64-macos build names no `get-task-allow`
+    profile-runs-an-ordinary-build.maxtest               an ordinary build is measured with no flag and no rebuild
+    profile-a-program-that-ends-at-once.maxtest          a program gone before the attach is reported as ended, never as an access refusal
+    profile-launches-a-signed-copy.maxtest               on macOS, the image the profiler launches grants `get-task-allow` in both blobs and the built one does not
+    profile-launches-a-copy-beside-the-original.maxtest  the launched copy sits in the original's directory, and the program sees that directory, its own path and argv[0]
+    profile-refuses-a-directory-it-cannot-write-a-copy-in.maxtest   on macOS, a read-only directory is refused, naming it, and leaves no copy
+    profile-sweeps-a-copy-whose-owner-has-ended.maxtest  a run removes a stale copy of a dead owner and keeps a live one's and a stranger's file
+    profile-leaves-the-profiled-image-unchanged.maxtest  the image and its sidecar are byte-identical after a profile
+    profile-refuses-a-build-whose-signature-is-malformed.maxtest   on macOS, a spoiled SuperBlob is refused as malformed
+    profile-refuses-an-image-this-compiler-did-not-write.maxtest   on macOS, an ELF image and an image with no CodeDirectory are refused, saying why
     fixtures/hotwarm/main.maxon.fixture     stored name only - see rule 1
     fixtures/greenthreads/main.maxon.fixture   stored name only - see rule 1
+    fixtures/selfcopy/main.maxon.fixture    stored name only - see rule 1
+    fixtures/endsatonce/main.maxon.fixture  stored name only - see rule 1
   execute/
     ExecuteHarness.maxon                        the shared half: the staging, the private cache, the spawn, the slot readers
     corpus.maxtest                          the fixture roster, and the corpus's own file rules
@@ -493,11 +506,13 @@ tests/
     a-shared-segment-word-is-read-with-an-acquire-and-written-with-a-release.maxtest     `__shm_read_word` is one `ldar` and `__shm_write_word` one `stlr`, on both arm64 lanes
     a-pinned-green-thread-stays-on-its-machine-across-a-park.maxtest     a thread that pinned itself runs on the same machine after every park
     a-pinned-green-thread-runs-while-another-sits-in-a-blocking-syscall.maxtest     the pinned thread's owner is woken and given a processor even while another machine is inside a blocking call
+    a-program-that-only-pins-lays-out-no-profile-runtime.maxtest     a `MachinePin` program runs, lays out `__gt_pin_destruct` and carries no `__prof_close`, on both arm64 lanes
     fixtures/spawn/main.maxon.fixture       stored name only - see rule 1
     fixtures/heap/main.maxon.fixture        stored name only - see rule 1
     fixtures/shared-segment/main.maxon.fixture   stored name only - see rule 1
     fixtures/pinned-machine/main.maxon.fixture   stored name only - see rule 1
     fixtures/pinned-machine-blocked/main.maxon.fixture   stored name only - see rule 1
+    fixtures/pin-only/main.maxon.fixture    stored name only - see rule 1
   examples/
     ExamplesHarness.maxon                   the shared half: build one example, bench/concurrency/ program or document's program into temp/examples/<source spelling>/, run it, check its answer
     basic.maxtest                           exits 42, the value its `main` returns
@@ -1033,9 +1048,14 @@ test` runs files concurrently, and a tree is what an output path lives in.
 
 ## `profile/` — where a program's CPU time went, measured from outside it
 
-Three cases over one subject: `maxon profile run` samples a RUNNING program by suspending its threads
-from another process, and reports where the samples landed. The shared half — the profiler's run, the
-report readers and the corpus's own reporting floor — lives in `ProfileHarness.maxon`, and the rest in
+Thirteen cases over one subject: `maxon profile run` samples a RUNNING program by stopping its threads from
+another process, and reports where the samples landed. Five measure a run, one of them an ordinary build
+that needs no flag and one a program that ends before the profiler attaches. The other eight are the
+`arm64-macos` entitlement and the copy it needs: one reads a cross-built image's code signature on any host,
+four read the image the profiler launches, where it sits and what becomes of it, and three run the profiler on
+macOS against an image or a directory it must refuse — a spoiled SuperBlob, an ELF image and an image with no
+CodeDirectory in one case, and a read-only directory — each refused with its reason. The shared half — the
+profiler's run, the report readers and the corpus's own reporting floor — lives in `ProfileHarness.maxon`, and the rest in
 `support/`; see the note under `debug/`.
 
 ⭐⭐ **THIS CORPUS PINS NO NUMBER, AND THAT IS NOT TIDINESS — IT IS WHAT A SAMPLING PROFILER IS.** Two
@@ -1056,9 +1076,10 @@ the tool is right; and a folded line splits as *path + LAST word*, not two words
 may carry a space (`[unnamed .text]`).
 
 **`profile-greenthreads`** — green threads appear as themselves with NOTHING enumerating them, because
-`__gt_context_switch` restores RSP *and* RBP, so sampling the OS worker IS sampling the green thread.
-`__sched_worker_loop` must appear NOWHERE at any reporting floor. ⚠ The two tasks are deliberately
-2:1 and not 1:1 — with equal work their order is a coin flip. ⚠ Their stacks are named
+`__gt_context_switch` restores the stack pointer *and* the frame pointer, so sampling the OS worker IS
+sampling the green thread. `__sched_worker_loop` must appear NOWHERE at any reporting floor, and the
+`runtime:` line, where a worker's own samples are counted, must hold at most a quarter of the run. ⚠ The
+two tasks are deliberately 2:1 and not 1:1 — with equal work their order is a coin flip. ⚠ Their stacks are named
 `__gt_trampoline`, not `spinA`/`spinB`: the trampoline is a NAMED frame, so the case asserts two
 stacks and both tasks ranked, not their names in the stacks table.
 
@@ -1187,7 +1208,7 @@ directory under `temp/consoleWrite/`), and it keeps rule 5: one spawning `test`,
 
 ## `emittedRuntime/` — the ORDERING an emitted runtime body reads another thread's word with, and the machine a pinned green thread runs on
 
-Seven cases. Five read the Target IR, and each one's subject there is a body no author wrote: one the back end synthesizes into every
+Eight cases. Five read the Target IR, and each one's subject there is a body no author wrote: one the back end synthesizes into every
 program that spawns, two into every program that allocates, fifteen scheduler, timer and poller
 bodies for the `.data` words published from under `__sched_lock`, the DebugStream producer's two ring
 bodies, and the two shared-segment word accessors. Each of the five builds a fixture — `spawn` for the first three,
@@ -1212,6 +1233,13 @@ processors, because a failed hand-off takes a different form at each: at one the
 processor, and at several it loses the race for an idle one. Their subject is
 `Scheduler.pinToMachine`: a green thread pinned to its machine may not be resumed on another one, so the
 machine that finds it has to hand its processor to the owner rather than keep it.
+
+The eighth does both. **`a-program-that-only-pins-lays-out-no-profile-runtime`** — a program whose one
+host-facing object is a `MachinePin` runs on this host and prints `held true`, and its `arm64-macos` and
+`arm64-linux` builds lay out a non-empty `__gt_pin_destruct`, while a build asked to render
+`__prof_close`, the profiler's host-handle close, is refused for naming no function of the program: a pin
+is a green-thread object, and its destructor sits in the scheduler's runtime band, apart from the
+profiler's.
 
 **`a-pinned-green-thread-stays-on-its-machine-across-a-park`** — 24 parks, and the program reports how many
 of them came back on a different machine. `moved 0 of 24` is the answer; a run killed at the deadline is

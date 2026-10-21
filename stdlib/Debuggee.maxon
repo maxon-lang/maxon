@@ -635,9 +635,15 @@ end 'traceHostCall'
 #if arch(arm64)
 	let GeneralBlockBytes = 272 as ScratchBytes
 	let VectorBlockBytes = 528 as ScratchBytes
+	public let TraceFramePointerOffset = 232
+	public let TraceStackPointerOffset = 248
+	public let TraceProgramCounterOffset = 256
 #else
 	let GeneralBlockBytes = 216 as ScratchBytes
 	let VectorBlockBytes = 512 as ScratchBytes
+	public let TraceFramePointerOffset = 32
+	public let TraceStackPointerOffset = 152
+	public let TraceProgramCounterOffset = 128
 #endif
 
 let TraceScratchBytes = 0x1000 as ScratchBytes
@@ -694,6 +700,8 @@ let PtraceSetRegs = 13
 let PtraceGetFpRegs = 14
 let PtraceGetRegSet = 0x4204
 let PtraceSetRegSet = 0x4205
+let PtraceSeize = 0x4206
+let PtraceInterrupt = 0x4207
 
 let NoteGeneralRegisters = 1
 let NoteFloatRegisters = 2
@@ -756,7 +764,9 @@ public type ProcessTrace
 	public function wait(budgetMs DebuggeeWaitMs, process DebuggeeProcessId) returns TraceReport
 		self.scratch.setWord(TraceStatusSlot, value: 0)
 
-		let reporter = traceHostCall(TraceHostVerb.awaitTracee, a0: self.scratch.addressOf(TraceStatusSlot), a1: budgetMs as RegisterWord, a2: process as RegisterWord, a3: 0, a4: 0)
+		// Negated, the id names the process's group, so any of its threads may report; `reapedGone` passes a
+		// thread id as it is, to wait on that thread alone.
+		let reporter = traceHostCall(TraceHostVerb.awaitTracee, a0: self.scratch.addressOf(TraceStatusSlot), a1: budgetMs as RegisterWord, a2: 0 - (process as RegisterWord), a3: 0, a4: 0)
 
 		if reporter == 0 'nothingArrived'
 			return TraceReport.nothing
@@ -796,6 +806,44 @@ public type ProcessTrace
 	public function detach(thread DebuggeeThreadId, signal DebuggeeSignal) returns bool
 		return traceHostCall(TraceHostVerb.request, a0: PtraceDetach, a1: thread as RegisterWord, a2: 0, a3: signal as RegisterWord, a4: 0) != 0
 	end 'detach'
+
+	module function seize(thread DebuggeeThreadId) returns bool
+		return traceHostCall(TraceHostVerb.request, a0: PtraceSeize, a1: thread as RegisterWord, a2: 0, a3: 0, a4: 0) != 0
+	end 'seize'
+
+	module function interrupt(thread DebuggeeThreadId) returns bool
+		return traceHostCall(TraceHostVerb.request, a0: PtraceInterrupt, a1: thread as RegisterWord, a2: 0, a3: 0, a4: 0) != 0
+	end 'interrupt'
+
+	module function reapedGone(thread DebuggeeThreadId) returns bool
+		self.scratch.setWord(TraceStatusSlot, value: 0)
+
+		let reporter = traceHostCall(TraceHostVerb.awaitTracee, a0: self.scratch.addressOf(TraceStatusSlot), a1: 0, a2: thread as RegisterWord, a3: 0, a4: 0)
+
+		if reporter == 0 'nothingArrived'
+			return false
+		end 'nothingArrived'
+
+		return match self.decodedReport(reporter as DebuggeeThreadId, waited: self.scratch.word(TraceStatusSlot) and LowDwordMask) 'which'
+			exited or
+			killed gives true
+
+			nothing or
+			stopped gives false
+		end 'which'
+	end 'reapedGone'
+
+	module function readGeneralRegisters(thread DebuggeeThreadId) returns bool
+		return self.generalBlockMoved(thread, writing: false)
+	end 'readGeneralRegisters'
+
+	module function generalRegister(offset ScratchOffset) returns RegisterWord
+		return self.scratch.word((TraceRegsSlot + offset) as ScratchOffset)
+	end 'generalRegister'
+
+	module function copyFrom(process DebuggeeProcessId, address DebuggeeAddress, destination RegisterWord, count RegisterWord) returns bool
+		return traceHostCall(TraceHostVerb.readTracee, a0: process as RegisterWord, a1: address as RegisterWord, a2: destination, a3: count, a4: self.scratch.addressOf(TraceReadCountSlot)) != 0
+	end 'copyFrom'
 
 	public function signalThread(process DebuggeeProcessId, thread DebuggeeThreadId, signal DebuggeeSignal) returns bool
 		return traceHostCall(TraceHostVerb.signalThread, a0: process as RegisterWord, a1: thread as RegisterWord, a2: signal as RegisterWord, a3: 0, a4: 0) != 0

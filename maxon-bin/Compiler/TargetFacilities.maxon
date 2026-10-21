@@ -191,17 +191,19 @@ export enum HostFacility
 	// reading a file, and a lane can serve either without the other.
 	sharedMemory
 
-	// ⭐⭐ **SAMPLING ANOTHER THREAD OF THIS PROCESS — the suspend/context/read/resume loop, the
-	// high-resolution tick that drives it and the module map that names what it finds (`StdOp.osHostProcess`).**
+	// ⭐⭐ **SAMPLING A THREAD OF ANOTHER PROCESS — the stop/registers/read/resume loop, the tick that drives
+	// it and the module map that names what it finds (`StdOp.osHostProcess`).**
 	// Its own facility rather than a corner of `processInfo`, on this enum's stated rule: reading one's own
 	// identity is a call that cannot fail, while sampling walks ANOTHER thread's register file and copies
 	// ANOTHER stack out of memory — a different question with a different API.
 	//
 	// ⛔⛔ **ITS ROW IS ABOUT A CPU AS WELL AS AN OS, AS ONLY `processDebug`'s IS BESIDE IT.** A sampled
-	// register file arrives as a `CONTEXT`, whose RIP/RSP/RBP offsets are x64's; on any other CPU those same
-	// displacements name three unrelated words. So a lane claiming this row on the strength of `os(Windows)`
-	// alone would not FAIL — it would symbolize garbage into a confident profile, which is the worst kind of
-	// wrong answer a profiler can give. The table is keyed on a whole `Target` precisely so this can be said.
+	// register file arrives as the host's per-CPU record — a `CONTEXT`, an `arm_thread_state64_t`, a
+	// `user_regs_struct` or `user_pt_regs` — and the program-counter, stack and frame offsets the sampler reads are that
+	// CPU's; on another CPU those same displacements name unrelated words. So a lane claiming this row on the
+	// strength of its OS alone would not FAIL — it would symbolize garbage into a confident profile, which is
+	// the worst kind of wrong answer a profiler can give. The table is keyed on a whole `Target` precisely so
+	// this can be said.
 	processSampling
 
 	// ⭐⭐ **DRIVING ANOTHER PROCESS FROM OUTSIDE IT — the channel its stops arrive on, its memory, and its
@@ -214,6 +216,16 @@ export enum HostFacility
 	// access`, a backtrace and exit 1. The fault probe (`maxon_force_segfault`) exists to reach it, and
 	// wasm32-wasi installs none: its store through address 0 lands in linear memory and traps nothing.
 	faultHandler
+
+	// Reaching another process through Mach task ports (`__prof_mach_*`): `task_for_pid`, thread ports and
+	// their state. Its own facility because the services are Darwin's alone, and a lane that samples without
+	// them (Win32 handles, ptrace) must refuse a call that names one.
+	machTaskPorts
+
+	// Blocking the calling OS thread for a stated number of microseconds (`__prof_sleep_us`). Withheld where
+	// the host's shortest honourable wait is not that call: Windows quantises a waitable timer and its
+	// `shortSleep` yields the quantum instead, so a caller asking for microseconds would not get them.
+	microsecondSleep
 end 'HostFacility'
 
 // The answer `calleeHostFacility` returns. A union rather than a bool-plus-out-param so that "this callee
@@ -394,15 +406,16 @@ end 'CalleeFacility'
 // it arrives there carrying the very name this predicate keys on and needs no second door.
 //
 // The PROCESS-SAMPLING band joins on the same terms and by the same PREFIX test. Its own reason is the
-// SHAPE argument in its sharpest form, and it is about a CPU rather than an OS: the sampled register file
-// arrives as a Win32 `CONTEXT`, whose RIP/RSP/RBP displacements are x64's, so a lane claiming this row on
-// the strength of `os(Windows)` alone would not fail — it would read three unrelated words as a program
-// counter and a frame chain, and hand back a confident profile of nothing. macOS has the equivalent
-// primitives behind `task_for_pid`, which is an ENTITLEMENT question rather than a coding one, and Linux's
-// `ptrace` is a different mechanism with a stop protocol. Every one of those is a body of its own; none is a lowering.
+// SHAPE argument in its sharpest form, and it is about a CPU as well as an OS: the sampled register file
+// arrives as the host's per-CPU record, so a lane claiming this row on the strength of its OS alone would not
+// fail — it would read unrelated words as a program counter and a frame chain, and hand back a confident
+// profile of nothing. Win32 thread handles, Mach task ports and `ptrace` are three mechanisms with three stop
+// protocols, and each is a body of its own (`ProfileRuntime.profileHostShapeOf`); none is a lowering. The
+// Mach-only entries (`__prof_mach_`) and the microsecond sleep are named ahead of the band, each for a
+// facility of its own, because a prefix band must not swallow a member that answers a different facility.
 //
 function calleeHostFacility(callee ByteArray) returns CalleeFacility
-	// The four scheduler entries named individually: their bands hold calls the compiler inserts, so a
+	// The scheduler entries named individually: their bands hold calls the compiler inserts, so a
 	// prefix test over `__gt_` would blame a drop the user never wrote (measured — see the header above).
 	if callee.equals(GtNowNsName) 'monotonic'
 		return CalleeFacility.needs(HostFacility.monotonicClock)
@@ -423,6 +436,12 @@ function calleeHostFacility(callee ByteArray) returns CalleeFacility
 	if callee.equals(GtAwaitAnyName) or callee.equals(GtQuiesceName) 'select'
 		return CalleeFacility.needs(HostFacility.greenThreads)
 	end 'select'
+
+	// Each reads the running machine, which only the green-thread floor provides; without this arm
+	// wasm32-wasi dies in its backend rather than refusing at the call.
+	if isMachineBindingCallee(callee) 'machineBinding'
+		return CalleeFacility.needs(HostFacility.greenThreads)
+	end 'machineBinding'
 
 	// ⭐⭐ **THE SCHEDULER-STATE QUERIES — the select's case exactly, one band over.** Each reads state only
 	// `__sched_init_procs` builds, so asking one INSTALLS the whole scheduler (`RuntimeUsage.recordCallUsage`
@@ -464,6 +483,14 @@ function calleeHostFacility(callee ByteArray) returns CalleeFacility
 	if isHostScratchRuntimeCallee(callee) 'theScratchRegion'
 		return CalleeFacility.needs(HostFacility.pageMemory)
 	end 'theScratchRegion'
+
+	if isMachHostRuntimeCallee(callee) 'machTaskPortBand'
+		return CalleeFacility.needs(HostFacility.machTaskPorts)
+	end 'machTaskPortBand'
+
+	if callee.equals(ProfileSleepName) 'microsecondSleepBand'
+		return CalleeFacility.needs(HostFacility.microsecondSleep)
+	end 'microsecondSleepBand'
 
 	if isProfileRuntimeCallee(callee) 'processSamplingBand'
 		return CalleeFacility.needs(HostFacility.processSampling)
@@ -516,7 +543,7 @@ function calleeHostFacility(callee ByteArray) returns CalleeFacility
 	// BODY, so the callee is present on every target and no lane can go red.
 
 	// The priority write and the liveness probe, each named ahead of their own `__proc_` band for the
-	// four scheduler entries' reason one screen up: a prefix band must not silently swallow a member
+	// scheduler entries' reason one screen up: a prefix band must not silently swallow a member
 	// that answers a different facility. They are the two `__proc_` entries that do not read an
 	// identity.
 	if callee.equals(ProcessBackgroundPriorityName) 'priority'
@@ -583,12 +610,11 @@ end 'calleeHasHostFacility'
 
 // ⭐⭐ **THE CAPABILITY TABLE — what each backend has actually landed.**
 //
-// Read as *"target T provides facility F"*, and written by the backend that made it true. x64-windows is
-// the one FULL row — it provides every facility, so its block answers `true` without asking which.
+// Read as *"target T provides facility F"*, and written by the backend that made it true.
 //
-// ⚠ The three POSIX lanes, arm64-macOS, arm64-linux and x64-linux, provide every facility their row
-// does not withhold, each `true` a landed family with real lowerings behind it: libSystem imports on
-// macOS, raw syscalls on the two static Linux images. A premature `true` is worse than a `false`;
+// ⚠ The four native lanes, x64-windows, arm64-macOS, arm64-linux and x64-linux, provide every facility
+// their row does not withhold, each `true` a landed family with real lowerings behind it: Win32 imports on
+// Windows, libSystem imports on macOS, raw syscalls on the two static Linux images. A premature `true` is worse than a `false`;
 // this file's header says why.
 //
 // ⚠ **wasm32-wasi PROVIDES ONLY `pageMemory`, `hostMutex` AND `entropy`, AND SOME OF ITS `false`s
@@ -599,7 +625,38 @@ end 'calleeHasHostFacility'
 // answer. One table, two consumers, no second copy.
 export function targetProvidesFacility(target Target, facility HostFacility) returns bool
 	if target.cpu == CpuArch.x64 and target.os == Os.windows 'windowsX64'
-		return true
+		return match facility 'f'
+			monotonicClock or
+			wallClock or
+			threadCpuClock or
+			uptimeClock or
+			sleep or
+			reschedule or
+			greenThreads or
+			subprocess or
+			managedFile or
+			managedDirectory or
+			managedSocket or
+			commandLine or
+			consoleStdin or
+			processInfo or
+			processPriority or
+			processLiveness or
+			processNamespace or
+			entropy or
+			cpuCount or
+			pageMemory or
+			hostMutex or
+			threadLocalSlot or
+			terminalDetection or
+			sharedMemory or
+			faultHandler or
+			processSampling or
+			processDebug gives true
+
+			machTaskPorts or
+			microsecondSleep gives false
+		end 'f'
 	end 'windowsX64'
 
 	if target.cpu == CpuArch.arm64 and target.os == Os.macos 'darwinArm64'
@@ -652,14 +709,13 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			terminalDetection or
 			sharedMemory or
 			faultHandler or
-			uptimeClock gives true
-
-			// ⛔ `processSampling` and `processDebug`: the register file is the wrong shape. `thread_get_state`
-			// answers an `arm_thread_state64_t`, not a `CONTEXT`, so each is a port of the whole register
-			// decoder rather than a lowering; a `true` here would read three unrelated words as RIP/RSP/RBP.
-			// `processDebug` owes a second port beside that one: debugging another process here is the
-			// `mach_port`/`task_for_pid` protocol and a `debugserver`-shaped stop loop, not a debug port.
+			uptimeClock or
 			processSampling or
+			machTaskPorts or
+			microsecondSleep gives true
+
+			// ⛔ `processDebug`: debugging another process here is the `mach_port`/`task_for_pid` protocol and a
+			// `debugserver`-shaped stop loop, not a debug port.
 			processDebug gives false
 		end 'f'
 	end 'darwinArm64'
@@ -724,11 +780,13 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			terminalDetection or
 			sharedMemory or
 			faultHandler or
-			uptimeClock gives true
+			uptimeClock or
+			processSampling or
+			microsecondSleep gives true
 
 			processDebug gives true
 
-			processSampling gives false
+			machTaskPorts gives false
 		end 'f'
 	end 'linuxArm64'
 
@@ -783,11 +841,13 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			terminalDetection or
 			sharedMemory or
 			faultHandler or
-			uptimeClock gives true
+			uptimeClock or
+			processSampling or
+			microsecondSleep gives true
 
 			processDebug gives true
 
-			processSampling gives false
+			machTaskPorts gives false
 		end 'f'
 	end 'linuxX64'
 
@@ -832,6 +892,8 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			terminalDetection or
 			sharedMemory or
 			processSampling or
+			machTaskPorts or
+			microsecondSleep or
 			processDebug or
 			faultHandler gives false
 		end 'f'

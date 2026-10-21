@@ -390,8 +390,8 @@ uses it.
 | `--define=<name>=<value>` | Replace a top-level `String` constant's written-out default with `<value>`. Repeatable. See [Defines](#defines). |
 | `--metrics=<path>` | Write this compile's per-phase time and memory to `<path>` as TSV. Each row's first field is its kind: `phase`, `regalloc`, `total`, `unattributed`, `code`, `tag` when `--census-by-tag` is given, and `churn` when `--allocations-by-tag` is. `--log=compiler:debug` prints the same numbers as a table, and adds a residency table — what the heap was *holding* at each phase boundary, rather than what the phase asked for. The TSV's five residency columns are filled only when it or `--census-by-tag` is given; on their own they are zero. |
 
-`--debugstream`, `--async-trace` and `--coverage` are opt-in **per build**. Without the flag, none of
-that machinery is emitted.
+`--debugstream`, `--async-trace` and `--coverage` are opt-in **per build**: each adds its machinery
+only to a build that names it.
 
 A build prints the compiler's version and an early-preview warning to stdout, then
 `Compiled -> <path>` when it compiled or `Up to date -> <path>` when its output was already current (see
@@ -429,8 +429,8 @@ of the output's path. It records:
 - every source of the program, every standard-library and runtime source, and the Unicode tables the
   compiler embeds, each with its modification time — and on `wasm32-wasi`, `vendor/wasm-tools` and the
   files under `vendor/wasi-wit`;
-- the target, whether the debug-info sidecar is written, `--coverage`, `--debugstream`, `--async-trace`,
-  the product version, and every define;
+- the target, whether the debug-info sidecar is written, `--coverage`, `--debugstream`,
+  `--async-trace`, the product version, and every define;
 - the compiler's path, size and modification time;
 - the size and modification time of the output and of its `.mxdbg` sidecar, and the time the compile
   started, read from the cache root's filesystem.

@@ -1,0 +1,29 @@
+let PlantedBytes = "not really an image"
+let ProbeLabel = "profile-sweeps-a-copy-whose-owner-has-ended"
+
+function plantedCopyName(base String, owner Pid, serial Count) returns String
+	return "{mintedScratchName(ProbeLabel, base: base, namespace: OwnHostNamespace, pid: owner, serial: serial)}{AttachedCopySuffix}"
+end 'plantedCopyName'
+
+test 'a profile run removes the attachable copies whose owners have ended and keeps a live one and a stranger'
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: ProbeLabel, fixture: HotWarmFixtureName)
+	let executable = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: HotWarmFixtureName)
+
+	let ended = staged.join(plantedCopyName(executable.filename(), owner: endedProcessId(), serial: 1))
+	let live = staged.join(plantedCopyName(executable.filename(), owner: Process.id(), serial: 2))
+	let stranger = staged.join("notes{AttachedCopySuffix}")
+
+	writeStagedFile(ended, content: PlantedBytes)
+	writeStagedFile(live, content: PlantedBytes)
+	writeStagedFile(stranger, content: PlantedBytes)
+
+	let run = runProfiler(staged, extraArguments: StringArray.create())
+
+	Expect.equal(run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb}` did not complete a measurement. It wrote to stderr: {run.stderr}")
+
+	#if os(Macos)
+		Expect.isFalse(File.exists(ended), message: "the profiler kept {ended.toString()}, an attachable copy whose owner has ended.")
+		Expect.isTrue(File.exists(live), message: "the profiler removed {live.toString()}, an attachable copy whose owner is still running.")
+		Expect.isTrue(File.exists(stranger), message: "the profiler removed {stranger.toString()}, a file it did not make.")
+	#endif
+end 'a profile run removes the attachable copies whose owners have ended and keeps a live one and a stranger'

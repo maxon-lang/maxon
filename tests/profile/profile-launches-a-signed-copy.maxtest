@@ -1,0 +1,18 @@
+test 'the image the profiler launches on macOS grants get-task-allow in both signature blobs, and the image the compiler built does not'
+	let staged = buildSelfCopyProgram("profile-launches-a-signed-copy")
+	let launched = profileSelfCopyProgram(staged)
+
+	Expect.equal(launched.run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb}` did not complete a measurement of the program that copies the image it runs from. It printed:{LineFeed}{launched.run.stdout}{LineFeed}— and wrote to stderr: {launched.run.stderr}")
+	Expect.isTrue(File.exists(launched.copiedImage), message: "the profiled program wrote no copy of its image to {launched.copiedImage.toString()}. It wrote to stderr: {launched.run.stderr}")
+
+	let granted = grantsGetTaskAllow(launched.copiedImage)
+
+	#if os(Macos)
+		Expect.isTrue(carriesBlob(launched.copiedImage, magic: SuperBlobMagic), message: "the image the profiler launched carries no embedded code signature. macOS kills an unsigned arm64 program.")
+		Expect.isTrue(granted, message: "the image the profiler launched does not grant {GetTaskAllowEntitlement} in both its plist and its DER entitlement blobs, so macOS would refuse the profiler the program's task port.")
+		Expect.isFalse(namesGetTaskAllow(launched.executable), message: "the image {launched.executable.toString()} the compiler built names {GetTaskAllowEntitlement}: only the copy the profiler launches may carry it.")
+	#else
+		Expect.isFalse(granted, message: "the image the profiler launched grants {GetTaskAllowEntitlement} on a host that needs no entitlement.")
+		Expect.isTrue(imageBytes(launched.copiedImage).equals(imageBytes(launched.executable)), message: "the image the profiler launched differs from {launched.executable.toString()} on a host that needs no entitlement.")
+	#endif
+end 'the image the profiler launches on macOS grants get-task-allow in both signature blobs, and the image the compiler built does not'

@@ -1,0 +1,21 @@
+let MachOExecutableFileType = 2
+
+export function isTheMachOExecutable(fileType FullRangeInt) returns bool
+	return fileType == MachOExecutableFileType
+end 'isTheMachOExecutable'
+
+export function executablePlacementOf(target Target, loadedAt DebugAddress) returns BackendAdoption
+	if loadedAt != 0 'located'
+		return BackendAdoption.ready(BackendImagePlacement.loadedAt(loadedAt))
+	end 'located'
+
+	if target.os == Os.macos 'slidByAnUnknownAmount'
+		return BackendAdoption.refused("the program's image is loaded at an address this lane slides it to, and none was found for it, so its code cannot be placed")
+	end 'slidByAnUnknownAmount'
+
+	return BackendAdoption.ready(BackendImagePlacement.asLinked)
+end 'executablePlacementOf'
+
+export function attachNeedsAnEntitlement(target Target) returns bool
+	return target.os == Os.macos
+end 'attachNeedsAnEntitlement'

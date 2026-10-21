@@ -2969,8 +2969,6 @@ function buildArm64LinuxAwaitTraceeChunk(errnoHome LinuxErrnoHome) returns Funct
 	asm.placeLabel(poll)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotPid)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: anyChild)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: 0)
-	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x1, rhs: Arm64Register.x0)
 	arm64EmitBranchTo(asm, label: selected)
 
 	asm.placeLabel(anyChild)
@@ -3115,7 +3113,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64LinuxHandleFileTypeChunk())
 	end 'terminalDetection'
 
-	if usage.usesProcessDebug 'processTrace'
+	if linuxUsesTraceBand(usage) 'processTrace'
 		chunks.push(buildArm64LinuxTraceRequestChunk(errnoHome))
 		chunks.push(buildArm64LinuxTraceeReadChunk(errnoHome))
 		chunks.push(buildArm64LinuxAwaitTraceeChunk(errnoHome))

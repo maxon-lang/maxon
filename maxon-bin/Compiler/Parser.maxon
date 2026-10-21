@@ -5483,24 +5483,25 @@ union ConstructorInstance
 	none
 end 'ConstructorInstance'
 
-// ⭐⭐ **THE COMPILER-OWNED SURFACE A `<Type>.` BASE DENOTES, OR `none`** — the five statics that lower to a
+// ⭐⭐ **THE COMPILER-OWNED SURFACE A `<Type>.` BASE DENOTES, OR `none`** — the statics that lower to a
 // runtime entry of the compiler's own rather than to a function the program declares. Decided from the base
 // alone, so it is asked BEFORE the `.` is consumed and each arm's sub-reader still receives the cursor it
 // expects.
 //
 // ⭐⭐ **IT IS A VALUE BECAUSE TWO DOORS ASK IT.** `Parser.parseQualifiedCall` ROUTES on it; the `async`
 // spawn reader REFUSES on it, because a spawn hands `__gt_spawn` the ADDRESS of a function the program
-// links and none of these five is one. A second roster in the async reader would silently admit whichever
+// links and none of these is one. A second roster in the async reader would silently admit whichever
 // surface is added next — an `asyncCall` naming a callee no file declares, which is a link failure rather
 // than a diagnostic.
 //
-// `none` is LAST so the five refusable arms are one contiguous range in a match.
+// `none` is LAST so the refusable arms are one contiguous range in a match.
 union CompilerOwnedStaticSurface
 	managedFile
 	managedDirectory
 	managedSocket
 	managedPages
 	managedHandle
+	managedPin
 	managedMemory
 	containerAlias(giid GenericInstanceId)
 	sharedValue(giid GenericInstanceId)
@@ -9501,6 +9502,10 @@ let BuiltinsProfileModuleSnapshotName = b"__Builtins.profileModuleSnapshot"
 let BuiltinsProfileModuleFirstName = b"__Builtins.profileModuleFirst"
 let BuiltinsProfileModuleNextName = b"__Builtins.profileModuleNext"
 let BuiltinsProfileCloseName = b"__Builtins.profileClose"
+let BuiltinsProfileSleepName = b"__Builtins.profileSleepMicros"
+let BuiltinsProfileMachSampleName = b"__Builtins.profileMachSample"
+let BuiltinsProfileSeizedOpenName = b"__Builtins.profileSeizedOpen"
+let BuiltinsProfileSeizedKillName = b"__Builtins.profileSeizedKill"
 let BuiltinsProfileReadWordName = b"__Builtins.profileReadWord"
 let BuiltinsProfileWriteWordName = b"__Builtins.profileWriteWord"
 let BuiltinsProfileNowFileTimeName = b"__Builtins.profileNowFileTime"
@@ -9528,6 +9533,7 @@ let BuiltinsDebugProcessSignalName = b"__Builtins.debugProcessSignal"
 let BuiltinsPinToMachineName = b"__Builtins.pinToMachine"
 let BuiltinsUnpinFromMachineName = b"__Builtins.unpinFromMachine"
 let BuiltinsCurrentMachineName = b"__Builtins.currentMachine"
+let BuiltinsPinDepthName = b"__Builtins.pinDepth"
 
 // The two positions the POSITIONAL shapes below name. Their own constants rather than the spawn contract's
 // `SubprocessSpawnArgvSlot`, which is also 0 but says something else: these mean "the first/second argument
@@ -20999,7 +21005,7 @@ export type Parser
 			return false
 		end 'notAnIdentifier'
 
-		return self.current().value.equals(ManagedPagesTypeName) or self.current().value.equals(ManagedHandleTypeName)
+		return isHostResourceHandleName(self.current().value)
 	end 'atManagedHostResourceProducer'
 
 	// Is the cursor on `. <name>`? The shape every "does this file call builtin method X?" sweep probe
@@ -38314,7 +38320,7 @@ export type Parser
 			throw self.rawSurfaceRefusal(RawSurfaceDoor.bufferType(spelledAt.value), anchor: spelledAt)
 		end 'theBufferType'
 
-		if isRawHandleTypeName(spelledAt.value) 'anOsHandleType'
+		if isRawHandleName(spelledAt.value) 'anOsHandleType'
 			throw self.rawSurfaceRefusal(RawSurfaceDoor.handleType(spelledAt.value), anchor: spelledAt)
 		end 'anOsHandleType'
 	end 'requireTypeSpellingIsNotRawBuffer'
@@ -75051,6 +75057,10 @@ export type Parser
 			return CompilerOwnedStaticSurface.managedHandle
 		end 'managedHandleStatic'
 
+		if typeName.equals(ManagedPinTypeName) 'managedPinStatic'
+			return CompilerOwnedStaticSurface.managedPin
+		end 'managedPinStatic'
+
 		// `__ManagedMemory.create(count, elementSize)` — intercepted BEFORE the generic-alias arm
 		// below, which would route it to `parseArrayStaticCall` (the alias IS bound to an `Array` instance)
 		// and refuse its two arguments against `Array.create()`'s none. That is the measured red:
@@ -75560,6 +75570,7 @@ export type Parser
 			managedSocket then return try self.parseManagedSocketStaticCall(func, typeTok: typeTok)
 			managedPages then return try self.parseManagedPagesStaticCall(func, typeTok: typeTok)
 			managedHandle then return try self.parseManagedHandleStaticCall(func, typeTok: typeTok)
+			managedPin then return try self.parseManagedPinStaticCall(typeTok)
 			managedMemory then return try self.parseManagedMemoryStaticCall(func, typeTok: typeTok)
 			containerAlias(giid) then return try self.parseContainerAliasStaticCall(func, aliasTok: typeTok, aliasName: aliasName, giid: giid, resultUsed: resultUsed)
 			sharedValue(giid) then return try self.parseSharedValueCreate(func, typeTok: typeTok, giid: giid)
@@ -76567,6 +76578,10 @@ export type Parser
 		if self.isManagedHandleType(recv.tag, nameId: recv.nameId) 'managedHandleMethod'
 			return try self.dispatchManagedHandleMethod(recv)
 		end 'managedHandleMethod'
+
+		if self.isManagedPinType(recv.tag, nameId: recv.nameId) 'managedPinMethod'
+			return try self.dispatchManagedPinMethod(recv)
+		end 'managedPinMethod'
 
 		// AN ENUM/UNION RECEIVER — `d.isNorth()`, `s.action()`, `self.isStop()`, and also
 		// `pick().score()` and `Direction.south.score()`, which the oracle accepts (measured: 10) and which
@@ -78998,6 +79013,21 @@ export type Parser
 		throw SourceParseError.unsupported("`{String.from(ManagedHandleTypeName)}` static '{String.from(methodTok.value)}' — the type has exactly these two: `timer` and `adopting`", line: methodTok.line, column: methodTok.column)
 	end 'parseManagedHandleStaticCall'
 
+	function parseManagedPinStaticCall(typeTok Token) returns ValueId throws SourceParseError
+		try self.requireTypeSpellingIsNotRawBuffer(typeTok)
+		try self.consume(TokenKind.dot)
+		let methodTok = try self.consume(TokenKind.identifier)
+		let range = SourceRange.between(typeTok, last: methodTok)
+
+		if methodTok.value.equals(ManagedPinAcquireMethod) 'acquire'
+			try self.consumeEmptyArgList()
+
+			return self.emitOwnedRuntimeResult(GtPinAcquireName, args: ValueIdArray.create(), resultTag: ValueTypeTag.structRef, resultNameId: self.managedPinNameId(), range: range)
+		end 'acquire'
+
+		throw SourceParseError.unsupported("`{String.from(ManagedPinTypeName)}` static '{String.from(methodTok.value)}' — the type has exactly one: `acquire`", line: methodTok.line, column: methodTok.column)
+	end 'parseManagedPinStaticCall'
+
 	function dispatchManagedPagesMethod(recv MethodReceiver) returns ValueId throws SourceParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.between(methodTok, last: methodTok)
@@ -79047,6 +79077,31 @@ export type Parser
 
 		throw SourceParseError.unsupported("`{String.from(ManagedHandleTypeName)}` method '{String.from(methodTok.value)}' — the type has exactly these two: `handle()` and `release()`", line: methodTok.line, column: methodTok.column)
 	end 'dispatchManagedHandleMethod'
+
+	function dispatchManagedPinMethod(recv MethodReceiver) returns ValueId throws SourceParseError
+		let methodTok = try self.consume(TokenKind.identifier)
+		let range = SourceRange.between(methodTok, last: methodTok)
+
+		if methodTok.value.equals(ManagedPinTokenMethod) 'token'
+			try self.consumeEmptyArgList()
+
+			return self.emitRuntimeCall(GtPinTokenName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'token'
+
+		if methodTok.value.equals(ManagedPinSurrenderMethod) 'surrender'
+			try self.consumeEmptyArgList()
+
+			return self.emitRuntimeCall(GtPinSurrenderName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'surrender'
+
+		if methodTok.value.equals(ManagedPinReleaseMethod) 'release'
+			try self.consumeEmptyArgList()
+
+			return self.emitRuntimeCall(GtPinReleaseName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		end 'release'
+
+		throw SourceParseError.unsupported("`{String.from(ManagedPinTypeName)}` method '{String.from(methodTok.value)}' — the type has exactly these three: `token()`, `surrender()` and `release()`", line: methodTok.line, column: methodTok.column)
+	end 'dispatchManagedPinMethod'
 
 	function emitManagedSocketTcpConnectCall(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
 		let endpoint = try self.parseManagedSocketEndpointArgs(func, methodTok: methodTok)
@@ -79541,6 +79596,10 @@ export type Parser
 		return self.artifact.typeNames.intern(ManagedHandleTypeName)
 	end 'managedHandleNameId'
 
+	function managedPinNameId() returns TypeNameId
+		return self.artifact.typeNames.intern(ManagedPinTypeName)
+	end 'managedPinNameId'
+
 	// Is this receiver a `__ManagedFile`? A TAG cannot answer it — every struct box is `structRef` — so it
 	// is the interned NAME behind the tag, exactly as `isStringIndexType` asks.
 	//
@@ -79588,6 +79647,10 @@ export type Parser
 	function isManagedHandleType(tag ValueTypeTag, nameId TypeNameId) returns bool
 		return self.receiverIsNamedAggregate(tag, nameId: nameId, typeName: ManagedHandleTypeName)
 	end 'isManagedHandleType'
+
+	function isManagedPinType(tag ValueTypeTag, nameId TypeNameId) returns bool
+		return self.receiverIsNamedAggregate(tag, nameId: nameId, typeName: ManagedPinTypeName)
+	end 'isManagedPinType'
 
 	// ⭐ **"IS THIS RECEIVER THE AGGREGATE CALLED `typeName`?" — THE SHARED BODY OF THE THREE TYPE TESTS
 	// ABOVE AND BELOW** (`__ManagedFile`, `__ManagedDirectory`, `StringIndex`). Each spelled the tag gate and
@@ -97319,6 +97382,10 @@ export type Parser
 				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: ProfileCloseName, arity: ProfileOneArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.void, resultAlias: NoAnswerAlias, resultUsed: resultUsed, calleeTok: anchor)
 			end 'profileClose'
 
+			if callee.equals(BuiltinsProfileSleepName) 'profileSleep'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: ProfileSleepName, arity: ProfileOneArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.void, resultAlias: NoAnswerAlias, resultUsed: resultUsed, calleeTok: anchor)
+			end 'profileSleep'
+
 			if callee.equals(BuiltinsProfileReadWordName) 'profileReadWord'
 				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: ProfileReadWordName, arity: ProfileTwoArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultAlias: FullRangeIntAliasName, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
 			end 'profileReadWord'
@@ -97330,6 +97397,22 @@ export type Parser
 			if callee.equals(BuiltinsProfileNowFileTimeName) 'profileNowFileTime'
 				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: WallClockNowFileTimeName, arity: ProfileNoArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultAlias: FullRangeIntAliasName, resultUsed: resultUsed, calleeTok: anchor)
 			end 'profileNowFileTime'
+
+			if callee.equals(BuiltinsProfileMachSampleName) 'profileMachSample'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: MachSampleName, arity: ProfileSampleArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultAlias: FullRangeIntAliasName, resultUsed: resultUsed, calleeTok: anchor)
+			end 'profileMachSample'
+
+			if callee.equals(BuiltinsProfileSeizedOpenName) 'profileSeizedOpen'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: ProfileSeizedOpenName, arity: ProfileTwoArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultAlias: FullRangeIntAliasName, resultUsed: resultUsed, calleeTok: anchor)
+			end 'profileSeizedOpen'
+
+			if callee.equals(BuiltinsProfileSeizedKillName) 'profileSeizedKill'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: ProfileSeizedKillName, arity: ProfileTwoArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.void, resultAlias: NoAnswerAlias, resultUsed: resultUsed, calleeTok: anchor)
+			end 'profileSeizedKill'
+
+			if let machService = try machHostServiceNamed(callee) 'machHost'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: machHostRuntimeName(machService), arity: machHostWords(machService), shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultAlias: FullRangeIntAliasName, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
+			end 'machHost'
 
 			if callee.equals(BuiltinsDebugReadMemoryName) 'debugReadMemory'
 				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: DebugHostReadMemoryName, arity: DebugHostFiveArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultAlias: FullRangeIntAliasName, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
@@ -97414,6 +97497,10 @@ export type Parser
 			if callee.equals(BuiltinsUnpinFromMachineName) 'unpinFromMachine'
 				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: GtUnpinMachineName, arity: DebugHostNoArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.void, resultAlias: NoAnswerAlias, resultUsed: resultUsed, calleeTok: anchor)
 			end 'unpinFromMachine'
+
+			if callee.equals(BuiltinsPinDepthName) 'pinDepth'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: GtPinDepthName, arity: DebugHostNoArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultAlias: FullRangeIntAliasName, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
+			end 'pinDepth'
 
 			if callee.equals(BuiltinsCurrentMachineName) 'currentMachine'
 				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: GtCurrentMachineName, arity: DebugHostNoArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultAlias: FullRangeIntAliasName, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
@@ -101063,7 +101150,7 @@ export type Parser
 		throw SourceParseError.unsupported("`async {String.from(typeTok.value)}.{String.from(memberTok.value)}(…)` — `{String.from(callee)}` is a runtime intrinsic the compiler lowers in place, so it names no function a green thread could start at; call it directly, or spawn a function that calls it", line: memberTok.line, column: memberTok.column)
 	end 'requireCalleeIsASpawnableFunction'
 
-	// ⛔ **A COMPILER-OWNED STATIC IS NOT A SPAWN TARGET, and the five surfaces share ONE refusal because
+	// ⛔ **A COMPILER-OWNED STATIC IS NOT A SPAWN TARGET, and the surfaces share ONE refusal because
 	// they share one reason:** each lowers to a runtime entry the compiler emits (`__mf_read_all`,
 	// `__managed_create`, an `Array` create op) rather than to a function the program declares, while a spawn
 	// hands the scheduler the ADDRESS of a linked function. The roster is `compilerOwnedStaticSurface`'s, so
@@ -101078,6 +101165,7 @@ export type Parser
 			managedSocket or
 			managedPages or
 			managedHandle or
+			managedPin or
 			managedMemory or
 			sharedValue or
 			containerAlias then throw SourceParseError.unsupported("`async {String.from(typeTok.value)}.…` — a static on this type is served by a runtime entry the compiler emits rather than by a function the program declares, and a spawn hands the scheduler the ADDRESS of a linked function. Call it directly, or spawn a function of your own that wraps it", line: typeTok.line, column: typeTok.column)

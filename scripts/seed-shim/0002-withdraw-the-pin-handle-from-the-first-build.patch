@@ -1,0 +1,47 @@
+--- a/stdlib/Scheduler.maxon
++++ b/stdlib/Scheduler.maxon
+@@ -105,7 +105,7 @@
+ 	end 'unpinFromMachine'
+ 
+ 	module static function pinDepth() returns PinDepth
+-		return __Builtins.pinDepth() as PinDepth
++		return 0
+ 	end 'pinDepth'
+ 
+ 	/// The machine running the calling green thread; 0 is no machine.
+@@ -119,22 +119,30 @@
+ /// Releasing it from another green thread, off any green-thread machine, or after
+ /// `Scheduler.unpinFromMachine()` undid the pin is a fatal runtime error.
+ public type MachinePin
+-	var pin as __ManagedPin
++	var token as PinToken
+ 
+ 	public static function acquire() returns MachinePin
+-		return Self{pin: __ManagedPin.acquire()}
++		return Self{token: __Builtins.pinToMachine() as PinToken}
+ 	end 'acquire'
+ 
+ 	public function held() returns bool
+-		return self.pin.token() != 0
++		return self.token != 0
+ 	end 'held'
+ 
+ 	public function release()
+-		self.pin.release()
++		if self.token == 0 'nothingHeld'
++			return
++		end 'nothingHeld'
++
++		__Builtins.unpinFromMachine()
++		self.token = 0
+ 	end 'release'
+ 
+ 	module function surrender() returns PinToken
+-		return self.pin.surrender() as PinToken
++		let surrendered = self.token
++		self.token = 0
++
++		return surrendered
+ 	end 'surrender'
+ 
+ 	public function clone() returns Self

@@ -4,28 +4,32 @@
 // ⭐⭐ **THIS SAMPLES ANOTHER PROCESS AND NEVER RUNS ONE INSTRUCTION OF IT.** Two of the three rules a
 // sampler is bound by therefore hold STRUCTURALLY rather than by discipline: it allocates nothing in the
 // target and takes no lock the target could hold, because there is no path from here into the target's code
-// at all. The third — IT ALWAYS RESUMES — is the one the structure does not give for free, and it is
-// enforced at the single place a thread is ever suspended: `ProfileRuntime.buildProfileSample`, whose Std
-// graph converges every failure edge on ONE resume block that dominates its only return.
+// at all. The third — IT ALWAYS RESUMES — is the one the structure does not give for free. On Windows and
+// macOS it is enforced at the one entry that suspends (`ProfileRuntime.buildProfileSample`,
+// `MachHostRuntime.buildMachSample`), whose Std graph converges every edge after a successful suspend on
+// ONE resume block. On Linux every stop ends in `letGo`, and `SeizedThreads`' release detaches any thread
+// still held — or kills the process rather than leave it stopped.
 //
-// ⭐⭐ **WHY SAMPLING OS THREADS SEES GREEN THREADS.** `__gt_context_switch` restores RSP *and* RBP, so an OS
-// worker executing a green thread has that green thread's own stack in its registers: the register capture
-// below IS the green thread's and the frame-pointer walk IS its backtrace. Nothing has to enumerate green
-// threads to see them — which matters, because the one mechanism that CAN enumerate them is answered
-// exclusively by a PARKED target, and parking a program once per sample is a design this tree has refused.
+// ⭐⭐ **WHY SAMPLING OS THREADS SEES GREEN THREADS.** `__gt_context_switch` restores the stack pointer *and*
+// the frame pointer, so an OS worker executing a green thread has that green thread's own stack in its
+// registers: the register capture below IS the green thread's and the frame-pointer walk IS its backtrace.
+// Nothing has to enumerate green threads to see them — which matters, because the one mechanism that CAN
+// enumerate them is answered exclusively by a PARKED target, and parking a program once per sample is a
+// design this tree has refused.
 //
 // ⭐ **WHY THE ALLOCATION BASE IDENTIFIES A STACK.** Every green thread's stack is its own reservation and so
 // is every OS thread's, so two CONCURRENTLY LIVE stacks can never share one. It is the ALLOCATION base
 // rather than the region base because a stack reservation is split into committed, guard and reserved
 // regions with different bases and one allocation base — the identity has to be what does not move as the
-// stack grows into its guard page.
+// stack grows into its guard page. Only Windows reports the reservation; elsewhere a stack whose walk found
+// no root is identified by its thread (`profileStackIdentity`).
 //
 // ⛔ **THE LOOP RUNS ON THE THREAD THAT CALLED IT, NEVER ON A GREEN THREAD OF ITS OWN.** Its wait is a
 // blocking OS wait a thousand times a second, and handing a processor back and forth at that rate is a
 // scheduler interaction nothing in this tree has measured.
 //
-// The gate and every conjunct of its reason are `ProfileModel`'s.
-#if os(Windows) and arch(x64)
+// The gate and its reason are `ProfileModel`'s.
+#if not os(Wasi)
 	module typealias ProfileWordArray = Array with RegisterWord
 
 	// How many frames a walk produced. A byte extent inside the copied window is an ordinary `RegisterWord`,
@@ -52,28 +56,6 @@
 	let ProfileThreadRefreshNanos = 100000000
 
 	let ProfileNanosPerSecond = 1000000000.0
-
-	// The two names a PE image's own header answers with, and the flag that says its base is not a promise.
-	let ProfileTextSectionName = ".text"
-	let ProfileDynamicBaseFlag = 0x0040
-
-	// The PE displacements this file reads. It walks the section table itself rather than reaching for
-	// `readPeSectionData`, because what it needs is a section's PLACEMENT — the address the loader maps it
-	// at — and that reader answers with the section's BYTES.
-	let ProfilePeSignatureOffsetField = 0x3C
-	let ProfileDosMagic = 0x5A4D
-	let ProfilePeMagic = 0x00004550
-	let ProfileCoffHeaderBytes = 20
-	let ProfileCoffSectionCountOffset = 2
-	let ProfileCoffOptionalHeaderSizeOffset = 16
-	let ProfileOptionalImageBaseOffset = 24
-	let ProfileOptionalDllCharacteristicsOffset = 70
-	let ProfileSectionHeaderBytes = 40
-	let ProfileSectionNameBytes = 8
-	let ProfileSectionVirtualSizeOffset = 8
-	let ProfileSectionVirtualAddressOffset = 12
-	let ProfileSectionRawSizeOffset = 16
-	let ProfileSectionRawPointerOffset = 20
 
 	// ========================================================================================
 	// THE TARGET'S IMAGE
@@ -105,26 +87,45 @@
 		var starts as ProfileWordArray
 		var ends as ProfileWordArray
 		var names as ProfileStringArray
+		var fileTypes as ProfileWordArray
 
 		static function over(modules SampledModuleArray) returns ProfileModuleMap
 			var starts = ProfileWordArray.create()
 			var ends = ProfileWordArray.create()
 			var names = ProfileStringArray.create()
+			var fileTypes = ProfileWordArray.create()
 
 			for loaded in modules 'eachModule'
 				starts.push(loaded.base)
 				ends.push(loaded.limit)
 				names.push(loaded.name)
+				fileTypes.push(loaded.fileType)
 			end 'eachModule'
 
-			return Self{starts: starts, ends: ends, names: names}
+			return Self{starts: starts, ends: ends, names: names, fileTypes: fileTypes}
 		end 'over'
 
-		// The base the FIRST module was loaded at, which for a Toolhelp module walk is the executable itself.
-		// Zero when nothing was enumerated.
-		export function mainModuleBase() returns RegisterWord
-			return try self.starts.get(0) otherwise 0
-		end 'mainModuleBase'
+		// Where the executable was loaded: the first module of a Toolhelp walk on Windows, the image whose
+		// Mach-O file type is the executable's on macOS. Zero when nothing was enumerated, and on Linux, whose
+		// static image is placed as linked (`executablePlacementOf`).
+		export function executableBase(target Target) returns RegisterWord
+			return match target.os 'os'
+				windows gives try self.starts.get(0) otherwise 0
+				macos gives self.baseOfTheMachOExecutable()
+				linux gives 0
+				wasi panic("ProfileModuleMap.executableBase: {targetToString(target)} has no sampler, so no module list was read")
+			end 'os'
+		end 'executableBase'
+
+		function baseOfTheMachOExecutable() returns RegisterWord
+			for (iter, fileType) in self.fileTypes.withIterator() 'eachModule'
+				if isTheMachOExecutable(fileType as FullRangeInt) 'theProgram'
+					return try self.starts.get(iter.index()) otherwise 0
+				end 'theProgram'
+			end 'eachModule'
+
+			return 0
+		end 'baseOfTheMachOExecutable'
 
 		export function nameAt(address RegisterWord) returns String throws AbsentError
 			for (iter, start) in self.starts.withIterator() 'eachModule'
@@ -136,76 +137,6 @@
 			throw AbsentError.absent
 		end 'nameAt'
 	end 'ProfileModuleMap'
-
-	// Where a PE image says its `.text` will be mapped, and whether that promise is one the loader keeps.
-	module type ProfilePlacement
-		export var preferredTextBase as RegisterWord
-		export var textRva as RegisterWord
-		export var textSize as RegisterWord
-		export var relocatable as bool
-		export var codeBytes as ByteArray
-
-		static function create(preferredTextBase RegisterWord, textRva RegisterWord, textSize RegisterWord, relocatable bool, codeBytes ByteArray) returns ProfilePlacement
-			return Self{preferredTextBase: preferredTextBase, textRva: textRva, textSize: textSize, relocatable: relocatable, codeBytes: codeBytes}
-		end 'create'
-	end 'ProfilePlacement'
-
-	module union ProfilePlacementRead
-		found(placement ProfilePlacement)
-		refused(reason String)
-	end 'ProfilePlacementRead'
-
-	// The image's own header is read, never the live process, because this compiler's PE writer clears
-	// DYNAMIC_BASE: its binaries map where their header says, so `.text`'s address is arithmetic. A
-	// binary that sets the flag is caught by `relocatable` and answered from the module map instead; a
-	// wrong base would not fail, it would symbolize every sample to a wrong function.
-	module function readProfilePlacement(binary FilePath) returns ProfilePlacementRead
-		let image = try File.readBinary(binary) otherwise return ProfilePlacementRead.refused("cannot read {reportPathDisplay(binary)}")
-
-		if imageReadU16(image, at: 0) != ProfileDosMagic 'notAnImage'
-			return profileNotAPeImage(binary)
-		end 'notAnImage'
-
-		let peOffset = imageReadU32(image, at: ProfilePeSignatureOffsetField) as ByteOffset
-
-		if not spanFitsWithin(peOffset, count: ProfileCoffHeaderBytes as BytePos, total: image.count() as BytePos) or imageReadU32(image, at: peOffset) != ProfilePeMagic 'notPe'
-			return profileNotAPeImage(binary)
-		end 'notPe'
-
-		let coff = peOffset + 4
-		let sectionCount = imageReadU16(image, at: coff + ProfileCoffSectionCountOffset)
-		let optionalHeaderSize = imageReadU16(image, at: coff + ProfileCoffOptionalHeaderSizeOffset)
-		let optional = coff + ProfileCoffHeaderBytes as ByteOffset
-		let firstSection = optional + optionalHeaderSize as ByteOffset
-
-		let preferredBase = imageReadU64(image, at: optional + ProfileOptionalImageBaseOffset) as RegisterWord
-		let relocatable = (imageReadU16(image, at: optional + ProfileOptionalDllCharacteristicsOffset) and ProfileDynamicBaseFlag) != 0
-
-		for index in 0 upto sectionCount 'eachSection'
-			let header = firstSection + (index * ProfileSectionHeaderBytes) as ByteOffset
-
-			if not spanFitsWithin(header, count: ProfileSectionHeaderBytes as BytePos, total: image.count() as BytePos) or not imageNameIs(image, at: header, maxBytes: ProfileSectionNameBytes, name: ProfileTextSectionName) 'notTheCode'
-				continue
-			end 'notTheCode'
-
-			let virtualSize = imageReadU32(image, at: header + ProfileSectionVirtualSizeOffset) as RegisterWord
-			let rawSize = imageReadU32(image, at: header + ProfileSectionRawSizeOffset) as BytePos
-			let rawPointer = imageReadU32(image, at: header + ProfileSectionRawPointerOffset) as ByteOffset
-			let stored = virtualSize as BytePos if (virtualSize as BytePos) < rawSize else rawSize
-
-			if not spanFitsWithin(rawPointer, count: stored, total: image.count() as BytePos) 'runsPastTheEnd'
-				return ProfilePlacementRead.refused("{reportPathDisplay(binary)} claims a {ProfileTextSectionName} section that runs past the end of the file")
-			end 'runsPastTheEnd'
-
-			return ProfilePlacementRead.found(ProfilePlacement.create(preferredBase, textRva: imageReadU32(image, at: header + ProfileSectionVirtualAddressOffset) as RegisterWord, textSize: virtualSize, relocatable: relocatable, codeBytes: imageSlice(image, start: rawPointer, count: stored)))
-		end 'eachSection'
-
-		return ProfilePlacementRead.refused("{reportPathDisplay(binary)} has no {ProfileTextSectionName} section, so there is no code for a profile to land in")
-	end 'readProfilePlacement'
-
-	function profileNotAPeImage(binary FilePath) returns ProfilePlacementRead
-		return ProfilePlacementRead.refused("{reportPathDisplay(binary)} is not a PE image this build can sample")
-	end 'profileNotAPeImage'
 
 	// ========================================================================================
 	// SYMBOLIZATION
@@ -220,19 +151,31 @@
 
 	// What the sidecar calls the code at a `.text` offset, or the placeholder for our own code it does not
 	// name — a runtime helper the function table has no record for.
-	function profileFunctionNameAt(image ProfileImage, offset MxdbgCodeOffset) returns String
+	function pushProfileFunctionFrame(frames ProfileStringArray, image ProfileImage, offset MxdbgCodeOffset) returns bool
 		return match image.sidecar.functionContaining(offset) 'lookup'
-			none gives ProfileUnnamedTextFrame
-			found(info) gives ProfileUnnamedTextFrame if info.name.isEmpty() else info.name
+			none gives pushUnnamedProfileFrame(frames)
+			found(info) gives pushNamedProfileFrame(frames, info: info)
 		end 'lookup'
-	end 'profileFunctionNameAt'
+	end 'pushProfileFunctionFrame'
+
+	function pushUnnamedProfileFrame(frames ProfileStringArray) returns bool
+		frames.push(ProfileUnnamedTextFrame)
+
+		return false
+	end 'pushUnnamedProfileFrame'
+
+	function pushNamedProfileFrame(frames ProfileStringArray, info MxdbgFunctionInfo) returns bool
+		frames.push(ProfileUnnamedTextFrame if info.name.isEmpty() else info.name)
+
+		return not mxdbgOriginIsTheRuntimes(info.origin)
+	end 'pushNamedProfileFrame'
 
 	// ⭐ **ONE PHYSICAL FRAME IS AS MANY PROFILE FRAMES AS THE CODE AT `offset` HAS CALLEES SPLICED INTO
 	// IT.** A body the inliner spliced away has no frame of its own, so the chain alone would credit its
 	// caller with its time and lose the level a report ranks by. The sidecar's inline tables name the
 	// innermost spliced body first — where self time goes — then each body it nests under, then the
 	// function whose frame this is, exactly as the panic runtime prints the same frame.
-	function pushProfileFramesAt(frames ProfileStringArray, image ProfileImage, offset MxdbgCodeOffset)
+	function pushProfileFramesAt(frames ProfileStringArray, image ProfileImage, offset MxdbgCodeOffset) returns bool
 		var site = image.sidecar.inlineSiteContaining(offset)
 
 		while true 'eachSpliceOutwards'
@@ -242,7 +185,7 @@
 			end 's'
 		end 'eachSpliceOutwards'
 
-		frames.push(profileFunctionNameAt(image, offset: offset))
+		return pushProfileFunctionFrame(frames, image: image, offset: offset)
 	end 'pushProfileFramesAt'
 
 	// Push one spliced body's name and answer the site it nests under.
@@ -252,13 +195,14 @@
 		return site.parent
 	end 'pushInlineSiteFrame'
 
-	// ⭐ **ONLY THE LEAF EARNS A FOREIGN PLACEHOLDER.** Above the leaf, leaving `.text` is simply where our
-	// code ends — the outermost Maxon frame returns into the C runtime or the thread starter — so stopping
-	// there is what makes a stack's root its entry function rather than a symbol we cannot name. At the LEAF
-	// it means the sample landed in a DLL or the kernel, and the chain above it cannot be trusted at all:
-	// foreign code has no obligation to maintain a frame pointer, so following RBP out of it would produce a
-	// return address that might well resolve to a real function of ours and attribute the sample to a caller
-	// that never called it. One unnamed frame is the honest answer; a plausible wrong one is not.
+	// ⭐ **ONLY THE LEAF EARNS A FOREIGN PLACEHOLDER.** Above the leaf, leaving `.text` is where our code ends
+	// or passes through — the outermost Maxon frame returns into the C runtime or the thread starter — so a
+	// foreign frame there is skipped, and a stack's root is its entry function rather than a symbol we cannot
+	// name. At the LEAF it means the sample landed in a library or the kernel. Where foreign code need not
+	// keep a frame pointer (`SampledProcess.foreignCodeKeepsTheFrameChain()` is false), the chain above it
+	// cannot be trusted at all: following RBP out of it would produce a return address that might well
+	// resolve to a real function of ours and attribute the sample to a caller that never called it. One
+	// unnamed frame is the honest answer; a plausible wrong one is not.
 	function profileForeignLeafFrame(image ProfileImage, address RegisterWord) returns String
 		let name = try image.modules.nameAt(address) otherwise return ProfileOutsideTextFrame
 		return "[{name}]"
@@ -291,17 +235,24 @@
 	function walkProfileFrames(frames ProfileStringArray, image ProfileImage, leafPc RegisterWord, framePointer RegisterWord, stackPointer RegisterWord, window StackWindow) returns ProfileWalk
 		frames.clear()
 
-		if not profileAddressInText(image, address: leafPc) 'foreignLeaf'
-			frames.push(profileForeignLeafFrame(image, address: leafPc))
-			return ProfileWalk.of(false, rootFrame: 0)
-		end 'foreignLeaf'
+		var ranTheProgram = false
+		var sawOurCode = false
 
-		pushProfileFramesAt(frames, image: image, offset: (leafPc - image.textBase) as MxdbgCodeOffset)
+		if profileAddressInText(image, address: leafPc) 'ourLeaf'
+			ranTheProgram = pushProfileFramesAt(frames, image: image, offset: (leafPc - image.textBase) as MxdbgCodeOffset)
+			sawOurCode = true
+		end 'ourLeaf' else 'foreignLeaf'
+			frames.push(profileForeignLeafFrame(image, address: leafPc))
+
+			if not SampledProcess.foreignCodeKeepsTheFrameChain() 'chainUntrusted'
+				return ProfileWalk.of(false, rootFrame: 0, runtimeOnly: false)
+			end 'chainUntrusted'
+		end 'foreignLeaf'
 
 		let windowBytes = window.byteCount()
 
 		if windowBytes < ProfileFrameLinkBytes 'nothingToWalk'
-			return ProfileWalk.of(false, rootFrame: 0)
+			return ProfileWalk.of(false, rootFrame: 0, runtimeOnly: false)
 		end 'nothingToWalk'
 
 		// The largest offset at which BOTH words of a frame link still fit, computed ONCE by SUBTRACTING the
@@ -312,36 +263,47 @@
 
 		while walked < ProfileMaxWalkFrames 'eachFrame'
 			if fp < stackPointer 'belowTheWindow'
-				return ProfileWalk.of(false, rootFrame: 0)
+				return ProfileWalk.of(false, rootFrame: 0, runtimeOnly: false)
 			end 'belowTheWindow'
 
 			let offset = fp - stackPointer
 
 			if offset > lastFrameLinkOffset 'pastTheWindow'
-				return ProfileWalk.of(false, rootFrame: 0)
+				return ProfileWalk.of(false, rootFrame: 0, runtimeOnly: false)
 			end 'pastTheWindow'
 
-			let savedFp = try window.word(offset as StackWindowOffset) otherwise return ProfileWalk.of(false, rootFrame: 0)
-			let returnAddress = try window.word((offset + ProfileWordBytes) as StackWindowOffset) otherwise return ProfileWalk.of(false, rootFrame: 0)
+			let savedFp = try window.word(offset as StackWindowOffset) otherwise return ProfileWalk.of(false, rootFrame: 0, runtimeOnly: false)
+			let returnAddress = try window.word((offset + ProfileWordBytes) as StackWindowOffset) otherwise return ProfileWalk.of(false, rootFrame: 0, runtimeOnly: false)
 
-			if returnAddress == 0 or not profileAddressInText(image, address: returnAddress) 'endOfOurCode'
-				return ProfileWalk.of(false, rootFrame: fp)
-			end 'endOfOurCode'
+			if returnAddress == 0 'rootOfTheStack'
+				return ProfileWalk.of(false, rootFrame: fp, runtimeOnly: sawOurCode and not ranTheProgram)
+			end 'rootOfTheStack'
 
-			// ⭐ A frame above the leaf is a RETURN address, so it resolves through the ONE call-site bias
-			// this tree states — without it, a call that is a function's last instruction names the function
-			// AFTER it.
-			pushProfileFramesAt(frames, image: image, offset: MxdbgReader.callSiteLookup((returnAddress - image.textBase) as MxdbgCodeOffset))
+			if profileAddressInText(image, address: returnAddress) 'ourCode'
+				sawOurCode = true
+
+				// ⭐ A frame above the leaf is a RETURN address, so it resolves through the ONE call-site bias
+				// this tree states — without it, a call that is a function's last instruction names the function
+				// AFTER it.
+				if pushProfileFramesAt(frames, image: image, offset: MxdbgReader.callSiteLookup((returnAddress - image.textBase) as MxdbgCodeOffset)) 'aProgramFrame'
+					ranTheProgram = true
+				end 'aProgramFrame'
+			end 'ourCode' else 'foreignCode'
+				if not SampledProcess.foreignCodeKeepsTheFrameChain() 'endOfOurCode'
+					return ProfileWalk.of(false, rootFrame: fp, runtimeOnly: sawOurCode and not ranTheProgram)
+				end 'endOfOurCode'
+			end 'foreignCode'
+
 			walked = walked + 1
 
 			if savedFp <= fp 'notGrowingOutwards'
-				return ProfileWalk.of(false, rootFrame: fp)
+				return ProfileWalk.of(false, rootFrame: fp, runtimeOnly: sawOurCode and not ranTheProgram)
 			end 'notGrowingOutwards'
 
 			fp = savedFp
 		end 'eachFrame'
 
-		return ProfileWalk.of(true, rootFrame: 0)
+		return ProfileWalk.of(true, rootFrame: 0, runtimeOnly: sawOurCode and not ranTheProgram)
 	end 'walkProfileFrames'
 
 	// ========================================================================================
@@ -523,7 +485,8 @@
 			self.ticks = self.ticks + 1
 		end 'sampleOnce'
 
-		// ⭐⭐ **THE BASELINE IS THE COUNT READ WHILE THE THREAD WAS SUSPENDED** (`__prof_sample`). Suspending
+		// ⭐⭐ **THE BASELINE IS THE COUNT READ WHILE THE THREAD WAS SUSPENDED** (`__prof_sample`,
+		// `__prof_mach_sample`; on Linux the moment its stop ends, still before the walk). Suspending
 		// a thread costs it kernel cycles and the counter counts them, so a baseline read before the
 		// suspend would charge a sampled thread for its own sampling; one read after the walk would drop
 		// what the thread ran, resumed, while the sampler walked and aggregated its copied stack — most for
@@ -538,15 +501,15 @@
 
 			return match capture 'captured'
 				threadGone gives ProfileThreadSample.gone
-				unreadable(allocationBase, suspendedCycles) gives self.chargedWithNoRegisters(allocationBase, suspendedCycles: suspendedCycles, charges: charges, accumulator: accumulator, frames: frames)
-				captured(stack) gives self.chargedWithStack(stack, charges: charges, accumulator: accumulator, image: image, frames: frames)
+				unreadable(reservation, suspendedCycles) gives self.chargedWithNoRegisters(profileStackIdentity(reservation, thread: thread), suspendedCycles: suspendedCycles, charges: charges, accumulator: accumulator, frames: frames)
+				captured(stack) gives self.chargedWithStack(stack, thread: thread, charges: charges, accumulator: accumulator, image: image, frames: frames)
 			end 'captured'
 		end 'sampleThread'
 
-		function chargedWithNoRegisters(allocationBase RegisterWord, suspendedCycles RegisterWord, charges ProfileCharges, accumulator ProfileAccumulator, frames ProfileStringArray) returns ProfileThreadSample
+		function chargedWithNoRegisters(stackIdentity ProfileStackBase, suspendedCycles RegisterWord, charges ProfileCharges, accumulator ProfileAccumulator, frames ProfileStringArray) returns ProfileThreadSample
 			frames.clear()
 			frames.push(ProfileUnreadableStackFrame)
-			accumulator.accept(frames, charged: charges, stackIdentity: allocationBase as ProfileStackBase, lostItsRoot: false, hadNoChain: true)
+			accumulator.accept(frames, charged: charges, stackIdentity: stackIdentity, lostItsRoot: false, hadNoChain: true)
 
 			return ProfileThreadSample.charged(suspendedCycles)
 		end 'chargedWithNoRegisters'
@@ -554,10 +517,17 @@
 		// Everything here runs with the thread ALREADY RESUMED, over the copy. Nothing about walking or
 		// symbolizing needs the target held, and holding it would multiply the suspension by the stack's
 		// depth.
-		function chargedWithStack(stack SampledStack, charges ProfileCharges, accumulator ProfileAccumulator, image ProfileImage, frames ProfileStringArray) returns ProfileThreadSample
+		function chargedWithStack(stack SampledStack, thread SampledThread, charges ProfileCharges, accumulator ProfileAccumulator, image ProfileImage, frames ProfileStringArray) returns ProfileThreadSample
 			let walk = walkProfileFrames(frames, image: image, leafPc: stack.programCounter, framePointer: stack.framePointer, stackPointer: stack.stackPointer, window: stack.window)
-			let identity = walk.rootFrame if walk.rootFrame != 0 else stack.allocationBase
-			accumulator.accept(frames, charged: charges, stackIdentity: identity as ProfileStackBase, lostItsRoot: walk.lostItsRoot, hadNoChain: stack.window.byteCount() == 0)
+
+			if walk.runtimeOnly 'theRuntimesOwnMachinery'
+				accumulator.acceptRuntime(charges)
+
+				return ProfileThreadSample.charged(stack.suspendedCycles)
+			end 'theRuntimesOwnMachinery'
+
+			let identity = walk.rootFrame as ProfileStackBase if walk.rootFrame != 0 else profileStackIdentity(stack.reservation, thread: thread)
+			accumulator.accept(frames, charged: charges, stackIdentity: identity, lostItsRoot: walk.lostItsRoot, hadNoChain: stack.window.byteCount() == 0)
 
 			return ProfileThreadSample.charged(stack.suspendedCycles)
 		end 'chargedWithStack'
@@ -573,11 +543,19 @@
 	type ProfileWalk
 		export let lostItsRoot as bool
 		export let rootFrame as RegisterWord
+		export let runtimeOnly as bool
 
-		static function of(lostItsRoot bool, rootFrame RegisterWord) returns ProfileWalk
-			return Self{lostItsRoot: lostItsRoot, rootFrame: rootFrame}
+		static function of(lostItsRoot bool, rootFrame RegisterWord, runtimeOnly bool) returns ProfileWalk
+			return Self{lostItsRoot: lostItsRoot, rootFrame: rootFrame, runtimeOnly: runtimeOnly}
 		end 'of'
 	end 'ProfileWalk'
+
+	function profileStackIdentity(reservation StackReservation, thread SampledThread) returns ProfileStackBase
+		return match reservation 'reported'
+			base(address) gives address as ProfileStackBase
+			unreported gives thread.id as ProfileStackBase
+		end 'reported'
+	end 'profileStackIdentity'
 
 	union ProfileThreadSample
 		gone
@@ -596,35 +574,20 @@
 		return false
 	end 'profileThreadIdsContain'
 
-	// The image a session symbolizes against: the sidecar it was handed, plus a module snapshot taken while
-	// the target is certainly alive and before a single sample.
-	module function profileImageFor(session ProfileSession, placement ProfilePlacement, sidecar MxdbgReader) returns ProfileImageLoad
-		let modules = try session.loadedModules() otherwise 'unlisted'
-			return profileImageWithoutModules(placement, sidecar: sidecar)
-		end 'unlisted'
+	module function profileImageFor(session ProfileSession, sidecar MxdbgReader, textBytes DebugAddress) returns ProfileImageLoad
+		let modules = try session.loadedModules() otherwise ProfileModuleMap.over(SampledModuleArray.create())
 
-		// ⭐ A PINNED image is arithmetic on its own header; a RELOCATABLE one has to be asked where it
-		// landed, and refusing beats symbolizing every sample to a function that is wrong by the slide.
-		let mapped = modules.mainModuleBase()
-
-		if placement.relocatable and mapped == 0 'slidByAnUnknownAmount'
-			return ProfileImageLoad.refused(ProfileSlidImageReason)
-		end 'slidByAnUnknownAmount'
-
-		let base = placement.preferredTextBase if mapped == 0 else mapped
-
-		return ProfileImageLoad.loaded(ProfileImage.create(base + placement.textRva, textSize: placement.textSize, sidecar: sidecar, modules: modules))
+		return match executablePlacementOf(sidecar.target, loadedAt: modules.executableBase(sidecar.target) as DebugAddress) 'placed'
+			refused(reason) gives ProfileImageLoad.refused(reason)
+			ready(placement) gives ProfileImageLoad.loaded(profileImageAt(sidecar, textBytes: textBytes, placement: placement, modules: modules))
+		end 'placed'
 	end 'profileImageFor'
 
-	let ProfileSlidImageReason = "this binary sets DYNAMIC_BASE, so where its code was mapped is not what its header says, and the module list could not be read to find out. Every sample would be attributed to the wrong function."
+	function profileImageAt(sidecar MxdbgReader, textBytes DebugAddress, placement BackendImagePlacement, modules ProfileModuleMap) returns ProfileImage
+		let contract = DebugRuntimeContract.readFrom(sidecar, textBytes: textBytes, placement: placement)
 
-	function profileImageWithoutModules(placement ProfilePlacement, sidecar MxdbgReader) returns ProfileImageLoad
-		if placement.relocatable 'slidByAnUnknownAmount'
-			return ProfileImageLoad.refused(ProfileSlidImageReason)
-		end 'slidByAnUnknownAmount'
-
-		return ProfileImageLoad.loaded(ProfileImage.create(placement.preferredTextBase + placement.textRva, textSize: placement.textSize, sidecar: sidecar, modules: ProfileModuleMap.over(SampledModuleArray.create())))
-	end 'profileImageWithoutModules'
+		return ProfileImage.create(contract.textBase() as RegisterWord, textSize: contract.textSize() as RegisterWord, sidecar: sidecar, modules: modules)
+	end 'profileImageAt'
 
 	module union ProfileImageLoad
 		loaded(image ProfileImage)
