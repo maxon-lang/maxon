@@ -2146,9 +2146,21 @@ function x64LinuxEmitUnmapSlot(asm X64RuntimeAsm, baseSlot StackSize, byteSize M
 	encodeX64MunmapBaseInRdi(asm.code, length: X64MapLength.fixed(byteSize))
 end 'x64LinuxEmitUnmapSlot'
 
-function x64LinuxEmitReleaseObjectPage(asm X64RuntimeAsm, handleSlot StackSize)
+// What the slot passed to `x64LinuxEmitReleaseObjectPage` holds: the tagged handle `mrt_host_wait_new`
+// returned, or its payload an earlier untag already produced. A caller that has untagged pays no second shift pair.
+enum X64ObjectHandleForm
+	tagged
+	untagged
+end 'X64ObjectHandleForm'
+
+function x64LinuxEmitReleaseObjectPage(asm X64RuntimeAsm, handleSlot StackSize, form X64ObjectHandleForm)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(handleSlot), wide: true)
-	x64LinuxEmitUntagHandle(asm, reg: X64Register.rdi)
+
+	match form 'form'
+		tagged then x64LinuxEmitUntagHandle(asm, reg: X64Register.rdi)
+		untagged then break
+	end 'form'
+
 	encodeX64MunmapBaseInRdi(asm.code, length: X64MapLength.fixed(LinuxHostObjectPageBytes))
 end 'x64LinuxEmitReleaseObjectPage'
 
@@ -2506,8 +2518,9 @@ function buildX64LinuxThreadCreateChunk() returns FunctionCodeChunk
 	// this call took, in the reverse of the order it took it, and answer the NULL handle `spawnIt` reads as
 	// "no thread started" (it releases the P it claimed for this M).
 	asm.placeLabel(cloneFailed)
+
 	// Not `mrt_host_wait_close`: its static reach of `mrt_host_proc_reap` overflows the E5004 margin.
-	x64LinuxEmitReleaseObjectPage(asm, handleSlot: SlotObj)
+	x64LinuxEmitReleaseObjectPage(asm, handleSlot: SlotObj, form: X64ObjectHandleForm.tagged)
 	x64LinuxEmitUnmapSlot(asm, baseSlot: SlotTls, byteSize: LinuxHostObjectPageBytes)
 
 	asm.placeLabel(releaseStack)
@@ -2727,7 +2740,7 @@ function buildX64LinuxWaitCloseChunk() returns FunctionCodeChunk
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostProcReapName)
 
 	asm.placeLabel(unmapObject)
-	x64LinuxEmitReleaseObjectPage(asm, handleSlot: SlotObj)
+	x64LinuxEmitReleaseObjectPage(asm, handleSlot: SlotObj, form: X64ObjectHandleForm.untagged)
 
 	asm.placeLabel(closed)
 	return asm.finishFunction(HostWaitCloseName)

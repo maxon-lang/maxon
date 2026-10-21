@@ -8212,23 +8212,25 @@ end 'managedFieldDropCallee'
 // share and gives it back from its own destructor (`MailboxRuntime.MboxHandleDestructName`), so its
 // retain is the plain box incref.
 //
-// ⭐⭐ **THE THREE OS-HANDLE AGGREGATES TAKE THE PLAIN BOX INCREF, AND THAT IS SYMMETRIC.** They are
+// ⭐⭐ **THE FIVE OS-RESOURCE AGGREGATES TAKE THE PLAIN BOX INCREF, AND THAT IS SYMMETRIC.** They are
 // co-owned in ordinary programs (`file-io`, `managed-file`, `managed-directory`, `tcp-client`,
 // `http-client`, `async-tcp`, `file-info` and more route here), so this arm may not refuse them.
 //
 // ⚠ **THE RETAIN AND THE DROP ARE ALREADY BALANCED, AND THE DROP IS WHERE TO CHECK IT.**
-// `managedNameDropCallee` answers `__mf_destruct` / `__md_destruct` / `__ms_destruct` — each the
-// **refcount-CHECKED** teardown (see its own bullet: *"the refcount-checked teardown that does both"*). It
-// steps the count down and closes the handle only at zero, so one `__mm_incref` per co-owner is exactly its
-// dual. Closing twice needs a drop that closes UNCONDITIONALLY, which none of these three has.
+// `managedNameDropCallee` answers `__mf_destruct` / `__md_destruct` / `__ms_destruct` /
+// `__prof_pages_destruct` / `__prof_handle_destruct` — each the **refcount-CHECKED** teardown (see its own
+// bullet: *"the refcount-checked teardown that does both"*). It steps the count down and closes the handle
+// only at zero, so one `__mm_incref` per co-owner is exactly its dual. Closing twice needs a drop that
+// closes UNCONDITIONALLY, which none of these five has.
 //
 // A future aggregate whose drop releases more than the box owes an arm here, and it earns one by having that
 // shape — not by owning an OS handle.
 function managedNameRetainCallee(signatures ProgramSignatures, declaredName ByteArray, result RetainResult) returns ByteArray
 	return match compilerOwnedAggregateOf(signatures, name: declaredName) 'compilerOwned'
-		// Kept apart from `userDeclared` below though the callee is the same: these three answer it because
-		// their destruct is refcount-checked, that one because a plain box is a plain box. Same answer, two
-		// different reasons, and the day either reason changes only one arm should move.
+		// Kept apart from `userDeclared` below though the callee is the same: the five OS-resource arms answer
+		// it because their destruct is refcount-checked, `serviceHandle` because its box's own destructor steps
+		// the mailbox shares, `userDeclared` because a plain box is a plain box. Same answer, three different
+		// reasons, and the day any of them changes only one arm should move.
 		managedFile or
 		managedDirectory or
 		managedSocket or
@@ -8984,9 +8986,9 @@ function instanceCascadeStrategy(signatures ProgramSignatures, id GenericInstanc
 		return elementRecordCascadeStrategy(signatures, id: id, entries: chainCascadeEntries(action), asElement: asElement, action: action)
 	end 'theChain'
 
-	// The drop twin's service-handle arm. A handle's clone is a SECOND HANDLE to the same service, never a
-	// duplicated box: `__clone_<mangled>` would copy the mailbox pointer while stepping neither count. It
-	// sits with the other compiler-owned records rather than at the top, so the containers above pay nothing.
+	// A handle's clone is a SECOND HANDLE to the same service, never a duplicated box: `__clone_<mangled>`
+	// would copy the mailbox pointer while stepping neither count. It sits with the other compiler-owned
+	// records rather than at the top, so the containers above pay nothing.
 	if signatures.instanceBaseIsServiceHandle(id) 'serviceHandle'
 		return ManagedCascadeStrategy.direct(serviceHandleCascadeCallee(action, clone: MboxHandleCloneBoxName))
 	end 'serviceHandle'
@@ -22187,8 +22189,8 @@ export type ProgramSignatures
 	// is not to a defaulting callee, i.e. almost all of them. The same accounting `throwsMap.contains` is
 	// written for one registry over.
 	//
-	// Two askers: the gates of `Parser.fillOmittedArgDefaults` and
-	// `Parser.fillConstFactoryArgDefaults`.
+	// Three askers: the gates of `Parser.fillOmittedArgDefaults`,
+	// `Parser.fillConstFactoryArgDefaults` and `Parser.calleeFillsDefaultsAfter`.
 	export function declaresParamDefaults(callee ByteArray) returns bool
 		return self.settledDeclarations().funcParamDefaults.contains(callee)
 	end 'declaresParamDefaults'
@@ -41535,14 +41537,6 @@ export type ProgramSignatures
 			return ListNodeDecrefName
 		end 'managedListNode'
 
-		// ⭐⭐ **A GENERIC SERVICE'S HANDLE REACHES THIS ROUTER RATHER THAN THE NAME ONE** — it carries its
-		// instantiation, so the TAG decides and no name is ever asked. Its box's destructor releases the
-		// mailbox, so the drop is the plain decref, as `managedNameDropCallee`'s handle arm answers. Placed
-		// below the container arms so the common `Array` drop pays no extra probe for it.
-		if self.instanceBaseIsServiceHandle(id) 'serviceHandle'
-			return MmDecrefName
-		end 'serviceHandle'
-
 		if self.instanceBaseIsSharedValue(id) 'sharedValue'
 			return SharedValueBoxDropName
 		end 'sharedValue'
@@ -41557,6 +41551,9 @@ export type ProgramSignatures
 			panic("ProgramSignatures.genericInstanceBoxDropCallee: `{String.from(self.genericInstanceBaseName(id))}` is a synthesized builtin container with no drop-callee arm — a builtin's record is never reclaimed by __mm_decref, which would free the box and leak everything it links")
 		end 'builtinOwesADropCallee'
 
+		// A generic service's handle lands here, and it carries its instantiation, so the tag decides and no
+		// name is asked. Its one field is the mailbox word (`buildServiceHandleStruct` panics on a second), so
+		// it takes the plain decref, and the box's own destructor releases the mailbox.
 		if self.genericInstanceHasManagedField(id) 'managed'
 			return destructorSymbol(self.mangleGenericInstance(id))
 		end 'managed'

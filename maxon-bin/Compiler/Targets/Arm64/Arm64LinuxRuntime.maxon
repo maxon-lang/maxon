@@ -1717,10 +1717,9 @@ end 'buildArm64LinuxWaitNewChunk'
 // shape this lane's host objects have, shared by the wait object, the per-thread slot block and a worker M's
 // stack. The parameters are `PosixMmap`'s, the same ones `lowerOsAllocPages` marshals.
 //
-// ⚠ **THE SIZE IS AN ARGUMENT BECAUSE A WORKER M's STACK IS NOT ONE PAGE.** It was `arm64LinuxEmitMapPage`
-// with `LinuxHostObjectPageBytes` baked in while every host object here happened to be exactly one page;
-// a second spelling of the six-register `mmap` shuffle for the one caller that wants a megabyte is precisely
-// the duplication this file refuses everywhere else.
+// ⚠ **THE SIZE IS AN ARGUMENT BECAUSE A WORKER M's STACK IS NOT ONE PAGE.** Host objects are one page
+// each, but the stack is a megabyte, and a second spelling of the six-register `mmap` shuffle for it would
+// be the duplication this file refuses everywhere else.
 function arm64LinuxEmitMapAnon(asm Arm64RuntimeAsm, byteSize MachineWord)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: MmapKernelChoosesBase)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: byteSize)
@@ -1731,9 +1730,21 @@ function arm64LinuxEmitMapAnon(asm Arm64RuntimeAsm, byteSize MachineWord)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallMmap)
 end 'arm64LinuxEmitMapAnon'
 
-function arm64LinuxEmitReleaseObjectPage(asm Arm64RuntimeAsm, handleSlot StackSize)
+// What the slot passed to `arm64LinuxEmitReleaseObjectPage` holds: the tagged handle `mrt_host_wait_new`
+// returned, or its payload an earlier untag already produced. A caller that has untagged pays no second untag.
+enum Arm64ObjectHandleForm
+	tagged
+	untagged
+end 'Arm64ObjectHandleForm'
+
+function arm64LinuxEmitReleaseObjectPage(asm Arm64RuntimeAsm, handleSlot StackSize, form Arm64ObjectHandleForm)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: handleSlot)
-	arm64PosixUntagHandle(asm, reg: Arm64Register.x0)
+
+	match form 'form'
+		tagged then arm64PosixUntagHandle(asm, reg: Arm64Register.x0)
+		untagged then break
+	end 'form'
+
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: LinuxHostObjectPageBytes as MachineWord)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallMunmap)
 end 'arm64LinuxEmitReleaseObjectPage'
@@ -1871,8 +1882,9 @@ function buildArm64LinuxThreadCreateChunk(globalData GlobalDataTable) returns Fu
 	// this call took, in the reverse of the order it took it, and answer the NULL handle `spawnIt` already
 	// reads as "no thread started" (it releases the P it claimed for this M).
 	asm.placeLabel(cloneFailed)
+
 	// Not `mrt_host_wait_close`: its static reach of `mrt_host_proc_reap` overflows the E5004 margin.
-	arm64LinuxEmitReleaseObjectPage(asm, handleSlot: SlotObj)
+	arm64LinuxEmitReleaseObjectPage(asm, handleSlot: SlotObj, form: Arm64ObjectHandleForm.tagged)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotTls)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: LinuxHostObjectPageBytes as MachineWord)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallMunmap)
@@ -2109,7 +2121,7 @@ function buildArm64LinuxWaitCloseChunk() returns FunctionCodeChunk
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostProcReapName)
 
 	asm.placeLabel(unmapObject)
-	arm64LinuxEmitReleaseObjectPage(asm, handleSlot: SlotObj)
+	arm64LinuxEmitReleaseObjectPage(asm, handleSlot: SlotObj, form: Arm64ObjectHandleForm.untagged)
 
 	asm.placeLabel(closed)
 	return asm.finishFunction(HostWaitCloseName)
