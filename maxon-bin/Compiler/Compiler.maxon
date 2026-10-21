@@ -860,11 +860,30 @@ function requireNoUnresolvedTagsSurvivedTheMaxonTier(module MaxonModule)
 	for func in module.functions 'eachFunc'
 		for (iter, tag) in func.valueTags.withIterator() 'eachValue'
 			if tagIsUnresolved(tag) 'anUnresolvedSurvived'
-				panic("requireNoUnresolvedTagsSurvivedTheMaxonTier: v{iter.index()} of '{String.from(func.name)}' still carries an `unresolved` type tag past `semanticCheck`. An `unresolved` is minted only for a call whose callee `ProgramSignatures.returnTypeOf` reported UNDECLARED, and `SemanticCheck.validateCall` must have refused that program with E3004 before this line. A tag surviving here means some undeclared callee escapes that refusal — and a closure whose body type is this value publishes `MaxonType.integer` as its return type (Parser's closure lift), so the program would be EMITTED returning an int from a body that returns something else.")
+				panic("requireNoUnresolvedTagsSurvivedTheMaxonTier: v{iter.index()} of '{String.from(func.name)}' still carries an `unresolved` type tag past `semanticCheck`; it is {unresolvedValueOrigin(module, func: func, value: iter.index() as ValueId)}. An `unresolved` value rests on an error already reported — a call whose callee `ProgramSignatures.returnTypeOf` reported UNDECLARED (which `SemanticCheck.validateCall` refuses with E3004), a poisoned constant or global, an enum case's backing, a closure parameter a deferred member offered — and a tag surviving here means one of them escaped its refusal. A closure whose body type is this value publishes `MaxonType.integer` as its return type (Parser's closure lift), so the program would be EMITTED returning an int from a body that returns something else.")
 			end 'anUnresolvedSurvived'
 		end 'eachValue'
 	end 'eachFunc'
 end 'requireNoUnresolvedTagsSurvivedTheMaxonTier'
+
+function unresolvedValueOrigin(module MaxonModule, func IrFunction, value ValueId) returns String
+	for opIdx in module.liveOpIndices(func) 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("unresolvedValueOrigin: opIdx {opIdx} from liveOpIndices is not in module.ops")
+		let defined = try maxonOpDefinedValue(op) otherwise continue
+
+		if defined != value 'anotherValue'
+			continue
+		end 'anotherValue'
+
+		if maxonOpCalleeKind(op) == MaxonCalleeKind.direct 'aCall'
+			return "the result of a call to '{String.from(maxonOpCalleeName(op))}'"
+		end 'aCall'
+
+		return "the result of an op that names no callee"
+	end 'eachOp'
+
+	return "a value no op defines"
+end 'unresolvedValueOrigin'
 
 function lowerTheProgram(project Project, passes PassKindArray) returns LoweredProgram throws CompileError
 	// ⭐ **THE DIAGNOSTICS OF *THIS* COMPILE, NOT OF EVERY COMPILE THIS PROJECT HAS EVER RUN.** A warm

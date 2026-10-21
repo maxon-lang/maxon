@@ -310,6 +310,24 @@ end 'main'
 error E3179: <fragment>:4:29: type parameter 'T' of 'make' cannot be inferred: no parameter is declared 'T'
 ```
 
+<!-- test: error.an-argument-from-an-undefined-call-is-the-only-report-of-a-generic-call -->
+The type parameter cannot be inferred from an argument whose type nothing knows, and that argument has
+already been refused at its call, so inference reports nothing.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function larger(a T, b T) uses T returns T where T is Comparable
+	return a if a > b else b
+end 'larger'
+
+function main() returns ExitCode
+	return larger(1 as Integer, b: frobnicate(2)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:9:33: call to undefined function 'frobnicate'
+```
+
 <!-- test: a-generic-static-method -->
 ```maxon
 type MathUtil

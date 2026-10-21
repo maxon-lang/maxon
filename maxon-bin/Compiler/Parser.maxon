@@ -2093,58 +2093,6 @@ export union SourceParseError implements Error
 	extensionMemberHidesOwnMember(explanation String, line LineNumber, column ColumnNumber, let note DiagnosticNote)
 end 'SourceParseError'
 
-export type DeferredParseError
-	export let error as SourceParseError
-	export let filePath as FilePath
-	export let funcIndex as ElementIndex
-	export let value as ValueId
-
-	export static function create(error SourceParseError, filePath FilePath, funcIndex ElementIndex, value ValueId) returns DeferredParseError
-		return Self{error: error, filePath: filePath, funcIndex: funcIndex, value: value}
-	end 'create'
-
-	export function relocated(funcOffset ElementIndex) returns DeferredParseError
-		return Self{error: self.error, filePath: self.filePath, funcIndex: self.funcIndex + funcOffset, value: self.value}
-	end 'relocated'
-
-	// @generated library-cache begin
-	function cacheWrite(writer LibraryCacheWriter)
-		writer.refuse()
-	end 'cacheWrite'
-
-	static function cacheRead(_ LibraryCacheReader) returns DeferredParseError throws LibraryCacheDamage
-		throw LibraryCacheDamage.unrepresentable
-	end 'cacheRead'
-
-	// @generated library-cache end
-end 'DeferredParseError'
-
-export typealias DeferredParseErrorArray = Array with DeferredParseError
-
-// @generated library-cache begin
-module function cacheWriteDeferredParseErrorArray(writer LibraryCacheWriter, value DeferredParseErrorArray)
-	writer.unsigned(value.count() as CacheUnsigned)
-
-	for item in value 'eachItem'
-		item.cacheWrite(writer)
-	end 'eachItem'
-end 'cacheWriteDeferredParseErrorArray'
-
-module function cacheReadDeferredParseErrorArray(reader LibraryCacheReader) returns DeferredParseErrorArray throws LibraryCacheDamage
-	let count = try reader.count()
-	var result = DeferredParseErrorArray.create()
-	result.reserve(count)
-
-	for _ in 0 upto count 'eachItem'
-		let item = try DeferredParseError.cacheRead(reader)
-		result.push(item)
-	end 'eachItem'
-
-	return result
-end 'cacheReadDeferredParseErrorArray'
-
-// @generated library-cache end
-
 // Which refusal an `end` whose label does not repeat its header's is: a block's (E2008) or a match's (E2043).
 enum EndLabelRule
 	block
@@ -2314,7 +2262,16 @@ end 'ZeroElementRefusal'
 enum LiteralEntryShape
 	element
 	pair
+	tupleElement
 end 'LiteralEntryShape'
+
+function literalEntryCloser(entry LiteralEntryShape) returns TokenKind
+	return match entry 'entry'
+		element or
+		pair gives TokenKind.rightBracket
+		tupleElement gives TokenKind.rightParen
+	end 'entry'
+end 'literalEntryCloser'
 
 enum SoughtGive
 	known
@@ -3032,7 +2989,7 @@ type ForSourceFacts
 
 	// Set when the source is a call to no declared function: the body's element is then an
 	// `unresolved` value derived from it.
-	export var deferredSource as DeferralSource
+	export var sourceIsDeferred as bool
 
 	// The cursor protocol this source is walked through, when it is walked by one.
 	export var cursorSurface as MethodSurface
@@ -3047,7 +3004,7 @@ type ForSourceFacts
 	export var readsReadOnlyElements as bool
 
 	static function create(limit ValueId, testAnchorIndex ElementIndex) returns ForSourceFacts
-		return Self{isRange: false, rangeInclusive: false, limit: limit, testAnchorIndex: testAnchorIndex, isCharacterRange: false, isString: false, deferredSource: DeferralSource.none, cursorSurface: MethodSurface.none, cursorEntrySeed: CursorEntrySeed.atTheFirstElement, claimsWithIteratorPromise: false, readsReadOnlyElements: false}
+		return Self{isRange: false, rangeInclusive: false, limit: limit, testAnchorIndex: testAnchorIndex, isCharacterRange: false, isString: false, sourceIsDeferred: false, cursorSurface: MethodSurface.none, cursorEntrySeed: CursorEntrySeed.atTheFirstElement, claimsWithIteratorPromise: false, readsReadOnlyElements: false}
 	end 'create'
 end 'ForSourceFacts'
 
@@ -4233,7 +4190,7 @@ union ClosureParamOffer
 	// An argument of a member called on an undeclared call's result: the member, and so its parameter
 	// types, cannot be known, and each omitted type is `unresolved`. Sound only because E3004 at that
 	// call rejects the program before lowering.
-	deferred(sourceFuncIndex ElementIndex, sourceId ValueId)
+	deferred
 end 'ClosureParamOffer'
 
 // The one `none`, shared: a payload-free union case is still a heap object, and this is the answer for nearly
@@ -14814,13 +14771,12 @@ type TryBlockContext
 	// throw (see `routeThrowingOp`).
 	export var conflictingMoveEdge as bool
 
-	// The first deferred value (one resting on an undeclared call) this body minted, `none` until one
-	// is. A body that routed nothing but holds one is not refused E3083, which would land in front of
-	// the E3004 that explains it.
-	export var deferredCause as DeferralSource
+	// A body that routed nothing but minted a deferred value (one resting on an undeclared call) is not
+	// refused E3083, which would land in front of the E3004 that explains it.
+	export var holdsADeferredValue as bool
 
 	static function create(tryTok Token, label ByteArray, errBlockId BlockId, flagPhi ValueId, phiVars LoopPhiVarArray, ownedFloor ElementIndex, emptyMark MoveMark) returns TryBlockContext
-		return Self{tryTok: tryTok, label: label, errBlockId: errBlockId, flagPhi: flagPhi, phiVars: phiVars, ownedFloor: ownedFloor, members: TryBlockErrorMemberArray.create(), routedEdges: RoutedErrorEdgeArray.create(), unfusableMember: "", edgeMoveMark: MoveMark.create(MoveSlots.empty(), consumes: PromiseConsumeRecordArray.create(), gives: emptyMark.conditionallyGiven), conflictingMoveEdge: false, deferredCause: DeferralSource.none}
+		return Self{tryTok: tryTok, label: label, errBlockId: errBlockId, flagPhi: flagPhi, phiVars: phiVars, ownedFloor: ownedFloor, members: TryBlockErrorMemberArray.create(), routedEdges: RoutedErrorEdgeArray.create(), unfusableMember: "", edgeMoveMark: MoveMark.create(MoveSlots.empty(), consumes: PromiseConsumeRecordArray.create(), gives: emptyMark.conditionallyGiven), conflictingMoveEdge: false, holdsADeferredValue: false}
 	end 'create'
 
 	export function throwsClause() returns ThrowsClause
@@ -40943,7 +40899,7 @@ export type Parser
 	function destructuredElement(value ValueId, source DestructuredSource, index FieldIndex, range SourceRange) returns ValueId
 		return match source 'source'
 			tuple(layout) gives self.emitFieldLoad(value, layout: layout, index: index, range: range)
-			deferred gives self.deferredFrom(value)
+			deferred gives self.mintDeferredValue()
 		end 'source'
 	end 'destructuredElement'
 
@@ -41216,20 +41172,20 @@ export type Parser
 		// any `_ = f(…)`.
 		if nameTok.value.equals(DiscardBindingName) 'discardResult'
 			let discardOpFloor = self.artifact.module.ops.count()
-			let discardDeferralFloor = self.artifact.deferralSources.count()
+			let discardDeferralFloor = self.artifact.deferredChains.count()
 			let rhsStart = self.pos
 			let discarded = try self.parseExpression(func, block: block)
 
 			// E3067's `_ =` door: the discard opts out of a verdict on an effect, so there must be one.
 			// `_ = 42`, `_ = c.name`, `_ = a + b` and `_ = round(1.5)` compute a value nothing would
-			// complain about. A call on a deferred value emits no op, so its `deferralSources` row counts
+			// complain about. A call on a deferred value emits no op, so its `deferredChains` row counts
 			// as one. Any call in the statement counts, as any op does for `statementCallsOrAwaits`, where
 			// the `try` door asks whether the target value itself is a call.
 			//
 			// A `void` right-hand side cannot reach here — `_ = f()` on a void callee is E2004 from the
 			// expression itself — so the void guard `recordDiscardedCallResult` carries for the
 			// bare-statement door is not repeated.
-			if not self.statementCallsOrAwaits(discardOpFloor) and not self.rhsIsABareBinding(rhsStart) and not self.artifact.deferralSources.recordsACallAbove(discardDeferralFloor) 'nothingWasCalled'
+			if not self.statementCallsOrAwaits(discardOpFloor) and not self.rhsIsABareBinding(rhsStart) and not self.artifact.deferredChains.recordsACallAbove(discardDeferralFloor) 'nothingWasCalled'
 				throw SourceParseError.discardExpectsACall(nameTok.line, column: nameTok.column)
 			end 'nothingWasCalled'
 
@@ -45272,7 +45228,7 @@ export type Parser
 
 			// Noted even when the value was minted outside the block: a body whose only throw is this one
 			// routes nothing, and would otherwise be refused E3083 in front of the E3004 that explains it.
-			self.noteDeferredValueInTryBlock(errValue)
+			self.noteDeferredValueInTryBlock()
 			self.endADeferredThrow(errValue, routed: routed, anchor: anchor)
 			return
 		end 'notAnErrorType'
@@ -45702,7 +45658,7 @@ export type Parser
 		// sit above it — what `endBlockAfterUnreachableTail` drains if the ok edge turns out to be unreachable
 		// Read only on that path; every other `try` ignores it.
 		let tempFloor = self.bodyState.pendingTempDrops.count()
-		let targetDeferralFloor = self.artifact.deferralSources.count()
+		let targetDeferralFloor = self.artifact.deferredChains.count()
 		let result = try self.parseTryCallTarget(func)
 		let (target, flag) = try self.rewriteLastCallToTryCall(result, tryTok: tryTok, targetDeferralFloor: targetDeferralFloor, targetOpFloor: targetOpFloor)
 		var leg = self.takeSentLeg()
@@ -45860,7 +45816,7 @@ export type Parser
 				promise(facts) then return (try self.emitAwaitOp(promise, facts: self.holdTheSendOfAnAwait(promise, facts: facts), awaitTok: awaitTok)).0
 
 				// Derived as a call, so `rewriteLastCallToTryCall` answers it `TryTarget.deferred`.
-				deferred(result) then return self.deferredValueFrom(self.artifact.currentFuncIndex, sourceId: result, chainCalls: DeferredChainCalls.lastLinkIsACall)
+				deferred then return self.deferredValueOfChain(DeferredChainCalls.lastLinkIsACall)
 			end 'operand'
 		end 'awaitTarget'
 
@@ -46151,8 +46107,8 @@ export type Parser
 		// Asked before `opProducingTheValue`: a deferred chain whose base emits an op of its own (a
 		// captured `var` read through its cell) would otherwise have that unrelated op rewritten as the
 		// target.
-		if self.artifact.deferralSources.lastLinkIsACallAbove(targetDeferralFloor, funcIndex: self.artifact.currentFuncIndex, valueId: target) 'aDeferredCall'
-			return (TryTarget.deferred, self.deferredFrom(target))
+		if self.artifact.deferredChains.lastLinkIsACallAbove(targetDeferralFloor, funcIndex: self.artifact.currentFuncIndex, valueId: target) 'aDeferredCall'
+			return (TryTarget.deferred, self.mintDeferredValue())
 		end 'aDeferredCall'
 
 		// `try (a)`, which emits nothing, and `try (a + b)` are refused with one sentence
@@ -48004,7 +47960,7 @@ export type Parser
 		// could disagree. A body that routed nothing but minted a deferred value is not refused: `(e)` is
 		// bound deferred (`caughtFlagOf`), and the E3004 at the undeclared call is the program's
 		// diagnostic.
-		if not throwsClauseIsThrowing(ctx.throwsClause()) and not ctx.deferredCause.isDeferred() 'noThrowingCalls'
+		if not throwsClauseIsThrowing(ctx.throwsClause()) and not ctx.holdsADeferredValue 'noThrowingCalls'
 			throw SourceParseError.tryBlockNoThrows(String.from(ctx.label), line: tryTok.line, column: tryTok.column)
 		end 'noThrowingCalls'
 
@@ -48032,10 +47988,11 @@ export type Parser
 			return ctx.flagPhi
 		end 'aRoutedBody'
 
-		match ctx.deferredCause 'cause'
-			none then panic("caughtFlagOf: a body that routed nothing and deferred nothing is refused E3083 by `requireRoutableTryBlockBody` before this runs")
-			value(funcIndex, valueId) then return self.deferredValueFrom(funcIndex, sourceId: valueId, chainCalls: DeferredChainCalls.noCall)
-		end 'cause'
+		if not ctx.holdsADeferredValue 'neitherRoutedNorDeferred'
+			panic("caughtFlagOf: a body that routed nothing and deferred nothing is refused E3083 by `requireRoutableTryBlockBody` before this runs")
+		end 'neitherRoutedNorDeferred'
+
+		return self.mintDeferredValue()
 	end 'caughtFlagOf'
 
 	// ⭐⭐ **BUILD THE SYNTHESIZED ERROR UNION — the `(e)` binding's type when the body routed TWO OR MORE
@@ -53775,7 +53732,7 @@ export type Parser
 		let tryTok = try self.consume(TokenKind.try)
 
 		let targetOpFloor = self.artifact.module.ops.count()
-		let targetDeferralFloor = self.artifact.deferralSources.count()
+		let targetDeferralFloor = self.artifact.deferredChains.count()
 		let sourceStart = self.pos
 		self.lastBareBindingImmutableName = WriteBlame.unblamed
 		let result = try self.parseTryCallTarget(func)
@@ -54486,7 +54443,7 @@ export type Parser
 		// (`absorbThrowingCursorSource`) nor a release of the claimed op (`releaseHeldThrowingOp`) may
 		// reach below it, so neither touches a call the previous statement emitted.
 		let sourceOpFloor = self.artifact.module.ops.count()
-		let sourceDeferralFloor = self.artifact.deferralSources.count()
+		let sourceDeferralFloor = self.artifact.deferredChains.count()
 
 		// `var` for the ONE rewrite a collection source can undergo: a `Map` is replaced by its materialized
 		// entries below, which is what makes every question after this point an ARRAY's question.
@@ -54518,7 +54475,7 @@ export type Parser
 		// with E3004 at the call, and a refusal here would land in front of that one, at the `for`.
 		// Earlier and `src` does not exist; later and `requireIterableSource` has already spoken.
 		if self.valueIsDeferred(source) 'deferredCallSource'
-			src.deferredSource = DeferralSource.value(self.artifact.currentFuncIndex, valueId: source)
+			src.sourceIsDeferred = true
 			source = self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
 			src.isRange = true
 			src.limit = source
@@ -54856,9 +54813,8 @@ export type Parser
 		// The element is not the counter the stand-in range steps: every body consumer already has an arm for
 		// `unresolved`, where an `int` element earns a refusal of its own — a destructuring pattern rejects
 		// "a 'int' element", a method call "'int' has no method" — in front of E3004.
-		match src.deferredSource 'deferredCallElement'
-			value(sourceFuncIndex, sourceId) then loopValue = self.deferredValueFrom(sourceFuncIndex, sourceId: sourceId, chainCalls: DeferredChainCalls.noCall)
-			none then break
+		if src.sourceIsDeferred 'deferredCallElement'
+			loopValue = self.mintDeferredValue()
 		end 'deferredCallElement'
 
 		// ⭐ **A CHARACTER RANGE MINTS ITS ELEMENT FROM THE COUNTER**, where a String mints it from a byte
@@ -55581,7 +55537,7 @@ export type Parser
 		// The floor `rewriteLastCallToTryCall` measures "the target's own op" against — see `parseTry`, which
 		// captures it at the same point and for the same reason.
 		let targetOpFloor = self.artifact.module.ops.count()
-		let targetDeferralFloor = self.artifact.deferralSources.count()
+		let targetDeferralFloor = self.artifact.deferredChains.count()
 
 		// Claimed for every destination: this function rewrites the call into the try channel itself, so
 		// no router may rewrite it first, or `rewriteLastCallToTryCall` would meet a `tryCall` it must
@@ -58913,7 +58869,7 @@ export type Parser
 
 				if hasPayloadBindings 'openArmBindings'
 					if deferredScrutinee 'deferredScrutineeBindings'
-						try self.declareDeferredPatternBindings(func, names: deferredBindings, scrut: scrut)
+						try self.declareDeferredPatternBindings(func, names: deferredBindings)
 					end 'deferredScrutineeBindings' else 'payloadSlotBindings'
 						let armMovedManaged = try self.declarePayloadBindings(arm.bindings, scrutBox: payloadBox, scrutSolelyOwned: scrutSolelyOwned, scrutMutable: scrutMutable, scrutIsAFreshTemporary: scrutIsAFreshTemporary, layout: requireEnumLayout(arm.payloadEnum))
 
@@ -60385,7 +60341,7 @@ export type Parser
 		// A bare identifier (that is not `min`/`max`, handled by the caller) is an enum-case pattern.
 		if self.at(TokenKind.identifier) 'enumCasePattern'
 			if self.valueIsDeferred(scrut) 'aDeferredScrutinee'
-				return try self.deferredCasePattern(scrut)
+				return try self.deferredCasePattern()
 			end 'aDeferredScrutinee'
 
 			try self.refuseCasePatternOverAScalar(scrut, patternTok: firstTok)
@@ -60769,7 +60725,7 @@ export type Parser
 		throw SourceParseError.expectedExpression(expressionOperandDisplayText(firstTok), line: firstTok.line, column: firstTok.column)
 	end 'decodeScalarPatternBound'
 
-	function deferredCasePattern(scrut ValueId) returns ValueId throws SourceParseError
+	function deferredCasePattern() returns ValueId throws SourceParseError
 		try self.consume(TokenKind.identifier)
 
 		while self.at(TokenKind.dot) 'qualifiedCase'
@@ -60785,7 +60741,7 @@ export type Parser
 			end 'eachBinding'
 		end 'payloadBindings'
 
-		return self.deferredFrom(scrut)
+		return self.mintDeferredValue()
 	end 'deferredCasePattern'
 
 	function takeDeferredPatternBindings() returns TokenArray
@@ -60795,9 +60751,9 @@ export type Parser
 		return taken
 	end 'takeDeferredPatternBindings'
 
-	function declareDeferredPatternBindings(func IrFunction, names TokenArray, scrut ValueId) throws SourceParseError
+	function declareDeferredPatternBindings(func IrFunction, names TokenArray) throws SourceParseError
 		for nameTok in names 'eachBinding'
-			try self.declareInitializedBinding(func, nameTok: nameTok, value: self.deferredFrom(scrut), sourceName: SourceBinding.none, sourceReadsAField: false, kind: BindingKind.let)
+			try self.declareInitializedBinding(func, nameTok: nameTok, value: self.mintDeferredValue(), sourceName: SourceBinding.none, sourceReadsAField: false, kind: BindingKind.let)
 		end 'eachBinding'
 	end 'declareDeferredPatternBindings'
 
@@ -69198,6 +69154,10 @@ export type Parser
 		// (`repeatedOwningDestinationWouldDoubleFree`).
 		var movedOwningValues = ValueIdArray.create()
 
+		if self.valueIsDeferred(first) 'aDeferredFirstElement'
+			return try self.deferredLiteralRest(func, entry: LiteralEntryShape.tupleElement)
+		end 'aDeferredFirstElement'
+
 		try self.collectTupleElement(elementValues, elementBareLocal: elementBareLocal, elementTypes: elementTypes, elementBrands: elementBrands, movedOwningValues: movedOwningValues, value: first, valueStart: firstStart, target: target)
 		elementStarts.push(firstStart)
 
@@ -69206,6 +69166,11 @@ export type Parser
 			let valueStart = self.pos
 			self.stateTupleColumnTargetAt(target, column: elementValues.count() as FieldIndex, valueStart: valueStart)
 			let value = try self.parseValueExpression(func)
+
+			if self.valueIsDeferred(value) 'aDeferredElement'
+				return try self.deferredLiteralRest(func, entry: LiteralEntryShape.tupleElement)
+			end 'aDeferredElement'
+
 			try self.collectTupleElement(elementValues, elementBareLocal: elementBareLocal, elementTypes: elementTypes, elementBrands: elementBrands, movedOwningValues: movedOwningValues, value: value, valueStart: valueStart, target: target)
 			elementStarts.push(valueStart)
 		end 'eachElement'
@@ -71661,48 +71626,43 @@ export type Parser
 		try self.requireManagedValueMatches(payloadValueTypeOf(class, declared: declared), isString: payloadClassIsString(class), value: value, placeDoor: placeDoor, placeName: placeName, placeOwner: placeOwner, placeBrand: placeBrand, placeSpelling: placeSpelling, voice: voice, anchor: anchor)
 	end 'requireManagedSlotValueMatches'
 
-	// A refusal earned by a deferred value — a call no file declares, or a value derived from one —
-	// handed whole to a declared type is recorded rather than thrown: a throw ends the file's parse,
-	// so `SemanticCheck.checkCalls` never reports the E3004 that explains it and the author is shown
-	// only this symptom, at a consumer line. Only the report is deferred: the entry carries the
-	// finished `SourceParseError`, and the value, so `SemanticCheck.deferralCause` can trace the refusal to
-	// the calls it rests on.
+	// A deferred value — a call no file declares, or a value derived from one — is refused once, by the
+	// E3004 `SemanticCheck.checkCalls` reports at the call, so a type rule that meets it reports nothing: a
+	// throw would end the file's parse before that E3004 is found.
 	// `mintCallResult` owns the rule.
 	function refuseUnlessDeferred(error SourceParseError, value ValueId) throws SourceParseError
 		if not self.valueIsDeferred(value) 'notADeferredCallResult'
 			throw error
 		end 'notADeferredCallResult'
-
-		self.artifact.deferredParseErrors.push(DeferredParseError.create(error, filePath: self.artifact.filePath, funcIndex: self.artifact.currentFuncIndex, value: value))
 	end 'refuseUnlessDeferred'
 
-	// The operand twin of `refuseUnlessDeferred`: a construct applied to a deferred operand records no
-	// refusal and yields a value derived from it, which stays unknown until it is handed whole to a
-	// declared type.
+	// The operand twin of `refuseUnlessDeferred`: a construct applied to a deferred operand reports nothing
+	// and yields a deferred value.
 	function deferredResultOrRefusal(error SourceParseError, value ValueId) returns ValueId throws SourceParseError
 		if not self.valueIsDeferred(value) 'aKnownOperand'
 			throw error
 		end 'aKnownOperand'
 
-		return self.deferredFrom(value)
+		return self.mintDeferredValue()
 	end 'deferredResultOrRefusal'
 
-	// Once an entry is deferred the literal's element type is unknowable, so nothing more is built:
+	// Once an entry is deferred the literal's type is unknowable, so nothing more is built:
 	// the remaining entries are parsed for their own diagnostics and the whole literal answers a
 	// deferred value.
-	function deferredLiteralRest(func IrFunction, first ValueId, entry LiteralEntryShape) returns ValueId throws SourceParseError
+	function deferredLiteralRest(func IrFunction, entry LiteralEntryShape) returns ValueId throws SourceParseError
 		while try self.atAnotherLiteralEntry() 'moreEntries'
 			_ = try self.parseExpression(func, block: self.bodyState.currentBlock)
 
 			match entry 'entry'
-				element then break
+				element or
+				tupleElement then break
 				pair then try self.skipDeferredPairValue(func)
 			end 'entry'
 		end 'moreEntries'
 
-		try self.consume(TokenKind.rightBracket)
+		try self.consume(literalEntryCloser(entry))
 
-		return self.deferredFrom(first)
+		return self.mintDeferredValue()
 	end 'deferredLiteralRest'
 
 	function skipDeferredPairValue(func IrFunction) throws SourceParseError
@@ -71710,10 +71670,10 @@ export type Parser
 		_ = try self.parseExpression(func, block: self.bodyState.currentBlock)
 	end 'skipDeferredPairValue'
 
-	function deferredMapLiteralFromKey(func IrFunction, key ValueId) returns ValueId throws SourceParseError
+	function deferredMapLiteralFromKey(func IrFunction) returns ValueId throws SourceParseError
 		try self.skipDeferredPairValue(func)
 
-		return try self.deferredLiteralRest(func, first: key, entry: LiteralEntryShape.pair)
+		return try self.deferredLiteralRest(func, entry: LiteralEntryShape.pair)
 	end 'deferredMapLiteralFromKey'
 
 	function atAnotherLiteralEntry() returns bool throws SourceParseError
@@ -76425,7 +76385,7 @@ export type Parser
 		self.noteMethodCallMutabilityUses(recv)
 
 		if tagIsUnresolved(recv.tag) 'deferredCallError'
-			return try self.deferredUnresolvedMemberResult(func, sourceFuncIndex: self.artifact.currentFuncIndex, sourceId: recv.value)
+			return try self.deferredUnresolvedMemberResult(func)
 		end 'deferredCallError'
 
 		try self.consume(TokenKind.dot)
@@ -78343,9 +78303,8 @@ export type Parser
 		let baseName = self.baseBindingName(baseTok)
 		view binding = enclosing.getInfo(baseName)
 
-		match self.deferralSourceOfBinding(binding, frame: self.capturedFrame(frame).funcIndex) 'deferredBase'
-			value(sourceFuncIndex, sourceId) then return try self.deferredUnresolvedMemberResult(func, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId)
-			none then break
+		if self.baseBindingIsADeferredCallResult(binding) 'deferredBase'
+			return try self.deferredUnresolvedMemberResult(func)
 		end 'deferredBase'
 
 		let capturedTag = maxonTypeTag(binding.varType)
@@ -80071,7 +80030,7 @@ export type Parser
 		end 'mapLiteral'
 
 		if self.valueIsDeferred(first) 'aDeferredFirstElement'
-			return try self.deferredLiteralRest(func, first: first, entry: LiteralEntryShape.element)
+			return try self.deferredLiteralRest(func, entry: LiteralEntryShape.element)
 		end 'aDeferredFirstElement'
 
 		// ⚠ **THE STATED INSTANCE IS TAKEN WITHOUT ASKING THE FIRST ELEMENT AT ALL**, which is the point: under
@@ -80146,7 +80105,7 @@ export type Parser
 			let parsed = try self.parseArrayLiteralTailElement(func, giid: giid)
 
 			if self.valueIsDeferred(parsed.value) 'aDeferredElement'
-				return try self.deferredLiteralRest(func, first: parsed.value, entry: LiteralEntryShape.element)
+				return try self.deferredLiteralRest(func, entry: LiteralEntryShape.element)
 			end 'aDeferredElement'
 
 			values.push(parsed.value)
@@ -80614,7 +80573,7 @@ export type Parser
 			let parsed = try self.parseArrayLiteralTailElement(func, giid: giid)
 
 			if self.valueIsDeferred(parsed.value) 'aDeferredElement'
-				return try self.deferredLiteralRest(func, first: parsed.value, entry: LiteralEntryShape.element)
+				return try self.deferredLiteralRest(func, entry: LiteralEntryShape.element)
 			end 'aDeferredElement'
 
 			try self.pushArrayLiteralElement(arr, elem: parsed.value, giid: giid, valueStart: parsed.start, range: range)
@@ -82366,7 +82325,7 @@ export type Parser
 		let first = try self.parseExpression(func, block: self.bodyState.currentBlock)
 
 		if self.valueIsDeferred(first) 'aDeferredFirstMember'
-			return try self.deferredLiteralRest(func, first: first, entry: LiteralEntryShape.element)
+			return try self.deferredLiteralRest(func, entry: LiteralEntryShape.element)
 		end 'aDeferredFirstMember'
 
 		let keyType = try self.literalColumnTypeFor(first, literalKind: SetLiteralSubject, columnNoun: HashTableKeyColumnNoun, valueTok: firstTok)
@@ -82391,7 +82350,7 @@ export type Parser
 			let member = try self.parseHashTableColumnArg(func, columnType: keyType, declaredType: declaredType, columnSubject: "`{String.from(SetBuiltinBaseName)} with {columnTypeName(declared, identity: identity)}` requires {articledColumnTypeName(declared, identity: identity)} {HashTableKeyColumnNoun}", consume: false)
 
 			if self.valueIsDeferred(member) 'aDeferredMember'
-				return try self.deferredLiteralRest(func, first: member, entry: LiteralEntryShape.element)
+				return try self.deferredLiteralRest(func, entry: LiteralEntryShape.element)
 			end 'aDeferredMember'
 
 			signs = try self.foldColumnSign(signs, value: member, anchor: memberTok)
@@ -82661,7 +82620,7 @@ export type Parser
 	// would drain the value from the statement's pending drops and leak.
 	function parseMapLiteralBody(func IrFunction, firstKey ValueId, firstKeyTok Token, range SourceRange) returns ValueId throws SourceParseError
 		if self.valueIsDeferred(firstKey) 'aDeferredFirstKey'
-			return try self.deferredMapLiteralFromKey(func, key: firstKey)
+			return try self.deferredMapLiteralFromKey(func)
 		end 'aDeferredFirstKey'
 
 		let keyType = try self.literalColumnTypeFor(firstKey, literalKind: MapLiteralSubject, columnNoun: HashTableKeyColumnNoun, valueTok: firstKeyTok)
@@ -82672,7 +82631,7 @@ export type Parser
 		let firstValue = try self.parseExpression(func, block: self.bodyState.currentBlock)
 
 		if self.valueIsDeferred(firstValue) 'aDeferredFirstValue'
-			return try self.deferredLiteralRest(func, first: firstValue, entry: LiteralEntryShape.pair)
+			return try self.deferredLiteralRest(func, entry: LiteralEntryShape.pair)
 		end 'aDeferredFirstValue'
 
 		let valueType = try self.literalColumnTypeFor(firstValue, literalKind: MapLiteralSubject, columnNoun: HashTableValueColumnNoun, valueTok: firstValueTok)
@@ -82709,7 +82668,7 @@ export type Parser
 			let key = try self.parseMapColumnValue(func, giid: giid, position: HashTableKeyArgPosition, columnNoun: HashTableKeyColumnNoun, consume: false)
 
 			if self.valueIsDeferred(key) 'aDeferredKey'
-				return try self.deferredMapLiteralFromKey(func, key: key)
+				return try self.deferredMapLiteralFromKey(func)
 			end 'aDeferredKey'
 
 			try self.consumePairSeparator()
@@ -82718,7 +82677,7 @@ export type Parser
 			let value = try self.parseMapColumnValue(func, giid: giid, position: MapValueArgPosition, columnNoun: HashTableValueColumnNoun, consume: false)
 
 			if self.valueIsDeferred(value) 'aDeferredValue'
-				return try self.deferredLiteralRest(func, first: value, entry: LiteralEntryShape.pair)
+				return try self.deferredLiteralRest(func, entry: LiteralEntryShape.pair)
 			end 'aDeferredValue'
 
 			keySigns = try self.foldColumnSign(keySigns, value: key, anchor: keyTok)
@@ -83420,7 +83379,7 @@ export type Parser
 		let first = try self.parseExpression(func, block: self.bodyState.currentBlock)
 
 		if self.valueIsDeferred(first) 'aDeferredFirstMember'
-			return try self.deferredLiteralRest(func, first: first, entry: LiteralEntryShape.element)
+			return try self.deferredLiteralRest(func, entry: LiteralEntryShape.element)
 		end 'aDeferredFirstMember'
 
 		let giid = try self.listFromInstance(listTok, statedByAlias: statedByAlias, first: first, firstTok: firstTok)
@@ -83433,7 +83392,7 @@ export type Parser
 			let member = try self.parseExpression(func, block: self.bodyState.currentBlock)
 
 			if self.valueIsDeferred(member) 'aDeferredMember'
-				return try self.deferredLiteralRest(func, first: member, entry: LiteralEntryShape.element)
+				return try self.deferredLiteralRest(func, entry: LiteralEntryShape.element)
 			end 'aDeferredMember'
 
 			signs = try self.foldColumnSign(signs, value: member, anchor: memberTok)
@@ -88253,9 +88212,8 @@ export type Parser
 	// is keyed by. So `p.x` resolves through the same two steps a human does — which type is `p`,
 	// and which slot does that type call `x`.
 	function parseFieldAccess(func IrFunction) returns ValueId throws SourceParseError
-		match self.chainBaseDeferralSource() 'deferredBase'
-			value(sourceFuncIndex, sourceId) then return try self.deferredMemberResultPastTheBase(func, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId)
-			none then break
+		if self.chainBaseIsDeferred() 'deferredBase'
+			return try self.deferredMemberResultPastTheBase(func)
 		end 'deferredBase'
 
 		var step = try self.resolveFieldChain()
@@ -88484,7 +88442,7 @@ export type Parser
 			// chain's own diagnostic rather than a claim that the base does not exist.
 			constant or
 			none then throw SourceParseError.undefinedVariable(String.from(tok.value), line: tok.line, column: tok.column)
-			poisoned then panic("resolveFieldChain: a poisoned base is answered by `chainBaseDeferralSource` before the chain is resolved, in both the read and the write door")
+			poisoned then panic("resolveFieldChain: a poisoned base is answered by `chainBaseIsDeferred` before the chain is resolved, in both the read and the write door")
 			global(label, valueType, mutable) then return try self.resolveGlobalFieldChain(tok, label: label, valueType: valueType, mutable: mutable)
 		end 'binding'
 
@@ -89058,18 +89016,20 @@ export type Parser
 		return Token.create(TokenKind.identifier, line: fieldTok.line, column: fieldTok.column, value: nascentSelfSlotName(fieldTok.value))
 	end 'nascentSelfSlotToken'
 
-	function parseDeferredFieldAssignment(func IrFunction, block IrBlock, sourceFuncIndex ElementIndex, sourceId ValueId) throws SourceParseError
+	function parseDeferredFieldAssignment(func IrFunction, block IrBlock) throws SourceParseError
+		self.noteDeferredValueInTryBlock()
 		self.advance()
-		_ = try self.parseDeferredMemberChain(func, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId)
+		_ = try self.parseDeferredMemberChain(func)
 		try self.consume(TokenKind.equals)
 		_ = try self.parseExpression(func, block: block)
 	end 'parseDeferredFieldAssignment'
 
 	function parseFieldAssignment(func IrFunction, block IrBlock) throws SourceParseError
-		match self.chainBaseDeferralSource() 'deferredBase'
-			value(sourceFuncIndex, sourceId) then try self.parseDeferredFieldAssignment(func, block: block, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId)
-			none then try self.parseResolvedFieldAssignment(func, block: block)
-		end 'deferredBase'
+		if self.chainBaseIsDeferred() 'deferredBase'
+			try self.parseDeferredFieldAssignment(func, block: block)
+		end 'deferredBase' else 'resolvedBase'
+			try self.parseResolvedFieldAssignment(func, block: block)
+		end 'resolvedBase'
 	end 'parseFieldAssignment'
 
 	// `p.x = <expr>` — write field `x` of the box `p` points at. The mirror of `parseFieldAccess`: the
@@ -91336,7 +91296,6 @@ export type Parser
 		end 'aCapturedPromise'
 
 		self.carryFromSharedRecord(captured, from: binding.boundValue, source: self.capturedFrame(frame).body, path: ValueCarryPath.capture)
-		self.carryCapturedDeferral(binding, frame: frame, captured: captured)
 		self.wearCapturedFloatAlias(captured, binding: binding, frame: frame)
 		return self.readOfAnUnadoptedLocal(binding, value: captured)
 	end 'emitCaptureRead'
@@ -91373,13 +91332,6 @@ export type Parser
 		self.markReadOnly(value, mark: ReadOnlyMark.immutableGlobal)
 		self.bodyState.derivedImmutableGlobalReads = withValueMarked(self.bodyState.derivedImmutableGlobalReads, value: value)
 	end 'markDerivedImmutableGlobalRead'
-
-	function carryCapturedDeferral(binding VarInfo, frame ElementIndex, captured ValueId)
-		match self.deferralSourceOfBinding(binding, frame: self.capturedFrame(frame).funcIndex) 'deferredBinding'
-			value(sourceFuncIndex, sourceId) then self.artifact.recordDeferralSource(captured, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId, chainCalls: DeferredChainCalls.noCall)
-			none then break
-		end 'deferredBinding'
-	end 'carryCapturedDeferral'
 
 	// The env slot for `name`, appending a fresh one (recording the enclosing value + type to store) on first
 	// sight and reusing it thereafter. Dedup keeps `multiple-captures` (`x + a + b`) at one slot per distinct
@@ -92591,17 +92543,6 @@ export type Parser
 		end 'existentialParam'
 	end 'requireNoInterfaceClosureParam'
 
-	// A refusal traced through a parameter the `deferred` offer typed is then attributed to the
-	// undeclared call, which is what lets the editor withhold it once a sibling file declares the
-	// callee.
-	function recordDeferredClosureParams(paramTypes MaxonTypeArray, sourceFuncIndex ElementIndex, sourceId ValueId)
-		for (iter, paramType) in paramTypes.withIterator() 'eachParam'
-			if tagIsUnresolved(maxonTypeTag(paramType)) 'typedByTheOffer'
-				self.artifact.recordDeferralSource(iter.index() as ValueId, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId, chainCalls: DeferredChainCalls.noCall)
-			end 'typedByTheOffer'
-		end 'eachParam'
-	end 'recordDeferredClosureParams'
-
 	function closurePlaceholderReturn(declaredResult ClosureResult) returns MaxonReturnType
 		return match declaredResult 'result'
 			declared(returnType) gives MaxonReturnType.value(returnType.clone())
@@ -92749,12 +92690,6 @@ export type Parser
 		self.bodyState.boundParams = savedBody.boundParams
 		self.seedCellLocalNames(paramNames)
 		try self.bindParameters(lifted, byRef: allByValueConvention, consume: self.signatures.consumeOf(closureName), paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts)
-
-		match paramTypeOffer 'offer'
-			deferred(sourceFuncIndex, sourceId) then self.recordDeferredClosureParams(paramTypes, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId)
-			offered or
-			none then break
-		end 'offer'
 
 		// Parse the single body expression, then close the lifted function like a value `return`: the
 		// body IS the closure's returned value, so `emitOwnedValueReturn` promotes a borrowed String to
@@ -103185,50 +103120,43 @@ export type Parser
 	// The doors whose parameter type is a `__`-reserved builtin (`__ManagedMemory`, `__ManagedFile`,
 	// `__ManagedSocket`, `__ManagedDirectory`) throw instead; only a file allowed to spell those names
 	// reaches them.
-	function deferredUnresolvedMemberResult(func IrFunction, sourceFuncIndex ElementIndex, sourceId ValueId) returns ValueId throws SourceParseError
-		let chainCalls = try self.parseDeferredMemberChain(func, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId)
+	function deferredUnresolvedMemberResult(func IrFunction) returns ValueId throws SourceParseError
+		let chainCalls = try self.parseDeferredMemberChain(func)
 
-		return self.deferredValueFrom(sourceFuncIndex, sourceId: sourceId, chainCalls: chainCalls)
+		return self.deferredValueOfChain(chainCalls)
 	end 'deferredUnresolvedMemberResult'
 
-	function deferredMemberResultPastTheBase(func IrFunction, sourceFuncIndex ElementIndex, sourceId ValueId) returns ValueId throws SourceParseError
+	function deferredMemberResultPastTheBase(func IrFunction) returns ValueId throws SourceParseError
 		self.advance()
 
-		return try self.deferredUnresolvedMemberResult(func, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId)
+		return try self.deferredUnresolvedMemberResult(func)
 	end 'deferredMemberResultPastTheBase'
 
-	// The one door a deferred value is minted through, so the innermost block-form `try` learns of its
-	// body's first one (`TryBlockContext.deferredCause`). A deferred value minted by `mintValue`
+	// The one door a deferred value is minted through, so the innermost block-form `try` learns that its
+	// body holds one (`TryBlockContext.holdsADeferredValue`). A deferred value minted by `mintValue`
 	// directly would leave that body to be refused E3083.
 	function mintDeferredValue() returns ValueId
 		let result = self.mintValue(ValueTypeTag.unresolved, nameId: UnnamedTypeId)
-		self.noteDeferredValueInTryBlock(result)
+		self.noteDeferredValueInTryBlock()
 
 		return result
 	end 'mintDeferredValue'
 
-	function noteDeferredValueInTryBlock(value ValueId)
+	function noteDeferredValueInTryBlock()
 		if self.bodyState.tryBlocks.count() == 0 'outsideATryBlock'
 			return
 		end 'outsideATryBlock'
 
 		var ctx = self.innermostTryBlock()
-
-		if not ctx.deferredCause.isDeferred() 'theFirstDeferredValue'
-			ctx.deferredCause = DeferralSource.value(self.artifact.currentFuncIndex, valueId: value)
-		end 'theFirstDeferredValue'
+		ctx.holdsADeferredValue = true
 	end 'noteDeferredValueInTryBlock'
 
-	function deferredValueFrom(sourceFuncIndex ElementIndex, sourceId ValueId, chainCalls DeferredChainCalls) returns ValueId
+	function deferredValueOfChain(chainCalls DeferredChainCalls) returns ValueId
 		let derived = self.mintDeferredValue()
-		self.artifact.recordDeferralSource(derived, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId, chainCalls: chainCalls)
+		self.artifact.recordDeferredChain(derived, chainCalls: chainCalls)
 
 		return derived
-	end 'deferredValueFrom'
-
-	function deferredFrom(value ValueId) returns ValueId
-		return self.deferredValueFrom(self.artifact.currentFuncIndex, sourceId: value, chainCalls: DeferredChainCalls.noCall)
-	end 'deferredFrom'
+	end 'deferredValueOfChain'
 
 	function valueIsDeferred(value ValueId) returns bool
 		return tagIsUnresolved(self.tagOf(value))
@@ -103238,19 +103166,11 @@ export type Parser
 		return try self.bodyState.tryBlocks.get(self.bodyState.tryBlocks.count() - 1) otherwise panic("innermostTryBlock: asked with no block-form `try` on the stack — every caller is on a route `throwRouteDestination` found inside one")
 	end 'innermostTryBlock'
 
-	function deferralSourceOfBinding(binding VarInfo, frame ElementIndex) returns DeferralSource
-		if not self.baseBindingIsADeferredCallResult(binding) 'aResolvedBinding'
-			return DeferralSource.none
-		end 'aResolvedBinding'
-
-		return DeferralSource.value(frame, valueId: binding.boundValue)
-	end 'deferralSourceOfBinding'
-
 	function capturedFrame(frame ElementIndex) returns ClosureEnclosingFrame
 		return try self.closureEnclosingFrames.get(frame) otherwise panic("capturedFrame: frame {frame} is not one of the {self.closureEnclosingFrames.count()} enclosing frames — `captureScopeOf` answers a frame only while it is pushed")
 	end 'capturedFrame'
 
-	function parseDeferredMemberChain(func IrFunction, sourceFuncIndex ElementIndex, sourceId ValueId) returns DeferredChainCalls throws SourceParseError
+	function parseDeferredMemberChain(func IrFunction) returns DeferredChainCalls throws SourceParseError
 		var chainCalls = DeferredChainCalls.noCall
 
 		while self.at(TokenKind.dot) 'chain'
@@ -103258,7 +103178,7 @@ export type Parser
 			self.advance()
 
 			if self.at(TokenKind.leftParen) 'anArgumentList'
-				try self.parseDeferredMemberArguments(func, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId)
+				try self.parseDeferredMemberArguments(func)
 				chainCalls = DeferredChainCalls.lastLinkIsACall
 			end 'anArgumentList' else if chainCalls == DeferredChainCalls.lastLinkIsACall 'aMemberAfterACall'
 				chainCalls = DeferredChainCalls.callBeforeTheLastLink
@@ -103272,7 +103192,7 @@ export type Parser
 	// `parseCallArgs`, which records by-reference, array-literal and anchor facts
 	// against a declared callee; a member of an undeclared call's result has none to record them
 	// against.
-	function parseDeferredMemberArguments(func IrFunction, sourceFuncIndex ElementIndex, sourceId ValueId) throws SourceParseError
+	function parseDeferredMemberArguments(func IrFunction) throws SourceParseError
 		try self.consume(TokenKind.leftParen)
 		var argIndex = 0 as ParamCount
 
@@ -103286,7 +103206,7 @@ export type Parser
 			let offersAClosure = self.argumentOpensAClosure(valueStart)
 
 			if offersAClosure 'aClosureLiteral'
-				self.stateClosureParamOfferAt(valueStart, offer: ClosureParamOffer.deferred(sourceFuncIndex, sourceId: sourceId))
+				self.stateClosureParamOfferAt(valueStart, offer: ClosureParamOffer.deferred)
 			end 'aClosureLiteral'
 
 			_ = try self.parseValueExpression(func)
@@ -103306,51 +103226,33 @@ export type Parser
 		return tagIsUnresolved(maxonTypeTag(binding.varType))
 	end 'baseBindingIsADeferredCallResult'
 
-	function chainBaseDeferralSource() returns DeferralSource
+	function chainBaseIsDeferred() returns bool
 		match self.valueBaseAt(self.pos) 'base'
-			thisFrame then return self.deferralSourceOfBinding(self.thisFrameBindingOf(self.current()), frame: self.artifact.currentFuncIndex)
-			captured(frame) then return self.deferralSourceOfBinding(self.capturedBindingOf(self.current(), frame: frame), frame: self.capturedFrame(frame).funcIndex)
+			thisFrame then return self.baseBindingIsADeferredCallResult(self.thisFrameBindingOf(self.current()))
+			captured(frame) then return self.baseBindingIsADeferredCallResult(self.capturedBindingOf(self.current(), frame: frame))
 			unbound or
-			alwaysAType then return self.deferralOfAPoisonedChainBase()
+			alwaysAType then return self.chainBaseIsAPoisonedBinding()
 		end 'base'
-	end 'chainBaseDeferralSource'
+	end 'chainBaseIsDeferred'
 
-	function deferralOfAPoisonedChainBase() returns DeferralSource
-		let plain = self.deferralOfAPoisonedBase(self.current())
+	function chainBaseIsAPoisonedBinding() returns bool
+		return self.baseIsAPoisonedGlobal(self.current()) or self.baseIsAPoisonedStaticMember()
+	end 'chainBaseIsAPoisonedBinding'
 
-		if plain.isDeferred() 'aPoisonedGlobal'
-			return plain
-		end 'aPoisonedGlobal'
+	function baseIsAPoisonedGlobal(baseTok Token) returns bool
+		return self.signatures.topLevelBindingVisibleFrom(baseTok.value, readerFilePath: self.job.path) and self.bindingIsPoisoned(baseTok)
+	end 'baseIsAPoisonedGlobal'
 
-		return self.deferralOfAPoisonedStaticMember()
-	end 'deferralOfAPoisonedChainBase'
-
-	function deferralOfAPoisonedBase(baseTok Token) returns DeferralSource
-		if not self.signatures.topLevelBindingVisibleFrom(baseTok.value, readerFilePath: self.job.path) 'noBindingOfThisName'
-			return DeferralSource.none
-		end 'noBindingOfThisName'
-
-		return self.deferralOfAPoisonedBinding(baseTok)
-	end 'deferralOfAPoisonedBase'
-
-	function deferralOfAPoisonedBinding(bindingTok Token) returns DeferralSource
-		if not self.bindingIsPoisoned(bindingTok) 'notPoisoned'
-			return DeferralSource.none
-		end 'notPoisoned'
-
-		return DeferralSource.value(self.artifact.currentFuncIndex, valueId: self.mintDeferredValue())
-	end 'deferralOfAPoisonedBinding'
-
-	function deferralOfAPoisonedStaticMember() returns DeferralSource
-		let typeTok = try self.staticBaseTokenAt(self.pos) otherwise return DeferralSource.none
+	function baseIsAPoisonedStaticMember() returns bool
+		let typeTok = try self.staticBaseTokenAt(self.pos) otherwise return false
 		let memberIndex = self.pos + TokensPerQualifierSegment
 
 		if not self.namesStaticMemberAt(typeTok, memberIndex: memberIndex) 'notAStaticMember'
-			return DeferralSource.none
+			return false
 		end 'notAStaticMember'
 
-		return self.deferralOfAPoisonedBinding(self.staticMemberNameToken(typeTok, memberTok: self.tokenAt(memberIndex)))
-	end 'deferralOfAPoisonedStaticMember'
+		return self.bindingIsPoisoned(self.staticMemberNameToken(typeTok, memberTok: self.tokenAt(memberIndex)))
+	end 'baseIsAPoisonedStaticMember'
 
 	function bindingIsPoisoned(bindingTok Token) returns bool
 		return match self.managedReceiverBindingOf(bindingTok) 'binding'

@@ -1371,11 +1371,11 @@ error E3034: specs/enum-full/error.fromRawValue-associated-values.maxon:11:15: u
 ### An undefined call feeding `fromName` or `fromRawValue` is named by E3004 first
 
 A call no file declares is reported as E3004 and its result is typed `unresolved` — a DEFERRAL, not
-a type. Every door that meets one must record its own complaint rather than refuse, because a
-refusal here ends the file's parse before the undefined call is ever reported: the program is then
-told only that a `string` or an `int` was expected, on a line that is correct, while the line that
-is wrong says nothing. Both enum lookup members are such a door, and each pins its own sentence
-after the E3004 that causes it.
+a type. Every door that meets one must neither refuse nor complain, because a refusal here ends the
+file's parse before the undefined call is ever reported, and a complaint would be a second diagnostic
+about the one call: the program is then told that a `string` or an `int` was expected, on a line that is
+correct, as well as the line that is wrong. Both enum lookup members are such a door, and each reports
+the E3004 that causes it and nothing else.
 
 <!-- test: error.fromName-argument-is-an-undefined-call -->
 ```maxon
@@ -1391,13 +1391,9 @@ end 'main'
 ```
 ```maxoncstderr
 error E3004: specs/enum-full/error.fromName-argument-is-an-undefined-call.maxon:8:34: call to undefined function 'nosuchFn'
-error E3005: specs/enum-full/error.fromName-argument-is-an-undefined-call.maxon:8:25: type mismatch: 'expected String, got unknown'
 ```
 
 <!-- test: error.fromRawValue-argument-is-an-undefined-call -->
-⚠ The raw-value door anchors its refusal on the ARGUMENT rather than on the member name, so both
-diagnostics land on one column — which is the point: they are the same defect, reported cause
-first.
 ```maxon
 enum Direction
 	north = 1
@@ -1411,7 +1407,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3004: specs/enum-full/error.fromRawValue-argument-is-an-undefined-call.maxon:8:38: call to undefined function 'nosuchFn'
-error E3005: specs/enum-full/error.fromRawValue-argument-is-an-undefined-call.maxon:8:38: type mismatch: 'expected int, got unknown'
 ```
 
 <!-- test: enum-member-constant -->

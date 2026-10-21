@@ -1009,23 +1009,6 @@ function indexRowsByFunction(funcIndices FuncIndexArray, selected BoolArray, fun
 	return FunctionRowCsr.create(rowStarts, rows: rows)
 end 'indexRowsByFunction'
 
-// The value an `unresolved` value was derived from, so a refusal raised over it can be traced back
-// to the undeclared call at its root (`SemanticCheck.deferralCause`). The parser records one
-// wherever it derives an unresolved value from another — a member chain, a loop element, a capture
-// read inside a closure — and it names a function as well as a value because a capture's source is
-// in the enclosing function.
-export union DeferralSource
-	none
-	value(funcIndex ElementIndex, valueId ValueId)
-
-	export function isDeferred() returns bool
-		return match self 'source'
-			none gives false
-			value gives true
-		end 'source'
-	end 'isDeferred'
-end 'DeferralSource'
-
 // A call on a deferred value emits no op, so the `try` and `_ =` doors read this where they would
 // read the ops. `Parser.parseDeferredMemberChain`, the one walker of a deferred chain, decides it.
 export enum DeferredChainCalls
@@ -1098,37 +1081,37 @@ end 'cacheReadDeferredChainCallsArray'
 
 // @generated library-cache end
 
-union DeferralRowLookup
+union DeferredChainRowLookup
 	absent
 	at(row ElementIndex)
-end 'DeferralRowLookup'
+end 'DeferredChainRowLookup'
 
-export type DeferralSourceTable
+export type DeferredChainTable
 	var funcIndices as FuncIndexArray
 	var valueIds as ValueIdArray
-	var sourceFuncIndices as FuncIndexArray
-	var sourceIds as ValueIdArray
 	var chainCallKinds as DeferredChainCallsArray
 
-	export static function create() returns DeferralSourceTable
-		return Self{funcIndices: FuncIndexArray.create(), valueIds: ValueIdArray.create(), sourceFuncIndices: FuncIndexArray.create(), sourceIds: ValueIdArray.create(), chainCallKinds: DeferredChainCallsArray.create()}
+	export static function create() returns DeferredChainTable
+		return Self{funcIndices: FuncIndexArray.create(), valueIds: ValueIdArray.create(), chainCallKinds: DeferredChainCallsArray.create()}
 	end 'create'
 
 	export function count() returns Count
 		return self.funcIndices.count()
 	end 'count'
 
-	export function record(funcIndex ElementIndex, valueId ValueId, sourceFuncIndex ElementIndex, sourceId ValueId, chainCalls DeferredChainCalls)
+	export function record(funcIndex ElementIndex, valueId ValueId, chainCalls DeferredChainCalls)
+		if chainCalls == DeferredChainCalls.noCall 'nothingToRead'
+			return
+		end 'nothingToRead'
+
 		self.funcIndices.push(funcIndex)
 		self.valueIds.push(valueId)
-		self.sourceFuncIndices.push(sourceFuncIndex)
-		self.sourceIds.push(sourceId)
 		self.chainCallKinds.push(chainCalls)
 	end 'record'
 
-	// Both readers scan only the rows from `floor` up, a count the caller takes just before the
+	// Both readers ask only about the rows from `floor` up, a count the caller takes just before the
 	// expression it asks about: a row below it is an earlier statement's (`let v = c.describe()` then
-	// `try (v)` stays E2015), and the bound keeps each scan to one statement's rows.
+	// `try (v)` stays E2015).
 	export function lastLinkIsACallAbove(floor ElementIndex, funcIndex ElementIndex, valueId ValueId) returns bool
 		return match self.rowOf(funcIndex, valueId: valueId, floor: floor) 'row'
 			absent gives false
@@ -1136,62 +1119,39 @@ export type DeferralSourceTable
 		end 'row'
 	end 'lastLinkIsACallAbove'
 
+	// Every row is a call: `record` keeps no `noCall` row.
 	export function recordsACallAbove(floor ElementIndex) returns bool
-		for i in floor upto self.count() 'each'
-			if self.chainCallsAt(i) != DeferredChainCalls.noCall 'aCallWasDeferred'
-				return true
-			end 'aCallWasDeferred'
-		end 'each'
-
-		return false
+		return floor < self.count()
 	end 'recordsACallAbove'
 
 	function chainCallsAt(row ElementIndex) returns DeferredChainCalls
-		return try self.chainCallKinds.get(row) otherwise panic("DeferralSourceTable.chainCallsAt: chainCallKinds.get OOB at {row}")
+		return try self.chainCallKinds.get(row) otherwise panic("DeferredChainTable.chainCallsAt: chainCallKinds.get OOB at {row}")
 	end 'chainCallsAt'
 
-	// A linear scan: it is asked only while tracing the cause of a refusal.
-	export function sourceOf(funcIndex ElementIndex, valueId ValueId) returns DeferralSource
-		return match self.rowOf(funcIndex, valueId: valueId, floor: 0) 'row'
-			absent gives DeferralSource.none
-			at(row) gives self.sourceAt(row)
-		end 'row'
-	end 'sourceOf'
-
-	function sourceAt(row ElementIndex) returns DeferralSource
-		let sourceFunc = try self.sourceFuncIndices.get(row) otherwise panic("DeferralSourceTable.sourceAt: sourceFuncIndices.get OOB at {row}")
-		let sourceId = try self.sourceIds.get(row) otherwise panic("DeferralSourceTable.sourceAt: sourceIds.get OOB at {row}")
-		return DeferralSource.value(sourceFunc, valueId: sourceId)
-	end 'sourceAt'
-
-	function rowOf(funcIndex ElementIndex, valueId ValueId, floor ElementIndex) returns DeferralRowLookup
+	function rowOf(funcIndex ElementIndex, valueId ValueId, floor ElementIndex) returns DeferredChainRowLookup
 		for row in floor upto self.count() 'each'
-			let f = try self.funcIndices.get(row) otherwise panic("DeferralSourceTable.rowOf: funcIndices.get OOB at {row}")
-			let v = try self.valueIds.get(row) otherwise panic("DeferralSourceTable.rowOf: valueIds.get OOB at {row}")
+			let f = try self.funcIndices.get(row) otherwise panic("DeferredChainTable.rowOf: funcIndices.get OOB at {row}")
+			let v = try self.valueIds.get(row) otherwise panic("DeferredChainTable.rowOf: valueIds.get OOB at {row}")
 
 			if f == funcIndex and v == valueId 'match'
-				return DeferralRowLookup.at(row)
+				return DeferredChainRowLookup.at(row)
 			end 'match'
 		end 'each'
 
-		return DeferralRowLookup.absent
+		return DeferredChainRowLookup.absent
 	end 'rowOf'
 
-	export function appendFrom(source DeferralSourceTable, funcOffset ElementIndex)
+	export function appendFrom(source DeferredChainTable, funcOffset ElementIndex)
 		for i in 0 upto source.count() 'each'
-			let f = try source.funcIndices.get(i) otherwise panic("DeferralSourceTable.appendFrom: funcIndices.get OOB at {i}")
-			let v = try source.valueIds.get(i) otherwise panic("DeferralSourceTable.appendFrom: valueIds.get OOB at {i}")
-			let sourceFunc = try source.sourceFuncIndices.get(i) otherwise panic("DeferralSourceTable.appendFrom: sourceFuncIndices.get OOB at {i}")
-			let sourceId = try source.sourceIds.get(i) otherwise panic("DeferralSourceTable.appendFrom: sourceIds.get OOB at {i}")
-			self.record(f + funcOffset, valueId: v, sourceFuncIndex: sourceFunc + funcOffset, sourceId: sourceId, chainCalls: source.chainCallsAt(i))
+			let f = try source.funcIndices.get(i) otherwise panic("DeferredChainTable.appendFrom: funcIndices.get OOB at {i}")
+			let v = try source.valueIds.get(i) otherwise panic("DeferredChainTable.appendFrom: valueIds.get OOB at {i}")
+			self.record(f + funcOffset, valueId: v, chainCalls: source.chainCallsAt(i))
 		end 'each'
 	end 'appendFrom'
 
 	export function truncate(count ElementIndex)
 		self.funcIndices.truncate(count)
 		self.valueIds.truncate(count)
-		self.sourceFuncIndices.truncate(count)
-		self.sourceIds.truncate(count)
 		self.chainCallKinds.truncate(count)
 	end 'truncate'
 
@@ -1199,24 +1159,20 @@ export type DeferralSourceTable
 	export function cacheWrite(writer LibraryCacheWriter)
 		cacheWriteFuncIndexArray(writer, value: self.funcIndices)
 		cacheWriteValueIdArray(writer, value: self.valueIds)
-		cacheWriteFuncIndexArray(writer, value: self.sourceFuncIndices)
-		cacheWriteValueIdArray(writer, value: self.sourceIds)
 		cacheWriteDeferredChainCallsArray(writer, value: self.chainCallKinds)
 	end 'cacheWrite'
 
-	export static function cacheRead(reader LibraryCacheReader) returns DeferralSourceTable throws LibraryCacheDamage
+	export static function cacheRead(reader LibraryCacheReader) returns DeferredChainTable throws LibraryCacheDamage
 		let f_funcIndices = try cacheReadFuncIndexArray(reader)
 		let f_valueIds = try cacheReadValueIdArray(reader)
-		let f_sourceFuncIndices = try cacheReadFuncIndexArray(reader)
-		let f_sourceIds = try cacheReadValueIdArray(reader)
 		let f_chainCallKinds = try cacheReadDeferredChainCallsArray(reader)
 
-		return Self{funcIndices: f_funcIndices, valueIds: f_valueIds, sourceFuncIndices: f_sourceFuncIndices, sourceIds: f_sourceIds, chainCallKinds: f_chainCallKinds}
+		return Self{funcIndices: f_funcIndices, valueIds: f_valueIds, chainCallKinds: f_chainCallKinds}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize40
-		return sizeof(DeferralSourceTable) as CacheSize40
+	static function cacheLayoutBytes() returns CacheSize24
+		return sizeof(DeferredChainTable) as CacheSize24
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
-end 'DeferralSourceTable'
+end 'DeferredChainTable'

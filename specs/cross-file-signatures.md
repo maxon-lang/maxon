@@ -518,17 +518,14 @@ the symptom one line below it: arithmetic, interpolation, a field read, a method
 a closure capture and a closure body all do so in `specs/functions.md`.
 
 A method call whose RECEIVER is a generic instance (`Array with Hidden`, reached through its
-typealias) is one more such position, and it owes the same answer. The argument door is entitled to
-add its own E3005 — the free-function control below shows both diagnostics, E3004 first — but it may
-not stand in for E3004: the mismatch it reports is a consequence of the undefined callee, and a
-program told only about the consequence names a line that is correct and hides the line that is
-wrong.
+typealias) is one more such position, and it owes the same answer. The argument door reports nothing of
+its own: a value already refused at its call is never refused again at a consumer, so the program is told
+the line that is wrong and not the line that merely follows from it.
 
 <!-- test: error.generic-instance-consumer-hides-the-undefined-call -->
-The undefined call feeds `push` on a `HiddenArray` receiver. Both diagnostics belong to this
-program, and E3004 — the cause — is reported first. The alias is declared in the file that spells
-it, so the only boundary this program crosses is the union's, and nothing here turns on where an
-alias may be declared.
+The undefined call feeds `push` on a `HiddenArray` receiver. Only E3004 — the cause — is reported. The
+alias is declared in the file that spells it, so the only boundary this program crosses is the union's,
+and nothing here turns on where an alias may be declared.
 ```maxon
 // --- file: probe.maxon
 export union Hidden
@@ -547,14 +544,13 @@ end 'main'
 ```
 ```maxoncstderr
 error E3004: <fragment>:11:10: call to undefined function 'brokeHidden'
-error E3005: <fragment>:13:5: argument type mismatch for 'value': expected 'Hidden', got 'unknown'
 ```
 
 <!-- test: error.generic-instance-consumer-control-free-function-names-the-undefined-call -->
 ⭐ The control that makes the receiver the variable under test. Same union, same undefined
 callee, same value — only the consumer changes, from a method on a generic instance to a free
 function. Nothing here depends on a generic receiver, so this is the answer the case above owes, and
-it is what proves the receiver case reaches E3004 rather than silencing E3005 or suppressing the argument door.
+it is what proves the receiver case reaches E3004 rather than suppressing it.
 ```maxon
 // --- file: probe.maxon
 export union Hidden
@@ -574,14 +570,13 @@ end 'main'
 ```
 ```maxoncstderr
 error E3004: <fragment>:13:10: call to undefined function 'brokeHidden'
-error E3005: <fragment>:14:2: argument type mismatch for 'v': expected 'Hidden', got 'unknown'
 ```
 
 <!-- test: error.generic-instance-consumer-append-names-the-undefined-call -->
 ⭐ `Array.append` is the sibling door of the `push` above — one spelling away, with its own argument
 rule (`ProgramSignatures.arrayAppendArgAdmits`) and its own sentence — and it owes the same answer.
 Its rule opens by asking whether the argument is an array instance, which an `unresolved` is not, so
-without the deferral the refusal it throws ends the file's parse and E3004 is never reported at all.
+a refusal it threw would end the file's parse and E3004 would never be reported at all.
 ```maxon
 // --- file: probe.maxon
 export union Hidden
@@ -599,5 +594,4 @@ end 'main'
 ```
 ```maxoncstderr
 error E3004: <fragment>:12:12: call to undefined function 'brokeHidden'
-error E3005: <fragment>:12:5: argument type mismatch for 'other': expected 'HiddenArray', got 'unknown'
 ```

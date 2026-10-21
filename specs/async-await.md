@@ -4330,8 +4330,8 @@ error E3004: <fragment>:8:22: call to undefined function 'nosuch'
 ```
 
 <!-- test: async-await.error.a-promise-var-rearmed-with-a-spawn-of-nothing-is-undefined -->
-Re-arming a promise var with a spawn nothing declares reports that call and the assignment it feeds, and
-nothing at the later await.
+Re-arming a promise var with a spawn nothing declares reports that call, and nothing at the assignment it
+feeds or at the later await.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -4351,11 +4351,10 @@ end 'main'
 ```
 ```maxoncstderr
 error E3004: <fragment>:12:12: call to undefined function 'nosuch'
-error E3005: <fragment>:12:2: cannot assign a value of type 'unknown' to variable 'p', which holds 'Promise with int(-9223372036854775808 to 9223372036854775807)'
 ```
 
 <!-- test: async-await.error.a-promise-var-rearmed-on-one-branch-with-a-spawn-of-nothing-is-undefined -->
-The same re-arm on one arm of a branch reports the call and the assignment, and nothing at the merge.
+The same re-arm on one arm of a branch reports the call, and nothing at the assignment or the merge.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -4383,7 +4382,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3004: <fragment>:15:13: call to undefined function 'nosuch'
-error E3005: <fragment>:15:3: cannot assign a value of type 'unknown' to variable 'p', which holds 'Promise with int(-9223372036854775808 to 9223372036854775807)'
 ```
 
 <!-- test: async-await.error.a-moved-string-var-assigned-a-call-nothing-declares-is-undefined -->
@@ -4404,7 +4402,7 @@ error E3004: <fragment>:5:6: call to undefined function 'nosuch'
 
 <!-- test: async-await.error.a-moved-struct-var-assigned-a-call-nothing-declares-is-undefined -->
 A struct `var` whose value moved away and is assigned a call nothing declares holds that unknown value, so
-reading it reports nothing beyond the call and the assignment.
+reading it reports nothing beyond the call.
 ```maxon
 type Box
 	export var name as String
@@ -4424,7 +4422,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3004: <fragment>:13:8: call to undefined function 'nosuch'
-error E3005: <fragment>:13:2: cannot assign a value of type 'unknown' to variable 'box', which holds 'Box'
 ```
 
 <!-- test: async-await.error.a-tuple-assignment-of-a-call-nothing-declares-to-a-moved-var-is-undefined -->
@@ -4468,8 +4465,8 @@ error E3004: <fragment>:12:9: call to undefined function 'nosuch'
 ```
 
 <!-- test: async-await.error.a-field-and-an-element-assigned-a-call-nothing-declares-are-undefined -->
-A field store and an element store of a call nothing declares report each call and the store it feeds, and
-nothing at the reads.
+A field store and an element store of a call nothing declares report each call, and nothing at the store it
+feeds or at the reads.
 ```maxon
 typealias NameArray = Array with String
 
@@ -4493,8 +4490,6 @@ end 'main'
 ```maxoncstderr
 error E3004: <fragment>:14:13: call to undefined function 'nosuch'
 error E3004: <fragment>:16:13: call to undefined function 'nosuch'
-error E3005: <fragment>:14:6: cannot assign a value of type 'unknown' to field 'name' of 'Box', which holds 'String'
-error E3005: <fragment>:16:8: argument type mismatch for 'value': expected 'String', got 'unknown'
 ```
 
 <!-- test: async-await.error.a-call-nothing-declares-stored-in-a-promise-array-is-undefined -->
@@ -4516,8 +4511,8 @@ error E3004: <fragment>:8:10: call to undefined function 'nosuch'
 ```
 
 <!-- test: async-await.error.a-captured-struct-var-assigned-a-call-nothing-declares-is-undefined -->
-A cell-resident struct `var` assigned a call nothing declares reports the call and the assignment, and
-nothing at the closure's read through it.
+A cell-resident struct `var` assigned a call nothing declares reports the call, and nothing at the
+assignment or at the closure's read through it.
 ```maxon
 type Box
 	export var name as String
@@ -4542,7 +4537,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3004: <fragment>:18:8: call to undefined function 'nosuch'
-error E3005: <fragment>:18:2: cannot assign a value of type 'unknown' to variable 'box', which holds 'Box'
 ```
 
 <!-- test: async-await.qualified-spawn-of-a-directory-types-static -->

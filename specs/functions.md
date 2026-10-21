@@ -1210,7 +1210,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3004: <fragment>:9:9: call to undefined function 'frobnicate'
-error E3005: <fragment>:9:2: return type mismatch in 'pick': type 'unknown' does not implement interface 'Shape'
 ```
 
 <!-- test: unknown-function-result-passed-at-an-interface-parameter -->
@@ -1231,7 +1230,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3004: <fragment>:13:17: call to undefined function 'frobnicate'
-error E3005: <fragment>:13:9: argument type mismatch for 'shape': type 'unknown' does not implement interface 'Shape'
 ```
 
 <!-- test: unknown-function-result-stored-into-an-interface-field -->
@@ -1278,7 +1276,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3004: <fragment>:28:16: call to undefined function 'frobnicate'
-error E3005: <fragment>:28:3: field type mismatch for 'Frame.shape': type 'unknown' does not implement interface 'Shape'
 ```
 
 <!-- test: unknown-function-result-returned-at-a-struct -->
@@ -1301,7 +1298,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3004: <fragment>:11:9: call to undefined function 'frobnicate'
-error E3005: <fragment>:11:2: Cannot return 'unknown' from function declared to return 'Box'
 ```
 
 <!-- test: unknown-function-result-assigned-to-a-struct-variable -->
@@ -1322,7 +1318,97 @@ end 'main'
 ```
 ```maxoncstderr
 error E3004: <fragment>:12:6: call to undefined function 'frobnicate'
-error E3005: <fragment>:12:2: cannot assign a value of type 'unknown' to variable 'b', which holds 'Box'
+```
+
+<!-- test: unknown-function-result-assigned-to-a-scalar-variable -->
+```maxon
+typealias Tally = int(0 to 1000)
+
+function main() returns ExitCode
+	var n = 0 as Tally
+	n = frobnicate(2)
+	return n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:6:6: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-returned-at-a-scalar -->
+```maxon
+typealias Tally = int(0 to 1000)
+
+function pick() returns Tally
+	return frobnicate(2)
+end 'pick'
+
+function main() returns ExitCode
+	return pick() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:5:9: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-passed-at-a-struct-parameter -->
+```maxon
+type Box
+	export var n = 0 as Count
+
+	static function create() returns Box
+		return Box{}
+	end 'create'
+end 'Box'
+
+function open(box Box) returns Count
+	return box.n
+end 'open'
+
+function main() returns ExitCode
+	return open(frobnicate(2)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:15:14: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-passed-at-a-scalar-parameter -->
+```maxon
+typealias Tally = int(0 to 1000)
+
+function twice(n Tally) returns Tally
+	return n
+end 'twice'
+
+function main() returns ExitCode
+	return twice(frobnicate(2)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:9:15: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-as-a-condition -->
+```maxon
+function main() returns ExitCode
+	if frobnicate(2) 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:5: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-compared-with-a-literal -->
+```maxon
+function main() returns ExitCode
+	return 1 if frobnicate(2) == 3 else 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:14: call to undefined function 'frobnicate'
 ```
 
 <!-- test: unknown-function-result-negated-with-not -->
@@ -1351,7 +1437,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3004: <fragment>:7:8: call to undefined function 'frobnicate'
-error E3005: <fragment>:7:2: throw requires an error enum value
 ```
 
 <!-- test: unknown-function-result-awaited-directly -->
@@ -1390,7 +1475,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3004: <fragment>:19:32: call to undefined function 'frobnicate'
-error E3059: <fragment>:19:10: type mismatch: 'otherwise type 'unknown' does not match expected type 'Box''
 ```
 
 <!-- test: unknown-function-as-the-only-throwing-call-of-a-throws-function -->
@@ -1475,7 +1559,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3004: <fragment>:8:9: call to undefined function 'frobnicate'
-error E3005: <fragment>:8:3: throw requires an error enum value
 ```
 
 <!-- test: unknown-function-result-method-called-alone-in-a-try-block -->

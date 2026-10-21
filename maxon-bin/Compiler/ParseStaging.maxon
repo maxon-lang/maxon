@@ -556,7 +556,7 @@ export type FileParseArtifact
 	// `mergeArtifact` with the merge's function + op offsets. What lets the backend's
 	// E5001 map a Target ValueId back to its source span.
 	export var valueOrigins as ValueOriginTable
-	export var deferralSources as DeferralSourceTable
+	export var deferredChains as DeferredChainTable
 
 	// This file's `funcSignatures` registry contributions, in declaration order.
 	export var funcSignatures as FuncSignatureEntryArray
@@ -704,9 +704,6 @@ export type FileParseArtifact
 	export var unusedTypeAliases as DeferredNameDiagnosticRoster
 	export var hiddenTypeNames as DeferredDiagnosticRoster
 
-	// Refusals a door recorded instead of throwing; `Parser.refuseUnlessDeferred` owns the rule.
-	export var deferredParseErrors as DeferredParseErrorArray
-
 	// ⭐ THE DECLARATION-HYGIENE DIAGNOSTICS this file's function bodies earned (E3012 unused, E3077
 	// var-should-be-let), kept OUT of `diagnostics` above so they cannot gate the pipeline ahead of the
 	// checks that could explain the body instead. `mergeArtifact` folds them into
@@ -742,7 +739,7 @@ export type FileParseArtifact
 			debugStreamNameSites: DebugStreamNameSiteMap.create(),
 			immortalConstArraySites: ImmortalConstArraySiteMap.create(),
 			valueOrigins: ValueOriginTable.create(),
-			deferralSources: DeferralSourceTable.create(),
+			deferredChains: DeferredChainTable.create(),
 			funcSignatures: FuncSignatureEntryArray.create(),
 			overloadSets: noOverloadSets,
 			pendingFnMergeChecks: PendingFnMergeCheckArray.create(),
@@ -767,7 +764,6 @@ export type FileParseArtifact
 			diagnostics: DiagnosticArray.create(),
 			unusedTypeAliases: noDeferredNameDiagnostics,
 			hiddenTypeNames: noDeferredDiagnostics,
-			deferredParseErrors: DeferredParseErrorArray.create(),
 			bindingHygieneDiagnostics: DiagnosticArray.create(),
 			parseMints: ParseMints.none,
 			instanceIdsInUse: GenericInstanceIdArray.create()
@@ -930,9 +926,9 @@ export type FileParseArtifact
 		self.valueOrigins.recordParam(self.currentFuncIndex, valueId: valueId, range: range)
 	end 'recordParamOrigin'
 
-	export function recordDeferralSource(valueId ValueId, sourceFuncIndex ElementIndex, sourceId ValueId, chainCalls DeferredChainCalls)
-		self.deferralSources.record(self.currentFuncIndex, valueId: valueId, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId, chainCalls: chainCalls)
-	end 'recordDeferralSource'
+	export function recordDeferredChain(valueId ValueId, chainCalls DeferredChainCalls)
+		self.deferredChains.record(self.currentFuncIndex, valueId: valueId, chainCalls: chainCalls)
+	end 'recordDeferredChain'
 
 	// Record a function's parameter signature and return type as this file's contribution to
 	// the project-wide `funcSignatures` and `funcReturnTypes` registries. Called by the parser
@@ -1095,7 +1091,7 @@ export type FileParseArtifact
 		cacheWriteDebugStreamNameSiteMap(writer, value: self.debugStreamNameSites)
 		cacheWriteImmortalConstArraySiteMap(writer, value: self.immortalConstArraySites)
 		self.valueOrigins.cacheWrite(writer)
-		self.deferralSources.cacheWrite(writer)
+		self.deferredChains.cacheWrite(writer)
 		cacheWriteFuncSignatureEntryArray(writer, value: self.funcSignatures)
 		cacheWriteOverloadSetTable(writer, value: self.overloadSets)
 		cacheWritePendingFnMergeCheckArray(writer, value: self.pendingFnMergeChecks)
@@ -1121,7 +1117,6 @@ export type FileParseArtifact
 		cacheWriteDiagnosticArray(writer, value: self.diagnostics)
 		cacheWriteDeferredNameDiagnosticRoster(writer, value: self.unusedTypeAliases)
 		cacheWriteDeferredDiagnosticRoster(writer, value: self.hiddenTypeNames)
-		cacheWriteDeferredParseErrorArray(writer, value: self.deferredParseErrors)
 		cacheWriteDiagnosticArray(writer, value: self.bindingHygieneDiagnostics)
 		cacheWriteParseMints(writer, value: self.parseMints)
 		cacheWriteGenericInstanceIdArray(writer, value: self.instanceIdsInUse)
@@ -1141,7 +1136,7 @@ export type FileParseArtifact
 		let f_debugStreamNameSites = try cacheReadDebugStreamNameSiteMap(reader)
 		let f_immortalConstArraySites = try cacheReadImmortalConstArraySiteMap(reader)
 		let f_valueOrigins = try ValueOriginTable.cacheRead(reader)
-		let f_deferralSources = try DeferralSourceTable.cacheRead(reader)
+		let f_deferredChains = try DeferredChainTable.cacheRead(reader)
 		let f_funcSignatures = try cacheReadFuncSignatureEntryArray(reader)
 		let f_overloadSets = try cacheReadOverloadSetTable(reader)
 		let f_pendingFnMergeChecks = try cacheReadPendingFnMergeCheckArray(reader)
@@ -1167,16 +1162,15 @@ export type FileParseArtifact
 		let f_diagnostics = try cacheReadDiagnosticArray(reader)
 		let f_unusedTypeAliases = try cacheReadDeferredNameDiagnosticRoster(reader)
 		let f_hiddenTypeNames = try cacheReadDeferredDiagnosticRoster(reader)
-		let f_deferredParseErrors = try cacheReadDeferredParseErrorArray(reader)
 		let f_bindingHygieneDiagnostics = try cacheReadDiagnosticArray(reader)
 		let f_parseMints = try cacheReadParseMints(reader)
 		let f_instanceIdsInUse = try cacheReadGenericInstanceIdArray(reader)
 
-		return Self{filePath: f_filePath, livesUnderStdlibDirectory: f_livesUnderStdlibDirectory, typeIdsAreProjectGlobal: f_typeIdsAreProjectGlobal, module: f_module, opRanges: f_opRanges, covPoints: f_covPoints, asyncSpawnSites: f_asyncSpawnSites, serviceAwaitSites: f_serviceAwaitSites, registryUseSites: f_registryUseSites, allocTagSites: f_allocTagSites, debugStreamNameSites: f_debugStreamNameSites, immortalConstArraySites: f_immortalConstArraySites, valueOrigins: f_valueOrigins, deferralSources: f_deferralSources, funcSignatures: f_funcSignatures, overloadSets: f_overloadSets, pendingFnMergeChecks: f_pendingFnMergeChecks, pendingFunctionTypeDoors: f_pendingFunctionTypeDoors, pendingBrandRecords: f_pendingBrandRecords, pendingDiscardedResults: f_pendingDiscardedResults, rangeChecks: f_rangeChecks, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, structTypes: f_structTypes, writtenTupleTypes: f_writtenTupleTypes, enumTypes: f_enumTypes, interfaces: f_interfaces, typeNameDecls: f_typeNameDecls, genericInstanceRequests: f_genericInstanceRequests, usedTypeNames: f_usedTypeNames, memberAccessedTypeNames: f_memberAccessedTypeNames, conformances: f_conformances, literalInitSites: f_literalInitSites, inferredInstantiationSites: f_inferredInstantiationSites, typeNames: f_typeNames, currentFuncIndex: f_currentFuncIndex, diagnostics: f_diagnostics, unusedTypeAliases: f_unusedTypeAliases, hiddenTypeNames: f_hiddenTypeNames, deferredParseErrors: f_deferredParseErrors, bindingHygieneDiagnostics: f_bindingHygieneDiagnostics, parseMints: f_parseMints, instanceIdsInUse: f_instanceIdsInUse}
+		return Self{filePath: f_filePath, livesUnderStdlibDirectory: f_livesUnderStdlibDirectory, typeIdsAreProjectGlobal: f_typeIdsAreProjectGlobal, module: f_module, opRanges: f_opRanges, covPoints: f_covPoints, asyncSpawnSites: f_asyncSpawnSites, serviceAwaitSites: f_serviceAwaitSites, registryUseSites: f_registryUseSites, allocTagSites: f_allocTagSites, debugStreamNameSites: f_debugStreamNameSites, immortalConstArraySites: f_immortalConstArraySites, valueOrigins: f_valueOrigins, deferredChains: f_deferredChains, funcSignatures: f_funcSignatures, overloadSets: f_overloadSets, pendingFnMergeChecks: f_pendingFnMergeChecks, pendingFunctionTypeDoors: f_pendingFunctionTypeDoors, pendingBrandRecords: f_pendingBrandRecords, pendingDiscardedResults: f_pendingDiscardedResults, rangeChecks: f_rangeChecks, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, structTypes: f_structTypes, writtenTupleTypes: f_writtenTupleTypes, enumTypes: f_enumTypes, interfaces: f_interfaces, typeNameDecls: f_typeNameDecls, genericInstanceRequests: f_genericInstanceRequests, usedTypeNames: f_usedTypeNames, memberAccessedTypeNames: f_memberAccessedTypeNames, conformances: f_conformances, literalInitSites: f_literalInitSites, inferredInstantiationSites: f_inferredInstantiationSites, typeNames: f_typeNames, currentFuncIndex: f_currentFuncIndex, diagnostics: f_diagnostics, unusedTypeAliases: f_unusedTypeAliases, hiddenTypeNames: f_hiddenTypeNames, bindingHygieneDiagnostics: f_bindingHygieneDiagnostics, parseMints: f_parseMints, instanceIdsInUse: f_instanceIdsInUse}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize344
-		return sizeof(FileParseArtifact) as CacheSize344
+	static function cacheLayoutBytes() returns CacheSize336
+		return sizeof(FileParseArtifact) as CacheSize336
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -1287,8 +1281,8 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	target.merge(artifact.module)
 	project.opRanges.appendFrom(artifact.opRanges)
 	project.valueOrigins.appendFrom(artifact.valueOrigins, funcOffset: funcOffset, opOffset: opOffset)
-	project.deferralSources.appendFrom(artifact.deferralSources, funcOffset: funcOffset)
-	commitArtifactRegistries(project, artifact: artifact, opOffset: opOffset, funcOffset: funcOffset, signatures: signatures)
+	project.deferredChains.appendFrom(artifact.deferredChains, funcOffset: funcOffset)
+	commitArtifactRegistries(project, artifact: artifact, opOffset: opOffset, signatures: signatures)
 end 'mergeArtifact'
 
 // The registries are rebuilt by running a kept file's commits again rather than restored from a
@@ -1302,10 +1296,10 @@ module function replayMergedArtifact(project Project, artifact FileParseArtifact
 		panic("replayMergedArtifact: the index adopted the mints of {artifact.filePath.toString()} under other ids than the merge that placed its ops gave them — the kept ops would name instances the index no longer holds")
 	end 'adoptionMoved'
 
-	commitArtifactRegistries(project, artifact: artifact, opOffset: before.opCount, funcOffset: before.funcCount, signatures: signatures)
+	commitArtifactRegistries(project, artifact: artifact, opOffset: before.opCount, signatures: signatures)
 end 'replayMergedArtifact'
 
-function commitArtifactRegistries(project Project, artifact FileParseArtifact, opOffset ElementIndex, funcOffset ElementIndex, signatures ProgramSignatures)
+function commitArtifactRegistries(project Project, artifact FileParseArtifact, opOffset ElementIndex, signatures ProgramSignatures)
 	commitCovPoints(project, artifact: artifact)
 	commitOpKeyedSites(project, artifact: artifact, opOffset: opOffset)
 	commitFuncSignatures(project, artifact: artifact)
@@ -1326,7 +1320,6 @@ function commitArtifactRegistries(project Project, artifact FileParseArtifact, o
 	commitInferredInstantiationSites(project, artifact: artifact)
 	commitDiagnostics(project, artifact: artifact)
 	commitDeferredNameDiagnostics(project, artifact: artifact)
-	commitDeferredParseErrors(project, artifact: artifact, funcOffset: funcOffset)
 	commitWrittenGenericAliasNames(project, artifact: artifact, signatures: signatures)
 end 'commitArtifactRegistries'
 
@@ -1342,8 +1335,9 @@ module enum OpKeyedTable
 	debugStreamNameSites
 	immortalConstArraySites
 	valueOrigins
-	deferralSources
+	deferredChains
 	refusedOverloadCalls
+	undecidedOverloadCalls
 	pendingDiscardedResults
 	opRanges
 end 'OpKeyedTable'
@@ -1360,8 +1354,9 @@ module function heldBy(table OpKeyedTable, project Project) returns ElementIndex
 		debugStreamNameSites gives project.debugStreamNameSites.count()
 		immortalConstArraySites gives project.immortalConstArraySites.count()
 		valueOrigins gives project.valueOrigins.count()
-		deferralSources gives project.deferralSources.count()
+		deferredChains gives project.deferredChains.count()
 		refusedOverloadCalls gives project.refusedOverloadCalls.count()
+		undecidedOverloadCalls gives project.undecidedOverloadCalls.count()
 		pendingDiscardedResults gives project.pendingDiscardedResults.count()
 		opRanges gives project.opRanges.count()
 	end 'whichTable'
@@ -1372,21 +1367,21 @@ module type MergeMark
 	let blockCount as ElementIndex
 	module let funcCount as ElementIndex
 	let valueOrigins as ValueOriginMark
-	let deferralSources as ElementIndex
+	let deferredChains as ElementIndex
 
 	module static function empty() returns MergeMark
-		return Self{opCount: 0, blockCount: 0, funcCount: 0, valueOrigins: ValueOriginMark.create(0, params: 0, derived: 0), deferralSources: 0}
+		return Self{opCount: 0, blockCount: 0, funcCount: 0, valueOrigins: ValueOriginMark.create(0, params: 0, derived: 0), deferredChains: 0}
 	end 'empty'
 
 	module static function of(project Project, target MaxonModule) returns MergeMark
-		return Self{opCount: target.ops.count(), blockCount: target.blocks.count(), funcCount: target.funcCount(), valueOrigins: project.valueOrigins.mark(), deferralSources: project.deferralSources.count()}
+		return Self{opCount: target.ops.count(), blockCount: target.blocks.count(), funcCount: target.funcCount(), valueOrigins: project.valueOrigins.mark(), deferredChains: project.deferredChains.count()}
 	end 'of'
 
 	module function rollBack(project Project, target MaxonModule)
 		target.truncateTo(self.opCount, blockCount: self.blockCount, functionCount: self.funcCount)
 		project.opRanges.truncate(self.opCount)
 		project.valueOrigins.truncate(self.valueOrigins)
-		project.deferralSources.truncate(self.deferralSources)
+		project.deferredChains.truncate(self.deferredChains)
 	end 'rollBack'
 end 'MergeMark'
 
@@ -1423,14 +1418,6 @@ function commitDeferredNameDiagnostics(project Project, artifact FileParseArtifa
 		entries(recorded) then project.hiddenTypeNameDiagnostics.append(recorded)
 	end 'hidden'
 end 'commitDeferredNameDiagnostics'
-
-function commitDeferredParseErrors(project Project, artifact FileParseArtifact, funcOffset ElementIndex)
-	var target = project.deferredParseErrors
-
-	for deferred in artifact.deferredParseErrors 'each'
-		target.push(deferred.relocated(funcOffset))
-	end 'each'
-end 'commitDeferredParseErrors'
 
 // The cross-file half of E3062: a generic-instance alias may be written only in files other than the
 // one declaring it, which the per-file check cannot see.

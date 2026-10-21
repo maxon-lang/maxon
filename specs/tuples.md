@@ -964,6 +964,89 @@ end 'main'
 error E2015: <fragment>:3:2: Unsupported: a destructuring binding of a 'int' initializer (only a TUPLE can be destructured — `let (x, y) = …` needs a right-hand side that is a tuple)
 ```
 
+<!-- test: error.a-tuple-literal-holding-a-call-nothing-declares-is-undefined-at-that-call -->
+A tuple literal holding a call nothing declares is refused once, at that call. The tuple has no type to
+intern, and nothing is reported about it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	var s = "a string padded out long enough to heap allocate"
+	var n = 0 as Integer
+	(s, n) = (nosuch(1), 2)
+	print("{s}{n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:7:12: call to undefined function 'nosuch'
+```
+
+<!-- test: error.a-destructuring-declaration-of-a-tuple-literal-holding-a-call-nothing-declares-is-undefined-at-that-call -->
+The same literal destructured into new bindings, with the call past the first element, is refused once, at
+that call.
+```maxon
+function main() returns ExitCode
+	let (a, b) = (1, nosuch(2))
+	print("{a}{b}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:19: call to undefined function 'nosuch'
+```
+
+<!-- test: error.a-bound-tuple-literal-holding-a-call-nothing-declares-is-undefined-at-that-call -->
+A tuple literal bound whole, with the call in its middle, is refused once, at that call, and the reads of
+the binding report nothing.
+```maxon
+function main() returns ExitCode
+	let triple = (1, nosuch(2), 3)
+	print("{triple.0}{triple.2}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:19: call to undefined function 'nosuch'
+```
+
+<!-- test: error.a-tuple-literal-holding-a-call-nothing-declares-passed-at-a-tuple-parameter-is-undefined-at-that-call -->
+A tuple literal holding a call nothing declares, handed to a tuple parameter, is refused once, at that call.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function takes(pair (Integer, Integer)) returns Integer
+	return pair.0
+end 'takes'
+
+function main() returns ExitCode
+	return takes((frobnicate(1), 2)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:9:16: call to undefined function 'frobnicate'
+```
+
+<!-- test: error.a-returned-tuple-literal-holding-a-call-nothing-declares-is-undefined-at-that-call -->
+A tuple literal returned from a function declared to return a tuple is refused once, at the call inside it,
+and nothing is reported at the return.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function pair() returns (Integer, Integer)
+	return (nosuch(1), 2)
+end 'pair'
+
+function main() returns ExitCode
+	let (a, b) = pair()
+	print("{a}{b}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:5:10: call to undefined function 'nosuch'
+```
+
 ### ⭐ A TUPLE OVER A GENERIC TYPE PARAMETER
 
 A tuple may hold a type parameter, and three facts make it a type: its IDENTITY (a type-parameter token is a

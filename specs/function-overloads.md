@@ -242,8 +242,92 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/function-overloads/error.an-argument-from-an-undefined-call-picks-no-overload.maxon:11:9: resolving an overload of 'pick' against an argument whose type is not known — it derives from a name no file of the program declares, so no overload can be picked by it
 error E3004: specs/function-overloads/error.an-argument-from-an-undefined-call-picks-no-overload.maxon:11:14: call to undefined function 'undefinedAnswer'
+```
+
+<!-- test: error.an-argument-from-an-undefined-call-picks-no-overload-of-a-set-two-files-declare -->
+The overloads are declared by two files, so no member holds the bare name. The undefined call is still the
+only thing reported: the overload it feeds is neither refused nor named as undefined.
+```maxon
+// --- file: strings.maxon
+export function pick(x String) returns ExitCode
+	return 1 if x.isEmpty() else 0
+end 'pick'
+
+// --- file: codes.maxon
+export function pick(x ExitCode) returns ExitCode
+	return x
+end 'pick'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return pick(undefinedAnswer())
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:14:14: call to undefined function 'undefinedAnswer'
+```
+
+<!-- test: error.an-undefined-call-beside-a-known-argument-is-the-only-report-of-an-overloaded-call -->
+The argument that cannot be typed blocks the choice of overload, so the argument beside it is judged against
+none: it is not held to the first overload's parameter, whichever type that is.
+```maxon
+function pick(a ExitCode, b ExitCode) returns ExitCode
+	return a + b
+end 'pick'
+
+function pick(a String, b String) returns ExitCode
+	return 1 if a.isEmpty() or b.isEmpty() else 0
+end 'pick'
+
+function main() returns ExitCode
+	return pick(undefinedAnswer(), b: "s")
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:11:14: call to undefined function 'undefinedAnswer'
+```
+
+<!-- test: error.an-undefined-call-in-an-overloaded-call-of-another-arity-is-the-only-report -->
+Overloads of different arity: the undefined call picks none of them, so the call's argument count is not held
+to the first overload's either.
+```maxon
+function pick(a ExitCode) returns ExitCode
+	return a
+end 'pick'
+
+function pick(a String, b String) returns ExitCode
+	return 1 if a.isEmpty() or b.isEmpty() else 0
+end 'pick'
+
+function main() returns ExitCode
+	return pick(undefinedAnswer(), b: "s")
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:11:14: call to undefined function 'undefinedAnswer'
+```
+
+<!-- test: error.an-undefined-call-in-a-set-whose-first-member-is-hidden-from-the-caller-is-the-only-report -->
+The overload registered first is file-private to a file the caller is not. The undefined call picks none of
+the overloads, and the call is not checked against the hidden one either.
+```maxon
+// --- file: a.maxon
+function pick(x ExitCode) returns ExitCode
+	return x
+end 'pick'
+
+// --- file: main.maxon
+function pick(x String) returns ExitCode
+	return 1 if x.isEmpty() else 0
+end 'pick'
+
+function main() returns ExitCode
+	return pick(undefinedAnswer())
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:13:14: call to undefined function 'undefinedAnswer'
 ```
 
 <!-- test: a-void-overload-beside-a-value-one-resolves-by-argument -->

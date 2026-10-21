@@ -227,7 +227,7 @@ extension Project
 		var kept = DiagnosticArray.create()
 
 		for diagnostic in reported 'eachRefusal'
-			if theProjectDeclaresTheRefusedName(diagnostic, verdicts: verdicts, buffer: buffer, document: document, tokens: tokens, corpus: signatures, reader: reader, own: own) 'blindToASibling'
+			if theProjectDeclaresTheSubject(diagnosticSubject(diagnostic, tokens: tokens), verdicts: verdicts, buffer: buffer, document: document, corpus: signatures, reader: reader, own: own) 'blindToASibling'
 				continue
 			end 'blindToASibling'
 
@@ -331,7 +331,7 @@ end 'tokenStreamsAgree'
 // ⛔⛔ **THE FAMILY FILTER IS THE PRICE OF BLINDNESS, AND IT APPLIES ONLY WHERE THE COMPILE WAS BLIND.**
 // A modified buffer is compiled alone, so a name only a sibling declares is a name it could not resolve —
 // and once one such name is in the file, every refusal downstream of it is suspect, not just the ones
-// `theProjectDeclaresTheRefusedName` could attribute. But a modified buffer that resolved every name it
+// `theProjectDeclaresTheSubject` could attribute. But a modified buffer that resolved every name it
 // used is not blind at all, and filtering there would mute the author's own errors while they type. So the
 // scope is asked first, and only then is the answer narrowed to what is true of this file's text alone.
 function refusalsThisRoadMayPublish(kept DiagnosticArray, road RefusalRoad, verdicts SiblingVerdictMap, buffer FilePath, document HoverDocument, tokens TokenArray, corpus ProgramSignatures, reader FilePath, own ProgramSignatures) returns DiagnosticArray
@@ -369,33 +369,6 @@ end 'aNameOnlyTheProjectDeclares'
 
 // ⚠ No confident subject means PUBLISH: a diagnostic nothing can be attributed to is shown rather than
 // dropped, because a suppression that guesses hides a real error and a squiggle that survives does not.
-function theProjectDeclaresTheRefusedName(diagnostic Diagnostic, verdicts SiblingVerdictMap, buffer FilePath, document HoverDocument, tokens TokenArray, corpus ProgramSignatures, reader FilePath, own ProgramSignatures) returns bool
-	match diagnostic.cause 'cause'
-		standsAlone then return theProjectDeclaresTheSubject(diagnosticSubject(diagnostic, tokens: tokens), verdicts: verdicts, buffer: buffer, document: document, corpus: corpus, reader: reader, own: own)
-		undeclaredCalls(calls, filePath) then return theProjectDeclaresEveryCallee(calls, filePath: filePath, verdicts: verdicts, buffer: buffer, document: document, tokens: tokens, corpus: corpus, reader: reader, own: own)
-	end 'cause'
-end 'theProjectDeclaresTheRefusedName'
-
-// Each undeclared call is judged exactly as the E3004 at that call is, and one that no sibling
-// declares keeps the diagnostic.
-function theProjectDeclaresEveryCallee(calls SourceRangeArray, filePath FilePath, verdicts SiblingVerdictMap, buffer FilePath, document HoverDocument, tokens TokenArray, corpus ProgramSignatures, reader FilePath, own ProgramSignatures) returns bool
-	if not namesTheSameFile(filePath, other: buffer) 'anotherFilesCalls'
-		return false
-	end 'anotherFilesCalls'
-
-	if calls.isEmpty() 'noCallToAttribute'
-		panic("theProjectDeclaresEveryCallee: a diagnostic caused by undeclared calls names none of them — `SemanticCheck.deferralCause` answers `standsAlone` rather than an empty list")
-	end 'noCallToAttribute'
-
-	for call in calls 'eachUndeclaredCall'
-		if not theProjectDeclaresTheSubject(subjectAnchoredAt(tokens, line: call.line, column: call.column), verdicts: verdicts, buffer: buffer, document: document, corpus: corpus, reader: reader, own: own) 'declaredNowhereElse'
-			return false
-		end 'declaredNowhereElse'
-	end 'eachUndeclaredCall'
-
-	return true
-end 'theProjectDeclaresEveryCallee'
-
 function theProjectDeclaresTheSubject(subject DiagnosticSubject, verdicts SiblingVerdictMap, buffer FilePath, document HoverDocument, corpus ProgramSignatures, reader FilePath, own ProgramSignatures) returns bool
 	match subject 'subject'
 		unattributable then return false

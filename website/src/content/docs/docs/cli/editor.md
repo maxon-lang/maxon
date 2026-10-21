@@ -119,12 +119,12 @@ a compile — so a name declared in another file resolves, and a type declared t
 The index matches what the matching command compiles: for a `.maxon` document it holds the project's
 `.maxon` sources, and for a `.maxtest` document the project's `.maxtest` files as well, so a test file
 sees the helpers its sibling test files declare and a production source sees production sources only.
-Diagnostics use that same index for two corrections: a name a sibling file declares counts as declared,
-and a refusal that exists only because the buffer was compiled alone is dropped — an overload call, or a
-held-back parse error, whose argument derives from a call a sibling file declares. This *buffer check*
-runs on the buffer together with the standard library. An error only the whole program merged across
-files can raise — two sibling files contesting one name, for example — comes from the *project check*
-described under **Diagnostics** below, which compiles the project as `maxon build` does.
+Diagnostics use that same index for one correction: a name a sibling file declares counts as declared. A
+call to a name no file declares is reported once, at that call, and the value it produces is accepted
+wherever it is used. This *buffer check* runs on the buffer together with the standard library. An error
+only the whole program merged across files can raise — two sibling files contesting one name, for
+example — comes from the *project check* described under **Diagnostics** below, which compiles the
+project as `maxon build` does.
 
 **A document's uri may carry any scheme, and what the server can do with a document turns on the path
 that uri spells.** Every scheme is accepted, so an editor that forwards whatever uri a buffer carries is

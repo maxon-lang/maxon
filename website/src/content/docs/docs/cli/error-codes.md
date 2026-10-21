@@ -249,7 +249,7 @@ The program declares no 'main' function.
 
 ### E3004 — `callUnknownFunction`
 
-A call names a function that does not exist -- a typo, or a callee not visible from here. A dotted call, whether written as an expression, a statement, under `try` or `async`, or in a top-level constant, is reported here when its qualifier names no binding, directory or type (`foo.bar.baz()`: nothing declares `foo.bar`). Correct the qualifier to the directory or type that declares the function. A bare call in a top-level or `static` initializer is reported here as it is in a function body. A member called on its result has parameters no declaration states, so it accepts any argument labels and an untyped closure argument; errors inside its arguments are reported as usual.
+A call names a function that does not exist -- a typo, or a callee not visible from here. A dotted call, whether written as an expression, a statement, under `try` or `async`, or in a top-level constant, is reported here when its qualifier names no binding, directory or type (`foo.bar.baz()`: nothing declares `foo.bar`). Correct the qualifier to the directory or type that declares the function. A bare call in a top-level or `static` initializer is reported here as it is in a function body. This is the one error the call earns: the value it produces is accepted wherever it is used. A member called on its result has parameters no declaration states, so it accepts any argument labels and an untyped closure argument; errors inside its arguments are reported as usual.
 
 ### E3005 — `typeMismatch`
 
@@ -809,7 +809,7 @@ A typealias's `implements` clause names a parent its range does not fit. The ali
 
 ### E3179 — `genericTypeParameterNotInferable`
 
-A generic function's type parameter cannot be inferred: no parameter is declared with it, or an argument that would decide it has a type the compiler cannot determine. Reported at its name in the `uses` clause in the first case and at the call in the second. Declare a parameter of that type, or give the argument a known type.
+A generic function's type parameter cannot be inferred: no parameter is declared with it. Reported at its name in the `uses` clause. Declare a parameter of that type.
 
 ### E3180 — `genericArgumentsHaveNoCommonType`
 

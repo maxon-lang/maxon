@@ -20,7 +20,6 @@ CUSTOM_TYPES = {
 }
 
 REFUSING_TYPES = {
-    "DeferredParseError",
     "ConditionalRefusal",
     "MisclosedBlockSite",
 }

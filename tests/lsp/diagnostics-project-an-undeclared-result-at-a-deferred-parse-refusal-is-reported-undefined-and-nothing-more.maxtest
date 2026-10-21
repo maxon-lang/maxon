@@ -3,9 +3,9 @@ let ProjectDeferredUndeclaredHelperFileName = "helper.maxon"
 let ProjectDeferredUndeclaredBufferFileName = "main.maxon"
 let ProjectDeferredUndeclaredHelperSource = "module function projectDeferredUndeclaredHelper() returns String\n\treturn \"green\"\nend 'projectDeferredUndeclaredHelper'\n"
 let ProjectDeferredUndeclaredBufferSource = "enum ProjectDeferredUndeclaredColour\n\tred\n\tgreen\nend 'ProjectDeferredUndeclaredColour'\n\nfunction main() returns ExitCode\n\tlet colour = try ProjectDeferredUndeclaredColour.fromName(projectDeferredUndeclaredNowhere()) otherwise return 2\n\n\treturn 1 if colour == ProjectDeferredUndeclaredColour.green else 0\nend 'main'\n"
-let ProjectDeferredUndeclaredPublished = "E3004@6 E3005@6"
+let ProjectDeferredUndeclaredPublished = "E3004@6"
 
-test 'a result no file declares at a door the parse refuses by type is still refused'
+test 'a result no file declares at a door the parse types is reported undefined and nothing more'
 	let root = stagedProjectDiagnosticsRoot(ProjectDeferredUndeclaredDirName)
 	writeCorpusFile(root, fileName: ProjectDeferredUndeclaredHelperFileName, content: ProjectDeferredUndeclaredHelperSource)
 	writeCorpusFile(root, fileName: ProjectDeferredUndeclaredBufferFileName, content: ProjectDeferredUndeclaredBufferSource)
@@ -14,5 +14,5 @@ test 'a result no file declares at a door the parse refuses by type is still ref
 
 	discardOutsideCheckoutDir(root)
 
-	expectProjectDiagnosticCodesAndLines(probe, expected: ProjectDeferredUndeclaredPublished, note: "`projectDeferredUndeclaredNowhere` is declared nowhere, and `main` hands its result to the buffer enum's `fromName`, whose argument must be a `String`. A `maxon build` of the staged project reports the undefined function and then the refusal the parse recorded against its result, both on the `let` line.")
-end 'a result no file declares at a door the parse refuses by type is still refused'
+	expectProjectDiagnosticCodesAndLines(probe, expected: ProjectDeferredUndeclaredPublished, note: "`projectDeferredUndeclaredNowhere` is declared nowhere, and `main` hands its result to the buffer enum's `fromName`, whose argument must be a `String`. A `maxon build` of the staged project reports the undefined function on the `let` line and nothing about the `String` the door expects, whose argument is already refused there.")
+end 'a result no file declares at a door the parse types is reported undefined and nothing more'

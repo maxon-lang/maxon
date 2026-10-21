@@ -1535,6 +1535,8 @@ end 'cacheReadServiceAwaitSiteMap'
 
 export typealias RefusedOverloadCallSet = Set with ElementIndex
 
+export typealias UndecidedOverloadCallSet = Set with ElementIndex
+
 export typealias SynthesizedOpFileMap = Map with (ElementIndex, FilePath)
 
 export type RegistryUseSite
@@ -11986,8 +11988,6 @@ export type Project
 	export var hiddenTypeNameDiagnostics as DiagnosticArray
 	export var unknownTypeReports as UnknownTypeReports
 
-	export var deferredParseErrors as DeferredParseErrorArray
-
 	// The generic-instance alias names some file wrote in a type position — one half of the cross-file
 	// E3062 credit, which `TypeResolution.reportDeferredNameDiagnostics` completes by asking the
 	// candidate's OWN file the same question. Only a name
@@ -12288,6 +12288,10 @@ export type Project
 	// other op-keyed tables each fold round.
 	export var refusedOverloadCalls = RefusedOverloadCallSet.create()
 
+	// The calls `SemanticCheck.resolveOneOverloadedCall` left undecided because an argument is deferred, by
+	// op index; `checkCalls` skips them. Reset with the other op-keyed tables each fold round.
+	export var undecidedOverloadCalls = UndecidedOverloadCallSet.create()
+
 	// The source file an op was synthesized on behalf of, by op index (`ModuleInit.recordOpTables`) —
 	// what `authoredFileOf` answers for an op the function holding it was not written in.
 	export var synthesizedOpFiles as SynthesizedOpFileMap
@@ -12414,7 +12418,7 @@ export type Project
 	// (register-pressure) diagnostic maps a Target ValueId back to its source span
 	// through it.
 	export var valueOrigins as ValueOriginTable
-	export var deferralSources as DeferralSourceTable
+	export var deferredChains as DeferredChainTable
 
 	// The compile root: the file or directory this build was invoked on. Used to
 	// derive per-file namespaces and the default output path.
@@ -12499,7 +12503,6 @@ export type Project
 			unusedTypeAliasDiagnostics: DeferredNameDiagnosticArray.create(),
 			hiddenTypeNameDiagnostics: DiagnosticArray.create(),
 			unknownTypeReports: UnknownTypeReports.create(),
-			deferredParseErrors: DeferredParseErrorArray.create(),
 			genericAliasNamesWrittenByAFile: UsedTypeNameSet.create(),
 			bindingHygieneDiagnostics: DiagnosticArray.create(),
 			targetRefusalDiagnostics: DiagnosticArray.create(),
@@ -12564,7 +12567,7 @@ export type Project
 			stdOpElementStrides: StdOpElementStrideMap.create(),
 			stdOpTrivialElementSites: StdOpTrivialElementSiteSet.create(),
 			valueOrigins: ValueOriginTable.create(),
-			deferralSources: DeferralSourceTable.create(),
+			deferredChains: DeferredChainTable.create(),
 			rootPath: rootPath,
 			target: target,
 			diagnostics: DiagnosticArray.create(),
@@ -12847,7 +12850,7 @@ module function distinctDiagnostics(diagnostics DiagnosticArray) returns Diagnos
 	var distinct = DiagnosticArray.create()
 
 	for diagnostic in diagnostics 'each'
-		let identity = diagnostic.identityText()
+		let identity = diagnostic.render()
 
 		if seen.contains(identity) 'reportedAlready'
 			continue

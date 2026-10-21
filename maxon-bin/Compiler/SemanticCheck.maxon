@@ -83,9 +83,6 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	try checkCalls(project, module: module, signatures: signatures, funcNames: funcNames, throwsMap: throwsMap, mutationSummary: mutationSummary, provenance: provenance, calls: summaryIndex)
 	try requireStillWanted(project)
 
-	// After `checkCalls`: the E3004 explaining an undefined call precedes the refusal it caused.
-	reportDeferredParseErrors(project, module: module, signatures: signatures)
-
 	provenance.endStorageDoors()
 	provenance.checkVarInitializersTakeNoSharedRecord(funcNames)
 	try checkClosureCycles(project, module: module, signatures: signatures, funcNames: funcNames, provenance: provenance)
@@ -93,10 +90,10 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 
 	// The RETURN half of the interface-widening rule. After `checkCalls` so a program with
 	// both a bad argument and a bad return reports the argument first, in the order the reader meets them.
-	checkReturnedValueTypes(project, module: module, signatures: signatures)
+	checkReturnedValueTypes(project, module: module)
 
 	// The FIELD-STORE half, after the return half for the order a reader meets the two in a body's own statements.
-	checkExistentialFieldStores(project, module: module, signatures: signatures)
+	checkExistentialFieldStores(project, module: module)
 
 	// The function-type doors the parser recorded (`PendingFunctionTypeDoor`). It runs HERE, and not beside
 	// `checkValueMergeSignatures`, for one reason: the shapes are compared RESOLVED, and resolution has not
@@ -197,11 +194,11 @@ function resolveOverloadedCalls(project Project, module MaxonModule, signatures 
 
 	for fnIndex in 0 upto module.functions.count() 'eachFunc'
 		valueDefiners.beginFunction()
-		resolveOverloadedCallsInFunc(project, module: module, signatures: signatures, funcNames: funcNames, func: try module.functions.get(fnIndex) otherwise panic("resolveOverloadedCalls: fnIndex {fnIndex} is below module.functions.count()"), funcIndex: fnIndex, valueDefiners: valueDefiners)
+		resolveOverloadedCallsInFunc(project, module: module, signatures: signatures, funcNames: funcNames, func: try module.functions.get(fnIndex) otherwise panic("resolveOverloadedCalls: fnIndex {fnIndex} is below module.functions.count()"), valueDefiners: valueDefiners)
 	end 'eachFunc'
 end 'resolveOverloadedCalls'
 
-function resolveOverloadedCallsInFunc(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, funcIndex ElementIndex, valueDefiners FunctionValueOrigins)
+function resolveOverloadedCallsInFunc(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, valueDefiners FunctionValueOrigins)
 	var resolution = CallResolution.create(func)
 
 	for opIdx in module.liveOpIndices(func) 'eachOp'
@@ -210,7 +207,7 @@ function resolveOverloadedCallsInFunc(project Project, module MaxonModule, signa
 		match maxonOpCalleeKind(op) 'callee'
 			noCallee then break
 			functionValue then refuseOverloadedFunctionValue(project, func: func, opIndex: opIdx, name: maxonOpCalleeName(op))
-			direct then resolveOneOverloadedCall(project, module: module, signatures: signatures, funcNames: funcNames, func: func, funcIndex: funcIndex, opIndex: opIdx, valueDefiners: valueDefiners, resolution: resolution)
+			direct then resolveOneOverloadedCall(project, module: module, signatures: signatures, funcNames: funcNames, func: func, opIndex: opIdx, valueDefiners: valueDefiners, resolution: resolution)
 		end 'callee'
 	end 'eachOp'
 
@@ -276,8 +273,7 @@ function settleConditionalArguments(project Project, module MaxonModule, func Ir
 end 'settleConditionalArguments'
 
 // Which op defines each value of the function being walked, which the op stream does not offer.
-// `repointDefaultedArgHelpers` rewrites the op that produced a synthesized default argument, and
-// `deferralCause` follows a refused argument back to the call it came from.
+// `repointDefaultedArgHelpers` rewrites the op that produced a synthesized default argument.
 //
 // ⚠ `Project.valueOrigins` already answers this and may not be used for it. That table is
 // whole-program and its `lookup` is a linear scan meant for a single diagnostic. Asked once per
@@ -307,23 +303,16 @@ type FunctionValueOrigins
 	// `call`, and of nothing else: `retypeOpaqueMethodResult` answers `asItStands` on an empty argument
 	// list, so no reinterpretation is ever wrapped around it and the call's own result IS the argument.
 	function definingOp(module MaxonModule, func IrFunction, value ValueId) returns ElementIndex
-		match self.originOf(module, func: func, value: value) 'origin'
-			found(opIndex) then return opIndex
-			none then panic("FunctionValueOrigins.definingOp: value v{value} of '{String.from(func.name)}' is defined by no live op — it was read back as a synthesized default ARGUMENT, which `Parser.emitDefaultArgValue` produces as a nullary call's result")
-		end 'origin'
-	end 'definingOp'
-
-	function originOf(module MaxonModule, func IrFunction, value ValueId) returns ValueOriginLookup
 		if not self.filled 'theFirstAskInThisFunction'
 			self.fill(module, func: func)
 		end 'theFirstAskInThisFunction'
 
-		if not (try self.isDefined.get(value) otherwise panic("FunctionValueOrigins.originOf: value v{value} is past '{String.from(func.name)}'s own value count — every SSA value is minted through Parser.mintValue, which is what sizes this column")) 'noOpDefinesIt'
-			return ValueOriginLookup.none
+		if not (try self.isDefined.get(value) otherwise panic("FunctionValueOrigins.definingOp: value v{value} is past '{String.from(func.name)}'s own value count — every SSA value is minted through Parser.mintValue, which is what sizes this column")) 'noOpDefinesIt'
+			panic("FunctionValueOrigins.definingOp: value v{value} of '{String.from(func.name)}' is defined by no live op — it was read back as a synthesized default ARGUMENT, which `Parser.emitDefaultArgValue` produces as a nullary call's result")
 		end 'noOpDefinesIt'
 
-		return ValueOriginLookup.found(try self.definedAt.get(value) otherwise panic("FunctionValueOrigins.originOf: definedAt.get OOB at v{value} — the two columns are pushed in lockstep"))
-	end 'originOf'
+		return try self.definedAt.get(value) otherwise panic("FunctionValueOrigins.definingOp: definedAt.get OOB at v{value} — the two columns are pushed in lockstep")
+	end 'definingOp'
 
 	function fill(module MaxonModule, func IrFunction)
 		self.definedAt = OpIndexArray.create()
@@ -354,20 +343,31 @@ end 'FunctionValueOrigins'
 
 // One call. A callee that names no overload set is left exactly as the parser wrote it, which is
 // nearly every call in the program.
-function resolveOneOverloadedCall(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, funcIndex ElementIndex, opIndex ElementIndex, valueDefiners FunctionValueOrigins, resolution CallResolution)
+function resolveOneOverloadedCall(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, opIndex ElementIndex, valueDefiners FunctionValueOrigins, resolution CallResolution)
 	let readerFilePath = authoredFileOf(project, func: func, opIndex: opIndex)
 	var op = try module.ops.get(opIndex) otherwise panic("resolveOneOverloadedCall: ops.get({opIndex}) OOB — the index came from liveOpIndices")
 	view callee = maxonOpCalleeName(op)
 	view members = try project.overloadSets.get(callee) otherwise return
 	let candidates = overloadCandidates(project, members: members)
 
-	if candidates.count() > 1 and callPassesOpaqueArg(func, op: op) 'cannotDiscriminate'
-		refuseOpaqueOverloadArgument(project, module: module, signatures: signatures, func: func, funcIndex: funcIndex, opIndex: opIndex, callee: callee, origins: valueDefiners)
+	let nameable = membersTheCallerMayName(project, signatures: signatures, funcNames: funcNames, func: func, op: op, candidates: candidates)
+	let narrowed = nameable.count() > 0 and nameable.count() < candidates.count()
+
+	let opaque = opaqueArgumentOf(func, op: op) if candidates.count() > 1 else OpaqueArgument.none
+
+	if opaque == OpaqueArgument.typeParameter 'cannotDiscriminate'
+		refuseOpaqueOverloadArgument(project, func: func, opIndex: opIndex, callee: callee)
 		return
 	end 'cannotDiscriminate'
 
-	let nameable = membersTheCallerMayName(project, signatures: signatures, funcNames: funcNames, func: func, op: op, candidates: candidates)
-	let narrowed = nameable.count() > 0 and nameable.count() < candidates.count()
+	// Left on the first candidate as `noMatch` is, and no silent pick: a deferred argument rests on an error
+	// already reported, and nothing judges the call (`Project.undecidedOverloadCalls`).
+	if opaque == OpaqueArgument.deferred 'aDeferredArgumentPicksNothing'
+		project.undecidedOverloadCalls.insert(opIndex)
+		leaveUnmatchedCallOnFirstCandidate(project, module: module, opIndex: opIndex, callee: callee, candidates: nameable if narrowed else candidates)
+		return
+	end 'aDeferredArgumentPicksNothing'
+
 	let firstPick = selectOverload(project, func: func, readerFilePath: readerFilePath, op: op, candidates: nameable if narrowed else candidates, retype: argumentsAsWritten)
 	let widens = narrowed and pickFindsNoMember(firstPick)
 	let pick = selectOverload(project, func: func, readerFilePath: readerFilePath, op: op, candidates: candidates, retype: argumentsAsWritten) if widens else firstPick
@@ -435,173 +435,50 @@ end 'leaveUnmatchedCallOnFirstCandidate'
 //
 // A `typeParameter` value is a generic's `T` that `retypeOpaqueMethodResult` could not make
 // concrete — which it declines to do exactly when the concrete type is managed, because the drop
-// decision the tag governs is already emitted. An `unresolved` value is the same shape by deferral.
-// Neither names an aggregate: `aggregateNameFor` answers empty for both and
-// `namedAggregatesConflict` reads empty as "a scalar", so the candidate with a scalar parameter
-// would match while the one with the correct aggregate parameter was refused for disagreeing with
-// it.
+// decision the tag governs is already emitted. It names no aggregate: `aggregateNameFor` answers
+// empty for it and `namedAggregatesConflict` reads empty as "a scalar", so the candidate with a scalar
+// parameter would match while the one with the correct aggregate parameter was refused for
+// disagreeing with it.
 //
-// So a set of two or more candidates and an argument nothing can identify is refused. It cannot be
-// a selection (there is no fact to select on) and it must not be a silent one: `noMatch` would
-// leave the bare name, which is the first member's registration name, so whichever overload
-// happened to be written first would take the call. A single candidate needs no discrimination and
-// is left alone.
-//
-// The refusal carries the undeclared calls an `unresolved` argument derives from (`deferralCause`),
-// so the editor can drop it when it compiled a buffer alone and a sibling file declares them all.
-function refuseOpaqueOverloadArgument(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndex ElementIndex, opIndex ElementIndex, callee ByteArray, origins FunctionValueOrigins)
+// So a set of two or more candidates and a type-parameter argument is refused. It cannot be a
+// selection (there is no fact to select on) and it must not be a silent one: `noMatch` would leave the
+// bare name, which is the first member's registration name, so whichever overload happened to be
+// written first would take the call. A single candidate needs no discrimination and is left alone.
+function refuseOpaqueOverloadArgument(project Project, func IrFunction, opIndex ElementIndex, callee ByteArray)
 	let range = project.opRanges.get(opIndex)
-	let args = match overloadCallArgs(try module.ops.get(opIndex) otherwise panic("refuseOpaqueOverloadArgument: ops.get({opIndex}) OOB — the index is the call being refused")) 'args'
-		supplied(supplied, _, _, _) gives supplied
-	end 'args'
 
-	let refusal = Diagnostic.create(ErrorCode.parserUnsupportedFeature, message: opaqueOverloadArgumentMessage(callee, typeParameterArgument: valueTagsInclude(func, args: args, tag: ValueTypeTag.typeParameter)), line: range.line, column: range.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
-
-	reportDiagnostic(project, diagnostic: refusal.withCause(deferralCause(project, module: module, signatures: signatures, funcIndex: funcIndex, seeds: args, origins: origins)))
+	reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "resolving an overload of '{bareMethodName(callee)}' against an argument of opaque generic type — the value is a type parameter whose concrete type is managed, so its type is not known at the call and no overload can be picked by it. Bind the argument to a concretely-typed local first, or give the overloads distinct names", line: range.line, column: range.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
 end 'refuseOpaqueOverloadArgument'
 
-function opaqueOverloadArgumentMessage(callee ByteArray, typeParameterArgument bool) returns String
-	if typeParameterArgument 'aTypeParameter'
-		return "resolving an overload of '{bareMethodName(callee)}' against an argument of opaque generic type — the value is a type parameter whose concrete type is managed, so its type is not known at the call and no overload can be picked by it. Bind the argument to a concretely-typed local first, or give the overloads distinct names"
-	end 'aTypeParameter'
+enum OpaqueArgument
+	none
+	typeParameter
+	deferred
+end 'OpaqueArgument'
 
-	return "resolving an overload of '{bareMethodName(callee)}' against an argument whose type is not known — it derives from a name no file of the program declares, so no overload can be picked by it"
-end 'opaqueOverloadArgumentMessage'
-
-// ⚠ Fails closed: a value the trace cannot follow to an undeclared call — a type parameter, a call
-// to a declared function, a definer with no opaque operand — makes the diagnostic `standsAlone`,
-// and the editor publishes it. A cause naming calls the refusal does not rest on would hide a real
-// error.
-function deferralCause(project Project, module MaxonModule, signatures ProgramSignatures, funcIndex ElementIndex, seeds ValueIdArray, origins FunctionValueOrigins) returns DiagnosticCause
-	var calls = SourceRangeArray.create()
-
-	if not traceUndeclaredCalls(project, module: module, signatures: signatures, funcIndex: funcIndex, seeds: seeds, origins: origins, calls: calls) or calls.isEmpty() 'noUndeclaredCallExplainsIt'
-		return DiagnosticCause.standsAlone
-	end 'noUndeclaredCallExplainsIt'
-
-	return DiagnosticCause.undeclaredCalls(calls, filePath: module.getFunc(funcIndex).sourceFilePath)
-end 'deferralCause'
-
-module function valuesDeferralCause(project Project, module MaxonModule, signatures ProgramSignatures, funcIndex ElementIndex, values ValueIdArray) returns DiagnosticCause
-	return deferralCause(project, module: module, signatures: signatures, funcIndex: funcIndex, seeds: values, origins: FunctionValueOrigins.create())
-end 'valuesDeferralCause'
-
-function traceUndeclaredCalls(project Project, module MaxonModule, signatures ProgramSignatures, funcIndex ElementIndex, seeds ValueIdArray, origins FunctionValueOrigins, calls SourceRangeArray) returns bool
-	let func = module.getFunc(funcIndex)
-	var pending = ValueIdArray.create()
-	pending.append(seeds)
-	var visited = ValueMarkSet.create()
-
-	while not pending.isEmpty() 'eachValue'
-		let value = try pending.pop() otherwise panic("traceUndeclaredCalls: the loop runs only while `pending` holds a value")
-
-		if visited.contains(value) 'tracedAlready'
-			continue
-		end 'tracedAlready'
-
-		visited.insert(value)
-		let tag = try func.valueTags.get(value) otherwise panic("traceUndeclaredCalls: value v{value} of '{String.from(func.name)}' has no recorded type — every SSA value is minted through Parser.mintValue")
-
-		if tag == ValueTypeTag.typeParameter 'opaqueInEveryCompile'
-			return false
-		end 'opaqueInEveryCompile'
-
-		if tag != ValueTypeTag.unresolved 'identified'
-			continue
-		end 'identified'
-
-		if not traceDeferredValue(project, module: module, signatures: signatures, func: func, funcIndex: funcIndex, value: value, origins: origins, calls: calls, pending: pending) 'untraceable'
-			return false
-		end 'untraceable'
-	end 'eachValue'
-
-	return true
-end 'traceUndeclaredCalls'
-
-function traceDeferredValue(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndex ElementIndex, value ValueId, origins FunctionValueOrigins, calls SourceRangeArray, pending ValueIdArray) returns bool
-	match project.deferralSources.sourceOf(funcIndex, valueId: value) 'recorded'
-		value(sourceFuncIndex, sourceId) then return followDeferralSource(project, module: module, signatures: signatures, funcIndex: funcIndex, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId, calls: calls, pending: pending)
-		none then break
-	end 'recorded'
-
-	match origins.originOf(module, func: func, value: value) 'origin'
-		found(definer) then return traceDeferredDefiner(project, module: module, signatures: signatures, func: func, definer: definer, calls: calls, pending: pending)
-		none then return pushBlockArgumentInputs(module, func: func, value: value, pending: pending)
-	end 'origin'
-end 'traceDeferredValue'
-
-function followDeferralSource(project Project, module MaxonModule, signatures ProgramSignatures, funcIndex ElementIndex, sourceFuncIndex ElementIndex, sourceId ValueId, calls SourceRangeArray, pending ValueIdArray) returns bool
-	if sourceFuncIndex == funcIndex 'thisFunctionsValue'
-		pending.push(sourceId)
-		return true
-	end 'thisFunctionsValue'
-
-	return traceUndeclaredCalls(project, module: module, signatures: signatures, funcIndex: sourceFuncIndex, seeds: singletonArgs(sourceId), origins: FunctionValueOrigins.create(), calls: calls)
-end 'followDeferralSource'
-
-function traceDeferredDefiner(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, definer ElementIndex, calls SourceRangeArray, pending ValueIdArray) returns bool
-	let op = try module.ops.get(definer) otherwise panic("traceDeferredDefiner: ops.get({definer}) OOB — the index came from liveOpIndices")
-
-	if maxonOpCalleeKind(op) == MaxonCalleeKind.direct 'aCall'
-		let callee = maxonOpCalleeName(op)
-
-		// The question the parser's deferral doors asked, so the call named here is the one the parser
-		// deferred. `validateCall` asks `project.funcSignatures` instead: it runs after overload
-		// resolution, on `#`-mangled names the sweep never holds.
-		if signatures.definesCallee(callee) 'notAnAuthorsUndeclaredCallee'
-			return false
-		end 'notAnAuthorsUndeclaredCallee'
-
-		calls.push(project.opRanges.get(definer))
-		return true
-	end 'aCall'
-
-	var operands = ValueIdArray.create()
-	maxonOpOperandValues(op, into: operands)
-
-	if not valueTagsIncludeOpaque(func, args: operands) 'opaqueWithoutAnOpaqueOperand'
-		return false
-	end 'opaqueWithoutAnOpaqueOperand'
-
-	pending.append(operands)
-	return true
-end 'traceDeferredDefiner'
-
-function pushBlockArgumentInputs(module MaxonModule, func IrFunction, value ValueId, pending ValueIdArray) returns bool
-	for blockRef in func.blockRefs 'eachBlock'
-		let block = module.getBlock(blockRef)
-
-		for (iter, argument) in block.blockArgs.withIterator() 'eachArgument'
-			if argument.valueId == value 'theDefiningBlock'
-				pushEdgeInputs(module, func: func, target: block.id, position: iter.index(), pending: pending)
-				return true
-			end 'theDefiningBlock'
-		end 'eachArgument'
-	end 'eachBlock'
-
-	return false
-end 'pushBlockArgumentInputs'
-
-function pushEdgeInputs(module MaxonModule, func IrFunction, target BlockId, position ElementIndex, pending ValueIdArray)
-	for blockRef in func.blockRefs 'eachPredecessor'
-		for edge in module.getBlock(blockRef).branchEdges 'eachEdge'
-			if edge.targetBlockId == target 'intoTheDefiningBlock'
-				pending.push(try edge.argIds.get(position) otherwise panic("pushEdgeInputs: an edge into block {target} carries {edge.argIds.count()} arguments, and the block's argument {position} is one of them"))
-			end 'intoTheDefiningBlock'
-		end 'eachEdge'
-	end 'eachPredecessor'
-end 'pushEdgeInputs'
-
-// Does this call supply an argument whose type nothing can identify? See `refuseOpaqueOverloadArgument`.
-function callPassesOpaqueArg(func IrFunction, op MaxonOp) returns bool
+function opaqueArgumentOf(func IrFunction, op MaxonOp) returns OpaqueArgument
 	match overloadCallArgs(op) 'args'
-		supplied(args, _, _, _) then return valueTagsIncludeOpaque(func, args: args)
+		supplied(args, _, _, _) then return opaqueArgumentAmong(func, args: args)
 	end 'args'
-end 'callPassesOpaqueArg'
+end 'opaqueArgumentOf'
 
-function valueTagsIncludeOpaque(func IrFunction, args ValueIdArray) returns bool
-	return valueTagsInclude(func, args: args, tag: ValueTypeTag.typeParameter) or valueTagsInclude(func, args: args, tag: ValueTypeTag.unresolved)
-end 'valueTagsIncludeOpaque'
+function opaqueArgumentAmong(func IrFunction, args ValueIdArray) returns OpaqueArgument
+	var found = OpaqueArgument.none
+
+	for argId in args 'each'
+		let argTag = try func.valueTags.get(argId) otherwise panic("opaqueArgumentAmong: value v{argId} of '{String.from(func.name)}' has no recorded type — every SSA value is minted through Parser.mintValue")
+
+		if argTag == ValueTypeTag.typeParameter 'aTypeParameterWins'
+			return OpaqueArgument.typeParameter
+		end 'aTypeParameterWins'
+
+		if argTag == ValueTypeTag.unresolved 'deferredUnlessATypeParameterFollows'
+			found = OpaqueArgument.deferred
+		end 'deferredUnlessATypeParameterFollows'
+	end 'each'
+
+	return found
+end 'opaqueArgumentAmong'
 
 function valueTagsInclude(func IrFunction, args ValueIdArray, tag ValueTypeTag) returns bool
 	for argId in args 'each'
@@ -3332,17 +3209,6 @@ function blameTargetErrorsIn(project Project, func IrFunction) returns bool
 	return not targetProvidesEveryFacility(project.target) and not isLibraryFunction(project, func: func)
 end 'blameTargetErrorsIn'
 
-function reportDeferredParseErrors(project Project, module MaxonModule, signatures ProgramSignatures)
-	for entryIndex in 0 upto project.deferredParseErrors.count() 'eachEntry'
-		reportDiagnostic(project, diagnostic: deferredParseErrorDiagnostic(project, module: module, signatures: signatures, entryIndex: entryIndex))
-	end 'eachEntry'
-end 'reportDeferredParseErrors'
-
-function deferredParseErrorDiagnostic(project Project, module MaxonModule, signatures ProgramSignatures, entryIndex ElementIndex) returns Diagnostic
-	let deferred = try project.deferredParseErrors.get(entryIndex) otherwise panic("deferredParseErrorDiagnostic: entryIndex {entryIndex} is below project.deferredParseErrors.count()")
-	return parseErrorDiagnostic(deferred.error, path: deferred.filePath, keywords: project.keywords).withCause(valuesDeferralCause(project, module: module, signatures: signatures, funcIndex: deferred.funcIndex, values: singletonArgs(deferred.value)))
-end 'deferredParseErrorDiagnostic'
-
 function checkCalls(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, throwsMap FuncThrowsMap, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, calls CallSummaryIndex) throws CompileError
 	var witnessSlots = WitnessSlotsByDeclIndex.create()
 	provenance.beginStorageDoors()
@@ -3382,6 +3248,10 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 
 			for opIdx in block.bodyOps() 'eachOp'
 				view op = try module.ops.get(opIdx) otherwise panic("checkCalls: opIdx {opIdx} not in module.ops")
+
+				if project.undecidedOverloadCalls.count() > 0 and project.undecidedOverloadCalls.contains(opIdx) 'anUndecidedOverload'
+					continue
+				end 'anUndecidedOverload'
 
 				match op 'op'
 					// A PLAIN call — its args are validated, and a call to a THROWING callee that is not
@@ -4043,13 +3913,6 @@ function validateCall(project Project, func IrFunction, signatures ProgramSignat
 		end 'aMethodMissOnAResolvedType'
 
 		if signatures.isGenericFunctionKey(callee) and valueTagsInclude(func, args: args, tag: ValueTypeTag.unresolved) 'aGenericCallWaitingOnADeferredArgument'
-			// An argument deferred only by undeclared calls is reported by their own E3004.
-			match provenance.causeOfArguments(args) 'cause'
-				undeclaredCalls then return
-				standsAlone then break
-			end 'cause'
-
-			reportPositioned(project, code: ErrorCode.genericTypeParameterNotInferable, message: "the type parameters of '{String.from(noun)}' cannot be inferred: an argument's type is not known", line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'aGenericCallWaitingOnADeferredArgument'
 
@@ -6197,7 +6060,7 @@ end 'targetCanHostSubprocess'
 function checkSlottedCall(project Project, func IrFunction, result ValueId, callee ByteArray, sig FuncSignature, args ValueIdArray, argRanges SourceRangeArray, argLabels NameRoster, argImmutableNames WriteBlameArray, argIds ValueIdArray, argDefaultSlots ParamCountArray, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, callRange SourceRange, filePath FilePath, overloadRefused bool)
 	checkArgTypes(project, func: func, result: result, callee: callee, sig: sig, args: args, argRanges: argRanges, argIds: argIds, argDefaultSlots: argDefaultSlots, callRange: callRange, filePath: filePath, provenance: provenance, overloadRefused: overloadRefused)
 	checkTypeParameterArgs(project, func: func, result: result, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath, provenance: provenance)
-	checkPerInstanceArgs(project, func: func, callee: callee, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath, provenance: provenance)
+	checkPerInstanceArgs(project, func: func, callee: callee, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath)
 	let keptReadOnly = checkReadOnlyArgToKeepingParam(func, result: result, callee: callee, sig: sig, args: args, argLabels: argLabels, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mutationSummary: mutationSummary, provenance: provenance, callRange: callRange)
 	let keptWritable = noteSharedArgsToKeepingParams(func, result: result, callee: callee, sig: sig, args: args, argLabels: argLabels, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mutationSummary: mutationSummary, provenance: provenance, callRange: callRange)
 	checkImmutableArgToMutatingParam(project, func: func, callee: callee, sig: sig, args: args, argLabels: argLabels, argImmutableNames: argImmutableNames, refusedAsKept: keptReadOnly or keptWritable, mutationSummary: mutationSummary, provenance: provenance, callRange: callRange, filePath: filePath)
@@ -6586,7 +6449,7 @@ function checkTypeParameterArgs(project Project, func IrFunction, result ValueId
 	// is refused where the unbound value MEETS a typed place, and reporting it a second time here would
 	// replace a recorded diagnostic with one about the construct's inside.
 	if tag == ValueTypeTag.structRef and sig.takesReceiver() 'aReceiverOfTheBaseItself'
-		checkUnboundTypeParameterArgs(project, func: func, base: aggregateNameFor(project, tag: tag, nameId: subjectNameId, readerFilePath: filePath), sig: sig, argIds: argIds, callRange: callRange, filePath: filePath, provenance: provenance)
+		checkUnboundTypeParameterArgs(project, func: func, base: aggregateNameFor(project, tag: tag, nameId: subjectNameId, readerFilePath: filePath), sig: sig, argIds: argIds, callRange: callRange, filePath: filePath)
 	end 'aReceiverOfTheBaseItself'
 end 'checkTypeParameterArgs'
 
@@ -6608,7 +6471,7 @@ end 'checkTypeParameterArgs'
 // The verdict is `aggregatesConflict`, over the two names its own producers spell — the same authority and
 // the same two halves the field door asks — so the two cannot come to disagree about what an opaque place
 // accepts. At most one argument is reported per call, the bound every argument walk here keeps.
-function checkUnboundTypeParameterArgs(project Project, func IrFunction, base ByteArray, sig FuncSignature, argIds ValueIdArray, callRange SourceRange, filePath FilePath, provenance ProvenanceTracer)
+function checkUnboundTypeParameterArgs(project Project, func IrFunction, base ByteArray, sig FuncSignature, argIds ValueIdArray, callRange SourceRange, filePath FilePath)
 	// ⚠ `var` for `checkTypeParameterArgsAt`'s reason — the index memoizes as it is asked.
 	var signatures = programSignaturesIn(project, asker: "checkUnboundTypeParameterArgs")
 
@@ -6627,6 +6490,10 @@ function checkUnboundTypeParameterArgs(project Project, func IrFunction, base By
 		let argTag = try func.valueTags.get(argId) otherwise panic("checkUnboundTypeParameterArgs: value v{argId} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
 		let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkUnboundTypeParameterArgs: value v{argId} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
 
+		if tagIsUnresolved(argTag) 'aDeferredArgument'
+			continue
+		end 'aDeferredArgument'
+
 		// The EXPECTED side is asked of the shared producer rather than written as the empty name it must be:
 		// "an opaque place carries no nominal identity" is `typeArgAggregateName`'s sentence, and a second
 		// spelling of it here is a second place for it to change.
@@ -6635,7 +6502,7 @@ function checkUnboundTypeParameterArgs(project Project, func IrFunction, base By
 		end 'claimsNoConcreteIdentity'
 
 		let paramName = try sig.paramNames.get(i) otherwise panic("checkUnboundTypeParameterArgs: paramNames.get OOB at {i}")
-		reportPositioned(project, code: ErrorCode.typeMismatch, message: "{argTypeMismatchMessage(ArgumentParameter.named(paramName), position: i as ParamCount, expected: typeTagName(ValueTypeTag.typeParameter), got: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: filePath))}: {ConcreteValueAtOpaquePlaceSuffix}", line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArguments(singletonArgs(argId)))
+		reportPositioned(project, code: ErrorCode.typeMismatch, message: "{argTypeMismatchMessage(ArgumentParameter.named(paramName), position: i as ParamCount, expected: typeTagName(ValueTypeTag.typeParameter), got: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: filePath))}: {ConcreteValueAtOpaquePlaceSuffix}", line: callRange.line, column: callRange.column, filePath: filePath)
 		return
 	end 'eachArg'
 end 'checkUnboundTypeParameterArgs'
@@ -6661,6 +6528,13 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 			continue
 		end 'concreteParam'
 
+		let argId = try argIds.get(i) otherwise panic("checkTypeParameterArgsAt: argIds.get OOB at {i}")
+		let argTag = try func.valueTags.get(argId) otherwise panic("checkTypeParameterArgsAt: value v{argId} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
+
+		if tagIsUnresolved(argTag) 'aDeferredArgument'
+			continue
+		end 'aDeferredArgument'
+
 		// The opaque formal's position in the base type's `uses` list — a `typeParameter`'s payload is an
 		// IDENTITY rather than that position, so it is recovered through the one door that owns the
 		// conversion (`opaqueTypeParamPosition`). The instance's argument list was arity-checked at
@@ -6680,8 +6554,6 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 		// the other, never both), so their order between themselves says nothing.
 		let substituted = signatures.floatAliasResolved(signatures.functionAliasResolved(signatures.canonicalTypeArg(signatures.substitutedInstanceArg(gid, position: position))), readerFilePath: filePath)
 		view expected = signatures.typeArgAggregateName(substituted, readerFilePath: filePath)
-		let argId = try argIds.get(i) otherwise panic("checkTypeParameterArgsAt: argIds.get OOB at {i}")
-		let argTag = try func.valueTags.get(argId) otherwise panic("checkTypeParameterArgsAt: value v{argId} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
 		let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkTypeParameterArgsAt: value v{argId} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
 		view got = aggregateNameFor(project, tag: argTag, nameId: argNameId, readerFilePath: filePath)
 
@@ -6690,7 +6562,7 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 		// and `checkArgTypes` fetches the same name unconditionally for every argument of every call.
 		let paramName = try sig.paramNames.get(i) otherwise panic("checkTypeParameterArgsAt: paramNames.get OOB at {i}")
 
-		if refusePromiseOfAnotherType(project, slotType: substituted, argId: argId, argTag: argTag, argNameId: argNameId, callRange: callRange, filePath: filePath, provenance: provenance) 'promiseMeetsAnotherPromise'
+		if refusePromiseOfAnotherType(project, slotType: substituted, argTag: argTag, argNameId: argNameId, callRange: callRange, filePath: filePath) 'promiseMeetsAnotherPromise'
 			return
 		end 'promiseMeetsAnotherPromise'
 
@@ -6714,7 +6586,7 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 			// way (user ruling, 2026-08-04). The compiled twin read `expected 'Box_Leaf', got 'OtherBox'`
 			// on a program that declares `typealias LeafBox = Box with Leaf` — the `got` side quoting the
 			// author and the `expected` side quoting the mangler.
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(ArgumentParameter.named(paramName), position: i as ParamCount, expected: signatures.aliasIdentityDisplay(signatures.instanceArgDisplayName(gid, position: position)), got: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: filePath)), line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArguments(singletonArgs(argId)))
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(ArgumentParameter.named(paramName), position: i as ParamCount, expected: signatures.aliasIdentityDisplay(signatures.instanceArgDisplayName(gid, position: position)), got: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: filePath)), line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'wrongTypeArgument'
 
@@ -6803,7 +6675,7 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 		// parameter beside it reads `expected 'Integer'` off `sig.paramDeclaredNames` — one rule spelling
 		// its type two ways by which door the value entered, and the runnable oracle says `Integer`
 		// (`arrays.error.insert-string-into-int-array`).
-		if checkArgAgainstDeclaredTag(project, argTag: argTag, argNameId: argNameId, declaredType: substituted, declaredAggregate: EmptySourceText, declaredName: signatures.indexScalarAliasName(substituted), param: ArgumentParameter.named(paramName), position: i as ParamCount, callRange: callRange, filePath: filePath, argId: argId, provenance: provenance) != DeclaredTypeMatch.ok 'refusedBySubstitutedType'
+		if checkArgAgainstDeclaredTag(project, argTag: argTag, argNameId: argNameId, declaredType: substituted, declaredAggregate: EmptySourceText, declaredName: signatures.indexScalarAliasName(substituted), param: ArgumentParameter.named(paramName), position: i as ParamCount, callRange: callRange, filePath: filePath) != DeclaredTypeMatch.ok 'refusedBySubstitutedType'
 			return
 		end 'refusedBySubstitutedType'
 	end 'eachArg'
@@ -6872,7 +6744,7 @@ end 'instanceTypingValue'
 // RECEIVER argument). An argument WITH a per-instance identity of the WRONG instance is E3005; an
 // argument with NONE (a literal, a field read, a plain integer) DECAYS and is accepted. A factory
 // call (no receiver) is left to decay: its inner-alias arguments in the corpus are literals.
-function checkPerInstanceArgs(project Project, func IrFunction, callee ByteArray, sig FuncSignature, argIds ValueIdArray, callRange SourceRange, filePath FilePath, provenance ProvenanceTracer)
+function checkPerInstanceArgs(project Project, func IrFunction, callee ByteArray, sig FuncSignature, argIds ValueIdArray, callRange SourceRange, filePath FilePath)
 	var signatures = programSignaturesIn(project, asker: "checkPerInstanceArgs")
 
 	// Allocation-free short-circuit: when no method in the program declares an inner-alias parameter — every
@@ -6885,7 +6757,7 @@ function checkPerInstanceArgs(project Project, func IrFunction, callee ByteArray
 
 	match signatures.methodInnerAliasParamsOf(callee) 'lookup'
 		noInnerAliasParams then return
-		found(info) then checkPerInstanceArgsWith(project, signatures: signatures, func: func, sig: sig, argIds: argIds, info: info, callRange: callRange, filePath: filePath, provenance: provenance)
+		found(info) then checkPerInstanceArgsWith(project, signatures: signatures, func: func, sig: sig, argIds: argIds, info: info, callRange: callRange, filePath: filePath)
 	end 'lookup'
 end 'checkPerInstanceArgs'
 
@@ -6916,7 +6788,7 @@ end 'checkPerInstanceArgs'
 // the instance view of its declared type (`paramTypeThroughCallInstance`), which is where it
 // belongs: that comparison sees `Array with Num` on both sides and also REFUSES a `HoldA with
 // String`'s items, which this name check accepted (both spelled `HoldA.Items`).
-function checkPerInstanceArgsWith(project Project, signatures ProgramSignatures, func IrFunction, sig FuncSignature, argIds ValueIdArray, info InnerAliasParamInfo, callRange SourceRange, filePath FilePath, provenance ProvenanceTracer)
+function checkPerInstanceArgsWith(project Project, signatures ProgramSignatures, func IrFunction, sig FuncSignature, argIds ValueIdArray, info InnerAliasParamInfo, callRange SourceRange, filePath FilePath)
 	// A method prepends `__self` at real position 0; the sweep records inner-alias members over the SOURCE
 	// parameters (no `__self`), so a method's real position i maps to source i - 1. A static factory has no
 	// receiver here — its inner-alias arguments decay — so only a method is checked.
@@ -6952,7 +6824,7 @@ function checkPerInstanceArgsWith(project Project, signatures ProgramSignatures,
 
 		if namedAggregatesConflict(expected, got: got) 'wrongInstance'
 			let paramName = try sig.paramNames.get(i) otherwise panic("checkPerInstanceArgsWith: paramNames.get OOB at {i}")
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(ArgumentParameter.named(paramName), position: i as ParamCount, expected: String.from(expected), got: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: filePath)), line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArguments(singletonArgs(argId)))
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(ArgumentParameter.named(paramName), position: i as ParamCount, expected: String.from(expected), got: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: filePath)), line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'wrongInstance'
 	end 'eachArg'
@@ -7429,6 +7301,7 @@ enum ExistentialWideningVerdict
 	widens
 	floatHasNoValueHalf
 	doesNotConform
+	deferred
 end 'ExistentialWideningVerdict'
 
 // ⭐⭐ **MAY A VALUE OF THIS TYPE CROSS INTO AN INTERFACE-TYPED POSITION? — THE VERDICT, ONCE, FOR EVERY
@@ -7449,13 +7322,16 @@ end 'ExistentialWideningVerdict'
 // emitter and PANICKED there — `a register-to-register move from xmm0 to rcx crosses register files` — with
 // no position and nothing in the message an author could act on. It is E2062's fact one widening position
 // over: dictionary passing gives a type parameter and an existential the SAME opaque slot, so the same limit.
+//
+// An `unresolved` value answers `deferred`, which every position passes unreported: the value rests on an
+// error already reported, such as the E3004 at an undeclared call.
 function existentialWideningVerdict(project Project, valueTag ValueTypeTag, valueNameId TypeNameId, interfaceName ByteArray, readerFilePath FilePath) returns ExistentialWideningVerdict
 	if valueTag == ValueTypeTag.float 'floatHasNoWayIntoTheFatPointer'
 		return ExistentialWideningVerdict.floatHasNoValueHalf
 	end 'floatHasNoWayIntoTheFatPointer'
 
 	if valueTag == ValueTypeTag.unresolved 'noTypeToShowConformance'
-		return ExistentialWideningVerdict.doesNotConform
+		return ExistentialWideningVerdict.deferred
 	end 'noTypeToShowConformance'
 
 	if not valueWidensToInterface(project, signatures: programSignaturesIn(project, asker: "existentialWideningVerdict"), valueType: maxonTypeOfTag(valueTag, nameId: valueNameId), interfaceName: interfaceName, readerFilePath: readerFilePath) 'doesNotConform'
@@ -7886,8 +7762,8 @@ end 'floatHasNoValueHalfReason'
 // The per-function gate is the DECLARED RETURN TYPE, tested before anything walks a body — an
 // interface-returning function is a vanishing fraction of any program, and `liveOpIndices` builds an array
 // per function it is asked about.
-function checkReturnedValueTypes(project Project, module MaxonModule, signatures ProgramSignatures)
-	for (iter, func) in module.functions.withIterator() 'eachFunc'
+function checkReturnedValueTypes(project Project, module MaxonModule)
+	for func in module.functions 'eachFunc'
 		// A stdlib function no path from `main` reaches is dropped before the back end, so a diagnostic here
 		// would name code the program does not contain — `checkCalls`' gate, for its reason.
 		if project.libraryFacts.bodyIsSwept(func.name) 'notInTheProgram'
@@ -7896,7 +7772,7 @@ function checkReturnedValueTypes(project Project, module MaxonModule, signatures
 
 		match func.maxonReturnType 'declaredReturn'
 			void then break
-			value(inner) then checkReturnsAgainstInterface(project, module: module, signatures: signatures, func: func, funcIndex: iter.index(), declaredReturn: inner)
+			value(inner) then checkReturnsAgainstInterface(project, module: module, func: func, declaredReturn: inner)
 		end 'declaredReturn'
 	end 'eachFunc'
 end 'checkReturnedValueTypes'
@@ -7905,7 +7781,7 @@ end 'checkReturnedValueTypes'
 // TERMINATOR and occasionally a body op (a mid-block return), so the walk is `liveOpIndices` — the single
 // home of the blockRefs → opRefs+terminator descent — rather than a scan of `opRefs` that would miss most of
 // them, or of the append-only `module.ops` that would report against dead ops from an earlier pass.
-function checkReturnsAgainstInterface(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndex ElementIndex, declaredReturn MaxonType)
+function checkReturnsAgainstInterface(project Project, module MaxonModule, func IrFunction, declaredReturn MaxonType)
 	if maxonTypeTag(declaredReturn) != ValueTypeTag.interfaceRef 'notAnExistentialReturn'
 		return
 	end 'notAnExistentialReturn'
@@ -7974,7 +7850,7 @@ function checkReturnsAgainstInterface(project Project, module MaxonModule, signa
 	view exitChains = module.exitChainsOf(func, returned: retValues)
 
 	for (position, value) in retValues.withIterator() 'eachReturn'
-		checkReturnedValueAtItsSites(project, module: module, signatures: signatures, func: func, funcIndex: funcIndex, value: value, retOpIndex: try retOpIndices.get(position.index()) otherwise panic("checkReturnsAgainstInterface: retOpIndices.get OOB at {position.index()}"), exitChains: exitChains, interfaceName: interfaceName, returnExistentialSites: returnExistentialSites)
+		checkReturnedValueAtItsSites(project, func: func, value: value, retOpIndex: try retOpIndices.get(position.index()) otherwise panic("checkReturnsAgainstInterface: retOpIndices.get OOB at {position.index()}"), exitChains: exitChains, interfaceName: interfaceName, returnExistentialSites: returnExistentialSites)
 	end 'eachReturn'
 end 'checkReturnsAgainstInterface'
 
@@ -7997,21 +7873,21 @@ function noteReturnOp(retOpIndices OpIndexArray, retValues ValueIdArray, opIdx E
 	retValues.push(value)
 end 'noteReturnOp'
 
-function checkReturnedValueAtItsSites(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndex ElementIndex, value ValueId, retOpIndex ElementIndex, exitChains ExitChainsByReturn, interfaceName ByteArray, returnExistentialSites GenericInstanceIdArray)
+function checkReturnedValueAtItsSites(project Project, func IrFunction, value ValueId, retOpIndex ElementIndex, exitChains ExitChainsByReturn, interfaceName ByteArray, returnExistentialSites GenericInstanceIdArray)
 	if let chain = try exitChains.get(value) 'aSharedReturn'
 		for leaf in chain.leaves 'eachExit'
-			checkOneReturnedValue(project, module: module, signatures: signatures, func: func, funcIndex: funcIndex, value: leaf.value, interfaceName: interfaceName, returnExistentialSites: returnExistentialSites, retRange: project.opRanges.get(leaf.source.terminatorIndex()))
+			checkOneReturnedValue(project, func: func, value: leaf.value, interfaceName: interfaceName, returnExistentialSites: returnExistentialSites, retRange: project.opRanges.get(leaf.source.terminatorIndex()))
 		end 'eachExit'
 
 		return
 	end 'aSharedReturn'
 
-	checkOneReturnedValue(project, module: module, signatures: signatures, func: func, funcIndex: funcIndex, value: value, interfaceName: interfaceName, returnExistentialSites: returnExistentialSites, retRange: project.opRanges.get(retOpIndex))
+	checkOneReturnedValue(project, func: func, value: value, interfaceName: interfaceName, returnExistentialSites: returnExistentialSites, retRange: project.opRanges.get(retOpIndex))
 end 'checkReturnedValueAtItsSites'
 
 // One `return`'s value against the interface its function promised — the verdict shared with the argument
 // position, worded for this one. Anchored on the `return` itself, the line an author would change.
-function checkOneReturnedValue(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndex ElementIndex, value ValueId, interfaceName ByteArray, returnExistentialSites GenericInstanceIdArray, retRange SourceRange)
+function checkOneReturnedValue(project Project, func IrFunction, value ValueId, interfaceName ByteArray, returnExistentialSites GenericInstanceIdArray, retRange SourceRange)
 	let valueTag = try func.valueTags.get(value) otherwise panic("checkOneReturnedValue: value v{value} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
 	let valueNameId = try func.valueNameIds.get(value) otherwise panic("checkOneReturnedValue: value v{value} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
 	let displayName = String.from(interfaceName)
@@ -8019,8 +7895,9 @@ function checkOneReturnedValue(project Project, module MaxonModule, signatures P
 	match existentialWideningVerdict(project, valueTag: valueTag, valueNameId: valueNameId, interfaceName: interfaceName, readerFilePath: func.sourceFilePath) 'widening'
 		// The parameterized half, asked once conformance is settled — the argument position's twin.
 		widens then checkExistentialSiteClaimAtReturn(project, func: func, returnExistentialSites: returnExistentialSites, valueTag: valueTag, valueNameId: valueNameId, interfaceName: interfaceName, retRange: retRange)
+		deferred then break
 		floatHasNoValueHalf then reportPositioned(project, code: ErrorCode.floatWidenedToExistential, message: "Cannot return a `float` from '{functionSourceName(project, func: func)}', which is declared to return the interface type '{displayName}': {floatHasNoValueHalfReason(displayName)}, or declare the return type as `float`", line: retRange.line, column: retRange.column, filePath: func.sourceFilePath)
-		doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage("return type mismatch in '{functionSourceName(project, func: func)}'", conformer: typeDisplayName(project, tag: valueTag, nameId: valueNameId, readerFilePath: func.sourceFilePath), interfaceName: displayName), line: retRange.line, column: retRange.column, filePath: func.sourceFilePath, cause: valuesDeferralCause(project, module: module, signatures: signatures, funcIndex: funcIndex, values: singletonArgs(value)))
+		doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage("return type mismatch in '{functionSourceName(project, func: func)}'", conformer: typeDisplayName(project, tag: valueTag, nameId: valueNameId, readerFilePath: func.sourceFilePath), interfaceName: displayName), line: retRange.line, column: retRange.column, filePath: func.sourceFilePath)
 	end 'widening'
 end 'checkOneReturnedValue'
 
@@ -8033,8 +7910,8 @@ end 'checkOneReturnedValue'
 // parameter (`Taker with T` inside `type Box uses T`) is checked nowhere whole-program; the argument and the
 // `return` refuse what they cannot settle, and a field store is the remaining way a value comes to be held at
 // such a claim.
-function checkExistentialFieldStores(project Project, module MaxonModule, signatures ProgramSignatures)
-	for (iter, func) in module.functions.withIterator() 'eachFunc'
+function checkExistentialFieldStores(project Project, module MaxonModule)
+	for func in module.functions 'eachFunc'
 		if func.existentialFieldStores.count() == 0 'storesIntoNoInterfaceField'
 			continue
 		end 'storesIntoNoInterfaceField'
@@ -8045,12 +7922,12 @@ function checkExistentialFieldStores(project Project, module MaxonModule, signat
 		end 'notInTheProgram'
 
 		for store in func.existentialFieldStores 'eachStore'
-			checkOneExistentialFieldStore(project, module: module, signatures: signatures, func: func, funcIndex: iter.index(), store: store)
+			checkOneExistentialFieldStore(project, func: func, store: store)
 		end 'eachStore'
 	end 'eachFunc'
 end 'checkExistentialFieldStores'
 
-function checkOneExistentialFieldStore(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndex ElementIndex, store ExistentialFieldStore)
+function checkOneExistentialFieldStore(project Project, func IrFunction, store ExistentialFieldStore)
 	let valueTag = try func.valueTags.get(store.value) otherwise panic("checkOneExistentialFieldStore: value v{store.value} of function '{String.from(func.name)}' has no recorded type — every SSA value is minted with its type columns")
 	let valueNameId = try func.valueNameIds.get(store.value) otherwise panic("checkOneExistentialFieldStore: value v{store.value} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
 	let displayName = String.from(store.interfaceName)
@@ -8058,8 +7935,9 @@ function checkOneExistentialFieldStore(project Project, module MaxonModule, sign
 
 	match existentialWideningVerdict(project, valueTag: valueTag, valueNameId: valueNameId, interfaceName: store.interfaceName, readerFilePath: store.filePath) 'widening'
 		widens then checkExistentialSiteClaimAtFieldStore(project, func: func, store: store, valueTag: valueTag, valueNameId: valueNameId)
+		deferred then break
 		floatHasNoValueHalf then reportPositioned(project, code: ErrorCode.floatWidenedToExistential, message: floatIntoExistentialStoreMessage(store.place, site: site, interfaceName: displayName), line: store.line, column: store.column, filePath: store.filePath)
-		doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage(existentialStoreMismatchSubject(store.place, site: site), conformer: valueTypeDisplayName(project, func: func, value: store.value, tag: valueTag, nameId: valueNameId, readerFilePath: store.filePath), interfaceName: displayName), line: store.line, column: store.column, filePath: store.filePath, cause: valuesDeferralCause(project, module: module, signatures: signatures, funcIndex: funcIndex, values: singletonArgs(store.value)))
+		doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage(existentialStoreMismatchSubject(store.place, site: site), conformer: valueTypeDisplayName(project, func: func, value: store.value, tag: valueTag, nameId: valueNameId, readerFilePath: store.filePath), interfaceName: displayName), line: store.line, column: store.column, filePath: store.filePath)
 	end 'widening'
 end 'checkOneExistentialFieldStore'
 
@@ -8168,14 +8046,19 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 			// type the site claims `Element` is. Asked only once conformance is settled, because a
 			// non-conformer's bindings are not the fault worth reporting.
 			widens then checkExistentialSiteClaimAtArgument(project, func: func, paramExistentialSites: paramExistentialSites, position: position, argTag: argTag, argNameId: argNameId, interfaceName: interfaceName, param: param, callInstanceSubject: callInstanceSubject, callRange: callRange, filePath: filePath)
+			deferred then break
 			floatHasNoValueHalf then reportPositioned(project, code: ErrorCode.floatWidenedToExistential, message: "Cannot pass a `float` as {argParamLabel(param, position: position)}, which is declared at the interface type '{displayName}': {floatHasNoValueHalfReason(displayName)}, or take the parameter as a `float`", line: callRange.line, column: callRange.column, filePath: filePath)
-			doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage("argument type mismatch for {argParamLabel(param, position: position)}", conformer: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: filePath), interfaceName: displayName), line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArguments(singletonArgs(argId)))
+			doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage("argument type mismatch for {argParamLabel(param, position: position)}", conformer: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: filePath), interfaceName: displayName), line: callRange.line, column: callRange.column, filePath: filePath)
 		end 'widening'
 
 		return
 	end 'existentialParam'
 
-	if refusePromiseOfAnotherType(project, slotType: paramType, argId: argId, argTag: argTag, argNameId: argNameId, callRange: callRange, filePath: filePath, provenance: provenance) 'promiseMeetsAnotherPromise'
+	if tagIsUnresolved(argTag) 'aDeferredArgument'
+		return
+	end 'aDeferredArgument'
+
+	if refusePromiseOfAnotherType(project, slotType: paramType, argTag: argTag, argNameId: argNameId, callRange: callRange, filePath: filePath) 'promiseMeetsAnotherPromise'
 		return
 	end 'promiseMeetsAnotherPromise'
 
@@ -8227,7 +8110,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 			var argSignatures = programSignaturesIn(project, asker: "checkOneArgType")
 			let declaredParamBrandOfCall = declaredBrandOf(declaredParamName, paramTag: paramTag)
 			let gotBrandOfCall = valueBrandOf(project, func: func, value: argId)
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(param, position: position, expected: argSignatures.tupleDisplayNoted(expectedDisplay, identity: expectedAggregate, otherShown: gotDisplay, otherIdentity: gotAggregate), got: argSignatures.tupleDisplayNoted(gotDisplay, identity: gotAggregate, otherShown: expectedDisplay, otherIdentity: expectedAggregate), expectedNote: argSignatures.contestedTypeNote(paramTag, nameId: typeNameIdOf(paramType), brand: declaredParamBrandOfCall, identity: expectedAggregate, shown: expectedDisplay, otherShown: gotDisplay), gotNote: argSignatures.contestedTypeNote(argTag, nameId: argNameId, brand: gotBrandOfCall, identity: gotAggregate, shown: gotDisplay, otherShown: expectedDisplay)), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArguments(singletonArgs(argId)))
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(param, position: position, expected: argSignatures.tupleDisplayNoted(expectedDisplay, identity: expectedAggregate, otherShown: gotDisplay, otherIdentity: gotAggregate), got: argSignatures.tupleDisplayNoted(gotDisplay, identity: gotAggregate, otherShown: expectedDisplay, otherIdentity: expectedAggregate), expectedNote: argSignatures.contestedTypeNote(paramTag, nameId: typeNameIdOf(paramType), brand: declaredParamBrandOfCall, identity: expectedAggregate, shown: expectedDisplay, otherShown: gotDisplay), gotNote: argSignatures.contestedTypeNote(argTag, nameId: argNameId, brand: gotBrandOfCall, identity: gotAggregate, shown: gotDisplay, otherShown: expectedDisplay)), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'aggregateArgMismatch'
 	end 'aggregateComparable'
@@ -8251,7 +8134,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 		end 'signatureMismatch'
 	end 'functionArg'
 
-	_ = checkArgAgainstDeclaredTag(project, argTag: argTag, argNameId: argNameId, declaredType: paramType, declaredAggregate: expectedAggregate, declaredName: declaredParamName, param: param, position: position, callRange: callRange, filePath: filePath, argId: argId, provenance: provenance)
+	_ = checkArgAgainstDeclaredTag(project, argTag: argTag, argNameId: argNameId, declaredType: paramType, declaredAggregate: expectedAggregate, declaredName: declaredParamName, param: param, position: position, callRange: callRange, filePath: filePath)
 end 'checkOneArgType'
 
 function reportUnneededLiteralCastArgument(project Project, cast LiteralCast, destination RangedTypeAlias, filePath FilePath)
@@ -8338,13 +8221,13 @@ end 'checkFunctionArgShape'
 // `argParamLabel`'s discipline for `argParamLabel`'s measured reason: this runs on EVERY argument of EVERY
 // call in the program, and `paramDisplayName` builds a `String`. The pieces are values the caller already
 // holds, so passing them costs nothing where rendering them up front would cost an allocation per argument.
-function checkArgAgainstDeclaredTag(project Project, argTag ValueTypeTag, argNameId TypeNameId, declaredType MaxonType, declaredAggregate ByteArray, declaredName ByteArray, param ArgumentParameter, position ParamCount, callRange SourceRange, filePath FilePath, argId ValueId, provenance ProvenanceTracer) returns DeclaredTypeMatch
+function checkArgAgainstDeclaredTag(project Project, argTag ValueTypeTag, argNameId TypeNameId, declaredType MaxonType, declaredAggregate ByteArray, declaredName ByteArray, param ArgumentParameter, position ParamCount, callRange SourceRange, filePath FilePath) returns DeclaredTypeMatch
 	let declaredTag = maxonTypeTag(declaredType)
 	let verdict = checkDeclaredType(argTag, declared: declaredTag)
 
 	match verdict 'declared'
 		ok then break
-		mismatch then reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(param, position: position, expected: paramDisplayName(project, paramType: declaredType, paramTag: declaredTag, aggregate: declaredAggregate, declaredName: declaredName, argTag: argTag, argNameId: argNameId, readerFilePath: filePath), got: typeDisplayName(project, tag: argTag, nameId: argNameId, readerFilePath: filePath)), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArguments(singletonArgs(argId)))
+		mismatch then reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(param, position: position, expected: paramDisplayName(project, paramType: declaredType, paramTag: declaredTag, aggregate: declaredAggregate, declaredName: declaredName, argTag: argTag, argNameId: argNameId, readerFilePath: filePath), got: typeDisplayName(project, tag: argTag, nameId: argNameId, readerFilePath: filePath)), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath)
 
 		// ⚠ **THE TWO ARMS BELOW SPELL THE PARAMETER BY ITS RESOLVED CLASS WORD AND NOT BY ITS DECLARATION,
 		// AND THAT IS THE CANONICAL COROLLARY OF THE DISPLAY RULE RATHER THAN AN EXCEPTION TO IT.** Each is
@@ -8358,13 +8241,13 @@ function checkArgAgainstDeclaredTag(project Project, argTag ValueTypeTag, argNam
 		// The parameter is still NAMED, unlike the parser's three sites, because the reader's next
 		// question is which argument — but the rule's own sentence is `implicitNarrowingMessage`'s,
 		// shared verbatim, so the four sites cannot come to explain one rule four ways.
-		narrowsFloatToInt then reportPositioned(project, code: ErrorCode.semanticUnsafeCast, message: "argument {argParamLabel(param, position: position)}: {implicitNarrowingMessage(typeTagName(argTag), targetType: typeTagName(declaredTag))}", line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArguments(singletonArgs(argId)))
+		narrowsFloatToInt then reportPositioned(project, code: ErrorCode.semanticUnsafeCast, message: "argument {argParamLabel(param, position: position)}: {implicitNarrowingMessage(typeTagName(argTag), targetType: typeTagName(declaredTag))}", line: callRange.line, column: callRange.column, filePath: filePath)
 
 		// A FUNCTION VALUE passed to a NON-function parameter — the argument twin of the parser's
 		// assignment/return sites, sharing `FunctionValueMisuseSuffix` so all four explain one rule one
 		// way. (Reached only through the whole-program signature the parser cannot see, which is why the
 		// rule's argument arm lives here rather than at the call site.)
-		functionIntoNonFunction then reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot pass a value of type 'function' as argument {argParamLabel(param, position: position)}, which holds '{typeTagName(declaredTag)}': {FunctionValueMisuseSuffix}", line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArguments(singletonArgs(argId)))
+		functionIntoNonFunction then reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot pass a value of type 'function' as argument {argParamLabel(param, position: position)}, which holds '{typeTagName(declaredTag)}': {FunctionValueMisuseSuffix}", line: callRange.line, column: callRange.column, filePath: filePath)
 	end 'declared'
 
 	return verdict
@@ -8505,7 +8388,7 @@ function typeDisplayName(project Project, tag ValueTypeTag, nameId TypeNameId, r
 	return programSignaturesIn(project, asker: "typeDisplayName").displayNameOfAggregate(tag, aggregate: aggregateNameFor(project, tag: tag, nameId: nameId, readerFilePath: readerFilePath))
 end 'typeDisplayName'
 
-function refusePromiseOfAnotherType(project Project, slotType MaxonType, argId ValueId, argTag ValueTypeTag, argNameId TypeNameId, callRange SourceRange, filePath FilePath, provenance ProvenanceTracer) returns bool
+function refusePromiseOfAnotherType(project Project, slotType MaxonType, argTag ValueTypeTag, argNameId TypeNameId, callRange SourceRange, filePath FilePath) returns bool
 	var signatures = programSignaturesIn(project, asker: "refusePromiseOfAnotherType")
 
 	if argTag != ValueTypeTag.genericInstance or not typeIsPromiseStorage(signatures, t: slotType) 'notTwoPromises'
@@ -8520,7 +8403,7 @@ function refusePromiseOfAnotherType(project Project, slotType MaxonType, argId V
 	end 'agreeing'
 
 	let detail = promiseStorageMismatchDetail(promiseHeldDisplay(promiseClaimDisplayIn(project, gid: got, readerFilePath: filePath)), slot: String.from(signatures.instanceDisplayName(slot)), slotClaim: promiseClaimDisplayIn(project, gid: slot, readerFilePath: filePath))
-	reportPositioned(project, code: ErrorCode.promiseStorageMismatch, message: detail, line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArguments(singletonArgs(argId)))
+	reportPositioned(project, code: ErrorCode.promiseStorageMismatch, message: detail, line: callRange.line, column: callRange.column, filePath: filePath)
 	return true
 end 'refusePromiseOfAnotherType'
 

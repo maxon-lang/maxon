@@ -1,0 +1,17 @@
+let ProjectSiblingKnownOverloadDirName = "diagnostics-project-sibling-result-beside-a-known-argument-at-an-overload"
+let ProjectSiblingKnownOverloadHelperFileName = "helper.maxon"
+let ProjectSiblingKnownOverloadBufferFileName = "main.maxon"
+let ProjectSiblingKnownOverloadHelperSource = "module function projectSiblingKnownOverloadAnswer() returns ExitCode\n\treturn 0\nend 'projectSiblingKnownOverloadAnswer'\n"
+let ProjectSiblingKnownOverloadBufferSource = "function projectSiblingKnownOverloadPick(a ExitCode, b ExitCode) returns ExitCode\n\treturn a + b\nend 'projectSiblingKnownOverloadPick'\n\nfunction projectSiblingKnownOverloadPick(a String, b String) returns ExitCode\n\treturn 1 if a.isEmpty() or b.isEmpty() else 0\nend 'projectSiblingKnownOverloadPick'\n\nfunction main() returns ExitCode\n\treturn projectSiblingKnownOverloadPick(projectSiblingKnownOverloadAnswer(), b: \"s\")\nend 'main'\n"
+
+test 'a sibling function result beside a known argument, handed to an overloaded function, is judged against no overload'
+	let root = stagedProjectDiagnosticsRoot(ProjectSiblingKnownOverloadDirName)
+	writeCorpusFile(root, fileName: ProjectSiblingKnownOverloadHelperFileName, content: ProjectSiblingKnownOverloadHelperSource)
+	writeCorpusFile(root, fileName: ProjectSiblingKnownOverloadBufferFileName, content: ProjectSiblingKnownOverloadBufferSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectSiblingKnownOverloadBufferFileName, content: ProjectSiblingKnownOverloadBufferSource)
+
+	discardOutsideCheckoutDir(root)
+
+	expectNoProjectDiagnostics(probe, note: "`projectSiblingKnownOverloadAnswer` is a `module function` the sibling file declares, returning `ExitCode`, and `main` hands its result and the `String` \"s\" to `projectSiblingKnownOverloadPick`, which the buffer overloads on (`ExitCode`, `ExitCode`) and (`String`, `String`). A `maxon build` of the staged project exits 0. The buffer compiled alone cannot type the sibling's result, so it cannot choose an overload, and it must not hold the `String` to the first overload's `ExitCode` parameter either.")
+end 'a sibling function result beside a known argument, handed to an overloaded function, is judged against no overload'

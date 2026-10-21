@@ -3,9 +3,9 @@ let ProjectFieldUndeclaredHelperFileName = "helper.maxon"
 let ProjectFieldUndeclaredBufferFileName = "main.maxon"
 let ProjectFieldUndeclaredHelperSource = "module function projectFieldUndeclaredHelper() returns ExitCode\n\treturn 0\nend 'projectFieldUndeclaredHelper'\n"
 let ProjectFieldUndeclaredBufferSource = "function projectFieldUndeclaredPick(x ExitCode) returns ExitCode\n\treturn x\nend 'projectFieldUndeclaredPick'\n\nfunction projectFieldUndeclaredPick(x String) returns ExitCode\n\treturn 1 if x.isEmpty() else 0\nend 'projectFieldUndeclaredPick'\n\nfunction main() returns ExitCode\n\tlet box = projectFieldUndeclaredNowhere()\n\treturn projectFieldUndeclaredPick(box.count)\nend 'main'\n"
-let ProjectFieldUndeclaredPublished = "E2015@10 E3004@9"
+let ProjectFieldUndeclaredPublished = "E3004@9"
 
-test 'a field of a binding holding a result no file declares, handed to an overloaded function, is still refused'
+test 'a field of a binding holding a result no file declares, handed to an overloaded function, is reported undefined and nothing more'
 	let root = stagedProjectDiagnosticsRoot(ProjectFieldUndeclaredDirName)
 	writeCorpusFile(root, fileName: ProjectFieldUndeclaredHelperFileName, content: ProjectFieldUndeclaredHelperSource)
 	writeCorpusFile(root, fileName: ProjectFieldUndeclaredBufferFileName, content: ProjectFieldUndeclaredBufferSource)
@@ -14,5 +14,5 @@ test 'a field of a binding holding a result no file declares, handed to an overl
 
 	discardOutsideCheckoutDir(root)
 
-	expectProjectDiagnosticCodesAndLines(probe, expected: ProjectFieldUndeclaredPublished, note: "`projectFieldUndeclaredNowhere` is declared nowhere, and `main` binds its result and hands the binding's `count` to `projectFieldUndeclaredPick`, which the buffer overloads on `ExitCode` and `String`. A `maxon build` of the staged project refuses the overload on the `return` line and reports the undefined function on the `let` line above it.")
-end 'a field of a binding holding a result no file declares, handed to an overloaded function, is still refused'
+	expectProjectDiagnosticCodesAndLines(probe, expected: ProjectFieldUndeclaredPublished, note: "`projectFieldUndeclaredNowhere` is declared nowhere, and `main` binds its result and hands the binding's `count` to `projectFieldUndeclaredPick`, which the buffer overloads on `ExitCode` and `String`. A `maxon build` of the staged project reports the undefined function on the `let` line above the `return` and nothing about the overload, whose argument is already refused there.")
+end 'a field of a binding holding a result no file declares, handed to an overloaded function, is reported undefined and nothing more'
