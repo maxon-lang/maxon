@@ -77,6 +77,29 @@ end 'main'
 error E3066: specs/enum-match-only/error.enum-eq.maxon:11:7: cannot compare union values using '==', use 'match' instead
 ```
 
+<!-- test: error.enum-eq-library-tier -->
+<!-- tier: stdlib -->
+The union rule binds the library tier too: the standard library is refused a union `==` exactly as a program is.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Container
+	empty
+	value(n Integer)
+end 'Container'
+
+function main() returns ExitCode
+	let c = Container.empty
+	if c == Container.empty 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3066: <fragment>:11:7: cannot compare union values using '==', use 'match' instead
+```
+
 <!-- test: error.enum-ne -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)

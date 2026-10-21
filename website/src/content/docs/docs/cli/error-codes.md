@@ -381,7 +381,7 @@ an impure-function call's result was discarded without the explicit `_ =` opt-in
 
 ### E3066 — `semanticEnumNotComparable`
 
-A 'union' value is compared with '=='/'!='. Unions carry no synthesized equality; use 'match'. a `union` value was compared with `==` / `!=`. Unions carry no synthesized equality -- a new case can't be added without every match site being forced to handle it, so the only way to inspect a union is `match`. Enums (which auto-implement Equatable) are unaffected. Stdlib source is exempt (trusted). Emitted from `Parser.emitComparableCompare`.
+A 'union' value is compared with '=='/'!='. Unions carry no synthesized equality; use 'match'. a `union` value was compared with `==` / `!=`. Unions carry no synthesized equality -- a new case can't be added without every match site being forced to handle it, so the only way to inspect a union is `match`. Enums (which auto-implement Equatable) are unaffected. The rule binds every tier: the standard library is refused the same way. Emitted from `Parser.emitComparableCompare`.
 
 ### E3067 — `semanticSelfAssignment`
 
