@@ -1402,8 +1402,8 @@ union AlwaysSplicedDataReference
 end 'AlwaysSplicedDataReference'
 
 function alwaysSplicedBodyNamedByData(project Project, module StdModule, byName FunctionNameIndex) returns AlwaysSplicedDataReference
-	for reloc in project.globalData.pendingRdataRelocs 'eachRdataSlot'
-		let slot = alwaysSplicedBodyNamed(module, name: reloc.funcName, byName: byName, door: "an .rdata slot")
+	for name in project.globalData.functionNamesInRdata() 'eachRdataSlot'
+		let slot = alwaysSplicedBodyNamed(module, name: name, byName: byName, door: "an .rdata slot")
 
 		match slot 'anRdataSlot'
 			none then break
@@ -1727,8 +1727,8 @@ type CalledOnceCensus
 			end 'aTest'
 		end 'eachFunction'
 
-		for reloc in project.globalData.pendingRdataRelocs 'eachRdataSlot'
-			self.markReferenced(reloc.funcName, byName: byName)
+		for name in project.globalData.functionNamesInRdata() 'eachRdataSlot'
+			self.markReferenced(name, byName: byName)
 		end 'eachRdataSlot'
 
 		// A function used as a VALUE is called by its `__fnref_` thunk, which does not exist until after the

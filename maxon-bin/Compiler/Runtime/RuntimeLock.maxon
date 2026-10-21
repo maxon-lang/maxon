@@ -7,8 +7,8 @@
 // bits cannot carry the flags.
 //
 // The one deviation from Go is the recursive kind, which adds an owner token and a depth beside the
-// key: the runtime takes `__sched_lock`, `__gt_gfree_lock`, a GT record's lock and the slab lock
-// nested on one OS thread, and an exclusive word taken twice there waits for ever.
+// key: the runtime takes `__gt_gfree_lock`, a GT record's lock and the slab lock nested on one OS
+// thread, and an exclusive word taken twice there waits for ever.
 let RtLockOffKey = 0
 export let RtLockOffOwner = 8 as ByteOffset
 export let RtLockOffDepth = 16 as ByteOffset
@@ -65,6 +65,24 @@ export type RuntimeLockSite
 end 'RuntimeLockSite'
 
 export typealias RuntimeLockSiteArray = Array with RuntimeLockSite
+
+export type RuntimeLockRequirement
+	export let funcName as ByteArray
+	export let lockLabel as ByteArray
+
+	static function create(funcName ByteArray, lockLabel ByteArray) returns RuntimeLockRequirement
+		return Self{funcName: funcName, lockLabel: lockLabel}
+	end 'create'
+end 'RuntimeLockRequirement'
+
+export typealias RuntimeLockRequirementArray = Array with RuntimeLockRequirement
+
+// Registers `func` as running only inside the exclusive global lock `lockLabel`. E5006 then refuses
+// every call to it where the lock may be free and every return from it where the lock may be free,
+// and its body is checked as entered holding the lock (`RuntimeLockUse`).
+export function requireRuntimeLockHeld(module StdModule, func IrFunction, lockLabel ByteArray)
+	module.runtimeLockRequirements.push(RuntimeLockRequirement.create(func.name.clone(), lockLabel: lockLabel.clone()))
+end 'requireRuntimeLockHeld'
 
 export function runtimeLockMarkOf(kind RuntimeLockKind, entering bool) returns RuntimeLockMark
 	return match kind 'kind'

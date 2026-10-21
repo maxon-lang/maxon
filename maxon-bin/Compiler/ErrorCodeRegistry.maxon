@@ -2376,6 +2376,35 @@ export enum ErrorCode
 	// break the recursion.
 	unguardedStackChain = "E5004"
 
+	// A runtime function takes an exclusive lock word it already holds. An exclusive runtime lock such
+	// as `__sched_lock` is not recursive, so the second take waits on the first for ever. Proven once per
+	// build over the runtime the compiler emits, on every target but wasm32-wasi, whose one thread drops
+	// the locks: along every path on which a function may hold a global exclusive lock, no call may
+	// reach a function that takes it again, directly or through further calls, in the runtime or in the
+	// program. A call through a function pointer counts as reaching every function whose address is
+	// taken, by an op or by an `.rdata` slot, except the entry points only the OS enters. A function that
+	// returns holding a lock passes the hold to its callers. Reported program-wide, naming the holding
+	// function, the call and the chain to the second take. Pass the held state down instead of taking
+	// the lock twice: give the inner function a form that expects the lock held.
+	// What this does not cover: calls the backend inserts after the lock marks are expanded, code
+	// hand-assembled into the image, a lock word that is not one global (a mailbox's or a stack pool's),
+	// and a build whose function names collide, which E4015 reports and which skips the check.
+	nestedExclusiveLockTake = "E5005"
+
+	// A runtime function that requires an exclusive lock held is called where the lock may be free. A
+	// function states the requirement when the runtime builds it: the `_held` forms of the doors that
+	// otherwise take the lock themselves, and the functions that only ever run inside it. Along every
+	// path to a call of such a function the lock must be held, in a caller that takes no lock of its own
+	// as in one that does; a lock a callee returns holding counts as possibly held, not as held. A
+	// function with the requirement starts with the lock held, so its own calls are checked against
+	// E5005 as well, and it must still hold the lock at every return, because its callers go on as
+	// though it did. Proven in the same pass as E5005. Reported program-wide, naming the caller and the
+	// callee, or the function that returns without its lock. Take the lock before the call on every path
+	// that reaches it, or call the form of the callee that takes it.
+	// What this does not cover, beyond E5005's exclusions: a call through a function pointer, and a
+	// call that releases a lock its caller took, after which the caller counts as still holding it.
+	callRequiresRuntimeLockHeld = "E5006"
+
 	// The previous build output at this path could not be cleared, so this build cannot replace it.
 	// Refused ahead of the write, because the write is logged and swallowed: carrying on would print
 	// "Wrote N bytes" and exit 0 over an untouched STALE binary. Every message states that the previous

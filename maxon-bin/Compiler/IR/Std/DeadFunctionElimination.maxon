@@ -280,11 +280,7 @@ end 'thisWalkReached'
 //        makes the leak gate FIRE, so a gate that decided from the module instead would let this root's
 //        removal turn every exit-101 test silently green.
 //      * `__gt_ready_locked` and `__sched_wake_or_spawn` — a readiness walk's ready of a parked waiter and
-//        the wake it may owe. A program's Std callers of them may all be unreachable while a hand-assembled
-//        chunk still names them, so they are reached from data alone. MEASURED for a predecessor by adding
-//        the call without a root: `panic at X64Backend.maxon:2280: resolveCallFixups: call to unknown
-//        function '__sched_wake_or_spawn'`, seventeen `subprocess-builtins` cases at once, exactly the shape
-//        `__mm_leak_check`'s note above predicts.
+//        the wake it may owe. No stub or chunk calls either; they are rooted unconditionally all the same.
 //      * `__gt_drain_at_exit` — the entry stub's scheduler teardown (`BackendDispatch.prependEntryStub`),
 //        in exactly `__mm_leak_check`'s position and for exactly its reason.
 //    A chunk-called name is rooted on the target gate its chunk rides, and a stub-called one on the fact the
@@ -359,8 +355,8 @@ end 'functionRecordCodesOf'
 //     program without green threads; with them, `__gt_drain_at_exit` calls it.
 //   * `__mm_leak_check` — both entry stubs' leak gate, emitted from `RuntimeUsage.usesHeap` where
 //     installation is decided; a pruned root leaves a call with no callee, loudly, on every backend.
-//   * `__gt_ready_locked` / `__sched_wake_or_spawn` — a readiness walk's two callees, named by a
-//     hand-assembled chunk unconditionally.
+//   * `__gt_ready_locked` / `__sched_wake_or_spawn` — a readiness walk's two callees, rooted
+//     unconditionally.
 //   * `__sched_syscall_regain` and the bracket pair — called only from the Target tier's syscall handoff,
 //     on the lanes that build it (`SchedRuntime.targetBracketsBlockingSyscalls`, whose gate the install
 //     shares); an ungated root here would be the shape in which the two halves drift apart silently.

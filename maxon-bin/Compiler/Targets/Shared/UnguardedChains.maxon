@@ -90,7 +90,7 @@ end 'requireUnguardedChainsFitTheGuardMargin'
 // switch-in — entry points, thread starts, fault and signal handlers — which no pointer call in the
 // program reaches, so they are not priced as pointer targets. `edgesOf` panics on a by-name call to
 // one, which keeps the roster honest.
-function nameIsEnteredByTheOs(name ByteArray) returns bool
+export function nameIsEnteredByTheOs(name ByteArray) returns bool
 	return name.equals(EntryPointName) or name.equals(SchedWorkerLoopName) or name.equals(SchedSysmonName) or name.equals(FaultThunkName) or name.equals(FaultHandlerName) or name.equals(PreemptHandlerName) or name.equals(LinuxSigreturnName) or name.equals(AsyncPreemptName) or name.equals(GtTrampolineName) or name.equals(NetpollChildFiredName)
 end 'nameIsEnteredByTheOs'
 
@@ -293,8 +293,8 @@ type UnguardedChainWalk
 	end 'notePointerCallers'
 
 	function noteIndirectTargets(globalData GlobalDataTable)
-		for reloc in globalData.pendingRdataRelocs 'eachRdataSlot'
-			self.noteAddressTaken(reloc.funcName)
+		for name in globalData.functionNamesInRdata() 'eachRdataSlot'
+			self.noteAddressTaken(name)
 		end 'eachRdataSlot'
 
 		for index in 0 upto self.chunks.count() 'eachChunk'
@@ -549,22 +549,6 @@ type UnguardedChainWalk
 		return try self.hasDeepest.get(index) otherwise panic("UnguardedChainWalk.hasDeepestOf: hasDeepest.get OOB at {index}")
 	end 'hasDeepestOf'
 
-	function quotedNames(names NameRoster) returns String
-		var text = StringBuilder.create()
-
-		for position in 0 upto names.count() 'eachName'
-			let name = try names.get(position) otherwise panic("UnguardedChainWalk.quotedNames: names.get OOB at {position}")
-
-			if position > 0 'separator'
-				text.append(" → ")
-			end 'separator'
-
-			text.append("'{String.from(name)}'")
-		end 'eachName'
-
-		return text.build()
-	end 'quotedNames'
-
 	function framedNames(indices ChunkIndexColumn) returns String
 		var text = StringBuilder.create()
 
@@ -612,7 +596,7 @@ type UnguardedChainWalk
 		end 'eachOnPath'
 
 		cycle.push(index)
-		try self.refuseAt(index, message: "'{String.from(self.chunkAt(index).funcName)}' has no stack guard and reaches itself ({self.quotedNames(self.namesOf(cycle, expandInlined: false))}) — an unguarded function runs inside the {self.margin}-byte guard margin, and a recursion has no depth that margin could bound")
+		try self.refuseAt(index, message: "'{String.from(self.chunkAt(index).funcName)}' has no stack guard and reaches itself ({quotedNames(self.namesOf(cycle, expandInlined: false))}) — an unguarded function runs inside the {self.margin}-byte guard margin, and a recursion has no depth that margin could bound")
 	end 'refuseRecursion'
 
 	function surveying() returns bool
@@ -680,7 +664,7 @@ type UnguardedChainWalk
 	function refuseChain(root ElementIndex) throws CompileError
 		let chain = self.chainFrom(root)
 
-		try self.refuseAt(root, message: "the unguarded chain {self.quotedNames(self.namesOf(chain, expandInlined: true))} may need more stack than the {self.margin}-byte guard margin — an unguarded function runs inside that margin, so every chain of them must fit it")
+		try self.refuseAt(root, message: "the unguarded chain {quotedNames(self.namesOf(chain, expandInlined: true))} may need more stack than the {self.margin}-byte guard margin — an unguarded function runs inside that margin, so every chain of them must fit it")
 	end 'refuseChain'
 
 	function refuseThroughPointer(root ElementIndex) throws CompileError
@@ -721,3 +705,19 @@ type UnguardedChainWalk
 		panic("{message}")
 	end 'requireEverythingWasSized'
 end 'UnguardedChainWalk'
+
+export function quotedNames(names NameRoster) returns String
+	var text = StringBuilder.create()
+
+	for position in 0 upto names.count() 'eachName'
+		let name = try names.get(position) otherwise panic("quotedNames: names.get OOB at {position}")
+
+		if position > 0 'separator'
+			text.append(" → ")
+		end 'separator'
+
+		text.append("'{String.from(name)}'")
+	end 'eachName'
+
+	return text.build()
+end 'quotedNames'

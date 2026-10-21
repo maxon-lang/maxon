@@ -4,9 +4,9 @@ let ExpandedLockOwnedLabel = b"__rl_owned"
 let ExpandedLockNestedLabel = b"__rl_nested"
 let ExpandedLockOutermostLabel = b"__rl_outermost"
 
-typealias RuntimeLockSiteByOp = Map with (ElementIndex, RuntimeLockSite)
+module typealias RuntimeLockSiteByOp = Map with (ElementIndex, RuntimeLockSite)
 
-export function expandRuntimeLocks(module StdModule, firstFuncIndex ElementIndex, target Target)
+export function expandRuntimeLocks(module StdModule, firstFuncIndex ElementIndex, target Target, project Project) throws CompileError
 	if module.runtimeLockSites.count() == 0 'noSites'
 		return
 	end 'noSites'
@@ -16,6 +16,10 @@ export function expandRuntimeLocks(module StdModule, firstFuncIndex ElementIndex
 	// ⚠ A WASI component has one thread, so a lock has nothing to exclude and its marks are dropped. A
 	// threaded wasm lane makes that a silent race; see `HostFacility.hostMutex`.
 	let dropOnly = target.os == Os.wasi
+
+	if not dropOnly 'threaded'
+		try requireRuntimeLocksAreUsedAsDeclared(module, firstFuncIndex: firstFuncIndex, sites: sites, globalData: project.globalData, project: project)
+	end 'threaded'
 
 	for funcIndex in firstFuncIndex upto module.functions.count() 'eachFunc'
 		let func = try module.functions.get(funcIndex) otherwise panic("expandRuntimeLocks: functions.get OOB at {funcIndex}")

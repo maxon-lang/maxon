@@ -1569,7 +1569,7 @@ export function targetPreemptDelivery(target Target) returns PreemptDelivery
 	end 'os'
 end 'targetPreemptDelivery'
 
-// ⭐ **`__sched_lock` — Go's `sched.lock`: a recursive runtime lock (`RuntimeLock`) laid out in
+// ⭐ **`__sched_lock` — Go's `sched.lock`: an exclusive runtime lock (`RuntimeLock`) laid out in
 // `.data`** for EVERY green-thread program. It guards the
 // global run queue and its counts, the idle processor and machine lists, the machine roster, the
 // regain list and the process phase, and with them the timer store and the poll-descriptor band.
@@ -1579,8 +1579,9 @@ end 'targetPreemptDelivery'
 //
 // ⚠ **ONE LOCK OVER THE QUEUE, THE TIMERS AND THE POLLER, AND THAT IS A DEADLOCK ARGUMENT.**
 // Separate locks would have to be held together wherever a readiness readies a thread, and two
-// locks held together have an ORDER that every file touching them would have to remember. The
-// lock is recursive, so one lock covering all of it has no order to get wrong. A record
+// locks held together have an ORDER that every file touching them would have to remember. One lock
+// covering all of it has no order to get wrong, and a path that holds it calls the held form of
+// whatever would take it again (`SchedLockHold`). A record
 // lock is taken inside it — a ready from the timer store or the poller, the hand-off gate's requeue
 // — and no record lock is held while it is taken.
 export let SchedLockLabel = b"__sched_lock"
@@ -1736,9 +1737,9 @@ export let SchedWakeOrSpawnName = b"__sched_wake_or_spawn"
 
 // ⭐⭐ `__sched_wake_netpoller(when)` — Go's `wakeNetPoller` (`proc.go:4018`): a deadline `when` has just become
 // the earliest the scheduler waits for. If a machine is blocked in the poller for a LATER deadline, break its
-// wait; if none is polling, `__sched_wake_poller`. `GtRuntime.__gt_register_park` calls it holding
-// `__sched_lock` and `__np_pd_deadline` with it released; the wake takes it, recursively in the
-// first case. EXPORTED for `GtRuntime.__gt_register_park`.
+// wait; if none is polling, `__sched_wake_poller`. `GtRuntime.__gt_register_park`, `__np_pd_deadline` and a send's
+// park (`GtRuntime.emitGtArmTimerDeadline`, which holds the sender's mailbox lock) call it with `__sched_lock`
+// released; the wake takes it. EXPORTED for `GtRuntime.__gt_register_park`.
 export let SchedWakeNetpollerName = b"__sched_wake_netpoller"
 
 // ⭐⭐ `__sched_wake_poller()` — a timer or a child is pending and no machine waits in the poller: take one
@@ -1766,6 +1767,32 @@ export let SchedStopWorkersName = b"__sched_stop_workers"
 //
 // ⚠ NOT exported: `GtRuntime` reaches it through `emitSchedRunqPut` rather than by name.
 let SchedRunqPutName = b"__sched_runq_put"
+
+// `__sched_runq_put_held(gt)` — `__sched_runq_put` for a caller that holds `__sched_lock`, which
+// neither takes it nor releases it.
+let SchedRunqPutHeldName = b"__sched_runq_put_held"
+
+// Which form of a door that takes `__sched_lock` a caller needs. The lock is not recursive, so a caller
+// that holds it must call the held form, which neither takes nor releases it; the free form taken under
+// the lock waits for ever. The build checks the choice at every call: E5005 refuses the free form under
+// the lock, E5006 the held form where the lock may be free.
+export enum SchedLockHold
+	free
+	held
+end 'SchedLockHold'
+
+export function lockHoldNameOf(hold SchedLockHold, whenFree ByteArray, whenHeld ByteArray) returns ByteArray
+	return match hold 'hold'
+		free gives whenFree
+		held gives whenHeld
+	end 'hold'
+end 'lockHoldNameOf'
+
+export function requireSchedLockHeldWhen(module StdModule, func IrFunction, hold SchedLockHold)
+	if hold == SchedLockHold.held 'heldForm'
+		requireRuntimeLockHeld(module, func: func, lockLabel: SchedLockLabel)
+	end 'heldForm'
+end 'requireSchedLockHeldWhen'
 
 // `__sched_runq_next(p) -> gt` — take the thread out of `p`'s `runnext` slot by CAS, or 0. Go's `runqget`'s
 // first arm; the caller that takes one this way must not charge the schedule a tick (`POffRunnext`).
@@ -2439,7 +2466,7 @@ export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns D
 	pushRuntimeGlobal(out, label: SchedShutdownFlagLabel, sharing: MultiMSharing.lastWriterWins, reach: DataReach.walked)
 
 	if usage.usesGt 'schedLock'
-		pushRecursiveRuntimeLock(out, label: SchedLockLabel)
+		pushRuntimeGlobal(out, label: SchedLockLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.declared)
 	end 'schedLock'
 
 	pushRuntimeGlobal(out, label: SchedLockDepthSinkLabel, sharing: MultiMSharing.lastWriterWins, reach: DataReach.walked)
@@ -2472,7 +2499,11 @@ end 'schedRuntimeGlobals'
 // green-thread half does — there is no program that wants one without the other.
 export function installSchedRuntime(module StdModule, target Target)
 	buildSchedInitProcs(module, target: target)
-	buildSchedRunqPut(module)
+
+	for hold in SchedLockHold.allCases 'eachHold'
+		buildSchedRunqPut(module, hold: hold)
+	end 'eachHold'
+
 	buildSchedRunqNext(module)
 	buildSchedRunqGet(module)
 	buildSchedRunqEmpty(module)
@@ -2648,12 +2679,26 @@ function emitLockWordLeaveBeforeMachine(module StdModule, block IrBlock, label B
 end 'emitLockWordLeaveBeforeMachine'
 
 export function emitSchedLockEnter(module StdModule, block IrBlock, ids ValueMinter)
-	emitLockWordEnter(module, block: block, label: SchedLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
+	emitLockWordEnter(module, block: block, label: SchedLockLabel, kind: RuntimeLockKind.exclusive, ids: ids)
 end 'emitSchedLockEnter'
 
 export function emitSchedLockLeave(module StdModule, block IrBlock, ids ValueMinter)
-	emitLockWordLeave(module, block: block, label: SchedLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
+	emitLockWordLeave(module, block: block, label: SchedLockLabel, kind: RuntimeLockKind.exclusive, ids: ids)
 end 'emitSchedLockLeave'
+
+export function emitSchedLockEnterWhenFree(module StdModule, block IrBlock, hold SchedLockHold, ids ValueMinter)
+	match hold 'hold'
+		free then emitSchedLockEnter(module, block: block, ids: ids)
+		held then break
+	end 'hold'
+end 'emitSchedLockEnterWhenFree'
+
+export function emitSchedLockLeaveWhenFree(module StdModule, block IrBlock, hold SchedLockHold, ids ValueMinter)
+	match hold 'hold'
+		free then emitSchedLockLeave(module, block: block, ids: ids)
+		held then break
+	end 'hold'
+end 'emitSchedLockLeaveWhenFree'
 
 // ⭐⭐ **STEP A RUNTIME-LOCK DEPTH WORD — `MOffLocks` OF A MACHINE, OR THE ADDRESS A WALK RESOLVED.** The
 // allocator's lock pair steps the same word through `emitLockEnterWithDepth`/`emitLockLeaveWithDepth`, with
@@ -2715,9 +2760,9 @@ end 'emitLockDepthAddrOrSink'
 // `sealedBeforeWorkers` grounds — bring-up is single-threaded BY CONSTRUCTION, because that loop is
 // what builds the array a worker could ever be spawned onto. It is stated here as well as there
 // because a rule with a silent exception is a rule the next reader will not trust. Go asserts it
-// (`assertLockHeld(&sched.lock)` at `mput`, `mget`, `pidleput` and `pidleget`); the compiler has no
-// such assert to emit, and `__sched_lock` is RECURSIVE, so getting it wrong produces no diagnostic
-// anywhere — only a list that loses a node.
+// (`assertLockHeld(&sched.lock)` at `mput`, `mget`, `pidleput` and `pidleget`); these doors are emitted
+// inline into their callers, not built as functions registered with `requireRuntimeLockHeld`, so E5006
+// cannot see them and getting it wrong produces no diagnostic anywhere — only a list that loses a node.
 
 // Where a LIFO's head word lives, which is also what serializes it.
 union SchedListHead
@@ -2969,9 +3014,9 @@ end 'emitSchedMidleUnlinkLocked'
 // `GtRuntime.__gt_ready_locked` answered; `wake` and `cont` are the caller's blocks, so each keeps its own
 // block order. Two properties, and neither is optional:
 //
-//   • **AFTER the release**, because the outermost release's compare-and-swap is the StoreLoad
-//     fence `buildSchedWakeOrSpawn`'s read of the spinning count depends on, and a nested leave releases
-//     nothing.
+//   • **AFTER the release**, because the release's compare-and-swap is the StoreLoad fence
+//     `buildSchedWakeOrSpawn`'s read of the spinning count depends on, and the wake's `__sched_startm`
+//     takes `__sched_lock` itself.
 //   • **ONLY IF OWED**, because a wake that nothing readied owes would take the gate on every publish of a
 //     program that readies nothing, and with an idle processor and no spinner it would START a machine for
 //     it — an OS thread that idles for the life of the process, and the `workers` reading
@@ -2993,11 +3038,12 @@ export function emitSchedWakeAnIdleM(module StdModule, block IrBlock, ids ValueM
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SchedWakeOrSpawnName, args: ValueIdArray.create()))
 end 'emitSchedWakeAnIdleM'
 
-// ⭐ **PUT A STRAND TOKEN IN THIS PROCESSOR'S `runnext` SLOT, WITHOUT THE WAKE.** It requires no lock state of
-// its caller: the put takes no lock, and an overflow's recursive entry into `__sched_lock` is safe (see
-// `buildSchedRunqPut`). EXPORTED for `GtRuntime.emitGtStrandTokenPublish`, whose callers pay the wake.
-export function emitSchedRunqPut(module StdModule, block IrBlock, gt ValueId, ids ValueMinter)
-	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SchedRunqPutName, args: argsOf(gt)))
+// ⭐ **PUT A STRAND TOKEN IN THIS PROCESSOR'S `runnext` SLOT, WITHOUT THE WAKE.** The put itself takes
+// no lock; an overflow, or a thread with no processor, takes `__sched_lock` unless `hold` says the caller
+// already has it (see `buildSchedRunqPut`). EXPORTED for `GtRuntime.emitGtStrandTokenPublish`, whose
+// callers pay the wake.
+export function emitSchedRunqPut(module StdModule, block IrBlock, gt ValueId, hold SchedLockHold, ids ValueMinter)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: lockHoldNameOf(hold, whenFree: SchedRunqPutName, whenHeld: SchedRunqPutHeldName), args: argsOf(gt)))
 end 'emitSchedRunqPut'
 
 // ⭐⭐ **ASK THE SCHEDULER WHICH STRAND TOKEN MACHINE `m` RUNS NEXT, OR 0 — the CONSUME door**, one door
@@ -3128,7 +3174,7 @@ function buildSchedInitProcs(module StdModule, target Target)
 	// rule whole: every M is on `__sched_allm` before anything can look for it. M0's handle is 0
 	// because this runtime never created the thread, the same 0 the teardown's join tests for. The
 	// lock is taken though nothing contends, because `emitSchedAllocM` requires its caller to hold it.
-	emitLockWordEnterBeforeMachine(module, block: adopt, label: SchedLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
+	emitLockWordEnterBeforeMachine(module, block: adopt, label: SchedLockLabel, kind: RuntimeLockKind.exclusive, ids: ids)
 	let zeroIndex = emitConst(module, block: adopt, value: 0, ids: ids)
 	let p0 = emitLoadProc(module, block: adopt, index: zeroIndex, ids: ids)
 	let m0 = emitSchedAllocM(module, block: adopt, nextP: p0, caller: CallerMachine.notYetPublished, ids: ids)
@@ -3140,7 +3186,7 @@ function buildSchedInitProcs(module StdModule, target Target)
 	// since the count is the list's, and the claim is inside this critical section like every other
 	// writer of the word.
 	emitSchedPidleClaimLocked(module, block: adopt, p: p0, ids: ids)
-	emitLockWordLeaveBeforeMachine(module, block: adopt, label: SchedLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
+	emitLockWordLeaveBeforeMachine(module, block: adopt, label: SchedLockLabel, kind: RuntimeLockKind.exclusive, ids: ids)
 	emitSchedBecomeM(module, block: adopt, m: m0, target: target, ids: ids)
 
 	// The main thread takes P[0] directly rather than through `MOffNextP`: it is not waking from a park, and
@@ -3180,7 +3226,7 @@ end 'buildSchedInitProcs'
 // `MOffSpinning`. No word is written by both while both run.
 //
 // ⚠ **A WORKER's M STRUCT COMES OUT OF THE CREATOR's OWN P SHARD.** `SlabRawShardRow` is exercised by other
-// callers: the poller, back from its wait holding no processor, runs `__gt_timer_check`
+// callers: the poller, back from its wait holding no processor, runs `__gt_timer_check_held`
 // with `M->currentP == 0` (`wpolled`), which is `emitSlabResolveShard`'s **P-less-M** arm.
 
 // ⭐⭐ **ALLOCATE AND REGISTER AN M — the creator's half.** The struct, its park event, the processor it is
@@ -3672,8 +3718,9 @@ end 'emitSchedAnyRunnable'
 // the slots `[h, h+n)` belong to this thread alone: no thief can claim them (the head has moved past) and no
 // push can overwrite them, because this function is the ring's only pusher and it has not pushed yet. A 1 KB
 // frame array avoided, and one fewer place for two copies of a batch to disagree.
-function buildSchedRunqPut(module StdModule)
-	var func = IrFunction.createFromStd(SchedRunqPutName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+function buildSchedRunqPut(module StdModule, hold SchedLockHold)
+	var func = IrFunction.createFromStd(lockHoldNameOf(hold, whenFree: SchedRunqPutName, whenHeld: SchedRunqPutHeldName), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	requireSchedLockHeldWhen(module, func: func, hold: hold)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3707,12 +3754,12 @@ function buildSchedRunqPut(module StdModule)
 
 	// globalOnly: this OS thread owns no P, so it has no ring to push — the global queue is where a
 	// thread belongs when nobody owns it yet, and it is exactly what `__sched_find_runnable`'s batch
-	// grab is for. The lock is taken HERE rather than owed by the caller: most publishers reach this
-	// holding no lock, and `__sched_lock` is recursive, so one that already holds it — a ready
-	// from the timer store or the poller — pays two counted ops and nothing else.
-	emitSchedLockEnter(module, block: globalOnly, ids: ids)
+	// grab is for. The free form takes the lock HERE rather than owing it to the caller, because most
+	// publishers reach this holding no lock; the held form is for a ready from the timer store or the
+	// poller, which already holds it.
+	emitSchedLockEnterWhenFree(module, block: globalOnly, hold: hold, ids: ids)
 	emitSchedEnqueueLocked(module, block: globalOnly, gt: gt, ids: ids)
-	emitSchedLockLeave(module, block: globalOnly, ids: ids)
+	emitSchedLockLeaveWhenFree(module, block: globalOnly, hold: hold, ids: ids)
 	module.setTerminator(globalOnly, op: StdOp.retVoid)
 
 	// ⭐⭐ **slotPut: EXCHANGE THE SLOT — Go's `retryNext`, and the compare-and-swap is not optional.** Only this
@@ -3758,18 +3805,14 @@ function buildSchedRunqPut(module StdModule)
 	module.setTerminator(claim, op: StdOp.condBranch(lostClaim, thenBlockId: retry.id, elseBlockId: moveLock.id))
 	claim.branchEdges.push(BranchEdge.create(retry.id, argIds: argsOf(pushGt)))
 
-	// ⛔⛔ **THE ACQUIRE GETS A BLOCK OF ITS OWN, AND BOTH NEIGHBOURS WOULD BE A HANG.** `__sched_lock`
-	// is recursive, so it COUNTS: an acquire in the loop header below would recurse it 128 times
-	// against the one release at `moveDone`, and an acquire in `claim` would be taken again on every
-	// lost-CAS retry. Both leave the lock held for the process's life, and neither is a fault — the
-	// failure is a hang in the next thread to want the global queue. One acquire, on the one edge that
-	// runs exactly once.
+	// ⛔⛔ **THE ACQUIRE GETS A BLOCK OF ITS OWN, AND BOTH NEIGHBOURS WOULD BE A HANG.** An acquire in the
+	// loop header below would take the lock 128 times against the one release at `moveDone`, and an acquire
+	// in `claim` would be taken again on every lost-CAS retry. One acquire, on the one edge that runs
+	// exactly once.
 	//
-	// ⚠ **A CALLER THAT ALREADY HOLDS THE LOCK REACHES HERE, AND THAT IS SAFE**, because the same recursion
-	// counts a nested pair correctly. What such a caller must not rely on is this leave being the StoreLoad
-	// fence for its own wake — a recursive leave releases nothing — and none does: the ring's fence is
-	// `emitRunqPublishTail`'s locked op, and a batch publisher's is its own outer release.
-	emitSchedLockEnter(module, block: moveLock, ids: ids)
+	// ⚠ **THE HELD FORM ACQUIRES AND RELEASES NOTHING HERE**, so the StoreLoad fence for a held caller's
+	// wake is that caller's own release, as the ring's is `emitRunqPublishTail`'s locked op.
+	emitSchedLockEnterWhenFree(module, block: moveLock, hold: hold, ids: ids)
 	let moveStart = emitConst(module, block: moveLock, value: 0, ids: ids)
 	module.setTerminator(moveLock, op: StdOp.branch(moveHdr.id))
 	moveLock.branchEdges.push(BranchEdge.create(moveHdr.id, argIds: argsOf(moveStart)))
@@ -3780,7 +3823,7 @@ function buildSchedRunqPut(module StdModule)
 	// Asking `emitGtIsDropped` of every slot and calling `__gt_runner_done` on the ones that answered
 	// would make that call **while holding `__sched_lock`**, which is the one thing it may never be
 	// made under: it reaches `__gt_reclaim`'s releaser, and a releaser that reaches
-	// `__gt_promise_drop` spin-waits with a release that a recursive lock turns into a no-op. See
+	// `__gt_promise_drop` spin-waits on a lock this call would still hold. See
 	// `GtRuntime.GtRunnerDoneName`, where the rule is written down.
 	//
 	// ⚠ **NOTHING IS LEAKED BY MOVING ONE.** A tombstone on the global queue is refused and reclaimed by
@@ -3801,7 +3844,7 @@ function buildSchedRunqPut(module StdModule)
 	// The evicted thread goes to the global tail BEHIND the batch, which is Go's order (`batch[n] = gp`) and
 	// the only one that keeps the ring's FIFO promise across an overflow.
 	emitSchedEnqueueLocked(module, block: moveDone, gt: pushGt, ids: ids)
-	emitSchedLockLeave(module, block: moveDone, ids: ids)
+	emitSchedLockLeaveWhenFree(module, block: moveDone, hold: hold, ids: ids)
 	module.setTerminator(moveDone, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -3940,6 +3983,7 @@ end 'buildSchedRunqEmpty'
 // machine holds, and the caller is either `p`'s machine or `p` has none — so the loop terminates.
 function buildSchedDrainRunq(module StdModule)
 	var func = IrFunction.createFromStd(SchedDrainRunqName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	requireRuntimeLockHeld(module, func: func, lockLabel: SchedLockLabel)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5378,7 +5422,7 @@ function buildSchedSweepDropped(module StdModule)
 	//
 	// ⚠ **NO LOCK HERE — the walk takes and releases its own, per iteration.** It has to: it calls
 	// `__gt_runner_done`, which must never run under `__sched_lock`. A bracket held by this caller would make
-	// the walk's release a recursive decrement that released nothing, which is exactly the latent hang
+	// the walk's take wait on the caller for ever, which is exactly the latent hang
 	// `GtRuntime.GtRunnerDoneName` records.
 	emitGtFifoSweepDropped(module, func: func, cur: globalStart, cont: doneBlock, ends: GtQueueEnds.globalLabels, ids: ids)
 
@@ -6408,6 +6452,7 @@ end 'emitSchedCheckdead'
 
 function buildSchedCheckdead(module StdModule)
 	var func = IrFunction.createFromStd(SchedCheckdeadName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
+	requireRuntimeLockHeld(module, func: func, lockLabel: SchedLockLabel)
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -6454,7 +6499,7 @@ function buildSchedCheckdead(module StdModule)
 	emitBranchOnCasLost(module, block: quiescerGivesUp, result: claimedWaiter, lost: doneBlock, won: quiescerClaimed, ids: ids)
 
 	emitStoreField(module, block: quiescerClaimed, record: quiescer, offset: GtOffParkArg, value: emitSchedGtLiveSum(module, block: quiescerClaimed, ids: ids))
-	_ = emitGtReady(module, block: quiescerClaimed, gt: quiescer, gate: GtReadyGate.fromWaiting, ids: ids)
+	_ = emitGtReady(module, block: quiescerClaimed, gt: quiescer, gate: GtReadyGate.fromWaiting, hold: SchedLockHold.held, ids: ids)
 	emitBranchOnCompare(module, block: quiescerClaimed, value: road, pred: StdCmpPred.eq, against: SchedParkRoad.ordinary.rawValue, whenTrue: quiescerSignalled, whenFalse: doneBlock, ids: ids)
 
 	var quiescerWoken = emitSchedSignalMachineLocked(module, func: func, cur: quiescerSignalled, m: m, labelPrefix: "cdquiesce", ids: ids)
@@ -6515,7 +6560,6 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	var lockedRun = module.addBlock(func, label: b"wlockedrun", heat: BlockHeat.cold)
 	var lockedStrandRun = module.addBlock(func, label: b"wlockedstrandrun", heat: BlockHeat.cold)
 	var checkTimers = module.addBlock(func, label: b"wchecktimers", heat: BlockHeat.normal)
-	var fireTimers = module.addBlock(func, label: b"wfiretimers", heat: BlockHeat.normal)
 	var dequeue = module.addBlock(func, label: b"wdequeue", heat: BlockHeat.normal)
 	var sortWork = module.addBlock(func, label: b"wsortwork", heat: BlockHeat.normal)
 	var handedOffProc = module.addBlock(func, label: b"whandedoff", heat: BlockHeat.cold)
@@ -6643,13 +6687,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	// pays it.
 	let owed = ids.mint()
 	dequeue.blockArgs.push(IrBlockArg.create(owed, argType: StdType.i64))
-	let noDebt = emitConst(module, block: checkTimers, value: WakeDebtNone, ids: ids)
-	let checkedAt = emitGtBranchOnTimerDue(module, func: func, cur: checkTimers, due: fireTimers, notDue: dequeue, notDueArgs: argsOf(noDebt), ids: ids)
-
-	let timerDebt = ids.mint()
-	module.appendOp(fireTimers, op: StdOp.call(timerDebt, callee: GtTimerCheckName, args: argsOf(checkedAt)))
-	module.setTerminator(fireTimers, op: StdOp.branch(dequeue.id))
-	fireTimers.branchEdges.push(BranchEdge.create(dequeue.id, argIds: argsOf(timerDebt)))
+	emitGtPollStores(module, func: func, cur: checkTimers, cont: dequeue, hold: SchedLockHold.free, ids: ids)
 
 	// ⭐⭐ **THE SEARCH STARTS UNCREDITED, AS GO'S `findRunnable` DOES.** A machine back from running a strand
 	// consults its own ring and the global queue as an ordinary machine; it becomes a SPINNER — one unit of
@@ -6691,7 +6729,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	//
 	// ⭐⭐ **THE WAKE DEBT GOES TO `wdequeue` RATHER THAN BEING PAID.** The thread fired onto this ring is run by
 	// this machine, which searches next; `wfound` pays it.
-	emitGtPollStores(module, func: func, cur: idlePoll, cont: idleFire, ids: ids)
+	emitGtPollStores(module, func: func, cur: idlePoll, cont: idleFire, hold: SchedLockHold.free, ids: ids)
 
 	let idleDebt = ids.mint()
 	idleFire.blockArgs.push(IrBlockArg.create(idleDebt, argType: StdType.i64))
@@ -6850,12 +6888,12 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	// walks readied more than one, `wresumed` wakes one machine for the rest. ⚠ **THIS IS THE PRODUCER FOR
 	// `emitSlabResolveShard`'s P-LESS-M ARM**: anything the two walks allocate is allocated with
 	// `M->currentP` at 0, so `SlabRuntime.emitSlabResolveShard` routes it to the raw row under the slab's own
-	// lock. The walks take `__sched_lock` again, recursively.
+	// lock. The walks run in this hold: they are the held forms.
 	emitSchedLockEnter(module, block: polled, ids: ids)
 	emitStoreReleaseGlobalWord(module, block: polled, label: SchedLastPollLabel, value: emitGtNowNs(module, block: polled, ids: ids), ids: ids)
 	emitStoreReleaseGlobalWord(module, block: polled, label: SchedPollUntilLabel, value: emitConst(module, block: polled, value: 0, ids: ids), ids: ids)
 	let queuedBeforePoll = emitLoadGlobalWord(module, block: polled, label: SchedRunqSizeLabel, ids: ids)
-	emitGtPollStores(module, func: func, cur: polled, cont: polledStores, ids: ids)
+	emitGtPollStores(module, func: func, cur: polled, cont: polledStores, hold: SchedLockHold.held, ids: ids)
 	polledStores.blockArgs.push(IrBlockArg.create(ids.mint(), argType: StdType.i64))
 
 	// The walks' wake debt says only that something was readied, and the queue can already hold others' work,

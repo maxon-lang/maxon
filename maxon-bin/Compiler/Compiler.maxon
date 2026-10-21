@@ -1848,7 +1848,9 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// exist.
 	if pipeline.stdModule.runtimeLockSites.count() > 0 'runtimeLocks'
 		installRuntimeLockRuntime(pipeline.stdModule, usesGt: usage.usesGt, target: project.target)
-		expandRuntimeLocks(pipeline.stdModule, firstFuncIndex: firstEmittedFuncIndex, target: project.target)
+		try expandRuntimeLocks(pipeline.stdModule, firstFuncIndex: firstEmittedFuncIndex, target: project.target, project: project) otherwise 'runtimeLockMisuse'
+			try refuseCompile(project)
+		end 'runtimeLockMisuse'
 	end 'runtimeLocks'
 
 	var dataSection = dataSectionRoster(userGlobals.clone(), usage: usage, target: project.target)

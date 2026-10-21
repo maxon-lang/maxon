@@ -376,23 +376,21 @@ data {
   __sched_ncpu@456 = i64 0
   __sched_shutdown_flag@464 = i64 0
   __sched_lock@472 = i64 0
-  __sched_lock_owner@480 = i64 0
-  __sched_lock_depth@488 = i64 0
-  __sched_lock_depth_sink@496 = i64 0
-  __sched_nmspinning@504 = i64 0
-  __sched_needspinning@512 = i64 0
-  __sched_sysmon_event@520 = i64 0
-  __sched_sysmon_wait@528 = i64 0
-  __sched_timer_starts@536 = i64 0
-  __sched_preempt_ext_lock@544 = i64 0
-  __sched_preempt_context@552 = i64 0
-  __slab_arena_list@560 = i64 0
-  __slab_arena_map_l1@568 = i64 0
-  __slab_state@576 = i64 0
-  __mrt_console_probe_stdin@584 = i8 0
-  __mrt_console_probe_stdout@585 = i8 0
-  __mrt_console_probe_stderr@586 = i8 0
-  __mrt_program_started@587 = i8 0
+  __sched_lock_depth_sink@480 = i64 0
+  __sched_nmspinning@488 = i64 0
+  __sched_needspinning@496 = i64 0
+  __sched_sysmon_event@504 = i64 0
+  __sched_sysmon_wait@512 = i64 0
+  __sched_timer_starts@520 = i64 0
+  __sched_preempt_ext_lock@528 = i64 0
+  __sched_preempt_context@536 = i64 0
+  __slab_arena_list@544 = i64 0
+  __slab_arena_map_l1@552 = i64 0
+  __slab_state@560 = i64 0
+  __mrt_console_probe_stdin@568 = i8 0
+  __mrt_console_probe_stdout@569 = i8 0
+  __mrt_console_probe_stderr@570 = i8 0
+  __mrt_program_started@571 = i8 0
 }
 
 func @main {

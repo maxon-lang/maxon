@@ -153,24 +153,22 @@ data {
   __sched_ncpu@464 = i64 0
   __sched_shutdown_flag@472 = i64 0
   __sched_lock@480 = i64 0
-  __sched_lock_owner@488 = i64 0
-  __sched_lock_depth@496 = i64 0
-  __sched_lock_depth_sink@504 = i64 0
-  __sched_nmspinning@512 = i64 0
-  __sched_needspinning@520 = i64 0
-  __sched_sysmon_event@528 = i64 0
-  __sched_sysmon_wait@536 = i64 0
-  __sched_timer_starts@544 = i64 0
-  __sched_preempt_ext_lock@552 = i64 0
-  __sched_preempt_context@560 = i64 0
-  __slab_arena_list@568 = i64 0
-  __slab_arena_map_l1@576 = i64 0
-  __slab_state@584 = i64 0
-  __ms_wsa_started@592 = i64 0
-  __mrt_console_probe_stdin@600 = i8 0
-  __mrt_console_probe_stdout@601 = i8 0
-  __mrt_console_probe_stderr@602 = i8 0
-  __mrt_program_started@603 = i8 0
+  __sched_lock_depth_sink@488 = i64 0
+  __sched_nmspinning@496 = i64 0
+  __sched_needspinning@504 = i64 0
+  __sched_sysmon_event@512 = i64 0
+  __sched_sysmon_wait@520 = i64 0
+  __sched_timer_starts@528 = i64 0
+  __sched_preempt_ext_lock@536 = i64 0
+  __sched_preempt_context@544 = i64 0
+  __slab_arena_list@552 = i64 0
+  __slab_arena_map_l1@560 = i64 0
+  __slab_state@568 = i64 0
+  __ms_wsa_started@576 = i64 0
+  __mrt_console_probe_stdin@584 = i8 0
+  __mrt_console_probe_stdout@585 = i8 0
+  __mrt_console_probe_stderr@586 = i8 0
+  __mrt_program_started@587 = i8 0
 }
 
 func @holdSilently {
@@ -532,14 +530,10 @@ func @__np_pd_mark_timed_out {
     x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
     x64.mov rdx, gs:[rdx]
     x64.aluBaseDispImm32.add [rdx + 656], 1
-    x64.movRegImm32 rdx, 48
-    x64.mov rdx, gs:[rdx]
-    x64.movRegImm32 rsi, 1
-    x64.xchg8 [rax], rsi <- rsi
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __rl_slow#7
-  __rl_owned:
-    x64.storeBaseDispReg.word64 [rax + 8], rdx
+    x64.movRegImm32 rdx, 1
+    x64.xchg8 [rax], rdx <- rdx
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, __rl_slow#6
   __rl_cont#5:
     x64.callDirect __np_pd_slot
     x64.cmpRegImm32 r8, 0
@@ -556,21 +550,11 @@ func @__np_pd_mark_timed_out {
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.mov rax, gs:[rax]
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 16]
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_nested
-  __rl_outermost:
-    x64.movRegImm32 rdx, 0
-    x64.storeBaseDispReg.word64 [rcx + 8], rdx
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#8
-    x64.jmp __rl_slow#11
-  __rl_nested:
-    x64.leaRegRegImm32 rdx, rdx, -1
-    x64.storeBaseDispReg.word64 [rcx + 16], rdx
-  __rl_cont#8:
+    x64.jcc notEqual, __rl_slow#8
+  __rl_cont#7:
     x64.aluBaseDispImm32.add [rax + 656], -1
     x64.epilogue 56
     x64.popReg rbx
@@ -586,18 +570,17 @@ func @__np_pd_mark_timed_out {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rl_slow#7:
+  __rl_slow#6:
     x64.storeSlotReg slot0, rcx
     x64.movRegReg rcx, rax
-    x64.movRegReg rdx, rsi
-    x64.callDirect __rtlock_enter_slow
+    x64.callDirect __rtlock_acquire
     x64.loadRegSlot rcx, slot0
     x64.jmp __rl_cont#5
-  __rl_slow#11:
+  __rl_slow#8:
     x64.storeSlotReg slot1, rax
     x64.callDirect __rtlock_release
     x64.loadRegSlot rax, slot1
-    x64.jmp __rl_cont#8
+    x64.jmp __rl_cont#7
 }
 ```
 
@@ -662,22 +645,20 @@ data {
   __sched_ncpu@448 = i64 0
   __sched_shutdown_flag@456 = i64 0
   __sched_lock@464 = i64 0
-  __sched_lock_owner@472 = i64 0
-  __sched_lock_depth@480 = i64 0
-  __sched_lock_depth_sink@488 = i64 0
-  __sched_nmspinning@496 = i64 0
-  __sched_needspinning@504 = i64 0
-  __sched_sysmon_event@512 = i64 0
-  __sched_sysmon_wait@520 = i64 0
-  __sched_timer_starts@528 = i64 0
-  __mrt_envp@536 = i64 0
-  __mrt_signal_stack_bytes@544 = i64 0
-  __mrt_tls_next_key@552 = i64 0
-  __slab_arena_list@560 = i64 0
-  __slab_arena_map_l1@568 = i64 0
-  __slab_state@576 = i64 0
-  __ms_wsa_started@584 = i64 0
-  __mrt_program_started@592 = i8 0
+  __sched_lock_depth_sink@472 = i64 0
+  __sched_nmspinning@480 = i64 0
+  __sched_needspinning@488 = i64 0
+  __sched_sysmon_event@496 = i64 0
+  __sched_sysmon_wait@504 = i64 0
+  __sched_timer_starts@512 = i64 0
+  __mrt_envp@520 = i64 0
+  __mrt_signal_stack_bytes@528 = i64 0
+  __mrt_tls_next_key@536 = i64 0
+  __slab_arena_list@544 = i64 0
+  __slab_arena_map_l1@552 = i64 0
+  __slab_state@560 = i64 0
+  __ms_wsa_started@568 = i64 0
+  __mrt_program_started@576 = i8 0
 }
 
 func @holdSilently {
@@ -1039,14 +1020,10 @@ func @__np_pd_mark_timed_out {
     x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
     x64.mov rdx, gs:[rdx]
     x64.aluBaseDispImm32.add [rdx + 656], 1
-    x64.movRegImm32 rdx, 4088
-    x64.mov rdx, gs:[rdx]
-    x64.movRegImm32 rsi, 1
-    x64.xchg8 [rax], rsi <- rsi
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __rl_slow#7
-  __rl_owned:
-    x64.storeBaseDispReg.word64 [rax + 8], rdx
+    x64.movRegImm32 rdx, 1
+    x64.xchg8 [rax], rdx <- rdx
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, __rl_slow#6
   __rl_cont#5:
     x64.callDirect __np_pd_slot
     x64.cmpRegImm32 r8, 0
@@ -1063,21 +1040,11 @@ func @__np_pd_mark_timed_out {
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.mov rax, gs:[rax]
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 16]
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_nested
-  __rl_outermost:
-    x64.movRegImm32 rdx, 0
-    x64.storeBaseDispReg.word64 [rcx + 8], rdx
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#8
-    x64.jmp __rl_slow#11
-  __rl_nested:
-    x64.leaRegRegImm32 rdx, rdx, -1
-    x64.storeBaseDispReg.word64 [rcx + 16], rdx
-  __rl_cont#8:
+    x64.jcc notEqual, __rl_slow#8
+  __rl_cont#7:
     x64.aluBaseDispImm32.add [rax + 656], -1
     x64.epilogue 56
     x64.popReg rbx
@@ -1093,18 +1060,17 @@ func @__np_pd_mark_timed_out {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rl_slow#7:
+  __rl_slow#6:
     x64.storeSlotReg slot0, rcx
     x64.movRegReg rcx, rax
-    x64.movRegReg rdx, rsi
-    x64.callDirect __rtlock_enter_slow
+    x64.callDirect __rtlock_acquire
     x64.loadRegSlot rcx, slot0
     x64.jmp __rl_cont#5
-  __rl_slow#11:
+  __rl_slow#8:
     x64.storeSlotReg slot1, rax
     x64.callDirect __rtlock_release
     x64.loadRegSlot rax, slot1
-    x64.jmp __rl_cont#8
+    x64.jmp __rl_cont#7
 }
 ```
 
@@ -1169,19 +1135,17 @@ data {
   __sched_ncpu@448 = i64 0
   __sched_shutdown_flag@456 = i64 0
   __sched_lock@464 = i64 0
-  __sched_lock_owner@472 = i64 0
-  __sched_lock_depth@480 = i64 0
-  __sched_lock_depth_sink@488 = i64 0
-  __sched_nmspinning@496 = i64 0
-  __sched_needspinning@504 = i64 0
-  __sched_sysmon_event@512 = i64 0
-  __sched_sysmon_wait@520 = i64 0
-  __sched_timer_starts@528 = i64 0
-  __slab_arena_list@536 = i64 0
-  __slab_arena_map_l1@544 = i64 0
-  __slab_state@552 = i64 0
-  __ms_wsa_started@560 = i64 0
-  __mrt_program_started@568 = i8 0
+  __sched_lock_depth_sink@472 = i64 0
+  __sched_nmspinning@480 = i64 0
+  __sched_needspinning@488 = i64 0
+  __sched_sysmon_event@496 = i64 0
+  __sched_sysmon_wait@504 = i64 0
+  __sched_timer_starts@512 = i64 0
+  __slab_arena_list@520 = i64 0
+  __slab_arena_map_l1@528 = i64 0
+  __slab_state@536 = i64 0
+  __ms_wsa_started@544 = i64 0
+  __mrt_program_started@552 = i8 0
 }
 
 func @holdSilently {
@@ -1560,13 +1524,10 @@ func @__np_pd_mark_timed_out {
     arm64.loadRegBaseDisp.word64 x3, [x2 + 656]
     arm64.add x3, x3, 1
     arm64.storeBaseDispReg.word64 [x2 + 656], x3
-    arm64.arm64ThreadPointer x2, darwinMaskedReadOnly
-    arm64.movImm x3, 1
-    arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
-    arm64.cmp x3, 0
-    arm64.b.ne __rl_slow#7
-  __rl_owned:
-    arm64.storeBaseDispReg.word64 [x1 + 8], x2
+    arm64.movImm x2, 1
+    arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
+    arm64.cmp x2, 0
+    arm64.b.ne __rl_slow#6
   __rl_cont#5:
     arm64.bl __np_pd_slot
     arm64.cmp x0, 0
@@ -1588,21 +1549,11 @@ func @__np_pd_mark_timed_out {
     arm64.cset x17, ne
     arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
     arm64.mul x1, x16, x17
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 16]
-    arm64.cmp x2, 0
-    arm64.b.ne __rl_nested
-  __rl_outermost:
-    arm64.movImm x2, 0
-    arm64.storeBaseDispReg.word64 [x0 + 8], x2
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 1
-    arm64.b.eq __rl_cont#8
-    arm64.b __rl_slow#11
-  __rl_nested:
-    arm64.add x2, x2, -1
-    arm64.storeBaseDispReg.word64 [x0 + 16], x2
-  __rl_cont#8:
+    arm64.b.ne __rl_slow#8
+  __rl_cont#7:
     arm64.loadRegBaseDisp.word64 x2, [x1 + 656]
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x1 + 656], x2
@@ -1618,20 +1569,20 @@ func @__np_pd_mark_timed_out {
     arm64.loadRegSlot x19, slot2
     arm64.epilogue 48
     arm64.ret
-  __rl_slow#7:
+  __rl_slow#6:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x3
-    arm64.bl __rtlock_enter_slow
+    arm64.movRegReg x1, x2
+    arm64.bl __rtlock_acquire
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.b __rl_cont#5
-  __rl_slow#11:
+  __rl_slow#8:
     arm64.storeSlotReg slot1, x1
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_release
     arm64.loadRegSlot x1, slot1
-    arm64.b __rl_cont#8
+    arm64.b __rl_cont#7
 }
 ```
 
@@ -1696,23 +1647,21 @@ data {
   __sched_ncpu@448 = i64 0
   __sched_shutdown_flag@456 = i64 0
   __sched_lock@464 = i64 0
-  __sched_lock_owner@472 = i64 0
-  __sched_lock_depth@480 = i64 0
-  __sched_lock_depth_sink@488 = i64 0
-  __sched_nmspinning@496 = i64 0
-  __sched_needspinning@504 = i64 0
-  __sched_sysmon_event@512 = i64 0
-  __sched_sysmon_wait@520 = i64 0
-  __sched_timer_starts@528 = i64 0
-  __mrt_envp@536 = i64 0
-  __mrt_signal_stack_bytes@544 = i64 0
-  __mrt_hwcap_atomics@552 = i64 0
-  __mrt_tls_next_key@560 = i64 0
-  __slab_arena_list@568 = i64 0
-  __slab_arena_map_l1@576 = i64 0
-  __slab_state@584 = i64 0
-  __ms_wsa_started@592 = i64 0
-  __mrt_program_started@600 = i8 0
+  __sched_lock_depth_sink@472 = i64 0
+  __sched_nmspinning@480 = i64 0
+  __sched_needspinning@488 = i64 0
+  __sched_sysmon_event@496 = i64 0
+  __sched_sysmon_wait@504 = i64 0
+  __sched_timer_starts@512 = i64 0
+  __mrt_envp@520 = i64 0
+  __mrt_signal_stack_bytes@528 = i64 0
+  __mrt_hwcap_atomics@536 = i64 0
+  __mrt_tls_next_key@544 = i64 0
+  __slab_arena_list@552 = i64 0
+  __slab_arena_map_l1@560 = i64 0
+  __slab_state@568 = i64 0
+  __ms_wsa_started@576 = i64 0
+  __mrt_program_started@584 = i8 0
 }
 
 func @holdSilently {
@@ -2091,13 +2040,10 @@ func @__np_pd_mark_timed_out {
     arm64.loadRegBaseDisp.word64 x3, [x2 + 656]
     arm64.add x3, x3, 1
     arm64.storeBaseDispReg.word64 [x2 + 656], x3
-    arm64.arm64ThreadPointer x2, linuxWritable
-    arm64.movImm x3, 1
-    arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
-    arm64.cmp x3, 0
-    arm64.b.ne __rl_slow#7
-  __rl_owned:
-    arm64.storeBaseDispReg.word64 [x1 + 8], x2
+    arm64.movImm x2, 1
+    arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
+    arm64.cmp x2, 0
+    arm64.b.ne __rl_slow#6
   __rl_cont#5:
     arm64.bl __np_pd_slot
     arm64.cmp x0, 0
@@ -2119,21 +2065,11 @@ func @__np_pd_mark_timed_out {
     arm64.cset x17, ne
     arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
     arm64.mul x1, x16, x17
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 16]
-    arm64.cmp x2, 0
-    arm64.b.ne __rl_nested
-  __rl_outermost:
-    arm64.movImm x2, 0
-    arm64.storeBaseDispReg.word64 [x0 + 8], x2
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 1
-    arm64.b.eq __rl_cont#8
-    arm64.b __rl_slow#11
-  __rl_nested:
-    arm64.add x2, x2, -1
-    arm64.storeBaseDispReg.word64 [x0 + 16], x2
-  __rl_cont#8:
+    arm64.b.ne __rl_slow#8
+  __rl_cont#7:
     arm64.loadRegBaseDisp.word64 x2, [x1 + 656]
     arm64.add x2, x2, -1
     arm64.storeBaseDispReg.word64 [x1 + 656], x2
@@ -2149,20 +2085,20 @@ func @__np_pd_mark_timed_out {
     arm64.loadRegSlot x19, slot2
     arm64.epilogue 48
     arm64.ret
-  __rl_slow#7:
+  __rl_slow#6:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x3
-    arm64.bl __rtlock_enter_slow
+    arm64.movRegReg x1, x2
+    arm64.bl __rtlock_acquire
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.b __rl_cont#5
-  __rl_slow#11:
+  __rl_slow#8:
     arm64.storeSlotReg slot1, x1
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_release
     arm64.loadRegSlot x1, slot1
-    arm64.b __rl_cont#8
+    arm64.b __rl_cont#7
 }
 ```
 
@@ -2299,24 +2235,22 @@ data {
   __sched_ncpu@464 = i64 0
   __sched_shutdown_flag@472 = i64 0
   __sched_lock@480 = i64 0
-  __sched_lock_owner@488 = i64 0
-  __sched_lock_depth@496 = i64 0
-  __sched_lock_depth_sink@504 = i64 0
-  __sched_nmspinning@512 = i64 0
-  __sched_needspinning@520 = i64 0
-  __sched_sysmon_event@528 = i64 0
-  __sched_sysmon_wait@536 = i64 0
-  __sched_timer_starts@544 = i64 0
-  __sched_preempt_ext_lock@552 = i64 0
-  __sched_preempt_context@560 = i64 0
-  __slab_arena_list@568 = i64 0
-  __slab_arena_map_l1@576 = i64 0
-  __slab_state@584 = i64 0
-  __ms_wsa_started@592 = i64 0
-  __mrt_console_probe_stdin@600 = i8 0
-  __mrt_console_probe_stdout@601 = i8 0
-  __mrt_console_probe_stderr@602 = i8 0
-  __mrt_program_started@603 = i8 0
+  __sched_lock_depth_sink@488 = i64 0
+  __sched_nmspinning@496 = i64 0
+  __sched_needspinning@504 = i64 0
+  __sched_sysmon_event@512 = i64 0
+  __sched_sysmon_wait@520 = i64 0
+  __sched_timer_starts@528 = i64 0
+  __sched_preempt_ext_lock@536 = i64 0
+  __sched_preempt_context@544 = i64 0
+  __slab_arena_list@552 = i64 0
+  __slab_arena_map_l1@560 = i64 0
+  __slab_state@568 = i64 0
+  __ms_wsa_started@576 = i64 0
+  __mrt_console_probe_stdin@584 = i8 0
+  __mrt_console_probe_stdout@585 = i8 0
+  __mrt_console_probe_stderr@586 = i8 0
+  __mrt_program_started@587 = i8 0
 }
 
 func @main {
@@ -3097,22 +3031,20 @@ data {
   __sched_ncpu@448 = i64 0
   __sched_shutdown_flag@456 = i64 0
   __sched_lock@464 = i64 0
-  __sched_lock_owner@472 = i64 0
-  __sched_lock_depth@480 = i64 0
-  __sched_lock_depth_sink@488 = i64 0
-  __sched_nmspinning@496 = i64 0
-  __sched_needspinning@504 = i64 0
-  __sched_sysmon_event@512 = i64 0
-  __sched_sysmon_wait@520 = i64 0
-  __sched_timer_starts@528 = i64 0
-  __mrt_envp@536 = i64 0
-  __mrt_signal_stack_bytes@544 = i64 0
-  __mrt_tls_next_key@552 = i64 0
-  __slab_arena_list@560 = i64 0
-  __slab_arena_map_l1@568 = i64 0
-  __slab_state@576 = i64 0
-  __ms_wsa_started@584 = i64 0
-  __mrt_program_started@592 = i8 0
+  __sched_lock_depth_sink@472 = i64 0
+  __sched_nmspinning@480 = i64 0
+  __sched_needspinning@488 = i64 0
+  __sched_sysmon_event@496 = i64 0
+  __sched_sysmon_wait@504 = i64 0
+  __sched_timer_starts@512 = i64 0
+  __mrt_envp@520 = i64 0
+  __mrt_signal_stack_bytes@528 = i64 0
+  __mrt_tls_next_key@536 = i64 0
+  __slab_arena_list@544 = i64 0
+  __slab_arena_map_l1@552 = i64 0
+  __slab_state@560 = i64 0
+  __ms_wsa_started@568 = i64 0
+  __mrt_program_started@576 = i8 0
 }
 
 func @main {
@@ -3747,19 +3679,17 @@ data {
   __sched_ncpu@448 = i64 0
   __sched_shutdown_flag@456 = i64 0
   __sched_lock@464 = i64 0
-  __sched_lock_owner@472 = i64 0
-  __sched_lock_depth@480 = i64 0
-  __sched_lock_depth_sink@488 = i64 0
-  __sched_nmspinning@496 = i64 0
-  __sched_needspinning@504 = i64 0
-  __sched_sysmon_event@512 = i64 0
-  __sched_sysmon_wait@520 = i64 0
-  __sched_timer_starts@528 = i64 0
-  __slab_arena_list@536 = i64 0
-  __slab_arena_map_l1@544 = i64 0
-  __slab_state@552 = i64 0
-  __ms_wsa_started@560 = i64 0
-  __mrt_program_started@568 = i8 0
+  __sched_lock_depth_sink@472 = i64 0
+  __sched_nmspinning@480 = i64 0
+  __sched_needspinning@488 = i64 0
+  __sched_sysmon_event@496 = i64 0
+  __sched_sysmon_wait@504 = i64 0
+  __sched_timer_starts@512 = i64 0
+  __slab_arena_list@520 = i64 0
+  __slab_arena_map_l1@528 = i64 0
+  __slab_state@536 = i64 0
+  __ms_wsa_started@544 = i64 0
+  __mrt_program_started@552 = i8 0
 }
 
 func @main {
@@ -4392,23 +4322,21 @@ data {
   __sched_ncpu@448 = i64 0
   __sched_shutdown_flag@456 = i64 0
   __sched_lock@464 = i64 0
-  __sched_lock_owner@472 = i64 0
-  __sched_lock_depth@480 = i64 0
-  __sched_lock_depth_sink@488 = i64 0
-  __sched_nmspinning@496 = i64 0
-  __sched_needspinning@504 = i64 0
-  __sched_sysmon_event@512 = i64 0
-  __sched_sysmon_wait@520 = i64 0
-  __sched_timer_starts@528 = i64 0
-  __mrt_envp@536 = i64 0
-  __mrt_signal_stack_bytes@544 = i64 0
-  __mrt_hwcap_atomics@552 = i64 0
-  __mrt_tls_next_key@560 = i64 0
-  __slab_arena_list@568 = i64 0
-  __slab_arena_map_l1@576 = i64 0
-  __slab_state@584 = i64 0
-  __ms_wsa_started@592 = i64 0
-  __mrt_program_started@600 = i8 0
+  __sched_lock_depth_sink@472 = i64 0
+  __sched_nmspinning@480 = i64 0
+  __sched_needspinning@488 = i64 0
+  __sched_sysmon_event@496 = i64 0
+  __sched_sysmon_wait@504 = i64 0
+  __sched_timer_starts@512 = i64 0
+  __mrt_envp@520 = i64 0
+  __mrt_signal_stack_bytes@528 = i64 0
+  __mrt_hwcap_atomics@536 = i64 0
+  __mrt_tls_next_key@544 = i64 0
+  __slab_arena_list@552 = i64 0
+  __slab_arena_map_l1@560 = i64 0
+  __slab_state@568 = i64 0
+  __ms_wsa_started@576 = i64 0
+  __mrt_program_started@584 = i8 0
 }
 
 func @main {

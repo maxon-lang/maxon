@@ -152,7 +152,11 @@ export function installNetpollRuntime(module StdModule, target Target)
 	// The poll-descriptor band. It is built on every lane because the park kind it serves is dispatched by
 	// `__gt_register_park` and `__gt_timer_check`, which every green-thread program contains.
 	buildNetpollPdSlot(module)
-	buildNetpollPdAdopt(module)
+
+	for hold in SchedLockHold.allCases 'eachAdoptHold'
+		buildNetpollPdAdopt(module, hold: hold)
+	end 'eachAdoptHold'
+
 	buildNetpollGroupUnhook(module)
 	buildNetpollPdWaitAny(module)
 	buildNetpollPdRelease(module)
@@ -652,7 +656,7 @@ end 'emitNetpollDrain'
 // ⛔⛔ **EVERY WORD OF EVERY RECORD IS READ AND WRITTEN UNDER `__sched_lock`, AND THAT IS WHY THIS BAND HAS NO
 // CAS IN IT.** Go's state machine is lock-free because its poller holds no lock of its own; here the four
 // parties that move a direction word — the waiting green thread, its registration, the poller's readiness walk
-// and the timer's expiry — each already hold the scheduler's lock or are one recursive entry away from it, and
+// and the timer's expiry — each already hold the scheduler's lock or take it for the whole of their act, and
 // every critical section is a load and a store. A second discipline beside the one the timer store and the run
 // queues already keep would be a second set of orderings to get right for no measured gain.
 
@@ -773,6 +777,11 @@ let NetpollPdReadyOneName = b"__np_pd_ready_one"
 // open, without the registration: a child's source is registered by a verb of its own, and a minted
 // per-operation source is registered by nothing, the operation's own packet being what reports it.
 let NetpollPdAdoptName = b"__np_pd_adopt"
+
+// `__np_pd_adopt_held(source) -> wakeDebt` — `__np_pd_adopt` for a caller that holds `__sched_lock`:
+// it takes nothing, and the wake the record's reset owes is answered rather than paid, for the caller to
+// pay after its own release.
+let NetpollPdAdoptHeldName = b"__np_pd_adopt_held"
 
 // `__np_pd_open(source, fd)` — give this descriptor a record at `source` and register the descriptor itself
 // with the poller. Called once per socket, between `socket()` and `connect()`. The two arguments differ only
@@ -1040,8 +1049,14 @@ function buildNetpollPdSlot(module StdModule)
 end 'buildNetpollPdSlot'
 
 // `__np_pd_adopt(source)` — see `NetpollPdAdoptName`.
-function buildNetpollPdAdopt(module StdModule)
-	var func = IrFunction.createFromStd(NetpollPdAdoptName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+function buildNetpollPdAdopt(module StdModule, hold SchedLockHold)
+	let returnType = match hold 'returnType'
+		free gives StdReturnType.void
+		held gives StdReturnType.value(StdType.i64)
+	end 'returnType'
+
+	var func = IrFunction.createFromStd(lockHoldNameOf(hold, whenFree: NetpollPdAdoptName, whenHeld: NetpollPdAdoptHeldName), returnType: returnType, paramCount: 1, paramTypes: oneI64Param())
+	requireSchedLockHeldWhen(module, func: func, hold: hold)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1057,7 +1072,6 @@ function buildNetpollPdAdopt(module StdModule)
 	var haveSlot = module.addBlock(func, label: b"npslot", heat: BlockHeat.normal)
 	var carve = module.addBlock(func, label: b"npcarve", heat: BlockHeat.normal)
 	var reset = module.addBlock(func, label: b"npreset", heat: BlockHeat.normal)
-	var doneBlock = module.addBlock(func, label: b"npopendone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let fd = 0
@@ -1069,7 +1083,7 @@ function buildNetpollPdAdopt(module StdModule)
 	emitBranchOnCompare(module, block: entry, value: fd, pred: StdCmpPred.lt, against: 0, whenTrue: notASource, whenFalse: indexed, ids: ids)
 	emitRuntimeAbort(module, func: func, block: notASource, abort: RuntimeAbort.netpollAdoptIndexIsNotASource, ids: ids)
 
-	emitSchedLockEnter(module, block: indexed, ids: ids)
+	emitSchedLockEnterWhenFree(module, block: indexed, hold: hold, ids: ids)
 	let capBefore = emitLoadGlobalWord(module, block: indexed, label: NetpollPdCapLabel, ids: ids)
 	emitBranchOnCompareValues(module, block: indexed, a: fd, pred: StdCmpPred.ge, b: capBefore, whenTrue: growPick, whenFalse: haveSlot, ids: ids)
 
@@ -1119,15 +1133,22 @@ function buildNetpollPdAdopt(module StdModule)
 	carve.branchEdges.push(BranchEdge.create(reset.id, argIds: argsOf(carved)))
 
 	// A recycled descriptor inherits its predecessor's record, so every word is written rather than assumed.
-	var payWake = module.addBlock(func, label: b"npopenwake", heat: BlockHeat.normal)
 	let pd = ids.mint()
 	reset.blockArgs.push(IrBlockArg.create(pd, argType: StdType.i64))
 	let debt = emitNetpollPdClear(module, block: reset, pd: pd, ids: ids)
 	emitStoreField(module, block: reset, record: pd, offset: PdOffFd, value: fd)
-	emitSchedLockLeave(module, block: reset, ids: ids)
-	emitSchedWakeIfOwed(module, cur: reset, owed: debt, wake: payWake, cont: doneBlock, ids: ids)
+	emitSchedLockLeaveWhenFree(module, block: reset, hold: hold, ids: ids)
 
-	module.setTerminator(doneBlock, op: StdOp.retVoid)
+	if hold == SchedLockHold.free 'paysItsOwnWake'
+		var payWake = module.addBlock(func, label: b"npopenwake", heat: BlockHeat.normal)
+		var doneBlock = module.addBlock(func, label: b"npopendone", heat: BlockHeat.normal)
+
+		emitSchedWakeIfOwed(module, cur: reset, owed: debt, wake: payWake, cont: doneBlock, ids: ids)
+		module.setTerminator(doneBlock, op: StdOp.retVoid)
+	end 'paysItsOwnWake' else 'answersTheDebt'
+		module.setTerminator(reset, op: StdOp.ret(debt))
+	end 'answersTheDebt'
+
 	module.functions.push(func)
 end 'buildNetpollPdAdopt'
 
@@ -1445,6 +1466,7 @@ end 'buildNetpollPdWait'
 // `__np_pd_commit(gt)` — see `NetpollPdCommitName`.
 function buildNetpollPdCommit(module StdModule)
 	var func = IrFunction.createFromStd(NetpollPdCommitName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	requireRuntimeLockHeld(module, func: func, lockLabel: SchedLockLabel)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1472,7 +1494,7 @@ function buildNetpollPdCommit(module StdModule)
 	// Readiness landed between the mark and this commit, so the thread is readied rather than left waiting for
 	// a wake that has already happened — Go's `netpollblockcommit` answering false. A record that moved on
 	// arrives here too, and the resumed `__np_pd_wait`'s own generation test answers `NetpollWaitStale`.
-	module.setTerminator(resumeNow, op: StdOp.ret(emitGtReady(module, block: resumeNow, gt: gt, gate: GtReadyGate.alreadyRunnable, ids: ids)))
+	module.setTerminator(resumeNow, op: StdOp.ret(emitGtReady(module, block: resumeNow, gt: gt, gate: GtReadyGate.alreadyRunnable, hold: SchedLockHold.held, ids: ids)))
 
 	emitGtMarkWaiting(module, block: publish, gt: gt, ids: ids)
 	emitStoreField(module, block: publish, record: gpp, offset: 0, value: gt)
@@ -1493,6 +1515,7 @@ end 'buildNetpollPdCommit'
 // `__np_pd_expire(gt)` — see `NetpollPdExpireName`.
 function buildNetpollPdExpire(module StdModule)
 	var func = IrFunction.createFromStd(NetpollPdExpireName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	requireRuntimeLockHeld(module, func: func, lockLabel: SchedLockLabel)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1511,7 +1534,7 @@ function buildNetpollPdExpire(module StdModule)
 	// thread would ready it a second time.
 	emitNetpollBranchOnGroupPark(module, block: entry, gt: gt, several: groupArm, one: single, ids: ids)
 	module.appendOp(groupArm, op: StdOp.call(ids.mint(), callee: NetpollGroupUnhookName, args: argsOf(gt)))
-	module.setTerminator(groupArm, op: StdOp.ret(emitGtReady(module, block: groupArm, gt: gt, gate: GtReadyGate.fromWaiting, ids: ids)))
+	module.setTerminator(groupArm, op: StdOp.ret(emitGtReady(module, block: groupArm, gt: gt, gate: GtReadyGate.fromWaiting, hold: SchedLockHold.held, ids: ids)))
 
 	// A word no longer naming this thread is one the readiness walk got to first, removing the entry with it —
 	// the race's losing side, and nothing is owed.
@@ -1522,7 +1545,7 @@ function buildNetpollPdExpire(module StdModule)
 	emitConstReturn(module, block: gone, value: WakeDebtNone, ids: ids)
 
 	emitNetpollUnhookExpired(module, block: fire, gpp: gpp, ids: ids)
-	module.setTerminator(fire, op: StdOp.ret(emitGtReady(module, block: fire, gt: gt, gate: GtReadyGate.fromWaiting, ids: ids)))
+	module.setTerminator(fire, op: StdOp.ret(emitGtReady(module, block: fire, gt: gt, gate: GtReadyGate.fromWaiting, hold: SchedLockHold.held, ids: ids)))
 
 	module.functions.push(func)
 end 'buildNetpollPdExpire'
@@ -1542,6 +1565,7 @@ end 'buildNetpollPdExpire'
 // its runner reclaims it — the queued arm's contract exactly.
 function buildNetpollPdDrop(module StdModule)
 	var func = IrFunction.createFromStd(NetpollPdDropName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	requireRuntimeLockHeld(module, func: func, lockLabel: SchedLockLabel)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1586,6 +1610,7 @@ end 'buildNetpollPdDrop'
 // `__np_pd_ready_one(pd, mode)` — see `NetpollPdReadyOneName`.
 function buildNetpollPdReadyOne(module StdModule)
 	var func = IrFunction.createFromStd(NetpollPdReadyOneName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	requireRuntimeLockHeld(module, func: func, lockLabel: SchedLockLabel)
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1653,7 +1678,7 @@ function buildNetpollPdReadyOne(module StdModule)
 	disarmTimer.blockArgs.push(IrBlockArg.create(deadline, argType: StdType.i64))
 	disarmTimer.blockArgs.push(IrBlockArg.create(disarmTag, argType: StdType.i64))
 	emitNetpollDisarmDeadline(module, func: func, ids: ids, startBlock: disarmTimer, gt: state, deadline: deadline, tag: disarmTag, cont: readied)
-	module.setTerminator(readied, op: StdOp.ret(emitGtReady(module, block: readied, gt: state, gate: GtReadyGate.fromWaiting, ids: ids)))
+	module.setTerminator(readied, op: StdOp.ret(emitGtReady(module, block: readied, gt: state, gate: GtReadyGate.fromWaiting, hold: SchedLockHold.held, ids: ids)))
 
 	module.functions.push(func)
 end 'buildNetpollPdReadyOne'
@@ -1908,8 +1933,10 @@ let NetpollKeyGenShift = 32
 let NetpollKeyIndexMask = 4294967295
 
 // `__np_src_key_alloc() -> key` / `__np_src_key_release(key)` — the completion-port lane's stand-in for a
-// descriptor table. `__sched_lock` is taken here, because the PAIR of words is what must move indivisibly.
+// descriptor table. `__sched_lock` is taken here, because the PAIR of words is what must move indivisibly;
+// the held form of the allocator is for `__np_op_settle`, which holds it.
 let NetpollSourceKeyAllocName = b"__np_src_key_alloc"
+let NetpollSourceKeyAllocHeldName = b"__np_src_key_alloc_held"
 let NetpollSourceKeyReleaseName = b"__np_src_key_release"
 
 // ⭐⭐⭐ **ON A COMPLETION PORT THE POLL SOURCE IS THE OPERATION, NOT THE DESCRIPTOR — `__np_op_open() ->
@@ -2201,7 +2228,10 @@ end 'emitNetpollCloseChildOnPosix'
 // posts under a key. Built only there — the two POSIX lanes take their keys from the kernel's descriptor table,
 // their kernels report a child themselves, and a read there completes in its caller.
 function buildNetpollSourceKeyBand(module StdModule)
-	buildNetpollSourceKeyAlloc(module)
+	for hold in SchedLockHold.allCases 'eachKeyHold'
+		buildNetpollSourceKeyAlloc(module, hold: hold)
+	end 'eachKeyHold'
+
 	buildNetpollSourceKeyRelease(module)
 	buildNetpollOpOpen(module)
 	buildNetpollOpClose(module)
@@ -2214,8 +2244,9 @@ end 'buildNetpollSourceKeyBand'
 
 // `__np_src_key_alloc()` — see `NetpollSourceKeyAllocName`. A recycled key comes off the free list, which is
 // threaded through the records themselves (`PdOffNextFreeKey`); otherwise the high-water mark steps.
-function buildNetpollSourceKeyAlloc(module StdModule)
-	var func = IrFunction.createFromStd(NetpollSourceKeyAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+function buildNetpollSourceKeyAlloc(module StdModule, hold SchedLockHold)
+	var func = IrFunction.createFromStd(lockHoldNameOf(hold, whenFree: NetpollSourceKeyAllocName, whenHeld: NetpollSourceKeyAllocHeldName), returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	requireSchedLockHeldWhen(module, func: func, hold: hold)
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2224,7 +2255,7 @@ function buildNetpollSourceKeyAlloc(module StdModule)
 	var fresh = module.addBlock(func, label: b"npkfresh", heat: BlockHeat.normal)
 	var answer = module.addBlock(func, label: b"npkanswer", heat: BlockHeat.normal)
 
-	emitSchedLockEnter(module, block: entry, ids: ids)
+	emitSchedLockEnterWhenFree(module, block: entry, hold: hold, ids: ids)
 	let head = emitLoadGlobalWord(module, block: entry, label: NetpollSourceKeyFreeLabel, ids: ids)
 	emitBranchOnCompare(module, block: entry, value: head, pred: StdCmpPred.eq, against: 0, whenTrue: fresh, whenFalse: reuse, ids: ids)
 
@@ -2245,7 +2276,7 @@ function buildNetpollSourceKeyAlloc(module StdModule)
 
 	let key = ids.mint()
 	answer.blockArgs.push(IrBlockArg.create(key, argType: StdType.i64))
-	emitSchedLockLeave(module, block: answer, ids: ids)
+	emitSchedLockLeaveWhenFree(module, block: answer, hold: hold, ids: ids)
 	module.setTerminator(answer, op: StdOp.ret(key))
 
 	module.functions.push(func)
@@ -2302,18 +2333,26 @@ function buildNetpollOpOpen(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
-	let source = ids.mint()
-	module.appendOp(entry, op: StdOp.call(source, callee: NetpollSourceKeyAllocName, args: ValueIdArray.create()))
-	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: NetpollPdAdoptName, args: argsOf(source)))
-
-	// The stamp reads the record's generation outside the lock, which is safe because nobody else holds this
-	// key: the allocator handed it to this thread and only `__np_op_close` gives it back.
-	let key = emitNetpollStampKey(module, block: entry, source: source, ids: ids)
-	emitStoreField(module, block: entry, record: emitLoadCurrentGt(module, block: entry, ids: ids), offset: GtOffIoSource, value: key)
+	let (source, _) = emitNetpollOpMint(module, block: entry, hold: SchedLockHold.free, ids: ids)
 	module.setTerminator(entry, op: StdOp.ret(source))
 
 	module.functions.push(func)
 end 'buildNetpollOpOpen'
+
+// The stamp reads the record's generation outside the lock in the free form, which is safe because
+// nobody else holds this key: the allocator handed it to this thread and only `__np_op_close` gives it
+// back. Only the held form's debt is a value: the free form's adoption pays its own and returns nothing.
+function emitNetpollOpMint(module StdModule, block IrBlock, hold SchedLockHold, ids ValueMinter) returns (ValueId, ValueId)
+	let source = ids.mint()
+	module.appendOp(block, op: StdOp.call(source, callee: lockHoldNameOf(hold, whenFree: NetpollSourceKeyAllocName, whenHeld: NetpollSourceKeyAllocHeldName), args: ValueIdArray.create()))
+	let debt = ids.mint()
+	module.appendOp(block, op: StdOp.call(debt, callee: lockHoldNameOf(hold, whenFree: NetpollPdAdoptName, whenHeld: NetpollPdAdoptHeldName), args: argsOf(source)))
+
+	let key = emitNetpollStampKey(module, block: block, source: source, ids: ids)
+	emitStoreField(module, block: block, record: emitLoadCurrentGt(module, block: block, ids: ids), offset: GtOffIoSource, value: key)
+
+	return (source, debt)
+end 'emitNetpollOpMint'
 
 // `__np_op_close(source)` — see `NetpollOpOpenName`. The guard on the thread goes first, because a promise
 // dropped after it is cleared takes the ordinary deregistering arm and this thread is no longer parked by
@@ -2422,9 +2461,11 @@ end 'buildNetpollOpClear'
 
 // `__np_op_settle()` — see `NetpollOpSettleName`.
 //
-// ⚠ **THE MINT RUNS UNDER THIS HOLD, AND THE WAKE DEBT IT COULD HAND BACK IS PROVABLY NONE.** A key reaches
-// the free list only from a close that has already readied the record's waiters, and a key past the high-water
-// mark has no record at all — so `__np_pd_adopt`'s reset finds both directions empty and owes nothing.
+// ⚠ **THE MINT RUNS UNDER THIS HOLD, THROUGH THE HELD FORMS OF THE ALLOCATOR AND THE ADOPTION, AND
+// THE WAKE DEBT THE ADOPTION ANSWERS IS PAID AFTER THE RELEASE.** It is provably none: a key reaches the
+// free list only from a close that has already readied the record's waiters, and a key past the
+// high-water mark has no record at all — so `__np_pd_adopt`'s reset finds both directions empty. It is
+// paid regardless, rather than relied on to be zero.
 function buildNetpollOpSettle(module StdModule)
 	var func = IrFunction.createFromStd(NetpollOpSettleName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
@@ -2432,20 +2473,26 @@ function buildNetpollOpSettle(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var mint = module.addBlock(func, label: b"npossmint", heat: BlockHeat.normal)
 	var settled = module.addBlock(func, label: b"npossdone", heat: BlockHeat.normal)
+	var payWake = module.addBlock(func, label: b"npossowed", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"npossfinished", heat: BlockHeat.normal)
 
 	emitSchedLockEnter(module, block: entry, ids: ids)
 	let aimed = emitLoadField(module, block: entry, record: emitLoadCurrentGt(module, block: entry, ids: ids), offset: GtOffIoSource, ids: ids)
 	emitBranchOnCompare(module, block: entry, value: aimed, pred: StdCmpPred.ne, against: 0, whenTrue: mint, whenFalse: settled, ids: ids)
-	entry.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(emitConst(module, block: entry, value: 0, ids: ids))))
+	entry.branchEdges.push(BranchEdge.create(settled.id, argIds: twoArgs(emitConst(module, block: entry, value: 0, ids: ids), second: emitConst(module, block: entry, value: WakeDebtNone, ids: ids))))
 
-	let source = emitNetpollOpOpen(module, block: mint, ids: ids)
+	let (source, adoptDebt) = emitNetpollOpMint(module, block: mint, hold: SchedLockHold.held, ids: ids)
 	module.setTerminator(mint, op: StdOp.branch(settled.id))
-	mint.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(source)))
+	mint.branchEdges.push(BranchEdge.create(settled.id, argIds: twoArgs(source, second: adoptDebt)))
 
 	let answer = ids.mint()
+	let owed = ids.mint()
 	settled.blockArgs.push(IrBlockArg.create(answer, argType: StdType.i64))
+	settled.blockArgs.push(IrBlockArg.create(owed, argType: StdType.i64))
 	emitSchedLockLeave(module, block: settled, ids: ids)
-	module.setTerminator(settled, op: StdOp.ret(answer))
+	emitSchedWakeIfOwed(module, cur: settled, owed: owed, wake: payWake, cont: doneBlock, ids: ids)
+
+	module.setTerminator(doneBlock, op: StdOp.ret(answer))
 
 	module.functions.push(func)
 end 'buildNetpollOpSettle'
@@ -2907,6 +2954,7 @@ end 'buildNetpollPdWaitAny'
 // holds `PdWoken`, so the walk passes over it (`__np_pd_ready_one` says why it must).
 function buildNetpollGroupUnhook(module StdModule)
 	var func = IrFunction.createFromStd(NetpollGroupUnhookName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	requireRuntimeLockHeld(module, func: func, lockLabel: SchedLockLabel)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)

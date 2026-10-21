@@ -528,11 +528,11 @@ function emitMboxReadyClaimedSender(module StdModule, func IrFunction, cur IrBlo
 	emitSchedLockEnter(module, block: disarm, ids: ids)
 	emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: disarm, gt: sender, tag: emitConst(module, block: disarm, value: TimerTagSend, ids: ids), found: readyLocked, missing: readyLocked)
 
-	let lockedDebt = emitGtReady(module, block: readyLocked, gt: sender, gate: GtReadyGate.fromWaiting, ids: ids)
+	let lockedDebt = emitGtReady(module, block: readyLocked, gt: sender, gate: GtReadyGate.fromWaiting, hold: SchedLockHold.held, ids: ids)
 	emitSchedLockLeave(module, block: readyLocked, ids: ids)
 	emitBranchCarrying(module, from: readyLocked, to: cont, value: lockedDebt)
 
-	let freeDebt = emitGtReady(module, block: readyFree, gt: sender, gate: GtReadyGate.fromWaiting, ids: ids)
+	let freeDebt = emitGtReady(module, block: readyFree, gt: sender, gate: GtReadyGate.fromWaiting, hold: SchedLockHold.free, ids: ids)
 	emitBranchCarrying(module, from: readyFree, to: cont, value: freeDebt)
 end 'emitMboxReadyClaimedSender'
 
