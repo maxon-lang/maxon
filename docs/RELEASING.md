@@ -38,14 +38,18 @@ tree, so **a tree that carries a patch is owed a new seed, and CI freezes and pi
    `scripts/build-from-seed.sh --unshimmed`, which fails at the first refusal: the new seed builds the tree
    with no patch, on all four architectures, before anything is published.
 3. **`pin`**, once the suite, `freeze` and `prove` are green. `scripts/pin-seed.sh` publishes the pre-release
-   at the frozen commit, commits the tag to `scripts/seed-tag` with every `scripts/seed-shim/*.patch`
-   deleted, pushes that commit to `main` as `github-actions[bot]`, and dispatches CI on `main`, because GitHub
-   ignores a push made with `GITHUB_TOKEN`.
+   at the frozen commit, fetches every archive back from it with `scripts/fetch-seed.sh`, then commits the tag
+   to `scripts/seed-tag` with every `scripts/seed-shim/*.patch` deleted and pushes that commit to `main` as
+   `github-actions[bot]`. GitHub starts no workflow for a push made with `GITHUB_TOKEN`. A pin on the frozen
+   commit needs none — its tree is the one `prove` built, and the download from the release is the one step
+   of CI's seed path `prove` does not take — so CI is dispatched on `main` only when the pin landed over later
+   commits, which no run has built with the new seed.
 
 ⚠ **A pin is superseded when `main` has moved past the frozen commit and changed `scripts/seed-shim/` or
 `scripts/seed-tag`.** The patches it would delete were judged against the older tree, so it writes a notice
 and exits 0 unpublished, and the later commit's run decides the next seed. A pin refuses a tag or release that
-already exists.
+already exists, so a pin that fails after publishing — its release does not fetch back, or `main` refuses the
+push — leaves the release orphaned: delete the release and its tag before re-running the `pin` job.
 
 `scripts/freeze-seed.sh` builds `maxon-bin` for `x64-windows`, `x64-linux`, `arm64-macos` and `arm64-linux`
 with the slot compiler (`maxon run build --target=<t> --output=<stage>/maxon`, the way

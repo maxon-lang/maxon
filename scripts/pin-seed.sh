@@ -3,6 +3,7 @@
 # Publish the seed `scripts/freeze-seed.sh` wrote to `temp/seed/dist/` and pin `main` to it,
 # deleting every `scripts/seed-shim/` patch. It is CI's `pin` job, run once `prove` has built the
 # tree with every archive and no shim.
+# A release that does not fetch is never pinned: CI's seed step fetches it on every run that follows.
 #
 # Usage:
 #   scripts/pin-seed.sh --sha=<the commit the seed was frozen from> --tag=<its seed tag>
@@ -16,8 +17,11 @@ cd "$repo_root"
 Remote="origin"
 Branch="main"
 MaxPushAttempts=3
+MaxFetchAttempts=3
+FetchRetrySeconds=15
 BotName="github-actions[bot]"
 BotEmail="41898282+github-actions[bot]@users.noreply.github.com"
+SeedFetchCheckDirectory="$SeedWorkDirectory/fetch-check"
 PinWorkflow="ci.yml"
 
 sha=""
@@ -77,6 +81,25 @@ require_unpublished() {
 	[ -z "$remote_tag" ] || { echo "pin-seed.sh: $Remote already has the tag $tag — a seed tag never moves" >&2; exit 1; }
 }
 
+require_fetchable() {
+	local target attempt
+
+	for target in $SeedTargets; do
+		attempt=1
+
+		until ./scripts/fetch-seed.sh "$tag" "$target" --output="$SeedFetchCheckDirectory/$target/maxon"; do
+			if [ "$attempt" -ge "$MaxFetchAttempts" ]; then
+				echo "pin-seed.sh: $tag is published but its $target seed does not fetch — the release is orphaned and $tag is not pinned" >&2
+				exit 1
+			fi
+
+			attempt=$((attempt + 1))
+			echo "pin-seed.sh: fetching $tag for $target failed — retrying (attempt $attempt of $MaxFetchAttempts)" >&2
+			sleep "$FetchRetrySeconds"
+		done
+	done
+}
+
 commit_pin() {
 	local patch
 
@@ -105,6 +128,7 @@ require_unpublished
 echo "pin-seed.sh: publishing $tag"
 "${seed_release_create[@]}"
 
+require_fetchable
 commit_pin
 
 attempt=1
@@ -129,6 +153,9 @@ done
 
 echo "pin-seed.sh: $Branch is pinned to $tag"
 
-# GitHub starts no workflow for a push made with `GITHUB_TOKEN`, so the pinned commit's CI is
-# dispatched.
-gh workflow run "$PinWorkflow" --ref "$Branch"
+# GitHub starts no workflow for a push made with `GITHUB_TOKEN`. A pin on the frozen commit holds the
+# tree `prove` built; one that landed over later commits holds code no run has built with this seed.
+if [ "$(git rev-parse HEAD^)" != "$sha" ]; then
+	echo "pin-seed.sh: the pin landed over commits after $sha — dispatching $PinWorkflow on $Branch"
+	gh workflow run "$PinWorkflow" --ref "$Branch"
+fi
