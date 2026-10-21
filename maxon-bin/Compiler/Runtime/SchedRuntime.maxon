@@ -1763,6 +1763,8 @@ let SchedWakePollerName = b"__sched_wake_poller"
 // caller; the fields are this file's, so the function is here and the exit path merely asks for it.
 export let SchedStopWorkersName = b"__sched_stop_workers"
 
+export let SchedMainTakeProcName = b"__sched_main_take_proc"
+
 // `__sched_runq_put(gt)` — put a runnable green thread in the CURRENT P's `runnext` slot and the thread it
 // displaced on the ring tail, overflowing half the ring to the global queue when the ring is full. Go's
 // `runqput(next: true)` + `runqputslow`.
@@ -2597,6 +2599,7 @@ export function installSchedRuntime(module StdModule, target Target)
 		buildSchedExitSyscall(module)
 	end 'theBracketIsCalled'
 
+	buildSchedMainTakeProc(module, target: target)
 	buildSchedStopWorkers(module)
 end 'installSchedRuntime'
 
@@ -8629,6 +8632,35 @@ function emitSchedRegainUnlinkLocked(module StdModule, func IrFunction, cur IrBl
 	emitStoreField(module, block: cleared, record: m, offset: MOffRegainNext, value: emitConst(module, block: cleared, value: 0, ids: ids))
 	module.setTerminator(cleared, op: StdOp.branch(cont.id))
 end 'emitSchedRegainUnlinkLocked'
+
+// ⭐ `__sched_main_take_proc()` — the main machine takes an idle processor if it holds none. The exit drain's
+// release runs on the main OS thread, which left the loop by the park road with no processor, and a release
+// that closes a service's mailbox readies the parked service: a ready from a processor-less machine starts a
+// worker on the idle processor, so the service's exit would run concurrently with the rest of the release
+// even at one processor. Holding the processor, the readied thread waits on this machine's ring until the
+// drain loop is next entered. With no idle processor the machine goes on as it was.
+function buildSchedMainTakeProc(module StdModule, target Target)
+	var func = IrFunction.createFromStd(SchedMainTakeProcName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var takeIt = module.addBlock(func, label: b"maintake", heat: BlockHeat.normal)
+	var noneIdle = module.addBlock(func, label: b"maintakenone", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"maintakedone", heat: BlockHeat.normal)
+
+	let m = emitLoadCurrentM(module, block: entry, ids: ids)
+	let held = emitLoadField(module, block: entry, record: m, offset: MOffCurrentP, ids: ids)
+	emitBranchOnCompare(module, block: entry, value: held, pred: StdCmpPred.eq, against: 0, whenTrue: takeIt, whenFalse: doneBlock, ids: ids)
+
+	emitSchedLockEnter(module, block: takeIt, ids: ids)
+	emitSchedRegainProcessor(module, func: func, cur: takeIt, m: m, resumeAt: doneBlock, none: noneIdle, resumeLabel: b"maintakeresume", target: target, ids: ids)
+
+	emitSchedLockLeave(module, block: noneIdle, ids: ids)
+	module.setTerminator(noneIdle, op: StdOp.branch(doneBlock.id))
+
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+	module.functions.push(func)
+end 'buildSchedMainTakeProc'
 
 // ==========================================================================
 // `__sched_stop_workers`

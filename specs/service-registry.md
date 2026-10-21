@@ -459,6 +459,7 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: a-registered-handle-is-a-box-only-the-registry-owns -->
 <!-- procs: 1 -->
+<!-- preempt: off -->
 The registry slot holds a handle box of its own, with its own share of the mailbox, so the registering
 frame's drop of its reference and any thread's replace or release of the slot step different counts.
 <!-- MmTrace -->

@@ -4966,7 +4966,8 @@ end 'buildGtAwaitAny'
 //   2. **RELEASE THE REGISTRY SLOTS AND THE MANAGED GLOBALS** (`__maxon_registry_release`,
 //      `__maxon_global_cleanup`). Both stay live through step 1, because a handler still running
 //      there may look a key up or read a module `let`. The release closes the mailboxes only parked
-//      services held, so the loop runs once more after it.
+//      services held, so the loop runs once more after it. The release runs holding a processor
+//      (`__sched_main_take_proc`), which keeps a service it readies off a worker until that loop.
 //   3. **STOP AND JOIN THE WORKER Ms** (`__sched_stop_workers`), which is where the counter this
 //      exit path is about to read stops moving.
 //
@@ -5038,6 +5039,7 @@ function emitReleaseOwnersAfterDrain(module StdModule, func IrFunction, cur IrBl
 	var entered = emitSchedEnterPhaseLocked(module, func: func, cur: release, phase: SchedPhase.draining, ids: ids)
 	emitSchedLockLeave(module, block: entered, ids: ids)
 
+	module.appendOp(entered, op: StdOp.call(ids.mint(), callee: SchedMainTakeProcName, args: ValueIdArray.create()))
 	emitOwnerReleaseCalls(module, block: entered, releasesRegistry: releasesRegistry, releasesGlobals: releasesGlobals, code: code, ids: ids)
 	emitSchedMainLoop(module, block: entered, until: SchedMainLoopUntil.drained, ids: ids)
 	return entered
