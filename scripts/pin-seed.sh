@@ -12,6 +12,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
+. scripts/lib/host-binaries.sh
 . scripts/lib/seed.sh
 
 Remote="origin"
@@ -84,7 +85,7 @@ require_unpublished() {
 require_fetchable() {
 	local target attempt
 
-	for target in $SeedTargets; do
+	for target in $MaxonTargets; do
 		attempt=1
 
 		until ./scripts/fetch-seed.sh "$tag" "$target" --output="$SeedFetchCheckDirectory/$target/maxon"; do

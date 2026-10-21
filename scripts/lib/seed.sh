@@ -1,16 +1,17 @@
 # WHAT A BOOTSTRAP SEED IS CALLED AND WHERE ITS PIECES LIVE — written ONCE, for every script that
-# freezes, proves, publishes, pins or fetches one, so no two of them disagree about a tag or an
-# archive name.
+# freezes, proves, publishes, pins or fetches one, so no two of them disagree about a tag or a path.
+
+# Sourced here, not left to the caller: `ci.yml` sources this file alone.
+. scripts/lib/host-binaries.sh
+. scripts/lib/checksums.sh
 
 SeedTagPrefix="seed"
-SeedTargets="x64-windows x64-linux arm64-macos arm64-linux"
 SeedPinFile="scripts/seed-tag"
 SeedShimDirectory="scripts/seed-shim"
 SeedCommitAbbreviation=12
 SeedWorkDirectory="temp/seed"
 SeedDistDirectory="$SeedWorkDirectory/dist"
-SeedChecksumsAsset="SHA256SUMS"
-SeedChecksumsFile="$SeedDistDirectory/$SeedChecksumsAsset"
+SeedChecksumsFile="$SeedDistDirectory/$ChecksumsAsset"
 SeedNotesFile="$SeedDistDirectory/NOTES.md"
 GhReleaseNotFound="release not found"
 
@@ -24,23 +25,6 @@ seed_tag() {
 seed_tag_names_commit() {
 	local tag="$1" commit="$2"
 	[[ "$tag" == "$SeedTagPrefix-"?*"-${commit:0:$SeedCommitAbbreviation}" ]]
-}
-
-seed_archive_stem() {
-	local tag="$1" target="$2"
-	printf 'maxon-%s-%s' "$tag" "$target"
-}
-
-seed_archive_file() {
-	local tag="$1" target="$2" extension
-
-	case "$target" in
-		*-windows) extension="zip" ;;
-		*-linux|*-macos) extension="tar.gz" ;;
-		*) echo "seed.sh: $target is not a seed target" >&2; exit 1 ;;
-	esac
-
-	printf '%s.%s' "$(seed_archive_stem "$tag" "$target")" "$extension"
 }
 
 seed_shim_patches() {
@@ -61,11 +45,12 @@ seed_release_published() {
 }
 
 seed_release_create_command() {
-	local tag="$1" commit="$2" target file
+	local tag="$1" commit="$2" target archive file
 	local -a assets=()
 
-	for target in $SeedTargets; do
-		assets+=("$SeedDistDirectory/$(seed_archive_file "$tag" "$target")")
+	for target in $MaxonTargets; do
+		archive="$(maxon_archive_file "$tag" "$target")"
+		assets+=("$SeedDistDirectory/$archive")
 	done
 
 	assets+=("$SeedChecksumsFile")

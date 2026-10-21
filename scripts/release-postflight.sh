@@ -24,18 +24,20 @@ set -eu
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
-# The library is resolved against the repository root, which shellcheck has no way to know.
+# The libraries are resolved against the repository root, which shellcheck has no way to know.
 # shellcheck disable=SC1091
 . scripts/lib/release-checks.sh
+# shellcheck disable=SC1091
+. scripts/lib/host-binaries.sh
+# shellcheck disable=SC1091
+. scripts/lib/checksums.sh
 
 Repo="maxon-lang/maxon"
 ReleasesUrl="https://github.com/$Repo/releases"
 SiteUrl="https://maxon.dev"
-ChecksumAsset="SHA256SUMS"
 
-# The targets `release.yml` builds, one runner each. The two installers are served verbatim from
-# `PublicDir` and `maxon upgrade` fetches them under exactly these names.
-ReleaseTargets="x64-windows x64-linux arm64-linux arm64-macos"
+# The two installers are served verbatim from `PublicDir` and `maxon upgrade` fetches them under
+# exactly these names.
 InstallScripts="install.sh install.ps1"
 PublicDir="website/public"
 
@@ -87,13 +89,6 @@ fi
 
 printf 'release-postflight.sh: %s\n\n' "$tag"
 
-asset_name() {
-	case "$1" in
-		*-windows) printf 'maxon-%s-%s.zip' "$version" "$1" ;;
-		*)         printf 'maxon-%s-%s.tar.gz' "$version" "$1" ;;
-	esac
-}
-
 # `-L` because every URL here is behind at least one redirect; the body is kept so a check can read it.
 # A transport failure prints `000` rather than nothing, so the reason a check gives always names a
 # status a reader can act on.
@@ -119,14 +114,14 @@ elif ! gh release view "$tag" --json assets --jq '.assets[].name' > "$work/asset
 	check_detail "$work/assets.err"
 else
 	missing=""
-	for target in $ReleaseTargets; do
-		want="$(asset_name "$target")"
+	for target in $MaxonTargets; do
+		want="$(maxon_archive_file "$version" "$target")"
 		if ! grep -Fx -- "$want" "$work/assets" >/dev/null; then
 			missing="$missing $want"
 		fi
 	done
-	if ! grep -Fx -- "$ChecksumAsset" "$work/assets" >/dev/null; then
-		missing="$missing $ChecksumAsset"
+	if ! grep -Fx -- "$ChecksumsAsset" "$work/assets" >/dev/null; then
+		missing="$missing $ChecksumsAsset"
 	fi
 
 	# An asset nobody expected is as much a defect as a missing one: it means the release carries
@@ -135,11 +130,11 @@ else
 	while read -r name; do
 		[ -n "$name" ] || continue
 		case "$name" in
-			"$ChecksumAsset") continue ;;
+			"$ChecksumsAsset") continue ;;
 		esac
 		known=0
-		for target in $ReleaseTargets; do
-			if [ "$name" = "$(asset_name "$target")" ]; then
+		for target in $MaxonTargets; do
+			if [ "$name" = "$(maxon_archive_file "$version" "$target")" ]; then
 				known=1
 			fi
 		done
@@ -153,7 +148,7 @@ else
 	elif [ -n "$unexpected" ]; then
 		check_fail release-assets "$tag carries assets nothing downstream reads:$unexpected"
 	else
-		check_pass release-assets "the four archives and $ChecksumAsset are attached"
+		check_pass release-assets "every target's archive and $ChecksumsAsset are attached"
 	fi
 fi
 

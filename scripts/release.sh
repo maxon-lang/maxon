@@ -29,6 +29,7 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 . scripts/lib/host-binaries.sh
 . scripts/lib/archive.sh
+. scripts/lib/checksums.sh
 . scripts/lib/docs-closure.sh
 
 DIST="dist"
@@ -74,16 +75,17 @@ version_from_binary="$(compiler_version)"
 
 package_one() {
 	local tgt="$1" native="$2"
-	local stage="$DIST/maxon-$version_from_binary-$tgt"
+	local stage archive exe_ext
+
+	stage="$DIST/$(maxon_archive_stem "$version_from_binary" "$tgt")"
+	archive="$DIST/$(maxon_archive_file "$version_from_binary" "$tgt")"
+	exe_ext="$(maxon_target_exe_ext "$tgt")"
 
 	echo "release.sh: packaging $tgt (version $version_from_binary)"
 	rm -rf "$stage"
 	mkdir -p "$stage"
 
 	# ⛔ THE BINARY IS BUILT UNDER ITS FINAL NAME. See the Mach-O signature note in the header.
-	local exe_ext=""
-	case "$tgt" in *-windows) exe_ext=".exe" ;; esac
-
 	if [ "$native" -eq 1 ]; then
 		cp "$maxon" "$stage/maxon$exe_ext"
 	else
@@ -117,17 +119,7 @@ package_one() {
 	cp LICENSE-MIT LICENSE-APACHE README.md "$stage/"
 	write_install_md "$stage/INSTALL.md" "$tgt" "$exe_ext"
 
-	local archive
-	case "$tgt" in
-		*-windows)
-			archive="$DIST/maxon-$version_from_binary-$tgt.zip"
-			rm -f "$archive"
-			make_zip "$archive" "$stage" ;;
-		*)
-			archive="$DIST/maxon-$version_from_binary-$tgt.tar.gz"
-			rm -f "$archive"
-			make_tar "$archive" "$stage" ;;
-	esac
+	make_archive "$archive" "$stage"
 
 	rm -rf "$stage"
 	echo "release.sh: wrote $archive"
@@ -220,6 +212,7 @@ EOF
 # within minutes of the notes.
 write_default_notes() {
 	local out="$1"
+	shift
 
 	# ⛔ **WRITTEN ASIDE AND MOVED INTO PLACE, because a half-written file here is indistinguishable
 	# from a hand-written one**, and the caller regenerates only when `NOTES.md` is absent. The stale
@@ -236,7 +229,7 @@ write_default_notes() {
 		echo "## Assets"
 		echo
 		local f
-		for f in $(find "$DIST" -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz' \) -printf '%f\n' | sort); do
+		for f in "$@"; do
 			if [ -f "$DIST/$f$UntestedMarkerSuffix" ]; then
 				echo "- \`$f\` ⚠ cross-built: the test suite was not run on its platform"
 			else
@@ -244,7 +237,7 @@ write_default_notes() {
 			fi
 		done
 		echo
-		echo "\`SHA256SUMS\` is published beside the archives. The archives are not signed, so the checksum is what"
+		echo "\`$ChecksumsAsset\` is published beside the archives. The archives are not signed, so the checksum is what"
 		echo "tells you a file is the one that was built."
 	} > "$partial"
 
@@ -296,12 +289,18 @@ if [ "$version" != "v$version_from_binary" ]; then
 	exit 1
 fi
 
-archives="$(find "$DIST" -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz' \) | sort)"
+archives="$(archives_in "$DIST")"
 [ -n "$archives" ] || { echo "release.sh: no archives in $DIST — run --package first" >&2; exit 1; }
 
-( cd "$DIST" && sha256sum $(find . -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz' \) -printf '%f\n' | sort) > SHA256SUMS )
+archive_names=()
+
+for archive in $archives; do
+	archive_names+=("$(basename "$archive")")
+done
+
+write_checksums "$DIST" "${archive_names[@]}"
 echo "release.sh: checksums"
-sed 's/^/  /' "$DIST/SHA256SUMS"
+sed 's/^/  /' "$DIST/$ChecksumsAsset"
 
 # ⭐ WRITTEN BEFORE THE DRY-RUN EXIT, so `--dry-run` exercises the notes too. A preview that skips the
 # one artifact a person actually reads is not a preview.
@@ -316,7 +315,7 @@ scripts/changelog.sh --section="$version_from_binary" > /dev/null
 
 if [ ! -f "$DIST/NOTES.md" ]; then
 	echo "release.sh: writing default notes to $DIST/NOTES.md"
-	write_default_notes "$DIST/NOTES.md"
+	write_default_notes "$DIST/NOTES.md" "${archive_names[@]}"
 fi
 
 if [ "$dry_run" -eq 1 ]; then
@@ -327,5 +326,5 @@ fi
 command -v gh >/dev/null 2>&1 || { echo "release.sh: publishing needs the GitHub CLI (gh)" >&2; exit 1; }
 
 gh release create "$version" --title "Maxon $version_from_binary" --notes-file "$DIST/NOTES.md" \
-	$archives "$DIST/SHA256SUMS"
+	$archives "$DIST/$ChecksumsAsset"
 echo "release.sh: published $version"

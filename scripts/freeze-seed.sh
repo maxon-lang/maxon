@@ -43,6 +43,7 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 . scripts/lib/host-binaries.sh
 . scripts/lib/archive.sh
+. scripts/lib/checksums.sh
 . scripts/lib/seed.sh
 
 CompilerSourceDirectories="maxon-bin stdlib runtime"
@@ -75,20 +76,13 @@ newer="$(find $CompilerSourceDirectories -path '*/.maxon' -prune -o -type f ! -n
 rm -rf "$SeedDistDirectory" "$StageDirectory"
 mkdir -p "$SeedDistDirectory" "$StageDirectory"
 
-seed_binary_name() {
-	case "$1" in
-		*-windows) printf 'maxon.exe' ;;
-		*) printf 'maxon' ;;
-	esac
-}
-
 freeze_one() {
 	local target="$1"
 	local stage binary archive log
 
-	stage="$StageDirectory/$(seed_archive_stem "$tag" "$target")"
-	binary="$stage/$(seed_binary_name "$target")"
-	archive="$SeedDistDirectory/$(seed_archive_file "$tag" "$target")"
+	stage="$StageDirectory/$(maxon_archive_stem "$tag" "$target")"
+	binary="$stage/maxon$(maxon_target_exe_ext "$target")"
+	archive="$SeedDistDirectory/$(maxon_archive_file "$tag" "$target")"
 	log="$SeedWorkDirectory/build-$target.log"
 
 	mkdir -p "$stage"
@@ -100,11 +94,7 @@ freeze_one() {
 	find "$stage" -maxdepth 1 -type f -name '*.mxdbg' -delete
 	chmod +x "$binary"
 
-	case "$archive" in
-		*.zip)    make_zip "$archive" "$stage" ;;
-		*.tar.gz) make_tar "$archive" "$stage" ;;
-		*) echo "freeze-seed.sh: no packer writes $archive" >&2; return 1 ;;
-	esac
+	make_archive "$archive" "$stage"
 
 	[ -s "$archive" ] || { echo "freeze-seed.sh: packaging $target wrote no $archive" >&2; return 1; }
 	echo "freeze-seed.sh: wrote $archive"
@@ -112,15 +102,15 @@ freeze_one() {
 
 archives=()
 
-for target in $SeedTargets; do
+for target in $MaxonTargets; do
 	freeze_one "$target"
-	archives+=("$(seed_archive_file "$tag" "$target")")
+	archives+=("$(maxon_archive_file "$tag" "$target")")
 done
 
-( cd "$SeedDistDirectory" && sha256sum "${archives[@]}" > "$SeedChecksumsAsset" )
+write_checksums "$SeedDistDirectory" "${archives[@]}"
 
 host_target="$(maxon_host_target)"
-host_binary="$StageDirectory/$(seed_archive_stem "$tag" "$host_target")/$(seed_binary_name "$host_target")"
+host_binary="$StageDirectory/$(maxon_archive_stem "$tag" "$host_target")/maxon$(maxon_target_exe_ext "$host_target")"
 seed_version="$("$host_binary" version)"
 
 {
@@ -130,7 +120,7 @@ seed_version="$("$host_binary" version)"
 	printf 'It is a pre-release so that `releases/latest`, which the installers and `maxon upgrade` follow, never\n'
 	printf 'resolves to it. Never move this tag or replace an asset: the pin means exactly these bytes.\n\n'
 	printf 'Compiler: %s\n\n' "$seed_version"
-	printf '`SHA256SUMS` lists the archives.\n'
+	printf '`%s` lists the archives.\n' "$ChecksumsAsset"
 } > "$SeedNotesFile"
 
 seed_release_create_command "$tag" "$commit"

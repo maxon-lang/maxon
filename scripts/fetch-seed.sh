@@ -41,6 +41,8 @@ caller_dir="$(pwd)"
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 . scripts/lib/host-binaries.sh
+. scripts/lib/archive.sh
+. scripts/lib/checksums.sh
 . scripts/lib/seed.sh
 
 tag=""
@@ -57,12 +59,16 @@ caller_path() {
 }
 
 for argument in "$@"; do
+	if maxon_is_target "$argument"; then
+		target="$argument"
+		continue
+	fi
+
 	case "$argument" in
 		--allow-none)                               allow_none=1 ;;
 		--from=?*)                                  from="$(caller_path "${argument#--from=}")" ;;
 		--output=?*)                                output="$(caller_path "${argument#--output=}")" ;;
 		v[0-9]*|seed-?*)                            tag="$argument" ;;
-		x64-windows|x64-linux|arm64-macos|arm64-linux) target="$argument" ;;
 		*) echo "fetch-seed.sh: unknown argument: $argument" >&2; exit 2 ;;
 	esac
 done
@@ -77,14 +83,6 @@ if [ -z "$tag" ]; then
 	[ -n "$tag" ] || { echo "fetch-seed.sh: $SeedPinFile is empty" >&2; exit 1; }
 fi
 
-sha256_of() {
-	if command -v sha256sum >/dev/null 2>&1; then
-		sha256sum "$1" | cut -d' ' -f1
-	else
-		shasum -a 256 "$1" | cut -d' ' -f1
-	fi
-}
-
 download_release() {
 	if ! seed_release_published "$tag"; then
 		if [ "$allow_none" = 1 ]; then
@@ -96,7 +94,7 @@ download_release() {
 		exit 1
 	fi
 
-	gh release download "$tag" --pattern "*$target*" --pattern "$SeedChecksumsAsset" --dir "$work"
+	gh release download "$tag" --pattern "*$target*" --pattern "$ChecksumsAsset" --dir "$work"
 }
 
 copy_local_release() {
@@ -104,11 +102,11 @@ copy_local_release() {
 
 	[ -d "$from" ] || { echo "fetch-seed.sh: --from=$from is not a directory" >&2; exit 1; }
 
-	archive="$from/$(seed_archive_file "$tag" "$target")"
+	archive="$from/$(maxon_archive_file "$tag" "$target")"
 	[ -f "$archive" ] || { echo "fetch-seed.sh: $from holds no $(basename "$archive") — no $target archive frozen as $tag" >&2; exit 1; }
-	[ -f "$from/$SeedChecksumsAsset" ] || { echo "fetch-seed.sh: $from holds no $SeedChecksumsAsset" >&2; exit 1; }
+	[ -f "$from/$ChecksumsAsset" ] || { echo "fetch-seed.sh: $from holds no $ChecksumsAsset" >&2; exit 1; }
 
-	cp "$archive" "$from/$SeedChecksumsAsset" "$work"
+	cp "$archive" "$from/$ChecksumsAsset" "$work"
 }
 
 work="$(mktemp -d)"
@@ -120,23 +118,19 @@ else
 	download_release
 fi
 
-archive="$(find "$work" -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz' \) | head -n1)"
+archive_ext="$(maxon_target_archive_ext "$target")"
+archive="$(find "$work" -maxdepth 1 -type f -name "*-$target.$archive_ext" | head -n1)"
 [ -n "$archive" ] || { echo "fetch-seed.sh: $tag publishes no archive for $target" >&2; exit 1; }
-[ -f "$work/$SeedChecksumsAsset" ] || { echo "fetch-seed.sh: $tag publishes no $SeedChecksumsAsset" >&2; exit 1; }
+[ -f "$work/$ChecksumsAsset" ] || { echo "fetch-seed.sh: $tag publishes no $ChecksumsAsset" >&2; exit 1; }
 
-expected="$(awk -v name="$(basename "$archive")" '$2 == name || $2 == "*" name { print $1 }' "$work/$SeedChecksumsAsset")"
-[ -n "$expected" ] || { echo "fetch-seed.sh: $SeedChecksumsAsset of $tag does not list $(basename "$archive")" >&2; exit 1; }
-[ "$expected" = "$(sha256_of "$archive")" ] || { echo "fetch-seed.sh: $(basename "$archive") does not match $SeedChecksumsAsset of $tag" >&2; exit 1; }
+expected="$(awk -v name="$(basename "$archive")" '$2 == name || $2 == "*" name { print $1 }' "$work/$ChecksumsAsset")"
+[ -n "$expected" ] || { echo "fetch-seed.sh: $ChecksumsAsset of $tag does not list $(basename "$archive")" >&2; exit 1; }
+[ "$expected" = "$(sha256_of "$archive")" ] || { echo "fetch-seed.sh: $(basename "$archive") does not match $ChecksumsAsset of $tag" >&2; exit 1; }
 
-mkdir -p "$work/unpacked"
+unpack_archive "$archive" "$work/unpacked"
 
-case "$archive" in
-	*.zip)    unzip -q "$archive" -d "$work/unpacked" ;;
-	*.tar.gz) tar -xzf "$archive" -C "$work/unpacked" ;;
-	*) echo "fetch-seed.sh: cannot unpack $archive" >&2; exit 1 ;;
-esac
-
-found="$(find "$work/unpacked" -type f \( -name 'maxon' -o -name 'maxon.exe' \) | head -n1)"
+binary_name="maxon$(maxon_target_exe_ext "$target")"
+found="$(find "$work/unpacked" -type f -name "$binary_name" | head -n1)"
 [ -n "$found" ] || { echo "fetch-seed.sh: no maxon binary in $tag's $target archive" >&2; exit 1; }
 
 seed="$(maxon_downloaded_path)"

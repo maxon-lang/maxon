@@ -27,6 +27,8 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 . scripts/lib/host-binaries.sh
+. scripts/lib/archive.sh
+. scripts/lib/checksums.sh
 
 # ⚠ `wasm-opt` IS NOT FETCHED BY DEFAULT BECAUSE NOTHING IN THIS TREE INVOKES IT. The wasm lane runs
 # `wasmtime` (to execute a component) and `wasm-tools` (to wrap the emitted core module into one, and
@@ -43,12 +45,15 @@ tools=""
 force=0
 
 for arg in "$@"; do
+	if maxon_is_target "$arg"; then
+		[ -z "$target" ] || { echo "fetch-vendor.sh: two targets named: $target and $arg" >&2; exit 2; }
+		target="$arg"
+		continue
+	fi
+
 	case "$arg" in
 		--force) force=1 ;;
 		-h|--help) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-		x64-windows|x64-linux|arm64-linux|arm64-macos)
-			[ -z "$target" ] || { echo "fetch-vendor.sh: two targets named: $target and $arg" >&2; exit 2; }
-			target="$arg" ;;
 		wasmtime|wasm-tools|wasm-opt) tools="$tools $arg" ;;
 		*) echo "fetch-vendor.sh: unknown argument: $arg" >&2; exit 2 ;;
 	esac
@@ -113,25 +118,7 @@ tool_version() {
 	esac
 }
 
-# Windows binaries carry `.exe`; every other target's do not. This is the TARGET's convention, not the
-# host's, so it cannot come from `MAXON_EXE_EXT` — staging arm64-macos from Windows must not produce
-# a `wasmtime.exe` that machine will never run.
-target_exe_ext() { case "$1" in *-windows) echo ".exe" ;; *) echo "" ;; esac; }
-
-# ⛔ `local`, ON EVERY ONE. Without it this function assigns to the CALLER's `dest` — the vendor
-# directory the loop is about to `rm -rf` — and the removal takes the freshly extracted tree instead.
-extract_into() {
-	local src="$1" into="$2"
-	mkdir -p "$into"
-	case "$src" in
-		*.zip)     unzip -q -o "$src" -d "$into" ;;
-		*.tar.xz)  tar -xJf "$src" -C "$into" ;;
-		*.tar.gz)  tar -xzf "$src" -C "$into" ;;
-		*) echo "fetch-vendor.sh: unknown archive type: $src" >&2; return 1 ;;
-	esac
-}
-
-ext="$(target_exe_ext "$target")"
+ext="$(maxon_target_exe_ext "$target")"
 fetched=0
 
 # Cleanup is explicit rather than trapped, so a FAILED run leaves this directory behind: it holds the
@@ -165,12 +152,7 @@ for tool in $tools; do
 	# ⛔ VERIFY OR REFUSE, and DELETE what failed. Leaving a mismatched archive on disk invites a
 	# second run to find it and skip the download, which is how an unverified file becomes the one in
 	# use.
-	# A stock macOS host has `shasum` but may lack `sha256sum`.
-	if command -v sha256sum >/dev/null 2>&1; then
-		got="$(sha256sum "$archive" | cut -d' ' -f1)"
-	else
-		got="$(shasum -a 256 "$archive" | cut -d' ' -f1)"
-	fi
+	got="$(sha256_of "$archive")"
 	if [ "$got" != "$want" ]; then
 		rm -f "$archive"
 		echo "fetch-vendor.sh: SHA256 MISMATCH for $tool $version ($target) — deleted the download" >&2
@@ -181,7 +163,7 @@ for tool in $tools; do
 	fi
 
 	rm -rf "$work/x"
-	extract_into "$archive" "$work/x"
+	unpack_archive "$archive" "$work/x"
 
 	# ⭐ FIND THE BINARY BY NAME rather than by a path spelled per tool: the three archives lay out
 	# differently (a versioned top directory, or `bin/` under one), and a layout that changes upstream
