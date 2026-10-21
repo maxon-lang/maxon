@@ -368,6 +368,14 @@ function closureCaptureSourceOf(captureNames NameRoster, word ClosureHiddenWord)
 	return ClosureCaptureSource.envSlot(envSlotOffset(slot))
 end 'closureCaptureSourceOf'
 
+// The raw values are spliced into E2001's message, which `specs/if-statements.md`,
+// `specs/match-statements.md` and `specs/test-declaration.md` pin byte-for-byte.
+module enum LineEndingConstruct
+	blockLabel = "block label"
+	statement = "statement"
+	matchArm = "match arm"
+end 'LineEndingConstruct'
+
 // The parser's failure modes. Distinct from NumberParsing's `ParserError` (which
 // `intLiteralValue` / `floatLiteralBits` catch and re-raise, positioned, as
 // `integerOverflow` / `floatLiteralOverflow`). queryParseOps turns a thrown
@@ -1185,11 +1193,11 @@ export union SourceParseError implements Error
 	// legal — a permanent refusal filed as a pending one.
 	expectedDeclaration(got String, line LineNumber, column ColumnNumber)
 
-	// ⭐ **A BLOCK LABEL ENDS ITS LINE** — `if true 'x' return 1 end 'x'` is refused, which
-	// `specs/if-statements.md`'s `single-line-block-rejected` pins. It rides the SAME E2001 as
+	// ⭐ **A BLOCK LABEL, A STATEMENT AND A MATCH ARM EACH END THEIR LINE** — `if true 'x' return 1 end 'x'`
+	// is refused, which `specs/if-statements.md`'s `single-line-block-rejected` pins. It rides the SAME E2001 as
 	// `expectedDeclaration` beside it, for the same reason: a token stood where the layout admits
 	// exactly one thing.
-	expectedNewlineAfterBlockLabel(got String, line LineNumber, column ColumnNumber)
+	expectedNewlineAfter(construct LineEndingConstruct, got String, line LineNumber, column ColumnNumber)
 
 	// ⭐⭐ **A BARE `try` INSIDE A CLOSURE, WHOSE ENCLOSING FUNCTION IS THE LIFTED CLOSURE ITSELF.** Renders
 	// as **E2001** `try without otherwise requires the enclosing function to have 'throws'`, positioned at
@@ -15433,7 +15441,7 @@ function divergentHandlerOpensAt(kind TokenKind) returns bool
 	return kind == TokenKind.panic or kind == TokenKind.throws
 end 'divergentHandlerOpensAt'
 
-// ⭐⭐ **DOES A STATEMENT OPENING WITH THIS TOKEN LEAVE ITS BLOCK UNCONDITIONALLY?** — the E3071 roster,
+// ⭐⭐ **`terminator` IS A STATEMENT FORM THAT LEAVES ITS BLOCK UNCONDITIONALLY** — the E3071 roster,
 // written once. `return`/`throw`/`panic` leave the FUNCTION; `break`/`continue` leave the enclosing loop or
 // match. All five end the straight-line block they sit in, so whatever is written after one of them before
 // the block's `end` is unreachable and `parseStatements` refuses it.
@@ -15449,26 +15457,113 @@ end 'divergentHandlerOpensAt'
 //
 // ⚠⚠ **THIS IS THE E3071 ROSTER, NOT THE ROSTER OF EVERYTHING THAT TERMINATES A BLOCK, AND THE TWO ARE
 // DIFFERENT LISTS.** A bare-call statement to a function that never returns also ends its block
-// (`terminateAfterDivergingCall`), and it is NOT admitted here — deliberately. This roster is read off a
-// statement's FIRST TOKEN before that statement is parsed, and whether a call comes back is a whole-program
-// fact about its callee, not a property of the token. So the tail under such a call is parsed into a `dead`
-// block instead of refused, exactly as the tail under an `if`/`else` whose branches all `return` already is:
-// neither opens with one of these five keywords, and neither is E3071's to report.
-function statementEndsItsBlockAt(kind TokenKind) returns bool
-	return kind == TokenKind.return or kind == TokenKind.throw or kind == TokenKind.panic or kind == TokenKind.break or kind == TokenKind.continue
-end 'statementEndsItsBlockAt'
+// (`terminateAfterDivergingCall`), and it is NOT admitted here — deliberately. This roster is read
+// off the form `statementFormAt` classifies before that statement is parsed, and whether a call
+// comes back is a whole-program fact about its callee, not a property of the form. So the tail
+// under such a call is parsed into a `dead` block instead of refused, exactly as the tail under an
+// `if`/`else` whose branches all `return` already is: neither opens with one of these five
+// keywords, and neither is E3071's to report.
+//
+// `tryStmt` is `plain` although its block form opens a block: the form covers both spellings, and
+// `parseTry` refuses the block one in a match arm (E2049) itself.
+function statementFormRole(form StatementForm) returns StatementRole
+	return match form 'form'
+		ret or
+		breakStmt or
+		continueStmt or
+		throwStmt or
+		panicStmt gives StatementRole.terminator
+		ifStmt or
+		whileStmt or
+		forStmt or
+		matchStmt gives StatementRole.blockOpener
+		strayStatementToken gives StatementRole.refusedOnSight
+		bindingDecl or
+		annotatedDecl or
+		tryStmt or
+		awaitStmt or
+		tupleAssign or
+		assign or
+		selfFieldAssign or
+		staticMemberAssign or
+		refusedStaticStore or
+		fieldAssign or
+		methodCallStmt or
+		fieldChainMethodStmt or
+		staticMemberCallStmt or
+		qualifiedStaticCallStmt or
+		namespaceQualifiedCallStmt or
+		valueHeadedCallStmt or
+		spawnStmt or
+		callStmt or
+		memberExprStmt gives StatementRole.plain
+	end 'form'
+end 'statementFormRole'
+
+enum StatementRole
+	terminator
+	blockOpener
+	refusedOnSight
+	plain
+end 'StatementRole'
 
 // The straight-line terminator the PREVIOUS statement was, when it was one — the whole of what
 // `parseStatements` has to remember between iterations to answer E3071.
 //
 // `keyword` carries the terminator token's own SOURCE BYTES rather than a spelling chosen here, so the
 // message quotes exactly the word the author wrote and there is no second roster to hold in step with
-// `statementEndsItsBlockAt`. Keywords are lexed as words and keep their span (see `Token.value`), so those
-// bytes are a zero-copy slice of the source buffer this parse already holds.
+// `statementFormRole`. Keywords are lexed as words and keep their span (see `Token.value`), so
+// those bytes are a zero-copy slice of the source buffer this parse already holds.
 union PrecedingTerminator
 	none
 	keyword(let name ByteArray)
 end 'PrecedingTerminator'
+
+enum StatementForm
+	ret
+	bindingDecl
+	annotatedDecl
+	ifStmt
+	whileStmt
+	forStmt
+	matchStmt
+	breakStmt
+	continueStmt
+	throwStmt
+	tryStmt
+	panicStmt
+	awaitStmt
+	tupleAssign
+	assign
+	selfFieldAssign
+	staticMemberAssign
+	refusedStaticStore
+	fieldAssign
+	methodCallStmt
+	fieldChainMethodStmt
+	staticMemberCallStmt
+	qualifiedStaticCallStmt
+	namespaceQualifiedCallStmt
+	valueHeadedCallStmt
+	spawnStmt
+	callStmt
+	memberExprStmt
+	strayStatementToken
+end 'StatementForm'
+
+function lineSharedRefusal(construct LineEndingConstruct, got Token) returns SourceParseError
+	return SourceParseError.expectedNewlineAfter(construct, got: tokenDisplayText(got), line: got.line, column: got.column)
+end 'lineSharedRefusal'
+
+type StatementHead
+	export let opening as Token
+	export let chain as ChainResolution
+	export let form as StatementForm
+
+	static function create(opening Token, chain ChainResolution, form StatementForm) returns StatementHead
+		return Self{opening: opening, chain: chain, form: form}
+	end 'create'
+end 'StatementHead'
 
 // ⭐ **WHICH FORM OF CATCH IS BEING PARSED — the one thing the declaration door cannot see for itself.** A
 // SINGLE-CALL form (`try f() otherwise (e) …`, `if try f() … else (e) …`) catches ONE call's error, so the
@@ -15719,7 +15814,7 @@ module function tokenCanBeAName(tok Token) returns bool
 	end 'plainIdentifier'
 
 	// ⛔⛔ **LAYOUT IS NEVER A NAME, AND `docComment` IS WHY THIS ARM HAS TO EXIST.** The empty-value test
-	// below carried every layout kind out until `///` became a token: a doc comment is not an identifier,
+	// below carries `newline` out but not a doc comment: a doc comment is not an identifier,
 	// is not a literal, and CARRIES ITS PROSE — so it passes all three tests below, and `consumeNameToken`
 	// would take the body of a comment as a declared name, a parameter, a callee, a method or an argument
 	// label, with `tokenDisplayText` then quoting that prose inside the E2010 for whatever followed. Asked
@@ -15776,6 +15871,12 @@ module function testDeclarationAt(tokens TokenArray, index ElementIndex) returns
 	let proseName = try tokens.get(index + 1) otherwise return false
 	return proseName.kind == TokenKind.charLiteral
 end 'testDeclarationAt'
+
+// `if range.end 'x'` ends its condition with a member named `end` and then opens the `if`'s label, so an
+// `end` behind a `.` closes nothing.
+module function labelledBlockCloserAt(tokens TokenArray, index ElementIndex) returns bool
+	return tokenKindAt(tokens, index: index) == TokenKind.end and tokenKindAt(tokens, index: index + 1) == TokenKind.charLiteral and not tokenFollowsAMemberDot(tokens, index: index)
+end 'labelledBlockCloserAt'
 
 // The SHAPE half on its own — a pure bounded lookaround. It is a routine of its own because the
 // block-extent walk asks it while deciding THIS token's name verdict, and so cannot read the memo that
@@ -23349,7 +23450,7 @@ export type Parser
 
 		var eq = afterModifier + 2
 
-		while self.kindAt(eq) != TokenKind.newline and self.kindAt(eq) != TokenKind.eof and self.kindAt(eq) != TokenKind.equals 'findDefault'
+		while not tokenKindEndsALine(self.kindAt(eq)) and self.kindAt(eq) != TokenKind.equals 'findDefault'
 			eq = eq + 1
 		end 'findDefault'
 
@@ -23683,7 +23784,7 @@ export type Parser
 		end 'theResultIsNotAName'
 
 		let after = self.kindAt(chainEnd)
-		return after == TokenKind.rightParen or after == TokenKind.comma or after == TokenKind.newline or after == TokenKind.eof
+		return after == TokenKind.rightParen or after == TokenKind.comma or tokenKindEndsALine(after)
 	end 'closureHandsBackANameAt'
 
 	function methodBodyEndFrom(bodyStart ElementIndex) returns ElementIndex
@@ -25241,7 +25342,7 @@ export type Parser
 		var q = forPos + 1
 
 		while self.kindAt(q) != TokenKind.in 'toTheSource'
-			if self.kindAt(q) == TokenKind.newline or self.kindAt(q) == TokenKind.eof 'noSource'
+			if tokenKindEndsALine(self.kindAt(q)) 'noSource'
 				throw MapError.keyNotFound
 			end 'noSource'
 
@@ -25415,7 +25516,7 @@ export type Parser
 	function forHeaderIsARangeFrom(source ElementIndex) returns bool
 		var q = source
 
-		while self.kindAt(q) != TokenKind.newline and self.kindAt(q) != TokenKind.eof 'toTheEndOfTheHeader'
+		while not tokenKindEndsALine(self.kindAt(q)) 'toTheEndOfTheHeader'
 			if self.kindAt(q) == TokenKind.to or self.kindAt(q) == TokenKind.upto 'aRangeOperator'
 				return true
 			end 'aRangeOperator'
@@ -28791,7 +28892,7 @@ export type Parser
 	// `specs/field-defaults.md`'s `error.annotation-with-default`, and `var x = e as T` is the
 	// spelling.
 	function requireFieldLineEnd() throws SourceParseError
-		if tokenKindIsSkippedLayout(self.current().kind) or self.isEof() 'fieldComplete'
+		if tokenKindEndsALine(self.kindAt(self.pos)) 'fieldComplete'
 			return
 		end 'fieldComplete'
 
@@ -28927,7 +29028,7 @@ export type Parser
 	function fieldDefaultEnd(fromEquals ElementIndex) returns ElementIndex
 		var q = fromEquals + 1
 
-		while self.kindAt(q) != TokenKind.newline and self.kindAt(q) != TokenKind.eof 'scan'
+		while not tokenKindEndsALine(self.kindAt(q)) 'scan'
 			q = q + 1
 		end 'scan'
 
@@ -30621,7 +30722,7 @@ export type Parser
 	function implementsClauseBindsAnything() returns bool
 		var at = self.pos
 
-		while self.kindAt(at) != TokenKind.newline and self.kindAt(at) != TokenKind.eof 'theHeaderLine'
+		while not tokenKindEndsALine(self.kindAt(at)) 'theHeaderLine'
 			if self.kindAt(at) == TokenKind.with 'bindsOne'
 				return true
 			end 'bindsOne'
@@ -31716,13 +31817,12 @@ export type Parser
 	//
 	// ⚠ **IT IS BLIND TO LAYOUT, AND THE REASON IS THE SAME ONE FOR EVERY KIND OF IT: THE RANGE CANNOT HOLD
 	// ANY.** A function typealias's parameter list may not span lines — a newline there is `E2010 Expected 'a
-	// type' but got 'newline'` — and `scanComment` stops BEFORE the line break, so a `///` doc comment inside
-	// the parens would put a `docComment` token there and earn the identical refusal. Neither can reach a
-	// range this is asked about, so reformatting cannot move the digest. Whitespace and indentation are not
-	// tokens at all.
+	// type' but got 'newline'` — and a `///` after code in the parens is an ordinary comment running to that
+	// same line break. Neither can reach a range this is asked about, so reformatting cannot move the
+	// digest. Whitespace and indentation are not tokens at all.
 	//
-	// ⛔ **DO NOT REST THAT ON "COMMENTS ARE NOT TOKENS", WHICH IS NO LONGER TRUE.** `//` and `/* … */` are
-	// still dropped by the lexer, but `///` is emitted (the formatter and the LSP read it back), and it
+	// ⛔ **DO NOT REST THAT ON "COMMENTS ARE NOT TOKENS", WHICH IS FALSE.** `//` and `/* … */` are dropped by
+	// the lexer, but a `///` leading its line is emitted (the formatter and the LSP read it back), and it
 	// CARRIES TEXT — so a doc comment inside a folded range would change the digest, and the declaration
 	// sweep and the real parse mint identical values only because no legal range contains one.
 	//
@@ -33319,15 +33419,10 @@ export type Parser
 	// ⚠ It takes an INDEX rather than reading the cursor because THREE walks ask it and only two of them
 	// are cursor-driven: the real parse and the tolerant sweep sit ON the token, while the sibling-receiver
 	// scan (`ensureSiblingReceivers`) walks an index of its own. Written twice, the third walk would read a
-	// case named `end` as the body's terminator — measured, before this took an index: a bare sibling call
-	// to a method declared after such a case reported `E3004 call to undefined function`.
+	// case named `end` as the body's terminator, and a bare sibling call to a method declared after such a
+	// case would report `E3004 call to undefined function`.
 	function enumBodyEndsAt(index ElementIndex) returns bool
-		if self.kindAt(index) != TokenKind.end 'notEnd'
-			return false
-		end 'notEnd'
-
-		let next = self.kindAt(index + 1)
-		return next == TokenKind.charLiteral or next == TokenKind.eof
+		return labelledBlockCloserAt(self.tokens, index: index) or (self.kindAt(index) == TokenKind.end and self.kindAt(index + 1) == TokenKind.eof)
 	end 'enumBodyEndsAt'
 
 	// Does the cursor open a METHOD inside an enum/union body — `[export] [static] function <name>(`?
@@ -35139,7 +35234,7 @@ export type Parser
 	// Three refusals live here and nowhere else, and each is a property of the HEAD rather than of the body:
 	// the file it stands in (E2058), an empty name (E2059), and anything at all after the name (E2001).
 	// The third is what refuses `test 'x'(v int)` and `test 'x' returns int` — the two shapes the language
-	// forbids — and it is the ORDINARY block-label layout rule (`requireNewlineAfterBlockLabel`), not a pair
+	// forbids — and it is the ORDINARY block-label layout rule (`requireLineEndAfter`), not a pair
 	// of rules of its own: a test's name IS a block label, closed by an `end` that repeats it, so "the label
 	// ends its line" already says everything the two refusals need to say. That is also what keeps a
 	// malformed test a PARSE error rather than a test that silently passes.
@@ -35165,7 +35260,7 @@ export type Parser
 			throw SourceParseError.testEmptyName(nameTok.line, column: nameTok.column)
 		end 'unnamed'
 
-		try self.requireNewlineAfterBlockLabel()
+		try self.requireLineEndAfter(LineEndingConstruct.blockLabel)
 
 		return nameTok
 	end 'readTestDeclarationHead'
@@ -35288,7 +35383,7 @@ export type Parser
 	function blockHeaderLabelAt(opener ElementIndex) returns OpenedBlockLabel
 		var q = opener + 1
 
-		while self.kindAt(q) != TokenKind.newline and self.kindAt(q) != TokenKind.eof 'header'
+		while not tokenKindEndsALine(self.kindAt(q)) 'header'
 			q = q + 1
 		end 'header'
 
@@ -37316,7 +37411,7 @@ export type Parser
 	// EOF is admitted so a source truncated mid-declaration keeps reaching the missing-`end` diagnostic,
 	// which says more about it than "unexpected token".
 	function requireDeclarationHeaderLineEnd() throws SourceParseError
-		if self.at(TokenKind.newline) or self.isEof() 'headerComplete'
+		if tokenKindEndsALine(self.kindAt(self.pos)) 'headerComplete'
 			return
 		end 'headerComplete'
 
@@ -38568,14 +38663,26 @@ export type Parser
 
 		// ⭐⭐ **E3071 LIVES HERE BECAUSE THIS IS THE ONE STATEMENT-LIST LOOP** — a function body and every
 		// nested block body (`parseBlockBody`) both come through it, so the dead-code rule is stated once for
-		// the whole language. See `statementEndsItsBlockAt` for the roster and `PrecedingTerminator` for why
+		// the whole language. See `statementFormRole` for the roster and `PrecedingTerminator` for why
 		// the keyword's own bytes are what travels.
 		var preceding = PrecedingTerminator.none
+		var sharesItsLine = false
 
 		while true 'stmts'
 			self.skipNewlines()
+			let closes = self.closesBlockAt(self.pos)
 
-			if self.at(TokenKind.end) 'endBlock'
+			if sharesItsLine 'afterAStatementOnItsLine'
+				let shared = self.current()
+
+				if not closes 'aStatementSharesIt'
+					_ = try self.readStatementOpening(preceding, entersItsChain: false)
+				end 'aStatementSharesIt'
+
+				throw lineSharedRefusal(LineEndingConstruct.statement, got: shared)
+			end 'afterAStatementOnItsLine'
+
+			if closes 'endBlock'
 				break
 			end 'endBlock'
 
@@ -38588,18 +38695,13 @@ export type Parser
 			// Asked after the `end` and EOF tests, both of which are the block ending rather than a statement:
 			// a terminator as the block's LAST statement is the ordinary shape, and a truncated body is
 			// `unexpectedEof`'s to report, not this one's.
-			let stmtTok = self.current()
-
-			match preceding 'dead'
-				none then break
-				keyword(name) then throw SourceParseError.unreachableCode(String.from(name), line: stmtTok.line, column: stmtTok.column)
-			end 'dead'
-
-			// Recorded BEFORE the statement is parsed, off its opening token, so the next iteration can
-			// refuse whatever follows it.
-			preceding = PrecedingTerminator.keyword(stmtTok.value) if statementEndsItsBlockAt(stmtTok.kind) else PrecedingTerminator.none
-
-			current = try self.parseStatement(func, block: current)
+			//
+			// `preceding` is recorded BEFORE the statement is parsed, off its form, so the next iteration
+			// can refuse whatever follows it.
+			let head = try self.readStatementOpening(preceding, entersItsChain: true)
+			preceding = PrecedingTerminator.keyword(head.opening.value) if statementFormRole(head.form) == StatementRole.terminator else PrecedingTerminator.none
+			current = try self.parseStatement(func, block: current, head: head)
+			sharesItsLine = not tokenKindEndsALine(self.kindAt(self.pos))
 		end 'stmts'
 
 		return current
@@ -38617,17 +38719,12 @@ export type Parser
 	// `break`/`continue` are the two that genuinely cannot move it: neither takes an
 	// expression. They still route through the same return so there is ONE rule here rather
 	// than an exception to remember.
-	function parseStatement(func IrFunction, block IrBlock) returns IrBlock throws SourceParseError
+	function parseStatement(func IrFunction, block IrBlock, head StatementHead) returns IrBlock throws SourceParseError
 		self.bodyState.currentBlock = block
 
 		// The statement's first token — the anchor `drainPendingTemps` gives the drops it emits (no source
 		// token spawns a drop). Captured before parsing advances the cursor.
-		let stmtTok = self.current()
-
-		// E3067, before the dispatch and before any op is emitted: this statement's TOKENS may already say
-		// it does nothing. See `rejectDegenerateAssignment` for the rule and for what it deliberately lets
-		// through — it is asked here, once, rather than by each of the three assignment arms it spans.
-		try self.rejectDegenerateAssignment(self.pos)
+		let stmtTok = head.opening
 
 		// ⭐ **`--coverage`: ONE COUNTER AT THE HEAD OF EVERY USER STATEMENT, ahead of the statement's own
 		// ops** — so a statement whose code a later pass deletes still reports the count its line really
@@ -38637,33 +38734,31 @@ export type Parser
 			self.mintCovPoint(block, funcName: func.name, flags: MxdbgCovFlagStatement, line: stmtTok.line, col: stmtTok.column, branchLine: 0, branchCol: 0)
 		end 'instrumentThisStatement'
 
-		// Before every arm: a chain naming a declared type leaves the cursor on that type's token, so each arm
-		// reads `sub.Calc.ping()` as it reads `Calc.ping()`.
-		let chain = try self.enterQualifiedChainOfStatement()
+		let form = head.form
 
-		if self.at(TokenKind.return) 'ret'
+		if form == StatementForm.ret 'ret'
 			try self.parseReturnStatement(func, block: block)
-		end 'ret' else if bindingKeywordSpells(stmtTok.kind) 'bindingDecl'
+		end 'ret' else if form == StatementForm.bindingDecl 'bindingDecl'
 			try self.parseBinding(func, block: block, kind: bindingKindOfKeyword(stmtTok.kind), heapAnnotated: false)
-		end 'bindingDecl' else if self.at(TokenKind.at) 'annotatedDecl'
+		end 'bindingDecl' else if form == StatementForm.annotatedDecl 'annotatedDecl'
 			// `@heap let p = Point.create(1, y: 2)` — an ANNOTATED binding. The `@` is the only token that opens
 			// one and it opens nothing else, so the arm sits beside the two bindings it decorates.
 			try self.parseAnnotatedBinding(func, block: block)
-		end 'annotatedDecl' else if self.at(TokenKind.if) 'ifStmt'
+		end 'annotatedDecl' else if form == StatementForm.ifStmt 'ifStmt'
 			return try self.parseIfStatement(func, block: block)
-		end 'ifStmt' else if self.at(TokenKind.while) 'whileStmt'
+		end 'ifStmt' else if form == StatementForm.whileStmt 'whileStmt'
 			return try self.parseWhileStatement(func, block: block)
-		end 'whileStmt' else if self.at(TokenKind.for) 'forStmt'
+		end 'whileStmt' else if form == StatementForm.forStmt 'forStmt'
 			return try self.parseForStatement(func)
-		end 'forStmt' else if self.at(TokenKind.match) 'matchStmt'
+		end 'forStmt' else if form == StatementForm.matchStmt 'matchStmt'
 			return try self.parseMatchStatement(func, block: block)
-		end 'matchStmt' else if self.at(TokenKind.break) 'breakStmt'
+		end 'matchStmt' else if form == StatementForm.breakStmt 'breakStmt'
 			try self.parseBreakStatement(func, block: block)
-		end 'breakStmt' else if self.at(TokenKind.continue) 'continueStmt'
+		end 'breakStmt' else if form == StatementForm.continueStmt 'continueStmt'
 			try self.parseContinueStatement(block)
-		end 'continueStmt' else if self.at(TokenKind.throw) 'throwStmt'
+		end 'continueStmt' else if form == StatementForm.throwStmt 'throwStmt'
 			try self.parseThrowStatement(func, block: block)
-		end 'throwStmt' else if self.at(TokenKind.try) 'tryStmt'
+		end 'throwStmt' else if form == StatementForm.tryStmt 'tryStmt'
 			// The BLOCK form (`try 'label' … end 'label' otherwise (e) 'h' … end 'h'`) is a statement and
 			// nothing else — it groups statements and yields no value — so it forks HERE, off the same
 			// label lookahead the extent scan reads (`tryOpensBlockAt`, which is also where the label-vs-
@@ -38676,9 +38771,9 @@ export type Parser
 			// A `try` in statement position — its value is discarded; the forms are the propagate,
 			// the control-flow `otherwise`s, `otherwise ignore`, and the block handlers.
 			_ = try self.parseTry(func, resultUsed: false)
-		end 'tryStmt' else if self.at(TokenKind.panic) 'panicStmt'
+		end 'tryStmt' else if form == StatementForm.panicStmt 'panicStmt'
 			try self.parsePanicStatement(func, block: block)
-		end 'panicStmt' else if self.at(TokenKind.await) 'awaitStmt'
+		end 'panicStmt' else if form == StatementForm.awaitStmt 'awaitStmt'
 			// ⭐ **`await p` ON A LINE OF ITS OWN** — a VOID async awaited for its EFFECT. The await IS the
 			// synchronization point and there is nothing to bind: a void async's await yields a void-tagged
 			// value, so no binding and no expression position can host it. That is the same "this is the
@@ -38690,29 +38785,24 @@ export type Parser
 			// `drainPendingTemps` tail releases it if it owns heap. `try await p otherwise …` is NOT this arm:
 			// it opens with `try` and `tryStmt` above claims it.
 			_ = try self.parseAwait(func)
-		end 'awaitStmt' else if self.at(TokenKind.otherwise) 'strayOtherwise'
-			// An `otherwise` with no `try` to attach to (`let v = f() otherwise 0`). Reaches here as a
-			// statement starter after the preceding expression completed. Renders as E3058.
-			let otherwiseTok = self.current()
-			throw SourceParseError.otherwiseWithoutTry(otherwiseTok.line, column: otherwiseTok.column)
-		end 'strayOtherwise' else if tupleAssignEqualsIn(self.tokens, open: self.pos) != self.pos 'tupleAssign'
+		end 'awaitStmt' else if form == StatementForm.tupleAssign 'tupleAssign'
 			// `(x, let y) = f()` — a statement-level TUPLE ASSIGNMENT (`specs/tuple-assign.md`): one
 			// right-hand side, evaluated once, distributed positionally over targets that rebind, declare or
 			// discard. It is the only statement in the grammar that opens with `(`, and the predicate — not
 			// this arm — is where that claim is stated and defended. See `tupleAssignEqualsIn`.
 			try self.parseTupleAssignment(func, block: block)
-		end 'tupleAssign' else if self.assignsAt(self.pos) 'assign'
+		end 'tupleAssign' else if form == StatementForm.assign 'assign'
 			// An identifier followed by `=` is a reassignment. The two-token lookahead
 			// keeps a bare identifier from being mis-parsed as an incomplete assignment.
 			// Through `assignsAt`, which is also what decides a loop's carried vars — see there.
 			try self.parseAssignment(func, block: block)
-		end 'assign' else if self.selfFieldAssignsAt(self.pos) 'selfFieldAssign'
+		end 'assign' else if form == StatementForm.selfFieldAssign 'selfFieldAssign'
 			// `self.count = 5` — the explicit spelling of a self-field store. Its own predicate for
 			// `fieldAssignsAt`'s reason: it assigns no BINDING, so `assignedBindingsIn` must not see it.
 			// (The BARE spelling, `count = 5`, matches `assignsAt` and is routed above — see there
 			// for why the scan finding `count` is harmless.)
 			try self.parseExplicitSelfFieldAssignment(func, block: block)
-		end 'selfFieldAssign' else if self.staticMemberAssignsAt(self.pos) 'staticMemberAssign'
+		end 'selfFieldAssign' else if form == StatementForm.staticMemberAssign 'staticMemberAssign'
 			// `Counter.count = 42` — a store to a static member's module storage. Its own arm, ahead of
 			// `fieldAssignsAt`, whose token shape it shares EXACTLY: what tells the two apart is that this base
 			// names a TYPE and that one a VALUE, which is the same separation `methodCallsAt` draws between
@@ -38723,18 +38813,18 @@ export type Parser
 			// reason: it assigns no BINDING, so a loop writing a static must mint no header phi for it — every
 			// read of the slot is a fresh `loadIndirect` (`emitGlobalLoad`), exactly as for a file-scope `var`.
 			try self.parseStaticMemberAssignment(func, block: block)
-		end 'staticMemberAssign' else if self.staticStoreRefusedAt(self.pos) 'refusedStaticStore'
+		end 'staticMemberAssign' else if form == StatementForm.refusedStaticStore 'refusedStaticStore'
 			// `Counter.hits = 9` where the roster refuses the member. Directly beneath the arm that takes the
 			// LEGAL store and above the field arm, which is the same separation that pair already draws: a
 			// base naming a TYPE is never a chain through a binding, so the field arm's refusal would name
 			// the wrong mistake. See `staticStoreRefusedAt`.
 			try self.refuseStaticMemberHiddenStore()
-		end 'refusedStaticStore' else if self.fieldAssignsAt(self.pos) 'fieldAssign'
+		end 'refusedStaticStore' else if form == StatementForm.fieldAssign 'fieldAssign'
 			// `p.x = 5` — a store THROUGH a binding rather than a rebinding of one. Its own
 			// predicate, and `assignedBindingsIn` reads only `assignsAt`: see `assignsAt` for why
 			// widening that one instead would have minted the loop's phi for the FIELD's name.
 			try self.parseFieldAssignment(func, block: block)
-		end 'fieldAssign' else if self.methodCallsAt(self.pos) or self.arrayManagedMemberCallAt(self.pos) 'methodCallStmt'
+		end 'fieldAssign' else if form == StatementForm.methodCallStmt 'methodCallStmt'
 			// `c.increment()` / `self.increment()` — a method call for its EFFECT. Void methods are
 			// most of what a type declares, and this is the only position that wants no value, so
 			// `resultUsed: false` is what makes them callable at all.
@@ -38753,7 +38843,7 @@ export type Parser
 			let methodOpFloor = self.artifact.module.ops.count()
 			let methodResult = try self.parsePostfix(func, value: try self.parseMethodCall(func, resultUsed: false), resultUsed: false)
 			try self.finishCallStatement(func, result: methodResult, opFloor: methodOpFloor, tempFloor: methodTempFloor, anchor: methodAnchor)
-		end 'methodCallStmt' else if self.fieldChainMethodCallAt(self.pos) 'fieldChainMethodStmt'
+		end 'methodCallStmt' else if form == StatementForm.fieldChainMethodStmt 'fieldChainMethodStmt'
 			// `b.ops.push(1)` / `o.inner.op()` — a call reached through a ≥2-hop field chain, on an ARRAY FIELD's
 			// method or a FUNCTION-typed FIELD (#97). `methodCallsAt` covers only the one-hop `b.push(…)` / `h.op()`;
 			// this is the chain case, dispatched for effect (`resultUsed: false`). A function field's trailing
@@ -38763,7 +38853,7 @@ export type Parser
 			let chainOpFloor = self.artifact.module.ops.count()
 			let chainResult = try self.parseFieldChainCall(func, resultUsed: false)
 			try self.finishCallStatement(func, result: chainResult, opFloor: chainOpFloor, tempFloor: chainTempFloor, anchor: chainAnchor)
-		end 'fieldChainMethodStmt' else if self.staticMemberCallsAt(self.pos) 'staticMemberCallStmt'
+		end 'fieldChainMethodStmt' else if form == StatementForm.staticMemberCallStmt 'staticMemberCallStmt'
 			// `Names.items.push(9)` — a method called for its EFFECT on a static member's record. The
 			// expression door reaches the same reader through `parseDottedPrimary`'s static arm; a statement
 			// has no arm that claims a dotted form, so it needs one of its own — exactly as
@@ -38774,7 +38864,7 @@ export type Parser
 			let staticOpFloor = self.artifact.module.ops.count()
 			let staticResult = try self.parseStaticMemberAccess(func, baseTok: try self.typeBaseTokenAt(self.pos), resultUsed: false)
 			try self.finishCallStatement(func, result: staticResult, opFloor: staticOpFloor, tempFloor: staticTempFloor, anchor: staticAnchor)
-		end 'staticMemberCallStmt' else if self.qualifiedStaticCallsAt(self.pos) 'qualifiedStaticCallStmt'
+		end 'staticMemberCallStmt' else if form == StatementForm.qualifiedStaticCallStmt 'qualifiedStaticCallStmt'
 			// ⭐ `Clock.tick()` / `__Builtins.sleep(ms)` / `__ManagedFile.statFree(buffer)` — A STATIC CALLED
 			// ON A LINE OF ITS OWN, and `statFree` is the case that makes the position load-bearing rather
 			// than a convenience: it is the ONLY thing that can release the raw block `stat` hands back, and
@@ -38802,7 +38892,7 @@ export type Parser
 			let staticCallOpFloor = self.artifact.module.ops.count()
 			let staticCallResult = try self.parsePostfix(func, value: try self.parseQualifiedCall(func, resultUsed: false), resultUsed: false)
 			try self.finishCallStatement(func, result: staticCallResult, opFloor: staticCallOpFloor, tempFloor: staticCallTempFloor, anchor: staticCallAnchor)
-		end 'qualifiedStaticCallStmt' else if self.chainIsADirectoryQualifiedCall(chain) 'namespaceQualifiedCallStmt'
+		end 'qualifiedStaticCallStmt' else if form == StatementForm.namespaceQualifiedCallStmt 'namespaceQualifiedCallStmt'
 			// ⭐ **`utils.shout()` / `lib.inner.shout()` ON A LINE OF ITS OWN** — a FREE call written with
 			// a directory qualifier, and a free call is exactly what `callStmt` below already admits: the
 			// result is discarded, `resultUsed: false` is what makes a VOID one legal here, and the
@@ -38822,15 +38912,15 @@ export type Parser
 			let qualifiedAnchor = self.dottedCallNameToken(self.pos)
 			let qualifiedTempFloor = self.bodyState.pendingTempDrops.count()
 			let qualifiedOpFloor = self.artifact.module.ops.count()
-			let qualifiedResult = try self.parsePostfix(func, value: try self.parseNamespaceQualifiedCall(func, chain: chain, resultUsed: false), resultUsed: false)
+			let qualifiedResult = try self.parsePostfix(func, value: try self.parseNamespaceQualifiedCall(func, chain: head.chain, resultUsed: false), resultUsed: false)
 			try self.finishCallStatement(func, result: qualifiedResult, opFloor: qualifiedOpFloor, tempFloor: qualifiedTempFloor, anchor: qualifiedAnchor)
-		end 'namespaceQualifiedCallStmt' else if self.chainHeadsAValue(chain) and self.chainCallFollowsAt(self.pos) 'valueHeadedCallStmt'
+		end 'namespaceQualifiedCallStmt' else if form == StatementForm.valueHeadedCallStmt 'valueHeadedCallStmt'
 			let valueAnchor = self.dottedCallNameToken(self.pos)
 			let valueTempFloor = self.bodyState.pendingTempDrops.count()
 			let valueOpFloor = self.artifact.module.ops.count()
 			let valueResult = try self.parsePostfix(func, value: try self.parseVariableReference(func), resultUsed: false)
 			try self.finishCallStatement(func, result: valueResult, opFloor: valueOpFloor, tempFloor: valueTempFloor, anchor: valueAnchor)
-		end 'valueHeadedCallStmt' else if self.atSpawnPrefix() 'spawnStmt'
+		end 'valueHeadedCallStmt' else if form == StatementForm.spawnStmt 'spawnStmt'
 			// ⭐ **`spawn Calc.create()` ON A LINE OF ITS OWN** — a service started for its EFFECT, its handle
 			// discarded. It needs an arm of its own for `namespaceQualifiedCallStmt`'s reason one arm up: the
 			// `callStmt` lookahead below is `identifier (`, which `spawn Calc` fails, so without this the
@@ -38840,7 +38930,7 @@ export type Parser
 			// ⚠ It is the SAME reader as the expression position's, so the two cannot come to disagree about
 			// what a spawn is or which refusal it earns — `parseAwait`'s single-homing argument exactly.
 			_ = try self.parseSpawn(func)
-		end 'spawnStmt' else if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.leftParen 'callStmt'
+		end 'spawnStmt' else if form == StatementForm.callStmt 'callStmt'
 			// An identifier followed by `(` is a bare-call statement — the call is evaluated for its
 			// effect and its result discarded. `resultUsed: false` is what makes a VOID call legal
 			// HERE and nowhere else: this is the position that wants no value.
@@ -38872,7 +38962,7 @@ export type Parser
 				try self.finishCallStatement(func, result: callResult, opFloor: callOpFloor, tempFloor: callTempFloor, anchor: calleeTok)
 				self.terminateAfterDivergingCall(func, calleeTok: calleeTok, tempFloor: callTempFloor)
 			end 'directCallStmt'
-		end 'callStmt' else if self.peekKind() == TokenKind.dot 'memberExprStmt'
+		end 'callStmt' else if form == StatementForm.memberExprStmt 'memberExprStmt'
 			// `h.op` / `arr.managed` / `Self.make(1)` — a MEMBER ACCESS written on a line of its own. Every
 			// arm above has already declined it (no `=` to make it a store, no `(args)` shape any of the call
 			// dispatchers claims), and what is left is a WELL-FORMED EXPRESSION refused for a reason that
@@ -38908,19 +38998,9 @@ export type Parser
 			end 'undefinedBase'
 
 			throw SourceParseError.unsupported("{memberTok.kind.rawValue} statement", line: memberTok.line, column: memberTok.column)
-		end 'memberExprStmt' else 'strayStatementToken'
-			// A bare `foo` on a line of its own, a `retur x` typo, a `test` that meant `test()`. Every arm
-			// above has declined the token and it opens no construct of its own — and no future feature makes
-			// any of these legal, which is the one verdict E2015 ("a construct this compiler does not
-			// implement yet") cannot carry. E2001 is the code the registry already claims for a token the
-			// grammar has no position for. Same fault and same fix as `dispatchTopLevel`'s fall-through
-			// one scope up, and the same second defect to avoid with it: `tok.kind.rawValue` is
-			// the token's CATEGORY, which is not a string any reader can search the file
-			// for. `tokenDisplayText` is the one reader that resolves a token's text — see its definition
-			// (`Lexer.maxon`) for why reading `.value` directly is not the same thing.
-			let tok = self.current()
-			throw SourceParseError.strayToken(tokenDisplayText(tok), line: tok.line, column: tok.column)
-		end 'strayStatementToken'
+		end 'memberExprStmt' else 'refusedOnSight'
+			panic("parseStatement: '{form}' is refused on sight by `readStatementOpening`, which every caller asks before this dispatch")
+		end 'refusedOnSight'
 
 		try self.requireSendSettled()
 
@@ -38954,6 +39034,196 @@ export type Parser
 
 		return self.bodyState.currentBlock
 	end 'parseStatement'
+
+	// Tested in `parseStatement`'s arm order, and the comments on those arms argue that order: a
+	// form tested earlier claims every statement a later one would also match.
+	function statementFormAt(chain ChainResolution) returns StatementForm
+		if self.at(TokenKind.return) 'ret'
+			return StatementForm.ret
+		end 'ret'
+
+		if bindingKeywordSpells(self.current().kind) 'bindingDecl'
+			return StatementForm.bindingDecl
+		end 'bindingDecl'
+
+		if self.at(TokenKind.at) 'annotatedDecl'
+			return StatementForm.annotatedDecl
+		end 'annotatedDecl'
+
+		if self.at(TokenKind.if) 'ifStmt'
+			return StatementForm.ifStmt
+		end 'ifStmt'
+
+		if self.at(TokenKind.while) 'whileStmt'
+			return StatementForm.whileStmt
+		end 'whileStmt'
+
+		if self.at(TokenKind.for) 'forStmt'
+			return StatementForm.forStmt
+		end 'forStmt'
+
+		if self.at(TokenKind.match) 'matchStmt'
+			return StatementForm.matchStmt
+		end 'matchStmt'
+
+		if self.at(TokenKind.break) 'breakStmt'
+			return StatementForm.breakStmt
+		end 'breakStmt'
+
+		if self.at(TokenKind.continue) 'continueStmt'
+			return StatementForm.continueStmt
+		end 'continueStmt'
+
+		if self.at(TokenKind.throw) 'throwStmt'
+			return StatementForm.throwStmt
+		end 'throwStmt'
+
+		if self.at(TokenKind.try) 'tryStmt'
+			return StatementForm.tryStmt
+		end 'tryStmt'
+
+		if self.at(TokenKind.panic) 'panicStmt'
+			return StatementForm.panicStmt
+		end 'panicStmt'
+
+		if self.at(TokenKind.await) 'awaitStmt'
+			return StatementForm.awaitStmt
+		end 'awaitStmt'
+
+		if tupleAssignEqualsIn(self.tokens, open: self.pos) != self.pos 'tupleAssign'
+			return StatementForm.tupleAssign
+		end 'tupleAssign'
+
+		if self.assignsAt(self.pos) 'assign'
+			return StatementForm.assign
+		end 'assign'
+
+		if self.selfFieldAssignsAt(self.pos) 'selfFieldAssign'
+			return StatementForm.selfFieldAssign
+		end 'selfFieldAssign'
+
+		if self.staticMemberAssignsAt(self.pos) 'staticMemberAssign'
+			return StatementForm.staticMemberAssign
+		end 'staticMemberAssign'
+
+		if self.staticStoreRefusedAt(self.pos) 'refusedStaticStore'
+			return StatementForm.refusedStaticStore
+		end 'refusedStaticStore'
+
+		if self.fieldAssignsAt(self.pos) 'fieldAssign'
+			return StatementForm.fieldAssign
+		end 'fieldAssign'
+
+		if self.methodCallsAt(self.pos) or self.arrayManagedMemberCallAt(self.pos) 'methodCallStmt'
+			return StatementForm.methodCallStmt
+		end 'methodCallStmt'
+
+		if self.fieldChainMethodCallAt(self.pos) 'fieldChainMethodStmt'
+			return StatementForm.fieldChainMethodStmt
+		end 'fieldChainMethodStmt'
+
+		if self.staticMemberCallsAt(self.pos) 'staticMemberCallStmt'
+			return StatementForm.staticMemberCallStmt
+		end 'staticMemberCallStmt'
+
+		if self.qualifiedStaticCallsAt(self.pos) 'qualifiedStaticCallStmt'
+			return StatementForm.qualifiedStaticCallStmt
+		end 'qualifiedStaticCallStmt'
+
+		if self.chainIsADirectoryQualifiedCall(chain) 'namespaceQualifiedCallStmt'
+			return StatementForm.namespaceQualifiedCallStmt
+		end 'namespaceQualifiedCallStmt'
+
+		if self.chainHeadsAValue(chain) and self.chainCallFollowsAt(self.pos) 'valueHeadedCallStmt'
+			return StatementForm.valueHeadedCallStmt
+		end 'valueHeadedCallStmt'
+
+		if self.atSpawnPrefix() 'spawnStmt'
+			return StatementForm.spawnStmt
+		end 'spawnStmt'
+
+		if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.leftParen 'callStmt'
+			return StatementForm.callStmt
+		end 'callStmt'
+
+		if self.peekKind() == TokenKind.dot 'memberExprStmt'
+			return StatementForm.memberExprStmt
+		end 'memberExprStmt'
+
+		return StatementForm.strayStatementToken
+	end 'statementFormAt'
+
+	// The order of these refusals decides which error a line earns, and `specs/if-statements.md` pins
+	// it: a statement's position (E3071) is judged before its content (E3067). A token sharing a line
+	// is asked with `entersItsChain: false`, because entering a chain can refuse a name past that
+	// token, which would beat the line's E2001.
+	function readStatementOpening(preceding PrecedingTerminator, entersItsChain bool) returns StatementHead throws SourceParseError
+		let opening = self.current()
+		try self.refuseStrayOtherwise()
+		try self.refuseUnreachableStatement(preceding, at: opening)
+
+		// E3067, before the dispatch and before any op is emitted: this statement's TOKENS may already say
+		// it does nothing. See `rejectDegenerateAssignment` for the rule and for what it deliberately lets
+		// through — it is asked here, once, rather than by each of the three assignment arms it spans.
+		try self.rejectDegenerateAssignment(self.pos)
+
+		// Before every arm: a chain naming a declared type leaves the cursor on that type's token, so each arm
+		// reads `sub.Calc.ping()` as it reads `Calc.ping()`.
+		let chain = self.resolveQualifiedChainAtCursor(MethodQualifierDots)
+
+		if entersItsChain 'entersItsChain'
+			try self.enterResolvedChain(chain)
+		end 'entersItsChain'
+
+		let form = self.statementFormAt(chain)
+		try self.refuseStatementOnSight(form)
+		return StatementHead.create(opening, chain: chain, form: form)
+	end 'readStatementOpening'
+
+	// An `otherwise` with no `try` to attach to (`let v = f() otherwise 0`). Reaches here as a
+	// statement starter after the preceding expression completed. Renders as E3058.
+	function refuseStrayOtherwise() throws SourceParseError
+		if not self.at(TokenKind.otherwise) 'noStrayOtherwise'
+			return
+		end 'noStrayOtherwise'
+
+		let otherwiseTok = self.current()
+		throw SourceParseError.otherwiseWithoutTry(otherwiseTok.line, column: otherwiseTok.column)
+	end 'refuseStrayOtherwise'
+
+	// A bare `foo` on a line of its own, a `retur x` typo, a `test` that meant `test()`. Every form
+	// `statementFormAt` tests has declined the token and it opens no construct of its own — and no
+	// future feature makes any of these legal, which is the one verdict E2015 ("a construct this
+	// compiler does not implement yet") cannot carry. E2001 is the code the registry already claims
+	// for a token the grammar has no position for. Same fault and same fix as `dispatchTopLevel`'s
+	// fall-through one scope up, and the same second defect to avoid with it: `tok.kind.rawValue` is
+	// the token's CATEGORY, which is not a string any reader can search the file
+	// for. `tokenDisplayText` is the one reader that resolves a token's text — see its definition
+	// (`Lexer.maxon`) for why reading `.value` directly is not the same thing.
+	function refuseStatementOnSight(form StatementForm) throws SourceParseError
+		if statementFormRole(form) != StatementRole.refusedOnSight 'opensAStatement'
+			return
+		end 'opensAStatement'
+
+		let tok = self.current()
+		throw SourceParseError.strayToken(tokenDisplayText(tok), line: tok.line, column: tok.column)
+	end 'refuseStatementOnSight'
+
+	function refuseArmAfterDefault(sawDefault bool) throws SourceParseError
+		if not sawDefault 'noDefaultYet'
+			return
+		end 'noDefaultYet'
+
+		let strayTok = self.current()
+		throw SourceParseError.matchDefaultNotLast(strayTok.line, column: strayTok.column)
+	end 'refuseArmAfterDefault'
+
+	function refuseUnreachableStatement(preceding PrecedingTerminator, at Token) throws SourceParseError
+		match preceding 'dead'
+			none then return
+			keyword(name) then throw SourceParseError.unreachableCode(String.from(name), line: at.line, column: at.column)
+		end 'dead'
+	end 'refuseUnreachableStatement'
 
 	// ⭐⭐ **`@heap let p = Point.create(1, y: 2)` — THE HEAP ANNOTATION (`specs/ownership.md`), WHICH
 	// THE COMPILER ACCEPTS, VALIDATES, AND THEN LOWERS AS A PLAIN BINDING.** It asks the compiler to
@@ -40636,9 +40906,8 @@ export type Parser
 	// anchored on the closing `end` — where the missing statements would have gone. A body holding
 	// only a COMMENT reads as empty, and the spec's own documentation example is exactly that program.
 	//
-	// ⚠ **THAT HOLDS BECAUSE THE PARSER SKIPS COMMENTS, NOT BECAUSE THE LEXER DROPS THEM — and the two
-	// stopped being one statement when `///` became a token.** `//` and `/* … */` are still dropped; a
-	// `///` doc comment reaches the parser, and this body reads it as empty only because the
+	// ⚠ **THAT HOLDS BECAUSE THE PARSER SKIPS COMMENTS, NOT BECAUSE THE LEXER DROPS THEM.** `//` and
+	// `/* … */` are dropped; a `///` doc comment reaches the parser, and this body reads it as empty only because the
 	// `skipNewlines` above steps over it (`tokenKindIsSkippedLayout`). Sever that and a block holding one
 	// doc-comment line silently stops being empty, so E3082 stops firing on it.
 	function parseBlockBody(func IrFunction, block IrBlock, label ByteArray) returns IrBlock throws SourceParseError
@@ -43672,7 +43941,7 @@ export type Parser
 	function typeSpellingEndsAt(q ElementIndex, depth TypeSpellingDepth, first ElementIndex) returns bool
 		let kind = self.kindAt(q)
 
-		if kind == TokenKind.eof or tokenKindIsSkippedLayout(kind) 'endOfLine'
+		if tokenKindEndsALine(kind) 'endOfLine'
 			return true
 		end 'endOfLine'
 
@@ -45081,8 +45350,8 @@ export type Parser
 	// What follows goes into a fresh `dead` block, as `finalizeIfElse` does for the continuation of an
 	// `if` whose branches all terminate: the tail is parsed for syntax and emits into a block nothing
 	// reaches, and a `return` written under such a statement is not a second terminator on this block,
-	// which `emitTerminator` would panic on. E3071 does not refuse that tail: its roster is keywords
-	// at a statement's first token (`statementEndsItsBlockAt`), and neither a call nor a `try` is one.
+	// which `emitTerminator` would panic on. E3071 does not refuse that tail: its roster is statement
+	// forms (`statementFormRole`), and neither a call nor a `try` is a terminator.
 	function endBlockAfterUnreachableTail(func IrFunction, anchor Token, tempFloor ElementIndex)
 		// The block this statement's work landed in cannot ordinarily be terminated — its ops were just
 		// appended — but a `dead` one can arrive here from an unreachable tail, and `Terminator.dead` is not an
@@ -46805,7 +47074,8 @@ export type Parser
 		// The single-statement CONTROL-FLOW forms terminate the error block; their own scope drops release
 		// the caught box the caller enrolled.
 		if self.at(TokenKind.return) or self.at(TokenKind.break) or self.at(TokenKind.continue) 'controlFlow'
-			_ = try self.parseStatement(func, block: self.bodyState.currentBlock)
+			let head = try self.readStatementOpening(PrecedingTerminator.none, entersItsChain: true)
+			_ = try self.parseStatement(func, block: self.bodyState.currentBlock, head: head)
 			return TryHandler.terminated
 		end 'controlFlow'
 
@@ -47274,7 +47544,7 @@ export type Parser
 		// Consume the block-open label (`parseBlockBody` consumes only the closing `end <label>`, exactly
 		// as `parseIfStatement`/`parseWhileStatement` consume their own opening labels).
 		try self.consume(TokenKind.charLiteral)
-		try self.requireNewlineAfterBlockLabel()
+		try self.requireLineEndAfter(LineEndingConstruct.blockLabel)
 
 		// The owned-binding height BEFORE the caught box is enrolled — a handler-local drop FLOOR, the try
 		// twin of `openBlock`'s `ownedCount` (drained by `dropArmScopedOwned` below). A boxed error is an
@@ -47371,7 +47641,7 @@ export type Parser
 		let tryTok = try self.consume(TokenKind.try)
 		let labelTok = try self.consume(TokenKind.charLiteral)
 
-		try self.requireNewlineAfterBlockLabel()
+		try self.requireLineEndAfter(LineEndingConstruct.blockLabel)
 
 		// A match arm's body must be a single statement (E2049).
 		//
@@ -52644,7 +52914,7 @@ export type Parser
 		try self.requireNoRedundantContainsGet(ifIndex)
 
 		let thenLabel = try self.consume(TokenKind.charLiteral)
-		try self.requireNewlineAfterBlockLabel()
+		try self.requireLineEndAfter(LineEndingConstruct.blockLabel)
 
 		// Values entering the branches (the condition only reads, so `entry`'s values
 		// are unchanged by it). Positional over `assignedBindings`.
@@ -53027,7 +53297,7 @@ export type Parser
 		end 'elseIf'
 
 		let elseLabelTok = try self.consume(TokenKind.charLiteral)
-		try self.requireNewlineAfterBlockLabel()
+		try self.requireLineEndAfter(LineEndingConstruct.blockLabel)
 		return try self.parseBlockBody(func, block: elseBlock, label: elseLabelTok.value)
 	end 'parseElseBranchBody'
 
@@ -53660,7 +53930,7 @@ export type Parser
 		self.noteLoopConditionExit()
 
 		let loopLabelTok = try self.consume(TokenKind.charLiteral)
-		try self.requireNewlineAfterBlockLabel()
+		try self.requireLineEndAfter(LineEndingConstruct.blockLabel)
 
 		var body = self.artifact.module.addBlock(func, label: loopLabelTok.value, heat: BlockHeat.normal)
 		var exit = self.artifact.module.addBlock(func, label: b"whileexit", heat: BlockHeat.normal)
@@ -54227,7 +54497,7 @@ export type Parser
 		let cond = try self.emitCompare(indexPhi, rhs: bound, op: testOp, opTok: self.tokenAt(src.testAnchorIndex))
 
 		let loopLabelTok = try self.consume(TokenKind.charLiteral)
-		try self.requireNewlineAfterBlockLabel()
+		try self.requireLineEndAfter(LineEndingConstruct.blockLabel)
 
 		var body = self.artifact.module.addBlock(func, label: loopLabelTok.value, heat: BlockHeat.normal)
 		var step = self.artifact.module.addBlock(func, label: b"forstep", heat: BlockHeat.normal)
@@ -55881,13 +56151,16 @@ export type Parser
 	// Does the token at `index` CLOSE a block — `opensBlockAt`'s counterpart, and its own predicate for the
 	// same reason `assignsAt` is one. Every token scan in this file that counts block depth has to make the
 	// keyword-as-a-NAME exclusion (`end` is a legal enum case name, so `end then …` is an arm and `Kw.end`
-	// is a member read — neither is a closer), and eight of them had spelled it out independently. Spelled
-	// once, a scan cannot be taught the opener rule and miss the closer rule — which would leave a depth
-	// counter that never comes back down.
+	// is a member read — neither is a closer). Spelled once, a scan cannot be taught the opener rule and
+	// miss the closer rule — which would leave a depth counter that never comes back down.
 	//
-	// ⚠ **A SCAN THAT TESTS `TokenKind.end` ITSELF IS THIS BUG WAITING**, which is why the two that did
-	// (the sweep's `blockDepthAfter` and the match arm loop's end-of-arms test) ask here instead.
+	// ⚠ **A SCAN THAT TESTS `TokenKind.end` ITSELF IS THIS BUG WAITING**, which is why the sweep's
+	// `blockDepthAfter` and the match arm loop's end-of-arms test ask here.
 	function closesBlockAt(index ElementIndex) returns bool
+		if labelledBlockCloserAt(self.tokens, index: index) 'labelledCloser'
+			return true
+		end 'labelledCloser'
+
 		return self.kindAt(index) == TokenKind.end and not self.keywordIsAName(index)
 	end 'closesBlockAt'
 
@@ -56166,7 +56439,7 @@ export type Parser
 			return false
 		end 'atFileStart'
 
-		if self.kindAt(index - 1) == TokenKind.dot 'memberName'
+		if tokenFollowsAMemberDot(self.tokens, index: index) 'memberName'
 			return true
 		end 'memberName'
 
@@ -57456,7 +57729,7 @@ export type Parser
 			// ⚠ **THE MATCH WINS UNCONDITIONALLY, AND THAT IS CORRECT ONLY BECAUSE OF E2049.** "Innermost
 			// break target" is what the rule says, and preferring the top of `matches` over the top of
 			// `loops` computes it only because a match arm body may not OPEN a loop
-			// (`parseArmBody` → `isBlockOpeningStatement` → E2049) and a closure resets both stacks — so no
+			// (`parseArmBody` → `statementFormRole` → E2049) and a closure resets both stacks — so no
 			// loop can ever be nested INSIDE an open match, and a match on the stack always IS the innermost
 			// target. Both references depend on this and neither records it. A push-depth counter would
 			// remove the dependency and was deliberately not built: it is speculative generality for a
@@ -57838,7 +58111,7 @@ export type Parser
 
 		let labelTok = try self.consume(TokenKind.charLiteral)
 		let matchLabel = labelTok.value
-		try self.requireNewlineAfterBlockLabel()
+		try self.requireLineEndAfter(LineEndingConstruct.blockLabel)
 
 		let entryVals = self.snapshotBindings(carried)
 
@@ -58033,6 +58306,7 @@ export type Parser
 		// ⭐ **`--coverage`: THIS CONSTRUCT BECOMES THE BRANCH THE ARMS BELOW GROUP UNDER.** Entered after the
 		// scrutinee so a `match` nested inside one groups its own arms; popped once the loop is done.
 		self.enterMatch(matchTok)
+		var armSharesItsLine = false
 
 		while true 'arms'
 			self.skipNewlines()
@@ -58040,18 +58314,26 @@ export type Parser
 			// The closing `end` — unless the keyword is a NAME here (an `end then …` arm on an enum whose
 			// case is spelled `end`, or a member read `Kw.end`). Asked of `closesBlockAt` rather than
 			// spelled out, so this loop and the block-extent scans cannot drift on what an `end` is.
-			if self.closesBlockAt(self.pos) 'endOfArms'
+			let closes = self.closesBlockAt(self.pos)
+
+			if armSharesItsLine 'afterAnArmOnItsLine'
+				if not closes 'anArmSharesIt'
+					try self.refuseStrayOtherwise()
+					try self.refuseArmAfterDefault(sawDefault)
+				end 'anArmSharesIt'
+
+				throw lineSharedRefusal(LineEndingConstruct.matchArm, got: self.current())
+			end 'afterAnArmOnItsLine'
+
+			if closes 'endOfArms'
 				break
 			end 'endOfArms'
 
-			if self.at(TokenKind.default) 'defaultArm'
-				// A second `default`, or any `default` that is not last, is E2029 — reported when a
-				// pattern arm FOLLOWS a default (below); a default following a default is the same rule.
-				if sawDefault 'defaultAfterDefault'
-					let dupTok = self.current()
-					throw SourceParseError.matchDefaultNotLast(dupTok.line, column: dupTok.column)
-				end 'defaultAfterDefault'
+			// A second `default`, or any `default` that is not last, is E2029 — reported when a
+			// pattern arm FOLLOWS a default; a default following a default is the same rule.
+			try self.refuseArmAfterDefault(sawDefault)
 
+			if self.at(TokenKind.default) 'defaultArm'
 				let defTok = self.current()
 				try self.consume(TokenKind.default)
 
@@ -58188,11 +58470,6 @@ export type Parser
 				sawDefault = true
 				prevFallthrough = false
 			end 'defaultArm' else 'patternArm'
-				if sawDefault 'armAfterDefault'
-					let strayTok = self.current()
-					throw SourceParseError.matchDefaultNotLast(strayTok.line, column: strayTok.column)
-				end 'armAfterDefault'
-
 				let patternTok = self.current()
 
 				// `var` because the body block is forwarded to functions that fill it (payload phis, the arm
@@ -58395,6 +58672,8 @@ export type Parser
 					currentTestBlock = try self.artifact.module.getBlockByIdIn(func, id: nextTestId) otherwise panic("parseMatchCommon: the chain's next test block {nextTestId} is not in its own function")
 				end 'chainAdvance'
 			end 'patternArm'
+
+			armSharesItsLine = not tokenKindEndsALine(self.kindAt(self.pos))
 		end 'arms'
 
 		self.noteMatchArmsExclusive(func, starts: armStarts, ends: armEnds)
@@ -58699,22 +58978,23 @@ export type Parser
 
 		// Each arm body is a single statement — a block-opening one (`if`/`while`/`for`/`match`)
 		// has no place for its nested scope on a single-line arm.
-		let firstTok = self.current()
+		let head = try self.readStatementOpening(PrecedingTerminator.none, entersItsChain: true)
+		let firstTok = head.opening
 
-		if self.isBlockOpeningStatement(firstTok.kind) 'blockOpener'
+		if statementFormRole(head.form) == StatementRole.blockOpener 'blockOpener'
 			throw SourceParseError.matchBlockStatement(firstTok.kind.rawValue, line: firstTok.line, column: firstTok.column)
 		end 'blockOpener'
 
 		// Whether the body is a `return` is read BEFORE it is parsed — `and fallthrough` after a
 		// `return` cannot combine (the `return` has already left the arm).
-		let isReturn = self.at(TokenKind.return)
+		let isReturn = head.form == StatementForm.ret
 
 		// ⭐ A match arm body is a single statement, so a `try` used here may take only a single-statement
 		// form — the block forms are E2049. `parseTry` reads this flag; saved/restored so a nested
 		// construct unwinds it. On a throw the parse aborts, so restoring on the error path is moot.
 		let savedInMatchArm = self.bodyState.inMatchArmBody
 		self.bodyState.inMatchArmBody = true
-		var exitBlock = try self.parseStatement(func, block: self.bodyState.currentBlock)
+		var exitBlock = try self.parseStatement(func, block: self.bodyState.currentBlock, head: head)
 		self.bodyState.inMatchArmBody = savedInMatchArm
 
 		var fellThrough = false
@@ -58750,12 +59030,6 @@ export type Parser
 		let andTok = self.current()
 		throw SourceParseError.strayToken(tokenDisplayText(andTok), line: andTok.line, column: andTok.column)
 	end 'rejectStrayAndOnExpressionArm'
-
-	// The block-opening statement keywords — an arm body may not start with one (E2049). `try`'s
-	// block form is also one, but `parseTry` raises that one itself.
-	function isBlockOpeningStatement(kind TokenKind) returns bool
-		return kind == TokenKind.if or kind == TokenKind.while or kind == TokenKind.for or kind == TokenKind.match
-	end 'isBlockOpeningStatement'
 
 	// Set up the phis of a FALLTHROUGH-TARGET body block — one reached both by its match edge(s)
 	// (carrying the pre-match `entryVals`) and by the previous arm's fallthrough edge (carrying
@@ -64488,21 +64762,21 @@ export type Parser
 		return self.job.path
 	end 'typeNameReaderAt'
 
-	function enterQualifiedChainOfStatement() returns ChainResolution throws SourceParseError
-		if not (self.at(TokenKind.identifier) and self.peekKind() == TokenKind.dot) 'notADottedStatement'
-			return UnqualifiedChain
-		end 'notADottedStatement'
-
-		return try self.enterQualifiedChainAtCursor(MethodQualifierDots)
-	end 'enterQualifiedChainOfStatement'
-
 	function enterQualifiedChainAtCursor(minimumDots ElementIndex) returns ChainResolution throws SourceParseError
+		let chain = self.resolveQualifiedChainAtCursor(minimumDots)
+		try self.enterResolvedChain(chain)
+		return chain
+	end 'enterQualifiedChainAtCursor'
+
+	function resolveQualifiedChainAtCursor(minimumDots ElementIndex) returns ChainResolution
 		if self.dottedChainLengthAt(self.pos) < minimumDots 'tooShortToResolveHere'
 			return UnqualifiedChain
 		end 'tooShortToResolveHere'
 
-		let chain = self.resolveChainAt(self.pos, use: ChainUse.memberReference)
+		return self.resolveChainAt(self.pos, use: ChainUse.memberReference)
+	end 'resolveQualifiedChainAtCursor'
 
+	function enterResolvedChain(chain ChainResolution) throws SourceParseError
 		match chain 'chain'
 			declaredType(declaration, consumed) then try self.settleTypeNameVerdict(self.enterChainType(declaration, consumed: consumed, anchor: self.current()))
 			ambiguous(written, candidates) then throw ambiguousTypeNameRefusal(written, candidates: candidates, ownDeclarationUnqualifiable: false, anchor: self.current())
@@ -64511,9 +64785,7 @@ export type Parser
 			value or
 			declaredFunction then break
 		end 'chain'
-
-		return chain
-	end 'enterQualifiedChainAtCursor'
+	end 'enterResolvedChain'
 
 	function settleTypeNameVerdict(verdict TypeNameVerdict) throws SourceParseError
 		if self.job.foldsAConstantInitializer 'aDiscardedArtifact'
@@ -103849,27 +104121,23 @@ export type Parser
 	// **WHERE A STATEMENT STOPS, ASKED AT AN ABSOLUTE INDEX** — the `newline` that separates it from the
 	// next one, the `end` that closes the enclosing block when it is that block's last statement, or EOF.
 	//
-	// ⛔ **A `///` DOC COMMENT IS NOT A FOURTH TERMINATOR AND MUST NOT BE ADDED AS ONE.** `//` and `/* … */`
-	// are dropped by the lexer and cannot appear here at all; a doc comment IS a token, and a statement
-	// with one trailing it has not ended — its `newline` still follows, because `scanComment` stops before
-	// the line break. This asks what TERMINATES a statement, a question about a token's MEANING;
-	// `tokenKindIsSkippedLayout` asks what a cursor may step over, and routing one through the other would
-	// let `return /// x` read as a bare `return`.
+	// A `docComment` is admitted only because the lexer never emits one after code on its line
+	// (`Lexer.scanComment`), so it can stand here only where a line has already ended.
 	//
 	// ONE predicate because three readers ask it and a divergence between them is a WRONG DIAGNOSTIC
 	// rather than a crash: `atEnumFunctionRawValue` decides that a name IS the whole raw value,
 	// `parseReturnStatement` decides that a `return` is BARE, and `rejectDegenerateAssignment` decides
-	// that a chain IS the whole right-hand side. Written out three times — which it was — a fourth
+	// that a chain IS the whole right-hand side. Written out three times, a fourth
 	// terminator taught to one reader leaves the other two reading a complete statement as an unfinished
 	// one, each with its own unrelated-looking error.
 	//
 	// ⛔ **`requireDeclarationHeaderLineEnd` IS NOT A FOURTH READER AND MUST NOT BE "FINISHED" INTO ONE.** It
-	// asks `newline or eof` deliberately, WITHOUT `end`: it guards a DECLARATION HEADER, and a header line can
+	// asks `tokenKindEndsALine` deliberately, WITHOUT `end`: it guards a DECLARATION HEADER, and a header line can
 	// never legitimately be closed by the token that closes the body it introduces. Routed through here it
 	// would accept `function f() end` — a signature with no newline after it — as a complete header.
 	function statementEndsAt(index ElementIndex) returns bool
 		let kind = self.kindAt(index)
-		return kind == TokenKind.newline or kind == TokenKind.end or kind == TokenKind.eof
+		return tokenKindEndsALine(kind) or kind == TokenKind.end
 	end 'statementEndsAt'
 
 	// The IDENTIFIER text at an ABSOLUTE index, or the empty source text when that token is anything else
@@ -104505,10 +104773,11 @@ export type Parser
 	// control — fires: its RHS chain IS `x` and matches the LHS token for token. What makes it a different
 	// program is only the `+ 1` that follows, so "the chain is the WHOLE right-hand side" is the rule.
 	//
-	// Asked once, from `parseStatement`, before the dispatch — rather than from each of the three
-	// assignment arms — because the shape it refuses spans all of them (`assignsAt`, `fieldAssignsAt` and
-	// `selfFieldAssignsAt` each own one spelling of it) and a fourth write form would otherwise have to
-	// remember to ask. A statement that opens with something the chain walk refuses costs one predicate.
+	// Asked once, from `readStatementOpening`, before the dispatch — rather than from each of the
+	// three assignment arms — because the shape it refuses spans all of them (`assignsAt`,
+	// `fieldAssignsAt` and `selfFieldAssignsAt` each own one spelling of it) and a fourth write form
+	// would otherwise have to remember to ask. A statement that opens with something the chain walk
+	// refuses costs one predicate.
 	//
 	// ⛔ TUPLE ASSIGNMENT does NOT reach this rule. `fieldChainEndAfter` walks a chain from a NAME, so
 	// it stops dead at the `(` and this rule never looks at the statement: `(x, y) = (x, y)` compiles
@@ -105903,19 +106172,16 @@ export type Parser
 
 	// Consume a token of the expected kind, or throw a positioned mismatch error.
 	// A TokenKind's `.rawValue` is its human-readable display text ("(", "return").
-	// ⭐⭐ **THE LAYOUT RULE EVERY LABELLED BLOCK OPENER ASKS, AND NONE OF THEM RESTATES.** A block's
-	// label is the last thing on its line: `if`, `else`, `while`, `for`, `match` and both `try` forms
-	// open one, and a rule spelled at seven sites is a rule that drifts at six of them. The compiler enforced it
-	// NOWHERE until this call existed — `while i < 1 'w' i = i + 1 end 'w'` compiled and ran, measured on
-	// the same binary that refused nothing about it.
-	function requireNewlineAfterBlockLabel() throws SourceParseError
-		if self.at(TokenKind.newline) 'endsItsLine'
+	// ⭐⭐ **THE ONE-CONSTRUCT-PER-LINE RULE, ASKED AFTER EVERY BLOCK LABEL, STATEMENT AND MATCH ARM AND
+	// RESTATED BY NONE OF THEM.** `while i < 1 'w' i = i + 1 end 'w'` is refused at its label, and a rule
+	// spelled at every opener is a rule that drifts at all but one of them.
+	function requireLineEndAfter(construct LineEndingConstruct) throws SourceParseError
+		if tokenKindEndsALine(self.kindAt(self.pos)) 'endsItsLine'
 			return
 		end 'endsItsLine'
 
-		let got = self.current()
-		throw SourceParseError.expectedNewlineAfterBlockLabel(tokenDisplayText(got), line: got.line, column: got.column)
-	end 'requireNewlineAfterBlockLabel'
+		throw lineSharedRefusal(construct, got: self.current())
+	end 'requireLineEndAfter'
 
 	function consume(kind TokenKind) returns Token throws SourceParseError
 		let tok = self.current()

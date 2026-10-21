@@ -117,20 +117,18 @@ end 'main'
 error E3082: specs/doc-comments/doc-comments.not-a-block-body.maxon:5:2: empty block: 'ok'
 ```
 
-<!-- test: doc-comments.never-a-name -->
-⛔ **The one position where a doc comment is NOT layout, and the only one that can produce a wrong
-answer rather than a refusal.** A doc comment carries its prose as its value, so it is not an
-identifier, not a literal, and not empty — which is every test `Parser.tokenCanBeAName` applies. With
-no arm for it there, `consumeNameToken` accepts it and this program declares a function whose name is
-the body of a comment.
+<!-- test: doc-comments.trailing-after-function-is-a-plain-comment -->
+A `///` after code on its line is a plain comment and ends the line, so its prose never stands where a
+name belongs: the function below has no name on its line, and the name expected after `function` is
+refused at the line's end.
 ```maxon
-function /// a doc comment where a name belongs
+function /// a comment where a name belongs
 main() returns ExitCode
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E2010: specs/doc-comments/doc-comments.never-a-name.maxon:2:10: Expected identifier but got 'a doc comment where a name belongs'
+error E2010: specs/doc-comments/doc-comments.trailing-after-function-is-a-plain-comment.maxon:2:44: Expected identifier but got 'newline'
 ```
 
 <!-- test: doc-comments.between-declarations -->
@@ -174,4 +172,60 @@ end 'main'
 ```
 ```exitcode
 7
+```
+
+<!-- test: doc-comments.trailing-after-a-statement-ends-the-line -->
+A `///` after code on the same line ends that line as a plain comment, so the statement before it is complete.
+```maxon
+function main() returns ExitCode
+	let a = 3 /// a note on the statement
+	return a /// a note on the return
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: doc-comments.trailing-after-a-match-arm-ends-the-line -->
+The same for a match arm, in both forms.
+```maxon
+typealias Code = int(0 to 9)
+
+function code(n Code) returns Code
+	return match n 'm'
+		1 gives 4 /// a note on the arm
+		default gives 0
+	end 'm'
+end 'code'
+
+function main() returns ExitCode
+	match code(1) 'check'
+		4 then return 4 /// a note on the statement arm
+		default then return 1
+	end 'check'
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: doc-comments.trailing-after-a-block-label-ends-the-line -->
+A block label and a declaration header end their lines the same way.
+```maxon
+typealias Code = int(0 to 9)
+
+function pick(n Code) returns Code /// a note on the header
+	if n > 3 'big' /// a note on the label
+		return 2
+	end 'big'
+
+	return 1
+end 'pick'
+
+function main() returns ExitCode
+	return pick(5)
+end 'main'
+```
+```exitcode
+2
 ```

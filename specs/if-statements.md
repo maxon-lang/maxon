@@ -279,6 +279,124 @@ end 'main'
 error E2001: specs/if-statements/if-statements.single-line-block-rejected.maxon:3:14: Expected newline after block label, got 'return'
 ```
 
+<!-- test: if-statements.statement-and-end-on-one-line-rejected -->
+A statement ends its line, so the `end` closing its block cannot follow it there.
+```maxon
+function main() returns ExitCode
+	if true 'x'
+		return 1	end 'x'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2001: specs/if-statements/if-statements.statement-and-end-on-one-line-rejected.maxon:4:12: Expected newline after statement, got 'end'
+```
+
+<!-- test: if-statements.statement-after-return-on-one-line-is-unreachable -->
+A second statement after a `return` on the same line is unreachable code, which is the more specific error.
+```maxon
+typealias Small = int(0 to 9)
+
+function main() returns ExitCode
+	var x = 1 as Small
+	return x	x = 2
+end 'main'
+```
+```maxoncstderr
+error E3071: specs/if-statements/if-statements.statement-after-return-on-one-line-is-unreachable.maxon:6:11: unreachable code after 'return'
+```
+
+<!-- test: if-statements.self-assignment-after-return-on-one-line-is-unreachable -->
+A statement's position is judged before its content: a self-assignment after a `return` on its line is unreachable code first.
+```maxon
+typealias Small = int(0 to 9)
+
+function main() returns ExitCode
+	var x = 1 as Small
+	return x	x = x
+end 'main'
+```
+```maxoncstderr
+error E3071: specs/if-statements/if-statements.self-assignment-after-return-on-one-line-is-unreachable.maxon:6:11: unreachable code after 'return'
+```
+
+<!-- test: if-statements.block-if-sharing-a-line-with-a-statement -->
+A block `if` written after a statement on the same line is refused at the `if`, before its block is read.
+```maxon
+typealias Small = int(0 to 9)
+
+function main() returns ExitCode
+	var x = 1 as Small
+	print("one\n")	if x == 1 'a'
+		x = 3
+	end 'a'
+	return x
+end 'main'
+```
+```maxoncstderr
+error E2001: specs/if-statements/if-statements.block-if-sharing-a-line-with-a-statement.maxon:6:17: Expected newline after statement, got 'if'
+```
+
+<!-- test: if-statements.shared-line-is-refused-before-the-block-it-opens -->
+The shared line is the error even when the block it opens holds a later one.
+```maxon
+typealias Small = int(0 to 9)
+
+function main() returns ExitCode
+	var x = 1 as Small
+	print("one\n")	while x < 3 'w'
+		x = nope
+	end 'w'
+	return x
+end 'main'
+```
+```maxoncstderr
+error E2001: specs/if-statements/if-statements.shared-line-is-refused-before-the-block-it-opens.maxon:6:17: Expected newline after statement, got 'while'
+```
+
+<!-- test: if-statements.shared-line-names-nothing-past-its-first-token -->
+The shared line is refused at its first token, before a qualified name after it is resolved.
+```maxon
+function main() returns ExitCode
+	print("one\n")	nowhere.inner.shout()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2001: specs/if-statements/if-statements.shared-line-names-nothing-past-its-first-token.maxon:3:17: Expected newline after statement, got 'nowhere'
+```
+
+<!-- test: if-statements.self-assignment-sharing-a-line-is-the-self-assignment -->
+A self-assignment written after a statement on its line is refused as the self-assignment, the more specific error.
+```maxon
+typealias Small = int(0 to 9)
+
+function main() returns ExitCode
+	var x = 1 as Small
+	print("one\n")	x = x
+	return x
+end 'main'
+```
+```maxoncstderr
+error E3067: specs/if-statements/if-statements.self-assignment-sharing-a-line-is-the-self-assignment.maxon:6:17: self-assignment has no effect: 'x = x'
+```
+
+<!-- test: if-statements.two-statements-on-one-line-rejected -->
+One statement per line: a second statement after the first on the same line is refused.
+```maxon
+typealias Small = int(0 to 9)
+
+function main() returns ExitCode
+	var x = 1 as Small
+	var y = 2 as Small
+	x = 3	y = 4
+	return x + y
+end 'main'
+```
+```maxoncstderr
+error E2001: specs/if-statements/if-statements.two-statements-on-one-line-rejected.maxon:7:8: Expected newline after statement, got 'y'
+```
+
 <!-- test: error.mismatched-if-end-label -->
 A label written after `end` must repeat the block's opening label.
 ```maxon

@@ -135,6 +135,8 @@ block_comment = '/*' { <any character> } '*/'
 doc_comment   = '///' { <any character except newline> } NEWLINE
 ```
 
+A `doc_comment` is the first thing on its line; a `///` after code on the same line is a `line_comment`.
+
 ### 1.8 Conditional Compilation Directives
 
 ```

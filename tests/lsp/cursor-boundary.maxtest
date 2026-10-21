@@ -1,30 +1,20 @@
 // cursor-boundary.maxtest — hover and `textDocument/definition` resolve ONE cursor position, and this
 // is what says so.
 //
-// ⭐⭐ **A CARET AT A TOKEN BOUNDARY TOUCHES TWO TOKENS, AND THE TWO METHODS ONCE DISAGREED ABOUT WHICH
-// ONE IT NAMES.** MEASURED against the server, caret one past `name`: in `let z = name///note` definition
-// jumped to `name` while hover answered NOTHING, and in `let z = name#if os(Windows)` hover described the
-// `#if`. An editor that jumps somewhere it will not describe is the defect.
+// A caret at a token boundary touches two tokens, and both methods must name the same one: with the
+// caret one past `name` in `let z = name#if os(Windows)`, that is `name`. An editor that jumps somewhere
+// it will not describe is the defect.
 //
-// ⭐ The cure was one resolver, not two agreeing ones — `LspSymbols.lspTokenAtCursor`. The rule it
-// settles: an identifier ENDING at the offset beats a token BEGINNING there. Half-open containment counts
-// `offset == start` as "inside", which is the caret at a token's LEFT edge rather than within it, so
-// containment-first is what made hover describe the directive the author had just typed past. Strict
-// containment and ending-at-an-identifier are mutually exclusive, so this boundary is the ONLY position
-// the two rules ever decide differently — which is why nothing else in the suite exposed it.
+// Both methods ask one resolver, `LspSymbols.lspTokenAtCursor`, and its rule is that an identifier ENDING
+// at the offset beats a token BEGINNING there. Half-open containment counts `offset == start` as
+// "inside", which is the caret at a token's LEFT edge rather than within it, so containment-first would
+// describe the directive the author had just typed past. Strict containment and ending-at-an-identifier
+// are mutually exclusive, so this boundary is the ONLY position the two rules decide differently.
 //
 // See `LspClient.maxon` for why every session is released before anything is asserted.
 
-// `name` is followed IMMEDIATELY by a `///` comment, so the offset one past `name` is also the comment
-// token's first byte. Only a fixture like this puts two SPANNED tokens on one offset — a punctuator
-// carries no span, which is why the ordinary `arr.` case never exposed the disagreement.
-function boundaryDocCommentFixture() returns String
-	return String.from(b"let name = 1
-let z = name///note")
-end 'boundaryDocCommentFixture'
-
-// The same boundary against a KEYWORD rather than prose: the case that made hover describe a
-// conditional-compilation directive where the author was pointing at a name.
+// A keyword begins where the name ends, so hover could describe the conditional-compilation directive
+// where the author was pointing at the name.
 function boundaryDirectiveFixture() returns String
 	return String.from(b"let name = 1
 let z = name#if os(Windows)
@@ -34,7 +24,7 @@ end 'boundaryDirectiveFixture'
 // One past the `e` of `name` on the second line — `let z = name` is twelve characters.
 //          111111111122
 // 0123456789012345678901
-// let z = name///note
+// let z = name#if os(Windows)
 let BoundaryCursorLine = 1
 let BoundaryCursorCharacter = 12
 
@@ -42,7 +32,6 @@ let BoundaryCursorCharacter = 12
 let BoundaryDeclarationLine = 0
 
 test 'hover and definition name the same token at a boundary'
-	boundaryBothNameTheDeclaration(boundaryDocCommentFixture(), what: "a `///` comment")
 	boundaryBothNameTheDeclaration(boundaryDirectiveFixture(), what: "a `#if` directive")
 end 'hover and definition name the same token at a boundary'
 

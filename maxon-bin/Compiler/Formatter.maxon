@@ -376,7 +376,7 @@ type CommentMapBuilder
 
 		let next = try self.tokens.get(span.followingToken) otherwise return false
 
-		return next.line == span.endLine and next.kind != TokenKind.newline and next.kind != TokenKind.docComment and next.kind != TokenKind.eof
+		return next.line == span.endLine and not tokenKindEndsALine(next.kind)
 	end 'sitsBetweenCode'
 
 	function anchorToToken(span CommentSpan, anchored InPlaceCommentMap)
@@ -715,7 +715,7 @@ type FormatState
 	// been emitted" is a different fact from "line zero".
 	var hasEmitted as bool
 	var lastEmittedSourceLine as LineNumber
-	var lineStartedWithEnd as bool
+	var labelFollowsACloser as bool
 	var lineHasLabeledOpener as bool
 	var lineHasMatch as bool
 
@@ -731,7 +731,7 @@ type FormatState
 	var blankDecisionPending as bool
 
 	static function create(tokens TokenArray, options FormatOptions, lines SourceLines, comments SourceComments, keywords KeywordTable) returns FormatState
-		return Self{out: StringBuilder.create(), options: options, tokens: tokens, lines: lines, comments: comments.byLine, inPlace: comments.inPlace, consumedLeading: ConsumedLineSet.create(), consumedTrailing: ConsumedLineSet.create(), blocks: FormatBlockKindArray.create(), groupFrames: GroupFrameArray.create(), indentLevel: 0, atLineStart: true, newlineRun: 0, pendingIndentIncrease: false, pendingScopeGrouping: ScopeGrouping.memberList, prevKind: TokenKind.eof, prevIsModuleKeyword: false, prevWasDot: false, prevWasUnary: false, prevProducedValue: false, prevBeganLine: false, prevNamesAFunction: false, prevDeclaresAFunction: false, brackets: BracketTracker.create(), inArmPattern: false, armContinuation: false, hasEmitted: false, lastEmittedSourceLine: 0, lineStartedWithEnd: false, lineHasLabeledOpener: false, lineHasMatch: false, prevGroupKey: GroupKey.of(GroupKeyKind.none), pendingGroupKey: GroupKey.of(GroupKeyKind.none), currentLineOpenedBlock: false, uniqueGroupCounter: 0, blankDecisionPending: false, keywords: keywords}
+		return Self{out: StringBuilder.create(), options: options, tokens: tokens, lines: lines, comments: comments.byLine, inPlace: comments.inPlace, consumedLeading: ConsumedLineSet.create(), consumedTrailing: ConsumedLineSet.create(), blocks: FormatBlockKindArray.create(), groupFrames: GroupFrameArray.create(), indentLevel: 0, atLineStart: true, newlineRun: 0, pendingIndentIncrease: false, pendingScopeGrouping: ScopeGrouping.memberList, prevKind: TokenKind.eof, prevIsModuleKeyword: false, prevWasDot: false, prevWasUnary: false, prevProducedValue: false, prevBeganLine: false, prevNamesAFunction: false, prevDeclaresAFunction: false, brackets: BracketTracker.create(), inArmPattern: false, armContinuation: false, hasEmitted: false, lastEmittedSourceLine: 0, labelFollowsACloser: false, lineHasLabeledOpener: false, lineHasMatch: false, prevGroupKey: GroupKey.of(GroupKeyKind.none), pendingGroupKey: GroupKey.of(GroupKeyKind.none), currentLineOpenedBlock: false, uniqueGroupCounter: 0, blankDecisionPending: false, keywords: keywords}
 	end 'create'
 
 	// Walk every token, then hand over the built text. A formatted file with content ends with
@@ -841,40 +841,48 @@ type FormatState
 		var lineIsBlockCloser = false
 
 		if (tok.kind == TokenKind.rightBracket or tok.kind == TokenKind.rightBrace) and self.atLineStart and self.indentLevel > 0 'closesMultiLineLiteral'
-			self.indentLevel = self.indentLevel - 1
-			self.popGroupFrame()
+			self.dedentOneLevel()
 			lineIsBlockCloser = true
 		end 'closesMultiLineLiteral'
 
 		// `#else` closes the previous branch AND opens the next, so it is not a group of its own either.
 		if (tok.kind == TokenKind.hashElse or tok.kind == TokenKind.hashEndif) and self.indentLevel > 0 'closesDirectiveBranch'
-			self.indentLevel = self.indentLevel - 1
-			self.popGroupFrame()
+			self.dedentOneLevel()
 			lineIsBlockCloser = true
 		end 'closesDirectiveBranch'
 
-		// `end 'label'` closes a block. Only at line start and only when the label follows immediately —
-		// a mid-line `end` (`TokenKind.end`) is a value reference, and a bare `end` in an enum body is a
-		// case name.
-		let endLabelFollows = tok.kind == TokenKind.end and self.kindAt(index + 1) == TokenKind.charLiteral
+		// `end 'label'` closes a block wherever it stands on its line. The parser refuses a mid-line one, but
+		// `fmt` keeps such a line as written, and the block it closes must still leave the indentation of
+		// the lines after it balanced.
+		let closesABlock = labelledBlockCloserAt(self.tokens, index: index)
 
-		if endLabelFollows and self.atLineStart 'closesBlock'
-			if self.indentLevel > 0 'dedent'
-				self.indentLevel = self.indentLevel - 1
-				self.popGroupFrame()
-			end 'dedent'
-
-			self.popBlock()
-			lineIsBlockCloser = true
-		end 'closesBlock'
-
-		let wasAtLineStart = self.atLineStart
-
-		if wasAtLineStart 'lineBegins'
-			self.lineStartedWithEnd = endLabelFollows
+		if self.atLineStart 'lineBegins'
+			self.labelFollowsACloser = false
 			self.lineHasLabeledOpener = false
 			self.lineHasMatch = false
 		end 'lineBegins'
+
+		if closesABlock and self.atLineStart 'closesBlock'
+			if self.indentLevel > 0 'dedent'
+				self.dedentOneLevel()
+			end 'dedent'
+
+			self.popBlock()
+			self.labelFollowsACloser = true
+			lineIsBlockCloser = true
+		end 'closesBlock' else if closesABlock 'closesBlockMidLine'
+			if self.pendingIndentIncrease 'bodyOpenedOnThisLine'
+				self.pendingIndentIncrease = false
+				self.currentLineOpenedBlock = false
+			end 'bodyOpenedOnThisLine' else if self.indentLevel > 0 'dedentFollowingLines'
+				self.dedentOneLevel()
+			end 'dedentFollowingLines'
+
+			self.popBlock()
+			self.labelFollowsACloser = true
+		end 'closesBlockMidLine'
+
+		let wasAtLineStart = self.atLineStart
 
 		if wasAtLineStart and labeledBlockOpener(tok.kind) 'labeledOpener'
 			self.lineHasLabeledOpener = true
@@ -1006,14 +1014,14 @@ type FormatState
 
 		// `end 'X' else` / `end 'X' otherwise` stay on one line: the chain's next keyword is pulled up
 		// beside the label rather than starting a line of its own.
-		if tok.kind == TokenKind.charLiteral and self.prevKind == TokenKind.end 'maybeChainLabel'
+		if index > 0 and labelledBlockCloserAt(self.tokens, index: index - 1) 'maybeChainLabel'
 			if self.chainsToNextBranch(index) 'chains'
 				self.prevKind = tok.kind
 				self.prevNamesAFunction = false
 				self.prevDeclaresAFunction = false
 				self.prevIsModuleKeyword = spellsModuleModifier(tok.kind, value: tok.value)
 				self.prevProducedValue = true
-				self.lineStartedWithEnd = false
+				self.labelFollowsACloser = false
 				self.lineHasLabeledOpener = true
 				return self.indexPastNewlinesFrom(index + 1)
 			end 'chains'
@@ -1046,7 +1054,7 @@ type FormatState
 
 		// A character literal opens a block only when a labeled-block opener appeared earlier on the same
 		// line — never after `break`, `continue`, `return` or an `end` that closed one.
-		if tok.kind == TokenKind.charLiteral and not self.lineStartedWithEnd and self.lineHasLabeledOpener 'maybeBlockLabel'
+		if tok.kind == TokenKind.charLiteral and not self.labelFollowsACloser and self.lineHasLabeledOpener 'maybeBlockLabel'
 			if not self.chainsToNextBranch(index) 'opensABlock'
 				self.blocks.push(FormatBlockKind.matchBody if self.lineHasMatch else FormatBlockKind.other)
 				self.beginBodyAfterThisLine(ScopeGrouping.matchArms if self.lineHasMatch else ScopeGrouping.statements)
@@ -1349,7 +1357,7 @@ type FormatState
 		while at < tokens.count() 'eachToken'
 			let kind = self.kindAt(at)
 
-			if kind == TokenKind.newline or kind == TokenKind.eof 'endOfLine'
+			if tokenKindEndsALine(kind) 'endOfLine'
 				return at
 			end 'endOfLine'
 
@@ -1478,6 +1486,11 @@ type FormatState
 
 	// --- Block stack ---
 
+	function dedentOneLevel()
+		self.indentLevel = self.indentLevel - 1
+		self.popGroupFrame()
+	end 'dedentOneLevel'
+
 	function popBlock()
 		if self.blocks.count() > 0 'hasABlock'
 			_ = try self.blocks.pop() otherwise panic("FormatState.popBlock: the count is non-zero on the line above")
@@ -1553,8 +1566,8 @@ type FormatState
 	// WOULD DESTROY SOURCE.** That predicate says what the GRAMMAR may step over, and it admits
 	// `docComment`; this one says what the FORMATTER may step over, and a doc comment is text it has to
 	// write out. `maybeChainLabel` RETURNS this index — the walk resumes there and every token in
-	// between is never emitted — so admitting `docComment` would silently delete the comment in
-	// `end 'x' /// note` followed by `else`. The two questions share a shape and not an answer.
+	// between is never emitted — so admitting `docComment` would silently delete a `///` line standing
+	// between `end 'x'` and an `else`. The two questions share a shape and not an answer.
 	function indexPastNewlinesFrom(index ElementIndex) returns ElementIndex
 		var at = index
 

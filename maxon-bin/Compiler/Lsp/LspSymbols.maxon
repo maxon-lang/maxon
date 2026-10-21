@@ -324,7 +324,7 @@ function openContinuationArm(open OpenBlockArray, tokens TokenArray, tokenLine L
 end 'openContinuationArm'
 
 // ⭐ **A LINE WHOSE LAST TOKEN IS A CHARACTER LITERAL IS A BLOCK HEADER** — that is the language's own
-// layout rule (`Parser.requireNewlineAfterBlockLabel`: a block label is followed by a newline and
+// layout rule (`Parser.requireLineEndAfter`: a block label is followed by a newline and
 // nothing else), so it holds for `if`, `while`, `for`, `match`, block-form `try`, `else`, `otherwise` and
 // `test` alike without any of them being enumerated. A line that merely ENDS in a character literal is
 // admitted here too and discarded by the label reconciliation in `closeMatching`.
@@ -395,7 +395,7 @@ module function lspTokenLines(tokens TokenArray) returns LspTokenLineArray
 	var open = false
 
 	for (position, token) in tokens.withIterator() 'eachToken'
-		if tokenKindIsSkippedLayout(token.kind) or token.kind == TokenKind.eof 'notCode'
+		if tokenKindEndsALine(token.kind) 'notCode'
 			continue
 		end 'notCode'
 

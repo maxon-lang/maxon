@@ -992,7 +992,7 @@ module type HoverDocument
 	function castTargetType(target ElementIndex) returns HoverType
 		let afterTarget = tokenAt(dottedNameEnd(target) + 1).kind
 
-		if not tokenCanBeAName(tokenAt(target)) or (afterTarget != TokenKind.newline and afterTarget != TokenKind.eof) 'notTheWholeExpression'
+		if not tokenCanBeAName(tokenAt(target)) or not tokenKindEndsALine(afterTarget) 'notTheWholeExpression'
 			return HoverType.unknown
 		end 'notTheWholeExpression'
 
@@ -1894,7 +1894,7 @@ module type HoverDocument
 	function appendDocComment(prose StringArray, above ElementIndex)
 		var first = above
 
-		while first > 0 and kindIsDocOrLayout(tokenAt(first - 1).kind) 'walkUp'
+		while first > 0 and tokenKindIsSkippedLayout(tokenAt(first - 1).kind) 'walkUp'
 			first = first - 1
 		end 'walkUp'
 
@@ -1995,14 +1995,8 @@ end 'kindDeclaresAContainer'
 // enumeration of THOSE would admit every one it had not been taught yet. Enumerating what ends an
 // expression instead leaves every unfamiliar token meaning `unknown`.
 function kindEndsAnExpression(kind TokenKind) returns bool
-	return kind == TokenKind.newline or kind == TokenKind.comma or kind == TokenKind.eof or kind == TokenKind.otherwise or tokenKindClosesABracket(kind)
+	return tokenKindEndsALine(kind) or kind == TokenKind.comma or kind == TokenKind.otherwise or tokenKindClosesABracket(kind)
 end 'kindEndsAnExpression'
-
-// What may sit between a declaration and the `///` lines written for it: blank lines, and the doc lines
-// themselves.
-function kindIsDocOrLayout(kind TokenKind) returns bool
-	return kind == TokenKind.newline or kind == TokenKind.docComment
-end 'kindIsDocOrLayout'
 
 // --- Rendering ----------------------------------------------------------------------------------
 

@@ -65,7 +65,19 @@ name; a test's label is its quoted name. Labels on `if`, `else`, `while`, `for`,
 blocks are chosen by you and name the block for `break` and `continue`. A label written after `end` must be
 the block's own label: anything else is **E2008** (`Mismatched end label: expected 'tick', got 'loop'`), and
 **E2043** for a `match`. Only a `test` must write it; on every other block the label after `end` may be
-omitted. Statements end at the end of the line; there are no semicolons and no braces around blocks.
+omitted. Statements end at the end of the line, and a block runs from its label to its `end`. A block
+label, a statement and a match arm each end their line, so the next one starts on a line of its own; a
+token after one on the same line is **E2001**:
+
+```maxon
+if ready() 'x' return 1 end 'x'   // error E2001: Expected newline after block label, got 'return'
+```
+
+A token after a statement or a match arm that is an error in its own right is reported as that error
+ahead of E2001: an `otherwise` with no `try` is **E3058**, a statement after a `return`, `throw`, `panic`,
+`break` or `continue` is **E3071** (even when it is also a self-assignment), a self-assignment is
+**E3067**, a token that opens no statement is **E2001** `unexpected token`, and an arm after a `default`
+is **E2029**.
 
 ### Conditional Compilation
 
@@ -138,6 +150,7 @@ end 'twice'
 ```
 
 A doc comment is not a statement, so a block containing only a doc comment is still empty (**E3082**).
+A `///` after code on the same line is an ordinary comment.
 
 ### Shebang Line
 

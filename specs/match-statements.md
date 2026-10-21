@@ -2060,3 +2060,152 @@ end 'main'
 usable
 ```
 
+<!-- test: error.match-expression-arms-on-one-line -->
+One arm per line: a second `gives` arm after an arm's value on the same line is refused, not read as a second arm.
+```maxon
+enum Kind
+	red
+	green
+	blue
+end 'Kind'
+
+typealias Code = int(0 to 9)
+
+function code(k Kind) returns Code
+	return match k 'm'
+		red gives 1		green gives 2
+		blue gives 3
+	end 'm'
+end 'code'
+
+function main() returns ExitCode
+	return code(Kind.green)
+end 'main'
+```
+```maxoncstderr
+error E2001: specs/match-statements/error.match-expression-arms-on-one-line.maxon:12:16: Expected newline after match arm, got 'green'
+```
+
+<!-- test: error.match-statement-arms-on-one-line -->
+The same rule for a match statement: a `then` arm's statement ends its line.
+```maxon
+enum Kind
+	red
+	green
+	blue
+end 'Kind'
+
+function main() returns ExitCode
+	let k = Kind.green
+	match k 'm'
+		red then return 1		green then return 2
+		blue then return 3
+	end 'm'
+end 'main'
+```
+```maxoncstderr
+error E2001: specs/match-statements/error.match-statement-arms-on-one-line.maxon:11:22: Expected newline after match arm, got 'green'
+```
+
+<!-- test: error.match-diverging-arm-shares-its-line -->
+A diverging arm of a match expression ends its line too.
+```maxon
+enum Kind
+	red
+	green
+	blue
+end 'Kind'
+
+typealias Code = int(0 to 9)
+
+function code(k Kind) returns Code
+	return match k 'm'
+		red panic("no red")	green gives 2
+		blue gives 3
+	end 'm'
+end 'code'
+
+function main() returns ExitCode
+	return code(Kind.green)
+end 'main'
+```
+```maxoncstderr
+error E2001: specs/match-statements/error.match-diverging-arm-shares-its-line.maxon:12:23: Expected newline after match arm, got 'green'
+```
+
+<!-- test: error.stray-otherwise-after-a-statement-arm -->
+An `otherwise` with no `try` after a statement arm's statement is E3058, exactly as after a statement on its own line.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail() returns Integer throws MyError
+	return 42
+end 'mayFail'
+
+function main() returns ExitCode
+	var val = 0 as Integer
+	match val 'm'
+		0 then val = mayFail() otherwise 0
+		default then val = 1
+	end 'm'
+	return val
+end 'main'
+```
+```maxoncstderr
+error E3058: specs/match-statements/error.stray-otherwise-after-a-statement-arm.maxon:15:26: otherwise requires try expression
+```
+
+<!-- test: error.stray-otherwise-after-an-expression-arm -->
+The same after a `gives` arm's value.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail() returns Integer throws MyError
+	return 42
+end 'mayFail'
+
+function main() returns ExitCode
+	let val = 0 as Integer
+	let picked = match val 'm'
+		0 gives mayFail() otherwise 0
+		default gives 1
+	end 'm'
+	return picked
+end 'main'
+```
+```maxoncstderr
+error E3058: specs/match-statements/error.stray-otherwise-after-an-expression-arm.maxon:15:21: otherwise requires try expression
+```
+
+<!-- test: error.match-arm-and-end-on-one-line -->
+The `end` that closes a match stands on its own line, never after the last arm.
+```maxon
+enum Kind
+	red
+	green
+end 'Kind'
+
+typealias Code = int(0 to 9)
+
+function code(k Kind) returns Code
+	return match k 'm'
+		red gives 1
+		green gives 2	end 'm'
+end 'code'
+
+function main() returns ExitCode
+	return code(Kind.green)
+end 'main'
+```
+```maxoncstderr
+error E2001: specs/match-statements/error.match-arm-and-end-on-one-line.maxon:12:17: Expected newline after match arm, got 'end'
+```
+

@@ -791,6 +791,54 @@ end 'main'
 error E3058: specs/error-handling/error.otherwise-without-try.maxon:13:22: otherwise requires try expression
 ```
 
+<!-- test: error.otherwise-without-try-after-a-return -->
+A stray `otherwise` after a `return`'s value is still E3058: it ends the `return`, it is not a statement after one.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail() returns Integer throws MyError
+	return 42
+end 'mayFail'
+
+function pick() returns Integer
+	return mayFail() otherwise 0
+end 'pick'
+
+function main() returns ExitCode
+	return pick()
+end 'main'
+```
+```maxoncstderr
+error E3058: specs/error-handling/error.otherwise-without-try-after-a-return.maxon:13:19: otherwise requires try expression
+```
+
+<!-- test: error.otherwise-without-try-after-an-assignment -->
+The same stray `otherwise` after a reassignment is still E3058, not a complaint about the line.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail() returns Integer throws MyError
+	return 42
+end 'mayFail'
+
+function main() returns ExitCode
+	var val = 0 as Integer
+	val = mayFail() otherwise 0
+	return val
+end 'main'
+```
+```maxoncstderr
+error E3058: specs/error-handling/error.otherwise-without-try-after-an-assignment.maxon:14:18: otherwise requires try expression
+```
+
 <!-- test: error.otherwise-ignore-in-assignment -->
 ```maxon
 

@@ -388,9 +388,7 @@ end 'cacheEnumTablesAgreeInCompilerLexer'
 // for `maxon fmt` and the LSP that no production consumes. Everything else, EOF included, is a token
 // some production wants.
 //
-// ⚠ **IT IS NOT "where a statement ENDS", AND `statementEndsAt` MUST NOT BE ROUTED THROUGH IT.** That
-// question is about a `newline`'s MEANING (it terminates the statement), and a doc comment terminates
-// nothing — `requireNewlineAfterBlockLabel` and `requireDeclarationHeaderLineEnd` demand a literal newline.
+// Where a line ENDS is `tokenKindEndsALine`'s to say, which adds EOF.
 //
 // ⚠ It is ONE definition because the readers must agree or a construct means two things: the cursor
 // mover and its lookahead (`Parser.skipNewlines` / `indexPastNewlines`) decide what a program IS, and
@@ -402,6 +400,10 @@ end 'cacheEnumTablesAgreeInCompilerLexer'
 module function tokenKindIsSkippedLayout(kind TokenKind) returns bool
 	return kind == TokenKind.newline or kind == TokenKind.docComment
 end 'tokenKindIsSkippedLayout'
+
+module function tokenKindEndsALine(kind TokenKind) returns bool
+	return tokenKindIsSkippedLayout(kind) or kind == TokenKind.eof
+end 'tokenKindEndsALine'
 
 module function tokenKindOpensABracket(kind TokenKind) returns bool
 	return kind == TokenKind.leftParen or kind == TokenKind.leftBracket or kind == TokenKind.leftBrace
@@ -469,6 +471,10 @@ function kindBefore(tokens TokenArray, index ElementIndex) returns TokenKind
 
 	return tokenKindAt(tokens, index: (index - 1) as ElementIndex)
 end 'kindBefore'
+
+module function tokenFollowsAMemberDot(tokens TokenArray, index ElementIndex) returns bool
+	return kindBefore(tokens, index: index) == TokenKind.dot
+end 'tokenFollowsAMemberDot'
 
 function viewMayFollow(previous TokenKind) returns bool
 	return previous == TokenKind.newline or previous == TokenKind.if or previous == TokenKind.then
@@ -1178,6 +1184,11 @@ type Lexer
 
 		return (try tokens.get(tokens.count() - 1) otherwise panic("Lexer.lastTokenKind: get failed one below a non-zero count")).kind
 	end 'lastTokenKind'
+
+	function noCodePrecedesOnThisLine() returns bool
+		let previous = self.lastTokenKind()
+		return previous == TokenKind.newline or previous == TokenKind.eof
+	end 'noCodePrecedesOnThisLine'
 
 	// The cursor's position as the byte offset every token and slice is stated in.
 	function cursorByte() returns ByteOffset
@@ -2147,9 +2158,10 @@ type Lexer
 	end 'skipCommentLine'
 
 	// Both '/' characters already consumed. A `//` emits no token, so the rest of the line is skipped
-	// whole; a THIRD slash makes it a doc comment, which does.
+	// whole; a THIRD slash makes it a doc comment, which does, but only when it leads its line. A `///`
+	// after code is an ordinary comment, so a `docComment` token never trails code on its line.
 	function scanComment(startLine LineNumber, startCol ColumnNumber, startByte ByteOffset) throws CursorError
-		if cursor.current() == AsciiByte.slash 'aThirdSlash'
+		if cursor.current() == AsciiByte.slash and self.noCodePrecedesOnThisLine() 'aThirdSlash'
 			try scanDocComment(startLine, startCol: startCol, startByte: startByte)
 			return
 		end 'aThirdSlash'

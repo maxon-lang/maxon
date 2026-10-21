@@ -1,0 +1,28 @@
+test 'a `///` after code on the line above a declaration does not document it'
+	let document = trailingNoteDocument()
+	let undocumented = hoverRendering(document, line: 11, character: 11)
+
+	Expect.contains(undocumented, needle: "add", message: "the call hovers as the function it resolves to.")
+
+	Expect.isFalse(undocumented.contains("a note on the limit"), message: "a `///` after code ends that line as a plain comment, so it documents nothing below it: {undocumented}")
+
+	let documented = hoverRendering(document, line: 11, character: 22)
+
+	Expect.contains(documented, needle: "Doubles a number", message: "a `///` on a line of its own still documents the declaration below it: {documented}")
+end 'a `///` after code on the line above a declaration does not document it'
+
+function trailingNoteDocument() returns String
+	return String.from(b"let limit = 3 /// a note on the limit
+function add(x int, y int) returns int
+    return x + y
+end 'add'
+
+/// Doubles a number
+function twice(x int) returns int
+    return x + x
+end 'twice'
+
+function main() returns int
+    return add(limit, twice(1))
+end 'main'")
+end 'trailingNoteDocument'
