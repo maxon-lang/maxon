@@ -1691,8 +1691,8 @@ deep=256000 shallow=128 raised=true restored=true
 only at a collection, from the stacks that collection scanned, so a goroutine born and finished between two
 collections contributes no sample. Sixty-four deep coroutines raise the seed, as in the cases above; then a
 hundred and twenty-eight shallow ones that never wait, each started on that raised seed and finished without
-being observed at any depth, run — enough to close two windows were they counted — and a fresh coroutine
-starts where the one before the burst did.
+being observed at any depth, run — enough to close two windows were they counted, and too few to reach a scan
+lap — and a fresh coroutine starts where the one before the burst did.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -1761,6 +1761,82 @@ end 'main'
 ```
 ```stdout
 deep=256000 quick=128 raised=true kept=true
+```
+```exitcode
+0
+```
+
+<!-- test: async-stack-growth.the-starting-stack-follows-the-live-threads-when-the-finishers-teach-nothing -->
+<!-- procs: 1 -->
+**A RUN OF THREADS THAT NEVER PARK STILL LETS THE STARTING STACK FALL, BECAUSE THE THREADS THAT ARE ALIVE ARE SCANNED.**
+Go recomputes `startingStackSize` at each collection from every goroutine that collection scanned, parked or
+not, so a seed raised by a deep burst falls again once the goroutines left alive are shallow. A lap of finishes
+that no window can count stands in for the collection here: sixty-four deep coroutines raise the seed, as in the
+cases above; then two thousand coroutines that never wait run one after another, each started on that raised seed
+and finished without being seen at any depth. The threads alive at the scans those finishes trigger are shallow,
+so a fresh coroutine starts where the one before the burst did.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function down(n Integer) returns Integer
+	if n == 0 'bottom'
+		return 0
+	end 'bottom'
+	return 1 + down(n - 1)
+end 'down'
+
+function seedBytes() returns Integer
+	Scheduler.yield()
+	return Scheduler.currentStackBytes() as Integer
+end 'seedBytes'
+
+function deep(n Integer) returns Integer
+	Scheduler.yield()
+	return down(n)
+end 'deep'
+
+function neverWaits(n Integer) returns Integer
+	if n < 0 'waitsOnlyWhenNegative'
+		Scheduler.yield()
+	end 'waitsOnlyWhenNegative'
+	return n
+end 'neverWaits'
+
+function main() returns ExitCode
+	let first = async seedBytes()
+	let before = await first
+	var deeps = IntPromiseArray.create()
+	var i = 0 as Integer
+	while i < 64 'deepEach'
+		deeps.push(async deep(4000))
+		i = i + 1
+	end 'deepEach'
+	var deepTotal = 0 as Integer
+	var k = 0 as ElementIndex
+	while k < 64 'awaitDeep'
+		let p = try deeps.get(k) otherwise panic("deeps.get OOB at {k} — bounded by the pushes above")
+		deepTotal = deepTotal + await p
+		k = k + 1
+	end 'awaitDeep'
+	let mid = async seedBytes()
+	let raised = await mid
+	var quickTotal = 0 as Integer
+	var j = 0 as Integer
+	while j < 2000 'quickEach'
+		let q = async neverWaits(1)
+		quickTotal = quickTotal + await q
+		j = j + 1
+	end 'quickEach'
+	let later = async seedBytes()
+	let after = await later
+	print("deep={deepTotal} quick={quickTotal} raised={raised > before} restored={after == before}\n")
+	return 0
+end 'main'
+```
+```stdout
+deep=256000 quick=2000 raised=true restored=true
 ```
 ```exitcode
 0

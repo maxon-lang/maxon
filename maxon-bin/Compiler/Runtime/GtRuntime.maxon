@@ -646,6 +646,15 @@ let GtSeedWindowShift = 6 as FullRangeInt
 let GtSeedWindowSamples = 1 shl GtSeedWindowShift
 let GtSeedWindowMask = GtSeedWindowSamples - 1
 
+// ⭐ **HOW MANY FINISHES THAT TAUGHT THE WINDOW NOTHING ONE PROCESSOR COUNTS BEFORE A SCAN OF THE LIVE THREADS**,
+// plus sixteen per record on the `allg` roster (`GtSeedScanRosterShift`), so the scan's walk costs a sixteenth of
+// a record visit a finish however many threads the program has carved; each visit is a cold cache line, which
+// is why the lap scales with the roster. Go recomputes `startingStackSize` at each collection from every
+// goroutine alive, parked or not; with no collector, the window above sees only finishers that were observed,
+// and this lap is what lets the live population move the seed when none were.
+let GtSeedScanLapFinishes = 256
+let GtSeedScanRosterShift = 4
+
 // ⭐ **THE LARGEST SEED THE ADAPTIVE START MAY CHOOSE.** Go caps `startingStackSize` only at
 // `maxstacksize`, because its stacks come from a cache; every seed here is committed memory taken
 // at the spawn, before the thread has used a byte, and the cap is also the stack pool's largest
@@ -1217,6 +1226,10 @@ export let GtPreemptName = b"__gt_preempt"
 
 // ⭐⭐ **`__gt_seed_adapt()` — Go's `gcComputeStartingStackSize`, once a window.** See `buildGtSeedAdapt`.
 let GtSeedAdaptName = b"__gt_seed_adapt"
+
+// ⭐⭐ **`__gt_seed_scan()` — Go's `gcComputeStartingStackSize` over the stacks of the threads that are ALIVE.**
+// See `buildGtSeedScan`.
+let GtSeedScanName = b"__gt_seed_scan"
 let GtInitName = b"__gt_init"
 export let GtSpawnName = b"__gt_spawn"
 
@@ -1817,10 +1830,11 @@ export let GtQuiesceWaiterLabel = b"__gt_quiesce_waiter"
 // ⭐⭐ **THE ADAPTIVE SEED — Go's `startingStackSize`.** The size `__gt_free_get` gives a new
 // thread's stack: the smallest power of two in [`gtSeedStackBytes`,
 // `GtSeedMaxBytes`] that holds the average stack the threads that finished in the last window
-// needed (`__gt_seed_adapt`, `GtSeedWindowShift`). Starting at the average costs at most twice the
+// needed (`__gt_seed_adapt`, `GtSeedWindowShift`), or the average the live threads are using
+// (`__gt_seed_scan`). Starting at the average costs at most twice the
 // space an oracle would, and a thread that needs more still grows. `MultiMSharing.lastWriterWins`:
-// the adapt writes it under `__gt_seed_guard` and a spawn reads it without, and every value a spawn
-// can read is a seed some window chose.
+// the adapt and the scan write it under `__gt_seed_guard` and a spawn reads it without, and every value a
+// spawn can read is a seed some window or scan chose.
 export let GtSeedBytesLabel = b"__gt_seed_bytes"
 
 // The summed per-P sample counters (`POffStackSampleSum`, `POffStackSampleCount`) as the last window close
@@ -2689,6 +2703,7 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtStackFree(module)
 	buildGtSystemStackAlloc(module, target: target)
 	buildGtSeedAdapt(module, target: target)
+	buildGtSeedScan(module, target: target)
 	buildGtPark(module)
 	buildGtNowNs(module)
 	buildGtTimerAdd(module)
@@ -6191,13 +6206,17 @@ function buildGtRunnerDone(module StdModule, target Target)
 	var wake = module.addBlock(func, label: b"runnerwake", heat: BlockHeat.normal)
 	var stackCheck = module.addBlock(func, label: b"runnerstackcheck", heat: BlockHeat.normal)
 	var releaseStack = module.addBlock(func, label: b"runnerreleasestack", heat: BlockHeat.normal)
+	var haveOffset = module.addBlock(func, label: b"runnersampleoffset", heat: BlockHeat.normal)
+	var haveMachine = module.addBlock(func, label: b"runnersamplemachine", heat: BlockHeat.normal)
+	var classify = module.addBlock(func, label: b"runnerclassify", heat: BlockHeat.normal)
 	var sampleKind = module.addBlock(func, label: b"runnersamplekind", heat: BlockHeat.normal)
 	var sampleDepth = module.addBlock(func, label: b"runnersampledepth", heat: BlockHeat.normal)
 	var sampled = module.addBlock(func, label: b"runnersampled", heat: BlockHeat.normal)
-	var haveOffset = module.addBlock(func, label: b"runnersampleoffset", heat: BlockHeat.normal)
-	var haveMachine = module.addBlock(func, label: b"runnersamplemachine", heat: BlockHeat.normal)
-	var countSample = module.addBlock(func, label: b"runnercountsample", heat: BlockHeat.normal)
+	var quietFinish = module.addBlock(func, label: b"runnerquietfinish", heat: BlockHeat.normal)
+	var quietRoster = module.addBlock(func, label: b"runnerquietroster", heat: BlockHeat.normal)
+	var scanSeed = module.addBlock(func, label: b"runnerseedscan", heat: BlockHeat.normal)
 	var closeSeedWindow = module.addBlock(func, label: b"runnerseedwindow", heat: BlockHeat.normal)
+	var freeSeedStacks = module.addBlock(func, label: b"runnerseedfree", heat: BlockHeat.normal)
 	var keepStack = module.addBlock(func, label: b"runnerkeepstack", heat: BlockHeat.normal)
 	var afterStack = module.addBlock(func, label: b"runnerafterstack", heat: BlockHeat.normal)
 	var greenDone = module.addBlock(func, label: b"runnergreendone", heat: BlockHeat.normal)
@@ -6268,13 +6287,16 @@ function buildGtRunnerDone(module StdModule, target Target)
 	// margin, as the shrink rule does, would count the park's own frames twice, since they ride in that margin, and
 	// on a lane whose floor leaves little above the guard it would lift every thread that parks off the floor.
 	//
-	// A thread that neither parked nor grew was seen at no depth, so it samples nothing and advances no window, and
-	// a stretch of such threads leaves the seed where it is. Sampling it at the guard height pulls the seed to the
-	// floor, where the next threads grow and push it back up, and each flip frees and reallocates the kept stacks
-	// of recycled records. After a deep burst, short threads that never park leave the seed high.
-	let stackMarks = emitLoadField(module, block: releaseStack, record: gt, offset: GtOffStackMarks, ids: ids)
-	let observed = emitGtHasStackMark(module, block: releaseStack, marks: stackMarks, mark: GtStackMarksOfAnObservation, ids: ids)
-	module.setTerminator(releaseStack, op: StdOp.condBranch(observed, thenBlockId: sampleKind.id, elseBlockId: keepStack.id))
+	// A thread that neither parked nor grew was seen at no depth, so it samples nothing and advances no window.
+	// Sampling it at the guard height would pull the seed to the floor, where the next threads grow and push it
+	// back up, and each flip frees and reallocates the kept stacks of recycled records. Its finish steps the
+	// processor's quiet-finish count instead, and a lap of those runs `__gt_seed_scan`, which measures the threads
+	// alive, so a run of threads that never park cannot hold the seed high after a deep burst.
+	let p = emitLoadCurrentPOrBail(module, cur: releaseStack, haveOffset: haveOffset, haveMachine: haveMachine, haveProc: classify, noProc: keepStack, ids: ids)
+
+	let stackMarks = emitLoadField(module, block: classify, record: gt, offset: GtOffStackMarks, ids: ids)
+	let observed = emitGtHasStackMark(module, block: classify, marks: stackMarks, mark: GtStackMarksOfAnObservation, ids: ids)
+	module.setTerminator(classify, op: StdOp.condBranch(observed, thenBlockId: sampleKind.id, elseBlockId: quietFinish.id))
 
 	let stackSize = emitLoadField(module, block: sampleKind, record: gt, offset: GtOffStackSize, ids: ids)
 	let grew = emitGtHasStackMark(module, block: sampleKind, marks: stackMarks, mark: GtStackMarkGrew, ids: ids)
@@ -6287,20 +6309,33 @@ function buildGtRunnerDone(module StdModule, target Target)
 	sampleDepth.branchEdges.push(BranchEdge.create(sampled.id, argIds: argsOf(depthNeeded)))
 
 	// The finish that makes its processor's count a multiple of the window closes one (`GtSeedWindowShift`).
-	// A finisher holding no processor records no sample.
 	let sample = ids.mint()
 	sampled.blockArgs.push(IrBlockArg.create(sample, argType: StdType.i64))
-	let p = emitLoadCurrentPOrBail(module, cur: sampled, haveOffset: haveOffset, haveMachine: haveMachine, haveProc: countSample, noProc: keepStack, ids: ids)
 
-	let oneStack = emitConst(module, block: countSample, value: OneMore, ids: ids)
-	_ = emitFieldAccumulate(module, block: countSample, record: p, offset: POffStackSampleSum, delta: sample, multiM: false, ids: ids)
-	let finishedBefore = emitFieldAccumulate(module, block: countSample, record: p, offset: POffStackSampleCount, delta: oneStack, multiM: false, ids: ids)
-	let finished = emitBin(module, block: countSample, a: finishedBefore, b: oneStack, opcode: StdBinOpcode.add, ids: ids)
-	let intoWindow = emitBin(module, block: countSample, a: finished, b: emitConst(module, block: countSample, value: GtSeedWindowMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
-	emitBranchOnCompareValues(module, block: countSample, a: intoWindow, pred: StdCmpPred.ne, b: zero, whenTrue: keepStack, whenFalse: closeSeedWindow, ids: ids)
+	let oneStack = emitConst(module, block: sampled, value: OneMore, ids: ids)
+	_ = emitFieldAccumulate(module, block: sampled, record: p, offset: POffStackSampleSum, delta: sample, multiM: false, ids: ids)
+	let finishedBefore = emitFieldAccumulate(module, block: sampled, record: p, offset: POffStackSampleCount, delta: oneStack, multiM: false, ids: ids)
+	let finished = emitBin(module, block: sampled, a: finishedBefore, b: oneStack, opcode: StdBinOpcode.add, ids: ids)
+	let intoWindow = emitBin(module, block: sampled, a: finished, b: emitConst(module, block: sampled, value: GtSeedWindowMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	emitBranchOnCompareValues(module, block: sampled, a: intoWindow, pred: StdCmpPred.ne, b: zero, whenTrue: keepStack, whenFalse: closeSeedWindow, ids: ids)
+
+	let quietBefore = emitLoadField(module, block: quietFinish, record: p, offset: POffStackQuietFinishes, ids: ids)
+	let quiet = emitBin(module, block: quietFinish, a: quietBefore, b: emitConst(module, block: quietFinish, value: OneMore, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: quietFinish, record: p, offset: POffStackQuietFinishes, value: quiet)
+	emitBranchOnCompare(module, block: quietFinish, value: quiet, pred: StdCmpPred.lt, against: GtSeedScanLapFinishes, whenTrue: keepStack, whenFalse: quietRoster, ids: ids)
+
+	let rosterLaps = emitBin(module, block: quietRoster, a: emitLoadAcquireGlobalWord(module, block: quietRoster, label: GtAllGLenLabel, ids: ids), b: emitConst(module, block: quietRoster, value: GtSeedScanRosterShift, ids: ids), opcode: StdBinOpcode.shl, ids: ids)
+	let scanDue = emitBin(module, block: quietRoster, a: rosterLaps, b: emitConst(module, block: quietRoster, value: GtSeedScanLapFinishes, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	emitBranchOnCompareValues(module, block: quietRoster, a: quiet, pred: StdCmpPred.ge, b: scanDue, whenTrue: scanSeed, whenFalse: keepStack, ids: ids)
+
+	emitStoreField(module, block: scanSeed, record: p, offset: POffStackQuietFinishes, value: zero)
+	module.appendOp(scanSeed, op: StdOp.call(ids.mint(), callee: GtSeedScanName, args: ValueIdArray.create()))
+	module.setTerminator(scanSeed, op: StdOp.branch(freeSeedStacks.id))
 
 	module.appendOp(closeSeedWindow, op: StdOp.call(ids.mint(), callee: GtSeedAdaptName, args: ValueIdArray.create()))
-	emitGtFreeStacks(module, func: func, cur: closeSeedWindow, cont: keepStack, ids: ids)
+	module.setTerminator(closeSeedWindow, op: StdOp.branch(freeSeedStacks.id))
+
+	emitGtFreeStacks(module, func: func, cur: freeSeedStacks, cont: keepStack, ids: ids)
 
 	let seed = emitLoadGlobalWord(module, block: keepStack, label: GtSeedBytesLabel, ids: ids)
 	emitGtDropStackUnlessSized(module, func: func, cur: keepStack, record: gt, kept: seed, cont: afterStack, ids: ids)
@@ -7582,18 +7617,30 @@ function buildGtSeedAdapt(module StdModule, target Target)
 
 	emitStoreGlobalWord(module, block: window, label: GtSeedSumSeenLabel, value: sum, ids: ids)
 	emitStoreGlobalWord(module, block: window, label: GtSeedCountSeenLabel, value: count, ids: ids)
-	let floorSeed = emitConst(module, block: window, value: gtSeedStackBytes(target), ids: ids)
-	module.setTerminator(window, op: StdOp.branch(grow.id))
-	window.branchEdges.push(BranchEdge.create(grow.id, argIds: argsOf(floorSeed)))
+	emitGtSeedPublishAverage(module, cur: window, grow: grow, fits: fits, publish: publish, sum: windowSum, count: windowCount, done: finished, target: target, ids: ids)
 
-	// grow(seed): stop at the ceiling, or at the first size that holds the window's average.
+	_ = emitGlobalAccumulate(module, block: finished, label: GtSeedGuardLabel, delta: emitConst(module, block: finished, value: OneFewer, ids: ids), multiM: true, ids: ids)
+	module.setTerminator(finished, op: StdOp.retVoid)
+
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+	module.functions.push(func)
+end 'buildGtSeedAdapt'
+
+// The seed both closes choose: the smallest power of two in [`gtSeedStackBytes`, `GtSeedMaxBytes`] whose
+// product with `count` covers `sum`, stored to `__gt_seed_bytes`, then `done`. The caller makes `grow`, `fits`
+// and `publish` and ends `cur` here.
+function emitGtSeedPublishAverage(module StdModule, cur IrBlock, grow IrBlock, fits IrBlock, publish IrBlock, sum ValueId, count ValueId, done IrBlock, target Target, ids ValueMinter)
+	let floorSeed = emitConst(module, block: cur, value: gtSeedStackBytes(target), ids: ids)
+	module.setTerminator(cur, op: StdOp.branch(grow.id))
+	cur.branchEdges.push(BranchEdge.create(grow.id, argIds: argsOf(floorSeed)))
+
 	let seed = ids.mint()
 	grow.blockArgs.push(IrBlockArg.create(seed, argType: StdType.i64))
 	emitBranchOnCompare(module, block: grow, value: seed, pred: StdCmpPred.ge, against: GtSeedMaxBytes, whenTrue: publish, whenFalse: fits, ids: ids)
 	grow.branchEdges.push(BranchEdge.create(publish.id, argIds: argsOf(seed)))
 
-	let covered = emitBin(module, block: fits, a: seed, b: windowCount, opcode: StdBinOpcode.mul, ids: ids)
-	let holdsAverage = emitCmp(module, block: fits, a: covered, b: windowSum, pred: StdCmpPred.ge, ids: ids)
+	let covered = emitBin(module, block: fits, a: seed, b: count, opcode: StdBinOpcode.mul, ids: ids)
+	let holdsAverage = emitCmp(module, block: fits, a: covered, b: sum, pred: StdCmpPred.ge, ids: ids)
 	let doubled = emitBin(module, block: fits, a: seed, b: seed, opcode: StdBinOpcode.add, ids: ids)
 	module.setTerminator(fits, op: StdOp.condBranch(holdsAverage, thenBlockId: publish.id, elseBlockId: grow.id))
 	fits.branchEdges.push(BranchEdge.create(publish.id, argIds: argsOf(seed)))
@@ -7602,14 +7649,92 @@ function buildGtSeedAdapt(module StdModule, target Target)
 	let chosen = ids.mint()
 	publish.blockArgs.push(IrBlockArg.create(chosen, argType: StdType.i64))
 	emitStoreGlobalWord(module, block: publish, label: GtSeedBytesLabel, value: chosen, ids: ids)
-	module.setTerminator(publish, op: StdOp.branch(finished.id))
+	module.setTerminator(publish, op: StdOp.branch(done.id))
+end 'emitGtSeedPublishAverage'
+
+// ⭐⭐⭐ **`__gt_seed_scan()` — Go's `gcComputeStartingStackSize` over what `scanstack` counted: every thread
+// that is alive, parked or not (`mgcmark.go`'s `scannedSize = gp.stack.hi - sp`, summed per processor).** Its
+// one caller is `__gt_runner_done`, at the finish that completes a lap of unsampled ones
+// (`GtSeedScanLapFinishes`). Each live record on the `allg` roster counts its saved depth plus the guard
+// height, the same need a finished thread's sample states, and the seed is their average; no live thread
+// means the floor, as Go's `scannedStacks == 0` does. It claims `__gt_seed_guard` like the adapt.
+//
+// ⚠ **THE DEVIATION FROM GO IS THE STOP-THE-WORLD.** Go scans goroutines it has stopped; this scan runs while
+// the other processors run. A thread executing on another processor still shows the sp it last switched out
+// with, so it counts the depth it had then, and a record whose words are mid-reuse or mid-relocation is
+// skipped when its sp lies outside its stack. A completed record holds no live stack and is skipped.
+// The roster length is read before its base, so the base covers every slot the length names.
+function buildGtSeedScan(module StdModule, target Target)
+	var func = IrFunction.createFromStd(GtSeedScanName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var claimed = module.addBlock(func, label: b"scanclaimed", heat: BlockHeat.normal)
+	var rosterHdr = module.addBlock(func, label: b"scanrosterhdr", heat: BlockHeat.normal)
+	var rosterBody = module.addBlock(func, label: b"scanrosterbody", heat: BlockHeat.normal)
+	var rosterLive = module.addBlock(func, label: b"scanrosterlive", heat: BlockHeat.normal)
+	var rosterTally = module.addBlock(func, label: b"scanrostertally", heat: BlockHeat.normal)
+	var measured = module.addBlock(func, label: b"scanmeasured", heat: BlockHeat.normal)
+	var grow = module.addBlock(func, label: b"scangrow", heat: BlockHeat.normal)
+	var fits = module.addBlock(func, label: b"scanfits", heat: BlockHeat.normal)
+	var publish = module.addBlock(func, label: b"scanpublish", heat: BlockHeat.normal)
+	var finished = module.addBlock(func, label: b"scanfinished", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"scandone", heat: BlockHeat.normal)
+
+	let guardClaimed = emitCasGlobalWord(module, block: entry, label: GtSeedGuardLabel, expected: emitConst(module, block: entry, value: 0, ids: ids), replacement: emitConst(module, block: entry, value: 1, ids: ids), ids: ids)
+	emitBranchOnCasLost(module, block: entry, result: guardClaimed, lost: doneBlock, won: claimed, ids: ids)
+
+	let rosterLength = emitLoadAcquireGlobalWord(module, block: claimed, label: GtAllGLenLabel, ids: ids)
+	let rosterBase = emitLoadAcquireGlobalWord(module, block: claimed, label: GtAllGLabel, ids: ids)
+	let noneYet = emitConst(module, block: claimed, value: 0, ids: ids)
+	let rosterIndex = ids.mint()
+	let runningSum = ids.mint()
+	let runningCount = ids.mint()
+	rosterHdr.blockArgs.push(IrBlockArg.create(rosterIndex, argType: StdType.i64))
+	rosterHdr.blockArgs.push(IrBlockArg.create(runningSum, argType: StdType.i64))
+	rosterHdr.blockArgs.push(IrBlockArg.create(runningCount, argType: StdType.i64))
+	module.setTerminator(claimed, op: StdOp.branch(rosterHdr.id))
+	claimed.branchEdges.push(BranchEdge.create(rosterHdr.id, argIds: threeArgs(noneYet, second: noneYet, third: noneYet)))
+
+	emitBranchOnCompareValues(module, block: rosterHdr, a: rosterIndex, pred: StdCmpPred.ge, b: rosterLength, whenTrue: measured, whenFalse: rosterBody, ids: ids)
+	rosterHdr.branchEdges.push(BranchEdge.create(measured.id, argIds: twoArgs(runningSum, second: runningCount)))
+
+	let gt = emitWordSlotLoad(module, block: rosterBody, base: rosterBase, index: rosterIndex, ids: ids)
+	let nextIndex = emitBin(module, block: rosterBody, a: rosterIndex, b: emitConst(module, block: rosterBody, value: OneMore, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let status = emitGtLoadPublishedStatus(module, block: rosterBody, gt: gt, ids: ids)
+	let isFinished = emitGtStatusEquals(module, block: rosterBody, status: status, want: GtStatus.completed, ids: ids)
+	module.setTerminator(rosterBody, op: StdOp.condBranch(isFinished, thenBlockId: rosterHdr.id, elseBlockId: rosterLive.id))
+	rosterBody.branchEdges.push(BranchEdge.create(rosterHdr.id, argIds: threeArgs(nextIndex, second: runningSum, third: runningCount)))
+
+	let stackBase = emitLoadField(module, block: rosterLive, record: gt, offset: GtOffStackBase, ids: ids)
+	let stackTop = emitBin(module, block: rosterLive, a: stackBase, b: emitLoadField(module, block: rosterLive, record: gt, offset: GtOffStackSize, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let savedSp = emitLoadField(module, block: rosterLive, record: gt, offset: GtOffSp, ids: ids)
+	let hasStack = emitCompareWithConstant(module, block: rosterLive, value: stackBase, pred: StdCmpPred.ne, against: 0, ids: ids)
+	let aboveBase = emitCmp(module, block: rosterLive, a: savedSp, b: stackBase, pred: StdCmpPred.ge, ids: ids)
+	let belowTop = emitCmp(module, block: rosterLive, a: savedSp, b: stackTop, pred: StdCmpPred.le, ids: ids)
+	let insideStack = emitBin(module, block: rosterLive, a: emitBin(module, block: rosterLive, a: hasStack, b: aboveBase, opcode: StdBinOpcode.bitAnd, ids: ids), b: belowTop, opcode: StdBinOpcode.bitAnd, ids: ids)
+	module.setTerminator(rosterLive, op: StdOp.condBranch(insideStack, thenBlockId: rosterTally.id, elseBlockId: rosterHdr.id))
+	rosterLive.branchEdges.push(BranchEdge.create(rosterHdr.id, argIds: threeArgs(nextIndex, second: runningSum, third: runningCount)))
+
+	let used = emitBin(module, block: rosterTally, a: stackTop, b: savedSp, opcode: StdBinOpcode.sub, ids: ids)
+	let needed = emitBin(module, block: rosterTally, a: used, b: emitConst(module, block: rosterTally, value: gtStackGuardHeight(target), ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let tallySum = emitBin(module, block: rosterTally, a: runningSum, b: needed, opcode: StdBinOpcode.add, ids: ids)
+	let tallyCount = emitBin(module, block: rosterTally, a: runningCount, b: emitConst(module, block: rosterTally, value: OneMore, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(rosterTally, op: StdOp.branch(rosterHdr.id))
+	rosterTally.branchEdges.push(BranchEdge.create(rosterHdr.id, argIds: threeArgs(nextIndex, second: tallySum, third: tallyCount)))
+
+	let sum = ids.mint()
+	let count = ids.mint()
+	measured.blockArgs.push(IrBlockArg.create(sum, argType: StdType.i64))
+	measured.blockArgs.push(IrBlockArg.create(count, argType: StdType.i64))
+	emitGtSeedPublishAverage(module, cur: measured, grow: grow, fits: fits, publish: publish, sum: sum, count: count, done: finished, target: target, ids: ids)
 
 	_ = emitGlobalAccumulate(module, block: finished, label: GtSeedGuardLabel, delta: emitConst(module, block: finished, value: OneFewer, ids: ids), multiM: true, ids: ids)
 	module.setTerminator(finished, op: StdOp.retVoid)
 
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
 	module.functions.push(func)
-end 'buildGtSeedAdapt'
+end 'buildGtSeedScan'
 
 // `__gt_trace_emit(tagRecord, value, suffixRecord)` — print one async-trace line to stderr:
 // `<tag><value><suffix?>\n`. `tagRecord`/`suffixRecord` are immortal `.rdata` String records (see
