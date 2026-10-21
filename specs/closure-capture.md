@@ -4367,3 +4367,275 @@ end 'main'
 ```maxoncstderr
 error E3078: <fragment>:40:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
 ```
+
+<!-- test: closure-capture.a-closure-in-a-returned-array-literal-runs-after-its-frame-died -->
+A closure written as an element of a returned array literal keeps the record it captured.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Reader = function() returns Integer
+typealias Readers = Array with Reader
+
+type Counter
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Counter'
+
+function makeReaders(start Integer) returns Readers
+	let c = Counter.create(start)
+	return [function() gives 1, function() gives c.n * 2, function() gives 3]
+end 'makeReaders'
+
+function main() returns ExitCode
+	let readers = makeReaders(21)
+	let r = try readers.get(1) otherwise return 1
+	return r() as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: closure-capture.error.a-writing-closure-in-a-returned-array-literal-refuses-a-let-argument -->
+The returned literal carries a closure that writes `b`, so handing `arm` the `let` is refused at the call.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias Bump = function() returns Count
+typealias Bumps = Array with Bump
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+function zero(b Box) returns Count
+	b.n = 9
+	return 0
+end 'zero'
+
+function arm(b Box) returns Bumps
+	return [function() gives zero(b)]
+end 'arm'
+
+function main() returns ExitCode
+	let b = Box.create(1)
+	let fs = arm(b)
+	print("{fs.count()} {b.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:25:11: cannot pass 'b', which is read-only (a `let` binding), to a function that writes parameter 'b' (in main); pass a clone()
+```
+
+<!-- test: closure-capture.error.an-array-literal-of-closures-stored-into-a-module-var-keeps-what-they-capture -->
+The literal assigned to a module-level `var` outlives `arm`, so the closure in it keeps `b`, as a closure pushed there does.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias Read = function() returns Count
+typealias Reads = Array with Read
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+var shows = Reads.create()
+
+function arm(b Box)
+	shows = [function() gives b.n]
+end 'arm'
+
+function main() returns ExitCode
+	let b = Box.create(1)
+	arm(b)
+	print("{b.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:22:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
+```
+
+<!-- test: closure-capture.error.an-array-literal-of-closures-stored-into-a-module-record-field-keeps-what-they-capture -->
+The literal assigned to a field of a module-level record outlives `arm`, so the closure in it keeps `b`.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias Read = function() returns Count
+typealias Reads = Array with Read
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Shelf
+	export var shows as Reads
+
+	static function create() returns Self
+		return Self{shows: Reads.create()}
+	end 'create'
+end 'Shelf'
+
+var shelf = Shelf.create()
+
+function arm(b Box)
+	shelf.shows = [function() gives b.n]
+end 'arm'
+
+function main() returns ExitCode
+	let b = Box.create(1)
+	arm(b)
+	print("{b.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:30:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
+```
+
+<!-- test: closure-capture.error.a-nested-array-literal-of-closures-pushed-into-a-module-var-keeps-what-they-capture -->
+The inner literal becomes an element of an array that outlives `arm`, so its closure keeps `b`.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias Read = function() returns Count
+typealias Reads = Array with Read
+typealias Groups = Array with Reads
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+var groups = Groups.create()
+
+function arm(b Box)
+	groups.push([function() gives b.n])
+end 'arm'
+
+function main() returns ExitCode
+	let b = Box.create(1)
+	arm(b)
+	print("{b.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:23:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
+```
+
+<!-- test: closure-capture.error.a-nested-array-literal-of-closures-pushed-into-what-they-capture -->
+The inner literal is an element of an array `self` holds, so the closure in it would be held by the record it captures.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+typealias Thunks = Array with Thunk
+typealias Groups = Array with Thunks
+
+type Counter
+	export var n as Integer
+	export var groups as Groups
+
+	static function create() returns Self
+		return Self{n: 1, groups: Groups.create()}
+	end 'create'
+
+	export function arm()
+		self.groups.push([function() gives self.n])
+	end 'arm'
+end 'Counter'
+
+function main() returns ExitCode
+	var c = Counter.create()
+	c.arm()
+	return c.groups.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3183: <fragment>:16:20: this value holds a closure that captures 'self' and is stored into a record 'self' holds, so 'self' would hold the closure and the closure would hold 'self', and neither would ever be released. Store it somewhere 'self' does not reach, or capture what the closure needs instead of 'self' itself
+```
+
+<!-- test: closure-capture.error.a-returned-array-literal-of-closures-stored-into-what-they-capture -->
+The literal a callee returns holds a closure over `h`, and storing it into `h` closes the cycle.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+typealias Thunks = Array with Thunk
+
+type Counter
+	export var n as Integer
+	export var reads as Thunks
+
+	static function create() returns Self
+		return Self{n: 1, reads: Thunks.create()}
+	end 'create'
+end 'Counter'
+
+function reading(h Counter) returns Thunks
+	return [function() gives h.n]
+end 'reading'
+
+function arm(h Counter)
+	h.reads = reading(h)
+end 'arm'
+
+function main() returns ExitCode
+	var c = Counter.create()
+	arm(c)
+	return c.reads.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3183: <fragment>:20:12: this value holds a closure that captures 'h' and is stored into a record 'h' holds, so 'h' would hold the closure and the closure would hold 'h', and neither would ever be released. Store it somewhere 'h' does not reach, or capture what the closure needs instead of 'h' itself
+```
+
+<!-- test: closure-capture.error.an-array-literal-of-closures-kept-in-a-module-var-stored-into-what-they-capture -->
+A module-level `var` hands back the literal stored into it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+typealias Thunks = Array with Thunk
+
+type Counter
+	export var n as Integer
+	export var reads as Thunks
+
+	static function create() returns Self
+		return Self{n: 1, reads: Thunks.create()}
+	end 'create'
+end 'Counter'
+
+var stash = Thunks.create()
+
+function arm(h Counter)
+	stash = [function() gives h.n]
+	h.reads = stash
+end 'arm'
+
+function main() returns ExitCode
+	var c = Counter.create()
+	arm(c)
+	return c.reads.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3183: <fragment>:19:12: this value holds a closure that captures 'h' and is stored into a record 'h' holds, so 'h' would hold the closure and the closure would hold 'h', and neither would ever be released. Store it somewhere 'h' does not reach, or capture what the closure needs instead of 'h' itself
+```

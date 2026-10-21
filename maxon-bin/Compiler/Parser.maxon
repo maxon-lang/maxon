@@ -79965,7 +79965,7 @@ export type Parser
 	// ⭐ **`element` IS WHERE THE INSTANCE COMES FROM, AND IT IS A PARAMETER RATHER THAN A SECOND ENTRY POINT**
 	// (`ArrayLiteralElementSource`). A `<alias> from […]` head states the instance the literal must build;
 	// everything downstream of that one decision — the map-literal fork, the constant-blob fork, the element
-	// rule, the escape gate, the owned-temp registration — is the same for both spellings, and a second
+	// rule, the owned-temp registration — is the same for both spellings, and a second
 	// function to hold a different first line would have had to copy all of it.
 	function parseArrayLiteral(func IrFunction, element ArrayLiteralElementSource) returns ValueId throws SourceParseError
 		// ⭐ **THE RECEIVING SLOT'S ANSWER IS TAKEN HERE AND SPENT AT THE `giid` LINE BELOW.** Taken before a
@@ -80048,7 +80048,7 @@ export type Parser
 		let arr = try self.emitArrayCreateOp(giid, range: range)
 		try self.pushArrayLiteralElement(arr, elem: head, giid: giid, valueStart: firstStart, range: range)
 
-		return try self.finishArrayLiteral(func, arr: arr, giid: giid, first: head, range: range)
+		return try self.finishArrayLiteral(func, arr: arr, giid: giid, range: range)
 	end 'parseArrayLiteral'
 
 	// ⭐⭐ **AN INLINE-STORED LITERAL'S BODY — COLLECTED FIRST, EMITTED ONCE.** Every element is parsed and held, and
@@ -80092,9 +80092,6 @@ export type Parser
 		try self.consume(TokenKind.rightBracket)
 		try self.requireElementsShareASign(values, starts: starts)
 
-		// ⚠ **THE BLOB ARM NEEDS NO ESCAPE GATE AND CANNOT.** A capturing closure is not a value the compiler
-		// holds as an integer constant, so `everyElementIsAKnownConstant` has already excluded one from this
-		// arm; the PUSH arm below is a real container build and asks the question in full.
 		if self.everyElementIsAKnownConstant(values) 'aConstantBlob'
 			let blob = self.emitConstantArrayBlob(values, giid: giid, range: range)
 			return blob
@@ -80531,7 +80528,7 @@ export type Parser
 	end 'plainConstantArrayAs'
 
 	// The tail a MANAGED or OPAQUE literal takes once its record exists and its first element is pushed: the
-	// `, e` elements, the closing `]`, the escape gate and the owned-temp registration. It pushes as it goes
+	// `, e` elements, the closing `]` and the owned-temp registration. It pushes as it goes
 	// rather than collecting, and that is the whole difference from `parseCollectedArrayLiteralBody`: a
 	// managed element's move-in is decided from the `[valueStart, self.pos)` window it was written at, which
 	// a collect-then-push walk would have already moved past.
@@ -80540,12 +80537,7 @@ export type Parser
 	// the same two rules `parseStructLiteralFields` states for `{…}`. A skip before the push would widen the
 	// `[valueStart, self.pos)` window `moveElementIntoContainer` reads to decide whether the element was a bare
 	// local, and silently mis-decide a managed element's move-in.
-	function finishArrayLiteral(func IrFunction, arr ValueId, giid GenericInstanceId, first ValueId, range SourceRange) returns ValueId throws SourceParseError
-		// Held only for the escape gate below, which asks about the whole element list — see
-		// `requireNoEscapingClosureElement` for why the question is the list's and not each element's.
-		var values = ValueIdArray.create()
-		values.push(first)
-
+	function finishArrayLiteral(func IrFunction, arr ValueId, giid GenericInstanceId, range SourceRange) returns ValueId throws SourceParseError
 		while try self.atAnotherLiteralEntry() 'moreElements'
 			let parsed = try self.parseArrayLiteralTailElement(func, giid: giid)
 
@@ -80554,7 +80546,6 @@ export type Parser
 			end 'aDeferredElement'
 
 			try self.pushArrayLiteralElement(arr, elem: parsed.value, giid: giid, valueStart: parsed.start, range: range)
-			values.push(parsed.value)
 		end 'moreElements'
 
 		try self.consume(TokenKind.rightBracket)
