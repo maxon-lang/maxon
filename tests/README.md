@@ -98,6 +98,8 @@ tests/
   lsp/
     LspClient.maxon              a live JSON-RPC client the tests import - see rule 1; `abandonedSession` and `abandonedStagedSession` release a session that failed, then fail the test naming what it was doing
     <area>.maxtest               one LSP method area per file
+    diagnostics-project-declared-inputs-probe.maxtest   the shared half of the declared-input cases: a project file whose sources come from a file it reads, declared in `inputs` or not, delegating or with two targets, and a gate that holds its run until released
+    diagnostics-project-<change>.maxtest   the cases built on it, one each: which change to a declared input, a delegated `.maxproj` or an undeclared read runs the project file again, and which keeps the held answer
   ladders/                       hand-built scaling generators + the README indexing them
     index.maxtest                the README's rows against the scripts beside it
   parallelCompile/
@@ -144,6 +146,10 @@ tests/
     manifest-defines-not-a-list-refused.maxtest               `defines` that are not a list are refused, and write nothing
     manifest-define-not-a-string-refused.maxtest              a define that is not a string is refused, and writes nothing
     manifest-source-not-a-string-refused.maxtest              a source that is not a string is refused as malformed, and writes nothing
+    manifest-inputs-not-a-list-refused.maxtest                `inputs` that are not a list are refused
+    manifest-inputs-naming-a-directory-refused.maxtest        an input that names a directory (the empty string names the project's own) is refused
+    manifest-inputs-naming-a-link-to-a-directory-refused.maxtest      an input that is a link to a directory is refused (not on Windows)
+    manifest-build-inputs-naming-a-directory-refused.maxtest  `Build.build`'s `inputs` reach the description, and one that is a directory is refused
     manifest-program-not-written-into-project.maxtest         the compiled manifest is kept in the run cache, so nothing lands in the project's `.maxon/`
     version-component-past-the-pe-field-refused.maxtest       a `version` component past 65535 is refused for x64-windows, and writes nothing
     version-component-past-the-macho-field-refused.maxtest    a second `version` component past 1023 is refused for arm64-macos, and writes nothing

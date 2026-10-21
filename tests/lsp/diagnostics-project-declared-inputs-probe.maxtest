@@ -1,0 +1,322 @@
+export let DeclaredInputsPlanFileName = "sources.txt"
+export let DeclaredInputsSharedListing = "../shared\n"
+export let DeclaredInputsNoListing = ""
+let DeclaredInputsUndefinedCode = "E3004"
+let DeclaredInputsBlankListing = "\n"
+let DeclaredInputsHoldFileName = "hold.txt"
+let DeclaredInputsReleasePrefix = "release-"
+let DeclaredInputsReleaseSuffix = ".txt"
+let DeclaredInputsLaterAskMs = 1200
+let DeclaredInputsRunsFileName = "runs.txt"
+let DeclaredInputsRunPollMs = 100
+let DeclaredInputsRunBoundMs = 20000
+let DeclaredInputsRerunBoundMs = 8000
+let DeclaredInputsEditedVersion = 2
+
+let DeclaredInputsRootDirName = "diagnostics-project-declared-inputs"
+let DeclaredInputsManifestFileName = "app.maxproj"
+let DeclaredInputsProjectDirName = "proj"
+let DeclaredInputsSharedDirName = "shared"
+let DeclaredInputsMainFileName = "main.maxon"
+let DeclaredInputsSharedFileName = "answer.maxon"
+let DeclaredInputsReadingBody = "\tlet plan = try FilePath.from(\"sources.txt\") otherwise return 1\n\tvar sources = StringArray.create()\n\tsources.push(\".\")\n\n\tif File.exists(plan) 'planned'\n\t\tlet text = try File.readText(plan) otherwise return 1\n\n\t\tfor line in text.split(\"\\n\") 'eachLine'\n\t\t\tif not line.isEmpty() 'aSource'\n\t\t\t\tsources.push(line)\n\t\t\tend 'aSource'\n\t\tend 'eachLine'\n\tend 'planned'\n\n"
+let DeclaredInputsGate = "\tlet runs = try FilePath.from(\"runs.txt\") otherwise return 1\n\tvar earlier = \"\"\n\n\tif File.exists(runs) 'ranBefore'\n\t\tearlier = try File.readText(runs) otherwise return 1\n\tend 'ranBefore'\n\n\ttry File.writeText(runs, content: \"\{earlier\}ran\\n\") otherwise return 1\n\n\tlet hold = try FilePath.from(\"hold.txt\") otherwise return 1\n\tvar number = 1 as Count\n\n\tfor line in earlier.split(\"\\n\") 'eachRun'\n\t\tif not line.isEmpty() 'aRun'\n\t\t\tnumber = number + 1\n\t\tend 'aRun'\n\tend 'eachRun'\n\n\tlet release = try FilePath.from(\"release-\{number\}.txt\") otherwise return 1\n\tvar polls = 0 as Count\n\n\twhile File.exists(hold) and not File.exists(release) and polls < 1200 'untilReleased'\n\t\tsleep(50)\n\t\tpolls = polls + 1\n\tend 'untilReleased'\n\n"
+let DeclaredInputsBuilding = "\tBuild.buildWithConfig(BuildConfig.create(sources, output: \"program\""
+let DeclaredInputsDeclaration = ", inputs: [\"sources.txt\"]"
+let DeclaredInputsMainSource = "function main() returns ExitCode\n\treturn sharedAnswer()\nend 'main'\n"
+let DeclaredInputsSharedSource = "export function sharedAnswer() returns ExitCode\n\treturn 0\nend 'sharedAnswer'\n"
+
+export enum InputDeclaration
+	declared
+	undeclared
+	declaredAndGated
+	declaredByTheFirstOfTwoTargets
+	declaredByTheLastOfTwoTargets
+end 'InputDeclaration'
+
+export enum MidRunEdit
+	onTheFirstResolution
+	restoringAnOldModifiedTime
+	afterAnUnsettledRun
+end 'MidRunEdit'
+
+export union PlanFile
+	absent
+	listing(text String)
+end 'PlanFile'
+
+export type DeclaredInputsProject
+	export let root as FilePath
+	export let project as FilePath
+
+	static function create(root FilePath, project FilePath) returns DeclaredInputsProject
+		return Self{root: root, project: project}
+	end 'create'
+end 'DeclaredInputsProject'
+
+function readingTarget(name String, gate String, declaration String) returns String
+	return "export function {name}() returns ExitCode\n{DeclaredInputsReadingBody}{gate}{DeclaredInputsBuilding}{declaration}))\n\treturn 0\nend '{name}'\n"
+end 'readingTarget'
+
+function staticTarget(name String) returns String
+	return "export function {name}() returns ExitCode\n\tBuild.buildWithConfig(BuildConfig.create([\".\"], output: \"program\", inputs: [\"static.txt\"]))\n\treturn 0\nend '{name}'\n"
+end 'staticTarget'
+
+function manifestFor(declaration InputDeclaration) returns String
+	return match declaration 'declaration'
+		declared gives readingTarget("build", gate: "", declaration: DeclaredInputsDeclaration)
+		undeclared gives readingTarget("build", gate: "", declaration: "")
+		declaredAndGated gives readingTarget("build", gate: DeclaredInputsGate, declaration: DeclaredInputsDeclaration)
+		declaredByTheFirstOfTwoTargets gives twoTargets(readingTarget("alpha", gate: "", declaration: DeclaredInputsDeclaration), second: staticTarget("beta"))
+		declaredByTheLastOfTwoTargets gives twoTargets(staticTarget("alpha"), second: readingTarget("beta", gate: "", declaration: DeclaredInputsDeclaration))
+	end 'declaration'
+end 'manifestFor'
+
+function twoTargets(first String, second String) returns String
+	return "{first}\n{second}"
+end 'twoTargets'
+
+function writtenLongAgo(directory FilePath, fileName String, content String)
+	writeCorpusFile(directory, fileName: fileName, content: content)
+	backdatedToTheYear2000(directory.join(fileName))
+end 'writtenLongAgo'
+
+function createdDirectory(directory FilePath)
+	if not Directory.create(directory) 'couldNotCreate'
+		panic("the test could not run: could not create {directory.toString()}")
+	end 'couldNotCreate'
+end 'createdDirectory'
+
+export function stagedDeclaredInputsProject(declaration InputDeclaration, plan PlanFile) returns DeclaredInputsProject
+	let root = freshOutsideCheckoutDir(DeclaredInputsRootDirName)
+	let project = root.join(DeclaredInputsProjectDirName)
+	let shared = root.join(DeclaredInputsSharedDirName)
+
+	createdDirectory(project)
+	createdDirectory(shared)
+
+	writeCorpusFile(project, fileName: DeclaredInputsManifestFileName, content: manifestFor(declaration))
+	writeCorpusFile(project, fileName: DeclaredInputsMainFileName, content: DeclaredInputsMainSource)
+	writeCorpusFile(shared, fileName: DeclaredInputsSharedFileName, content: DeclaredInputsSharedSource)
+
+	match plan 'plan'
+		absent then break
+		listing(text) then writtenLongAgo(project, fileName: DeclaredInputsPlanFileName, content: text)
+	end 'plan'
+
+	return DeclaredInputsProject.create(root, project: project)
+end 'stagedDeclaredInputsProject'
+
+export let DeclaredInputsLonelyDirectory = "../inner-lonely\n"
+export let DeclaredInputsSharingDirectory = "../inner-sharing\n"
+let DeclaredInputsProjectOnlyListing = "../proj\n"
+export let DeclaredInputsProjectAndSharedListing = "../proj\n../shared\n"
+
+let DeclaredInputsChoosingManifest = "export function build() returns ExitCode\n\tlet plan = try FilePath.from(\"sources.txt\") otherwise return 1\n\tlet directory = try File.readText(plan) otherwise return 1\n\n\tBuild.delegate(directory.trim(), inputs: [\"sources.txt\"])\n\treturn 0\nend 'build'\n"
+let DeclaredInputsDelegatingManifest = "export function build() returns ExitCode\n\tBuild.delegate(\"../inner-reading\")\n\treturn 0\nend 'build'\n"
+let DeclaredInputsLonelyManifest = "export function build() returns ExitCode\n\tBuild.buildWithConfig(BuildConfig.create([\"../proj\"], output: \"program\"))\n\treturn 0\nend 'build'\n"
+let DeclaredInputsSharingManifest = "export function build() returns ExitCode\n\tBuild.buildWithConfig(BuildConfig.create([\"../proj\", \"../shared\"], output: \"program\"))\n\treturn 0\nend 'build'\n"
+let DeclaredInputsLonelyDirName = "inner-lonely"
+let DeclaredInputsSharingDirName = "inner-sharing"
+let DeclaredInputsReadingDirName = "inner-reading"
+
+export enum OuterDelegation
+	choosingTheInnerProjectByAnInput
+	toAProjectThatReadsItsOwnInput
+end 'OuterDelegation'
+
+export function stagedDelegatingInputsProject(outer OuterDelegation, plan String) returns DeclaredInputsProject
+	let staged = stagedDeclaredInputsProject(InputDeclaration.declared, plan: PlanFile.listing(plan))
+
+	let outerManifest = match outer 'outer'
+		choosingTheInnerProjectByAnInput gives DeclaredInputsChoosingManifest
+		toAProjectThatReadsItsOwnInput gives DeclaredInputsDelegatingManifest
+	end 'outer'
+
+	writeCorpusFile(staged.project, fileName: DeclaredInputsManifestFileName, content: outerManifest)
+
+	for (dirName, manifest) in [(DeclaredInputsLonelyDirName, DeclaredInputsLonelyManifest), (DeclaredInputsSharingDirName, DeclaredInputsSharingManifest), (DeclaredInputsReadingDirName, manifestFor(InputDeclaration.declared))] 'eachDelegate'
+		let directory = staged.root.join(dirName)
+
+		createdDirectory(directory)
+		writtenLongAgo(directory, fileName: DeclaredInputsManifestFileName, content: manifest)
+	end 'eachDelegate'
+
+	writtenLongAgo(staged.root.join(DeclaredInputsReadingDirName), fileName: DeclaredInputsPlanFileName, content: DeclaredInputsProjectOnlyListing)
+
+	return staged
+end 'stagedDelegatingInputsProject'
+
+export function planWrittenAs(staged DeclaredInputsProject, text String) returns CorpusDiskEditArray
+	var edits = CorpusDiskEditArray.create()
+	edits.push(CorpusDiskEdit.wrote(staged.project, fileName: DeclaredInputsPlanFileName, content: text))
+
+	return edits
+end 'planWrittenAs'
+
+export function planDeleted(staged DeclaredInputsProject) returns CorpusDiskEditArray
+	var edits = CorpusDiskEditArray.create()
+	edits.push(CorpusDiskEdit.deleted(staged.project, fileName: DeclaredInputsPlanFileName))
+
+	return edits
+end 'planDeleted'
+
+export function readingProjectPlanWrittenAs(staged DeclaredInputsProject, text String) returns CorpusDiskEditArray
+	var edits = CorpusDiskEditArray.create()
+	edits.push(CorpusDiskEdit.wrote(staged.root.join(DeclaredInputsReadingDirName), fileName: DeclaredInputsPlanFileName, content: text))
+
+	return edits
+end 'readingProjectPlanWrittenAs'
+
+export function lonelyProjectFileWidened(staged DeclaredInputsProject) returns CorpusDiskEditArray
+	var edits = CorpusDiskEditArray.create()
+	edits.push(CorpusDiskEdit.wrote(staged.root.join(DeclaredInputsLonelyDirName), fileName: DeclaredInputsManifestFileName, content: DeclaredInputsSharingManifest))
+
+	return edits
+end 'lonelyProjectFileWidened'
+
+export function probeAcrossAnInputEdit(staged DeclaredInputsProject, edits CorpusDiskEditArray) returns ProjectDiagnosticsProbeArray
+	let probes = probeProjectCheckAcrossAnEdit(staged.project, fileName: DeclaredInputsMainFileName, content: DeclaredInputsMainSource, diskEdits: edits, editedContent: DeclaredInputsMainSource)
+
+	discardOutsideCheckoutDir(staged.root)
+
+	return probes
+end 'probeAcrossAnInputEdit'
+
+export function gatedRunsAfterAnInputEditedMidRun(staged DeclaredInputsProject, edit MidRunEdit) returns ElementIndex throws TestFailure
+	var client = LspClient.start()
+
+	if let runs = try editInputMidRun(client, staged: staged, edit: edit) 'finished'
+		client.release()
+		discardOutsideCheckoutDir(staged.root)
+
+		return runs
+	end 'finished' else (e) 'failed'
+		try abandonedStagedSession(client, staged: staged.root, failure: e, doing: "the session did not complete")
+	end 'failed'
+
+	panic("gatedRunsAfterAnInputEditedMidRun: a failed session is reported by `abandonedStagedSession`, which always throws")
+end 'gatedRunsAfterAnInputEditedMidRun'
+
+function editInputMidRun(client LspClient, staged DeclaredInputsProject, edit MidRunEdit) returns ElementIndex throws LspClientError
+	let project = staged.project
+	let uri = fileUriOf(project.join(DeclaredInputsMainFileName))
+	let resolvedFirst = edit == MidRunEdit.restoringAnOldModifiedTime
+	var gatedRun = 1 as ElementIndex
+
+	if not resolvedFirst 'heldFromTheStart'
+		writeCorpusFile(project, fileName: DeclaredInputsHoldFileName, content: "hold")
+	end 'heldFromTheStart'
+
+	_ = try client.initializeAtRoot(project)
+	try client.initialized()
+	try client.openDocument(uri, content: DeclaredInputsMainSource)
+
+	if resolvedFirst 'resolvedBeforeTheEdit'
+		_ = try client.awaitProjectCheckPublish(uri)
+
+		writeCorpusFile(project, fileName: DeclaredInputsHoldFileName, content: "hold")
+		writeCorpusFile(project, fileName: DeclaredInputsPlanFileName, content: DeclaredInputsBlankListing)
+		try client.changeDocument(uri, content: DeclaredInputsMainSource, version: DeclaredInputsEditedVersion)
+
+		gatedRun = 2
+	end 'resolvedBeforeTheEdit'
+
+	_ = try runsReached(client, uri: uri, project: project, wanted: gatedRun, boundMs: DeclaredInputsRunBoundMs)
+
+	if edit == MidRunEdit.afterAnUnsettledRun 'anEditThatUnsettlesTheFirstRun'
+		writeCorpusFile(project, fileName: DeclaredInputsPlanFileName, content: DeclaredInputsBlankListing)
+		releasedRun(project, number: gatedRun)
+
+		gatedRun = gatedRun + 1
+		_ = try runsReached(client, uri: uri, project: project, wanted: gatedRun, boundMs: DeclaredInputsRerunBoundMs)
+	end 'anEditThatUnsettlesTheFirstRun'
+
+	writeCorpusFile(project, fileName: DeclaredInputsPlanFileName, content: DeclaredInputsSharedListing)
+
+	if edit != MidRunEdit.onTheFirstResolution 'withAnOldTime'
+		backdatedToTheYear2000(project.join(DeclaredInputsPlanFileName))
+	end 'withAnOldTime'
+
+	releasedRun(project, number: gatedRun)
+
+	return try runsReached(client, uri: uri, project: project, wanted: gatedRun + 1, boundMs: DeclaredInputsRerunBoundMs)
+end 'editInputMidRun'
+
+function releasedRun(project FilePath, number ElementIndex)
+	writeCorpusFile(project, fileName: "{DeclaredInputsReleasePrefix}{number}{DeclaredInputsReleaseSuffix}", content: "release")
+end 'releasedRun'
+
+export function runsAfterAnIdenticalRewrite(staged DeclaredInputsProject) returns ElementIndex throws TestFailure
+	var client = LspClient.start()
+
+	if let runs = try rewriteInputIdentically(client, staged: staged) 'finished'
+		client.release()
+		discardOutsideCheckoutDir(staged.root)
+
+		return runs
+	end 'finished' else (e) 'failed'
+		try abandonedStagedSession(client, staged: staged.root, failure: e, doing: "the session did not complete")
+	end 'failed'
+
+	panic("runsAfterAnIdenticalRewrite: a failed session is reported by `abandonedStagedSession`, which always throws")
+end 'runsAfterAnIdenticalRewrite'
+
+function rewriteInputIdentically(client LspClient, staged DeclaredInputsProject) returns ElementIndex throws LspClientError
+	let project = staged.project
+	let uri = fileUriOf(project.join(DeclaredInputsMainFileName))
+
+	_ = try client.initializeAtRoot(project)
+	try client.initialized()
+	try client.openDocument(uri, content: DeclaredInputsMainSource)
+	_ = try client.awaitProjectCheckPublish(uri)
+
+	writeCorpusFile(project, fileName: DeclaredInputsPlanFileName, content: DeclaredInputsNoListing)
+	try client.changeDocument(uri, content: DeclaredInputsMainSource, version: DeclaredInputsEditedVersion)
+	_ = try client.awaitProjectCheckPublish(uri)
+
+	sleep(DeclaredInputsLaterAskMs)
+
+	try client.changeDocument(uri, content: DeclaredInputsMainSource, version: DeclaredInputsEditedVersion + 1)
+	_ = try client.awaitProjectCheckPublish(uri)
+
+	return runsOf(project)
+end 'rewriteInputIdentically'
+
+function runsReached(client LspClient, uri String, project FilePath, wanted ElementIndex, boundMs DurationMs) returns ElementIndex throws LspClientError
+	let started = Clock.nowMs()
+	var runs = runsOf(project)
+
+	while runs < wanted and Clock.elapsedMs(started) < boundMs 'untilReached'
+		_ = try client.documentSymbols(uri)
+		sleep(DeclaredInputsRunPollMs)
+		runs = runsOf(project)
+	end 'untilReached'
+
+	return runs
+end 'runsReached'
+
+function runsOf(project FilePath) returns ElementIndex
+	let marker = project.join(DeclaredInputsRunsFileName)
+
+	if not File.exists(marker) 'neverRan'
+		return 0
+	end 'neverRan'
+
+	let text = try File.readText(marker) otherwise panic("the test could not run: could not read {marker.toString()}")
+	var runs = 0 as ElementIndex
+
+	for line in text.split("\n") 'eachLine'
+		if not line.isEmpty() 'aRun'
+			runs = runs + 1
+		end 'aRun'
+	end 'eachLine'
+
+	return runs
+end 'runsOf'
+
+export function expectSharedUndefined(probe ProjectDiagnosticsProbe, note String) throws TestFailure
+	let only = try onlyProjectDiagnostic(probe, note: note)
+
+	try Expect.equal(only.code.describe(), expected: DeclaredInputsUndefinedCode, message: "{note} {only.message}")
+end 'expectSharedUndefined'

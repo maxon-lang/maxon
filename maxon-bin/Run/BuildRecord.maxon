@@ -228,9 +228,12 @@ function stampedInputs(base FilePath, paths CompileInputArray) returns RecordedI
 
 	for path in paths 'eachPath'
 		let anchored = path.anchoredAt(base)
-		let info = try File.info(anchored) otherwise throw RunCacheError.unavailable("could not read the modification time of {anchored.toString()}")
 
-		stamped.push(RecordedInput.create(anchored, modifiedTime: info.modifiedTime))
+		match fileStateOf(anchored) 'state'
+			present(_, modifiedTime, _) then stamped.push(RecordedInput.create(anchored, modifiedTime: modifiedTime))
+			absent or
+			unreadable then throw RunCacheError.unavailable("could not read the modification time of {anchored.toString()}")
+		end 'state'
 	end 'eachPath'
 
 	return stamped
@@ -491,11 +494,11 @@ union RecordedFileStamp
 end 'RecordedFileStamp'
 
 function stampOf(path FilePath) returns RecordedFileStamp
-	let info = try File.info(path) otherwise (e) 'noInfo'
-		return RecordedFileStamp.absent if e == FileInfoError.notFound else RecordedFileStamp.unreadable
-	end 'noInfo'
-
-	return RecordedFileStamp.written(info.size, modifiedTime: info.modifiedTime)
+	return match fileStateOf(path) 'state'
+		absent gives RecordedFileStamp.absent
+		unreadable gives RecordedFileStamp.unreadable
+		present(size, modifiedTime, _) gives RecordedFileStamp.written(size, modifiedTime: modifiedTime)
+	end 'state'
 end 'stampOf'
 
 function encodedStamp(stamp RecordedFileStamp) returns String
@@ -595,7 +598,7 @@ function modifiedInputChange(current RecordedInputArray, stored RecordedInputArr
 			return StatedText.stated("{input.path.toString()} was replaced by an older copy")
 		end 'restored'
 
-		if input.modifiedTime != was.modifiedTime or was.modifiedTime >= started 'modified'
+		if input.modifiedTime != was.modifiedTime or not settledBefore(was.modifiedTime, observedAt: started) 'modified'
 			return StatedText.stated("{input.path.toString()} was modified at or after the last compile started")
 		end 'modified'
 	end 'eachInput'

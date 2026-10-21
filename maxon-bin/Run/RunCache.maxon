@@ -468,9 +468,12 @@ end 'fieldsDigest'
 
 export function compilerIdentity(target Target) returns CompilerIdentity throws RunCacheError
 	let exe = try Process.executablePath() otherwise throw RunCacheError.unavailable("could not determine this compiler's own path, which the build cache key is computed over")
-	let info = try File.info(exe) otherwise throw RunCacheError.unavailable("could not read {exe.toString()}, which the build cache key is computed over")
 
-	return CompilerIdentity.create(exe, size: info.size, modifiedTime: info.modifiedTime, target: target)
+	match fileStateOf(exe) 'state'
+		present(size, modifiedTime, _) then return CompilerIdentity.create(exe, size: size, modifiedTime: modifiedTime, target: target)
+		absent or
+		unreadable then throw RunCacheError.unavailable("could not read {exe.toString()}, which the build cache key is computed over")
+	end 'state'
 end 'compilerIdentity'
 
 // ⭐ **WALK ORDER IS PART OF THE KEY.** The loader registers sources in the order the walk found them and
@@ -488,11 +491,11 @@ function digestLines(label String, paths CompileInputArray) returns String throw
 end 'digestLines'
 
 function sourceLine(label String, path FilePath) returns String throws RunCacheError
-	let bytes = try File.readBinary(path) otherwise throw RunCacheError.unavailable("could not read {path.toString()}, which the build cache key is computed over")
+	let digest = try fileDigestOf(path) otherwise throw RunCacheError.unavailable("could not read {path.toString()}, which the build cache key is computed over")
 
 	var fields = StringArray.create()
 	fields.push(path.toString())
-	fields.push(hexOfLeadingBytes(sha256(bytes), count: CacheNameDigestBytes))
+	fields.push(hexOfLeadingBytes(digest, count: CacheNameDigestBytes))
 
 	return manifestLine(label, fields: fields)
 end 'sourceLine'

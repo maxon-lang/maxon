@@ -1,0 +1,7 @@
+test 'project diagnostics: the inputs an unsettled run saw are the baseline of the next run'
+	let staged = stagedDeclaredInputsProject(InputDeclaration.declaredAndGated, plan: PlanFile.listing(DeclaredInputsNoListing))
+
+	let runs = gatedRunsAfterAnInputEditedMidRun(staged, edit: MidRunEdit.afterAnUnsettledRun)
+
+	Expect.isTrue(runs >= 3, message: "`{DeclaredInputsPlanFileName}` was edited during the first run of the project file, which left that run unsettled. It was rewritten again during the second run, and its modified time was set back to the year 2000, so only the bytes the first run saw can show that it moved. The project file owes a third run. It ran {runs} time(s).")
+end 'project diagnostics: the inputs an unsettled run saw are the baseline of the next run'

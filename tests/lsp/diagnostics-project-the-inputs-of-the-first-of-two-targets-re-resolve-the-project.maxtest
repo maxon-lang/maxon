@@ -1,0 +1,8 @@
+test 'project diagnostics: an input declared by the first of two targets re-resolves the project when it changes'
+	let staged = stagedDeclaredInputsProject(InputDeclaration.declaredByTheFirstOfTwoTargets, plan: PlanFile.listing(DeclaredInputsNoListing))
+
+	let probes = probeAcrossAnInputEdit(staged, edits: planWrittenAs(staged, text: DeclaredInputsSharedListing))
+
+	try expectSharedUndefined(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "`{DeclaredInputsPlanFileName}` lists no directory, so neither target holds `shared`.")
+	try expectNoProjectDiagnostics(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAfterTheEdit), note: "`{DeclaredInputsPlanFileName}` is declared by `alpha` and now lists `shared`. The project holds the union of both targets' sources and inputs, so it is resolved again.")
+end 'project diagnostics: an input declared by the first of two targets re-resolves the project when it changes'

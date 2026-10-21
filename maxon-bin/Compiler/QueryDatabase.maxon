@@ -680,27 +680,6 @@ end 'FileProvenance'
 
 export typealias FileProvenanceMemo = Map with (FilePath, FileProvenance)
 
-module type SourceFileStamp
-	module let size as FileSize
-	module let modifiedTime as Timestamp
-	module let observedAt as Timestamp
-
-	module static function create(size FileSize, modifiedTime Timestamp, observedAt Timestamp) returns SourceFileStamp
-		return Self{size: size, modifiedTime: modifiedTime, observedAt: observedAt}
-	end 'create'
-
-	// ⚠ `>=`, not `>`: `Timestamp` is whole seconds, so a write inside the second the read began in is
-	// indistinguishable from one that preceded it and has to count as unseen. A stamp that fails this
-	// describes nothing and forces a re-read.
-	module function describes(info FileInfo) returns bool
-		if self.modifiedTime >= self.observedAt 'writableWithinTheStampedSecond'
-			return false
-		end 'writableWithinTheStampedSecond'
-
-		return self.size == info.size and self.modifiedTime == info.modifiedTime
-	end 'describes'
-end 'SourceFileStamp'
-
 module typealias SourceFileStampMap = Map with (FilePath, SourceFileStamp)
 
 module type LibraryNameRoster
@@ -718,9 +697,8 @@ module type LibraryNameRoster
 
 		for path in paths 'eachFile'
 			let stamp = try self.stamps.get(path) otherwise return false
-			let info = try File.info(path) otherwise return false
 
-			if not stamp.describes(info) 'rewritten'
+			if not stamp.describes(fileStateOf(path)) 'rewritten'
 				return false
 			end 'rewritten'
 		end 'eachFile'

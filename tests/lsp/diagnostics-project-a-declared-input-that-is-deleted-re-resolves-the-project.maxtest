@@ -1,0 +1,8 @@
+test 'project diagnostics: a declared input that is deleted re-resolves the project'
+	let staged = stagedDeclaredInputsProject(InputDeclaration.declared, plan: PlanFile.listing(DeclaredInputsSharedListing))
+
+	let probes = probeAcrossAnInputEdit(staged, edits: planDeleted(staged))
+
+	try expectNoProjectDiagnostics(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "`{DeclaredInputsPlanFileName}` lists `shared`, so `main.maxon` sees it.")
+	try expectSharedUndefined(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAfterTheEdit), note: "`{DeclaredInputsPlanFileName}` is gone, the project file declares it as an input, and the buffer re-sent its unchanged text, so the project file runs again and the project is its own directory.")
+end 'project diagnostics: a declared input that is deleted re-resolves the project'

@@ -1,0 +1,8 @@
+test 'project diagnostics: a file the project file read and did not declare leaves the held answer stale'
+	let staged = stagedDeclaredInputsProject(InputDeclaration.undeclared, plan: PlanFile.listing(DeclaredInputsNoListing))
+
+	let probes = probeAcrossAnInputEdit(staged, edits: planWrittenAs(staged, text: DeclaredInputsSharedListing))
+
+	try expectSharedUndefined(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "`{DeclaredInputsPlanFileName}` lists no directory, so the project is its own directory and cannot see `shared`.")
+	try expectSharedUndefined(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAfterTheEdit), note: "`{DeclaredInputsPlanFileName}` now lists `shared` but the project file declares no inputs, so its answer is keyed on its own text alone and stays as it was until that text changes.")
+end 'project diagnostics: a file the project file read and did not declare leaves the held answer stale'

@@ -1,0 +1,15 @@
+#if not os(Windows)
+	let LinkName = "link"
+	let LinkTargetDirName = "manifest-inputs-link-target"
+	let LinkRefusalWording = "which is a directory, not a file"
+
+	test 'a manifest input that is a link to a directory is refused'
+		let staged = stagedProject("inputs-naming-a-link-to-a-directory-refused", fixture: InputsNamingALinkFixtureName)
+		let target = freshOutsideCheckoutDir(LinkTargetDirName)
+		_ = runSystemTool("ln", arguments: ["-s", target.toString(), staged.join(LinkName).toString()], what: "`ln -s` making a link to a directory in the staged project")
+
+		requireRefused(staged, options: StringArray.create(), exitCode: RefusedExitCode, wordings: [LinkRefusalWording], what: "maxon build")
+
+		discardOutsideCheckoutDir(target)
+	end 'a manifest input that is a link to a directory is refused'
+#endif

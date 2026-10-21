@@ -142,15 +142,13 @@ end 'stalenessOf'
 // The scan stops at the FIRST newer source, for `cross-target-gate.sh`'s reason: the reader needs an
 // example, not an inventory, and the fix is the same however many there are.
 function stalenessUnder(binary FilePath, sourceRoot FilePath) returns StalenessVerdict
-	let built = try File.info(binary) otherwise panic("CompilerFreshness: could not read the modification time of {binary.toString()}, a file this command is running from or has already proved exists")
+	let built = modifiedTimeOf(binary, why: "a file this command is running from or has already proved exists")
 
 	var sources = MaxonSourcePathArray.create()
 	_ = try collectMaxonSources(sourceRoot, into: sources) otherwise panic("CompilerFreshness: could not walk {sourceRoot.toString()} for sources, though its {SourceRootMarkerDirName}/ directory is right there")
 
 	for source in sources 'each'
-		let info = try File.info(source) otherwise panic("CompilerFreshness: could not read the modification time of {source.toString()}, a file the directory walk had just listed")
-
-		if info.modifiedTime <= built.modifiedTime 'notNewer'
+		if modifiedTimeOf(source, why: "a file the directory walk had just listed") <= built 'notNewer'
 			continue
 		end 'notNewer'
 
@@ -165,6 +163,14 @@ function stalenessUnder(binary FilePath, sourceRoot FilePath) returns StalenessV
 
 	return StalenessVerdict.mayProceed
 end 'stalenessUnder'
+
+export function modifiedTimeOf(path FilePath, why String) returns Timestamp
+	match fileStateOf(path) 'state'
+		present(_, modifiedTime, _) then return modifiedTime
+		absent or
+		unreadable then panic("CompilerFreshness: could not read the modification time of {path.toString()}, {why}")
+	end 'state'
+end 'modifiedTimeOf'
 
 // Whether `maxon build` compiled `source`, which `collectMaxonSources` found, into the binary. See
 // this file's header for why the output-directory clause lives here rather than in that walk.

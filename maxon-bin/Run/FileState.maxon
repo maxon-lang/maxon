@@ -1,0 +1,41 @@
+export union FileState
+	absent
+	unreadable(failure FileFailure)
+	present(size FileSize, modifiedTime Timestamp, isDirectory bool)
+end 'FileState'
+
+export function fileStateOf(path FilePath) returns FileState
+	let info = try File.info(path) otherwise (e) 'noInfo'
+		return FileState.absent if e == FileInfoError.notFound else FileState.unreadable(e.failure())
+	end 'noInfo'
+
+	return FileState.present(info.size, modifiedTime: info.modifiedTime, isDirectory: info.isDirectory)
+end 'fileStateOf'
+
+export function fileDigestOf(path FilePath) returns ByteArray throws FileReadError
+	return sha256(try File.readBinary(path))
+end 'fileDigestOf'
+
+// ⚠ `<`, not `<=`: `Timestamp` is whole seconds, so a write inside the second the read began in is
+// indistinguishable from one that preceded it and has to count as unseen.
+export function settledBefore(modifiedTime Timestamp, observedAt Timestamp) returns bool
+	return modifiedTime < observedAt
+end 'settledBefore'
+
+export type SourceFileStamp
+	export let size as FileSize
+	export let modifiedTime as Timestamp
+	export let observedAt as Timestamp
+
+	export static function create(size FileSize, modifiedTime Timestamp, observedAt Timestamp) returns SourceFileStamp
+		return Self{size: size, modifiedTime: modifiedTime, observedAt: observedAt}
+	end 'create'
+
+	export function describes(now FileState) returns bool
+		return match now 'now'
+			present(nowSize, nowModifiedTime, _) gives settledBefore(self.modifiedTime, observedAt: self.observedAt) and self.size == nowSize and self.modifiedTime == nowModifiedTime
+			absent or
+			unreadable gives false
+		end 'now'
+	end 'describes'
+end 'SourceFileStamp'

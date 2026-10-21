@@ -413,8 +413,11 @@ export function libraryDeclaredTypeNames(project Project) returns NameRoster thr
 	var names = NameRoster.create()
 
 	for path in found 'eachFile'
-		let info = try File.info(path) otherwise throw CompileError.readError(path)
-		stamps.upsert(path, value: SourceFileStamp.create(info.size, modifiedTime: info.modifiedTime, observedAt: observedAt))
+		match fileStateOf(path) 'state'
+			present(size, modifiedTime, _) then stamps.upsert(path, value: SourceFileStamp.create(size, modifiedTime: modifiedTime, observedAt: observedAt))
+			absent or
+			unreadable then throw CompileError.readError(path)
+		end 'state'
 
 		let declared = try declaredTypeNamesOfLibraryFile(project, path: path)
 

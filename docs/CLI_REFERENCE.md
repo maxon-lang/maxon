@@ -1166,12 +1166,12 @@ compiler that is about to build, for example which commit its `maxon version` re
 
 | Call | Meaning |
 |---|---|
-| `Build.build(source, output:, debugInfo:, version:, defines:, rebuildWithOutput:)` | Build one file or directory to one output. The common case. |
+| `Build.build(source, output:, debugInfo:, version:, defines:, rebuildWithOutput:, inputs:)` | Build one file or directory to one output. The common case. |
 | `Build.buildWithConfig(config)` | Build one `BuildConfig`, which can list several sources, compiled as one program in order. |
-| `Build.delegate(directory, target:)` | Hand the whole description to a target of another directory's `.maxproj` file. |
+| `Build.delegate(directory, target:, inputs:)` | Hand the whole description to a target of another directory's `.maxproj` file. |
 
-`output` defaults to `""`, `debugInfo` to `true`, `version` to `""`, `defines` to an empty list and
-`rebuildWithOutput` to `false`. **A
+`output` defaults to `""`, `debugInfo` to `true`, `version` to `""`, `defines` to an empty list,
+`rebuildWithOutput` to `false` and `inputs` to an empty list. **A
 build that states no output is written to `.maxon/<name>`**, `<name>` being the project file's name
 without its extension (for a task, the `.maxtasks` file's). The keys the driver reads from the JSON are:
 
@@ -1185,6 +1185,7 @@ without its extension (for a task, the `.maxtasks` file's). The keys the driver 
 | `version` | string | A dotted version stamped into the binary: a `VS_VERSIONINFO` resource on Windows and `LC_SOURCE_VERSION` on macOS. Linux and `wasm32-wasi` binaries carry no product version. Without it, the binary reports `0.0.0.0`, and a missing component is 0. A component that is not a number is refused on every target, and one the target's field cannot hold is refused too: each Windows component holds 0 to 65535 (four at most); on macOS the first holds 0 to 16777215 and the next four 0 to 1023. |
 | `defines` | list of `name=value` strings | The same as [`--define=`](#defines) on the command line. |
 | `rebuild_with_output` | `true` or `false` | Run the written program with this command's own arguments once the build succeeds (default `false`). See [Building again with the written program](#building-again-with-the-written-program). |
+| `inputs` | list of strings | Files besides `sources` whose contents the description depends on, resolved against the project file's directory. The language server runs the project file again when one changes; see [`maxon lsp-server`](#maxon-lsp-server). With `directory`, they join the delegated project's own. A directory is refused: ``error: myapp.maxproj's `inputs` holds `<entry>`, which is a directory, not a file``. |
 
 A field that is present but malformed is **refused**, naming the key, for example
 ``error: myapp.maxproj's `sources` is not a list of strings``. A description that fails to parse as JSON
@@ -2215,8 +2216,17 @@ with no `.maxproj`, and a project file that does not compile are each their dire
 The project file runs beside the session, for up to 30 seconds, and every request is answered
 meanwhile. Each project's file runs on its own, so a slow one holds up only its own project's answer.
 The project check of a document in that project starts once the answer arrives, and every open document
-in that project is then checked again. An answer holds until the `.maxproj` text changes; a project file
-that failed to compile, failed, or was refused is run again after ten seconds. A project file that fails
+in that project is then checked again. An answer holds while what it was resolved from is unchanged:
+the `.maxproj` text, every `.maxproj` it delegates to, and the bytes of each file the build declares in
+[`inputs`](#describing-a-build). A declared input that is missing is held as missing, and its
+appearance runs the project file again, as do its deletion and an edit that changes its bytes; one
+rewritten with the same bytes keeps the answer. A file the project file reads without declaring it
+keeps the held answer when it changes. A project file that failed to compile, failed, or was refused is
+run again after ten seconds. `maxon build` runs the project file on every build. Three gaps remain: an
+input whose modification time lies in the future is read again on every ask; an input the previous run
+did not declare that is deleted while the run that declares it is under way leaves that run's answer
+held; and on a filesystem whose clock is coarse or skewed against the server's, a write made during a
+run can go unseen. A project file that fails
 or describes no usable build — no build, or no `sources` — is a refusal: the line `maxon build` prints
 for it is published on the `.maxproj` document, and with the project check of each document in the
 project, at the document's first character.

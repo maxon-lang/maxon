@@ -30,24 +30,32 @@ public type BuildConfig
 	/// already running with `MAXON_SECOND_STAGE` set ends at its own output. Refused with `directory`.
 	public var rebuildWithOutput as bool
 
-	public static function create(sources StringArray, output String = "", debug_info bool = true, version String = "", defines StringArray = StringArray.create(), directory String = "", delegateTarget String = "", rebuildWithOutput bool = false) returns BuildConfig
-		return BuildConfig{output: output, sources: sources, debug_info: debug_info, version: version, defines: defines, directory: directory, delegateTarget: delegateTarget, rebuildWithOutput: rebuildWithOutput}
+	/// Files besides `sources` whose contents this build's description depends on, relative to the
+	/// project file's directory. The language server runs the project file again when one changes; a
+	/// directory is refused.
+	public var inputs as StringArray
+
+	public static function create(sources StringArray, output String = "", debug_info bool = true, version String = "", defines StringArray = StringArray.create(), directory String = "", delegateTarget String = "", rebuildWithOutput bool = false, inputs StringArray = StringArray.create()) returns BuildConfig
+		return BuildConfig{output: output, sources: sources, debug_info: debug_info, version: version, defines: defines, directory: directory, delegateTarget: delegateTarget, rebuildWithOutput: rebuildWithOutput, inputs: inputs}
 	end 'create'
 end 'BuildConfig'
 
 // The file a described build is written to, named by the driver before it runs a manifest. The
-// compiler spells this name too (`Main.BuildDescriptionVariable`) and cannot share this constant:
-// the two must agree, or every manifest describes nothing.
+// compiler spells this name too (`BuildDescriptionVariable`, `maxon-bin/Run/ProjectDescription.maxon`)
+// and cannot share this constant: the two must agree, or every manifest describes nothing.
 let BuildDescriptionVariable = "MAXON_BUILD_DESCRIPTION"
 
 let DescribedBuildSeparator = ",\n"
 
-// The compiler spells this key too (`Main.ManifestRebuildWithOutputKey`); a mismatch drops the
-// request silently, since an absent key reads as `false`.
+// The compiler spells this key too (`ManifestRebuildWithOutputKey`, in the same file); a mismatch
+// drops the request silently, since an absent key reads as `false`.
 let RebuildWithOutputKey = "rebuild_with_output"
 
-// `Main.ManifestDirectoryKey` and `Main.ManifestDelegateTargetKey` spell these too; a mismatch
-// reads as unstated, silently.
+// The compiler spells this key too (`ManifestInputsKey`); a mismatch reads as no inputs, silently.
+let InputsKey = "inputs"
+
+// `ManifestDirectoryKey` and `ManifestDelegateTargetKey` in the same file spell these too; a
+// mismatch reads as unstated, silently.
 let DirectoryKey = "directory"
 let DelegateTargetKey = "target"
 
@@ -58,11 +66,12 @@ public type Build
 	/// `.maxon/<name>`, `<name>` being the driver file's. debugInfo: whether the build writes the
 	/// `<output>.mxdbg` sidecar; `maxon build --no-debug-info` turns it off whatever this says.
 	/// rebuildWithOutput: build again with the program just written, as
-	/// `BuildConfig.rebuildWithOutput` describes.
-	public static function build(source String, output String = "", debugInfo bool = true, version String = "", defines StringArray = StringArray.create(), rebuildWithOutput bool = false)
+	/// `BuildConfig.rebuildWithOutput` describes. inputs: files besides `source` this description
+	/// depends on, as `BuildConfig.inputs` describes.
+	public static function build(source String, output String = "", debugInfo bool = true, version String = "", defines StringArray = StringArray.create(), rebuildWithOutput bool = false, inputs StringArray = StringArray.create())
 		var sources = StringArray.create()
 		sources.push(source)
-		Build.emitBuildConfig(BuildConfig.create(sources, output: output, debug_info: debugInfo, version: version, defines: defines, rebuildWithOutput: rebuildWithOutput))
+		Build.emitBuildConfig(BuildConfig.create(sources, output: output, debug_info: debugInfo, version: version, defines: defines, rebuildWithOutput: rebuildWithOutput, inputs: inputs))
 	end 'build'
 
 	/// Custom build - full control via BuildConfig
@@ -73,9 +82,10 @@ public type Build
 	/// Hand the build to another directory's `.maxproj` file. The compiler runs that file with the
 	/// directory as its working directory and resolves the relative paths it states against it, so the
 	/// delegated project builds the same way from either end. target: which of its targets to build,
-	/// named as `maxon build` names one; empty means its sole target.
-	public static function delegate(directory String, target String = "")
-		Build.emitBuildConfig(BuildConfig.create(StringArray.create(), directory: directory, delegateTarget: target))
+	/// named as `maxon build` names one; empty means its sole target. inputs: files this delegation
+	/// depends on, joined to the delegated project's own, as `BuildConfig.inputs` describes.
+	public static function delegate(directory String, target String = "", inputs StringArray = StringArray.create())
+		Build.emitBuildConfig(BuildConfig.create(StringArray.create(), directory: directory, delegateTarget: target, inputs: inputs))
 	end 'delegate'
 
 	/// Emit one build configuration as JSON. Every string is JSON-escaped, so a `"` or a Windows `\`
@@ -97,6 +107,10 @@ public type Build
 		if config.rebuildWithOutput 'rebuildRequested'
 			text.append(",\n  \"{RebuildWithOutputKey}\": true")
 		end 'rebuildRequested'
+
+		if config.inputs.count() > 0 'inputsDeclared'
+			text.append(",\n  \"{InputsKey}\": [{Build.renderStringList(config.inputs)}]")
+		end 'inputsDeclared'
 
 		text.append("\n\}")
 		return text

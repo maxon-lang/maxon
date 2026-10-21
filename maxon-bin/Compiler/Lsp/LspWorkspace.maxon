@@ -313,9 +313,8 @@ let HeldProjectCapacity = 8
 
 let WorkspaceResweepIntervalMs = 1000
 
-// How long an unbuilt or refused answer holds while the `.maxproj` text and the trust are
-// unchanged. Any other answer holds until one of the two changes
-// (`ProjectInputsAnswer.stillAnswers`).
+// How long an unbuilt or refused answer holds while its stamp holds and the trust is unchanged. Any
+// other answer holds until its stamp or the trust changes (`ProjectInputsAnswer.stillAnswers`).
 let UnresolvedProjectRetryMs = 10000
 
 let ProjectLoadingMethod = "maxon/projectLoading"
@@ -360,7 +359,7 @@ module type LspWorkspaceState
 		let ticket = self.nextResolutionTicket
 		var root = self.held.rootAt(dir.toString())
 		var resolver = root.resolver.obtained(function() gives spawn LspProjectResolver.create())
-		self.arrivals.push(try resolver.resolve(dir.clone(), ticket: ticket, sendTimeout: ForeverMs) otherwise panic("LspWorkspaceState.requestResolution: a send that waits forever for room, to a resolver this workspace holds, was refused"))
+		self.arrivals.push(try resolver.resolve(dir.clone(), ticket: ticket, previous: root.inputs.previousInputStamps().clone(), sendTimeout: ForeverMs) otherwise panic("LspWorkspaceState.requestResolution: a send that waits forever for room, to a resolver this workspace holds, was refused"))
 
 		return ticket
 	end 'requestResolution'
@@ -848,7 +847,7 @@ module function projectSourcesIn(dir FilePath, selection SourceSelection, answer
 		walked or
 		ambiguous or
 		unbuilt then return EditorSources.walked(maxonSourcesIn(dir, selection: selection), root: dir)
-		listed(paths) then return listedSources(paths, selection: selection, projectDir: dir)
+		listed(paths, _) then return listedSources(paths, selection: selection, projectDir: dir)
 		refused then return EditorSources.refused(dir, lines: answer.refusal.clone())
 	end 'inputs'
 end 'projectSourcesIn'
@@ -865,17 +864,24 @@ function listedSources(paths MaxonSourcePathArray, selection SourceSelection, pr
 	return EditorSources.walked(SourceSweep.swept(sources), root: root)
 end 'listedSources'
 
-// ⚠ An answer is keyed on the `.maxproj` text alone, so a project file whose sources depend on
-// another file holds a stale answer until its own text changes. `unknown` equals no stamp, itself
-// included.
+// What an answer was resolved from: the `.maxproj` text and the state of each input it declared. A
+// file the project file reads without declaring it is not covered, and an edit to it leaves the
+// answer stale. `unknown` equals no stamp, itself included; its inputs are the baseline the next run
+// is compared against.
 export union ProjectFileStamp
 	absent
-	present(file FilePath, content String)
-	unknown
+	present(file FilePath, content String, inputs DeclaredInputStamps)
+	unknown(inputs DeclaredInputStamps)
 end 'ProjectFileStamp'
 
+module union StampCurrency
+	outdated
+	vouched
+	refreshed(stamp ProjectFileStamp)
+end 'StampCurrency'
+
 function projectFileStampIn(dir FilePath) returns ProjectFileStamp
-	let search = try driverFileIn(dir, extension: ProjectFileExtension) otherwise return ProjectFileStamp.unknown
+	let search = try driverFileIn(dir, extension: ProjectFileExtension) otherwise return ProjectFileStamp.unknown(DeclaredInputStamps.create())
 
 	return match search 'search'
 		found(file) gives stampOfFile(file)
@@ -884,34 +890,70 @@ function projectFileStampIn(dir FilePath) returns ProjectFileStamp
 end 'projectFileStampIn'
 
 function stampOfFile(file FilePath) returns ProjectFileStamp
-	let content = try File.readText(file) otherwise return ProjectFileStamp.unknown
+	let content = try File.readText(file) otherwise return ProjectFileStamp.unknown(DeclaredInputStamps.create())
 
-	return ProjectFileStamp.present(file, content: content)
+	return ProjectFileStamp.present(file, content: content, inputs: DeclaredInputStamps.create())
 end 'stampOfFile'
 
-function stampsEqual(held ProjectFileStamp, current ProjectFileStamp) returns bool
+function stampWithInputs(stamp ProjectFileStamp, inputs DeclaredInputStamps) returns ProjectFileStamp
+	return match stamp 'stamp'
+		present(file, content, _) gives ProjectFileStamp.present(file.clone(), content: content.clone(), inputs: inputs)
+		unknown gives ProjectFileStamp.unknown(inputs)
+		absent gives stamp.clone()
+	end 'stamp'
+end 'stampWithInputs'
+
+function inputStampsOfStamp(stamp ProjectFileStamp) returns DeclaredInputStamps
+	return match stamp 'stamp'
+		present(_, _, held) gives held
+		unknown(baseline) gives baseline
+		absent gives DeclaredInputStamps.create()
+	end 'stamp'
+end 'inputStampsOfStamp'
+
+function stampHolds(stamp ProjectFileStamp, current ProjectFileStamp) returns bool
+	return match stampCurrency(stamp, current: current) 'currency'
+		outdated gives false
+		vouched or
+		refreshed gives true
+	end 'currency'
+end 'stampHolds'
+
+function stampCurrency(stamp ProjectFileStamp, current ProjectFileStamp) returns StampCurrency
 	return match current 'current'
-		absent gives holdsNoProjectFile(held)
-		present(file, content) gives holdsThisProjectFile(held, file: file, content: content)
-		unknown gives false
+		absent gives currencyWithNoProjectFile(stamp)
+		present(file, content, _) gives currencyOfProjectFile(stamp, file: file, content: content)
+		unknown gives StampCurrency.outdated
 	end 'current'
-end 'stampsEqual'
+end 'stampCurrency'
 
-function holdsNoProjectFile(stamp ProjectFileStamp) returns bool
+function currencyWithNoProjectFile(stamp ProjectFileStamp) returns StampCurrency
 	return match stamp 'stamp'
-		absent gives true
+		absent gives StampCurrency.vouched
 		present or
-		unknown gives false
+		unknown gives StampCurrency.outdated
 	end 'stamp'
-end 'holdsNoProjectFile'
+end 'currencyWithNoProjectFile'
 
-function holdsThisProjectFile(stamp ProjectFileStamp, file FilePath, content String) returns bool
+function currencyOfProjectFile(stamp ProjectFileStamp, file FilePath, content String) returns StampCurrency
 	return match stamp 'stamp'
-		present(heldFile, heldContent) gives heldFile.equals(file) and heldContent == content
+		present(heldFile, heldContent, heldInputs) gives currencyOfHeldInputs(heldFile, heldContent: heldContent, heldInputs: heldInputs, file: file, content: content)
 		absent or
-		unknown gives false
+		unknown gives StampCurrency.outdated
 	end 'stamp'
-end 'holdsThisProjectFile'
+end 'currencyOfProjectFile'
+
+function currencyOfHeldInputs(heldFile FilePath, heldContent String, heldInputs DeclaredInputStamps, file FilePath, content String) returns StampCurrency
+	if not heldFile.equals(file) or heldContent != content 'anotherProjectFile'
+		return StampCurrency.outdated
+	end 'anotherProjectFile'
+
+	return match checkDeclaredInputs(heldInputs) 'check'
+		vouched gives StampCurrency.vouched
+		refreshed(renewed) gives StampCurrency.refreshed(ProjectFileStamp.present(heldFile.clone(), content: heldContent.clone(), inputs: renewed))
+		changed gives StampCurrency.outdated
+	end 'check'
+end 'currencyOfHeldInputs'
 
 export type ProjectInputsAnswer
 	module let inputs as ProjectInputs
@@ -940,20 +982,24 @@ export type ProjectInputsAnswer
 		end 'inputs'
 	end 'isSettled'
 
-	module function stillAnswers(current ProjectFileStamp, askerTrusts bool) returns bool
+	module function withStamp(renewed ProjectFileStamp) returns ProjectInputsAnswer
+		return Self{inputs: self.inputs.clone(), refusal: self.refusal.clone(), notice: self.notice.clone(), trusted: self.trusted, resolved: self.resolved, stamp: renewed, askedAtMs: self.askedAtMs}
+	end 'withStamp'
+
+	module function stillAnswers(current ProjectFileStamp, askerTrusts bool) returns StampCurrency
 		if self.trusted != askerTrusts 'trustChanged'
-			return false
+			return StampCurrency.outdated
 		end 'trustChanged'
 
 		if not self.isSettled() and Clock.elapsedMs(self.askedAtMs) >= UnresolvedProjectRetryMs 'unsettledAndExpired'
-			return false
+			return StampCurrency.outdated
 		end 'unsettledAndExpired'
 
-		return stampsEqual(self.stamp, current: current)
+		return stampCurrency(self.stamp, current: current)
 	end 'stillAnswers'
 
 	module function answersTheRequestFor(current ProjectFileStamp, askerTrusts bool) returns bool
-		return self.trusted == askerTrusts and stampsEqual(self.stamp, current: current)
+		return self.trusted == askerTrusts and stampHolds(self.stamp, current: current)
 	end 'answersTheRequestFor'
 end 'ProjectInputsAnswer'
 
@@ -996,12 +1042,33 @@ type ProjectInputsMemo
 		return self.decided(dir, current: current, workspace: workspace)
 	end 'answerFor'
 
+	function previousInputStamps() returns DeclaredInputStamps
+		return match self.held 'held'
+			nothingAsked gives DeclaredInputStamps.create()
+			asked(answer) gives inputStampsOfStamp(answer.stamp)
+		end 'held'
+	end 'previousInputStamps'
+
 	function reusable(current ProjectFileStamp, trusted bool) returns HeldProjectInputs
 		return match self.held 'held'
 			nothingAsked gives HeldProjectInputs.nothingAsked
-			asked(answer) gives reusedWhileCurrent(answer, current: current, trusted: trusted)
+			asked(answer) gives self.reused(answer, current: current, trusted: trusted)
 		end 'held'
 	end 'reusable'
+
+	function reused(answer ProjectInputsAnswer, current ProjectFileStamp, trusted bool) returns HeldProjectInputs
+		return match answer.stillAnswers(current, askerTrusts: trusted) 'currency'
+			outdated gives HeldProjectInputs.nothingAsked
+			vouched gives HeldProjectInputs.asked(answer)
+			refreshed(stamp) gives self.renewed(answer.withStamp(stamp.clone()))
+		end 'currency'
+	end 'reused'
+
+	function renewed(answer ProjectInputsAnswer) returns HeldProjectInputs
+		self.held = HeldProjectInputs.asked(answer.clone())
+
+		return HeldProjectInputs.asked(answer)
+	end 'renewed'
 
 	function outstanding(current ProjectFileStamp, trusted bool) returns RequestedInputs
 		return match self.requested 'requested'
@@ -1038,8 +1105,8 @@ type ProjectInputsMemo
 		return self.shownMeanwhile(provisional)
 	end 'request'
 
-	// A reply carrying any ticket but the awaited one answers a request made before the `.maxproj`
-	// text or the trust last changed, or before this root was released and held afresh, and is dropped.
+	// A reply carrying any ticket but the awaited one answers a request made before the stamp or the
+	// trust last changed, or before this root was released and held afresh, and is dropped.
 	function hold(answer ProjectInputsAnswer, ticket ResolutionTicket) returns bool
 		if not self.awaits(ticket) 'superseded'
 			return false
@@ -1066,14 +1133,6 @@ type ProjectInputsMemo
 	end 'awaits'
 end 'ProjectInputsMemo'
 
-function reusedWhileCurrent(answer ProjectInputsAnswer, current ProjectFileStamp, trusted bool) returns HeldProjectInputs
-	if not answer.stillAnswers(current, askerTrusts: trusted) 'outdated'
-		return HeldProjectInputs.nothingAsked
-	end 'outdated'
-
-	return HeldProjectInputs.asked(answer)
-end 'reusedWhileCurrent'
-
 function requestWhileCurrent(provisional ProjectInputsAnswer, ticket ResolutionTicket, current ProjectFileStamp, trusted bool) returns RequestedInputs
 	if not provisional.answersTheRequestFor(current, askerTrusts: trusted) 'outdated'
 		return RequestedInputs.noRequest
@@ -1098,15 +1157,21 @@ function decisionFor(dir FilePath, stamp ProjectFileStamp, trusted bool) returns
 	end 'need'
 end 'decisionFor'
 
-// Stamped before the run and checked after it: a file edited during the run is stamped `unknown`,
-// so the next ask runs it again rather than holding an answer about text that is gone.
-module function resolvedProjectInputs(dir FilePath) returns ProjectInputsAnswer
+// The `.maxproj` and the previous run's inputs are stamped before the run and checked after it: a
+// file edited during the run leaves the answer `unknown`, so the next ask runs it again rather than
+// holding an answer about text that is gone. This run's inputs are known only once it ends, so they
+// are digested after it. One the previous run did not declare has no digest from before, so a write
+// to it during the run shows only as a modification time not settled before `started`.
+module function resolvedProjectInputs(dir FilePath, previous DeclaredInputStamps) returns ProjectInputsAnswer
+	let started = WallClock.nowUnixSeconds() as Timestamp
+	let inputsBefore = declaredInputStampsOf(declaredPathsOf(previous), since: previous)
 	let before = projectFileStampIn(dir)
 	var voice = ManifestVoice.forEditor(LspServerCommandName)
 	let inputs = projectInputs(dir, word: StatedText.unstated, severalTargets: SeveralTargets.holdEvery, voice: voice)
-	let after = projectFileStampIn(dir)
+	let inputsAfter = declaredInputStampsOf(declaredInputsOf(inputs), since: DeclaredInputStamps.create())
+	let settled = stampHolds(before, current: projectFileStampIn(dir)) and not inputsMovedBetween(inputsBefore, after: inputsAfter) and not unseenInputsModifiedSince(started, stamps: inputsAfter, seen: previous)
 
-	return answerFrom(inputs, voice: voice, stamp: before if stampsEqual(before, current: after) else ProjectFileStamp.unknown)
+	return answerFrom(inputs, voice: voice, stamp: stampWithInputs(before, inputs: inputsAfter) if settled else ProjectFileStamp.unknown(inputsAfter))
 end 'resolvedProjectInputs'
 
 function answerFrom(inputs ProjectInputs, voice ManifestVoice, stamp ProjectFileStamp) returns ProjectInputsAnswer

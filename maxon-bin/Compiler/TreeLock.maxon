@@ -873,11 +873,11 @@ function readClassified(path FilePath, what String) returns FileText
 end 'readClassified'
 
 function modifiedStamp(path FilePath, what String) returns FileStamp
-	let info = try File.info(path) otherwise (e) 'noInfo'
-		return FileStamp.fault(faultOf(e.failure()), reason: "could not read the timestamp of {what} at {path.toString()} ({e.name})")
-	end 'noInfo'
-
-	return FileStamp.at(info.modifiedTime as UnixSeconds)
+	return match fileStateOf(path) 'state'
+		present(_, modifiedTime, _) gives FileStamp.at(modifiedTime as UnixSeconds)
+		absent gives FileStamp.fault(faultOf(FileFailure.notFound), reason: "could not read the timestamp of {what} at {path.toString()} ({FileFailure.notFound.name})")
+		unreadable(failure) gives FileStamp.fault(faultOf(failure), reason: "could not read the timestamp of {what} at {path.toString()} ({failure.name})")
+	end 'state'
 end 'modifiedStamp'
 
 // On Windows a file whose delete is pending answers access denied until its last handle closes,

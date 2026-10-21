@@ -1,0 +1,8 @@
+test 'project diagnostics: an input that the delegated project file declares re-resolves the delegating project when it changes'
+	let staged = stagedDelegatingInputsProject(OuterDelegation.toAProjectThatReadsItsOwnInput, plan: DeclaredInputsNoListing)
+
+	let probes = probeAcrossAnInputEdit(staged, edits: readingProjectPlanWrittenAs(staged, text: DeclaredInputsProjectAndSharedListing))
+
+	try expectSharedUndefined(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "The delegating project file declares nothing. The project it delegates to lists only this project, so `main.maxon` cannot see `shared`.")
+	try expectNoProjectDiagnostics(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAfterTheEdit), note: "The delegated project file declares `{DeclaredInputsPlanFileName}` and it now lists `shared`. The delegating answer keeps the delegated file's own inputs, so the project is resolved again.")
+end 'project diagnostics: an input that the delegated project file declares re-resolves the delegating project when it changes'

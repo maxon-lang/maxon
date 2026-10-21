@@ -1,0 +1,8 @@
+test 'project diagnostics: a declared input that did not exist re-resolves the project when it appears'
+	let staged = stagedDeclaredInputsProject(InputDeclaration.declared, plan: PlanFile.absent)
+
+	let probes = probeAcrossAnInputEdit(staged, edits: planWrittenAs(staged, text: DeclaredInputsSharedListing))
+
+	try expectSharedUndefined(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "`{DeclaredInputsPlanFileName}` does not exist, so the project is its own directory and cannot see `shared`. A declared input that is missing is a state of the answer, not an error.")
+	try expectNoProjectDiagnostics(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAfterTheEdit), note: "`{DeclaredInputsPlanFileName}` now exists and lists `shared`, so the project file runs again and `main.maxon` sees `shared`.")
+end 'project diagnostics: a declared input that did not exist re-resolves the project when it appears'

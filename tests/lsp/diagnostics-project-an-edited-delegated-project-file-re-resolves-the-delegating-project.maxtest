@@ -1,0 +1,8 @@
+test 'project diagnostics: an edited project file that another project file delegates to re-resolves the delegating project'
+	let staged = stagedDelegatingInputsProject(OuterDelegation.choosingTheInnerProjectByAnInput, plan: DeclaredInputsLonelyDirectory)
+
+	let probes = probeAcrossAnInputEdit(staged, edits: lonelyProjectFileWidened(staged))
+
+	try expectSharedUndefined(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "The delegating project file hands the build to `inner-lonely`, whose project holds only this project, so `main.maxon` cannot see `shared`.")
+	try expectNoProjectDiagnostics(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAfterTheEdit), note: "`inner-lonely`'s project file now lists `shared` too. The delegating project file's own text did not change, but the answer depends on the delegated file's text, so the project is resolved again.")
+end 'project diagnostics: an edited project file that another project file delegates to re-resolves the delegating project'

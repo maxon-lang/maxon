@@ -7,6 +7,7 @@ export let ManifestDebugInfoKey = "debug_info"
 let ManifestDirectoryKey = "directory"
 let ManifestDelegateTargetKey = "target"
 let ManifestRebuildWithOutputKey = "rebuild_with_output"
+let ManifestInputsKey = "inputs"
 
 export let DebugInfoWhenUnstated = true
 let RebuildWithOutputWhenUnstated = false
@@ -213,10 +214,21 @@ export type DescribedBuild
 	export let output as StatedText
 	export let sources as MaxonSourcePathArray
 	export let rebuildWithOutput as bool
+	export let inputs as MaxonSourcePathArray
 
-	static function create(doc JsonDoc, node JsonNodeId, manifest FilePath, base ManifestBase, output StatedText, sources MaxonSourcePathArray, rebuildWithOutput bool) returns DescribedBuild
-		return Self{doc: doc, node: node, manifest: manifest, base: base, output: output, sources: sources, rebuildWithOutput: rebuildWithOutput}
+	static function create(doc JsonDoc, node JsonNodeId, manifest FilePath, base ManifestBase, output StatedText, sources MaxonSourcePathArray, rebuildWithOutput bool, inputs MaxonSourcePathArray) returns DescribedBuild
+		return Self{doc: doc, node: node, manifest: manifest, base: base, output: output, sources: sources, rebuildWithOutput: rebuildWithOutput, inputs: inputs}
 	end 'create'
+
+	export function declaringAlso(outer MaxonSourcePathArray) returns DescribedBuild
+		var merged = MaxonSourcePathArray.create()
+		var held = MaxonSourcePathSet.create()
+
+		holdNew(outer, into: merged, held: held)
+		holdNew(self.inputs, into: merged, held: held)
+
+		return DescribedBuild.create(self.doc.clone(), node: self.node, manifest: self.manifest.clone(), base: self.base.clone(), output: self.output.clone(), sources: self.sources.clone(), rebuildWithOutput: self.rebuildWithOutput, inputs: merged)
+	end 'declaringAlso'
 end 'DescribedBuild'
 
 export union DescriptionResolution
@@ -226,11 +238,21 @@ end 'DescriptionResolution'
 
 export union ProjectInputs
 	walked
-	listed(paths MaxonSourcePathArray)
+	listed(paths MaxonSourcePathArray, declared MaxonSourcePathArray)
 	ambiguous(projectFile FilePath, targets TaskNameArray)
 	unbuilt
 	refused(code ExitCode)
 end 'ProjectInputs'
+
+export function declaredInputsOf(inputs ProjectInputs) returns MaxonSourcePathArray
+	return match inputs 'inputs'
+		listed(_, declared) gives declared.clone()
+		walked or
+		ambiguous or
+		unbuilt or
+		refused gives MaxonSourcePathArray.create()
+	end 'inputs'
+end 'declaredInputsOf'
 
 export function reportSeveralTargets(projectFile FilePath, targets TaskNameArray, voice ManifestVoice)
 	voice.say("error: {projectFile.filename()} declares {targets.count()} targets, and `maxon {voice.speaker}` compiles the sources of a project's one target:")
@@ -385,12 +407,11 @@ function severalTargetsInputs(projectFile FilePath, projectDir FilePath, declare
 end 'severalTargetsInputs'
 
 function everyTargetInputs(projectFile FilePath, projectDir FilePath, declared TaskNameArray, voice ManifestVoice) returns ProjectInputs
-	var everyRoot = MaxonSourcePathArray.create()
-	var held = MaxonSourcePathSet.create()
+	var everyTarget = HeldListing.create()
 
 	for target in declared 'eachTarget'
 		match targetInputs(projectFile, projectDir: projectDir, target: target, voice: voice) 'inputs'
-			listed(paths) then holdNew(paths, into: everyRoot, held: held)
+			listed(paths, declaredInputs) then everyTarget.hold(paths, declared: declaredInputs)
 			walked or
 			ambiguous then panic("everyTargetInputs: a target named by the roster is run, and a run lists its sources or is refused")
 			unbuilt then return ProjectInputs.unbuilt
@@ -398,8 +419,28 @@ function everyTargetInputs(projectFile FilePath, projectDir FilePath, declared T
 		end 'inputs'
 	end 'eachTarget'
 
-	return ProjectInputs.listed(everyRoot)
+	return everyTarget.asInputs()
 end 'everyTargetInputs'
+
+type HeldListing
+	var roots as MaxonSourcePathArray
+	var heldRoots as MaxonSourcePathSet
+	var inputs as MaxonSourcePathArray
+	var heldInputs as MaxonSourcePathSet
+
+	static function create() returns HeldListing
+		return Self{roots: MaxonSourcePathArray.create(), heldRoots: MaxonSourcePathSet.create(), inputs: MaxonSourcePathArray.create(), heldInputs: MaxonSourcePathSet.create()}
+	end 'create'
+
+	function hold(paths MaxonSourcePathArray, declared MaxonSourcePathArray)
+		holdNew(paths, into: self.roots, held: self.heldRoots)
+		holdNew(declared, into: self.inputs, held: self.heldInputs)
+	end 'hold'
+
+	function asInputs() returns ProjectInputs
+		return ProjectInputs.listed(self.roots.clone(), declared: self.inputs.clone())
+	end 'asInputs'
+end 'HeldListing'
 
 function holdNew(paths MaxonSourcePathArray, into MaxonSourcePathArray, held MaxonSourcePathSet)
 	for path in paths 'eachPath'
@@ -414,7 +455,7 @@ end 'holdNew'
 
 function targetInputs(projectFile FilePath, projectDir FilePath, target String, voice ManifestVoice) returns ProjectInputs
 	match describedThroughProject(projectFile, target: target, base: ManifestBase.directory(projectDir), depth: 0, voice: voice) 'resolution'
-		resolved(described) then return ProjectInputs.listed(absolutePaths(described.sources))
+		resolved(described) then return ProjectInputs.listed(absolutePaths(described.sources), declared: absolutePaths(described.inputs))
 		refused(code) then return ProjectInputs.unbuilt if voice.projectFileIsBroken() else ProjectInputs.refused(code)
 	end 'resolution'
 end 'targetInputs'
@@ -582,9 +623,13 @@ export function resolveDescription(described String, manifest FilePath, base Man
 		return DescriptionResolution.refused(reportMalformedManifestField(ManifestRebuildWithOutputKey, error: e, manifest: manifest, voice: voice))
 	end 'badRebuildWithOutput'
 
+	let statedInputs = try manifestInputs(doc, build: chosen, base: base) otherwise (e) 'badInputs'
+		return DescriptionResolution.refused(reportMalformedManifestField(ManifestInputsKey, error: e, manifest: manifest, voice: voice))
+	end 'badInputs'
+
 	match delegateDirectory 'delegated'
 		unstated then break
-		stated(directory) then return resolveDelegatedDescription(doc, build: chosen, directory: directory, statedSources: statedSources, rebuildWithOutput: rebuildWithOutput, manifest: manifest, base: base, depth: depth, voice: voice)
+		stated(directory) then return resolveDelegatedDescription(doc, build: chosen, directory: directory, statedSources: statedSources, rebuildWithOutput: rebuildWithOutput, statedInputs: statedInputs, manifest: manifest, base: base, depth: depth, voice: voice)
 	end 'delegated'
 
 	// An empty `sources` is refused, not read as this directory: that would compile the whole tree
@@ -595,10 +640,10 @@ export function resolveDescription(described String, manifest FilePath, base Man
 		return DescriptionResolution.refused(OwnFailureExit)
 	end 'noPaths'
 
-	return DescriptionResolution.resolved(DescribedBuild.create(doc, node: chosen, manifest: manifest, base: base, output: output, sources: statedSources, rebuildWithOutput: rebuildWithOutput))
+	return DescriptionResolution.resolved(DescribedBuild.create(doc, node: chosen, manifest: manifest, base: base, output: output, sources: statedSources, rebuildWithOutput: rebuildWithOutput, inputs: statedInputs))
 end 'resolveDescription'
 
-function resolveDelegatedDescription(doc JsonDoc, build JsonNodeId, directory String, statedSources MaxonSourcePathArray, rebuildWithOutput bool, manifest FilePath, base ManifestBase, depth DelegationDepth, voice ManifestVoice) returns DescriptionResolution
+function resolveDelegatedDescription(doc JsonDoc, build JsonNodeId, directory String, statedSources MaxonSourcePathArray, rebuildWithOutput bool, statedInputs MaxonSourcePathArray, manifest FilePath, base ManifestBase, depth DelegationDepth, voice ManifestVoice) returns DescriptionResolution
 	if statedSources.count() != 0 'bothWays'
 		return DescriptionResolution.refused(refuseDelegatedWith(ManifestSourcesKey, manifest: manifest, voice: voice))
 	end 'bothWays'
@@ -613,7 +658,7 @@ function resolveDelegatedDescription(doc JsonDoc, build JsonNodeId, directory St
 		return DescriptionResolution.refused(reportMalformedManifestField(ManifestDelegateTargetKey, error: e, manifest: manifest, voice: voice))
 	end 'badDelegateTarget'
 
-	return resolveDelegation(directory, targetWord: delegateTarget, manifest: manifest, base: base, depth: depth, voice: voice)
+	return withInputsDeclaredAlso(resolveDelegation(directory, targetWord: delegateTarget, manifest: manifest, base: base, depth: depth, voice: voice), outer: statedInputs)
 end 'resolveDelegatedDescription'
 
 function refuseDelegatedWith(key String, manifest FilePath, voice ManifestVoice) returns ExitCode
@@ -631,6 +676,7 @@ export union ManifestFieldError implements Error
 	notAString
 	notAListOfStrings
 	notAPath(entry String)
+	isADirectory(entry String)
 	notADefinePair(entry String)
 	notStampable(problem ProductVersionError)
 end 'ManifestFieldError'
@@ -643,6 +689,7 @@ export function reportMalformedManifestField(key String, error ManifestFieldErro
 		notAString gives "is not a string"
 		notAListOfStrings gives "is not a list of strings"
 		notAPath(entry) gives "holds `{entry}`, which is not a path"
+		isADirectory(entry) gives "holds `{entry}`, which is a directory, not a file"
 		notADefinePair(entry) gives "holds `{entry}`, which is not a `<name>{DefineNameValueSeparator}<value>` pair"
 		notStampable(versionProblem) gives productVersionProblem(versionProblem)
 	end 'whatIsWrong'
@@ -673,15 +720,41 @@ end 'manifestStatedText'
 
 function manifestSources(doc JsonDoc, build JsonNodeId, base ManifestBase) returns MaxonSourcePathArray throws ManifestFieldError
 	let listId = try doc.getChild(build, key: ManifestSourcesKey) otherwise throw ManifestFieldError.missing
-	var sources = MaxonSourcePathArray.create()
 
-	for spelling in try manifestStrings(doc, list: doc.get(listId)) 'eachSource'
-		let stated = rebasedOnManifest(spelling, base: base)
-		sources.push(try FilePath.from(stated) otherwise throw ManifestFieldError.notAPath(spelling))
-	end 'eachSource'
-
-	return sources
+	return try manifestPaths(doc, list: listId, base: base)
 end 'manifestSources'
+
+function manifestInputs(doc JsonDoc, build JsonNodeId, base ManifestBase) returns MaxonSourcePathArray throws ManifestFieldError
+	let listId = try doc.getChild(build, key: ManifestInputsKey) otherwise return MaxonSourcePathArray.create()
+	let inputs = try manifestPaths(doc, list: listId, base: base)
+
+	for input in inputs 'eachInput'
+		if namesADirectory(input) 'aDirectory'
+			throw ManifestFieldError.isADirectory(input.toString())
+		end 'aDirectory'
+	end 'eachInput'
+
+	return inputs
+end 'manifestInputs'
+
+function manifestPaths(doc JsonDoc, list JsonNodeId, base ManifestBase) returns MaxonSourcePathArray throws ManifestFieldError
+	var paths = MaxonSourcePathArray.create()
+
+	for spelling in try manifestStrings(doc, list: doc.get(list)) 'eachPath'
+		let stated = rebasedOnManifest(spelling, base: base)
+		paths.push(try FilePath.from(stated) otherwise throw ManifestFieldError.notAPath(spelling))
+	end 'eachPath'
+
+	return paths
+end 'manifestPaths'
+
+function namesADirectory(path FilePath) returns bool
+	return match fileStateOf(path.resolve(Directory.currentPath())) 'state'
+		present(_, _, isDirectory) gives isDirectory
+		absent or
+		unreadable gives false
+	end 'state'
+end 'namesADirectory'
 
 // The depth bound is what ends a cycle: two manifests delegating to each other would otherwise
 // recurse until the process died with nothing said.
@@ -708,13 +781,22 @@ function refuseDelegationToNoProject(manifest FilePath, directory String, voice 
 	return OwnFailureExit
 end 'refuseDelegationToNoProject'
 
+// The delegated `.maxproj` joins the inputs: the answer rests on its text, which the delegating
+// project file's own stamp does not cover, so an edit to it alone would leave a stale answer held.
 function resolveDelegatedTarget(projectFile FilePath, declared TaskNameArray, word StatedText, directory FilePath, depth DelegationDepth, voice ManifestVoice) returns DescriptionResolution
 	match chosenTarget(projectFile, declared: declared, word: word, voice: voice) 'chosen'
-		named(name) then return describedThroughProject(projectFile, target: name, base: ManifestBase.directory(directory), depth: depth + 1, voice: voice)
+		named(name) then return withInputsDeclaredAlso(describedThroughProject(projectFile, target: name, base: ManifestBase.directory(directory), depth: depth + 1, voice: voice), outer: MaxonSourcePathArray from [projectFile])
 		notDeclared(spelled, offered) then return DescriptionResolution.refused(refuseUndeclaredDelegatedTarget(projectFile, word: spelled, offered: offered, voice: voice))
 		refused(code) then return DescriptionResolution.refused(code)
 	end 'chosen'
 end 'resolveDelegatedTarget'
+
+function withInputsDeclaredAlso(resolution DescriptionResolution, outer MaxonSourcePathArray) returns DescriptionResolution
+	return match resolution 'resolution'
+		resolved(described) gives DescriptionResolution.resolved(described.declaringAlso(outer))
+		refused(code) gives DescriptionResolution.refused(code)
+	end 'resolution'
+end 'withInputsDeclaredAlso'
 
 function refuseUndeclaredDelegatedTarget(projectFile FilePath, word String, offered TaskNameArray, voice ManifestVoice) returns ExitCode
 	voice.say("error: {projectFile.toString()} declares no target `{word}`.")

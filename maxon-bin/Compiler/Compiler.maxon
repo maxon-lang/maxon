@@ -2328,9 +2328,8 @@ function registeredSourceMatchesDisk(project Project, path FilePath) returns boo
 	end 'nothingRegisteredUnderThisPath'
 
 	let stamp = try project.db.sourceStamps.get(path) otherwise return false
-	let info = try File.info(path) otherwise return false
 
-	return stamp.describes(info)
+	return stamp.describes(fileStateOf(path))
 end 'registeredSourceMatchesDisk'
 
 // The stamp is dropped with the disk text: kept, it would still describe the file on disk, and the next
@@ -2341,8 +2340,11 @@ module function overlayUnsavedText(project Project, path FilePath, content Strin
 end 'overlayUnsavedText'
 
 function stampRegisteredSource(project Project, path FilePath, observedAt Timestamp)
-	let info = try File.info(path) otherwise return
-	project.db.sourceStamps.upsert(path, value: SourceFileStamp.create(info.size, modifiedTime: info.modifiedTime, observedAt: observedAt))
+	match fileStateOf(path) 'state'
+		present(size, modifiedTime, _) then project.db.sourceStamps.upsert(path, value: SourceFileStamp.create(size, modifiedTime: modifiedTime, observedAt: observedAt))
+		absent or
+		unreadable then return
+	end 'state'
 end 'stampRegisteredSource'
 
 // --- Output path resolution ---

@@ -1,0 +1,7 @@
+test 'project diagnostics: a declared input edited during a re-run and given an old modified time is not recorded as settled'
+	let staged = stagedDeclaredInputsProject(InputDeclaration.declaredAndGated, plan: PlanFile.listing(DeclaredInputsNoListing))
+
+	let runs = gatedRunsAfterAnInputEditedMidRun(staged, edit: MidRunEdit.restoringAnOldModifiedTime)
+
+	Expect.equal(runs, expected: 3, message: "`{DeclaredInputsPlanFileName}` was rewritten after the second run of the project file had read it and before that run ended, and its modified time was set back to the year 2000, so only the bytes held before the run can show that it moved. The project file owes a third run. It ran {runs} time(s).")
+end 'project diagnostics: a declared input edited during a re-run and given an old modified time is not recorded as settled'

@@ -183,8 +183,17 @@ with no `.maxproj`, and a project file that does not compile are each their dire
 The project file runs beside the session, for up to 30 seconds, and every request is answered
 meanwhile. Each project's file runs on its own, so a slow one holds up only its own project's answer.
 The project check of a document in that project starts once the answer arrives, and every open document
-in that project is then checked again. An answer holds until the `.maxproj` text changes; a project file
-that failed to compile, failed, or was refused is run again after ten seconds. A project file that fails
+in that project is then checked again. An answer holds while what it was resolved from is unchanged:
+the `.maxproj` text, every `.maxproj` it delegates to, and the bytes of each file the build declares in
+[`inputs`](/docs/cli/project-structure/#describing-a-build). A declared input that is missing is held as missing, and its
+appearance runs the project file again, as do its deletion and an edit that changes its bytes; one
+rewritten with the same bytes keeps the answer. A file the project file reads without declaring it
+keeps the held answer when it changes. A project file that failed to compile, failed, or was refused is
+run again after ten seconds. `maxon build` runs the project file on every build. Three gaps remain: an
+input whose modification time lies in the future is read again on every ask; an input the previous run
+did not declare that is deleted while the run that declares it is under way leaves that run's answer
+held; and on a filesystem whose clock is coarse or skewed against the server's, a write made during a
+run can go unseen. A project file that fails
 or describes no usable build — no build, or no `sources` — is a refusal: the line `maxon build` prints
 for it is published on the `.maxproj` document, and with the project check of each document in the
 project, at the document's first character.

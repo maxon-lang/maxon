@@ -1,0 +1,194 @@
+module enum InputKind
+	missing
+	unreadable
+	directory
+	file
+end 'InputKind'
+
+export union InputState
+	missing
+	unreadable
+	directory
+	file(stat SourceFileStamp, digest ByteArray)
+
+	module function kind() returns InputKind
+		return match self 'state'
+			missing gives InputKind.missing
+			unreadable gives InputKind.unreadable
+			directory gives InputKind.directory
+			file gives InputKind.file
+		end 'state'
+	end 'kind'
+
+	module function hasDigest(other ByteArray) returns bool
+		return match self 'state'
+			file(_, digest) gives digest.equals(other)
+			missing or
+			unreadable or
+			directory gives false
+		end 'state'
+	end 'hasDigest'
+
+	module function vouchedBy(observed FileState) returns bool
+		return match self 'state'
+			file(stat, _) gives stat.describes(observed)
+			missing or
+			unreadable or
+			directory gives false
+		end 'state'
+	end 'vouchedBy'
+
+	module function modifiedAtOrAfter(started Timestamp) returns bool
+		return match self 'state'
+			file(stat, _) gives not settledBefore(stat.modifiedTime, observedAt: started)
+			missing or
+			unreadable or
+			directory gives false
+		end 'state'
+	end 'modifiedAtOrAfter'
+
+	module function isSettled() returns bool
+		return match self 'state'
+			file(stat, _) gives settledBefore(stat.modifiedTime, observedAt: stat.observedAt)
+			missing or
+			unreadable or
+			directory gives false
+		end 'state'
+	end 'isSettled'
+end 'InputState'
+
+export typealias DeclaredInputStamps = Map with (FilePath, InputState)
+
+union InputSighting
+	vouched(state InputState)
+	sighted(state InputState)
+
+	function state() returns InputState
+		return match self 'sighting'
+			vouched(held) gives held
+			sighted(seen) gives seen
+		end 'sighting'
+	end 'state'
+
+	function isNew() returns bool
+		return match self 'sighting'
+			vouched gives false
+			sighted gives true
+		end 'sighting'
+	end 'isNew'
+end 'InputSighting'
+
+module union InputsCheck
+	vouched
+	refreshed(inputs DeclaredInputStamps)
+	changed
+end 'InputsCheck'
+
+module function declaredInputStampsOf(paths MaxonSourcePathArray, since DeclaredInputStamps) returns DeclaredInputStamps
+	var stamps = DeclaredInputStamps.create()
+
+	for path in paths 'eachPath'
+		stamps.upsert(path.clone(), value: sightingAt(path, since: since).state())
+	end 'eachPath'
+
+	return stamps
+end 'declaredInputStampsOf'
+
+module function declaredPathsOf(stamps DeclaredInputStamps) returns MaxonSourcePathArray
+	var paths = MaxonSourcePathArray.create()
+
+	for (path, _) in stamps 'eachStamp'
+		paths.push(path.clone())
+	end 'eachStamp'
+
+	return paths
+end 'declaredPathsOf'
+
+module function checkDeclaredInputs(held DeclaredInputStamps) returns InputsCheck
+	var renewed = DeclaredInputStamps.create()
+	var anyRefreshed = false
+
+	for (path, was) in held 'eachInput'
+		let sighting = sightingAt(path, since: held)
+		let now = sighting.state()
+
+		if not sameContent(was, now: now) 'moved'
+			return InputsCheck.changed
+		end 'moved'
+
+		// An unsettled stamp vouches for nothing, so storing it would rewrite the held answer on every
+		// ask and save no digest: the held one stays until a settled one replaces it.
+		let renewable = sighting.isNew() and now.isSettled()
+
+		if renewable 'restamped'
+			renewed.upsert(path.clone(), value: now.clone())
+			anyRefreshed = true
+		end 'restamped' else 'unchanged'
+			renewed.upsert(path.clone(), value: was.clone())
+		end 'unchanged'
+	end 'eachInput'
+
+	return InputsCheck.refreshed(renewed) if anyRefreshed else InputsCheck.vouched
+end 'checkDeclaredInputs'
+
+module function inputsMovedBetween(before DeclaredInputStamps, after DeclaredInputStamps) returns bool
+	for (path, was) in before 'eachInput'
+		if let now = try after.get(path) 'stillDeclared'
+			if not sameContent(was, now: now) 'moved'
+				return true
+			end 'moved'
+		end 'stillDeclared'
+	end 'eachInput'
+
+	return false
+end 'inputsMovedBetween'
+
+module function unseenInputsModifiedSince(started Timestamp, stamps DeclaredInputStamps, seen DeclaredInputStamps) returns bool
+	for (path, state) in stamps 'eachInput'
+		if not seen.contains(path) and state.modifiedAtOrAfter(started) 'modifiedDuringTheRun'
+			return true
+		end 'modifiedDuringTheRun'
+	end 'eachInput'
+
+	return false
+end 'unseenInputsModifiedSince'
+
+function sameContent(held InputState, now InputState) returns bool
+	return match held 'held'
+		file(_, digest) gives now.hasDigest(digest)
+		missing or
+		unreadable or
+		directory gives held.kind() == now.kind()
+	end 'held'
+end 'sameContent'
+
+function sightingAt(path FilePath, since DeclaredInputStamps) returns InputSighting
+	let observedAt = WallClock.nowUnixSeconds() as Timestamp
+	let observed = fileStateOf(path)
+
+	if let held = try since.get(path) 'heldBefore'
+		if held.vouchedBy(observed) 'stillVouched'
+			return InputSighting.vouched(held.clone())
+		end 'stillVouched'
+	end 'heldBefore'
+
+	return InputSighting.sighted(observedInputState(path, observed: observed, observedAt: observedAt))
+end 'sightingAt'
+
+function observedInputState(path FilePath, observed FileState, observedAt Timestamp) returns InputState
+	return match observed 'observed'
+		absent gives InputState.missing
+		unreadable gives InputState.unreadable
+		present(size, modifiedTime, isDirectory) gives presentInputState(path, size: size, modifiedTime: modifiedTime, isDirectory: isDirectory, observedAt: observedAt)
+	end 'observed'
+end 'observedInputState'
+
+function presentInputState(path FilePath, size FileSize, modifiedTime Timestamp, isDirectory bool, observedAt Timestamp) returns InputState
+	if isDirectory 'aDirectory'
+		return InputState.directory
+	end 'aDirectory'
+
+	let digest = try fileDigestOf(path) otherwise return InputState.unreadable
+
+	return InputState.file(SourceFileStamp.create(size, modifiedTime: modifiedTime, observedAt: observedAt), digest: digest)
+end 'presentInputState'

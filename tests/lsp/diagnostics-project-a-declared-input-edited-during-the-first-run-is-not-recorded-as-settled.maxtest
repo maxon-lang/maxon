@@ -1,0 +1,7 @@
+test 'project diagnostics: a declared input edited while the first run of the project file is in progress is not recorded as settled'
+	let staged = stagedDeclaredInputsProject(InputDeclaration.declaredAndGated, plan: PlanFile.listing(DeclaredInputsNoListing))
+
+	let runs = gatedRunsAfterAnInputEditedMidRun(staged, edit: MidRunEdit.onTheFirstResolution)
+
+	Expect.isTrue(runs >= 2, message: "`{DeclaredInputsPlanFileName}` was rewritten after the first run of the project file had read it and before that run ended. Nothing was held to compare it with, but the file was modified after the run began, so the answer describes bytes that are gone and the project file owes another run. It ran {runs} time(s).")
+end 'project diagnostics: a declared input edited while the first run of the project file is in progress is not recorded as settled'

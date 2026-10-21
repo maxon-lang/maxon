@@ -1,0 +1,8 @@
+test 'project diagnostics: a declared input the project file read re-resolves the project when its bytes change'
+	let staged = stagedDeclaredInputsProject(InputDeclaration.declared, plan: PlanFile.listing(DeclaredInputsNoListing))
+
+	let probes = probeAcrossAnInputEdit(staged, edits: planWrittenAs(staged, text: DeclaredInputsSharedListing))
+
+	try expectSharedUndefined(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "`{DeclaredInputsPlanFileName}` lists no directory, so the project is its own directory and cannot see `shared`.")
+	try expectNoProjectDiagnostics(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAfterTheEdit), note: "`{DeclaredInputsPlanFileName}` now lists `shared`, the project file declares it as an input, and the buffer re-sent its unchanged text, so the project file runs again and `main.maxon` sees `shared`.")
+end 'project diagnostics: a declared input the project file read re-resolves the project when its bytes change'

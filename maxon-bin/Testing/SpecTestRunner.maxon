@@ -3777,10 +3777,10 @@ function guestCompilerUnder(projectRoot FilePath, harnessExe FilePath, effective
 	// nobody is looking at. This binary has already been proved current (`Main.runSpecTest` →
 	// `refuseIfStale`), so anything older than it was built from an older tree. Strictly older, matching
 	// `CompilerFreshness`'s tie-break: a same-second write is not a rebuild.
-	let host = try File.info(harnessExe) otherwise panic("SpecTestRunner: could not read the modification time of {harnessExe.toString()}, the file this command is running from")
-	let guest = try File.info(guestExe) otherwise panic("SpecTestRunner: could not read the modification time of {guestExe.toString()}, a file this command has just proved exists")
+	let host = modifiedTimeOf(harnessExe, why: "the file this command is running from")
+	let guest = modifiedTimeOf(guestExe, why: "a file this command has just proved exists")
 
-	if guest.modifiedTime < host.modifiedTime 'builtBeforeTheHost'
+	if guest < host 'builtBeforeTheHost'
 		return buildGuestCompiler(harnessExe, projectRoot: projectRoot, guestExe: guestExe, effectiveTarget: effectiveTarget, because: "{harnessExe.toString()} is newer than it")
 	end 'builtBeforeTheHost'
 
