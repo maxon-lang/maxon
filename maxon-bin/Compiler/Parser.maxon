@@ -6248,14 +6248,15 @@ let MethodNameSeparator = "."
 // `isQualifiedUnderTypeName` compare against. Both run once per method declaration, once per method call
 // site and again in the declaration pre-scan, so a cost here is linear in the program: rendering one
 // spelling into the other per ask is what the second constant buys off, and the String above stays for
-// `splitQualifiedName`, which splits a String.
+// `bareMethodName`, which splits a String.
 //
 // What makes the duplication safe is not this comment: it is that the two copies have a test between them.
 // Every direct builtin-conformance dispatch resolves through `isCompilerInternalCallee` →
-// `isBuiltinConformanceImplName` → `splitQualifiedName`, so a byte here that disagrees with the join
-// above makes every direct builtin-conformance call fail to be recognized as compiler-owned, and every
-// `primitive-comparable`/`primitive-hashable`/`method-call-on-call-result` case goes red with E3004. The
-// copies cannot drift silently.
+// `isBuiltinConformanceImplName` → `SignatureIndex.nameIsQualifiedBy`, so a byte here that
+// disagrees with the join above makes every direct builtin-conformance call fail to be recognized
+// as compiler-owned, and every
+// `primitive-comparable`/`primitive-hashable`/`method-call-on-call-result` case goes red with
+// E3004. The copies cannot drift silently.
 //
 // ⚠ It deliberately quotes neither the impl roster nor a case count. What the check is worth does not
 // depend on the number, and a number nothing verifies is just a second place to be wrong.
@@ -6849,10 +6850,9 @@ export function qualifiedNameIs(callee ByteArray, typeName ByteArray, member Byt
 end 'qualifiedNameIs'
 
 // ⭐ **DOES `name` WEAR `typeName`'S QUALIFIER — i.e. is it `qualifiedMethodName(typeName, <anything>)`?**
-// The join's INVERSE, and deliberately allocation-free: its caller
-// (`IrInterface.isBuiltinConformanceImplName` → `MmRuntime.isCompilerInternalCallee`) is asked of EVERY
-// callee in the program by `SemanticCheck.validateCall` and `LowerMaxonToStd.lowerCall`, so materializing
-// a joined name here would allocate once per call site in every compile.
+// The join's INVERSE, and deliberately allocation-free: the parser asks it at call sites
+// (`instanceSourceOfCall`, `recordSubstitutedArgRangeChecks`), so materializing a joined name
+// here would allocate once per call site in every compile.
 //
 // ⚠ **THE SEPARATOR TEST IS LOAD-BEARING, NOT TIDINESS.** Without it this is a bare `bytesStartWith`, and
 // a user function called `internNames` begins with `int` — it would be classified compiler-internal and

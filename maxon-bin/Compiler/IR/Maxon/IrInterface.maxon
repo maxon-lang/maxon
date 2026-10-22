@@ -2939,8 +2939,12 @@ export function isIntrinsicBuiltinConformance(interfaces IrInterfaceMap, typeNam
 	return conformsIntrinsically(typeName, protocol: interfaces.protocolKind(interfaceName), discovered: discovered)
 end 'isIntrinsicBuiltinConformance'
 
+// Every protocol `conformsIntrinsically` can answer true for; one it admits that is missing here is
+// silently never supplied by the walks over this list.
+let IntrinsicConformableProtocols = [BuiltinInterfaceKind.hashable, BuiltinInterfaceKind.equatable, BuiltinInterfaceKind.comparable]
+
 function namesAHashingOrOrderingProtocol(protocol BuiltinInterfaceKind) returns bool
-	return protocol == BuiltinInterfaceKind.hashable or protocol == BuiltinInterfaceKind.equatable or protocol == BuiltinInterfaceKind.comparable
+	return IntrinsicConformableProtocols.contains(protocol)
 end 'namesAHashingOrOrderingProtocol'
 
 function conformsIntrinsically(typeName ByteArray, protocol BuiltinInterfaceKind, discovered DiscoveredConformer) returns bool
@@ -3191,6 +3195,13 @@ end 'conformanceSelfTypeNameOf'
 //
 // The conformers listed here are exactly those `builtinConformerOfTag` can return, because those are the
 // only qualifiers the parser can emit a direct dispatch under. A tag joins that map and this one together.
+// The array record is not one of them and may not join, though the compiler mints `Array.hash`
+// and `Array.equals`: its name is the corpus's to choose and a user program may take it, so
+// admitting it would wave a user's own `Array.hash` past E3004.
+//
+// The four spellings are tested one by one rather than by walking `BuiltinConformer.allCases`,
+// which allocates, and `MmRuntime.isCompilerInternalCallee`'s per-call path must not.
+//
 // ⛔⛔ **THE QUALIFIER ALONE IS NOT THE ANSWER.**
 // Resting the `String` arm on *"no user `type String` exists to carry a `hash()`"* is a premise about the
 // RESERVATION, and one that excludes only a USER declaration. The CORPUS's declaration is admissible
@@ -3213,43 +3224,15 @@ end 'conformanceSelfTypeNameOf'
 // way, because a predicate with one arm reasoning from a keyword and another from a lookup is how the two
 // come to disagree the next time a reservation moves.
 export function isBuiltinConformanceImplName(name ByteArray) returns bool
-	if not (nameIsQualifiedBy(name, qualifier: IntConformerName) or nameIsQualifiedBy(name, qualifier: FloatConformerName) or nameIsQualifiedBy(name, qualifier: BoolConformerName) or nameIsQualifiedBy(name, qualifier: StringConformerName)) 'notUnderAConformer'
-		return false
-	end 'notUnderAConformer'
-
-	return match splitQualifiedName(name) 'parts'
-		notQualified gives false
-		parts(conformer, method) gives isSynthesizedConformerImpl(conformer, methodName: method)
-	end 'parts'
+	return isSynthesizedConformerImpl(name, conformer: IntConformerName) or isSynthesizedConformerImpl(name, conformer: FloatConformerName) or isSynthesizedConformerImpl(name, conformer: BoolConformerName) or isSynthesizedConformerImpl(name, conformer: StringConformerName)
 end 'isBuiltinConformanceImplName'
 
-// ⭐⭐ **THE CONFORMER SPELLINGS A DIRECT `<value>.<method>()` DISPATCH CAN BE EMITTED UNDER — `BuiltinConformer`'s
-// cases as NAMES, in ONE place.** Why the set is SOUND — two different arguments, neither covering the
-// other — is `isBuiltinConformanceImplName`'s header, not repeated here.
-//
-// ⛔ **THE ARRAY RECORD IS NOT IN IT AND MAY NOT JOIN**, though the compiler does mint `Array.hash` /
-// `Array.equals`: its name is the CORPUS's to choose and a user program may take it, so neither argument
-// covers it and admitting it would wave a USER's own `Array.hash` past E3004. That is the same bound
-// `builtinConformerMethod` states as its reason for carrying no array row.
-//
-// ⚠ **IT COMPARES THE FOUR SPELLINGS RATHER THAN WALKING THE ENUM, AND THAT IS A COST CONSTRAINT.** It sits
-// on `MmRuntime.reservedCalleeReasonOf`'s per-callee path (`SemanticCheck.validateCall`,
-// `LowerMaxonToStd.lowerCall`), which that function's header requires to be allocation-free; mapping
-// `<BuiltinConformer>.allCases` through `builtinConformerName` would allocate a case array per call.
-function namesADirectDispatchConformer(name ByteArray) returns bool
-	return name.equals(IntConformerName) or name.equals(FloatConformerName) or name.equals(BoolConformerName) or name.equals(StringConformerName)
-end 'namesADirectDispatchConformer'
-
-// Does the compiler SYNTHESIZE `<conformer>.<methodName>`? True exactly when the conformer is one the
-// parser can emit a direct dispatch under AND the ragged table supplies that method for it — one lookup,
-// so this predicate and the installer that builds the body cannot come to disagree about which symbols
-// exist.
-function isSynthesizedConformerImpl(conformer ByteArray, methodName ByteArray) returns bool
-	if not namesADirectDispatchConformer(conformer) 'notABuiltinConformer'
+function isSynthesizedConformerImpl(name ByteArray, conformer ByteArray) returns bool
+	if not nameIsQualifiedBy(name, qualifier: conformer) 'notUnderTheConformer'
 		return false
-	end 'notABuiltinConformer'
+	end 'notUnderTheConformer'
 
-	try supplyingProtocol(conformer, methodName: methodName, discovered: DiscoveredConformer.none) otherwise return false
+	try supplyingProtocol(conformer, spelling: name, methodStart: conformer.count() + 1, discovered: DiscoveredConformer.none) otherwise return false
 	return true
 end 'isSynthesizedConformerImpl'
 
@@ -3261,23 +3244,10 @@ end 'BuiltinConformerMethodLookup'
 
 export typealias BuiltinInterfaceKindArray = Array with BuiltinInterfaceKind
 
-// The protocols a BUILTIN type can intrinsically conform to — the only ones `conformsIntrinsically` ever
-// answers `true` for, so the method search below covers exactly the set that predicate admits.
-function builtinConformableProtocols() returns BuiltinInterfaceKindArray
-	var protocols = BuiltinInterfaceKindArray.create()
-
-	for protocol in BuiltinInterfaceKind.allCases 'eachKind'
-		if namesAHashingOrOrderingProtocol(protocol) 'conformable'
-			protocols.push(protocol)
-		end 'conformable'
-	end 'eachKind'
-
-	return protocols
-end 'builtinConformableProtocols'
-
 // ⭐⭐ **WHICH PROTOCOLS ONE BUILTIN CONFORMER ACTUALLY CONFORMS TO** — the ragged table's row for
 // `typeName`, read off the predicate rather than restated. Spelled as the opening `if … continue` of each
-// walk below it is one fact written once per reader; here it is one function.
+// walk below it is one fact written once per reader; here it is one function, read by every walk
+// but `supplyingProtocol`'s.
 //
 // ⭐ **AND THAT THIRD READER IS THE CONDITIONAL CONFORMANCE'S `where` CLAUSE.** `Array`'s row IS the clause
 // its element must satisfy (see `isIntrinsicBuiltinConformance`'s `Array` arm), so the availability check,
@@ -3286,7 +3256,7 @@ end 'builtinConformableProtocols'
 export function intrinsicConformanceProtocols(typeName ByteArray, discovered DiscoveredConformer) returns BuiltinInterfaceKindArray
 	var protocols = BuiltinInterfaceKindArray.create()
 
-	for protocol in builtinConformableProtocols() 'eachProtocol'
+	for protocol in IntrinsicConformableProtocols 'eachProtocol'
 		if conformsIntrinsically(typeName, protocol: protocol, discovered: discovered) 'conforms'
 			protocols.push(protocol)
 		end 'conforms'
@@ -3311,8 +3281,8 @@ end 'intrinsicConformanceProtocols'
 // enum of `int`/`float`/`bool`/`String` — or one of those two spellings written out. The array record is
 // deliberately not among them and may not become one: its direct `arr.hash()` / `a == b` dispatch calls
 // `__managed_hash`/`__managed_eq`, not `Array.<method>` (see `BuiltinConformanceRuntime`'s `Array` note), and
-// `namesADirectDispatchConformer` states the same bound from the reserved-callee side, where admitting a name
-// a user program may TAKE would wave that user's own `Array.hash` past E3004.
+// `isBuiltinConformanceImplName` states the same bound from the reserved-callee side, where
+// admitting a name a user program may TAKE would wave that user's own `Array.hash` past E3004.
 // ⇒ every caller passing `DiscoveredConformer.none` is stating that bound, not taking a convenience: it holds
 // no program to discover a conformer from, and it must not.
 //
@@ -3324,17 +3294,24 @@ end 'intrinsicConformanceProtocols'
 // hazard: the symbol it reaches is `ProgramSignatures.enumConformanceImplName`'s, which is `int.<method>`
 // (a KEYWORD qualifier no declaration can wear) precisely when the enum declares no such method of its own.
 export function builtinConformerMethod(typeName ByteArray, methodName ByteArray, discovered DiscoveredConformer, interfaces IrInterfaceMap) returns BuiltinConformerMethodLookup
-	let protocol = try supplyingProtocol(typeName, methodName: methodName, discovered: discovered) otherwise return BuiltinConformerMethodLookup.notSupplied
+	let protocol = try supplyingProtocol(typeName, spelling: methodName, methodStart: 0, discovered: discovered) otherwise return BuiltinConformerMethodLookup.notSupplied
 	return BuiltinConformerMethodLookup.supplied(try synthesizedProtocolMethod(protocol, interfaces: interfaces) otherwise panic("builtinConformerMethod: `{protocol.name}` supplies `{String.from(methodName)}` by `supplyingProtocol`'s answer, so it declares a method"))
 end 'builtinConformerMethod'
 
 // Matched by method NAME, so a lookup builds only the one protocol method it returns: `builtinConformerMethod`
 // is asked on every String-method call.
-function supplyingProtocol(typeName ByteArray, methodName ByteArray, discovered DiscoveredConformer) returns BuiltinInterfaceKind throws AbsentError
-	for protocol in intrinsicConformanceProtocols(typeName, discovered: discovered) 'eachProtocol'
+//
+// It walks the list itself rather than through `intrinsicConformanceProtocols`, whose array would
+// be allocated per callee on `isBuiltinConformanceImplName`'s path.
+function supplyingProtocol(typeName ByteArray, spelling ByteArray, methodStart ElementIndex, discovered DiscoveredConformer) returns BuiltinInterfaceKind throws AbsentError
+	for protocol in IntrinsicConformableProtocols 'eachProtocol'
+		if not conformsIntrinsically(typeName, protocol: protocol, discovered: discovered) 'conforms'
+			continue
+		end 'conforms'
+
 		let declared = try synthesizedProtocolMethodName(protocol) otherwise continue
 
-		if declared.equals(methodName) 'declaresMethod'
+		if bytesTailEquals(spelling, start: methodStart, run: declared) 'declaresMethod'
 			return protocol
 		end 'declaresMethod'
 	end 'eachProtocol'

@@ -4007,12 +4007,9 @@ function calleeVisibleFrom(project Project, signatures ProgramSignatures, funcNa
 	//
 	// ⚠ **IT IS ASKED AFTER THE ORDINARY RULE, AND THE ORDER IS A COST RATHER THAN A PRECEDENCE.** An
 	// admit-list only ever turns a refusal into an admission, so either order answers the same — and every
-	// call site in the program crosses this line, where neither conjunct is cheap. The prefix test is a
-	// CLASSIFIER (`MmRuntime.reservedCalleeReasonOf`), which slices a qualified name apart to tell a
-	// synthesized conformance impl from an ordinary callee, and `isRuntimeSourceFile` probes a memo keyed on
-	// a `FilePath`, whose Windows hash lower-cases a copy of the path. MEASURED at ~23 allocations per call
-	// site when this runs first: `phase:semanticCheck` +23,430 at the doubling ladder's rung 0 and +150,732
-	// at rung 3. Asked here it runs only where the ordinary rule has already refused.
+	// call site in the program crosses this line. `isRuntimeSourceFile` probes a memo keyed on a
+	// `FilePath`, whose Windows hash lower-cases a copy of the path; asked here, that allocation is
+	// paid only where the ordinary rule has already refused.
 	return isCompilerInternalCallee(callee) and isRuntimeSourceFile(project, path: declared.sourceFilePath)
 end 'calleeVisibleFrom'
 
