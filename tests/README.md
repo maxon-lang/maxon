@@ -97,7 +97,7 @@ tests/
     gates/<case>.maxtest         a well-formed spec it must ACCEPT, then REPORT something about
     gates/<case>/                the gate's one or two `.md`
   lsp/
-    LspClient.maxon              a live JSON-RPC client the tests import - see rule 1; `abandonedSession` and `abandonedStagedSession` release a session that failed, then fail the test naming what it was doing; `start` takes the server's environment; `stageRecordedProject`, `startedOverRecordedCache` and `recordedManifestDiagnostics` build a project into a private cache, rewrite its compiler-version record and read its `.maxproj` diagnostics
+    LspClient.maxon              a live JSON-RPC client the tests import - see rule 1; `abandonedSession` and `abandonedStagedSession` release a session that failed, then fail the test naming what it was doing; `start` takes the server's environment; `stageRecordedProject`, `startedOverRecordedCache` and `recordedManifestDiagnostics` build a project into a private cache, rewrite its compiler-version record and read its `.maxproj` diagnostics, `buildRecordedProject` builds it again, and `expectBreakingChangeNotices` checks those diagnostics carry the record's notices
     <area>.maxtest               one LSP method area per file
     diagnostics-project-declared-inputs-probe.maxtest   the shared half of the declared-input cases: a project file whose sources come from a file it reads, declared in `inputs` or not, delegating or with two targets, and a gate that holds its run until released
     diagnostics-project-<change>.maxtest   the cases built on it, one each: which change to a declared input, a delegated `.maxproj` or an undeclared read runs the project file again, and which keeps the held answer

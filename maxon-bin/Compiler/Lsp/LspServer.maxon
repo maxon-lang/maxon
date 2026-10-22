@@ -161,9 +161,38 @@ type LspSession
 
 		match publishBufferDiagnostics(self.workspace, uri: uri, text: text, arrival: arrival) 'publish'
 			unchecked then return
-			published(reader, root, path, fast) then self.requestProjectCheck(uri, path: path, text: text, version: version, clientVersion: clientVersion, alone: fast, reader: reader, root: root)
+			published(reader, root, path, fast) then self.publishedFor(uri, path: path, text: text, version: version, clientVersion: clientVersion, alone: fast, reader: reader, root: root)
 		end 'publish'
 	end 'documentArrived'
+
+	function publishedFor(uri String, path FilePath, text String, version LspDocumentVersion, clientVersion ClientDocumentVersion, alone DiagnosticArray, reader LspReaderSearch, root WorkspaceRoot)
+		self.requestProjectCheck(uri, path: path, text: text, version: version, clientVersion: clientVersion, alone: alone, reader: reader, root: root)
+
+		match root 'root'
+			projectDirectory(dir) then self.rearriveProjectFileIfRecordMoved(dir)
+			libraryTier or
+			singleFile then return
+		end 'root'
+	end 'publishedFor'
+
+	function rearriveProjectFileIfRecordMoved(dir FilePath)
+		let key = recordWatchKey(dir)
+		view watched = try self.workspace.recordWatches.get(key) otherwise return
+
+		if recordWatchHolds(watched, dir: dir) 'unchanged'
+			return
+		end 'unchanged'
+
+		// Removed before the re-arrival, whose `.maxproj` publish records the watch afresh; removing after
+		// would drop that fresh watch. A closed `.maxproj` leaves none, so it is not re-arrived again.
+		_ = self.workspace.recordWatches.remove(key)
+
+		for (uri, text) in self.documents.clone() 'eachOpenDocument'
+			if isProjectFileAt(uri, key: key) 'theProjectFile'
+				self.documentArrived(uri, text: text, arrival: BufferArrival.edited, clientVersion: ClientDocumentVersion.unstated)
+			end 'theProjectFile'
+		end 'eachOpenDocument'
+	end 'rearriveProjectFileIfRecordMoved'
 
 	function requestProjectCheck(uri String, path FilePath, text String, version LspDocumentVersion, clientVersion ClientDocumentVersion, alone DiagnosticArray, reader LspReaderSearch, root WorkspaceRoot)
 		match lspProjectCheckRoot(reader, root: root) 'root'

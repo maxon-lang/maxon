@@ -1,0 +1,62 @@
+let RebuiltRecordDirName = "diagnostics-project-build-after-maxproj-opened"
+let EditedMainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n\nfunction unused() returns ExitCode\n\treturn 0\nend 'unused'\n"
+
+type ManifestAcrossABuild
+	module let before as PublishedDiagnosticArray
+	module let after as StashedPublish
+
+	static function of(before PublishedDiagnosticArray, after StashedPublish) returns ManifestAcrossABuild
+		return Self{before: before, after: after}
+	end 'of'
+end 'ManifestAcrossABuild'
+
+test 'project diagnostics: a build after the .maxproj opened clears its breaking-change notices on the next publish'
+	let staged = freshOutsideCheckoutDir(RebuiltRecordDirName)
+	_ = stageRecordedProject(staged, recording: recordLine(OlderRelease))
+
+	var client = startedOverRecordedCache(staged)
+
+	if let across = try manifestAcrossABuild(client, staged: staged) 'answered'
+		client.release()
+		discardOutsideCheckoutDir(staged)
+
+		expectBreakingChangeNotices(across.before)
+		expectNoStaleNotices(across.after)
+	end 'answered' else (e) 'failed'
+		abandonedStagedSession(client, staged: staged, failure: e, doing: "the session did not complete")
+	end 'failed'
+end 'project diagnostics: a build after the .maxproj opened clears its breaking-change notices on the next publish'
+
+function manifestAcrossABuild(client LspClient, staged FilePath) returns ManifestAcrossABuild throws LspClientError
+	let before = try recordedManifestDiagnostics(client, staged: staged)
+	let manifestUri = recordedDocumentUri(staged, fileName: RecordedManifestFileName)
+	let mainUri = recordedDocumentUri(staged, fileName: StagedProgramFileName)
+
+	try client.openDocument(mainUri, content: RecordedMainSource)
+
+	// Every pre-build `.maxproj` publish is drained once the project check settles: the re-send after
+	// resolution could otherwise land after the build and pass this case without the record watch.
+	_ = try client.awaitSettledProjectCheckSet(mainUri)
+	try client.discardPublishes(manifestUri)
+
+	buildRecordedProject(staged)
+
+	try client.changeDocument(mainUri, content: EditedMainSource, version: InitialDocumentVersion + 1)
+
+	let after = try client.awaitPublishWhilePolling(manifestUri, polled: mainUri)
+
+	return ManifestAcrossABuild.of(before, after: after)
+end 'manifestAcrossABuild'
+
+function expectNoStaleNotices(after StashedPublish) throws TestFailure
+	match after 'arrived'
+		none then try Expect.fail("after `maxon {BuildCommandName}` rewrote the project's compiler-version record to this release, an edit of the open `{StagedProgramFileName}` brought no fresh publish for the open `{RecordedManifestFileName}` within {ProjectCheckPublishFailureBoundMs} ms, so the breaking-change notices of maxon {OlderRelease} stay on it.")
+		found(published) then try expectNoBreakingChangeNotice(published.items)
+	end 'arrived'
+end 'expectNoStaleNotices'
+
+function expectNoBreakingChangeNotice(items PublishedDiagnosticArray) throws TestFailure
+	for item in items 'eachItem'
+		try Expect.isFalse(item.message.startsWith(LastBuiltWording), message: "after `maxon {BuildCommandName}` rewrote the project's compiler-version record to this release, the open `{RecordedManifestFileName}` was republished still carrying a breaking-change notice: {item.message}")
+	end 'eachItem'
+end 'expectNoBreakingChangeNotice'

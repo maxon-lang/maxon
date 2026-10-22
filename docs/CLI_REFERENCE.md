@@ -2253,7 +2253,8 @@ change since the recorded release:
 `This project was last built with maxon <release>. <version>: <change> Fix: <fix>`. A record that does
 not hold a release version, or cannot be read, is one Error diagnostic carrying the line `maxon build`
 refuses with. `maxon build` writes the record and the server reads it, so a build shows in these
-diagnostics the next time the `.maxproj` is published, such as after an edit to it.
+diagnostics the next time the `.maxproj` is published: after an edit to it, or, once the record has
+changed since the open `.maxproj` last published, after an open or edit of any document of the project.
 
 **A project is built when a document in it opens.** On `didOpen` the server builds the index that
 document reads, before it publishes the document's diagnostics, when the document's root is a known

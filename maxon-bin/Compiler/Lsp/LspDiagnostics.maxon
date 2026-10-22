@@ -249,6 +249,11 @@ function projectFileSaid(reader LspReaderSearch, path FilePath) returns (StringA
 	end 'layout'
 
 	let dir = try path.resolve(reader.workingDirectory).parent() otherwise return (StringArray.create(), StringArray.create())
+
+	// Observed before `breakingChangeNotices` reads the record: a rewrite landing between the two then
+	// fails the watch and re-publishes this file, where observing after would vouch for stale notices.
+	reader.workspace.recordWatches.upsert(recordWatchKey(dir), value: observeRecord(dir))
+
 	let answer = reader.workspace.projectInputsOf(dir)
 	var refusal = answer.refusal.clone()
 	var notice = answer.notice.clone()

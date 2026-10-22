@@ -1,5 +1,4 @@
 let OlderRecordDirName = "diagnostics-project-older-release-record"
-let FixPart = "Fix: "
 
 test 'project diagnostics: a record of an older release lists the breaking changes since it on the .maxproj'
 	let staged = freshOutsideCheckoutDir(OlderRecordDirName)
@@ -20,24 +19,3 @@ test 'project diagnostics: a record of an older release lists the breaking chang
 		abandonedStagedSession(client, staged: staged, failure: e, doing: "the session did not complete")
 	end 'failed'
 end 'project diagnostics: a record of an older release lists the breaking changes since it on the .maxproj'
-
-function expectBreakingChangeNotices(items PublishedDiagnosticArray) throws TestFailure
-	let lastBuilt = "{LastBuiltWording} {OlderRelease}."
-	var notices = 0 as Count
-
-	try Expect.greaterThan(items.count(), than: 0, message: "the `.maxproj` of a project last built by maxon {OlderRelease} published no diagnostics, where it owes one notice per breaking change since that release.")
-
-	for item in items 'eachItem'
-		try Expect.notEqual(item.severity, expected: PublishedErrorSeverity, message: "a record of an older release is not an error: {item.message}")
-
-		if item.severity != PublishedInformationSeverity 'notANotice'
-			continue
-		end 'notANotice'
-
-		try Expect.startsWith(item.message, needle: lastBuilt, message: "a breaking-change notice does not open with `{lastBuilt}`: {item.message}")
-		try Expect.contains(item.message, needle: FixPart, message: "a breaking-change notice carries no `{FixPart}` part: {item.message}")
-		notices = notices + 1
-	end 'eachItem'
-
-	try Expect.greaterThan(notices, than: 0, message: "the `.maxproj` of a project last built by maxon {OlderRelease} published {items.count()} diagnostic(s) and no Information-severity notice of a breaking change among them.")
-end 'expectBreakingChangeNotices'

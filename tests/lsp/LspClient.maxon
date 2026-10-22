@@ -444,7 +444,7 @@ let FastPublishesPerDocumentVersion = 1
 
 // A failure bound and nothing else: the waits count publishes and outcome lines, so a passing case never
 // runs it out.
-let ProjectCheckPublishFailureBoundMs = 15000 as DurationMs
+export let ProjectCheckPublishFailureBoundMs = 15000 as DurationMs
 let ProjectCheckPollPauseMs = 50
 let ProjectCheckPublishedOutcome = "published"
 
@@ -461,7 +461,7 @@ function stashTakeIsSatisfied(take StashTake, taken ElementIndex) returns bool
 end 'stashTakeIsSatisfied'
 
 // Whether a stashed publish for the asked-about uri was there to take.
-union StashedPublish
+public union StashedPublish
 	found(published PublishedDiagnostics)
 	none
 end 'StashedPublish'
@@ -774,6 +774,23 @@ public type LspClient
 		throw LspClientError.transportFailed("no textDocument/publishDiagnostics for {uri} arrived within {UnaddressedMessageBudget} messages")
 	end 'awaitPublishedDiagnostics'
 
+	public function awaitPublishWhilePolling(uri String, polled String) returns StashedPublish throws LspClientError
+		let started = Clock.nowMs()
+
+		while Clock.elapsedMs(started) < ProjectCheckPublishFailureBoundMs 'untilPublished'
+			_ = try self.documentSymbols(polled)
+
+			let stashed = try self.takeStashedPublish(uri)
+
+			match stashed 'arrived'
+				found then return stashed
+				none then sleep(ProjectCheckPollPauseMs)
+			end 'arrived'
+		end 'untilPublished'
+
+		return StashedPublish.none
+	end 'awaitPublishWhilePolling'
+
 	public function awaitProjectCheckPublish(uri String, within DurationMs = ProjectCheckPublishFailureBoundMs) returns PublishedDiagnostics throws LspClientError
 		return try self.awaitPublishesOfThisVersion(uri, still: PublishesPerProjectDocumentVersion, within: within)
 	end 'awaitProjectCheckPublish'
@@ -833,6 +850,10 @@ public type LspClient
 
 		return notices
 	end 'takeProjectLoadingNotices'
+
+	public function discardPublishes(uri String) throws LspClientError
+		_ = try self.takeStashedWhere(function(candidate JsonDoc) gives publishesFor(candidate, uri: uri), take: StashTake.every)
+	end 'discardPublishes'
 
 	public function discardProjectCheckReports(uri String) throws LspClientError
 		_ = try self.takeProjectCheckReports(projectCheckReportPrefix(uri))
@@ -2021,9 +2042,10 @@ let HoverSectionSeparator = "\n"
 
 let RecordedProjectSubdirName = "proj"
 let RecordedCacheDirName = "cache"
-let RecordedManifestFileName = "app.maxproj"
+export let RecordedManifestFileName = "app.maxproj"
 let RecordedManifestSource = "export function build() returns ExitCode\n\tBuild.build(\".\", output: \"program\")\n\treturn 0\nend 'build'\n"
-let RecordedMainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let FixPart = "Fix: "
+export let RecordedMainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
 
 function recordedProjectOf(staged FilePath) returns FilePath
 	return staged.join(RecordedProjectSubdirName)
@@ -2043,11 +2065,7 @@ export function stageRecordedProject(staged FilePath, recording String) returns 
 	writeCorpusFile(project, fileName: RecordedManifestFileName, content: RecordedManifestSource)
 	writeCorpusFile(project, fileName: StagedProgramFileName, content: RecordedMainSource)
 
-	let built = spawnCompiler([BuildCommandName], staged: project, what: "`maxon {BuildCommandName}` in {project.toString()}", environment: recordedCacheEnvironment(staged))
-
-	if built.exitCode() != 0 'buildFailed'
-		panic("the test could not run: `maxon {BuildCommandName}` in {project.toString()} exited {built.exitCode()}, so no compiler-version record was written. It wrote to stdout: {built.stdout} and to stderr: {built.stderr}")
-	end 'buildFailed'
+	buildRecordedProject(staged)
 
 	let record = try soleVersionRecordUnder(staged.join(RecordedCacheDirName))
 	writeStagedFile(record, content: recording)
@@ -2055,15 +2073,27 @@ export function stageRecordedProject(staged FilePath, recording String) returns 
 	return record
 end 'stageRecordedProject'
 
+export function buildRecordedProject(staged FilePath)
+	let project = recordedProjectOf(staged)
+	let built = spawnCompiler([BuildCommandName], staged: project, what: "`maxon {BuildCommandName}` in {project.toString()}", environment: recordedCacheEnvironment(staged))
+
+	if built.exitCode() != 0 'buildFailed'
+		panic("the test could not run: `maxon {BuildCommandName}` in {project.toString()} exited {built.exitCode()}, so no compiler-version record was written. It wrote to stdout: {built.stdout} and to stderr: {built.stderr}")
+	end 'buildFailed'
+end 'buildRecordedProject'
+
+export function recordedDocumentUri(staged FilePath, fileName String) returns String
+	return fileUriOf(recordedProjectOf(staged).join(fileName))
+end 'recordedDocumentUri'
+
 export function startedOverRecordedCache(staged FilePath) returns LspClient
 	return LspClient.start(environment: recordedCacheEnvironment(staged))
 end 'startedOverRecordedCache'
 
 export function recordedManifestDiagnostics(client LspClient, staged FilePath) returns PublishedDiagnosticArray throws LspClientError
-	let project = recordedProjectOf(staged)
-	let uri = fileUriOf(project.join(RecordedManifestFileName))
+	let uri = recordedDocumentUri(staged, fileName: RecordedManifestFileName)
 
-	_ = try client.initializeAtRootWithTrust(project, trusted: true)
+	_ = try client.initializeAtRootWithTrust(recordedProjectOf(staged), trusted: true)
 	try client.initialized()
 	try client.openDocument(uri, content: RecordedManifestSource)
 
@@ -2071,3 +2101,24 @@ export function recordedManifestDiagnostics(client LspClient, staged FilePath) r
 
 	return published.items
 end 'recordedManifestDiagnostics'
+
+export function expectBreakingChangeNotices(items PublishedDiagnosticArray) throws TestFailure
+	let lastBuilt = "{LastBuiltWording} {OlderRelease}."
+	var notices = 0 as Count
+
+	try Expect.greaterThan(items.count(), than: 0, message: "the `.maxproj` of a project last built by maxon {OlderRelease} published no diagnostics, where it owes one notice per breaking change since that release.")
+
+	for item in items 'eachItem'
+		try Expect.notEqual(item.severity, expected: PublishedErrorSeverity, message: "a record of an older release is not an error: {item.message}")
+
+		if item.severity != PublishedInformationSeverity 'notANotice'
+			continue
+		end 'notANotice'
+
+		try Expect.startsWith(item.message, needle: lastBuilt, message: "a breaking-change notice does not open with `{lastBuilt}`: {item.message}")
+		try Expect.contains(item.message, needle: FixPart, message: "a breaking-change notice carries no `{FixPart}` part: {item.message}")
+		notices = notices + 1
+	end 'eachItem'
+
+	try Expect.greaterThan(notices, than: 0, message: "the `.maxproj` of a project last built by maxon {OlderRelease} published {items.count()} diagnostic(s) and no Information-severity notice of a breaking change among them.")
+end 'expectBreakingChangeNotices'

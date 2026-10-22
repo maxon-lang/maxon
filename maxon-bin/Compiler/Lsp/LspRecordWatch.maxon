@@ -1,0 +1,71 @@
+enum RecordKind
+	unlocatable
+	absent
+	unreadable
+	present
+end 'RecordKind'
+
+module union RecordWatch
+	unlocatable
+	absent
+	unreadable
+	present(stamp SourceFileStamp)
+
+	function kind() returns RecordKind
+		return match self 'watch'
+			unlocatable gives RecordKind.unlocatable
+			absent gives RecordKind.absent
+			unreadable gives RecordKind.unreadable
+			present gives RecordKind.present
+		end 'watch'
+	end 'kind'
+end 'RecordWatch'
+
+module typealias RecordWatchMap = Map with (String, RecordWatch)
+
+module function recordWatchKey(dir FilePath) returns String
+	return dir.resolve(Directory.currentPath()).normalize().toString()
+end 'recordWatchKey'
+
+module function observeRecord(dir FilePath) returns RecordWatch
+	let observedAt = WallClock.nowUnixSeconds() as Timestamp
+	let record = try versionRecordPathOf(dir) otherwise return RecordWatch.unlocatable
+
+	return match fileStateOf(record) 'state'
+		absent gives RecordWatch.absent
+		unreadable gives RecordWatch.unreadable
+		present(size, modifiedTime, _) gives RecordWatch.present(SourceFileStamp.create(size, modifiedTime: modifiedTime, observedAt: observedAt))
+	end 'state'
+end 'observeRecord'
+
+module function recordWatchHolds(held RecordWatch, dir FilePath) returns bool
+	let record = try versionRecordPathOf(dir) otherwise return held.kind() == RecordKind.unlocatable
+	let now = fileStateOf(record)
+
+	return match held 'held'
+		present(stamp) gives stamp.describes(now)
+		unlocatable or
+		absent or
+		unreadable gives held.kind() == recordKindOf(now)
+	end 'held'
+end 'recordWatchHolds'
+
+function recordKindOf(state FileState) returns RecordKind
+	return match state 'state'
+		absent gives RecordKind.absent
+		unreadable gives RecordKind.unreadable
+		present gives RecordKind.present
+	end 'state'
+end 'recordKindOf'
+
+module function isProjectFileAt(uri String, key String) returns bool
+	let path = try FilePath.from(uri) otherwise return false
+
+	if not isProjectFileName(path.filename()) 'notAProjectFile'
+		return false
+	end 'notAProjectFile'
+
+	let dir = try path.resolve(Directory.currentPath()).parent() otherwise return false
+
+	return recordWatchKey(dir) == key
+end 'isProjectFileAt'
