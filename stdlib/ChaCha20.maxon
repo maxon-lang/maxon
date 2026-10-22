@@ -1,0 +1,180 @@
+/// The ChaCha20 stream cipher (RFC 8439) with a 12-byte nonce and a 32-bit block counter.
+/// @category Crypto
+
+typealias ChaChaWord = bits(64)
+typealias ChaChaWords = Array with ChaChaWord
+typealias ChaChaQuad = (ChaChaWord, ChaChaWord, ChaChaWord, ChaChaWord)
+
+typealias ChaChaRotateAmount = int(7 to 16)
+typealias ChaChaSlot = int(0 to 15) implements ElementIndex
+
+/// The ChaCha20 block counter.
+public typealias ChaCha20Counter = int(0 to u32.max)
+
+/// Why `ChaCha20.xorKeyStream` refused a key, a nonce or a length.
+public enum ChaCha20Error implements Error
+	invalidKeyLength
+	invalidNonceLength
+	counterOverflow
+end 'ChaCha20Error'
+
+let chaChaKeyBytes = 32
+let chaChaNonceBytes = 12
+let chaChaBlockBytes = 64
+let chaChaBlockWords = 16
+let chaChaWordBytes = 4
+let chaChaWordBits = 32
+let chaChaKeyWords = 8
+let chaChaNonceWords = 3
+let chaChaDoubleRounds = 10
+let chaChaBlockShift = 6
+let chaChaCounterSlot = 12
+let chaChaCounterLimit = 4294967296
+let chaChaBitsPerByte = 8
+
+let chaChaWordMask = 0xFFFFFFFF as ChaChaWord
+let chaChaByteMask = 0xFF as ChaChaWord
+let chaChaZeroWord = 0 as ChaChaWord
+
+let chaChaConstantWords = ChaChaWords from [0x61707865, 0x3320646e, 0x79622d32, 0x6b206574]
+
+function chaChaReadWord(source ByteArray, off ElementIndex) returns ChaChaWord
+	var word = 0 as ChaChaWord
+
+	for i in 0 upto chaChaWordBytes 'eachByte'
+		let b = try source.get(off + i) otherwise panic("chacha20: read past the key or nonce the caller sized")
+		word = word or ((b as ChaChaWord) shl (i * chaChaBitsPerByte))
+	end 'eachByte'
+
+	return word
+end 'chaChaReadWord'
+
+function chaChaRotL(v ChaChaWord, n ChaChaRotateAmount) returns ChaChaWord
+	return ((v shl n) or (v shr (chaChaWordBits - n))) and chaChaWordMask
+end 'chaChaRotL'
+
+function chaChaQuarterRound(a ChaChaWord, b ChaChaWord, c ChaChaWord, d ChaChaWord) returns ChaChaQuad
+	let a1 = (a + b) and chaChaWordMask
+	let d1 = chaChaRotL(d xor a1, n: 16)
+	let c1 = (c + d1) and chaChaWordMask
+	let b1 = chaChaRotL(b xor c1, n: 12)
+	let a2 = (a1 + b1) and chaChaWordMask
+	let d2 = chaChaRotL(d1 xor a2, n: 8)
+	let c2 = (c1 + d2) and chaChaWordMask
+	let b2 = chaChaRotL(b1 xor c2, n: 7)
+
+	return (a2, b2, c2, d2)
+end 'chaChaQuarterRound'
+
+function chaChaInitialState(key ByteArray, nonce ByteArray) returns ChaChaWords
+	var state = ChaChaWords.create()
+	state.reserve(chaChaBlockWords)
+	state.append(chaChaConstantWords)
+
+	for i in 0 upto chaChaKeyWords 'keyWords'
+		state.push(chaChaReadWord(key, off: i * chaChaWordBytes))
+	end 'keyWords'
+
+	state.push(chaChaZeroWord)
+
+	for i in 0 upto chaChaNonceWords 'nonceWords'
+		state.push(chaChaReadWord(nonce, off: i * chaChaWordBytes))
+	end 'nonceWords'
+
+	return state
+end 'chaChaInitialState'
+
+function chaChaRound(working ChaChaWords, a ChaChaSlot, b ChaChaSlot, c ChaChaSlot, d ChaChaSlot)
+	let wa = try working.get(a) otherwise panic("chacha20: working index unreachable")
+	let wb = try working.get(b) otherwise panic("chacha20: working index unreachable")
+	let wc = try working.get(c) otherwise panic("chacha20: working index unreachable")
+	let wd = try working.get(d) otherwise panic("chacha20: working index unreachable")
+	let (ra, rb, rc, rd) = chaChaQuarterRound(wa, b: wb, c: wc, d: wd)
+
+	try working.set(a, value: ra) otherwise panic("chacha20: working index unreachable")
+	try working.set(b, value: rb) otherwise panic("chacha20: working index unreachable")
+	try working.set(c, value: rc) otherwise panic("chacha20: working index unreachable")
+	try working.set(d, value: rd) otherwise panic("chacha20: working index unreachable")
+end 'chaChaRound'
+
+function chaChaDoubleRound(working ChaChaWords)
+	chaChaRound(working, a: 0, b: 4, c: 8, d: 12)
+	chaChaRound(working, a: 1, b: 5, c: 9, d: 13)
+	chaChaRound(working, a: 2, b: 6, c: 10, d: 14)
+	chaChaRound(working, a: 3, b: 7, c: 11, d: 15)
+	chaChaRound(working, a: 0, b: 5, c: 10, d: 15)
+	chaChaRound(working, a: 1, b: 6, c: 11, d: 12)
+	chaChaRound(working, a: 2, b: 7, c: 8, d: 13)
+	chaChaRound(working, a: 3, b: 4, c: 9, d: 14)
+end 'chaChaDoubleRound'
+
+// The working state is an Array rather than sixteen locals: a loop holding seventeen live values is
+// refused (E5001).
+function chaChaBlock(state ChaChaWords, block ChaChaWords)
+	block.clear()
+	block.append(state)
+
+	for _ in 0 upto chaChaDoubleRounds 'rounds'
+		chaChaDoubleRound(block)
+	end 'rounds'
+
+	for (iter, initial) in state.withIterator() 'addState'
+		let slot = iter.index()
+		let mixed = try block.get(slot) otherwise panic("chacha20: block index unreachable")
+		try block.set(slot, value: (initial + mixed) and chaChaWordMask) otherwise panic("chacha20: block index unreachable")
+	end 'addState'
+end 'chaChaBlock'
+
+function chaChaXorBlock(output ByteArray, data ByteArray, keystream ChaChaWords, blockOff ElementIndex)
+	var index = blockOff
+
+	for word in keystream 'eachWord'
+		for i in 0 upto chaChaWordBytes 'eachByte'
+			if index >= data.count() 'finished'
+				return
+			end 'finished'
+
+			let plain = try data.get(index) otherwise panic("chacha20: data index unreachable")
+			output.push(plain xor (((word shr (i * chaChaBitsPerByte)) and chaChaByteMask) as Byte))
+			index = index + 1
+		end 'eachByte'
+	end 'eachWord'
+end 'chaChaXorBlock'
+
+/// The ChaCha20 stream cipher.
+public type ChaCha20
+	/// `data` XORed with the key stream of a 32-byte `key` and a 12-byte `nonce`, starting at block
+	/// `counter`. Encryption and decryption are the same call.
+	public static function xorKeyStream(key ByteArray, nonce ByteArray, counter ChaCha20Counter, data ByteArray) returns ByteArray throws ChaCha20Error
+		if key.count() != chaChaKeyBytes 'keyLength'
+			throw ChaCha20Error.invalidKeyLength
+		end 'keyLength'
+
+		if nonce.count() != chaChaNonceBytes 'nonceLength'
+			throw ChaCha20Error.invalidNonceLength
+		end 'nonceLength'
+
+		let blocks = (data.count() + chaChaBlockBytes - 1) shr chaChaBlockShift
+
+		let firstBlock = counter as Count
+
+		if firstBlock + blocks > chaChaCounterLimit 'overflow'
+			throw ChaCha20Error.counterOverflow
+		end 'overflow'
+
+		var state = chaChaInitialState(key, nonce: nonce)
+		var keystream = ChaChaWords.create()
+		keystream.reserve(chaChaBlockWords)
+
+		var output = ByteArray.create()
+		output.reserve(data.count())
+
+		for blockIndex in 0 upto blocks 'eachBlock'
+			try state.set(chaChaCounterSlot, value: (firstBlock + blockIndex) as ChaChaWord) otherwise panic("chacha20: counter slot unreachable")
+			chaChaBlock(state, block: keystream)
+			chaChaXorBlock(output, data: data, keystream: keystream, blockOff: blockIndex shl chaChaBlockShift)
+		end 'eachBlock'
+
+		return output
+	end 'xorKeyStream'
+end 'ChaCha20'

@@ -301,6 +301,101 @@ end 'main'
 
 Output: `16` and `outputTooLong`.
 
+## Aead
+
+`Aead` is authenticated encryption with associated data: `seal` encrypts a message and appends a 16-byte
+tag over it and the associated data, and `open` checks the tag before decrypting. [`AesGcm`](#aesgcm) and
+[`ChaCha20Poly1305`](#chacha20poly1305) implement it. Every key, nonce and message is a `ByteArray`, and
+the work takes the same time whatever the key and the data hold.
+
+| Requirement | Returns | Throws | Description |
+|-------------|---------|--------|-------------|
+| `seal(nonce ByteArray, plaintext ByteArray, additionalData ByteArray)` | `ByteArray` | `AeadError` | The ciphertext of `plaintext`, as long as it, followed by the tag. `additionalData` is authenticated and not encrypted. |
+| `open(nonce ByteArray, sealed ByteArray, additionalData ByteArray)` | `ByteArray` | `AeadError` | The plaintext of what `seal` returned, given the same nonce and associated data. |
+
+`AeadError` has four cases: `invalidKeyLength` and `invalidNonceLength` for a key or a 12-byte nonce of
+the wrong size, `plaintextTooLong` from `seal` past the cipher's limit, and `authenticationFailed` from
+`open` when the tag does not match or `sealed` is shorter than a tag. `open` returns no plaintext unless
+the tag matches.
+
+A nonce must never be used twice under one key: two messages sealed under one key and nonce reveal the
+XOR of their plaintexts, and let an attacker forge tags.
+
+```maxon
+function main() returns ExitCode
+	var key = ByteArray.create()
+	key.resize(32)
+	var nonce = ByteArray.create()
+	nonce.resize(12)
+
+	let aead = try ChaCha20Poly1305.create(key) otherwise return 1
+	let sealed = try aead.seal(nonce, plaintext: "hello".toByteArray(), additionalData: "v1".toByteArray()) otherwise return 1
+	let opened = try aead.open(nonce, sealed: sealed, additionalData: "v1".toByteArray()) otherwise return 1
+	print("{sealed.count()} {opened.count()}\n")
+
+	_ = try aead.open(nonce, sealed: sealed, additionalData: "v2".toByteArray()) otherwise (e) 'refused'
+		print("{e}\n")
+		return 0
+	end 'refused'
+
+	return 1
+end 'main'
+```
+
+Output: `21 5` and `authenticationFailed`.
+
+## AesGcm
+
+AES-GCM (NIST SP 800-38D) with a 12-byte nonce and a 16-byte tag, implementing [`Aead`](#aead).
+`AesGcm.create(key ByteArray)` takes a 16-, 24- or 32-byte key and throws `AeadError.invalidKeyLength`
+for any other. `seal` accepts up to 2^36 − 32 bytes of plaintext, the most its 32-bit block counter
+covers.
+
+## ChaCha20Poly1305
+
+ChaCha20-Poly1305 (RFC 8439) with a 12-byte nonce and a 16-byte tag, implementing [`Aead`](#aead).
+`ChaCha20Poly1305.create(key ByteArray)` takes a 32-byte key, keeping its own copy, and throws
+`AeadError.invalidKeyLength` for any other. `seal` accepts up to 2^38 − 64 bytes of plaintext.
+
+## Aes
+
+The AES block cipher (FIPS 197), the primitive under [`AesGcm`](#aesgcm). It encrypts one 16-byte block
+at a time, or a message in counter mode. The key schedule is computed once by `Aes.create`.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `Aes.create(key ByteArray)` | `Aes` | `AesError` | The cipher for a 16-, 24- or 32-byte key: AES-128, AES-192 or AES-256. |
+| `encryptBlock(block ByteArray)` | `ByteArray` | `AesError` | The encryption of one 16-byte block. |
+| `decryptBlock(block ByteArray)` | `ByteArray` | `AesError` | The decryption of one 16-byte block. |
+| `xorKeyStream(nonce ByteArray, counter AesCounter, data ByteArray)` | `ByteArray` | `AesKeyStreamError` | `data` XORed with the counter-mode key stream: each block's input is the 12-byte nonce followed by a 32-bit big-endian counter, `counter` for the first block. Encrypting and decrypting are the same call. |
+
+`AesError` is `invalidKeyLength` or `invalidBlockLength`. `AesKeyStreamError` is `invalidNonceLength`, or
+`counterOverflow` when `data` needs a block counter past 2^32 − 1. `AesCounter` is `int(0 to u32.max)`.
+
+A bare block cipher is not authenticated: use [`AesGcm`](#aesgcm) to encrypt messages.
+
+## ChaCha20
+
+The ChaCha20 stream cipher (RFC 8439), the primitive under [`ChaCha20Poly1305`](#chacha20poly1305).
+
+| Function | Returns | Throws | Description |
+|----------|---------|--------|-------------|
+| `ChaCha20.xorKeyStream(key ByteArray, nonce ByteArray, counter ChaCha20Counter, data ByteArray)` | `ByteArray` | `ChaCha20Error` | `data` XORed with the key stream of a 32-byte key and a 12-byte nonce, starting at 64-byte block `counter`. Encrypting and decrypting are the same call. |
+
+`ChaCha20Error` is `invalidKeyLength`, `invalidNonceLength`, or `counterOverflow` when `data` needs a block
+counter past 2^32 − 1. `ChaCha20Counter` is `int(0 to u32.max)`.
+
+## Poly1305
+
+The Poly1305 one-time authenticator (RFC 8439), the tag under [`ChaCha20Poly1305`](#chacha20poly1305).
+
+| Function | Returns | Throws | Description |
+|----------|---------|--------|-------------|
+| `Poly1305.mac(key ByteArray, message ByteArray)` | `ByteArray` | `Poly1305Error` | The 16-byte tag of `message` under a 32-byte key. |
+
+`Poly1305Error` has one case, `invalidKeyLength`. A key tags exactly one message: two tags under one key
+let an attacker forge a third. Compare tags with [`constantTimeEqual`](#hmac).
+
 ## Hasher
 
 `Hasher` is an incremental FNV-1a 64-bit hash, for content keys and cache digests. It is not cryptographic.

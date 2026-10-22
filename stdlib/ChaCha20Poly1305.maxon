@@ -1,0 +1,110 @@
+/// ChaCha20-Poly1305 authenticated encryption (RFC 8439) with a 12-byte nonce and a 16-byte tag.
+/// @category Crypto
+
+let chaCha20Poly1305KeyBytes = 32
+let chaCha20Poly1305NonceBytes = 12
+let chaCha20Poly1305TagBytes = 16
+let chaCha20Poly1305PaddingBlockBytes = 16
+let chaCha20Poly1305LengthFieldBytes = 8
+let chaCha20Poly1305BitsPerByte = 8
+let chaCha20Poly1305ByteMask = 0xFF
+let chaCha20Poly1305OneTimeKeyBlock = 0
+let chaCha20Poly1305FirstDataBlock = 1
+// 2^32 − 1 blocks of 64 bytes: the most the 32-bit counter covers from `chaCha20Poly1305FirstDataBlock` on.
+let chaCha20Poly1305MaxPlaintextBytes = 274877906880
+let chaCha20Poly1305ZeroByte = 0 as Byte
+
+function chaCha20Poly1305PadToBlock(buffer ByteArray)
+	while buffer.count() mod chaCha20Poly1305PaddingBlockBytes != 0 'padding'
+		buffer.push(chaCha20Poly1305ZeroByte)
+	end 'padding'
+end 'chaCha20Poly1305PadToBlock'
+
+function chaCha20Poly1305AppendLength(buffer ByteArray, length Count)
+	for i in 0 upto chaCha20Poly1305LengthFieldBytes 'eachByte'
+		buffer.push(((length shr (i * chaCha20Poly1305BitsPerByte)) and chaCha20Poly1305ByteMask) as Byte)
+	end 'eachByte'
+end 'chaCha20Poly1305AppendLength'
+
+/// ChaCha20-Poly1305 under one 32-byte key.
+public type ChaCha20Poly1305 implements Aead
+	// Not zeroed when the cipher is dropped: there is no destructor hook to do it.
+	var key as ByteArray
+
+	/// The cipher for a copy of `key`, or `invalidKeyLength`.
+	public static function create(key ByteArray) returns ChaCha20Poly1305 throws AeadError
+		if key.count() != chaCha20Poly1305KeyBytes 'keyLength'
+			throw AeadError.invalidKeyLength
+		end 'keyLength'
+
+		return Self{key: key.clone()}
+	end 'create'
+
+	public function seal(nonce ByteArray, plaintext ByteArray, additionalData ByteArray) returns ByteArray throws AeadError
+		try requireNonce(nonce)
+
+		if plaintext.count() > chaCha20Poly1305MaxPlaintextBytes 'plaintextLength'
+			throw AeadError.plaintextTooLong
+		end 'plaintextLength'
+
+		var sealed = apply(nonce, counter: chaCha20Poly1305FirstDataBlock, data: plaintext)
+		let tag = authenticate(nonce, additionalData: additionalData, ciphertext: sealed)
+		sealed.append(tag)
+
+		return sealed
+	end 'seal'
+
+	public function open(nonce ByteArray, sealed ByteArray, additionalData ByteArray) returns ByteArray throws AeadError
+		try requireNonce(nonce)
+
+		if sealed.count() < chaCha20Poly1305TagBytes or sealed.count() - chaCha20Poly1305TagBytes > chaCha20Poly1305MaxPlaintextBytes 'badLength'
+			throw AeadError.authenticationFailed
+		end 'badLength'
+
+		let ciphertextBytes = sealed.count() - chaCha20Poly1305TagBytes
+		let ciphertext = try sealed.slice(0, endIndex: ciphertextBytes) otherwise panic("ChaCha20Poly1305: ciphertext range unreachable")
+		let received = try sealed.slice(ciphertextBytes, endIndex: sealed.count()) otherwise panic("ChaCha20Poly1305: tag range unreachable")
+		let expected = authenticate(nonce, additionalData: additionalData, ciphertext: ciphertext)
+
+		if not constantTimeEqual(expected, b: received) 'forged'
+			throw AeadError.authenticationFailed
+		end 'forged'
+
+		return apply(nonce, counter: chaCha20Poly1305FirstDataBlock, data: ciphertext)
+	end 'open'
+
+	function requireNonce(nonce ByteArray) throws AeadError
+		if nonce.count() != chaCha20Poly1305NonceBytes 'nonceLength'
+			throw AeadError.invalidNonceLength
+		end 'nonceLength'
+	end 'requireNonce'
+
+	function apply(nonce ByteArray, counter ChaCha20Counter, data ByteArray) returns ByteArray
+		let transformed = try ChaCha20.xorKeyStream(key, nonce: nonce, counter: counter, data: data) otherwise (failure) 'refused'
+			match failure 'reason'
+				invalidKeyLength then panic("ChaCha20Poly1305: xorKeyStream refused a key that create accepted")
+				invalidNonceLength then panic("ChaCha20Poly1305: xorKeyStream refused a nonce that requireNonce accepted")
+				counterOverflow then panic("ChaCha20Poly1305: xorKeyStream wrapped the block counter for data no longer than 2^38 - 64 bytes")
+			end 'reason'
+		end 'refused'
+
+		return transformed
+	end 'apply'
+
+	function authenticate(nonce ByteArray, additionalData ByteArray, ciphertext ByteArray) returns ByteArray
+		var zeros = ByteArray.create()
+		zeros.resize(chaCha20Poly1305KeyBytes)
+		let oneTimeKey = apply(nonce, counter: chaCha20Poly1305OneTimeKeyBlock, data: zeros)
+
+		var input = ByteArray.create()
+		input.reserve(additionalData.count() + ciphertext.count() + chaCha20Poly1305PaddingBlockBytes * 2 + chaCha20Poly1305LengthFieldBytes * 2)
+		input.append(additionalData)
+		chaCha20Poly1305PadToBlock(input)
+		input.append(ciphertext)
+		chaCha20Poly1305PadToBlock(input)
+		chaCha20Poly1305AppendLength(input, length: additionalData.count())
+		chaCha20Poly1305AppendLength(input, length: ciphertext.count())
+
+		return try Poly1305.mac(oneTimeKey, message: input) otherwise panic("ChaCha20Poly1305: Poly1305 refused a 32-byte key")
+	end 'authenticate'
+end 'ChaCha20Poly1305'

@@ -16,3 +16,9 @@ of the spec here.
 | `base64` | `stdlib/Base64.maxon` | `specs/base64.md` |
 | `pem` | `stdlib/Pem.maxon` | `specs/pem.md` |
 | `secure-random-bytes` | `stdlib/Random.maxon` | `specs/random.md` |
+| `aes` | `stdlib/Aes.maxon` | `specs/aes.md` |
+| `aes-ctr` | `stdlib/Aes.maxon` | `specs/aes.md` |
+| `aes-gcm` | `stdlib/AesGcm.maxon` | `specs/aes-gcm.md` |
+| `chacha20` | `stdlib/ChaCha20.maxon` | `specs/chacha20.md` |
+| `poly1305` | `stdlib/Poly1305.maxon` | `specs/poly1305.md` |
+| `chacha20-poly1305` | `stdlib/ChaCha20Poly1305.maxon` | `specs/chacha20-poly1305.md` |

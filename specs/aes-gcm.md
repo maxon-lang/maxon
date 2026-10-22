@@ -1,0 +1,1103 @@
+---
+feature: aes-gcm
+status: stable
+keywords: [aes-gcm, AesGcm, Aead, AeadError, seal, open, aead, gcm, authenticated encryption, crypto]
+category: crypto
+---
+
+# `AesGcm` — AES-GCM authenticated encryption
+
+## Documentation
+
+`AesGcm.create(key)` is the AES-GCM `Aead` (NIST SP 800-38D) for a 16-, 24- or 32-byte key, with a 12-byte nonce
+and a 16-byte tag. The `Aead` interface is what `AesGcm` and `ChaCha20Poly1305` implement:
+
+| Call | Meaning |
+|---|---|
+| `aead.seal(nonce, plaintext: p, additionalData: a)` | the ciphertext of `p` followed by the 16-byte tag over it and `a` |
+| `aead.open(nonce, sealed: s, additionalData: a)` | the plaintext of `s`, only when its tag verifies against `a` |
+
+Each throws an `AeadError`, and the first check that fails decides it:
+
+1. a key of another length, at `create`: `invalidKeyLength`;
+2. a nonce that is not exactly 12 bytes: `invalidNonceLength`;
+3. for `seal`, a plaintext longer than `2^36 - 32` bytes: `plaintextTooLong`;
+4. for `open`, sealed input shorter than 16 bytes or a tag that does not verify: `authenticationFailed`.
+
+`open` compares the tag in constant time and returns no plaintext when it fails. A changed ciphertext, tag,
+additional data, nonce or key are one error. A nonce MUST NOT be reused under one key.
+
+The vectors are the McGrew-Viega GCM test cases with a 96-bit IV, the NIST CAVP GCM vectors and Project
+Wycheproof's AES-GCM cases. An output longer than 64 bytes is pinned by its length and SHA-256 digest.
+
+## Tests
+
+<!-- test: aes-gcm.seal -->
+Every `seal` vector whose output is pinned in full, through the `Aead` interface.
+```maxon
+function digit(symbol Byte) returns Byte
+	if symbol >= 0x61 'letter'
+		return symbol - 0x57
+	end 'letter'
+
+	return symbol - 0x30
+end 'digit'
+
+function fromHex(hex String) returns ByteArray
+	var bytes = ByteArray.create()
+	var high = 0 as Byte
+	var isHigh = true
+
+	for symbol in hex.bytes() 'eachSymbol'
+		if isHigh 'first'
+			high = digit(symbol)
+		end 'first' else 'second'
+			bytes.push(high * 16 + digit(symbol))
+		end 'second'
+
+		isHigh = not isHigh
+	end 'eachSymbol'
+
+	return bytes
+end 'fromHex'
+
+function toHex(bytes ByteArray) returns String
+	var text = ""
+
+	for byte in bytes 'eachByte'
+		text.append("{byte:02x}")
+	end 'eachByte'
+
+	return text
+end 'toHex'
+
+enum Operation
+	seal
+	open
+end 'Operation'
+
+function errorName(failure AeadError) returns String
+	return match failure 'name'
+		invalidKeyLength gives "invalidKeyLength"
+		invalidNonceLength gives "invalidNonceLength"
+		authenticationFailed gives "authenticationFailed"
+		plaintextTooLong gives "plaintextTooLong"
+	end 'name'
+end 'errorName'
+
+function perform(operation Operation, aead Aead, nonceHex String, inputHex String, additionalDataHex String) returns ByteArray throws AeadError
+	let nonce = fromHex(nonceHex)
+	let additionalData = fromHex(additionalDataHex)
+
+	match operation 'direction'
+		seal then return try aead.seal(nonce, plaintext: fromHex(inputHex), additionalData: additionalData)
+		open then return try aead.open(nonce, sealed: fromHex(inputHex), additionalData: additionalData)
+	end 'direction'
+end 'perform'
+
+function performWithKey(operation Operation, keyHex String, nonceHex String, inputHex String, additionalDataHex String) returns ByteArray throws AeadError
+	let aead = try AesGcm.create(fromHex(keyHex))
+	return try perform(operation, aead: aead, nonceHex: nonceHex, inputHex: inputHex, additionalDataHex: additionalDataHex)
+end 'performWithKey'
+
+function report(id String, operation Operation, keyHex String, nonceHex String, inputHex String, additionalDataHex String)
+	if let output = try performWithKey(operation, keyHex: keyHex, nonceHex: nonceHex, inputHex: inputHex, additionalDataHex: additionalDataHex) 'done'
+		print("{id} [{toHex(output)}]\n")
+	end 'done' else (failure) 'refused'
+		print("{id} {errorName(failure)}\n")
+	end 'refused'
+end 'report'
+
+function main() returns ExitCode
+	report("seal-001", operation: Operation.seal, keyHex: "00000000000000000000000000000000", nonceHex: "000000000000000000000000", inputHex: "", additionalDataHex: "")
+	report("seal-002", operation: Operation.seal, keyHex: "00000000000000000000000000000000", nonceHex: "000000000000000000000000", inputHex: "00000000000000000000000000000000", additionalDataHex: "")
+	report("seal-003", operation: Operation.seal, keyHex: "feffe9928665731c6d6a8f9467308308", nonceHex: "cafebabefacedbaddecaf888", inputHex: "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b391aafd255", additionalDataHex: "")
+	report("seal-004", operation: Operation.seal, keyHex: "feffe9928665731c6d6a8f9467308308", nonceHex: "cafebabefacedbaddecaf888", inputHex: "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("seal-005", operation: Operation.seal, keyHex: "000000000000000000000000000000000000000000000000", nonceHex: "000000000000000000000000", inputHex: "", additionalDataHex: "")
+	report("seal-006", operation: Operation.seal, keyHex: "000000000000000000000000000000000000000000000000", nonceHex: "000000000000000000000000", inputHex: "00000000000000000000000000000000", additionalDataHex: "")
+	report("seal-007", operation: Operation.seal, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c", nonceHex: "cafebabefacedbaddecaf888", inputHex: "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b391aafd255", additionalDataHex: "")
+	report("seal-008", operation: Operation.seal, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c", nonceHex: "cafebabefacedbaddecaf888", inputHex: "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("seal-009", operation: Operation.seal, keyHex: "0000000000000000000000000000000000000000000000000000000000000000", nonceHex: "000000000000000000000000", inputHex: "", additionalDataHex: "")
+	report("seal-010", operation: Operation.seal, keyHex: "0000000000000000000000000000000000000000000000000000000000000000", nonceHex: "000000000000000000000000", inputHex: "00000000000000000000000000000000", additionalDataHex: "")
+	report("seal-011", operation: Operation.seal, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308", nonceHex: "cafebabefacedbaddecaf888", inputHex: "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b391aafd255", additionalDataHex: "")
+	report("seal-012", operation: Operation.seal, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308", nonceHex: "cafebabefacedbaddecaf888", inputHex: "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("seal-013", operation: Operation.seal, keyHex: "11754cd72aec309bf52f7687212e8957", nonceHex: "3c819d9a9bed087615030b65", inputHex: "", additionalDataHex: "")
+	report("seal-014", operation: Operation.seal, keyHex: "77be63708971c4e240d1cb79e8d77feb", nonceHex: "e0e00f19fed7ba0136a797f3", inputHex: "", additionalDataHex: "7a43ec1d9c0a5a78a0b16533a6213cab")
+	report("seal-015", operation: Operation.seal, keyHex: "7fddb57453c241d03efbed3ac44e371c", nonceHex: "ee283a3fc75575e33efd4887", inputHex: "d5de42b461646c255c87bd2962d3b9a2", additionalDataHex: "")
+	report("seal-016", operation: Operation.seal, keyHex: "fe0121f42e599f88ff02a985403e19bb", nonceHex: "3bb9eb7724cbe1943d43de21", inputHex: "fd331ca8646091c29f21e5f0a1", additionalDataHex: "2662d895035b6519f3510eae0faa3900ad23cfdf")
+	report("seal-017", operation: Operation.seal, keyHex: "2c1f21cf0f6fb3661943155c3e3d8492", nonceHex: "23cb5ff362e22426984d1907", inputHex: "42f758836986954db44bf37c6ef5e4ac0adaf38f27252a1b82d02ea949c8a1a2dbc0d68b5615ba7c1220ff6510e259f06655d8", additionalDataHex: "5d3624879d35e46849953e45a32a624d6a6c536ed9857c613b572b0333e701557a713e3f010ecdf9a6bd6c9e3e44b065208645aff4aabee611b391528514170084ccf587177f4488f33cfb5e979e42b6e1cfc0a60238982a7aec")
+	report("seal-018", operation: Operation.seal, keyHex: "aa740abfadcda779220d3b406c5d7ec09a77fe9d94104539", nonceHex: "ab2265b4c168955561f04315", inputHex: "", additionalDataHex: "")
+	report("seal-019", operation: Operation.seal, keyHex: "41c5da8667ef725220ffe39ae0ac590ac9fca729ab60ada0", nonceHex: "05ad13a5e2c2ab667e1a6fbc", inputHex: "", additionalDataHex: "8b5c124bef6e2f0fe4d8c95cd5fa4cf1")
+	report("seal-020", operation: Operation.seal, keyHex: "fbc0b4c56a714c83217b2d1bcadd2ed2e9efb0dcac6cc19f", nonceHex: "5f4b43e811da9c470d6a9b01", inputHex: "d2ae38c4375954835d75b8e4c2f9bbb4", additionalDataHex: "")
+	report("seal-021", operation: Operation.seal, keyHex: "4bea36ca9c7a5cf6df8f8bb5be1e97647d014bd181d50e28", nonceHex: "bff3d447b453eeb78f3a5650", inputHex: "d4f1053348696176de90c538c6", additionalDataHex: "33b7e18c7d5fd133faadd0ab524b86526e398203")
+	report("seal-022", operation: Operation.seal, keyHex: "50f5cc5e33774f383235c64e77c502ca6c5d06ab0af6be04", nonceHex: "9d4c766490224946d91a99a7", inputHex: "35df59329eb5fc30c28791164bf9b374df228d2be467414727f457a9dd0f079f7342e23adb06929ce0ad607116ee11718ce320", additionalDataHex: "4feca4174889298e992b765dfa67d33219f9b23898f8e869b7f1fbf5d71d87b44edd963d1055618b9db7bffe96b7856f3197868d6ce5e755a6c751661773e1def403a4cf036151ecae67b35f2891285420956604ef31c9aab341")
+	report("seal-023", operation: Operation.seal, keyHex: "b52c505a37d78eda5dd34f20c22540ea1b58963cf8e5bf8ffa85f9f2492505b4", nonceHex: "516c33929df5a3284ff463d7", inputHex: "", additionalDataHex: "")
+	report("seal-024", operation: Operation.seal, keyHex: "78dc4e0aaf52d935c3c01eea57428f00ca1fd475f5da86a49c8dd73d68c8e223", nonceHex: "d79cf22d504cc793c3fb6c8a", inputHex: "", additionalDataHex: "b96baa8c1c75a671bfb2d08d06be5f36")
+	report("seal-025", operation: Operation.seal, keyHex: "31bdadd96698c204aa9ce1448ea94ae1fb4a9a0b3c9d773b51bb1822666b8f22", nonceHex: "0d18e06c7c725ac9e362e1ce", inputHex: "2db5168e932556f8089a0622981d017d", additionalDataHex: "")
+	report("seal-026", operation: Operation.seal, keyHex: "69b458f2644af9020463b40ee503cdf083d693815e2659051ae0d039e606a970", nonceHex: "8d1da8ab5f91ccd09205944b", inputHex: "f3e0e09224256bf21a83a5de8d", additionalDataHex: "036ad5e5494ef817a8af2f5828784a4bfedd1653")
+	report("seal-027", operation: Operation.seal, keyHex: "148579a3cbca86d5520d66c0ec71ca5f7e41ba78e56dc6eebd566fed547fe691", nonceHex: "b08a5ea1927499c6ecbfd4e0", inputHex: "9d0b15fdf1bd595f91f8b3abc0f7dec927dfd4799935a1795d9ce00c9b879434420fe42c275a7cd7b39d638fb81ca52b49dc41", additionalDataHex: "e4f963f015ffbb99ee3349bbaf7e8e8e6c2a71c230a48f9d59860a29091d2747e01a5ca572347e247d25f56ba7ae8e05cde2be3c97931292c02370208ecd097ef692687fecf2f419d3200162a6480a57dad408a0dfeb492e2c5d")
+	report("seal-028", operation: Operation.seal, keyHex: "5b9604fe14eadba931b0ccf34843dab9", nonceHex: "028318abc1824029138141a2", inputHex: "001d0c231287c1182784554ca3a21908", additionalDataHex: "")
+	report("seal-029", operation: Operation.seal, keyHex: "5b9604fe14eadba931b0ccf34843dab9", nonceHex: "921d2507fa8007b7bd067d34", inputHex: "001d0c231287c1182784554ca3a21908", additionalDataHex: "00112233445566778899aabbccddeeff")
+	report("seal-030", operation: Operation.seal, keyHex: "aa023d0478dcb2b2312498293d9a9129", nonceHex: "0432bc49ac34412081288127", inputHex: "2035af313d1346ab00154fea78322105", additionalDataHex: "aac39231129872a2")
+	report("seal-031", operation: Operation.seal, keyHex: "bedcfb5a011ebc84600fcb296c15af0d", nonceHex: "438a547a94ea88dce46c6c85", inputHex: "", additionalDataHex: "")
+	report("seal-032", operation: Operation.seal, keyHex: "384ea416ac3c2f51a76e7d8226346d4e", nonceHex: "b30c084727ad1c592ac21d12", inputHex: "35", additionalDataHex: "")
+	report("seal-033", operation: Operation.seal, keyHex: "cae31cd9f55526eb038241fc44cac1e5", nonceHex: "b5e006ded553110e6dc56529", inputHex: "d10989f2c52e94ad", additionalDataHex: "")
+	report("seal-034", operation: Operation.seal, keyHex: "dd6197cd63c963919cf0c273ef6b28bf", nonceHex: "ecb0c42f7000ef0e6f95f24d", inputHex: "4dcc1485365866e25ac3f2ca6aba97", additionalDataHex: "")
+	report("seal-035", operation: Operation.seal, keyHex: "ffdf4228361ea1f8165852136b3480f7", nonceHex: "0e1666f2dc652f7708fb8f0d", inputHex: "25b12e28ac0ef6ead0226a3b2288c800", additionalDataHex: "")
+	report("seal-036", operation: Operation.seal, keyHex: "c15ed227dd2e237ecd087eaaaad19ea4", nonceHex: "965ff6643116ac1443a2dec7", inputHex: "fee62fde973fe025ad6b322dcdf3c63fc7", additionalDataHex: "")
+	report("seal-037", operation: Operation.seal, keyHex: "a8ee11b26d7ceb7f17eaa1e4b83a2cf6", nonceHex: "fbbc04fd6e025b7193eb57f6", inputHex: "c08f085e6a9e0ef3636280c11ecfadf0c1e72919ffc17eaf", additionalDataHex: "")
+	report("seal-038", operation: Operation.seal, keyHex: "28ff3def08179311e2734c6d1c4e2871", nonceHex: "32bcb9b569e3b852d37c766a", inputHex: "dfc61a20df8505b53e3cd59f25770d5018add3d6", additionalDataHex: "c3")
+	report("seal-039", operation: Operation.seal, keyHex: "e63a43216c08867210e248859eb5e99c", nonceHex: "9c3a4263d983456658aad4b1", inputHex: "b14da56b0462dc05b871fc815273ff4810f92f4b", additionalDataHex: "834afdc5c737186b")
+	report("seal-040", operation: Operation.seal, keyHex: "38449890234eb8afab0bbf82e2385454", nonceHex: "33e90658416e7c1a7c005f11", inputHex: "f762776bf83163b323ca63a6b3adeac1e1357262", additionalDataHex: "4020855c66ac4595058395f367201c4c")
+	report("seal-041", operation: Operation.seal, keyHex: "6a68671dfe323d419894381f85eb63fd", nonceHex: "9f0d85b605711f34cd2a35ba", inputHex: "0fc67899c3f1bbe196d90f1eca3797389230aa37", additionalDataHex: "76eb5f147250fa3c12bff0a6e3934a0b16860cf11646773b")
+	report("seal-054", operation: Operation.seal, keyHex: "5a475f9976ed117ab37a4fffab0592eb", nonceHex: "6bce45bea6ad59bd2a08f7b3", inputHex: "dc6ab0e261412cc709422289ea202021d9298060", additionalDataHex: "e8bb51b694b6b0763e097bad1152f5c762a878a3e7f7a9d78e809838de78567900281b7e4f0f185493fd85e28db79b595541aba7e158b3936490b632355d74")
+	report("seal-055", operation: Operation.seal, keyHex: "c4b03435b91fc52e09eff27e4dc3fb42", nonceHex: "5046e7e08f0747e1efccb09e", inputHex: "8e887b224e8b89c82e9a641cf579e6879e1111c7", additionalDataHex: "75fc9078b488e9503dcb568c882c9eec24d80b04f0958c82aac8484f025c90434148db8e9bfe29c7e071b797457cb1695a5e5a6317b83690ba0538fb11e325ca")
+	report("seal-056", operation: Operation.seal, keyHex: "f64d1bc47b081afb21181bdc16ffbcca", nonceHex: "2c03293704f79612181609d3", inputHex: "85b24904bf12ced33d78df7437b36fff83d1e817", additionalDataHex: "a883d23e25a62b492f1271d3d79b8689dde7250a0575b8175a6b69d48d1b4bc2df1b4dc4a2b1eb506bc0e8c11e7dc2f3d08b475214551df7c53e581ec55c0d0a2d")
+	report("seal-057", operation: Operation.seal, keyHex: "7e0e0cf8c9ac58867ef3e3315d0a4338", nonceHex: "a03461bd9ffedb16a65c0389", inputHex: "de4451316ad820471a43906965af9fa221c0360f", additionalDataHex: "c70f009be65ade8465cc05b5227963c12c60b68247ae2e431b2445bb6aa69c0a7820177861e5f6e3585269fd15efaf38c3713e6af0e93362d2d9a6e3296712f581563ae3980298f8bb7276859afecc7052fef63b060bc8f219ffe200e14dbde1f0a36233b5994a0b68c4690b437d495ddff991993e75039bcba4c19d7a6f01")
+	report("seal-058", operation: Operation.seal, keyHex: "7e37d56e6b1d0172d40d64d6111dd424", nonceHex: "517c55c2ec9bfea90addc2bd", inputHex: "6a7dea03c1bba70be8c73da47d5ee06d72a27430", additionalDataHex: "8ed8a9be4c3d32a5098434ee5c0c4fc20f78ef5e25ed8b72a840a463e36b67b881e048b5e49f515b2541ad5ce4ebb3a917c16bcdc0dc3cb52bb4ed5a1dffcf1e1866544e8db103b2ad99c6fa6e7de1d8b45bff57ec872f1cfc78b0e4870f6f200ff1291cae033defc3327ba82792ba438e35c4bfbb684fec5ce5e3ae167d01d7")
+	report("seal-059", operation: Operation.seal, keyHex: "d9218931dc592aef3bffb924c9e0b02c", nonceHex: "17d824f4f2f191e9c9dc0a52", inputHex: "29f29bfc5b09ff158d74fbf7532c06aa3afa936c", additionalDataHex: "76dcb9948575b503fea75cb3d4949bb96ae3d2c1780f185e0fb3cd5b83eb7090be7a966f6146a4db7ef82f8adb9b10158b69d4bb19dffe4c639fe278d0334e68aaf1b68451a8e6778ddbb29aac4b25bcb2ea059601ee2eba439134aecd0ceacd98e388c40114c11969dfd4a16beeaf3d1c7410e99e674894445821e8fcda7b7ba7")
+	report("seal-060", operation: Operation.seal, keyHex: "bf2056baaf45c5a00a733b49f10b7dd0", nonceHex: "fef1b243b44ba92b47c6626b", inputHex: "7e8c2d8a65f539210c047422ae57549195a08393", additionalDataHex: "1bb3a17907279ebff63593de97a64e5ceaf9e1d407e5a5eec1ce0f62586f0dfddb7a3a83fd164e800bcbc6fb089d6a247dfa444633f4663ae1e0bdf37b50a7a01f506e2220bbdd4b08c59fe60e455bdaeda7e5a0cdb2e6dfca66381a72962fa8a6f9847a87135ccf02a40da5b3b8e91e6e1f31542f85f90bce1de05188fe57355329031c66b3fde18bbdcbd2cbec42ea1d0fc803abed2f15c41d2f122674ea91b7280e818acb7549fe63135d2109b4014ec6002745301bd0ac59ca8e4f8d2fb699347b74e17818e3a57fa69c759312dcfde155b2a558a2385c8adab8a6d57f0f497eaf0833e3d930e83fed88c91e18a74c4f5ff45925a2bbdda22f9a4f1196")
+	report("seal-061", operation: Operation.seal, keyHex: "6f8307bb3d83d67866c2fa5b26f9cade", nonceHex: "dfe93ed879e4b391ebbbfd37", inputHex: "81ebf69754857be5ad7ddf0062f866421089d136", additionalDataHex: "1d72720dbbc40333e819a4def81f7bae137d8e52dc010ed901a390bf8c0ab6b435b08ef0184888bc83b14b98b59f6c56afd46131c5627b9e2a44f0a12a9a5356d9090c8b19c94f3f8651d49c74276bd9ae1071cad5f5040fbe1e99124ef44f3f813b13dff958e7331b949193bdf558fd14032c54f0e0ae7ac4d2e6a99d82a5da41135f0543ad377d217152497cf86435d24ee0c75997e3863133d322017aec98050b2fbc1dd8542293ae706889e754daf6ff8c91fb6533c5db7375dd3e365e6a18c546fa9463dfdb21d51c9cf23c9284a63cbfad197f376601101cb2f8a67b6e866569218043cd1745d25ecddf609ce2f9a8f76fb883780a393ea18b7624376b")
+	report("seal-062", operation: Operation.seal, keyHex: "3076741408f734ce25d48f982e8b844b", nonceHex: "a2712eac5e06d3cc2864aa8b", inputHex: "414ec6b149e54735302dada888b98b7fdb4c127c", additionalDataHex: "18526e4efd995a0bf6405d9f906725c290278958d49554974d8fe025e7860daa225c1285b0573916a4b6741f7cc2e29ce4e525e12f436cb7ce0ad47df3d0f5bd80fb27e47635a4985fdaedf0e821f1c8959985cac49c97a4a02438d92b4afd4c855dcc7ef41ecfc36866334fcc05b2bb93ef13f00c5ea9b921e8a519d77f648e0efe9b5a62305a2ecf7d4999663a6ddfca517f1f36f0899b0bdef9f433c4bb2663c0cc1bb616e7d1949e522bec85485d371d1134c90eede75e865dc7be405b54c33f0acbace6cf780c78035b8035b6ea3f562a8d30a156c199fdafd25be06ee895581195ef125cb4e629e4f18e0bee979d31513896db8466e448e6b4600a316757")
+	report("seal-063", operation: Operation.seal, keyHex: "01842c51b9943da4ec4effc057f8c3e3", nonceHex: "0d5bf8ade38ed384861839b8", inputHex: "dfc40cf38738675120f03b12505589b2f02bba68", additionalDataHex: "e2b0c047ee9a7ebde0bc5c2a773f02703f2526226d7fd721a6bdae1d9701da986db6c9bf224f032947bbcc40b269e40c7a4fc1a3d667cf6379843ecc3b9d0664dcde0dfe8d803aa8e14a59cfea1cc58bd93e8a54d5936229a21c497bd75c4534e19480b2a50ae8de0b906f75c1dcf737b5179daf751c3d6f51a1111c4865139393ee95963393a8f98005546759565baf95be2334e57f7c23272c9eca778d9956ee16b187fe309d9e1e699c1a8acdf370fbcab37b1e107934bb156987a282bdef9f9a92758474d808a3e3b191a6476f3e6ed49dc08451e3404e65918fdba33ba8ea3ba09b5669b4be9a64b93bae5de662b8f35d4abbb68118de9d025ebeb599a9cd2b0e35fd82aa0df2d43b60a61512d5af934489302572f928b790e6aadff6b7304b1a4080cc4faf8c698daa3045c945d828d915da6dda0662545f7d85297a36438ea7315a48d9a097140776f3c43d28f522f8afa03000c5a0192b5fb776b3bd06d3d9c52c873fccb0ecd1a8e14187ae2621d2e2848ae30af7ed0758fdbbc497aa69d58441f4d4b8ea13aaac97c4bffc4d07dbc62ae27f00a8db0c5d1bb24042481369f6ccd4df85d9c58a90069897e17ae0334248e13306a936697d2b5dadde5ac6c10b554b6bbd27752101b5df1f1cbb8c0ec1977c4581ab8dcd26a31dff01433785206b6595e3b824b5834295407f5027159eee46189f390537ddce6db5")
+	report("seal-064", operation: Operation.seal, keyHex: "67bd1fe83e4500ddaea721035d4cf7e4", nonceHex: "5449b293c849be9941b1fb3e", inputHex: "c259151909cc0480abbae3f7fb6beac92258d37d", additionalDataHex: "18b8e9b141288ca891606a88987057fa078efc47c0e270b36985c924506e4f8e4a3d1541d0535f515a370a3400e2408fc92d217f9f37fb0b972a3a7602cac98f8f0231a4d76cf584d9239ee816765cecd28f325b907e0b02b260609c70226a16ecd9bd67a64ea12c4b249c05a90112940200df3e70519a4b9ec136b6f535d4b8b2ae16c5a54cb8c57d87451697e5101e1d09a94d2117b30ce90c3685117e2194a379e7a5754da20179582f97767e633d141185fe3784a44d94210b214768aa51117ed5c880613623e4aabbb647721764a513425b8d90d4189651f1529e688466d8abed49e2a5f0f4493b878d4169848547f591277631f1fed6c97d167f8baa68920a2b0220d2ad5ae65cd09dcbbfab42bc666867378e40fd3ced9719a76659ba22213a5a23e30aeeef995164883299e7dd6fff1617b4287c3197cb3b1abd54b2f0ca573b1a4677a054f1232cd19803633fe57b041c768df7c3506313e7eaa365624833becd768fcc4a31ade932e71ade8ccbf400b3aa2d32891a4a173fb7498c9564c89b70548fd495ac2ea85c4bedb4c9136d1a0a6c1618c4f1aa8e619fef765e1c7410f86cd8ae7d0b7ed28947433cd0ff64f5f9029816d61080237f099aad2f8520f25d7685cc1893b3e8da3aafdb38846b6758ee02b5c5ac899b2c0738453be2a83b879f97cbad8e214786fb2a836c74e06ef190022f4b5557694c254bc7")
+	report("seal-065", operation: Operation.seal, keyHex: "e7e0827a582b946828cb6df0d1c4617e", nonceHex: "3a403192064a51df71a3554f", inputHex: "65e0007f93225599dfc59107720c503c0158f3f4", additionalDataHex: "053d3468b4d0a5a6a12dff017c40218c2f990158c50a95503130bb92a5d7615973ec8827043b29222e15713fb9a58db90a397d31b16e21b3befd3d66d8990312b3f7ada3f39abbe92e17a1a66d6a290534b3110287915b08f47431a1bfb9c823e54a16b287a57d4c3463c838c462dc7898a3d7f5f653a945744dbb126bd21802e4684ad7dc90391b8b8000343db337145bf17fe31fdc434163ee6ae44ada02de6192bda57018dde5ba1f59721b4583968efe8613816c3502ac1b1ef162d0085f8df37b3436d14cc54684e898fcb695f15a59d7df60eaa028388d7fdca2bbd90e07a1a02281dc85e00d83750bef47fe0256b23ccd83c864e8619b7b7e75c9b24814e6533c4f7855e4fa21de0747c64795aac015ab532d033e205898a7511da32f898daed383a48314db35f75e7bf12c7a99e50eb8dc93f8700624438211cda86423cfde8d183ae5d6ad70133753e40f73652dfd03074fee034ce6d16ccfc0b3341a9ec18e630872f625e04129173313ee22b1cbcbd90ee74c5019173eed3ab2a47f16c8672e449e06e3bec4d05971fe8eba752d5d962e6e7d27408464441b3db18804fc1e5c428e970688d8c55f2980f30a6b86034ad2f79a76ef44c8d816345a6270c15c79deebf3dcbc1a1a968d318b6cccc09ab755cbe0f6ff4c23710935a4ea5bcab51c307454fba56cef1308b7cf0738626964ae7d2b65ad54d52872699b96")
+	report("seal-066", operation: Operation.seal, keyHex: "00112233445566778899aabbccddeeff", nonceHex: "000000000000000000000000", inputHex: "ebd4a3e10cf6d41c50aeae007563b072", additionalDataHex: "")
+	report("seal-067", operation: Operation.seal, keyHex: "00112233445566778899aabbccddeeff", nonceHex: "ffffffffffffffffffffffff", inputHex: "d593c4d8224f1b100c35e4f6c4006543", additionalDataHex: "")
+	report("seal-068", operation: Operation.seal, keyHex: "92ace3e348cd821092cd921aa3546374299ab46209691bc28b8752d17f123c20", nonceHex: "00112233445566778899aabb", inputHex: "00010203040506070809", additionalDataHex: "00000000ffffffff")
+	report("seal-069", operation: Operation.seal, keyHex: "29d3a44f8723dc640239100c365423a312934ac80239212ac3df3421a2098123", nonceHex: "00112233445566778899aabb", inputHex: "", additionalDataHex: "aabbccddeeff")
+	report("seal-070", operation: Operation.seal, keyHex: "80ba3192c803ce965ea371d5ff073cf0f43b6a2ab576b208426e11409c09b9b0", nonceHex: "4da5bf8dfd5852c1ea12379d", inputHex: "", additionalDataHex: "")
+	report("seal-071", operation: Operation.seal, keyHex: "cc56b680552eb75008f5484b4cb803fa5063ebd6eab91f6ab6aef4916a766273", nonceHex: "99e23ec48985bccdeeab60f1", inputHex: "2a", additionalDataHex: "")
+	report("seal-072", operation: Operation.seal, keyHex: "51e4bf2bad92b7aff1a4bc05550ba81df4b96fabf41c12c7b00e60e48db7e152", nonceHex: "4f07afedfdc3b6c2361823d3", inputHex: "be3308f72a2c6aed", additionalDataHex: "")
+	report("seal-073", operation: Operation.seal, keyHex: "67119627bd988eda906219e08c0d0d779a07d208ce8a4fe0709af755eeec6dcb", nonceHex: "68ab7fdbf61901dad461d23c", inputHex: "51f8c1f731ea14acdb210a6d973e07", additionalDataHex: "")
+	report("seal-074", operation: Operation.seal, keyHex: "59d4eafb4de0cfc7d3db99a8f54b15d7b39f0acc8da69763b019c1699f87674a", nonceHex: "2fcb1b38a99e71b84740ad9b", inputHex: "549b365af913f3b081131ccb6b825588", additionalDataHex: "")
+	report("seal-075", operation: Operation.seal, keyHex: "3b2458d8176e1621c0cc24c0c0e24c1e80d72f7ee9149a4b166176629616d011", nonceHex: "45aaa3e5d16d2d42dc03445d", inputHex: "3ff1514b1c503915918f0c0c31094a6e1f", additionalDataHex: "")
+	report("seal-076", operation: Operation.seal, keyHex: "0212a8de5007ed87b33f1a7090b6114f9e08cefd9607f2c276bdcfdbc5ce9cd7", nonceHex: "e6b1adf2fd58a8762c65f31b", inputHex: "10f1ecf9c60584665d9ae5efe279e7f7377eea6916d2b111", additionalDataHex: "")
+	report("seal-077", operation: Operation.seal, keyHex: "b279f57e19c8f53f2f963f5f2519fdb7c1779be2ca2b3ae8e1128b7d6c627fc4", nonceHex: "98bc2c7438d5cd7665d76f6e", inputHex: "fcc515b294408c8645c9183e3f4ecee5127846d1", additionalDataHex: "c0")
+	report("seal-078", operation: Operation.seal, keyHex: "cdccfe3f46d782ef47df4e72f0c02d9c7f774def970d23486f11a57f54247f17", nonceHex: "376187894605a8d45e30de51", inputHex: "e28e0e9f9d22463ac0e42639b530f42102fded75", additionalDataHex: "956846a209e087ed")
+	report("seal-079", operation: Operation.seal, keyHex: "f32364b1d339d82e4f132d8f4a0ec1ff7e746517fa07ef1a7f422f4e25a48194", nonceHex: "5a86a50a0e8a179c734b996d", inputHex: "43891bccb522b1e72a6b53cf31c074e9d6c2df8e", additionalDataHex: "ab2ac7c44c60bdf8228c7884adb20184")
+	report("seal-080", operation: Operation.seal, keyHex: "ff0089ee870a4a39f645b0a5da774f7a5911e9696fc9cad646452c2aa8595a12", nonceHex: "bc2a7757d0ce2d8b1f14ccd9", inputHex: "748b28031621d95ee61812b4b4f47d04c6fc2ff3", additionalDataHex: "972ab4e06390caae8f99dd6e2187be6c7ff2c08a24be16ef")
+	report("seal-093", operation: Operation.seal, keyHex: "0f112e59cdccd851c3b8e76c9f05a3b7c2e4feca5846afeb351c1cbcace82f04", nonceHex: "7147973339d86789a2c9a958", inputHex: "102e5804dda1fb5d656077edb15cadb5d0bdee8c", additionalDataHex: "37128be45f0a7f329546e1492c3c9c2d2534d5b1f5147e49ab91221e7c3edea21bbe47bfe3619437ce3c61e6e946c504f348296918219e51bf2c5598589cff")
+	report("seal-094", operation: Operation.seal, keyHex: "2ce6b4c15f85fb2da5cc6c269491eef281980309181249ebf2832bd6d0732d0b", nonceHex: "c064fae9173b173fd6f11f34", inputHex: "f8a27a4baf00dc0555d222f2fa4fb42dc666ea3c", additionalDataHex: "498d3075b09fed998280583d61bb36b6ce41f130063b80824d1586e143d349b126b16aa10fe57343ed223d6364ee602257fe313a7fc9bf9088f027795b8dc1d3")
+	report("seal-095", operation: Operation.seal, keyHex: "52350da5a572911ee0e0fcedb115af6f4570fbf9c74a11bc184444d6a621d60f", nonceHex: "d68ad045c1b9c2923cf5404c", inputHex: "4e6e6dad2c16cfc6e7cac03636a4a6d88bd6a13e", additionalDataHex: "03a94b3841292d9bbf72f413c09167c54ee10537c049afe2bbcec43b18f3890b2fcdd3bb31e6d709274e199c0c4648eb3d8b38e0c1bf7f309443bef6937cde4123")
+	report("seal-096", operation: Operation.seal, keyHex: "d058304c0ba039b2e2d08661fd8f6db88779bd5ce580eb766c1d6ab34b94ee94", nonceHex: "3c553397fafda0eb06a59f23", inputHex: "0a064cd5e49845c4efb60fb343dc03faffa36c49", additionalDataHex: "cfb1fe1c47e2450109eaed4e1aac9431aa5db1e3b7eeacad3ebc9e8e1f3e0a823f757f619761e61ad05af8cef83104890940cd592137eb7ba5879b95759c8be1525f9a01fc01582d93a2a841336a104d169968c274b5a8c30883b4bd621725f69079bb94a174a3c94db62f2ae746d03200f01c19aaa8a3b89e78b99a62f76f")
+	report("seal-097", operation: Operation.seal, keyHex: "44c8d0cdb8f7e736cfd997c872a5d9c5ef30afbe44b6566606b90aa5e3e8b797", nonceHex: "6f39afba021e4c36eb92962e", inputHex: "2e6f40f9d3725836ac0c858177938fd67be19432", additionalDataHex: "98d1ca1788cbeb300ea5c6b1eec95eb2347177201400913d45225622b6273eec8a74c3f12c8d5248dabee586229786ff192c4df0c79547f7ad6a92d78d9f8952758635783add2a5977d386e0aef76482211d2c3ae98de4baadb3f8b35b510464755dc75ceb2bf25b233317523f399a6c507db214f085fa2818f0d3702b10952b")
+	report("seal-098", operation: Operation.seal, keyHex: "e27e718e4b66c91e221f2a3df9da0013f7e14340006eca50dc30c4cc2ddeb679", nonceHex: "b46fed185e8b33215dd474dd", inputHex: "e39aeaf1d214f78915601fee9a3527d777674651", additionalDataHex: "2d2b6247f9c342f8d0432ce0715749d0bac0e2e3f28b785be8dc84b3a0e57a161afde34227277512204ffa4bceb6e0a4d021031b765540f7f613045f74e7e6e4977c04b78b5d3f8d4e420a9748c12d1f9aa5e03a27749be2785dd555a8cf0182c0826f2d60eed3c4059adf8872f3c4d81a963592472965cc0c66102167e4cb1ca2")
+	report("seal-099", operation: Operation.seal, keyHex: "fc1bfd0b58515c4e7906e2052596bb92de8c879806af47a4c726ff08c9ba47cc", nonceHex: "f3da3be574337b8f8c052866", inputHex: "9adfced8e23f7897b66efcc3468d63b87da79a24", additionalDataHex: "d26f7ff887725228f3109924ed9eaeaa8c103cfcaac1d6e3874d11afd8424fd030fea80547212fe7c8ac9f4ecbe304b62e5bb206ac3a8318a819b9701f494aefd22e84d227922102f5130f0685e88e25115c3ab9e8bb290c0df0715c4adb00a2ecc9bab5bbcc49cec60305a5b04f646b1d0f951673cf1eb4742c1a52beb2cd2f43a2e413e4a9f5679123b4d59f2ae14c27ee84e970cafcbb5a0736ad2636833cb644c9f2fb61a4a09fad511f4c1781c5685f94814d242c5e3eb4abe165732ab0258a2461c56d452ef1cf48b4ff0f331b91c2c71ce1c03877552837a12dfe75f78bf1cd615b3b2b864fd9503a5f5bea652870bce4cad5c726f1c512dae7f5f8")
+	report("seal-100", operation: Operation.seal, keyHex: "7ec20e38aa1b1f018d79903fc1cf6e260cec3733a19ad9e30f60b54e2ea6ebcc", nonceHex: "5ccd9cdcf97ac61364687bbb", inputHex: "bab28e0987509b1d6f9cf3aa90030795f125ee44", additionalDataHex: "d9d2ee145b5c31a17dce932538c7e45da1c82abb80b0553251e442dbc5af9c126d3a76a24767c39b229bec8976a0df89fa70ea9ad872aa36d6b8b09aaa54698e7f29c2c2d12efb0b301cfb97076473dfa7ec030350e26839fbb7e1612dad93ff08e1119168c5fca56816c62b042f06d89e5a95da6a615e13ba4cad9f942534c539520d00509d0d4ac6d80c59e769d7e1aa7e12987ee05fb6a19b383c3348df6cbdcff604ef218338910a8e275d9a62b802cb07ec9249c9635e2437f8339dff3e21f79e9eb2acc2bbbadd520a84c58f0ddaaf8c32496d173b6b8c0c274352d40d47bfbd93069abdcc3d21c2cd330a8c16847f0e5299beb6a2d33be746de5c71f2")
+	report("seal-101", operation: Operation.seal, keyHex: "e40003d6e08ab80b4bfc8400ef112945a901ec64a1b6536ca92665090d608bc4", nonceHex: "9f095dafe6f6e0fbafbbe02e", inputHex: "38c3f44bc5765de1f3d1c3684cd09cddefaf298d", additionalDataHex: "422d5efcffe364905984533f0a579d80b18bda7b29e6e46498effba53c350112c0bbb8dc4ce03bb0c69e1d0baa19f0637108aa4a16b09a281f232839d87b6d0e42be1baa7c67f1be970ea169d3960b9fe0a61f11cd2eb7398c19e641feb43f778e257a397063db5b3a6707e9db62387054f9f9d44f143583e63edad45a00251e5173d7505f22a8bce232e56c2c276a58033ae30d5dbf4e35a862e42af573be38c6406d9b4c7acbf275fe36c0ecf2c4642898a30e6146fac992a16405f98312126b7a3722f5dfb7dd4e4911c1426b2e01d04e9be6db3771100f7d7d4282e4ea585f3646241e807ca64f06a7fa9b7003d710b801d66f517d2d5ebd740872deba13d0")
+	report("seal-102", operation: Operation.seal, keyHex: "820bb5eb3707e713d5fcfe3c98bb1ba733540ddf44b172746bb950957254adb5", nonceHex: "f2b947eae4311254417c5928", inputHex: "81c37b34c4369ecc1a9cdd6f1557133e59249165", additionalDataHex: "f76c06fe9dfa7fffddae7d545977f1944bdb8e48bb8740ff1a9a90c260e1264fdbfa328ed8f183e672892a6d3464c176adab5da8ab3af7c08b71ad135d7b42c3ebd893938f82cb9d200bb50c26e823af951149407bcc05f17fbe8ec275db96a9c7aa230f1347bcf10202d5cb7fb16076f6a78cd620fdd67a9be58f6992e619a8314cb40446b654d1c01c9cc6a92e44a77b015f2cefb9e5284082951bd98ee7e834adf39306bdd4288296c276e63b0dba7b7269c63e0e77f3df0debe8fe36454ed7ab332db77d2d9d7e1832f36e13ac6c88e383dc8533bc624a27ae378758742a63e39d54fec827b19c63c692cdbc6a498ce80c5c112d461cbed6c93a458573c765c759776e7b8e3430ca389991996f895ee16fe538f2de3a902f8423138f05e87e01c1adf2232ce9eff100b39452565c10125b3a852183f8026b1cb8281e9e2e6a0fbdde64d0f4c2984a72f1ae2bfbb409c9de9ad2244860996e1053cc8cdd70511bb265f20561a0337de4891fbf293f705fe040f187ba43bf13fb5e02031f8edce5db10ef5d411a448ce0903dde943d2e199f0e4af2ad3ab2a534f0d6418acbc5ea9340356e11036bf6dec306419177630d36b41a0e646388f6010227a323f9570f43f2f14a8b9fa346ad0459c0c28ce6ca2eed98983bd08db82bfd0945bd4c94bd82a4046876d7a3844a4fb9365284b1511b6fb36a2703abc9b03a6244bf")
+	report("seal-103", operation: Operation.seal, keyHex: "65e18f70f168abaf388104c9b37a9686aebc7743f0e66b84b7c7cc0e3600f655", nonceHex: "8d564420fcb9a98e7e07475c", inputHex: "12d3cc4473970296d2918818fdcf1a570d2d4821", additionalDataHex: "016dde724536eee27187907263e4a62f3b637eaa8ab6f86d0343f66f7f73c6f8c3416cf253532454c045557ed7a371c2d6b8e19e0101e1109cd7227dc5390545ff24484031957749514379a77a33df0fd129f80e9869747b6589fd29a6935aa37b00e2abbbae2b67904726e9fe22143080af18821ff10c5217e845cd6e0ef2513c1d82c14f9d3933f3fd5c6364075aebef6c0f5c97fa343aa192ba8c526b7ad4c71c4c19ad2d5ae05b07176a5e66d486889a2e8f9ef80b9c0680cf887f60137f6266ec335a5f1d74dc41dec1653a96d61b75f4b569b9328f6b2fb40391704f66e058e92dfc15d77599018d74907a9bb8870c5c446e81fa7a764a549f6a417326b52fbbe4f5885e6455be2890c3a8b97a9fd0c92c085edfaf6a4f28dfec0243aa79a71d123282d4e9a0b3497ad569db869e56638e271f1205a52fc38cb74767e4bb2f37bd437083e994395e98454c04092d292c681ade9e398589df6cbf9b3196d12c8153740647af018cab5f9bf3e3db7deea221c73f377b96d368ff8d9ffecb8f44d50b59fafc90f655ec9271c9c1d032cfb0f23720d01981c26296536e66cdb8c390ad1bca90e6b2711170665ad52aaa188f87ca96888d3d932e6c3bf32891cd746308b0d6345ed8cf7c1ad88442326a3892e60afd5c86a2d062a461d8896446154e9148aad5b122437e26a52ba1b620d085af628af5ada9fff664d4a9a230")
+	report("seal-104", operation: Operation.seal, keyHex: "b15ab816ba505ec42b528066d9119b4b2ee38159ce54a26bc5d661127e05222c", nonceHex: "75e3c608a39367dc4aa748d0", inputHex: "8b2a6a9604b25d1670b7d869c649a05399b8ada5", additionalDataHex: "005931a2d5c5bcedc716c3f246e21b3a46d2a6b1ce73644653e0cf277efa492f12fb2b83f70bae8737d53cd76254dabca8422d4ff9396c265d57e4fd3d0cd1c38198e229637c7fbfff468fcdb04ca12101865c08bbf55689e1299c5e7a430296c47a874d9956557b2cb32fd3f8073f85fefb6d2005c5d3329e40dcb957f5b01d7f1582ea359b947d5669da8003c009f8ecbfbf094fb8155cf89251ee4a91a43a96e3f6d302e15753dd48dd5e3b87e093021059ec323d38d3ee72290521eefd54cf708aa9e81869b756c3fc3c9a60e12226ac643bf7a91951e5509159b1e298bbfe88fd8ee659cac98c904f68c928403894fc89df100d6f30fd1ce20666815929b6eee39ece510eb53567e35cbe49dcec0f1b80fee861ed0af1cc759d477f306a5e1273e64c7e33554d11d79632006b420e7c71d36fece18d75a8b5773171ed071c26664fc0113277e3356ab30db05ac62ea5b975e36413572dd39e5c22d5c42bc82ab0ab85b54fbfaa527d1344dc3dfb18b941b05bcc5b47d25e18ef936f3918ed87cbf5dfa67989a038e2f747345c4b8d27b101c944f0f1d6fe21cd1a653c17530f9a893d7fd48afafcf12bf005fe044a000e8deaf09bed39ba62784bd5b88ace564806a9b5e0bf40f9f655fdd5bdc4bf568c5abb4b84ec61a85f0038b4f4cc3e75c3b3f99e62b99292d510f690c07c18af41b765fe5a1ee9484cf04c69f3f49c")
+	report("seal-105", operation: Operation.seal, keyHex: "00112233445566778899aabbccddeeff102132435465768798a9bacbdcedfe0f", nonceHex: "000000000000000000000000", inputHex: "561008fa07a68f5c61285cd013464eaf", additionalDataHex: "")
+	report("seal-106", operation: Operation.seal, keyHex: "00112233445566778899aabbccddeeff102132435465768798a9bacbdcedfe0f", nonceHex: "ffffffffffffffffffffffff", inputHex: "c6152244cea1978d3e0bc274cf8c0b3b", additionalDataHex: "")
+	report("seal-107", operation: Operation.seal, keyHex: "00112233445566778899aabbccddeeff1021324354657687", nonceHex: "000000000000000000000000", inputHex: "0b4dbbba8982e0f649f8ba85f3aa061b", additionalDataHex: "")
+	report("seal-108", operation: Operation.seal, keyHex: "00112233445566778899aabbccddeeff1021324354657687", nonceHex: "ffffffffffffffffffffffff", inputHex: "1ae93688ef7e2650a9342ad4718b2780", additionalDataHex: "")
+	report("seal-109", operation: Operation.seal, keyHex: "5019eb9fef82e5750b631758f0213e3e5fcca12748b40eb4", nonceHex: "ff0ddb0a0d7b36d219da12b5", inputHex: "", additionalDataHex: "")
+	report("seal-110", operation: Operation.seal, keyHex: "21218af790428f8024d3e7e1428c9fcf578c216636d60e73", nonceHex: "34047bc39b9c608384dff5b8", inputHex: "e3", additionalDataHex: "")
+	report("seal-111", operation: Operation.seal, keyHex: "3a8bf543c480925632118245bcbf5d01522b987a31a33da3", nonceHex: "4ebc13cf4636cc7c45e560a7", inputHex: "53fc72e71b59eeb3", additionalDataHex: "")
+	report("seal-112", operation: Operation.seal, keyHex: "92f4d2672fceec43963ccffb17e6ea7578b11418b06a3b82", nonceHex: "6e7ff7f0797685cfc44b05ff", inputHex: "c3ec16adb184affa8ae9738bffb916", additionalDataHex: "")
+	report("seal-113", operation: Operation.seal, keyHex: "bcb6bc5ee6743df1396a34639327b25809ec9c81dd6a0c0e", nonceHex: "be0326d23bdc2c64648d13f4", inputHex: "80474a3a3b809560eee2ce7a7a33ea07", additionalDataHex: "")
+	report("seal-114", operation: Operation.seal, keyHex: "5e1d28213e092536525bbae09e214af4c891e202b2b4fa4f", nonceHex: "b6be6cd0681235d826aa28ea", inputHex: "53d59433a7db7f41b31ccb6d4a2d789965", additionalDataHex: "")
+	report("seal-115", operation: Operation.seal, keyHex: "7f672d85e151aa490bc0eec8f66b5e5bee74af11642be3ff", nonceHex: "b022067048505b20946216ef", inputHex: "ef6412c72b03c643fa02565a0ae2378a9311c11a84065f80", additionalDataHex: "")
+	report("seal-116", operation: Operation.seal, keyHex: "969fed5068541d65418c2c1de8fe1f845e036030496e1272", nonceHex: "817fe51c31f2879141a34335", inputHex: "3d8233191a2823bf767e99167b1d4af4f4848458", additionalDataHex: "cb")
+	report("seal-117", operation: Operation.seal, keyHex: "fa5b9b41f93f8b682c04ba816c3fecc24eec095b04dd7497", nonceHex: "62b9cf1e923bc1138d05d205", inputHex: "18159841813a69fc0f8f4229e1678da7c9016711", additionalDataHex: "2ed8487153e21b12")
+	report("seal-118", operation: Operation.seal, keyHex: "fbfb395662787e2d25a2e7510f818e825936a35114e237c9", nonceHex: "3f1a1e02e90a4ba7a1db9df2", inputHex: "2952a3d64107d5cbb9602239d05a5c5c222cf72b", additionalDataHex: "74318d8876528243f1944b73eb77e96e")
+	report("seal-119", operation: Operation.seal, keyHex: "5d8e9c2222316c9ed5ff94513cc957436ae447a6e1a73a29", nonceHex: "0802ae86c75a73bf79561521", inputHex: "42b4439e1d2116f834b91c516a26299df279956b", additionalDataHex: "5ca354a4cb8e4fc9798aa209ad4f739dc7c232fdd1f22584")
+	report("seal-132", operation: Operation.seal, keyHex: "856b07ff0afa13819eef43f5dd4a81f7bed2a9c7089cbf06", nonceHex: "901007f757eb3bf0bfd1e03e", inputHex: "b03092f7ad0d36d7e00784652e4ce12eaae65006", additionalDataHex: "03a47b930053a4abb40c661eabfcf19ec269f4913a5a18513eb67243b184b2e946fae1838b35c6f086f8227e4d353620684008827b9720f450c3977ebe8622")
+	report("seal-133", operation: Operation.seal, keyHex: "55a4ca526443357ac7c896d9a67cf7d467f6921d69002d3a", nonceHex: "dba233ccbc7992e64e82cfa3", inputHex: "4e56d1ea538cf49cad49959e884eb540c846556c", additionalDataHex: "df737cd77d31eb9097a17c31b4c92889ef1f32b7464e2620e9007192ea675b9ad6910527ffecee2452be0248fab75608c7fdca08e86580322aac1d6a11b96ecf")
+	report("seal-134", operation: Operation.seal, keyHex: "ef97a39d45a5054df344d818eb156377d4fa5124274f2f2f", nonceHex: "d0278d7ba51e31ebf8f70fca", inputHex: "b491a47f1082581642f8053f66017740e898028f", additionalDataHex: "66f612f2b99e74db949c1caf3cfbe1dde9646da8497861c37f46dc43bfff08df3aec09b229a5c8b9d8b8901f22dfa3aa1f955dba7aa2e883bd0a2ac510b501a038")
+	report("seal-135", operation: Operation.seal, keyHex: "e430ffe62cf0028ca50bacd8ac020d5420aff345b71a98d8", nonceHex: "2b5dd5d7b0e26fb51fa1e0ff", inputHex: "56a1c5580ec785da046fa16bd039a4737eb88c7b", additionalDataHex: "625d9a344276ac8b4f62f49bf274a19f8086976741c79e04ef1499c7f4f4b8203dedc6b02e3d49d6c5bc67a973fb125793ab8999f565a41414a6de06f9adf1165f6ade260f447e028a48ad65044d013153ae96e7063732d1ba3a3783fc0905e9a28fa23a5c49ab2cba016d20c6df704bada62a243d76dbaf17a98457793893")
+	report("seal-136", operation: Operation.seal, keyHex: "f381d0ffd3373a1aa02edd1d7fa748e91908fe534bef73d2", nonceHex: "10aaec0de4ad75376be9fd41", inputHex: "653a3f033c2775e08fef73cf80f5e2699fb360cb", additionalDataHex: "7739aad7399d9c0f0a3c95b403888f0072d94acb76ff576e05f4a063120b84e722b4d5cd43a58e4abab444cb8ced112f3dbd8993b831c39b4edb76e92eb33ee24c5922b56552685f3b0f4cf22e0e11628f6a3d33eff9def7ec527112dfafcf122814e3d1aaf66c3f970526511088bffef8101d1cef833268ff80387df30557f7")
+	report("seal-137", operation: Operation.seal, keyHex: "f8ce769a34f48d24a2076860e7d18ab5f4f2a528e2280da2", nonceHex: "8d7f8676115266f5d1a0e91f", inputHex: "507596e9236f4d9ebcdeb0ed75dcc7ff7e52b155", additionalDataHex: "7b6dccc150563e845434c2bca29f3f9d7841628f00c9474e0620017f7fa8e2500362fd7cf3cd162395b14a520de484c305fe2f6be6309174edc3e14fd5aeccfba6dcae183428613ed9d6df3f01d5db538245c8ae8ff50f30ba3d428510cad3289b462805ea1029133c64af457e46ff512b19580d5dfd0d5a01e42d0fa628c2f729")
+	report("seal-138", operation: Operation.seal, keyHex: "4b726f49036f5ef872000a34ca09a8528a1eea7e0563a55e", nonceHex: "ae05124d76b056fcce5c8b37", inputHex: "e1dd0b94db0a9f7fd6b2c4a6d652e0e2664896dc", additionalDataHex: "95df74132def5ae8adb6b3b6cc918a9f7c9072f2df639d269abc3c551cbd6ab245f57a8e97095a580d473aadbff50f1d871e766fec329100b45fa3571b4904b4f5e4e0d1bd25910f457dd1f01bbf82ff59a2138af16756d64fa9d82089ccd6baa18c16d0381dddbc469ccc54405e853fcecf3b2285247dee886639edaafbaad58edb8e1287c17da2f449681988f1e575c8c6e99e2a2aeefbf7e6e1fcac86adf9b1c1349be7fe29f0f71d7cbe8740e09d296a4718b41250b6fbfc68cc52061c0530fd79e15c5b0ef013a977781f7a63ed513892b8d105b1064eeacf1524de4c50ab85c223d47de35eafb9e931cf426dc455866ea88f49d51003b82bf5efc7e6")
+	report("seal-139", operation: Operation.seal, keyHex: "f8ac92d206df1da3ada5e906806252a78262e51e00a7ce0b", nonceHex: "2c933d7590ff4058e22f7e5b", inputHex: "44ac8c525484528958ecfee09ed44ec0df828a61", additionalDataHex: "ff2771b5c817a5e1326cb907d5384db2861a3295109e678b553ba14a5a99005fe0d6dc6d73178b75d348b6d9c1a8b6983e20cf2b23161cc88b02752cba166f36ebb433d7b429ff5f590758d3ba5696f7268caa55b0e5fbfff498aa77ec79115c679b7df6b118cf4c51a3185f9d6177de145be885ca5e1b355a4a21b6b0b7928c6e70d6cfee65a3d17758e08012f088b28e381e8abc6e15471d580036bb3e78ae1f976caa660ead300c4d0f50d04fa07088643361ac8c634d4c375827be900d62f860f9089c5dbc5ad02f9cab9dd49a324c960b259ab839de45896c6049eb71f4a056d937a90afac1f52e7c73c24ca341306c32a016cbe40c7478de24ec8c7f6f")
+	report("seal-140", operation: Operation.seal, keyHex: "8f27b1c3b3d7023c76ee66c768a3e92d4971e25f729d8788", nonceHex: "12444040caede67285e490d7", inputHex: "0df6e750092b9ac576dde66006a4cab2116eee21", additionalDataHex: "58fd02ac23ec7fa5b9460f60bfc85b4bebba70039a8f83261d6cc4f560107c10bc69548a5d6152882fb465fd59fb8164d7c94523c3dd4206d33064f5191bd31f0c48fe03d7460e995c93175b57cb03f58711adc94632031c4305272367b4289c725d9cb7ae9ba996b3a079174508c1eae8162a0bac446c1e53fe0c402b6912dfd6702addccada30a5c010fc22c2c75e43226378ec7f4b3b71ccc71f32ab1adc877cc7b0a180c75d385c0f71a0b291a1cccf4be47e272249d61ffbf059c4f7be74eba07d5e1be3a7438458a611fe58cee4f946e25dee03e6485235566f20ed555be32cd57a94e522d2168eae23c4587371a2d145f418c59e7bbc464a3bd88b8919b")
+	report("seal-141", operation: Operation.seal, keyHex: "9755eb909e1c30c2c11d3f106107e7b573c25b9fdb8bc19a", nonceHex: "a82a5f561431c689e7c4dc0b", inputHex: "f8007e074951f11f55e10736b5dd17abff63e87a", additionalDataHex: "e12f568134513a0ea75837571321e6355f7078970184400b1297db21b0cd34c6677852a3079a31f2ae83781270b36a97a28da391605f02b40754501871675616a9a9047f7e3865295120d5d3d329ebcc7a4e24ef8db3efe615c2a9102dfa7a49c370f333c62ac196fb4949c64409492712e3b423faf621443e6d07e76738497e301d41c26a414e8d08ff118d65b6a2d6768d18883c52466b5af58cf8335904a2ebb1c02673c80c285d6771067b0db6e6e93156405bb2f5b61b5be80df0db6ae5fa8a9fc69db80be215a0ae17b808f6a00c52555b4b3188e71ea38ff08583b6cabd0b3f86b44f2a494cf54bb41320bdcd8bebd1e8b566435e9f6b2949e2152c5f721d0490db80f564164dbc6f394933dadd7b98ef28b04f54064f9ab84ea7f6fd92f3bb071eee8b3b924ea9f182e707a06f80c6129485c648a7aec6e00cdbb1ae41fd91273fb8370ea5ac9b19a7fe000b4f45a586dd04e793565226931300eaf900b99d50b7a68e7fc517b581412b2b193cc5d8b02cab61027ceee8701718eae5847b674d68d371775ebd40135a24962165f2f7dbfd7069ad1d8c88f2d2e13bf049e847f6e5198037a90d196d49ee04b08e210ab9967b376cf875b6cc66d77e70a82a0f7f06e20cb2d469b59f2b59e5ed0f27907955d4e4826b5b6ba98d7cb30f1804c6c4350101dc790684811774afc1bdc6a84bae3bd3e2dfe08180f0a509")
+	report("seal-142", operation: Operation.seal, keyHex: "d4090019a07de8ff31e98fd1898ffbd8c1001f58269a6433", nonceHex: "65aeaa5ed2c63afd95ff522a", inputHex: "abe86098f798946add9b1b078f16358ea0dd0cd1", additionalDataHex: "37df311edab4303e9b10dc83a90e8562c55aeb9ab98564437468c6b41d3e08898079c9d818e1ca0f0249ec36c183d26678828f0536cb06a8748709330877155ca9a7f87629868c126b3dfba262e0e5ec2e493ea51e4566a94d825c47792634c8d9944666001e12ad2399a4dded6e2c67830fd527956c02f2eb1bc55991cc8be609b3490c0c2a4063f0f2bd2a3203328ea6816579aed76090809e51175f275286f56e77d0455f9ec45c0ed2f0f454374382a3b2d043862d3ee069d5966cbe017927a8a8aaf5873de038d940375b3a2971d453e646dbbb614246325f1f88639c1e868e43b7868f37cd577f8ce35ff05bc0159992c34b933eb9c50bf9d5257d91b644f0b2658c63010afc9fc49f60a50b6f7ae994d4377313b9e78657cccdf4cdfa5d96eb5e935613a27d109b5c20434ca108f05df5f798d8bb421c3e9dc2f546d1b45050a26f889ae0235d2c39b1ea4b2f3b52672727c9e5da6db731c3539c80d10538e69643c79c681014f84fb3a8356dbafbeb6e8e701c445d524b63b1b8fff49c4fbcf672a07977b9661f472efc508d430cefe8e744f324c22846060c637ada1e83a177ad2520b8ac214b844c506493434f8f1666a0bb6a3f57ec6c4efd3f138fb767d7ef6cac7c9d31db5c954b7a7fd2a87308f997eda1d8ae8cc0c7211ec13fc6fda845eadcd25c7f7a9c69cc38d91439fe7ef153835fd972e218594c2a06")
+	report("seal-143", operation: Operation.seal, keyHex: "2ca090f0f4ec5afdf4a3cfb253fe2e87771ddd5b0375f567", nonceHex: "4c48b15143a3f40305c70cd6", inputHex: "00f6840e9b66ef3b6be01f74dfea1ca408038ef5", additionalDataHex: "894fb598d67e5d2d434fd216d38e69631e69c23e488ffbde6e4ff84b10f51563da1c8ca05308fda743af0c55c3714479d0b337b6157c065bf74e9527985a76561843f347f15268f2c9b778b273a6496c0b13dd6bedd7876b336abac4e871584c54c8ab1ee731be17ed0044c82fef47341131f3ce09918dc2920a8b6426ef40a3a539230a28e2636d27e42a2636d016bb58ef8987fb52f066e75e3193a8f98f58f6eb6178bf930cca0ffc5728d67a9e02351051b47abccc8e8afaeff2134c79a08d3c4f596de227f87f48f53f60715054bb59e9640b3f224817ff2453cd685740bbd65f7de9d71d041a90a5146122e1c13bbaf364a7bc30e1827cb962aa409fefcc2d512cef53b3f0059550c5464219b636082768f61296cd1eef8cce71c17c84fd4717e231bb5be272839bd7385c8ef8680100212ecab4430a8bb6fa6599c47ace673409901b0f098b61720920419f033c5efc7cf633047021c8329697a3887ba7d0e4ce8e573c9c055daf285782eb0657ebf4666f4fe078f2fb93323b7151d95af1ffb5bddec2fb1e96b4c70a0b8162224905dd2c0acb9b1c1c332bdd356d05b5fab9813c16f893dcce2a95b0b34d4d9a5997037a90ded22de5e4d0e3e410569d3b010d31ba78843c6b6226f364ecc9695623ce1c1c21bf5734e08c3097d0f32a0624d32b9eb49f7ae61b68c50f5920db675a5a8a73cd288364ec9705db799893")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+seal-001 [58e2fccefa7e3061367f1d57a4e7455a]
+seal-002 [0388dace60b6a392f328c2b971b2fe78ab6e47d42cec13bdf53a67b21257bddf]
+seal-003 [42831ec2217774244b7221b784d0d49ce3aa212f2c02a4e035c17e2329aca12e21d514b25466931c7d8f6a5aac84aa051ba30b396a0aac973d58e091473f59854d5c2af327cd64a62cf35abd2ba6fab4]
+seal-004 [42831ec2217774244b7221b784d0d49ce3aa212f2c02a4e035c17e2329aca12e21d514b25466931c7d8f6a5aac84aa051ba30b396a0aac973d58e0915bc94fbc3221a5db94fae95ae7121a47]
+seal-005 [cd33b28ac773f74ba00ed1f312572435]
+seal-006 [98e7247c07f0fe411c267e4384b0f6002ff58d80033927ab8ef4d4587514f0fb]
+seal-007 [3980ca0b3c00e841eb06fac4872a2757859e1ceaa6efd984628593b40ca1e19c7d773d00c144c525ac619d18c84a3f4718e2448b2fe324d9ccda2710acade2569924a7c8587336bfb118024db8674a14]
+seal-008 [3980ca0b3c00e841eb06fac4872a2757859e1ceaa6efd984628593b40ca1e19c7d773d00c144c525ac619d18c84a3f4718e2448b2fe324d9ccda27102519498e80f1478f37ba55bd6d27618c]
+seal-009 [530f8afbc74536b9a963b4f1c4cb738b]
+seal-010 [cea7403d4d606b6e074ec5d3baf39d18d0d1c8a799996bf0265b98b5d48ab919]
+seal-011 [522dc1f099567d07f47f37a32a84427d643a8cdcbfe5c0c97598a2bd2555d1aa8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f662898015adb094dac5d93471bdec1a502270e3cc6c]
+seal-012 [522dc1f099567d07f47f37a32a84427d643a8cdcbfe5c0c97598a2bd2555d1aa8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f66276fc6ece0f4e1768cddf8853bb2d551b]
+seal-013 [250327c674aaf477aef2675748cf6971]
+seal-014 [209fcc8d3675ed938e9c7166709dd946]
+seal-015 [2ccda4a5415cb91e135c2a0f78c9b2fdb36d1df9b9d5e596f83e8b7f52971cb3]
+seal-016 [59fe29b07b0de8d869efbbd9b4d24c3e9c1c73c0af1097e26061c857de]
+seal-017 [81824f0e0d523db30d3da369fdc0d60894c7a0a20646dd015073ad2732bd989b14a222b6ad57af43e1895df9dca2a5344a62cc57a3ee28136e94c74838997ae9823f3a]
+seal-018 [f149e2b5f0adaa9842ca5f45b768a8fc]
+seal-019 [204bdb1bd62154bf08922aaa54eed705]
+seal-020 [69482957e6be5c54882d00314e0259cf191e9f29bef63a26860c1e020a21137e]
+seal-021 [0d9f7cde2614b71ed9c4b93503e88484488bd6470aa5e79b898c93dd28]
+seal-022 [77670f6520a34dfc05819a10f322b30e397473fe51f8274bfb105c2eec37e24951abaef11e73c3c425a8c4b2d8c3ffeb8ed9245349ef7a70499f2760123c0d5dcf5a6d]
+seal-023 [bdc1ac884d332457a1d2664f168c76f0]
+seal-024 [3e5d486aa2e30b22e040b85723a06e76]
+seal-025 [fa4362189661d163fcd6a56d8bf0405ad636ac1bbedd5cc3ee727dc2ab4a9489]
+seal-026 [c0a62d77e6031bfdc6b13ae217a794a9aaee48cd92e47761bf1baff0af]
+seal-027 [2097e372950a5e9383c675e89eea1c314f999159f5611344b298cda45e62843716f215f82ee663919c64002a5c198d7878fd3fadbecdb0d5c2224d804d2886ff9a5760]
+seal-028 [26073cc1d851beff176384dc9896d5ff0a3ea7a5487cb5f7d70fb6c58d038554]
+seal-029 [49d8b9783e911913d87094d1f63cc7651e348ba07cca2cf04c618cb4d43a5b92]
+seal-030 [eea945f3d0f98cc0fbab472a0cf24e874bb9b4812519dadf9e1232016d068133]
+seal-031 [960247ba5cde02e41a313c4c0136edc3]
+seal-032 [547c1e4ae88bb27e5638343cb9fd3f6337]
+seal-033 [a036ead03193903f3b626940e0e9f0cbea8e18c437fd6011]
+seal-034 [8a9992388e735f80ee18f4a63c10ad1486a91cccf92c9a5b00f7b0e034891c]
+seal-035 [f7bd379d130477176b8bb3cb23dbbbaa1ee6513ce30c7873f59dd4350a588f42]
+seal-036 [0de51fe4f7f2d1f0f917569f5c6d1b009c6cd8521422c0177e83ef1b7a845d97db]
+seal-037 [7cd9f4e4f365704fff3b9900aa93ba54b672bac554275650f4eb193241226db017b32ec38ca47217]
+seal-038 [f58d453212c2c8a436e9283672f579f1191229785901131d0760c8715901d881fdfd3bc0]
+seal-039 [bf864616c2347509ca9b10446379b9bdbb3b8f64a97d25b490390b53c5db91f6ee2a15b8]
+seal-040 [a6f2ef3c7ef74a126dd2d5f6673964e27d5b34b6b8bbdc4f5014bc752c8b4e9b87f650a3]
+seal-041 [bd64802cfebaeb487d3a8f76ce943a37b3472dd5fce9a5b530c7d7af718be1ec0ae9ed4d]
+seal-054 [35d3ab0534102884ed0db4694a221df1bf94dcdbd78d2c197deb70ed52933f4fa0b09856]
+seal-055 [b6786812574a254eb43b1cb1d1753564c6b520e9ad8c09610d508f3d0f03cc523c0d5fcc]
+seal-056 [b00975863c673f0f19326294ebc4c77f7287c279ae57622c1d175ebbca77bd4ee812ed89]
+seal-057 [8b9dcbd9c9573509d978db0d910e269612c907bf61ae3afdb06a01d8ee6f7e739ec30a4e]
+seal-058 [cfb631790767d0645d8ec6f23bf7fa8b19ce79eec5767ddaa747158446231766bd20490c]
+seal-059 [d0d22cc0893261b105c021f534737599cac3b10df55f4ac6d836fc288036a63f53b0ddd4]
+seal-060 [1fcc05bf4960fd02475c072f9eee8150994edcb9f3e092f2415f7f0ce88f37a2495dce48]
+seal-061 [4d8ff72d859bae1114201c419c098476e74eece93b2e9e1b378d707bd2a961bd7811f0c7]
+seal-062 [e4d3f4898cb3d9732641d1f8d9d889b2c98af93076d4fbb69d529b64175b328be00b1068]
+seal-063 [e4035356a34bb01ea65c7e6d972cb4cec0252a791054ef6bc0a5156445cf760a2a65d847]
+seal-064 [2ccc824b0c0b593faeeff2424f3a64b1dcd08c07e52d78836666333b2fe59ddc5d6f264d]
+seal-065 [336c3b0080eb95480e671366be5508b1fe6ab14e63278e1781fad93131ecfd619275890c]
+seal-066 [f62d84d649e56bc8cfedc5d74a51e2f7ffffffffffffffffffffffffffffffff]
+seal-067 [431f31e6840931fd95f94bf88296ff6900000000000000000000000000000000]
+seal-068 [e27abdd2d2a53d2f136b9a4a2579529301bcfb71c78d4060f52c]
+seal-069 [2a7d77fa526b8250cb296078926b5020]
+seal-070 [4771a7c404a472966cea8f73c8bfe17a]
+seal-071 [06633c1e9703ef744ffffb40edf9d14355]
+seal-072 [cf332a12fdee800b602e8d7c4799d62c140c9bb834876b09]
+seal-073 [43fc101bff4b32bfadd3daf57a590eec04aacb7148a8b8be44cb7eaf4efa69]
+seal-074 [f58c16690122d75356907fd96b570fca28752c20153092818faba2a334640d6e]
+seal-075 [73a6b6f45f6ccc5131e07f2caa1f2e2f562d7379ec1db5952d4e95d30c340b1b1d]
+seal-076 [0843fff52d934fc7a071ea62c0bd351ce85678cde3ea2c9e7355fde599006715053813ce696237a8]
+seal-077 [eb5500e3825952866d911253f8de860c00831c81ecb660e1fb0541ec41e8d68a64141b3a]
+seal-078 [feca44952447015b5df1f456df8ca4bb4eee2ce2082e91924deeb77880e1b1c84f9b8d30]
+seal-079 [43dda832e942e286da314daa99bef5071d9d2c78c3922583476ced575404ddb85dd8cd44]
+seal-080 [a929ee7e67c7a2f91bbcec6389a3caf43ab49305ebec6774b955e789591c822dab739e12]
+seal-093 [618ac626ae0e8d06c2fd2fb66be253dc26ed6e38d8d93ff975cb988f09174dcd439cb6a4]
+seal-094 [aed58d8a252f740dba4bf6d36773bd5b41234bba01f93d7456aa184ebb49bea472b6d65d]
+seal-095 [c7764411be13cfeaaece761bd3bb13552f088048bcc2544e79f34ea1076a12b76441d6fa]
+seal-096 [a7d84ff71dc713161359b757af42c74dddbf53ce736e48a2b7792acc599baa651629a203]
+seal-097 [b42428f8094ef7e65c9e8c45ef3e95c28ce07d7232b25dfbb896d0f9d79c823bdd8e5d06]
+seal-098 [750232115a5edea7b249a22c0cdae17f725d6f994a72d8c30fc7e0f1806d9a817adae14a]
+seal-099 [1875d3d76930b58361103d64220591feaad5c9a2223099bb16c30cba134e639ed95615b7]
+seal-100 [ce4c58d3c7354d2d27e3bb41a62e5941fb1e39f3e177391d5e2cefa2f7d35e33a76566aa]
+seal-101 [d4a79f729487935950ec032e690ab8fe25c4158e876d2f334f47968b10c103859d436db8]
+seal-102 [8d529d8a4f0d7ec4e41d8d361663df53c479ac34d509e3e1eccfe38f7c63f9a55f42946a]
+seal-103 [2844b68b9356049934b031b0d6de55b50fab0f46387bc3a46530bdf24b1cfa67899369ea]
+seal-104 [371fa70af8a198cb43ddd545e74b806246f7e932014a0179b81691d09011dcea5739551d]
+seal-105 [23293e9b07ca7d1b0cae7cc489a973b3ffffffffffffffffffffffffffffffff]
+seal-106 [7cb6fc7c6abc009efe9551a99f36a42100000000000000000000000000000000]
+seal-107 [3f875c9bd7d8511448459468e398c3b2ffffffffffffffffffffffffffffffff]
+seal-108 [210dabea4364c6d5b3429e774332293600000000000000000000000000000000]
+seal-109 [7971284e6c9e6aac346fe2b7a0a064c2]
+seal-110 [fe2e982e24b81cd120d35a70fe6935e665]
+seal-111 [99f2ff1c8a44e5f26870f104ddc514477b400336fb01860e]
+seal-112 [afe8ef41591bfcc00db3c880ceb18629fff7f285768645c9c8bf7a471c9393]
+seal-113 [90339dca02ef717f1603994aee6cf6d2e3d33e01ce64f271783147de226228bc]
+seal-114 [b98ed6321679941a3e521834296686ad989f50c03e055e519712c582ec9db3235b]
+seal-115 [addd303651119e52f6170dfc7a915064253d57532987b9abfa0484f8baa95f5b7a31c56d1b34c58b]
+seal-116 [0d2c3a3c0cc4b40e70ed45e188e356a0e1533b3192909a80e90540e1878ab59ef300072b]
+seal-117 [c7c1cbb85ce2a0a3f32cb9ef01ad45ec1118b66d253317f98bdab87531ece20475cd9ebb]
+seal-118 [ecf5e403f19c007c8da7a456caf0a6d75762829be0877a100f9dd9d6795f0e74c56a9fab]
+seal-119 [94d844d98b9467daa7e8dde7f4290037354d7fb262196638590cef429d6b1d1a59839c02]
+seal-132 [998a3879df7667ff9465bc21d588f66bf8c1c12e978b9e5bb49f18f9f46caf5936a67e85]
+seal-133 [3f57ec1b414f74818fead9f35aa1679402c3e75097b89b291419e32cf654ea630a3ad014]
+seal-134 [139bd08a98f92d510c9b4297c49268b22248130f712117f40aa46db99677a1b78aa5b81b]
+seal-135 [21ab90dda8190ee814206fbf89e49e8334d818785ee3bd42fbcc55f7c5cd462c6fa991c6]
+seal-136 [5565c6d09c4c924d61c0ef808fb0ea144ffb473812b72ec1d9c32fb22c13c40b33796fa9]
+seal-137 [9ed3ee2562d36b18853a0860cec49c2389d9081165d59cf532847093e4c4810d1b552540]
+seal-138 [b57c958e548442114387f4cfec8fe0dcce934c9b0acf8955d654b84874201a21542d1b2a]
+seal-139 [971445256332bf87268538e10bb470f11df912e541a6af58f67c6cc4fc6f55189f68cdac]
+seal-140 [c6877b03552e97d9a1e6557f90dc7adde15a2f432536272bee7446820041854e10b49a03]
+seal-141 [a86df5408463e8baa3198eb8b931a2298cebb097673da04c8ee1bbf2f7be33c7be2d09a5]
+seal-142 [9d0a4e2fcd6ff30cb3ccaaa29f311392e1b43fe4f35dac665c8bac31f6ab0587615ec1bc]
+seal-143 [daf4f2eed72c51941e8038e92c5d9272c2b2d97b5c3fd7da0dfbf67c11acb866caf92a99]
+```
+
+<!-- test: aes-gcm.seal-long-outputs -->
+Every `seal` vector whose output is longer than 64 bytes, pinned by its length and SHA-256 digest, through the `Aead` interface.
+```maxon
+function digit(symbol Byte) returns Byte
+	if symbol >= 0x61 'letter'
+		return symbol - 0x57
+	end 'letter'
+
+	return symbol - 0x30
+end 'digit'
+
+function fromHex(hex String) returns ByteArray
+	var bytes = ByteArray.create()
+	var high = 0 as Byte
+	var isHigh = true
+
+	for symbol in hex.bytes() 'eachSymbol'
+		if isHigh 'first'
+			high = digit(symbol)
+		end 'first' else 'second'
+			bytes.push(high * 16 + digit(symbol))
+		end 'second'
+
+		isHigh = not isHigh
+	end 'eachSymbol'
+
+	return bytes
+end 'fromHex'
+
+function toHex(bytes ByteArray) returns String
+	var text = ""
+
+	for byte in bytes 'eachByte'
+		text.append("{byte:02x}")
+	end 'eachByte'
+
+	return text
+end 'toHex'
+
+enum Operation
+	seal
+	open
+end 'Operation'
+
+function errorName(failure AeadError) returns String
+	return match failure 'name'
+		invalidKeyLength gives "invalidKeyLength"
+		invalidNonceLength gives "invalidNonceLength"
+		authenticationFailed gives "authenticationFailed"
+		plaintextTooLong gives "plaintextTooLong"
+	end 'name'
+end 'errorName'
+
+function perform(operation Operation, aead Aead, nonceHex String, inputHex String, additionalDataHex String) returns ByteArray throws AeadError
+	let nonce = fromHex(nonceHex)
+	let additionalData = fromHex(additionalDataHex)
+
+	match operation 'direction'
+		seal then return try aead.seal(nonce, plaintext: fromHex(inputHex), additionalData: additionalData)
+		open then return try aead.open(nonce, sealed: fromHex(inputHex), additionalData: additionalData)
+	end 'direction'
+end 'perform'
+
+function performWithKey(operation Operation, keyHex String, nonceHex String, inputHex String, additionalDataHex String) returns ByteArray throws AeadError
+	let aead = try AesGcm.create(fromHex(keyHex))
+	return try perform(operation, aead: aead, nonceHex: nonceHex, inputHex: inputHex, additionalDataHex: additionalDataHex)
+end 'performWithKey'
+
+function report(id String, operation Operation, keyHex String, nonceHex String, inputHex String, additionalDataHex String)
+	if let output = try performWithKey(operation, keyHex: keyHex, nonceHex: nonceHex, inputHex: inputHex, additionalDataHex: additionalDataHex) 'done'
+		print("{id} {output.count()} [{toHex(sha256(output))}]\n")
+	end 'done' else (failure) 'refused'
+		print("{id} {errorName(failure)}\n")
+	end 'refused'
+end 'report'
+
+function main() returns ExitCode
+	report("seal-042", operation: Operation.seal, keyHex: "bb571c160132b0c8d5d190d0bc356ddc", nonceHex: "2596c440cf0232950ec66bc4", inputHex: "053be1b6190a717fc74c879e6fd62dc44628495507e50d662271dee795a4ad26e0c4f86cb6b20ac6bd9d682d2d8a05c9dad875a6911b49ea0af4f17c97a5f2", additionalDataHex: "")
+	report("seal-043", operation: Operation.seal, keyHex: "e12260fcd355a51a0d01bb1f6fa538c2", nonceHex: "5dfc37366f5688275147d3f9", inputHex: "d902deeab175c008329a33bfaccd5c0eb3a6a152a1510e7db04fa0aff7ce4288530db6a80fa7fea582aa7d46d7d56e708d2bb0c5edd3d26648d336c3620ea55e", additionalDataHex: "")
+	report("seal-044", operation: Operation.seal, keyHex: "97ec85a69a05131cd4ff643972f6d8f9", nonceHex: "9189e0eedcc413a0ba1e63d2", inputHex: "10acefa6f3959faecb5cfdaee8aaf09d4381b2b147e0b13450c26ee07f29edaa9a1f1af4e2d111dea7ff681a19fc3a4fd66df6a17985b06543a3b6c0e4e51a54b7", additionalDataHex: "")
+	report("seal-045", operation: Operation.seal, keyHex: "65d38f0b268f180d6ba548d509111dde", nonceHex: "e14dfc27394ac846c2373ea7", inputHex: "1fa76d7995dc996a5f5dabaa4be401be14f4d4706a213a4dd725df386ec147a6be074947c733094f47a7222552376740aa8348a0ae1c7f2d972a0ad664f8b8ec81dfc9af078b61daea5dde874fd73775b4cd65acf069ada0b2b9bfbb4a9817ba41d4dcaff7653df5c8cd9ce7f59eec92ae9e61314e03ef48839810ea825520", additionalDataHex: "")
+	report("seal-046", operation: Operation.seal, keyHex: "3c55f88e9faa0d68ab50d02b47161276", nonceHex: "d767c48d2037b4bd2c231bbd", inputHex: "5d6add48e7a5704e54f9c2829a9b4283dce0d3a65b133eba3793c4fbfa1d8e3a2539d0d4f3de381598ce5b2360173fbd149476c31692c5d6e872fce40219378949c2e70b5f1b9f0a1d5f38352ad814b2a035bb3f3f26425d831a2f7a5e65c5dfcd91a315c2b24f53a662605ea40857dd980e9be5cdad000c569f2d204d4bd3b0", additionalDataHex: "")
+	report("seal-047", operation: Operation.seal, keyHex: "62b3881832d428b6f900cacfa0fc5cd8", nonceHex: "f4cb98cc99e7bc424a98384e", inputHex: "0b91dd36a6fa967a257b267d12cbc20b56ed615b205d044a04b4ae8aaa365bd29a3b8f47a0828ef63324d1ff924c68090abaaad78df602edee0621b823f94c35ada7b62d81f21dd9945d1abb4ef882cfab12c2e4cec705df3d669183fe681753503a99a871637953537ef479b1f62de7819dbb5c950de7722090942d38129aefa7", additionalDataHex: "")
+	report("seal-048", operation: Operation.seal, keyHex: "8aeaa2591a452e626b9a6468b623bdfc", nonceHex: "b90f446f68aea588d843d01a", inputHex: "f0721c3b68d905092cada6d568df3a2da39573c7bb0e9a4ed159a2634237f9e788488c06fe8a7e1e01d1a1c985543ecf90f3d32e57d33c3df6c165b7edc6fbcf8bf2d043d1b7c0060309a29565a004ea3214d4e4f7dedeac2d74576c019b5fa000d025917af6f86310942102a34d92781972d4f1f57bbdd6f9b08cc979a358aacf6cb62334bfc916c249f18bcee644a8907ef576b41437098bdf0069767fb5ed1c0f1385e5895e4a5d70f5941a93014333436a7af465ec1038fdfa006410a0871225d64848e6c59ac23f176df663ee2171c9eaec0477f9ebd280880d9f2967a2e791cc998f6b23518ca97bbc6405d6ced3373ebf3d208c2a909274460a614a", additionalDataHex: "")
+	report("seal-049", operation: Operation.seal, keyHex: "e88d95eabe88fcf158fae858af951221", nonceHex: "a65834a9d231b34709383e9a", inputHex: "2decaccc8b424fa4963890ece15b3fc281b6215780ff6baee57edcd25afe260ff80ed4f25cc04d2802a1e90a2e6e96d1ee73a4a53dcf60025d484054d146f275ab34c33b102001a07d804cc94a40fd78c16780d1b648487fac035386e5d25c2b9edbf7a52d102d1943958c009eb6d88e00a3227c4c788e445003fabb4dbefccd3fe1716d916446fee2111615d560ecc59d7bd288268ab321e7002545887183fe023fdec2a6d3b73b94d1548cee19638d31d2c5a32b15d2aae3f42950a787115e200b00022d4929105da0b4d10ccb0b3886b3169b32ac5df7a637c23362e2d4ed9c137f35bbd578c2cda0377e0f1e64f7d31e9ef4d7603ea1363523758385c761", additionalDataHex: "")
+	report("seal-050", operation: Operation.seal, keyHex: "a294e70fa2ac10a1fb00c588b888b673", nonceHex: "dfe20d1c4350e6235d987af1", inputHex: "6ed1d7d618d158741f52078006f28494ba72a2454f27160ae8722793fcebc538ebc2f67c3ace3e0fe7c47b9e74e081182b47c930144e3fc80d0ad50611c3afcfe2dbc5279edbbba087c0e390355f3daffcd25ad4dea007c284ad92e7fcbecb438fb60623ff89a599dca2aac141b26651386ca55b739b94901ef6db609c344d8acf4544568e31bb09361112754b1c0c6a3c875bd9453b0ee0081412151398a294ecad75add521611db5288b60ac3c0128f6e94366b69e659e6aa66f058a3a3571064edbb0f05c11e5dde938fb46c3935dd5193a4e5664688f0ae67c29b7cc49a7963140f82e311a20c98cd34fbcab7b4b515ae86557e62099e3fc37b9595c85a75c", additionalDataHex: "")
+	report("seal-051", operation: Operation.seal, keyHex: "4a30eac07b788b7354a90e6448f56676", nonceHex: "c359d567616b6384ac20a43f", inputHex: "9a17b9d1dbe666f7431cbdd3b3173948c7ac13f268e12807256d2e5831ae67a14116144910b38368934571daff9d4004ba959b3cae2669e6eed49e750ca228415c6f7d1c1f2d3dbb02f4dfa49483a7f80fbcc1cb01d22c67817cc7a2bd2714eb62cdf8fb884a66ed245167cdb22e0dbc7b153e648714dfe83414696cffa892daf5af8820d562bdf55f76be5584a34b7e349d10d76c6e68305835b551a41ebf48e068320d875334a6a2d3108b1e93f7aa8da485d7a5470d805e0dd38c09feaa0f494d0572de314a287439f48aee5a2fa8e9850c6127ee88d50c5e8a2ac3eaa7b2fdd1589813fb3affa6589831df132bd576fbed21717e2b6766e593ed74dab35da125c433763ea90234dc6f01d37be14c78b8861be1fb4c8296b3faee65b6ef8a9daa6884e936359346f2da9f6981f9d64f676767641ada628aa8c7129326bd4ee57e515a2f78ba18c595b9bc1d0f49068734a67e635554eee688816061e904a4e05125d0e7797305451a7c3a1a3c507daedb990c12ca290a0f554aa8e834653aa21a0469d3b0c08ee512b323cb193779c9fe2f2b3f03794cd42f0220031d0c8eeb9c73a3283a599bc78da3b5b41b243edf082b23801a15d9956fca60f35acfb65c4d06d28aff81a1ca98c6faf8645be920bd87c03c054a0469b292ae34d05860e8d9b061300370463dcd5fcd6fb1d6b1acc9b4eb25cabd9de4e61d44922fcc", additionalDataHex: "")
+	report("seal-052", operation: Operation.seal, keyHex: "fc8e6d2c7f42cab59375327285cc3398", nonceHex: "49e1e00c48eaf1b5b9d2cb45", inputHex: "2121b06990dcde2885739032622fd70294174074bffdf40b01f3554d5d87242da61673fe9b1687771ff1cc330d7b8a5138f6598d8160ec90a4816a6dbab310f2c99ab19c49d8a5d04eed4b93cd76159766548e136517ecfb6aa7ad51e5ff6d083c0e53533692388e651ea9cba94693118e4699926476fea785d2cac0213aa68ae0a366923532d333ef133b490a4667606f7294db8c6a4530407409b51e803493d46638fba151b2031f8208d595b4e4ae55db66cd7c328753cfa0f644438b0bff4f87d9b7c5648e5d2e8057e0b20d550cf1d0aa13900647c332909b50f8ecb1ee148342aac705b28215900030bfd90ca1446e3a03ceb2ab71a9ceb3d8f0b4626febf1dcff3c1f5ae0fef4c0f74623ba47eb5fdc42d42a2039f45e5987624d97d0fcfb95f74c478d613b9067f03cb86d6055d5124e6ff3174d136d60fd7a54e7c8fdfff20fb5807c4e356cbfc70df4bf83997855608558dff64b3ea8854481cb24933000489f4b8e9415b22237e916653874549d7687ae71b063ace3ef7e41c705d197c3157dacd3263d61132a4f07b91cb0cd79bc7cfd85f6f8c1f507c33bb910e2e879e0e4d8fedf804134d14d5998b38376d9ac0831d1577510ef3704e3f68acfcb433aa2a751f94fa8b6b312afbeea7f3d1f38784d79db414c7799e011ca4d35779ed17aed7d96df5e1a60ace74692686ede778dfb4beeb42585c8ccdf03cf", additionalDataHex: "")
+	report("seal-053", operation: Operation.seal, keyHex: "f01a3c3559c58e80bc832544e069ef29", nonceHex: "cd5bc2aed48c3be836d7d786", inputHex: "0de5aac3f151b526751de8f36010e4394498eba3c8bc790fd4ba96eb2da33e40ddca3cb36fec102ef37a6a5132cd389bbcabbd15e1c9d2700af35f19a01ba3b26843ab50833f252befbbb5529173d51ca364d7d09468b3b68f740a6014b5b824206a6a7118bf144a223f87d76624c138bd24a5fa996f36e316087f3b59c1c71cd74a9184a518c8d9aa8c7243102dd39a93599e7bbe7dcd354d0780253767e9602f2f0cbbab7eae8d8c12cbad163f8fc20d32559f798d2b7285dba6f66dc28d9b3f0a301aa89f5cd1b5a1734fe72c68f98c861d26e7dddaa08a227999f7c98d7315e7c2e3c3f198cdd4cfd62f62389998c7b760106d0a437f5050f74f9ce63948f5494bed71c88be443654ef9eb0c867eede225c1bda181baabd8155360ccae65e54d399a3f7d670d11b53d7bbecda15d53e129ef2be29154e3c21411e6207977e2620007cf4b987dd2c304efe55bc2ef564074cd6e176a97184bff4cad0cd0cb85195c4e8398f27ca0d4d8c4851359eebdb606a213223903513f0db8c0fcc1f3a834738f6c9dd6adb43bdcbd921e7c3cd3b252e319f9e711edf55e8d7f1a320705a3ba77bfa33463a922a9f36b483590c4939fd977ace51c506d2e269b488a7169b696d828458ecb092ae3a9adf63a3a12809da51fc7340fc57db50fa1903f1c7de9ce606f1de3f95538823c04e3bfb6549385643710a2919f2fbd54887bdfb239", additionalDataHex: "")
+	report("seal-081", operation: Operation.seal, keyHex: "6efca98126918ab564d88c6bec02e8998b2be50e3f906ff9adfdd185f373e756", nonceHex: "4abd6cfc83bd06b11efaa2a7", inputHex: "bbec79c086d41e602d090f7e40494d6bf3faa1dc6df0ab8a88ea5d35d426b248c2ad880351e223f6170d37cc9655e10459e59cbd6d1c092ed31d72ccc7af20", additionalDataHex: "")
+	report("seal-082", operation: Operation.seal, keyHex: "5b1d1035c0b17ee0b0444767f80a25b8c1b741f4b50a4d3052226baa1c6fb701", nonceHex: "d61040a313ed492823cc065b", inputHex: "d096803181beef9e008ff85d5ddc38ddacf0f09ee5f7e07f1e4079cb64d0dc8f5e6711cd4921a7887de76e2678fdc67618f1185586bfea9d4c685d50e4bb9a82", additionalDataHex: "")
+	report("seal-083", operation: Operation.seal, keyHex: "81b6b27e5ed90ab99fe6756d4cb41e3f07269687f5afabdb426e29096b5e4466", nonceHex: "13e727486031cca21f733375", inputHex: "9a95a23cfb1e35d89a7597570df0fb0efcbb7429f53bebcbbfa49fa247b251a8508ad497066855d08688576188e4ffb12d1d084dcabec3d57806daf215dcc97edd", additionalDataHex: "")
+	report("seal-084", operation: Operation.seal, keyHex: "ea1d436f6359caec010789fa94fe08b167c3e497d8917282f47ad2a8f95fd0f1", nonceHex: "73fe022202767af834e32126", inputHex: "adf9b6df5c5cc9473e0bb579f9a6aad396f93d28bf83e98136f978cfb9d501d09ef778c122b43c876c22e40d74a48d908978465a06be9e80891710c8c2690a762bc9eb8bcb2aa2707db149abafb9c17c1f0b68c7adcea98aebf4c6a39e5a8f693133eaaa5bb0b3708720d7b86424101bad56aa190c67d25fe35a4a34e1f4fd", additionalDataHex: "")
+	report("seal-085", operation: Operation.seal, keyHex: "d7addd3889fadf8c893eee14ba2b7ea5bf56b449904869615bd05d5f114cf377", nonceHex: "8a3ad26b28cd13ba6504e260", inputHex: "c877a76bf595560772167c6e3bcc705305db9c6fcbeb90f4fea85116038bc53c3fa5b4b4ea0de5cc534fbe1cf9ae44824c6c2c0a5c885bd8c3cdc906f12675737e434b983e1e231a52a275db5fb1a0cac6a07b3b7dcb19482a5d3b06a9317a54826cea6b36fce452fa9b5475e2aaf25499499d8a8932a19eb987c903bd8502fe", additionalDataHex: "")
+	report("seal-086", operation: Operation.seal, keyHex: "7f7c5804a680f61924966725dba2a80d85267c2e03c7c234b045b24ec8e23528", nonceHex: "2d9bf8b636f337d265b0904c", inputHex: "e2f85fb176840c38345da0f0f8db6cdbc45a123165f244ff5389fe65bf341fa131130751b5c739a9931d5a57b141dc7b5b0c5a2ca07331c2dc04b2657b0289878dea0ef7d5601465b78a65795f0f3181304e58a261feb1d394f3c33cabae189941755d7654bb7bef08c31bd2c5ce1203eebc015ae040da2a851c2ba3c62e699356", additionalDataHex: "")
+	report("seal-087", operation: Operation.seal, keyHex: "01e75ae803d3045e6b28b7f67937eee2d8d98f77b4892d48ab1f15f57fa88bbe", nonceHex: "6902e8f0ef1e9ec60a3e46f0", inputHex: "32dde3b9bc671fad1265b26cad3d8dd0f099134f6755f98613024e1bd10da9a62bad01a997f973101e855ee1c7e60e6b6aa1df9d80fa567d0ccca0f956680be76ed37c71fdedef560e2523e8c5fdb9516250017304f8ff416b9b8e5d17c1f062ded4616ea9d462ed6ca0dfddb9f5295b7a127c0825ffab56ea4983c01eec867f93e24a18be48ceb540986c530104fd466318eb812eb42fd04355615f92503e53799742cdc71830eaa44aeec914b6ff1cbb4f6f81ab595078331d645c8d083b469731174a706b1666e5e450cb62671067032a566f597b9866b71514a409e38fcabe844964581b3ab5152696b76e49ace66581d21f512e28e077c44948a65260", additionalDataHex: "")
+	report("seal-088", operation: Operation.seal, keyHex: "dc4dbf811f9509e33a45a8a0743e9391de333f69c56ee4f0fe90ce21c238ee59", nonceHex: "1859d3ba4710cdd300baa029", inputHex: "df91c48591f4cae8c4d659d024dfd0a3535981487764bf19b012713e6ac6d578aa0b3a51d7ac97cd503fdc8682cabdb6a5256e9890458356f39b9749f6ab158112fbe4f91acd333477998b9f0d7cc0be2d40acfa5103adc1b0d0a5cc94733d703e0d8c26e09e9d079fa6a65cf35240a16280826ab7c0d8ac5882c89e58444233c2f60aaae0cbd1a7ed850065242a9378c340232fd86f1fd52a92c960a9a86f529f431acf3aa94133785803f4ac1a22378332daa22dea3d34d2fdb7c308fa44ab93b3fb02f428be22fad6c0b10c138af97b92a199296dd947c93fbc40674c34c5623d26d9c90dc6b3357018b9f9250fb4dd5c11518191a236745a2bd42f863766", additionalDataHex: "")
+	report("seal-089", operation: Operation.seal, keyHex: "317ba331307f3a3d3d82ee1fdab70f62a155af14daf631307a61b187d413e533", nonceHex: "a6687cf508356b174625deaa", inputHex: "32c1d09107c599d3cce4e782179c966c6ef963689d45351dbe0f6f881db273e54db76fc48fdc5d30f089da838301a5f924bba3c044e19b3ed5aa6be87118554004ca30e0324337d987839412bf8f8bbdd537205d4b0e2120e965373235d6cbd2fb3776ba0a384ec1d9b7c631a0379ff997c3f974a6f7bbf4fd23016211f5fc10acadb5e400d2ff0fdfd193f5c6fc6d4f7271dfd1349ed80fbedaebb155b9b02fb3074495d55f9a2455f59bf6f113191a029c6b0ba75d97cdc0c84f131836337f29f9d96ca448eec0cc46d1ca8b3735661979d83302fec08fffcf5e58f12b1e7050657b1b97c64a4e07e317f554f8310b6ccb49f36d48c57816d24952aada711d4f", additionalDataHex: "")
+	report("seal-090", operation: Operation.seal, keyHex: "4f62e56f7b15035f427849714beb97e6acf88371e1f69b388129bb447273d6b8", nonceHex: "137d5c98a92f6dcee4f29d7c", inputHex: "a147b716b86ac8dac7447d5ba60ee8a4191d2c64a3aa04276aee7bf7dc824962c09ace20a7e614cc9e177b5b11819b8f17008a9408e8cd8bb34b401be35368f492c17629b6467299bfd2ec4d9a7f17dea6f9ca084e871fb7fc78c2bf299b810522062726c5cae14b839722ecff499a2b3f082b6d1bfedb752f84a4e77459c9268d63199315363e9aaa39bea7fbbcc60a5eedc8a1a982ad6fa67c295b932eb3999047e0a99b3823032b6b3b7c4c553970afca50cb4e5ce859c25c598eb682005f17aec5526e26493208483679a23ccef6f7403a3f3055affd531a1cb7d183892dd577d526e8da8aa8b8b980a36e176b8d9293e785ac01bdd4dac8cf8dbdd82926f1e31408284fb3aa01f4414ac7aa7832d2ec02dd2db9b6b4b61d8c1cbb31dac7b6afa8d08b6877e439600c4a6fc07511877df2e9ce3a9538a726002a46c083d98124b185730f3b2aea2a01cb626be809f87b2ac100511c5b8fa0e9d40c9c999ea0aa87aad08cfb62c1ba869178be986156f7622d8c48ad80a552e9d08c36671ae232efefc8619c562e715f04ae52db2ad8e4a09e8c671b12289558117f9562d51beb59e29b10dd9eb232e8fcdb1cfdd14899acd693de14a7c076a4656386e23b06415b2c7a93b166cad1048bc605a49a79df3c03a3380de68a4f013e05e5283745d4078ebe308dc8881ced62ed571a93c69e8aae6e51f5e61e4ff75699aa32", additionalDataHex: "")
+	report("seal-091", operation: Operation.seal, keyHex: "6aada828b2273ffb81dc794a8629e305cb646f9d266002bd313427d384838767", nonceHex: "00dea4505cd5396f6ba408a5", inputHex: "1d99ee022f9576ed69af8a7f3945362ab0c4691a4d333a3f5f85cf8d7db7fb8a069b48998cf286ffa4615e87398c3c3c1295d5bee272bdeb5166470a8923f7b79dc92b2a97de34ba87db2907ac84fb23d38f2e1af835f737488fc04fac70432d3a0b02a472f851025803aac692273273e27be1dd9679a4d626997c363ba706a7db1f4cdc07fe3c67fbec0aa8619038e05607d95a5ddc4b403cd6dabc41790adb6cd76eaeac3491c3cd6a8787e0f29c042b4e2afe987674b9495ef55768c696bc6c3df1c1e9a7c0456f478a1a1cc4c3a9b0f2cd3b42db8d0b6aa36dfec3d2c08d1398eeb75db61ae902d2da5a1efac7904b8ae32af1ff942c99769504bb5c56f5819e4f899e8bbacfd4682d82f41e179a9ddf9a0820cc4316f252d1d35597aeda43ab870887e67aabe79f046b03a9a83588994058a07baedbbbf9c01d833732efac89ae8173f902e831d579d31e4a409cef5e494a27bb6367e84fc57642048e44d687ce73dd9e71384182b262d63a715698132f218fc2c3611ed0dbf814799866c8c43b4aa7c13b5a53f9a337627d76bb960f60fa891f0076a538c396500cefd2dd1e4e024f9d83275f9b2c0ce6df41bb6488398fc657dba0efdae0019dd31b03227edc5229aff60cd083c0f0b66675baaf91c3206819a0c985bc3283600e9e6d62c6fab2c6aefd69829c75063c54ad11269ac5ec563ecd870c2af4cde6cec43e", additionalDataHex: "")
+	report("seal-092", operation: Operation.seal, keyHex: "afd579aa1accc682aca54e142aa69df09802f020b24a42c41db58f6997edc678", nonceHex: "9f79d1da957491069d774496", inputHex: "bafc6e865c48bd34b7f9329e35cfb286cd4dc31f8316171218bf0471dffd35a330a181697ca5178688dd87efe527924f90d1c78ba40de70952ff44c26efe2159e59358f3931573df9373a73b91ba9592e12140cc009feedd2595e5b6f066b5ef6de99d4c31552cecb0614f1dce990e46e7694382f3cf3ccfcd1ea62e563e5f0dc36cb5a84e0c0b3f1f8f3fa9100f487195ff2e3169ad08136aa8ad566548c9836aa00dbac74716c26e838c1486a0084d3dfd692585e2e5ae7c75caf0e7af60219f96116ae963b4a5899cb30a120daaca7833776692c25ad7c185e6a2d70ce03ff156cd25d76153539d6855773e21142f9ba0313562875f105a2b770a15b533fbf5110dafb69329982ab44ed1b9f321d7b79ae15a19d9f3bd4c504c24b23b812d514c19ae2a347cc18c12ce915a0bad7cc89a8720d4ba5ee0964fe05e4cc59a13f92c670b8655071e216f19ad05f4bbcca6dc7feeb188d6269c58065c98fcbbac183a9abb3811d80cb476544bd74b26991f3df987f0ed0ea6238659ac09a2250fecc0723ffc51647b74bdf454f26e11112c8bbd797f09a3be8251c6b5b319ed9537278cc1abedb32aa10840984b96e8636b289335846ae4fbd4a00f6600d98ebe25885c68d7043ce0dc5229d7e9bd51bea9b8fe0552f40688429c482629ced623f6074858147e73da3ff4ad2ae45c1a1c8a6c5b3b2c3d568a756608179f63b580fd", additionalDataHex: "")
+	report("seal-120", operation: Operation.seal, keyHex: "11b18ea39c38491593fdd5e6e4ab8b4a0129a53f49ed6ca9", nonceHex: "0952a70d993188c1dd8891a5", inputHex: "7153217813c390b8d458be71fad1afb87971ffbca3a9411e3e7abe8b8774f987167acfeb5296e19b408b581ad6cab08c8dc81d40cdbe1c6592fb573bd7a3c6", additionalDataHex: "")
+	report("seal-121", operation: Operation.seal, keyHex: "ccbd0f509825a5f358a14aac044ae2826bb2c9eaaaaa077f", nonceHex: "9189a71ac359b73c8c08df22", inputHex: "a1ed1007b52e36ec0f70109c68da72ee7b675c855e3e4956d2dcf9d12f675d6933f677ddcc58face857699d2e3d90adcb8c6c57c9d88b5dfcf356de4c0b63f0e", additionalDataHex: "")
+	report("seal-122", operation: Operation.seal, keyHex: "c0a52b33c0095ecfe1f38e3494e194739ed974b8c7c08a2b", nonceHex: "1debe7394ef2a2a59988344f", inputHex: "7d989848d822a5c6a0fe3e316edc0adfae9dd631da2e5d150bb6aefa041505accecd2ba3a27379989c471bc7213a84ffe5128850e271d518798d199e7b8b657c39", additionalDataHex: "")
+	report("seal-123", operation: Operation.seal, keyHex: "24777288326e1a2190a318c77188a7912d0ba8d41423a29c", nonceHex: "f2f41982fe0f017ae4ea1b06", inputHex: "60b8beabd7e4a36fd3666e13a4cfad405ad7b0b17a614577ef9e9dc159b2040cfb61cbe9a2a856053cd46a889b8a8fde21db8822d6b346f665e03ac69ce86a15185bbde8cc9abf0ef934fd22523731fa2c3c19c2cb4579e57503b0322dbd29ee30c63045498e402518511f58525626b258703f9d01dc9351bc62ea53c2a9bf", additionalDataHex: "")
+	report("seal-124", operation: Operation.seal, keyHex: "d045c6eb173f440843faec3e9374602a94ee3f7176312208", nonceHex: "98e9153daca2522e3162cb15", inputHex: "3f0b30dc963a82d182c035b5a823060f07c4123792e6cee6bf91fea3c52fa66bb6a93ea6cce9f4813eb95bf18f816c00ad4fb56932827a39efb2fe56804e604a606774ee92ad46cd8c172a0d2bdea2fc99f67cd82c6024c315cfee6dbb8d27f745c9d0ce9bf5d09724f4bed003cf39478348b3304baa4ecc9974fc4f3ff93f95", additionalDataHex: "")
+	report("seal-125", operation: Operation.seal, keyHex: "3493fc8761e9dc247585046f2b78aa7f138ff9a9d47d9b39", nonceHex: "87eafe6caead7f916c11ab76", inputHex: "5338ebccc96896001715fd3a2b88710f6afd6ef479d7332a6cb54a3a46b35682c91f54ed7f4bd501c50d51c3cb6a74d21e269b832d985a30f63b79e82fdfcc21cea5c087e648de740c4c1a327eed5c51acf7c67a5768d985bc93eed979bcc2bba6eacd085389085329db182413b654795fd7b398775ee3628f386951bc39f9405e", additionalDataHex: "")
+	report("seal-126", operation: Operation.seal, keyHex: "0b68b66d5182fa6c3b08edd50a0a7483f025935a0d64abcf", nonceHex: "6fa4902beebd20e0e33138a2", inputHex: "e42ad7f89a187d9959681475515fa117091556097c0d866dea5c87ab45d94b89777938eb381f6f24bd222684be49d0f78223aa48193ce9e9a83d007c26fe4ad4d036040b81021ee4408185ed5f4fd871def6f5501bfb4d5ad5b91cc4c33753e8a8a0b419ff7750178bb305662a5913bf5ac97424114c2a596be64fa84e6ace89f0a5a34e305950b4fa504c5d0cac499ce6c142624a618c2db9ef33878e8c014a58f974356cd6773749942b4c6747aa2e19f68d086c1d3305da85f9f6528b725cfb428b583c727e4c4018c8c197d8fc356079d6f4eb89088925fabb0b02100a647bce9a956fc447f541f4a82ff1d856383ceb3463489def07ff014949d59ada", additionalDataHex: "")
+	report("seal-127", operation: Operation.seal, keyHex: "a5e1667400c497a927eddbf37566d295a09e1f061b24af46", nonceHex: "c8cac0a02a3b3276c357c2b3", inputHex: "07133989d3c42b89755d10fb60ec4c1b22521a11a304f00cfd7cc59ab54779178008d05ef2960e1d2b7011fa7a8fb6bb27b0bc54fb509084ed7a5a697b4d72fe24fda3da0a5ac5198bc1db4b91eac9c185ade810038346a2335aa1ccb0eb81d35a07ba0b89b4870cdccd367bc3d7ed1ee3f242308b29debd9f12e4e6dca74a3f42f84899035f899e4d0f9ccd1c30c8b32d21779d555f0a03bd5d5c5e4447a92098a10c72116b97722c7019da23f6320f47edb9c95c1ba6b37acc02d63acc50ddd0d26969256003011d7f4cdc2ab5c24e256da648ed1b0eb56c95c57a7fccdd2345f359c0bce6a2f0f49d7184a0023dd05f2eecbcc70fd0fdbae06f425590db38", additionalDataHex: "")
+	report("seal-128", operation: Operation.seal, keyHex: "e602188abf6a91f3e258838cea6befeffcf6257a509c3e95", nonceHex: "9e35d3ef1897c5fe3f647204", inputHex: "3b9a6edc44848c072341fd4af51ec116ac328f69cc5a3354e49299fb2e5d22fa0084e30b36ecaf54309397b2b498d686087f3457698c3639e73ca18c78c3e021d673986cfc2ceb4d07e66971e976f58f0336f82c7fc0d52d66610f26ca3bfe53c0b01cf7c207306db904c1ad300ab95c56fde820a8edd256f2b9906b312bf7af5ef4a806f618ddfcb67179b03fff80a245c38d8f4cff2875b71a0bf69129caf97121462e0501ec6574ede94706f4a04d2fb301d415c22ea12157d2e919bc7a0169a5ad5c7bb5761a8531abbe77d66a4871b3f27a7170f099044b9fdc50a8cb3b894252a501cc896ac4793bdb478bb1cb99c02341d7238dd8d593cfda02f7d520d7", additionalDataHex: "")
+	report("seal-129", operation: Operation.seal, keyHex: "62d347587ef0d58d6cc3ba2ae7af655704ac4dabc1cfb29c", nonceHex: "34e6e296f7625999bc9f02e3", inputHex: "823a005097d7811a4a81636835716670d7e239fe025978d9453461d8b08955fc9f92f297f0474177e9f730cde714467fd376b370ed96725497083f0fb7de9de1037f5094bb9cce8a7ef3137cfe31824ac1f641af92e2806c92e3c58e662c89cc259b3da66bb278a7dc08de9240eeef7151f88ec465f258ecc01b7a2cdb3e188eeb689813c9fb4199b8ad62cc26af1f52f1f3aa02ef3b605deeb0f20a8f00a9f9ca3d153e51d81ccafa07679b438450d0d46e457d5323d3ad385300930e222517b862ddf8b1253df0e20f51eae676cf83692b6ae6d4cfe35bcf43d2cec2edfb72bf9219e8b05aa61f900c804eba59c1007f2ddadab3e1dab4485e5c77f7a988095c5a447c7cd7ecefa26527dfcf8b4615463f12e3ca6910a8a41b07ac4f58e5219459954131c85f8aa70b943038e1d6e9909bb647707bf26a5ceced87298e4f4e616c0cc1edeb8e0c5a6d214918cd245e5d7d38d8c8ec141ddbba354cd2d9b7dd21132d9e4af58f4b6b69eeab9ac0ebd616f564bb4d5a38232d03e7fe62ed700c7761ba25a784c4b0c4804eb500175eeb8a5843e67104e3d1e3740acd022527cff1c982874fe956872818a73b8ca4782bdbb2d17a564de7070b51e0a89ec1834dfc74f23dffdfc478b92b25b26bc8f8a55267031d98278b691d4d3e6f706670d3a29774cf4517ad832b639f944e101694af6901d021a9a7c63cbcc543854460", additionalDataHex: "")
+	report("seal-130", operation: Operation.seal, keyHex: "f208e90e0a08f222c8ac3d4a0c8a8185f3f477f1a43ffce6", nonceHex: "603ddbeb612b71b1d08ebf40", inputHex: "bbae93802be4407815f67e4962b9c394b2fc7c94e6c10a42465f453672100be0d358ff7b0b285cbfce15f3a956a8c20f33a9d87b1202b249cf3f2197fd5d7f8bcee80d4160d0a7c1e8ce7434365a9e5aa413b1923d96073eac3f68f8b5a2bbf23a9ae13f7f13d625c40b42ab06771c1ec00960c2465336b855cb554d3db645f0b7ba2f4c64e0f652bd7902843cc43f8aa8681c838dd31573679c3433246a024c6694b2edbe35d12ad0219d556962e68a00b0586a36f1efe721055b3ac81071a6cb62584a979316aadf220c19d3309b6b22415c28f6d9ffeb20c83a85d5da48017b73cf9267d65b32d4cbf6e12a83be27a2c9848b715c8ab7b870a523f5d960273f703557cbf98f4b05b9d9f78bf4dc4475e07222e5fbf52eb47c785a84b9ec48a04bdc3518864cd9d578e94a63bbc595454db1030df7e99c293f0d4b33a6082c90bad953afae04db99a20abab29ca853858e4608de8df48358521eeb5b983ca4aa0dfe3f04bba8993de84c807ad56e5d79b651d5c2c9cca44fe4797de16d713ba45e7897c031b4f9ae85a219c0ec49ab89ab195effd3fb9f4997a3e1a6d066cf4437c4da39f9939eee4b6d52c1776ebc34ce5f45f2f8703de2404e1f97893a07c8997839c35eedc52e1c5a6412d3b6a9356ff0702845594b581004ce837ebf541707dcc11807868d60408c70c7abe996dd602bc81395202d060d4f076a432fad", additionalDataHex: "")
+	report("seal-131", operation: Operation.seal, keyHex: "701aea2830752a8cb9821af7b43895d39c2431ec877ace03", nonceHex: "a21c680b6e9e40c5b0686f09", inputHex: "a3b7e43f27027c7ce0fd944fe706d89f917b442411cdafdcd74b7f428b7962b9e31b80c957e3f0dc17e6639624c0d0a069cc684b50e700fbc126f17951ee31a388b8966bfd792d2cbe67a0ed2752062813eb7e6138f8d333a1b6721c3d3fabe96060575e9876cec095317090724e1334fa291b90cb926237e331f719290740c7e7e4432976c52203d617b307798810c99df55f0a3fd1fed1b929fa1fcb007465942d9ae3c1d96430916ed15f92623c181461d607a2977b494af88d62f4e3d8485d4600c3e1a09aae4ab743a74e87647db92ab8477f2a8d76193574c8555036330eaca69a12b15d66591d98b8fc08ba06035a549051484af9b3baf9cc366a1dea63885202a6dde3aafcb3c7350f7b2fa4beaab7d5ec7983627ee70677310faaa0cf5ed3afe71c8cb2c3eea9c6416946f28dfb8cb6e618243bef4258a042b36ddd6afe755e982bc49d3017eee040c2cd255e820acd278ee866db3fa2a836bbca9107e55ae55953e2db0a62d9fc245ec589411d1c70b84d974af8798bd4b15d4c95339a96765f7b1283a6c67ebc04075ece478d40408259a25f8291ef9e2f2e5017de2377578c42067228fe70562ee00acd61855efeca0c37f1aa449c0568cc36b8eb2c138d978d8b8e2881acec5af7fe04e595bf615fede74f4948266a9404ee6f1a1241cd08c11ef4d037951dd9780752544518474fbc2d4e3355a72a7c80c703f9", additionalDataHex: "")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+seal-042 79 [b0b33fb7502966734e0dab4bd0529ee7ef8828604d139ab3bc340f5b4cb72683]
+seal-043 80 [7c7d2de92c33140abf7bee89ac6a1e81a33085153695e1a25bb8a624b0574f89]
+seal-044 81 [39a82f9f99a8d363e7ccb48864c317bf92016fba54a8793001595341de9295c4]
+seal-045 143 [01b04a30776ffcccd0ef035ad846785c0fd2cb52c33e76442e7b6481b58b5131]
+seal-046 144 [e1ed8a3fd6e4256782c49f7de75c32516e46477b9393869ce3111c3158b2a5f8]
+seal-047 145 [73c849d776465c50ec292d604144d827f9adcc5b64984882dc0f5867bd68826c]
+seal-048 271 [96bd85eee7d58f2ec50f87421f30f2295db4cd031e42dc59dd07f00a7f634f8b]
+seal-049 272 [7884a148955c8f7d4c7c3eb647bfb4f2d0754a1c15f679fb48004e24232a3c04]
+seal-050 273 [92b2bc4ce7fb6d8ff47c9b725b99e7d6d62bb5d0dd79b205a5621e5e086cb16a]
+seal-051 527 [3682edf5f5d279dd8b5615ce41b5080af0e57a2776e364224f306e3196c1a285]
+seal-052 528 [6d24761e6f912f7064bca06f3d46330e30ac2f0b05a681acda690c11af62c33c]
+seal-053 529 [45d9e2627d37b8face38cc0c3e9e16f0d682dee90397036761074bb21c2591c4]
+seal-081 79 [6ce89e655ccb74057afb2bf9209a2047ae29bb3bacb369ad1fe41b032fe98841]
+seal-082 80 [bfecfeebec196352ea8d4b6e0e675fc54dc28bbe9d9f79a2db3f1f86abcabb10]
+seal-083 81 [cc3216483b9a5e27766208dbf8c2dd69e1b9978916e82560b94086619b399744]
+seal-084 143 [0a6fdba7864e8ecf0d0a74b288a3c62ed13d382506bdcaca5f36054a1369f96c]
+seal-085 144 [e261eb62dc257b3f8354b7607046e696689952683155d2341f7033c7926e2ccc]
+seal-086 145 [1503bc57a8336823c37b012208a497466bdd6441dbc57b21baee9fc6c0a487a9]
+seal-087 271 [71963c063df0b67502d3954a9787d2cbbd902e6f8d313542de96d08eabd2e69b]
+seal-088 272 [bc542003cad6c7b2744a1ccca940ce8480e26adb092218600f6873c111a8ca23]
+seal-089 273 [93b84697291ac6043fd9879a46b52d471d6054877a06794ea01cc7bb13a40caf]
+seal-090 527 [0950b47614a9f50213a9c1557773657556dae547bbfc66570ba2dd717a107624]
+seal-091 528 [afe90cd147c2da71dcd849eed1fadeaf7c0e549b80d073166909dbb83b0acd63]
+seal-092 529 [39e8df5fa350d4e63863c664ca3f4393bc691a4d1d0ea67cb54952258c43810d]
+seal-120 79 [0bab54305be884478bf75a4eb3e20ea1bfb818589125ab27a18f3533219057d4]
+seal-121 80 [80f218480c52530b571b642ae54e3f6255d12058e250d93876334e197f82c43b]
+seal-122 81 [ee10eae9ea08658d7e3186524a05a4201e2033e5ca0981313aaed26741c76478]
+seal-123 143 [2f354e63d28062f4596838af9c8be3ffb8b314f44d1a1a3926a80a9c0d394bd1]
+seal-124 144 [4369adaceac2e0de337f2216a0a0f35dbae55248daff7df0d9205c13b7d52d23]
+seal-125 145 [7dff3b730bdb0ba69a3618c66dfdd7c433a31f93e77d3eed51336fd2de920a5b]
+seal-126 271 [3b2daf2c6dbd739a6af07ce69b738baac08ce9dcb93538e8056fffa518101d81]
+seal-127 272 [c79d5306ba6ac83502bc30981c837c92749fb24189cabb58cbfdce1be4b4ede7]
+seal-128 273 [4a96e6018e3819f1a1e7234db4bd811dbaa2bcb09f6bce8223f9762f65132445]
+seal-129 527 [e9d3468fb658215476d4fe8bb2c1b510bbd138f8e1a193f09f413d97b77c64cf]
+seal-130 528 [45af019828ea0de0e7a7d17db2091fede9fe4756a383b282e8d20137b624ff76]
+seal-131 529 [2f8614dfceec28241e41247db0ebd9699d9bc51be0726aba9f6b2301489ebb8a]
+```
+
+<!-- test: aes-gcm.open -->
+Every `open` vector that authenticates, through the `Aead` interface.
+```maxon
+function digit(symbol Byte) returns Byte
+	if symbol >= 0x61 'letter'
+		return symbol - 0x57
+	end 'letter'
+
+	return symbol - 0x30
+end 'digit'
+
+function fromHex(hex String) returns ByteArray
+	var bytes = ByteArray.create()
+	var high = 0 as Byte
+	var isHigh = true
+
+	for symbol in hex.bytes() 'eachSymbol'
+		if isHigh 'first'
+			high = digit(symbol)
+		end 'first' else 'second'
+			bytes.push(high * 16 + digit(symbol))
+		end 'second'
+
+		isHigh = not isHigh
+	end 'eachSymbol'
+
+	return bytes
+end 'fromHex'
+
+function toHex(bytes ByteArray) returns String
+	var text = ""
+
+	for byte in bytes 'eachByte'
+		text.append("{byte:02x}")
+	end 'eachByte'
+
+	return text
+end 'toHex'
+
+enum Operation
+	seal
+	open
+end 'Operation'
+
+function errorName(failure AeadError) returns String
+	return match failure 'name'
+		invalidKeyLength gives "invalidKeyLength"
+		invalidNonceLength gives "invalidNonceLength"
+		authenticationFailed gives "authenticationFailed"
+		plaintextTooLong gives "plaintextTooLong"
+	end 'name'
+end 'errorName'
+
+function perform(operation Operation, aead Aead, nonceHex String, inputHex String, additionalDataHex String) returns ByteArray throws AeadError
+	let nonce = fromHex(nonceHex)
+	let additionalData = fromHex(additionalDataHex)
+
+	match operation 'direction'
+		seal then return try aead.seal(nonce, plaintext: fromHex(inputHex), additionalData: additionalData)
+		open then return try aead.open(nonce, sealed: fromHex(inputHex), additionalData: additionalData)
+	end 'direction'
+end 'perform'
+
+function performWithKey(operation Operation, keyHex String, nonceHex String, inputHex String, additionalDataHex String) returns ByteArray throws AeadError
+	let aead = try AesGcm.create(fromHex(keyHex))
+	return try perform(operation, aead: aead, nonceHex: nonceHex, inputHex: inputHex, additionalDataHex: additionalDataHex)
+end 'performWithKey'
+
+function report(id String, operation Operation, keyHex String, nonceHex String, inputHex String, additionalDataHex String)
+	if let output = try performWithKey(operation, keyHex: keyHex, nonceHex: nonceHex, inputHex: inputHex, additionalDataHex: additionalDataHex) 'done'
+		print("{id} [{toHex(output)}]\n")
+	end 'done' else (failure) 'refused'
+		print("{id} {errorName(failure)}\n")
+	end 'refused'
+end 'report'
+
+function main() returns ExitCode
+	report("open-001", operation: Operation.open, keyHex: "00000000000000000000000000000000", nonceHex: "000000000000000000000000", inputHex: "58e2fccefa7e3061367f1d57a4e7455a", additionalDataHex: "")
+	report("open-002", operation: Operation.open, keyHex: "00000000000000000000000000000000", nonceHex: "000000000000000000000000", inputHex: "0388dace60b6a392f328c2b971b2fe78ab6e47d42cec13bdf53a67b21257bddf", additionalDataHex: "")
+	report("open-003", operation: Operation.open, keyHex: "feffe9928665731c6d6a8f9467308308", nonceHex: "cafebabefacedbaddecaf888", inputHex: "42831ec2217774244b7221b784d0d49ce3aa212f2c02a4e035c17e2329aca12e21d514b25466931c7d8f6a5aac84aa051ba30b396a0aac973d58e091473f59854d5c2af327cd64a62cf35abd2ba6fab4", additionalDataHex: "")
+	report("open-004", operation: Operation.open, keyHex: "feffe9928665731c6d6a8f9467308308", nonceHex: "cafebabefacedbaddecaf888", inputHex: "42831ec2217774244b7221b784d0d49ce3aa212f2c02a4e035c17e2329aca12e21d514b25466931c7d8f6a5aac84aa051ba30b396a0aac973d58e0915bc94fbc3221a5db94fae95ae7121a47", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("open-005", operation: Operation.open, keyHex: "000000000000000000000000000000000000000000000000", nonceHex: "000000000000000000000000", inputHex: "cd33b28ac773f74ba00ed1f312572435", additionalDataHex: "")
+	report("open-006", operation: Operation.open, keyHex: "000000000000000000000000000000000000000000000000", nonceHex: "000000000000000000000000", inputHex: "98e7247c07f0fe411c267e4384b0f6002ff58d80033927ab8ef4d4587514f0fb", additionalDataHex: "")
+	report("open-007", operation: Operation.open, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c", nonceHex: "cafebabefacedbaddecaf888", inputHex: "3980ca0b3c00e841eb06fac4872a2757859e1ceaa6efd984628593b40ca1e19c7d773d00c144c525ac619d18c84a3f4718e2448b2fe324d9ccda2710acade2569924a7c8587336bfb118024db8674a14", additionalDataHex: "")
+	report("open-008", operation: Operation.open, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c", nonceHex: "cafebabefacedbaddecaf888", inputHex: "3980ca0b3c00e841eb06fac4872a2757859e1ceaa6efd984628593b40ca1e19c7d773d00c144c525ac619d18c84a3f4718e2448b2fe324d9ccda27102519498e80f1478f37ba55bd6d27618c", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("open-009", operation: Operation.open, keyHex: "0000000000000000000000000000000000000000000000000000000000000000", nonceHex: "000000000000000000000000", inputHex: "530f8afbc74536b9a963b4f1c4cb738b", additionalDataHex: "")
+	report("open-010", operation: Operation.open, keyHex: "0000000000000000000000000000000000000000000000000000000000000000", nonceHex: "000000000000000000000000", inputHex: "cea7403d4d606b6e074ec5d3baf39d18d0d1c8a799996bf0265b98b5d48ab919", additionalDataHex: "")
+	report("open-011", operation: Operation.open, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308", nonceHex: "cafebabefacedbaddecaf888", inputHex: "522dc1f099567d07f47f37a32a84427d643a8cdcbfe5c0c97598a2bd2555d1aa8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f662898015adb094dac5d93471bdec1a502270e3cc6c", additionalDataHex: "")
+	report("open-012", operation: Operation.open, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308", nonceHex: "cafebabefacedbaddecaf888", inputHex: "522dc1f099567d07f47f37a32a84427d643a8cdcbfe5c0c97598a2bd2555d1aa8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f66276fc6ece0f4e1768cddf8853bb2d551b", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("open-013", operation: Operation.open, keyHex: "11754cd72aec309bf52f7687212e8957", nonceHex: "3c819d9a9bed087615030b65", inputHex: "250327c674aaf477aef2675748cf6971", additionalDataHex: "")
+	report("open-014", operation: Operation.open, keyHex: "77be63708971c4e240d1cb79e8d77feb", nonceHex: "e0e00f19fed7ba0136a797f3", inputHex: "209fcc8d3675ed938e9c7166709dd946", additionalDataHex: "7a43ec1d9c0a5a78a0b16533a6213cab")
+	report("open-015", operation: Operation.open, keyHex: "7fddb57453c241d03efbed3ac44e371c", nonceHex: "ee283a3fc75575e33efd4887", inputHex: "2ccda4a5415cb91e135c2a0f78c9b2fdb36d1df9b9d5e596f83e8b7f52971cb3", additionalDataHex: "")
+	report("open-016", operation: Operation.open, keyHex: "fe0121f42e599f88ff02a985403e19bb", nonceHex: "3bb9eb7724cbe1943d43de21", inputHex: "59fe29b07b0de8d869efbbd9b4d24c3e9c1c73c0af1097e26061c857de", additionalDataHex: "2662d895035b6519f3510eae0faa3900ad23cfdf")
+	report("open-017", operation: Operation.open, keyHex: "2c1f21cf0f6fb3661943155c3e3d8492", nonceHex: "23cb5ff362e22426984d1907", inputHex: "81824f0e0d523db30d3da369fdc0d60894c7a0a20646dd015073ad2732bd989b14a222b6ad57af43e1895df9dca2a5344a62cc57a3ee28136e94c74838997ae9823f3a", additionalDataHex: "5d3624879d35e46849953e45a32a624d6a6c536ed9857c613b572b0333e701557a713e3f010ecdf9a6bd6c9e3e44b065208645aff4aabee611b391528514170084ccf587177f4488f33cfb5e979e42b6e1cfc0a60238982a7aec")
+	report("open-018", operation: Operation.open, keyHex: "aa740abfadcda779220d3b406c5d7ec09a77fe9d94104539", nonceHex: "ab2265b4c168955561f04315", inputHex: "f149e2b5f0adaa9842ca5f45b768a8fc", additionalDataHex: "")
+	report("open-019", operation: Operation.open, keyHex: "41c5da8667ef725220ffe39ae0ac590ac9fca729ab60ada0", nonceHex: "05ad13a5e2c2ab667e1a6fbc", inputHex: "204bdb1bd62154bf08922aaa54eed705", additionalDataHex: "8b5c124bef6e2f0fe4d8c95cd5fa4cf1")
+	report("open-020", operation: Operation.open, keyHex: "fbc0b4c56a714c83217b2d1bcadd2ed2e9efb0dcac6cc19f", nonceHex: "5f4b43e811da9c470d6a9b01", inputHex: "69482957e6be5c54882d00314e0259cf191e9f29bef63a26860c1e020a21137e", additionalDataHex: "")
+	report("open-021", operation: Operation.open, keyHex: "4bea36ca9c7a5cf6df8f8bb5be1e97647d014bd181d50e28", nonceHex: "bff3d447b453eeb78f3a5650", inputHex: "0d9f7cde2614b71ed9c4b93503e88484488bd6470aa5e79b898c93dd28", additionalDataHex: "33b7e18c7d5fd133faadd0ab524b86526e398203")
+	report("open-022", operation: Operation.open, keyHex: "50f5cc5e33774f383235c64e77c502ca6c5d06ab0af6be04", nonceHex: "9d4c766490224946d91a99a7", inputHex: "77670f6520a34dfc05819a10f322b30e397473fe51f8274bfb105c2eec37e24951abaef11e73c3c425a8c4b2d8c3ffeb8ed9245349ef7a70499f2760123c0d5dcf5a6d", additionalDataHex: "4feca4174889298e992b765dfa67d33219f9b23898f8e869b7f1fbf5d71d87b44edd963d1055618b9db7bffe96b7856f3197868d6ce5e755a6c751661773e1def403a4cf036151ecae67b35f2891285420956604ef31c9aab341")
+	report("open-023", operation: Operation.open, keyHex: "b52c505a37d78eda5dd34f20c22540ea1b58963cf8e5bf8ffa85f9f2492505b4", nonceHex: "516c33929df5a3284ff463d7", inputHex: "bdc1ac884d332457a1d2664f168c76f0", additionalDataHex: "")
+	report("open-024", operation: Operation.open, keyHex: "78dc4e0aaf52d935c3c01eea57428f00ca1fd475f5da86a49c8dd73d68c8e223", nonceHex: "d79cf22d504cc793c3fb6c8a", inputHex: "3e5d486aa2e30b22e040b85723a06e76", additionalDataHex: "b96baa8c1c75a671bfb2d08d06be5f36")
+	report("open-025", operation: Operation.open, keyHex: "31bdadd96698c204aa9ce1448ea94ae1fb4a9a0b3c9d773b51bb1822666b8f22", nonceHex: "0d18e06c7c725ac9e362e1ce", inputHex: "fa4362189661d163fcd6a56d8bf0405ad636ac1bbedd5cc3ee727dc2ab4a9489", additionalDataHex: "")
+	report("open-026", operation: Operation.open, keyHex: "69b458f2644af9020463b40ee503cdf083d693815e2659051ae0d039e606a970", nonceHex: "8d1da8ab5f91ccd09205944b", inputHex: "c0a62d77e6031bfdc6b13ae217a794a9aaee48cd92e47761bf1baff0af", additionalDataHex: "036ad5e5494ef817a8af2f5828784a4bfedd1653")
+	report("open-027", operation: Operation.open, keyHex: "148579a3cbca86d5520d66c0ec71ca5f7e41ba78e56dc6eebd566fed547fe691", nonceHex: "b08a5ea1927499c6ecbfd4e0", inputHex: "2097e372950a5e9383c675e89eea1c314f999159f5611344b298cda45e62843716f215f82ee663919c64002a5c198d7878fd3fadbecdb0d5c2224d804d2886ff9a5760", additionalDataHex: "e4f963f015ffbb99ee3349bbaf7e8e8e6c2a71c230a48f9d59860a29091d2747e01a5ca572347e247d25f56ba7ae8e05cde2be3c97931292c02370208ecd097ef692687fecf2f419d3200162a6480a57dad408a0dfeb492e2c5d")
+	report("open-028", operation: Operation.open, keyHex: "5b9604fe14eadba931b0ccf34843dab9", nonceHex: "028318abc1824029138141a2", inputHex: "26073cc1d851beff176384dc9896d5ff0a3ea7a5487cb5f7d70fb6c58d038554", additionalDataHex: "")
+	report("open-029", operation: Operation.open, keyHex: "5b9604fe14eadba931b0ccf34843dab9", nonceHex: "921d2507fa8007b7bd067d34", inputHex: "49d8b9783e911913d87094d1f63cc7651e348ba07cca2cf04c618cb4d43a5b92", additionalDataHex: "00112233445566778899aabbccddeeff")
+	report("open-030", operation: Operation.open, keyHex: "aa023d0478dcb2b2312498293d9a9129", nonceHex: "0432bc49ac34412081288127", inputHex: "eea945f3d0f98cc0fbab472a0cf24e874bb9b4812519dadf9e1232016d068133", additionalDataHex: "aac39231129872a2")
+	report("open-031", operation: Operation.open, keyHex: "bedcfb5a011ebc84600fcb296c15af0d", nonceHex: "438a547a94ea88dce46c6c85", inputHex: "960247ba5cde02e41a313c4c0136edc3", additionalDataHex: "")
+	report("open-032", operation: Operation.open, keyHex: "384ea416ac3c2f51a76e7d8226346d4e", nonceHex: "b30c084727ad1c592ac21d12", inputHex: "547c1e4ae88bb27e5638343cb9fd3f6337", additionalDataHex: "")
+	report("open-033", operation: Operation.open, keyHex: "cae31cd9f55526eb038241fc44cac1e5", nonceHex: "b5e006ded553110e6dc56529", inputHex: "a036ead03193903f3b626940e0e9f0cbea8e18c437fd6011", additionalDataHex: "")
+	report("open-034", operation: Operation.open, keyHex: "dd6197cd63c963919cf0c273ef6b28bf", nonceHex: "ecb0c42f7000ef0e6f95f24d", inputHex: "8a9992388e735f80ee18f4a63c10ad1486a91cccf92c9a5b00f7b0e034891c", additionalDataHex: "")
+	report("open-035", operation: Operation.open, keyHex: "ffdf4228361ea1f8165852136b3480f7", nonceHex: "0e1666f2dc652f7708fb8f0d", inputHex: "f7bd379d130477176b8bb3cb23dbbbaa1ee6513ce30c7873f59dd4350a588f42", additionalDataHex: "")
+	report("open-036", operation: Operation.open, keyHex: "00112233445566778899aabbccddeeff", nonceHex: "000000000000000000000000", inputHex: "f62d84d649e56bc8cfedc5d74a51e2f7ffffffffffffffffffffffffffffffff", additionalDataHex: "")
+	report("open-037", operation: Operation.open, keyHex: "00112233445566778899aabbccddeeff", nonceHex: "ffffffffffffffffffffffff", inputHex: "431f31e6840931fd95f94bf88296ff6900000000000000000000000000000000", additionalDataHex: "")
+	report("open-038", operation: Operation.open, keyHex: "92ace3e348cd821092cd921aa3546374299ab46209691bc28b8752d17f123c20", nonceHex: "00112233445566778899aabb", inputHex: "e27abdd2d2a53d2f136b9a4a2579529301bcfb71c78d4060f52c", additionalDataHex: "00000000ffffffff")
+	report("open-039", operation: Operation.open, keyHex: "29d3a44f8723dc640239100c365423a312934ac80239212ac3df3421a2098123", nonceHex: "00112233445566778899aabb", inputHex: "2a7d77fa526b8250cb296078926b5020", additionalDataHex: "aabbccddeeff")
+	report("open-040", operation: Operation.open, keyHex: "80ba3192c803ce965ea371d5ff073cf0f43b6a2ab576b208426e11409c09b9b0", nonceHex: "4da5bf8dfd5852c1ea12379d", inputHex: "4771a7c404a472966cea8f73c8bfe17a", additionalDataHex: "")
+	report("open-041", operation: Operation.open, keyHex: "cc56b680552eb75008f5484b4cb803fa5063ebd6eab91f6ab6aef4916a766273", nonceHex: "99e23ec48985bccdeeab60f1", inputHex: "06633c1e9703ef744ffffb40edf9d14355", additionalDataHex: "")
+	report("open-042", operation: Operation.open, keyHex: "51e4bf2bad92b7aff1a4bc05550ba81df4b96fabf41c12c7b00e60e48db7e152", nonceHex: "4f07afedfdc3b6c2361823d3", inputHex: "cf332a12fdee800b602e8d7c4799d62c140c9bb834876b09", additionalDataHex: "")
+	report("open-043", operation: Operation.open, keyHex: "67119627bd988eda906219e08c0d0d779a07d208ce8a4fe0709af755eeec6dcb", nonceHex: "68ab7fdbf61901dad461d23c", inputHex: "43fc101bff4b32bfadd3daf57a590eec04aacb7148a8b8be44cb7eaf4efa69", additionalDataHex: "")
+	report("open-044", operation: Operation.open, keyHex: "59d4eafb4de0cfc7d3db99a8f54b15d7b39f0acc8da69763b019c1699f87674a", nonceHex: "2fcb1b38a99e71b84740ad9b", inputHex: "f58c16690122d75356907fd96b570fca28752c20153092818faba2a334640d6e", additionalDataHex: "")
+	report("open-045", operation: Operation.open, keyHex: "00112233445566778899aabbccddeeff102132435465768798a9bacbdcedfe0f", nonceHex: "000000000000000000000000", inputHex: "23293e9b07ca7d1b0cae7cc489a973b3ffffffffffffffffffffffffffffffff", additionalDataHex: "")
+	report("open-046", operation: Operation.open, keyHex: "00112233445566778899aabbccddeeff102132435465768798a9bacbdcedfe0f", nonceHex: "ffffffffffffffffffffffff", inputHex: "7cb6fc7c6abc009efe9551a99f36a42100000000000000000000000000000000", additionalDataHex: "")
+	report("open-047", operation: Operation.open, keyHex: "00112233445566778899aabbccddeeff1021324354657687", nonceHex: "000000000000000000000000", inputHex: "3f875c9bd7d8511448459468e398c3b2ffffffffffffffffffffffffffffffff", additionalDataHex: "")
+	report("open-048", operation: Operation.open, keyHex: "00112233445566778899aabbccddeeff1021324354657687", nonceHex: "ffffffffffffffffffffffff", inputHex: "210dabea4364c6d5b3429e774332293600000000000000000000000000000000", additionalDataHex: "")
+	report("open-049", operation: Operation.open, keyHex: "5019eb9fef82e5750b631758f0213e3e5fcca12748b40eb4", nonceHex: "ff0ddb0a0d7b36d219da12b5", inputHex: "7971284e6c9e6aac346fe2b7a0a064c2", additionalDataHex: "")
+	report("open-050", operation: Operation.open, keyHex: "21218af790428f8024d3e7e1428c9fcf578c216636d60e73", nonceHex: "34047bc39b9c608384dff5b8", inputHex: "fe2e982e24b81cd120d35a70fe6935e665", additionalDataHex: "")
+	report("open-051", operation: Operation.open, keyHex: "3a8bf543c480925632118245bcbf5d01522b987a31a33da3", nonceHex: "4ebc13cf4636cc7c45e560a7", inputHex: "99f2ff1c8a44e5f26870f104ddc514477b400336fb01860e", additionalDataHex: "")
+	report("open-052", operation: Operation.open, keyHex: "92f4d2672fceec43963ccffb17e6ea7578b11418b06a3b82", nonceHex: "6e7ff7f0797685cfc44b05ff", inputHex: "afe8ef41591bfcc00db3c880ceb18629fff7f285768645c9c8bf7a471c9393", additionalDataHex: "")
+	report("open-053", operation: Operation.open, keyHex: "bcb6bc5ee6743df1396a34639327b25809ec9c81dd6a0c0e", nonceHex: "be0326d23bdc2c64648d13f4", inputHex: "90339dca02ef717f1603994aee6cf6d2e3d33e01ce64f271783147de226228bc", additionalDataHex: "")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+open-001 []
+open-002 [00000000000000000000000000000000]
+open-003 [d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b391aafd255]
+open-004 [d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39]
+open-005 []
+open-006 [00000000000000000000000000000000]
+open-007 [d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b391aafd255]
+open-008 [d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39]
+open-009 []
+open-010 [00000000000000000000000000000000]
+open-011 [d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b391aafd255]
+open-012 [d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39]
+open-013 []
+open-014 []
+open-015 [d5de42b461646c255c87bd2962d3b9a2]
+open-016 [fd331ca8646091c29f21e5f0a1]
+open-017 [42f758836986954db44bf37c6ef5e4ac0adaf38f27252a1b82d02ea949c8a1a2dbc0d68b5615ba7c1220ff6510e259f06655d8]
+open-018 []
+open-019 []
+open-020 [d2ae38c4375954835d75b8e4c2f9bbb4]
+open-021 [d4f1053348696176de90c538c6]
+open-022 [35df59329eb5fc30c28791164bf9b374df228d2be467414727f457a9dd0f079f7342e23adb06929ce0ad607116ee11718ce320]
+open-023 []
+open-024 []
+open-025 [2db5168e932556f8089a0622981d017d]
+open-026 [f3e0e09224256bf21a83a5de8d]
+open-027 [9d0b15fdf1bd595f91f8b3abc0f7dec927dfd4799935a1795d9ce00c9b879434420fe42c275a7cd7b39d638fb81ca52b49dc41]
+open-028 [001d0c231287c1182784554ca3a21908]
+open-029 [001d0c231287c1182784554ca3a21908]
+open-030 [2035af313d1346ab00154fea78322105]
+open-031 []
+open-032 [35]
+open-033 [d10989f2c52e94ad]
+open-034 [4dcc1485365866e25ac3f2ca6aba97]
+open-035 [25b12e28ac0ef6ead0226a3b2288c800]
+open-036 [ebd4a3e10cf6d41c50aeae007563b072]
+open-037 [d593c4d8224f1b100c35e4f6c4006543]
+open-038 [00010203040506070809]
+open-039 []
+open-040 []
+open-041 [2a]
+open-042 [be3308f72a2c6aed]
+open-043 [51f8c1f731ea14acdb210a6d973e07]
+open-044 [549b365af913f3b081131ccb6b825588]
+open-045 [561008fa07a68f5c61285cd013464eaf]
+open-046 [c6152244cea1978d3e0bc274cf8c0b3b]
+open-047 [0b4dbbba8982e0f649f8ba85f3aa061b]
+open-048 [1ae93688ef7e2650a9342ad4718b2780]
+open-049 []
+open-050 [e3]
+open-051 [53fc72e71b59eeb3]
+open-052 [c3ec16adb184affa8ae9738bffb916]
+open-053 [80474a3a3b809560eee2ce7a7a33ea07]
+```
+
+<!-- test: aes-gcm.open-refuses-forgeries -->
+Modified tags, ciphertexts, additional data, nonces and keys, and sealed inputs too short to hold a tag.
+```maxon
+function digit(symbol Byte) returns Byte
+	if symbol >= 0x61 'letter'
+		return symbol - 0x57
+	end 'letter'
+
+	return symbol - 0x30
+end 'digit'
+
+function fromHex(hex String) returns ByteArray
+	var bytes = ByteArray.create()
+	var high = 0 as Byte
+	var isHigh = true
+
+	for symbol in hex.bytes() 'eachSymbol'
+		if isHigh 'first'
+			high = digit(symbol)
+		end 'first' else 'second'
+			bytes.push(high * 16 + digit(symbol))
+		end 'second'
+
+		isHigh = not isHigh
+	end 'eachSymbol'
+
+	return bytes
+end 'fromHex'
+
+function toHex(bytes ByteArray) returns String
+	var text = ""
+
+	for byte in bytes 'eachByte'
+		text.append("{byte:02x}")
+	end 'eachByte'
+
+	return text
+end 'toHex'
+
+enum Operation
+	seal
+	open
+end 'Operation'
+
+function errorName(failure AeadError) returns String
+	return match failure 'name'
+		invalidKeyLength gives "invalidKeyLength"
+		invalidNonceLength gives "invalidNonceLength"
+		authenticationFailed gives "authenticationFailed"
+		plaintextTooLong gives "plaintextTooLong"
+	end 'name'
+end 'errorName'
+
+function perform(operation Operation, aead Aead, nonceHex String, inputHex String, additionalDataHex String) returns ByteArray throws AeadError
+	let nonce = fromHex(nonceHex)
+	let additionalData = fromHex(additionalDataHex)
+
+	match operation 'direction'
+		seal then return try aead.seal(nonce, plaintext: fromHex(inputHex), additionalData: additionalData)
+		open then return try aead.open(nonce, sealed: fromHex(inputHex), additionalData: additionalData)
+	end 'direction'
+end 'perform'
+
+function performWithKey(operation Operation, keyHex String, nonceHex String, inputHex String, additionalDataHex String) returns ByteArray throws AeadError
+	let aead = try AesGcm.create(fromHex(keyHex))
+	return try perform(operation, aead: aead, nonceHex: nonceHex, inputHex: inputHex, additionalDataHex: additionalDataHex)
+end 'performWithKey'
+
+function report(id String, operation Operation, keyHex String, nonceHex String, inputHex String, additionalDataHex String)
+	if let output = try performWithKey(operation, keyHex: keyHex, nonceHex: nonceHex, inputHex: inputHex, additionalDataHex: additionalDataHex) 'done'
+		print("{id} [{toHex(output)}]\n")
+	end 'done' else (failure) 'refused'
+		print("{id} {errorName(failure)}\n")
+	end 'refused'
+end 'report'
+
+function main() returns ExitCode
+	report("aes-gcm-err-001", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f", nonceHex: "505152535455565758595a5b", inputHex: "eb156d081ed6b6b55f4612f021d87b39d9847dbc326a06e988c77ad3863e6083", additionalDataHex: "")
+	report("aes-gcm-err-002", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f", nonceHex: "505152535455565758595a5b", inputHex: "eb156d081ed6b6b55f4612f021d87b39da847dbc326a06e988c77ad3863e6083", additionalDataHex: "")
+	report("aes-gcm-err-003", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f", nonceHex: "505152535455565758595a5b", inputHex: "eb156d081ed6b6b55f4612f021d87b3958847dbc326a06e988c77ad3863e6083", additionalDataHex: "")
+	report("aes-gcm-err-004", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f", nonceHex: "505152535455565758595a5b", inputHex: "eb156d081ed6b6b55f4612f021d87b39d8857dbc326a06e988c77ad3863e6083", additionalDataHex: "")
+	report("aes-gcm-err-005", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f", nonceHex: "505152535455565758595a5b", inputHex: "eb156d081ed6b6b55f4612f021d87b39d8847d3c326a06e988c77ad3863e6083", additionalDataHex: "")
+	report("aes-gcm-err-006", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f", nonceHex: "505152535455565758595a5b", inputHex: "eb156d081ed6b6b55f4612f021d87b39d8847dbc336a06e988c77ad3863e6083", additionalDataHex: "")
+	report("aes-gcm-err-007", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f", nonceHex: "505152535455565758595a5b", inputHex: "eb156d081ed6b6b55f4612f021d87b39d8847dbc306a06e988c77ad3863e6083", additionalDataHex: "")
+	report("aes-gcm-err-008", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f", nonceHex: "505152535455565758595a5b", inputHex: "eb156d081ed6b6b55f4612f021d87b39d8847dbc326a066988c77ad3863e6083", additionalDataHex: "")
+	report("aes-gcm-err-009", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f", nonceHex: "505152535455565758595a5b", inputHex: "eb156d081ed6b6b55f4612f021d87b39d8847dbc326a06e989c77ad3863e6083", additionalDataHex: "")
+	report("aes-gcm-err-010", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f", nonceHex: "505152535455565758595a5b", inputHex: "eb156d081ed6b6b55f4612f021d87b39d8847dbc326a06e908c77ad3863e6083", additionalDataHex: "")
+	report("aes-gcm-err-011", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f", nonceHex: "505152535455565758595a5b", inputHex: "eb156d081ed6b6b55f4612f021d87b39d8847dbc326a06e988e77ad3863e6083", additionalDataHex: "")
+	report("aes-gcm-err-012", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f", nonceHex: "505152535455565758595a5b", inputHex: "eb156d081ed6b6b55f4612f021d87b39d8847dbc326a06e988c77bd3863e6083", additionalDataHex: "")
+	report("aes-gcm-err-013", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f", nonceHex: "505152535455565758595a5b", inputHex: "eb156d081ed6b6b55f4612f021d87b39d8847dbc326a06e988c77ad3873e6083", additionalDataHex: "")
+	report("aes-gcm-err-014", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f", nonceHex: "505152535455565758595a5b", inputHex: "eb156d081ed6b6b55f4612f021d87b39d8847dbc326a06e988c77ad3843e6083", additionalDataHex: "")
+	report("aes-gcm-err-015", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f", nonceHex: "505152535455565758595a5b", inputHex: "eb156d081ed6b6b55f4612f021d87b39d8847dbc326a06e988c77ad3063e6083", additionalDataHex: "")
+	report("aes-gcm-err-016", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f", nonceHex: "505152535455565758595a5b", inputHex: "eb156d081ed6b6b55f4612f021d87b39d8847dbc326a06e988c77ad3863e6082", additionalDataHex: "")
+	report("aes-gcm-err-017", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f", nonceHex: "505152535455565758595a5b", inputHex: "eb156d081ed6b6b55f4612f021d87b39d8847dbc326a06e988c77ad3863e6081", additionalDataHex: "")
+	report("aes-gcm-err-018", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f", nonceHex: "505152535455565758595a5b", inputHex: "eb156d081ed6b6b55f4612f021d87b39d8847dbc326a06e988c77ad3863e60c3", additionalDataHex: "")
+	report("aes-gcm-err-019", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f", nonceHex: "505152535455565758595a5b", inputHex: "eb156d081ed6b6b55f4612f021d87b39d8847dbc326a06e988c77ad3863e6003", additionalDataHex: "")
+	report("aes-gcm-err-020", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f", nonceHex: "505152535455565758595a5b", inputHex: "eb156d081ed6b6b55f4612f021d87b39d9847dbc326a06e989c77ad3863e6083", additionalDataHex: "")
+	report("aes-gcm-err-021", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f", nonceHex: "505152535455565758595a5b", inputHex: "eb156d081ed6b6b55f4612f021d87b39d8847d3c326a066988c77ad3863e6083", additionalDataHex: "")
+	report("aes-gcm-err-022", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f", nonceHex: "505152535455565758595a5b", inputHex: "eb156d081ed6b6b55f4612f021d87b39d8847dbc326a066988c77ad3863e6003", additionalDataHex: "")
+	report("aes-gcm-err-023", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f", nonceHex: "505152535455565758595a5b", inputHex: "eb156d081ed6b6b55f4612f021d87b39277b8243cd95f9167738852c79c19f7c", additionalDataHex: "")
+	report("aes-gcm-err-024", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f", nonceHex: "505152535455565758595a5b", inputHex: "eb156d081ed6b6b55f4612f021d87b3900000000000000000000000000000000", additionalDataHex: "")
+	report("aes-gcm-err-025", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f", nonceHex: "505152535455565758595a5b", inputHex: "eb156d081ed6b6b55f4612f021d87b39ffffffffffffffffffffffffffffffff", additionalDataHex: "")
+	report("aes-gcm-err-026", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f", nonceHex: "505152535455565758595a5b", inputHex: "eb156d081ed6b6b55f4612f021d87b395804fd3cb2ea86690847fa5306bee003", additionalDataHex: "")
+	report("aes-gcm-err-027", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f", nonceHex: "505152535455565758595a5b", inputHex: "eb156d081ed6b6b55f4612f021d87b39d9857cbd336b07e889c67bd2873f6182", additionalDataHex: "")
+	report("aes-gcm-err-028", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", nonceHex: "505152535455565758595a5b", inputHex: "b2061457c0759fc1749f174ee1ccadfa9de8fef6d8ab1bf1bf887232eab590dd", additionalDataHex: "")
+	report("aes-gcm-err-029", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", nonceHex: "505152535455565758595a5b", inputHex: "b2061457c0759fc1749f174ee1ccadfa9ee8fef6d8ab1bf1bf887232eab590dd", additionalDataHex: "")
+	report("aes-gcm-err-030", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", nonceHex: "505152535455565758595a5b", inputHex: "b2061457c0759fc1749f174ee1ccadfa1ce8fef6d8ab1bf1bf887232eab590dd", additionalDataHex: "")
+	report("aes-gcm-err-031", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", nonceHex: "505152535455565758595a5b", inputHex: "b2061457c0759fc1749f174ee1ccadfa9ce9fef6d8ab1bf1bf887232eab590dd", additionalDataHex: "")
+	report("aes-gcm-err-032", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", nonceHex: "505152535455565758595a5b", inputHex: "b2061457c0759fc1749f174ee1ccadfa9ce8fe76d8ab1bf1bf887232eab590dd", additionalDataHex: "")
+	report("aes-gcm-err-033", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", nonceHex: "505152535455565758595a5b", inputHex: "b2061457c0759fc1749f174ee1ccadfa9ce8fef6d9ab1bf1bf887232eab590dd", additionalDataHex: "")
+	report("aes-gcm-err-034", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", nonceHex: "505152535455565758595a5b", inputHex: "b2061457c0759fc1749f174ee1ccadfa9ce8fef6daab1bf1bf887232eab590dd", additionalDataHex: "")
+	report("aes-gcm-err-035", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", nonceHex: "505152535455565758595a5b", inputHex: "b2061457c0759fc1749f174ee1ccadfa9ce8fef6d8ab1b71bf887232eab590dd", additionalDataHex: "")
+	report("aes-gcm-err-036", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", nonceHex: "505152535455565758595a5b", inputHex: "b2061457c0759fc1749f174ee1ccadfa9ce8fef6d8ab1bf1be887232eab590dd", additionalDataHex: "")
+	report("aes-gcm-err-037", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", nonceHex: "505152535455565758595a5b", inputHex: "b2061457c0759fc1749f174ee1ccadfa9ce8fef6d8ab1bf13f887232eab590dd", additionalDataHex: "")
+	report("aes-gcm-err-038", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", nonceHex: "505152535455565758595a5b", inputHex: "b2061457c0759fc1749f174ee1ccadfa9ce8fef6d8ab1bf1bfa87232eab590dd", additionalDataHex: "")
+	report("aes-gcm-err-039", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", nonceHex: "505152535455565758595a5b", inputHex: "b2061457c0759fc1749f174ee1ccadfa9ce8fef6d8ab1bf1bf887332eab590dd", additionalDataHex: "")
+	report("aes-gcm-err-040", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", nonceHex: "505152535455565758595a5b", inputHex: "b2061457c0759fc1749f174ee1ccadfa9ce8fef6d8ab1bf1bf887232ebb590dd", additionalDataHex: "")
+	report("aes-gcm-err-041", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", nonceHex: "505152535455565758595a5b", inputHex: "b2061457c0759fc1749f174ee1ccadfa9ce8fef6d8ab1bf1bf887232e8b590dd", additionalDataHex: "")
+	report("aes-gcm-err-042", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", nonceHex: "505152535455565758595a5b", inputHex: "b2061457c0759fc1749f174ee1ccadfa9ce8fef6d8ab1bf1bf8872326ab590dd", additionalDataHex: "")
+	report("aes-gcm-err-043", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", nonceHex: "505152535455565758595a5b", inputHex: "b2061457c0759fc1749f174ee1ccadfa9ce8fef6d8ab1bf1bf887232eab590dc", additionalDataHex: "")
+	report("aes-gcm-err-044", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", nonceHex: "505152535455565758595a5b", inputHex: "b2061457c0759fc1749f174ee1ccadfa9ce8fef6d8ab1bf1bf887232eab590df", additionalDataHex: "")
+	report("aes-gcm-err-045", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", nonceHex: "505152535455565758595a5b", inputHex: "b2061457c0759fc1749f174ee1ccadfa9ce8fef6d8ab1bf1bf887232eab5909d", additionalDataHex: "")
+	report("aes-gcm-err-046", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", nonceHex: "505152535455565758595a5b", inputHex: "b2061457c0759fc1749f174ee1ccadfa9ce8fef6d8ab1bf1bf887232eab5905d", additionalDataHex: "")
+	report("aes-gcm-err-047", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", nonceHex: "505152535455565758595a5b", inputHex: "b2061457c0759fc1749f174ee1ccadfa9de8fef6d8ab1bf1be887232eab590dd", additionalDataHex: "")
+	report("aes-gcm-err-048", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", nonceHex: "505152535455565758595a5b", inputHex: "b2061457c0759fc1749f174ee1ccadfa9ce8fe76d8ab1b71bf887232eab590dd", additionalDataHex: "")
+	report("aes-gcm-err-049", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", nonceHex: "505152535455565758595a5b", inputHex: "b2061457c0759fc1749f174ee1ccadfa9ce8fef6d8ab1b71bf887232eab5905d", additionalDataHex: "")
+	report("aes-gcm-err-050", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", nonceHex: "505152535455565758595a5b", inputHex: "b2061457c0759fc1749f174ee1ccadfa631701092754e40e40778dcd154a6f22", additionalDataHex: "")
+	report("aes-gcm-err-051", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", nonceHex: "505152535455565758595a5b", inputHex: "b2061457c0759fc1749f174ee1ccadfa00000000000000000000000000000000", additionalDataHex: "")
+	report("aes-gcm-err-052", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", nonceHex: "505152535455565758595a5b", inputHex: "b2061457c0759fc1749f174ee1ccadfaffffffffffffffffffffffffffffffff", additionalDataHex: "")
+	report("aes-gcm-err-053", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", nonceHex: "505152535455565758595a5b", inputHex: "b2061457c0759fc1749f174ee1ccadfa1c687e76582b9b713f08f2b26a35105d", additionalDataHex: "")
+	report("aes-gcm-err-054", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", nonceHex: "505152535455565758595a5b", inputHex: "b2061457c0759fc1749f174ee1ccadfa9de9fff7d9aa1af0be897333ebb491dc", additionalDataHex: "")
+	report("aes-gcm-err-055", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f1011121314151617", nonceHex: "505152535455565758595a5b", inputHex: "458256842dfd297f30bd2f8f15c92db0b5e44c5b2fe90e4c78f358da0d99cb64", additionalDataHex: "")
+	report("aes-gcm-err-056", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f1011121314151617", nonceHex: "505152535455565758595a5b", inputHex: "458256842dfd297f30bd2f8f15c92db0b6e44c5b2fe90e4c78f358da0d99cb64", additionalDataHex: "")
+	report("aes-gcm-err-057", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f1011121314151617", nonceHex: "505152535455565758595a5b", inputHex: "458256842dfd297f30bd2f8f15c92db034e44c5b2fe90e4c78f358da0d99cb64", additionalDataHex: "")
+	report("aes-gcm-err-058", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f1011121314151617", nonceHex: "505152535455565758595a5b", inputHex: "458256842dfd297f30bd2f8f15c92db0b4e54c5b2fe90e4c78f358da0d99cb64", additionalDataHex: "")
+	report("aes-gcm-err-059", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f1011121314151617", nonceHex: "505152535455565758595a5b", inputHex: "458256842dfd297f30bd2f8f15c92db0b4e44cdb2fe90e4c78f358da0d99cb64", additionalDataHex: "")
+	report("aes-gcm-err-060", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f1011121314151617", nonceHex: "505152535455565758595a5b", inputHex: "458256842dfd297f30bd2f8f15c92db0b4e44c5b2ee90e4c78f358da0d99cb64", additionalDataHex: "")
+	report("aes-gcm-err-061", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f1011121314151617", nonceHex: "505152535455565758595a5b", inputHex: "458256842dfd297f30bd2f8f15c92db0b4e44c5b2de90e4c78f358da0d99cb64", additionalDataHex: "")
+	report("aes-gcm-err-062", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f1011121314151617", nonceHex: "505152535455565758595a5b", inputHex: "458256842dfd297f30bd2f8f15c92db0b4e44c5b2fe90ecc78f358da0d99cb64", additionalDataHex: "")
+	report("aes-gcm-err-063", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f1011121314151617", nonceHex: "505152535455565758595a5b", inputHex: "458256842dfd297f30bd2f8f15c92db0b4e44c5b2fe90e4c79f358da0d99cb64", additionalDataHex: "")
+	report("aes-gcm-err-064", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f1011121314151617", nonceHex: "505152535455565758595a5b", inputHex: "458256842dfd297f30bd2f8f15c92db0b4e44c5b2fe90e4cf8f358da0d99cb64", additionalDataHex: "")
+	report("aes-gcm-err-065", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f1011121314151617", nonceHex: "505152535455565758595a5b", inputHex: "458256842dfd297f30bd2f8f15c92db0b4e44c5b2fe90e4c78d358da0d99cb64", additionalDataHex: "")
+	report("aes-gcm-err-066", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f1011121314151617", nonceHex: "505152535455565758595a5b", inputHex: "458256842dfd297f30bd2f8f15c92db0b4e44c5b2fe90e4c78f359da0d99cb64", additionalDataHex: "")
+	report("aes-gcm-err-067", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f1011121314151617", nonceHex: "505152535455565758595a5b", inputHex: "458256842dfd297f30bd2f8f15c92db0b4e44c5b2fe90e4c78f358da0c99cb64", additionalDataHex: "")
+	report("aes-gcm-err-068", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f1011121314151617", nonceHex: "505152535455565758595a5b", inputHex: "458256842dfd297f30bd2f8f15c92db0b4e44c5b2fe90e4c78f358da0f99cb64", additionalDataHex: "")
+	report("aes-gcm-err-069", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f1011121314151617", nonceHex: "505152535455565758595a5b", inputHex: "458256842dfd297f30bd2f8f15c92db0b4e44c5b2fe90e4c78f358da8d99cb64", additionalDataHex: "")
+	report("aes-gcm-err-070", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f1011121314151617", nonceHex: "505152535455565758595a5b", inputHex: "458256842dfd297f30bd2f8f15c92db0b4e44c5b2fe90e4c78f358da0d99cb65", additionalDataHex: "")
+	report("aes-gcm-err-071", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f1011121314151617", nonceHex: "505152535455565758595a5b", inputHex: "458256842dfd297f30bd2f8f15c92db0b4e44c5b2fe90e4c78f358da0d99cb66", additionalDataHex: "")
+	report("aes-gcm-err-072", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f1011121314151617", nonceHex: "505152535455565758595a5b", inputHex: "458256842dfd297f30bd2f8f15c92db0b4e44c5b2fe90e4c78f358da0d99cb24", additionalDataHex: "")
+	report("aes-gcm-err-073", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f1011121314151617", nonceHex: "505152535455565758595a5b", inputHex: "458256842dfd297f30bd2f8f15c92db0b4e44c5b2fe90e4c78f358da0d99cbe4", additionalDataHex: "")
+	report("aes-gcm-err-074", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f1011121314151617", nonceHex: "505152535455565758595a5b", inputHex: "458256842dfd297f30bd2f8f15c92db0b5e44c5b2fe90e4c79f358da0d99cb64", additionalDataHex: "")
+	report("aes-gcm-err-075", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f1011121314151617", nonceHex: "505152535455565758595a5b", inputHex: "458256842dfd297f30bd2f8f15c92db0b4e44cdb2fe90ecc78f358da0d99cb64", additionalDataHex: "")
+	report("aes-gcm-err-076", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f1011121314151617", nonceHex: "505152535455565758595a5b", inputHex: "458256842dfd297f30bd2f8f15c92db0b4e44c5b2fe90ecc78f358da0d99cbe4", additionalDataHex: "")
+	report("aes-gcm-err-077", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f1011121314151617", nonceHex: "505152535455565758595a5b", inputHex: "458256842dfd297f30bd2f8f15c92db04b1bb3a4d016f1b3870ca725f266349b", additionalDataHex: "")
+	report("aes-gcm-err-078", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f1011121314151617", nonceHex: "505152535455565758595a5b", inputHex: "458256842dfd297f30bd2f8f15c92db000000000000000000000000000000000", additionalDataHex: "")
+	report("aes-gcm-err-079", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f1011121314151617", nonceHex: "505152535455565758595a5b", inputHex: "458256842dfd297f30bd2f8f15c92db0ffffffffffffffffffffffffffffffff", additionalDataHex: "")
+	report("aes-gcm-err-080", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f1011121314151617", nonceHex: "505152535455565758595a5b", inputHex: "458256842dfd297f30bd2f8f15c92db03464ccdbaf698eccf873d85a8d194be4", additionalDataHex: "")
+	report("aes-gcm-err-081", operation: Operation.open, keyHex: "000102030405060708090a0b0c0d0e0f1011121314151617", nonceHex: "505152535455565758595a5b", inputHex: "458256842dfd297f30bd2f8f15c92db0b5e54d5a2ee80f4d79f259db0c98ca65", additionalDataHex: "")
+	report("aes-gcm-err-082", operation: Operation.open, keyHex: "a49a5e26a2f8cb63d05546c2a62f5343", nonceHex: "907763b19b9b4ab6bd4f0281", inputHex: "a2be08210d8c470a8df6e8fbd79ec5cf", additionalDataHex: "")
+	report("aes-gcm-err-083", operation: Operation.open, keyHex: "867fc5d5476d5008f0703d81e3622255", nonceHex: "22945529dff947c3c9264df7", inputHex: "1c785025e5a2678e4b29b29276e395bb87fdf1261846164a950c37a3f2eea17d", additionalDataHex: "261a9efd4f32bc3d07c115b4edcf8adf")
+	report("aes-gcm-err-084", operation: Operation.open, keyHex: "f780e4089a6224b9db576b368149fc4f58e6c8f7061814e2", nonceHex: "ae84a7ac9f89a70c92d566ec", inputHex: "cd65b48665146066b92b34b38ec3415e", additionalDataHex: "")
+	report("aes-gcm-err-085", operation: Operation.open, keyHex: "f3167d3ea919d15bb5254717cc8b2a18da1e35950a872089", nonceHex: "5583ee965e59308a902a0703", inputHex: "ad475445f3eecb217387be44895254e1f7e9cef0e7296bdb0b4305b0a8edf9ac", additionalDataHex: "cc67a35257f75e8816d0de5b83d321f0")
+	report("aes-gcm-err-086", operation: Operation.open, keyHex: "e5a8123f2e2e007d4e379ba114a2fb66e6613f57c72d4e4f024964053028a831", nonceHex: "51e43385bf533e168427e1ad", inputHex: "38fe845c66e66bdd884c2aecafd280e6", additionalDataHex: "")
+	report("aes-gcm-err-087", operation: Operation.open, keyHex: "9a0343f850a6427120f764789ffec6d237447b898fbf51d2182f065d3861497d", nonceHex: "3deef6f453dd70d92143adcd", inputHex: "e93165935ac18e3a2845d15fe31a9286f5fc50d18766bc3d9e16dd136d45816b", additionalDataHex: "dbb8226a624520863db6897017b2a4f8")
+	report("aes-gcm-err-095", operation: Operation.open, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308", nonceHex: "cafebabefacedbaddecaf888", inputHex: "532dc1f099567d07f47f37a32a84427d643a8cdcbfe5c0c97598a2bd2555d1aa8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f66276fc6ece0f4e1768cddf8853bb2d551b", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("aes-gcm-err-096", operation: Operation.open, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308", nonceHex: "cafebabefacedbaddecaf888", inputHex: "522dc1f099567d07f47f37a32a84427d643a8cdcbfe5c0c97598a2bd2555d1aa8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f6e276fc6ece0f4e1768cddf8853bb2d551b", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("aes-gcm-err-097", operation: Operation.open, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308", nonceHex: "cafebabefacedbaddecaf888", inputHex: "522dc1f099567d07f47f37a32a84427d643a8cdcbfe5c0c97598a2bd2555d1aa8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f66277fc6ece0f4e1768cddf8853bb2d551b", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("aes-gcm-err-098", operation: Operation.open, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308", nonceHex: "cafebabefacedbaddecaf888", inputHex: "522dc1f099567d07f47f37a32a84427d643a8cdcbfe5c0c97598a2bd2555d1aa8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f66276fc6ece0f4e1768cddf8853bb2d551b", additionalDataHex: "ffedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("aes-gcm-err-099", operation: Operation.open, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308", nonceHex: "cafebabefacedbaddecaf888", inputHex: "522dc1f099567d07f47f37a32a84427d643a8cdcbfe5c0c97598a2bd2555d1aa8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f66276fc6ece0f4e1768cddf8853bb2d551b", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabadda")
+	report("aes-gcm-err-100", operation: Operation.open, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308", nonceHex: "cafebabefacedbaddecaf888", inputHex: "522dc1f099567d07f47f37a32a84427d643a8cdcbfe5c0c97598a2bd2555d1aa8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f66276fc6ece0f4e1768cddf8853bb2d551b", additionalDataHex: "")
+	report("aes-gcm-err-101", operation: Operation.open, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308", nonceHex: "cbfebabefacedbaddecaf888", inputHex: "522dc1f099567d07f47f37a32a84427d643a8cdcbfe5c0c97598a2bd2555d1aa8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f66276fc6ece0f4e1768cddf8853bb2d551b", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("aes-gcm-err-102", operation: Operation.open, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308", nonceHex: "cafebabefacedbaddecaf808", inputHex: "522dc1f099567d07f47f37a32a84427d643a8cdcbfe5c0c97598a2bd2555d1aa8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f66276fc6ece0f4e1768cddf8853bb2d551b", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("aes-gcm-err-103", operation: Operation.open, keyHex: "ffffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308", nonceHex: "cafebabefacedbaddecaf888", inputHex: "522dc1f099567d07f47f37a32a84427d643a8cdcbfe5c0c97598a2bd2555d1aa8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f66276fc6ece0f4e1768cddf8853bb2d551b", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("aes-gcm-err-104", operation: Operation.open, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308", nonceHex: "cafebabefacedbaddecaf888", inputHex: "2dc1f099567d07f47f37a32a84427d643a8cdcbfe5c0c97598a2bd2555d1aa8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f66276fc6ece0f4e1768cddf8853bb2d551b", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("aes-gcm-err-105", operation: Operation.open, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308", nonceHex: "cafebabefacedbaddecaf888", inputHex: "76fc6ece0f4e1768cddf8853bb2d551b522dc1f099567d07f47f37a32a84427d643a8cdcbfe5c0c97598a2bd2555d1aa8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f662", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("aes-gcm-err-106", operation: Operation.open, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308", nonceHex: "cafebabefacedbaddecaf888", inputHex: "fc6ece0f4e1768cddf8853bb2d551b", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("aes-gcm-err-107", operation: Operation.open, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308", nonceHex: "cafebabefacedbaddecaf888", inputHex: "", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+aes-gcm-err-001 authenticationFailed
+aes-gcm-err-002 authenticationFailed
+aes-gcm-err-003 authenticationFailed
+aes-gcm-err-004 authenticationFailed
+aes-gcm-err-005 authenticationFailed
+aes-gcm-err-006 authenticationFailed
+aes-gcm-err-007 authenticationFailed
+aes-gcm-err-008 authenticationFailed
+aes-gcm-err-009 authenticationFailed
+aes-gcm-err-010 authenticationFailed
+aes-gcm-err-011 authenticationFailed
+aes-gcm-err-012 authenticationFailed
+aes-gcm-err-013 authenticationFailed
+aes-gcm-err-014 authenticationFailed
+aes-gcm-err-015 authenticationFailed
+aes-gcm-err-016 authenticationFailed
+aes-gcm-err-017 authenticationFailed
+aes-gcm-err-018 authenticationFailed
+aes-gcm-err-019 authenticationFailed
+aes-gcm-err-020 authenticationFailed
+aes-gcm-err-021 authenticationFailed
+aes-gcm-err-022 authenticationFailed
+aes-gcm-err-023 authenticationFailed
+aes-gcm-err-024 authenticationFailed
+aes-gcm-err-025 authenticationFailed
+aes-gcm-err-026 authenticationFailed
+aes-gcm-err-027 authenticationFailed
+aes-gcm-err-028 authenticationFailed
+aes-gcm-err-029 authenticationFailed
+aes-gcm-err-030 authenticationFailed
+aes-gcm-err-031 authenticationFailed
+aes-gcm-err-032 authenticationFailed
+aes-gcm-err-033 authenticationFailed
+aes-gcm-err-034 authenticationFailed
+aes-gcm-err-035 authenticationFailed
+aes-gcm-err-036 authenticationFailed
+aes-gcm-err-037 authenticationFailed
+aes-gcm-err-038 authenticationFailed
+aes-gcm-err-039 authenticationFailed
+aes-gcm-err-040 authenticationFailed
+aes-gcm-err-041 authenticationFailed
+aes-gcm-err-042 authenticationFailed
+aes-gcm-err-043 authenticationFailed
+aes-gcm-err-044 authenticationFailed
+aes-gcm-err-045 authenticationFailed
+aes-gcm-err-046 authenticationFailed
+aes-gcm-err-047 authenticationFailed
+aes-gcm-err-048 authenticationFailed
+aes-gcm-err-049 authenticationFailed
+aes-gcm-err-050 authenticationFailed
+aes-gcm-err-051 authenticationFailed
+aes-gcm-err-052 authenticationFailed
+aes-gcm-err-053 authenticationFailed
+aes-gcm-err-054 authenticationFailed
+aes-gcm-err-055 authenticationFailed
+aes-gcm-err-056 authenticationFailed
+aes-gcm-err-057 authenticationFailed
+aes-gcm-err-058 authenticationFailed
+aes-gcm-err-059 authenticationFailed
+aes-gcm-err-060 authenticationFailed
+aes-gcm-err-061 authenticationFailed
+aes-gcm-err-062 authenticationFailed
+aes-gcm-err-063 authenticationFailed
+aes-gcm-err-064 authenticationFailed
+aes-gcm-err-065 authenticationFailed
+aes-gcm-err-066 authenticationFailed
+aes-gcm-err-067 authenticationFailed
+aes-gcm-err-068 authenticationFailed
+aes-gcm-err-069 authenticationFailed
+aes-gcm-err-070 authenticationFailed
+aes-gcm-err-071 authenticationFailed
+aes-gcm-err-072 authenticationFailed
+aes-gcm-err-073 authenticationFailed
+aes-gcm-err-074 authenticationFailed
+aes-gcm-err-075 authenticationFailed
+aes-gcm-err-076 authenticationFailed
+aes-gcm-err-077 authenticationFailed
+aes-gcm-err-078 authenticationFailed
+aes-gcm-err-079 authenticationFailed
+aes-gcm-err-080 authenticationFailed
+aes-gcm-err-081 authenticationFailed
+aes-gcm-err-082 authenticationFailed
+aes-gcm-err-083 authenticationFailed
+aes-gcm-err-084 authenticationFailed
+aes-gcm-err-085 authenticationFailed
+aes-gcm-err-086 authenticationFailed
+aes-gcm-err-087 authenticationFailed
+aes-gcm-err-095 authenticationFailed
+aes-gcm-err-096 authenticationFailed
+aes-gcm-err-097 authenticationFailed
+aes-gcm-err-098 authenticationFailed
+aes-gcm-err-099 authenticationFailed
+aes-gcm-err-100 authenticationFailed
+aes-gcm-err-101 authenticationFailed
+aes-gcm-err-102 authenticationFailed
+aes-gcm-err-103 authenticationFailed
+aes-gcm-err-104 authenticationFailed
+aes-gcm-err-105 authenticationFailed
+aes-gcm-err-106 authenticationFailed
+aes-gcm-err-107 authenticationFailed
+```
+
+<!-- test: aes-gcm.refuses-invalid-lengths -->
+Keys and nonces of other lengths for `seal` and `open`, and both at once, which reports the key.
+```maxon
+function digit(symbol Byte) returns Byte
+	if symbol >= 0x61 'letter'
+		return symbol - 0x57
+	end 'letter'
+
+	return symbol - 0x30
+end 'digit'
+
+function fromHex(hex String) returns ByteArray
+	var bytes = ByteArray.create()
+	var high = 0 as Byte
+	var isHigh = true
+
+	for symbol in hex.bytes() 'eachSymbol'
+		if isHigh 'first'
+			high = digit(symbol)
+		end 'first' else 'second'
+			bytes.push(high * 16 + digit(symbol))
+		end 'second'
+
+		isHigh = not isHigh
+	end 'eachSymbol'
+
+	return bytes
+end 'fromHex'
+
+function toHex(bytes ByteArray) returns String
+	var text = ""
+
+	for byte in bytes 'eachByte'
+		text.append("{byte:02x}")
+	end 'eachByte'
+
+	return text
+end 'toHex'
+
+enum Operation
+	seal
+	open
+end 'Operation'
+
+function errorName(failure AeadError) returns String
+	return match failure 'name'
+		invalidKeyLength gives "invalidKeyLength"
+		invalidNonceLength gives "invalidNonceLength"
+		authenticationFailed gives "authenticationFailed"
+		plaintextTooLong gives "plaintextTooLong"
+	end 'name'
+end 'errorName'
+
+function perform(operation Operation, aead Aead, nonceHex String, inputHex String, additionalDataHex String) returns ByteArray throws AeadError
+	let nonce = fromHex(nonceHex)
+	let additionalData = fromHex(additionalDataHex)
+
+	match operation 'direction'
+		seal then return try aead.seal(nonce, plaintext: fromHex(inputHex), additionalData: additionalData)
+		open then return try aead.open(nonce, sealed: fromHex(inputHex), additionalData: additionalData)
+	end 'direction'
+end 'perform'
+
+function performWithKey(operation Operation, keyHex String, nonceHex String, inputHex String, additionalDataHex String) returns ByteArray throws AeadError
+	let aead = try AesGcm.create(fromHex(keyHex))
+	return try perform(operation, aead: aead, nonceHex: nonceHex, inputHex: inputHex, additionalDataHex: additionalDataHex)
+end 'performWithKey'
+
+function report(id String, operation Operation, keyHex String, nonceHex String, inputHex String, additionalDataHex String)
+	if let output = try performWithKey(operation, keyHex: keyHex, nonceHex: nonceHex, inputHex: inputHex, additionalDataHex: additionalDataHex) 'done'
+		print("{id} [{toHex(output)}]\n")
+	end 'done' else (failure) 'refused'
+		print("{id} {errorName(failure)}\n")
+	end 'refused'
+end 'report'
+
+function main() returns ExitCode
+	report("aes-gcm-err-088", operation: Operation.seal, keyHex: "aa023d0478dcb2b2312498293d9a9129", nonceHex: "0432bc49ac344120", inputHex: "2035af313d1346ab00154fea78322105", additionalDataHex: "aac39231129872a2")
+	report("aes-gcm-err-089", operation: Operation.open, keyHex: "aa023d0478dcb2b2312498293d9a9129", nonceHex: "0432bc49ac344120", inputHex: "64c36bb3b732034e3a7d04efc5197785b7d0dd70b00d65b97cfd080ff4b819d1", additionalDataHex: "aac39231129872a2")
+	report("aes-gcm-err-090", operation: Operation.seal, keyHex: "2034a82547276c83dd3212a813572bce", nonceHex: "3254202d854734812398127a3d134421", inputHex: "02efd2e5782312827ed5d230189a2a342b277ce048462193", additionalDataHex: "1a0293d8f90219058902139013908190bc490890d3ff12a3")
+	report("aes-gcm-err-091", operation: Operation.open, keyHex: "2034a82547276c83dd3212a813572bce", nonceHex: "3254202d854734812398127a3d134421", inputHex: "64069c2d58690561f27ee199e6b479b6369eec688672bde99b7abadd6e69c1d9ec925786534f5075", additionalDataHex: "1a0293d8f90219058902139013908190bc490890d3ff12a3")
+	report("aes-gcm-err-092", operation: Operation.seal, keyHex: "7e5a39dcda7e066988f19adf4de4d501", nonceHex: "494356c3459d60e3a83433c9bcf2c0454a763e496e4ec99bfbe4bbb83a4fda76b542213899dcf5521cd9bbbe5d11545bda44a3f4a681ce2843acea730d83d3930ea30991ee1a68ebf6d1a5a40f9b02a1aab091298df8dd689dc7613bcbff94d35f2ca43377d81618562bcf6573411ec9bc97c5a6276b554054c0fa787073d067", inputHex: "b04729b4adbaac63c2aaf8d8", additionalDataHex: "")
+	report("aes-gcm-err-093", operation: Operation.open, keyHex: "7e5a39dcda7e066988f19adf4de4d501", nonceHex: "494356c3459d60e3a83433c9bcf2c0454a763e496e4ec99bfbe4bbb83a4fda76b542213899dcf5521cd9bbbe5d11545bda44a3f4a681ce2843acea730d83d3930ea30991ee1a68ebf6d1a5a40f9b02a1aab091298df8dd689dc7613bcbff94d35f2ca43377d81618562bcf6573411ec9bc97c5a6276b554054c0fa787073d067", inputHex: "5291dd4da91ccc2e77306d83a7f7b21a3b7ece509e922647fd905f06", additionalDataHex: "")
+	report("aes-gcm-err-094", operation: Operation.open, keyHex: "8f3f52e3c75c58f5cb261f518f4ad30a", nonceHex: "", inputHex: "cf71978ffcc778f3c85ac9c31b6fe191", additionalDataHex: "")
+	report("aes-gcm-err-108", operation: Operation.seal, keyHex: "", nonceHex: "cafebabefacedbaddecaf888", inputHex: "d9313225f88406e5a55909c5aff5269a", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("aes-gcm-err-109", operation: Operation.seal, keyHex: "000000000000000000000000000000", nonceHex: "cafebabefacedbaddecaf888", inputHex: "d9313225f88406e5a55909c5aff5269a", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("aes-gcm-err-110", operation: Operation.seal, keyHex: "0000000000000000000000000000000000", nonceHex: "cafebabefacedbaddecaf888", inputHex: "d9313225f88406e5a55909c5aff5269a", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("aes-gcm-err-111", operation: Operation.seal, keyHex: "0000000000000000000000000000000000000000", nonceHex: "cafebabefacedbaddecaf888", inputHex: "d9313225f88406e5a55909c5aff5269a", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("aes-gcm-err-112", operation: Operation.seal, keyHex: "00000000000000000000000000000000000000000000000000000000000000", nonceHex: "cafebabefacedbaddecaf888", inputHex: "d9313225f88406e5a55909c5aff5269a", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("aes-gcm-err-113", operation: Operation.seal, keyHex: "000000000000000000000000000000000000000000000000000000000000000000", nonceHex: "cafebabefacedbaddecaf888", inputHex: "d9313225f88406e5a55909c5aff5269a", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("aes-gcm-err-114", operation: Operation.open, keyHex: "", nonceHex: "cafebabefacedbaddecaf888", inputHex: "56828838c5f61e6393ba7a0abcc9f66276fc6ece0f4e1768cddf8853bb2d551b", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("aes-gcm-err-115", operation: Operation.seal, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308", nonceHex: "", inputHex: "d9313225f88406e5a55909c5aff5269a", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("aes-gcm-err-116", operation: Operation.seal, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308", nonceHex: "0000000000000000", inputHex: "d9313225f88406e5a55909c5aff5269a", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("aes-gcm-err-117", operation: Operation.seal, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308", nonceHex: "0000000000000000000000", inputHex: "d9313225f88406e5a55909c5aff5269a", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("aes-gcm-err-118", operation: Operation.seal, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308", nonceHex: "00000000000000000000000000", inputHex: "d9313225f88406e5a55909c5aff5269a", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("aes-gcm-err-119", operation: Operation.seal, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308", nonceHex: "00000000000000000000000000000000", inputHex: "d9313225f88406e5a55909c5aff5269a", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("aes-gcm-err-120", operation: Operation.seal, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308", nonceHex: "000000000000000000000000000000000000000000000000", inputHex: "d9313225f88406e5a55909c5aff5269a", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("aes-gcm-err-121", operation: Operation.open, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308", nonceHex: "0000000000000000000000", inputHex: "56828838c5f61e6393ba7a0abcc9f66276fc6ece0f4e1768cddf8853bb2d551b", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("aes-gcm-err-122", operation: Operation.open, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308", nonceHex: "00000000000000000000000000", inputHex: "56828838c5f61e6393ba7a0abcc9f66276fc6ece0f4e1768cddf8853bb2d551b", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("aes-gcm-err-123", operation: Operation.seal, keyHex: "", nonceHex: "0000000000000000", inputHex: "d9313225f88406e5a55909c5aff5269a", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	report("aes-gcm-err-124", operation: Operation.open, keyHex: "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308", nonceHex: "0000000000000000", inputHex: "", additionalDataHex: "feedfacedeadbeeffeedfacedeadbeefabaddad2")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+aes-gcm-err-088 invalidNonceLength
+aes-gcm-err-089 invalidNonceLength
+aes-gcm-err-090 invalidNonceLength
+aes-gcm-err-091 invalidNonceLength
+aes-gcm-err-092 invalidNonceLength
+aes-gcm-err-093 invalidNonceLength
+aes-gcm-err-094 invalidNonceLength
+aes-gcm-err-108 invalidKeyLength
+aes-gcm-err-109 invalidKeyLength
+aes-gcm-err-110 invalidKeyLength
+aes-gcm-err-111 invalidKeyLength
+aes-gcm-err-112 invalidKeyLength
+aes-gcm-err-113 invalidKeyLength
+aes-gcm-err-114 invalidKeyLength
+aes-gcm-err-115 invalidNonceLength
+aes-gcm-err-116 invalidNonceLength
+aes-gcm-err-117 invalidNonceLength
+aes-gcm-err-118 invalidNonceLength
+aes-gcm-err-119 invalidNonceLength
+aes-gcm-err-120 invalidNonceLength
+aes-gcm-err-121 invalidNonceLength
+aes-gcm-err-122 invalidNonceLength
+aes-gcm-err-123 invalidKeyLength
+aes-gcm-err-124 invalidNonceLength
+```

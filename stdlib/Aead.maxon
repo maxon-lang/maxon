@@ -1,0 +1,21 @@
+/// Authenticated encryption with associated data: the interface AES-GCM and ChaCha20-Poly1305 share.
+/// @category Crypto
+
+/// Why an `Aead` refused a key, a nonce or a message.
+public enum AeadError implements Error
+	invalidKeyLength
+	invalidNonceLength
+	plaintextTooLong
+	authenticationFailed
+end 'AeadError'
+
+/// An authenticated cipher: `seal` encrypts and tags, `open` checks the tag and decrypts. A nonce must
+/// never be used twice under one key.
+public interface Aead
+	/// The ciphertext of `plaintext` followed by the tag over it and `additionalData`.
+	function seal(nonce ByteArray, plaintext ByteArray, additionalData ByteArray) returns ByteArray throws AeadError
+
+	/// The plaintext of `sealed`, or `authenticationFailed` when its tag does not match; no plaintext is
+	/// released on failure.
+	function open(nonce ByteArray, sealed ByteArray, additionalData ByteArray) returns ByteArray throws AeadError
+end 'Aead'

@@ -1,0 +1,189 @@
+/// The Poly1305 one-time authenticator (RFC 8439): a 16-byte tag under a 32-byte key used for one message.
+/// @category Crypto
+
+typealias Poly1305Word = bits(64)
+typealias Poly1305Words = Array with Poly1305Word
+typealias Poly1305Limbs = (Poly1305Word, Poly1305Word, Poly1305Word, Poly1305Word, Poly1305Word)
+
+typealias Poly1305LimbIndex = int(0 to 4) implements ElementIndex
+
+/// Why `Poly1305.mac` refused a key.
+public enum Poly1305Error implements Error
+	invalidKeyLength
+end 'Poly1305Error'
+
+let poly1305KeyBytes = 32
+let poly1305BlockBytes = 16
+let poly1305WordBytes = 4
+let poly1305TagWords = 4
+let poly1305LimbCount = 5
+let poly1305LimbBits = 26
+let poly1305WordBits = 32
+let poly1305BitsPerByte = 8
+let poly1305LimbStrideBytes = 3
+let poly1305LimbShiftStep = 2
+let poly1305PadOffset = 16
+let poly1305PadByte = 1 as Byte
+let poly1305ZeroByte = 0 as Byte
+
+let poly1305LimbMask = 0x3FFFFFF as Poly1305Word
+let poly1305WordMask = 0xFFFFFFFF as Poly1305Word
+let poly1305ByteMask = 0xFF as Poly1305Word
+let poly1305AllOnes = u64.max as Poly1305Word
+let poly1305ZeroWord = 0 as Poly1305Word
+let poly1305FullBlockBit = 0x1000000 as Poly1305Word
+let poly1305ReductionFactor = 5 as Poly1305Word
+let poly1305PackStep = 6
+
+let poly1305ClampMasks = Poly1305Words from [0x3FFFFFF, 0x3FFFF03, 0x3FFC0FF, 0x3F03FFF, 0x00FFFFF]
+
+function poly1305ReadWord(source ByteArray, off ElementIndex, limit ElementIndex) returns Poly1305Word
+	var word = 0 as Poly1305Word
+
+	for i in 0 upto poly1305WordBytes 'eachByte'
+		let index = off + i
+		var b = poly1305ZeroByte
+
+		if index < limit 'inside'
+			b = try source.get(index) otherwise panic("poly1305: read inside the limit unreachable")
+		end 'inside' else if index == limit 'marker'
+			b = poly1305PadByte
+		end 'marker'
+
+		word = word or ((b as Poly1305Word) shl (i * poly1305BitsPerByte))
+	end 'eachByte'
+
+	return word
+end 'poly1305ReadWord'
+
+function poly1305Limb(source ByteArray, base ElementIndex, limit ElementIndex, index Poly1305LimbIndex) returns Poly1305Word
+	let word = poly1305ReadWord(source, off: base + index * poly1305LimbStrideBytes, limit: limit)
+
+	return (word shr (index * poly1305LimbShiftStep)) and poly1305LimbMask
+end 'poly1305Limb'
+
+function poly1305Multiplier(key ByteArray) returns Poly1305Words
+	var limbs = Poly1305Words.create()
+	limbs.reserve(poly1305LimbCount)
+
+	for (iter, clamp) in poly1305ClampMasks.withIterator() 'eachLimb'
+		limbs.push(poly1305Limb(key, base: 0, limit: poly1305KeyBytes, index: iter.index() as Poly1305LimbIndex) and clamp)
+	end 'eachLimb'
+
+	return limbs
+end 'poly1305Multiplier'
+
+function poly1305Carry(d0 Poly1305Word, d1 Poly1305Word, d2 Poly1305Word, d3 Poly1305Word, d4 Poly1305Word) returns Poly1305Limbs
+	let e1 = d1 + (d0 shr poly1305LimbBits)
+	let e2 = d2 + (e1 shr poly1305LimbBits)
+	let e3 = d3 + (e2 shr poly1305LimbBits)
+	let e4 = d4 + (e3 shr poly1305LimbBits)
+	let e0 = (d0 and poly1305LimbMask) + (e4 shr poly1305LimbBits) * poly1305ReductionFactor
+
+	return ((e0 and poly1305LimbMask), (e1 and poly1305LimbMask) + (e0 shr poly1305LimbBits), (e2 and poly1305LimbMask), (e3 and poly1305LimbMask), (e4 and poly1305LimbMask))
+end 'poly1305Carry'
+
+function poly1305Select(kept Poly1305Word, replacement Poly1305Word, mask Poly1305Word) returns Poly1305Word
+	return (kept and (mask xor poly1305AllOnes)) or (replacement and mask)
+end 'poly1305Select'
+
+// h + 5 carries past 2^130 exactly when h ≥ p = 2^130 − 5, and then its low 130 bits are h − p. The
+// result is selected by mask, never by branch, so the time does not depend on h.
+function poly1305Reduced(limbs Poly1305Words) returns Poly1305Words
+	var subtracted = Poly1305Words.create()
+	subtracted.reserve(poly1305LimbCount)
+	var carry = poly1305ReductionFactor
+
+	for limb in limbs 'eachLimb'
+		let sum = limb + carry
+		carry = sum shr poly1305LimbBits
+		subtracted.push(sum and poly1305LimbMask)
+	end 'eachLimb'
+
+	let mask = carry * poly1305AllOnes
+	var reduced = Poly1305Words.create()
+	reduced.reserve(poly1305LimbCount)
+
+	for (iter, limb) in limbs.withIterator() 'eachSelected'
+		let alternative = try subtracted.get(iter.index()) otherwise panic("poly1305: limb index unreachable")
+		reduced.push(poly1305Select(limb, replacement: alternative, mask: mask))
+	end 'eachSelected'
+
+	return reduced
+end 'poly1305Reduced'
+
+function poly1305Tag(limbs Poly1305Words, key ByteArray) returns ByteArray
+	let reduced = poly1305Reduced(limbs)
+	var tag = ByteArray.create()
+	tag.reserve(poly1305BlockBytes)
+	var carry = poly1305ZeroWord
+
+	for k in 0 upto poly1305TagWords 'eachWord'
+		let low = try reduced.get(k) otherwise panic("poly1305: limb index unreachable")
+		let high = try reduced.get(k + 1) otherwise panic("poly1305: limb index unreachable")
+		let packed = ((low shr (k * poly1305PackStep)) or (high shl (poly1305LimbBits - k * poly1305PackStep))) and poly1305WordMask
+		let padWord = poly1305ReadWord(key, off: poly1305PadOffset + k * poly1305WordBytes, limit: poly1305KeyBytes)
+		let total = packed + padWord + carry
+		carry = total shr poly1305WordBits
+
+		for i in 0 upto poly1305WordBytes 'eachByte'
+			tag.push(((total shr (i * poly1305BitsPerByte)) and poly1305ByteMask) as Byte)
+		end 'eachByte'
+	end 'eachWord'
+
+	return tag
+end 'poly1305Tag'
+
+/// The Poly1305 authenticator.
+public type Poly1305
+	/// The 16-byte tag of `message` under a 32-byte one-time `key`. A key must never tag two messages.
+	public static function mac(key ByteArray, message ByteArray) returns ByteArray throws Poly1305Error
+		if key.count() != poly1305KeyBytes 'keyLength'
+			throw Poly1305Error.invalidKeyLength
+		end 'keyLength'
+
+		let multiplier = poly1305Multiplier(key)
+		let r0 = try multiplier.get(0) otherwise panic("poly1305: multiplier index unreachable")
+		let r1 = try multiplier.get(1) otherwise panic("poly1305: multiplier index unreachable")
+		let r2 = try multiplier.get(2) otherwise panic("poly1305: multiplier index unreachable")
+		let r3 = try multiplier.get(3) otherwise panic("poly1305: multiplier index unreachable")
+		let r4 = try multiplier.get(4) otherwise panic("poly1305: multiplier index unreachable")
+		let s1 = r1 * poly1305ReductionFactor
+		let s2 = r2 * poly1305ReductionFactor
+		let s3 = r3 * poly1305ReductionFactor
+		let s4 = r4 * poly1305ReductionFactor
+
+		var h0 = poly1305ZeroWord
+		var h1 = poly1305ZeroWord
+		var h2 = poly1305ZeroWord
+		var h3 = poly1305ZeroWord
+		var h4 = poly1305ZeroWord
+		var blockStart = 0 as ElementIndex
+		let limit = message.count()
+
+		while blockStart < limit 'eachBlock'
+			// Each block is read with a 1 appended: bit 128 for a full block, the `poly1305PadByte`
+			// `poly1305ReadWord` puts at `limit` for a short last one.
+			let highBit = poly1305FullBlockBit if limit - blockStart >= poly1305BlockBytes else poly1305ZeroWord
+
+			let m0 = h0 + poly1305Limb(message, base: blockStart, limit: limit, index: 0)
+			let m1 = h1 + poly1305Limb(message, base: blockStart, limit: limit, index: 1)
+			let m2 = h2 + poly1305Limb(message, base: blockStart, limit: limit, index: 2)
+			let m3 = h3 + poly1305Limb(message, base: blockStart, limit: limit, index: 3)
+			let m4 = h4 + (poly1305Limb(message, base: blockStart, limit: limit, index: 4) or highBit)
+
+			let d0 = m0 * r0 + m1 * s4 + m2 * s3 + m3 * s2 + m4 * s1
+			let d1 = m0 * r1 + m1 * r0 + m2 * s4 + m3 * s3 + m4 * s2
+			let d2 = m0 * r2 + m1 * r1 + m2 * r0 + m3 * s4 + m4 * s3
+			let d3 = m0 * r3 + m1 * r2 + m2 * r1 + m3 * r0 + m4 * s4
+			let d4 = m0 * r4 + m1 * r3 + m2 * r2 + m3 * r1 + m4 * r0
+
+			(h0, h1, h2, h3, h4) = poly1305Carry(d0, d1: d1, d2: d2, d3: d3, d4: d4)
+			blockStart = blockStart + poly1305BlockBytes
+		end 'eachBlock'
+
+		(h0, h1, h2, h3, h4) = poly1305Carry(h0, d1: h1, d2: h2, d3: h3, d4: h4)
+
+		return poly1305Tag(Poly1305Words from [h0, h1, h2, h3, h4], key: key)
+	end 'mac'
+end 'Poly1305'
