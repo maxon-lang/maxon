@@ -6,8 +6,10 @@ let DiedMarker = "DIED"
 let PassToken = "PASS"
 let NotRunToken = "NOTRUN"
 let NoVerdict = "no verdict"
+let NothingProvedMessage = "proved nothing"
+let NothingProvedExitCode = 1
+let NoRunnerOnALinuxHostReason = "cannot be run from a Linux host"
 let RunnerMissingMarkers = ["needs OrbStack", "needs WSL2", "needs a working WSL2"]
-let UnspawnableLane = "arm64-linux"
 let WindowsLane = "x64-windows"
 
 function verdictOfCase(said String, testName String) returns String
@@ -23,14 +25,6 @@ function verdictOfCase(said String, testName String) returns String
 
 	return NoVerdict
 end 'verdictOfCase'
-
-function expectedVerdict() returns String
-	if hostLaneName() == UnspawnableLane 'noRunnerExists'
-		return NotRunToken
-	end 'noRunnerExists'
-
-	return PassToken
-end 'expectedVerdict'
 
 function runnerIsMissing(said String) returns bool
 	for marker in RunnerMissingMarkers 'eachMarker'
@@ -73,17 +67,37 @@ function requireForeignLaneAnswers(run CollectedOutput) throws TestFailure
 		broken.push("a worker DIED while the {ForeignLaneTargetFlag} run was under way. It said:\n{said}\n")
 	end 'aWorkerDied'
 
+	// The verdict is read from the harness's output, not predicted from the host: the harness's
+	// routing is the one source of which host has a runner, and a table here would drift from it.
+	let laneVerdict = verdictOfCase(said, testName: ForeignLanePlainCase)
+
 	for testName in [ForeignLanePlainCase, ForeignLaneParkingCase] 'eachCase'
 		let verdict = verdictOfCase(said, testName: testName)
 
-		if verdict != expectedVerdict() 'wrongVerdict'
-			broken.push("'{testLabel(ForeignLaneSpecName, testName: testName)}' came back as {verdict} on {hostLaneName()}, where {expectedVerdict()} is the answer. It said:\n{said}\n")
+		if verdict != laneVerdict 'wrongVerdict'
+			broken.push("'{testLabel(ForeignLaneSpecName, testName: testName)}' came back as {verdict}, where the lane's own verdict for '{testLabel(ForeignLaneSpecName, testName: ForeignLanePlainCase)}' is {laneVerdict}; every case of a lane is a {PassToken} or every case is a {NotRunToken}. It said:\n{said}\n")
 		end 'wrongVerdict'
 	end 'eachCase'
 
-	if run.exitCode() != SuccessExitCode 'runFailed'
-		broken.push("the {ForeignLaneTargetFlag} run exited {run.exitCode()}, where every case is a {expectedVerdict()}. It said:\n{said}\n")
-	end 'runFailed'
+	if laneVerdict == PassToken 'laneRan'
+		if run.exitCode() != SuccessExitCode 'runFailed'
+			broken.push("the {ForeignLaneTargetFlag} run exited {run.exitCode()}, where every case is a {PassToken}. It said:\n{said}\n")
+		end 'runFailed'
+	end 'laneRan' else if laneVerdict == NotRunToken 'laneHasNoRunner'
+		if run.exitCode() != NothingProvedExitCode 'notFailed'
+			broken.push("the {ForeignLaneTargetFlag} run exited {run.exitCode()}, where a lane whose every case is a {NotRunToken} exits {NothingProvedExitCode}: a run that executed nothing is not a run that passed. It said:\n{said}\n")
+		end 'notFailed'
+
+		if not said.contains(NothingProvedMessage) 'silentAboutIt'
+			broken.push("the {ForeignLaneTargetFlag} run did not say it {NothingProvedMessage}, though every case is a {NotRunToken}. It said:\n{said}\n")
+		end 'silentAboutIt'
+
+		if not said.contains(NoRunnerOnALinuxHostReason) 'noReason'
+			broken.push("the {ForeignLaneTargetFlag} run did not give the reason a Linux host has no runner for a foreign CPU ('{NoRunnerOnALinuxHostReason}'), so a host that has a runner may have been routed to none. It said:\n{said}\n")
+		end 'noReason'
+	end 'laneHasNoRunner' else 'laneUndecided'
+		broken.push("the {ForeignLaneTargetFlag} run gave '{testLabel(ForeignLaneSpecName, testName: ForeignLanePlainCase)}' no {PassToken} and no {NotRunToken}. It said:\n{said}\n")
+	end 'laneUndecided'
 
 	try requireNothingBroken(broken, headline: "a foreign Linux lane answers every case")
 end 'requireForeignLaneAnswers'

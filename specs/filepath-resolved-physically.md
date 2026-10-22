@@ -79,7 +79,7 @@ true
 <!-- test: filepath-resolved-physically-follows-a-junction -->
 <!-- unsupported-targets: arm64-macos, arm64-linux, x64-linux, wasm32-wasi -->
 A Windows directory junction, and a file reached through one, resolve to the one physical file, spelled with
-a drive letter and no `\\?\` prefix. The junction is made with PowerShell, which needs no elevation for one.
+a drive letter and no `\\?\` prefix. The junction is made with `mklink /J`, which needs no elevation.
 ```maxon
 function main() returns ExitCode
 	let base = (FilePath from "temp\\resolved-physically-junction").resolve(Directory.currentPath())
@@ -91,30 +91,38 @@ function main() returns ExitCode
 
 	try File.writeText(inner.join("f.txt"), content: "x") otherwise return 2
 
-	let link = base.join("link").toString()
-	let script = "Remove-Item -LiteralPath '{link}' -Force -ErrorAction SilentlyContinue; New-Item -ItemType Junction -Path '{link}' -Target '{base.join("real").toString()}' | Out-Null"
-	let made = try Subprocess.run(Executable.name("powershell"), arguments: ["-NoProfile", "-Command", script]) otherwise return 3
+	let link = base.join("link")
+
+	if Directory.exists(link) 'stale'
+		try Directory.delete(link) otherwise return 3
+	end 'stale'
+
+	let made = try Subprocess.run(Executable.name("cmd"), arguments: ["/c", "mklink", "/J", link.toString(), base.join("real").toString()]) otherwise (e) 'notRun'
+		print("mklink was not run: {e.displayReason()}\n")
+		return 4
+	end 'notRun'
 
 	if not made.succeeded() 'noJunction'
-		return 4
+		print("mklink exit {made.exitCode()}: {made.stdout}{made.stderr}\n")
+		return 5
 	end 'noJunction'
 
-	let root = try base.resolvedPhysically() otherwise return 5
+	let root = try base.resolvedPhysically() otherwise return 6
 	let file = root.join("real").join("inner").join("f.txt")
 
-	let viaJunction = try base.join("link").join("inner").join("f.txt").resolvedPhysically() otherwise return 6
-	let theJunction = try base.join("link").resolvedPhysically() otherwise return 7
+	let viaJunction = try base.join("link").join("inner").join("f.txt").resolvedPhysically() otherwise return 7
+	let theJunction = try base.join("link").resolvedPhysically() otherwise return 8
 
 	print("{viaJunction.equals(file)}\n")
 	print("{theJunction.equals(root.join("real"))}\n")
 	print("{file.isAbsolute()}\n")
 	print("{file.toString().contains("?")}\n")
 
-	let cleaned = try Subprocess.run(Executable.name("powershell"), arguments: ["-NoProfile", "-Command", "Remove-Item -LiteralPath '{base.join("link").toString()}' -Force; Remove-Item -LiteralPath '{base.toString()}' -Recurse -Force"]) otherwise return 8
-
-	if not cleaned.succeeded() 'notCleaned'
-		return 9
-	end 'notCleaned'
+	try Directory.delete(link) otherwise return 9
+	try File.delete(inner.join("f.txt")) otherwise return 10
+	try Directory.delete(inner) otherwise return 11
+	try Directory.delete(base.join("real")) otherwise return 12
+	try Directory.delete(base) otherwise return 13
 
 	return 0
 end 'main'

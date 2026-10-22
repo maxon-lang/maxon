@@ -4,8 +4,9 @@ feature: harness-gate-a-foreign-linux-lane-gives-every-case-a-verdict
 # The foreign-linux-lane gate
 
 The gate runs this spec with `--target=x64-linux`. Wherever a runner executes that binary, each case must PASS and no
-worker may die; a host with no runner for it reports each case NOTRUN. The second case parks a green thread on a
-running child, which a guest without `pidfd_open` awaits through SIGCHLD delivered on a signalfd.
+worker may die; a host with no runner for it reports each case NOTRUN, exits 1 and says the run proved nothing. The
+second case parks a green thread on a running child, which a guest without `pidfd_open` awaits through SIGCHLD
+delivered on a signalfd.
 
 ## Tests
 
