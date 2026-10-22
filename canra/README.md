@@ -27,3 +27,5 @@ of the spec here.
 | `ecdh-p256` | `stdlib/NistCurves.maxon` | `specs/ecdh.md` |
 | `ecdsa-verify` | `stdlib/NistCurves.maxon` | `specs/ecdsa.md` |
 | `ecdsa-sign-p256` | `stdlib/NistCurves.maxon` | `specs/ecdsa.md` |
+| `rsa-verify` | `stdlib/Rsa.maxon` | `specs/rsa.md` |
+| `rsa-pss-sign` | `stdlib/Rsa.maxon` | `specs/rsa.md` |

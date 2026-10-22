@@ -177,6 +177,85 @@ a2V5IGJ5dGVz
 PUBLIC KEY: key bytes
 ```
 
+## Der
+
+`DerReader` reads DER, the strict binary encoding of ASN.1 (ITU-T X.690 section 10) that certificates and
+keys use, one element at a time. Each read consumes the next element, checks its tag, and checks it against
+the DER rules; a constructed element is entered as a new reader over its content.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `DerReader.create(bytes ByteArray)` | `DerReader` | — | A reader positioned at the first element of `bytes`. |
+| `isAtEnd()` | `bool` | — | Whether every element has been read. |
+| `finish()` | — | `DerError` | `trailingData` unless every element has been read. |
+| `peekHeader()` | `DerHeader` | `DerError` | The next element's header, leaving the element unread. |
+| `enterSequence()` | `DerReader` | `DerError` | A reader over the content of the next element, a SEQUENCE. |
+| `enterSet()` | `DerReader` | `DerError` | A reader over the content of the next element, a SET. The order of a SET OF is not checked. |
+| `enterExplicit(tagNumber DerTagNumber)` | `DerReader` | `DerError` | A reader over the content of the next element, a constructed context-specific `[tagNumber]`, the explicit tag X.509 writes. |
+| `readInteger()` | `ByteArray` | `DerError` | A non-negative INTEGER's big-endian magnitude, without its sign octet. Zero is one zero octet. |
+| `readObjectIdentifier()` | `ByteArray` | `DerError` | An OBJECT IDENTIFIER's content octets, such as `2a864886f70d010101` for `rsaEncryption`. |
+| `readNull()` | — | `DerError` | Consumes a NULL. |
+| `readBitString()` | `DerBitString` | `DerError` | A primitive BIT STRING. |
+| `readOctetString()` | `ByteArray` | `DerError` | A primitive OCTET STRING's content. |
+| `readUtcTime()` | `UnixSeconds` | `DerError` | A UTCTime `YYMMDDHHMMSSZ`. Years `50` to `99` are 1950 to 1999 and `00` to `49` are 2000 to 2049 (RFC 5280 section 4.1.2.5.1). |
+| `readGeneralizedTime()` | `UnixSeconds` | `DerError` | A GeneralizedTime `YYYYMMDDHHMMSSZ`. Fractional seconds, which RFC 5280 forbids, are refused. |
+
+A `DerHeader` has `tagClass()`, a `DerTagClass` (`universal`, `application`, `contextSpecific` or
+`private`), `isConstructed()`, `tagNumber()` and `length()`, the number of content octets. A `DerBitString`
+has `bytes()`, the octets after the unused-bits octet, and `unusedBits()`, how many low bits of the last
+octet are not part of the string.
+
+| Name | Definition |
+|------|------------|
+| `DerTagNumber` | `int(0 to u32.max)` |
+| `DerLength` | `int(0 to u64.max)`, implementing `Count` |
+| `DerUnusedBits` | `int(0 to 7)` |
+
+| `DerError` case | When |
+|-----------------|------|
+| `truncated` | The input ends inside a header, or an element's content runs past the input or past the element holding it. |
+| `indefiniteLength` | The length octet `0x80`, BER's indefinite form. |
+| `nonMinimalLength` | A long-form length the short form or fewer octets could carry. |
+| `nonMinimalTagNumber` | A high-tag-number form holding a number below 31, or one with a leading `0x80` octet. |
+| `tagNumberTooLarge` | A tag number above `DerTagNumber`. |
+| `unexpectedTag` | The element is not the type the read asked for, the constructed form of a primitive type included. |
+| `trailingData` | `finish` found an element left. |
+| `emptyInteger` | An INTEGER with no content octets. |
+| `nonMinimalInteger` | An INTEGER with a redundant leading `00` or `ff` octet. |
+| `negativeInteger` | An INTEGER whose sign bit is set. |
+| `invalidNull` | A NULL with content. |
+| `invalidBitString` | A BIT STRING with no unused-bits octet, more than 7 unused bits, unused bits and no data, or a set unused bit. |
+| `invalidObjectIdentifier` | An empty OBJECT IDENTIFIER, a subidentifier with a leading `0x80` octet, or a last octet with its continuation bit set. |
+| `invalidTime` | A time not in the form above, or a date or clock time that does not exist. |
+
+```maxon
+function hex(bytes ByteArray) returns String
+	var text = ""
+
+	for b in bytes 'each'
+		text.append("{b:02x}")
+	end 'each'
+
+	return text
+end 'hex'
+
+function main() returns ExitCode
+	var outer = DerReader.create(ByteArray from [0x30, 0x06, 0x02, 0x01, 0x05, 0x02, 0x01, 0x80])
+	var numbers = try outer.enterSequence() otherwise return 1
+	let first = try numbers.readInteger() otherwise return 1
+	print("{hex(first)} {numbers.isAtEnd()}\n")
+
+	_ = try numbers.readInteger() otherwise (e) 'refused'
+		print("{e}\n")
+		return 0
+	end 'refused'
+
+	return 1
+end 'main'
+```
+
+Output: `05 false` and `negativeInteger`.
+
 ## Sha2
 
 The SHA-2 hash functions of FIPS 180-4. `sha256`, `sha384` and `sha512` hash a whole `ByteArray`; a
@@ -300,6 +379,57 @@ end 'main'
 ```
 
 Output: `16` and `outputTooLong`.
+
+## Rsa
+
+`Rsa` verifies RSA signatures under RSASSA-PKCS1-v1_5 and RSASSA-PSS, and makes RSASSA-PSS signatures
+(RFC 8017), over SHA-256, SHA-384 or SHA-512. PSS uses MGF1 over the same hash and a salt as long as the
+digest, the parameters of TLS 1.3's `rsa_pss_rsae_*` schemes.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `Rsa.verifyPkcs1v15(publicKey ByteArray, hash HashAlgorithm, message ByteArray, signature ByteArray)` | `bool` | `RsaError` | Whether `signature` is the PKCS #1 v1.5 signature of `message`. The expected encoded block is built and compared whole, so no lenient parse of the signature's block can accept a forgery. |
+| `Rsa.verifyPss(publicKey ByteArray, hash HashAlgorithm, message ByteArray, signature ByteArray)` | `bool` | `RsaError` | Whether `signature` is the PSS signature of `message`. A signature made with another salt length is `false`. |
+| `Rsa.signPss(privateKey ByteArray, hash HashAlgorithm, message ByteArray, salt ByteArray)` | `ByteArray` | `RsaError` | The PSS signature of `message`, exactly as long as the modulus. Pass `hash.digestBytes()` fresh bytes from `Random.bytes` as `salt` for every signature. |
+
+A public key is a DER SubjectPublicKeyInfo (RFC 5280), the form a certificate carries: `rsaEncryption` with
+NULL parameters, a modulus of 2048 to 4096 bits that is odd, and an odd exponent `e` with `3 <= e < n`. A
+private key is a DER PKCS #8 `PrivateKeyInfo` without attributes, holding a two-prime `RSAPrivateKey` with
+the same modulus and exponent rules whose values agree: `p * q == n`, `e * d == 1` modulo `p - 1` and
+`q - 1`, `dP` and `dQ` are `d` reduced modulo `p - 1` and `q - 1`, and `qInv * q == 1` modulo `p`. PEM keys
+are decoded with [`Pem`](#pem) first.
+
+The checks run in order and the first that fails is thrown:
+
+| `RsaError` case | When |
+|-----------------|------|
+| `invalidPublicKey` | The public key breaks any rule above, or is not strict DER. |
+| `invalidPrivateKey` | The private key breaks any rule above, or is not strict DER. |
+| `invalidSignatureLength` | Verification only: the signature is not exactly as long as the modulus. |
+| `invalidSaltLength` | `signPss` only: the salt is not exactly `hash.digestBytes()` long. |
+
+Every other wrong signature, including one whose value is not below the modulus, verifies as `false`.
+
+`signPss` takes time independent of the private key: the exponentiation walks the exponent in fixed
+4-bit windows, picks each table entry by masking every entry, and never branches or indexes memory on a
+secret value. The input is blinded by a random factor drawn from `Random.bytes`, and the signature is
+checked with the public exponent before it is returned. When the operating system cannot supply random
+bytes, `signPss` panics.
+
+```maxon
+function main() returns ExitCode
+	let message = "hello".toByteArray()
+
+	_ = try Rsa.verifyPss(ByteArray.create(), hash: HashAlgorithm.sha256, message: message, signature: ByteArray.create()) otherwise (e) 'refused'
+		print("{e}\n")
+		return 0
+	end 'refused'
+
+	return 1
+end 'main'
+```
+
+Output: `invalidPublicKey`.
 
 ## Aead
 

@@ -39,7 +39,7 @@ end 'main'
 | [Collections](/docs/stdlib/collections/#array) | Array, List, Map, Set, Vector, Range, Iterators, Interfaces |
 | [I/O and processes](/docs/stdlib/io/#file) | File, FilePath, Directory, Console, CommandLine, Log, TraceCapture, Process, Subprocess, SharedMemory, Debuggee, Sampler |
 | [Network](/docs/stdlib/network/#tcpclient) | TcpClient, TcpListener, HttpClient, HttpServer, URL |
-| [Data](/docs/stdlib/data/#json) | Json, Base64, Pem, Sha2, Hmac, Hkdf, Aead, AesGcm, ChaCha20Poly1305, Aes, ChaCha20, Poly1305, X25519, Ed25519, Hasher |
+| [Data](/docs/stdlib/data/#json) | Json, Base64, Pem, Der, Sha2, Hmac, Hkdf, Rsa, Aead, AesGcm, ChaCha20Poly1305, Aes, ChaCha20, Poly1305, X25519, Ed25519, EcdhP256, Ecdsa, EcdsaP256, Hasher |
 | [System](/docs/stdlib/runtime/#clock) | Clock, Scheduler, HeapStats, SharedValue, Random, Math, Primitive Extensions |
 | [Testing](/docs/stdlib/testing/) | Testing |
 | [Build](/docs/stdlib/build/) | Build |
@@ -146,7 +146,7 @@ qualified: `Array.ElementIterator`, `Array.ElementMemory`, `Map.Entry`, `List.Li
 
 ### Target support
 
-Everything that is pure computation (strings, collections, `Json`, `Base64`, `Pem`, the SHA-2, HMAC
+Everything that is pure computation (strings, collections, `Json`, `Base64`, `Pem`, `DerReader`, the SHA-2, HMAC
 and HKDF functions, `Hasher`, `Math`, `URL` parsing) works on every target, and so does `Random`. Operating-system facilities are available on `x64-windows`,
 `arm64-macos`, `arm64-linux` and `x64-linux`.
 

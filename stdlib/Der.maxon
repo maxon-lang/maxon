@@ -1,0 +1,528 @@
+/// Strict DER (ITU-T X.690 section 10): the encoding of certificates and keys, read element by element.
+/// @category Text
+
+/// Why a `DerReader` refused the element it was asked to read.
+public enum DerError implements Error
+	truncated
+	indefiniteLength
+	nonMinimalLength
+	nonMinimalTagNumber
+	tagNumberTooLarge
+	unexpectedTag
+	trailingData
+	emptyInteger
+	nonMinimalInteger
+	negativeInteger
+	invalidNull
+	invalidBitString
+	invalidObjectIdentifier
+	invalidTime
+end 'DerError'
+
+/// The class bits of an identifier octet (X.690 section 8.1.2.2).
+public enum DerTagClass
+	universal
+	application
+	contextSpecific
+	private
+end 'DerTagClass'
+
+/// A tag number. A larger one is refused as `tagNumberTooLarge`.
+public typealias DerTagNumber = int(0 to u32.max)
+/// The number of content octets of an element.
+public typealias DerLength = int(0 to u64.max) implements Count
+/// The unused low bits of a BIT STRING's last octet.
+public typealias DerUnusedBits = int(0 to 7)
+
+typealias DerTimeField = int(0 to 9999)
+
+enum DerUniversalTag
+	integer = 2
+	bitString = 3
+	octetString = 4
+	null = 5
+	objectIdentifier = 6
+	sequence = 16
+	set = 17
+	utcTime = 23
+	generalizedTime = 24
+end 'DerUniversalTag'
+
+enum DerTimeLayout
+	utc
+	generalized
+end 'DerTimeLayout'
+
+let derClassShift = 6
+let derConstructedBit = 0x20
+let derLowTagNumberMask = 0x1F
+let derHighTagNumberForm = 31
+let derContinuationBit = 0x80
+let derSevenBitMask = 0x7F
+let derBitsPerTagOctet = 7
+let derShortLengthLimit = 0x80
+let derMostLengthOctets = 8
+let derBitsPerByte = 8
+let derSignBit = 0x80
+let derAllOnesOctet = 0xFF
+let derMaxUnusedBits = 7
+let derAsciiZero = 0x30
+let derAsciiNine = 0x39
+let derZuluDesignator = 0x5A
+let derUtcTimeLength = 13
+let derGeneralizedTimeLength = 15
+let derUtcCenturyPivot = 50
+let derUtcLateCentury = 1900
+let derUtcEarlyCentury = 2000
+let derMonthsPerYear = 12
+let derHoursPerDay = 24
+let derMinutesPerHour = 60
+let derSecondsPerMinute = 60
+let derSecondsPerDay = 86400
+let derDaysPerEra = 146097
+let derYearsPerEra = 400
+let derDaysToUnixEpoch = 719468
+let derFebruary = 2
+let derMarchShift = 3
+let derMonthsAfterFebruary = 9
+let derDaysPerMarchMonths = 153
+let derMarchMonthsPerCycle = 5
+let derDecimalBase = 10
+let derFieldDigits = 2
+let derMarchMonthOffset = 2
+let derDaysPerYear = 365
+let derLeapCycle = 4
+let derCenturyCycle = 100
+let derLongMonthDays = 31
+let derShortMonthDays = 30
+let derLeapFebruaryDays = 29
+let derFebruaryDays = 28
+
+/// The identifier and length octets of one element.
+public type DerHeader
+	var tagClass as DerTagClass
+	var constructed as bool
+	var tagNumber as DerTagNumber
+	var length as DerLength
+	var contentStart as ElementIndex
+
+	/// The class of the tag.
+	public function tagClass() returns DerTagClass
+		return tagClass
+	end 'tagClass'
+
+	/// Whether the element holds further elements rather than content octets.
+	public function isConstructed() returns bool
+		return constructed
+	end 'isConstructed'
+
+	/// The tag number within its class.
+	public function tagNumber() returns DerTagNumber
+		return tagNumber
+	end 'tagNumber'
+
+	/// The number of content octets.
+	public function length() returns DerLength
+		return length
+	end 'length'
+
+	function contentStart() returns ElementIndex
+		return contentStart
+	end 'contentStart'
+
+	function contentEnd() returns ElementIndex
+		return contentStart + length
+	end 'contentEnd'
+
+	function isUniversal(tag DerUniversalTag, isConstructed bool) returns bool
+		if tagClass != DerTagClass.universal or constructed != isConstructed 'otherKind'
+			return false
+		end 'otherKind'
+
+		let universal = try DerUniversalTag.fromRawValue(tagNumber) otherwise return false
+
+		return universal == tag
+	end 'isUniversal'
+
+	static function create(tagClass DerTagClass, constructed bool, tagNumber DerTagNumber, length DerLength, contentStart ElementIndex) returns DerHeader
+		return DerHeader{tagClass: tagClass, constructed: constructed, tagNumber: tagNumber, length: length, contentStart: contentStart}
+	end 'create'
+end 'DerHeader'
+
+/// A BIT STRING's content: whole octets, the last of which may carry unused low bits, always zero.
+public type DerBitString
+	var bytes as ByteArray
+	var unusedBits as DerUnusedBits
+
+	/// The content octets after the unused-bits octet.
+	public function bytes() returns ByteArray
+		return bytes
+	end 'bytes'
+
+	/// How many low bits of the last octet are not part of the string.
+	public function unusedBits() returns DerUnusedBits
+		return unusedBits
+	end 'unusedBits'
+
+	static function create(bytes ByteArray, unusedBits DerUnusedBits) returns DerBitString
+		return DerBitString{bytes: bytes, unusedBits: unusedBits}
+	end 'create'
+end 'DerBitString'
+
+/// A cursor over a run of DER elements. Every read consumes one element and checks it against the DER
+/// rules; a constructed element is entered as a reader over its content.
+public type DerReader
+	var bytes as ByteArray
+	var position as ElementIndex
+	var limit as ElementIndex
+
+	/// A reader over every element of `bytes`.
+	public static function create(bytes ByteArray) returns DerReader
+		return DerReader{bytes: bytes, position: 0, limit: bytes.count()}
+	end 'create'
+
+	static function over(bytes ByteArray, start ElementIndex, limit ElementIndex) returns DerReader
+		return DerReader{bytes: bytes, position: start, limit: limit}
+	end 'over'
+
+	/// Whether every element has been read.
+	public function isAtEnd() returns bool
+		return position == limit
+	end 'isAtEnd'
+
+	/// `trailingData` unless every element has been read.
+	public function finish() throws DerError
+		if not isAtEnd() 'remaining'
+			throw DerError.trailingData
+		end 'remaining'
+	end 'finish'
+
+	/// The next element's header, leaving the element unread.
+	public function peekHeader() returns DerHeader throws DerError
+		var cursor = position
+		let identifier = try octetAt(cursor)
+		cursor = cursor + 1
+
+		var tagNumber = (identifier and derLowTagNumberMask) as DerTagNumber
+
+		if tagNumber == derHighTagNumberForm 'highForm'
+			(tagNumber, cursor) = try highTagNumber(cursor)
+		end 'highForm'
+
+		var length = 0 as DerLength
+		(length, cursor) = try lengthAt(cursor)
+
+		if length > limit - cursor 'pastEnd'
+			throw DerError.truncated
+		end 'pastEnd'
+
+		let tagClass = try DerTagClass.fromRawValue(identifier shr derClassShift) otherwise panic("two class bits name one of four classes")
+
+		return DerHeader.create(tagClass, constructed: (identifier and derConstructedBit) != 0, tagNumber: tagNumber, length: length, contentStart: cursor)
+	end 'peekHeader'
+
+	/// A reader over the content of the next element, a SEQUENCE.
+	public function enterSequence() returns DerReader throws DerError
+		return try enterUniversal(DerUniversalTag.sequence)
+	end 'enterSequence'
+
+	/// A reader over the content of the next element, a SET.
+	public function enterSet() returns DerReader throws DerError
+		return try enterUniversal(DerUniversalTag.set)
+	end 'enterSet'
+
+	/// A reader over the content of the next element, an explicit context-specific tag `[tagNumber]`.
+	public function enterExplicit(tagNumber DerTagNumber) returns DerReader throws DerError
+		let header = try peekHeader()
+
+		if header.tagClass() != DerTagClass.contextSpecific or not header.isConstructed() or header.tagNumber() != tagNumber 'otherTag'
+			throw DerError.unexpectedTag
+		end 'otherTag'
+
+		return enter(header)
+	end 'enterExplicit'
+
+	/// The next element, a non-negative INTEGER, as its big-endian magnitude without the sign octet.
+	/// Zero is one zero octet.
+	public function readInteger() returns ByteArray throws DerError
+		let content = try readPrimitive(DerUniversalTag.integer)
+
+		if content.isEmpty() 'empty'
+			throw DerError.emptyInteger
+		end 'empty'
+
+		let first = try content.get(0) otherwise panic("a non-empty INTEGER has a first octet")
+
+		if content.count() == 1 'single'
+			if first >= derSignBit 'negative'
+				throw DerError.negativeInteger
+			end 'negative'
+
+			return content
+		end 'single'
+
+		let second = try content.get(1) otherwise panic("an INTEGER of two or more octets has a second octet")
+
+		if (first == 0 and second < derSignBit) or (first == derAllOnesOctet and second >= derSignBit) 'redundant'
+			throw DerError.nonMinimalInteger
+		end 'redundant'
+
+		if first >= derSignBit 'negative'
+			throw DerError.negativeInteger
+		end 'negative'
+
+		if first == 0 'signOctet'
+			return try content.slice(1, endIndex: content.count()) otherwise panic("the sign octet precedes at least one octet")
+		end 'signOctet'
+
+		return content
+	end 'readInteger'
+
+	/// The next element, an OBJECT IDENTIFIER, as its content octets.
+	public function readObjectIdentifier() returns ByteArray throws DerError
+		let content = try readPrimitive(DerUniversalTag.objectIdentifier)
+		var startsSubidentifier = true
+
+		for octet in content 'eachOctet'
+			if startsSubidentifier and octet == derContinuationBit 'paddedSubidentifier'
+				throw DerError.invalidObjectIdentifier
+			end 'paddedSubidentifier'
+
+			startsSubidentifier = (octet and derContinuationBit) == 0
+		end 'eachOctet'
+
+		if not startsSubidentifier or content.isEmpty() 'unfinished'
+			throw DerError.invalidObjectIdentifier
+		end 'unfinished'
+
+		return content
+	end 'readObjectIdentifier'
+
+	/// The next element, a NULL.
+	public function readNull() throws DerError
+		let content = try readPrimitive(DerUniversalTag.null)
+
+		if not content.isEmpty() 'hasContent'
+			throw DerError.invalidNull
+		end 'hasContent'
+	end 'readNull'
+
+	/// The next element, a primitive BIT STRING.
+	public function readBitString() returns DerBitString throws DerError
+		let content = try readPrimitive(DerUniversalTag.bitString)
+
+		if content.isEmpty() 'noUnusedBitsOctet'
+			throw DerError.invalidBitString
+		end 'noUnusedBitsOctet'
+
+		let unused = try content.get(0) otherwise panic("a non-empty BIT STRING has its unused-bits octet")
+		let last = try content.get(content.count() - 1) otherwise panic("a non-empty BIT STRING has a last octet")
+
+		if unused > derMaxUnusedBits or (unused > 0 and content.count() == 1) or (last and ((1 shl unused) - 1)) != 0 'badPadding'
+			throw DerError.invalidBitString
+		end 'badPadding'
+
+		let bits = try content.slice(1, endIndex: content.count()) otherwise panic("the unused-bits octet is inside the content")
+
+		return DerBitString.create(bits, unusedBits: unused as DerUnusedBits)
+	end 'readBitString'
+
+	/// The next element, a primitive OCTET STRING, as its content.
+	public function readOctetString() returns ByteArray throws DerError
+		return try readPrimitive(DerUniversalTag.octetString)
+	end 'readOctetString'
+
+	/// The next element, a UTCTime `YYMMDDHHMMSSZ`, as Unix seconds. Years 50 to 99 are 1950 to 1999 and
+	/// 00 to 49 are 2000 to 2049 (RFC 5280 section 4.1.2.5.1).
+	public function readUtcTime() returns UnixSeconds throws DerError
+		return try derUnixSeconds(try readPrimitive(DerUniversalTag.utcTime), layout: DerTimeLayout.utc)
+	end 'readUtcTime'
+
+	/// The next element, a GeneralizedTime `YYYYMMDDHHMMSSZ`, as Unix seconds. Fractional seconds, which
+	/// RFC 5280 section 4.1.2.5.2 forbids, are `invalidTime`.
+	public function readGeneralizedTime() returns UnixSeconds throws DerError
+		return try derUnixSeconds(try readPrimitive(DerUniversalTag.generalizedTime), layout: DerTimeLayout.generalized)
+	end 'readGeneralizedTime'
+
+	function octetAt(index ElementIndex) returns Byte throws DerError
+		if index >= limit 'pastEnd'
+			throw DerError.truncated
+		end 'pastEnd'
+
+		return try bytes.get(index) otherwise panic("a reader's end is inside its bytes")
+	end 'octetAt'
+
+	function highTagNumber(start ElementIndex) returns (DerTagNumber, ElementIndex) throws DerError
+		var cursor = start
+		var number = 0 as DerLength
+
+		if (try octetAt(cursor)) == derContinuationBit 'padded'
+			throw DerError.nonMinimalTagNumber
+		end 'padded'
+
+		while true 'eachOctet'
+			let octet = try octetAt(cursor)
+			cursor = cursor + 1
+			number = (number shl derBitsPerTagOctet) + ((octet and derSevenBitMask) as DerLength)
+
+			if number > u32.max 'tooLarge'
+				throw DerError.tagNumberTooLarge
+			end 'tooLarge'
+
+			if (octet and derContinuationBit) == 0 'last'
+				break
+			end 'last'
+		end 'eachOctet'
+
+		if number < derHighTagNumberForm 'lowNumber'
+			throw DerError.nonMinimalTagNumber
+		end 'lowNumber'
+
+		return (number as DerTagNumber, cursor)
+	end 'highTagNumber'
+
+	function lengthAt(start ElementIndex) returns (DerLength, ElementIndex) throws DerError
+		let first = try octetAt(start)
+
+		if first < derShortLengthLimit 'shortForm'
+			return (first as DerLength, start + 1)
+		end 'shortForm'
+
+		if first == derShortLengthLimit 'indefinite'
+			throw DerError.indefiniteLength
+		end 'indefinite'
+
+		let octetCount = (first and derSevenBitMask) as Count
+
+		if (try octetAt(start + 1)) == 0 'leadingZero'
+			throw DerError.nonMinimalLength
+		end 'leadingZero'
+
+		if octetCount > derMostLengthOctets 'pastAnyInput'
+			throw DerError.truncated
+		end 'pastAnyInput'
+
+		var length = 0 as DerLength
+
+		for offset in 1 to octetCount 'eachOctet'
+			length = (length shl derBitsPerByte) + ((try octetAt(start + offset)) as DerLength)
+		end 'eachOctet'
+
+		if length < derShortLengthLimit 'shortWouldDo'
+			throw DerError.nonMinimalLength
+		end 'shortWouldDo'
+
+		return (length, start + 1 + octetCount)
+	end 'lengthAt'
+
+	function enter(header DerHeader) returns DerReader
+		position = header.contentEnd()
+
+		return DerReader.over(bytes, start: header.contentStart(), limit: header.contentEnd())
+	end 'enter'
+
+	function enterUniversal(tag DerUniversalTag) returns DerReader throws DerError
+		let header = try peekHeader()
+
+		if not header.isUniversal(tag, isConstructed: true) 'otherTag'
+			throw DerError.unexpectedTag
+		end 'otherTag'
+
+		return enter(header)
+	end 'enterUniversal'
+
+	function readPrimitive(tag DerUniversalTag) returns ByteArray throws DerError
+		let header = try peekHeader()
+
+		if not header.isUniversal(tag, isConstructed: false) 'otherTag'
+			throw DerError.unexpectedTag
+		end 'otherTag'
+
+		position = header.contentEnd()
+
+		return try bytes.slice(header.contentStart(), endIndex: header.contentEnd()) otherwise panic("a header's content lies inside its reader")
+	end 'readPrimitive'
+end 'DerReader'
+
+function derDigits(text ByteArray, start ElementIndex, count Count) returns DerTimeField throws DerError
+	var value = 0 as DerTimeField
+
+	for offset in 0 upto count 'eachDigit'
+		let symbol = try text.get(start + offset) otherwise panic("the time's length was checked before its digits")
+
+		if symbol < derAsciiZero or symbol > derAsciiNine 'notDigit'
+			throw DerError.invalidTime
+		end 'notDigit'
+
+		value = value * derDecimalBase + ((symbol - derAsciiZero) as DerTimeField)
+	end 'eachDigit'
+
+	return value
+end 'derDigits'
+
+function derIsLeapYear(year DerTimeField) returns bool
+	return year mod derLeapCycle == 0 and (year mod derCenturyCycle != 0 or year mod derYearsPerEra == 0)
+end 'derIsLeapYear'
+
+function derDaysInMonth(year DerTimeField, month DerTimeField) returns DerTimeField
+	return match month 'days'
+		4 or
+		6 or
+		9 or
+		11 gives derShortMonthDays
+		2 gives derLeapFebruaryDays if derIsLeapYear(year) else derFebruaryDays
+		1 or
+		3 or
+		5 or
+		7 or
+		8 or
+		10 or
+		12 gives derLongMonthDays
+		default panic("a month was checked to be from 1 to 12")
+	end 'days'
+end 'derDaysInMonth'
+
+function derDaysFromCivil(year UnixSeconds, month UnixSeconds, day UnixSeconds) returns UnixSeconds
+	let shiftedYear = year - 1 if month <= derFebruary else year
+	let era = (shiftedYear if shiftedYear >= 0 else shiftedYear - (derYearsPerEra - 1)) / derYearsPerEra
+	let yearOfEra = shiftedYear - era * derYearsPerEra
+	let marchMonth = month + derMonthsAfterFebruary if month <= derFebruary else month - derMarchShift
+	let dayOfYear = (derDaysPerMarchMonths * marchMonth + derMarchMonthOffset) / derMarchMonthsPerCycle + day - 1
+	let dayOfEra = yearOfEra * derDaysPerYear + yearOfEra / derLeapCycle - yearOfEra / derCenturyCycle + dayOfYear
+
+	return era * derDaysPerEra + dayOfEra - derDaysToUnixEpoch
+end 'derDaysFromCivil'
+
+function derUnixSeconds(text ByteArray, layout DerTimeLayout) returns UnixSeconds throws DerError
+	let expectedLength = derUtcTimeLength if layout == DerTimeLayout.utc else derGeneralizedTimeLength
+
+	if text.count() != expectedLength or (try text.get(expectedLength - 1) otherwise panic("the length was just checked")) != derZuluDesignator 'shape'
+		throw DerError.invalidTime
+	end 'shape'
+
+	let yearDigits = expectedLength - derUtcTimeLength + derFieldDigits
+	var year = try derDigits(text, start: 0, count: yearDigits)
+
+	if layout == DerTimeLayout.utc 'twoDigitYear'
+		year = year + (derUtcLateCentury if year >= derUtcCenturyPivot else derUtcEarlyCentury)
+	end 'twoDigitYear'
+
+	let month = try derDigits(text, start: yearDigits, count: derFieldDigits)
+	let day = try derDigits(text, start: yearDigits + derFieldDigits, count: derFieldDigits)
+	let hour = try derDigits(text, start: yearDigits + 2 * derFieldDigits, count: derFieldDigits)
+	let minute = try derDigits(text, start: yearDigits + 3 * derFieldDigits, count: derFieldDigits)
+	let second = try derDigits(text, start: yearDigits + 4 * derFieldDigits, count: derFieldDigits)
+
+	if month < 1 or month > derMonthsPerYear or day < 1 or day > derDaysInMonth(year, month: month) 'badDate'
+		throw DerError.invalidTime
+	end 'badDate'
+
+	if hour >= derHoursPerDay or minute >= derMinutesPerHour or second >= derSecondsPerMinute 'badClock'
+		throw DerError.invalidTime
+	end 'badClock'
+
+	let days = derDaysFromCivil(year as UnixSeconds, month: month as UnixSeconds, day: day as UnixSeconds)
+	let secondsOfDay = ((hour * derMinutesPerHour + minute) * derSecondsPerMinute + second) as UnixSeconds
+
+	return days * derSecondsPerDay + secondsOfDay
+end 'derUnixSeconds'

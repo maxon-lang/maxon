@@ -1,0 +1,879 @@
+/// RSA signatures (RFC 8017): RSASSA-PKCS1-v1_5 and RSASSA-PSS verification, and RSASSA-PSS signing.
+/// @category Crypto
+
+/// Why an `Rsa` call refused its input.
+public enum RsaError implements Error
+	invalidPublicKey
+	invalidPrivateKey
+	invalidSignatureLength
+	invalidSaltLength
+end 'RsaError'
+
+typealias RsaLimb = bits(64)
+typealias RsaLimbs = Array with RsaLimb
+typealias RsaLimbTable = Array with RsaLimbs
+typealias RsaIntegers = Array with ByteArray
+typealias RsaTopBits = int(0 to 7)
+
+enum RsaBlindingError implements Error
+	notInvertible
+end 'RsaBlindingError'
+
+enum RsaPublicKeyField
+	modulus
+	publicExponent
+end 'RsaPublicKeyField'
+
+enum RsaPrivateKeyField
+	version
+	modulus
+	publicExponent
+	privateExponent
+	prime1
+	prime2
+	exponent1
+	exponent2
+	coefficient
+end 'RsaPrivateKeyField'
+
+let rsaLimbBits = 32
+let rsaLimbBytes = 4
+let rsaLimbMask = 0xFFFFFFFF as RsaLimb
+let rsaLimbBase = 0x100000000
+let rsaLowBit = 1 as RsaLimb
+let rsaHighBitShift = 63
+let rsaBitsPerByte = 8
+let rsaByteMask = 0xFF
+let rsaWindowBits = 4
+let rsaWindowMask = 0xF as RsaLimb
+let rsaTableEntries = 16
+let rsaNewtonSteps = 5
+let rsaMontgomeryHeadroomLimbs = 2
+let rsaNewtonTwo = 2
+let rsaMinimumModulusBits = 2048
+let rsaMaximumModulusBits = 4096
+let rsaPssTrailer = 0xBC
+let rsaPssSeparator = 0x01
+let rsaPssZeroPrefixBytes = 8
+let rsaPssFramingBytes = 2
+let rsaPkcs1BlockType = 0x01
+let rsaPkcs1Filler = 0xFF
+let rsaPkcs1FramingBytes = 3
+let rsaMgfCounterBytes = 4
+let rsaBlindingExtraBytes = 8
+
+let rsaEncryptionOid = ByteArray from [0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01]
+let rsaVersionZero = ByteArray from [0x00]
+let rsaSha256DigestInfo = ByteArray from [0x30, 0x31, 0x30, 0x0D, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0x04, 0x20]
+let rsaSha384DigestInfo = ByteArray from [0x30, 0x41, 0x30, 0x0D, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02, 0x05, 0x00, 0x04, 0x30]
+let rsaSha512DigestInfo = ByteArray from [0x30, 0x51, 0x30, 0x0D, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05, 0x00, 0x04, 0x40]
+
+function rsaZeroLimbs(count Count) returns RsaLimbs
+	var limbs = RsaLimbs.create()
+	limbs.reserve(count)
+
+	for _ in 0 upto count 'eachLimb'
+		limbs.push(0)
+	end 'eachLimb'
+
+	return limbs
+end 'rsaZeroLimbs'
+
+function rsaOne(count Count) returns RsaLimbs
+	var limbs = rsaZeroLimbs(count)
+	try limbs.set(0, value: rsaLowBit) otherwise panic("a limb array holds at least one limb")
+	return limbs
+end 'rsaOne'
+
+function rsaLimbCount(bytes ByteArray) returns Count
+	return (bytes.count() + rsaLimbBytes - 1) / rsaLimbBytes
+end 'rsaLimbCount'
+
+function rsaLimbsFromBytes(bytes ByteArray, count Count) returns RsaLimbs
+	var limbs = rsaZeroLimbs(count)
+	let last = bytes.count() - 1
+
+	for (iter, byte) in bytes.withIterator() 'eachByte'
+		let fromEnd = last - iter.index()
+		let index = fromEnd / rsaLimbBytes
+		let current = try limbs.get(index) otherwise panic("the limbs hold every byte of the value")
+		try limbs.set(index, value: current or ((byte as RsaLimb) shl ((fromEnd mod rsaLimbBytes) * rsaBitsPerByte))) otherwise panic("the limbs hold every byte of the value")
+	end 'eachByte'
+
+	return limbs
+end 'rsaLimbsFromBytes'
+
+function rsaBytesFromLimbs(limbs RsaLimbs, count Count) returns ByteArray
+	var bytes = ByteArray.create()
+	bytes.reserve(count)
+
+	for offset in 0 upto count 'eachByte'
+		let fromEnd = count - 1 - offset
+		let limb = try limbs.get(fromEnd / rsaLimbBytes) otherwise panic("the limbs cover every byte asked for")
+		bytes.push(((limb shr ((fromEnd mod rsaLimbBytes) * rsaBitsPerByte)) and rsaByteMask) as Byte)
+	end 'eachByte'
+
+	return bytes
+end 'rsaBytesFromLimbs'
+
+function rsaValueLimbs(bytes ByteArray) returns RsaLimbs
+	return rsaLimbsFromBytes(bytes, count: rsaLimbCount(bytes))
+end 'rsaValueLimbs'
+
+function rsaResized(limbs RsaLimbs, count Count) returns RsaLimbs
+	var resized = rsaZeroLimbs(count)
+
+	for (iter, limb) in limbs.withIterator() 'eachLimb'
+		if iter.index() < count 'kept'
+			try resized.set(iter.index(), value: limb) otherwise panic("the index is below the new count")
+		end 'kept' else if limb != 0 'dropped'
+			panic("rsaResized: a value does not fit the limbs it is narrowed to")
+		end 'dropped'
+	end 'eachLimb'
+
+	return resized
+end 'rsaResized'
+
+function rsaLimbOrZero(limbs RsaLimbs, index ElementIndex) returns RsaLimb
+	if index >= limbs.count() 'beyond'
+		return 0
+	end 'beyond'
+
+	return try limbs.get(index) otherwise panic("the index was checked against the count")
+end 'rsaLimbOrZero'
+
+function rsaSubtractMasked(target RsaLimbs, subtrahend RsaLimbs, mask RsaLimb) returns RsaLimb
+	var borrow = 0 as RsaLimb
+
+	for index in 0 upto target.count() 'eachLimb'
+		let current = try target.get(index) otherwise panic("the index is below the count")
+		let difference = current + rsaLimbBase - (rsaLimbOrZero(subtrahend, index: index) and mask) - borrow
+		try target.set(index, value: difference and rsaLimbMask) otherwise panic("the index is below the count")
+		borrow = rsaLowBit - (difference shr rsaLimbBits)
+	end 'eachLimb'
+
+	return borrow
+end 'rsaSubtractMasked'
+
+function rsaAddMasked(target RsaLimbs, addend RsaLimbs, mask RsaLimb) returns RsaLimb
+	var carry = 0 as RsaLimb
+
+	for index in 0 upto target.count() 'eachLimb'
+		let current = try target.get(index) otherwise panic("the index is below the count")
+		let sum = current + (rsaLimbOrZero(addend, index: index) and mask) + carry
+		try target.set(index, value: sum and rsaLimbMask) otherwise panic("the index is below the count")
+		carry = sum shr rsaLimbBits
+	end 'eachLimb'
+
+	return carry
+end 'rsaAddMasked'
+
+function rsaSelectInto(target RsaLimbs, source RsaLimbs, mask RsaLimb)
+	for (iter, limb) in source.withIterator() 'eachLimb'
+		let current = try target.get(iter.index()) otherwise panic("a selection's target is as wide as its source")
+		try target.set(iter.index(), value: (current and (mask xor rsaLimbMask)) or (limb and mask)) otherwise panic("a selection's target is as wide as its source")
+	end 'eachLimb'
+end 'rsaSelectInto'
+
+function rsaSwapMasked(left RsaLimbs, right RsaLimbs, mask RsaLimb)
+	for index in 0 upto left.count() 'eachLimb'
+		let leftLimb = try left.get(index) otherwise panic("swapped values are equally wide")
+		let rightLimb = try right.get(index) otherwise panic("swapped values are equally wide")
+		let flip = (leftLimb xor rightLimb) and mask
+		try left.set(index, value: leftLimb xor flip) otherwise panic("swapped values are equally wide")
+		try right.set(index, value: rightLimb xor flip) otherwise panic("swapped values are equally wide")
+	end 'eachLimb'
+end 'rsaSwapMasked'
+
+function rsaShiftLeftInto(target RsaLimbs, lowBit RsaLimb)
+	var carry = lowBit
+
+	for index in 0 upto target.count() 'eachLimb'
+		let shifted = ((try target.get(index) otherwise panic("the index is below the count")) shl 1) or carry
+		try target.set(index, value: shifted and rsaLimbMask) otherwise panic("the index is below the count")
+		carry = shifted shr rsaLimbBits
+	end 'eachLimb'
+end 'rsaShiftLeftInto'
+
+function rsaShiftRightInto(target RsaLimbs, highBit RsaLimb)
+	var carry = highBit
+	let last = target.count() - 1
+
+	for offset in 0 upto target.count() 'eachLimb'
+		let limb = try target.get(last - offset) otherwise panic("the index is below the count")
+		try target.set(last - offset, value: (limb shr 1) or (carry shl (rsaLimbBits - 1))) otherwise panic("the index is below the count")
+		carry = limb and rsaLowBit
+	end 'eachLimb'
+end 'rsaShiftRightInto'
+
+function rsaMask(bit RsaLimb) returns RsaLimb
+	return bit * rsaLimbMask
+end 'rsaMask'
+
+function rsaWiderCount(left RsaLimbs, right RsaLimbs) returns Count
+	return left.count() if left.count() > right.count() else right.count()
+end 'rsaWiderCount'
+
+function rsaBelowBit(left RsaLimbs, right RsaLimbs) returns RsaLimb
+	let width = rsaWiderCount(left, right: right)
+	var difference = rsaResized(left, count: width)
+	return rsaSubtractMasked(difference, subtrahend: right, mask: rsaLimbMask)
+end 'rsaBelowBit'
+
+function rsaIsBelow(left RsaLimbs, right RsaLimbs) returns bool
+	return rsaBelowBit(left, right: right) == rsaLowBit
+end 'rsaIsBelow'
+
+function rsaEqual(left RsaLimbs, right RsaLimbs) returns bool
+	var difference = 0 as RsaLimb
+
+	for index in 0 upto rsaWiderCount(left, right: right) 'eachLimb'
+		difference = difference or (rsaLimbOrZero(left, index: index) xor rsaLimbOrZero(right, index: index))
+	end 'eachLimb'
+
+	return difference == 0
+end 'rsaEqual'
+
+function rsaReduceOnce(value RsaLimbs, modulus RsaLimbs)
+	var difference = value.clone()
+	let borrow = rsaSubtractMasked(difference, subtrahend: modulus, mask: rsaLimbMask)
+	rsaSelectInto(value, source: difference, mask: rsaMask(rsaLowBit - borrow))
+end 'rsaReduceOnce'
+
+function rsaReduce(value RsaLimbs, modulus RsaLimbs) returns RsaLimbs
+	var remainder = rsaZeroLimbs(modulus.count() + 1)
+	let last = value.count() - 1
+
+	for offset in 0 upto value.count() 'eachLimb'
+		let limb = try value.get(last - offset) otherwise panic("the index is below the count")
+
+		for bit in 0 upto rsaLimbBits 'eachBit'
+			rsaShiftLeftInto(remainder, lowBit: (limb shr (rsaLimbBits - 1 - bit)) and rsaLowBit)
+			rsaReduceOnce(remainder, modulus: modulus)
+		end 'eachBit'
+	end 'eachLimb'
+
+	return rsaResized(remainder, count: modulus.count())
+end 'rsaReduce'
+
+function rsaMultiplyAccumulate(target RsaLimbs, source RsaLimbs, factor RsaLimb, offset ElementIndex)
+	var carry = 0 as RsaLimb
+
+	for (iter, limb) in source.withIterator() 'eachLimb'
+		let index = offset + iter.index()
+		let sum = (try target.get(index) otherwise panic("the product fits its accumulator")) + limb * factor + carry
+		try target.set(index, value: sum and rsaLimbMask) otherwise panic("the product fits its accumulator")
+		carry = sum shr rsaLimbBits
+	end 'eachLimb'
+
+	for index in offset + source.count() upto target.count() 'eachCarry'
+		let sum = (try target.get(index) otherwise panic("the index is below the count")) + carry
+		try target.set(index, value: sum and rsaLimbMask) otherwise panic("the index is below the count")
+		carry = sum shr rsaLimbBits
+	end 'eachCarry'
+end 'rsaMultiplyAccumulate'
+
+function rsaMultiply(left RsaLimbs, right RsaLimbs) returns RsaLimbs
+	var product = rsaZeroLimbs(left.count() + right.count())
+
+	for (iter, factor) in right.withIterator() 'eachFactor'
+		rsaMultiplyAccumulate(product, source: left, factor: factor, offset: iter.index())
+	end 'eachFactor'
+
+	return product
+end 'rsaMultiply'
+
+function rsaBitLength(bytes ByteArray) returns Count
+	let first = try bytes.get(0) otherwise panic("an INTEGER has at least one octet")
+	var bits = (bytes.count() - 1) * rsaBitsPerByte
+	var top = first
+
+	while top != 0 'eachBit'
+		bits = bits + 1
+		top = top shr 1
+	end 'eachBit'
+
+	return bits
+end 'rsaBitLength'
+
+function rsaIsOdd(bytes ByteArray) returns bool
+	let last = try bytes.get(bytes.count() - 1) otherwise panic("an INTEGER has at least one octet")
+	return (last and 1) == 1
+end 'rsaIsOdd'
+
+type RsaMontgomery
+	var modulus as RsaLimbs
+	var negatedInverse as RsaLimb
+	var squaredRadix as RsaLimbs
+
+	static function create(modulus RsaLimbs) returns RsaMontgomery
+		let lowest = try modulus.get(0) otherwise panic("a modulus has at least one limb")
+		var inverse = rsaLowBit
+
+		for _ in 0 upto rsaNewtonSteps 'eachStep'
+			inverse = (inverse * ((rsaNewtonTwo - lowest * inverse) and rsaLimbMask)) and rsaLimbMask
+		end 'eachStep'
+
+		var radix = rsaZeroLimbs(2 * modulus.count() + 1)
+		try radix.set(2 * modulus.count(), value: rsaLowBit) otherwise panic("the radix has its top limb")
+
+		return RsaMontgomery{modulus: modulus, negatedInverse: (rsaLimbBase - inverse) and rsaLimbMask, squaredRadix: rsaReduce(radix, modulus: modulus)}
+	end 'create'
+
+	function multiply(left RsaLimbs, right RsaLimbs) returns RsaLimbs
+		var accumulator = rsaZeroLimbs(modulus.count() + rsaMontgomeryHeadroomLimbs)
+
+		for factor in right 'eachFactor'
+			rsaMultiplyAccumulate(accumulator, source: left, factor: factor, offset: 0)
+			let lowest = try accumulator.get(0) otherwise panic("the accumulator has its lowest limb")
+			rsaMultiplyAccumulate(accumulator, source: modulus, factor: (lowest * negatedInverse) and rsaLimbMask, offset: 0)
+			_ = try accumulator.remove(0) otherwise panic("the accumulator has its lowest limb")
+			accumulator.push(0)
+		end 'eachFactor'
+
+		rsaReduceOnce(accumulator, modulus: modulus)
+
+		return rsaResized(accumulator, count: modulus.count())
+	end 'multiply'
+
+	function toMontgomery(value RsaLimbs) returns RsaLimbs
+		return multiply(value, right: squaredRadix)
+	end 'toMontgomery'
+
+	function fromMontgomery(value RsaLimbs) returns RsaLimbs
+		return multiply(value, right: rsaOne(modulus.count()))
+	end 'fromMontgomery'
+
+	function product(left RsaLimbs, right RsaLimbs) returns RsaLimbs
+		return toMontgomery(multiply(left, right: right))
+	end 'product'
+
+	function publicPower(base RsaLimbs, exponent RsaLimbs) returns RsaLimbs
+		let factor = toMontgomery(base)
+		var accumulator = toMontgomery(rsaOne(modulus.count()))
+		let last = exponent.count() - 1
+
+		for offset in 0 upto exponent.count() 'eachLimb'
+			let limb = try exponent.get(last - offset) otherwise panic("the index is below the count")
+
+			for bit in 0 upto rsaLimbBits 'eachBit'
+				accumulator = multiply(accumulator, right: accumulator)
+
+				if ((limb shr (rsaLimbBits - 1 - bit)) and rsaLowBit) == rsaLowBit 'set'
+					accumulator = multiply(accumulator, right: factor)
+				end 'set'
+			end 'eachBit'
+		end 'eachLimb'
+
+		return fromMontgomery(accumulator)
+	end 'publicPower'
+
+	function powerTable(base RsaLimbs) returns RsaLimbTable
+		let factor = toMontgomery(base)
+		var table = RsaLimbTable.create()
+		table.push(toMontgomery(rsaOne(modulus.count())))
+
+		for _ in 1 upto rsaTableEntries 'eachEntry'
+			view previous = try table.get(table.count() - 1) otherwise panic("the table starts with one entry")
+			table.push(multiply(previous, right: factor))
+		end 'eachEntry'
+
+		return table
+	end 'powerTable'
+
+	function secretWindow(accumulator RsaLimbs, table RsaLimbTable, digit RsaLimb) returns RsaLimbs
+		var squared = accumulator.clone()
+
+		for _ in 0 upto rsaWindowBits 'eachSquaring'
+			squared = multiply(squared, right: squared)
+		end 'eachSquaring'
+
+		var selected = rsaZeroLimbs(modulus.count())
+
+		for (iter, entry) in table.withIterator() 'eachEntry'
+			let difference = (iter.index() as RsaLimb) xor digit
+			rsaSelectInto(selected, source: entry, mask: rsaMask((difference - 1) shr rsaHighBitShift))
+		end 'eachEntry'
+
+		return multiply(squared, right: selected)
+	end 'secretWindow'
+
+	function secretPower(base RsaLimbs, exponent RsaLimbs) returns RsaLimbs
+		let table = powerTable(base)
+		var accumulator = (try table.get(0) otherwise panic("the table starts with the Montgomery one")).clone()
+		let last = exponent.count() - 1
+
+		for offset in 0 upto exponent.count() 'eachLimb'
+			let limb = try exponent.get(last - offset) otherwise panic("the index is below the count")
+
+			for window in 0 upto rsaLimbBits / rsaWindowBits 'eachWindow'
+				let shift = rsaLimbBits - rsaWindowBits * (window + 1)
+				accumulator = secretWindow(accumulator, table: table, digit: (limb shr shift) and rsaWindowMask)
+			end 'eachWindow'
+		end 'eachLimb'
+
+		return fromMontgomery(accumulator)
+	end 'secretPower'
+
+	function invert(value RsaLimbs) returns RsaLimbs throws RsaBlindingError
+		var remaining = value.clone()
+		var divisor = modulus.clone()
+		var remainingFactor = rsaOne(modulus.count())
+		var divisorFactor = rsaZeroLimbs(modulus.count())
+
+		for _ in 0 upto 2 * rsaLimbBits * modulus.count() 'eachStep'
+			let odd = (try remaining.get(0) otherwise panic("a value has its lowest limb")) and rsaLowBit
+			let swap = rsaMask(odd and rsaBelowBit(remaining, right: divisor))
+			rsaSwapMasked(remaining, right: divisor, mask: swap)
+			rsaSwapMasked(remainingFactor, right: divisorFactor, mask: swap)
+			_ = rsaSubtractMasked(remaining, subtrahend: divisor, mask: rsaMask(odd))
+			halveFactor(remainingFactor, subtrahend: divisorFactor, odd: odd)
+			rsaShiftRightInto(remaining, highBit: 0)
+		end 'eachStep'
+
+		if not rsaEqual(divisor, right: rsaOne(1)) 'sharedFactor'
+			throw RsaBlindingError.notInvertible
+		end 'sharedFactor'
+
+		return divisorFactor
+	end 'invert'
+
+	function halveFactor(factor RsaLimbs, subtrahend RsaLimbs, odd RsaLimb)
+		let borrow = rsaSubtractMasked(factor, subtrahend: subtrahend, mask: rsaMask(odd))
+		_ = rsaAddMasked(factor, addend: modulus, mask: rsaMask(borrow))
+		let lowest = (try factor.get(0) otherwise panic("a value has its lowest limb")) and rsaLowBit
+		let carry = rsaAddMasked(factor, addend: modulus, mask: rsaMask(lowest))
+		rsaShiftRightInto(factor, highBit: carry)
+	end 'halveFactor'
+end 'RsaMontgomery'
+
+typealias RsaBlockCheck = function(ByteArray, Count) returns bool
+
+function rsaIntegerAt(integers RsaIntegers, index ElementIndex) returns ByteArray
+	return try integers.get(index) otherwise panic("a key's INTEGER count was checked when it was read")
+end 'rsaIntegerAt'
+
+function rsaFieldLimbs(integers RsaIntegers, field RsaPrivateKeyField) returns RsaLimbs
+	return rsaValueLimbs(rsaIntegerAt(integers, index: field.ordinal))
+end 'rsaFieldLimbs'
+
+function rsaAlgorithm(reader DerReader) returns ByteArray throws DerError
+	var algorithm = try reader.enterSequence()
+	let identifier = try algorithm.readObjectIdentifier()
+	try algorithm.readNull()
+	try algorithm.finish()
+	return identifier
+end 'rsaAlgorithm'
+
+function rsaOuterSequence(encoding ByteArray) returns DerReader throws DerError
+	var outer = DerReader.create(encoding)
+	var sequence = try outer.enterSequence()
+	try outer.finish()
+	return sequence
+end 'rsaOuterSequence'
+
+function rsaIntegers(encoding ByteArray, count Count) returns RsaIntegers throws DerError
+	var sequence = try rsaOuterSequence(encoding)
+
+	var integers = RsaIntegers.create()
+
+	for _ in 0 upto count 'eachInteger'
+		integers.push(try sequence.readInteger())
+	end 'eachInteger'
+
+	try sequence.finish()
+	return integers
+end 'rsaIntegers'
+
+function rsaPublicKeyParts(der ByteArray) returns (ByteArray, DerBitString) throws DerError
+	var info = try rsaOuterSequence(der)
+
+	let algorithm = try rsaAlgorithm(info)
+	let key = try info.readBitString()
+	try info.finish()
+	return (algorithm, key)
+end 'rsaPublicKeyParts'
+
+function rsaPrivateKeyParts(der ByteArray) returns (ByteArray, ByteArray, ByteArray) throws DerError
+	var info = try rsaOuterSequence(der)
+
+	let version = try info.readInteger()
+	let algorithm = try rsaAlgorithm(info)
+	let key = try info.readOctetString()
+	try info.finish()
+	return (version, algorithm, key)
+end 'rsaPrivateKeyParts'
+
+function rsaIsAcceptable(modulus ByteArray, exponent ByteArray) returns bool
+	let bits = rsaBitLength(modulus)
+
+	if bits < rsaMinimumModulusBits or bits > rsaMaximumModulusBits or not rsaIsOdd(modulus) or not rsaIsOdd(exponent) 'outOfRange'
+		return false
+	end 'outOfRange'
+
+	let exponentLimbs = rsaValueLimbs(exponent)
+
+	return not rsaEqual(exponentLimbs, right: rsaOne(1)) and rsaIsBelow(exponentLimbs, right: rsaValueLimbs(modulus))
+end 'rsaIsAcceptable'
+
+function rsaIsZero(value RsaLimbs) returns bool
+	return rsaEqual(value, right: rsaZeroLimbs(1))
+end 'rsaIsZero'
+
+function rsaMatchesPrime(prime RsaLimbs, publicExponent RsaLimbs, privateExponent RsaLimbs, crtExponent RsaLimbs) returns bool
+	let one = rsaOne(1)
+	var order = prime.clone()
+	_ = rsaSubtractMasked(order, subtrahend: one, mask: rsaLimbMask)
+
+	return rsaEqual(rsaReduce(privateExponent, modulus: order), right: crtExponent) and rsaEqual(rsaReduce(rsaMultiply(publicExponent, right: privateExponent), modulus: order), right: one)
+end 'rsaMatchesPrime'
+
+function rsaIsConsistent(integers RsaIntegers) returns bool
+	let one = rsaOne(1)
+	let modulus = rsaFieldLimbs(integers, field: RsaPrivateKeyField.modulus)
+	let publicExponent = rsaFieldLimbs(integers, field: RsaPrivateKeyField.publicExponent)
+	let privateExponent = rsaFieldLimbs(integers, field: RsaPrivateKeyField.privateExponent)
+	let primeOne = rsaFieldLimbs(integers, field: RsaPrivateKeyField.prime1)
+	let primeTwo = rsaFieldLimbs(integers, field: RsaPrivateKeyField.prime2)
+	let coefficient = rsaFieldLimbs(integers, field: RsaPrivateKeyField.coefficient)
+
+	if not rsaIsBelow(one, right: primeOne) or not rsaIsBelow(one, right: primeTwo) or not rsaEqual(rsaMultiply(primeOne, right: primeTwo), right: modulus) 'factors'
+		return false
+	end 'factors'
+
+	if rsaIsZero(privateExponent) or not rsaIsBelow(privateExponent, right: modulus) 'privateExponentRange'
+		return false
+	end 'privateExponentRange'
+
+	if not rsaMatchesPrime(primeOne, publicExponent: publicExponent, privateExponent: privateExponent, crtExponent: rsaFieldLimbs(integers, field: RsaPrivateKeyField.exponent1)) 'firstExponent'
+		return false
+	end 'firstExponent'
+
+	if not rsaMatchesPrime(primeTwo, publicExponent: publicExponent, privateExponent: privateExponent, crtExponent: rsaFieldLimbs(integers, field: RsaPrivateKeyField.exponent2)) 'secondExponent'
+		return false
+	end 'secondExponent'
+
+	return not rsaIsZero(coefficient) and rsaIsBelow(coefficient, right: primeOne) and rsaEqual(rsaReduce(rsaMultiply(coefficient, right: primeTwo), modulus: primeOne), right: one)
+end 'rsaIsConsistent'
+
+function rsaEncodedLength(modulusBits Count) returns Count
+	return (modulusBits - 1 + rsaBitsPerByte - 1) / rsaBitsPerByte
+end 'rsaEncodedLength'
+
+function rsaTopBits(modulusBits Count) returns RsaTopBits
+	return (rsaEncodedLength(modulusBits) * rsaBitsPerByte - (modulusBits - 1)) as RsaTopBits
+end 'rsaTopBits'
+
+function rsaHash(hash HashAlgorithm, data ByteArray) returns ByteArray
+	var digest = Digest.create(hash)
+	digest.update(data)
+	return digest.finalize()
+end 'rsaHash'
+
+function rsaZeroBytes(count Count) returns ByteArray
+	var bytes = ByteArray.create()
+	bytes.reserve(count)
+
+	for _ in 0 upto count 'eachByte'
+		bytes.push(0)
+	end 'eachByte'
+
+	return bytes
+end 'rsaZeroBytes'
+
+function rsaDigestInfo(hash HashAlgorithm) returns ByteArray
+	return match hash 'prefix'
+		sha256 gives rsaSha256DigestInfo.clone()
+		sha384 gives rsaSha384DigestInfo.clone()
+		sha512 gives rsaSha512DigestInfo.clone()
+	end 'prefix'
+end 'rsaDigestInfo'
+
+function rsaPkcs1Block(hash HashAlgorithm, message ByteArray, length Count) returns ByteArray
+	let prefix = rsaDigestInfo(hash)
+	let digest = rsaHash(hash, data: message)
+	var block = ByteArray.create()
+	block.reserve(length)
+	block.push(0)
+	block.push(rsaPkcs1BlockType)
+
+	for _ in 0 upto length - prefix.count() - digest.count() - rsaPkcs1FramingBytes 'eachFiller'
+		block.push(rsaPkcs1Filler)
+	end 'eachFiller'
+
+	block.push(0)
+	block.append(prefix)
+	block.append(digest)
+	return block
+end 'rsaPkcs1Block'
+
+function rsaMgf1(hash HashAlgorithm, seed ByteArray, length Count) returns ByteArray
+	var mask = ByteArray.create()
+	mask.reserve(length)
+	var counter = 0 as RsaLimb
+
+	while mask.count() < length 'eachBlock'
+		var digest = Digest.create(hash)
+		digest.update(seed)
+		digest.update(rsaBytesFromLimbs(RsaLimbs from [counter], count: rsaMgfCounterBytes))
+
+		for byte in digest.finalize() 'eachByte'
+			if mask.count() < length 'needed'
+				mask.push(byte)
+			end 'needed'
+		end 'eachByte'
+
+		counter = counter + 1
+	end 'eachBlock'
+
+	return mask
+end 'rsaMgf1'
+
+function rsaMaskBlock(hash HashAlgorithm, seed ByteArray, block ByteArray, topBits RsaTopBits) returns ByteArray
+	let mask = rsaMgf1(hash, seed: seed, length: block.count())
+	var masked = ByteArray.create()
+	masked.reserve(block.count())
+
+	for (iter, byte) in block.withIterator() 'eachByte'
+		masked.push(byte xor (try mask.get(iter.index()) otherwise panic("the mask is as long as the block")))
+	end 'eachByte'
+
+	let first = try masked.get(0) otherwise panic("a PSS data block is never empty")
+	try masked.set(0, value: first and (rsaByteMask shr topBits)) otherwise panic("a PSS data block is never empty")
+	return masked
+end 'rsaMaskBlock'
+
+function rsaPssDigest(hash HashAlgorithm, message ByteArray, salt ByteArray) returns ByteArray
+	var digest = Digest.create(hash)
+	digest.update(rsaZeroBytes(rsaPssZeroPrefixBytes))
+	digest.update(rsaHash(hash, data: message))
+	digest.update(salt)
+	return digest.finalize()
+end 'rsaPssDigest'
+
+function rsaPssEncode(hash HashAlgorithm, message ByteArray, salt ByteArray, modulusBits Count) returns ByteArray
+	let encodedLength = rsaEncodedLength(modulusBits)
+	let seed = rsaPssDigest(hash, message: message, salt: salt)
+	var block = rsaZeroBytes(encodedLength - salt.count() - seed.count() - rsaPssFramingBytes)
+	block.push(rsaPssSeparator)
+	block.append(salt)
+
+	var encoded = rsaMaskBlock(hash, seed: seed, block: block, topBits: rsaTopBits(modulusBits))
+	encoded.append(seed)
+	encoded.push(rsaPssTrailer)
+	return encoded
+end 'rsaPssEncode'
+
+function rsaPssMatches(block ByteArray, hash HashAlgorithm, message ByteArray, modulusBits Count) returns bool
+	let encodedLength = rsaEncodedLength(modulusBits)
+	let topBits = rsaTopBits(modulusBits)
+	let start = block.count() - encodedLength
+	let digestBytes = hash.digestBytes() as Count
+
+	for offset in 0 upto start 'eachLeadingByte'
+		if (try block.get(offset) otherwise panic("the block is k bytes")) != 0 'tooLarge'
+			return false
+		end 'tooLarge'
+	end 'eachLeadingByte'
+
+	let first = try block.get(start) otherwise panic("the encoded message is never empty")
+	let last = try block.get(block.count() - 1) otherwise panic("the encoded message is never empty")
+
+	if (first shr (rsaBitsPerByte - topBits)) != 0 or encodedLength < 2 * digestBytes + rsaPssFramingBytes or last != rsaPssTrailer 'malformed'
+		return false
+	end 'malformed'
+
+	let dataEnd = block.count() - digestBytes - 1
+	let maskedData = try block.slice(start, endIndex: dataEnd) otherwise panic("the data block lies inside the encoded message")
+	let seed = try block.slice(dataEnd, endIndex: block.count() - 1) otherwise panic("the seed lies inside the encoded message")
+	let data = rsaMaskBlock(hash, seed: seed, block: maskedData, topBits: topBits)
+	let paddingLength = encodedLength - 2 * digestBytes - rsaPssFramingBytes
+
+	for (iter, byte) in data.withIterator() 'eachPaddingByte'
+		if iter.index() == paddingLength 'separator'
+			if byte != rsaPssSeparator 'noSeparator'
+				return false
+			end 'noSeparator'
+
+			break
+		end 'separator'
+
+		if byte != 0 'nonZeroPadding'
+			return false
+		end 'nonZeroPadding'
+	end 'eachPaddingByte'
+
+	let salt = try data.slice(data.count() - digestBytes, endIndex: data.count()) otherwise panic("the salt lies inside the data block")
+
+	return constantTimeEqual(seed, b: rsaPssDigest(hash, message: message, salt: salt))
+end 'rsaPssMatches'
+
+type RsaPublicKey
+	var modulus as RsaLimbs
+	var exponent as RsaLimbs
+	var modulusBits as Count
+	var montgomery as RsaMontgomery
+
+	static function create(modulus ByteArray, exponent ByteArray) returns RsaPublicKey
+		let limbs = rsaValueLimbs(modulus)
+		let montgomery = RsaMontgomery.create(limbs.clone())
+
+		return RsaPublicKey{modulus: limbs, exponent: rsaValueLimbs(exponent), modulusBits: rsaBitLength(modulus), montgomery: montgomery}
+	end 'create'
+
+	static function parse(der ByteArray) returns RsaPublicKey throws RsaError
+		let (algorithm, key) = try rsaPublicKeyParts(der) otherwise throw RsaError.invalidPublicKey
+
+		if not constantTimeEqual(algorithm, b: rsaEncryptionOid) or key.unusedBits() != 0 'notRsa'
+			throw RsaError.invalidPublicKey
+		end 'notRsa'
+
+		let integers = try rsaIntegers(key.bytes(), count: RsaPublicKeyField.allCases.count()) otherwise throw RsaError.invalidPublicKey
+		let modulus = rsaIntegerAt(integers, index: RsaPublicKeyField.modulus.ordinal)
+		let exponent = rsaIntegerAt(integers, index: RsaPublicKeyField.publicExponent.ordinal)
+
+		if not rsaIsAcceptable(modulus, exponent: exponent) 'unacceptable'
+			throw RsaError.invalidPublicKey
+		end 'unacceptable'
+
+		return create(modulus, exponent: exponent)
+	end 'parse'
+
+	function width() returns Count
+		return modulus.count()
+	end 'width'
+
+	function modulusBits() returns Count
+		return modulusBits
+	end 'modulusBits'
+
+	function modulusBytes() returns Count
+		return (modulusBits + rsaBitsPerByte - 1) / rsaBitsPerByte
+	end 'modulusBytes'
+
+	function raise(value RsaLimbs) returns RsaLimbs
+		return montgomery.publicPower(value, exponent: exponent)
+	end 'raise'
+
+	function product(left RsaLimbs, right RsaLimbs) returns RsaLimbs
+		return montgomery.product(left, right: right)
+	end 'product'
+
+	function verify(signature ByteArray, check RsaBlockCheck) returns bool throws RsaError
+		if signature.count() != modulusBytes() 'wrongLength'
+			throw RsaError.invalidSignatureLength
+		end 'wrongLength'
+
+		let value = rsaLimbsFromBytes(signature, count: modulus.count())
+
+		if not rsaIsBelow(value, right: modulus) 'outOfRange'
+			return false
+		end 'outOfRange'
+
+		return check(rsaBytesFromLimbs(raise(value), count: modulusBytes()), modulusBits)
+	end 'verify'
+
+	function blinding() returns (RsaLimbs, RsaLimbs)
+		while true 'eachDraw'
+			let drawn = try Random.bytes((modulusBytes() + rsaBlindingExtraBytes) as RandomByteCount) otherwise panic("the operating system refused random bytes for RSA blinding")
+			let factor = rsaReduce(rsaValueLimbs(drawn), modulus: modulus)
+			let inverse = try montgomery.invert(factor) otherwise continue
+
+			return (raise(factor), inverse)
+		end 'eachDraw'
+
+		panic("the blinding loop returns from inside")
+	end 'blinding'
+end 'RsaPublicKey'
+
+type RsaPrivateKey
+	var publicKey as RsaPublicKey
+	var primeOne as RsaLimbs
+	var primeTwo as RsaLimbs
+	var exponentOne as RsaLimbs
+	var exponentTwo as RsaLimbs
+	var coefficient as RsaLimbs
+	var primeOneMontgomery as RsaMontgomery
+	var primeTwoMontgomery as RsaMontgomery
+
+	static function parse(der ByteArray) returns RsaPrivateKey throws RsaError
+		let (version, algorithm, key) = try rsaPrivateKeyParts(der) otherwise throw RsaError.invalidPrivateKey
+
+		if not constantTimeEqual(version, b: rsaVersionZero) or not constantTimeEqual(algorithm, b: rsaEncryptionOid) 'notRsa'
+			throw RsaError.invalidPrivateKey
+		end 'notRsa'
+
+		let integers = try rsaIntegers(key, count: RsaPrivateKeyField.allCases.count()) otherwise throw RsaError.invalidPrivateKey
+		let modulus = rsaIntegerAt(integers, index: RsaPrivateKeyField.modulus.ordinal)
+		let exponent = rsaIntegerAt(integers, index: RsaPrivateKeyField.publicExponent.ordinal)
+
+		if not constantTimeEqual(rsaIntegerAt(integers, index: RsaPrivateKeyField.version.ordinal), b: rsaVersionZero) or not rsaIsAcceptable(modulus, exponent: exponent) or not rsaIsConsistent(integers) 'invalid'
+			throw RsaError.invalidPrivateKey
+		end 'invalid'
+
+		let primeOne = rsaFieldLimbs(integers, field: RsaPrivateKeyField.prime1)
+		let primeTwo = rsaFieldLimbs(integers, field: RsaPrivateKeyField.prime2)
+		let primeOneWidth = primeOne.count()
+
+		return RsaPrivateKey{publicKey: RsaPublicKey.create(modulus, exponent: exponent), primeOne: primeOne.clone(), primeTwo: primeTwo.clone(), exponentOne: rsaResized(rsaFieldLimbs(integers, field: RsaPrivateKeyField.exponent1), count: primeOneWidth), exponentTwo: rsaResized(rsaFieldLimbs(integers, field: RsaPrivateKeyField.exponent2), count: primeTwo.count()), coefficient: rsaResized(rsaFieldLimbs(integers, field: RsaPrivateKeyField.coefficient), count: primeOneWidth), primeOneMontgomery: RsaMontgomery.create(primeOne), primeTwoMontgomery: RsaMontgomery.create(primeTwo)}
+	end 'parse'
+
+	function modulusBits() returns Count
+		return publicKey.modulusBits()
+	end 'modulusBits'
+
+	function chineseRemainder(value RsaLimbs) returns RsaLimbs
+		let first = primeOneMontgomery.secretPower(rsaReduce(value, modulus: primeOne), exponent: exponentOne)
+		let second = primeTwoMontgomery.secretPower(rsaReduce(value, modulus: primeTwo), exponent: exponentTwo)
+		var difference = first.clone()
+		let borrow = rsaSubtractMasked(difference, subtrahend: rsaReduce(second, modulus: primeOne), mask: rsaLimbMask)
+		_ = rsaAddMasked(difference, addend: primeOne, mask: rsaMask(borrow))
+
+		var signature = rsaMultiply(primeTwo, right: primeOneMontgomery.product(difference, right: coefficient))
+		_ = rsaAddMasked(signature, addend: second, mask: rsaLimbMask)
+		return rsaResized(signature, count: publicKey.width())
+	end 'chineseRemainder'
+
+	function sign(encoded ByteArray) returns ByteArray throws RsaError
+		let message = rsaLimbsFromBytes(encoded, count: publicKey.width())
+		let (blind, unblind) = publicKey.blinding()
+		let signature = publicKey.product(chineseRemainder(publicKey.product(message, right: blind)), right: unblind)
+
+		if not rsaEqual(publicKey.raise(signature), right: message) 'faulty'
+			throw RsaError.invalidPrivateKey
+		end 'faulty'
+
+		return rsaBytesFromLimbs(signature, count: publicKey.modulusBytes())
+	end 'sign'
+end 'RsaPrivateKey'
+
+/// RSA signatures (RFC 8017) over SHA-2, with keys in DER.
+public type Rsa
+	/// Whether `signature` is the RSASSA-PKCS1-v1_5 signature of `message` under `publicKey`, a DER
+	/// SubjectPublicKeyInfo. The whole encoded block is compared, never parsed.
+	public static function verifyPkcs1v15(publicKey ByteArray, hash HashAlgorithm, message ByteArray, signature ByteArray) returns bool throws RsaError
+		let key = try RsaPublicKey.parse(publicKey)
+
+		return try key.verify(signature, check: function(block ByteArray, _ Count) gives constantTimeEqual(block, b: rsaPkcs1Block(hash, message: message, length: block.count())))
+	end 'verifyPkcs1v15'
+
+	/// Whether `signature` is the RSASSA-PSS signature of `message` under `publicKey`, a DER
+	/// SubjectPublicKeyInfo, with MGF1 over `hash` and a salt as long as its digest.
+	public static function verifyPss(publicKey ByteArray, hash HashAlgorithm, message ByteArray, signature ByteArray) returns bool throws RsaError
+		let key = try RsaPublicKey.parse(publicKey)
+
+		return try key.verify(signature, check: function(block ByteArray, modulusBits Count) gives rsaPssMatches(block, hash: hash, message: message, modulusBits: modulusBits))
+	end 'verifyPss'
+
+	/// The RSASSA-PSS signature of `message` under `privateKey`, a DER PKCS #8 two-prime RSA key, with
+	/// MGF1 over `hash` and `salt`, which must be exactly as long as the digest.
+	public static function signPss(privateKey ByteArray, hash HashAlgorithm, message ByteArray, salt ByteArray) returns ByteArray throws RsaError
+		let key = try RsaPrivateKey.parse(privateKey)
+
+		if salt.count() != hash.digestBytes() 'wrongSalt'
+			throw RsaError.invalidSaltLength
+		end 'wrongSalt'
+
+		return try key.sign(rsaPssEncode(hash, message: message, salt: salt, modulusBits: key.modulusBits()))
+	end 'signPss'
+end 'Rsa'
