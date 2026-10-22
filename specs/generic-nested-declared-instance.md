@@ -413,3 +413,728 @@ end 'main'
 ```stdout
 56 56
 ```
+
+### A call two nested instances deep
+
+<!-- test: a-call-on-a-field-of-a-field-both-nested-instances -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Inner uses T
+	var v as T
+
+	static function create(x T) returns Self
+		return Self{v: x}
+	end 'create'
+
+	function slotSize() returns Int
+		return sizeof(T)
+	end 'slotSize'
+end 'Inner'
+
+type Middle uses U
+	typealias EChain = Inner with U
+	export var chain as EChain
+
+	static function create(x U) returns Self
+		return Self{chain: EChain.create(x)}
+	end 'create'
+end 'Middle'
+
+type Bag uses Element
+	typealias EMiddle = Middle with Element
+	var middle as EMiddle
+
+	static function create(x Element) returns Self
+		return Self{middle: EMiddle.create(x)}
+	end 'create'
+
+	function probe() returns Int
+		return self.middle.chain.slotSize()
+	end 'probe'
+end 'Bag'
+
+typealias IntBag = Bag with Int
+
+function main() returns ExitCode
+	var b = IntBag.create(7)
+	return b.probe()
+end 'main'
+```
+```exitcode
+8
+```
+
+### A call on the nested field of a `Self`-typed parameter
+
+`other.chain.slotSize()` reaches the same `Inner` the receiver's own `chain` does, so `probe` forwards its
+block 0 to it exactly as it does for `chain.slotSize()`.
+
+<!-- test: a-call-on-the-nested-field-of-a-self-typed-parameter -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Inner uses T
+	var v as T
+
+	static function create(x T) returns Self
+		return Self{v: x}
+	end 'create'
+
+	function slotSize() returns Int
+		return sizeof(T)
+	end 'slotSize'
+end 'Inner'
+
+type Bag uses Element
+	typealias EChain = Inner with Element
+	export var chain as EChain
+
+	static function create(x Element) returns Self
+		return Self{chain: EChain.create(x)}
+	end 'create'
+
+	function probe(other Self) returns Int
+		return other.chain.slotSize()
+	end 'probe'
+end 'Bag'
+
+typealias IntBag = Bag with Int
+
+function main() returns ExitCode
+	var a = IntBag.create(7)
+	var b = IntBag.create(9)
+	return a.probe(b)
+end 'main'
+```
+```exitcode
+8
+```
+
+### A closure parameter named like a nested field denotes the parameter's instance only inside the closure
+
+`inner` is a field over a `Pair`, whose `slotSize()` reads the block; the closure's own `inner` is an
+`Inner with Element`, whose `slotSize()` reads none. The call after the closure is the field's.
+
+<!-- test: a-closure-parameter-named-like-a-nested-field-calls-through-its-own-instance-and-the-field-keeps-its-own-after -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Pair uses A
+	var w as A
+
+	static function create(x A) returns Self
+		return Self{w: x}
+	end 'create'
+
+	function slotSize() returns Int
+		return sizeof(A)
+	end 'slotSize'
+end 'Pair'
+
+type Inner uses T
+	var v as T
+
+	static function create(x T) returns Self
+		return Self{v: x}
+	end 'create'
+
+	function slotSize() returns Int
+		return 1
+	end 'slotSize'
+end 'Inner'
+
+type Bag uses Element
+	typealias EPair = Pair with Element
+	typealias EChain = Inner with Element
+	var inner as EPair
+
+	static function create(x Element) returns Self
+		return Self{inner: EPair.create(x)}
+	end 'create'
+
+	function probe(chain EChain) returns Int
+		let g = function(inner EChain) gives inner.slotSize()
+		return g(chain) + inner.slotSize()
+	end 'probe'
+end 'Bag'
+
+typealias IntBag = Bag with Int
+typealias IntChain = Inner with Int
+
+function main() returns ExitCode
+	var b = IntBag.create(7)
+	return b.probe(IntChain.create(9))
+end 'main'
+```
+```exitcode
+9
+```
+
+### A closure parameter named like a type-parameter field is not the field
+
+<!-- test: a-closure-parameter-named-like-a-type-parameter-field-calls-a-corpus-member-of-its-own-array -->
+```maxon
+type Bag uses Element
+	export typealias Items = Array with Element
+	var current as Element
+
+	static function create(first Element) returns Self
+		return Self{current: first}
+	end 'create'
+
+	function probe(xs Items) returns bool
+		let g = function(current Items) gives current.isEmpty()
+		return g(xs)
+	end 'probe'
+
+	function value() returns Element
+		return self.current
+	end 'value'
+end 'Bag'
+
+typealias StrBag = Bag with String
+typealias StrItems = Array with String
+
+function main() returns ExitCode
+	var b = StrBag.create("alpha {40 + 2} value long enough for a heap record")
+	var xs = StrItems.create()
+	xs.push("beta {40 + 2} value long enough for a heap record")
+	print("{b.probe(xs)} {b.value()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+false alpha 42 value long enough for a heap record
+```
+
+### A closure parameter that is not an instance ends with its closure
+
+`chain` is a field over an `Inner`; the closure's `chain` is an `Int`. The call after the closure is still the field's.
+
+<!-- test: a-closure-parameter-of-another-type-leaves-the-field-in-scope-after-it -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Inner uses T
+	var v as T
+
+	static function create(x T) returns Self
+		return Self{v: x}
+	end 'create'
+
+	function slotSize() returns Int
+		return sizeof(T)
+	end 'slotSize'
+end 'Inner'
+
+type Bag uses Element
+	typealias EChain = Inner with Element
+	var chain as EChain
+
+	static function create(x Element) returns Self
+		return Self{chain: EChain.create(x)}
+	end 'create'
+
+	function probe() returns Int
+		let a = chain.slotSize()
+		let g = function(chain Int) gives chain + 1
+		return a + g(1) + chain.slotSize()
+	end 'probe'
+end 'Bag'
+
+typealias IntBag = Bag with Int
+
+function main() returns ExitCode
+	var b = IntBag.create(7)
+	return b.probe()
+end 'main'
+```
+```exitcode
+18
+```
+
+### A closure parameter's extent runs through a multi-line body
+
+The closure's body is a `match` whose arms stand on the lines after the `gives`; the parameter `e` stays an `Inner` instance through the final `end`, so the arm's `e.slotSize()` draws its edge.
+
+<!-- test: a-closure-parameters-extent-runs-through-a-multi-line-match-body -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Inner uses T
+	var v as T
+
+	static function create(x T) returns Self
+		return Self{v: x}
+	end 'create'
+
+	function slotSize() returns Int
+		return sizeof(T)
+	end 'slotSize'
+end 'Inner'
+
+type Bag uses Element
+	typealias EChain = Inner with Element
+	var seen as Count
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	function probe(chain EChain) returns Int
+		let g = function(e EChain, pick Int) gives match pick 'arm'
+			1 gives e.slotSize()
+			default gives 0
+		end 'arm'
+
+		return g(chain, 1)
+	end 'probe'
+end 'Bag'
+
+typealias IntBag = Bag with Int
+typealias IntChain = Inner with Int
+
+function main() returns ExitCode
+	var b = IntBag.create()
+	return b.probe(IntChain.create(9))
+end 'main'
+```
+```exitcode
+8
+```
+
+### A forwarded size read through a cursor of a two-parameter instance
+
+`Pairs with (bool, String)` reaches `Slot with W` through its iterator, which `map` builds from a body that carries no descriptor of its own. The read of `sizeof(V)` is `String`'s, never a blank block's.
+
+<!-- test: a-forwarded-size-read-through-a-cursor-of-a-two-parameter-instance -->
+```maxon
+public type Slot uses V
+	var v as V
+
+	public static function create(x V) returns Self
+		return Self{v: x}
+	end 'create'
+
+	public static function measure() returns Count
+		return sizeof(V)
+	end 'measure'
+end 'Slot'
+
+public type PairIter uses K, W implements Iterator with Count
+	public typealias Held = Slot with W
+	var done as bool
+
+	public static function create() returns Self
+		return Self{done: false}
+	end 'create'
+
+	public function current() returns Count
+		return Held.measure()
+	end 'current'
+
+	public function advance() throws IterationError
+		if done 'finished'
+			throw IterationError.exhausted
+		end 'finished'
+
+		done = true
+	end 'advance'
+end 'PairIter'
+
+public type Pairs uses Key, Value implements Iterable with (Count, PIter)
+	public typealias PIter = PairIter with (Key, Value)
+	var tag as Key
+	var value as Value
+
+	public static function create(tag Key, value Value) returns Self
+		return Self{tag: tag, value: value}
+	end 'create'
+
+	public function createIterator() returns PIter throws IterationError
+		return PIter.create()
+	end 'createIterator'
+end 'Pairs'
+
+typealias StrPairs = Pairs with (bool, String)
+
+function main() returns ExitCode
+	let p = StrPairs.create(true, value: "alpha {40 + 2} value long enough for a heap record")
+	let xs = p.map(function(n Count) gives n)
+	print("{xs.count()} {try xs.get(0) otherwise 99}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 56
+```
+
+### A local bound to a longer chain is the instance the whole chain answers
+
+`chain.peer().plain()` ends in `Plain`, not in the `Pair` that `peer` answers, so `c.slotSize()` is `Plain`'s.
+
+<!-- test: a-local-bound-to-a-longer-chain-is-the-instance-the-whole-chain-answers -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Plain
+	var n as Int
+
+	static function create() returns Self
+		return Self{n: 3}
+	end 'create'
+
+	function slotSize() returns Int
+		return n
+	end 'slotSize'
+end 'Plain'
+
+type Pair uses A
+	var w as A
+
+	static function create(x A) returns Self
+		return Self{w: x}
+	end 'create'
+
+	function plain() returns Plain
+		return Plain.create()
+	end 'plain'
+
+	function slotSize() returns Int
+		return sizeof(A)
+	end 'slotSize'
+end 'Pair'
+
+type Inner uses T
+	typealias P = Pair with T
+	var p as P
+
+	static function create(x T) returns Self
+		return Self{p: P.create(x)}
+	end 'create'
+
+	function peer() returns P
+		return p
+	end 'peer'
+end 'Inner'
+
+type Bag uses Element
+	typealias EChain = Inner with Element
+	var chain as EChain
+
+	static function create(x Element) returns Self
+		return Self{chain: EChain.create(x)}
+	end 'create'
+
+	function probe() returns Int
+		let c = chain.peer().plain()
+		return c.slotSize()
+	end 'probe'
+end 'Bag'
+
+typealias IntBag = Bag with Int
+
+function main() returns ExitCode
+	var b = IntBag.create(7)
+	return b.probe()
+end 'main'
+```
+```exitcode
+3
+```
+
+### A local bound to a method's result is the instance that method returns
+
+`chain.peer()` answers a `Pair`, not the `Inner` that `chain` is, so `c.slotSize()` is `Pair`'s.
+
+<!-- test: a-local-bound-to-a-methods-result-is-the-instance-the-method-returns -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Pair uses A
+	var w as A
+
+	static function create(x A) returns Self
+		return Self{w: x}
+	end 'create'
+
+	function slotSize() returns Int
+		return sizeof(A)
+	end 'slotSize'
+end 'Pair'
+
+type Inner uses T
+	typealias P = Pair with T
+	var p as P
+
+	static function create(x T) returns Self
+		return Self{p: P.create(x)}
+	end 'create'
+
+	function peer() returns P
+		return p
+	end 'peer'
+
+	function slotSize() returns Int
+		return 1
+	end 'slotSize'
+end 'Inner'
+
+type Bag uses Element
+	typealias EChain = Inner with Element
+	var chain as EChain
+
+	static function create(x Element) returns Self
+		return Self{chain: EChain.create(x)}
+	end 'create'
+
+	function probe() returns Int
+		let c = chain.peer()
+		return c.slotSize()
+	end 'probe'
+end 'Bag'
+
+typealias IntBag = Bag with Int
+
+function main() returns ExitCode
+	var b = IntBag.create(7)
+	return b.probe()
+end 'main'
+```
+```exitcode
+8
+```
+
+### The same through a chain of two nested fields
+
+<!-- test: a-local-bound-to-a-methods-result-through-two-nested-fields -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Pair uses A
+	var w as A
+
+	static function create(x A) returns Self
+		return Self{w: x}
+	end 'create'
+
+	function slotSize() returns Int
+		return sizeof(A)
+	end 'slotSize'
+end 'Pair'
+
+type Inner uses T
+	typealias P = Pair with T
+	var p as P
+
+	static function create(x T) returns Self
+		return Self{p: P.create(x)}
+	end 'create'
+
+	function peer() returns P
+		return p
+	end 'peer'
+
+	function slotSize() returns Int
+		return 1
+	end 'slotSize'
+end 'Inner'
+
+type Middle uses U
+	typealias EChain = Inner with U
+	export var b as EChain
+
+	static function create(x U) returns Self
+		return Self{b: EChain.create(x)}
+	end 'create'
+end 'Middle'
+
+type Bag uses Element
+	typealias EMiddle = Middle with Element
+	var a as EMiddle
+
+	static function create(x Element) returns Self
+		return Self{a: EMiddle.create(x)}
+	end 'create'
+
+	function probe() returns Int
+		let c = self.a.b.peer()
+		return c.slotSize()
+	end 'probe'
+end 'Bag'
+
+typealias IntBag = Bag with Int
+
+function main() returns ExitCode
+	var b = IntBag.create(7)
+	return b.probe()
+end 'main'
+```
+```exitcode
+8
+```
+
+### A local bound to a call on an overloaded method's result
+
+`dup` has two overloads that both answer `Self`, so the result is the receiver's own instance whichever is bound, and `c.size()` reads `bool`'s size.
+
+<!-- test: a-local-bound-to-an-overloaded-methods-result-is-the-receiver-instance -->
+```maxon
+type Slot uses V
+	var n as Count
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function dup() returns Self
+		return Self{n: n}
+	end 'dup'
+
+	function dup(times Count) returns Self
+		return Self{n: times}
+	end 'dup'
+
+	function size() returns Count
+		return sizeof(V)
+	end 'size'
+end 'Slot'
+
+type Bag uses Element
+	typealias Inner = Slot with Element
+	var inner as Inner
+
+	static function create() returns Self
+		return Self{inner: Inner.create()}
+	end 'create'
+
+	function probe() returns Count
+		let c = self.inner.dup()
+		return c.size()
+	end 'probe'
+end 'Bag'
+
+typealias BoolBag = Bag with bool
+
+function main() returns ExitCode
+	let b = BoolBag.create()
+	print("{b.probe()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+### A nested instance bound to a local from a `Self`-typed parameter's field
+
+<!-- test: a-local-bound-to-the-nested-field-of-a-self-typed-parameter -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Inner uses T
+	var v as T
+
+	static function create(x T) returns Self
+		return Self{v: x}
+	end 'create'
+
+	function slotSize() returns Int
+		return sizeof(T)
+	end 'slotSize'
+end 'Inner'
+
+type Bag uses Element
+	typealias EChain = Inner with Element
+	export var chain as EChain
+
+	static function create(x Element) returns Self
+		return Self{chain: EChain.create(x)}
+	end 'create'
+
+	function probe(other Self) returns Int
+		view peer = other.chain
+		return peer.slotSize()
+	end 'probe'
+end 'Bag'
+
+typealias IntBag = Bag with Int
+
+function main() returns ExitCode
+	var a = IntBag.create(7)
+	var b = IntBag.create(9)
+	return a.probe(b)
+end 'main'
+```
+```exitcode
+8
+```
+
+### Two sibling closures, each parameter its own instance
+
+<!-- test: two-sibling-closures-name-a-parameter-alike-over-different-instances -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Pair uses A
+	var w as A
+
+	static function create(x A) returns Self
+		return Self{w: x}
+	end 'create'
+
+	function slotSize() returns Int
+		return sizeof(A)
+	end 'slotSize'
+end 'Pair'
+
+type Inner uses T
+	var v as T
+
+	static function create(x T) returns Self
+		return Self{v: x}
+	end 'create'
+
+	function slotSize() returns Int
+		return 1
+	end 'slotSize'
+end 'Inner'
+
+type Bag uses Element
+	typealias EPair = Pair with Element
+	typealias EChain = Inner with Element
+	var seen as Count
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	function probe(chain EChain, pair EPair) returns Int
+		let g = function(c EChain) gives c.slotSize()
+		let h = function(c EPair) gives c.slotSize()
+		return g(chain) + h(pair)
+	end 'probe'
+end 'Bag'
+
+typealias IntBag = Bag with Int
+typealias IntChain = Inner with Int
+typealias IntPair = Pair with Int
+
+function main() returns ExitCode
+	var b = IntBag.create()
+	return b.probe(IntChain.create(9), pair: IntPair.create(7))
+end 'main'
+```
+```exitcode
+9
+```

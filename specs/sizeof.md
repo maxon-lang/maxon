@@ -627,3 +627,223 @@ end 'main'
 ```stdout
 56008 56 57
 ```
+
+### `sizeof` read by a call chained on a method's result and on an overloaded method's result
+
+<!-- test: sizeof-read-through-a-call-chained-on-a-result -->
+```maxon
+typealias Small = int(0 to 65535)
+
+type Inner uses T
+	var v as T
+
+	static function create(x T) returns Self
+		return Self{v: x}
+	end 'create'
+
+	function size() returns Count
+		return sizeof(T)
+	end 'size'
+end 'Inner'
+
+type Outer uses T
+	typealias Held = Inner with T
+	var held as Held
+
+	static function create(x T) returns Self
+		return Self{held: Held.create(x)}
+	end 'create'
+
+	function make() returns Held
+		return held
+	end 'make'
+
+	function probe() returns Count
+		return self.make().size()
+	end 'probe'
+end 'Outer'
+
+typealias SmallOuter = Outer with Small
+typealias BoolOuter = Outer with bool
+
+function main() returns ExitCode
+	let a = SmallOuter.create(7)
+	let b = BoolOuter.create(true)
+	print("{a.probe()} {b.probe()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8 1
+```
+
+<!-- test: sizeof-read-through-an-overloaded-methods-result -->
+```maxon
+type Left uses A
+	var n as Count
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+
+	function size() returns Count
+		return sizeof(A)
+	end 'size'
+end 'Left'
+
+type Right uses B
+	var n as Count
+
+	static function create() returns Self
+		return Self{n: 2}
+	end 'create'
+
+	function size() returns Count
+		return sizeof(B)
+	end 'size'
+end 'Right'
+
+type Inner uses T
+	typealias L = Left with T
+	typealias R = Right with T
+	var n as Count
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function pick(_ Count) returns L
+		return L.create()
+	end 'pick'
+
+	function pick(_ bool) returns R
+		return R.create()
+	end 'pick'
+end 'Inner'
+
+type Outer uses T
+	typealias Held = Inner with T
+	var inner as Held
+
+	static function create() returns Self
+		return Self{inner: Held.create()}
+	end 'create'
+
+	function probe() returns Count
+		let c = self.inner.pick(1)
+		return c.size()
+	end 'probe'
+
+	function probeOther() returns Count
+		let c = self.inner.pick(true)
+		return c.size()
+	end 'probeOther'
+end 'Outer'
+
+typealias BoolOuter = Outer with bool
+
+function main() returns ExitCode
+	let o = BoolOuter.create()
+	print("{o.probe()} {o.probeOther()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 1
+```
+
+### `sizeof` behind a method taken as a value, and read by a field default built from outside
+
+<!-- test: sizeof.error.a-static-of-a-generic-type-is-not-a-function-value -->
+A method of a generic type is not a function value, so no thunk is ever asked to call one without the descriptor it reads.
+```maxon
+type Box uses T
+	var n as Count
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	static function width() returns Count
+		return sizeof(T)
+	end 'width'
+
+	function viaValue() returns Count
+		let f = Self.width
+		return f()
+	end 'viaValue'
+end 'Box'
+
+typealias Small = int(0 to 65535)
+typealias SmallBox = Box with Small
+
+function main() returns ExitCode
+	let a = SmallBox.create()
+	print("{a.viaValue()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:14:16: Expected 'min or max' but got 'width'
+```
+
+<!-- test: sizeof-read-by-a-field-default-built-through-a-typealias -->
+```maxon
+type Box uses T
+	export var n = sizeof(T) as Count
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Box'
+
+typealias Small = int(0 to 65535)
+typealias SmallBox = Box with Small
+typealias FlagBox = Box with bool
+
+function main() returns ExitCode
+	let a = SmallBox.create()
+	let b = FlagBox.create()
+	print("{a.n} {b.n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8 1
+```
+
+<!-- test: sizeof.error.a-static-of-a-generic-type-is-not-a-function-value-from-main -->
+```maxon
+type Box uses T
+	var n as Count
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	static function width() returns Count
+		return sizeof(T)
+	end 'width'
+end 'Box'
+
+typealias Small = int(0 to 65535)
+typealias SmallBox = Box with Small
+
+function main() returns ExitCode
+	let f = SmallBox.width
+	print("{f()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:18:19: Expected 'min or max' but got 'width'
+```

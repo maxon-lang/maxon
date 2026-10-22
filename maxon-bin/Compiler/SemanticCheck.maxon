@@ -1725,7 +1725,7 @@ end 'buildThrowsMap'
 // each other, are both ordinary Maxon. The least fixpoint is the only answer that is both order-independent
 // and terminating.
 //
-// ⭐ **IT IS THE SAME WORKLIST SHAPE `Queries.foldDescriptorNeeds` AND THE TRANSITIVE-CONSUME FIXPOINT USE**,
+// ⭐ **IT IS THE SAME WORKLIST SHAPE `Queries.foldFixedElementCountNeeds` AND THE TRANSITIVE-CONSUME FIXPOINT USE**,
 // deliberately — a third idiom for "close a per-function fact under the call graph" would be one concept
 // with three spellings. Termination is monotone-and-bounded: a mask only ever GAINS bits (`maskWithParam`
 // never clears one) and a function has at most `MaxAbiArgs` of them, so a caller is re-enqueued only on a
@@ -3841,9 +3841,20 @@ function validatePlainCall(project Project, func IrFunction, signatures ProgramS
 		// ⚠ The NOUN, not the callee: a bare `int.fromString(s)` is the shape an author most often writes by
 		// mistake, and quoting `'__int_fromString'` back names a callee they did not write — see
 		// `callDiagnosticNoun`.
-		reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: throwingCallRequiresTryMessage(signatures.diagnosticCalleeSpelling(callDiagnosticNoun(callee, mint: mint))), line: callRange.line, column: callRange.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
+		reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: throwingCallRequiresTryMessage(boundCalleeSpelling(signatures, funcNames: funcNames, callee: callee, mint: mint)), line: callRange.line, column: callRange.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
 	end 'throwing'
 end 'validatePlainCall'
+
+function boundCalleeSpelling(signatures ProgramSignatures, funcNames FunctionNameIndex, callee ByteArray, mint CalleeMint) returns ByteArray
+	let noun = callDiagnosticNoun(callee, mint: mint)
+
+	if not noun.equals(callee) or overloadRegistrationBaseName(callee).equals(callee) 'notAnOverloadMember'
+		return signatures.diagnosticCalleeSpelling(noun)
+	end 'notAnOverloadMember'
+
+	let member = try funcNames.funcNamed(callee) otherwise panic("boundCalleeSpelling: the overload member '{String.from(callee)}' throws and has no body in the module")
+	return signatures.diagnosticMemberSpelling(callee, declFilePath: member.sourceFilePath)
+end 'boundCalleeSpelling'
 
 // Validate one call site. Reports the FIRST error found (unknown callee, then the arg
 // slotting result: arity, unknown label, or a parameter given two arguments; then, on a
@@ -6116,25 +6127,17 @@ end 'checkResolvedExtensionConstraints'
 // The deferred twin of `Parser.requireTablesToForwardOpaqueArguments`, on the member overload
 // resolution chose.
 function reportOpaqueReceiverWithoutTables(project Project, signatures ProgramSignatures, func IrFunction, callee ByteArray, constraints WhereConstraintArray, gid GenericInstanceId, callRange SourceRange, filePath FilePath)
-	let holder = tableHolderOf(project, signatures: signatures, func: func)
+	// The carrier fixpoint runs in lowering, after this check, so a static counts as carrying its tables
+	// here; lowering refuses the call (`refuseUnsuppliedTables`) when it turns out to carry none.
+	let holder = tableHolderOf(signatures, funcSignatures: project.funcSignatures, func: func, staticCarriesTheDescriptor: true)
 
 	if holder == TableHolder.carriesTables or not signatures.constraintsNameABareTypeParameter(callee, extensionConstraints: constraints, gid: gid) 'nothingToForwardOrSomewhereToForwardFrom'
 		return
 	end 'nothingToForwardOrSomewhereToForwardFrom'
 
 	let arrival = arrivalWhenWithoutTables(holder, outsideAClosure: NoWitnessTablesArrival.dispatchedOnAnInstanceOverATypeParameter)
-
-	match splitQualifiedName(overloadRegistrationBaseName(callee)) 'q'
-		parts(_, member) then reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: unsupportedFeatureMessage(noWitnessTablesSentence(member, arrival: arrival)), line: callRange.line, column: callRange.column, filePath: filePath)
-		notQualified then panic("reportOpaqueReceiverWithoutTables: '{String.from(callee)}' carries extension constraints but is not a qualified method name — `Parser.noteTypeExtensionWitnessConstraints` files them under `<Conformer>.<member>` only")
-	end 'q'
+	reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: noWitnessTablesRefusalText(callee, arrival: arrival), line: callRange.line, column: callRange.column, filePath: filePath)
 end 'reportOpaqueReceiverWithoutTables'
-
-function tableHolderOf(project Project, signatures ProgramSignatures, func IrFunction) returns TableHolder
-	let liftedClosure = isLiftedClosureName(func.name)
-	let callerSignature = try project.funcSignatures.get(func.name) otherwise return deriveTableHolder(liftedClosure, carriedTables: 0)
-	return deriveTableHolder(liftedClosure, carriedTables: signatures.witnessParamCountForCallee(func.name, sig: callerSignature))
-end 'tableHolderOf'
 
 // The refusal itself, split out so the arm above stays one line: the callee is a
 // `<Conformer>.<member>` (the fold files constraints under no other shape), possibly wearing an overload

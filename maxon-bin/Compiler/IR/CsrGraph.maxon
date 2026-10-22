@@ -7,7 +7,8 @@
 //   • the CFG's successor / predecessor lists    (TargetLiveness.FuncTopology.succ/.pred)
 //   • which values die at each op of a block     (RegisterAllocator.BlockDeaths)
 //   • which values feed each phi                 (PruneDeadBlockArgs, ElimTrivialBlockArgs)
-//   • which methods call a method                (Parser: descriptor-need + array-feed fixpoints)
+//   • which methods call a method                (Parser: fixed-element-count + array-feed fixpoints)
+//   • which functions carry a layout descriptor  (LowerMaxonToStd.planLayoutCarriers)
 //   • which functions forward a parameter        (SignatureIndex.closeByRefForwarding)
 //   • which stdlib functions need the substrate  (StdlibSource.SubstrateFixpoint)
 //   • which instances a type argument denotes    (SignatureIndex.buildInstanceArgGraph)
@@ -112,11 +113,12 @@ end 'buildCsr'
 // for O(nodes + edges).
 //
 // ⭐ **THE SHARED ENGINE OF EVERY TRANSITIVE-CLOSURE FIXPOINT IN THE COMPILER**, so they cannot drift on how
-// reachability is marked: the descriptor-need fixpoint (`Queries.foldDescriptorNeeds`), the transitive
-// array-feed fixpoint (`solveAndPublishTransitiveFeeds`) and the by-reference forwarding closure
-// (`ProgramSignatures.closeByRefForwarding`). It lives HERE rather than beside the first two for the reason
-// `buildCsr` does — see this file's header: a walk over a CSR belongs with the CSR, and the third consumer
-// is in a file the other two's home cannot be reached from.
+// reachability is marked: the fixed-element-count fixpoint (`Parser.solveFixedElementCountNeeds`), the
+// transitive array-feed fixpoint (`solveAndPublishTransitiveFeeds`), the layout-carrier fixpoint
+// (`MaxonToStdLowering.planLayoutCarriers`) and the by-reference forwarding closure
+// (`ProgramSignatures.closeByRefForwarding`). It lives HERE rather than beside any one of them for the reason
+// `buildCsr` does — see this file's header: a walk over a CSR belongs with the CSR, and its consumers live in
+// files that cannot all reach one another.
 //
 // ⚠ **A ROUND-BASED FIXPOINT IS NOT AN ALTERNATIVE SPELLING OF THIS, IT IS A DIFFERENT COMPLEXITY.**
 // "Re-scan every node until nothing changes" costs O(depth x (nodes + edges)) and the depth is the source

@@ -985,3 +985,136 @@ end 'main'
 ```maxoncstderr
 error E3133: <fragment>:42:11: 'Wrap' constrains type parameter 'S' to 'Cursor with Integer', but 'TextCur' binds 'Cursor's associated type 'Element' to 'String' — a `where` constraint's binding is what types every dispatch through that parameter inside the shared body, which is compiled ONCE, so a conformer binding it otherwise would have its bits read as the claimed type. Bind the constraint to what the conformer declares, or supply an argument whose conformance binds what the constraint states
 ```
+
+<!-- test: associated-binding.a-method-reading-nothing-of-its-parameter-supplies-a-parametric-witness-from-its-own-table -->
+`Holder.run` reads nothing of `T` itself. It calls `Keeper.measure`, which dispatches through `Keeper`'s `A is Sized` table, and that table has to be the one for `Pair with T`, whose `size` reads its type argument's size. Only `Holder`'s own descriptor can supply it, so `run` carries one.
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+interface Sized
+	function size() returns Val
+end 'Sized'
+
+type Keeper uses A where A is Sized
+	var n as Val
+
+	static function create(n Val) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function measure(probe A) returns Val
+		return probe.size() + self.n
+	end 'measure'
+end 'Keeper'
+
+type Pair uses P implements Sized
+	var n as Val
+
+	static function create(n Val) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function size() returns Val
+		return sizeof(P) as Val
+	end 'size'
+end 'Pair'
+
+type Holder uses T
+	typealias Wrapped = Pair with T
+	typealias Gauge = Keeper with Wrapped
+
+	var gauge as Gauge
+
+	static function create(base Val) returns Self
+		return Self{gauge: Gauge.create(base)}
+	end 'create'
+
+	function run() returns Val
+		return self.gauge.measure(Wrapped.create(1))
+	end 'run'
+end 'Holder'
+
+typealias Small = int(0 to 65535)
+typealias SmallHolder = Holder with Small
+typealias FlagHolder = Holder with bool
+
+function main() returns ExitCode
+	let a = SmallHolder.create(100)
+	let b = FlagHolder.create(100)
+	print("{a.run()} {b.run()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+108 101
+```
+
+<!-- test: associated-binding.a-witness-read-only-inside-a-closure-the-callee-builds-is-supplied-from-the-callers-table -->
+`Keeper.measure` dispatches through its `A is Sized` table only inside a closure it builds, so its caller still has to supply the table for `Pair with T`.
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+interface Sized
+	function size() returns Val
+end 'Sized'
+
+type Keeper uses A where A is Sized
+	var n as Val
+
+	static function create(n Val) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function measure(probe A) returns Val
+		let f = function(p A) gives p.size()
+		return f(probe) + self.n
+	end 'measure'
+end 'Keeper'
+
+type Pair uses P implements Sized
+	var n as Val
+
+	static function create(n Val) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function size() returns Val
+		return sizeof(P) as Val
+	end 'size'
+end 'Pair'
+
+type Holder uses T
+	typealias Wrapped = Pair with T
+	typealias Gauge = Keeper with Wrapped
+
+	var gauge as Gauge
+
+	static function create(base Val) returns Self
+		return Self{gauge: Gauge.create(base)}
+	end 'create'
+
+	function run() returns Val
+		return self.gauge.measure(Wrapped.create(1))
+	end 'run'
+end 'Holder'
+
+typealias Small = int(0 to 65535)
+typealias SmallHolder = Holder with Small
+typealias FlagHolder = Holder with bool
+
+function main() returns ExitCode
+	let a = SmallHolder.create(100)
+	let b = FlagHolder.create(100)
+	print("{a.run()} {b.run()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+108 101
+```

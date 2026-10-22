@@ -533,10 +533,9 @@ end 'main'
 - A `static function` learns it from the instance its call names: the typealias it is called through
   (`IntBox.create(42)`), the instance its arguments fix on the bare generic name, or, called from a method
   of the same generic, what that method received. This covers every static, whatever it returns, that
-  reads `sizeof` of a type parameter or `countof(Self)`, builds an `Array with T`, stores a borrowed
-  type-parameter value, or calls a method of a `where` constraint on one. A call that names no instance,
-  from a function holding none to hand on, is **E2015**, and **E3162** when it needs a layout descriptor
-  through a bare generic base (below).
+  needs its instance's layout, its `countof(Self)` or the tables of a `where` constraint, itself or through
+  what it calls. A call that names no instance, from a function holding none to hand on, is **E3162** when
+  the static needs the layout (below), and **E2015** when it needs the count or the tables.
 - A generic type whose methods reach an instance of itself through an ever-growing type argument
   (`Node with (Pair with T)` inside `Node`) has no finite set of instances, and is **E2015**.
 - Wrong argument count is **E2056**; a bare `int` argument is **E2061**; a type argument to a non-generic

@@ -1619,10 +1619,9 @@ end 'main'
 - A `static function` learns it from the instance its call names: the typealias it is called through
   (`IntBox.create(42)`), the instance its arguments fix on the bare generic name, or, called from a method
   of the same generic, what that method received. This covers every static, whatever it returns, that
-  reads `sizeof` of a type parameter or `countof(Self)`, builds an `Array with T`, stores a borrowed
-  type-parameter value, or calls a method of a `where` constraint on one. A call that names no instance,
-  from a function holding none to hand on, is **E2015**, and **E3162** when it needs a layout descriptor
-  through a bare generic base (below).
+  needs its instance's layout, its `countof(Self)` or the tables of a `where` constraint, itself or through
+  what it calls. A call that names no instance, from a function holding none to hand on, is **E3162** when
+  the static needs the layout (below), and **E2015** when it needs the count or the tables.
 - A generic type whose methods reach an instance of itself through an ever-growing type argument
   (`Node with (Pair with T)` inside `Node`) has no finite set of instances, and is **E2015**.
 - Wrong argument count is **E2056**; a bare `int` argument is **E2061**; a type argument to a non-generic
@@ -4837,7 +4836,8 @@ not 80.
 
 - `sleep(milliseconds)` parks the current green thread; it takes a `Milliseconds` value.
 - `async` applies to a direct call of a function or a static method. It cannot start a closure, an
-  indirect call or an instance method (**E2015**). A generic function is started at the instance its
+  indirect call, an instance method, or a static that reads its generic type's layout (**E2015**): a
+  coroutine is handed its written arguments only. A generic function is started at the instance its
   arguments infer, as a call would be. A [qualified](#qualified-names) callee reads as the direct call
   reads it, at any length: `async sub.Calc.seven()` and `async outer.inner.six()` start what those calls
   name.

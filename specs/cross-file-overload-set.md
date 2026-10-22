@@ -1092,3 +1092,89 @@ end 'main'
 ```exitcode
 9
 ```
+
+<!-- test: error.a-throwing-member-in-a-subdirectory-is-spelled-with-its-namespace -->
+The set is declared by an `extension` in `sub/` and by an `extension` in the root file. Each member is qualified by its own file: the member the call binds to lives in `sub/`.
+```maxon
+// --- file: sub/box.maxon
+export enum PutError implements Error
+	failed
+end 'PutError'
+
+export type Box
+	export var n as Count
+
+	export static function create() returns Box
+		return Box{n: 0}
+	end 'create'
+end 'Box'
+
+extension Box
+	export function put(x Count) throws PutError
+		if x == 0 'nothing'
+			throw PutError.failed
+		end 'nothing'
+	end 'put'
+end 'Box'
+
+// --- file: main.maxon
+extension sub.Box
+	function put(x String) throws sub.PutError
+		if x.isEmpty() 'nothing'
+			throw sub.PutError.failed
+		end 'nothing'
+	end 'put'
+end 'Box'
+
+function main() returns ExitCode
+	let b = sub.Box.create()
+	b.put(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3057: <fragment>:34:4: throwing function requires try: 'sub.Box.put'
+```
+
+<!-- test: error.a-throwing-member-in-the-root-file-is-spelled-without-the-others-namespace -->
+The same two members, and the call binds to the one in the root file, so the sentence does not wear the `sub.` namespace of the other member.
+```maxon
+// --- file: sub/box.maxon
+export enum PutError implements Error
+	failed
+end 'PutError'
+
+export type Box
+	export var n as Count
+
+	export static function create() returns Box
+		return Box{n: 0}
+	end 'create'
+end 'Box'
+
+extension Box
+	export function put(x Count) throws PutError
+		if x == 0 'nothing'
+			throw PutError.failed
+		end 'nothing'
+	end 'put'
+end 'Box'
+
+// --- file: main.maxon
+extension sub.Box
+	function put(x String) throws sub.PutError
+		if x.isEmpty() 'nothing'
+			throw sub.PutError.failed
+		end 'nothing'
+	end 'put'
+end 'Box'
+
+function main() returns ExitCode
+	let b = sub.Box.create()
+	b.put("x")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3057: <fragment>:34:4: throwing function requires try: 'Box.put'
+```

@@ -2784,13 +2784,17 @@ type Holder uses T where T is Hashable and Equatable
 		let f = function(y T) gives Self.hashOf(y)
 		return f(x)
 	end 'viaClosure'
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
 end 'Holder'
 
 typealias H = Holder with Integer
 
 function main() returns ExitCode
 	let value = 41 as Integer
-	let h = H{v: value}
+	let h = H.make(value)
 	print("{h.viaClosure(value)}\n")
 	return 0
 end 'main'
@@ -3198,6 +3202,10 @@ type Runner uses D where D is Hashable and Equatable
 		let f = function(x OuterD) gives Self.run(x)
 		return f(o)
 	end 'viaClosure'
+
+	static function make(d D) returns Self
+		return Self{d: d}
+	end 'make'
 end 'Runner'
 
 typealias R = Runner with String
@@ -3205,7 +3213,7 @@ typealias StrOuter = Outer with String
 
 function main() returns ExitCode
 	let o = StrOuter.create("outer")
-	let r = R{d: "d"}
+	let r = R.make("d")
 	print("{r.viaClosure(o)}\n")
 	return 0
 end 'main'
@@ -3841,4 +3849,329 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+### A static that hands on nothing of its type's parameters carries nothing
+
+<!-- test: where-clauses.a-static-calling-a-concrete-witness-method-is-not-a-carrier -->
+`Box.probe` calls `contains` on an `Array with Integer`, whose `Equatable` table is the one for `Integer`. None of `Box`'s own tables is handed on, so `probe` carries no descriptor and no witnesses, and a call through the bare name from `main` has nothing to supply.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Integers = Array with Integer
+
+type Box uses T where T is Hashable and Equatable
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function probe() returns bool
+		var xs = Integers.create()
+		xs.push(1)
+		xs.push(2)
+		return xs.contains(2)
+	end 'probe'
+end 'Box'
+
+function main() returns ExitCode
+	print("{Box.probe()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true
+```
+
+<!-- test: where-clauses.a-static-creating-a-closure-that-reads-nothing-is-not-a-carrier -->
+```maxon
+type Box uses T where T is Hashable and Equatable
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function bump(n Count) returns Count
+		let f = function(x Count) gives x + 1
+		return f(n)
+	end 'bump'
+end 'Box'
+
+function main() returns ExitCode
+	print("{Box.bump(1)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2
+```
+
+<!-- test: where-clauses.a-static-with-conditional-witnesses-that-carries-nothing-is-spawned -->
+<!-- unsupported-targets: wasm32-wasi -->
+```maxon
+type Holder uses T where T is Hashable and Equatable
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function plain(n Count) returns Count
+		sleep(1)
+		return n + 1
+	end 'plain'
+end 'Holder'
+
+function main() returns ExitCode
+	let p = async Holder.plain(1)
+	let v = await p
+	print("{v}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2
+```
+
+<!-- test: where-clauses.error.a-static-reading-its-types-parameter-is-not-spawned -->
+<!-- unsupported-targets: wasm32-wasi -->
+```maxon
+type Holder uses T where T is Hashable and Equatable
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function width(n Count) returns Count
+		sleep(1)
+		return n + sizeof(T)
+	end 'width'
+end 'Holder'
+
+function main() returns ExitCode
+	let p = async Holder.width(1)
+	let v = await p
+	print("{v}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:16:23: Unsupported: `async Holder.width(…)` reads the enclosing instance's layout descriptor, which a spawn cannot hand it — the green thread's argument region carries the written arguments only. Call it directly, or spawn a function that carries none
+```
+
+<!-- test: where-clauses.a-static-with-conditional-witnesses-called-in-a-closure-passed-to-map -->
+```maxon
+type Holder uses T where T is Hashable and Equatable
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function width(n Count) returns Count
+		return n + sizeof(T)
+	end 'width'
+end 'Holder'
+
+typealias Small = int(0 to 100)
+typealias SmallHolder = Holder with Small
+
+function main() returns ExitCode
+	let xs = [1, 2]
+	let ys = xs.map(function(n) gives SmallHolder.width(n))
+	print("{try ys.get(0) otherwise 0} {try ys.get(1) otherwise 0}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+9 10
+```
+
+<!-- test: where-clauses.a-static-reading-a-witness-called-in-a-closure-passed-to-map -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Holder uses T where T is Equatable
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function agree(a T, b T) returns Integer
+		return 1 if a == b else 0
+	end 'agree'
+end 'Holder'
+
+typealias IntHolder = Holder with Integer
+
+function main() returns ExitCode
+	let xs = [1, 2]
+	let ys = xs.map(function(n) gives IntHolder.agree(n, b: 1))
+	print("{try ys.get(0) otherwise 0} {try ys.get(1) otherwise 0}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 0
+```
+
+### A static at the argument-slot ceiling that carries no descriptor keeps the slots it never uses unreserved
+
+<!-- test: where-clauses.a-static-at-the-argument-ceiling-with-conditional-witnesses-is-not-a-carrier -->
+Sixty-two parameters plus two conditional witnesses plus the layout slot would be sixty-five, one past the ceiling. The static reads nothing of `T`, so it is no carrier and takes sixty-two.
+```maxon
+type Holder uses T where T is Hashable and Equatable
+	var v as T
+
+	static function sum(p0 Count, p1 Count, p2 Count, p3 Count, p4 Count, p5 Count, p6 Count, p7 Count, p8 Count, p9 Count, p10 Count, p11 Count, p12 Count, p13 Count, p14 Count, p15 Count, p16 Count, p17 Count, p18 Count, p19 Count, p20 Count, p21 Count, p22 Count, p23 Count, p24 Count, p25 Count, p26 Count, p27 Count, p28 Count, p29 Count, p30 Count, p31 Count, p32 Count, p33 Count, p34 Count, p35 Count, p36 Count, p37 Count, p38 Count, p39 Count, p40 Count, p41 Count, p42 Count, p43 Count, p44 Count, p45 Count, p46 Count, p47 Count, p48 Count, p49 Count, p50 Count, p51 Count, p52 Count, p53 Count, p54 Count, p55 Count, p56 Count, p57 Count, p58 Count, p59 Count, p60 Count, p61 Count) returns Count
+		return p0 + p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9 + p10 + p11 + p12 + p13 + p14 + p15 + p16 + p17 + p18 + p19 + p20 + p21 + p22 + p23 + p24 + p25 + p26 + p27 + p28 + p29 + p30 + p31 + p32 + p33 + p34 + p35 + p36 + p37 + p38 + p39 + p40 + p41 + p42 + p43 + p44 + p45 + p46 + p47 + p48 + p49 + p50 + p51 + p52 + p53 + p54 + p55 + p56 + p57 + p58 + p59 + p60 + p61
+	end 'sum'
+end 'Holder'
+
+typealias Small = int(0 to 100)
+typealias IntHolder = Holder with Small
+
+function main() returns ExitCode
+	print("{IntHolder.sum(1, p1: 2, p2: 3, p3: 4, p4: 5, p5: 6, p6: 7, p7: 8, p8: 9, p9: 10, p10: 11, p11: 12, p12: 13, p13: 14, p14: 15, p15: 16, p16: 17, p17: 18, p18: 19, p19: 20, p20: 21, p21: 22, p22: 23, p23: 24, p24: 25, p25: 26, p26: 27, p27: 28, p28: 29, p29: 30, p30: 31, p31: 32, p32: 33, p33: 34, p34: 35, p35: 36, p36: 37, p37: 38, p38: 39, p39: 40, p40: 41, p41: 42, p42: 43, p43: 44, p44: 45, p45: 46, p46: 47, p47: 48, p48: 49, p49: 50, p50: 51, p51: 52, p52: 53, p53: 54, p54: 55, p55: 56, p56: 57, p57: 58, p58: 59, p59: 60, p60: 61, p61: 62)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1953
+```
+
+<!-- test: where-clauses.a-witness-only-static-called-through-self-from-an-instance-method -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Holder uses T where T is Hashable and Equatable
+	var v as T
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+
+	static function hashOf(v T) returns HashValue
+		return v.hash()
+	end 'hashOf'
+
+	function viaSelf(x T) returns HashValue
+		return Self.hashOf(x)
+	end 'viaSelf'
+end 'Holder'
+
+typealias H = Holder with Integer
+
+function main() returns ExitCode
+	let value = 41 as Integer
+	let h = H.make(value)
+	print("{h.viaSelf(value) == value.hash()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true
+```
+
+<!-- test: where-clauses.a-call-missing-its-descriptor-and-its-tables-is-refused-once -->
+`main` names the bare `Holder`, so the call has no instance to take the layout descriptor from or the `where` tables from. It is one refusal, at the call.
+```maxon
+type Holder uses T where T is Hashable and Equatable
+	var v as T
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+
+	static function width(n Count) returns Count
+		return n + sizeof(T)
+	end 'width'
+end 'Holder'
+
+function main() returns ExitCode
+	print("{Holder.width(1)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3162: <fragment>:15:17: 'Holder' is named without type arguments and nothing binds its parameter 'T', so 'Holder.width' has no layout descriptor to be handed: the base has none, and neither does this function. Name the instance with a typealias, giving each of its parameters a type argument
+```
+
+<!-- test: where-clauses.a-static-at-the-argument-ceiling-that-reads-its-types-parameter-is-refused -->
+The same sixty-two parameters, but the static reads `sizeof(T)`, so it is a carrier and its layout slot makes the sixty-fifth. The refusal is at the declaration.
+```maxon
+type Holder uses T where T is Hashable and Equatable
+	var v as T
+
+	static function sum(p0 Count, p1 Count, p2 Count, p3 Count, p4 Count, p5 Count, p6 Count, p7 Count, p8 Count, p9 Count, p10 Count, p11 Count, p12 Count, p13 Count, p14 Count, p15 Count, p16 Count, p17 Count, p18 Count, p19 Count, p20 Count, p21 Count, p22 Count, p23 Count, p24 Count, p25 Count, p26 Count, p27 Count, p28 Count, p29 Count, p30 Count, p31 Count, p32 Count, p33 Count, p34 Count, p35 Count, p36 Count, p37 Count, p38 Count, p39 Count, p40 Count, p41 Count, p42 Count, p43 Count, p44 Count, p45 Count, p46 Count, p47 Count, p48 Count, p49 Count, p50 Count, p51 Count, p52 Count, p53 Count, p54 Count, p55 Count, p56 Count, p57 Count, p58 Count, p59 Count, p60 Count, p61 Count) returns Count
+		return sizeof(T) + p0 + p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9 + p10 + p11 + p12 + p13 + p14 + p15 + p16 + p17 + p18 + p19 + p20 + p21 + p22 + p23 + p24 + p25 + p26 + p27 + p28 + p29 + p30 + p31 + p32 + p33 + p34 + p35 + p36 + p37 + p38 + p39 + p40 + p41 + p42 + p43 + p44 + p45 + p46 + p47 + p48 + p49 + p50 + p51 + p52 + p53 + p54 + p55 + p56 + p57 + p58 + p59 + p60 + p61
+	end 'sum'
+end 'Holder'
+
+typealias Small = int(0 to 100)
+typealias IntHolder = Holder with Small
+
+function main() returns ExitCode
+	print("{IntHolder.sum(1, p1: 2, p2: 3, p3: 4, p4: 5, p5: 6, p6: 7, p7: 8, p8: 9, p9: 10, p10: 11, p11: 12, p12: 13, p13: 14, p14: 15, p15: 16, p16: 17, p17: 18, p18: 19, p19: 20, p20: 21, p21: 22, p22: 23, p23: 24, p24: 25, p25: 26, p26: 27, p27: 28, p28: 29, p29: 30, p30: 31, p31: 32, p32: 33, p33: 34, p34: 35, p35: 36, p36: 37, p37: 38, p38: 39, p39: 40, p40: 41, p41: 42, p42: 43, p43: 44, p44: 45, p45: 46, p46: 47, p47: 48, p48: 49, p49: 50, p50: 51, p51: 52, p52: 53, p53: 54, p54: 55, p55: 56, p56: 57, p57: 58, p58: 59, p59: 60, p60: 61, p61: 62)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:5:18: Unsupported: a function with 65 argument slots — more than the 64 a call can carry. A signature's slots are its declared parameters plus the hidden ones the ABI adds (a witness per interface-typed parameter, a layout descriptor for a generic that reads one or calls a function that does, one witness per `where` constraint), and the limit is the width of the per-argument float mask that routes each one to its register file
+```
+
+<!-- test: where-clauses.a-closure-written-for-a-descriptor-it-never-reads-leaves-its-static-a-non-carrier -->
+The closure calls a sibling static of the generic type, so it holds a word for the layout descriptor; the sibling reads nothing, so neither the closure nor the static that builds it carries a descriptor and a call through the bare name has nothing to supply.
+```maxon
+type Box uses T where T is Hashable and Equatable
+	var v as T
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+
+	static function plain() returns Count
+		return 1
+	end 'plain'
+
+	static function viaClosure() returns Count
+		let f = function() gives Self.plain()
+		return f()
+	end 'viaClosure'
+end 'Box'
+
+function main() returns ExitCode
+	print("{Box.viaClosure()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
 ```

@@ -3122,6 +3122,8 @@ end 'cacheReadClosureCaptureSourceEnvSlot'
 
 // @generated library-cache end
 
+export let LayoutSlotWidth = 1 as ParamCount
+
 export type IrFunction
 	// --- Common fields (all phases) ---
 	// A zero-copy slice of the source, straight off the declaring token. It stays bytes all
@@ -3214,6 +3216,11 @@ export type IrFunction
 	// ⚠ A FIELD rather than a name test, for `keepsItsOwnFrame`'s reason: the body says so, by calling
 	// `__Raw.splicedAtEverySite()`, and nothing infers it from a naming band.
 	export var mustBeSplicedAtEverySite as bool
+
+	// The hidden slots past `paramCount` this function may take: a static's conditional witnesses, then the
+	// layout slot. They join `paramCount` only once lowering makes the function a carrier
+	// (`reserveLayoutParameters`); until then `paramCount` excludes them.
+	export var layoutReserve as ParamCount
 	export var closureLayout as ClosureCaptureSource
 	export var closureFixedElementCount as ClosureCaptureSource
 	export var closureEnvFields as ClosureEnvFieldArray
@@ -3539,6 +3546,7 @@ export type IrFunction
 			name: name.clone(),
 			visibility: Visibility.file,
 			needsGreenThreadStackGuard: needsGreenThreadStackGuard,
+			layoutReserve: 0,
 			closureLayout: ClosureCaptureSource.none,
 			closureFixedElementCount: ClosureCaptureSource.none,
 			closureEnvFields: ClosureEnvFieldArray.create(),
@@ -3626,6 +3634,7 @@ export type IrFunction
 			name: name,
 			visibility: Visibility.global,
 			needsGreenThreadStackGuard: needsGreenThreadStackGuard,
+			layoutReserve: 0,
 			closureLayout: ClosureCaptureSource.none,
 			closureFixedElementCount: ClosureCaptureSource.none,
 			closureEnvFields: ClosureEnvFieldArray.create(),
@@ -3700,6 +3709,7 @@ export type IrFunction
 			// A copy is the same code with the same stack behaviour, so the claim TRAVELS rather than being
 			// re-decided here — exactly as `sourceFilePath` does one line down, and for the same reason.
 			needsGreenThreadStackGuard: src.needsGreenThreadStackGuard,
+			layoutReserve: src.layoutReserve,
 			closureLayout: src.closureLayout,
 			closureFixedElementCount: src.closureFixedElementCount,
 			closureEnvFields: src.closureEnvFields,
@@ -3766,6 +3776,14 @@ export type IrFunction
 			inlineSites: src.inlineSites if src.inlineSites.isEmpty() else InlineSiteArray.create()
 		}
 	end 'shallowCopy'
+
+	export function mayCarryADescriptor() returns bool
+		return self.layoutReserve != 0
+	end 'mayCarryADescriptor'
+
+	export function reservesConditionalWitnesses() returns bool
+		return self.layoutReserve > LayoutSlotWidth
+	end 'reservesConditionalWitnesses'
 
 	export function surrenderColumns()
 		self.ownership = ColumnOwnership.nothing()
@@ -4069,6 +4087,7 @@ export type IrFunction
 		writer.flag(self.pinsItsThread)
 		writer.flag(self.returnsByIndirectJump)
 		writer.flag(self.mustBeSplicedAtEverySite)
+		writer.unsigned(self.layoutReserve as CacheUnsigned)
 		cacheWriteClosureCaptureSource(writer, value: self.closureLayout)
 		cacheWriteClosureCaptureSource(writer, value: self.closureFixedElementCount)
 		cacheWriteClosureEnvFieldArray(writer, value: self.closureEnvFields)
@@ -4131,6 +4150,7 @@ export type IrFunction
 		let f_pinsItsThread = try reader.flag()
 		let f_returnsByIndirectJump = try reader.flag()
 		let f_mustBeSplicedAtEverySite = try reader.flag()
+		let f_layoutReserve = (try reader.unsigned()) as ParamCount
 		let f_closureLayout = try cacheReadClosureCaptureSource(reader)
 		let f_closureFixedElementCount = try cacheReadClosureCaptureSource(reader)
 		let f_closureEnvFields = try cacheReadClosureEnvFieldArray(reader)
@@ -4176,11 +4196,11 @@ export type IrFunction
 		let f_debugLocalLocations = try cacheReadDebugValueLocationArray(reader)
 		let f_debugLocalRanges = try cacheReadDebugValueRangeArray(reader)
 
-		return Self{name: f_name, visibility: f_visibility, sourceFilePath: f_sourceFilePath, paramCount: f_paramCount, blockRefs: f_blockRefs, nextBlockId: f_nextBlockId, nameLine: f_nameLine, nameColumn: f_nameColumn, closeLine: f_closeLine, closeColumn: f_closeColumn, needsGreenThreadStackGuard: f_needsGreenThreadStackGuard, keepsItsOwnFrame: f_keepsItsOwnFrame, pinsItsThread: f_pinsItsThread, returnsByIndirectJump: f_returnsByIndirectJump, mustBeSplicedAtEverySite: f_mustBeSplicedAtEverySite, closureLayout: f_closureLayout, closureFixedElementCount: f_closureFixedElementCount, closureEnvFields: f_closureEnvFields, closureStoreSites: f_closureStoreSites, maxonReturnType: f_maxonReturnType, maxonParamTypes: f_maxonParamTypes, typeSites: f_typeSites, valueTags: f_valueTags, valueNameIds: f_valueNameIds, valueBrandIds: f_valueBrandIds, valueMintedSole: f_valueMintedSole, filedProvenance: f_filedProvenance, ownership: ColumnOwnership.everything(), valueWitnessIds: f_valueWitnessIds, valueExistentialInstances: f_valueExistentialInstances, valueCallInstances: f_valueCallInstances, literalCastArguments: f_literalCastArguments, deferredArgumentBindings: f_deferredArgumentBindings, conditionalOps: f_conditionalOps, conditionalRefusals: f_conditionalRefusals, existentialFieldStores: f_existentialFieldStores, throwsTypeName: f_throwsTypeName, scope: f_scope, returnType: f_returnType, paramTypes: f_paramTypes, varSlotCount: f_varSlotCount, stackSize: f_stackSize, outgoingArgSize: f_outgoingArgSize, closureSubCounter: f_closureSubCounter, writtenParamMask: f_writtenParamMask, writesThroughParamMask: f_writesThroughParamMask, brandOriginValues: f_brandOriginValues, brandOriginKeys: f_brandOriginKeys, writesModuleStorage: f_writesModuleStorage, bodyWasSkippedAsUnreached: f_bodyWasSkippedAsUnreached, bodySplicedAway: f_bodySplicedAway, usesValueTupleReturn: f_usesValueTupleReturn, reassignedParamMask: f_reassignedParamMask, argumentOverlaps: f_argumentOverlaps, letCastReads: f_letCastReads, paramGuards: f_paramGuards, inlineSites: f_inlineSites, debugLocals: f_debugLocals, debugLocalLocations: f_debugLocalLocations, debugLocalRanges: f_debugLocalRanges}
+		return Self{name: f_name, visibility: f_visibility, sourceFilePath: f_sourceFilePath, paramCount: f_paramCount, blockRefs: f_blockRefs, nextBlockId: f_nextBlockId, nameLine: f_nameLine, nameColumn: f_nameColumn, closeLine: f_closeLine, closeColumn: f_closeColumn, needsGreenThreadStackGuard: f_needsGreenThreadStackGuard, keepsItsOwnFrame: f_keepsItsOwnFrame, pinsItsThread: f_pinsItsThread, returnsByIndirectJump: f_returnsByIndirectJump, mustBeSplicedAtEverySite: f_mustBeSplicedAtEverySite, layoutReserve: f_layoutReserve, closureLayout: f_closureLayout, closureFixedElementCount: f_closureFixedElementCount, closureEnvFields: f_closureEnvFields, closureStoreSites: f_closureStoreSites, maxonReturnType: f_maxonReturnType, maxonParamTypes: f_maxonParamTypes, typeSites: f_typeSites, valueTags: f_valueTags, valueNameIds: f_valueNameIds, valueBrandIds: f_valueBrandIds, valueMintedSole: f_valueMintedSole, filedProvenance: f_filedProvenance, ownership: ColumnOwnership.everything(), valueWitnessIds: f_valueWitnessIds, valueExistentialInstances: f_valueExistentialInstances, valueCallInstances: f_valueCallInstances, literalCastArguments: f_literalCastArguments, deferredArgumentBindings: f_deferredArgumentBindings, conditionalOps: f_conditionalOps, conditionalRefusals: f_conditionalRefusals, existentialFieldStores: f_existentialFieldStores, throwsTypeName: f_throwsTypeName, scope: f_scope, returnType: f_returnType, paramTypes: f_paramTypes, varSlotCount: f_varSlotCount, stackSize: f_stackSize, outgoingArgSize: f_outgoingArgSize, closureSubCounter: f_closureSubCounter, writtenParamMask: f_writtenParamMask, writesThroughParamMask: f_writesThroughParamMask, brandOriginValues: f_brandOriginValues, brandOriginKeys: f_brandOriginKeys, writesModuleStorage: f_writesModuleStorage, bodyWasSkippedAsUnreached: f_bodyWasSkippedAsUnreached, bodySplicedAway: f_bodySplicedAway, usesValueTupleReturn: f_usesValueTupleReturn, reassignedParamMask: f_reassignedParamMask, argumentOverlaps: f_argumentOverlaps, letCastReads: f_letCastReads, paramGuards: f_paramGuards, inlineSites: f_inlineSites, debugLocals: f_debugLocals, debugLocalLocations: f_debugLocalLocations, debugLocalRanges: f_debugLocalRanges}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize480
-		return sizeof(IrFunction) as CacheSize480
+	static function cacheLayoutBytes() returns CacheSize488
+		return sizeof(IrFunction) as CacheSize488
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

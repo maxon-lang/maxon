@@ -3962,7 +3962,7 @@ end 'RangedAliasRegistry'
 //
 // ⚠ **ITS MINTS ARE `public`, WHERE THE CLAIMANT MAY BE `file`.** A range mint is compiler-supplied,
 // exactly like the builtin `ExitCode`, and its NAME is unspellable in source
-// (`CompilerQualifiedAliasSeparator`), so no reader can be admitted or refused by the tier anyway.
+// (`CompilerMintSeparator`), so no reader can be admitted or refused by the tier anyway.
 function scopedSpellingsOf(name ByteArray, claimants RangedTypeAliasArray, mints RangedTypeAliasArray) returns NameRoster
 	var spellings = NameRoster.create()
 
@@ -7121,13 +7121,6 @@ end 'cacheReadBitWidthArray'
 
 // @generated library-cache end
 
-export union EqualityOperand
-	unknown
-	noEdge
-	arrayOverParameters
-	structOverParameters(let base ByteArray)
-end 'EqualityOperand'
-
 export type StructLayout
 	export let name as ByteArray
 
@@ -8674,7 +8667,7 @@ end 'serviceHandleCompanionName'
 
 // The member half of the DISPATCH LOOP's symbol — `__`-prefixed so no source may declare it (E2051)
 // and no author may call it.
-module let ServiceLoopMemberName = b"__loop"
+let ServiceLoopMemberName = b"__loop"
 
 // ⭐⭐ **`<T>.__loop` — THE SYNTHESIZED DISPATCH LOOP'S SYMBOL, SPELLED ONCE FOR ITS THREE READERS.**
 // `ServiceLoop.installServiceLoops` BUILDS the function under this name,
@@ -8686,6 +8679,13 @@ module let ServiceLoopMemberName = b"__loop"
 module function serviceLoopSymbol(typeName ByteArray) returns ByteArray
 	return qualifiedMethodName(typeName, methodName: ServiceLoopMemberName)
 end 'serviceLoopSymbol'
+
+module function isServiceLoopSymbol(name ByteArray) returns bool
+	return match splitQualifiedName(name) 'split'
+		notQualified gives false
+		parts(_, member) gives member.equals(ServiceLoopMemberName)
+	end 'split'
+end 'isServiceLoopSymbol'
 
 // ⭐⭐ **THE REPLY SLOT IS AN `Integer`, DELIBERATELY, AND THE PAYLOAD DROPS ARE WHY.** It is a raw
 // cell pointer, NOT a managed box: every payload drop — the loop's and a `__destruct_<U>`
@@ -10692,6 +10692,17 @@ export function staticMemberRegistrationName(sourceName ByteArray) returns ByteA
 	return overloadRegistrationName(sourceName, suffix: StaticMemberNameSuffix.toByteArray())
 end 'staticMemberRegistrationName'
 
+export function overloadSetKeyOf(registered ByteArray) returns ByteArray
+	let base = overloadRegistrationBaseName(registered)
+	let parts = String.from(registered).split(OverloadNameSeparator)
+
+	if parts.count() > 1 and (try parts.get(1) otherwise panic("overloadSetKeyOf: parts.get(1) on a name of {parts.count()} parts")) == StaticMemberNameSuffix 'aContestedStaticsSet'
+		return staticMemberRegistrationName(base)
+	end 'aContestedStaticsSet'
+
+	return base
+end 'overloadSetKeyOf'
+
 // ⭐⭐ **A `test` DECLARATION'S SECOND NAME, AND WHY IT NEEDS ONE.** A test is named by a quoted PROSE name
 // (`test 'adds two numbers'`), and a prose name cannot be a symbol — it reaches name mangling, the
 // executable's symbol table, the `.mxdbg` sidecar and every panic stack trace. So a test compiles to an
@@ -10762,13 +10773,14 @@ end 'isTestFunctionName'
 // is and why a default is a FUNCTION rather than a replayed expression; this is only where its name is
 // spelled.
 //
-// ⚠ **IT HAS EXACTLY ONE CALLER — the declaration SWEEP** (`Parser.recordScannedParamDefaults`), which
-// publishes the name whole-program so a call site in any file can emit a call to it. The real parse, which
-// synthesizes the helper's BODY, READS that published name back rather than minting a second time
-// (`Parser.sweptParamDefaultHelperName`). It did mint its own, briefly, and the two derivations disagreed
-// on the one input that differs between them — an instance method's receiver shifts every parameter's
-// position by one — which surfaced as a backend `call to unknown function` with no source position at all.
-// A name derived in one place cannot disagree with itself.
+// ⚠ **THE DECLARATION SWEEP PUBLISHES THE NAME** (`Parser.recordScannedParamDefaults`), whole-program, so a
+// call site in any file can emit a call to it; the other callers (`Parser.declaredParamDefaultHelperName`,
+// `ProgramSignatures.fileDefaultHelperUnder`, `SemanticCheck.repointDefaultedArgHelpers`) re-key it to a
+// registration name. The real parse, which synthesizes the helper's BODY, READS the published name back
+// rather than minting a second time (`Parser.sweptParamDefaultHelperName`): two derivations disagree on the
+// one input that differs between them — an instance method's receiver shifts every parameter's position by
+// one — and surface as a backend `call to unknown function` with no source position at all. A name derived
+// in one place cannot disagree with itself.
 //
 // `paramIndex` is the parameter's CALL-ALIGNED position (the receiver occupies 0 on an instance method),
 // which is also the index `ParamDefaultInfo.producerFor` is asked with.
@@ -10792,7 +10804,9 @@ end 'paramDefaultHelperName'
 // callee beside it. A short call is filled while it is parsed, from a registry keyed by the name the source
 // wrote, so the emitted helper call names the SWEPT helper; `SemanticCheck.repointDefaultedArgHelpers`
 // re-points it at the resolved member's own the moment the member is known. Between those two moments the
-// name stands for a SET, exactly as the base callee does — see `StdlibSource.markReachable`, the one caller.
+// name stands for a SET, exactly as the base callee does — see `StdlibSource.markReachable`.
+// `ProgramSignatures.declarationSiteOf` asks it the other way, to map a member's helper back to the set's
+// swept one, whose declaration site the sweep recorded.
 //
 // ⚠ **IT TAKES THE SLOT OFF THE NAME RATHER THAN BEING HANDED ONE, and that is what makes it a re-key rather
 // than a second mint.** The slot is already spelled in the helper it is given; re-deriving it from a
@@ -10853,7 +10867,7 @@ export function fieldDefaultHelperName(typeName ByteArray, fieldName ByteArray) 
 	return mintedHelperName(FieldDefaultHelperPrefix, head: typeName, tail: fieldName)
 end 'fieldDefaultHelperName'
 
-// ⭐ **IS `callee` ONE OF THE MINT ABOVE?** — the question `LowerMaxonToStd.hiddenArgumentSourceOf`
+// ⭐ **IS `callee` ONE OF THE MINT ABOVE?** — the question `LayoutSource.hiddenSourceKindOf`
 // asks to forward a field-default helper's hidden words from its caller rather than read them off
 // its result or its call's qualifier. It reads the prefix rather than a `CalleeMint`, because the
 // mint is a parse-time fact and does not ride the op; it lives beside the join so the prefix keeps
@@ -10898,16 +10912,25 @@ type MintedHelperNameParts
 	end 'create'
 end 'MintedHelperNameParts'
 
+// `mint` names the `CalleeMint` arm entitled to ask, so a panic here says which call site is at fault
+// rather than merely which name looked wrong.
+function splitMintedHelperName(helperName ByteArray, prefix ByteArray, mint String) returns MintedHelperNameParts
+	return try decodeMintedHelperName(helperName, prefix: prefix) otherwise panic("splitMintedHelperName: '{String.from(helperName)}' is not a '{String.from(prefix)}' mint — only a call site the op marks `{mint}` may be asked")
+end 'splitMintedHelperName'
+
+module function paramDefaultHelperOwnerOf(name ByteArray) returns ByteArray throws AbsentError
+	return (try decodeMintedHelperName(name, prefix: ParamDefaultHelperPrefix)).head
+end 'paramDefaultHelperOwnerOf'
+
 // ⭐ **SPLIT A `<prefix>#<head>#<tail>` HELPER NAME — the shared inverse of both mints above.** Written
-// once because the two decodes differ in exactly two ways: which prefix they expect, and what they do with
+// once because the decodes differ in exactly two ways: which prefix they expect, and what they do with
 // the pieces. Written twice, a later fix to the scan would reach one of them.
 //
 // ⭐ **AND IT CHECKS ITSELF AGAINST THE FORWARD JOIN RATHER THAN TRUSTING ITS OWN SPLIT.** The split takes
 // everything between the FIRST separator and the LAST, which is exact only while the prefix holds no
 // separator and the trailing part is one run — re-joining the pieces and comparing turns those premises
-// into a check the mint owns. `mint` names the `CalleeMint` arm entitled to ask, so a panic here says which
-// call site is at fault rather than merely which name looked wrong.
-function splitMintedHelperName(helperName ByteArray, prefix ByteArray, mint String) returns MintedHelperNameParts
+// into a check the mint owns.
+function decodeMintedHelperName(helperName ByteArray, prefix ByteArray) returns MintedHelperNameParts throws AbsentError
 	let separator = try OverloadNameSeparator.toByteArray().get(0) otherwise panic("splitMintedHelperName: OverloadNameSeparator is a one-byte literal")
 
 	var firstSplit = helperName.count()
@@ -10925,9 +10948,9 @@ function splitMintedHelperName(helperName ByteArray, prefix ByteArray, mint Stri
 		lastSplit = i
 	end 'scan'
 
-	if firstSplit == lastSplit 'fewerThanTwoSeparators'
-		panic("splitMintedHelperName: '{String.from(helperName)}' holds fewer than two '{OverloadNameSeparator}' separators, so the '{String.from(prefix)}' mint cannot have produced it — only a call site the op marks `{mint}` may be asked")
-	end 'fewerThanTwoSeparators'
+	if firstSplit == lastSplit or not bytesStartWith(helperName, prefix: overloadRegistrationName(prefix, suffix: ByteArray.create())) 'notThisMint'
+		throw AbsentError.absent
+	end 'notThisMint'
 
 	let head = try helperName.slice(firstSplit + 1, endIndex: lastSplit) otherwise panic("splitMintedHelperName: slice [{firstSplit + 1}, {lastSplit}) of a {helperName.count()}-byte name is in range by the indices just found")
 	let tail = try helperName.slice(lastSplit + 1, endIndex: helperName.count()) otherwise panic("splitMintedHelperName: slice [{lastSplit + 1}, {helperName.count()}) is in range by the index just found")
@@ -10938,7 +10961,7 @@ function splitMintedHelperName(helperName ByteArray, prefix ByteArray, mint Stri
 	end 'decodeDisagreesWithTheMint'
 
 	return MintedHelperNameParts.create(head, tail: tail)
-end 'splitMintedHelperName'
+end 'decodeMintedHelperName'
 
 // Append one part to an overload suffix under construction — so a suffix's parts and the suffix's own join
 // to the base name are the same character, stated once above.

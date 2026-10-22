@@ -282,7 +282,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/stack-arguments/argument-slots-are-capped-and-the-cap-is-stated.maxon:4:10: Unsupported: a function with 65 argument slots — more than the 64 a call can carry. A signature's slots are its declared parameters plus the hidden ones the ABI adds (a witness per interface-typed parameter, a layout descriptor for a generic that reads `sizeof`, one witness per `where` constraint), and the limit is the width of the per-argument float mask that routes each one to its register file
+error E2015: specs/stack-arguments/argument-slots-are-capped-and-the-cap-is-stated.maxon:4:10: Unsupported: a function with 65 argument slots — more than the 64 a call can carry. A signature's slots are its declared parameters plus the hidden ones the ABI adds (a witness per interface-typed parameter, a layout descriptor for a generic that reads one or calls a function that does, one witness per `where` constraint), and the limit is the width of the per-argument float mask that routes each one to its register file
 ```
 
 <!-- test: a-spawn-keeps-the-lower-async-argument-ceiling -->

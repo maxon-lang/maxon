@@ -1269,8 +1269,8 @@ end 'main'
 18 3
 ```
 
-<!-- test: error.a-container-literal-over-the-parameter-in-a-body-without-a-descriptor-is-refused -->
-A container literal of records over the enclosing parameter needs a descriptor this body does not carry.
+<!-- test: a-container-literal-over-the-parameter-in-an-instance-method-is-served -->
+A container literal of records over the enclosing parameter is built in an instance method, which takes the descriptor from `self`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1322,12 +1322,15 @@ function main() returns ExitCode
 	let w = b.wrap(one)
 	b.add(heap(2), tag: 5)
 	let e = try c.get(0) otherwise return 92
-	print("{e.v} {c.count()}\n")
+	print("{e.v} {c.count()} {w.count()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:32:10: Unsupported: a container whose element is 'Bag.EBox' — a generic instance or tuple written over this type's OWN parameter, resting (itself, or through an instance it holds) a slot declared AT that parameter — cannot be created in a body that carries no layout descriptor: a container stamps ONE machine word as its element destructor, and the only word that releases such a slot at every instantiation is read out of the enclosing instance's layout descriptor, which this body does not carry. Construct the container through an inner typealias (`<Alias>.create()` or `<Alias>{}`), which reserves the descriptor for the method or the `Self`-returning `static function` that writes it; or hold the values in a container of the type PARAMETER itself (`Array with <type parameter>`); or build the container in a method of a concrete instantiation
+```exitcode
+0
+```
+```stdout
+a heap string long enough to allocate 1 1 1
 ```
 
 <!-- test: a-closure-in-a-static-storing-a-borrowed-parameter-takes-the-call-sites-descriptor -->
@@ -1998,42 +2001,6 @@ end 'main'
 ```
 ```stdout
 second payload long enough to allocate
-```
-
-<!-- test: error.an-opaque-field-assigned-a-borrowed-value-by-its-bare-name-is-refused -->
-The same assignment spelled by the bare field name, in a body that reserves no layout descriptor.
-```maxon
-type Cell uses T
-	export var v as T
-
-	static function create(v T) returns Self
-		return Self{v: v}
-	end 'create'
-
-	function takeFrom(other Self)
-		v = other.v
-	end 'takeFrom'
-end 'Cell'
-
-typealias StrCell = Cell with String
-
-function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
-	sb.append(a)
-	sb.append(b)
-	return sb.build()
-end 'heapString'
-
-function main() returns ExitCode
-	var a = StrCell.create(heapString("first payload ", b: "long enough to allocate"))
-	let b = StrCell.create(heapString("second payload ", b: "long enough to allocate"))
-	a.takeFrom(b)
-	print("{a.v}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E2015: <fragment>:10:3: Unsupported: reassigning the opaque type-parameter field 'v' of 'Cell' from a borrowed value in a body that carries no layout descriptor — the reference the field takes is read from the enclosing instance's descriptor at run time, and this body has none to read it through; write the reassignment as `self.<field> = …`, which reserves one for the method, or assign the field from a parameter the method consumes
 ```
 
 <!-- test: a-self-returning-static-built-from-an-array-element-is-served -->
@@ -4822,4 +4789,622 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: a-non-opaque-field-of-a-nested-instance-is-reassigned-and-the-displaced-value-released -->
+A field typed as an instance over the type parameter (`Cell`), written through `self.inner` with the new value a parameter. The displaced cell and the string it holds must be released exactly once.
+```maxon
+type Cell uses T
+	export var v as T
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+end 'Cell'
+
+type Slot uses T
+	export typealias C = Cell with T
+	export var c as C
+
+	static function create(c C) returns Self
+		return Self{c: c}
+	end 'create'
+end 'Slot'
+
+type Wrapper uses T
+	export typealias Inner = Slot with T
+	export typealias WrapperCell = Cell with T
+	var inner as Inner
+
+	static function create(c WrapperCell) returns Self
+		return Self{inner: Inner.create(c)}
+	end 'create'
+
+	function put(next WrapperCell)
+		self.inner.c = next
+	end 'put'
+end 'Wrapper'
+
+typealias StrCell = Cell with String
+typealias StrWrapper = Wrapper with String
+
+function main() returns ExitCode
+	var w = StrWrapper.create(StrCell.make("first string long enough to force a heap allocation"))
+	w.put(StrCell.make("second string, longer still, and also heap allocated"))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: an-opaque-field-assigned-a-borrowed-value-by-its-bare-name-is-served -->
+The same assignment spelled by the bare field name: it reserves the layout descriptor the borrowed value's reference is taken through.
+```maxon
+type Cell uses T
+	export var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	function takeFrom(item T)
+		v = item
+	end 'takeFrom'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	var a = StrCell.create(heapString("first payload ", b: "long enough to allocate"))
+	let s = heapString("second payload ", b: "long enough to allocate")
+	a.takeFrom(s)
+	print("{a.v} {s}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+second payload long enough to allocate second payload long enough to allocate
+```
+
+<!-- test: an-opaque-field-assigned-by-its-bare-name-from-another-instances-field-is-shared -->
+The same assignment spelled by the bare field name: the reassignment reserves the layout descriptor it drops the displaced value and takes the new reference through.
+```maxon
+type Cell uses T
+	export var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	function takeFrom(other Self)
+		v = other.v
+	end 'takeFrom'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	var a = StrCell.create(heapString("first payload ", b: "long enough to allocate"))
+	let b = StrCell.create(heapString("second payload ", b: "long enough to allocate"))
+	a.takeFrom(b)
+	print("{a.v}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+second payload long enough to allocate
+```
+
+<!-- test: an-opaque-field-of-a-nested-instance-is-assigned-a-borrowed-value -->
+A type-parameter field of an instance held over the enclosing type's own parameter, written through `self.inner`.
+```maxon
+type Slot uses T
+	export var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Slot'
+
+type Wrapper uses T
+	export typealias Inner = Slot with T
+	var inner as Inner
+
+	static function create(v T) returns Self
+		return Self{inner: Inner.create(v)}
+	end 'create'
+
+	function put(item T)
+		self.inner.v = item
+	end 'put'
+
+	function show() returns T
+		return self.inner.v
+	end 'show'
+end 'Wrapper'
+
+typealias StrWrapper = Wrapper with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	var w = StrWrapper.create(heapString("first payload ", b: "long enough to allocate"))
+	let s = heapString("second payload ", b: "long enough to allocate")
+	w.put(s)
+	print("{w.show()} {s}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+second payload long enough to allocate second payload long enough to allocate
+```
+
+<!-- test: an-opaque-field-of-a-self-typed-parameter-is-assigned-a-borrowed-value -->
+A type-parameter field written through a `Self`-typed parameter drops the displaced value and takes its own reference to the borrowed one, so the method owes a layout descriptor.
+```maxon
+type Cell uses T
+	export var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	function overwrite(other Self, item T)
+		other.v = item
+	end 'overwrite'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	var a = StrCell.create(heapString("first payload ", b: "long enough to allocate"))
+	var b = StrCell.create(heapString("second payload ", b: "long enough to allocate"))
+	let s = heapString("third payload ", b: "long enough to allocate")
+	a.overwrite(b, item: s)
+	print("{b.v} {s}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+third payload long enough to allocate third payload long enough to allocate
+```
+
+<!-- test: an-opaque-field-of-a-self-typed-parameters-nested-instance-is-assigned -->
+The same write through the nested field of a `Self`-typed parameter.
+```maxon
+type Slot uses T
+	export var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Slot'
+
+type Wrapper uses T
+	export typealias Inner = Slot with T
+	var inner as Inner
+
+	static function create(v T) returns Self
+		return Self{inner: Inner.create(v)}
+	end 'create'
+
+	function putInto(other Self, item T)
+		other.inner.v = item
+	end 'putInto'
+
+	function show() returns T
+		return self.inner.v
+	end 'show'
+end 'Wrapper'
+
+typealias StrWrapper = Wrapper with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	var w = StrWrapper.create(heapString("first payload ", b: "long enough to allocate"))
+	var o = StrWrapper.create(heapString("second payload ", b: "long enough to allocate"))
+	let s = heapString("third payload ", b: "long enough to allocate")
+	w.putInto(o, item: s)
+	print("{o.show()} {s}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+third payload long enough to allocate third payload long enough to allocate
+```
+
+<!-- test: an-opaque-field-of-an-instance-over-the-second-of-two-parameters-is-assigned-a-borrowed-value -->
+`Slot with U` inside `Wrapper uses T, U` stores through the block of `U`, so the displaced and the new `String` are released and retained through `String`'s protocol, and the first parameter is a trivial type.
+```maxon
+typealias Small = int(0 to 255)
+
+type Slot uses V
+	export var v as V
+
+	static function create(first V) returns Self
+		return Self{v: first}
+	end 'create'
+end 'Slot'
+
+type Wrapper uses T, U
+	export typealias Inner = Slot with U
+	var tag as T
+	var inner as Inner
+
+	static function create(t T, u U) returns Self
+		return Self{tag: t, inner: Inner.create(u)}
+	end 'create'
+
+	function peekValue() returns U
+		return self.inner.v
+	end 'peekValue'
+
+	function put(item U)
+		self.inner.v = item
+	end 'put'
+
+	function putInto(other Self, item U)
+		other.inner.v = item
+	end 'putInto'
+end 'Wrapper'
+
+typealias SmallStrWrapper = Wrapper with (Small, String)
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	var w = SmallStrWrapper.create(3, u: heapString("first payload ", b: "long enough to allocate"))
+	var o = SmallStrWrapper.create(4, u: heapString("other payload ", b: "long enough to allocate"))
+	let s = heapString("second payload ", b: "long enough to allocate")
+	let t = heapString("third payload ", b: "long enough to allocate")
+	w.put(s)
+	w.putInto(o, item: t)
+	print("{w.peekValue()} {o.peekValue()} {s} {t}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+second payload long enough to allocate third payload long enough to allocate second payload long enough to allocate third payload long enough to allocate
+```
+
+<!-- test: an-opaque-field-two-nested-instances-deep-is-assigned-a-borrowed-value -->
+The same write through a field of a field, both holding an instance over the enclosing type's own parameter.
+```maxon
+type Slot uses T
+	export var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Slot'
+
+type Middle uses T
+	export typealias Inner = Slot with T
+	export var b as Inner
+
+	static function create(v T) returns Self
+		return Self{b: Inner.create(v)}
+	end 'create'
+end 'Middle'
+
+type Outer uses T
+	export typealias Mid = Middle with T
+	var a as Mid
+
+	static function create(v T) returns Self
+		return Self{a: Mid.create(v)}
+	end 'create'
+
+	function put(item T)
+		self.a.b.v = item
+	end 'put'
+
+	function show() returns T
+		return self.a.b.v
+	end 'show'
+end 'Outer'
+
+typealias StrOuter = Outer with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	var o = StrOuter.create(heapString("first payload ", b: "long enough to allocate"))
+	let s = heapString("second payload ", b: "long enough to allocate")
+	o.put(s)
+	print("{o.show()} {s}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+second payload long enough to allocate second payload long enough to allocate
+```
+
+<!-- test: an-instance-field-of-a-nested-instance-is-reassigned-in-a-static-through-the-call-sites-descriptor -->
+The same write inside a `static function`, which releases the displaced cell through the descriptor its call hands it.
+```maxon
+type Cell uses T
+	export var v as T
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+end 'Cell'
+
+type Slot uses T
+	export var cell as Cell
+
+	static function create(cell Cell) returns Self
+		return Self{cell: cell}
+	end 'create'
+end 'Slot'
+
+type Wrapper uses T
+	export typealias Inner = Slot with T
+	export var inner as Inner
+
+	static function create(cell Cell) returns Self
+		return Self{inner: Inner.create(cell)}
+	end 'create'
+
+	static function put(target Self, next Cell)
+		target.inner.cell = next
+	end 'put'
+end 'Wrapper'
+
+typealias StrCell = Cell with String
+typealias StrWrapper = Wrapper with String
+
+function main() returns ExitCode
+	var w = StrWrapper.create(StrCell.make("first string long enough to force a heap allocation"))
+	StrWrapper.put(w, next: StrCell.make("second string, longer still, and also heap allocated"))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: an-opaque-field-assigned-a-borrowed-value-in-a-static-takes-the-call-sites-descriptor -->
+The same assignment through a `Self`-typed parameter of a `static function`, which takes a reference through the descriptor its call hands it.
+```maxon
+type Cell uses T
+	export var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function overwrite(target Self, item T)
+		target.v = item
+	end 'overwrite'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	var a = StrCell.create(heapString("first payload ", b: "long enough to allocate"))
+	let s = heapString("second payload ", b: "long enough to allocate")
+	StrCell.overwrite(a, item: s)
+	print("{a.v} {s}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+second payload long enough to allocate second payload long enough to allocate
+```
+
+<!-- test: an-owned-parameter-value-is-released-in-a-method-reached-through-a-call-on-a-result -->
+`self.make().stash()` calls a method that builds an `Array with T` of borrowed `T` values and releases them at its scope exit. The receiver of `stash` is a call's result, so the release goes through the descriptor the caller forwards from its own.
+```maxon
+type Inner uses T
+	export typealias Items = Array with T
+	var v as T
+
+	static function create(x T) returns Self
+		return Self{v: x}
+	end 'create'
+
+	function stash() returns Count
+		var items = Items.create()
+		items.push(self.v)
+		return items.count()
+	end 'stash'
+end 'Inner'
+
+type Outer uses T
+	typealias Held = Inner with T
+	var held as Held
+
+	static function create(x T) returns Self
+		return Self{held: Held.create(x)}
+	end 'create'
+
+	function make() returns Held
+		return held
+	end 'make'
+
+	function probe() returns Count
+		return self.make().stash()
+	end 'probe'
+end 'Outer'
+
+typealias StrOuter = Outer with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	let o = StrOuter.create(heapString("first payload ", b: "long enough to allocate"))
+	print("{o.probe()} {o.probe()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 1
+```
+
+<!-- test: a-static-not-returning-self-pushes-a-borrowed-parameter-through-a-typealias-instance -->
+A `static function` that does not return `Self` pushes a borrowed `T` into an `Array with T`. It takes the descriptor from the call that names the instance through its typealias, so the array holds a reference of its own.
+```maxon
+type Pile uses T
+	export typealias Items = Array with T
+	var n as Count
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	static function stash(items Items, item T)
+		items.push(item)
+	end 'stash'
+end 'Pile'
+
+typealias StrPile = Pile with String
+typealias StrItems = Array with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	var items = StrItems.create()
+	let s = heapString("pushed payload ", b: "long enough to allocate")
+	StrPile.stash(items, item: s)
+	StrPile.stash(items, item: s)
+	let first = try items.get(0) otherwise return 90
+	print("{items.count()} {first} {s}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 pushed payload long enough to allocate pushed payload long enough to allocate
+```
+
+<!-- test: a-static-pushing-a-self-typed-parameters-field-into-a-local-array-takes-the-call-sites-descriptor -->
+A `static function` that does not return `Self` reads a type-parameter field of a `Self`-typed parameter and pushes it into a local `Array with T`. The local array releases the reference through the descriptor the call hands the static.
+```maxon
+type Pile uses T
+	export typealias Items = Array with T
+	export var top as T
+
+	static function create(top T) returns Self
+		return Self{top: top}
+	end 'create'
+
+	static function tally(owner Self) returns Count
+		var items = Items.create()
+		items.push(owner.top)
+		items.push(owner.top)
+		return items.count()
+	end 'tally'
+end 'Pile'
+
+typealias StrPile = Pile with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	let p = StrPile.create(heapString("top payload ", b: "long enough to allocate"))
+	print("{StrPile.tally(p)} {p.top}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 top payload long enough to allocate
 ```

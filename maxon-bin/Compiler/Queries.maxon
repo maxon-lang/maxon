@@ -871,17 +871,16 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// Holder uses T` means `Cell with Holder.T`, and left bare the field is classified as the base
 	// `Cell` — which owns nothing, because its one field is the opaque `T` — stranding whatever the
 	// type argument brought (exit 101, no diagnostic). After the interface re-tag, so the two rules
-	// see one column in one state; before `foldDescriptorNeeds`/`deriveInstanceNames`, because this
+	// see one column in one state; before `foldFixedElementCountNeeds`/`deriveInstanceNames`, because this
 	// interns the scoped instance and an instance minted after the warming walk derives its name memos
 	// lazily.
 	signatures.normalizeSweptScopedGenericFields()
 
-	// Which methods carry the hidden layout-descriptor parameter — after the extension fold, which
-	// puts an extension's methods onto their conformers, and before `deriveInstanceNames`, because the
-	// scan's opaque-array seed interns a generic alias instance and an instance minted after the
-	// warming walk derives its name memos lazily, by the parse, which must only ever read them.
+	// Which methods carry the hidden fixed-element-count parameter — after the extension fold, which
+	// puts an extension's methods onto their conformers. A count slot is ABI, so an answer that moved with
+	// declaration order would be a silently different calling convention.
 	signatures.settleByRefConventions()
-	try foldDescriptorNeeds(project, signatures: signatures)
+	try foldFixedElementCountNeeds(project, signatures: signatures)
 	signatures.attributeHashEventsTo(HashEventSource.whole)
 
 	// Every instantiation's compiled and canonical names, for the same "the whole program is known
@@ -1731,7 +1730,7 @@ end 'walkExtensionSitesPerFile'
 // parse does.
 //
 // ⚠ `buildsBodies` is the one thing that varies, so it is a parameter rather than a second
-// constructor: the folds that publish signatures pass `true`; `foldDescriptorNeeds` scans for a
+// constructor: the folds that publish signatures pass `true`; `foldFixedElementCountNeeds` scans for a
 // calling convention and emits nothing, so it passes `false`.
 //
 // Sharing one reader across a file's sites is safe for the same reason `foldInterfaceDeclarations`
@@ -1778,111 +1777,38 @@ function foldConformanceClauses(project Project, signatures ProgramSignatures) t
 	end 'eachFile'
 end 'foldConformanceClauses'
 
-// A generic type's methods are declared in two places that need not share a file: its own `type`
-// body, and every `extension` body over it. A method needs the descriptor if it directly needs one,
-// or if it calls — on `self`, transitively — a method that does, and that self-call graph crosses
-// freely between the two. So the fixpoint is one graph over the whole program, not one graph per
-// declaration.
-//
-// ⚠ Runs after `foldExtensionDeclarations`, because only that pass puts an extension's methods onto
-// their conformers, and after `allFilesFolded` generally, because several of the scan's seeds are
-// whole-program answers that read `false` for a declaration the sweep has not reached. A descriptor
-// parameter is ABI, so an answer that moved with declaration order would be a silently different
-// calling convention.
-//
-// A program with no generic type costs nothing: only a generic type records a `DescriptorScanSite`,
-// so the whole pass is an empty-array test for a generics-free program.
-//
-// The sites arrive grouped by file — the sweep visits files in source-path order and appends within
-// each, and the extension fold appends after — so the grouping is a WALK and not a map,
-// `foldInterfaceDeclarations`' shape for its reason (one `Parser` per file, not per site).
-//
-// ⚠ Extension sites are appended AFTER every type site, so the run for one file may be split across
-// two stretches of the array. That costs at most a second `Parser` for that file and cannot change
-// the answer: the fixpoint is solved over the union, and the union is a set.
-function foldDescriptorNeeds(project Project, signatures ProgramSignatures) throws CompileError
+function foldFixedElementCountNeeds(project Project, signatures ProgramSignatures) throws CompileError
 	view sites = signatures.settledDeclarations().descriptorScanSites
 
-	if sites.count() == 0 'noGenericTypeInThisProgram'
+	if sites.count() == 0 'noSizedContainerInThisProgram'
 		return
-	end 'noGenericTypeInThisProgram'
+	end 'noSizedContainerInThisProgram'
 
-	// The three columns of the fixpoint's input, accumulated across every site: each method's
-	// qualified name, its direct-need seed, and the siblings it calls on `self`. They are built here
-	// rather than per site so the solve sees one graph.
 	var methodNames = NameRoster.create()
-	var directSeeds = DescriptorNeedMap.create()
-
-	// The count column is a second seed AND a second edge set, not a share of the descriptor's: the
-	// two columns may err in OPPOSITE directions, so they cannot tolerate the same graph. See
-	// `ProgramSignatures.fixedElementCountNeeds` for why they are two slots and not one.
 	var countSeeds = DescriptorNeedMap.create()
-	var selfCallees = SelfCalleesMap.create()
-	var blindCallees = SelfCalleesMap.create()
 	var countCallees = SelfCalleesMap.create()
-
 	var i = 0 as ElementIndex
 
 	while i < sites.count() 'eachFile'
-		let path = (try sites.get(i) otherwise panic("foldDescriptorNeeds: sites.get OOB at {i} below count {sites.count()}")).path
-
-		// `buildsBodies: false` — this scan settles a CALLING CONVENTION and emits nothing, which is the
-		// one axis on which it differs from the three folds above. See `siteFileReader`.
+		let path = (try sites.get(i) otherwise panic("foldFixedElementCountNeeds: sites.get OOB at {i} below count {sites.count()}")).path
 		var reader = try siteFileReader(project, signatures: signatures, path: path, buildsBodies: false)
 
 		while i < sites.count() 'eachSiteInFile'
-			view site = try sites.get(i) otherwise panic("foldDescriptorNeeds: sites.get OOB at {i} below count {sites.count()}")
+			view site = try sites.get(i) otherwise panic("foldFixedElementCountNeeds: sites.get OOB at {i} below count {sites.count()}")
 
 			if not site.path.equals(path) 'nextFile'
 				break
 			end 'nextFile'
 
-			reader.scanDescriptorNeedsInto(site, methodNames: methodNames, directSeeds: directSeeds, countSeeds: countSeeds, selfCallees: selfCallees, blindCallees: blindCallees, countCallees: countCallees)
+			reader.scanFixedElementCountNeedsInto(site, methodNames: methodNames, countSeeds: countSeeds, countCallees: countCallees)
 			i = i + 1
 		end 'eachSiteInFile'
 	end 'eachFile'
 
-	// Two solves, over two graphs and two seed columns, through ONE solver: the shape of the fixpoint
-	// is the same (reverse reachability from a seeded set over a call graph), and only its input
-	// differs.
-	var layoutNeeding = DescriptorNeedNameSet.create()
-	var layoutSpeculative = DescriptorNeedNameSet.create()
-	solveDescriptorNeeds(methodNames, directSeeds: directSeeds, firmColumns: singleColumn(selfCallees), blindColumns: singleColumn(blindCallees), needing: layoutNeeding, speculative: layoutSpeculative)
-	var needing = DescriptorNeedNameSet.create()
-	var speculative = DescriptorNeedNameSet.create()
-	sourceableDescriptorNeeds(layoutNeeding, layoutSpeculative: layoutSpeculative, signatures: signatures, needing: needing, speculative: speculative)
-	logCompilerDebugSettled("descriptor needs: {needing.count()} layout-needing method(s), {speculative.count()} speculative")
-	signatures.recordDescriptorNeeds(needing, speculative: speculative)
 	var countNeeding = DescriptorNeedNameSet.create()
-	var countSpeculative = DescriptorNeedNameSet.create()
-	solveDescriptorNeeds(methodNames, directSeeds: countSeeds, firmColumns: singleColumn(countCallees), blindColumns: SelfCalleesMapArray.create(), needing: countNeeding, speculative: countSpeculative)
+	solveFixedElementCountNeeds(methodNames, seeds: countSeeds, callees: countCallees, needing: countNeeding)
 	signatures.recordFixedElementCountNeeds(countNeeding)
-end 'foldDescriptorNeeds'
-
-function singleColumn(column SelfCalleesMap) returns SelfCalleesMapArray
-	var columns = SelfCalleesMapArray.create()
-	columns.push(column)
-	return columns
-end 'singleColumn'
-
-// A speculative need is dropped from a static that does not return `Self`: reserving one would
-// refuse every call to it that names no instance (`Parser.requireALayoutSourceForAStaticCall`), for
-// a need that was only a guess.
-function sourceableDescriptorNeeds(layoutNeeding DescriptorNeedNameSet, layoutSpeculative DescriptorNeedNameSet, signatures ProgramSignatures, needing DescriptorNeedNameSet, speculative DescriptorNeedNameSet)
-	for name in layoutNeeding 'eachName'
-		if not layoutSpeculative.contains(name) 'aFirmNeed'
-			needing.insert(name)
-			continue
-		end 'aFirmNeed'
-
-		if signatures.cannotSourceALayoutDescriptor(name) 'nothingToReserveItWith'
-			continue
-		end 'nothingToReserveItWith'
-
-		needing.insert(name)
-		speculative.insert(name)
-	end 'eachName'
-end 'sourceableDescriptorNeeds'
+end 'foldFixedElementCountNeeds'
 
 // A file's parse as a compile asks for it: the memo's artifact, or everything a parse of the file reads beside
 // the settled index, and the key its artifact is stamped with.

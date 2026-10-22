@@ -385,10 +385,10 @@ end 'main'
 0
 ```
 
-<!-- test: error.a-bare-field-reassignment-in-a-body-without-a-descriptor-is-refused -->
-### …but the bare spelling of the reassignment, in a method that reserves no descriptor, is refused
-`one = b` names the field without `self.`, and the method it is written in reserves no layout descriptor, so
-there is no destructor to release the displaced record through.
+<!-- test: a-bare-field-reassignment-reserves-the-descriptor-it-releases-through -->
+### …and so does the bare spelling of the reassignment
+`one = b` names the field without `self.`; the method it is written in carries the layout descriptor the displaced
+record is released through, exactly as `self.one = b` does.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -479,8 +479,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:52:3: Unsupported: reassigning 'one' of 'Bag', whose type 'EBox' is built over this type's OWN parameters — the shared generic body compiles once for every instantiation, and the destructor that releases the displaced value is not the same at every one of them. This body carries no layout descriptor to release it through, so write the reassignment as `self.<field> = …`, which reserves one for the method, or reassign it through a CONCRETE receiver
+```exitcode
+0
+```
+```stdout
+hello heap world 350 a heap string of some length 49
 ```
 
 <!-- test: bare-generic-name-managed-field-as-array-element -->

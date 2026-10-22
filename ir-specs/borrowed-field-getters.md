@@ -94,9 +94,9 @@ func @Big.create {
     x64.callDirect __managed_create
     x64.storeSlotReg slot0, r8
   __il_body#4:
-    x64.leaRegRdata rbx, [rip + __layout_Map_Count$0_1000000_Count$0_1000000]
     x64.leaRegRdata rax, [rip + __witness_int.Hashable]
     x64.leaRegRdata rax, [rip + __witness_int.Equatable]
+    x64.leaRegRdata rbx, [rip + __layout_Map_Count$0_1000000_Count$0_1000000]
   __il_body#11:
     x64.movRegImm32 rcx, 8
     x64.loadRegBaseDisp.word64 rdx, [rbx + 40]
@@ -188,11 +188,11 @@ func @main {
   __il_cont#41:
     x64.loadRegBaseDisp.word64 rbx, [rax + 8]
     x64.leaRegFunc rax, [rip + __clone_Map_Count$0_1000000_Count$0_1000000]
-    x64.leaRegRdata r12, [rip + __layout_Map_Count$0_1000000_Count$0_1000000]
-    x64.leaRegRdata r13, [rip + __witness_int.Hashable]
-    x64.leaRegRdata r15, [rip + __witness_int.Equatable]
+    x64.leaRegRdata r12, [rip + __witness_int.Hashable]
+    x64.leaRegRdata r13, [rip + __witness_int.Equatable]
+    x64.leaRegRdata r15, [rip + __layout_Map_Count$0_1000000_Count$0_1000000]
   __il_body#16:
-    x64.callMem [r13 + 48]
+    x64.callMem [r12 + 48]
     x64.movRegReg rcx, rbx
     x64.movRegImm32 rdx, 3
     x64.movRegReg rax, r8

@@ -427,9 +427,7 @@ end 'paramFloatMask'
 // materialise the receiver instance's descriptor, which needs the whole-program `(baseId, args)`
 // payload that lives only on `ProgramSignatures`, and that is reachable only through the project.
 
-// The set of qualified function names whose body reads `sizeof(T)` and therefore carries a hidden
-// trailing layout-descriptor parameter. Built once per lowering by an op-scan; read at a call
-// site to decide whether to append the descriptor argument, and per callee to bind the descriptor param.
+// A set of qualified function names that carry a hidden trailing layout-descriptor parameter.
 typealias LayoutNeedingFuncSet = Map with (ByteArray, bool)
 
 // The set of witness-table `.rdata` labels already emitted — the blob, its method-slot
@@ -615,18 +613,6 @@ end 'NullWitnessArgRequest'
 
 typealias NullWitnessArgRequestArray = Array with NullWitnessArgRequest
 
-type NullLayoutArgRequest
-	export let caller as ByteArray
-	export let callee as ByteArray
-	export let opIndex as ElementIndex
-
-	static function create(caller ByteArray, callee ByteArray, opIndex ElementIndex) returns NullLayoutArgRequest
-		return Self{caller: caller, callee: callee, opIndex: opIndex}
-	end 'create'
-end 'NullLayoutArgRequest'
-
-typealias NullLayoutArgRequestArray = Array with NullLayoutArgRequest
-
 union HiddenParameterSlot
 	layout
 	witness(constraintIndex WitnessSlotIndex)
@@ -650,18 +636,16 @@ function hiddenSlotKey(calleeName ByteArray, slot HiddenParameterSlot) returns S
 	end 'slot'
 end 'hiddenSlotKey'
 
-// The witness parameters are the callee's FINAL `witnessCount` (`bindImplicitParams`), counted by
-// the `ProgramSignatures.witnessParamCountForCallee` the call site sized its hidden block with, so
-// the parameter a proof inspects is the one the zero reached.
-function witnessParameterValueId(calleeName ByteArray, paramCount ParamCount, witnessCount ParamCount, constraintIndex WitnessSlotIndex) returns ValueId
+// The witness parameters are the `witnessCount` that end the callee's hidden block (`bindImplicitParams`),
+// counted by the `witnessCountOf` the call site sized its hidden block with, so the parameter a proof
+// inspects is the one the zero reached.
+function witnessParameterValueId(calleeName ByteArray, hiddenBlockEnd ParamCount, witnessCount ParamCount, constraintIndex WitnessSlotIndex) returns ValueId
 	if constraintIndex as ParamCount >= witnessCount 'noSuchSlot'
 		panic("witnessParameterValueId: '{String.from(calleeName)}' carries {witnessCount} witness parameter(s) and a call passed one for constraint {constraintIndex} — `appendWitnessArgs` walks the very list this count is of")
 	end 'noSuchSlot'
 
-	return valueIdAtParamPosition(paramCount - witnessCount + (constraintIndex as ParamCount))
+	return witnessBlockStartValueId(hiddenBlockEnd, witnessParamCount: witnessCount) + (constraintIndex as ValueId)
 end 'witnessParameterValueId'
-
-typealias NullLayoutReportedSet = Set with String
 
 typealias RangeSiteIndexArray = Array with ElementIndex
 
@@ -961,11 +945,6 @@ function requireRuntimeCallPositional(callee ByteArray, argLabels NameRoster)
 	end 'eachLabel'
 end 'requireRuntimeCallPositional'
 
-union LayoutSource
-	ofInstance(instance GenericInstanceId)
-	forwardedFromTheCaller
-end 'LayoutSource'
-
 union HiddenArgumentSource
 	ofReceiver(value ValueId)
 	ofResult(value ValueId)
@@ -1060,7 +1039,22 @@ typealias DescriptorTableMap = Map with (ByteArray, DescriptorTable)
 
 let noDescriptorTable = DescriptorTable.create()
 
+enum DictionaryOutlook
+	realized
+	assumeCarried
+end 'DictionaryOutlook'
+
+type SlotImpls
+	export let names as NameRoster
+	export let surelyCarriesADictionary as bool
+
+	static function create(names NameRoster, surelyCarriesADictionary bool) returns SlotImpls
+		return Self{names: names, surelyCarriesADictionary: surelyCarriesADictionary}
+	end 'create'
+end 'SlotImpls'
+
 union WitnessArgSource
+	forwardedSlot
 	forwardedBareParameter(token TypeParamId)
 	staticTable(let conformer ByteArray, instance WitnessTableInstance)
 	parametricInstance(let conformer ByteArray, instance GenericInstanceId)
@@ -1161,6 +1155,173 @@ type DescriptorSubjects
 	end 'noteWhereCarried'
 end 'DescriptorSubjects'
 
+enum CarrierCallKind
+	direct
+	spawn
+end 'CarrierCallKind'
+
+union UnboundBase
+	none
+	named(typeName ByteArray)
+end 'UnboundBase'
+
+type CarrierCall
+	export let caller as CsrIndex
+	export let callee as CsrIndex
+	export let opIndex as ElementIndex
+	export let kind as CarrierCallKind
+	export let need as CarrierCallNeed
+	export let forwardsTables as bool
+	export let base as UnboundBase
+
+	static function create(caller CsrIndex, callee CsrIndex, opIndex ElementIndex, kind CarrierCallKind, need CarrierCallNeed, forwardsTables bool, base UnboundBase) returns CarrierCall
+		return Self{caller: caller, callee: callee, opIndex: opIndex, kind: kind, need: need, forwardsTables: forwardsTables, base: base}
+	end 'create'
+end 'CarrierCall'
+
+typealias BodyOpIndexArray = Array with ElementIndex
+typealias CarrierCallArray = Array with CarrierCall
+typealias CarrierIndexMap = Map with (ByteArray, CsrIndex)
+
+type ClosureCreation
+	export let creator as CsrIndex
+	export let closure as CsrIndex
+	export let creatorReservesWitnesses as bool
+	export let creatorIsAClosure as bool
+
+	static function create(creator CsrIndex, closure CsrIndex, creatorReservesWitnesses bool, creatorIsAClosure bool) returns ClosureCreation
+		return Self{creator: creator, closure: closure, creatorReservesWitnesses: creatorReservesWitnesses, creatorIsAClosure: creatorIsAClosure}
+	end 'create'
+end 'ClosureCreation'
+
+typealias ClosureCreationArray = Array with ClosureCreation
+
+typealias CarrierIndexArray = Array with CsrIndex
+
+type PendingTable
+	export let caller as CsrIndex
+	export let callee as CsrIndex
+	export let impls as CarrierIndexArray
+	export let surelyCarriesADictionary as bool
+	export let calleeTakesTablesOnlyWhenCarried as bool
+
+	static function create(caller CsrIndex, callee CsrIndex, impls CarrierIndexArray, surelyCarriesADictionary bool, calleeTakesTablesOnlyWhenCarried bool) returns PendingTable
+		return Self{caller: caller, callee: callee, impls: impls, surelyCarriesADictionary: surelyCarriesADictionary, calleeTakesTablesOnlyWhenCarried: calleeTakesTablesOnlyWhenCarried}
+	end 'create'
+end 'PendingTable'
+
+typealias PendingTableArray = Array with PendingTable
+
+typealias NodeMarks = int(0 to 7)
+typealias NodeMarksArray = Array with NodeMarks
+
+let CarrierSeedMark = 1
+let DispatchMark = 2
+let DispatchingClosureMark = 4
+
+type LayoutCarrierScan
+	export var indexOfName as CarrierIndexMap
+	export var marks as NodeMarksArray
+	export var dispatchCalleeEnds as CsrColumn
+	export var dispatchCallerEnds as CsrColumn
+	export var pendingTables as PendingTableArray
+	export var calleeEnds as CsrColumn
+	export var callerEnds as CsrColumn
+	export var calls as CarrierCallArray
+	export var creations as ClosureCreationArray
+
+	static function create(functionCount ElementIndex) returns Self
+		var marks = NodeMarksArray.create()
+		marks.growFilled(functionCount, value: 0)
+		return Self{indexOfName: CarrierIndexMap.create(), marks: marks, dispatchCalleeEnds: CsrColumn.create(), dispatchCallerEnds: CsrColumn.create(), pendingTables: PendingTableArray.create(), calleeEnds: CsrColumn.create(), callerEnds: CsrColumn.create(), calls: CarrierCallArray.create(), creations: ClosureCreationArray.create()}
+	end 'create'
+
+	function mark(node CsrIndex, mark NodeMarks)
+		let held = try self.marks.get(node) otherwise panic("LayoutCarrierScan.mark: node {node} is outside the {self.marks.count()} the scan was sized to")
+		try self.marks.set(node, value: held or mark) otherwise panic("LayoutCarrierScan.mark: node {node} is outside the {self.marks.count()} the scan was sized to")
+	end 'mark'
+
+	function marked(node CsrIndex, mark NodeMarks) returns bool
+		let held = try self.marks.get(node) otherwise panic("LayoutCarrierScan.marked: node {node} is outside the {self.marks.count()} the scan was sized to")
+		return (held and mark) != 0
+	end 'marked'
+
+	function column(mark NodeMarks) returns BoolArray
+		var seeds = BoolArray.create()
+
+		for node in 0 upto self.marks.count() 'eachNode'
+			seeds.push(self.marked(node as CsrIndex, mark: mark))
+		end 'eachNode'
+
+		return seeds
+	end 'column'
+
+	function edge(caller CsrIndex, callee CsrIndex)
+		self.calleeEnds.push(callee)
+		self.callerEnds.push(caller)
+	end 'edge'
+
+	function noteCall(call CarrierCall, followed bool)
+		self.calls.push(call)
+
+		if followed 'anEdgeToFollow'
+			self.edge(call.caller, callee: call.callee)
+		end 'anEdgeToFollow'
+	end 'noteCall'
+
+	function noteCallEdge(caller CsrIndex, callee CsrIndex)
+		self.dispatchCalleeEnds.push(callee)
+		self.dispatchCallerEnds.push(caller)
+	end 'noteCallEdge'
+
+	function resolvePendingTables(readsWitnesses BoolArray)
+		for pending in self.pendingTables 'eachPending'
+			if not (try readsWitnesses.get(pending.callee) otherwise panic("LayoutCarrierScan.resolvePendingTables: callee {pending.callee} is outside the {readsWitnesses.count()} the scan was sized to")) 'theCalleeNeverReadsIt'
+				continue
+			end 'theCalleeNeverReadsIt'
+
+			if not pending.surelyCarriesADictionary 'onlyIfAnImplCarriesOne'
+				for impl in pending.impls 'eachImpl'
+					self.edge(pending.caller, callee: impl)
+				end 'eachImpl'
+
+				continue
+			end 'onlyIfAnImplCarriesOne'
+
+			if pending.calleeTakesTablesOnlyWhenCarried 'followTheCalleeCarrier'
+				self.edge(pending.caller, callee: pending.callee)
+				continue
+			end 'followTheCalleeCarrier'
+
+			self.mark(pending.caller, mark: CarrierSeedMark)
+		end 'eachPending'
+	end 'resolvePendingTables'
+
+	function seedCreatorsOfDispatchingClosures()
+		var changed = true
+
+		while changed 'untilNoCreatorGainsAClosure'
+			changed = false
+
+			for creation in self.creations 'eachCreation'
+				if not self.marked(creation.closure, mark: DispatchingClosureMark) or self.marked(creation.creator, mark: DispatchingClosureMark) 'nothingNewToCarry'
+					continue
+				end 'nothingNewToCarry'
+
+				if creation.creatorReservesWitnesses 'theStaticHoldsTheTables'
+					self.mark(creation.creator, mark: CarrierSeedMark)
+					continue
+				end 'theStaticHoldsTheTables'
+
+				if creation.creatorIsAClosure 'theClosureInheritsFromItsOwnCreator'
+					self.mark(creation.creator, mark: DispatchingClosureMark)
+					changed = true
+				end 'theClosureInheritsFromItsOwnCreator'
+			end 'eachCreation'
+		end 'untilNoCreatorGainsAClosure'
+	end 'seedCreatorsOfDispatchingClosures'
+end 'LayoutCarrierScan'
+
 // ⭐⭐ **WHICH DIVISION IS BEING EXPANDED, AND — WHERE THERE IS ONE — THE ERROR-FLAG REGISTER IT WRITES.**
 // The flag is the ONE thing that differs between the fallible divisions and the total remainder
 // which is why `lowerDivisionExpansion` is one function and not two near-copies of a four-op guard.
@@ -1233,16 +1394,16 @@ type MaxonToStdLowering
 	var currentParamCount as ParamCount
 
 	// The Maxon module's CHECKED name index (`FunctionNameIndex`), built once for the whole pipeline
-	// and threaded in. `buildLayoutNeedingFuncs` derives its FILTERED set by walking `funcNames.functions`,
-	// so that set's key space is provably the duplicate-free one rather than whatever the module happened to
-	// hold — the same argument `SemanticCheck`'s throws map and escape summary stand on.
+	// and threaded in.
 	var funcNames as FunctionNameIndex
 
-	// The qualified names of functions that carry a hidden layout-descriptor parameter — built
-	// once by `buildLayoutNeedingFuncs` (a PARAMETER-COUNT scan, never an op-scan: see its header for the
-	// transitive reservations an op-scan would miss), then read at every call site (append the descriptor
+	// The qualified names of functions that carry a hidden layout-descriptor parameter — settled once by
+	// `planLayoutCarriers` before any body lowers, then read at every call site (append the descriptor
 	// argument?) and per callee (bind the descriptor param?).
 	var layoutNeedingFuncs as LayoutNeedingFuncSet
+	var layoutCarrierClosures as LayoutNeedingFuncSet
+	var layoutParametersReserved as bool
+	var layoutCarriersSettled as bool
 
 	// `GenericInstanceId` ⇒ the `.rdata` label of its emitted descriptor blob. Filled lazily by
 	// `ensureLayoutDescriptor` — one blob per instance actually used as a `sizeof(T)` receiver — so a
@@ -1290,8 +1451,6 @@ type MaxonToStdLowering
 	// The calls that passed a ZERO for a `where` constraint whose type argument is a PARAMETRIC instance —
 	// see `NullWitnessArgRequest`. Drained ONCE, after the function walk, by `installParametricWitnessChecks`.
 	var pendingNullWitnessArgs as NullWitnessArgRequestArray
-
-	var pendingNullLayoutArgs as NullLayoutArgRequestArray
 
 	// Which conformances hold a dictionary-carrying impl — see `DictionaryCarryingConformanceMap`.
 	var dictionaryCarryingConformances as DictionaryCarryingConformanceMap
@@ -1427,15 +1586,14 @@ type MaxonToStdLowering
 	var hasImplicitFixedElementCount as bool
 
 	// The number of hidden WITNESS parameters the CURRENT function carries — one per `where`
-	// constraint of its enclosing type, for a method `witnessParamCountForCallee` gives them (0
-	// otherwise). The witness parameters occupy the FINAL `currentWitnessCount` ValueIds, so witness
-	// slot `i` is `witnessParamBase + i`. `bindImplicitParams` sets both from the type's constraint
-	// count.
+	// constraint of its enclosing type, for a method `witnessCountOf` gives them (0
+	// otherwise). The witness parameters occupy the `currentWitnessCount` ValueIds before any layout slot,
+	// so witness slot `i` is `witnessParamBase + i`. `bindImplicitParams` sets both.
 	var currentWitnessCount as ParamCount
 
-	// The ValueId of the CURRENT function's FIRST witness parameter — `paramCount -
-	// currentWitnessCount`. Read by `lowerWitnessDispatch` to forward the caller's own witness slot to a
-	// dispatch. Meaningless (and unread) when `currentWitnessCount` is 0.
+	// The ValueId of the CURRENT function's FIRST witness parameter. Read by `lowerWitnessDispatch` to
+	// forward the caller's own witness slot to a dispatch. Meaningless (and unread) when
+	// `currentWitnessCount` is 0.
 	var witnessParamBase as ValueId
 
 	// The `throws` clause of the function CURRENTLY being lowered — re-pointed per function like
@@ -1508,7 +1666,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		var signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), conventions: project.functionValueConventions, signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotsByDeclIndex.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedFunctionRecords: FunctionRecordLabelSet.create(), functionValueTargets: FunctionValueTargets.none, emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), pendingNullLayoutArgs: NullLayoutArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessCounts: WitnessCountMap.create(), bitwiseKinds: ArrayBitwiseKindMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: ValueExistentialInstanceMap.create(), currentCallInstances: ValueCallInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFunction: LoweredFunction.none, currentSourceFilePath: CompilerOwnedDeclFilePath, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, descriptorTables: DescriptorTableMap.create(), hiddenSlotUses: HiddenSlotUseMap.create(), instanceParameterUses: InstanceParameterUses.create(), implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, libraryFacts: project.libraryFacts, rangeChecks: project.rangeChecks, rangeSiteFacts: project.rangeSiteFacts, rangeSites: RangeSiteWalk.create(), nextValueId: 0, holdAliases: ValueIdArray.create()}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), conventions: project.functionValueConventions, signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutCarrierClosures: LayoutNeedingFuncSet.create(), layoutParametersReserved: false, layoutCarriersSettled: false, layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotsByDeclIndex.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedFunctionRecords: FunctionRecordLabelSet.create(), functionValueTargets: FunctionValueTargets.none, emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessCounts: WitnessCountMap.create(), bitwiseKinds: ArrayBitwiseKindMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: ValueExistentialInstanceMap.create(), currentCallInstances: ValueCallInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFunction: LoweredFunction.none, currentSourceFilePath: CompilerOwnedDeclFilePath, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, descriptorTables: DescriptorTableMap.create(), hiddenSlotUses: HiddenSlotUseMap.create(), instanceParameterUses: InstanceParameterUses.create(), implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, libraryFacts: project.libraryFacts, rangeChecks: project.rangeChecks, rangeSiteFacts: project.rangeSiteFacts, rangeSites: RangeSiteWalk.create(), nextValueId: 0, holdAliases: ValueIdArray.create()}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -1580,10 +1738,8 @@ type MaxonToStdLowering
 		// info, and then every writer on that column returns before touching it.
 		self.stdModule.spans.armed = project.debugInfo
 
-		// Which functions carry a hidden layout-descriptor parameter — computed ONCE, up front,
-		// so both directions of the ABI (a callee binding its slot, a caller appending the argument) read
-		// one whole-program answer. An op-scan over the Maxon module; O(total ops), linear.
-		self.buildLayoutNeedingFuncs()
+		try self.planLayoutCarriers(project)
+		try self.reserveLayoutParameters(project)
 		try self.planDescriptorTables(project)
 
 		// Relocate blocks 1:1 first so blockRef indices stay aligned between the
@@ -1611,7 +1767,7 @@ type MaxonToStdLowering
 		// param types) to the Std-phase types. blockRefs stay valid because block
 		// indices were kept 1:1 above.
 		for i in 0 upto self.maxonModule.functions.count() 'transferFuncs'
-			var func = try self.maxonModule.functions.get(i) otherwise panic("lowerMaxonToStd: maxonModule.functions.get OOB at {i}")
+			var func = self.functionAt(i, reader: "lowerMaxonToStd")
 			var stdParams = StdTypeArray.create()
 
 			for k in 0 upto func.maxonParamTypes.count() 'eachParam'
@@ -1802,7 +1958,6 @@ type MaxonToStdLowering
 		// new entry in the very array the loop above iterates (see `WitnessAdapterRequest` /
 		// `NullWitnessArgRequest`).
 		self.installParametricWitnessChecks(project)
-		self.installNullLayoutChecks(project)
 		self.installWitnessSlotAdapters(project)
 
 		// ⭐ **THE WALK IS OVER, SO THE CURSOR IS ANSWERABLE FOR.** Below the installs above, which append
@@ -2418,47 +2573,8 @@ type MaxonToStdLowering
 
 	// --- Dictionary-passing substrate ---
 
-	// Build `layoutNeedingFuncs`: every function that carries the hidden layout-descriptor parameter
-	// — which the PARSER reserved, as the LAST param, for every method whose TRANSITIVE need
-	// (`Queries.foldDescriptorNeeds`: direct `sizeof(T)` or a self-call to a sibling that needs one) was set. So
-	// a method like `indirectSize` that only does `return self.directSize()` carries the param even though it
-	// has no `sizeofType` op of its own — which is exactly why detection is by PARAM COUNT here, not an op-scan:
-	// the reserved slot is the whole-program fact a caller reads to decide whether to append the descriptor arg.
-	function buildLayoutNeedingFuncs()
-		// Walks the CHECKED index's own array rather than the module's: this set is keyed by function
-		// NAME, so two functions of one name would silently collapse into one entry and a caller would read
-		// the wrong one's descriptor need. `FunctionNameIndex` has already refused that pair.
-		for func in self.funcNames.functions 'eachFunc'
-			if self.functionHasDescriptorParam(func) 'needsLayout'
-				self.layoutNeedingFuncs.upsert(func.name, value: true)
-			end 'needsLayout'
-		end 'eachFunc'
-	end 'buildLayoutNeedingFuncs'
-
-	// Does `func` carry a layout-descriptor parameter? The parser reserves it after the user +
-	// EXISTENTIAL-WITNESS companions and BEFORE the fixed-element count and any constraint-witness parameters
-	// (`[user][existentialWitness][layout][count][witness_0..k]`), so a `paramCount` above every
-	// OTHER hidden block means the layout slot is present. Each of the three
-	// counts is derived from a whole-program fact the parser reserved by — the declared parameter
-	// TYPES and by-reference mask for the existential block, the enclosing type's `where` constraints
-	// for the witness block — so caller and callee agree without a per-function field.
-	//
-	// ⚠ **A COUNT MISSING FROM THIS SUM READS AS A LAYOUT SLOT THAT IS NOT THERE.** With the
-	// existential block absent from it, `function callGreet(g Greeter)` makes `layoutNeedingFuncs`
-	// claim a free function needs a descriptor, and the caller then panics looking for a generic
-	// instance to source one from.
-	function functionHasDescriptorParam(func IrFunction) returns bool
-		return func.paramCount > func.maxonParamTypes.count() as ParamCount + existentialWitnessParamCount(func.maxonParamTypes, byReference: func.reassignedParamMask) + self.fixedElementCountParamCountFor(func.name) + self.witnessParamCountForFunc(func)
-	end 'functionHasDescriptorParam'
-
 	// ⭐⭐ **DOES `callee` CARRY THE HIDDEN FIXED-ELEMENT-COUNT PARAMETER?** — asked BY NAME, of the
 	// same whole-program fixpoint `Parser.parseFunction` reserved the slot from, at BOTH ends of the ABI.
-	//
-	// ⚠ **THE LAYOUT SLOT IS RECOVERED FROM THE PARAMETER COUNT AND THIS ONE CANNOT BE, AND THE REASON IS
-	// ARITHMETIC RATHER THAN TASTE.** `functionHasDescriptorParam` works by subtracting every OTHER hidden
-	// block from `paramCount` and testing what is left over, which decides the question only while ONE
-	// optional slot is unaccounted for. With two, `base + 1` is ambiguous between them. So the count slot
-	// states itself BY NAME, and the layout slot goes on being derived from a total this one subtracts.
 	//
 	// ⚠ **AND IT IS ASKED WITHOUT THE `anyFunction…` PRE-GATE `Parser.parseFunction` OPENS WITH, DELIBERATELY.**
 	// That gate exists because asking the question there needs the qualified name BUILT — an allocation per
@@ -2470,27 +2586,25 @@ type MaxonToStdLowering
 	end 'fixedElementCountParamCountFor'
 
 	// Bind the CURRENT function's hidden implicit parameters (layout + count +
-	// witnesses). The witness parameters occupy the FINAL `currentWitnessCount` ValueIds; the fixed-element
-	// count (when present) sits just before them, and the layout descriptor (when present) one further in. `hasImplicitLayout` is the authoritative layout-presence bit (a zero-user-param
+	// witnesses). The layout descriptor (when present) is the FINAL parameter, the witness parameters occupy
+	// the `currentWitnessCount` ValueIds before it, and the fixed-element count (when present) sits just
+	// before them. `hasImplicitLayout` is the authoritative layout-presence bit (a zero-user-param
 	// generic method's descriptor slot is legitimately ValueId 0, so the id cannot double as the presence flag);
 	// `witnessParamBase` is witness slot 0's ValueId, read by `lowerWitnessDispatch` to forward a witness.
 	function bindImplicitParams(func IrFunction)
 		self.currentWitnessCount = self.witnessParamCountForFunc(func)
-		self.witnessParamBase = valueIdAtParamPosition(func.paramCount - self.currentWitnessCount)
+		self.hasImplicitLayout = self.layoutNeedingFuncs.contains(func.name)
+		let hiddenBlockEnd = hiddenBlockEndOf(func, carriesALayoutSlot: self.hasImplicitLayout)
+		self.witnessParamBase = witnessBlockStartValueId(hiddenBlockEnd, witnessParamCount: self.currentWitnessCount)
 
-		// ⭐ `[user][existentialWitness][layout][count][witness_0..k]` — read back from the END, so the
-		// count slot is found first and the descriptor sits one further in. BOTH offsets come from
-		// `MaxonDialect`'s two slot functions, which is where `Parser.parseFunction` RESERVED them: the order
-		// is one fact and a second spelling of it is a wrong register, never a compile error.
 		let countSlots = self.fixedElementCountParamCountFor(func.name)
 		self.hasImplicitFixedElementCount = countSlots != 0
 		self.implicitCountValueId = 0
 
 		if self.hasImplicitFixedElementCount 'countSlot'
-			self.implicitCountValueId = fixedElementCountSlotValueId(func.paramCount, witnessParamCount: self.currentWitnessCount)
+			self.implicitCountValueId = fixedElementCountSlotValueId(hiddenBlockEnd, witnessParamCount: self.currentWitnessCount)
 		end 'countSlot'
 
-		self.hasImplicitLayout = self.functionHasDescriptorParam(func)
 		self.implicitLayoutValueId = 0
 
 		if not self.hasImplicitLayout 'noLayout'
@@ -2501,30 +2615,34 @@ type MaxonToStdLowering
 	end 'bindImplicitParams'
 
 	function witnessCountOf(callee ByteArray, sig FuncSignature) returns ParamCount
+		if not self.layoutCarriersSettled 'carriersStillOpen'
+			panic("witnessCountOf: asked for '{String.from(callee)}' before the carrier fixpoint settled — a static carries its witnesses only when it carries the descriptor, and the answer is memoized")
+		end 'carriersStillOpen'
+
 		if let known = try self.witnessCounts.get(callee) 'alreadyCounted'
 			return known
 		end 'alreadyCounted'
 
-		let counted = self.signatures.witnessParamCountForCallee(callee, sig: sig)
+		let counted = self.signatures.witnessSlotsCarriedBy(callee, sig: sig, staticCarriesTheDescriptor: self.layoutNeedingFuncs.contains(callee))
 		self.witnessCounts.upsert(callee, value: counted)
 		return counted
 	end 'witnessCountOf'
 
-	// The number of hidden witness parameters `func` carries — the witness twin of
-	// `functionHasDescriptorParam`. Derived from the function's own signature (`takesReceiver`) and its
-	// enclosing type's `where`-constraint count, so the count is a pure function of whole-program facts and
-	// needs no per-function field. A synthesized function with no signature (a closure/thunk) carries none.
 	function witnessParamCountForFunc(func IrFunction) returns ParamCount
-		view sig = try self.funcSignatures.get(func.name) otherwise return 0
+		if isSignaturelessCompilerCallee(func.name, funcSignatures: self.funcSignatures) or isServiceLoopSymbol(func.name) 'aFunctionTheCompilerBuiltWithoutASignature'
+			return 0
+		end 'aFunctionTheCompilerBuiltWithoutASignature'
+
+		view sig = try self.funcSignatures.get(func.name) otherwise panic("witnessParamCountForFunc: '{String.from(func.name)}' has no signature and is neither a compiler-internal name nor a service loop — every other function is registered by the parse that built it")
 		return self.witnessCountOf(func.name, sig: sig)
 	end 'witnessParamCountForFunc'
 
 	// The float-widened arguments (`crossFloatDomainArgs`) PLUS the hidden IMPLICIT arguments a
-	// dictionary-passing call carries: the existential witnesses, the layout descriptor, THEN the
-	// fixed element count, THEN one witness pointer per `where` constraint — in the
-	// `[user][existentialWitness][layout][count][witness_0..k]` order the parser reserved them at, so
+	// dictionary-passing call carries: the existential witnesses, THEN the fixed element count, THEN one
+	// witness pointer per `where` constraint, THEN the layout descriptor — in the
+	// `[user][existentialWitness][count][witness_0..k][layout]` order the parameters are bound in, so
 	// the caller's argument registers and the callee's `param` ops meet. That ORDER's arithmetic has
-	// one home, `MaxonDialect`'s two slot functions; this list is the same order expressed as push
+	// one home, `MaxonDialect`'s slot functions; this list is the same order expressed as push
 	// order.
 	function finalizeCallArgsWithLayout(argIds ValueIdArray, sig FuncSignature, callee ByteArray, result ValueId, dstBlock IrBlock) returns ValueIdArray
 		let baseArgs = self.crossFloatDomainArgs(argIds, paramTypes: sig.paramTypes, byReference: ByReferenceParamSource.directCallee(callee), dstBlock: dstBlock)
@@ -2547,23 +2665,23 @@ type MaxonToStdLowering
 		out.append(baseArgs)
 
 		// ⭐ **THE EXISTENTIAL WITNESSES COME FIRST — the ABI is
-		// `[user][existentialWitness][layout][count][witness]` and this list is built in that order.**
+		// `[user][existentialWitness][count][witness][layout]` and this list is built in that order.**
 		// See `Parser.bindExistentialWitnessParams` for why the block sits where it does.
 		if existentialCount > 0 'existentialWitnesses'
 			self.appendExistentialWitnessArgs(out, argIds: argIds, sig: sig, callee: callee, byReference: byReference, dstBlock: dstBlock)
 		end 'existentialWitnesses'
 
-		if needsLayout 'layout'
-			out.push(self.materializeLayoutArgFor(argIds, sig: sig, result: result, callee: callee, dstBlock: dstBlock))
-		end 'layout'
-
 		if countSlots > 0 'fixedElementCount'
-			out.push(self.materializeFixedElementCountArgFor(argIds, sig: sig, result: result, callee: callee, dstBlock: dstBlock))
+			out.push(self.materializeFixedElementCountArgFor(argIds, result: result, callee: callee, dstBlock: dstBlock))
 		end 'fixedElementCount'
 
 		if witnessCount > 0 'witnesses'
 			self.appendWitnessArgs(out, argIds: argIds, sig: sig, result: result, callee: callee, dstBlock: dstBlock)
 		end 'witnesses'
+
+		if needsLayout 'layout'
+			out.push(self.materializeLayoutArgFor(argIds, result: result, callee: callee, dstBlock: dstBlock))
+		end 'layout'
 
 		return out
 	end 'finalizeCallArgsWithLayout'
@@ -2663,14 +2781,14 @@ type MaxonToStdLowering
 	end 'conformerNameOf'
 
 	// Append the hidden WITNESS arguments a dictionary-passing call to `callee` carries — one
-	// per `where` constraint of the callee's enclosing type, in constraint (source) order, AFTER any layout
+	// per `where` constraint of the callee's enclosing type, in constraint (source) order, BEFORE any layout
 	// descriptor. `out` is the fresh argument array `finalizeCallArgsWithLayout` built (never `argIds`), so
 	// pushing is safe.
 	//
 	// ⭐ The source is `hiddenArgumentSourceOf`'s, the one the layout descriptor and the count read
 	// too, so a call can never take its descriptor from one instance and its witnesses from another.
 	function appendWitnessArgs(out ValueIdArray, argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray, dstBlock IrBlock)
-		let source = self.hiddenArgumentSourceOf(argIds, sig: sig, result: result, callee: callee)
+		let source = self.hiddenArgumentSourceOf(argIds, result: result, callee: callee)
 		view constraints = self.signatures.witnessConstraintsOfMethod(callee, extensionConstraints: sig.extensionConstraints)
 
 		for i in 0 upto constraints.count() 'eachConstraint'
@@ -2679,81 +2797,57 @@ type MaxonToStdLowering
 		end 'eachConstraint'
 	end 'appendWitnessArgs'
 
-	function witnessSourceInstance(source HiddenArgumentSource) returns GenericInstanceId throws AbsentError
+	// Where ONE constraint's witness argument comes from — the one plan the carrier scan
+	// (`DictionaryOutlook.assumeCarried`) and the call's emission (`realized`) both read, so the call the
+	// scan judged is the call emitted. A receiver that is the enclosing generic body's OWN `self`
+	// (`structRef`) or a value of its type parameter forwards the caller's own witness slot for the same
+	// constraint index (a generic→generic call, both of the same type, so the slots align), as
+	// `receiverLayoutSourceOf` forwards the layout.
+	function witnessArgSourceFor(source HiddenArgumentSource, constraint WhereConstraint, outlook DictionaryOutlook) returns WitnessArgSource
 		match source 'source'
-			ofReceiver(value) then return try self.instanceOfInstanceValue(value)
-			ofResult(value) then return try self.instanceOfInstanceValue(value)
-			ofQualifier(instance) then return instance
-			forwardedFromTheCaller then throw AbsentError.absent
+			ofReceiver(value) then return self.witnessArgSourceOfValue(value, constraint: constraint, outlook: outlook)
+			ofResult(value) then return self.witnessArgSourceOfValue(value, constraint: constraint, outlook: outlook)
+			ofQualifier(gid) then return self.witnessArgSourceOf(gid, constraint: constraint, outlook: outlook)
+			forwardedFromTheCaller then return WitnessArgSource.forwardedSlot
 		end 'source'
-	end 'witnessSourceInstance'
+	end 'witnessArgSourceFor'
 
-	function instanceOfInstanceValue(value ValueId) returns GenericInstanceId throws AbsentError
-		if self.valueTagOf(value) != ValueTypeTag.genericInstance 'notAnInstance'
-			throw AbsentError.absent
-		end 'notAnInstance'
-
-		return self.instanceIdOfValue(value)
-	end 'instanceOfInstanceValue'
-
-	function materializeWitnessArg(source HiddenArgumentSource, constraint WhereConstraint, constraintIndex WitnessSlotIndex, callee ByteArray, dstBlock IrBlock) returns ValueId
-		match source 'source'
-			ofReceiver(value) then return self.materializeWitnessArgFromValue(value, constraint: constraint, constraintIndex: constraintIndex, callee: callee, dstBlock: dstBlock)
-			ofResult(value) then return self.materializeWitnessArgFromValue(value, constraint: constraint, constraintIndex: constraintIndex, callee: callee, dstBlock: dstBlock)
-			ofQualifier(gid) then return self.materializeInstanceWitnessArg(gid, constraint: constraint, constraintIndex: constraintIndex, callee: callee, dstBlock: dstBlock)
-			forwardedFromTheCaller then return self.forwardCallerWitness(constraintIndex, callee: callee)
-		end 'source'
-	end 'materializeWitnessArg'
-
-	// The witness-table address to pass for ONE constraint. A CONCRETE generic-instance receiver → the
-	// RIP-relative address of `__witness_<ConcreteArg>.<Iface>` (`rdataAddr`), emitting the table on
-	// first reference — or, for an argument that is an instance over the caller's own parameters, the
-	// table the caller's layout descriptor carries (`parametricWitnessArg`); a receiver that is the
-	// enclosing generic body's OWN `self` (`structRef`) or a value of its type parameter → FORWARD the
-	// caller's own witness slot for the same constraint index (a generic→generic call, both of the
-	// same type, so the slots align). Mirrors `receiverLayoutSource`.
-	function materializeWitnessArgFromValue(receiver ValueId, constraint WhereConstraint, constraintIndex WitnessSlotIndex, callee ByteArray, dstBlock IrBlock) returns ValueId
+	function witnessArgSourceOfValue(receiver ValueId, constraint WhereConstraint, outlook DictionaryOutlook) returns WitnessArgSource
 		let tag = self.valueTagOf(receiver)
 
 		if tag == ValueTypeTag.genericInstance 'concrete'
-			return self.materializeInstanceWitnessArg(self.instanceIdOfValue(receiver), constraint: constraint, constraintIndex: constraintIndex, callee: callee, dstBlock: dstBlock)
+			return self.witnessArgSourceOf(self.instanceIdOfValue(receiver), constraint: constraint, outlook: outlook)
 		end 'concrete'
 
 		if tag == ValueTypeTag.structRef or tag == ValueTypeTag.typeParameter 'forward'
-			return self.forwardCallerWitness(constraintIndex, callee: callee)
+			return WitnessArgSource.forwardedSlot
 		end 'forward'
 
-		panic("materializeWitnessArg: call to witness-carrying '{String.from(callee)}' has a receiver of tag {tag.name} — an instance method's receiver is a concrete generic instance, the enclosing self (structRef), or a type parameter")
-	end 'materializeWitnessArgFromValue'
+		panic("witnessArgSourceOfValue: a call to a witness-carrying callee has a receiver of tag {tag.name} — an instance method's receiver is a concrete generic instance, the enclosing self (structRef), or a type parameter")
+	end 'witnessArgSourceOfValue'
 
-	function materializeInstanceWitnessArg(gid GenericInstanceId, constraint WhereConstraint, constraintIndex WitnessSlotIndex, callee ByteArray, dstBlock IrBlock) returns ValueId
-		// ⭐⭐ **AN INSTANCE OVER THE ENCLOSING BODY'S OWN TYPE PARAMETER FORWARDS, IT DOES NOT MATERIALIZE
-		// The instance IS a concrete `genericInstance` — but the argument at the constrained
-		// position may be an OPAQUE parameter of the function we are lowering: `Map.createIterator` building
-		// a `MapIterator with (Key, Value)` while `Key` is still `Map`'s own parameter. There is no table to
-		// name (`conformerTypeArgName` answers a mangled `T<digest>` that no conformance is filed under, and
-		// `ensureWitnessTable` on it PANICS in `witnessSlotImpl`), and there does not need to be: the caller
-		// was handed one, and its own `where` clause says which slot.
-		//
-		// ⚠ **THE SLOT COMES FROM THE SHARED VERDICT, NEVER FROM `constraintIndex`.** The two constraint
-		// lists here belong to DIFFERENT declarations (`Map`'s and `MapIterator`'s), so the
-		// prefix-alignment that lets `materializeWitnessArgFromValue`'s `structRef`/`typeParameter` arm
-		// forward slot `i` to slot `i` does not hold and must not be assumed — a wrong forwarding index
-		// here is a witness read out of the wrong slot. `opaqueParamDischarge` is the same answer
-		// `checkWhereConstraints` accepted the program on, so the slot placed here is the slot the check
-		// verified.
-		match self.witnessArgSourceOf(gid, constraint: constraint) 'source'
+	function materializeWitnessArg(source HiddenArgumentSource, constraint WhereConstraint, constraintIndex WitnessSlotIndex, callee ByteArray, dstBlock IrBlock) returns ValueId
+		match self.witnessArgSourceFor(source, constraint: constraint, outlook: DictionaryOutlook.realized) 'plan'
+			forwardedSlot then return self.forwardCallerWitness(constraintIndex, callee: callee)
 			forwardedBareParameter(token) then return self.forwardOpaqueParamWitness(token, constraint: constraint, callee: callee)
 			staticTable(conformer, instance) then return self.addressOfWitnessTable(conformer, instance: instance, interfaceName: constraint.interfaceName, dstBlock: dstBlock)
 			parametricInstance(conformer, argGid) then return self.parametricWitnessArg(conformer, argGid: argGid, constraint: constraint, constraintIndex: constraintIndex, callee: callee, dstBlock: dstBlock)
-		end 'source'
-	end 'materializeInstanceWitnessArg'
+		end 'plan'
+	end 'materializeWitnessArg'
 
 	// The conformer is `conformerTypeArgName`'s CANONICAL reduction (`Box with Integer` -> `int`) —
 	// the reducer the E3017 check keys its conformance lookup by — so the table label
 	// (`__witness_int.Hashable`) and its slot relocations (`int.hash`) name the impls that check
 	// accepted.
-	function witnessArgSourceOf(gid GenericInstanceId, constraint WhereConstraint) returns WitnessArgSource
+	//
+	// ⭐⭐ **AN INSTANCE OVER THE ENCLOSING BODY'S OWN TYPE PARAMETER FORWARDS, IT DOES NOT MATERIALIZE
+	// The instance IS a concrete `genericInstance` — but the argument at the constrained
+	// position may be an OPAQUE parameter of the function we are lowering: `Map.createIterator` building
+	// a `MapIterator with (Key, Value)` while `Key` is still `Map`'s own parameter. There is no table to
+	// name (`conformerTypeArgName` answers a mangled `T<digest>` that no conformance is filed under, and
+	// `ensureWitnessTable` on it PANICS in `witnessSlotImpl`), and there does not need to be: the caller
+	// was handed one, and its own `where` clause says which slot (`forwardOpaqueParamWitness`).
+	function witnessArgSourceOf(gid GenericInstanceId, constraint WhereConstraint, outlook DictionaryOutlook) returns WitnessArgSource
 		let typeArg = self.signatures.substitutedInstanceArg(gid, position: constraint.typeParamIndex)
 
 		if maxonTypeTag(typeArg) == ValueTypeTag.typeParameter 'aBareParameter'
@@ -2763,7 +2857,7 @@ type MaxonToStdLowering
 		let concreteType = self.signatures.conformerTypeArgName(gid, position: constraint.typeParamIndex).toByteArray()
 		let argInstance = self.constraintArgumentInstance(gid, position: constraint.typeParamIndex)
 
-		if not self.constraintArgumentHasNoTable(concreteType, instance: argInstance, interfaceName: constraint.interfaceName) 'aTableExistsToNameStatically'
+		if not self.constraintArgumentHasNoTable(concreteType, instance: argInstance, interfaceName: constraint.interfaceName, outlook: outlook) 'aTableExistsToNameStatically'
 			return WitnessArgSource.staticTable(concreteType, instance: argInstance)
 		end 'aTableExistsToNameStatically'
 
@@ -2815,8 +2909,16 @@ type MaxonToStdLowering
 		return tableId
 	end 'witnessTableFromTheCallersDescriptor'
 
+	function methodTypeOfFunction(funcName ByteArray) returns ByteArray throws AbsentError
+		match self.signatures.functionDeclaringType(funcName) 'declaring'
+			method(typeName) then return typeName
+			freeFunction then throw AbsentError.absent
+			undeclared then panic("methodTypeOfFunction: lowering reached '{String.from(funcName)}', which no source declares and the compiler does not own — SemanticCheck refuses an undefined callee before lowering")
+		end 'declaring'
+	end 'methodTypeOfFunction'
+
 	function currentFunctionIsAMethodOf(owner ByteArray) returns bool
-		let declaring = try declaringTypeOf(self.currentFuncName()) otherwise return false
+		let declaring = try self.methodTypeOfFunction(self.currentFuncName()) otherwise return false
 		return declaring.equals(owner)
 	end 'currentFunctionIsAMethodOf'
 
@@ -2844,10 +2946,10 @@ type MaxonToStdLowering
 	function forwardOpaqueParamWitness(token TypeParamId, constraint WhereConstraint, callee ByteArray) returns ValueId
 		let owner = try self.signatures.typeParamOwnerOf(token) otherwise panic("forwardOpaqueParamWitness: lowering '{String.from(self.currentFuncName())}' reached an opaque type parameter (token {token}) that no declaration filed — every `typeParameter` the parser mints is recorded against the `uses` list it was resolved from")
 
-		// The declaring TYPE of the function being lowered — the same `Type.member` split
+		// The declaring TYPE of the function being lowered — the same `functionDeclaringType`
 		// `witnessConstraintsOfMethod` reads a caller's own constraint list through, so the two agree on what
 		// "this function's type" means by construction.
-		let enclosingType = try declaringTypeOf(self.currentFuncName()) otherwise panic("forwardOpaqueParamWitness: '{String.from(self.currentFuncName())}' passes `{String.from(owner.paramName)}` of `type {String.from(owner.declaringTypeName)}` to '{String.from(callee)}', but this function is a method of no type — a witness slot index of one declaration is not a parameter number of another, and forwarding it would read a table out of an unrelated slot")
+		let enclosingType = try self.methodTypeOfFunction(self.currentFuncName()) otherwise panic("forwardOpaqueParamWitness: '{String.from(self.currentFuncName())}' passes `{String.from(owner.paramName)}` of `type {String.from(owner.declaringTypeName)}` to '{String.from(callee)}', but this function is a method of no type — a witness slot index of one declaration is not a parameter number of another, and forwarding it would read a table out of an unrelated slot")
 
 		if not enclosingType.equals(owner.declaringTypeName) 'foreignParameter'
 			panic("forwardOpaqueParamWitness: '{String.from(self.currentFuncName())}' passes `{String.from(owner.paramName)}` of `type {String.from(owner.declaringTypeName)}` to '{String.from(callee)}', but this function is a method of `{String.from(enclosingType)}` — a witness slot index of one declaration is not a parameter number of another, and forwarding it would read a table out of an unrelated slot")
@@ -3045,27 +3147,38 @@ type MaxonToStdLowering
 	// whose slot then demanded an adapter would hand a per-instance adapter a shared table's null dictionary.
 	// Both go through `witnessSlotImplIsSlotShaped`.
 	function conformanceImplsCarryADictionary(typeName ByteArray, interfaceName ByteArray) returns bool
+		if not self.layoutParametersReserved 'parametersStillOpen'
+			panic("conformanceImplsCarryADictionary: asked of '{String.from(typeName)}' as '{String.from(interfaceName)}' before the carriers' layout slots joined their parameter counts — an impl's arity is compared against the slot's, and the answer is memoized")
+		end 'parametersStillOpen'
+
 		let key = witnessTableLabel(typeName, interfaceName: interfaceName)
 
 		if let memoized = try self.dictionaryCarryingConformances.get(key) 'alreadyAsked'
 			return memoized
 		end 'alreadyAsked'
 
-		let slots = interfaceWitnessSlots(self.interfaces, iface: self.resolveWitnessInterface(interfaceName))
-		var carries = false
-
-		for i in 0 upto slots.count() 'eachSlot'
-			let slot = try slots.get(i) otherwise panic("conformanceImplsCarryADictionary: slots.get OOB at {i} below count {slots.count()}")
-
-			if not self.witnessSlotImplIsSlotShaped(self.witnessSlotImpl(typeName, interfaceName: slot.sourceInterfaceName, method: slot.method), method: slot.method) 'thisSlotCarriesOne'
-				carries = true
-				break
-			end 'thisSlotCarriesOne'
-		end 'eachSlot'
-
+		let carries = self.conformanceSlotImpls(typeName, interfaceName: interfaceName).surelyCarriesADictionary
 		self.dictionaryCarryingConformances.upsert(key, value: carries)
 		return carries
 	end 'conformanceImplsCarryADictionary'
+
+	function conformanceSlotImpls(typeName ByteArray, interfaceName ByteArray) returns SlotImpls
+		let slots = interfaceWitnessSlots(self.interfaces, iface: self.resolveWitnessInterface(interfaceName))
+		var names = NameRoster.create()
+
+		for i in 0 upto slots.count() 'eachSlot'
+			let slot = try slots.get(i) otherwise panic("conformanceSlotImpls: slots.get OOB at {i} below count {slots.count()}")
+			let implName = self.witnessSlotImpl(typeName, interfaceName: slot.sourceInterfaceName, method: slot.method)
+
+			if not self.witnessSlotImplIsSlotShaped(implName, method: slot.method) 'thisSlotCarriesOne'
+				return SlotImpls.create(NameRoster.create(), surelyCarriesADictionary: true)
+			end 'thisSlotCarriesOne'
+
+			names.push(implName.clone())
+		end 'eachSlot'
+
+		return SlotImpls.create(names, surelyCarriesADictionary: false)
+	end 'conformanceSlotImpls'
 
 	// Is the member filling this slot already the slot's own shape — the ONE test that decides both whether an
 	// adapter is needed (`witnessSlotCallee`) and whether the conformance needs a per-instance table
@@ -3104,7 +3217,7 @@ type MaxonToStdLowering
 	//
 	// Both halves stay in their own single home (`conformanceImplsCarryADictionary`, `instanceIsFullyConcrete`)
 	// so this is a second COMPOSITION and never a second opinion.
-	function constraintArgumentHasNoTable(typeName ByteArray, instance WitnessTableInstance, interfaceName ByteArray) returns bool
+	function constraintArgumentHasNoTable(typeName ByteArray, instance WitnessTableInstance, interfaceName ByteArray, outlook DictionaryOutlook) returns bool
 		// ⚠ **A `shared` REQUEST IS NOT A NON-CONCRETE ONE, AND `instanceIsFullyConcrete` ANSWERS `false` FOR
 		// BOTH.** That predicate is asked only of a request already known to be `perInstance`
 		// (`witnessTableInstanceFor` matches first), and an argument that names no instance at all — `int`, a
@@ -3120,7 +3233,10 @@ type MaxonToStdLowering
 			return false
 		end 'aConcreteInstantiation'
 
-		return self.conformanceImplsCarryADictionary(typeName, interfaceName: interfaceName)
+		match outlook 'outlook'
+			assumeCarried then return true
+			realized then return self.conformanceImplsCarryADictionary(typeName, interfaceName: interfaceName)
+		end 'outlook'
 	end 'constraintArgumentHasNoTable'
 
 	// The table a VALUE's witness is taken from — `perInstance` when the value is typed at a generic instance,
@@ -3485,18 +3601,12 @@ type MaxonToStdLowering
 	//   • A table is minted ON DEMAND from a call site that holds the instance, never emitted up front per
 	//     (gid × conformance), so an instantiation nothing widens costs nothing.
 	//
-	// ⚠ **THE ORDER IS THE ABI's — `[layout][count][witness_0..k]`, read back from the END by
+	// ⚠ **THE ORDER IS THE ABI's — `[count][witness_0..k][layout]`, read back from the END by
 	// `bindImplicitParams`** — and each block's PRESENCE is asked of the same predicate the call-site
 	// appender asks (`layoutNeedingFuncs`, `fixedElementCountParamCountFor`, `witnessConstraintsOfMethod`),
 	// so an adapter and a direct call to one impl cannot disagree about its parameter list. The arity check
 	// at the end is the two copies of that number meeting.
 	function appendInstanceAdapterDictionary(args ValueIdArray, request WitnessAdapterRequest, impl IrFunction, entry IrBlock, gid GenericInstanceId, sig FuncSignature)
-		if self.layoutNeedingFuncs.contains(request.implName) 'aLayoutDescriptor'
-			let descId = args.count() as ValueId
-			self.stdModule.appendOp(entry, op: StdOp.rdataAddr(descId, label: self.globalData.labelBytesOf(self.ensureLayoutDescriptor(gid))))
-			args.push(descId)
-		end 'aLayoutDescriptor'
-
 		if self.fixedElementCountParamCountFor(request.implName) != 0 'aFixedElementCount'
 			// A per-instance table is only minted for a CONCRETE instance, and a concrete instance states its
 			// own count — `Vector with 4 Element` says 4 — so unlike the value door there is no caller slot to
@@ -3516,13 +3626,19 @@ type MaxonToStdLowering
 			args.push(witnessId)
 		end 'eachConstraint'
 
+		if self.layoutNeedingFuncs.contains(request.implName) 'aLayoutDescriptor'
+			let descId = args.count() as ValueId
+			self.stdModule.appendOp(entry, op: StdOp.rdataAddr(descId, label: self.globalData.labelBytesOf(self.ensureLayoutDescriptor(gid))))
+			args.push(descId)
+		end 'aLayoutDescriptor'
+
 		if args.count() as ParamCount != impl.paramCount 'theTwoParameterListsDisagree'
 			panic("appendInstanceAdapterDictionary: the adapter for '{String.from(request.implName)}' built {args.count()} argument(s) and the impl declares {impl.paramCount} — the three hidden blocks are asked of the same predicates the call-site appender uses, so a difference means one of them answers differently for an adapter than for a direct call")
 		end 'theTwoParameterListsDisagree'
 	end 'appendInstanceAdapterDictionary'
 
 	// The witness table one `where` constraint of `gid`'s BASE resolves to at this instantiation — the
-	// concrete-instance arm of `materializeWitnessArgFromValue`, asked of an instance rather than of a receiver value, and
+	// concrete-instance arm of `witnessArgSourceFor`, asked of an instance rather than of a receiver value, and
 	// through the SAME two reducers (`conformerTypeArgName` for the label's conformer,
 	// `constraintArgumentInstance` for whether that conformer's own table is per-instance) so a constraint
 	// discharged at a call site and the same constraint discharged inside an adapter name one table.
@@ -3552,7 +3668,7 @@ type MaxonToStdLowering
 	// pass.
 	//
 	// The hidden block is the tail `[slotArity, paramCount)`: the ABI is
-	// `[user][existential][layout][count][witness]`, and `appendWitnessAdapterDictionary` has already
+	// `[user][existential][count][witness][layout]`, and `appendWitnessAdapterDictionary` has already
 	// refused the existential block, so what remains past the slot's own arguments is exactly the
 	// descriptor, the fixed-element count and the witnesses.
 	//
@@ -3749,23 +3865,25 @@ type MaxonToStdLowering
 		let witnessCount = self.witnessParamCountForFunc(func)
 
 		return match slot 'slot'
-			layout gives layoutDescriptorSlotValueId(func.paramCount, witnessParamCount: witnessCount, fixedElementCountSlots: self.fixedElementCountParamCountFor(func.name))
-			witness(constraintIndex) gives witnessParameterValueId(func.name, paramCount: func.paramCount, witnessCount: witnessCount, constraintIndex: constraintIndex)
+			layout gives layoutDescriptorSlotValueId(func.paramCount)
+			witness(constraintIndex) gives witnessParameterValueId(func.name, hiddenBlockEnd: hiddenBlockEndOf(func, carriesALayoutSlot: self.layoutNeedingFuncs.contains(func.name)), witnessCount: witnessCount, constraintIndex: constraintIndex)
 		end 'slot'
 	end 'hiddenSlotValueId'
 
 	function hiddenSlotKindAt(impl IrFunction, position ParamCount) returns HiddenParameterSlot throws AbsentError
 		view sig = try self.funcSignatures.get(impl.name) otherwise throw AbsentError.absent
 		let witnessCount = self.witnessCountOf(impl.name, sig: sig)
-		let first = impl.paramCount - witnessCount
+		let carriesALayoutSlot = self.layoutNeedingFuncs.contains(impl.name)
+		let hiddenBlockEnd = hiddenBlockEndOf(impl, carriesALayoutSlot: carriesALayoutSlot)
+		let first = hiddenBlockEnd - witnessCount
 
-		if position >= first 'aWitnessSlot'
-			return HiddenParameterSlot.witness((position - first) as WitnessSlotIndex)
-		end 'aWitnessSlot'
-
-		if self.functionHasDescriptorParam(impl) and valueIdAtParamPosition(position) == self.hiddenSlotValueId(impl, slot: HiddenParameterSlot.layout) 'theLayoutSlot'
+		if carriesALayoutSlot and valueIdAtParamPosition(position) == layoutDescriptorSlotValueId(impl.paramCount) 'theLayoutSlot'
 			return HiddenParameterSlot.layout
 		end 'theLayoutSlot'
+
+		if position >= first and position < hiddenBlockEnd 'aWitnessSlot'
+			return HiddenParameterSlot.witness((position - first) as WitnessSlotIndex)
+		end 'aWitnessSlot'
 
 		throw AbsentError.absent
 	end 'hiddenSlotKindAt'
@@ -3912,21 +4030,16 @@ type MaxonToStdLowering
 		end 'resolved'
 	end 'resolveWitnessInterface'
 
-	function materializeLayoutArgFor(argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
-		match self.layoutSourceOf(argIds, sig: sig, result: result, callee: callee) 'source'
+	function materializeLayoutArgFor(argIds ValueIdArray, result ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
+		match self.layoutSourceOf(argIds, result: result, callee: callee) 'source'
 			ofInstance(instance) then return self.emitInstanceDescriptorAddr(instance, dstBlock: dstBlock)
-			forwardedFromTheCaller then return self.forwardCallerLayout(callee, dstBlock: dstBlock)
+			forwardedFromTheCaller then return self.forwardCallerLayout(callee)
 		end 'source'
 	end 'materializeLayoutArgFor'
 
 	// `planDescriptorTables` asks it too, so the table plan and the call lowering read one source.
-	function layoutSourceOf(argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray) returns LayoutSource
-		match self.hiddenArgumentSourceOf(argIds, sig: sig, result: result, callee: callee) 'source'
-			ofReceiver(receiver) then return self.receiverLayoutSource(receiver, callee: callee)
-			ofResult(built) then return LayoutSource.ofInstance(self.instanceIdOfValue(built))
-			ofQualifier(instance) then return LayoutSource.ofInstance(instance)
-			forwardedFromTheCaller then return LayoutSource.forwardedFromTheCaller
-		end 'source'
+	function layoutSourceOf(argIds ValueIdArray, result ValueId, callee ByteArray) returns CallLayoutSource
+		return try callLayoutSourceFrom(self.signatures, callee: callee, argIds: argIds, result: result, tags: self.valueTags, nameIds: self.valueNameIds, callInstances: self.currentCallInstances) otherwise panic("layoutSourceOf: call to layout-needing '{String.from(callee)}' has a subject the classifier cannot source — an instance method's receiver is a concrete generic instance, the enclosing self (structRef), or a type parameter")
 	end 'layoutSourceOf'
 
 	// One decision for a call's layout descriptor, fixed element count and witness tables, so the
@@ -3934,27 +4047,15 @@ type MaxonToStdLowering
 	// widened `baseArgs`. A field-default helper forwards: its result is the FIELD's type, so reading
 	// it would describe the wrong instance, and its only call site is a `Self{…}` inside the declaring
 	// type's own body, which holds the words to forward. A call to a static that does not return
-	// `Self` and names no instance arrives here only from a caller holding the words; the parser
-	// refuses every other (`Parser.requireALayoutSourceForAStaticCall` and its count and witness
-	// twins).
-	function hiddenArgumentSourceOf(argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray) returns HiddenArgumentSource
-		if sig.takesReceiver() 'instanceMethod'
-			return HiddenArgumentSource.ofReceiver(try argIds.get(0) otherwise panic("hiddenArgumentSourceOf: dictionary-carrying instance method '{String.from(callee)}' has no receiver argument — its first parameter is `self`"))
-		end 'instanceMethod'
-
-		if isFieldDefaultHelperName(callee) 'fieldDefaultHelper'
-			return HiddenArgumentSource.forwardedFromTheCaller
-		end 'fieldDefaultHelper'
-
-		if let qualifier = try self.currentCallInstances.get(result) 'calledThroughAnInstance'
-			return HiddenArgumentSource.ofQualifier(qualifier)
-		end 'calledThroughAnInstance'
-
-		if self.valueTagOf(result) == ValueTypeTag.genericInstance and self.signatures.callBuildsTheInstanceOfItsOwnType(callee, instance: self.instanceIdOfValue(result)) 'aStaticBuildingTheInstance'
-			return HiddenArgumentSource.ofResult(result)
-		end 'aStaticBuildingTheInstance'
-
-		return HiddenArgumentSource.forwardedFromTheCaller
+	// `Self` and names no instance forwards the caller's words; `refuseCarrierCall` refuses such a
+	// call from a caller that holds none.
+	function hiddenArgumentSourceOf(argIds ValueIdArray, result ValueId, callee ByteArray) returns HiddenArgumentSource
+		match hiddenSourceKindFrom(self.signatures, callee: callee, result: result, tags: self.valueTags, nameIds: self.valueNameIds, callInstances: self.currentCallInstances) 'kind'
+			ofReceiver then return HiddenArgumentSource.ofReceiver(callSubjectOf(argIds, takesReceiver: true, result: result, callee: callee))
+			ofResult then return HiddenArgumentSource.ofResult(result)
+			ofQualifier(gid) then return HiddenArgumentSource.ofQualifier(gid)
+			forwardedFromTheCaller then return HiddenArgumentSource.forwardedFromTheCaller
+		end 'kind'
 	end 'hiddenArgumentSourceOf'
 
 	// The descriptor address for a generic instance — the shared core of every way a layout-needing
@@ -3994,7 +4095,7 @@ type MaxonToStdLowering
 	// writes each argument's size and so panics on an instance over type parameters
 	// (`ProgramSignatures.genericInstanceArgLogicalSize`). `Map.map`, whose `extension Iterable` body
 	// walks a `MapIterator with (Key, Value)`, carries one: its `ElementArray{}` is composed over
-	// `Map`'s parameters, which seeds it directly (`Parser.opaqueContainerConstructionAt`), and its
+	// `Map`'s parameters, which makes it a carrier directly (`descriptorRuntimeCallOf`), and its
 	// cursor calls forward that descriptor at block 0.
 	function emitInstanceDescriptorAddr(gid GenericInstanceId, dstBlock IrBlock) returns ValueId
 		if self.hasImplicitLayout and self.descriptorTableHolds(gid) 'resolvedAtTheConcreteRoot'
@@ -4020,7 +4121,14 @@ type MaxonToStdLowering
 		return (try self.valueNameIds.get(value) otherwise panic("instanceIdOfValue: generic-instance value v{value} in '{String.from(self.currentFuncName())}' has no name-id (its GenericInstanceId) — the two type columns are dense and in lockstep")) as GenericInstanceId
 	end 'instanceIdOfValue'
 
+	function requireImplicitLayout(reader String)
+		if not self.hasImplicitLayout 'noLayout'
+			panic("{reader}: '{String.from(self.currentFuncName())}' carries no layout descriptor parameter — the carrier scan gives every function that reads one a slot, so a read here means the scan and this lowering disagree")
+		end 'noLayout'
+	end 'requireImplicitLayout'
+
 	function emitDescriptorTableRead(gid GenericInstanceId, dstBlock IrBlock) returns ValueId
+		self.requireImplicitLayout("emitDescriptorTableRead")
 		let owner = self.descriptorTableOwnerOf(gid)
 		let descId = self.mintStdValueId()
 		let offset = layoutTableSlotOffset(self.signatures.structTypeParamsOf(owner).count(), entry: self.descriptorTableEntryOf(gid, owner: owner))
@@ -4043,15 +4151,13 @@ type MaxonToStdLowering
 		return try self.signatures.instanceParameterOwnerName(gid) otherwise panic("descriptorTableOwnerOf: instance {gid} is built on no type parameter, so no declaration's table can hold it")
 	end 'descriptorTableOwnerOf'
 
-	function createTakesItsElementStampFromADescriptor(callee ByteArray, result ValueId) returns bool
-		if not (callee.equals(ManagedCreateName) or callee.equals(ListCreateName)) or self.valueTagOf(result) != ValueTypeTag.genericInstance 'notAnInstanceCreate'
-			return false
-		end 'notAnInstanceCreate'
-
-		return self.signatures.instanceDescriptorIsComposedFromTheCaller(self.instanceIdOfValue(result))
-	end 'createTakesItsElementStampFromADescriptor'
+	function descriptorRuntimeCallOfValue(callee ByteArray, result ValueId) returns DescriptorRuntimeCall
+		return descriptorRuntimeCallOf(self.signatures, callee: callee, result: instanceViewOf(self.valueTags, nameIds: self.valueNameIds, value: result))
+	end 'descriptorRuntimeCallOfValue'
 
 	function appendComposedElementStampCreate(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
+		self.requireImplicitLayout("appendComposedElementStampCreate")
+
 		if args.count() + 1 != stampedContainerCreateArity(callee) 'notShortTheStamp'
 			panic("appendComposedElementStampCreate: `{String.from(callee)}` in '{String.from(self.currentFuncName())}' arrived with {args.count()} arguments — the parser leaves the element stamp off a composed create in every body that carries a layout descriptor, and this lowering reads it off the same reservation")
 		end 'notShortTheStamp'
@@ -4065,10 +4171,12 @@ type MaxonToStdLowering
 	end 'appendComposedElementStampCreate'
 
 	function bindClosureCaptures(layout ClosureCaptureSource, fixedElementCount ClosureCaptureSource, paramCount ParamCount, entryBlock IrBlock)
-		if let descId = try self.loadClosureCapture(layout, paramCount: paramCount, entryBlock: entryBlock) 'carriesTheDescriptor'
-			self.hasImplicitLayout = true
-			self.implicitLayoutValueId = descId
-		end 'carriesTheDescriptor'
+		if self.layoutCarrierClosures.contains(self.currentFuncName()) 'aClosureThatReadsTheDescriptor'
+			if let descId = try self.loadClosureCapture(layout, paramCount: paramCount, entryBlock: entryBlock) 'carriesTheDescriptor'
+				self.hasImplicitLayout = true
+				self.implicitLayoutValueId = descId
+			end 'carriesTheDescriptor'
+		end 'aClosureThatReadsTheDescriptor'
 
 		if let countId = try self.loadClosureCapture(fixedElementCount, paramCount: paramCount, entryBlock: entryBlock) 'carriesTheCount'
 			self.hasImplicitFixedElementCount = true
@@ -4089,12 +4197,42 @@ type MaxonToStdLowering
 		return wordId
 	end 'loadRecordWord'
 
+	function functionAt(index ElementIndex, reader String) returns IrFunction
+		return try self.maxonModule.functions.get(index) otherwise panic("{reader}: functions.get({index}) below count {self.maxonModule.functions.count()}")
+	end 'functionAt'
+
 	function functionCarriesADescriptor(func IrFunction) returns bool
 		return match func.closureLayout 'source'
-			none gives self.functionHasDescriptorParam(func)
-			envSlot gives true
+			none gives self.layoutNeedingFuncs.contains(func.name)
+			envSlot gives self.layoutCarrierClosures.contains(func.name)
 		end 'source'
 	end 'functionCarriesADescriptor'
+
+	function enterFunctionBody(func IrFunction) returns bool
+		if self.libraryFacts.bodyIsSwept(func.name) 'noBodyToLower'
+			return false
+		end 'noBodyToLower'
+
+		self.valueTags = func.valueTags
+		self.valueNameIds = func.valueNameIds
+		self.currentCallInstances = func.valueCallInstances
+		self.currentFunction = LoweredFunction.named(func.name)
+		return true
+	end 'enterFunctionBody'
+
+	function bodyOpIndicesOf(blockRefs BlockRefArray) returns BodyOpIndexArray
+		var indices = BodyOpIndexArray.create()
+
+		for blockRef in blockRefs 'eachBlock'
+			let opCount = (try self.maxonModule.blocks.get(blockRef) otherwise panic("bodyOpIndicesOf: blockRef not in maxonModule.blocks")).bodyOpCount()
+
+			for pos in 0 upto opCount 'eachOp'
+				indices.push(self.maxonBlockOpRefAt(blockRef, pos: pos))
+			end 'eachOp'
+		end 'eachBlock'
+
+		return indices
+	end 'bodyOpIndicesOf'
 
 	// Planned whole before any body lowers: `ensureLayoutDescriptor` fixes a blob's table length when it first
 	// mints it, so an entry filed after that would index past the blob.
@@ -4102,16 +4240,12 @@ type MaxonToStdLowering
 		var subjects = DescriptorSubjects.create()
 
 		for fnIndex in 0 upto self.maxonModule.functions.count() 'eachFunc'
-			var func = try self.maxonModule.functions.get(fnIndex) otherwise panic("planDescriptorTables: functions.get({fnIndex}) below count")
+			var func = self.functionAt(fnIndex, reader: "planDescriptorTables")
 
-			if self.libraryFacts.bodyIsSwept(func.name) 'noBodyToLower'
+			if not self.enterFunctionBody(func) 'noBodyToLower'
 				continue
 			end 'noBodyToLower'
 
-			self.valueTags = func.valueTags
-			self.valueNameIds = func.valueNameIds
-			self.currentCallInstances = func.valueCallInstances
-			self.currentFunction = LoweredFunction.named(func.name)
 			subjects.enterFunction(fnIndex, carriesADescriptor: self.functionCarriesADescriptor(func))
 			self.noteTableCandidatesOf(func.blockRefs, into: subjects)
 		end 'eachFunc'
@@ -4122,9 +4256,406 @@ type MaxonToStdLowering
 
 		self.dropGrowingWitnessEntries()
 
-		try self.requireEveryComposedDescriptorHasASource(subjects.withoutADescriptor, project: project)
+		self.requireEveryComposedDescriptorHasASource(subjects.withoutADescriptor)
 		try self.requireDescriptorTablesAreFinite(subjects.candidates, project: project)
 	end 'planDescriptorTables'
+
+	function reserveLayoutParameters(project Project) throws CompileError
+		if self.layoutParametersReserved 'alreadyReserved'
+			panic("reserveLayoutParameters: the carriers' layout slots were already added to their parameter counts — adding them twice would put every slot one position too far out")
+		end 'alreadyReserved'
+
+		self.layoutParametersReserved = true
+		var overflowed = false
+
+		for i in 0 upto self.maxonModule.functions.count() 'eachFunction'
+			var func = self.functionAt(i, reader: "reserveLayoutParameters")
+
+			if not self.layoutNeedingFuncs.contains(func.name) 'notACarrier'
+				continue
+			end 'notACarrier'
+
+			func.paramCount = func.paramCount + func.layoutReserve
+
+			if func.paramCount > MaxAbiArgs 'pastTheCeiling'
+				reportAtFunctionName(project, func: func, code: ErrorCode.parserUnsupportedFeature, message: unsupportedFeatureMessage(abiSlotCeilingSentence(func.paramCount)))
+				overflowed = true
+			end 'pastTheCeiling'
+		end 'eachFunction'
+
+		if overflowed 'someCarrierDoesNotFit'
+			throw CompileError.compileError
+		end 'someCarrierDoesNotFit'
+	end 'reserveLayoutParameters'
+
+	function planLayoutCarriers(project Project) throws CompileError
+		let count = self.maxonModule.functions.count()
+		var scan = LayoutCarrierScan.create(count)
+
+		for fnIndex in 0 upto count 'indexFunctions'
+			scan.indexOfName.upsert(self.functionAt(fnIndex, reader: "planLayoutCarriers").name, value: fnIndex as CsrIndex)
+		end 'indexFunctions'
+
+		for fnIndex in 0 upto count 'scanFunctions'
+			var func = self.functionAt(fnIndex, reader: "planLayoutCarriers")
+
+			if self.enterFunctionBody(func) 'aBodyToScan'
+				self.noteCarrierFactsOf(func, index: fnIndex as CsrIndex, scan: scan)
+			end 'aBodyToScan'
+		end 'scanFunctions'
+
+		// A parametric-instance table is held pending until the callees that dispatch through witnesses are
+		// known, so a caller becomes a carrier for one only where the table is really read.
+		scan.resolvePendingTables(reverseReachabilityMark(buildCsr(scan.dispatchCalleeEnds, to: scan.dispatchCallerEnds, nodeCount: count as CsrIndex), seeds: scan.column(DispatchMark)))
+		scan.seedCreatorsOfDispatchingClosures()
+
+		let marked = reverseReachabilityMark(buildCsr(scan.calleeEnds, to: scan.callerEnds, nodeCount: count as CsrIndex), seeds: scan.column(CarrierSeedMark))
+		try self.settleLayoutCarriers(marked, scan: scan, project: project)
+		self.layoutCarriersSettled = true
+	end 'planLayoutCarriers'
+
+	function noteCarrierFactsOf(func IrFunction, index CsrIndex, scan LayoutCarrierScan)
+		for opIndex in self.bodyOpIndicesOf(func.blockRefs) 'eachOp'
+			self.noteCarrierFactsOfOp(self.maxonOpAt(opIndex), opIndex: opIndex, func: func, caller: index, scan: scan)
+		end 'eachOp'
+	end 'noteCarrierFactsOf'
+
+	function noteCarrierFactsOfOp(op MaxonOp, opIndex ElementIndex, func IrFunction, caller CsrIndex, scan LayoutCarrierScan)
+		match op 'shape'
+			sizeofType then scan.mark(caller, mark: CarrierSeedMark)
+			call(result, callee, args, argLabels, _, _, _, _) then self.noteCarrierFactsOfCall(result, callee: callee, args: args, argLabels: argLabels, opIndex: opIndex, func: func, caller: caller, scan: scan)
+			tryCall(result, _, callee, args, argLabels, _, _, _, _) then self.noteCarrierFactsOfCall(result, callee: callee, args: args, argLabels: argLabels, opIndex: opIndex, func: func, caller: caller, scan: scan)
+			asyncCall(_, callee, _, _, _, _, _, _) then self.noteSpawnedCall(callee, opIndex: opIndex, caller: caller, scan: scan)
+			functionRef(_, funcName, form) then self.noteFunctionReference(funcName, form: form, func: func, caller: caller, scan: scan)
+			witnessDispatch or
+			witnessTryDispatch then self.noteWitnessDispatch(func, caller: caller, scan: scan)
+			literal or
+			ret or
+			retVoid or
+			binOp or
+			unaryOp or
+			compare or
+			condBranch or
+			branch or
+			globalAddr or
+			loadIndirect or
+			storeIndirect or
+			stringLiteral or
+			throwError or
+			propagateError or
+			panicAbort or
+			indirectCall or
+			await or
+			tryAwait or
+			constArrayLiteral or
+			switch or
+			panicAbortValue or
+			errorFlagEncode or
+			serviceSpawn or
+			serviceSend or
+			serviceReplyCell or
+			immortalStructRecord or
+			immortalStringTable or
+			covPoint or
+			rawIntrinsic or
+			existentialWitness or
+			holdValue or
+			holdEnd then break
+		end 'shape'
+	end 'noteCarrierFactsOfOp'
+
+	function noteWitnessDispatch(func IrFunction, caller CsrIndex, scan LayoutCarrierScan)
+		scan.mark(caller, mark: DispatchMark)
+
+		if func.reservesConditionalWitnesses() 'theStaticOwnsItsWitnessesOnlyWhenCarried'
+			scan.mark(caller, mark: CarrierSeedMark)
+			return
+		end 'theStaticOwnsItsWitnessesOnlyWhenCarried'
+
+		if isLiftedClosureName(func.name) 'aClosureDispatchingThroughInheritedTables'
+			scan.mark(caller, mark: DispatchingClosureMark)
+		end 'aClosureDispatchingThroughInheritedTables'
+	end 'noteWitnessDispatch'
+
+	function noteFunctionReference(funcName ByteArray, form FunctionRefForm, func IrFunction, caller CsrIndex, scan LayoutCarrierScan)
+		let target = try scan.indexOfName.get(funcName) otherwise return
+		view targetFunc = self.functionAt(target, reader: "noteFunctionReference")
+
+		if not isLiftedClosureName(funcName) 'aPlainFunction'
+			if form == FunctionRefForm.functionValue and targetFunc.mayCarryADescriptor() 'aMethodAsAValue'
+				panic("noteFunctionReference: '{String.from(func.name)}' takes '{String.from(funcName)}', a method of a generic type, as a function value — its thunk passes the written arguments only, so the hidden slots the method reads would be whatever the registers held. The parser refuses a method as a value (E2010)")
+			end 'aMethodAsAValue'
+
+			return
+		end 'aPlainFunction'
+
+		match targetFunc.closureLayout 'layout'
+			none then break
+			envSlot then scan.edge(caller, callee: target)
+		end 'layout'
+
+		scan.noteCallEdge(caller, callee: target)
+		scan.creations.push(ClosureCreation.create(caller, closure: target, creatorReservesWitnesses: func.reservesConditionalWitnesses(), creatorIsAClosure: isLiftedClosureName(func.name)))
+	end 'noteFunctionReference'
+
+	function noteSpawnedCall(callee ByteArray, opIndex ElementIndex, caller CsrIndex, scan LayoutCarrierScan)
+		let target = try scan.indexOfName.get(callee) otherwise return
+		scan.noteCall(CarrierCall.create(caller, callee: target, opIndex: opIndex, kind: CarrierCallKind.spawn, need: CarrierCallNeed.none, forwardsTables: false, base: UnboundBase.none), followed: false)
+	end 'noteSpawnedCall'
+
+	function noteCarrierFactsOfCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, opIndex ElementIndex, func IrFunction, caller CsrIndex, scan LayoutCarrierScan)
+		if isSignaturelessCompilerCallee(callee, funcSignatures: self.funcSignatures) 'aCompilerOwnCall'
+			if self.descriptorRuntimeCallOfValue(callee, result: result) != DescriptorRuntimeCall.none 'aDescriptorRuntimeEntry'
+				scan.mark(caller, mark: CarrierSeedMark)
+			end 'aDescriptorRuntimeEntry'
+
+			return
+		end 'aCompilerOwnCall'
+
+		let target = try scan.indexOfName.get(callee) otherwise return
+		scan.noteCallEdge(caller, callee: target)
+		view sig = try self.funcSignatures.get(callee) otherwise panic("noteCarrierFactsOfCall: callee '{String.from(callee)}' is a function of the module and has no signature")
+
+		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels) 'slot'
+			ordered(argIds) then self.noteCarrierFactsOfSlottedCall(argIds, sig: sig, result: result, callee: callee, target: target, opIndex: opIndex, func: func, caller: caller, scan: scan)
+			arityMismatch or
+			unknownLabel or
+			duplicateArg then panic("noteCarrierFactsOfCall: '{String.from(callee)}' reached lowering with arguments SemanticCheck must have refused")
+		end 'slot'
+	end 'noteCarrierFactsOfCall'
+
+	function noteCarrierFactsOfSlottedCall(argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray, target CsrIndex, opIndex ElementIndex, func IrFunction, caller CsrIndex, scan LayoutCarrierScan)
+		view calleeFunc = self.functionAt(target, reader: "noteCarrierFactsOfSlottedCall")
+		let source = self.hiddenArgumentSourceOf(argIds, result: result, callee: callee)
+		let callerCanCarry = self.functionCanCarryADescriptor(func)
+		let calleeTakesTablesOnlyWhenCarried = not self.signatures.declaredCalleeTakesReceiver(callee) and self.signatures.staticMayCarryWitnessSlots(callee)
+		let forwardsTables = self.forwardsTheCallersTables(source, callee: callee, sig: sig, target: target, caller: caller, callerCanCarry: callerCanCarry, calleeTakesTablesOnlyWhenCarried: calleeTakesTablesOnlyWhenCarried, scan: scan)
+		let need = self.carrierNeedOfCall(argIds, result: result, callee: callee, calleeFunc: calleeFunc)
+		let callerHoldsTheTables = forwardsTables and func.reservesConditionalWitnesses()
+
+		if not calleeTakesTablesOnlyWhenCarried and callerHoldsTheTables 'theCallerMustHoldThem'
+			scan.mark(caller, mark: CarrierSeedMark)
+		end 'theCallerMustHoldThem'
+
+		let recorded = forwardsTables and calleeTakesTablesOnlyWhenCarried
+
+		if need == CarrierCallNeed.none and not recorded 'nothingToTakeFromTheCaller'
+			return
+		end 'nothingToTakeFromTheCaller'
+
+		let tablesFollowed = recorded and callerHoldsTheTables
+		let descriptorFollowed = need != CarrierCallNeed.none and callerCanCarry
+		scan.noteCall(CarrierCall.create(caller, callee: target, opIndex: opIndex, kind: CarrierCallKind.direct, need: need, forwardsTables: recorded, base: self.unboundBaseOf(source, callee: callee)), followed: tablesFollowed or descriptorFollowed)
+	end 'noteCarrierFactsOfSlottedCall'
+
+	function carrierNeedOfCall(argIds ValueIdArray, result ValueId, callee ByteArray, calleeFunc IrFunction) returns CarrierCallNeed
+		if not calleeFunc.mayCarryADescriptor() 'aCalleeThatCannotCarryOne'
+			return CarrierCallNeed.none
+		end 'aCalleeThatCannotCarryOne'
+
+		return carrierNeedOf(self.signatures, source: self.layoutSourceOf(argIds, result: result, callee: callee))
+	end 'carrierNeedOfCall'
+
+	function functionCanCarryADescriptor(func IrFunction) returns bool
+		if func.mayCarryADescriptor() 'headroomReserved'
+			return true
+		end 'headroomReserved'
+
+		return match func.closureLayout 'source'
+			none gives false
+			envSlot gives true
+		end 'source'
+	end 'functionCanCarryADescriptor'
+
+	function forwardsTheCallersTables(source HiddenArgumentSource, callee ByteArray, sig FuncSignature, target CsrIndex, caller CsrIndex, callerCanCarry bool, calleeTakesTablesOnlyWhenCarried bool, scan LayoutCarrierScan) returns bool
+		var forwards = false
+
+		for constraint in self.signatures.witnessConstraintsOfMethod(callee, extensionConstraints: sig.extensionConstraints) 'eachConstraint'
+			match self.witnessArgSourceFor(source, constraint: constraint, outlook: DictionaryOutlook.assumeCarried) 'plan'
+				parametricInstance(conformer, _) then self.notePendingTable(conformer, interfaceName: constraint.interfaceName, target: target, caller: caller, callerCanCarry: callerCanCarry, calleeTakesTablesOnlyWhenCarried: calleeTakesTablesOnlyWhenCarried, scan: scan)
+				forwardedSlot or
+				forwardedBareParameter then forwards = true
+				staticTable then continue
+			end 'plan'
+		end 'eachConstraint'
+
+		return forwards
+	end 'forwardsTheCallersTables'
+
+	function notePendingTable(conformer ByteArray, interfaceName ByteArray, target CsrIndex, caller CsrIndex, callerCanCarry bool, calleeTakesTablesOnlyWhenCarried bool, scan LayoutCarrierScan)
+		if not callerCanCarry 'nothingToReadItFrom'
+			panic("notePendingTable: '{String.from(self.functionAt(caller, reader: "notePendingTable").name)}' supplies '{String.from(self.functionAt(target, reader: "notePendingTable").name)}' a witness table for `{String.from(interfaceName)}` from a parametric instance, and carries no layout descriptor to read it from — a parametric instance exists only inside a generic type, whose methods reserve a slot and whose closures claim an environment word")
+		end 'nothingToReadItFrom'
+
+		let slotImpls = self.conformanceSlotImpls(conformer, interfaceName: interfaceName)
+		var impls = CarrierIndexArray.create()
+
+		for name in slotImpls.names 'eachImpl'
+			impls.push(try scan.indexOfName.get(name) otherwise continue)
+		end 'eachImpl'
+
+		scan.pendingTables.push(PendingTable.create(caller, callee: target, impls: impls, surelyCarriesADictionary: slotImpls.surelyCarriesADictionary, calleeTakesTablesOnlyWhenCarried: calleeTakesTablesOnlyWhenCarried))
+	end 'notePendingTable'
+
+	function unboundBaseOf(source HiddenArgumentSource, callee ByteArray) returns UnboundBase
+		match source 'source'
+			ofReceiver(receiver) then return self.receiverStructName(receiver)
+			forwardedFromTheCaller then return UnboundBase.named(try self.methodTypeOfFunction(callee) otherwise panic("unboundBaseOf: '{String.from(callee)}' takes its hidden arguments from the caller and is declared by no type"))
+			ofResult or
+			ofQualifier then return UnboundBase.none
+		end 'source'
+	end 'unboundBaseOf'
+
+	function receiverStructName(receiver ValueId) returns UnboundBase
+		if self.valueTagOf(receiver) != ValueTypeTag.structRef 'notABase'
+			return UnboundBase.none
+		end 'notABase'
+
+		let nameId = try self.valueNameIds.get(receiver) otherwise panic("receiverStructName: structRef value v{receiver} in '{String.from(self.currentFuncName())}' has no name-id — the two type columns are dense and in lockstep")
+		return UnboundBase.named(try self.typeNames.nameOf(nameId) otherwise panic("receiverStructName: structRef value v{receiver} names type id {nameId}, which the interner does not hold"))
+	end 'receiverStructName'
+
+	function settleLayoutCarriers(marked BoolArray, scan LayoutCarrierScan, project Project) throws CompileError
+		for fnIndex in 0 upto self.maxonModule.functions.count() 'eachFunction'
+			if not (try marked.get(fnIndex) otherwise panic("settleLayoutCarriers: marked.get({fnIndex}) below count")) 'notACarrier'
+				continue
+			end 'notACarrier'
+
+			view func = self.functionAt(fnIndex, reader: "settleLayoutCarriers")
+
+			if func.mayCarryADescriptor() 'anAbiCarrier'
+				self.layoutNeedingFuncs.upsert(func.name, value: true)
+				continue
+			end 'anAbiCarrier'
+
+			match func.closureLayout 'source'
+				envSlot then self.layoutCarrierClosures.upsert(func.name, value: true)
+				none then panic("settleLayoutCarriers: '{String.from(func.name)}' reads a layout descriptor and has neither a hidden slot nor an environment word to receive one — the parser reserves a slot for every function of a generic type and claims an environment word for every closure that may read one")
+			end 'source'
+		end 'eachFunction'
+
+		for creation in scan.creations 'eachCreation'
+			self.requireACarrierClosureHasACarrierCreator(creation, marked: marked)
+		end 'eachCreation'
+
+		var refused = false
+
+		for call in scan.calls 'eachCall'
+			if not (try marked.get(call.callee) otherwise panic("settleLayoutCarriers: marked.get({call.callee}) below count")) 'calleeCarriesNone'
+				continue
+			end 'calleeCarriesNone'
+
+			if self.refuseCarrierCall(call, project: project) 'refusedOne'
+				refused = true
+			end 'refusedOne'
+		end 'eachCall'
+
+		if refused 'someCallRefused'
+			throw CompileError.compileError
+		end 'someCallRefused'
+	end 'settleLayoutCarriers'
+
+	function requireACarrierClosureHasACarrierCreator(creation ClosureCreation, marked BoolArray)
+		let closureIsACarrier = try marked.get(creation.closure) otherwise panic("requireACarrierClosureHasACarrierCreator: marked.get({creation.closure}) below count")
+		let creatorIsACarrier = try marked.get(creation.creator) otherwise panic("requireACarrierClosureHasACarrierCreator: marked.get({creation.creator}) below count")
+
+		if closureIsACarrier and not creatorIsACarrier 'noDescriptorToFillItsEnvironmentWith'
+			panic("requireACarrierClosureHasACarrierCreator: '{String.from(self.functionAt(creation.closure, reader: "requireACarrierClosureHasACarrierCreator").name)}' reads a layout descriptor from its environment, and '{String.from(self.functionAt(creation.creator, reader: "requireACarrierClosureHasACarrierCreator").name)}', which builds it, carries none to fill that environment word with — the creator-to-closure edge makes the creator a carrier whenever its closure is one")
+		end 'noDescriptorToFillItsEnvironmentWith'
+	end 'requireACarrierClosureHasACarrierCreator'
+
+	function refuseCarrierCall(call CarrierCall, project Project) returns bool
+		match call.kind 'kind'
+			spawn then return self.refuseSpawnOfACarrier(call, project: project)
+			direct then break
+		end 'kind'
+
+		if self.refuseUnsuppliedDescriptor(call, project: project) 'refusedTheDescriptor'
+			return true
+		end 'refusedTheDescriptor'
+
+		return self.refuseUnsuppliedTables(call, project: project)
+	end 'refuseCarrierCall'
+
+	function refuseSpawnOfACarrier(call CarrierCall, project Project) returns bool
+		view caller = self.functionAt(call.caller, reader: "refuseSpawnOfACarrier")
+		view callee = self.functionAt(call.callee, reader: "refuseSpawnOfACarrier")
+		self.reportAtOp(project, func: caller, opIndex: call.opIndex, code: ErrorCode.parserUnsupportedFeature, message: unsupportedFeatureMessage("`async {String.from(overloadRegistrationBaseName(callee.name))}(…)` reads the enclosing instance's layout descriptor, which a spawn cannot hand it — the green thread's argument region carries the written arguments only. Call it directly, or spawn a function that carries none"))
+		return true
+	end 'refuseSpawnOfACarrier'
+
+	function refuseUnsuppliedTables(call CarrierCall, project Project) returns bool
+		if not call.forwardsTables 'nothingForwarded'
+			return false
+		end 'nothingForwarded'
+
+		view caller = self.functionAt(call.caller, reader: "refuseUnsuppliedTables")
+		view callee = self.functionAt(call.callee, reader: "refuseUnsuppliedTables")
+		let holder = tableHolderOf(self.signatures, funcSignatures: self.funcSignatures, func: caller, staticCarriesTheDescriptor: self.layoutNeedingFuncs.contains(caller.name))
+
+		if holder == TableHolder.carriesTables 'theCallerHoldsTables'
+			return false
+		end 'theCallerHoldsTables'
+
+		self.reportAtOp(project, func: caller, opIndex: call.opIndex, code: ErrorCode.parserUnsupportedFeature, message: noWitnessTablesRefusalText(callee.name, arrival: arrivalWhenWithoutTables(holder, outsideAClosure: NoWitnessTablesArrival.forwardedToACallee)))
+		return true
+	end 'refuseUnsuppliedTables'
+
+	function refuseUnsuppliedDescriptor(call CarrierCall, project Project) returns bool
+		if call.need == CarrierCallNeed.none 'theCalleeNeedsNothing'
+			return false
+		end 'theCalleeNeedsNothing'
+
+		view caller = self.functionAt(call.caller, reader: "refuseUnsuppliedDescriptor")
+		view callee = self.functionAt(call.callee, reader: "refuseUnsuppliedDescriptor")
+
+		if not self.functionCanCarryADescriptor(caller) 'aCallerWithNothingToHandOn'
+			return self.refuseCallerWithNoDescriptor(call, caller: caller, callee: callee, project: project)
+		end 'aCallerWithNothingToHandOn'
+
+		if call.need != CarrierCallNeed.forwarded 'theCallersDescriptorDescribesTheCallee'
+			return false
+		end 'theCallersDescriptorDescribesTheCallee'
+
+		return self.refuseBaseOfAnotherType(call, caller: caller, callee: callee, project: project)
+	end 'refuseUnsuppliedDescriptor'
+
+	function refuseCallerWithNoDescriptor(call CarrierCall, caller IrFunction, callee IrFunction, project Project) returns bool
+		match call.base 'base'
+			named(typeName) then self.reportAtOp(project, func: caller, opIndex: call.opIndex, code: ErrorCode.bareGenericSubjectUnbound, message: bareGenericSubjectSentence(self.signatures, base: typeName, callee: callee.name, use: BareGenericSubjectUse.needsALayoutDescriptor, scopeTypeName: EmptySourceText, scopeParams: NameRoster.create()))
+			none then panic("refuseCallerWithNoDescriptor: '{String.from(caller.name)}' calls '{String.from(callee.name)}', which needs the caller's own layout descriptor, from a source that names no generic base — the parser reserves a slot for every function of a generic type and claims an environment word for every closure that may read one, so a caller that can carry nothing is refused only for naming a bare generic base")
+		end 'base'
+
+		return true
+	end 'refuseCallerWithNoDescriptor'
+
+	function refuseBaseOfAnotherType(call CarrierCall, caller IrFunction, callee IrFunction, project Project) returns bool
+		match call.base 'base'
+			none then return false
+			named(typeName) then return self.refuseBaseNotTheCallersType(call, base: typeName, caller: caller, callee: callee, project: project)
+		end 'base'
+	end 'refuseBaseOfAnotherType'
+
+	function refuseBaseNotTheCallersType(call CarrierCall, base ByteArray, caller IrFunction, callee IrFunction, project Project) returns bool
+		let callerType = try self.methodTypeOfFunction(caller.name) otherwise panic("refuseBaseNotTheCallersType: '{String.from(caller.name)}' can carry a layout descriptor and is declared by no type — only a method of a generic type, or a closure written in one, can")
+
+		if callerType.equals(base) 'theSameType'
+			return false
+		end 'theSameType'
+
+		self.reportAtOp(project, func: caller, opIndex: call.opIndex, code: ErrorCode.bareGenericSubjectUnbound, message: bareGenericSubjectSentence(self.signatures, base: base, callee: callee.name, use: BareGenericSubjectUse.needsALayoutDescriptor, scopeTypeName: callerType, scopeParams: self.signatures.structTypeParamsOf(callerType)))
+		return true
+	end 'refuseBaseNotTheCallersType'
+
+	function reportAtOp(project Project, func IrFunction, opIndex ElementIndex, code ErrorCode, message String)
+		if opIndex >= project.opRanges.count() 'noRecordedPosition'
+			reportAtFunctionName(project, func: func, code: code, message: message)
+			return
+		end 'noRecordedPosition'
+
+		let range = project.opRanges.get(opIndex)
+		reportPositioned(project, code: code, message: message, line: range.line, column: range.column, filePath: func.sourceFilePath)
+	end 'reportAtOp'
 
 	// A witness entry whose instance's own table leads back to its owner would stamp an ever-larger
 	// instance at every level, so the mint would never end. Unlike an instance entry, which
@@ -4166,10 +4697,10 @@ type MaxonToStdLowering
 		end 'eachPartition'
 	end 'dropGrowingWitnessEntries'
 
-	function requireEveryComposedDescriptorHasASource(sites DescriptorSubjectSiteArray, project Project) throws CompileError
+	function requireEveryComposedDescriptorHasASource(sites DescriptorSubjectSiteArray)
 		for site in sites 'eachSite'
 			if self.instanceIsResolvedAtTheConcreteRoot(site.instance) 'noDescriptorToComposeFrom'
-				try self.refuseDescriptorSubject(site, project: project, reason: "is called on '{String.from(self.signatures.instanceDisplayName(site.instance))}', whose layout descriptor is read out of the calling method's own descriptor, and this body carries none — a method reserves one only when its body reaches the instance through a field, an inner typealias, a parameter or a local bound from one of those, a closure carries the descriptor of the method it is written in, and a `static function` carries one only when a parameter's type is written over its type's own parameters. Make the call from an instance method of the enclosing type, through one of those spellings (e.g. 'self.<field>.<method>(…)')")
+				panic("requireEveryComposedDescriptorHasASource: '{String.from(self.functionAt(site.funcIndex, reader: "requireEveryComposedDescriptorHasASource").name)}' calls '{String.from(site.callee)}' on '{String.from(self.signatures.instanceDisplayName(site.instance))}', whose layout descriptor is composed from the caller's own, and the caller carries none — an instance built on a type parameter exists only inside a generic type, and the carrier fixpoint gives every function there that passes such an instance a slot or an environment word")
 			end 'noDescriptorToComposeFrom'
 		end 'eachSite'
 	end 'requireEveryComposedDescriptorHasASource'
@@ -4211,7 +4742,7 @@ type MaxonToStdLowering
 	end 'descriptorTableReaches'
 
 	function refuseDescriptorSubject(site DescriptorSubjectSite, project Project, reason String) throws CompileError
-		let func = try self.maxonModule.functions.get(site.funcIndex) otherwise panic("refuseDescriptorSubject: functions.get({site.funcIndex}) — the plan recorded the index while walking this array")
+		let func = self.functionAt(site.funcIndex, reader: "refuseDescriptorSubject")
 		reportAtFunctionName(project, func: func, code: ErrorCode.parserUnsupportedFeature, message: unsupportedFeatureMessage("'{String.from(overloadRegistrationBaseName(site.callee))}' {reason}"))
 		throw CompileError.compileError
 	end 'refuseDescriptorSubject'
@@ -4249,13 +4780,9 @@ type MaxonToStdLowering
 	end 'instanceIsResolvedAtTheConcreteRoot'
 
 	function noteTableCandidatesOf(blockRefs BlockRefArray, into DescriptorSubjects)
-		for blockRef in blockRefs 'eachBlock'
-			let opCount = (try self.maxonModule.blocks.get(blockRef) otherwise panic("noteTableCandidatesOf: blockRef not in maxonModule.blocks")).bodyOpCount()
-
-			for pos in 0 upto opCount 'eachOp'
-				self.noteTableCandidateOfOp(self.maxonOpAt(self.maxonBlockOpRefAt(blockRef, pos: pos)), into: into)
-			end 'eachOp'
-		end 'eachBlock'
+		for opIndex in self.bodyOpIndicesOf(blockRefs) 'eachOp'
+			self.noteTableCandidateOfOp(self.maxonOpAt(opIndex), into: into)
+		end 'eachOp'
 	end 'noteTableCandidatesOf'
 
 	function noteTableCandidateOfOp(op MaxonOp, into DescriptorSubjects)
@@ -4273,7 +4800,7 @@ type MaxonToStdLowering
 	end 'noteTableCandidateOfOp'
 
 	function noteTableCandidateOfCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, into DescriptorSubjects)
-		let composedStamp = self.createTakesItsElementStampFromADescriptor(callee, result: result)
+		let composedStamp = self.descriptorRuntimeCallOfValue(callee, result: result) == DescriptorRuntimeCall.composedElementStampCreate
 
 		if composedStamp 'aComposedElementStamp'
 			into.noteWhereCarried(self.instanceIdOfValue(result), callee: callee)
@@ -4305,19 +4832,20 @@ type MaxonToStdLowering
 		end 'aTableIsRead'
 
 		if passesADescriptor 'aDescriptorIsPassed'
-			self.noteTableCandidateOfSource(self.layoutSourceOf(argIds, sig: sig, result: result, callee: callee), callee: callee, into: into)
+			self.noteTableCandidateOfSource(self.layoutSourceOf(argIds, result: result, callee: callee), callee: callee, into: into)
 		end 'aDescriptorIsPassed'
 	end 'planHiddenArguments'
 
 	function fileWitnessTableEntriesOfSlottedCall(argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray)
-		let gid = try self.witnessSourceInstance(self.hiddenArgumentSourceOf(argIds, sig: sig, result: result, callee: callee)) otherwise return
+		let source = self.hiddenArgumentSourceOf(argIds, result: result, callee: callee)
 
 		for constraint in self.signatures.witnessConstraintsOfMethod(callee, extensionConstraints: sig.extensionConstraints) 'eachConstraint'
-			match self.witnessArgSourceOf(gid, constraint: constraint) 'source'
+			match self.witnessArgSourceFor(source, constraint: constraint, outlook: DictionaryOutlook.realized) 'plan'
 				parametricInstance(conformer, argGid) then self.fileWitnessTableEntry(argGid, interfaceName: constraint.interfaceName, conformer: conformer)
+				forwardedSlot or
 				forwardedBareParameter or
 				staticTable then continue
-			end 'source'
+			end 'plan'
 		end 'eachConstraint'
 	end 'fileWitnessTableEntriesOfSlottedCall'
 
@@ -4345,7 +4873,7 @@ type MaxonToStdLowering
 		return entriesHold(table.witnesses, instance: instance, interfaceName: interfaceName)
 	end 'holdsWitnessEntry'
 
-	function noteTableCandidateOfSource(source LayoutSource, callee ByteArray, into DescriptorSubjects)
+	function noteTableCandidateOfSource(source CallLayoutSource, callee ByteArray, into DescriptorSubjects)
 		match source 'source'
 			forwardedFromTheCaller then return
 			ofInstance(instance) then self.noteTableCandidate(instance, callee: callee, into: into)
@@ -4357,31 +4885,6 @@ type MaxonToStdLowering
 			into.note(gid, callee: callee)
 		end 'builtOnAParameter'
 	end 'noteTableCandidate'
-
-	// The layout-descriptor address to pass for a call whose receiver is `receiver`. A generic instance
-	// receiver → its descriptor blob's address, or the caller's own block forwarded when the instance is
-	// written over the caller's parameters (`emitInstanceDescriptorAddr` owns that split); a receiver that is
-	// the caller's OWN type parameter (a generic body calling another generic method on a `T` value) →
-	// FORWARD the caller's own layout slot. The forward arm is reached only by a generic-to-generic
-	// call.
-	function receiverLayoutSource(receiver ValueId, callee ByteArray) returns LayoutSource
-		let tag = self.valueTagOf(receiver)
-
-		if tag == ValueTypeTag.genericInstance 'instance'
-			return LayoutSource.ofInstance(self.instanceIdOfValue(receiver))
-		end 'instance'
-
-		// ⭐ A `structRef`(base) receiver is the enclosing generic body's OWN instance — `self` — so the
-		// descriptor to pass is the caller's own, FORWARDED. A `typeParameter` receiver (a value of the caller's
-		// `T`) forwards for the same reason. Both are the generic-to-generic threading that lets a shared body
-		// drive another. The parser rejects the residual shape (a descriptor call on a non-`self` same-base
-		// value) before lowering, so the caller here always carries a layout param.
-		if tag == ValueTypeTag.structRef or tag == ValueTypeTag.typeParameter 'forward'
-			return LayoutSource.forwardedFromTheCaller
-		end 'forward'
-
-		panic("receiverLayoutSource: call to layout-needing '{String.from(callee)}' has a receiver of tag {tag.name} — an instance method's receiver is a concrete generic instance, the enclosing self (structRef), or a type parameter")
-	end 'receiverLayoutSource'
 
 	// ⭐⭐ **THE ELEMENT COUNT A COUNT-NEEDING CALL PASSES — A COMPILE-TIME CONSTANT AT EVERY CALL SITE,
 	// WHICH IS THE WHOLE REASON THE COUNT IS A PARAMETER AND NOT A DESCRIPTOR WORD.**
@@ -4395,8 +4898,8 @@ type MaxonToStdLowering
 	// field reached from inside `type Holder uses Element` answers 0.** Read here off the instance the call
 	// site actually holds, the same shape answers 4 — and it does so without asking that call site for a
 	// descriptor at all, which matters because a frame holding such a field is not guaranteed to have one.
-	function materializeFixedElementCountArgFor(argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
-		match self.hiddenArgumentSourceOf(argIds, sig: sig, result: result, callee: callee) 'source'
+	function materializeFixedElementCountArgFor(argIds ValueIdArray, result ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
+		match self.hiddenArgumentSourceOf(argIds, result: result, callee: callee) 'source'
 			ofReceiver(value) then return self.emitFixedElementCountOf(value, callee: callee, dstBlock: dstBlock)
 			ofResult(value) then return self.emitFixedElementCountOf(value, callee: callee, dstBlock: dstBlock)
 			ofQualifier(instance) then return self.emitFixedElementCountOfInstance(instance, callee: callee, dstBlock: dstBlock)
@@ -4445,68 +4948,10 @@ type MaxonToStdLowering
 		return self.forwardCallerFixedElementCount(callee)
 	end 'emitFixedElementCountOfInstance'
 
-	// Forward the CURRENT (generic) function's own layout slot to a callee — when a generic body calls another
-	// layout-needing method on `self` or on a value of its own type parameter. For a FIRM need the
-	// caller MUST carry a layout param: the parser's TRANSITIVE reservation gives one to every method
-	// that reaches such a call, and the parser rejects the residual shape (a descriptor call on a
-	// non-`self` same-base value) before lowering, so a missing slot here is a genuine internal
-	// invariant break rather than a user error. A SPECULATIVE need
-	// (`ProgramSignatures.functionLayoutNeedIsSpeculative`) is passed a zero instead, which
-	// `installNullLayoutChecks` proves the callee never reads.
-	function forwardCallerLayout(callee ByteArray, dstBlock IrBlock) returns ValueId
-		if self.hasImplicitLayout 'hasOneToForward'
-			return self.implicitLayoutValueId
-		end 'hasOneToForward'
-
-		if not self.signatures.functionLayoutNeedIsSpeculative(callee) 'aFirmNeed'
-			panic("forwardCallerLayout: caller '{String.from(self.currentFuncName())}' has no layout descriptor to forward to '{String.from(callee)}' — the parser's transitive reservation and residual-rejection should make this unreachable")
-		end 'aFirmNeed'
-
-		self.pendingNullLayoutArgs.push(NullLayoutArgRequest.create(self.currentFuncName(), callee: callee, opIndex: self.currentMaxonOpIndex))
-		let nullId = self.emitZeroConst(dstBlock)
-		return nullId
+	function forwardCallerLayout(callee ByteArray) returns ValueId
+		self.requireImplicitLayout("forwardCallerLayout to '{String.from(callee)}'")
+		return self.implicitLayoutValueId
 	end 'forwardCallerLayout'
-
-	function installNullLayoutChecks(project Project)
-		var proved = NullLayoutReportedSet.create()
-
-		for request in self.pendingNullLayoutArgs 'eachRequest'
-			let pair = "{String.from(request.caller)} {String.from(request.callee)}"
-
-			if proved.contains(pair) 'alreadyProved'
-				continue
-			end 'alreadyProved'
-
-			proved.insert(pair)
-
-			if self.calleeReadsHiddenParameter(request.callee, callerName: request.caller, slot: HiddenParameterSlot.layout) 'aFirstRefusalOfThePair'
-				self.reportNullLayoutRead(request, project: project)
-			end 'aFirstRefusalOfThePair'
-		end 'eachRequest'
-	end 'installNullLayoutChecks'
-
-	function reportNullLayoutRead(request NullLayoutArgRequest, project Project)
-		let caller = try self.funcNames.funcNamed(request.caller) otherwise panic("reportNullLayoutRead: '{String.from(request.caller)}' is in no function of this module — it is the function whose body this pass was lowering when the null was recorded")
-		let message = unsupportedFeatureMessage("'{String.from(request.caller)}' calls '{String.from(request.callee)}', which reads the enclosing instance's layout descriptor, and {self.nullLayoutHolderSentence(request.caller)}")
-
-		if request.opIndex >= project.opRanges.count() 'noRecordedPosition'
-			reportAtFunctionName(project, func: caller, code: ErrorCode.parserUnsupportedFeature, message: message)
-			return
-		end 'noRecordedPosition'
-
-		let range = project.opRanges.get(request.opIndex)
-		reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: message, line: range.line, column: range.column, filePath: caller.sourceFilePath)
-	end 'reportNullLayoutRead'
-
-	function nullLayoutHolderSentence(callerName ByteArray) returns String
-		let callerSignature = try self.funcSignatures.get(callerName) otherwise return "the function this closure was written in carries none to hand it — write the call in a method that does"
-
-		if callerSignature.takesReceiver() 'anInstanceMethod'
-			return "this method carries no layout descriptor of its own to forward — the receiver it calls on was not recognised as the enclosing type, so none was reserved. Reach the callee {ReachThroughSelfClause}, or through a concrete instance instead"
-		end 'anInstanceMethod'
-
-		return "this `static function` carries none to hand it — a static takes a descriptor {StaticTakesItsDictionaryFromItsCall}, and this call names no instance. Call it through a typealias, or make it an instance method"
-	end 'nullLayoutHolderSentence'
 
 	// The `.rdata` label of `gid`'s descriptor blob, emitting it on first reference. The blob is PURE DATA —
 	// box size, alignment, the T-slot storage width, and in each parameter's block the source-level
@@ -4623,18 +5068,13 @@ type MaxonToStdLowering
 
 	// Lower `sizeof(T)` to a runtime read of `elementLogicalSize@56` from `T`'s own block of the
 	// CURRENT function's layout descriptor. The parser folds every CONCRETE sizeof to a literal, so
-	// this op only ever carries a typeParameter; and it reserved the descriptor parameter whenever a
-	// body reads sizeof(T), so reaching here without one is a pre-scan/op-scan divergence — a loud
-	// bug, not a silent wrong load.
+	// this op only ever carries a typeParameter.
 	function lowerSizeofType(result ValueId, targetType MaxonType, dstBlock IrBlock)
 		if maxonTypeTag(targetType) != ValueTypeTag.typeParameter 'notTypeParam'
 			panic("lowerSizeofType: sizeofType carries a {maxonTypeTag(targetType).name} operand — the parser folds every concrete sizeof to a literal, so only the type-parameter case reaches this op")
 		end 'notTypeParam'
 
-		if not self.hasImplicitLayout 'noLayout'
-			panic("lowerSizeofType: sizeof(T) in '{String.from(self.currentFuncName())}' but the function carries no layout descriptor parameter — the parser's slot reservation and this lowering's op-scan disagree")
-		end 'noLayout'
-
+		self.requireImplicitLayout("lowerSizeofType")
 		let blockOffset = layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(targetType))
 		self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(result, addrId: self.implicitLayoutValueId, offset: blockOffset + LAYOUT_OFFSET_ELEMENT_LOGICAL_SIZE, valueType: StdType.i64))
 	end 'lowerSizeofType'
@@ -4982,24 +5422,18 @@ type MaxonToStdLowering
 		// known statically, so it is READ from the enclosing instance's threaded layout descriptor
 		// (`destroyFunc@40`) HERE — the tier that owns the descriptor's ValueId — and appended as the LAST
 		// argument, mirroring how `sizeof(T)` reads `elementLogicalSize@56`.
-		if self.isOpaqueContainerCreateCall(callee, result: result) 'opaqueContainerCreate'
+		let descriptorCall = self.descriptorRuntimeCallOfValue(callee, result: result)
+
+		if descriptorCall == DescriptorRuntimeCall.opaqueContainerCreate 'opaqueContainerCreate'
 			self.appendOpaqueContainerCreate(result, callee: callee, args: args, dstBlock: dstBlock)
 			return
 		end 'opaqueContainerCreate'
 
-		if self.hasImplicitLayout and self.createTakesItsElementStampFromADescriptor(callee, result: result) 'aComposedElementStamp'
+		if descriptorCall == DescriptorRuntimeCall.composedElementStampCreate 'aComposedElementStamp'
 			self.appendComposedElementStampCreate(result, callee: callee, args: args, dstBlock: dstBlock)
 			return
 		end 'aComposedElementStamp'
 
-		// A `__drop_type_param` arrives with ONE argument (the opaque owned value); its
-		// element destructor is not known statically, so the enclosing instance's layout descriptor is
-		// PREPENDED as the first argument (`__drop_type_param(descriptor, value)`) — the drop twin of
-		// `appendOpaqueContainerCreate`'s destructor read, off the SAME `implicitLayoutValueId`.
-		// A `__drop_type_param` and its co-ownership twin `__retain_type_param`
-		// each arrive with ONE argument (the opaque value) and take the descriptor in front of it. ONE arm
-		// because the prepend is one act: the block is chosen off the VALUE's own type parameter either way,
-		// and two arms is where the drop's block and the retain's would come to be read differently.
 		// ⭐ **AN `__mm_alloc` GETS ITS TRACE TAG HERE.** The parser and `ModuleInit` both
 		// write a two-argument `__mm_alloc(size, destructor)` — a struct record, a boxed union, an
 		// interpolation scratch buffer — and none of them can name a USER type's tag, because the
@@ -5013,6 +5447,11 @@ type MaxonToStdLowering
 			self.appendMmAllocTag(result, args: args, tag: self.allocTagIndexOf(result), dstBlock: dstBlock)
 			return
 		end 'allocTag'
+
+		if callee.equals(LayoutWordName) 'layoutWord'
+			self.appendLayoutWord(result, dstBlock: dstBlock)
+			return
+		end 'layoutWord'
 
 		if callee.equals(ParameterCellAllocName) 'parameterCell'
 			self.appendParameterCellAlloc(result, dstBlock: dstBlock)
@@ -5033,7 +5472,11 @@ type MaxonToStdLowering
 			return
 		end 'debugStreamLog'
 
-		if callee.equals(DropTypeParamName) or callee.equals(RetainTypeParamName) 'typeParamOwnership'
+		// A `__drop_type_param` and its co-ownership twin `__retain_type_param`
+		// each arrive with ONE argument (the opaque value) and take the descriptor in front of it. ONE arm
+		// because the prepend is one act: the block is chosen off the VALUE's own type parameter either way,
+		// and two arms is where the drop's block and the retain's would come to be read differently.
+		if descriptorCall == DescriptorRuntimeCall.typeParamOwnership 'typeParamOwnership'
 			self.appendTypeParamDescriptor(result, callee: callee, args: args, dstBlock: dstBlock)
 			return
 		end 'typeParamOwnership'
@@ -5045,7 +5488,7 @@ type MaxonToStdLowering
 		// descriptor lays out (`ProgramSignatures.genericInstanceFieldOpaqueBlockOffset` carries the argument).
 		// That is what serves a PERMUTED instance — `Pair with (U, T)` inside `Holder uses T, U` — which a
 		// single forwarded block base cannot express at all.
-		if isDictionaryDestructorCallee(callee) 'dictionaryCascade'
+		if descriptorCall == DescriptorRuntimeCall.dictionaryDestructor 'dictionaryCascade'
 			self.appendWholeLayoutDescriptor(result, callee: callee, args: args, dstBlock: dstBlock)
 			return
 		end 'dictionaryCascade'
@@ -5062,7 +5505,7 @@ type MaxonToStdLowering
 		// ⚠ The descriptor append runs FIRST and may itself emit ops into `dstBlock`, so the index the call is
 		// about to occupy is read AFTER it and immediately before the append — the same discipline
 		// `Parser.emitRuntimeCallInto` states for its own op index.
-		let callArgs = self.opaqueCopyArgsWithDescriptor(callee, args: args, dstBlock: dstBlock)
+		let callArgs = self.opaqueCopyArgsWithDescriptor(descriptorCall, callee: callee, args: args, dstBlock: dstBlock)
 		self.recordStaticElementFacts(args, opIndex: self.stdModule.opCount())
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: callArgs))
 	end 'appendRuntimeCall'
@@ -5162,23 +5605,27 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: self.globalData.labelBytesOf(label)))
 	end 'emitWitnessTableAddr'
 
+	function appendLayoutWord(result ValueId, dstBlock IrBlock)
+		if self.hasImplicitLayout 'aDescriptorToHandOver'
+			self.stdModule.appendOp(dstBlock, op: StdOp.binOpImm(result, lhs: self.implicitLayoutValueId, imm: 0, opcode: StdBinOpcode.add, operandType: StdType.i64))
+			return
+		end 'aDescriptorToHandOver'
+
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(result, value: 0, valueType: StdType.i64))
+	end 'appendLayoutWord'
+
 	// Append the enclosing instance's layout DESCRIPTOR to an OPAQUE-`T` array-copy call's arguments — the
 	// LAST argument the `__managed_{slice,clone,append}_opaque` wrappers read `copyFunc@32` from,
 	// exactly as `appendOpaqueContainerCreate` appends the `destroyFunc@40` read for an opaque `__managed_create`. A
 	// non-opaque-copy callee passes through UNCHANGED, so this is a safe wrapper over every runtime call's args.
 	// Shared by the non-throwing (`lowerRuntimeCall`) and throwing (`lowerTryCall`, the throwing `slice`) paths so
-	// they cannot drift on whether — or where — the descriptor is appended. The descriptor is guaranteed by the
-	// parser's copy-descriptor-need seed (a method that copies an opaque array reserves it, exactly as an opaque
-	// `X.create()` or a `sizeof(T)` method does), so its absence here is a parser/lowering divergence — a loud
-	// bug, not a silent wrong load, matching `appendOpaqueContainerCreate`.
-	function opaqueCopyArgsWithDescriptor(callee ByteArray, args ValueIdArray, dstBlock IrBlock) returns ValueIdArray
-		if not isOpaqueElementCopyCallee(callee) 'notOpaqueCopy'
+	// they cannot drift on whether — or where — the descriptor is appended.
+	function opaqueCopyArgsWithDescriptor(descriptorCall DescriptorRuntimeCall, callee ByteArray, args ValueIdArray, dstBlock IrBlock) returns ValueIdArray
+		if descriptorCall != DescriptorRuntimeCall.opaqueElementCopy 'notOpaqueCopy'
 			return args
 		end 'notOpaqueCopy'
 
-		if not self.hasImplicitLayout 'noLayout'
-			panic("opaqueCopyArgsWithDescriptor: opaque array copy '{String.from(callee)}' in '{String.from(self.currentFuncName())}' but the function carries no layout descriptor parameter — the parser's copy-descriptor-need seed and this lowering disagree")
-		end 'noLayout'
+		self.requireImplicitLayout("opaqueCopyArgsWithDescriptor of '{String.from(callee)}'")
 
 		// The COPIED array's own type parameter decides the block — its `copyFunc@32` is that column's
 		// cloner and no other's, the exact dual of `appendOpaqueContainerCreate`'s destructor read.
@@ -5191,16 +5638,11 @@ type MaxonToStdLowering
 
 	// Emit `__drop_type_param(descriptor, value)` / `__retain_type_param(descriptor, value)`:
 	// prepend the CURRENT function's layout descriptor to the single `value` argument the parser
-	// emitted. The descriptor parameter is guaranteed by the parser's descriptor-need seed (a method that drops
-	// an opaque feed binding, or STORES a borrowed opaque value into a record, needs it exactly as a
-	// `sizeof(T)` / opaque `X.create()` method does), so its absence here is a parser/lowering divergence — a
-	// loud bug, not a silent wrong load, matching `appendOpaqueContainerCreate`. `result` is the parser's result
+	// emitted. `result` is the parser's result
 	// value — VOID for the drop, the CO-OWNER for the retain — passed through so the Std op's result column
 	// stays dense either way.
 	function appendTypeParamDescriptor(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
-		if not self.hasImplicitLayout 'noLayout'
-			panic("appendTypeParamDescriptor: `{String.from(callee)}` in '{String.from(self.currentFuncName())}' but the function carries no layout descriptor parameter — the parser's descriptor-need seed and this lowering disagree")
-		end 'noLayout'
+		self.requireImplicitLayout("appendTypeParamDescriptor of '{String.from(callee)}'")
 
 		// The value's own type parameter decides the block: both entries read their word off whatever
 		// descriptor they are handed, so a two-parameter generic acting on its SECOND parameter's value must be
@@ -5214,14 +5656,9 @@ type MaxonToStdLowering
 	end 'appendTypeParamDescriptor'
 
 	// Emit `__destruct_dict_<mangled>(descriptor, box)` — prepend the CURRENT function's WHOLE layout
-	// descriptor to the single box argument the parser emitted. The descriptor parameter is guaranteed
-	// by the same reservation `__drop_type_param` rests on, and `Parser.instanceBoxDropCallee` picks
-	// this callee only where that descriptor exists, so its absence here is a parser/lowering
-	// divergence — a loud bug, not a silent wrong load.
+	// descriptor to the single box argument the parser emitted.
 	function appendWholeLayoutDescriptor(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
-		if not self.hasImplicitLayout 'noLayout'
-			panic("appendWholeLayoutDescriptor: `{String.from(callee)}` in '{String.from(self.currentFuncName())}' but the function carries no layout descriptor parameter — the parser's descriptor-need seed and this lowering disagree")
-		end 'noLayout'
+		self.requireImplicitLayout("appendWholeLayoutDescriptor of '{String.from(callee)}'")
 
 		var fullArgs = ValueIdArray.create()
 		fullArgs.push(self.implicitLayoutValueId)
@@ -5242,38 +5679,12 @@ type MaxonToStdLowering
 		return layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(MaxonType.typeParameter(token as TypeParamId)))
 	end 'typeParamValueBlockOffset'
 
-	// Is this runtime call an OPAQUE-`T` container `create()` — an `__managed_create` or a
-	// `__list_create` whose result instance's element is a type parameter? The parser emits such a create
-	// SHORT its element-destructor argument, which `appendOpaqueContainerCreate` supplies. A CONCRETE create (its
-	// element known) already carries every argument and takes the plain path.
-	//
-	// ⚠ The callee test is a two-name set rather than `opaqueInstanceCreateReadsTheDescriptor` over the result, and
-	// deliberately: the runtime ENTRY is what decides whether an argument is missing, and a container whose
-	// opaque create ever takes a third route would be admitted here by its instance while emitting a call this
-	// arm knows nothing about.
-	function isOpaqueContainerCreateCall(callee ByteArray, result ValueId) returns bool
-		if not callee.equals(ManagedCreateName) and not callee.equals(ListCreateName) 'notCreate'
-			return false
-		end 'notCreate'
-
-		if self.valueTagOf(result) != ValueTypeTag.genericInstance 'notInstance'
-			return false
-		end 'notInstance'
-
-		return self.signatures.containerElementIsOpaque(self.instanceIdOfValue(result))
-	end 'isOpaqueContainerCreateCall'
-
 	// Emit an opaque-`T` container create: load the element destructor from the enclosing instance's layout
 	// descriptor `destroyFunc@40` slot, then call the runtime entry with it as the LAST argument —
 	// `__managed_create(element_size, element_destroy)` for an array or vector, `__list_create(element_drop)`
-	// for a chain, which states its whole argument list in that one word. The reserved descriptor param is
-	// guaranteed by the parser's descriptor-need seed (an opaque `X.create()` seeds it exactly as `sizeof(T)`
-	// does), so its absence here is a parser/lowering divergence — a loud bug, not a silent wrong load,
-	// matching `lowerSizeofType`.
+	// for a chain, which states its whole argument list in that one word.
 	function appendOpaqueContainerCreate(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
-		if not self.hasImplicitLayout 'noLayout'
-			panic("appendOpaqueContainerCreate: an opaque container `create()` (`{String.from(callee)}` — an `Array with <type parameter>`, a `Vector with <N> <type parameter>`, or a chain; see `ProgramSignatures.opaqueInstanceCreateReadsTheDescriptor`) in '{String.from(self.currentFuncName())}' but the function carries no layout descriptor parameter — the parser's descriptor-need seed and this lowering disagree")
-		end 'noLayout'
+		self.requireImplicitLayout("appendOpaqueContainerCreate of '{String.from(callee)}'")
 
 		// ⭐ **WHICH type parameter's dictionary — the block for the ELEMENT's OWN parameter.** A
 		// two-parameter generic creates one opaque container per column from ONE shared body, and reading a fixed
@@ -5304,6 +5715,8 @@ type MaxonToStdLowering
 	//
 	// Parameter 0's block IS the descriptor, so a single-parameter instance emits no arithmetic at all.
 	function descriptorBlockAddr(blockOffset ByteOffset, dstBlock IrBlock) returns ValueId
+		self.requireImplicitLayout("descriptorBlockAddr")
+
 		if blockOffset == 0 'theFirstBlockIsTheDescriptor'
 			return self.implicitLayoutValueId
 		end 'theFirstBlockIsTheDescriptor'
@@ -6582,7 +6995,7 @@ type MaxonToStdLowering
 			// The element facts are `appendRuntimeCall`'s, asked here for the THREE throwing element primitives
 			// (`__managed_get`, `__managed_set`, `__managed_mem_set`) — the same facts about the same argument,
 			// so the two doors share the one recorder rather than each testing the argument for itself.
-			let tryCallArgs = self.opaqueCopyArgsWithDescriptor(callee, args: args, dstBlock: dstBlock)
+			let tryCallArgs = self.opaqueCopyArgsWithDescriptor(self.descriptorRuntimeCallOfValue(callee, result: result), callee: callee, args: args, dstBlock: dstBlock)
 			self.recordStaticElementFacts(args, opIndex: self.stdModule.opCount())
 			self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: tryCallArgs))
 			return

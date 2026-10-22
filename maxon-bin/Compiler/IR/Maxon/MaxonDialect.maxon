@@ -683,8 +683,9 @@ export function paramCarriesAnExistentialWitness(paramType MaxonType, param Para
 end 'paramCarriesAnExistentialWitness'
 
 // ⭐⭐ **WHERE THE TWO OPTIONAL HIDDEN SLOTS SIT, WRITTEN ONCE.** The ABI is
-// `[user][existentialWitness][layout][count][witness_0..k]`, and both optional blocks are addressed
-// FROM THE END — so each slot's ValueId is arithmetic on `paramCount` and the counts trailing it. That
+// `[user][existentialWitness][count][witness_0..k][layout]`: the layout slot is the LAST parameter, and the
+// count and witnesses are addressed back from the end of the block before it (`hiddenBlockEndOf`) — so
+// each slot's ValueId is arithmetic on `paramCount` and the counts trailing it. That
 // arithmetic is read both where the parser RESERVES it (`Parser.layoutParamOf`,
 // `Parser.fixedElementCountParamOf`) and where the lowering BINDS it
 // (`LowerMaxonToStd.bindImplicitParams`).
@@ -693,15 +694,21 @@ end 'paramCarriesAnExistentialWitness'
 // CONSEQUENCE.** That header records what a drifted reserve/supply COUNT costs; a drifted
 // reserve/bind OFFSET costs the same thing by a shorter road — the callee reads the register the
 // caller filled with the OTHER hidden slot, with no compile error anywhere.
-export function fixedElementCountSlotValueId(paramCount ParamCount, witnessParamCount ParamCount) returns ValueId
-	return valueIdAtParamPosition(paramCount - witnessParamCount - 1)
+export function fixedElementCountSlotValueId(hiddenBlockEnd ParamCount, witnessParamCount ParamCount) returns ValueId
+	return valueIdAtParamPosition(hiddenBlockEnd - witnessParamCount - 1)
 end 'fixedElementCountSlotValueId'
 
-// The layout descriptor sits one block FURTHER IN than the count, so it steps over however many count slots
-// there are (0 or 1) as well as the witness block. Same order, same single home.
-export function layoutDescriptorSlotValueId(paramCount ParamCount, witnessParamCount ParamCount, fixedElementCountSlots ParamCount) returns ValueId
-	return valueIdAtParamPosition(paramCount - witnessParamCount - fixedElementCountSlots - 1)
+export function witnessBlockStartValueId(hiddenBlockEnd ParamCount, witnessParamCount ParamCount) returns ValueId
+	return valueIdAtParamPosition(hiddenBlockEnd - witnessParamCount)
+end 'witnessBlockStartValueId'
+
+export function layoutDescriptorSlotValueId(paramCount ParamCount) returns ValueId
+	return valueIdAtParamPosition(paramCount - LayoutSlotWidth)
 end 'layoutDescriptorSlotValueId'
+
+export function hiddenBlockEndOf(func IrFunction, carriesALayoutSlot bool) returns ParamCount
+	return func.paramCount - LayoutSlotWidth if carriesALayoutSlot else func.paramCount
+end 'hiddenBlockEndOf'
 
 // Rebuild a `MaxonType` from the two columns — the inverse of `maxonTypeTag` +
 // `typeNameIdOf`. THIS ALLOCATES (it constructs a union), which is why it is called only

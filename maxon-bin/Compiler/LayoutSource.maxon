@@ -1,0 +1,198 @@
+module enum CarrierCallNeed
+	none
+	forwarded
+	composed
+end 'CarrierCallNeed'
+
+module union HiddenSourceKind
+	ofReceiver
+	ofResult
+	ofQualifier(gid GenericInstanceId)
+	forwardedFromTheCaller
+end 'HiddenSourceKind'
+
+module union InstanceView
+	instance(gid GenericInstanceId)
+	other(tag ValueTypeTag)
+end 'InstanceView'
+
+union QualifierView
+	absent
+	instance(gid GenericInstanceId)
+end 'QualifierView'
+
+module union CallLayoutSource
+	ofInstance(gid GenericInstanceId)
+	forwardedFromTheCaller
+end 'CallLayoutSource'
+
+function instanceOfView(view InstanceView) returns GenericInstanceId throws AbsentError
+	match view 'view'
+		instance(gid) then return gid
+		other then throw AbsentError.absent
+	end 'view'
+end 'instanceOfView'
+
+function qualifierInstanceOf(qualifier QualifierView) returns GenericInstanceId throws AbsentError
+	match qualifier 'qualified'
+		instance(gid) then return gid
+		absent then throw AbsentError.absent
+	end 'qualified'
+end 'qualifierInstanceOf'
+
+function viewIsTheCallersOwnType(view InstanceView) returns bool
+	return match view 'view'
+		instance gives false
+		other(tag) gives tag == ValueTypeTag.structRef or tag == ValueTypeTag.typeParameter
+	end 'view'
+end 'viewIsTheCallersOwnType'
+
+module function instanceViewOf(tags ValueTypeTagArray, nameIds TypeNameIdArray, value ValueId) returns InstanceView
+	let tag = try tags.get(value) otherwise panic("instanceViewOf: value v{value} has no recorded type — every SSA value must be minted through Parser.mintValue")
+
+	if tag == ValueTypeTag.genericInstance 'anInstance'
+		return InstanceView.instance((try nameIds.get(value) otherwise panic("instanceViewOf: generic-instance value v{value} has no name-id — the two type columns are dense and in lockstep")) as GenericInstanceId)
+	end 'anInstance'
+
+	return InstanceView.other(tag)
+end 'instanceViewOf'
+
+function qualifierViewOf(callInstances ValueCallInstanceMap, result ValueId) returns QualifierView
+	if let qualifier = try callInstances.get(result) 'calledThroughAnInstance'
+		return QualifierView.instance(qualifier)
+	end 'calledThroughAnInstance'
+
+	return QualifierView.absent
+end 'qualifierViewOf'
+
+module function callSubjectOf(argIds ValueIdArray, takesReceiver bool, result ValueId, callee ByteArray) returns ValueId
+	if not takesReceiver 'noReceiver'
+		return result
+	end 'noReceiver'
+
+	return try argIds.get(0) otherwise panic("callSubjectOf: dictionary-carrying instance method '{String.from(callee)}' has no receiver argument — its first parameter is `self`")
+end 'callSubjectOf'
+
+module function hiddenSourceKindFrom(signatures ProgramSignatures, callee ByteArray, result ValueId, tags ValueTypeTagArray, nameIds TypeNameIdArray, callInstances ValueCallInstanceMap) returns HiddenSourceKind
+	return hiddenSourceKindOf(signatures, callee: callee, takesReceiver: signatures.declaredCalleeTakesReceiver(callee), qualifier: qualifierViewOf(callInstances, result: result), result: instanceViewOf(tags, nameIds: nameIds, value: result))
+end 'hiddenSourceKindFrom'
+
+module function callLayoutSourceFrom(signatures ProgramSignatures, callee ByteArray, argIds ValueIdArray, result ValueId, tags ValueTypeTagArray, nameIds TypeNameIdArray, callInstances ValueCallInstanceMap) returns CallLayoutSource throws AbsentError
+	let takesReceiver = signatures.declaredCalleeTakesReceiver(callee)
+	let subject = callSubjectOf(argIds, takesReceiver: takesReceiver, result: result, callee: callee)
+	return try callLayoutSourceOf(signatures, callee: callee, takesReceiver: takesReceiver, receiver: instanceViewOf(tags, nameIds: nameIds, value: subject), qualifier: qualifierViewOf(callInstances, result: result), result: instanceViewOf(tags, nameIds: nameIds, value: result))
+end 'callLayoutSourceFrom'
+
+function hiddenSourceKindOf(signatures ProgramSignatures, callee ByteArray, takesReceiver bool, qualifier QualifierView, result InstanceView) returns HiddenSourceKind
+	if takesReceiver 'instanceMethod'
+		return HiddenSourceKind.ofReceiver
+	end 'instanceMethod'
+
+	if isFieldDefaultHelperName(callee) 'fieldDefaultHelper'
+		return HiddenSourceKind.forwardedFromTheCaller
+	end 'fieldDefaultHelper'
+
+	if let through = try qualifierInstanceOf(qualifier) 'calledThroughAnInstance'
+		return HiddenSourceKind.ofQualifier(through)
+	end 'calledThroughAnInstance'
+
+	if let built = try instanceOfView(result) 'resultIsAnInstance'
+		if signatures.callBuildsTheInstanceOfItsOwnType(callee, instance: built) 'aStaticBuildingTheInstance'
+			return HiddenSourceKind.ofResult
+		end 'aStaticBuildingTheInstance'
+	end 'resultIsAnInstance'
+
+	return HiddenSourceKind.forwardedFromTheCaller
+end 'hiddenSourceKindOf'
+
+function callLayoutSourceOf(signatures ProgramSignatures, callee ByteArray, takesReceiver bool, receiver InstanceView, qualifier QualifierView, result InstanceView) returns CallLayoutSource throws AbsentError
+	match hiddenSourceKindOf(signatures, callee: callee, takesReceiver: takesReceiver, qualifier: qualifier, result: result) 'kind'
+		ofReceiver then return try receiverLayoutSourceOf(receiver)
+		ofResult then return CallLayoutSource.ofInstance(try instanceOfView(result))
+		ofQualifier(through) then return CallLayoutSource.ofInstance(through)
+		forwardedFromTheCaller then return CallLayoutSource.forwardedFromTheCaller
+	end 'kind'
+end 'callLayoutSourceOf'
+
+function receiverLayoutSourceOf(receiver InstanceView) returns CallLayoutSource throws AbsentError
+	if let gid = try instanceOfView(receiver) 'anInstance'
+		return CallLayoutSource.ofInstance(gid)
+	end 'anInstance'
+
+	if viewIsTheCallersOwnType(receiver) 'theCallersOwnType'
+		return CallLayoutSource.forwardedFromTheCaller
+	end 'theCallersOwnType'
+
+	throw AbsentError.absent
+end 'receiverLayoutSourceOf'
+
+module function carrierNeedOf(signatures ProgramSignatures, source CallLayoutSource) returns CarrierCallNeed
+	match source 'source'
+		forwardedFromTheCaller then return CarrierCallNeed.forwarded
+		ofInstance(gid) then return carrierNeedOfInstance(signatures, gid: gid)
+	end 'source'
+end 'carrierNeedOf'
+
+function carrierNeedOfInstance(signatures ProgramSignatures, gid GenericInstanceId) returns CarrierCallNeed
+	if signatures.instanceIsBuiltOnATypeParameter(gid) 'composedFromTheCaller'
+		return CarrierCallNeed.composed
+	end 'composedFromTheCaller'
+
+	return CarrierCallNeed.none
+end 'carrierNeedOfInstance'
+
+module enum DescriptorRuntimeCall
+	none
+	typeParamOwnership
+	dictionaryDestructor
+	opaqueElementCopy
+	opaqueContainerCreate
+	composedElementStampCreate
+end 'DescriptorRuntimeCall'
+
+module function descriptorRuntimeCallOf(signatures ProgramSignatures, callee ByteArray, result InstanceView) returns DescriptorRuntimeCall
+	if callee.equals(DropTypeParamName) or callee.equals(RetainTypeParamName) 'typeParamOwnership'
+		return DescriptorRuntimeCall.typeParamOwnership
+	end 'typeParamOwnership'
+
+	if isDictionaryDestructorCallee(callee) 'dictionaryDestructor'
+		return DescriptorRuntimeCall.dictionaryDestructor
+	end 'dictionaryDestructor'
+
+	if isOpaqueElementCopyCallee(callee) 'opaqueElementCopy'
+		return DescriptorRuntimeCall.opaqueElementCopy
+	end 'opaqueElementCopy'
+
+	// The callee is tested by name before the result's instance is asked: the runtime ENTRY decides whether
+	// an argument is missing, and a container whose opaque create took a third route would otherwise be
+	// admitted by its instance while emitting a call no arm here knows.
+	if not callee.equals(ManagedCreateName) and not callee.equals(ListCreateName) 'notAContainerCreate'
+		return DescriptorRuntimeCall.none
+	end 'notAContainerCreate'
+
+	let created = try instanceOfView(result) otherwise return DescriptorRuntimeCall.none
+
+	match signatures.containerCreateRoute(created) 'route'
+		opaqueElement then return DescriptorRuntimeCall.opaqueContainerCreate
+		composedFromTheCaller then return DescriptorRuntimeCall.composedElementStampCreate
+		staticStamp then return DescriptorRuntimeCall.none
+	end 'route'
+end 'descriptorRuntimeCallOf'
+
+module function tableHolderOf(signatures ProgramSignatures, funcSignatures FuncSignatureMap, func IrFunction, staticCarriesTheDescriptor bool) returns TableHolder
+	let liftedClosure = isLiftedClosureName(func.name)
+
+	if isSignaturelessCompilerCallee(func.name, funcSignatures: funcSignatures) 'aCompilerOwnFunction'
+		return deriveTableHolder(liftedClosure, carriedTables: 0)
+	end 'aCompilerOwnFunction'
+
+	let callerSignature = try funcSignatures.get(func.name) otherwise panic("tableHolderOf: '{String.from(func.name)}' is a function of the module and has no signature")
+	return deriveTableHolder(liftedClosure, carriedTables: signatures.witnessSlotsCarriedBy(func.name, sig: callerSignature, staticCarriesTheDescriptor: staticCarriesTheDescriptor))
+end 'tableHolderOf'
+
+module function noWitnessTablesRefusalText(callee ByteArray, arrival NoWitnessTablesArrival) returns String
+	match splitQualifiedName(overloadRegistrationBaseName(callee)) 'qualified'
+		parts(_, member) then return unsupportedFeatureMessage(noWitnessTablesSentence(member, arrival: arrival))
+		notQualified then panic("noWitnessTablesRefusalText: '{String.from(callee)}' takes witness tables from its call site and is not a qualified method name — the constraint fold files them under `<Conformer>.<member>` only")
+	end 'qualified'
+end 'noWitnessTablesRefusalText'

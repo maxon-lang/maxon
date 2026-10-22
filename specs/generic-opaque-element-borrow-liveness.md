@@ -1602,3 +1602,503 @@ end 'main'
 ```maxoncstderr
 error E3159: <fragment>:10:8: cannot write through 'first': 'first' is read-only (a `view`) and nothing reachable through it may be written; use 'var', or write a clone()
 ```
+
+<!-- test: a-field-read-through-a-bare-nested-instance-field-is-counted -->
+### The same read with the nested field spelled by its bare name
+```maxon
+type Slot uses T where T is Equatable
+	export var current as T
+	var seen as Count
+
+	static function create(first T) returns Self
+		return Self{current: first, seen: 0}
+	end 'create'
+end 'Slot'
+
+type Wrapper uses T where T is Equatable
+	export typealias Inner = Slot with T
+	var inner as Inner
+	var seen as Count
+
+	static function create(first T) returns Self
+		return Self{inner: Inner.create(first), seen: 0}
+	end 'create'
+
+	function observe(item T) returns Count
+		if item == item 'same'
+			self.seen = self.seen + 1
+		end 'same'
+
+		return self.seen
+	end 'observe'
+
+	function bareHead() returns Count
+		view held = inner.current
+		return observe(held)
+	end 'bareHead'
+end 'Wrapper'
+
+typealias StrWrapper = Wrapper with String
+
+function main() returns ExitCode
+	var w = StrWrapper.create("alpha {40 + 2} value long enough for a heap record")
+	print("{w.bareHead()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: a-field-read-through-a-local-bound-to-a-nested-instance-is-counted -->
+### The same read through a local bound to the nested instance
+```maxon
+type Slot uses T where T is Equatable
+	export var current as T
+	var seen as Count
+
+	static function create(first T) returns Self
+		return Self{current: first, seen: 0}
+	end 'create'
+end 'Slot'
+
+type Wrapper uses T where T is Equatable
+	export typealias Inner = Slot with T
+	var inner as Inner
+	var seen as Count
+
+	static function create(first T) returns Self
+		return Self{inner: Inner.create(first), seen: 0}
+	end 'create'
+
+	function observe(item T) returns Count
+		if item == item 'same'
+			self.seen = self.seen + 1
+		end 'same'
+
+		return self.seen
+	end 'observe'
+
+	function viaLocal() returns Count
+		view via = self.inner
+		view held = via.current
+		return observe(held)
+	end 'viaLocal'
+end 'Wrapper'
+
+typealias StrWrapper = Wrapper with String
+
+function main() returns ExitCode
+	var w = StrWrapper.create("alpha {40 + 2} value long enough for a heap record")
+	print("{w.viaLocal()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: a-field-read-through-a-nested-instance-field-is-counted -->
+### A type-parameter field read through a field holding an instance over the same parameter is counted
+`Wrapper.nestedLook` reads `Slot.current` through `self.inner`, a `Slot with T`; the read is the only reason it owes a layout descriptor.
+```maxon
+type Slot uses T where T is Equatable
+	export var current as T
+	var seen as Count
+
+	static function create(first T) returns Self
+		return Self{current: first, seen: 0}
+	end 'create'
+end 'Slot'
+
+type Wrapper uses T where T is Equatable
+	export typealias Inner = Slot with T
+	var inner as Inner
+	var seen as Count
+
+	static function create(first T) returns Self
+		return Self{inner: Inner.create(first), seen: 0}
+	end 'create'
+
+	function observe(item T) returns Count
+		if item == item 'same'
+			self.seen = self.seen + 1
+		end 'same'
+
+		return self.seen
+	end 'observe'
+
+	function nestedLook() returns Count
+		view held = self.inner.current
+		return observe(held)
+	end 'nestedLook'
+
+	function nestedPass() returns Count
+		return observe(self.inner.current)
+	end 'nestedPass'
+end 'Wrapper'
+
+typealias StrWrapper = Wrapper with String
+
+function main() returns ExitCode
+	var w = StrWrapper.create("alpha {40 + 2} value long enough for a heap record")
+	print("{w.nestedLook()} {w.nestedPass()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 2
+```
+
+<!-- test: a-field-read-through-a-parameter-declared-at-a-nested-instance-is-counted -->
+### The same read through a parameter declared at the nested instance's alias
+```maxon
+type Slot uses T where T is Equatable
+	export var current as T
+	var seen as Count
+
+	static function create(first T) returns Self
+		return Self{current: first, seen: 0}
+	end 'create'
+end 'Slot'
+
+type Wrapper uses T where T is Equatable
+	export typealias Inner = Slot with T
+	var inner as Inner
+	var seen as Count
+
+	static function create(first T) returns Self
+		return Self{inner: Inner.create(first), seen: 0}
+	end 'create'
+
+	function observe(item T) returns Count
+		if item == item 'same'
+			self.seen = self.seen + 1
+		end 'same'
+
+		return self.seen
+	end 'observe'
+
+	function viaParam(c Inner) returns Count
+		view held = c.current
+		return observe(held)
+	end 'viaParam'
+end 'Wrapper'
+
+typealias StrWrapper = Wrapper with String
+typealias StrSlot = Slot with String
+
+function main() returns ExitCode
+	var w = StrWrapper.create("alpha {40 + 2} value long enough for a heap record")
+	let s = StrSlot.create("beta {40 + 2} value long enough for a heap record")
+	print("{w.viaParam(s)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: a-field-read-through-a-self-typed-parameters-nested-instance-is-counted -->
+### The same read through the nested field of a `Self`-typed parameter
+```maxon
+type Slot uses T where T is Equatable
+	export var current as T
+	var seen as Count
+
+	static function create(first T) returns Self
+		return Self{current: first, seen: 0}
+	end 'create'
+end 'Slot'
+
+type Wrapper uses T where T is Equatable
+	export typealias Inner = Slot with T
+	var inner as Inner
+	var seen as Count
+
+	static function create(first T) returns Self
+		return Self{inner: Inner.create(first), seen: 0}
+	end 'create'
+
+	function observe(item T) returns Count
+		if item == item 'same'
+			self.seen = self.seen + 1
+		end 'same'
+
+		return self.seen
+	end 'observe'
+
+	function viaPeer(other Self) returns Count
+		view held = other.inner.current
+		return observe(held)
+	end 'viaPeer'
+end 'Wrapper'
+
+typealias StrWrapper = Wrapper with String
+
+function main() returns ExitCode
+	var w = StrWrapper.create("alpha {40 + 2} value long enough for a heap record")
+	var o = StrWrapper.create("beta {40 + 2} value long enough for a heap record")
+	print("{w.viaPeer(o)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: a-field-read-two-nested-instances-deep-is-counted -->
+### The same read two nested instances deep
+```maxon
+type Slot uses T where T is Equatable
+	export var current as T
+	var seen as Count
+
+	static function create(first T) returns Self
+		return Self{current: first, seen: 0}
+	end 'create'
+end 'Slot'
+
+type Middle uses T where T is Equatable
+	export typealias Inner = Slot with T
+	export var inner as Inner
+
+	static function create(first T) returns Self
+		return Self{inner: Inner.create(first)}
+	end 'create'
+end 'Middle'
+
+type Outer uses T where T is Equatable
+	export typealias Mid = Middle with T
+	var mid as Mid
+	var seen as Count
+
+	static function create(first T) returns Self
+		return Self{mid: Mid.create(first), seen: 0}
+	end 'create'
+
+	function observe(item T) returns Count
+		if item == item 'same'
+			self.seen = self.seen + 1
+		end 'same'
+
+		return self.seen
+	end 'observe'
+
+	function deepLook() returns Count
+		view held = self.mid.inner.current
+		return observe(held)
+	end 'deepLook'
+end 'Outer'
+
+typealias StrOuter = Outer with String
+
+function main() returns ExitCode
+	var o = StrOuter.create("alpha {40 + 2} value long enough for a heap record")
+	print("{o.deepLook()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: a-for-loop-over-the-array-field-of-a-self-typed-parameter-holds-its-element -->
+### A `for` over the array field of a `Self`-typed parameter holds its element across a call that wipes the source
+`walk` iterates `other.items` and `wipe` clears that very array while the loop's element is live; the loop owes the element a reference of its own.
+```maxon
+type Bag uses T where T is Equatable
+	export typealias Items = Array with T
+	var items as Items
+	var seen as Count
+
+	static function create() returns Self
+		return Self{items: Items.create(), seen: 0}
+	end 'create'
+
+	function add(item T)
+		items.push(item)
+	end 'add'
+
+	function observe(item T) returns Count
+		if item == item 'same'
+			self.seen = self.seen + 1
+		end 'same'
+
+		return self.seen
+	end 'observe'
+
+	function walk(other Self) returns Count
+		var total = 0 as Count
+
+		for item in other.items 'scan'
+			other.items.clear()
+			total = total + observe(item)
+		end 'scan'
+
+		return total
+	end 'walk'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function main() returns ExitCode
+	var a = StrBag.create()
+	var b = StrBag.create()
+	b.add("alpha {40 + 2} value long enough for a heap record")
+	b.add("beta {40 + 2} value long enough for a heap record")
+	print("{a.walk(b)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: a-parenthesized-field-read-is-counted -->
+### A field read inside parentheses, bare and through `self`, is counted
+```maxon
+type Slot uses T where T is Equatable
+	var current as T
+	var seen as Count
+
+	static function create(first T) returns Self
+		return Self{current: first, seen: 0}
+	end 'create'
+
+	function observe(item T) returns Count
+		if item == item 'same'
+			self.seen = self.seen + 1
+		end 'same'
+
+		return self.seen
+	end 'observe'
+
+	function groupedLook() returns Count
+		view held = (current)
+		return observe(held)
+	end 'groupedLook'
+
+	function groupedSelfPass() returns Count
+		return observe((self.current))
+	end 'groupedSelfPass'
+end 'Slot'
+
+typealias StrSlot = Slot with String
+
+function main() returns ExitCode
+	var s = StrSlot.create("alpha {40 + 2} value long enough for a heap record")
+	print("{s.groupedLook()} {s.groupedSelfPass()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 2
+```
+
+<!-- test: a-self-typed-parameters-field-read-bound-to-a-name-is-counted -->
+### A field read off a `Self`-typed parameter, bound to a name, is counted
+`peerLook` stores, reassigns and moves nothing and reads no field of `self`, so the field of its `other` parameter is the only reason it
+owes a layout descriptor.
+```maxon
+type Slot uses T where T is Equatable
+	var current as T
+	var seen as Count
+
+	static function create(first T) returns Self
+		return Self{current: first, seen: 0}
+	end 'create'
+
+	function observe(item T) returns Count
+		if item == item 'same'
+			self.seen = self.seen + 1
+		end 'same'
+
+		return self.seen
+	end 'observe'
+
+	function peerLook(other Self) returns Count
+		view held = other.current
+		return observe(held)
+	end 'peerLook'
+end 'Slot'
+
+typealias StrSlot = Slot with String
+
+function main() returns ExitCode
+	var s = StrSlot.create("alpha {40 + 2} value long enough for a heap record")
+	var t = StrSlot.create("beta {40 + 2} value long enough for a heap record")
+	print("{s.peerLook(t)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: a-self-typed-parameters-field-read-passed-on-is-counted -->
+### A field read off a `Self`-typed parameter, passed on, is counted
+```maxon
+type Slot uses T where T is Equatable
+	var current as T
+	var seen as Count
+
+	static function create(first T) returns Self
+		return Self{current: first, seen: 0}
+	end 'create'
+
+	function observe(item T) returns Count
+		if item == item 'same'
+			self.seen = self.seen + 1
+		end 'same'
+
+		return self.seen
+	end 'observe'
+
+	function peerPass(other Self) returns Count
+		return observe(other.current)
+	end 'peerPass'
+end 'Slot'
+
+typealias StrSlot = Slot with String
+
+function main() returns ExitCode
+	var s = StrSlot.create("alpha {40 + 2} value long enough for a heap record")
+	var t = StrSlot.create("beta {40 + 2} value long enough for a heap record")
+	print("{s.peerPass(t)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```

@@ -59,10 +59,8 @@ let TypeArgumentSeparator = ", "
 
 let WrittenInstanceMarker = " with "
 
-let LiftedFunctionNameSeparator = "$"
-
 function liftedFunctionHost(segments StringArray, name ByteArray) returns ByteArray
-	return (try segments.get(0) otherwise panic("liftedFunctionHost: splitting '{String.from(name)}' at '{LiftedFunctionNameSeparator}' produced no segment")).toByteArray()
+	return (try segments.get(0) otherwise panic("liftedFunctionHost: splitting '{String.from(name)}' at '{CompilerMintSeparator}' produced no segment")).toByteArray()
 end 'liftedFunctionHost'
 
 // The shape discriminators the signature hash mixes — one per arm of the two type unions, so two
@@ -5632,7 +5630,6 @@ function sinkAnswers(sink FeedSink, query FeedSinkQuery) returns bool
 	return match query 'query'
 		anySink gives true
 		calleeStorageSink gives sink == FeedSink.calleeStorage
-		constructedValueSink gives sink == FeedSink.constructedValue
 	end 'query'
 end 'sinkAnswers'
 
@@ -5666,21 +5663,10 @@ export enum FeedSinkQuery
 	anySink
 
 	// Does the fed value land in storage the callee owns and releases? The callee's enrolment
-	// (`bindParameters`), the caller's move (`transferConsumedArgs`) and the descriptor-need seed
-	// (`ProgramSignatures.functionFeedsCalleeStorage`) all ask it here, so they agree about who frees
-	// the value. It asks the sink and not merely `isFeed()`: only a callee-storage feed is enrolled
-	// owned, so only it can be left live at an exit and dropped through the descriptor. A `Self{item: p}` constructor feed
-	// is settled at the concrete call site, and seeding the descriptor off it would reserve a slot a
-	// generic constructor has no receiver to source.
+	// (`bindParameters`) asks the sink and not merely `isFeed()`: only a callee-storage feed is enrolled
+	// owned, so only it can be left live at an exit and dropped through the descriptor. A `Self{item: p}`
+	// constructor feed is settled at the concrete call site.
 	calleeStorageSink
-
-	// The question for a body that forwards a borrowed opaque `T` into another generic's `create()`
-	// and takes its reference through `retainFunc@64` (`methodNameEverFeedsATypeParameter`). It must
-	// not match the callee-storage sink too: `storesBorrowedOpaqueElement` already seeds that one, and
-	// a second seed reserves a descriptor in a chain that must stay inert — `extension Iterable.map`'s
-	// `result.push(item)` then panics in `bakeFuncAbs64Relocs`
-	// (`interface-extensions.stdlib-map-on-map-with-function`).
-	constructedValueSink
 end 'FeedSinkQuery'
 
 export enum ForwardShape
@@ -6452,9 +6438,6 @@ end 'forwardedStoreIsTakenBy'
 // them, and a shared empty handed to a name it then writes is a `let` global's record handed to a name that is
 // written through: the rule that a value which may alias a `let` global's record may not be written through
 // refuses that (E3159). A column that is always fresh can alias nothing, and costs one empty record.
-//
-// ⚡ The descriptor scan's edge columns keep their shared anchor instead (`Parser.edgeColumnSnapshot`): nearly
-// every body records no edge, so a fresh column there would be an allocation per body for nothing.
 export function setParamBit(column BoolArray, index ParamCount)
 	while column.count() as ParamCount <= index 'reach'
 		column.push(false)
@@ -13114,9 +13097,7 @@ end 'cacheReadConstInitializerTypeNameSet'
 
 // @generated library-cache end
 
-// The SIMPLE (unqualified) names of methods, keyed by nothing else — see
-// `ProgramSignatures.bareTypeParamReturnerNames`, whose whole point is that the qualifying type is exactly
-// what its reader cannot supply.
+// The SIMPLE (unqualified) names of methods, keyed by nothing else.
 typealias MethodNameSet = Set with ByteArray
 
 // @generated library-cache begin
@@ -15168,16 +15149,14 @@ end 'cacheReadConformanceClauseDeclSiteArray'
 
 // @generated library-cache end
 
-// ⭐⭐ **WHERE ONE SET OF A GENERIC TYPE'S METHODS BEGINS — the site list the whole-program
-// LAYOUT-DESCRIPTOR-NEED fixpoint walks (`Queries.foldDescriptorNeeds`).** A generic `type`'s own body is
-// one site; every `extension` body over a generic target is another, one per conformer it publishes onto.
-// `typeName` is the type those methods belong to — the CONFORMER for an extension — so every method the
-// fixpoint collects is keyed by the same `Type.method` name a call resolves to.
+// ⭐⭐ **WHERE ONE SET OF THE SIZED CONTAINER'S METHODS BEGINS — the site list the whole-program
+// fixed-element-count fixpoint walks (`Queries.foldFixedElementCountNeeds`).** The container's own `type`
+// body is one site; every `extension` body over it is another. `typeName` is the type those methods belong
+// to — the CONFORMER for an extension — so every method the fixpoint collects is keyed by the same
+// `Type.method` name a call resolves to.
 //
-// ⭐ **ONLY A GENERIC TYPE IS RECORDED, AND THAT IS WHAT KEEPS THE COST OFF EVERY OTHER PROGRAM.** A
-// descriptor exists to carry a TYPE PARAMETER's layout at run time, so a type with no `uses` clause can
-// never need one — and a program that declares no generic type records no site, which makes
-// `foldDescriptorNeeds` an empty-array test that allocates nothing.
+// ⭐ **ONLY THE SIZED CONTAINER IS RECORDED**, because a count can be read only inside its own body
+// (`Parser.fixedElementCountEdgesFor`).
 export type DescriptorScanSite
 	export var path as FilePath
 
@@ -15187,20 +15166,8 @@ export type DescriptorScanSite
 	export var bodyStart as ElementIndex
 	export let typeName as ByteArray
 
-	// ⭐⭐ **IS THIS BODY AN *INTERFACE* EXTENSION'S RATHER THAN THE TYPE'S OWN?** It decides one
-	// descriptor seed and nothing else, and it is a fact only the recorder holds: by the time the fixpoint
-	// walks the body, `typeName` is the CONFORMER either way and the two are indistinguishable.
-	//
-	// An interface-extension body is written in the INTERFACE's terms — it can name no field of the conformer
-	// and no `uses` parameter of it — so the routes by which it can hold a bare associated-type value are
-	// exactly two, and each already has its own seed: a PARAMETER declared at that type
-	// (`methodCanForwardABorrowedOpaque`) and the per-trip element of `for … in self`
-	// (`receiverCursorElementIsOpaque`). A TYPE extension is the type's own body by every other measure — it
-	// names the type's fields and its `uses` list — so it is `false` here, as a `type` body is.
-	export let bodyIsAnInterfaceExtension as bool
-
-	export static function create(path FilePath, bodyStart ElementIndex, typeName ByteArray, bodyIsAnInterfaceExtension bool) returns DescriptorScanSite
-		return Self{path: path, bodyStart: bodyStart, typeName: typeName, bodyIsAnInterfaceExtension: bodyIsAnInterfaceExtension}
+	export static function create(path FilePath, bodyStart ElementIndex, typeName ByteArray) returns DescriptorScanSite
+		return Self{path: path, bodyStart: bodyStart, typeName: typeName}
 	end 'create'
 
 	// @generated library-cache begin
@@ -15208,27 +15175,23 @@ export type DescriptorScanSite
 		writer.text(self.path.toString())
 		writer.unsigned(self.bodyStart as CacheUnsigned)
 		writer.bytes(self.typeName)
-		writer.flag(self.bodyIsAnInterfaceExtension)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns DescriptorScanSite throws LibraryCacheDamage
 		let f_path = try reader.path()
 		let f_bodyStart = (try reader.unsigned()) as ElementIndex
 		let f_typeName = try reader.bytes()
-		let f_bodyIsAnInterfaceExtension = try reader.flag()
 
-		return Self{path: f_path, bodyStart: f_bodyStart, typeName: f_typeName, bodyIsAnInterfaceExtension: f_bodyIsAnInterfaceExtension}
+		return Self{path: f_path, bodyStart: f_bodyStart, typeName: f_typeName}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize32
-		return sizeof(DescriptorScanSite) as CacheSize32
+	static function cacheLayoutBytes() returns CacheSize24
+		return sizeof(DescriptorScanSite) as CacheSize24
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
 end 'DescriptorScanSite'
 
-// Is `target` an INTERFACE extension — the half `DescriptorScanSite.bodyIsAnInterfaceExtension` records? An
-// undeclared target expands nothing, so the answer there is the safe one: it gets no site at all.
 export function extensionTargetIsAnInterface(target ExtensionTarget) returns bool
 	match target 'target'
 		interfaceExtension then return true
@@ -15602,7 +15565,7 @@ end 'HeldAssociatedArg'
 
 // The witness constraints of an extension method that are NOT its enclosing type's own — see
 // `ExtensionTarget`'s type arm. Keyed by the qualified method name, which is the key both the reservation
-// side (`Parser.witnessParamCountFor`, through the constraints the extension body is parsed under) and the
+// side (`Parser.witnessReserveFor`, through the constraints the extension body is parsed under) and the
 // supply side (`LowerMaxonToStd.appendWitnessArgs`) resolve a callee by.
 //
 // ⚠ **IT HOLDS THE EXTRAS, NOT THE WHOLE SLOT LIST.** A method's witness slots are the type's own constraints
@@ -16038,6 +16001,24 @@ end 'claimIsNominal'
 // (`lib.fmt.Score`) yields the whole directory chain and the member — which is what every reader of
 // this union wants (the unqualified name for a diagnostic, the receiver half for a per-instance
 // probe).
+export union DeclaringType
+	method(typeName ByteArray)
+	freeFunction
+	undeclared
+end 'DeclaringType'
+
+export enum CalleeReceiver
+	takesReceiver
+	takesNone
+	undeclared
+end 'CalleeReceiver'
+
+export enum ContainerCreateRoute
+	opaqueElement
+	composedFromTheCaller
+	staticStamp
+end 'ContainerCreateRoute'
+
 export union QualifiedNameParts
 	parts(let prefix ByteArray, let member ByteArray)
 	notQualified
@@ -16077,14 +16058,15 @@ export function unqualifiedMemberOf(name ByteArray) returns ByteArray
 	end 'shape'
 end 'unqualifiedMemberOf'
 
-export function declaringTypeOf(name ByteArray) returns ByteArray throws AbsentError
+function nameQualifierOf(name ByteArray) returns ByteArray throws AbsentError
 	match splitQualifiedName(name) 'qualified'
 		parts(prefix, _) then return prefix
 		notQualified then throw AbsentError.absent
 	end 'qualified'
-end 'declaringTypeOf'
+end 'nameQualifierOf'
 
-// ⭐⭐ **THE "$" THAT DIVIDES A RANGE-QUALIFIED ELEMENT NAME FROM ITS BASE** — `Byte$0_255`.
+// ⭐⭐ **THE "$" EVERY COMPILER MINT JOINS THROUGH** — a range-qualified element name (`Byte$0_255`), an
+// alias minted inside an instance, a lifted closure (`f$closure_0`).
 //
 // ⚠ **IT MAY NOT BE THE "." ABOVE, AND THAT IS NOT A PREFERENCE.** `splitQualifiedName` reads a dotted name
 // as `<directory chain>.<member>`, so a mint spelled `Byte.0_255` would present itself to every
@@ -16094,14 +16076,14 @@ end 'declaringTypeOf'
 // `.` and nothing else, so a `$` cannot appear in a declared name at all: the minted half of the element
 // namespace and the declarable half are disjoint BY CONSTRUCTION rather than by a check, which is the
 // property `ReservedTypeNamePrefix` buys one namespace over.
-let CompilerQualifiedAliasSeparator = "$"
+module let CompilerMintSeparator = "$"
 
-// The BYTE value of `CompilerQualifiedAliasSeparator` (ASCII '$'), for the allocation-free scan below. Named
+// The BYTE value of `CompilerMintSeparator` (ASCII '$'), for the allocation-free scan below. Named
 // so the byte and the string form cannot drift — `QualifiedAliasSeparatorByte`'s discipline.
-let CompilerQualifiedAliasSeparatorByte = 36
+let CompilerMintSeparatorByte = 36
 
 function qualifiedMintName(name ByteArray, qualifier String) returns ByteArray
-	return "{String.from(name)}{CompilerQualifiedAliasSeparator}{qualifier}".toByteArray()
+	return "{String.from(name)}{CompilerMintSeparator}{qualifier}".toByteArray()
 end 'qualifiedMintName'
 
 module function ordinalMintSpelling(spelling ByteArray, place ElementIndex) returns ByteArray
@@ -16109,7 +16091,7 @@ module function ordinalMintSpelling(spelling ByteArray, place ElementIndex) retu
 end 'ordinalMintSpelling'
 
 module function isMintName(name ByteArray) returns bool
-	let at = try firstSeparatorIndex(name, separator: CompilerQualifiedAliasSeparatorByte as NameSeparatorByte) otherwise return false
+	let at = try firstSeparatorIndex(name, separator: CompilerMintSeparatorByte) otherwise return false
 	return at > 0 and not isLiftedClosureName(name)
 end 'isMintName'
 
@@ -16157,7 +16139,7 @@ end 'shapeQualifiedAliasName'
 //
 // ⭐⭐ **TWO SPELLINGS OF ONE RANGE, AND THE SPLIT IS THE SAME ONE `mangleGenericInstance` AND
 // `canonicalNameWithin` HAVE.** `rangeQualifiedAliasName` above is a KEY: it must be unspellable in source,
-// so it wears `CompilerQualifiedAliasSeparator` and is never shown to anyone. This one is DISPLAY: it goes
+// so it wears `CompilerMintSeparator` and is never shown to anyone. This one is DISPLAY: it goes
 // into diagnostics, so it must read like a type and must not carry a separator no author has ever seen.
 // Neither can serve as the other, and a single spelling would have to fail at one of the two jobs.
 export function rangeSourceSpelling(underlying MaxonType, low FullRangeInt, high FullRangeInt) returns ByteArray
@@ -16419,7 +16401,7 @@ end 'sourceSpelledAliasText'
 //     element it names has been qualified — without the roster learning anything about ranges.
 //   • A DIAGNOSTIC quotes a typealias back at the author, and a mint is a name NO SOURCE LINE HOLDS.
 export function sourceSpelledAliasName(name ByteArray) returns ByteArray
-	let split = try firstSeparatorIndex(name, separator: CompilerQualifiedAliasSeparatorByte) otherwise return name
+	let split = try firstSeparatorIndex(name, separator: CompilerMintSeparatorByte) otherwise return name
 
 	return try name.slice(0, endIndex: split) otherwise panic("sourceSpelledAliasName: slice [0, {split}) of a {name.count()}-byte name is in range by the index `firstSeparatorIndex` just found")
 end 'sourceSpelledAliasName'
@@ -16503,9 +16485,10 @@ export type FunctionDeclSite
 	export let takesReceiver as bool
 	export let nameLine as LineNumber
 	export let nameColumn as ColumnNumber
+	export let enclosingTypeName as ByteArray
 
-	static function create(visibility Visibility, declFilePath FilePath, takesReceiver bool, nameLine LineNumber, nameColumn ColumnNumber) returns FunctionDeclSite
-		return Self{visibility: visibility, declFilePath: declFilePath, takesReceiver: takesReceiver, nameLine: nameLine, nameColumn: nameColumn}
+	static function create(visibility Visibility, declFilePath FilePath, takesReceiver bool, nameLine LineNumber, nameColumn ColumnNumber, enclosingTypeName ByteArray) returns FunctionDeclSite
+		return Self{visibility: visibility, declFilePath: declFilePath, takesReceiver: takesReceiver, nameLine: nameLine, nameColumn: nameColumn, enclosingTypeName: enclosingTypeName}
 	end 'create'
 
 	// @generated library-cache begin
@@ -16515,6 +16498,7 @@ export type FunctionDeclSite
 		writer.flag(self.takesReceiver)
 		writer.unsigned(self.nameLine as CacheUnsigned)
 		writer.unsigned(self.nameColumn as CacheUnsigned)
+		writer.bytes(self.enclosingTypeName)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns FunctionDeclSite throws LibraryCacheDamage
@@ -16523,12 +16507,13 @@ export type FunctionDeclSite
 		let f_takesReceiver = try reader.flag()
 		let f_nameLine = (try reader.unsigned()) as LineNumber
 		let f_nameColumn = (try reader.unsigned()) as ColumnNumber
+		let f_enclosingTypeName = try reader.bytes()
 
-		return Self{visibility: f_visibility, declFilePath: f_declFilePath, takesReceiver: f_takesReceiver, nameLine: f_nameLine, nameColumn: f_nameColumn}
+		return Self{visibility: f_visibility, declFilePath: f_declFilePath, takesReceiver: f_takesReceiver, nameLine: f_nameLine, nameColumn: f_nameColumn, enclosingTypeName: f_enclosingTypeName}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize40
-		return sizeof(FunctionDeclSite) as CacheSize40
+	static function cacheLayoutBytes() returns CacheSize48
+		return sizeof(FunctionDeclSite) as CacheSize48
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -17503,42 +17488,14 @@ export type SettledDeclarations
 	// because the clause's own extent depends on an interface arity only that pass knows.
 	export var conformanceClauseSites as ConformanceClauseDeclSiteArray
 
-	// ⭐ Where each GENERIC type's method list begins — its own body, and every extension body over it. See
-	// `DescriptorScanSite`. Read once, by `Queries.foldDescriptorNeeds`, after the extension fold has put
-	// every extension method into the program.
+	// ⭐ Where the SIZED CONTAINER's method list begins — its own body, and every extension body over it. See
+	// `DescriptorScanSite`. Read once, by `Queries.foldFixedElementCountNeeds`, after the extension fold has
+	// put every extension method into the program.
 	export var descriptorScanSites as DescriptorScanSiteArray
 
-	// ⭐⭐ **WHICH METHODS CARRY THE HIDDEN LAYOUT-DESCRIPTOR PARAMETER — the ONE answer, keyed by
-	// the qualified `Type.method` name a call resolves to.** Solved whole-program by
-	// `Queries.foldDescriptorNeeds` after `allFilesFolded`; read by `Parser.parseFunction` to reserve the slot
-	// before it numbers a method's body values, and by `Parser.requireSelfForDescriptorForwarding` to refuse a
-	// forward from a same-type value that is not `self`. (This said "and by nothing else"; the same commit that
-	// wrote it added the second reader — corrected at review.) TWO READERS ARE NOT TWO ANSWERS: both ask this
-	// one set through `functionNeedsLayoutDescriptor`, under the same qualified name, so the reservation and
-	// the refusal cannot disagree about which methods carry the slot.
-	//
-	// ⛔ **IT IS WHOLE-PROGRAM, NOT PER TYPE BODY.** The self-call graph is NOT local to a type
-	// declaration — an extension body is outside it and may be in another file — so the fixpoint
-	// cannot be either. A method an `extension` contributes that sat in no fixpoint could never
-	// reserve the slot while `LowerMaxonToStd` still asked it to FORWARD one to a callee that had: a
-	// compiler panic on a legal program.
-	//
-	// It points at the SHARED EMPTY until a program actually declares a generic type, so a program with none
-	// allocates nothing for it; `recordDescriptorNeeds` replaces it wholesale, copy-on-write, exactly as
-	// `whereConstraints` does on a `StructLayout`.
-	module var descriptorNeeds as DescriptorNeedNameSet
-
-	// ⭐⭐ **THE MEMBERS OF `descriptorNeeds` THAT ONLY RECEIVER-BLIND EDGES REACH**
-	// (`Parser.descriptorBlindEdgesFor`). The pre-scan cannot type those receivers, so such a need may
-	// ORDER work and never REFUSE a program: a frame that reserved no descriptor passes the callee a
-	// zero (`LowerMaxonToStd.forwardCallerLayout`), and lowering proves the callee never reads it,
-	// through every callee it forwards it to, or refuses the call with a position
-	// (`installNullLayoutChecks`).
-	module var speculativeDescriptorNeeds as DescriptorNeedNameSet
-
 	// ⭐⭐ **WHICH METHODS CARRY THE HIDDEN FIXED-ELEMENT-COUNT PARAMETER — the count `countof(Self)`
-	// reads, keyed by the same qualified `Type.method` name and solved by the same fixpoint over the same
-	// self-call graph as `descriptorNeeds`.**
+	// reads, keyed by the qualified `Type.method` name and solved by a fixpoint over the sized container's
+	// self-call graph.**
 	//
 	// ⛔⛔ **IT IS A SECOND PARAMETER RATHER THAN A TENTH DESCRIPTOR WORD, AND THAT IS A MEASUREMENT AND NOT A
 	// PREFERENCE.** A count is a fact about the INSTANCE; every word the layout descriptor carries is a fact
@@ -17557,8 +17514,6 @@ export type SettledDeclarations
 	// forwards the caller's own slot. It also costs the descriptor nothing: a `countof`-reading method that
 	// needs no OTHER dictionary word reserves no descriptor at all, so it can be called from a frame that has
 	// none.
-	//
-	// Shared-empty until a program actually reads a count, for `descriptorNeeds`' reason.
 	module var fixedElementCountNeeds as DescriptorNeedNameSet
 
 	// ⭐ Every (conformer, method) a CONDITIONAL extension was withheld from, under the qualified name a call
@@ -17814,6 +17769,10 @@ export type SettledDeclarations
 	// `funcReturnDeclFiles`', because "no entry" has to mean "no file declares this name" for the answer to
 	// be exact. It is moved by the same three refiles that move a `returnTypes` entry, so it can never lag
 	// the declaration it describes.
+	//
+	// ⚠ One site per KEY: an overload member that registers under a mangled name reads the site its set's
+	// key recorded (`declarationSiteOf`), so a reader that needs a member's own file asks the member's
+	// function instead (`SemanticCheck.boundCalleeSpelling`).
 	module var funcDeclSites as FunctionDeclSiteMap
 
 	// ⭐⭐ **EVERY DECLARATION OF EVERY NAME, AS A CALL SITE HAS TO SEE IT** — one array per registration key,
@@ -17955,32 +17914,6 @@ export type SettledDeclarations
 	module var constInitializerTypeNames as ConstInitializerTypeNameSet
 	module var constInitializerTypeSites as NameInFileArray
 
-	// ⭐⭐ **THE SIMPLE METHOD NAMES SOME DECLARATION IN THE PROGRAM RETURNS A BARE TYPE PARAMETER
-	// FROM** — `calleeReturnsBareTypeParameter` asked of a name rather than of a qualified callee,
-	// because the descriptor-need pre-scan sees a `.get(` and cannot resolve its receiver. See
-	// `methodNameEverReturnsBareTypeParameter` for what the answer is used for and why the weaker,
-	// name-keyed question is the right one to ask there.
-	//
-	// A `computed` flag beside the set rather than an empty-set sentinel, following `arrayByteInstance`: a
-	// program in which NO method returns a bare type parameter has a legitimately empty answer, and rebuilding
-	// it on every ask would be O(functions) per member-call token — the quadratic this index's headers keep
-	// naming. Built at most once per compile, and only for a program that has a generic type at all
-	// (`Queries.foldDescriptorNeeds` returns before the first ask otherwise).
-	//
-	// ⚠ **LAZY IS SAFE HERE ONLY BECAUSE THE ONE ASKER IS PINNED IN THE PASS ORDER.** `returnTypes` is
-	// REWRITTEN after the sweep — three times, by `rewriteRecordedReturnTypes`' contest / struct / interface
-	// rules — so a memo folded before those would answer about a column that no longer exists. Its sole
-	// reader is `Parser.scanDescriptorSignalsIn`, reached only from `foldDescriptorNeeds`, which
-	// `Queries.queryProgramSignatures` runs strictly AFTER all three. A second reader elsewhere in the
-	// pipeline would have to re-establish that, which is why there is not one.
-	module var bareTypeParamReturnerNames as MethodNameSet
-	module var bareTypeParamReturnerNamesComputed as bool
-
-	// The `typeParamFeederNameSet` memo — the same fold-once shape as the pair above, over the
-	// consume column rather than the return column.
-	module var typeParamFeederNames as MethodNameSet
-	module var typeParamFeederNamesComputed as bool
-
 	// ⭐⭐ **WHICH TYPE NAMES A *USER* FILE DECLARES** — one half of the shadow contest. Filled by
 	// `Queries.noteTopLevelTypeDeclaration` for every non-stdlib declaration, and read only while
 	// deciding which of a LISTED STDLIB module's declarations a user program has taken the name of.
@@ -18007,11 +17940,10 @@ export type SettledDeclarations
 	// sweep and this runs ahead of both, so the rename is applied at the READ exactly as it is for the
 	// corpus name below.
 	//
-	// ⚠ **AN ARRAY AND NOT A SET, BECAUSE ONE READER NEEDS THE ORDER AND ALL OF THEM NEED IT STABLE.**
-	// `arrayDeclarationNames` feeds the descriptor pre-scan, which records one edge per serving declaration;
-	// a hash set's iteration order would make that edge order a function of the hash rather than of the
-	// program. A whole program declares one such type, or two under a contest, so membership is a scan of
-	// one or two names — cheaper than the hash it replaces and one representation instead of two.
+	// ⚠ **AN ARRAY AND NOT A SET, BECAUSE ITS READERS NEED A STABLE ORDER.** A hash set's iteration order
+	// would make the order of what they report a function of the hash rather than of the program. A whole
+	// program declares one such type, or two under a contest, so membership is a scan of one or two names —
+	// cheaper than the hash it replaces and one representation instead of two.
 	module var arrayLiteralConformers as NameRoster
 
 	// ⭐⭐ **EVERY `spawn <T>.<member>(…)` THE PROGRAM WRITES** — noted by the whole-program token walk
@@ -18196,7 +18128,7 @@ export type SettledDeclarations
 	export static function create(os Os) returns SettledDeclarations
 		let interfaces = IrInterfaceMap.create()
 
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionAliasRegistry.create(), nestedFunctionAliasMembers: NestedFunctionAliasNameSet.create(), pendingImplementsClauses: AliasImplementsClauseArray.create(), implementsParents: AliasImplementsParentMap.create(), implementsVerdicts: AliasImplementsVerdictMap.create(), structLayouts: StructLayoutArray.create(), structNamesInDeclOrder: NameRoster.create(), enumTypes: createEnumRegistry(interfaces), genericAliasDecls: GenericAliasEntryArray.create(), genericAliasDeclIndexByName: GenericAliasDeclIndexMap.create(), genericAliasDeclsIndexedThrough: 0, instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), typeParamOwners: TypeParamOwnerMap.create(), crossKindContests: noCrossKindContests, typeNameClaimIndex: TypeNameClaimIndex.unsettled, vectorFromSizes: FixedSizeArray.create(), fromHeadNames: FromHeadNameSet.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: noGenericAliasContests, multiplyDeclaredGenericAliases: noDisagreeingAliasNames, sharedInstanceGenericAliases: DisagreeingAliasNameSet.create(), genericAliasMints: GenericAliasMintTable.create(), runtimeFilePaths: LibraryFilePathSet.create(), scriptlibFilePaths: LibraryFilePathSet.create(), genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: interfaces, interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), interfaceDeclSiteNames: InterfaceNameSet.create(), interfaceDeclSiteIndexByName: InterfaceDeclSiteIndexMap.create(), interfaceDeclSitesIndexedThrough: 0, extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: DescriptorNeedNameSet.create(), speculativeDescriptorNeeds: DescriptorNeedNameSet.create(), fixedElementCountNeeds: DescriptorNeedNameSet.create(), conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, conformerIndex: DeclaredConformerIndex.unbuilt(), extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), declParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), byRefSitesOfKey: DeclarationSitesByKeyMap.create(), byRefForwardingLive: ByRefForwardingMap.create(), byRefBareNames: ByRefBareNameSet.create(), opaqueByRefBareNames: ByRefBareNameSet.create(), calleeBareNames: BareNameSet.create(), genericInstanceNameMarker: genericInstanceNameMarker(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcConstructingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsReceiverField: DeclaredBodyFactNameSet.create(), funcReceiverFieldReturningDeclarationCounts: FunctionDeclarationCountMap.create(), interfaceRequirementNames: MethodNameSet.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), interfaceExtensionMembers: InterfaceExtensionMemberMap.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), authorDeclaredNames: HashDigestSet.create(), libraryMeantNames: HashDigestSet.create(), managedTopLevelNames: ManagedTopLevelNameSet.create(), corpusSlotInitCallees: SlotInitCalleeMap.create(), constInitializerTypeNames: ConstInitializerTypeNameSet.create(), constInitializerTypeSites: NameInFileArray.create(), bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: NameRoster.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceSpawnCandidateKeys: ServiceSpawnCandidateKeySet.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), corpusArrayRecordName: ArrayRecordName.of(SynthesizedArrayRecordSeed), shadowRoster: ShadowSpellingRoster.none(), qualifiedTypeClaims: TypeNameClaimLog.create(), typeHeadClaims: TypeNameClaimLog.create(), topLevelBindingSites: TopLevelBindingSiteMap.create(), writtenTypeClaims: TypeNameClaimLog.create(), aliasFamiliesBesideNominals: DeclaredTypeNameSet.create(), headerTypeNameDecls: TypeNameDeclArray.create(), nominalNameCollisions: TypeNameCollisionArray.create(), fileModuleDirectories: ModuleDirectoryByFile.create(), namespaceQualifiers: DeclaredTypeNameSet.create(), libraryFilePaths: LibraryFilePathSet.create(), declTokenStreams: DeclTokenStreamMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionAliasRegistry.create(), nestedFunctionAliasMembers: NestedFunctionAliasNameSet.create(), pendingImplementsClauses: AliasImplementsClauseArray.create(), implementsParents: AliasImplementsParentMap.create(), implementsVerdicts: AliasImplementsVerdictMap.create(), structLayouts: StructLayoutArray.create(), structNamesInDeclOrder: NameRoster.create(), enumTypes: createEnumRegistry(interfaces), genericAliasDecls: GenericAliasEntryArray.create(), genericAliasDeclIndexByName: GenericAliasDeclIndexMap.create(), genericAliasDeclsIndexedThrough: 0, instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), typeParamOwners: TypeParamOwnerMap.create(), crossKindContests: noCrossKindContests, typeNameClaimIndex: TypeNameClaimIndex.unsettled, vectorFromSizes: FixedSizeArray.create(), fromHeadNames: FromHeadNameSet.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: noGenericAliasContests, multiplyDeclaredGenericAliases: noDisagreeingAliasNames, sharedInstanceGenericAliases: DisagreeingAliasNameSet.create(), genericAliasMints: GenericAliasMintTable.create(), runtimeFilePaths: LibraryFilePathSet.create(), scriptlibFilePaths: LibraryFilePathSet.create(), genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: interfaces, interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), interfaceDeclSiteNames: InterfaceNameSet.create(), interfaceDeclSiteIndexByName: InterfaceDeclSiteIndexMap.create(), interfaceDeclSitesIndexedThrough: 0, extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), fixedElementCountNeeds: DescriptorNeedNameSet.create(), conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, conformerIndex: DeclaredConformerIndex.unbuilt(), extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), declParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), byRefSitesOfKey: DeclarationSitesByKeyMap.create(), byRefForwardingLive: ByRefForwardingMap.create(), byRefBareNames: ByRefBareNameSet.create(), opaqueByRefBareNames: ByRefBareNameSet.create(), calleeBareNames: BareNameSet.create(), genericInstanceNameMarker: genericInstanceNameMarker(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcConstructingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsReceiverField: DeclaredBodyFactNameSet.create(), funcReceiverFieldReturningDeclarationCounts: FunctionDeclarationCountMap.create(), interfaceRequirementNames: MethodNameSet.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), interfaceExtensionMembers: InterfaceExtensionMemberMap.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), authorDeclaredNames: HashDigestSet.create(), libraryMeantNames: HashDigestSet.create(), managedTopLevelNames: ManagedTopLevelNameSet.create(), corpusSlotInitCallees: SlotInitCalleeMap.create(), constInitializerTypeNames: ConstInitializerTypeNameSet.create(), constInitializerTypeSites: NameInFileArray.create(), userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: NameRoster.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceSpawnCandidateKeys: ServiceSpawnCandidateKeySet.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), corpusArrayRecordName: ArrayRecordName.of(SynthesizedArrayRecordSeed), shadowRoster: ShadowSpellingRoster.none(), qualifiedTypeClaims: TypeNameClaimLog.create(), typeHeadClaims: TypeNameClaimLog.create(), topLevelBindingSites: TopLevelBindingSiteMap.create(), writtenTypeClaims: TypeNameClaimLog.create(), aliasFamiliesBesideNominals: DeclaredTypeNameSet.create(), headerTypeNameDecls: TypeNameDeclArray.create(), nominalNameCollisions: TypeNameCollisionArray.create(), fileModuleDirectories: ModuleDirectoryByFile.create(), namespaceQualifiers: DeclaredTypeNameSet.create(), libraryFilePaths: LibraryFilePathSet.create(), declTokenStreams: DeclTokenStreamMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create()}
 	end 'create'
 
 	static function unused() returns SettledDeclarations
@@ -18251,8 +18183,6 @@ export type SettledDeclarations
 		cacheWriteExtensionDeclSiteArray(writer, value: self.extensionDeclSites)
 		cacheWriteConformanceClauseDeclSiteArray(writer, value: self.conformanceClauseSites)
 		cacheWriteDescriptorScanSiteArray(writer, value: self.descriptorScanSites)
-		cacheWriteDescriptorNeedNameSet(writer, value: self.descriptorNeeds)
-		cacheWriteDescriptorNeedNameSet(writer, value: self.speculativeDescriptorNeeds)
 		cacheWriteDescriptorNeedNameSet(writer, value: self.fixedElementCountNeeds)
 		cacheWriteConditionalExtensionSkipMap(writer, value: self.conditionalExtensionSkips)
 		cacheWriteAssociatedTypeHoldingMap(writer, value: self.associatedTypeHoldings)
@@ -18317,10 +18247,6 @@ export type SettledDeclarations
 		cacheWriteDefineProblemArray(writer, value: self.defineProblems)
 		cacheWriteConstInitializerTypeNameSet(writer, value: self.constInitializerTypeNames)
 		cacheWriteNameInFileArray(writer, value: self.constInitializerTypeSites)
-		cacheWriteMethodNameSet(writer, value: self.bareTypeParamReturnerNames)
-		writer.flag(self.bareTypeParamReturnerNamesComputed)
-		cacheWriteMethodNameSet(writer, value: self.typeParamFeederNames)
-		writer.flag(self.typeParamFeederNamesComputed)
 		cacheWriteDeclaredTypeNameSet(writer, value: self.userDeclaredTypeNames)
 		cacheWriteDeclaredTypeNameSet(writer, value: self.stdlibDeclaredTypeNames)
 		cacheWriteNameRoster(writer, value: self.arrayLiteralConformers)
@@ -18408,8 +18334,6 @@ export type SettledDeclarations
 		let f_extensionDeclSites = try cacheReadExtensionDeclSiteArray(reader)
 		let f_conformanceClauseSites = try cacheReadConformanceClauseDeclSiteArray(reader)
 		let f_descriptorScanSites = try cacheReadDescriptorScanSiteArray(reader)
-		let f_descriptorNeeds = try cacheReadDescriptorNeedNameSet(reader)
-		let f_speculativeDescriptorNeeds = try cacheReadDescriptorNeedNameSet(reader)
 		let f_fixedElementCountNeeds = try cacheReadDescriptorNeedNameSet(reader)
 		let f_conditionalExtensionSkips = try cacheReadConditionalExtensionSkipMap(reader)
 		let f_associatedTypeHoldings = try cacheReadAssociatedTypeHoldingMap(reader)
@@ -18474,10 +18398,6 @@ export type SettledDeclarations
 		let f_defineProblems = try cacheReadDefineProblemArray(reader)
 		let f_constInitializerTypeNames = try cacheReadConstInitializerTypeNameSet(reader)
 		let f_constInitializerTypeSites = try cacheReadNameInFileArray(reader)
-		let f_bareTypeParamReturnerNames = try cacheReadMethodNameSet(reader)
-		let f_bareTypeParamReturnerNamesComputed = try reader.flag()
-		let f_typeParamFeederNames = try cacheReadMethodNameSet(reader)
-		let f_typeParamFeederNamesComputed = try reader.flag()
 		let f_userDeclaredTypeNames = try cacheReadDeclaredTypeNameSet(reader)
 		let f_stdlibDeclaredTypeNames = try cacheReadDeclaredTypeNameSet(reader)
 		let f_arrayLiteralConformers = try cacheReadNameRoster(reader)
@@ -18517,11 +18437,11 @@ export type SettledDeclarations
 		let f_genericInstancesByName = try cacheReadGenericFunctionInstanceMap(reader)
 		let f_initializerCallSites = try cacheReadInitializerCallSiteArray(reader)
 
-		return Self{misclosedBlocks: f_misclosedBlocks, returnTypes: f_returnTypes, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, nestedFunctionAliasMembers: f_nestedFunctionAliasMembers, pendingImplementsClauses: f_pendingImplementsClauses, implementsParents: f_implementsParents, implementsVerdicts: f_implementsVerdicts, structLayouts: f_structLayouts, structNamesInDeclOrder: f_structNamesInDeclOrder, enumTypes: f_enumTypes, genericAliasDecls: f_genericAliasDecls, genericAliasDeclIndexByName: f_genericAliasDeclIndexByName, genericAliasDeclsIndexedThrough: f_genericAliasDeclsIndexedThrough, instanceDisplayNames: f_instanceDisplayNames, funcReturnAliasNames: f_funcReturnAliasNames, typeParamOwners: f_typeParamOwners, crossKindContests: f_crossKindContests, typeNameClaimIndex: f_typeNameClaimIndex, vectorFromSizes: f_vectorFromSizes, fromHeadNames: f_fromHeadNames, genericAliases: f_genericAliases, interfaceAliases: f_interfaceAliases, interfaceAliasOwners: f_interfaceAliasOwners, contestedGenericAliases: f_contestedGenericAliases, multiplyDeclaredGenericAliases: f_multiplyDeclaredGenericAliases, sharedInstanceGenericAliases: f_sharedInstanceGenericAliases, genericAliasMints: f_genericAliasMints, runtimeFilePaths: f_runtimeFilePaths, scriptlibFilePaths: f_scriptlibFilePaths, genericAliasSites: f_genericAliasSites, constLiteralSites: f_constLiteralSites, innerAliases: f_innerAliases, extensionInnerAliasMembers: f_extensionInnerAliasMembers, droppedSignatures: f_droppedSignatures, methodInnerAliasParams: f_methodInnerAliasParams, interfaces: f_interfaces, interfaceNamesInDeclOrder: f_interfaceNamesInDeclOrder, interfaceDeclIndexByName: f_interfaceDeclIndexByName, interfaceDeclSites: f_interfaceDeclSites, interfaceDeclSiteNames: f_interfaceDeclSiteNames, interfaceDeclSiteIndexByName: f_interfaceDeclSiteIndexByName, interfaceDeclSitesIndexedThrough: f_interfaceDeclSitesIndexedThrough, extensionDeclSites: f_extensionDeclSites, conformanceClauseSites: f_conformanceClauseSites, descriptorScanSites: f_descriptorScanSites, descriptorNeeds: f_descriptorNeeds, speculativeDescriptorNeeds: f_speculativeDescriptorNeeds, fixedElementCountNeeds: f_fixedElementCountNeeds, conditionalExtensionSkips: f_conditionalExtensionSkips, associatedTypeHoldings: f_associatedTypeHoldings, sweptConformances: f_sweptConformances, sweptConformancesBuilt: f_sweptConformancesBuilt, conformerIndex: f_conformerIndex, extensionDeclaredConformances: f_extensionDeclaredConformances, extensionMethodConstraints: f_extensionMethodConstraints, unconstrainedExtensionMethods: f_unconstrainedExtensionMethods, decls: f_decls, declIndex: f_declIndex, funcParamConsumes: f_funcParamConsumes, declParamConsumes: f_declParamConsumes, funcParamReassigns: f_funcParamReassigns, byRefSitesOfKey: f_byRefSitesOfKey, byRefForwardingLive: f_byRefForwardingLive, funcGlobalAliasReturns: f_funcGlobalAliasReturns, globalAliasReturnKeys: f_globalAliasReturnKeys, byRefBareNames: f_byRefBareNames, opaqueByRefBareNames: f_opaqueByRefBareNames, calleeBareNames: f_calleeBareNames, genericInstanceNameMarker: genericInstanceNameMarker(), funcThrows: f_funcThrows, disagreeingThrows: f_disagreeingThrows, funcThrowingDeclarationCounts: f_funcThrowingDeclarationCounts, funcDiverges: f_funcDiverges, funcDivergingDeclarationCounts: f_funcDivergingDeclarationCounts, funcAlwaysThrows: f_funcAlwaysThrows, funcAlwaysThrowingDeclarationCounts: f_funcAlwaysThrowingDeclarationCounts, funcReturnsFreshRecord: f_funcReturnsFreshRecord, funcFreshReturnForwards: f_funcFreshReturnForwards, funcFreshReturningDeclarationCounts: f_funcFreshReturningDeclarationCounts, funcConstructsFromParams: f_funcConstructsFromParams, funcConstructingDeclarationCounts: f_funcConstructingDeclarationCounts, funcReturnsReceiverField: f_funcReturnsReceiverField, funcReceiverFieldReturningDeclarationCounts: f_funcReceiverFieldReturningDeclarationCounts, interfaceRequirementNames: f_interfaceRequirementNames, funcParamDefaults: f_funcParamDefaults, funcOpaqueParams: f_funcOpaqueParams, contestedOpaqueParams: f_contestedOpaqueParams, disagreeingParamDefaults: f_disagreeingParamDefaults, funcDeclarationCounts: f_funcDeclarationCounts, funcDefaultingDeclarationCounts: f_funcDefaultingDeclarationCounts, declaredReturnSurfaces: f_declaredReturnSurfaces, funcReturnDeclFiles: f_funcReturnDeclFiles, funcDeclSites: f_funcDeclSites, overloadedDecls: f_overloadedDecls, bufferElementAliases: f_bufferElementAliases, bufferSurfaceAliases: f_bufferSurfaceAliases, extensionPublishedMethods: f_extensionPublishedMethods, extensionShadowedMethods: f_extensionShadowedMethods, extensionMethodDeclFiles: f_extensionMethodDeclFiles, contestedExtensionMethods: f_contestedExtensionMethods, interfaceExtensionMembers: f_interfaceExtensionMembers, stdlibPublishedExtensionMethods: f_stdlibPublishedExtensionMethods, stdlibExtensionMethodsBeatenByUser: f_stdlibExtensionMethodsBeatenByUser, staticInstanceContests: f_staticInstanceContests, authorDeclaredNames: f_authorDeclaredNames, libraryMeantNames: f_libraryMeantNames, managedTopLevelNames: f_managedTopLevelNames, corpusSlotInitCallees: f_corpusSlotInitCallees, inlineRecordByTypeNameId: f_inlineRecordByTypeNameId, defineProblems: f_defineProblems, constInitializerTypeNames: f_constInitializerTypeNames, constInitializerTypeSites: f_constInitializerTypeSites, bareTypeParamReturnerNames: f_bareTypeParamReturnerNames, bareTypeParamReturnerNamesComputed: f_bareTypeParamReturnerNamesComputed, typeParamFeederNames: f_typeParamFeederNames, typeParamFeederNamesComputed: f_typeParamFeederNamesComputed, userDeclaredTypeNames: f_userDeclaredTypeNames, stdlibDeclaredTypeNames: f_stdlibDeclaredTypeNames, arrayLiteralConformers: f_arrayLiteralConformers, serviceSpawnCandidateList: f_serviceSpawnCandidateList, serviceSpawnCandidateKeys: f_serviceSpawnCandidateKeys, serviceHandleOwners: f_serviceHandleOwners, defaultDeclarationList: f_defaultDeclarationList, serviceMessages: f_serviceMessages, interfaceHandleOwners: f_interfaceHandleOwners, interfaceHandleRepresentatives: f_interfaceHandleRepresentatives, interfaceHandleOrder: f_interfaceHandleOrder, serviceSendErrorNames: f_serviceSendErrorNames, corpusArrayRecordName: f_corpusArrayRecordName, shadowRoster: f_shadowRoster, qualifiedTypeClaims: f_qualifiedTypeClaims, typeHeadClaims: f_typeHeadClaims, topLevelBindingSites: f_topLevelBindingSites, writtenTypeClaims: f_writtenTypeClaims, claimedTypeClaims: f_claimedTypeClaims, aliasFamiliesBesideNominals: f_aliasFamiliesBesideNominals, headerTypeNameDecls: f_headerTypeNameDecls, nominalNameCollisions: f_nominalNameCollisions, fileModuleDirectories: f_fileModuleDirectories, namespaceQualifiers: f_namespaceQualifiers, libraryFilePaths: f_libraryFilePaths, declTokenStreams: DeclTokenStreamMap.create(), declaredTests: f_declaredTests, namespaceQualifiedFunctions: f_namespaceQualifiedFunctions, freeFunctionDirectories: f_freeFunctionDirectories, contestedFreeFunctions: f_contestedFreeFunctions, contestedRegistrationNames: f_contestedRegistrationNames, contestedKeysAnotherDeclarationHolds: f_contestedKeysAnotherDeclarationHolds, freeFunctionDeclFiles: f_freeFunctionDeclFiles, crossFileOverloadedFreeFunctions: f_crossFileOverloadedFreeFunctions, instantiatedByAParse: f_instantiatedByAParse, genericTemplates: f_genericTemplates, genericInstancesBySite: f_genericInstancesBySite, genericInstancesByName: f_genericInstancesByName, initializerCallSites: f_initializerCallSites}
+		return Self{misclosedBlocks: f_misclosedBlocks, returnTypes: f_returnTypes, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, nestedFunctionAliasMembers: f_nestedFunctionAliasMembers, pendingImplementsClauses: f_pendingImplementsClauses, implementsParents: f_implementsParents, implementsVerdicts: f_implementsVerdicts, structLayouts: f_structLayouts, structNamesInDeclOrder: f_structNamesInDeclOrder, enumTypes: f_enumTypes, genericAliasDecls: f_genericAliasDecls, genericAliasDeclIndexByName: f_genericAliasDeclIndexByName, genericAliasDeclsIndexedThrough: f_genericAliasDeclsIndexedThrough, instanceDisplayNames: f_instanceDisplayNames, funcReturnAliasNames: f_funcReturnAliasNames, typeParamOwners: f_typeParamOwners, crossKindContests: f_crossKindContests, typeNameClaimIndex: f_typeNameClaimIndex, vectorFromSizes: f_vectorFromSizes, fromHeadNames: f_fromHeadNames, genericAliases: f_genericAliases, interfaceAliases: f_interfaceAliases, interfaceAliasOwners: f_interfaceAliasOwners, contestedGenericAliases: f_contestedGenericAliases, multiplyDeclaredGenericAliases: f_multiplyDeclaredGenericAliases, sharedInstanceGenericAliases: f_sharedInstanceGenericAliases, genericAliasMints: f_genericAliasMints, runtimeFilePaths: f_runtimeFilePaths, scriptlibFilePaths: f_scriptlibFilePaths, genericAliasSites: f_genericAliasSites, constLiteralSites: f_constLiteralSites, innerAliases: f_innerAliases, extensionInnerAliasMembers: f_extensionInnerAliasMembers, droppedSignatures: f_droppedSignatures, methodInnerAliasParams: f_methodInnerAliasParams, interfaces: f_interfaces, interfaceNamesInDeclOrder: f_interfaceNamesInDeclOrder, interfaceDeclIndexByName: f_interfaceDeclIndexByName, interfaceDeclSites: f_interfaceDeclSites, interfaceDeclSiteNames: f_interfaceDeclSiteNames, interfaceDeclSiteIndexByName: f_interfaceDeclSiteIndexByName, interfaceDeclSitesIndexedThrough: f_interfaceDeclSitesIndexedThrough, extensionDeclSites: f_extensionDeclSites, conformanceClauseSites: f_conformanceClauseSites, descriptorScanSites: f_descriptorScanSites, fixedElementCountNeeds: f_fixedElementCountNeeds, conditionalExtensionSkips: f_conditionalExtensionSkips, associatedTypeHoldings: f_associatedTypeHoldings, sweptConformances: f_sweptConformances, sweptConformancesBuilt: f_sweptConformancesBuilt, conformerIndex: f_conformerIndex, extensionDeclaredConformances: f_extensionDeclaredConformances, extensionMethodConstraints: f_extensionMethodConstraints, unconstrainedExtensionMethods: f_unconstrainedExtensionMethods, decls: f_decls, declIndex: f_declIndex, funcParamConsumes: f_funcParamConsumes, declParamConsumes: f_declParamConsumes, funcParamReassigns: f_funcParamReassigns, byRefSitesOfKey: f_byRefSitesOfKey, byRefForwardingLive: f_byRefForwardingLive, funcGlobalAliasReturns: f_funcGlobalAliasReturns, globalAliasReturnKeys: f_globalAliasReturnKeys, byRefBareNames: f_byRefBareNames, opaqueByRefBareNames: f_opaqueByRefBareNames, calleeBareNames: f_calleeBareNames, genericInstanceNameMarker: genericInstanceNameMarker(), funcThrows: f_funcThrows, disagreeingThrows: f_disagreeingThrows, funcThrowingDeclarationCounts: f_funcThrowingDeclarationCounts, funcDiverges: f_funcDiverges, funcDivergingDeclarationCounts: f_funcDivergingDeclarationCounts, funcAlwaysThrows: f_funcAlwaysThrows, funcAlwaysThrowingDeclarationCounts: f_funcAlwaysThrowingDeclarationCounts, funcReturnsFreshRecord: f_funcReturnsFreshRecord, funcFreshReturnForwards: f_funcFreshReturnForwards, funcFreshReturningDeclarationCounts: f_funcFreshReturningDeclarationCounts, funcConstructsFromParams: f_funcConstructsFromParams, funcConstructingDeclarationCounts: f_funcConstructingDeclarationCounts, funcReturnsReceiverField: f_funcReturnsReceiverField, funcReceiverFieldReturningDeclarationCounts: f_funcReceiverFieldReturningDeclarationCounts, interfaceRequirementNames: f_interfaceRequirementNames, funcParamDefaults: f_funcParamDefaults, funcOpaqueParams: f_funcOpaqueParams, contestedOpaqueParams: f_contestedOpaqueParams, disagreeingParamDefaults: f_disagreeingParamDefaults, funcDeclarationCounts: f_funcDeclarationCounts, funcDefaultingDeclarationCounts: f_funcDefaultingDeclarationCounts, declaredReturnSurfaces: f_declaredReturnSurfaces, funcReturnDeclFiles: f_funcReturnDeclFiles, funcDeclSites: f_funcDeclSites, overloadedDecls: f_overloadedDecls, bufferElementAliases: f_bufferElementAliases, bufferSurfaceAliases: f_bufferSurfaceAliases, extensionPublishedMethods: f_extensionPublishedMethods, extensionShadowedMethods: f_extensionShadowedMethods, extensionMethodDeclFiles: f_extensionMethodDeclFiles, contestedExtensionMethods: f_contestedExtensionMethods, interfaceExtensionMembers: f_interfaceExtensionMembers, stdlibPublishedExtensionMethods: f_stdlibPublishedExtensionMethods, stdlibExtensionMethodsBeatenByUser: f_stdlibExtensionMethodsBeatenByUser, staticInstanceContests: f_staticInstanceContests, authorDeclaredNames: f_authorDeclaredNames, libraryMeantNames: f_libraryMeantNames, managedTopLevelNames: f_managedTopLevelNames, corpusSlotInitCallees: f_corpusSlotInitCallees, inlineRecordByTypeNameId: f_inlineRecordByTypeNameId, defineProblems: f_defineProblems, constInitializerTypeNames: f_constInitializerTypeNames, constInitializerTypeSites: f_constInitializerTypeSites, userDeclaredTypeNames: f_userDeclaredTypeNames, stdlibDeclaredTypeNames: f_stdlibDeclaredTypeNames, arrayLiteralConformers: f_arrayLiteralConformers, serviceSpawnCandidateList: f_serviceSpawnCandidateList, serviceSpawnCandidateKeys: f_serviceSpawnCandidateKeys, serviceHandleOwners: f_serviceHandleOwners, defaultDeclarationList: f_defaultDeclarationList, serviceMessages: f_serviceMessages, interfaceHandleOwners: f_interfaceHandleOwners, interfaceHandleRepresentatives: f_interfaceHandleRepresentatives, interfaceHandleOrder: f_interfaceHandleOrder, serviceSendErrorNames: f_serviceSendErrorNames, corpusArrayRecordName: f_corpusArrayRecordName, shadowRoster: f_shadowRoster, qualifiedTypeClaims: f_qualifiedTypeClaims, typeHeadClaims: f_typeHeadClaims, topLevelBindingSites: f_topLevelBindingSites, writtenTypeClaims: f_writtenTypeClaims, claimedTypeClaims: f_claimedTypeClaims, aliasFamiliesBesideNominals: f_aliasFamiliesBesideNominals, headerTypeNameDecls: f_headerTypeNameDecls, nominalNameCollisions: f_nominalNameCollisions, fileModuleDirectories: f_fileModuleDirectories, namespaceQualifiers: f_namespaceQualifiers, libraryFilePaths: f_libraryFilePaths, declTokenStreams: DeclTokenStreamMap.create(), declaredTests: f_declaredTests, namespaceQualifiedFunctions: f_namespaceQualifiedFunctions, freeFunctionDirectories: f_freeFunctionDirectories, contestedFreeFunctions: f_contestedFreeFunctions, contestedRegistrationNames: f_contestedRegistrationNames, contestedKeysAnotherDeclarationHolds: f_contestedKeysAnotherDeclarationHolds, freeFunctionDeclFiles: f_freeFunctionDeclFiles, crossFileOverloadedFreeFunctions: f_crossFileOverloadedFreeFunctions, instantiatedByAParse: f_instantiatedByAParse, genericTemplates: f_genericTemplates, genericInstancesBySite: f_genericInstancesBySite, genericInstancesByName: f_genericInstancesByName, initializerCallSites: f_initializerCallSites}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize1248
-		return sizeof(SettledDeclarations) as CacheSize1248
+	static function cacheLayoutBytes() returns CacheSize1200
+		return sizeof(SettledDeclarations) as CacheSize1200
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -19087,7 +19007,7 @@ export type ProgramSignatures
 	function insertMeantName(name ByteArray)
 		self.insertMeantDigest(mixBytes(Hasher.empty(), bytes: name))
 
-		let owner = try declaringTypeOf(name) otherwise return
+		let owner = try nameQualifierOf(name) otherwise return
 		self.insertMeantDigest(mixBytes(Hasher.empty(), bytes: owner))
 	end 'insertMeantName'
 
@@ -20595,9 +20515,8 @@ export type ProgramSignatures
 			self.mainThreadSettled().conformanceClauseSites.push(site)
 		end 'eachConformanceClauseSite'
 
-		// The generic-type method-list sites the descriptor-need fixpoint walks — see `DescriptorScanSite`.
-		// A program that declares no generic type contributes none, which is what leaves
-		// `Queries.foldDescriptorNeeds` an empty-array test.
+		// The sized-container method-list sites the fixed-element-count fixpoint walks — see
+		// `DescriptorScanSite`.
 		for site in scanSites 'eachDescriptorScanSite'
 			self.mainThreadSettled().descriptorScanSites.push(site)
 		end 'eachDescriptorScanSite'
@@ -20758,11 +20677,11 @@ export type ProgramSignatures
 	// conditional does not reconcile the two ownerships, so the build exits 101.
 	function recordScannedSignature(entry FuncReturnTypeEntry, name ByteArray, moduleDirectory String, declFilePath FilePath, remap TypeIdRemap)
 		if not remap.movesAnything() 'idsUnchanged'
-			self.record(name, moduleDirectory: moduleDirectory, returnType: entry.returnType, declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: declFilePath, takesReceiver: entry.takesReceiver, opaqueParams: entry.opaqueParams, paramNames: entry.paramNames, paramTypes: entry.paramTypes, paramDeclaredBrands: entry.paramDeclaredBrands, returnAliasName: entry.returnAliasName, nameLine: entry.nameLine, nameColumn: entry.nameColumn)
+			self.record(name, moduleDirectory: moduleDirectory, returnType: entry.returnType, declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: declFilePath, takesReceiver: entry.takesReceiver, opaqueParams: entry.opaqueParams, paramNames: entry.paramNames, paramTypes: entry.paramTypes, paramDeclaredBrands: entry.paramDeclaredBrands, returnAliasName: entry.returnAliasName, nameLine: entry.nameLine, nameColumn: entry.nameColumn, enclosingTypeName: entry.enclosingTypeName)
 			return
 		end 'idsUnchanged'
 
-		self.record(name, moduleDirectory: moduleDirectory, returnType: remapMaxonReturnType(entry.returnType, remap: remap), declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: declFilePath, takesReceiver: entry.takesReceiver, opaqueParams: entry.opaqueParams, paramNames: entry.paramNames, paramTypes: remapMaxonTypes(entry.paramTypes, remap: remap), paramDeclaredBrands: entry.paramDeclaredBrands, returnAliasName: entry.returnAliasName, nameLine: entry.nameLine, nameColumn: entry.nameColumn)
+		self.record(name, moduleDirectory: moduleDirectory, returnType: remapMaxonReturnType(entry.returnType, remap: remap), declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: declFilePath, takesReceiver: entry.takesReceiver, opaqueParams: entry.opaqueParams, paramNames: entry.paramNames, paramTypes: remapMaxonTypes(entry.paramTypes, remap: remap), paramDeclaredBrands: entry.paramDeclaredBrands, returnAliasName: entry.returnAliasName, nameLine: entry.nameLine, nameColumn: entry.nameColumn, enclosingTypeName: entry.enclosingTypeName)
 	end 'recordScannedSignature'
 
 	function recordSweptDefaultHelpers(info ParamDefaultInfo, helpers SweptDefaultHelperArray, bareName ByteArray, registrationName ByteArray, moduleDirectory String, declFilePath FilePath, remap TypeIdRemap)
@@ -20810,7 +20729,7 @@ export type ProgramSignatures
 	// ⭐⭐ **THE KEY IS NOT ALWAYS `name`: A `static` MEMBER WHOSE NAME AN INSTANCE MEMBER ALSO WEARS IS FILED
 	// UNDER ITS OWN** — see `noteStaticInstanceDeclaration`, which is asked first because every write below has
 	// to land on one key.
-	function record(name ByteArray, moduleDirectory String, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, declFilePath FilePath, takesReceiver bool, opaqueParams OpaqueParamInfo, paramNames NameRoster, paramTypes MaxonTypeArray, paramDeclaredBrands NameRoster, returnAliasName ReturnAliasSpelling, nameLine LineNumber, nameColumn ColumnNumber)
+	function record(name ByteArray, moduleDirectory String, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, declFilePath FilePath, takesReceiver bool, opaqueParams OpaqueParamInfo, paramNames NameRoster, paramTypes MaxonTypeArray, paramDeclaredBrands NameRoster, returnAliasName ReturnAliasSpelling, nameLine LineNumber, nameColumn ColumnNumber, enclosingTypeName ByteArray)
 		self.noteStaticInstanceDeclaration(name, takesReceiver: takesReceiver)
 		let key = self.sweepRegistrationKey(name, moduleDirectory: moduleDirectory, takesReceiver: takesReceiver)
 
@@ -20844,7 +20763,7 @@ export type ProgramSignatures
 			self.mainThreadSettled().funcReturnDeclFiles.upsert(key, value: declFilePath)
 		end 'aNameThisFileMustBeAbleToResolveLaterOn'
 
-		self.mainThreadSettled().funcDeclSites.upsert(key, value: FunctionDeclSite.create(visibility, declFilePath: declFilePath, takesReceiver: takesReceiver, nameLine: nameLine, nameColumn: nameColumn))
+		self.mainThreadSettled().funcDeclSites.upsert(key, value: FunctionDeclSite.create(visibility, declFilePath: declFilePath, takesReceiver: takesReceiver, nameLine: nameLine, nameColumn: nameColumn, enclosingTypeName: enclosingTypeName))
 
 		// ⭐ **APPENDED, NEVER UPSERTED — this is the one registry here that keeps EVERY declaration of a key
 		// rather than the last.** Being able to tell two members of a set apart is the whole of what it is for.
@@ -21584,43 +21503,6 @@ export type ProgramSignatures
 		end 'f'
 	end 'mixTypeParamFeed'
 
-	// ⭐ **DOES `callee` FEED ANY parameter into storage IT owns?** — the descriptor-need
-	// seed reads this: a method that enrols an opaque feed parameter owned may DROP it on a path that does not
-	// move it (a conditional `push`/forward), and that drop reads the enclosing instance's layout descriptor
-	// `destroyFunc@40` at run time, so the method must carry the descriptor parameter. A borrow-only callee (no
-	// entry) feeds nothing, and a CONSTRUCTOR feed enrols nothing, so neither can need a descriptor.
-	export function functionFeedsCalleeStorage(callee ByteArray) returns bool
-		for info in self.consumeFactsOfEveryDeclaration(callee) 'eachDeclaration'
-			if info.anyFeed(FeedSinkQuery.calleeStorageSink) 'feeds'
-				return true
-			end 'feeds'
-		end 'eachDeclaration'
-
-		return false
-	end 'functionFeedsCalleeStorage'
-
-	function consumeFactsOfEveryDeclaration(key ByteArray) returns ParamConsumeInfoArray
-		var facts = ParamConsumeInfoArray.create()
-
-		if self.keyNamesOneDeclaration(key) 'theOnlyDeclarationOfItsName'
-			match self.consumeOf(key) 'c'
-				consumes(info) then facts.push(info)
-				borrowsAll then break
-			end 'c'
-
-			return facts
-		end 'theOnlyDeclarationOfItsName'
-
-		for decl in self.overloadedDeclsOf(key) 'eachDeclaration'
-			match self.consumeOfDeclaration(decl.site) 'c'
-				consumes(info) then facts.push(info)
-				borrowsAll then continue
-			end 'c'
-		end 'eachDeclaration'
-
-		return facts
-	end 'consumeFactsOfEveryDeclaration'
-
 	// ⭐ **THE CALLEE'S CONSUME FACTS, or `borrowsAll`** — the door a CALL SITE asks once, then slots each
 	// argument against `info.paramNames` to decide which ones are moved. `borrowsAll` (no recorded entry) is
 	// every runtime callee, every borrow-only user function, and the overwhelming common case — so the call
@@ -22230,8 +22112,8 @@ export type ProgramSignatures
 	// makes the whole feature free for a program that reassigns nothing.
 	//
 	// ⭐⭐ **IT IS A REACHABILITY QUESTION, SO IT IS ASKED OF THE REACHABILITY ENGINE** — `buildCsr` +
-	// `reverseReachabilityMark`, the shared O(nodes + edges) worklist the descriptor-need and array-feed
-	// fixpoints already close through. A bare name takes something by reference iff it REASSIGNS (the seed) or
+	// `reverseReachabilityMark`, the shared O(nodes + edges) worklist the layout-carrier, fixed-element-count
+	// and array-feed fixpoints already close through. A bare name takes something by reference iff it REASSIGNS (the seed) or
 	// forwards into a name that does, which is exactly "reaches a seed over the forwarding edges".
 	//
 	// ⚠⚠ **A ROUND-BASED FIXPOINT — RE-SCAN EVERY RECORDED FUNCTION UNTIL NOTHING CHANGES — IS O(depth x
@@ -22452,18 +22334,6 @@ export type ProgramSignatures
 		end 'alias'
 	end 'interfaceFormalBrand'
 
-	export function methodNameTakesAWitnessCell(methodName ByteArray) returns bool
-		self.requireByRefMasksSettled()
-
-		for (key, _) in self.witnessByRefMasks 'eachRequirement'
-			if bareMethodName(key).equals(String.from(methodName)) 'aWrittenRequirement'
-				return true
-			end 'aWrittenRequirement'
-		end 'eachRequirement'
-
-		return false
-	end 'methodNameTakesAWitnessCell'
-
 	export function witnessRequirementByRefMask(interfaceName ByteArray, methodName ByteArray) returns ParamPositionMask
 		self.requireByRefMasksSettled()
 		return try self.witnessByRefMasks.get(witnessRequirementKey(interfaceName, methodName: methodName)) otherwise NoParamPositions
@@ -22624,19 +22494,6 @@ export type ProgramSignatures
 		self.closeByRefForwarding()
 		return self.settledDeclarations().byRefBareNames.count() != 0
 	end 'programTakesAParamByRef'
-
-	export function reassignsAnOpaqueParameter(callee ByteArray) returns bool
-		view positions = self.opaqueParamsOf(callee).positions
-		let convention = self.byRefOf(callee)
-
-		for index in 0 upto positions.count() 'eachParam'
-			if positions.namesATypeParameter(index) and convention.paramIsDirectlyReassigned(index) 'reassignedThroughItsCell'
-				return true
-			end 'reassignedThroughItsCell'
-		end 'eachParam'
-
-		return false
-	end 'reassignsAnOpaqueParameter'
 
 	// Record one function's per-parameter DEFAULTS AND fold them into the hash — the one write, for
 	// `recordParamConsume`'s reason. A function with NO default is not recorded (its default answer is
@@ -28717,7 +28574,7 @@ export type ProgramSignatures
 	// An alias declared inside a generic instance is minted `<alias><separator><instance>`. Splitting at the
 	// first separator is sound because a source-spelled alias name cannot contain one.
 	function instanceOwningAliasMint(identity ByteArray) returns GenericInstanceId throws MapError
-		let split = try firstSeparatorIndex(identity, separator: CompilerQualifiedAliasSeparatorByte as NameSeparatorByte)
+		let split = try firstSeparatorIndex(identity, separator: CompilerMintSeparatorByte)
 		return try self.renderedInstanceOfUnclaimedName(try identity.slice(split + 1, endIndex: identity.count()) otherwise panic("ProgramSignatures.instanceOwningAliasMint: the slice past the separator at {split} of a {identity.count()}-byte name is in range"))
 	end 'instanceOwningAliasMint'
 
@@ -31679,7 +31536,7 @@ export type ProgramSignatures
 	end 'structWhereConstraints'
 
 	// The `uses` parameter names of a declared type, in declaration order — the list a `typeParameter` token
-	// is resolved against. Read by `Parser.scanDescriptorNeedsInto`, which scans an EXTENSION body in its
+	// is resolved against. Read by `Parser.scanFixedElementCountNeedsInto`, which scans an EXTENSION body in its
 	// TARGET's scope and so has no `uses` clause of its own to parse. An undeclared name answers the SHARED
 	// empty, which is also what a non-generic type's layout already holds.
 	export function structTypeParamsOf(typeName ByteArray) returns NameRoster
@@ -31688,68 +31545,19 @@ export type ProgramSignatures
 	end 'structTypeParamsOf'
 
 	// ⭐ **DOES `typeName` DECLARE TYPE PARAMETERS — i.e. is it GENERIC?** The whole-program form of the
-	// question `Parser.openTypeParamScope` answers locally, asked by the two recorders of a
-	// `DescriptorScanSite`: an extension's conformer is a name, not a layout the recorder holds, and a
-	// descriptor carries a TYPE PARAMETER's layout, so a non-generic target can never need one. An UNDECLARED
-	// name answers `false` — an extension over a name no file declares publishes onto no conformer at all.
+	// question `Parser.openTypeParamScope` answers locally, for an asker that holds a name rather than a
+	// layout. An UNDECLARED name answers `false`.
 	export function structDeclaresTypeParams(typeName ByteArray) returns bool
 		let layout = try self.registeredLayout(typeName) otherwise return false
 		return not layout.typeParamNames.isEmpty()
 	end 'structDeclaresTypeParams'
 
-	// ⭐⭐ **DOES `callee` CARRY THE HIDDEN LAYOUT-DESCRIPTOR PARAMETER? — the ONE answer, read by
-	// the RESERVATION side (`Parser.parseFunction`) and derived once by `Queries.foldDescriptorNeeds`.** The
-	// SUPPLY side does not ask it by name at all: `LowerMaxonToStd.buildLayoutNeedingFuncs` recovers the same
-	// fact from the emitted parameter COUNT, which is the strongest form of one-fact — the reservation is not
-	// merely agreed with, it is the only thing the supply side reads.
-	//
-	// Asked with the qualified `Type.method` name, so a method contributed by an `extension` is the same key
-	// as one declared in the type's own body. See `descriptorNeeds` for the compiler abort the per-type-body
-	// version cost.
-	export function functionNeedsLayoutDescriptor(callee ByteArray) returns bool
-		return self.nameIsInNeedSet(self.settledDeclarations().descriptorNeeds, callee: callee)
-	end 'functionNeedsLayoutDescriptor'
-
-	// Does ANY method in the whole program carry a descriptor — the allocation-free gate `parseFunction` opens
-	// with, and it is not an optimization. Asking the question above needs the qualified name BUILT, and a
-	// method's qualified name is a fresh `ByteArray`: spent per method declaration in a program that declares
-	// no generic type — the entire scale corpus — that is a per-declaration allocation bought to learn `false`.
-	// `SemanticCheck.hasInnerAliasParams` is the same guard over the same shape.
-	export function anyFunctionNeedsLayoutDescriptor() returns bool
-		return self.settledDeclarations().descriptorNeeds.count() != 0
-	end 'anyFunctionNeedsLayoutDescriptor'
-
-	// Publish the solved fixpoint. Wholesale, copy-on-write over the shared empty, and called at most once per
-	// compile — `foldDescriptorNeeds` solves over every site in the program at one moment, so there is no
-	// partial answer any reader could observe.
-	export function recordDescriptorNeeds(needs DescriptorNeedNameSet, speculative DescriptorNeedNameSet)
-		var ownDeclarations = self.mainThreadSettled()
-		ownDeclarations.descriptorNeeds = needs
-		ownDeclarations.speculativeDescriptorNeeds = speculative
-	end 'recordDescriptorNeeds'
-
-	export function functionLayoutNeedIsSpeculative(callee ByteArray) returns bool
-		return self.nameIsInNeedSet(self.settledDeclarations().speculativeDescriptorNeeds, callee: callee)
-	end 'functionLayoutNeedIsSpeculative'
-
-	export function cannotSourceALayoutDescriptor(callee ByteArray) returns bool
-		let site = try self.settledDeclarations().funcDeclSites.get(callee) otherwise return false
-		return self.hasNoInstanceToTakeHiddenArgumentsFrom(callee, takesReceiver: site.takesReceiver)
-	end 'cannotSourceALayoutDescriptor'
-
-	function hasNoInstanceToTakeHiddenArgumentsFrom(callee ByteArray, takesReceiver bool) returns bool
+	export function hasNoInstanceToTakeHiddenArgumentsFrom(callee ByteArray, takesReceiver bool) returns bool
 		return not takesReceiver and not self.calleeReturnsItsDeclaringType(callee)
 	end 'hasNoInstanceToTakeHiddenArgumentsFrom'
 
-	// ⭐⭐ **DOES `callee` CARRY THE HIDDEN FIXED-ELEMENT-COUNT PARAMETER?** — `functionNeedsLayoutDescriptor`'s
-	// twin, over the same qualified `Type.method` key and the same solved graph.
-	//
-	// ⚠ **BOTH SIDES OF THE ABI ASK THIS ONE DOOR, WHICH THE LAYOUT SLOT DELIBERATELY DOES NOT DO** — that
-	// one lets the supply side recover the fact from the emitted parameter COUNT, and it can, because it is
-	// the LAST optional slot in the list. With two optional slots a count is not recoverable from a
-	// total, so the fact is asked by name at both ends instead of being derived at one of them. See
-	// `MaxonToStdLowering.functionHasDescriptorParam`, which subtracts this slot before testing for the
-	// layout one.
+	// ⭐⭐ **DOES `callee` CARRY THE HIDDEN FIXED-ELEMENT-COUNT PARAMETER?** — asked of the solved count
+	// fixpoint under the qualified `Type.method` key, by both sides of the ABI.
 	export function functionReadsFixedElementCount(callee ByteArray) returns bool
 		return self.nameIsInNeedSet(self.settledDeclarations().fixedElementCountNeeds, callee: callee)
 	end 'functionReadsFixedElementCount'
@@ -31766,12 +31574,11 @@ export type ProgramSignatures
 	end 'nameIsInNeedSet'
 
 	// Does ANY method in the whole program read a fixed element count — the allocation-free gate
-	// `parseFunction` opens with, for `anyFunctionNeedsLayoutDescriptor`'s stated reason.
+	// `parseFunction` opens with, because asking the question itself needs the qualified name built.
 	export function anyFunctionReadsFixedElementCount() returns bool
 		return self.settledDeclarations().fixedElementCountNeeds.count() != 0
 	end 'anyFunctionReadsFixedElementCount'
 
-	// Publish the solved count fixpoint, on `recordDescriptorNeeds`' terms.
 	export function recordFixedElementCountNeeds(needs DescriptorNeedNameSet)
 		var ownDeclarations = self.mainThreadSettled()
 		ownDeclarations.fixedElementCountNeeds = needs
@@ -31816,16 +31623,17 @@ export type ProgramSignatures
 	//   • **everything after the merge**, which holds a REGISTRATION name ⇒ that name's own
 	//     `FuncSignature.extensionConstraints`, recorded by the parse that minted the name.
 	export function witnessConstraintsOfMethod(callee ByteArray, extensionConstraints WhereConstraintArray) returns WhereConstraintArray
-		match splitQualifiedName(callee) 'q'
-			notQualified then return WhereConstraintArray.create()
-			parts(typeName, _) then return self.typeExtensionWitnessConstraints(typeName, extensionConstraints: extensionConstraints)
-		end 'q'
+		return match self.functionDeclaringType(callee) 'declaring'
+			method(typeName) gives self.typeExtensionWitnessConstraints(typeName, extensionConstraints: extensionConstraints)
+			freeFunction or
+			undeclared gives WhereConstraintArray.create()
+		end 'declaring'
 	end 'witnessConstraintsOfMethod'
 
 	// ⭐⭐ **THE WITNESS-SLOT LIST OF A TYPE `typeName` WHOSE METHOD ALSO CARRIES THE EXTENSION CLAUSE
 	// `extensionConstraints` — the ONE derived list the RESERVATION side and the SUPPLY side of the
 	// dictionary-passing ABI both read.** `Parser.openTypeExtensionBodyScope` opens the body with it (so
-	// `witnessParamCountFor` reserves exactly these slots) and `witnessConstraintsOfMethod` answers with it (so
+	// `witnessReserveFor` reserves exactly these slots) and `witnessConstraintsOfMethod` answers with it (so
 	// `LowerMaxonToStd.appendWitnessArgs` fills exactly these slots). Both hand it the SAME two inputs — the
 	// extension's target type, and the extension's own clause as `noteTypeExtensionWitnessConstraints` filed it
 	// — so the two lists are not merely equal, they are one call.
@@ -33621,8 +33429,7 @@ export type ProgramSignatures
 	//
 	// ⚠ **MEASURED, and it is not hypothetical**: two files declaring `typealias Bag = Array with
 	// <different element>` plus a `typealias BB = Box with Bag` reached `genericAliasInstance`'s refusal from
-	// `isManagedOpaqueTypeParamField` AND from `noteDestructorUsage`'s opaque-element drop rooting — two
-	// unrelated whole-program walks — while the single-file program compiles. The `Container with Bag`
+	// `noteDestructorUsage`'s opaque-element drop rooting while the single-file program compiles. The `Container with Bag`
 	// deep-clone twin reaches it from `requireOpaqueArrayCopyable`.
 	function genericAliasSpellingIsSuperseded(name ByteArray) returns bool
 		match self.settledDeclarations().contestedGenericAliases 'index'
@@ -33787,17 +33594,7 @@ export type ProgramSignatures
 	// ⛔⛔ **THE MISS IS THE NAME AND NOT `EmptySourceText`, WHICH IS THE WHOLE POINT.** The caller asks one
 	// question of one name; if the two spellings of a cursor had to be routed by the caller they would be two
 	// code paths, and this project's signature bug is exactly a mechanism that answers one spelling and not
-	// its twin. **MEASURED:** `receiverCursorElementIsOpaque` resolved `returns BagIterator` and not
-	// `returns BagIter`, so `stdlib/List.maxon:147`'s `typealias ListIter = ListIterator with Element` reserved
-	// no layout descriptor and every program whose cone reached `extension Iterable` was refused with a false
-	// E2015.
-	//
-	// ⚠ **IT IS NOT `nestedParameterisedInstanceOfAlias`, WHICH ANSWERS A NARROWER QUESTION.** That door
-	// gates on `instanceIsANestedParameterisedOne` — a property of the instance's ARGUMENTS (built on a type
-	// parameter, over a base that is not one of the containers this compiler serves itself). What a base
-	// DECLARES is a property of the base alone, so borrowing that gate here could answer "no such type" for a
-	// cursor that genuinely hands out the enclosing type's own parameter — an under-reservation, which is the
-	// direction that refuses a legal program.
+	// its twin.
 	//
 	// ⭐⭐ **IT IS ALSO THE STRUCT A QUALIFIED CALL'S METHOD IS DECLARED ON** — a generic-instance alias
 	// dispatches its statics to the BASE struct (The compiler compiles ONE body per generic type, so
@@ -33805,9 +33602,9 @@ export type ProgramSignatures
 	// every other name is already its own base. Two copies of one resolution is this project's
 	// signature bug in the shape that bites hardest: the alias tiers here are
 	// `scopedGenericAliasInstance`'s
-	// three and `fileScopedInstance`'s rescope, and a fourth tier taught to one copy would have the
-	// descriptor-need pre-scan resolving `BagIter` to one base while the call that links against it mangles to
-	// another — a wrong SYMBOL and a wrong RESERVATION, with no compile error at either door.
+	// three and `fileScopedInstance`'s rescope, and a fourth tier taught to one copy would resolve `BagIter`
+	// to one base where the call that links against it mangles to another — a wrong SYMBOL, with no compile
+	// error at either door.
 	export function denotedGenericBaseName(name ByteArray, readerFilePath FilePath) returns ByteArray
 		if not self.isAliasOfFormFor(name, readerFilePath: readerFilePath, wanted: FormAliasKind.generic) 'namesNoInstance'
 			return name
@@ -34004,14 +33801,13 @@ export type ProgramSignatures
 	// `Parser.emitFusedWrapperLiteral`'s identity arm.
 	//
 	// ⚠⚠ **IT ASKS THE DECLARED SURFACE AND NOT THE FIELD'S `MaxonType`, AND THAT IS FORCED BY *WHEN* IT IS
-	// ASKED.** The same question arrives at three different resolution stages — the descriptor pre-scan
-	// (`Parser.scanDescriptorNeedsInto`), the declaration sweep (through `Parser.enclosingSelfType`) and the
-	// real parse — and the column holds a different thing at each. MEASURED on `stdlib/Array.maxon`'s own
-	// shape: at the pre-scan `fieldTypes[0]` is still `named('Array.ElementMemory')`, the INNER alias, because
-	// only a TOP-LEVEL generic alias is retyped by `resolveRecordedGenericAliasTypes`. A test over the
-	// resolved instance therefore answers "how far the index had got", which is the class of bug
+	// ASKED.** The same question arrives at more than one resolution stage — the declaration sweep (through
+	// `Parser.enclosingSelfType`) and the real parse — and the column holds a different thing at each: on
+	// `stdlib/Array.maxon`'s own shape `fieldTypes[0]` can still be `named('Array.ElementMemory')`, the INNER
+	// alias, because only a TOP-LEVEL generic alias is retyped by `resolveRecordedGenericAliasTypes`. A test
+	// over the resolved instance therefore answers "how far the index had got", which is the class of bug
 	// `Parser.declaredSurfaceAt` records for the tuple mask. The SURFACE is recorded from the SOURCE at
-	// declaration time and reads the same at all three (`SurfaceBitIsBuffer`).
+	// declaration time and reads the same at every stage (`SurfaceBitIsBuffer`).
 	//
 	// ⚠ **THE TYPE-PARAMETER CLAUSE IS WHAT KEEPS A NON-GENERIC CONFORMER OUT.** The record is generic over
 	// its element by construction, so a `type Holder implements BuiltinArrayLiteral` whose field is the BARE
@@ -34214,12 +34010,9 @@ export type ProgramSignatures
 	// above.** One normally. TWO when a user program declares its own container: the user's under the
 	// bare `Array` and `stdlib/Array.maxon`'s under this compile's mint.
 	//
-	// ⚠ **IT IS FOR THE ASKER THAT HAS NO RECEIVER TO ASK.** A door holding a resolved receiver reads the
-	// declaration off the instance (`genericInstanceBaseName`, which is exact); this serves the descriptor
-	// pre-scan, which runs before any body is parsed and resolves nothing, so it takes the union and lets the
-	// fixpoint's own name→index filter drop the name no function bears. That is the direction
-	// `Parser.corpusServesArrayMember`'s header requires it to err in: an edge too many reserves a parameter
-	// nothing reads, a missing one aborts the compiler.
+	// ⚠ **IT IS FOR THE ASKER THAT NEEDS EVERY DECLARATION.** A door holding a resolved receiver reads its
+	// own declaration off the instance (`genericInstanceBaseName`, which is exact);
+	// `Parser.refuseArrayMemberTheOtherDeclarationCarries` asks about the OTHER one, so it walks the union.
 	export function arrayDeclarationNames() returns NameRoster
 		var names = NameRoster.create()
 
@@ -34791,23 +34584,9 @@ export type ProgramSignatures
 	// Is instance `id`'s value the fused managed buffer record, born through `__managed_create`? A `Vector`'s
 	// record is an `Array`'s — the two differ in what may be done to them, not in how the bytes sit — so its
 	// create, size, drop, clone and transfer walks are the same entries for both.
-	//
-	// ⚠ The descriptor-need SEED and the descriptor-reading EMIT ask the WIDER family below, never this one: a
-	// family narrower at one side than the other is a compiler PANIC (`appendOpaqueArrayCreate: … the function
-	// carries no layout descriptor parameter`), not a wrong answer.
 	export function isManagedBufferRecordInstance(id GenericInstanceId) returns bool
 		return self.isArrayInstance(id) or self.isVectorInstance(id)
 	end 'isManagedBufferRecordInstance'
-
-	// ⭐⭐ **WHICH CONTAINERS' `create` READS THE ENCLOSING LAYOUT DESCRIPTOR when its element is OPAQUE — the
-	// family the descriptor-need SEED (`Parser.opaqueContainerConstructionAt`) and the descriptor-reading EMIT
-	// (`LowerMaxonToStd.isOpaqueContainerCreateCall`) both read.** It is a WIDER family than the one
-	// above, and the two must stay apart: `isManagedBufferRecordInstance` names the containers born through
-	// `__managed_create` — which is what `containerCreateCall` goes on to EMIT — while a chain is born through
-	// `__list_create` and yet reads the very same `destroyFunc@40` word out of the very same descriptor.
-	export function opaqueInstanceCreateReadsTheDescriptor(id GenericInstanceId) returns bool
-		return self.isManagedBufferRecordInstance(id) or self.isManagedListInstance(id)
-	end 'opaqueInstanceCreateReadsTheDescriptor'
 
 	// ⭐ **DOES THIS (tag, id) PAIR DENOTE A `Vector with N T`?** — `isArrayInstanceAt`'s twin, and it exists
 	// for that function's MEASURED reason and not for symmetry: a `TypeNameId` and a `GenericInstanceId` share
@@ -35002,9 +34781,9 @@ export type ProgramSignatures
 	// because the array is stamped `__managed_create(8, __mm_decref)` and the box is freed without its slot
 	// being released. The destructor that WOULD release it (`__destruct_Box_String`) exists — `Box with String`
 	// is interned by the substitution — but a shared body can name only the DECLARATION VIEW's, and that one
-	// reads its own bare `T` field through `typeIsManaged` and is told the field owns nothing. A shared body
-	// that carries a layout descriptor reads the per-instantiation destructor out of its descriptor table
-	// instead (`Parser.createStampsFromTheBodysDescriptor`); this predicate is what a body without one is
+	// reads its own bare `T` field through `typeIsManaged` and is told the field owns nothing. A create whose
+	// element is composed over the caller's parameters reads the per-instantiation destructor out of the
+	// descriptor table instead (`containerCreateRoute`); this predicate is what a statically stamped create is
 	// refused on.
 	//
 	// ⭐ **THE OPACITY IS THE ROUTING AND THE INSTANTIATION IS THE VERDICT** — `containerOpaqueElementCanBeManaged`'s
@@ -35070,62 +34849,6 @@ export type ProgramSignatures
 
 		return self.instanceOwnsASlotOfKind(id, kind: TypeArgInstantiationKind.retainedFeed, visited: ClonerSet.create())
 	end 'instanceRestsARetainedSlot'
-
-	// ⭐⭐⭐ **CAN A BODY OF `callee` EVEN GET HOLD OF A BORROWED OPAQUE `T` TO FORWARD?** The
-	// DECLARATION-level narrowing on the constructor-feed descriptor seed, and the one that keeps an
-	// over-approximation by NAME from reaching the whole corpus.
-	//
-	// ⛔⛔ **THE SEED IS A `.<name>(` TEST AND `create` IS A NAME EVERYTHING WEARS.** Without this,
-	// `stdlib/Interfaces.maxon`'s `extension Iterable.withIterator` — `WithIterSelf.create(iter)` — reserved a
-	// descriptor on EVERY conformer in the library, and a chain meant to stay inert stops being inert.
-	// MEASURED: `interface-extensions.stdlib-map-on-map-with-function` went from green to `panic at
-	// CodeResult.maxon:142: bakeFuncAbs64Relocs` — the chain minted a concrete
-	// `__layout_Array___Tuple2.String.int` whose `copyFunc@32` names a tuple cloner
-	// `installStructCascades` never builds. (That cloner gap is OLDER and is reachable with no
-	// generics at all — `Array with (String, Integer)` plus a `.clone()` panics the merge-base
-	// compiler identically — so it is reported separately; what belongs here is not steering the
-	// corpus into it.)
-	//
-	// ⇒ **the two ways a body can hold a bare `T` that a DECLARATION states**: a PARAMETER declared at the
-	// enclosing type's parameter (`Bag.wrap(x Element)`), or a FIELD of the enclosing type declared at one
-	// (`Bag.createIterator()` forwarding `self.slot`). Neither `Map`, `Set` nor `List` declares a bare-parameter
-	// field — every one of their columns is a container — so the whole corpus declines and the two shapes above
-	// do not.
-	//
-	// ⚠ **A THIRD WAY EXISTS AND IS DELIBERATELY NOT SEEN: a `T` read OUT of a container** (`items.get(i)` fed
-	// straight to a constructor). It is invisible from declarations, which is the sibling signals' stated
-	// discipline, and its cost is a REFUSAL with a position (`requireDescriptorForOpaqueStores`) rather than a
-	// wrong answer — which is what the merge base does with it today.
-	export function methodCanForwardABorrowedOpaque(callee ByteArray, typeName ByteArray) returns bool
-		if self.opaqueParamsOf(callee).declaresATypeParameterParam() 'aParameterAtTheParameter'
-			return true
-		end 'aParameterAtTheParameter'
-
-		return self.typeDeclaresABareTypeParameterField(typeName)
-	end 'methodCanForwardABorrowedOpaque'
-
-	// Does `typeName`'s declaration hold a field standing at one of its own type parameters — the other place a
-	// shared body can read a bare `T` from. Read off the DECLARED field types (the declaration view is what a
-	// shared body sees), through the one field-type door so a field spelled via an inner alias resolves the same
-	// way `substituteInstanceFieldType` resolves it.
-	function typeDeclaresABareTypeParameterField(typeName ByteArray) returns bool
-		match self.structInAnyFile(typeName) 'declared'
-			undeclared then return false
-			declared(layout) then return self.layoutHasABareTypeParameterField(layout)
-		end 'declared'
-	end 'typeDeclaresABareTypeParameterField'
-
-	// The walk behind the question above. Split out for `typeDeclaresABareTypeParameterField`'s reason — a
-	// `match` arm may not hold a loop.
-	function layoutHasABareTypeParameterField(layout StructLayout) returns bool
-		for i in 0 upto layout.fieldCount() 'eachField'
-			if maxonTypeTag(self.fieldTypeOf(layout, index: i, into: self.typeNames)) == ValueTypeTag.typeParameter 'aBareParameterField'
-				return true
-			end 'aBareParameterField'
-		end 'eachField'
-
-		return false
-	end 'layoutHasABareTypeParameterField'
 
 	// Is substituted instance field `index` still standing at a BARE type parameter — the slot the dictionary
 	// destructor releases through `__drop_type_param` rather than through a symbol? Asked over
@@ -36371,17 +36094,24 @@ export type ProgramSignatures
 	// An already-qualified registration name (a free function contested across directories registers
 	// as `alpha.pick`) is left alone, and the test is `namespaceQualifiedFunctions`, the set that made
 	// it qualified, so the guard and the mint cannot disagree about which names carry their directory.
+	//
+	// An overload member is spelled through its set's declaration site; E3057 names the member it bound
+	// through that member's own file (`diagnosticMemberSpelling`, from `SemanticCheck.boundCalleeSpelling`).
 	export function diagnosticCalleeSpelling(callee ByteArray) returns ByteArray
 		let written = overloadRegistrationBaseName(callee)
-		let declared = callee if self.settledDeclarations().funcDeclSites.contains(callee) else written
-		let site = try self.settledDeclarations().funcDeclSites.get(declared) otherwise return written
+		let site = try self.declarationSiteOf(callee) otherwise return written
+		return self.diagnosticMemberSpelling(callee, declFilePath: site.declFilePath)
+	end 'diagnosticCalleeSpelling'
 
-		if self.settledDeclarations().namespaceQualifiedFunctions.contains(declared) 'theSpellingAlreadyCarriesItsDirectory'
+	export function diagnosticMemberSpelling(callee ByteArray, declFilePath FilePath) returns ByteArray
+		let written = overloadRegistrationBaseName(callee)
+
+		if self.settledDeclarations().namespaceQualifiedFunctions.contains(written) 'theSpellingAlreadyCarriesItsDirectory'
 			return written
 		end 'theSpellingAlreadyCarriesItsDirectory'
 
-		return self.diagnosticNameInFile(written, declFilePath: site.declFilePath)
-	end 'diagnosticCalleeSpelling'
+		return self.diagnosticNameInFile(written, declFilePath: declFilePath)
+	end 'diagnosticMemberSpelling'
 
 	export function diagnosticNameInFile(name ByteArray, declFilePath FilePath) returns ByteArray
 		let namespace = self.namespaceOf(declFilePath)
@@ -36572,8 +36302,7 @@ export type ProgramSignatures
 	// `Vector`) or the chain, whose copy and drop are a runtime WALK rather than a field cascade, and which
 	// therefore have no base layout for the declared-instance walks to read. The negation is load-bearing:
 	// `instanceGraphSupportsDeepClone` routes everything ELSE to the field walk, which refuses a layout-less
-	// instance. It is deliberately NOT `opaqueInstanceCreateReadsTheDescriptor`, which is about how a container
-	// is BORN, not about how its record is walked.
+	// instance.
 	export function isElementBearingRecordInstance(id GenericInstanceId) returns bool
 		return self.isManagedBufferRecordInstance(id) or self.isManagedListInstance(id)
 	end 'isElementBearingRecordInstance'
@@ -40462,47 +40191,6 @@ export type ProgramSignatures
 		return base
 	end 'genericInstanceCallerParameterRunBase'
 
-	// ⭐⭐ **IS THIS INSTANCE A DECLARED GENERIC BUILT ON SOME GENERIC'S OWN TYPE PARAMETERS?** —
-	// the `Inner with Element` a `type Bag uses Element` names through a `typealias EChain = Inner with Element`,
-	// or a mixed `Inner with (Pair with Element)`. Such an instance has NO descriptor blob of its own: the blob
-	// carries its argument's SIZE, and `Element` is a type parameter whose size is itself a descriptor read
-	// (`primitiveTypeByteSize` panics rather than guessing). Every layout-needing call through such a value —
-	// the receiver's own methods, and the STATIC constructor that builds it — therefore takes its descriptor
-	// from the enclosing frame's, forwarded or read out of its table
-	// (`MaxonToStdLowering.emitInstanceDescriptorAddr`), so the enclosing method has to carry one, which is
-	// what the descriptor-need fixpoint draws an edge for.
-	//
-	// ⛔ **THE CONTAINERS THIS COMPILER SERVES ITSELF ARE EXCLUDED, AND THE EXCLUSION IS LOAD-BEARING.**
-	// `Array with Element` is the field every generic container in `stdlib/` declares, and it already has a
-	// mechanism of its own — `Parser.corpusServesArrayMember`'s receiver-blind edge, tuned to it and
-	// deliberately withheld from statics. Admitting those bases here would draw a second, differently-gated
-	// edge over every call in the containers this compiler synthesizes. The residue — a DECLARED generic
-	// standing where a compiler-owned one could — is what has no mechanism at all, and is what this
-	// answers for.
-	//
-	// ⛔⛔ **`Map` AND `Set` ARE NOT AMONG THE EXCLUDED BASES.** The exclusion is
-	// `isBuiltinGenericBaseNameBesidesTheRecord`
-	// plus the record — `List`, `Vector`, `__ManagedList`, `__ManagedListNode`, `__ManagedMemoryCursor`, `Array`.
-	// `Map` and `Set` are ORDINARY CORPUS TYPES here and this predicate answers for them like any other.
-	//
-	// ⚠ **AND IT IS NOT HYPOTHETICAL:** `stdlib/Set.maxon:15` declares `typealias SetIter = SetIterator with Element`
-	// and `:271` calls `SetIter.create(…)`, so this answers **true** and a real edge `Set.createIterator ->
-	// SetIterator.create` is drawn today. It is harmless only because `SetIterator.create` happens to need no
-	// descriptor. `Map` escapes purely because it spells the base bare (`MapIterator.create`) rather than through
-	// an alias — **an asymmetry produced by SPELLING, not by design**, which is this project's signature bug
-	// class. Read the set, never this sentence's memory of it.
-	//
-	// It is ONE expression because the alias door and the field door below both ask it, and a disagreement
-	// between them would be a call whose descriptor one half supplies and the other mints.
-	export function instanceIsANestedParameterisedOne(gid GenericInstanceId) returns bool
-		if not self.instanceIsBuiltOnATypeParameter(gid) 'builtOnNoParameter'
-			return false
-		end 'builtOnNoParameter'
-
-		let base = self.genericInstanceBaseName(gid)
-		return not self.isBuiltinGenericBaseName(base) and not self.declaresTheArrayLiteralMarker(base)
-	end 'instanceIsANestedParameterisedOne'
-
 	export function genericInstanceArgsBuildOnATypeParameter(gid GenericInstanceId) returns bool
 		for position in 0 upto self.genericInstanceArgCount(gid) 'eachArg'
 			let arg = self.instanceArgType(gid, position: position)
@@ -40519,6 +40207,18 @@ export type ProgramSignatures
 		try self.genericInstanceCallerParameterRunBase(gid) otherwise return self.instanceIsBuiltOnATypeParameter(gid)
 		return false
 	end 'instanceDescriptorIsComposedFromTheCaller'
+
+	export function containerCreateRoute(gid GenericInstanceId) returns ContainerCreateRoute
+		if self.containerElementIsOpaque(gid) 'opaqueElement'
+			return ContainerCreateRoute.opaqueElement
+		end 'opaqueElement'
+
+		if self.instanceDescriptorIsComposedFromTheCaller(gid) 'composedFromTheCaller'
+			return ContainerCreateRoute.composedFromTheCaller
+		end 'composedFromTheCaller'
+
+		return ContainerCreateRoute.staticStamp
+	end 'containerCreateRoute'
 
 	export function instanceIsBuiltOnATypeParameter(gid GenericInstanceId) returns bool
 		_ = try self.firstTypeParameterInInstanceArgs(gid) otherwise return false
@@ -40628,37 +40328,6 @@ export type ProgramSignatures
 		return false
 	end 'aggregateNameIsBuiltOnATypeParameter'
 
-	export function resolvedCallFeedsAnInstanceParameter(callee ByteArray, gid GenericInstanceId) returns bool
-		for info in self.consumeFactsOfEveryDeclaration(callee) 'eachDeclaration'
-			if self.someFeedLandsOnAnInstanceParameter(info, gid: gid) 'feeds'
-				return true
-			end 'feeds'
-		end 'eachDeclaration'
-
-		return false
-	end 'resolvedCallFeedsAnInstanceParameter'
-
-	function someFeedLandsOnAnInstanceParameter(info ParamConsumeInfo, gid GenericInstanceId) returns bool
-		for feed in info.feeds 'eachFeed'
-			if self.feedLandsOnAnInstanceParameter(feed, gid: gid) 'landsOnAParameter'
-				return true
-			end 'landsOnAParameter'
-		end 'eachFeed'
-
-		return false
-	end 'someFeedLandsOnAnInstanceParameter'
-
-	function feedLandsOnAnInstanceParameter(feed TypeParamFeed, gid GenericInstanceId) returns bool
-		return match feed 'fed'
-			feeds(position, _) gives self.instanceArgIsATypeParameter(gid, position: position)
-			none gives false
-		end 'fed'
-	end 'feedLandsOnAnInstanceParameter'
-
-	function instanceArgIsATypeParameter(gid GenericInstanceId, position ElementIndex) returns bool
-		return maxonTypeTag(self.instanceArgType(gid, position: position)) == ValueTypeTag.typeParameter
-	end 'instanceArgIsATypeParameter'
-
 	// ⭐⭐ **IS EVERY ARGUMENT OF THIS INSTANCE A TYPE, ALL THE WAY DOWN?** — the question two mechanisms
 	// ask for the same reason, which is that a PARAMETRIC instance names nothing a compile-time answer can be
 	// built from:
@@ -40702,92 +40371,6 @@ export type ProgramSignatures
 	export function argIsFullyConcrete(arg MaxonType) returns bool
 		return not self.typeIsBuiltOnATypeParameter(arg)
 	end 'argIsFullyConcrete'
-
-	// ⭐⭐ **THE INSTANCE A GENERIC-INSTANCE ALIAS DENOTES WHEN IT IS A NESTED PARAMETERISED ONE.**
-	// `EChain` inside `type Bag uses Element`, on a `typealias EChain = Inner with Element`, answers
-	// `Inner with Element`, whose base `Inner` holds the callee `EChain.create()` links to — the node the
-	// descriptor-need fixpoint has to draw an edge to. Every OTHER alias spelling throws: a concrete instance
-	// supplies its own descriptor, and a corpus container keeps the edge tuned to it.
-	export function nestedParameterisedInstanceOfAlias(name ByteArray, readerFilePath FilePath) returns GenericInstanceId throws MapError
-		if not self.isAliasOfFormFor(name, readerFilePath: readerFilePath, wanted: FormAliasKind.generic) 'namesNoInstance'
-			throw MapError.keyNotFound
-		end 'namesNoInstance'
-
-		return try self.nestedParameterisedOrMiss(self.genericAliasInstanceFrom(name, readerFilePath: readerFilePath))
-	end 'nestedParameterisedInstanceOfAlias'
-
-	function nestedParameterisedOrMiss(gid GenericInstanceId) returns GenericInstanceId throws MapError
-		if not self.instanceIsANestedParameterisedOne(gid) 'notNested'
-			throw MapError.keyNotFound
-		end 'notNested'
-
-		return gid
-	end 'nestedParameterisedOrMiss'
-
-	// ⭐⭐ **THE SAME ANSWER FOR A FIELD RATHER THAN AN ALIAS** — `chain` inside `type Bag uses Element`,
-	// declared `var chain as EChain`, answers `Inner with Element`. The alias door above serves the STATIC spelling
-	// (`EChain.create()`), this one the INSTANCE spelling (`chain.count()`); they are two ways to write one
-	// receiver and they resolve through one predicate.
-	//
-	// ⛔⛔ **THE COLUMN IS RESOLVED BEFORE IT IS CLASSIFIED, and skipping that step sees no instance at all.**
-	// A field declared through an inner generic alias is recorded by the declaration sweep as a bare
-	// `named("Bag.EChain")` — the alias registry is filled after the file is swept — so a classifier reading
-	// the recorded type directly gets a NAME and never a `genericInstance`. `substituteInstanceFieldType`'s
-	// header carries the measured leak the same omission produced one door over.
-	export function nestedParameterisedInstanceOfField(structName ByteArray, fieldName ByteArray) returns GenericInstanceId throws MapError
-		let declared = try self.declaredSlotTypeOfField(structName, fieldName: fieldName) otherwise throw MapError.keyNotFound
-
-		if maxonTypeTag(declared) != ValueTypeTag.genericInstance 'notAnInstanceField'
-			throw MapError.keyNotFound
-		end 'notAnInstanceField'
-
-		return try self.nestedParameterisedOrMiss(typeNameIdOf(declared) as GenericInstanceId)
-	end 'nestedParameterisedInstanceOfField'
-
-	export function fieldEqualityOperand(structName ByteArray, fieldName ByteArray) returns EqualityOperand
-		let declared = try self.declaredSlotTypeOfField(structName, fieldName: fieldName) otherwise return EqualityOperand.unknown
-
-		return match maxonTypeTag(declared) 'tag'
-			genericInstance gives self.instanceEqualityOperand(typeNameIdOf(declared) as GenericInstanceId)
-			named gives self.namedEqualityOperand(self.nameOfId(typeNameIdOf(declared)))
-			unresolved gives EqualityOperand.unknown
-			boolean or
-			integer or
-			exitCode or
-			float or
-			void or
-			structRef or
-			string or
-			function or
-			typeParameter or
-			character or
-			interfaceRef or
-			cstring gives EqualityOperand.noEdge
-		end 'tag'
-	end 'fieldEqualityOperand'
-
-	function namedEqualityOperand(name ByteArray) returns EqualityOperand
-		if self.settledDeclarations().typeAliases.anyFileDeclares(name) 'aRangedAlias'
-			return EqualityOperand.noEdge
-		end 'aRangedAlias'
-
-		match self.enumInAnyFile(name) 'declaration'
-			declared then return EqualityOperand.noEdge
-			undeclared then return EqualityOperand.unknown
-		end 'declaration'
-	end 'namedEqualityOperand'
-
-	export function instanceEqualityOperand(id GenericInstanceId) returns EqualityOperand
-		if self.instanceArgsAreFullyConcrete(id) 'nothingReadsTheCallersLayout'
-			return EqualityOperand.noEdge
-		end 'nothingReadsTheCallersLayout'
-
-		if self.isArrayInstance(id) 'anArrayOverParameters'
-			return EqualityOperand.arrayOverParameters
-		end 'anArrayOverParameters'
-
-		return EqualityOperand.structOverParameters(self.genericInstanceBaseName(id))
-	end 'instanceEqualityOperand'
 
 	// Does the field reach `owner` again, through declared generics' fields, over arguments that
 	// properly contain the ones it was reached with? Such a type needs a larger instance at every
@@ -41381,21 +40964,13 @@ export type ProgramSignatures
 	end 'genericTypeFieldHasManagedInstantiation'
 
 	// ⭐⭐ **IS GENERIC `typeName` INSTANTIATED IN THE PROGRAM THIS INDEX WAS SETTLED FOR?** The gate
-	// on the store-side descriptor-need seed, and on the store that reads the descriptor it reserves — one answer
-	// for both, because the reservation is ABI.
-	//
-	// ⛔ **"is some instantiation MANAGED" IS THE QUESTION THIS CANNOT ASK.** A CONCRETE instantiation is interned
-	// by the PARSE that meets it — `for pair in m` is what mints `MapIterator with (String, Integer)` — and the
-	// seed is computed before any body is parsed. Measured with the managed question in place: `stdlib/Map.maxon`'s
-	// `current` reserved nothing and was then refused for want of the descriptor its own store asked for.
+	// on a shared body's store of a borrowed opaque value (`typeParamOwnerIsInstantiated`).
 	//
 	// ⭐ **WHETHER THE TYPE IS INSTANTIATED AT ALL IS ANSWERED OVER THE WHOLE PROGRAM, BY SETTLING TWICE.** The
 	// sweep interns what declarations name; a type only an expression instantiates (`Box.create(5)`) is found by
 	// the fold that merges the parse minting it, filed, and the index is settled again counting it
 	// (`Queries.foldEveryFileInto`). So a parse is told what the settled index holds — never its own mints,
-	// which would answer the store one way and the reservation another. A generic nothing instantiates answers
-	// `false` and reserves nothing, which matters: its value is a bare `structRef(Base)` no call site can source a
-	// descriptor for, and a reservation there is `forwardCallerLayout`'s panic.
+	// which would answer one body one way and another body another.
 	export function genericTypeIsInstantiated(typeName ByteArray) returns bool
 		if self.settledDeclarations().instantiatedByAParse.contains(typeName) 'aParseInstantiatedIt'
 			return true
@@ -41417,10 +40992,9 @@ export type ProgramSignatures
 	end 'holdsARowOf'
 
 	// ⭐ **IS THE GENERIC THAT DECLARES `param` INSTANTIATED?** — the question above, asked of a
-	// VALUE's own type-parameter token rather than of a declaration site's name, so the store side and the
-	// descriptor-need seed decide off ONE predicate. The token carries both halves of "which type's parameter
-	// is this", which is exactly what lets the store ask it without being handed the enclosing type
-	// from somewhere else — the pairing hazard `instanceWithTypeArgKind`'s header records.
+	// VALUE's own type-parameter token rather than of a declaration site's name. The token carries both halves
+	// of "which type's parameter is this", which is exactly what lets the store ask it without being handed the
+	// enclosing type from somewhere else — the pairing hazard `instanceWithTypeArgKind`'s header records.
 	//
 	// A token no ledger holds answers `false`, for `anyInstanceTypeArgHasKind`'s reason: nothing declares it,
 	// so nothing instantiates it.
@@ -41433,10 +41007,6 @@ export type ProgramSignatures
 	// instantiation of the type that declares it?** The gate on the descriptor-mediated retain a
 	// shared body owes when it hands its own borrowed `T` to a durable sink, and the STRONGER question
 	// `typeParamOwnerIsInstantiated` deliberately is not.
-	//
-	// ⭐ It is answerable HERE and not at the descriptor-need seed, which is the whole of why the two differ:
-	// `genericTypeIsInstantiated`'s header carries the argument — the seed runs before any body is parsed, so
-	// a concrete instantiation may not be interned yet. This is asked while a BODY is emitted.
 	//
 	// ⛔ **AND IT HAS TO BE ASKED, BECAUSE THE WEAK QUESTION REFUSES FOUR COMMITTED PROGRAMS** — MEASURED:
 	// `own-name-in-a-generic-body-is-still-Self`, `generic-body-user-generic-inner-alias-create` and two
@@ -41453,9 +41023,9 @@ export type ProgramSignatures
 	// box (`typeIsManaged` true — `genericInstanceFieldOwesDrop` drops it, balanced by the feed's
 	// `__mm_retain`). That co-ownership is sound for a field set ONCE at construction, but a SHARED-body
 	// REASSIGNMENT of it (`self.saved = next`) has no way to drop the field's OLD co-owned value: the opaque
-	// body cannot emit a trivial struct's `__mm_decref` directly, and the two gates the reassign site routes
-	// through (`genericTypeFieldHasManagedInstantiation` for the drop, `isManagedOpaqueTypeParamField` for the
-	// descriptor it would drop through) both read the CONSUME boundary, so neither fires for this class. So a
+	// body cannot emit a trivial struct's `__mm_decref` directly, and the gate the reassign site's drop routes
+	// through (`genericTypeFieldHasManagedInstantiation`) reads the CONSUME boundary, so it does not fire for
+	// this class. So a
 	// reassignment would LEAK the old value. This gate lets `emitOpaqueFieldReassign` REJECT that combination up front rather than ship the
 	// leak — read off the SAME `typeIsManaged`/`typeArgIsOwned` boundaries the drop and the consume decide on,
 	// so the reject fires on exactly the fields the destructor co-owns but the reassign cannot re-balance. A
@@ -41762,66 +41332,6 @@ export type ProgramSignatures
 		return false
 	end 'instantiationChainViolatesItsWhereClause'
 
-	// ⭐ **IS `fieldName` OF `structName` A BARE OPAQUE TYPE-PARAMETER field whose element is MANAGED for some
-	// instantiation** — a `typeParameter`-tagged field (`export var saved as Element` on
-	// `type Box uses Element`) that at least one interned instance makes owned (`Box with String`). This is the
-	// ONE fact the descriptor-need scan reserves a reassigning method's layout descriptor by: only such a
-	// reassignment DROPS the field's old opaque value through the descriptor-gated `__drop_type_param`, so only
-	// it needs the descriptor. Read off the SAME raw `fieldTypes` column and the SAME `typeArgIsOwned` managed
-	// boundary the emitted drop (`emitOpaqueFieldReassign`) and the box's own destructor branch on, so the
-	// reserved slot and the emitted drop decide off ONE fact. False for a non-generic type, an unknown field, a
-	// concrete/direct field, or an all-trivial instantiation (`Box with SmallInt` — inert, no drop, no descriptor).
-	export function isManagedOpaqueTypeParamField(structName ByteArray, fieldName ByteArray) returns bool
-		let fieldType = try self.declaredSlotTypeOfField(structName, fieldName: fieldName) otherwise return false
-
-		if maxonTypeTag(fieldType) != ValueTypeTag.typeParameter 'notOpaque'
-			return false
-		end 'notOpaque'
-
-		return self.genericTypeFieldHasManagedInstantiation(typeParamIdOf(fieldType))
-	end 'isManagedOpaqueTypeParamField'
-
-	export function fieldIsABareTypeParameter(structName ByteArray, fieldName ByteArray) returns bool
-		let fieldType = try self.declaredSlotTypeOfField(structName, fieldName: fieldName) otherwise return false
-		return maxonTypeTag(fieldType) == ValueTypeTag.typeParameter
-	end 'fieldIsABareTypeParameter'
-
-	export function fieldMayYieldAnOpaqueIndexedElement(structName ByteArray, fieldName ByteArray) returns bool
-		let declared = try self.declaredSlotTypeOfField(structName, fieldName: fieldName) otherwise return true
-
-		return match maxonTypeTag(declared) 'tag'
-			genericInstance gives self.instanceHoldsAnOpaqueIndexedElement(typeNameIdOf(declared) as GenericInstanceId)
-			named or
-			unresolved gives true
-			boolean or
-			integer or
-			exitCode or
-			float or
-			void or
-			structRef or
-			string or
-			function or
-			typeParameter or
-			character or
-			interfaceRef or
-			cstring gives false
-		end 'tag'
-	end 'fieldMayYieldAnOpaqueIndexedElement'
-
-	function instanceHoldsAnOpaqueIndexedElement(gid GenericInstanceId) returns bool
-		if not self.isManagedBufferRecordInstance(gid) 'notAnIndexedContainer'
-			return false
-		end 'notAnIndexedContainer'
-
-		for position in 0 upto self.genericInstanceArgCount(gid) 'eachArg'
-			if maxonTypeTag(self.instanceArgType(gid, position: position)) == ValueTypeTag.typeParameter 'anOpaqueElement'
-				return true
-			end 'anOpaqueElement'
-		end 'eachArg'
-
-		return false
-	end 'instanceHoldsAnOpaqueIndexedElement'
-
 	function declaredSlotTypeOfField(structName ByteArray, fieldName ByteArray) returns MaxonType throws AbsentError
 		view layout = try self.registeredLayout(structName) otherwise throw AbsentError.absent
 		let index = try layout.indexOfField(fieldName) otherwise throw AbsentError.absent
@@ -41848,7 +41358,7 @@ export type ProgramSignatures
 	// measurement.
 	//
 	// A shared-body reassignment of a co-owned trivial field would break this balance (the reassign site's own
-	// drop gate and descriptor-need seed both read the CONSUME boundary, so neither fires for this class), so
+	// drop gate reads the CONSUME boundary, so it does not fire for this class), so
 	// it is REJECTED at the reassign site (`emitOpaqueFieldReassign`) — leaving every field this
 	// drop fires on either construct-only (co-owned once) or managed/scalar (the pre-existing model).
 	//
@@ -42024,25 +41534,6 @@ export type ProgramSignatures
 
 		return MmDecrefName
 	end 'genericInstanceBoxDropCallee'
-
-	// ⭐⭐ **DOES ANY REAL INSTANTIATION OF `declaringTypeName` RELEASE FIELD `index` THROUGH SOMETHING OTHER
-	// THAN `sharedCallee`?** — the whole-program half of `Parser.requireSharedBodyReassignHasAStaticDrop`, whose
-	// header carries the leak this refuses and why divergence rather than non-concreteness is the test.
-	//
-	// The shared generic body has exactly ONE callee available for a field write's displaced value, chosen off
-	// the DECLARATION view; every instantiation's real drop is chosen off the SUBSTITUTED one. When those agree
-	// the write is sound and stays legal — an all-trivial program is the common case and must not be refused.
-	//
-	// ⚠ **A NOT-MANAGED INSTANTIATION DIVERGES TOO, AND IN THE OTHER DIRECTION**: the body would emit a release
-	// for a slot that instantiation owes none, which is an over-release rather than a leak. Both are the same
-	// question — "is the one callee right everywhere?" — so both are answered here rather than at the caller.
-	//
-	// The walk is O(interned instances) and is reached only from a shared body writing to an instance-typed
-	// field, i.e. from the one shape that can be wrong; the caller's two tag gates keep every ordinary field
-	// write away from it.
-	export function instanceFieldDropDivergesAcrossInstantiations(declaringTypeName ByteArray, index FieldIndex, sharedCallee ByteArray) returns bool
-		return self.rowSetFlag(RowSetQuery.dropDiverges(declaringTypeName, index: index, sharedCallee: sharedCallee))
-	end 'instanceFieldDropDivergesAcrossInstantiations'
 
 	function dropDivergesOverTheRows(declaringTypeName ByteArray, index FieldIndex, sharedCallee ByteArray) returns bool
 		for position in 0 upto self.genericInstanceCount() 'eachInstance'
@@ -43101,22 +42592,6 @@ export type ProgramSignatures
 
 		return resolved
 	end 'viewRestingARetainedSlot'
-
-	export function structFieldRestsThroughAView(structName ByteArray, index FieldIndex) returns bool
-		_ = try self.structFieldRestingNestedView(structName, index: index) otherwise return false
-		return true
-	end 'structFieldRestsThroughAView'
-
-	export function namedFieldRestsThroughAView(structName ByteArray, fieldName ByteArray) returns bool
-		match self.structInAnyFile(structName) 'declaringType'
-			undeclared then return false
-			declared(layout) then return self.structFieldRestsThroughAView(structName, index: try layout.indexOfField(fieldName) otherwise return false)
-		end 'declaringType'
-	end 'namedFieldRestsThroughAView'
-
-	export function structFieldTypeDisplayName(structName ByteArray, index FieldIndex) returns String
-		return self.typeDisplayName(self.typeArgumentType(self.structFieldDeclaredType(structName, index: index)))
-	end 'structFieldTypeDisplayName'
 
 	export function viewDictionaryDestructorSubject(view MaxonType) returns ByteArray
 		if maxonTypeTag(view) == ValueTypeTag.genericInstance 'anInstance'
@@ -45419,7 +44894,7 @@ export type ProgramSignatures
 	// ONE HOME, because both sides of a hidden ABI block read it.** A static has no `self`, so its
 	// dictionary columns — the layout descriptor and the constraint witnesses —
 	// are sourced at the CALL SITE from the call's RESULT, and that is the concrete instance only when the
-	// static returns its own type (`retypeGenericAliasConstructorResult`). `Parser.witnessParamCountFor`
+	// static returns its own type (`retypeGenericAliasConstructorResult`). `Parser.witnessReserveFor`
 	// RESERVES the block on this answer and `ProgramSignatures.witnessParamCountForCallee` SUPPLIES it on the
 	// same answer, so the two cannot size the block differently — which they must not, because a witness-slot
 	// count is ABI and a mismatch is an argument-register disagreement nothing downstream can notice
@@ -45434,10 +44909,11 @@ export type ProgramSignatures
 	// Allocation-free: it compares the interned NAME in this index's own table rather than adopting the type
 	// into a caller's interner, because the question is about identity and not about a type crossing out.
 	export function calleeReturnsItsDeclaringType(callee ByteArray) returns bool
-		match splitQualifiedName(callee) 'qualified'
-			notQualified then return false
-			parts(typeName, _) then return self.declaredReturnNamesStruct(callee, typeName: typeName)
-		end 'qualified'
+		return match self.functionDeclaringType(callee) 'declaring'
+			method(typeName) gives self.declaredReturnNamesStruct(callee, typeName: typeName)
+			freeFunction or
+			undeclared gives false
+		end 'declaring'
 	end 'calleeReturnsItsDeclaringType'
 
 	// The tail of the question above, split out because a `match` arm may not open one.
@@ -45448,174 +44924,184 @@ export type ProgramSignatures
 		end 'declared'
 	end 'declaredReturnNamesStruct'
 
-	// The number of witness parameters the CALLEE `callee` carries: its witness-constraint count when
-	// `calleeCarriesWitnessSlots`, zero otherwise. Both the callee side (append witness arguments) and
-	// the current-function side (bind witness parameters) read this ONE rule, so they cannot drift on
-	// how many witnesses a call passes — and it is the count OF the very list `appendWitnessArgs` then
-	// walks (`ProgramSignatures.witnessConstraintsOfMethod`), rather than a second lookup that could
-	// answer for a different list.
+	// The number of witness parameters the CALLEE `callee` reserves: its witness-constraint count when it has
+	// an instance to take them from or is a static that may carry them, zero otherwise. A static of the second
+	// kind keeps them only while it carries the descriptor (`witnessSlotsCarriedBy`). Both the callee side
+	// (append witness arguments) and the current-function side (bind witness parameters) read this ONE rule,
+	// so they cannot drift on how many witnesses a call passes — and it is the count OF the very list
+	// `appendWitnessArgs` then walks (`ProgramSignatures.witnessConstraintsOfMethod`), rather than a second
+	// lookup that could answer for a different list.
 	export function witnessParamCountForCallee(callee ByteArray, sig FuncSignature) returns ParamCount
-		if not self.calleeCarriesWitnessSlots(callee, takesReceiver: sig.takesReceiver()) 'noWitnessSource'
+		if self.hasNoInstanceToTakeHiddenArgumentsFrom(callee, takesReceiver: self.declaredCalleeTakesReceiver(callee)) and not self.staticMayCarryWitnessSlots(callee) 'noWitnessSource'
 			return 0
 		end 'noWitnessSource'
 
 		return self.witnessConstraintsOfMethod(callee, extensionConstraints: sig.extensionConstraints).count()
 	end 'witnessParamCountForCallee'
 
-	export function calleeCarriesWitnessSlots(callee ByteArray, takesReceiver bool) returns bool
-		return not self.hasNoInstanceToTakeHiddenArgumentsFrom(callee, takesReceiver: takesReceiver) or self.staticSourcesWitnessesFromItsCallSite(callee)
-	end 'calleeCarriesWitnessSlots'
+	export function witnessSlotsCarriedBy(callee ByteArray, sig FuncSignature, staticCarriesTheDescriptor bool) returns ParamCount
+		let counted = self.witnessParamCountForCallee(callee, sig: sig)
+
+		if counted != 0 and self.hasNoInstanceToTakeHiddenArgumentsFrom(callee, takesReceiver: self.declaredCalleeTakesReceiver(callee)) and not staticCarriesTheDescriptor 'aStaticThatCarriesNone'
+			return 0
+		end 'aStaticThatCarriesNone'
+
+		return counted
+	end 'witnessSlotsCarriedBy'
+
+	export function staticMayCarryWitnessSlots(callee ByteArray) returns bool
+		return self.hasNoInstanceToTakeHiddenArgumentsFrom(callee, takesReceiver: false) and not isFieldDefaultHelperName(callee)
+	end 'staticMayCarryWitnessSlots'
+
+	function declarationSiteOf(callee ByteArray) returns FunctionDeclSite throws AbsentError
+		view sites = self.settledDeclarations().funcDeclSites
+
+		if let direct = try sites.get(callee) 'declaredUnderThisName'
+			return direct
+		end 'declaredUnderThisName'
+
+		if isParamDefaultHelperName(callee) 'aParamDefaultHelper'
+			let setHelper = paramDefaultHelperNameOnMember(callee, member: overloadSetKeyOf(paramDefaultCalleeSpelling(callee)))
+			return try sites.get(setHelper) otherwise throw AbsentError.absent
+		end 'aParamDefaultHelper'
+
+		let setKey = overloadSetKeyOf(callee)
+
+		if let member = try sites.get(setKey) 'aMemberOfADeclaredSet'
+			return member
+		end 'aMemberOfADeclaredSet'
+
+		let templates = try self.settledDeclarations().genericTemplates.get(setKey) otherwise throw AbsentError.absent
+		let template = try templates.get(0) otherwise throw AbsentError.absent
+		return FunctionDeclSite.create(template.visibility, declFilePath: template.declFilePath, takesReceiver: template.takesReceiver, nameLine: template.line, nameColumn: template.column, enclosingTypeName: template.enclosingTypeName)
+	end 'declarationSiteOf'
+
+	function isOwnedByTheCompiler(callee ByteArray) returns bool
+		return (isCompilerInternalCallee(callee) and not isParamDefaultHelperName(callee) and not isFieldDefaultHelperName(callee)) or isServiceLoopSymbol(callee)
+	end 'isOwnedByTheCompiler'
+
+	export function calleeMayCarryALayoutDescriptor(callee ByteArray) returns bool
+		return match self.functionDeclaringType(callee) 'declaring'
+			method(typeName) gives self.declaringTypeMayCarryADescriptor(typeName)
+			freeFunction or
+			undeclared gives false
+		end 'declaring'
+	end 'calleeMayCarryALayoutDescriptor'
+
+	function declaringTypeMayCarryADescriptor(typeName ByteArray) returns bool
+		if let layout = try self.registeredLayout(typeName) 'aStruct'
+			return not layout.typeParamNames.isEmpty()
+		end 'aStruct'
+
+		if primitiveTagOfTypeName(typeName) != ValueTypeTag.unresolved 'aPrimitiveExtension'
+			return false
+		end 'aPrimitiveExtension'
+
+		let form = try self.declaredFormInAnyFile(typeName) otherwise panic("declaringTypeMayCarryADescriptor: a function is declared on '{String.from(typeName)}', which no file declares as a type")
+
+		match form 'form'
+			enumType or
+			unionType or
+			interfaceType then return false
+			structType or
+			rangedAlias or
+			functionAlias or
+			genericAlias or
+			tupleAlias then panic("declaringTypeMayCarryADescriptor: a function is declared on '{String.from(typeName)}', which the sweep records as a {form.name} and not as a type with a registered layout")
+		end 'form'
+	end 'declaringTypeMayCarryADescriptor'
+
+	export function functionDeclaringType(funcName ByteArray) returns DeclaringType
+		var declared = funcName
+
+		if isLiftedClosureName(funcName) 'aLiftedClosure'
+			declared = self.liftedFunctionHostOf(funcName)
+		end 'aLiftedClosure'
+
+		if let site = try self.declarationSiteOf(declared) 'declaredBySource'
+			if site.enclosingTypeName.isEmpty() 'aFreeFunction'
+				return DeclaringType.freeFunction
+			end 'aFreeFunction'
+
+			return DeclaringType.method(site.enclosingTypeName)
+		end 'declaredBySource'
+
+		if self.isOwnedByTheCompiler(declared) 'noSourceByConstruction'
+			return DeclaringType.freeFunction
+		end 'noSourceByConstruction'
+
+		if let typeName = try self.typeOfSynthesizedMember(declared) 'aMemberTheCompilerSynthesizes'
+			return DeclaringType.method(typeName)
+		end 'aMemberTheCompilerSynthesizes'
+
+		return DeclaringType.undeclared
+	end 'functionDeclaringType'
+
+	function typeOfSynthesizedMember(name ByteArray) returns ByteArray throws AbsentError
+		match splitQualifiedName(name) 'qualified'
+			notQualified then throw AbsentError.absent
+			parts(typeName, _) then return try self.declaredTypeNamed(typeName)
+		end 'qualified'
+	end 'typeOfSynthesizedMember'
+
+	function declaredTypeNamed(typeName ByteArray) returns ByteArray throws AbsentError
+		if self.hasRegisteredLayout(typeName) or primitiveTagOfTypeName(typeName) != ValueTypeTag.unresolved 'aStructOrPrimitive'
+			return typeName
+		end 'aStructOrPrimitive'
+
+		let form = try self.declaredFormInAnyFile(typeName) otherwise throw AbsentError.absent
+
+		match form 'form'
+			structType or
+			enumType or
+			unionType or
+			interfaceType then return typeName
+			rangedAlias or
+			functionAlias or
+			genericAlias or
+			tupleAlias then throw AbsentError.absent
+		end 'form'
+	end 'declaredTypeNamed'
+
+	export function aliasNestedInDeclaringTypeOf(callee ByteArray, aliasName ByteArray) returns ByteArray throws AbsentError
+		match self.functionDeclaringType(callee) 'declaring'
+			method(typeName) then return joinQualifiedName(typeName, member: aliasName)
+			freeFunction or
+			undeclared then throw AbsentError.absent
+		end 'declaring'
+	end 'aliasNestedInDeclaringTypeOf'
+
+	export function declaredCalleeTakesReceiver(callee ByteArray) returns bool
+		match self.calleeReceiverOf(callee) 'receiver'
+			takesReceiver then return true
+			takesNone then return false
+			undeclared then panic("declaredCalleeTakesReceiver: '{String.from(callee)}' has a signature and no declaration site and is neither a lifted closure nor a name the compiler owns — every caller reaches this after SemanticCheck has refused an undefined callee")
+		end 'receiver'
+	end 'declaredCalleeTakesReceiver'
+
+	export function calleeReceiverOf(callee ByteArray) returns CalleeReceiver
+		if isLiftedClosureName(callee) 'aClosureCarriesItsRecordNotAReceiver'
+			return CalleeReceiver.takesNone
+		end 'aClosureCarriesItsRecordNotAReceiver'
+
+		if let site = try self.declarationSiteOf(callee) 'declaredBySource'
+			return CalleeReceiver.takesReceiver if site.takesReceiver else CalleeReceiver.takesNone
+		end 'declaredBySource'
+
+		if self.isOwnedByTheCompiler(callee) 'noSourceByConstruction'
+			return CalleeReceiver.takesNone
+		end 'noSourceByConstruction'
+
+		return CalleeReceiver.undeclared
+	end 'calleeReceiverOf'
 
 	export function callBuildsTheInstanceOfItsOwnType(callee ByteArray, instance GenericInstanceId) returns bool
-		match splitQualifiedName(callee) 'qualified'
-			notQualified then return false
-			parts(typeName, _) then return self.genericInstanceBaseName(instance).equals(typeName)
-		end 'qualified'
+		return match self.functionDeclaringType(callee) 'declaring'
+			method(typeName) gives self.genericInstanceBaseName(instance).equals(typeName)
+			freeFunction or
+			undeclared gives false
+		end 'declaring'
 	end 'callBuildsTheInstanceOfItsOwnType'
-
-	export function memberAlwaysCarriesWitnessSlots(qualified ByteArray) returns bool
-		return self.declaresCallee(qualified) and not self.hasNoInstanceToTakeHiddenArgumentsFrom(qualified, takesReceiver: self.declaredMethodTakesReceiver(qualified)) and not self.witnessConstraintsOfMethod(qualified, extensionConstraints: self.extensionMethodConstraintsOf(qualified)).isEmpty()
-	end 'memberAlwaysCarriesWitnessSlots'
-
-	// A static that does not return `Self` carries witness slots exactly when it needs a descriptor:
-	// both are read off the instance its call names, and the parser seeds the descriptor need for a
-	// static that dispatches through the constraints (`Parser.scanDescriptorNeedsInto`).
-	export function staticSourcesWitnessesFromItsCallSite(callee ByteArray) returns bool
-		return self.anyFunctionNeedsLayoutDescriptor() and self.hasNoInstanceToTakeHiddenArgumentsFrom(callee, takesReceiver: false) and self.functionNeedsLayoutDescriptor(callee) and not isFieldDefaultHelperName(callee)
-	end 'staticSourcesWitnessesFromItsCallSite'
-
-	// ⭐⭐ **DOES `callee` DECLARE A BARE TYPE-PARAMETER RETURN — a `returns T` whose value the shared body
-	// compiling it cannot classify?** The descriptor-need seed for the RETURN door: such a
-	// body hands the caller a `+1` like every other managed return, and when the value it returns is a BORROW
-	// it takes that reference through the enclosing instance's `retainFunc@64`, so the method needs the
-	// parameter carrying the descriptor.
-	//
-	// ⚠ **ASKED OF THE RESOLVED DECLARED TYPE RATHER THAN OF THE TOKENS, because both token answers are
-	// wrong in a different direction.** An inner alias may NAME the parameter (`typealias Held = Element`), so
-	// a token test misses the reservation and the emitted retain then has no descriptor; and a parameter's own
-	// function type spells `returns Element` inside the parameter list, so a token test reserves for methods
-	// that return nothing of the kind. The index has the resolved type by the time
-	// `Queries.foldDescriptorNeeds` runs (after `allFilesFolded`), which is what makes one reading serve both.
-	//
-	// Allocation-free for `declaredReturnNamesStruct`'s reason: the answer is a TAG, so no type crosses out of
-	// this index's own interner.
-	export function calleeReturnsBareTypeParameter(callee ByteArray) returns bool
-		match try self.settledDeclarations().returnTypes.get(callee) otherwise return false 'declared'
-			void then return false
-			value(inner) then return maxonTypeTag(inner) == ValueTypeTag.typeParameter
-		end 'declared'
-	end 'calleeReturnsBareTypeParameter'
-
-	// ⭐⭐ **DOES *SOME* DECLARATION SPELLED `<anything>.name` RETURN A BARE TYPE PARAMETER?** The
-	// descriptor-need seed for the door one hop past the return: a body that CALLS such a method ADOPTS the
-	// `+1` it hands back (`Parser.enrolOwnedCallTemp`), and when the receiver's instance binds that position
-	// to the CALLER's own type parameter the adopted value is opaque and is released at scope exit through
-	// the descriptor-gated `__drop_type_param`. So the caller needs a descriptor too.
-	//
-	// ⚠ **IT IS KEYED ON THE SIMPLE NAME BECAUSE THE PRE-SCAN HAS NOTHING ELSE.** `Queries.foldDescriptorNeeds`
-	// walks TOKENS before any body is parsed, so at `cell.get(` the receiver's type is unknown — `cell` may be
-	// a field, a parameter or a local bound from a call, and only the last is genuinely out of reach of a
-	// resolver, which is exactly why a resolver here would have a HOLE. This is the discipline every sibling
-	// signal already keeps and states: `hasContainerMoveOut` records ANY `.pop()` whatever its receiver, because
-	// **over-reserving costs one ignored parameter and missing one refuses a legal program**
-	// (`requireDescriptorForOpaqueStores`) or aborts the compiler.
-	//
-	// ⚠ **AND IT CARRIES NO `instantiated` GATE, FOR `calleeReturnsBareTypeParameter`'s REASON**: the emission
-	// side is `enrolOwnedCallTemp`, which fires off the value's tag while a body is being parsed — strictly
-	// later than the instance registry this scan reads. A declaration-level signal must be answerable from the
-	// declarations alone.
-	export function methodNameEverReturnsBareTypeParameter(name ByteArray) returns bool
-		return self.bareTypeParamReturnerNameSet().contains(name)
-	end 'methodNameEverReturnsBareTypeParameter'
-
-	// ⭐⭐ **DOES SOME DECLARATION WEARING `name` TAKE A CONSTRUCTOR-FEED TYPE-PARAMETER PARAMETER?**
-	// The CALLER-side half of the constructor-feed retain, and the exact twin of the question above: that one
-	// is asked of a `.<name>(` whose callee HANDS BACK a bare `T`, this one of a `.<name>(` whose callee will
-	// KEEP one in a record it returns. A body making such a call may have to take a reference through
-	// `retainFunc@64` (`handleEscapingBorrowFeed`), so it needs the enclosing instance's layout descriptor —
-	// and no sibling signal could see that, for the reason `adoptsOpaqueResult`'s arm records: the receiver is
-	// a field, a local or an inner alias the descriptor-need pre-scan cannot resolve.
-	//
-	// It is answered by name, and `create` is a name everything wears, so the over-approximation is
-	// not free: a reserved descriptor changes what `LowerMaxonToStd.emitInstanceDescriptorAddr` does
-	// at every nested-instance call in the body. The seed therefore also asks whether the method can
-	// hold a borrowed `T` at all (`methodCanForwardABorrowedOpaque`) and whether a static could source
-	// a descriptor (`calleeReturnsItsDeclaringType`). This set answers only the sink question, and it
-	// excludes the callee-storage sink (`FeedSinkQuery.constructedValueSink`) because
-	// `storesBorrowedOpaqueElement` already seeds that one.
-	export function methodNameEverFeedsATypeParameter(name ByteArray) returns bool
-		return self.typeParamFeederNameSet().contains(name)
-	end 'methodNameEverFeedsATypeParameter'
-
-	// The set behind the question above, folded ONCE out of `funcParamConsumes` — the only place the
-	// program's whole feed column lives. A free function is skipped for `bareTypeParamReturnerNameSet`'s
-	// reason: a bare name can never be reached through the `.` this set is asked at.
-	function typeParamFeederNameSet() returns MethodNameSet
-		if self.settledDeclarations().typeParamFeederNamesComputed 'alreadyFolded'
-			return self.settledDeclarations().typeParamFeederNames
-		end 'alreadyFolded'
-
-		for (callee, _) in self.settledDeclarations().funcParamConsumes 'eachKey'
-			match splitQualifiedName(callee) 'qualified'
-				notQualified then continue
-				parts(_, member) then self.recordTypeParamFeedersUnder(callee, member: member)
-			end 'qualified'
-		end 'eachKey'
-
-		var ownDeclarations = self.mainThreadSettled()
-		ownDeclarations.typeParamFeederNamesComputed = true
-		return self.settledDeclarations().typeParamFeederNames
-	end 'typeParamFeederNameSet'
-
-	function recordTypeParamFeedersUnder(key ByteArray, member ByteArray)
-		for info in self.consumeFactsOfEveryDeclaration(key) 'eachDeclaration'
-			self.recordIfTypeParamFeeder(member, info: info)
-		end 'eachDeclaration'
-	end 'recordTypeParamFeedersUnder'
-
-	// One row of the fold above. Split out for `recordIfBareTypeParamReturn`'s reason — a `match` arm may not
-	// hold a statement sequence, and the insert is guarded.
-	function recordIfTypeParamFeeder(member ByteArray, info ParamConsumeInfo)
-		if not info.anyFeed(FeedSinkQuery.constructedValueSink) 'noConstructorFeed'
-			return
-		end 'noConstructorFeed'
-
-		self.mainThreadSettled().typeParamFeederNames.insert(member)
-	end 'recordIfTypeParamFeeder'
-
-	// The set behind the question above, folded ONCE out of `returnTypes` — the only place the program's whole
-	// declared-return column lives. A free function is skipped rather than filtered later: `splitQualifiedName`
-	// answers `notQualified` for one, and a bare name can never be reached through the `.` this set is asked at.
-	// The map's VALUE is not read here: what makes a callee a bare-`T` returner is
-	// `calleeReturnsBareTypeParameter`, asked below so the set and the per-callee answer stay one predicate.
-	function bareTypeParamReturnerNameSet() returns MethodNameSet
-		if self.settledDeclarations().bareTypeParamReturnerNamesComputed 'alreadyFolded'
-			return self.settledDeclarations().bareTypeParamReturnerNames
-		end 'alreadyFolded'
-
-		for (callee, _) in self.settledDeclarations().returnTypes 'eachDeclaration'
-			match splitQualifiedName(callee) 'qualified'
-				notQualified then continue
-				parts(_, member) then self.recordIfBareTypeParamReturn(callee, member: member)
-			end 'qualified'
-		end 'eachDeclaration'
-
-		var ownDeclarations = self.mainThreadSettled()
-		ownDeclarations.bareTypeParamReturnerNamesComputed = true
-		return self.settledDeclarations().bareTypeParamReturnerNames
-	end 'bareTypeParamReturnerNameSet'
-
-	// The tail of the fold above, split out because a `match` arm may not open one. The question is asked
-	// through `calleeReturnsBareTypeParameter` rather than by re-matching the return type here, so the SET and
-	// the PER-CALLEE answer are one predicate — two spellings of "is this a bare `T` return" is precisely how
-	// the seed and the emission would come to disagree.
-	function recordIfBareTypeParamReturn(callee ByteArray, member ByteArray)
-		if not self.calleeReturnsBareTypeParameter(callee) 'notABareTypeParamReturn'
-			return
-		end 'notABareTypeParamReturn'
-
-		self.mainThreadSettled().bareTypeParamReturnerNames.insert(member)
-	end 'recordIfBareTypeParamReturn'
 
 	// The `bool` half of `returnTypeOf`, which adopts the return type into the asker's interner: that
 	// allocates and needs an interner the asker may not hold, and a `Map.contains` needs neither. A
@@ -46150,9 +45636,7 @@ export type ProgramSignatures
 	end 'settleBaseline'
 
 	function mixBodyScanFacts(state HashDigest, excluding HashDigestSet) returns HashDigest
-		var out = mixNameSet(Hasher.combined(state, value: DeclShapeDescriptorNeeds), names: self.settledDeclarations().descriptorNeeds, excluding: excluding)
-		out = mixNameSet(Hasher.combined(out, value: DeclShapeSpeculativeDescriptorNeeds), names: self.settledDeclarations().speculativeDescriptorNeeds, excluding: excluding)
-		out = mixNameSet(Hasher.combined(out, value: DeclShapeFixedElementCountNeeds), names: self.settledDeclarations().fixedElementCountNeeds, excluding: excluding)
+		var out = mixNameSet(Hasher.combined(state, value: DeclShapeFixedElementCountNeeds), names: self.settledDeclarations().fixedElementCountNeeds, excluding: excluding)
 		out = Hasher.combined(Hasher.combined(out, value: DeclShapeInstantiatedByAParse), value: self.instantiatedDigestExcluding(excluding))
 		return Hasher.combined(self.mixGenericTemplates(Hasher.combined(out, value: DeclShapeGenericInstances), excluding: excluding), value: self.genericInstancesDigest)
 	end 'mixBodyScanFacts'
@@ -46348,18 +45832,23 @@ export type ProgramSignatures
 	end 'declaredNameOf'
 
 	function namesALiftingHost(name ByteArray) returns bool
-		return self.settledDeclarations().genericInstancesByName.contains(name) or self.settledDeclarations().interfaceExtensionMembers.contains(name)
+		if self.settledDeclarations().genericInstancesByName.contains(name) or self.settledDeclarations().interfaceExtensionMembers.contains(name) 'aHostItself'
+			return true
+		end 'aHostItself'
+
+		let owner = try paramDefaultHelperOwnerOf(name) otherwise return false
+		return self.namesALiftingHost(owner)
 	end 'namesALiftingHost'
 
 	// The LONGEST prefix that names a host, because an instance's name can hold the separator itself — a
 	// declaration's mint spelled in its type arguments — and the first segment alone would cut it short.
 	function liftedFunctionHostOf(name ByteArray) returns ByteArray
-		let segments = String.from(name).split(LiftedFunctionNameSeparator)
+		let segments = String.from(name).split(CompilerMintSeparator)
 		var host = liftedFunctionHost(segments, name: name)
 		var prefix = String.from(host)
 
 		for position in 1 upto segments.count() 'eachLiftedSegment'
-			prefix.append("{LiftedFunctionNameSeparator}{try segments.get(position) otherwise panic("liftedFunctionHostOf: segments.get OOB at {position} inside its own count()")}")
+			prefix.append("{CompilerMintSeparator}{try segments.get(position) otherwise panic("liftedFunctionHostOf: segments.get OOB at {position} inside its own count()")}")
 			var candidate = prefix.toByteArray()
 
 			if self.namesALiftingHost(candidate) 'aLongerHost'
@@ -46929,8 +46418,6 @@ export type ProgramSignatures
 		fingerprint.note("extensionDeclSites", value: declarations.extensionDeclSites.count() as EntryCount)
 		fingerprint.note("conformanceClauseSites", value: declarations.conformanceClauseSites.count() as EntryCount)
 		fingerprint.note("descriptorScanSites", value: declarations.descriptorScanSites.count() as EntryCount)
-		fingerprint.note("descriptorNeeds", value: declarations.descriptorNeeds.count())
-		fingerprint.note("speculativeDescriptorNeeds", value: declarations.speculativeDescriptorNeeds.count())
 		fingerprint.note("fixedElementCountNeeds", value: declarations.fixedElementCountNeeds.count())
 		fingerprint.note("conditionalExtensionSkips", value: declarations.conditionalExtensionSkips.count())
 		fingerprint.note("associatedTypeHoldings", value: declarations.associatedTypeHoldings.count())
@@ -47014,10 +46501,6 @@ export type ProgramSignatures
 		fingerprint.note("constInitializerTypeSites", value: declarations.constInitializerTypeSites.count() as EntryCount)
 		fingerprint.note("arrayByteInstance", value: self.arrayByteInstance as EntryCount)
 		fingerprint.noteFlag("arrayByteInstanceComputed", flag: self.arrayByteInstanceComputed)
-		fingerprint.note("bareTypeParamReturnerNames", value: declarations.bareTypeParamReturnerNames.count())
-		fingerprint.noteFlag("bareTypeParamReturnerNamesComputed", flag: declarations.bareTypeParamReturnerNamesComputed)
-		fingerprint.note("typeParamFeederNames", value: declarations.typeParamFeederNames.count())
-		fingerprint.noteFlag("typeParamFeederNamesComputed", flag: declarations.typeParamFeederNamesComputed)
 		fingerprint.note("userDeclaredTypeNames", value: declarations.userDeclaredTypeNames.count())
 		fingerprint.note("stdlibDeclaredTypeNames", value: declarations.stdlibDeclaredTypeNames.count())
 		fingerprint.note("arrayLiteralConformers", value: declarations.arrayLiteralConformers.count() as EntryCount)
@@ -47475,8 +46958,6 @@ export let BandInstanceIdBase = 1099511627776 as GenericInstanceId
 let DeclShapeInstanceRow = 0x5D1C34F0A9B2E781 as HashDigest
 let SpeculativeRowMark = 0x2F8A6C1D93E4B705 as HashDigest
 let NamedRowMark = 0x71B3E95A0C2D48F6 as HashDigest
-let DeclShapeDescriptorNeeds = 0x6A09E667BB67AE85 as HashDigest
-let DeclShapeSpeculativeDescriptorNeeds = 0x8F1BBCDCCA62C1D6 as HashDigest
 let DeclShapeFixedElementCountNeeds = 0x3C6EF372A54FF53A as HashDigest
 let DeclShapeInstantiatedByAParse = 0xA54FF53A510E527F as HashDigest
 let DeclShapeGenericInstances = 0x3C6EF372FE94F82B as HashDigest
@@ -47495,7 +46976,7 @@ function nameIsExcluded(name ByteArray, excluded HashDigestSet) returns bool
 		return true
 	end 'itself'
 
-	let owner = try declaringTypeOf(name) otherwise return false
+	let owner = try nameQualifierOf(name) otherwise return false
 
 	return excluded.contains(mixBytes(Hasher.empty(), bytes: owner))
 end 'nameIsExcluded'

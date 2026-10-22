@@ -2112,7 +2112,7 @@ type EntryGuardWaivers
 					continue
 				end 'noWaivableParam'
 
-				if functionIsAServiceLoop(func.name) and project.uncheckedCallPaths.namesAServiceHandler(callee) 'theLoopForwardsCheckedMessages'
+				if isServiceLoopSymbol(func.name) and project.uncheckedCallPaths.namesAServiceHandler(callee) 'theLoopForwardsCheckedMessages'
 					self.denyIfAnUncheckedPathReaches(project, callee: callee)
 					continue
 				end 'theLoopForwardsCheckedMessages'
@@ -2244,12 +2244,5 @@ function denyParamAt(params WaivableParamArray, at ElementIndex)
 	var denied = try params.get(at) otherwise panic("denyParamAt: params.get OOB at {at}")
 	denied.waived = false
 end 'denyParamAt'
-
-function functionIsAServiceLoop(name ByteArray) returns bool
-	return match splitQualifiedName(name) 'split'
-		notQualified gives false
-		parts(_, member) gives member.equals(ServiceLoopMemberName)
-	end 'split'
-end 'functionIsAServiceLoop'
 
 let sharedNoBorrowOperands = BorrowOperandsMap.create()

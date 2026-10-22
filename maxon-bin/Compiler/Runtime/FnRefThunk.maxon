@@ -196,11 +196,18 @@ export typealias FnRefThunkSet = Set with ByteArray
 // such label is not a closure. `$closure_` is what `parseClosureExpression` mints, it survives nesting
 // (`f$closure_0$closure_1` still contains it), and no label disambiguator can produce it.
 export function isLiftedClosureName(name ByteArray) returns bool
-	return bytesContainRun(name, run: LiftedClosureMarker)
+	return bytesContainRun(name, run: liftedClosureMark())
 end 'isLiftedClosureName'
 
-// The join + tag `Parser.parseClosureExpression` mints between an enclosing function and its lifted closure.
-let LiftedClosureMarker = b"$closure_"
+export function liftedClosureName(host ByteArray, ordinal ClosureSubIndex) returns ByteArray
+	return "{String.from(host)}{String.from(liftedClosureMark())}{ordinal}".toByteArray()
+end 'liftedClosureName'
+
+function liftedClosureMark() returns ByteArray
+	return "{CompilerMintSeparator}{LiftedClosureWord}".toByteArray()
+end 'liftedClosureMark'
+
+let LiftedClosureWord = "closure_"
 
 let FnRefThunkPrefix = "__fnref_"
 

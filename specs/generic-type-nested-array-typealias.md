@@ -2882,12 +2882,12 @@ container it was read out of.
 The caller is the only frame that can see the borrow, so that is where the reference is taken
 (`handleEscapingBorrowFeed`), through the enclosing instance's layout descriptor.
 
-⭐⭐ **`relay` NEEDS A DESCRIPTOR RESERVATION TO TAKE THE REFERENCE THROUGH.** No feed scan can seed one
-for *"forwards a borrowed opaque value to a storing sibling"*: the forwarded value is an EXPRESSION, so no
-feed scan records it. The seed does not look at the forward at all. It looks at the CALL the expression is: `items.get(i)` names a method some declaration in the program returns
-a bare type parameter from, and a body that calls one ADOPTS the `+1` it hands back
-(`ProgramSignatures.methodNameEverReturnsBareTypeParameter`). `relay` therefore carries a descriptor for
-its own adopted result, and the reference it owes the forward is taken through the same one.
+⭐⭐ **`relay` NEEDS A DESCRIPTOR TO TAKE THE REFERENCE THROUGH.** The forwarded value is an EXPRESSION, so
+nothing records the forward itself. The need comes from the CALL the expression is: `items.get(i)` returns a
+bare type parameter, and a body that calls such a method ADOPTS the `+1` it hands back and releases it through
+the descriptor-gated `__drop_type_param`, so lowering gives that body a layout descriptor. `relay` therefore
+carries a descriptor for its own adopted result, and the reference it owes the forward is taken through the
+same one.
 
 ⚠ **A LEAK WOULD BE WORSE THAN A REFUSAL**, so the case reads the balance: 100 relays of one element print `spare 100` and exit **0**.
 The loop is what makes that reading worth having — a per-call leak would be a hundred
@@ -2998,4 +2998,855 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+### A closure in a generic method calls a method that needs the layout descriptor through an untyped receiver
+
+<!-- test: a-closure-in-a-generic-method-calls-a-descriptor-reader-through-a-result -->
+The closure calls `self.make().stash(y)`; `make()` returns a typealias instance, so the receiver of `stash` is a call's result. `stash` stores a borrowed element and so reads the descriptor, which the closure takes from its environment and the method forwards from its own.
+```maxon
+type Inner uses T
+	export typealias Items = Array with T
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	function stash(item T) returns Count
+		self.items.push(item)
+		return self.items.count()
+	end 'stash'
+end 'Inner'
+
+type Outer uses T
+	typealias Held = Inner with T
+	var held as Held
+
+	static function create() returns Self
+		return Self{held: Held.create()}
+	end 'create'
+
+	function make() returns Held
+		return held
+	end 'make'
+
+	function run(x T) returns Count
+		let f = function(y T) gives self.make().stash(y)
+		_ = f(x)
+		return f(x)
+	end 'run'
+end 'Outer'
+
+typealias StrOuter = Outer with String
+
+function main() returns ExitCode
+	var o = StrOuter.create()
+	let s = "closure payload number one is long enough to live on the heap"
+	let n = o.run(s)
+
+	if n == 2 'twice'
+		return 0
+	end 'twice'
+
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-closure-calling-a-static-that-reads-sizeof-and-returns-a-concrete-array -->
+The static returns an `Array with Count`, a concrete generic instance that is not the instance the static builds, so the call takes the descriptor from the enclosing method. The closure that makes the call holds it.
+```maxon
+type Box uses T
+	export typealias Widths = Array with Count
+	var n as Count
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	static function widths() returns Widths
+		var out = Widths.create()
+		out.push(sizeof(T))
+		return out
+	end 'widths'
+
+	function probe() returns Count
+		let f = function() gives Self.widths()
+		let all = f()
+		return try all.get(0) otherwise 0
+	end 'probe'
+end 'Box'
+
+typealias Small = int(0 to 65535)
+typealias SmallBox = Box with Small
+typealias FlagBox = Box with bool
+
+function main() returns ExitCode
+	let a = SmallBox.create()
+	let b = FlagBox.create()
+	print("{a.probe()} {b.probe()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8 1
+```
+
+<!-- test: a-closure-capturing-a-tuple-of-the-parameter-releases-it -->
+The closure captures a `(T, T)` tuple local over `String`, so the environment holds two references that its destructor releases through the descriptor; a leak exits 101.
+```maxon
+type Twin uses T
+	var kept as T
+
+	static function create(kept T) returns Self
+		return Self{kept: kept}
+	end 'create'
+
+	function first(a T, b T) returns T
+		let both = (a, b)
+		let f = function() gives both.0
+		return f()
+	end 'first'
+end 'Twin'
+
+typealias StrTwin = Twin with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	let t = StrTwin.create(heapString("kept ", b: "long enough to allocate"))
+	let a = heapString("first ", b: "long enough to allocate")
+	let b = heapString("second ", b: "long enough to allocate")
+	print("{t.first(a, b: b)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+first long enough to allocate
+```
+
+<!-- test: a-closure-in-a-generic-type-in-a-sub-directory-calls-a-descriptor-reader -->
+The generic type is declared in `sub/`, so its methods are named through the directory; the closure's call to `width` still has to reach the descriptor of `viaClosure`.
+```maxon
+// --- file: sub/box.maxon
+typealias Small = int(0 to 65535)
+typealias SmallBox = Box with Small
+typealias FlagBox = Box with bool
+
+type Box uses T
+	var n as Count
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function width() returns Count
+		return sizeof(T)
+	end 'width'
+
+	function viaClosure() returns Count
+		let f = function() gives self.width()
+		return f()
+	end 'viaClosure'
+end 'Box'
+
+export function probe() returns Count
+	return SmallBox.create().viaClosure() * 10 + FlagBox.create().viaClosure()
+end 'probe'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("{sub.probe()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+81
+```
+
+<!-- test: a-closure-in-an-extension-method-of-a-generic-type-calls-a-descriptor-reader -->
+```maxon
+type Box uses T
+	export var n as Count
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function width() returns Count
+		return sizeof(T)
+	end 'width'
+end 'Box'
+
+extension Box
+	function viaClosure() returns Count
+		let f = function() gives self.width()
+		return f()
+	end 'viaClosure'
+end 'Box'
+
+typealias Small = int(0 to 65535)
+typealias SmallBox = Box with Small
+typealias FlagBox = Box with bool
+
+function main() returns ExitCode
+	let a = SmallBox.create()
+	let b = FlagBox.create()
+	print("{a.viaClosure()} {b.viaClosure()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8 1
+```
+
+<!-- test: a-closure-calls-the-overload-of-a-generic-method-that-reads-the-descriptor -->
+The second declaration of `size` is the one that reads `sizeof(T)`, and it is named by a registration name that wears a suffix for its parameter type.
+```maxon
+type Box uses T
+	export typealias Items = Array with Count
+	export var n as Count
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function size(flag bool) returns Count
+		return 1 if flag else 0
+	end 'size'
+
+	function size(items Items) returns Count
+		return sizeof(T) + items.count()
+	end 'size'
+
+	function viaClosure() returns Count
+		var items = Items.create()
+		items.push(1)
+		let f = function() gives self.size(items)
+		return f()
+	end 'viaClosure'
+end 'Box'
+
+typealias Small = int(0 to 65535)
+typealias SmallBox = Box with Small
+typealias FlagBox = Box with bool
+
+function main() returns ExitCode
+	let a = SmallBox.create()
+	let b = FlagBox.create()
+	print("{a.viaClosure()} {b.viaClosure()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+9 2
+```
+
+<!-- test: a-closure-calls-the-static-overloads-of-a-name-an-instance-method-also-wears -->
+The instance `m` and the two `static` overloads of `m` are three declarations of one source name. The statics are registered under a key of their own, and the declaration they are read back by is theirs, not the instance's.
+```maxon
+type Box uses T
+	export var n as Count
+
+	static function create() returns Self
+		return Self{n: 3}
+	end 'create'
+
+	function m() returns Count
+		return self.n
+	end 'm'
+
+	static function m(b SmallBox) returns Count
+		return sizeof(T) + b.n
+	end 'm'
+
+	static function m(b SmallBox, extra Count) returns Count
+		return sizeof(T) + b.n + extra
+	end 'm'
+
+	function viaClosure(other SmallBox) returns Count
+		let f = function() gives Self.m(other, extra: 1)
+		return f()
+	end 'viaClosure'
+
+	function viaClosureOneArgument(other SmallBox) returns Count
+		let f = function() gives Self.m(other)
+		return f()
+	end 'viaClosureOneArgument'
+end 'Box'
+
+typealias Small = int(0 to 65535)
+typealias SmallBox = Box with Small
+typealias FlagBox = Box with bool
+
+function main() returns ExitCode
+	let a = SmallBox.create()
+	let b = FlagBox.create()
+	print("{a.viaClosure(a)} {b.viaClosure(a)} {a.viaClosureOneArgument(a)} {b.viaClosureOneArgument(a)} {a.m()} {SmallBox.m(a)} {FlagBox.m(a, extra: 2)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+12 5 11 4 3 11 6
+```
+
+<!-- test: the-parameter-default-of-a-later-overload-of-a-generic-method-reads-sizeof -->
+The second overload of `width` declares its own defaulted parameter. Its default is a helper function named after the overload, and that helper reads the enclosing instance's layout descriptor like the method it belongs to.
+```maxon
+typealias Level = int(0 to 125)
+
+type Gauge uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function width(n Level, extra Level = sizeof(T) as Level) returns Level
+		return n + extra
+	end 'width'
+
+	function width(n String, extra Level = sizeof(T) as Level) returns Level
+		return (n.count() as Level) + extra
+	end 'width'
+
+	function probe() returns Level
+		return self.width("ab")
+	end 'probe'
+end 'Gauge'
+
+typealias IntGauge = Gauge with Level
+
+function main() returns ExitCode
+	let g = IntGauge.create(3)
+	print("{g.probe()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10
+```
+
+<!-- test: the-parameter-default-of-a-later-overload-of-a-generic-method-builds-a-container -->
+```maxon
+typealias Level = int(0 to 125)
+
+type Gauge uses T
+	typealias Held = Array with T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function width(n Level, held Held = Held.create()) returns Level
+		return n + (held.count() as Level)
+	end 'width'
+
+	function width(n String, held Held = Held.create()) returns Level
+		return (n.count() as Level) + (held.count() as Level)
+	end 'width'
+
+	function probe() returns Level
+		return self.width("abcd")
+	end 'probe'
+end 'Gauge'
+
+typealias IntGauge = Gauge with Level
+
+function main() returns ExitCode
+	let g = IntGauge.create(3)
+	print("{g.probe()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4
+```
+
+<!-- test: a-function-typed-parameter-default-names-its-own-types-alias-beside-another-types -->
+Two generic types each declare a `Transform` of their own. A default value and a closure written at a call each take the alias of the type that declares the method.
+```maxon
+typealias Level = int(0 to 125)
+
+type Other uses U
+	typealias Transform = function(Count) returns Count
+	var item as U
+
+	static function create(item U) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function twice(f Transform, n Count) returns Count
+		return f(f(n))
+	end 'twice'
+end 'Other'
+
+function bump(x Level) returns Level
+	return x + 1
+end 'bump'
+
+type Box uses T
+	typealias Transform = function(Level) returns Level
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function run(n Level, f Transform = bump) returns Level
+		return f(n)
+	end 'run'
+end 'Box'
+
+typealias LevelBox = Box with Level
+typealias LevelOther = Other with Level
+
+function main() returns ExitCode
+	let b = LevelBox.create(3)
+	let o = LevelOther.create(3)
+	print("{b.run(5)} {b.run(5, f: function(x) gives x + 2)} {o.twice(function(x) gives x * 3, n: 2)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6 7 18
+```
+
+<!-- test: the-default-of-a-later-overload-is-filled-at-a-call-from-main -->
+```maxon
+typealias Level = int(0 to 125)
+
+type Gauge uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function width(n Level, extra Level = sizeof(T) as Level) returns Level
+		return n + extra
+	end 'width'
+
+	function width(n String, extra Level = sizeof(T) as Level) returns Level
+		return (n.count() as Level) + extra
+	end 'width'
+end 'Gauge'
+
+typealias IntGauge = Gauge with Level
+typealias FlagGauge = Gauge with bool
+
+function main() returns ExitCode
+	let g = IntGauge.create(3)
+	let h = FlagGauge.create(true)
+	print("{g.width("abcd")} {h.width("abcd")} {g.width(2)} {h.width(2)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+12 5 10 3
+```
+
+<!-- test: the-default-of-a-later-overload-is-filled-at-a-call-from-a-closure -->
+```maxon
+typealias Level = int(0 to 125)
+
+type Gauge uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function width(n Level, extra Level = sizeof(T) as Level) returns Level
+		return n + extra
+	end 'width'
+
+	function width(n String, extra Level = sizeof(T) as Level) returns Level
+		return (n.count() as Level) + extra
+	end 'width'
+
+	function viaClosure() returns Level
+		let f = function() gives self.width("abcd")
+		return f()
+	end 'viaClosure'
+end 'Gauge'
+
+typealias IntGauge = Gauge with Level
+typealias FlagGauge = Gauge with bool
+
+function main() returns ExitCode
+	let g = IntGauge.create(3)
+	let h = FlagGauge.create(true)
+	let k = IntGauge.create(4)
+	let f = function() gives k.width("ab")
+	print("{g.viaClosure()} {h.viaClosure()} {f()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+12 5 10
+```
+
+<!-- test: the-default-of-a-later-overload-declared-in-an-extension-reads-sizeof -->
+```maxon
+typealias Level = int(0 to 125)
+
+type Gauge uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Gauge'
+
+extension Gauge
+	function width(n Level, extra Level = sizeof(T) as Level) returns Level
+		return n + extra
+	end 'width'
+
+	function width(n String, extra Level = sizeof(T) as Level) returns Level
+		return (n.count() as Level) + extra
+	end 'width'
+
+	function probe() returns Level
+		return self.width("abcd")
+	end 'probe'
+end 'Gauge'
+
+typealias IntGauge = Gauge with Level
+typealias FlagGauge = Gauge with bool
+
+function main() returns ExitCode
+	let g = IntGauge.create(3)
+	let h = FlagGauge.create(true)
+	print("{g.probe()} {h.probe()} {g.width("ab")}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+12 5 10
+```
+
+<!-- test: the-default-of-a-later-static-overload-beside-an-instance-member-reads-sizeof -->
+```maxon
+typealias Level = int(0 to 125)
+
+type Gauge uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function width() returns Level
+		return 7
+	end 'width'
+
+	static function width(n Level, extra Level = sizeof(T) as Level) returns Level
+		return n + extra
+	end 'width'
+
+	static function width(n String, extra Level = sizeof(T) as Level) returns Level
+		return (n.count() as Level) + extra
+	end 'width'
+end 'Gauge'
+
+typealias IntGauge = Gauge with Level
+typealias FlagGauge = Gauge with bool
+
+function main() returns ExitCode
+	let g = IntGauge.create(3)
+	print("{g.width()} {IntGauge.width("abcd")} {FlagGauge.width("abcd")} {IntGauge.width(2)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 12 5 10
+```
+
+<!-- test: a-closure-in-the-default-of-a-generic-function-instance-named-over-a-range-finds-its-host -->
+The instance's name holds the `$` of its range-qualified type argument, and so does the name of the closure lifted out of its default helper.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Pred = function(Count) returns bool
+
+function accept(x T, f Pred = function(v Count) gives v > 1) uses T returns bool
+	return f(sizeof(T) + (0 if x == x else 1))
+end 'accept'
+
+function main() returns ExitCode
+	let a = 5 as Integer
+	let b = true
+	print("{accept(a)} {accept(b)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true false
+```
+
+<!-- test: a-service-message-default-takes-its-subject-from-the-service-not-the-first-argument -->
+The message's first written argument is itself a generic instance, over a type that is not the service's. The default reads the service's own `T`.
+```maxon
+typealias Level = int(0 to 125)
+
+type Cell uses U
+	export var item as U
+
+	static function create(item U) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Cell'
+
+typealias IntCell = Cell with Level
+
+type Sink uses T
+	var tag as T
+
+	static function create(tag T) returns Self
+		return Self{tag: tag}
+	end 'create'
+
+	export function put(c IntCell, extra Count = sizeof(T)) returns Count
+		return extra + (c.item as Count) * 0
+	end 'put'
+end 'Sink'
+
+function main() returns ExitCode
+	let h = spawn Sink.create(true)
+	let n = try await h.put(IntCell.create(5)) otherwise 0
+	print("{n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: a-service-message-without-arguments-fills-a-default-that-reads-sizeof -->
+```maxon
+type Sink uses T
+	var tag as T
+
+	static function create(tag T) returns Self
+		return Self{tag: tag}
+	end 'create'
+
+	export function width(extra Count = sizeof(T)) returns Count
+		return extra
+	end 'width'
+end 'Sink'
+
+typealias Small = int(0 to 255)
+
+function main() returns ExitCode
+	let h = spawn Sink.create(5 as Small)
+	let g = spawn Sink.create(true)
+	let a = try await h.width() otherwise 0
+	let b = try await g.width() otherwise 0
+	print("{a} {b}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8 1
+```
+
+<!-- test: a-factory-with-an-inferred-instance-fills-a-default-that-reads-sizeof -->
+```maxon
+typealias Small = int(0 to 255)
+
+type Box uses T
+	var item as T
+	export var n as Count
+
+	static function make(x T, n Count = sizeof(T)) returns Self
+		return Self{item: x, n: n}
+	end 'make'
+end 'Box'
+
+function main() returns ExitCode
+	print("{Box.make(5 as Small).n} {Box.make(true).n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8 1
+```
+
+<!-- test: a-factory-with-an-inferred-instance-fills-a-default-inside-another-generic-type -->
+```maxon
+typealias Small = int(0 to 255)
+
+type Box uses T
+	var item as T
+	export var n as Count
+
+	static function make(x T, n Count = sizeof(T)) returns Self
+		return Self{item: x, n: n}
+	end 'make'
+end 'Box'
+
+type Outer uses U
+	var tag as U
+
+	static function create(tag U) returns Self
+		return Self{tag: tag}
+	end 'create'
+
+	function build() returns Count
+		return Box.make(5 as Small).n
+	end 'build'
+end 'Outer'
+
+typealias FlagOuter = Outer with bool
+
+function main() returns ExitCode
+	let o = FlagOuter.create(true)
+	print("{o.build()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8
+```
+
+<!-- test: an-interface-extension-method-takes-the-alias-of-the-conformer-it-was-folded-for -->
+`map` is declared once in `extension Iterable` and folded once per conformer; each fold files its `ElementTransform` under the conformer, so an untyped closure takes the element type of the array it is written against.
+```maxon
+typealias Words = Array with String
+typealias Nums = Array with Count
+
+function main() returns ExitCode
+	var words = Words.create()
+	words.push("ab")
+	var nums = Nums.create()
+	nums.push(4)
+	let shouted = words.map(function(w) gives "{w}!")
+	let doubled = nums.map(function(n) gives n * 2)
+	print("{try shouted.get(0) otherwise ""} {try doubled.get(0) otherwise 0}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+ab! 8
+```
+
+<!-- test: a-closure-building-the-type-runs-a-field-default-that-reads-sizeof -->
+```maxon
+type Box uses T
+	export var n = sizeof(T) as Count
+
+	static function create() returns Self
+		let build = function() gives Self{}
+		return build()
+	end 'create'
+end 'Box'
+
+typealias Small = int(0 to 65535)
+typealias SmallBox = Box with Small
+typealias FlagBox = Box with bool
+
+function main() returns ExitCode
+	let a = SmallBox.create()
+	let b = FlagBox.create()
+	print("{a.n} {b.n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8 1
+```
+
+<!-- test: a-closure-in-a-plain-type-builds-the-type-with-a-field-default -->
+```maxon
+type Plain
+	export var n = 7 as Count
+
+	static function create() returns Self
+		let build = function() gives Self{}
+		return build()
+	end 'create'
+end 'Plain'
+
+function main() returns ExitCode
+	let p = Plain.create()
+	print("{p.n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
 ```

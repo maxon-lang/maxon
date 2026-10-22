@@ -233,9 +233,10 @@ export type GenericFunctionTemplate
 	export let constraints as WhereConstraintArray
 	export let takesReceiver as bool
 	export let visibility as Visibility
+	export let enclosingTypeName as ByteArray
 
-	export static function create(key ByteArray, declFilePath FilePath, line LineNumber, column ColumnNumber, typeParamNames NameRoster, paramNames NameRoster, paramSlots GenericParamSlotArray, paramTypeParams TypeParamIndexArray, constraints WhereConstraintArray, takesReceiver bool, visibility Visibility) returns Self
-		return Self{key: key, declFilePath: declFilePath, line: line, column: column, typeParamNames: typeParamNames, paramNames: paramNames, paramSlots: paramSlots, paramTypeParams: paramTypeParams, constraints: constraints, takesReceiver: takesReceiver, visibility: visibility}
+	export static function create(key ByteArray, declFilePath FilePath, line LineNumber, column ColumnNumber, typeParamNames NameRoster, paramNames NameRoster, paramSlots GenericParamSlotArray, paramTypeParams TypeParamIndexArray, constraints WhereConstraintArray, takesReceiver bool, visibility Visibility, enclosingTypeName ByteArray) returns Self
+		return Self{key: key, declFilePath: declFilePath, line: line, column: column, typeParamNames: typeParamNames, paramNames: paramNames, paramSlots: paramSlots, paramTypeParams: paramTypeParams, constraints: constraints, takesReceiver: takesReceiver, visibility: visibility, enclosingTypeName: enclosingTypeName}
 	end 'create'
 
 	export function siteKey() returns ByteArray
@@ -274,6 +275,7 @@ export type GenericFunctionTemplate
 		cacheWriteWhereConstraintArray(writer, value: self.constraints)
 		writer.flag(self.takesReceiver)
 		writer.unsigned(self.visibility.ordinal as CacheUnsigned)
+		writer.bytes(self.enclosingTypeName)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns GenericFunctionTemplate throws LibraryCacheDamage
@@ -288,12 +290,13 @@ export type GenericFunctionTemplate
 		let f_constraints = try cacheReadWhereConstraintArray(reader)
 		let f_takesReceiver = try reader.flag()
 		let f_visibility = try cacheReadVisibility(reader)
+		let f_enclosingTypeName = try reader.bytes()
 
-		return Self{key: f_key, declFilePath: f_declFilePath, line: f_line, column: f_column, typeParamNames: f_typeParamNames, paramNames: f_paramNames, paramSlots: f_paramSlots, paramTypeParams: f_paramTypeParams, constraints: f_constraints, takesReceiver: f_takesReceiver, visibility: f_visibility}
+		return Self{key: f_key, declFilePath: f_declFilePath, line: f_line, column: f_column, typeParamNames: f_typeParamNames, paramNames: f_paramNames, paramSlots: f_paramSlots, paramTypeParams: f_paramTypeParams, constraints: f_constraints, takesReceiver: f_takesReceiver, visibility: f_visibility, enclosingTypeName: f_enclosingTypeName}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize88
-		return sizeof(GenericFunctionTemplate) as CacheSize88
+	static function cacheLayoutBytes() returns CacheSize96
+		return sizeof(GenericFunctionTemplate) as CacheSize96
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

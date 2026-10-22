@@ -52,7 +52,8 @@ not 80.
 
 - `sleep(milliseconds)` parks the current green thread; it takes a `Milliseconds` value.
 - `async` applies to a direct call of a function or a static method. It cannot start a closure, an
-  indirect call or an instance method (**E2015**). A generic function is started at the instance its
+  indirect call, an instance method, or a static that reads its generic type's layout (**E2015**): a
+  coroutine is handed its written arguments only. A generic function is started at the instance its
   arguments infer, as a call would be. A [qualified](/docs/language/namespaces/#qualified-names) callee reads as the direct call
   reads it, at any length: `async sub.Calc.seven()` and `async outer.inner.six()` start what those calls
   name.
