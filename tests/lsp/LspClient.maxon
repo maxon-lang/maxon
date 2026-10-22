@@ -436,6 +436,7 @@ end 'ProjectLoadingNotice'
 
 typealias StashedNotificationArray = Array with JsonDoc
 typealias StashedNotificationTest = function(JsonDoc) returns bool
+public typealias AwaitedPublishTest = function(PublishedDiagnostics) returns bool
 
 typealias VersionPublishTally = int(0 to 64)
 
@@ -774,18 +775,21 @@ public type LspClient
 		throw LspClientError.transportFailed("no textDocument/publishDiagnostics for {uri} arrived within {UnaddressedMessageBudget} messages")
 	end 'awaitPublishedDiagnostics'
 
-	public function awaitPublishWhilePolling(uri String, polled String) returns StashedPublish throws LspClientError
+	public function awaitPublishWhilePolling(uri String, polled String, wanted AwaitedPublishTest) returns StashedPublish throws LspClientError
 		let started = Clock.nowMs()
 
 		while Clock.elapsedMs(started) < ProjectCheckPublishFailureBoundMs 'untilPublished'
 			_ = try self.documentSymbols(polled)
 
-			let stashed = try self.takeStashedPublish(uri)
+			for doc in try self.takeStashedWhere(function(candidate JsonDoc) gives publishesFor(candidate, uri: uri), take: StashTake.every) 'eachPublish'
+				let published = try readPublishedDiagnostics(doc, uri: uri)
 
-			match stashed 'arrived'
-				found then return stashed
-				none then sleep(ProjectCheckPollPauseMs)
-			end 'arrived'
+				if wanted(published) 'accepted'
+					return StashedPublish.found(published)
+				end 'accepted'
+			end 'eachPublish'
+
+			sleep(ProjectCheckPollPauseMs)
 		end 'untilPublished'
 
 		return StashedPublish.none

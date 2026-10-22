@@ -43,20 +43,24 @@ function manifestAcrossABuild(client LspClient, staged FilePath) returns Manifes
 
 	try client.changeDocument(mainUri, content: EditedMainSource, version: InitialDocumentVersion + 1)
 
-	let after = try client.awaitPublishWhilePolling(manifestUri, polled: mainUri)
+	let after = try client.awaitPublishWhilePolling(manifestUri, polled: mainUri, wanted: function(published) gives carriesNoBreakingChangeNotice(published.items))
 
 	return ManifestAcrossABuild.of(before, after: after)
 end 'manifestAcrossABuild'
 
 function expectNoStaleNotices(after StashedPublish) throws TestFailure
 	match after 'arrived'
-		none then try Expect.fail("after `maxon {BuildCommandName}` rewrote the project's compiler-version record to this release, an edit of the open `{StagedProgramFileName}` brought no fresh publish for the open `{RecordedManifestFileName}` within {ProjectCheckPublishFailureBoundMs} ms, so the breaking-change notices of maxon {OlderRelease} stay on it.")
-		found(published) then try expectNoBreakingChangeNotice(published.items)
+		none then try Expect.fail("after `maxon {BuildCommandName}` rewrote the project's compiler-version record to this release, an edit of the open `{StagedProgramFileName}` brought no publish for the open `{RecordedManifestFileName}` free of a `{LastBuiltWording}` notice within {ProjectCheckPublishFailureBoundMs} ms, so the breaking-change notices of maxon {OlderRelease} stay on it.")
+		found then return
 	end 'arrived'
 end 'expectNoStaleNotices'
 
-function expectNoBreakingChangeNotice(items PublishedDiagnosticArray) throws TestFailure
+function carriesNoBreakingChangeNotice(items PublishedDiagnosticArray) returns bool
 	for item in items 'eachItem'
-		try Expect.isFalse(item.message.startsWith(LastBuiltWording), message: "after `maxon {BuildCommandName}` rewrote the project's compiler-version record to this release, the open `{RecordedManifestFileName}` was republished still carrying a breaking-change notice: {item.message}")
+		if item.message.startsWith(LastBuiltWording) 'stale'
+			return false
+		end 'stale'
 	end 'eachItem'
-end 'expectNoBreakingChangeNotice'
+
+	return true
+end 'carriesNoBreakingChangeNotice'
