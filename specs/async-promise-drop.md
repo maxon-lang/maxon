@@ -3802,10 +3802,9 @@ end 'main'
 error E3141: <fragment>:29:22: a promise cannot be borrowed through 'watch': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. A coroutine can still be running after the frame that started it has ended, and by then that frame has reclaimed the thread, so a coroutine that only reads this promise would read a reclaimed thread. Pass the promise to a parameter the callee takes (`await`, `.cancel()`, a store or a `return` of it), or pass the result instead
 ```
 
-<!-- test: async-promise-drop.error.a-promise-handed-to-overloads-that-disagree-about-taking-it-by-an-async-call -->
-Which overload an `async` call binds is settled after the arguments are handed over, so the promise cannot be
-moved into a coroutine that may or may not own it. A promise is handed to an `async` call only when every
-overload the call may bind takes it.
+<!-- test: async-promise-drop.a-promise-handed-to-overloads-that-disagree-about-taking-it-is-moved-into-the-one-the-arguments-pick -->
+The arguments of an `async` call pick the overload it binds, and the promise is handed to that declaration alone: the
+`Integer` overload takes it, the `bool` one only reads it, and `n: 1` picks the first.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -3834,8 +3833,43 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
+```stdout
+3
+```
+
+<!-- test: async-promise-drop.error.an-async-call-whose-arguments-tie-two-overloads-is-ambiguous -->
+The two `relay` overloads fit the arguments equally, so the `async` call is ambiguous like any other call; which of them takes the promise is not asked until the arguments pick one.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Wide = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function relay(p IntPromise, n Integer) returns Integer
+	return (await p) + n
+end 'relay'
+
+function relay(p IntPromise, n Wide) returns Integer
+	if p.isComplete() 'done'
+		Scheduler.yield()
+	end 'done'
+
+	return 7
+end 'relay'
+
+function main() returns ExitCode
+	let p = async work(1)
+	let r = async relay(p, n: 1)
+	print("{await r}\n")
+	return 0
+end 'main'
+```
 ```maxoncstderr
-error E3141: <fragment>:24:22: a promise cannot be borrowed through 'relay': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. A coroutine can still be running after the frame that started it has ended, and by then that frame has reclaimed the thread, so a coroutine that only reads this promise would read a reclaimed thread. Pass the promise to a parameter the callee takes (`await`, `.cancel()`, a store or a `return` of it), or pass the result instead
+error E3007: <fragment>:25:16: Ambiguous overload for 'relay': multiple overloads match. Candidates: (p IntPromise, n Integer), (p IntPromise, n Wide)
 ```
 
 <!-- test: async-promise-drop.error.one-promise-handed-to-overloads-that-disagree-about-taking-it-twice -->

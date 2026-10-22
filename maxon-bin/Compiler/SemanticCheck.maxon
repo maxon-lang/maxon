@@ -147,20 +147,20 @@ end 'semanticCheck'
 
 // ⭐⭐ **PICK THE OVERLOAD EACH CALL MEANT, AND REWRITE THE CALL TO NAME IT**.
 //
-// **WHY IT IS HERE AND NOT IN THE PARSER.** The parser writes only into a per-file artifact and learns
-// about other files exclusively through the pre-parse DECLARATION SWEEP, which reads tokens and
-// deliberately records NO parameter types — so at parse time there is no candidate list to score against.
-// This pass is the first point that holds both halves: RESOLVED parameter types for every candidate
-// (`resolveTypes` ran) and a real type for every argument (the parser's per-value columns), so the type of
-// an argument like `over(a.count())` is the tag the parser minted for that value rather than a guess made
-// from tokens. The `method-call-argument-*` family covers exactly those shapes.
+// The parse picks the member wherever no argument is a type parameter or still untyped
+// (`Parser.pickDeclaration`), and records
+// the answer by op (`Project.overloadAnswers`); this pass applies a recorded answer and scores only a call
+// the parse left unasked. Both decide through `selectOverload`, over one row per swept declaration
+// (`overloadRowOfDecl`).
 //
 // The SELECTION ORDER:
-//   1. **candidates** — the set's members that survived to the registry at all (see `overloadCandidates`).
-//   2. **labels + arity, together, through `slotCallArgs`** — the ONE label→position mapping in the compiler.
+//   1. **candidates** — the set's members that survived to the registry at all (see `overloadCandidates`),
+//      narrowed to the ones the calling file may name when that leaves some but not all of them; when the
+//      narrowed ones fit nothing, every candidate is scored (`selectOverload`).
+//   2. **labels + arity, together, through `placeCallArgs`** — the ONE label→position mapping in the compiler.
 //      A candidate the call cannot be slotted against is out: every named argument must name a parameter
-//      and the arity must match, asked as ONE question by the function that already owns the rule. Asking
-//      them separately would be a second copy of it.
+//      and every parameter no argument fills must declare a default, asked as ONE question by the function
+//      that already owns the rule. Asking them separately would be a second copy of it.
 //   3. **argument-type SCORE** — `ExactArgScore` for a tag-for-tag match, `WideningArgScore` for a legal
 //      coercion, and INCOMPATIBLE (dropped) for anything `checkDeclaredType` refuses. Summed over the
 //      arguments; the unique highest total wins.
@@ -191,14 +191,15 @@ function resolveOverloadedCalls(project Project, module MaxonModule, signatures 
 	// One column for the whole pass, re-keyed to each function and filled only by a call that asks it —
 	// see `FunctionValueOrigins`.
 	var valueDefiners = FunctionValueOrigins.create()
+	var state = OverloadPassState.create()
 
 	for fnIndex in 0 upto module.functions.count() 'eachFunc'
 		valueDefiners.beginFunction()
-		resolveOverloadedCallsInFunc(project, module: module, signatures: signatures, funcNames: funcNames, func: try module.functions.get(fnIndex) otherwise panic("resolveOverloadedCalls: fnIndex {fnIndex} is below module.functions.count()"), valueDefiners: valueDefiners)
+		resolveOverloadedCallsInFunc(project, module: module, signatures: signatures, funcNames: funcNames, func: try module.functions.get(fnIndex) otherwise panic("resolveOverloadedCalls: fnIndex {fnIndex} is below module.functions.count()"), valueDefiners: valueDefiners, state: state)
 	end 'eachFunc'
 end 'resolveOverloadedCalls'
 
-function resolveOverloadedCallsInFunc(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, valueDefiners FunctionValueOrigins)
+function resolveOverloadedCallsInFunc(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, valueDefiners FunctionValueOrigins, state OverloadPassState)
 	var resolution = CallResolution.create(func)
 
 	for opIdx in module.liveOpIndices(func) 'eachOp'
@@ -207,7 +208,7 @@ function resolveOverloadedCallsInFunc(project Project, module MaxonModule, signa
 		match maxonOpCalleeKind(op) 'callee'
 			noCallee then break
 			functionValue then refuseOverloadedFunctionValue(project, func: func, opIndex: opIdx, name: maxonOpCalleeName(op))
-			direct then resolveOneOverloadedCall(project, module: module, signatures: signatures, funcNames: funcNames, func: func, opIndex: opIdx, valueDefiners: valueDefiners, resolution: resolution)
+			direct then resolveOneOverloadedCall(project, module: module, signatures: signatures, funcNames: funcNames, func: func, opIndex: opIdx, valueDefiners: valueDefiners, resolution: resolution, state: state)
 		end 'callee'
 	end 'eachOp'
 
@@ -343,16 +344,13 @@ end 'FunctionValueOrigins'
 
 // One call. A callee that names no overload set is left exactly as the parser wrote it, which is
 // nearly every call in the program.
-function resolveOneOverloadedCall(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, opIndex ElementIndex, valueDefiners FunctionValueOrigins, resolution CallResolution)
+function resolveOneOverloadedCall(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, opIndex ElementIndex, valueDefiners FunctionValueOrigins, resolution CallResolution, state OverloadPassState)
 	let readerFilePath = authoredFileOf(project, func: func, opIndex: opIndex)
 	var op = try module.ops.get(opIndex) otherwise panic("resolveOneOverloadedCall: ops.get({opIndex}) OOB — the index came from liveOpIndices")
 	view callee = maxonOpCalleeName(op)
 	view members = try project.overloadSets.get(callee) otherwise return
 	let candidates = overloadCandidates(project, members: members)
-
-	let nameable = membersTheCallerMayName(project, signatures: signatures, funcNames: funcNames, func: func, callerFilePath: readerFilePath, op: op, candidates: candidates)
-	let narrowed = nameable.count() > 0 and nameable.count() < candidates.count()
-
+	let call = overloadCallFactsOf(func, readerFilePath: readerFilePath, op: op)
 	let opaque = opaqueArgumentOf(func, op: op) if candidates.count() > 1 else OpaqueArgument.none
 
 	if opaque == OpaqueArgument.typeParameter 'cannotDiscriminate'
@@ -364,18 +362,25 @@ function resolveOneOverloadedCall(project Project, module MaxonModule, signature
 	// already reported, and nothing judges the call (`Project.undecidedOverloadCalls`).
 	if opaque == OpaqueArgument.deferred 'aDeferredArgumentPicksNothing'
 		project.undecidedOverloadCalls.insert(opIndex)
-		leaveUnmatchedCallOnFirstCandidate(project, module: module, opIndex: opIndex, callee: callee, candidates: nameable if narrowed else candidates)
+		leaveUnmatchedCallOnFirstCandidate(project, module: module, opIndex: opIndex, callee: callee, candidates: nameableMemberNamesOf(project, signatures: signatures, funcNames: funcNames, state: state, callee: callee, candidates: candidates, call: call))
 		return
 	end 'aDeferredArgumentPicksNothing'
 
-	let firstPick = selectOverload(project, func: func, readerFilePath: readerFilePath, op: op, candidates: nameable if narrowed else candidates, retype: argumentsAsWritten)
-	let widens = narrowed and pickFindsNoMember(firstPick)
-	let pick = selectOverload(project, func: func, readerFilePath: readerFilePath, op: op, candidates: candidates, retype: argumentsAsWritten) if widens else firstPick
-	let pool = nameable if narrowed and not widens else candidates
-	retireDisambiguatingLiteralCasts(project, func: func, readerFilePath: readerFilePath, op: op, candidates: pool, pick: pick)
+	let parsed = try project.overloadAnswers.get(opIndex) otherwise 'neverAsked'
+		let rows = state.rowsOf(project, signatures: signatures, funcNames: funcNames, callee: callee, candidates: candidates)
+		let selection = selectOverload(signatures, interner: project.typeNames, call: call, rows: rows, views: overloadArgsOf(project, func: func, op: op, uncast: sharedNoUncastLiterals))
+		applyVerdict(project, module: module, signatures: signatures, funcNames: funcNames, func: func, opIndex: opIndex, callerFilePath: readerFilePath, callee: callee, selection: selection, call: call, valueDefiners: valueDefiners, resolution: resolution, state: state, candidates: candidates)
+		return
+	end 'neverAsked'
 
-	match pick 'pick'
-		chosen(member) then bindOverloadChoice(project, module: module, signatures: signatures, funcNames: funcNames, func: func, opIndex: opIndex, callerFilePath: readerFilePath, callee: callee, member: member, valueDefiners: valueDefiners, resolution: resolution)
+	applyParsedAnswer(project, module: module, signatures: signatures, funcNames: funcNames, func: func, opIndex: opIndex, callerFilePath: readerFilePath, callee: callee, answer: parsed, call: call, valueDefiners: valueDefiners, resolution: resolution, state: state, candidates: candidates)
+end 'resolveOneOverloadedCall'
+
+function applyVerdict(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, opIndex ElementIndex, callerFilePath FilePath, callee ByteArray, selection OverloadSelection, call OverloadCallFacts, valueDefiners FunctionValueOrigins, resolution CallResolution, state OverloadPassState, candidates NameRoster)
+	let pool = memberNamesOf(selection.pool)
+
+	match selection.verdict 'pick'
+		chosen(row) then bindChosenMember(project, module: module, signatures: signatures, funcNames: funcNames, func: func, opIndex: opIndex, callerFilePath: callerFilePath, callee: callee, member: overloadRowAt(selection.pool, row: row).registeredName, call: call, valueDefiners: valueDefiners, resolution: resolution, state: state, candidates: candidates, disagreement: sharedCallResultSubject)
 
 		// ⛔⛔ **AN AMBIGUOUS CALL IS *ALSO* LEFT ON A DECLARED MEMBER, AND LEAVING IT ON THE BARE NAME
 		// EARNS THE AUTHOR A SECOND, WRONG DIAGNOSTIC.** A CONTESTED set has no member under the bare
@@ -383,13 +388,67 @@ function resolveOneOverloadedCall(project Project, module MaxonModule, signature
 		// reported **`E3004: call to undefined function 'f'`** — about a name declared twice over — under the
 		// E3007 that has just explained the real fault. It is the same premise `noMatch` needed made true, so
 		// it takes the same repair.
-		ambiguous(tied) then reportAmbiguousOverload(project, func: func, opIndex: opIndex, callee: callee, tied: tied, module: module, candidates: pool)
+		tied(rowIndices) then reportAmbiguousOverload(project, func: func, opIndex: opIndex, callee: callee, tied: overloadRowsAt(selection.pool, rowIndices: rowIndices), module: module, candidates: pool)
 
 		// Nothing the call could mean. Left on a DECLARED member deliberately — see this pass's header,
 		// step 5, and `leaveUnmatchedCallOnFirstCandidate` for the one set where "left alone" is not that.
-		noMatch then leaveUnmatchedCallOnFirstCandidate(project, module: module, opIndex: opIndex, callee: callee, candidates: pool)
+		noMatch then refuseUnmatchedCall(project, module: module, func: func, opIndex: opIndex, callee: callee, candidates: pool)
 	end 'pick'
-end 'resolveOneOverloadedCall'
+end 'applyVerdict'
+
+function applyParsedAnswer(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, opIndex ElementIndex, callerFilePath FilePath, callee ByteArray, answer OverloadAnswer, call OverloadCallFacts, valueDefiners FunctionValueOrigins, resolution CallResolution, state OverloadPassState, candidates NameRoster)
+	match answer 'parsed'
+		bound(site) then bindParsedSite(project, module: module, signatures: signatures, funcNames: funcNames, func: func, opIndex: opIndex, callerFilePath: callerFilePath, callee: callee, site: site, call: call, valueDefiners: valueDefiners, resolution: resolution, state: state, candidates: candidates)
+		tied(sites) then reportAmbiguousOverload(project, func: func, opIndex: opIndex, callee: callee, tied: tiedRowsAtSites(project, signatures: signatures, funcNames: funcNames, state: state, callee: callee, candidates: candidates, sites: sites), module: module, candidates: nameableMemberNamesOf(project, signatures: signatures, funcNames: funcNames, state: state, callee: callee, candidates: candidates, call: call))
+		noMember then refuseUnmatchedCall(project, module: module, func: func, opIndex: opIndex, callee: callee, candidates: candidates)
+	end 'parsed'
+end 'applyParsedAnswer'
+
+function bindParsedSite(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, opIndex ElementIndex, callerFilePath FilePath, callee ByteArray, site ByteArray, call OverloadCallFacts, valueDefiners FunctionValueOrigins, resolution CallResolution, state OverloadPassState, candidates NameRoster)
+	let member = try memberAtSite(funcNames, candidates: candidates, site: site) otherwise panic("bindParsedSite: the parse bound '{String.from(callee)}' at {String.from(site)} and no live member of the set is declared there — the parse scores only declarations the pass holds")
+
+	bindChosenMember(project, module: module, signatures: signatures, funcNames: funcNames, func: func, opIndex: opIndex, callerFilePath: callerFilePath, callee: callee, member: member, call: call, valueDefiners: valueDefiners, resolution: resolution, state: state, candidates: candidates, disagreement: sharedBoundCallResultSubject)
+end 'bindParsedSite'
+
+function refuseUnmatchedCall(project Project, module MaxonModule, func IrFunction, opIndex ElementIndex, callee ByteArray, candidates NameRoster)
+	retireEveryLiteralCast(func, op: try module.ops.get(opIndex) otherwise panic("refuseUnmatchedCall: ops.get({opIndex}) OOB — the index came from liveOpIndices"))
+	leaveUnmatchedCallOnFirstCandidate(project, module: module, opIndex: opIndex, callee: callee, candidates: candidates)
+end 'refuseUnmatchedCall'
+
+function bindChosenMember(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, opIndex ElementIndex, callerFilePath FilePath, callee ByteArray, member ByteArray, call OverloadCallFacts, valueDefiners FunctionValueOrigins, resolution CallResolution, state OverloadPassState, candidates NameRoster, disagreement OverloadDisagreementSubject)
+	var op = try module.ops.get(opIndex) otherwise panic("bindChosenMember: ops.get({opIndex}) OOB — the index came from liveOpIndices")
+
+	retireDisambiguatingLiteralCasts(project, func: func, op: op, signatures: signatures, funcNames: funcNames, state: state, callee: callee, candidates: candidates, call: call, member: member)
+	bindOverloadChoice(project, module: module, signatures: signatures, funcNames: funcNames, func: func, opIndex: opIndex, callerFilePath: callerFilePath, callee: callee, member: member, valueDefiners: valueDefiners, resolution: resolution, disagreement: disagreement)
+end 'bindChosenMember'
+
+function memberAtSite(funcNames FunctionNameIndex, candidates NameRoster, site ByteArray) returns ByteArray throws AbsentError
+	for member in candidates 'eachCandidate'
+		let held = try funcNames.funcNamed(member) otherwise continue
+
+		if held.declarationSite().equals(site) 'thisMember'
+			return member
+		end 'thisMember'
+	end 'eachCandidate'
+
+	throw AbsentError.absent
+end 'memberAtSite'
+
+function tiedRowsAtSites(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, state OverloadPassState, callee ByteArray, candidates NameRoster, sites NameRoster) returns OverloadCandidateArray
+	var tied = OverloadCandidateArray.create()
+
+	for row in state.rowsOf(project, signatures: signatures, funcNames: funcNames, callee: callee, candidates: candidates) 'eachRowInMergeOrder'
+		if sites.contains(row.site) 'aTiedRow'
+			tied.push(row)
+		end 'aTiedRow'
+	end 'eachRowInMergeOrder'
+
+	if tied.count() != sites.count() 'aTiedSiteHoldsNoRow'
+		panic("tiedRowsAtSites: the parse tied '{String.from(callee)}' at {sites.count()} sites and the pass holds {tied.count()} rows there — every declaration the parse scores is a live member of the set")
+	end 'aTiedSiteHoldsNoRow'
+
+	return tied
+end 'tiedRowsAtSites'
 
 // ⭐⭐ **STEP 5's PREMISE, MADE TRUE RATHER THAN ASSUMED.** A call that fits no member is meant
 // to reach `checkCalls` still naming a DECLARED function, so the diagnostic the author gets is the
@@ -435,7 +494,7 @@ end 'leaveUnmatchedCallOnFirstCandidate'
 //
 // A `typeParameter` value is a generic's `T` that `typeCallResultThroughInstance` could not make
 // concrete — a call that names no instance (a receiver, or a qualifier, whose argument fixes `T`)
-// leaves the declared opaque tag as it stands. It names no aggregate: `aggregateNameFor` answers
+// leaves the declared opaque tag as it stands. It names no aggregate: `aggregateNameIn` answers
 // empty for it and `namedAggregatesConflict` reads empty as "a scalar", so the candidate with a scalar
 // parameter would match while the one with the correct aggregate parameter was refused for
 // disagreeing with it.
@@ -526,310 +585,128 @@ export function overloadCandidates(project Project, members NameRoster) returns 
 	return candidates
 end 'overloadCandidates'
 
-function membersTheCallerMayName(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, callerFilePath FilePath, op MaxonOp, candidates NameRoster) returns NameRoster
-	var nameable = NameRoster.create()
-
-	for member in candidates 'eachCandidate'
-		if not boundMemberIsRefusedAsHidden(project, signatures: signatures, funcNames: funcNames, func: func, callerFilePath: callerFilePath, op: op, member: member) 'theCallerMayNameIt'
-			nameable.push(member)
-		end 'theCallerMayNameIt'
-	end 'eachCandidate'
-
-	return nameable
-end 'membersTheCallerMayName'
-
-function pickFindsNoMember(pick OverloadPick) returns bool
-	return match pick 'pick'
-		noMatch gives true
-		chosen or
-		ambiguous gives false
-	end 'pick'
-end 'pickFindsNoMember'
-
-// The outcome of scoring a call against an overload set's candidates. `ambiguous` carries the TIED candidates
-// (not all of them) because that is what the diagnostic lists — the ones the call genuinely cannot choose
-// between.
-union OverloadPick
-	chosen(let member ByteArray)
-	ambiguous(let tied NameRoster)
-	noMatch
-end 'OverloadPick'
-
-// A candidate scores `ExactArgScore` per argument whose tag matches its parameter's exactly and
-// `WideningArgScore` per argument that merely coerces legally (an int at a `float`, an int at an `ExitCode`).
-// The numbers only have to ORDER the candidates.
-//
-// ⭐⭐ **EXPORTED BECAUSE A SECOND DECIDER RANKS BY THEM, AND MUST RANK THE SAME WAY.**
-// `Parser.boundReturnOf` picks a member at PARSE time, for its return type alone, from what the
-// token sweep publishes — and the member it picks has to be the one this pass will pick a whole pass later,
-// or the program earns `reportOverloadReturnDisagreement` for a call it got right. The two cannot share a
-// scoring FUNCTION (one reads swept types, the other the merged registry), so they share the ORDER: the same
-// two numbers, the same "unique highest total wins", the same "nothing fits" floor.
-export let ExactArgScore = 2 as OverloadArgScore
-export let WideningArgScore = 1 as OverloadArgScore
-
-// Wide enough for `ExactArgScore` at every parameter of the widest signature the ABI admits.
-export typealias OverloadArgScore = int(0 to 128)
-
-typealias OverloadArgScoreArray = Array with OverloadArgScore
-
-// Score every candidate and answer which one the call meant. ONE scoring pass, holding the scores.
-//
-// ⚠ It scored every candidate TWICE — once to find the best total, once to ask who held it — on the stated
-// grounds that keeping an array of scores was the more expensive arrangement. It is the cheaper one: scoring
-// a candidate runs `slotCallArgs`, which ALLOCATES the slotted argument list, so the second sweep re-paid
-// that allocation for every candidate to avoid one array of small integers. Scoring is also the only part
-// of this pass that touches the signature registry and the type rules, so doubling it doubled the actual
-// work — and the two sweeps had to be kept answering identically by hand, one `overloadCandidateScore` call
-// spelled in two places, which is the shape this compiler keeps getting bitten by.
-//
-// `incompatible` folds to `NoCompatibleOverloadScore`, which needs no second flag and is not a sentinel: a
-// candidate that FITS always scores at least `WideningArgScore` (a zero-argument candidate is floored there
-// by `overloadArgTypeFit`), so zero is unreachable for a fitting candidate and `best` staying zero means
-// nothing fitted.
-function selectOverload(project Project, func IrFunction, readerFilePath FilePath, op MaxonOp, candidates NameRoster, retype ArgumentRetype) returns OverloadPick
-	var scores = OverloadArgScoreArray.create()
-	var best = NoCompatibleOverloadScore
-
-	for candidate in candidates 'eachCandidate'
-		let score = match overloadCandidateScore(project, func: func, readerFilePath: readerFilePath, op: op, candidate: candidate, retype: retype) 'fit'
-			fits(fitScore) gives fitScore
-			incompatible gives NoCompatibleOverloadScore
-		end 'fit'
-
-		scores.push(score)
-		best = overloadBetterScore(best, candidate: score)
-	end 'eachCandidate'
-
-	if best == NoCompatibleOverloadScore 'nothingFits'
-		return OverloadPick.noMatch
-	end 'nothingFits'
-
-	var tied = NameRoster.create()
-
-	for i in 0 upto candidates.count() 'eachWinner'
-		let score = try scores.get(i) otherwise panic("selectOverload: scores.get OOB at {i} — one score was pushed per candidate")
-
-		if score == best 'winner'
-			tied.push(try candidates.get(i) otherwise panic("selectOverload: candidates.get OOB at {i} inside its own count()"))
-		end 'winner'
-	end 'eachWinner'
-
-	if tied.count() == 1 'unique'
-		return OverloadPick.chosen(try tied.get(0) otherwise panic("selectOverload: tied.count() == 1 but get(0) failed"))
-	end 'unique'
-
-	return OverloadPick.ambiguous(tied)
-end 'selectOverload'
-
-// A score no candidate can reach, so "did anything fit?" needs no second flag. It is not a sentinel RETURN:
-// nothing outside `selectOverload` sees it, and the answer it produces is a union arm.
-export let NoCompatibleOverloadScore = 0 as OverloadArgScore
-
-function overloadBetterScore(best OverloadArgScore, candidate OverloadArgScore) returns OverloadArgScore
-	return candidate if candidate > best else best
-end 'overloadBetterScore'
-
-union OverloadFit
-	fits(score OverloadArgScore)
-	incompatible
-end 'OverloadFit'
-
-// One candidate's fit. The call's arguments are slotted to the candidate's parameters through the shared
-// `slotCallArgs` — which is simultaneously the label test and the arity test — and then each slotted argument
-// is measured against its parameter by the SAME coercion rule `checkOneArgType` reports against, so a
-// candidate this function accepts cannot then be rejected by the argument check downstream.
-//
-// ⚠ **AND THE PROMISE HAS TO HOLD IN THE OTHER DIRECTION TOO.** A candidate this function REFUSES
-// that `checkArgTypes` would have accepted is not a harmless extra strictness: with no candidate
-// fitting, `leaveUnmatchedCallOnFirstCandidate` points the call at the FIRST member and the program
-// is refused against a signature it was never written against. The `result` is threaded down for
-// exactly that reason — see `overloadArgTypeFit`'s own header.
-function overloadCandidateScore(project Project, func IrFunction, readerFilePath FilePath, op MaxonOp, candidate ByteArray, retype ArgumentRetype) returns OverloadFit
-	view sig = try project.funcSignatures.get(candidate) otherwise panic("overloadCandidateScore: candidate '{String.from(candidate)}' is not in funcSignatures — `overloadCandidates` filtered on exactly that")
-	let result = try maxonOpDefinedValue(op) otherwise panic("overloadCandidateScore: asked of an op that defines no value — `maxonOpCalleeKind` answers `direct` only for the three CALL ops, and every one of them defines its result")
-
-	match overloadCallArgs(op) 'args'
-		supplied(args, argLabels, _, _) then return overloadSlottedFit(project, func: func, readerFilePath: readerFilePath, sig: sig, result: result, args: args, argLabels: argLabels, retype: retype)
-	end 'args'
-end 'overloadCandidateScore'
-
-function overloadSlottedFit(project Project, func IrFunction, readerFilePath FilePath, sig FuncSignature, result ValueId, args ValueIdArray, argLabels NameRoster, retype ArgumentRetype) returns OverloadFit
-	match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels) 'slot'
-		ordered(argIds) then return overloadArgTypeFit(project, func: func, readerFilePath: readerFilePath, sig: sig, result: result, argIds: argIds, retype: retype)
-
-		// An arity mismatch, a label naming no parameter, or two arguments at one parameter: this candidate is
-		// not what the call was written against.
-		arityMismatch or
-		unknownLabel or
-		duplicateArg then return OverloadFit.incompatible
-	end 'slot'
-end 'overloadSlottedFit'
-
-// ⛔⛔ **IT JUDGES EACH PARAMETER THROUGH THE CALL'S INSTANCE, AND WITHOUT THAT EVERY OVERLOAD SET ON
-// A GENERIC TYPE'S EXTENSION IS UNRESOLVABLE.** `checkArgTypes` resolves a parameter's
-// declaration-view type against the instance the call is actually made at
-// (`paramTypeThroughCallInstance`) precisely because a shared generic body spells `__self` at the
-// base `Array with <T>`. This scorer read the raw signature instead, so the RECEIVER of
-// `a.sort(cmp)` on an `Array with Integer` was compared nominally against `Array_T<gid>` and every
-// candidate scored `incompatible`. MEASURED against `stdlib/Array.maxon` listed: **`E3036:
-// 'Array.sort' expects 1 argument(s) but 2 were provided`** — the arity of the OTHER overload,
-// reported because nothing fit and the call fell back to the first member. It was order-dependent
-// and silent: swapping the two `extension Array` blocks moved the error to `expects 2 argument(s)
-// but 1 were provided`.
-//
-// So the subject is read HERE the same way `checkArgTypes` reads it — one `callInstanceSubject` per candidate,
-// off that candidate's own signature, because whether the receiver IS the subject depends on
-// `sig.takesReceiver()` and the candidates of one set need not agree about that.
-function overloadArgTypeFit(project Project, func IrFunction, readerFilePath FilePath, sig FuncSignature, result ValueId, argIds ValueIdArray, retype ArgumentRetype) returns OverloadFit
-	let instanceSubject = callInstanceSubject(sig, result: result, argIds: argIds)
-	var score = NoCompatibleOverloadScore
-
-	for i in 0 upto argIds.count() 'eachArg'
-		let argId = try argIds.get(i) otherwise panic("overloadArgTypeFit: argIds.get OOB at {i} inside its own count()")
-		let paramType = paramTypeThroughCallInstance(project, func: func, subject: instanceSubject, paramType: try sig.paramTypes.get(i) otherwise panic("overloadArgTypeFit: paramTypes.get OOB at {i} — `slotCallArgs` answered `ordered`, so the counts agree"))
-		let argTag = scoredArgTag(func, argId: argId, retype: retype)
-		let paramTag = maxonTypeTag(paramType)
-
-		if checkDeclaredType(argTag, declared: paramTag) != DeclaredTypeMatch.ok 'refused'
-			return OverloadFit.incompatible
-		end 'refused'
-
-		// ⭐ TWO DIFFERENT AGGREGATES SHARE ONE TAG — two structs are both `structRef`, two boxed unions both
-		// erased to `integer` — so the verdict above accepts `over(aBag)` at an `over(x Box)`. Identity is the
-		// interned NAME, and it is the same rule `checkOneArgType` applies at the same pair, asked here so a
-		// candidate is not selected on a tag agreement its own argument check will refuse.
-		view spelledAggregate = aggregateNameFor(project, tag: paramTag, nameId: typeNameIdOf(paramType), readerFilePath: readerFilePath)
-		view expected = (try sig.paramAggregateNames.get(i) otherwise panic("overloadArgTypeFit: paramAggregateNames.get OOB at {i} — a signature's param columns are built in lockstep")) if spelledAggregate.isEmpty() else spelledAggregate
-
-		// ⚠ Ungated on the declared side for the reason `checkOneArgType` is: a SCALAR parameter meeting an
-		// AGGREGATE argument is a real conflict, and skipping it here is what let this resolver SELECT an
-		// `over(x Integer)` for a boxed-union argument (measured: exit 25 from arithmetic on the payload
-		// word). Asking the same question the argument check asks is also what makes this function's own
-		// promise true — that a candidate it accepts cannot then be rejected downstream.
-		let argNameId = scoredArgNameId(func, argId: argId, retype: retype)
-
-		if not expected.isEmpty() or (tagAdmitsNoAggregate(paramTag) and argAggregateCannotDecay(project, tag: argTag, nameId: argNameId)) 'aggregateComparable'
-			// ⚠ **`aggregatesConflict`, NOT the bare rule** — the shared door carries the byte-element
-			// boundary (`byteBufferBoundaryAdmits`), and this function's own promise is that a candidate it
-			// accepts cannot then be rejected downstream. Spelled with the bare rule it answered
-			// `incompatible` for a `__ManagedMemory` parameter meeting a compiler-synthesized byte buffer,
-			// which `checkOneArgType` accepts — the two answers `checkOneArgType`'s header forbids.
-			//
-			// ⛔ **AND IT IS OBSERVABLE.** A candidate wrongly refused here is not merely refused again by
-			// every sibling while the call resolves anyway: with NO candidate fitting, `selectOverload`'s
-			// caller falls back to the FIRST declared overload and reports against ITS parameter. MEASURED —
-			// `which(x Ints)` declared ahead of `which(m __ManagedMemory)`, called with a cwd buffer, read
-			// `expected 'Array_Integer', got 'Array___ManagedByte'`, naming a parameter the call was never
-			// written against. Pinned by `bytearray-element-size.md`'s
-			// `overload-scoring-admits-a-synthesized-buffer-at-a-byte-buffer-candidate`.
-			var signatures = programSignaturesIn(project, asker: "overloadArgTypeFit")
-			view got = aggregateNameFor(project, tag: argTag, nameId: argNameId, readerFilePath: readerFilePath)
-
-			if signatures.aggregatesConflict(expected, expectedTag: paramTag, expectedNameId: typeNameIdOf(paramType), expectedBrand: paramBrandOf(sig, position: i as ParamCount, paramTag: paramTag), got: got, gotTag: argTag, gotNameId: argNameId, gotBrand: scoredArgBrand(project, func: func, argId: argId, retype: retype), readerFilePath: readerFilePath) 'aggregateMismatch'
-				if not signatures.serviceHandleWidensTo(got, interfaceHandleName: expected) 'noConversion'
-					return OverloadFit.incompatible
-				end 'noConversion'
-
-				score = score + WideningArgScore
-				continue
-			end 'aggregateMismatch'
-		end 'aggregateComparable'
-
-		score = score + (ExactArgScore if argTag == paramTag else WideningArgScore)
-	end 'eachArg'
-
-	// A ZERO-ARGUMENT candidate scored nothing, and it still FITS — `Counter.create()` beside
-	// `Counter.create(value Integer)` is a legitimate arity-only pair, and the arity test that separated them
-	// already ran. It reaches `WideningArgScore` rather than the "nothing fits" floor so the answer stays a
-	// score the caller can compare.
-	return OverloadFit.fits(score if score > NoCompatibleOverloadScore else WideningArgScore)
-end 'overloadArgTypeFit'
-
-union ArgumentRetype
-	asWritten
-	uncastLiterals(casts LiteralCastMap)
-end 'ArgumentRetype'
-
-let argumentsAsWritten = ArgumentRetype.asWritten
-
-function retypesArgument(retype ArgumentRetype, argId ValueId) returns bool
-	return match retype 'retype'
-		asWritten gives false
-		uncastLiterals(casts) gives casts.contains(argId)
-	end 'retype'
-end 'retypesArgument'
-
-function uncastLiteralOf(retype ArgumentRetype, argId ValueId) returns LiteralCast throws MapError
-	match retype 'retype'
-		asWritten then throw MapError.keyNotFound
-		uncastLiterals(casts) then return try casts.get(argId)
-	end 'retype'
-end 'uncastLiteralOf'
-
-function scoredArgTag(func IrFunction, argId ValueId, retype ArgumentRetype) returns ValueTypeTag
-	if let uncast = try uncastLiteralOf(retype, argId: argId) 'theUncastLiteral'
-		return uncast.literalTag
-	end 'theUncastLiteral'
-
-	return try func.valueTags.get(argId) otherwise panic("scoredArgTag: value v{argId} of '{String.from(func.name)}' has no recorded type — every SSA value is minted through Parser.mintValue")
-end 'scoredArgTag'
-
-function scoredArgNameId(func IrFunction, argId ValueId, retype ArgumentRetype) returns TypeNameId
-	if retypesArgument(retype, argId: argId) 'theUncastLiteral'
-		return UnnamedTypeId
-	end 'theUncastLiteral'
-
-	return try func.valueNameIds.get(argId) otherwise panic("scoredArgNameId: value v{argId} of '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
-end 'scoredArgNameId'
-
-function scoredArgBrand(project Project, func IrFunction, argId ValueId, retype ArgumentRetype) returns ByteArray
-	if retypesArgument(retype, argId: argId) 'theUncastLiteral'
-		return EmptySourceText
-	end 'theUncastLiteral'
-
-	return valueBrandOf(project, func: func, value: argId)
-end 'scoredArgBrand'
-
 // The unneeded literal casts of one call are uncast TOGETHER and the set re-scored, and they are
 // reported only if the same member is still chosen: the diagnostics tell the author to remove every
 // one of them, and removing two individually harmless casts together can silently select another
 // overload.
-function retireDisambiguatingLiteralCasts(project Project, func IrFunction, readerFilePath FilePath, op MaxonOp, candidates NameRoster, pick OverloadPick)
+function retireDisambiguatingLiteralCasts(project Project, func IrFunction, op MaxonOp, signatures ProgramSignatures, funcNames FunctionNameIndex, state OverloadPassState, callee ByteArray, candidates NameRoster, call OverloadCallFacts, member ByteArray)
 	if func.literalCastArguments.count() == 0 'noLiteralCastArgument'
 		return
 	end 'noLiteralCastArgument'
 
-	if uncastingTheUnneededKeepsThePick(project, func: func, readerFilePath: readerFilePath, op: op, candidates: candidates, pick: pick) 'everyUnneededCastCanGo'
+	if uncastingTheUnneededKeepsTheMember(project, func: func, op: op, signatures: signatures, call: call, rows: state.rowsOf(project, signatures: signatures, funcNames: funcNames, callee: callee, candidates: candidates), member: member) 'everyUnneededCastCanGo'
 		return
 	end 'everyUnneededCastCanGo'
 
-	let args = match overloadCallArgs(op) 'args'
-		supplied(supplied, _, _, _) gives supplied
-	end 'args'
+	retireEveryLiteralCast(func, op: op)
+end 'retireDisambiguatingLiteralCasts'
+
+function retireEveryLiteralCast(func IrFunction, op MaxonOp)
+	if func.literalCastArguments.count() == 0 'noLiteralCastArgument'
+		return
+	end 'noLiteralCastArgument'
+
+	let args = overloadSuppliedArgs(op)
 
 	for argId in args 'retireEach'
 		func.retireLiteralCast(argId)
 	end 'retireEach'
-end 'retireDisambiguatingLiteralCasts'
+end 'retireEveryLiteralCast'
 
-function uncastingTheUnneededKeepsThePick(project Project, func IrFunction, readerFilePath FilePath, op MaxonOp, candidates NameRoster, pick OverloadPick) returns bool
-	return match pick 'pick'
-		chosen(member) gives uncastingTheUnneededKeepsTheMember(project, func: func, readerFilePath: readerFilePath, op: op, candidates: candidates, member: member)
-		ambiguous or
-		noMatch gives false
-	end 'pick'
-end 'uncastingTheUnneededKeepsThePick'
-
-function uncastingTheUnneededKeepsTheMember(project Project, func IrFunction, readerFilePath FilePath, op MaxonOp, candidates NameRoster, member ByteArray) returns bool
+function uncastingTheUnneededKeepsTheMember(project Project, func IrFunction, op MaxonOp, signatures ProgramSignatures, call OverloadCallFacts, rows OverloadCandidateArray, member ByteArray) returns bool
 	let unneeded = unneededLiteralCastArguments(project, func: func, op: op, member: member)
 
 	if unneeded.count() == 0 'nothingToUncast'
 		return true
 	end 'nothingToUncast'
 
-	return chosenMemberIs(selectOverload(project, func: func, readerFilePath: readerFilePath, op: op, candidates: candidates, retype: ArgumentRetype.uncastLiterals(unneeded)), member: member)
+	let rescored = selectOverload(signatures, interner: project.typeNames, call: call, rows: rows, views: overloadArgsOf(project, func: func, op: op, uncast: unneeded))
+
+	return match rescored.verdict 'verdict'
+		chosen(row) gives overloadRowAt(rescored.pool, row: row).registeredName.equals(member)
+		tied or
+		noMatch gives false
+	end 'verdict'
 end 'uncastingTheUnneededKeepsTheMember'
+
+function memberNamesOf(rows OverloadCandidateArray) returns NameRoster
+	var names = NameRoster.create()
+
+	for row in rows 'eachRow'
+		names.push(row.registeredName)
+	end 'eachRow'
+
+	return names
+end 'memberNamesOf'
+
+function nameableMemberNamesOf(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, state OverloadPassState, callee ByteArray, candidates NameRoster, call OverloadCallFacts) returns NameRoster
+	return memberNamesOf(overloadPoolOf(signatures, rows: state.rowsOf(project, signatures: signatures, funcNames: funcNames, callee: callee, candidates: candidates), call: call).rows)
+end 'nameableMemberNamesOf'
+
+function overloadArgsOf(project Project, func IrFunction, op MaxonOp, uncast LiteralCastMap) returns OverloadArgArray
+	let args = overloadSuppliedArgs(op)
+
+	return overloadArgViews(args, tags: func.valueTags, nameIds: func.valueNameIds, brandIds: func.valueBrandIds, interner: project.typeNames, uncast: uncast)
+end 'overloadArgsOf'
+
+function overloadCallFactsOf(func IrFunction, readerFilePath FilePath, op MaxonOp) returns OverloadCallFacts
+	match overloadCallArgs(op) 'args'
+		supplied(_, argLabels, _, mint) then return OverloadCallFacts.create(readerFilePath, argLabels: argLabels, staticInstance: staticInstanceOf(func, op: op), callerName: func.name, mint: mint)
+	end 'args'
+end 'overloadCallFactsOf'
+
+function staticInstanceOf(func IrFunction, op MaxonOp) returns SuppliedInstance
+	let result = try maxonOpDefinedValue(op) otherwise panic("staticInstanceOf: asked of an op that defines no value — overload resolution reaches only the three CALL ops, and every one of them defines its result")
+	let id = try func.valueCallInstances.get(result) otherwise return SuppliedInstance.absent
+
+	if func.valueInferredInstances.contains(result) 'theInstanceWasInferredFromTheArguments'
+		return SuppliedInstance.absent
+	end 'theInstanceWasInferredFromTheArguments'
+
+	return SuppliedInstance.instance(id)
+end 'staticInstanceOf'
+
+function requireEveryParameterIsReadable(row OverloadCandidate, callee ByteArray)
+	for param in row.params 'eachParam'
+		if not param.readable 'anUnreadableParameter'
+			panic("requireEveryParameterIsReadable: a parameter of the declaration of '{String.from(callee)}' at {String.from(row.site)} reached overload resolution unread — the real parse refuses every parameter type the declaration sweep cannot read, and a refused program is never resolved")
+		end 'anUnreadableParameter'
+	end 'eachParam'
+end 'requireEveryParameterIsReadable'
+
+function sweptDeclarationOfMember(signatures ProgramSignatures, funcNames FunctionNameIndex, callee ByteArray, member ByteArray) returns OverloadedDecl throws AbsentError
+	let held = try funcNames.funcNamed(member) otherwise throw AbsentError.absent
+	return try signatures.overloadedDeclAt(callee, site: held.declarationSite())
+end 'sweptDeclarationOfMember'
+
+typealias OverloadRowsByCallee = Map with (ByteArray, OverloadCandidateArray)
+
+type OverloadPassState
+	var rows as OverloadRowsByCallee
+
+	static function create() returns Self
+		return Self{rows: OverloadRowsByCallee.create()}
+	end 'create'
+
+	function rowsOf(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, callee ByteArray, candidates NameRoster) returns OverloadCandidateArray
+		if let cached = try self.rows.get(callee) 'alreadyBuilt'
+			return cached.clone()
+		end 'alreadyBuilt'
+
+		var built = OverloadCandidateArray.create()
+
+		for member in candidates 'eachCandidate'
+			let decl = try sweptDeclarationOfMember(signatures, funcNames: funcNames, callee: callee, member: member) otherwise panic("OverloadPassState.rowsOf: the live member '{String.from(member)}' of '{String.from(callee)}' has no swept declaration — every member of an overload set is registered from a declaration the sweep indexed")
+			let row = overloadRowOfDecl(signatures, interner: project.typeNames, decl: decl, registeredName: member)
+			requireEveryParameterIsReadable(row, callee: callee)
+			built.push(row)
+		end 'eachCandidate'
+
+		self.rows.upsert(callee, value: built)
+
+		return built.clone()
+	end 'rowsOf'
+end 'OverloadPassState'
 
 function unneededLiteralCastArguments(project Project, func IrFunction, op MaxonOp, member ByteArray) returns LiteralCastMap
 	let sig = try project.funcSignatures.get(member) otherwise panic("unneededLiteralCastArguments: the chosen member '{String.from(member)}' is not in funcSignatures — `overloadCandidates` filtered on exactly that")
@@ -860,14 +737,6 @@ function unneededLiteralCastArguments(project Project, func IrFunction, op Maxon
 	return unneeded
 end 'unneededLiteralCastArguments'
 
-function chosenMemberIs(pick OverloadPick, member ByteArray) returns bool
-	return match pick 'pick'
-		chosen(chosenMember) gives chosenMember.equals(member)
-		ambiguous or
-		noMatch gives false
-	end 'pick'
-end 'chosenMemberIs'
-
 // ⭐⭐ **A CONSTANT ARGUMENT'S RANGE IS CHECKED AGAINST A CALLEE'S DECLARED PARAMETER ALIAS, AND THAT
 // SITE WAS RECORDED PER NAME AT PARSE TIME — so it has to be RETARGETED when the call resolves
 // elsewhere.**
@@ -892,7 +761,7 @@ end 'chosenMemberIs'
 // sites are then indistinguishable, so the second claim is refused rather than allowed to overwrite the
 // first. The cure for that residual is to key the site by its call's op index, which is a change to the
 // `RangeCheckArgSite` record and its pass, not to this one.
-function bindOverloadChoice(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, opIndex ElementIndex, callerFilePath FilePath, callee ByteArray, member ByteArray, valueDefiners FunctionValueOrigins, resolution CallResolution)
+function bindOverloadChoice(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, opIndex ElementIndex, callerFilePath FilePath, callee ByteArray, member ByteArray, valueDefiners FunctionValueOrigins, resolution CallResolution, disagreement OverloadDisagreementSubject)
 	var op = try module.ops.get(opIndex) otherwise panic("bindOverloadChoice: ops.get({opIndex}) OOB — the index came from liveOpIndices")
 	let reconcilesTheResult = not boundMemberIsRefusedAsHidden(project, signatures: signatures, funcNames: funcNames, func: func, callerFilePath: callerFilePath, op: op, member: member)
 
@@ -901,8 +770,8 @@ function bindOverloadChoice(project Project, module MaxonModule, signatures Prog
 	end 'args'
 
 	bindDeferredArguments(project, module: module, funcNames: funcNames, func: func, opIndex: opIndex, member: member, resolution: resolution)
-	requireSpawnAwaitsItsMember(project, module: module, funcNames: funcNames, func: func, opIndex: opIndex, callee: callee, member: member)
-	commitOverloadChoice(project, module: module, func: func, opIndex: opIndex, member: member, disagreement: sharedCallResultSubject, reconcilesTheResult: reconcilesTheResult)
+	requireSpawnAwaitsItsMember(project, module: module, funcNames: funcNames, func: func, opIndex: opIndex, callee: callee, member: member, disagreement: disagreement)
+	commitOverloadChoice(project, module: module, func: func, opIndex: opIndex, member: member, disagreement: disagreement, reconcilesTheResult: reconcilesTheResult)
 end 'bindOverloadChoice'
 
 function boundMemberIsRefusedAsHidden(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, callerFilePath FilePath, op MaxonOp, member ByteArray) returns bool
@@ -911,24 +780,23 @@ function boundMemberIsRefusedAsHidden(project Project, signatures ProgramSignatu
 	end 'notInTheProgram'
 
 	match overloadCallArgs(op) 'args'
-		supplied(_, _, _, mint) then return not calleeVisibleFrom(project, signatures: signatures, funcNames: funcNames, callee: member, caller: func, callerFilePath: callerFilePath, mint: mint)
+		supplied(_, _, _, mint) then return not calleeVisibleFrom(signatures, funcNames: funcNames, callee: member, caller: func, callerFilePath: callerFilePath, mint: mint)
 	end 'args'
 end 'boundMemberIsRefusedAsHidden'
 
-function requireSpawnAwaitsItsMember(project Project, module MaxonModule, funcNames FunctionNameIndex, func IrFunction, opIndex ElementIndex, callee ByteArray, member ByteArray)
+function requireSpawnAwaitsItsMember(project Project, module MaxonModule, funcNames FunctionNameIndex, func IrFunction, opIndex ElementIndex, callee ByteArray, member ByteArray, disagreement OverloadDisagreementSubject)
 	let op = try module.ops.get(opIndex) otherwise panic("requireSpawnAwaitsItsMember: ops.get({opIndex}) OOB — the index came from liveOpIndices")
 
 	match overloadResultValue(op) 'result'
-		definesAPromise(promise) then requirePromiseAwaitsTheMember(project, funcNames: funcNames, func: func, opIndex: opIndex, promise: promise, callee: callee, member: member)
+		definesAPromise(promise) then requirePromiseAwaitsTheMember(project, funcNames: funcNames, func: func, opIndex: opIndex, promise: promise, callee: callee, member: member, disagreement: disagreement)
 		defines or
 		definesNothing then return
 	end 'result'
 end 'requireSpawnAwaitsItsMember'
 
-function requirePromiseAwaitsTheMember(project Project, funcNames FunctionNameIndex, func IrFunction, opIndex ElementIndex, promise ValueId, callee ByteArray, member ByteArray)
+function requirePromiseAwaitsTheMember(project Project, funcNames FunctionNameIndex, func IrFunction, opIndex ElementIndex, promise ValueId, callee ByteArray, member ByteArray, disagreement OverloadDisagreementSubject)
 	var signatures = programSignaturesIn(project, asker: "requirePromiseAwaitsTheMember")
-	let memberFunc = try funcNames.funcNamed(member) otherwise panic("requirePromiseAwaitsTheMember: the chosen member '{String.from(member)}' has a signature and no body in the module")
-	let decl = try signatures.overloadedDeclAt(callee, site: memberFunc.declarationSite()) otherwise panic("requirePromiseAwaitsTheMember: no declaration of '{String.from(callee)}' sits where its member '{String.from(member)}' was parsed — the sweep records every declaration of a name it parses")
+	let decl = try sweptDeclarationOfMember(signatures, funcNames: funcNames, callee: callee, member: member) otherwise panic("requirePromiseAwaitsTheMember: the chosen member '{String.from(member)}' of '{String.from(callee)}' has no swept declaration — a call binds only a member the sweep indexed")
 	let gid = (try func.valueNameIds.get(promise) otherwise panic("requirePromiseAwaitsTheMember: value v{promise} of '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")) as GenericInstanceId
 
 	if signatures.promiseAwaits(gid, returnType: decl.returnType) 'awaitsTheMembersResult'
@@ -941,7 +809,7 @@ function requirePromiseAwaitsTheMember(project Project, funcNames FunctionNameIn
 		value(returned) gives maxonTypeTag(returned)
 	end 'returns'
 
-	reportOverloadReturnDisagreement(project, range: project.opRanges.get(opIndex), filePath: authoredFileOf(project, func: func, opIndex: opIndex), member: member, current: awaitedTag, declared: declaredTag, disagreement: sharedCallResultSubject)
+	reportOverloadReturnDisagreement(project, range: project.opRanges.get(opIndex), filePath: authoredFileOf(project, func: func, opIndex: opIndex), member: member, current: awaitedTag, declared: declaredTag, disagreement: disagreement)
 end 'requirePromiseAwaitsTheMember'
 
 // An overloaded call is parsed before its member is known, so an argument whose passing the members
@@ -1236,27 +1104,26 @@ end 'commitOverloadChoice'
 // they cannot find and a construct they did not write.
 union OverloadDisagreementSubject
 	theCallsResult
+	theBoundCallsResult
 	aDefaultedArgument(let callee ByteArray, slot ParamCount)
 end 'OverloadDisagreementSubject'
 
-// The `theCallsResult` answer, shared: a payload-free union case is still a heap object in Maxon, and
+// The two result answers, shared: a payload-free union case is still a heap object in Maxon, and
 // `commitOverloadChoice` runs at every resolved overloaded call in the program.
 let sharedCallResultSubject = OverloadDisagreementSubject.theCallsResult
+let sharedBoundCallResultSubject = OverloadDisagreementSubject.theBoundCallsResult
 
 // ⭐⭐ **THE ONE THING SELECTING LATE COSTS: the parser has ALREADY TYPED the call's result, and it may have
 // typed it from a registry that cannot tell overloads apart.**
 //
 // A call's result value is minted during the parse (`Parser.mintCallResult`), typed by
-// `Parser.boundReturnOf`, which asks the sweep's per-declaration parameter types which member the
-// call means and answers that member's return type — so for a set whose members disagree, and whose
-// arguments settle which one is meant, the tag the parser minted is already the right one and this pass finds
-// nothing to do. Where that decider DECLINES (it does not read every parameter type, and it will not
-// choose between two members that fit equally) the answer falls back to `ProgramSignatures.returnTypeOf`,
-// whose table is keyed by the name the SOURCE wrote and is LAST-WINS over duplicate declarations — so the
-// call was typed from whichever declaration the sweep read last. When the member this call actually resolves
-// to returns something else, that tag is wrong, and it is wrong in a way that reaches the machine: the tag is
-// what `lowerMaxonToStd` reads to pick the Std type of the call's result, so a `bool`-tagged result of an
-// i64-returning callee is read one byte wide.
+// `Parser.boundReturnOf`: a call the parse bound is typed from the member it bound, which is the member this
+// pass applies, so a disagreement there is a compiler bug (`theBoundCallsResult`). A call the parse did not
+// bind is typed from `ProgramSignatures.returnTypeOf`, whose table is keyed by the name the SOURCE wrote and
+// is LAST-WINS over duplicate declarations — so the call was typed from whichever declaration the sweep read
+// last. When the member this call actually resolves to returns something else, that tag is wrong, and it is
+// wrong in a way that reaches the machine: the tag is what `lowerMaxonToStd` reads to pick the Std type of
+// the call's result, so a `bool`-tagged result of an i64-returning callee is read one byte wide.
 //
 // So the tag is REPAIRED here — but only where the repair is provably complete:
 //
@@ -1275,24 +1142,23 @@ let sharedCallResultSubject = OverloadDisagreementSubject.theCallsResult
 // ⚠ **The narrow residual, stated where it lives:** if the divergence IS scalar-to-scalar, the parser may
 // already have rejected or reshaped an expression using the stale tag (`if <int-tagged>`, `<bool> + 1`). That
 // is a false diagnostic, not a wrong answer, and it cannot arise for a set whose members agree on their
-// return type, nor for one the parse-time decider settled — which is the common case.
-// What is left is the decider's own boundary: a parameter type it does not read, and a tie.
+// return type, nor for a call the parse bound — which is the common case.
 //
 // A member the call may not name is not reconciled at all (`boundMemberIsRefusedAsHidden`):
 // E3008 refuses the call, and a reconcile against that member would add a second, wrong diagnostic.
 function reconcileOverloadResultType(project Project, func IrFunction, opIndex ElementIndex, op MaxonOp, member ByteArray, disagreement OverloadDisagreementSubject)
 	match overloadResultValue(op) 'result'
-		defines(result) then reconcileOverloadResultTag(project, func: func, opIndex: opIndex, result: result, member: member, disagreement: disagreement)
+		defines(result) then reconcileOverloadResultTag(project, func: func, opIndex: opIndex, op: op, result: result, member: member, disagreement: disagreement)
 		definesAPromise or
 		definesNothing then break
 	end 'result'
 end 'reconcileOverloadResultType'
 
-function reconcileOverloadResultTag(project Project, func IrFunction, opIndex ElementIndex, result ValueId, member ByteArray, disagreement OverloadDisagreementSubject)
+function reconcileOverloadResultTag(project Project, func IrFunction, opIndex ElementIndex, op MaxonOp, result ValueId, member ByteArray, disagreement OverloadDisagreementSubject)
 	let declared = try project.funcReturnTypes.get(member) otherwise return
 
 	match declared 'declared'
-		value(returnType) then requireOverloadResultTagAgrees(project, func: func, opIndex: opIndex, result: result, member: member, declared: returnType, disagreement: disagreement)
+		value(returnType) then requireOverloadResultTagAgrees(project, func: func, opIndex: opIndex, op: op, result: result, member: member, declared: returnType, disagreement: disagreement)
 		void then requireOverloadVoidResult(project, func: func, opIndex: opIndex, result: result, member: member, disagreement: disagreement)
 	end 'declared'
 end 'reconcileOverloadResultTag'
@@ -1302,25 +1168,15 @@ end 'reconcileOverloadResultTag'
 // It is tempting to `break` here on the grounds that *"a VOID member cannot have been chosen for a call
 // whose result is read: the parser refuses a void call in value position, and in statement position the
 // result tag is `void` already"*. **Both halves assume the SWEEP recorded the void member**, and the sweep
-// is LAST-WINS over one entry per NAME wherever the parse-time decider declines — so when the VALUE member
+// is LAST-WINS over one entry per NAME wherever the parse binds no member — so when the VALUE member
 // is the one it recorded, such a call is typed from it: the result carries that member's tag, and
 // `enrolOwnedCallTemp` has already enrolled the scope-exit drop a managed return owes. A call that then resolves HERE, to the void member,
 // spends that drop on a register the callee never wrote.
 //
-// MEASURED, `emit(flag bool)` declared ahead of `emit(tag int) returns String`, called `emit(true)` in
-// statement position: compiled clean, no diagnostic at any stage, and died with an ACCESS VIOLATION
-// (0xC0000005). The mirror — void recorded, a value member called — was already refused by the sibling
-// below, which is why this read as guarded for as long as it did: the family fired, just not in this
-// quadrant.
-//
-// ⭐⭐ **BOTH OF THOSE PROGRAMS NOW COMPILE AND ARE RIGHT, and this arm is what would catch it if they
-// stopped being.** `Parser.boundReturnOf` types each of them from the member its ARGUMENT means,
-// so the void call has no managed result to enrol a drop for and the value call has one to drop — pinned as
-// `function-overloads.md`'s two `*-overload-beside-a-*-one-*-resolves-by-argument` cases, which assert the
-// answer and the exit code rather than a refusal. What still reaches here is a set with a member
-// whose parameter type the decider does not read, such as a qualified type of more than one
-// namespace segment — `cross-file-overload-set.md`'s
-// `error.a-set-with-a-member-the-decider-cannot-read-is-refused`.
+// A call the parse bound is typed from the member its ARGUMENT means, so the void call has no managed result
+// to enrol a drop for and the value call has one to drop — pinned as `function-overloads.md`'s two
+// `*-overload-beside-a-*-one-*-resolves-by-argument` cases, which assert the answer and the exit code
+// rather than a refusal.
 //
 // A `void`-tagged result is the agreement, and it is the only one: no repair is possible in either
 // direction, because the divergence is over whether there is a value AT ALL.
@@ -1334,9 +1190,13 @@ function requireOverloadVoidResult(project Project, func IrFunction, opIndex Ele
 	reportOverloadReturnDisagreement(project, range: project.opRanges.get(opIndex), filePath: authoredFileOf(project, func: func, opIndex: opIndex), member: member, current: currentTag, declared: ValueTypeTag.void, disagreement: disagreement)
 end 'requireOverloadVoidResult'
 
-function requireOverloadResultTagAgrees(project Project, func IrFunction, opIndex ElementIndex, result ValueId, member ByteArray, declared MaxonType, disagreement OverloadDisagreementSubject)
+function requireOverloadResultTagAgrees(project Project, func IrFunction, opIndex ElementIndex, op MaxonOp, result ValueId, member ByteArray, declared MaxonType, disagreement OverloadDisagreementSubject)
 	let currentTag = try func.valueTags.get(result) otherwise panic("requireOverloadResultTagAgrees: value v{result} of '{String.from(func.name)}' has no recorded type — every SSA value is minted through Parser.mintValue")
 	let declaredTag = maxonTypeTag(declared)
+
+	if not overloadResultTagAgrees(currentTag, declared: declaredTag) and returnAgreesAtTheCallsInstance(project, func: func, op: op, result: result, member: member, declared: declared, currentTag: currentTag) 'typedThroughTheInstance'
+		return
+	end 'typedThroughTheInstance'
 
 	if overloadDisagreementIsIrreparable(currentTag, declared: declaredTag) 'notRepairable'
 		reportOverloadReturnDisagreement(project, range: project.opRanges.get(opIndex), filePath: authoredFileOf(project, func: func, opIndex: opIndex), member: member, current: currentTag, declared: declaredTag, disagreement: disagreement)
@@ -1347,20 +1207,55 @@ function requireOverloadResultTagAgrees(project Project, func IrFunction, opInde
 		return
 	end 'alreadyRight'
 
+	if disagreementIsAVerifiedPick(disagreement) 'theParseMintedItFromThisMember'
+		reportOverloadReturnDisagreement(project, range: project.opRanges.get(opIndex), filePath: authoredFileOf(project, func: func, opIndex: opIndex), member: member, current: currentTag, declared: declaredTag, disagreement: disagreement)
+	end 'theParseMintedItFromThisMember'
+
 	func.retypeValueInPrivateColumns(result, tag: declaredTag, nameId: typeNameIdOf(declared))
 end 'requireOverloadResultTagAgrees'
 
+function returnTagAtTheCallsInstance(project Project, func IrFunction, op MaxonOp, result ValueId, member ByteArray, declared MaxonType) returns ValueTypeTag throws AbsentError
+	view sig = try project.funcSignatures.get(member) otherwise throw AbsentError.absent
+
+	let args = overloadSuppliedArgs(op)
+
+	let gid = try callInstanceOf(func, subject: callInstanceSubject(sig, result: result, argIds: args))
+	var signatures = programSignaturesIn(project, asker: "returnTagAtTheCallsInstance")
+	let fixed = maxonTypeTag(slotThroughInstance(signatures, interner: project.typeNames, slotType: declared, gid: gid))
+
+	if maxonTypeTag(declared) == ValueTypeTag.typeParameter and tagIsFloat(fixed) 'aFloatRidingTheOpaqueWord'
+		return ValueTypeTag.integer
+	end 'aFloatRidingTheOpaqueWord'
+
+	return fixed
+end 'returnTagAtTheCallsInstance'
+
+function returnAgreesAtTheCallsInstance(project Project, func IrFunction, op MaxonOp, result ValueId, member ByteArray, declared MaxonType, currentTag ValueTypeTag) returns bool
+	let carried = try returnTagAtTheCallsInstance(project, func: func, op: op, result: result, member: member, declared: declared) otherwise return false
+	return overloadResultTagAgrees(currentTag, declared: carried)
+end 'returnAgreesAtTheCallsInstance'
+
+function disagreementIsAVerifiedPick(disagreement OverloadDisagreementSubject) returns bool
+	return match disagreement 'about'
+		theBoundCallsResult gives true
+		theCallsResult or
+		aDefaultedArgument gives false
+	end 'about'
+end 'disagreementIsAVerifiedPick'
+
 // ONE sentence for every quadrant of the disagreement — value-vs-value that no retype can repair, and
 // value-vs-void which nothing can. Spelling it in each arm is how the two would drift into two accounts of
-// one rule, and the void arm's own history is that a second account of it was simply MISSING.
+// one rule.
 function reportOverloadReturnDisagreement(project Project, range SourceRange, filePath FilePath, member ByteArray, current ValueTypeTag, declared ValueTypeTag, disagreement OverloadDisagreementSubject)
 	let message = match disagreement 'about'
-		theCallsResult gives "the overloads of '{String.from(overloadRegistrationBaseName(member))}' do not agree on their return type ('{typeTagName(current)}' and '{typeTagName(declared)}'), and this call needed the one they disagree about. A call's result type is fixed while its file is parsed, from the parameter types the whole-program declaration sweep publishes — and they did not settle which overload this call means, so the result was typed from the single return type that index keeps per NAME. Only a difference between plain scalars can be corrected once the overload is known, a whole pass later. Make the overloads return the same type, or spell every overload's parameters as type NAMES that this call's arguments match in exactly one of them"
+		theCallsResult gives "the overloads of '{String.from(overloadRegistrationBaseName(member))}' do not agree on their return type ('{typeTagName(current)}' and '{typeTagName(declared)}'), and this call needed the one they disagree about. A call's result type is fixed while its file is parsed, from the parameter types the whole-program declaration sweep publishes — and the parse could not settle which overload this call means, so the result was typed from the single return type that index keeps per NAME. Only a difference between plain scalars can be corrected once resolution has chosen the overload. Make the overloads return the same type, or spell every overload's parameters as type NAMES that this call's arguments match in exactly one of them"
+
+		theBoundCallsResult panic("compiler bug: the parse bound a call to '{String.from(member)}' and typed its result '{typeTagName(current)}', and that member returns '{typeTagName(declared)}' — the parse and resolution read one pick, so the result is minted from the declaration resolution applies")
 
 		// The op being reconciled is the synthesized helper behind an omitted argument, so `member` is a
 		// symbol no source wrote. The sentence names the PARAMETER POSITION and the overloaded name the
 		// author did write, and asks for the one thing that repairs it.
-		aDefaultedArgument(callee, slot) gives "the overloads of '{bareMethodName(callee)}' do not agree on the TYPE of parameter {slot}, which this call omitted and the compiler supplied from that parameter's default ('{typeTagName(current)}' and '{typeTagName(declared)}'). A defaulted argument's type is fixed while the call is parsed, from a whole-program index that records one answer per NAME, and the overload is resolved a whole pass later — so only a difference between plain scalars can be corrected by then. Declare that parameter at the same type in every overload"
+		aDefaultedArgument(callee, slot) gives "the overloads of '{bareMethodName(callee)}' do not agree on the TYPE of parameter {slot}, which this call omitted and the compiler supplied from that parameter's default ('{typeTagName(current)}' and '{typeTagName(declared)}'). A defaulted argument's type is fixed while the call is parsed, from a whole-program index that records one answer per NAME, and resolution applies the overload afterwards — so only a difference between plain scalars can be corrected by then. Declare that parameter at the same type in every overload"
 	end 'about'
 
 	reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: unsupportedFeatureMessage(message), line: range.line, column: range.column, filePath: filePath)
@@ -1401,51 +1296,16 @@ end 'overloadResultValue'
 // where the author must add a label), naming the callee as WRITTEN with its type qualifier stripped, and
 // listing the tied candidates' parameter lists in declaration order. The wording is pinned byte for byte
 // by `specs/function-overloads.md`.
-function reportAmbiguousOverload(project Project, func IrFunction, opIndex ElementIndex, callee ByteArray, tied NameRoster, module MaxonModule, candidates NameRoster)
+function reportAmbiguousOverload(project Project, func IrFunction, opIndex ElementIndex, callee ByteArray, tied OverloadCandidateArray, module MaxonModule, candidates NameRoster)
 	let range = project.opRanges.get(opIndex)
 	project.refusedOverloadCalls.insert(opIndex)
-	reportPositioned(project, code: ErrorCode.semanticAmbiguousOverload, message: "Ambiguous overload for '{bareMethodName(callee)}': multiple overloads match. Candidates: {renderOverloadCandidates(project, tied: tied)}", line: range.line, column: range.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
+	retireEveryLiteralCast(func, op: try module.ops.get(opIndex) otherwise panic("reportAmbiguousOverload: ops.get({opIndex}) OOB — the index came from liveOpIndices"))
+	reportPositioned(project, code: ErrorCode.semanticAmbiguousOverload, message: ambiguousOverloadMessage(bareMethodName(callee), candidates: renderOverloadRows(tied, interner: project.typeNames)), line: range.line, column: range.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
 
 	// The op still names a callee, and for a CONTESTED set that name belongs to no declaration — see the
 	// `ambiguous` arm above for the second diagnostic that earns.
 	leaveUnmatchedCallOnFirstCandidate(project, module: module, opIndex: opIndex, callee: callee, candidates: candidates)
 end 'reportAmbiguousOverload'
-
-// `(name String), (label Age)` — each tied candidate's parameter list, receiver excluded, a ranged
-// alias shown by its name. `specs/function-overloads.md` pins the spellings.
-function renderOverloadCandidates(project Project, tied NameRoster) returns String
-	var rendered = ""
-
-	for candidate in tied 'each'
-		view sig = try project.funcSignatures.get(candidate) otherwise panic("renderOverloadCandidates: candidate '{String.from(candidate)}' is not in funcSignatures — the tie was scored against that entry")
-
-		if not rendered.isEmpty() 'separator'
-			rendered = "{rendered}, "
-		end 'separator'
-
-		rendered = "{rendered}({renderOverloadParams(project, sig: sig)})"
-	end 'each'
-
-	return rendered
-end 'renderOverloadCandidates'
-
-function renderOverloadParams(project Project, sig FuncSignature) returns String
-	var rendered = ""
-
-	for i in firstUserParamIndex(sig.takesReceiver()) upto sig.paramNames.count() as ParamCount 'eachParam'
-		if not rendered.isEmpty() 'separator'
-			rendered = "{rendered}, "
-		end 'separator'
-
-		let paramName = try sig.paramNames.get(i as ElementIndex) otherwise panic("renderOverloadParams: paramNames.get OOB at {i} inside its own count()")
-		let paramType = try sig.paramTypes.get(i as ElementIndex) otherwise panic("renderOverloadParams: paramTypes.get OOB at {i} — a signature's param columns are built in lockstep")
-		let declaredName = try sig.paramDeclaredNames.get(i as ElementIndex) otherwise panic("renderOverloadParams: paramDeclaredNames.get OOB at {i} — a signature's param columns are built in lockstep")
-		let spelled = sourceSpelledAliasText(declaredName) if not declaredName.isEmpty() and (tagIsInteger(maxonTypeTag(paramType)) or tagIsFloat(maxonTypeTag(paramType))) else maxonTypeName(paramType, typeNames: project.typeNames)
-		rendered = "{rendered}{String.from(paramName)} {spelled}"
-	end 'eachParam'
-
-	return rendered
-end 'renderOverloadParams'
 
 // The argument list an overload-resolvable op supplies. A THIRD match over the same three variants would be
 // one too many, but this one asks a different question from `maxonOpCalleeKind`'s and cannot be folded into it:
@@ -1462,6 +1322,12 @@ function overloadCallArgs(op MaxonOp) returns OverloadCallArgs
 		default panic("overloadCallArgs: asked of an op that supplies no argument list — `maxonOpCalleeKind` answers `direct` for exactly these three")
 	end 'op'
 end 'overloadCallArgs'
+
+function overloadSuppliedArgs(op MaxonOp) returns ValueIdArray
+	return match overloadCallArgs(op) 'args'
+		supplied(supplied, _, _, _) gives supplied
+	end 'args'
+end 'overloadSuppliedArgs'
 
 // E3054 — the ENTRY function cannot declare `throws`: there is no caller left to handle the error. Scans
 // the merged module for it (whose `throwsTypeName` the parser stamped), positioned at its name token.
@@ -3609,7 +3475,7 @@ end 'nominalWitnessFormal'
 //
 // This gate read `containsEnumInAnyFile(formalName)`, which is a third answer to *"which identities does resolution
 // destroy?"* beside `Parser.erasedAggregateNameOf` (the parse tier's, one answer for its own
-// two fill sites) and `aggregateNameFor` (this pass's own). It was the narrow one: a boxed enum erases, and
+// two fill sites) and `aggregateNameIn` (the extractor this pass asks). It was the narrow one: a boxed enum erases, and
 // so does a **PER-INSTANCE RANGED ALIAS**, which it did not name.
 //
 // **MEASURED.** `interface Taker { take(i IntPool.Idx) }` over `export typealias Idx = int(0 to 15)`: the
@@ -3618,22 +3484,22 @@ end 'nominalWitnessFormal'
 // `v=10019`. One compiler answering one question two ways — the defect this batch exists to close, surviving
 // inside the door the batch added, because the two doors classified the same fact apart.
 //
-// ⚠ **IT WRITES NO FOURTH RULE. It asks `aggregateNameFor` TWICE — LIVE, then PRE-ERASURE** — which
+// ⚠ **IT WRITES NO FOURTH RULE. It asks `aggregateNameIn` TWICE — LIVE, then PRE-ERASURE** — which
 // is exactly the two steps `checkOneArgType` takes for every argument it judges. A formal whose
 // identity SURVIVED (a struct's `structRef`, an existential's `interfaceRef`) is read live by the
 // checker and must carry nothing, or one name would sit in two places; a formal whose identity did
 // NOT survive arrives as bare `integer`, and the pre-resolution `named(id)` is the only thing that
-// still knows what it was. `aggregateNameFor` decides both asks, so the enum arm, the
+// still knows what it was. `aggregateNameIn` decides both asks, so the enum arm, the
 // per-instance-alias arm and any arm added later reach this door by construction rather than by a
 // second author remembering them.
 // ⚠ `readerFilePath` is the one `witnessFormalDeclaredType` resolved the formal with, the declaring
 // interface's file: the denoted type and its pre-erasure identity must come from one declaration.
 function erasedFormalIdentity(project Project, denoted MaxonType, id TypeNameId, readerFilePath FilePath) returns ByteArray
-	if not aggregateNameFor(project, tag: maxonTypeTag(denoted), nameId: typeNameIdOf(denoted), readerFilePath: readerFilePath).isEmpty() 'survivedResolution'
+	if not aggregateNameIn(programSignaturesIn(project, asker: "erasedFormalIdentity"), interner: project.typeNames, tag: maxonTypeTag(denoted), nameId: typeNameIdOf(denoted), readerFilePath: readerFilePath).isEmpty() 'survivedResolution'
 		return EmptySourceText
 	end 'survivedResolution'
 
-	return aggregateNameFor(project, tag: ValueTypeTag.named, nameId: id, readerFilePath: readerFilePath)
+	return aggregateNameIn(programSignaturesIn(project, asker: "erasedFormalIdentity"), interner: project.typeNames, tag: ValueTypeTag.named, nameId: id, readerFilePath: readerFilePath)
 end 'erasedFormalIdentity'
 
 // The noun a diagnostic about this call must use. Every message below that quotes a callee asks
@@ -3920,7 +3786,7 @@ function validateCall(project Project, func IrFunction, signatures ProgramSignat
 		return
 	end 'unknownFn'
 
-	if not calleeVisibleFrom(project, signatures: signatures, funcNames: funcNames, callee: callee, caller: func, callerFilePath: filePath, mint: mint) 'notVisibleHere'
+	if not calleeVisibleFrom(signatures, funcNames: funcNames, callee: callee, caller: func, callerFilePath: filePath, mint: mint) 'notVisibleHere'
 		// A root declaration keeps the bare key, so a bare call can arrive here holding one this file may not
 		// name; it is no candidate, and the visible declarations elsewhere decide the refusal.
 		if reportAmbiguousCrossFileCall(project, signatures: signatures, callee: callee, callRange: callRange, filePath: filePath) 'ambiguousPastAnInvisibleRootDeclaration'
@@ -3935,11 +3801,17 @@ function validateCall(project Project, func IrFunction, signatures ProgramSignat
 
 	match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels) 'slot'
 		ordered(argIds) then checkSlottedCall(project, func: func, result: result, callee: callee, sig: sig, args: args, argRanges: argRanges, argLabels: argLabels, argImmutableNames: argImmutableNames, argIds: argIds, defaultedArgs: defaultedArgs, mutationSummary: mutationSummary, provenance: provenance, callRange: callRange, filePath: filePath, overloadRefused: project.refusedOverloadCalls.contains(opIndex))
+		refused(failure) then reportArgSlotFailure(project, failure: failure, noun: noun, callRange: callRange, argRanges: argRanges, filePath: filePath)
+	end 'slot'
+end 'validateCall'
+
+function reportArgSlotFailure(project Project, failure ArgSlotFailure, noun ByteArray, callRange SourceRange, argRanges SourceRangeArray, filePath FilePath)
+	match failure 'failure'
 		arityMismatch(expected, got) then reportPositioned(project, code: ErrorCode.callArgCountMismatch, message: argArityMismatchMessage(String.from(noun), expected: expected, got: got), line: callRange.line, column: callRange.column, filePath: filePath)
 		unknownLabel(argIndex, label) then reportArgError(project, code: ErrorCode.callUnknownArgLabel, message: argUnknownLabelMessage(String.from(noun), label: label), argRanges: argRanges, argIndex: argIndex, filePath: filePath)
 		duplicateArg(argIndex, paramName) then reportArgError(project, code: ErrorCode.callDuplicateArg, message: argDuplicateMessage(String.from(noun), paramName: paramName), argRanges: argRanges, argIndex: argIndex, filePath: filePath)
-	end 'slot'
-end 'validateCall'
+	end 'failure'
+end 'reportArgSlotFailure'
 
 // ⭐⭐ **MAY THE CALLING FILE NAME THIS CALLEE?** The function half of `Visibility`.
 //
@@ -3956,15 +3828,11 @@ end 'validateCall'
 // comparing its empty path against a real caller's would refuse every call to it. A callee the
 // index does not know at all is exempt for the same reason it cannot be checked: there is no
 // declaration to read a tier off.
-function calleeVisibleFrom(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, callee ByteArray, caller IrFunction, callerFilePath FilePath, mint CalleeMint) returns bool
+function calleeVisibleFrom(signatures ProgramSignatures, funcNames FunctionNameIndex, callee ByteArray, caller IrFunction, callerFilePath FilePath, mint CalleeMint) returns bool
 	// ⭐ **A CALLEE NAME THE AUTHOR DID NOT WRITE HAS NO VISIBILITY TO ANSWER FOR** — visibility governs what
 	// a file may NAME, and a minted callee is one the compiler spelled out of something else the author
 	// wrote (`int.fromString` ⇒ `__int_fromString`, an omitted argument ⇒ its default helper,
 	// `FilePath from "…"` ⇒ `FilePath.init`). Each mint's own header says the call is the compiler's.
-	if mintSpellsTheWholeCallee(mint) 'theCompilersOwnSpelling'
-		return true
-	end 'theCompilersOwnSpelling'
-
 	// ⭐ **AND THE SYMMETRIC HALF: A CALL NO FILE WROTE ASKS ON NOBODY'S BEHALF.** `callerFilePath`
 	// is the op's authored file (`authoredFileOf`), not the function's. A call an initializer wrote
 	// sits in `__module_init` filed under its global's declaring file (`SynthesizedSite.declaredAt`),
@@ -3974,43 +3842,13 @@ function calleeVisibleFrom(project Project, signatures ProgramSignatures, funcNa
 	//
 	// ⚠ It is asked BEFORE the callee's own path for the caller's-mistake-first reason the header
 	// states.
-	if callerFilePath.isEmpty() 'callerIsCompilerBuilt'
+	if callNamesNothingTheReaderWrote(mint, readerFilePath: callerFilePath) 'theCompilerWroteTheCall'
 		return true
-	end 'callerIsCompilerBuilt'
+	end 'theCompilerWroteTheCall'
 
 	let declared = try funcNames.funcNamed(callee) otherwise return true
 
-	if declaredIsNameableFrom(signatures, declared: declared, readerFilePath: callerFilePath) 'theOrdinaryRule'
-		return true
-	end 'theOrdinaryRule'
-
-	// A generic instance, or a body extending an interface, may call what the interface's surface
-	// declares for its conformer whatever that member's visibility: the conformance grants it. Every
-	// other method keeps the ordinary rule.
-	if signatures.interfaceSurfaceGrantsCall(caller.name, callee: callee) 'aConformanceTheCallerGranted'
-		return true
-	end 'aConformanceTheCallerGranted'
-
-	// ⭐⭐ **AND A `runtime/` ENTRY POINT ANSWERS TO NO DIRECTORY'S MODULE SCOPE.** The tier is loaded into
-	// every program and the compiler reaches an entry BY NAME, out of whatever file wrote the construct that
-	// needs it — `stdlib/Clock.maxon`'s `nowUnixSeconds` reaches `__clock_now_unix_s`. This is the
-	// compiler-built arm above with a declaring file attached: nobody WROTE the call either way, so there is
-	// no author to refuse.
-	//
-	// ⛔ **THE CALLEE HALF IS DELIBERATE, AND IT IS "RESERVED", NOT "PREFIXED".** What it must prove is that
-	// no author could have written the name — `isCompilerInternalCallee` answers that for the `__` band and,
-	// through `ReservedCalleeReason.faultProbeEntry`, for `maxon_force_segfault`, whose free-function
-	// declaration `Parser.requireFreeFunctionNameIsNotTheFaultProbe` refuses outright. A runtime file's other
-	// UNRESERVED declarations are ordinary module-scoped names, and `module` is the tier's visibility ceiling
-	// (E3154) precisely so they stay refused outside it: keyed on the tier alone this arm would publish every
-	// one of them to every file in the program.
-	//
-	// ⚠ **IT IS ASKED AFTER THE ORDINARY RULE, AND THE ORDER IS A COST RATHER THAN A PRECEDENCE.** An
-	// admit-list only ever turns a refusal into an admission, so either order answers the same — and every
-	// call site in the program crosses this line. `isRuntimeSourceFile` probes a memo keyed on a
-	// `FilePath`, whose Windows hash lower-cases a copy of the path; asked here, that allocation is
-	// paid only where the ordinary rule has already refused.
-	return isCompilerInternalCallee(callee) and isRuntimeSourceFile(project, path: declared.sourceFilePath)
+	return declarationMayBeNamed(signatures, visibility: declared.visibility, declFilePath: declared.sourceFilePath, registeredName: callee, readerFilePath: callerFilePath, callerName: caller.name)
 end 'calleeVisibleFrom'
 
 // Did the mint spell the whole callee, or only its qualifier? The exemption above turns on the
@@ -4022,7 +3860,7 @@ end 'calleeVisibleFrom'
 // "minted, therefore the compiler's", it would exempt every method call in every program from
 // E3008, so a non-exported method would be callable from any file with a value in hand, and no test
 // in the suite asks that question of a method.
-function mintSpellsTheWholeCallee(mint CalleeMint) returns bool
+module function mintSpellsTheWholeCallee(mint CalleeMint) returns bool
 	return match mint 'm'
 		notMinted or
 		resolvedTypeQualifier gives false
@@ -4128,10 +3966,6 @@ function reportUndefinedInitializerCall(project Project, site InitializerCallSit
 	let message = undefinedFunctionMessage(String.from(site.callee())) if reason == ReservedCalleeReason.notReserved else reservedFunctionUndefinedMessage(String.from(site.callee()), reason: reason)
 	reportPositioned(project, code: ErrorCode.callUnknownFunction, message: message, line: site.range().line, column: site.range().column, filePath: site.readerFilePath())
 end 'reportUndefinedInitializerCall'
-
-function declaredIsNameableFrom(signatures ProgramSignatures, declared IrFunction, readerFilePath FilePath) returns bool
-	return declared.isCompilerBuilt() or signatures.isVisibleFrom(declared.visibility, declFilePath: declared.sourceFilePath, readerFilePath: readerFilePath)
-end 'declaredIsNameableFrom'
 
 // Where an author's function name was written: the three doors E3095 refuses an ambiguous bare name at.
 export enum FunctionNameUse
@@ -6427,7 +6261,7 @@ function checkTypeParameterArgs(project Project, func IrFunction, result ValueId
 	// is refused where the unbound value MEETS a typed place, and reporting it a second time here would
 	// replace a recorded diagnostic with one about the construct's inside.
 	if tag == ValueTypeTag.structRef and sig.takesReceiver() 'aReceiverOfTheBaseItself'
-		checkUnboundTypeParameterArgs(project, func: func, base: aggregateNameFor(project, tag: tag, nameId: subjectNameId, readerFilePath: filePath), sig: sig, argIds: argIds, callRange: callRange, filePath: filePath)
+		checkUnboundTypeParameterArgs(project, func: func, base: aggregateNameIn(programSignaturesIn(project, asker: "checkTypeParameterArgs"), interner: project.typeNames, tag: tag, nameId: subjectNameId, readerFilePath: filePath), sig: sig, argIds: argIds, callRange: callRange, filePath: filePath)
 	end 'aReceiverOfTheBaseItself'
 end 'checkTypeParameterArgs'
 
@@ -6475,7 +6309,7 @@ function checkUnboundTypeParameterArgs(project Project, func IrFunction, base By
 		// The EXPECTED side is asked of the shared producer rather than written as the empty name it must be:
 		// "an opaque place carries no nominal identity" is `typeArgAggregateName`'s sentence, and a second
 		// spelling of it here is a second place for it to change.
-		if not signatures.aggregatesConflict(signatures.typeArgAggregateName(paramType, readerFilePath: filePath), expectedTag: ValueTypeTag.typeParameter, expectedNameId: typeNameIdOf(paramType), expectedBrand: paramBrandOf(sig, position: i as ParamCount, paramTag: ValueTypeTag.typeParameter), got: aggregateNameFor(project, tag: argTag, nameId: argNameId, readerFilePath: filePath), gotTag: argTag, gotNameId: argNameId, gotBrand: valueBrandOf(project, func: func, value: argId), readerFilePath: filePath) 'claimsNoConcreteIdentity'
+		if not signatures.aggregatesConflict(signatures.typeArgAggregateName(paramType, readerFilePath: filePath), expectedTag: ValueTypeTag.typeParameter, expectedNameId: typeNameIdOf(paramType), expectedBrand: paramBrandOf(sig, position: i as ParamCount, paramTag: ValueTypeTag.typeParameter), got: aggregateNameIn(programSignaturesIn(project, asker: "checkUnboundTypeParameterArgs"), interner: project.typeNames, tag: argTag, nameId: argNameId, readerFilePath: filePath), gotTag: argTag, gotNameId: argNameId, gotBrand: valueBrandOf(project, func: func, value: argId), readerFilePath: filePath) 'claimsNoConcreteIdentity'
 			continue
 		end 'claimsNoConcreteIdentity'
 
@@ -6533,7 +6367,7 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 		let substituted = signatures.floatAliasResolved(signatures.functionAliasResolved(signatures.canonicalTypeArg(signatures.substitutedInstanceArg(gid, position: position))), readerFilePath: filePath)
 		view expected = signatures.typeArgAggregateName(substituted, readerFilePath: filePath)
 		let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkTypeParameterArgsAt: value v{argId} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
-		view got = aggregateNameFor(project, tag: argTag, nameId: argNameId, readerFilePath: filePath)
+		view got = aggregateNameIn(programSignaturesIn(project, asker: "checkTypeParameterArgsAt"), interner: project.typeNames, tag: argTag, nameId: argNameId, readerFilePath: filePath)
 
 		// Hoisted out of the failure branch because BOTH halves below want it now, and one unconditional read
 		// is cheaper than threading it into two. It is a dense array read on a path that already does four,
@@ -6658,16 +6492,15 @@ end 'checkTypeParameterArgsAt'
 
 union CallSubject
 	heldBy(value ValueId)
-	builtBy(result ValueId)
+	calledThrough(result ValueId)
 end 'CallSubject'
 
 // ⭐ **WHICH VALUE CARRIES THE INSTANCE a call into a shared generic body is made at.** Two shapes
 // carry it, and they are asked in the order that makes a METHOD's answer its receiver's: an
 // instance method's receiver IS the instance (`heldBy`), whereas its result may be an unrelated
-// type (`get() returns T`), while a receiverless static has only its RESULT (`builtBy`) — the
-// instance it built (`retypeGenericAliasConstructorResult`), or, for a static returning another
-// type, the instance its call was made through (`IrFunction.valueCallInstances`), which only this
-// arm reads.
+// type (`get() returns T`), while a receiverless static has only its RESULT (`calledThrough`), keyed to
+// the instance its call was made through (`IrFunction.valueCallInstances`) whether or not it returns that
+// instance.
 function callInstanceSubject(sig FuncSignature, result ValueId, argIds ValueIdArray) returns CallSubject
 	if sig.takesReceiver() and argIds.count() > 0 'method'
 		return CallSubject.heldBy(try argIds.get(0) otherwise panic("callInstanceSubject: argIds.count() > 0 but get(0) failed"))
@@ -6677,30 +6510,22 @@ function callInstanceSubject(sig FuncSignature, result ValueId, argIds ValueIdAr
 		return CallSubject.heldBy(result)
 	end 'receiverlessMethod'
 
-	return CallSubject.builtBy(result)
+	return CallSubject.calledThrough(result)
 end 'callInstanceSubject'
 
 function subjectValue(subject CallSubject) returns ValueId
 	return match subject 'subject'
 		heldBy(value) gives value
-		builtBy(result) gives result
+		calledThrough(result) gives result
 	end 'subject'
 end 'subjectValue'
 
 function callInstanceOf(func IrFunction, subject CallSubject) returns GenericInstanceId throws AbsentError
 	match subject 'subject'
 		heldBy(value) then return try instanceTypingValue(func, value: value)
-		builtBy(result) then return try instanceBuiltByStaticCall(func, result: result)
+		calledThrough(result) then return try func.valueCallInstances.get(result) otherwise throw AbsentError.absent
 	end 'subject'
 end 'callInstanceOf'
-
-function instanceBuiltByStaticCall(func IrFunction, result ValueId) returns GenericInstanceId throws AbsentError
-	if let recorded = try func.valueCallInstances.get(result) 'aStaticCalledThroughAnInstance'
-		return recorded
-	end 'aStaticCalledThroughAnInstance'
-
-	return try instanceTypingValue(func, value: result)
-end 'instanceBuiltByStaticCall'
 
 function instanceTypingValue(func IrFunction, value ValueId) returns GenericInstanceId throws AbsentError
 	if (try func.valueTags.get(value) otherwise panic("instanceTypingValue: value v{value} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")) != ValueTypeTag.genericInstance 'notAnInstance'
@@ -6725,7 +6550,7 @@ function checkPerInstanceArgs(project Project, func IrFunction, callee ByteArray
 	// Allocation-free short-circuit: when no method in the program declares an inner-alias parameter — every
 	// generics-free program — the per-callee lookup below could not possibly find one, and it mints an
 	// `InnerAliasParamLookup` union box on EVERY call. Gate it out, exactly as the parser gates
-	// `innerAliasParamsIn` on `enclosingInnerAliases.count()` and `aggregateNameFor` gates on `containsQualifier`.
+	// `innerAliasParamsIn` on `enclosingInnerAliases.count()` and `aggregateNameIn` gates on `containsQualifier`.
 	if not signatures.hasInnerAliasParams() 'noPerInstanceMethods'
 		return
 	end 'noPerInstanceMethods'
@@ -6739,7 +6564,7 @@ end 'checkPerInstanceArgs'
 // The body of the per-instance argument check once the callee is known to declare an inner-alias parameter.
 // The receiver's instance alias re-qualifies each inner-alias parameter; the argument's own aggregate name
 // (its per-instance identity, or empty) is compared against it with the SAME `namedAggregatesConflict` rule
-// and `typeDisplayName` wording `checkArgTypes` uses on its own `aggregateNameFor` result — a
+// and `typeDisplayName` wording `checkArgTypes` uses on its own `aggregateNameIn` result — a
 // per-instance alias IS a nominal aggregate here, so the two aggregate-argument checks stay one rule (a
 // future narrower-range compatibility rule lands in one place, not two).
 //
@@ -6783,7 +6608,7 @@ function checkPerInstanceArgsWith(project Project, signatures ProgramSignatures,
 		let argId = try argIds.get(i) otherwise panic("checkPerInstanceArgsWith: argIds.get OOB at {i}")
 		let argTag = try func.valueTags.get(argId) otherwise panic("checkPerInstanceArgsWith: value v{argId} of function '{String.from(func.name)}' has no recorded type")
 		let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkPerInstanceArgsWith: value v{argId} of function '{String.from(func.name)}' has no recorded type name")
-		view got = aggregateNameFor(project, tag: argTag, nameId: argNameId, readerFilePath: filePath)
+		view got = aggregateNameIn(programSignaturesIn(project, asker: "checkPerInstanceArgsWith"), interner: project.typeNames, tag: argTag, nameId: argNameId, readerFilePath: filePath)
 
 		if got.isEmpty() 'decays'
 			continue
@@ -7003,28 +6828,13 @@ end 'reportIrreparableSuppliedDefault'
 // read is cheaper than threading a second value through, and the overwhelmingly common call (no instance
 // subject at all) leaves after it.
 function paramTypeThroughCallInstance(project Project, func IrFunction, subject CallSubject, paramType MaxonType) returns MaxonType
-	let paramTag = maxonTypeTag(paramType)
-
-	if paramTag == ValueTypeTag.typeParameter 'ownedByTheSubstitutedCheck'
-		return paramType
-	end 'ownedByTheSubstitutedCheck'
-
-	if paramTag != ValueTypeTag.structRef and paramTag != ValueTypeTag.genericInstance 'carriesNoDeclarationView'
+	if not paramTagCarriesADeclarationView(maxonTypeTag(paramType)) 'carriesNoDeclarationView'
 		return paramType
 	end 'carriesNoDeclarationView'
 
 	let gid = try callInstanceOf(func, subject: subject) otherwise return paramType
 
-	// ⚠ `var`, because the substitution INTERNS the instance it produces — `Array with T` under `T -> Num` is a
-	// type the program may never spell, and the identity it is compared by has to exist. Same reason
-	// `checkTypeParameterArgsAt` binds the index that way for the compiled-name memo.
-	var signatures = programSignaturesIn(project, asker: "paramTypeThroughCallInstance")
-
-	if paramTag == ValueTypeTag.structRef 'maybeSelf'
-		return slotThroughCallInstance(project, signatures: signatures, slotType: paramType, gid: gid)
-	end 'maybeSelf'
-
-	return signatures.substituteThroughInstance(paramType, id: gid)
+	return paramTypeAtInstance(programSignaturesIn(project, asker: "paramTypeThroughCallInstance"), interner: project.typeNames, gid: gid, paramType: paramType)
 end 'paramTypeThroughCallInstance'
 
 // ⭐⭐ **A FUNCTION-TYPED PARAMETER CARRIES A DECLARATION VIEW TOO — IN ITS SHAPE, WHICH IS WHY THE
@@ -7096,25 +6906,25 @@ end 'functionShapeThroughCallInstance'
 // keeps its `structRef` through resolution and must answer EMPTY here (its name is read live off the type on
 // both sides); only what collapses to bare `integer` — a boxed union/enum, a per-instance ranged alias — has
 // a name that must be carried. That is why the gate is the RESOLVED tag while the answer comes from the
-// UNRESOLVED one, and why `aggregateNameFor` alone would be wrong here: it names a struct.
+// UNRESOLVED one, and why `aggregateNameIn` alone would be wrong here: it names a struct.
 //
 // ⚠ It CROSSES THE SLOT AGAIN rather than taking the caller's crossed type, and that is one extra call of
 // ONE function, not a second spelling of it: the caller holds the RESOLVED form, and the name this needs
-// exists only in the unresolved one. The crossing is `slotThroughCallInstance` either way, so the two cannot
+// exists only in the unresolved one. The crossing is `slotThroughInstance` either way, so the two cannot
 // come to disagree; and it runs on the bare-`T` arm alone, which is a handful of slots in a whole program.
 function substitutedSlotIdentity(project Project, signatures ProgramSignatures, slotType MaxonType, gid GenericInstanceId, carried ByteArray) returns ByteArray
 	if not slotIsBareTypeParameter(slotType) 'concreteAtTheParse'
 		return carried
 	end 'concreteAtTheParse'
 
-	let unresolved = slotThroughCallInstance(project, signatures: signatures, slotType: slotType, gid: gid)
+	let unresolved = slotThroughInstance(signatures, interner: project.typeNames, slotType: slotType, gid: gid)
 
 	if maxonTypeTag(resolveType(project, signatures: signatures, t: unresolved, readerFilePath: CompilerOwnedDeclFilePath)) != ValueTypeTag.integer 'identitySurvivesInTheTypeItself'
 		return EmptySourceText
 	end 'identitySurvivesInTheTypeItself'
 
 	// `CompilerOwnedDeclFilePath` for `resolvedSlotThroughCallInstance`'s reason, two lines up.
-	return aggregateNameFor(project, tag: maxonTypeTag(unresolved), nameId: typeNameIdOf(unresolved), readerFilePath: CompilerOwnedDeclFilePath)
+	return aggregateNameIn(programSignaturesIn(project, asker: "substitutedSlotIdentity"), interner: project.typeNames, tag: maxonTypeTag(unresolved), nameId: typeNameIdOf(unresolved), readerFilePath: CompilerOwnedDeclFilePath)
 end 'substitutedSlotIdentity'
 
 // The RETURN slot's half of the identity above — one name rather than a column, because a function type
@@ -7128,51 +6938,13 @@ end 'returnSlotIdentityThroughCallInstance'
 
 // ⭐ **IS THIS SHAPE SLOT THE BARE-`T` ARM? — the ONE question that decides BOTH halves of the substitution,
 // which is why it has one speller.** It says whether the answer crosses an INTERNER
-// (`slotThroughCallInstance`) and whether the instance can give the slot a pre-erasure IDENTITY it did not
+// (`slotThroughInstance`) and whether the instance can give the slot a pre-erasure IDENTITY it did not
 // have when the alias was parsed (`substitutedSlotIdentity`). Those are two facts about one slot and they
 // must never be decided differently for it: a slot crossed as opaque but scored as concrete would compare a
 // project-space type against an index-space name, which is the pair of bugs both headers record.
-function slotIsBareTypeParameter(slotType MaxonType) returns bool
+module function slotIsBareTypeParameter(slotType MaxonType) returns bool
 	return maxonTypeTag(slotType) == ValueTypeTag.typeParameter
 end 'slotIsBareTypeParameter'
-
-// ⭐⭐ **ONE SLOT OF THAT SUBSTITUTION, CROSSED BACK INTO THIS PASS'S INTERNER — the first of the two steps
-// `Parser.slotTypeThroughReceiver` takes one tier down.**
-// The substitution is asked in the INDEX's space and only the ANSWER crosses, which is that door's own rule;
-// what it adds is that a bare-`T` slot's answer is the instance's ARGUMENT, and that comes back in the WRONG
-// TABLE. `substitutedInstanceArg` answers in `ProgramSignatures.typeNames`, a different interner with its own
-// insertion order, so the id means whatever name happens to sit at that number here.
-//
-// ⛔ **MEASURED** on `typealias Zog = function(Element) returns Element` inside `extension Holder`, called at
-// a `Holder with Integer`: the refusal read **`expected 'fn(Holder.Zog) returns Holder.Zog'`** — the
-// substituted argument rendered as the ALIAS'S OWN NAME, because that name sat at the argument's index-space
-// id in the project table. The identical program with a CONCRETE parameter read `Integer`, which is the same
-// bug landing on a plausible name instead of an absurd one.
-//
-// ⚠ **GATED ON THE DECLARED SLOT, NOT ON THE ANSWER, for `slotTypeThroughReceiver`'s reason turned to this
-// door's shape.** The bare-`T` arm is the ONE arm of `substituteThroughInstanceInterned` that hands back an
-// index-space id — a tuple crossed as a NAME into the interner it was GIVEN, a nested instance answers a
-// whole-program giid, and every other slot is returned untouched — so adopting an answer that never left
-// would re-read a project id in the index's table, which is this same bug pointed the other way.
-//
-// The answer is deliberately still UNRESOLVED, because its two readers need it in that order: the TYPE wants
-// the erasure `resolveTypes` already performed on the arriving side (`resolvedSlotThroughCallInstance`), and
-// `substitutedSlotIdentity` wants the name that erasure destroys. One crossing, two readers.
-function slotThroughCallInstance(project Project, signatures ProgramSignatures, slotType MaxonType, gid GenericInstanceId) returns MaxonType
-	if signatures.slotNamesTheInstancesBase(slotType, interner: project.typeNames, gid: gid) 'theDeclarationsSelf'
-		return MaxonType.genericInstance(gid)
-	end 'theDeclarationsSelf'
-
-	// ⚠ `var` for `functionShapeThroughCallInstance`'s reason — the substitution INTERNS what it produces.
-	var index = signatures
-	let substituted = index.substituteThroughInstanceInterned(slotType, id: gid, interner: project.typeNames)
-
-	if not slotIsBareTypeParameter(slotType) 'noIndexSpaceIdCrossedOut'
-		return substituted
-	end 'noIndexSpaceIdCrossedOut'
-
-	return index.adoptType(substituted, into: project.typeNames)
-end 'slotThroughCallInstance'
 
 // ⭐ **THE CROSSING'S SECOND STEP — the ERASURE, which is what makes the declared side comparable with the
 // arriving one at all.** A generic instance's type ARGUMENT is interned before the alias registries exist,
@@ -7182,7 +6954,7 @@ end 'slotThroughCallInstance'
 function resolvedSlotThroughCallInstance(project Project, signatures ProgramSignatures, slotType MaxonType, gid GenericInstanceId) returns MaxonType
 	// ⚠ **`CompilerOwnedDeclFilePath` — a reader with no file: a generic instance's type ARGUMENT was interned before any file read it**, so
 	// there is no reading file to scope a cross-KIND contested name by.
-	return resolveType(project, signatures: signatures, t: slotThroughCallInstance(project, signatures: signatures, slotType: slotType, gid: gid), readerFilePath: CompilerOwnedDeclFilePath)
+	return resolveType(project, signatures: signatures, t: slotThroughInstance(signatures, interner: project.typeNames, slotType: slotType, gid: gid), readerFilePath: CompilerOwnedDeclFilePath)
 end 'resolvedSlotThroughCallInstance'
 
 // The RETURN slot of the substitution above — the `void`/`value` split, which a match arm's single statement
@@ -7200,7 +6972,7 @@ end 'returnTypeThroughCallInstance'
 // an indirect one — a function TYPE's parameter names are documentation the parser discards
 // (`Parser.readFunctionTypeParam`), which is also why `parseIndirectCall` passes arguments positionally.
 // An EMPTY name is the indirect call's "there is no name", the same `EmptySourceText`-means-none convention
-// `aggregateNameFor` answers with.
+// `aggregateNameIn` answers with.
 //
 // ⚠ **IT IS CALLED ONLY FROM THE REPORTING ARMS, and that is a measurement rather than a preference.**
 // Rendering the label up front and passing it in cost a `String.from` plus an interpolation on EVERY
@@ -7968,7 +7740,7 @@ end 'existentialStoreWideningPlace'
 // question and is asked only when something is actually reported.
 //
 // `preErasedAggregate` is the union/enum identity `resolveTypes` destroys: a STRUCT parameter keeps
-// its `structRef(id)` through resolution so `aggregateNameFor` reads it straight off `paramType`,
+// its `structRef(id)` through resolution so `aggregateNameIn` reads it straight off `paramType`,
 // but a UNION/ENUM parameter collapses to bare `integer`, and only the carrier the parser stashed
 // before that erasure still holds the name. **BOTH call shapes now have one** — a direct call off
 // its signature (`FuncSignature.paramAggregateNames`), an indirect call off the callee's declared
@@ -8039,19 +7811,19 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 	// check below would ACCEPT it, and at a CONSUMING argument (a constructor storing it into a field)
 	// it is then dropped under the DECLARED parameter type's destructor: a wild free the tag check
 	// cannot see. Identity is the interned name, EXACT — an aggregate is never a subtype of another.
-	// The comparison RULE is `namedAggregatesConflict`, shared verbatim with the parser's coercion
-	// sites; only the name EXTRACTION is local. The ARG side always resolves live, because an argument
-	// keeps its `named`/`structRef` tag (`aggregateNameFor` handles both).
-	view spelledAggregate = aggregateNameFor(project, tag: paramTag, nameId: typeNameIdOf(paramType), readerFilePath: filePath)
+	// The comparison RULE is `namedAggregatesConflict` and the name EXTRACTION is `aggregateNameIn`, both
+	// shared verbatim with the parser's coercion sites. The ARG side always resolves live, because an argument
+	// keeps its `named`/`structRef` tag (`aggregateNameIn` handles both).
+	view spelledAggregate = aggregateNameIn(programSignaturesIn(project, asker: "checkOneArgType"), interner: project.typeNames, tag: paramTag, nameId: typeNameIdOf(paramType), readerFilePath: filePath)
 	view expectedAggregate = preErasedAggregate if spelledAggregate.isEmpty() else spelledAggregate
 
 	// ⚠ The ask is NOT gated on the DECLARED side being an aggregate: that skips the
 	// quadrant where a SCALAR parameter meets an AGGREGATE argument — which the tag check cannot refuse
 	// either, so `takesInt(x Integer)` accepts a boxed union and does arithmetic on its payload word.
-	// `tagAdmitsNoAggregate` is what keeps that safe for a `T` parameter, and `argAggregateCannotDecay` what
+	// `tagAdmitsNoAggregate` is what keeps that safe for a `T` parameter, and `aggregateCannotDecayIn` what
 	// keeps it off a byte enum or a per-instance alias, both of which legitimately coerce to an int.
-	if not expectedAggregate.isEmpty() or (tagAdmitsNoAggregate(paramTag) and argAggregateCannotDecay(project, tag: argTag, nameId: argNameId)) 'aggregateComparable'
-		view gotAggregate = aggregateNameFor(project, tag: argTag, nameId: argNameId, readerFilePath: filePath)
+	if not expectedAggregate.isEmpty() or (tagAdmitsNoAggregate(paramTag) and aggregateCannotDecayIn(programSignaturesIn(project, asker: "checkOneArgType"), interner: project.typeNames, tag: argTag, nameId: argNameId)) 'aggregateComparable'
+		view gotAggregate = aggregateNameIn(programSignaturesIn(project, asker: "checkOneArgType"), interner: project.typeNames, tag: argTag, nameId: argNameId, readerFilePath: filePath)
 
 		// ⭐⭐ **THE BYTE-ELEMENT BOUNDARY — the one place two DIFFERENT named aggregates denote one
 		// record, and the reason the DECLARED-function door has to ask what the BUILTIN door already
@@ -8065,7 +7837,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 		// does not ask it refuses a legal program (see `ProgramSignatures.byteBufferBoundaryAdmits`). The
 		// per-instance-alias decay clause the shared door also carries cannot fire here: it needs an
 		// EMPTY `expectedAggregate`, and an empty one only reaches this line through
-		// `argAggregateCannotDecay`, which has already answered the same question wider.
+		// `aggregateCannotDecayIn`, which has already answered the same question wider.
 		var signatures = programSignaturesIn(project, asker: "checkOneArgType")
 
 		// A handle the parser left unconverted because the call's overloads tied is already E3007; every
@@ -8241,98 +8013,8 @@ function argMismatchWithOpaqueTail(sentence String, argTag ValueTypeTag) returns
 	return "{sentence}: {OpaqueValueMisuseSuffix}"
 end 'argMismatchWithOpaqueTail'
 
-// The interned name of the declared STRUCT or boxed UNION/ENUM a (tag, nameId) pair denotes, or
-// `EmptySourceText` for anything that is not one — the SemanticCheck half of the named-aggregate
-// identity check, and the full twin of the parser's `aggregateNameOf`. It resolves against the
-// MERGED `project.typeNames` (an arg's name id was remapped project-global at merge —
-// mergeArtifact) rather than the file-local interner the parser reads, but the SHAPE is identical:
-//
-//   • `structRef` is ALWAYS a declared struct — its name, no registry lookup.
-//   • `named` is a boxed union/enum EXACTLY when the signature index registered its name; a ranged-int
-//     alias is `named` too and is numeric, NOT an aggregate (an argument still carries its
-//     `named` tag, unlike a PARAMETER, which `resolveTypes` erased to `integer` before this pass runs).
-//   • every other tag names no aggregate.
-//
-// The "none" answer is `EmptySourceText`, which `namedAggregatesConflict` reads off `isEmpty()`.
-// ⭐⭐ **IS THIS VALUE AN AGGREGATE THAT CANNOT DECAY TO A SCALAR? — the ARGUMENT-side companion to
-// `tagAdmitsNoAggregate`, and the distinction that "does it NAME an aggregate?" does not draw.**
-//
-// `aggregateNameFor` answers a name for everything with a nominal identity, and two of those legitimately
-// coerce to an integer parameter, so its non-empty answer cannot be the refusal test:
-//
-//   • a NON-BOXED enum — `enum Ascii` over byte values IS its backing integer, and
-//     `byte-enum-comparison.enum-coerces-to-byte-arg` pins the coercion.
-//   • a PER-INSTANCE ranged alias (`WA.Idx`) — a ranged int wearing an instance-qualified name, which
-//     `per-instance-alias-decays-at-a-type-parameter-argument` and `cast-preserves-source` pin decaying.
-//
-// What genuinely cannot decay is a value whose scalar reading would be a POINTER or a record: a struct, a
-// generic instance, a String/Character record, and a BOXED union/enum. That last one is the measured hole
-// (`takesInt(Shape.circle(5))` returned arithmetic on the payload word), and boxed-ness is exactly the line
-// between it and the byte enum beside it — the same line `ProgramSignatures.typeIsManaged` draws one tier
-// down, for the same reason.
-function argAggregateCannotDecay(project Project, tag ValueTypeTag, nameId TypeNameId) returns bool
-	if tagNamesADeclaredType(tag) or tag == ValueTypeTag.genericInstance or tag == ValueTypeTag.string or tag == ValueTypeTag.character 'alwaysARecord'
-		return true
-	end 'alwaysARecord'
-
-	if tag != ValueTypeTag.named 'notNamed'
-		return false
-	end 'notNamed'
-
-	let name = try project.typeNames.nameOf(nameId) otherwise panic("argAggregateCannotDecay: named id {nameId} is not in the project interner — a named value's name id is remapped project-global at merge (mergeArtifact)")
-
-	if project.structTypes.contains(name) 'namedStruct'
-		return true
-	end 'namedStruct'
-
-	if not project.enumTypes.contains(name) 'notEnum'
-		// A ranged int/float alias, per-instance or plain: a scalar wearing a name.
-		return false
-	end 'notEnum'
-
-	view layout = try project.enumTypes.get(name) otherwise panic("argAggregateCannotDecay: enumTypes.contains({String.from(name)}) is true but get failed")
-	return layout.isBoxed()
-end 'argAggregateCannotDecay'
-
-// The whole-program twin of `Parser.aggregateNameOf`: the same tag dispatch, over the merged
-// `project.typeNames`. It asks on a file's behalf because a name TWO KINDS hold carries a nominal identity
-// in one file and none in another (`typeNamePairMayCoexist`); the arm for a value wearing an alias
-// is `ProgramSignatures.namedIdentityOf`, the door the parser asks too, so the two tiers cannot
-// disagree about one name.
-function aggregateNameFor(project Project, tag ValueTypeTag, nameId TypeNameId, readerFilePath FilePath) returns ByteArray
-	if tagNamesADeclaredType(tag) 'struct'
-		return try project.typeNames.nameOf(nameId) otherwise panic("aggregateNameFor: structRef id {nameId} is not in the project interner — a structRef's name id is remapped project-global at merge (mergeArtifact)")
-	end 'struct'
-
-	// ⭐ **AN EXISTENTIAL IS NOMINAL IN ITS INTERFACE** — the whole-program twin of the parser's
-	// `aggregateNameOf` arm, and it carries that arm's whole argument (see there for the measured wrong
-	// answer an empty name produced). It is reached only where the PARAMETER is not itself an interface —
-	// `checkOneArgType`'s existential arm returns before this — so what it answers for is an existential
-	// handed to a CONCRETE place, which is refused by name rather than by the kind word `interface`.
-	if tag == ValueTypeTag.interfaceRef 'existential'
-		return try project.typeNames.nameOf(nameId) otherwise panic("aggregateNameFor: interfaceRef id {nameId} is not in the project interner — an interface name id is remapped project-global at merge (mergeArtifact)")
-	end 'existential'
-
-	// ⭐ A GENERIC INSTANCE IS A NOMINAL AGGREGATE, IDENTIFIED BY ITS COMPILED NAME — the twin of the
-	// parser's `aggregateNameOf` arm, and it reads no interner at all: the id a `genericInstance`
-	// carries is a whole-program `GenericInstanceId`, not a per-file name id. The compiled name is the
-	// EXACT identity to compare on, because `checkTypeSymbolNamespace` has already refused (E3006) any
-	// program in which two instances — or an instance and a declared type — compile to one name, so
-	// two equal names here denote one instance in every program that reaches this pass.
-	if tag == ValueTypeTag.genericInstance 'genericInstance'
-		return programSignaturesIn(project, asker: "aggregateNameFor").canonicalInstanceName(nameId as GenericInstanceId)
-	end 'genericInstance'
-
-	if not valueTagWearsAnAlias(tag, nameId: nameId) 'namesNoAlias'
-		return EmptySourceText
-	end 'namesNoAlias'
-
-	let name = try project.typeNames.nameOf(nameId) otherwise panic("aggregateNameFor: named id {nameId} is not in the project interner — a named value's name id is remapped project-global at merge (mergeArtifact)")
-	return programSignaturesIn(project, asker: "aggregateNameFor").namedIdentityOf(name, readerFilePath: readerFilePath)
-end 'aggregateNameFor'
-
-// ⭐⭐ **THE DISPLAY TWIN OF `aggregateNameFor`, AND THE WHOLE-PROGRAM HALF OF ONE RULE (user ruling,
-// 2026-08-04): a diagnostic names a type the way the AUTHOR WROTE IT.** `aggregateNameFor` answers with the
+// ⭐⭐ **THE DISPLAY TWIN OF `aggregateNameIn`, AND THE WHOLE-PROGRAM HALF OF ONE RULE (user ruling,
+// 2026-08-04): a diagnostic names a type the way the AUTHOR WROTE IT.** `aggregateNameIn` answers with the
 // IDENTITY the checks compare on, and for a generic instance that identity is the canonical `Array_String` —
 // a name no source line holds. The author wrote `typealias StringArray = Array with String`, and
 // `specs/type-checking.md` pins `expected 'StringArray'`.
@@ -8345,8 +8027,7 @@ end 'aggregateNameFor'
 // identities can render as different strings and vice versa — `aggregatesConflict` is still the only door that
 // decides whether two types are one. This function is read BY diagnostics and by nothing else.
 //
-// ⚠ The parser tier's twin is `Parser.displayTypeNameOf`; the two exist for the reason `aggregateNameOf` and
-// `aggregateNameFor` do (different tier, different interner), and both quote the instance name out of the one
+// ⚠ The parser tier's twin is `Parser.displayTypeNameOf`, and both quote the instance name out of the one
 // whole-program index, so they cannot spell a type two ways. **The twinning stops at the LOOKUP and the
 // instance arm — the tail is `ProgramSignatures.displayNameOfAggregate`, shared, because a tag and an
 // already-resolved name belong to no tier.**
@@ -8357,7 +8038,7 @@ function typeDisplayName(project Project, tag ValueTypeTag, nameId TypeNameId, r
 
 	// Its aggregate NAME when it has one (`BoxB`), else the scalar TYPE it actually is (`int` for a bare
 	// integer meeting a union parameter).
-	return programSignaturesIn(project, asker: "typeDisplayName").displayNameOfAggregate(tag, aggregate: aggregateNameFor(project, tag: tag, nameId: nameId, readerFilePath: readerFilePath))
+	return programSignaturesIn(project, asker: "typeDisplayName").displayNameOfAggregate(tag, aggregate: aggregateNameIn(programSignaturesIn(project, asker: "typeDisplayName"), interner: project.typeNames, tag: tag, nameId: nameId, readerFilePath: readerFilePath))
 end 'typeDisplayName'
 
 function refusePromiseOfAnotherType(project Project, slotType MaxonType, argTag ValueTypeTag, argNameId TypeNameId, callRange SourceRange, filePath FilePath) returns bool

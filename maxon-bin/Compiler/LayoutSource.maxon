@@ -57,13 +57,24 @@ module function instanceViewOf(tags ValueTypeTagArray, nameIds TypeNameIdArray, 
 	return InstanceView.other(tag)
 end 'instanceViewOf'
 
-function qualifierViewOf(callInstances ValueCallInstanceMap, result ValueId) returns QualifierView
+function qualifierViewOf(callInstances ValueCallInstanceMap, result ValueId, resultView InstanceView) returns QualifierView
 	if let qualifier = try callInstances.get(result) 'calledThroughAnInstance'
+		if resultIsTheInstance(resultView, gid: qualifier) 'theResultIsTheQualifier'
+			return QualifierView.absent
+		end 'theResultIsTheQualifier'
+
 		return QualifierView.instance(qualifier)
 	end 'calledThroughAnInstance'
 
 	return QualifierView.absent
 end 'qualifierViewOf'
+
+function resultIsTheInstance(resultView InstanceView, gid GenericInstanceId) returns bool
+	return match resultView 'view'
+		instance(built) gives built == gid
+		other gives false
+	end 'view'
+end 'resultIsTheInstance'
 
 module function callSubjectOf(argIds ValueIdArray, takesReceiver bool, result ValueId, callee ByteArray) returns ValueId
 	if not takesReceiver 'noReceiver'
@@ -74,13 +85,15 @@ module function callSubjectOf(argIds ValueIdArray, takesReceiver bool, result Va
 end 'callSubjectOf'
 
 module function hiddenSourceKindFrom(signatures ProgramSignatures, callee ByteArray, result ValueId, tags ValueTypeTagArray, nameIds TypeNameIdArray, callInstances ValueCallInstanceMap) returns HiddenSourceKind
-	return hiddenSourceKindOf(signatures, callee: callee, takesReceiver: signatures.declaredCalleeTakesReceiver(callee), qualifier: qualifierViewOf(callInstances, result: result), result: instanceViewOf(tags, nameIds: nameIds, value: result))
+	let resultView = instanceViewOf(tags, nameIds: nameIds, value: result)
+	return hiddenSourceKindOf(signatures, callee: callee, takesReceiver: signatures.declaredCalleeTakesReceiver(callee), qualifier: qualifierViewOf(callInstances, result: result, resultView: resultView), result: resultView)
 end 'hiddenSourceKindFrom'
 
 module function callLayoutSourceFrom(signatures ProgramSignatures, callee ByteArray, argIds ValueIdArray, result ValueId, tags ValueTypeTagArray, nameIds TypeNameIdArray, callInstances ValueCallInstanceMap) returns CallLayoutSource throws AbsentError
 	let takesReceiver = signatures.declaredCalleeTakesReceiver(callee)
 	let subject = callSubjectOf(argIds, takesReceiver: takesReceiver, result: result, callee: callee)
-	return try callLayoutSourceOf(signatures, callee: callee, takesReceiver: takesReceiver, receiver: instanceViewOf(tags, nameIds: nameIds, value: subject), qualifier: qualifierViewOf(callInstances, result: result), result: instanceViewOf(tags, nameIds: nameIds, value: result))
+	let resultView = instanceViewOf(tags, nameIds: nameIds, value: result)
+	return try callLayoutSourceOf(signatures, callee: callee, takesReceiver: takesReceiver, receiver: instanceViewOf(tags, nameIds: nameIds, value: subject), qualifier: qualifierViewOf(callInstances, result: result, resultView: resultView), result: resultView)
 end 'callLayoutSourceFrom'
 
 function hiddenSourceKindOf(signatures ProgramSignatures, callee ByteArray, takesReceiver bool, qualifier QualifierView, result InstanceView) returns HiddenSourceKind

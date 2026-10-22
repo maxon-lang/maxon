@@ -245,6 +245,54 @@ end 'main'
 3 8
 ```
 
+<!-- test: two-files-each-overload-on-their-own-private-token-of-different-kinds -->
+`Token` is a file-private struct in `a.maxon` and a file-private ranged alias in `main.maxon`, and each file overloads `put` on its own. A parameter spelled `Token` means the declaring file's `Token`, so each call binds the `put` of the file it is written in. It prints `105 204`.
+```maxon
+// --- file: a.maxon
+type Token
+	export let n as Count
+
+	static function make(n Count) returns Self
+		return Self{n: n}
+	end 'make'
+end 'Token'
+
+function put(t Token) returns Count
+	return t.n + 100
+end 'put'
+
+function put(flag bool) returns Count
+	return 1 if flag else 2
+end 'put'
+
+export function useA() returns Count
+	return put(Token.make(5))
+end 'useA'
+
+// --- file: main.maxon
+typealias Token = int(0 to 9)
+
+function put(t Token) returns Count
+	return t + 200
+end 'put'
+
+function put(s String) returns Count
+	return s.count()
+end 'put'
+
+function main() returns ExitCode
+	let t = 4 as Token
+	print("{useA()} {put(t)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+105 204
+```
+
 <!-- test: error.two-spellings-of-one-type-are-ambiguous-at-the-call -->
 Two overloads written at two ALIASES of one underlying type both register — each parameter is identified by
 the alias declaration it names, not by the type underneath — so the program is refused at the CALL, which
@@ -597,13 +645,12 @@ end 'main'
 3 0
 ```
 
-### A parameter type the decider does not read
+### A parameter type written through several namespace segments
 
-<!-- test: error.a-set-with-a-member-the-decider-cannot-read-is-refused -->
-The decider reads a qualified parameter type of one namespace segment and no deeper, so `lib.fmt.Score`
-leaves the void member unscored and the whole set undecided. The result is typed from the `String` of the
-last declaration the sweep read, resolution binds the call to the void member, and the call is refused
-rather than handed a result its callee never writes.
+<!-- test: a-set-with-a-deeply-qualified-parameter-type-resolves -->
+A parameter type may be qualified through any number of namespace segments, and the call is bound against
+it like any other: `pick(7)` fits `lib.fmt.Score` and not the tuple, so it calls the void member, which has
+no result to type. It prints `n7`.
 ```maxon
 // --- file: lib/fmt/score.maxon
 public typealias Score = int(0 to 100)
@@ -624,8 +671,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:17:2: Unsupported: the overloads of 'pick' do not agree on their return type ('String' and 'void'), and this call needed the one they disagree about. A call's result type is fixed while its file is parsed, from the parameter types the whole-program declaration sweep publishes — and they did not settle which overload this call means, so the result was typed from the single return type that index keeps per NAME. Only a difference between plain scalars can be corrected once the overload is known, a whole pass later. Make the overloads return the same type, or spell every overload's parameters as type NAMES that this call's arguments match in exactly one of them
+```exitcode
+0
+```
+```stdout
+n7
 ```
 
 ### Two facts the decider reads

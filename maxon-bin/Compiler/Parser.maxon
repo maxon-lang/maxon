@@ -2197,10 +2197,31 @@ union MessageRoute
 	sendTable(slot CaseIndex, let interfaceName ByteArray)
 end 'MessageRoute'
 
-union SweptDeclarationPick
-	chosen(decl OverloadedDecl)
-	undecided
-end 'SweptDeclarationPick'
+// `unasked` is not `noMember`: the parse decided nothing (one declaration, or an argument whose type is not
+// known yet), and overload resolution scores the call itself.
+union CallPick
+	unasked
+	bound(decl OverloadedDecl)
+	tied(sites NameRoster)
+	noMember
+end 'CallPick'
+
+let sharedUnaskedPick = CallPick.unasked
+let sharedNoMemberPick = CallPick.noMember
+
+union OverloadRowState
+	unbuilt
+	built(rows OverloadRowMemo)
+end 'OverloadRowState'
+
+let sharedOverloadRowsUnbuilt = OverloadRowState.unbuilt
+
+function suppliedInstanceOf(constructed ConstructorInstance) returns SuppliedInstance
+	return match constructed 'constructed'
+		instance(id) gives SuppliedInstance.instance(id)
+		none gives SuppliedInstance.absent
+	end 'constructed'
+end 'suppliedInstanceOf'
 
 function payloadsAgree(payloads PayloadFieldArray, other PayloadFieldArray) returns bool
 	if payloads.count() != other.count() 'differentArity'
@@ -3043,44 +3064,12 @@ end 'aliasPromisesTaken'
 // every compound-typed declaration in the program. NEVER mutated (a `MaxonType` has no mutable state).
 let sharedUnreadParamType = MaxonType.unresolved
 
-// How many candidates of one set hold the best score — a count of OVERLOADS, not of parameters, which is why
-// it is not `ParamCount`. Wide because nothing bounds how many declarations may wear one name: the
-// registration mint counts up an ordinal rather than refusing (`unclaimedRegistrationName`).
-typealias OverloadCandidateCount = int(0 to u64.max)
-
-// ⭐⭐ **THE TAG A *RESOLVED* SIGNATURE WOULD CARRY IN THIS PARAMETER SLOT — for RANKING only.**
-// `SemanticCheck.overloadArgTypeFit` ranks against `project.funcSignatures`, which `resolveTypes`
-// has already erased: a ranged alias, an enum and a boxed union all read `integer` there, while a
-// SWEPT type still spells the name. Ranked without this, an `int` argument scores WIDENING at an
-// `Integer` parameter and WIDENING at a `float` one, the two tie, and the parse-time decider
-// declines a call the resolver settles — on `pick(a Integer) returns String` beside `pick(a Real)`
-// called `pick(1)`, whose answer is `i1`.
-//
-// ⚠ **THE ARGUMENT SIDE IS NOT NORMALIZED, AND THAT IS WHAT MAKES THIS AGREE RATHER THAN MERELY LOOK
-// SIMILAR.** A value declared at an alias keeps its `named` tag in `IrFunction.valueTags` through both passes,
-// so that pass compares a `named` argument against an ERASED parameter — which is exactly the comparison this
-// reproduces by erasing the parameter alone.
-//
-// ⚠ It is asked ONLY for exact-vs-widening. The COMPATIBILITY verdict is taken on the unerased tag, where
-// `named` is what carries the alias's own identity and `checkDeclaredType` is the rule.
-function overloadRankTagOf(paramTag ValueTypeTag) returns ValueTypeTag
-	return ValueTypeTag.integer if paramTag == ValueTypeTag.named else paramTag
-end 'overloadRankTagOf'
-
 union BoundReturn
-	declared(returnType MaxonReturnType, scopeFilePath FilePath, pick SweptDeclarationPick)
+	declared(returnType MaxonReturnType, scopeFilePath FilePath, pick CallPick)
 	undeclared
 end 'BoundReturn'
 
 let sharedUndeclaredReturn = BoundReturn.undeclared
-
-let sharedUndecidedDeclarationPick = SweptDeclarationPick.undecided
-
-// A swept member's parameter names aligned to a call's argument list: the receiver is excluded from a swept
-// parameter list (`OverloadedDecl`) and present in the call's, the same prepend `parseCallNamed` makes.
-function sweptSlotNames(candidate OverloadedDecl) returns NameRoster
-	return callAlignedFrom(candidate.paramNames) if candidate.takesReceiver else candidate.paramNames
-end 'sweptSlotNames'
 
 export function declarationsTheCallSlots(candidates OverloadedDeclArray, argLabels NameRoster) returns OverloadedDeclArray
 	var placeholders = ValueIdArray.create()
@@ -3094,26 +3083,12 @@ export function declarationsTheCallSlots(candidates OverloadedDeclArray, argLabe
 	for decl in candidates 'eachDeclaration'
 		match slotCallArgs(sweptSlotNames(decl), args: placeholders, argLabels: argLabels) 'slot'
 			ordered then slotted.push(decl)
-			arityMismatch or
-			unknownLabel or
-			duplicateArg then continue
+			refused then continue
 		end 'slot'
 	end 'eachDeclaration'
 
 	return candidates.clone() if slotted.isEmpty() else slotted
 end 'declarationsTheCallSlots'
-
-// One candidate's verdict. `unscoreable` is its own arm and not a second spelling of `incompatible`: a
-// candidate whose parameter types the sweep could not read cannot be refused, so counting it out would make
-// "exactly one member fits" a claim about the members that happened to be readable.
-union SweptOverloadFit
-	fits(score OverloadArgScore)
-	incompatible
-	unscoreable
-end 'SweptOverloadFit'
-
-let sharedOverloadIncompatible = SweptOverloadFit.incompatible
-let sharedOverloadUnscoreable = SweptOverloadFit.unscoreable
 
 // The `match`-position stack's two columns start here and are copied on the first push, so a parse that
 // instruments nothing — every parse of an ordinary build — allocates neither. NEVER mutated.
@@ -5110,18 +5085,6 @@ union InferredTypeArgument
 	absent
 end 'InferredTypeArgument'
 
-union FactoryTypeArguments
-	fixed(let typeArgs MaxonTypeArray)
-	unfixed(let paramName ByteArray)
-
-	function arguments() returns MaxonTypeArray throws AbsentError
-		match self 'fixes'
-			fixed(typeArgs) then return typeArgs.clone()
-			unfixed then throw AbsentError.absent
-		end 'fixes'
-	end 'arguments'
-end 'FactoryTypeArguments'
-
 // A type the sweep could not read may be anything, so it never provably differs: a column whose type is
 // unread may be the parameter a body returns, and answering otherwise would let a borrow through as moved.
 function typesProvablyDiffer(a MaxonType, other MaxonType) returns bool
@@ -5131,20 +5094,6 @@ function typesProvablyDiffer(a MaxonType, other MaxonType) returns bool
 
 	return not maxonTypesDenoteSame(a, b: other)
 end 'typesProvablyDiffer'
-
-function typeArgumentListsDenoteSame(list MaxonTypeArray, other MaxonTypeArray) returns bool
-	if list.count() != other.count() 'differentLengths'
-		return false
-	end 'differentLengths'
-
-	for i in 0 upto list.count() 'eachArgument'
-		if not maxonTypesDenoteSame(try list.get(i) otherwise panic("typeArgumentListsDenoteSame: list.get OOB at {i} below its own count"), b: try other.get(i) otherwise panic("typeArgumentListsDenoteSame: other.get OOB at {i} below the equal count")) 'anotherType'
-			return false
-		end 'anotherType'
-	end 'eachArgument'
-
-	return true
-end 'typeArgumentListsDenoteSame'
 
 // ⭐ **WHY AN INFERENCE FIXED NOTHING** — the two shapes, carried to the one door that decides between a
 // refusal and the base `structRef`. A verdict and not a sentence, so the road that discards it renders
@@ -5157,8 +5106,8 @@ union UninferredFactoryReason
 	// another generic body, whose enclosing parameters name no layout.
 	theArgumentsAreStillOpaque
 
-	// The factory is declared more than once, so which parameter list the arguments fill is not settled here.
-	theFactoryIsOverloaded(declarationCount ElementIndex)
+	// The factory is declared more than once and the arguments bind no single one of its declarations.
+	noSingleDeclarationIsBound(declarationCount ElementIndex)
 end 'UninferredFactoryReason'
 
 // The two calls E3162 refuses on a bare generic base the enclosing scope does not bind.
@@ -6722,6 +6671,17 @@ function overloadMemberTypeSuffixes(members OverloadMemberArray) returns NameRos
 
 	return suffixes
 end 'overloadMemberTypeSuffixes'
+
+function registrationNameAmong(key ByteArray, contested bool, typeSuffix ByteArray, labelSuffix ByteArray, members OverloadMemberArray) returns ByteArray
+	if members.isEmpty() and not contested 'firstOfThisNameInItsFile'
+		return key
+	end 'firstOfThisNameInItsFile'
+
+	return match overloadMemberHoldingSignature(members, typeSuffix: typeSuffix, labelSuffix: labelSuffix) 'redeclaration'
+		redeclares(registered) gives registered
+		newSignature gives overloadRegistrationName(key, suffix: overloadSuffixAmong(typeSuffix, labelSuffix: labelSuffix, held: overloadMemberTypeSuffixes(members)))
+	end 'redeclaration'
+end 'registrationNameAmong'
 
 function overloadSuffixAmong(typeSuffix ByteArray, labelSuffix ByteArray, held NameRoster) returns ByteArray
 	for heldSuffix in held 'each'
@@ -17232,7 +17192,7 @@ end 'calleesOf'
 // site does. Shared by the two callers that need the alignment (`callAlignedInstanceParams` for the
 // transitive array-feed scan, `sweptParamNamesFor` for the declaration sweep), because an alignment written
 // twice is two chances to disagree about where `self` sits.
-function callAlignedFrom(sourceNames NameRoster) returns NameRoster
+module function callAlignedFrom(sourceNames NameRoster) returns NameRoster
 	var paramNames = NameRoster.create()
 	paramNames.push(SelfParamName)
 
@@ -18465,6 +18425,7 @@ type FunctionBodyState
 	export var valueExistentialInstance as ValueExistentialInstanceColumn
 	export var valueExistentialScope as ValueExistentialScopeColumn
 	export var valueCallInstance as ValueCallInstanceColumn
+	export var valueInferredInstance as ValueCallInstanceColumn
 
 	// Every store this function makes into an interface-typed field (`ExistentialFieldStore`), started at the
 	// shared empty and replaced on the first write, and swapped across a closure body for its sibling's reason.
@@ -19065,6 +19026,7 @@ type FunctionBodyState
 			valueExistentialInstance: noValueExistentialInstances,
 			valueExistentialScope: noValueExistentialScopes,
 			valueCallInstance: noValueCallInstances,
+			valueInferredInstance: noValueCallInstances,
 			existentialFieldStores: ExistentialFieldStoreArray.create(),
 			valueDeclaredAlias: noValueDeclaredAliases,
 			literalCasts: noLiteralCasts,
@@ -19562,6 +19524,8 @@ export type Parser
 	var declaringWitnessParamBase as ValueId
 	var declaringWitnessParamCount as ParamCount
 
+	var overloadRows as OverloadRowState
+
 	// ⭐ The transitive witness SLOT LIST of each interface this file dispatches through — see
 	// `WitnessSlotTable` for the quadratic that put it here.
 	var witnessSlotsByInterface as WitnessSlotTable
@@ -19934,7 +19898,7 @@ export type Parser
 	//
 	// A contested stdlib declaration is moved into the reserved space (`StdlibShadowRenameMap`), and the
 	// hard half is not moving the DECLARATION — it is reaching every other spelling of the name. The compiler
-	// identifies types by NAME all the way down: `structRef(name)`, `aggregateNameFor`, `__destruct_<name>`,
+	// identifies types by NAME all the way down: `structRef(name)`, `aggregateNameIn`, `__destruct_<name>`,
 	// `__layout_<name>`, both enum registries, the interface registry, a `throws` clause, a qualified case
 	// value, a `Type.method` callee, a struct-literal head. **A rename that reached the declaration and
 	// missed one of those would be a silent wrong answer rather than a compile error** — so it is applied
@@ -20076,6 +20040,7 @@ export type Parser
 			enclosingExtensionConstraints: WhereConstraintArray.create(),
 			declaringWitnessParamBase: 0,
 			declaringWitnessParamCount: 0,
+			overloadRows: sharedOverloadRowsUnbuilt,
 			witnessSlotsByInterface: noWitnessSlots,
 			lastWitnessDispatch: RecordedTryTarget.nothingRecorded,
 			pendingRequirementParam: PendingUnstorableRequirement.none,
@@ -21413,13 +21378,14 @@ export type Parser
 		end 'genericScope'
 
 		var sweptParamTypes = MaxonTypeArray.create()
-		let isAMessage = takesReceiver and isProgramWideTier(visibility) and not self.genericInstanceName.isInstance()
 		var sweptParamSpellings = NameRoster.create()
 
-		let sourceParamNames = self.paramNamesIn(paramsStart, typeParamPositionsOut: scannedTypeParamPositions, collectTypeParamFlags: inGenericScope, typesOut: sweptParamTypes, collectTypes: true, spellingsOut: sweptParamSpellings, collectSpellings: isAMessage)
+		let sourceParamNames = self.paramNamesIn(paramsStart, typeParamPositionsOut: scannedTypeParamPositions, collectTypeParamFlags: inGenericScope, typesOut: sweptParamTypes, collectTypes: true, spellingsOut: sweptParamSpellings)
 		let scannedParamNames = sweptParamNamesFor(sourceParamNames, takesReceiver: takesReceiver)
 		let promiseCarriers = promiseCarrierPositions(sweptParamTypes, takesReceiver: takesReceiver)
-		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: self.opaqueParamsDeclaredBy(scannedParamNames, positions: scannedTypeParamPositions), paramNames: sourceParamNames, paramTypes: sweptParamTypes, paramDeclaredBrands: sweptParamSpellings, returnAliasName: returnAliasName, nameLine: nameTok.line, nameColumn: nameTok.column, enclosingTypeName: self.enclosingTypeNameOrEmpty()))
+		let sweptParamDefaults = self.paramDefaultMaskOf(paramsStart)
+		let declaresDefaults = sweptParamDefaults != NoParamPositions
+		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: self.opaqueParamsDeclaredBy(scannedParamNames, positions: scannedTypeParamPositions), paramNames: sourceParamNames, paramTypes: sweptParamTypes, paramSpellings: sweptParamSpellings, paramDefaults: sweptParamDefaults, returnAliasName: returnAliasName, nameLine: nameTok.line, nameColumn: nameTok.column, enclosingTypeName: self.enclosingTypeNameOrEmpty()))
 
 		// ⭐⭐ **EVERY FREE FUNCTION'S BARE NAME** — recorded
 		// here, from the SAME token walk that records its return type, because it answers two questions only
@@ -21451,7 +21417,9 @@ export type Parser
 		// `return` in every respect that matters here, its `let`-global-alias shape. Both ride the
 		// `ParamDefaultEntry` rather than `entries` and `globalAliasReturns`: the helper's final name
 		// waits on a contest only the fold can see (`ProgramSignatures.recordSweptDefaultHelpers`).
-		self.recordScannedParamDefaults(funcName, paramsStart: paramsStart, takesReceiver: takesReceiver, visibility: visibility, paramDefaults: paramDefaults)
+		if declaresDefaults 'someParameterDefaults'
+			self.recordScannedParamDefaults(funcName, paramsStart: paramsStart, takesReceiver: takesReceiver, visibility: visibility, paramDefaults: paramDefaults)
+		end 'someParameterDefaults'
 
 		// The `throws E` clause follows the return type; parsed BEFORE the consume-scan so the cursor lands
 		// past it. Only a THROWING function gets an entry (its absence is "does not throw"), mirroring
@@ -21564,10 +21532,6 @@ export type Parser
 	// A helper is published at the DECLARING function's own tier, which is the only true statement about it:
 	// nobody writes its name, so no file can be refused it, and every call to it is the compiler's own mint.
 	function recordScannedParamDefaults(funcName ByteArray, paramsStart ElementIndex, takesReceiver bool, visibility Visibility, paramDefaults ParamDefaultEntryArray)
-		if not self.paramListDeclaresDefault(paramsStart) 'noDefaults'
-			return
-		end 'noDefaults'
-
 		var names = NameRoster.create()
 		var producers = ParamDefaultProducerArray.create()
 		var helpers = SweptDefaultHelperArray.create()
@@ -21696,42 +21660,48 @@ export type Parser
 		return DefaultHelperAliasReturn.states(GlobalAliasReturnInfo.create(returnedNames, returnCalls: returnCalls, bareName: helperName, callability: DeclCallability.bareCallOnly, declFilePath: self.job.path))
 	end 'defaultHelperGlobalAliasReturn'
 
-	// Does the parameter list at `parenPos` declare a default on ANY parameter? A peek-only, allocation-free
-	// walk asked once per declared function.
+	// Which source positions of the parameter list at `parenPos` declare a default — a peek-only,
+	// allocation-free walk asked once per declared function.
 	//
 	// ⚠ It is a SEPARATE walk from `recordScannedParamDefaults`' and deliberately so: merged, every function
-	// in the program would allocate the two name arrays that routine builds, on the sweep's hottest path, to
+	// in the program would allocate the arrays that routine builds, on the sweep's hottest path, to
 	// discover that the overwhelming majority declare no default at all. This is the same gate
 	// `recordScannedSignature` puts in front of the `throws` clause and the inner-alias parameter info.
-	function paramListDeclaresDefault(parenPos ElementIndex) returns bool
-		if self.kindAt(parenPos) != TokenKind.leftParen 'noParens'
-			return false
-		end 'noParens'
+	function paramDefaultMaskOf(parenPos ElementIndex) returns ParamPositionMask
+		var defaults = NoParamPositions
 
-		var q = parenPos + 1
-
-		if self.kindAt(q) == TokenKind.rightParen 'noParams'
-			return false
+		if self.kindAt(parenPos) != TokenKind.leftParen or self.kindAt(parenPos + 1) == TokenKind.rightParen 'noParams'
+			return defaults
 		end 'noParams'
 
+		var q = parenPos + 1
+		var position = 0 as ParamCount
+
 		while true 'params'
+			// A parameter past the mask's width is past the argument-slot ceiling too, which the real parse
+			// refuses (E2015) whatever the defaults are.
+			if position >= MaxAbiArgs 'pastTheMask'
+				return defaults
+			end 'pastTheMask'
+
 			let typeEnd = self.skipParamType(q + 1)
 
-			if self.kindAt(typeEnd) == TokenKind.equals 'found'
-				return true
-			end 'found'
+			if self.kindAt(typeEnd) == TokenKind.equals 'aDefaultedParameter'
+				defaults = maskWithParam(defaults, param: position)
+			end 'aDefaultedParameter'
 
-			if self.kindAt(typeEnd) != TokenKind.comma 'endList'
-				return false
+			let itemEnd = self.paramItemEndFrom(typeEnd)
+
+			if self.kindAt(itemEnd) != TokenKind.comma 'endList'
+				return defaults
 			end 'endList'
 
-			q = typeEnd + 1
+			q = itemEnd + 1
+			position = position + 1
 		end 'params'
 
-		// No `paramItemEndFrom` step here, and that is not an omission: this walk RETURNS at the first `=`
-		// it finds, so it never has one to step over.
-		panic("paramListDeclaresDefault: the parameter loop only exits by returning at `=`, the closing `)` or EOF")
-	end 'paramListDeclaresDefault'
+		panic("paramDefaultMaskOf: the parameter loop only exits by returning at the closing `)` or EOF")
+	end 'paramDefaultMaskOf'
 
 	// ⭐ **THE CALL-ALIGNED PARAMETER LIST of an instance method in a generic type** — `SelfParamName` at slot 0
 	// (a concrete slot), then the source parameters, in the SAME order the receiver-prepending
@@ -21749,7 +21719,7 @@ export type Parser
 	// (`scanTypeMethodFeeds`) door onto them.
 	function callAlignedInstanceParams(paramsStart ElementIndex, typeParamPositionsOut TypeParamSlots) returns NameRoster
 		self.pushReceiverTypeParamSlot(typeParamPositionsOut)
-		return callAlignedFrom(self.paramNamesIn(paramsStart, typeParamPositionsOut: typeParamPositionsOut, collectTypeParamFlags: true, typesOut: self.emptySweptParamTypes, collectTypes: false, spellingsOut: self.emptyParamSpellings, collectSpellings: false))
+		return callAlignedFrom(self.paramNamesIn(paramsStart, typeParamPositionsOut: typeParamPositionsOut, collectTypeParamFlags: true, typesOut: self.emptySweptParamTypes, collectTypes: false, spellingsOut: self.emptyParamSpellings))
 	end 'callAlignedInstanceParams'
 
 	// The POSITION half of the alignment above — the receiver's slot-0 entry, which names no `uses` parameter
@@ -24187,7 +24157,7 @@ export type Parser
 	// same list — this is the one place that says which is which.
 	function feedScanParams(paramsStart ElementIndex, takesReceiver bool, typeParamPositionsOut TypeParamSlots) returns NameRoster
 		if not takesReceiver 'receiverless'
-			return self.paramNamesIn(paramsStart, typeParamPositionsOut: typeParamPositionsOut, collectTypeParamFlags: true, typesOut: self.emptySweptParamTypes, collectTypes: false, spellingsOut: self.emptyParamSpellings, collectSpellings: false)
+			return self.paramNamesIn(paramsStart, typeParamPositionsOut: typeParamPositionsOut, collectTypeParamFlags: true, typesOut: self.emptySweptParamTypes, collectTypes: false, spellingsOut: self.emptyParamSpellings)
 		end 'receiverless'
 
 		return self.callAlignedInstanceParams(paramsStart, typeParamPositionsOut: typeParamPositionsOut)
@@ -24476,8 +24446,9 @@ export type Parser
 	// closing `)`; `skipParamType` finds that end (paren depth tracked, because a type may itself contain
 	// parens — `int(0 to 100)`, `function(X) returns Y`).
 	//
-	// ⭐ **AND, ON THE SAME WALK, THE DECLARED TYPE ITSELF** (`typesOut`, gated by `collectTypes` exactly as the
-	// positions are by their own flag) — the CALL-side half of an overload set, read through `sweptParamTypeAt`.
+	// ⭐ **AND, ON THE SAME WALK, THE DECLARED TYPE ITSELF** (`typesOut`, with its written name in `spellingsOut`
+	// — empty for a type that is not a name — both gated by `collectTypes` exactly as the positions are by
+	// their own flag) — the CALL-side half of an overload set, read through `sweptParamTypeAt`.
 	// It rides this walk rather than one of its own for the reason the positions do: `names[i]` and `types[i]`
 	// describe the same parameter by construction, and a call scores an overload on both together.
 	//
@@ -24494,7 +24465,7 @@ export type Parser
 	// — see there: it needs a strictly COARSER answer that this grammar cannot give more cheaply, and a shared
 	// walk that returned index COLUMNS measured **+7,794 allocations at rung 0 of the scale ladder, doubling
 	// per rung**, because it put three heap objects on a once-per-function path.
-	function paramNamesIn(parenPos ElementIndex, typeParamPositionsOut TypeParamSlots, collectTypeParamFlags bool, typesOut MaxonTypeArray, collectTypes bool, spellingsOut NameRoster, collectSpellings bool) returns NameRoster
+	function paramNamesIn(parenPos ElementIndex, typeParamPositionsOut TypeParamSlots, collectTypeParamFlags bool, typesOut MaxonTypeArray, collectTypes bool, spellingsOut NameRoster) returns NameRoster
 		var names = NameRoster.create()
 		var q = parenPos
 
@@ -24523,9 +24494,11 @@ export type Parser
 			if collectTypes 'overloadSurface'
 				typesOut.push(self.sweptParamTypeAt(typeStart, typeEnd: typeEnd))
 
-				if collectSpellings and typeEnd == typeStart + 1 and self.kindAt(typeStart) == TokenKind.identifier 'aSingleNameType'
-					spellingsOut.push(self.tokenAt(typeStart).value)
-				end 'aSingleNameType' else if collectSpellings 'anyOtherType'
+				let spellingSegments = self.dottedChainLengthAt(typeStart)
+
+				if self.kindAt(typeStart) == TokenKind.identifier and typeEnd == typeStart + spellingSegments * TokensPerQualifierSegment + 1 'aNameType'
+					spellingsOut.push(chainSpellingAt(self.tokens, at: typeStart, segments: spellingSegments))
+				end 'aNameType' else 'anyOtherType'
 					spellingsOut.push(EmptySourceText)
 				end 'anyOtherType'
 			end 'overloadSurface'
@@ -24569,27 +24542,15 @@ export type Parser
 	// here moves only the ORDER of registration, and only in a program that declares a tuple parameter.
 	//   • **COST** — this runs at every parameter of every declaration in the program, and a compound type is
 	//     where the reader allocates.
-	//   ⚠ **THE COMMONEST COMPOUND TYPE IS A RANGED INT, NOT A GENERIC INSTANTIATION.** `n int(0 to 100)`
-	//     spans six tokens, so a set with one such parameter is UNSCOREABLE — far more of the corpus than
-	//     `Array with T`, `(A, B)` and `function(X) returns Y` suggest. It is the fallback's commonest
-	//     customer, and the reason that fallback has to stay exactly as good as it was.
 	//   • **REGISTRATION ORDER** — reading a compound type REGISTERS it whole-program: `parseTupleTypeReference`
 	//     interns the tuple through `ProgramSignatures.internTupleType`, which mints a canonical name and a
-	//     layout on the index.
-	//     ⛔ **THIS BULLET USED TO SAY "A PARAMETER LIST IS NOT A PLACE THE SWEEP MAY MINT INSTANCES FROM",
-	//     AND THAT IS FALSE — the sweep already mints them from a RETURN clause two lines from here.**
-	//     `recordScannedSignature` reads `returns (A, B)` through `parseOptionalReturnType` →
-	//     `parseTypeReference` → that same tuple arm, which is deliberately OUTSIDE the `allFilesFolded` gate
-	//     its neighbours sit behind (`sweptStructReturnOf`'s header records what that costs and why it stays).
-	//     So there is no rule being kept here. What is true is narrower and still worth the line: every
-	//     registration the sweep makes moves the `GenericInstanceId` of every later one, and those ids decide
-	//     mangled instance names and which claimant `checkTypeSymbolNamespace` calls the newcomer. Reading
-	//     every parameter list too would add registrations across the whole corpus to buy this decider
-	//     something its fallback already covers.
+	//     layout on the index. Every registration the sweep makes moves the `GenericInstanceId` of every later
+	//     one, and those ids decide mangled instance names and which claimant `checkTypeSymbolNamespace` calls
+	//     the newcomer.
 	//
 	// A type it does not read is recorded as `MaxonType.unresolved` — the tag's own "no type is known here"
-	// arm, never a stand-in for one — and the overload picker treats a declaration carrying one as
-	// UNSCOREABLE rather than as matching anything.
+	// arm, never a stand-in for one — and that parameter fits no argument (`OverloadParam.unreadable`). Every
+	// such type is one the real parse refuses (`SemanticCheck.requireEveryParameterIsReadable`).
 	//
 	// The cursor is saved and restored, so the peek-only contract of the walk that calls this holds.
 	function sweptParamTypeAt(typeStart ElementIndex, typeEnd ElementIndex) returns MaxonType
@@ -24607,24 +24568,18 @@ export type Parser
 		return swept
 	end 'sweptParamTypeAt'
 
-	// ⭐⭐ **A THREE-TOKEN `<Type>.<member>` IS THE ONE COMPOUND SHAPE THE SWEEP DOES READ, AND
-	// NONE OF THE THREE REASONS ABOVE APPLIES TO IT.** It registers nothing (a dotted name is a `named`, and
-	// only tuples and generic instantiations mint), it costs three token tests plus the one-token reader's own
-	// work, and it is not the ranged-int shape the fallback exists for.
+	// ⭐⭐ **A DOTTED NAME, THROUGH ANY NUMBER OF SEGMENTS, IS A COMPOUND SHAPE THE SWEEP DOES READ, AND
+	// NEITHER REASON ABOVE APPLIES TO IT.** It registers nothing (a dotted name is a `named`, and only tuples
+	// and generic instantiations mint), and it costs a token test per segment plus the one-token reader's own
+	// work.
 	//
 	// ⛔ **AND WITHOUT IT A SERVICE CANNOT TAKE A HANDLE, WHICH THE DESIGN REQUIRES.** A message's parameters
 	// ARE the payload fields of the synthesized request union (`ServiceCompanions.serviceRequestPayloads`
 	// resolves each one), so a `run(sink Logger.handle)` recorded `unresolved` builds a payload declared
 	// `unresolved` — and that reaches `classifyUnionPayload`'s panic.
-	// MEASURED as exactly that panic on `services/two-instances-are-independent`, whose `reportThen` takes a
-	// peer's handle.
-	//
-	// ⚠ It widens what the OVERLOAD picker can score, which is the second half of what an unread type costs:
-	// a declaration with a dotted parameter type stops being UNSCOREABLE. That direction is the safe one — the
-	// picker was declining to score a type it could have read — and it is the same widening the return clause
-	// two lines away has always had.
 	function paramTypeIsADottedName(typeStart ElementIndex, typeEnd ElementIndex) returns bool
-		return typeEnd == typeStart + 3 and self.kindAt(typeStart + 1) == TokenKind.dot and tokenCanBeAName(self.tokenAt(typeStart + 2))
+		let dots = self.dottedChainLengthAt(typeStart)
+		return dots > 0 and typeEnd == typeStart + dots * TokensPerQualifierSegment + 1
 	end 'paramTypeIsADottedName'
 
 	// ⭐ The inner-alias PARAMETER shape of the parameter list at `parenPos` — its SOURCE parameter
@@ -25048,7 +25003,7 @@ export type Parser
 		// facts, which the sweep supplies, are a different thing: they separate two DECLARATIONS wearing one
 		// source name, not two members of one overload set, which share a registration key by design.
 		if self.signatures.throwsClauseCollide(base) 'declarationsDisagree'
-			throw SourceParseError.unsupported("overloading '{String.from(base)}' — its declarations do not all state the same `throws` clause, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told whether the call throws at all or which error type it recovers. The `try` is desugared when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give every overload the same `throws` clause, or give the overloads distinct names", line: nameTok.line, column: nameTok.column)
+			throw SourceParseError.unsupported("overloading '{String.from(base)}' — its declarations do not all state the same `throws` clause, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told whether the call throws at all or which error type it recovers. The `try` is desugared when the call is PARSED, from the one clause kept per NAME, so nothing downstream can repair it. Give every overload the same `throws` clause, or give the overloads distinct names", line: nameTok.line, column: nameTok.column)
 		end 'declarationsDisagree'
 
 		// ⚠ **ASKED OF THE WHOLE SURFACE AND NOT ONLY THE OUTRIGHT SPELLING.** A tuple slot and an array
@@ -25056,7 +25011,7 @@ export type Parser
 		// moment, so an overload set that differs only at a slot has the identical unrepairable ambiguity — the
 		// message therefore says NAMES rather than returns.
 		if not surfaceIsPlain(self.signatures.declaredReturnSurface(base)) 'bufferReturningOverload'
-			throw SourceParseError.unsupported("overloading '{String.from(base)}' — one of its declarations NAMES `{String.from(ManagedMemoryTypeName)}` in its return type, and the whole-program declaration sweep publishes that SPELLING under the name the source wrote, so a call to this name cannot be told whether its result carries the buffer's member roster or the `Array`'s. The surface is chosen when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give the overloads distinct names", line: nameTok.line, column: nameTok.column)
+			throw SourceParseError.unsupported("overloading '{String.from(base)}' — one of its declarations NAMES `{String.from(ManagedMemoryTypeName)}` in its return type, and the whole-program declaration sweep publishes that SPELLING under the name the source wrote, so a call to this name cannot be told whether its result carries the buffer's member roster or the `Array`'s. The surface is chosen when the call is PARSED, from the one spelling kept per NAME, so nothing downstream can repair it. Give the overloads distinct names", line: nameTok.line, column: nameTok.column)
 		end 'bufferReturningOverload'
 
 		// ⭐⭐ **PARAMETER DEFAULTS ARE NOT A BLANKET REFUSAL HERE.** The sentence the two above are refused on holds for
@@ -26114,7 +26069,7 @@ export type Parser
 
 				match verdict 'verdict'
 					satisfied then self.publishOrShadowExtensionMethod(index, header: header, conformer: conformer, shadowed: shadowed, qualifiedMethodName: qualifiedMethodName, takesReceiver: memberTakesReceiver, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
-					unmet(unmetInterfaceName, bindingName) then self.foldWithheldExtensionMethod(index, conformer: conformer, methodName: methodName, clause: clause, unmetInterfaceName: unmetInterfaceName, bindingName: bindingName)
+					unmet(unmetInterfaceName, bindingName) then self.foldWithheldExtensionMethod(index, conformer: conformer, methodName: methodName, clause: clause, unmetInterfaceName: unmetInterfaceName, bindingName: bindingName, shadowed: shadowed)
 				end 'verdict'
 
 				// `recordScannedSignature` leaves the cursor at the method BODY's first token, i.e. inside the
@@ -26457,8 +26412,15 @@ export type Parser
 	// Read a WITHHELD method's signature into arrays that are discarded, and file why it is missing. The read
 	// is what keeps the cursor where a published method's leaves it (see the call site); the filing is what
 	// lets the call site say something better than "no such method".
-	function foldWithheldExtensionMethod(index ProgramSignatures, conformer ByteArray, methodName ByteArray, clause String, unmetInterfaceName ByteArray, bindingName ByteArray)
+	function foldWithheldExtensionMethod(index ProgramSignatures, conformer ByteArray, methodName ByteArray, clause String, unmetInterfaceName ByteArray, bindingName ByteArray, shadowed bool)
 		self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramReassigns: ParamReassignEntryArray.create(), globalAliasReturns: GlobalAliasReturnEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), bodyFacts: SweptBodyFactEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: NameRoster.create(), messageMethodNameOut: NameRoster.create())
+
+		// The skip is keyed by the qualified name the conformer's own method also wears, so filing one for a
+		// shadowed method would refuse every call to the conformer's method as E4006.
+		if shadowed 'theConformersOwnMethodIsTheOneItsCallMeans'
+			return
+		end 'theConformersOwnMethodIsTheOneItsCallMeans'
+
 		index.recordConditionalExtensionSkip(qualifiedMethodName(conformer, methodName: methodName), skip: ConditionalExtensionSkip.create(conformer, methodName: methodName, clause: clause, unmetInterfaceName: unmetInterfaceName, bindingName: bindingName))
 	end 'foldWithheldExtensionMethod'
 
@@ -28047,15 +28009,13 @@ export type Parser
 		end 'callee'
 	end 'emitOptionalFuncAddr'
 
-	function widenArgsToInterfaceHandles(callee ByteArray, args ValueIdArray, argLabels NameRoster, anchor Token, rparenTok Token)
+	function widenArgsToInterfaceHandles(callee ByteArray, pick CallPick, args ValueIdArray, argLabels NameRoster, anchor Token, rparenTok Token)
 		if not self.signatures.declaresAnInterfaceHandle() 'noInterfaceHandle'
 			return
 		end 'noInterfaceHandle'
 
-		match self.sweptDeclarationOf(callee, args: args, argLabels: argLabels) 'declaration'
-			undecided then return
-			chosen(decl) then self.widenArgsToDeclaration(decl, args: args, argLabels: argLabels, anchor: anchor, rparenTok: rparenTok)
-		end 'declaration'
+		let decl = try self.declarationBoundBy(callee, pick: pick) otherwise return
+		self.widenArgsToDeclaration(decl, args: args, argLabels: argLabels, anchor: anchor, rparenTok: rparenTok)
 	end 'widenArgsToInterfaceHandles'
 
 	function widenArgsToDeclaration(decl OverloadedDecl, args ValueIdArray, argLabels NameRoster, anchor Token, rparenTok Token)
@@ -33680,7 +33640,7 @@ export type Parser
 	// The same question asked of a VALUE rather than of a written type — the shape the `try … otherwise`
 	// check needs, where what is in hand is the try's result and not the callee's declared return type.
 	// A ranged-int alias value carries tag `named` and its alias name in the parallel name column (see
-	// `aggregateNameOf`), so the two routes reach the identical registry probe below.
+	// `aggregateNameIn`), so the two routes reach the identical registry probe below.
 	function declaredAliasOfValue(value ValueId) returns DeclaredAlias
 		if self.tagOf(value) != ValueTypeTag.named 'notNamed'
 			return DeclaredAlias.undeclared
@@ -39102,8 +39062,8 @@ export type Parser
 		// ⚠ The two names decide the verdict and do not spell it: for a generic instance they are the
 		// canonical `Box_Leaf`, which no source line holds. The message renders through
 		// `displayTypeNameOf`, as the argument voice does, so the author's `LeafBox` is what both say.
-		view declaredAggregate = self.aggregateNameOf(declaredTag, nameId: typeNameIdOf(binding.varType))
-		view assignedAggregate = self.aggregateNameOf(valueTag, nameId: self.valueNameId(value))
+		view declaredAggregate = aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: declaredTag, nameId: typeNameIdOf(binding.varType), readerFilePath: self.job.path)
+		view assignedAggregate = aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: valueTag, nameId: self.valueNameId(value), readerFilePath: self.job.path)
 		let declaredBrand = self.internedName(binding.brandId)
 
 		if self.signatures.aggregatesConflict(declaredAggregate, expectedTag: declaredTag, expectedNameId: typeNameIdOf(binding.varType), expectedBrand: declaredBrand, got: assignedAggregate, gotTag: valueTag, gotNameId: self.valueNameId(value), gotBrand: self.brandOf(value), readerFilePath: self.job.path) 'aggregateReassignMismatch'
@@ -41082,6 +41042,11 @@ export type Parser
 			entries(byValue) then func.valueCallInstances = byValue
 		end 'function'
 
+		match self.bodyState.valueInferredInstance 'function'
+			unwritten then break
+			entries(byValue) then func.valueInferredInstances = byValue
+		end 'function'
+
 		match self.bodyState.literalCastArguments 'function'
 			unwritten then break
 			entries(confirmed) then func.literalCastArguments = confirmed
@@ -41505,9 +41470,9 @@ export type Parser
 			return value
 		end 'notAMixedExpression'
 
-		view slot = self.aggregateNameOf(maxonTypeTag(declared), nameId: typeNameIdOf(declared))
+		view slot = aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: maxonTypeTag(declared), nameId: typeNameIdOf(declared), readerFilePath: self.job.path)
 
-		if slot.equals(self.aggregateNameOf(self.tagOf(value), nameId: self.valueNameId(value))) 'alreadyTheDestinationsType'
+		if slot.equals(aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: self.tagOf(value), nameId: self.valueNameId(value), readerFilePath: self.job.path)) 'alreadyTheDestinationsType'
 			self.shedOperandAliasSet(value)
 			return value
 		end 'alreadyTheDestinationsType'
@@ -41530,15 +41495,13 @@ export type Parser
 		end 'aMixedExpression'
 	end 'shedOperandAliasSet'
 
-	function admitOperandAliasSetArgs(callee ByteArray, args ValueIdArray, argLabels NameRoster, anchor Token) throws SourceParseError
+	function admitOperandAliasSetArgs(callee ByteArray, pick CallPick, args ValueIdArray, argLabels NameRoster, anchor Token) throws SourceParseError
 		if not self.someArgNeedsItsDestinationsType(args) 'noMixedExpression'
 			return
 		end 'noMixedExpression'
 
-		match self.sweptDeclarationOf(callee, args: args, argLabels: argLabels) 'declaration'
-			undecided then return
-			chosen(decl) then try self.admitOperandAliasSetArgsTo(decl, args: args, argLabels: argLabels, anchor: anchor)
-		end 'declaration'
+		let decl = try self.declarationBoundBy(callee, pick: pick) otherwise return
+		try self.admitOperandAliasSetArgsTo(decl, args: args, argLabels: argLabels, anchor: anchor)
 	end 'admitOperandAliasSetArgs'
 
 	function someArgNeedsItsDestinationsType(args ValueIdArray) returns bool
@@ -42136,82 +42099,6 @@ export type Parser
 		return self.signatures.instanceArgBrand(giid, position: ContainerElementArgPosition)
 	end 'elementBrandOf'
 
-	// ⭐ **THE INTERNED NAME OF THE DECLARED AGGREGATE A (tag, nameId) PAIR DENOTES, OR
-	// `EmptySourceText` FOR ANYTHING THAT IS NOT ONE** — a scalar, a ranged-int alias, a String. The
-	// parser-tier half of the aggregate identity check: it tells a struct/enum name apart from a
-	// numeric alias by a registry lookup.
-	//
-	// ⚠ **KEEP THE TAG DISPATCH IN LOCKSTEP WITH ITS SemanticCheck TWIN `aggregateNameFor`** — the two
-	// answer the SAME question (which tags name an aggregate, and how) on the two interners the two tiers
-	// hold, so they cannot share a call; teach a new aggregate tag to one and not the other and a value the
-	// parser names an aggregate would slip the call-argument check as a scalar. The specs on BOTH sides are
-	// the net: `error.return-wrong-union` guards this one, `error.callarg-wrong-union-*` the twin. The one
-	// arm that consults a REGISTRY rather than reading the tag — `named` — is not twinned: both ask
-	// `ProgramSignatures.namedIdentityOf`, given the name each interner resolves.
-	//
-	// It takes the SCALAR (tag, nameId) pair, never a `MaxonType`, so a coercion site reads it off the
-	// `valueTags`/`valueNameIds` columns (or a declared type's tag/id) and materializes no heap union —
-	// the discipline TypeRules' header states for every type rule, and the reason `structRef`-returning
-	// is checked without an allocation on the common scalar-returning path.
-	//
-	//   • `structRef` is ALWAYS a declared struct — its name, no registry lookup (the parser mints the
-	//     arm only for a declared `type`, so `structRef` cannot name anything else).
-	//   • `named` is overloaded — a boxed union/enum (TypeResolution erases it to an integer only later), a
-	//     per-instance alias, a plain ranged alias — and `namedIdentityOf` says which identity it carries;
-	//     a ranged alias's CLASS stays numeric (the theorem `typeClassOf` rests on).
-	//   • a `float` that wears an alias name (`wearFloatAlias`) asks `namedIdentityOf` too, which is what
-	//     keeps a float alias nominal where its tag alone says only `float`.
-	//   • every other tag names no aggregate.
-	//
-	// The "none" answer is `EmptySourceText`, matching this file's `enclosingType` idiom: a real
-	// aggregate name is never empty, so `isEmpty()` distinguishes it exactly (`namedAggregatesConflict`).
-	function aggregateNameOf(tag ValueTypeTag, nameId TypeNameId) returns ByteArray
-		if tag == ValueTypeTag.structRef 'struct'
-			return self.internedName(nameId)
-		end 'struct'
-
-		// ⭐⭐ **AN EXISTENTIAL IS A NOMINAL AGGREGATE, IDENTIFIED BY ITS INTERFACE,
-		// AND WITHOUT THIS ARM IT IS A MEASURED SILENT WRONG ANSWER.** Two existentials share the
-		// `interfaceRef` tag and therefore `TypeClass.interfaceValue`, so `checkDeclaredType` — the tag-only
-		// verdict every coercion site opens with — AGREES for any two interfaces. Nothing else then asks:
-		// this function is where the parser's assignment, return, field-store, global-store and
-		// container-element doors get their nominal identity, and an empty answer means "no identity to
-		// compare".
-		//
-		// **MEASURED**, on `interface Derived extends Base` with `var t = <a Base>` then `t = <a Derived>`:
-		// the program COMPILED and returned **2** where the answer is **1**. `t.base()` numbered slot 0 of
-		// `Base`'s table through `__witness_Impl.Derived`, whose slot 0 is `derived()` —
-		// `interfaceWitnessSlots` puts an interface's OWN requirements before its parents'. A wrong function
-		// pointer, no diagnostic, and the one thing the refusal exists to stop.
-		//
-		// ⚠ **NAME IDENTITY IS EXACT HERE, AND DELIBERATELY NOT THE `extends`-TRANSITIVE RULE
-		// `ConformanceCheck.typeConformsTo` USES.** A CONCRETE `Impl implements Derived` reaching a `Base`
-		// place is a widening the argument door performs by MATERIALIZING `__witness_Impl.Base`; a `Derived`
-		// EXISTENTIAL reaching one is not, because its witness half already addresses `Derived`'s table and
-		// there is no conversion between two tables with two slot orders. Transitive conformance answers the
-		// first question; exact identity answers this one.
-		if tag == ValueTypeTag.interfaceRef 'existential'
-			return self.internedName(nameId)
-		end 'existential'
-
-		// ⭐ A GENERIC INSTANCE IS A NOMINAL AGGREGATE, IDENTIFIED BY ITS COMPILED NAME. `Box with
-		// Leaf` and `Box with Other` are both `genericInstance`-tagged pointers to a base `Box` box, so the
-		// tag check reads them as one type and the wrong one, stored where the other is declared, is later
-		// dropped by the wrong `__destruct_<instance>` — the identical wild free two distinct STRUCTS sharing
-		// `structRef` would be, one abstraction up. The id a `genericInstance` carries is a
-		// `GenericInstanceId`, which is whole-program (not a file-local interner id), so it needs no
-		// `internedName` — and its name is a pure READ here, pre-derived by `queryProgramSignatures`.
-		if tag == ValueTypeTag.genericInstance 'genericInstance'
-			return self.signatures.canonicalInstanceName(nameId as GenericInstanceId)
-		end 'genericInstance'
-
-		if not valueTagWearsAnAlias(tag, nameId: nameId) 'namesNoAlias'
-			return EmptySourceText
-		end 'namesNoAlias'
-
-		return self.signatures.namedIdentityOf(self.internedName(nameId), readerFilePath: self.job.path)
-	end 'aggregateNameOf'
-
 	// ⭐ **RECORD A FUNCTION VALUE MEETING A FUNCTION-TYPED PLACE — the FUNCTION twin of the nominal
 	// `aggregatesConflict` identity check every door beside this one already makes.** A `structRef` and a
 	// `function` are both aggregates the tag check reads as one type: two different structs share
@@ -42285,7 +42172,7 @@ export type Parser
 	// refused the legal program that passes one to the other. A near-mirror that is not exact is this
 	// project's signature bug — so the two sides share the extraction, not merely the comparison.
 	//
-	// ⚠ **CALLABLE ONLY FROM THE REAL PARSE**, for `resolveNamedStruct`/`aggregateNameOf`'s own reason: both
+	// ⚠ **CALLABLE ONLY FROM THE REAL PARSE**, for `resolveNamedStruct`/`aggregateNameIn`'s own reason: both
 	// consult `self.signatures`, which the tolerant declaration SWEEP is still building, so a name the sweep
 	// has not reached yet would classify differently there. Every caller is inside a `recordSignature`-gated
 	// or real-parse-only path.
@@ -42297,7 +42184,7 @@ export type Parser
 			return EmptySourceText
 		end 'survivesResolution'
 
-		return self.aggregateNameOf(tag, nameId: typeNameIdOf(resolved))
+		return aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: tag, nameId: typeNameIdOf(resolved), readerFilePath: self.job.path)
 	end 'erasedAggregateNameOf'
 
 	// The same extraction for a RETURN slot — a `void` return carries no type and so no identity. Its column
@@ -42813,8 +42700,8 @@ export type Parser
 	function admitReturnedAggregate(func IrFunction, returned ValueId, retTag ValueTypeTag, declaredTag ValueTypeTag, declaredNameId TypeNameId, retStart ElementIndex, anchor Token) returns ValueId throws SourceParseError
 		let declaredType = try valueTypeOfReturn(func.maxonReturnType) otherwise panic("admitReturnedAggregate: a void return type has no value — the caller must gate on maxonReturnTypeIsVoid first")
 		let value = try self.destinationTemporary(returned, declared: declaredType, anchor: anchor)
-		view declaredReturnName = self.aggregateNameOf(declaredTag, nameId: declaredNameId)
-		view returnedName = self.aggregateNameOf(retTag, nameId: self.valueNameId(value))
+		view declaredReturnName = aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: declaredTag, nameId: declaredNameId, readerFilePath: self.job.path)
+		view returnedName = aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: retTag, nameId: self.valueNameId(value), readerFilePath: self.job.path)
 		view returnBrand = self.bodyState.functionReturnBrand
 
 		if not returnBrand.isEmpty() and retTag == ValueTypeTag.genericInstance 'aBrandedReturnMayMeetAnUnadoptedRead'
@@ -45216,8 +45103,8 @@ export type Parser
 		//
 		// ⚠ The two names decide the verdict and do not spell it, as at the return and reassignment
 		// doors: the message renders the author's alias, not the canonical instance name.
-		view resultAggregate = self.aggregateNameOf(self.tagOf(result), nameId: self.valueNameId(result))
-		view fallbackAggregate = self.aggregateNameOf(self.tagOf(otherwiseValue), nameId: self.valueNameId(otherwiseValue))
+		view resultAggregate = aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: self.tagOf(result), nameId: self.valueNameId(result), readerFilePath: self.job.path)
+		view fallbackAggregate = aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: self.tagOf(otherwiseValue), nameId: self.valueNameId(otherwiseValue), readerFilePath: self.job.path)
 
 		if self.signatures.aggregatesConflict(resultAggregate, expectedTag: self.tagOf(result), expectedNameId: self.valueNameId(result), expectedBrand: self.brandOf(result), got: fallbackAggregate, gotTag: self.tagOf(otherwiseValue), gotNameId: self.valueNameId(otherwiseValue), gotBrand: self.brandOf(otherwiseValue), readerFilePath: self.job.path) 'aggregateOtherwiseMismatch'
 			try self.refuseOtherwiseMismatch(self.valueDisplayTypeName(otherwiseValue), expectedType: self.valueDisplayTypeName(result), fallback: otherwiseValue, tryTok: tryTok)
@@ -46484,6 +46371,14 @@ export type Parser
 		let flag = self.rewriteRoutedOp(opIdx)
 		self.forkOntoPropagatingHandler(func, flag: flag, clause: clause, result: result, anchor: anchorTokenSpanning(self.artifact.opRanges.get(opIdx)), reportsTheThrow: self.testBodyAbsorbs(clause), leg: SentLegSlot.none)
 	end 'routeToImpliedTestHandler'
+
+	function namingCallerName() returns ByteArray
+		if self.artifact.module.functions.isEmpty() 'noBodyWasEverParsed'
+			return EmptySourceText
+		end 'noBodyWasEverParsed'
+
+		return self.bodyFunction().name
+	end 'namingCallerName'
 
 	function bodyFunction() returns IrFunction
 		return try self.artifact.module.functions.get(self.artifact.currentFuncIndex) otherwise panic("bodyFunction: the function whose body is being parsed ({self.artifact.currentFuncIndex}) is not in this file's module — every body door pushes its function before it stamps the index")
@@ -50400,7 +50295,7 @@ export type Parser
 	end 'calleeFillsDefaultsAfter'
 
 	function anyGenericTemplateOmitsAParameter(callee ByteArray, written Count, receiverSlots ParamCount) returns bool
-		for template in self.genericTemplatesNameableHere(callee) 'eachTemplate'
+		for template in self.genericTemplatesNameableHere(callee, mint: CalleeMint.notMinted) 'eachTemplate'
 			if omittedParametersRemain(sweptParamNamesFor(template.paramNames, takesReceiver: template.takesReceiver).count(), written: written, receiverSlots: receiverSlots) 'moreDeclared'
 				return true
 			end 'moreDeclared'
@@ -57244,7 +57139,7 @@ export type Parser
 			let firstGive = self.giveValueOf(baselineArm.give)
 			let firstTag = self.tagOf(firstGive)
 			let firstNameId = self.valueNameId(firstGive)
-			view firstAggregate = self.aggregateNameOf(firstTag, nameId: firstNameId)
+			view firstAggregate = aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: firstTag, nameId: firstNameId, readerFilePath: self.job.path)
 
 			for i in 0 upto reachingArms.count() 'scanGiveType'
 				view arm = try reachingArms.get(i) otherwise panic("finalizeMatchMerge: reachingArms.get OOB at {i}")
@@ -57256,7 +57151,7 @@ export type Parser
 
 				let giveTag = self.tagOf(giveVal)
 				let giveNameId = self.valueNameId(giveVal)
-				view giveAggregate = self.aggregateNameOf(giveTag, nameId: giveNameId)
+				view giveAggregate = aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: giveTag, nameId: giveNameId, readerFilePath: self.job.path)
 
 				let classDisagrees = not typesAgree(giveTag, right: firstTag)
 				let nameDisagrees = self.signatures.aggregatesConflict(firstAggregate, expectedTag: firstTag, expectedNameId: firstNameId, expectedBrand: self.brandOf(firstGive), got: giveAggregate, gotTag: giveTag, gotNameId: giveNameId, gotBrand: self.brandOf(giveVal), readerFilePath: self.job.path)
@@ -57499,7 +57394,7 @@ export type Parser
 	// False for a `float` or ranged-float alias (ALREADY in the float domain — no promotion), for a
 	// bool/String/function/type-parameter (NON-numeric — a genuine type mismatch), and for a `named`
 	// AGGREGATE, which is numeric-CLASSED (`typeClassOf(named) == numeric`) but is a POINTER to a box that
-	// `cvtsi2sd` would corrupt — told apart from a numeric alias by `aggregateNameOf`, exactly as
+	// `cvtsi2sd` would corrupt — told apart from a numeric alias by `aggregateNameIn`, exactly as
 	// `checkGiveTypes` tells them apart. Reads the tag/name columns only, materialising no `MaxonType`.
 	function giveIsPromotableToFloat(give ValueId) returns bool
 		let tag = self.tagOf(give)
@@ -57512,14 +57407,14 @@ export type Parser
 
 		// A `named` value is a ranged alias OR a declared aggregate. A ranged-FLOAT alias is already
 		// float-domain (no promotion); a declared aggregate (union/enum/per-instance alias) is a POINTER,
-		// not a number, that `cvtsi2sd` would corrupt (`aggregateNameOf` names it); only a plain ranged-INT
+		// not a number, that `cvtsi2sd` would corrupt (`aggregateNameIn` names it); only a plain ranged-INT
 		// alias — numeric, no aggregate name — promotes.
 		if tag == ValueTypeTag.named 'namedType'
 			if self.namedIsFloatAlias(nameId) 'floatAlias'
 				return false
 			end 'floatAlias'
 
-			return self.aggregateNameOf(tag, nameId: nameId).isEmpty()
+			return aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: tag, nameId: nameId, readerFilePath: self.job.path).isEmpty()
 		end 'namedType'
 
 		// A `float` (already float-domain), bool, String, function, struct, type parameter, generic
@@ -57588,7 +57483,7 @@ export type Parser
 	// for a match.
 	//
 	// ⚠ Both arms print through `valueDisplayTypeName`, the one value-display door, and not through
-	// `aggregateNameOf`, the identity `checkGiveTypes` compares on: for a generic instance that
+	// `aggregateNameIn`, the identity `checkGiveTypes` compares on: for a generic instance that
 	// identity is a canonical mint no source line holds.
 	function valueMergeGiveMismatch(construct MergeConstruct, reachingArms MatchArmExitArray, firstArm MatchArmExit, gotArm MatchArmExit, matchTok Token) returns SourceParseError
 		var displayArm = gotArm
@@ -57599,7 +57494,7 @@ export type Parser
 
 		let firstGive = self.giveValueOf(firstArm.give)
 		let gotGive = self.giveValueOf(displayArm.give)
-		let paired = self.pairedDisplays(gotGive, declaredTag: self.tagOf(firstGive), declaredNameId: self.valueNameId(firstGive), declaredBrand: self.brandOf(firstGive), declaredIdentity: self.aggregateNameOf(self.tagOf(firstGive), nameId: self.valueNameId(firstGive)), declaredShown: self.valueDisplayTypeName(firstGive))
+		let paired = self.pairedDisplays(gotGive, declaredTag: self.tagOf(firstGive), declaredNameId: self.valueNameId(firstGive), declaredBrand: self.brandOf(firstGive), declaredIdentity: aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: self.tagOf(firstGive), nameId: self.valueNameId(firstGive), readerFilePath: self.job.path), declaredShown: self.valueDisplayTypeName(firstGive))
 		return valueMergeMismatchError(construct == MergeConstruct.ternary, expectedDisplay: self.valueDisplayTypeName(firstGive), gotDisplay: self.valueDisplayTypeName(gotGive), line: matchTok.line, column: matchTok.column, expectedNote: paired.declaredNote, gotNote: paired.gotNote)
 	end 'valueMergeGiveMismatch'
 
@@ -63851,7 +63746,7 @@ export type Parser
 	end 'ownTypeNamedByCast'
 
 	// Is `xs as Ys` a cast between two brands of ONE generic instance, or between two instances whose elements
-	// are same-named declarations of one layout? Then nothing converts. Compared on the CANONICAL name, which is what `aggregateNameOf` compares: `Box with N0` and `Box with (Box with S0)`
+	// are same-named declarations of one layout? Then nothing converts. Compared on the CANONICAL name, which is what `aggregateNameIn` compares: `Box with N0` and `Box with (Box with S0)`
 	// are one instance under two gids, as `both-spellings-agree-at-the-comparison` pins.
 	function castIsARebrand(value ValueId, targetType MaxonType) returns bool
 		if maxonTypeTag(targetType) != ValueTypeTag.genericInstance or self.tagOf(value) != ValueTypeTag.genericInstance 'notTwoInstances'
@@ -64087,7 +63982,7 @@ export type Parser
 	// `castNamesItsValue`'s question: it mints for a bare local, and `convertValueToDeclaredType`
 	// renames an expression's own integer in place.
 	function castChangesTheNominalIdentity(value ValueId, targetType MaxonType) returns bool
-		return self.signatures.identitiesConflict(self.aggregateNameOf(maxonTypeTag(targetType), nameId: typeNameIdOf(targetType)), got: self.aggregateNameOf(self.tagOf(value), nameId: self.valueNameId(value)), readerFilePath: self.job.path) or self.castNamesAnImplementedAlias(value, targetType: targetType)
+		return self.signatures.identitiesConflict(aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: maxonTypeTag(targetType), nameId: typeNameIdOf(targetType), readerFilePath: self.job.path), got: aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: self.tagOf(value), nameId: self.valueNameId(value), readerFilePath: self.job.path), readerFilePath: self.job.path) or self.castNamesAnImplementedAlias(value, targetType: targetType)
 	end 'castChangesTheNominalIdentity'
 
 	function castNamesAnImplementedAlias(value ValueId, targetType MaxonType) returns bool
@@ -67207,6 +67102,22 @@ export type Parser
 		byValue.upsert(result, value: instance)
 	end 'recordValueCallInstance'
 
+	function recordValueInferredInstance(result ValueId, instance GenericInstanceId)
+		var byValue = self.valueInferredInstancesForWrite()
+		byValue.upsert(result, value: instance)
+	end 'recordValueInferredInstance'
+
+	function valueInferredInstancesForWrite() returns ValueCallInstanceMap
+		match self.bodyState.valueInferredInstance 'state'
+			unwritten then break
+			entries(byValue) then return byValue
+		end 'state'
+
+		let fresh = ValueCallInstanceMap.create()
+		self.bodyState.valueInferredInstance = ValueCallInstanceColumn.entries(fresh)
+		return fresh
+	end 'valueInferredInstancesForWrite'
+
 	function valueCallInstancesForWrite() returns ValueCallInstanceMap
 		match self.bodyState.valueCallInstance 'state'
 			unwritten then break
@@ -69336,7 +69247,7 @@ export type Parser
 	// ⭐⭐ **WHAT MAY STAND IN AN INTERFACE-TYPED FIELD.** A value already held at an interface must be held at
 	// THIS one, EXACTLY, and deliberately not by the `extends`-transitive rule: a `Derived` witness addresses
 	// `Derived`'s table, whose slot ORDER is not `Base`'s, so forwarding one into a `Base` slot is a wrong
-	// function pointer rather than a widening (`aggregateNameOf`'s existential arm carries the measurement).
+	// function pointer rather than a widening.
 	// `requireManagedValueMatches` decides that, over the DECLARED interface type.
 	//
 	// A CONCRETE value is admitted and widened at the store (`fieldStoreWitness`). Whether it conforms is
@@ -69545,8 +69456,8 @@ export type Parser
 		// value in that body (`self.value = Label.create(77)` inside `Box uses T`) is a genuine mismatch the
 		// shared body cannot justify for every instantiation, and it is refused here: unguarded it had compiled
 		// and exited **101, a leak**, printing a box pointer as an integer.
-		view wantName = self.aggregateNameOf(wantTag, nameId: typeNameIdOf(storage))
-		view gotName = self.aggregateNameOf(got, nameId: self.valueNameId(value))
+		view wantName = aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: wantTag, nameId: typeNameIdOf(storage), readerFilePath: self.job.path)
+		view gotName = aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: got, nameId: self.valueNameId(value), readerFilePath: self.job.path)
 
 		if not placeBrand.isEmpty() and got == ValueTypeTag.genericInstance 'aBrandedPlaceMayMeetAnUnadoptedRead'
 			self.recordUnadoptedBrandDoor(value, expected: placeBrand, door: placeDoor, placeName: placeName, owner: placeOwner, anchor: anchor)
@@ -73321,7 +73232,7 @@ export type Parser
 	//
 	// Asked after the factory inference, because arguments that fix every parameter to a concrete type build
 	// that instance and leave no bare subject; and before the result is minted, so a refused call emits nothing.
-	function requireBareGenericSubjectIsBound(callee ByteArray, args ValueIdArray, argLabels NameRoster, constructed ConstructorInstance, inferInstanceOf FactoryInference, anchor Token) throws SourceParseError
+	function requireBareGenericSubjectIsBound(callee ByteArray, pick CallPick, args ValueIdArray, argLabels NameRoster, constructed ConstructorInstance, inferInstanceOf FactoryInference, anchor Token) throws SourceParseError
 		if self.enclosingTypeParams.isEmpty() 'nothingTheFrameCanFeed'
 			return
 		end 'nothingTheFrameCanFeed'
@@ -73332,7 +73243,7 @@ export type Parser
 			if self.signatures.calleeReceiverOf(callee) != CalleeReceiver.takesReceiver 'aStaticCallOnAGenericBase'
 				match constructed 'arguments'
 					instance then return
-					none then try self.requireBareGenericBaseIsBound(base, callee: callee, args: args, argLabels: argLabels, anchor: anchor)
+					none then try self.requireBareGenericBaseIsBound(base, callee: callee, pick: pick, args: args, argLabels: argLabels, anchor: anchor)
 				end 'arguments'
 
 				return
@@ -73350,7 +73261,7 @@ export type Parser
 		end 'firstArgumentIsNoBase'
 
 		if self.signatures.calleeReceiverOf(callee) == CalleeReceiver.takesReceiver 'aReceiverCall'
-			try self.requireBareGenericBaseIsBound(self.internedName(self.valueNameId(first)), callee: callee, args: args, argLabels: argLabels, anchor: anchor)
+			try self.requireBareGenericBaseIsBound(self.internedName(self.valueNameId(first)), callee: callee, pick: pick, args: args, argLabels: argLabels, anchor: anchor)
 		end 'aReceiverCall'
 	end 'requireBareGenericSubjectIsBound'
 
@@ -73385,28 +73296,29 @@ export type Parser
 		throw SourceParseError.unsupported("calling '{String.from(unqualifiedMemberOf(callee))}' (which reads `countof` of the sized container's own `Self`) through a name that states no element count, from a function that carries no fixed-element-count parameter of its own to forward — a `static function` that does not return `Self` takes the count from the instance its call names. Name a sized instance with a typealias (`Vector with 3 Int`) and call it through that, or call it from a method of the sized container", line: anchor.line, column: anchor.column)
 	end 'requireACountSourceForAStaticCall'
 
-	function requireBareGenericBaseIsBound(base ByteArray, callee ByteArray, args ValueIdArray, argLabels NameRoster, anchor Token) throws SourceParseError
+	function requireBareGenericBaseIsBound(base ByteArray, callee ByteArray, pick CallPick, args ValueIdArray, argLabels NameRoster, anchor Token) throws SourceParseError
 		// The scope's own name means `Self`, whose descriptor this frame does carry.
 		if self.namesEnclosingType(base) or not self.signatures.structDeclaresTypeParams(base) 'notABareGenericBase'
 			return
 		end 'notABareGenericBase'
 
-		if self.bareGenericBaseIsFedAnEnclosingParameter(base, callee: callee, args: args, argLabels: argLabels) 'fed'
+		if self.bareGenericBaseIsFedAnEnclosingParameter(base, callee: callee, pick: pick, args: args, argLabels: argLabels) 'fed'
 			throw self.bareGenericSubjectRefusal(base, callee: callee, use: BareGenericSubjectUse.fedAnEnclosingParameter, anchor: anchor)
 		end 'fed'
 	end 'requireBareGenericBaseIsBound'
 
 	// ⚠ **AN OVERLOADED CALLEE IS FED ONLY IF EVERY MEMBER ITS ARGUMENTS FILL IS, AND AT LEAST ONE IS FILLED.**
-	// Which member resolution picks is settled a pass later, and a refusal resting on the wrong member refuses a
-	// legal call — so a member is judged only where resolution could pick it: its arity and labels fit, and every
-	// argument outside the base's own slots passes the fit test resolution applies. A slot written over the base's
+	// The members judged are the pick's (`declarationsOfThePick`) — the one it bound, or every nameable one when
+	// the parse left the call to resolution — and a refusal resting on the wrong member refuses a legal call, so
+	// a member is judged only where resolution could pick it: its arity and labels fit, and every argument
+	// outside the base's own slots passes the fit test resolution applies (`overloadArgFit`). A slot written over the base's
 	// parameters is exempt from that test, because nothing binds those parameters: no argument fits one, and the
 	// mismatch is exactly what this refuses.
-	function bareGenericBaseIsFedAnEnclosingParameter(base ByteArray, callee ByteArray, args ValueIdArray, argLabels NameRoster) returns bool
+	function bareGenericBaseIsFedAnEnclosingParameter(base ByteArray, callee ByteArray, pick CallPick, args ValueIdArray, argLabels NameRoster) returns bool
 		var anyMemberFills = false
 
-		for decl in self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path) 'eachMember'
-			let feed = self.memberFeed(base, decl: decl, args: args, argLabels: argLabels)
+		for decl in self.declarationsOfThePick(callee, pick: pick) 'eachMember'
+			let feed = self.memberFeed(base, callee: callee, decl: decl, args: args, argLabels: argLabels)
 
 			if feed == MemberFeed.notFed 'thisMemberIsNotFed'
 				return false
@@ -73420,20 +73332,19 @@ export type Parser
 		return anyMemberFills
 	end 'bareGenericBaseIsFedAnEnclosingParameter'
 
-	function memberFeed(base ByteArray, decl OverloadedDecl, args ValueIdArray, argLabels NameRoster) returns MemberFeed
+	function memberFeed(base ByteArray, callee ByteArray, decl OverloadedDecl, args ValueIdArray, argLabels NameRoster) returns MemberFeed
 		match slotCallArgs(sweptSlotNames(decl), args: args, argLabels: argLabels) 'slot'
-			ordered(slotted) then return self.slottedMemberFeed(base, decl: decl, slotted: slotted)
+			ordered(slotted) then return self.slottedMemberFeed(base, callee: callee, decl: decl, slotted: slotted)
 
 			// A label no parameter carries, or a count no parameter list takes, is the argument check's refusal.
-			arityMismatch or
-			unknownLabel or
-			duplicateArg then return MemberFeed.unfilled
+			refused then return MemberFeed.unfilled
 		end 'slot'
 	end 'memberFeed'
 
 	// Inside a generic type body a value that is not fully concrete is one written over the enclosing type's
 	// parameters. A parameter type the sweep could not read cannot refuse the member, so it is not judged.
-	function slottedMemberFeed(base ByteArray, decl OverloadedDecl, slotted ValueIdArray) returns MemberFeed
+	function slottedMemberFeed(base ByteArray, callee ByteArray, decl OverloadedDecl, slotted ValueIdArray) returns MemberFeed
+		let row = self.rowOfDeclaration(callee, decl: decl)
 		var fed = false
 
 		for i in 0 upto decl.paramTypes.count() 'eachUserParam'
@@ -73444,17 +73355,38 @@ export type Parser
 			end 'theSweepDidNotReadThisParameterType'
 
 			let declared = self.sweptParamType(swept, scopeFilePath: decl.declFilePath)
-			let argument = try slotted.get(callPositionOfColumn(decl.takesReceiver, column: i as ParamCount)) otherwise panic("slottedMemberFeed: slotted.get OOB at column {i} — `slotCallArgs` answered `ordered`, so the counts agree")
+			let position = callPositionOfColumn(decl.takesReceiver, column: i as ParamCount)
+			let argument = try slotted.get(position) otherwise panic("slottedMemberFeed: slotted.get OOB at column {i} — `slotCallArgs` answered `ordered`, so the counts agree")
 
 			if self.typeIsWrittenOverTheBase(declared, base: base) 'aSlotOfTheBase'
 				fed = fed or not self.signatures.argIsFullyConcrete(self.typeOf(argument))
-			end 'aSlotOfTheBase' else if not self.sweptArgumentFits(declared, argValue: argument) 'anotherMembersArgument'
+			end 'aSlotOfTheBase' else if not self.rowParameterFitsArgument(row, position: position, argument: argument) 'anotherMembersArgument'
 				return MemberFeed.unfilled
 			end 'anotherMembersArgument'
 		end 'eachUserParam'
 
 		return MemberFeed.fed if fed else MemberFeed.notFed
 	end 'slottedMemberFeed'
+
+	function rowOfDeclaration(callee ByteArray, decl OverloadedDecl) returns OverloadCandidate
+		for row in self.overloadRowsOf(callee) 'eachRow'
+			if row.site.equals(decl.site) 'thisDeclaration'
+				return row
+			end 'thisDeclaration'
+		end 'eachRow'
+
+		panic("rowOfDeclaration: '{String.from(callee)}' has a declaration at {String.from(decl.site)} and no row was built for it — a row is built from every declaration of the set")
+	end 'rowOfDeclaration'
+
+	function rowParameterFitsArgument(row OverloadCandidate, position ParamCount, argument ValueId) returns bool
+		let param = try row.params.get(position) otherwise panic("rowParameterFitsArgument: params.get OOB at {position} — a row holds one parameter per slot of its declaration")
+		let call = self.overloadCallFactsOf(NameRoster.create(), mint: CalleeMint.notMinted, supplied: ConstructorInstance.none)
+		var argumentOnly = ValueIdArray.create()
+		argumentOnly.push(argument)
+		let view = try self.overloadViewsOf(argumentOnly, uncast: sharedNoUncastLiterals).get(0) otherwise panic("rowParameterFitsArgument: one argument was handed in and no view came back")
+
+		return overloadArgFit(self.signatures, interner: self.artifact.typeNames, call: call, instance: SuppliedInstance.absent, param: param, view: view) != OverloadArgFit.incompatible
+	end 'rowParameterFitsArgument'
 
 	// Does `declared` mention one of `base`'s own type parameters — the parameter itself, or an instance written
 	// over one at any depth?
@@ -73625,8 +73557,13 @@ export type Parser
 	//
 	// `constructorInstanceOf`'s third road, and deliberately not an arm of it: that door answers from the
 	// BASE NAME alone and is asked before any argument exists.
-	function spawnFactoryConstructorInstance(supplied ConstructorInstance, inferInstanceOf FactoryInference, callee ByteArray, args ValueIdArray, argLabels NameRoster, anchor Token, serviceSite ServiceSpawnSite) returns ConstructorInstance throws SourceParseError
+	function spawnFactoryConstructorInstance(supplied ConstructorInstance, inferInstanceOf FactoryInference, callee ByteArray, pick CallPick, args ValueIdArray, argLabels NameRoster, anchor Token, serviceSite ServiceSpawnSite) returns ConstructorInstance throws SourceParseError
 		let base = try inferInstanceOf.baseName() otherwise return supplied
+
+		match serviceSite 'site'
+			notASpawn then break
+			at(spawnTok) then try self.requireBoundFactoryStartsAService(callee, pick: pick, typeName: base, spawnTok: spawnTok)
+		end 'site'
 
 		view params = self.signatures.structTypeParamsOf(base)
 
@@ -73634,20 +73571,21 @@ export type Parser
 			return supplied
 		end 'aPlainType'
 
-		// ⛔⛔ **AN OVERLOADED FACTORY FIXES ITS INSTANCE ONLY WHERE EVERY MEMBER THE CALL CAN SLOT AGREES,
-		// BECAUSE WHICH MEMBER IT BINDS IS NOT SETTLED YET.** `ServiceCompanions.classifyServiceTarget` may read
-		// an overloaded factory off its FIRST member for the receiver and the return type — every member agrees
-		// about those, since they are what make it a factory at all. Parameter types are a third fact with no
-		// such argument: with `make(x T)` declared ahead of `make(a Whole, x T)`, `Box.make(2 as Whole, x:
-		// "hi")` resolves to the second while a first-declaration read matches argument 0 against `x T` and
-		// fixes `T` to `int` — a legal program refused, or, once the value is used, a wrong instance and a wrong
-		// destructor with no diagnostic at all. Which member a call resolves to is
-		// `SemanticCheck.resolveOverloadedCalls`' answer, and it is settled after this point; type arguments
-		// every slottable member fixes alike are the answer whichever one it picks.
+		match pick 'pick'
+			noMember or
+			tied then return supplied
+			bound or
+			unasked then break
+		end 'pick'
+
+		// ⛔⛔ **AN OVERLOADED FACTORY FIXES ITS INSTANCE FROM THE ONE DECLARATION THE PICK LEAVES, NEVER FROM
+		// THE FIRST DECLARED.** With `make(x T)` declared ahead of `make(a Whole, x T)`, `Box.make(2 as Whole,
+		// x: "hi")` binds the second, while a first-declaration read matches argument 0 against `x T` and fixes
+		// `T` to `int` — a wrong instance and a wrong destructor with no diagnostic at all.
 		//
-		// ⇒ **WHERE THEY DISAGREE, REFUSED HERE RATHER THAN GUESSED.** The `spawn` road says so with a
-		// sentence; the ordinary road keeps the base `structRef`, so nothing legal is lost either way.
-		view visible = self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path)
+		// ⇒ **WHERE MORE THAN ONE DECLARATION IS LEFT, REFUSED HERE RATHER THAN GUESSED.** The `spawn` road says
+		// so with a sentence; the ordinary road keeps the base `structRef`.
+		view visible = self.declarationsNameableHere(callee)
 
 		if visible.isEmpty() and serviceSite.isASpawn() 'noDeclarationIsNameable'
 			throw self.unnameableFactoryRefusal(callee, anchor: try serviceSite.token() otherwise anchor)
@@ -73657,49 +73595,45 @@ export type Parser
 			return supplied
 		end 'anOrdinaryCallOfAnUnnameableFactory'
 
-		view bindable = declarationsTheCallSlots(visible, argLabels: argLabels)
+		let decl = try self.soleDeclarationOfThePick(callee, pick: pick) otherwise 'noSingleDeclarationIsBound'
+			return try self.uninferredFactoryInstance(supplied, reason: UninferredFactoryReason.noSingleDeclarationIsBound(visible.count()), typeName: base, callee: callee, site: serviceSite)
+		end 'noSingleDeclarationIsBound'
 
-		if bindable.count() > 1 'anOverloadedFactory'
-			if let typeArgs = try self.typeArgumentsEveryOverloadFixes(base, callee: callee, declarations: bindable, args: args, argLabels: argLabels) 'everyOverloadAgrees'
-				return try self.instanceOfFactoryTypeArguments(supplied, base: base, typeArgs: typeArgs, callee: callee, anchor: anchor, site: serviceSite)
-			end 'everyOverloadAgrees'
-
-			return try self.uninferredFactoryInstance(supplied, reason: UninferredFactoryReason.theFactoryIsOverloaded(visible.count()), typeName: base, callee: callee, site: serviceSite)
-		end 'anOverloadedFactory'
-
-		match self.factoryTypeArgumentsOf(base, decl: serviceFirstDeclOf(bindable, key: callee), args: args, argLabels: argLabels) 'fixes'
-			fixed(typeArgs) then return try self.instanceOfFactoryTypeArguments(supplied, base: base, typeArgs: typeArgs.clone(), callee: callee, anchor: anchor, site: serviceSite)
-			unfixed(paramName) then return try self.uninferredFactoryInstance(supplied, reason: UninferredFactoryReason.noParameterFixesIt(paramName), typeName: base, callee: callee, site: serviceSite)
-		end 'fixes'
+		return try self.instanceFixedByFactoryDeclaration(supplied, base: base, decl: decl, callee: callee, args: args, argLabels: argLabels, anchor: anchor, site: serviceSite)
 	end 'spawnFactoryConstructorInstance'
 
-	function typeArgumentsEveryOverloadFixes(base ByteArray, callee ByteArray, declarations OverloadedDeclArray, args ValueIdArray, argLabels NameRoster) returns MaxonTypeArray throws AbsentError
-		let reference = try self.factoryTypeArgumentsOf(base, decl: serviceFirstDeclOf(declarations, key: callee), args: args, argLabels: argLabels).arguments()
+	function requireBoundFactoryStartsAService(callee ByteArray, pick CallPick, typeName ByteArray, spawnTok Token) throws SourceParseError
+		match pick 'pick'
+			bound(decl) then try self.requireBoundDeclarationStartsAService(decl, typeName: typeName, callee: callee, spawnTok: spawnTok)
+			unasked or
+			tied or
+			noMember then return
+		end 'pick'
+	end 'requireBoundFactoryStartsAService'
 
-		for decl in declarations 'eachDeclaration'
-			if not typeArgumentListsDenoteSame(reference, other: try self.factoryTypeArgumentsOf(base, decl: decl, args: args, argLabels: argLabels).arguments()) 'anotherInstance'
-				throw AbsentError.absent
-			end 'anotherInstance'
-		end 'eachDeclaration'
+	function requireBoundDeclarationStartsAService(decl OverloadedDecl, typeName ByteArray, callee ByteArray, spawnTok Token) throws SourceParseError
+		let verdict = classifyFactoryDeclaration(self.signatures, typeName: typeName, decl: decl)
 
-		return reference
-	end 'typeArgumentsEveryOverloadFixes'
+		if verdict != FactoryVerdict.startsAService 'theBoundOneStartsNone'
+			throw SourceParseError.serviceNotASpawnTarget(serviceTargetRefusalMessage(serviceTargetVerdictOf(verdict), typeName: typeName, member: unqualifiedMemberOf(callee)), line: spawnTok.line, column: spawnTok.column)
+		end 'theBoundOneStartsNone'
+	end 'requireBoundDeclarationStartsAService'
 
-	function factoryTypeArgumentsOf(base ByteArray, decl OverloadedDecl, args ValueIdArray, argLabels NameRoster) returns FactoryTypeArguments
+	function instanceFixedByFactoryDeclaration(supplied ConstructorInstance, base ByteArray, decl OverloadedDecl, callee ByteArray, args ValueIdArray, argLabels NameRoster, anchor Token, site ServiceSpawnSite) returns ConstructorInstance throws SourceParseError
 		view params = self.signatures.structTypeParamsOf(base)
 		var typeArgs = MaxonTypeArray.create()
 
 		for position in 0 upto params.count() 'eachTypeParam'
-			view paramName = try params.get(position) otherwise panic("factoryTypeArgumentsOf: params.get OOB at {position} on a list walked to its own count")
+			view paramName = try params.get(position) otherwise panic("instanceFixedByFactoryDeclaration: params.get OOB at {position} on a list walked to its own count")
 
 			match self.factoryTypeArgumentAt(base, paramName: paramName, position: position, decl: decl, args: args, argLabels: argLabels) 'argument'
 				found(t) then typeArgs.push(t)
-				absent then return FactoryTypeArguments.unfixed(paramName.clone())
+				absent then return try self.uninferredFactoryInstance(supplied, reason: UninferredFactoryReason.noParameterFixesIt(paramName), typeName: base, callee: callee, site: site)
 			end 'argument'
 		end 'eachTypeParam'
 
-		return FactoryTypeArguments.fixed(typeArgs)
-	end 'factoryTypeArgumentsOf'
+		return try self.instanceOfFactoryTypeArguments(supplied, base: base, typeArgs: typeArgs, callee: callee, anchor: anchor, site: site)
+	end 'instanceFixedByFactoryDeclaration'
 
 	function instanceOfFactoryTypeArguments(supplied ConstructorInstance, base ByteArray, typeArgs MaxonTypeArray, callee ByteArray, anchor Token, site ServiceSpawnSite) returns ConstructorInstance throws SourceParseError
 		for t in typeArgs 'eachTypeArgument'
@@ -73755,7 +73689,7 @@ export type Parser
 		match reason 'why'
 			noParameterFixesIt(paramName) then throw SourceParseError.unsupported(spawnUninferrableTypeArgumentRefusal(typeName, member: member, paramName: paramName), line: spawnTok.line, column: spawnTok.column)
 			theArgumentsAreStillOpaque then throw SourceParseError.unsupported(spawnOpaqueTypeArgumentRefusal(typeName, member: member), line: spawnTok.line, column: spawnTok.column)
-			theFactoryIsOverloaded(declarationCount) then throw SourceParseError.unsupported(spawnOverloadedFactoryRefusal(typeName, member: member, declarationCount: declarationCount), line: spawnTok.line, column: spawnTok.column)
+			noSingleDeclarationIsBound(declarationCount) then throw SourceParseError.unsupported(spawnUnboundFactoryRefusal(typeName, member: member, declarationCount: declarationCount), line: spawnTok.line, column: spawnTok.column)
 		end 'why'
 	end 'uninferredFactoryInstance'
 
@@ -73876,6 +73810,7 @@ export type Parser
 	// comments in `SemanticCheck`, `SignatureIndex` and `IrFunction` cite it.
 	function retypeGenericAliasConstructorResult(result ValueId, gid GenericInstanceId, aliasName ByteArray)
 		self.retypeConstructorResultToInstance(result, gid: gid)
+		self.recordValueCallInstance(result, instance: gid)
 
 		// ⛔⛔ **PROVENANCE IS ABOUT WHAT THE SITE WROTE, NOT ABOUT WHETHER A RETYPE WAS NEEDED**, so it is
 		// not written behind the retype's guards. A factory whose result is ALREADY the instance is the
@@ -73888,7 +73823,6 @@ export type Parser
 		// instance and it must be THIS one. A result that is some other base's struct is not described by
 		// this alias and must not be stamped with its name.
 		if not self.resultIsTheInstance(result, gid: gid) 'notTheInstanceBuilt'
-			self.recordValueCallInstance(result, instance: gid)
 			return
 		end 'notTheInstanceBuilt'
 
@@ -73921,10 +73855,8 @@ export type Parser
 	// words from.
 	function stampInferredFactoryResult(result ValueId, gid GenericInstanceId)
 		self.retypeConstructorResultToInstance(result, gid: gid)
-
-		if not self.resultIsTheInstance(result, gid: gid) 'aStaticReturningAnotherType'
-			self.recordValueCallInstance(result, instance: gid)
-		end 'aStaticReturningAnotherType'
+		self.recordValueCallInstance(result, instance: gid)
+		self.recordValueInferredInstance(result, instance: gid)
 	end 'stampInferredFactoryResult'
 
 	// ⭐ **THE RETYPE HALF.** A DECLARED generic's `create() returns Self` hands back the shared body's base
@@ -77300,7 +77232,7 @@ export type Parser
 
 	function pairedDisplays(value ValueId, declaredTag ValueTypeTag, declaredNameId TypeNameId, declaredBrand ByteArray, declaredIdentity ByteArray, declaredShown String) returns PairedDisplays
 		let gotShown = self.valueDisplayTypeName(value)
-		view gotIdentity = self.aggregateNameOf(self.tagOf(value), nameId: self.valueNameId(value))
+		view gotIdentity = aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: self.tagOf(value), nameId: self.valueNameId(value), readerFilePath: self.job.path)
 		let gotNote = self.signatures.contestedTypeNote(self.tagOf(value), nameId: self.valueNameId(value), brand: self.brandOf(value), identity: gotIdentity, shown: gotShown, otherShown: declaredShown)
 		let declaredNote = self.signatures.contestedTypeNote(declaredTag, nameId: declaredNameId, brand: declaredBrand, identity: declaredIdentity, shown: declaredShown, otherShown: gotShown)
 		return PairedDisplays.create(self.signatures.tupleDisplayNoted(gotShown, identity: gotIdentity, otherShown: declaredShown, otherIdentity: declaredIdentity), gotNote: gotNote, declared: self.signatures.tupleDisplayNoted(declaredShown, identity: declaredIdentity, otherShown: gotShown, otherIdentity: gotIdentity), declaredNote: declaredNote)
@@ -77327,17 +77259,16 @@ export type Parser
 		return self.displayTypeNameOf(tag, nameId: nameId)
 	end 'brandedDisplayTypeName'
 
-	// ⭐⭐ **THE DISPLAY TWIN OF `aggregateNameOf`, AND THE PARSER-TIER HALF OF ONE RULE (user ruling,
-	// 2026-08-04): a diagnostic names a type the way the AUTHOR WROTE IT.** `aggregateNameOf` answers with the
+	// ⭐⭐ **THE DISPLAY TWIN OF `aggregateNameIn`, AND THE PARSER-TIER HALF OF ONE RULE (user ruling,
+	// 2026-08-04): a diagnostic names a type the way the AUTHOR WROTE IT.** `aggregateNameIn` answers with the
 	// IDENTITY — for a generic instance, the canonical `Array_String` two values are compared on — and an
 	// identity is not a spelling: no source line holds `Array_String`, the author wrote
 	// `typealias StringArray = Array with String`. Every other tag already answers with a written name (a
 	// struct, an interface, a registered union/enum) or with the primitive the author sees (`int`, `String`),
 	// so the instance arm is the whole difference and the rest routes through the existing chain.
 	//
-	// ⚠ The SemanticCheck twin is `typeDisplayName`; the two are twins for `aggregateNameOf`'s own reason —
-	// different tier, different interner — and the instance name they both quote comes from the shared
-	// whole-program index, so they cannot come to spell one type two ways. **What is twinned is the LOOKUP
+	// ⚠ The SemanticCheck twin is `typeDisplayName`, and the instance name they both quote comes from the
+	// shared whole-program index, so they cannot come to spell one type two ways. **What is twinned is the LOOKUP
 	// and the instance arm, which are the two tier-bound halves; the TAIL is not, and is
 	// `ProgramSignatures.displayNameOfAggregate` — one home, because it takes a tag and a resolved name, and a
 	// tuple's element names resolve against the whole-program index both tiers share.**
@@ -77349,7 +77280,7 @@ export type Parser
 		// Its aggregate NAME when it has one (a declared struct/union), else the scalar TYPE it actually is —
 		// an `int`, a `bool`, a `String`, or a ranged-int alias whose overloaded `named` tag is NOT an
 		// aggregate.
-		return self.signatures.displayNameOfAggregate(tag, aggregate: self.aggregateNameOf(tag, nameId: nameId))
+		return self.signatures.displayNameOfAggregate(tag, aggregate: aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: tag, nameId: nameId, readerFilePath: self.job.path))
 	end 'displayTypeNameOf'
 
 	// `CharSet from ['x', 'y', 'z']` — the SOURCE form of a `Set with Character`, and the only form: the
@@ -77603,7 +77534,7 @@ export type Parser
 	end 'parseManagedFileFillArgs'
 
 	// ⭐ **IS THIS THE `StringIndex` TYPE?** A TAG cannot answer it — every struct box is `structRef` — so it
-	// is the interned NAME behind the tag, which is the same identity `aggregateNameOf` publishes for a
+	// is the interned NAME behind the tag, which is the same identity `aggregateNameIn` publishes for a
 	// reassign check. The tag gate is not merely a fast path: a non-aggregate tag carries `UnnamedTypeId` in
 	// the name column, which no interner is obliged to hold.
 	//
@@ -78855,7 +78786,7 @@ export type Parser
 	// `SortComparator`'s `Element` is the receiver's element.
 	//
 	// ⛔ **AN OVERLOAD SET OFFERS ONLY WHAT EVERY CANDIDATE THAT COULD TAKE A CLOSURE AGREES ON.** Which member a
-	// call means is settled a pass later (`SemanticCheck.resolveOverloadedCalls`) and may turn on the closure's own
+	// call means is picked once its arguments are parsed (`pickDeclaration`) and may turn on the closure's own
 	// types, so no candidate may be preferred here. A candidate with no slot for this argument, or whose slot is a
 	// concrete type no closure is, cannot be the one a closure literal resolves to and is set aside
 	// (`sort()` beside `sort(cmp)`). Two different function types, or a slot this door cannot judge — one the sweep
@@ -78869,7 +78800,7 @@ export type Parser
 		let callee = try target.declaredName() otherwise return noClosureParamOffer
 		var offered = OfferedFunctionAlias.none
 
-		for candidate in self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path) 'eachCandidate'
+		for candidate in self.declarationsNameableHere(callee) 'eachCandidate'
 			let slot = try argSlotPosition(candidate.paramNames, argIndex: sourceIndex, label: label) otherwise continue
 			let swept = try candidate.paramTypes.get(slot) otherwise panic("closureParamOfferAt: paramTypes.get OOB at {slot} — the sweep records one type per parameter name")
 			let slotType = self.slotTypeThroughCallReceiver(self.repairSweptType(self.signatures.adoptType(swept, into: self.artifact.typeNames), scopeFilePath: candidate.declFilePath), args: args, receiverArgs: receiverArgs, scopeFilePath: candidate.declFilePath)
@@ -80297,7 +80228,7 @@ export type Parser
 		let parsed = try self.integerizedOperand(try self.parseExpression(func, block: self.bodyState.currentBlock), expected: declared, start: valueStart, pastEnd: self.pos)
 
 		let valueTag = self.tagOf(parsed)
-		view valueIdentity = self.aggregateNameOf(valueTag, nameId: self.valueNameId(parsed))
+		view valueIdentity = aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: valueTag, nameId: self.valueNameId(parsed), readerFilePath: self.job.path)
 
 		if not tagIsUnresolved(valueTag) and not columnValueMatches(declared, declaredIdentity: self.declaredColumnIdentity(declaredType), valueTag: valueTag, valueIdentity: valueIdentity) 'mismatch'
 			throw SourceParseError.unsupported("{columnSubject} — got a '{columnTypeName(valueTag, identity: valueIdentity)}' value", line: valueTok.line, column: valueTok.column)
@@ -80313,10 +80244,10 @@ export type Parser
 	// one expression agreeing. Spelled out at each site, changing one described a different program from the
 	// one refused, with no compile error anywhere to say so.
 	//
-	// ⚠ It is the UNGATED `aggregateNameOf`: a nested-container value column is admitted, and two distinct
+	// ⚠ It is the UNGATED `aggregateNameIn`: a nested-container value column is admitted, and two distinct
 	// instances share the `genericInstance` tag, so a gate withholding that tag's name would equate them.
 	function declaredColumnIdentity(declaredType MaxonType) returns ByteArray
-		return self.aggregateNameOf(maxonTypeTag(declaredType), nameId: typeNameIdOf(declaredType))
+		return aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: maxonTypeTag(declaredType), nameId: typeNameIdOf(declaredType), readerFilePath: self.job.path)
 	end 'declaredColumnIdentity'
 
 	// --- The `Map` builtin generic: `create` / `upsert` / `contains` / `get` / `count` ---
@@ -81673,11 +81604,17 @@ export type Parser
 			// The ARITY error blames the call, the two LABEL errors blame the offending argument — the same
 			// split `SemanticCheck.validateCall` makes, `methodTok` being this call's own anchor (it is what
 			// `SourceRange.between(methodTok, last: rparenTok)` starts the dispatch op's range at).
-			arityMismatch(expected, got) then throw SourceParseError.witnessArgCountMismatch(self.witnessCalleeName(target), expected: expected, got: got, line: methodTok.line, column: methodTok.column)
-			unknownLabel(argIndex, label) then throw SourceParseError.witnessUnknownArgLabel(self.witnessCalleeName(target), label: label, line: witnessArgAnchor(argRanges, argIndex: argIndex).line, column: witnessArgAnchor(argRanges, argIndex: argIndex).column)
-			duplicateArg(argIndex, paramName) then throw SourceParseError.witnessDuplicateArg(self.witnessCalleeName(target), paramName: paramName, line: witnessArgAnchor(argRanges, argIndex: argIndex).line, column: witnessArgAnchor(argRanges, argIndex: argIndex).column)
+			refused(failure) then throw self.witnessSlotRefusal(target, failure: failure, argRanges: argRanges, methodTok: methodTok)
 		end 'slot'
 	end 'slottedWitnessArgs'
+
+	function witnessSlotRefusal(target WitnessDispatchTarget, failure ArgSlotFailure, argRanges SourceRangeArray, methodTok Token) returns SourceParseError
+		return match failure 'failure'
+			arityMismatch(expected, got) gives SourceParseError.witnessArgCountMismatch(self.witnessCalleeName(target), expected: expected, got: got, line: methodTok.line, column: methodTok.column)
+			unknownLabel(argIndex, label) gives SourceParseError.witnessUnknownArgLabel(self.witnessCalleeName(target), label: label, line: witnessArgAnchor(argRanges, argIndex: argIndex).line, column: witnessArgAnchor(argRanges, argIndex: argIndex).column)
+			duplicateArg(argIndex, paramName) gives SourceParseError.witnessDuplicateArg(self.witnessCalleeName(target), paramName: paramName, line: witnessArgAnchor(argRanges, argIndex: argIndex).line, column: witnessArgAnchor(argRanges, argIndex: argIndex).column)
+		end 'failure'
+	end 'witnessSlotRefusal'
 
 	// What a witness dispatch's argument diagnostics BLAME: `<Interface>.<method>`, which is what the call
 	// actually binds against. A direct call names its callee; a dispatch has no callee name to name — the
@@ -83004,7 +82941,7 @@ export type Parser
 			return false
 		end 'noIndexParameter'
 
-		let decl = try self.signatures.soleVisibleDeclarationOf(qualifiedMethodName(typeName, methodName: member), readerFilePath: self.job.path) otherwise return false
+		let decl = try self.soleNameableDeclarationOf(qualifiedMethodName(typeName, methodName: member), callerName: self.namingCallerName()) otherwise return false
 
 		return match self.signatures.declaredParamAliasAt(decl, position: 0) 'indexType'
 			declared(alias) gives maxonTypeTag(alias.underlying) != ValueTypeTag.integer
@@ -85402,7 +85339,7 @@ export type Parser
 		let gotTag = self.tagOf(value)
 		let gotNameId = self.valueNameId(value)
 
-		if not tagIsIntegral(gotTag) or self.signatures.aggregatesConflict(expected, expectedTag: ValueTypeTag.named, expectedNameId: UnnamedTypeId, expectedBrand: EmptySourceText, got: self.aggregateNameOf(gotTag, nameId: gotNameId), gotTag: gotTag, gotNameId: gotNameId, gotBrand: self.brandOf(value), readerFilePath: self.job.path) 'anotherAlias'
+		if not tagIsIntegral(gotTag) or self.signatures.aggregatesConflict(expected, expectedTag: ValueTypeTag.named, expectedNameId: UnnamedTypeId, expectedBrand: EmptySourceText, got: aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: gotTag, nameId: gotNameId, readerFilePath: self.job.path), gotTag: gotTag, gotNameId: gotNameId, gotBrand: self.brandOf(value), readerFilePath: self.job.path) 'anotherAlias'
 			throw SourceParseError.builtinArgumentType(String.from(paramName), expected: String.from(sourceSpelledAliasName(alias.name)), got: self.valueDisplayTypeName(value), line: anchor.line, column: anchor.column)
 		end 'anotherAlias'
 
@@ -90045,7 +89982,7 @@ export type Parser
 			throw AbsentError.absent
 		end 'aSingleDeclaration'
 
-		return try self.signatures.soleVisibleDeclarationOf(key, readerFilePath: self.job.path) otherwise throw AbsentError.absent
+		return try self.soleNameableDeclarationOf(key, callerName: self.namingCallerName()) otherwise throw AbsentError.absent
 	end 'functionValueMember'
 
 	function returnTypeBehindFunctionValue(key ByteArray, tabulated MaxonReturnType) returns MaxonReturnType
@@ -90067,20 +90004,50 @@ export type Parser
 	// suffixes are those of the members declared before it in that file, as at the mint. A name that differs
 	// is a function value of a symbol nothing defines.
 	function registeredNameOfDeclaration(base ByteArray, decl OverloadedDecl) returns ByteArray
-		var held = NameRoster.create()
+		let names = self.registeredNamesOfSet(base)
+		let decls = self.signatures.overloadedDeclsOf(base)
 
-		for other in self.signatures.overloadedDeclsOf(base) 'eachDeclaration'
-			if other.site.equals(decl.site) 'reachedThisDeclaration'
-				break
-			end 'reachedThisDeclaration'
-
-			if other.declFilePath.equals(decl.declFilePath) 'earlierInTheSameFile'
-				held.push(self.overloadSuffixOfDeclaration(other))
-			end 'earlierInTheSameFile'
+		for i in 0 upto decls.count() 'eachDeclaration'
+			if (try decls.get(i) otherwise panic("registeredNameOfDeclaration: decls.get OOB at {i} inside its own count()")).site.equals(decl.site) 'thisOne'
+				return try names.get(i) otherwise panic("registeredNameOfDeclaration: names.get OOB at {i} — one name is minted per declaration")
+			end 'thisOne'
 		end 'eachDeclaration'
 
-		return overloadRegistrationName(base, suffix: overloadSuffixAmong(self.overloadSuffixOfDeclaration(decl), labelSuffix: overloadLabelSuffix(decl.paramNames, takesReceiver: decl.takesReceiver), held: held))
+		panic("registeredNameOfDeclaration: the declaration at {String.from(decl.site)} is not one of the declarations of '{String.from(base)}'")
 	end 'registeredNameOfDeclaration'
+
+	// Every reader recomputing a member's registered name asks here, so no two readers can disagree; a
+	// step that drifts from the mint's (`overloadRegistrationNameFor`) names a symbol nothing defines. The
+	// swept parameter lists exclude the receiver, hence `takesReceiver: false`.
+	function declarationIsAFreeFunctionOf(key ByteArray, decl OverloadedDecl) returns bool
+		if not containsQualifier(key) 'aBareNameIsAFreeFunction'
+			return true
+		end 'aBareNameIsAFreeFunction'
+
+		return key.equals(self.signatures.freeFunctionRegistrationName(unqualifiedMemberOf(key), moduleDirectory: self.signatures.moduleDirectoryOf(decl.declFilePath)))
+	end 'declarationIsAFreeFunctionOf'
+
+	function registeredNamesOfSet(key ByteArray) returns NameRoster
+		var names = NameRoster.create()
+		var membersByFile = OverloadMemberMap.create()
+		let sourceBase = overloadRegistrationBaseName(key)
+
+		for decl in self.signatures.overloadedDeclsOf(key) 'eachDeclaration'
+			let file = decl.declFilePath.toString().toByteArray()
+			var members = try membersByFile.get(file) otherwise OverloadMemberArray.create()
+			let typeSuffix = self.overloadSuffixOfDeclaration(decl)
+			let labelSuffix = overloadLabelSuffix(decl.paramNames, takesReceiver: false)
+			let contested = self.signatures.isContestedExtensionMethod(sourceBase) or (self.declarationIsAFreeFunctionOf(key, decl: decl) and self.signatures.isCrossFileOverloadedFreeFunctionAt(key, declFilePath: decl.declFilePath))
+
+			let registered = registrationNameAmong(key, contested: contested, typeSuffix: typeSuffix, labelSuffix: labelSuffix, members: members)
+
+			names.push(registered)
+			members.push(OverloadMember.create(registered, typeSuffix: typeSuffix, labelSuffix: labelSuffix))
+			membersByFile.upsert(file, value: members)
+		end 'eachDeclaration'
+
+		return names
+	end 'registeredNamesOfSet'
 
 	function overloadSuffixOfDeclaration(decl OverloadedDecl) returns ByteArray
 		var adopted = MaxonTypeArray.create()
@@ -90089,7 +90056,7 @@ export type Parser
 			adopted.push(self.sweptParamType(swept, scopeFilePath: decl.declFilePath))
 		end 'eachParam'
 
-		return self.overloadTypeSuffix(adopted, takesReceiver: decl.takesReceiver)
+		return self.overloadTypeSuffix(adopted, takesReceiver: false)
 	end 'overloadSuffixOfDeclaration'
 
 	// A cross-file overloaded free function's suffix is read off the swept declaration, the input another
@@ -90106,9 +90073,12 @@ export type Parser
 	function overloadMemberDeclaredAs(registered ByteArray) returns OverloadedDecl throws AbsentError
 		let key = overloadSetKeyOf(registered)
 
-		for decl in self.signatures.overloadedDeclsOf(key) 'eachDeclaration'
-			if self.registeredNameOfDeclaration(key, decl: decl).equals(registered) 'thisOne'
-				return decl
+		let decls = self.signatures.overloadedDeclsOf(key)
+		let names = self.registeredNamesOfSet(key)
+
+		for i in 0 upto decls.count() 'eachDeclaration'
+			if (try names.get(i) otherwise panic("overloadMemberDeclaredAs: names.get OOB at {i} — one name is minted per declaration")).equals(registered) 'thisOne'
+				return try decls.get(i) otherwise panic("overloadMemberDeclaredAs: decls.get OOB at {i} inside its own count()")
 			end 'thisOne'
 		end 'eachDeclaration'
 
@@ -91606,7 +91576,7 @@ export type Parser
 	end 'requireConstFactoryFirstArgNameHasDefault'
 
 	function requireConstFactoryArgumentsFit(callee ConstInitializerCallee, args ConstFactoryArgumentArray, argTokens TokenArray) throws ConstEvalError
-		let decl = try self.signatures.soleVisibleDeclarationOf(callee.name, readerFilePath: self.job.path) otherwise return
+		let decl = try self.soleNameableDeclarationOf(callee.name, callerName: EmptySourceText) otherwise return
 
 		for i in 0 upto args.count() 'eachArgument'
 			let arg = try args.get(i) otherwise panic("requireConstFactoryArgumentsFit: args.get OOB at {i} below count {args.count()}")
@@ -91696,7 +91666,7 @@ export type Parser
 			return unfoldedUserCall(callee, args: args)
 		end 'notAFoldableFactory'
 
-		match self.signatures.constFactoryConstructionAmong(self.signatures.declarationsVisibleFrom(callee.name, readerFilePath: self.job.path)) 'known'
+		match self.signatures.constFactoryConstructionAmong(self.declarationsNameableBy(callee.name, callerName: EmptySourceText)) 'known'
 			unfoldable then return unfoldedUserCall(callee, args: args)
 			folds(layout, paramNames) then return try self.constFactoryConstruction(callee, args: args, calls: calls, layout: layout, paramNames: paramNames)
 		end 'known'
@@ -96795,23 +96765,23 @@ export type Parser
 
 		var conventions = ByRefConventionArray.create()
 
-		if self.signatures.declaresAFunctionVisibleFrom(callee, readerFilePath: self.job.path) 'aNonGenericDeclarationToo'
+		if not self.declarationsNameableHere(callee).isEmpty() 'aNonGenericDeclarationToo'
 			conventions.append(conventionsOf(self.nonGenericDeclarationFacts(callee)))
 		end 'aNonGenericDeclarationToo'
 
-		for template in self.signatures.genericTemplatesVisibleFrom(callee, readerFilePath: self.job.path) 'eachTemplate'
+		for template in self.genericTemplatesNameableFrom(callee, mint: CalleeMint.notMinted) 'eachTemplate'
 			conventions.push(self.signatures.byRefOfDeclaration(template.siteKey()).clone())
 		end 'eachTemplate'
 
 		return conventions
 	end 'byRefConventionsReachableFrom'
 
-	function declarationsTheCallMayBind(callee ByteArray, places PlaceArgumentArray, argLabels NameRoster) returns DeclarationFactsArray
+	function declarationsTheCallMayBind(callee ByteArray, places PlaceArgumentArray, pick CallPick, argLabels NameRoster) returns DeclarationFactsArray
 		if places.isEmpty() and not self.signatures.isAnOverloadSet(callee) 'oneDeclarationAnswers'
 			return noDeclarationFacts
 		end 'oneDeclarationAnswers'
 
-		return self.declarationFactsBoundBy(callee, argLabels: argLabels)
+		return self.declarationFactsBoundBy(callee, pick: pick, argLabels: argLabels)
 	end 'declarationsTheCallMayBind'
 
 	function consumeOfTheOneDeclaration(callee ByteArray, declarations DeclarationFactsArray) returns CalleeConsume
@@ -96819,11 +96789,18 @@ export type Parser
 		return only.consume
 	end 'consumeOfTheOneDeclaration'
 
-	function declarationFactsBoundBy(callee ByteArray, argLabels NameRoster) returns DeclarationFactsArray
+	function declarationFactsBoundBy(callee ByteArray, pick CallPick, argLabels NameRoster) returns DeclarationFactsArray
 		if let site = try self.artifact.requestedGenericInstanceSiteKey(callee) 'aGenericInstance'
 			let byRef = self.signatures.byRefOfDeclaration(site)
 			return singleDeclarationFacts(DeclarationFacts.create(site, byRef: byRef, consume: self.signatures.consumeOf(callee)))
 		end 'aGenericInstance'
+
+		match pick 'pick'
+			bound(decl) then return singleDeclarationFacts(self.factsOfDeclaration(decl))
+			unasked or
+			tied or
+			noMember then break
+		end 'pick'
 
 		let callable = self.callableMembersOfASet(callee)
 
@@ -96844,23 +96821,57 @@ export type Parser
 		return self.factsOfDeclarations(callable)
 	end 'nonGenericDeclarationFacts'
 
+	function declarationsNameableHere(callee ByteArray) returns OverloadedDeclArray
+		return self.declarationsNameableBy(callee, callerName: self.namingCallerName())
+	end 'declarationsNameableHere'
+
+	function declarationsNameableBy(callee ByteArray, callerName ByteArray) returns OverloadedDeclArray
+		var nameable = OverloadedDeclArray.create()
+		view decls = self.signatures.overloadedDeclsOf(callee)
+		view rows = self.overloadRowsOf(callee)
+
+		for i in 0 upto decls.count() 'eachDeclaration'
+			let row = try rows.get(i) otherwise panic("declarationsNameableBy: rows.get OOB at {i} — a row is built from each declaration of the set, in order")
+
+			if declarationMayBeNamed(self.signatures, visibility: row.visibility, declFilePath: row.declFilePath, registeredName: row.registeredName, readerFilePath: self.job.path, callerName: callerName) 'theCallerMayNameIt'
+				nameable.push(try decls.get(i) otherwise panic("declarationsNameableBy: decls.get OOB at {i} inside its own count()"))
+			end 'theCallerMayNameIt'
+		end 'eachDeclaration'
+
+		return nameable
+	end 'declarationsNameableBy'
+
+	function soleNameableDeclarationOf(callee ByteArray, callerName ByteArray) returns OverloadedDecl throws MapError
+		view nameable = self.declarationsNameableBy(callee, callerName: callerName)
+
+		if nameable.count() != 1 'noSingleDeclaration'
+			throw MapError.keyNotFound
+		end 'noSingleDeclaration'
+
+		return try nameable.get(0) otherwise panic("soleNameableDeclarationOf: get(0) on a one-declaration array")
+	end 'soleNameableDeclarationOf'
+
 	function callableMembersOfASet(callee ByteArray) returns OverloadedDeclArray
 		if not self.signatures.isAnOverloadSet(callee) 'notASet'
 			return OverloadedDeclArray.create()
 		end 'notASet'
 
-		return self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path)
+		return self.declarationsNameableHere(callee)
 	end 'callableMembersOfASet'
 
 	function factsOfDeclarations(decls OverloadedDeclArray) returns DeclarationFactsArray
 		var facts = DeclarationFactsArray.create()
 
 		for decl in decls 'eachDeclaration'
-			facts.push(DeclarationFacts.create(decl.site, byRef: self.signatures.byRefOfDeclaration(decl.site), consume: self.signatures.consumeOfDeclaration(decl.site)))
+			facts.push(self.factsOfDeclaration(decl))
 		end 'eachDeclaration'
 
 		return facts
 	end 'factsOfDeclarations'
+
+	function factsOfDeclaration(decl OverloadedDecl) returns DeclarationFacts
+		return DeclarationFacts.create(decl.site, byRef: self.signatures.byRefOfDeclaration(decl.site), consume: self.signatures.consumeOfDeclaration(decl.site))
+	end 'factsOfDeclaration'
 
 	function declarationByRefConvention(sourceName ByteArray, nameTok Token) returns ByRefConvention
 		if not self.signatures.programTakesAParamByRef() 'nothingIsPassedByReference'
@@ -97117,7 +97128,7 @@ export type Parser
 	// `spelling` says whether those callee bytes are the AUTHOR'S or the COMPILER'S, which is the one
 	// question the reserved-space door cannot answer from the name — see `CalleeMint`.
 	function emitCall(writtenCallee ByteArray, anchor Token, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint, inferInstanceOf FactoryInference = FactoryInference.none, serviceSite ServiceSpawnSite = sharedNotAServiceSpawn, places PlaceArgumentArray = noPlaceArguments) returns ValueId throws SourceParseError
-		let callee = try self.genericInstanceCallee(writtenCallee, anchor: anchor, args: args, argLabels: argLabels)
+		let callee = try self.genericInstanceCallee(writtenCallee, anchor: anchor, args: args, argLabels: argLabels, mint: mint, supplied: constructorInstance)
 		try self.requireCalleeIsNotReservedName(callee, anchor: anchor, mint: mint)
 
 		// ⭐⭐ **A SLICE OF A LITERAL WITH COMPILE-TIME BOUNDS BECOMES A LITERAL, AND THEN THIS IS NOT A CALL AT
@@ -97137,25 +97148,27 @@ export type Parser
 			end 'constantSlice'
 		end 'aSliceCallWorthAsking'
 
-		// ⭐ **AN OMITTED ARGUMENT IS SUPPLIED HERE, BEFORE ANYTHING ELSE READS THE ARGUMENT LIST**.
+		let pick = self.pickDeclaration(callee, args: args, argLabels: argLabels, mint: mint, supplied: constructorInstance)
+
+		// ⭐ **AN OMITTED ARGUMENT IS SUPPLIED HERE, BEFORE ANYTHING BUT THE PICK READS THE ARGUMENT LIST**.
 		// Every direct, method and static call funnels through this one line, so the fill needs no
 		// second copy at the method / static / operator-desugar doors — and by the time `applyCallerConsume`
 		// and the emit below see `args`, a defaulted argument is indistinguishable from a written one, which
 		// is what makes the consume transfer, the drop enrollment and `slotCallArgs`' arity gate correct for
 		// it with no change to any of them.
 		let defaultedArgs = try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, receiverSlots: NoReceiverSlots)
-		view declarations = self.declarationsTheCallMayBind(callee, places: places, argLabels: argLabels)
+		view declarations = self.declarationsTheCallMayBind(callee, places: places, pick: pick, argLabels: argLabels)
 		let placeBindings = try self.bindPlaceArguments(places, declarations: declarations, args: args, argLabels: argLabels)
-		self.widenArgsToInterfaceHandles(callee, args: args, argLabels: argLabels, anchor: anchor, rparenTok: rparenTok)
-		try self.admitOperandAliasSetArgs(callee, args: args, argLabels: argLabels, anchor: anchor)
-		let bound = self.boundReturnOf(callee, args: args, argLabels: argLabels)
+		self.widenArgsToInterfaceHandles(callee, pick: pick, args: args, argLabels: argLabels, anchor: anchor, rparenTok: rparenTok)
+		try self.admitOperandAliasSetArgs(callee, pick: pick, args: args, argLabels: argLabels, anchor: anchor)
+		let bound = self.boundReturnOf(callee, pick: pick.clone())
 
 		// ⭐ **A FACTORY CALL ON A BARE GENERIC BASE HAS ITS INSTANCE FIXED BY ITS ARGUMENTS**, and this is the
 		// first line at which they are all in hand — the fill above included, so a DEFAULTED argument fixes a
 		// type parameter exactly as a written one does. Every other caller gets back what it supplied.
-		let constructed = try self.spawnFactoryConstructorInstance(constructorInstance, inferInstanceOf: inferInstanceOf, callee: callee, args: args, argLabels: argLabels, anchor: anchor, serviceSite: serviceSite)
+		let constructed = try self.spawnFactoryConstructorInstance(constructorInstance, inferInstanceOf: inferInstanceOf, callee: callee, pick: pick, args: args, argLabels: argLabels, anchor: anchor, serviceSite: serviceSite)
 		self.stampDefaultsSubject(callee, args: args, argLabels: argLabels, defaultedArgs: defaultedArgs, receiverSlots: NoReceiverSlots, constructorInstance: constructed)
-		try self.requireBareGenericSubjectIsBound(callee, args: args, argLabels: argLabels, constructed: constructed, inferInstanceOf: inferInstanceOf, anchor: anchor)
+		try self.requireBareGenericSubjectIsBound(callee, pick: pick, args: args, argLabels: argLabels, constructed: constructed, inferInstanceOf: inferInstanceOf, anchor: anchor)
 		try self.requireACountSourceForAStaticCall(callee, constructed: constructed, anchor: anchor)
 		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed, bound: bound)
 		try self.requireBareGenericResultIsTyped(result, callee: callee, constructed: constructed, inferInstanceOf: inferInstanceOf, anchor: anchor)
@@ -97227,7 +97240,7 @@ export type Parser
 		// CONSUMES — a plain-field store, or a type-parameter field of a concrete instance whose argument owns
 		// managed heap — is moved (poisoned / drained); a borrowed one is refused. Done BEFORE the op is
 		// emitted so a refused call emits nothing.
-		let transfers = try self.applyCallerConsume(callee, declarations: declarations, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructed, callResult: result, site: serviceSite)
+		let transfers = try self.applyCallerConsume(callee, declarations: declarations, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructed, callResult: result, site: serviceSite, pick: pick.clone())
 		self.holdScratchCellsEmptiedWhenTheMemberTakesTheValue(placeBindings.pending, callResult: result, anchor: anchor)
 		self.recordDeferredArgumentBindings(placeBindings.pending, transfers: transfers, callResult: result)
 
@@ -97253,6 +97266,7 @@ export type Parser
 		self.recordConstantArgRangeChecks(callee, args: args, argLabels: argLabels, anchor: anchor)
 		self.recordOpaqueArgRangeChecks(callee, args: args, argLabels: argLabels, anchor: anchor, constructorInstance: constructed)
 		let opIdx = self.artifact.module.ops.count()
+		self.recordPick(pick, opIndex: opIdx)
 		self.emitDirectCallOp(MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(placeBindings.argImmutableNamesFor(argImmutableNames)), defaultedArgs: defaultedArgs, mint: mint), callee: callee, callResult: result, args: args, argLabels: argLabels, range: SourceRange.between(anchor, last: rparenTok))
 
 		// ⭐ **AND WHERE THAT OP LANDED, WHEN IT IS ONE A LATER FOLD MAY DROP.** Only the two index accessors
@@ -97321,27 +97335,16 @@ export type Parser
 		return args.count() == 1 and self.valueIsAManagedStructRecord(result) and self.signatures.returnsAReceiverField(callee)
 	end 'callHandsBackTheReceiversField'
 
-	function genericInstanceCallee(callee ByteArray, anchor Token, args ValueIdArray, argLabels NameRoster) returns ByteArray throws SourceParseError
+	function genericInstanceCallee(callee ByteArray, anchor Token, args ValueIdArray, argLabels NameRoster, mint CalleeMint, supplied ConstructorInstance) returns ByteArray throws SourceParseError
 		if not self.signatures.isGenericFunctionKey(callee) 'notAGenericName'
 			return callee
 		end 'notAGenericName'
 
-		if self.nonGenericDeclarationFitsExactly(callee, args: args, argLabels: argLabels) 'anExactNonGenericDeclaration'
+		if self.nonGenericDeclarationServes(callee, args: args, argLabels: argLabels, mint: mint, supplied: supplied) 'aNonGenericDeclarationServes'
 			return callee
-		end 'anExactNonGenericDeclaration'
+		end 'aNonGenericDeclarationServes'
 
-		view templates = self.genericTemplatesNameableHere(callee)
-		let refuse = templates.count() == 1 and not self.signatures.declaresCallee(callee)
-		var inferred = GenericFunctionInstanceArray.create()
-
-		for template in templates 'eachTemplate'
-			match try self.inferGenericInstance(template, args: args, argLabels: argLabels, anchor: anchor, refuse: refuse) 'inference'
-				inferred(instance) then inferred.push(instance)
-				notApplicable then continue
-			end 'inference'
-		end 'eachTemplate'
-
-		view chosen = self.nearestGenericInstances(inferred)
+		view chosen = try self.inferredGenericInstances(callee, anchor: anchor, args: args, argLabels: argLabels, mint: mint)
 
 		if chosen.count() > 1 'twoGenericDeclarationsInfer'
 			throw SourceParseError.genericCallAmbiguous((bareMethodName(callee)), candidates: chosen.count(), line: anchor.line, column: anchor.column)
@@ -97352,12 +97355,78 @@ export type Parser
 		return instance.instanceName
 	end 'genericInstanceCallee'
 
+	function nonGenericDeclarationServes(callee ByteArray, args ValueIdArray, argLabels NameRoster, mint CalleeMint, supplied ConstructorInstance) returns bool
+		if self.signatures.overloadedDeclsOf(callee).isEmpty() 'noNonGenericDeclaration'
+			return false
+		end 'noNonGenericDeclaration'
+
+		let fits = nameableExactFits(self.signatures, interner: self.artifact.typeNames, call: self.overloadCallFactsOf(argLabels, mint: mint, supplied: supplied), rows: self.overloadRowsOf(callee).clone(), views: self.overloadViewsOf(args, uncast: sharedNoUncastLiterals))
+
+		for fit in fits 'eachExactFit'
+			if self.everyByValueArgFits(fit.byValue, args: args) 'aFitTheCallCanBind'
+				return true
+			end 'aFitTheCallCanBind'
+		end 'eachExactFit'
+
+		return false
+	end 'nonGenericDeclarationServes'
+
+	function everyByValueArgFits(byValue ByValueArgArray, args ValueIdArray) returns bool
+		for arg in byValue 'eachByValueArg'
+			let value = try args.get(arg.argIndex) otherwise panic("everyByValueArgFits: args.get OOB at {arg.argIndex} — a by-value fit names an argument of its own call")
+
+			if not self.valueFitsAliasByValue(value, alias: arg.alias) 'theValueLeavesTheAlias'
+				return false
+			end 'theValueLeavesTheAlias'
+		end 'eachByValueArg'
+
+		return true
+	end 'everyByValueArgFits'
+
+	function valueFitsAliasByValue(value ValueId, alias RangedTypeAlias) returns bool
+		if self.constIsKnown(value) or self.floatConstIsKnown(value) 'aKnownConstant'
+			return self.edgeProvesAlias(value, alias: alias) or self.integerLiteralWidensInto(value, alias: alias)
+		end 'aKnownConstant'
+
+		let counted = try self.counterIntervalOf(value) otherwise return true
+		return aliasIsFloat(alias) or rangeCoversIntBounds(alias, low: counted.lo, high: counted.hi)
+	end 'valueFitsAliasByValue'
+
+	function inferredGenericInstances(callee ByteArray, anchor Token, args ValueIdArray, argLabels NameRoster, mint CalleeMint) returns GenericFunctionInstanceArray throws SourceParseError
+		view templates = self.genericTemplatesNameableHere(callee, mint: mint)
+		let refuse = templates.count() == 1 and not self.signatures.declaresCallee(callee)
+		var inferred = GenericFunctionInstanceArray.create()
+
+		for template in templates 'eachTemplate'
+			match try self.inferGenericInstance(template, args: args, argLabels: argLabels, anchor: anchor, refuse: refuse) 'inference'
+				inferred(instance) then inferred.push(instance)
+				notApplicable then continue
+			end 'inference'
+		end 'eachTemplate'
+
+		return self.nearestGenericInstances(inferred)
+	end 'inferredGenericInstances'
+
 	// With none visible every template is kept, so the call still binds an instance and E3008 refuses
 	// it rather than E3004.
-	function genericTemplatesNameableHere(callee ByteArray) returns GenericFunctionTemplateArray
-		let nameable = self.signatures.genericTemplatesVisibleFrom(callee, readerFilePath: self.job.path)
+	function genericTemplatesNameableHere(callee ByteArray, mint CalleeMint) returns GenericFunctionTemplateArray
+		let nameable = self.genericTemplatesNameableFrom(callee, mint: mint)
 		return self.signatures.genericTemplatesOf(callee) if nameable.isEmpty() else nameable
 	end 'genericTemplatesNameableHere'
+
+	function genericTemplatesNameableFrom(callee ByteArray, mint CalleeMint) returns GenericFunctionTemplateArray
+		var nameable = GenericFunctionTemplateArray.create()
+		let callerName = self.namingCallerName()
+		let exempt = callNamesNothingTheReaderWrote(mint, readerFilePath: self.job.path)
+
+		for template in self.signatures.genericTemplatesOf(callee) 'eachTemplate'
+			if exempt or declarationMayBeNamed(self.signatures, visibility: template.visibility, declFilePath: template.declFilePath, registeredName: callee, readerFilePath: self.job.path, callerName: callerName) 'theCallerMayNameIt'
+				nameable.push(template)
+			end 'theCallerMayNameIt'
+		end 'eachTemplate'
+
+		return nameable
+	end 'genericTemplatesNameableFrom'
 
 	// Narrowed after inference, not before: an arity overload declared in another directory must still
 	// win a call the nearer declaration cannot take.
@@ -97384,38 +97453,6 @@ export type Parser
 
 		panic("nearestGenericInstances: {instances.count()} instances were inferred and none came from a template of its call's candidates")
 	end 'nearestGenericInstances'
-
-	function nonGenericDeclarationFitsExactly(callee ByteArray, args ValueIdArray, argLabels NameRoster) returns bool
-		for decl in self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path) 'eachDeclaration'
-			if self.declarationFitsExactly(decl, args: args, argLabels: argLabels) 'exact'
-				return true
-			end 'exact'
-		end 'eachDeclaration'
-
-		return false
-	end 'nonGenericDeclarationFitsExactly'
-
-	function declarationFitsExactly(decl OverloadedDecl, args ValueIdArray, argLabels NameRoster) returns bool
-		for argIndex in firstUserParamIndex(decl.takesReceiver) upto args.count() 'eachArgument'
-			let label = try argLabels.get(argIndex) otherwise panic("declarationFitsExactly: argLabels holds {argLabels.count()} entries for {args.count()} arguments — the two columns are parallel")
-			let column = try columnOfCallPosition(decl.takesReceiver, position: argIndex as ParamCount) otherwise panic("declarationFitsExactly: argument {argIndex} is the receiver, which the loop starts past")
-			let paramIndex = try argSlotPosition(decl.paramNames, argIndex: column, label: label) otherwise return false
-
-			let swept = try decl.paramTypes.get(paramIndex) otherwise return false
-			let paramType = self.sweptParamType(swept, scopeFilePath: decl.declFilePath)
-			let arg = try args.get(argIndex) otherwise panic("declarationFitsExactly: args.get OOB at {argIndex}")
-
-			if self.tagOf(arg) != maxonTypeTag(paramType) or not self.sweptArgumentFits(paramType, argValue: arg) 'differs'
-				return false
-			end 'differs'
-
-			if self.tagOf(arg) == ValueTypeTag.named and not self.signatures.rangedIdentityOfSpelling(self.internedName(self.valueNameId(arg)), readerFilePath: self.job.path).equals(self.signatures.rangedIdentityOfSpelling(self.internedName(typeNameIdOf(paramType)), readerFilePath: decl.declFilePath)) 'anotherAlias'
-				return false
-			end 'anotherAlias'
-		end 'eachArgument'
-
-		return true
-	end 'declarationFitsExactly'
 
 	function inferGenericInstance(template GenericFunctionTemplate, args ValueIdArray, argLabels NameRoster, anchor Token, refuse bool) returns GenericInference throws SourceParseError
 		let functionName = (bareMethodName(template.key))
@@ -97964,7 +98001,7 @@ export type Parser
 
 		let callee = match rule 'defaultsKey'
 			messageSend gives declared
-			firstNamedIfDefaulted gives try self.genericInstanceCallee(declared, anchor: anchor, args: args, argLabels: argLabels)
+			firstNamedIfDefaulted gives try self.genericInstanceCallee(declared, anchor: anchor, args: args, argLabels: argLabels, mint: CalleeMint.notMinted, supplied: ConstructorInstance.none)
 			ordinary or
 			firstMayBeNamed or
 			allPositional or
@@ -98135,32 +98172,32 @@ export type Parser
 
 		match bound 'bound'
 			undeclared then return OpaqueWordReading.asItStands
-			declared(returnType, scopeFilePath, _) then return try self.typeResultThroughSource(result, source: source, callee: callee, args: args, argLabels: argLabels, returnType: returnType, scopeFilePath: scopeFilePath, anchor: anchor)
+			declared(returnType, scopeFilePath, pick) then return try self.typeResultThroughSource(result, source: source, callee: callee, pick: pick, args: args, argLabels: argLabels, returnType: returnType, scopeFilePath: scopeFilePath, anchor: anchor)
 		end 'bound'
 	end 'typeCallResultThroughInstance'
 
-	function typeResultThroughSource(result ValueId, source CallInstanceSource, callee ByteArray, args ValueIdArray, argLabels NameRoster, returnType MaxonReturnType, scopeFilePath FilePath, anchor Token) returns OpaqueWordReading throws SourceParseError
+	function typeResultThroughSource(result ValueId, source CallInstanceSource, callee ByteArray, pick CallPick, args ValueIdArray, argLabels NameRoster, returnType MaxonReturnType, scopeFilePath FilePath, anchor Token) returns OpaqueWordReading throws SourceParseError
 		match source 'source'
 			nowhere or
 			scopeOnly then return OpaqueWordReading.asItStands
-			qualifier(gid) then return try self.typeStaticResultThroughInstance(result, gid: gid, callee: callee, args: args, argLabels: argLabels, returnType: returnType, scopeFilePath: scopeFilePath, anchor: anchor)
-			receiver(value) then return try self.retypeDeclaredMethodResult(result, callee: callee, args: args, argLabels: argLabels, receiver: value, returnType: returnType, scopeFilePath: scopeFilePath, anchor: anchor)
+			qualifier(gid) then return try self.typeStaticResultThroughInstance(result, gid: gid, callee: callee, pick: pick, args: args, argLabels: argLabels, returnType: returnType, scopeFilePath: scopeFilePath, anchor: anchor)
+			receiver(value) then return try self.retypeDeclaredMethodResult(result, callee: callee, pick: pick, args: args, argLabels: argLabels, receiver: value, returnType: returnType, scopeFilePath: scopeFilePath, anchor: anchor)
 		end 'source'
 	end 'typeResultThroughSource'
 
-	function typeStaticResultThroughInstance(result ValueId, gid GenericInstanceId, callee ByteArray, args ValueIdArray, argLabels NameRoster, returnType MaxonReturnType, scopeFilePath FilePath, anchor Token) returns OpaqueWordReading throws SourceParseError
-		try self.settleStaticPromiseHandout(result, callee: callee, args: args, argLabels: argLabels, returnType: returnType, gid: gid, scopeFilePath: scopeFilePath, anchor: anchor)
+	function typeStaticResultThroughInstance(result ValueId, gid GenericInstanceId, callee ByteArray, pick CallPick, args ValueIdArray, argLabels NameRoster, returnType MaxonReturnType, scopeFilePath FilePath, anchor Token) returns OpaqueWordReading throws SourceParseError
+		try self.settleStaticPromiseHandout(result, callee: callee, pick: pick, args: args, argLabels: argLabels, returnType: returnType, gid: gid, scopeFilePath: scopeFilePath, anchor: anchor)
 		self.markSurfaceOfStaticResult(result, args: args, gid: gid, returnType: returnType)
 		return self.typeResultThroughInstance(result, gid: gid, scopeFilePath: scopeFilePath)
 	end 'typeStaticResultThroughInstance'
 
-	function settleStaticPromiseHandout(result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, returnType MaxonReturnType, gid GenericInstanceId, scopeFilePath FilePath, anchor Token) throws SourceParseError
+	function settleStaticPromiseHandout(result ValueId, callee ByteArray, pick CallPick, args ValueIdArray, argLabels NameRoster, returnType MaxonReturnType, gid GenericInstanceId, scopeFilePath FilePath, anchor Token) throws SourceParseError
 		if not self.returnHandsBackAGreenThread(returnType, gid: gid, scopeFilePath: scopeFilePath) 'nothingToBorrow'
 			return
 		end 'nothingToBorrow'
 
-		let holder = try self.holderArgumentOf(callee, args: args, argLabels: argLabels, gid: gid).value() otherwise return
-		try self.settleCorpusPromiseRead(result, callee: callee, args: args, argLabels: argLabels, holder: holder, returnType: returnType, gid: gid, scopeFilePath: scopeFilePath, anchor: anchor)
+		let holder = try self.holderArgumentOf(callee, pick: pick, args: args, argLabels: argLabels, gid: gid).value() otherwise return
+		try self.settleCorpusPromiseRead(result, callee: callee, pick: pick, args: args, argLabels: argLabels, holder: holder, returnType: returnType, gid: gid, scopeFilePath: scopeFilePath, anchor: anchor)
 	end 'settleStaticPromiseHandout'
 
 	function returnHandsBackAGreenThread(returnType MaxonReturnType, gid GenericInstanceId, scopeFilePath FilePath) returns bool
@@ -98177,8 +98214,8 @@ export type Parser
 		end 'eachArgument'
 	end 'markSurfaceOfStaticResult'
 
-	function holderArgumentOf(callee ByteArray, args ValueIdArray, argLabels NameRoster, gid GenericInstanceId) returns HolderArgument
-		let facts = self.declarationFactsBoundBy(callee, argLabels: argLabels)
+	function holderArgumentOf(callee ByteArray, pick CallPick, args ValueIdArray, argLabels NameRoster, gid GenericInstanceId) returns HolderArgument
+		let facts = self.declarationFactsBoundBy(callee, pick: pick, argLabels: argLabels)
 
 		for column in 0 upto args.count() as ParamCount 'eachArgument'
 			let argument = try args.get(column) otherwise panic("holderArgumentOf: args.get OOB at {column}")
@@ -98277,7 +98314,7 @@ export type Parser
 		end 'declaring'
 	end 'scopeOnlySourceOfForeignCallee'
 
-	function retypeDeclaredMethodResult(result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, receiver ValueId, returnType MaxonReturnType, scopeFilePath FilePath, anchor Token) returns OpaqueWordReading throws SourceParseError
+	function retypeDeclaredMethodResult(result ValueId, callee ByteArray, pick CallPick, args ValueIdArray, argLabels NameRoster, receiver ValueId, returnType MaxonReturnType, scopeFilePath FilePath, anchor Token) returns OpaqueWordReading throws SourceParseError
 		// ⭐⭐ **THE CORPUS-CALL DOOR IS THE ONLY PLACE A CORPUS MEMBER'S ELEMENT TYPE IS CONCRETE**.
 		// `stdlib/Array.maxon` is compiled ONCE over an opaque `Element`, so no rule about
 		// promise elements can be written inside `last()` or `cursor()` — in there the element is a type
@@ -98285,7 +98322,7 @@ export type Parser
 		// known, so here is where a member that hands back a BORROWED promise element, or a copy of a
 		// receiver holding one, is refused.
 		try self.requireCorpusCopyHoldsNoGreenThread(callee, receiver: receiver, anchor: anchor)
-		try self.settleCorpusPromiseRead(result, callee: callee, args: args, argLabels: argLabels, holder: receiver, returnType: returnType, gid: self.valueInstanceId(receiver), scopeFilePath: scopeFilePath, anchor: anchor)
+		try self.settleCorpusPromiseRead(result, callee: callee, pick: pick, args: args, argLabels: argLabels, holder: receiver, returnType: returnType, gid: self.valueInstanceId(receiver), scopeFilePath: scopeFilePath, anchor: anchor)
 		self.markReceiverSurfaceOfResult(result, receiver: receiver, returnType: returnType)
 		let reading = self.typeResultThroughInstance(result, gid: self.valueInstanceId(receiver), scopeFilePath: scopeFilePath)
 
@@ -98367,14 +98404,14 @@ export type Parser
 	//
 	// ⚠ The cursor slot's ops are emitted HERE, before the call op, so the call stays the last op a `try`
 	// rewrite looks for (`try it.peek(1)`); the position they read is the one the call reads.
-	function settleCorpusPromiseRead(result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, holder ValueId, returnType MaxonReturnType, gid GenericInstanceId, scopeFilePath FilePath, anchor Token) throws SourceParseError
+	function settleCorpusPromiseRead(result ValueId, callee ByteArray, pick CallPick, args ValueIdArray, argLabels NameRoster, holder ValueId, returnType MaxonReturnType, gid GenericInstanceId, scopeFilePath FilePath, anchor Token) throws SourceParseError
 		// ⚠ **GATED ON WHAT THE MEMBER RETURNS, NOT ON THE RECEIVER ALONE.** The rule is about handing an
 		// ELEMENT over; a member of the same container that returns something else — `count()`, `push()`,
 		// `clear()` — is untouched by it.
 		let declared = try valueTypeOfReturn(returnType) otherwise return
 		let handedBack = self.slotTypeThroughInstance(declared, gid: gid, scopeFilePath: scopeFilePath)
 
-		if not self.typeHandsBackAGreenThread(handedBack) or self.calleeMovesItsElementOut(callee, args: args, argLabels: argLabels, gid: gid) 'nothingBorrowed'
+		if not self.typeHandsBackAGreenThread(handedBack) or self.calleeMovesItsElementOut(callee, pick: pick, args: args, argLabels: argLabels, gid: gid) 'nothingBorrowed'
 			return
 		end 'nothingBorrowed'
 
@@ -98393,8 +98430,8 @@ export type Parser
 		throw SourceParseError.promiseCannotBeBorrowed(String.from(unqualifiedMemberName(callee)), cure: cure, line: anchor.line, column: anchor.column)
 	end 'settleCorpusPromiseRead'
 
-	function calleeMovesItsElementOut(callee ByteArray, args ValueIdArray, argLabels NameRoster, gid GenericInstanceId) returns bool
-		if self.signatures.declaresALibraryMoveOutDoor(callee, argLabels: argLabels) 'aLibraryDoor'
+	function calleeMovesItsElementOut(callee ByteArray, pick CallPick, args ValueIdArray, argLabels NameRoster, gid GenericInstanceId) returns bool
+		if self.libraryMoveOutDoorBinds(callee, pick: pick, argLabels: argLabels) 'aLibraryDoor'
 			return true
 		end 'aLibraryDoor'
 
@@ -98402,17 +98439,43 @@ export type Parser
 			return true
 		end 'movesOneOutOfAField'
 
-		return self.signatures.returnsAParameter(callee) and self.returnableParametersAreMovedIn(callee, args: args, argLabels: argLabels, gid: gid)
+		return self.signatures.returnsAParameter(callee) and self.returnableParametersAreMovedIn(callee, pick: pick, args: args, argLabels: argLabels, gid: gid)
 	end 'calleeMovesItsElementOut'
 
-	function returnableParametersAreMovedIn(callee ByteArray, args ValueIdArray, argLabels NameRoster, gid GenericInstanceId) returns bool
-		view declarations = self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path)
+	function libraryMoveOutDoorBinds(callee ByteArray, pick CallPick, argLabels NameRoster) returns bool
+		if not isElementMoveOutName(unqualifiedMemberOf(callee)) 'notADoorName'
+			return false
+		end 'notADoorName'
+
+		match pick 'pick'
+			bound(decl) then return self.signatures.declaredByTheCorpus(decl.declFilePath)
+			unasked or
+			tied or
+			noMember then return self.signatures.everyBindableDeclarationIsTheCorpus(callee, argLabels: argLabels)
+		end 'pick'
+	end 'libraryMoveOutDoorBinds'
+
+	function declarationsOfThePick(callee ByteArray, pick CallPick) returns OverloadedDeclArray
+		var declarations = OverloadedDeclArray.create()
+
+		match pick 'pick'
+			bound(decl) then declarations.push(decl)
+			unasked or
+			tied or
+			noMember then declarations = self.declarationsNameableHere(callee)
+		end 'pick'
+
+		return declarations
+	end 'declarationsOfThePick'
+
+	function returnableParametersAreMovedIn(callee ByteArray, pick CallPick, args ValueIdArray, argLabels NameRoster, gid GenericInstanceId) returns bool
+		view declarations = self.declarationsOfThePick(callee, pick: pick.clone())
 
 		if declarations.isEmpty() 'noDeclarationToRead'
 			return false
 		end 'noDeclarationToRead'
 
-		let facts = self.declarationFactsBoundBy(callee, argLabels: argLabels)
+		let facts = self.declarationFactsBoundBy(callee, pick: pick, argLabels: argLabels)
 
 		for column in 0 upto args.count() as ParamCount 'eachArgument'
 			let label = callArgumentLabel(argLabels, argIndex: column)
@@ -99090,9 +99153,11 @@ export type Parser
 	function emitAsyncCall(writtenCallee ByteArray, anchor Token, mint CalleeMint, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, argAnchors TokenIndexArray, rparenTok Token, spawnSite AsyncSpawnSite) returns ValueId throws SourceParseError
 		try self.requireCalleeIsNotRawSurface(writtenCallee, anchor: anchor)
 
-		let callee = try self.genericInstanceCallee(writtenCallee, anchor: anchor, args: args, argLabels: argLabels)
+		let callee = try self.genericInstanceCallee(writtenCallee, anchor: anchor, args: args, argLabels: argLabels, mint: mint, supplied: ConstructorInstance.none)
 
 		try self.requireCalleeIsNotReservedName(callee, anchor: anchor, mint: mint)
+
+		let pick = self.pickDeclaration(callee, args: args, argLabels: argLabels, mint: mint, supplied: ConstructorInstance.none)
 
 		// ⭐ **AN OMITTED ARGUMENT IS SUPPLIED AT THIS DOOR TOO** — the SECOND of the two
 		// source call doors, so `async f()` against `function f(n Integer = 1)` is the same legal call
@@ -99141,8 +99206,8 @@ export type Parser
 		// `fillOmittedArgDefaults`, so a MANAGED default is transferred exactly as a written argument is.
 		try self.transferAsyncSpawnArgs(callee, args: args, argImmutableNames: argImmutableNames, argAnchors: argAnchors, anchor: anchor)
 
-		let result = match self.boundReturnOf(callee, args: args, argLabels: argLabels) 'spawned'
-			declared(returnType, scopeFilePath, pick) gives try self.spawnAtItsPromiseInstance(callee, returnType: returnType, scopeFilePath: scopeFilePath, pick: pick, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor)
+		let result = match self.boundReturnOf(callee, pick: pick.clone()) 'spawned'
+			declared(returnType, scopeFilePath, _) gives try self.spawnAtItsPromiseInstance(callee, pick: pick, returnType: returnType, scopeFilePath: scopeFilePath, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor)
 			undeclared gives self.mintDeferredValue()
 		end 'spawned'
 
@@ -99159,6 +99224,8 @@ export type Parser
 			self.markCallChecked(result)
 		end 'theQuantityDoorIsKept'
 
+		self.recordPick(pick, opIndex: self.artifact.module.opCount())
+
 		// Immediately before the emit, so the site keys the op that emit is about to append.
 		self.artifact.recordAsyncSpawnSite(spawnSite)
 		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(argImmutableNames), defaultedArgs: defaultedArgs, mint: mint), range: SourceRange.between(anchor, last: rparenTok))
@@ -99169,17 +99236,27 @@ export type Parser
 
 	// One pick serves the result gate and the minted instance, so an overloaded callee is checked and
 	// awaited at the same declaration.
-	function spawnAtItsPromiseInstance(callee ByteArray, returnType MaxonReturnType, scopeFilePath FilePath, pick SweptDeclarationPick, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, anchor Token) returns ValueId throws SourceParseError
+	function spawnAtItsPromiseInstance(callee ByteArray, pick CallPick, returnType MaxonReturnType, scopeFilePath FilePath, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, anchor Token) returns ValueId throws SourceParseError
 		try self.requireAsyncResult(callee, returnType: self.repairSweptReturnType(returnType, scopeFilePath: scopeFilePath), anchor: anchor)
-		try self.transferAsyncPromiseArgs(callee, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor)
 
-		return self.mintSpawnPromise(callee, pick: pick)
+		match pick 'pick'
+			bound or
+			unasked or
+			noMember then try self.transferAsyncPromiseArgs(callee, pick: pick, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor)
+
+			// A tie is E3007 at resolution; with no declaration bound there is no move to judge.
+			tied then break
+		end 'pick'
+
+		return self.mintSpawnPromise(callee, pick: pick.clone())
 	end 'spawnAtItsPromiseInstance'
 
-	function mintSpawnPromise(callee ByteArray, pick SweptDeclarationPick) returns ValueId
+	function mintSpawnPromise(callee ByteArray, pick CallPick) returns ValueId
 		let promise = match pick 'pick'
-			chosen(decl) gives self.signatures.internPromiseInstanceReturning(decl.returnType, callee: callee)
-			undecided gives self.signatures.internPromiseInstanceForCallee(callee)
+			bound(decl) gives self.signatures.internPromiseInstanceReturning(decl.returnType, callee: callee)
+			unasked or
+			tied or
+			noMember gives self.signatures.internPromiseInstanceForCallee(callee)
 		end 'pick'
 
 		return self.mintValue(ValueTypeTag.genericInstance, nameId: promise as TypeNameId)
@@ -99246,7 +99323,7 @@ export type Parser
 	// only reads the promise would read a thread this frame reclaims. The E3141 waits for the loop, so a
 	// promise also handed to a taking parameter is E3102 at its second argument, as
 	// `specs/async-promise-drop.md` pins.
-	function transferAsyncPromiseArgs(callee ByteArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, anchor Token) throws SourceParseError
+	function transferAsyncPromiseArgs(callee ByteArray, pick CallPick, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, anchor Token) throws SourceParseError
 		var promiseColumns = ParamCountArray.create()
 
 		for column in 0 upto args.count() as ParamCount 'eachArg'
@@ -99259,7 +99336,7 @@ export type Parser
 			return
 		end 'noPromiseTravels'
 
-		let declarations = self.declarationFactsBoundBy(callee, argLabels: argLabels)
+		let declarations = self.declarationFactsBoundBy(callee, pick: pick, argLabels: argLabels)
 		var borrowedColumns = ParamCountArray.create()
 
 		for column in promiseColumns 'eachPromiseColumn'
@@ -99303,7 +99380,7 @@ export type Parser
 	end 'handOffArgumentAnchor'
 
 	function declaredInterfaceParamAt(callee ByteArray, argIndex ParamCount, label ByteArray) returns InterfaceParam throws MapError
-		let decl = try self.signatures.soleVisibleDeclarationOf(callee, readerFilePath: self.job.path)
+		let decl = try self.soleNameableDeclarationOf(callee, callerName: self.namingCallerName())
 		let position = try argSlotPosition(decl.paramNames, argIndex: argIndex, label: label)
 		let swept = try decl.paramTypes.get(position) otherwise panic("declaredInterfaceParamAt: paramTypes.get OOB at {position} — a declaration's parameter columns are built in lockstep")
 		let name = try decl.paramNames.get(position) otherwise panic("declaredInterfaceParamAt: paramNames.get OOB at {position} — a declaration's parameter columns are built in lockstep")
@@ -99658,7 +99735,7 @@ export type Parser
 	// (poisoned if it is a live binding, drained if a temporary), a borrowed struct/union is refused
 	// (E2015) and a scalar is inert, and a promise moves at every position the callee takes. The
 	// common callee `borrowsAll`, so this is one `match`.
-	function applyCallerConsume(callee ByteArray, declarations DeclarationFactsArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance, callResult ValueId, site ServiceSpawnSite) returns PendingArgumentBindingArray throws SourceParseError
+	function applyCallerConsume(callee ByteArray, declarations DeclarationFactsArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance, callResult ValueId, site ServiceSpawnSite, pick CallPick) returns PendingArgumentBindingArray throws SourceParseError
 		if declarations.count() < 2 'oneDeclarationDecides'
 			match self.consumeOfTheOneDeclaration(callee, declarations: declarations) 'c'
 				borrowsAll then break
@@ -99695,7 +99772,12 @@ export type Parser
 			end 'everyDeclarationTakesItAlike'
 
 			if let spawnTok = try site.token() 'aSpawnCannotMoveConditionally'
-				throw SourceParseError.unsupported("`spawn {String.from(callee)}(…)` — `{String.from(callee)}` is declared {declarations.count()} times and they do not all keep argument {column + 1} alike. A `spawn` MOVES every argument its factory keeps into the service, and which declaration this call binds is settled after this point, so there is no one move to make. Give the factories distinct names", line: spawnTok.line, column: spawnTok.column)
+				match pick 'pick'
+					unasked then throw SourceParseError.unsupported("`spawn {String.from(callee)}(…)` — `{String.from(callee)}` is declared {declarations.count()} times, they do not all keep argument {column + 1} alike, and the arguments pick no single one of them. A `spawn` MOVES every argument its factory keeps into the service, so with no one declaration bound there is no one move to make. Give the arguments types that fit exactly one `{String.from(callee)}`", line: spawnTok.line, column: spawnTok.column)
+					bound or
+					tied or
+					noMember then break
+				end 'pick'
 			end 'aSpawnCannotMoveConditionally'
 
 			try self.transferTakenColumn(self.anyTakerTakesAsAPromise(takers, column: column, label: label, argValue: argValue), column: column, label: label, takingSites: taking.sites, args: args, argRanges: argRanges, anchor: anchor, consumedOwned: consumedOwned, transfers: transfers, callResult: callResult)
@@ -100448,7 +100530,7 @@ export type Parser
 	function noteCellHandOverTarget(target CallArgTarget, name ByteArray, column ParamCount, label ByteArray)
 		let callee = try target.calleeName() otherwise return
 
-		for declaration in self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path) 'eachDeclaration'
+		for declaration in self.declarationsNameableHere(callee) 'eachDeclaration'
 			let position = try argSlotPosition(declaration.paramNames, argIndex: column, label: label) otherwise continue
 			let parameter = displayParamName(try declaration.paramNames.get(position) otherwise panic("noteCellHandOverTarget: paramNames.get OOB at {position} — the position came from `argSlotPosition` over this very column"))
 
@@ -100683,21 +100765,16 @@ export type Parser
 	// that keeps ONE return type per key silently answers YES to for every declaration wearing that key.
 	//
 	// The TAG half is `overloadResultTagAgrees` asked in BOTH directions — the same rule
-	// `SemanticCheck.requireOverloadResultTagAgrees` refuses on — so a set the tags call agreeing is exactly
-	// a set that pass can never report. Two ranged aliases therefore agree (they are both numbers), which is
-	// what keeps `stdlib`'s own overload sets on the untouched path.
+	// `SemanticCheck.requireOverloadResultTagAgrees` refuses on. Two ranged aliases therefore agree (they are
+	// both numbers).
 	//
-	// ⛔⛔ **THE TAG HALF IS NOT THE WHOLE TEST, AND TESTING ONLY IT IS A MEASURED SILENT WRONG ANSWER.**
-	// Two struct returns are both `structRef` and two generic-instance returns are both
-	// `genericInstance`, so a set returning two DIFFERENT aggregates read as agreeing: the decider
-	// declined, `returnTypeOf`'s last-wins answer typed the call from the OTHER member — and the
-	// sentence above is exactly why nothing reported it, the two being consistently blind together.
-	// **MEASURED:** `pick(n Integer) returns Box` beside `pick(s String) returns Bag`, two two-field
-	// structs whose fields are declared in OPPOSITE orders, called `pick(1)` — `b.first` reads a `Box`
-	// at `Bag`'s offsets, compiling clean, with no diagnostic at any stage.
+	// ⛔⛔ **THE TAG HALF IS NOT THE WHOLE TEST, AND TESTING ONLY IT IS A SILENT WRONG ANSWER.** Two struct
+	// returns are both `structRef` and two generic-instance returns are both `genericInstance`, so two
+	// DIFFERENT aggregates read as agreeing, and a value typed from one is read at the other's field offsets
+	// with no diagnostic at any stage.
 	//
 	// ⇒ once the tags agree, only a nominal IDENTITY can still part them, and it is read through the ONE
-	// routine that answers it (`aggregateNameOf`) — the same refinement `sweptOverloadArgFit` applies to a
+	// routine that answers it (`aggregateNameIn`) — the same refinement `overloadArgFit` applies to a
 	// PARAMETER at the same pair, and the same "a ranged alias names no aggregate" rule that keeps two
 	// spellings of one number interchangeable.
 	function returnAnswersAreInterchangeable(left MaxonReturnType, right MaxonReturnType) returns bool
@@ -100719,39 +100796,189 @@ export type Parser
 	end 'returnAnswersAreInterchangeable'
 
 	// The aggregate identity of a SWEPT return type, read in this file's own interner. ADOPTED first because
-	// `aggregateNameOf` resolves ids against `self.artifact.typeNames` and a swept id is the INDEX's — the
+	// the name is read in `self.artifact.typeNames` and a swept id is the INDEX's — the
 	// same crossing `boundReturnOf` makes for the type it finally hands back. Reached only once
 	// the tags have already agreed, so no set the tag test parts pays for it.
 	function adoptedReturnAggregateName(swept MaxonReturnType) returns ByteArray
 		return match self.signatures.adoptReturnType(swept, into: self.artifact.typeNames) 'adopted'
 			void gives EmptySourceText
-			value(inner) gives self.aggregateNameOf(maxonTypeTag(inner), nameId: typeNameIdOf(inner))
+			value(inner) gives aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: maxonTypeTag(inner), nameId: typeNameIdOf(inner), readerFilePath: self.job.path)
 		end 'adopted'
 	end 'adoptedReturnAggregateName'
 
-	// ⭐⭐ **DO THE DECLARATIONS OF ONE NAME DISAGREE ABOUT WHAT THEY RETURN?** — the gate that keeps the
-	// parse-time overload decider off every call in every program that does not need it. It is asked of ALL
-	// the declarations rather than of the visible ones, because what a disagreement spoils is
-	// `ProgramSignatures.returnTypeOf`, whose one entry per key is written by whichever declaration was swept
-	// last — visible from the reader or not.
-	//
-	// ⚠ **EVERY CANDIDATE IS COMPARED AGAINST THE FIRST, AND THAT IS COMPLETE BECAUSE THE RELATION IS AN
-	// EQUIVALENCE.** Its tag half is class equality (`typeClassesAgree`) refined by floatness — the one
-	// non-equality it admits, int-to-float widening, is exactly what the floatness test removes — and its
-	// name half is byte equality. A pairwise sweep would find nothing this fold does not.
-	function sweptOverloadsDisagreeOnReturnType(candidates OverloadedDeclArray) returns bool
-		let first = try candidates.get(0) otherwise panic("sweptOverloadsDisagreeOnReturnType: an empty candidate list — the caller returns on `count() < 2` before asking")
+	// ⭐⭐⭐ **WHICH OVERLOAD'S RETURN TYPE THIS CALL READS.** A call's result type is fixed while its own file
+	// is parsed: the tag decides the Std type of the result (`lowerMaxonToStd`), whether a scope-exit drop is
+	// enrolled for it (`enrolOwnedCallTemp`) and which register file it travels in. So a call the pick bound is
+	// typed from the declaration it bound, which is the one resolution applies, and only an unbound call reads
+	// the by-name answer, whose one return type per NAME is `SemanticCheck.reconcileOverloadResultType`'s to
+	// check against the member resolution chooses.
+	function boundReturnOf(callee ByteArray, pick CallPick) returns BoundReturn
+		match pick 'pick'
+			// ADOPTED into this file's interner, exactly as `returnTypeOf` adopts the by-name answer: the
+			// index's ids are its own, and a `named`/`structRef` return read raw would name whatever this
+			// file's table happens to hold at that id.
+			bound(decl) then return BoundReturn.declared(self.signatures.adoptReturnType(decl.returnType, into: self.artifact.typeNames), scopeFilePath: decl.declFilePath, pick: pick.clone())
+			unasked or
+			tied or
+			noMember then return self.boundByName(callee, pick: pick.clone())
+		end 'pick'
+	end 'boundReturnOf'
 
-		for i in 1 upto candidates.count() 'eachLater'
-			let later = try candidates.get(i) otherwise panic("sweptOverloadsDisagreeOnReturnType: candidates.get OOB at {i} inside its own count()")
+	function boundByName(callee ByteArray, pick CallPick) returns BoundReturn
+		match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'byName'
+			declared(returnType) then return BoundReturn.declared(returnType, scopeFilePath: self.signatures.recordedReturnDeclFileOf(callee), pick: pick.clone())
+			undeclared then return sharedUndeclaredReturn
+		end 'byName'
+	end 'boundByName'
 
-			if not self.returnAnswersAreInterchangeable(first.returnType, right: later.returnType) 'twoAnswers'
+	function overloadRowMemo() returns OverloadRowMemo
+		match self.overloadRows 'state'
+			built(rows) then return rows
+			unbuilt then break
+		end 'state'
+
+		let rows = OverloadRowMemo.create()
+		self.overloadRows = OverloadRowState.built(rows)
+
+		return rows
+	end 'overloadRowMemo'
+
+	function overloadRowsOf(callee ByteArray) returns OverloadCandidateArray
+		var memo = self.overloadRowMemo()
+
+		if let known = try memo.get(callee) 'memoized'
+			return known
+		end 'memoized'
+
+		var rows = OverloadCandidateArray.create()
+
+		view decls = self.signatures.overloadedDeclsOf(callee)
+		view names = self.registeredNamesOfSet(callee)
+
+		for i in 0 upto decls.count() 'eachDeclaration'
+			rows.push(overloadRowOfDecl(self.signatures, interner: self.artifact.typeNames, decl: try decls.get(i) otherwise panic("overloadRowsOf: decls.get OOB at {i} inside its own count()"), registeredName: try names.get(i) otherwise panic("overloadRowsOf: names.get OOB at {i} — one name is minted per declaration")))
+		end 'eachDeclaration'
+
+		memo.upsert(callee, value: rows)
+
+		return rows
+	end 'overloadRowsOf'
+
+	function overloadViewsOf(args ValueIdArray, uncast LiteralCastMap) returns OverloadArgArray
+		return overloadArgViews(args, tags: self.bodyState.valueTags, nameIds: self.bodyState.valueNameIds, brandIds: self.bodyState.valueBrandIds, interner: self.artifact.typeNames, uncast: uncast)
+	end 'overloadViewsOf'
+
+	function overloadCallFactsOf(argLabels NameRoster, mint CalleeMint, supplied ConstructorInstance) returns OverloadCallFacts
+		return OverloadCallFacts.create(self.job.path, argLabels: argLabels, staticInstance: suppliedInstanceOf(supplied), callerName: self.namingCallerName(), mint: mint)
+	end 'overloadCallFactsOf'
+
+	function argumentsDecideNoOverload(args ValueIdArray) returns bool
+		for arg in args 'eachArg'
+			let tag = self.tagOf(arg)
+
+			if tag == ValueTypeTag.typeParameter or tagIsUnresolved(tag) 'aValueWhoseTypeIsNotKnownYet'
 				return true
-			end 'twoAnswers'
-		end 'eachLater'
+			end 'aValueWhoseTypeIsNotKnownYet'
+		end 'eachArg'
 
 		return false
-	end 'sweptOverloadsDisagreeOnReturnType'
+	end 'argumentsDecideNoOverload'
+
+	function pickDeclaration(callee ByteArray, args ValueIdArray, argLabels NameRoster, mint CalleeMint, supplied ConstructorInstance) returns CallPick
+		if not self.signatures.isAnOverloadSet(callee) 'oneDeclarationAnswers'
+			return sharedUnaskedPick
+		end 'oneDeclarationAnswers'
+
+		if self.argumentsDecideNoOverload(args) 'resolutionRefusesOrDefersIt'
+			return sharedUnaskedPick
+		end 'resolutionRefusesOrDefersIt'
+
+		let call = self.overloadCallFactsOf(argLabels, mint: mint, supplied: supplied)
+		let views = self.overloadViewsOf(args, uncast: sharedNoUncastLiterals)
+		let selection = selectOverload(self.signatures, interner: self.artifact.typeNames, call: call, rows: self.rowsWhoseValuesFit(self.overloadRowsOf(callee), call: call, views: views, args: args), views: views)
+		return self.pickOfAnswer(callee, answer: overloadAnswerOf(selection))
+	end 'pickDeclaration'
+
+	function rowsWhoseValuesFit(rows OverloadCandidateArray, call OverloadCallFacts, views OverloadArgArray, args ValueIdArray) returns OverloadCandidateArray
+		if not self.anArgumentHasAKnownRange(args) 'nothingToJudgeByValue'
+			return rows.clone()
+		end 'nothingToJudgeByValue'
+
+		var fitting = OverloadCandidateArray.create()
+		var anyServes = false
+
+		for row in rows 'eachCandidate'
+			let fit = overloadFit(self.signatures, interner: self.artifact.typeNames, call: call, candidate: row, views: views)
+
+			if not self.everyByValueArgFits(fit.byValue, args: args) 'aValueLeavesItsAlias'
+				continue
+			end 'aValueLeavesItsAlias'
+
+			fitting.push(row.clone())
+			anyServes = anyServes or fit.standing != OverloadStanding.incompatible
+		end 'eachCandidate'
+
+		return fitting if anyServes else rows.clone()
+	end 'rowsWhoseValuesFit'
+
+	function anArgumentHasAKnownRange(args ValueIdArray) returns bool
+		for arg in args 'eachArg'
+			if self.constIsKnown(arg) or self.floatConstIsKnown(arg) or valueIsMarked(self.bodyState.literalCounters, value: arg) 'aKnownRange'
+				return true
+			end 'aKnownRange'
+		end 'eachArg'
+
+		return false
+	end 'anArgumentHasAKnownRange'
+
+	function pickOfAnswer(callee ByteArray, answer OverloadAnswer) returns CallPick
+		match answer 'answer'
+			bound(site) then return CallPick.bound(try self.signatures.overloadedDeclAt(callee, site: site) otherwise panic("pickOfAnswer: the scorer bound '{String.from(callee)}' to a declaration at {String.from(site)} and the index holds none there — a row is built from a declaration of the set"))
+			tied(sites) then return CallPick.tied(sites)
+			noMember then return sharedNoMemberPick
+		end 'answer'
+	end 'pickOfAnswer'
+
+	function declarationBoundBy(callee ByteArray, pick CallPick) returns OverloadedDecl throws AbsentError
+		match pick 'pick'
+			bound(decl) then return decl
+			unasked then return try self.soleDeclarationOfThePick(callee, pick: pick.clone())
+			tied or
+			noMember then throw AbsentError.absent
+		end 'pick'
+	end 'declarationBoundBy'
+
+	function soleDeclarationOfThePick(callee ByteArray, pick CallPick) returns OverloadedDecl throws AbsentError
+		view open = self.declarationsOfThePick(callee, pick: pick.clone())
+
+		if open.count() != 1 'noSingleDeclarationIsLeft'
+			throw AbsentError.absent
+		end 'noSingleDeclarationIsLeft'
+
+		return try open.get(0) otherwise panic("soleDeclarationOfThePick: get(0) failed on a one-declaration array")
+	end 'soleDeclarationOfThePick'
+
+	function recordPick(pick CallPick, opIndex ElementIndex)
+		match pick 'pick'
+			unasked then return
+			bound(decl) then self.artifact.recordOverloadAnswer(opIndex, answer: OverloadAnswer.bound(decl.site.clone()))
+			tied(sites) then self.artifact.recordOverloadAnswer(opIndex, answer: OverloadAnswer.tied(sites.clone()))
+			noMember then self.artifact.recordOverloadAnswer(opIndex, answer: OverloadAnswer.noMember)
+		end 'pick'
+	end 'recordPick'
+
+	// ⭐⭐ **A SWEPT PARAMETER TYPE ADOPTED AND THEN REPAIRED, and BOTH steps are the reason a type read off it
+	// agrees with the argument check.** The sweep's ids live in the index's own interner, and the type it recorded
+	// is the TOLERANT one — a struct, a float alias and a generic alias all arrive as a bare `named`
+	// (`parseTypeReference`'s `allFilesFolded` argument). Compared raw, a `ByteArray` parameter is a `named` while
+	// its argument is a generic instance, and the two never agree.
+	//
+	// ⚠ A recorded PARAMETER type is repaired only where it is read. A recorded return type and a struct field
+	// are also normalized at the source by `contestScopedAlias`, for readers that reach no scoped repair; a
+	// parameter type has no such reader, so the scope file its reader hands in is the whole of the rule for it.
+	function sweptParamType(swept MaxonType, scopeFilePath FilePath) returns MaxonType
+		return self.repairSweptType(self.signatures.adoptType(swept, into: self.artifact.typeNames), scopeFilePath: scopeFilePath)
+	end 'sweptParamType'
 
 	// Mint the SSA value a call to `calleeTok` defines, typed from the WHOLE-PROGRAM signature index
 	// (SignatureIndex.maxon) — so the type is exact whether the callee is declared above this call,
@@ -100760,236 +100987,6 @@ export type Parser
 	// The index answers with the DECLARATION, undistorted, which is what makes the two cases below
 	// distinguishable at all: "no file declares it" is `undeclared` and "it declares nothing to
 	// return" is `declared(void)`.
-	// ⭐⭐⭐ **WHICH OVERLOAD'S RETURN TYPE THIS CALL READS — the CALL half of a cross-file overload set, and
-	// the only decision the parser has to take about a set it does not resolve.**
-	//
-	// A call's result type is fixed while its own file is parsed: the tag decides the Std type of the result
-	// (`lowerMaxonToStd`), whether a scope-exit drop is enrolled for it (`enrolOwnedCallTemp`) and which
-	// register file it travels in. The MEMBER is chosen a whole pass later
-	// (`SemanticCheck.resolveOverloadedCalls`), so with one return type per NAME every call to a disagreeing
-	// set was typed from whichever declaration the sweep read last. See `ProgramSignatures.OverloadedDecl`
-	// for the two measured failures that produced — an access violation and a leak.
-	//
-	// ⭐ **ITS PICK IS `undecided` WHENEVER THE SET AGREES, AND THAT IS WHAT MAKES THIS DOOR INERT FOR EVERY
-	// PROGRAM THAT ALREADY COMPILED.** An agreeing set has one return type however the call resolves, so the
-	// by-name answer is already exact and is taken unchanged — no corpus program and no `stdlib` call takes a
-	// different path or emits a different byte because of this door.
-	//
-	// ⚠⚠ **IT IS A NARROW DECIDER, AND IT IS *CHECKED* RATHER THAN TRUSTED.** Its pick is `undecided` -
-	// falling back to the by-name type and to the refusal that has always guarded it
-	// (`SemanticCheck.reportOverloadReturnDisagreement`) — for anything it cannot settle: a member the sweep
-	// could not read a parameter type for, a call that fits several visible members, a call that fits none.
-	// And when it DOES answer, `SemanticCheck.reconcileOverloadResultType` re-asks the same question against
-	// the member resolution actually chose and refuses the program if the two types disagree irreconcilably.
-	// So a pick this door gets wrong is a DIAGNOSTIC, never a wrong answer — which is what lets the two
-	// deciders stay honest about the different things they know: this one sees only what a TOKEN SWEEP could
-	// publish, and that one sees the real signatures a pass later.
-	//
-	// ⚠⚠ **THE TWO DECIDERS DIFFER IN THEIR CANDIDATE SET, NOT ONLY IN SCORING AND SOURCE — say so before
-	// reading the paragraph below as a claim that they agree.** This door filters by
-	// `declarationsVisibleFrom`; `SemanticCheck.overloadCandidates` filters only on "did the member survive to `funcSignatures`" and
-	// applies no visibility rule at all, so that pass may select a member the calling file cannot NAME — which
-	// is caught afterwards by `calleeVisibilityFrom` (E3008/E3088), a refusal rather than a privacy hole. What
-	// the two share is the ORDER; where their candidate sets part, this door's answer is the narrower one and
-	// the wider one is refused a pass later.
-	//
-	// ⚠ **VISIBILITY IS APPLIED HERE AND NOT IN THE SCORER, because for the shape described next it is
-	// the WHOLE answer.** Two files of one module each declaring a file-private helper of one name -
-	// `stdlib/Console.maxon` and `stdlib/Subprocess.maxon` each carrying a `stripTrailingCR` — leave exactly
-	// one member nameable from either file, so no type has to be compared to know which one a call means. The
-	// DISAGREEMENT is still read across ALL declarations, because it is `returnTypeOf`'s answer that the
-	// member this file cannot name is what spoils.
-	function boundReturnOf(callee ByteArray, args ValueIdArray, argLabels NameRoster) returns BoundReturn
-		// ⚡ **THE COST GATE, and it is the first thing this function does because it runs at EVERY call in the
-		// program.** A name with one declaration — which is nearly every callee, every builtin and every
-		// runtime symbol — leaves here on a count, having allocated nothing: `overloadedDeclsOf` answers a
-		// MISS with the shared empty list rather than building one.
-		//
-		// ⚠ It has a DEFENSIVE property nobody set out to give it, worth knowing before anyone tightens it: a
-		// double-fold of one file would push that file's declarations twice and flip this test — and the
-		// duplicates then compare as agreeing (they are the same declaration), so the set still lands on
-		// `undecided` and the by-name answer still serves. The gate is a cost gate; it is not what makes a
-		// double-fold safe.
-		let pick = self.returnDecidingDeclaration(callee, args: args, argLabels: argLabels)
-
-		match pick 'pick'
-			// ADOPTED into this file's interner, exactly as `returnTypeOf` adopts the by-name answer: the
-			// index's ids are its own, and a `named`/`structRef` return read raw would name whatever this
-			// file's table happens to hold at that id.
-			chosen(decl) then return BoundReturn.declared(self.signatures.adoptReturnType(decl.returnType, into: self.artifact.typeNames), scopeFilePath: decl.declFilePath, pick: pick)
-			undecided then return self.boundByName(callee)
-		end 'pick'
-	end 'boundReturnOf'
-
-	function returnDecidingDeclaration(callee ByteArray, args ValueIdArray, argLabels NameRoster) returns SweptDeclarationPick
-		view candidates = self.signatures.overloadedDeclsOf(callee)
-
-		if candidates.count() < 2 'oneDeclarationWearsThisName'
-			return sharedUndecidedDeclarationPick
-		end 'oneDeclarationWearsThisName'
-
-		if not self.sweptOverloadsDisagreeOnReturnType(candidates) 'oneAnswerHoweverItResolves'
-			return sharedUndecidedDeclarationPick
-		end 'oneAnswerHoweverItResolves'
-
-		return self.sweptOverloadAmong(self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path), args: args, argLabels: argLabels)
-	end 'returnDecidingDeclaration'
-
-	function boundByName(callee ByteArray) returns BoundReturn
-		match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'byName'
-			declared(returnType) then return BoundReturn.declared(returnType, scopeFilePath: self.signatures.recordedReturnDeclFileOf(callee), pick: sharedUndecidedDeclarationPick)
-			undeclared then return sharedUndeclaredReturn
-		end 'byName'
-	end 'boundByName'
-
-	function sweptDeclarationOf(callee ByteArray, args ValueIdArray, argLabels NameRoster) returns SweptDeclarationPick
-		view candidates = self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path)
-
-		if candidates.count() == 1 'oneDeclaration'
-			return SweptDeclarationPick.chosen(try candidates.get(0) otherwise panic("sweptDeclarationOf: one declaration was just counted"))
-		end 'oneDeclaration'
-
-		return self.sweptOverloadAmong(candidates, args: args, argLabels: argLabels)
-	end 'sweptDeclarationOf'
-
-	function sweptOverloadAmong(candidates OverloadedDeclArray, args ValueIdArray, argLabels NameRoster) returns SweptDeclarationPick
-		var picked = SweptDeclarationPick.undecided
-		var best = NoCompatibleOverloadScore
-		var holdingBest = 0 as OverloadCandidateCount
-
-		for candidate in candidates 'eachCandidate'
-			var score = NoCompatibleOverloadScore
-
-			match self.sweptOverloadFit(candidate, args: args, argLabels: argLabels) 'fit'
-				// A parameter the sweep did not read leaves this whole set unjudgeable: a candidate that cannot
-				// be refused cannot be outranked either, so a winner here would be a claim about the members this
-				// door happened to be able to read.
-				unscoreable then return SweptDeclarationPick.undecided
-				incompatible then continue
-				fits(fitScore) then score = fitScore
-			end 'fit'
-
-			if score < best 'outranked'
-				continue
-			end 'outranked'
-
-			if score > best 'aNewBest'
-				best = score
-				holdingBest = 0
-			end 'aNewBest'
-
-			holdingBest = holdingBest + 1
-			picked = SweptDeclarationPick.chosen(candidate)
-		end 'eachCandidate'
-
-		// A TIE is `undecided` and never a choice: `SemanticCheck.selectOverload` calls the same tie E3007, so
-		// the program is refused at the call rather than typed from one of the members it cannot mean.
-		return picked if holdingBest == 1 else SweptDeclarationPick.undecided
-	end 'sweptOverloadAmong'
-
-	// One candidate's fit, scored on the SWEEP's parameter types. Arity and labels are asked through the
-	// shared `slotCallArgs` — simultaneously the label test and the arity test, and the one label-to-position
-	// mapping in the compiler — and each slotted argument is then measured by `checkDeclaredType`, the same
-	// coercion rule `SemanticCheck.overloadArgTypeFit` scores with a pass later and `checkOneArgType` reports
-	// against after that.
-	//
-	// ⚠ **THE SCORE IS THAT PASS'S OWN — `ExactArgScore`/`WideningArgScore`, exported from it for this door.**
-	// The two cannot share a scoring FUNCTION (one reads the SWEEP's tolerant types, the other the merged
-	// registry), so what they share is the ORDER, which is the part that has to agree: a member this door
-	// picks and that pass does not is a call typed from a return type it never gets, and the program earns
-	// `reportOverloadReturnDisagreement` for something the author got right.
-	function sweptOverloadFit(candidate OverloadedDecl, args ValueIdArray, argLabels NameRoster) returns SweptOverloadFit
-		match slotCallArgs(sweptSlotNames(candidate), args: args, argLabels: argLabels) 'slot'
-			ordered(slotted) then return self.sweptOverloadArgFit(candidate, slotted: slotted)
-
-			// An arity mismatch, a label naming no parameter, or two arguments at one parameter: this call was
-			// not written against this candidate.
-			arityMismatch or
-			unknownLabel or
-			duplicateArg then return sharedOverloadIncompatible
-		end 'slot'
-	end 'sweptOverloadFit'
-
-	function sweptOverloadArgFit(candidate OverloadedDecl, slotted ValueIdArray) returns SweptOverloadFit
-		var score = NoCompatibleOverloadScore
-
-		for i in 0 upto candidate.paramTypes.count() 'eachUserParam'
-			let swept = try candidate.paramTypes.get(i) otherwise panic("sweptOverloadArgFit: paramTypes.get OOB at {i} inside its own count()")
-
-			if maxonTypeTag(swept) == ValueTypeTag.unresolved 'theSweepDidNotReadThisParameterType'
-				return sharedOverloadUnscoreable
-			end 'theSweepDidNotReadThisParameterType'
-
-			let paramType = self.sweptParamType(swept, scopeFilePath: candidate.declFilePath)
-			let argValue = try slotted.get(callPositionOfColumn(candidate.takesReceiver, column: i as ParamCount)) otherwise panic("sweptOverloadArgFit: slotted.get OOB at column {i} — `slotCallArgs` answered `ordered`, so the counts agree, and `paramNames`/`paramTypes` are pushed in lockstep by the one walk that fills them")
-
-			if self.handleWidensToSlot(argValue, declared: paramType) 'aHandleConversion'
-				score = score + WideningArgScore
-				continue
-			end 'aHandleConversion'
-
-			if not self.sweptArgumentFits(paramType, argValue: argValue) 'refused'
-				return sharedOverloadIncompatible
-			end 'refused'
-
-			score = score + (ExactArgScore if self.tagOf(argValue) == overloadRankTagOf(maxonTypeTag(paramType)) else WideningArgScore)
-		end 'eachUserParam'
-
-		// A ZERO-PARAMETER candidate scored nothing and still fits — the arity test that separated it from its
-		// siblings already ran. It is floored at `WideningArgScore` so the answer stays a score the caller can
-		// compare, exactly as `SemanticCheck.overloadArgTypeFit` floors its own.
-		return SweptOverloadFit.fits(score if score > NoCompatibleOverloadScore else WideningArgScore)
-	end 'sweptOverloadArgFit'
-
-	// ⭐⭐ **A SWEPT PARAMETER TYPE ADOPTED AND THEN REPAIRED, and BOTH steps are the reason a fit read off it
-	// agrees with the argument check.** The sweep's ids live in the index's own interner, and the type it recorded
-	// is the TOLERANT one — a struct, a float alias and a generic alias all arrive as a bare `named`
-	// (`parseTypeReference`'s `allFilesFolded` argument). Compared raw, a `ByteArray` parameter is a `named` while
-	// its argument is a generic instance, and every candidate scores incompatible.
-	//
-	// ⚠ It is the only repair a recorded PARAMETER type gets. A recorded return type and a struct field are
-	// also normalized at the source by `contestScopedAlias`, for readers that reach no scoped repair; a
-	// parameter type has no such reader, so the scope file handed in here is the whole of the rule for it.
-	function sweptParamType(swept MaxonType, scopeFilePath FilePath) returns MaxonType
-		return self.repairSweptType(self.signatures.adoptType(swept, into: self.artifact.typeNames), scopeFilePath: scopeFilePath)
-	end 'sweptParamType'
-
-	// Does `argValue` fit a parameter of `paramType` by the coercion rule and the aggregate identity the argument
-	// check applies?
-	function sweptArgumentFits(paramType MaxonType, argValue ValueId) returns bool
-		let paramTag = maxonTypeTag(paramType)
-		let argTag = self.tagOf(argValue)
-
-		if checkDeclaredType(argTag, declared: paramTag) != DeclaredTypeMatch.ok 'theCoercionRuleRefusesIt'
-			return false
-		end 'theCoercionRuleRefusesIt'
-
-		// ⭐ TWO DIFFERENT AGGREGATES SHARE ONE TAG, so the tag verdict alone accepts a `Bag` at a `Box`
-		// parameter. The identity is the aggregate NAME, read on both sides through the ONE routine that
-		// answers it (`aggregateNameOf`) — the parser's own half of the refinement
-		// `SemanticCheck.overloadArgTypeFit` applies at the same pair, and the same "a ranged alias names no
-		// aggregate" rule that lets an `int` literal stand at a `Cnt` parameter.
-		//
-		// ⚠ **IT ASKS THE SHARED AUTHORITY AND THAT PASS ASKS IT THROUGH A WIDER DOOR, SO THE TWO ARE NOT
-		// THE SAME PREDICATE.** `overloadArgTypeFit` falls back to `sig.paramAggregateNames` for an ERASED
-		// union parameter, which is not reachable from here, where the parameter type is the SWEEP's and no
-		// signature exists yet. The gap is one-directional — this door can call INCOMPATIBLE a candidate
-		// that pass accepts, never the reverse — so its cost is a DECLINE (`undecided`, or at worst a wrong
-		// single pick that `reconcileOverloadResultType` refuses), never a candidate selected here and
-		// rejected downstream.
-		//
-		// ⛔ **THE BARE RULE IS NOT ENOUGH, because a ranged alias carries a nominal identity**: spelled
-		// `namedAggregatesConflict`, an `Age` parameter met by a bare `5` is "exactly one empty" and every
-		// literal argument in the program scores `incompatible`. The decay arms live on the shared door.
-		let argNameId = self.valueNameId(argValue)
-
-		// The expected brand is empty because the sweep's parameter type carries no spelling; a
-		// brand-only mismatch is SemanticCheck's to refuse (`overloadArgTypeFit`). The argument's operand
-		// alias set rides as its brand, so a mixed expression fits a parameter any operand's alias
-		// satisfies.
-		return not self.signatures.aggregatesConflict(self.aggregateNameOf(paramTag, nameId: typeNameIdOf(paramType)), expectedTag: paramTag, expectedNameId: typeNameIdOf(paramType), expectedBrand: EmptySourceText, got: self.aggregateNameOf(argTag, nameId: argNameId), gotTag: argTag, gotNameId: argNameId, gotBrand: self.operandAliasSetOf(argValue), readerFilePath: self.job.path)
-	end 'sweptArgumentFits'
-
 	function mintCallResult(callee ByteArray, anchor Token, resultUsed bool, bound BoundReturn) returns ValueId throws SourceParseError
 		// `bound` is `boundReturnOf`'s, which owns why an overload set is not typed by name alone.
 		match bound 'callee'
@@ -101252,33 +101249,12 @@ export type Parser
 	// of a `returns Float` callee binds a `float` (XMM) value that `trunc` truncates and `return` moves
 	// cleanly, rather than a `named` value the tag says is an int while the backend files it in XMM.
 	//
-	// ⚠ **TWO READERS OF SWEPT TYPES, AND THEY MUST REPAIR THEM ALIKE**: a call's RESULT (below) and an
-	// overload candidate's PARAMETER (`sweptOverloadArgFit`). Repairing one and not the other is exactly how a
-	// candidate gets scored against a tag its own argument check one pass later never sees.
+	// ⚠ **TWO READERS OF SWEPT TYPES, AND THEY MUST REPAIR THEM ALIKE**: a call's RESULT (below) and a
+	// declaration's PARAMETER (`sweptParamType`). Repairing one and not the other gives a parameter a tag its
+	// own argument check one pass later never sees.
 	function repairSweptType(swept MaxonType, scopeFilePath FilePath) returns MaxonType
-		return self.canonicalizeSweptTupleName(self.scopeCrossedType(self.resolveNamedAlias(self.resolveFloatAliasType(resolveNamedStruct(swept, typeNames: self.artifact.typeNames, signatures: self.signatures, scopeFilePath: scopeFilePath), scopeFilePath: scopeFilePath), scopeFilePath: scopeFilePath), scopeFilePath: scopeFilePath))
+		return canonicalizeSweptTupleName(self.signatures, interner: self.artifact.typeNames, repaired: self.scopeCrossedType(self.resolveNamedAlias(self.resolveFloatAliasType(resolveNamedStruct(swept, typeNames: self.artifact.typeNames, signatures: self.signatures, scopeFilePath: scopeFilePath), scopeFilePath: scopeFilePath), scopeFilePath: scopeFilePath), scopeFilePath: scopeFilePath))
 	end 'repairSweptType'
-
-	// ⚠ **A SWEPT `structRef` IS THE ONE REPAIRED TAG THAT CAN ARRIVE NON-CANONICAL, AND A TUPLE IS WHERE IT
-	// SHOWS.** `canonicalNameOfStruct` is behind `allFilesFolded`, so the SWEEP spells a tuple by its
-	// elements' SOURCE names (`__Tuple2.Tally.String`) while the real parse spells the same tuple by their
-	// canonical ones (`__Tuple2.int.String`) — two names for one type, and a closure offered at a parameter
-	// declared with a tuple-slot function alias was refused on the difference. Outermost step, because it
-	// must see the name the three repairs and the scope crossing below settled on.
-	function canonicalizeSweptTupleName(repaired MaxonType) returns MaxonType
-		if maxonTypeTag(repaired) != ValueTypeTag.structRef 'carriesNoStructName'
-			return repaired
-		end 'carriesNoStructName'
-
-		let name = self.internedName(typeNameIdOf(repaired))
-		view canonical = self.signatures.canonicalNameOfStruct(name)
-
-		if canonical.equals(name) 'theSweepSpelledItCanonically'
-			return repaired
-		end 'theSweepSpelledItCanonically'
-
-		return MaxonType.structRef(self.artifact.typeNames.intern(canonical))
-	end 'canonicalizeSweptTupleName'
 
 	// ⭐⭐ **A NAME THAT MEANS TWO THINGS MAY NOT TRAVEL AS A NAME ACROSS THE FILE BOUNDARY — the step of the
 	// repair the scope alone does not buy.** Resolving the slot in its DECLARING file

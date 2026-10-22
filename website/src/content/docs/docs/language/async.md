@@ -68,9 +68,9 @@ not 80.
   `let` is shared read-only, and one binding other than a promise may be handed twice in one call. A scalar
   is copied. Passing a handle is how a socket or a server is shared with a coroutine.
 - **A promise argument moves.** A coroutine can still be running after the frame that started it has ended,
-  so an `async` call hands a promise, or a value whose type holds one, only to a parameter that every
-  overload the call may bind takes — one the callee awaits, cancels, stores or returns. The coroutine then
-  owns the thread, and the caller's binding is spent. A parameter that only reads it is **E3141**: pass the
+  so an `async` call hands a promise, or a value whose type holds one, only to a parameter the callee takes
+  — one it awaits, cancels, stores or returns; for an overloaded callee, the overload the call's arguments
+  bind. The coroutine then owns the thread, and the caller's binding is spent. A parameter that only reads it is **E3141**: pass the
   promise to one that takes it, or await it and pass the result. One promise at two arguments of one call is
   **E3102**.
 - A parameter the callee reassigns gets storage the coroutine owns, and nothing is written back to the
@@ -197,10 +197,10 @@ a `Map`'s values, and a `withIterator()` pair bound whole. `pop` and `remove` mo
 caller owns it outright. A member of a type you declare, a `pop` of your own included, is judged by its
 body: it moves its element out when every `return` hands back what a library `pop`/`remove` took out of a
 field of `self` (directly, through a `var` local bound to one, or through another such member of a field's
-type), or a parameter every declaration of it takes; one that returns a borrow (`self.items.last()`) is
+type), or a parameter the declaration the call binds takes; one that returns a borrow (`self.items.last()`) is
 **E3141**. A static of a generic type that hands back a promise an argument holds — an instance passed in,
 or an array, map, tuple or struct reaching one — reads it out of that argument as a method reads its
-receiver, so it is **E3141** too, unless every declaration of the static takes that argument. Reading a promise out of a temporary — `try make().get(0)` — keeps that temporary
+receiver, so it is **E3141** too, unless the declaration the call binds takes that argument. Reading a promise out of a temporary — `try make().get(0)` — keeps that temporary
 alive to the end of the enclosing scope, so the promise outlives the expression it came from.
 
 **Consuming a promise.** `await`, `.cancel()`, a `push` or `set` into another container, a store into a field
@@ -211,8 +211,8 @@ passed to a parameter the callee only reads stays with the caller. A call of `pu
 `upsert`, `append` or `prepend` stores its bare arguments whatever the receiver is, so a function that
 hands its promise parameter to such a method takes the promise even where the receiver's own method only
 reads it. Where the overloads a call may bind differ about taking it, the overload the
-call binds decides. An `async` call is stricter (see [Starting a Coroutine](#starting-a-coroutine)): every
-overload must take the promise. A store into a promise field also releases the thread that field was
+call binds decides. An `async` call is stricter (see [Starting a Coroutine](#starting-a-coroutine)): the
+overload it binds must take the promise. A store into a promise field also releases the thread that field was
 holding, exactly once. Three refusals follow:
 
 - **E3141** — the slot a read came out of has already been spent, at any of those doors. Two reads of one slot
@@ -334,9 +334,10 @@ end 'main'
   declares its own. A factory the spawning file cannot see is **E3008** (**E3088** for a `module` one).
 - **Generic services.** A generic type can be spawned; its handle type is spelled through an alias,
   `typealias StringBoxHandle = Box.handle with String`. A `spawn` on the bare generic name reads its type
-  arguments off the factory's arguments, and an overloaded factory is spawned when every overload the call
-  can slot fixes the same ones; a factory that fixes no type, or overloads that fix different ones, are
-  **E2015**.
+  arguments off the factory's arguments; a factory that fixes no type is **E2015**.
+- **Overloaded factories.** A `spawn` binds the factory overload its arguments fit, as any call does, and
+  that overload must start the service (**E3134** when it returns another type). Two overloads that fit
+  equally are **E3007**, and arguments that bind no single overload of a generic factory are **E2015**.
 - A refusal of a `spawn`'s target or factory (**E3134**, **E3008**, **E2015**) points at the `spawn`
   keyword.
 - Services that `await` each other in a cycle are **E3139**.

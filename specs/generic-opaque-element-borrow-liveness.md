@@ -1237,8 +1237,8 @@ end 'main'
 2 5
 ```
 
-<!-- test: error.an-overloaded-factory-through-a-bare-generic-base-names-no-instance -->
-An overloaded factory whose overloads fix different instances fixes no instantiation from its arguments, and nothing else names one, so the static that needs a descriptor to copy its argument is reached through no instance and the call is refused rather than handed a zero descriptor.
+<!-- test: an-overloaded-factory-through-a-bare-generic-base-infers-the-instance-the-call-binds -->
+An overloaded factory fixes its instantiation from the declaration the call binds, so the static that needs a descriptor to copy its argument is reached through `Box with String` and handed that instance's descriptor.
 ```maxon
 type Box uses T
 	export typealias Items = Array with T
@@ -1268,8 +1268,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3162: <fragment>:25:14: 'Box' is named without type arguments and nothing binds its parameter 'T', so 'Box.keep' has no layout descriptor to be handed: the base has none, and neither does this function. Name the instance with a typealias, giving each of its parameters a type argument
+```exitcode
+0
+```
+```stdout
+4 alpha 42 value long enough for a heap record
 ```
 
 <!-- test: an-overloaded-factory-through-a-bare-generic-base-whose-overloads-fix-one-instance-infers-it -->
@@ -1591,6 +1594,116 @@ end 'main'
 ```
 ```stdout
 true
+```
+
+<!-- test: the-result-instance-a-pick-mints-from-its-return-type-is-not-an-input-to-the-pick -->
+The two `create` members return different instances, so the call's result instance is the picked member's return type and the pick cannot be ranked through it. Called through `Holder`, the call picks `create(_ Num, other Self)`, which returns `Texts`, and the pick ranks without the instance the result carries. Returns 11.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Box uses T
+	var item as T
+	export var tag as Num
+
+	static function seed(item T, tag Num) returns Self
+		return Self{item: item, tag: tag}
+	end 'seed'
+
+	static function create(_ Num, other Self) returns Texts
+		return Texts.seed("{other.tag}", tag: 11)
+	end 'create'
+
+	static function create(x T, other Texts) returns Holder
+		let copy = Box.seed(x, tag: other.tag)
+
+		return Holder.seed(1, tag: copy.tag + 22)
+	end 'create'
+end 'Box'
+
+typealias Holder = Box with Num
+typealias Texts = Box with String
+
+function main() returns ExitCode
+	let existing = Holder.seed(3, tag: 0)
+	let five = 5 as Num
+	let made = Holder.create(five, other: existing)
+	return made.tag
+end 'main'
+```
+```exitcode
+11
+```
+
+<!-- test: two-overloads-returning-the-same-instance-alias-stay-interchangeable -->
+Both `create` members return `Texts`, so the set has one answer however the call resolves and the call is typed from it. Returns 11.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Box uses T
+	var item as T
+	export var tag as Num
+
+	static function seed(item T, tag Num) returns Self
+		return Self{item: item, tag: tag}
+	end 'seed'
+
+	static function create(_ Num, other Self) returns Texts
+		return Texts.seed("{other.tag}", tag: 11)
+	end 'create'
+
+	static function create(x T, other Texts) returns Texts
+		let copy = Box.seed(x, tag: other.tag)
+
+		return Texts.seed("v", tag: copy.tag + 22)
+	end 'create'
+end 'Box'
+
+typealias Holder = Box with Num
+typealias Texts = Box with String
+
+function main() returns ExitCode
+	let existing = Holder.seed(3, tag: 0)
+	let five = 5 as Num
+	let made = Holder.create(five, other: existing)
+	return made.tag
+end 'main'
+```
+```exitcode
+11
+```
+
+<!-- test: a-static-called-through-a-named-instance-binds-the-instance-whatever-it-returns -->
+`weigh(other Self)` is judged through `NumBox`'s instance, so it takes the `Box with Num` the call passes and `weigh(xs Strs)` does not, although the static returns a `Num` and not a `Self`. Returns 42.
+```maxon
+typealias Num = int(0 to 1000)
+typealias Strs = Array with String
+
+type Box uses T
+	var item as T
+	var size as Num
+
+	static function create(item T) returns Self
+		return Self{item: item, size: 1}
+	end 'create'
+
+	static function weigh(other Self) returns Num
+		return other.size + 41
+	end 'weigh'
+
+	static function weigh(xs Strs) returns bool
+		return xs.count() > 0
+	end 'weigh'
+end 'Box'
+
+typealias NumBox = Box with Num
+
+function main() returns ExitCode
+	let b = NumBox.create(7)
+	return NumBox.weigh(b)
+end 'main'
+```
+```exitcode
+42
 ```
 
 <!-- test: error.an-opaque-value-has-no-interpolation-door -->

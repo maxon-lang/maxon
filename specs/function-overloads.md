@@ -1213,7 +1213,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:20:9: Unsupported: the overloads of 'f' do not agree on the TYPE of parameter 1, which this call omitted and the compiler supplied from that parameter's default ('int' and 'float'). A defaulted argument's type is fixed while the call is parsed, from a whole-program index that records one answer per NAME, and the overload is resolved a whole pass later — so only a difference between plain scalars can be corrected by then. Declare that parameter at the same type in every overload
+error E2015: <fragment>:20:9: Unsupported: the overloads of 'f' do not agree on the TYPE of parameter 1, which this call omitted and the compiler supplied from that parameter's default ('int' and 'float'). A defaulted argument's type is fixed while the call is parsed, from a whole-program index that records one answer per NAME, and resolution applies the overload afterwards — so only a difference between plain scalars can be corrected by then. Declare that parameter at the same type in every overload
 ```
 
 <!-- test: overloads-agree-on-the-error-they-throw -->
@@ -1440,7 +1440,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:19:10: Unsupported: overloading 'want' — its declarations do not all state the same `throws` clause, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told whether the call throws at all or which error type it recovers. The `try` is desugared when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give every overload the same `throws` clause, or give the overloads distinct names
+error E2015: <fragment>:19:10: Unsupported: overloading 'want' — its declarations do not all state the same `throws` clause, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told whether the call throws at all or which error type it recovers. The `try` is desugared when the call is PARSED, from the one clause kept per NAME, so nothing downstream can repair it. Give every overload the same `throws` clause, or give the overloads distinct names
 ```
 
 <!-- test: error.overloads-disagree-on-whether-they-throw-at-all -->
@@ -1479,7 +1479,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:15:10: Unsupported: overloading 'want' — its declarations do not all state the same `throws` clause, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told whether the call throws at all or which error type it recovers. The `try` is desugared when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give every overload the same `throws` clause, or give the overloads distinct names
+error E2015: <fragment>:15:10: Unsupported: overloading 'want' — its declarations do not all state the same `throws` clause, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told whether the call throws at all or which error type it recovers. The `try` is desugared when the call is PARSED, from the one clause kept per NAME, so nothing downstream can repair it. Give every overload the same `throws` clause, or give the overloads distinct names
 ```
 
 <!-- test: error.overloads-disagree-on-whether-they-throw-at-all-non-throwing-member-first -->
@@ -1515,7 +1515,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:15:10: Unsupported: overloading 'want' — its declarations do not all state the same `throws` clause, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told whether the call throws at all or which error type it recovers. The `try` is desugared when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give every overload the same `throws` clause, or give the overloads distinct names
+error E2015: <fragment>:15:10: Unsupported: overloading 'want' — its declarations do not all state the same `throws` clause, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told whether the call throws at all or which error type it recovers. The `try` is desugared when the call is PARSED, from the one clause kept per NAME, so nothing downstream can repair it. Give every overload the same `throws` clause, or give the overloads distinct names
 ```
 
 <!-- test: a-static-and-instance-pair-where-the-static-throws -->
@@ -1741,7 +1741,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: alpha/specs/function-overloads/error.a-contested-overload-set-whose-members-name-two-error-types.maxon:20:17: Unsupported: overloading 'alpha.want' — its declarations do not all state the same `throws` clause, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told whether the call throws at all or which error type it recovers. The `try` is desugared when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give every overload the same `throws` clause, or give the overloads distinct names
+error E2015: alpha/specs/function-overloads/error.a-contested-overload-set-whose-members-name-two-error-types.maxon:20:17: Unsupported: overloading 'alpha.want' — its declarations do not all state the same `throws` clause, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told whether the call throws at all or which error type it recovers. The `try` is desugared when the call is PARSED, from the one clause kept per NAME, so nothing downstream can repair it. Give every overload the same `throws` clause, or give the overloads distinct names
 ```
 
 <!-- test: contested-directory-overload-set-agreeing-on-defaults -->
@@ -2254,4 +2254,1149 @@ end 'main'
 ```stdout
 read 2
 51 2
+```
+
+<!-- test: error.an-overloaded-function-refuses-an-argument-wearing-another-alias-of-the-parameters-type -->
+`Nums` and `Others` are two spellings of one array type that carry different brands. The only array-taking `pick` is declared at `Nums`, so the call with an `Others` binds no member and is refused as an argument mismatch.
+```maxon
+typealias Num = int(0 to 100)
+typealias Nums = Array with Num
+typealias Others = Array with Num
+
+function pick(a Nums) returns Count
+	return a.count()
+end 'pick'
+
+function pick(n Count) returns Count
+	return n
+end 'pick'
+
+function main() returns ExitCode
+	var good = Nums.create()
+	good.push(5)
+	var other = Others.create()
+	other.push(6)
+	return (pick(good) + pick(other)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:19:23: argument type mismatch for 'a': expected 'Nums', got 'Others'
+```
+
+<!-- test: error.an-overloaded-function-refuses-an-argument-wearing-another-alias-of-a-qualified-parameters-type -->
+The same pair with the parameter spelled through a namespace qualifier: the brand `lib.Nums` names is the one the declaration is bound by, so an `lib.Others` argument binds no member.
+```maxon
+// --- file: lib/nums.maxon
+public typealias Num = int(0 to 100)
+public typealias Nums = Array with Num
+public typealias Others = Array with Num
+
+// --- file: main.maxon
+function pick(a lib.Nums) returns Count
+	return a.count()
+end 'pick'
+
+function pick(n Count) returns Count
+	return n
+end 'pick'
+
+function main() returns ExitCode
+	var good = lib.Nums.create()
+	good.push(5)
+	var other = lib.Others.create()
+	other.push(6)
+	return (pick(good) + pick(other)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:21:23: argument type mismatch for 'a': expected 'Nums', got 'Others'
+```
+
+<!-- test: a-bare-literal-at-a-narrower-alias-binds-the-alias-member-beside-a-generic -->
+<!-- process: own -->
+A bare literal fits `describe(n Score)` by its range, so the non-generic member binds it with no cast; the generic serves every other type.
+```maxon
+typealias Score = int(0 to 100)
+
+function describe(n Score) returns Count
+	_ = n
+	return 1
+end 'describe'
+
+function describe(x T) uses T returns Count
+	_ = x
+	return 2
+end 'describe'
+
+function main() returns ExitCode
+	print("{describe(5)} {describe("a")}\n")
+	return 0
+end 'main'
+```
+```stdout
+1 2
+```
+
+<!-- test: error.a-cast-to-the-alias-beside-a-generic-is-an-unneeded-cast -->
+<!-- process: own -->
+The non-generic member wins without the cast, so `5 as Score` repeats what the parameter already says.
+```maxon
+typealias Score = int(0 to 100)
+
+function describe(n Score) returns Count
+	_ = n
+	return 1
+end 'describe'
+
+function describe(x T) uses T returns Count
+	_ = x
+	return 2
+end 'describe'
+
+function main() returns ExitCode
+	print("{describe(5 as Score)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3010: <fragment>:15:21: unneeded cast: the literal 5 already fits in 'Score'
+```
+
+<!-- test: a-cast-that-fixes-the-type-parameter-picks-the-generic-beside-an-alias-member -->
+<!-- process: own -->
+A cast to another alias fixes `T` to that alias and the alias member no longer fits, so the generic binds.
+```maxon
+typealias Score = int(0 to 100)
+typealias Other = int(0 to 1000)
+
+function describe(n Score) returns Count
+	_ = n
+	return 1
+end 'describe'
+
+function describe(x T) uses T returns Count
+	_ = x
+	return 2
+end 'describe'
+
+function main() returns ExitCode
+	print("{describe(5 as Other)}\n")
+	return 0
+end 'main'
+```
+```stdout
+2
+```
+
+<!-- test: a-full-range-alias-parameter-takes-a-bare-literal-beside-a-generic -->
+<!-- process: own -->
+An alias that admits every value is an exact fit for a bare literal; the generic binds every other type.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function describe(n Integer) returns Count
+	_ = n
+	return 1
+end 'describe'
+
+function describe(x T) uses T returns Count
+	_ = x
+	return 2
+end 'describe'
+
+function main() returns ExitCode
+	print("{describe(5)} {describe("a")}\n")
+	return 0
+end 'main'
+```
+```stdout
+1 2
+```
+
+<!-- test: an-argument-of-the-alias-type-picks-the-alias-member-beside-a-generic -->
+<!-- process: own -->
+An argument that already wears `Score` fits the alias member exactly.
+```maxon
+typealias Score = int(0 to 100)
+
+function describe(n Score) returns Count
+	_ = n
+	return 1
+end 'describe'
+
+function describe(x T) uses T returns Count
+	_ = x
+	return 2
+end 'describe'
+
+function main() returns ExitCode
+	let s = 5 as Score
+	print("{describe(s)} {describe("a")}\n")
+	return 0
+end 'main'
+```
+```stdout
+1 2
+```
+
+<!-- test: a-bare-float-literal-at-a-narrower-float-alias-binds-the-alias-member-beside-a-generic -->
+<!-- process: own -->
+The rule holds for a float alias as for an integer one.
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+
+function describe(r Ratio) returns Count
+	_ = r
+	return 1
+end 'describe'
+
+function describe(x T) uses T returns Count
+	_ = x
+	return 2
+end 'describe'
+
+function main() returns ExitCode
+	print("{describe(0.5)} {describe("a")}\n")
+	return 0
+end 'main'
+```
+```stdout
+1 2
+```
+
+<!-- test: a-loop-counter-binds-the-alias-member-beside-a-generic -->
+<!-- process: own -->
+A counter that no alias names fits the alias parameter by value, so the non-generic member binds it on every trip.
+```maxon
+typealias Score = int(0 to 100)
+
+function describe(n Score) returns Count
+	_ = n
+	return 1
+end 'describe'
+
+function describe(x T) uses T returns Count
+	_ = x
+	return 2
+end 'describe'
+
+function main() returns ExitCode
+	var total = 0 as Count
+
+	for i in 0 upto 3 'eachTrip'
+		total = total + describe(i)
+	end 'eachTrip'
+
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```stdout
+3
+```
+
+<!-- test: a-negated-literal-binds-the-alias-member-while-an-out-of-range-one-binds-the-generic -->
+<!-- process: own -->
+`-5` is a value of `Signed` and `-500` is not, so the first binds the alias member and the second falls to the generic.
+```maxon
+typealias Signed = int(-100 to 100)
+
+function describe(n Signed) returns Count
+	_ = n
+	return 1
+end 'describe'
+
+function describe(x T) uses T returns Count
+	_ = x
+	return 2
+end 'describe'
+
+function main() returns ExitCode
+	print("{describe(-5)} {describe(-500)}\n")
+	return 0
+end 'main'
+```
+```stdout
+1 2
+```
+
+<!-- test: a-literal-outside-the-alias-binds-the-generic -->
+<!-- process: own -->
+`500` is not a value of `Score`, so the alias member does not serve it and the generic does.
+```maxon
+typealias Score = int(0 to 100)
+
+function describe(n Score) returns Count
+	_ = n
+	return 1
+end 'describe'
+
+function describe(x T) uses T returns Count
+	_ = x
+	return 2
+end 'describe'
+
+function main() returns ExitCode
+	print("{describe(500)}\n")
+	return 0
+end 'main'
+```
+```stdout
+2
+```
+
+<!-- test: a-bound-literal-binds-the-alias-member-beside-a-generic -->
+<!-- process: own -->
+A `let` that holds a literal is a value that fits the alias by its range.
+```maxon
+typealias Score = int(0 to 100)
+
+function describe(n Score) returns Count
+	_ = n
+	return 1
+end 'describe'
+
+function describe(x T) uses T returns Count
+	_ = x
+	return 2
+end 'describe'
+
+function main() returns ExitCode
+	let k = 5
+	print("{describe(k)}\n")
+	return 0
+end 'main'
+```
+```stdout
+1
+```
+
+<!-- test: a-count-parameter-takes-a-bare-literal-beside-a-generic -->
+<!-- process: own -->
+`Count` is a library alias that narrows the integers to the non-negative ones, and a literal fits it by its range.
+```maxon
+function describe(n Count) returns Count
+	_ = n
+	return 1
+end 'describe'
+
+function describe(x T) uses T returns Count
+	_ = x
+	return 2
+end 'describe'
+
+function main() returns ExitCode
+	print("{describe(5)} {describe("a")}\n")
+	return 0
+end 'main'
+```
+```stdout
+1 2
+```
+
+<!-- test: a-per-instance-alias-parameter-takes-a-bare-literal-beside-a-generic -->
+<!-- process: own -->
+An alias declared inside a generic type and named through an instance is judged by its range like any other: a literal inside its range binds the non-generic member and one outside it falls to the generic.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper uses T
+	export typealias Idx = int(0 to 9)
+	export var value as T
+
+	static function create(value T) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Wrapper'
+
+typealias IntWrapper = Wrapper with Integer
+
+function describe(i IntWrapper.Idx) returns Count
+	_ = i
+	return 1
+end 'describe'
+
+function describe(x T) uses T returns Count
+	_ = x
+	return 2
+end 'describe'
+
+function main() returns ExitCode
+	print("{describe(5)} {describe(50)} {describe("a")}\n")
+	return 0
+end 'main'
+```
+```stdout
+1 2 2
+```
+
+<!-- test: a-member-missing-a-required-argument-does-not-serve-the-call-beside-a-generic -->
+<!-- process: own -->
+`show("a")` leaves `width` unsupplied and it has no default, so the two-parameter member does not fit and the generic serves the call.
+```maxon
+function show(s String, width Count) returns Count
+	_ = s
+	_ = width
+	return 1
+end 'show'
+
+function show(x T) uses T returns Count
+	_ = x
+	return 2
+end 'show'
+
+function main() returns ExitCode
+	print("{show("a")}\n")
+	return 0
+end 'main'
+```
+```stdout
+2
+```
+
+<!-- test: error.an-inline-ranged-parameter-type-is-refused-before-any-overload-is-picked -->
+A ranged type is spelled through a `typealias`, so the declaration is refused where it is written and the call is never judged against it.
+```maxon
+function pick(n int(0 to 10)) returns Count
+	return 1
+end 'pick'
+
+function pick(s String) returns Count
+	return 2
+end 'pick'
+
+function main() returns ExitCode
+	print("{pick("abc")}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:2:17: Cannot use bare 'int' as a type. Define a typealias with range constraints, e.g., typealias MyInt = int(0 to 100)
+```
+
+<!-- test: error.an-inline-ranged-float-parameter-of-a-static-is-refused-before-any-overload-is-picked -->
+The same refusal for a static member of a type, with a `String` member beside it that would take the call.
+```maxon
+type Box
+	export var n as Count
+
+	static function make(v float(0.0 to 1.0)) returns Self
+		return Self{n: 1}
+	end 'make'
+
+	static function make(s String) returns Self
+		return Self{n: 2}
+	end 'make'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.make("abc")
+	print("{b.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:5:25: Cannot use bare 'float' as a type. Define a typealias with range constraints, e.g., typealias MyFloat = float(0.0 to 1.0)
+```
+
+<!-- test: error.a-capability-word-on-a-plain-function-parameter-is-refused-before-any-overload-is-picked -->
+`keep` qualifies a parameter of a function type, an interface method or a generic function only, so a plain overloaded function that writes it is refused at the declaration.
+```maxon
+function pick(s keep String) returns Count
+	return 1
+end 'pick'
+
+function pick(n Count) returns Count
+	return 2
+end 'pick'
+
+function main() returns ExitCode
+	print("{pick("abc")}{pick(7)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2076: <fragment>:2:17: 'keep' qualifies a parameter or result of a function type, an interface method or a generic function only
+```
+
+<!-- test: error.an-undeclared-parameter-type-is-reported-once-and-picks-no-overload -->
+A parameter type that names nothing is the declaration's own error; the call beside it adds no ambiguity or mismatch to it.
+```maxon
+function pick(n Nonexistent) returns Count
+	return 1
+end 'pick'
+
+function pick(s String) returns Count
+	return 2
+end 'pick'
+
+function main() returns ExitCode
+	print("{pick("abc")}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3011: <fragment>:2:17: Unknown type 'Nonexistent'
+```
+
+<!-- test: error.overloads-that-disagree-about-defaults-are-refused-at-the-declaration -->
+A defaulted parameter that its sibling overload does not declare is refused where the default is written, so no call is ever filled against a member it does not belong to.
+```maxon
+function f(a String) returns Count
+	return 1
+end 'f'
+
+function f(a Count, b Count = 1) returns Count
+	return a + b
+end 'f'
+
+function main() returns ExitCode
+	print("{f("x")}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:6:29: Unsupported: a default value on parameter 'b' of 'f' — that name is declared more than once in this program and the declarations do not agree about their defaults: they differ in their parameter list, in which positions default, or in whether they default anything at all. The whole-program declaration sweep publishes defaults under the name the source wrote and a short call is filled when it is PARSED, a whole pass before the overload is resolved, so a call that omits an argument cannot be told which declaration's shape to fill. Give every declaration of this name the same parameters and the same defaults, or drop the default
+```
+
+<!-- test: error.overloads-that-differ-only-by-one-defaulted-parameter-are-refused-at-the-declaration -->
+The same refusal when both members take a `Count` and one of them defaults a second parameter.
+```maxon
+function f(a Count) returns Count
+	return a
+end 'f'
+
+function f(a Count, b Count = 1) returns Count
+	return a + b
+end 'f'
+
+function main() returns ExitCode
+	print("{f(5)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:6:29: Unsupported: a default value on parameter 'b' of 'f' — that name is declared more than once in this program and the declarations do not agree about their defaults: they differ in their parameter list, in which positions default, or in whether they default anything at all. The whole-program declaration sweep publishes defaults under the name the source wrote and a short call is filled when it is PARSED, a whole pass before the overload is resolved, so a call that omits an argument cannot be told which declaration's shape to fill. Give every declaration of this name the same parameters and the same defaults, or drop the default
+```
+
+<!-- test: overloads-that-agree-about-defaults-fill-the-omitted-argument-of-the-member-the-call-binds -->
+Both members declare the same defaulted parameter, so the omitted argument is filled the same way whichever member the call binds, and each member's own default expression is the one that runs.
+```maxon
+function f(a String, b Count = 10) returns Count
+	return a.count() + b
+end 'f'
+
+function f(a Count, b Count = 20) returns Count
+	return a + b
+end 'f'
+
+function main() returns ExitCode
+	print("{f("xy")} {f(5)} {f("xy", b: 1)} {f(5, b: 1)}\n")
+	return 0
+end 'main'
+```
+```stdout
+12 25 3 6
+```
+
+<!-- test: an-overloaded-element-returning-method-on-a-float-array-binds-each-call -->
+The element a method hands back is the opaque word the instance reads as a float, and the overload the arguments pick is checked against the same word.
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+typealias Ratios = Array with Ratio
+
+extension Array
+	function head() returns Element
+		return try self.get(0) otherwise panic("empty")
+	end 'head'
+
+	function head(fallback Element) returns Element
+		return (try self.get(0) otherwise fallback)
+	end 'head'
+end 'Array'
+
+function main() returns ExitCode
+	var r = Ratios.create()
+	r.push(0.5)
+	print("{r.head()} {r.head(0.25)}\n")
+	return 0
+end 'main'
+```
+```stdout
+0.5 0.5
+```
+
+<!-- test: error.a-float-type-argument-is-refused-before-an-overloaded-method-is-judged -->
+A user generic type cannot be instantiated over a float, so an overloaded element-returning method of one is never reached with a float result.
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+
+type Box uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function get() returns T
+		return self.item
+	end 'get'
+
+	function get(fallback T) returns T
+		_ = fallback
+		return self.item
+	end 'get'
+end 'Box'
+
+typealias RatioBox = Box with Ratio
+
+function main() returns ExitCode
+	let b = RatioBox.create(0.5)
+	print("{b.get()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2062: <fragment>:21:31: Cannot use 'Ratio' as a type argument: a float type argument is not supported yet. A type parameter is an opaque 8-byte general-purpose slot under the compiler's dictionary-passing, and a float value travels in a floating-point register, so it has no way through
+```
+
+<!-- test: error.a-tied-call-with-a-cast-reports-the-tie-and-no-unneeded-cast -->
+`f(a Score)` and `f(b Score)` fit a positional call alike, so the call is ambiguous; the cast to `Score` is not reported as unneeded beside the real error.
+```maxon
+typealias Score = int(0 to 100)
+
+function f(a Score) returns Count
+	_ = a
+	return 1
+end 'f'
+
+function f(b Score) returns Count
+	_ = b
+	return 2
+end 'f'
+
+function main() returns ExitCode
+	print("{f(5 as Score)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3007: <fragment>:15:10: Ambiguous overload for 'f': multiple overloads match. Candidates: (a Score), (b Score)
+```
+
+<!-- test: error.an-unmatched-call-with-a-cast-reports-the-mismatch-and-no-unneeded-cast -->
+No member takes `true` for its second parameter, so the call is refused as a mismatch; the cast to `Score` is not reported as unneeded beside the real error.
+```maxon
+typealias Score = int(0 to 100)
+
+function f(a Score, b String) returns Count
+	_ = a
+	_ = b
+	return 1
+end 'f'
+
+function f(a Score, b Count) returns Count
+	_ = a
+	_ = b
+	return 2
+end 'f'
+
+function main() returns ExitCode
+	print("{f(5 as Score, b: true)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:17:10: argument type mismatch for 'b': expected 'String', got 'bool'
+```
+
+<!-- test: function-overloads.a-written-negative-and-an-over-the-top-literal-leave-the-alias-and-the-generic-serves -->
+<!-- process: own -->
+A written negative and a literal above the top lie outside `Score`, so the alias member does not take them by value and the generic binds.
+```maxon
+typealias Score = int(0 to 100)
+
+function describe(n Score) returns Count
+	_ = n
+	return 1
+end 'describe'
+
+function describe(x T) uses T returns Count
+	_ = x
+	return 2
+end 'describe'
+
+function main() returns ExitCode
+	print("{describe(-1)} {describe(101)} {describe(100)}\n")
+	return 0
+end 'main'
+```
+```stdout
+2 2 1
+```
+
+<!-- test: function-overloads.u64-max-written-as-a-name-leaves-the-alias-and-the-generic-serves -->
+<!-- process: own -->
+`u64.max` is a known constant outside `Score`, so the generic binds it.
+```maxon
+typealias Score = int(0 to 100)
+
+function describe(n Score) returns Count
+	_ = n
+	return 1
+end 'describe'
+
+function describe(x T) uses T returns Count
+	_ = x
+	return 2
+end 'describe'
+
+function main() returns ExitCode
+	print("{describe(u64.max)} {describe(100)}\n")
+	return 0
+end 'main'
+```
+```stdout
+2 1
+```
+
+<!-- test: function-overloads.a-counter-that-leaves-the-alias-is-served-by-the-generic -->
+<!-- process: own -->
+A counter over 0 upto 200 reaches values `Score` cannot hold, so the generic binds it instead of the alias member refusing it.
+```maxon
+typealias Score = int(0 to 100)
+
+function describe(n Score) returns Count
+	_ = n
+	return 1
+end 'describe'
+
+function describe(x T) uses T returns Count
+	_ = x
+	return 2
+end 'describe'
+
+function main() returns ExitCode
+	var total = 0 as Count
+
+	for i in 0 upto 200 'eachNumber'
+		total = total + describe(i)
+	end 'eachNumber'
+
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```stdout
+400
+```
+
+<!-- test: function-overloads.a-counter-inside-the-alias-binds-the-alias-member -->
+<!-- process: own -->
+A counter over 0 upto 50 stays inside `Score`, so the non-generic member takes it by value.
+```maxon
+typealias Score = int(0 to 100)
+
+function describe(n Score) returns Count
+	_ = n
+	return 1
+end 'describe'
+
+function describe(x T) uses T returns Count
+	_ = x
+	return 2
+end 'describe'
+
+function main() returns ExitCode
+	var total = 0 as Count
+
+	for i in 0 upto 50 'eachNumber'
+		total = total + describe(i)
+	end 'eachNumber'
+
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```stdout
+50
+```
+
+<!-- test: function-overloads.a-value-computed-from-a-counter-is-judged-by-its-interval -->
+<!-- process: own -->
+`i + 1` over 0 upto 50 stays inside `Score` and binds the alias member; `i * 10` reaches 490 and the generic serves it.
+```maxon
+typealias Score = int(0 to 100)
+
+function describe(n Score) returns Count
+	_ = n
+	return 1
+end 'describe'
+
+function describe(x T) uses T returns Count
+	_ = x
+	return 2
+end 'describe'
+
+function main() returns ExitCode
+	var inside = 0 as Count
+	var outside = 0 as Count
+
+	for i in 0 upto 50 'eachNumber'
+		inside = inside + describe(i + 1)
+		outside = outside + describe(i * 10)
+	end 'eachNumber'
+
+	print("{inside} {outside}\n")
+	return 0
+end 'main'
+```
+```stdout
+50 100
+```
+
+<!-- test: function-overloads.error.a-free-function-defaulting-its-sixty-fifth-parameter-is-refused -->
+<!-- process: own -->
+A free function with 66 parameters, the last two defaulted, is past the 64 argument slots a call can carry, so the declaration is refused whatever its defaults are.
+```maxon
+function wide(p0 Count, p1 Count, p2 Count, p3 Count, p4 Count, p5 Count, p6 Count, p7 Count, p8 Count, p9 Count, p10 Count, p11 Count, p12 Count, p13 Count, p14 Count, p15 Count, p16 Count, p17 Count, p18 Count, p19 Count, p20 Count, p21 Count, p22 Count, p23 Count, p24 Count, p25 Count, p26 Count, p27 Count, p28 Count, p29 Count, p30 Count, p31 Count, p32 Count, p33 Count, p34 Count, p35 Count, p36 Count, p37 Count, p38 Count, p39 Count, p40 Count, p41 Count, p42 Count, p43 Count, p44 Count, p45 Count, p46 Count, p47 Count, p48 Count, p49 Count, p50 Count, p51 Count, p52 Count, p53 Count, p54 Count, p55 Count, p56 Count, p57 Count, p58 Count, p59 Count, p60 Count, p61 Count, p62 Count, p63 Count, p64 Count = 0, p65 Count = 0) returns Count
+	return p0
+end 'wide'
+
+function main() returns ExitCode
+	_ = wide(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:2:10: Unsupported: a function with 66 argument slots — more than the 64 a call can carry. A signature's slots are its declared parameters plus the hidden ones the ABI adds (a witness per interface-typed parameter, a layout descriptor for a generic that reads one or calls a function that does, one witness per `where` constraint), and the limit is the width of the per-argument float mask that routes each one to its register file
+```
+
+<!-- test: function-overloads.error.a-method-defaulting-its-sixty-fifth-parameter-is-refused -->
+<!-- process: own -->
+A method with 66 parameters, the last two defaulted, is past the argument slots a call can carry, so the declaration is refused.
+```maxon
+type Holder
+	var seed as Count
+
+	function wide(p0 Count, p1 Count, p2 Count, p3 Count, p4 Count, p5 Count, p6 Count, p7 Count, p8 Count, p9 Count, p10 Count, p11 Count, p12 Count, p13 Count, p14 Count, p15 Count, p16 Count, p17 Count, p18 Count, p19 Count, p20 Count, p21 Count, p22 Count, p23 Count, p24 Count, p25 Count, p26 Count, p27 Count, p28 Count, p29 Count, p30 Count, p31 Count, p32 Count, p33 Count, p34 Count, p35 Count, p36 Count, p37 Count, p38 Count, p39 Count, p40 Count, p41 Count, p42 Count, p43 Count, p44 Count, p45 Count, p46 Count, p47 Count, p48 Count, p49 Count, p50 Count, p51 Count, p52 Count, p53 Count, p54 Count, p55 Count, p56 Count, p57 Count, p58 Count, p59 Count, p60 Count, p61 Count, p62 Count, p63 Count, p64 Count = 0, p65 Count = 0) returns Count
+		return self.seed + p0
+	end 'wide'
+end 'Holder'
+
+function main() returns ExitCode
+	var holder = Holder{seed: 1}
+	_ = holder.wide(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:5:11: Unsupported: a function with 67 argument slots — more than the 64 a call can carry. A signature's slots are its declared parameters plus the hidden ones the ABI adds (a witness per interface-typed parameter, a layout descriptor for a generic that reads one or calls a function that does, one witness per `where` constraint), and the limit is the width of the per-argument float mask that routes each one to its register file
+```
+
+<!-- test: function-overloads.error.a-static-defaulting-its-sixty-fifth-parameter-is-refused -->
+<!-- process: own -->
+A static with 66 parameters, the last two defaulted, is past the argument slots a call can carry, so the declaration is refused.
+```maxon
+type Holder
+	var seed as Count
+
+	static function wide(p0 Count, p1 Count, p2 Count, p3 Count, p4 Count, p5 Count, p6 Count, p7 Count, p8 Count, p9 Count, p10 Count, p11 Count, p12 Count, p13 Count, p14 Count, p15 Count, p16 Count, p17 Count, p18 Count, p19 Count, p20 Count, p21 Count, p22 Count, p23 Count, p24 Count, p25 Count, p26 Count, p27 Count, p28 Count, p29 Count, p30 Count, p31 Count, p32 Count, p33 Count, p34 Count, p35 Count, p36 Count, p37 Count, p38 Count, p39 Count, p40 Count, p41 Count, p42 Count, p43 Count, p44 Count, p45 Count, p46 Count, p47 Count, p48 Count, p49 Count, p50 Count, p51 Count, p52 Count, p53 Count, p54 Count, p55 Count, p56 Count, p57 Count, p58 Count, p59 Count, p60 Count, p61 Count, p62 Count, p63 Count, p64 Count = 0, p65 Count = 0) returns Count
+		return p0
+	end 'wide'
+end 'Holder'
+
+function main() returns ExitCode
+	_ = Holder.wide(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:5:18: Unsupported: a function with 66 argument slots — more than the 64 a call can carry. A signature's slots are its declared parameters plus the hidden ones the ABI adds (a witness per interface-typed parameter, a layout descriptor for a generic that reads one or calls a function that does, one witness per `where` constraint), and the limit is the width of the per-argument float mask that routes each one to its register file
+```
+
+<!-- test: function-overloads.a-value-that-leaves-a-narrow-alias-binds-the-wider-alias-member-beside-a-generic -->
+<!-- process: own -->
+50 lies outside `Small`, so only the wider alias member and the generic fit it; the non-generic member wins and the generic serves what no alias member takes.
+```maxon
+typealias Small = int(0 to 10)
+typealias Wide = int(0 to 1000)
+
+function pick(n Small) returns Count
+	_ = n
+	return 1
+end 'pick'
+
+function pick(n Wide) returns Count
+	_ = n
+	return 2
+end 'pick'
+
+function pick(x T) uses T returns Count
+	_ = x
+	return 3
+end 'pick'
+
+function main() returns ExitCode
+	print("{pick(50)} {pick("a")}\n")
+	return 0
+end 'main'
+```
+```stdout
+2 3
+```
+
+<!-- test: function-overloads.a-value-that-leaves-a-narrow-alias-binds-the-wider-alias-member -->
+<!-- process: own -->
+Two alias members and no generic: 50 lies outside `Small`, so the call binds `Wide` rather than tying.
+```maxon
+typealias Small = int(0 to 10)
+typealias Wide = int(0 to 1000)
+
+function pick(n Small) returns Count
+	_ = n
+	return 1
+end 'pick'
+
+function pick(n Wide) returns Count
+	_ = n
+	return 2
+end 'pick'
+
+function main() returns ExitCode
+	print("{pick(50)}\n")
+	return 0
+end 'main'
+```
+```stdout
+2
+```
+
+<!-- test: function-overloads.a-float-alias-parameter-takes-a-float-and-leaves-an-integer-to-the-other-member -->
+<!-- process: own -->
+A float alias parameter is read the same way from the declaration and from the argument: `0.5` binds `Ratio`, `3` binds the `Count` member.
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+
+function show(r Ratio) returns Count
+	_ = r
+	return 1
+end 'show'
+
+function show(n Count) returns Count
+	_ = n
+	return 2
+end 'show'
+
+function main() returns ExitCode
+	print("{show(0.5)} {show(3)}\n")
+	return 0
+end 'main'
+```
+```stdout
+1 2
+```
+
+<!-- test: function-overloads.a-conditional-interface-extension-is-skipped-for-a-conformer-that-fails-its-clause -->
+<!-- process: own -->
+The extension adds `same(other Element)` only where `Element` is `Equatable`; `Crate` binds `Element` to a type that is not, so the extension member is skipped and the conformer's own `same(n Count)` is the only one its call can mean.
+```maxon
+interface Holds uses Element
+	function first() returns Element
+end 'Holds'
+
+extension Holds where Element is Equatable
+	function same(other Element) returns bool
+		return self.first() == other
+	end 'same'
+end 'Holds'
+
+type Tag
+	let id as Count
+
+	static function create(id Count) returns Self
+		return Self{id: id}
+	end 'create'
+end 'Tag'
+
+type Crate implements Holds with Tag
+	let tag as Tag
+
+	static function create() returns Self
+		return Self{tag: Tag.create(1)}
+	end 'create'
+
+	function first() returns Tag
+		return self.tag
+	end 'first'
+
+	function same(n Count) returns bool
+		return n == 7
+	end 'same'
+end 'Crate'
+
+function main() returns ExitCode
+	let c = Crate.create()
+	if c.same(7) 'yes'
+		return 1
+	end 'yes'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: function-overloads.a-conditional-interface-extension-yields-to-the-conformers-own-method-where-its-clause-holds -->
+<!-- process: own -->
+The same shape with a conformer whose `Element` is `Equatable`: the clause holds, and the conformer's own `same(label String)` still shadows the extension's `same(other Element)`, so the call means the conformer's.
+```maxon
+interface Holds uses Element
+	function first() returns Element
+end 'Holds'
+
+extension Holds where Element is Equatable
+	function same(other Element) returns bool
+		return self.first() == other
+	end 'same'
+end 'Holds'
+
+type Crate implements Holds with Count
+	let value as Count
+
+	static function create(value Count) returns Self
+		return Self{value: value}
+	end 'create'
+
+	function first() returns Count
+		return self.value
+	end 'first'
+
+	function same(label String) returns bool
+		return label.count() == 3
+	end 'same'
+end 'Crate'
+
+function main() returns ExitCode
+	let c = Crate.create(4)
+
+	if c.same("abc") 'byLabel'
+		return 2
+	end 'byLabel'
+
+	return 0
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: error.an-interface-constrained-call-sees-the-conformers-private-member-in-the-pool-it-scores -->
+<!-- process: own -->
+The conformer's file-private `show(n Count)` and exported `show(n Whole)` are both nameable from an interface-constrained generic that calls through `Showy`, so the literal 5 fits both and the call is ambiguous.
+```maxon
+// --- file: a.maxon
+export typealias Whole = int(i64.min to i64.max)
+
+export interface Showy
+	function show(n Whole) returns Whole
+end 'Showy'
+
+export type Gadget implements Showy
+	var seen as Whole
+
+	export static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	function show(n Count) returns Whole
+		return 1
+	end 'show'
+
+	export function show(n Whole) returns Whole
+		return 2
+	end 'show'
+end 'Gadget'
+
+// --- file: main.maxon
+function run(x T) uses T returns Whole where T is Showy
+	return x.show(5)
+end 'run'
+
+function main() returns ExitCode
+	let g = Gadget.create()
+	return run(g) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3007: <fragment>:27:11: Ambiguous overload for 'show': multiple overloads match. Candidates: (n Count), (n Whole)
+```
+
+<!-- test: error.a-user-extension-of-int-declaring-tostring-replaces-the-stdlibs-and-is-refused-by-its-conformance -->
+<!-- process: own -->
+A user `extension int` that declares `toString(pad Count)` takes the name from the stdlib's `extension int implements Stringable`, so the conformance no longer finds the stdlib's `toString()` and the build is refused rather than the two forming one overload set.
+```maxon
+extension int
+	function toString(pad Count) returns String
+		return "{self}/{pad}"
+	end 'toString'
+end 'int'
+
+function main() returns ExitCode
+	let n = 21
+	print("{n.toString()} {n.toString(3)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3016: stdlib/PrimitiveExtensions.maxon:17:11: Partial interface implementation: type 'int' has 1 method(s) with wrong signature:
+  - toString(pad Count) returns String (expected toString() returns String)
+```
+
+<!-- test: a-type-and-a-directory-of-one-name-keep-their-own-overload-sets -->
+<!-- process: own -->
+`Shape` is both a type with two `area` methods and a directory whose two files each declare a free `area`; the directory's cross-file contest does not rename the type's methods, and each call finds its own set: 9 + 6 + 4 + 3.
+```maxon
+// --- file: Shape/one.maxon
+export function area(n Count) returns Count
+	return n
+end 'area'
+
+export function viaTwo() returns Count
+	return area("abc")
+end 'viaTwo'
+
+// --- file: Shape/two.maxon
+export function area(s String) returns Count
+	return s.count()
+end 'area'
+
+export function viaOne() returns Count
+	return area(4)
+end 'viaOne'
+
+// --- file: main.maxon
+type Shape
+	let side as Count
+
+	static function create(side Count) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Count
+		return self.side * self.side
+	end 'area'
+
+	function area(scale Count) returns Count
+		return self.side * scale
+	end 'area'
+end 'Shape'
+
+function main() returns ExitCode
+	let s = Shape.create(3)
+	return (s.area() + s.area(2) + Shape.viaOne() + Shape.viaTwo()) as ExitCode
+end 'main'
+```
+```exitcode
+22
 ```

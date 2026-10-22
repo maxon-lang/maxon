@@ -189,9 +189,14 @@ function main() returns ExitCode
 end 'main'
 ```
 
-- A call that more than one overload matches is **E3007** (`Ambiguous overload`). A first argument
+- A call that more than one overload matches is **E3007** (`Ambiguous overload`), and so is a `spawn` or an
+  `async` call that does. The message lists each tied overload's parameters as its declaration writes
+  them (`Candidates: (b BlockId), (v VarId)`). A first argument
   is labelled only at a defaulted parameter, and overloads of one name that declare defaults must agree
   on their parameters, so two single-parameter overloads of the same type cannot be told apart.
+- A literal, a negated literal, a loop counter or a value computed from them fits a ranged-alias
+  parameter when it lies inside the alias's range, so beside `pick(n Small)` (`int(0 to 10)`) and
+  `pick(n Wide)` (`int(0 to 1000)`), `pick(50)` binds `Wide`.
 - Declaring the same overload twice, with the same parameter names and types, is a duplicate
   definition (**E3006**). Overloads with the same parameter types but different parameter names are
   separate declarations; a call whose labels cannot tell them apart is **E3007**.

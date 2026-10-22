@@ -56,7 +56,7 @@ release's version as its heading when the release is cut.
 - A member of your own type named `pop`, `remove`, `removeFirst` or `removeLast` that hands back a promise is
   judged by its body, and one that returns a borrow (`self.items.last()`) is E3141; so is a generic static
   that hands back a promise one of its arguments still holds.
-  Fix: return what a library `pop`/`remove` takes out of the field, or have every declaration of the static
+  Fix: return what a library `pop`/`remove` takes out of the field, or have the declaration the call binds
   take that argument.
 - A static called on a bare generic name whose result is written over a type parameter no argument fixes
   (`Holder.make()` declared `returns T`) is E3162.
@@ -87,6 +87,17 @@ release's version as its heading when the release is cut.
 - A `?`, `;`, `|`, `&`, `$`, `%`, `~`, `^`, backtick, control character or non-ASCII character outside a
   string literal or a comment is E1010 (`Unexpected character`); the lexer skipped it before.
   Fix: delete the character, or move it into a string literal or a comment.
+- A `spawn` of an overloaded factory and an `async` call of an overloaded function bind the overload their
+  arguments fit, as any call does: two overloads that fit equally are E3007, and the bound overload alone
+  decides which arguments move (a promise included) and which type arguments a generic factory fixes.
+  Fix: give the arguments types, or labels, that fit exactly one overload.
+- Beside a generic function of the same name, a non-generic overload binds a literal, a negated literal, a
+  loop counter or a value computed from them that lies inside its parameter's alias, and the generic binds
+  one known to leave it.
+  Fix: cast the argument to the type the generic should take (`describe(5 as Other)`).
+- A literal cast to the alias of the non-generic overload it already binds (`describe(5 as Score)` beside a
+  generic `describe`) is E3010.
+  Fix: drop the cast.
 
 ## 0.5.0 — 2026-10-08
 

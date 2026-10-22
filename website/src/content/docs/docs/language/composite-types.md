@@ -531,7 +531,7 @@ end 'main'
 - Several parameters: `type Pair uses A, B`, instantiated `Pair with (Integer, String)`.
 - A static called on the bare generic name infers the arguments from its parameters: a parameter written
   at a type parameter, or at an instance over one (`Array with T`, or the generic itself). An overloaded
-  static infers them when every overload the call can slot fixes the same ones. A call whose result is
+  static infers them from the overload its arguments bind. A call whose result is
   written over a parameter that no argument fixes (`Holder.make()` declared `returns T`) has no type and is
   **E3162**; inside the generic's own body the enclosing instance types it.
 - One compiled body serves every instantiation. A method learns how its type arguments are laid out and
@@ -641,8 +641,13 @@ because the caller granted the conformance by passing the type. The grant reache
 the copy too. Every other member of the type needs ordinary visibility from the declaring file. A generic
 function is itself visible like any function: a private one called from another file is **E3008**.
 
-A non-generic declaration of the same name is chosen when its parameter types are exactly the argument
-types. Two generic declarations that both infer a type for one call are **E3007**.
+A non-generic declaration of the same name is chosen when every argument fits its parameter exactly: a
+value of the parameter's own type, or a value with no alias — a literal, a negated literal, a loop counter or
+a value computed from them — that lies inside the parameter's range. A value known to leave the range is
+taken by the generic, and a parameter whose alias admits every value of its type takes any of them. Since a
+literal already binds the non-generic declaration, casting it to that parameter's alias is **E3010**
+(`describe(5 as Score)`); a cast to another alias fixes `T` to that alias, and the generic binds. Two generic
+declarations that both infer a type for one call are **E3007**.
 
 A generic function's result may declare `returns sole T` or `returns readonly T` (see
 [Capability Qualifiers](/docs/language/functions/#capability-qualifiers-keep-sole-returns-readonly)); a body that breaks it is **E3189**.
@@ -787,8 +792,9 @@ end 'Seq'
 `Upto.create(4).has(3)` is available because `Integer` is `Equatable`. Several constraints on one
 parameter join with `and`: `where Key is Hashable and Equatable`.
 
-Conformers that do not satisfy the clause simply do not get the method; calling it on one is **E4006**,
-which names the unmet constraint.
+The method belongs to the conformers that satisfy the clause; calling it on any other is **E4006**, which
+names the unmet constraint. A conformer that declares its own method of that name calls its own, whether
+its binding satisfies the clause or not.
 
 ### Conditional Interface Conformance
 

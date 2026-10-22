@@ -254,7 +254,8 @@ export type FuncReturnTypeEntry
 	export let opaqueParams as OpaqueParamInfo
 	export let paramNames as NameRoster
 	export let paramTypes as MaxonTypeArray
-	export let paramDeclaredBrands as NameRoster
+	export let paramSpellings as NameRoster
+	export let paramDefaults as ParamPositionMask
 
 	// The bare NAME the `returns` clause wrote, when it wrote one — `DenseColumn` for
 	// `returns DenseColumn`, and `none` for `returns Array with Integer`, for a primitive, or for no
@@ -272,8 +273,8 @@ export type FuncReturnTypeEntry
 	// ⚠ **THE THREE EMPTY DEFAULTS ARE FRESH, NOT SHARED ANCHORS.** A default naming a module-level `let`
 	// makes that anchor an export nothing calls, which `checkUnusedExports` reports as E3092. An empty
 	// container costs a record; the anchor costs a build.
-	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, takesReceiver bool = false, opaqueParams OpaqueParamInfo = sharedNoOpaqueParams, paramNames NameRoster = NameRoster.create(), paramTypes MaxonTypeArray = MaxonTypeArray.create(), paramDeclaredBrands NameRoster = NameRoster.create(), returnAliasName ReturnAliasSpelling = ReturnAliasSpelling.none, nameLine LineNumber = 0, nameColumn ColumnNumber = 0, enclosingTypeName ByteArray = EmptySourceText) returns FuncReturnTypeEntry
-		return Self{name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: opaqueParams, paramNames: paramNames, paramTypes: paramTypes, paramDeclaredBrands: paramDeclaredBrands, returnAliasName: returnAliasName, nameLine: nameLine, nameColumn: nameColumn, enclosingTypeName: enclosingTypeName}
+	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, takesReceiver bool = false, opaqueParams OpaqueParamInfo = sharedNoOpaqueParams, paramNames NameRoster = NameRoster.create(), paramTypes MaxonTypeArray = MaxonTypeArray.create(), paramSpellings NameRoster = NameRoster.create(), paramDefaults ParamPositionMask = NoParamPositions, returnAliasName ReturnAliasSpelling = ReturnAliasSpelling.none, nameLine LineNumber = 0, nameColumn ColumnNumber = 0, enclosingTypeName ByteArray = EmptySourceText) returns FuncReturnTypeEntry
+		return Self{name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: opaqueParams, paramNames: paramNames, paramTypes: paramTypes, paramSpellings: paramSpellings, paramDefaults: paramDefaults, returnAliasName: returnAliasName, nameLine: nameLine, nameColumn: nameColumn, enclosingTypeName: enclosingTypeName}
 	end 'create'
 end 'FuncReturnTypeEntry'
 
@@ -530,6 +531,8 @@ export type FileParseArtifact
 	// to be captured here rather than recovered downstream.
 	export var asyncSpawnSites as AsyncSpawnSiteMap
 
+	export var overloadAnswers as OverloadAnswerMap
+
 	// The twin of `asyncSpawnSites` for services: every `await` of a service reply this file holds, keyed by the op
 	// index in THIS artifact's module and folded with the merge's offset. See `Project.serviceAwaitSites`.
 	export var serviceAwaitSites as ServiceAwaitSiteMap
@@ -734,6 +737,7 @@ export type FileParseArtifact
 			opRanges: SourceRangeTable.create(),
 			covPoints: CovPointArray.create(),
 			asyncSpawnSites: AsyncSpawnSiteMap.create(),
+			overloadAnswers: OverloadAnswerMap.create(),
 			serviceAwaitSites: ServiceAwaitSiteMap.create(),
 			registryUseSites: noRegistryUseSites,
 			allocTagSites: AllocTagSiteMap.create(),
@@ -834,6 +838,10 @@ export type FileParseArtifact
 	export function recordAsyncSpawnSite(site AsyncSpawnSite)
 		self.asyncSpawnSites.upsert(self.module.opCount(), value: site)
 	end 'recordAsyncSpawnSite'
+
+	export function recordOverloadAnswer(opIndex ElementIndex, answer OverloadAnswer)
+		self.overloadAnswers.upsert(opIndex, value: answer)
+	end 'recordOverloadAnswer'
 
 	// The service twin, on the same read-it-through-here contract and for its reason: the site lands on the op
 	// the parser is ABOUT to append, so the key is the current count.
@@ -1086,6 +1094,7 @@ export type FileParseArtifact
 		self.opRanges.cacheWrite(writer)
 		cacheWriteCovPointArray(writer, value: self.covPoints)
 		cacheWriteAsyncSpawnSiteMap(writer, value: self.asyncSpawnSites)
+		cacheWriteOverloadAnswerMap(writer, value: self.overloadAnswers)
 		cacheWriteServiceAwaitSiteMap(writer, value: self.serviceAwaitSites)
 		cacheWriteRegistryUseSiteTable(writer, value: self.registryUseSites)
 		cacheWriteAllocTagSiteMap(writer, value: self.allocTagSites)
@@ -1131,6 +1140,7 @@ export type FileParseArtifact
 		let f_opRanges = try SourceRangeTable.cacheRead(reader)
 		let f_covPoints = try cacheReadCovPointArray(reader)
 		let f_asyncSpawnSites = try cacheReadAsyncSpawnSiteMap(reader)
+		let f_overloadAnswers = try cacheReadOverloadAnswerMap(reader)
 		let f_serviceAwaitSites = try cacheReadServiceAwaitSiteMap(reader)
 		let f_registryUseSites = try cacheReadRegistryUseSiteTable(reader)
 		let f_allocTagSites = try cacheReadAllocTagSiteMap(reader)
@@ -1167,11 +1177,11 @@ export type FileParseArtifact
 		let f_parseMints = try cacheReadParseMints(reader)
 		let f_instanceIdsInUse = try cacheReadGenericInstanceIdArray(reader)
 
-		return Self{filePath: f_filePath, livesUnderStdlibDirectory: f_livesUnderStdlibDirectory, typeIdsAreProjectGlobal: f_typeIdsAreProjectGlobal, module: f_module, opRanges: f_opRanges, covPoints: f_covPoints, asyncSpawnSites: f_asyncSpawnSites, serviceAwaitSites: f_serviceAwaitSites, registryUseSites: f_registryUseSites, allocTagSites: f_allocTagSites, debugStreamNameSites: f_debugStreamNameSites, immortalConstArraySites: f_immortalConstArraySites, valueOrigins: f_valueOrigins, deferredChains: f_deferredChains, funcSignatures: f_funcSignatures, overloadSets: f_overloadSets, pendingFnMergeChecks: f_pendingFnMergeChecks, pendingFunctionTypeDoors: f_pendingFunctionTypeDoors, pendingBrandRecords: f_pendingBrandRecords, pendingDiscardedResults: f_pendingDiscardedResults, rangeChecks: f_rangeChecks, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, structTypes: f_structTypes, writtenTupleTypes: f_writtenTupleTypes, enumTypes: f_enumTypes, interfaces: f_interfaces, typeNameDecls: f_typeNameDecls, genericInstanceRequests: f_genericInstanceRequests, usedTypeNames: f_usedTypeNames, memberAccessedTypeNames: f_memberAccessedTypeNames, conformances: f_conformances, literalInitSites: f_literalInitSites, inferredInstantiationSites: f_inferredInstantiationSites, typeNames: f_typeNames, currentFuncIndex: f_currentFuncIndex, diagnostics: f_diagnostics, unusedTypeAliases: f_unusedTypeAliases, hiddenTypeNames: f_hiddenTypeNames, bindingHygieneDiagnostics: f_bindingHygieneDiagnostics, parseMints: f_parseMints, instanceIdsInUse: f_instanceIdsInUse}
+		return Self{filePath: f_filePath, livesUnderStdlibDirectory: f_livesUnderStdlibDirectory, typeIdsAreProjectGlobal: f_typeIdsAreProjectGlobal, module: f_module, opRanges: f_opRanges, covPoints: f_covPoints, asyncSpawnSites: f_asyncSpawnSites, overloadAnswers: f_overloadAnswers, serviceAwaitSites: f_serviceAwaitSites, registryUseSites: f_registryUseSites, allocTagSites: f_allocTagSites, debugStreamNameSites: f_debugStreamNameSites, immortalConstArraySites: f_immortalConstArraySites, valueOrigins: f_valueOrigins, deferredChains: f_deferredChains, funcSignatures: f_funcSignatures, overloadSets: f_overloadSets, pendingFnMergeChecks: f_pendingFnMergeChecks, pendingFunctionTypeDoors: f_pendingFunctionTypeDoors, pendingBrandRecords: f_pendingBrandRecords, pendingDiscardedResults: f_pendingDiscardedResults, rangeChecks: f_rangeChecks, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, structTypes: f_structTypes, writtenTupleTypes: f_writtenTupleTypes, enumTypes: f_enumTypes, interfaces: f_interfaces, typeNameDecls: f_typeNameDecls, genericInstanceRequests: f_genericInstanceRequests, usedTypeNames: f_usedTypeNames, memberAccessedTypeNames: f_memberAccessedTypeNames, conformances: f_conformances, literalInitSites: f_literalInitSites, inferredInstantiationSites: f_inferredInstantiationSites, typeNames: f_typeNames, currentFuncIndex: f_currentFuncIndex, diagnostics: f_diagnostics, unusedTypeAliases: f_unusedTypeAliases, hiddenTypeNames: f_hiddenTypeNames, bindingHygieneDiagnostics: f_bindingHygieneDiagnostics, parseMints: f_parseMints, instanceIdsInUse: f_instanceIdsInUse}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize336
-		return sizeof(FileParseArtifact) as CacheSize336
+	static function cacheLayoutBytes() returns CacheSize344
+		return sizeof(FileParseArtifact) as CacheSize344
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -1332,6 +1342,7 @@ module enum OpKeyedTable
 	registryUseSites
 	serviceAwaitSites
 	asyncSpawnSites
+	overloadAnswers
 	allocTagSites
 	debugStreamNameSites
 	immortalConstArraySites
@@ -1351,6 +1362,7 @@ module function heldBy(table OpKeyedTable, project Project) returns ElementIndex
 		registryUseSites gives project.registryUseSites.count()
 		serviceAwaitSites gives project.serviceAwaitSites.count()
 		asyncSpawnSites gives project.asyncSpawnSites.count()
+		overloadAnswers gives project.overloadAnswers.count()
 		allocTagSites gives project.allocTagSites.count()
 		debugStreamNameSites gives project.debugStreamNameSites.count()
 		immortalConstArraySites gives project.immortalConstArraySites.count()
@@ -2458,6 +2470,7 @@ function commitOpKeyedSites(project Project, artifact FileParseArtifact, opOffse
 	end 'registryUses'
 
 	project.asyncSpawnSites.upsertRelocated(artifact.asyncSpawnSites, offset: opOffset)
+	project.overloadAnswers.upsertRelocated(artifact.overloadAnswers, offset: opOffset)
 	project.allocTagSites.upsertRelocated(artifact.allocTagSites, offset: opOffset)
 	project.debugStreamNameSites.upsertRelocated(artifact.debugStreamNameSites, offset: opOffset)
 	project.immortalConstArraySites.upsertRelocated(artifact.immortalConstArraySites, offset: opOffset)

@@ -2209,7 +2209,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:10: Unsupported: overloading 'make' — one of its declarations NAMES `__ManagedMemory` in its return type, and the whole-program declaration sweep publishes that SPELLING under the name the source wrote, so a call to this name cannot be told whether its result carries the buffer's member roster or the `Array`'s. The surface is chosen when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give the overloads distinct names
+error E2015: <fragment>:10:10: Unsupported: overloading 'make' — one of its declarations NAMES `__ManagedMemory` in its return type, and the whole-program declaration sweep publishes that SPELLING under the name the source wrote, so a call to this name cannot be told whether its result carries the buffer's member roster or the `Array`'s. The surface is chosen when the call is PARSED, from the one spelling kept per NAME, so nothing downstream can repair it. Give the overloads distinct names
 ```
 
 ### The `Array` roster is DERIVED from the arms it describes
@@ -2872,7 +2872,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:10: Unsupported: overloading 'make' — one of its declarations NAMES `__ManagedMemory` in its return type, and the whole-program declaration sweep publishes that SPELLING under the name the source wrote, so a call to this name cannot be told whether its result carries the buffer's member roster or the `Array`'s. The surface is chosen when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give the overloads distinct names
+error E2015: <fragment>:8:10: Unsupported: overloading 'make' — one of its declarations NAMES `__ManagedMemory` in its return type, and the whole-program declaration sweep publishes that SPELLING under the name the source wrote, so a call to this name cannot be told whether its result carries the buffer's member roster or the `Array`'s. The surface is chosen when the call is PARSED, from the one spelling kept per NAME, so nothing downstream can repair it. Give the overloads distinct names
 ```
 
 ### Every door out of an array of buffers, and every copy of one

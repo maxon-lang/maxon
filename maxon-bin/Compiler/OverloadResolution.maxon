@@ -1,0 +1,838 @@
+// Wide enough for `ExactArgScore` at every parameter of the widest signature the ABI admits.
+typealias OverloadArgScore = int(0 to 128)
+
+typealias OverloadArgScoreArray = Array with OverloadArgScore
+
+// A candidate scores `ExactArgScore` per argument whose tag matches its parameter's exactly and
+// `WideningArgScore` per argument that merely coerces legally (an int at a `float`, an int at an `ExitCode`).
+// The numbers only have to ORDER the candidates.
+let ExactArgScore = 2
+let WideningArgScore = 1
+
+// A score no FITTING candidate reaches (`overloadSlottedFit` floors a fit at `WideningArgScore`), so "did
+// anything fit?" needs no second flag. It is not a sentinel RETURN: the answer it produces is a union arm.
+let NoCompatibleOverloadScore = 0
+
+module union DeclaredRange
+	whole
+	narrowed(let alias RangedTypeAlias)
+end 'DeclaredRange'
+
+module type OverloadParam
+	module let erased as MaxonType
+	module let aggregate as ByteArray
+	module let declared as ByteArray
+	module let defaults as bool
+	module let isReceiver as bool
+	module let readable as bool
+	module let range as DeclaredRange
+	module let spelled as ByteArray
+	module let adopted as MaxonType
+
+	static function receiver() returns OverloadParam
+		return Self{erased: MaxonType.unresolved, aggregate: EmptySourceText, declared: EmptySourceText, defaults: false, isReceiver: true, readable: true, range: DeclaredRange.whole, spelled: EmptySourceText, adopted: MaxonType.unresolved}
+	end 'receiver'
+
+	static function unreadable(defaults bool, spelled ByteArray, adopted MaxonType) returns OverloadParam
+		return Self{erased: MaxonType.unresolved, aggregate: EmptySourceText, declared: EmptySourceText, defaults: defaults, isReceiver: false, readable: false, range: DeclaredRange.whole, spelled: spelled, adopted: adopted}
+	end 'unreadable'
+
+	static function of(slot ErasedSlot, declared ByteArray, defaults bool, spelled ByteArray, adopted MaxonType) returns OverloadParam
+		return Self{erased: slot.erased, aggregate: slot.aggregate, declared: declared, defaults: defaults, isReceiver: false, readable: true, range: slot.range, spelled: spelled, adopted: adopted}
+	end 'of'
+end 'OverloadParam'
+
+module typealias OverloadParamArray = Array with OverloadParam
+
+module type OverloadCandidate
+	module let site as ByteArray
+	module let registeredName as ByteArray
+	module let slotNames as NameRoster
+	module let params as OverloadParamArray
+	module let takesReceiver as bool
+	module let visibility as Visibility
+	module let declFilePath as FilePath
+
+	module static function create(site ByteArray, registeredName ByteArray, slotNames NameRoster, params OverloadParamArray, takesReceiver bool, visibility Visibility, declFilePath FilePath) returns OverloadCandidate
+		return Self{site: site, registeredName: registeredName, slotNames: slotNames, params: params, takesReceiver: takesReceiver, visibility: visibility, declFilePath: declFilePath}
+	end 'create'
+end 'OverloadCandidate'
+
+module typealias OverloadCandidateArray = Array with OverloadCandidate
+module typealias RowIndexArray = Array with ElementIndex
+module typealias OverloadRowMemo = Map with (ByteArray, OverloadCandidateArray)
+
+module type OverloadArg
+	module let tag as ValueTypeTag
+	module let nameId as TypeNameId
+	module let brand as ByteArray
+
+	module static function create(tag ValueTypeTag, nameId TypeNameId, brand ByteArray) returns OverloadArg
+		return Self{tag: tag, nameId: nameId, brand: brand}
+	end 'create'
+end 'OverloadArg'
+
+module typealias OverloadArgArray = Array with OverloadArg
+
+module union SuppliedInstance
+	absent
+	instance(let id GenericInstanceId)
+end 'SuppliedInstance'
+
+module type OverloadCallFacts
+	module let readerFilePath as FilePath
+	module let argLabels as NameRoster
+	module let staticInstance as SuppliedInstance
+	module let callerName as ByteArray
+	module let exemptsEveryMember as bool
+
+	module static function create(readerFilePath FilePath, argLabels NameRoster, staticInstance SuppliedInstance, callerName ByteArray, mint CalleeMint) returns OverloadCallFacts
+		return Self{readerFilePath: readerFilePath, argLabels: argLabels.clone(), staticInstance: staticInstance, callerName: callerName, exemptsEveryMember: callNamesNothingTheReaderWrote(mint, readerFilePath: readerFilePath)}
+	end 'create'
+end 'OverloadCallFacts'
+
+module function callNamesNothingTheReaderWrote(mint CalleeMint, readerFilePath FilePath) returns bool
+	return mintSpellsTheWholeCallee(mint) or readerFilePath.isEmpty()
+end 'callNamesNothingTheReaderWrote'
+
+module union OverloadVerdict
+	chosen(let row ElementIndex)
+	tied(let rowIndices RowIndexArray)
+	noMatch
+end 'OverloadVerdict'
+
+module type OverloadPool
+	module let rows as OverloadCandidateArray
+	module let narrowed as bool
+
+	module static function create(rows OverloadCandidateArray, narrowed bool) returns OverloadPool
+		return Self{rows: rows, narrowed: narrowed}
+	end 'create'
+end 'OverloadPool'
+
+module type OverloadSelection
+	module let verdict as OverloadVerdict
+	module let pool as OverloadCandidateArray
+
+	module static function create(verdict OverloadVerdict, pool OverloadCandidateArray) returns OverloadSelection
+		return Self{verdict: verdict, pool: pool}
+	end 'create'
+end 'OverloadSelection'
+
+export union OverloadAnswer
+	bound(let site ByteArray)
+	tied(let sites NameRoster)
+	noMember
+end 'OverloadAnswer'
+
+// @generated library-cache begin
+function cacheWriteOverloadAnswer(writer LibraryCacheWriter, value OverloadAnswer)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		bound(a0) then cacheWriteOverloadAnswerBound(writer, a0: a0)
+		tied(a0) then cacheWriteOverloadAnswerTied(writer, a0: a0)
+		noMember then break
+	end 'payload'
+end 'cacheWriteOverloadAnswer'
+
+function cacheWriteOverloadAnswerBound(writer LibraryCacheWriter, a0 ByteArray)
+	writer.bytes(a0)
+end 'cacheWriteOverloadAnswerBound'
+
+function cacheWriteOverloadAnswerTied(writer LibraryCacheWriter, a0 NameRoster)
+	cacheWriteNameRoster(writer, value: a0)
+end 'cacheWriteOverloadAnswerTied'
+
+function cacheReadOverloadAnswer(reader LibraryCacheReader) returns OverloadAnswer throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives try cacheReadOverloadAnswerBound(reader)
+		1 gives try cacheReadOverloadAnswerTied(reader)
+		2 gives OverloadAnswer.noMember
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadOverloadAnswer'
+
+function cacheReadOverloadAnswerBound(reader LibraryCacheReader) returns OverloadAnswer throws LibraryCacheDamage
+	let a0 = try reader.bytes()
+
+	return OverloadAnswer.bound(a0)
+end 'cacheReadOverloadAnswerBound'
+
+function cacheReadOverloadAnswerTied(reader LibraryCacheReader) returns OverloadAnswer throws LibraryCacheDamage
+	let a0 = try cacheReadNameRoster(reader)
+
+	return OverloadAnswer.tied(a0)
+end 'cacheReadOverloadAnswerTied'
+
+// @generated library-cache end
+
+export typealias OverloadAnswerMap = Map with (ElementIndex, OverloadAnswer)
+
+// @generated library-cache begin
+module function cacheWriteOverloadAnswerMap(writer LibraryCacheWriter, value OverloadAnswerMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.unsigned(key as CacheUnsigned)
+		cacheWriteOverloadAnswer(writer, value: entry)
+	end 'eachEntry'
+end 'cacheWriteOverloadAnswerMap'
+
+module function cacheReadOverloadAnswerMap(reader LibraryCacheReader) returns OverloadAnswerMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = OverloadAnswerMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = (try reader.unsigned()) as ElementIndex
+		let entry = try cacheReadOverloadAnswer(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadOverloadAnswerMap'
+
+// @generated library-cache end
+
+module enum OverloadStanding
+	exact
+	coerced
+	incompatible
+end 'OverloadStanding'
+
+module type ByValueArg
+	module let argIndex as ParamCount
+	module let alias as RangedTypeAlias
+
+	static function create(argIndex ParamCount, alias RangedTypeAlias) returns ByValueArg
+		return Self{argIndex: argIndex, alias: alias}
+	end 'create'
+end 'ByValueArg'
+
+module typealias ByValueArgArray = Array with ByValueArg
+
+module type OverloadFit
+	module let score as OverloadArgScore
+	module let standing as OverloadStanding
+	module let byValue as ByValueArgArray
+
+	static function create(score OverloadArgScore, standing OverloadStanding, byValue ByValueArgArray) returns OverloadFit
+		return Self{score: score, standing: standing, byValue: byValue}
+	end 'create'
+end 'OverloadFit'
+
+module typealias OverloadFitArray = Array with OverloadFit
+
+let sharedIncompatibleFit = OverloadFit.create(NoCompatibleOverloadScore as OverloadArgScore, standing: OverloadStanding.incompatible, byValue: ByValueArgArray.create())
+
+module enum OverloadArgFit
+	exact
+	sameAlias
+	byValue
+	widening
+	incompatible
+end 'OverloadArgFit'
+
+module let sharedNoUncastLiterals = LiteralCastMap.create()
+
+module function sweptSlotNames(candidate OverloadedDecl) returns NameRoster
+	return callAlignedFrom(candidate.paramNames) if candidate.takesReceiver else candidate.paramNames
+end 'sweptSlotNames'
+
+module function aggregateNameIn(signatures ProgramSignatures, interner TypeNameInterner, tag ValueTypeTag, nameId TypeNameId, readerFilePath FilePath) returns ByteArray
+	if tagNamesADeclaredType(tag) 'struct'
+		return try interner.nameOf(nameId) otherwise panic("aggregateNameIn: structRef id {nameId} is not in the interner the caller named — a structRef's name id is minted in it")
+	end 'struct'
+
+	// ⚠ The EXACT interface name, never the `extends`-transitive rule: a `Derived` existential's witness
+	// addresses `Derived`'s table, whose slot order is not `Base`'s, so one standing at a `Base` place would
+	// dispatch through the wrong function pointers.
+	if tag == ValueTypeTag.interfaceRef 'existential'
+		return try interner.nameOf(nameId) otherwise panic("aggregateNameIn: interfaceRef id {nameId} is not in the interner the caller named — an interface name id is minted in it")
+	end 'existential'
+
+	// The compiled name is an exact identity because `checkTypeSymbolNamespace` refuses (E3006) any program
+	// in which two instances, or an instance and a declared type, compile to one name.
+	if tag == ValueTypeTag.genericInstance 'genericInstance'
+		return signatures.canonicalInstanceName(nameId as GenericInstanceId)
+	end 'genericInstance'
+
+	if not valueTagWearsAnAlias(tag, nameId: nameId) 'namesNoAlias'
+		return EmptySourceText
+	end 'namesNoAlias'
+
+	let name = try interner.nameOf(nameId) otherwise panic("aggregateNameIn: named id {nameId} is not in the interner the caller named — a named value's name id is minted in it")
+	return signatures.namedIdentityOf(name, readerFilePath: readerFilePath)
+end 'aggregateNameIn'
+
+module function aggregateCannotDecayIn(signatures ProgramSignatures, interner TypeNameInterner, tag ValueTypeTag, nameId TypeNameId) returns bool
+	if tagNamesADeclaredType(tag) or tag == ValueTypeTag.genericInstance or tag == ValueTypeTag.string or tag == ValueTypeTag.character 'alwaysARecord'
+		return true
+	end 'alwaysARecord'
+
+	if tag != ValueTypeTag.named 'notNamed'
+		return false
+	end 'notNamed'
+
+	let name = try interner.nameOf(nameId) otherwise panic("aggregateCannotDecayIn: named id {nameId} is not in the interner the caller named — a named value's name id is minted in it")
+
+	if signatures.containsStructInAnyFile(name) 'namedStruct'
+		return true
+	end 'namedStruct'
+
+	return signatures.enumNameIsBoxed(name)
+end 'aggregateCannotDecayIn'
+
+// ⭐⭐ **ONE SLOT SUBSTITUTED THROUGH AN INSTANCE, CROSSED BACK INTO THE CALLER'S INTERNER — the first of the
+// two steps `Parser.slotTypeThroughReceiver` takes one tier down.**
+// The substitution is asked in the INDEX's space and only the ANSWER crosses, which is that door's own rule;
+// what it adds is that a bare-`T` slot's answer is the instance's ARGUMENT, and that comes back in the WRONG
+// TABLE. `substitutedInstanceArg` answers in `ProgramSignatures.typeNames`, a different interner with its own
+// insertion order, so the id means whatever name happens to sit at that number in `interner`.
+//
+// ⚠ **GATED ON THE DECLARED SLOT, NOT ON THE ANSWER, for `slotTypeThroughReceiver`'s reason turned to this
+// door's shape.** The bare-`T` arm is the ONE arm of `substituteThroughInstanceInterned` that hands back an
+// index-space id — a tuple crossed as a NAME into the interner it was GIVEN, a nested instance answers a
+// whole-program giid, and every other slot is returned untouched — so adopting an answer that never left
+// would re-read a project id in the index's table, which is this same bug pointed the other way.
+//
+// The answer is deliberately still UNRESOLVED, because its two readers need it in that order: the TYPE wants
+// the erasure `resolveTypes` already performed on the arriving side (`resolvedSlotThroughCallInstance`), and
+// `substitutedSlotIdentity` wants the name that erasure destroys. One crossing, two readers.
+module function slotThroughInstance(signatures ProgramSignatures, interner TypeNameInterner, slotType MaxonType, gid GenericInstanceId) returns MaxonType
+	if signatures.slotNamesTheInstancesBase(slotType, interner: interner, gid: gid) 'theDeclarationsSelf'
+		return MaxonType.genericInstance(gid)
+	end 'theDeclarationsSelf'
+
+	var index = signatures
+	let substituted = index.substituteThroughInstanceInterned(slotType, id: gid, interner: interner)
+
+	if not slotIsBareTypeParameter(slotType) 'noIndexSpaceIdCrossedOut'
+		return substituted
+	end 'noIndexSpaceIdCrossedOut'
+
+	return index.adoptType(substituted, into: interner)
+end 'slotThroughInstance'
+
+module function paramTagCarriesADeclarationView(paramTag ValueTypeTag) returns bool
+	return paramTag == ValueTypeTag.structRef or paramTag == ValueTypeTag.genericInstance
+end 'paramTagCarriesADeclarationView'
+
+function paramTypeThroughInstance(signatures ProgramSignatures, interner TypeNameInterner, instance SuppliedInstance, paramType MaxonType) returns MaxonType
+	if not paramTagCarriesADeclarationView(maxonTypeTag(paramType)) 'carriesNoDeclarationView'
+		return paramType
+	end 'carriesNoDeclarationView'
+
+	match instance 'supplied'
+		absent then return paramType
+		instance(gid) then return paramTypeAtInstance(signatures, interner: interner, gid: gid, paramType: paramType)
+	end 'supplied'
+end 'paramTypeThroughInstance'
+
+module function paramTypeAtInstance(signatures ProgramSignatures, interner TypeNameInterner, gid GenericInstanceId, paramType MaxonType) returns MaxonType
+	if maxonTypeTag(paramType) == ValueTypeTag.structRef 'maybeSelf'
+		return slotThroughInstance(signatures, interner: interner, slotType: paramType, gid: gid)
+	end 'maybeSelf'
+
+	var index = signatures
+	return index.substituteThroughInstance(paramType, id: gid)
+end 'paramTypeAtInstance'
+
+function instanceHeldBy(view OverloadArg) returns SuppliedInstance
+	if view.tag != ValueTypeTag.genericInstance 'notAnInstance'
+		return SuppliedInstance.absent
+	end 'notAnInstance'
+
+	return SuppliedInstance.instance(view.nameId as GenericInstanceId)
+end 'instanceHeldBy'
+
+function candidateInstance(candidate OverloadCandidate, views OverloadArgArray, argAt ParamCountArray, staticInstance SuppliedInstance) returns SuppliedInstance
+	if not candidate.takesReceiver 'receiverless'
+		return staticInstance
+	end 'receiverless'
+
+	let slot = try argAt.get(ReceiverParamPosition) otherwise panic("candidateInstance: a receiver-taking candidate was slotted to an empty argument list — arity already agreed with its parameter count")
+	return instanceHeldBy(try views.get(slot) otherwise panic("candidateInstance: views.get OOB at {slot} — the slot order holds positions of this call's own arguments"))
+end 'candidateInstance'
+
+// The one rule for "may this file name this declaration". Past the ordinary tier rule, a conformance
+// grants a generic instance, or a body extending an interface, every member the interface's surface
+// declares for its conformer, whatever that member's tier.
+//
+// ⭐ A `runtime/` entry answers to no directory's module scope: the compiler reaches one by name out of
+// whatever file wrote the construct that needs it, so no author wrote the call. ⛔ The test is that the
+// name is RESERVED (`isCompilerInternalCallee`), not merely declared in the tier: the tier's other
+// declarations are module-scoped (E3154 is its ceiling), and keyed on the tier alone this would publish
+// every one of them to every file in the program.
+module function declarationMayBeNamed(signatures ProgramSignatures, visibility Visibility, declFilePath FilePath, registeredName ByteArray, readerFilePath FilePath, callerName ByteArray) returns bool
+	if declFilePath.isEmpty() or signatures.isVisibleFrom(visibility, declFilePath: declFilePath, readerFilePath: readerFilePath) 'theOrdinaryRule'
+		return true
+	end 'theOrdinaryRule'
+
+	if signatures.interfaceSurfaceGrantsCall(callerName, callee: registeredName) 'aConformanceTheCallerGranted'
+		return true
+	end 'aConformanceTheCallerGranted'
+
+	return isCompilerInternalCallee(registeredName) and signatures.declaredInTheRuntimeTier(declFilePath)
+end 'declarationMayBeNamed'
+
+function rowMayBeNamed(signatures ProgramSignatures, candidate OverloadCandidate, call OverloadCallFacts) returns bool
+	return call.exemptsEveryMember or declarationMayBeNamed(signatures, visibility: candidate.visibility, declFilePath: candidate.declFilePath, registeredName: candidate.registeredName, readerFilePath: call.readerFilePath, callerName: call.callerName)
+end 'rowMayBeNamed'
+
+module function overloadPoolOf(signatures ProgramSignatures, rows OverloadCandidateArray, call OverloadCallFacts) returns OverloadPool
+	var nameable = OverloadCandidateArray.create()
+
+	for row in rows 'eachCandidate'
+		if rowMayBeNamed(signatures, candidate: row, call: call) 'theCallerMayNameIt'
+			nameable.push(row)
+		end 'theCallerMayNameIt'
+	end 'eachCandidate'
+
+	if nameable.count() > 0 and nameable.count() < rows.count() 'narrowed'
+		return OverloadPool.create(nameable, narrowed: true)
+	end 'narrowed'
+
+	return OverloadPool.create(rows, narrowed: false)
+end 'overloadPoolOf'
+
+// ⛔⛔ **IT JUDGES EACH PARAMETER THROUGH THE CALL'S INSTANCE (`candidateInstance`), AND WITHOUT THAT
+// EVERY OVERLOAD SET ON A GENERIC TYPE'S EXTENSION IS UNRESOLVABLE.** `checkArgTypes` resolves a
+// parameter's declaration-view type against the instance the call is actually made at
+// (`paramTypeThroughCallInstance`) precisely because a shared generic body spells `__self` at the
+// base `Array with <T>`, which no argument of an instance matches nominally.
+module function overloadArgFit(signatures ProgramSignatures, interner TypeNameInterner, call OverloadCallFacts, instance SuppliedInstance, param OverloadParam, view OverloadArg) returns OverloadArgFit
+	if param.isReceiver 'theReceiverIsJudgedByTheDispatch'
+		return OverloadArgFit.exact
+	end 'theReceiverIsJudgedByTheDispatch'
+
+	if not param.readable 'noTypeWasReadForIt'
+		return OverloadArgFit.incompatible
+	end 'noTypeWasReadForIt'
+
+	let paramType = paramTypeThroughInstance(signatures, interner: interner, instance: instance, paramType: param.erased)
+	let argTag = view.tag
+	let paramTag = maxonTypeTag(paramType)
+
+	if checkDeclaredType(argTag, declared: paramTag) != DeclaredTypeMatch.ok 'refused'
+		return OverloadArgFit.incompatible
+	end 'refused'
+
+	// ⭐ TWO DIFFERENT AGGREGATES SHARE ONE TAG — two structs are both `structRef`, two boxed unions both
+	// erased to `integer` — so the verdict above accepts `over(aBag)` at an `over(x Box)`. Identity is the
+	// interned NAME, and it is the same rule `checkOneArgType` applies at the same pair, asked here so a
+	// candidate is not selected on a tag agreement its own argument check will refuse.
+	view spelledAggregate = aggregateNameIn(signatures, interner: interner, tag: paramTag, nameId: typeNameIdOf(paramType), readerFilePath: call.readerFilePath)
+	view expected = param.aggregate if spelledAggregate.isEmpty() else spelledAggregate
+
+	// ⚠ Ungated on the declared side for the reason `checkOneArgType` is: a SCALAR parameter meeting an
+	// AGGREGATE argument is a real conflict, and skipping it here would SELECT an `over(x Integer)` for a
+	// boxed-union argument and do arithmetic on its payload word. Asking the same question the argument
+	// check asks is also what makes this function's own promise true — that a candidate it accepts cannot
+	// then be rejected downstream.
+	if not expected.isEmpty() or (tagAdmitsNoAggregate(paramTag) and aggregateCannotDecayIn(signatures, interner: interner, tag: argTag, nameId: view.nameId)) 'aggregateComparable'
+		view got = aggregateNameIn(signatures, interner: interner, tag: argTag, nameId: view.nameId, readerFilePath: call.readerFilePath)
+
+		// ⚠ **`aggregatesConflict`, NOT the bare rule** — the shared door carries the byte-element
+		// boundary (`byteBufferBoundaryAdmits`), and this function's own promise is that a candidate it
+		// accepts cannot then be rejected downstream. The bare rule answers `incompatible` for a
+		// `__ManagedMemory` parameter meeting a compiler-synthesized byte buffer, which `checkOneArgType`
+		// accepts — the two answers `checkOneArgType`'s header forbids.
+		//
+		// ⛔ **AND IT IS OBSERVABLE.** With NO candidate fitting, the call falls back to the FIRST declared
+		// overload and is reported against ITS parameter, one the call was never written against. Pinned by
+		// `bytearray-element-size.md`'s `overload-scoring-admits-a-synthesized-buffer-at-a-byte-buffer-candidate`.
+		if signatures.aggregatesConflict(expected, expectedTag: paramTag, expectedNameId: typeNameIdOf(paramType), expectedBrand: declaredBrandOf(param.declared, paramTag: paramTag), got: got, gotTag: argTag, gotNameId: view.nameId, gotBrand: view.brand, readerFilePath: call.readerFilePath) 'aggregateMismatch'
+			if not signatures.serviceHandleWidensTo(got, interfaceHandleName: expected) 'noConversion'
+				return OverloadArgFit.incompatible
+			end 'noConversion'
+
+			return OverloadArgFit.widening
+		end 'aggregateMismatch'
+
+		if argTag == ValueTypeTag.named and not expected.isEmpty() and got.equals(expected) 'theSameRangedAlias'
+			return OverloadArgFit.sameAlias
+		end 'theSameRangedAlias'
+	end 'aggregateComparable'
+
+	if argTag != paramTag 'aCoercedArgument'
+		return OverloadArgFit.widening
+	end 'aCoercedArgument'
+
+	// Exact only if the value lies inside the alias, which is the parse's to prove
+	// (`Parser.valueFitsAliasByValue`) before it lets a non-generic member serve the call over a generic one.
+	if declaredRangeIsNarrowed(param.range) and view.nameId == UnnamedTypeId 'aValueOfNoAlias'
+		return OverloadArgFit.byValue
+	end 'aValueOfNoAlias'
+
+	return OverloadArgFit.exact
+end 'overloadArgFit'
+
+function declaredRangeIsNarrowed(range DeclaredRange) returns bool
+	return match range 'range'
+		whole gives false
+		narrowed gives true
+	end 'range'
+end 'declaredRangeIsNarrowed'
+
+function overloadSlottedFit(signatures ProgramSignatures, interner TypeNameInterner, call OverloadCallFacts, candidate OverloadCandidate, views OverloadArgArray, argAt ParamCountArray, placed BoolArray) returns OverloadFit
+	let instance = candidateInstance(candidate, views: views, argAt: argAt, staticInstance: call.staticInstance)
+	var score = NoCompatibleOverloadScore as OverloadArgScore
+	var standing = OverloadStanding.exact
+	var byValue = ByValueArgArray.create()
+
+	for position in 0 upto candidate.params.count() 'eachParameter'
+		let param = try candidate.params.get(position) otherwise panic("overloadSlottedFit: params.get OOB at {position} inside its own count()")
+		let supplied = try placed.get(position) otherwise panic("overloadSlottedFit: placed.get OOB at {position} inside its own count()")
+
+		if not supplied and not param.defaults 'aRequiredParameterNobodySupplied'
+			return sharedIncompatibleFit
+		end 'aRequiredParameterNobodySupplied'
+
+		if not supplied 'anOmittedDefault'
+			continue
+		end 'anOmittedDefault'
+
+		let argIndex = try argAt.get(position) otherwise panic("overloadSlottedFit: argAt.get OOB at {position} inside its own count()")
+		let view = try views.get(argIndex) otherwise panic("overloadSlottedFit: views.get OOB at {argIndex} — the slot order holds positions of this call's own arguments")
+		let fit = overloadArgFit(signatures, interner: interner, call: call, instance: instance, param: param, view: view)
+
+		if fit == OverloadArgFit.incompatible 'refused'
+			return sharedIncompatibleFit
+		end 'refused'
+
+		score = score + (WideningArgScore if fit == OverloadArgFit.sameAlias or fit == OverloadArgFit.widening else ExactArgScore)
+
+		if fit == OverloadArgFit.widening 'aCoercedArgument'
+			standing = OverloadStanding.coerced
+		end 'aCoercedArgument'
+
+		if fit == OverloadArgFit.byValue 'aValueFittedByItsRange'
+			match param.range 'range'
+				narrowed(alias) then byValue.push(ByValueArg.create(argIndex, alias: alias))
+				whole then panic("overloadSlottedFit: a by-value fit is only ever scored against a narrowed range")
+			end 'range'
+		end 'aValueFittedByItsRange'
+	end 'eachParameter'
+
+	// A ZERO-ARGUMENT candidate scored nothing, and it still FITS — `Counter.create()` beside
+	// `Counter.create(value Integer)` is a legitimate arity-only pair, and the arity test that separated them
+	// already ran. It reaches `WideningArgScore` rather than the "nothing fits" floor so the answer stays a
+	// score the caller can compare.
+	return OverloadFit.create(score if score > NoCompatibleOverloadScore else WideningArgScore, standing: standing, byValue: byValue)
+end 'overloadSlottedFit'
+
+// One candidate's fit. The call's arguments are slotted to the candidate's parameters through
+// `placeCallArgs` — which is simultaneously the label test and the arity test, with an omitted parameter
+// admitted only where the declaration defaults it — and then each slotted argument
+// is measured against its parameter by the SAME coercion rule `checkOneArgType` reports against, so a
+// candidate this function accepts cannot then be rejected by the argument check downstream.
+//
+// ⚠ **AND THE PROMISE HAS TO HOLD IN THE OTHER DIRECTION TOO.** A candidate this function REFUSES
+// that `checkArgTypes` would have accepted is not a harmless extra strictness: with no candidate
+// fitting, `leaveUnmatchedCallOnFirstCandidate` points the call at the FIRST member and the program
+// is refused against a signature it was never written against.
+module function overloadFit(signatures ProgramSignatures, interner TypeNameInterner, call OverloadCallFacts, candidate OverloadCandidate, views OverloadArgArray) returns OverloadFit
+	match placeCallArgs(candidate.slotNames, argLabels: call.argLabels, argCount: views.count() as ParamCount, unfilled: UnfilledSlots.permitted) 'slot'
+		placed(argAt, filled) then return overloadSlottedFit(signatures, interner: interner, call: call, candidate: candidate, views: views, argAt: argAt, placed: filled)
+		refused then return sharedIncompatibleFit
+	end 'slot'
+end 'overloadFit'
+
+function overloadBetterScore(best OverloadArgScore, candidate OverloadArgScore) returns OverloadArgScore
+	return candidate if candidate > best else best
+end 'overloadBetterScore'
+
+// Score every candidate and answer which one the call meant. ONE scoring pass, holding the scores: scoring a
+// candidate allocates its placement (`placeCallArgs`) and reads the type rules, so a second sweep to ask who
+// holds the best total would pay all of it again.
+function scoreOverloadAmong(signatures ProgramSignatures, interner TypeNameInterner, call OverloadCallFacts, rows OverloadCandidateArray, views OverloadArgArray) returns OverloadVerdict
+	var scores = OverloadArgScoreArray.create()
+	var best = NoCompatibleOverloadScore as OverloadArgScore
+
+	for row in rows 'eachCandidate'
+		let score = overloadFit(signatures, interner: interner, call: call, candidate: row, views: views).score
+
+		scores.push(score)
+		best = overloadBetterScore(best, candidate: score)
+	end 'eachCandidate'
+
+	if best == NoCompatibleOverloadScore 'nothingFits'
+		return OverloadVerdict.noMatch
+	end 'nothingFits'
+
+	var winners = RowIndexArray.create()
+
+	for i in 0 upto rows.count() 'eachWinner'
+		let score = try scores.get(i) otherwise panic("scoreOverloadAmong: scores.get OOB at {i} — one score was pushed per candidate")
+
+		if score == best 'winner'
+			winners.push(i)
+		end 'winner'
+	end 'eachWinner'
+
+	if winners.count() == 1 'unique'
+		return OverloadVerdict.chosen(try winners.get(0) otherwise panic("scoreOverloadAmong: winners.count() == 1 but get(0) failed"))
+	end 'unique'
+
+	return OverloadVerdict.tied(winners)
+end 'scoreOverloadAmong'
+
+function verdictFindsNoMember(verdict OverloadVerdict) returns bool
+	return match verdict 'verdict'
+		noMatch gives true
+		chosen or
+		tied gives false
+	end 'verdict'
+end 'verdictFindsNoMember'
+
+// The one decider: the parse (`Parser.pickDeclaration`) and overload resolution both ask it, and
+// resolution applies the answer the parse recorded, so the two cannot bind one call differently.
+module function selectOverload(signatures ProgramSignatures, interner TypeNameInterner, call OverloadCallFacts, rows OverloadCandidateArray, views OverloadArgArray) returns OverloadSelection
+	let pool = overloadPoolOf(signatures, rows: rows, call: call)
+	let first = scoreOverloadAmong(signatures, interner: interner, call: call, rows: pool.rows, views: views)
+
+	if pool.narrowed and verdictFindsNoMember(first) 'theNameableMembersFitNothing'
+		return OverloadSelection.create(scoreOverloadAmong(signatures, interner: interner, call: call, rows: rows, views: views), pool: rows)
+	end 'theNameableMembersFitNothing'
+
+	return OverloadSelection.create(first, pool: pool.rows)
+end 'selectOverload'
+
+module function nameableExactFits(signatures ProgramSignatures, interner TypeNameInterner, call OverloadCallFacts, rows OverloadCandidateArray, views OverloadArgArray) returns OverloadFitArray
+	var fits = OverloadFitArray.create()
+
+	for row in rows 'eachCandidate'
+		if not rowMayBeNamed(signatures, candidate: row, call: call) 'notNameableHere'
+			continue
+		end 'notNameableHere'
+
+		let fit = overloadFit(signatures, interner: interner, call: call, candidate: row, views: views)
+
+		if fit.standing == OverloadStanding.exact 'anExactFit'
+			fits.push(fit)
+		end 'anExactFit'
+	end 'eachCandidate'
+
+	return fits
+end 'nameableExactFits'
+
+module function overloadRowAt(pool OverloadCandidateArray, row ElementIndex) returns OverloadCandidate
+	return try pool.get(row) otherwise panic("overloadRowAt: pool.get OOB at {row} — a verdict names a row of the pool it was scored over")
+end 'overloadRowAt'
+
+module function overloadRowsAt(pool OverloadCandidateArray, rowIndices RowIndexArray) returns OverloadCandidateArray
+	var picked = OverloadCandidateArray.create()
+
+	for row in rowIndices 'eachRow'
+		picked.push(overloadRowAt(pool, row: row))
+	end 'eachRow'
+
+	return picked
+end 'overloadRowsAt'
+
+module function overloadAnswerOf(selection OverloadSelection) returns OverloadAnswer
+	return match selection.verdict 'verdict'
+		chosen(row) gives OverloadAnswer.bound(overloadRowAt(selection.pool, row: row).site)
+		tied(rowIndices) gives OverloadAnswer.tied(overloadSitesOf(overloadRowsAt(selection.pool, rowIndices: rowIndices)))
+		noMatch gives OverloadAnswer.noMember
+	end 'verdict'
+end 'overloadAnswerOf'
+
+function overloadSitesOf(rows OverloadCandidateArray) returns NameRoster
+	var sites = NameRoster.create()
+
+	for row in rows 'eachRow'
+		sites.push(row.site)
+	end 'eachRow'
+
+	return sites
+end 'overloadSitesOf'
+
+// ⚠ **A SWEPT `structRef` IS THE ONE REPAIRED TAG THAT CAN ARRIVE NON-CANONICAL, AND A TUPLE IS WHERE IT
+// SHOWS.** `canonicalNameOfStruct` is behind `allFilesFolded`, so the SWEEP spells a tuple by its
+// elements' SOURCE names (`__Tuple2.Tally.String`) while the real parse spells the same tuple by their
+// canonical ones (`__Tuple2.int.String`) — two names for one type, and a closure offered at a parameter
+// declared with a tuple-slot function alias was refused on the difference. Outermost step, because it
+// must see the name the three repairs and the scope crossing below settled on.
+module function canonicalizeSweptTupleName(signatures ProgramSignatures, interner TypeNameInterner, repaired MaxonType) returns MaxonType
+	if maxonTypeTag(repaired) != ValueTypeTag.structRef 'carriesNoStructName'
+		return repaired
+	end 'carriesNoStructName'
+
+	let name = try interner.nameOf(typeNameIdOf(repaired)) otherwise panic("canonicalizeSweptTupleName: structRef id {typeNameIdOf(repaired)} is not in the interner the caller named")
+	view canonical = signatures.canonicalNameOfStruct(name)
+
+	if canonical.equals(name) 'theSweepSpelledItCanonically'
+		return repaired
+	end 'theSweepSpelledItCanonically'
+
+	return MaxonType.structRef(interner.intern(canonical))
+end 'canonicalizeSweptTupleName'
+
+type ErasedSlot
+	module let erased as MaxonType
+	module let aggregate as ByteArray
+	module let range as DeclaredRange
+
+	static function create(erased MaxonType, aggregate ByteArray, range DeclaredRange) returns ErasedSlot
+		return Self{erased: erased, aggregate: aggregate, range: range}
+	end 'create'
+end 'ErasedSlot'
+
+function declaredRangeOfAlias(alias RangedTypeAlias) returns DeclaredRange
+	if aliasAdmitsEveryValue(alias) 'noValueIsRefused'
+		return DeclaredRange.whole
+	end 'noValueIsRefused'
+
+	return DeclaredRange.narrowed(alias.clone())
+end 'declaredRangeOfAlias'
+
+function declaredRangeOf(signatures ProgramSignatures, name ByteArray, readerFilePath FilePath) returns DeclaredRange
+	match signatures.declaredAliasOfSpelling(name, readerFilePath: readerFilePath) 'fileScope'
+		declared(alias) then return declaredRangeOfAlias(alias)
+		undeclared then break
+	end 'fileScope'
+
+	match signatures.qualifiedAliasOf(name, readerFilePath: readerFilePath) 'qualified'
+		declared(alias) then return declaredRangeOfAlias(alias)
+		undeclared then return DeclaredRange.whole
+	end 'qualified'
+end 'declaredRangeOf'
+
+function erasedSlotIn(signatures ProgramSignatures, interner TypeNameInterner, adopted MaxonType, scopeFilePath FilePath) returns ErasedSlot throws UnknownTypeName
+	let resolved = resolveNamedStruct(adopted, typeNames: interner, signatures: signatures, scopeFilePath: scopeFilePath)
+
+	if maxonTypeTag(resolved) != ValueTypeTag.named 'survivesResolution'
+		return ErasedSlot.create(canonicalizeSweptTupleName(signatures, interner: interner, repaired: resolved), aggregate: EmptySourceText, range: DeclaredRange.whole)
+	end 'survivesResolution'
+
+	let id = typeNameIdOf(resolved)
+	let name = try interner.nameOf(id) otherwise panic("erasedSlotIn: named id {id} is not in the interner the caller named")
+	let aggregate = signatures.namedIdentityOf(name, readerFilePath: scopeFilePath)
+
+	if let denoted = try denotedNamedType(signatures, name: name, id: id, readerFilePath: scopeFilePath) 'aDeclaredType'
+		return ErasedSlot.create(denoted, aggregate: aggregate, range: declaredRangeOf(signatures, name: name, readerFilePath: scopeFilePath))
+	end 'aDeclaredType'
+
+	return ErasedSlot.create(try denotedAliasForm(signatures, name: name, readerFilePath: scopeFilePath, into: interner), aggregate: aggregate, range: DeclaredRange.whole)
+end 'erasedSlotIn'
+
+module function declaredBrandInFile(signatures ProgramSignatures, spelled ByteArray, declFilePath FilePath) returns ByteArray
+	if spelled.isEmpty() 'nothingSpelled'
+		return EmptySourceText
+	end 'nothingSpelled'
+
+	if signatures.genericAliasMintIsABrand(spelled) 'aDeclarationsOwnMint'
+		return spelled
+	end 'aDeclarationsOwnMint'
+
+	if isCompilerReservedName(spelled) 'notAnAuthorsAlias'
+		return EmptySourceText
+	end 'notAnAuthorsAlias'
+
+	return signatures.genericBrandOfWritten(spelled, readerFilePath: declFilePath)
+end 'declaredBrandInFile'
+
+let UnreadParamDisplay = "?"
+
+function overloadParamOfDecl(signatures ProgramSignatures, interner TypeNameInterner, decl OverloadedDecl, index ElementIndex) returns OverloadParam
+	let swept = try decl.paramTypes.get(index) otherwise panic("overloadParamOfDecl: paramTypes.get OOB at {index} — the caller walks the declaration's own parameters")
+	let defaults = maskHasParam(decl.paramDefaults, param: index as ParamCount)
+	view spelled = decl.paramSpellingAt(index)
+
+	if maxonTypeTag(swept) == ValueTypeTag.unresolved 'aTypeTheSweepCouldNotRead'
+		return OverloadParam.unreadable(defaults, spelled: spelled, adopted: swept)
+	end 'aTypeTheSweepCouldNotRead'
+
+	let adopted = signatures.adoptType(swept, into: interner)
+
+	let slot = try erasedSlotIn(signatures, interner: interner, adopted: adopted, scopeFilePath: decl.declFilePath) otherwise 'anUndeclaredTypeName'
+		return OverloadParam.unreadable(defaults, spelled: spelled, adopted: adopted)
+	end 'anUndeclaredTypeName'
+
+	let declared = declaredBrandInFile(signatures, spelled: spelled, declFilePath: decl.declFilePath) if maxonTypeTag(slot.erased) == ValueTypeTag.genericInstance else EmptySourceText
+
+	return OverloadParam.of(slot, declared: declared, defaults: defaults, spelled: spelled, adopted: adopted)
+end 'overloadParamOfDecl'
+
+function shownParamType(param OverloadParam, interner TypeNameInterner) returns String
+	if not param.spelled.isEmpty() 'theAuthorsSpelling'
+		return String.from(param.spelled)
+	end 'theAuthorsSpelling'
+
+	if not param.readable and maxonTypeTag(param.adopted) == ValueTypeTag.unresolved 'aTypeNothingCouldRead'
+		return UnreadParamDisplay
+	end 'aTypeNothingCouldRead'
+
+	return maxonTypeName(param.adopted, typeNames: interner)
+end 'shownParamType'
+
+// `(name String), (label Age)` — each tied candidate's parameter list, receiver excluded, a ranged
+// alias shown by its name. `specs/function-overloads.md` pins the spellings.
+module function renderOverloadRows(rows OverloadCandidateArray, interner TypeNameInterner) returns String
+	var rendered = ""
+
+	for row in rows 'eachRow'
+		if not rendered.isEmpty() 'separator'
+			rendered = "{rendered}, "
+		end 'separator'
+
+		rendered = "{rendered}({renderOverloadRow(row, interner: interner)})"
+	end 'eachRow'
+
+	return rendered
+end 'renderOverloadRows'
+
+function renderOverloadRow(row OverloadCandidate, interner TypeNameInterner) returns String
+	var rendered = ""
+
+	for i in firstUserParamIndex(row.takesReceiver) upto row.params.count() as ParamCount 'eachParam'
+		let param = try row.params.get(i as ElementIndex) otherwise panic("renderOverloadRow: params.get OOB at {i} inside its own count()")
+		let paramName = try row.slotNames.get(i as ElementIndex) otherwise panic("renderOverloadRow: slotNames.get OOB at {i} — a row's slot names are aligned with its parameters")
+
+		if not rendered.isEmpty() 'separator'
+			rendered = "{rendered}, "
+		end 'separator'
+
+		rendered = "{rendered}{String.from(paramName)} {shownParamType(param, interner: interner)}"
+	end 'eachParam'
+
+	return rendered
+end 'renderOverloadRow'
+
+module function overloadRowOfDecl(signatures ProgramSignatures, interner TypeNameInterner, decl OverloadedDecl, registeredName ByteArray) returns OverloadCandidate
+	var params = OverloadParamArray.create()
+
+	if decl.takesReceiver 'receiverSlot'
+		params.push(OverloadParam.receiver())
+	end 'receiverSlot'
+
+	for i in 0 upto decl.paramTypes.count() 'eachParam'
+		params.push(overloadParamOfDecl(signatures, interner: interner, decl: decl, index: i))
+	end 'eachParam'
+
+	return OverloadCandidate.create(decl.site, registeredName: registeredName, slotNames: sweptSlotNames(decl), params: params, takesReceiver: decl.takesReceiver, visibility: decl.visibility, declFilePath: decl.declFilePath)
+end 'overloadRowOfDecl'
+
+module function overloadArgViews(args ValueIdArray, tags ValueTypeTagArray, nameIds TypeNameIdArray, brandIds TypeNameIdArray, interner TypeNameInterner, uncast LiteralCastMap) returns OverloadArgArray
+	var views = OverloadArgArray.create()
+
+	for arg in args 'eachArg'
+		if let cast = try uncast.get(arg) 'anUncastLiteral'
+			views.push(OverloadArg.create(cast.literalTag, nameId: UnnamedTypeId, brand: EmptySourceText))
+			continue
+		end 'anUncastLiteral'
+
+		let tag = try tags.get(arg) otherwise panic("overloadArgViews: value v{arg} has no recorded type — every SSA value is minted through mintValue")
+		let nameId = try nameIds.get(arg) otherwise panic("overloadArgViews: value v{arg} has no recorded type name — the two type columns are minted in lockstep")
+		let brandId = try brandIds.get(arg) otherwise panic("overloadArgViews: value v{arg} has no brand slot — the brand column is pushed in lockstep with the type columns")
+		let brand = try interner.nameOf(brandId) otherwise panic("overloadArgViews: brand id {brandId} is not in the interner the caller named")
+
+		views.push(OverloadArg.create(tag, nameId: nameId, brand: brand))
+	end 'eachArg'
+
+	return views
+end 'overloadArgViews'

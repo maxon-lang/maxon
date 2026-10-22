@@ -605,6 +605,8 @@ enum SignatureDiscriminator
 	// throws clause enters a content hash.
 	throwsShapeNone = 53
 	throwsShapeThrowing = 54
+
+	declShapeOverloadParams = 149
 end 'SignatureDiscriminator'
 
 // The discriminator for one backing. A `match` rather than a chained `if`, so a new backing cannot be added
@@ -7086,8 +7088,8 @@ export type ParamDefaultInfo
 	// over, and the same reason it exists: the sweep keys by bare name and an overload set shares one key.
 	//
 	// ⭐ **IT COMPARES THE SHAPE, WHICH IS EVERYTHING EXCEPT THE DEFAULT'S EXPRESSION** — and that is the whole
-	// of what makes per-overload defaults expressible. A call's argument list is BUILT while the call is parsed
-	// and the overload is picked a whole pass later, so every fact the fill commits to must be one every member
+	// of what makes per-overload defaults expressible. A call's argument list is BUILT while the call is parsed,
+	// from the one default shape the shared key files, so every fact the fill commits to must be one every member
 	// agrees on: the call-aligned parameter NAMES (which decide what a labelled argument occupies), and per
 	// position what PRODUCES the default (which decides how many arguments the fill appends, and what ops it
 	// emits for each). Two members that agree on all of that are filled identically whichever one wins, so
@@ -16563,28 +16565,6 @@ end 'cacheReadFunctionDeclSiteMap'
 
 // @generated library-cache end
 
-// ⭐⭐⭐ **ONE DECLARATION OF AN OVERLOADED NAME, AS THE CALL SIDE HAS TO SEE IT — the parameter-type
-// SPELLINGS the whole-program sweep publishes so that a call can read the return type of the overload IT
-// MEANS rather than of whichever declaration was swept last.**
-//
-// ⛔⛔ **THE LAST-WINS `returnTypes` ENTRY IS WHY THIS EXISTS, AND WHAT IT COST WAS A WRONG ANSWER AND A
-// CRASH.** A call's result type is fixed while its own file is parsed (`Parser.mintCallResult`) and the
-// overload is chosen a whole pass later (`SemanticCheck.resolveOverloadedCalls`), so with ONE return type
-// per NAME every call to an overloaded name was typed from one member's declaration. MEASURED, both
-// directions: `emit(flag bool)` beside `emit(tag int) returns String`, called `emit(true)`, compiled clean
-// and died with an ACCESS VIOLATION (a scope-exit drop spent on a register the void member never wrote);
-// the mirror LEAKED. And a `pick(s String)` in one file beside a `pick(n Cnt)` in another — the shape two
-// `stdlib/` modules each need for a private helper — was **`E3005: Cannot return 'int' from function
-// declared to return 'String'`**, raised inside the file that is CORRECT.
-//
-// ⚠ **`paramNames`/`paramTypes` ARE SOURCE-ALIGNED, RECEIVER EXCLUDED** — `takesReceiver` says whether a
-// call's argument list carries one ahead of them. That is the alignment `overloadTypeSuffix` and every
-// overload key already use, and for their reason: within one registration base every member agrees about
-// receiver-presence, so the receiver distinguishes nothing and carrying it would only be a slot to
-// mis-index.
-//
-// ⚠ **A PARAMETER THE SWEEP COULD NOT READ IS `MaxonType.unresolved`** (`Parser.sweptParamTypeAt`), and a
-// declaration carrying one is UNSCOREABLE rather than matching. See `SweptOverloadFit`.
 // ⭐ **THE ANSWER `ProgramSignatures.constFactoryConstructionAmong` GIVES — a factory the const evaluator may
 // rewrite into a construction, with the two facts that rewriting needs, or nothing.** One union
 // rather than two accessors because the layout and the parameter names are only meaningful together: the
@@ -16613,37 +16593,60 @@ type DeclaredParam
 	end 'create'
 end 'DeclaredParam'
 
+// ⭐⭐⭐ **ONE DECLARATION OF AN OVERLOADED NAME, AS THE CALL SIDE HAS TO SEE IT — what the whole-program
+// sweep publishes about its parameters, from which the parse and overload resolution both build its one
+// candidate row (`overloadRowOfDecl`).**
+//
+// ⛔⛔ **THE LAST-WINS `returnTypes` ENTRY IS WHY THIS EXISTS.** A call's result type is fixed while its own
+// file is parsed (`Parser.mintCallResult`), and ONE return type per NAME would type every call to an
+// overloaded name from one member's declaration: a scope-exit drop spent on a register a void member never
+// wrote, a leak in the mirror, and a refusal raised inside the file that is correct.
+//
+// ⚠ **`paramNames`/`paramTypes` ARE SOURCE-ALIGNED, RECEIVER EXCLUDED** — `takesReceiver` says whether a
+// call's argument list carries one ahead of them. That is the alignment `overloadTypeSuffix` and every
+// overload key already use, and for their reason: within one registration base every member agrees about
+// receiver-presence, so the receiver distinguishes nothing and carrying it would only be a slot to
+// mis-index.
+//
+// ⚠ **A PARAMETER THE SWEEP COULD NOT READ IS `MaxonType.unresolved`** (`Parser.sweptParamTypeAt`), and it
+// fits no argument (`OverloadParam.unreadable`).
 export type OverloadedDecl
 	export let paramNames as NameRoster
 	export let paramTypes as MaxonTypeArray
-	export let paramDeclaredBrands as NameRoster
+	export let paramSpellings as NameRoster
+	export let paramDefaults as ParamPositionMask
 	export let takesReceiver as bool
 	export let returnType as MaxonReturnType
 	export let visibility as Visibility
 	export let declFilePath as FilePath
 	export let site as ByteArray
 
-	export static function create(paramNames NameRoster, paramTypes MaxonTypeArray, paramDeclaredBrands NameRoster, takesReceiver bool, returnType MaxonReturnType, visibility Visibility, declFilePath FilePath, site ByteArray) returns OverloadedDecl
-		return Self{paramNames: paramNames, paramTypes: paramTypes, paramDeclaredBrands: paramDeclaredBrands, takesReceiver: takesReceiver, returnType: returnType, visibility: visibility, declFilePath: declFilePath, site: site}
+	export static function create(paramNames NameRoster, paramTypes MaxonTypeArray, paramSpellings NameRoster, paramDefaults ParamPositionMask, takesReceiver bool, returnType MaxonReturnType, visibility Visibility, declFilePath FilePath, site ByteArray) returns OverloadedDecl
+		return Self{paramNames: paramNames, paramTypes: paramTypes, paramSpellings: paramSpellings, paramDefaults: paramDefaults, takesReceiver: takesReceiver, returnType: returnType, visibility: visibility, declFilePath: declFilePath, site: site}
 	end 'create'
+
+	module function paramSpellingAt(index ElementIndex) returns ByteArray
+		return try self.paramSpellings.get(index) otherwise panic("OverloadedDecl.paramSpellingAt: paramSpellings.get OOB at {index} — the sweep pushes one spelling beside every parameter type it records")
+	end 'paramSpellingAt'
 
 	// This declaration with a re-decided return type — the one edit the three whole-program rewrites make
 	// (`ProgramSignatures.rewriteOverloadedDeclReturnTypes`). A fresh record rather than a field write,
 	// because every column here is a `let`: what a declaration SAID does not change, only what the index has
 	// since worked out that it MEANS.
 	export function withReturnType(rewritten MaxonReturnType) returns OverloadedDecl
-		return Self{paramNames: self.paramNames, paramTypes: self.paramTypes, paramDeclaredBrands: self.paramDeclaredBrands, takesReceiver: self.takesReceiver, returnType: rewritten, visibility: self.visibility, declFilePath: self.declFilePath, site: self.site}
+		return Self{paramNames: self.paramNames, paramTypes: self.paramTypes, paramSpellings: self.paramSpellings, paramDefaults: self.paramDefaults, takesReceiver: self.takesReceiver, returnType: rewritten, visibility: self.visibility, declFilePath: self.declFilePath, site: self.site}
 	end 'withReturnType'
 
 	export function withParamTypes(rewritten MaxonTypeArray) returns OverloadedDecl
-		return Self{paramNames: self.paramNames, paramTypes: rewritten, paramDeclaredBrands: self.paramDeclaredBrands, takesReceiver: self.takesReceiver, returnType: self.returnType, visibility: self.visibility, declFilePath: self.declFilePath, site: self.site}
+		return Self{paramNames: self.paramNames, paramTypes: rewritten, paramSpellings: self.paramSpellings, paramDefaults: self.paramDefaults, takesReceiver: self.takesReceiver, returnType: self.returnType, visibility: self.visibility, declFilePath: self.declFilePath, site: self.site}
 	end 'withParamTypes'
 
 	// @generated library-cache begin
 	function cacheWrite(writer LibraryCacheWriter)
 		cacheWriteNameRoster(writer, value: self.paramNames)
 		cacheWriteMaxonTypeArray(writer, value: self.paramTypes)
-		cacheWriteNameRoster(writer, value: self.paramDeclaredBrands)
+		cacheWriteNameRoster(writer, value: self.paramSpellings)
+		writer.unsigned(self.paramDefaults as CacheUnsigned)
 		writer.flag(self.takesReceiver)
 		cacheWriteMaxonReturnType(writer, value: self.returnType)
 		writer.unsigned(self.visibility.ordinal as CacheUnsigned)
@@ -16654,18 +16657,19 @@ export type OverloadedDecl
 	static function cacheRead(reader LibraryCacheReader) returns OverloadedDecl throws LibraryCacheDamage
 		let f_paramNames = try cacheReadNameRoster(reader)
 		let f_paramTypes = try cacheReadMaxonTypeArray(reader)
-		let f_paramDeclaredBrands = try cacheReadNameRoster(reader)
+		let f_paramSpellings = try cacheReadNameRoster(reader)
+		let f_paramDefaults = (try reader.unsigned()) as ParamPositionMask
 		let f_takesReceiver = try reader.flag()
 		let f_returnType = try cacheReadMaxonReturnType(reader)
 		let f_visibility = try cacheReadVisibility(reader)
 		let f_declFilePath = try reader.path()
 		let f_site = try reader.bytes()
 
-		return Self{paramNames: f_paramNames, paramTypes: f_paramTypes, paramDeclaredBrands: f_paramDeclaredBrands, takesReceiver: f_takesReceiver, returnType: f_returnType, visibility: f_visibility, declFilePath: f_declFilePath, site: f_site}
+		return Self{paramNames: f_paramNames, paramTypes: f_paramTypes, paramSpellings: f_paramSpellings, paramDefaults: f_paramDefaults, takesReceiver: f_takesReceiver, returnType: f_returnType, visibility: f_visibility, declFilePath: f_declFilePath, site: f_site}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize64
-		return sizeof(OverloadedDecl) as CacheSize64
+	static function cacheLayoutBytes() returns CacheSize72
+		return sizeof(OverloadedDecl) as CacheSize72
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -20708,11 +20712,11 @@ export type ProgramSignatures
 	// conditional does not reconcile the two ownerships, so the build exits 101.
 	function recordScannedSignature(entry FuncReturnTypeEntry, name ByteArray, moduleDirectory String, declFilePath FilePath, remap TypeIdRemap)
 		if not remap.movesAnything() 'idsUnchanged'
-			self.record(name, moduleDirectory: moduleDirectory, returnType: entry.returnType, declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: declFilePath, takesReceiver: entry.takesReceiver, opaqueParams: entry.opaqueParams, paramNames: entry.paramNames, paramTypes: entry.paramTypes, paramDeclaredBrands: entry.paramDeclaredBrands, returnAliasName: entry.returnAliasName, nameLine: entry.nameLine, nameColumn: entry.nameColumn, enclosingTypeName: entry.enclosingTypeName)
+			self.record(name, moduleDirectory: moduleDirectory, returnType: entry.returnType, declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: declFilePath, takesReceiver: entry.takesReceiver, opaqueParams: entry.opaqueParams, paramNames: entry.paramNames, paramTypes: entry.paramTypes, paramSpellings: entry.paramSpellings, paramDefaults: entry.paramDefaults, returnAliasName: entry.returnAliasName, nameLine: entry.nameLine, nameColumn: entry.nameColumn, enclosingTypeName: entry.enclosingTypeName)
 			return
 		end 'idsUnchanged'
 
-		self.record(name, moduleDirectory: moduleDirectory, returnType: remapMaxonReturnType(entry.returnType, remap: remap), declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: declFilePath, takesReceiver: entry.takesReceiver, opaqueParams: entry.opaqueParams, paramNames: entry.paramNames, paramTypes: remapMaxonTypes(entry.paramTypes, remap: remap), paramDeclaredBrands: entry.paramDeclaredBrands, returnAliasName: entry.returnAliasName, nameLine: entry.nameLine, nameColumn: entry.nameColumn, enclosingTypeName: entry.enclosingTypeName)
+		self.record(name, moduleDirectory: moduleDirectory, returnType: remapMaxonReturnType(entry.returnType, remap: remap), declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: declFilePath, takesReceiver: entry.takesReceiver, opaqueParams: entry.opaqueParams, paramNames: entry.paramNames, paramTypes: remapMaxonTypes(entry.paramTypes, remap: remap), paramSpellings: entry.paramSpellings, paramDefaults: entry.paramDefaults, returnAliasName: entry.returnAliasName, nameLine: entry.nameLine, nameColumn: entry.nameColumn, enclosingTypeName: entry.enclosingTypeName)
 	end 'recordScannedSignature'
 
 	function recordSweptDefaultHelpers(info ParamDefaultInfo, helpers SweptDefaultHelperArray, bareName ByteArray, registrationName ByteArray, moduleDirectory String, declFilePath FilePath, remap TypeIdRemap)
@@ -20760,7 +20764,7 @@ export type ProgramSignatures
 	// ⭐⭐ **THE KEY IS NOT ALWAYS `name`: A `static` MEMBER WHOSE NAME AN INSTANCE MEMBER ALSO WEARS IS FILED
 	// UNDER ITS OWN** — see `noteStaticInstanceDeclaration`, which is asked first because every write below has
 	// to land on one key.
-	function record(name ByteArray, moduleDirectory String, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, declFilePath FilePath, takesReceiver bool, opaqueParams OpaqueParamInfo, paramNames NameRoster, paramTypes MaxonTypeArray, paramDeclaredBrands NameRoster, returnAliasName ReturnAliasSpelling, nameLine LineNumber, nameColumn ColumnNumber, enclosingTypeName ByteArray)
+	function record(name ByteArray, moduleDirectory String, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, declFilePath FilePath, takesReceiver bool, opaqueParams OpaqueParamInfo, paramNames NameRoster, paramTypes MaxonTypeArray, paramSpellings NameRoster, paramDefaults ParamPositionMask, returnAliasName ReturnAliasSpelling, nameLine LineNumber, nameColumn ColumnNumber, enclosingTypeName ByteArray)
 		self.noteStaticInstanceDeclaration(name, takesReceiver: takesReceiver)
 		let key = self.sweepRegistrationKey(name, moduleDirectory: moduleDirectory, takesReceiver: takesReceiver)
 
@@ -20798,7 +20802,7 @@ export type ProgramSignatures
 
 		// ⭐ **APPENDED, NEVER UPSERTED — this is the one registry here that keeps EVERY declaration of a key
 		// rather than the last.** Being able to tell two members of a set apart is the whole of what it is for.
-		self.recordOverloadedDecl(key, decl: OverloadedDecl.create(paramNames, paramTypes: paramTypes, paramDeclaredBrands: paramDeclaredBrands, takesReceiver: takesReceiver, returnType: returnType, visibility: visibility, declFilePath: declFilePath, site: declarationSiteKey(declFilePath, line: nameLine, column: nameColumn)))
+		self.recordOverloadedDecl(key, decl: OverloadedDecl.create(paramNames, paramTypes: paramTypes, paramSpellings: paramSpellings, paramDefaults: paramDefaults, takesReceiver: takesReceiver, returnType: returnType, visibility: visibility, declFilePath: declFilePath, site: declarationSiteKey(declFilePath, line: nameLine, column: nameColumn)))
 
 		// ⭐ **THE OPAQUE-PARAMETER POSITIONS ARE WRITTEN HERE, WITH THE DECLARATION THEY DESCRIBE** —
 		// the same one-act discipline `declaredSurface`, `visibility` and `takesReceiver` ride on, and for
@@ -20832,7 +20836,7 @@ export type ProgramSignatures
 		// moment the pair exists, so a program that starts or stops being one cannot leave a reader's parse
 		// memo valid. (`declShapeContestedExtensionMethod` needs one precisely because THAT contest is minted by
 		// the parser, leaving nothing here to move.)
-		self.hash = self.mixDeclaration(self.hash, name: key, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, declFilePath: declFilePath, takesReceiver: takesReceiver, opaqueParams: opaqueParams)
+		self.hash = self.mixDeclaration(self.hash, name: key, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, declFilePath: declFilePath, takesReceiver: takesReceiver, opaqueParams: opaqueParams, paramNames: paramNames, paramTypes: paramTypes, paramSpellings: paramSpellings, paramDefaults: paramDefaults)
 		self.noteDeclaredName(key)
 	end 'record'
 
@@ -27609,10 +27613,8 @@ export type ProgramSignatures
 	// ⛔⛔ **CARRYING THE NAME IS MEASURED WORSE: it turns a wrong answer into a COMPILER PANIC.**
 	// `maxonTypeOfTag(value.tag, nameId: self.typeNames.intern(value.typeName))` makes the type a
 	// `named(<id in THIS index's table>)`, and the moment that type becomes a generic instance's ARGUMENT the
-	// reader is `SemanticCheck.aggregateNameFor`, which speaks the PROJECT interner:
-	// `panic at SemanticCheck.maxon:5798: aggregateNameFor: named id 314 is not in the project interner — a
-	// named value's name id is remapped project-global at merge (mergeArtifact)`, on
-	// `var m = [b"a": Kind.one, b"b": Kind.two]`. A file's artifact ids ARE remapped at merge; the evaluator is
+	// reader is `aggregateNameIn` handed the PROJECT interner, which panics on an id that interner does not
+	// hold (`var m = [b"a": Kind.one, b"b": Kind.two]`). A file's artifact ids ARE remapped at merge; the evaluator is
 	// a THROWAWAY parser whose artifact is never merged, so this index's ids are not.
 	//
 	// ⇒ **The top-level map literal REFUSES an enum column instead** (`Parser.requireConstMapColumnIsNameable`),
@@ -29104,8 +29106,8 @@ export type ProgramSignatures
 	end 'isRangedAliasIdentity'
 
 	// ⭐⭐ **THE NOMINAL IDENTITY A `named` TYPE NAME CARRIES FOR `readerFilePath`, OR `EmptySourceText`** —
-	// the one door every extractor's `named` arm asks (`Parser.aggregateNameOf`,
-	// `SemanticCheck.aggregateNameFor`, `typeArgAggregateName`), so a signature's stored identity, a live
+	// the one door every extractor's `named` arm asks (`aggregateNameIn`, `typeArgAggregateName`), so a
+	// signature's stored identity, a live
 	// value's and a type argument's cannot disagree about one name. `named` is overloaded: a declared
 	// struct/union/enum carries its own name, a per-instance alias (`IntWrapper.Idx`) its qualified name, a
 	// plain ranged alias the identity `rangedIdentityOfSpelling` spells. A nominal declaration held only for
@@ -29661,6 +29663,10 @@ export type ProgramSignatures
 
 		throw AbsentError.absent
 	end 'misclosedBlockIn'
+
+	export function declaredInTheRuntimeTier(declFilePath FilePath) returns bool
+		return self.settledDeclarations().runtimeFilePaths.contains(declFilePath.toString())
+	end 'declaredInTheRuntimeTier'
 
 	// The `stdlib/` part of the library — the files a `stdlib.X` spelling names. A `runtime/` file is the
 	// library's too, and has no qualifier an author can write; a scriptlib file is named by its package's
@@ -31042,8 +31048,8 @@ export type ProgramSignatures
 	// generic-instance alias whose base declares an inner alias `member`.
 	// ⚠ **THE PREFIX IS RESOLVED AS `readerFilePath` MEANS IT, AND THE FILE-LESS FORM IS A COMPILER
 	// PANIC.** The prefix is a generic-alias NAME, so for a name two files declare over different bases the
-	// bare door refuses outright — MEASURED, from `Parser.aggregateNameOf` on a program writing `W.Idx` where
-	// two files declare `W`: the compiler aborts. Every caller
+	// bare door refuses outright — from `aggregateNameIn` on a program writing `W.Idx` where two files
+	// declare `W`, the compiler aborts. Every caller
 	// that resolves a SOURCE spelling has a file; the two that structurally cannot pass
 	// `CompilerOwnedDeclFilePath`, which resolves like a stranger — the same convention
 	// `contestScopedDeclaredType` states for a layout no file declares.
@@ -31059,7 +31065,7 @@ export type ProgramSignatures
 		// ⭐ **`scopedGenericAliasInstance` AND NOT `genericAliasInstanceFrom`, AND THE DIFFERENCE IS BOTH HALVES
 		// OF WHAT THIS SITE NEEDS.** The first picks WHICH DECLARATION the reader means — a pure map probe. The
 		// second then re-scopes that instance's ARGUMENTS, which interns, and interning MUTATES: this door is
-		// asked from `SemanticCheck.aggregateNameFor`, which holds the memoized index immutably and would be
+		// asked from `aggregateNameIn`, which holds the memoized index immutably and would be
 		// refused (E3159). It is also work this site cannot use — an instance's BASE is invariant under
 		// argument scoping, and the base is the whole of what a per-instance alias reads off the prefix.
 		return joinQualifiedName(self.genericInstanceBaseName(self.scopedGenericAliasInstance(prefix, readerFilePath: readerFilePath)), member: member)
@@ -31081,10 +31087,10 @@ export type ProgramSignatures
 	// and, at the two symmetric merges, the value the phi ADOPTS (the try's result, the first arm). The byte
 	// boundary is one-way for that reason and no other; see `byteBufferBoundaryAdmits`.
 	//
-	// ⚠ **THE (tag, nameId) PAIRS RIDE BESIDE THE NAMES RATHER THAN REPLACING THEM.** Three producers spell
-	// the name (`Parser.aggregateNameOf`, `SemanticCheck.aggregateNameFor`, `typeArgAggregateName`), one
-	// per interner, so this index cannot re-derive it — but the pair it needs is interner-independent, since
-	// a `genericInstance` carries a whole-program `GenericInstanceId` in all three.
+	// ⚠ **THE (tag, nameId) PAIRS RIDE BESIDE THE NAMES RATHER THAN REPLACING THEM.** The name is spelled
+	// against the asker's interner (`aggregateNameIn`, `typeArgAggregateName`), so this index cannot
+	// re-derive it — but the pair it needs is interner-independent, since a `genericInstance` carries a
+	// whole-program `GenericInstanceId` in every interner.
 	//
 	// ⭐⭐ **A SCALAR WEARING A NAME DECAYS IN BOTH DIRECTIONS, AND THAT IS THE WHOLE OF THE DECAY RULE.** A
 	// ranged typealias and a per-instance `Idx` are integers whose only nominal content is the name, so a
@@ -31161,7 +31167,7 @@ export type ProgramSignatures
 	// which mints an `InnerAliasParamLookup` union — a heap box — on every call. When this
 	// answers false — every generics-free program, and any program with no per-instance method parameter —
 	// no callee could ever be found, so the check returns without the per-call box. Mirrors the parser's
-	// own `enclosingInnerAliases.count() != 0` gate and `aggregateNameFor`'s `containsQualifier` gate.
+	// own `enclosingInnerAliases.count() != 0` gate and `aggregateNameIn`'s `containsQualifier` gate.
 	export function hasInnerAliasParams() returns bool
 		return self.settledDeclarations().methodInnerAliasParams.count() != 0
 	end 'hasInnerAliasParams'
@@ -35541,10 +35547,10 @@ export type ProgramSignatures
 	//     end 'cwd'
 	//
 	// ⇒ the door is folded into `aggregatesConflict`, which every one of those sites already asked and which
-	// now takes each side's (tag, nameId) beside its aggregate NAME. That shape is forced: THREE producers
-	// spell the name those sites compare (`Parser.aggregateNameOf`, `SemanticCheck.aggregateNameFor`,
-	// `typeArgAggregateName`, one per interner), so the name cannot be re-derived here — but the pair
-	// CAN be passed, because a `genericInstance`'s id is whole-program in all three. Spelling
+	// now takes each side's (tag, nameId) beside its aggregate NAME. That shape is forced: the name those
+	// sites compare is spelled against the asker's interner (`aggregateNameIn`, `typeArgAggregateName`), so
+	// it cannot be re-derived here — but the pair CAN be passed, because a `genericInstance`'s id is
+	// whole-program in every interner. Spelling
 	// `namedAggregatesConflict(…) and not byteBufferBoundaryAdmits(…)` at each site instead would be the
 	// one-fact-two-answers shape this door exists to end, and is exactly how seven of them came to disagree.
 	// `specs/bytearray-element-size.md`'s `a-synthesized-buffer-crosses-every-declared-byte-buffer-door`
@@ -36186,18 +36192,18 @@ export type ProgramSignatures
 		return try self.settledDeclarations().overloadedDecls.get(key) otherwise sharedNoOverloadedDecls
 	end 'overloadedDeclsOf'
 
-	function declarationIsVisibleFrom(declaration OverloadedDecl, readerFilePath FilePath) returns bool
-		return self.isVisibleFrom(declaration.visibility, declFilePath: declaration.declFilePath, readerFilePath: readerFilePath)
+	function declarationIsVisibleFrom(key ByteArray, declaration OverloadedDecl, readerFilePath FilePath) returns bool
+		return declarationMayBeNamed(self, visibility: declaration.visibility, declFilePath: declaration.declFilePath, registeredName: key, readerFilePath: readerFilePath, callerName: EmptySourceText)
 	end 'declarationIsVisibleFrom'
 
-	function templateIsVisibleFrom(template GenericFunctionTemplate, readerFilePath FilePath) returns bool
-		return self.isVisibleFrom(template.visibility, declFilePath: template.declFilePath, readerFilePath: readerFilePath)
+	function templateIsVisibleFrom(key ByteArray, template GenericFunctionTemplate, readerFilePath FilePath) returns bool
+		return declarationMayBeNamed(self, visibility: template.visibility, declFilePath: template.declFilePath, registeredName: key, readerFilePath: readerFilePath, callerName: EmptySourceText)
 	end 'templateIsVisibleFrom'
 
 	// Every declaration rather than the last, because the members of one key may state different tiers.
-	export function declaresAFunctionVisibleFrom(key ByteArray, readerFilePath FilePath) returns bool
+	function declaresAFunctionVisibleFrom(key ByteArray, readerFilePath FilePath) returns bool
 		for declaration in self.overloadedDeclsOf(key) 'eachDeclaration'
-			if self.declarationIsVisibleFrom(declaration, readerFilePath: readerFilePath) 'nameableHere'
+			if self.declarationIsVisibleFrom(key, declaration: declaration, readerFilePath: readerFilePath) 'nameableHere'
 				return true
 			end 'nameableHere'
 		end 'eachDeclaration'
@@ -36205,11 +36211,11 @@ export type ProgramSignatures
 		return false
 	end 'declaresAFunctionVisibleFrom'
 
-	export function declarationsVisibleFrom(callee ByteArray, readerFilePath FilePath) returns OverloadedDeclArray
+	function declarationsVisibleFrom(callee ByteArray, readerFilePath FilePath) returns OverloadedDeclArray
 		var visible = OverloadedDeclArray.create()
 
 		for declaration in self.overloadedDeclsOf(callee) 'eachDeclaration'
-			if self.declarationIsVisibleFrom(declaration, readerFilePath: readerFilePath) 'thisReaderMeansIt'
+			if self.declarationIsVisibleFrom(callee, declaration: declaration, readerFilePath: readerFilePath) 'thisReaderMeansIt'
 				visible.push(declaration)
 			end 'thisReaderMeansIt'
 		end 'eachDeclaration'
@@ -36217,13 +36223,13 @@ export type ProgramSignatures
 		return visible
 	end 'declarationsVisibleFrom'
 
-	export function soleVisibleDeclarationOf(callee ByteArray, readerFilePath FilePath) returns OverloadedDecl throws MapError
+	function soleVisibleDeclarationOf(callee ByteArray, readerFilePath FilePath) returns OverloadedDecl throws MapError
 		view declarations = self.overloadedDeclsOf(callee)
 		var soleIndex = 0 as ElementIndex
 		var visibleCount = 0 as ElementIndex
 
 		for (iter, declaration) in declarations.withIterator() 'eachDeclaration'
-			if self.declarationIsVisibleFrom(declaration, readerFilePath: readerFilePath) 'thisReaderMeansIt'
+			if self.declarationIsVisibleFrom(callee, declaration: declaration, readerFilePath: readerFilePath) 'thisReaderMeansIt'
 				soleIndex = iter.index()
 				visibleCount = visibleCount + 1
 			end 'thisReaderMeansIt'
@@ -39185,7 +39191,7 @@ export type ProgramSignatures
 
 	// The recursive half, carrying the instances already open on this walk.
 	//
-	// ⚠ **THE PATH GUARD IS LOAD-BEARING, because this runs in the PARSER** — `aggregateNameOf` asks it, and
+	// ⚠ **THE PATH GUARD IS LOAD-BEARING, because this runs in the PARSER** — `aggregateNameIn` asks it, and
 	// the parse completes before `checkGenericAliasCycles` (E3091) refuses a cyclic alias. Resolving alias
 	// arguments is exactly what makes `typealias A = Box with A` a cycle here, where `mangleTypeArg` never
 	// followed one. On revisit it falls back to the INTERNED name, which terminates and is deterministic;
@@ -39255,7 +39261,7 @@ export type ProgramSignatures
 		//
 		// ⛔ **THE ALIAS'S NAME, NEVER ITS RANGE.** Two aliases over one range are two types, so the name IS
 		// the identity here — and this string is rendered into diagnostics through `instanceDisplayName`'s
-		// fallback and through `aggregateNameOf`, where this tree's standing rule is that an alias is quoted
+		// fallback and through `aggregateNameIn`, where this tree's standing rule is that an alias is quoted
 		// AS SOURCE SPELLS IT.
 		if maxonTypeTag(t) == ValueTypeTag.named 'namedLeaf'
 			return String.from(self.nameOfId(typeNameIdOf(t)))
@@ -39267,7 +39273,7 @@ export type ProgramSignatures
 	// ⭐ **DERIVE EVERY SWEPT INSTANCE'S NAMES NOW, SO THEY ARE PART OF THE SETTLED BASELINE.**
 	//
 	// `mangleGenericInstance` and `canonicalInstanceName` memoize by WRITING, and the parse asks both
-	// (`Parser.aggregateNameOf`). Warmed here, a name a parse reads for a swept instance is baseline data every
+	// (`aggregateNameIn`). Warmed here, a name a parse reads for a swept instance is baseline data every
 	// file sees alike; a name derived for a row the parse itself mints is journaled and undone at the band's
 	// close (`ProgramSignatures.closeParseBand`).
 	export function deriveInstanceNames()
@@ -39505,10 +39511,9 @@ export type ProgramSignatures
 
 	// ⭐ **THE NOMINAL IDENTITY OF AN INSTANCE'S SUBSTITUTED TYPE ARGUMENT** — what a parameter
 	// declared with the bare type parameter `T` actually demands at a call made through that instance. It is
-	// the third source of the aggregate name `namedAggregatesConflict` compares, beside the parser's
-	// `aggregateNameOf` and SemanticCheck's `aggregateNameFor`, and it exists for the reason those two are
-	// twins rather than one function: the name is resolved against a DIFFERENT interner — an instance's
-	// argument types are interned HERE, not in the merged `project.typeNames`. The comparison RULE is still
+	// the second source of the aggregate name `namedAggregatesConflict` compares, beside `aggregateNameIn`,
+	// and its name is resolved against a DIFFERENT interner — an instance's argument types are interned
+	// HERE, not in the merged `project.typeNames`. The comparison RULE is still
 	// the single shared one, and so is the `named` arm's rule (`namedIdentityOf`); only the id-to-name step
 	// is local.
 	//
@@ -41971,6 +41976,11 @@ export type ProgramSignatures
 	export function containsEnumInAnyFile(name ByteArray) returns bool
 		return self.settledDeclarations().enumTypes.contains(name)
 	end 'containsEnumInAnyFile'
+
+	export function enumNameIsBoxed(name ByteArray) returns bool
+		let layout = try self.settledDeclarations().enumTypes.get(name) otherwise return false
+		return layout.isBoxed()
+	end 'enumNameIsBoxed'
 
 	// ⭐ **THE ONE RUNTIME ENTRY THAT DROPS AN OWNED BOX OF UNION `unionName`** — `__destruct_<U>` for a
 	// managed-payload union (its own tag-conditional cascade), the trivial `__mm_decref` for a scalar-only
@@ -45718,11 +45728,30 @@ export type ProgramSignatures
 	// on a method decides whether a bare `helper()` in ANOTHER file's `extension` body resolves — and, when it
 	// does, whether the call carries the enclosing `self` — so the answer is baked into that file's memoized
 	// parse and the key that memo is validated against has to move with it.
-	function mixDeclaration(state HashDigest, name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, declFilePath FilePath, takesReceiver bool, opaqueParams OpaqueParamInfo) returns HashDigest
+	function mixDeclaration(state HashDigest, name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, declFilePath FilePath, takesReceiver bool, opaqueParams OpaqueParamInfo, paramNames NameRoster, paramTypes MaxonTypeArray, paramSpellings NameRoster, paramDefaults ParamPositionMask) returns HashDigest
 		let named = self.mixReturnType(mixBytes(state, bytes: name), returnType: returnType)
 		let tiered = mixDeclaringTier(mixSurface(Hasher.combined(named, value: SignatureDiscriminator.returnShapeSurface), surface: declaredSurface), visibility: visibility, declFilePath: declFilePath)
-		return mixOpaqueParams(Hasher.combined(tiered, value: SignatureDiscriminator.receiverShapePresent if takesReceiver else SignatureDiscriminator.receiverShapeAbsent), opaqueParams: opaqueParams)
+		let received = mixOpaqueParams(Hasher.combined(tiered, value: SignatureDiscriminator.receiverShapePresent if takesReceiver else SignatureDiscriminator.receiverShapeAbsent), opaqueParams: opaqueParams)
+		return self.mixOverloadParams(received, paramNames: paramNames, paramTypes: paramTypes, paramSpellings: paramSpellings, paramDefaults: paramDefaults)
 	end 'mixDeclaration'
+
+	function mixOverloadParams(state HashDigest, paramNames NameRoster, paramTypes MaxonTypeArray, paramSpellings NameRoster, paramDefaults ParamPositionMask) returns HashDigest
+		if paramNames.isEmpty() 'declaresNoParameter'
+			return state
+		end 'declaresNoParameter'
+
+		var mixed = Hasher.combined(state, value: SignatureDiscriminator.declShapeOverloadParams)
+
+		for i in 0 upto paramNames.count() 'eachParameter'
+			let paramName = try paramNames.get(i) otherwise panic("mixOverloadParams: paramNames.get OOB at {i} despite i < count")
+			let paramType = try paramTypes.get(i) otherwise panic("mixOverloadParams: paramTypes.get OOB at {i} — the sweep pushes a parameter's name and type in lockstep")
+			let brand = try paramSpellings.get(i) otherwise panic("mixOverloadParams: paramSpellings.get OOB at {i} — the sweep pushes a parameter's spelling beside its type")
+			let defaultBit = SignatureDiscriminator.defaultBitSet if maskHasParam(paramDefaults, param: i as ParamCount) else SignatureDiscriminator.defaultBitClear
+			mixed = Hasher.combined(self.mixType(mixBytes(mixBytes(mixed, bytes: paramName), bytes: brand), t: paramType), value: defaultBit)
+		end 'eachParameter'
+
+		return mixed
+	end 'mixOverloadParams'
 
 	// ⭐ The opaque-parameter half of a declaration's hash — see `declShapeOpaqueParams` for what a
 	// reader copies out of it. A declaration that takes no bare type parameter mixes NOTHING, so every
@@ -46079,25 +46108,13 @@ export type ProgramSignatures
 
 	function declaresAGenericTemplateVisibleFrom(key ByteArray, readerFilePath FilePath) returns bool
 		for template in self.genericTemplatesOf(key) 'eachTemplate'
-			if self.templateIsVisibleFrom(template, readerFilePath: readerFilePath) 'visible'
+			if self.templateIsVisibleFrom(key, template: template, readerFilePath: readerFilePath) 'visible'
 				return true
 			end 'visible'
 		end 'eachTemplate'
 
 		return false
 	end 'declaresAGenericTemplateVisibleFrom'
-
-	export function genericTemplatesVisibleFrom(key ByteArray, readerFilePath FilePath) returns GenericFunctionTemplateArray
-		var visible = GenericFunctionTemplateArray.create()
-
-		for template in self.genericTemplatesOf(key) 'eachTemplate'
-			if self.templateIsVisibleFrom(template, readerFilePath: readerFilePath) 'visible'
-				visible.push(template)
-			end 'visible'
-		end 'eachTemplate'
-
-		return visible
-	end 'genericTemplatesVisibleFrom'
 
 	export function genericInstanceCountAt(siteKey ByteArray) returns ElementIndex
 		let filed = try self.settledDeclarations().genericInstancesBySite.get(siteKey) otherwise return 0

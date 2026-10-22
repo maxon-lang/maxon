@@ -3338,11 +3338,16 @@ export type IrFunction
 	// existential, which is very nearly all of them.
 	export var valueExistentialInstances as ValueExistentialInstanceMap
 
-	// The generic instance a receiverless static was called through, keyed by the call's RESULT, for a
-	// result that is not that instance (`Parser.retypeGenericAliasConstructorResult`). Read only by
-	// `SemanticCheck.instanceBuiltByStaticCall`, which substitutes the static's parameters through it.
-	// Published as `valueExistentialInstances` is, and for its reason.
+	// The generic instance a receiverless static was called through, keyed by the call's RESULT, whether or
+	// not the result is that instance (`Parser.retypeGenericAliasConstructorResult`). Published as
+	// `valueExistentialInstances` is, and for its reason.
 	export var valueCallInstances as ValueCallInstanceMap
+
+	// The entries of `valueCallInstances` whose instance the call's ARGUMENTS fixed rather than its qualifier
+	// (`Parser.stampInferredFactoryResult`). Overload ranking reads only a supplied instance
+	// (`SemanticCheck.staticInstanceOf`): an inferred one follows from the declaration the call binds
+	// (`Parser.instanceFixedByFactoryDeclaration`), so ranking through it would rank by its own answer.
+	export var valueInferredInstances as ValueCallInstanceMap
 
 	// The arguments written as a literal cast, whose E3010 waits for SemanticCheck: an overloaded
 	// call's parameter is not known until overload resolution. Handed over like
@@ -3574,6 +3579,7 @@ export type IrFunction
 			valueWitnessIds: valueWitnessIds,
 			valueExistentialInstances: ValueExistentialInstanceMap.create(),
 			valueCallInstances: ValueCallInstanceMap.create(),
+			valueInferredInstances: ValueCallInstanceMap.create(),
 			literalCastArguments: placeholders.noLiteralCastArguments,
 			deferredArgumentBindings: DeferredArgumentBindingArray.create(),
 			conditionalOps: ConditionalOpArray.create(),
@@ -3662,6 +3668,7 @@ export type IrFunction
 			valueWitnessIds: ValueIdArray.create(),
 			valueExistentialInstances: ValueExistentialInstanceMap.create(),
 			valueCallInstances: ValueCallInstanceMap.create(),
+			valueInferredInstances: ValueCallInstanceMap.create(),
 			literalCastArguments: LiteralCastMap.create(),
 			deferredArgumentBindings: DeferredArgumentBindingArray.create(),
 			conditionalOps: ConditionalOpArray.create(),
@@ -3740,6 +3747,7 @@ export type IrFunction
 			valueWitnessIds: src.valueWitnessIds,
 			valueExistentialInstances: src.valueExistentialInstances,
 			valueCallInstances: src.valueCallInstances,
+			valueInferredInstances: src.valueInferredInstances,
 			literalCastArguments: src.literalCastArguments,
 			deferredArgumentBindings: src.deferredArgumentBindings,
 			conditionalOps: src.conditionalOps,
@@ -3893,6 +3901,16 @@ export type IrFunction
 
 			self.valueCallInstances = callInstances
 		end 'callsThroughAnInstance'
+
+		if self.valueInferredInstances.count() > 0 'callsThroughAnInferredInstance'
+			var inferredInstances = ValueCallInstanceMap.create()
+
+			for (value, instance) in self.valueInferredInstances 'eachInferredInstance'
+				inferredInstances.upsert(value, value: remap.applyInstance(instance))
+			end 'eachInferredInstance'
+
+			self.valueInferredInstances = inferredInstances
+		end 'callsThroughAnInferredInstance'
 
 		if self.existentialFieldStores.count() > 0 'storesIntoAnInterfaceField'
 			var stores = ExistentialFieldStoreArray.create()
@@ -4056,6 +4074,7 @@ export type IrFunction
 		self.valueWitnessIds = ValueIdArray.create()
 		self.valueExistentialInstances = ValueExistentialInstanceMap.create()
 		self.valueCallInstances = ValueCallInstanceMap.create()
+		self.valueInferredInstances = ValueCallInstanceMap.create()
 		self.literalCastArguments = LiteralCastMap.create()
 		self.letCastReads = LetCastReadArray.create()
 		self.deferredArgumentBindings = DeferredArgumentBindingArray.create()
@@ -4107,6 +4126,7 @@ export type IrFunction
 		cacheWriteValueIdArray(writer, value: self.valueWitnessIds)
 		cacheWriteValueExistentialInstanceMap(writer, value: self.valueExistentialInstances)
 		cacheWriteValueCallInstanceMap(writer, value: self.valueCallInstances)
+		cacheWriteValueCallInstanceMap(writer, value: self.valueInferredInstances)
 		cacheWriteLiteralCastMap(writer, value: self.literalCastArguments)
 		cacheWriteDeferredArgumentBindingArray(writer, value: self.deferredArgumentBindings)
 		cacheWriteConditionalOpArray(writer, value: self.conditionalOps)
@@ -4170,6 +4190,7 @@ export type IrFunction
 		let f_valueWitnessIds = try cacheReadValueIdArray(reader)
 		let f_valueExistentialInstances = try cacheReadValueExistentialInstanceMap(reader)
 		let f_valueCallInstances = try cacheReadValueCallInstanceMap(reader)
+		let f_valueInferredInstances = try cacheReadValueCallInstanceMap(reader)
 		let f_literalCastArguments = try cacheReadLiteralCastMap(reader)
 		let f_deferredArgumentBindings = try cacheReadDeferredArgumentBindingArray(reader)
 		let f_conditionalOps = try cacheReadConditionalOpArray(reader)
@@ -4200,11 +4221,11 @@ export type IrFunction
 		let f_debugLocalLocations = try cacheReadDebugValueLocationArray(reader)
 		let f_debugLocalRanges = try cacheReadDebugValueRangeArray(reader)
 
-		return Self{name: f_name, visibility: f_visibility, sourceFilePath: f_sourceFilePath, paramCount: f_paramCount, blockRefs: f_blockRefs, nextBlockId: f_nextBlockId, nameLine: f_nameLine, nameColumn: f_nameColumn, closeLine: f_closeLine, closeColumn: f_closeColumn, needsGreenThreadStackGuard: f_needsGreenThreadStackGuard, keepsItsOwnFrame: f_keepsItsOwnFrame, pinsItsThread: f_pinsItsThread, returnsByIndirectJump: f_returnsByIndirectJump, mustBeSplicedAtEverySite: f_mustBeSplicedAtEverySite, layoutReserve: f_layoutReserve, closureLayout: f_closureLayout, closureFixedElementCount: f_closureFixedElementCount, closureEnvFields: f_closureEnvFields, closureStoreSites: f_closureStoreSites, maxonReturnType: f_maxonReturnType, maxonParamTypes: f_maxonParamTypes, typeSites: f_typeSites, valueTags: f_valueTags, valueNameIds: f_valueNameIds, valueBrandIds: f_valueBrandIds, valueMintedSole: f_valueMintedSole, filedProvenance: f_filedProvenance, ownership: ColumnOwnership.everything(), valueWitnessIds: f_valueWitnessIds, valueExistentialInstances: f_valueExistentialInstances, valueCallInstances: f_valueCallInstances, literalCastArguments: f_literalCastArguments, deferredArgumentBindings: f_deferredArgumentBindings, conditionalOps: f_conditionalOps, conditionalRefusals: f_conditionalRefusals, existentialFieldStores: f_existentialFieldStores, throwsTypeName: f_throwsTypeName, scope: f_scope, returnType: f_returnType, paramTypes: f_paramTypes, varSlotCount: f_varSlotCount, stackSize: f_stackSize, outgoingArgSize: f_outgoingArgSize, closureSubCounter: f_closureSubCounter, writtenParamMask: f_writtenParamMask, writesThroughParamMask: f_writesThroughParamMask, brandOriginValues: f_brandOriginValues, brandOriginKeys: f_brandOriginKeys, writesModuleStorage: f_writesModuleStorage, bodyWasSkippedAsUnreached: f_bodyWasSkippedAsUnreached, bodySplicedAway: f_bodySplicedAway, usesValueTupleReturn: f_usesValueTupleReturn, reassignedParamMask: f_reassignedParamMask, argumentOverlaps: f_argumentOverlaps, letCastReads: f_letCastReads, paramGuards: f_paramGuards, inlineSites: f_inlineSites, debugLocals: f_debugLocals, debugLocalLocations: f_debugLocalLocations, debugLocalRanges: f_debugLocalRanges}
+		return Self{name: f_name, visibility: f_visibility, sourceFilePath: f_sourceFilePath, paramCount: f_paramCount, blockRefs: f_blockRefs, nextBlockId: f_nextBlockId, nameLine: f_nameLine, nameColumn: f_nameColumn, closeLine: f_closeLine, closeColumn: f_closeColumn, needsGreenThreadStackGuard: f_needsGreenThreadStackGuard, keepsItsOwnFrame: f_keepsItsOwnFrame, pinsItsThread: f_pinsItsThread, returnsByIndirectJump: f_returnsByIndirectJump, mustBeSplicedAtEverySite: f_mustBeSplicedAtEverySite, layoutReserve: f_layoutReserve, closureLayout: f_closureLayout, closureFixedElementCount: f_closureFixedElementCount, closureEnvFields: f_closureEnvFields, closureStoreSites: f_closureStoreSites, maxonReturnType: f_maxonReturnType, maxonParamTypes: f_maxonParamTypes, typeSites: f_typeSites, valueTags: f_valueTags, valueNameIds: f_valueNameIds, valueBrandIds: f_valueBrandIds, valueMintedSole: f_valueMintedSole, filedProvenance: f_filedProvenance, ownership: ColumnOwnership.everything(), valueWitnessIds: f_valueWitnessIds, valueExistentialInstances: f_valueExistentialInstances, valueCallInstances: f_valueCallInstances, valueInferredInstances: f_valueInferredInstances, literalCastArguments: f_literalCastArguments, deferredArgumentBindings: f_deferredArgumentBindings, conditionalOps: f_conditionalOps, conditionalRefusals: f_conditionalRefusals, existentialFieldStores: f_existentialFieldStores, throwsTypeName: f_throwsTypeName, scope: f_scope, returnType: f_returnType, paramTypes: f_paramTypes, varSlotCount: f_varSlotCount, stackSize: f_stackSize, outgoingArgSize: f_outgoingArgSize, closureSubCounter: f_closureSubCounter, writtenParamMask: f_writtenParamMask, writesThroughParamMask: f_writesThroughParamMask, brandOriginValues: f_brandOriginValues, brandOriginKeys: f_brandOriginKeys, writesModuleStorage: f_writesModuleStorage, bodyWasSkippedAsUnreached: f_bodyWasSkippedAsUnreached, bodySplicedAway: f_bodySplicedAway, usesValueTupleReturn: f_usesValueTupleReturn, reassignedParamMask: f_reassignedParamMask, argumentOverlaps: f_argumentOverlaps, letCastReads: f_letCastReads, paramGuards: f_paramGuards, inlineSites: f_inlineSites, debugLocals: f_debugLocals, debugLocalLocations: f_debugLocalLocations, debugLocalRanges: f_debugLocalRanges}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize488
-		return sizeof(IrFunction) as CacheSize488
+	static function cacheLayoutBytes() returns CacheSize496
+		return sizeof(IrFunction) as CacheSize496
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

@@ -107,6 +107,10 @@ export enum ErrorCode
 	// 65,535 fields in a `type`, cases in an `enum`, payload fields in one case, requirements in an
 	// `interface` (its inherited ones included) or elements in a tuple, or more than 65,536 backing entries
 	// written for one enum case. Split the declaration.
+	// A function with more than 64 argument slots -- its declared parameters, defaulted ones included, plus
+	// the hidden ones the ABI adds -- is refused at its name, and a call with more than 64 arguments at the
+	// call. A `spawn` of an overloaded factory of a generic type whose arguments bind no single one of its
+	// declarations is refused too: give the arguments types that fit exactly one.
 	parserUnsupportedFeature = "E2015"
 
 	// A character literal is malformed (empty, or holding more than one character).
@@ -535,12 +539,12 @@ export enum ErrorCode
 	// in place of the method that spelling collides with.
 	duplicateDefinition = "E3006"
 
-	// A call cannot pick a unique overload: two or more candidates match it indistinguishably.
-	// call site cannot pick a unique overload because multiple
-	// variants have indistinguishable signatures at this call. Emitted when
-	// two overloads share the same parameter types and the caller doesn't
-	// disambiguate with named arguments, or when two generic functions of one name both infer a type
-	// for the call.
+	// A call cannot pick a unique overload: two or more candidates match it indistinguishably. Emitted when
+	// two overloads share the same parameter types and the caller doesn't disambiguate with named
+	// arguments, or when two generic functions of one name both infer a type for the call. A `spawn` of an
+	// overloaded factory and an `async` call of an overloaded function bind their overload by their
+	// arguments too, so a tie there is this code. The message lists each tied overload's parameters as
+	// its declaration spells them (`Candidates: (b BlockId), (v VarId)`).
 	semanticAmbiguousOverload = "E3007"
 
 	// A symbol is referenced from another file but is not declared 'export'.
@@ -1851,10 +1855,10 @@ export enum ErrorCode
 	// owners one thread. A generic type whose body copies an `Array with T` field is refused where the
 	// program instantiates it with a promise. `await` the promise and copy a value holding its result.
 	// An `async` call refuses a promise, or a value whose type holds one, at a parameter the callee only
-	// reads -- or that any overload the call may bind only reads. A coroutine can still be running after the
-	// frame that started it has ended, and by then the promise may have been awaited out of what holds it
-	// and its thread reclaimed. Pass the promise to a parameter every overload takes (one it awaits,
-	// cancels, stores or returns), or await it and pass the result.
+	// reads -- for an overloaded callee, the overload the call's arguments bind. A coroutine can still be
+	// running after the frame that started it has ended, and by then the promise may have been awaited out
+	// of what holds it and its thread reclaimed. Pass the promise to a parameter that overload takes (one it
+	// awaits, cancels, stores or returns), or await it and pass the result.
 	semanticPromiseCannotBeBorrowed = "E3141"
 
 	// A promise is USED after it was consumed. A promise owns a green thread, and a green thread has
@@ -2100,7 +2104,7 @@ export enum ErrorCode
 	// function has no descriptor of its own (`Holder.create()` in `main`). A static call whose
 	// arguments fix every parameter to a concrete type, through parameters written at a type parameter
 	// or at an instance over one (`Array with T`), names that instance and is not refused; an overloaded
-	// static names it when every overload the call can slot fixes the same instance. A static whose result
+	// static names the instance the overload its arguments bind fixes. A static whose result
 	// is written over a parameter that no argument fixes (`Holder.make()` declared `returns T`) has no type
 	// and is refused, outside the generic's own body. Name the instance with a typealias:
 	// `typealias Inner = Box with T`.

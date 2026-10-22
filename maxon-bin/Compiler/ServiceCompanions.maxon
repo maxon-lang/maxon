@@ -579,24 +579,54 @@ module function classifyServiceTarget(signatures ProgramSignatures, typeName Byt
 		return ServiceTargetVerdict.memberIsNotDeclared
 	end 'noSuchMember'
 
-	// ⚠ The FIRST declaration decides, and an overloaded FACTORY is therefore read off its first member. A
-	// spawn picks its overload the way any call does (`SemanticCheck.resolveOverloadedCalls`), which is a
-	// pass this sweep runs before — but every member of a factory's overload set agrees about the two facts
-	// asked here, because they are what make it a factory at all: a `static` beside an instance method of
-	// one name is already refused (`requireOverloadableName`), and a set disagreeing about the return type
-	// is E3005 at its own declaration.
-	let factory = serviceFirstDeclOf(decls, key: factoryKey)
+	// ⚠ ANY member that starts a service makes the type a spawn target, because this sweep runs before a
+	// call picks its overload: the spawn then requires that the declaration its arguments bind starts one
+	// (`Parser.requireBoundFactoryStartsAService`, E3134). With no member starting one, the first
+	// declaration's verdict is the refusal.
+	if factoryDeclarationsStartingAService(signatures, typeName: typeName, decls: decls) > 0 'aMemberStartsOne'
+		return ServiceTargetVerdict.startsAService
+	end 'aMemberStartsOne'
 
-	if factory.takesReceiver 'anInstanceMethod'
-		return ServiceTargetVerdict.memberTakesAReceiver
+	return serviceTargetVerdictOf(classifyFactoryDeclaration(signatures, typeName: typeName, decl: serviceFirstDeclOf(decls, key: factoryKey)))
+end 'classifyServiceTarget'
+
+module enum FactoryVerdict
+	startsAService
+	memberTakesAReceiver
+	memberDoesNotReturnTheType
+end 'FactoryVerdict'
+
+module function classifyFactoryDeclaration(signatures ProgramSignatures, typeName ByteArray, decl OverloadedDecl) returns FactoryVerdict
+	if decl.takesReceiver 'anInstanceMethod'
+		return FactoryVerdict.memberTakesAReceiver
 	end 'anInstanceMethod'
 
-	if not serviceReturnTypeNames(signatures, returned: factory.returnType, typeName: typeName) 'returnsSomethingElse'
-		return ServiceTargetVerdict.memberDoesNotReturnTheType
+	if not serviceReturnTypeNames(signatures, returned: decl.returnType, typeName: typeName) 'returnsSomethingElse'
+		return FactoryVerdict.memberDoesNotReturnTheType
 	end 'returnsSomethingElse'
 
-	return ServiceTargetVerdict.startsAService
-end 'classifyServiceTarget'
+	return FactoryVerdict.startsAService
+end 'classifyFactoryDeclaration'
+
+function factoryDeclarationsStartingAService(signatures ProgramSignatures, typeName ByteArray, decls OverloadedDeclArray) returns ElementIndex
+	var serviceStarters = 0 as ElementIndex
+
+	for decl in decls 'eachDeclaration'
+		if classifyFactoryDeclaration(signatures, typeName: typeName, decl: decl) == FactoryVerdict.startsAService 'startsOne'
+			serviceStarters = serviceStarters + 1
+		end 'startsOne'
+	end 'eachDeclaration'
+
+	return serviceStarters
+end 'factoryDeclarationsStartingAService'
+
+module function serviceTargetVerdictOf(verdict FactoryVerdict) returns ServiceTargetVerdict
+	return match verdict 'verdict'
+		startsAService gives ServiceTargetVerdict.startsAService
+		memberTakesAReceiver gives ServiceTargetVerdict.memberTakesAReceiver
+		memberDoesNotReturnTheType gives ServiceTargetVerdict.memberDoesNotReturnTheType
+	end 'verdict'
+end 'serviceTargetVerdictOf'
 
 // Does the recorded return type name `typeName` itself? See `classifyServiceTarget` for why BOTH id-bearing
 // tags are accepted at this point in the sweep.
@@ -970,12 +1000,29 @@ end 'serviceUntransferableValueMessage'
 // `declaredSlotType`'s `interfaceType` arm deliberately THROWS (see `denotedSlotType`) — so a parameter written
 // `s Shape` arrives as a bare `named` and is re-tagged here through that normalization's own test.
 function serviceParamSlotType(signatures ProgramSignatures, declared MaxonType, into TypeNameInterner, declFilePath FilePath) returns MaxonType
-	if let asInterface = try signatures.sweptInterfaceTypeOf(declared, readerFilePath: declFilePath) 'namesAnInterface'
+	let written = serviceParamTypeByIdentity(signatures, declared: declared, declFilePath: declFilePath)
+
+	if let asInterface = try signatures.sweptInterfaceTypeOf(written, readerFilePath: declFilePath) 'namesAnInterface'
 		return signatures.adoptType(asInterface, into: into)
 	end 'namesAnInterface'
 
-	return signatures.declaredSlotType(declared, into: into, slotScopeFilePath: declFilePath)
+	return signatures.declaredSlotType(written, into: into, slotScopeFilePath: declFilePath)
 end 'serviceParamSlotType'
+
+function serviceParamTypeByIdentity(signatures ProgramSignatures, declared MaxonType, declFilePath FilePath) returns MaxonType
+	if maxonTypeTag(declared) != ValueTypeTag.named 'notAWrittenName'
+		return declared
+	end 'notAWrittenName'
+
+	var names = signatures.indexTypeNames()
+	let spelled = try names.nameOf(typeNameIdOf(declared)) otherwise panic("serviceParamTypeByIdentity: named id {typeNameIdOf(declared)} is not in the index interner the sweep recorded it against")
+
+	if not containsQualifier(spelled) 'anUnqualifiedName'
+		return declared
+	end 'anUnqualifiedName'
+
+	return MaxonType.named(names.intern(signatures.declaredIdentityOfSpelling(spelled, declFilePath: declFilePath)))
+end 'serviceParamTypeByIdentity'
 
 // ⭐⭐ **THE WITNESS HALF OF AN INTERFACE-TYPED MESSAGE ARGUMENT RIDES THE PAYLOAD SLOT AFTER IT.** A payload
 // slot is one machine word and a fat pointer is two, so the request union gives such a parameter a second,
@@ -1102,13 +1149,12 @@ module function serviceReplyInstanceUnknownRefusal(typeName ByteArray, methodNam
 	return "`{String.from(typeName)}.{String.from(methodName)}` replies at `{String.from(typeName)}`'s own type parameter `{String.from(paramName)}`, and this handle stands at the bare `{String.from(serviceHandleCompanionName(typeName))}` — the ONE handle companion every instantiation of `{String.from(typeName)}` shares — so it names no instantiation and the reply has no type. SPELL the instantiation: `{String.from(serviceHandleCompanionName(typeName))} with <the type argument>` is a generic instance like any other, and a `typealias` over it carries the reply's type through a parameter, a struct field or an array element. Or send `{String.from(methodName)}` where the `spawn {String.from(typeName)}.{String.from(member)}(…)` binding is, which carries the instantiation already"
 end 'serviceReplyInstanceUnknownRefusal'
 
-// ⭐⭐ **THE WORDS FOR A `spawn` WHOSE OVERLOADED FACTORY'S OVERLOADS DO NOT ALL FIX ONE INSTANCE.** Which
-// member a call resolves to is `SemanticCheck.resolveOverloadedCalls`' answer and it is not available here, so
-// when the overloads the call can slot disagree the arguments cannot be matched against a parameter list
-// without guessing which one — and a guess binds the type argument from the wrong position.
-module function spawnOverloadedFactoryRefusal(typeName ByteArray, member ByteArray, declarationCount ElementIndex) returns String
-	return "`spawn {String.from(typeName)}.{String.from(member)}(…)` — `{String.from(typeName)}` is generic and `{String.from(member)}` is declared {declarationCount} times, so its type arguments cannot be read off the call: the overloads the call can slot do not all fix the same type arguments (they fix different ones, or one of them fixes none), and which overload the arguments resolve to is settled after this point. Give the factories that disagree distinct names, or spawn a type whose factory is declared once"
-end 'spawnOverloadedFactoryRefusal'
+// ⭐⭐ **THE WORDS FOR A `spawn` WHOSE ARGUMENTS BIND NO SINGLE DECLARATION OF AN OVERLOADED FACTORY.** The
+// type arguments are read off the declaration the call binds, and reading them off any other matches the
+// arguments against the wrong parameter list and binds a type argument from the wrong position.
+module function spawnUnboundFactoryRefusal(typeName ByteArray, member ByteArray, declarationCount ElementIndex) returns String
+	return "`spawn {String.from(typeName)}.{String.from(member)}(…)` — `{String.from(member)}` is declared {declarationCount} times and the arguments pick no single one of them, so which factory the spawn starts a service from cannot be told. Give the arguments types that fit exactly one `{String.from(member)}`"
+end 'spawnUnboundFactoryRefusal'
 
 // ⭐⭐ **THE WORDS FOR A `spawn` WHOSE TYPE ARGUMENT IS STILL OPAQUE.** Written inside another generic
 // body, `spawn Box.create(item)` fixes `T` to the ENCLOSING declaration's parameter — a type the loop would
@@ -1357,7 +1403,7 @@ function serviceRequestPayloads(signatures ProgramSignatures, typeName ByteArray
 		let declared = try decl.paramTypes.get(p) otherwise panic("serviceRequestPayloads: paramTypes.get OOB at {p} below count {decl.paramTypes.count()} for '{String.from(key)}'")
 		let paramName = serviceParamName(decl, index: p as ParamCount)
 		let slotType = serviceParamSlotType(signatures, declared: declared, into: into, declFilePath: declFilePath)
-		payloads.push(PayloadField.create(paramName, declaredType: slotType, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: serviceParamBrand(decl, index: p, slotType: slotType), isLet: false))
+		payloads.push(PayloadField.create(paramName, declaredType: slotType, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: serviceParamBrand(signatures, decl: decl, index: p, slotType: slotType, declFilePath: declFilePath), isLet: false))
 
 		if maxonTypeTag(slotType) == ValueTypeTag.interfaceRef 'aFatPointer'
 			payloads.push(PayloadField.create(serviceWitnessHalfSlotName(paramName), declaredType: MaxonType.integer, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, isLet: false))
@@ -1371,9 +1417,12 @@ function serviceRequestPayloads(signatures ProgramSignatures, typeName ByteArray
 	return payloads
 end 'serviceRequestPayloads'
 
-function serviceParamBrand(decl OverloadedDecl, index ElementIndex, slotType MaxonType) returns ByteArray
-	let spelled = try decl.paramDeclaredBrands.get(index) otherwise return EmptySourceText
-	return declaredBrandOf(spelled, paramTag: maxonTypeTag(slotType))
+function serviceParamBrand(signatures ProgramSignatures, decl OverloadedDecl, index ElementIndex, slotType MaxonType, declFilePath FilePath) returns ByteArray
+	if maxonTypeTag(slotType) != ValueTypeTag.genericInstance 'noBrandToCarry'
+		return EmptySourceText
+	end 'noBrandToCarry'
+
+	return declaredBrandInFile(signatures, spelled: decl.paramSpellingAt(index), declFilePath: declFilePath)
 end 'serviceParamBrand'
 
 // Does this DECLARATION deliver a reply? A value-returning message obviously does; a THROWING one does too,

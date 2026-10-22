@@ -10823,24 +10823,23 @@ end 'main'
 3
 ```
 
-<!-- test: error.a-spawn-of-an-overloaded-generic-factory-is-refused -->
-A `spawn` reads its type arguments off the factory's own argument list. It is refused because the overloads
-the call can slot fix different instances: which overload the arguments resolve to is settled after the point where the
-instantiation must already be known. Refused rather than guessed — reading the first declaration would fix
-`T` from a parameter the resolved overload does not have, and the instance, its layout and its destructor
-would all be the wrong ones with no diagnostic.
+<!-- test: a-spawn-of-an-overloaded-generic-factory-binds-the-overload-its-arguments-pick -->
+A `spawn` reads its type arguments off the argument list of the factory declaration the call binds, like any
+other call: `create(7, x: 9 as Whole)` binds the second `create`, so `T` is the type of `x`, not of the first
+declaration's lone parameter.
 ```maxon
 typealias Whole = int(i64.min to i64.max)
 
 type Box uses T
+	export var v as T
 	export var n as Whole
 
-	static function create(x T, a Whole) returns Self
-		return Self{n: 1}
+	static function create(x T) returns Self
+		return Self{v: x, n: 1}
 	end 'create'
 
-	static function create(b Whole, a T) returns Self
-		return Self{n: 2}
+	static function create(a Whole, x T) returns Self
+		return Self{v: x, n: a}
 	end 'create'
 
 	export function peek() returns Whole
@@ -10849,12 +10848,207 @@ type Box uses T
 end 'Box'
 
 function main() returns ExitCode
-	let h = spawn Box.create("hi", a: 7 as Whole)
-	return try await h.peek() otherwise 0 as ExitCode
+	let h = spawn Box.create(7, x: 9 as Whole)
+	let total = try await h.peek() otherwise 0
+	return total as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-spawn-binds-the-factory-overload-that-returns-the-type -->
+The two `create` overloads disagree about what they return, and only the second returns the service type. The call binds the one its arguments fit, so the spawn starts a service from it.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+type Other
+	export var m as Whole
+
+	static function make(m Whole) returns Self
+		return Self{m: m}
+	end 'make'
+end 'Other'
+
+type Counter
+	export var n as Whole
+
+	static function create(seed Whole) returns Other
+		return Other.make(seed)
+	end 'create'
+
+	static function create(seed Whole, step Whole) returns Self
+		return Self{n: seed + step}
+	end 'create'
+
+	export function peek() returns Whole
+		return self.n
+	end 'peek'
+end 'Counter'
+
+function main() returns ExitCode
+	let h = spawn Counter.create(40, step: 2)
+	let total = try await h.peek() otherwise 0
+	return total as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.a-spawn-whose-bound-factory-overload-returns-another-type-is-refused -->
+The same pair, and the call binds the first `create`, which returns an `Other`: that declaration does not start a service, and the spawn is refused at the call.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+type Other
+	export var m as Whole
+
+	static function make(m Whole) returns Self
+		return Self{m: m}
+	end 'make'
+end 'Other'
+
+type Counter
+	export var n as Whole
+
+	static function create(seed Whole) returns Other
+		return Other.make(seed)
+	end 'create'
+
+	static function create(seed Whole, step Whole) returns Self
+		return Self{n: seed + step}
+	end 'create'
+
+	export function peek() returns Whole
+		return self.n
+	end 'peek'
+end 'Counter'
+
+function main() returns ExitCode
+	let h = spawn Counter.create(40)
+	let total = try await h.peek() otherwise 0
+	return total as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:21:10: Unsupported: `spawn Box.create(…)` — `Box` is generic and `create` is declared 2 times, so its type arguments cannot be read off the call: the overloads the call can slot do not all fix the same type arguments (they fix different ones, or one of them fixes none), and which overload the arguments resolve to is settled after this point. Give the factories that disagree distinct names, or spawn a type whose factory is declared once
+error E3134: <fragment>:29:10: `spawn Counter.create(…)` does not start a service: `Counter.create` does not hand back a `Counter` the service can own — a service's state is the BOX of a declared `type`, and this factory's recorded return type is not one. `spawn` starts a SERVICE from a static factory of a declared type that returns that type, e.g. `spawn Calc.create()`
+```
+
+<!-- test: error.a-spawn-whose-arguments-tie-two-factory-overloads-is-ambiguous -->
+Two `create` overloads fit the argument equally, so the spawn is ambiguous like any other call, whichever type each of them returns.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+type Other
+	export var m as Whole
+
+	static function make(m Whole) returns Self
+		return Self{m: m}
+	end 'make'
+end 'Other'
+
+type Counter
+	export var n as Whole
+
+	static function create(seed Whole) returns Other
+		return Other.make(seed)
+	end 'create'
+
+	static function create(start Whole) returns Self
+		return Self{n: start}
+	end 'create'
+
+	export function peek() returns Whole
+		return self.n
+	end 'peek'
+end 'Counter'
+
+function main() returns ExitCode
+	let h = spawn Counter.create(40)
+	let total = try await h.peek() otherwise 0
+	return total as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3007: <fragment>:29:24: Ambiguous overload for 'create': multiple overloads match. Candidates: (seed Whole), (start Whole)
+```
+
+<!-- test: error.a-spawn-of-a-generic-factory-whose-arguments-tie-two-overloads-is-ambiguous -->
+Every `create` returns `Self`, so each starts a service, but two of them fit the arguments equally. The spawn is ambiguous at the callee, as an ordinary call of the same overloads is.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias Wide = int(i64.min to i64.max)
+
+type Box uses T
+	export var n as Whole
+
+	static function create(x T, n Whole) returns Self
+		_ = x
+		return Self{n: n}
+	end 'create'
+
+	static function create(x T, n Wide) returns Self
+		_ = x
+		return Self{n: n as Whole}
+	end 'create'
+
+	export function peek() returns Whole
+		return self.n
+	end 'peek'
+end 'Box'
+
+function main() returns ExitCode
+	let h = spawn Box.create(1, n: 5)
+	let total = try await h.peek() otherwise 0
+	return total as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3007: <fragment>:24:20: Ambiguous overload for 'create': multiple overloads match. Candidates: (x T, n Whole), (x T, n Wide)
+```
+
+<!-- test: error.a-spawn-whose-bound-factory-starts-no-service-is-refused-ahead-of-a-message-roster-diagnostic -->
+The call binds the first `create`, which returns an `Other`, and the service also declares an overloaded message. The factory is judged first, so the spawn is refused as not starting a service and not for the roster.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+type Other
+	export var m as Whole
+
+	static function make(m Whole) returns Self
+		return Self{m: m}
+	end 'make'
+end 'Other'
+
+type Counter
+	export var n as Whole
+
+	static function create(seed Whole) returns Other
+		return Other.make(seed)
+	end 'create'
+
+	static function create(seed Whole, step Whole) returns Self
+		return Self{n: seed + step}
+	end 'create'
+
+	export function peek() returns Whole
+		return self.n
+	end 'peek'
+
+	export function peek(extra Whole) returns Whole
+		return self.n + extra
+	end 'peek'
+end 'Counter'
+
+function main() returns ExitCode
+	let h = spawn Counter.create(40)
+	let total = try await h.peek() otherwise 0
+	return total as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3134: <fragment>:33:10: `spawn Counter.create(…)` does not start a service: `Counter.create` does not hand back a `Counter` the service can own — a service's state is the BOX of a declared `type`, and this factory's recorded return type is not one. `spawn` starts a SERVICE from a static factory of a declared type that returns that type, e.g. `spawn Calc.create()`
 ```
 
 <!-- test: a-spawn-of-an-overloaded-generic-factory-whose-overloads-fix-one-instance-starts-it -->
@@ -10930,9 +11124,8 @@ end 'main'
 5
 ```
 
-<!-- test: error.a-spawn-of-factories-that-keep-an-argument-differently-is-refused -->
-A `spawn` moves every argument its factory keeps. One `create` keeps its argument and the other only reads it,
-and which of the two the call binds is settled after the argument has to be moved or left alone.
+<!-- test: a-spawn-of-factories-that-keep-an-argument-differently-moves-into-the-bound-one -->
+A `spawn` moves every argument its factory keeps. One `create` keeps its argument and the other only reads it, and the argument's type binds the first, so `shelf` is moved into the service.
 ```maxon
 type Shelf
 	export let count as Integer
@@ -10973,8 +11166,129 @@ function main() returns ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
+```exitcode
+4
+```
+
+<!-- test: a-spawn-of-factories-that-keep-an-argument-differently-leaves-the-borrowed-one-with-the-caller -->
+The same factories with an argument that binds the `create` which only reads it: the caller keeps the `Label` and reads it after the spawn.
+```maxon
+type Shelf
+	export let count as Integer
+
+	static function create(count Integer) returns Self
+		return Self{count: count}
+	end 'create'
+end 'Shelf'
+
+type Label
+	export let text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Label'
+
+type Keeper
+	let shelf as Shelf
+
+	static function create(shelf Shelf) returns Self
+		return Self{shelf: shelf}
+	end 'create'
+
+	static function create(shelf Label) returns Self
+		return Self{shelf: Shelf.create(shelf.text.byteLength() as Integer)}
+	end 'create'
+
+	export function count() returns Integer
+		return self.shelf.count
+	end 'count'
+end 'Keeper'
+
+function main() returns ExitCode
+	let label = Label.create("abcdef")
+	let k = spawn Keeper.create(label)
+	let kept = try await k.count() otherwise 0
+	return (kept + (label.text.byteLength() as Integer)) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+12
+```
+
+<!-- test: error.a-spawn-of-factories-that-keep-an-argument-differently-and-tie-is-ambiguous -->
+Two `create` overloads fit the argument equally and disagree about keeping it. The tie is the diagnostic: no declaration is bound, so there is no move to make until the arguments pick one.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+type Shelf
+	export let count as Whole
+
+	static function create(count Whole) returns Self
+		return Self{count: count}
+	end 'create'
+end 'Shelf'
+
+type Keeper
+	let shelf as Shelf
+	let size as Whole
+
+	static function create(shelf Shelf) returns Self
+		return Self{shelf: shelf, size: 0}
+	end 'create'
+
+	static function create(other Shelf) returns Self
+		return Self{shelf: Shelf.create(other.count), size: 1}
+	end 'create'
+
+	export function count() returns Whole
+		return self.shelf.count + self.size
+	end 'count'
+end 'Keeper'
+
+function main() returns ExitCode
+	let shelf = Shelf.create(4)
+	let k = spawn Keeper.create(shelf)
+	return (try await k.count() otherwise 0) as ExitCode
+end 'main'
+```
 ```maxoncstderr
-error E2015: <fragment>:36:10: Unsupported: `spawn Keeper.create(…)` — `Keeper.create` is declared 2 times and they do not all keep argument 1 alike. A `spawn` MOVES every argument its factory keeps into the service, and which declaration this call binds is settled after this point, so there is no one move to make. Give the factories distinct names
+error E3007: <fragment>:31:23: Ambiguous overload for 'create': multiple overloads match. Candidates: (shelf Shelf), (other Shelf)
+```
+
+<!-- test: a-spawn-of-factories-that-keep-an-argument-differently-binds-by-an-alias-valued-argument -->
+The argument is a value of the `Names` alias, which fits only the `create` that keeps an array, so the array is moved into the service and the other `create`, which takes a count, is not the one bound.
+```maxon
+typealias Names = Array with String
+
+type Keeper
+	let names as Names
+	let size as Count
+
+	static function create(names Names) returns Self
+		return Self{names: names, size: 0}
+	end 'create'
+
+	static function create(size Count) returns Self
+		return Self{names: Names.create(), size: size}
+	end 'create'
+
+	export function total() returns Count
+		return self.names.count() + self.size
+	end 'total'
+end 'Keeper'
+
+function main() returns ExitCode
+	var names = Names.create()
+	names.push("alpha {40 + 2} long enough for a heap record")
+	let k = spawn Keeper.create(names)
+	let n = try await k.total() otherwise 0
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+1
 ```
 
 <!-- test: error.a-value-popped-from-a-field-container-is-moved-out-not-solely-owned -->
@@ -16644,4 +16958,171 @@ end 'Box'
 ```
 ```maxoncstderr
 error E3008: <fragment>:4:10: function 'Box.create' is not exported
+```
+
+<!-- test: error.a-spawn-of-an-overloaded-generic-factory-whose-arguments-fit-no-overload-reports-the-mismatch -->
+No `create` takes a `String` for `n`, so the spawn is refused as an argument mismatch against the first overload and not as a factory whose type argument cannot be read.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias Wide = int(i64.min to i64.max)
+
+type Box uses T
+	export var n as Whole
+
+	static function create(x T, n Whole) returns Self
+		_ = x
+		return Self{n: n}
+	end 'create'
+
+	static function create(x T, n Wide) returns Self
+		_ = x
+		return Self{n: n as Whole}
+	end 'create'
+
+	export function peek() returns Whole
+		return self.n
+	end 'peek'
+end 'Box'
+
+function main() returns ExitCode
+	let h = spawn Box.create(1, n: "s")
+	let total = try await h.peek() otherwise 0
+	return total as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:24:20: argument type mismatch for 'n': expected 'Whole', got 'String'
+```
+
+<!-- test: error.a-spawn-of-an-overloaded-factory-whose-arguments-fit-no-overload-reports-the-mismatch -->
+The same for a service that is not generic: nothing takes a `String`, and the mismatch is what the author reads.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias Wide = int(i64.min to i64.max)
+
+type Counter
+	export var n as Whole
+
+	static function create(seed Whole) returns Self
+		return Self{n: seed}
+	end 'create'
+
+	static function create(start Wide) returns Self
+		return Self{n: start as Whole}
+	end 'create'
+
+	export function peek() returns Whole
+		return self.n
+	end 'peek'
+end 'Counter'
+
+function main() returns ExitCode
+	let h = spawn Counter.create("s")
+	let total = try await h.peek() otherwise 0
+	return total as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:22:24: argument type mismatch for 'seed': expected 'Whole', got 'String'
+```
+
+<!-- test: a-message-parameter-spelled-through-its-directory-keeps-its-brand -->
+<!-- process: own -->
+A message parameter spelled `lib.Names`, an alias of `Array with String` declared in `lib/`, carries the same brand as the value the sender builds from `lib.Names`, so the request's payload accepts it and the reply comes back.
+```maxon
+// --- file: lib/names.maxon
+export typealias Names = Array with String
+
+// --- file: main.maxon
+type Store
+	var seen as Count
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function keep(names lib.Names) returns Count
+		self.seen = self.seen + names.count()
+		return self.seen
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	var tags = lib.Names.create()
+	tags.push("a")
+	let got = try await h.keep(tags) otherwise panic("the store is open")
+	return got as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: a-message-parameter-spelled-through-its-directory-as-a-struct-an-enum-and-an-interface -->
+<!-- process: own -->
+Message parameters spelled `lib.Item`, `lib.Mode` and `lib.Named`, a struct, an enum and an interface declared in `lib/`, resolve through their declaring directory, so each message is sent, handled and answered: 3 + 10 + 5.
+```maxon
+// --- file: lib/types.maxon
+export type Item
+	export let weight as Count
+
+	export static function create(weight Count) returns Self
+		return Self{weight: weight}
+	end 'create'
+end 'Item'
+
+export enum Mode
+	quiet
+	loud
+end 'Mode'
+
+export interface Named
+	function label() returns Count
+end 'Named'
+
+export type Plate implements Named
+	let code as Count
+
+	export static function create(code Count) returns Self
+		return Self{code: code}
+	end 'create'
+
+	export function label() returns Count
+		return self.code
+	end 'label'
+end 'Plate'
+
+// --- file: main.maxon
+type Store
+	var seen as Count
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function weigh(item lib.Item) returns Count
+		self.seen = self.seen + item.weight
+		return self.seen
+	end 'weigh'
+
+	export function volume(mode lib.Mode) returns Count
+		return 10 if mode == lib.Mode.loud else 1
+	end 'volume'
+
+	export function tag(plate lib.Named) returns Count
+		return plate.label()
+	end 'tag'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	let weighed = try await h.weigh(lib.Item.create(3)) otherwise panic("the store is open")
+	let loudness = try await h.volume(lib.Mode.loud) otherwise panic("the store is open")
+	let tagged = try await h.tag(lib.Plate.create(5)) otherwise panic("the store is open")
+	return (weighed + loudness + tagged) as ExitCode
+end 'main'
+```
+```exitcode
+18
 ```

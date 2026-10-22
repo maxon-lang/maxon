@@ -121,7 +121,7 @@ export enum TypeClass
 	// class agreeing with nothing is what routes every other position to a diagnostic.
 	//
 	// ⚠ **TWO EXISTENTIALS AGREEING AT THE CLASS LEVEL IS TAG-LEVEL ASSIGNABILITY AND NOTHING MORE — the
-	// INTERFACE identity is `Parser.aggregateNameOf`'s to compare, and it must.** A `Derived` value reaching
+	// INTERFACE identity is `aggregateNameIn`'s to compare, and it must.** A `Derived` value reaching
 	// a `Base`-typed binding agrees here, and its witness half addresses `Derived`'s table while the place
 	// dispatches by numbering `Base`'s: MEASURED before that arm existed, a program that compiled clean and
 	// returned 2 where the answer is 1.
@@ -633,9 +633,8 @@ export let ConcreteValueAtOpaquePlaceSuffix = "one body serves every instantiati
 // It lives HERE, beside `checkDeclaredType`, because it is a coercion-site type rule and a rule with
 // two homes drifts. The NAME-EXTRACTION legitimately differs by tier only in WHICH interner it reads —
 // the parser resolves an id against its file-local interner, SemanticCheck against the merged
-// `project.typeNames` — but both handle the SAME two aggregate cases (`structRef` struct, `named`
-// registered union/enum): the parser's `aggregateNameOf` and SemanticCheck's `aggregateNameFor` are
-// full twins. A union PARAMETER is the one place a name is unrecoverable at the SemanticCheck tier
+// `project.typeNames` — so both tiers ask the one extractor, `aggregateNameIn`, handing it their own
+// interner. A union PARAMETER is the one place a name is unrecoverable at the SemanticCheck tier
 // (`resolveTypes` erased its `named` to `integer`), so the parser stashes it pre-erasure on the
 // signature (`FuncSignature.paramAggregateNames`). The COMPARISON RULE is this one
 // function, called by both.
@@ -704,7 +703,7 @@ end 'brandsConflict'
 // legitimately admits an aggregate turns this into a FALSE REJECTION of a valid program, and three tags
 // do admit one: `typeParameter` (a generic's `T` takes any concrete type — `Box.create(v T)` handed a
 // struct is the whole point of generics), `unresolved` (agrees with everything by deferral) and `named`
-// (whose aggregate name comes back empty only when `aggregateNameFor` did not RECOGNIZE it, which is not
+// (whose aggregate name comes back empty only when `aggregateNameIn` did not RECOGNIZE it, which is not
 // the same fact as "it is a scalar"). `structRef`/`genericInstance`/`string`/`character`/`function` are
 // already decided by the non-empty branch or by their own rules. So the narrow four is the only set that
 // is provably safe, and it is the set the measured hole needs.
