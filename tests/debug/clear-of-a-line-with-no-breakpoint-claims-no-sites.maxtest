@@ -1,0 +1,32 @@
+let UnsetClearTextCaseLabel = "clear-of-a-line-with-no-breakpoint-claims-no-sites"
+let AnchorName = "hit-body"
+let NotSetLead = "breakpoint not-set at "
+let SiteCountTail = " site(s))"
+let NoSitesTail = "(0 site(s))"
+
+test 'the REPL answers a clear of a line no breakpoint was set on without claiming a site'
+	let staged = builtFixture(UnsetClearTextCaseLabel, fixture: ConditionFixtureName)
+	let hitLine = anchorLine(staged.join(StagedProgramFileName), anchor: AnchorName)
+	let executable = builtExecutable(staged)
+	let rows = statementOffsetsOfLine(executable, staged: staged, line: hitLine)
+
+	try Expect.isTrue(rows.count() > 1, message: "the anchored line must carry several statement rows, or a count of them could not be told from a count of one site. It has {rows.count()}.")
+
+	let script = "{ClearCommand} {lineTarget(hitLine)}{LineFeed}{QuitCommand}{LineFeed}"
+	let session = spawnDebugRepl(executable, staged: staged, script: script)
+	let spoken = withoutCarriageReturns(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	var answers = StringArray.create()
+
+	for line in spoken.split(LineFeed) 'eachLine'
+		if line.contains(NotSetLead) 'theClearsAnswer'
+			answers.push(line)
+		end 'theClearsAnswer'
+	end 'eachLine'
+
+	try Expect.equal(answers.count(), expected: 1, message: "one `{ClearCommand}` of an unset line is one `{NotSetLead}` line. {said}")
+
+	let answer = try answers.get(0) otherwise panic("{UnsetClearTextCaseLabel}: the count was checked above")
+	try Expect.isTrue(answer.contains(NoSitesTail) or not answer.contains(SiteCountTail), message: "nothing was armed on the line, so the answer claims no site: `{answer}`. {said}")
+end 'the REPL answers a clear of a line no breakpoint was set on without claiming a site'

@@ -1,0 +1,25 @@
+let UnsetClearCaseLabel = "clear-of-a-line-with-no-breakpoint-answers-no-offset"
+let AnchorName = "hit-body"
+let NotSetAction = "not-set"
+
+test 'clearing a line no breakpoint was set on answers not-set and names no offset'
+	let staged = builtFixture(UnsetClearCaseLabel, fixture: ConditionFixtureName)
+	let hitLine = anchorLine(staged.join(StagedProgramFileName), anchor: AnchorName)
+	let executable = builtExecutable(staged)
+	let rows = statementOffsetsOfLine(executable, staged: staged, line: hitLine)
+
+	try Expect.isTrue(rows.count() > 1, message: "the anchored line must carry several statement rows, or an answer naming them could not be told apart from one naming none. It has {rows.count()}.")
+
+	let commands = debugCommandLine(["{ClearCommand} {lineTarget(hitLine)}"])
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: BreakpointEventName)
+
+	try Expect.equal(answers.count(), expected: 1, message: "one `{ClearCommand}` is one `{BreakpointEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	let answer = eventAt(answers, index: 0)
+	try Expect.equal(textOf(answer, node: answer.root, key: ActionKey), expected: NotSetAction, message: "nothing was armed on the line, so there is nothing to clear. {said}")
+	try Expect.equal(memberOf(answer, node: answer.root, key: OffsetKey).count(), expected: 0, message: "nothing was armed, so the answer names no `{OffsetKey}`. {said}")
+	try Expect.equal(memberOf(answer, node: answer.root, key: OffsetsKey).count(), expected: 0, message: "nothing was armed, so the answer lists no `{OffsetsKey}`. {said}")
+end 'clearing a line no breakpoint was set on answers not-set and names no offset'

@@ -21,6 +21,7 @@ test 'an exact offset that is not an instruction start is refused, and the progr
 	let answer = eventAt(breakpoints, index: 0)
 	try Expect.equal(textOf(answer, node: answer.root, key: ActionKey), expected: RefusedAction, message: "a statement row begins an instruction, so one byte past it is inside that instruction, and an `int3` planted there would corrupt it. {said}")
 	try Expect.equal(textOf(answer, node: answer.root, key: ReasonKey), expected: NotAnInstructionStartReason, message: "the refusal says why the offset cannot be armed. {said}")
+	try Expect.equal(textOf(answer, node: answer.root, key: OffsetKey), expected: hexSpelling(inside), message: "a refused `{BreakCommand} {exactOffsetTarget(inside)}` answers for the offset it was asked about. {said}")
 	try Expect.equal(eventsOfKind(events, kind: StopEventName).count(), expected: 0, message: "nothing was armed, so nothing stops. {said}")
 	try Expect.equal(eventsOfKind(events, kind: ExitEventName).count(), expected: 1, message: "the program runs out to its exit. {said}")
 end 'an exact offset that is not an instruction start is refused, and the program runs out untouched'

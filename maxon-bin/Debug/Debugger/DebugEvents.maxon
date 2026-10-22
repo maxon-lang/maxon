@@ -93,8 +93,6 @@ function renderedObject(doc JsonDoc, node JsonNodeId) returns String
 	return Json.stringify(doc)
 end 'renderedObject'
 
-let UnarmedBreakpointOffsetWireWord = 0 as DebugAddress
-
 function breakpointObject(doc JsonDoc, answer DebugBreakpointAnswer) returns JsonNodeId
 	var object = JsonObjectBuilder.create()
 	object.addString(doc, key: DebugEventKey, value: BreakpointEventKind)
@@ -102,7 +100,10 @@ function breakpointObject(doc JsonDoc, answer DebugBreakpointAnswer) returns Jso
 	addFunctionName(object, doc: doc, name: answer.functionName)
 	object.addString(doc, key: FileKey, value: answer.file.wireName())
 	object.addNumber(doc, key: LineKey, value: answer.line.wireNumber() as JsonFloat)
-	object.addString(doc, key: OffsetKey, value: hexWord(try answer.offsets.get(0) otherwise UnarmedBreakpointOffsetWireWord))
+
+	if let first = try answer.offsets.get(0) 'somethingResolved'
+		object.addString(doc, key: OffsetKey, value: hexWord(first))
+	end 'somethingResolved'
 
 	if answer.offsets.count() > 1 'severalSites'
 		object.addNode(OffsetsKey, node: hexArray(doc, offsets: answer.offsets))

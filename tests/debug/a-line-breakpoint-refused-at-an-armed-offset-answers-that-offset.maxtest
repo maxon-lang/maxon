@@ -1,0 +1,32 @@
+let RefusedLineCaseLabel = "a-line-breakpoint-refused-at-an-armed-offset-answers-that-offset"
+let AnchorName = "hit-body"
+let FirstCondition = "i == 7"
+let SecondCondition = "i == 9"
+let SharedConditionReason = "condition-differs-at-a-shared-offset"
+
+test 'a line breakpoint refused at a byte another condition holds answers that byte, and no other row of the line'
+	let staged = builtFixture(RefusedLineCaseLabel, fixture: ConditionFixtureName)
+	let hitLine = anchorLine(staged.join(StagedProgramFileName), anchor: AnchorName)
+	let executable = builtExecutable(staged)
+	let rows = statementOffsetsOfLine(executable, staged: staged, line: hitLine)
+	let offset = try rows.get(0) otherwise panic("{RefusedLineCaseLabel}: the anchored line has a statement row")
+
+	try Expect.isTrue(rows.count() > 1, message: "the anchored line must carry several statement rows, or an answer naming every row could not be told from one naming the refused byte. It has {rows.count()}.")
+
+	let commands = debugCommandLine([conditionalBreak(exactOffsetTarget(offset), condition: FirstCondition), conditionalBreak(lineTarget(hitLine), condition: SecondCondition)])
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let armings = eventsOfKind(events, kind: BreakpointEventName)
+
+	try Expect.equal(armings.count(), expected: 2, message: "two armings are two `{BreakpointEventName}` events. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	let first = eventAt(armings, index: 0)
+	try Expect.equal(textOf(first, node: first.root, key: ActionKey), expected: SetAction, message: "the exact-offset conditional breakpoint is armed. {said}")
+
+	let second = eventAt(armings, index: 1)
+	try Expect.equal(textOf(second, node: second.root, key: ActionKey), expected: RefusedAction, message: "the line's entry is the byte the first breakpoint holds under another condition, so the line breakpoint is refused. {said}")
+	try Expect.equal(textOf(second, node: second.root, key: ReasonKey), expected: SharedConditionReason, message: "the refusal names why. {said}")
+	try Expect.equal(textOf(second, node: second.root, key: OffsetKey), expected: hexSpelling(offset), message: "the refusal answers for the byte it was refused at. {said}")
+	try Expect.equal(memberOf(second, node: second.root, key: OffsetsKey).count(), expected: 0, message: "arming tried one byte of the line and was refused there; the line's other statement rows were never candidates, so `{OffsetsKey}` must not list them. {said}")
+end 'a line breakpoint refused at a byte another condition holds answers that byte, and no other row of the line'

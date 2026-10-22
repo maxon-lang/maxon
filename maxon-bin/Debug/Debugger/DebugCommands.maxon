@@ -1021,10 +1021,10 @@ export type DebugConversation
 		let spelling = debugBreakTargetSpelling(target)
 
 		return match self.symbols.resolveBreakTarget(target) 'resolved'
-			refused(file, line, functionName, reason) gives DebugBreakTargetAnswer.answered(refusedTarget(spelling, file: file, line: line, functionName: functionName, reason: reason))
+			refused(file, line, functionName, offset, reason) gives DebugBreakTargetAnswer.answered(breakpointAnswer(BreakpointRefusedAction, spelling: spelling, file: file, line: line, functionName: functionName, offsets: [offset], reason: StatedText.stated(reason)))
 			noMatch(suggestion) gives DebugBreakTargetAnswer.answered(unmatchedTarget(spelling, suggestion: suggestion))
 			ambiguous(candidates) gives DebugBreakTargetAnswer.answered(ambiguousTarget(spelling, candidates: candidates))
-			noCode(file, line) gives DebugBreakTargetAnswer.answered(uncoveredTarget(spelling, file: file, line: line))
+			noCode(file, line) gives DebugBreakTargetAnswer.answered(breakpointAnswer(BreakpointNoCodeAction, spelling: spelling, file: file, line: line, functionName: DebugFunctionNameLookup.none, offsets: DebugAddressArray.create(), reason: StatedText.unstated))
 			atLine(file, line, bodies, functionName, breakpoint) gives DebugBreakTargetAnswer.atLine(file, line: line, bodies: bodies, functionName: functionName, breakpoint: breakpoint)
 		end 'resolved'
 	end 'breakTargetOf'
@@ -1039,14 +1039,29 @@ export type DebugConversation
 		end 'eachBody'
 
 		if attempt.armed.count() > 0 'somethingArmed'
-			return DebugReply.breakpoint(DebugBreakpointAnswer.create(BreakpointSetAction, target: spelling, functionName: functionName, file: file, line: line, offsets: attempt.armed, candidates: StringArray.create(), suggestion: StatedText.unstated, reason: StatedText.unstated, condition: condition))
+			return breakpointAnswer(BreakpointSetAction, spelling: spelling, file: file, line: line, functionName: functionName, offsets: attempt.armed, reason: StatedText.unstated, condition: condition)
 		end 'somethingArmed'
 
 		if not attempt.reachedArming 'noCandidateCouldCarryTheCondition'
-			return refusedCondition(BreakpointConditionInvalidAction if attempt.conditionRefusals.contains(BreakpointConditionInvalidAction) else BreakpointConditionUnsupportedAction, spelling: spelling, file: file, line: line, functionName: functionName, condition: condition)
+			var action = BreakpointConditionInvalidAction
+			var offsets = offsetsRefusedFor(attempt.conditionRefusals, reason: action)
+
+			if offsets.count() == 0 'noInvalidCondition'
+				action = BreakpointConditionUnsupportedAction
+				offsets = offsetsRefusedFor(attempt.conditionRefusals, reason: action)
+			end 'noInvalidCondition'
+
+			if offsets.count() == 0 'noConditionRefusal'
+				panic("armBodies: an attempt that never reached arming recorded a condition refusal for every candidate")
+			end 'noConditionRefusal'
+
+			return breakpointAnswer(action, spelling: spelling, file: file, line: line, functionName: functionName, offsets: offsets, reason: StatedText.unstated, condition: condition)
 		end 'noCandidateCouldCarryTheCondition'
 
-		return DebugReply.breakpoint(DebugBreakpointAnswer.create(BreakpointRefusedAction, target: spelling, functionName: functionName, file: file, line: line, offsets: DebugAddressArray.create(), candidates: StringArray.create(), suggestion: StatedText.unstated, reason: StatedText.stated(try attempt.armRefusals.get(0) otherwise panic("armBodies: an attempt that reached arming and armed nothing recorded why"))))
+		match reportedRefusal(attempt.armRefusals) 'reported'
+			none then panic("armBodies: an attempt that reached arming and armed nothing recorded why")
+			reported(reason, offsets) then return breakpointAnswer(BreakpointRefusedAction, spelling: spelling, file: file, line: line, functionName: functionName, offsets: offsets, reason: StatedText.stated(reason))
+		end 'reported'
 	end 'armBodies'
 
 	function armFirstArmable(candidates DebugLineCandidateArray, attempt DebugArmingAttempt)
@@ -1068,7 +1083,7 @@ export type DebugConversation
 		attempt.reachedArming = true
 
 		if self.conditionDiffersAt(candidate.offset, attempt: attempt) 'anotherConditionHoldsTheByte'
-			return attempt.refusedByTheDriver(DebugSharedConditionReason)
+			return attempt.refusedByTheDriver(DebugSharedConditionReason, offset: candidate.offset)
 		end 'anotherConditionHoldsTheByte'
 
 		match self.conditionHeldAt(candidate.offset) 'armed'
@@ -1077,15 +1092,15 @@ export type DebugConversation
 		end 'armed'
 
 		match decodedAt(self.symbols.imageCode(), offset: candidate.offset, address: self.engine.imageTextBase() + candidate.offset) 'classified'
-			unclassified then return attempt.refusedForTheInstruction(DebugUnclassifiedReason)
+			unclassified then return attempt.refusedForTheInstruction(DebugUnclassifiedReason, offset: candidate.offset)
 			decoded then return self.armDecoded(candidate, request: request, attempt: attempt)
 		end 'classified'
 	end 'armedHere'
 
 	function armedUnder(candidate DebugLineCandidate, text String, attempt DebugArmingAttempt) returns bool
 		match compileDebugCondition(self.symbols, offset: candidate.offset, site: self.symbols.presentedSiteAt(candidate.offset, hidden: candidate.hidden), text: text) 'compiled'
-			unsupported then attempt.conditionRefusals.push(BreakpointConditionUnsupportedAction)
-			invalid then attempt.conditionRefusals.push(BreakpointConditionInvalidAction)
+			unsupported then attempt.conditionRefusals.push(DebugRefusal.create(BreakpointConditionUnsupportedAction, offset: candidate.offset))
+			invalid then attempt.conditionRefusals.push(DebugRefusal.create(BreakpointConditionInvalidAction, offset: candidate.offset))
 			compiled(record) then return self.armedHere(candidate, request: DebugConditionRequest.carried(record), attempt: attempt)
 		end 'compiled'
 
@@ -1118,8 +1133,8 @@ export type DebugConversation
 
 		match self.conditionReplaced(candidate.offset, request: request).inquiry() 'replaced'
 			answered then return self.notedRearmed(attempt, candidate: candidate)
-			refused(reason) then return attempt.refusedByTheDriver(reason)
-			gone(ending) then return self.settledBy(ending, attempt: attempt)
+			refused(reason) then return attempt.refusedByTheDriver(reason, offset: candidate.offset)
+			gone(ending) then return self.settledBy(ending, attempt: attempt, offset: candidate.offset)
 		end 'replaced'
 	end 'rearmedHeldByte'
 
@@ -1152,31 +1167,31 @@ export type DebugConversation
 	function armDecoded(candidate DebugLineCandidate, request DebugConditionRequest, attempt DebugArmingAttempt) returns bool
 		match self.engine.armBreakpoint(candidate.offset, forTheUser: true) 'answered'
 			done then return self.attachConditionTo(attempt, candidate: candidate, request: request)
-			nothingParked then return attempt.stoppedBy(DebugNotRunningReason)
-			refused(reason) then return attempt.refusedByTheDriver(reason)
-			gone(ending) then return self.settledBy(ending, attempt: attempt)
+			nothingParked then return attempt.stoppedBy(DebugNotRunningReason, offset: candidate.offset)
+			refused(reason) then return attempt.refusedByTheDriver(reason, offset: candidate.offset)
+			gone(ending) then return self.settledBy(ending, attempt: attempt, offset: candidate.offset)
 		end 'answered'
 	end 'armDecoded'
 
-	function settledBy(ending TargetOutcome, attempt DebugArmingAttempt) returns bool
-		self.settleRefusing(attempt.armRefusals, ending: ending)
+	function settledBy(ending TargetOutcome, attempt DebugArmingAttempt, offset DebugAddress) returns bool
+		self.settleRefusing(attempt.armRefusals, ending: ending, offset: offset)
 
 		return true
 	end 'settledBy'
 
 	function attachConditionTo(attempt DebugArmingAttempt, candidate DebugLineCandidate, request DebugConditionRequest) returns bool
-		if not self.conditionHeld(attempt.armRefusals, offset: candidate.offset, request: request) 'theConditionWasRefused'
-			self.clearArmedByte(candidate.offset, cleared: DebugAddressArray.create(), refusals: attempt.armRefusals)
+		match self.conditionHeld(attempt.armRefusals, offset: candidate.offset, request: request) 'posted'
+			held then return self.notedArmed(attempt, candidate: candidate)
+			refused then self.clearArmedByte(candidate.offset, cleared: DebugAddressArray.create(), refusals: attempt.armRefusals)
+			gone then break
+		end 'posted'
 
-			return true
-		end 'theConditionWasRefused'
-
-		return self.notedArmed(attempt, candidate: candidate)
+		return true
 	end 'attachConditionTo'
 
-	function conditionHeld(refusals StringArray, offset DebugAddress, request DebugConditionRequest) returns bool
+	function conditionHeld(refusals DebugRefusals, offset DebugAddress, request DebugConditionRequest) returns DebugConditionPosting
 		return match request 'asked'
-			none gives true
+			none gives DebugConditionPosting.held
 			carried(record) gives self.conditionPosted(refusals, offset: offset, record: record)
 		end 'asked'
 	end 'conditionHeld'
@@ -1235,19 +1250,23 @@ export type DebugConversation
 		return hidden
 	end 'hiddenForBreakpointAt'
 
-	function conditionPosted(refusals StringArray, offset DebugAddress, record DebugConditionRecord) returns bool
+	function conditionPosted(refusals DebugRefusals, offset DebugAddress, record DebugConditionRecord) returns DebugConditionPosting
 		match self.engine.attachCondition(offset, record: record).inquiry() 'answered'
-			answered then return true
-			refused(reason) then refusals.push(reason)
-			gone(ending) then self.settleRefusing(refusals, ending: ending)
+			answered then return DebugConditionPosting.held
+			refused(reason) then return postingRefused(refusals, reason: reason, offset: offset)
+			gone(ending) then return self.postingEnded(refusals, ending: ending, offset: offset)
 		end 'answered'
-
-		return false
 	end 'conditionPosted'
 
-	function settleRefusing(refusals StringArray, ending TargetOutcome)
+	function postingEnded(refusals DebugRefusals, ending TargetOutcome, offset DebugAddress) returns DebugConditionPosting
+		self.settleRefusing(refusals, ending: ending, offset: offset)
+
+		return DebugConditionPosting.gone
+	end 'postingEnded'
+
+	function settleRefusing(refusals DebugRefusals, ending TargetOutcome, offset DebugAddress)
 		self.settle(ending)
-		refusals.push(DebugNotRunningReason)
+		refusals.push(DebugRefusal.create(DebugNotRunningReason, offset: offset))
 	end 'settleRefusing'
 
 	function disarmTarget(target DebugBreakTarget, owner DebugBreakOwner) returns DebugReply
@@ -1261,7 +1280,7 @@ export type DebugConversation
 
 	function disarmBodies(spelling String, file DebugFileName, line DebugLineLookup, bodies DebugLineBodyArray, functionName DebugFunctionNameLookup, identity DebugBreakIdentity) returns DebugReply
 		var cleared = DebugAddressArray.create()
-		var refusals = StringArray.create()
+		var refusals = DebugRefusals.create()
 
 		for body in bodies 'eachBody'
 			for candidate in body 'eachCandidate'
@@ -1269,12 +1288,17 @@ export type DebugConversation
 			end 'eachCandidate'
 		end 'eachBody'
 
-		let action = BreakpointClearedAction if cleared.count() > 0 else BreakpointRefusedAction if refusals.count() > 0 else BreakpointNotSetAction
+		if cleared.count() > 0 'someCleared'
+			return breakpointAnswer(BreakpointClearedAction, spelling: spelling, file: file, line: line, functionName: functionName, offsets: cleared, reason: StatedText.unstated)
+		end 'someCleared'
 
-		return DebugReply.breakpoint(DebugBreakpointAnswer.create(action, target: spelling, functionName: functionName, file: file, line: line, offsets: cleared, candidates: StringArray.create(), suggestion: StatedText.unstated, reason: firstRefusalOf(refusals)))
+		match reportedRefusal(refusals) 'reported'
+			none then return breakpointAnswer(BreakpointNotSetAction, spelling: spelling, file: file, line: line, functionName: functionName, offsets: DebugAddressArray.create(), reason: StatedText.unstated)
+			reported(reason, offsets) then return breakpointAnswer(BreakpointRefusedAction, spelling: spelling, file: file, line: line, functionName: functionName, offsets: offsets, reason: StatedText.stated(reason))
+		end 'reported'
 	end 'disarmBodies'
 
-	function disarmCandidate(candidate DebugLineCandidate, identity DebugBreakIdentity, cleared DebugAddressArray, refusals StringArray)
+	function disarmCandidate(candidate DebugLineCandidate, identity DebugBreakIdentity, cleared DebugAddressArray, refusals DebugRefusals)
 		match self.dropPurpose(candidate.offset, hidden: candidate.hidden, identity: identity) 'dropped'
 			notArmed then return
 			othersRemain then cleared.push(candidate.offset)
@@ -1282,11 +1306,11 @@ export type DebugConversation
 		end 'dropped'
 	end 'disarmCandidate'
 
-	function clearArmedByte(offset DebugAddress, cleared DebugAddressArray, refusals StringArray)
+	function clearArmedByte(offset DebugAddress, cleared DebugAddressArray, refusals DebugRefusals)
 		match self.engine.clearBreakpoint(offset) 'answered'
 			done then cleared.push(offset)
-			nothingParked then refusals.push(DebugNotRunningReason)
-			refused(reason) then refusals.push(reason)
+			nothingParked then refusals.push(DebugRefusal.create(DebugNotRunningReason, offset: offset))
+			refused(reason) then refusals.push(DebugRefusal.create(reason, offset: offset))
 			gone(ending) then self.settle(ending)
 		end 'answered'
 	end 'clearArmedByte'
@@ -2241,41 +2265,86 @@ type DebugArmingAttempt
 	export let identity as DebugBreakIdentity
 	export let condition as DebugBreakCondition
 	export var armed as DebugAddressArray
-	export var armRefusals as StringArray
-	export var conditionRefusals as StringArray
+	export var armRefusals as DebugRefusals
+	export var conditionRefusals as DebugRefusals
 	export var reachedArming as bool
 
 	static function create(identity DebugBreakIdentity, condition DebugBreakCondition) returns DebugArmingAttempt
-		return Self{identity: identity, condition: condition, armed: DebugAddressArray.create(), armRefusals: StringArray.create(), conditionRefusals: StringArray.create(), reachedArming: false}
+		return Self{identity: identity, condition: condition, armed: DebugAddressArray.create(), armRefusals: DebugRefusals.create(), conditionRefusals: DebugRefusals.create(), reachedArming: false}
 	end 'create'
 
-	function refusedForTheInstruction(reason String) returns bool
-		self.armRefusals.push(reason)
+	function noteRefusal(reason String, offset DebugAddress)
+		self.armRefusals.push(DebugRefusal.create(reason, offset: offset))
+	end 'noteRefusal'
+
+	function refusedForTheInstruction(reason String, offset DebugAddress) returns bool
+		self.noteRefusal(reason, offset: offset)
 
 		return false
 	end 'refusedForTheInstruction'
 
-	function refusedByTheDriver(reason String) returns bool
-		self.armRefusals.push(reason)
+	function refusedByTheDriver(reason String, offset DebugAddress) returns bool
+		self.noteRefusal(reason, offset: offset)
 
 		return not refusalDependsOnTheInstruction(reason)
 	end 'refusedByTheDriver'
 
-	function stoppedBy(reason String) returns bool
-		self.armRefusals.push(reason)
+	function stoppedBy(reason String, offset DebugAddress) returns bool
+		self.noteRefusal(reason, offset: offset)
 
 		return true
 	end 'stoppedBy'
 end 'DebugArmingAttempt'
 
-function firstRefusalOf(refusals StringArray) returns StatedText
-	let first = try refusals.get(0) otherwise return StatedText.unstated
-	return StatedText.stated(first)
-end 'firstRefusalOf'
+type DebugRefusal
+	export let reason as String
+	export let offset as DebugAddress
 
-function refusedTarget(spelling String, file DebugFileName, line DebugLineLookup, functionName DebugFunctionNameLookup, reason String) returns DebugReply
-	return DebugReply.breakpoint(DebugBreakpointAnswer.create(BreakpointRefusedAction, target: spelling, functionName: functionName, file: file, line: line, offsets: DebugAddressArray.create(), candidates: StringArray.create(), suggestion: StatedText.unstated, reason: StatedText.stated(reason)))
-end 'refusedTarget'
+	static function create(reason String, offset DebugAddress) returns DebugRefusal
+		return Self{reason: reason, offset: offset}
+	end 'create'
+end 'DebugRefusal'
+
+typealias DebugRefusals = Array with DebugRefusal
+
+function offsetsRefusedFor(refusals DebugRefusals, reason String) returns DebugAddressArray
+	var offsets = DebugAddressArray.create()
+
+	for refusal in refusals 'eachRefusal'
+		if refusal.reason == reason 'thisReason'
+			offsets.push(refusal.offset)
+		end 'thisReason'
+	end 'eachRefusal'
+
+	return offsets
+end 'offsetsRefusedFor'
+
+union DebugReportedRefusal
+	none
+	reported(reason String, offsets DebugAddressArray)
+end 'DebugReportedRefusal'
+
+enum DebugConditionPosting
+	held
+	refused
+	gone
+end 'DebugConditionPosting'
+
+function reportedRefusal(refusals DebugRefusals) returns DebugReportedRefusal
+	let first = try refusals.get(0) otherwise return DebugReportedRefusal.none
+
+	return DebugReportedRefusal.reported(first.reason, offsets: offsetsRefusedFor(refusals, reason: first.reason))
+end 'reportedRefusal'
+
+function postingRefused(refusals DebugRefusals, reason String, offset DebugAddress) returns DebugConditionPosting
+	refusals.push(DebugRefusal.create(reason, offset: offset))
+
+	return DebugConditionPosting.refused
+end 'postingRefused'
+
+function breakpointAnswer(action String, spelling String, file DebugFileName, line DebugLineLookup, functionName DebugFunctionNameLookup, offsets DebugAddressArray, reason StatedText, condition DebugBreakCondition = DebugBreakCondition.unconditional) returns DebugReply
+	return DebugReply.breakpoint(DebugBreakpointAnswer.create(action, target: spelling, functionName: functionName, file: file, line: line, offsets: offsets, candidates: StringArray.create(), suggestion: StatedText.unstated, reason: reason, condition: condition))
+end 'breakpointAnswer'
 
 // A leading row that starts a call opens an entry even when a later row enters the line, so a stop
 // there precedes the call and `step` can still enter it.
@@ -2335,17 +2404,9 @@ function innermostPhysicalFrame(frames DebugFrameArray) returns DebugFrameLookup
 	return DebugFrameLookup.none
 end 'innermostPhysicalFrame'
 
-function refusedCondition(action String, spelling String, file DebugFileName, line DebugLineLookup, functionName DebugFunctionNameLookup, condition DebugBreakCondition) returns DebugReply
-	return DebugReply.breakpoint(DebugBreakpointAnswer.create(action, target: spelling, functionName: functionName, file: file, line: line, offsets: DebugAddressArray.create(), candidates: StringArray.create(), suggestion: StatedText.unstated, reason: StatedText.unstated, condition: condition))
-end 'refusedCondition'
-
 function ambiguousTarget(spelling String, candidates StringArray) returns DebugReply
 	return DebugReply.breakpoint(DebugBreakpointAnswer.create(BreakpointAmbiguousAction, target: spelling, functionName: DebugFunctionNameLookup.none, file: DebugFileName.unknown, line: DebugLineLookup.unknown, offsets: DebugAddressArray.create(), candidates: candidates, suggestion: StatedText.unstated, reason: StatedText.unstated))
 end 'ambiguousTarget'
-
-function uncoveredTarget(spelling String, file DebugFileName, line DebugLineLookup) returns DebugReply
-	return DebugReply.breakpoint(DebugBreakpointAnswer.create(BreakpointNoCodeAction, target: spelling, functionName: DebugFunctionNameLookup.none, file: file, line: line, offsets: DebugAddressArray.create(), candidates: StringArray.create(), suggestion: StatedText.unstated, reason: StatedText.unstated))
-end 'uncoveredTarget'
 
 function hasACallerFrame(stop DebugStop) returns bool
 	var physical = 0 as DebugTally

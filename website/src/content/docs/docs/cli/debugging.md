@@ -262,8 +262,11 @@ stderr both go to this driver's stderr. The events are `breakpoint`, `stop`, `ba
 value that cannot be read carries `unavailable` with one of `optimized-out`, `not-live-here`,
 `read-failed` or `layout-not-described`. A `stop`, `breakpoint`, `locals` or thread row carries
 `function` when its position lies in a function, and a backtrace frame carries its `col` beside its
-`line`. A `trace` event carries `since`, the previous stop's position in the ring, when there was a
-previous stop.
+`line`. A `breakpoint` event carries `offset` when its answer names an offset, and `offsets` beside it
+when the answer names several. A refusal, `condition-*` included, names the offsets refused for the
+reason it reports, and a `*0x<offset>` target the offset asked; `not-set`, `no-match`, `ambiguous` and
+`no-code` answers name none. `reason` comes with a `refused` answer. A `trace` event carries `since`,
+the previous stop's position in the ring, when there was a previous stop.
 The driver exits 0 when the session completed — the program's own exit code is DATA in the `exit` event —
 and 1 on a timeout, a refused session or a crash. A command issued after the
 program has ended is an `error`, and the verdict stands.

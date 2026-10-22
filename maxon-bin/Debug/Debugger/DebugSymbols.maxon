@@ -49,7 +49,7 @@ export union BreakResolution
 	noCode(file DebugFileName, line DebugLineLookup)
 	ambiguous(candidates StringArray)
 	noMatch(suggestion StatedText)
-	refused(file DebugFileName, line DebugLineLookup, functionName DebugFunctionNameLookup, reason String)
+	refused(file DebugFileName, line DebugLineLookup, functionName DebugFunctionNameLookup, offset DebugAddress, reason String)
 end 'BreakResolution'
 
 export union DebugBreakTarget
@@ -919,12 +919,14 @@ export type DebugSymbols
 	end 'filesAt'
 
 	function resolvedOffset(offset MxdbgCodeOffset) returns BreakResolution
-		if (offset as DebugAddress) >= (self.code.count() as DebugAddress) 'pastTheText'
-			return BreakResolution.refused(DebugFileName.unknown, line: DebugLineLookup.unknown, functionName: DebugFunctionNameLookup.none, reason: DebugOutOfTextReason)
+		let address = offset as DebugAddress
+
+		if address >= (self.code.count() as DebugAddress) 'pastTheText'
+			return BreakResolution.refused(DebugFileName.unknown, line: DebugLineLookup.unknown, functionName: DebugFunctionNameLookup.none, offset: address, reason: DebugOutOfTextReason)
 		end 'pastTheText'
 
 		match self.reader.functionContaining(offset) 'enclosing'
-			none then return BreakResolution.refused(DebugFileName.unknown, line: DebugLineLookup.unknown, functionName: DebugFunctionNameLookup.none, reason: DebugOutOfTextReason)
+			none then return BreakResolution.refused(DebugFileName.unknown, line: DebugLineLookup.unknown, functionName: DebugFunctionNameLookup.none, offset: address, reason: DebugOutOfTextReason)
 			found(fn) then return self.resolvedInsideFunction(fn, offset: offset)
 		end 'enclosing'
 	end 'resolvedOffset'
@@ -932,18 +934,19 @@ export type DebugSymbols
 	function resolvedInsideFunction(fn MxdbgFunctionInfo, offset MxdbgCodeOffset) returns BreakResolution
 		let position = self.positionAt(fn, offset: offset)
 		let file = position.path.fileName()
-		let named = DebugFunctionNameLookup.named(self.presentedNameAt(offset as DebugAddress, hidden: 0))
+		let address = offset as DebugAddress
+		let named = DebugFunctionNameLookup.named(self.presentedNameAt(address, hidden: 0))
 
 		// Only the runtime's code is refused: library and generated code at an exact offset is armable,
 		// though the debugger presents and steps only program-owned code.
 		if self.reader.ownerWithin(fn, codeOffset: offset) == MxdbgCodeOwner.runtime 'theRuntimesCode'
-			return BreakResolution.refused(file, line: position.spot.lineLookup(), functionName: named, reason: DebugInsideRuntimeSymbolReason)
+			return BreakResolution.refused(file, line: position.spot.lineLookup(), functionName: named, offset: address, reason: DebugInsideRuntimeSymbolReason)
 		end 'theRuntimesCode'
 
 		return match self.instructionStartAt(fn, offset: offset) 'boundary'
-			start gives BreakResolution.atLine(file, line: position.spot.lineLookup(), bodies: singleBody(offset as DebugAddress), functionName: named, breakpoint: exactOffsetSpelling(offset))
-			inside gives BreakResolution.refused(file, line: position.spot.lineLookup(), functionName: named, reason: DebugNotAnInstructionStartReason)
-			undecodable gives BreakResolution.refused(file, line: position.spot.lineLookup(), functionName: named, reason: DebugUnclassifiedReason)
+			start gives BreakResolution.atLine(file, line: position.spot.lineLookup(), bodies: singleBody(address), functionName: named, breakpoint: exactOffsetSpelling(offset))
+			inside gives BreakResolution.refused(file, line: position.spot.lineLookup(), functionName: named, offset: address, reason: DebugNotAnInstructionStartReason)
+			undecodable gives BreakResolution.refused(file, line: position.spot.lineLookup(), functionName: named, offset: address, reason: DebugUnclassifiedReason)
 		end 'boundary'
 	end 'resolvedInsideFunction'
 
