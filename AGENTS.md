@@ -19,8 +19,10 @@ There are no time constraints. Complexity doesn't matter. If you are fixing an i
 **Maxon never avoids a breaking change.** A language that refuses to break cannot improve, and Maxon is
 written with agents, which fix what a release breaks. Make the better design: keep no old spelling, no
 compatibility shim, no deprecation period, and never reject a design because existing code would have to
-change. What a break owes is its entry under `## Unreleased` in `RELEASE_NOTES.md` — the change and its
-`Fix:` — in the same commit (`docs/RELEASING.md`, "The release notes").
+change. A change that makes Maxon source which compiled with the previous release fail to compile owes its
+entry under `## Unreleased` in `RELEASE_NOTES.md` — the change and its `Fix:` — in the same commit
+(`docs/RELEASING.md`, "The release notes"). A change to a command, flag, tool output or event stream is
+not such an entry; it updates its `docs/` source.
 
 ## Where the rules live
 

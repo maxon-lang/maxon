@@ -379,9 +379,11 @@ is neither `## Unreleased` nor `## X.Y.Z — YYYY-MM-DD`, on sections out of new
 `###` heading outside the five above, and on a breaking change with no `Fix:` line; `website.yml`
 fails on drift.
 
-**`## Unreleased` holds the breaking changes of the release being prepared.** The change that breaks
-something adds its entry under `## Unreleased` › `### Breaking changes` in the same commit, since it is
-the one that knows the fix. The section is the first in the file and exists only while it holds
+**`## Unreleased` holds the source breaks of the release being prepared: Maxon code that compiled with
+the previous release and does not compile with this one.** The change that causes one adds its entry
+under `## Unreleased` › `### Breaking changes` in the same commit, since it is the one that knows the
+fix. A change to a command, flag, tool output or event stream is not entered there as it lands; it
+updates its `docs/` source, and the release notes describe it at the cut. The section is the first in the file and exists only while it holds
 something. Cutting a release renames it to `## X.Y.Z — YYYY-MM-DD` and adds the other subsections.
 
 ```bash
