@@ -276,12 +276,14 @@ export type SourceClaims
 	export let declaredAliases as StringArray
 	export let extensionMethodKeys as StringArray
 	export let shadowedLibraryNames as StringArray
-	export let declaresModuleVars as bool
+	export let moduleVars as ModuleVarHolding
 	export let spawnsServices as bool
+	export let usesFunctionValues as bool
+	export let libraryExtensionMethods as StringArray
 	export let mentionedNames as StringArray
 
-	export static function create(moduleInit ModuleInitNeed, declaredNominals StringArray, declaredAliases StringArray, extensionMethodKeys StringArray, shadowedLibraryNames StringArray, declaresModuleVars bool, spawnsServices bool, mentionedNames StringArray) returns SourceClaims
-		return Self{moduleInit: moduleInit, declaredNominals: declaredNominals, declaredAliases: declaredAliases, extensionMethodKeys: extensionMethodKeys, shadowedLibraryNames: shadowedLibraryNames, declaresModuleVars: declaresModuleVars, spawnsServices: spawnsServices, mentionedNames: mentionedNames}
+	export static function create(moduleInit ModuleInitNeed, declaredNominals StringArray, declaredAliases StringArray, extensionMethodKeys StringArray, shadowedLibraryNames StringArray, moduleVars ModuleVarHolding, spawnsServices bool, usesFunctionValues bool, libraryExtensionMethods StringArray, mentionedNames StringArray) returns SourceClaims
+		return Self{moduleInit: moduleInit, declaredNominals: declaredNominals, declaredAliases: declaredAliases, extensionMethodKeys: extensionMethodKeys, shadowedLibraryNames: shadowedLibraryNames, moduleVars: moduleVars, spawnsServices: spawnsServices, usesFunctionValues: usesFunctionValues, libraryExtensionMethods: libraryExtensionMethods, mentionedNames: mentionedNames}
 	end 'create'
 end 'SourceClaims'
 
@@ -359,21 +361,83 @@ export function claimsOfUserFiles(project Project) returns SourceClaims throws C
 	try foldExtensionsOfUserFiles(project, signatures: fold.signatures)
 	let nominals = fold.signatures.userDeclaredNominalNames()
 	let aliases = fold.signatures.userDeclaredAliasNames()
-	let mentioned = try identifierNamesWritten(project, paths: fold.paths)
+	let written = try tokensWritten(project, paths: fold.paths)
 	let shadowed = try namesTheLibraryAlsoDeclares(project, nominals: nominals, aliases: aliases)
 	let extensionKeys = try extensionMethodKeysWritten(project, signatures: fold.signatures)
-	return SourceClaims.create(fold.signatures.programModuleInitNeed(), declaredNominals: nominals, declaredAliases: aliases, extensionMethodKeys: extensionKeys, shadowedLibraryNames: shadowed, declaresModuleVars: fold.signatures.declaresAUserModuleVar(), spawnsServices: fold.signatures.serviceSpawnCandidates().count() != 0, mentionedNames: mentioned)
+	return SourceClaims.create(fold.signatures.programModuleInitNeed(), declaredNominals: nominals, declaredAliases: aliases, extensionMethodKeys: extensionKeys, shadowedLibraryNames: shadowed, moduleVars: fold.signatures.userModuleVarHolding(), spawnsServices: fold.signatures.serviceSpawnCandidates().count() != 0, usesFunctionValues: written.usesFunctionValues, libraryExtensionMethods: try libraryExtensionMethodsOnConformers(project, signatures: fold.signatures), mentionedNames: written.names)
 end 'claimsOfUserFiles'
 
-function identifierNamesWritten(project Project, paths MaxonSourcePathArray) returns StringArray throws CompileError
-	var names = StringArray.create()
+function libraryExtensionMethodsOnConformers(project Project, signatures ProgramSignatures) returns StringArray throws CompileError
+	let interfaces = (try libraryRoster(project)).interfaces
+	var pending = StringArray.create()
+	var reached = SourceNameSet.create()
+	var methods = StringArray.create()
+
+	for (name, _) in interfaces 'eachInterface'
+		if not signatures.declaredConformerIndex().structConformersOf(name.toByteArray()).isEmpty() 'anAuthorsConformer'
+			pending.push(name)
+		end 'anAuthorsConformer'
+	end 'eachInterface'
+
+	while not pending.isEmpty() 'eachPending'
+		let name = try pending.pop() otherwise panic("libraryExtensionMethodsOnConformers: pop on a list just found non-empty")
+
+		if reached.contains(name) 'alreadyReached'
+			continue
+		end 'alreadyReached'
+
+		reached.insert(name)
+
+		let declared = try interfaces.get(name) otherwise continue
+
+		for method in declared.methods 'eachMethod'
+			if not methods.contains(method) 'firstOfItsName'
+				methods.push(method)
+			end 'firstOfItsName'
+		end 'eachMethod'
+
+		for parent in declared.parents 'eachParent'
+			pending.push(parent)
+		end 'eachParent'
+	end 'eachPending'
+
+	methods.sort(function(left String, right String) gives left.compare(right))
+	return methods
+end 'libraryExtensionMethodsOnConformers'
+
+type WrittenTokens
+	export var names as StringArray
+	export var usesFunctionValues as bool
+
+	static function create() returns WrittenTokens
+		return Self{names: StringArray.create(), usesFunctionValues: false}
+	end 'create'
+end 'WrittenTokens'
+
+function opensAFunctionValue(tokens TokenArray, position ElementIndex) returns bool
+	let token = try tokens.get(position) otherwise panic("opensAFunctionValue: tokens.get OOB at {position} below count {tokens.count()}")
+
+	if token.kind != TokenKind.function or position + 1 >= tokens.count() 'notAFunctionWord'
+		return false
+	end 'notAFunctionWord'
+
+	let next = try tokens.get(position + 1) otherwise panic("opensAFunctionValue: tokens.get OOB at {position + 1} below count {tokens.count()}")
+	return next.kind == TokenKind.leftParen
+end 'opensAFunctionValue'
+
+function tokensWritten(project Project, paths MaxonSourcePathArray) returns WrittenTokens throws CompileError
+	var written = WrittenTokens.create()
 	var seen = SourceNameSet.create()
 
 	for path in paths 'eachFile'
 		view tokens = try queryActiveTokens(project, path: path)
 
 		for i in 0 upto tokens.count() 'eachToken'
-			let token = try tokens.get(i) otherwise panic("identifierNamesWritten: tokens.get OOB at {i} below count {tokens.count()}")
+			let token = try tokens.get(i) otherwise panic("tokensWritten: tokens.get OOB at {i} below count {tokens.count()}")
+
+			if opensAFunctionValue(tokens, position: i) 'aFunctionValue'
+				written.usesFunctionValues = true
+			end 'aFunctionValue'
 
 			if token.kind != TokenKind.identifier 'notAName'
 				continue
@@ -383,20 +447,20 @@ function identifierNamesWritten(project Project, paths MaxonSourcePathArray) ret
 
 			if not seen.contains(name) 'firstMention'
 				seen.insert(name)
-				names.push(name)
+				written.names.push(name)
 			end 'firstMention'
 
 			if i + 2 >= tokens.count() 'noMemberFollows'
 				continue
 			end 'noMemberFollows'
 
-			let dot = try tokens.get(i + 1) otherwise panic("identifierNamesWritten: tokens.get OOB at {i + 1} below count {tokens.count()}")
+			let dot = try tokens.get(i + 1) otherwise panic("tokensWritten: tokens.get OOB at {i + 1} below count {tokens.count()}")
 
 			if dot.kind != TokenKind.dot 'notQualified'
 				continue
 			end 'notQualified'
 
-			let member = try tokens.get(i + 2) otherwise panic("identifierNamesWritten: tokens.get OOB at {i + 2} below count {tokens.count()}")
+			let member = try tokens.get(i + 2) otherwise panic("tokensWritten: tokens.get OOB at {i + 2} below count {tokens.count()}")
 
 			if member.kind != TokenKind.identifier 'notAMemberName'
 				continue
@@ -406,13 +470,13 @@ function identifierNamesWritten(project Project, paths MaxonSourcePathArray) ret
 
 			if not seen.contains(qualified) 'firstQualifiedMention'
 				seen.insert(qualified)
-				names.push(qualified)
+				written.names.push(qualified)
 			end 'firstQualifiedMention'
 		end 'eachToken'
 	end 'eachFile'
 
-	return names
-end 'identifierNamesWritten'
+	return written
+end 'tokensWritten'
 
 function namesTheLibraryAlsoDeclares(project Project, nominals StringArray, aliases StringArray) returns StringArray throws CompileError
 	var shadowed = StringArray.create()
@@ -423,7 +487,7 @@ function namesTheLibraryAlsoDeclares(project Project, nominals StringArray, alia
 
 	var library = SourceNameSet.create()
 
-	let libraryNames = try libraryDeclaredTypeNames(project)
+	let libraryNames = (try libraryRoster(project)).names
 
 	for name in libraryNames 'eachLibraryName'
 		library.insert(String.from(name))

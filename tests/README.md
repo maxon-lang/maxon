@@ -796,7 +796,9 @@ exit code and output. The shared half is `SpecHarness.maxon`.
   when it differs and that `--update-required` replaces or adds without asking a compile-error case for
   one, plain run cases that batch into programs
   by type name and keep their own names, a case declaring a module `var` and a case spawning a service
-  kept in separate programs, the cases that stay out of it, `--batch=off` running every case
+  kept in separate programs, a case keeping a function in a module `var` and a case holding closures in a
+  record kept in separate programs, a case declaring a conformer with a file-private cursor and a case
+  calling a library `Iterable` extension method kept in separate programs, the cases that stay out of it, `--batch=off` running every case
   alone, a crash mid-batch attributed to its own case (on `--target=wasm32-wasi` too, where no case of a
   batch can be selected again, so the siblings are recompiled and run alone), a batched case's services finishing before its end
   marker, a case that passes alone but fails batched reported as a batching gap, a case marked

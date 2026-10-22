@@ -389,14 +389,14 @@ function setAsideTheUsersOwnLibraryFiles(project Project) returns MaxonSourcePat
 	return setAside
 end 'setAsideTheUsersOwnLibraryFiles'
 
-// The type names `stdlib/` declares, held on the session's shared file memos and re-read when any file's
+// The type names `stdlib/` declares and the methods its interface extensions add, held on the session's shared file memos and re-read when any file's
 // stamp stops describing it. `observedAt` is sampled before any file is read, because a whole-second mtime cannot tell a
 // same-size edit made in that second (see `SourceFileStamp`).
-export function libraryDeclaredTypeNames(project Project) returns NameRoster throws CompileError
+module function libraryRoster(project Project) returns LibraryNameRoster throws CompileError
 	var found = MaxonSourcePathArray.create()
 
 	if not Directory.exists(project.stdlibDir) 'theTierDidNotArrive'
-		return NameRoster.create()
+		return LibraryNameRoster.create(SourceFileStampMap.create(), names: NameRoster.create(), interfaces: LibraryInterfaceMap.create())
 	end 'theTierDidNotArrive'
 
 	_ = try collectMaxonSources(project.stdlibDir, into: found)
@@ -404,13 +404,14 @@ export function libraryDeclaredTypeNames(project Project) returns NameRoster thr
 
 	if let held = try project.session.fileMemos.libraryNames.get(key) 'aRosterOfTheseFiles'
 		if held.describes(found) 'stillCurrent'
-			return held.names
+			return held
 		end 'stillCurrent'
 	end 'aRosterOfTheseFiles'
 
 	let observedAt = WallClock.nowUnixSeconds() as Timestamp
 	var stamps = SourceFileStampMap.create()
 	var names = NameRoster.create()
+	var written = LibraryInterfaceMap.create()
 
 	for path in found 'eachFile'
 		match fileStateOf(path) 'state'
@@ -424,13 +425,108 @@ export function libraryDeclaredTypeNames(project Project) returns NameRoster thr
 		for name in declared 'eachName'
 			names.push(name)
 		end 'eachName'
+
+		try noteInterfacesOfLibraryFile(project, path: path, entries: written)
 	end 'eachFile'
 
-	let roster = LibraryNameRoster.create(stamps, names: names)
-	let rostered = roster.names
+	let roster = LibraryNameRoster.create(stamps, names: names, interfaces: declaredInterfacesOnly(written))
 	project.session.fileMemos.libraryNames.upsert(key, value: roster)
-	return rostered
-end 'libraryDeclaredTypeNames'
+	return roster
+end 'libraryRoster'
+
+function declaredInterfacesOnly(written LibraryInterfaceMap) returns LibraryInterfaceMap
+	var interfaces = LibraryInterfaceMap.create()
+
+	for (name, entry) in written 'eachWritten'
+		if entry.declared 'anInterface'
+			interfaces.upsert(name, value: entry)
+		end 'anInterface'
+	end 'eachWritten'
+
+	return interfaces
+end 'declaredInterfacesOnly'
+
+function noteInterfacesOfLibraryFile(project Project, path FilePath, entries LibraryInterfaceMap) throws CompileError
+	let content = (try sourceEntryOf(project, path: path)).content
+
+	if not content.contains(InterfaceKeywordText) and not content.contains(ExtensionKeywordText) 'declaresNeither'
+		return
+	end 'declaresNeither'
+
+	view tokens = try queryActiveTokens(project, path: path)
+
+	for position in 0 upto tokens.count() 'eachToken'
+		let token = try tokens.get(position) otherwise panic("noteInterfacesOfLibraryFile: tokens.get OOB at {position} below count {tokens.count()}")
+
+		if token.kind == TokenKind.interface 'anInterface'
+			noteLibraryInterface(tokens, keywordAt: position, entries: entries)
+		end 'anInterface' else if token.kind == TokenKind.extension 'anExtension'
+			noteLibraryExtension(tokens, keywordAt: position, entries: entries)
+		end 'anExtension'
+	end 'eachToken'
+end 'noteInterfacesOfLibraryFile'
+
+function declarationNameAfter(tokens TokenArray, keywordAt ElementIndex) returns String throws AbsentError
+	let nameToken = try tokens.get(keywordAt + 1) otherwise panic("declarationNameAfter: the keyword at {keywordAt} is the last of {tokens.count()} tokens, which end at the end-of-file token")
+
+	if nameToken.kind != TokenKind.identifier 'notADeclaration'
+		throw AbsentError.absent
+	end 'notADeclaration'
+
+	return String.from(nameToken.value)
+end 'declarationNameAfter'
+
+function noteLibraryInterface(tokens TokenArray, keywordAt ElementIndex, entries LibraryInterfaceMap)
+	let name = try declarationNameAfter(tokens, keywordAt: keywordAt) otherwise return
+	var entry = try entries.get(name) otherwise LibraryInterface.create()
+	var listingParents = false
+	entry.declared = true
+
+	for header in keywordAt + 2 upto tokens.count() 'eachHeaderToken'
+		let token = try tokens.get(header) otherwise panic("noteLibraryInterface: tokens.get OOB at {header} below count {tokens.count()}")
+
+		if token.kind == TokenKind.newline or token.kind == TokenKind.eof 'endOfHeader'
+			break
+		end 'endOfHeader'
+
+		if token.kind == TokenKind.extends 'startsTheParents'
+			listingParents = true
+		end 'startsTheParents' else if listingParents and token.kind == TokenKind.identifier 'aParent'
+			entry.parents.push(String.from(token.value))
+		end 'aParent'
+	end 'eachHeaderToken'
+
+	entries.upsert(name, value: entry)
+end 'noteLibraryInterface'
+
+function noteLibraryExtension(tokens TokenArray, keywordAt ElementIndex, entries LibraryInterfaceMap)
+	let name = try declarationNameAfter(tokens, keywordAt: keywordAt) otherwise return
+	var entry = try entries.get(name) otherwise LibraryInterface.create()
+
+	for body in keywordAt + 2 upto tokens.count() 'eachBodyToken'
+		let token = try tokens.get(body) otherwise panic("noteLibraryExtension: tokens.get OOB at {body} below count {tokens.count()}")
+
+		if token.kind == TokenKind.end and token.column == FirstSourceColumn 'closesTheExtension'
+			break
+		end 'closesTheExtension'
+
+		if token.kind != TokenKind.function or body + 1 >= tokens.count() 'notAMethodHead'
+			continue
+		end 'notAMethodHead'
+
+		let method = try tokens.get(body + 1) otherwise panic("noteLibraryExtension: tokens.get OOB at {body + 1} below count {tokens.count()}")
+
+		if method.kind == TokenKind.identifier 'aMethod'
+			entry.methods.push(String.from(method.value))
+		end 'aMethod'
+	end 'eachBodyToken'
+
+	entries.upsert(name, value: entry)
+end 'noteLibraryExtension'
+
+let InterfaceKeywordText = "interface"
+let ExtensionKeywordText = "extension"
+let FirstSourceColumn = 1
 
 function declaredTypeNamesOfLibraryFile(project Project, path FilePath) returns NameRoster throws CompileError
 	try loadOneSourceFile(project, path: path)

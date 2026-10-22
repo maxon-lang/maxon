@@ -682,12 +682,25 @@ export typealias FileProvenanceMemo = Map with (FilePath, FileProvenance)
 
 module typealias SourceFileStampMap = Map with (FilePath, SourceFileStamp)
 
+export type LibraryInterface
+	export var declared as bool
+	export var parents as StringArray
+	export var methods as StringArray
+
+	export static function create() returns LibraryInterface
+		return Self{declared: false, parents: StringArray.create(), methods: StringArray.create()}
+	end 'create'
+end 'LibraryInterface'
+
+export typealias LibraryInterfaceMap = Map with (String, LibraryInterface)
+
 module type LibraryNameRoster
 	let stamps as SourceFileStampMap
 	export let names as NameRoster
+	export let interfaces as LibraryInterfaceMap
 
-	module static function create(stamps SourceFileStampMap, names NameRoster) returns LibraryNameRoster
-		return Self{stamps: stamps, names: names}
+	module static function create(stamps SourceFileStampMap, names NameRoster, interfaces LibraryInterfaceMap) returns LibraryNameRoster
+		return Self{stamps: stamps, names: names, interfaces: interfaces}
 	end 'create'
 
 	module function describes(paths MaxonSourcePathArray) returns bool

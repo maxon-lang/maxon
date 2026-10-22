@@ -1960,6 +1960,12 @@ export enum ModuleInitNeed
 	runsProgramCode
 end 'ModuleInitNeed'
 
+export enum ModuleVarHolding
+	none
+	scalarsOnly
+	holdsValues
+end 'ModuleVarHolding'
+
 enum InitializerShape
 	scalar
 	records
@@ -26899,17 +26905,50 @@ export type ProgramSignatures
 		return need
 	end 'programModuleInitNeed'
 
-	export function declaresAUserModuleVar() returns bool
-		for i in 0 upto self.settledDeclarations().decls.count() 'each'
-			let decl = self.declAt(i)
+	export function userModuleVarHolding() returns ModuleVarHolding
+		var holding = ModuleVarHolding.none
 
-			if decl.mutable and not decl.declaredByTheCorpus 'anAuthorsVar'
-				return true
-			end 'anAuthorsVar'
+		for i in 0 upto self.settledDeclarations().decls.count() 'each'
+			view decl = self.declAt(i)
+
+			if not decl.mutable or decl.declaredByTheCorpus 'notAnAuthorsVar'
+				continue
+			end 'notAnAuthorsVar'
+
+			match self.initializerShapeOf(decl) 'shape'
+				scalar then holding = ModuleVarHolding.holdsValues if self.initializerNamesAValue(decl) else ModuleVarHolding.scalarsOnly
+				records or
+				runsCode then return ModuleVarHolding.holdsValues
+			end 'shape'
+
+			if holding == ModuleVarHolding.holdsValues 'settled'
+				return holding
+			end 'settled'
 		end 'each'
 
+		return holding
+	end 'userModuleVarHolding'
+
+	function initializerNamesAValue(decl TopLevelDecl) returns bool
+		let tokens = self.declTokenStreamOf(decl).prepared.tokens
+		var previousKind = TokenKind.equals
+
+		for position in decl.initStart upto decl.initEnd 'eachToken'
+			let token = try tokens.get(position) otherwise panic("ProgramSignatures.initializerNamesAValue: initializer token {position} of '{String.from(decl.name)}' is not below the declaring file's {tokens.count()} tokens")
+
+			if tokenKindIsSkippedLayout(token.kind) 'layout'
+				continue
+			end 'layout'
+
+			if token.kind == TokenKind.identifier and previousKind != TokenKind.as 'aValueName'
+				return true
+			end 'aValueName'
+
+			previousKind = token.kind
+		end 'eachToken'
+
 		return false
-	end 'declaresAUserModuleVar'
+	end 'initializerNamesAValue'
 
 	// Read off the initializer's tokens and default-deny: a token not explicitly scalar- or record-shaped
 	// runs code. A member read is scalar only as `.min`/`.max` or an enum or union case, and a comparison

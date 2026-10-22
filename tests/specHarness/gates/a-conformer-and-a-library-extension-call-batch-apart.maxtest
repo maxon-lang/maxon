@@ -1,0 +1,16 @@
+let ExtensionApartSpecName = "extension-apart"
+
+test 'a case declaring a conformer with a private cursor and a case calling a library extension method batch into separate programs'
+	let run = runGateFixtureOnce(StringArray.create())
+	let said = everythingSaid(run)
+	var broken = StringArray.create()
+
+	collectNotPassed(said, specName: ExtensionApartSpecName, testNames: ["extension-apart.walks-a-private-cursor", "extension-apart.maps-an-array", "extension-apart.walks-another-private-cursor", "extension-apart.filters-an-array"], broken: broken)
+	collectMissingSummary(said, expected: batchSummaryLine(4, programs: 2, alone: 0), broken: broken)
+
+	if run.exitCode() != SuccessExitCode 'runFailed'
+		broken.push("the run exited {run.exitCode()}. It said:\n{said}\n")
+	end 'runFailed'
+
+	requireNothingBroken(broken, headline: "a conformer with a private cursor and a library extension call batch apart")
+end 'a case declaring a conformer with a private cursor and a case calling a library extension method batch into separate programs'

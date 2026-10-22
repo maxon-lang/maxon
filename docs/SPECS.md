@@ -488,7 +488,12 @@ of that name), and a case declaring a `typealias` and another that names the wor
 case declaring a module-level `var` and a case that spawns a service land in different programs too: a
 closure call reached from a service message reaches every function whose address the program takes, so
 [E3143](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3143) refuses the pair together while each compiles
-alone. The declared and mentioned names come from the compiler's own front end, one pass per case
+alone. A case whose module-level `var` may hold a function value (any initializer that is not a plain scalar) and a case
+that writes a function type or a closure also land apart, since a closure call in the second may reach the first's `var`
+and [E3188](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3188) refuses a `let` bound to what that call can write. So do
+a case declaring a type that implements `Iterable`, `Iterator` or any other library interface with extension methods and a
+case that names one of those methods: the extension's body is expanded over every conformer in the program, and it
+cannot name a cursor type that is file-private (E3008). The declared and mentioned names come from the compiler's own front end, one pass per case
 (`Compiler.claimsOfSources`). Each batched case
 sits in its own directory, so its file-private names stay its own, with its `main` renamed to an exported
 `__spec_case_<n>`, and a generated entry runs the cases selected by `--select=`
