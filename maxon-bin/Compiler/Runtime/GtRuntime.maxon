@@ -2752,7 +2752,7 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtResched(module)
 	buildGtPreempt(module, target: target)
 	buildGtIoPark(module)
-	buildGtProcessRun(module, commandShape: subprocessCommandShape(target))
+	buildGtProcessRun(module, commandShape: subprocessCommandShape(target), childShape: netpollShape(target))
 
 	// The shell wrapper `__gt_process_run` and the one-shot read probe take a command LINE through, on a lane
 	// whose spawn primitive takes a vector. Beside its callers, for the reason its own header carries.
@@ -8320,7 +8320,7 @@ end 'buildGtPreempt'
 // accessor uses. Every exit is an `errorReturn`: the reap path returns `(code, NoErrorFlag)`, a
 // `CreateProcessW` failure returns `(0, RunProcessSpawnFailedFlag)`. The front end recognizes `__gt_process_run` as a
 // throwing runtime callee (`isThrowingGtRuntimeCallee`), so a `runProcess` call must be a `tryCall`.
-function buildGtProcessRun(module StdModule, commandShape SubprocessCommandShape)
+function buildGtProcessRun(module StdModule, commandShape SubprocessCommandShape, childShape NetpollShape)
 	var func = IrFunction.createFromStd(GtProcessRunName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: runProcessErrorThrows())
 	var ids = ValueMinter.create(1)
 
@@ -8368,6 +8368,7 @@ function buildGtProcessRun(module StdModule, commandShape SubprocessCommandShape
 	var spawnFailed = module.addBlock(func, label: b"spawnfailed", heat: BlockHeat.normal)
 	var spawnOk = module.addBlock(func, label: b"spawnok", heat: BlockHeat.normal)
 	var waitChild = module.addBlock(func, label: b"waitchild", heat: BlockHeat.normal)
+	var childReady = module.addBlock(func, label: b"childready", heat: BlockHeat.normal)
 	var renounced = module.addBlock(func, label: b"renounced", heat: BlockHeat.normal)
 	var reapExit = module.addBlock(func, label: b"reapexit", heat: BlockHeat.normal)
 
@@ -8421,22 +8422,25 @@ function buildGtProcessRun(module StdModule, commandShape SubprocessCommandShape
 	let child = emitNetpollAcquireChildSource(module, func: func, ids: ids, cur: spawnOk, hProcess: hProcess, cont: waitChild, gone: reapExit)
 
 	// waitChild: suspend on the source's READ direction and resume when the child's exit lands there. The
-	// registration is given back on every road out, because the source is a descriptor (or, on a completion
-	// port, a key) this call owns for exactly as long as the wait — which is why the close is appended AFTER
-	// the branch is set and still runs BEFORE it: a block's body ops all run ahead of its terminator, so one
-	// copy serves both roads out.
+	// source is a descriptor (or, on a completion port, a key) this call owns for exactly as long as
+	// the wait, so `childready` gives the registration back on readiness and
+	// `emitNetpollRenounceChild` says who does on the renounced road.
 	let childGen = emitNetpollPdOpBegin(module, block: waitChild, source: child.source, ids: ids)
-	emitGtWaitReadable(module, cur: waitChild, source: child.source, gen: childGen, ready: reapExit, renounced: renounced, ids: ids)
-	module.appendOp(waitChild, op: StdOp.call(ids.mint(), callee: NetpollChildCloseName, args: twoArgs(child.source, second: child.token)))
+	emitGtWaitReadable(module, cur: waitChild, source: child.source, gen: childGen, ready: childReady, renounced: renounced, ids: ids)
 
-	// ⭐⭐ **A WAIT THAT ENDED ANY OTHER WAY WAS RENOUNCED, AND THE CHILD IS ABANDONED RATHER THAN KILLED.**
+	module.appendOp(childReady, op: StdOp.call(ids.mint(), callee: NetpollChildCloseName, args: twoArgs(child.source, second: child.token)))
+	module.setTerminator(childReady, op: StdOp.branch(reapExit.id))
+
+	// ⭐⭐ **A WAIT THAT ENDED ANY OTHER WAY WAS RENOUNCED, AND THE CHILD IS LEFT RUNNING, NOT KILLED.**
 	// Only `__np_pd_drop` can end this wait without readiness — no deadline is ever armed on a child — so the
 	// promise this coroutine belongs to has been dropped and nothing can observe the answer. The child runs to
-	// completion on its own: reading its code would mean blocking the machine on a process nobody is waiting
-	// for.
+	// completion on its own: reading its code here would mean blocking the machine on a process nobody
+	// is waiting for. Who closes the child's handle is `emitNetpollRenounceChild`'s to say.
 	let renouncedCode = ids.mint()
 	module.appendOp(renounced, op: StdOp.const(renouncedCode, value: 0, valueType: StdType.i64))
-	module.appendOp(renounced, op: StdOp.osCloseHandle(hProcess))
+
+	emitNetpollRenounceChild(module, block: renounced, shape: childShape, child: child, hProcess: hProcess, ids: ids)
+
 	let renouncedNoError = ids.mint()
 	module.appendOp(renounced, op: StdOp.const(renouncedNoError, value: NoErrorFlag, valueType: StdType.i64))
 	module.setTerminator(renounced, op: StdOp.errorReturn(renouncedCode, errorFlagId: renouncedNoError))

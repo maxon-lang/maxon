@@ -21,7 +21,10 @@ no longer BEGIN an operation that waits on a far end, which answers that operati
 at once rather than parking for a wake-up the spent drop will never send. A started
 thread parked on a wait (a `sleep` timer, a `runProcess` child) has that wait ended early — it is readied,
 resumes, unwinds its own frame, and its strand's runner reclaims it — because nothing can unwind a suspended
-frame from outside, and freeing its stack would strand every heap value its locals own. Because
+frame from outside, and freeing its stack would strand every heap value its locals own. A `runProcess` child is
+not killed by the drop and is not left unreaped: on Windows the thread closes the child's handle and the OS reclaims
+the process, and on the POSIX lanes the poll record that watches the child becomes its owner, so the poller reaps the
+child when it exits with nobody awaiting (`posix-a-dropped-child-is-reaped-when-it-exits`). Because
 a green thread's struct and stack are slab/OS allocations invisible to the `__mm` heap leak gate, a spawned
 thread that is neither awaited nor dropped leaks silently — so the runtime keeps a green-thread live count (one up
 per spawn, one down when the promise's owner releases it, by an await or a drop) and the one OS-exit leak gate
@@ -417,6 +420,101 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 42
+```
+
+<!-- test: async-promise-drop.posix-a-dropped-child-is-reaped-when-it-exits -->
+<!-- tier: stdlib -->
+<!-- unsupported-targets: x64-windows -->
+A dropped promise abandons the child's wait, and the child must still be reaped when it exits. Three coroutines each
+park on a `sleep 1` child and are dropped while it runs; the program then sleeps past every exit and asks `ps` for the
+zombies among its own children.
+```maxon
+
+function slowProc() returns Integer
+	return try __Builtins.runProcess("sleep 1") otherwise 99
+end 'slowProc'
+
+function fast() returns Integer
+	Scheduler.yield()
+	return 42
+end 'fast'
+
+function zombieChildren() returns String
+	let shell = Executable.path(try FilePath.from("/bin/sh") otherwise panic("/bin/sh is a valid path"))
+	var argv = StringArray.create()
+	argv.push("-c")
+	argv.push("ps -A -o ppid=,stat= | awk -v me=$PPID '$1 == me && $2 ~ /^Z/ \{ n++ \} END \{ print n + 0 \}'")
+	let result = try Subprocess.run(shell, arguments: argv) otherwise panic("ps could not run")
+	return result.stdout
+end 'zombieChildren'
+
+function main() returns ExitCode
+	var early = 0 as Integer
+
+	for _ in 0 upto 3 'drops'
+		let s = async slowProc()
+		let q = async fast()
+		_ = await q
+
+		if s.isComplete() 'finishedEarly'
+			early = early + 1
+		end 'finishedEarly'
+	end 'drops'
+
+	sleep(2500)
+	print("early={early}\n")
+	print("zombies={zombieChildren()}")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```stdout
+early=0
+zombies=0
+```
+```exitcode
+0
+```
+
+<!-- test: async-promise-drop.posix-children-cancelled-around-their-exit-are-all-reaped -->
+<!-- tier: stdlib -->
+<!-- unsupported-targets: x64-windows -->
+Sixty children each live about ten milliseconds, and each is cancelled after a different delay, so the cancellations land
+before, during and after the exits. Whichever side of the exit a cancel falls on, the child is reaped, so no zombie is left
+once the last of them has had time to finish.
+```maxon
+
+function shortProc() returns Integer
+	return try __Builtins.runProcess("sleep 0.01") otherwise 99
+end 'shortProc'
+
+function zombieChildren() returns String
+	let shell = Executable.path(try FilePath.from("/bin/sh") otherwise panic("/bin/sh is a valid path"))
+	var argv = StringArray.create()
+	argv.push("-c")
+	argv.push("ps -A -o ppid=,stat= | awk -v me=$PPID '$1 == me && $2 ~ /^Z/ \{ n++ \} END \{ print n + 0 \}'")
+	let result = try Subprocess.run(shell, arguments: argv) otherwise panic("ps could not run")
+	return result.stdout
+end 'zombieChildren'
+
+function main() returns ExitCode
+	for lap in 0 upto 60 'cancels'
+		let p = async shortProc()
+		sleep(lap mod 13)
+		p.cancel()
+	end 'cancels'
+
+	sleep(1500)
+	print("zombies={zombieChildren()}")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```stdout
+zombies=0
+```
+```exitcode
+0
 ```
 
 <!-- test: async-promise-drop.windows-parked-pipe-read-drop-reclaims-the-frames-heap -->

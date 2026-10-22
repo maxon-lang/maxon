@@ -126,6 +126,11 @@ export function netpollRuntimeGlobals() returns DataSectionEntryArray
 	pushRuntimeGlobal(out, label: NetpollPdCapLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: NetpollWaitersLabel, sharing: MultiMSharing.publishedFromTheLock, reach: DataReach.walked)
 
+	// Written only under `__sched_lock`. `__np_poll` tests it for emptiness without the lock and
+	// `__np_orphan_reap` re-reads it under the lock, so a stale answer defers the reap to the next
+	// poll.
+	pushRuntimeGlobal(out, label: NetpollOrphanExitedLabel, sharing: MultiMSharing.publishedFromTheLock, reach: DataReach.walked)
+
 	// The source-key allocator — see `PdOffNextFreeKey`. Both words move inside ONE hold of
 	// `__sched_lock`, exactly as the table's base and capacity do.
 	pushRuntimeGlobal(out, label: NetpollSourceKeyFreeLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
@@ -180,7 +185,7 @@ export function installNetpollRuntime(module StdModule, target Target)
 	buildNetpollPdWait(module)
 	buildNetpollPdCommit(module)
 	buildNetpollPdExpire(module)
-	buildNetpollPdDrop(module)
+	buildNetpollPdDrop(module, target: target)
 	buildNetpollPdReadyOne(module)
 	buildNetpollFail(module)
 	buildNetpollPdWake(module, target: target)
@@ -212,6 +217,13 @@ export function installNetpollRuntime(module StdModule, target Target)
 		completionPort or
 		kqueue then break
 	end 'signalBand'
+
+	match netpollShape(target) 'orphanBand'
+		epoll or
+		kqueue then buildNetpollOrphanBand(module, target: target)
+
+		completionPort then break
+	end 'orphanBand'
 
 	// The pipe band, likewise on every lane — the completion-port shape answers both doors with nothing to do.
 	buildNetpollPipeOpen(module, target: target)
@@ -501,7 +513,8 @@ function emitNetpollRaise(module StdModule, func IrFunction, cur IrBlock, shape 
 	emitNetpollRequire(module, func: func, cur: cur, shape: shape, verb: NetpollVerb.raiseBreak, subject: breakSource, answer: answer, cont: cont, ids: ids)
 end 'emitNetpollRaise'
 
-// ⭐⭐⭐ **`__np_poll(timeoutMs)` — THE WAIT, AND THE ONE DECODE OF WHAT IT ANSWERED.**
+// ⭐⭐⭐ **`__np_poll(timeoutMs)` — THE WAIT, THE ONE DECODE OF WHAT IT ANSWERED, AND ON A POSIX LANE
+// THE REAP OF THE ORPHANS THAT DECODE QUEUED.**
 //
 // ⚠ **A BREAK BELONGS TO THE BLOCKING POLLER** (Go's `delay != 0`). A non-blocking poll that receives one — only
 // `__sysmon`'s stale poll makes those — leaves it for the blocking one: the epoll shape simply does not read the
@@ -562,11 +575,32 @@ function buildNetpollPoll(module StdModule, target Target)
 	module.setTerminator(nextEntry, op: StdOp.branch(entryHdr.id))
 	nextEntry.branchEdges.push(BranchEdge.create(entryHdr.id, argIds: argsOf(nextIndex)))
 
-	module.setTerminator(doneBlock, op: StdOp.retVoid)
+	emitNetpollFinishOrphans(module, func: func, cur: doneBlock, shape: shape, ids: ids)
 	emitNetpollFailWith(module, func: func, block: failedWait, verb: NetpollVerb.wait, subject: poller, answer: answer, ids: ids)
 
 	module.functions.push(func)
 end 'buildNetpollPoll'
+
+function emitNetpollFinishOrphans(module StdModule, func IrFunction, cur IrBlock, shape NetpollShape, ids ValueMinter)
+	match shape 'finish'
+		epoll or
+		kqueue then emitNetpollReapIfAny(module, func: func, cur: cur, ids: ids)
+
+		completionPort then module.setTerminator(cur, op: StdOp.retVoid)
+	end 'finish'
+end 'emitNetpollFinishOrphans'
+
+function emitNetpollReapIfAny(module StdModule, func IrFunction, cur IrBlock, ids ValueMinter)
+	var reap = module.addBlock(func, label: b"npreaporphans", heat: BlockHeat.normal)
+	var none = module.addBlock(func, label: b"npnoorphans", heat: BlockHeat.normal)
+
+	let head = emitLoadAcquireGlobalWord(module, block: cur, label: NetpollOrphanExitedLabel, ids: ids)
+	emitBranchOnCompare(module, block: cur, value: head, pred: StdCmpPred.ne, against: 0, whenTrue: reap, whenFalse: none, ids: ids)
+
+	module.appendOp(reap, op: StdOp.call(ids.mint(), callee: NetpollOrphanReapName, args: ValueIdArray.create()))
+	module.setTerminator(reap, op: StdOp.retVoid)
+	module.setTerminator(none, op: StdOp.retVoid)
+end 'emitNetpollReapIfAny'
 
 // ⭐⭐⭐ **THE COMPLETION-PORT LANE HAS THREE PACKET SHAPES AND EACH IS NAMED HERE.** A break, a
 // child's exit posted by hand, and an overlapped pipe read the kernel finished — and the two tokens
@@ -842,11 +876,23 @@ let PdOffGen = 48
 // rather than key zero.
 let PdOffNextFreeKey = 56
 
-// The child a signal-mode record waits on, 0 before the arm and once its exit has readied the
-// record. `__np_child_sweep` asks only records holding one, so a cleared word is what keeps one
-// exit from readying its waiter twice.
+// The child a record waits on, 0 before the arm: `__np_child_bind` stores it on pidfd and kqueue,
+// `__np_child_track` in signal mode. A signal-mode exit that readies the waiter clears it, and so
+// does the reaper when it pops an orphan. `__np_child_sweep` asks only records holding one, so a
+// cleared word is what keeps one exit from readying its waiter twice and keeps the sweep off a
+// wait object the reaper has closed.
 let PdOffChildHandle = 64
-let PdBytes = 72
+
+// Who owns the child: `PdChildAwaited` the coroutine parked on it, `PdChildOrphaned` the record
+// itself once the promise was dropped, `PdChildExited` the `__np_orphan_exited` list once that
+// child's exit was reported. `PdOffOrphanNext` links the list.
+let PdOffOrphanState = 72
+let PdOffOrphanNext = 80
+let PdBytes = 88
+
+let PdChildAwaited = 0
+let PdChildOrphaned = 1
+let PdChildExited = 2
 
 // The values a direction word holds that are not a green thread. The first three are Go's `pdNil`, `pdReady`
 // and `pdWait`: nothing, a readiness nobody has consumed, and a wait that is marked but not published
@@ -869,6 +915,10 @@ let PdWait = 2
 // is its answer — a renounced reader must not issue its call again on a descriptor nobody wants — while a
 // group member the wait did not fire on is held as `PdWait`, so a readiness landing on it before the group
 // resumes becomes `PdWoken` and is reported: the collect drain's child source reports exactly once.
+//
+// A child record marked orphaned is the exception: its readiness is routed by
+// `emitNetpollBranchOnChildOwner` before the direction word is consulted, so the `PdExpired` its
+// drop left does not absorb the exit.
 let PdWoken = 3
 let PdExpired = 4
 
@@ -985,7 +1035,8 @@ let NetpollPdMarkTimedOutName = b"__np_pd_mark_timed_out"
 export let NetpollPdTimedOutName = b"__np_pd_timed_out"
 
 // `__np_pd_wake(fd, readReady, writeReady) -> wakeDebt` — the poller's readiness walk, whose one caller is the
-// decode in this file. Called with `__sched_lock` NOT held; it takes the lock itself.
+// decode in this file. Called with `__sched_lock` NOT held; it takes the lock itself. On a POSIX
+// lane a record whose child was renounced is queued for the reaper instead of readying a waiter.
 let NetpollPdWakeName = b"__np_pd_wake"
 
 // `__np_pd_commit(gt) -> wakeDebt` — `__gt_register_park`'s netpoll arm: publish the parked thread into the
@@ -1000,7 +1051,9 @@ export let NetpollPdExpireName = b"__np_pd_expire"
 // it off the poller, disarm its deadline and mark the wait EXPIRED, so its resumption answers
 // `timedOut` rather than re-issuing a syscall on a descriptor nobody wants. The READY is the
 // caller's (`GtRuntime.emitGtRenouncePark`), owed only when this answers found; `NetpollDropMissed`
-// means the readiness walk or the deadline readied the thread first. `__sched_lock` held.
+// means the readiness walk or the deadline readied the thread first. `__sched_lock` held. On a
+// POSIX lane a record holding a child is also marked orphaned, which hands the child to the poller
+// to reap.
 export let NetpollPdDropName = b"__np_pd_drop"
 
 export let NetpollDropMissed = 0 as FullRangeInt
@@ -1437,6 +1490,7 @@ function emitNetpollPdClear(module StdModule, block IrBlock, pd ValueId, ids Val
 	emitStoreField(module, block: block, record: pd, offset: PdOffWd, value: zeroWord)
 	emitStoreField(module, block: block, record: pd, offset: PdOffTimedOut, value: zeroWord)
 	emitStoreField(module, block: block, record: pd, offset: PdOffChildHandle, value: zeroWord)
+	emitStoreField(module, block: block, record: pd, offset: PdOffOrphanState, value: zeroWord)
 
 	// The record's next life starts here, so a thread that parked on its previous one stops owning these words
 	// — see `PdOffGen`. It is BUMPED and not zeroed because a snapshot can only tell one life from the next by
@@ -1780,7 +1834,7 @@ end 'buildNetpollPdExpire'
 // event can reach it, disarm its deadline, and mark the wait EXPIRED. The caller readies it when
 // this answers found; it runs its own body out, its own frame's destructors free what it held, and
 // its runner reclaims it — the queued arm's contract exactly.
-function buildNetpollPdDrop(module StdModule)
+function buildNetpollPdDrop(module StdModule, target Target)
 	var func = IrFunction.createFromStd(NetpollPdDropName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	requireRuntimeLockHeld(module, func: func, lockLabel: SchedLockLabel)
 	var ids = ValueMinter.create(1)
@@ -1814,7 +1868,7 @@ function buildNetpollPdDrop(module StdModule)
 	module.setTerminator(look, op: StdOp.condBranch(singleTook, thenBlockId: unhook.id, elseBlockId: disarm.id))
 
 	emitNetpollUnhookExpired(module, block: unhook, gpp: gpp, ids: ids)
-	module.setTerminator(unhook, op: StdOp.branch(disarm.id))
+	emitNetpollOrphanParkedChild(module, func: func, cur: unhook, shape: netpollShape(target), pd: parkedOn.pd, cont: disarm, ids: ids)
 
 	// The deadline goes whether or not the direction still named this thread: a readiness wake that got there
 	// first removed the entry already, and the scan then answers "not present" rather than taking another's.
@@ -1823,6 +1877,28 @@ function buildNetpollPdDrop(module StdModule)
 
 	module.functions.push(func)
 end 'buildNetpollPdDrop'
+
+function emitNetpollOrphanParkedChild(module StdModule, func IrFunction, cur IrBlock, shape NetpollShape, pd ValueId, cont IrBlock, ids ValueMinter)
+	match shape 'ownership'
+		epoll or
+		kqueue then emitNetpollMarkOrphanedChild(module, func: func, cur: cur, pd: pd, cont: cont, ids: ids)
+
+		completionPort then module.setTerminator(cur, op: StdOp.branch(cont.id))
+	end 'ownership'
+end 'emitNetpollOrphanParkedChild'
+
+// Made in the same `__sched_lock` hold that took the waiter off the direction word: a readiness
+// landing between the two would meet `PdExpired` and be absorbed, and the exited child would never
+// be reaped.
+function emitNetpollMarkOrphanedChild(module StdModule, func IrFunction, cur IrBlock, pd ValueId, cont IrBlock, ids ValueMinter)
+	var mark = module.addBlock(func, label: b"npdorphan", heat: BlockHeat.normal)
+
+	let child = emitLoadField(module, block: cur, record: pd, offset: PdOffChildHandle, ids: ids)
+	emitBranchOnCompare(module, block: cur, value: child, pred: StdCmpPred.ne, against: 0, whenTrue: mark, whenFalse: cont, ids: ids)
+
+	emitStoreField(module, block: mark, record: pd, offset: PdOffOrphanState, value: emitConst(module, block: mark, value: PdChildOrphaned, ids: ids))
+	module.setTerminator(mark, op: StdOp.branch(cont.id))
+end 'emitNetpollMarkOrphanedChild'
 
 // `__np_pd_ready_one(pd, mode)` — see `NetpollPdReadyOneName`.
 function buildNetpollPdReadyOne(module StdModule)
@@ -1913,18 +1989,21 @@ function emitNetpollWakeIndex(module StdModule, block IrBlock, shape NetpollShap
 end 'emitNetpollWakeIndex'
 
 // ⭐⭐⭐ **A PACKET FOR A SOURCE ALREADY GIVEN BACK NAMES NOTHING, AND DROPPING IT IS THE ANSWER.** A kernel
-// stops reporting a CLOSED descriptor itself, so a POSIX lane has no such packet and this is a plain branch
-// there. A completion packet outlives its child and the key is all it carries, so the generation rides in the
-// key's high half and is compared here against the record's. Readying on a mismatch readies whoever holds that
-// index NOW — on Windows the next child, whose waiter then reads `STILL_ACTIVE` off a live process.
-function emitNetpollWakeGenerationGate(module StdModule, block IrBlock, shape NetpollShape, key ValueId, pd ValueId, live IrBlock, stale IrBlock, noDebt ValueId, ids ValueMinter)
+// stops reporting a CLOSED descriptor itself, so a POSIX lane has no such packet; there the gate
+// sends a record whose child was renounced to the reaper's list or drops a repeat of that exit
+// (`emitNetpollBranchOnChildOwner`) and lets every other record through. A completion packet
+// outlives its child and the key is all it carries, so the generation rides in the key's high half
+// and is compared here against the record's. Readying on a mismatch readies whoever holds that
+// index NOW — on Windows the next child, whose waiter then reads `STILL_ACTIVE` off a live
+// process.
+function emitNetpollWakeGate(module StdModule, func IrFunction, block IrBlock, shape NetpollShape, key ValueId, pd ValueId, readReady ValueId, live IrBlock, stale IrBlock, noDebt ValueId, ids ValueMinter)
 	match shape 'shape'
 		epoll or
-		kqueue then module.setTerminator(block, op: StdOp.branch(live.id))
+		kqueue then emitNetpollBranchOnChildOwner(module, func: func, block: block, pd: pd, exitSeen: readReady, awaited: live, spent: stale, spentArg: noDebt, ids: ids)
 
 		completionPort then emitNetpollWakeCompareGeneration(module, block: block, key: key, pd: pd, live: live, stale: stale, noDebt: noDebt, ids: ids)
 	end 'shape'
-end 'emitNetpollWakeGenerationGate'
+end 'emitNetpollWakeGate'
 
 function emitNetpollWakeCompareGeneration(module StdModule, block IrBlock, key ValueId, pd ValueId, live IrBlock, stale IrBlock, noDebt ValueId, ids ValueMinter)
 	let stamped = emitBin(module, block: block, a: key, b: emitConst(module, block: block, value: NetpollKeyGenShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
@@ -1962,7 +2041,7 @@ function buildNetpollPdWake(module StdModule, target Target)
 	module.setTerminator(entry, op: StdOp.condBranch(haveRecord, thenBlockId: current.id, elseBlockId: doneBlock.id))
 	entry.branchEdges.push(BranchEdge.create(doneBlock.id, argIds: argsOf(noDebt)))
 
-	emitNetpollWakeGenerationGate(module, block: current, shape: netpollShape(target), key: fd, pd: pd, live: known, stale: doneBlock, noDebt: noDebt, ids: ids)
+	emitNetpollWakeGate(module, func: func, block: current, shape: netpollShape(target), key: fd, pd: pd, readReady: readReady, live: known, stale: doneBlock, noDebt: noDebt, ids: ids)
 
 	emitBranchOnCompareValues(module, block: known, a: readReady, pred: StdCmpPred.ne, b: zero, whenTrue: doRead, whenFalse: afterRead, ids: ids)
 	known.branchEdges.push(BranchEdge.create(afterRead.id, argIds: argsOf(noDebt)))
@@ -2119,6 +2198,8 @@ let NetpollChildOpenName = b"__np_child_open"
 
 // `__np_child_arm(source, childHandle) -> token` — register the source with the poller. A 0 says the
 // registration was refused; any other value is the token `__np_child_close` must be handed back.
+// On a POSIX lane it also stores `childHandle` in the record (`PdOffChildHandle`), which is what
+// lets the record own the child if the promise is dropped.
 let NetpollChildArmName = b"__np_child_arm"
 
 // `__np_child_close(source, token)` — give the source and its registration back, and reset its record.
@@ -2131,6 +2212,14 @@ let NetpollChildArmed = 1
 let NetpollChildTrackName = b"__np_child_track"
 let NetpollChildSweepName = b"__np_child_sweep"
 let NetpollChildSignalFdName = b"__np_child_signal_fd"
+let NetpollChildBindName = b"__np_child_bind"
+let NetpollOrphanReapName = b"__np_orphan_reap"
+
+// The renounced children whose exit was reported, linked through `PdOffOrphanNext`. A record on it
+// belongs to the list until `__np_orphan_reap` closes it. An orphan is not counted in
+// `__np_waiters`, so neither the exit drain nor `__sched_checkdead` waits for it, and no timer or
+// thread polls on its behalf: it is reaped by whichever `__np_poll` runs after its exit.
+let NetpollOrphanExitedLabel = b"__np_orphan_exited"
 
 // The source-key allocator: the head of the free list (a key + 1, so 0 is "empty") and the lowest
 // key never yet handed out. Its holders are a parked child and an overlapped read in flight on the
@@ -2377,18 +2466,104 @@ function buildNetpollSignalBand(module StdModule)
 	buildNetpollChildSweep(module)
 end 'buildNetpollSignalBand'
 
+function buildNetpollOrphanBand(module StdModule, target Target)
+	buildNetpollChildBind(module)
+	buildNetpollOrphanReap(module, target: target)
+end 'buildNetpollOrphanBand'
+
+function buildNetpollChildBind(module StdModule)
+	var func = IrFunction.createFromStd(NetpollChildBindName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var known = module.addBlock(func, label: b"npbindknown", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 2)
+	let source = 0
+	let childHandle = 1
+
+	emitSchedLockEnter(module, block: entry, ids: ids)
+	let pd = emitNetpollPdLookupOrAbort(module, func: func, cur: entry, fd: source, known: known, ids: ids)
+
+	emitStoreField(module, block: known, record: pd, offset: PdOffChildHandle, value: childHandle)
+	emitSchedLockLeave(module, block: known, ids: ids)
+	module.setTerminator(known, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildNetpollChildBind'
+
+// The wait blocks this machine, but the exit is already reported, so it returns at once. It has
+// to block: XNU can report `NOTE_EXIT` before a non-blocking `waitpid` can reap, and the handle's
+// close reaps without blocking, so a close alone could leave the child a zombie.
+function buildNetpollOrphanReap(module StdModule, target Target)
+	var func = IrFunction.createFromStd(NetpollOrphanReapName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var hdr = module.addBlock(func, label: b"nporphanhdr", heat: BlockHeat.normal)
+	var take = module.addBlock(func, label: b"nporphantake", heat: BlockHeat.normal)
+	var empty = module.addBlock(func, label: b"nporphanempty", heat: BlockHeat.normal)
+
+	module.setTerminator(entry, op: StdOp.branch(hdr.id))
+
+	emitSchedLockEnter(module, block: hdr, ids: ids)
+	let record = emitLoadAcquireGlobalWord(module, block: hdr, label: NetpollOrphanExitedLabel, ids: ids)
+	emitBranchOnCompare(module, block: hdr, value: record, pred: StdCmpPred.eq, against: 0, whenTrue: empty, whenFalse: take, ids: ids)
+
+	emitSchedLockLeave(module, block: empty, ids: ids)
+	module.setTerminator(empty, op: StdOp.retVoid)
+
+	emitStoreReleaseGlobalWord(module, block: take, label: NetpollOrphanExitedLabel, value: emitLoadField(module, block: take, record: record, offset: PdOffOrphanNext, ids: ids), ids: ids)
+	let source = emitLoadField(module, block: take, record: record, offset: PdOffFd, ids: ids)
+	let childHandle = emitLoadField(module, block: take, record: record, offset: PdOffChildHandle, ids: ids)
+	emitStoreField(module, block: take, record: record, offset: PdOffChildHandle, value: emitConst(module, block: take, value: 0, ids: ids))
+	emitSchedLockLeave(module, block: take, ids: ids)
+
+	module.appendOp(take, op: StdOp.osWaitHandle(ids.mint(), handleId: childHandle, timeoutMsId: emitConst(module, block: take, value: WaitInfinite, ids: ids)))
+	module.appendOp(take, op: StdOp.osCloseHandle(childHandle))
+	emitNetpollCloseChildOfPosixSource(module, func: func, cur: take, shape: netpollShape(target), source: source, cont: hdr, ids: ids)
+
+	module.functions.push(func)
+end 'buildNetpollOrphanReap'
+
 function emitNetpollChildExited(module StdModule, block IrBlock, childHandle ValueId, ids ValueMinter) returns ValueId
 	let answer = emitNetpoll(module, block: block, verb: NetpollVerb.pollChildExit, operands: argsOf(childHandle), ids: ids)
 	return emitCompareWithConstant(module, block: block, value: answer, pred: StdCmpPred.ne, against: 0, ids: ids)
 end 'emitNetpollChildExited'
 
-function emitNetpollReadyChild(module StdModule, block IrBlock, pd ValueId, incoming ValueId, cont IrBlock, ids ValueMinter)
+function emitNetpollReadyChild(module StdModule, func IrFunction, block IrBlock, pd ValueId, incoming ValueId, cont IrBlock, ids ValueMinter)
+	var awaited = module.addBlock(func, label: b"nprcawaited", heat: BlockHeat.normal)
+
+	emitNetpollBranchOnChildOwner(module, func: func, block: block, pd: pd, exitSeen: emitConst(module, block: block, value: 1, ids: ids), awaited: awaited, spent: cont, spentArg: incoming, ids: ids)
+
 	let debt = ids.mint()
-	module.appendOp(block, op: StdOp.call(debt, callee: NetpollPdReadyOneName, args: twoArgs(pd, second: emitConst(module, block: block, value: NetpollModeRead, ids: ids))))
-	emitStoreField(module, block: block, record: pd, offset: PdOffChildHandle, value: emitConst(module, block: block, value: 0, ids: ids))
-	module.setTerminator(block, op: StdOp.branch(cont.id))
-	block.branchEdges.push(BranchEdge.create(cont.id, argIds: argsOf(emitBin(module, block: block, a: incoming, b: debt, opcode: StdBinOpcode.bitOr, ids: ids))))
+	module.appendOp(awaited, op: StdOp.call(debt, callee: NetpollPdReadyOneName, args: twoArgs(pd, second: emitConst(module, block: awaited, value: NetpollModeRead, ids: ids))))
+	emitStoreField(module, block: awaited, record: pd, offset: PdOffChildHandle, value: emitConst(module, block: awaited, value: 0, ids: ids))
+	module.setTerminator(awaited, op: StdOp.branch(cont.id))
+	awaited.branchEdges.push(BranchEdge.create(cont.id, argIds: argsOf(emitBin(module, block: awaited, a: incoming, b: debt, opcode: StdBinOpcode.bitOr, ids: ids))))
 end 'emitNetpollReadyChild'
+
+function emitNetpollBranchOnChildOwner(module StdModule, func IrFunction, block IrBlock, pd ValueId, exitSeen ValueId, awaited IrBlock, spent IrBlock, spentArg ValueId, ids ValueMinter)
+	var renounced = module.addBlock(func, label: b"npownrenounced", heat: BlockHeat.normal)
+	var queueOrphan = module.addBlock(func, label: b"npownqueue", heat: BlockHeat.normal)
+
+	let state = emitLoadField(module, block: block, record: pd, offset: PdOffOrphanState, ids: ids)
+	emitBranchOnCompare(module, block: block, value: state, pred: StdCmpPred.eq, against: PdChildAwaited, whenTrue: awaited, whenFalse: renounced, ids: ids)
+
+	let firstExit = emitBin(module, block: renounced, a: emitCompareWithConstant(module, block: renounced, value: state, pred: StdCmpPred.eq, against: PdChildOrphaned, ids: ids), b: emitCompareWithConstant(module, block: renounced, value: exitSeen, pred: StdCmpPred.ne, against: 0, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	emitBranchOnCompare(module, block: renounced, value: firstExit, pred: StdCmpPred.ne, against: 0, whenTrue: queueOrphan, whenFalse: spent, ids: ids)
+	renounced.branchEdges.push(BranchEdge.create(spent.id, argIds: argsOf(spentArg)))
+
+	emitNetpollQueueOrphan(module, block: queueOrphan, pd: pd, ids: ids)
+	module.setTerminator(queueOrphan, op: StdOp.branch(spent.id))
+	queueOrphan.branchEdges.push(BranchEdge.create(spent.id, argIds: argsOf(spentArg)))
+end 'emitNetpollBranchOnChildOwner'
+
+function emitNetpollQueueOrphan(module StdModule, block IrBlock, pd ValueId, ids ValueMinter)
+	emitStoreField(module, block: block, record: pd, offset: PdOffOrphanState, value: emitConst(module, block: block, value: PdChildExited, ids: ids))
+	emitStoreField(module, block: block, record: pd, offset: PdOffOrphanNext, value: emitLoadAcquireGlobalWord(module, block: block, label: NetpollOrphanExitedLabel, ids: ids))
+	emitStoreReleaseGlobalWord(module, block: block, label: NetpollOrphanExitedLabel, value: pd, ids: ids)
+end 'emitNetpollQueueOrphan'
 
 // The exit is asked for here, under `__sched_lock`, as soon as the handle is stored: a child that
 // exited before that raised its SIGCHLD while the sweep would still skip this record, and no second
@@ -2413,7 +2588,7 @@ function buildNetpollChildTrack(module StdModule)
 	emitStoreField(module, block: known, record: pd, offset: PdOffChildHandle, value: childHandle)
 	module.setTerminator(known, op: StdOp.condBranch(emitNetpollChildExited(module, block: known, childHandle: childHandle, ids: ids), thenBlockId: exited.id, elseBlockId: running.id))
 
-	emitNetpollReadyChild(module, block: exited, pd: pd, incoming: emitConst(module, block: exited, value: WakeDebtNone, ids: ids), cont: unlock, ids: ids)
+	emitNetpollReadyChild(module, func: func, block: exited, pd: pd, incoming: emitConst(module, block: exited, value: WakeDebtNone, ids: ids), cont: unlock, ids: ids)
 
 	module.setTerminator(running, op: StdOp.branch(unlock.id))
 	running.branchEdges.push(BranchEdge.create(unlock.id, argIds: argsOf(emitConst(module, block: running, value: WakeDebtNone, ids: ids))))
@@ -2428,8 +2603,8 @@ end 'buildNetpollChildTrack'
 
 // Every minted child is asked, not only the one a signal names: SIGCHLD coalesces, so one readable
 // signalfd can stand for several exits. The ask is `WNOWAIT` and leaves the child unreaped, because
-// the status is taken in one place, `osProcessExitCode`, and a reap here would leave it nothing to
-// read.
+// the status is taken afterwards, by `osProcessExitCode` or the orphan reaper's wait, and a reap
+// here would leave it nothing to read.
 function buildNetpollChildSweep(module StdModule)
 	var func = IrFunction.createFromStd(NetpollChildSweepName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
@@ -2481,7 +2656,7 @@ function buildNetpollChildSweep(module StdModule)
 	module.setTerminator(poll, op: StdOp.condBranch(emitNetpollChildExited(module, block: poll, childHandle: childHandle, ids: ids), thenBlockId: ready.id, elseBlockId: next.id))
 	poll.branchEdges.push(BranchEdge.create(next.id, argIds: argsOf(debt)))
 
-	emitNetpollReadyChild(module, block: ready, pd: pd, incoming: debt, cont: next, ids: ids)
+	emitNetpollReadyChild(module, func: func, block: ready, pd: pd, incoming: debt, cont: next, ids: ids)
 
 	let carried = ids.mint()
 	next.blockArgs.push(IrBlockArg.create(carried, argType: StdType.i64))
@@ -2530,6 +2705,7 @@ function emitNetpollArmChildOnPosix(module StdModule, func IrFunction, cur IrBlo
 	var refused = module.addBlock(func, label: b"npchrefused", heat: BlockHeat.normal)
 	var armed = module.addBlock(func, label: b"npcharmed", heat: BlockHeat.normal)
 
+	module.appendOp(cur, op: StdOp.call(ids.mint(), callee: NetpollChildBindName, args: twoArgs(source, second: childHandle)))
 	let answer = emitNetpoll(module, block: cur, verb: NetpollVerb.armChildSource, operands: threeArgs(poller, second: source, third: childHandle), ids: ids)
 	emitBranchOnCompare(module, block: cur, value: answer, pred: StdCmpPred.lt, against: 0, whenTrue: refused, whenFalse: armed, ids: ids)
 	emitNetpollFailWith(module, func: func, block: refused, verb: NetpollVerb.armChildSource, subject: source, answer: answer, ids: ids)
@@ -2552,13 +2728,21 @@ function buildNetpollChildClose(module StdModule, target Target)
 	match netpollShape(target) 'give'
 		completionPort then emitNetpollCloseChildOnPort(module, block: entry, source: source, token: token, cont: doneBlock, ids: ids)
 
-		epoll then emitNetpollCloseChildByMode(module, func: func, cur: entry, source: source, cont: doneBlock, ids: ids)
-		kqueue then emitNetpollCloseChildOnPosix(module, block: entry, source: source, cont: doneBlock, ids: ids)
+		epoll or
+		kqueue then emitNetpollCloseChildOfPosixSource(module, func: func, cur: entry, shape: netpollShape(target), source: source, cont: doneBlock, ids: ids)
 	end 'give'
 
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
 	module.functions.push(func)
 end 'buildNetpollChildClose'
+
+function emitNetpollCloseChildOfPosixSource(module StdModule, func IrFunction, cur IrBlock, shape NetpollShape, source ValueId, cont IrBlock, ids ValueMinter)
+	match shape 'give'
+		epoll then emitNetpollCloseChildByMode(module, func: func, cur: cur, source: source, cont: cont, ids: ids)
+		kqueue then emitNetpollCloseChildOnPosix(module, block: cur, source: source, cont: cont, ids: ids)
+		completionPort then panic("emitNetpollCloseChildOfPosixSource: the completion-port lane's close takes the registration's token, which only `emitNetpollCloseChildOnPort` has")
+	end 'give'
+end 'emitNetpollCloseChildOfPosixSource'
 
 function emitNetpollCloseChildByMode(module StdModule, func IrFunction, cur IrBlock, source ValueId, cont IrBlock, ids ValueMinter)
 	var minted = module.addBlock(func, label: b"npchmintedclose", heat: BlockHeat.normal)
@@ -2629,6 +2813,24 @@ export function emitNetpollAcquireChildSource(module StdModule, func IrFunction,
 
 	return NetpollChildSource.create(source, token: emitNetpollWatchHandleOnRecord(module, func: func, ids: ids, cur: opened, source: source, handle: hProcess, cont: cont))
 end 'emitNetpollAcquireChildSource'
+
+// Only the completion-port lane gives the registration and the handle back here: Windows has no
+// zombies, so closing the handle is the whole renunciation. A POSIX poller's record keeps both
+// until the child exits, and closing the handle of a still-running child would only attempt a
+// non-blocking reap and leave it a zombie.
+export function emitNetpollRenounceChild(module StdModule, block IrBlock, shape NetpollShape, child NetpollChildSource, hProcess ValueId, ids ValueMinter)
+	match shape 'ownership'
+		completionPort then emitNetpollReleaseRenouncedChild(module, block: block, child: child, hProcess: hProcess, ids: ids)
+
+		epoll or
+		kqueue then break
+	end 'ownership'
+end 'emitNetpollRenounceChild'
+
+function emitNetpollReleaseRenouncedChild(module StdModule, block IrBlock, child NetpollChildSource, hProcess ValueId, ids ValueMinter)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NetpollChildCloseName, args: twoArgs(child.source, second: child.token)))
+	module.appendOp(block, op: StdOp.osCloseHandle(hProcess))
+end 'emitNetpollReleaseRenouncedChild'
 
 // ⭐⭐ **ARM A HANDLE'S SIGNAL ONTO A RECORD THAT ALREADY EXISTS.** `cur` is terminated and `cont` reached
 // with the registration live, carrying the token its unregistration takes. What the signal then readies is
