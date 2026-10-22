@@ -851,6 +851,11 @@ export let HostNetpollArmSourceName = b"mrt_host_netpoll_arm"
 export let HostNetpollChildOpenName = b"mrt_host_netpoll_child_open"
 export let HostNetpollArmChildName = b"mrt_host_netpoll_arm_child"
 export let HostNetpollChildCloseName = b"mrt_host_netpoll_child_close"
+export let HostNetpollChildProbeName = b"mrt_host_netpoll_child_probe"
+export let HostNetpollSignalOpenName = b"mrt_host_netpoll_signal_open"
+export let HostNetpollSignalBlockName = b"mrt_host_netpoll_signal_block"
+export let HostNetpollSignalDrainName = b"mrt_host_netpoll_signal_drain"
+export let HostNetpollChildPollName = b"mrt_host_netpoll_child_poll"
 
 // ⭐ **THE PIPE READ END'S FLAG — `NetpollVerb.armPipeSource`.** One `fcntl(F_SETFL, O_NONBLOCK)`. Its
 // registration is a separate `armChildSource`, because a pipe end and a `pidfd` are the same thing to a
@@ -1033,6 +1038,11 @@ export function posixNetpollChunk(verb NetpollVerb) returns ByteArray
 		armChildSource gives HostNetpollArmChildName
 		armPipeSource gives HostNetpollArmPipeName
 		closeChildSource gives HostNetpollChildCloseName
+		probeChildSource gives HostNetpollChildProbeName
+		openSignalSource gives HostNetpollSignalOpenName
+		blockChildSignal gives HostNetpollSignalBlockName
+		drainSignalSource gives HostNetpollSignalDrainName
+		pollChildExit gives HostNetpollChildPollName
 		openTimer panic("posixNetpollChunk: `openTimer` has no chunk on a POSIX lane — a sleep needs no object there, so the isel answers `PosixNoTimerObject` inline")
 		postChildExit panic("posixNetpollChunk: `postChildExit` forwards a child's exit to a completion port, and these kernels make a child's source readable themselves — `NetpollRuntime` emits it only under `NetpollShape.completionPort`")
 		openPipeServer or
@@ -1049,6 +1059,8 @@ end 'posixNetpollChunk'
 export function posixNetpollOperandCount(verb NetpollVerb) returns ParamCount
 	return match verb 'v'
 		openPoller or
+		blockChildSignal or
+		openSignalSource or
 		yieldThread gives 0
 		openBreak or
 		drainBreak or
@@ -1057,6 +1069,9 @@ export function posixNetpollOperandCount(verb NetpollVerb) returns ParamCount
 		spinPause or
 		openChildSource or
 		closeChildSource or
+		probeChildSource or
+		drainSignalSource or
+		pollChildExit or
 		armPipeSource gives 1
 		wait gives 4
 		raiseBreak or

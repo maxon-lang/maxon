@@ -238,13 +238,14 @@ let WasmtimeRunSubcommand = "run"
 let WasmtimeSettingFlag = "-S"
 let WasmtimeExitWithCodeSetting = "cli-exit-with-code=y"
 
-// --- OrbStack: the arm64-linux runner ---
+// --- OrbStack: the Linux runner on a macOS host ---
 //
 // `orb run -m <machine> <exe>` executes a binary that lives on the MAC's filesystem inside a Linux
-// VM, which mirrors the Mac's tree at IDENTICAL real paths. That mirroring is the whole reason a Linux
-// spec run works from this host with no copying, no image and no cross-mount: the compiler this
-// command builds and the specs it reads are all one tree, seen from both sides
-// at one set of paths (`runSuiteInGuest`).
+// VM, which mirrors the Mac's tree at IDENTICAL real paths. That mirroring is the whole reason a
+// Linux spec run works from this host with no copying, no image and no cross-mount: the compiler
+// this command builds and the specs it reads are all one tree, seen from both sides at one set of
+// paths (`runSuiteInGuest`). A Linux target for the other CPU is compiled here and its binaries run
+// in the machine under emulation (`RunStrategy.orbBatch`).
 //
 // ⚠ UNLIKE WASMTIME, `orb` IS A SYSTEM INSTALL, NOT VENDORED. There is no `vendor/` tree to walk up
 // to and no in-repo copy to prefer; the locator for a system tool is PATH, which is exactly what
@@ -252,11 +253,15 @@ let WasmtimeExitWithCodeSetting = "cli-exit-with-code=y"
 let OrbExecutableName = "orb"
 let OrbRunSubcommand = "run"
 let OrbMachineFlag = "-m"
-let OrbMachineName = "maxon-linux"
+export let OrbMachineName = "maxon-linux"
 
 // The cheapest command that proves the machine can execute one — coreutils' no-op, present in every
 // Linux image. See `requireOrbMachineReachable`.
 let OrbProbeCommand = "true"
+let OrbRosettaOption = "rosetta"
+let PhysicalPwdCommand = "pwd"
+let PhysicalPwdFlag = "-P"
+let GuestShellReadStdinFlag = "-s"
 
 // --- WSL: the x64-linux runner (Windows host) ---
 //
@@ -277,21 +282,19 @@ let WslExecutableName = "wsl"
 let WslCwdFlag = "--cd"
 let WslExecFlag = "-e"
 
-// ⭐⭐ **THE GUEST IS ANCHORED AT THE CHECKOUT ROOT, AND THE SCRIPT STEPS INTO THE RUN DIRECTORY —
-// because `--cd` decides TWO things at once and they are not the same thing.** It is where WSL looks
-// for the script and the binaries, and it is also the cwd every test program inherits. Those have
-// different right answers: the binaries live in the spec's scratch directory, and a test program must
-// stand in `specRunWorkingDir()` — `<checkoutRoot>/temp/` — like every program the other three lanes
-// spawn (`spawnExecution` passes it as `workingDirectory`).
+// ⭐⭐ **THE SCRIPT ANCHORS ITS PATHS AT `$R`, THEN STEPS INTO THE RUN DIRECTORY — because where the
+// guest finds the binaries and the cwd every test program inherits have different right answers.**
+// The binaries live in the spec's scratch directory, and a test program must stand in
+// `specRunWorkingDir()` — `<checkoutRoot>/temp/` — like every program the other lanes spawn
+// (`spawnExecution` passes it as `workingDirectory`). Under WSL `$R` is the checkout root `--cd`
+// names; under `orb` it is the scratch directory itself (`guestBasePrologue`).
 //
-// ⛔ **MEASURED: pointing `--cd` at the scratch directory silently gave this lane a DIFFERENT cwd from
-// every other, and four `directory.md` cases read `../bin` and found nothing.** They failed as a wrong
-// ANSWER — `Directory.exists` false, `Directory.list` throwing — not as a harness error, because a
-// relative path resolves against whatever cwd it is handed and cannot tell a wrong one from a right
-// one. The contract is stated once, on `specRunWorkingDir`; this lane now honours it by construction:
-// `--cd` is the root, the script `cd`s into the run subdirectory before the first execution, and every
-// path the script names afterwards is anchored at `$R` so the step cannot move it.
-let GuestRootShellName = "R"
+// ⛔ **A WRONG CWD FAILS AS A WRONG ANSWER, NOT AS A HARNESS ERROR** — `Directory.exists` false,
+// `Directory.list` throwing — because a relative path resolves against whatever cwd it is handed
+// and cannot tell a wrong one from a right one. The contract is stated once, on
+// `specRunWorkingDir`; the script `cd`s into the run subdirectory before the first execution, and
+// every path it names afterwards is anchored at `$R` so the step cannot move it.
+let GuestBaseShellName = "R"
 
 // ⭐⭐ **THE `<!-- stdin: … -->` MARKER, CARRIED INTO THE BATCH — because a facility the direct-spawn
 // path honours and the batch path drops is a WRONG ANSWER, not a missing feature.**
@@ -348,21 +351,62 @@ let BatchStdinHoldSeconds = SpecSpawnTimeoutSeconds + BatchKillGraceSeconds + 1
 let GuestShell = "/bin/sh"
 let GuestShellCommandFlag = "-c"
 
-// ⭐ **THE PREFLIGHT PROBES THE LANE, NOT MERELY THAT WSL EXISTS.** The x64-linux run step executes a
-// whole spec's binaries from a generated `/bin/sh` script that bounds each one with coreutils
-// `timeout` (see `runWslBatch`), so a distro without either would fail every test in the suite with
-// one unexplained status — precisely the 3000-identical-failures outcome `requireRunnerAvailable`
-// exists to turn into one sentence. `command -v` is a POSIX shell builtin, so ONE entry proves all
-// three facts at once: a distro is reachable, it can execute `/bin/sh`, and `timeout` is on its PATH.
+// ⭐ **THE PREFLIGHT PROBES THE LANE, NOT MERELY THAT THE GUEST EXISTS.** A batched run step
+// executes a whole spec's binaries from a generated `/bin/sh` script that bounds each one with
+// coreutils `timeout` (see `runGuestBatch`), so a guest without either would fail every test in the
+// suite with one unexplained status — precisely the 3000-identical-failures outcome
+// `requireRunnerAvailable` exists to turn into one sentence. `command -v` is a POSIX shell builtin,
+// so ONE entry proves all three facts at once: a distro is reachable, it can execute `/bin/sh`, and
+// `timeout` is on its PATH.
 //
 // A FUNCTION rather than a module `let`, because it INTERPOLATES: a top-level constant that allocates
 // a String would run its initializer outside any test's ownership, and every other constant in this
 // file is a literal for that reason.
-function wslProbeScript() returns String
+function guestBatchProbeScript() returns String
 	return "command -v {GuestTimeoutCommand} > /dev/null"
-end 'wslProbeScript'
+end 'guestBatchProbeScript'
 
-// --- THE BATCHED RUN STEP: ONE `wsl` ENTRY PER SPEC ---------------------------------------------
+let GuestMakeTempCommand = "mktemp"
+let GuestPrintfCommand = "printf"
+let GuestMakeExecutableCommand = "chmod +x"
+let GuestRemoveCommand = "rm -f"
+let GuestProbeImageShellName = "e"
+let GuestProbeStatusShellName = "s"
+let OctalDigitBits = 3
+let OctalDigitMask = 7
+
+function shellOctalEscapes(image ByteArray) returns String
+	var out = StringBuilder.create()
+
+	for byte in image 'eachByte'
+		let value = byte as MachineWord
+		let high = (value shr (2 * OctalDigitBits)) and OctalDigitMask
+		let middle = (value shr OctalDigitBits) and OctalDigitMask
+		let low = value and OctalDigitMask
+		out.append("{ShBackslash}{high}{middle}{low}")
+	end 'eachByte'
+
+	return out.build()
+end 'shellOctalEscapes'
+
+// The emulated lane's preflight runs a minimal ELF for the target CPU, because a machine of the
+// host's CPU runs `true` whether or not it can execute a foreign binary; only an execution proves
+// the emulation is on. The image is written into the guest's own temp directory, so the probe
+// crosses no shared directory.
+function emulatedGuestProbeScript(cpu CpuArch) returns String
+	let image = "${GuestProbeImageShellName}"
+	return "{guestBatchProbeScript()} && {GuestProbeImageShellName}=$({GuestMakeTempCommand}) && {GuestPrintfCommand} {ShQuote}{shellOctalEscapes(minimalExitElf(cpu))}{ShQuote} > \"{image}\" && {GuestMakeExecutableCommand} \"{image}\" && \"{image}\"; {GuestProbeStatusShellName}=$?; {GuestRemoveCommand} \"{image}\"; exit ${GuestProbeStatusShellName}"
+end 'emulatedGuestProbeScript'
+
+function emulationRemedy(cpu CpuArch) returns String
+	return match cpu 'cpu'
+		x64 gives "enable Rosetta in OrbStack with `{OrbExecutableName} config set {OrbRosettaOption} true`, then restart OrbStack"
+		arm64 gives "the '{OrbMachineName}' machine has no arm64 emulation here; run the suite on an arm64 host"
+		wasm32 panic("emulationRemedy: wasm32 is not a Linux guest CPU")
+	end 'cpu'
+end 'emulationRemedy'
+
+// --- THE BATCHED RUN STEP: ONE `wsl` OR `orb` ENTRY PER SPEC ------------------------------------
 //
 // ⭐⭐ **THE ENTRY IS THE WHOLE PRICE, SO THE ENTRY IS WHAT THIS SPENDS ONCE.** MEASURED on this host,
 // 2026-08-06: a bare `wsl -e /bin/true` costs **137 ms** (20 entries = 2.733 s, almost none of it CPU
@@ -405,7 +449,7 @@ let BatchRunFunctionName = "r"
 // variable nothing set.
 let BatchKeyShellName = "n"
 
-// The `$`-reference to it. A FUNCTION and not a `let` for `wslProbeScript`'s reason: a module constant
+// The `$`-reference to it. A FUNCTION and not a `let` for `guestBatchProbeScript`'s reason: a module constant
 // must be a constant expression, and this one interpolates.
 function batchKeyShellVar() returns String
 	return "${BatchKeyShellName}"
@@ -707,9 +751,9 @@ end 'CompileAnswer'
 // It does not bound a compile, which runs in this process: the pool's progress bound ends a hung
 // compile, one level up.
 //
-// It is the deadline for one execution, which is not one spawn: the batched WSL run performs a
-// whole spec's executions inside a single `wsl` process (`runWslBatch`), each bounded by this value
-// inside the guest with coreutils `timeout`, which takes seconds, and the spawn by their sum
+// It is the deadline for one execution, which is not one spawn: a batched run performs a whole
+// spec's executions inside a single `wsl` or `orb` process (`runGuestBatch`), each bounded by this
+// value inside the guest with coreutils `timeout`, which takes seconds, and the spawn by their sum
 // (`batchDeadlineMs`). So the milliseconds are derived from the seconds rather than written twice.
 let SpecSpawnTimeoutSeconds = 120
 export let SpecSpawnTimeoutMs = SpecSpawnTimeoutSeconds * MillisecondsPerSecond
@@ -718,9 +762,9 @@ export let SpecSpawnTimeoutMs = SpecSpawnTimeoutSeconds * MillisecondsPerSecond
 // that states none starts its child somewhere nobody chose (see `RunWorkingSubdirName`).
 //
 // `timeoutMs`, `environment` and `standardInput` default because every spawn but one wants the same
-// value, so the one that differs is the one that states it: `runWslBatch` for the deadline, since
-// it performs many executions in one spawn, and the RUN step for the environment
-// (`runEnvironmentFor`) and standard input (`runStdinFor`).
+// value, so the one that differs is the one that states it: `runGuestBatch` for the deadline, since
+// it performs many executions in one spawn, and for the script it hands `orb` on standard input,
+// and the RUN step for the environment (`runEnvironmentFor`) and standard input (`runStdinFor`).
 export function runProcess(exe Executable, argv StringArray, workingDirectory FilePath, timeoutMs DurationMs = SpecSpawnTimeoutMs, environment Environment = Environment.inherit, standardInput InputSource = InputSource.none) returns ProcessCapture throws SubprocessError
 	var config = Configuration.create(exe)
 	config.arguments = argv
@@ -898,12 +942,12 @@ end 'TestRun'
 // One spec is the unit of work the pool dispatches. Only the parent walks the spec directory, because
 // the listing order is also the report order.
 //
-// Three passes: compile (and decide every verdict that needs no run), execute every run the spec needs
-// together through this lane's runner (`executeRuns`), then finish each verdict against its pin. The
-// middle pass is what lets the x64-linux lane make one `wsl` entry per spec instead of one per test
-// (`runWslBatch`). The compile pass builds a spec's batchable run cases into shared programs
-// (`prepareBatch`, `SpecBatch`), and a case that fails batched is compiled and run alone before the
-// verdicts (`withBatchedFailuresDiagnosed`).
+// Three passes: compile (and decide every verdict that needs no run), execute every run the spec
+// needs together through this lane's runner (`executeRuns`), then finish each verdict against its
+// pin. The middle pass is what lets a batched Linux lane make one `wsl` or `orb` entry per spec
+// instead of one per test (`runGuestBatch`). The compile pass builds a spec's batchable run cases
+// into shared programs (`prepareBatch`, `SpecBatch`), and a case that fails batched is compiled and
+// run alone before the verdicts (`withBatchedFailuresDiagnosed`).
 //
 // `prepared` and `observations` hold exactly one entry per selected test in declaration order, a
 // `notRequired` observation included, so the third pass pairs them by index; a length that disagrees
@@ -1724,7 +1768,8 @@ function unrunnableReasonFor(effectiveTarget Target) returns String
 	return match externalRunnerFor(effectiveTarget) 'runner'
 		unspawnable(reason) gives reason
 		wasmtime panic("unrunnableReasonFor: {targetToString(effectiveTarget)} runs under wasmtime, so no case of it can be unrun — `runStrategyFor` and this census disagree")
-		orbstack panic("unrunnableReasonFor: {targetToString(effectiveTarget)} runs under OrbStack, so no case of it can be unrun — `runStrategyFor` and this census disagree")
+		orbstack or
+		orbstackEmulated panic("unrunnableReasonFor: {targetToString(effectiveTarget)} runs under OrbStack, so no case of it can be unrun — `runStrategyFor` and this census disagree")
 		wsl panic("unrunnableReasonFor: {targetToString(effectiveTarget)} runs under WSL, so no case of it can be unrun — `runStrategyFor` and this census disagree")
 	end 'runner'
 end 'unrunnableReasonFor'
@@ -3479,19 +3524,19 @@ end 'RunCommand'
 // target's OS:
 //   * `wasi`  — a `.wasm` COMPONENT, run under the vendored wasmtime.
 //   * `linux` — a static ELF, run under WSL (from a Windows host) or an OrbStack Linux VM (from a
-//               macOS host). WHICH one is a property of the HOST, not the target — see `externalRunnerFor`.
+//               macOS host), natively (`orbstack`) or under emulation for the other CPU
+//               (`orbstackEmulated`). WHICH one is a property of the HOST, not the target — see
+//               `externalRunnerFor`.
 //
 // ⚠ THIS UNION IS WHY THE TABLE IS WRITTEN ONCE. Two callers ask the OS the same question in
 // different words — `buildRunCommand` turns the answer into a command, `requireRunnerAvailable`
-// turns the SAME answer into a preflight probe — and they had each carried their own `match` over
-// `Os`, with the two unreachable arms' panic text duplicated verbatim between them. Nothing made the
-// copies agree: a runner added to one and not the other passes preflight and then panics per test,
-// or probes for a runner no test will use. Routed through this union, adding an arm here makes BOTH
-// matches fail to compile until they are taught about it — a drift that was silent becomes a build
-// error.
+// turns the SAME answer into a preflight probe. A runner known to one and not the other passes
+// preflight and then panics per test, or probes for a runner no test will use; routed through this
+// union, adding an arm here makes BOTH matches fail to compile until they are taught about it.
 union ExternalRunner
 	wasmtime
 	orbstack
+	orbstackEmulated
 	wsl
 
 	// ⭐⭐ **THERE IS NO PROGRAM ON THIS MACHINE THAT CAN RUN THAT BINARY — AND THAT IS AN ANSWER, NOT AN
@@ -3544,11 +3589,19 @@ function linuxRunnerForHost(target Target) returns ExternalRunner
 	let host = detectHostTarget()
 	return match host.os 'host'
 		windows gives windowsLinuxRunner(target, host: host)
-		macos gives ExternalRunner.orbstack
+		macos gives orbstackRunnerFor(target, host: host)
 		linux gives ExternalRunner.unspawnable("a Linux ELF for a foreign CPU cannot be run from a Linux host by this harness (host {targetToString(host)}) — only a host whose CPU matches {targetToString(target)} can execute these cases")
 		wasi panic("SpecTestRunner: 'wasi' is not a host OS — detectHostTarget never returns it, so this arm is unreachable")
 	end 'host'
 end 'linuxRunnerForHost'
+
+function orbstackRunnerFor(target Target, host Target) returns ExternalRunner
+	if target.cpu != host.cpu 'emulatedGuest'
+		return ExternalRunner.orbstackEmulated
+	end 'emulatedGuest'
+
+	return ExternalRunner.orbstack
+end 'orbstackRunnerFor'
 
 // WSL runs only the HOST CPU's Linux binaries — there is no in-box binfmt/qemu cross-execution — so a
 // foreign-CPU Linux target (e.g. `arm64-linux` on an x86-64 Windows host) has NO runner here. Saying so
@@ -3599,18 +3652,21 @@ function buildRunCommand(modulePath FilePath, effectiveTarget Target, programArg
 	let launch = match externalRunnerFor(effectiveTarget) 'runner'
 		wasmtime gives buildWasmRunCommand(modulePath)
 
-		// ⛔ NOT A GAP — the OrbStack lane does not execute one program per command either. It delegates
-		// the whole SUITE to a compiler running inside the machine, so no test binary is ever spawned
-		// from this host for it. Reaching here means a lane `runStrategyFor` had claimed to delegate was
-		// routed to a per-test spawn.
+		// ⛔ NOT A GAP — the native-CPU OrbStack lane does not execute one program per command either. It
+		// delegates the whole SUITE to a compiler running inside the machine, so no test binary is ever
+		// spawned from this host for it. Reaching here means a lane `runStrategyFor` had claimed to
+		// delegate was routed to a per-test spawn.
 		orbstack panic("SpecTestRunner: the {targetToString(effectiveTarget)} suite runs inside the {OrbMachineName} machine (see runSuiteInGuest), so it has no per-test run command — `runStrategyFor` and `buildRunCommand` disagree about this target")
 
-		// ⛔ NOT A GAP — the WSL lane does not execute one program per command, so there is no per-test
-		// command to build for it. It runs a whole spec's programs from one generated script inside a
-		// single entry (`runWslBatch`), and `runStrategyFor` is the ONE table that decides which lane
-		// does which. This arm is what makes the two disagreeing a panic instead of a silent second
-		// answer: reaching it means a lane was routed here that `runStrategyFor` had claimed to batch.
-		wsl panic("SpecTestRunner: the {targetToString(effectiveTarget)} lane runs a whole spec in one {WslExecutableName} entry (see runWslBatch), so it has no per-test run command — `runStrategyFor` and `buildRunCommand` disagree about this target")
+		orbstackEmulated panic("SpecTestRunner: the {targetToString(effectiveTarget)} lane runs a whole spec in one {OrbExecutableName} entry (see runGuestBatch), so it has no per-test run command — `runStrategyFor` and `buildRunCommand` disagree about this target")
+
+		// ⛔ NOT A GAP — the WSL lane, like the emulated OrbStack lane above, does not execute one program
+		// per command, so there is no per-test command to build for it. It runs a whole spec's programs
+		// from one generated script inside a single entry (`runGuestBatch`), and `runStrategyFor` is the
+		// ONE table that decides which lane does which. This arm is what makes the two disagreeing a
+		// panic instead of a silent second answer: reaching it means a lane was routed here that
+		// `runStrategyFor` had claimed to batch.
+		wsl panic("SpecTestRunner: the {targetToString(effectiveTarget)} lane runs a whole spec in one {WslExecutableName} entry (see runGuestBatch), so it has no per-test run command — `runStrategyFor` and `buildRunCommand` disagree about this target")
 
 		// ⛔ NOT A GAP EITHER, and the same disagreement said the other way round: nothing on this host
 		// can spawn such a binary, so `runStrategyFor` routes the whole lane to `RunStrategy.noneHere`
@@ -3724,19 +3780,18 @@ function buildLinuxVmRunCommand(exePath FilePath) returns RunCommand
 end 'buildLinuxVmRunCommand'
 
 // ============================================================================================
-// THE DELEGATED LANE — a macOS host's Linux suite, run by a Linux-hosted copy of this compiler
+// THE DELEGATED LANE — a macOS host's own-CPU Linux suite, run by a Linux-hosted compiler
 // ============================================================================================
 //
-// The compiler that answers these cases is hosted on the machine they are about: it compiles each one
-// and runs it natively. `RunStrategy` carries why this lane is delegated rather than batched, and the
-// measurement that says the two compilers emit identical code.
+// The compiler that answers these cases is hosted on the machine they are about: it compiles each
+// one and runs it natively. `RunStrategy` carries why this lane is delegated rather than batched.
 //
 // The code lives here because everything it needs is already in this file in one copy each: the `orb`
 // spelling, the machine name and the absolute-path rule (`buildLinuxVmRunCommand`).
 //
-// ⚠ ONE machine serves BOTH Linux targets. `OrbMachineName` is aarch64 with Rosetta enabled, so an
-// x64-linux compiler runs there too; a second machine would be a second answer to "where does Linux
-// run here".
+// ⚠ ONE machine serves BOTH Linux targets. `OrbMachineName` is aarch64 with Rosetta enabled, so the
+// x64-linux binaries `RunStrategy.orbBatch` compiles on this host run there too; a second machine
+// would be a second answer to "where does Linux run here".
 export function runSuiteInGuest(harnessExe FilePath, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, workerCount WorkerCount, workersOverridden bool, effectiveTarget Target, includeNetwork bool, resultTarget SpecResultTarget) returns ExitCode
 	return match guestCompilerFor(harnessExe, effectiveTarget: effectiveTarget) 'compiler'
 		ready(guestExe) gives spawnGuestSuite(guestExe, specDir: specDir, filterPatterns: filterPatterns, mode: mode, workerCount: workerCount, workersOverridden: workersOverridden, includeNetwork: includeNetwork, resultTarget: resultTarget)
@@ -3936,30 +3991,35 @@ typealias RunObservationArray = Array with RunObservation
 // commands and the preflight are built from, so "which runner" and "one entry or many" cannot come to
 // disagree — adding a runner makes this match fail to compile until it decides.
 //
-// The four lanes, and what each one is:
+// The five lanes, and what each one is:
 //
 //   * **`individually`** — the host's own binaries and the wasm modules the vendored wasmtime runs. One
 //     spawn per execution, because a spawn here costs what a spawn costs.
-//   * **`wslBatch`** — a Windows host's Linux lane. A whole spec's executions go into ONE `wsl` entry,
-//     because the entry itself is what costs (137 ms, measured on that host).
+//   * **`wslBatch`** — a Windows host's Linux lane. A whole spec's executions go into ONE `wsl`
+//     entry, because the entry itself is what costs.
+//   * **`orbBatch`** — a macOS host's Linux lane for the CPU the Mac is not (x64-linux on Apple
+//     silicon). Each case is compiled here, and a whole spec's executions go into ONE `orb run`
+//     entry, where the machine runs them under emulation; the preflight proves the emulation is on
+//     (`requireRunnerAvailable`).
 //   * **`noneHere`** — nothing on this machine can execute such a binary. Not an absence of a strategy
 //     but a strategy: every test that needed its program run is told so, in its own record, exactly as
 //     the executing lanes tell theirs.
-//   * **`inGuest`** — a macOS host's Linux lane, and the one that is not a batch at all. The SUITE is
-//     handed to a Linux-hosted copy of this compiler inside the OrbStack machine
-//     (`Main.runSpecTest` → `runSuiteInGuest`), which then takes the `individually` lane natively; no
-//     spec is ever staged on this side, so nothing reaches the run pass here.
+//   * **`inGuest`** — a macOS host's Linux lane for its own CPU, and the one that is not a batch at
+//     all. The SUITE is handed to a Linux-hosted copy of this compiler inside the OrbStack machine
+//     (`Main.runSpecTest` → `runSuiteInGuest`), which then takes the `individually` lane natively;
+//     no spec is ever staged on this side, so nothing reaches the run pass here.
 //
-// ⚠ **WHY THE LINUX LANE IS DELEGATED RATHER THAN BATCHED, AND WHAT LICENSES MOVING IT.** Per-entry
-// cost is not what hurts on `orb`: an entry is ~23 ms, but 480 executions across twelve parallel
-// streams — exactly what the pool does — do not finish in 600 s, while 200 sequential ones take 3.4 s.
-// The problem is CONCURRENCY, and batching per spec would cut the count without cutting that; one
-// entry for the whole suite removes it outright. What makes the move safe is that it changes no
-// expectation: the macOS cross-compiler and the Linux-hosted compiler emit identical code, and only
-// the machine doing the emitting differs.
+// ⚠ **WHY THE OWN-CPU LINUX LANE IS DELEGATED RATHER THAN BATCHED.** Not for the cost of concurrent
+// `orb` entries: eight entries of one second of work each finish in one second, and the batched
+// x64-linux lane, which makes one entry per spec across parallel workers, runs a 593-case subset in
+// 215 s, 112 s and 51 s at 1, 4 and 8 workers. The own-CPU lane is delegated so that the machine the
+// cases are about also compiles them and runs them natively, with no entry per spec at all.
+// Delegating changes no expectation: the macOS cross-compiler and the Linux-hosted compiler emit
+// identical code, and only the machine doing the emitting differs.
 export union RunStrategy
 	individually
 	wslBatch
+	orbBatch
 	noneHere
 
 	// DECLARED LAST so `individually to noneHere` stays a contiguous range for the callers that ask
@@ -3978,6 +4038,7 @@ export function runStrategyFor(effectiveTarget Target) returns RunStrategy
 	return match externalRunnerFor(effectiveTarget) 'runner'
 		wasmtime gives RunStrategy.individually
 		orbstack gives RunStrategy.inGuest
+		orbstackEmulated gives RunStrategy.orbBatch
 		wsl gives RunStrategy.wslBatch
 		unspawnable gives RunStrategy.noneHere
 	end 'runner'
@@ -4032,7 +4093,8 @@ type RunLane
 
 		return match self.strategy 'strategy'
 			individually gives spawnEach(executions, runWorkingDir: self.runWorkingDir, effectiveTarget: self.effectiveTarget)
-			wslBatch gives runWslBatch(executions, specName: self.specName, tempDir: self.tempDir, runWorkingDir: self.runWorkingDir)
+			wslBatch gives runGuestBatch(executions, launcher: BatchLauncher.wsl, specName: self.specName, tempDir: self.tempDir, runWorkingDir: self.runWorkingDir)
+			orbBatch gives runGuestBatch(executions, launcher: BatchLauncher.orb, specName: self.specName, tempDir: self.tempDir, runWorkingDir: self.runWorkingDir)
 			noneHere gives notRunnableHereFor(executions.count())
 			inGuest panic("SpecTestRunner: the {targetToString(self.effectiveTarget)} suite runs inside the {OrbMachineName} machine (see runSuiteInGuest), so nothing is staged on this host to execute — `runStrategyFor` and `Main.runSpecTest` disagree about this target")
 		end 'strategy'
@@ -4309,10 +4371,10 @@ end 'partialOutputBeforeTheKill'
 // (`MaxProcsEnvName`, `PreemptEnvName`/`PreemptEnvOffValue`), because a marker set under one name and read
 // under another is accepted, ignored and silent.
 //
-// ⚠ Nothing here forwards the variables across a launcher, because no lane puts one between this call and
-// the program. The one that would — `orb run`, which carries only the variables named in `ORBENV` —
-// spawns no test binary from this host: a Linux suite is answered by a compiler inside the machine,
-// which spawns its own children there and reaches this same block (`runSuiteInGuest`).
+// ⚠ Nothing here forwards the variables across a launcher, because no lane hands this environment
+// to one. A batched lane carries them in its script, which exports them inside the guest per case
+// (`batchScript`), so `orb run`'s `ORBENV` filter never sees them; the delegated lane's compiler
+// spawns its own children in the machine and reaches this same block (`runSuiteInGuest`).
 function runEnvironmentFor(procs SpecProcs, preempt SpecPreempt) returns Environment
 	var overrides = EnvMap.create()
 
@@ -4370,23 +4432,24 @@ function runStdinFor(stdin SpecStdin) returns InputSource
 	end 's'
 end 'runStdinFor'
 
-// Whether the one `wsl` entry happened at all. A launch that never got off the ground is not one test's
-// failure — every test the batch was carrying has to be told, in its own record, which is what keeps
-// the pool's one-record-per-test accounting true.
+// Whether the one guest entry happened at all. A launch that never got off the ground is not one
+// test's failure — every test the batch was carrying has to be told, in its own record, which is
+// what keeps the pool's one-record-per-test accounting true.
 union BatchLaunch
 	completed(capture ProcessCapture)
 	failed(reason String)
 end 'BatchLaunch'
 
-// ⭐⭐ **ONE `wsl` ENTRY FOR THE WHOLE SPEC.** See the batch constants block for the measurement that
+// ⭐⭐ **ONE GUEST ENTRY FOR THE WHOLE SPEC.** See the batch constants block for the measurement that
 // motivates it and for why the capture is files rather than a stream.
 //
-// The entry is `wsl --cd <spec scratch dir> -e /bin/sh .batch/run.sh`, which is the per-test command's
-// own shape with the script in the binary's place: `--cd` takes the directory as a RAW Windows
-// path and WSL translates it, so nothing here maps a Windows path to a guest one and nothing here
-// assumes an automount root. Every binary that spec built is IN that directory, so each execution
-// inherits exactly the working directory a per-test `--cd` would give it.
-function runWslBatch(executions ExecutionArray, specName String, tempDir FilePath, runWorkingDir FilePath) returns RunObservationArray
+// Under WSL the entry is `wsl --cd <checkout root> -e /bin/sh <scratch>/.batch/run.sh`: `--cd`
+// takes the directory as a RAW Windows path and WSL translates it, so nothing here maps a Windows
+// path to a guest one and nothing here assumes an automount root. Under OrbStack it is
+// `orb run -m <machine> /bin/sh -s` with the script on standard input
+// (`BatchLauncher.readsScriptFromFile`). Either way the script sets the working directory itself
+// (`GuestBaseShellName`).
+function runGuestBatch(executions ExecutionArray, launcher BatchLauncher, specName String, tempDir FilePath, runWorkingDir FilePath) returns RunObservationArray
 	let batchSubdir = batchSubdirPath()
 	let batchDir = tempDir.join(batchSubdir)
 
@@ -4394,14 +4457,14 @@ function runWslBatch(executions ExecutionArray, specName String, tempDir FilePat
 	// out of it. It names the batch's SIZE rather than a test, and that is not decoration: the pool's
 	// progress bound for this lane is `batchDeadlineMs` of exactly this count, so a report that reads
 	// "terminated while running <spec>: 40 executions" is read against the number that allowed it.
-	emitWorkerStep(WorkerStep.run, label: "{specName}: {executions.count()} execution(s) in one {WslExecutableName} entry")
+	emitWorkerStep(WorkerStep.run, label: "{specName}: {executions.count()} execution(s) in one {launcher.executableName()} entry")
 
-	let launch = launchBatch(executions, tempDir: tempDir, batchDir: batchDir, runWorkingDir: runWorkingDir)
+	let launch = launchBatch(executions, launcher: launcher, tempDir: tempDir, batchDir: batchDir, runWorkingDir: runWorkingDir)
 
 	var observations = RunObservationArray.create()
 
 	for execution in executions 'eachExecution'
-		observations.push(batchObservationFor(execution.key, batchDir: batchDir, launch: launch))
+		observations.push(batchObservationFor(execution.key, launcher: launcher, batchDir: batchDir, launch: launch))
 	end 'eachExecution'
 
 	// The captures have been read into the observations, so what is on disk is spent. Removed for
@@ -4410,13 +4473,48 @@ function runWslBatch(executions ExecutionArray, specName String, tempDir FilePat
 	purgeFilesIn(batchDir)
 
 	return observations
-end 'runWslBatch'
+end 'runGuestBatch'
+
+enum BatchLauncher
+	wsl
+	orb
+
+	function executableName() returns String
+		return match self 'launcher'
+			wsl gives WslExecutableName
+			orb gives OrbExecutableName
+		end 'launcher'
+	end 'executableName'
+
+	// `orb` takes the script on stdin: under `/private/var/folders`, where a staged project's scratch
+	// directory lives, the guest's view of a file the host wrote moments earlier can be stale.
+	function readsScriptFromFile() returns bool
+		return match self 'launcher'
+			wsl gives true
+			orb gives false
+		end 'launcher'
+	end 'readsScriptFromFile'
+end 'BatchLauncher'
+
+function batchLaunchArguments(launcher BatchLauncher, tempDir FilePath) returns StringArray
+	return match launcher 'launcher'
+		wsl gives StringArray from [WslCwdFlag, Directory.currentPath().toString(), WslExecFlag, GuestShell, guestScriptPath(tempDir)]
+		orb gives StringArray from [OrbRunSubcommand, OrbMachineFlag, OrbMachineName, GuestShell, GuestShellReadStdinFlag]
+	end 'launcher'
+end 'batchLaunchArguments'
+
+function batchScriptInput(launcher BatchLauncher, script String) returns InputSource
+	return match launcher 'launcher'
+		wsl gives InputSource.none
+		orb gives InputSource.bytes(script)
+	end 'launcher'
+end 'batchScriptInput'
 
 // Write the script and run it. Everything that can go wrong BEFORE the guest starts is one reason,
 // carried to every test the batch was to have run.
-function launchBatch(executions ExecutionArray, tempDir FilePath, batchDir FilePath, runWorkingDir FilePath) returns BatchLaunch
+function launchBatch(executions ExecutionArray, launcher BatchLauncher, tempDir FilePath, batchDir FilePath, runWorkingDir FilePath) returns BatchLaunch
 	if executions.isEmpty() 'nothingToRun'
-		// A spec of nothing but `maxoncstderr` cases runs no program at all, and must not pay a 137 ms
+		// A spec of nothing but `maxoncstderr` cases runs no program at all, and must not pay a guest
 		// entry to prove it. Every observation this launch is read for is `notRequired` anyway.
 		return BatchLaunch.completed(emptyBatchCapture())
 	end 'nothingToRun'
@@ -4440,20 +4538,19 @@ function launchBatch(executions ExecutionArray, tempDir FilePath, batchDir FileP
 		return BatchLaunch.failed("could not write the batch stdin file {stdinPath.toString()}")
 	end 'noStdinFile'
 
-	let scriptPath = batchDir.join("{BatchScriptName}")
-	try File.writeText(scriptPath, content: batchScript(executions, tempDir: tempDir)) otherwise 'noScript'
-		return BatchLaunch.failed("could not write the batch script {scriptPath.toString()}")
-	end 'noScript'
+	let script = batchScript(executions, launcher: launcher, tempDir: tempDir, runWorkingDir: runWorkingDir)
 
-	var argv = StringArray.create()
-	argv.push(WslCwdFlag)
-	argv.push(Directory.currentPath().toString())
-	argv.push(WslExecFlag)
-	argv.push(GuestShell)
-	argv.push("{guestSpecTempPrefix(tempDir)}{PathSeparator}{BatchSubdirName}{PathSeparator}{BatchScriptName}")
+	if launcher.readsScriptFromFile() 'scriptFile'
+		let scriptPath = batchDir.join("{BatchScriptName}")
+		try File.writeText(scriptPath, content: script) otherwise 'noScript'
+			return BatchLaunch.failed("could not write the batch script {scriptPath.toString()}")
+		end 'noScript'
+	end 'scriptFile'
 
-	let batch = try runProcess(Executable.name(WslExecutableName), argv: argv, workingDirectory: runWorkingDir, timeoutMs: batchDeadlineMs(executions.count() as TestTally)) otherwise (e) 'batchSpawnFailed'
-		return BatchLaunch.failed("the batched {WslExecutableName} run failed: {e.displayReason()}")
+	let argv = batchLaunchArguments(launcher, tempDir: tempDir)
+
+	let batch = try runProcess(Executable.name(launcher.executableName()), argv: argv, workingDirectory: runWorkingDir, timeoutMs: batchDeadlineMs(executions.count() as TestTally), standardInput: batchScriptInput(launcher, script: script)) otherwise (e) 'batchSpawnFailed'
+		return BatchLaunch.failed("the batched {launcher.executableName()} run failed: {e.displayReason()}")
 	end 'batchSpawnFailed'
 
 	// The script's own exit status is the last execution's and means nothing — every verdict is in the
@@ -4510,18 +4607,18 @@ function discardBatchCaptures(batchDir FilePath, key String)
 end 'discardBatchCaptures'
 
 // One test's observation, read back out of the files its execution wrote.
-function batchObservationFor(key String, batchDir FilePath, launch BatchLaunch) returns RunObservation
+function batchObservationFor(key String, launcher BatchLauncher, batchDir FilePath, launch BatchLaunch) returns RunObservation
 	return match launch 'l'
 		failed(reason) gives RunObservation.failed(reason)
-		completed(capture) gives batchCaptureFor(key, batchDir: batchDir, batch: capture)
+		completed(capture) gives batchCaptureFor(key, launcher: launcher, batchDir: batchDir, batch: capture)
 	end 'l'
 end 'batchObservationFor'
 
-function batchCaptureFor(key String, batchDir FilePath, batch ProcessCapture) returns RunObservation
+function batchCaptureFor(key String, launcher BatchLauncher, batchDir FilePath, batch ProcessCapture) returns RunObservation
 	// THE STATUS FIRST, because it is the file that says the execution finished at all — the other two
 	// exist from the moment the redirection is set up, so neither can answer that question.
 	let status = try File.readText(batchCapturePath(batchDir, key: key, extension: BatchStatusExtension)) otherwise 'noStatus'
-		return RunObservation.failed("the batched {WslExecutableName} run recorded no exit status for this test; the batch itself exited {batch.exitCode}{batchStderrNote(batch)}")
+		return RunObservation.failed("the batched {launcher.executableName()} run recorded no exit status for this test; the batch itself exited {batch.exitCode}{batchStderrNote(batch)}")
 	end 'noStatus'
 
 	let recorded = status.trim()
@@ -4534,15 +4631,15 @@ function batchCaptureFor(key String, batchDir FilePath, batch ProcessCapture) re
 	// disagreement between this reader and the script above it, which is a harness break rather than a
 	// verdict about the program — so it FAILS this one test with the bytes it could not read.
 	let exitCode = try parseCount(recorded) otherwise (e) 'unreadableStatus'
-		return RunObservation.failed("the batched {WslExecutableName} run wrote an unreadable exit status '{recorded}': {scaleErrorText(e)}")
+		return RunObservation.failed("the batched {launcher.executableName()} run wrote an unreadable exit status '{recorded}': {scaleErrorText(e)}")
 	end 'unreadableStatus'
 
 	let stdout = try File.readText(batchCapturePath(batchDir, key: key, extension: BatchStdoutExtension)) otherwise 'noStdout'
-		return RunObservation.failed("the batched {WslExecutableName} run recorded exit status {exitCode} but no stdout capture for this test")
+		return RunObservation.failed("the batched {launcher.executableName()} run recorded exit status {exitCode} but no stdout capture for this test")
 	end 'noStdout'
 
 	let stderr = try File.readText(batchCapturePath(batchDir, key: key, extension: BatchStderrExtension)) otherwise 'noStderr'
-		return RunObservation.failed("the batched {WslExecutableName} run recorded exit status {exitCode} but no stderr capture for this test")
+		return RunObservation.failed("the batched {launcher.executableName()} run recorded exit status {exitCode} but no stderr capture for this test")
 	end 'noStderr'
 
 	return RunObservation.completed(ProcessCapture.create(exitCode as ExitCodeValue, stdout: stdout, stderr: stderr))
@@ -4575,15 +4672,11 @@ end 'batchStderrNote'
 //
 // ⭐ **THE FUNCTION BODY IS A SUBSHELL `( … )` RATHER THAN A BRACE BLOCK.** POSIX allows either, and
 // `{`/`}` would have to be escaped in every Maxon string literal that spells this script.
-function batchScript(executions ExecutionArray, tempDir FilePath) returns String
+function batchScript(executions ExecutionArray, launcher BatchLauncher, tempDir FilePath, runWorkingDir FilePath) returns String
 	var out = StringBuilder.create()
-	let scratch = guestSpecTempPrefix(tempDir)
+	let scratch = guestScratchExpression(launcher, tempDir: tempDir)
 
-	// The guest's own name for the checkout root, taken from the cwd WSL translated rather than composed
-	// here: nothing on this side knows the distro's automount prefix, and `--cd` is the one argument WSL
-	// translates. Every path below hangs off it, so the `cd` on the next line cannot move any of them.
-	out.append("{GuestRootShellName}=$(pwd)\n")
-	out.append("cd {RunWorkingSubdirName} || exit 1\n")
+	out.append(guestBasePrologue(launcher, tempDir: tempDir, runWorkingDir: runWorkingDir))
 
 	// ⭐ THE EXECUTION ITSELF, IN ITS OWN FUNCTION, so the three stdin shapes below differ by their
 	// REDIRECTION alone. Written once because the alternative is the whole `timeout` line spelled three
@@ -4606,7 +4699,7 @@ function batchScript(executions ExecutionArray, tempDir FilePath) returns String
 	out.append("\t[ -z \"{batchProcsShellVar()}\" ] || export {String.from(MaxProcsEnvName)}=\"{batchProcsShellVar()}\"\n")
 	out.append("\t[ -z \"{batchPreemptShellVar()}\" ] || export {String.from(PreemptEnvName)}=\"{batchPreemptShellVar()}\"\n")
 	out.append("\tc=\"{guestCapturePath(scratch, extension: BatchStatusExtension)}\"\n")
-	out.append("\ta=\"{guestRootPath(scratch)}{PathSeparator}{batchExeShellVar()}\"\n")
+	out.append("\ta=\"{scratch}{PathSeparator}{batchExeShellVar()}\"\n")
 	out.append("\to=\"{guestCapturePath(scratch, extension: BatchStdoutExtension)}\"\n")
 	out.append("\te=\"{guestCapturePath(scratch, extension: BatchStderrExtension)}\"\n")
 
@@ -4630,31 +4723,61 @@ function batchScript(executions ExecutionArray, tempDir FilePath) returns String
 	return out.build()
 end 'batchScript'
 
-// One capture file, on the GUEST side: the same stem-plus-extension formula `batchCapturePath` composes
-// for the reader, written relative to the `--cd` directory with the shell's own variable where the host
-// puts the key.
+// One capture file, on the GUEST side: the same stem-plus-extension formula `batchCapturePath`
+// composes for the reader, under the scratch expression `guestScratchExpression` answers, with the
+// shell's own variable where the host puts the key.
 //
-// ⚠ `PathSeparator`, never a literal `/`: the guest is POSIX whatever the host is, and the argv that
-// names the script five lines away already spells the separator from this same constant. Two spellings
-// of one separator is how the writer and the reader come to disagree about a path neither compiler
-// checks.
+// ⚠ `PathSeparator`, never a literal `/`: the guest is POSIX whatever the host is, and
+// `guestScriptPath`, which names the script, already spells the separator from this same constant.
+// Two spellings of one separator is how the writer and the reader come to disagree about a path
+// neither compiler checks.
 function guestCapturePath(scratch String, extension String) returns String
-	return "{guestRootPath(scratch)}{PathSeparator}{BatchSubdirName}{PathSeparator}{batchKeyShellVar()}{extension}"
+	return "{scratch}{PathSeparator}{BatchSubdirName}{PathSeparator}{batchKeyShellVar()}{extension}"
 end 'guestCapturePath'
 
-// A path under the spec's scratch directory, anchored at the guest's checkout root. Anchored rather than
-// left relative because the script steps into the run working directory before the first execution — see
-// `GuestRootShellName` — so a relative spelling would resolve against the wrong directory from that
-// line on, and would do it silently.
-function guestRootPath(scratch String) returns String
-	return "${GuestRootShellName}{PathSeparator}{scratch}"
-end 'guestRootPath'
+// The spec's scratch directory as the script names it, anchored at `$R` because the prologue steps
+// into the run working directory before the first execution: a relative spelling would resolve
+// against that directory from then on, silently.
+function guestScratchExpression(launcher BatchLauncher, tempDir FilePath) returns String
+	return match launcher 'launcher'
+		wsl gives "${GuestBaseShellName}{PathSeparator}{guestSpecTempPrefix(tempDir)}"
+		orb gives "${GuestBaseShellName}"
+	end 'launcher'
+end 'guestScratchExpression'
+
+// Under WSL `$R` is taken from the cwd WSL translated rather than composed here: nothing on this
+// side knows the distro's automount prefix, and `--cd` is the one argument WSL translates. Under
+// `orb` the guest mirrors the Mac's tree at real paths only, so the script is handed the scratch
+// directory's physical path (`hostPhysicalDirectory`); a symlinked prefix such as `/var` names
+// nothing in the machine.
+function guestBasePrologue(launcher BatchLauncher, tempDir FilePath, runWorkingDir FilePath) returns String
+	return match launcher 'launcher'
+		wsl gives "{GuestBaseShellName}=$(pwd)\ncd {RunWorkingSubdirName} || exit 1\n"
+		orb gives "cd {shQuoted(hostPhysicalDirectory(tempDir).toString())} || exit 1\n{GuestBaseShellName}=$({PhysicalPwdCommand} {PhysicalPwdFlag})\ncd {shQuoted(hostPhysicalDirectory(runWorkingDir).toString())} || exit 1\n"
+	end 'launcher'
+end 'guestBasePrologue'
+
+function hostPhysicalDirectory(directory FilePath) returns FilePath
+	let resolved = try runProcess(Executable.name(PhysicalPwdCommand), argv: StringArray from [PhysicalPwdFlag], workingDirectory: directory) otherwise (e) 'noPwd'
+		panic("SpecTestRunner: could not resolve {directory.toString()} to its physical path with `{PhysicalPwdCommand} {PhysicalPwdFlag}`: {e.displayReason()}")
+	end 'noPwd'
+
+	if not exitSucceeded(resolved.exitCode as ExitCode) 'pwdFailed'
+		panic("SpecTestRunner: `{PhysicalPwdCommand} {PhysicalPwdFlag}` failed in {directory.toString()} (exit {resolved.exitCode}): {resolved.stderr.trim()}")
+	end 'pwdFailed'
+
+	return try FilePath.from(resolved.stdout.trim()) otherwise panic("SpecTestRunner: `{PhysicalPwdCommand} {PhysicalPwdFlag}` answered '{resolved.stdout.trim()}' in {directory.toString()}, which is not a path")
+end 'hostPhysicalDirectory'
+
+function guestScriptPath(tempDir FilePath) returns String
+	return "{guestSpecTempPrefix(tempDir)}{PathSeparator}{BatchSubdirName}{PathSeparator}{BatchScriptName}"
+end 'guestScriptPath'
 
 // The delayed line's file, on the guest side — the twin of `launchBatch`'s `stdinPath`, and a pair
 // for the reason `guestCapturePath` and `batchCapturePath` are one: the writer and the reader must
 // name one file.
 function guestStdinPath(scratch String) returns String
-	return "{guestRootPath(scratch)}{PathSeparator}{BatchSubdirName}{PathSeparator}{BatchStdinFileName}"
+	return "{scratch}{PathSeparator}{BatchSubdirName}{PathSeparator}{BatchStdinFileName}"
 end 'guestStdinPath'
 
 // The `case` token for one arm of `SpecStdin`. EXHAUSTIVE with no bare default: a fourth arm added to the
@@ -4679,7 +4802,7 @@ end 'batchStdinToken'
 function guestSpecTempPrefix(tempDir FilePath) returns String
 	let root = Directory.currentPath()
 	let relative = try tempDir.anchoredAt(root).relativeTo(root) otherwise 'notUnderRoot'
-		panic("SpecTestRunner: the spec scratch directory {tempDir.toString()} is not under the checkout root {root.toString()}, so the {WslExecutableName} guest cannot name it")
+		panic("SpecTestRunner: the spec scratch directory {tempDir.toString()} is not under the checkout root {root.toString()}, so the guest cannot name it")
 	end 'notUnderRoot'
 
 	return relative.toString().replace(WindowsPathSeparator, with: PathSeparator)
@@ -4761,25 +4884,36 @@ export function requireRunnerAvailable(effectiveTarget Target)
 
 	match externalRunnerFor(effectiveTarget) 'runner'
 		wasmtime then _ = findWasmtimePath()
-		orbstack then requireOrbMachineReachable(effectiveTarget)
+		orbstack then requireOrbMachineReachable(effectiveTarget, probeScript: OrbProbeCommand, requirement: orbMachineRequirement())
+		orbstackEmulated then requireOrbMachineReachable(effectiveTarget, probeScript: emulatedGuestProbeScript(effectiveTarget.cpu), requirement: orbEmulatedMachineRequirement(effectiveTarget.cpu))
 		wsl then requireWslAvailable(effectiveTarget)
 		unspawnable then break
 	end 'runner'
 end 'requireRunnerAvailable'
 
-// Probe the OrbStack machine by running the smallest possible command in it.
+function orbMachineRequirement() returns String
+	return "an OrbStack Linux machine named '{OrbMachineName}' (`{OrbExecutableName} create ubuntu {OrbMachineName}`) whose {GuestShell} and coreutils `{GuestTimeoutCommand}` are present"
+end 'orbMachineRequirement'
+
+function orbEmulatedMachineRequirement(cpu CpuArch) returns String
+	return "{orbMachineRequirement()}, and which can execute {String.from(cpuCanonicalName(cpu))} binaries — {emulationRemedy(cpu)}"
+end 'orbEmulatedMachineRequirement'
+
+// Probe the OrbStack machine by running `probeScript` under its `/bin/sh`.
 //
-// It answers THREE questions in one spawn, and each has a different fix: is `orb` installed, does the
-// machine this runner names exist, and can it execute a binary. A probe rather than a file-existence
-// check because two of the three are not questions the filesystem can answer — and because a stopped
-// machine is STARTED by this call, so the first real test does not pay that latency inside its own
-// timing.
-function requireOrbMachineReachable(effectiveTarget Target)
+// It answers THREE questions in one spawn, and each has a different fix: is `orb` installed, does
+// the machine this runner names exist, and can it execute a binary of the target's CPU. A probe
+// rather than a file-existence check because two of the three are not questions the filesystem can
+// answer — and because a stopped machine is STARTED by this call, so the first real test does not
+// pay that latency inside its own timing.
+function requireOrbMachineReachable(effectiveTarget Target, probeScript String, requirement String)
 	var argv = StringArray.create()
 	argv.push(OrbRunSubcommand)
 	argv.push(OrbMachineFlag)
 	argv.push(OrbMachineName)
-	argv.push(OrbProbeCommand)
+	argv.push(GuestShell)
+	argv.push(GuestShellCommandFlag)
+	argv.push(probeScript)
 
 	// Derived from the target the caller is running, never spelled as a literal: a message that tells
 	// the reader to drop `--target=<x>` has to name the flag `resolveTarget` accepts, and
@@ -4792,12 +4926,12 @@ function requireOrbMachineReachable(effectiveTarget Target)
 	end 'notInstalled'
 
 	if not exitSucceeded(probe.exitCode as ExitCode) 'machineUnreachable'
-		panic("SpecTestRunner: '{OrbExecutableName} {OrbRunSubcommand} {OrbMachineFlag} {OrbMachineName} {OrbProbeCommand}' failed (exit {probe.exitCode}): {probe.stderr.trim()} — the {orbTargetKey} run path needs an OrbStack Linux machine named '{OrbMachineName}' (`orb create ubuntu {OrbMachineName}`)")
+		panic("SpecTestRunner: the {orbTargetKey} preflight probe '{OrbExecutableName} {OrbRunSubcommand} {OrbMachineFlag} {OrbMachineName} {GuestShell} {GuestShellCommandFlag} ...' failed (exit {probe.exitCode}): {probe.stderr.trim()} — the {orbTargetKey} run path needs {requirement}")
 	end 'machineUnreachable'
 end 'requireOrbMachineReachable'
 
 // Probe WSL by running the smallest command that proves the LANE, not merely the distro — see
-// `wslProbeScript` for why that is `/bin/sh` and `timeout` rather than `/bin/true`. Like the orb probe
+// `guestBatchProbeScript` for why that is `/bin/sh` and `timeout` rather than `/bin/true`. Like the orb probe
 // it answers every question it can in ONE spawn, and each has a different fix: is `wsl` installed, is a
 // distro reachable, can it execute `/bin/sh`, is coreutils there. The target key is DERIVED from a
 // `Target`, never spelled literally — the same discipline the orb probe follows.
@@ -4808,14 +4942,14 @@ function requireWslAvailable(effectiveTarget Target)
 	argv.push(WslExecFlag)
 	argv.push(GuestShell)
 	argv.push(GuestShellCommandFlag)
-	argv.push(wslProbeScript())
+	argv.push(guestBatchProbeScript())
 
 	let probe = try runProcess(Executable.name(WslExecutableName), argv: argv, workingDirectory: inheritedWorkingDirectory()) otherwise (e) 'notInstalled'
 		panic("SpecTestRunner: could not run '{WslExecutableName}' ({e.displayReason()}) — running a {wslTargetKey} binary from a Windows host needs WSL2 (`wsl --install`); install it, or drop {TargetFlagPrefix}{wslTargetKey} and run the suite for this host")
 	end 'notInstalled'
 
 	if not exitSucceeded(probe.exitCode as ExitCode) 'distroUnusable'
-		panic("SpecTestRunner: '{WslExecutableName} {WslExecFlag} {GuestShell} {GuestShellCommandFlag} {wslProbeScript()}' failed (exit {probe.exitCode}): {probe.stderr.trim()} — the {wslTargetKey} run path needs a working WSL2 distribution (`wsl --install`) whose {GuestShell} and coreutils `{GuestTimeoutCommand}` are present, because a spec's binaries are run from a generated shell script that bounds each one with it")
+		panic("SpecTestRunner: '{WslExecutableName} {WslExecFlag} {GuestShell} {GuestShellCommandFlag} {guestBatchProbeScript()}' failed (exit {probe.exitCode}): {probe.stderr.trim()} — the {wslTargetKey} run path needs a working WSL2 distribution (`wsl --install`) whose {GuestShell} and coreutils `{GuestTimeoutCommand}` are present, because a spec's binaries are run from a generated shell script that bounds each one with it")
 	end 'distroUnusable'
 end 'requireWslAvailable'
 

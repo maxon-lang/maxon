@@ -104,23 +104,28 @@ data {
   __np_pd_table@416 = i64 0
   __np_pd_cap@424 = i64 0
   __np_waiters@432 = i64 0
-  __sched_num_procs@440 = i64 0
-  __sched_ncpu@448 = i64 0
-  __sched_shutdown_flag@456 = i64 0
-  __sched_lock@464 = i64 0
-  __sched_lock_depth_sink@472 = i64 0
-  __sched_nmspinning@480 = i64 0
-  __sched_needspinning@488 = i64 0
-  __sched_sysmon_event@496 = i64 0
-  __sched_sysmon_wait@504 = i64 0
-  __sched_timer_starts@512 = i64 0
-  __mrt_envp@520 = i64 0
-  __mrt_signal_stack_bytes@528 = i64 0
-  __mrt_tls_next_key@536 = i64 0
-  __slab_arena_list@544 = i64 0
-  __slab_arena_map_l1@552 = i64 0
-  __slab_state@560 = i64 0
-  __mrt_program_started@568 = i8 0
+  __np_src_key_free@440 = i64 0
+  __np_src_key_high@448 = i64 0
+  __np_child_signal@456 = i64 0
+  __np_pd_mtable@464 = i64 0
+  __np_pd_mcap@472 = i64 0
+  __sched_num_procs@480 = i64 0
+  __sched_ncpu@488 = i64 0
+  __sched_shutdown_flag@496 = i64 0
+  __sched_lock@504 = i64 0
+  __sched_lock_depth_sink@512 = i64 0
+  __sched_nmspinning@520 = i64 0
+  __sched_needspinning@528 = i64 0
+  __sched_sysmon_event@536 = i64 0
+  __sched_sysmon_wait@544 = i64 0
+  __sched_timer_starts@552 = i64 0
+  __mrt_envp@560 = i64 0
+  __mrt_signal_stack_bytes@568 = i64 0
+  __mrt_tls_next_key@576 = i64 0
+  __slab_arena_list@584 = i64 0
+  __slab_arena_map_l1@592 = i64 0
+  __slab_state@600 = i64 0
+  __mrt_program_started@608 = i8 0
 }
 
 func @main {
@@ -162,10 +167,21 @@ func @__np_child_open {
     x64.pushReg r12
     x64.prologue 64
     x64.movRegReg rbx, rcx
+    x64.leaRegGlobal rax, __np_child_signal
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, npchpidfd
+  npchminted:
+    x64.callDirect __np_child_signal_fd
+    x64.callDirect __np_src_key_alloc
+    x64.movRegReg r12, r8
+    x64.jmp npchsourced
+  npchpidfd:
     x64.movRegImm32 rax, 0
     x64.movRegReg rcx, rbx
     x64.callDirect mrt_host_netpoll_child_open
     x64.movRegReg r12, rax
+  npchsourced:
     x64.cmpRegImm32 r12, -3
     x64.jcc notEqual, npchsrcchk
   npchsrcgone:
@@ -194,6 +210,19 @@ func @__np_child_open {
     x64.popReg rbp
     x64.ret
   npchadopt:
+    x64.movRegImm rax, 4294967296
+    x64.cmpRegReg r12, rax
+    x64.jcc less, npchadoptdesc
+  npchadoptminted:
+    x64.movRegReg rcx, r12
+    x64.callDirect __np_pd_adopt_minted
+    x64.movRegReg r8, r12
+    x64.epilogue 64
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  npchadoptdesc:
     x64.movRegReg rcx, r12
     x64.callDirect __np_pd_adopt
     x64.movRegReg r8, r12
@@ -408,24 +437,29 @@ data {
   __np_pd_table@416 = i64 0
   __np_pd_cap@424 = i64 0
   __np_waiters@432 = i64 0
-  __sched_num_procs@440 = i64 0
-  __sched_ncpu@448 = i64 0
-  __sched_shutdown_flag@456 = i64 0
-  __sched_lock@464 = i64 0
-  __sched_lock_depth_sink@472 = i64 0
-  __sched_nmspinning@480 = i64 0
-  __sched_needspinning@488 = i64 0
-  __sched_sysmon_event@496 = i64 0
-  __sched_sysmon_wait@504 = i64 0
-  __sched_timer_starts@512 = i64 0
-  __mrt_envp@520 = i64 0
-  __mrt_signal_stack_bytes@528 = i64 0
-  __mrt_hwcap_atomics@536 = i64 0
-  __mrt_tls_next_key@544 = i64 0
-  __slab_arena_list@552 = i64 0
-  __slab_arena_map_l1@560 = i64 0
-  __slab_state@568 = i64 0
-  __mrt_program_started@576 = i8 0
+  __np_src_key_free@440 = i64 0
+  __np_src_key_high@448 = i64 0
+  __np_child_signal@456 = i64 0
+  __np_pd_mtable@464 = i64 0
+  __np_pd_mcap@472 = i64 0
+  __sched_num_procs@480 = i64 0
+  __sched_ncpu@488 = i64 0
+  __sched_shutdown_flag@496 = i64 0
+  __sched_lock@504 = i64 0
+  __sched_lock_depth_sink@512 = i64 0
+  __sched_nmspinning@520 = i64 0
+  __sched_needspinning@528 = i64 0
+  __sched_sysmon_event@536 = i64 0
+  __sched_sysmon_wait@544 = i64 0
+  __sched_timer_starts@552 = i64 0
+  __mrt_envp@560 = i64 0
+  __mrt_signal_stack_bytes@568 = i64 0
+  __mrt_hwcap_atomics@576 = i64 0
+  __mrt_tls_next_key@584 = i64 0
+  __slab_arena_list@592 = i64 0
+  __slab_arena_map_l1@600 = i64 0
+  __slab_state@608 = i64 0
+  __mrt_program_started@616 = i8 0
 }
 
 func @main {
@@ -461,10 +495,21 @@ func @__np_child_open {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
+    arm64.leaGlobal x0, __np_child_signal
+    arm64.ldar.word64 x0, [x0]
+    arm64.cmp x0, 0
+    arm64.b.eq npchpidfd
+  npchminted:
+    arm64.bl __np_child_signal_fd
+    arm64.bl __np_src_key_alloc
+    arm64.movRegReg x20, x0
+    arm64.b npchsourced
+  npchpidfd:
     arm64.movImm x0, 0
     arm64.movRegReg x0, x19
     arm64.bl mrt_host_netpoll_child_open
     arm64.movRegReg x20, x0
+  npchsourced:
     arm64.cmp x20, -3
     arm64.b.ne npchsrcchk
   npchsrcgone:
@@ -491,6 +536,18 @@ func @__np_child_open {
     arm64.epilogue 32
     arm64.ret
   npchadopt:
+    arm64.movImm x0, 4294967296
+    arm64.cmp x20, x0
+    arm64.b.lt npchadoptdesc
+  npchadoptminted:
+    arm64.movRegReg x0, x20
+    arm64.bl __np_pd_adopt_minted
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  npchadoptdesc:
     arm64.movRegReg x0, x20
     arm64.bl __np_pd_adopt
     arm64.movRegReg x0, x20

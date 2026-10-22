@@ -189,6 +189,10 @@ let Arm64LinuxSyscallEpollPwait = 22
 // exited. The number is the SAME on both Linux CPUs: it was added to every architecture's table at once.
 let Arm64LinuxSyscallPidfdOpen = 434
 
+let Arm64LinuxSyscallRtSigprocmask = 135
+let Arm64LinuxSyscallSignalfd4 = 74
+let Arm64LinuxSyscallWaitid = 95
+
 // The per-descriptor flag change a polled pipe end needs — see `NetpollVerb.armPipeSource` for why the flag
 // cannot come from `pipe2`.
 export let Arm64LinuxSyscallFcntl = 25
@@ -215,7 +219,7 @@ export let Arm64LinuxSyscallGetPriority = 141
 let Arm64LinuxSyscallDup3 = 24
 let Arm64LinuxSyscallPipe2 = 59
 let Arm64LinuxSyscallPpoll = 73
-let Arm64LinuxSyscallExit = 93
+export let Arm64LinuxSyscallExit = 93
 let Arm64LinuxSyscallKill = 129
 let Arm64LinuxSyscallGetRandom = 278
 let Arm64LinuxSyscallSetsid = 157
@@ -2554,7 +2558,8 @@ function buildArm64LinuxSpawnChunk(errnoHome LinuxErrnoHome) returns FunctionCod
 	let SlotStatusCount = 11 as StackSize
 	let SlotEnv = 12 as StackSize
 	let SlotCwdFd = 13 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(14)
+	let SlotChildSigset = 14
+	var asm = Arm64RuntimeAsm.beginFunction(15)
 
 	let cwdReady = asm.newLabel()
 	let cwdFailed = asm.newLabel()
@@ -2692,6 +2697,10 @@ function buildArm64LinuxSpawnChunk(errnoHome LinuxErrnoHome) returns FunctionCod
 	// asks for. It never falls out of this block: a successful `execve` does not return, and a failed one ends
 	// in `exit`, which is why `published` below can sit under it.
 	asm.placeLabel(childPath)
+
+	// Signal mode blocks SIGCHLD in every machine, and `execve` keeps the mask, so the program run
+	// would start with it blocked; an unblock where the mode is pidfd changes nothing.
+	arm64LinuxEmitSigprocmaskSigChld(asm, how: LinuxSigUnblock as MachineWord, slot: SlotChildSigset)
 	emitArm64LinuxChildDup3(asm, startupSlot: SlotStartup, handleOffset: StartupInfoHStdInputOffset as MachineWord, childDescriptor: PosixChildStdinFd)
 	emitArm64LinuxChildDup3(asm, startupSlot: SlotStartup, handleOffset: StartupInfoHStdOutputOffset as MachineWord, childDescriptor: PosixChildStdoutFd)
 	emitArm64LinuxChildDup3(asm, startupSlot: SlotStartup, handleOffset: StartupInfoHStdErrorOffset as MachineWord, childDescriptor: PosixChildStderrFd)
@@ -3238,6 +3247,11 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64LinuxNetpollArmChunk(HostNetpollArmChildName, events: LinuxEpollReadEvents as MachineWord))
 		chunks.push(buildArm64LinuxNetpollChildOpenChunk())
 		chunks.push(buildArm64LinuxNetpollChildCloseChunk())
+		chunks.push(buildArm64LinuxNetpollChildProbeChunk())
+		chunks.push(buildArm64LinuxNetpollSignalOpenChunk())
+		chunks.push(buildArm64LinuxNetpollSignalBlockChunk())
+		chunks.push(buildArm64LinuxNetpollSignalDrainChunk())
+		chunks.push(buildArm64LinuxNetpollChildPollChunk())
 		chunks.push(buildArm64LinuxNetpollCounterChunk(HostNetpollRaiseBreakName, syscallNumber: Arm64LinuxSyscallWrite, descriptor: Arm64Register.x1))
 		chunks.push(buildArm64LinuxNetpollCounterChunk(HostNetpollDrainBreakName, syscallNumber: Arm64LinuxSyscallRead, descriptor: Arm64Register.x0))
 		chunks.push(buildArm64LinuxSleepChunk(HostNetpollSleepName, unit: PosixTimeUnit.microseconds))
@@ -3407,9 +3421,11 @@ function buildArm64LinuxNetpollArmChunk(name ByteArray, events MachineWord) retu
 	return asm.finishFunction(name)
 end 'buildArm64LinuxNetpollArmChunk'
 
-// ⭐⭐ **`mrt_host_netpoll_child_open(x0 = childHandle) -> x0 = a pidfd, or -errno` — A CHILD BECOMES A
-// DESCRIPTOR.** `pidfd_open` answers a file descriptor that polls READABLE once the child has exited, so the
-// child joins the poller through the same registration and the same decode a socket does.
+// ⭐⭐ **`mrt_host_netpoll_child_open(x0 = childHandle) -> x0 = a pidfd, or -errno` — A CHILD BECOMES
+// A DESCRIPTOR.** `pidfd_open` answers a file descriptor that polls READABLE once the child has
+// exited, so the child joins the poller through the same registration and the same decode a socket
+// does. Only in pidfd mode: where `__np_init`'s probe found `pidfd_open` unusable, a child is
+// watched through SIGCHLD on a signalfd instead (`NetpollRuntime`'s child-exit section).
 //
 // ⚠ **THE CHILD MUST STILL BE UNREAPED, AND EVERY CALLER'S IS.** A pidfd names a task, and the only party
 // that takes this one's status is the green thread that is about to park on this descriptor.
@@ -3422,6 +3438,85 @@ function buildArm64LinuxNetpollChildOpenChunk() returns FunctionCodeChunk
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallPidfdOpen)
 	return asm.finishFunction(HostNetpollChildOpenName)
 end 'buildArm64LinuxNetpollChildOpenChunk'
+
+function arm64LinuxEmitSigChldSet(asm Arm64RuntimeAsm, slot StackSize)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: LinuxSigChldBit as MachineWord)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: slot)
+end 'arm64LinuxEmitSigChldSet'
+
+function arm64LinuxEmitSigprocmaskSigChld(asm Arm64RuntimeAsm, how MachineWord, slot StackSize)
+	arm64LinuxEmitSigChldSet(asm, slot: slot)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: how)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: slot)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: LinuxSigsetBytes as MachineWord)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallRtSigprocmask)
+end 'arm64LinuxEmitSigprocmaskSigChld'
+
+function buildArm64LinuxNetpollChildProbeChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: 0)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallPidfdOpen)
+	return asm.finishFunction(HostNetpollChildProbeName)
+end 'buildArm64LinuxNetpollChildProbeChunk'
+
+function buildArm64LinuxNetpollSignalBlockChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(1)
+
+	arm64LinuxEmitSigprocmaskSigChld(asm, how: LinuxSigBlock as MachineWord, slot: 0)
+	return asm.finishFunction(HostNetpollSignalBlockName)
+end 'buildArm64LinuxNetpollSignalBlockChunk'
+
+function buildArm64LinuxNetpollSignalOpenChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(1)
+
+	arm64LinuxEmitSigChldSet(asm, slot: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: LinuxNoDescriptor)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: LinuxSigsetBytes as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: (LinuxEpollCloexec + LinuxEventfdNonblock) as MachineWord)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallSignalfd4)
+	return asm.finishFunction(HostNetpollSignalOpenName)
+end 'buildArm64LinuxNetpollSignalOpenChunk'
+
+function buildArm64LinuxNetpollSignalDrainChunk() returns FunctionCodeChunk
+	let infoSlots = LinuxSiginfoBytes / SpillSlotBytes
+	var asm = Arm64RuntimeAsm.beginFunction(infoSlots)
+
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: LinuxSiginfoBytes as MachineWord)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallRead)
+	return asm.finishFunction(HostNetpollSignalDrainName)
+end 'buildArm64LinuxNetpollSignalDrainChunk'
+
+function buildArm64LinuxNetpollChildPollChunk() returns FunctionCodeChunk
+	let SlotInfo = 0 as StackSize
+	let infoSlots = LinuxSiginfoBytes / SpillSlotBytes
+	var asm = Arm64RuntimeAsm.beginFunction(infoSlots)
+	let answered = asm.newLabel()
+
+	arm64PosixUntagHandle(asm, reg: Arm64Register.x0)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x1, base: Arm64Register.x0, byteOffset: PosixWaitOffChildPid)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotInfo)
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: LinuxWaitidByPid as MachineWord)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x2, slot: SlotInfo)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: LinuxWaitidExitedNoWaitNoHang as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: 0)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallWaitid)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: answered)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotInfo)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x1, label: answered)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 1)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostNetpollChildPollName)
+end 'buildArm64LinuxNetpollChildPollChunk'
 
 // ⭐⭐ **`mrt_host_netpoll_arm_pipe(x0 = fd) -> x0 = 0, or -errno`.** One `fcntl` setting `O_NONBLOCK` on
 // `fd`, and nothing else: the registration is a separate `armChildSource` (`NetpollRuntime.emitNetpollArmPipe`).

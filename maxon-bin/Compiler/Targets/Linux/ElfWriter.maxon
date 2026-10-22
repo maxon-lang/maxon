@@ -115,6 +115,74 @@ let ElfSymtabFirstGlobal = 1
 // targets. A cross-target gate that is weaker on one target is a gate that lies about that target.
 let ElfDataSegmentMinBytes = 8
 
+let ElfShoffFieldOffset = 40
+let ElfShentsizeFieldOffset = 58
+let ElfShnumFieldOffset = 60
+let ElfShstrndxFieldOffset = 62
+
+let ElfMinimalProgramHeaderCount = 1
+let ElfMinimalExitStatus = 0
+
+// `e_shoff`/`e_shentsize`/`e_shnum`/`e_shstrndx` are written as zero placeholders and backpatched
+// only if debug symbols produce a section header table; a file with none legitimately has no
+// section headers at all.
+function writeElfFileHeader(elf ByteArray, elfMachine MachineWord, entryPoint MachineWord, programHeaderCount MachineWord)
+	elf.append(ElfIdent)
+	writeWord(elf, value: ElfTypeExec)
+	writeWord(elf, value: elfMachine)
+	writeDword(elf, value: ElfVersionCurrent)
+	writeQword(elf, value: entryPoint)
+	writeQword(elf, value: ElfHeaderSize)  // e_phoff — program headers follow the ELF header
+	writeQword(elf, value: 0)  // e_shoff
+	writeDword(elf, value: 0)  // e_flags
+	writeWord(elf, value: ElfHeaderSize)  // e_ehsize
+	writeWord(elf, value: ElfProgramHeaderSize)  // e_phentsize
+	writeWord(elf, value: programHeaderCount)  // e_phnum
+	writeWord(elf, value: 0)  // e_shentsize
+	writeWord(elf, value: 0)  // e_shnum
+	writeWord(elf, value: 0)  // e_shstrndx
+end 'writeElfFileHeader'
+
+function elfMachineFor(cpu CpuArch) returns MachineWord
+	return match cpu 'machine'
+		arm64 gives ElfMachineAarch64
+		x64 gives ElfMachineX86_64
+		wasm32 panic("elfMachineFor: wasm32 is not an ELF target — the wasm backend emits a WASI component (writeWasm), and writeExecutable never routes it here")
+	end 'machine'
+end 'elfMachineFor'
+
+function appendX64MinimalExit(code ByteArray)
+	encodeMovRegImm32(code, dest: X64Register.rdi, value: ElfMinimalExitStatus)
+	encodeX64Syscall(code, number: X64LinuxSyscallExit)
+end 'appendX64MinimalExit'
+
+function appendArm64MinimalExit(code ByteArray)
+	arm64EmitMovImm(code, rd: arm64RuntimeReg(Arm64Register.x0), value: ElfMinimalExitStatus)
+	arm64EmitSyscall(code, number: Arm64LinuxSyscallExit)
+end 'appendArm64MinimalExit'
+
+export function minimalExitElf(cpu CpuArch) returns ByteArray
+	var code = ByteArray.create()
+
+	match cpu 'exitSequence'
+		x64 then appendX64MinimalExit(code)
+		arm64 then appendArm64MinimalExit(code)
+		wasm32 then panic("minimalExitElf: wasm32 is not an ELF target")
+	end 'exitSequence'
+
+	let codeOffset = ElfHeaderSize + ElfMinimalProgramHeaderCount * ElfProgramHeaderSize
+	let imageSize = codeOffset + code.count()
+
+	var elf = ByteArray.create()
+	elf.reserve(imageSize)
+
+	writeElfFileHeader(elf, elfMachine: elfMachineFor(cpu), entryPoint: (ElfLoadAddr + codeOffset) as MachineWord, programHeaderCount: ElfMinimalProgramHeaderCount)
+	writeElfProgramHeader(elf, flags: ElfPfRead or ElfPfExec, fileOffset: 0, vaddr: ElfLoadAddr, fileSize: imageSize as MachineWord, memSize: imageSize as MachineWord)
+	elf.append(code)
+
+	return elf
+end 'minimalExitElf'
+
 // Write one Elf64_Phdr (56 bytes). Every segment this writer emits keeps `p_vaddr == p_paddr` (there
 // is no physical-address distinction for a userspace image) and page alignment, so those two fields
 // are derived here rather than passed — one fewer way for a caller to break the congruence rule.
@@ -252,11 +320,7 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 		panic("writeElf: the ELF writer emits Linux executables only (got {targetToString(target)})")
 	end 'wrongOs'
 
-	let elfMachine = match target.cpu 'machine'
-		arm64 gives ElfMachineAarch64
-		x64 gives ElfMachineX86_64
-		wasm32 panic("writeElf: wasm32 is not an ELF target — the wasm backend emits a WASI component (writeWasm), and writeExecutable never routes it here")
-	end 'machine'
+	let elfMachine = elfMachineFor(target.cpu)
 
 	var code = codeResult.code
 	let codeSize = code.count()
@@ -330,27 +394,7 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	elf.reserve(dataFileOffset + dataSegmentSize)
 
 	// === Elf64_Ehdr (64 bytes) ===
-	// `e_shoff`/`e_shentsize`/`e_shnum`/`e_shstrndx` are written as zero placeholders and backpatched
-	// only if debug symbols produce a section header table; a file with none legitimately has no
-	// section headers at all.
-	elf.append(ElfIdent)
-	writeWord(elf, value: ElfTypeExec)
-	writeWord(elf, value: elfMachine)
-	writeDword(elf, value: ElfVersionCurrent)
-	writeQword(elf, value: entryPoint as MachineWord)
-	writeQword(elf, value: ElfHeaderSize)  // e_phoff — program headers follow the ELF header
-	let shoffFieldOffset = elf.count()
-	writeQword(elf, value: 0)  // e_shoff
-	writeDword(elf, value: 0)  // e_flags
-	writeWord(elf, value: ElfHeaderSize)  // e_ehsize
-	writeWord(elf, value: ElfProgramHeaderSize)  // e_phentsize
-	writeWord(elf, value: programHeaderCount)  // e_phnum
-	let shentsizeFieldOffset = elf.count()
-	writeWord(elf, value: 0)  // e_shentsize
-	let shnumFieldOffset = elf.count()
-	writeWord(elf, value: 0)  // e_shnum
-	let shstrndxFieldOffset = elf.count()
-	writeWord(elf, value: 0)  // e_shstrndx
+	writeElfFileHeader(elf, elfMachine: elfMachine, entryPoint: entryPoint as MachineWord, programHeaderCount: programHeaderCount)
 
 	// === Program headers ===
 	// Segment 1 maps from file offset 0, so it covers the ELF header and these program headers too —
@@ -371,7 +415,7 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	// while the segment's floor is a loader concern (see `ElfDataSegmentMinBytes`). The padding
 	// between them stays inside the segment and outside the section, exactly as Mach-O's page padding
 	// sits outside `__DATA,__data`.
-	writeElfTrailingSections(elf, codeResult: codeResult, textVAddr: textVAddr, textFileOffset: textFileOffset, codeSize: codeSize as BytePos, rodataVAddr: rodataVAddr as MachineWord, rodataFileOffset: rodataFileOffset as MachineWord, rdataSize: rdataSize as BytePos, dataVAddr: dataVAddr as MachineWord, dataFileOffset: dataFileOffset as MachineWord, dataSize: preludeSize as BytePos, shoffFieldOffset: shoffFieldOffset as ByteOffset, shentsizeFieldOffset: shentsizeFieldOffset as ByteOffset, shnumFieldOffset: shnumFieldOffset as ByteOffset, shstrndxFieldOffset: shstrndxFieldOffset as ByteOffset)
+	writeElfTrailingSections(elf, codeResult: codeResult, textVAddr: textVAddr, textFileOffset: textFileOffset, codeSize: codeSize as BytePos, rodataVAddr: rodataVAddr as MachineWord, rodataFileOffset: rodataFileOffset as MachineWord, rdataSize: rdataSize as BytePos, dataVAddr: dataVAddr as MachineWord, dataFileOffset: dataFileOffset as MachineWord, dataSize: preludeSize as BytePos, shoffFieldOffset: ElfShoffFieldOffset as ByteOffset, shentsizeFieldOffset: ElfShentsizeFieldOffset as ByteOffset, shnumFieldOffset: ElfShnumFieldOffset as ByteOffset, shstrndxFieldOffset: ElfShstrndxFieldOffset as ByteOffset)
 
 	// `mode` is NOT optional. PeWriter omits it because Windows derives executability from the file's
 	// contents; every POSIX loader derives it from the mode bits, and a file written without them

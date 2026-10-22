@@ -10,6 +10,9 @@ module let SuccessExitCode = 0
 
 let StagingDirNamePrefix = "maxon-tests-spec-harness"
 let IgnoredWrapperDirName = "ignored"
+let LinkedSpecDirSuffix = "-linked"
+let SymlinkToolName = "ln"
+let SymlinkFlag = "-s"
 let RunCacheRootDirName = "run-cache"
 let IgnoredWrapperInnerDirName = "spec"
 let IgnoreMarkerFileName = ".maxonignore"
@@ -76,6 +79,19 @@ module function runGateFixtureOnce(extraArguments StringArray, environment Envir
 	return runOnceThenDiscard(stagedGateFixture(caller), extraArguments: extraArguments, environment: environment)
 end 'runGateFixtureOnce'
 
+module function runGateFixtureThroughASymlink(extraArguments StringArray, caller String = __file__) returns CollectedOutput
+	let staged = stagedGateFixture(caller)
+	let link = try FilePath.from("{staged.toString()}{LinkedSpecDirSuffix}") otherwise panic("spec-harness tests: the gate could not run - '{staged.toString()}{LinkedSpecDirSuffix}' is not a spellable path")
+
+	_ = runSystemTool(SymlinkToolName, arguments: [SymlinkFlag, staged.toString(), link.toString()], what: "linking {link.toString()} to {staged.toString()}")
+
+	let run = runSpecTest(link, includeNetwork: false, extraArguments: extraArguments)
+	try File.delete(link) otherwise panic("spec-harness tests: the gate could not remove the link {link.toString()}")
+	discardOutsideCheckoutDir(staged)
+
+	return run
+end 'runGateFixtureThroughASymlink'
+
 module function runGateFixtureOnceFromTheCheckout(extraArguments StringArray, caller String = __file__) returns CollectedOutput
 	let staged = stagedGateFixture(caller)
 	let run = runSpecTest(staged, includeNetwork: false, extraArguments: extraArguments, fromTheCheckout: true)
@@ -130,6 +146,10 @@ end 'failVerdictPrefix'
 module function passVerdictLine(label String) returns String
 	return "PASS {label}"
 end 'passVerdictLine'
+
+module function hostLaneName() returns String
+	return HostLane
+end 'hostLaneName'
 
 module function hostTargetIrFence() returns String
 	return "{TargetIrFenceStem}{HostLane}"

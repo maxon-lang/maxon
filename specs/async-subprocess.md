@@ -287,6 +287,106 @@ typealias Integer = int(i64.min to i64.max)
 123
 ```
 
+<!-- test: async-subprocess.posix-children-exiting-in-reverse-order-each-resume-with-their-own-status -->
+<!-- tier: stdlib -->
+<!-- unsupported-targets: x64-windows -->
+⭐ **THREE CHILDREN WHOSE EXITS ARRIVE IN THE OPPOSITE ORDER FROM THEIR SPAWNS.** The first child outlives the
+second, which outlives the third, so the exits reach the poller as 3, 2, 1 while the awaits ask for 1, 2, 3. Two
+facts are asserted at once. Each task resumes with the status of ITS child (`r1 r2 r3` read back as 1, 2, 3), so
+an exit delivered to the wrong parked task is a different number rather than a near miss. And the resumption
+order is the exit order (`order` steps in base 4 as each task finishes, so the quick child's 3, then the middle
+child's 2, then the slow child's 1 read `57`), so a wake that waited for the oldest child instead of the one
+that exited gives a different number too.
+```maxon
+var order = 0 as Integer
+
+function slow() returns Integer
+	let code = try __Builtins.runProcess("sleep 0.9; exit 1") otherwise 99
+	order = order * 4 + 1
+	return code
+end 'slow'
+
+function middle() returns Integer
+	let code = try __Builtins.runProcess("sleep 0.5; exit 2") otherwise 99
+	order = order * 4 + 2
+	return code
+end 'middle'
+
+function quick() returns Integer
+	let code = try __Builtins.runProcess("exit 3") otherwise 99
+	order = order * 4 + 3
+	return code
+end 'quick'
+
+function main() returns ExitCode
+	let p1 = async slow()
+	let p2 = async middle()
+	let p3 = async quick()
+	let r1 = await p1
+	let r2 = await p2
+	let r3 = await p3
+
+	if r1 != 1 or r2 != 2 or r3 != 3 'statuses'
+		return 99
+	end 'statuses'
+
+	return order as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+57
+```
+
+<!-- test: async-subprocess.posix-short-children-that-exit-before-their-waiter-parks -->
+<!-- tier: stdlib -->
+<!-- unsupported-targets: x64-windows -->
+⭐ **MANY SHORT CHILDREN IN FLIGHT AT ONCE, SO SOME EXIT BEFORE THEIR OWN WAITER HAS PARKED.** Six tasks each run
+eight children one after another, every child `exit {code}` through `/bin/sh`, which is as short-lived as a
+child gets. While one task is arming its child's wait, the children of the other five are exiting, so a
+child routinely finishes before the task that spawned it has parked, and its exit has to be found by looking
+rather than by an event that already came and went. The awaits run last-to-first so the promises complete in
+an order unrelated to the awaits.
+
+⚠ **THE SUM IS THE ASSERTION.** Task `n` returns eight times `n`, so `168` says all forty-eight children were
+spawned, waited for and reaped with their own status: a lost wake hangs the case, a status delivered to the
+wrong task or a child counted twice changes the sum.
+```maxon
+function child(code Integer) returns Integer
+	return try __Builtins.runProcess("exit {code}") otherwise 99
+end 'child'
+
+function lap(code Integer) returns Integer
+	var total = 0 as Integer
+
+	for _ in 0 upto 8 'laps'
+		total = total + child(code)
+	end 'laps'
+
+	return total
+end 'lap'
+
+function main() returns ExitCode
+	let p1 = async lap(1)
+	let p2 = async lap(2)
+	let p3 = async lap(3)
+	let p4 = async lap(4)
+	let p5 = async lap(5)
+	let p6 = async lap(6)
+	let r6 = await p6
+	let r5 = await p5
+	let r4 = await p4
+	let r3 = await p3
+	let r2 = await p2
+	let r1 = await p1
+	return (r1 + r2 + r3 + r4 + r5 + r6) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+168
+```
+
 <!-- test: async-subprocess.interleave-with-sleep -->
 <!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->

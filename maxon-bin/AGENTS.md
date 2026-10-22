@@ -231,6 +231,12 @@ debug interface — stays compiler code, so a row naming a cpu or os the compile
 > ⇒ **TO HOST x64-linux LOCALLY, CROSS-BUILD ONCE AND THEN STAY INSIDE WSL** — the recipe is in the
 > `compiler-workflow` skill.
 
+**On arm64-macos, `spec-test --target=x64-linux` is a cross lane through OrbStack's Rosetta emulation:**
+every case is compiled on the Mac, and each spec's binaries run in one `orb run` entry on the
+`maxon-linux` machine. Rosetta must be enabled (`orb config set rosetta true`, then restart OrbStack);
+the preflight runs a minimal x86-64 ELF in the machine and names that remedy when the ELF fails.
+`--target=arm64-linux` hands the suite to a compiler built for the machine and run inside it.
+
 `run_spec_test` takes `target: "wasm32-wasi"` and runs the output under the
 vendored wasmtime. By hand, for ONE program:
 

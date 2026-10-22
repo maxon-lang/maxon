@@ -2504,7 +2504,7 @@ Commands that take `--target=`:
 |---------|-------------------------|
 | [`maxon build`](#maxon-build) | The executable it writes |
 | [`maxon test`](#maxon-test) | The test binary, which it then runs; on a host that cannot execute that target, every test is reported as not run |
-| [`maxon spec-test`](#maxon-spec-test) | Each spec test, run under the checkout's vendored runtime where needed |
+| [`maxon spec-test`](#maxon-spec-test) | Each spec test, which it then runs where this host has a runner for that target (see its `--target` option) |
 
 `maxon execute` always builds for the host, and so do a `.maxproj` project file and a `.maxtasks` task
 file (the builds they describe follow `--target`). An executable copied from Windows to a Linux or macOS machine may need
@@ -3043,7 +3043,7 @@ case is compiled inside this process, so the compiler under test is the executab
 |--------|-------------|
 | `--filter=<pattern>` | Run only tests whose `<spec>/<test>` label contains `<pattern>`, a case-sensitive substring: a spec name selects that spec, a test name selects that test, and `spec/test` selects exactly one. Repeatable: the run takes every test any pattern selects, in one pool of workers. A comma is part of the pattern. |
 | `--workers=<n>` | Run on `<n>` persistent worker processes (default: this machine's count, shown by `maxon help spec-test`). `1` is the same pool with one worker, not a serial mode, and output is identical for every count. |
-| `--target=<cpu>-<os>` | Cross-compile each selected test for that target and run it under the vendored runtime. |
+| `--target=<cpu>-<os>` | Cross-compile each selected test for that target and run it: `wasm32-wasi` under the vendored wasmtime; a Linux target under WSL2 on a Windows host of the same CPU, and on a macOS host inside the OrbStack machine `maxon-linux`. There, a target for the Mac's own CPU is compiled and run by a copy of the compiler that `spec-test` builds for the machine, and on Apple silicon `x64-linux` cases are compiled on the Mac and run under Rosetta, which must be enabled in OrbStack (`orb config set rosetta true`, then restart OrbStack). On a host that cannot execute the target, each case is compiled and reported as not run. |
 | `--network` | Also run the cases that open a socket to a real external host. A default run names every case it left out. |
 | `--batch=on\|off` | `on` (the default) compiles a spec's plain run cases into the fewest programs whose type names do not overlap and runs each once, rerunning alone any case that did not finish cleanly. `off` compiles and runs every case on its own. Any other value is refused. |
 | `--update-required` | Re-mint the inline blocks a run checks, in the spec files themselves: the trace-capture blocks, and the `TargetIr:<lane>` pin of this run's lane for every selected case of a spec that holds any pin. A pin is compiled, not run, so a lane this host cannot execute still re-mints. Review the diff, and pair it with `--filter`: unfiltered, it re-mints every selected case's blocks. |

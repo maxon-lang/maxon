@@ -1,0 +1,89 @@
+let ForeignLaneSpecName = "foreign-lane"
+let ForeignLanePlainCase = "foreign-lane.plain"
+let ForeignLaneParkingCase = "foreign-lane.parks-on-a-child"
+let ForeignLaneTargetFlag = "--target=x64-linux"
+let DiedMarker = "DIED"
+let PassToken = "PASS"
+let NotRunToken = "NOTRUN"
+let NoVerdict = "no verdict"
+let RunnerMissingMarkers = ["needs OrbStack", "needs WSL2", "needs a working WSL2"]
+let UnspawnableLane = "arm64-linux"
+let WindowsLane = "x64-windows"
+
+function verdictOfCase(said String, testName String) returns String
+	let label = testLabel(ForeignLaneSpecName, testName: testName)
+
+	if said.contains(passVerdictLine(label)) 'passed'
+		return PassToken
+	end 'passed'
+
+	if said.contains("{NotRunToken} {label}") 'notRun'
+		return NotRunToken
+	end 'notRun'
+
+	return NoVerdict
+end 'verdictOfCase'
+
+function expectedVerdict() returns String
+	if hostLaneName() == UnspawnableLane 'noRunnerExists'
+		return NotRunToken
+	end 'noRunnerExists'
+
+	return PassToken
+end 'expectedVerdict'
+
+function runnerIsMissing(said String) returns bool
+	for marker in RunnerMissingMarkers 'eachMarker'
+		if said.contains(marker) 'named'
+			return true
+		end 'named'
+	end 'eachMarker'
+
+	return false
+end 'runnerIsMissing'
+
+function foreignLaneArguments() returns StringArray
+	var arguments = StringArray.create()
+	arguments.push(ForeignLaneTargetFlag)
+	return arguments
+end 'foreignLaneArguments'
+
+test 'a foreign linux lane runs every case, a child-parking one included, and kills no worker'
+	try requireForeignLaneAnswers(runGateFixtureOnce(foreignLaneArguments()))
+end 'a foreign linux lane runs every case, a child-parking one included, and kills no worker'
+
+test 'a foreign linux lane given its spec directory through a symlink answers every case the same'
+	if hostLaneName() == WindowsLane 'noSymlinkTool'
+		return
+	end 'noSymlinkTool'
+
+	try requireForeignLaneAnswers(runGateFixtureThroughASymlink(foreignLaneArguments()))
+end 'a foreign linux lane given its spec directory through a symlink answers every case the same'
+
+function requireForeignLaneAnswers(run CollectedOutput) throws TestFailure
+	let said = everythingSaid(run)
+
+	if runnerIsMissing(said) 'noRunnerOnThisHost'
+		return
+	end 'noRunnerOnThisHost'
+
+	var broken = StringArray.create()
+
+	if said.contains(DiedMarker) 'aWorkerDied'
+		broken.push("a worker DIED while the {ForeignLaneTargetFlag} run was under way. It said:\n{said}\n")
+	end 'aWorkerDied'
+
+	for testName in [ForeignLanePlainCase, ForeignLaneParkingCase] 'eachCase'
+		let verdict = verdictOfCase(said, testName: testName)
+
+		if verdict != expectedVerdict() 'wrongVerdict'
+			broken.push("'{testLabel(ForeignLaneSpecName, testName: testName)}' came back as {verdict} on {hostLaneName()}, where {expectedVerdict()} is the answer. It said:\n{said}\n")
+		end 'wrongVerdict'
+	end 'eachCase'
+
+	if run.exitCode() != SuccessExitCode 'runFailed'
+		broken.push("the {ForeignLaneTargetFlag} run exited {run.exitCode()}, where every case is a {expectedVerdict()}. It said:\n{said}\n")
+	end 'runFailed'
+
+	try requireNothingBroken(broken, headline: "a foreign Linux lane answers every case")
+end 'requireForeignLaneAnswers'

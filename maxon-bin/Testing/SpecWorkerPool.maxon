@@ -277,30 +277,32 @@ let WedgeWatchdogGraceMs = 180 * MillisecondsPerSecond
 // once, before the loop.
 //
 // ⚠ **ONE LANE DOES NOT PERFORM ONE EXECUTION PER STEP, AND AN OUTER BOUND THAT IGNORED THAT WOULD
-// PRE-EMPT THE INNER ONE.** A WINDOWS host's Linux lane runs a whole spec's executions inside a
-// SINGLE `wsl` entry (`SpecTestRunner.runWslBatch`), which the WORKER bounds at
-// `batchDeadlineMs(executions)` — a number that scales with the spec because the entry does. The
-// parent cannot see inside that entry and no breadcrumb can arrive from within it, so the silence it
-// must tolerate is the batch's whole allowance. Taken from the runner's own function rather than
-// re-derived here: two spellings of one deadline is how an outer bound comes to fire first.
+// PRE-EMPT THE INNER ONE.** A batched Linux lane — WSL on a Windows host, OrbStack emulation on a
+// macOS one — runs a whole spec's executions inside a SINGLE `wsl` or `orb` entry
+// (`SpecTestRunner.runGuestBatch`), which the WORKER bounds at `batchDeadlineMs(executions)` — a
+// number that scales with the spec because the entry does. The parent cannot see inside that entry
+// and no breadcrumb can arrive from within it, so the silence it must tolerate is the batch's whole
+// allowance. Taken from the runner's own function rather than re-derived here: two spellings of one
+// deadline is how an outer bound comes to fire first.
 //
 // The parent counts TESTS where the batch counts EXECUTIONS (only a test that got as far as running is
 // in the entry), so this is an upper bound on the worker's own — which is the safe direction and the
 // only one the parent's plan can supply.
 //
 // ⚠ **WHAT THAT COSTS, SAID PLAINLY: ON THE BATCHED LANE A HUNG *COMPILE* ALSO WAITS THE BATCH'S
-// ALLOWANCE.** One number serves a slot whichever step is in flight, because the only thing the drain
-// publishes as it reads is the INSTANT, not the kind — the kind is decoded from the lines, and the
-// lines are handed back when the job ends. So `x64-linux` tolerates a non-terminating compile for
-// `360 s + 120 s x (tests + 1)` rather than 360 s. It is left that way deliberately: a per-slot step
-// kind would buy precision on the one lane this host never gates, at the price of a second thing the
-// drain thread writes, and every argument on this bound says loose-but-never-wrong beats tight — the
-// bound this replaced was tight and wrong. A hang there still ENDS; it ends late.
+// ALLOWANCE.** One number serves a slot whichever step is in flight, because the only thing the
+// drain publishes as it reads is the INSTANT, not the kind — the kind is decoded from the lines,
+// and the lines are handed back when the job ends. So `x64-linux` tolerates a non-terminating
+// compile for `360 s + 120 s x (tests + 1)` rather than 360 s. It is left that way deliberately: a
+// per-slot step kind would buy precision on the one lane this host never gates, at the price of a
+// second thing the drain thread writes, and every argument on this bound says loose-but-never-wrong
+// beats tight. A hang there still ENDS; it ends late.
 function progressDeadlineMs(tests TestTally, strategy RunStrategy) returns DurationMs
 	return match strategy 'lane'
 		individually or
 		noneHere gives TestProgressDeadlineMs
-		wslBatch gives TestProgressDeadlineMs + batchDeadlineMs(tests)
+		wslBatch or
+		orbBatch gives TestProgressDeadlineMs + batchDeadlineMs(tests)
 		inGuest panic("SpecWorkerPool: a delegated suite runs no workers on this host (see SpecTestRunner.runSuiteInGuest), so there is no worker silence to bound — `runStrategyFor` and `Main.runSpecTest` disagree about this target")
 	end 'lane'
 end 'progressDeadlineMs'

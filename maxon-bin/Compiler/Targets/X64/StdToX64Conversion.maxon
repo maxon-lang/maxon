@@ -4105,6 +4105,11 @@ export type StdToX64Lowering
 			armChildSource or
 			closeChildSource or
 			armPipeSource or
+			probeChildSource or
+			openSignalSource or
+			blockChildSignal or
+			drainSignalSource or
+			pollChildExit or
 			shortSleep or
 			spinPause or
 			yieldThread then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.chunk(posixNetpollChunk(verb)), args: posixNetpollChunkArgs(verb, operands: operands), dstBlock: dstBlock)
@@ -4129,6 +4134,11 @@ export type StdToX64Lowering
 			drainBreak then panic("lowerOsNetpollWin64: `drainBreak` is the epoll shape's read of its eventfd, and x64-windows is `NetpollShape.completionPort`, whose break is consumed by receiving its packet — `NetpollRuntime` emits this verb only under `NetpollShape.epoll`")
 			armSource then self.lowerNetpollArmSourceWin64(resultId, poller: netpollOperand(operands, index: 0), fd: netpollOperand(operands, index: 1), dstBlock: dstBlock)
 			armPipeSource then self.lowerNetpollPipeNoWaitWin64(resultId, handle: netpollOperand(operands, index: 0), dstBlock: dstBlock)
+			probeChildSource or
+			openSignalSource or
+			blockChildSignal or
+			drainSignalSource or
+			pollChildExit then panic("lowerOsNetpollWin64: the signalfd child-exit verbs ask the Linux kernel for a descriptor that reports SIGCHLD, and Windows learns of a child through a registered wait — `NetpollRuntime` emits them only under `NetpollShape.epoll`")
 			openChildSource then panic("lowerOsNetpollWin64: `openChildSource` asks the HOST for a descriptor that reports a child's exit, and Windows has none — `NetpollRuntime.__np_child_open` allocates this lane's source key itself")
 			armChildSource then self.lowerNetpollArmChildWin64(resultId, child: netpollOperand(operands, index: 2), source: netpollOperand(operands, index: 1), callback: netpollOperand(operands, index: 3), dstBlock: dstBlock)
 			closeChildSource then self.lowerNetpollCloseChildWin64(resultId, registeredWait: netpollOperand(operands, index: 0), dstBlock: dstBlock)

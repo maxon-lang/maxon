@@ -34,7 +34,7 @@ Commands that take `--target=`:
 |---------|-------------------------|
 | [`maxon build`](/docs/cli/#maxon-build) | The executable it writes |
 | [`maxon test`](/docs/cli/#maxon-test) | The test binary, which it then runs; on a host that cannot execute that target, every test is reported as not run |
-| [`maxon spec-test`](/docs/cli/compiler-development/#maxon-spec-test) | Each spec test, run under the checkout's vendored runtime where needed |
+| [`maxon spec-test`](/docs/cli/compiler-development/#maxon-spec-test) | Each spec test, which it then runs where this host has a runner for that target (see its `--target` option) |
 
 `maxon execute` always builds for the host, and so do a `.maxproj` project file and a `.maxtasks` task
 file (the builds they describe follow `--target`). An executable copied from Windows to a Linux or macOS machine may need
