@@ -5408,3 +5408,99 @@ end 'main'
 ```stdout
 2 top payload long enough to allocate
 ```
+
+<!-- test: a-static-storing-a-copied-parameter-into-self-through-an-inferred-instance-retains-it -->
+A `static function` of a generic type copies its `T` parameter into a `var`, builds `Self{v: copy}` and is called on the bare base, so the instance is inferred from the argument. The record owns its own reference to the string.
+```maxon
+type Box uses T
+	export var v as T
+
+	function touch() returns Count
+		return 1
+	end 'touch'
+
+	static function keep(x T) returns Count
+		var copy = x
+		copy = x
+		let pair = Self{v: copy}
+		return pair.touch()
+	end 'keep'
+end 'Box'
+
+function main() returns ExitCode
+	let s = "alpha {40 + 2} value long enough for a heap record"
+	let k = Box.keep(s)
+	print("{k} {s}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 alpha 42 value long enough for a heap record
+```
+
+<!-- test: a-static-storing-its-parameter-into-self-through-an-inferred-instance-retains-it -->
+The same static without the local copy: `Self{v: x}` stores the borrowed parameter directly.
+```maxon
+type Box uses T
+	export var v as T
+
+	function touch() returns Count
+		return 1
+	end 'touch'
+
+	static function keep(x T) returns Count
+		let pair = Self{v: x}
+		return pair.touch()
+	end 'keep'
+end 'Box'
+
+function main() returns ExitCode
+	let s = "alpha {40 + 2} value long enough for a heap record"
+	let k = Box.keep(s)
+	print("{k} {s}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 alpha 42 value long enough for a heap record
+```
+
+<!-- test: a-static-storing-a-copied-parameter-into-self-through-a-typealias-instance-retains-it -->
+The alias-qualified call of the same static is the control: both spellings of the instance take the reference.
+```maxon
+type Box uses T
+	export var v as T
+
+	function touch() returns Count
+		return 1
+	end 'touch'
+
+	static function keep(x T) returns Count
+		var copy = x
+		copy = x
+		let pair = Self{v: copy}
+		return pair.touch()
+	end 'keep'
+end 'Box'
+
+typealias StrBox = Box with String
+
+function main() returns ExitCode
+	let s = "alpha {40 + 2} value long enough for a heap record"
+	let k = StrBox.keep(s)
+	print("{k} {s}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 alpha 42 value long enough for a heap record
+```

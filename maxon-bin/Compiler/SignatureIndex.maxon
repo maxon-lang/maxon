@@ -45992,22 +45992,23 @@ export type ProgramSignatures
 	end 'mixGenericTemplates'
 
 	// The generic types this merged index holds a row of that its settle did not count as instantiated — what a fold
-	// files into `QueryDatabase.InstantiatedByAParse`. Every generic type records a descriptor scan site.
+	// files into `QueryDatabase.InstantiatedByAParse`. Every generic type records a type-parameter owner, so the roster is
+	// read from those owners.
 	export function typesNewlyInstantiatedByAParse() returns NameRoster
 		var found = NameRoster.create()
 		var asked = InstantiatedTypeNameSet.create()
 
-		for site in self.settledDeclarations().descriptorScanSites 'eachSite'
-			if asked.contains(site.typeName) 'askedAlready'
+		for (_, owner) in self.settledDeclarations().typeParamOwners 'eachOwner'
+			if asked.contains(owner.declaringTypeName) 'askedAlready'
 				continue
 			end 'askedAlready'
 
-			asked.insert(site.typeName)
+			asked.insert(owner.declaringTypeName)
 
-			if self.holdsARowOf(site.typeName) and not self.genericTypeIsInstantiated(site.typeName) 'aParseInstantiatedIt'
-				found.push(site.typeName)
+			if self.holdsARowOf(owner.declaringTypeName) and not self.genericTypeIsInstantiated(owner.declaringTypeName) 'aParseInstantiatedIt'
+				found.push(owner.declaringTypeName)
 			end 'aParseInstantiatedIt'
-		end 'eachSite'
+		end 'eachOwner'
 
 		return found
 	end 'typesNewlyInstantiatedByAParse'
