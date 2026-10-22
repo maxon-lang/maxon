@@ -250,16 +250,22 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: sched-processor.idle-processor-count-before-any-work -->
 <!-- procs: 4 -->
+<!-- preempt: off -->
 **THE IDLE-PROCESSOR COUNT, GO'S `sched.npidle`.** Nothing spawned: the main thread holds one processor and
 every other one sits on the idle list. `Scheduler.counters().idleProcessors` reads the count the scheduler
 keeps beside that list. Go reads the same number on every wake decision — whether to start a spinning machine
 when a processor is handed off, and how many spinners are worth having — which is why it is a maintained word
 rather than a walk of the list.
 
+⭐ **THE MARKER IS WHAT MAKES THE START DETERMINISTIC.** The count is a live gauge, and the monitor preempts
+a thread that has held its processor for 10 ms of wall time. A loaded host can spend that long between the
+scheduler's bring-up and `main`'s first line, and the preempted `main` goes to the global queue and wakes a
+spinning machine that holds a processor until it parks. With `preempt: off` the monitor takes no processor
+from `main` and requests no yield of it, so the read finds every other processor on the idle list.
+
 ⚠ **IT ASSERTS AN AGREEMENT AND NOT A NUMBER.** The scheduler takes `procs: 4` exactly on every host, and
 the case checks the idle count against `Scheduler.processorCount() - 1`, the count the scheduler itself resolved,
-so the two readings of one scheduler must agree. The idle count is read first, because it is the query that
-brings the scheduler up.
+so the two readings of one scheduler must agree.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -279,7 +285,10 @@ everyButMain=true
 <!-- test: sched-processor.a-builtin-scalar-result-binds-to-a-var -->
 <!-- tier: stdlib -->
 <!-- procs: 4 -->
-A builtin's result is a call's value, not a bare number, so a `var` binds it with no cast.
+A builtin's result is a call's value, not a bare number, so a `var` binds it with no cast. The case is about the
+binding, so it asserts only what holds whenever it runs: `main` holds a processor, so the idle count is at most
+the processor count less one. Which processors are idle at a given moment is the scheduler's to decide, and
+`idle-processor-count-before-any-work` pins the count at the start.
 ```maxon
 function main() returns ExitCode
 	var lowest = __Builtins.schedIdleProcessorCount()
@@ -287,12 +296,12 @@ function main() returns ExitCode
 	if again < lowest 'lower'
 		lowest = again
 	end 'lower'
-	print("everyButMain={lowest == __Builtins.schedProcessorCount() - 1}\n")
+	print("withinIdleBound={lowest <= __Builtins.schedProcessorCount() - 1}\n")
 	return 0
 end 'main'
 ```
 ```stdout
-everyButMain=true
+withinIdleBound=true
 ```
 ```exitcode
 0
