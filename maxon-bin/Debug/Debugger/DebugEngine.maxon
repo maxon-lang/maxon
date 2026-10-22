@@ -122,7 +122,6 @@ export let DebugOutOfTextReason = "out-of-text"
 export let DebugInsideRuntimeSymbolReason = "inside-runtime-symbol"
 export let DebugNotRunningReason = "not-running"
 let DebugNoSuchBreakpointReason = "no-such-breakpoint"
-let DebugReturnHoldTakenReason = "return-hold-taken"
 export let DebugFaultIsTerminalReason = "fault-is-terminal"
 let DebugNotStoppedReason = "not-stopped"
 let DebugThreadIsRunningReason = "thread-is-running"
@@ -141,11 +140,10 @@ type EngineBreakpoint
 	export let address as DebugAddress
 	export let originalBytes as ByteArray
 	export let usersOwn as bool
-	export let conditioned as bool
-	export let condition as DebugConditionRecord
+	export let condition as DebugConditionRequest
 
-	static function create(offset DebugAddress, address DebugAddress, originalBytes ByteArray, usersOwn bool, conditioned bool, condition DebugConditionRecord) returns EngineBreakpoint
-		return Self{offset: offset, address: address, originalBytes: originalBytes, usersOwn: usersOwn, conditioned: conditioned, condition: condition}
+	static function create(offset DebugAddress, address DebugAddress, originalBytes ByteArray, usersOwn bool, condition DebugConditionRequest) returns EngineBreakpoint
+		return Self{offset: offset, address: address, originalBytes: originalBytes, usersOwn: usersOwn, condition: condition}
 	end 'create'
 end 'EngineBreakpoint'
 
@@ -186,70 +184,9 @@ union EngineGlobalRead
 	read(value DebuggeeWord)
 end 'EngineGlobalRead'
 
-union EngineReturnPoint
-	at(point DebugReturnPoint, offset DebugAddress, heldOverACondition bool)
-
-	function holdsTheWalksHold() returns bool
-		return match self 'standing'
-			at(_, _, held) gives held
-		end 'standing'
-	end 'holdsTheWalksHold'
-
-	function withoutTheHoldAt(armed DebugAddress) returns EngineReturnPoint
-		return match self 'standing'
-			at(point, offset, held) gives EngineReturnPoint.at(point, offset: offset, heldOverACondition: held and offset != armed)
-		end 'standing'
-	end 'withoutTheHoldAt'
-
-	function heldIfAt(holding DebugAddress) returns EngineReturnPoint
-		return match self 'standing'
-			at(point, offset, held) gives EngineReturnPoint.at(point, offset: offset, heldOverACondition: held or offset == holding)
-		end 'standing'
-	end 'heldIfAt'
-
-	function movedWith(movedThread DebugAddress, from DebugAddress, to DebugAddress) returns EngineReturnPoint
-		return match self 'standing'
-			at(point, offset, held) gives EngineReturnPoint.at(point.movedWith(movedThread, from: from, to: to), offset: offset, heldOverACondition: held)
-		end 'standing'
-	end 'movedWith'
-
-	function standsAt(address DebugAddress) returns bool
-		return match self 'standing'
-			at(point, _, _) gives point.address == address
-		end 'standing'
-	end 'standsAt'
-
-	function unheldPointAt(holding DebugAddress) returns DebugReturnPointLookup
-		return match self 'standing'
-			at(point, offset, held) gives DebugReturnPointLookup.at(point) if offset == holding and not held else DebugReturnPointLookup.none
-		end 'standing'
-	end 'unheldPointAt'
-
-	function pointReachedBy(landed EngineStop) returns DebugReturnPointLookup
-		return match self 'standing'
-			at(point, _, _) gives DebugReturnPointLookup.at(point) if point.reachedBy(landed) else DebugReturnPointLookup.none
-		end 'standing'
-	end 'pointReachedBy'
-
-	function offsetOf() returns DebugAddress
-		return match self 'standing'
-			at(_, offset, _) gives offset
-		end 'standing'
-	end 'offsetOf'
-end 'EngineReturnPoint'
-
-typealias EngineReturnPointArray = Array with EngineReturnPoint
-
 module union DebugReturnPointLookup
 	none
 	at(point DebugReturnPoint)
-
-	module function found() returns bool
-		return match self 'lookup'
-			none gives false
-			at gives true
-		end 'lookup'
-	end 'found'
 end 'DebugReturnPointLookup'
 
 module enum DebugReturnKind
@@ -322,7 +259,7 @@ export type DebugEngine implements DebugMemory
 	let stopTimeoutMs as StopTimeoutMs
 	var lastStopSeq as EngineSeq
 	var breakpoints as EngineBreakpointArray
-	var returnPoints as EngineReturnPointArray
+	var returnPoints as DebugReturnPointArray
 	let textBase as DebugAddress
 	let textSize as DebugAddress
 	var cacheBase as DebugAddress
@@ -395,7 +332,7 @@ export type DebugEngine implements DebugMemory
 		end 'adopted'
 
 		var contract = DebugRuntimeContract.readFrom(reader, textBytes: textBytes, placement: placement)
-		var engine = Self{pin: pin, launched: launched, backend: backend, target: target, contract: contract, stopTimeoutMs: stopTimeoutMs, lastStopSeq: 0, breakpoints: EngineBreakpointArray.create(), returnPoints: EngineReturnPointArray.create(), textBase: contract.textBase(), textSize: contract.textSize(), cacheBase: 0, cacheBytes: ByteArray.create(), cacheFilled: false, trace: trace, routing: routing, registers: DebugRegisterFile.create(), stopThread: 0, stopped: false, answeredUnder: 0, liftedTraps: EngineLiftedTrapArray.create(), detached: false, closed: false, holdArmed: false, lastReason: 0, lastFault: 0, lastPc: 0, lastConditionMissed: false, pausePending: false, readerStep: EngineReaderStep.none}
+		var engine = Self{pin: pin, launched: launched, backend: backend, target: target, contract: contract, stopTimeoutMs: stopTimeoutMs, lastStopSeq: 0, breakpoints: EngineBreakpointArray.create(), returnPoints: DebugReturnPointArray.create(), textBase: contract.textBase(), textSize: contract.textSize(), cacheBase: 0, cacheBytes: ByteArray.create(), cacheFilled: false, trace: trace, routing: routing, registers: DebugRegisterFile.create(), stopThread: 0, stopped: false, answeredUnder: 0, liftedTraps: EngineLiftedTrapArray.create(), detached: false, closed: false, holdArmed: false, lastReason: 0, lastFault: 0, lastPc: 0, lastConditionMissed: false, pausePending: false, readerStep: EngineReaderStep.none}
 
 		return engine.awaitEntryStop()
 	end 'start'
@@ -661,15 +598,14 @@ export type DebugEngine implements DebugMemory
 
 	// --- breakpoints ---
 
-	export function armBreakpoint(offset DebugAddress, forTheUser bool) returns CommandOutcome
+	export function armBreakpoint(offset DebugAddress, forTheUser bool, condition DebugConditionRequest) returns CommandOutcome
 		if offset >= self.textSize 'pastTheImage'
 			return CommandOutcome.refused(DebugOutOfTextReason)
 		end 'pastTheImage'
 
 		if self.armedAt(self.textBase + offset) 'armedAlready'
 			view original = self.originalBytesAt(offset)
-			self.recordBreakpoint(offset, originalBytes: original, usersOwn: forTheUser or self.userBreakpointAt(self.textBase + offset), conditioned: false, condition: DebugConditionRecord.unconditioned())
-			self.forgetTheHoldAt(offset)
+			self.recordBreakpoint(offset, originalBytes: original, usersOwn: forTheUser or self.userBreakpointAt(self.textBase + offset), condition: condition)
 
 			return CommandOutcome.done
 		end 'armedAlready'
@@ -679,10 +615,9 @@ export type DebugEngine implements DebugMemory
 		match trap 'planted'
 			unreadable then return CommandOutcome.refused(DebugOutOfTextReason)
 			unwritable then return CommandOutcome.refused(DebugUnwritableReason)
-			planted(original) then self.recordBreakpoint(offset, originalBytes: original, usersOwn: forTheUser, conditioned: false, condition: DebugConditionRecord.unconditioned())
+			planted(original) then self.recordBreakpoint(offset, originalBytes: original, usersOwn: forTheUser, condition: condition)
 		end 'planted'
 
-		self.forgetTheHoldAt(offset)
 		self.cacheFilled = false
 
 		return CommandOutcome.done
@@ -744,36 +679,6 @@ export type DebugEngine implements DebugMemory
 		end 'eachArmed'
 	end 'clearEveryBreakpoint'
 
-	export function attachCondition(offset DebugAddress, record DebugConditionRecord) returns CommandOutcome
-		match self.breakpointAt(self.textBase + offset) 'known'
-			none then return CommandOutcome.refused(DebugNoSuchBreakpointReason)
-			at then break
-		end 'known'
-
-		let held = self.returnPointHeldOver(offset, conditioned: true)
-
-		if not held.accepted() 'theWalkCouldNotHoldItsReturn'
-			return held
-		end 'theWalkCouldNotHoldItsReturn'
-
-		view original = self.originalBytesAt(offset)
-		self.recordBreakpoint(offset, originalBytes: original, usersOwn: true, conditioned: true, condition: record)
-
-		return CommandOutcome.done
-	end 'attachCondition'
-
-	export function clearCondition(offset DebugAddress) returns CommandOutcome
-		match self.breakpointAt(self.textBase + offset) 'known'
-			none then return CommandOutcome.refused(DebugNoSuchBreakpointReason)
-			at then break
-		end 'known'
-
-		view original = self.originalBytesAt(offset)
-		self.recordBreakpoint(offset, originalBytes: original, usersOwn: true, conditioned: false, condition: DebugConditionRecord.unconditioned())
-
-		return CommandOutcome.done
-	end 'clearCondition'
-
 	// ⚠ Two questions that must not be confused: this one is PHYSICAL — a trap byte stands here, whoever
 	// planted it — while `userBreakpointAt` below is the reader's, and answers only for a breakpoint the user
 	// asked for. Reporting a stop by this one presents a walk's own return point as a user's hit.
@@ -791,13 +696,6 @@ export type DebugEngine implements DebugMemory
 		end 'known'
 	end 'userBreakpointAt'
 
-	function conditionedAt(address DebugAddress) returns bool
-		return match self.breakpointAt(address) 'known'
-			none gives false
-			at(breakpoint) gives breakpoint.conditioned
-		end 'known'
-	end 'conditionedAt'
-
 	function breakpointAt(address DebugAddress) returns EngineBreakpointLookup
 		for breakpoint in self.breakpoints 'eachBreakpoint'
 			if breakpoint.address == address 'thisOne'
@@ -808,9 +706,9 @@ export type DebugEngine implements DebugMemory
 		return EngineBreakpointLookup.none
 	end 'breakpointAt'
 
-	function recordBreakpoint(offset DebugAddress, originalBytes ByteArray, usersOwn bool, conditioned bool, condition DebugConditionRecord)
+	function recordBreakpoint(offset DebugAddress, originalBytes ByteArray, usersOwn bool, condition DebugConditionRequest)
 		self.forgetBreakpoint(offset)
-		self.breakpoints.push(EngineBreakpoint.create(offset, address: self.textBase + offset, originalBytes: originalBytes, usersOwn: usersOwn, conditioned: conditioned, condition: condition))
+		self.breakpoints.push(EngineBreakpoint.create(offset, address: self.textBase + offset, originalBytes: originalBytes, usersOwn: usersOwn, condition: condition))
 	end 'recordBreakpoint'
 
 	function forgetBreakpoint(offset DebugAddress)
@@ -832,71 +730,23 @@ export type DebugEngine implements DebugMemory
 			panic("DebugEngine.plantReturnPoint: a walk plants each of its return points once, and the one at {hexWord(point.address)} already stands")
 		end 'plantedAlready'
 
-		let offset = point.address - self.textBase
-
-		// A conditioned byte the user armed is held, so a false condition still stops the walk there
-		// rather than running past its return point.
 		if self.armedAt(point.address) 'theUserArmedItAlready'
-			let conditioned = self.conditionedAt(point.address)
-			self.returnPoints.push(EngineReturnPoint.at(point, offset: offset, heldOverACondition: conditioned))
+			self.returnPoints.push(point)
 
 			return CommandOutcome.done
 		end 'theUserArmedItAlready'
 
-		let outcome = self.armBreakpoint(offset, forTheUser: false)
+		let outcome = self.armBreakpoint(point.address - self.textBase, forTheUser: false, condition: DebugConditionRequest.none)
 
 		if outcome.accepted() 'planted'
-			self.returnPoints.push(EngineReturnPoint.at(point, offset: offset, heldOverACondition: false))
+			self.returnPoints.push(point)
 		end 'planted'
 
 		return outcome
 	end 'plantReturnPoint'
 
-	function returnPointHeldOver(offset DebugAddress, conditioned bool) returns CommandOutcome
-		match self.unheldReturnPointAt(offset) 'standing'
-			none then return CommandOutcome.done
-			at then break
-		end 'standing'
-
-		if not conditioned 'nothingToHold'
-			return CommandOutcome.done
-		end 'nothingToHold'
-
-		var kept = EngineReturnPointArray.create()
-
-		for standing in self.returnPoints 'eachPoint'
-			kept.push(standing.heldIfAt(offset))
-		end 'eachPoint'
-
-		self.returnPoints = kept
-
-		return CommandOutcome.done
-	end 'returnPointHeldOver'
-
-	function unheldReturnPointAt(offset DebugAddress) returns DebugReturnPointLookup
-		for standing in self.returnPoints 'eachPoint'
-			let unheld = standing.unheldPointAt(offset)
-
-			if unheld.found() 'thisOne'
-				return unheld
-			end 'thisOne'
-		end 'eachPoint'
-
-		return DebugReturnPointLookup.none
-	end 'unheldReturnPointAt'
-
-	function forgetTheHoldAt(offset DebugAddress)
-		var kept = EngineReturnPointArray.create()
-
-		for standing in self.returnPoints 'eachPoint'
-			kept.push(standing.withoutTheHoldAt(offset))
-		end 'eachPoint'
-
-		self.returnPoints = kept
-	end 'forgetTheHoldAt'
-
 	module function rebaseReturnPoint(greenThread DebugAddress, from DebugAddress, to DebugAddress)
-		var kept = EngineReturnPointArray.create()
+		var kept = DebugReturnPointArray.create()
 
 		for standing in self.returnPoints 'eachPoint'
 			kept.push(standing.movedWith(greenThread, from: from, to: to))
@@ -911,10 +761,8 @@ export type DebugEngine implements DebugMemory
 
 	module function returnPointReachedBy(landed EngineStop) returns DebugReturnPointLookup
 		for standing in self.returnPoints 'eachPoint'
-			let reached = standing.pointReachedBy(landed)
-
-			if reached.found() 'thisOne'
-				return reached
+			if standing.reachedBy(landed) 'thisOne'
+				return DebugReturnPointLookup.at(standing)
 			end 'thisOne'
 		end 'eachPoint'
 
@@ -926,11 +774,11 @@ export type DebugEngine implements DebugMemory
 	// that still names the point leaves a live `int3` in the debuggee with `armedAt` reading clean.
 	export function liftReturnPoint() returns CommandOutcome
 		view standing = self.returnPoints
-		self.returnPoints = EngineReturnPointArray.create()
+		self.returnPoints = DebugReturnPointArray.create()
 		var outcome = CommandOutcome.done
 
 		for point in standing 'eachPoint'
-			var lifted = self.liftedOne(point.offsetOf())
+			var lifted = self.liftedOne(point.address - self.textBase)
 
 			if outcome.accepted() 'noFailureYet'
 				outcome = lifted
@@ -953,7 +801,7 @@ export type DebugEngine implements DebugMemory
 
 	export function returnPointAt(address DebugAddress) returns bool
 		for standing in self.returnPoints 'eachPoint'
-			if standing.standsAt(address) 'thisOne'
+			if standing.address == address 'thisOne'
 				return true
 			end 'thisOne'
 		end 'eachPoint'
@@ -1370,7 +1218,7 @@ export type DebugEngine implements DebugMemory
 			return self.stoodAt(DbgStopReasonBreakpoint, fault: 0, pc: address, conditionMissed: false)
 		end 'theConditionIsMet'
 
-		if self.returnPointAt(address) or self.walkHoldsTheByteAt(address) 'theWalkWantsItAnyway'
+		if self.returnPointAt(address) 'theWalkWantsItAnyway'
 			return self.stoodAt(DbgStopReasonBreakpoint, fault: 0, pc: address, conditionMissed: true)
 		end 'theWalkWantsItAnyway'
 
@@ -1482,20 +1330,10 @@ export type DebugEngine implements DebugMemory
 		end 'presence'
 	end 'trapInstructionStandsAt'
 
-	function walkHoldsTheByteAt(address DebugAddress) returns bool
-		for standing in self.returnPoints 'eachPoint'
-			if standing.offsetOf() == address - self.textBase and standing.holdsTheWalksHold() 'thisOne'
-				return true
-			end 'thisOne'
-		end 'eachPoint'
-
-		return false
-	end 'walkHoldsTheByteAt'
-
 	function conditionHoldsAt(address DebugAddress) returns bool
 		match self.breakpointAt(address) 'known'
 			none then return true
-			at(breakpoint) then return true if not breakpoint.conditioned else debugConditionHolds(breakpoint.condition, memory: self, framePointer: self.registers.framePointer())
+			at(breakpoint) then return breakpoint.condition.holds(self, framePointer: self.registers.framePointer())
 		end 'known'
 	end 'conditionHoldsAt'
 

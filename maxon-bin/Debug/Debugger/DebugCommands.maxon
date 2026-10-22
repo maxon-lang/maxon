@@ -1131,19 +1131,13 @@ export type DebugConversation
 			return self.notedArmed(attempt, candidate: candidate)
 		end 'theByteAlreadyCarriesIt'
 
-		match self.conditionReplaced(candidate.offset, request: request).inquiry() 'replaced'
-			answered then return self.notedRearmed(attempt, candidate: candidate)
-			refused(reason) then return attempt.refusedByTheDriver(reason, offset: candidate.offset)
-			gone(ending) then return self.settledBy(ending, attempt: attempt, offset: candidate.offset)
-		end 'replaced'
-	end 'rearmedHeldByte'
+		match self.engine.armBreakpoint(candidate.offset, forTheUser: true, condition: request) 'answered'
+			done then break
+			default panic("DebugConversation.rearmedHeldByte: the byte at 0x{candidate.offset:x} is armed, so re-arming it records the condition and answers done")
+		end 'answered'
 
-	function conditionReplaced(offset DebugAddress, request DebugConditionRequest) returns CommandOutcome
-		return match request 'asked'
-			none gives self.engine.clearCondition(offset)
-			carried(record) gives self.engine.attachCondition(offset, record: record)
-		end 'asked'
-	end 'conditionReplaced'
+		return self.notedRearmed(attempt, candidate: candidate)
+	end 'rearmedHeldByte'
 
 	function notedRearmed(attempt DebugArmingAttempt, candidate DebugLineCandidate) returns bool
 		var reconditioned = DebugArmPurposes.create()
@@ -1165,8 +1159,8 @@ export type DebugConversation
 	end 'notedArmed'
 
 	function armDecoded(candidate DebugLineCandidate, request DebugConditionRequest, attempt DebugArmingAttempt) returns bool
-		match self.engine.armBreakpoint(candidate.offset, forTheUser: true) 'answered'
-			done then return self.attachConditionTo(attempt, candidate: candidate, request: request)
+		match self.engine.armBreakpoint(candidate.offset, forTheUser: true, condition: request) 'answered'
+			done then return self.notedArmed(attempt, candidate: candidate)
 			nothingParked then return attempt.stoppedBy(DebugNotRunningReason, offset: candidate.offset)
 			refused(reason) then return attempt.refusedByTheDriver(reason, offset: candidate.offset)
 			gone(ending) then return self.settledBy(ending, attempt: attempt, offset: candidate.offset)
@@ -1178,23 +1172,6 @@ export type DebugConversation
 
 		return true
 	end 'settledBy'
-
-	function attachConditionTo(attempt DebugArmingAttempt, candidate DebugLineCandidate, request DebugConditionRequest) returns bool
-		match self.conditionHeld(attempt.armRefusals, offset: candidate.offset, request: request) 'posted'
-			held then return self.notedArmed(attempt, candidate: candidate)
-			refused then self.clearArmedByte(candidate.offset, cleared: DebugAddressArray.create(), refusals: attempt.armRefusals)
-			gone then break
-		end 'posted'
-
-		return true
-	end 'attachConditionTo'
-
-	function conditionHeld(refusals DebugRefusals, offset DebugAddress, request DebugConditionRequest) returns DebugConditionPosting
-		return match request 'asked'
-			none gives DebugConditionPosting.held
-			carried(record) gives self.conditionPosted(refusals, offset: offset, record: record)
-		end 'asked'
-	end 'conditionHeld'
 
 	function notePurpose(offset DebugAddress, purpose DebugArmPurpose)
 		var kept = self.purposesOtherThan(offset, hidden: purpose.hidden, identity: purpose.identity)
@@ -1249,20 +1226,6 @@ export type DebugConversation
 
 		return hidden
 	end 'hiddenForBreakpointAt'
-
-	function conditionPosted(refusals DebugRefusals, offset DebugAddress, record DebugConditionRecord) returns DebugConditionPosting
-		match self.engine.attachCondition(offset, record: record).inquiry() 'answered'
-			answered then return DebugConditionPosting.held
-			refused(reason) then return postingRefused(refusals, reason: reason, offset: offset)
-			gone(ending) then return self.postingEnded(refusals, ending: ending, offset: offset)
-		end 'answered'
-	end 'conditionPosted'
-
-	function postingEnded(refusals DebugRefusals, ending TargetOutcome, offset DebugAddress) returns DebugConditionPosting
-		self.settleRefusing(refusals, ending: ending, offset: offset)
-
-		return DebugConditionPosting.gone
-	end 'postingEnded'
 
 	function settleRefusing(refusals DebugRefusals, ending TargetOutcome, offset DebugAddress)
 		self.settle(ending)
@@ -2324,23 +2287,11 @@ union DebugReportedRefusal
 	reported(reason String, offsets DebugAddressArray)
 end 'DebugReportedRefusal'
 
-enum DebugConditionPosting
-	held
-	refused
-	gone
-end 'DebugConditionPosting'
-
 function reportedRefusal(refusals DebugRefusals) returns DebugReportedRefusal
 	let first = try refusals.get(0) otherwise return DebugReportedRefusal.none
 
 	return DebugReportedRefusal.reported(first.reason, offsets: offsetsRefusedFor(refusals, reason: first.reason))
 end 'reportedRefusal'
-
-function postingRefused(refusals DebugRefusals, reason String, offset DebugAddress) returns DebugConditionPosting
-	refusals.push(DebugRefusal.create(reason, offset: offset))
-
-	return DebugConditionPosting.refused
-end 'postingRefused'
 
 function breakpointAnswer(action String, spelling String, file DebugFileName, line DebugLineLookup, functionName DebugFunctionNameLookup, offsets DebugAddressArray, reason StatedText, condition DebugBreakCondition = DebugBreakCondition.unconditional) returns DebugReply
 	return DebugReply.breakpoint(DebugBreakpointAnswer.create(action, target: spelling, functionName: functionName, file: file, line: line, offsets: offsets, candidates: StringArray.create(), suggestion: StatedText.unstated, reason: reason, condition: condition))

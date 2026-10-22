@@ -157,9 +157,6 @@ lives: every word that names one re-lists the roster first, and an id whose thre
 - `unwritable` — for a byte the debugger could not write into the program's code.
 - `inside-runtime-symbol` — for a `break` at code that is the runtime's own: the runtime tier, and
   anything the compiler synthesized.
-- `return-hold-taken` — for a conditional `break` on the instruction of a running step's temporary
-  breakpoint, when another of that step's temporary breakpoints already shares its instruction with a
-  condition. One such instruction at a time may carry a condition.
 
 A `stop` carries a `reason`: `entry` before `main`, `breakpoint`, `step`, `pause`, `trap` and `fault`.
 `trap` is a trap instruction the debugger did not plant — a stop like any other, with a register file and a
