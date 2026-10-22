@@ -660,12 +660,26 @@ end 'InputsChange'
 module function inputsChangeReachesDocument(change InputsChange, workspace LspWorkspaceState, uri String, search LspRootSearch) returns bool
 	match change 'change'
 		everyProject then return true
-		oneProject(key) then return documentIsInProject(workspace, uri: uri, key: key, search: search)
+		oneProject(key) then return documentIsInProject(workspace, uri: uri, key: key, search: search, selection: ProjectDocuments.every)
 	end 'change'
 end 'inputsChangeReachesDocument'
 
-function documentIsInProject(workspace LspWorkspaceState, uri String, key String, search LspRootSearch) returns bool
+module enum ProjectDocuments
+	every
+	projectFileOnly
+end 'ProjectDocuments'
+
+module function documentIsInProject(workspace LspWorkspaceState, uri String, key String, search LspRootSearch, selection ProjectDocuments) returns bool
 	let readerPath = try FilePath.from(uri) otherwise return false
+
+	let selected = match selection 'selection'
+		every gives true
+		projectFileOnly gives isProjectFileName(readerPath.filename())
+	end 'selection'
+
+	if not selected 'notSelected'
+		return false
+	end 'notSelected'
 
 	return match lspProjectFactsOf(workspace, readerPath: readerPath, search: search) 'facts'
 		swept(root, _) gives root.toString() == key

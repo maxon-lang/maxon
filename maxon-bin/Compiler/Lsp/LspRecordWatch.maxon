@@ -23,10 +23,6 @@ end 'RecordWatch'
 
 module typealias RecordWatchMap = Map with (String, RecordWatch)
 
-module function recordWatchKey(dir FilePath) returns String
-	return dir.resolve(Directory.currentPath()).normalize().toString()
-end 'recordWatchKey'
-
 module function observeRecord(dir FilePath) returns RecordWatch
 	let observedAt = WallClock.nowUnixSeconds() as Timestamp
 	let record = try versionRecordPathOf(dir) otherwise return RecordWatch.unlocatable
@@ -58,15 +54,3 @@ function recordKindOf(state FileState) returns RecordKind
 		present gives RecordKind.present
 	end 'state'
 end 'recordKindOf'
-
-module function isProjectFileAt(uri String, key String) returns bool
-	let path = try FilePath.from(uri) otherwise return false
-
-	if not isProjectFileName(path.filename()) 'notAProjectFile'
-		return false
-	end 'notAProjectFile'
-
-	let dir = try path.resolve(Directory.currentPath()).parent() otherwise return false
-
-	return recordWatchKey(dir) == key
-end 'isProjectFileAt'

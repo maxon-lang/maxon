@@ -176,7 +176,7 @@ type LspSession
 	end 'publishedFor'
 
 	function rearriveProjectFileIfRecordMoved(dir FilePath)
-		let key = recordWatchKey(dir)
+		let key = dir.toString()
 		view watched = try self.workspace.recordWatches.get(key) otherwise return
 
 		if recordWatchHolds(watched) 'unchanged'
@@ -187,8 +187,10 @@ type LspSession
 		// would drop that fresh watch. A closed `.maxproj` leaves none, so it is not re-arrived again.
 		_ = self.workspace.recordWatches.remove(key)
 
+		let search = lspRootSearch()
+
 		for (uri, text) in self.documents.clone() 'eachOpenDocument'
-			if isProjectFileAt(uri, key: key) 'theProjectFile'
+			if documentIsInProject(self.workspace, uri: uri, key: key, search: search, selection: ProjectDocuments.projectFileOnly) 'theProjectFile'
 				self.documentArrived(uri, text: text, arrival: BufferArrival.edited, clientVersion: ClientDocumentVersion.unstated)
 			end 'theProjectFile'
 		end 'eachOpenDocument'
