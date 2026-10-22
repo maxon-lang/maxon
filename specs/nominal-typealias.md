@@ -1539,7 +1539,7 @@ end 'main'
 ```
 
 <!-- test: error.interface-method-implemented-over-a-different-alias -->
-A conformance compares the SPELLED alias, so an interface method over `Integer` is not implemented by a
+A conformance compares the alias each side declares, so an interface method over `Integer` is not implemented by a
 method over `Int`, even though the two ranges are identical.
 ```maxon
 typealias Integer = int(i64.min to i64.max)

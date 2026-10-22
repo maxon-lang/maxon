@@ -4546,3 +4546,94 @@ end 'main'
 ```maxoncstderr
 error E2073: app/<fragment>:6:17: 'Console' is a ranged alias and has no member 'stdin'
 ```
+
+<!-- test: an-interface-requirement-returning-byte-array-beside-a-type-named-its-instance -->
+A program declares a struct `Array_Byte` beside an interface requirement returning `ByteArray`. The
+requirement's return type is the byte array its alias names, not the author's struct that shares the
+instance's name, so `p.packed()` through the interface is a byte array and its count is 3.
+```maxon
+type Array_Byte
+	let tag as ExitCode
+end 'Array_Byte'
+
+interface Packer
+	function packed() returns ByteArray
+end 'Packer'
+
+type Bytes implements Packer
+	let tag as ExitCode
+
+	static function create() returns Self
+		return Self{tag: 0}
+	end 'create'
+
+	function packed() returns ByteArray
+		return ByteArray from [1, 2, 3]
+	end 'packed'
+end 'Bytes'
+
+function count(p Packer) returns ExitCode
+	return p.packed().count() as ExitCode
+end 'count'
+
+function main() returns ExitCode
+	return count(Bytes.create())
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: error.a-requirement-returning-the-declared-type-is-not-met-by-the-instance -->
+A requirement returning the author's struct `Array_Byte` names that struct, not the byte array whose
+instance shares its name, so a `packed()` returning `ByteArray` does not meet it.
+```maxon
+type Array_Byte
+	let tag as ExitCode
+end 'Array_Byte'
+
+interface Packer
+	function packed() returns Array_Byte
+end 'Packer'
+
+type Bytes implements Packer
+	function packed() returns ByteArray
+		return ByteArray from [1, 2, 3]
+	end 'packed'
+end 'Bytes'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:10:6: Partial interface implementation: type 'Bytes' has 1 method(s) with wrong signature:
+  - packed() returns ByteArray (expected packed() returns Array_Byte)
+```
+
+<!-- test: error.a-requirement-taking-the-declared-type-is-not-met-by-the-instance -->
+A requirement parameter typed as the author's struct `Array_Byte` names that struct, not the byte array
+whose instance shares its name, so a `pack` taking a `ByteArray` does not meet it.
+```maxon
+type Array_Byte
+	let tag as ExitCode
+end 'Array_Byte'
+
+interface Packer
+	function pack(b Array_Byte) returns ExitCode
+end 'Packer'
+
+type Bytes implements Packer
+	function pack(b ByteArray) returns ExitCode
+		return b.count() as ExitCode
+	end 'pack'
+end 'Bytes'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:10:6: Partial interface implementation: type 'Bytes' has 1 method(s) with wrong signature:
+  - pack(b ByteArray) returns ExitCode (expected pack(b Array_Byte) returns ExitCode)
+```

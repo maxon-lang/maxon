@@ -1475,7 +1475,7 @@ end 'main'
 ```
 
 <!-- test: error.interface-impl-brand-must-match -->
-A conformance compares the SPELLED alias — `take(xs Ys)` does not implement `take(xs Xs)` — and the
+A conformance compares the brand each side declares — `take(xs Ys)` does not implement `take(xs Xs)` — and the
 diagnostic prints the spellings, not the instance mint.
 ```maxon
 typealias Integer = int(i64.min to i64.max)

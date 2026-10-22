@@ -3122,8 +3122,8 @@ end 'main'
 `parseOptionalReturnType`, so without the door the declared type degrades silently to the machine word —
 the program COMPILES and links, and the first dispatch on the result reports the misdirecting
 `a member access 'area' on a 'int' value`.
-⚠ It has its own `returnType` arm, apart from a declared function's return: a direct call's return WRITES the second register, and a witness slot's signature is
-rebuilt from the requirement's rendered return-type NAME, which no interface has a spelling in. It is
+⚠ It has its own `returnType` arm, apart from a declared function's return: a direct call's return WRITES the second register, and a witness slot's signature
+carries the requirement's return as one machine word, with no register for the witness half. It is
 noted-then-thrown rather than thrown in place, for the reason the parameter half is — the reader is
 shared with a tolerant whole-program fold.
 ```maxon
@@ -3142,7 +3142,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/interface-dispatch/error.interface-typed-requirement-return.maxon:9:18: Unsupported: an interface requirement's return type declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a requirement is dispatched through a witness-table slot whose signature is rebuilt from the requirement's rendered return-type NAME, a spelling no interface has — so the second register is never read and the witness half is dropped. Declare the return at a concrete type, or hand the interface back from a NAMED function called DIRECTLY, whose second return register carries the witness half
+error E2015: specs/interface-dispatch/error.interface-typed-requirement-return.maxon:9:18: Unsupported: an interface requirement's return type declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a requirement is dispatched through a witness-table slot that carries the return as one machine word — so the second register is never read and the witness half is dropped. Declare the return at a concrete type, or hand the interface back from a NAMED function called DIRECTLY, whose second return register carries the witness half
 ```
 
 <!-- test: error.interface-typed-function-type-return -->
@@ -3726,4 +3726,478 @@ shwmae opening 1
 hallo middle 2
 opening 3 middle 3 closing 3
 shwmae closing 3
+```
+
+
+<!-- test: interface-requirement-returning-byte-array-throws-through-two-conformers -->
+```maxon
+enum ProbeError implements Error
+	refused
+end 'ProbeError'
+
+interface Transform
+	function run(data ByteArray) returns ByteArray throws ProbeError
+end 'Transform'
+
+type Doubler implements Transform
+	let limit as Count
+
+	static function create(limit Count) returns Self
+		return Self{limit: limit}
+	end 'create'
+
+	function run(data ByteArray) returns ByteArray throws ProbeError
+		if data.count() > self.limit 'big'
+			throw ProbeError.refused
+		end 'big'
+
+		var out = ByteArray.create()
+
+		for b in data 'each'
+			out.push(b)
+			out.push(b)
+		end 'each'
+
+		return out
+	end 'run'
+end 'Doubler'
+
+type Reverser implements Transform
+	let limit as Count
+
+	static function create(limit Count) returns Self
+		return Self{limit: limit}
+	end 'create'
+
+	function run(data ByteArray) returns ByteArray throws ProbeError
+		if data.count() > self.limit 'big'
+			throw ProbeError.refused
+		end 'big'
+
+		var out = ByteArray.create()
+
+		for b in data 'each'
+			out.insert(0, value: b)
+		end 'each'
+
+		return out
+	end 'run'
+end 'Reverser'
+
+function apply(t Transform, data ByteArray) returns ByteArray throws ProbeError
+	let r = try t.run(data)
+	return r
+end 'apply'
+
+function orEmpty(t Transform, data ByteArray) returns ByteArray
+	let r = try t.run(data) otherwise ByteArray.create()
+	return r
+end 'orEmpty'
+
+function show(bytes ByteArray)
+	print("{bytes.count()}:")
+
+	for b in bytes 'each'
+		print(" {b}")
+	end 'each'
+
+	print("\n")
+end 'show'
+
+function main() returns ExitCode
+	let data = ByteArray from [1, 2, 3]
+
+	let doubled = try apply(Doubler.create(8), data: data) otherwise ByteArray.create()
+	show(doubled)
+
+	let reversed = try apply(Reverser.create(8), data: data) otherwise ByteArray.create()
+	show(reversed)
+
+	let refused = try apply(Doubler.create(2), data: data) otherwise ByteArray.create()
+	show(refused)
+
+	show(orEmpty(Reverser.create(8), data: data))
+	show(orEmpty(Doubler.create(2), data: data))
+	show(orEmpty(Reverser.create(2), data: data))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6: 1 1 2 2 3 3
+3: 3 2 1
+0:
+3: 3 2 1
+0:
+0:
+```
+
+<!-- test: interface-requirement-returning-a-user-array-alias-through-two-conformers -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Numbers = Array with Integer
+
+interface Source
+	function nums(n Integer) returns Numbers
+end 'Source'
+
+type Counting implements Source
+	let start as Integer
+
+	static function create(start Integer) returns Self
+		return Self{start: start}
+	end 'create'
+
+	function nums(n Integer) returns Numbers
+		var out = Numbers.create()
+
+		for i in 0 upto n 'each'
+			out.push(self.start + i)
+		end 'each'
+
+		return out
+	end 'nums'
+end 'Counting'
+
+type Squares implements Source
+	let scale as Integer
+
+	static function create(scale Integer) returns Self
+		return Self{scale: scale}
+	end 'create'
+
+	function nums(n Integer) returns Numbers
+		var out = Numbers.create()
+
+		for i in 0 upto n 'each'
+			out.push(i * i * self.scale)
+		end 'each'
+
+		return out
+	end 'nums'
+end 'Squares'
+
+function report(s Source, n Integer)
+	let size = s.nums(n).count()
+	let xs = s.nums(n)
+	print("{size} {xs.count()}:")
+
+	for x in xs 'each'
+		print(" {x}")
+	end 'each'
+
+	print("\n")
+end 'report'
+
+function main() returns ExitCode
+	report(Counting.create(10), n: 3)
+	report(Squares.create(2), n: 4)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 3: 10 11 12
+4 4: 0 2 8 18
+```
+
+<!-- test: interface-requirements-returning-byte-array-and-a-map-alias-through-two-conformers -->
+A requirement returning the stdlib `ByteArray` without `throws`, and one returning a user alias of a `Map`,
+called through an interface-typed parameter: each result is the container its requirement declares, so its
+`count()` and its element reads work for either conformer.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Tally = Map with (String, Integer)
+
+interface Survey
+	function packed() returns ByteArray
+	function tally() returns Tally
+end 'Survey'
+
+type Small implements Survey
+	let base as Integer
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+
+	function packed() returns ByteArray
+		return ByteArray from [9, 8, 7]
+	end 'packed'
+
+	function tally() returns Tally
+		var t = Tally.create()
+		t.upsert("x", value: self.base * 10)
+		return t
+	end 'tally'
+end 'Small'
+
+type Large implements Survey
+	let base as Integer
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+
+	function packed() returns ByteArray
+		var out = ByteArray.create()
+
+		for i in 0 upto 4 'each'
+			out.push((200 + i) as Byte)
+		end 'each'
+
+		return out
+	end 'packed'
+
+	function tally() returns Tally
+		var t = Tally.create()
+		t.upsert("x", value: self.base)
+		t.upsert("y", value: self.base + 5)
+		return t
+	end 'tally'
+end 'Large'
+
+function report(s Survey)
+	let packed = s.packed()
+	let first = try packed.get(0) otherwise 0
+	let last = try packed.get(packed.count() - 1) otherwise 0
+	print("packed {packed.count()}: {first} {last}\n")
+
+	let tally = s.tally()
+	let x = try tally.get("x") otherwise 0
+	let y = try tally.get("y") otherwise -1
+	print("tally {tally.count()}: {x} {y}\n")
+end 'report'
+
+function main() returns ExitCode
+	report(Small.create(4))
+	report(Large.create(7))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+packed 3: 9 7
+tally 1: 40 -1
+packed 4: 200 203
+tally 2: 7 12
+```
+
+<!-- test: error.interface-requirement-result-keeps-its-alias -->
+A call through an interface-typed value is typed by the requirement's declared return alias, exactly as a
+direct call to the conformer is: `Other` is a second alias of the same instance, so the result of `m.make()`
+does not fit an `Other` parameter.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias Other = Array with Integer
+
+interface Maker
+	function make() returns IntArray
+end 'Maker'
+
+type Builder implements Maker
+	let seed as Integer
+
+	static function create(seed Integer) returns Self
+		return Self{seed: seed}
+	end 'create'
+
+	function make() returns IntArray
+		var xs = IntArray.create()
+		xs.push(self.seed)
+		return xs
+	end 'make'
+end 'Builder'
+
+function head(xs Other) returns Integer
+	return try xs.get(0) otherwise 0
+end 'head'
+
+function viaInterface(m Maker) returns Integer
+	return head(m.make())
+end 'viaInterface'
+
+function main() returns ExitCode
+	return viaInterface(Builder.create(42)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/interface-dispatch/error.interface-requirement-result-keeps-its-alias.maxon:29:9: argument type mismatch for 'xs': expected 'Other', got 'IntArray'
+```
+
+<!-- test: error.a-witness-argument-of-another-instance-is-refused -->
+An argument to a call through an interface-typed value is judged against the requirement's declared
+parameter alias, exactly as a direct call to the conformer judges it: a `Strings` is not an `IntArray`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias Strings = Array with String
+
+interface Summer
+	function total(xs IntArray) returns Integer
+end 'Summer'
+
+type Adder implements Summer
+	let base as Integer
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+
+	function total(xs IntArray) returns Integer
+		var t = self.base
+		for x in xs 'each'
+			t = t + x
+		end 'each'
+		return t
+	end 'total'
+end 'Adder'
+
+function viaInterface(s Summer) returns Integer
+	return s.total(Strings.create())
+end 'viaInterface'
+
+function main() returns ExitCode
+	return viaInterface(Adder.create(0)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/interface-dispatch/error.a-witness-argument-of-another-instance-is-refused.maxon:27:11: argument type mismatch for 'xs': expected 'IntArray', got 'Strings'
+```
+
+<!-- test: error.a-witness-argument-of-another-alias-is-refused -->
+`Other` is a second alias of the same instance as `IntArray`, so an `Other` argument does not fit the
+requirement's `IntArray` parameter through the interface, as it does not fit it in a direct call.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias Other = Array with Integer
+
+interface Summer
+	function total(xs IntArray) returns Integer
+end 'Summer'
+
+type Adder implements Summer
+	let base as Integer
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+
+	function total(xs IntArray) returns Integer
+		var t = self.base
+		for x in xs 'each'
+			t = t + x
+		end 'each'
+		return t
+	end 'total'
+end 'Adder'
+
+function viaInterface(s Summer) returns Integer
+	return s.total(Other.create())
+end 'viaInterface'
+
+function main() returns ExitCode
+	return viaInterface(Adder.create(0)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/interface-dispatch/error.a-witness-argument-of-another-alias-is-refused.maxon:27:11: argument type mismatch for 'xs': expected 'IntArray', got 'Other'
+```
+
+<!-- test: interface-requirement-returning-a-character-through-two-conformers -->
+A requirement returning `Character` hands each conformer's grapheme back through the interface-typed value,
+owned by the caller exactly as a direct call's result is.
+```maxon
+interface Glyphs
+	function glyph() returns Character
+end 'Glyphs'
+
+type Letter implements Glyphs
+	let ch as Character
+
+	static function create(ch Character) returns Self
+		return Self{ch: ch}
+	end 'create'
+
+	function glyph() returns Character
+		return self.ch
+	end 'glyph'
+end 'Letter'
+
+type Mark implements Glyphs
+	let ch as Character
+
+	static function create(ch Character) returns Self
+		return Self{ch: ch}
+	end 'create'
+
+	function glyph() returns Character
+		return self.ch
+	end 'glyph'
+end 'Mark'
+
+function codeOf(g Glyphs) returns ExitCode
+	let c = g.glyph()
+
+	for cp in c.codepoints() 'first'
+		return cp
+	end 'first'
+
+	return 0
+end 'codeOf'
+
+function main() returns ExitCode
+	return codeOf(Letter.create('A')) + codeOf(Mark.create('B'))
+end 'main'
+```
+```exitcode
+131
+```
+
+<!-- test: error.a-witness-argument-to-a-character-formal-is-refused -->
+An argument to a requirement's `Character` parameter is judged through the interface exactly as a direct
+call to the conformer judges it: an integer is not a `Character`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Sink
+	function put(c Character) returns Integer
+end 'Sink'
+
+type Counter implements Sink
+	let base as Integer
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+
+	function put(c Character) returns Integer
+		var n = self.base
+
+		for _ in c.codepoints() 'each'
+			n = n + 1
+		end 'each'
+
+		return n
+	end 'put'
+end 'Counter'
+
+function viaInterface(s Sink) returns Integer
+	return s.put(5)
+end 'viaInterface'
+
+function main() returns ExitCode
+	return viaInterface(Counter.create(0)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:27:11: argument type mismatch for 'c': expected 'Character', got 'int'
 ```

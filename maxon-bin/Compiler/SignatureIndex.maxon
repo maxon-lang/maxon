@@ -322,24 +322,6 @@ function mixDeclaringTier(state HashDigest, visibility Visibility, declFilePath 
 	return mixBytes(mixVisibilityTier(state, visibility: visibility), bytes: declFilePath.toString().toByteArray())
 end 'mixDeclaringTier'
 
-// ⭐ **THE `with` BINDINGS' HALF OF THE STATEMENT ABOVE, AS A CLAUSE MAY BIND AT EVERY NAME** —
-// one list per interface, so the column is nested and a flat walk of it could not tell
-// `implements A with X, B` from `implements A, B with X`.
-//
-// ⚠ **EACH LIST'S LENGTH IS MIXED AHEAD OF ITS CONTENTS, AND THAT IS WHAT MAKES THE NESTING VISIBLE.**
-// Without it `[[X], [Y]]` and `[[X, Y], []]` hash identically — two different programs (one binds `Y` at the
-// second interface, the other binds it at the first), and a reader served the wrong memo would substitute
-// one conformer's associated type for another's.
-function mixConformanceBindings(state HashDigest, bindings ConformanceBindingArray) returns HashDigest
-	var out = state
-
-	for perInterface in bindings 'eachConformance'
-		out = mixDeclaredConformances(Hasher.combined(out, value: perInterface.count() as HashDigest), conformsTo: perInterface, shape: DeclShapeConformanceBinding)
-	end 'eachConformance'
-
-	return out
-end 'mixConformanceBindings'
-
 // The `MaxonType.structRef` arm's discriminator. It is DISTINCT from `TypeShapeNamed`, and that is
 // load-bearing rather than tidy: `named(Point)` and `structRef(Point)` carry the same NAME and mean
 // different things in every reader — one is a ranged int, the other a pointer — so a hash that
@@ -798,6 +780,7 @@ let DeclShapeStdlibExtensionMethodBeatenByUser = 106 as HashDigest
 // index re-read. Sharing one shape would let a clause whose extent CHANGED between the two hash as a clause
 // that was read once and correctly — which is exactly the memo staleness this re-read exists to close.
 let DeclShapeRefoldedConformance = 91 as HashDigest
+let DeclShapeRefoldedWhereConstraint = 138 as HashDigest
 
 // A `throws` clause's PRESENCE discriminators — the two arms of `ThrowsClause`, so `none` and
 // `throwing(E)` cannot hash alike in a position where both are possible. `mixThrowsClause` is the one place a
@@ -8334,7 +8317,7 @@ end 'witnessFormalPositionsByRef'
 
 function noteRequirementsWritten(iface IrInterface, info ParamReassignInfo, positions ParamPositionMask, into WitnessByRefMaskMap)
 	for method in iface.methods 'eachRequirement'
-		if method.isStatic or not method.name.equals(info.bareName) or method.paramTypeNames.count() + WitnessReceiverArgCount != info.paramNames.count() 'notThisDeclarationsRequirement'
+		if method.isStatic or not method.name.equals(info.bareName) or method.paramTypes.count() + WitnessReceiverArgCount != info.paramNames.count() 'notThisDeclarationsRequirement'
 			continue
 		end 'notThisDeclarationsRequirement'
 
@@ -15121,7 +15104,8 @@ end 'cacheReadExtensionDeclSiteArray'
 // `uses` arity, and that arity is `foldInterfaceDeclarations`' answer — a pass that cannot run until every
 // file has folded. So the sweep reads what it can prove (`Parser.readOptionalImplementsClause` stops at the
 // first unparenthesized `with`) and `Queries.foldConformanceClauses` re-reads the SAME tokens with the same
-// reader once the arity is known.
+// reader once the arity is known. A `type` whose `where` clause binds an associated type is noted too, for
+// the clause `Parser.foldConformanceClauseInto` re-reads.
 //
 // ⛔ **MEASURED before it existed: `implements Marker with T, Holder with T` gave `extension Holder`'s
 // methods to nobody, while `implements Holder with T, Marker with T` — the identical clause, reordered —
@@ -22386,15 +22370,6 @@ export type ProgramSignatures
 		end 'eachInterface'
 	end 'noteWitnessRequirementsWrittenBy'
 
-	export function interfaceFormalBrand(interfaceName ByteArray, formalName ByteArray) returns ByteArray
-		view declaring = self.declaringInterface(interfaceName)
-
-		return match self.scopedGenericAliasDecl(formalName, readerFilePath: declaring.declFilePath) 'alias'
-			declared gives brandOfDeclaredSpelling(formalName)
-			undeclared gives EmptySourceText
-		end 'alias'
-	end 'interfaceFormalBrand'
-
 	export function witnessRequirementByRefMask(interfaceName ByteArray, methodName ByteArray) returns ParamPositionMask
 		self.requireByRefMasksSettled()
 		return try self.witnessByRefMasks.get(witnessRequirementKey(interfaceName, methodName: methodName)) otherwise NoParamPositions
@@ -23256,8 +23231,8 @@ export type ProgramSignatures
 	//     A, B` opens a second ARGUMENT or a second INTERFACE, so it changes what a conformance in any file
 	//     PARSES — a reader that did not re-parse would go on binding the old count.
 	//   • The declaring FILE rides: a dispatch in any file resolves the formals as that file sees them
-	//     (`interfaceFormalAlias`), so moving the interface to another file changes what its callers
-	//     check.
+	//     (`requirementAbiType`, `SemanticCheck.nominalWitnessFormal`), so moving the interface to another
+	//     file changes what its callers check.
 	//   • Each method's NAME, RETURN TYPE, FORMAL TYPES, FORMAL NAMES and `throws` ride: a witness dispatch in
 	//     any file picks its table SLOT, its result type, its `Self`-formal rejection, its `name:` label
 	//     vocabulary and its calling ABI off exactly those five (`Parser.findWitnessDispatchCandidates`), and every one
@@ -23316,7 +23291,13 @@ export type ProgramSignatures
 		for method in iface.methods 'eachMethod'
 			self.mainThreadSettled().interfaceRequirementNames.insert(method.name)
 			self.hash = mixBytes(mixBytes(Hasher.combined(self.hash, value: DeclShapeInterfaceMethod), bytes: method.name), bytes: method.returnTypeName)
+			self.hash = self.mixRequirementType(self.hash, requirement: method.returnType)
 			self.hash = mixInterfaceFormals(self.hash, names: method.paramNames, types: method.paramTypeNames)
+
+			for param in method.paramTypes 'eachParamType'
+				self.hash = self.mixRequirementType(self.hash, requirement: param)
+			end 'eachParamType'
+
 			self.hash = mixThrowsClause(self.hash, clause: method.throwsClause)
 			self.hash = mixCapabilities(self.hash, params: method.paramCapabilities, result: method.returnCapability)
 			self.hash = Hasher.combined(self.hash, value: ReceiverShapeAbsent if method.isStatic else ReceiverShapePresent)
@@ -23344,10 +23325,6 @@ export type ProgramSignatures
 			notFound then panic("ProgramSignatures.declaringInterface: no interface '{String.from(interfaceName)}' declares the requirement being read — a witness dispatch's declaring interface comes out of this index")
 		end 'declaring'
 	end 'declaringInterface'
-
-	export function interfaceDeclaresAssociatedType(interfaceName ByteArray, name ByteArray) returns bool
-		return self.declaringInterface(interfaceName).associatedTypeNames.contains(name)
-	end 'interfaceDeclaresAssociatedType'
 
 	module function interfaceDeclarationSites() returns InterfaceDeclSiteArray
 		return self.settledDeclarations().interfaceDeclSites
@@ -23473,10 +23450,7 @@ export type ProgramSignatures
 		// which `Box with …` are legal (E3017) and which witness table a dispatch reads in any file, so a
 		// reader's parse memo must move with it. Each entry's constrained-param INDEX and interface NAME are
 		// mixed, in list order — the witness-slot order depends on that order too.
-		for i in 0 upto layout.whereConstraintCount() 'eachConstraint'
-			let constraint = try layout.whereConstraints.get(i) otherwise panic("ProgramSignatures.recordStruct: whereConstraints.get OOB at {i}")
-			state = mixBytes(Hasher.combined(Hasher.combined(state, value: DeclShapeWhereConstraint), value: constraint.typeParamIndex as HashDigest), bytes: constraint.interfaceName)
-		end 'eachConstraint'
+		state = self.mixWhereConstraints(state, constraints: layout.whereConstraints)
 
 		// The `implements` list rides too — see `mixDeclaredConformances`. For a `type` it decides which
 		// INTERFACE EXTENSION methods the type has, so adding or removing a name here adds or removes whole
@@ -23487,7 +23461,7 @@ export type ProgramSignatures
 		// CONDITIONAL extension's methods exist on this type at all (`ConformanceCheck.checkExtensionConstraints`), so
 		// editing `implements Holder with Score` to `with Tally` adds or removes functions from the program
 		// with neither the extension's file nor this type's field list moving.
-		state = mixConformanceBindings(state, bindings: layout.conformanceBindings)
+		state = self.mixConformanceBindings(state, bindings: layout.conformanceBindings)
 
 		for i in 0 upto layout.fieldCount() 'eachField'
 			state = self.mixField(state, layout: layout, index: i)
@@ -23670,62 +23644,20 @@ export type ProgramSignatures
 		return self.settledDeclarations().interfaceAliasOwners.contains(name)
 	end 'interfaceDeclaresAlias'
 
-	// ⭐⭐ **WHAT A REQUIREMENT SPELLING `<Interface>.<member>` ACTUALLY REQUIRES, under this conformance's
-	// bindings** — the alias's RIGHT-HAND SIDE with each of the declaring interface's associated types
-	// replaced by what the conformance bound it to, rendered to the SAME canonical instance name the
-	// conformer's own declared parameter renders to (`renderDeclaredTypeName` → `canonicalInstanceName`).
-	// That is what makes the expansion arrive at `ConformanceCheck`'s ONE substitution site as an ordinary
-	// substituted name. `InstanceNameForm.written` renders the same expansion as source spells it
-	// (`Array with Byte`), for the requirement a diagnostic prints.
-	//
-	// `boundSpellings` is parallel to `associatedTypeNames` — the caller resolves each name through the same
-	// two-pair lookup every other position uses, so ORDER is: EXPAND first (the alias is what says an
-	// associated type is used at all), then SUBSTITUTE into what the expansion exposed. The reverse order is
-	// not merely slower, it is undefined: before expansion the requirement mentions no associated type.
-	//
-	// ⛔ **IT BUILDS THE NAME AND MUST NOT INTERN ONE.** Interning the substituted instance would MINT a
-	// fresh `GenericInstanceId` on the FAILING path — the path where no conformer declares that type — long
-	// after `deriveInstanceNames` warmed the set and while `checkTypeSymbolNamespace`'s compiled-name walk
-	// still has the whole instance space to enumerate. A name is all any caller wants; the memoized namer is
-	// still what names every part of it that did not move.
-	export function expandInterfaceAlias(qualifiedName ByteArray, associatedTypeNames NameRoster, boundSpellings NameRoster, conformerName ByteArray, conformerTypeParams NameRoster, declaringInterfaceName ByteArray, form InstanceNameForm) returns ByteArray throws MapError
-		let id = try self.settledDeclarations().interfaceAliases.get(qualifiedName)
-		return self.substitutedInstanceName(id, associatedTypeNames: associatedTypeNames, boundSpellings: boundSpellings, conformerName: conformerName, conformerTypeParams: conformerTypeParams, declaringInterfaceName: declaringInterfaceName, form: form)
-	end 'expandInterfaceAlias'
+	export function expandedInterfaceAliasDisplay(qualifiedName ByteArray, associatedTypeNames NameRoster, boundSpellings NameRoster, declaringInterfaceName ByteArray) returns ByteArray throws MapError
+		let id = try self.interfaceAliasInstanceOf(qualifiedName)
+		return self.substitutedInstanceName(id, associatedTypeNames: associatedTypeNames, boundSpellings: boundSpellings, declaringInterfaceName: declaringInterfaceName)
+	end 'expandedInterfaceAliasDisplay'
 
-	// The name of `id`, in `form`, with every associated-type argument substituted — the recursion above
-	// seeds. Its canonical form mirrors `canonicalNameWithin`'s join (stem, then `_` and each argument's canonical form) and cannot
-	// simply CALL it, because that one names the instance as interned and this one names the instance the
-	// conformance means. A NESTED instance argument recurses, which is what makes
-	// `typealias Nested = Array with (Array with Element)` expand as far as it is written.
-	//
-	// No cycle guard, and none is reachable: an interface alias's arguments are the ones `readGenericInstanceAlias`
-	// parsed, and an argument naming another alias of the same interface is refused at that parse
-	// (`E3011 Unknown type 'Holder.ElementArray'` — measured), so this walk descends only into instances
-	// spelled inline and therefore strictly smaller than their parent.
-	function substitutedInstanceName(id GenericInstanceId, associatedTypeNames NameRoster, boundSpellings NameRoster, conformerName ByteArray, conformerTypeParams NameRoster, declaringInterfaceName ByteArray, form InstanceNameForm) returns ByteArray
+	function substitutedInstanceName(id GenericInstanceId, associatedTypeNames NameRoster, boundSpellings NameRoster, declaringInterfaceName ByteArray) returns ByteArray
 		var args = StringArray.create()
 
 		for (iter, arg) in self.genericInstances.instanceArgs(id).withIterator() 'eachArg'
-			args.push("{self.readOnlyArgMarker(id, position: iter.index(), form: form)}{self.substitutedArgName(arg, associatedTypeNames: associatedTypeNames, boundSpellings: boundSpellings, conformerName: conformerName, conformerTypeParams: conformerTypeParams, declaringInterfaceName: declaringInterfaceName, form: form)}")
+			args.push("{self.readOnlyArgMarker(id, position: iter.index(), form: InstanceNameForm.written)}{self.substitutedArgName(arg, associatedTypeNames: associatedTypeNames, boundSpellings: boundSpellings, declaringInterfaceName: declaringInterfaceName)}")
 		end 'eachArg'
 
-		return match form 'form'
-			canonical gives self.canonicalInstanceNameOver(self.instanceNameStem(id), args: args)
-			written gives self.writtenInstanceTextOver(self.instanceNameStem(id), args: args)
-		end 'form'
+		return self.writtenInstanceTextOver(self.instanceNameStem(id), args: args)
 	end 'substitutedInstanceName'
-
-	function canonicalInstanceNameOver(stem String, args StringArray) returns ByteArray
-		var out = stem
-
-		for arg in args 'eachArg'
-			out.append("_")
-			out.append(arg)
-		end 'eachArg'
-
-		return out.toByteArray()
-	end 'canonicalInstanceNameOver'
 
 	function writtenInstanceTextOver(stem String, args StringArray) returns ByteArray
 		var out = "{stem} with "
@@ -23749,61 +23681,23 @@ export type ProgramSignatures
 		return sole.contains(WrittenInstanceMarker)
 	end 'soleArgIsAnInstance'
 
-	// ONE argument of the walk above. Three answers: an argument that IS
-	// one of the declaring interface's associated types becomes whatever the conformance bound that name to;
-	// a nested instance recurses; anything else is named exactly as `canonicalTypeArgName` names it, which is
-	// what keeps a concrete argument (`typealias Bytes = Array with Byte`, an interface declaring no `uses`
-	// at all) reaching the same string the conformer's own declaration renders.
-	function substitutedArgName(arg MaxonType, associatedTypeNames NameRoster, boundSpellings NameRoster, conformerName ByteArray, conformerTypeParams NameRoster, declaringInterfaceName ByteArray, form InstanceNameForm) returns String
-		// `typeParamPositionIn` is the ONE reader of a type-parameter token, and it is the stronger test than a
-		// bare tag check: a token minted by some OTHER declaration fails it rather than subscripting this
-		// interface's list at a position that happens to be in range.
+	function substitutedArgName(arg MaxonType, associatedTypeNames NameRoster, boundSpellings NameRoster, declaringInterfaceName ByteArray) returns String
 		if maxonTypeTag(arg) == ValueTypeTag.typeParameter 'maybeAnAssociatedType'
 			if let position = try typeParamPositionIn(typeParamIdOf(arg), declarationName: declaringInterfaceName, paramNames: associatedTypeNames) 'oneOfTheDeclarersOwn'
-				let bound = try boundSpellings.get(position) otherwise panic("substitutedArgName: boundSpellings.get OOB at {position} — it is built parallel to associatedTypeNames, which is the list that position was just read out of")
-
-				if form == InstanceNameForm.written 'theBindingAsTheAuthorWroteIt'
-					return self.aliasIdentityDisplay(bound)
-				end 'theBindingAsTheAuthorWroteIt'
-
-				return self.canonicalArgNameOfSpelling(bound, conformerName: conformerName, conformerTypeParams: conformerTypeParams)
+				return self.aliasIdentityDisplay(try boundSpellings.get(position) otherwise panic("substitutedArgName: boundSpellings.get OOB at {position} — it is built parallel to associatedTypeNames, which is the list that position was just read out of"))
 			end 'oneOfTheDeclarersOwn'
 		end 'maybeAnAssociatedType'
 
 		if maxonTypeTag(arg) == ValueTypeTag.genericInstance 'aNestedInstance'
-			return String.from(self.substitutedInstanceName(genericInstanceIdOf(arg), associatedTypeNames: associatedTypeNames, boundSpellings: boundSpellings, conformerName: conformerName, conformerTypeParams: conformerTypeParams, declaringInterfaceName: declaringInterfaceName, form: form))
+			return String.from(self.substitutedInstanceName(genericInstanceIdOf(arg), associatedTypeNames: associatedTypeNames, boundSpellings: boundSpellings, declaringInterfaceName: declaringInterfaceName))
 		end 'aNestedInstance'
 
-		if form == InstanceNameForm.written 'anArgumentAsWritten'
-			return String.from(self.displayedTypeArgName(arg, spelling: InstanceArgSpelling.asWritten))
-		end 'anArgumentAsWritten'
-
-		var path = GenericInstanceIdArray.create()
-		return self.canonicalTypeArgName(arg, path: path)
+		return String.from(self.displayedTypeArgName(arg, spelling: InstanceArgSpelling.asWritten))
 	end 'substitutedArgName'
 
-	// The canonical argument name of a SPELLING — a conformance's `with` argument is a source name, and this
-	// is the one place one is turned into the string an interned argument of the same type would carry.
-	// It routes BOTH answers through `canonicalTypeArgName`, the one speller, rather than restating either:
-	// a name the conformer declares as its own type PARAMETER is that parameter's token (which is how the
-	// conformer's own `Array with Element` was interned), and every other name denotes whatever it denotes —
-	// a generic alias resolves through the alias table, a struct or ranged alias is its own name — which is
-	// exactly the `named` leaf that speller already decides.
-	//
-	// ⚠ It INTERNS the spelling, and that is safe where interning an INSTANCE would not be: `intern` is
-	// append-only and idempotent, nothing reads this interner by index after the fold, and a name carries no
-	// place in the instance space `checkTypeSymbolNamespace` enumerates. The read-only half (`idOf`) cannot
-	// serve here — a name it misses has no id to build a `MaxonType` from, and the miss is exactly the case
-	// that still has to be named.
-	function canonicalArgNameOfSpelling(spelling ByteArray, conformerName ByteArray, conformerTypeParams NameRoster) returns String
-		var path = GenericInstanceIdArray.create()
-
-		if conformerTypeParams.contains(spelling) 'theConformersOwnParameter'
-			return self.canonicalTypeArgName(MaxonType.typeParameter(typeParamTokenFor(conformerName, paramName: spelling)), path: path)
-		end 'theConformersOwnParameter'
-
-		return self.canonicalTypeArgName(MaxonType.named(self.typeNames.intern(spelling)), path: path)
-	end 'canonicalArgNameOfSpelling'
+	export function interfaceAliasInstanceOf(qualifiedName ByteArray) returns GenericInstanceId throws MapError
+		return try self.settledDeclarations().interfaceAliases.get(qualifiedName)
+	end 'interfaceAliasInstanceOf'
 
 	// Resolve an alias entry's flat pre-order arg tree to concrete `MaxonType`s in THIS index's
 	// interner — interning nested instances DEPTH-FIRST. A leaf remaps its file-interner type through
@@ -24662,6 +24556,41 @@ export type ProgramSignatures
 			nameOnly then return tagged
 		end 'identity'
 	end 'mixAliasReturnSlot'
+
+	// ⭐ **A CLAUSE'S `with` BINDINGS, AS A CLAUSE MAY BIND AT EVERY NAME** — one list per interface, so
+	// the column is nested and a flat walk of it could not tell `implements A with X, B` from
+	// `implements A, B with X`.
+	//
+	// ⚠ **EACH LIST'S LENGTH IS MIXED AHEAD OF ITS CONTENTS, AND THAT IS WHAT MAKES THE NESTING VISIBLE.**
+	// Without it `[[X], [Y]]` and `[[X, Y], []]` hash identically — two different programs (one binds `Y` at the
+	// second interface, the other binds it at the first), and a reader served the wrong memo would substitute
+	// one conformer's associated type for another's.
+	function mixConformanceBindings(state HashDigest, bindings ConformanceBindingArray) returns HashDigest
+		var out = state
+
+		for perInterface in bindings 'eachConformance'
+			out = mixDeclaredConformances(Hasher.combined(out, value: perInterface.spellings.count() as HashDigest), conformsTo: perInterface.spellings, shape: DeclShapeConformanceBinding)
+
+			for bound in perInterface.types 'eachBoundType'
+				out = self.mixRequirementType(out, requirement: bound)
+			end 'eachBoundType'
+		end 'eachConformance'
+
+		return out
+	end 'mixConformanceBindings'
+
+	function mixRequirementType(state HashDigest, requirement RequirementType) returns HashDigest
+		let tagged = mixBytes(Hasher.combined(state, value: requirement.identity.ordinal as HashDigest), bytes: requirement.brand)
+
+		return match requirement.identity 'identity'
+			typeParameter(token) gives Hasher.combined(tagged, value: token as HashDigest)
+			genericInstance(id) gives self.mixGenericInstance(tagged, id: id)
+			builtin(tag) gives Hasher.combined(tagged, value: tag.rawValue as HashDigest)
+			nominal(name) gives mixBytes(tagged, bytes: name)
+			void or
+			selfType gives tagged
+		end 'identity'
+	end 'mixRequirementType'
 
 	// Add one top-level DECLARATION (a `let` or a `var`) to the arena. No value yet:
 	// `evaluateInitializers` supplies that once every file has been folded in.
@@ -28918,9 +28847,18 @@ export type ProgramSignatures
 	end 'libraryAliasDeclaringFile'
 
 	export function libraryAliasType(name ByteArray, into TypeNameInterner) returns MaxonType
-		let declaringFile = try self.libraryAliasDeclaringFile(name) otherwise return MaxonType.named(into.intern(name))
-		return MaxonType.named(into.intern(self.rangedIdentityOfSpelling(name, readerFilePath: declaringFile)))
+		return MaxonType.named(into.intern(self.libraryAliasIdentity(name)))
 	end 'libraryAliasType'
+
+	function libraryAliasIdentity(name ByteArray) returns ByteArray
+		let declaringFile = try self.libraryAliasDeclaringFile(name) otherwise return name
+		return self.rangedIdentityOfSpelling(name, readerFilePath: declaringFile)
+	end 'libraryAliasIdentity'
+
+	export function settleSynthesizedNominals()
+		self.mainThreadSettled().interfaces.recordSynthesizedNominal(HashValueTypeName, identity: self.libraryAliasIdentity(HashValueTypeName))
+		self.mainThreadSettled().interfaces.recordSynthesizedNominal(OrderingTypeName, identity: self.libraryAliasIdentity(OrderingTypeName))
+	end 'settleSynthesizedNominals'
 
 	export function libraryAliasDeclaration(name ByteArray) returns DeclaredAlias
 		let declaringFile = try self.libraryAliasDeclaringFile(name) otherwise return self.settledDeclarations().typeAliases.declarationInAnyFile(name)
@@ -30518,15 +30456,10 @@ export type ProgramSignatures
 		return self.fileScopedOrInnerDeclaredAlias(self.aliasOf(name, readerFilePath: readerFilePath), name: name)
 	end 'fileScopedOrInnerAliasNamed'
 
-	export function interfaceFormalAlias(interfaceName ByteArray, formalName ByteArray) returns RangedTypeAlias throws MapError
-		let declaring = self.declaringInterface(interfaceName)
-
-		if declaring.associatedTypeNames.contains(formalName) 'aConformerBindsIt'
-			throw MapError.keyNotFound
-		end 'aConformerBindsIt'
-
-		return try self.rangeCheckedAliasNamed(formalName, readerFilePath: declaring.declFilePath)
-	end 'interfaceFormalAlias'
+	export function requirementRangedAlias(requirement RequirementType, interfaceName ByteArray) returns RangedTypeAlias throws MapError
+		let name = try requirement.nominalName() otherwise throw MapError.keyNotFound
+		return try self.rangeCheckedAliasNamed(name, readerFilePath: self.declaringInterface(interfaceName).declFilePath)
+	end 'requirementRangedAlias'
 
 	export function fileScopedOrInnerDeclaredAlias(fileScoped DeclaredAlias, name ByteArray) returns DeclaredAlias
 		match fileScoped 'fileScoped'
@@ -30660,13 +30593,6 @@ export type ProgramSignatures
 
 		return self.instanceBrandOfSpelling(self.nameOfId(typeNameIdOf(raw)))
 	end 'instanceArgBrand'
-
-	// The instance a requirement's rendered parameter type denotes, as the identity `canonicalInstanceName`
-	// spells: a generic alias resolves through the registry, and any other rendering is already the mint.
-	export function instanceIdentityOfSpelling(spelling ByteArray) returns ByteArray
-		let gid = try self.settledDeclarations().genericAliases.get(spelling) otherwise return spelling
-		return self.canonicalInstanceName(gid)
-	end 'instanceIdentityOfSpelling'
 
 	// ⭐ **HOW A BRAND IS QUOTED.** The author's spelling, unless that spelling is CONTESTED — two files
 	// declaring one alias name over two instances — in which case the instance's own display name carries the
@@ -31625,19 +31551,44 @@ export type ProgramSignatures
 
 			enumLayout.recordConformances(clause.names)
 		end 'anEnum' else 'aType'
-			let slot = try self.structSlots.get(site.declName) otherwise return
-			var layout = self.ownLayoutAtSlot(slot)
-
-			if not layout.declFilePath.equals(site.path) 'theRegistryHoldsAnotherDeclaration'
-				return
-			end 'theRegistryHoldsAnotherDeclaration'
-
+			var layout = try self.sweptLayoutDeclaredAt(site) otherwise return
 			layout.recordConformances(clause.names, bindings: clause.bindings)
 		end 'aType'
 
 		let named = mixBytes(Hasher.combined(self.hash, value: DeclShapeRefoldedConformance), bytes: site.declName)
-		self.hash = mixConformanceBindings(mixDeclaredConformances(named, conformsTo: clause.names, shape: DeclShapeDeclaredConformance), bindings: clause.bindings)
+		self.hash = self.mixConformanceBindings(mixDeclaredConformances(named, conformsTo: clause.names, shape: DeclShapeDeclaredConformance), bindings: clause.bindings)
 	end 'refoldConformanceClause'
+
+	export function refoldWhereConstraints(site ConformanceClauseDeclSite, constraints WhereConstraintArray)
+		var layout = try self.sweptLayoutDeclaredAt(site) otherwise return
+		layout.recordWhereConstraints(constraints)
+
+		self.hash = self.mixWhereConstraints(mixBytes(Hasher.combined(self.hash, value: DeclShapeRefoldedWhereConstraint), bytes: site.declName), constraints: constraints)
+	end 'refoldWhereConstraints'
+
+	function mixWhereConstraints(state HashDigest, constraints WhereConstraintArray) returns HashDigest
+		var mixed = state
+
+		for constraint in constraints 'eachConstraint'
+			mixed = mixBytes(Hasher.combined(Hasher.combined(mixed, value: DeclShapeWhereConstraint), value: constraint.typeParamIndex as HashDigest), bytes: constraint.interfaceName)
+
+			for binding in constraint.associatedBindingTypes 'eachBinding'
+				mixed = self.mixRequirementType(mixed, requirement: binding)
+			end 'eachBinding'
+		end 'eachConstraint'
+
+		return mixed
+	end 'mixWhereConstraints'
+
+	function sweptLayoutDeclaredAt(site ConformanceClauseDeclSite) returns StructLayout throws MapError
+		let layout = self.ownLayoutAtSlot(try self.structSlots.get(site.declName))
+
+		if not layout.declFilePath.equals(site.path) 'theRegistryHoldsAnotherDeclaration'
+			throw MapError.keyNotFound
+		end 'theRegistryHoldsAnotherDeclaration'
+
+		return layout
+	end 'sweptLayoutDeclaredAt'
 
 	// ⭐⭐ **THE DECLARED-CONFORMANCE INDEX AS THIS PHASE CAN SEE IT — the same map `ConformanceCheck` builds,
 	// from the only store that exists this early.** `declaredConformanceIndex(project)` reads
@@ -32243,23 +32194,9 @@ export type ProgramSignatures
 		return self.mangleTypeArg(self.substitutedInstanceArg(gid, position: position)).toByteArray()
 	end 'instanceArgCompiledName'
 
-	export function instanceArgBindingIdentity(gid GenericInstanceId, position ElementIndex) returns ByteArray
-		let arg = self.substitutedInstanceArg(gid, position: position)
-
-		if maxonTypeTag(arg) == ValueTypeTag.genericInstance 'nestedInstance'
-			return self.canonicalInstanceName(genericInstanceIdOf(arg))
-		end 'nestedInstance'
-
-		if maxonTypeTag(arg) == ValueTypeTag.named and self.isGenericAliasInAnyFile(self.nameOfId(typeNameIdOf(arg))) 'aGenericAliasSpelling'
-			return self.canonicalInstanceName(self.bareGenericAliasInstance(self.nameOfId(typeNameIdOf(arg))))
-		end 'aGenericAliasSpelling'
-
-		return self.instanceArgDisplayName(gid, position: position)
-	end 'instanceArgBindingIdentity'
-
 	// ⭐⭐ **HOW A DIAGNOSTIC SPELLS ONE OF AN INSTANCE'S TYPE ARGUMENTS — the display twin of
-	// `instanceArgCompiledName`, under the 2026-08-04 ruling that a diagnostic names a type by the
-	// `typealias` the author wrote.**
+	// `instanceArgCompiledName`, under the ruling that a diagnostic names a type by the `typealias` the
+	// author wrote.**
 	// Read by every message that quotes a type argument: the generic call's `expected` side
 	// (`SemanticCheck.checkTypeParameterArgsAt`), the E3017 `where`-constraint violation, and the withheld
 	// conditional-extension refusal.
@@ -32275,21 +32212,9 @@ export type ProgramSignatures
 	// — a bounds-checked array read of an already-built type, on a path that only a REJECTED program reaches.
 	// A second copy of the compiled rule for that is the trade this codebase does not make.
 	//
-	// ⛔⛔ **THE OPAQUE ARM IS THE SECOND HALF OF THAT SAME BUG, AND IT WAS STILL OPEN.** `mangleTypeArg`
-	// spells a type-parameter argument as its DIGEST — `T5a05ccf53759d5f6` — and its own header says why
-	// that is right THERE: it is a lookup key, injective and build-order stable. It is not a type name, and no
-	// source line holds it. MEASURED, on a generic body writing `Cursor with Element`: *"this use of 'Cursor'
-	// binds its associated type 'Element' to 'T5a05ccf53759d5f6', but 'Walk' binds it to 'Element'"* — one
-	// sentence naming ONE parameter twice, once as the author wrote it and once as a hash, and reporting them
-	// as a disagreement.
-	//
-	// ⚠ **SO IT IS NOT ONLY THE PRINTING: E3125 *COMPARES* THIS ANSWER**, against a conformance's `withArgs`,
-	// which is the source spelling. `requireWrittenBindingMatchesConformers` says in as many words that both
-	// sides are the source spelling and that comparing a compiled name against one *"would report a difference
-	// in RENDERING as a difference in type"* — which is exactly what a digest did, refusing every shared
-	// generic body that instantiates an interface over its own parameter. The parameter's own NAME is what
-	// both sides then hold, and it is the same currency `associatedAbiBindingOf` already compares two
-	// CONFORMERS in.
+	// ⛔⛔ **THE OPAQUE ARM PRINTS THE PARAMETER'S NAME.** `mangleTypeArg` spells a type-parameter argument as
+	// its DIGEST — `T5a05ccf53759d5f6` — and its own header says why that is right THERE: it is a lookup key,
+	// injective and build-order stable. It is not a type name, and no source line holds it.
 	export function instanceArgDisplayName(gid GenericInstanceId, position ElementIndex) returns ByteArray
 		let arg = self.substitutedInstanceArg(gid, position: position)
 
@@ -32304,6 +32229,57 @@ export type ProgramSignatures
 
 		return self.instanceArgCompiledName(gid, position: position)
 	end 'instanceArgDisplayName'
+
+	export function instanceArgRequirement(gid GenericInstanceId, position ElementIndex) returns RequirementType
+		return self.instanceArgTypeRequirement(self.substitutedInstanceArg(gid, position: position))
+	end 'instanceArgRequirement'
+
+	export function instanceArgTypeRequirement(arg MaxonType) returns RequirementType
+		if maxonTypeTag(arg) == ValueTypeTag.named and self.isGenericAliasInAnyFile(self.nameOfId(typeNameIdOf(arg))) 'aGenericAliasSpelling'
+			return RequirementType.create(RequirementTypeIdentity.genericInstance(self.bareGenericAliasInstance(self.nameOfId(typeNameIdOf(arg)))), brand: EmptySourceText)
+		end 'aGenericAliasSpelling'
+
+		return requirementTypeOfDeclared(arg, names: self.typeNames, brand: EmptySourceText)
+	end 'instanceArgTypeRequirement'
+
+	// A `nominal` name is completed in the file that declared the requirement or binding, never the reader's:
+	// two files may declare one name as two types.
+	export function fileCompleteRequirement(requirement RequirementType, declFilePath FilePath) returns RequirementType
+		return match requirement.identity 'identity'
+			nominal(name) gives RequirementType.create(RequirementTypeIdentity.nominal(self.declaredIdentityOfSpelling(name, declFilePath: declFilePath).clone()), brand: requirement.brand)
+			void or
+			selfType or
+			typeParameter or
+			genericInstance or
+			builtin gives requirement.clone()
+		end 'identity'
+	end 'fileCompleteRequirement'
+
+	export function requirementDisplay(requirement RequirementType) returns String
+		return match requirement.identity 'identity'
+			nominal(name) gives self.aliasIdentityDisplay(name)
+			genericInstance(id) gives self.instanceSourceDisplay(id)
+			builtin(tag) gives primitiveTypeTagName(tag)
+			typeParameter(token) gives String.from(self.requirementTypeParameterName(token))
+			void panic("ProgramSignatures.requirementDisplay: a void requirement names no type")
+			selfType panic("ProgramSignatures.requirementDisplay: `Self` names the receiver's own type, which only the receiver can say")
+		end 'identity'
+	end 'requirementDisplay'
+
+	export function conformerNameOfRequirement(binding RequirementType, readerFilePath FilePath) returns ByteArray
+		return match binding.identity 'identity'
+			nominal(name) gives self.conformerNameOfDeclaredName(name, readerFilePath: readerFilePath).toByteArray()
+			genericInstance(id) gives self.conformerNameOfInstanceSpelling(id, spelling: self.canonicalInstanceName(id)).toByteArray()
+			builtin(tag) gives primitiveTypeTagName(tag).toByteArray()
+			typeParameter(token) gives self.requirementTypeParameterName(token)
+			void or
+			selfType panic("ProgramSignatures.conformerNameOfRequirement: a conformance binds an associated type to a declared type, never to `void` or `Self`")
+		end 'identity'
+	end 'conformerNameOfRequirement'
+
+	function requirementTypeParameterName(token TypeParamId) returns ByteArray
+		return (try self.typeParamOwnerOf(token) otherwise panic("ProgramSignatures.requirementTypeParameterName: type-parameter token {token} has no owner — `recordStruct` and `recordInterfaceDeclaration` file every declared parameter as the sweep folds")).paramName.clone()
+	end 'requirementTypeParameterName'
 
 	// How many type arguments instance `gid` carries — `Box with String` ⇒ 1, `Pair with (A, B)` ⇒ 2.
 	// The BOUND on `instanceArgCompiledName`/`instanceArgDisplayName`/`substitutedInstanceArg`'s `position`,
@@ -38951,8 +38927,7 @@ export type ProgramSignatures
 
 	// ⭐⭐ **THE INSTANCE A DECLARED NAME NAMES, IN EITHER OF THE TWO SPELLINGS ONE CAN ARRIVE IN.** The first
 	// arm answers for the spelling an AUTHOR wrote (`typealias IntUpCursor = UpCursor with Integer`); the
-	// second for the spelling the COMPILER wrote (`UpCursor_Integer`), which is what `renderDeclaredTypeName`
-	// records into a conformance's `withArgs` and therefore what every question asked OF a binding is handed.
+	// second for the spelling the COMPILER wrote (`UpCursor_Integer`), a canonical instance name.
 	// `declaredNameIsManaged` carries the same pair for the ownership question, with the same sentence — *"a
 	// generic instance arrives as its canonical name at some doors, and no registry is keyed by that"*.
 	//
@@ -38962,12 +38937,6 @@ export type ProgramSignatures
 	// ⚠ **THE SUPERSEDED GUARD IS `genericAliasInstance`'s PRECONDITION, not caution.** That door refuses a
 	// spelling two files contest, and a whole-program reader must ask this first (see there); a superseded
 	// spelling names no instance, which is the safe direction — its caller then falls back to the name itself.
-	//
-	// Its two readers want different things from the answer — `conformerNameOfDeclaredName` the conformance it
-	// reduces to, `LowerMaxonToStd.witnessInstanceOfDeclaredName` whether its witness table is keyed by it —
-	// so the recognition is stated once here rather than at each. MEASURED at the E3126 door before the second
-	// arm existed: *"'UpCursor_Integer' does not implement 'Cursor'"* on a program whose
-	// `type UpCursor uses Element implements Cursor with Element` declares exactly that.
 	export function instanceOfDeclaredName(name ByteArray) returns GenericInstanceId throws MapError
 		if let alias = try self.liveGenericAliasInstance(name) 'genericInstanceAlias'
 			return alias
@@ -39003,6 +38972,10 @@ export type ProgramSignatures
 	// legitimately spell one type. Every comparison stays on `conformerNameOfDeclaredName`, which is the
 	// identity; this answers only what gets printed.
 	export function displaySpellingOfDeclaredName(name ByteArray) returns ByteArray
+		if isMintName(name) 'aContestedDeclarationsMint'
+			return self.aliasIdentityDisplay(name).toByteArray()
+		end 'aContestedDeclarationsMint'
+
 		return self.instanceDisplayName(try self.renderedInstanceOfUnclaimedName(name) otherwise return name)
 	end 'displaySpellingOfDeclaredName'
 
@@ -43480,13 +43453,13 @@ export type ProgramSignatures
 			functionAlias or
 
 			// ⚠ **`genericAlias` STAYS `false` EVEN THOUGH `IntegerSeq = Seq with Integer` DENOTES AN
-			// EXISTENTIAL, and the reason is that this door never meets that spelling.** Both callers pass
-			// a conformance's recorded `withArgs`, and `Parser.readConformanceWithArg` RENDERS what it read
-			// — an existential alias renders to its interface name, `Seq` — so the alias reaches the
-			// `interfaceType` arm above under the bare name. Answering it here as well would be a second
-			// reading of one fact, reachable by nothing;
+			// EXISTENTIAL, and the reason is that this door never meets that spelling.** Its callers pass a
+			// binding's `nominal` identity or an instance's canonical name, and an existential alias's
+			// identity is its interface's name (`requirementTypeOfDeclared`'s `interfaceRef` arm), so the
+			// alias reaches the `interfaceType` arm above under the bare name. Answering it here as well
+			// would be a second reading of one fact, reachable by nothing;
 			// `parameterized-existential.error.associated-type-bound-to-an-existential-alias` pins the
-			// rendering this rests on.
+			// identity this rests on.
 			genericAlias or
 			tupleAlias then return false
 		end 'form'

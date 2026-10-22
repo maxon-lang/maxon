@@ -511,6 +511,17 @@ union WitnessTableInstance
 	perInstance(gid GenericInstanceId)
 end 'WitnessTableInstance'
 
+function witnessInstanceOfRequirement(binding RequirementType) returns WitnessTableInstance
+	return match binding.identity 'identity'
+		genericInstance(id) gives WitnessTableInstance.perInstance(id)
+		typeParameter or
+		builtin or
+		nominal gives WitnessTableInstance.shared
+		void or
+		selfType panic("witnessInstanceOfRequirement: a conformance binds an associated type to a declared type, never to `void` or `Self`")
+	end 'identity'
+end 'witnessInstanceOfRequirement'
+
 // Which conformances have at least one slot impl carrying a hidden dictionary — asked once per `(conformer,
 // interface)` pair and held, because the answer is a pure function of the impls' declared arities and the
 // question is asked at every per-instance mint. Keyed by the pair's BASE label, which is injective
@@ -3266,17 +3277,6 @@ type MaxonToStdLowering
 		return WitnessTableInstance.shared
 	end 'constraintArgumentInstance'
 
-	// And from a declared NAME — the door a held associated position's BINDING comes through, which is a
-	// rendered name rather than a type. Its two arms are `ProgramSignatures.instanceOfDeclaredName`'s, asked
-	// there so this file holds no second opinion about which spellings name an instance.
-	function witnessInstanceOfDeclaredName(name ByteArray) returns WitnessTableInstance
-		if let instance = try self.signatures.instanceOfDeclaredName(name) 'namesAnInstance'
-			return WitnessTableInstance.perInstance(instance)
-		end 'namesAnInstance'
-
-		return WitnessTableInstance.shared
-	end 'witnessInstanceOfDeclaredName'
-
 	// ⭐⭐ **WHAT A WITNESS SLOT ACTUALLY POINTS AT — the impl, or an ABI ADAPTER over it.**
 	//
 	// A `witnessCall` passes exactly what the REQUIREMENT declares: a receiver plus one argument per formal
@@ -3392,7 +3392,7 @@ type MaxonToStdLowering
 			return
 		end 'theImplReturnsAWord'
 
-		let slotResult = self.witnessFormalType(slot.method.returnTypeName, formalFilePath: slot.sourceDeclFilePath, dispatched: tableInterface, site: FormalSite.tableSlot(conformer))
+		let slotResult = self.witnessFormalType(slot.method.returnType, formalFilePath: slot.sourceDeclFilePath, dispatched: tableInterface, site: FormalSite.tableSlot(conformer))
 
 		if stdTypeIsFloat(maxonTypeToStdType(slotResult)) 'theSlotReturnsAFloatToo'
 			return
@@ -3429,7 +3429,7 @@ type MaxonToStdLowering
 	// `witnessFormalTypes` can seed a receiver unconditionally and still agree with this: it is asked only
 	// about the requirements a dispatch reached.
 	function witnessSlotAbiArity(method InterfaceMethodSig) returns ParamCount
-		return method.paramTypeNames.count() if method.isStatic else 1 + method.paramTypeNames.count()
+		return method.paramTypes.count() if method.isStatic else 1 + method.paramTypes.count()
 	end 'witnessSlotAbiArity'
 
 	function maxonOpAt(opIdx ElementIndex) returns MaxonOp
@@ -3915,15 +3915,15 @@ type MaxonToStdLowering
 	// compile-time constant and lives here, in the conformer's own table, where a dispatch site that has the
 	// receiver's witness can load it.
 	//
-	// ⚠ **IT IS THE CONFORMER'S OWN BINDING AND NOT THE FOLD'S** (`conformanceDeclBinding`, not
+	// ⚠ **IT IS THE CONFORMER'S OWN BINDING AND NOT THE FOLD'S** (`conformanceDeclBindingType`, not
 	// `associatedAbiBindingOf`): a held position is the one place two conformers are ALLOWED to bind
 	// differently, which is the whole point — `UpBag` names `__witness_UpCursor.Cursor` here and `DownBag`
 	// names `__witness_DownCursor.Cursor`, and a dispatch through either lands in the right one without the
 	// call site knowing which.
 	//
 	// ⚠⚠ **THE BINDING IS REDUCED TO ITS CONFORMER NAME FIRST, EXACTLY AS THIS PASS'S OTHER TWO
-	// `ensureWitnessTable` CALLERS DO.** A conformance's `withArgs` are RENDERED names, so a binding to a
-	// generic instance arrives as the canonical mint `UpCursor_Integer` — and a table is keyed by the CONFORMER
+	// `ensureWitnessTable` CALLERS DO.** A binding to a generic instance names the instance
+	// (`UpCursor_Integer`) — and a table is keyed by the CONFORMER
 	// (`materializeWitnessArg` uses `conformerTypeArgName`, `witnessForExistentialValue` uses
 	// `conformerNameOfType`). Under dictionary-passing that reduction is what makes the table right rather
 	// than merely findable: `UpCursor.current` is compiled ONCE over an opaque layout, so one
@@ -3936,10 +3936,10 @@ type MaxonToStdLowering
 	function stampAssociatedWitnessSlots(typeName ByteArray, interfaceName ByteArray, label String, methodCount WitnessMethodIndex, associatedCount ElementIndex)
 		for position in 0 upto associatedCount 'eachAssociatedType'
 			if let held = try self.signatures.associatedTypeHeldAt(interfaceName, position: position) 'heldAtAnInterface'
-				if let bound = try conformanceDeclBinding(self.conformances, typeName: typeName, interfaceName: interfaceName, position: position) 'thisConformerBoundIt'
+				if let bound = try conformanceDeclBindingType(self.conformances, typeName: typeName, interfaceName: interfaceName, position: position) 'thisConformerBoundIt'
 					let (decl, binding) = bound
-					let conformer = self.signatures.conformerNameOfDeclaredName(binding, readerFilePath: decl.filePath).toByteArray()
-					self.globalData.recordRdataBlobRelativeOffset(self.ensureWitnessTable(conformer, instance: self.witnessInstanceOfDeclaredName(binding), interfaceName: held), rdataLabel: label, offsetInLabel: witnessAssociatedSlotOffset(methodCount, position: position))
+					let conformer = self.signatures.conformerNameOfRequirement(binding, readerFilePath: decl.filePath)
+					self.globalData.recordRdataBlobRelativeOffset(self.ensureWitnessTable(conformer, instance: witnessInstanceOfRequirement(binding), interfaceName: held), rdataLabel: label, offsetInLabel: witnessAssociatedSlotOffset(methodCount, position: position))
 				end 'thisConformerBoundIt'
 			end 'heldAtAnInterface'
 		end 'eachAssociatedType'
@@ -5831,11 +5831,9 @@ type MaxonToStdLowering
 	// reached through an adapter (`witnessSlotCallee`).
 	//
 	// ⭐ **A FORMAL THE INTERFACE DOES NOT NAME A TYPE FOR IS AN ASSOCIATED TYPE, AND ITS TYPE IS THE
-	// CONFORMERS' BINDING.** The formals are RENDERED SOURCE NAMES, and `witnessFormalType` below decides each
-	// one: an ASSOCIATED type first (a `uses` parameter can spell a builtin, so the order is load-bearing —
-	// see there), resolved by `associatedFormalType`; otherwise `builtinTypeNameTag`, with everything it
-	// does not name reduced to the machine word by `renderedTypeNameAbiType`, which is right for `Self`, a user
-	// type, a type parameter and a ranged alias alike.
+	// CONFORMERS' BINDING.** `witnessFormalType` below decides each formal: an ASSOCIATED type first,
+	// resolved by `associatedFormalType`; otherwise `requirementAbiType`, which reduces every non-builtin to
+	// the machine word — right for `Self`, a user type, a type parameter and a ranged alias alike.
 	//
 	// ⚠ **THE ACTUAL IS NEVER CONSULTED.** Falling back to the argument's own tag reads the unresolved
 	// `valueTags` column, and it cannot see a binding the actual does not happen to match. Two
@@ -5864,27 +5862,22 @@ type MaxonToStdLowering
 	end 'witnessFormalTypes'
 
 	function witnessSlotFormalTypes(slot CollectedInterfaceMethod, dispatched IrInterface, site FormalSite) returns MaxonTypeArray
-		let formals = slot.method.paramTypeNames
+		let formals = slot.method.paramTypes
 
 		var types = MaxonTypeArray.create()
 		types.push(MaxonType.integer)
 
 		for j in 0 upto formals.count() 'eachFormal'
-			let formalName = try formals.get(j) otherwise panic("witnessSlotFormalTypes: formals.get OOB at {j} below count {formals.count()}")
-			types.push(self.witnessFormalType(formalName, formalFilePath: slot.sourceDeclFilePath, dispatched: dispatched, site: site))
+			let formal = try formals.get(j) otherwise panic("witnessSlotFormalTypes: formals.get OOB at {j} below count {formals.count()}")
+			types.push(self.witnessFormalType(formal, formalFilePath: slot.sourceDeclFilePath, dispatched: dispatched, site: site))
 		end 'eachFormal'
 
 		return types
 	end 'witnessSlotFormalTypes'
 
 	// ⭐⭐ **THE DECLARED TYPE OF ONE WITNESS FORMAL, AND THE ORDER OF THE TWO TESTS IS LOAD-BEARING.** An
-	// ASSOCIATED TYPE is asked about FIRST and a builtin NAME second, because a `uses` parameter is an
-	// IDENTIFIER and identifiers can spell builtins: `float`/`bool`/`int` are keywords a `uses` list cannot
-	// hold (E2010), but `ExitCode` and `String` are not. `interface Taker uses ExitCode` is a legal program
-	// whose `ExitCode` is a TYPE PARAMETER denoting whatever each conformer binds — and asking
-	// `builtinTypeNameTag` first reads it as the u32 builtin and declares the argument an i32 against an i64
-	// callee. `builtinTypeNameTag`'s own header states the rule that breaks — it is valid only at a door
-	// holding a RENDERED type name, never at one asking what a `named` reference DENOTES.
+	// ASSOCIATED TYPE is asked about FIRST: `requirementAbiType` reads every type parameter as the machine
+	// word, which is wrong for a conformer that binds it to `float`.
 	//
 	// ⭐⭐ **THE ASSOCIATED TYPE IS RESOLVED AGAINST THE DISPATCHED INTERFACE, NOT THE DECLARING ONE.** Under
 	// `extends`, a requirement projected in from a parent spells the PARENT's `uses` name — but a conformance
@@ -5901,12 +5894,12 @@ type MaxonToStdLowering
 	// program that passes the check and a call this emits cannot describe one argument two ways. The
 	// ACTUAL's tag is the unresolved `valueTags` column, it would panic `maxonTypeToStdType` outright
 	// on a `named` actual, and it cannot see a binding the actual does not happen to match.
-	function witnessFormalType(formalName ByteArray, formalFilePath FilePath, dispatched IrInterface, site FormalSite) returns MaxonType
-		if let position = try dispatched.associatedTypeNames.positionOfName(formalName) 'aConformerBindsIt'
-			return self.associatedFormalType(dispatched.name, position: position, formalName: formalName, site: site)
+	function witnessFormalType(formal RequirementType, formalFilePath FilePath, dispatched IrInterface, site FormalSite) returns MaxonType
+		if let position = try associatedPositionIn(formal, iface: dispatched, signatures: self.signatures) 'aConformerBindsIt'
+			return self.associatedFormalType(dispatched.name, position: position, formalName: try dispatched.associatedTypeNames.get(position) otherwise panic("witnessFormalType: associatedTypeNames.get OOB at {position} — `associatedPositionIn` just read it out of the same list"), site: site)
 		end 'aConformerBindsIt'
 
-		return renderedTypeNameAbiType(formalName, readerFilePath: formalFilePath, signatures: self.signatures)
+		return requirementAbiType(formal, readerFilePath: formalFilePath, signatures: self.signatures)
 	end 'witnessFormalType'
 
 	// ⭐⭐ **THE RESOLVED TYPE OF AN ASSOCIATED FORMAL — THE SITE'S OWN CLAIM FIRST, THE WHOLE-PROGRAM FOLD
@@ -5919,10 +5912,10 @@ type MaxonToStdLowering
 	// conformers may legally bind a position differently when every dispatch site claims its binding, so
 	// asking the fold for a table panics on `disagreed` in a legal program.
 	//
-	// ⚠ **THE SITE'S ANSWER GOES THROUGH `renderedTypeNameAbiType` AND NOT THROUGH THE `MaxonType`**, so this
-	// arm and the fold below reduce one spelling by one rule. `instanceArgDisplayName` is the SAME rendered
-	// name `SemanticCheck.existentialSiteClaimAgainst` compares a conformer's binding against, so the check
-	// that admits a widening and the ABI this emits for it cannot come to read the string two ways.
+	// ⚠ **THE SITE'S ANSWER GOES THROUGH `requirementAbiType`**, the rule the fold below reduces a binding by,
+	// and `instanceArgRequirement` is the SAME identity `SemanticCheck.existentialSiteClaimAgainst` compares a
+	// conformer's binding against, so the check that admits a widening and the ABI this emits for it cannot
+	// come to read one binding two ways.
 	//
 	// ⚠⚠ **`disagreed` IS UNREACHABLE FROM A DISPATCH SITE THAT CLAIMS NOTHING.** E3119 refuses a
 	// disagreement at exactly the positions no dispatch site fixes —
@@ -5940,7 +5933,7 @@ type MaxonToStdLowering
 		end 'theSiteClaimsIt'
 
 		match associatedAbiBindingOf(self.conformances, signatures: self.signatures, interfaceName: interfaceName, position: position) 'binding'
-			agreed(_, _, declaredType) then return declaredType
+			agreed(_, _, _, declaredType) then return declaredType
 			unconformed then return MaxonType.integer
 			disagreed(first, firstBinding, second, secondBinding) then panic("associatedFormalType: '{String.from(interfaceName)}' binds `{String.from(formalName)}` to `{String.from(firstBinding)}` in '{String.from(first.typeName)}' and to `{String.from(secondBinding)}` in '{String.from(second.typeName)}', while the site claims nothing at position {position} — which `ConformanceCheck.checkAssociatedTypeAbiAgreement` reports as E3119, so the pipeline's error gate must stop before lowering")
 		end 'binding'
@@ -5948,18 +5941,18 @@ type MaxonToStdLowering
 
 	function siteClaimedFormalType(site FormalSite, position ElementIndex, interfaceName ByteArray) returns MaxonType throws MapError
 		match site 'site'
-			dispatchedFrom(receiver) then return renderedTypeNameAbiType(try self.receiverSiteBinding(receiver, position: position, interfaceName: interfaceName), readerFilePath: self.currentSourceFilePath, signatures: self.signatures)
+			dispatchedFrom(receiver) then return requirementAbiType(try self.receiverSiteBinding(receiver, position: position, interfaceName: interfaceName), readerFilePath: self.currentSourceFilePath, signatures: self.signatures)
 			tableSlot(conformer) then return try self.conformerBindingAbiType(conformer, position: position, interfaceName: interfaceName)
 		end 'site'
 	end 'siteClaimedFormalType'
 
 	function conformerBindingAbiType(conformer ByteArray, position ElementIndex, interfaceName ByteArray) returns MaxonType throws MapError
-		let (decl, binding) = try conformanceDeclBinding(self.conformances, typeName: conformer, interfaceName: interfaceName, position: position)
-		return renderedTypeNameAbiType(binding, readerFilePath: decl.filePath, signatures: self.signatures)
+		let (decl, binding) = try conformanceDeclBindingType(self.conformances, typeName: conformer, interfaceName: interfaceName, position: position)
+		return requirementAbiType(binding, readerFilePath: decl.filePath, signatures: self.signatures)
 	end 'conformerBindingAbiType'
 
-	// ⭐ **WHAT THE RECEIVER'S OWN DECLARATION BOUND ONE ASSOCIATED POSITION TO** — the site's claim, as the
-	// RENDERED name. `MapError.keyNotFound` for a receiver that claims nothing at all (a bare `Taker`
+	// ⭐ **WHAT THE RECEIVER'S OWN DECLARATION BOUND ONE ASSOCIATED POSITION TO** — the site's claim.
+	// `MapError.keyNotFound` for a receiver that claims nothing at all (a bare `Taker`
 	// parameter, an UNBOUND constrained type parameter, a field load, a merge phi) and for one whose instance
 	// bound too few arguments, which is E3016's to report.
 	//
@@ -5971,13 +5964,13 @@ type MaxonToStdLowering
 	// arrangement one tier up: `ConformanceCheck.receiverClaimedPositions` reads the two stores in this order
 	// and for this reason, so the refusal that admits the dispatch and the ABI this emits for it cannot come to
 	// disagree about what the site fixed.
-	function receiverSiteBinding(receiver ValueId, position ElementIndex, interfaceName ByteArray) returns ByteArray throws MapError
+	function receiverSiteBinding(receiver ValueId, position ElementIndex, interfaceName ByteArray) returns RequirementType throws MapError
 		if let instance = try self.currentExistentialInstances.get(receiver) 'declaredAtAnInstantiatedExistential'
 			if position >= self.signatures.genericInstanceArgCount(instance) 'boundNothingHere'
 				throw MapError.keyNotFound
 			end 'boundNothingHere'
 
-			return self.signatures.instanceArgDisplayName(instance, position: position)
+			return self.signatures.instanceArgRequirement(instance, position: position)
 		end 'declaredAtAnInstantiatedExistential'
 
 		if self.valueTagOf(receiver) != ValueTypeTag.typeParameter 'notAConstrainedParameter'
@@ -6074,17 +6067,14 @@ type MaxonToStdLowering
 	// ONLY BECAUSE THE ONE CASE IT CANNOT COVER IS REFUSED.** A witness call's ARGUMENT widths cannot
 	// come from `stdTypeOf`: the parser tags an `ExitCode` ANNOTATION as a bare `named` and that collapses to
 	// the wrong width (see there). The RESULT is the opposite case for a requirement whose return type the
-	// interface SPELLS — `Parser.interfaceSpelledType` asks `TypeResolution.builtinTypeNameTag` about that
-	// spelling, so the tag on the value IS the interface's own answer already, the formals rule arriving by a
-	// shorter road rather than a second source. `where-clauses.witness-exitcode-return-high` pins it.
+	// interface NAMES — `Parser.interfaceReturnMaxonType` types it from the requirement's stored identity, so
+	// the tag on the value IS the interface's own answer already, the formals rule arriving by a shorter road
+	// rather than a second source. `where-clauses.witness-exitcode-return-high` pins it.
 	//
-	// ⚠ The road does NOT reach a return the interface leaves to a conformer. An ASSOCIATED return
-	// type spells only the `uses` name, so that door answers `named` → `int` while the impl returns
-	// whatever was bound — MEASURED at 35 on x64 where the program computes 31, and a trap on wasm.
-	// Fixing it needs the binding at PARSE time, which no store holds mid-parse, so it is REFUSED
-	// instead: E3120, in `ConformanceCheck.checkAssociatedReturnIsUnmanagedMachineWord`. Every return
-	// that reaches here is therefore one the interface itself names, and this reads the right width
-	// for all of them.
+	// ⚠ The road does NOT reach an ASSOCIATED return at a receiver that claims no binding: the parser types
+	// it `int` while the impl returns whatever was bound, so it is REFUSED instead: E3120, in
+	// `ConformanceCheck.checkAssociatedReturnIsUnmanagedMachineWord`. Every return that reaches here is
+	// therefore one this reads the right width for.
 	function witnessCallResultType(result ValueId, isVoid bool) returns StdReturnType
 		return StdReturnType.void if isVoid else StdReturnType.value(self.stdTypeOf(result))
 	end 'witnessCallResultType'

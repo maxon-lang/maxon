@@ -1118,3 +1118,57 @@ end 'main'
 ```stdout
 108 101
 ```
+
+<!-- test: associated-binding.a-constraint-binding-a-generic-alias-is-met-by-a-conformer-binding-that-alias -->
+`Wrap`'s constraint binds `Cursor`'s `Element` to the generic-instance alias `Ints`, and `Tick` binds it to
+the same `Ints`. The constraint is read in the declaration sweep, before the alias registries are whole, and
+the conformance after; both name one instance, so the instantiation keeps the claim.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Ints = Array with Integer
+
+interface Cursor uses Element
+	function current() returns Element
+end 'Cursor'
+
+type Tick implements Cursor with Ints
+	var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function current() returns Ints
+		var xs = Ints.create()
+		xs.push(self.n)
+		xs.push(self.n)
+		return xs
+	end 'current'
+end 'Tick'
+
+type Wrap uses S where S is Cursor with Ints
+	var s as S
+
+	static function create(s S) returns Self
+		return Self{s: s}
+	end 'create'
+
+	function size() returns Integer
+		return self.s.current().count()
+	end 'size'
+end 'Wrap'
+
+typealias TickWrap = Wrap with Tick
+
+function main() returns ExitCode
+	let w = TickWrap.create(Tick.create(5))
+	print("{w.size()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2
+```

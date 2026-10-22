@@ -1313,36 +1313,11 @@ end 'Digest'
 42
 ```
 
-⚠⚠ **THE PLACEMENT GUARD, AND IT PINS A LIMITATION ON PURPOSE.** This program SHOULD compile and
-return 42; it does not, and the E3011 below is a false reject (`Parser.interfaceReturnMaxonType` has no
-generic-instance arm — see the note under the code). It is pinned as an ENABLED error case anyway, because
-**the diagnostic is the only thing in the whole suite that can see WHERE
-`Queries.foldInterfaceDeclarations` runs**, and that placement is a correctness property.
+A requirement whose RETURN type is a generic-alias instance (`IntArray = Array with Integer`), called
+through a `where T is Maker` type parameter. The requirement's return is the instance itself, so
+`self.item.make()` is the array and `get(0)` reads the 42 the conformer pushed.
 
-Three placements of the interface read give three answers on this one program:
-
-| placement | result |
-|---|---|
-| reading the interface out of the REAL PARSE's `artifact.interfaces` | `E3011 … Unknown type 'IntArray'` |
-| the read after `allFilesFolded`, before `deriveInstanceNames` (the placement in use) | `E3011 … Unknown type 'IntArray'`, byte-identical |
-| the read moved INTO the per-file sweep | **COMPILES, exit 42** |
-
-The third row is the trap, and it is why this case exists: it looks like an improvement and is not. An
-incomplete index makes `signatures.isGenericAlias` answer "no", so the requirement's return type renders as
-the RAW ALIAS `IntArray` — which happens to resolve — while the real parse renders the same type as its
-canonical instance name. Two spellings of one type inside one index is a false-ACCEPT shape, and the
-accept it buys here is an accident, not a fix.
-
-⚠ **AND THE REST OF THE SUITE CANNOT SEE THAT.** With the recording moved into the per-file sweep the rest
-of the suite stays green, `constraint-interface-generic-alias-formal` included: a FORMAL's rendered string is only ever COMPARED (against `Self`, against `float`), never
-RESOLVED, so no formal-position case can go red. Only the RETURN position resolves the string, so this is
-the one shape where the two renderings are observable at all. Without this case the placement is guarded by
-nothing.
-
-⇒ **WHEN `interfaceReturnMaxonType` HAS A GENERIC-INSTANCE ARM, THIS CASE FLIPS TO `exitcode 42` — IT
-DOES NOT GET DELETED.** It has two jobs and only the first one retires.
-
-<!-- test: where-clauses.error.witness-return-generic-instance -->
+<!-- test: where-clauses.witness-return-generic-instance -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -1380,18 +1355,167 @@ function main() returns ExitCode
 	return BuilderBox.create(Builder.create(42)).first()
 end 'main'
 ```
+```exitcode
+42
+```
+
+<!-- test: where-clauses.error.witness-return-keeps-the-requirements-alias -->
+A requirement's declared return alias is the type of the call's result, through a `where T is Maker`
+type parameter exactly as through a direct call: `Other` is a second alias of the same instance, so the
+result of `self.item.make()` does not fit an `Other` parameter.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias Other = Array with Integer
+
+interface Maker
+	function make() returns IntArray
+end 'Maker'
+
+type Builder implements Maker
+	let seed as Integer
+
+	static function create(seed Integer) returns Self
+		return Self{seed: seed}
+	end 'create'
+
+	function make() returns IntArray
+		var xs = IntArray.create()
+		xs.push(self.seed)
+		return xs
+	end 'make'
+end 'Builder'
+
+function head(xs Other) returns Integer
+	return try xs.get(0) otherwise 0
+end 'head'
+
+type Box uses T where T is Maker
+	let item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function first() returns Integer
+		return head(self.item.make())
+	end 'first'
+end 'Box'
+
+typealias BuilderBox = Box with Builder
+
+function main() returns ExitCode
+	return BuilderBox.create(Builder.create(42)).first() as ExitCode
+end 'main'
+```
 ```maxoncstderr
-error E3011: specs/where-clauses/where-clauses.error.witness-return-generic-instance.maxon:28:17: Unknown type 'IntArray'
+error E3005: specs/where-clauses/where-clauses.error.witness-return-keeps-the-requirements-alias.maxon:36:10: argument type mismatch for 'xs': expected 'Other', got 'IntArray'
+```
+
+<!-- test: where-clauses.witness-requirement-returning-byte-array-throws-through-two-conformers -->
+A throwing requirement returning `ByteArray`, called through a `where T is Transform` type parameter of a
+generic function, propagated with `try` and caught with `otherwise`: each conformer's result reaches the
+caller as the array, and a refusal reaches it as the error.
+```maxon
+enum ProbeError implements Error
+	refused
+end 'ProbeError'
+
+interface Transform
+	function run(data ByteArray) returns ByteArray throws ProbeError
+end 'Transform'
+
+type Doubler implements Transform
+	let limit as Count
+
+	static function create(limit Count) returns Self
+		return Self{limit: limit}
+	end 'create'
+
+	function run(data ByteArray) returns ByteArray throws ProbeError
+		if data.count() > self.limit 'big'
+			throw ProbeError.refused
+		end 'big'
+
+		var out = ByteArray.create()
+
+		for b in data 'each'
+			out.push(b)
+			out.push(b)
+		end 'each'
+
+		return out
+	end 'run'
+end 'Doubler'
+
+type Reverser implements Transform
+	let limit as Count
+
+	static function create(limit Count) returns Self
+		return Self{limit: limit}
+	end 'create'
+
+	function run(data ByteArray) returns ByteArray throws ProbeError
+		if data.count() > self.limit 'big'
+			throw ProbeError.refused
+		end 'big'
+
+		var out = ByteArray.create()
+
+		for b in data 'each'
+			out.insert(0, value: b)
+		end 'each'
+
+		return out
+	end 'run'
+end 'Reverser'
+
+function apply(item T, data ByteArray) uses T returns ByteArray throws ProbeError where T is Transform
+	let r = try item.run(data)
+	return r
+end 'apply'
+
+function orEmpty(item T, data ByteArray) uses T returns ByteArray where T is Transform
+	let r = try item.run(data) otherwise ByteArray.create()
+	return r
+end 'orEmpty'
+
+function show(bytes ByteArray)
+	print("{bytes.count()}:")
+
+	for b in bytes 'each'
+		print(" {b}")
+	end 'each'
+
+	print("\n")
+end 'show'
+
+function main() returns ExitCode
+	let data = ByteArray from [1, 2, 3]
+
+	show(try apply(Doubler.create(8), data: data) otherwise ByteArray.create())
+	show(try apply(Reverser.create(8), data: data) otherwise ByteArray.create())
+	show(try apply(Doubler.create(2), data: data) otherwise ByteArray.create())
+	show(orEmpty(Reverser.create(8), data: data))
+	show(orEmpty(Doubler.create(2), data: data))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6: 1 1 2 2 3 3
+3: 3 2 1
+0:
+3: 3 2 1
+0:
 ```
 
 <!-- test: where-clauses.constraint-interface-generic-alias-formal -->
-⚠ THE RENDERING GUARD. An interface requirement whose parameter type is a GENERIC-ALIAS instance
-(`IntArray = Array with Integer`) is the one shape where the two renderings of a declared type can
-disagree: `renderDeclaredTypeName` spells a `genericInstance` as its CANONICAL instance name, and a
-reader asked before the whole-program alias table is complete would see a plain `named` type and spell
-the raw alias instead. Two spellings of one type are a false ACCEPT on the conformance and a wrong
-`paramTypeNames` at the dispatch, so the recording pass runs only once every file has folded — and
-this case is what pins it.
+An interface requirement whose parameter type is a GENERIC-ALIAS instance (`IntArray = Array with
+Integer`), met by a conformer spelling the same alias and dispatched through a `where T is Summer`
+parameter with an `IntArray` argument.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer

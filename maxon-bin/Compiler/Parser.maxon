@@ -4762,33 +4762,15 @@ union ConformanceUsesArity
 	unresolvable
 end 'ConformanceUsesArity'
 
-// ⭐⭐ **HOW A CONFORMANCE `with` ARGUMENT IS SPELLED — TWO ANSWERS TO ONE READ, BECAUSE THE TWO COLUMNS THAT
-// STORE IT ARE CONSUMED IN OPPOSITE DIRECTIONS.**
-//
-//   • `identity` — `renderDeclaredTypeName`'s answer, which CANONICALIZES a generic instance
-//     (`Array_Integer`, `SetIterator_T7fe…`). It is what the REAL parse records on a `ConformanceDecl`,
-//     because `ConformanceCheck.signatureMatches` DECIDES conformance by comparing two of these strings and
-//     two spellings of one type there is a false accept.
-//   • `asWritten` — the identifier the author wrote. It is what the SWEPT column
-//     (`StructLayout.conformanceBindings`) must carry, because its consumer runs the substitution BACKWARDS:
-//     `Parser.extensionAssociatedTypeBinding` puts the binding back into a TYPE POSITION in the extension
-//     body, and `checkExtensionConstraints` asks what that name conforms to. A canonical mint is a name no
-//     type reference resolves.
-//
-// ⛔ **MEASURED when the deferred re-read used `identity`** (which the per-file sweep only avoided because
-// its index was too incomplete to canonicalize anything): the stdlib stopped compiling with three
-// `E3011 … Unknown type 'ArrayIterator_Te3315404e8d3fd14'` / `'MapIterator_…'` / `'SetIterator_…'` at
-// `stdlib/Interfaces.maxon`'s `typealias WithIterSelf = WithIterIterator with Iter, Element` — `Iter`
-// substituted to a canonical mint inside `extension Iterable`'s body.
-//
-// ⭐ **AND MAKING IT EXPLICIT IS WHAT MAKES THE SWEPT COLUMN ORDER-INDEPENDENT.** Left to
-// `renderDeclaredTypeName` alone, an argument naming a `typealias` declared in an EARLIER-swept file
-// canonicalized while the identical argument in the first file swept did not — the same "a fact derived from
-// how far the sweep has got" that `Parser.parseTypeReference`'s header refuses for a return type.
-enum ConformanceArgSpelling
-	identity
-	asWritten
-end 'ConformanceArgSpelling'
+// How `with (A, B)` is read against a one-associated-type interface: `tupleAtArityOne` as one tuple argument
+// (`parenthesizedWithBindsOneTuple`), `itemList` as one binding per item. ⚠ The declaration sweep
+// (`readOptionalImplementsClause`) reads `itemList`, so where the real parse reads one tuple the swept
+// binding count differs from the interface's arity and `ConformanceCheck.pairableConformanceBindings`
+// empties it, so a conditional extension's `where` clause is unmet for that conformer.
+enum ParenthesizedWithReading
+	tupleAtArityOne
+	itemList
+end 'ParenthesizedWithReading'
 
 // ⭐⭐ **WHAT A BARE `int`/`float` MEANS AT THE TYPE POSITION BEING READ** — the argument every
 // `parseTypeReference` caller must answer, and the roster of the rule's exemptions.
@@ -14198,6 +14180,10 @@ function paramTypeStartAt(paramTypeStarts TokenIndexArray, position ElementIndex
 	return try paramTypeStarts.get(position) otherwise panic("paramTypeStartAt: paramTypeStarts.get OOB at {position} — a parameter's columns are built in lockstep")
 end 'paramTypeStartAt'
 
+function ownedBrand(brand ByteArray) returns ByteArray
+	return EmptySourceText if brand.isEmpty() else brand.clone()
+end 'ownedBrand'
+
 // The INITIAL `Parser.declaredNameKeywords`. It has no `is`-identity gate of its own because it is filled by
 // `buildBlockExtentIndex` in the SAME pass as `blockExtentEnds`, whose anchor is the gate for all three of
 // that walk's outputs. The builder REPLACES the field with a fresh list before pushing anything, so this one
@@ -16560,9 +16546,8 @@ enum DeclaredStoragePosition
 	// `StdOp.callIndirect`, which carries its whole signature ON THE OP and has room for one result.
 	functionTypeReturnType
 
-	// An interface REQUIREMENT's return. Dispatched through a witness-table slot, whose signature is
-	// rebuilt from the requirement's rendered return-type NAME (`Parser.interfaceSpelledType`) — a
-	// spelling that cannot denote an interface at all.
+	// An interface REQUIREMENT's return. Dispatched through a witness-table slot, whose signature carries the
+	// return as one machine word (`requirementAbiType`), so the witness half has no register.
 	interfaceRequirementReturnType
 
 	// ⭐ A FUNCTION VALUE's return, which is the position `functionTypeReturnType` does not cover: that one is
@@ -16705,7 +16690,7 @@ function storagePositionRoom(position DeclaredStoragePosition) returns String
 		// spelled as an interface: two different absences, so two different sentences.
 		functionTypeReturnType or
 		functionValueReturnType then return "a call through a function value carries its whole signature on the call op (`callIndirect`), where there is room for ONE result — so the second register is never read and the witness half is dropped"
-		interfaceRequirementReturnType then return "a requirement is dispatched through a witness-table slot whose signature is rebuilt from the requirement's rendered return-type NAME, a spelling no interface has — so the second register is never read and the witness half is dropped"
+		interfaceRequirementReturnType then return "a requirement is dispatched through a witness-table slot that carries the return as one machine word — so the second register is never read and the witness half is dropped"
 		associatedTypeBinding then return "a witness call carries one machine word per argument, so an argument's witness half is dropped — and unlike a result, whose conformer the impl that produces it pins statically, an argument's table is the CALLER's and differs per call site, so no slot of the callee's table can supply it"
 	end 'which'
 end 'storagePositionRoom'
@@ -18881,6 +18866,7 @@ type FunctionBodyState
 	export var valueMintedSole as BoolArray
 
 	export let functionReturnSpelling as ByteArray
+	export let functionReturnBrand as ByteArray
 
 	// What the body being parsed files for `StorageProvenance` at its `end` (`DeferredProvenance`,
 	// `fileDeferredProvenance`), the module-level `let`s it read among them, which
@@ -18977,13 +18963,14 @@ type FunctionBodyState
 	// so a column left standing would name an unrelated value or block in the next body. ⚠ Every field
 	// is a fresh or shared-empty object, because a closure's saved state still holds the enclosing
 	// body's objects; only `recycledDeferredProvenance` reuses one, for a declared body.
-	static function fresh(anchors ParserAnchors, firstValueId ValueId, returnSpelling ByteArray, provenance DeferredProvenance, mayReturnAGlobalAlias bool, closureEnv ClosureEnvParam, returnAlias DeclaredAlias, paramSites RangeCheckParamSiteArray, layoutParam HiddenWordParam, countParam HiddenWordParam, nascentSelfFactory bool, kind EnclosingBodyKind) returns FunctionBodyState
+	static function fresh(anchors ParserAnchors, firstValueId ValueId, returnSpelling ByteArray, returnBrand ByteArray, provenance DeferredProvenance, mayReturnAGlobalAlias bool, closureEnv ClosureEnvParam, returnAlias DeclaredAlias, paramSites RangeCheckParamSiteArray, layoutParam HiddenWordParam, countParam HiddenWordParam, nascentSelfFactory bool, kind EnclosingBodyKind) returns FunctionBodyState
 		return Self{
 			scope: Scope.create(),
 			valueIds: ValueIdRef.create(firstValueId),
 			currentBlock: anchors.detachedBlock,
 			valueMintedSole: BoolArray.create(),
 			functionReturnSpelling: returnSpelling,
+			functionReturnBrand: returnBrand,
 			deferredProvenance: provenance,
 			enclosingFunctionMayReturnAGlobalAlias: mayReturnAGlobalAlias,
 			captureNames: NameRoster.create(),
@@ -19282,14 +19269,15 @@ end 'GenericBindingScope'
 
 type ExtensionAssociatedScope
 	export let names as NameRoster
-	export let bindings as NameRoster
+	export let bindings as RequirementTypeArray
+	export let bindingFilePath as FilePath
 
-	static function over(names NameRoster, bindings NameRoster) returns ExtensionAssociatedScope
-		return Self{names: names, bindings: bindings}
+	static function over(names NameRoster, bindings RequirementTypeArray, bindingFilePath FilePath) returns ExtensionAssociatedScope
+		return Self{names: names, bindings: bindings, bindingFilePath: bindingFilePath}
 	end 'over'
 
 	static function empty() returns ExtensionAssociatedScope
-		return Self{names: NameRoster.create(), bindings: NameRoster.create()}
+		return Self{names: NameRoster.create(), bindings: RequirementTypeArray.create(), bindingFilePath: CompilerOwnedDeclFilePath}
 	end 'empty'
 end 'ExtensionAssociatedScope'
 
@@ -19676,8 +19664,8 @@ export type Parser
 	// ⭐ **THE ASSOCIATED-TYPE SUBSTITUTION AN INTERFACE-EXTENSION BODY IS PARSED UNDER (conditional
 	// extensions)** — the extended interface's `uses` names, and what the CONFORMER this pass is monomorphizing
 	// for binds each of them to. Parallel, positional, and empty everywhere else. `parseTypeReference` reads
-	// them to resolve a written `Element` as the name `Integer`; see the ⚠ there for why they are deliberately
-	// NOT `enclosingTypeParams`. Written by `openExtensionBodyScope`, cleared in lockstep with the other
+	// them to resolve a written `Element` as the conformer's binding; see the ⚠ there for why they are
+	// deliberately NOT `enclosingTypeParams`. Written by `openExtensionBodyScope`, cleared in lockstep with the other
 	// per-declaration scopes (`enterTypeScope`/`closeTypeParamScope`).
 	var extensionAssociated as ExtensionAssociatedScope
 
@@ -20045,7 +20033,7 @@ export type Parser
 			libraryBlame: LibraryBlame.unblamed,
 			topLevelStorageSubjects: noTopLevelStorageSubjects,
 			pendingOverlaps: OverlappingPairArray.create(),
-			bodyState: FunctionBodyState.fresh(anchors, firstValueId: 0, returnSpelling: EmptySourceText, provenance: anchors.noDeferredProvenance, mayReturnAGlobalAlias: false, closureEnv: ClosureEnvParam.none, returnAlias: anchors.undeclaredAlias, paramSites: sharedEmptyParamSites, layoutParam: HiddenWordParam.none, countParam: HiddenWordParam.none, nascentSelfFactory: false, kind: EnclosingBodyKind.declaredFunction),
+			bodyState: FunctionBodyState.fresh(anchors, firstValueId: 0, returnSpelling: EmptySourceText, returnBrand: EmptySourceText, provenance: anchors.noDeferredProvenance, mayReturnAGlobalAlias: false, closureEnv: ClosureEnvParam.none, returnAlias: anchors.undeclaredAlias, paramSites: sharedEmptyParamSites, layoutParam: HiddenWordParam.none, countParam: HiddenWordParam.none, nascentSelfFactory: false, kind: EnclosingBodyKind.declaredFunction),
 			claimOpFloor: 0,
 			heldAwaits: HeldAwaitArray.create(),
 			qualifiedTypeBase: QualifiedTypeBase.none,
@@ -25454,8 +25442,11 @@ export type Parser
 		// ⚠ **ONLY A CLAUSE THAT WRITES A `with` DEFERS ANYTHING** (`implementsClauseBindsAnything`): the arity
 		// this reader cannot know is consulted inside the `with` arm and nowhere else, so a clause without one
 		// is read the same by both passes and the re-read would re-derive this answer.
+		var headerDeferred = false
+
 		if self.at(TokenKind.implements) and self.implementsClauseBindsAnything() 'deferredConformances'
 			conformanceSiteOut.push(ConformanceClauseDeclSite.create(self.job.path, tokenPos: declStart, declName: nameTok.value, declIsEnum: false))
+			headerDeferred = true
 		end 'deferredConformances'
 
 		self.openConformanceClauseAliasScope()
@@ -25531,7 +25522,14 @@ export type Parser
 			// `implements` clause (which the loop tolerantly skips token-by-token) precedes it. Tolerant, like
 			// `readStructFieldInto`: a malformed `where` is the real parse's to report.
 			if depth == 0 and self.at(TokenKind.where) 'isWhere'
-				layout.recordWhereConstraints(try self.readWhereClause(self.enclosingTypeParams, owner: TypeWhereClauseOwner, admitsAssociatedBindings: true) otherwise break)
+				var constraints = try self.readWhereClause(self.enclosingTypeParams, owner: TypeWhereClauseOwner, admitsAssociatedBindings: true) otherwise break
+				layout.recordWhereConstraints(constraints)
+
+				if not headerDeferred and whereConstraintsBindAnything(constraints) 'theBindingsWaitForTheWholeProgram'
+					conformanceSiteOut.push(ConformanceClauseDeclSite.create(self.job.path, tokenPos: declStart, declName: nameTok.value, declIsEnum: false))
+					headerDeferred = true
+				end 'theBindingsWaitForTheWholeProgram'
+
 				continue
 			end 'isWhere'
 
@@ -25748,6 +25746,9 @@ export type Parser
 	// grammar and the two passes cannot drift on what a clause SAYS — only on how much of it they can prove.
 	// See that reader for the arity rule that makes one pass stop where the other continues.
 	//
+	// It re-reads a type's `where` clause too: a constraint's `with` bindings are settled identities only once
+	// every file has folded (`declaredRequirementType`).
+	//
 	// ⚠ **A CLAUSE THIS CANNOT READ LEAVES THE SWEEP'S RECORD STANDING**, which is the one shape of tolerance
 	// that fits here: the sweep's answer is a SUBSET of the clause, and `declaringNothing()` would be a WRONG
 	// one. Nothing is closed on that path either — `enterTypeScope` assigns every per-declaration scope
@@ -25776,6 +25777,13 @@ export type Parser
 		let clause = try self.readOptionalImplementsClause() otherwise return
 		self.closeConformanceClauseAliasScope()
 		index.refoldConformanceClause(site, clause: clause)
+
+		if site.declIsEnum or not self.at(TokenKind.where) 'noWhereClause'
+			return
+		end 'noWhereClause'
+
+		var constraints = try self.readWhereClause(self.enclosingTypeParams, owner: TypeWhereClauseOwner, admitsAssociatedBindings: true) otherwise return
+		index.refoldWhereConstraints(site, constraints: constraints)
 	end 'foldConformanceClauseInto'
 
 	// ⭐ **CONSUME A WHOLE `extension <Interface>` DECLARATION IN THE TOLERANT SWEEP** — the twin of
@@ -26200,7 +26208,7 @@ export type Parser
 	// different type, silently. Its constraints are a filter that has already been applied by the time this is
 	// called (`extensionConformerVerdict`), so there is nothing left for the body to dispatch through either.
 	//
-	// ⭐ **WHAT THE ASSOCIATED NAMES GET INSTEAD IS THE NAME SUBSTITUTION** (conditional extensions), which is
+	// ⭐ **WHAT THE ASSOCIATED NAMES GET INSTEAD IS THE CONFORMER'S BINDING** (conditional extensions), which is
 	// available here for exactly the reason the parameter reading is wrong: this pass is monomorphizing for ONE
 	// conformer, and that conformer's `implements … with …` says what its `Element` IS. See
 	// `Parser.extensionAssociated` and the ⚠ in `parseTypeReference`.
@@ -26281,11 +26289,11 @@ export type Parser
 		let associated = extensionTargetParamNames(header.target)
 		let bindings = self.conformerAssociatedBindings(header, conformer: conformer, index: index)
 
-		if associated.count() != bindings.count() 'noPositionalPairing'
+		if associated.count() != bindings.types.count() 'noPositionalPairing'
 			return
 		end 'noPositionalPairing'
 
-		self.extensionAssociated = ExtensionAssociatedScope.over(associated, bindings: bindings)
+		self.extensionAssociated = ExtensionAssociatedScope.over(associated, bindings: bindings.types, bindingFilePath: self.extensionConformerLayout(conformer, index: index).declFilePath)
 	end 'openInterfaceExtensionBodyScope'
 
 	// The TYPE-extension half of the door above, split out so the interface half reads as one path rather than
@@ -26326,7 +26334,7 @@ export type Parser
 	// (`parenthesizedWithBindsOneTuple`, which argues why that cannot be settled later). Emptied here, the
 	// consequence is a conditional extension WITHHELD from that conformer and a body parsed with no
 	// substitution — `readOptionalImplementsClause`'s standard, bounded and missing rather than wrong.
-	function conformerAssociatedBindings(header ExtensionHeader, conformer ByteArray, index ProgramSignatures) returns NameRoster
+	function conformerAssociatedBindings(header ExtensionHeader, conformer ByteArray, index ProgramSignatures) returns ConformanceBinding
 		return pairableConformanceBindings(self.extensionConformerLayout(conformer, index: index).bindingsForInterface(header.nameTok.value), associatedTypeNames: extensionTargetParamNames(header.target))
 	end 'conformerAssociatedBindings'
 
@@ -26600,10 +26608,11 @@ export type Parser
 	//
 	// A linear scan: an interface declares a handful of associated types, so a per-parse name→binding map
 	// would be a heap object bought to serve one or two lookups.
-	function extensionAssociatedTypeBinding(name ByteArray) returns ByteArray throws MapError
+	function extensionAssociatedType(name ByteArray) returns MaxonType throws MapError
 		let i = try self.extensionAssociated.names.positionOfName(name)
-		return try self.extensionAssociated.bindings.get(i) otherwise panic("extensionAssociatedTypeBinding: the conformer binds nothing at associated-type position {i}, where the interface declares {self.extensionAssociated.names.count()} — `openExtensionBodyScope` installs the two columns only when their lengths agree")
-	end 'extensionAssociatedTypeBinding'
+		let bound = try self.extensionAssociated.bindings.get(i) otherwise panic("extensionAssociatedType: the conformer binds nothing at associated-type position {i}, where the interface declares {self.extensionAssociated.names.count()} — `openExtensionBodyScope` installs the two columns only when their lengths agree")
+		return self.repairSweptType(resolvedBindingType(bound, typeNames: self.artifact.typeNames, signatures: self.signatures), scopeFilePath: self.extensionAssociated.bindingFilePath)
+	end 'extensionAssociatedType'
 
 	function genericBoundTypeName(name ByteArray) returns ByteArray
 		return match self.genericBindingOf(name) 'binding'
@@ -26736,9 +26745,8 @@ export type Parser
 
 	// ⭐⭐ **THE ASSOCIATED-TYPE BINDINGS ONE `where` CONSTRAINT CARRIES — `where Source is Iterator with
 	// Element`.** The `with` clause an `implements` line already carries, read by the SAME reader
-	// (`readConformanceWithArg`, under the `identity` spelling) so a binding written on a constraint and the
-	// same binding written on a conformance are the same rendered string and compare without a second
-	// resolution.
+	// (`readConformanceWithArg`), so a binding written on a constraint and the same binding written on a
+	// conformance are one stored identity.
 	//
 	// ⚠ **A MULTI-BINDING `with` MUST BE PARENTHESIZED HERE, WHERE ON AN `implements` LINE IT NEED NOT BE —
 	// and that is forced rather than chosen.** `parseConformanceWithArgs`' comma-continued spelling is bounded
@@ -26749,14 +26757,16 @@ export type Parser
 	// that read `where T is Pair with A, B` as `T is Pair with A` and then tried to read `B` as a constrained
 	// PARAMETER would abandon the clause and file a SHORTER slot list whole-program — a wrong ABI, not a
 	// wrong message. Parentheses make the extent a token fact, so both passes read the same list.
-	function readWhereConstraintBindings(interfaceName ByteArray) returns NameRoster throws SourceParseError
+	function readWhereConstraintBindings(interfaceName ByteArray) returns RequirementTypeArray throws SourceParseError
+		var types = RequirementTypeArray.create()
+
 		if self.at(TokenKind.leftParen) 'delimited'
-			return try self.parseConformanceWithArgs(interfaceName, spelling: ConformanceArgSpelling.identity, spellings: NameRoster.create())
+			_ = try self.parseConformanceWithArgs(interfaceName, reading: ParenthesizedWithReading.tupleAtArityOne, spellings: NameRoster.create(), types: types)
+			return types
 		end 'delimited'
 
-		var bindings = NameRoster.create()
-		bindings.push(try self.readConformanceWithArg(ConformanceArgSpelling.identity))
-		return bindings
+		_ = try self.readConformanceWithArg(types)
+		return types
 	end 'readWhereConstraintBindings'
 
 	// ⭐ **PARSE A `where <T> is <Interface> [with <Bindings>] [and <Interface> …]… [, <U> is …]…` CLAUSE.**
@@ -26780,8 +26790,13 @@ export type Parser
 
 			while true 'interfaces'
 				let ifaceTok = try self.consumeConformedInterfaceName()
-				let bindings = sharedEmptyDeclaredConformances if not self.at(TokenKind.with) else (try self.readWrittenWhereConstraintBindings(ifaceTok.value, admitsAssociatedBindings: admitsAssociatedBindings))
-				constraints.push(WhereConstraint.create(paramIndex, interfaceName: ifaceTok.value, associatedBindings: bindings))
+
+				if not self.at(TokenKind.with) 'bindsNothing'
+					constraints.push(WhereConstraint.create(paramIndex, interfaceName: ifaceTok.value))
+				end 'bindsNothing' else 'bindsAssociatedTypes'
+					let bindingTypes = try self.readWrittenWhereConstraintBindings(ifaceTok.value, admitsAssociatedBindings: admitsAssociatedBindings)
+					constraints.push(WhereConstraint.create(paramIndex, interfaceName: ifaceTok.value, associatedBindingTypes: bindingTypes))
+				end 'bindsAssociatedTypes'
 
 				if not self.at(TokenKind.and) 'doneInterfaces'
 					break
@@ -26800,7 +26815,7 @@ export type Parser
 		return constraints
 	end 'readWhereClause'
 
-	function readWrittenWhereConstraintBindings(interfaceName ByteArray, admitsAssociatedBindings bool) returns NameRoster throws SourceParseError
+	function readWrittenWhereConstraintBindings(interfaceName ByteArray, admitsAssociatedBindings bool) returns RequirementTypeArray throws SourceParseError
 		if not admitsAssociatedBindings 'aGenericFunctionConstraint'
 			let withTok = self.current()
 			throw SourceParseError.unsupported("a `where` constraint of a generic function binding the interface's associated types with `with` — constrain the function by the interface alone", line: withTok.line, column: withTok.column)
@@ -27751,7 +27766,7 @@ export type Parser
 		let anchor = self.current()
 		let declaredReturn = MaxonReturnType.value(returnType)
 
-		self.beginDeclaredBody(0, returnSpelling: EmptySourceText, mayReturnAGlobalAlias: false, returnAlias: self.anchors.undeclaredAlias, paramSites: sharedEmptyParamSites, layoutParam: HiddenWordParam.none, countParam: HiddenWordParam.none, nascentSelfFactory: false, kind: EnclosingBodyKind.declaredFunction, witnessParamBase: 0, witnessParamCount: 0)
+		self.beginDeclaredBody(0, returnSpelling: EmptySourceText, returnBrand: EmptySourceText, mayReturnAGlobalAlias: false, returnAlias: self.anchors.undeclaredAlias, paramSites: sharedEmptyParamSites, layoutParam: HiddenWordParam.none, countParam: HiddenWordParam.none, nascentSelfFactory: false, kind: EnclosingBodyKind.declaredFunction, witnessParamBase: 0, witnessParamCount: 0)
 
 		var initializer = IrFunction.create(name, maxonReturnType: declaredReturn, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), typeSites: self.anchors.functions.noTypeSites, valueTags: self.bodyState.valueTags, valueNameIds: self.bodyState.valueNameIds, valueBrandIds: self.bodyState.valueBrandIds, valueMintedSole: self.anchors.functions.mintedSole, valueWitnessIds: self.bodyState.valueWitnessIds, declaredAt: SourcePosition.declaredAt(self.job.path, nameTok: anchor), placeholders: self.anchors.functions, throwsTypeName: ThrowsClause.none)
 		initializer.visibility = Visibility.global
@@ -27770,7 +27785,7 @@ export type Parser
 		self.publishExistentialInstances(initializer)
 		self.fileDeferredProvenance(initializer)
 		self.publishDebugLocals(initializer)
-		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(NameRoster.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: NameRoster.create(), paramDeclaredNames: NameRoster.create(), returnAggregateName: self.erasedAggregateNameOfReturn(declaredReturn), paramExistentialSites: ParamExistentialSiteArray.create(), returnExistentialSites: GenericInstanceIdArray.create(), extensionConstraints: WhereConstraintArray.create(), writtenTypeNames: sharedEmptyWrittenTypeNames, selfSpelledParams: NoParamPositions), returnType: declaredReturn, nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.job.path, synthesized: true, role: FunctionDeclarationRole.ordinary)
+		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(NameRoster.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: NameRoster.create(), paramDeclaredNames: NameRoster.create(), returnAggregateName: self.erasedAggregateNameOfReturn(declaredReturn), returnBrand: EmptySourceText, paramExistentialSites: ParamExistentialSiteArray.create(), returnExistentialSites: GenericInstanceIdArray.create(), extensionConstraints: WhereConstraintArray.create(), writtenTypeNames: sharedEmptyWrittenTypeNames, selfSpelledParams: NoParamPositions), returnType: declaredReturn, nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.job.path, synthesized: true, role: FunctionDeclarationRole.ordinary)
 		self.commitRangeChecks(name)
 	end 'parseDefaultInitializer'
 
@@ -28060,7 +28075,7 @@ export type Parser
 			return
 		end 'noInterfaceHandle'
 
-		for (position, formal) in target.paramTypeNames.withIterator() 'eachFormal'
+		for (position, formal) in target.paramTypes.withIterator() 'eachFormal'
 			let i = position.index() + WitnessReceiverArgCount
 			let given = try args.get(i) otherwise panic("widenWitnessArgs: args.get OOB at {i} — a dispatch reaching here has the receiver plus one actual per formal")
 
@@ -28068,7 +28083,8 @@ export type Parser
 				continue
 			end 'aCellIsNotAHandle'
 
-			try args.set(i, value: self.interfaceHandleNamed(given, target: formal, first: first, last: last)) otherwise panic("widenWitnessArgs: args.set OOB at {i}")
+			let handleName = try formal.nominalName() otherwise continue
+			try args.set(i, value: self.interfaceHandleNamed(given, target: handleName, first: first, last: last)) otherwise panic("widenWitnessArgs: args.set OOB at {i}")
 		end 'eachFormal'
 	end 'widenWitnessArgs'
 
@@ -30926,7 +30942,9 @@ export type Parser
 		let throwsClause = try self.parseOptionalThrowsClause()
 
 		let written = self.writtenSignatureTypeNames(true, paramNames: paramNames, paramTypeStarts: paramTypeStarts, returnTypeStart: returnTypeStart, hasReturnType: hasReturnType, ownTypeParams: NameRoster.create())
-		return InterfaceMethodSig.create(nameTok.value, paramNames: paramNames, paramTypeNames: self.renderInterfaceParamTypes(paramTypes, paramTypeStarts: paramTypeStarts, interfaceName: interfaceName), returnTypeName: self.renderInterfaceReturnType(returnType, interfaceName: interfaceName), isStatic: isStatic, throwsClause: throwsClause, paramIsBuffer: interfaceParamBufferSpellings(paramSurfaces), paramCapabilities: paramCapabilities, returnCapability: qualifiedReturn.capability, nameLine: nameTok.line, nameColumn: nameTok.column, written: written)
+		let paramRequirements = self.interfaceParamRequirements(paramTypes, paramTypeStarts: paramTypeStarts, interfaceName: interfaceName)
+		let returnRequirement = self.interfaceReturnRequirement(returnType, typeStart: returnTypeStart, interfaceName: interfaceName)
+		return InterfaceMethodSig.create(nameTok.value, paramNames: paramNames, paramTypeNames: self.renderInterfaceParamTypes(paramTypes, requirements: paramRequirements, paramTypeStarts: paramTypeStarts, interfaceName: interfaceName), paramTypes: paramRequirements, returnTypeName: self.renderInterfaceReturnType(returnType, requirement: returnRequirement, typeStart: returnTypeStart, interfaceName: interfaceName), returnType: returnRequirement, isStatic: isStatic, throwsClause: throwsClause, paramIsBuffer: interfaceParamBufferSpellings(paramSurfaces), paramCapabilities: paramCapabilities, returnCapability: qualifiedReturn.capability, nameLine: nameTok.line, nameColumn: nameTok.column, written: written)
 	end 'parseInterfaceMethod'
 
 	// Render each of an interface method's parameter types to its source string, parallel to `paramTypes`.
@@ -30950,19 +30968,66 @@ export type Parser
 		return out
 	end 'interfaceParamBufferSpellings'
 
-	// A parameter declared through a generic-instance ALIAS renders as that alias: the requirement's brand,
-	// which `ConformanceCheck.signatureMatches` compares against the impl's spelled column and E3016 prints.
-	function renderInterfaceParamTypes(paramTypes MaxonTypeArray, paramTypeStarts TokenIndexArray, interfaceName ByteArray) returns NameRoster
+	// A parameter declared through a generic-instance ALIAS renders as that alias, the requirement's brand.
+	function renderInterfaceParamTypes(paramTypes MaxonTypeArray, requirements RequirementTypeArray, paramTypeStarts TokenIndexArray, interfaceName ByteArray) returns NameRoster
 		var out = NameRoster.create()
 
 		for i in 0 upto paramTypes.count() 'each'
 			let paramType = try paramTypes.get(i) otherwise panic("renderInterfaceParamTypes: paramTypes.get OOB at {i}")
-			view brand = self.declaredParamBrand(paramTypeStarts, position: i, resolved: paramType)
-			out.push(brand if not brand.isEmpty() else self.renderInterfaceParamType(paramType, typeStart: paramTypeStartAt(paramTypeStarts, position: i), interfaceName: interfaceName))
+			let requirement = try requirements.get(i) otherwise panic("renderInterfaceParamTypes: requirements.get OOB at {i} — interfaceParamRequirements builds one per parameter")
+			out.push(self.renderInterfaceRequirement(requirement, declared: paramType, typeStart: paramTypeStartAt(paramTypeStarts, position: i), interfaceName: interfaceName))
 		end 'each'
 
 		return out
 	end 'renderInterfaceParamTypes'
+
+	function interfaceParamRequirements(paramTypes MaxonTypeArray, paramTypeStarts TokenIndexArray, interfaceName ByteArray) returns RequirementTypeArray
+		var out = RequirementTypeArray.create()
+
+		for i in 0 upto paramTypes.count() 'each'
+			let paramType = try paramTypes.get(i) otherwise panic("interfaceParamRequirements: paramTypes.get OOB at {i}")
+			out.push(self.interfaceRequirementType(paramType, typeStart: paramTypeStartAt(paramTypeStarts, position: i), interfaceName: interfaceName))
+		end 'each'
+
+		return out
+	end 'interfaceParamRequirements'
+
+	function interfaceReturnRequirement(returnType MaxonReturnType, typeStart ElementIndex, interfaceName ByteArray) returns RequirementType
+		return match returnType 'r'
+			void gives RequirementType.create(RequirementTypeIdentity.void, brand: EmptySourceText)
+			value(inner) gives self.interfaceRequirementType(inner, typeStart: typeStart, interfaceName: interfaceName)
+		end 'r'
+	end 'interfaceReturnRequirement'
+
+	function interfaceRequirementType(declared MaxonType, typeStart ElementIndex, interfaceName ByteArray) returns RequirementType
+		if self.namesInterfaceSelf(declared, interfaceName: interfaceName) 'theInterfacesOwnType'
+			return RequirementType.ofSelf()
+		end 'theInterfacesOwnType'
+
+		return self.declaredRequirementType(declared, typeStart: typeStart)
+	end 'interfaceRequirementType'
+
+	function declaredRequirementType(declared MaxonType, typeStart ElementIndex) returns RequirementType
+		let requirement = requirementTypeOfDeclared(declared, names: self.artifact.typeNames, brand: self.declaredBrandAt(typeStart, resolved: declared))
+
+		if not self.signatures.allFilesFolded 'theSweepSettlesItsRequirementsAfterTheFold'
+			return requirement
+		end 'theSweepSettlesItsRequirementsAfterTheFold'
+
+		return self.signatures.fileCompleteRequirement(requirement, declFilePath: self.job.path)
+	end 'declaredRequirementType'
+
+	function renderInterfaceRequirement(requirement RequirementType, declared MaxonType, typeStart ElementIndex, interfaceName ByteArray) returns ByteArray
+		if not requirement.brand.isEmpty() 'aBrandedInstance'
+			return requirement.brand
+		end 'aBrandedInstance'
+
+		return self.renderInterfaceParamType(declared, typeStart: typeStart, interfaceName: interfaceName)
+	end 'renderInterfaceRequirement'
+
+	function namesInterfaceSelf(declared MaxonType, interfaceName ByteArray) returns bool
+		return maxonTypeTag(declared) == ValueTypeTag.structRef and self.internedName(typeNameIdOf(declared)).equals(interfaceName)
+	end 'namesInterfaceSelf'
 
 	function renderInterfaceParamType(paramType MaxonType, typeStart ElementIndex, interfaceName ByteArray) returns ByteArray
 		if maxonTypeTag(paramType) != ValueTypeTag.genericInstance 'notAnInstance'
@@ -30976,32 +31041,23 @@ export type Parser
 	end 'renderInterfaceParamType'
 
 	// Render an interface method's RETURN to its source string — `void` for no `returns`, else the type.
-	function renderInterfaceReturnType(returnType MaxonReturnType, interfaceName ByteArray) returns ByteArray
+	function renderInterfaceReturnType(returnType MaxonReturnType, requirement RequirementType, typeStart ElementIndex, interfaceName ByteArray) returns ByteArray
 		return match returnType 'r'
 			void gives InterfaceVoidTypeName
-			value(inner) gives self.renderInterfaceTypeName(inner, interfaceName: interfaceName)
+			value(inner) gives self.renderInterfaceRequirement(requirement, declared: inner, typeStart: typeStart, interfaceName: interfaceName)
 		end 'r'
 	end 'renderInterfaceReturnType'
 
-	// Render a parsed interface-signature `MaxonType` to the SOURCE string the conformance check compares
-	// and prints. `Self` (a `structRef` whose id is the interface's own name) renders as `Self`; every
-	// other type defers to the SHARED `renderDeclaredTypeName` — read off the LOCAL interner, but the STRING
-	// is interner-independent, so it matches the impl side rendered off the project interner (the same
-	// property `paramAggregateNames` relies on). Rendered at parse time, so `mergeArtifact` folds an
-	// interface with no id to remap.
+	// Render a parsed interface-signature `MaxonType` to the SOURCE string E3016 prints. `Self` (a `structRef`
+	// whose id is the interface's own name) renders as `Self`; every other type defers to the SHARED
+	// `renderDeclaredTypeName`, so it reads as the impl side does.
 	//
 	// ⚠ The `Self` arm is the WHOLE of what this adds, and it is deliberately NOT in the shared renderer: a
 	// `Self` written in a conformance ARGUMENT means the conforming type's own name, not the string `Self`.
 	function renderInterfaceTypeName(t MaxonType, interfaceName ByteArray) returns ByteArray
-		let tag = maxonTypeTag(t)
-
-		if tag == ValueTypeTag.structRef 'structRefType'
-			let refName = self.internedName(typeNameIdOf(t))
-
-			if refName.equals(interfaceName) 'selfRef'
-				return InterfaceSelfTypeName
-			end 'selfRef'
-		end 'structRefType'
+		if self.namesInterfaceSelf(t, interfaceName: interfaceName) 'selfRef'
+			return InterfaceSelfTypeName
+		end 'selfRef'
 
 		// Every other type goes through the ONE shared renderer (`IrInterface.renderDeclaredTypeName`) — the
 		// same function the IMPL side of the conformance uses, so an associated type, a type PARAMETER and a
@@ -31082,8 +31138,9 @@ export type Parser
 
 		try self.consume(TokenKind.with)
 		var spellings = NameRoster.create()
-		let withArgs = try self.parseConformanceWithArgs(ifaceTok.value, spelling: ConformanceArgSpelling.identity, spellings: spellings)
-		return InterfaceConformance.create(ifaceTok.value, withArgs: withArgs, withArgSpellings: spellings)
+		var types = RequirementTypeArray.create()
+		let withArgs = try self.parseConformanceWithArgs(ifaceTok.value, reading: ParenthesizedWithReading.tupleAtArityOne, spellings: spellings, types: types)
+		return InterfaceConformance.create(ifaceTok.value, withArgs: withArgs, withArgSpellings: spellings, withArgTypes: types)
 	end 'parseOneConformance'
 
 	// ⭐ **THE `with <TypeArg>` / `with (<TypeArgs>)` ASSOCIATED-TYPE BINDING, IN BOTH SPELLINGS.**
@@ -31120,19 +31177,16 @@ export type Parser
 	// indistinguishable one line later — recording a flag on it purely so a later pass could re-derive what
 	// this function is looking straight at would be plumbing a parse fact through the whole tier for no gain.
 	//
-	// ⚠⚠ **`spelling` IS WHAT THE TWO CALLERS DO NOT SHARE, AND IT IS NOT COSMETIC** — see
-	// `ConformanceArgSpelling`. It reaches the tuple arm as well as the argument reader, because collapsing
-	// `with (A, B)` into one interned tuple produces a name only the identity spelling can carry.
-	function parseConformanceWithArgs(interfaceName ByteArray, spelling ConformanceArgSpelling, spellings NameRoster) returns NameRoster throws SourceParseError
+	// ⚠⚠ **`reading` IS WHAT THE CALLERS DO NOT SHARE** — see `ParenthesizedWithReading`.
+	function parseConformanceWithArgs(interfaceName ByteArray, reading ParenthesizedWithReading, spellings NameRoster, types RequirementTypeArray) returns NameRoster throws SourceParseError
 		var args = NameRoster.create()
 
-		if self.at(TokenKind.leftParen) and spelling == ConformanceArgSpelling.identity and self.parenthesizedWithBindsOneTuple(interfaceName) 'oneTupleArgument'
+		if self.at(TokenKind.leftParen) and reading == ParenthesizedWithReading.tupleAtArityOne and self.parenthesizedWithBindsOneTuple(interfaceName) 'oneTupleArgument'
 			// ONE argument, read by the ordinary reference reader — `parseTypeReference` meets the `(` and
 			// routes to `parseTupleTypeReference`, which is what mints and interns the tuple's layout. So the
-			// binding this records is character-for-character the name `WithIterIterator.current`'s declared
-			// `returns (Source, Element)` renders to, which is the whole point: `ConformanceCheck` compares
-			// the two as strings.
-			try self.readConformanceWithArgInto(args, spellings: spellings, spelling: spelling)
+			// binding this records is the same tuple instance `WithIterIterator.current`'s declared
+			// `returns (Source, Element)` resolves to, which is what `ConformanceCheck` compares.
+			try self.readConformanceWithArgInto(args, spellings: spellings, types: types)
 			return args
 		end 'oneTupleArgument'
 
@@ -31143,7 +31197,7 @@ export type Parser
 			try self.consume(TokenKind.leftParen)
 
 			while true 'eachArg'
-				try self.readConformanceWithArgInto(args, spellings: spellings, spelling: spelling)
+				try self.readConformanceWithArgInto(args, spellings: spellings, types: types)
 
 				if not self.at(TokenKind.comma) 'lastArg'
 					break
@@ -31157,7 +31211,7 @@ export type Parser
 			return args
 		end 'parenthesized'
 
-		try self.readConformanceWithArgInto(args, spellings: spellings, spelling: spelling)
+		try self.readConformanceWithArgInto(args, spellings: spellings, types: types)
 
 		if not self.at(TokenKind.comma) 'singleArg'
 			return args
@@ -31167,51 +31221,32 @@ export type Parser
 
 		while args.count() < arity and self.at(TokenKind.comma) 'moreArgs'
 			try self.consume(TokenKind.comma)
-			try self.readConformanceWithArgInto(args, spellings: spellings, spelling: spelling)
+			try self.readConformanceWithArgInto(args, spellings: spellings, types: types)
 		end 'moreArgs'
 
 		return args
 	end 'parseConformanceWithArgs'
 
-	function readConformanceWithArgInto(args NameRoster, spellings NameRoster, spelling ConformanceArgSpelling) throws SourceParseError
+	function readConformanceWithArgInto(args NameRoster, spellings NameRoster, types RequirementTypeArray) throws SourceParseError
 		spellings.push(self.typeSpellingAt(self.pos))
-		args.push(try self.readConformanceWithArg(spelling))
+		args.push(try self.readConformanceWithArg(types))
 	end 'readConformanceWithArgInto'
 
-	// One conformance argument: read as a type reference (so it records the alias USE) and rendered to the
-	// source string the substitution carries. Spelled once because both arms above read an argument the same
-	// way, and a second spelling would be free to record the use in only one of them — which is exactly the
-	// bug the parenthesized arm already had.
+	// One conformance argument: read as a type reference (so it records the alias USE), its identity pushed
+	// onto `types`, and its display string returned. Spelled once because both arms above read an argument
+	// the same way, and a second spelling would be free to record the use in only one of them — which is
+	// exactly the bug the parenthesized arm already had.
 	//
 	// It renders through the SHARED renderer and NOT through `renderInterfaceTypeName`, which is the one
 	// difference between the two conformance-argument positions: a written `Self` here has already resolved
 	// to the enclosing type's own `structRef` (`enclosingSelfType`), and the conforming type's NAME is
 	// precisely what the binding must carry. `enclosingTypeParams` is the CONFORMING type's own `uses` list,
 	// which is what makes `type Box uses T implements Holder with T` bind `Element := T`.
-	//
-	// ⚠ **THE READ IS ONE READ IN BOTH SPELLINGS, AND THAT IS THE POINT.** `parseTypeReference` runs either
-	// way — it is what moves the cursor, records the alias USE (E3062) and interns a tuple — so the two
-	// spellings differ only in which of two facts about the SAME argument is handed back. See
-	// `ConformanceArgSpelling`.
-	function readConformanceWithArg(spelling ConformanceArgSpelling) returns ByteArray throws SourceParseError
-		// Taken before the reader moves, because that is the only moment the WRITTEN form is in hand.
-		let firstTok = self.current()
+	function readConformanceWithArg(types RequirementTypeArray) returns ByteArray throws SourceParseError
 		let start = self.pos
-		let identity = self.renderScopedTypeName(try self.parseTypeReference(BarePrimitiveVoice.admitted)).clone()
-
-		if spelling == ConformanceArgSpelling.identity 'theComparableIdentity'
-			return identity
-		end 'theComparableIdentity'
-
-		// ⚠ **A SINGLE IDENTIFIER IS THE ONLY ARGUMENT THAT HAS AN AUTHOR'S NAME, so it is the only one this
-		// answers with.** `Self`, a dotted chain and a tuple are each more than the one token a substitution
-		// could put back — for those the identity is not merely the better answer, it is the only spelling
-		// that exists, and it is exactly what the per-file sweep produced for them before this split.
-		if self.pos != start + 1 or firstTok.kind != TokenKind.identifier 'theAuthorWroteNoSingleName'
-			return identity
-		end 'theAuthorWroteNoSingleName'
-
-		return firstTok.value
+		let declared = try self.parseTypeReference(BarePrimitiveVoice.admitted)
+		types.push(self.declaredRequirementType(declared, typeStart: start))
+		return self.renderScopedTypeName(declared).clone()
 	end 'readConformanceWithArg'
 
 	// ⭐ **`with (A, B)` AGAINST A ONE-ASSOCIATED-TYPE INTERFACE IS ONE TUPLE ARGUMENT, NOT TWO
@@ -32852,6 +32887,7 @@ export type Parser
 		let returnSpelling = self.typeSpellingAt(returnTypeStart) if self.at(TokenKind.returns) else EmptySourceText
 		let qualifiedReturn = try self.parseOptionalReturnType(QualifierPolicy.admitted if not head.ownTypeParams.isEmpty() else QualifierPolicy.refused)
 		let returnType = self.resolveNamedStructReturn(qualifiedReturn.returnType)
+		let returnBrand = self.returnBrandOf(returnType, returnTypeStart: returnTypeStart)
 
 		// The `throws E` clause, stamped onto the function so the body parse and the lowering can read it
 		// off `func`.
@@ -32972,7 +33008,7 @@ export type Parser
 		// The global-alias answer is read once here rather than at each `return`: it cannot change while
 		// one body is parsed, and its door sits on the promotion path of every returned aggregate. The
 		// return and parameter aliases are read here because `resolveTypes` erases both.
-		self.beginDeclaredBody((paramCount + layoutReserve) as ValueId, returnSpelling: returnSpelling, mayReturnAGlobalAlias: self.functionMayReturnAGlobalAlias(name), returnAlias: self.rangedReturnAlias(returnType), paramSites: try self.rangedParamSites(paramTypes, paramRanges: paramRanges) otherwise sharedEmptyParamSites, layoutParam: layoutParamOf(mayCarryALayoutDescriptor, paramCount: paramCount + layoutReserve), countParam: fixedElementCountParamOf(needsCountParam, paramCount: paramCount, witnessParamCount: witnessParamCount), nascentSelfFactory: nascentSelfFactory, kind: EnclosingBodyKind.testBody if isTest else EnclosingBodyKind.declaredFunction, witnessParamBase: witnessBlockStartValueId(paramCount + tailWitnessParamCount, witnessParamCount: witnessParamCount + tailWitnessParamCount), witnessParamCount: witnessParamCount + tailWitnessParamCount)
+		self.beginDeclaredBody((paramCount + layoutReserve) as ValueId, returnSpelling: returnSpelling, returnBrand: returnBrand, mayReturnAGlobalAlias: self.functionMayReturnAGlobalAlias(name), returnAlias: self.rangedReturnAlias(returnType), paramSites: try self.rangedParamSites(paramTypes, paramRanges: paramRanges) otherwise sharedEmptyParamSites, layoutParam: layoutParamOf(mayCarryALayoutDescriptor, paramCount: paramCount + layoutReserve), countParam: fixedElementCountParamOf(needsCountParam, paramCount: paramCount, witnessParamCount: witnessParamCount), nascentSelfFactory: nascentSelfFactory, kind: EnclosingBodyKind.testBody if isTest else EnclosingBodyKind.declaredFunction, witnessParamBase: witnessBlockStartValueId(paramCount + tailWitnessParamCount, witnessParamCount: witnessParamCount + tailWitnessParamCount), witnessParamCount: witnessParamCount + tailWitnessParamCount)
 
 		self.bodyState.returnsAReceiverField = takesReceiver and self.signatures.returnsAReceiverField(name)
 
@@ -33134,7 +33170,7 @@ export type Parser
 		self.stampLetCastScopes(nameTok.line, lastLine: self.tokenAt(self.pos - 1).line)
 		self.fileDeferredProvenance(func)
 		self.publishDebugLocals(func)
-		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramNames, paramTypes: paramTypes, paramTypeStarts: paramTypeStarts), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: self.returnExistentialSitesOf(returnType, returnTypeStart: returnTypeStart), extensionConstraints: self.enclosingExtensionConstraints, writtenTypeNames: signatureTypeNames, selfSpelledParams: self.selfSpelledParamsOf(paramNames, paramTypeStarts: paramTypeStarts), returnCapability: qualifiedReturn.capability), returnType: returnType, nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.job.path, synthesized: false, role: self.declarationRoleOf(nameTok))
+		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramNames, paramTypes: paramTypes, paramTypeStarts: paramTypeStarts), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), returnBrand: returnBrand, paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: self.returnExistentialSitesOf(returnType, returnTypeStart: returnTypeStart), extensionConstraints: self.enclosingExtensionConstraints, writtenTypeNames: signatureTypeNames, selfSpelledParams: self.selfSpelledParamsOf(paramNames, paramTypeStarts: paramTypeStarts), returnCapability: qualifiedReturn.capability), returnType: returnType, nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.job.path, synthesized: false, role: self.declarationRoleOf(nameTok))
 		self.commitRangeChecks(name)
 	end 'parseFunction'
 
@@ -34657,7 +34693,7 @@ export type Parser
 		// A helper reserves no witness parameters, so a dispatch inside one has none to name and
 		// `witnessParamValueId` says so. ⚠ A lifted closure is not this case: its body deliberately
 		// leaves the declaring function's pair standing (see `parseClosureExpression`).
-		self.beginDeclaredBody((helperParamCount + layoutReserve) as ValueId, returnSpelling: EmptySourceText, mayReturnAGlobalAlias: self.functionMayReturnAGlobalAlias(helperName), returnAlias: self.rangedReturnAlias(returnType), paramSites: sharedEmptyParamSites, layoutParam: layoutParamOf(mayCarryALayoutDescriptor, paramCount: helperParamCount + layoutReserve), countParam: fixedElementCountParamOf(needsCountParam, paramCount: helperParamCount, witnessParamCount: 0), nascentSelfFactory: false, kind: EnclosingBodyKind.declaredFunction, witnessParamBase: 0, witnessParamCount: 0)
+		self.beginDeclaredBody((helperParamCount + layoutReserve) as ValueId, returnSpelling: EmptySourceText, returnBrand: EmptySourceText, mayReturnAGlobalAlias: self.functionMayReturnAGlobalAlias(helperName), returnAlias: self.rangedReturnAlias(returnType), paramSites: sharedEmptyParamSites, layoutParam: layoutParamOf(mayCarryALayoutDescriptor, paramCount: helperParamCount + layoutReserve), countParam: fixedElementCountParamOf(needsCountParam, paramCount: helperParamCount, witnessParamCount: 0), nascentSelfFactory: false, kind: EnclosingBodyKind.declaredFunction, witnessParamBase: 0, witnessParamCount: 0)
 
 		var helper = IrFunction.create(helperName, maxonReturnType: returnType, paramCount: helperParamCount, maxonParamTypes: MaxonTypeArray.create(), typeSites: self.anchors.functions.noTypeSites, valueTags: self.bodyState.valueTags, valueNameIds: self.bodyState.valueNameIds, valueBrandIds: self.bodyState.valueBrandIds, valueMintedSole: self.anchors.functions.mintedSole, valueWitnessIds: self.bodyState.valueWitnessIds, declaredAt: SourcePosition.declaredAt(self.job.path, nameTok: anchor), placeholders: self.anchors.functions, throwsTypeName: ThrowsClause.none)
 
@@ -34707,7 +34743,7 @@ export type Parser
 		self.publishExistentialInstances(helper)
 		self.fileDeferredProvenance(helper)
 		self.publishDebugLocals(helper)
-		self.artifact.recordFuncSignature(helperName, signature: FuncSignature.create(NameRoster.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: NameRoster.create(), paramDeclaredNames: NameRoster.create(), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: ParamExistentialSiteArray.create(), returnExistentialSites: GenericInstanceIdArray.create(), extensionConstraints: WhereConstraintArray.create(), writtenTypeNames: sharedEmptyWrittenTypeNames, selfSpelledParams: NoParamPositions), returnType: returnType, nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.job.path, synthesized: true, role: FunctionDeclarationRole.ordinary)
+		self.artifact.recordFuncSignature(helperName, signature: FuncSignature.create(NameRoster.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: NameRoster.create(), paramDeclaredNames: NameRoster.create(), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), returnBrand: EmptySourceText, paramExistentialSites: ParamExistentialSiteArray.create(), returnExistentialSites: GenericInstanceIdArray.create(), extensionConstraints: WhereConstraintArray.create(), writtenTypeNames: sharedEmptyWrittenTypeNames, selfSpelledParams: NoParamPositions), returnType: returnType, nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.job.path, synthesized: true, role: FunctionDeclarationRole.ordinary)
 		self.commitRangeChecks(helperName)
 	end 'parseDefaultHelperBody'
 
@@ -34898,7 +34934,7 @@ export type Parser
 			// ⭐ THE BRAND THE DECLARATION SPELLED (`xs Xs`), stamped on the parameter's own slot and carried by the
 			// binding: the callee's body reads it at every door, and the caller's half is the signature's
 			// `paramDeclaredNames` column (`paramDeclaredNamesOf`), read off the same token.
-			view paramBrand = self.declaredParamBrand(paramTypeStarts, position: i, resolved: paramType)
+			view paramBrand = self.declaredBrandAt(paramTypeStartAt(paramTypeStarts, position: i), resolved: paramType)
 			self.brandValue(paramId, brand: paramBrand)
 
 			// Parameter `i` owns ValueId `i`; record its declaration span so the register-pressure
@@ -35400,14 +35436,17 @@ export type Parser
 
 				// Read BEFORE the arguments, because the reader consumes the `(` that is the answer.
 				let delimited = self.at(TokenKind.leftParen)
-				bindings.push(try self.parseConformanceWithArgs(nameTok.value, spelling: ConformanceArgSpelling.asWritten, spellings: NameRoster.create()))
+				var spellings = NameRoster.create()
+				var types = RequirementTypeArray.create()
+				_ = try self.parseConformanceWithArgs(nameTok.value, reading: ParenthesizedWithReading.itemList, spellings: spellings, types: types)
+				bindings.push(ConformanceBinding.create(spellings, types: types))
 
 				if not delimited and not self.conformanceArityResolves(nameTok.value) 'theArityIsNotKnownYet'
 					self.skipRestOfImplementsClause()
 					break
 				end 'theArityIsNotKnownYet'
 			end 'bindsAssociatedTypes' else 'bindsNothing'
-				bindings.push(NameRoster.create())
+				bindings.push(sharedEmptyConformanceBinding)
 			end 'bindsNothing'
 
 			if not self.at(TokenKind.comma) 'lastInterface'
@@ -35656,19 +35695,17 @@ export type Parser
 		let headIndex = self.pos
 		let tok = try self.consume(TokenKind.identifier)
 
-		// ⭐⭐ **AN INTERFACE EXTENSION'S ASSOCIATED TYPE IS THE CONFORMER'S BINDING FOR IT, SUBSTITUTED
-		// HERE AS A NAME AND RESOLVED BY EVERY ARM BELOW UNCHANGED (conditional extensions).** `extension
-		// HasItems where Element is Equatable` writing `function has(target Element)` is parsed once per
-		// conformer, and `IntList implements HasItems with Integer` binds `Element` to `Integer` — so what
-		// the body means by `Element` is exactly what it would have meant by `Integer`, and the honest way
-		// to say that is to resolve the name the binding names.
+		// ⭐⭐ **AN INTERFACE EXTENSION'S ASSOCIATED TYPE IS THE CONFORMER'S BINDING FOR IT (conditional
+		// extensions).** `extension HasItems where Element is Equatable` writing `function has(target
+		// Element)` is parsed once per conformer, and `IntList implements HasItems with Integer` binds
+		// `Element` to `Integer` — so what the body means by `Element` is the binding's stored type, resolved
+		// in the file the binding was written in.
 		//
-		// ⚠⚠ **IT IS A NAME SUBSTITUTION AND *NOT* AN ENTRY IN `enclosingTypeParams`, AND THE DIFFERENCE IS
-		// A SILENT WRONG TYPE.** Installing the interface's associated names as type parameters would make
-		// `Element` resolve to `typeParameter(0)` — position 0 of the CONFORMER's own `uses` list, a
-		// different type entirely, and one nothing downstream would question. Substituting the name instead
-		// means the arms below answer for `Integer` / `HashItem` / `NotEq` exactly as they answer for a
-		// hand-written annotation, so an alias stays a ranged alias and a struct stays a struct.
+		// ⚠⚠ **IT IS *NOT* AN ENTRY IN `enclosingTypeParams`, AND THE DIFFERENCE IS A SILENT WRONG TYPE.**
+		// Installing the interface's associated names as type parameters would make `Element` resolve to
+		// `typeParameter(0)` — position 0 of the CONFORMER's own `uses` list, a different type entirely, and
+		// one nothing downstream would question. The binding keeps an alias a ranged alias and a struct a
+		// struct.
 		//
 		// ⚠ **BARE NAMES ONLY.** A dotted chain's head is a namespace or an instance
 		// (`lib.fmt.Score`, `StrWrapper.Idx`), never an associated type, and rewriting one would retarget a
@@ -35682,7 +35719,13 @@ export type Parser
 			end 'binding'
 		end 'insideAGenericInstance'
 
-		let name = tok.value if qualifierDots > 0 else self.genericBoundTypeName(try self.extensionAssociatedTypeBinding(tok.value) otherwise tok.value)
+		if qualifierDots == 0 'anUnqualifiedName'
+			if let bound = try self.extensionAssociatedType(tok.value) 'anAssociatedName'
+				return bound
+			end 'anAssociatedName'
+		end 'anUnqualifiedName'
+
+		let name = tok.value if qualifierDots > 0 else self.genericBoundTypeName(tok.value)
 
 		// Recorded HERE, above every arm, rather than in the arm that finally decides what the name
 		// denotes: a name written in a type position is a USE whichever way it resolves, and hooking
@@ -35798,8 +35841,7 @@ export type Parser
 		// conformer list as the target alone), which is exactly what makes an extension's `T` the same `T`
 		// as the type's own. An INTERFACE extension's body (`openExtensionBodyScope`) is the fourth door
 		// and it installs the CONFORMER's list under `enterTypeScope(conformer)` — never the interface's
-		// associated names, which reach a body as a NAME SUBSTITUTION and are resolved by whichever arm
-		// the substituted name lands on.
+		// associated names, which reach a body as the conformer's binding (`extensionAssociatedType`).
 		//
 		// ⚠ The digest is a pure function of the two names, so the tolerant sweep and the real parse
 		// compute the SAME token with no registry between them — which is the property this arm's
@@ -40772,17 +40814,15 @@ export type Parser
 	// Refuse a holding whose associated type reaches a requirement's PARAMETER — see
 	// `DeclaredStoragePosition.associatedTypeBinding` for why that direction alone is unsupplyable.
 	//
-	// ⚠ **IT IS ASKED OF THE TRANSITIVE REQUIREMENT LIST** (`requirementTakesType`, the same door E3119/E3120
-	// read), so a parameter projected in through `extends` is refused too. A scan of `iface.methods` alone would be
-	// a measured escape for those checks and the identical one here.
+	// ⚠ **IT IS ASKED OF THE TRANSITIVE REQUIREMENT LIST** (`requirementTakesAssociatedType`, the same door
+	// E3119/E3120 read), so a parameter projected in through `extends` is refused too. A scan of
+	// `iface.methods` alone would be a measured escape for those checks and the identical one here.
 	function requireHeldAssociatedTypeIsOnlyReturned(iface IrInterface, position FieldIndex, heldAt ByteArray, argTok Token) throws SourceParseError
 		if position >= iface.associatedTypeNames.count() as FieldIndex 'pastThisInterfacesUsesNames'
 			return
 		end 'pastThisInterfacesUsesNames'
 
-		let associated = try iface.associatedTypeNames.get(position) otherwise panic("requireHeldAssociatedTypeIsOnlyReturned: associatedTypeNames.get OOB at {position} below count {iface.associatedTypeNames.count()} — the guard above excludes it")
-
-		if not requirementTakesType(self.signatures.interfaceMap(), iface: iface, name: associated) 'onlyEverAResult'
+		if not requirementTakesAssociatedType(self.signatures.interfaceMap(), iface: iface, position: position as ElementIndex, signatures: self.signatures) 'onlyEverAResult'
 			return
 		end 'onlyEverAResult'
 
@@ -41089,9 +41129,9 @@ export type Parser
 		return self.bodyState.deferredProvenance
 	end 'recycledDeferredProvenance'
 
-	function beginDeclaredBody(firstValueId ValueId, returnSpelling ByteArray, mayReturnAGlobalAlias bool, returnAlias DeclaredAlias, paramSites RangeCheckParamSiteArray, layoutParam HiddenWordParam, countParam HiddenWordParam, nascentSelfFactory bool, kind EnclosingBodyKind, witnessParamBase ValueId, witnessParamCount ParamCount)
+	function beginDeclaredBody(firstValueId ValueId, returnSpelling ByteArray, returnBrand ByteArray, mayReturnAGlobalAlias bool, returnAlias DeclaredAlias, paramSites RangeCheckParamSiteArray, layoutParam HiddenWordParam, countParam HiddenWordParam, nascentSelfFactory bool, kind EnclosingBodyKind, witnessParamBase ValueId, witnessParamCount ParamCount)
 		self.requireNoAwaitHeldAcrossFunctions()
-		self.bodyState = FunctionBodyState.fresh(self.anchors, firstValueId: firstValueId, returnSpelling: returnSpelling, provenance: self.recycledDeferredProvenance(), mayReturnAGlobalAlias: mayReturnAGlobalAlias, closureEnv: ClosureEnvParam.none, returnAlias: returnAlias, paramSites: paramSites, layoutParam: layoutParam, countParam: countParam, nascentSelfFactory: nascentSelfFactory, kind: kind)
+		self.bodyState = FunctionBodyState.fresh(self.anchors, firstValueId: firstValueId, returnSpelling: returnSpelling, returnBrand: returnBrand, provenance: self.recycledDeferredProvenance(), mayReturnAGlobalAlias: mayReturnAGlobalAlias, closureEnv: ClosureEnvParam.none, returnAlias: returnAlias, paramSites: paramSites, layoutParam: layoutParam, countParam: countParam, nascentSelfFactory: nascentSelfFactory, kind: kind)
 		self.declaringWitnessParamBase = witnessParamBase
 		self.declaringWitnessParamCount = witnessParamCount
 
@@ -42003,7 +42043,7 @@ export type Parser
 	end 'declaredBrand'
 
 	function declaredParamSpelling(paramTypeStarts TokenIndexArray, position ElementIndex, resolved MaxonType) returns ByteArray
-		let brand = self.declaredParamBrand(paramTypeStarts, position: position, resolved: resolved)
+		let brand = self.declaredBrandAt(paramTypeStartAt(paramTypeStarts, position: position), resolved: resolved)
 
 		if not brand.isEmpty() 'aBrandedParameter'
 			return brand
@@ -42019,12 +42059,23 @@ export type Parser
 		end 'spelling'
 	end 'declaredParamSpelling'
 
-	function declaredParamBrand(paramTypeStarts TokenIndexArray, position ElementIndex, resolved MaxonType) returns ByteArray
-		match self.writtenTypeNameAt(paramTypeStartAt(paramTypeStarts, position: position)) 'spelling'
-			named(name) then return self.declaredBrand(name, resolved: resolved)
+	function declaredBrandAt(typeStart ElementIndex, resolved MaxonType) returns ByteArray
+		if maxonTypeTag(resolved) != ValueTypeTag.genericInstance 'notAnInstance'
+			return EmptySourceText
+		end 'notAnInstance'
+
+		match self.writtenTypeNameAt(typeStart) 'spelling'
+			named(name) then return ownedBrand(self.declaredBrand(name, resolved: resolved))
 			unnamed then return EmptySourceText
 		end 'spelling'
-	end 'declaredParamBrand'
+	end 'declaredBrandAt'
+
+	function returnBrandOf(returnType MaxonReturnType, returnTypeStart ElementIndex) returns ByteArray
+		return match returnType 'r'
+			void gives EmptySourceText
+			value(inner) gives self.declaredBrandAt(returnTypeStart, resolved: inner)
+		end 'r'
+	end 'returnBrandOf'
 
 	// ⭐⭐ **A BRAND IS A FILE-SCOPE GENERIC ALIAS, AND AN INNER ALIAS BRANDS NOTHING.** `typealias Xs = Array
 	// with Integer` at file scope names a type an author can write at every door — a parameter, a cast target,
@@ -42727,7 +42778,7 @@ export type Parser
 		let value = try self.destinationTemporary(returned, declared: declaredType, anchor: anchor)
 		view declaredReturnName = self.aggregateNameOf(declaredTag, nameId: declaredNameId)
 		view returnedName = self.aggregateNameOf(retTag, nameId: self.valueNameId(value))
-		view returnBrand = self.declaredBrand(self.bodyState.functionReturnSpelling, resolved: declaredType)
+		view returnBrand = self.bodyState.functionReturnBrand
 
 		if not returnBrand.isEmpty() and retTag == ValueTypeTag.genericInstance 'aBrandedReturnMayMeetAnUnadoptedRead'
 			self.recordUnadoptedBrandDoor(value, expected: returnBrand, door: FunctionTypeDoor.returned, placeName: func.name, owner: SlotOwner.unowned, anchor: anchor)
@@ -53650,7 +53701,7 @@ export type Parser
 		for i in 0 upto candidates.count() 'eachCandidate'
 			let candidate = try candidates.get(i) otherwise panic("witnessProtocolTarget: candidates.get OOB at {i} below count {candidates.count()}")
 
-			if witnessRequirementTakesReceiver(candidate) and candidate.paramTypeNames.count() == ProtocolMethodArity 'theProtocolShape'
+			if witnessRequirementTakesReceiver(candidate) and candidate.paramTypes.count() == ProtocolMethodArity 'theProtocolShape'
 				protocolShaped.push(candidate)
 			end 'theProtocolShape'
 		end 'eachCandidate'
@@ -65921,7 +65972,7 @@ export type Parser
 		// Typed through `interfaceReturnMaxonType`, the SAME typer `emitBuiltinConformanceCall` gives
 		// `i.compare(j)`'s result, so the `Ordering` this hands `emitOrderingVerdict` carries the enum's
 		// `named` tag exactly as a witness dispatch's does.
-		let orderingType = self.interfaceReturnMaxonType(OrderingTypeName)
+		let orderingType = self.interfaceReturnMaxonType(RequirementType.ofNominal(self.signatures.interfaceMap().synthesizedNominalOf(OrderingTypeName)))
 		let ordering = self.emitRuntimeCall(CharCmpName, args: pairArgs(lhs, second: rhs), resultTag: maxonTypeTag(orderingType), resultNameId: typeNameIdOf(orderingType), range: SourceRange.ofToken(opTok))
 
 		return self.emitOrderingVerdict(ordering, op: op, opTok: opTok)
@@ -66074,7 +66125,7 @@ export type Parser
 			// two DISTINCT conformers' impls, so "they are both `Equatable`" does not make them interchangeable
 			// — the operator would silently take whichever was written first. Same reject as the `.method()`
 			// form's, for the same reason.
-			ambiguous(first, second) then throw SourceParseError.ambiguousWitnessDispatch(String.from(method.name), provider: self.witnessDispatchProviderPhrase(receiver), argCount: method.paramTypeNames.count() as ParamCount, first: renderWitnessRequirement(first, signatures: self.signatures), second: renderWitnessRequirement(second, signatures: self.signatures), line: opTok.line, column: opTok.column)
+			ambiguous(first, second) then throw SourceParseError.ambiguousWitnessDispatch(String.from(method.name), provider: self.witnessDispatchProviderPhrase(receiver), argCount: method.paramTypes.count() as ParamCount, first: renderWitnessRequirement(first, signatures: self.signatures), second: renderWitnessRequirement(second, signatures: self.signatures), line: opTok.line, column: opTok.column)
 		end 'pick'
 	end 'requireOperatorWitness'
 
@@ -66145,14 +66196,14 @@ export type Parser
 	// the protocol's own formals. So a missing actual is a compiler defect rather than a program's, and it
 	// panics instead of quietly passing an under-supplied dispatch through to the emit.
 	function requireGenuineSelfArgs(target WitnessDispatchTarget, args ValueIdArray, what String, receiverParam TypeParamId, errorTok Token) throws SourceParseError
-		for j in 0 upto target.paramTypeNames.count() 'eachFormal'
-			let formalTypeName = try target.paramTypeNames.get(j) otherwise panic("requireGenuineSelfArgs: paramTypeNames.get OOB at {j}")
+		for j in 0 upto target.paramTypes.count() 'eachFormal'
+			let formalType = try target.paramTypes.get(j) otherwise panic("requireGenuineSelfArgs: paramTypes.get OOB at {j}")
 
-			if not formalTypeName.equals(InterfaceSelfTypeName) 'notSelfFormal'
+			if not formalType.isSelf() 'notSelfFormal'
 				continue
 			end 'notSelfFormal'
 
-			let actual = try args.get(j + 1) otherwise panic("requireGenuineSelfArgs: formal {j} of '{what}' has no actual — args holds {args.count()} entries (receiver + {args.count() - 1}) for {target.paramTypeNames.count()} formals, so the caller's arity check did not run")
+			let actual = try args.get(j + 1) otherwise panic("requireGenuineSelfArgs: formal {j} of '{what}' has no actual — args holds {args.count()} entries (receiver + {args.count() - 1}) for {target.paramTypes.count()} formals, so the caller's arity check did not run")
 
 			if not self.isReceiverTypeParamValue(actual, receiverParam: receiverParam) 'notSelfArg'
 				throw SourceParseError.witnessSelfArgNotTypeParam(what, typeParamName: String.from(self.typeParamDisplayName(receiverParam)), got: self.selfArgActualDescription(actual), line: errorTok.line, column: errorTok.column)
@@ -66181,10 +66232,10 @@ export type Parser
 			return
 		end 'constrainedTypeParameter'
 
-		for j in 0 upto target.paramTypeNames.count() 'eachFormal'
-			let formalTypeName = try target.paramTypeNames.get(j) otherwise panic("requireWitnessSelfArgs: paramTypeNames.get OOB at {j} below count {target.paramTypeNames.count()}")
+		for j in 0 upto target.paramTypes.count() 'eachFormal'
+			let formalType = try target.paramTypes.get(j) otherwise panic("requireWitnessSelfArgs: paramTypes.get OOB at {j} below count {target.paramTypes.count()}")
 
-			if not formalTypeName.equals(InterfaceSelfTypeName) 'notSelfFormal'
+			if not formalType.isSelf() 'notSelfFormal'
 				continue
 			end 'notSelfFormal'
 
@@ -66909,17 +66960,10 @@ export type Parser
 		let anchor = self.tokenAt(start)
 		let element = try self.parseTypeReference(voice)
 		try self.requireStorableDeclaredType(element, position: DeclaredStoragePosition.tupleElement, line: anchor.line, column: anchor.column)
-		brands.push(self.writtenElementBrand(start, resolved: element))
+		brands.push(self.declaredBrandAt(start, resolved: element))
 		sites.noteWrittenType(anchor)
 		return element
 	end 'readTupleElementType'
-
-	function writtenElementBrand(start ElementIndex, resolved MaxonType) returns ByteArray
-		return match self.writtenTypeNameAt(start) 'spelling'
-			named(name) gives self.declaredBrand(name, resolved: resolved)
-			unnamed gives EmptySourceText
-		end 'spelling'
-	end 'writtenElementBrand'
 
 	function parseTupleTypeReference(voice BarePrimitiveVoice) returns MaxonType throws SourceParseError
 		let openTok = try self.consume(TokenKind.leftParen)
@@ -74749,7 +74793,7 @@ export type Parser
 			return BuiltinConformerMethodLookup.notSupplied
 		end 'theEnumDeclaresIt'
 
-		return builtinConformerMethod(enumName, methodName: memberName, discovered: self.signatures.discoveredConformerOf(enumName))
+		return builtinConformerMethod(enumName, methodName: memberName, discovered: self.signatures.discoveredConformerOf(enumName), interfaces: self.signatures.interfaceMap())
 	end 'enumGrantedConformanceMethod'
 
 	// ⭐ **EMIT ONE GRANTED-CONFORMANCE CALL ON AN ENUM RECEIVER** — the cursor sits on the member NAME, which
@@ -76306,7 +76350,7 @@ export type Parser
 		// would decline to install, and the day `String` gains `Comparable` its `compare()` opens with no edit
 		// here. A name the row does not supply falls through to the roster below, which is what keeps a typo a
 		// typo rather than a permissions message.
-		match builtinConformerMethod(StringConformerName, methodName: methodTok.value, discovered: DiscoveredConformer.none) 'conformanceMethod'
+		match builtinConformerMethod(StringConformerName, methodName: methodTok.value, discovered: DiscoveredConformer.none, interfaces: self.signatures.interfaceMap()) 'conformanceMethod'
 			supplied(method) then return try self.emitBuiltinConformanceCall(func, receiver: recv.value, target: DirectConformanceTarget.builtinValue(BuiltinConformer.stringConformer), method: method, baseTok: baseTok, methodTok: methodTok)
 			notSupplied then break
 		end 'conformanceMethod'
@@ -77640,7 +77684,7 @@ export type Parser
 			return try self.emitPrimitiveClone(recv.value, methodTok: methodTok)
 		end 'cloneableLowering'
 
-		match builtinConformerMethod(typeName, methodName: methodTok.value, discovered: DiscoveredConformer.none) 'lookup'
+		match builtinConformerMethod(typeName, methodName: methodTok.value, discovered: DiscoveredConformer.none, interfaces: self.signatures.interfaceMap()) 'lookup'
 			supplied(method) then return try self.emitBuiltinConformanceCall(func, receiver: recv.value, target: DirectConformanceTarget.builtinValue(conformer), method: method, baseTok: recv.anchor, methodTok: methodTok)
 			notSupplied then throw SourceParseError.unsupported("'{String.from(typeName)}' has no method named '{String.from(methodTok.value)}' — a builtin-typed receiver supplies {builtinConformerDispatchMethodNames(typeName)}", line: methodTok.line, column: methodTok.column)
 		end 'lookup'
@@ -77738,13 +77782,13 @@ export type Parser
 		// is the compiler's, and reporting it would name an argument the author never wrote).
 		let userArgs = args.count() as ParamCount - BuiltinConformanceReceiverArgs
 
-		if userArgs != method.paramTypeNames.count() as ParamCount 'arity'
-			throw SourceParseError.builtinArity(String.from(method.name), expected: method.paramTypeNames.count() as ParamCount, got: userArgs, line: methodTok.line, column: methodTok.column)
+		if userArgs != method.paramTypes.count() as ParamCount 'arity'
+			throw SourceParseError.builtinArity(String.from(method.name), expected: method.paramTypes.count() as ParamCount, got: userArgs, line: methodTok.line, column: methodTok.column)
 		end 'arity'
 
 		try self.requireBuiltinConformanceSelfArgs(method, args: args, target: target, methodTok: methodTok)
 
-		let resultType = self.interfaceReturnMaxonType(method.returnTypeName)
+		let resultType = self.interfaceReturnMaxonType(method.returnType)
 		return self.emitRuntimeCall(self.conformanceImplNameOf(target, methodName: method.name), args: args, resultTag: maxonTypeTag(resultType), resultNameId: typeNameIdOf(resultType), range: SourceRange.between(baseTok, last: rparenTok))
 	end 'emitBuiltinConformanceCall'
 
@@ -77788,10 +77832,10 @@ export type Parser
 	//
 	// Interface formal `j` is actual `j + BuiltinConformanceReceiverArgs`; arity was checked above.
 	function requireBuiltinConformanceSelfArgs(method InterfaceMethodSig, args ValueIdArray, target DirectConformanceTarget, methodTok Token) throws SourceParseError
-		for j in 0 upto method.paramTypeNames.count() 'eachFormal'
-			let formalTypeName = try method.paramTypeNames.get(j) otherwise panic("requireBuiltinConformanceSelfArgs: paramTypeNames.get OOB at {j} below count {method.paramTypeNames.count()}")
+		for j in 0 upto method.paramTypes.count() 'eachFormal'
+			let formalType = try method.paramTypes.get(j) otherwise panic("requireBuiltinConformanceSelfArgs: paramTypes.get OOB at {j} below count {method.paramTypes.count()}")
 
-			if not formalTypeName.equals(InterfaceSelfTypeName) 'notSelfFormal'
+			if not formalType.isSelf() 'notSelfFormal'
 				continue
 			end 'notSelfFormal'
 
@@ -79096,7 +79140,7 @@ export type Parser
 		// ⚠ **A DIRECT CALL CANNOT REACH IT, WHICH IS WHY IT SURVIVED REVIEW.** `[code(), code()]` over a
 		// `function code() returns ExitCode` compiles, because a direct call's result is not `exitCode`-tagged.
 		// `wordSlotStorageType`'s header names the two doors that DO mint one — `mintIndirectCallResult` (an
-		// indirect call through a function alias) and `interfaceSpelledType` (an interface method
+		// indirect call through a function alias) and `interfaceReturnMaxonType` (an interface method
 		// `returns ExitCode`) — and both reach this column. That header is also this arm's ANSWER: it maps
 		// `exitCode` to `MaxonType.integer` at the env-slot sink because an `exitCode` lowers to `StdType.u32`,
 		// for which `accessWidthFor` has no memory-access form and panics on every backend. An
@@ -81596,7 +81640,7 @@ export type Parser
 	// `isVoid` is derived here from `target` rather than passed in, so no caller can spell its own
 	// answer; the op's void-ness decides which register the lowering reads a result from.
 	function emitWitnessDispatch(result ValueId, args ValueIdArray, blames WriteBlameArray, target WitnessDispatchTarget, range SourceRange, siteTok Token)
-		let isVoid = target.returnTypeName.equals(InterfaceVoidTypeName)
+		let isVoid = target.returnType.isVoid()
 		let placed = self.floatWidenedWitnessArgs(target, args: args, siteTok: siteTok)
 
 		if self.witnessArgumentsAreChecked(placed, target: target, anchor: siteTok) 'theQuantityDoorIsKept'
@@ -81618,16 +81662,16 @@ export type Parser
 			self.recordBrandHandOver(box, kind: BrandRecordKind.handOverWitness, opIndex: opIndex, argIndex: position as ParamCount, label: EmptySourceText, range: range)
 			let varType = try self.handedCellTypeOf(box) otherwise continue
 			view varAlias = try self.rangeCheckedAliasOf(varType) otherwise continue
-			let formalName = try target.paramTypeNames.get(position - WitnessReceiverArgCount) otherwise panic("guardCellsTheRequirementMayWiden: paramTypeNames.get OOB at {position - WitnessReceiverArgCount}")
+			let formal = try target.paramTypes.get(position - WitnessReceiverArgCount) otherwise panic("guardCellsTheRequirementMayWiden: paramTypes.get OOB at {position - WitnessReceiverArgCount}")
 
-			if self.interfaceFormalMayNotFitWithin(varAlias, target: target, formalName: formalName) 'aWiderFormal'
+			if self.interfaceFormalMayNotFitWithin(varAlias, target: target, formal: formal) 'aWiderFormal'
 				self.emitCopyBackGuard(box, varType: varType, alias: varAlias, range: range)
 			end 'aWiderFormal'
 		end 'eachFormal'
 	end 'guardCellsTheRequirementMayWiden'
 
-	function interfaceFormalMayNotFitWithin(varAlias RangedTypeAlias, target WitnessDispatchTarget, formalName ByteArray) returns bool
-		let formalAlias = try self.signatures.interfaceFormalAlias(target.declaringInterfaceName, formalName: formalName) otherwise return true
+	function interfaceFormalMayNotFitWithin(varAlias RangedTypeAlias, target WitnessDispatchTarget, formal RequirementType) returns bool
+		let formalAlias = try self.signatures.requirementRangedAlias(formal, interfaceName: target.declaringInterfaceName) otherwise return true
 		return not rangeCoversDenotedRange(varAlias, source: DeclaredAlias.declared(formalAlias.clone()))
 	end 'interfaceFormalMayNotFitWithin'
 
@@ -81697,7 +81741,7 @@ export type Parser
 	// Does ANY formal of the dispatched interface method declare `float`? The fast-path predicate above, kept
 	// beside the per-formal test so the two read the same constant.
 	function witnessTargetHasFloatFormal(target WitnessDispatchTarget) returns bool
-		for j in 0 upto target.paramTypeNames.count() 'eachFormal'
+		for j in 0 upto target.paramTypes.count() 'eachFormal'
 			if self.witnessFormalIsFloat(target, formalIndex: j) 'found'
 				return true
 			end 'found'
@@ -81709,10 +81753,9 @@ export type Parser
 	// Is interface formal `formalIndex` declared `float`? Both askers stay within the declared formals — one
 	// loops the formals directly, the other loops actuals a checked arity has made equinumerous with them
 	// (see `floatWidenedWitnessArgs`) — so an out-of-range index is a compiler defect, not an arity mismatch
-	// to absorb. The name is spelled by `FloatConformerName`, the same constant `interfaceSpelledType`
-	// reads it by.
+	// to absorb.
 	function witnessFormalIsFloat(target WitnessDispatchTarget, formalIndex ElementIndex) returns bool
-		return (try target.paramTypeNames.get(formalIndex) otherwise panic("witnessFormalIsFloat: paramTypeNames.get OOB at {formalIndex} below count {target.paramTypeNames.count()} — a dispatch reaching here has one actual per formal")).equals(FloatConformerName)
+		return (try target.paramTypes.get(formalIndex) otherwise panic("witnessFormalIsFloat: paramTypes.get OOB at {formalIndex} below count {target.paramTypes.count()} — a dispatch reaching here has one actual per formal")).isFloat()
 	end 'witnessFormalIsFloat'
 
 	// The requirements `<receiver>.<method>(…)` could bind, or the "no constraint provides it" reject when the
@@ -81993,7 +82036,7 @@ export type Parser
 				continue
 			end 'reachedByAnEarlierConstraint'
 
-			candidates.push(WitnessDispatchTarget.create(witness, methodIndex: slotIndex as WitnessMethodIndex, interfaceDeclIndex: interfaceDeclIndex, returnTypeName: slot.method.returnTypeName, paramTypeNames: slot.method.paramTypeNames, throwsClause: slot.method.throwsClause, methodName: methodName, paramNames: slot.method.paramNames, declaringInterfaceName: slot.sourceInterfaceName, isStatic: slot.method.isStatic))
+			candidates.push(WitnessDispatchTarget.create(witness, methodIndex: slotIndex as WitnessMethodIndex, interfaceDeclIndex: interfaceDeclIndex, returnTypeName: slot.method.returnTypeName, returnType: slot.method.returnType, paramTypeNames: slot.method.paramTypeNames, paramTypes: slot.method.paramTypes, throwsClause: slot.method.throwsClause, methodName: methodName, paramNames: slot.method.paramNames, declaringInterfaceName: slot.sourceInterfaceName, isStatic: slot.method.isStatic))
 		end 'eachSlot'
 	end 'appendInterfaceDispatchCandidates'
 
@@ -82038,7 +82081,7 @@ export type Parser
 		for i in 0 upto candidates.count() 'eachCandidate'
 			let candidate = try candidates.get(i) otherwise panic("pickWitnessDispatchByArity: candidates.get OOB at {i} below count {candidates.count()}")
 
-			if candidate.paramTypeNames.count() as ParamCount == argCount 'takesThisMany'
+			if candidate.paramTypes.count() as ParamCount == argCount 'takesThisMany'
 				matching.push(candidate)
 			end 'takesThisMany'
 		end 'eachCandidate'
@@ -82091,7 +82134,7 @@ export type Parser
 	// an interface's declared return type is already concrete, and the one that is not (`Self`) is answered
 	// by the receiver rather than substituted afterwards.
 	function mintWitnessDispatchResult(target WitnessDispatchTarget, receiver ValueId, methodTok Token, resultUsed bool) returns ValueId throws SourceParseError
-		if target.returnTypeName.equals(InterfaceVoidTypeName) 'voidReturn'
+		if target.returnType.isVoid() 'voidReturn'
 			if resultUsed 'noValueToUse'
 				throw SourceParseError.voidCallResultUsed(String.from(methodTok.value), line: methodTok.line, column: methodTok.column)
 			end 'noValueToUse'
@@ -82109,7 +82152,7 @@ export type Parser
 	// `enrolOwnedCallTemp` exists at all.
 	function witnessDispatchValueResult(target WitnessDispatchTarget, receiver ValueId, methodTok Token) returns ValueId
 		// A `Self` return is the receiver's own type (the shared body cannot know the concrete one).
-		if target.returnTypeName.equals(InterfaceSelfTypeName) 'selfReturn'
+		if target.returnType.isSelf() 'selfReturn'
 			return self.mintSelfReturnedWitnessResult(receiver)
 		end 'selfReturn'
 
@@ -82138,18 +82181,25 @@ export type Parser
 		// Minted as the interface's own file reads its text, so a float is lifted and a contested ranged
 		// name re-spelled once, the crossing a direct call's result makes from its callee's file. Read as
 		// this file's, a same-named narrower alias here elides the return guard.
-		return self.mintOwnedCallResult(self.unboundRequirementResultType(target), scopeFilePath: self.signatures.declaringInterface(target.declaringInterfaceName).declFilePath)
+		let result = self.mintOwnedCallResult(self.unboundRequirementResultType(target), scopeFilePath: self.signatures.declaringInterface(target.declaringInterfaceName).declFilePath)
+
+		if self.tagOf(result) == ValueTypeTag.genericInstance and not target.returnType.brand.isEmpty() 'aBrandedResult'
+			self.brandValue(result, brand: target.returnType.brand)
+		end 'aBrandedResult'
+
+		return result
 	end 'witnessDispatchValueResult'
 
 	// An associated type no receiver binds is named `<DeclaringInterface>.<Item>`: under its bare name
 	// a program typealias of that name would capture it, and the result would carry that alias's
 	// range.
 	function unboundRequirementResultType(target WitnessDispatchTarget) returns MaxonType
-		if not self.signatures.interfaceDeclaresAssociatedType(target.declaringInterfaceName, name: target.returnTypeName) 'aProgramTypeName'
-			return self.interfaceSpelledType(target.returnTypeName)
-		end 'aProgramTypeName'
+		if target.returnType.isTypeParameter() 'anAssociatedType'
+			let member = try associatedNameOf(target.returnType, signatures: self.signatures) otherwise panic("unboundRequirementResultType: the type parameter '{String.from(target.returnTypeName)}' returned by '{String.from(target.declaringInterfaceName)}.{String.from(target.methodName)}' has no owner — `recordInterfaceDeclaration` files every associated type of an interface as the sweep folds")
+			return MaxonType.named(self.artifact.typeNames.intern(joinQualifiedName(target.declaringInterfaceName, member: member)))
+		end 'anAssociatedType'
 
-		return MaxonType.named(self.artifact.typeNames.intern(joinQualifiedName(target.declaringInterfaceName, member: target.returnTypeName)))
+		return resolvedRequirementType(target.returnType, typeNames: self.artifact.typeNames, signatures: self.signatures)
 	end 'unboundRequirementResultType'
 
 	// ⭐⭐ **WHAT THE RECEIVER'S `with` ARGUMENTS SAY THIS ASSOCIATED-TYPE RETURN IS.** `current()` on a
@@ -82181,7 +82231,7 @@ export type Parser
 
 		match lookupInterface(self.signatures.interfaceMap(), name: dispatched) 'base'
 			notFound then throw MapError.keyNotFound
-			found(iface) then return try self.instanceBoundAssociatedType(claim, iface: iface, returnTypeName: target.returnTypeName)
+			found(iface) then return try self.instanceBoundAssociatedType(claim, iface: iface, requirement: target.returnType)
 		end 'base'
 	end 'associatedReturnThroughReceiverInstance'
 
@@ -82191,8 +82241,8 @@ export type Parser
 	// ⚠ The argument crosses out of the INDEX's interner through `resolvedSlotType`, exactly as
 	// `slotTypeThroughReceiver` crosses a substituted field type — an `adoptType` alone would leave a
 	// sweep-recorded `named` leaf that reads as an integer (see that door).
-	function instanceBoundAssociatedType(claim ExistentialClaim, iface IrInterface, returnTypeName ByteArray) returns MaxonType throws MapError
-		let position = try iface.associatedTypeNames.positionOfName(returnTypeName)
+	function instanceBoundAssociatedType(claim ExistentialClaim, iface IrInterface, requirement RequirementType) returns MaxonType throws MapError
+		let position = try associatedPositionIn(requirement, iface: iface, signatures: self.signatures)
 
 		if position >= self.signatures.genericInstanceArgCount(claim.instance) 'boundNothingHere'
 			throw MapError.keyNotFound
@@ -82224,37 +82274,22 @@ export type Parser
 
 		match lookupInterface(self.signatures.interfaceMap(), name: dispatched) 'base'
 			notFound then throw MapError.keyNotFound
-			found(iface) then return try self.constraintBoundAssociatedType(receiver, iface: iface, returnTypeName: target.returnTypeName)
+			found(iface) then return try self.constraintBoundAssociatedType(receiver, iface: iface, requirement: target.returnType)
 		end 'base'
 	end 'associatedReturnThroughConstraintBinding'
 
 	// The two lookups the answer above is — `instanceBoundAssociatedType`'s shape over the constraint list
 	// rather than over an instance's arguments, split out for `heldAssociatedReturnIn`'s reason.
-	function constraintBoundAssociatedType(receiver ValueId, iface IrInterface, returnTypeName ByteArray) returns MaxonType throws MapError
-		let position = try iface.associatedTypeNames.positionOfName(returnTypeName)
+	function constraintBoundAssociatedType(receiver ValueId, iface IrInterface, requirement RequirementType) returns MaxonType throws MapError
+		let position = try associatedPositionIn(requirement, iface: iface, signatures: self.signatures)
 		let bindings = constrainedParamAssociatedBindings(self.signatures, token: self.valueTypeParamId(receiver), interfaceName: iface.name)
 
 		if position >= bindings.count() 'boundNothingHere'
 			throw MapError.keyNotFound
 		end 'boundNothingHere'
 
-		return self.constraintBindingResultType(try bindings.get(position) otherwise panic("constraintBoundAssociatedType: bindings.get OOB at {position} below count {bindings.count()}"))
+		return resolvedBindingType(try bindings.get(position) otherwise panic("constraintBoundAssociatedType: bindings.get OOB at {position} below count {bindings.count()}"), typeNames: self.artifact.typeNames, signatures: self.signatures)
 	end 'constraintBoundAssociatedType'
-
-	// ⭐ **WHAT A CONSTRAINT'S BINDING DENOTES IN THE DECLARATION THAT WROTE IT.** A binding is a
-	// rendered type name, and inside a shared generic body the interesting ones name the enclosing
-	// declaration's OWN parameters — `where Source is Iterator with Element` inside `type
-	// WithIterIterator uses Source, Element` binds a `typeParameter`, which is what makes the declared
-	// `returns (Source, Element)` and the built tuple ONE type. Everything else is a concrete name and
-	// takes `interfaceSpelledType`, the SAME typer the fallback in `witnessDispatchValueResult` uses,
-	// so the two answers differ only in what they are answering ABOUT.
-	function constraintBindingResultType(binding ByteArray) returns MaxonType
-		if self.enclosingTypeParams.contains(binding) 'namesAnEnclosingParameter'
-			return MaxonType.typeParameter(typeParamTokenFor(self.enclosingTypeName(), paramName: binding))
-		end 'namesAnEnclosingParameter'
-
-		return self.interfaceSpelledType(binding)
-	end 'constraintBindingResultType'
 
 	// The OWNER type's file, not this call's: a `where` clause is stored only from the type
 	// declaration, while the dispatch may be written in an extension in another file.
@@ -82289,14 +82324,14 @@ export type Parser
 
 		match lookupInterface(self.signatures.interfaceMap(), name: dispatched) 'base'
 			notFound then throw AbsentError.absent
-			found(iface) then return try self.heldAssociatedReturnIn(iface, returnTypeName: target.returnTypeName)
+			found(iface) then return try self.heldAssociatedReturnIn(iface, requirement: target.returnType)
 		end 'base'
 	end 'heldAssociatedReturnOf'
 
 	// The two lookups the answer above is, over a resolved interface — split out because the `found` arm of a
 	// `lookupInterface` match is a call in every reader of this file, never a body.
-	function heldAssociatedReturnIn(iface IrInterface, returnTypeName ByteArray) returns HeldAssociatedReturn throws AbsentError
-		let position = try iface.associatedTypeNames.positionOfName(returnTypeName) otherwise throw AbsentError.absent
+	function heldAssociatedReturnIn(iface IrInterface, requirement RequirementType) returns HeldAssociatedReturn throws AbsentError
+		let position = try associatedPositionIn(requirement, iface: iface, signatures: self.signatures) otherwise throw AbsentError.absent
 		return HeldAssociatedReturn.create(try self.signatures.associatedTypeHeldAt(iface.name, position: position), slotOffset: witnessAssociatedSlotOffset(self.witnessSlotsOf(iface).count() as WitnessMethodIndex, position: position), position: position)
 	end 'heldAssociatedReturnIn'
 
@@ -82359,40 +82394,9 @@ export type Parser
 	// The result type of a synthesized-protocol direct call (`emitBuiltinConformanceCall`,
 	// `emitByteRecordOrdering`), lifted as its compiler-owned interface sees it: a program alias of
 	// the same name is range-checked against rather than inherited.
-	function interfaceReturnMaxonType(returnTypeName ByteArray) returns MaxonType
-		return self.repairSweptType(self.interfaceSpelledType(returnTypeName), scopeFilePath: CompilerOwnedDeclFilePath)
+	function interfaceReturnMaxonType(requirement RequirementType) returns MaxonType
+		return self.repairSweptType(resolvedRequirementType(requirement, typeNames: self.artifact.typeNames, signatures: self.signatures), scopeFilePath: CompilerOwnedDeclFilePath)
 	end 'interfaceReturnMaxonType'
-
-	// An interface TYPE NAME as a `MaxonType`: the primitive keywords map to their tags, `String` to
-	// the builtin, and every other name — a user ranged alias (`Code`), a struct — to a `named` type
-	// `mintOwnedCallResult` resolves through the same alias/struct doors a direct call's return does.
-	//
-	// ⭐ **`ExitCode` IS CLAIMED WITH THE KEYWORDS AND NOT WITH THE USER NAMES, AND THE REASON IS A WIDTH
-	// WIDTH.** An interface stores its return type as a rendered source STRING, so this
-	// function RE-DERIVES what a declaration derived once, and the `named` fallback is only safe while the two
-	// derivations agree — which they do for every name but that one. MEASURED at this door: an
-	// `ExitCode`-returning interface method returned 42 on x64 and trapped under wasmtime.
-	//
-	// It cannot be routed through `denotedNamedType` wholesale: this function answers for the VALUE column,
-	// where a ranged alias deliberately keeps its `named` identity (see `castConvertsPerInstance`), while
-	// that cascade erases it for the SIGNATURE column.
-	//
-	// ⭐⭐ **SO THE NAME→TAG TABLE IS `builtinTypeNameTag`, AND THIS DOOR IS NOT ITS ONLY ASKER.** Written
-	// out here and here alone, it is how the FUNCTION-TYPEALIAS registry — a second interner-free store of
-	// the same kind — comes to drop `ExitCode`'s width and trap on wasm. One table, three doors; see
-	// `builtinTypeNameTag` for the measurement and for why `Character` is
-	// not in it. `named` is its answer for every name it does not own, which is exactly what
-	// `maxonTypeOfTag`'s `named` arm rebuilds from this file's interned id — and the intern is paid only on
-	// that answer, never for a builtin whose type carries no name at all.
-	//
-	// ⛔⛔ **UNLIFTED: a ranged FLOAT alias is `named` here**, and a `named` result is read as an i64,
-	// so an interface method `returns Real` would capture its result out of the INTEGER return
-	// register while the impl leaves it in XMM0. Every caller lifts it through `repairSweptType`
-	// (`mintOwnedCallResult`) with the file whose text it is.
-	function interfaceSpelledType(typeName ByteArray) returns MaxonType
-		let tag = builtinTypeNameTag(typeName)
-		return maxonTypeOfTag(tag, nameId: UnnamedTypeId if tag != ValueTypeTag.named else self.artifact.typeNames.intern(typeName))
-	end 'interfaceSpelledType'
 
 	// The token shape of a method call on an ARRAY FIELD reached through a field chain — `<base>(.<field>)+
 	// .<method>(` with AT LEAST TWO dots (a one-dot `b.m(…)` is `methodCallsAt`'s). `resolveFieldChainFrom`
@@ -90336,7 +90340,7 @@ export type Parser
 		// closure's parameters ARE spelled (`function(t IntTaker) gives …`) and carry the same `paramTypeStarts`
 		// every declared function's do, while its return type is INFERRED from the body and names no token for
 		// `declaredExistentialInstanceAt` to read.
-		var signature = FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramNames, paramTypes: paramTypes, paramTypeStarts: paramTypeStarts), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: GenericInstanceIdArray.create(), extensionConstraints: WhereConstraintArray.create(), writtenTypeNames: sharedEmptyWrittenTypeNames, selfSpelledParams: NoParamPositions)
+		var signature = FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramNames, paramTypes: paramTypes, paramTypeStarts: paramTypeStarts), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), returnBrand: EmptySourceText, paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: GenericInstanceIdArray.create(), extensionConstraints: WhereConstraintArray.create(), writtenTypeNames: sharedEmptyWrittenTypeNames, selfSpelledParams: NoParamPositions)
 		self.publishLiftedBody(lifted, returnType: returnType, signature: signature, anchor: functionTok, synthesized: false)
 		self.closureShapes.upsert(closureName, value: FunctionValueShape.create(signature.paramTypes, returnType: returnType, scopeFilePath: self.job.path, promisesTaken: BoolArray.create()))
 
@@ -90407,7 +90411,7 @@ export type Parser
 	end 'declaredTypeSites'
 
 	function liftedBodyState(firstValueId ValueId, closureEnv ClosureEnvParam, returnAlias DeclaredAlias, paramSites RangeCheckParamSiteArray, layoutParam HiddenWordParam, countParam HiddenWordParam) returns FunctionBodyState
-		return FunctionBodyState.fresh(self.anchors, firstValueId: firstValueId, returnSpelling: EmptySourceText, provenance: DeferredProvenance.create(self.anchors.functions.provenance), mayReturnAGlobalAlias: false, closureEnv: closureEnv, returnAlias: returnAlias, paramSites: paramSites, layoutParam: layoutParam, countParam: countParam, nascentSelfFactory: false, kind: EnclosingBodyKind.closureBody)
+		return FunctionBodyState.fresh(self.anchors, firstValueId: firstValueId, returnSpelling: EmptySourceText, returnBrand: EmptySourceText, provenance: DeferredProvenance.create(self.anchors.functions.provenance), mayReturnAGlobalAlias: false, closureEnv: closureEnv, returnAlias: returnAlias, paramSites: paramSites, layoutParam: layoutParam, countParam: countParam, nascentSelfFactory: false, kind: EnclosingBodyKind.closureBody)
 	end 'liftedBodyState'
 
 	function pushLiftedFunction(name ByteArray, returnType MaxonReturnType, paramTypes MaxonTypeArray, anchor Token) returns IrFunction
@@ -90710,7 +90714,7 @@ export type Parser
 
 		var paramNames = NameRoster.create()
 		paramNames.push(ClosureEnvDropParamName)
-		self.publishLiftedBody(drop, returnType: MaxonReturnType.void, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: NameRoster.create(), returnAggregateName: EmptySourceText, paramExistentialSites: ParamExistentialSiteArray.create(), returnExistentialSites: GenericInstanceIdArray.create(), extensionConstraints: WhereConstraintArray.create(), writtenTypeNames: sharedEmptyWrittenTypeNames, selfSpelledParams: NoParamPositions), anchor: anchor, synthesized: true)
+		self.publishLiftedBody(drop, returnType: MaxonReturnType.void, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: NameRoster.create(), returnAggregateName: EmptySourceText, returnBrand: EmptySourceText, paramExistentialSites: ParamExistentialSiteArray.create(), returnExistentialSites: GenericInstanceIdArray.create(), extensionConstraints: WhereConstraintArray.create(), writtenTypeNames: sharedEmptyWrittenTypeNames, selfSpelledParams: NoParamPositions), anchor: anchor, synthesized: true)
 		self.fileDeferredProvenance(drop)
 
 		self.bodyState = savedBody
@@ -90730,7 +90734,7 @@ export type Parser
 	// there would move every following field.
 	//
 	// An `exitCode` value arrives from two producers — an indirect call through a function alias
-	// (`mintIndirectCallResult`) and an interface method (`interfaceSpelledType`) — so the
+	// (`mintIndirectCallResult`) and an interface method (`interfaceReturnMaxonType`) — so the
 	// widening is at this sink rather than at either. Pinned by
 	// `closure-capture.capture-exitcode-from-alias-call`, `.capture-exitcode-from-interface-method`
 	// and `.capture-exitcode-wide-value`; only the last carries a value wider than one byte, so only
@@ -98655,9 +98659,9 @@ export type Parser
 			throw MapError.keyNotFound
 		end 'theBorrowedReceiver'
 
-		let formalName = try target.paramTypeNames.get((argIndex - WitnessReceiverArgCount) as ElementIndex) otherwise panic("interfaceFormalParameterAt: paramTypeNames.get OOB at {argIndex - WitnessReceiverArgCount} — a witness dispatch carries the receiver plus one actual per formal")
+		let formal = try target.paramTypes.get((argIndex - WitnessReceiverArgCount) as ElementIndex) otherwise panic("interfaceFormalParameterAt: paramTypes.get OOB at {argIndex - WitnessReceiverArgCount} — a witness dispatch carries the receiver plus one actual per formal")
 
-		let alias = try self.signatures.interfaceFormalAlias(target.declaringInterfaceName, formalName: formalName)
+		let alias = try self.signatures.requirementRangedAlias(formal, interfaceName: target.declaringInterfaceName)
 		return ArgSiteParameter.slotAlias(alias.clone())
 	end 'interfaceFormalParameterAt'
 
@@ -101556,14 +101560,14 @@ export type Parser
 	end 'valueAWitnessFormalReceives'
 
 	function witnessArgumentsAreChecked(args ValueIdArray, target WitnessDispatchTarget, anchor Token) returns bool
-		for (position, formalName) in target.paramTypeNames.withIterator() 'eachFormal'
+		for (position, formal) in target.paramTypes.withIterator() 'eachFormal'
 			let given = try self.valueAWitnessFormalReceives(try args.get(position.index() + WitnessReceiverArgCount) otherwise panic("witnessArgumentsAreChecked: args.get OOB at formal {position.index()} — a dispatch has the receiver plus one actual per formal")) otherwise continue
 
 			if not self.argOwesTheQuantityDoor(given) 'owesNothing'
 				continue
 			end 'owesNothing'
 
-			view alias = try self.signatures.interfaceFormalAlias(target.declaringInterfaceName, formalName: formalName) otherwise return false
+			view alias = try self.signatures.requirementRangedAlias(formal, interfaceName: target.declaringInterfaceName) otherwise return false
 			self.recordQuantityDoor(given, alias: alias, anchor: anchor)
 		end 'eachFormal'
 

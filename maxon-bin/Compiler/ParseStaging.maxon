@@ -2083,6 +2083,22 @@ function rewriteTypeIds(project Project, artifact FileParseArtifact, remap TypeI
 
 	artifact.functionTypeAliases = aliases
 
+	var renumberedInterfaces = IrInterfaceArray.create()
+
+	for iface in artifact.interfaces 'eachInterface'
+		renumberedInterfaces.push(iface.withInstancesRenumbered(remap))
+	end 'eachInterface'
+
+	artifact.interfaces = renumberedInterfaces
+
+	var renumberedConformances = ConformanceDeclArray.create()
+
+	for decl in artifact.conformances 'eachConformance'
+		renumberedConformances.push(decl.withInstancesRenumbered(remap))
+	end 'eachConformance'
+
+	artifact.conformances = renumberedConformances
+
 	for layout in artifact.structTypes 'eachStruct'
 		remapStructLayoutFieldTypes(layout, remap: remap)
 	end 'eachStruct'

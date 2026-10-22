@@ -1,15 +1,11 @@
 // IrInterface.maxon — the parsed shape of an `interface` declaration, a type's declared
 // `implements` conformance, and the witness-table layout a dispatch through one reads.
 //
-// ⭐ **TYPES ARE STORED AS RENDERED SOURCE STRINGS, not interned `MaxonType`s.** A
-// conformance check compares an interface method against a type's method by SOURCE
-// spelling (`Integer`, `Self`, `void`) and the E3016 message PRINTS that spelling,
-// so the string is exactly what the checker needs. It also buys two properties the
-// interned form would cost work to keep — the same two `paramAggregateNames` buys
-// (Project.maxon): the string carries no interner id, so `mergeArtifact` folds an
-// interface with NO remap; and it does not depend on `resolveTypes`, which erases
-// `Integer` to `int` — and `checkConformance` runs BEFORE resolution, so the alias
-// name is still there to print.
+// ⭐ **A REQUIREMENT'S TYPES ARE STORED IDENTITIES (`RequirementType`)**, settled once every file has
+// folded (`ProgramSignatures.fileCompleteRequirement`) and renumbered with the rest of an artifact's instance
+// ids on merge. Every reader that needs a type, an ABI class or a conformer asks one resolver —
+// `resolvedRequirementType`, `requirementAbiType`, `ProgramSignatures.conformerNameOfRequirement` — and never
+// the rendered strings stored beside them, which are display: E3016 prints the spelling the source wrote.
 //
 // ⭐ **The stdlib protocol interfaces (Stringable, Hashable, …) are SYNTHESIZED on
 // lookup, not parsed.** The compiler does not read `stdlib/`; it synthesizes `String`/`Array`
@@ -570,13 +566,403 @@ export function lentParams(count ParamCount) returns ParamCapabilityArray
 	return out
 end 'lentParams'
 
-// One method SIGNATURE declared in an interface body (no body). Its type columns are
-// rendered SOURCE strings (see the header). `paramNames`/`paramTypeNames` are parallel.
+export union RequirementTypeIdentity
+	void
+	selfType
+	typeParameter(let token TypeParamId)
+	genericInstance(let id GenericInstanceId)
+	builtin(let tag ValueTypeTag)
+	nominal(let name ByteArray)
+end 'RequirementTypeIdentity'
+
+// @generated library-cache begin
+function cacheWriteRequirementTypeIdentity(writer LibraryCacheWriter, value RequirementTypeIdentity)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		void then break
+		selfType then break
+		typeParameter(a0) then cacheWriteRequirementTypeIdentityTypeParameter(writer, a0: a0)
+		genericInstance(a0) then cacheWriteRequirementTypeIdentityGenericInstance(writer, a0: a0)
+		builtin(a0) then cacheWriteRequirementTypeIdentityBuiltin(writer, a0: a0)
+		nominal(a0) then cacheWriteRequirementTypeIdentityNominal(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteRequirementTypeIdentity'
+
+function cacheWriteRequirementTypeIdentityTypeParameter(writer LibraryCacheWriter, a0 TypeParamId)
+	writer.unsigned(a0 as CacheUnsigned)
+end 'cacheWriteRequirementTypeIdentityTypeParameter'
+
+function cacheWriteRequirementTypeIdentityGenericInstance(writer LibraryCacheWriter, a0 GenericInstanceId)
+	writer.unsigned(a0 as CacheUnsigned)
+end 'cacheWriteRequirementTypeIdentityGenericInstance'
+
+function cacheWriteRequirementTypeIdentityBuiltin(writer LibraryCacheWriter, a0 ValueTypeTag)
+	writer.unsigned(a0.ordinal as CacheUnsigned)
+end 'cacheWriteRequirementTypeIdentityBuiltin'
+
+function cacheWriteRequirementTypeIdentityNominal(writer LibraryCacheWriter, a0 ByteArray)
+	writer.bytes(a0)
+end 'cacheWriteRequirementTypeIdentityNominal'
+
+function cacheReadRequirementTypeIdentity(reader LibraryCacheReader) returns RequirementTypeIdentity throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives RequirementTypeIdentity.void
+		1 gives RequirementTypeIdentity.selfType
+		2 gives try cacheReadRequirementTypeIdentityTypeParameter(reader)
+		3 gives try cacheReadRequirementTypeIdentityGenericInstance(reader)
+		4 gives try cacheReadRequirementTypeIdentityBuiltin(reader)
+		5 gives try cacheReadRequirementTypeIdentityNominal(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadRequirementTypeIdentity'
+
+function cacheReadRequirementTypeIdentityTypeParameter(reader LibraryCacheReader) returns RequirementTypeIdentity throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as TypeParamId
+
+	return RequirementTypeIdentity.typeParameter(a0)
+end 'cacheReadRequirementTypeIdentityTypeParameter'
+
+function cacheReadRequirementTypeIdentityGenericInstance(reader LibraryCacheReader) returns RequirementTypeIdentity throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as GenericInstanceId
+
+	return RequirementTypeIdentity.genericInstance(a0)
+end 'cacheReadRequirementTypeIdentityGenericInstance'
+
+function cacheReadRequirementTypeIdentityBuiltin(reader LibraryCacheReader) returns RequirementTypeIdentity throws LibraryCacheDamage
+	let a0 = try cacheReadValueTypeTag(reader)
+
+	return RequirementTypeIdentity.builtin(a0)
+end 'cacheReadRequirementTypeIdentityBuiltin'
+
+function cacheReadRequirementTypeIdentityNominal(reader LibraryCacheReader) returns RequirementTypeIdentity throws LibraryCacheDamage
+	let a0 = try reader.bytes()
+
+	return RequirementTypeIdentity.nominal(a0)
+end 'cacheReadRequirementTypeIdentityNominal'
+
+// @generated library-cache end
+
+export type RequirementType
+	export let identity as RequirementTypeIdentity
+	export let brand as ByteArray
+
+	export static function create(identity RequirementTypeIdentity, brand ByteArray) returns RequirementType
+		return Self{identity: identity, brand: brand}
+	end 'create'
+
+	export static function ofTag(tag ValueTypeTag) returns RequirementType
+		return Self{identity: RequirementTypeIdentity.builtin(tag), brand: EmptySourceText}
+	end 'ofTag'
+
+	export static function ofNominal(name ByteArray) returns RequirementType
+		return Self{identity: RequirementTypeIdentity.nominal(name), brand: EmptySourceText}
+	end 'ofNominal'
+
+	export static function ofSelf() returns RequirementType
+		return Self{identity: RequirementTypeIdentity.selfType, brand: EmptySourceText}
+	end 'ofSelf'
+
+	export function isVoid() returns bool
+		return match self.identity 'identity'
+			void gives true
+			selfType or
+			typeParameter or
+			genericInstance or
+			builtin or
+			nominal gives false
+		end 'identity'
+	end 'isVoid'
+
+	export function isSelf() returns bool
+		return match self.identity 'identity'
+			selfType gives true
+			void or
+			typeParameter or
+			genericInstance or
+			builtin or
+			nominal gives false
+		end 'identity'
+	end 'isSelf'
+
+	export function isTypeParameter() returns bool
+		return match self.identity 'identity'
+			typeParameter gives true
+			void or
+			selfType or
+			genericInstance or
+			builtin or
+			nominal gives false
+		end 'identity'
+	end 'isTypeParameter'
+
+	export function isFloat() returns bool
+		return match self.identity 'identity'
+			builtin(tag) gives tag == ValueTypeTag.float
+			void or
+			selfType or
+			typeParameter or
+			genericInstance or
+			nominal gives false
+		end 'identity'
+	end 'isFloat'
+
+	export function nominalName() returns ByteArray throws AbsentError
+		match self.identity 'identity'
+			nominal(name) then return name.clone()
+			void or
+			selfType or
+			typeParameter or
+			genericInstance or
+			builtin then throw AbsentError.absent
+		end 'identity'
+	end 'nominalName'
+
+	export function denotesSameTypeAs(other RequirementType) returns bool
+		return requirementIdentitiesAgree(self.identity, second: other.identity)
+	end 'denotesSameTypeAs'
+
+	export function agreesWith(other RequirementType) returns bool
+		return self.denotesSameTypeAs(other) and self.brand.equals(other.brand)
+	end 'agreesWith'
+
+	export function argumentCheckSpelling(display ByteArray) returns ByteArray
+		return match self.identity 'identity'
+			genericInstance gives self.brand
+			void or
+			selfType or
+			typeParameter or
+			builtin or
+			nominal gives display
+		end 'identity'
+	end 'argumentCheckSpelling'
+
+	export function withInstancesRenumbered(remap TypeIdRemap) returns RequirementType
+		return match self.identity 'identity'
+			genericInstance(id) gives Self{identity: RequirementTypeIdentity.genericInstance(remap.applyInstance(id)), brand: self.brand}
+			void or
+			selfType or
+			typeParameter or
+			builtin or
+			nominal gives self.clone()
+		end 'identity'
+	end 'withInstancesRenumbered'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		cacheWriteRequirementTypeIdentity(writer, value: self.identity)
+		writer.bytes(self.brand)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns RequirementType throws LibraryCacheDamage
+		let f_identity = try cacheReadRequirementTypeIdentity(reader)
+		let f_brand = try reader.bytes()
+
+		return Self{identity: f_identity, brand: f_brand}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(RequirementType) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'RequirementType'
+
+export typealias RequirementTypeArray = Array with RequirementType
+
+// @generated library-cache begin
+export function cacheWriteRequirementTypeArray(writer LibraryCacheWriter, value RequirementTypeArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteRequirementTypeArray'
+
+export function cacheReadRequirementTypeArray(reader LibraryCacheReader) returns RequirementTypeArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = RequirementTypeArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try RequirementType.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadRequirementTypeArray'
+
+// @generated library-cache end
+
+export function resolvedRequirementType(requirement RequirementType, typeNames TypeNameInterner, signatures ProgramSignatures) returns MaxonType
+	return match requirement.identity 'identity'
+		builtin(tag) gives maxonTypeOfTag(tag, nameId: UnnamedTypeId)
+		nominal(name) gives MaxonType.named(typeNames.intern(name))
+		genericInstance(id) gives signatures.instanceDenotedType(id, into: typeNames)
+		void panic("resolvedRequirementType: a void requirement has no value type — the caller tests the result for void first")
+		selfType panic("resolvedRequirementType: `Self` denotes the receiver's own type, which only the receiver can answer")
+		typeParameter panic("resolvedRequirementType: an associated type denotes what a conformance or a constraint binds it to, which only the dispatch can answer")
+	end 'identity'
+end 'resolvedRequirementType'
+
+export function resolvedBindingType(binding RequirementType, typeNames TypeNameInterner, signatures ProgramSignatures) returns MaxonType
+	return match binding.identity 'identity'
+		typeParameter(token) gives MaxonType.typeParameter(token)
+		void or
+		selfType or
+		genericInstance or
+		builtin or
+		nominal gives resolvedRequirementType(binding, typeNames: typeNames, signatures: signatures)
+	end 'identity'
+end 'resolvedBindingType'
+
+export function requirementTypeOfDeclared(declared MaxonType, names TypeNameInterner, brand ByteArray) returns RequirementType
+	let identity = match declared 'declared'
+		boolean or
+		integer or
+		float or
+		exitCode or
+		string or
+		character or
+		cstring gives RequirementTypeIdentity.builtin(maxonTypeTag(declared))
+		named(id) gives RequirementTypeIdentity.nominal(declaredTypeNameOf(names, id: id))
+		structRef(id) gives RequirementTypeIdentity.nominal(declaredTypeNameOf(names, id: id))
+		function(id) gives RequirementTypeIdentity.nominal(declaredTypeNameOf(names, id: id))
+		interfaceRef(id) gives RequirementTypeIdentity.nominal(declaredTypeNameOf(names, id: id))
+		typeParameter(token) gives RequirementTypeIdentity.typeParameter(token)
+		genericInstance(id) gives RequirementTypeIdentity.genericInstance(id)
+		unresolved panic("requirementTypeOfDeclared: a requirement or binding parsed to an unresolved type — it is read after every file has folded, so every type it names has been settled")
+	end 'declared'
+
+	return RequirementType.create(identity, brand: brand)
+end 'requirementTypeOfDeclared'
+
+function declaredTypeNameOf(names TypeNameInterner, id TypeNameId) returns ByteArray
+	return (try names.nameOf(id) otherwise panic("declaredTypeNameOf: type-name id {id} is not in this interner — every `named`/`structRef` id is minted from the interner its reader holds")).clone()
+end 'declaredTypeNameOf'
+
+function requirementIdentitiesAgree(first RequirementTypeIdentity, second RequirementTypeIdentity) returns bool
+	if first.ordinal != second.ordinal 'differentKinds'
+		return false
+	end 'differentKinds'
+
+	return match first 'kind'
+		void or
+		selfType gives true
+		typeParameter(token) gives sameTypeParameter(second, token: token)
+		genericInstance(id) gives sameGenericInstance(second, id: id)
+		builtin(tag) gives sameBuiltin(second, tag: tag)
+		nominal(name) gives sameNominal(second, name: name)
+	end 'kind'
+end 'requirementIdentitiesAgree'
+
+function sameTypeParameter(second RequirementTypeIdentity, token TypeParamId) returns bool
+	match second 'secondIdentity'
+		typeParameter(other) then return other == token
+		default panic("sameTypeParameter: the kinds were compared equal before the payloads")
+	end 'secondIdentity'
+end 'sameTypeParameter'
+
+function sameGenericInstance(second RequirementTypeIdentity, id GenericInstanceId) returns bool
+	match second 'secondIdentity'
+		genericInstance(other) then return other == id
+		default panic("sameGenericInstance: the kinds were compared equal before the payloads")
+	end 'secondIdentity'
+end 'sameGenericInstance'
+
+function sameBuiltin(second RequirementTypeIdentity, tag ValueTypeTag) returns bool
+	match second 'secondIdentity'
+		builtin(other) then return other == tag
+		default panic("sameBuiltin: the kinds were compared equal before the payloads")
+	end 'secondIdentity'
+end 'sameBuiltin'
+
+function sameNominal(second RequirementTypeIdentity, name ByteArray) returns bool
+	match second 'secondIdentity'
+		nominal(other) then return other.equals(name)
+		default panic("sameNominal: the kinds were compared equal before the payloads")
+	end 'secondIdentity'
+end 'sameNominal'
+
+function requirementsAgree(first RequirementTypeArray, second RequirementTypeArray) returns bool
+	if first.count() != second.count() 'differentArity'
+		return false
+	end 'differentArity'
+
+	for i in 0 upto first.count() 'eachRequirement'
+		let mine = try first.get(i) otherwise panic("requirementsAgree: first.get OOB at {i} below count {first.count()}")
+		let theirs = try second.get(i) otherwise panic("requirementsAgree: second.get OOB at {i} below count {second.count()}")
+
+		if not mine.agreesWith(theirs) 'differs'
+			return false
+		end 'differs'
+	end 'eachRequirement'
+
+	return true
+end 'requirementsAgree'
+
+export function requirementAbiType(requirement RequirementType, readerFilePath FilePath, signatures ProgramSignatures) returns MaxonType
+	return match requirement.identity 'identity'
+		builtin(tag) gives builtinAbiType(tag)
+		nominal(name) gives MaxonType.float if signatures.isFloatAliasFor(name, readerFilePath: readerFilePath) else MaxonType.integer
+		void or
+		selfType or
+		typeParameter or
+		genericInstance gives MaxonType.integer
+	end 'identity'
+end 'requirementAbiType'
+
+function builtinAbiType(tag ValueTypeTag) returns MaxonType
+	return match tag 'tag'
+		boolean or
+		integer or
+		float or
+		exitCode or
+		string gives maxonTypeOfTag(tag, nameId: UnnamedTypeId)
+		character or
+		cstring gives MaxonType.integer
+		named or
+		unresolved or
+		void or
+		structRef or
+		function or
+		typeParameter or
+		genericInstance or
+		interfaceRef panic("builtinAbiType: `{tag.name}` is not a tag a requirement's builtin identity can hold")
+	end 'tag'
+end 'builtinAbiType'
+
+export function associatedNameOf(requirement RequirementType, signatures ProgramSignatures) returns ByteArray throws MapError
+	match requirement.identity 'identity'
+		typeParameter(token) then return try declaredParameterName(token, signatures: signatures)
+		void or
+		selfType or
+		genericInstance or
+		builtin or
+		nominal then throw MapError.keyNotFound
+	end 'identity'
+end 'associatedNameOf'
+
+function declaredParameterName(token TypeParamId, signatures ProgramSignatures) returns ByteArray throws MapError
+	let owner = try signatures.typeParamOwnerOf(token)
+	return owner.paramName
+end 'declaredParameterName'
+
+export function associatedPositionIn(requirement RequirementType, iface IrInterface, signatures ProgramSignatures) returns ElementIndex throws MapError
+	return try iface.associatedTypeNames.positionOfName(try associatedNameOf(requirement, signatures: signatures))
+end 'associatedPositionIn'
+
+// One method SIGNATURE declared in an interface body (no body). `paramTypeNames`/`returnTypeName` are
+// the display of `paramTypes`/`returnType` (see the header). The parameter columns are parallel.
 export type InterfaceMethodSig
 	export let name as ByteArray
 	export let paramNames as NameRoster
 	export let paramTypeNames as NameRoster
+	export let paramTypes as RequirementTypeArray
 	export let returnTypeName as ByteArray
+	export let returnType as RequirementType
 
 	// A `static function` in an interface body carries no receiver, so a conforming type
 	// need not supply it as an instance method — the conformance check SKIPS it.
@@ -594,10 +980,10 @@ export type InterfaceMethodSig
 	// ⭐⭐ **WAS THIS PARAMETER SPELLED BARE `__ManagedMemory`? — ONE BOOL PER PARAMETER, PARALLEL TO
 	// `paramTypeNames`, AND IT IS THE ONLY PLACE THE SPELLING SURVIVES.**
 	//
-	// `paramTypeNames` is rendered from `MaxonType`s, and by then a bare `__ManagedMemory` has already
-	// resolved to the CONCRETE byte instance and prints `Array_Byte` — indistinguishable from a genuine
-	// `ByteArray` requirement. So the fact cannot be recovered downstream and has to be carried from the
-	// tokens; `parseInterfaceMethod` computes it as the `paramSurfaces` column.
+	// A bare `__ManagedMemory` resolves to the CONCRETE byte instance, so its `paramTypes` identity is that
+	// instance — indistinguishable from a genuine `ByteArray` requirement. So the fact cannot be recovered
+	// downstream and has to be carried from the tokens; `parseInterfaceMethod` computes it as the
+	// `paramSurfaces` column.
 	//
 	// ⚠ **WHY THE DISTINCTION IS LOAD-BEARING RATHER THAN COSMETIC.** `__ManagedMemory` is
 	// GENERIC over one `Element`, so a bare spelling inside a REQUIREMENT is that unbound parameter — it
@@ -641,16 +1027,22 @@ export type InterfaceMethodSig
 
 	export let written as WrittenTypeNames
 
-	export static function create(name ByteArray, paramNames NameRoster, paramTypeNames NameRoster, returnTypeName ByteArray, isStatic bool, throwsClause ThrowsClause, paramIsBuffer BoolArray, paramCapabilities ParamCapabilityArray, returnCapability ResultCapability, nameLine LineNumber, nameColumn ColumnNumber, written WrittenTypeNames) returns InterfaceMethodSig
-		return Self{name: name, paramNames: paramNames, paramTypeNames: paramTypeNames, returnTypeName: returnTypeName, isStatic: isStatic, throwsClause: throwsClause, paramIsBuffer: paramIsBuffer, paramCapabilities: paramCapabilities, returnCapability: returnCapability, nameLine: nameLine, nameColumn: nameColumn, written: written}
+	export static function create(name ByteArray, paramNames NameRoster, paramTypeNames NameRoster, paramTypes RequirementTypeArray, returnTypeName ByteArray, returnType RequirementType, isStatic bool, throwsClause ThrowsClause, paramIsBuffer BoolArray, paramCapabilities ParamCapabilityArray, returnCapability ResultCapability, nameLine LineNumber, nameColumn ColumnNumber, written WrittenTypeNames) returns InterfaceMethodSig
+		return Self{name: name, paramNames: paramNames, paramTypeNames: paramTypeNames, paramTypes: paramTypes, returnTypeName: returnTypeName, returnType: returnType, isStatic: isStatic, throwsClause: throwsClause, paramIsBuffer: paramIsBuffer, paramCapabilities: paramCapabilities, returnCapability: returnCapability, nameLine: nameLine, nameColumn: nameColumn, written: written}
 	end 'create'
+
+	export function withInstancesRenumbered(remap TypeIdRemap) returns InterfaceMethodSig
+		return Self{name: self.name, paramNames: self.paramNames, paramTypeNames: self.paramTypeNames, paramTypes: renumberedRequirements(self.paramTypes, remap: remap), returnTypeName: self.returnTypeName, returnType: self.returnType.withInstancesRenumbered(remap), isStatic: self.isStatic, throwsClause: self.throwsClause, paramIsBuffer: self.paramIsBuffer, paramCapabilities: self.paramCapabilities, returnCapability: self.returnCapability, nameLine: self.nameLine, nameColumn: self.nameColumn, written: self.written}
+	end 'withInstancesRenumbered'
 
 	// @generated library-cache begin
 	function cacheWrite(writer LibraryCacheWriter)
 		writer.bytes(self.name)
 		cacheWriteNameRoster(writer, value: self.paramNames)
 		cacheWriteNameRoster(writer, value: self.paramTypeNames)
+		cacheWriteRequirementTypeArray(writer, value: self.paramTypes)
 		writer.bytes(self.returnTypeName)
+		self.returnType.cacheWrite(writer)
 		writer.flag(self.isStatic)
 		cacheWriteThrowsClause(writer, value: self.throwsClause)
 		cacheWriteBoolArray(writer, value: self.paramIsBuffer)
@@ -665,7 +1057,9 @@ export type InterfaceMethodSig
 		let f_name = try reader.bytes()
 		let f_paramNames = try cacheReadNameRoster(reader)
 		let f_paramTypeNames = try cacheReadNameRoster(reader)
+		let f_paramTypes = try cacheReadRequirementTypeArray(reader)
 		let f_returnTypeName = try reader.bytes()
+		let f_returnType = try RequirementType.cacheRead(reader)
 		let f_isStatic = try reader.flag()
 		let f_throwsClause = try cacheReadThrowsClause(reader)
 		let f_paramIsBuffer = try cacheReadBoolArray(reader)
@@ -675,11 +1069,11 @@ export type InterfaceMethodSig
 		let f_nameColumn = (try reader.unsigned()) as ColumnNumber
 		let f_written = try WrittenTypeNames.cacheRead(reader)
 
-		return Self{name: f_name, paramNames: f_paramNames, paramTypeNames: f_paramTypeNames, returnTypeName: f_returnTypeName, isStatic: f_isStatic, throwsClause: f_throwsClause, paramIsBuffer: f_paramIsBuffer, paramCapabilities: f_paramCapabilities, returnCapability: f_returnCapability, nameLine: f_nameLine, nameColumn: f_nameColumn, written: f_written}
+		return Self{name: f_name, paramNames: f_paramNames, paramTypeNames: f_paramTypeNames, paramTypes: f_paramTypes, returnTypeName: f_returnTypeName, returnType: f_returnType, isStatic: f_isStatic, throwsClause: f_throwsClause, paramIsBuffer: f_paramIsBuffer, paramCapabilities: f_paramCapabilities, returnCapability: f_returnCapability, nameLine: f_nameLine, nameColumn: f_nameColumn, written: f_written}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize96
-		return sizeof(InterfaceMethodSig) as CacheSize96
+	static function cacheLayoutBytes() returns CacheSize112
+		return sizeof(InterfaceMethodSig) as CacheSize112
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -742,16 +1136,14 @@ export function assembleMethodSignature(name ByteArray, paramNames NameRoster, p
 	return "{rendered}) returns {signatures.aliasIdentityDisplay(returnType)}"
 end 'assembleMethodSignature'
 
-// ⭐⭐ **THE ONE RENDERER OF A DECLARED TYPE TO THE SOURCE STRING A CONFORMANCE COMPARES AND PRINTS.**
-// BOTH sides of the conformance relation come through here — the INTERFACE side at parse time
+// ⭐⭐ **THE ONE RENDERER OF A DECLARED TYPE TO THE SOURCE STRING A CONFORMANCE PRINTS.** BOTH sides of
+// the conformance relation come through here — the INTERFACE side at parse time
 // (`Parser.renderInterfaceTypeName`, which adds only the `Self` arm on top of it) and the IMPL side at
-// check time (`ConformanceCheck.signatureMatches` / `formatActualSignature`) — and it is ONE function
-// because a rendered name is a type IDENTITY, not a caption: `signatureMatches` decides conformance by
-// comparing two of these strings. A tag the two sides spell DIFFERENTLY is a false REJECT; a tag they
-// both spell as one KIND WORD is a false ACCEPT, which no positive test can see.
+// check time (`ConformanceCheck.formatActualSignature`). The impl side's string is also what
+// `ConformanceCheck.requirementMeetsType` holds a `nominal`, `Self` or associated requirement against, so a
+// tag the two sides spell DIFFERENTLY is a false REJECT.
 //
-// ⚠ **`maxonTypeName` ALONE CANNOT BE THAT RENDERER — two of its arms name a KIND rather than a TYPE**,
-// and this is the one site where that difference is a wrong answer instead of a cosmetic one:
+// ⚠ **`maxonTypeName` ALONE CANNOT BE THAT RENDERER — two of its arms name a KIND rather than a TYPE:**
 //
 //   • a `typeParameter`'s id is a `(declaring type, parameter name)` DIGEST and not an interner id — no
 //     spelling of it is a name `maxonTypeName` could resolve — so `maxonTypeName` gives the literal
@@ -759,34 +1151,13 @@ end 'assembleMethodSignature'
 //     rejects `type Box uses T implements Holder with T`, how every generic container in `stdlib/`
 //     declares conformance.
 //   • a `genericInstance` renders as the literal `struct`, so `Array with Integer` and `Array with String`
-//     render alike — a FALSE ACCEPT: a type whose `take(xs Array with String)` would satisfy an
-//     interface requiring `take(xs Array with Integer)`, where E3016 is the right answer. An
-//     instance's identity is `ProgramSignatures.canonicalInstanceName` — the compiler's own answer
-//     to "are these two the same type?", which every OTHER comparison site already asks, and which
-//     collapses the two spellings of one instance to one string.
+//     would print alike. An instance renders as `ProgramSignatures.canonicalInstanceName`, so one spelled
+//     with no alias prints as the compiler's mint (`Array_Integer`).
 //
 // The lists are the CALLER's because only the caller knows whose they are: the parser renders against the
 // declaration it is inside (`enclosingTypeParams`) and its file-local interner, the conformance check
 // against the conforming type's recorded `uses` names and the project interner. They are four PARAMETERS
-// and deliberately not one record: a record is a heap box, this is called once per rendered type, and the
-// ladder read the difference — +32/+48/+80/+144/+272/+528 allocations at 32 bytes each, A/B MEASURED, for
-// nothing but a shorter call. The RULE lives here, once: two copies agreeing on the `genericInstance` hole
-// is exactly what makes the hole read as an acceptance rather than as a disagreement.
-//
-// ⛔⛔ **THIS FUNCTION IS THE ONE PLACE A COMPILER-MINTED NAME REACHES A DIAGNOSTIC, AND THAT IS A
-// DECISION, NOT AN UNSWEPT DOOR.** Every other message that names a type goes
-// through a DISPLAY renderer that quotes the author's `typealias` — `Parser.displayTypeNameOf`,
-// `SemanticCheck.typeDisplayName`, `ProgramSignatures.instanceArgDisplayName`. This one does not, because
-// the string it returns is not a caption at ALL: `signatureMatches` DECIDES conformance by comparing two of
-// them, and the interface side's copy is frozen into `InterfaceMethodSig.paramTypeNames` at parse time,
-// where the associated-type substitution then rewrites it BY NAME. So `specs/associated-types.md` shows
-// `take(xs Array_String) … (expected take(xs Array_Integer) …)` where the author wrote `StrArray`/`IntArray`.
-//
-// ⇒ **Converting it means SPLITTING that column into an identity and a display**, carried in lockstep through
-// the parse-time record, the `Self` substitution, the associated-type substitution and both formatters — and
-// a display column that the name-keyed substitution silently skipped would be a WRONG signature in a message
-// rather than an ugly one. That is scoped work of its own. Both halves of every such message spell the type
-// the SAME way, which is what keeps it merely ugly.
+// and deliberately not one record: a record is a heap box, and this is called once per rendered type.
 export function renderDeclaredTypeName(t MaxonType, declarationName ByteArray, typeParamNames NameRoster, typeNames TypeNameInterner, signatures ProgramSignatures) returns ByteArray
 	let tag = maxonTypeTag(t)
 
@@ -808,9 +1179,9 @@ export function renderDeclaredTypeName(t MaxonType, declarationName ByteArray, t
 	// on `stdlib/Array.maxon`'s `clone`/`init`/`equals` arrives here as `Array with Array.Element`, and the
 	// mangled `Array_Te3315404e8d3fd14` matches no requirement — **MEASURED, three simultaneous `E3016`s
 	// against `Cloneable`, `Equatable` and `BuiltinArrayLiteral`, each one of them a `Self` the declaration
-	// plainly wrote.** `ConformanceCheck.substituteSelf` puts the bare declaration name on the EXPECTED side,
-	// so this is the spelling the two sides have to meet at; it also keeps the mangled name out of the
-	// DIAGNOSTIC, where it names a type no author can write.
+	// plainly wrote.** `ConformanceCheck.requirementMeetsType` holds a `Self` requirement against the bare
+	// declaration name, so this is the spelling the two sides have to meet at; it also keeps the mangled
+	// name out of the DIAGNOSTIC, where it names a type no author can write.
 	if tag == ValueTypeTag.genericInstance 'genericInstanceType'
 		if signatures.instanceIsDeclarationSelf(genericInstanceIdOf(t), declarationName: declarationName, paramNames: typeParamNames) 'theDeclarationsOwnInstance'
 			return declarationName
@@ -850,6 +1221,16 @@ export type IrInterface
 	export static function create(name ByteArray, methods InterfaceMethodSigArray, extendsInterfaces NameRoster, associatedTypeNames NameRoster, declFilePath FilePath) returns IrInterface
 		return Self{name: name, methods: methods, extendsInterfaces: extendsInterfaces, associatedTypeNames: associatedTypeNames, declFilePath: declFilePath}
 	end 'create'
+
+	export function withInstancesRenumbered(remap TypeIdRemap) returns IrInterface
+		var renumbered = InterfaceMethodSigArray.create()
+
+		for method in self.methods 'eachMethod'
+			renumbered.push(method.withInstancesRenumbered(remap))
+		end 'eachMethod'
+
+		return Self{name: self.name, methods: renumbered, extendsInterfaces: self.extendsInterfaces, associatedTypeNames: self.associatedTypeNames.clone(), declFilePath: self.declFilePath}
+	end 'withInstancesRenumbered'
 
 	// @generated library-cache begin
 	function cacheWrite(writer LibraryCacheWriter)
@@ -891,54 +1272,12 @@ export extension Array where Element is Equatable
 	end 'positionOfName'
 end 'Array'
 
-// ⭐⭐ **THE ABI-BEARING TYPE A RENDERED TYPE NAME DENOTES — the one collapse for every place a type is
-// held only as the bytes the source wrote.** `builtinTypeNameTag` answers for the five builtins whose tag
-// carries a width; EVERYTHING else it calls `named`, and a `named` here is not a residue to panic on — it
-// is a struct, a ranged alias, a generic instance or a type parameter, every one of which travels as the
-// MACHINE WORD. So `named` is reduced to `integer` at this one door.
-//
-// ⚠ **THE REDUCTION IS THE WHOLE POINT, AND OMITTING IT PANICS.** `maxonTypeToStdType` refuses a `named`
-// outright (it is a resolution residue THERE, where TypeResolution was required to have eliminated it),
-// so handing it a `maxonTypeOfTag(builtinTypeNameTag(name))` crashes the compiler on `with Integer` —
-// MEASURED, twice in one afternoon, at both sites that forgot it. `valueTagToStdType` makes the identical
-// reduction for the identical reason one column over; this is that rule for a NAME rather than a tag.
-// ⛔⛔ **A RANGED FLOAT ALIAS IS ASKED FOR SEPARATELY, AND WITHOUT THAT THIS DOOR PANICS THE x64
-// EMITTER.** `builtinTypeNameTag` answers `named` for every name it does not own, and collapsing all of
-// them to the machine word is right for `Self`, a user type and a ranged INT alias, and WRONG for the
-// one `named` type whose value lives in the other register file. MEASURED, `interface Scaled { scale(k Real)
-// returns Real }` over `typealias Real = float(f64.min to f64.max)`: `argFloatMask` cleared the argument's
-// bit, so the fused `witnessCall` declared a GPR against an impl declaring XMM and the backend died —
-// *"a register-to-register move from xmm0 to rdx crosses register files"*.
-//
-// ⭐⭐ **AND THE PREMISE THAT WOULD MAKE THE COLLAPSE SOUND LIVES IN ANOTHER FILE ENTIRELY.**
-// `builtinTypeNameTag`'s header says its answer is valid *"only at a door that holds a RENDERED type name"*,
-// resting on `bool`/`int`/`float` being unreachable as a `named` reference *"because the first three are
-// KEYWORDS"*. That holds only where an interface may write `scale(k float)` — and the ranged-typealias rule
-// makes the bare keyword ILLEGAL in exactly that position, so a float formal can ONLY arrive as an alias
-// NAME. A corpus that writes the keyword wherever the rule permits it hides the hole.
-//
-// ⚠ **AN INT ALIAS IS DELIBERATELY LEFT ALONE**, and `isFloatAliasFor`'s own header carries the
-// reason: `named` already reads as an integer everywhere, and its NAME is what carries the range
-// and the signedness the range checks read off it. A FLOAT alias is the ONE that cannot be left
-// overloaded, because the overloading is a register file rather than a range. Same asymmetry, same
-// reason, as `Parser.floatResolvedTagOfNameFrom`. The name is resolved in `readerFilePath`, because
-// two files may declare one private name over `int` and `float`.
-export function renderedTypeNameAbiType(name ByteArray, readerFilePath FilePath, signatures ProgramSignatures) returns MaxonType
-	let tag = builtinTypeNameTag(name)
-
-	if tag != ValueTypeTag.named 'aBuiltinSpelling'
-		return maxonTypeOfTag(tag, nameId: UnnamedTypeId)
-	end 'aBuiltinSpelling'
-
-	return MaxonType.float if signatures.isFloatAliasFor(name, readerFilePath: readerFilePath) else MaxonType.integer
-end 'renderedTypeNameAbiType'
-
 export union AssociatedAbiBinding
-	// Every conformer binds the SAME type. `binding` is the rendered name they all wrote, `declaredType` the
-	// resolved formal type that name denotes (ready for the same `paramFloatMask` collapse a function value's
-	// declared parameters go through), and `conformer` the declaration that settled it —
+	// Every conformer binds the SAME type. `binding` is its display, `bindingType` its identity,
+	// `declaredType` its ABI type (`requirementAbiType`, ready for the same `paramFloatMask` collapse a
+	// function value's declared parameters go through), and `conformer` the declaration that settled it —
 	// carried so a reporter has a POSITION without re-walking the store this fold just walked.
-	agreed(conformer ConformanceDecl, let binding ByteArray, declaredType MaxonType)
+	agreed(conformer ConformanceDecl, let binding ByteArray, let bindingType RequirementType, declaredType MaxonType)
 
 	// Two conformers bind DIFFERENT types. Both claimants ride WITH their declarations, so the diagnostic can
 	// name them and anchor on one; the FIRST is the one that settled the binding in source order, exactly as
@@ -966,14 +1305,14 @@ end 'AssociatedAbiBinding'
 // answered 5000 through one conformer and RANGE-PANICKED through the other. A dispatched requirement's
 // associated type therefore has exactly one legal binding across the program.
 //
-// A binding is a RENDERED type name (`InterfaceConformance.withArgs`), and comparing those names IS the whole
-// test — no resolution, no class. `declaredType` is resolved only so the LOWERING has the formal's type;
-// `renderedTypeNameAbiType` is that reduction, and it is the caller's business rather than the comparison's.
+// Two bindings are compared by identity (`InterfaceConformance.withArgTypes`), never by class. `declaredType`
+// is reduced only so the LOWERING has the formal's type, and it is the caller's business rather than the
+// comparison's.
 export function associatedAbiBindingOf(conformances ConformanceDeclArray, signatures ProgramSignatures, interfaceName ByteArray, position ElementIndex) returns AssociatedAbiBinding
 	for decl in conformances 'eachDeclaringType'
 		for entry in decl.interfaces 'eachInterface'
 			if bindsAssociatedAt(entry, interfaceName: interfaceName, position: position) 'theFirstConformer'
-				return agreementWith(conformances, signatures: signatures, interfaceName: interfaceName, position: position, first: decl, firstBinding: try entry.withArgs.get(position) otherwise panic("associatedAbiBindingOf: withArgs.get OOB at {position}, which `bindsAssociatedAt` excludes"))
+				return agreementWith(conformances, signatures: signatures, interfaceName: interfaceName, position: position, first: decl, firstBinding: try entry.withArgs.get(position) otherwise panic("associatedAbiBindingOf: withArgs.get OOB at {position}, which `bindsAssociatedAt` excludes"), firstBindingType: try entry.withArgTypes.get(position) otherwise panic("associatedAbiBindingOf: withArgTypes.get OOB at {position} — an InterfaceConformance's binding columns are parallel"))
 			end 'theFirstConformer'
 		end 'eachInterface'
 	end 'eachDeclaringType'
@@ -983,9 +1322,7 @@ end 'associatedAbiBindingOf'
 
 // Every conformer's binding held against the first conformer's, in source order: the first that differs, or the
 // one they all share.
-function agreementWith(conformances ConformanceDeclArray, signatures ProgramSignatures, interfaceName ByteArray, position ElementIndex, first ConformanceDecl, firstBinding ByteArray) returns AssociatedAbiBinding
-	view firstScoped = signatures.declaredIdentityOfSpelling(firstBinding, declFilePath: first.filePath)
-
+function agreementWith(conformances ConformanceDeclArray, signatures ProgramSignatures, interfaceName ByteArray, position ElementIndex, first ConformanceDecl, firstBinding ByteArray, firstBindingType RequirementType) returns AssociatedAbiBinding
 	for decl in conformances 'eachDeclaringType'
 		for entry in decl.interfaces 'eachInterface'
 			if not bindsAssociatedAt(entry, interfaceName: interfaceName, position: position) 'bindsNothingHere'
@@ -993,14 +1330,15 @@ function agreementWith(conformances ConformanceDeclArray, signatures ProgramSign
 			end 'bindsNothingHere'
 
 			let binding = try entry.withArgs.get(position) otherwise panic("agreementWith: withArgs.get OOB at {position}, which `bindsAssociatedAt` excludes")
+			let bindingType = try entry.withArgTypes.get(position) otherwise panic("agreementWith: withArgTypes.get OOB at {position} — an InterfaceConformance's binding columns are parallel")
 
-			if not firstScoped.equals(signatures.declaredIdentityOfSpelling(binding, declFilePath: decl.filePath)) 'bindingsDisagree'
+			if not firstBindingType.denotesSameTypeAs(bindingType) 'bindingsDisagree'
 				return AssociatedAbiBinding.disagreed(first, firstBinding: firstBinding, second: decl, secondBinding: binding)
 			end 'bindingsDisagree'
 		end 'eachInterface'
 	end 'eachDeclaringType'
 
-	return AssociatedAbiBinding.agreed(first, binding: firstBinding, declaredType: renderedTypeNameAbiType(firstBinding, readerFilePath: first.filePath, signatures: signatures))
+	return AssociatedAbiBinding.agreed(first, binding: firstBinding, bindingType: firstBindingType, declaredType: requirementAbiType(firstBindingType, readerFilePath: first.filePath, signatures: signatures))
 end 'agreementWith'
 
 // Does `entry` conform to `interfaceName` and bind its associated type at `position`? A conformance that bound
@@ -1011,25 +1349,25 @@ end 'bindsAssociatedAt'
 
 // A type has one `ConformanceDecl` per `implements` clause — its header's and each `extension T implements`'s
 // — so the first one for `typeName` need not be the one that binds `interfaceName`.
-export function conformanceDeclBinding(conformances ConformanceDeclArray, typeName ByteArray, interfaceName ByteArray, position ElementIndex) returns (ConformanceDecl, ByteArray) throws MapError
+export function conformanceDeclBindingType(conformances ConformanceDeclArray, typeName ByteArray, interfaceName ByteArray, position ElementIndex) returns (ConformanceDecl, RequirementType) throws MapError
 	for decl in conformances 'eachDeclaringType'
 		if not decl.typeName.equals(typeName) 'anotherType'
 			continue
 		end 'anotherType'
 
-		if let binding = try declAssociatedBinding(decl, interfaceName: interfaceName, position: position) 'thisClauseBindsIt'
+		if let binding = try declAssociatedBindingType(decl, interfaceName: interfaceName, position: position) 'thisClauseBindsIt'
 			return (decl, binding)
 		end 'thisClauseBindsIt'
 	end 'eachDeclaringType'
 
 	throw MapError.keyNotFound
-end 'conformanceDeclBinding'
+end 'conformanceDeclBindingType'
 
 // ⭐ **THE SAME READ WHEN THE CALLER ALREADY HOLDS THE DECLARATION**, which is what a WALK of the conformance
 // list holds. Split from the name-keyed door above rather than left inside it because the difference is a
 // COST, not a spelling: a walk that asked by name for each declaration it was already standing on would scan
 // the whole list per element — the quadratic this project's ladder exists to find.
-export function declAssociatedBinding(decl ConformanceDecl, interfaceName ByteArray, position ElementIndex) returns ByteArray throws MapError
+export function declAssociatedBindingType(decl ConformanceDecl, interfaceName ByteArray, position ElementIndex) returns RequirementType throws MapError
 	for entry in decl.interfaces 'eachInterface'
 		if not entry.interfaceName.equals(interfaceName) 'otherInterface'
 			continue
@@ -1041,11 +1379,11 @@ export function declAssociatedBinding(decl ConformanceDecl, interfaceName ByteAr
 			continue
 		end 'boundNothingAtThisPosition'
 
-		return try entry.withArgs.get(position) otherwise panic("declAssociatedBinding: withArgs.get OOB at {position}, which the guard above excludes")
+		return try entry.withArgTypes.get(position) otherwise panic("declAssociatedBindingType: withArgTypes.get OOB at {position} — an InterfaceConformance's binding columns are parallel, and the guard above bounds the position by `withArgs`")
 	end 'eachInterface'
 
 	throw MapError.keyNotFound
-end 'declAssociatedBinding'
+end 'declAssociatedBindingType'
 
 // ⭐⭐ **THE SHADOW RENAME TABLE — bare name ⇒ the reserved name a LISTED STDLIB module's declaration of
 // that name is moved to.**
@@ -1121,6 +1459,33 @@ end 'cacheReadIrInterfaceEntryMap'
 
 // @generated library-cache end
 
+export typealias SynthesizedNominalMap = Map with (ByteArray, readonly ByteArray)
+
+// @generated library-cache begin
+function cacheWriteSynthesizedNominalMap(writer LibraryCacheWriter, value SynthesizedNominalMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.bytes(key)
+		writer.bytes(entry)
+	end 'eachEntry'
+end 'cacheWriteSynthesizedNominalMap'
+
+function cacheReadSynthesizedNominalMap(reader LibraryCacheReader) returns SynthesizedNominalMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = SynthesizedNominalMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.bytes()
+		let entry = try reader.bytes()
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadSynthesizedNominalMap'
+
+// @generated library-cache end
+
 export type IrInterfaceMap
 	export var entries as IrInterfaceEntryMap
 
@@ -1128,13 +1493,23 @@ export type IrInterfaceMap
 	// protocol lookup already takes one; `withSharedLibraryRenames` hands the table on to a fresh registry.
 	var libraryRenames as StdlibShadowRenameMap
 
+	var synthesizedNominals as SynthesizedNominalMap
+
 	export static function create() returns IrInterfaceMap
-		return Self{entries: IrInterfaceEntryMap.create(), libraryRenames: StdlibShadowRenameMap.create()}
+		return Self{entries: IrInterfaceEntryMap.create(), libraryRenames: StdlibShadowRenameMap.create(), synthesizedNominals: SynthesizedNominalMap.create()}
 	end 'create'
 
 	export function withSharedLibraryRenames() returns IrInterfaceMap
-		return Self{entries: IrInterfaceEntryMap.create(), libraryRenames: self.libraryRenames}
+		return Self{entries: IrInterfaceEntryMap.create(), libraryRenames: self.libraryRenames, synthesizedNominals: self.synthesizedNominals}
 	end 'withSharedLibraryRenames'
+
+	export function recordSynthesizedNominal(name ByteArray, identity ByteArray)
+		self.synthesizedNominals.upsert(name, value: identity)
+	end 'recordSynthesizedNominal'
+
+	export function synthesizedNominalOf(name ByteArray) returns ByteArray
+		return try self.synthesizedNominals.get(name) otherwise name
+	end 'synthesizedNominalOf'
 
 	// The ONE gate every cost of the contest sits behind: for a program that shadows no library name it
 	// answers false, the token rewrite never runs, and the emitted bytes are those of a compile with no rename.
@@ -1206,24 +1581,26 @@ export type IrInterfaceMap
 	end 'namesALibraryProtocol'
 
 	export function protocolDeclaration(protocol BuiltinInterfaceKind) returns IrInterface
-		return synthesizedProtocol(protocol, spelledAs: self.spellingOf(protocol))
+		return synthesizedProtocol(protocol, spelledAs: self.spellingOf(protocol), interfaces: self)
 	end 'protocolDeclaration'
 
 	// @generated library-cache begin
 	export function cacheWrite(writer LibraryCacheWriter)
 		cacheWriteIrInterfaceEntryMap(writer, value: self.entries)
 		cacheWriteStdlibShadowRenameMap(writer, value: self.libraryRenames)
+		cacheWriteSynthesizedNominalMap(writer, value: self.synthesizedNominals)
 	end 'cacheWrite'
 
 	export static function cacheRead(reader LibraryCacheReader) returns IrInterfaceMap throws LibraryCacheDamage
 		let f_entries = try cacheReadIrInterfaceEntryMap(reader)
 		let f_libraryRenames = try cacheReadStdlibShadowRenameMap(reader)
+		let f_synthesizedNominals = try cacheReadSynthesizedNominalMap(reader)
 
-		return Self{entries: f_entries, libraryRenames: f_libraryRenames}
+		return Self{entries: f_entries, libraryRenames: f_libraryRenames, synthesizedNominals: f_synthesizedNominals}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize16
-		return sizeof(IrInterfaceMap) as CacheSize16
+	static function cacheLayoutBytes() returns CacheSize24
+		return sizeof(IrInterfaceMap) as CacheSize24
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -1266,45 +1643,68 @@ end 'cacheReadIrInterfaceArray'
 // declared conformance and nothing would notice.
 let sharedEmptyWithArgs = NameRoster.create()
 
+export let sharedEmptyRequirementTypes = RequirementTypeArray.create()
+
+export function renumberedRequirements(requirements RequirementTypeArray, remap TypeIdRemap) returns RequirementTypeArray
+	if requirements.isEmpty() 'nothingToRenumber'
+		return requirements
+	end 'nothingToRenumber'
+
+	var renumbered = RequirementTypeArray.create()
+
+	for requirement in requirements 'eachRequirement'
+		renumbered.push(requirement.withInstancesRenumbered(remap))
+	end 'eachRequirement'
+
+	return renumbered
+end 'renumberedRequirements'
+
 // ⭐ **ONE `I [with A, B]` ENTRY OF AN `implements` CLAUSE.** The interface NAME and this
 // conformance's POSITIONAL bindings for that interface's `uses` names, kept together because they mean
 // nothing apart: `withArgs[i]` binds `iface.associatedTypeNames[i]`. Two parallel columns on the decl
 // would be the same data with an alignment hazard a record makes unrepresentable.
 //
-// The arguments are RENDERED SOURCE STRINGS for `InterfaceMethodSig`'s reason (see this file's header):
-// what they substitute INTO is a requirement's rendered type string, and the E3016 message prints the
-// result — `implements Typed with Float` must print `expected make() returns Float`.
+// `withArgTypes` holds each argument's identity, which every verdict reads. `withArgs` (canonical) and
+// `withArgSpellings` (as written) are display, substituted into a requirement's display so the E3016
+// message prints the result — `implements Typed with Float` prints `expected make() returns Float`.
 export type InterfaceConformance
 	export let interfaceName as ByteArray
 	export let withArgs as NameRoster
 	export let withArgSpellings as NameRoster
+	export let withArgTypes as RequirementTypeArray
 
-	export static function create(interfaceName ByteArray, withArgs NameRoster, withArgSpellings NameRoster) returns InterfaceConformance
-		return Self{interfaceName: interfaceName, withArgs: withArgs, withArgSpellings: withArgSpellings}
+	export static function create(interfaceName ByteArray, withArgs NameRoster, withArgSpellings NameRoster, withArgTypes RequirementTypeArray) returns InterfaceConformance
+		return Self{interfaceName: interfaceName, withArgs: withArgs, withArgSpellings: withArgSpellings, withArgTypes: withArgTypes}
 	end 'create'
 
 	// A conformance that wrote no `with` clause at all — it binds nothing, and shares the one empty list.
 	export static function withoutBindings(interfaceName ByteArray) returns InterfaceConformance
-		return Self{interfaceName: interfaceName, withArgs: sharedEmptyWithArgs, withArgSpellings: sharedEmptyWithArgs}
+		return Self{interfaceName: interfaceName, withArgs: sharedEmptyWithArgs, withArgSpellings: sharedEmptyWithArgs, withArgTypes: sharedEmptyRequirementTypes}
 	end 'withoutBindings'
+
+	export function withInstancesRenumbered(remap TypeIdRemap) returns InterfaceConformance
+		return Self{interfaceName: self.interfaceName, withArgs: self.withArgs, withArgSpellings: self.withArgSpellings, withArgTypes: renumberedRequirements(self.withArgTypes, remap: remap)}
+	end 'withInstancesRenumbered'
 
 	// @generated library-cache begin
 	function cacheWrite(writer LibraryCacheWriter)
 		writer.bytes(self.interfaceName)
 		cacheWriteNameRoster(writer, value: self.withArgs)
 		cacheWriteNameRoster(writer, value: self.withArgSpellings)
+		cacheWriteRequirementTypeArray(writer, value: self.withArgTypes)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns InterfaceConformance throws LibraryCacheDamage
 		let f_interfaceName = try reader.bytes()
 		let f_withArgs = try cacheReadNameRoster(reader)
 		let f_withArgSpellings = try cacheReadNameRoster(reader)
+		let f_withArgTypes = try cacheReadRequirementTypeArray(reader)
 
-		return Self{interfaceName: f_interfaceName, withArgs: f_withArgs, withArgSpellings: f_withArgSpellings}
+		return Self{interfaceName: f_interfaceName, withArgs: f_withArgs, withArgSpellings: f_withArgSpellings, withArgTypes: f_withArgTypes}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize24
-		return sizeof(InterfaceConformance) as CacheSize24
+	static function cacheLayoutBytes() returns CacheSize32
+		return sizeof(InterfaceConformance) as CacheSize32
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -1348,6 +1748,16 @@ export type ConformanceDecl
 	export static function create(typeName ByteArray, interfaces InterfaceConformanceArray, nameLine LineNumber, nameColumn ColumnNumber, filePath FilePath) returns ConformanceDecl
 		return Self{typeName: typeName, interfaces: interfaces, nameLine: nameLine, nameColumn: nameColumn, filePath: filePath}
 	end 'create'
+
+	export function withInstancesRenumbered(remap TypeIdRemap) returns ConformanceDecl
+		var renumbered = InterfaceConformanceArray.create()
+
+		for entry in self.interfaces 'eachEntry'
+			renumbered.push(entry.withInstancesRenumbered(remap))
+		end 'eachEntry'
+
+		return Self{typeName: self.typeName, interfaces: renumbered, nameLine: self.nameLine, nameColumn: self.nameColumn, filePath: self.filePath}
+	end 'withInstancesRenumbered'
 
 	// @generated library-cache begin
 	function cacheWrite(writer LibraryCacheWriter)
@@ -1494,11 +1904,11 @@ end 'InterfaceLookup'
 // constraints, OR `b.run()` resolved against the interface a value is held at. `witnessValue` is the value
 // holding the table to jump through (see its own header — it is what makes the two receivers ONE
 // mechanism); `methodIndex` is the DECL-ORDER slot of the method in
-// that constraint's interface (the witness-table slot); `returnTypeName` is the interface method's rendered
-// return type, used to type the dispatch result exactly as a direct call types its own. `paramTypeNames` are
-// the method's rendered formal parameter types — read to reject a concrete value marshalled
-// into a `Self`-typed formal (`Equatable.equals`'s and `Comparable.compare`'s `other Self`), which would fault
-// (a struct `equals` dereferences an int literal as its `other` pointer).
+// that constraint's interface (the witness-table slot); `returnType` types the dispatch result exactly as a
+// direct call types its own. `paramTypes` are the formals a witness argument is checked against — among them
+// a `Self`-typed formal (`Equatable.equals`'s and `Comparable.compare`'s `other Self`), into which a concrete
+// value marshalled would fault (a struct `equals` dereferences an int literal as its `other` pointer).
+// `returnTypeName`/`paramTypeNames` are their display.
 export type WitnessDispatchTarget
 	// ⭐⭐ **THE VALUE HOLDING THE WITNESS TABLE THIS DISPATCH JUMPS THROUGH — a ValueId, not an index.**
 	// It is what makes ONE dispatch mechanism serve both receivers the
@@ -1528,7 +1938,9 @@ export type WitnessDispatchTarget
 	// per-argument ABI widths from the CALLEE's signature rather than from the actuals.
 	export let interfaceDeclIndex as ElementIndex
 	export let returnTypeName as ByteArray
+	export let returnType as RequirementType
 	export let paramTypeNames as NameRoster
+	export let paramTypes as RequirementTypeArray
 
 	// ⭐ **THE AUTHORITATIVE `name:` LABEL VOCABULARY OF THIS DISPATCH** — parallel to
 	// `paramTypeNames`, and the list `Project.slotCallArgs` slots the call's arguments against. It is the
@@ -1562,8 +1974,8 @@ export type WitnessDispatchTarget
 	// the last field of the requirement the two ambiguity/arity rejects need and the only one nothing else reads.
 	export let isStatic as bool
 
-	export static function create(witnessValue ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, returnTypeName ByteArray, paramTypeNames NameRoster, throwsClause ThrowsClause, methodName ByteArray, paramNames NameRoster, declaringInterfaceName ByteArray, isStatic bool) returns WitnessDispatchTarget
-		return Self{witnessValue: witnessValue, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, returnTypeName: returnTypeName, paramTypeNames: paramTypeNames, throwsClause: throwsClause, methodName: methodName, paramNames: paramNames, declaringInterfaceName: declaringInterfaceName, isStatic: isStatic}
+	export static function create(witnessValue ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, returnTypeName ByteArray, returnType RequirementType, paramTypeNames NameRoster, paramTypes RequirementTypeArray, throwsClause ThrowsClause, methodName ByteArray, paramNames NameRoster, declaringInterfaceName ByteArray, isStatic bool) returns WitnessDispatchTarget
+		return Self{witnessValue: witnessValue, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, returnTypeName: returnTypeName, returnType: returnType, paramTypeNames: paramTypeNames, paramTypes: paramTypes, throwsClause: throwsClause, methodName: methodName, paramNames: paramNames, declaringInterfaceName: declaringInterfaceName, isStatic: isStatic}
 	end 'create'
 end 'WitnessDispatchTarget'
 
@@ -1661,18 +2073,32 @@ export function witnessCandidatesNeedReceiverFilter(candidates WitnessDispatchTa
 	return false
 end 'witnessCandidatesNeedReceiverFilter'
 
+export type AliasExpansionScope
+	export let declaringInterfaceName as ByteArray
+	export let associatedNames as NameRoster
+	export let bound as RequirementTypeArray
+
+	export static function create(declaringInterfaceName ByteArray, associatedNames NameRoster, bound RequirementTypeArray) returns AliasExpansionScope
+		return Self{declaringInterfaceName: declaringInterfaceName, associatedNames: associatedNames, bound: bound}
+	end 'create'
+end 'AliasExpansionScope'
+
+export let sharedNoAliasExpansion = AliasExpansionScope.create(b"", associatedNames: NameRoster.create(), bound: RequirementTypeArray.create())
+
 // One requirement of an interface paired with the interface that DECLARED it — the source interface, so a
 // method inherited via `extends` can be tagged `(from BaseInterface)` in a missing-method report and so a
 // witness slot's relocation names the member filed under THAT interface's key
-// (`witnessSlotImplKey`, which is keyed by the declaring interface and not by the table's).
+// (`witnessSlotImplKey`, which is keyed by the declaring interface and not by the table's). `method` is the
+// copy a verdict reads, `displayMethod` the one E3016 prints.
 export type CollectedInterfaceMethod
 	export let method as InterfaceMethodSig
 	export let displayMethod as InterfaceMethodSig
 	export let sourceInterfaceName as ByteArray
 	export let sourceDeclFilePath as FilePath
+	export let expansion as AliasExpansionScope
 
-	export static function create(method InterfaceMethodSig, displayMethod InterfaceMethodSig, sourceInterfaceName ByteArray, sourceDeclFilePath FilePath) returns CollectedInterfaceMethod
-		return Self{method: method, displayMethod: displayMethod, sourceInterfaceName: sourceInterfaceName, sourceDeclFilePath: sourceDeclFilePath}
+	export static function create(method InterfaceMethodSig, displayMethod InterfaceMethodSig, sourceInterfaceName ByteArray, sourceDeclFilePath FilePath, expansion AliasExpansionScope) returns CollectedInterfaceMethod
+		return Self{method: method, displayMethod: displayMethod, sourceInterfaceName: sourceInterfaceName, sourceDeclFilePath: sourceDeclFilePath, expansion: expansion}
 	end 'create'
 end 'CollectedInterfaceMethod'
 
@@ -1773,7 +2199,7 @@ function appendInterfaceWitnessSlots(interfaces IrInterfaceMap, iface IrInterfac
 
 	for i in 0 upto iface.methods.count() 'eachOwn'
 		let method = try iface.methods.get(i) otherwise panic("appendInterfaceWitnessSlots: methods.get OOB at {i} below count {iface.methods.count()}")
-		slots.push(CollectedInterfaceMethod.create(method, displayMethod: method, sourceInterfaceName: iface.name, sourceDeclFilePath: iface.declFilePath))
+		slots.push(CollectedInterfaceMethod.create(method, displayMethod: method, sourceInterfaceName: iface.name, sourceDeclFilePath: iface.declFilePath, expansion: sharedNoAliasExpansion))
 	end 'eachOwn'
 
 	for j in 0 upto iface.extendsInterfaces.count() 'eachParent'
@@ -1944,25 +2370,27 @@ end 'collectParentInterfaces'
 // reason: every clause compares the candidate against the FETCHED protocol, so the protocol stays the one
 // place a requirement's shape is stated.
 export function witnessTargetIsProtocol(target WitnessDispatchTarget, want InterfaceMethodSig) returns bool
-	return target.returnTypeName.equals(want.returnTypeName) and target.isStatic == want.isStatic and not throwsClauseIsThrowing(target.throwsClause) and target.paramTypeNames.equals(want.paramTypeNames)
+	return target.returnType.agreesWith(want.returnType) and target.isStatic == want.isStatic and not throwsClauseIsThrowing(target.throwsClause) and requirementsAgree(target.paramTypes, second: want.paramTypes)
 end 'witnessTargetIsProtocol'
 
 // A nullary interface method (`hash()`, `toString()`, `clone()`). Every SYNTHESIZED protocol method is
 // non-throwing — the builtin conformances (`int.hash()`, `String.equals(other)`) are compiler-emitted
 // runtime chunks with no error channel — so the throws clause is `none` at both helpers.
-function nullaryInterfaceMethod(name ByteArray, returnTypeName ByteArray) returns InterfaceMethodSig
-	return InterfaceMethodSig.create(name, paramNames: NameRoster.create(), paramTypeNames: NameRoster.create(), returnTypeName: returnTypeName, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: InterfaceMethodSig.noBufferParams(0), paramCapabilities: lentParams(0), returnCapability: ResultCapability.unqualified, nameLine: 0, nameColumn: 0, written: sharedEmptyWrittenTypeNames)
+function nullaryInterfaceMethod(name ByteArray, returnTypeName ByteArray, returnType RequirementType) returns InterfaceMethodSig
+	return InterfaceMethodSig.create(name, paramNames: NameRoster.create(), paramTypeNames: NameRoster.create(), paramTypes: RequirementTypeArray.create(), returnTypeName: returnTypeName, returnType: returnType, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: InterfaceMethodSig.noBufferParams(0), paramCapabilities: lentParams(0), returnCapability: ResultCapability.unqualified, nameLine: 0, nameColumn: 0, written: sharedEmptyWrittenTypeNames)
 end 'nullaryInterfaceMethod'
 
 // A one-parameter interface method (`equals(other Self)`, `toString(format String)`).
-function unaryInterfaceMethod(name ByteArray, paramName ByteArray, paramTypeName ByteArray, returnTypeName ByteArray) returns InterfaceMethodSig
+function unaryInterfaceMethod(name ByteArray, paramName ByteArray, paramTypeName ByteArray, paramType RequirementType, returnTypeName ByteArray, returnType RequirementType) returns InterfaceMethodSig
 	var paramNames = NameRoster.create()
 	paramNames.push(paramName)
 	var paramTypeNames = NameRoster.create()
 	paramTypeNames.push(paramTypeName)
+	var paramTypes = RequirementTypeArray.create()
+	paramTypes.push(paramType)
 	let paramIsBuffer = InterfaceMethodSig.noBufferParams(paramNames.count() as ParamCount)
 	let paramCapabilities = lentParams(paramNames.count() as ParamCount)
-	return InterfaceMethodSig.create(name, paramNames: paramNames, paramTypeNames: paramTypeNames, returnTypeName: returnTypeName, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: paramIsBuffer, paramCapabilities: paramCapabilities, returnCapability: ResultCapability.unqualified, nameLine: 0, nameColumn: 0, written: sharedEmptyWrittenTypeNames)
+	return InterfaceMethodSig.create(name, paramNames: paramNames, paramTypeNames: paramTypeNames, paramTypes: paramTypes, returnTypeName: returnTypeName, returnType: returnType, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: paramIsBuffer, paramCapabilities: paramCapabilities, returnCapability: ResultCapability.unqualified, nameLine: 0, nameColumn: 0, written: sharedEmptyWrittenTypeNames)
 end 'unaryInterfaceMethod'
 
 // An interface with exactly one method and no `extends`/`uses` — every synthesized
@@ -1982,7 +2410,7 @@ end 'markerInterface'
 // ⭐⭐ **THE Std RESULT TYPE OF A SYNTHESIZED PROTOCOL METHOD — ONE FACT, READ BY EVERY BUILDER THAT MUST
 // AGREE WITH IT.** A witness table's method slot is typed by the INTERFACE, so three
 // parties have to spell one signature: the DISPATCH SITE (which derives it from the declarations just below,
-// through `Parser.interfaceSpelledType` → `valueTagToStdType`), the synthesized IMPL that lands in the
+// through `Parser.interfaceReturnMaxonType` → `valueTagToStdType`), the synthesized IMPL that lands in the
 // slot (`BuiltinConformanceRuntime`, `StringRuntime.buildStrEq`), and the hand-built `Set` runtime whose
 // bodies dispatch `hash`/`equals` through witnesses of their own. Nothing makes a synthesized
 // impl obey a conformance check — there is none to run — so without this the three are three copies.
@@ -1994,43 +2422,71 @@ end 'markerInterface'
 // EXACTLY, it is a **`wasm trap: indirect call type mismatch`** across 18 spec cases (`set`, `equatable`,
 // `primitive-conformance`, `string-conformance`).
 //
-// It is keyed by the RENDERED RETURN-TYPE NAME each declaration below already carries, so adding a protocol
+// It is keyed by the return `RequirementType` each declaration below already carries, so adding a protocol
 // method means writing its return type once — in the declaration — and this answers for it.
-export function builtinProtocolResultStdType(returnTypeName ByteArray) returns StdType
-	// `bool` is the one sub-64 result: `valueTagToStdType(boolean)` is `i1`.
-	if returnTypeName.equals(BoolConformerName) 'boolResult'
-		return StdType.i1
-	end 'boolResult'
-
-	// `HashValue` is a ranged int alias and `Ordering` an enum — both collapse to a machine word
-	// (`valueTagToStdType`'s `named`/`integer` arms), which is what makes them agree with the impls already.
-	if returnTypeName.equals(HashValueTypeName) or returnTypeName.equals(OrderingTypeName) 'machineWordResult'
-		return StdType.i64
-	end 'machineWordResult'
-
-	panic("builtinProtocolResultStdType: '{String.from(returnTypeName)}' is not a synthesized protocol method's return type — the three below return `bool`, `HashValue` and `Ordering`, and a fourth must be given its Std type here rather than assumed to be a machine word")
+export function builtinProtocolResultStdType(result RequirementType) returns StdType
+	return match result.identity 'identity'
+		builtin(tag) gives builtinProtocolResultOfTag(tag)
+		nominal(name) gives builtinProtocolResultOfNominal(name)
+		void or
+		selfType or
+		typeParameter or
+		genericInstance panic("builtinProtocolResultStdType: a synthesized protocol method's result is a `bool`, a `HashValue` or an `Ordering`, and a fourth kind of result must be given its Std type here rather than assumed to be a machine word")
+	end 'identity'
 end 'builtinProtocolResultStdType'
+
+function builtinProtocolResultOfTag(tag ValueTypeTag) returns StdType
+	if tag != ValueTypeTag.boolean 'notTheBool'
+		panic("builtinProtocolResultStdType: a builtin result of tag `{tag.name}` is not a synthesized protocol method's — `bool` is the only one, and a second must be given its Std type here rather than assumed to be a machine word")
+	end 'notTheBool'
+
+	return StdType.i1
+end 'builtinProtocolResultOfTag'
+
+function builtinProtocolResultOfNominal(name ByteArray) returns StdType
+	if not (name.equals(HashValueTypeName) or name.equals(OrderingTypeName)) 'notAMachineWordResult'
+		panic("builtinProtocolResultStdType: '{String.from(name)}' is not a synthesized protocol method's return type — the three below return `bool`, `HashValue` and `Ordering`, and a fourth must be given its Std type here rather than assumed to be a machine word")
+	end 'notAMachineWordResult'
+
+	return StdType.i64
+end 'builtinProtocolResultOfNominal'
 
 // The SYNTHESIZED stdlib protocol interfaces, verbatim from stdlib/Interfaces.maxon —
 // so `implements Stringable`/`Hashable`/… resolves without the compiler reading the stdlib (the
 // same reason `String`/`Array` are synthesized). Declared under `spelledAs`, the name this compile
 // spells the protocol by. `Iterator`/`Iterable` (associated types) are deliberately not synthesized here.
-function synthesizedProtocol(protocol BuiltinInterfaceKind, spelledAs ByteArray) returns IrInterface
-	match protocol 'which'
-		notABuiltin then panic("synthesizedProtocol: asked for the declaration of a name that is not one of the synthesized protocols — every caller classifies the name first")
-		stringable then return singleMethodInterface(spelledAs, method: nullaryInterfaceMethod(ToStringMethodName, returnTypeName: StringConformerName))
-		formattedStringable then return singleMethodInterface(spelledAs, method: unaryInterfaceMethod(ToStringMethodName, paramName: FormatParamName, paramTypeName: StringConformerName, returnTypeName: StringConformerName))
-		hashable then return singleMethodInterface(spelledAs, method: nullaryInterfaceMethod(HashMethodName, returnTypeName: HashValueTypeName))
-		equatable then return singleMethodInterface(spelledAs, method: unaryInterfaceMethod(EqualsMethodName, paramName: OtherParamName, paramTypeName: InterfaceSelfTypeName, returnTypeName: BoolConformerName))
-		comparable then return singleMethodInterface(spelledAs, method: unaryInterfaceMethod(CompareMethodName, paramName: OtherParamName, paramTypeName: InterfaceSelfTypeName, returnTypeName: OrderingTypeName))
-		cloneable then return singleMethodInterface(spelledAs, method: nullaryInterfaceMethod(CloneMethodName, returnTypeName: InterfaceSelfTypeName))
-		error then return markerInterface(spelledAs)
-	end 'which'
+function synthesizedProtocol(protocol BuiltinInterfaceKind, spelledAs ByteArray, interfaces IrInterfaceMap) returns IrInterface
+	let method = try synthesizedProtocolMethod(protocol, interfaces: interfaces) otherwise return markerInterface(spelledAs)
+	return singleMethodInterface(spelledAs, method: method)
 end 'synthesizedProtocol'
 
-function canonicalProtocolDeclaration(protocol BuiltinInterfaceKind) returns IrInterface
-	return synthesizedProtocol(protocol, spelledAs: canonicalProtocolName(protocol))
-end 'canonicalProtocolDeclaration'
+function synthesizedProtocolMethodName(protocol BuiltinInterfaceKind) returns ByteArray throws AbsentError
+	match protocol 'which'
+		notABuiltin then panic("synthesizedProtocolMethodName: asked for the method of a name that is not one of the synthesized protocols — every caller classifies the name first")
+		stringable or
+		formattedStringable then return ToStringMethodName
+		hashable then return HashMethodName
+		equatable then return EqualsMethodName
+		comparable then return CompareMethodName
+		cloneable then return CloneMethodName
+		error then throw AbsentError.absent
+	end 'which'
+end 'synthesizedProtocolMethodName'
+
+function synthesizedProtocolMethod(protocol BuiltinInterfaceKind, interfaces IrInterfaceMap) returns InterfaceMethodSig throws AbsentError
+	let name = try synthesizedProtocolMethodName(protocol)
+
+	match protocol 'which'
+		notABuiltin or
+		error then panic("synthesizedProtocolMethod: `{protocol.name}` declares no method — `synthesizedProtocolMethodName` refused it a line above")
+		stringable then return nullaryInterfaceMethod(name, returnTypeName: StringConformerName, returnType: RequirementType.ofTag(ValueTypeTag.string))
+		formattedStringable then return unaryInterfaceMethod(name, paramName: FormatParamName, paramTypeName: StringConformerName, paramType: RequirementType.ofTag(ValueTypeTag.string), returnTypeName: StringConformerName, returnType: RequirementType.ofTag(ValueTypeTag.string))
+		hashable then return nullaryInterfaceMethod(name, returnTypeName: HashValueTypeName, returnType: RequirementType.ofNominal(interfaces.synthesizedNominalOf(HashValueTypeName)))
+		equatable then return unaryInterfaceMethod(name, paramName: OtherParamName, paramTypeName: InterfaceSelfTypeName, paramType: RequirementType.ofSelf(), returnTypeName: BoolConformerName, returnType: RequirementType.ofTag(ValueTypeTag.boolean))
+		comparable then return unaryInterfaceMethod(name, paramName: OtherParamName, paramTypeName: InterfaceSelfTypeName, paramType: RequirementType.ofSelf(), returnTypeName: OrderingTypeName, returnType: RequirementType.ofNominal(interfaces.synthesizedNominalOf(OrderingTypeName)))
+		cloneable then return nullaryInterfaceMethod(name, returnTypeName: InterfaceSelfTypeName, returnType: RequirementType.ofSelf())
+	end 'which'
+end 'synthesizedProtocolMethod'
 
 function canonicalProtocolName(protocol BuiltinInterfaceKind) returns ByteArray
 	match protocol 'which'
@@ -2167,7 +2623,7 @@ export function lookupInterface(interfaces IrInterfaceMap, name ByteArray) retur
 	let protocol = interfaces.protocolKind(name)
 
 	if protocol != BuiltinInterfaceKind.notABuiltin 'aSynthesizedProtocol'
-		return InterfaceLookup.found(synthesizedProtocol(protocol, spelledAs: name))
+		return InterfaceLookup.found(synthesizedProtocol(protocol, spelledAs: name, interfaces: interfaces))
 	end 'aSynthesizedProtocol'
 
 	if let userIface = try interfaces.entries.get(name) 'userDeclared'
@@ -2793,10 +3249,8 @@ function isSynthesizedConformerImpl(conformer ByteArray, methodName ByteArray) r
 		return false
 	end 'notABuiltinConformer'
 
-	return match builtinConformerMethod(conformer, methodName: methodName, discovered: DiscoveredConformer.none) 'lookup'
-		supplied gives true
-		notSupplied gives false
-	end 'lookup'
+	try supplyingProtocol(conformer, methodName: methodName, discovered: DiscoveredConformer.none) otherwise return false
+	return true
 end 'isSynthesizedConformerImpl'
 
 // The protocol method a builtin conformer supplies under a given name, or `notSupplied`.
@@ -2869,25 +3323,24 @@ end 'intrinsicConformanceProtocols'
 // E3017 answer and the witness slot read: one derivation for the three. It carries none of the array's
 // hazard: the symbol it reaches is `ProgramSignatures.enumConformanceImplName`'s, which is `int.<method>`
 // (a KEYWORD qualifier no declaration can wear) precisely when the enum declares no such method of its own.
-export function builtinConformerMethod(typeName ByteArray, methodName ByteArray, discovered DiscoveredConformer) returns BuiltinConformerMethodLookup
+export function builtinConformerMethod(typeName ByteArray, methodName ByteArray, discovered DiscoveredConformer, interfaces IrInterfaceMap) returns BuiltinConformerMethodLookup
+	let protocol = try supplyingProtocol(typeName, methodName: methodName, discovered: discovered) otherwise return BuiltinConformerMethodLookup.notSupplied
+	return BuiltinConformerMethodLookup.supplied(try synthesizedProtocolMethod(protocol, interfaces: interfaces) otherwise panic("builtinConformerMethod: `{protocol.name}` supplies `{String.from(methodName)}` by `supplyingProtocol`'s answer, so it declares a method"))
+end 'builtinConformerMethod'
+
+// Matched by method NAME, so a lookup builds only the one protocol method it returns: `builtinConformerMethod`
+// is asked on every String-method call.
+function supplyingProtocol(typeName ByteArray, methodName ByteArray, discovered DiscoveredConformer) returns BuiltinInterfaceKind throws AbsentError
 	for protocol in intrinsicConformanceProtocols(typeName, discovered: discovered) 'eachProtocol'
-		// A DIRECT scan of the protocol's own methods, and deliberately not `interfaceWitnessSlots`: a
-		// synthesized protocol declares no `extends` (`singleMethodInterface`/`markerInterface` build them all
-		// with an empty list), so there is no chain to walk — and this dispatch wants the SIGNATURE, never a
-		// table slot, so it has nothing to keep in step with a witness table's numbering.
-		let iface = canonicalProtocolDeclaration(protocol)
+		let declared = try synthesizedProtocolMethodName(protocol) otherwise continue
 
-		for i in 0 upto iface.methods.count() 'eachMethod'
-			let method = try iface.methods.get(i) otherwise panic("builtinConformerMethod: methods.get OOB at {i} below count {iface.methods.count()} for protocol '{String.from(iface.name)}'")
-
-			if method.name.equals(methodName) 'declaresMethod'
-				return BuiltinConformerMethodLookup.supplied(method)
-			end 'declaresMethod'
-		end 'eachMethod'
+		if declared.equals(methodName) 'declaresMethod'
+			return protocol
+		end 'declaresMethod'
 	end 'eachProtocol'
 
-	return BuiltinConformerMethodLookup.notSupplied
-end 'builtinConformerMethod'
+	throw AbsentError.absent
+end 'supplyingProtocol'
 
 // ⭐ **THE METHODS A BUILTIN CONFORMER ACTUALLY SUPPLIES** — DERIVED from the very walk
 // `builtinConformerMethod` searches, so nothing downstream can advertise a method the dispatch would then
@@ -2909,9 +3362,7 @@ export function builtinConformerMethodNameList(typeName ByteArray) returns NameR
 	var names = NameRoster.create()
 
 	for protocol in intrinsicConformanceProtocols(typeName, discovered: DiscoveredConformer.none) 'eachProtocol'
-		for method in canonicalProtocolDeclaration(protocol).methods 'eachMethod'
-			names.push(method.name)
-		end 'eachMethod'
+		names.push(try synthesizedProtocolMethodName(protocol) otherwise continue)
 	end 'eachProtocol'
 
 	return names

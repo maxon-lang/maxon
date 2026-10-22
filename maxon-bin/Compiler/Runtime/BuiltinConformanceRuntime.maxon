@@ -498,7 +498,7 @@ end 'noteBuiltinImplReference'
 // scalar i64 in arg-0 (the witness dispatch passes `self.item`, a scalar `T` field read, straight
 // in — no pointer indirection).
 function buildIntHash(module StdModule, name ByteArray)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(HashValueTypeName)), paramCount: 1, paramTypes: oneI64Param())
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(RequirementType.ofNominal(HashValueTypeName))), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -562,7 +562,7 @@ end 'emitFloatBitsFold'
 // `primitive-hashable/float.hash.nan` pins the fold so a later reader does not "fix" it. `float.compare`'s
 // NaN preamble is not a counter-example: `compare` implements a TOTAL order, which IEEE does not give.
 function buildFloatHash(module StdModule, name ByteArray)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(HashValueTypeName)), paramCount: 1, paramTypes: oneF64Param())
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(RequirementType.ofNominal(HashValueTypeName))), paramCount: 1, paramTypes: oneF64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -673,7 +673,7 @@ end 'twoOperandParams'
 // (`stdlib/PrimitiveExtensions.maxon:39-41` is a bare `self == other` beside a NaN-aware `compare`) and the
 // canonical corpus pins both halves, so the asymmetry is the specification rather than an oversight here.
 function buildBuiltinEquals(module StdModule, name ByteArray, operandType StdType)
-	var func = createTwoOperandImpl(name, operandType: operandType, resultType: builtinProtocolResultStdType(BoolConformerName))
+	var func = createTwoOperandImpl(name, operandType: operandType, resultType: builtinProtocolResultStdType(RequirementType.ofTag(ValueTypeTag.boolean)))
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -753,7 +753,7 @@ end 'emitOrderedCascade'
 // cannot use it: IEEE `<`/`>` are false for every NaN pair, so `buildFloatCompare` enters the SAME cascade
 // from a NaN preamble instead.
 function buildOrderingCompare(module StdModule, name ByteArray, operandType StdType, ordering EnumLayout)
-	var func = createTwoOperandImpl(name, operandType: operandType, resultType: builtinProtocolResultStdType(OrderingTypeName))
+	var func = createTwoOperandImpl(name, operandType: operandType, resultType: builtinProtocolResultStdType(RequirementType.ofNominal(OrderingTypeName)))
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -790,7 +790,7 @@ end 'buildOrderingCompare'
 // a VALUE two blocks read rather than a branch, which on x64 costs the
 // `setne`+`setp`+`lea` materialization instead of a fused jump — a bigger body, to save a duplicated compare.
 function buildFloatCompare(module StdModule, name ByteArray, ordering EnumLayout)
-	var func = createTwoOperandImpl(name, operandType: StdType.f64, resultType: builtinProtocolResultStdType(OrderingTypeName))
+	var func = createTwoOperandImpl(name, operandType: StdType.f64, resultType: builtinProtocolResultStdType(RequirementType.ofNominal(OrderingTypeName)))
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -859,7 +859,7 @@ end 'buildFloatCompare'
 // lengths) rather than computed. Both `argType`s are set explicitly: `retypeBlockArgs` runs in
 // `lowerMaxonToStd`, which these post-pipeline functions never pass through.
 export function buildByteRecordCompare(module StdModule, name ByteArray, ordering EnumLayout)
-	var func = createTwoOperandImpl(name, operandType: StdType.i64, resultType: builtinProtocolResultStdType(OrderingTypeName))
+	var func = createTwoOperandImpl(name, operandType: StdType.i64, resultType: builtinProtocolResultStdType(RequirementType.ofNominal(OrderingTypeName)))
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -938,7 +938,7 @@ end 'buildByteRecordCompare'
 // accumulator added. Both phi `argType`s are set to i64 explicitly: `retypeBlockArgs` runs in
 // `lowerMaxonToStd`, which these post-pipeline functions never pass through.
 function buildStrHash(module StdModule, name ByteArray)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(HashValueTypeName)), paramCount: 1, paramTypes: oneI64Param())
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(RequirementType.ofNominal(HashValueTypeName))), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)

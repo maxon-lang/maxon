@@ -58,18 +58,17 @@
 // into a builtin-alias table (Character, etc.) when the stdlib cone lands.
 //
 // ⚠ **FILE-PRIVATE, AND IT IS THE `builtinTypeNameTag` BELOW THAT CARRIES THE NAME ACROSS FILES.** The
-// re-derivation doors — an interface's rendered return STRING, a function typealias's stored return NAME —
+// re-derivation doors — a function typealias's stored return and parameter NAMES —
 // need the ANSWER, not the bytes: handed the bytes, each door spells its own copy of the rule. Nothing
 // outside this file names the constant; the doors ask the table, which is the only thing that keeps them
 // from drifting.
 module let ExitCodeBuiltinName = b"ExitCode"
 
 // ⭐⭐ **THE TAG A BUILTIN TYPE NAME DENOTES — THE ONE ANSWER FOR EVERY DOOR THAT HOLDS A TYPE ONLY AS ITS
-// SOURCE-SPELLED NAME.** Two registries store a declared type INTERNER-FREE, as the bytes the source
-// wrote: an INTERFACE method's return type (a rendered source STRING — `IrInterface`) and a FUNCTION
-// TYPEALIAS's parameters and return (`FunctionTypeAlias`, whose `(tag, name)` pairs are what let it ride the
-// merge with no interner remap). Both therefore RE-DERIVE what a declaration derived once, and a
-// re-derivation is sound only while it reaches the SAME answer.
+// SOURCE-SPELLED NAME.** A FUNCTION TYPEALIAS stores its parameters and return INTERNER-FREE, as the bytes
+// the source wrote (`FunctionTypeAlias`, whose `(tag, name)` pairs are what let it ride the merge with no
+// interner remap). It therefore RE-DERIVES what a declaration derived once, and a re-derivation is sound
+// only while it reaches the SAME answer.
 //
 // It reaches the same answer for every name but one, because a ranged alias, an enum, a struct and a bare
 // nominal `named` all collapse to the same i64 machine word whichever route arrives at them
@@ -86,8 +85,8 @@ module let ExitCodeBuiltinName = b"ExitCode"
 // are pinned (`specs/first-class-functions.md`, `exitcode-return-through-alias` + its `ranged-alias`
 // control).
 //
-// ⇒ **The rule is stated ONCE, here, and asked by every door** — `Parser.interfaceSpelledType`, and
-// this file's `maxonTypeOfStoredTypeName` behind the stored-alias return and parameter doors
+// ⇒ **The rule is stated ONCE, here, and asked by every door** — this file's `maxonTypeOfStoredTypeName`
+// behind the stored-alias return and parameter doors
 // (`maxonTypeOfStoredAliasReturn`/`maxonTypeOfStoredAliasParam`), which the parser rebuilds through
 // against the FILE's interner and resolution against the project's merged one. Spelling it at one door
 // and nowhere else is exactly how the others drop the width; another hand-written `ExitCode` arm would
@@ -107,8 +106,8 @@ module let ExitCodeBuiltinName = b"ExitCode"
 // ⚠⚠ **THE ANSWER IS ONLY VALID AT A DOOR THAT HOLDS A *RENDERED* TYPE NAME — NOT AT ONE ASKING WHAT A
 // `named` REFERENCE DENOTES.** `bool`/`int`/`float`/`String` are unreachable as a `named` reference's name
 // (the first three are KEYWORDS; `String` and `Character` are settled syntactically by
-// `Parser.parseTypeReference`), so they can only arrive here from a rendered interface signature — where
-// they mean the builtin. That is why `denotedNamedType` admits only the `exitCode` answer and not every
+// `Parser.parseTypeReference`), so they can only arrive here as a stored spelling — where they mean the
+// builtin. That is why `denotedNamedType` admits only the `exitCode` answer and not every
 // non-`named` one; a new caller must decide the same question before it may read past the `exitCode` arm.
 //
 // ⛔ **A USER `enum String` CANNOT ROUTE THE NAME HERE.** `Parser.requireTypeNameNotCompilerOwned` refuses
@@ -118,17 +117,11 @@ module let ExitCodeBuiltinName = b"ExitCode"
 // can wear a `named` tag at all, in any program, so the answers past `exitCode` are unreachable here rather
 // than merely risky.
 //
-// ⚠ **`Character` IS DELIBERATELY ABSENT, and admitting it would be a FEATURE rather than a re-spelling.**
-// The set here is exactly the set the interface door answers for. A function typealias cannot reach the
-// question at all: `parseTypeReference` answers `Character` (and `String`) SYNTACTICALLY, so an alias stores
-// them by TAG with an EMPTY name and the `named` arm is never asked about either. Both are pinned
-// (`first-class-function.character-return-through-alias`, `.string-return-through-alias`), so a change that
-// started storing them by NAME would turn this reasoning red instead of quietly relying on it. The
-// interface door can reach it, and refuses it — an interface method declared `returns Character`,
-// dispatched through a witness, reports `E3005 Cannot return 'int' from function declared to return
-// 'Character'`. That is a clean refusal rather than a wrong answer, and admitting it means adopting a
-// managed record as an owned temp at the dispatch site (`Parser.enrolOwnedCallTemp`, which the witness door
-// reaches through `mintWitnessDispatchResult`), which is a mechanism with its own acceptance cases.
+// ⚠ **`Character` IS ABSENT.** A function typealias cannot reach the question: `parseTypeReference` answers
+// `Character` (and `String`) SYNTACTICALLY, so an alias stores them by TAG with an EMPTY name and the `named`
+// arm is never asked about either. Both are pinned (`first-class-function.character-return-through-alias`,
+// `.string-return-through-alias`), so a change that started storing them by NAME would turn this reasoning
+// red instead of quietly relying on it.
 //
 // ⚠ Every name is spelled by the CANONICAL constant the compiler already exports for it, never a fresh
 // `b"…"` — `BoolConformerName`'s own header says a second spelling of one of these "is the same fact and so
@@ -1079,7 +1072,7 @@ function syncResolvedSignature(project Project, func IrFunction)
 	end 'noSig'
 
 	var sig = try project.funcSignatures.get(func.name) otherwise panic("syncResolvedSignature: contains({String.from(func.name)}) true but get failed")
-	project.funcSignatures.upsert(func.name, value: FuncSignature.create(sig.paramNames, paramTypes: sourceParamTypesOf(func, declaredCount: sig.paramNames.count() as ParamCount), paramAggregateNames: sig.paramAggregateNames, paramDeclaredNames: sig.paramDeclaredNames, returnAggregateName: sig.returnAggregateName, paramExistentialSites: sig.paramExistentialSites, returnExistentialSites: sig.returnExistentialSites, extensionConstraints: sig.extensionConstraints, writtenTypeNames: sig.writtenTypeNames, selfSpelledParams: sig.selfSpelledParams, returnCapability: sig.returnCapability))
+	project.funcSignatures.upsert(func.name, value: FuncSignature.create(sig.paramNames, paramTypes: sourceParamTypesOf(func, declaredCount: sig.paramNames.count() as ParamCount), paramAggregateNames: sig.paramAggregateNames, paramDeclaredNames: sig.paramDeclaredNames, returnAggregateName: sig.returnAggregateName, returnBrand: sig.returnBrand, paramExistentialSites: sig.paramExistentialSites, returnExistentialSites: sig.returnExistentialSites, extensionConstraints: sig.extensionConstraints, writtenTypeNames: sig.writtenTypeNames, selfSpelledParams: sig.selfSpelledParams, returnCapability: sig.returnCapability))
 end 'syncResolvedSignature'
 
 // ⭐ **THE FUNCTION'S SOURCE PARAMETER TYPES — WHICH IS NOT ALWAYS ALL OF `maxonParamTypes`.** A LIFTED

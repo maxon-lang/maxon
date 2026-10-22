@@ -361,3 +361,143 @@ end 'main'
 ```exitcode
 2
 ```
+
+### A conditional extension's verdict reads the binding's type, not the alias name two files share
+
+Two files each declare a private `Bag`, one over `Byte` and one over a type that is not `Equatable`. `Packed`
+binds `Item` to the first file's `Bag`, a byte array, which is `Equatable`, so the conditional extension
+reaches `Packed` and `witnessed()` returns 7. The name `Bag` alone denotes no one type, so a verdict decided
+from the name withholds the method from `Packed`.
+
+<!-- test: conditional-extensions.binding-over-an-alias-two-files-declare -->
+```maxon
+// --- file: holder.maxon
+export interface Holder uses Item
+	function get() returns Item
+end 'Holder'
+
+extension Holder where Item is Equatable
+	export function witnessed() returns ExitCode
+		return 7
+	end 'witnessed'
+end 'Holder'
+
+// --- file: packed.maxon
+typealias Bag = Array with Byte
+
+export type Packed implements Holder with Bag
+	let tag as ExitCode
+
+	export static function create() returns Packed
+		return Packed{tag: 0}
+	end 'create'
+
+	function get() returns Bag
+		return Bag from [1, 2, 3]
+	end 'get'
+end 'Packed'
+
+// --- file: loose.maxon
+type Opaque
+	let tag as ExitCode
+end 'Opaque'
+
+typealias Bag = Array with Opaque
+
+export type Loose implements Holder with Bag
+	let tag as ExitCode
+
+	export static function create() returns Loose
+		return Loose{tag: 0}
+	end 'create'
+
+	function get() returns Bag
+		return Bag.create()
+	end 'get'
+
+	export function size() returns ExitCode
+		return self.get().count() as ExitCode
+	end 'size'
+end 'Loose'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let loose = Loose.create()
+	return Packed.create().witnessed() + loose.size()
+end 'main'
+```
+```exitcode
+7
+```
+
+### An extension body's associated type is the conformer's binding, not a name read again in the extension's file
+
+`Packed` and `Loose` each bind `Item` to the private `Bag` of their own file, one over `Byte` and one over a
+type that is not `Equatable`; the extension's file declares a third `Bag`, over `String`, and uses it for its
+own local. `weigh(other Item)` takes the conformer's binding, so on `Packed` it takes the byte array and
+`weigh` of a three-byte array returns 3. Reading the binding's name again in the extension's file would
+type `other` as an array of strings.
+
+<!-- test: conditional-extensions.associated-type-in-an-extension-body-over-an-alias-two-files-declare -->
+```maxon
+// --- file: holder.maxon
+typealias Bag = Array with String
+
+export interface Holder uses Item
+	function get() returns Item
+end 'Holder'
+
+extension Holder where Item is Equatable
+	export function weigh(other Item) returns ExitCode
+		let names = Bag.create()
+		return (other.count() as ExitCode) + (names.count() as ExitCode)
+	end 'weigh'
+end 'Holder'
+
+// --- file: packed.maxon
+typealias Bag = Array with Byte
+
+export type Packed implements Holder with Bag
+	let tag as ExitCode
+
+	export static function create() returns Packed
+		return Packed{tag: 0}
+	end 'create'
+
+	function get() returns Bag
+		return Bag from [1, 2, 3]
+	end 'get'
+end 'Packed'
+
+// --- file: loose.maxon
+type Opaque
+	let tag as ExitCode
+end 'Opaque'
+
+typealias Bag = Array with Opaque
+
+export type Loose implements Holder with Bag
+	let tag as ExitCode
+
+	export static function create() returns Loose
+		return Loose{tag: 0}
+	end 'create'
+
+	function get() returns Bag
+		return Bag.create()
+	end 'get'
+
+	export function size() returns ExitCode
+		return self.get().count() as ExitCode
+	end 'size'
+end 'Loose'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let loose = Loose.create()
+	return Packed.create().weigh(ByteArray from [1, 2, 3]) + loose.size()
+end 'main'
+```
+```exitcode
+3
+```

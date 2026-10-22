@@ -299,6 +299,11 @@ end 'main'
 - A type lists every interface it conforms to: `type Foo implements A, B`. An `enum` or a `union` declares
   conformance the same way and on the same terms — see
   [Enum Interface Conformance](/docs/language/enums-unions/#enum-interface-conformance). A missing or mis-typed method is **E3016**.
+- A requirement's parameter and return types are matched as declared: a typealias is its own type, and a
+  typealias of a generic instance is a [brand](/docs/language/ranged-typealiases/#generic-instance-and-function-type-aliases-are-brands), so
+  `make() returns IntArray` is not met by `make() returns Other` over the same instance (**E3016**). A call
+  through an interface value or a `where` constraint checks each argument against the requirement's
+  declared type as a direct call does (**E3005**), and its result carries the requirement's typealias.
 - `Self` in a requirement means the conforming type.
 - A requirement may be `static function`; the conforming type provides it as a static method.
 - `interface Derived extends Base` inherits `Base`'s requirements; a type implementing `Derived` provides

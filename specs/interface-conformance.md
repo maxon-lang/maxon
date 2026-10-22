@@ -293,8 +293,8 @@ end 'main'
 
 <!-- test: error.conformance-alias-crossing -->
 A `typealias` names its own type, so a requirement spelled `A` is met only by an implementation spelling
-`A`. `B` is a different type even over the identical range, and the refusal quotes both spellings, because
-the spelling is exactly what was compared.
+`A`. `B` is a different type even over the identical range, and the refusal quotes both spellings, each
+naming its own declaration.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -2334,4 +2334,32 @@ end 'main'
 ```
 ```exitcode
 11
+```
+
+<!-- test: error.a-requirement-return-alias-is-not-met-by-another-alias -->
+A requirement's return type is the alias it names, as a parameter's is: `Other` is a second alias of the
+same instance as `IntArray`, so a `make()` returning `Other` does not meet a requirement returning
+`IntArray`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias Other = Array with Integer
+
+interface Maker
+	function make() returns IntArray
+end 'Maker'
+
+type Builder implements Maker
+	function make() returns Other
+		return Other.create()
+	end 'make'
+end 'Builder'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:10:6: Partial interface implementation: type 'Builder' has 1 method(s) with wrong signature:
+  - make() returns Other (expected make() returns IntArray)
 ```

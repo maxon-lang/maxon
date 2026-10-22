@@ -162,7 +162,7 @@ function requireGrantedEnumMemberMatches(project Project, functionsByName Functi
 			return
 		end 'overloaded'
 
-		if signatureMatches(project, method: method, interfaceDeclFilePath: CompilerOwnedDeclFilePath, conformingType: enumName, implFunc: implFunc, implSig: implSig, typeParamNames: grantedEnumTypeParamNames, signatures: signatures) 'implementsTheRequirement'
+		if signatureMatches(project, method: method, expansion: sharedNoAliasExpansion, conformingType: enumName, implFunc: implFunc, implSig: implSig, typeParamNames: grantedEnumTypeParamNames, signatures: signatures) 'implementsTheRequirement'
 			return
 		end 'implementsTheRequirement'
 
@@ -246,7 +246,7 @@ function checkAssociatedTypeAbiAgreement(project Project, module MaxonModule, si
 			continue
 		end 'noAssociatedTypes'
 
-		let written = dispatchedAssociatedNamesOf(project.interfaces, dispatched: dispatched, iface: iface)
+		let written = dispatchedAssociatedNamesOf(project.interfaces, dispatched: dispatched, iface: iface, signatures: signatures)
 
 		for position in 0 upto iface.associatedTypeNames.count() 'eachAssociatedType'
 			view name = try iface.associatedTypeNames.get(position) otherwise panic("checkAssociatedTypeAbiAgreement: associatedTypeNames.get OOB at {position} below count {iface.associatedTypeNames.count()}")
@@ -279,7 +279,7 @@ end 'checkOneAssociatedPosition'
 // which requirements this program dispatches.
 function checkOneAssociatedType(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, position ElementIndex, isDispatchedResult bool)
 	match associatedAbiBindingOf(project.conformances, signatures: signatures, interfaceName: iface.name, position: position) 'binding'
-		agreed(conformer, binding, _) then checkAgreedBindingIsCarryable(project, signatures: signatures, iface: iface, name: name, conformer: conformer, binding: binding, isDispatchedResult: isDispatchedResult)
+		agreed(conformer, binding, bindingType, _) then checkAgreedBindingIsCarryable(project, signatures: signatures, iface: iface, name: name, conformer: conformer, binding: binding, bindingType: bindingType, isDispatchedResult: isDispatchedResult)
 		unconformed then break
 		disagreed(first, firstBinding, second, secondBinding) then reportAssociatedTypeBindingDisagreement(project, signatures: signatures, iface: iface, name: name, first: first, firstBinding: firstBinding, second: second, secondBinding: secondBinding)
 	end 'binding'
@@ -487,7 +487,7 @@ end 'copyRecordedSlots'
 // an enum ordinal in a machine word whatever the clause names, and the clause is compared by NAME
 // (`requireSameErrorType`) rather than lowered. MEASURED green on both targets. If a throwing witness call
 // ever carries the error's own type in its signature, this walk is where that becomes a third set.
-function dispatchedAssociatedNamesOf(interfaces IrInterfaceMap, dispatched DispatchedSlotMap, iface IrInterface) returns DispatchedAssociatedNames
+function dispatchedAssociatedNamesOf(interfaces IrInterfaceMap, dispatched DispatchedSlotMap, iface IrInterface, signatures ProgramSignatures) returns DispatchedAssociatedNames
 	let slots = try dispatched.get(iface.name) otherwise 'neverDispatched'
 		return sharedEmptyDispatchedAssociatedNames
 	end 'neverDispatched'
@@ -503,14 +503,14 @@ function dispatchedAssociatedNamesOf(interfaces IrInterfaceMap, dispatched Dispa
 
 		let method = (try requirements.get(methodIndex) otherwise panic("dispatchedAssociatedNamesOf: requirements.get OOB at {methodIndex} below count {requirements.count()} — the loop bounds it by that same list")).method
 
-		if unclaimedAssociatedPosition(iface, name: method.returnTypeName, claimed: claimed) 'anUnclaimedAssociatedResult'
-			inAResult.insert(method.returnTypeName)
-			inAnAbiPosition.insert(method.returnTypeName)
+		if let name = try unclaimedAssociatedName(iface, requirement: method.returnType, claimed: claimed, signatures: signatures) 'anUnclaimedAssociatedResult'
+			inAResult.insert(name)
+			inAnAbiPosition.insert(name)
 		end 'anUnclaimedAssociatedResult'
 
-		for paramTypeName in method.paramTypeNames 'eachFormal'
-			if unclaimedAssociatedPosition(iface, name: paramTypeName, claimed: claimed) 'anUnclaimedAssociatedFormal'
-				inAnAbiPosition.insert(paramTypeName)
+		for formal in method.paramTypes 'eachFormal'
+			if let name = try unclaimedAssociatedName(iface, requirement: formal, claimed: claimed, signatures: signatures) 'anUnclaimedAssociatedFormal'
+				inAnAbiPosition.insert(name)
 			end 'anUnclaimedAssociatedFormal'
 		end 'eachFormal'
 	end 'eachRequirement'
@@ -528,10 +528,15 @@ end 'dispatchedAssociatedNamesOf'
 // conformers that KEEP the claim may be widened into it; `SemanticCheck.checkExistentialSiteClaimAtArgument`
 // refuses the rest, at the one place a concrete conformer and a claim meet. Narrowing here without that
 // refusal in place would be E3119's own recorded failure with an extra step.
-function unclaimedAssociatedPosition(iface IrInterface, name ByteArray, claimed ElementIndex) returns bool
-	let position = try iface.associatedTypeNames.positionOfName(name) otherwise return false
-	return position >= claimed
-end 'unclaimedAssociatedPosition'
+function unclaimedAssociatedName(iface IrInterface, requirement RequirementType, claimed ElementIndex, signatures ProgramSignatures) returns ByteArray throws MapError
+	let position = try associatedPositionIn(requirement, iface: iface, signatures: signatures)
+
+	if position < claimed 'claimedByEverySite'
+		throw MapError.keyNotFound
+	end 'claimedByEverySite'
+
+	return try iface.associatedTypeNames.get(position) otherwise panic("unclaimedAssociatedName: associatedTypeNames.get OOB at {position} — `associatedPositionIn` just read it out of the same list")
+end 'unclaimedAssociatedName'
 
 // ⭐⭐ **WHAT A HOLDING OWES, AND WHY IT REPLACES E3119/E3120 RATHER THAN JOINING THEM: every conformer's
 // binding must be widenable into the interface the position is held at.** E3119's rule is forced by there
@@ -567,7 +572,7 @@ end 'checkHeldAssociatedTypeBindings'
 
 // One conformer's binding at `position`, if it declares one.
 function checkOneConformersHeldBinding(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, iface IrInterface, name ByteArray, conformance ConformanceDecl, position ElementIndex, heldAt ByteArray)
-	if let binding = try declAssociatedBinding(conformance, interfaceName: iface.name, position: position) 'bindsThisPosition'
+	if let binding = try declAssociatedBindingType(conformance, interfaceName: iface.name, position: position) 'bindsThisPosition'
 		checkOneHeldBinding(project, signatures: signatures, declared: declared, iface: iface, name: name, conformer: conformance, binding: binding, heldAt: heldAt)
 	end 'bindsThisPosition'
 end 'checkOneConformersHeldBinding'
@@ -582,63 +587,58 @@ end 'checkOneConformersHeldBinding'
 // the calling convention of a requirement this program DISPATCHES", which is the fact its gate established; a
 // holding is not gated on dispatch, so on this path the sentence would assert something nothing checked.
 // One code, two clauses, each true where it fires — the split E3120 already has between its own two.
-function checkOneHeldBinding(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, iface IrInterface, name ByteArray, conformer ConformanceDecl, binding ByteArray, heldAt ByteArray)
-	if signatures.declaredNameIsFatPointer(binding) 'twoWordsOutOfAOneWordResult'
-		reportPositioned(project, code: ErrorCode.associatedTypeReturnNotMachineWord, message: "'{String.from(conformer.typeName)}' binds '{String.from(iface.name)}'s associated type '{String.from(name)}' to the interface type '{String.from(binding)}', and this program holds '{String.from(name)}' at the interface type '{String.from(heldAt)}' — {ExistentialIsFatPointerReason}, so the impl would have to hand BOTH words back out of a witness call that returns one. A holding supplies the second word for a CONCRETE binding, from a slot naming that conformer's own nested table; there is nothing left to supply when the binding is already an interface. Bind the associated type to a concrete conformer", line: conformer.nameLine, column: conformer.nameColumn, filePath: conformer.filePath)
+function checkOneHeldBinding(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, iface IrInterface, name ByteArray, conformer ConformanceDecl, binding RequirementType, heldAt ByteArray)
+	let shown = signatures.requirementDisplay(binding)
+
+	if bindingIsFatPointer(signatures, binding: binding) 'twoWordsOutOfAOneWordResult'
+		reportPositioned(project, code: ErrorCode.associatedTypeReturnNotMachineWord, message: "'{String.from(conformer.typeName)}' binds '{String.from(iface.name)}'s associated type '{String.from(name)}' to the interface type '{shown}', and this program holds '{String.from(name)}' at the interface type '{String.from(heldAt)}' — {ExistentialIsFatPointerReason}, so the impl would have to hand BOTH words back out of a witness call that returns one. A holding supplies the second word for a CONCRETE binding, from a slot naming that conformer's own nested table; there is nothing left to supply when the binding is already an interface. Bind the associated type to a concrete conformer", line: conformer.nameLine, column: conformer.nameColumn, filePath: conformer.filePath)
 		return
 	end 'twoWordsOutOfAOneWordResult'
 
-	// ⭐⭐ **THE QUESTION IS ASKED OF THE CONFORMER THE BINDING REDUCES TO, NOT OF THE RENDERED NAME.** A
-	// `withArgs` entry is `renderDeclaredTypeName`'s output, so a binding to a generic instance arrives as the
-	// compiler's own canonical mint (`UpCursor_Integer`) — a string the `implements` registry is not keyed by
-	// and never can be, since under dictionary-passing the conformance belongs to the DECLARATION and one
-	// `__witness_UpCursor.Cursor` answers for every instantiation. Asked raw, the answer was always "does not
-	// implement", on `stdlib/Array.maxon`'s own `Iterable with (Element, ArrayIter)` among others.
-	// `conformerNameOfDeclaredName` is the ONE reducer every other conformance door already goes through, and
-	// this site was simply not going through it — the arguments are not lost by that, they are checked at the
-	// instantiation SITE by `checkOneInstantiation`'s E3017, which is where a base's `where` clause lives.
-	let boundConformer = signatures.conformerNameOfDeclaredName(binding, readerFilePath: conformer.filePath).toByteArray()
+	// ⭐⭐ **THE QUESTION IS ASKED OF THE CONFORMER THE BINDING REDUCES TO.** The `implements` registry is
+	// keyed by the DECLARATION, never by an instance: under dictionary-passing one `__witness_UpCursor.Cursor`
+	// answers for every instantiation. An instance's arguments are checked at the instantiation SITE by
+	// `checkOneInstantiation`'s E3017, which is where a base's `where` clause lives.
+	let boundConformer = signatures.conformerNameOfRequirement(binding, readerFilePath: conformer.filePath)
 
 	if typeConformsTo(declared, interfaces: project.interfaces, typeName: boundConformer, interfaceName: heldAt, discovered: signatures.discoveredConformerOf(boundConformer)) 'widensIntoTheHolding'
 		return
 	end 'widensIntoTheHolding'
 
-	view shown = signatures.displaySpellingOfDeclaredName(binding)
-	reportPositioned(project, code: ErrorCode.heldAssociatedTypeBindingNotConforming, message: "'{String.from(conformer.typeName)}' binds '{String.from(iface.name)}'s associated type '{String.from(name)}' to '{String.from(shown)}', and this program holds '{String.from(name)}' at the interface type '{String.from(heldAt)}' — every value of a held associated type is widened into that existential, so every conformer's binding must conform to it, and '{String.from(shown)}' does not implement '{String.from(heldAt)}'. Declare the conformance, or hold the associated type at an interface every conformer implements", line: conformer.nameLine, column: conformer.nameColumn, filePath: conformer.filePath)
+	reportPositioned(project, code: ErrorCode.heldAssociatedTypeBindingNotConforming, message: "'{String.from(conformer.typeName)}' binds '{String.from(iface.name)}'s associated type '{String.from(name)}' to '{shown}', and this program holds '{String.from(name)}' at the interface type '{String.from(heldAt)}' — every value of a held associated type is widened into that existential, so every conformer's binding must conform to it, and '{shown}' does not implement '{String.from(heldAt)}'. Declare the conformance, or hold the associated type at an interface every conformer implements", line: conformer.nameLine, column: conformer.nameColumn, filePath: conformer.filePath)
 end 'checkOneHeldBinding'
 
 // The two things a dispatch cannot carry, asked of one agreed binding. They are separate clauses because
 // they fail in different POSITIONS: a fat pointer cannot be carried anywhere at all, while a managed or
 // non-machine-word value is fine as a PARAMETER (the lowering resolves it and coerces the actual) and only
 // breaks as a RESULT, where the front end has to type it.
-function checkAgreedBindingIsCarryable(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, conformer ConformanceDecl, binding ByteArray, isDispatchedResult bool)
-	if signatures.declaredNameIsFatPointer(binding) 'twoWordsThroughAOneWordSlot'
+function checkAgreedBindingIsCarryable(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, conformer ConformanceDecl, binding ByteArray, bindingType RequirementType, isDispatchedResult bool)
+	if bindingIsFatPointer(signatures, binding: bindingType) 'twoWordsThroughAOneWordSlot'
 		reportPositioned(project, code: ErrorCode.associatedTypeReturnNotMachineWord, message: "'{String.from(conformer.typeName)}' binds '{String.from(iface.name)}'s associated type '{String.from(name)}' to the interface type '{String.from(binding)}', and '{String.from(name)}' reaches the calling convention of a requirement this program DISPATCHES through a receiver that does not say which binding it holds — {ExistentialIsFatPointerReason}, and a witness call carries one machine word per argument and one per result — so the second word is dropped and the impl reads a witness that was never passed. Bind the associated type to a concrete type", line: conformer.nameLine, column: conformer.nameColumn, filePath: conformer.filePath)
 		return
 	end 'twoWordsThroughAOneWordSlot'
 
-	checkAssociatedReturnIsUnmanagedMachineWord(project, signatures: signatures, iface: iface, name: name, conformer: conformer, binding: binding, isDispatchedResult: isDispatchedResult)
+	checkAssociatedReturnIsUnmanagedMachineWord(project, signatures: signatures, iface: iface, name: name, conformer: conformer, binding: binding, bindingType: bindingType, isDispatchedResult: isDispatchedResult)
 end 'checkAgreedBindingIsCarryable'
 
 // ⭐⭐ **REFUSE AN ASSOCIATED RETURN BOUND TO ANYTHING BUT AN UNMANAGED MACHINE WORD (E3120).** The parser
-// types a dispatch's result from the interface's own rendered spelling, which names the associated type and
-// — at a receiver that claims nothing — can never name what a conformer bound it to, so the result is typed
+// types a dispatch's result from the requirement, whose return is the associated type itself — and at a
+// receiver that claims nothing, nothing says what a conformer bound it to, so the result is typed
 // `int`. For a `float` binding, or a typealias of `float`, that is the wrong WIDTH and register file. For a
 // MANAGED binding it is the wrong OWNERSHIP: nothing takes ownership of the returned refcounted value and
 // nothing releases it, so the program leaks.
 //
-// The admitted set is therefore "an unmanaged machine word", asked of the BINDING NAME because the resolved
-// type has already collapsed a struct and a ranged integer alias to the same `integer`
-// (`renderedTypeNameAbiType`).
+// The admitted set is therefore "an unmanaged machine word", asked of the binding's identity because its ABI
+// type collapses a struct and a ranged integer alias to the same `integer` (`requirementAbiType`).
 //
 // ⚠ **AT A RECEIVER THAT DOES SAY WHICH BINDING IT HOLDS THE PARSER *CAN* NAME IT, WHICH IS WHY
 // THIS IS NOT ASKED THERE.** `Parser.associatedReturnThroughReceiverInstance` reads the site's own
 // `with` argument and types the result as that binding, ownership included, so the stated cause
 // above is simply false at such a position. The gate that keeps this refusal off them is
-// `unclaimedAssociatedPosition`, one walk up — the SAME gate E3119 gets, which is how these two go
+// `unclaimedAssociatedName`, one walk up — the SAME gate E3119 gets, which is how these two go
 // on keying on one set of facts.
-function checkAssociatedReturnIsUnmanagedMachineWord(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, conformer ConformanceDecl, binding ByteArray, isDispatchedResult bool)
-	if bindingIsUnmanagedMachineWord(signatures, binding: binding, readerFilePath: conformer.filePath) 'travelsAsAPlainWord'
+function checkAssociatedReturnIsUnmanagedMachineWord(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, conformer ConformanceDecl, binding ByteArray, bindingType RequirementType, isDispatchedResult bool)
+	if bindingIsUnmanagedMachineWord(signatures, binding: bindingType, readerFilePath: conformer.filePath) 'travelsAsAPlainWord'
 		return
 	end 'travelsAsAPlainWord'
 
@@ -663,28 +663,37 @@ end 'checkAssociatedReturnIsUnmanagedMachineWord'
 // A typealias of `float` is one of those unowned scalars and still not a machine word: its value comes back
 // in a float register while the call site reads a word, so it is answered false before that door is asked.
 //
-// ⚠ **A NAME NO REGISTRY DECLARES IS NOT AUTOMATICALLY SAFE.** *"An undeclared type in a conformance is
-// E3011 long before here"* is falsified by a GENERIC INSTANCE: the binding is rendered as the compiler's
-// OWN canonical name (`Box_Integer`), which no registry is keyed by and which no diagnostic ever fires on —
-// it reaches here, and answered "unmanaged" the program leaks. `declaredNameIsManaged` answers for that
-// rendering.
-function bindingIsUnmanagedMachineWord(signatures ProgramSignatures, binding ByteArray, readerFilePath FilePath) returns bool
-	let tag = builtinTypeNameTag(binding)
+// ⚠ A generic-instance binding is asked by its canonical name (`Box_Integer`), which no registry is keyed by
+// and which `declaredNameIsManaged` answers for; answered "unmanaged", the program leaks.
+function bindingIsUnmanagedMachineWord(signatures ProgramSignatures, binding RequirementType, readerFilePath FilePath) returns bool
+	return match binding.identity 'identity'
+		builtin(tag) gives tag == ValueTypeTag.integer
+		nominal(name) gives declaredNameIsPlainWord(signatures, name: name, readerFilePath: readerFilePath)
+		genericInstance(id) gives declaredNameIsPlainWord(signatures, name: signatures.canonicalInstanceName(id), readerFilePath: readerFilePath)
+		typeParameter gives true
+		void or
+		selfType panic("bindingIsUnmanagedMachineWord: a conformance binds an associated type to a declared type, never to `void` or `Self`")
+	end 'identity'
+end 'bindingIsUnmanagedMachineWord'
 
-	if tag != ValueTypeTag.named 'aBuiltinTypeName'
-		return tag == ValueTypeTag.integer
-	end 'aBuiltinTypeName'
-
-	if signatures.isFloatAliasFor(binding, readerFilePath: readerFilePath) 'travelsInTheFloatRegister'
+function declaredNameIsPlainWord(signatures ProgramSignatures, name ByteArray, readerFilePath FilePath) returns bool
+	if signatures.isFloatAliasFor(name, readerFilePath: readerFilePath) 'travelsInTheFloatRegister'
 		return false
 	end 'travelsInTheFloatRegister'
 
-	// TWO questions, and they are genuinely different. `declaredNameIsManaged` answers OWNERSHIP — does a
-	// value of this name own a record the program must release. `declaredNameIsFatPointer` answers WIDTH — an
-	// existential is refcount-free and still two words, and reading that off the ownership door is what let
-	// an interface-typed binding through to a SEGFAULT.
-	return not signatures.declaredNameIsManaged(binding) and not signatures.declaredNameIsFatPointer(binding)
-end 'bindingIsUnmanagedMachineWord'
+	return not signatures.declaredNameIsManaged(name) and not signatures.declaredNameIsFatPointer(name)
+end 'declaredNameIsPlainWord'
+
+function bindingIsFatPointer(signatures ProgramSignatures, binding RequirementType) returns bool
+	return match binding.identity 'identity'
+		nominal(name) gives signatures.declaredNameIsFatPointer(name)
+		void or
+		selfType or
+		typeParameter or
+		genericInstance or
+		builtin gives false
+	end 'identity'
+end 'bindingIsFatPointer'
 
 // The E3119 message, anchored on the SECOND conformer — the declaration that introduced the disagreement,
 // exactly as `checkTypeSymbolNamespace` blames the newcomer rather than the claimant that settled the name.
@@ -703,17 +712,19 @@ end 'reportAssociatedTypeBindingDisagreement'
 // mid-parse, where no module of ops exists to read a dispatch off, and the holding it guards is minted by a
 // WIDENING rather than by a call. Asking the transitive list is load-bearing there for the same measured
 // reason it is in that walk — a parameter projected in from a parent is one `iface.methods` cannot see.
-export function requirementTakesType(interfaces IrInterfaceMap, iface IrInterface, name ByteArray) returns bool
+export function requirementTakesAssociatedType(interfaces IrInterfaceMap, iface IrInterface, position ElementIndex, signatures ProgramSignatures) returns bool
 	for slot in interfaceWitnessSlots(interfaces, iface: iface) 'eachRequirement'
-		for paramTypeName in slot.method.paramTypeNames 'eachFormal'
-			if paramTypeName.equals(name) 'inAnArgument'
+		for formal in slot.method.paramTypes 'eachFormal'
+			let formalPosition = try associatedPositionIn(formal, iface: iface, signatures: signatures) otherwise continue
+
+			if formalPosition == position 'inAnArgument'
 				return true
 			end 'inAnArgument'
 		end 'eachFormal'
 	end 'eachRequirement'
 
 	return false
-end 'requirementTakesType'
+end 'requirementTakesAssociatedType'
 
 // The interfaces a type is DECLARED to implement — `Point` -> {`Digest`}. Built from `project.conformances`
 // for the E3017 where-constraint check: an instantiation `Box with Point where T is Digest` is legal iff
@@ -923,7 +934,7 @@ function checkOneAssociatedBinding(project Project, signatures ProgramSignatures
 	match associatedAbiBindingOf(project.conformances, signatures: signatures, interfaceName: iface.name, position: position) 'binding'
 		unconformed then break
 		disagreed then break
-		agreed(conformer, binding, _) then requireWrittenBindingMatchesConformers(project, signatures: signatures, site: site, iface: iface, position: position, conformer: conformer, binding: binding)
+		agreed(conformer, binding, bindingType, _) then requireWrittenBindingMatchesConformers(project, signatures: signatures, site: site, iface: iface, position: position, conformer: conformer, binding: binding, bindingType: bindingType)
 	end 'binding'
 end 'checkOneAssociatedBinding'
 
@@ -944,11 +955,8 @@ function requireWrittenBindingNamesTheHolding(project Project, signatures Progra
 	reportPositioned(project, code: ErrorCode.interfaceInstantiationBindingDisagreement, message: "this use of '{String.from(iface.name)}' binds its associated type '{String.from(name)}' to '{signatures.aliasIdentityDisplay(signatures.instanceArgDisplayName(site.gid, position: position))}', but this program HOLDS '{String.from(name)}' at the interface type '{String.from(heldAt)}' — a held position has exactly one holding, because the requirement's shared body is compiled once against it and every dispatch reads the nested table from a slot laid out for that one interface. Write '{String.from(heldAt)}', or give the two readings different interfaces", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
 end 'requireWrittenBindingNamesTheHolding'
 
-function requireWrittenBindingMatchesConformers(project Project, signatures ProgramSignatures, site GenericInstantiationSite, iface IrInterface, position ElementIndex, conformer ConformanceDecl, binding ByteArray)
-	// Both sides as DECLARATION IDENTITIES, the conformance's `withArgs` entry read in the conformer's own
-	// file — comparing a compiled name against a source string would report a difference in RENDERING as a
-	// difference in type.
-	if signatures.instanceArgBindingIdentity(site.gid, position: position).equals(signatures.declaredIdentityOfSpelling(binding, declFilePath: conformer.filePath)) 'restatesTheSettledBinding'
+function requireWrittenBindingMatchesConformers(project Project, signatures ProgramSignatures, site GenericInstantiationSite, iface IrInterface, position ElementIndex, conformer ConformanceDecl, binding ByteArray, bindingType RequirementType)
+	if signatures.instanceArgRequirement(site.gid, position: position).denotesSameTypeAs(bindingType) 'restatesTheSettledBinding'
 		return
 	end 'restatesTheSettledBinding'
 
@@ -987,37 +995,34 @@ end 'checkStructInstantiationConstraints'
 // that does not conform at all has no binding to compare, and one refusal per instantiation is what an author
 // can act on.
 //
-// ⛔⛔ **IT COMPARES RENDERED NAMES, SO IT MAY ONLY RUN WHERE BOTH RENDERINGS ARE CONCRETE — AND THE FIRST
-// CUT DID NOT, WHICH REFUSED `stdlib/Interfaces.maxon` OUTRIGHT.** A rendering written over type PARAMETERS
-// is a name in ONE declaration's scope, not a type identity: `extension Iterable`'s
-// `WithIterIterator with (Iter, Element)` claims `Iterator with <Iterable's Element>` while `MapIterator`'s
-// own conformance binds `Iterator`'s `Element` to `<MapIterator's (Key, Value)>` — the SAME tuple, spelled
-// `__Tuple2.Tfcd8090be60770aa.T5d84c0fc6312cff6` on one side and `__Tuple2.T38ee35d378b734f4.Taebb70a7666c1b3c`
-// on the other, because the parameter TOKENS belong to different declarations. MEASURED: E3131 on the
-// corpus's own `withIterator`, on a claim that is true.
+// ⛔⛔ **IT MAY ONLY RUN WHERE BOTH BINDINGS ARE CONCRETE.** A binding written over type PARAMETERS names
+// tokens of ONE declaration: `extension Iterable`'s `WithIterIterator with (Iter, Element)` claims
+// `Iterator with <Iterable's Element>` while `MapIterator`'s own conformance binds `Iterator`'s `Element` to
+// `<MapIterator's (Key, Value)>` — the SAME tuple over two declarations' tokens, so comparing them refuses
+// `stdlib/Interfaces.maxon`'s `withIterator` on a claim that is true.
 //
 // ⇒ two gates, and between them they are what makes a MISMATCH mean a wrong program:
 //   • the INSTANTIATION must be fully concrete (`instanceArgsAreFullyConcrete`) — a parametric one is a
 //     shape inside some shared body, compiled against that declaration's own view, and it says nothing a
-//     name comparison can decide;
-//   • the SUPPLIED binding must reduce to a concrete rendering (`suppliedConstraintBinding`), which for a
-//     GENERIC conformer means substituting its own `withArgs` through this argument's instantiation.
-// An inconclusive comparison is SKIPPED rather than reported: this refuses a wrong program, and a rendering
+//     comparison can decide;
+//   • the SUPPLIED binding must reduce to a concrete type (`suppliedConstraintBinding`), which for a
+//     GENERIC conformer means substituting its own binding through this argument's instantiation.
+// An inconclusive comparison is SKIPPED rather than reported: this refuses a wrong program, and a binding
 // it cannot make concrete is not evidence of one.
 function checkConstraintAssociatedBindings(project Project, signatures ProgramSignatures, site GenericInstantiationSite, constraint WhereConstraint, baseName ByteArray)
 	if not signatures.instanceArgsAreFullyConcrete(site.gid) 'aParametricInstantiation'
 		return
 	end 'aParametricInstantiation'
 
-	for position in 0 upto constraint.associatedBindings.count() 'eachBoundPosition'
-		view claimed = substitutedConstraintBinding(signatures, gid: site.gid, baseName: baseName, binding: try constraint.associatedBindings.get(position) otherwise panic("checkConstraintAssociatedBindings: associatedBindings.get OOB at {position} below count {constraint.associatedBindings.count()}"))
-		view supplied = try suppliedConstraintBinding(signatures, conformances: project.conformances, gid: site.gid, constraint: constraint, position: position) otherwise continue
+	for position in 0 upto constraint.associatedBindingTypes.count() 'eachBoundPosition'
+		let claimed = substitutedConstraintBinding(signatures, gid: site.gid, baseName: baseName, binding: try constraint.associatedBindingTypes.get(position) otherwise panic("checkConstraintAssociatedBindings: associatedBindingTypes.get OOB at {position} below count {constraint.associatedBindingTypes.count()}"))
+		let supplied = try suppliedConstraintBinding(signatures, conformances: project.conformances, gid: site.gid, constraint: constraint, position: position) otherwise continue
 
-		if claimed.equals(supplied) 'theArgumentKeepsTheClaim'
+		if claimed.denotesSameTypeAs(supplied) 'theArgumentKeepsTheClaim'
 			continue
 		end 'theArgumentKeepsTheClaim'
 
-		reportPositioned(project, code: ErrorCode.semanticWhereConstraintBindingDisagreement, message: "'{String.from(baseName)}' constrains type parameter '{String.from(constrainedTypeParamName(signatures, baseName: baseName, position: constraint.typeParamIndex as FieldIndex))}' to '{String.from(constraint.interfaceName)} with {signatures.aliasIdentityDisplay(claimed)}', but '{signatures.aliasIdentityDisplay(signatures.instanceArgDisplayName(site.gid, position: constraint.typeParamIndex))}' binds '{String.from(constraint.interfaceName)}'s associated type '{String.from(associatedTypeNameAt(project.interfaces, interfaceName: constraint.interfaceName, position: position))}' to '{signatures.aliasIdentityDisplay(supplied.clone())}' — a `where` constraint's binding is what types every dispatch through that parameter inside the shared body, which is compiled ONCE, so a conformer binding it otherwise would have its bits read as the claimed type. Bind the constraint to what the conformer declares, or supply an argument whose conformance binds what the constraint states", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
+		reportPositioned(project, code: ErrorCode.semanticWhereConstraintBindingDisagreement, message: "'{String.from(baseName)}' constrains type parameter '{String.from(constrainedTypeParamName(signatures, baseName: baseName, position: constraint.typeParamIndex as FieldIndex))}' to '{String.from(constraint.interfaceName)} with {signatures.requirementDisplay(claimed)}', but '{signatures.aliasIdentityDisplay(signatures.instanceArgDisplayName(site.gid, position: constraint.typeParamIndex))}' binds '{String.from(constraint.interfaceName)}'s associated type '{String.from(associatedTypeNameAt(project.interfaces, interfaceName: constraint.interfaceName, position: position))}' to '{signatures.requirementDisplay(supplied)}' — a `where` constraint's binding is what types every dispatch through that parameter inside the shared body, which is compiled ONCE, so a conformer binding it otherwise would have its bits read as the claimed type. Bind the constraint to what the conformer declares, or supply an argument whose conformance binds what the constraint states", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
 		return
 	end 'eachBoundPosition'
 end 'checkConstraintAssociatedBindings'
@@ -1034,29 +1039,28 @@ end 'associatedTypeNameAt'
 
 // A constraint's binding is written in the DECLARING type's own scope, so a binding that names one of its
 // `uses` parameters means whatever THIS instantiation supplied there — `where S is Cursor with E` at
-// `Wrap with (IntCur, Integer)` claims `Integer`. Every other binding is a concrete name already and is read
-// as the declaring type's file means it, which is why an unsubstitutable one falls back to its declaration
-// identity here while the SUPPLIED side treats the same miss as inconclusive: a claim the author wrote is a name in the program, a conformer's `withArgs`
-// entry over its own parameters is not.
-function substitutedConstraintBinding(signatures ProgramSignatures, gid GenericInstanceId, baseName ByteArray, binding ByteArray) returns ByteArray
-	return try substitutedBindingIn(signatures, gid: gid, paramNames: signatures.structTypeParamsOf(baseName), binding: binding) otherwise signatures.declaredIdentityOfSpelling(binding, declFilePath: signatures.baseLayoutOf(gid).declFilePath)
+// `Wrap with (IntCur, Integer)` claims `Integer`. Every other binding is already a resolved identity, which
+// is why an unsubstitutable one falls back to itself here while the SUPPLIED side treats the same miss as
+// inconclusive: a claim the author wrote is a type in the program, a conformer's binding over its own
+// parameters is not.
+function substitutedConstraintBinding(signatures ProgramSignatures, gid GenericInstanceId, baseName ByteArray, binding RequirementType) returns RequirementType
+	return try substitutedBindingIn(signatures, gid: gid, paramNames: signatures.structTypeParamsOf(baseName), binding: binding) otherwise binding.clone()
 end 'substitutedConstraintBinding'
 
-// ⭐ **THE ONE SUBSTITUTION STEP — a rendered name written over `paramNames`, rewritten into the scope
-// `gid` instantiates them in.** `MapError.keyNotFound` where the binding is not a bare parameter name (a
-// tuple or a nested instance is a rendering this cannot rewrite) or where the instantiation bound nothing at
-// that position.
-function substitutedBindingIn(signatures ProgramSignatures, gid GenericInstanceId, paramNames NameRoster, binding ByteArray) returns ByteArray throws MapError
-	let position = try paramNames.positionOfName(binding)
+// ⭐ **THE ONE SUBSTITUTION STEP — a binding naming one of `paramNames`, rewritten into the scope `gid`
+// instantiates them in.** `MapError.keyNotFound` where the binding is not a bare parameter (a tuple or a
+// nested instance is not rewritten) or where the instantiation bound nothing at that position.
+function substitutedBindingIn(signatures ProgramSignatures, gid GenericInstanceId, paramNames NameRoster, binding RequirementType) returns RequirementType throws MapError
+	let position = try paramNames.positionOfName(try associatedNameOf(binding, signatures: signatures))
 
 	if position >= signatures.genericInstanceArgCount(gid) 'boundOutsideThisInstantiation'
 		throw MapError.keyNotFound
 	end 'boundOutsideThisInstantiation'
 
-	return signatures.instanceArgDisplayName(gid, position: position)
+	return signatures.instanceArgRequirement(gid, position: position)
 end 'substitutedBindingIn'
 
-// What the ARGUMENT at this constrained position actually binds, as a CONCRETE rendering — or
+// What the ARGUMENT at this constrained position actually binds, as a CONCRETE type — or
 // `MapError.keyNotFound` where no concrete one can be derived, which the caller reads as *"say nothing"*.
 // A miss is also what an under-bound conformance produces, and that is E3016's to report rather than this
 // code's to guess at.
@@ -1064,15 +1068,15 @@ end 'substitutedBindingIn'
 // ⭐ **A GENERIC CONFORMER WRITES ITS BINDING OVER ITS OWN PARAMETERS, so the name it declares becomes a type
 // only once THIS argument's instantiation is substituted into it** — `MapIterator implements Iterator with
 // (Key, Value)` states a tuple of two parameters, and `MapIterator with (String, Integer)` is what turns it
-// into one. A bare parameter name substitutes to that instantiation's own display name; any richer rendering
-// (a tuple, a nested instance) is one this comparison cannot make concrete, and it says nothing.
-function suppliedConstraintBinding(signatures ProgramSignatures, conformances ConformanceDeclArray, gid GenericInstanceId, constraint WhereConstraint, position ElementIndex) returns ByteArray throws MapError
+// into one. A bare parameter substitutes to that instantiation's own argument; any richer binding (a tuple,
+// a nested instance) is one this comparison cannot make concrete, and it says nothing.
+function suppliedConstraintBinding(signatures ProgramSignatures, conformances ConformanceDeclArray, gid GenericInstanceId, constraint WhereConstraint, position ElementIndex) returns RequirementType throws MapError
 	let conformer = signatures.conformerTypeArgName(gid, position: constraint.typeParamIndex).toByteArray()
-	let (decl, binding) = try conformanceDeclBinding(conformances, typeName: conformer, interfaceName: constraint.interfaceName, position: position)
+	let (_, binding) = try conformanceDeclBindingType(conformances, typeName: conformer, interfaceName: constraint.interfaceName, position: position)
 	view conformerParams = signatures.structTypeParamsOf(conformer)
 
 	if conformerParams.isEmpty() 'aNonGenericConformerBindsAConcreteType'
-		return signatures.declaredIdentityOfSpelling(binding, declFilePath: decl.filePath)
+		return binding
 	end 'aNonGenericConformerBindsAConcreteType'
 
 	let typeArg = signatures.substitutedInstanceArg(gid, position: constraint.typeParamIndex)
@@ -1286,8 +1290,8 @@ end 'opaqueParamDischarge'
 // The empty list is the answer for every unconstrained parameter and every constraint that binds nothing,
 // which is the whole corpus but the shapes this exists for — and it is the SHARED empty, so the common path
 // allocates nothing.
-export function constrainedParamAssociatedBindings(signatures ProgramSignatures, token TypeParamId, interfaceName ByteArray) returns NameRoster
-	let owner = try signatures.typeParamOwnerOf(token) otherwise return sharedEmptyDeclaredConformances
+export function constrainedParamAssociatedBindings(signatures ProgramSignatures, token TypeParamId, interfaceName ByteArray) returns RequirementTypeArray
+	let owner = try signatures.typeParamOwnerOf(token) otherwise return sharedEmptyRequirementTypes
 	let constraints = signatures.structWhereConstraints(owner.declaringTypeName)
 
 	for i in 0 upto constraints.count() 'eachOwnerConstraint'
@@ -1297,10 +1301,10 @@ export function constrainedParamAssociatedBindings(signatures ProgramSignatures,
 			continue
 		end 'anotherConstraint'
 
-		return promised.associatedBindings
+		return promised.associatedBindingTypes
 	end 'eachOwnerConstraint'
 
-	return sharedEmptyDeclaredConformances
+	return sharedEmptyRequirementTypes
 end 'constrainedParamAssociatedBindings'
 
 // Does this verdict discharge the constraint? The bool the union deliberately is not, for the one caller
@@ -1341,14 +1345,14 @@ let UnboundAssociatedTypePhrase = b"(nothing)"
 
 // ⭐ **A CONFORMER'S `with` BINDINGS, OR NOTHING — THE POSITIONAL-PAIRING GATE.** Every reader of
 // `StructLayout.conformanceBindings` pairs it against the interface's associated-type names BY INDEX, so a
-// list of a different LENGTH has no positional meaning at all: reading position `i` out of it answers about
+// column of a different LENGTH has no positional meaning at all: reading position `i` out of it answers about
 // a neighbour rather than about the name it was asked for. Emptying it is what makes the two readers agree —
 // a body parsed with no substitution, a `where` clause reported UNMET — instead of one going missing while
 // the other goes wrong. See `Parser.conformerAssociatedBindings` for how the two lists come to disagree at
 // all (the declaration sweep cannot know an interface's arity).
-export function pairableConformanceBindings(bindings NameRoster, associatedTypeNames NameRoster) returns NameRoster
-	if bindings.count() != associatedTypeNames.count() 'noPositionalMeaning'
-		return sharedEmptyDeclaredConformances
+export function pairableConformanceBindings(bindings ConformanceBinding, associatedTypeNames NameRoster) returns ConformanceBinding
+	if bindings.spellings.count() != associatedTypeNames.count() or bindings.types.count() != associatedTypeNames.count() 'noPositionalMeaning'
+		return sharedEmptyConformanceBinding
 	end 'noPositionalMeaning'
 
 	return bindings
@@ -1367,14 +1371,15 @@ end 'pairableConformanceBindings'
 // `__witness_int.*` tables are filed under. Asking about the alias spelling instead would withhold
 // `contains` from every `Array with <ranged alias>` in the program, which is the motivating case for the
 // feature.
-export function checkExtensionConstraints(signatures ProgramSignatures, constraints WhereConstraintArray, bindings NameRoster, readerFilePath FilePath) returns ExtensionConstraintCheck
+export function checkExtensionConstraints(signatures ProgramSignatures, constraints WhereConstraintArray, bindings ConformanceBinding, readerFilePath FilePath) returns ExtensionConstraintCheck
 	for i in 0 upto constraints.count() 'eachConstraint'
 		let constraint = try constraints.get(i) otherwise panic("checkExtensionConstraints: constraints.get OOB at {i} below count {constraints.count()}")
-		let binding = try bindings.get(constraint.typeParamIndex) otherwise return ExtensionConstraintCheck.unmet(constraint.interfaceName, bindingName: UnboundAssociatedTypePhrase)
-		let conformer = signatures.conformerNameOfDeclaredName(binding, readerFilePath: readerFilePath).toByteArray()
+		let bound = try bindings.types.get(constraint.typeParamIndex) otherwise return ExtensionConstraintCheck.unmet(constraint.interfaceName, bindingName: UnboundAssociatedTypePhrase)
+		let spelling = try bindings.spellings.get(constraint.typeParamIndex) otherwise panic("checkExtensionConstraints: spellings.get OOB at {constraint.typeParamIndex} — a ConformanceBinding's columns are parallel")
+		let conformer = signatures.conformerNameOfRequirement(bound, readerFilePath: readerFilePath)
 
 		if not typeConformsTo(signatures.sweptConformanceIndex(), interfaces: signatures.interfaceMap(), typeName: conformer, interfaceName: constraint.interfaceName, discovered: signatures.discoveredConformerOf(conformer)) 'violates'
-			return ExtensionConstraintCheck.unmet(constraint.interfaceName, bindingName: binding)
+			return ExtensionConstraintCheck.unmet(constraint.interfaceName, bindingName: spelling)
 		end 'violates'
 	end 'eachConstraint'
 
@@ -1643,8 +1648,8 @@ end 'checkInterfaceMethods'
 //
 // ⭐⭐ **WHAT STAYS HERE IS THE SUBSTITUTION, AND IT IS THE ONLY PLACE ASSOCIATED TYPES ARE SUBSTITUTED.** A
 // collected requirement is ALREADY substituted, so the two things that read one — `signatureMatches`, which
-// decides the verdict, and `formatInterfaceMethodSignature`, which writes the sentence — are reading one
-// string rather than each deriving their own. Substituting at two sites instead would let a
+// decides the verdict from `method`, and `formatInterfaceMethodSignature`, which writes the sentence from
+// `displayMethod` — read two copies made by one substitution. Substituting at two sites instead would let a
 // substitution reach the comparison and miss the message, yielding a CORRECT VERDICT WITH A WRONG
 // SENTENCE, which no positive test can see —
 // which is why `error.extends.wrong-signature-under-an-inherited-binding-names-the-substituted-type` asserts
@@ -1670,15 +1675,12 @@ end 'checkInterfaceMethods'
 // longer fire. That is also the whole reason this is a two-pair lookup rather than a single clause-wide
 // dictionary, which cannot represent the disagreement at all.
 //
-// ⛔ **THE MISSING HALF WAS INVISIBLE BECAUSE TWO INDIVIDUALLY-CORRECT RULES NEVER MET.**
-// `Parser.conformanceUsesArity` counts an interface's OWN `uses` names and deliberately not its inherited
-// ones, so for `implements … BiCursor` the root's `associatedTypeNames` is EMPTY and the guard below took
-// the "nothing to substitute" path — while the slot list it hands back includes every
-// requirement `Cursor` declares. MEASURED: `type Walker implements Cursor with Pos, BiCursor` was
-// `E3016 … current() returns Pos (expected current() returns Element)`, and striking `, BiCursor` — which
-// REMOVES a conformance — made the same program compile and print 7. Conforming to a DESCENDANT destroyed
-// the binding of its ANCESTOR. Entries are kept apart, which is what lets E3111 tell two routes to one
-// slot apart, so the join has to be made HERE, per slot, rather than by flattening the clause.
+// ⛔ **THE DECLARING PAIR IS ASKED PER SLOT.** `Parser.conformanceUsesArity` counts an interface's OWN `uses`
+// names and deliberately not its inherited ones, so for `implements … BiCursor` the root's
+// `associatedTypeNames` is EMPTY while the slot list includes every requirement `Cursor` declares; without
+// the declaring pair, conforming to a DESCENDANT loses the binding of its ANCESTOR. Entries are kept apart,
+// which is what lets E3111 tell two routes to one slot apart, so the join is made HERE, per slot, rather
+// than by flattening the clause.
 //
 // ⚖ The absence of a sibling entry binds NOTHING. `implements BiCursor` alone and
 // `implements BiCursor with Pos` are both rejected with the identical `expected get() returns Element`
@@ -1687,25 +1689,25 @@ end 'checkInterfaceMethods'
 // `error.inherited-uses-name-unparenthesized-is-still-a-signature-error` pins.
 //
 // ⭐⭐ **AND AN INTERFACE-SCOPED `typealias` IS EXPANDED AT THIS SAME DOOR.** `function absorb(value
-// ElementArray)` inside `interface Holder uses Element` renders its parameter as the unresolved name
-// `Holder.ElementArray`, while every conformer's own alias renders a RESOLVED `Array_…` — so the two sides
-// of one requirement were compared as an unresolved name against an instance and every conformer was
-// refused. Expansion belongs HERE and not at a second site for the reason above: the expanded name is what
-// the verdict compares AND what the diagnostic prints.
+// ElementArray)` inside `interface Holder uses Element` is a requirement on `Holder.ElementArray`, which
+// names nothing outside `Holder`; every conformer writes the instance it expands to. The verdict compares
+// the expansion structurally under this conformance's bindings (`aliasExpansionScope`, read by
+// `nominalMeetsType`), and the display copy prints it with the bound spellings
+// substituted (`expandedAliasRequirement`).
 //
 // ⚠ **EXPAND FIRST, THEN SUBSTITUTE — the order is not a preference, the reverse is undefined.** Before
 // expansion the requirement mentions no associated type at all: `Holder.ElementArray` is one opaque name.
-// It is the right-hand side that exposes `Element`, and the bound spellings the expansion is handed are
-// produced by `boundTypeName` — the same two-pair lookup every other position uses — so the two rules
-// compose rather than each having its own idea of what a name means.
+// It is the right-hand side that exposes `Element`, and the bindings the expansion is handed come from
+// `associatedBinding` — the same two-pair lookup every other position uses — so the two rules compose
+// rather than each having its own idea of what a name means.
 //
-// ⚠ **THE FAST PATH IS TWO CONDITIONS NOW, AND BOTH ARE EXACT.** "This clause binds nothing" has to
+// ⚠ **THE FAST PATH IS TWO CONDITIONS, AND BOTH ARE EXACT.** "This clause binds nothing" has to
 // replace "the ROOT interface declares no associated type", which is precisely the wrong question
 // after the two-pair paragraph: asking whether ANY entry wrote a `with` argument is one pass over a
 // handful of entries, allocates nothing, needs no interface lookup, and is sufficient by
 // construction, since every binding this function can apply comes from one of those lists. But a
 // clause that binds nothing can still need EXPANSION — `interface Sink` with `typealias Bytes =
-// Array with Byte` and no `uses` at all was equally broken (measured) — so
+// Array with Byte` and no `uses` at all — so
 // `anySlotDeclarerHasAnAlias` rides beside it. That one is asked PER DECLARING INTERFACE and not
 // program-wide, for the reason its own header gives: `stdlib/Builtins.maxon` declares an alias, so
 // a program-wide bool is true for every program that loads the stdlib and would put every
@@ -1727,9 +1729,9 @@ function collectInterfaceMethods(project Project, signatures ProgramSignatures, 
 		let ownerNames = associatedTypeNamesDeclaredBy(project, iface: iface, interfaceName: slot.sourceInterfaceName)
 		let declaring = boundConformanceFor(conformance, entry: entry, interfaceName: slot.sourceInterfaceName)
 		let declaredNames = pairableAssociatedTypeNames(ownerNames, boundTypeNames: declaring.withArgs)
-		var under = RequirementSubstitution.create(signatures, clauseNames: clauseNames, clauseArgs: entry.withArgs, declaredNames: declaredNames, declaredArgs: declaring.withArgs, ownerNames: ownerNames, ownerInterfaceName: slot.sourceInterfaceName, conformerName: conformance.typeName, conformerTypeParams: typeParamNames, form: InstanceNameForm.canonical)
-		var spelled = RequirementSubstitution.create(signatures, clauseNames: clauseNames, clauseArgs: entry.withArgSpellings, declaredNames: declaredNames, declaredArgs: declaring.withArgSpellings, ownerNames: ownerNames, ownerInterfaceName: slot.sourceInterfaceName, conformerName: conformance.typeName, conformerTypeParams: typeParamNames, form: InstanceNameForm.written)
-		substituted.push(CollectedInterfaceMethod.create(substituteAssociatedTypes(slot.method, under: under), displayMethod: substituteAssociatedTypes(slot.method, under: spelled), sourceInterfaceName: slot.sourceInterfaceName, sourceDeclFilePath: slot.sourceDeclFilePath))
+		var under = RequirementSubstitution.create(signatures, clauseNames: clauseNames, clauseArgs: entry.withArgs, clauseTypes: entry.withArgTypes, declaredNames: declaredNames, declaredArgs: declaring.withArgs, declaredTypes: declaring.withArgTypes, ownerNames: ownerNames, ownerInterfaceName: slot.sourceInterfaceName, conformerName: conformance.typeName, conformerTypeParams: typeParamNames, form: InstanceNameForm.canonical)
+		var spelled = RequirementSubstitution.create(signatures, clauseNames: clauseNames, clauseArgs: entry.withArgSpellings, clauseTypes: entry.withArgTypes, declaredNames: declaredNames, declaredArgs: declaring.withArgSpellings, declaredTypes: declaring.withArgTypes, ownerNames: ownerNames, ownerInterfaceName: slot.sourceInterfaceName, conformerName: conformance.typeName, conformerTypeParams: typeParamNames, form: InstanceNameForm.written)
+		substituted.push(CollectedInterfaceMethod.create(substituteAssociatedTypes(slot.method, under: under), displayMethod: substituteAssociatedTypes(slot.method, under: spelled), sourceInterfaceName: slot.sourceInterfaceName, sourceDeclFilePath: slot.sourceDeclFilePath, expansion: aliasExpansionScope(under)))
 	end 'eachSlot'
 
 	return substituted
@@ -1744,11 +1746,13 @@ type RequirementSubstitution
 	// the requirement. Asked in that order — see `collectInterfaceMethods` for why clause-first is a rule.
 	export let clauseNames as NameRoster
 	export let clauseArgs as NameRoster
+	export let clauseTypes as RequirementTypeArray
 	export let declaredNames as NameRoster
 	export let declaredArgs as NameRoster
+	export let declaredTypes as RequirementTypeArray
 
 	// ⚠ The declaring interface's `uses` names UNGATED by `pairableAssociatedTypeNames`, unlike
-	// `declaredNames` above. The alias expansion pairs them against `boundTypeName`'s answers, which is
+	// `declaredNames` above. The alias expansion pairs them against `associatedBinding`'s answers, which is
 	// defined for every name whether or not an argument list could pair with it — where the substitution
 	// proper indexes an argument list directly and must not be handed a name it cannot reach.
 	export let ownerNames as NameRoster
@@ -1758,8 +1762,8 @@ type RequirementSubstitution
 	export var conformerTypeParams as NameRoster
 	export let form as InstanceNameForm
 
-	static function create(signatures ProgramSignatures, clauseNames NameRoster, clauseArgs NameRoster, declaredNames NameRoster, declaredArgs NameRoster, ownerNames NameRoster, ownerInterfaceName ByteArray, conformerName ByteArray, conformerTypeParams NameRoster, form InstanceNameForm) returns RequirementSubstitution
-		return Self{clauseNames: clauseNames, clauseArgs: clauseArgs, declaredNames: declaredNames, declaredArgs: declaredArgs, ownerNames: ownerNames, ownerInterfaceName: ownerInterfaceName, signatures: signatures, conformerName: conformerName, conformerTypeParams: conformerTypeParams, form: form}
+	static function create(signatures ProgramSignatures, clauseNames NameRoster, clauseArgs NameRoster, clauseTypes RequirementTypeArray, declaredNames NameRoster, declaredArgs NameRoster, declaredTypes RequirementTypeArray, ownerNames NameRoster, ownerInterfaceName ByteArray, conformerName ByteArray, conformerTypeParams NameRoster, form InstanceNameForm) returns RequirementSubstitution
+		return Self{clauseNames: clauseNames, clauseArgs: clauseArgs, clauseTypes: clauseTypes, declaredNames: declaredNames, declaredArgs: declaredArgs, declaredTypes: declaredTypes, ownerNames: ownerNames, ownerInterfaceName: ownerInterfaceName, signatures: signatures, conformerName: conformerName, conformerTypeParams: conformerTypeParams, form: form}
 	end 'create'
 end 'RequirementSubstitution'
 
@@ -1836,7 +1840,7 @@ function boundConformanceFor(conformance ConformanceDecl, entry InterfaceConform
 end 'boundConformanceFor'
 
 // ⛔ **A NAME LIST WITH NO ARGUMENT LIST TO PAIR AGAINST BINDS NOTHING — AND IT IS THE *NAMES* THAT
-// MUST BE EMPTIED, NOT THE ARGUMENTS.** `boundTypeName` is driven by the NAME list, so a short
+// MUST BE EMPTIED, NOT THE ARGUMENTS.** `associatedBinding` is driven by the NAME list, so a short
 // argument list left beside a full name list is not "no substitution", it is a subscript past the
 // end of the arguments. `pairableConformanceBindings` states the same positional rule for the
 // registry copy of these lists, and states why a list of a different length has no positional
@@ -1845,7 +1849,7 @@ end 'boundConformanceFor'
 // The gate is a no-op for the entry being checked — `checkOneInterfaceConformance` reported a short one and
 // returned before any requirement was collected — and it is what makes it true for a SIBLING entry too,
 // which has had no such gate yet (its own check reports E3016 separately). Stating it HERE rather than
-// relying on the remote guarantee is what turns `boundTypeName`'s panic into an unreachable invariant.
+// relying on the remote guarantee is what turns `associatedBinding`'s panic into an unreachable invariant.
 function pairableAssociatedTypeNames(associatedTypeNames NameRoster, boundTypeNames NameRoster) returns NameRoster
 	return sharedEmptyDeclaredConformances if boundTypeNames.count() < associatedTypeNames.count() else associatedTypeNames
 end 'pairableAssociatedTypeNames'
@@ -1857,68 +1861,91 @@ end 'pairableAssociatedTypeNames'
 // requirement of every binding conformance to say what four already-built lists say.
 function substituteAssociatedTypes(method InterfaceMethodSig, under RequirementSubstitution) returns InterfaceMethodSig
 	var paramTypeNames = NameRoster.create()
+	var paramTypes = RequirementTypeArray.create()
 
-	for i in 0 upto method.paramTypeNames.count() 'eachParam'
-		paramTypeNames.push(boundTypeName(try method.paramTypeNames.get(i) otherwise panic("substituteAssociatedTypes: paramTypeNames.get OOB at {i}"), under: under))
+	for i in 0 upto method.paramTypes.count() 'eachParam'
+		view display = try method.paramTypeNames.get(i) otherwise panic("substituteAssociatedTypes: paramTypeNames.get OOB at {i} — an InterfaceMethodSig's type columns are parallel")
+		let (requirement, shown) = boundRequirement(try method.paramTypes.get(i) otherwise panic("substituteAssociatedTypes: paramTypes.get OOB at {i}"), display: display, under: under)
+		paramTypeNames.push(shown)
+		paramTypes.push(requirement)
 	end 'eachParam'
 
-	return InterfaceMethodSig.create(method.name, paramNames: method.paramNames, paramTypeNames: paramTypeNames, returnTypeName: boundTypeName(method.returnTypeName, under: under), isStatic: method.isStatic, throwsClause: substituteThrowsClause(method.throwsClause, under: under), paramIsBuffer: method.paramIsBuffer, paramCapabilities: method.paramCapabilities, returnCapability: method.returnCapability, nameLine: method.nameLine, nameColumn: method.nameColumn, written: method.written)
+	let (returnRequirement, returnShown) = boundRequirement(method.returnType, display: method.returnTypeName, under: under)
+
+	return InterfaceMethodSig.create(method.name, paramNames: method.paramNames, paramTypeNames: paramTypeNames, paramTypes: paramTypes, returnTypeName: returnShown, returnType: returnRequirement, isStatic: method.isStatic, throwsClause: substituteThrowsClause(method.throwsClause, under: under), paramIsBuffer: method.paramIsBuffer, paramCapabilities: method.paramCapabilities, returnCapability: method.returnCapability, nameLine: method.nameLine, nameColumn: method.nameColumn, written: method.written)
 end 'substituteAssociatedTypes'
 
-// What ONE written type name in a requirement denotes under this conformance's bindings: the argument bound
-// at the associated type's position, or the name itself when neither pair spells it. The CLAUSE pair is
-// asked first and the DECLARING interface's second — see `collectInterfaceMethods` for why that order is a
-// rule and not a preference. The scan that decides WHICH `uses` parameter a name is lives in
-// `Array.positionOfName` — one statement of it, because the witness-call lowering asks the same
-// question for a different reason.
-function boundTypeName(name ByteArray, under RequirementSubstitution) returns ByteArray
-	let bound = boundAssociatedTypeName(name, under: under)
+function boundRequirement(requirement RequirementType, display ByteArray, under RequirementSubstitution) returns (RequirementType, ByteArray)
+	return match requirement.identity 'identity'
+		typeParameter gives boundTypeParameter(requirement, display: display, under: under)
+		nominal(name) gives expandedAliasRequirement(requirement, name: name, display: display, under: under)
+		void or
+		selfType or
+		genericInstance or
+		builtin gives (requirement.clone(), display.clone())
+	end 'identity'
+end 'boundRequirement'
 
-	if not bound.equals(name) 'anAssociatedTypeOfEitherPair'
-		return bound
-	end 'anAssociatedTypeOfEitherPair'
+function boundTypeParameter(requirement RequirementType, display ByteArray, under RequirementSubstitution) returns (RequirementType, ByteArray)
+	let name = try associatedNameOf(requirement, signatures: under.signatures) otherwise panic("boundTypeParameter: the type parameter '{String.from(display)}' of a requirement of '{String.from(under.ownerInterfaceName)}' has no owner — `recordInterfaceDeclaration` files every associated type of an interface as the sweep folds")
+	return try associatedBinding(name, under: under) otherwise return (requirement.clone(), display.clone())
+end 'boundTypeParameter'
 
-	// ⭐ **A NAME NEITHER PAIR SPELLS MAY STILL BE THE DECLARING INTERFACE'S OWN `typealias`.** It is
-	// asked LAST because the lookup above is what its own expansion is defined in terms of: an associated type
-	// resolves to a binding, and only then does the alias's right-hand side mean anything. An interface that
-	// declares no alias, and a name that is not one of its members, fall straight through to the name itself —
-	// which is every requirement in the corpus outside the shapes above.
-	return try expandedInterfaceAlias(name, under: under) otherwise return name
-end 'boundTypeName'
-
-// ⛔ **THE ASSOCIATED-TYPE HALF ALONE, AND IT IS A SEPARATE FUNCTION TO MAKE THE RECURSION
-// IMPOSSIBLE RATHER THAN MERELY UNREACHED.** The expansion below resolves the declaring interface's
-// `uses` names through this door. Calling `boundTypeName` here instead — whose last act is to
-// expand — would send every name that reached the expansion back into it, rebuilding the same
-// spelling list for ever. The recursion is not bounded "by construction" by the two pair lookups:
-// that holds only while both pairs are non-empty, which `pairableAssociatedTypeNames` exists to
-// make false. A structure that CANNOT recurse needs no such argument.
-function boundAssociatedTypeName(name ByteArray, under RequirementSubstitution) returns ByteArray
+function associatedBinding(name ByteArray, under RequirementSubstitution) returns (RequirementType, ByteArray) throws MapError
 	if let clausePosition = try under.clauseNames.positionOfName(name) 'boundByTheClause'
-		return try under.clauseArgs.get(clausePosition) otherwise panic("boundAssociatedTypeName: clauseArgs.get OOB at {clausePosition} below name count {under.clauseNames.count()} — `pairableAssociatedTypeNames` empties the NAME list whenever the arguments cannot pair with it positionally, so a name reaching this point always has an argument at its own index")
+		return ((try under.clauseTypes.get(clausePosition) otherwise panic("associatedBinding: clauseTypes.get OOB at {clausePosition} — an InterfaceConformance's binding columns are parallel")).clone(), (try under.clauseArgs.get(clausePosition) otherwise panic("associatedBinding: clauseArgs.get OOB at {clausePosition} below name count {under.clauseNames.count()} — `pairableAssociatedTypeNames` empties the NAME list whenever the arguments cannot pair with it positionally")).clone())
 	end 'boundByTheClause'
 
 	if let declaredPosition = try under.declaredNames.positionOfName(name) 'boundByItsDeclarer'
-		return try under.declaredArgs.get(declaredPosition) otherwise panic("boundAssociatedTypeName: declaredArgs.get OOB at {declaredPosition} below name count {under.declaredNames.count()} — the same `pairableAssociatedTypeNames` gate applies to the declaring interface's pair")
+		return ((try under.declaredTypes.get(declaredPosition) otherwise panic("associatedBinding: declaredTypes.get OOB at {declaredPosition} — an InterfaceConformance's binding columns are parallel")).clone(), (try under.declaredArgs.get(declaredPosition) otherwise panic("associatedBinding: declaredArgs.get OOB at {declaredPosition} below name count {under.declaredNames.count()} — the same `pairableAssociatedTypeNames` gate applies to the declaring interface's pair")).clone())
 	end 'boundByItsDeclarer'
 
-	return name
-end 'boundAssociatedTypeName'
+	throw MapError.keyNotFound
+end 'associatedBinding'
 
-// The alias's right-hand side under this conformance's bindings, as the canonical instance name the
-// conformer's own declared parameter renders to. The bound spellings are the ASSOCIATED-TYPE lookup's answers
-// for the declaring interface's `uses` names, which is what makes the expansion and the substitution ONE rule
-// rather than two: whatever `Element` means in a requirement's parameter position is what it means inside the
-// alias.
-function expandedInterfaceAlias(name ByteArray, under RequirementSubstitution) returns ByteArray throws MapError
+function expandedAliasRequirement(requirement RequirementType, name ByteArray, display ByteArray, under RequirementSubstitution) returns (RequirementType, ByteArray)
+	if under.form == InstanceNameForm.canonical 'theComparedCopy'
+		return (requirement.clone(), display.clone())
+	end 'theComparedCopy'
+
 	var boundSpellings = NameRoster.create()
 
 	for ownerName in under.ownerNames 'eachAssociatedType'
 		boundSpellings.push(boundAssociatedTypeName(ownerName, under: under))
 	end 'eachAssociatedType'
 
-	return try under.signatures.expandInterfaceAlias(name, associatedTypeNames: under.ownerNames, boundSpellings: boundSpellings, conformerName: under.conformerName, conformerTypeParams: under.conformerTypeParams, declaringInterfaceName: under.ownerInterfaceName, form: under.form)
-end 'expandedInterfaceAlias'
+	let shown = try under.signatures.expandedInterfaceAliasDisplay(name, associatedTypeNames: under.ownerNames, boundSpellings: boundSpellings, declaringInterfaceName: under.ownerInterfaceName) otherwise return (requirement.clone(), display.clone())
+	return (requirement.clone(), shown)
+end 'expandedAliasRequirement'
+
+function aliasExpansionScope(under RequirementSubstitution) returns AliasExpansionScope
+	if not under.signatures.interfaceDeclaresAlias(under.ownerInterfaceName) 'declaresNoAlias'
+		return sharedNoAliasExpansion
+	end 'declaresNoAlias'
+
+	var bound = RequirementTypeArray.create()
+
+	for ownerName in under.ownerNames 'eachAssociatedType'
+		bound.push(boundOwnerType(ownerName, under: under))
+	end 'eachAssociatedType'
+
+	return AliasExpansionScope.create(under.ownerInterfaceName, associatedNames: under.ownerNames, bound: bound)
+end 'aliasExpansionScope'
+
+function boundOwnerType(ownerName ByteArray, under RequirementSubstitution) returns RequirementType
+	let (requirement, _) = try associatedBinding(ownerName, under: under) otherwise return unboundOwnerType(ownerName, under: under)
+	return requirement
+end 'boundOwnerType'
+
+function unboundOwnerType(ownerName ByteArray, under RequirementSubstitution) returns RequirementType
+	let owner = under.conformerName if under.conformerTypeParams.contains(ownerName) else under.ownerInterfaceName
+	return RequirementType.create(RequirementTypeIdentity.typeParameter(typeParamTokenFor(owner, paramName: ownerName)), brand: EmptySourceText)
+end 'unboundOwnerType'
+
+function boundAssociatedTypeName(name ByteArray, under RequirementSubstitution) returns ByteArray
+	let (_, spelling) = try associatedBinding(name, under: under) otherwise return name
+	return spelling
+end 'boundAssociatedTypeName'
 
 // The `throws E` clause under the same bindings. It substitutes for the reason every other position does —
 // `function next() throws Element` is as much an associated-type USE as a parameter is, and the throws
@@ -1927,7 +1954,7 @@ end 'expandedInterfaceAlias'
 function substituteThrowsClause(clause ThrowsClause, under RequirementSubstitution) returns ThrowsClause
 	match clause 'declared'
 		none then return ThrowsClause.none
-		throwing(name) then return ThrowsClause.throwing(String.from(boundTypeName(name.toByteArray(), under: under)))
+		throwing(name) then return ThrowsClause.throwing(String.from(boundAssociatedTypeName(name.toByteArray(), under: under)))
 	end 'declared'
 end 'substituteThrowsClause'
 
@@ -1960,7 +1987,7 @@ function checkOneMethod(project Project, functionsByName FunctionNameIndex, conf
 	if let implFunc = try functionsByName.funcNamed(qualifiedName) 'present'
 		view implSig = conformanceImplSignature(project, name: qualifiedName)
 
-		if not signatureMatches(project, method: method, interfaceDeclFilePath: collectedMethod.sourceDeclFilePath, conformingType: conformance.typeName, implFunc: implFunc, implSig: implSig, typeParamNames: typeParamNames, signatures: signatures) 'mismatch'
+		if not signatureMatches(project, method: method, expansion: collectedMethod.expansion, conformingType: conformance.typeName, implFunc: implFunc, implSig: implSig, typeParamNames: typeParamNames, signatures: signatures) 'mismatch'
 			wrongSignature.push("{formatActualSignature(project, methodName: method.name, conformingType: conformance.typeName, implFunc: implFunc, implSig: implSig, typeParamNames: typeParamNames, signatures: signatures)} (expected {formatInterfaceMethodSignature(collectedMethod.displayMethod, signatures: signatures)})")
 		end 'mismatch' else 'signatureOk'
 			acceptConformingMember(project, functionsByName: functionsByName, conformance: conformance, collectedMethod: collectedMethod, selected: qualifiedName, implFunc: implFunc, typeParamNames: typeParamNames, signatures: signatures)
@@ -2021,7 +2048,7 @@ function checkOverloadedMembers(project Project, functionsByName FunctionNameInd
 	var matched = NameRoster.create()
 
 	for candidate in candidates 'eachCandidate'
-		if signatureMatches(project, method: collectedMethod.method, interfaceDeclFilePath: collectedMethod.sourceDeclFilePath, conformingType: conformance.typeName, implFunc: conformanceImplFunction(functionsByName, name: candidate), implSig: conformanceImplSignature(project, name: candidate), typeParamNames: typeParamNames, signatures: signatures) 'matches'
+		if signatureMatches(project, method: collectedMethod.method, expansion: collectedMethod.expansion, conformingType: conformance.typeName, implFunc: conformanceImplFunction(functionsByName, name: candidate), implSig: conformanceImplSignature(project, name: candidate), typeParamNames: typeParamNames, signatures: signatures) 'matches'
 			matched.push(candidate)
 		end 'matches'
 	end 'eachCandidate'
@@ -2426,9 +2453,9 @@ function throwsConformanceSubject(typeName ByteArray, collectedMethod CollectedI
 end 'throwsConformanceSubject'
 
 // Does the impl method's signature match the interface method's? Instance methods carry `__self` at
-// position 0, dropped on both sides; a `Self` in the interface substitutes the conforming type. The two
-// sides are compared as DECLARATION IDENTITIES — a requirement's written names read in the interface's own
-// file — because a `typealias` declaration is its own type: `process(v Int)` does not implement
+// position 0, dropped on both sides; a `Self` in the interface substitutes the conforming type. The
+// requirement side is its stored identity, completed in the interface's own file (`RequirementType`),
+// because a `typealias` declaration is its own type: `process(v Int)` does not implement
 // `process(v Integer)` even where the two ranges are identical, and the diagnostic quotes each side as its
 // source spells it.
 //
@@ -2439,7 +2466,7 @@ end 'throwsConformanceSubject'
 // `(expected compare(other Self) returns Ordering)`). `Self` reads better in a diagnostic than the
 // reader's own type name repeated back;
 // an associated type does not, because its name is meaningless outside the interface that declared it.
-function signatureMatches(project Project, method InterfaceMethodSig, interfaceDeclFilePath FilePath, conformingType ByteArray, implFunc IrFunction, implSig FuncSignature, typeParamNames NameRoster, signatures ProgramSignatures) returns bool
+function signatureMatches(project Project, method InterfaceMethodSig, expansion AliasExpansionScope, conformingType ByteArray, implFunc IrFunction, implSig FuncSignature, typeParamNames NameRoster, signatures ProgramSignatures) returns bool
 	// ⭐ **A `static` REQUIREMENT IS MET BY A STATIC MEMBER, AND AN INSTANCE ONE BY AN INSTANCE MEMBER.**
 	// The two have different ABIs — an instance method takes `__self` at position 0 — and the witness slot is
 	// stamped with whichever the type declared, so an instance impl under a static requirement would be
@@ -2464,9 +2491,9 @@ function signatureMatches(project Project, method InterfaceMethodSig, interfaceD
 
 		// ⭐⭐ **A REQUIREMENT SPELLED BARE `__ManagedMemory` MEANS *ANY* BUFFER, NOT A BUFFER OF BYTES.**
 		// The bare spelling inside a requirement is the buffer's unbound `Element` parameter, but it
-		// resolves to the CONCRETE byte instance, so by the time `paramTypeNames` is rendered it reads
-		// `Array_Byte` and an impl declaring `__ManagedMemory with Key` is refused against the very
-		// interface written for it — `BuiltinDictionaryLiteral` against `stdlib/Map.maxon`.
+		// resolves to the CONCRETE byte instance, so its stored identity is that instance and an impl
+		// declaring `__ManagedMemory with Key` would be refused against the very interface written for it —
+		// `BuiltinDictionaryLiteral` against `stdlib/Map.maxon`.
 		//
 		// ⛔ **THIS MAY NOT BE DONE BY COMPARING MORE LOOSELY.** Widening every `Array_Byte` requirement
 		// would silently accept a genuine `ByteArray` mismatch — a wrong ACCEPTANCE, which nothing reports.
@@ -2486,37 +2513,97 @@ function signatureMatches(project Project, method InterfaceMethodSig, interfaceD
 			continue
 		end 'requirementTakesAnyBuffer'
 
-		let written = try method.paramTypeNames.get(i) otherwise panic("signatureMatches: paramTypeNames.get OOB at {i}")
-		view expected = substituteSelf(signatures.declaredIdentityOfSpelling(written, declFilePath: interfaceDeclFilePath), conformingType: conformingType)
-		view actual = renderDeclaredTypeName(implType, declarationName: conformingType, typeParamNames: typeParamNames, typeNames: project.typeNames, signatures: signatures)
+		let requirement = try method.paramTypes.get(i) otherwise panic("signatureMatches: paramTypes.get OOB at {i} — an InterfaceMethodSig's type columns are parallel")
 
-		if expected.equals(actual) or aliasDecaysIntoPrimitive(project, expected: expected, actual: actual, readerFilePath: implFunc.sourceFilePath) 'oneSpelling'
-			continue
-		end 'oneSpelling'
-
-		// A requirement that spelled a generic-instance ALIAS renders as that alias (`Parser.renderInterfaceParamTypes`),
-		// which no impl rendering equals: the two are compared as an identity through the alias registry AND a
-		// brand against the impl's spelled column, exactly as `aggregatesConflict` compares a value — an
-		// unbranded side fits any brand, two different aliases of one instance do not.
-		if maxonTypeTag(implType) == ValueTypeTag.genericInstance 'aBrandedInstance'
-			if not signatures.instanceIdentityOfSpelling(expected).equals(signatures.canonicalInstanceName(genericInstanceIdOf(implType))) 'differentInstances'
-				return false
-			end 'differentInstances'
-
-			if brandsConflict(signatures.genericBrandOfWritten(written, readerFilePath: interfaceDeclFilePath), got: signatures.genericBrandOfWritten(implParamSpelling(implSig, position: (i + selfOffset) as ParamCount), readerFilePath: implFunc.sourceFilePath)) 'twoBrandsOfOneInstance'
-				return false
-			end 'twoBrandsOfOneInstance'
-
-			continue
-		end 'aBrandedInstance'
-
-		return false
+		if not requirementMeetsType(project, requirement: requirement, expansion: expansion, conformingType: conformingType, implType: implType, implSpelling: implParamSpelling(implSig, position: (i + selfOffset) as ParamCount), implFilePath: implFunc.sourceFilePath, typeParamNames: typeParamNames, signatures: signatures) 'aParamTheImplDoesNotTake'
+			return false
+		end 'aParamTheImplDoesNotTake'
 	end 'eachParam'
 
-	view expectedReturn = substituteSelf(signatures.declaredIdentityOfSpelling(method.returnTypeName, declFilePath: interfaceDeclFilePath), conformingType: conformingType)
-	view actualReturn = renderReturnType(project, returnType: implFunc.maxonReturnType, conformingType: conformingType, typeParamNames: typeParamNames, signatures: signatures)
-	return expectedReturn.equals(actualReturn) or aliasDecaysIntoPrimitive(project, expected: expectedReturn, actual: actualReturn, readerFilePath: implFunc.sourceFilePath)
+	match implFunc.maxonReturnType 'implReturn'
+		void then return method.returnType.isVoid()
+		value(implType) then return not method.returnType.isVoid() and requirementMeetsType(project, requirement: method.returnType, expansion: expansion, conformingType: conformingType, implType: implType, implSpelling: implSig.returnBrand, implFilePath: implFunc.sourceFilePath, typeParamNames: typeParamNames, signatures: signatures)
+	end 'implReturn'
 end 'signatureMatches'
+
+function requirementMeetsType(project Project, requirement RequirementType, expansion AliasExpansionScope, conformingType ByteArray, implType MaxonType, implSpelling ByteArray, implFilePath FilePath, typeParamNames NameRoster, signatures ProgramSignatures) returns bool
+	view actual = renderDeclaredTypeName(implType, declarationName: conformingType, typeParamNames: typeParamNames, typeNames: project.typeNames, signatures: signatures)
+
+	return match requirement.identity 'identity'
+		selfType gives actual.equals(conformingType)
+		genericInstance(id) gives instanceMeetsImplType(signatures.canonicalInstanceName(id), brand: requirement.brand, implType: implType, implSpelling: implSpelling, implFilePath: implFilePath, signatures: signatures)
+		builtin(tag) gives builtinMeetsType(project, tag: tag, implType: implType, implFilePath: implFilePath)
+		nominal(name) gives nominalMeetsType(name, expansion: expansion, actual: actual, implType: implType, signatures: signatures)
+		typeParameter gives unboundAssociatedMeetsType(requirement, actual: actual, signatures: signatures)
+		void panic("requirementMeetsType: a void requirement is compared by the return door before any type is asked")
+	end 'identity'
+end 'requirementMeetsType'
+
+function nominalMeetsType(name ByteArray, expansion AliasExpansionScope, actual ByteArray, implType MaxonType, signatures ProgramSignatures) returns bool
+	if let alias = try signatures.interfaceAliasInstanceOf(name) 'anInterfacesOwnAlias'
+		return maxonTypeTag(implType) == ValueTypeTag.genericInstance and expansionMeetsInstance(alias, expansion: expansion, implInstance: genericInstanceIdOf(implType), signatures: signatures)
+	end 'anInterfacesOwnAlias'
+
+	return maxonTypeTag(implType) != ValueTypeTag.genericInstance and name.equals(actual)
+end 'nominalMeetsType'
+
+function expansionMeetsInstance(alias GenericInstanceId, expansion AliasExpansionScope, implInstance GenericInstanceId, signatures ProgramSignatures) returns bool
+	if not signatures.genericInstanceBaseName(alias).equals(signatures.genericInstanceBaseName(implInstance)) or signatures.genericInstanceArgCount(alias) != signatures.genericInstanceArgCount(implInstance) 'differentShapes'
+		return false
+	end 'differentShapes'
+
+	for position in 0 upto signatures.genericInstanceArgCount(alias) 'eachArg'
+		if signatures.genericInstanceArgIsReadOnly(alias, position: position) != signatures.genericInstanceArgIsReadOnly(implInstance, position: position) 'differentReadOnlyness'
+			return false
+		end 'differentReadOnlyness'
+
+		if not expansionArgMeetsInstanceArg(signatures.substitutedInstanceArg(alias, position: position), expansion: expansion, implInstance: implInstance, position: position, signatures: signatures) 'differentArgs'
+			return false
+		end 'differentArgs'
+	end 'eachArg'
+
+	return true
+end 'expansionMeetsInstance'
+
+function expansionArgMeetsInstanceArg(aliasArg MaxonType, expansion AliasExpansionScope, implInstance GenericInstanceId, position ElementIndex, signatures ProgramSignatures) returns bool
+	let implArg = signatures.instanceArgRequirement(implInstance, position: position)
+
+	if maxonTypeTag(aliasArg) == ValueTypeTag.typeParameter 'maybeAnAssociatedType'
+		if let owned = try typeParamPositionIn(typeParamIdOf(aliasArg), declarationName: expansion.declaringInterfaceName, paramNames: expansion.associatedNames) 'oneOfTheDeclarersOwn'
+			return (try expansion.bound.get(owned) otherwise panic("expansionArgMeetsInstanceArg: bound.get OOB at {owned} — the scope's bindings are built parallel to its associated names")).denotesSameTypeAs(implArg)
+		end 'oneOfTheDeclarersOwn'
+	end 'maybeAnAssociatedType'
+
+	if maxonTypeTag(aliasArg) == ValueTypeTag.genericInstance 'aNestedInstance'
+		return match implArg.identity 'implArg'
+			genericInstance(nested) gives expansionMeetsInstance(genericInstanceIdOf(aliasArg), expansion: expansion, implInstance: nested, signatures: signatures)
+			void or
+			selfType or
+			typeParameter or
+			builtin or
+			nominal gives false
+		end 'implArg'
+	end 'aNestedInstance'
+
+	return signatures.instanceArgTypeRequirement(aliasArg).denotesSameTypeAs(implArg)
+end 'expansionArgMeetsInstanceArg'
+
+function unboundAssociatedMeetsType(requirement RequirementType, actual ByteArray, signatures ProgramSignatures) returns bool
+	let name = try associatedNameOf(requirement, signatures: signatures) otherwise panic("unboundAssociatedMeetsType: a requirement's type parameter has no owner — `recordInterfaceDeclaration` files every associated type of an interface as the sweep folds")
+	return name.equals(actual)
+end 'unboundAssociatedMeetsType'
+
+function instanceMeetsImplType(instance ByteArray, brand ByteArray, implType MaxonType, implSpelling ByteArray, implFilePath FilePath, signatures ProgramSignatures) returns bool
+	if maxonTypeTag(implType) != ValueTypeTag.genericInstance 'notAnInstance'
+		return false
+	end 'notAnInstance'
+
+	if not instance.equals(signatures.canonicalInstanceName(genericInstanceIdOf(implType))) 'differentInstances'
+		return false
+	end 'differentInstances'
+
+	return not brandsConflict(brand, got: signatures.genericBrandOfWritten(implSpelling, readerFilePath: implFilePath))
+end 'instanceMeetsImplType'
 
 // ⭐ **A REQUIREMENT WRITTEN AS A BARE PRIMITIVE IS AN UNNAMED SLOT, AND AN ALIAS OVER THAT PRIMITIVE
 // FITS IT — AT A PARAMETER AND AT THE RETURN.** `take(e float)` — an associated type bound to `float` — is
@@ -2524,10 +2611,20 @@ end 'signatureMatches'
 // decays into any alias slot of its class and a named value into an unnamed one
 // (`ProgramSignatures.aggregatesConflict`). The reverse — a requirement spelling an alias, an impl spelling
 // the primitive or another alias — is the nominal refusal `signatureMatches` makes.
-function aliasDecaysIntoPrimitive(project Project, expected ByteArray, actual ByteArray, readerFilePath FilePath) returns bool
-	let underlying = try project.typeAliases.underlyingFor(actual, readerFilePath: readerFilePath) otherwise return false
-	return maxonTypeName(underlying, typeNames: project.typeNames).toByteArray().equals(expected)
-end 'aliasDecaysIntoPrimitive'
+function builtinMeetsType(project Project, tag ValueTypeTag, implType MaxonType, implFilePath FilePath) returns bool
+	if maxonTypeTag(implType) == tag 'theBuiltinItself'
+		return true
+	end 'theBuiltinItself'
+
+	if maxonTypeTag(implType) != ValueTypeTag.named 'notAnAlias'
+		return false
+	end 'notAnAlias'
+
+	let aliasName = try project.typeNames.nameOf(typeNameIdOf(implType)) otherwise panic("builtinMeetsType: type-name id {typeNameIdOf(implType)} is not in the project interner — an impl's declared type is remapped project-global at merge (mergeArtifact)")
+	let underlying = try project.typeAliases.underlyingFor(aliasName, readerFilePath: implFilePath) otherwise return false
+
+	return maxonTypeTag(underlying) == tag
+end 'builtinMeetsType'
 
 // The impl method's signature as a source string — `process(value Float) returns Integer`. Param NAMES
 // come from `funcSignatures` (interner-free); param TYPES from the module's REMAPPED `maxonParamTypes`.
@@ -2544,7 +2641,7 @@ function formatActualSignature(project Project, methodName ByteArray, conforming
 		paramTypes.push(implParamDisplay(project, implFunc: implFunc, implSig: implSig, position: i as ParamCount, conformingType: conformingType, typeParamNames: typeParamNames, signatures: signatures))
 	end 'eachParam'
 
-	return assembleMethodSignature(methodName, paramNames: paramNames, paramTypes: paramTypes, returnType: renderReturnType(project, returnType: implFunc.maxonReturnType, conformingType: conformingType, typeParamNames: typeParamNames, signatures: signatures), isStatic: implIsStatic, signatures: signatures)
+	return assembleMethodSignature(methodName, paramNames: paramNames, paramTypes: paramTypes, returnType: implReturnDisplay(project, implFunc: implFunc, implSig: implSig, conformingType: conformingType, typeParamNames: typeParamNames, signatures: signatures), isStatic: implIsStatic, signatures: signatures)
 end 'formatActualSignature'
 
 // The alias an impl parameter was DECLARED under — the signature's spelled column for a generic-instance
@@ -2578,26 +2675,17 @@ function formatInterfaceMethodSignature(method InterfaceMethodSig, signatures Pr
 	return assembleMethodSignature(method.name, paramNames: method.paramNames, paramTypes: method.paramTypeNames, returnType: method.returnTypeName, isStatic: method.isStatic, signatures: signatures)
 end 'formatInterfaceMethodSignature'
 
-// Render an impl method's RETURN as a source string — `void` for a void return, else the type through the
-// shared renderer. Returns a ByteArray so it feeds BOTH the string comparison in `signatureMatches` and
-// the message assembly in `formatActualSignature` without a re-conversion at either.
-function renderReturnType(project Project, returnType MaxonReturnType, conformingType ByteArray, typeParamNames NameRoster, signatures ProgramSignatures) returns ByteArray
-	return match returnType 'r'
+// How an impl's RETURN prints in E3016: `implParamDisplay`'s rule at the return, and `void` for none.
+function implReturnDisplay(project Project, implFunc IrFunction, implSig FuncSignature, conformingType ByteArray, typeParamNames NameRoster, signatures ProgramSignatures) returns ByteArray
+	if not implSig.returnBrand.isEmpty() 'declaredThroughAnAlias'
+		return signatures.aliasIdentityDisplay(implSig.returnBrand).toByteArray()
+	end 'declaredThroughAnAlias'
+
+	return match implFunc.maxonReturnType 'r'
 		void gives InterfaceVoidTypeName
 		value(inner) gives renderDeclaredTypeName(inner, declarationName: conformingType, typeParamNames: typeParamNames, typeNames: project.typeNames, signatures: signatures)
 	end 'r'
-end 'renderReturnType'
-
-// Substitute the conforming type for an interface's `Self` — every other spelling passes through. The
-// interface renders `Self` for a receiver-typed result/parameter; the conforming type's own method spells
-// the concrete type, so this is what lets `returns Self` match `returns Point`.
-function substituteSelf(typeName ByteArray, conformingType ByteArray) returns ByteArray
-	if typeName.equals(InterfaceSelfTypeName) 'isSelf'
-		return conformingType
-	end 'isSelf'
-
-	return typeName
-end 'substituteSelf'
+end 'implReturnDisplay'
 
 // Join `  - item` lines with newlines — the bulleted detail block of an E3016 message.
 function joinBulletedLines(items StringArray) returns String

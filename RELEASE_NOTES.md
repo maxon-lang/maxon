@@ -15,6 +15,21 @@ release's version as its heading when the release is cut.
 
 ### Breaking changes
 
+- An interface requirement returning one typealias of a generic instance is not met by a method returning
+  another typealias of that instance (E3016), as a parameter already was not.
+  Fix: declare the method's return with the requirement's own typealias.
+- A declared type named like a generic instance (`type Array_Byte`) and the instance itself (`ByteArray`)
+  no longer meet each other's interface requirements (E3016).
+  Fix: declare the method with the type the requirement names, or rename the declared type.
+- An argument passed through an interface value or a `where` constraint is checked against the
+  requirement's declared type as a direct call's is: a value of another generic instance, of another
+  typealias of the same instance, or a non-`Character`/`CString` value for a `Character` or `CString`
+  parameter is E3005.
+  Fix: pass a value of the requirement's type, re-branding an instance with `as` (`xs as IntArray`).
+- The result of a call through an interface keeps the requirement's typealias, so passing it where another
+  typealias of the same instance is expected is E3005.
+  Fix: re-brand the result with `as`, or declare the destination with the requirement's typealias.
+
 - Passing a `let` to a function whose result holds a closure capturing that parameter — in a container,
   a record or bare — is E3078, also when the result is bound by a `let` and the closure only reads.
   Fix: pass a `clone()`.

@@ -601,8 +601,13 @@ export enum ErrorCode
 	// An 'implements' clause names an interface that does not exist.
 	semanticUnknownInterface = "E3015"
 
-	// A type, enum or union claims to implement an interface but does not define all of its members.
-	// The expected signature names each associated type by the `with` argument the conformance spelled.
+	// A type, enum or union claims to implement an interface but does not define all of its members, or
+	// defines one whose signature differs from the requirement's.
+	// The expected signature names each associated type by the `with` argument the conformance spelled, and
+	// each type as the source spells it, a typealias by its own name.
+	// A typealias of a generic instance is its own type: a requirement taking or returning `IntArray` is not
+	// met by a member spelled with another alias of the same instance. A declared type is not the generic
+	// instance its name resembles: a `type Array_Byte` neither meets nor is met by `ByteArray`.
 	semanticPartialInterfaceImpl = "E3016"
 
 	// A generic argument violates the 'where' constraint declared on the type parameter.
@@ -1355,7 +1360,7 @@ export enum ErrorCode
 	// Under dictionary passing an interface's method bodies are compiled ONCE for every conformer, with no
 	// per-conformer specialization. So the shared body is compiled against exactly one of those bindings, and
 	// every other conformer's impl is handed bits it reads as something else.
-	// MEASURED before the rule existed, on one call site reached with both conformers:
+	// On one call site reached with both conformers:
 	// * `with float` beside `with Integer` -- x64-windows compiled clean and answered 1 where the program
 	// computes 51, the float conformer's argument read out of the wrong register file, while wasm32-wasi
 	// trapped `indirect call type mismatch`;
@@ -1364,23 +1369,21 @@ export enum ErrorCode
 	// * `with Integer` beside `with Score = int(0 to 100)`, actual 5000 -- one conformer answered 5000 and
 	// the other RANGE-PANICKED at run time.
 	// It is refused on EVERY target for that reason: the register targets are the half that fails quietly.
-	// ⚠ THE RULE COMPARES THE BOUND TYPE, NOT ITS ABI CLASS, AND THE NARROWER LINE WAS MEASURABLY WRONG. The
-	// first cut asked only whether two bindings TRAVEL the same way, on the reasoning that a call's calling
-	// convention is all a shared body commits to. The last two cases above are both the SAME ABI class -- a
-	// String and an int are both machine words, two ranged aliases are both machine words -- and both are wrong
-	// answers. A dispatched requirement's associated type has exactly one legal binding across the program.
+	// ⚠ THE RULE COMPARES THE BOUND TYPE, NOT ITS ABI CLASS. The last two cases above are both the SAME ABI
+	// class -- a String and an int are both machine words, two ranged aliases are both machine words -- and
+	// both are wrong answers. A dispatched requirement's associated type has exactly one legal binding across
+	// the program.
 	// It fires only where the associated type REACHES a call, and only where a call is actually made. A program
-	// whose every call is statically resolved has no shared body and no witness table to be wrong about:
-	// MEASURED, two conformers of different classes with every call direct ran correctly (51) and must not be
-	// refused. The compiler is whole-program, so which slots are dispatched is read off the emitted ops.
-	// ⚠ THE UNIT IS THE DISPATCHED SLOT, NOT THE DISPATCHED INTERFACE NAME, AND THIS ENTRY SAID "a requirement
-	// the program actually DISPATCHES" WHILE THE CODE ASKED ONLY WHETHER THE INTERFACE WAS. The fold has
-	// exactly two consumers and both are keyed on the op's own `(interfaceDeclIndex, methodIndex)` pair:
-	// `LowerMaxonToStd.witnessFormalType` resolves the FORMALS of the requirement a `witnessCall` names, and
-	// the parser types that same requirement's RESULT. A slot no call jumps through has neither, so it
-	// constrains nothing. MEASURED: `interface Tally { take(e Element) returns Integer; label() returns
-	// Integer }` with two conformers binding `Element` differently and `label()` as the program's only
-	// dispatch was REFUSED, and runs correctly (51) once the gate is the slot.
+	// whose every call is statically resolved has no shared body and no witness table to be wrong about, so
+	// two conformers of different classes with every call direct are not refused. The compiler is
+	// whole-program, so which slots are dispatched is read off the emitted ops.
+	// ⚠ THE UNIT IS THE DISPATCHED SLOT, NOT THE DISPATCHED INTERFACE NAME. Both readers of the binding are
+	// keyed on the op's own `(interfaceDeclIndex, methodIndex)` pair: `LowerMaxonToStd.witnessFormalType`
+	// resolves the FORMALS of the requirement a `witnessCall` names, and the parser types that same
+	// requirement's RESULT. A slot no call jumps through has neither, so it constrains nothing:
+	// `interface Tally { take(e Element) returns Integer; label() returns Integer }` with two conformers
+	// binding `Element` differently and `label()` as the program's only dispatch compiles.
+	// The message names each binding as the source spells it.
 	associatedTypeAbiDisagreement = "E3119"
 
 	// An associated type reaches the calling convention of a requirement the program DISPATCHES, and its
@@ -1395,8 +1398,8 @@ export enum ErrorCode
 	// A dispatch's ARGUMENT types are settled where the call is emitted, so an associated PARAMETER is fine:
 	// the lowering resolves the binding and coerces the actual to it. A RESULT is not. Its type flows on into
 	// the program -- which instruction `m.make() + 11` picks, and whether the returned value is OWNED and
-	// released -- and that is decided by the PARSER, from the interface's own rendered spelling, which names
-	// the associated type and can never name what a conformer bound it to. There is no whole-program
+	// released -- and that is decided by the PARSER, from the requirement, whose return is the associated type
+	// and not what a conformer bound it to. There is no whole-program
 	// conformance registry mid-parse (`project.conformances` is filled at merge, after every file has parsed),
 	// so the front end has nothing to ask.
 	// * A `float`, or a typealias of `float` such as `typealias Real = float(f64.min to f64.max)`, is not a
@@ -1480,7 +1483,7 @@ export enum ErrorCode
 	// signature (`FuncSignature.paramExistentialSites` / `returnExistentialSites`) or the field's declared
 	// spelling (`ProgramSignatures.fieldExistentialSites`), are substituted through the call's own generic
 	// instance or the stored-into record's, and the site's argument at each position is compared -- RAW, for
-	// E3125's measured reason -- against what THIS conformer binds there (`declAssociatedBinding`).
+	// E3125's measured reason -- against what THIS conformer binds there (`declAssociatedBindingType`).
 	// Without it the deferral is E3119's own recorded hazard one indirection later: a dispatch through the
 	// widened value is emitted against the type the SITE claims and lands in an impl written for the type
 	// the CONFORMER bound. E3119's header records what that costs -- `with String` beside `with Integer`

@@ -6938,11 +6938,10 @@ end 'cacheReadFieldDefaultArray'
 //
 // ⭐⭐ **AND IT MAY BIND THAT INTERFACE'S ASSOCIATED TYPES — `where Source is Iterator with
 // Element`.** The `with` clause an `implements` line already carries, written on the other side of
-// the same conformance, and the currency is the same: one RENDERED type name per associated
+// the same conformance, and the currency is the same: one `RequirementType` per associated
 // position, in the interface's `uses` order, exactly as `StructLayout.conformanceBindings` holds
 // them (both come out of `Parser.parseConformanceWithArgs`, so a binding written on a constraint
-// and the same binding written on a conformance are comparable as strings without a second
-// resolution).
+// and the same binding written on a conformance are one identity).
 //
 // ⭐ **WHAT IT BUYS IS THE ONE FACT A TYPE PARAMETER CANNOT CARRY.** Inside a shared generic body the receiver
 // of a witness dispatch is a value of a type PARAMETER, which says nothing about what the conformance behind
@@ -6956,25 +6955,29 @@ end 'cacheReadFieldDefaultArray'
 export type WhereConstraint
 	export let typeParamIndex as ElementIndex
 	export let interfaceName as ByteArray
-	export let associatedBindings as NameRoster
+	export let associatedBindingTypes as RequirementTypeArray
 
-	export static function create(typeParamIndex ElementIndex, interfaceName ByteArray, associatedBindings NameRoster = sharedEmptyDeclaredConformances) returns WhereConstraint
-		return Self{typeParamIndex: typeParamIndex, interfaceName: interfaceName, associatedBindings: associatedBindings}
+	export static function create(typeParamIndex ElementIndex, interfaceName ByteArray, associatedBindingTypes RequirementTypeArray = sharedEmptyRequirementTypes) returns WhereConstraint
+		return Self{typeParamIndex: typeParamIndex, interfaceName: interfaceName, associatedBindingTypes: associatedBindingTypes}
 	end 'create'
+
+	export function withInstancesRenumbered(remap TypeIdRemap) returns WhereConstraint
+		return Self{typeParamIndex: self.typeParamIndex, interfaceName: self.interfaceName, associatedBindingTypes: renumberedRequirements(self.associatedBindingTypes, remap: remap)}
+	end 'withInstancesRenumbered'
 
 	// @generated library-cache begin
 	function cacheWrite(writer LibraryCacheWriter)
 		writer.unsigned(self.typeParamIndex as CacheUnsigned)
 		writer.bytes(self.interfaceName)
-		cacheWriteNameRoster(writer, value: self.associatedBindings)
+		cacheWriteRequirementTypeArray(writer, value: self.associatedBindingTypes)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns WhereConstraint throws LibraryCacheDamage
 		let f_typeParamIndex = (try reader.unsigned()) as ElementIndex
 		let f_interfaceName = try reader.bytes()
-		let f_associatedBindings = try cacheReadNameRoster(reader)
+		let f_associatedBindingTypes = try cacheReadRequirementTypeArray(reader)
 
-		return Self{typeParamIndex: f_typeParamIndex, interfaceName: f_interfaceName, associatedBindings: f_associatedBindings}
+		return Self{typeParamIndex: f_typeParamIndex, interfaceName: f_interfaceName, associatedBindingTypes: f_associatedBindingTypes}
 	end 'cacheRead'
 
 	static function cacheLayoutBytes() returns CacheSize24
@@ -7009,6 +7012,30 @@ module function cacheReadWhereConstraintArray(reader LibraryCacheReader) returns
 end 'cacheReadWhereConstraintArray'
 
 // @generated library-cache end
+
+export function whereConstraintsBindAnything(constraints WhereConstraintArray) returns bool
+	for constraint in constraints 'eachConstraint'
+		if not constraint.associatedBindingTypes.isEmpty() 'bindsAnAssociatedType'
+			return true
+		end 'bindsAnAssociatedType'
+	end 'eachConstraint'
+
+	return false
+end 'whereConstraintsBindAnything'
+
+export function renumberedWhereConstraints(constraints WhereConstraintArray, remap TypeIdRemap) returns WhereConstraintArray
+	if constraints.isEmpty() 'nothingToRenumber'
+		return constraints
+	end 'nothingToRenumber'
+
+	var renumbered = WhereConstraintArray.create()
+
+	for constraint in constraints 'eachConstraint'
+		renumbered.push(constraint.withInstancesRenumbered(remap))
+	end 'eachConstraint'
+
+	return renumbered
+end 'renumberedWhereConstraints'
 
 // Do two constraint lists name the same constraints in the same ORDER? The order is what makes this the
 // right question rather than set equality: the list IS the witness-slot numbering, so two lists agree only
@@ -7372,7 +7399,7 @@ export type StructLayout
 	// nothing at that interface (see `conformanceBindings`). The pairing is checked rather than assumed: a
 	// caller that asked about an interface this type does not name must get "no bindings", never a
 	// neighbour's.
-	export function bindingsForInterface(interfaceName ByteArray) returns NameRoster
+	export function bindingsForInterface(interfaceName ByteArray) returns ConformanceBinding
 		// Bounded by the BINDINGS column and not the names one, which is what makes the walk correct for both
 		// admitted shapes: a declaration with no `implements` clause at all carries the shared empty here and
 		// never enters the loop, while a declaration that has one carries an entry per name.
@@ -7386,7 +7413,7 @@ export type StructLayout
 			return try self.conformanceBindings.get(i) otherwise panic("StructLayout.bindingsForInterface: conformanceBindings.get OOB at {i} below count {self.conformanceBindings.count()}")
 		end 'eachConformance'
 
-		return sharedEmptyDeclaredConformances
+		return sharedEmptyConformanceBinding
 	end 'bindingsForInterface'
 
 	// The number of `where` constraints — the number of hidden witness parameters an
@@ -8378,16 +8405,51 @@ export let sharedEmptyDeclaredConformances = NameRoster.create()
 // ⭐ **ONE `with` ARGUMENT LIST PER INTERFACE NAMED, POSITIONAL AGAINST `conformsTo`.** A clause may
 // bind at more than one of its names — `implements Tagged with Integer, Held with Integer` binds at both —
 // so the bindings are a column beside the names and not a single list belonging to the last of them. A name
-// that wrote no `with` carries `sharedEmptyDeclaredConformances` at its position, which is what keeps the
-// two columns the same length and makes the pairing index arithmetic rather than a search.
-export typealias ConformanceBindingArray = Array with NameRoster
+// that wrote no `with` carries `sharedEmptyConformanceBinding` at its position, which is what keeps the
+// two columns the same length and makes the pairing index arithmetic rather than a search. `types` is what a
+// verdict reads; `spellings` is what a diagnostic prints.
+export type ConformanceBinding
+	export let spellings as NameRoster
+	export let types as RequirementTypeArray
+
+	export static function create(spellings NameRoster, types RequirementTypeArray) returns ConformanceBinding
+		return Self{spellings: spellings, types: types}
+	end 'create'
+
+	export function withInstancesRenumbered(remap TypeIdRemap) returns ConformanceBinding
+		return Self{spellings: self.spellings, types: renumberedRequirements(self.types, remap: remap)}
+	end 'withInstancesRenumbered'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		cacheWriteNameRoster(writer, value: self.spellings)
+		cacheWriteRequirementTypeArray(writer, value: self.types)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns ConformanceBinding throws LibraryCacheDamage
+		let f_spellings = try cacheReadNameRoster(reader)
+		let f_types = try cacheReadRequirementTypeArray(reader)
+
+		return Self{spellings: f_spellings, types: f_types}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(ConformanceBinding) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'ConformanceBinding'
+
+export let sharedEmptyConformanceBinding = ConformanceBinding.create(NameRoster.create(), types: RequirementTypeArray.create())
+
+export typealias ConformanceBindingArray = Array with ConformanceBinding
 
 // @generated library-cache begin
 function cacheWriteConformanceBindingArray(writer LibraryCacheWriter, value ConformanceBindingArray)
 	writer.unsigned(value.count() as CacheUnsigned)
 
 	for item in value 'eachItem'
-		cacheWriteNameRoster(writer, value: item)
+		item.cacheWrite(writer)
 	end 'eachItem'
 end 'cacheWriteConformanceBindingArray'
 
@@ -8397,7 +8459,7 @@ function cacheReadConformanceBindingArray(reader LibraryCacheReader) returns Con
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
-		let item = try cacheReadNameRoster(reader)
+		let item = try ConformanceBinding.cacheRead(reader)
 		result.push(item)
 	end 'eachItem'
 
@@ -8405,6 +8467,20 @@ function cacheReadConformanceBindingArray(reader LibraryCacheReader) returns Con
 end 'cacheReadConformanceBindingArray'
 
 // @generated library-cache end
+
+export function renumberedConformanceBindings(bindings ConformanceBindingArray, remap TypeIdRemap) returns ConformanceBindingArray
+	if bindings.isEmpty() 'nothingToRenumber'
+		return bindings
+	end 'nothingToRenumber'
+
+	var renumbered = ConformanceBindingArray.create()
+
+	for binding in bindings 'eachBinding'
+		renumbered.push(binding.withInstancesRenumbered(remap))
+	end 'eachBinding'
+
+	return renumbered
+end 'renumberedConformanceBindings'
 
 export typealias WrittenTypeNameEnds = Array with ElementIndex
 
@@ -10253,6 +10329,10 @@ export type FuncSignature
 	// EMPTY for `void` and for every identity resolution preserves.
 	export let returnAggregateName as ByteArray
 
+	// The generic-instance alias the return was declared under, or empty: the brand a requirement's own
+	// return brand is held against (`ConformanceCheck.instanceMeetsImplType`).
+	export let returnBrand as ByteArray
+
 	// ⭐⭐ **THE `with` ARGUMENTS AN EXISTENTIAL SLOT WAS DECLARED WITH, CARRIED ACROSS THE CALL
 	// BOUNDARY.** `ProgramSignatures.instanceDenotedType` collapses `Base with Args` over an interface
 	// base to a bare `interfaceRef(Base)`, so a parameter declared `t IntTaker` arrives in
@@ -10310,8 +10390,8 @@ export type FuncSignature
 	export let selfSpelledParams as ParamPositionMask
 	export let returnCapability as ResultCapability
 
-	export static function create(paramNames NameRoster, paramTypes MaxonTypeArray, paramAggregateNames NameRoster, paramDeclaredNames NameRoster, returnAggregateName ByteArray, paramExistentialSites ParamExistentialSiteArray, returnExistentialSites GenericInstanceIdArray, extensionConstraints WhereConstraintArray, writtenTypeNames WrittenTypeNames, selfSpelledParams ParamPositionMask, returnCapability ResultCapability = ResultCapability.unqualified) returns FuncSignature
-		return Self{paramNames: paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames, paramDeclaredNames: paramDeclaredNames, returnAggregateName: returnAggregateName, paramExistentialSites: paramExistentialSites, returnExistentialSites: returnExistentialSites, extensionConstraints: extensionConstraints, writtenTypeNames: writtenTypeNames, selfSpelledParams: selfSpelledParams, returnCapability: returnCapability}
+	export static function create(paramNames NameRoster, paramTypes MaxonTypeArray, paramAggregateNames NameRoster, paramDeclaredNames NameRoster, returnAggregateName ByteArray, returnBrand ByteArray, paramExistentialSites ParamExistentialSiteArray, returnExistentialSites GenericInstanceIdArray, extensionConstraints WhereConstraintArray, writtenTypeNames WrittenTypeNames, selfSpelledParams ParamPositionMask, returnCapability ResultCapability = ResultCapability.unqualified) returns FuncSignature
+		return Self{paramNames: paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames, paramDeclaredNames: paramDeclaredNames, returnAggregateName: returnAggregateName, returnBrand: returnBrand, paramExistentialSites: paramExistentialSites, returnExistentialSites: returnExistentialSites, extensionConstraints: extensionConstraints, writtenTypeNames: writtenTypeNames, selfSpelledParams: selfSpelledParams, returnCapability: returnCapability}
 	end 'create'
 
 	// The declared parameter count — the arity a call must match.
@@ -10363,6 +10443,7 @@ export type FuncSignature
 		end 'eachReturnSite'
 
 		self.returnExistentialSites = returnSites
+		self.extensionConstraints = renumberedWhereConstraints(self.extensionConstraints, remap: remap)
 	end 'renumberTypeIds'
 
 	// @generated library-cache begin
@@ -10372,6 +10453,7 @@ export type FuncSignature
 		cacheWriteNameRoster(writer, value: self.paramAggregateNames)
 		cacheWriteNameRoster(writer, value: self.paramDeclaredNames)
 		writer.bytes(self.returnAggregateName)
+		writer.bytes(self.returnBrand)
 		cacheWriteParamExistentialSiteArray(writer, value: self.paramExistentialSites)
 		cacheWriteGenericInstanceIdArray(writer, value: self.returnExistentialSites)
 		cacheWriteWhereConstraintArray(writer, value: self.extensionConstraints)
@@ -10386,6 +10468,7 @@ export type FuncSignature
 		let f_paramAggregateNames = try cacheReadNameRoster(reader)
 		let f_paramDeclaredNames = try cacheReadNameRoster(reader)
 		let f_returnAggregateName = try reader.bytes()
+		let f_returnBrand = try reader.bytes()
 		let f_paramExistentialSites = try cacheReadParamExistentialSiteArray(reader)
 		let f_returnExistentialSites = try cacheReadGenericInstanceIdArray(reader)
 		let f_extensionConstraints = try cacheReadWhereConstraintArray(reader)
@@ -10393,11 +10476,11 @@ export type FuncSignature
 		let f_selfSpelledParams = (try reader.unsigned()) as ParamPositionMask
 		let f_returnCapability = try cacheReadResultCapability(reader)
 
-		return Self{paramNames: f_paramNames, paramTypes: f_paramTypes, paramAggregateNames: f_paramAggregateNames, paramDeclaredNames: f_paramDeclaredNames, returnAggregateName: f_returnAggregateName, paramExistentialSites: f_paramExistentialSites, returnExistentialSites: f_returnExistentialSites, extensionConstraints: f_extensionConstraints, writtenTypeNames: f_writtenTypeNames, selfSpelledParams: f_selfSpelledParams, returnCapability: f_returnCapability}
+		return Self{paramNames: f_paramNames, paramTypes: f_paramTypes, paramAggregateNames: f_paramAggregateNames, paramDeclaredNames: f_paramDeclaredNames, returnAggregateName: f_returnAggregateName, returnBrand: f_returnBrand, paramExistentialSites: f_paramExistentialSites, returnExistentialSites: f_returnExistentialSites, extensionConstraints: f_extensionConstraints, writtenTypeNames: f_writtenTypeNames, selfSpelledParams: f_selfSpelledParams, returnCapability: f_returnCapability}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize88
-		return sizeof(FuncSignature) as CacheSize88
+	static function cacheLayoutBytes() returns CacheSize96
+		return sizeof(FuncSignature) as CacheSize96
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

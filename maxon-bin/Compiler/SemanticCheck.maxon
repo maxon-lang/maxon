@@ -3501,10 +3501,11 @@ function checkWitnessArgTypes(project Project, func IrFunction, signatures Progr
 	let callRange = project.opRanges.get(opIndex)
 	let witnessReceiver = witnessDispatchReceiver(args)
 
-	for j in 0 upto requirement.paramTypeNames.count() 'eachFormal'
-		let formalName = try requirement.paramTypeNames.get(j) otherwise panic("checkWitnessArgTypes: paramTypeNames.get OOB at {j} below count {requirement.paramTypeNames.count()}")
+	for j in 0 upto requirement.paramTypes.count() 'eachFormal'
+		let formalType = try requirement.paramTypes.get(j) otherwise panic("checkWitnessArgTypes: paramTypes.get OOB at {j} below count {requirement.paramTypes.count()}")
+		let formalName = try requirement.paramTypeNames.get(j) otherwise panic("checkWitnessArgTypes: paramTypeNames.get OOB at {j} below count {requirement.paramTypeNames.count()} — an InterfaceMethodSig's type columns are parallel")
 
-		match witnessFormalDeclaredType(project, signatures: signatures, declaring: declaring, formalName: formalName) 'formal'
+		match witnessFormalDeclaredType(project, signatures: signatures, declaring: declaring, requirement: formalType) 'formal'
 			opaque then continue
 
 			// ⭐ `declaredParamName` is the formal's OWN rendered name, which is exactly the pre-erasure SPELLING
@@ -3518,18 +3519,18 @@ function checkWitnessArgTypes(project Project, func IrFunction, signatures Progr
 			// are owned by the interface rather than by any conformer — which is exactly the owner guard
 			// `ProgramSignatures.substituteThroughInstance` applies, and `witnessFormalDeclaredType` has already
 			// answered `opaque` for them one line up.
-			declared(paramType, preErasedAggregate) then checkWitnessArgument(project, func: func, signatures: signatures, interfaceName: slot.sourceInterfaceName, formalName: formalName, paramType: paramType, preErasedAggregate: preErasedAggregate, param: ArgumentParameter.named(witnessFormalName(requirement, position: j as ParamCount)), position: j as ParamCount, argId: try args.get(j + WitnessReceiverArgCount) otherwise panic("checkWitnessArgTypes: args.get OOB at {j + WitnessReceiverArgCount} below count {args.count()} — a dispatch reaching here has the receiver plus one actual per formal"), callInstanceSubject: CallSubject.heldBy(witnessReceiver), callRange: callRange, filePath: authoredFileOf(project, func: func, opIndex: opIndex), provenance: provenance)
+			declared(paramType, preErasedAggregate) then checkWitnessArgument(project, func: func, signatures: signatures, interfaceName: slot.sourceInterfaceName, formal: formalType, formalName: formalName, paramType: paramType, preErasedAggregate: preErasedAggregate, param: ArgumentParameter.named(witnessFormalName(requirement, position: j as ParamCount)), position: j as ParamCount, argId: try args.get(j + WitnessReceiverArgCount) otherwise panic("checkWitnessArgTypes: args.get OOB at {j + WitnessReceiverArgCount} below count {args.count()} — a dispatch reaching here has the receiver plus one actual per formal"), callInstanceSubject: CallSubject.heldBy(witnessReceiver), callRange: callRange, filePath: authoredFileOf(project, func: func, opIndex: opIndex), provenance: provenance)
 		end 'formal'
 	end 'eachFormal'
 end 'checkWitnessArgTypes'
 
-function checkWitnessArgument(project Project, func IrFunction, signatures ProgramSignatures, interfaceName ByteArray, formalName ByteArray, paramType MaxonType, preErasedAggregate ByteArray, param ArgumentParameter, position ParamCount, argId ValueId, callInstanceSubject CallSubject, callRange SourceRange, filePath FilePath, provenance ProvenanceTracer)
-	if argumentIsRefused(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: formalName, param: param, position: position, argId: argId, callInstanceSubject: callInstanceSubject, paramExistentialSites: sharedEmptyParamExistentialSites, callRange: callRange, handedAt: callRange, filePath: filePath, provenance: provenance, overloadRefused: false) 'thisArgumentWasRefused'
+function checkWitnessArgument(project Project, func IrFunction, signatures ProgramSignatures, interfaceName ByteArray, formal RequirementType, formalName ByteArray, paramType MaxonType, preErasedAggregate ByteArray, param ArgumentParameter, position ParamCount, argId ValueId, callInstanceSubject CallSubject, callRange SourceRange, filePath FilePath, provenance ProvenanceTracer)
+	if argumentIsRefused(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: formal.argumentCheckSpelling(formalName), param: param, position: position, argId: argId, callInstanceSubject: callInstanceSubject, paramExistentialSites: sharedEmptyParamExistentialSites, callRange: callRange, handedAt: callRange, filePath: filePath, provenance: provenance, overloadRefused: false) 'thisArgumentWasRefused'
 		return
 	end 'thisArgumentWasRefused'
 
 	if let cast = try func.literalCastArguments.get(argId) 'aLiteralCastArgument'
-		if let destination = try signatures.interfaceFormalAlias(interfaceName, formalName: formalName) 'aRangedFormal'
+		if let destination = try signatures.requirementRangedAlias(formal, interfaceName: interfaceName) 'aRangedFormal'
 			reportUnneededLiteralCastArgument(project, cast: cast, destination: destination, filePath: filePath)
 		end 'aRangedFormal'
 	end 'aLiteralCastArgument'
@@ -3554,72 +3555,54 @@ function witnessFormalName(requirement InterfaceMethodSig, position ParamCount) 
 end 'witnessFormalName'
 
 // ⭐⭐ **WHAT AN INTERFACE FORMAL DENOTES AT THE ARGUMENT CHECK, or that there is nothing here to compare
-// against.** An interface stores its formals as RENDERED SOURCE NAMES (`IrInterface`'s header), so this door
-// re-derives what a declaration derived once — the same re-derivation `Parser.interfaceSpelledType` makes
-// for the RETURN, sourced from the same `builtinTypeNameTag` table so the two cannot drift.
+// against.** It is the formal's stored identity; a `nominal` is read in the declaring interface's file.
 //
 // ⚠ **`opaque` IS AN ANSWER, NOT A GAP TO BE FILLED IN LATER.** Three of its four sources are positions where
 // a comparison HERE would be wrong rather than merely absent, and the fourth is a name this pass cannot
 // resolve at all — in every case refusing on a guess would be a false refusal, which is the failure mode a
 // door that starts comparing types most easily acquires.
-function witnessFormalDeclaredType(project Project, signatures ProgramSignatures, declaring IrInterface, formalName ByteArray) returns WitnessFormalType
-	// A `Self`-typed formal (`Equatable.equals(other Self)`) is the RECEIVER's own type, which the shared body
-	// does not know. `Parser.requireWitnessSelfArgs` already refuses a concrete value there — the check that
-	// exists because marshalling an int literal into a `Self` pointer FAULTS — so this is not an unguarded
-	// position, it is one guarded by a rule stated where the receiver is.
-	if formalName.equals(InterfaceSelfTypeName) 'selfFormal'
-		return WitnessFormalType.opaque
-	end 'selfFormal'
+function witnessFormalDeclaredType(project Project, signatures ProgramSignatures, declaring IrInterface, requirement RequirementType) returns WitnessFormalType
+	return match requirement.identity 'identity'
+		selfType or
+		typeParameter gives WitnessFormalType.opaque
+		builtin(tag) gives builtinWitnessFormal(tag)
+		genericInstance(id) gives WitnessFormalType.declared(signatures.instanceDenotedType(id, into: project.typeNames), preErasedAggregate: EmptySourceText)
+		nominal(name) gives nominalWitnessFormal(project, signatures: signatures, declaring: declaring, name: name)
+		void panic("witnessFormalDeclaredType: a void requirement is a result, never a formal")
+	end 'identity'
+end 'witnessFormalDeclaredType'
 
-	// An ASSOCIATED TYPE denotes whatever each CONFORMER binds (`implements Taker with float`), so the
-	// interface cannot state it and neither can this. That the conformers must all bind it ALIKE is
-	// E3119's, reported by `ConformanceCheck` with a position; asking `associatedAbiBindingOf` here
-	// would re-derive that fold to refuse an argument against one conformer's binding in a body
-	// compiled for all of them. It is asked of the DECLARING interface, whose text the formal is: a
-	// derived interface dispatched through does not list its base's associated types.
-	//
-	// ⚠ Asked BEFORE `builtinTypeNameTag`, and the order is load-bearing for `LowerMaxonToStd.witnessFormalType`'s
-	// measured reason: a `uses` parameter is an IDENTIFIER, and `ExitCode`/`String` are identifiers too, so
-	// `interface Taker uses ExitCode` would otherwise read a TYPE PARAMETER as the u32 builtin.
-	if declaring.associatedTypeNames.contains(formalName) 'aConformerBindsIt'
-		return WitnessFormalType.opaque
-	end 'aConformerBindsIt'
+function builtinWitnessFormal(tag ValueTypeTag) returns WitnessFormalType
+	return match tag 'tag'
+		boolean or
+		integer or
+		float or
+		exitCode or
+		string or
+		character or
+		cstring gives WitnessFormalType.declared(maxonTypeOfTag(tag, nameId: UnnamedTypeId), preErasedAggregate: EmptySourceText)
+		named or
+		unresolved or
+		void or
+		structRef or
+		function or
+		typeParameter or
+		genericInstance or
+		interfaceRef panic("builtinWitnessFormal: `{tag.name}` is not a tag a requirement's builtin identity can hold")
+	end 'tag'
+end 'builtinWitnessFormal'
 
-	// A builtin whose spelling settles it — the table's answer is valid here because this door holds a
-	// RENDERED type name, which is exactly the precondition `builtinTypeNameTag`'s header states.
-	let builtinTag = builtinTypeNameTag(formalName)
+function nominalWitnessFormal(project Project, signatures ProgramSignatures, declaring IrInterface, name ByteArray) returns WitnessFormalType
+	let id = try project.typeNames.idOf(name) otherwise return WitnessFormalType.opaque
 
-	if builtinTag != ValueTypeTag.named 'builtinFormal'
-		return WitnessFormalType.declared(maxonTypeOfTag(builtinTag, nameId: UnnamedTypeId), preErasedAggregate: EmptySourceText)
-	end 'builtinFormal'
-
-	// Every remaining answer needs the name's id in the PROJECT interner, which is where an argument's own
-	// name id lives after the merge. A formal naming a type no file of this program interned is a name nothing
-	// here can resolve — `resolveTypes` reports it (E3011) against the declaration that wrote it — so it is
-	// opaque rather than a second report of the same fact.
-	let id = try project.typeNames.idOf(formalName) otherwise return WitnessFormalType.opaque
-
-	// A FUNCTION TYPEALIAS, which `denotedNamedType` does not answer for: it resolves TYPES, and a function
-	// alias lives in `functionAliasShapes`. Answered as `function(id)` — the same type a declared function
-	// PARAMETER of that alias carries — so `checkOneArgType`'s function-shape arm compares the two shapes
-	// exactly as it does for a direct call.
-	if signatures.isFunctionAliasFor(formalName, readerFilePath: declaring.declFilePath) 'functionAliasFormal'
-		let aliasId = try project.typeNames.idOf(signatures.declaredIdentityOfSpelling(formalName, declFilePath: declaring.declFilePath)) otherwise return WitnessFormalType.opaque
-		return WitnessFormalType.declared(MaxonType.function(aliasId), preErasedAggregate: EmptySourceText)
+	if signatures.isFunctionAliasFor(name, readerFilePath: declaring.declFilePath) 'functionAliasFormal'
+		return WitnessFormalType.declared(MaxonType.function(id), preErasedAggregate: EmptySourceText)
 	end 'functionAliasFormal'
 
-	// A struct, an interface, an enum/union, a ranged alias — the whole-program cascade, one door.
-	// ⚠ A GENERIC-INSTANCE alias and a TUPLE alias are in NEITHER this cascade nor the one above, so both land
-	// on `notDeclared` and are opaque.
-	//
-	// ⚠ **AND IT ASKS ON THE DECLARING INTERFACE'S BEHALF — `declaring.declFilePath`.** A
-	// requirement's formal is written inside that `interface`, so its name means what that file sees,
-	// whichever file holds the call.
-	let denoted = try denotedNamedType(signatures, name: formalName, id: id, readerFilePath: declaring.declFilePath) otherwise return WitnessFormalType.opaque
+	let denoted = try denotedNamedType(signatures, name: name, id: id, readerFilePath: declaring.declFilePath) otherwise return WitnessFormalType.opaque
 
-	// The identity `resolveTypes` took off this formal, if it took one — see `erasedFormalIdentity`.
 	return WitnessFormalType.declared(denoted, preErasedAggregate: erasedFormalIdentity(project, denoted: denoted, id: id, readerFilePath: declaring.declFilePath))
-end 'witnessFormalDeclaredType'
+end 'nominalWitnessFormal'
 
 // ⭐⭐ **THE IDENTITY THE FORMAL'S RESOLUTION DESTROYED, ASKED OF THE ONE WHOLE-PROGRAM CLASSIFIER —
 // and spelling it a THIRD time here is a wrong answer.**
@@ -7399,8 +7382,8 @@ end 'ExistentialSiteClaim'
 // pair: the actual 5000 answered 5000 through one conformer and RANGE-PANICKED through the other.
 //
 // ⚠ **A GENERIC CONFORMER'S BINDING IS RESOLVED THROUGH ITS OWN INSTANCE FIRST.** `type Array uses Element`
-// conforming `Iterable with Element` records the binding as the string `Element` — its OWN parameter's name, not
-// a type. Compared raw against a site's `Integer` that is a false disagreement, and it is the shape
+// conforming `Iterable with Element` binds its OWN parameter `Element`, not a type. Compared raw against a
+// site's `Integer` that is a false disagreement, and it is the shape
 // `stdlib/Array.maxon` is made of. `conformerBindingThroughInstance` reduces it before the comparison.
 function existentialSiteClaimVerdict(project Project, signatures ProgramSignatures, siteInstance GenericInstanceId, conformerTag ValueTypeTag, conformerNameId TypeNameId, interfaceName ByteArray) returns ExistentialSiteClaim
 	match lookupInterface(project.interfaces, name: interfaceName) 'base'
@@ -7463,8 +7446,8 @@ function existentialSiteClaimAgainst(project Project, signatures ProgramSignatur
 		end 'noInstanceFixedIt'
 
 		if let conformerBinding = try conformerBindingThroughInstance(project, signatures: signatures, conformerTag: conformerTag, conformerNameId: conformerNameId, interfaceName: iface.name, position: position) 'thisConformerBindsIt'
-			if not signatures.instanceArgBindingIdentity(siteInstance, position: position).equals(conformerBinding) 'contradictsTheClaim'
-				return ExistentialSiteClaim.disagrees(associatedName, siteBinding: siteBinding, conformerBinding: conformerBinding, route: ExistentialSiteClaimRoute.direct)
+			if not signatures.instanceArgRequirement(siteInstance, position: position).denotesSameTypeAs(conformerBinding) 'contradictsTheClaim'
+				return ExistentialSiteClaim.disagrees(associatedName, siteBinding: siteBinding, conformerBinding: signatures.requirementDisplay(conformerBinding).toByteArray(), route: ExistentialSiteClaimRoute.direct)
 			end 'contradictsTheClaim'
 		end 'thisConformerBindsIt'
 	end 'eachAssociatedType'
@@ -7500,58 +7483,55 @@ function heldPositionNestedClaim(project Project, signatures ProgramSignatures, 
 
 	let heldAt = try signatures.associatedTypeHeldAt(iface.name, position: position) otherwise panic("heldPositionNestedClaim: '{String.from(iface.name)}' position {position} answered `associatedTypeIsHeldAt` and then held nothing — both doors read the one `associatedTypeHoldings` row")
 	let associatedName = try iface.associatedTypeNames.get(position) otherwise panic("heldPositionNestedClaim: associatedTypeNames.get OOB at {position} below count {iface.associatedTypeNames.count()} — the caller's loop is bounded by that same list")
-	return nestedClaimAgainstBinding(project, signatures: signatures, nestedInstance: nestedInstance, binding: binding, heldAt: heldAt).throughHeldPosition(associatedName, at: heldAt, binding: signatures.displaySpellingOfDeclaredName(binding))
+	return nestedClaimAgainstBinding(project, signatures: signatures, nestedInstance: nestedInstance, binding: binding, heldAt: heldAt).throughHeldPosition(associatedName, at: heldAt, binding: signatures.requirementDisplay(binding).toByteArray())
 end 'heldPositionNestedClaim'
 
-// The conformer's binding is a RENDERED NAME and the verdict door names a conformer by `(tag, nameId)`, so
-// this is the adapter between them — and it is an adapter rather than a second walk on purpose: reproducing
-// `existentialSiteClaimAgainst`'s gates one level down is exactly how the outer and inner rules would come to
-// disagree.
+// The verdict door names a conformer by `(tag, nameId)`, so this adapts a binding's identity to it — and it
+// is an adapter rather than a second walk on purpose: reproducing `existentialSiteClaimAgainst`'s gates one
+// level down is exactly how the outer and inner rules would come to disagree.
 //
-// The two spellings a binding can have are the two `conformerBindingThroughInstance` already knows: a
-// canonical INSTANCE mint (`ArrayIterator_Integer`, which `renderedInstanceOfUnclaimedName` reverses and no
-// declaration claims) and a nominal declaration. `agrees` for a name this program never interned, which
-// is a name no conformance can be keyed by either.
-function nestedClaimAgainstBinding(project Project, signatures ProgramSignatures, nestedInstance GenericInstanceId, binding ByteArray, heldAt ByteArray) returns ExistentialSiteClaim
-	if let instance = try signatures.renderedInstanceOfUnclaimedName(binding) 'aCanonicalInstanceMint'
-		return existentialSiteClaimVerdict(project, signatures: signatures, siteInstance: nestedInstance, conformerTag: ValueTypeTag.genericInstance, conformerNameId: instance as TypeNameId, interfaceName: heldAt)
-	end 'aCanonicalInstanceMint'
-
-	let id = try project.typeNames.idOf(binding) otherwise 'noFileNamedIt'
-		return ExistentialSiteClaim.agrees
-	end 'noFileNamedIt'
-
-	return existentialSiteClaimVerdict(project, signatures: signatures, siteInstance: nestedInstance, conformerTag: ValueTypeTag.named, conformerNameId: id, interfaceName: heldAt)
+// `agrees` for a nominal name this program never interned, which is a name no conformance can be keyed by
+// either.
+function nestedClaimAgainstBinding(project Project, signatures ProgramSignatures, nestedInstance GenericInstanceId, binding RequirementType, heldAt ByteArray) returns ExistentialSiteClaim
+	return match binding.identity 'identity'
+		genericInstance(instance) gives existentialSiteClaimVerdict(project, signatures: signatures, siteInstance: nestedInstance, conformerTag: ValueTypeTag.genericInstance, conformerNameId: instance as TypeNameId, interfaceName: heldAt)
+		nominal(name) gives nominalNestedClaim(project, signatures: signatures, nestedInstance: nestedInstance, name: name, heldAt: heldAt)
+		void or
+		selfType or
+		typeParameter or
+		builtin gives ExistentialSiteClaim.agrees
+	end 'identity'
 end 'nestedClaimAgainstBinding'
 
+function nominalNestedClaim(project Project, signatures ProgramSignatures, nestedInstance GenericInstanceId, name ByteArray, heldAt ByteArray) returns ExistentialSiteClaim
+	let id = try project.typeNames.idOf(name) otherwise return ExistentialSiteClaim.agrees
+	return existentialSiteClaimVerdict(project, signatures: signatures, siteInstance: nestedInstance, conformerTag: ValueTypeTag.named, conformerNameId: id, interfaceName: heldAt)
+end 'nominalNestedClaim'
+
 // What the value being widened binds `interfaceName`'s associated type at `position` to — the conformer's own
-// answer (`fileScopedConformerBinding`), reduced through the conformer's INSTANCE when it has one.
+// answer (`conformanceDeclBindingType`), reduced through the conformer's INSTANCE when it has one.
 //
-// A conformance's `withArgs` are RENDERED SOURCE NAMES, so a GENERIC conformer records its own type parameter's
-// spelling: `type Array uses Element implements Iterable with Element` binds the string `Element`. That names a
-// type only once an instance says which, so an `Array with Integer` being widened resolves it to `Integer`
+// A GENERIC conformer binds its own type parameter: `type Array uses Element implements Iterable with
+// Element` binds `Element`. That names a type only once an instance says which, so an `Array with Integer`
+// being widened resolves it to `Integer`
 // before the comparison. `MapError.keyNotFound` when this type declares no such conformance or bound too few
 // arguments — both E3016's to report, and neither a disagreement.
-function conformerBindingThroughInstance(project Project, signatures ProgramSignatures, conformerTag ValueTypeTag, conformerNameId TypeNameId, interfaceName ByteArray, position ElementIndex) returns ByteArray throws MapError
+function conformerBindingThroughInstance(project Project, signatures ProgramSignatures, conformerTag ValueTypeTag, conformerNameId TypeNameId, interfaceName ByteArray, position ElementIndex) returns RequirementType throws MapError
 	if conformerTag != ValueTypeTag.genericInstance 'aNominalConformer'
 		let conformerName = try project.typeNames.nameOf(conformerNameId) otherwise panic("conformerBindingThroughInstance: type-name id {conformerNameId} is not in the project interner — a value's name id is remapped project-global at merge (mergeArtifact)")
-		return try fileScopedConformerBinding(project, signatures: signatures, typeName: conformerName, interfaceName: interfaceName, position: position)
+		let (_, declared) = try conformanceDeclBindingType(project.conformances, typeName: conformerName, interfaceName: interfaceName, position: position)
+		return declared
 	end 'aNominalConformer'
 
 	let baseName = signatures.genericInstanceBaseName(conformerNameId as GenericInstanceId)
-	let declared = try fileScopedConformerBinding(project, signatures: signatures, typeName: baseName, interfaceName: interfaceName, position: position)
+	let (_, declared) = try conformanceDeclBindingType(project.conformances, typeName: baseName, interfaceName: interfaceName, position: position)
 
-	if let paramPosition = try signatures.structTypeParamsOf(baseName).positionOfName(declared) 'namesTheConformersOwnParameter'
-		return signatures.instanceArgBindingIdentity(conformerNameId as GenericInstanceId, position: paramPosition)
+	if let paramPosition = try signatures.structTypeParamsOf(baseName).positionOfName(try associatedNameOf(declared, signatures: signatures)) 'namesTheConformersOwnParameter'
+		return signatures.instanceArgRequirement(conformerNameId as GenericInstanceId, position: paramPosition)
 	end 'namesTheConformersOwnParameter'
 
 	return declared
 end 'conformerBindingThroughInstance'
-
-function fileScopedConformerBinding(project Project, signatures ProgramSignatures, typeName ByteArray, interfaceName ByteArray, position ElementIndex) returns ByteArray throws MapError
-	let (decl, binding) = try conformanceDeclBinding(project.conformances, typeName: typeName, interfaceName: interfaceName, position: position)
-	return signatures.declaredIdentityOfSpelling(binding, declFilePath: decl.filePath)
-end 'fileScopedConformerBinding'
 
 // ⭐ **THE SITE'S CLAIM AS THE CALL SEES IT** — the callee's declared `Base with Args` with the CALLER's own
 // generic instance substituted in, so `Taker with T` declared inside `type Box uses T` is `Taker with Integer`

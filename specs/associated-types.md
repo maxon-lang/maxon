@@ -1001,12 +1001,9 @@ end 'main'
 
 ### A requirement typed by a GENERIC INSTANCE is checked by the instance's identity, not by its kind
 
-The third arm of the shared renderer (`IrInterface.renderDeclaredTypeName`), and the one whose hazard is a
-false ACCEPT rather than a false reject. `maxonTypeName` spells a `genericInstance` with the bare kind word
-`struct`, so compared by that spelling `Array with Integer` and `Array with String` render to the same
-string, satisfy each other, and this program compiles and runs where it must report E3016. Its identity is
-`ProgramSignatures.canonicalInstanceName` — the compiler's own answer to
-"are these two the same type?", which every other comparison site already asks.
+A requirement typed by a generic instance stores that instance as its identity, and only the same instance
+meets it. The hazard is a false ACCEPT: compared by kind, `Array with Integer` and `Array with String` would
+satisfy each other, and this program would compile and run where it must report E3016.
 
 <!-- test: conformance-requirement-typed-by-a-generic-instance -->
 ```maxon
@@ -1047,7 +1044,7 @@ error E3016: <fragment>:11:6: Partial interface implementation: type 'Sack' has 
 ### …and TWO ALIAS SPELLINGS of ONE instance do NOT conform — the comparison reads the spelled alias
 
 The instance identity says whether two requirements name the same LAYOUT; the alias spelled on each side
-says whether they name the same TYPE, and a conformance compares the spelling (`nominal-generic-alias.md`).
+says whether they name the same TYPE, and a conformance compares the brands (`nominal-generic-alias.md`).
 `IntArray` and `AlsoIntArray` are two brands of one instance, so `take(xs AlsoIntArray)` does not implement
 `take(xs IntArray)`, and the diagnostic prints the two spellings rather than the instance mint.
 
@@ -1594,9 +1591,7 @@ whatever each conformer binds, here `Integer`. A witness call's argument ABI mus
 "is this an associated type?" BEFORE it asks "is this a builtin type name?".
 **Asking the builtin table first reads the formal as the `u32` builtin and declares the argument a wasm
 i32 against an i64 callee — x64 answers 31 and wasm traps `indirect call type mismatch`.**
-`TypeResolution.builtinTypeNameTag`'s own header states the rule that violates: it is
-valid only at a door holding a RENDERED type name, never at one asking what a `named` reference
-DENOTES. Returns `31`.
+The requirement stores a `uses` name as a type parameter, never as the builtin it spells. Returns `31`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2248,8 +2243,8 @@ end 'main'
 <!-- test: error.associated-return-bound-to-a-managed-type -->
 ⭐⭐ **"MACHINE WORD" IS THE WRONG PREDICATE FOR E3120, AND WHAT IT LETS THROUGH LEAKS.** A `String`
 binding IS a machine word — a pointer — so a machine-word rule admits it. The parser types
-`m.make()` off the interface's spelling (`Element` → `named` → `int`), so nothing takes OWNERSHIP of the
-returned refcounted value and nothing releases it.
+`m.make()` off the requirement, whose return is the associated type `Element`, as `int`, so nothing takes
+OWNERSHIP of the returned refcounted value and nothing releases it.
 **Admitted, `with String` and `with Point` both run to completion and exit 101 — the leak gate — on
 x64-windows AND wasm32-wasi. The same interface with the return SPELLED `String` instead of associated
 is clean, which attributes the leak exactly to the associated-return path.**
@@ -2786,7 +2781,7 @@ end 'main'
 
 <!-- test: error.associated-return-bound-to-a-generic-instance -->
 ⭐⭐ **E3120 MUST NOT ADMIT A GENERIC INSTANCE, OR THE PROGRAM LEAKS.** A `Box with Integer` IS a machine
-word — a pointer — and it is managed. A conformance's `with` argument is recorded as the compiler's own
+word — a pointer — and it is managed. A generic-instance binding is asked about by the compiler's own
 CANONICAL name (`Box_Integer`), while `genericAliases` is keyed by the ALIAS (`IntBox`) — so
 `declaredNameIsManaged` has to answer for canonical instance names; a `declaredFormOf` that matched no
 registry would fall through its `otherwise return false`, and **`with IntBox` and `with IntArr` (an
@@ -4061,8 +4056,8 @@ error E3016: <fragment>:12:6: Partial interface implementation: type 'Walker' ha
 ### …and a GENUINELY wrong signature still says so — naming the SUBSTITUTED type
 
 ⛔ **THE CASE THAT PINS "CORRECT VERDICT, WRONG SENTENCE".** The substitution is made ONCE, at collection,
-so the string `signatureMatches` decides on and the string `formatInterfaceMethodSignature` prints are the
-same string (`collectInterfaceMethods`' header). A fix that reached the comparison and missed the message
+so the copy `signatureMatches` decides on and the copy `formatInterfaceMethodSignature` prints come from one
+substitution (`collectInterfaceMethods`' header). A fix that reached the comparison and missed the message
 would leave this program rejected — correctly — while telling its author the requirement is
 `returns Element`, a name their program cannot satisfy and no positive test can see. So the assertion here
 is the SENTENCE, not the code.
@@ -4376,8 +4371,8 @@ error E3011: specs/associated-types/error.w61.interface-alias-naming-another-int
 ### …and a genuinely wrong signature under an EXPANDED alias names the EXPANDED type
 
 ⛔ **The expanded-alias twin of the inherited-binding message case, and it pins the same hazard.** The
-expansion arrives at the ONE substitution site (`collectInterfaceMethods`), so the string the verdict compares
-and the string the diagnostic prints are one string. A rule that expanded for the comparison and not for the
+expansion is made at the ONE substitution site (`collectInterfaceMethods`), for the verdict and the
+diagnostic alike. A rule that expanded for the comparison and not for the
 message would leave this program correctly rejected while telling its author the requirement is
 `Holder.ElementArray` — a type their program cannot write, and one no positive case can see.
 
@@ -4746,4 +4741,67 @@ end 'main'
 ```
 ```maxoncstderr
 error E3127: <fragment>:54:10: cannot widen 'A' into 's', which is declared at the existential type 'Sink' with its associated type 'Item' bound to 'String' — 'A' binds 'Item' to 'Integer'. A dispatch through this value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or widen a conformer that binds 'Item' to 'String'
+```
+
+
+<!-- test: error.two-files-binding-one-associated-type-to-their-own-same-named-alias -->
+E3119 compares two conformers' bindings as the declarations their own files mean, not as the names they
+spell. `alpha/a.maxon` and `beta/b.maxon` each declare a file-private `Num` — one over `int`, one over
+`float` — and each binds `Taker`'s `Element` to its own. The two bindings are two types, so the dispatch
+in `useIt`, compiled once for both conformers, is refused exactly as `float` beside `Integer` is.
+```maxon
+// --- file: main.maxon
+export interface Taker uses Element
+	function take(e Element) returns ExitCode
+end 'Taker'
+
+function useIt(t Taker) returns ExitCode
+	return t.take(20)
+end 'useIt'
+
+function main() returns ExitCode
+	return useIt(makeInt()) + useIt(makeFloat())
+end 'main'
+
+// --- file: alpha/a.maxon
+typealias Num = int(i64.min to i64.max)
+
+type IntRunner implements Taker with Num
+	let base as Num
+
+	static function create(base Num) returns Self
+		return Self{base: base}
+	end 'create'
+
+	function take(e Num) returns ExitCode
+		return (self.base + e) as ExitCode
+	end 'take'
+end 'IntRunner'
+
+export function makeInt() returns Taker
+	return IntRunner.create(11)
+end 'makeInt'
+
+// --- file: beta/b.maxon
+typealias Num = float(f64.min to f64.max)
+typealias Count = int(0 to 100)
+
+type FloatRunner implements Taker with Num
+	let base as Count
+
+	static function create(base Count) returns Self
+		return Self{base: base}
+	end 'create'
+
+	function take(e Num) returns ExitCode
+		return (self.base + (20 if e > 19.0 else 0)) as ExitCode
+	end 'take'
+end 'FloatRunner'
+
+export function makeFloat() returns Taker
+	return FloatRunner.create(0)
+end 'makeFloat'
+```
+```maxoncstderr
+error E3119: beta/<fragment>:38:6: 'FloatRunner' binds 'Taker's associated type 'Element' to 'beta.Num', but 'IntRunner' binds it to 'alpha.Num' — and 'Element' is written as a parameter or return type of a requirement this program DISPATCHES THROUGH A RECEIVER THAT DOES NOT SAY WHICH BINDING IT HOLDS. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Declare that receiver at 'Taker with <binding>', which settles it for that dispatch; or bind the associated type to the same type in both conformances; or give the two conformers different interfaces
 ```
