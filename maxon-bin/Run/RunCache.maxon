@@ -68,12 +68,10 @@ end 'RunSlot'
 // The slot this program's build belongs in, and the name a build made from the current inputs carries
 // there.
 //
-// ⛔ The slot's identity is the program's path anchored at the working directory, and the compile
-// reads that same path (`RunSlot.program`). Anchored, because a relative spelling is the same text
-// in every checkout, and every checkout's `maxon.maxproj` would then share one slot and evict the
-// others' builds. Its `..` components are never folded: `link/..` folds lexically to `.` while the
-// filesystem answers the link target's parent, so a folded key would describe a different file from
-// the one compiled.
+// ⛔ The slot is keyed by the program's identity (`projectIdentityPathOf`), so every spelling of one
+// program shares one slot — relative, through a link or through `..` — and every checkout's
+// `maxon.maxproj` has its own. The compile reads the spelling anchored at the working directory
+// (`RunSlot.program`).
 //
 // ⚠ **THE STEM IS THERE FOR A READER AND FOR THE PROGRAM'S OWN `argv[0]`**, never for finding the build:
 // one slot directory holds one program's builds, so the key alone would locate them.
@@ -86,7 +84,8 @@ module function locateRunSlot(spelled FilePath, isProject bool, target Target, e
 	let key = try freshnessKey(program, target: target, entryFunction: entryFunction)
 	let stem = try slotStem(program, isProject: isProject)
 	let formatsRoot = try runCacheRoot()
-	let dir = try slotDirectory(program, entryFunction: entryFunction, formatsRoot: formatsRoot)
+	let identity = try projectIdentityPathOf(program)
+	let dir = try slotDirectory(identity, entryFunction: entryFunction, formatsRoot: formatsRoot)
 	let binarySuffix = executableExtension(target.os)
 	let built = "{stem}{SlotKeySeparator}{key}"
 
@@ -315,8 +314,8 @@ function cacheFormatName() returns String
 	return cacheFormatDirectoryName(CacheFormat)
 end 'cacheFormatName'
 
-function slotDirectory(program FilePath, entryFunction ByteArray, formatsRoot FilePath) returns FilePath throws RunCacheError
-	let dir = slotPathOf(program, entryFunction: entryFunction, formatsRoot: formatsRoot)
+function slotDirectory(identity FilePath, entryFunction ByteArray, formatsRoot FilePath) returns FilePath throws RunCacheError
+	let dir = slotPathOf(identity, entryFunction: entryFunction, formatsRoot: formatsRoot)
 
 	if not Directory.create(dir) 'unusable'
 		throw RunCacheError.unavailable("could not create {dir.toString()}, where this program's build is kept. Set {RunCacheRootVariable} to a writable directory.")
@@ -328,10 +327,10 @@ end 'slotDirectory'
 // One slot per program and entry point. A slot sweeps every build but its newest
 // (`discardSupersededBuilds`), so two targets or two tasks of one driver file sharing one slot
 // would evict each other on every use.
-function slotPathOf(program FilePath, entryFunction ByteArray, formatsRoot FilePath) returns FilePath
-	let identity = manifestLine(program.toString(), fields: [String.from(entryFunction)])
+function slotPathOf(identity FilePath, entryFunction ByteArray, formatsRoot FilePath) returns FilePath
+	let identified = manifestLine(identityKeyOf(identity), fields: [String.from(entryFunction)])
 
-	return formatsRoot.join(cacheFormatName()).join(hexOfLeadingBytes(sha256(identity.toByteArray()), count: CacheNameDigestBytes))
+	return formatsRoot.join(cacheFormatName()).join(hexOfLeadingBytes(sha256(identified.toByteArray()), count: CacheNameDigestBytes))
 end 'slotPathOf'
 
 export enum RunSlotDiscard
@@ -341,9 +340,10 @@ end 'RunSlotDiscard'
 
 /// Removes every file in the run slot of `program` and `entryFunction`, builds still being written
 /// included. `keptInPlace` when the slot's directory outlives the removal.
-export function discardRunSlotOf(program FilePath, entryFunction ByteArray) returns RunSlotDiscard
+export function discardRunSlotOf(program FilePath, entryFunction ByteArray) returns RunSlotDiscard throws RunCacheError
 	let formatsRoot = try runCacheRoot() otherwise return RunSlotDiscard.gone
-	let slot = slotPathOf(program, entryFunction: entryFunction, formatsRoot: formatsRoot)
+	let identity = try projectIdentityPathOf(program)
+	let slot = slotPathOf(identity, entryFunction: entryFunction, formatsRoot: formatsRoot)
 	discardSlotBuilds(slot, binarySuffix: executableExtension(detectHostTarget().os), kept: BuildNameArray.create(), pending: PendingBuilds.discarded)
 
 	return RunSlotDiscard.keptInPlace if Directory.isDirectory(slot) else RunSlotDiscard.gone

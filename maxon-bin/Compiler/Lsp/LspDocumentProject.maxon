@@ -95,8 +95,9 @@ function hexDigitByteOf(amount UrlHexDigitValue) returns Byte
 end 'hexDigitByteOf'
 
 // The project an open buffer makes, or nothing when this compiler cannot assemble one. A failure is a
-// broken installation — a library tier missing beside the binary, or one that will not load — and each
-// caller says what it does with the absence; there is no half-built project to hand back.
+// broken installation — a library tier missing beside the binary, one whose physical path the host
+// refuses, or one that will not load — and each caller says what it does with the absence; there is no
+// half-built project to hand back.
 module union LspDocumentProject
 	loaded(project Project, reader LspReaderSearch)
 	unavailable
@@ -106,16 +107,24 @@ module type LibraryTiers
 	module let stdlibDir as FilePath
 	module let runtimeDir as FilePath
 	module let scriptlib as ScriptlibTier
-	module let normalizedStdlibDir as FilePath
-	module let normalizedRuntimeDir as FilePath
+	module let stdlibIdentity as FilePath
+	module let runtimeIdentity as FilePath
 
 	module static function locate() returns LibraryTiers throws CompileError
 		let stdlibDir = try locateStdlibDir()
 		let runtimeDir = try runtimeDirBeside(stdlibDir)
+		let stdlibIdentity = try identityOfTier(stdlibDir)
+		let runtimeIdentity = try identityOfTier(runtimeDir)
 
-		return Self{stdlibDir: stdlibDir, runtimeDir: runtimeDir, scriptlib: ScriptlibLoad.besideStdlib.tierBeside(stdlibDir), normalizedStdlibDir: stdlibDir.normalize(), normalizedRuntimeDir: runtimeDir.normalize()}
+		return Self{stdlibDir: stdlibDir, runtimeDir: runtimeDir, scriptlib: ScriptlibLoad.besideStdlib.tierBeside(stdlibDir), stdlibIdentity: stdlibIdentity, runtimeIdentity: runtimeIdentity}
 	end 'locate'
 end 'LibraryTiers'
+
+function identityOfTier(dir FilePath) returns FilePath throws CompileError
+	return try projectIdentityPathOf(dir) otherwise (e) 'unidentifiable'
+		throw CompileError.unidentifiablePath(e.sentence())
+	end 'unidentifiable'
+end 'identityOfTier'
 
 module union OpenBuffer
 	held(path FilePath, content String)
@@ -150,10 +159,10 @@ end 'registerTheOpenBuffer'
 //
 // The buffer is registered before the library load, so a tier document's buffer is what
 // `setAsideTheUsersOwnLibraryFiles` files as library source, and its copy on disk is never loaded.
-module function lspDocumentProject(workspace LspWorkspaceState, path FilePath, content String) returns LspDocumentProject
-	let tiers = try LibraryTiers.locate() otherwise return LspDocumentProject.unavailable
-	let reader = LspReaderSearch.of(path, tiers: tiers, workspace: workspace)
-	let project = try libraryTierProject(lspBufferRootOf(reader), tiers: tiers, buffer: OpenBuffer.held(path, content: content), fileMemos: workspace.fileMemos) otherwise return LspDocumentProject.unavailable
+module function lspDocumentProject(workspace LspWorkspaceState, document ReaderDocument, content String) returns LspDocumentProject
+	let tiers = try lspLibraryTiers(workspace) otherwise return LspDocumentProject.unavailable
+	var reader = LspReaderSearch.of(document, tiers: tiers, workspace: workspace)
+	var project = try libraryTierProject(lspBufferRootOf(reader), tiers: tiers, buffer: OpenBuffer.held(lspBufferPathOf(reader), content: content), fileMemos: workspace.fileMemos) otherwise return LspDocumentProject.unavailable
 
 	return LspDocumentProject.loaded(project, reader: reader)
 end 'lspDocumentProject'
@@ -164,10 +173,8 @@ end 'lspDocumentProject'
 // path text and panics on a miss: a visibility question asked on behalf of the other spelling would
 // take the server down.
 module function registeredSpellingOf(project Project, path FilePath) returns FilePath
-	let wanted = path.normalize()
-
 	for registered in project.db.sourcePaths 'eachRegistered'
-		if registered.normalize().equals(wanted) 'theSameFile'
+		if namesTheSameFile(registered, other: path) 'theSameFile'
 			return registered
 		end 'theSameFile'
 	end 'eachRegistered'

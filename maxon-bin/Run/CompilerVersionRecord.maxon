@@ -204,13 +204,18 @@ function versionRecordDirectoryIn(root FilePath) returns FilePath
 end 'versionRecordDirectoryIn'
 
 export function versionRecordPathOf(projectDir FilePath) returns FilePath throws RunCacheError
-	let key = pathKeyOf(projectDir.resolve(Directory.currentPath()))
+	let key = pathKeyOf(try projectIdentityPathOf(projectDir))
 
 	return versionRecordDirectoryIn(try hostCacheRoot()).join("{key}{VersionRecordExtension}")
 end 'versionRecordPathOf'
 
 export function recordedReleaseOf(projectDir FilePath) returns RecordedRelease throws VersionRecordError
-	let record = try versionRecordPathOf(projectDir) otherwise return RecordedRelease.absent
+	let record = try versionRecordPathOf(projectDir) otherwise (e) 'unlocated'
+		match e 'why'
+			unavailable then return RecordedRelease.absent
+			unidentifiable(reason) then throw VersionRecordError.unusable(reason)
+		end 'why'
+	end 'unlocated'
 
 	if not File.exists(record) 'neverRecorded'
 		return RecordedRelease.absent
@@ -335,5 +340,8 @@ function recordHolds(record FilePath, line String) returns bool
 end 'recordHolds'
 
 function noRecordKept(projectDir FilePath, reason RunCacheError)
-	compilerLogger(CompilerLogGroup.compiler).debug("no compiler-version record was kept for {projectDir.toString()}: {reason.sentence()}")
+	match reason 'why'
+		unavailable then compilerLogger(CompilerLogGroup.compiler).debug("no compiler-version record was kept for {projectDir.toString()}: {reason.sentence()}")
+		unidentifiable then printError("warning: no compiler-version record was kept for {projectDir.toString()}: {reason.sentence()}\n")
+	end 'why'
 end 'noRecordKept'

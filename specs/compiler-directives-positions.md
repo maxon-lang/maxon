@@ -25,7 +25,7 @@ its five cases are **all statement-position**. This file covers every other posi
 ## Tests
 
 <!-- test: directives.top-level-branches -->
-Top level, between declarations — the position `stdlib/FilePath.maxon:3` needs. Both arms declare
+Top level, between declarations — the position the `pathSeparator` declarations at the top of `stdlib/FilePath.maxon` need. Both arms declare
 `pick`; only the live one exists, so this is not a duplicate definition.
 ```maxon
 #if testing(false)
@@ -76,7 +76,7 @@ end 'main'
 
 <!-- test: directives.type-body-static-function -->
 A `type` body, around a `static function` with no `#else` — the exact shape of
-`stdlib/FilePath.maxon:49-68`.
+the `#if os(Windows)` block around `hasInvalidChars` in the `FilePath` type body of `stdlib/FilePath.maxon`.
 ```maxon
 type Holder
 	#if testing(false)
@@ -126,7 +126,7 @@ end 'main'
 ```
 
 <!-- test: directives.same-name-in-both-branches -->
-⭐ **The `stdlib/FilePath.maxon:3-11` shape: one NAME declared in both arms, then used.**
+⭐ **The shape of the `pathSeparator` declarations at the top of `stdlib/FilePath.maxon`: one NAME declared in both arms, then used.**
 
 The sweep records top-level bindings FIRST-WINS and the parse reports `E3006` when the winner's
 position is not the one it dispatched. With the sweep reading both arms, the live declaration on any

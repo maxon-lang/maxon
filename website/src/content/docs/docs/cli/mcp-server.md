@@ -234,14 +234,14 @@ compiler: the [report](/docs/cli/#breaking-changes-since-the-last-build) `maxon 
 
 | Argument | Type | Description |
 |----------|------|-------------|
-| `path` | string, required | The project directory, or a file in it: a file's project is the directory of the nearest `.maxproj` at or above it |
+| `path` | string, required | The project directory, or a file in it: a file's project is the directory of the nearest `.maxproj` at or above its physical path (every symbolic link followed) |
 | `since` | string | A release, `X.Y.Z`, to list the changes after in place of the release the project's record holds |
 
 The answer holds `success`, `recordedVersion` (the release the project's compiler-version record holds,
 present when there is a record, or `since` when it is given), `compilerVersion`, and `changes`: one
 `{version, change, fix}` object per breaking change, newest release first. A project with no record
-answers an empty `changes`. A path naming nothing, a file with no `.maxproj` at or above it, a `since`
-that is not a release version, and a malformed record are refused.
+answers an empty `changes`. A path naming nothing, a path the host refuses to resolve, a file with no
+`.maxproj` at or above it, a `since` that is not a release version, and a malformed record are refused.
 
 ## Debug tools
 

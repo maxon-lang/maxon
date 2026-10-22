@@ -28,6 +28,7 @@ end 'ListProjectsProbe'
 export union ProjectRootsSession
 	atFolders(folders WorkspaceFolderRootArray)
 	atFoldersThenRemoved(folders WorkspaceFolderRootArray)
+	atFoldersThenSomeRemoved(folders WorkspaceFolderRootArray, removed WorkspaceFolderRootArray)
 	unrooted
 end 'ProjectRootsSession'
 
@@ -149,6 +150,15 @@ export function ceilingControl(outer FilePath) returns CorpusDefinitionProbe
 	return probeCorpusDefinitionWithRoot(CorpusSessionRoot.unrooted, uri: ceilingReaderUri(outer), content: CeilingReaderSource, line: CeilingOuterCallLine, character: CeilingCallCharacter)
 end 'ceilingControl'
 
+export function listedProjects(probe ListProjectsProbe) returns ListProjectsResult throws TestFailure
+	match probe 'probe'
+		answered(result, _) then return result
+		unanswered(reason) then try Expect.fail(reason)
+	end 'probe'
+
+	panic("project roots: the `unanswered` arm always throws, so this line is unreachable")
+end 'listedProjects'
+
 export function listProjectsIn(session ProjectRootsSession, documents WorkspaceFolderDocumentArray) returns ListProjectsProbe
 	var client = LspClient.start()
 	let probe = collectListedProjects(client, session: session, documents: documents)
@@ -188,6 +198,7 @@ function openProjectRootsSession(client LspClient, session ProjectRootsSession) 
 	match session 'session'
 		atFolders(folders) then _ = try client.initializeAtWorkspaceFolders(folders)
 		atFoldersThenRemoved(folders) then _ = try client.initializeAtWorkspaceFolders(folders)
+		atFoldersThenSomeRemoved(folders, _) then _ = try client.initializeAtWorkspaceFolders(folders)
 		unrooted then _ = try client.initialize()
 	end 'session'
 end 'openProjectRootsSession'
@@ -195,6 +206,7 @@ end 'openProjectRootsSession'
 function removeTheSessionsFolders(client LspClient, session ProjectRootsSession) throws LspClientError
 	match session 'session'
 		atFoldersThenRemoved(folders) then try client.changeWorkspaceFolders(WorkspaceFolderRootArray.create(), removed: folders)
+		atFoldersThenSomeRemoved(_, removed) then try client.changeWorkspaceFolders(WorkspaceFolderRootArray.create(), removed: removed)
 		atFolders or
 		unrooted then return
 	end 'session'

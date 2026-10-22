@@ -1,0 +1,26 @@
+#if not os(Windows)
+	let LinkedProjectDirName = "diagnostics-project-opened-through-a-link"
+	let LinkedProjectName = "linked-proj"
+
+	test 'project diagnostics: a project opened through a symbolic link lists the breaking changes the record written under its physical path names'
+		let staged = freshOutsideCheckoutDir(LinkedProjectDirName)
+		_ = stageRecordedProject(staged, recording: recordLine(OlderRelease))
+
+		let linked = staged.join(LinkedProjectName)
+		_ = runSystemTool("ln", arguments: ["-s", recordedProjectOf(staged).toString(), linked.toString()], what: "`ln -s` making a link to the staged project")
+
+		var client = startedOverRecordedCache(staged)
+
+		if let items = try recordedManifestDiagnostics(client, project: linked) 'answered'
+			client.release()
+
+			try File.delete(linked) otherwise panic("the gate could not run — could not remove the link {linked.toString()}.")
+
+			discardOutsideCheckoutDir(staged)
+
+			expectBreakingChangeNotices(items)
+		end 'answered' else (e) 'failed'
+			abandonedStagedSession(client, staged: staged, failure: e, doing: "the session did not complete")
+		end 'failed'
+	end 'project diagnostics: a project opened through a symbolic link lists the breaking changes the record written under its physical path names'
+#endif

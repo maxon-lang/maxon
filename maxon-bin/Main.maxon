@@ -689,25 +689,39 @@ function buildUnlessUpToDate(job BuildJob, session CompileSession) returns Build
 
 	// Held from before the freshness check until the record is published, so one build's check never
 	// reads a record another build of this output is about to replace.
-	let lockExit = acquireBuildOutputLock(output, into: session.treeLock)
+	let identity = try entryIdentityPathOf(output) otherwise (e) 'unidentifiable'
+		return unidentifiableOutcome(e)
+	end 'unidentifiable'
+
+	let lockExit = acquireBuildOutputLock(output, identity: identity, into: session.treeLock)
 
 	if not exitSucceeded(lockExit) 'outputBusy'
 		return BuildOutcome.failed(lockExit)
 	end 'outputBusy'
 
 	if let flag = try job.args.observedCompileFlag().text() 'observed'
-		return compileWithoutRecord(job, output: output, reason: "{flag} observes the compile", session: session)
+		return compileWithoutRecord(job, output: output, identity: identity, reason: "{flag} observes the compile", session: session)
 	end 'observed'
 
-	if outputIsRunningImage(output) 'rebuildsTheCompiler'
-		return compileWithoutRecord(job, output: output, reason: "the output is the running compiler", session: session)
+	let rebuildsTheCompiler = try outputIsRunningImage(identity) otherwise (e) 'unidentifiableImage'
+		return unidentifiableOutcome(e)
+	end 'unidentifiableImage'
+
+	if rebuildsTheCompiler 'rebuildsTheCompiler'
+		return compileWithoutRecord(job, output: output, identity: identity, reason: "the output is the running compiler", session: session)
 	end 'rebuildsTheCompiler'
 
-	match buildRecordOf(job.recordRequestFor(output)) 'recordability'
-		unrecordable(why) then return compileWithoutRecord(job, output: output, reason: "{NoBuildRecordReason}: {why}", session: session)
+	match buildRecordOf(job.recordRequestFor(identity)) 'recordability'
+		unrecordable(why) then return compileWithoutRecord(job, output: output, identity: identity, reason: "{NoBuildRecordReason}: {why}", session: session)
 		recordable(record) then return buildKeepingRecord(job, record: record, output: output, session: session)
 	end 'recordability'
 end 'buildUnlessUpToDate'
+
+function unidentifiableOutcome(why RunCacheError) returns BuildOutcome
+	printError("error: {why.sentence()}\n")
+
+	return BuildOutcome.failed(OwnFailureExit)
+end 'unidentifiableOutcome'
 
 function buildKeepingRecord(job BuildJob, record BuildRecord, output FilePath, session CompileSession) returns BuildOutcome
 	let freshness = Freshness.stale("{RebuildFlag} was requested") if job.args.rebuildRequested else freshnessOf(record)
@@ -734,14 +748,14 @@ function compileRecording(job BuildJob, record BuildRecord, output FilePath, rea
 	return compileAndReport(job, subject: output, reason: reason, keeping: RecordKeeping.keeps(record, started: started), session: session)
 end 'compileRecording'
 
-function compileWithoutRecord(job BuildJob, output FilePath, reason String, session CompileSession) returns BuildOutcome
-	discardBuildRecordOf(output)
+function compileWithoutRecord(job BuildJob, output FilePath, identity FilePath, reason String, session CompileSession) returns BuildOutcome
+	discardBuildRecordOf(identity)
 
 	return compileAndReport(job, subject: output, reason: reason, keeping: RecordKeeping.keepsNone, session: session)
 end 'compileWithoutRecord'
 
-function acquireBuildOutputLock(output FilePath, into LockHold) returns ExitCode
-	let lockPath = try recordLockPathOf(output) otherwise return SucceededExit
+function acquireBuildOutputLock(output FilePath, identity FilePath, into LockHold) returns ExitCode
+	let lockPath = try recordLockPathOf(identity) otherwise return SucceededExit
 
 	return acquireOutputLock(lockPath, output: output, into: into)
 end 'acquireBuildOutputLock'
@@ -1536,6 +1550,7 @@ module function reportCompileError(e CompileError, sink DiagnosticSink = Diagnos
 		runtimeNotFound or
 		runtimeTierIsNotAProgram or
 		runtimeIrNameAbsent or
+		unidentifiablePath or
 		runtimeIrNameIsProgramFunction then sink.emit("error: {driverErrorSentence(e)}")
 	end 'report'
 end 'reportCompileError'
@@ -1558,6 +1573,7 @@ module function driverErrorSentence(e CompileError) returns String
 		runtimeNotFound gives "could not locate the runtime/ directory beside stdlib/ (every compile loads runtime source)"
 		runtimeTierIsNotAProgram(r) gives "{r} is in the runtime/ tier, which every program compiles; it is not a program of its own. Build a program that uses it"
 		runtimeIrNameAbsent(name) gives "this program contains nothing named '{name}' — no IR body and no hand-assembled chunk — so a ```RequiredRuntime block naming it would render nothing and the pin would pin nothing, and neither would {EmitIrRuntimeFlagPrefix}{name} render anything. Check the spelling, or pick a program that contains it: the emitted runtime is installed on demand, and an unreached stdlib body is eliminated"
+		unidentifiablePath(reason) gives reason
 		runtimeIrNameIsProgramFunction(name, declaredIn) gives "'{name}' is the PROGRAM's own function — it is parsed from {declaredIn}, which is not the library, and the IR already renders it, so naming it in {EmitIrRuntimeFlagPrefix} (or a ```RequiredRuntime block) pins nothing new"
 		compileError or
 		abandoned panic("driverErrorSentence: a compile that raised {e.name} has no sentence of its own: its diagnostics were already emitted")

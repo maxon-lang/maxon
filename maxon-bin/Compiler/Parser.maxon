@@ -15498,8 +15498,8 @@ end 'NameContext'
 //
 //   • an enum/union CASE name — `enum TokenType { function return end if … }` (`keyword-as-case-name.md`);
 //   • a DECLARED name — a function's own name and a parameter's name (`keyword-as-a-declared-name.md`):
-//     `export static function from (path String)` is `stdlib/FilePath.maxon:34`, and it is the only
-//     keyword any `stdlib/` file declares as a function name;
+//     `export static function from (path String)` is `stdlib/FilePath.maxon`'s `FilePath.from`, and
+//     it is the only keyword any `stdlib/` file declares as a function name;
 //   • a MEMBER name after a `.` — `Box.from(7)`, `p.to()` (`memberNameTokenAt`).
 //
 // ⚠ **IT IS THE POSITION THAT LICENSES THIS, NOT THE KEYWORD**, so it takes nothing away from the
@@ -24853,8 +24853,8 @@ export type Parser
 	// ⭐⭐ **THE THIRD CLAUSE ADMITS A KEYWORD AS A DECLARED NAME, AND ITS ABSENCE IS MEASURED.** A
 	// bare `identifier` test refuses `spawn Reader.from(path)` outright, because `from` is a real keyword
 	// (`Set from […]`) that `tokenCanBeAName` nonetheless admits in a NAME position, and
-	// `stdlib/FilePath.maxon:34` declares exactly that shape — `static function from(path String) returns
-	// Self`, a factory. MEASURED without this clause: `spawn String.from(b"x")` earned the SHAPE refusal
+	// `stdlib/FilePath.maxon`'s `FilePath.from` declares exactly that shape — `static function
+	// from(path String) returns Self`, a factory. MEASURED without this clause: `spawn String.from(b"x")` earned the SHAPE refusal
 	// ("`spawn` is followed by a STATIC CALL on a type"), which is a sentence about a program the author did
 	// not write.
 	//
@@ -32671,7 +32671,7 @@ export type Parser
 		try self.consume(TokenKind.function)
 
 		// ⭐ A KEYWORD MAY BE THE DECLARED NAME — `export static function from (path String)` is
-		// `stdlib/FilePath.maxon:34`. Nothing but a name may stand here, so a keyword written here is one;
+		// `stdlib/FilePath.maxon`'s `FilePath.from`. Nothing but a name may stand here, so a keyword written here is one;
 		// see `consumeNameToken`. The token scans that re-derive block structure learn the same fact through
 		// `keywordIsAName`'s declaration-name shape, or a `function while(…)` would read as a block nothing
 		// closes.
@@ -64929,7 +64929,7 @@ export type Parser
 		// ⭐⭐ **`a == b` ON TWO VALUES OF ONE USER STRUCT DISPATCHES ITS OWN `equals`.**
 		// Without this, `comparableOperands` would refuse the pair — *"cannot compare struct with struct"* — for a
 		// program the oracle compiles and runs; `specs/filepath.md`'s `filepath-equality` /
-		// `filepath-inequality` are the corpus cases that reach it, and `stdlib/FilePath.maxon:181` is the
+		// `filepath-inequality` are the corpus cases that reach it, and `FilePath.equals` is the
 		// `equals` they mean to run (case-insensitive on Windows, so a POINTER compare or a memberwise one
 		// would both be the WRONG ANSWER, not merely a different one).
 		//
@@ -75769,15 +75769,15 @@ export type Parser
 		return self.emitOwnedRuntimeResult(callee, args: singletonArgs(path), resultTag: ValueTypeTag.structRef, resultNameId: self.managedFileNameId(), range: range)
 	end 'parseManagedFileOpen'
 
-	// ⭐ **THE FIVE `__ManagedDirectory` STATICS — the complete surface.** A name outside it is REFUSED
+	// ⭐ **THE SIX `__ManagedDirectory` STATICS — the complete surface.** A name outside it is REFUSED
 	// BY NAME here rather than left to fall through, exactly as `parseManagedFileStaticCall` argues:
 	// falling through would mangle `__ManagedDirectory.list` into a callee no file declares and
 	// surface as E3004 against a name the author did write.
 	//
 	// ⚠ **OWNERSHIP: only `openSearch` produces an owned box.** It goes through `emitOwnedRuntimeResult`, so
 	// it is tracked as an owned temporary whose drop is `__md_destruct` — the RAII close
-	// (`SignatureIndex.managedNameDropCallee`). `currentPath` returns an owned `__ManagedMemory` (an `Array`
-	// record), which is tracked the same way `__ManagedMemory.create`'s result is.
+	// (`SignatureIndex.managedNameDropCallee`). `currentPath` and `resolve` return an owned `__ManagedMemory`
+	// (an `Array` record), which is tracked the same way `__ManagedMemory.create`'s result is.
 	//
 	// ⚠ Throwing-ness is NOT decided here — `isThrowingManagedDirectoryRuntimeCallee` names the callee and
 	// the composed `isThrowingRuntimeCallee` is read by the parser's E3055 accept and SemanticCheck's E3057
@@ -75821,7 +75821,12 @@ export type Parser
 			return self.emitOwnedManagedMemoryResult(ManagedDirectoryCurrentPathName, args: ValueIdArray.create(), range: range)
 		end 'currentPath'
 
-		throw SourceParseError.unsupported("`{String.from(ManagedDirectoryTypeName)}` static '{String.from(methodTok.value)}' — the type has exactly these five: `openSearch`, `exists`, `create`, `delete` and `currentPath`", line: methodTok.line, column: methodTok.column)
+		if methodTok.value.equals(ManagedDirectoryResolveMethod) 'resolve'
+			let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
+			return self.emitOwnedManagedMemoryResult(ManagedDirectoryResolveName, args: singletonArgs(path), range: range)
+		end 'resolve'
+
+		throw SourceParseError.unsupported("`{String.from(ManagedDirectoryTypeName)}` static '{String.from(methodTok.value)}' — the type has exactly these six: `openSearch`, `exists`, `create`, `delete`, `currentPath` and `resolve`", line: methodTok.line, column: methodTok.column)
 	end 'parseManagedDirectoryStaticCall'
 
 	// ⭐ **THE THREE `__ManagedDirectory` INSTANCE METHODS — `next`, `filename`, `close`.** The cursor

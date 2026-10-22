@@ -1,0 +1,28 @@
+#if not os(Windows)
+	let CaseDirName = "build-an-output-below-an-unsearchable-directory"
+	let LockedDirName = "locked"
+	let LockedOutputPath = "locked/inner/program"
+	let NoAccessMode = "000"
+	let RestoredMode = "755"
+	let RefusalWording = "cannot be resolved to its physical path"
+
+	test 'a build whose output sits below a directory the process may not search is refused by name, never keyed by its spelling'
+		let dir = freshCaseDir(CaseDirName)
+		stageSettledProgram(dir, name: SettledProgramDirName, source: TrivialProgramSource)
+
+		let locked = dir.join(LockedDirName)
+
+		if not Directory.create(locked.join("inner")) 'noDirectory'
+			panic("the gate could not run — could not create {locked.toString()}.")
+		end 'noDirectory'
+
+		_ = runSystemTool("chmod", arguments: [NoAccessMode, locked.toString()], what: "`chmod` denying every access to {locked.toString()}")
+		let build = runRecordedBuild(dir, program: SettledProgramDirName, output: LockedOutputPath, options: StringArray.create())
+		_ = runSystemTool("chmod", arguments: [RestoredMode, locked.toString()], what: "`chmod` restoring access to {locked.toString()}")
+
+		let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+
+		try Expect.notEqual(build.exitCode(), expected: 0, message: "a build whose output sits below a directory the process may not search succeeded, keyed by a spelling the host never resolved. {said}")
+		try Expect.contains(build.stderr, needle: RefusalWording, message: "the build was refused without saying the output's physical path could not be resolved. {said}")
+	end 'a build whose output sits below a directory the process may not search is refused by name, never keyed by its spelling'
+#endif

@@ -127,16 +127,20 @@ type LspSession
 	end 'frameArrived'
 
 	function projectResolved(dir FilePath, answer ProjectInputsAnswer, ticket ResolutionTicket)
-		if self.workspace.projectResolved(dir, answer: answer, ticket: ticket) 'awaitedAnswer'
-			let key = dir.toString()
-			self.projectInputsChanged(InputsChange.oneProject(key.clone()))
-
-			// Released after the re-arrivals: one that reaches the project uses its root again and
-			// keeps the answer held, where a root released first is held afresh and runs its
-			// `.maxproj` again.
-			self.workspace.held.releaseIfDemoted(key)
-		end 'awaitedAnswer'
+		match self.workspace.projectResolved(dir, answer: answer, ticket: ticket) 'resolution'
+			landed(key) then self.answerLanded(key)
+			superseded then return
+		end 'resolution'
 	end 'projectResolved'
+
+	function answerLanded(key String)
+		self.projectInputsChanged(InputsChange.oneProject(key.clone()))
+
+		// Released after the re-arrivals: one that reaches the project uses its root again and
+		// keeps the answer held, where a root released first is held afresh and runs its
+		// `.maxproj` again.
+		self.workspace.held.releaseIfDemoted(key)
+	end 'answerLanded'
 
 	function projectInputsChanged(change InputsChange)
 		self.workspace.held.forgetCorpora(change)
@@ -144,7 +148,7 @@ type LspSession
 	end 'projectInputsChanged'
 
 	function rearriveReachedDocuments(change InputsChange)
-		let search = lspRootSearch()
+		let search = lspRootSearch(self.workspace)
 
 		for (uri, text) in self.documents.clone() 'eachOpenDocument'
 			if inputsChangeReachesDocument(change, workspace: self.workspace, uri: uri, search: search) 'reached'
@@ -169,14 +173,14 @@ type LspSession
 		self.requestProjectCheck(uri, path: path, text: text, version: version, clientVersion: clientVersion, alone: alone, reader: reader, root: root)
 
 		match root 'root'
-			projectDirectory(dir) then self.rearriveProjectFileIfRecordMoved(dir)
+			projectDirectory(name) then self.rearriveProjectFileIfRecordMoved(name)
 			libraryTier or
 			singleFile then return
 		end 'root'
 	end 'publishedFor'
 
-	function rearriveProjectFileIfRecordMoved(dir FilePath)
-		let key = dir.toString()
+	function rearriveProjectFileIfRecordMoved(name RootName)
+		let key = name.key()
 		view watched = try self.workspace.recordWatches.get(key) otherwise return
 
 		if recordWatchHolds(watched) 'unchanged'
@@ -187,7 +191,7 @@ type LspSession
 		// would drop that fresh watch. A closed `.maxproj` leaves none, so it is not re-arrived again.
 		_ = self.workspace.recordWatches.remove(key)
 
-		let search = lspRootSearch()
+		let search = lspRootSearch(self.workspace)
 
 		for (uri, text) in self.documents.clone() 'eachOpenDocument'
 			if documentIsInProject(self.workspace, uri: uri, key: key, search: search, selection: ProjectDocuments.projectFileOnly) 'theProjectFile'
@@ -199,18 +203,18 @@ type LspSession
 	function requestProjectCheck(uri String, path FilePath, text String, version LspDocumentVersion, clientVersion ClientDocumentVersion, alone DiagnosticArray, reader LspReaderSearch, root WorkspaceRoot)
 		match lspProjectCheckRoot(reader, root: root) 'root'
 			none then return
-			at(dir) then self.requestCheckOnceResolved(dir, uri: uri, path: path, text: text, version: version, clientVersion: clientVersion, alone: alone, reader: reader)
+			at(name) then self.requestCheckOnceResolved(name, uri: uri, path: path, text: text, version: version, clientVersion: clientVersion, alone: alone, reader: reader)
 		end 'root'
 	end 'requestProjectCheck'
 
-	function requestCheckOnceResolved(dir FilePath, uri String, path FilePath, text String, version LspDocumentVersion, clientVersion ClientDocumentVersion, alone DiagnosticArray, reader LspReaderSearch)
-		let inputs = self.workspace.projectInputsOf(dir)
+	function requestCheckOnceResolved(name RootName, uri String, path FilePath, text String, version LspDocumentVersion, clientVersion ClientDocumentVersion, alone DiagnosticArray, reader LspReaderSearch)
+		let inputs = self.workspace.projectInputsOf(name)
 
 		if not inputs.resolved 'stillResolving'
 			return
 		end 'stillResolving'
 
-		submitProjectCheck(lspProjectCheckerFor(self.workspace, dir: dir, tiers: reader.tiers), request: LspProjectCheckRequest.create(uri.clone(), path: path.clone(), text: text.clone(), version: version, clientVersion: clientVersion, alone: alone.clone(), inputs: inputs))
+		submitProjectCheck(lspProjectCheckerFor(self.workspace, name: name, tiers: reader.tiers), request: LspProjectCheckRequest.create(uri.clone(), path: path.clone(), text: text.clone(), version: version, clientVersion: clientVersion, alone: alone.clone(), inputs: inputs))
 	end 'requestCheckOnceResolved'
 
 	function exitCode() returns ExitCode
@@ -307,6 +311,7 @@ type LspSession
 		match outcome 'outcome'
 			answered(answer) then writeLspResult(self.workspace.writer, doc: answer.doc, id: id, result: answer.result)
 			compilerUnavailable then self.refuse(id, code: LspJsonRpcErrorCode.internalError, message: "Internal error - {wireName}: this compiler cannot locate its stdlib/ and runtime/ sources")
+			unidentifiable(reason) then self.refuse(id, code: LspJsonRpcErrorCode.internalError, message: "Internal error - {wireName}: {reason}")
 		end 'outcome'
 	end 'answerExtensionRequest'
 

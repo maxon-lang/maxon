@@ -29,10 +29,9 @@
 // The ones an isel branches to, plus the four the find-first walks are built out of. Each is built by
 // whichever lane's `append…RuntimeChunks` ran.
 //
-// ⚠ **`mrt_host_file_open` AND `mrt_host_cpu_count` ARE BUILT ONLY BY THE LINUX LANES**, and each isel is
-// what keeps that honest: it `bl`s them on the SYSCALL route alone, because the macOS route has no chunk to
-// call — an `open` there is one inline import (`lowerOsFileOpen` carries the vararg argument for why) and a
-// processor count is one `sysconf`.
+// ⚠ **`mrt_host_cpu_count` IS BUILT ONLY BY THE LINUX LANES**, and each isel is what keeps that honest: it
+// `bl`s it on the SYSCALL route alone, because the macOS route has no chunk to call — a processor count
+// there is one `sysconf`.
 export let HostLastErrorName = b"mrt_host_last_error"
 export let HostReadFileName = b"mrt_host_read_file"
 export let HostWriteFileName = b"mrt_host_write_file"
@@ -44,6 +43,7 @@ export let HostDirCreateName = b"mrt_host_dir_create"
 export let HostDirRemoveName = b"mrt_host_dir_remove"
 export let HostFileAttributesName = b"mrt_host_file_attributes"
 export let HostDirCurrentPathName = b"mrt_host_dir_current_path"
+export let HostFdPathName = b"mrt_host_fd_path"
 export let HostDirFindFirstName = b"mrt_host_dir_find_first"
 export let HostDirFindNextName = b"mrt_host_dir_find_next"
 export let HostDirFindCloseName = b"mrt_host_dir_find_close"
@@ -118,11 +118,12 @@ export function posixUsesHostObjects(usage RuntimeUsage) returns bool
 	return usage.usesGt or usage.usesDebugStream or usage.usesSharedMemory
 end 'posixUsesHostObjects'
 
-// Who reaches `mrt_host_file_open`: a `File`, a subprocess stream redirected to a path, and on Linux the
-// socket band, whose built-in resolver reads `/etc/hosts` and `/etc/resolv.conf` through the file ops. A gate
+// Who reaches `mrt_host_file_open`: a `File`, a `Directory` resolving a path physically
+// (`PathQueryVerb.openForResolve`), a subprocess stream redirected to a path, and on Linux the socket
+// band, whose built-in resolver reads `/etc/hosts` and `/etc/resolv.conf` through the file ops. A gate
 // narrower than this is a call to a symbol nothing laid out, which the fixup resolver reports as a panic.
 export function posixOpensFiles(usage RuntimeUsage) returns bool
-	return usage.usesManagedFile or usage.usesChildPipes or usage.usesManagedSocket
+	return usage.usesManagedFile or usage.usesManagedDirectory or usage.usesChildPipes or usage.usesManagedSocket
 end 'posixOpensFiles'
 
 // ⭐⭐ **WHO TAKES A RUNTIME LOCK — the programs whose main thread maps its Linux slot block first in
@@ -938,6 +939,8 @@ export let DarwinFcntlSetFlags = 4
 export let DarwinFcntlSetFd = 2
 export let DarwinONonBlock = 4
 export let DarwinFdCloexec = 1
+export let DarwinFcntlGetPath = 50
+export let DarwinFcntlGetPathBufferBytes = 1024
 
 // ⭐ **`getsockopt`'s LEVEL AND OPTION, ASKED OF THE OS.** The two POSIX kernels do not agree on either number
 // (`SOL_SOCKET` is 1 on Linux and 0xFFFF on Darwin), so the isels ask here rather than each carrying a pair.

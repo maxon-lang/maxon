@@ -71,18 +71,109 @@ export typealias CacheRootArray = Array with FilePath
 // sentence to the reader, so the arm is the fact and the payload is the sentence.
 export union RunCacheError implements Error
 	unavailable(reason String)
+	unidentifiable(reason String)
 
 	export function sentence() returns String
 		return match self 'why'
 			unavailable(reason) gives reason
+			unidentifiable(reason) gives reason
 		end 'why'
 	end 'sentence'
 end 'RunCacheError'
 
-// Over the host's comparison spelling, so two spellings of one path share one record and one lock.
-export function pathKeyOf(anchored FilePath) returns String
-	return hexOfLeadingBytes(sha256(anchored.comparisonSpelling().toByteArray()), count: CacheNameDigestBytes)
+// The one spelling an identity is filed under, which agrees with `FilePath.equals`: a key spelled any
+// other way splits one identity in two on Windows, where case is not significant.
+export function identityKeyOf(identity FilePath) returns String
+	return identity.comparisonSpelling()
+end 'identityKeyOf'
+
+export function pathKeyOf(identity FilePath) returns String
+	return hexOfLeadingBytes(sha256(identityKeyOf(identity).toByteArray()), count: CacheNameDigestBytes)
 end 'pathKeyOf'
+
+union PhysicalResolution
+	found(physical FilePath)
+	absent
+end 'PhysicalResolution'
+
+function physicalResolutionOf(path FilePath) returns PhysicalResolution throws RunCacheError
+	let physical = try path.resolvedPhysically() otherwise (e) 'refused'
+		match e 'why'
+			notFound then return PhysicalResolution.absent
+			accessDenied then throw RunCacheError.unidentifiable("{path.toString()} cannot be resolved to its physical path: access to it or to a directory above it was denied. Check the permissions of {path.toString()} and of every directory above it")
+			failed then throw RunCacheError.unidentifiable("{path.toString()} cannot be resolved to its physical path: the host refused the lookup. {physicalLookupCure()}")
+		end 'why'
+	end 'refused'
+
+	return PhysicalResolution.found(physical)
+end 'physicalResolutionOf'
+
+function physicalLookupCure() returns String
+	#if os(Windows)
+		return "A volume with no drive letter and no UNC name has no spelling a path can be keyed by: give the volume a drive letter or reach it through a share. Otherwise check for a symbolic link loop or a name longer than Windows allows"
+	#endif
+
+	#if os(Linux)
+		return "Check that /proc is mounted, which is how this host names a path physically, then check for a symbolic link loop or a name longer than the host allows"
+	#endif
+
+	#if os(Macos)
+		return "Check for a symbolic link loop or a name longer than the host allows"
+	#endif
+
+	#if os(Wasi)
+		return "Check for a symbolic link loop or a name longer than the host allows"
+	#endif
+end 'physicalLookupCure'
+
+// The identity of a path every link of which is followed: the physical path of its deepest existing
+// ancestor, with the components below it that name nothing yet joined back, so a project or a cache
+// entry not yet created has the identity it will have. Only `notFound` ascends: a lookup the host denies
+// or refuses may be of a path that exists and holds a link, and keying the rest lexically would split
+// it from its other spellings.
+export function projectIdentityPathOf(spelled FilePath) returns FilePath throws RunCacheError
+	let anchored = spelled.anchoredAt(Directory.currentPath())
+	var existing = anchored.clone()
+	var absent = StringArray.create()
+
+	while true 'ascend'
+		let resolution = try physicalResolutionOf(existing)
+
+		match resolution 'resolution'
+			found(physical) then return withAbsentComponents(physical, absent: absent)
+			absent then break
+		end 'resolution'
+
+		let parent = try existing.parent() otherwise throw RunCacheError.unidentifiable("{anchored.toString()} cannot be resolved to its physical path: no directory above it exists. Check that the volume holding it is mounted")
+
+		absent.insert(0, value: existing.filename())
+		existing = parent
+	end 'ascend'
+
+	panic("projectIdentityPathOf: the ascent leaves only by returning or throwing")
+end 'projectIdentityPathOf'
+
+// The identity of the entry itself, a link at it kept rather than followed: only the directory above is
+// resolved. A build deletes the output path before writing it, which removes a link there and leaves the
+// link's target alone, so the link's name is the file written.
+export function entryIdentityPathOf(spelled FilePath) returns FilePath throws RunCacheError
+	let anchored = spelled.anchoredAt(Directory.currentPath())
+	let parent = try anchored.parent() otherwise throw RunCacheError.unidentifiable("{anchored.toString()} names a volume root, which is not a file a build writes. Name a file inside a directory")
+
+	let physicalParent = try projectIdentityPathOf(parent)
+
+	return physicalParent.join(anchored.filename()).normalize()
+end 'entryIdentityPathOf'
+
+function withAbsentComponents(physical FilePath, absent StringArray) returns FilePath
+	var joined = physical.clone()
+
+	for component in absent 'eachComponent'
+		joined = joined.join(component)
+	end 'eachComponent'
+
+	return joined.normalize()
+end 'withAbsentComponents'
 
 export function keepRecordsTidy(directory FilePath, extension String, most ElementIndex, format CacheFormatNumber)
 	discardAllButNewestIn(directory, kept: most, admits: function(entry) gives entry.filename().endsWith(extension))

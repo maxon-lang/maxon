@@ -189,8 +189,18 @@ function unmintedSnippetStem(name String) returns String
 	return name.slice(name.startIndex(), endIndex: stemEnds)
 end 'unmintedSnippetStem'
 
+function runSlotOutlivesDiscard(source FilePath) returns bool
+	let slot = try discardRunSlotOf(source, entryFunction: MainFunctionName) otherwise (e) 'unidentified'
+		printError("maxon: could not find the run-cache slot of {source.path} to delete it ({e.sentence()}); the next server's sweep removes it once its owner has ended\n")
+
+		return true
+	end 'unidentified'
+
+	return slot == RunSlotDiscard.keptInPlace
+end 'runSlotOutlivesDiscard'
+
 function discardSnippet(source FilePath)
-	let slot = discardRunSlotOf(source, entryFunction: MainFunctionName)
+	var productsRemain = runSlotOutlivesDiscard(source)
 	let stem = pathWithoutSuffix(source, suffix: SnippetExtension)
 	let stemName = stem.filename()
 
@@ -202,8 +212,6 @@ function discardSnippet(source FilePath)
 
 		return
 	end 'unlisted'
-
-	var productsRemain = slot == RunSlotDiscard.keptInPlace
 
 	for entry in entries 'eachStaged'
 		let name = entry.filename()
@@ -585,7 +593,11 @@ export function executeBreakingChangesTool(reqDoc JsonDoc, idNode JsonNodeId, ar
 		return breakingChangesReply(reqDoc, idNode: idNode, recorded: RecordedRelease.recorded(since, rank: rank))
 	end 'sinceGiven'
 
-	let projectDir = try projectDirectoryNamedBy(path) otherwise return toolErrorText(reqDoc, idNode: idNode, message: "no `{ProjectFileExtension}` file is in the directory holding {pathArg} or above it, so it belongs to no project", repoRoot: ActingTree.host)
+	let physical = try projectIdentityPathOf(path) otherwise (e) 'unidentifiable'
+		return toolErrorText(reqDoc, idNode: idNode, message: e.sentence(), repoRoot: ActingTree.host)
+	end 'unidentifiable'
+
+	let projectDir = try projectDirectoryNamedBy(physical) otherwise return toolErrorText(reqDoc, idNode: idNode, message: "no `{ProjectFileExtension}` file is in the directory holding {pathArg} or above it, so it belongs to no project", repoRoot: ActingTree.host)
 
 	let recorded = try recordedReleaseOf(projectDir) otherwise (e) 'unusable'
 		return toolErrorText(reqDoc, idNode: idNode, message: e.sentence(), repoRoot: ActingTree.host)

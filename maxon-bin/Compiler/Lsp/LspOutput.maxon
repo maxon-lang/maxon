@@ -7,6 +7,9 @@ let LogMessageTypeKey = "type"
 let LogMessageTextKey = "message"
 let LogMessageTypeLog = 4
 
+let ShowMessageMethod = "window/showMessage"
+let ShowMessageTypeError = 1
+
 // The outcome line's wording is parsed by `tests/lsp/LspClient.maxon` (`ProjectCheckReportLead`), so a
 // change to it fails that corpus.
 let ProjectCheckLogLead = "maxon: project check"
@@ -45,6 +48,15 @@ module function submitToLspWriter(writer LspStdoutWriter.handle, command LspWrit
 		end 'why'
 	end 'refused'
 end 'submitToLspWriter'
+
+module function announceLspRefusal(writer LspStdoutWriter.handle, sentence String)
+	var doc = JsonDoc.create()
+	var params = LspJsonObject.create(doc)
+	params.put(LogMessageTypeKey, value: JsonNode.numberNode(ShowMessageTypeError as JsonFloat))
+	params.put(LogMessageTextKey, value: JsonNode.stringNode(sentence))
+
+	submitToLspWriter(writer, command: LspWriterCommand.write(lspNotificationText(doc, method: ShowMessageMethod, params: params.finish())))
+end 'announceLspRefusal'
 
 export function lspWriterHoldsVersion(writer LspStdoutWriter.handle, uri String, version LspDocumentVersion) returns bool
 	return try await writer.isCurrent(uri.clone(), version: version, sendTimeout: ForeverMs) otherwise (e) 'refused'

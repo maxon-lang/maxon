@@ -10,10 +10,10 @@
 // Teaching directives to the PARSE loops alone would leave the SWEEP reading both branches of every
 // `#if`, and the two would disagree about which declarations the file contains:
 //
-//   • **MEASURED, on the very file this mechanism exists to unblock.** `stdlib/FilePath.maxon:3-11`
-//     declares `pathSeparator` in BOTH arms of a top-level `#if os(Windows)`/`#else`. The sweep is
-//     FIRST-WINS (`ProgramSignatures.recordDecl`), so it would record the Windows arm's line 4 on
-//     every target; on Linux/macOS/wasi the parse dispatches the `#else` arm at line 8, and
+//   • **MEASURED, on the very file this mechanism exists to unblock.** `stdlib/FilePath.maxon`'s first
+//     top-level `#if os(Windows)`/`#else` declares `pathSeparator` in BOTH arms. The sweep is
+//     FIRST-WINS (`ProgramSignatures.recordDecl`), so it would record the Windows arm's declaration on
+//     every target; on Linux/macOS/wasi the parse dispatches the `#else` arm's, and
 //     `isRedeclaredBinding` compares those positions and reports **E3006 duplicate definition** — a
 //     correct program rejected on three targets out of four. Reverse the arms and it is worse: the
 //     parse binds the name to the OTHER branch's value, silently.

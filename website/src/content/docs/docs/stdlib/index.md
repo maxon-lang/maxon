@@ -159,7 +159,7 @@ at the call site, rather than failing at run time:
 | `Clock`, `WallClock`, `sleep`, `MachinePin`, every `Scheduler` member but `parallelBoundary` | E3104 |
 | `Log`, `Logger`, `LogSink` and the log handlers: logging runs on services, which need green threads | E3104 |
 | `TcpClient`, `TcpListener`, `HttpClient`, `HttpServer` | E3104 |
-| `Process.executablePath`, `SharedSegment` | E3104 |
+| `Process.executablePath`, `FilePath.resolvedPhysically`, `SharedSegment` | E3104 |
 | `Subprocess`, `StreamingSubprocess`, `Configuration`, `Process.environmentVariable` | E3074 |
 
 E3104 means this compiler has not implemented the facility for the target; E3074 means the platform has

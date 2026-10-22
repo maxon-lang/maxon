@@ -1,0 +1,85 @@
+#if not os(Windows)
+	let TwoSpellingsDirName = "diagnostics-project-two-spellings"
+	let TwoSpellingsLinkDirName = "diagnostics-project-two-spellings-link"
+	let TwoSpellingsFileName = "main.maxon"
+	let TwoSpellingsSource = "function main() returns ExitCode\n\tlet leftover = 1\n\treturn 0\nend 'main'\n"
+	let TwoSpellingsEditedSource = "function main() returns ExitCode\n\tlet leftover = 2\n\treturn 0\nend 'main'\n"
+	let TwoSpellingsFirstEdit = 2
+
+	type TwoSpellingsSession
+		module let linkedItems as PublishedDiagnosticArray
+		module let physicalItems as PublishedDiagnosticArray
+		module let firstOpen as ProjectLoadingNoticeArray
+		module let laterNotices as ProjectLoadingNoticeArray
+		module let projects as ProjectEntryArray
+
+		static function of(linkedItems PublishedDiagnosticArray, physicalItems PublishedDiagnosticArray, firstOpen ProjectLoadingNoticeArray, laterNotices ProjectLoadingNoticeArray, projects ProjectEntryArray) returns TwoSpellingsSession
+			return Self{linkedItems: linkedItems, physicalItems: physicalItems, firstOpen: firstOpen, laterNotices: laterNotices, projects: projects}
+		end 'of'
+	end 'TwoSpellingsSession'
+
+	test 'project diagnostics: one project opened through a symbolic link and by its physical path is held once, and each document is answered under its own uri'
+		let root = stagedProjectDiagnosticsRoot(TwoSpellingsDirName)
+		writeCorpusFile(root, fileName: TwoSpellingsFileName, content: TwoSpellingsSource)
+
+		let link = hostTempDir().join(outsideCheckoutDirName(TwoSpellingsLinkDirName))
+		_ = runSystemTool("ln", arguments: ["-s", root.toString(), link.toString()], what: "`ln -s` making a link to the staged project")
+
+		var client = LspClient.start()
+
+		if let session = try twoSpellingsSession(client, root: root, link: link) 'observed'
+			client.release()
+
+			try File.delete(link) otherwise panic("the gate could not run — could not remove the link {link.toString()}.")
+
+			discardOutsideCheckoutDir(root)
+
+			try requireEachSpellingAnswered(session)
+			try requireHeldOnce(session)
+		end 'observed' else (e) 'failed'
+			abandonedStagedSession(client, staged: root, failure: e, doing: "the session did not complete")
+		end 'failed'
+	end 'project diagnostics: one project opened through a symbolic link and by its physical path is held once, and each document is answered under its own uri'
+
+	function twoSpellingsSession(client LspClient, root FilePath, link FilePath) returns TwoSpellingsSession throws LspClientError
+		let linkedUri = fileUriOf(link.join(TwoSpellingsFileName))
+		let physicalUri = fileUriOf(root.join(TwoSpellingsFileName))
+
+		_ = try client.initializeAtRoot(link)
+		try client.initialized()
+
+		try client.openDocument(linkedUri, content: TwoSpellingsSource)
+		let linked = try client.awaitSettledProjectCheckSet(linkedUri)
+		let firstOpen = try client.takeProjectLoadingNotices()
+
+		try client.openDocument(physicalUri, content: TwoSpellingsSource)
+		let physical = try client.awaitSettledProjectCheckSet(physicalUri)
+
+		try client.changeDocument(linkedUri, content: TwoSpellingsEditedSource, version: TwoSpellingsFirstEdit)
+		_ = try client.awaitSettledProjectCheckSet(linkedUri)
+
+		try client.changeDocument(physicalUri, content: TwoSpellingsEditedSource, version: TwoSpellingsFirstEdit)
+		_ = try client.awaitSettledProjectCheckSet(physicalUri)
+
+		let laterNotices = try client.takeProjectLoadingNotices()
+		let listed = try client.listProjects()
+
+		return TwoSpellingsSession.of(linked.items, physicalItems: physical.items, firstOpen: firstOpen, laterNotices: laterNotices, projects: listed.projects)
+	end 'twoSpellingsSession'
+
+	function requireEachSpellingAnswered(session TwoSpellingsSession) throws TestFailure
+		try Expect.greaterThan(session.linkedItems.count(), than: 0, message: "the document opened through the link carried no diagnostic for the unused `leftover`, which `maxon build` reports.")
+		try Expect.greaterThan(session.physicalItems.count(), than: 0, message: "the same file opened by its physical path carried no diagnostic for the unused `leftover`: the answer was filed under the other spelling, or dropped.")
+		try Expect.equal(session.physicalItems.count(), expected: session.linkedItems.count(), message: "one file opened under two spellings must be answered the same under each.")
+	end 'requireEachSpellingAnswered'
+
+	function requireHeldOnce(session TwoSpellingsSession) throws TestFailure
+		try requireOneAnnouncedLoad(session.firstOpen, expectedTail: outsideCheckoutDirName(TwoSpellingsLinkDirName), note: "A document of the project was opened through a symbolic link to it, and nothing else was asked.")
+		try requireNoAnnouncedLoad(session.laterNotices, note: "The same file was opened by its physical path and then both documents were edited in turn: the project they sit in is the one already held, so nothing is rebuilt.")
+		try Expect.equal(session.projects.count(), expected: 1, message: "one project reached under two spellings is listed once.")
+
+		let listed = try session.projects.get(0) otherwise panic("the count was just held to one")
+
+		try Expect.isTrue(foldedRootPath(listed.rootPath).endsWith(outsideCheckoutDirName(TwoSpellingsLinkDirName)), message: "the listed project names the root under the spelling the editor opened it with first, and the root listed was {listed.rootPath}.")
+	end 'requireHeldOnce'
+#endif

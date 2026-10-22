@@ -1,0 +1,44 @@
+#if not os(Windows)
+	let UnrootedLinkDirName = "definition-unrooted-link"
+	let UnrootedLinkLinkDirName = "definition-unrooted-link-link"
+	let UnrootedLinkHelperFileName = "helper.maxon"
+	let UnrootedLinkMainFileName = "main.maxon"
+	let UnrootedLinkHelperSource = "export function unrootedHelper() returns ExitCode\n\treturn 0\nend 'unrootedHelper'\n"
+	let UnrootedLinkMainSource = "function main() returns ExitCode\n\treturn unrootedHelper()\nend 'main'\n"
+	let UnrootedLinkCallLine = 1
+	let UnrootedLinkCallCharacter = 12
+
+	test 'definition: a file opened through a symbolic link with no workspace folder open answers a sibling under the spelling it was opened with'
+		let root = stagedProjectDiagnosticsRoot(UnrootedLinkDirName)
+		writeCorpusFile(root, fileName: UnrootedLinkHelperFileName, content: UnrootedLinkHelperSource)
+
+		let link = hostTempDir().join(outsideCheckoutDirName(UnrootedLinkLinkDirName))
+		_ = runSystemTool("ln", arguments: ["-s", root.toString(), link.toString()], what: "`ln -s` making a link to the staged project")
+
+		var client = LspClient.start()
+
+		if let answered = try definitionWithNoFolderOpen(client, link: link) 'asked'
+			client.release()
+
+			try File.delete(link) otherwise panic("the gate could not run — could not remove the link {link.toString()}.")
+
+			discardOutsideCheckoutDir(root)
+
+			try Expect.isTrue(answered.isPresent, message: "a call to an `export`ed declaration in a sibling file did not resolve in a session that named no workspace folder.")
+			try Expect.equal(answered.uri, expected: fileUriOf(link.join(UnrootedLinkHelperFileName)), message: "the sibling was answered under a spelling the editor never opened the file with.")
+		end 'asked' else (e) 'failed'
+			abandonedStagedSession(client, staged: root, failure: e, doing: "the session did not complete")
+		end 'failed'
+	end 'definition: a file opened through a symbolic link with no workspace folder open answers a sibling under the spelling it was opened with'
+
+	function definitionWithNoFolderOpen(client LspClient, link FilePath) returns DefinitionResult throws LspClientError
+		let mainUri = fileUriOf(link.join(UnrootedLinkMainFileName))
+
+		_ = try client.initialize()
+		try client.initialized()
+		try client.openDocument(mainUri, content: UnrootedLinkMainSource)
+		_ = try client.awaitPublishedDiagnostics(mainUri)
+
+		return try client.definition(mainUri, line: UnrootedLinkCallLine, character: UnrootedLinkCallCharacter)
+	end 'definitionWithNoFolderOpen'
+#endif

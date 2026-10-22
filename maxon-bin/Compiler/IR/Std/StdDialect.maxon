@@ -1219,6 +1219,17 @@ export enum PathQueryVerb
 
 	// `(path, capacity, buffer)`. `GetFullPathNameW(path, capacity, buffer, NULL)`.
 	fullPath
+
+	// `(path, unused, unused)`, answering a handle or `INVALID_HANDLE_VALUE`. It opens for naming alone:
+	// no access is asked and a directory opens as a file does, so a path the process may not read still
+	// resolves. `O_EVTONLY` on macOS, `O_PATH` on Linux, no desired access with
+	// `FILE_FLAG_BACKUP_SEMANTICS` on Windows.
+	openForResolve
+
+	// `(handle, capacity, buffer)`. The final path of an `openForResolve` handle: `F_GETPATH` on macOS,
+	// the link `/proc/self/fd/<fd>` on Linux, which fails where `/proc` is not mounted, and
+	// `GetFinalPathNameByHandleW` on Windows, which answers the `\\?\` spelling.
+	finalPath
 end 'PathQueryVerb'
 
 export union StdOp
@@ -3109,9 +3120,10 @@ export union StdOp
 	// would read the block before it was filled.
 	osSocketServe(resultId ValueId, verb SocketServeVerb, a0Id ValueId, a1Id ValueId, a2Id ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
-	// A Win32 path query answering the count `ManagedDirectoryRuntime.emitFilledBufferVerdict`
-	// classifies. x64-windows only: its one producer is the Windows executable search in
-	// `SubprocessRuntime`.
+	// A path query answering the count `ManagedDirectoryRuntime.emitFilledBufferVerdict` classifies.
+	// `systemDirectory`, `windowsDirectory` and `fullPath` are x64-windows only, produced by the Windows
+	// executable search in `SubprocessRuntime`; `openForResolve` and `finalPath` are `__md_resolve_path`'s
+	// on every native lane.
 	osPathQuery(resultId ValueId, verb PathQueryVerb, a0Id ValueId, a1Id ValueId, a2Id ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 

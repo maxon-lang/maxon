@@ -39,15 +39,29 @@ let DiagnosticSourceName = "maxon"
 // nothing. Saying nothing leaves the editor showing what it already had, which is what "not
 // checked" looks like.
 module function publishBufferDiagnostics(workspace LspWorkspaceState, uri String, text String, arrival BufferArrival) returns BufferPublish
-	let path = try FilePath.from(uri) otherwise return BufferPublish.unchecked
+	match lspDocumentOf(workspace, uri: uri) 'document'
+		resolved(document) then return publishedDocumentDiagnostics(workspace, uri: uri, document: document, text: text, arrival: arrival)
+		notAPath then return BufferPublish.unchecked
+		unidentifiable(path, reason) then return refusedDocument(workspace, uri: uri, path: path, text: text, reason: reason)
+	end 'document'
+end 'publishBufferDiagnostics'
 
-	var checked = lspDocumentProject(workspace, path: path, content: text)
+function refusedDocument(workspace LspWorkspaceState, uri String, path FilePath, text String, reason String) returns BufferPublish
+	let tokens = lspDocumentTokens(text, keywords: KeywordTable.create())
+
+	submitToLspWriter(workspace.writer, command: LspWriterCommand.write(documentDiagnosticsText(uri, text: text, tokens: tokens, diagnostics: DiagnosticArray.create(), path: path, unbuilt: [reason], notices: StringArray.create())))
+
+	return BufferPublish.unchecked
+end 'refusedDocument'
+
+function publishedDocumentDiagnostics(workspace LspWorkspaceState, uri String, document ReaderDocument, text String, arrival BufferArrival) returns BufferPublish
+	var checked = lspDocumentProject(workspace, document: document, content: text)
 
 	match checked 'buffer'
-		loaded(project, reader) then return project.publishDocumentDiagnostics(uri, reader: reader, arrival: arrival, path: path, text: text)
+		loaded(project, reader) then return project.publishDocumentDiagnostics(uri, reader: reader, arrival: arrival, path: lspBufferPathOf(reader), text: text)
 		unavailable then return BufferPublish.unchecked
 	end 'buffer'
-end 'publishBufferDiagnostics'
+end 'publishedDocumentDiagnostics'
 
 module union BufferPublish
 	published(reader LspReaderSearch, root WorkspaceRoot, path FilePath, fast DiagnosticArray)
@@ -248,13 +262,14 @@ function projectFileSaid(reader LspReaderSearch, path FilePath) returns (StringA
 		standsAlone then break
 	end 'layout'
 
-	let dir = try path.resolve(reader.workingDirectory).parent() otherwise return (StringArray.create(), StringArray.create())
+	let projectDir = try reader.document.ancestry.get(0) otherwise return (StringArray.create(), StringArray.create())
+	let dir = projectDir.spelled
 
 	// Observed before `breakingChangeNotices` reads the record: a rewrite landing between the two then
 	// fails the watch and re-publishes this file, where observing after would vouch for stale notices.
-	reader.workspace.recordWatches.upsert(dir.toString(), value: observeRecord(dir))
+	reader.workspace.recordWatches.upsert(projectDir.key(), value: observeRecord(dir))
 
-	let answer = reader.workspace.projectInputsOf(dir)
+	let answer = reader.workspace.projectInputsOf(reader.workspace.held.settled(projectDir))
 	var refusal = answer.refusal.clone()
 	var notice = answer.notice.clone()
 
@@ -550,12 +565,28 @@ module function reportsOn(diagnostic Diagnostic, path FilePath) returns bool
 	return namesTheSameFile(try diagnostic.anchor.anchoredFile() otherwise return true, other: path)
 end 'reportsOn'
 
-// Resolved and normalized rather than compared as text: the corpus reports under the spelling it
-// registered a file by, which is not always the spelling the request arrived with
-// (`registeredSpellingOf` owns that rule). A text compare drops every one of those diagnostics and
-// publishes an empty array, which reads as "this document is clean".
+// Compared by identity rather than as text: the corpus reports under the spelling it registered a file
+// by, which is not always the spelling the request arrived with (`registeredSpellingOf` owns that
+// rule). A text compare drops every one of those diagnostics and publishes an empty array, which reads
+// as "this document is clean". The name test spares two physical lookups per pair, and it is sound
+// because an entry's identity keeps the entry's own name (`entryIdentityPathOf`).
 module function namesTheSameFile(one FilePath, other FilePath) returns bool
-	return one.resolve(Directory.currentPath()).equals(other.resolve(Directory.currentPath()))
+	if one.filename().toLower() != other.filename().toLower() 'differentNames'
+		return false
+	end 'differentNames'
+
+	let workingDirectory = Directory.currentPath()
+	let absoluteOne = one.resolve(workingDirectory)
+	let absoluteOther = other.resolve(workingDirectory)
+
+	if absoluteOne.equals(absoluteOther) 'theSameSpelling'
+		return true
+	end 'theSameSpelling'
+
+	let identityOne = try entryIdentityPathOf(absoluteOne) otherwise return false
+	let identityOther = try entryIdentityPathOf(absoluteOther) otherwise return false
+
+	return identityOne.equals(identityOther)
 end 'namesTheSameFile'
 
 // A line `maxon build` refuses a project with (`Main.reportCompileError`, `reportBreakingChanges`).

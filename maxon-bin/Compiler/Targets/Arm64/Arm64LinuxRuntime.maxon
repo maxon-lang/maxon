@@ -583,12 +583,32 @@ end 'buildArm64LinuxThreadCpuChunk'
 // ⭐⭐ **ON THIS LANE THE ANSWER IS NOT A CALL BUT A SYMLINK.** The kernel publishes
 // `/proc/self/exe`, whose TARGET is the running image's path (`_NSGetExecutablePath` has no Linux
 // counterpart), and `/proc/self/ns/pid`, whose target names the pid namespace — so each chunk is
-// one `readlinkat(AT_FDCWD, link, buf, bufLen)`.
+// one `readlinkat(AT_FDCWD, link, buf, bufLen)` (`arm64LinuxEmitReadLinkVerdict`).
+//
+// ⚠ **THE ARGUMENTS SHUFFLE AND THE ORDER IS LOAD-BEARING** for `buildArm64LinuxFileOpenChunk`'s reason: the
+// path constant materialises in x0 (the shared `.rdata` blob channel hands it there), so it moves to x1
+// BEFORE `AT_FDCWD` takes the x0 it vacated.
+function buildArm64LinuxReadLinkChunk(globalData GlobalDataTable, link ByteArray, name ByteArray) returns FunctionCodeChunk
+	let SlotBufPtr = 0 as StackSize
+	let SlotBufLen = 1 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(2)
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotBufPtr)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotBufLen)
+
+	arm64EmitCStringArg(asm, globalData: globalData, bytes: link)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x1, src: Arm64Register.x0)
+	arm64LinuxEmitReadLinkVerdict(asm, slotBufPtr: SlotBufPtr, slotBufLen: SlotBufLen)
+
+	return asm.finishFunction(name)
+end 'buildArm64LinuxReadLinkChunk'
+
+// Expects the link's path in x1 and the buffer's pointer and length in the two slots.
 //
 // ⛔⛔ **`readlinkat` DOES NOT NUL-TERMINATE AND DOES NOT REPORT TRUNCATION**, and those are the two facts
-// this chunk exists for. It answers the byte count it wrote, writes no terminator, and — when the link does
+// this helper exists for. It answers the byte count it wrote, writes no terminator, and — when the link does
 // not fit — SILENTLY TRUNCATES and answers exactly `bufLen`. Both are handled here in the vocabulary
-// `osExecutablePath` and `osProcessNamespace` speak
+// `osExecutablePath`, `osProcessNamespace` and `PathQueryVerb.finalPath` speak
 // (`ManagedDirectoryRuntime.emitFilledBufferVerdict`):
 //
 //   • `n < 0` ⇒ answer **0**, which the Std verdict reads as "refused" and `__proc_exe_path` turns into
@@ -600,36 +620,23 @@ end 'buildArm64LinuxThreadCpuChunk'
 //     store at `n == bufLen` is a one-byte overrun of the caller's buffer, and the caller is about to throw
 //     that buffer away regardless.
 //   • otherwise ⇒ terminate at `buf[n]` and answer `n`.
-//
-// ⚠ **THE ARGUMENTS SHUFFLE AND THE ORDER IS LOAD-BEARING** for `buildArm64LinuxFileOpenChunk`'s reason: the
-// path constant materialises in x0 (the shared `.rdata` blob channel hands it there), so it moves to x1
-// BEFORE `AT_FDCWD` takes the x0 it vacated.
-function buildArm64LinuxReadLinkChunk(globalData GlobalDataTable, link ByteArray, name ByteArray) returns FunctionCodeChunk
-	let SlotBufPtr = 0 as StackSize
-	let SlotBufLen = 1 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(2)
-
+function arm64LinuxEmitReadLinkVerdict(asm Arm64RuntimeAsm, slotBufPtr StackSize, slotBufLen StackSize)
 	let unavailable = asm.newLabel()
 	let finish = asm.newLabel()
 
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotBufPtr)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotBufLen)
-
-	arm64EmitCStringArg(asm, globalData: globalData, bytes: link)
-	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x1, src: Arm64Register.x0)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotBufPtr)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x3, slot: SlotBufLen)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: slotBufPtr)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x3, slot: slotBufLen)
 	arm64LinuxEmitAtFdCwd(asm, dest: Arm64Register.x0)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallReadlinkat)
 
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: unavailable)
 
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotBufLen)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: slotBufLen)
 	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.hs, label: finish)
 
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotBufPtr)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: slotBufPtr)
 	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x1, lhs: Arm64Register.x1, rhs: Arm64Register.x0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: NulByte as MachineWord)
 	arm64EmitStoreByte(asm, src: Arm64Register.x2, base: Arm64Register.x1)
@@ -639,8 +646,54 @@ function buildArm64LinuxReadLinkChunk(globalData GlobalDataTable, link ByteArray
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
 
 	asm.placeLabel(finish)
-	return asm.finishFunction(name)
-end 'buildArm64LinuxReadLinkChunk'
+end 'arm64LinuxEmitReadLinkVerdict'
+
+function buildArm64LinuxFdPathChunk(globalData GlobalDataTable) returns FunctionCodeChunk
+	let SlotBufPtr = 0 as StackSize
+	let SlotBufLen = 1 as StackSize
+	let SlotPath = 2
+	let pathSlots = runtimeFrameSlots(LinuxFdPathBufferBytes)
+	var asm = Arm64RuntimeAsm.beginFunction(SlotPath + pathSlots)
+
+	let nextDigit = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotBufPtr)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotBufLen)
+
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x3, src: Arm64Register.x0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: DecimalRadix as MachineWord)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x5, slot: SlotPath)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x5, base: Arm64Register.x5, imm: (LinuxFdPathBufferBytes - 1) as Imm32)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x6, value: NulByte as MachineWord)
+	arm64EmitStoreByte(asm, src: Arm64Register.x6, base: Arm64Register.x5)
+
+	asm.placeLabel(nextDigit)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x5, base: Arm64Register.x5, imm: -1)
+	arm64EmitRuntimeRrr(asm, opcode: Arm64OpUdiv, dest: Arm64Register.x7, lhs: Arm64Register.x3, rhs: Arm64Register.x4)
+	arm64EmitRuntimeRrr(asm, opcode: Arm64OpMul, dest: Arm64Register.x8, lhs: Arm64Register.x7, rhs: Arm64Register.x4)
+	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x9, lhs: Arm64Register.x3, rhs: Arm64Register.x8)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x9, base: Arm64Register.x9, imm: AsciiZeroDigit as Imm32)
+	arm64EmitStoreByte(asm, src: Arm64Register.x9, base: Arm64Register.x5)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x3, src: Arm64Register.x7)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x3, label: nextDigit)
+
+	let prefixBytes = LinuxProcSelfFd.count()
+	let tailOffset = prefixBytes - LinuxFdPathCopyWordBytes
+
+	arm64EmitCStringArg(asm, globalData: globalData, bytes: LinuxProcSelfFd)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x6, base: Arm64Register.x0, byteOffset: 0)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x0, base: Arm64Register.x0, imm: tailOffset as Imm32)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x7, base: Arm64Register.x0, byteOffset: 0)
+
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x5, base: Arm64Register.x5, imm: (0 - prefixBytes) as Imm32)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x6, base: Arm64Register.x5, byteOffset: 0)
+	arm64EmitStoreWord64Unaligned(asm, src: Arm64Register.x7, base: Arm64Register.x5, byteOffset: tailOffset as MachineWord, scratch: Arm64Register.x8)
+
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x1, src: Arm64Register.x5)
+	arm64LinuxEmitReadLinkVerdict(asm, slotBufPtr: SlotBufPtr, slotBufLen: SlotBufLen)
+
+	return asm.finishFunction(HostFdPathName)
+end 'buildArm64LinuxFdPathChunk'
 
 // ==========================================================================
 // mrt_host_cpu_count() -> x0 = usable processors | -1
@@ -3267,6 +3320,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64LinuxPathOpChunk(HostDirCreateName, syscallNumber: Arm64LinuxSyscallMkdirat, thirdArgument: PosixDirectoryMode as MachineWord, errnoHome: errnoHome))
 		chunks.push(buildArm64LinuxPathOpChunk(HostDirRemoveName, syscallNumber: Arm64LinuxSyscallUnlinkat, thirdArgument: LinuxRemoveDirectoryFlags, errnoHome: errnoHome))
 		chunks.push(buildArm64LinuxDirCurrentPathChunk(errnoHome))
+		chunks.push(buildArm64LinuxFdPathChunk(globalData))
 	end 'managedDirectory'
 
 	// The mode→attribute-mask decoder is called by BOTH `mrt_host_fill_find_data` (the cluster above) and

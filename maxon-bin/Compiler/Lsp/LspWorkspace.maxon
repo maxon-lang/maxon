@@ -12,12 +12,18 @@
 // because the driver compiles a driver file alone, while a `.maxproj` loaded for
 // `RootPurpose.loadsTheProject` takes the rungs below as a source beside it would: a saved one is
 // found by the climb's first step, and an unsaved one marks nothing on disk; otherwise the
-// nearest ancestor holding a `.maxproj`, climbed no higher than the nearest client-named root that
-// holds this document; otherwise the document is a single file, checked against the library tiers
-// and never swept. Only a `.maxproj` or a library tier states a project. A named root is a ceiling and never a rung: a directory above the one the client
-// opened may hold a `.maxproj` of its own, and rooting a document with no `.maxproj` at the named
-// root would load everything under it for a program `maxon build <file>` compiles from its own
-// directory. A client that names no root leaves the climb uncapped.
+// nearest ancestor holding a `.maxproj`, climbed no higher than the nearest workspace folder above
+// this document, matched by identity; otherwise the document is a single file, checked against the
+// library tiers and never swept. Only a `.maxproj` or a library tier states a project. A folder is a
+// ceiling and never a rung: a directory above the one the client opened may hold a `.maxproj` of its
+// own, and rooting a document with no `.maxproj` at the folder would load everything under it for a
+// program `maxon build <file>` compiles from its own directory. A client that names no folder leaves
+// the climb uncapped.
+//
+// A path's identity (`CacheRoot.projectIdentityPathOf`) is only ever a key, the question "is this the
+// same file, folder or project". Every path a compile, a sweep or the client is handed stays in a
+// spelling the client sent (`RootName`), because nothing maps an identity back to the spelling the
+// editor knows the file by.
 //
 // The ladder names a project's directory and nothing more. Which files the project holds, and the
 // root its namespaces are measured from, is `projectSourcesIn`'s answer: the `sources` its
@@ -25,9 +31,10 @@
 // only in a trusted workspace, and off the session loop by that project's own resolver
 // (`HeldRoot.resolver`).
 //
-// The named roots change mid-session: `workspace/didChangeWorkspaceFolders` adds and removes them, and
-// a removed root takes every project held under it. The sweep under a root prunes a directory holding
-// a `.maxproj`: projects do not nest, and a nested one must not change the outer project's index.
+// The folders change mid-session: `workspace/didChangeWorkspaceFolders` adds and removes them, and
+// removing a folder's last open spelling takes every project held under it. The sweep under a root
+// prunes a directory holding a `.maxproj`: projects do not nest, and a nested one must not change the
+// outer project's index.
 //
 // ⚠ Answering `unavailable` costs a feature its cross-file half and leaves the in-buffer half standing,
 // which is what an editor should see: fewer answers, never a refused request.
@@ -38,12 +45,37 @@ end 'LspCorpus'
 
 module typealias LspClientRootArray = Array with FilePath
 
+module type RootName
+	module let spelled as FilePath
+	module let identity as FilePath
+
+	module static function of(spelled FilePath, identity FilePath) returns RootName
+		return Self{spelled: spelled, identity: identity}
+	end 'of'
+
+	module function key() returns String
+		return identityKeyOf(self.identity)
+	end 'key'
+end 'RootName'
+
+module typealias RootNameArray = Array with RootName
+
+module type LspFolder
+	module let name as RootName
+
+	module static function of(spelled FilePath, identity FilePath) returns LspFolder
+		return Self{name: RootName.of(spelled, identity: identity)}
+	end 'of'
+end 'LspFolder'
+
+module typealias LspFolderArray = Array with LspFolder
+
 module typealias LspProjectFileCount = int(0 to u64.max)
 
 module union LspProjectFacts
-	swept(root FilePath, fileCount LspProjectFileCount)
-	unswept(root FilePath)
-	singleFile(path FilePath)
+	swept(root RootName, fileCount LspProjectFileCount)
+	unswept(root RootName)
+	singleFile(root RootName)
 	unlocated
 end 'LspProjectFacts'
 
@@ -57,21 +89,78 @@ union DocumentDirectory
 	none
 end 'DocumentDirectory'
 
-type ReaderDocument
+type DocumentAncestry
+	module let names as RootNameArray
+	module let ceiling as ProjectClimbCeiling
+
+	static function create(names RootNameArray, ceiling ProjectClimbCeiling) returns DocumentAncestry
+		return Self{names: names, ceiling: ceiling}
+	end 'create'
+end 'DocumentAncestry'
+
+module type ReaderDocument
 	module let path as FilePath
-	module let normalized as FilePath
+	module let identity as FilePath
+	module let ancestry as RootNameArray
 	module let climbCeiling as ProjectClimbCeiling
-	module let directory as DocumentDirectory
 
-	static function of(readerPath FilePath, namedRoots LspClientRootArray) returns ReaderDocument
-		let normalized = readerPath.normalize()
+	static function create(path FilePath, identity FilePath, ancestry RootNameArray, climbCeiling ProjectClimbCeiling) returns ReaderDocument
+		return Self{path: path, identity: identity, ancestry: ancestry, climbCeiling: climbCeiling}
+	end 'create'
 
-		return Self{path: readerPath, normalized: normalized, climbCeiling: nearestNamedRootOver(normalized, namedRoots: namedRoots), directory: directoryHolding(readerPath)}
+	module function named() returns RootName
+		return RootName.of(self.path, identity: self.identity)
+	end 'named'
+
+	module function ancestorSpelledAs(dir FilePath) returns RootName
+		for ancestor in self.ancestry 'eachAncestor'
+			if ancestor.spelled.equals(dir) 'theAncestor'
+				return ancestor.clone()
+			end 'theAncestor'
+		end 'eachAncestor'
+
+		panic("ReaderDocument.ancestorSpelledAs: '{dir.toString()}' is not a directory above '{self.path.toString()}', and the climb that named it visits only the document's own ancestors")
+	end 'ancestorSpelledAs'
+
+	module static function of(path FilePath, folders LspFolderArray) returns ReaderDocument throws RunCacheError
+		match directoryHolding(path) 'directory'
+			none then return Self.create(path, identity: path, ancestry: RootNameArray.create(), climbCeiling: ProjectClimbCeiling.none)
+			at(dir) then return try placedDocument(path, dir: dir, folders: folders)
+		end 'directory'
 	end 'of'
 end 'ReaderDocument'
 
-// Made once per request and handed down: the tier probe and the tier directories' normalisation
-// would otherwise be repeated by every step of one diagnostics publish.
+function placedDocument(path FilePath, dir FilePath, folders LspFolderArray) returns ReaderDocument throws RunCacheError
+	let identity = try entryIdentityPathOf(path)
+	let above = try ancestryAbove(dir, folders: folders)
+
+	return ReaderDocument.create(path, identity: identity, ancestry: above.names, climbCeiling: above.ceiling)
+end 'placedDocument'
+
+function ancestryAbove(dir FilePath, folders LspFolderArray) returns DocumentAncestry throws RunCacheError
+	var names = RootNameArray.create()
+	var current = dir.resolve(Directory.currentPath())
+
+	while true 'ascend'
+		let identity = try projectIdentityPathOf(current)
+		names.push(RootName.of(current, identity: identity))
+
+		if folderIdentifiedAs(folders, identity: identity) 'aNamedFolder'
+			return DocumentAncestry.create(names, ceiling: ProjectClimbCeiling.at(current))
+		end 'aNamedFolder'
+
+		let above = try current.parent() otherwise 'atTheRoot'
+			return DocumentAncestry.create(names, ceiling: ProjectClimbCeiling.none)
+		end 'atTheRoot'
+
+		current = above
+	end 'ascend'
+
+	panic("ancestryAbove: the ascent leaves only by returning or throwing")
+end 'ancestryAbove'
+
+// Made once per request and handed down: the tier probe would otherwise be repeated by every step of
+// one diagnostics publish.
 module type LspReaderSearch
 	module let document as ReaderDocument
 	module let tiers as LibraryTiers
@@ -83,8 +172,8 @@ module type LspReaderSearch
 		return Self{document: document, tiers: tiers, workingDirectory: workingDirectory, workspace: workspace, tier: tierHolding(document, tiers: tiers)}
 	end 'create'
 
-	module static function of(readerPath FilePath, tiers LibraryTiers, workspace LspWorkspaceState) returns LspReaderSearch
-		return LspReaderSearch.create(ReaderDocument.of(readerPath, namedRoots: workspace.namedRoots), tiers: tiers, workingDirectory: Directory.currentPath(), workspace: workspace)
+	module static function of(document ReaderDocument, tiers LibraryTiers, workspace LspWorkspaceState) returns LspReaderSearch
+		return LspReaderSearch.create(document, tiers: tiers, workingDirectory: Directory.currentPath(), workspace: workspace)
 	end 'of'
 end 'LspReaderSearch'
 
@@ -104,13 +193,13 @@ module enum RootPurpose
 end 'RootPurpose'
 
 module union WorkspaceRoot
-	projectDirectory(dir FilePath)
-	libraryTier(dir FilePath)
-	singleFile
+	projectDirectory(name RootName)
+	libraryTier(name RootName)
+	singleFile(name RootName)
 end 'WorkspaceRoot'
 
 union TierMembership
-	inTier(dir FilePath)
+	inTier(name RootName)
 	outside
 end 'TierMembership'
 
@@ -147,19 +236,19 @@ type HeldCorpus
 	end 'create'
 
 	function sweptFor(root WorkspaceRoot, request SweepRequest, workspace LspWorkspaceState) returns SweptProject
-		if self.resweepMovesTheRoot(root, readerPath: documentOf(request), workspace: workspace) 'rerooted'
+		if self.resweepMovesTheRoot(root, workspace: workspace) 'rerooted'
 			return SweptProject.rerooted
 		end 'rerooted'
 
 		return self.project.sweptOver(self.sweep, request: request)
 	end 'sweptFor'
 
-	function resweepMovesTheRoot(root WorkspaceRoot, readerPath FilePath, workspace LspWorkspaceState) returns bool
+	function resweepMovesTheRoot(root WorkspaceRoot, workspace LspWorkspaceState) returns bool
 		if self.sweepIsFresh() 'sweptRecently'
 			return false
 		end 'sweptRecently'
 
-		let sources = sourcesUnder(root, selection: self.selection, readerPath: readerPath, workspace: workspace)
+		let sources = sourcesUnder(root, selection: self.selection, workspace: workspace)
 
 		if not sources.root.equals(self.buildRoot) 'rootMoved'
 			return true
@@ -185,7 +274,7 @@ type HeldCorpus
 		self.sweptAtMs = Clock.nowMs()
 	end 'holdCompletedWalk'
 
-	function facts(root FilePath) returns LspProjectFacts
+	function facts(root RootName) returns LspProjectFacts
 		return match self.sweep 'sweep'
 			swept(sources) gives LspProjectFacts.swept(root, fileCount: productionSourceCount(sources))
 			walkFailed gives LspProjectFacts.unswept(root)
@@ -219,7 +308,7 @@ type HeldWorkspace
 		return Self{corpora: HeldCorpusMap.create()}
 	end 'create'
 
-	function sweptFor(root WorkspaceRoot, key String, tiers LibraryTiers, request SweepRequest, workspace LspWorkspaceState) returns SweptProject
+	function sweptFor(root WorkspaceRoot, tiers LibraryTiers, request SweepRequest, workspace LspWorkspaceState) returns SweptProject
 		let selection = readerSelectionOf(documentOf(request))
 
 		if self.corpora.contains(selection) 'heldAlready'
@@ -237,15 +326,17 @@ type HeldWorkspace
 
 		match root 'root'
 			projectDirectory or
-			libraryTier then return self.announcedSwept(root, key: key, selection: selection, tiers: tiers, request: request, workspace: workspace)
+			libraryTier then return self.announcedSwept(root, selection: selection, tiers: tiers, request: request, workspace: workspace)
 			singleFile then return self.builtSwept(root, selection: selection, tiers: tiers, request: request, workspace: workspace)
 		end 'root'
 	end 'sweptFor'
 
-	function announcedSwept(root WorkspaceRoot, key String, selection SourceSelection, tiers LibraryTiers, request SweepRequest, workspace LspWorkspaceState) returns SweptProject
-		writeProjectLoadingNotification(workspace.writer, rootPath: key, loading: true)
+	function announcedSwept(root WorkspaceRoot, selection SourceSelection, tiers LibraryTiers, request SweepRequest, workspace LspWorkspaceState) returns SweptProject
+		let rootPath = heldRootOf(root).spelled.toString()
+
+		writeProjectLoadingNotification(workspace.writer, rootPath: rootPath, loading: true)
 		var swept = self.builtSwept(root, selection: selection, tiers: tiers, request: request, workspace: workspace)
-		writeProjectLoadingNotification(workspace.writer, rootPath: key, loading: false)
+		writeProjectLoadingNotification(workspace.writer, rootPath: rootPath, loading: false)
 
 		return swept
 	end 'announcedSwept'
@@ -253,7 +344,7 @@ type HeldWorkspace
 	// Every return here reaches the `loading: false` in `announcedSwept`; one that skipped it would leave
 	// the client showing this project as loading for the rest of the session.
 	function builtSwept(root WorkspaceRoot, selection SourceSelection, tiers LibraryTiers, request SweepRequest, workspace LspWorkspaceState) returns SweptProject
-		let sources = sourcesUnder(root, selection: selection, readerPath: documentOf(request), workspace: workspace)
+		let sources = sourcesUnder(root, selection: selection, workspace: workspace)
 		var project = try libraryTierProject(sources.root, tiers: tiers, buffer: OpenBuffer.none, fileMemos: workspace.fileMemos) otherwise return SweptProject.unavailable
 		var fresh = HeldCorpus.create(project, selection: selection, sources: sources, sweptAtMs: Clock.nowMs())
 
@@ -269,14 +360,14 @@ type HeldWorkspace
 		return swept
 	end 'builtSwept'
 
-	function facts(root FilePath) returns LspProjectFacts
+	function facts(root RootName) returns LspProjectFacts
 		for selection in SourceSelection.allCases 'eachSelection'
 			if let held = try self.corpora.get(selection) 'heldForThisSelection'
 				return held.facts(root)
 			end 'heldForThisSelection'
 		end 'eachSelection'
 
-		panic("HeldWorkspace.facts: '{root.toString()}' is held, and a workspace is held only once one of its corpora has loaded")
+		panic("HeldWorkspace.facts: '{root.spelled.toString()}' is held, and a workspace is held only once one of its corpora has loaded")
 	end 'facts'
 end 'HeldWorkspace'
 
@@ -320,30 +411,45 @@ let UnresolvedProjectRetryMs = 10000
 let ProjectLoadingMethod = "maxon/projectLoading"
 let ProjectLoadingKey = "loading"
 
+module union LibraryTiersMemo
+	unlocated
+	located(tiers LibraryTiers)
+end 'LibraryTiersMemo'
+
+module union ProjectResolution
+	landed(key String)
+	superseded
+end 'ProjectResolution'
+
 module type LspWorkspaceState
 	module var held as RecentHeldRoots
 	module var trusted as bool
-	module var namedRoots as LspClientRootArray
+	module var folders as LspFolderArray
 	module var fileMemos as SharedFileMemoMap
 	module let writer as LspStdoutWriter.handle
 	module var arrivals as LspArrivalPromiseArray
 	module var recordWatches as RecordWatchMap
 	var nextResolutionTicket as ResolutionTicket
+	module var tiersMemo as LibraryTiersMemo
 
 	module static function create(writer LspStdoutWriter.handle) returns LspWorkspaceState
-		return Self{held: RecentHeldRoots.create(), trusted: true, namedRoots: LspClientRootArray.create(), fileMemos: SharedFileMemoMap.create(), writer: writer, arrivals: LspArrivalPromiseArray.create(), recordWatches: RecordWatchMap.create(), nextResolutionTicket: 0}
+		return Self{held: RecentHeldRoots.create(), trusted: true, folders: LspFolderArray.create(), fileMemos: SharedFileMemoMap.create(), writer: writer, arrivals: LspArrivalPromiseArray.create(), recordWatches: RecordWatchMap.create(), nextResolutionTicket: 0, tiersMemo: LibraryTiersMemo.unlocated}
 	end 'create'
 
-	module function projectInputsOf(dir FilePath) returns ProjectInputsAnswer
-		var root = self.held.rootAt(dir.toString())
+	module function projectInputsOf(name RootName) returns ProjectInputsAnswer
+		var root = self.held.rootAt(name)
 
-		return root.inputs.answerFor(dir, workspace: self)
+		return root.inputs.answerFor(root.name.spelled, workspace: self)
 	end 'projectInputsOf'
 
-	module function projectResolved(dir FilePath, answer ProjectInputsAnswer, ticket ResolutionTicket) returns bool
-		var root = try self.held.peek(dir.toString()) otherwise return false
+	module function projectResolved(dir FilePath, answer ProjectInputsAnswer, ticket ResolutionTicket) returns ProjectResolution
+		var root = try self.held.rootSpelledAs(dir) otherwise return ProjectResolution.superseded
 
-		return root.inputs.hold(answer, ticket: ticket)
+		if not root.inputs.hold(answer, ticket: ticket) 'superseded'
+			return ProjectResolution.superseded
+		end 'superseded'
+
+		return ProjectResolution.landed(root.name.key())
 	end 'projectResolved'
 
 	module function nextArrival() returns LspArrival
@@ -358,7 +464,7 @@ module type LspWorkspaceState
 	function requestResolution(dir FilePath) returns ResolutionTicket
 		self.nextResolutionTicket = self.nextResolutionTicket + 1
 		let ticket = self.nextResolutionTicket
-		var root = self.held.rootAt(dir.toString())
+		var root = try self.held.rootSpelledAs(dir) otherwise panic("LspWorkspaceState.requestResolution: a resolution is requested only through `projectInputsOf`, which files the root under this very spelling first")
 		var resolver = root.resolver.obtained(function() gives spawn LspProjectResolver.create())
 		self.arrivals.push(try resolver.resolve(dir.clone(), ticket: ticket, previous: root.inputs.previousInputStamps().clone(), sendTimeout: ForeverMs) otherwise panic("LspWorkspaceState.requestResolution: a send that waits forever for room, to a resolver this workspace holds, was refused"))
 
@@ -366,8 +472,20 @@ module type LspWorkspaceState
 	end 'requestResolution'
 end 'LspWorkspaceState'
 
+module function lspLibraryTiers(workspace LspWorkspaceState) returns LibraryTiers throws CompileError
+	match workspace.tiersMemo 'memo'
+		located(tiers) then return tiers.clone()
+		unlocated then break
+	end 'memo'
+
+	let tiers = try LibraryTiers.locate()
+	workspace.tiersMemo = LibraryTiersMemo.located(tiers.clone())
+
+	return tiers
+end 'lspLibraryTiers'
+
 module function lspRememberClientRoots(workspace LspWorkspaceState, roots LspClientRootArray)
-	workspace.namedRoots = LspClientRootArray.create()
+	workspace.folders = LspFolderArray.create()
 
 	for root in roots 'eachRoot'
 		rememberOneClientRoot(workspace, root: root)
@@ -384,74 +502,105 @@ module function lspChangeClientRoots(workspace LspWorkspaceState, added LspClien
 	end 'eachAdded'
 end 'lspChangeClientRoots'
 
-function rememberOneClientRoot(workspace LspWorkspaceState, root FilePath)
-	let dir = root.normalize()
+union ClientRootIdentity
+	identified(identity FilePath)
+	refused
+end 'ClientRootIdentity'
 
-	if namedRootsHold(workspace.namedRoots, dir: dir) 'alreadyNamed'
+function identifiedClientRoot(workspace LspWorkspaceState, root FilePath) returns ClientRootIdentity
+	let identity = try projectIdentityPathOf(root) otherwise (e) 'unidentifiable'
+		announceLspRefusal(workspace.writer, sentence: e.sentence())
+
+		return ClientRootIdentity.refused
+	end 'unidentifiable'
+
+	return ClientRootIdentity.identified(identity)
+end 'identifiedClientRoot'
+
+// One entry per spelling, not per identity: the client removes a folder by the spelling it added it
+// under, and `forgetClientRoot` drops the projects only with an identity's last spelling.
+function rememberOneClientRoot(workspace LspWorkspaceState, root FilePath)
+	let spelled = root.normalize()
+
+	if folderSpelledAs(workspace.folders, spelled: spelled) 'alreadyNamed'
 		return
 	end 'alreadyNamed'
 
-	workspace.namedRoots.push(dir)
+	match identifiedClientRoot(workspace, root: spelled) 'identity'
+		identified(identity) then workspace.folders.push(LspFolder.of(spelled, identity: identity))
+		refused then return
+	end 'identity'
 end 'rememberOneClientRoot'
 
-function namedRootsHold(namedRoots LspClientRootArray, dir FilePath) returns bool
-	for existing in namedRoots 'eachRoot'
-		if existing.equals(dir) 'theSameRoot'
+function folderSpelledAs(folders LspFolderArray, spelled FilePath) returns bool
+	for folder in folders 'eachFolder'
+		if folder.name.spelled.equals(spelled) 'theSameSpelling'
 			return true
-		end 'theSameRoot'
-	end 'eachRoot'
+		end 'theSameSpelling'
+	end 'eachFolder'
 
 	return false
-end 'namedRootsHold'
+end 'folderSpelledAs'
+
+function folderIdentifiedAs(folders LspFolderArray, identity FilePath) returns bool
+	for folder in folders 'eachFolder'
+		if folder.name.identity.equals(identity) 'theSameFolder'
+			return true
+		end 'theSameFolder'
+	end 'eachFolder'
+
+	return false
+end 'folderIdentifiedAs'
 
 function forgetClientRoot(workspace LspWorkspaceState, root FilePath)
-	let dir = root.normalize()
-	var kept = LspClientRootArray.create()
+	let spelled = root.normalize()
+	var kept = LspFolderArray.create()
+	var closed = LspFolderArray.create()
 
-	for existing in workspace.namedRoots 'eachRoot'
-		if not existing.equals(dir) 'staysNamed'
-			kept.push(existing)
-		end 'staysNamed'
-	end 'eachRoot'
+	for folder in workspace.folders 'eachFolder'
+		if folder.name.spelled.equals(spelled) 'closesNow'
+			closed.push(folder.clone())
+			continue
+		end 'closesNow'
 
-	workspace.namedRoots = kept
+		kept.push(folder.clone())
+	end 'eachFolder'
 
-	// A root is dropped in two places or not at all: the named-root list, and the projects already built
+	workspace.folders = kept
+
+	// A folder is dropped in two places or not at all: the folder list, and the projects already built
 	// under it. Nothing but capacity expires a held project, so one left behind outlives the folder the
-	// author closed.
-	workspace.held.dropUnder(dir)
+	// author closed. Several spellings of one folder share their projects, so the projects go with the last.
+	for gone in closed 'eachClosed'
+		if not folderIdentifiedAs(workspace.folders, identity: gone.name.identity) 'lastSpelling'
+			workspace.held.dropUnder(gone.name.identity)
+		end 'lastSpelling'
+	end 'eachClosed'
 end 'forgetClientRoot'
-
-function heldProjectIsUnder(key String, dir FilePath) returns bool
-	let held = try FilePath.from(key) otherwise return false
-
-	return held.normalize().isInside(dir)
-end 'heldProjectIsUnder'
 
 // Both halves are a filesystem probe and neither varies with the document, so it is made once per
 // answer and handed down: `listProjectsAnswer`'s walk over the open documents would otherwise pay
 // for both once per document.
-module function lspRootSearch() returns LspRootSearch
-	let tiers = try LibraryTiers.locate() otherwise return LspRootSearch.unavailable
+module function lspRootSearch(workspace LspWorkspaceState) returns LspRootSearch
+	let tiers = try lspLibraryTiers(workspace) otherwise return LspRootSearch.unavailable
 
 	return LspRootSearch.ready(tiers, workingDirectory: Directory.currentPath())
 end 'lspRootSearch'
 
 // The directory test comes before the search, which answers `singleFile` with no ladder when the
 // filesystem could not be probed and would file a path-less document under its own uri text.
-module function lspProjectFactsOf(workspace LspWorkspaceState, readerPath FilePath, search LspRootSearch) returns LspProjectFacts
-	let document = ReaderDocument.of(readerPath, namedRoots: workspace.namedRoots)
+module function lspProjectFactsOf(workspace LspWorkspaceState, document ReaderDocument, search LspRootSearch) returns LspProjectFacts
+	if document.ancestry.isEmpty() 'sitsInNoDirectory'
+		return LspProjectFacts.unlocated
+	end 'sitsInNoDirectory'
 
-	return match document.directory 'directory'
-		at gives locatedFacts(document, search: search, workspace: workspace)
-		none gives LspProjectFacts.unlocated
-	end 'directory'
+	return locatedFacts(document, search: search, workspace: workspace)
 end 'lspProjectFactsOf'
 
 function locatedFacts(document ReaderDocument, search LspRootSearch, workspace LspWorkspaceState) returns LspProjectFacts
 	return match search 'search'
 		ready(tiers, workingDirectory) gives factsUnderTheRootOf(LspReaderSearch.create(document, tiers: tiers, workingDirectory: workingDirectory, workspace: workspace))
-		unavailable gives LspProjectFacts.singleFile(document.path)
+		unavailable gives LspProjectFacts.singleFile(document.named())
 	end 'search'
 end 'locatedFacts'
 
@@ -460,17 +609,17 @@ function factsUnderTheRootOf(reader LspReaderSearch) returns LspProjectFacts
 
 	return match root 'root'
 		projectDirectory or
-		libraryTier gives heldProjectFacts(reader.workspace, root: root, readerPath: reader.document.path)
-		singleFile gives LspProjectFacts.singleFile(reader.document.path)
+		libraryTier gives heldProjectFacts(reader.workspace, root: root)
+		singleFile(name) gives LspProjectFacts.singleFile(name)
 	end 'root'
 end 'factsUnderTheRootOf'
 
-// The key is `heldRootOf`'s answer, which is the derivation `heldProjectSwept` files a project under. A
-// second spelling of it here reads a miss for every root and reports every project unswept, with nothing
-// failing to say so.
-function heldProjectFacts(workspace LspWorkspaceState, root WorkspaceRoot, readerPath FilePath) returns LspProjectFacts
-	let heldRoot = heldRootOf(root, readerPath: readerPath)
-	let held = try workspace.held.peek(heldRoot.toString()) otherwise return LspProjectFacts.unswept(heldRoot)
+// The key is the root's identity, which is the derivation `heldProjectSwept` files a project under. A
+// second derivation of it here reads a miss for every root and reports every project unswept, with
+// nothing failing to say so.
+function heldProjectFacts(workspace LspWorkspaceState, root WorkspaceRoot) returns LspProjectFacts
+	let heldRoot = heldRootOf(root)
+	let held = try workspace.held.peek(heldRoot.key()) otherwise return LspProjectFacts.unswept(heldRoot)
 
 	return match held.workspace 'workspace'
 		built(heldWorkspace) gives heldWorkspace.facts(heldRoot)
@@ -478,15 +627,35 @@ function heldProjectFacts(workspace LspWorkspaceState, root WorkspaceRoot, reade
 	end 'workspace'
 end 'heldProjectFacts'
 
-module function lspDocumentCorpus(workspace LspWorkspaceState, uri String) returns LspCorpus
-	let readerPath = try FilePath.from(uri) otherwise return LspCorpus.unavailable
-	let document = ReaderDocument.of(readerPath, namedRoots: workspace.namedRoots)
+module union LspDocumentEntry
+	resolved(document ReaderDocument)
+	notAPath
+	unidentifiable(path FilePath, reason String)
+end 'LspDocumentEntry'
 
-	return match lspRootSearch() 'search'
-		ready(tiers, workingDirectory) gives sweptWorkspace(workspace, root: workspaceRootOf(LspReaderSearch.create(document, tiers: tiers, workingDirectory: workingDirectory, workspace: workspace), purpose: RootPurpose.readsTheDocument), tiers: tiers, readerPath: readerPath)
+module function lspDocumentOf(workspace LspWorkspaceState, uri String) returns LspDocumentEntry
+	let spelled = try FilePath.from(uri) otherwise return LspDocumentEntry.notAPath
+	let document = try ReaderDocument.of(spelled, folders: workspace.folders) otherwise (e) 'unidentifiable'
+		return LspDocumentEntry.unidentifiable(spelled, reason: e.sentence())
+	end 'unidentifiable'
+
+	return LspDocumentEntry.resolved(document)
+end 'lspDocumentOf'
+
+module function lspDocumentCorpus(workspace LspWorkspaceState, uri String) returns LspCorpus
+	match lspDocumentOf(workspace, uri: uri) 'document'
+		resolved(document) then return corpusOfDocument(workspace, document: document)
+		notAPath or
+		unidentifiable then return LspCorpus.unavailable
+	end 'document'
+end 'lspDocumentCorpus'
+
+function corpusOfDocument(workspace LspWorkspaceState, document ReaderDocument) returns LspCorpus
+	return match lspRootSearch(workspace) 'search'
+		ready(tiers, workingDirectory) gives sweptWorkspace(workspace, root: workspaceRootOf(LspReaderSearch.create(document, tiers: tiers, workingDirectory: workingDirectory, workspace: workspace), purpose: RootPurpose.readsTheDocument), tiers: tiers, readerPath: document.path)
 		unavailable gives LspCorpus.unavailable
 	end 'search'
-end 'lspDocumentCorpus'
+end 'corpusOfDocument'
 
 module function lspProjectCorpus(reader LspReaderSearch, root WorkspaceRoot) returns LspCorpus
 	return match root 'root'
@@ -507,7 +676,7 @@ module function lspLoadProject(reader LspReaderSearch)
 end 'lspLoadProject'
 
 module union ProjectCheckRoot
-	at(dir FilePath)
+	at(name RootName)
 	none
 end 'ProjectCheckRoot'
 
@@ -517,43 +686,11 @@ module function lspProjectCheckRoot(reader LspReaderSearch, root WorkspaceRoot) 
 	end 'notAProgramABuildChecks'
 
 	return match root 'root'
-		projectDirectory(dir) gives ProjectCheckRoot.at(dir)
+		projectDirectory(name) gives ProjectCheckRoot.at(name)
 		libraryTier or
 		singleFile gives ProjectCheckRoot.none
 	end 'root'
 end 'lspProjectCheckRoot'
-
-function nearestNamedRootOver(document FilePath, namedRoots LspClientRootArray) returns ProjectClimbCeiling
-	var nearest = ProjectClimbCeiling.none
-
-	for root in namedRoots 'eachRoot'
-		nearest = nearerNamedRoot(nearest, candidate: root, document: document)
-	end 'eachRoot'
-
-	return nearest
-end 'nearestNamedRootOver'
-
-// A root that does not hold this document is never selected, not even as the only candidate: the climb
-// never meets it, so it caps nothing, and holding it would refuse a later root that does hold the
-// document.
-function nearerNamedRoot(nearest ProjectClimbCeiling, candidate FilePath, document FilePath) returns ProjectClimbCeiling
-	if not document.isInside(candidate) 'holdsNothingOfThisDocument'
-		return nearest
-	end 'holdsNothingOfThisDocument'
-
-	if not candidateIsNearer(nearest, dir: candidate) 'noNearerThanTheOneHeld'
-		return nearest
-	end 'noNearerThanTheOneHeld'
-
-	return ProjectClimbCeiling.at(candidate)
-end 'nearerNamedRoot'
-
-function candidateIsNearer(nearest ProjectClimbCeiling, dir FilePath) returns bool
-	return match nearest 'nearest'
-		at(held) gives dir.isInside(held)
-		none gives true
-	end 'nearest'
-end 'candidateIsNearer'
 
 function sweptWorkspace(workspace LspWorkspaceState, root WorkspaceRoot, tiers LibraryTiers, readerPath FilePath) returns LspCorpus
 	match heldProjectSwept(workspace, root: root, tiers: tiers, request: SweepRequest.reading(readerPath)) 'swept'
@@ -565,23 +702,24 @@ function sweptWorkspace(workspace LspWorkspaceState, root WorkspaceRoot, tiers L
 end 'sweptWorkspace'
 
 function heldProjectSwept(workspace LspWorkspaceState, root WorkspaceRoot, tiers LibraryTiers, request SweepRequest) returns SweptProject
-	let key = heldRootOf(root, readerPath: documentOf(request)).toString()
+	let name = heldRootOf(root)
+	let key = name.key()
 
 	if var held = try workspace.held.recentAt(key) 'heldAlready'
 		var slot = held.workspace
 
 		match slot 'workspace'
-			built(heldWorkspace) then return heldWorkspace.sweptFor(root, key: key, tiers: tiers, request: request, workspace: workspace)
+			built(heldWorkspace) then return heldWorkspace.sweptFor(root, tiers: tiers, request: request, workspace: workspace)
 			notBuilt then break
 		end 'workspace'
 	end 'heldAlready'
 
 	var fresh = HeldWorkspace.create()
-	var swept = fresh.sweptFor(root, key: key, tiers: tiers, request: request, workspace: workspace)
+	var swept = fresh.sweptFor(root, tiers: tiers, request: request, workspace: workspace)
 
 	match swept 'outcome'
 		read or
-		loaded then workspace.held.holdWorkspace(key, workspace: fresh)
+		loaded then workspace.held.holdWorkspace(name, workspace: fresh)
 		unavailable then break
 		rerooted then panic("heldProjectSwept: a held workspace rebuilds a corpus whose root moved before it answers")
 	end 'outcome'
@@ -602,10 +740,10 @@ function writeProjectLoadingNotification(writer LspStdoutWriter.handle, rootPath
 	writeLspNotification(writer, doc: doc, method: ProjectLoadingMethod, params: params.finish())
 end 'writeProjectLoadingNotification'
 
-module function lspProjectCheckerFor(workspace LspWorkspaceState, dir FilePath, tiers LibraryTiers) returns LspProjectChecker.handle
-	var root = workspace.held.rootAt(dir.toString())
+module function lspProjectCheckerFor(workspace LspWorkspaceState, name RootName, tiers LibraryTiers) returns LspProjectChecker.handle
+	var root = workspace.held.rootAt(name)
 
-	return root.checker.obtained(function() gives spawn LspProjectChecker.create(dir.clone(), stdlibDir: tiers.stdlibDir.clone(), runtimeDir: tiers.runtimeDir.clone(), writer: workspace.writer.clone()))
+	return root.checker.obtained(function() gives spawn LspProjectChecker.create(name.spelled.clone(), stdlibDir: tiers.stdlibDir.clone(), runtimeDir: tiers.runtimeDir.clone(), writer: workspace.writer.clone()))
 end 'lspProjectCheckerFor'
 
 union HeldWorkspaceSlot
@@ -637,13 +775,14 @@ typealias HeldChecker = HeldService with LspProjectChecker.handle
 typealias HeldResolver = HeldService with LspProjectResolver.handle
 
 type HeldRoot
+	module let name as RootName
 	module var workspace as HeldWorkspaceSlot
 	module var checker as HeldChecker
 	module var resolver as HeldResolver
 	module var inputs as ProjectInputsMemo
 
-	static function create() returns HeldRoot
-		return Self{workspace: HeldWorkspaceSlot.notBuilt, checker: HeldChecker.create(), resolver: HeldResolver.create(), inputs: ProjectInputsMemo.create()}
+	static function create(name RootName) returns HeldRoot
+		return Self{name: name, workspace: HeldWorkspaceSlot.notBuilt, checker: HeldChecker.create(), resolver: HeldResolver.create(), inputs: ProjectInputsMemo.create()}
 	end 'create'
 
 	function demote()
@@ -670,24 +809,30 @@ module enum ProjectDocuments
 end 'ProjectDocuments'
 
 module function documentIsInProject(workspace LspWorkspaceState, uri String, key String, search LspRootSearch, selection ProjectDocuments) returns bool
-	let readerPath = try FilePath.from(uri) otherwise return false
+	match lspDocumentOf(workspace, uri: uri) 'document'
+		resolved(document) then return documentPathIsInProject(workspace, document: document, key: key, search: search, selection: selection)
+		notAPath or
+		unidentifiable then return false
+	end 'document'
+end 'documentIsInProject'
 
+function documentPathIsInProject(workspace LspWorkspaceState, document ReaderDocument, key String, search LspRootSearch, selection ProjectDocuments) returns bool
 	let selected = match selection 'selection'
 		every gives true
-		projectFileOnly gives isProjectFileName(readerPath.filename())
+		projectFileOnly gives isProjectFileName(document.path.filename())
 	end 'selection'
 
 	if not selected 'notSelected'
 		return false
 	end 'notSelected'
 
-	return match lspProjectFactsOf(workspace, readerPath: readerPath, search: search) 'facts'
-		swept(root, _) gives root.toString() == key
-		unswept(root) gives root.toString() == key
+	return match lspProjectFactsOf(workspace, document: document, search: search) 'facts'
+		swept(root, _) gives root.key() == key
+		unswept(root) gives root.key() == key
 		singleFile or
 		unlocated gives false
 	end 'facts'
-end 'documentIsInProject'
+end 'documentPathIsInProject'
 
 typealias HeldRootMap = Map with (String, HeldRoot)
 
@@ -699,13 +844,33 @@ module type RecentHeldRoots
 		return Self{roots: HeldRootMap.create(), order: HeldProjectKeyArray.create()}
 	end 'create'
 
-	function rootAt(key String) returns HeldRoot
+	function rootAt(name RootName) returns HeldRoot
+		let key = name.key()
+
 		if not self.roots.contains(key) 'firstUse'
-			self.roots.upsert(key, value: HeldRoot.create())
+			self.roots.upsert(key, value: HeldRoot.create(name))
 		end 'firstUse'
 
 		return try self.recentAt(key) otherwise panic("RecentHeldRoots.rootAt: '{key}' is filed above when absent")
 	end 'rootAt'
+
+	// A root reached by a second spelling answers under the spelling it was first held by, so one held
+	// project registers its sources, announces its loading and is listed under one spelling.
+	module function settled(name RootName) returns RootName
+		let held = try self.roots.get(name.key()) otherwise return name
+
+		return held.name.clone()
+	end 'settled'
+
+	function rootSpelledAs(dir FilePath) returns HeldRoot throws MapError
+		for (key, held) in self.roots 'eachRoot'
+			if held.name.spelled.equals(dir) 'theRoot'
+				return try self.roots.get(key)
+			end 'theRoot'
+		end 'eachRoot'
+
+		throw MapError.keyNotFound
+	end 'rootSpelledAs'
 
 	function recentAt(key String) returns HeldRoot throws MapError
 		var held = try self.roots.get(key)
@@ -732,8 +897,8 @@ module type RecentHeldRoots
 		held.workspace = HeldWorkspaceSlot.notBuilt
 	end 'forgetCorpusAt'
 
-	function holdWorkspace(key String, workspace HeldWorkspace)
-		var held = self.rootAt(key)
+	function holdWorkspace(name RootName, workspace HeldWorkspace)
+		var held = self.rootAt(name)
 		held.workspace = HeldWorkspaceSlot.built(workspace)
 	end 'holdWorkspace'
 
@@ -783,11 +948,11 @@ module type RecentHeldRoots
 	end 'releaseIfDemoted'
 
 	// Walks the map, not the order: a demoted root is in the map alone, and goes with its folder too.
-	function dropUnder(dir FilePath)
+	function dropUnder(folder FilePath)
 		var gone = HeldProjectKeyArray.create()
 
-		for (key, _) in self.roots 'eachRoot'
-			if heldProjectIsUnder(key, dir: dir) 'goesWithTheFolder'
+		for (key, held) in self.roots 'eachRoot'
+			if held.name.identity.isInside(folder) 'goesWithTheFolder'
 				gone.push(key.clone())
 			end 'goesWithTheFolder'
 		end 'eachRoot'
@@ -808,11 +973,11 @@ module type RecentHeldRoots
 	end 'dropUnder'
 end 'RecentHeldRoots'
 
-function heldRootOf(root WorkspaceRoot, readerPath FilePath) returns FilePath
+function heldRootOf(root WorkspaceRoot) returns RootName
 	return match root 'root'
-		projectDirectory(dir) gives dir
-		libraryTier(dir) gives dir
-		singleFile gives readerPath
+		projectDirectory(name) gives name
+		libraryTier(name) gives name
+		singleFile(name) gives name
 	end 'root'
 end 'heldRootOf'
 
@@ -820,20 +985,30 @@ end 'heldRootOf'
 // would hold and the tier's files would be the project's own rather than library source, which they
 // are in every whole-program compile. It is still held and listed under the tier directory
 // (`heldRootOf`).
-function buildRootOf(root WorkspaceRoot, readerPath FilePath) returns FilePath
+function buildRootOf(root WorkspaceRoot) returns FilePath
 	return match root 'root'
-		libraryTier(dir) gives try dir.parent() otherwise panic("buildRootOf: '{dir.toString()}' is a library tier, a directory `LibraryTiers.locate` found by name inside another")
+		libraryTier(name) gives try name.spelled.parent() otherwise panic("buildRootOf: '{name.spelled.toString()}' is a library tier, a directory `LibraryTiers.locate` found by name inside another")
 		projectDirectory or
-		singleFile gives heldRootOf(root, readerPath: readerPath)
+		singleFile gives heldRootOf(root).spelled
 	end 'root'
 end 'buildRootOf'
 
 module function lspBufferRootOf(reader LspReaderSearch) returns FilePath
 	return match reader.tier 'tier'
-		inTier(dir) gives buildRootOf(WorkspaceRoot.libraryTier(dir), readerPath: reader.document.path)
+		inTier(name) gives buildRootOf(WorkspaceRoot.libraryTier(name))
 		outside gives reader.document.path
 	end 'tier'
 end 'lspBufferRootOf'
+
+// A tier document is registered under the tier's own spelling: library provenance
+// (`Queries.isLibrarySourceFile`) is a lexical test against the tier directory, so a buffer opened
+// through a link would read as a user file, with the tier's copy on disk loaded beside it.
+module function lspBufferPathOf(reader LspReaderSearch) returns FilePath
+	return match reader.tier 'tier'
+		inTier(name) gives name.spelled.join(try reader.document.identity.relativeTo(name.identity) otherwise panic("lspBufferPathOf: '{reader.document.identity.toString()}' is held in the tier '{name.identity.toString()}', so it lies below it"))
+		outside gives reader.document.path
+	end 'tier'
+end 'lspBufferPathOf'
 
 module type EditorSources
 	module let sweep as SourceSweep
@@ -849,11 +1024,11 @@ module type EditorSources
 	end 'refused'
 end 'EditorSources'
 
-function sourcesUnder(root WorkspaceRoot, selection SourceSelection, readerPath FilePath, workspace LspWorkspaceState) returns EditorSources
+function sourcesUnder(root WorkspaceRoot, selection SourceSelection, workspace LspWorkspaceState) returns EditorSources
 	return match root 'root'
-		projectDirectory(dir) gives projectSourcesIn(dir, selection: selection, answer: workspace.projectInputsOf(dir))
-		libraryTier(dir) gives EditorSources.walked(maxonSourcesIn(dir, selection: selection), root: buildRootOf(root, readerPath: readerPath))
-		singleFile gives EditorSources.walked(SourceSweep.swept(MaxonSourcePathArray.create()), root: buildRootOf(root, readerPath: readerPath))
+		projectDirectory(name) gives projectSourcesIn(name.spelled, selection: selection, answer: workspace.projectInputsOf(name))
+		libraryTier(name) gives EditorSources.walked(maxonSourcesIn(name.spelled, selection: selection), root: buildRootOf(root))
+		singleFile gives EditorSources.walked(SourceSweep.swept(MaxonSourcePathArray.create()), root: buildRootOf(root))
 	end 'root'
 end 'sourcesUnder'
 
@@ -1229,20 +1404,29 @@ end 'maxonSourcesIn'
 // This function only finds the `.maxproj` that marks a project; which files the project holds is
 // `projectSourcesIn`'s answer. A `.maxtasks` beside it marks nothing.
 module function workspaceRootOf(reader LspReaderSearch, purpose RootPurpose) returns WorkspaceRoot
+	return settledRoot(reader.workspace.held, root: foundRootOf(reader, purpose: purpose))
+end 'workspaceRootOf'
+
+function foundRootOf(reader LspReaderSearch, purpose RootPurpose) returns WorkspaceRoot
 	match reader.tier 'tier'
-		inTier(dir) then return WorkspaceRoot.libraryTier(dir)
+		inTier(name) then return WorkspaceRoot.libraryTier(name)
 		outside then break
 	end 'tier'
 
 	if isAProgramOfItsOwn(reader.document.path.filename(), purpose: purpose) 'aProgramOfItsOwn'
-		return WorkspaceRoot.singleFile
+		return WorkspaceRoot.singleFile(reader.document.named())
 	end 'aProgramOfItsOwn'
 
-	return match reader.document.directory 'directory'
-		at(dir) gives rootAround(reader.document, directory: dir, workingDirectory: reader.workingDirectory)
-		none gives WorkspaceRoot.singleFile
-	end 'directory'
-end 'workspaceRootOf'
+	return rootAround(reader.document)
+end 'foundRootOf'
+
+function settledRoot(held RecentHeldRoots, root WorkspaceRoot) returns WorkspaceRoot
+	return match root 'root'
+		projectDirectory(name) gives WorkspaceRoot.projectDirectory(held.settled(name))
+		libraryTier(name) gives WorkspaceRoot.libraryTier(held.settled(name))
+		singleFile(name) gives WorkspaceRoot.singleFile(held.settled(name))
+	end 'root'
+end 'settledRoot'
 
 function isAProgramOfItsOwn(name String, purpose RootPurpose) returns bool
 	return match purpose 'purpose'
@@ -1252,21 +1436,23 @@ function isAProgramOfItsOwn(name String, purpose RootPurpose) returns bool
 end 'isAProgramOfItsOwn'
 
 function tierHolding(document ReaderDocument, tiers LibraryTiers) returns TierMembership
-	if document.normalized.isInside(tiers.normalizedStdlibDir) 'aStdlibFile'
-		return TierMembership.inTier(tiers.stdlibDir)
+	if document.identity.isInside(tiers.stdlibIdentity) 'aStdlibFile'
+		return TierMembership.inTier(RootName.of(tiers.stdlibDir, identity: tiers.stdlibIdentity))
 	end 'aStdlibFile'
 
-	if document.normalized.isInside(tiers.normalizedRuntimeDir) 'aRuntimeFile'
-		return TierMembership.inTier(tiers.runtimeDir)
+	if document.identity.isInside(tiers.runtimeIdentity) 'aRuntimeFile'
+		return TierMembership.inTier(RootName.of(tiers.runtimeDir, identity: tiers.runtimeIdentity))
 	end 'aRuntimeFile'
 
 	return TierMembership.outside
 end 'tierHolding'
 
-function rootAround(document ReaderDocument, directory FilePath, workingDirectory FilePath) returns WorkspaceRoot
-	return match nearestProjectFile(directory.resolve(workingDirectory), ceiling: document.climbCeiling) 'manifest'
-		found(projectFile) gives projectRootAt(directoryHoldingProjectFile(projectFile))
-		none gives WorkspaceRoot.singleFile
+function rootAround(document ReaderDocument) returns WorkspaceRoot
+	let nearest = try document.ancestry.get(0) otherwise return WorkspaceRoot.singleFile(document.named())
+
+	return match nearestProjectFile(nearest.spelled, ceiling: document.climbCeiling) 'manifest'
+		found(projectFile) gives projectRootAt(document.ancestorSpelledAs(directoryHoldingProjectFile(projectFile)), document: document)
+		none gives WorkspaceRoot.singleFile(document.named())
 	end 'manifest'
 end 'rootAround'
 
@@ -1294,8 +1480,8 @@ end 'projectLayoutOf'
 
 // A `.maxproj` at a volume root — `/`, `C:\`, or a `\\server\share` — would sweep the whole volume
 // to answer one request on a single-threaded server, so a document under it is a single file.
-function projectRootAt(dir FilePath) returns WorkspaceRoot
-	return WorkspaceRoot.singleFile if isAVolumeRoot(dir) else WorkspaceRoot.projectDirectory(dir)
+function projectRootAt(name RootName, document ReaderDocument) returns WorkspaceRoot
+	return WorkspaceRoot.singleFile(document.named()) if isAVolumeRoot(name.spelled) else WorkspaceRoot.projectDirectory(name)
 end 'projectRootAt'
 
 function isAVolumeRoot(dir FilePath) returns bool

@@ -2050,7 +2050,7 @@ export let RecordedManifestFileName = "app.maxproj"
 let RecordedManifestSource = "export function build() returns ExitCode\n\tBuild.build(\".\", output: \"program\")\n\treturn 0\nend 'build'\n"
 export let RecordedMainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
 
-function recordedProjectOf(staged FilePath) returns FilePath
+export function recordedProjectOf(staged FilePath) returns FilePath
 	return staged.join(RecordedProjectSubdirName)
 end 'recordedProjectOf'
 
@@ -2093,10 +2093,10 @@ export function startedOverRecordedCache(staged FilePath) returns LspClient
 	return LspClient.start(environment: recordedCacheEnvironment(staged))
 end 'startedOverRecordedCache'
 
-export function recordedManifestDiagnostics(client LspClient, staged FilePath) returns PublishedDiagnosticArray throws LspClientError
-	let uri = recordedDocumentUri(staged, fileName: RecordedManifestFileName)
+export function recordedManifestDiagnostics(client LspClient, project FilePath) returns PublishedDiagnosticArray throws LspClientError
+	let uri = fileUriOf(project.join(RecordedManifestFileName))
 
-	_ = try client.initializeAtRootWithTrust(recordedProjectOf(staged), trusted: true)
+	_ = try client.initializeAtRootWithTrust(project, trusted: true)
 	try client.initialized()
 	try client.openDocument(uri, content: RecordedManifestSource)
 

@@ -104,10 +104,10 @@ built from changes:
   place, so simultaneous cold runs never share an output path. Superseded builds, builds an older
   cache format left, and temporary builds a process that has ended left (see
   [`maxon cache`](#maxon-cache)) are removed on a best-effort basis.
-- **The path is anchored at the working directory, and only its `.` components, repeated separators and
-  a trailing separator are folded.** `x.maxon` and `./x.maxon` share one cache slot, and `a/../x.maxon` gets another: through
-  a symbolic link, `a/..` need not be the working directory. That costs an extra compile, never a wrong
-  binary.
+- **The slot belongs to the program's physical path.** The path is anchored at the working directory and
+  every symbolic link along it is followed, so `x.maxon`, `./x.maxon`, `a/../x.maxon` and a path through a
+  link all share one cache slot when they name one file. The part of a path that names nothing yet is
+  folded lexically, as [`FilePath.normalize()`](/docs/stdlib/io/#filepath) folds it.
 
 `<cache>` is the directory Maxon owns on this host. It is the first of these whose variable names a
 directory this compiler can create:
@@ -428,9 +428,17 @@ release after the recorded one, up to this compiler's, with its fix. The MCP
 [`breaking_changes`](/docs/cli/mcp-server/#breaking_changes) tool answers the same list, and the language server publishes it
 on the project's `.maxproj` document (see [`maxon lsp-server`](/docs/cli/editor/#maxon-lsp-server)).
 
+A project path the host refuses to resolve to its physical spelling — a directory above it the process may not
+search, or a lookup the host refuses — fails the command by name, and the sentence says what to check (the
+permissions of the directory it names; on Linux, that `/proc` is mounted). A build or test run that has
+succeeded and then cannot resolve the project to keep its compiler-version record prints that as a `warning:` and
+keeps its exit status. Every record, lock and cache slot is keyed by a resolved physical path.
+
 The release is kept in a **compiler-version record** under the cache root, at
 `<cache>/project/v1/<key>.mxpv`, where `<cache>` is the first usable row of the table under
-[The run cache](#the-run-cache) and `<key>` a hash of the project directory's path. It holds one line,
+[The run cache](#the-run-cache) and `<key>` a hash of the project directory's physical path (every symbolic link
+followed), so the command line, the language server and the MCP server reach one record however the project is
+spelled. It holds one line,
 the release as `X.Y.Z`, and is written after a project's build succeeds and after a project's
 [`maxon test`](#maxon-test) run passes. So:
 
@@ -460,7 +468,8 @@ the output and its sidecar as they are. A build that compiles first says why, in
 
 Each compile leaves a **build record** under the cache root, at `<cache>/build/v1/<key>.mxbr`, where
 `<cache>` is the first usable row of the table under [The run cache](#the-run-cache) and `<key>` a hash
-of the output's path. It records:
+of the output's physical path: every symbolic link above the output is followed, and the output's own name is
+kept, so a link at the output path is keyed as the file the build writes there. It records:
 
 - every source of the program, every standard-library and runtime source, and the Unicode tables the
   compiler embeds, each with its modification time — and on `wasm32-wasi`, `vendor/wasm-tools` and the

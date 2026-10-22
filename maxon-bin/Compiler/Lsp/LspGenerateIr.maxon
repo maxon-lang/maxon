@@ -20,15 +20,22 @@ let ExplorerPositionBase = 1
 module function generateIrAnswer(workspace LspWorkspaceState, incoming JsonDoc, params JsonNodeId) returns LspExtensionOutcome throws LspParamsError
 	let source = try lspMemberText(incoming, of: params, key: SourceKey)
 	let filename = try lspMemberText(incoming, of: params, key: FilenameKey)
-	let path = try FilePath.from(filename) otherwise throw LspParamsError.malformed
 
-	var explored = lspDocumentProject(workspace, path: path, content: source)
+	match lspDocumentOf(workspace, uri: filename) 'document'
+		resolved(document) then return exploredOutcome(workspace, document: document, source: source)
+		notAPath then throw LspParamsError.malformed
+		unidentifiable(_, reason) then return LspExtensionOutcome.unidentifiable(reason)
+	end 'document'
+end 'generateIrAnswer'
+
+function exploredOutcome(workspace LspWorkspaceState, document ReaderDocument, source String) returns LspExtensionOutcome
+	var explored = lspDocumentProject(workspace, document: document, content: source)
 
 	return match explored 'explorer'
-		loaded(project, _) gives LspExtensionOutcome.answered(project.generatedIr(path, source: source))
+		loaded(project, reader) gives LspExtensionOutcome.answered(project.generatedIr(lspBufferPathOf(reader), source: source))
 		unavailable gives LspExtensionOutcome.compilerUnavailable
 	end 'explorer'
-end 'generateIrAnswer'
+end 'exploredOutcome'
 
 extension Project
 	// ⭐ **EVERY DIAGNOSTIC IS REPORTED, INCLUDING A WHOLE-PROGRAM CLAIM.** Unlike an open document, the

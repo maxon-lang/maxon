@@ -276,9 +276,9 @@ to choose the location.
 ## The tree lock
 
 Two commands writing the same output directories at once would corrupt each other's work, so some
-commands take a lock on the **checkout** they write into: the nearest directory above the path that
-holds a `stdlib/` directory (a Maxon source checkout or install). A project with no `stdlib/` above it
-takes no lock.
+commands take a lock on the **checkout** they write into: the nearest directory above the path's physical
+spelling (every symbolic link followed) that holds a `stdlib/` directory (a Maxon source checkout or
+install). A project with no `stdlib/` above it takes no lock.
 
 The lock is the file `.maxon-tree.lock` at that root. It is taken by `spec-test`, `scale-test`, and by a
 `build` of a directory without `--output=`. `run`, `test`, `fmt` and builds with `--output=` take none.
@@ -331,7 +331,7 @@ it to the new holder.
 Two builds of one output would overwrite each other's executable and [build record](/docs/cli/#up-to-date), so
 every `maxon build` — `--output=` builds included — locks its **output** before it decides whether the
 output is up to date, and holds the lock until the build record is written. The lock is
-`<cache>/build/locks/<key>.lock`, `<key>` being the hash of the output's path the build record is named by,
+`<cache>/build/locks/<key>.lock`, `<key>` being the hash of the output's physical path the build record is named by,
 with its claim file `<key>.lock.claim` beside it, so a build takes it only where a cache root is usable.
 
 It works as [the tree lock](#the-tree-lock) does: the same record, claim file, refresh, takeover and

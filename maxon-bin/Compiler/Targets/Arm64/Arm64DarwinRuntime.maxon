@@ -1631,6 +1631,49 @@ function buildArm64DarwinDirCurrentPathChunk() returns FunctionCodeChunk
 	return asm.finishFunction(HostDirCurrentPathName)
 end 'buildArm64DarwinDirCurrentPathChunk'
 
+function buildArm64DarwinFdPathChunk() returns FunctionCodeChunk
+	let SlotFd = 0 as StackSize
+	let SlotBufPtr = 1 as StackSize
+	let SlotBufLen = 2 as StackSize
+	var asm = Arm64RuntimeAsm.beginVariadicCallerFunction(3)
+
+	let refused = asm.newLabel()
+	let tooSmall = asm.newLabel()
+	let answered = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotFd)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotBufPtr)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotBufLen)
+
+	// `F_GETPATH` takes no size and writes up to `MAXPATHLEN` bytes, so a smaller buffer is answered too
+	// small rather than handed over to be overrun.
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x2, imm: DarwinFcntlGetPathBufferBytes as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lo, label: tooSmall)
+
+	// `fcntl` is variadic, and Darwin's arm64 convention passes its third argument on the stack.
+	arm64EmitStoreWord64Sp(asm.code, src: arm64RuntimeReg(Arm64Register.x1), byteOffset: 0)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotFd)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinFcntlGetPath as MachineWord)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.fcntl)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: refused)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotBufPtr)
+	arm64EmitCStringLength(asm, src: Arm64Register.x0, dest: Arm64Register.x2, cursor: Arm64Register.x1, scratch: Arm64Register.x3)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x0, src: Arm64Register.x2)
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(refused)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(tooSmall)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotBufLen)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostFdPathName)
+end 'buildArm64DarwinFdPathChunk'
+
 // ==========================================================================
 // mrt_darwin_dir_find_next(x0 = search, x1 = findDataPtr) -> x0 = BOOL
 // ==========================================================================
@@ -2177,6 +2220,10 @@ export let DarwinOpenCreateTruncateFlags = PosixOpenWriteOnly or DarwinOpenCreat
 
 export let DarwinOpenCreateExclusiveFlags = PosixOpenWriteOnly or DarwinOpenCreate or DarwinOpenExclusive
 
+let DarwinOpenEventOnly = 0x8000
+
+export let DarwinOpenResolveFlags = DarwinOpenEventOnly or DarwinOpenCloseOnExec
+
 // `mrt_host_file_open(x0 = path, x1 = flags, x2 = mode) -> x0 = fd | -1` — `open`, re-issued on `EINTR`.
 // A chunk because `open` is variadic and its mode travels on the stack, which an isel has no frame for.
 function buildArm64DarwinFileOpenChunk() returns FunctionCodeChunk
@@ -2464,6 +2511,7 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 		chunks.push(buildArm64DarwinDirCreateChunk())
 		chunks.push(buildArm64DarwinDirRemoveChunk())
 		chunks.push(buildArm64DarwinDirCurrentPathChunk())
+		chunks.push(buildArm64DarwinFdPathChunk())
 	end 'managedDirectory'
 
 	// Every socket lowering on this lane ends in one of the two folds, so the gate is

@@ -129,6 +129,7 @@ case-insensitive on Windows, byte-exact elsewhere.
 | `changeExtension(newExt String)` | `FilePath` | Replace or add an extension; include the dot (`".exe"`). |
 | `anchoredAt(base FilePath)` | `FilePath` | A relative path joined onto `base`, or an absolute path kept. Only what cannot change the file named is folded — `.` components, repeated separators and a trailing one — and every `..` is left for the filesystem, so through a symbolic link it names the file the spelling names. On Windows a drive-relative path (`C:foo`) is joined onto a `base` rooted on the same drive; against any other `base` it stays drive-relative, because it names that drive's current directory. |
 | `resolve(base FilePath)` | `FilePath` | `anchoredAt(base)`, then folded as `normalize()` folds it — lexically, so a `..` after a symbolic link cancels the link's name. |
+| `resolvedPhysically()` | `FilePath` | The path's one physical spelling, which the filesystem answers: every symbolic link along it is followed, every `..` is taken against the directory the walk has reached, and a relative path is taken against the working directory. Two spellings of one file answer the same path, so it is the path to key a cache or a lock by; the lexical `normalize()` gives each spelling a key of its own. On Windows the `\\?\` prefix is dropped and a network path comes back as `\\server\share\…`; a volume reachable only as `\\?\Volume{…}\` throws `failed`. Throws `PathResolveError.notFound` when the path names nothing, `accessDenied` when the process may not look it up, and `failed` for any other refusal, which on Linux includes an unmounted `/proc`. Refused on `wasm32-wasi` with E3104 ([Target support](/docs/stdlib/#target-support)). |
 | `relativeTo(base FilePath)` | `FilePath` | The part after `base`. Throws `FilePathError.noParent` when the path is not inside `base`. |
 | `normalize()` | `FilePath` | The path folded lexically, without asking the filesystem: `.` components removed, each `..` cancelling the component before it, repeated separators collapsed and a trailing one dropped. A `..` above an absolute path's root is dropped; a leading one in a relative path is kept. A relative path that folds away entirely is `.`. |
 | `toString()` | `String` | The path text. |
@@ -152,6 +153,14 @@ enum FilePathError implements Error
 	malformedURL
 	noParent
 end 'FilePathError'
+```
+
+```maxon
+enum PathResolveError implements Error
+	notFound
+	accessDenied
+	failed
+end 'PathResolveError'
 ```
 
 ```maxon

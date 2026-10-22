@@ -19,12 +19,12 @@ enum ListedProjectError implements Error
 end 'ListedProjectError'
 
 type ListedProject
-	module let rootPath as FilePath
+	module let root as RootName
 	module let isSingleFile as bool
 	module let fileCount as LspProjectFileCount
 
-	static function create(rootPath FilePath, isSingleFile bool, fileCount LspProjectFileCount) returns ListedProject
-		return Self{rootPath: rootPath, isSingleFile: isSingleFile, fileCount: fileCount}
+	static function create(root RootName, isSingleFile bool, fileCount LspProjectFileCount) returns ListedProject
+		return Self{root: root, isSingleFile: isSingleFile, fileCount: fileCount}
 	end 'create'
 end 'ListedProject'
 
@@ -32,24 +32,25 @@ typealias ListedProjectArray = Array with ListedProject
 
 module function listProjectsAnswer(workspace LspWorkspaceState, documents LspDocumentTextMap) returns LspExtensionOutcome
 	var listed = ListedProjectArray.create()
-	let search = lspRootSearch()
+	let search = lspRootSearch(workspace)
 
 	for (uri, _) in documents 'eachDocument'
-		let path = try FilePath.from(uri) otherwise continue
-		let entry = try listedProjectOf(workspace, readerPath: path, search: search) otherwise continue
-
-		addListedProject(entry, into: listed)
+		match lspDocumentOf(workspace, uri: uri) 'document'
+			resolved(document) then addListedProjectOf(workspace, document: document, search: search, into: listed)
+			notAPath or
+			unidentifiable then continue
+		end 'document'
 	end 'eachDocument'
 
 	// The map's order is its hashing's; the answer's is the roots'.
-	listed.sort(function(a ListedProject, b ListedProject) gives comparePathSpelling(a.rootPath, right: b.rootPath))
+	listed.sort(function(a ListedProject, b ListedProject) gives comparePathSpelling(a.root.spelled, right: b.root.spelled))
 
 	var doc = JsonDoc.create()
 	var projects = JsonNodeIdArray.create()
 
 	for entry in listed 'eachProject'
 		var project = LspJsonObject.create(doc)
-		project.put(LspRootPathKey, value: JsonNode.stringNode(entry.rootPath.toString()))
+		project.put(LspRootPathKey, value: JsonNode.stringNode(entry.root.spelled.toString()))
 		project.put(IsSingleFileKey, value: JsonNode.boolNode(entry.isSingleFile))
 		project.put(FileCountKey, value: JsonNode.numberNode(entry.fileCount as JsonFloat))
 		projects.push(project.finish())
@@ -60,11 +61,17 @@ module function listProjectsAnswer(workspace LspWorkspaceState, documents LspDoc
 	return LspExtensionOutcome.answered(LspAnswer.of(doc, result: result.finish()))
 end 'listProjectsAnswer'
 
-function listedProjectOf(workspace LspWorkspaceState, readerPath FilePath, search LspRootSearch) returns ListedProject throws ListedProjectError
-	match lspProjectFactsOf(workspace, readerPath: readerPath, search: search) 'facts'
+function addListedProjectOf(workspace LspWorkspaceState, document ReaderDocument, search LspRootSearch, into ListedProjectArray)
+	let entry = try listedProjectOf(workspace, document: document, search: search) otherwise return
+
+	addListedProject(entry, into: into)
+end 'addListedProjectOf'
+
+function listedProjectOf(workspace LspWorkspaceState, document ReaderDocument, search LspRootSearch) returns ListedProject throws ListedProjectError
+	match lspProjectFactsOf(workspace, document: document, search: search) 'facts'
 		swept(root, fileCount) then return ListedProject.create(root, isSingleFile: false, fileCount: fileCount)
 		unswept(root) then return ListedProject.create(root, isSingleFile: false, fileCount: UnsweptProjectFileCount)
-		singleFile(path) then return ListedProject.create(path, isSingleFile: true, fileCount: SingleFileProjectFileCount)
+		singleFile(root) then return ListedProject.create(root, isSingleFile: true, fileCount: SingleFileProjectFileCount)
 		unlocated then throw ListedProjectError.theDocumentSitsInNoDirectory
 	end 'facts'
 
@@ -73,7 +80,7 @@ end 'listedProjectOf'
 
 function addListedProject(entry ListedProject, into ListedProjectArray)
 	for existing in into 'eachListed'
-		if existing.rootPath.equals(entry.rootPath) 'oneProjectAlready'
+		if existing.root.identity.equals(entry.root.identity) 'oneProjectAlready'
 			return
 		end 'oneProjectAlready'
 	end 'eachListed'

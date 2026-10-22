@@ -22,6 +22,18 @@ public enum FilePathError implements Error
 	noParent
 end 'FilePathError'
 
+public enum PathResolveError implements Error
+	notFound
+	accessDenied
+	failed
+end 'PathResolveError'
+
+#if os(Windows)
+	let ExtendedPathPrefix = "\\\\?\\"
+	let ExtendedUncPrefix = "\\\\?\\UNC\\"
+	let UncRootPrefix = "\\\\"
+#endif
+
 // The two component spellings `normalize` folds.
 let CurrentDirectoryComponent = "."
 let ParentDirectoryComponent = ".."
@@ -673,6 +685,54 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 	public function resolve(base FilePath) returns FilePath
 		return joinedOnto(base).normalize()
 	end 'resolve'
+
+	/// The path the filesystem names this file by: every symbolic link followed, every `..` taken against
+	/// the directory reached, and a relative path taken against the working directory. Two spellings of one
+	/// file answer the same path, so it keys a cache or a lock where the lexical `normalize()` gives each
+	/// spelling a key of its own. On Windows the `\\?\` prefix is dropped and a network path comes back as
+	/// `\\server\share\…`; a volume reachable only as `\\?\Volume{…}\` throws `failed`. Throws `notFound`
+	/// for a path that names nothing and `accessDenied` for one the process may not look up.
+	public function resolvedPhysically() returns FilePath throws PathResolveError
+		let physical = try __ManagedDirectory.resolve(path.addressableBytes()) otherwise (e) 'refused'
+			match e 'reason'
+				notFound then throw PathResolveError.notFound
+				accessDenied then throw PathResolveError.accessDenied
+				default throws PathResolveError.failed
+			end 'reason'
+		end 'refused'
+
+		let spelled = String.init(physical)
+
+		#if os(Windows)
+			return FilePath{path: try dosSpellingOf(spelled)}
+		#else
+			return FilePath{path: spelled}
+		#endif
+	end 'resolvedPhysically'
+
+	#if os(Windows)
+		static function dosSpellingOf(extended String) returns String throws PathResolveError
+			if extended.startsWith(ExtendedUncPrefix) 'unc'
+				return "{UncRootPrefix}{textAfter(ExtendedUncPrefix.byteLength(), text: extended)}"
+			end 'unc'
+
+			if extended.startsWith(ExtendedPathPrefix) 'extendedPrefix'
+				let dos = textAfter(ExtendedPathPrefix.byteLength(), text: extended)
+
+				if hasDrivePrefix(dos) 'driveLetter'
+					return dos
+				end 'driveLetter'
+			end 'extendedPrefix'
+
+			throw PathResolveError.failed
+		end 'dosSpellingOf'
+
+		static function textAfter(prefixBytes BytePos, text String) returns String
+			let rest = try text.addressableBytes().slice(prefixBytes, text.byteLength()) otherwise panic("FilePath.textAfter: the prefix is a prefix of the text")
+
+			return String.init(rest)
+		end 'textAfter'
+	#endif
 
 	#if os(Windows)
 		function joinedOntoItsDrive(base FilePath) returns FilePath

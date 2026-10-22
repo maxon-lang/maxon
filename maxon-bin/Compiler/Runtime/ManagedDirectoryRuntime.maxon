@@ -3,15 +3,15 @@
 // ⭐ **THE ORACLE IS `specs/managed-directory.md`**, exactly as `ManagedFileRuntime`'s header records for
 // the file family: the ten committed cases are the whole of what can be asked.
 //
-// ⭐⭐ **TWO LANES** — `x64-windows` and arm64-macOS, whose `FindFirstFileW` is emulated over
-// `opendir`/`readdir`/`fnmatch` because Win32 takes a GLOB where POSIX takes a DIRECTORY
+// ⭐⭐ **EVERY NATIVE LANE** — `x64-windows`, and the POSIX lanes, whose `FindFirstFileW` is emulated over a
+// directory read and a glob match (`opendir`/`readdir`/`fnmatch` on macOS, `getdents64` and
+// `mrt_linux_glob_match` on Linux) because Win32 takes a GLOB where POSIX takes a DIRECTORY
 // (`Arm64DarwinRuntime.buildArm64DarwinDirFindFirstChunk` carries the split and the one semantic difference
 // the corpus does not reach). The roster is `TargetFacilities.targetProvidesFacility`'s
 // `managedDirectory` row.
 //
-// ⚠ A target that provides NEITHER still refuses at the call site
-// with the EXISTING `E3104 targetUnsupportedConstruct`, which matches on the `__md_` PREFIX — so a method
-// added later is gated by construction rather than by memory.
+// ⚠ A target outside the roster refuses at the call site with `E3104 targetUnsupportedConstruct`, which
+// matches on the `__md_` PREFIX — so a method added later is gated by construction rather than by memory.
 //
 // ---
 //
@@ -132,10 +132,15 @@ export let ErrorDirNotEmpty = 145 as FullRangeInt
 // `stat` failure must be reported as it (`Arm64DarwinRuntime.buildArm64DarwinFileAttributesChunk`).
 export let InvalidFileAttributes = 0xFFFFFFFF as FullRangeInt
 
-// `MAX_PATH`, the first buffer `emitGrowingPathFill` offers. It fits every path a program is
+// `MAX_PATH`, the first buffer `emitGrowingPathFill` offers every fill but `finalPath`. It fits every path a program is
 // normally installed at, so the common case is one call and one allocation; a larger start would
 // cost twice the allocation on every ordinary path to save one doubling on a long one.
 export let MaxPathBytes = 260 as FullRangeInt
+
+// The first buffer `__md_resolve_path` offers, and at least `DarwinFcntlGetPathBufferBytes`: below that
+// `mrt_host_fd_path` answers "too small" on macOS without asking, so a `MaxPathBytes` start would spend
+// two doublings on every resolution.
+let PhysicalPathFirstUnits = 4096 as FullRangeInt
 
 let PathGrowthShift = 1
 
@@ -162,6 +167,7 @@ let ManagedDirectoryCurrentPathFailedOrdinal = 6 as FullRangeInt
 let ManagedDirectoryClosedOrdinal = 7 as FullRangeInt
 let ManagedDirectoryDeleteFailedOrdinal = 8 as FullRangeInt
 let ManagedDirectoryDeleteNotEmptyOrdinal = 9 as FullRangeInt
+let ManagedDirectoryResolveFailedOrdinal = 10 as FullRangeInt
 let ManagedDirectoryNotFoundFlag = ManagedDirectoryNotFoundOrdinal + ErrorFlagOrdinalBias
 let ManagedDirectoryAccessDeniedFlag = ManagedDirectoryAccessDeniedOrdinal + ErrorFlagOrdinalBias
 let ManagedDirectoryOpenSearchFailedFlag = ManagedDirectoryOpenSearchFailedOrdinal + ErrorFlagOrdinalBias
@@ -171,6 +177,7 @@ let ManagedDirectoryCurrentPathFailedFlag = ManagedDirectoryCurrentPathFailedOrd
 let ManagedDirectoryClosedFlag = ManagedDirectoryClosedOrdinal + ErrorFlagOrdinalBias
 let ManagedDirectoryDeleteFailedFlag = ManagedDirectoryDeleteFailedOrdinal + ErrorFlagOrdinalBias
 let ManagedDirectoryDeleteNotEmptyFlag = ManagedDirectoryDeleteNotEmptyOrdinal + ErrorFlagOrdinalBias
+let ManagedDirectoryResolveFailedFlag = ManagedDirectoryResolveFailedOrdinal + ErrorFlagOrdinalBias
 
 // The `__md_` prefix that identifies EVERY directory runtime entry point — the one test `scanRuntimeUsage`
 // reads to set `usesManagedDirectory`, and the one `SemanticCheck` reads for E3104.
@@ -187,6 +194,7 @@ export let ManagedDirectoryDestructName = b"__md_destruct"
 export let ManagedDirectoryExistsName = b"__md_exists"
 export let ManagedDirectoryCreateName = b"__md_create"
 export let ManagedDirectoryCurrentPathName = b"__md_current_path"
+export let ManagedDirectoryResolveName = b"__md_resolve_path"
 export let ManagedDirectoryDeleteName = b"__md_delete"
 
 // ⭐ **WHICH `__ManagedDirectory` CALLEES THROW** — the fourth composer behind `Parser.isThrowingRuntimeCallee`.
@@ -201,7 +209,7 @@ export function isThrowingManagedDirectoryRuntimeCallee(callee ByteArray) return
 	//   • `__md_exists` — `false` is a valid answer ("it is not a directory"), not a failure.
 	//   • `__md_filename` — the spec's "Instance Methods (non-throwing)". It reads a record the OPEN already
 	//     filled, so there is no call to fail.
-	return callee.equals(ManagedDirectoryOpenSearchName) or callee.equals(ManagedDirectoryNextName) or callee.equals(ManagedDirectoryCreateName) or callee.equals(ManagedDirectoryCurrentPathName) or callee.equals(ManagedDirectoryDeleteName)
+	return callee.equals(ManagedDirectoryOpenSearchName) or callee.equals(ManagedDirectoryNextName) or callee.equals(ManagedDirectoryCreateName) or callee.equals(ManagedDirectoryCurrentPathName) or callee.equals(ManagedDirectoryDeleteName) or callee.equals(ManagedDirectoryResolveName)
 end 'isThrowingManagedDirectoryRuntimeCallee'
 
 // ⭐⭐ **WHAT THE USER ACTUALLY WROTE, FOR THE DIAGNOSTICS THAT QUOTE A CALLEE BACK AT THEM.**
@@ -213,7 +221,7 @@ end 'isThrowingManagedDirectoryRuntimeCallee'
 // ⚠ **IT IS A MAP ONTO THE PARSER'S OWN CONSTANTS, NOT A SECOND SPELLING.** Each arm answers with the very
 // `ManagedDirectory*Method` byte string `parseManagedDirectoryStaticCall`/`dispatchManagedDirectoryMethod`
 // dispatched on, so there is nothing here that can disagree with what the source is matched against.
-// It is asked only on the COLD path, and only for the five THROWING callees — the other four cannot reach
+// It is asked only on the COLD path, and only for the six THROWING callees — the other four cannot reach
 // either diagnostic at all, which is what the panic states rather than answers.
 //
 // ⚠⚠ **IT HAS A SECOND READER, AND THE `create` AND `delete` ARMS ARE ITS ALONE.** `Parser`'s E3059 asks this
@@ -243,6 +251,10 @@ export function managedDirectorySourceMethodName(callee ByteArray) returns ByteA
 	if callee.equals(ManagedDirectoryDeleteName) 'delete'
 		return ManagedDirectoryDeleteMethod
 	end 'delete'
+
+	if callee.equals(ManagedDirectoryResolveName) 'resolve'
+		return ManagedDirectoryResolveMethod
+	end 'resolve'
 
 	panic("managedDirectorySourceMethodName: no source-method arm for '{String.from(callee)}'. EITHER it is not a throwing `__ManagedDirectory` callee — this map is asked ONLY behind `isThrowingManagedDirectoryRuntimeCallee`, so nothing else can reach an E3057 — OR that predicate gained a name and this map did not, in which case add an arm answering the parser's own `ManagedDirectory*Method` constant. `installManagedDirectoryRuntime`'s drift guard asks this for every throwing `__md_` builder it installs, so the second case fails at INSTALL and never in front of a user's missing `try`")
 end 'managedDirectorySourceMethodName'
@@ -779,6 +791,58 @@ function buildManagedDirectoryCurrentPath(module StdModule)
 	module.functions.push(func)
 end 'buildManagedDirectoryCurrentPath'
 
+// Opened and then asked, because a query on an open handle is the one physical-path primitive all three
+// hosts share (`PathQueryVerb.finalPath`).
+function buildManagedDirectoryResolvePath(module StdModule)
+	var func = IrFunction.createFromStd(ManagedDirectoryResolveName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: managedDirectoryThrows())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var afterCopy = module.addBlock(func, label: b"mdterm", heat: BlockHeat.normal)
+	var failed = module.addBlock(func, label: b"mdfail", heat: BlockHeat.normal)
+	var opened = module.addBlock(func, label: b"mdok", heat: BlockHeat.normal)
+	var attempt = module.addBlock(func, label: b"mdattempt", heat: BlockHeat.normal)
+	var fitTest = module.addBlock(func, label: b"mdcpfit", heat: BlockHeat.normal)
+	var grow = module.addBlock(func, label: b"mdgrow", heat: BlockHeat.normal)
+	var refused = module.addBlock(func, label: b"mdrefused", heat: BlockHeat.normal)
+	var copyOut = module.addBlock(func, label: b"mdcopy", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let pathRec = 0
+
+	let scratch = emitPathToText(module, func: func, cur: entry, join: afterCopy, pathRec: pathRec, encoding: module.hostText, ids: ids)
+	let handle = ids.mint()
+	let unused = emitConst(module, block: afterCopy, value: 0, ids: ids)
+	emitIoPark(module, block: afterCopy, operation: GtIoOperation.fileExists, ids: ids)
+	module.appendOp(afterCopy, op: StdOp.osPathQuery(handle, verb: PathQueryVerb.openForResolve, a0Id: scratch, a1Id: unused, a2Id: unused))
+
+	let err = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.osLastError(err))
+	emitRawFree(module, block: afterCopy, ptr: scratch, ids: ids)
+	emitBranchOnCompare(module, block: afterCopy, value: handle, pred: StdCmpPred.eq, against: InvalidHandleValue, whenTrue: failed, whenFalse: opened, ids: ids)
+
+	emitDirectoryErrnoClassifiedThrow(module, func: func, block: failed, err: err, fallbackFlag: ManagedDirectoryResolveFailedFlag, ids: ids)
+
+	let (buffer, _) = emitGrowingPathFill(module, cur: opened, attempt: attempt, fitTest: fitTest, grow: grow, fill: PathFill.finalPath(handle), whenRefused: refused, whenFits: copyOut, ids: ids)
+
+	emitRawFree(module, block: refused, ptr: buffer, ids: ids)
+	emitCloseResolvedHandle(module, block: refused, handle: handle, ids: ids)
+	emitErrorReturn(module, block: refused, flag: ManagedDirectoryResolveFailedFlag, ids: ids)
+
+	let record = ids.mint()
+	var built = emitTextToManaged(module, func: func, cur: copyOut, cstr: buffer, record: record, encoding: module.hostText, ids: ids)
+	emitRawFree(module, block: built, ptr: buffer, ids: ids)
+	emitCloseResolvedHandle(module, block: built, handle: handle, ids: ids)
+	emitOkReturn(module, block: built, value: record, ids: ids)
+
+	module.functions.push(func)
+end 'buildManagedDirectoryResolvePath'
+
+function emitCloseResolvedHandle(module StdModule, block IrBlock, handle ValueId, ids ValueMinter)
+	emitIoPark(module, block: block, operation: GtIoOperation.fileExists, ids: ids)
+	module.appendOp(block, op: StdOp.osFileClose(handle))
+end 'emitCloseResolvedHandle'
+
 // One attempt's three-way verdict for a call that fills a caller's buffer and answers a count: `0`
 // is a failure, `< capacity` means the answer is in the buffer with its NUL, anything else means
 // the buffer was too small. ⚠ The `written == 0` test comes first because a 0 also satisfies
@@ -796,6 +860,7 @@ export union PathFill
 	systemDirectory
 	windowsDirectory
 	fullPath(source ValueId)
+	finalPath(handle ValueId)
 end 'PathFill'
 
 // The one grow-and-retry path fill. Each too-small attempt doubles the buffer, because two of the
@@ -808,7 +873,7 @@ export function emitGrowingPathFill(module StdModule, cur IrBlock, attempt IrBlo
 	let capacity = ids.mint()
 	pushI64BlockArgs(attempt, values: twoArgs(buffer, second: capacity))
 
-	let firstSize = emitConst(module, block: cur, value: MaxPathBytes, ids: ids)
+	let firstSize = emitConst(module, block: cur, value: pathFillFirstUnits(fill), ids: ids)
 	let encoding = pathFillEncoding(module, fill: fill)
 	let firstBuf = emitRawAlloc(module, block: cur, byteCount: emitByteCountOfUnits(module, block: cur, units: firstSize, encoding: encoding, ids: ids), ids: ids)
 	module.setTerminator(cur, op: StdOp.branch(attempt.id))
@@ -835,8 +900,21 @@ function emitPathFillOp(module StdModule, block IrBlock, fill PathFill, written 
 		systemDirectory then emitDirectoryQuery(module, block: block, verb: PathQueryVerb.systemDirectory, written: written, buffer: buffer, capacity: capacity, ids: ids)
 		windowsDirectory then emitDirectoryQuery(module, block: block, verb: PathQueryVerb.windowsDirectory, written: written, buffer: buffer, capacity: capacity, ids: ids)
 		fullPath(source) then module.appendOp(block, op: StdOp.osPathQuery(written, verb: PathQueryVerb.fullPath, a0Id: source, a1Id: capacity, a2Id: buffer))
+		finalPath(handle) then module.appendOp(block, op: StdOp.osPathQuery(written, verb: PathQueryVerb.finalPath, a0Id: handle, a1Id: capacity, a2Id: buffer))
 	end 'fill'
 end 'emitPathFillOp'
+
+function pathFillFirstUnits(fill PathFill) returns FullRangeInt
+	return match fill 'fill'
+		finalPath gives PhysicalPathFirstUnits
+		executablePath or
+		processNamespace or
+		currentDirectory or
+		systemDirectory or
+		windowsDirectory or
+		fullPath gives MaxPathBytes
+	end 'fill'
+end 'pathFillFirstUnits'
 
 function emitParkedCurrentDirectoryFill(module StdModule, block IrBlock, written ValueId, buffer ValueId, capacity ValueId, ids ValueMinter)
 	emitIoPark(module, block: block, operation: GtIoOperation.fileExists, ids: ids)
@@ -881,6 +959,7 @@ function claimManagedDirectoryOrdinals(project Project, declaration EnumLayout)
 	directoryErrors.claim(ManagedDirectoryClosedCaseName, ordinal: ManagedDirectoryClosedOrdinal)
 	directoryErrors.claim(ManagedDirectoryDeleteFailedCaseName, ordinal: ManagedDirectoryDeleteFailedOrdinal)
 	directoryErrors.claim(ManagedDirectoryDeleteNotEmptyCaseName, ordinal: ManagedDirectoryDeleteNotEmptyOrdinal)
+	directoryErrors.claim(ManagedDirectoryResolveFailedCaseName, ordinal: ManagedDirectoryResolveFailedOrdinal)
 	directoryErrors.requireTotal()
 end 'claimManagedDirectoryOrdinals'
 
@@ -898,6 +977,7 @@ export function installManagedDirectoryRuntime(module StdModule, usage RuntimeUs
 	buildManagedDirectoryCreate(module)
 	buildManagedDirectoryDelete(module)
 	buildManagedDirectoryCurrentPath(module)
+	buildManagedDirectoryResolvePath(module)
 
 	for func in module.functions 'eachFunc'
 		if not isManagedDirectoryRuntimeCallee(func.name) 'notOurs'
@@ -921,7 +1001,7 @@ end 'installManagedDirectoryRuntime'
 // Every callee this file installs — what the drift guard iterates, what `scanRuntimeUsage` reads to set
 // `usesManagedDirectory`, and what `TargetFacilities.calleeHostFacility` maps onto
 // `HostFacility.managedDirectory`, so a lane without one refuses the call with E3104. A PREFIX test rather
-// than an eight-way `or`: every entry point this file installs is `__md_`-named by construction, so a ninth
+// than a ten-way `or`: every entry point this file installs is `__md_`-named by construction, so an eleventh
 // is covered without being remembered here as well as declared above.
 export function isManagedDirectoryRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: ManagedDirectoryRuntimePrefix)

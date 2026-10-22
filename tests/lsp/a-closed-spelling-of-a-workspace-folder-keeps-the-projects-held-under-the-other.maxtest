@@ -1,0 +1,35 @@
+#if not os(Windows)
+	let TwoFolderSpellingsDirName = "two-folder-spellings"
+	let TwoFolderSpellingsLinkDirName = "two-folder-spellings-link"
+	let TwoFolderSpellingsMainFileName = "main.maxon"
+	let TwoFolderSpellingsHelperFileName = "helper.maxon"
+	let TwoFolderSpellingsMainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+	let TwoFolderSpellingsHelperSource = "export function twoSpellingsHelper() returns ExitCode\n\treturn 0\nend 'twoSpellingsHelper'\n"
+	let TwoFolderSpellingsHeldFileCount = 2
+
+	test 'project roots: one spelling of a workspace folder closed leaves the projects held under the spelling still open'
+		let root = stagedProjectDiagnosticsRoot(TwoFolderSpellingsDirName)
+		writeCorpusFile(root, fileName: TwoFolderSpellingsMainFileName, content: TwoFolderSpellingsMainSource)
+		writeCorpusFile(root, fileName: TwoFolderSpellingsHelperFileName, content: TwoFolderSpellingsHelperSource)
+
+		let link = hostTempDir().join(outsideCheckoutDirName(TwoFolderSpellingsLinkDirName))
+		_ = runSystemTool("ln", arguments: ["-s", root.toString(), link.toString()], what: "`ln -s` making a link to the staged project")
+
+		let documents = projectRootsDocument(fileUriOf(root.join(TwoFolderSpellingsMainFileName)), content: TwoFolderSpellingsMainSource)
+		let both = projectRootsFolderPair(link, second: root)
+		let onlyTheLinkClosed = listProjectsIn(ProjectRootsSession.atFoldersThenSomeRemoved(both, removed: projectRootsFolders(link)), documents: documents)
+		let bothClosed = listProjectsIn(ProjectRootsSession.atFoldersThenRemoved(both), documents: documents)
+
+		try File.delete(link) otherwise panic("the gate could not run — could not remove the link {link.toString()}.")
+
+		discardOutsideCheckoutDir(root)
+
+		let kept = try soleProject(listedProjects(onlyTheLinkClosed), note: "a document of a staged `.maxproj` project was opened in a session whose workspace folders name the project twice, by a symbolic link and by its own path, and the client closed the link.")
+
+		try Expect.equal(kept.fileCount, expected: TwoFolderSpellingsHeldFileCount, message: "the project reported {kept.fileCount} files after one spelling of its folder was closed, and the other spelling still names the folder, so the project it holds stays held with its {TwoFolderSpellingsHeldFileCount} sources.")
+
+		let gone = try soleProject(listedProjects(bothClosed), note: "the client closed both spellings of the workspace folder after opening the document, which is still open.")
+
+		try Expect.equal(gone.fileCount, expected: ProjectRootsUnsweptFileCount, message: "the project reported {gone.fileCount} files after the last spelling of its folder was closed, and {ProjectRootsUnsweptFileCount} is the count of a root the server holds no corpus for. The last spelling to close takes the projects held under the folder.")
+	end 'project roots: one spelling of a workspace folder closed leaves the projects held under the spelling still open'
+#endif

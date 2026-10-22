@@ -627,7 +627,13 @@ end 'ForeignRecord'
 // Stopping answers `NothingRanExitCode`, the code `refuseIfStale` answers, because both mean the
 // same thing to a caller reading only the number: nothing ran.
 export function acquireTreeLock(operand FilePath, into LockHold) returns ExitCode
-	let lockPath = try lockPathFor(operand) otherwise 'noCheckout'
+	let identity = try projectIdentityPathOf(operand) otherwise (e) 'unidentifiable'
+		printError("error: {e.sentence()}\n")
+
+		return NothingRanExitCode
+	end 'unidentifiable'
+
+	let lockPath = try lockPathFor(identity) otherwise 'noCheckout'
 		// Nothing shared to guard. `operand` has no `stdlib/` above it, so no other command in any
 		// tree writes what this one is about to write.
 		return SucceededExit
@@ -719,15 +725,15 @@ function acquireLock(lockPath FilePath, kind LockKind, subject String, into Lock
 	end 'claim'
 end 'acquireLock'
 
-// The lock file for the checkout containing `operand`, or a throw when there is no checkout above it.
+// The lock file for the checkout containing `identity`, or a throw when there is no checkout above it.
 //
-// `operand` is RESOLVED against the working directory first: `scale-test`'s corpus root is the
-// relative `.scale-tmp` and a `build maxon-bin` names its project relatively too, and a relative
-// single-component path has no parent to walk up from — so an unresolved one would silently answer
-// "not in a checkout" for the very commands this lock exists for.
-function lockPathFor(operand FilePath) returns FilePath throws CompileError
-	let absolute = operand.resolve(Directory.currentPath())
-	let stdlibDir = try stdlibDirAbove(absolute)
+// `identity` is `projectIdentityPathOf`'s answer, absolute and physical. Absolute, because
+// `scale-test`'s corpus root is the relative `.scale-tmp` and a `build maxon-bin` names its project
+// relatively too, and a relative single-component path has no parent to walk up from — so it would
+// silently answer "not in a checkout" for the very commands this lock exists for. Physical, so a
+// spelling through a link finds the one lock every other spelling of the checkout takes.
+function lockPathFor(identity FilePath) returns FilePath throws CompileError
+	let stdlibDir = try stdlibDirAbove(identity)
 	let checkoutRoot = try stdlibDir.parent() otherwise throw CompileError.stdlibNotFound
 	let name = try FilePath.from(LockFileName) otherwise panic("TreeLock: '{LockFileName}' is not a valid path component")
 	return checkoutRoot.join(name)

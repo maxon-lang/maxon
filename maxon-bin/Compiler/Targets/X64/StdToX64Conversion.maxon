@@ -259,6 +259,9 @@ let CreateNew = 1  // dwCreationDisposition — create, failing on an existing p
 // straight after the call cannot lose the new name.
 let MoveFileReplaceWriteThrough = 9  // MOVEFILE_REPLACE_EXISTING (1) | MOVEFILE_WRITE_THROUGH (8)
 let FileAttributeNormal = 0x80  // dwFlagsAndAttributes
+let FileFlagBackupSemantics = 0x02000000
+let NoDesiredAccess = 0x0
+let FinalPathNormalizedDos = 0x0
 
 // --- The ws2_32 constants ---
 //
@@ -3509,7 +3512,7 @@ export type StdToX64Lowering
 	// are `mrt_host_file_open`'s work, which is why this route branches into a chunk.
 	function lowerOsFileOpenRead(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.emitWin64CreateFile(resultId, pathPtrId: pathPtrId, access: GenericRead, disposition: OpenExisting, dstBlock: dstBlock)
+			importCall then self.emitWin64CreateFile(resultId, pathPtrId: pathPtrId, access: GenericRead, disposition: OpenExisting, attributes: FileAttributeNormal, dstBlock: dstBlock)
 			syscall then self.emitLinuxFileOpen(resultId, pathPtrId: pathPtrId, flags: PosixOpenReadOnly, mode: PosixNoFileMode as MachineWord, dstBlock: dstBlock)
 		end 'route'
 	end 'lowerOsFileOpenRead'
@@ -3524,7 +3527,7 @@ export type StdToX64Lowering
 	// the two carry different modes here. That is why the mode is a parameter of the shared emission.
 	function lowerOsFileOpenWrite(resultId ValueId, pathPtrId ValueId, disposition MachineWord, linuxFlags MachineWord, mode MachineWord, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.emitWin64CreateFile(resultId, pathPtrId: pathPtrId, access: GenericWrite, disposition: disposition, dstBlock: dstBlock)
+			importCall then self.emitWin64CreateFile(resultId, pathPtrId: pathPtrId, access: GenericWrite, disposition: disposition, attributes: FileAttributeNormal, dstBlock: dstBlock)
 			syscall then self.emitLinuxFileOpen(resultId, pathPtrId: pathPtrId, flags: linuxFlags, mode: mode, dstBlock: dstBlock)
 		end 'route'
 	end 'lowerOsFileOpenWrite'
@@ -3539,19 +3542,19 @@ export type StdToX64Lowering
 		self.emitCaptureRax(dstBlock, into: TargetVReg.virtual(resultId))
 	end 'emitLinuxFileOpen'
 
-	// ⭐ **THE ONE `CreateFileW` EMISSION, PARAMETERIZED BY THE TWO CONSTANTS THE OPENS DIFFER IN.**
-	// The opens differ ONLY in `dwDesiredAccess` and `dwCreationDisposition`; the share mode, the
-	// argument REGISTERS, the three stack slots, the entry point and the RAX capture are one shape,
-	// so they are written once. Two copies is how one of them would quietly acquire a different
+	// ⭐ **THE ONE `CreateFileW` EMISSION, PARAMETERIZED BY THE THREE CONSTANTS THE OPENS DIFFER IN.**
+	// The opens differ ONLY in `dwDesiredAccess`, `dwCreationDisposition` and `dwFlagsAndAttributes`; the
+	// share mode, the argument REGISTERS, the stack slots' layout, the entry point and the RAX capture are
+	// one shape, so they are written once. Two copies is how one of them would quietly acquire a different
 	// `hTemplateFile`.
 	//
 	// Stack args 5-7 first (rax scratch, while every argument register is still free), then the
 	// register args — the ordering `lowerOsProcessSpawnWin64` establishes and for its reason. The
 	// access mask uses the 64-bit `movRegImm` because `GENERIC_READ` is `0x80000000`, which reads as a
-	// sign bit in an imm32 spelling; one form for both keeps the two opens byte-comparable.
-	function emitWin64CreateFile(resultId ValueId, pathPtrId ValueId, access MachineWord, disposition MachineWord, dstBlock IrBlock)
+	// sign bit in an imm32 spelling; one form for every open keeps the opens byte-comparable.
+	function emitWin64CreateFile(resultId ValueId, pathPtrId ValueId, access MachineWord, disposition MachineWord, attributes MachineWord, dstBlock IrBlock)
 		self.emitWin64StackArgImm(dstBlock, slot: 0, value: disposition)
-		self.emitWin64StackArgImm(dstBlock, slot: 1, value: FileAttributeNormal)
+		self.emitWin64StackArgImm(dstBlock, slot: 1, value: attributes)
 		self.emitWin64StackArgImm(dstBlock, slot: 2, value: NullPointer)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(pathPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm(x64PhysReg(X64Register.rdx), value: access))
@@ -3866,7 +3869,7 @@ export type StdToX64Lowering
 	function lowerOsPathQuery(resultId ValueId, verb PathQueryVerb, a0Id ValueId, a1Id ValueId, a2Id ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsPathQueryWin64(resultId, verb: verb, a0Id: a0Id, a1Id: a1Id, a2Id: a2Id, dstBlock: dstBlock)
-			syscall then panic("lowerOsPathQuery: `osPathQuery` asks Win32 for a system directory or a full path, and a raw-syscall lane has no such call — `SubprocessRuntime.PathSearchShape.posix` searches `PATH` alone and emits none")
+			syscall then self.lowerOsPathQueryLinux(resultId, verb: verb, a0Id: a0Id, a1Id: a1Id, a2Id: a2Id, dstBlock: dstBlock)
 		end 'route'
 	end 'lowerOsPathQuery'
 
@@ -3875,8 +3878,25 @@ export type StdToX64Lowering
 			systemDirectory then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.import(IatSlot.GetSystemDirectoryW), args: twoArgs(a0Id, second: a1Id), dstBlock: dstBlock)
 			windowsDirectory then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.import(IatSlot.GetWindowsDirectoryW), args: twoArgs(a0Id, second: a1Id), dstBlock: dstBlock)
 			fullPath then self.lowerOsFullPathWin64(resultId, pathPtrId: a0Id, bufLenId: a1Id, bufPtrId: a2Id, dstBlock: dstBlock)
+			openForResolve then self.emitWin64CreateFile(resultId, pathPtrId: a0Id, access: NoDesiredAccess, disposition: OpenExisting, attributes: FileFlagBackupSemantics, dstBlock: dstBlock)
+			finalPath then self.lowerOsFinalPathWin64(resultId, handleId: a0Id, bufLenId: a1Id, bufPtrId: a2Id, dstBlock: dstBlock)
 		end 'v'
 	end 'lowerOsPathQueryWin64'
+
+	function lowerOsPathQueryLinux(resultId ValueId, verb PathQueryVerb, a0Id ValueId, a1Id ValueId, a2Id ValueId, dstBlock IrBlock)
+		match verb 'v'
+			openForResolve then self.emitLinuxFileOpen(resultId, pathPtrId: a0Id, flags: LinuxOpenResolveFlags, mode: PosixNoFileMode as MachineWord, dstBlock: dstBlock)
+			finalPath then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.chunk(HostFdPathName), args: threeArgs(a0Id, second: a2Id, third: a1Id), dstBlock: dstBlock)
+			systemDirectory or
+			windowsDirectory or
+			fullPath then panic("lowerOsPathQuery: `osPathQuery` asks Win32 for a system directory or a full path, and a raw-syscall lane has no such call — `SubprocessRuntime.PathSearchShape.posix` searches `PATH` alone and emits none")
+		end 'v'
+	end 'lowerOsPathQueryLinux'
+
+	function lowerOsFinalPathWin64(resultId ValueId, handleId ValueId, bufLenId ValueId, bufPtrId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: FinalPathNormalizedDos))
+		self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.import(IatSlot.GetFinalPathNameByHandleW), args: threeArgs(handleId, second: bufPtrId, third: bufLenId), dstBlock: dstBlock)
+	end 'lowerOsFinalPathWin64'
 
 	function lowerOsFullPathWin64(resultId ValueId, pathPtrId ValueId, bufLenId ValueId, bufPtrId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: NullPointer))

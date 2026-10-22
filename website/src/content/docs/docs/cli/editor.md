@@ -173,6 +173,19 @@ handles `workspace/didChangeWorkspaceFolders`: a folder added to the window caps
 once, and a folder removed from it stops capping it, with no restart of the editor. Nothing else in the
 workspace is renegotiated.
 
+**Every path stays in the spelling the client sent, and the physical path decides which file, folder and
+project is meant.** A document is read, indexed and answered under the uri the editor opened it with: its
+diagnostics are published under that uri, a definition names the file under the spelling the project was
+loaded with, and `maxon/projectLoading` and `maxon/listProjects` name a root by the spelling that reached it first.
+Where two spellings could mean one thing, the server asks the host for the physical path of each — every
+symbolic link followed, as `maxon build` keys its [compiler-version record](/docs/cli/#breaking-changes-since-the-last-build)
+— and treats equal answers as one: two spellings of a file are one source of the project, two spellings of a
+project are one held project, and a workspace folder named by two spellings is closed when its last
+spelling is. A path the host refuses to resolve (a directory above it the server may not search, or, on
+Linux, an unmounted `/proc`) is reported by name and its sentence says what to check: on the document as one
+error item at its first character, for a workspace folder as a `window/showMessage` of type 1, and for
+`maxon/generateIR` as an internal error.
+
 **A project holds the files its `.maxproj` file describes, as `maxon build` reads them.** The ladder
 names the project's directory. When its `.maxproj` declares targets, the server runs the project file
 as [`maxon build`](/docs/cli/project-structure/#the-project-file) runs it and holds the `sources` the target describes, rooted at
@@ -229,7 +242,7 @@ the library built, by its first hover, definition or completion.
 
 Projects are held across requests, the eight most recently used roots at a time, and a source is re-read
 when its size or modification time changes on disk. Removing a workspace folder also drops every project
-held under it. The list of files under a root is re-walked at most once a second, so a file created on
+held under it, once no other spelling of that folder is still open. The list of files under a root is re-walked at most once a second, so a file created on
 disk after the project was built is resolved into shortly afterwards rather than at once, and a file
 deleted from disk leaves the project at that same walk — definition, hover and completion stop resolving
 into it, and a name it was the only declaration of stops being one the project declares. A rename is the
@@ -331,7 +344,7 @@ two files of one project are one entry, and two sibling projects are two:
 { "projects": [ { "rootPath": "/home/me/app", "isSingleFile": false, "fileCount": 12 } ] }
 ```
 
-`rootPath` is that root directory, as a filesystem path; for a file of `stdlib/` or `runtime/` it is that
+`rootPath` is that root directory, as a filesystem path in the spelling the root was first reached by — a project opened through a symbolic link and by its physical path is one entry, named by the spelling that reached it first; for a file of `stdlib/` or `runtime/` it is that
 tier directory. `isSingleFile` is true where the ladder roots a document at its own file — a `.maxtasks`
 document, or any document no `.maxproj` marks — and then `rootPath` is that file and `fileCount` is 1. A document resolves to a root when its uri spells a
 filesystem path with a directory above it, so the list can name fewer projects than there are open

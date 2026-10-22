@@ -101,10 +101,10 @@ built from changes:
   place, so simultaneous cold runs never share an output path. Superseded builds, builds an older
   cache format left, and temporary builds a process that has ended left (see
   [`maxon cache`](#maxon-cache)) are removed on a best-effort basis.
-- **The path is anchored at the working directory, and only its `.` components, repeated separators and
-  a trailing separator are folded.** `x.maxon` and `./x.maxon` share one cache slot, and `a/../x.maxon` gets another: through
-  a symbolic link, `a/..` need not be the working directory. That costs an extra compile, never a wrong
-  binary.
+- **The slot belongs to the program's physical path.** The path is anchored at the working directory and
+  every symbolic link along it is followed, so `x.maxon`, `./x.maxon`, `a/../x.maxon` and a path through a
+  link all share one cache slot when they name one file. The part of a path that names nothing yet is
+  folded lexically, as [`FilePath.normalize()`](STDLIB_REFERENCE.md#filepath) folds it.
 
 `<cache>` is the directory Maxon owns on this host. It is the first of these whose variable names a
 directory this compiler can create:
@@ -425,9 +425,17 @@ release after the recorded one, up to this compiler's, with its fix. The MCP
 [`breaking_changes`](#breaking_changes) tool answers the same list, and the language server publishes it
 on the project's `.maxproj` document (see [`maxon lsp-server`](#maxon-lsp-server)).
 
+A project path the host refuses to resolve to its physical spelling — a directory above it the process may not
+search, or a lookup the host refuses — fails the command by name, and the sentence says what to check (the
+permissions of the directory it names; on Linux, that `/proc` is mounted). A build or test run that has
+succeeded and then cannot resolve the project to keep its compiler-version record prints that as a `warning:` and
+keeps its exit status. Every record, lock and cache slot is keyed by a resolved physical path.
+
 The release is kept in a **compiler-version record** under the cache root, at
 `<cache>/project/v1/<key>.mxpv`, where `<cache>` is the first usable row of the table under
-[The run cache](#the-run-cache) and `<key>` a hash of the project directory's path. It holds one line,
+[The run cache](#the-run-cache) and `<key>` a hash of the project directory's physical path (every symbolic link
+followed), so the command line, the language server and the MCP server reach one record however the project is
+spelled. It holds one line,
 the release as `X.Y.Z`, and is written after a project's build succeeds and after a project's
 [`maxon test`](#maxon-test) run passes. So:
 
@@ -457,7 +465,8 @@ the output and its sidecar as they are. A build that compiles first says why, in
 
 Each compile leaves a **build record** under the cache root, at `<cache>/build/v1/<key>.mxbr`, where
 `<cache>` is the first usable row of the table under [The run cache](#the-run-cache) and `<key>` a hash
-of the output's path. It records:
+of the output's physical path: every symbolic link above the output is followed, and the output's own name is
+kept, so a link at the output path is keyed as the file the build writes there. It records:
 
 - every source of the program, every standard-library and runtime source, and the Unicode tables the
   compiler embeds, each with its modification time — and on `wasm32-wasi`, `vendor/wasm-tools` and the
@@ -1334,9 +1343,9 @@ to choose the location.
 ### The tree lock
 
 Two commands writing the same output directories at once would corrupt each other's work, so some
-commands take a lock on the **checkout** they write into: the nearest directory above the path that
-holds a `stdlib/` directory (a Maxon source checkout or install). A project with no `stdlib/` above it
-takes no lock.
+commands take a lock on the **checkout** they write into: the nearest directory above the path's physical
+spelling (every symbolic link followed) that holds a `stdlib/` directory (a Maxon source checkout or
+install). A project with no `stdlib/` above it takes no lock.
 
 The lock is the file `.maxon-tree.lock` at that root. It is taken by `spec-test`, `scale-test`, and by a
 `build` of a directory without `--output=`. `run`, `test`, `fmt` and builds with `--output=` take none.
@@ -1389,7 +1398,7 @@ it to the new holder.
 Two builds of one output would overwrite each other's executable and [build record](#up-to-date), so
 every `maxon build` — `--output=` builds included — locks its **output** before it decides whether the
 output is up to date, and holds the lock until the build record is written. The lock is
-`<cache>/build/locks/<key>.lock`, `<key>` being the hash of the output's path the build record is named by,
+`<cache>/build/locks/<key>.lock`, `<key>` being the hash of the output's physical path the build record is named by,
 with its claim file `<key>.lock.claim` beside it, so a build takes it only where a cache root is usable.
 
 It works as [the tree lock](#the-tree-lock) does: the same record, claim file, refresh, takeover and
@@ -2207,6 +2216,19 @@ handles `workspace/didChangeWorkspaceFolders`: a folder added to the window caps
 once, and a folder removed from it stops capping it, with no restart of the editor. Nothing else in the
 workspace is renegotiated.
 
+**Every path stays in the spelling the client sent, and the physical path decides which file, folder and
+project is meant.** A document is read, indexed and answered under the uri the editor opened it with: its
+diagnostics are published under that uri, a definition names the file under the spelling the project was
+loaded with, and `maxon/projectLoading` and `maxon/listProjects` name a root by the spelling that reached it first.
+Where two spellings could mean one thing, the server asks the host for the physical path of each — every
+symbolic link followed, as `maxon build` keys its [compiler-version record](#breaking-changes-since-the-last-build)
+— and treats equal answers as one: two spellings of a file are one source of the project, two spellings of a
+project are one held project, and a workspace folder named by two spellings is closed when its last
+spelling is. A path the host refuses to resolve (a directory above it the server may not search, or, on
+Linux, an unmounted `/proc`) is reported by name and its sentence says what to check: on the document as one
+error item at its first character, for a workspace folder as a `window/showMessage` of type 1, and for
+`maxon/generateIR` as an internal error.
+
 **A project holds the files its `.maxproj` file describes, as `maxon build` reads them.** The ladder
 names the project's directory. When its `.maxproj` declares targets, the server runs the project file
 as [`maxon build`](#the-project-file) runs it and holds the `sources` the target describes, rooted at
@@ -2263,7 +2285,7 @@ the library built, by its first hover, definition or completion.
 
 Projects are held across requests, the eight most recently used roots at a time, and a source is re-read
 when its size or modification time changes on disk. Removing a workspace folder also drops every project
-held under it. The list of files under a root is re-walked at most once a second, so a file created on
+held under it, once no other spelling of that folder is still open. The list of files under a root is re-walked at most once a second, so a file created on
 disk after the project was built is resolved into shortly afterwards rather than at once, and a file
 deleted from disk leaves the project at that same walk — definition, hover and completion stop resolving
 into it, and a name it was the only declaration of stops being one the project declares. A rename is the
@@ -2365,7 +2387,7 @@ two files of one project are one entry, and two sibling projects are two:
 { "projects": [ { "rootPath": "/home/me/app", "isSingleFile": false, "fileCount": 12 } ] }
 ```
 
-`rootPath` is that root directory, as a filesystem path; for a file of `stdlib/` or `runtime/` it is that
+`rootPath` is that root directory, as a filesystem path in the spelling the root was first reached by — a project opened through a symbolic link and by its physical path is one entry, named by the spelling that reached it first; for a file of `stdlib/` or `runtime/` it is that
 tier directory. `isSingleFile` is true where the ladder roots a document at its own file — a `.maxtasks`
 document, or any document no `.maxproj` marks — and then `rootPath` is that file and `fileCount` is 1. A document resolves to a root when its uri spells a
 filesystem path with a directory above it, so the list can name fewer projects than there are open
@@ -2790,14 +2812,14 @@ compiler: the [report](#breaking-changes-since-the-last-build) `maxon build` pri
 
 | Argument | Type | Description |
 |----------|------|-------------|
-| `path` | string, required | The project directory, or a file in it: a file's project is the directory of the nearest `.maxproj` at or above it |
+| `path` | string, required | The project directory, or a file in it: a file's project is the directory of the nearest `.maxproj` at or above its physical path (every symbolic link followed) |
 | `since` | string | A release, `X.Y.Z`, to list the changes after in place of the release the project's record holds |
 
 The answer holds `success`, `recordedVersion` (the release the project's compiler-version record holds,
 present when there is a record, or `since` when it is given), `compilerVersion`, and `changes`: one
 `{version, change, fix}` object per breaking change, newest release first. A project with no record
-answers an empty `changes`. A path naming nothing, a file with no `.maxproj` at or above it, a `since`
-that is not a release version, and a malformed record are refused.
+answers an empty `changes`. A path naming nothing, a path the host refuses to resolve, a file with no
+`.maxproj` at or above it, a `since` that is not a release version, and a malformed record are refused.
 
 ### Debug tools
 

@@ -1,0 +1,49 @@
+#if not os(Windows)
+	let LinkedSubdirectoryDirName = "definition-linked-subdirectory"
+	let LinkedSubdirectoryTargetDirName = "definition-linked-subdirectory-target"
+	let LinkedSubdirectoryLinkName = "linked"
+	let LinkedSubdirectoryRootFileName = "main.maxon"
+	let LinkedSubdirectoryLeafFileName = "leaf.maxon"
+	let LinkedSubdirectoryRootSource = "function main() returns ExitCode\n\treturn leafHelper()\nend 'main'\n\nexport function rootHelper() returns ExitCode\n\treturn 0\nend 'rootHelper'\n"
+	let LinkedSubdirectoryLeafSource = "export function leafHelper() returns ExitCode\n\treturn rootHelper()\nend 'leafHelper'\n"
+	let LinkedSubdirectoryCallLine = 1
+	let LinkedSubdirectoryCallCharacter = 8
+
+	test 'definition: a file below a symbolic link to a directory outside the project resolves the declarations of the project it sits in'
+		let root = stagedProjectDiagnosticsRoot(LinkedSubdirectoryDirName)
+		writeCorpusFile(root, fileName: LinkedSubdirectoryRootFileName, content: LinkedSubdirectoryRootSource)
+
+		let target = freshOutsideCheckoutDir(LinkedSubdirectoryTargetDirName)
+		writeCorpusFile(target, fileName: LinkedSubdirectoryLeafFileName, content: LinkedSubdirectoryLeafSource)
+
+		let link = root.join(LinkedSubdirectoryLinkName)
+		_ = runSystemTool("ln", arguments: ["-s", target.toString(), link.toString()], what: "`ln -s` making a link to a directory outside the staged project")
+
+		var client = LspClient.start()
+
+		if let answered = try definitionBelowTheLink(client, root: root, link: link) 'asked'
+			client.release()
+
+			try File.delete(link) otherwise panic("the gate could not run — could not remove the link {link.toString()}.")
+
+			discardOutsideCheckoutDir(target)
+			discardOutsideCheckoutDir(root)
+
+			try Expect.isTrue(answered.isPresent, message: "a call to an `export`ed declaration in the project's root, from a file that sits below a symbolic link inside the project, did not resolve.")
+			try Expect.equal(answered.uri, expected: fileUriOf(root.join(LinkedSubdirectoryRootFileName)), message: "the declaration was answered under a spelling other than the one the project's folder was opened with.")
+		end 'asked' else (e) 'failed'
+			abandonedStagedSession(client, staged: root, failure: e, doing: "the session did not complete")
+		end 'failed'
+	end 'definition: a file below a symbolic link to a directory outside the project resolves the declarations of the project it sits in'
+
+	function definitionBelowTheLink(client LspClient, root FilePath, link FilePath) returns DefinitionResult throws LspClientError
+		let leafUri = fileUriOf(link.join(LinkedSubdirectoryLeafFileName))
+
+		_ = try client.initializeAtRoot(root)
+		try client.initialized()
+		try client.openDocument(leafUri, content: LinkedSubdirectoryLeafSource)
+		_ = try client.awaitPublishedDiagnostics(leafUri)
+
+		return try client.definition(leafUri, line: LinkedSubdirectoryCallLine, character: LinkedSubdirectoryCallCharacter)
+	end 'definitionBelowTheLink'
+#endif

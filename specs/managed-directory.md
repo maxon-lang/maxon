@@ -28,6 +28,7 @@ cases below that drive it directly compile in the library tier (`<!-- tier: stdl
 - `__ManagedDirectory.openSearch(managed)` — Opens a directory search with a pattern. Throws `__ManagedDirectoryError.openSearchFailed` if the path does not exist or access is denied.
 - `__ManagedDirectory.create(managed)` — Creates a directory. Throws `__ManagedDirectoryError.createFailed` on failure.
 - `__ManagedDirectory.currentPath()` — Returns the current working directory as `__ManagedMemory`. Throws `__ManagedDirectoryError.currentPathFailed` on failure.
+- `__ManagedDirectory.resolve(managed)` — Returns the physical path of an existing file or directory as `__ManagedMemory`, every symbolic link followed. Throws `__ManagedDirectoryError.notFound` when the path names nothing, `accessDenied` when it may not be looked up, and `resolveFailed` for any other refusal.
 
 ### Static Methods (non-throwing)
 

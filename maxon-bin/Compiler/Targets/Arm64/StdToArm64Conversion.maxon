@@ -1022,7 +1022,7 @@ export type StdToArm64Lowering
 			osHostProcess(resultId, service, a0Id, a1Id, a2Id, a3Id, a4Id, _) then self.lowerOsHostProcess(resultId, service: service, operands: fiveArgs(a0Id, second: a1Id, third: a2Id, fourth: a3Id, fifth: a4Id), dstRef: dstRef)
 			osNetpoll(resultId, verb, a0Id, a1Id, a2Id, a3Id, a4Id) then self.lowerOsNetpoll(resultId, verb: verb, operands: fiveArgs(a0Id, second: a1Id, third: a2Id, fourth: a3Id, fifth: a4Id), dstRef: dstRef)
 			osSocketOverlapped then panic("StdToArm64Lowering: `osSocketOverlapped` is an OVERLAPPED Winsock transfer and this lane has no Winsock — its sockets are driven by readiness, so `ManagedSocketRuntime.socketWaitShape` answers `polled` and emits none")
-			osPathQuery then panic("StdToArm64Lowering: `osPathQuery` asks Win32 for a system directory or a full path and this lane has none — `SubprocessRuntime.PathSearchShape.posix` searches `PATH` alone and emits none")
+			osPathQuery(resultId, verb, a0Id, a1Id, a2Id) then self.lowerOsPathQuery(resultId, verb: verb, a0Id: a0Id, a1Id: a1Id, a2Id: a2Id, dstRef: dstRef)
 
 			// One op, no operand, no register: the encoder reaches the counter through the reserved x16/x17
 			// scratch pair, which is outside the allocatable pool.
@@ -2387,6 +2387,16 @@ export type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: mode))
 		self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostFileOpenName), args: ValueIdArray.create(), dstRef: dstRef)
 	end 'lowerOsFileOpen'
+
+	function lowerOsPathQuery(resultId ValueId, verb PathQueryVerb, a0Id ValueId, a1Id ValueId, a2Id ValueId, dstRef ElementIndex)
+		match verb 'v'
+			openForResolve then self.lowerOsFileOpen(resultId, pathPtrId: a0Id, darwinFlags: DarwinOpenResolveFlags, linuxFlags: LinuxOpenResolveFlags, mode: PosixNoFileMode as MachineWord, dstRef: dstRef)
+			finalPath then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostFdPathName), args: threeArgs(a0Id, second: a2Id, third: a1Id), dstRef: dstRef)
+			systemDirectory or
+			windowsDirectory or
+			fullPath then panic("StdToArm64Lowering: `osPathQuery` asks Win32 for a system directory or a full path and this lane has none — `SubprocessRuntime.PathSearchShape.posix` searches `PATH` alone and emits none")
+		end 'v'
+	end 'lowerOsPathQuery'
 
 	// `CloseHandle` on a file ⇒ `close(fd)` — libSystem's on macOS, `svc` on Linux, and NOTHING else differs:
 	// the descriptor is in x0 either way and the `int` both answer is DISCARDED, which is the op's own

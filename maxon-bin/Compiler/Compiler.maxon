@@ -230,7 +230,13 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 		try refuseCompile(project)
 	end 'writerToolsMissing'
 
-	let rebuildsItself = outputIsRunningImage(outputPath)
+	let outputIdentity = try entryIdentityPathOf(outputPath) otherwise (e) 'unidentifiable'
+		throw CompileError.unidentifiablePath(e.sentence())
+	end 'unidentifiable'
+
+	let rebuildsItself = try outputIsRunningImage(outputIdentity) otherwise (e) 'unidentifiableImage'
+		throw CompileError.unidentifiablePath(e.sentence())
+	end 'unidentifiableImage'
 
 	if not rebuildsItself 'discardAheadOfThePipeline'
 		try discardPreviousOutput(project, outputPath: outputPath)
@@ -377,14 +383,16 @@ function siblingImagePath(outputPath FilePath, infix String) returns FilePath
 end 'siblingImagePath'
 
 // `maxon build` at the root of this repo names an output that IS the running binary.
-export function outputIsRunningImage(outputPath FilePath) returns bool
+export function outputIsRunningImage(outputIdentity FilePath) returns bool throws RunCacheError
 	let running = try Process.executablePath() otherwise 'noIntrospection'
 		// A host that will not say what it is running cannot be asked this question. A self-rebuild on
 		// such a host is refused with E6002 by `discardPreviousOutput`, which cannot delete a running image.
 		return false
 	end 'noIntrospection'
 
-	return outputPath.resolve(Directory.currentPath()).equals(running.normalize())
+	let runningIdentity = try entryIdentityPathOf(running)
+
+	return outputIdentity.equals(runningIdentity)
 end 'outputIsRunningImage'
 
 // ⭐⭐ **A COMPILER REBUILDING ITSELF WRITES OVER THE IMAGE IT IS EXECUTING, AND NO OS ALLOWS THAT.**

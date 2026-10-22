@@ -46,6 +46,12 @@ export let LinuxOpenCreateTruncateFlags = PosixOpenWriteOnly or LinuxOpenCreate 
 
 export let LinuxOpenCreateExclusiveFlags = PosixOpenWriteOnly or LinuxOpenCreate or LinuxOpenExclusive
 
+// `O_PATH|O_CLOEXEC`, for `PathQueryVerb.openForResolve`. Close-on-exec so a child spawned while the
+// descriptor is open does not inherit it.
+let LinuxOpenPathOnly = 0x200000
+
+export let LinuxOpenResolveFlags = LinuxOpenPathOnly or LinuxOpenCloseOnExec
+
 // `unlinkat`'s flag word: 0 means "remove a FILE". This op is `DeleteFileW`, which refuses a directory.
 export let LinuxUnlinkFileFlags = 0
 
@@ -347,6 +353,13 @@ export let LinuxClockThreadCpuTime = 3
 // `_NSGetExecutablePath` has no counterpart here and no call answers the question.
 export let LinuxProcSelfExe = b"/proc/self/exe"
 export let LinuxProcSelfPidNamespace = b"/proc/self/ns/pid"
+
+// `mrt_host_fd_path` reads the link `/proc/self/fd/<fd>`, spelled in a frame buffer of
+// `LinuxFdPathBufferBytes`: this prefix, at most 20 digits and a NUL. Both lanes copy the prefix as two
+// overlapping `LinuxFdPathCopyWordBytes` words, which covers it only while it is 8 to 16 bytes long.
+export let LinuxProcSelfFd = b"/proc/self/fd/"
+export let LinuxFdPathBufferBytes = 40
+export let LinuxFdPathCopyWordBytes = 8
 
 // ⭐⭐ **`cpu_set_t` IS 128 BYTES, AND `sched_getaffinity` REFUSES A SMALLER ONE.** The kernel demands a size
 // that is a multiple of a word AND large enough for every possible CPU, answering `-EINVAL` otherwise; 128

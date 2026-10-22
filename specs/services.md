@@ -935,7 +935,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: a-factory-may-be-spelled-with-a-keyword -->
-⭐ A keyword may be a DECLARED NAME, and `stdlib/FilePath.maxon:34` proves the shape is live corpus:
+⭐ A keyword may be a DECLARED NAME, and `FilePath.from` in `stdlib/FilePath.maxon` proves the shape is live corpus:
 `public static function from(path String) returns FilePath`. So `spawn Reader.from(3)` must be recognized
 as a spawn — both halves of `<Type>.<factory>` go through the same name reader every other declaration
 position uses.

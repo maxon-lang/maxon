@@ -1,0 +1,44 @@
+#if not os(Windows)
+	let LinkedDefinitionDirName = "definition-through-a-link"
+	let LinkedDefinitionLinkDirName = "definition-through-a-link-link"
+	let LinkedDefinitionHelperFileName = "helper.maxon"
+	let LinkedDefinitionMainFileName = "main.maxon"
+	let LinkedDefinitionHelperSource = "export function sharedHelper() returns ExitCode\n\treturn 0\nend 'sharedHelper'\n"
+	let LinkedDefinitionMainSource = "function main() returns ExitCode\n\treturn sharedHelper()\nend 'main'\n"
+	let LinkedDefinitionCallLine = 1
+	let LinkedDefinitionCallCharacter = 12
+
+	test 'definition: a project opened through a symbolic link answers a sibling under the spelling the editor opened it with'
+		let root = stagedProjectDiagnosticsRoot(LinkedDefinitionDirName)
+		writeCorpusFile(root, fileName: LinkedDefinitionHelperFileName, content: LinkedDefinitionHelperSource)
+
+		let link = hostTempDir().join(outsideCheckoutDirName(LinkedDefinitionLinkDirName))
+		_ = runSystemTool("ln", arguments: ["-s", root.toString(), link.toString()], what: "`ln -s` making a link to the staged project")
+
+		var client = LspClient.start()
+
+		if let answered = try definitionThroughTheLink(client, link: link) 'asked'
+			client.release()
+
+			try File.delete(link) otherwise panic("the gate could not run — could not remove the link {link.toString()}.")
+
+			discardOutsideCheckoutDir(root)
+
+			try Expect.isTrue(answered.isPresent, message: "a call to an `export`ed declaration in a sibling file did not resolve.")
+			try Expect.equal(answered.uri, expected: fileUriOf(link.join(LinkedDefinitionHelperFileName)), message: "the sibling was answered under a spelling the editor never opened the project with.")
+		end 'asked' else (e) 'failed'
+			abandonedStagedSession(client, staged: root, failure: e, doing: "the session did not complete")
+		end 'failed'
+	end 'definition: a project opened through a symbolic link answers a sibling under the spelling the editor opened it with'
+
+	function definitionThroughTheLink(client LspClient, link FilePath) returns DefinitionResult throws LspClientError
+		let mainUri = fileUriOf(link.join(LinkedDefinitionMainFileName))
+
+		_ = try client.initializeAtRoot(link)
+		try client.initialized()
+		try client.openDocument(mainUri, content: LinkedDefinitionMainSource)
+		_ = try client.awaitPublishedDiagnostics(mainUri)
+
+		return try client.definition(mainUri, line: LinkedDefinitionCallLine, character: LinkedDefinitionCallCharacter)
+	end 'definitionThroughTheLink'
+#endif

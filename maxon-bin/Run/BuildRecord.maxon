@@ -168,14 +168,14 @@ function locksDirectoryIn(root FilePath) returns FilePath
 	return root.join(BuildCommandDirName).join(BuildLocksDirName)
 end 'locksDirectoryIn'
 
-export function recordLockPathOf(output FilePath) returns FilePath throws RunCacheError
+export function recordLockPathOf(identity FilePath) returns FilePath throws RunCacheError
 	let directory = locksDirectoryIn(try hostCacheRoot())
 
 	if not Directory.create(directory) 'unusable'
 		throw RunCacheError.unavailable("could not create {directory.toString()}, where build locks are kept")
 	end 'unusable'
 
-	return outputLockPathIn(directory, key: pathKeyOf(anchoredOutputOf(output)))
+	return outputLockPathIn(directory, key: pathKeyOf(identity))
 end 'recordLockPathOf'
 
 export function isBuildLocksDirectory(path FilePath) returns bool
@@ -194,16 +194,12 @@ export function buildLockBelonging(path FilePath) returns FilePath throws Absent
 	return outputLockBelonging(path, directory: directory)
 end 'buildLockBelonging'
 
-function anchoredOutputOf(output FilePath) returns FilePath
-	return output.anchoredAt(Directory.currentPath())
-end 'anchoredOutputOf'
-
-function recordPathOf(anchored FilePath) returns FilePath throws RunCacheError
-	return recordDirectoryIn(try hostCacheRoot()).join("{pathKeyOf(anchored)}{BuildRecordExtension}")
+function recordPathOf(identity FilePath) returns FilePath throws RunCacheError
+	return recordDirectoryIn(try hostCacheRoot()).join("{pathKeyOf(identity)}{BuildRecordExtension}")
 end 'recordPathOf'
 
 export function buildRecordOf(request BuildRecordRequest) returns PendingBuildRecord
-	let output = anchoredOutputOf(request.output)
+	let output = request.output
 
 	let path = try recordPathOf(output) otherwise (e) 'noPlaceToKeepIt'
 		return PendingBuildRecord.unrecordable(e.sentence())
@@ -797,14 +793,18 @@ export function publishBuildRecord(record BuildRecord, started Timestamp)
 	keepRecordsTidy(recordDirectoryOf(record.path), extension: BuildRecordExtension, most: MostBuildRecords, format: BuildRecordFormat)
 end 'publishBuildRecord'
 
-export function discardBuildRecordOf(output FilePath)
-	let path = try recordPathOf(anchoredOutputOf(output)) otherwise return
+export function discardBuildRecordOf(identity FilePath)
+	let path = try recordPathOf(identity) otherwise return
 
 	try File.delete(path) otherwise ignore
 end 'discardBuildRecordOf'
 
 export function discardBuildRecordsNamed(stem FilePath)
 	for os in Os.allCases 'eachTarget'
-		discardBuildRecordOf(try FilePath.from("{stem.toString()}{executableExtension(os)}") otherwise panic("discardBuildRecordsNamed: {stem.toString()} with an executable extension appended is a spellable path"))
+		let named = try FilePath.from("{stem.toString()}{executableExtension(os)}") otherwise panic("discardBuildRecordsNamed: {stem.toString()} with an executable extension appended is a spellable path")
+
+		if let identity = try entryIdentityPathOf(named) 'identified'
+			discardBuildRecordOf(identity)
+		end 'identified'
 	end 'eachTarget'
 end 'discardBuildRecordsNamed'
