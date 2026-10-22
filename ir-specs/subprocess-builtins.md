@@ -447,7 +447,7 @@ func @__np_pd_wait_any {
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.mov rax, gs:[rax]
-    x64.aluBaseDispImm32.add [rax + 656], 1
+    x64.aluBaseDispImm32.add [rax + 808], 1
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
@@ -480,7 +480,7 @@ func @__np_pd_wait_any {
     x64.cmpRegImm32 rdx, 1
     x64.jcc notEqual, __rl_slow#42
   __rl_cont#41:
-    x64.aluBaseDispImm32.add [rax + 656], -1
+    x64.aluBaseDispImm32.add [rax + 808], -1
     x64.movRegImm32 rcx, 10
     x64.movRegReg rdx, rbx
     x64.callDirect __gt_park
@@ -489,7 +489,7 @@ func @__np_pd_wait_any {
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.mov rax, gs:[rax]
-    x64.aluBaseDispImm32.add [rax + 656], 1
+    x64.aluBaseDispImm32.add [rax + 808], 1
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
@@ -512,7 +512,7 @@ func @__np_pd_wait_any {
     x64.cmpRegImm32 rdx, 1
     x64.jcc notEqual, __rl_slow#46
   __rl_cont#45:
-    x64.aluBaseDispImm32.add [rax + 656], -1
+    x64.aluBaseDispImm32.add [rax + 808], -1
     x64.epilogue 72
     x64.popReg r15
     x64.popReg r14
@@ -681,7 +681,7 @@ func @__np_pd_wait_any {
     x64.cmpRegImm32 rdx, 1
     x64.jcc notEqual, __rl_slow#40
   __rl_cont#39:
-    x64.aluBaseDispImm32.add [rax + 656], -1
+    x64.aluBaseDispImm32.add [rax + 808], -1
     x64.movRegImm32 r8, 1
     x64.movRegReg rcx, r13
     x64.shlRegCl r8, r8
@@ -766,7 +766,7 @@ func @__np_pd_wait_any {
     x64.cmpRegImm32 rdx, 1
     x64.jcc notEqual, __rl_slow#38
   __rl_cont#37:
-    x64.aluBaseDispImm32.add [rax + 656], -1
+    x64.aluBaseDispImm32.add [rax + 808], -1
     x64.movRegImm32 r8, 0
     x64.epilogue 72
     x64.popReg r15
@@ -1193,9 +1193,9 @@ func @__np_pd_wait_any {
     arm64.cset x17, ne
     arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
     arm64.mul x1, x16, x17
-    arm64.loadRegBaseDisp.word64 x2, [x1 + 656]
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 808]
     arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x1 + 656], x2
+    arm64.storeBaseDispReg.word64 [x1 + 808], x2
     arm64.movImm x1, 1
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 0
@@ -1233,9 +1233,9 @@ func @__np_pd_wait_any {
     arm64.cmp x2, 1
     arm64.b.ne __rl_slow#42
   __rl_cont#41:
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 656]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 808]
     arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x1 + 656], x0
+    arm64.storeBaseDispReg.word64 [x1 + 808], x0
     arm64.movImm x0, 10
     arm64.movRegReg x1, x19
     arm64.bl __gt_park
@@ -1249,9 +1249,9 @@ func @__np_pd_wait_any {
     arm64.cset x17, ne
     arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
     arm64.mul x1, x16, x17
-    arm64.loadRegBaseDisp.word64 x2, [x1 + 656]
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 808]
     arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x1 + 656], x2
+    arm64.storeBaseDispReg.word64 [x1 + 808], x2
     arm64.movImm x1, 1
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 0
@@ -1279,9 +1279,9 @@ func @__np_pd_wait_any {
     arm64.cmp x3, 1
     arm64.b.ne __rl_slow#46
   __rl_cont#45:
-    arm64.loadRegBaseDisp.word64 x1, [x2 + 656]
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 808]
     arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x2 + 656], x1
+    arm64.storeBaseDispReg.word64 [x2 + 808], x1
     arm64.loadRegSlot x19, slot3
     arm64.loadRegSlot x20, slot4
     arm64.loadRegSlot x21, slot5
@@ -1445,9 +1445,9 @@ func @__np_pd_wait_any {
     arm64.cmp x2, 1
     arm64.b.ne __rl_slow#40
   __rl_cont#39:
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 656]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 808]
     arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x1 + 656], x0
+    arm64.storeBaseDispReg.word64 [x1 + 808], x0
     arm64.movImm x0, 1
     arm64.lslv x0, x0, x21
     arm64.loadRegSlot x19, slot3
@@ -1528,9 +1528,9 @@ func @__np_pd_wait_any {
     arm64.cmp x2, 1
     arm64.b.ne __rl_slow#38
   __rl_cont#37:
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 656]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 808]
     arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x1 + 656], x0
+    arm64.storeBaseDispReg.word64 [x1 + 808], x0
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot3
     arm64.loadRegSlot x20, slot4
@@ -1969,9 +1969,9 @@ func @__np_pd_wait_any {
     arm64.cset x17, ne
     arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
     arm64.mul x1, x16, x17
-    arm64.loadRegBaseDisp.word64 x2, [x1 + 656]
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 808]
     arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x1 + 656], x2
+    arm64.storeBaseDispReg.word64 [x1 + 808], x2
     arm64.movImm x1, 1
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 0
@@ -2009,9 +2009,9 @@ func @__np_pd_wait_any {
     arm64.cmp x2, 1
     arm64.b.ne __rl_slow#42
   __rl_cont#41:
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 656]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 808]
     arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x1 + 656], x0
+    arm64.storeBaseDispReg.word64 [x1 + 808], x0
     arm64.movImm x0, 10
     arm64.movRegReg x1, x19
     arm64.bl __gt_park
@@ -2025,9 +2025,9 @@ func @__np_pd_wait_any {
     arm64.cset x17, ne
     arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
     arm64.mul x1, x16, x17
-    arm64.loadRegBaseDisp.word64 x2, [x1 + 656]
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 808]
     arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x1 + 656], x2
+    arm64.storeBaseDispReg.word64 [x1 + 808], x2
     arm64.movImm x1, 1
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 0
@@ -2055,9 +2055,9 @@ func @__np_pd_wait_any {
     arm64.cmp x3, 1
     arm64.b.ne __rl_slow#46
   __rl_cont#45:
-    arm64.loadRegBaseDisp.word64 x1, [x2 + 656]
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 808]
     arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x2 + 656], x1
+    arm64.storeBaseDispReg.word64 [x2 + 808], x1
     arm64.loadRegSlot x19, slot3
     arm64.loadRegSlot x20, slot4
     arm64.loadRegSlot x21, slot5
@@ -2221,9 +2221,9 @@ func @__np_pd_wait_any {
     arm64.cmp x2, 1
     arm64.b.ne __rl_slow#40
   __rl_cont#39:
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 656]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 808]
     arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x1 + 656], x0
+    arm64.storeBaseDispReg.word64 [x1 + 808], x0
     arm64.movImm x0, 1
     arm64.lslv x0, x0, x21
     arm64.loadRegSlot x19, slot3
@@ -2304,9 +2304,9 @@ func @__np_pd_wait_any {
     arm64.cmp x2, 1
     arm64.b.ne __rl_slow#38
   __rl_cont#37:
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 656]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 808]
     arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x1 + 656], x0
+    arm64.storeBaseDispReg.word64 [x1 + 808], x0
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot3
     arm64.loadRegSlot x20, slot4

@@ -454,16 +454,8 @@ let Arm64OpLdpPostX = 0xA8C00000
 let Arm64OpStpOffX = 0xA9000000
 let Arm64OpLdpOffX = 0xA9400000
 
-// ⭐ **THE SIMD&FP TWINS, FOR THE GREEN-THREAD CONTEXT SWITCH.** Same instruction class, `V=1` and
-// `opc=01` (the 64-bit D form): `STP Dt1, Dt2, [Xn, #imm]!` and `LDP Dt1, Dt2, [Xn], #imm`. The imm7 field
-// and its scale are IDENTICAL to the X forms above — a D register is 8 bytes too — which is why
-// `arm64EmitPairOffset` serves all four with no width parameter.
-//
-// ⚠ They exist because d8..d15 are CALLEE-SAVED and the switch must preserve exactly what a call preserves.
-// The ordinary prologue spills them to frame slots one at a time (`Arm64PrologueEpilogue`'s header says why);
-// the switch cannot, having no frame — it lays a fixed 160-byte block whose size `__gt_spawn` must byte-match.
-let Arm64OpStpPreD = 0x6D800000
-let Arm64OpLdpPostD = 0x6CC00000
+let Arm64OpStpOffD = 0x6D000000
+let Arm64OpLdpOffD = 0x6D400000
 
 let Arm64PairImm7Shift = 15
 let Arm64PairImm7Mask = 0x7F
@@ -471,11 +463,6 @@ let Arm64PairImm7Mask = 0x7F
 // The STP/LDP imm7 counts units of ONE transferred register (8 bytes for the X forms), not bytes — the
 // scale the frame record's offset and the fill ladder's pair displacements both divide by.
 let Arm64PairScaleBytes = 8
-
-// The STP pre-index / LDP post-index imm7 reaches -512..+504 (scaled by 8). The smaller bound
-// governs both so one threshold decides the compact-vs-split frame form (larger frames use
-// a SUB-sp split).
-let Arm64FramePairIndexMax = 504
 
 // --- Floating-point (double precision — the scalar core's only float width) ---
 let Arm64OpFaddD = 0x1E602800
@@ -1242,6 +1229,12 @@ end 'arm64SignedMemField'
 let Arm64UnscaledImm9Modulus = 512
 let Arm64PairImm7Modulus = 128
 
+// The STP/LDP imm7 reaches -512..+504 bytes (scaled by 8). The smaller positive bound governs the
+// pre-index/post-index frame record too, so one threshold decides the compact-vs-split frame form
+// (larger frames use a SUB-sp split).
+let Arm64PairOffsetMaxBytes = (Arm64PairImm7Modulus / 2 - 1) * Arm64PairScaleBytes
+let Arm64PairOffsetMinBytes = -(Arm64PairImm7Modulus / 2) * Arm64PairScaleBytes
+
 // An UNSCALED SIGNED-offset load/store `op Rt, [Xn, #simm9]` — the ±256-byte form. Two callers, and they
 // want it for opposite reasons: a small frame slot uses it because the scaled form's alignment rule is not
 // worth the check there, and the byte-fill ladder because the scaled form has NO SIGN and the ladder's tail
@@ -1255,6 +1248,10 @@ end 'arm64EmitUnscaledMem'
 // what `Arm64PairScaleBytes` divides out, and it is signed — the property that lets the fill ladder anchor a
 // pair store backward off the region's end, and the reason this is not folded into the scaled builder above.
 function arm64EmitPairOffset(code ByteArray, opcode MachineWord, rt1 MachineWord, rt2 MachineWord, baseReg MachineWord, byteOffset Imm32)
+	if byteOffset > Arm64PairOffsetMaxBytes or byteOffset < Arm64PairOffsetMinBytes or byteOffset mod Arm64PairScaleBytes != 0 'unencodable'
+		panic("arm64EmitPairOffset: byte offset {byteOffset} has no signed imm7 form — STP/LDP reach {Arm64PairOffsetMinBytes} to {Arm64PairOffsetMaxBytes} in steps of {Arm64PairScaleBytes}, and a masked immediate would address some other word")
+	end 'unencodable'
+
 	let field = arm64SignedMemField(byteOffset, scale: Arm64PairScaleBytes, modulus: Arm64PairImm7Modulus)
 	emitArm64Insn(code, insn: opcode or ((field and Arm64PairImm7Mask) shl Arm64PairImm7Shift) or (rt2 shl Arm64Rt2Shift) or (baseReg shl Arm64RnShift) or rt1)
 end 'arm64EmitPairOffset'
@@ -2489,7 +2486,7 @@ export function arm64EmitMovToSp(code ByteArray, src MachineWord)
 	arm64EmitAddSubImm12(code, opcode: Arm64OpAddImm, rd: Arm64SpBaseField, rn: src, imm12: 0, shiftHi: false)
 end 'arm64EmitMovToSp'
 
-// `STP Xt1, Xt2, [SP, #-16]!` — the pre-indexed GPR push the context switch lays its saved block with.
+// `STP Xt1, Xt2, [SP, #-16]!` — the pre-indexed GPR push.
 export function arm64EmitPushPairGpr(code ByteArray, rt1 MachineWord, rt2 MachineWord)
 	arm64EmitPairOffset(code, opcode: Arm64OpStpPreX, rt1: rt1, rt2: rt2, baseReg: Arm64SpBaseField, byteOffset: -Arm64GtPairBytes as Imm32)
 end 'arm64EmitPushPairGpr'
@@ -2499,21 +2496,29 @@ export function arm64EmitPopPairGpr(code ByteArray, rt1 MachineWord, rt2 Machine
 	arm64EmitPairOffset(code, opcode: Arm64OpLdpPostX, rt1: rt1, rt2: rt2, baseReg: Arm64SpBaseField, byteOffset: Arm64GtPairBytes as Imm32)
 end 'arm64EmitPopPairGpr'
 
-// `STP Dt1, Dt2, [SP, #-16]!` / `LDP Dt1, Dt2, [SP], #16` — the SIMD&FP twins, for the callee-saved d8..d15.
-export function arm64EmitPushPairFp(code ByteArray, rt1 MachineWord, rt2 MachineWord)
-	arm64EmitPairOffset(code, opcode: Arm64OpStpPreD, rt1: rt1, rt2: rt2, baseReg: Arm64SpBaseField, byteOffset: -Arm64GtPairBytes as Imm32)
-end 'arm64EmitPushPairFp'
+export function arm64EmitStorePairGprAt(code ByteArray, rt1 MachineWord, rt2 MachineWord, baseReg MachineWord, byteOffset MachineWord)
+	arm64EmitPairOffset(code, opcode: Arm64OpStpOffX, rt1: rt1, rt2: rt2, baseReg: baseReg, byteOffset: byteOffset as Imm32)
+end 'arm64EmitStorePairGprAt'
 
-export function arm64EmitPopPairFp(code ByteArray, rt1 MachineWord, rt2 MachineWord)
-	arm64EmitPairOffset(code, opcode: Arm64OpLdpPostD, rt1: rt1, rt2: rt2, baseReg: Arm64SpBaseField, byteOffset: Arm64GtPairBytes as Imm32)
-end 'arm64EmitPopPairFp'
+export function arm64EmitLoadPairGprAt(code ByteArray, rt1 MachineWord, rt2 MachineWord, baseReg MachineWord, byteOffset MachineWord)
+	arm64EmitPairOffset(code, opcode: Arm64OpLdpOffX, rt1: rt1, rt2: rt2, baseReg: baseReg, byteOffset: byteOffset as Imm32)
+end 'arm64EmitLoadPairGprAt'
+
+export function arm64EmitStorePairFpAt(code ByteArray, rt1 MachineWord, rt2 MachineWord, baseReg MachineWord, byteOffset MachineWord)
+	arm64EmitPairOffset(code, opcode: Arm64OpStpOffD, rt1: rt1, rt2: rt2, baseReg: baseReg, byteOffset: byteOffset as Imm32)
+end 'arm64EmitStorePairFpAt'
+
+export function arm64EmitLoadPairFpAt(code ByteArray, rt1 MachineWord, rt2 MachineWord, baseReg MachineWord, byteOffset MachineWord)
+	arm64EmitPairOffset(code, opcode: Arm64OpLdpOffD, rt1: rt1, rt2: rt2, baseReg: baseReg, byteOffset: byteOffset as Imm32)
+end 'arm64EmitLoadPairFpAt'
 
 export let Arm64SlotScale = SpillSlotBytes as MachineWord
 
-// The bytes ONE pushed register pair moves SP by — two 8-byte registers. Named because it is the stride the
-// context switch's frame is DERIVED from (`Arm64GtRuntime.assertArm64GtFrameConsistent` multiplies it by the
-// pair count), and a bare 16 in that derivation would be indistinguishable from the stack's 16-byte ALIGNMENT,
-// which is a different fact that happens to share the number.
+// The bytes ONE pushed register pair moves SP by — two 8-byte registers. Named because it is the
+// stride the context switch's saved-register block is DERIVED from
+// (`Arm64GtRuntime.assertArm64GtFrameConsistent` multiplies it by the pair count), and a bare 16 in
+// that derivation would be indistinguishable from the stack's 16-byte ALIGNMENT, which is a
+// different fact that happens to share the number.
 export let Arm64GtPairBytes = 2 * SpillSlotBytes
 
 // `str`/`ldr Xt, [SP, #byteOffset]` — a hand-assembled chunk addressing its own frame off SP. The ONE pair
@@ -2638,12 +2643,12 @@ export let Arm64FrameRecordBytes = 16
 // #recordOffset` then keeps x29 pointing at the record, which is what leaves `[x29 + 16 + slot*8]` spill
 // addressing identical in both shapes.
 export function arm64EmitPrologue(code ByteArray, frameSize StackSize, recordOffset StackSize, probeScratchIsFree bool)
-	if frameSize <= Arm64FramePairIndexMax and recordOffset == 0 'compact'
-		arm64EmitStpPreIndex(code, frameSize: frameSize)
+	if frameSize <= Arm64PairOffsetMaxBytes and recordOffset == 0 'compact'
+		arm64EmitFrameRecord(code, opcode: Arm64OpStpPreX, byteOffset: -(frameSize as Imm32))
 		arm64EmitAddFpFromSp(code, offset: recordOffset)
 	end 'compact' else 'explicitAlloc'
 		arm64EmitFrameAlloc(code, frameSize: frameSize, probeScratchIsFree: probeScratchIsFree)
-		arm64EmitFrameRecordPair(code, opcode: Arm64OpStpOffX, offset: recordOffset as MachineWord)
+		arm64EmitFrameRecord(code, opcode: Arm64OpStpOffX, byteOffset: recordOffset as Imm32)
 		arm64EmitAddFpFromSp(code, offset: recordOffset)
 	end 'explicitAlloc'
 end 'arm64EmitPrologue'
@@ -2686,10 +2691,10 @@ end 'arm64EmitStackProbe'
 // explicit form for the mirror of the prologue's reason: the post-indexed LDP reloads from the OLD SP,
 // which is the outgoing-argument region rather than the record.
 export function arm64EmitEpilogue(code ByteArray, frameSize StackSize, recordOffset StackSize)
-	if frameSize <= Arm64FramePairIndexMax and recordOffset == 0 'compact'
-		arm64EmitLdpPostIndex(code, frameSize: frameSize)
+	if frameSize <= Arm64PairOffsetMaxBytes and recordOffset == 0 'compact'
+		arm64EmitFrameRecord(code, opcode: Arm64OpLdpPostX, byteOffset: frameSize as Imm32)
 	end 'compact' else 'explicitFree'
-		arm64EmitFrameRecordPair(code, opcode: Arm64OpLdpOffX, offset: recordOffset as MachineWord)
+		arm64EmitFrameRecord(code, opcode: Arm64OpLdpOffX, byteOffset: recordOffset as Imm32)
 		arm64EmitStackFree(code, amount: frameSize)
 	end 'explicitFree'
 end 'arm64EmitEpilogue'
@@ -2711,7 +2716,7 @@ end 'arm64EmitEpilogue'
 // same region, and all three quote the one derivation instead of restating its number.
 //
 // ⚠ AND IT IS THE LAST OF THE THREE TO FIRE, WHICH MEANS IT NEVER DOES — raising `MaxAbiArgs` does NOT
-// reach this door. `arm64EmitFrameRecordPair`'s signed STP/LDP imm7 binds the SAME region at 504 bytes,
+// reach this door. `arm64EmitFrameRecord`'s signed STP/LDP imm7 binds the SAME region at 504 bytes,
 // 65x sooner, from a prologue that is encoded before any body op; the true headroom is SEVEN argument
 // slots, and `arm64OutgoingArgRegionBytes`'s header carries the measurement and what to do about it.
 // So this message states the field it guards and sends the reader THERE rather than proposing a fix for
@@ -2720,41 +2725,15 @@ function arm64EmitStoreOutgoingArg(code ByteArray, slot SpillSlot, srcReg Target
 	let byteOffset = (slot as StackSize) * SpillSlotBytes
 
 	if not arm64ByteOffsetFitsScaledImm12(byteOffset as MachineWord, scale: Arm64SlotScale) 'unencodable'
-		panic("arm64EmitStoreOutgoingArg: outgoing argument slot {slot} sits at byte {byteOffset} of this frame's argument region, past the {Arm64LoadStoreImm12Mask} 8-byte units the scaled STR field reaches — the region can hold at most {arm64OutgoingArgRegionBytes()} bytes while `MaxAbiArgs` caps a signature. Reaching THIS door before `arm64EmitFrameRecordPair`'s 504-byte STP/LDP imm7, which binds the same region 65x sooner from the prologue, means the frame record no longer rides that field — so read `arm64OutgoingArgRegionBytes`'s header for which ceiling moved, and expect the answer to be `arm64EmitWideFrameSlot`'s x17 fold rewritten against SP")
+		panic("arm64EmitStoreOutgoingArg: outgoing argument slot {slot} sits at byte {byteOffset} of this frame's argument region, past the {Arm64LoadStoreImm12Mask} 8-byte units the scaled STR field reaches — the region can hold at most {arm64OutgoingArgRegionBytes()} bytes while `MaxAbiArgs` caps a signature. Reaching THIS door before `arm64EmitFrameRecord`'s 504-byte STP/LDP imm7, which binds the same region 65x sooner from the prologue, means the frame record no longer rides that field — so read `arm64OutgoingArgRegionBytes`'s header for which ceiling moved, and expect the answer to be `arm64EmitWideFrameSlot`'s x17 fold rewritten against SP")
 	end 'unencodable'
 
 	arm64EmitWord64Store(code, base: Arm64SpBaseField, byteOffset: byteOffset as MachineWord, src: srcReg)
 end 'arm64EmitStoreOutgoingArg'
 
-// STP x29, x30, [sp, #-frameSize]! (pre-indexed). imm7 is signed, scaled by 8.
-export function arm64EmitStpPreIndex(code ByteArray, frameSize StackSize)
-	let imm7 = (-(frameSize as FullRangeInt) / 8) and Arm64PairImm7Mask
-	emitArm64Insn(code, insn: ((Arm64OpStpPreX or (imm7 shl Arm64PairImm7Shift) or (Arm64Lr shl Arm64Rt2Shift) or (Arm64SpBaseField shl Arm64RnShift) or Arm64Fp) as MachineWord))
-end 'arm64EmitStpPreIndex'
-
-// LDP x29, x30, [sp], #frameSize (post-indexed).
-export function arm64EmitLdpPostIndex(code ByteArray, frameSize StackSize)
-	let imm7 = (frameSize / 8) and Arm64PairImm7Mask
-	emitArm64Insn(code, insn: ((Arm64OpLdpPostX or (imm7 shl Arm64PairImm7Shift) or (Arm64Lr shl Arm64Rt2Shift) or (Arm64SpBaseField shl Arm64RnShift) or Arm64Fp) as MachineWord))
-end 'arm64EmitLdpPostIndex'
-
-// STP/LDP x29, x30, [sp, #offset] (plain signed offset) — the large-frame record store/reload.
-// `opcode` selects STP (`Arm64OpStpOffX`) or LDP (`Arm64OpLdpOffX`).
-//
-// ⚠ THE imm7 IS SIGNED, AND MASKING IS NOT CLAMPING. `Arm64PairImm7Mask` keeps 7 bits, so an offset whose
-// scaled value reaches 64 encodes as a NEGATIVE displacement: the prologue would write the x29/x30 record
-// BELOW sp and the epilogue would reload x30 from there, returning to whatever the outgoing-argument
-// region happened to hold. `offset` was a literal 0 until stack arguments made it the outgoing-argument
-// size, so this became reachable arithmetic rather than a constant — and the ceiling that keeps it in
-// range is `arm64OutgoingArgRegionBytes()` (448 today) ≤ `Arm64FramePairIndexMax`, a fact derived in
-// another file entirely. Assert it where it is RELIED ON rather than inferring it three files away.
-function arm64EmitFrameRecordPair(code ByteArray, opcode MachineWord, offset MachineWord)
-	if offset > Arm64FramePairIndexMax 'unencodable'
-		panic("arm64EmitFrameRecordPair: frame-record offset {offset} exceeds the {Arm64FramePairIndexMax}-byte reach of the signed STP/LDP imm7 — the outgoing stack-argument region has outgrown it, and a masked immediate would place the frame record below sp")
-	end 'unencodable'
-
-	arm64EmitPairOffset(code, opcode: opcode, rt1: Arm64Fp, rt2: Arm64Lr, baseReg: Arm64SpBaseField, byteOffset: offset as Imm32)
-end 'arm64EmitFrameRecordPair'
+function arm64EmitFrameRecord(code ByteArray, opcode MachineWord, byteOffset Imm32)
+	arm64EmitPairOffset(code, opcode: opcode, rt1: Arm64Fp, rt2: Arm64Lr, baseReg: Arm64SpBaseField, byteOffset: byteOffset)
+end 'arm64EmitFrameRecord'
 
 // ADD x29, sp, #offset — point the frame pointer at the frame record, wherever in the frame it was put.
 // At offset 0 this IS `mov x29, sp`, and it must be the ADD alias rather than the ORR/XZR MOV (register 31

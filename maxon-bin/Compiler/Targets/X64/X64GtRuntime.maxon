@@ -29,15 +29,12 @@
 // code before control returns. So every register the colorer believes survives a call must be saved here
 // EXPLICITLY, and that set is exactly the two ordered lists below.
 
-// The callee-saved registers the context switch saves and restores: the GPRs in push order (pop
-// order is the exact reverse), then the XMMs into a `sub rsp` area written with `movsd` — the SAME
-// `calleeSavedOrder` and `calleeSavedXmmOrder` the ordinary prologue/epilogue preserves
-// (X64PrologueEpilogue), so the switch preserves EXACTLY what any call preserves, from two shared
-// lists rather than second copies. Their sizes are the contract `__gt_spawn`'s initial frame layout
-// byte-matches: `X64GtInitialFrameBytes` = the GPR words + the XMM words + the return-address word,
-// and the trampoline address sits in that top word so the first switch-in's jump enters the
-// trampoline. `assertGtFrameConsistent` (below) enforces that byte-match at chunk-build time,
-// deriving it from BOTH lists.
+// The callee-saved registers the context switch saves and restores in the GT record: the GPRs, then
+// the XMMs written with `movsd` — the SAME `calleeSavedOrder` and `calleeSavedXmmOrder` the
+// ordinary prologue/epilogue preserves (X64PrologueEpilogue), so the switch preserves EXACTLY what
+// any call preserves, from two shared lists rather than second copies. Their sizes are the contract
+// the record's saved-register block (`X64GtSavedRegisterBytes`) byte-matches;
+// `assertGtFrameConsistent` (below) enforces it at chunk-build time, deriving it from BOTH lists.
 //
 // ⚠ ONE `XmmSaveSlotBytes` WORD PER XMM — the SAME constant the prologue's slots stride by, not a second 8
 // that happens to agree. The low 64 bits ARE the value in the compiler (no type is wider, and nothing reads bits
@@ -53,6 +50,8 @@ let GtSwitchToReg = X64Register.rdx
 // The scratch the context switch shuttles the NT_TIB stack bounds through (save `from`'s, load `to`'s). rax is
 // caller-saved and is not read across a switch by any resumed continuation, so clobbering it here is invisible.
 let GtSwitchTibScratchReg = X64Register.rax
+
+let GtSwitchPcScratchReg = X64ReturnJumpScratchReg
 
 // NT_TIB stack-bound fields in the GS segment (Win64). A kernel call probes these and faults when RSP is
 // outside `[StackLimit, StackBase)`. The syscall shim (repoint at the system stack for a call) and the context
@@ -163,75 +162,49 @@ let GtTrampGtReg = X64Register.r12
 let GtTrampArgBufReg = X64Register.r10
 let GtTrampFuncPtrReg = X64Register.r11
 
-// The bytes the context switch reserves below its GPR pushes for the callee-saved XMM half — one
-// `XmmSaveSlotBytes` slot per register of `calleeSavedXmmOrder`, which IS the width the prologue's slots use
-// because it is the same constant.
-function gtXmmSaveAreaBytes() returns StackSize
-	return (calleeSavedXmmOrder.count() as StackSize) * XmmSaveSlotBytes
-end 'gtXmmSaveAreaBytes'
+function registerSlotBytes(gprCount Count, xmmCount Count) returns StackSize
+	return (gprCount as StackSize) * StackWordBytes + (xmmCount as StackSize) * XmmSaveSlotBytes
+end 'registerSlotBytes'
 
-// ⭐ Enforce the ONE fact the Std-tier frame builder (`__gt_spawn` in GtRuntime, which lays
-// `gtInitialFrameBytes`) and this Target-tier byte code SHARE: a fresh GT's initial context-switch
-// frame is every callee-saved register plus one return-address word. If a register is added to or
-// removed from EITHER callee-saved list without moving `X64GtInitialFrameBytes` in lockstep, the
-// first switch-in pops the wrong number of bytes and jumps to a WILD address. This turns that
-// silent cross-tier drift into a compile-time panic on every async compile.
+// ⭐ Enforce the ONE fact the GT record's layout (`gtSavedRegisterBytes` in GtRuntime) and this
+// Target-tier byte code SHARE: the record's saved-register block holds every callee-saved register.
+// If a register is added to or removed from EITHER callee-saved list without moving
+// `X64GtSavedRegisterBytes` in lockstep, the switch writes into the next record field or leaves a
+// register unsaved. This turns that silent cross-tier drift into a compile-time panic on every
+// async compile.
 //
-// ⚠⚠ IT IS DERIVED FROM **BOTH** LISTS. The GPRs are pushed words; the XMMs are `movsd` words in a `sub rsp`
-// area, because x86-64 has no `push xmm`. An assert over `calleeSavedOrder` alone would keep passing while
-// covering only half the frame.
+// ⚠⚠ IT IS DERIVED FROM **BOTH** LISTS. An assert over `calleeSavedOrder` alone would keep passing
+// while covering only part of the block.
 //
-// ⚠⚠ AND FROM THE PROLOGUE'S OWN STRIDE (`XmmSaveSlotBytes`, via `gtXmmSaveAreaBytes`), not from any other
-// constant that happens to be 8: widening the prologue's slots to 16 must fail here, or the context switch
-// would save 8 of every 16 bytes and destroy the upper halves of xmm6-15 across every `await`.
+// ⚠⚠ AND FROM THE PROLOGUE'S OWN STRIDE (`XmmSaveSlotBytes`, via `registerSlotBytes`), not from any
+// other constant that happens to be 8: widening the prologue's slots to 16 must fail here, or the
+// context switch would save 8 of every 16 bytes and destroy the upper halves of xmm6-15 across
+// every `await`.
 function assertGtFrameConsistent(target Target)
-	let gprBytes = calleeSavedOrder.count() * StackWordBytes
-	let framedBytes = gprBytes as StackSize + gtXmmSaveAreaBytes() + StackWordBytes
+	let savedBytes = registerSlotBytes(calleeSavedOrder.count(), xmmCount: calleeSavedXmmOrder.count())
+	let declared = gtSavedRegisterBytes(target) as StackSize
 
-	let declared = gtInitialFrameBytes(target) as StackSize
-
-	if framedBytes != declared 'drift'
-		panic("GT frame drift: the context switch saves {calleeSavedOrder.count()} callee-saved GPR words ({gprBytes} bytes) + {calleeSavedXmmOrder.count()} callee-saved XMM words ({gtXmmSaveAreaBytes()} bytes) + 1 return-address word = {framedBytes} bytes, but `gtInitialFrameBytes` (the frame __gt_spawn lays for this target) is {declared} — a mismatch is a wild ret on the first switch-in")
+	if savedBytes != declared 'drift'
+		panic("GT saved-register drift: the context switch saves {calleeSavedOrder.count()} callee-saved GPR words + {calleeSavedXmmOrder.count()} callee-saved XMM words = {savedBytes} bytes into the GT record, but `gtSavedRegisterBytes` (the block the record reserves for this target) is {declared} — a mismatch writes into the next record field, or leaves a callee-saved register unsaved across every switch")
 	end 'drift'
 end 'assertGtFrameConsistent'
 
-// `__gt_context_switch(from = rcx, to = rdx)` — save the current GT's callee-saved register + rsp/rbp state
-// into `from`, restore `to`'s, and jump to `to`'s saved return address (a resumed GT's await-loop
-// continuation, or — for a fresh GT — the trampoline). No frame, no `.data`. A `ret` here would
-// pop a return-stack entry the other context's call pushed and mispredict on every switch; see
-// `markIndirectJumpReturns`.
-// The OS thread's last error is saved into `from` and restored from `to` with them
-// (`GtRuntime.GtOffLastError`): the TEB's 32-bit `LastErrorValue` on Windows, the errno slot on
-// Linux.
+// `__gt_context_switch(from = rcx, to = rdx)` — pop its return address into `from`'s saved pc, save
+// the current GT's callee-saved register + rsp/rbp state into `from`, restore `to`'s, and jump to
+// `to`'s saved pc (a resumed GT's await-loop continuation, or — for a fresh GT — the trampoline).
+// No frame, no `.data`, and nothing left on the stack it leaves. A `ret` here would pop a
+// return-stack entry the other context's call pushed and mispredict on every switch; see
+// `markIndirectJumpReturns`. The OS thread's last error is saved into `from` and restored from `to`
+// with them (`GtRuntime.GtOffLastError`): the TEB's 32-bit `LastErrorValue` on Windows, the errno
+// slot on Linux.
 function buildGtContextSwitchChunk(target Target) returns FunctionCodeChunk
 	assertGtFrameConsistent(target)
 	var code = ByteArray.create()
 
-	// Save callee-saved on the current (from) stack, in push order.
-	for reg in calleeSavedOrder 'push'
-		encodePushReg(code, reg: reg)
-	end 'push'
+	encodePopReg(code, reg: GtSwitchPcScratchReg)
+	encodeStoreBaseDispReg(code, base: GtSwitchFromReg, disp: GtOffSavedPc as Imm32, srcReg: GtSwitchPcScratchReg, wide: true)
+	emitRegisterSlots(code, base: GtSwitchFromReg, firstSlot: GtOffSavedRegs as StackSize, gprs: calleeSavedOrder, xmms: calleeSavedXmmOrder, direction: GtRegisterBlockDirection.save)
 
-	// ⭐⭐ AND THE CALLEE-SAVED XMMs — `sub rsp` + `movsd`, because there is no `push xmm`.
-	//
-	// THIS IS NOT OPTIONAL AND IT IS NOT SYMMETRY FOR ITS OWN SAKE. Ordinary user code reaches this chunk
-	// through a normal `call` (`__gt_await` → `__gt_context_switch`), so the colorer treats it as a call
-	// clobbering exactly `callerSavedMask()` — which EXCLUDES xmm6-15. The colorer therefore believes a float
-	// in xmm6 survives this call. But this chunk does not return to its caller: it switches to a DIFFERENT
-	// green thread's stack, that thread runs arbitrary user code, and control comes back here only later.
-	// Without these saves the other thread's float work lands in xmm6-15 and the suspended thread resumes
-	// reading it — a silent wrong answer with no crash to find it by.
-	//
-	// One slot per callee-saved XMM — bounded by that list, two orders of magnitude below the guard
-	// page, so this reservation never walks and needs no scratch (see `encodePrologue`).
-	encodePrologue(code, stackSize: gtXmmSaveAreaBytes(), probeScratchIsFree: false)
-
-	for k in 0 upto calleeSavedXmmOrder.count() 'saveXmm'
-		let reg = try calleeSavedXmmOrder.get(k) otherwise panic("buildGtContextSwitchChunk: save index derived from count is in range")
-		encodeMovsdBaseDispReg(code, base: X64Register.rsp, disp: ((k as StackSize) * XmmSaveSlotBytes) as Imm32, srcReg: reg)
-	end 'saveXmm'
-
-	// from->sp = rsp ; from->fp = rbp.
 	encodeStoreBaseDispReg(code, base: GtSwitchFromReg, disp: GtOffSp as Imm32, srcReg: X64Register.rsp, wide: true)
 	encodeStoreBaseDispReg(code, base: GtSwitchFromReg, disp: GtOffFp as Imm32, srcReg: X64Register.rbp, wide: true)
 
@@ -261,26 +234,13 @@ function buildGtContextSwitchChunk(target Target) returns FunctionCodeChunk
 
 	emitX64CarryLastError(code, gtReg: GtSwitchToReg, os: target.os, direction: GtLastErrorDirection.fromGt)
 
-	// Restore the callee-saved XMMs from the new stack FIRST — they sit BELOW the pushed GPR words, so rsp
-	// addresses them before the `add rsp` that releases their area. Restore order is free (each register has
-	// its own word rather than a stack position); only the GPR pops below are LIFO.
-	for k in 0 upto calleeSavedXmmOrder.count() 'restoreXmm'
-		let reg = try calleeSavedXmmOrder.get(k) otherwise panic("buildGtContextSwitchChunk: restore index derived from count is in range")
-		encodeMovsdRegBaseDisp(code, destReg: reg, base: X64Register.rsp, disp: ((k as StackSize) * XmmSaveSlotBytes) as Imm32)
-	end 'restoreXmm'
+	emitRegisterSlots(code, base: GtSwitchToReg, firstSlot: GtOffSavedRegs as StackSize, gprs: calleeSavedOrder, xmms: calleeSavedXmmOrder, direction: GtRegisterBlockDirection.restore)
 
-	encodeEpilogue(code, stackSize: gtXmmSaveAreaBytes())
-
-	// Restore callee-saved from the new stack, in reverse push order, then jump to to's saved return addr.
-	for i in 0 upto calleeSavedOrder.count() 'pop'
-		let reg = try calleeSavedOrder.get(calleeSavedOrder.count() - 1 - i) otherwise panic("buildGtContextSwitchChunk: pop index derived from count is in range")
-		encodePopReg(code, reg: reg)
-	end 'pop'
-
-	encodeIndirectReturn(code, scratch: X64ReturnJumpScratchReg)
+	encodeLoadRegBaseDisp(code, destReg: GtSwitchPcScratchReg, base: GtSwitchToReg, disp: GtOffSavedPc as Imm32, wide: true)
+	encodeJmpReg(code, reg: GtSwitchPcScratchReg)
 
 	var chunk = FunctionCodeChunk.createWith(GtContextSwitchName, code: code, callFixups: CallFixupArray.create(), rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create())
-	chunk.leavesCallerStack(gtInitialFrameBytes(target) as StackSize)
+	chunk.leavesCallerStack(StackWordBytes as StackSize)
 	return chunk
 end 'buildGtContextSwitchChunk'
 
@@ -291,9 +251,9 @@ end 'buildGtContextSwitchChunk'
 // and marks the GT completed, then context-switches to the GT's waiter (always set by the strand runner that
 // switched it in).
 //
-// The stack is 16-aligned on entry (`__gt_spawn` lays `gt.sp` so the switch-in's jump lands with rsp = stack
-// top, a page boundary), so `sub rsp, ShadowSpaceBytes` — a multiple of 16 — keeps every `call` below aligned
-// while reserving the Win64 shadow space the user call may clobber.
+// The stack is 16-aligned on entry (`__gt_spawn` sets `gt.sp` to the stack top, a page boundary),
+// so `sub rsp, ShadowSpaceBytes` — a multiple of 16 — keeps every `call` below aligned while
+// reserving the Win64 shadow space the user call may clobber.
 function buildGtTrampolineChunk() returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
@@ -1108,7 +1068,7 @@ end 'emitGtGatedIatCall'
 //   mov gs:[0x08],rax ; sub rax,0x10000 ; mov gs:[0x10],rax                    (repoint TIB at the system stack)
 //   call [CreateProcessW]
 //   lea r11,[rip+__sched_tls_teb_offset] ; mov r11,[r11] ; mov r11,gs:[r11] ; mov r11,[r11+0x08]
-//   mov rcx,[r11+0x90] ; mov gs:[0x08],rcx ; mov rcx,[r11+0x98] ; mov gs:[0x10],rcx   (restore TIB to this GT)
+//   mov rcx,[r11+GtOffTibStackBase] ; mov gs:[0x08],rcx ; mov rcx,[r11+GtOffTibStackLimit] ; mov gs:[0x10],rcx   (restore TIB to this GT)
 //   add rsp,0x58 ; pop r10 ; mov rsp,r10 ; pop r10 ; jmp done                  (switch back to the GT stack)
 //   fatal: jmp mrt_fatal_os_call_off_every_stack
 //   elsewhere: (the M again) ; mov r11,[rax+0x10] ; cmp rsp,r11 ; jae fatal ; sub r11,0x10000+guard region ; cmp rsp,r11 ; jb fatal
@@ -1311,11 +1271,11 @@ end 'emitGtShimmedIatCall'
 // chain adding the relocation offset to each interior link — which is what frame-pointers-on-every-function pays
 // for.
 //
-// ⭐⭐ **THE CHAIN STARTS AT `gt.fp` IN BOTH DIRECTIONS.** At a park, `__gt_context_switch` stores rbp in
-// `gt.fp` and pushes only rbx/r12-r15, the XMMs and the return address — none of them a stack pointer — so the
-// thread's live frame pointer lives in the struct and nowhere on the stack. `__gt_morestack` publishes its live
-// rbp and entry rsp to `gt.fp`/`gt.sp` before relocating, so the grower's thread is presented in exactly the
-// shape of a parked one.
+// ⭐⭐ **THE CHAIN STARTS AT `gt.fp` IN BOTH DIRECTIONS.** At a park, `__gt_context_switch` stores
+// rbp in `gt.fp` and every other register it saves in the struct too, leaving nothing on the stack
+// — so the thread's live frame pointer lives in the struct and nowhere on the stack.
+// `__gt_morestack` publishes its live rbp and entry rsp to `gt.fp`/`gt.sp` before relocating, so
+// the grower's thread is presented in exactly the shape of a parked one.
 //
 // ENTRY CONTRACT (from a prologue guard, directly or through `__gt_guard_tripped`'s jump): r11 = the current GT,
 // r10 = the system-stack top, r8 = the guard's PROJECTED rsp (all three non-arg scratch the guard loaded, so this
@@ -1432,7 +1392,7 @@ end 'GtRegisterBlockDirection'
 function emitGtRegisterBlock(code ByteArray, gprs X64RegisterArray, stackedBytes StackSize, direction GtRegisterBlockDirection) returns StackSize
 	let pushedBytes = (gprs.count() * StackWordBytes) as StackSize
 	let aboveFrame = stackedBytes + pushedBytes
-	let frameBytes = alignUpStack(aboveFrame + ShadowSpaceBytes + (argFpRegisters.count() as StackSize) * XmmSaveSlotBytes, alignment: StackFrameAlignment) - aboveFrame
+	let frameBytes = alignUpStack(aboveFrame + ShadowSpaceBytes + registerSlotBytes(0, xmmCount: argFpRegisters.count()), alignment: StackFrameAlignment) - aboveFrame
 
 	if direction == GtRegisterBlockDirection.save 'save'
 		for reg in gprs 'push'
@@ -1441,9 +1401,9 @@ function emitGtRegisterBlock(code ByteArray, gprs X64RegisterArray, stackedBytes
 
 		// Far inside a page, so it never probes; every caller holds the GT in r11.
 		encodePrologue(code, stackSize: frameBytes, probeScratchIsFree: false)
-		emitGtFpArgumentSlots(code, direction: direction)
+		emitRegisterSlots(code, base: X64Register.rsp, firstSlot: ShadowSpaceBytes, gprs: X64RegisterArray.create(), xmms: argFpRegisters, direction: direction)
 	end 'save' else 'restore'
-		emitGtFpArgumentSlots(code, direction: direction)
+		emitRegisterSlots(code, base: X64Register.rsp, firstSlot: ShadowSpaceBytes, gprs: X64RegisterArray.create(), xmms: argFpRegisters, direction: direction)
 		encodeEpilogue(code, stackSize: frameBytes)
 
 		for i in 0 upto gprs.count() 'pop'
@@ -1455,18 +1415,25 @@ function emitGtRegisterBlock(code ByteArray, gprs X64RegisterArray, stackedBytes
 	return pushedBytes + frameBytes
 end 'emitGtRegisterBlock'
 
-// The FP argument registers' slots, `XmmSaveSlotBytes` apart above the shadow space.
-function emitGtFpArgumentSlots(code ByteArray, direction GtRegisterBlockDirection)
-	for k in 0 upto argFpRegisters.count() 'fps'
-		let reg = try argFpRegisters.get(k) otherwise panic("emitGtFpArgumentSlots: index derived from count is in range")
-		let disp = (ShadowSpaceBytes + ((k as StackSize) * XmmSaveSlotBytes)) as Imm32
+function emitRegisterSlots(code ByteArray, base X64Register, firstSlot StackSize, gprs X64RegisterArray, xmms X64RegisterArray, direction GtRegisterBlockDirection)
+	for (iter, reg) in gprs.withIterator() 'gprs'
+		let disp = (firstSlot + registerSlotBytes(iter.index() as Count, xmmCount: 0)) as Imm32
 
 		match direction 'dir'
-			save then encodeMovsdBaseDispReg(code, base: X64Register.rsp, disp: disp, srcReg: reg)
-			restore then encodeMovsdRegBaseDisp(code, destReg: reg, base: X64Register.rsp, disp: disp)
+			save then encodeStoreBaseDispReg(code, base: base, disp: disp, srcReg: reg, wide: true)
+			restore then encodeLoadRegBaseDisp(code, destReg: reg, base: base, disp: disp, wide: true)
 		end 'dir'
-	end 'fps'
-end 'emitGtFpArgumentSlots'
+	end 'gprs'
+
+	for (iter, reg) in xmms.withIterator() 'xmms'
+		let disp = (firstSlot + registerSlotBytes(gprs.count(), xmmCount: iter.index() as Count)) as Imm32
+
+		match direction 'dir'
+			save then encodeMovsdBaseDispReg(code, base: base, disp: disp, srcReg: reg)
+			restore then encodeMovsdRegBaseDisp(code, destReg: reg, base: base, disp: disp)
+		end 'dir'
+	end 'xmms'
+end 'emitRegisterSlots'
 
 // `__gt_morestack` — grow the current GT's stack to the first doubling that fits the requesting frame, move the
 // thread onto it (`__gt_stack_relocate`), store the stack marks of a grow (`GtStackMarksOfAGrow`), and `ret` onto
@@ -1753,10 +1720,11 @@ function emitGtRelocateRebaseWord(code ByteArray, reg X64Register, base X64Regis
 	encodeStoreBaseDispReg(code, base: base, disp: disp, srcReg: reg, wide: true)
 end 'emitGtRelocateRebaseWord'
 
-// The saved-rbp chain walk — the correctness crux. Entered with the walker (the rebased `gt.fp`) in `RelocWalkReg`.
-// For each frame whose saved rbp points into the old stack it adds the relocation offset, then follows the
-// now-adjusted link. It ends when the walker leaves the relocated region `[new_low, new_high)` — which a null
-// link does too: a green thread's outermost frame is the trampoline's, whose saved rbp is the seed zero.
+// The saved-rbp chain walk — the correctness crux. Entered with the walker (the rebased `gt.fp`) in
+// `RelocWalkReg`. For each frame whose saved rbp points into the old stack it adds the relocation
+// offset, then follows the now-adjusted link. It ends when the walker leaves the relocated region
+// `[new_low, new_high)` — which a null link does too: a green thread's outermost frame is the
+// trampoline's, whose saved rbp is the zero `__gt_spawn` leaves in `gt.fp`.
 function emitGtRelocateChainWalk(code ByteArray)
 	var walkFixups = ChunkRel32FixupArray.create()
 	var walkLabels = BlockOffsetTable.create()
@@ -2219,9 +2187,10 @@ function emitAsyncPreemptBody(code ByteArray, callFixups CallFixupArray) returns
 	encodeGrp1RegImm32(code, ext: Grp1ExtAnd, reg: X64Register.rsp, imm: (0 - StackFrameAlignment) as Imm32)
 	encodePrologue(code, stackSize: blockBytes, probeScratchIsFree: false)
 
-	emitAsyncPreemptRegisterBlock(code, direction: GtRegisterBlockDirection.save)
+	let xmms = asyncPreemptXmmOrder()
+	emitRegisterSlots(code, base: X64Register.rsp, firstSlot: ShadowSpaceBytes, gprs: AsyncPreemptGprOrder, xmms: xmms, direction: GtRegisterBlockDirection.save)
 	encodeCallDirect(code, callFixups: callFixups, targetName: AsyncPreemptParkName)
-	emitAsyncPreemptRegisterBlock(code, direction: GtRegisterBlockDirection.restore)
+	emitRegisterSlots(code, base: X64Register.rsp, firstSlot: ShadowSpaceBytes, gprs: AsyncPreemptGprOrder, xmms: xmms, direction: GtRegisterBlockDirection.restore)
 
 	// `lea` writes no flags, so the frame comes home with the interrupted flags still on the stack below it.
 	encodeLeaRegRegImm32(code, dest: X64Register.rsp, base: X64Register.rbp, disp: -(StackWordBytes as Imm32))
@@ -2235,27 +2204,6 @@ function emitAsyncPreemptBody(code ByteArray, callFixups CallFixupArray) returns
 	// The pushed rbp and flags, the most the alignment can drop from a word-aligned rsp, and the block.
 	return ((2 * StackWordBytes) + (StackFrameAlignment - StackWordBytes)) as StackSize + blockBytes
 end 'emitAsyncPreemptBody'
-
-// Every general register and every XMM, one 8-byte slot each above the shadow space the park may clobber.
-function emitAsyncPreemptRegisterBlock(code ByteArray, direction GtRegisterBlockDirection)
-	for (iter, reg) in AsyncPreemptGprOrder.withIterator() 'gprs'
-		let disp = (ShadowSpaceBytes + ((iter.index() as StackSize) * StackWordBytes)) as Imm32
-
-		match direction 'dir'
-			save then encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: disp, srcReg: reg, wide: true)
-			restore then encodeLoadRegBaseDisp(code, destReg: reg, base: X64Register.rsp, disp: disp, wide: true)
-		end 'dir'
-	end 'gprs'
-
-	for (iter, reg) in asyncPreemptXmmOrder().withIterator() 'xmms'
-		let disp = (ShadowSpaceBytes + asyncPreemptGprBytes() + ((iter.index() as StackSize) * XmmSaveSlotBytes)) as Imm32
-
-		match direction 'dir'
-			save then encodeMovsdBaseDispReg(code, base: X64Register.rsp, disp: disp, srcReg: reg)
-			restore then encodeMovsdRegBaseDisp(code, destReg: reg, base: X64Register.rsp, disp: disp)
-		end 'dir'
-	end 'xmms'
-end 'emitAsyncPreemptRegisterBlock'
 
 // ⭐ **EVERY XMM, DERIVED FROM THE TWO LISTS THAT ALREADY PARTITION THEM** — the FP argument registers (the
 // caller-saved half) and the callee-saved half — rather than a third list of sixteen names that could drift
@@ -2278,15 +2226,10 @@ function asyncPreemptXmmOrder() returns X64RegisterArray
 	return all
 end 'asyncPreemptXmmOrder'
 
-// The GPR half of the block, which is also where the XMM half starts.
-function asyncPreemptGprBytes() returns StackSize
-	return (AsyncPreemptGprOrder.count() * StackWordBytes) as StackSize
-end 'asyncPreemptGprBytes'
-
 // The whole block: the shadow space the park's own callees may clobber, then a slot per register, rounded so
 // rsp is 16-aligned at the `call`.
 function asyncPreemptBlockBytes() returns StackSize
-	return alignUpStack(ShadowSpaceBytes + asyncPreemptGprBytes() + ((vectorRegisterCount(x64RegisterFile()) as StackSize) * XmmSaveSlotBytes), alignment: StackFrameAlignment)
+	return alignUpStack(ShadowSpaceBytes + registerSlotBytes(AsyncPreemptGprOrder.count(), xmmCount: asyncPreemptXmmOrder().count()), alignment: StackFrameAlignment)
 end 'asyncPreemptBlockBytes'
 
 // ⭐ **WHAT AN ASYNCHRONOUS STOP COSTS THE GREEN THREAD's STACK BELOW THE INTERRUPTED RSP, BEFORE

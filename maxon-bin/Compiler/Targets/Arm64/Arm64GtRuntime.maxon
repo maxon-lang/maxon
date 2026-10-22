@@ -25,11 +25,10 @@
 //      call PROBES those two words and faults when RSP is outside them. Darwin has no such contract, so
 //      `GtOffTibStackBase`/`GtOffTibStackLimit` are never read or written on this lane and `__gt_spawn`
 //      does not seed them (see `GtRuntime.buildGtSpawn`'s per-target arm).
-//   2. **THE RETURN ADDRESS IS A REGISTER, NOT A STACK WORD.** x64's switch ends in `pop; jmp`, which
-//      POPS the resumed thread's continuation; AArch64's ends in `br x30`. So a fresh green thread's
-//      seed frame must place `&__gt_trampoline` in the x29/x30 PAIR the switch pops last, which is why
-//      the frame is laid from the TOP DOWN in pre-indexed pairs and the LR lands at `frame_base + 8`
-//      rather than at `stackTop - 8`. That is a STRUCTURAL difference in `__gt_spawn`, not a number.
+//   2. **THE RETURN ADDRESS IS A REGISTER, NOT A STACK WORD.** x64's switch pops its caller's
+//      return address into `GtOffSavedPc`; here it is already in x30, so the switch moves x29/x30
+//      as one pair at `GtOffFp` — which is why `GtOffSavedPc` must be the word after `GtOffFp` —
+//      and leaves nothing on the caller's stack.
 //   3. **THE GUARD MUST PRESERVE x30 ITSELF.** x64's guard `call`s `__gt_morestack` and the guarded
 //      function's own return address is already on the stack; here it is live in x30 and the prologue
 //      has not run. The cold path therefore opens a 16-byte cell for it — and that cell is why the
@@ -54,12 +53,13 @@
 // The saved-register block, DERIVED from the prologue's own callee-saved bounds
 // ==========================================================================
 
-// ⭐⭐ **THE ONE FACT THE Std TIER AND THIS ONE SHARE: a fresh green thread's initial frame is every
-// callee-saved register plus the frame record.** `__gt_spawn` lays `gtInitialFrameBytes(target)` bytes and
-// this chunk pops exactly that many; a mismatch is not a compile error but a branch to a wild address on
-// the very first switch-in. So the size is DERIVED here from the four bounds the prologue pass exports and
-// CHECKED against the Std constant (feedback: DERIVE > CHECK > COMMENT), which is what makes adding a
-// callee-saved register a panic on the next async compile rather than a corrupted stack.
+// ⭐⭐ **THE ONE FACT THE Std TIER AND THIS ONE SHARE: the GT record's saved-register block holds
+// every callee-saved register but the frame record.** The record reserves
+// `gtSavedRegisterBytes(target)` bytes and this chunk moves exactly that many; a mismatch is not a
+// compile error but a switch that writes into the next record field or leaves a register unsaved.
+// So the size is DERIVED here from the four bounds the prologue pass exports and CHECKED against
+// the Std constant (feedback: DERIVE > CHECK > COMMENT), which is what makes adding a callee-saved
+// register a panic on the next async compile rather than a corrupted record.
 //
 // ⚠ The registers move in PAIRS (`stp`/`ldp`), so each half of the callee-saved file must have an EVEN
 // count — asserted rather than assumed, because an odd one would silently drop the last register.
@@ -82,11 +82,11 @@ let Arm64GtRegistersPerPair = 2
 // ⭐ Enforce the cross-tier byte-match. Called at chunk-build time, so an async compile for arm64 panics
 // the moment the two sides disagree.
 function assertArm64GtFrameConsistent(target Target)
-	let framedBytes = (arm64GtSavedPairCount() as FullRangeInt) * Arm64GtPairBytes
-	let declared = gtInitialFrameBytes(target)
+	let savedBytes = (arm64GtSavedPairCount() as FullRangeInt) * Arm64GtPairBytes
+	let declared = gtSavedRegisterBytes(target)
 
-	if framedBytes != declared 'drift'
-		panic("arm64 GT frame drift: the context switch saves {arm64GtSavedPairCount()} register pairs = {framedBytes} bytes, but `gtInitialFrameBytes` (the frame `__gt_spawn` lays for this target) is {declared} — a mismatch is a wild `ret` on the first switch-in, because the trampoline address `__gt_spawn` writes would not be the word the last `ldp` puts into x30")
+	if savedBytes != declared 'drift'
+		panic("arm64 GT saved-register drift: the context switch saves {arm64GtSavedPairCount()} register pairs = {savedBytes} bytes into the GT record, but `gtSavedRegisterBytes` (the block the record reserves for this target) is {declared} — a mismatch writes into the next record field, or leaves a callee-saved register unsaved across every switch")
 	end 'drift'
 end 'assertArm64GtFrameConsistent'
 
@@ -103,10 +103,11 @@ let Arm64GtSwitchToReg = Arm64Register.x1
 // live-across-calls ABI role is a trap for the next reader rather than a saving.
 let Arm64GtSwitchSpScratch = Arm64Register.x10
 
-// The trampoline's own registers. The GT must survive the user call, so it takes a CALLEE-SAVED register —
-// safe to clobber here because the switch has just restored x19..x28 from this fresh stack's ZEROED seed
-// frame, so they belong to nobody. The argument buffer and the function pointer are caller-saved
-// NON-ARGUMENT registers (x10..x15), so the six argument loads below cannot clobber either.
+// The trampoline's own registers. The GT must survive the user call, so it takes a CALLEE-SAVED
+// register — safe to clobber here because the switch has just restored x19..x28 from a fresh
+// record's stale saved-register block, so they belong to nobody. The argument buffer and the
+// function pointer are caller-saved NON-ARGUMENT registers (x10..x15), so the six argument loads
+// below cannot clobber either.
 //
 // ⚠ **x10/x11 RATHER THAN x16.** x16 is this backend's import-call trampoline scratch
 // (`arm64EmitImportCall`'s `adrp/ldr/blr x16`) and an AAPCS64 intra-procedure-call temporary a linker
@@ -120,40 +121,31 @@ let Arm64GtTrampArgBufReg = Arm64Register.x11
 // `__gt_context_switch(x0 = from, x1 = to)`
 // ==========================================================================
 
-// Save the current green thread's callee-saved register + SP/FP state into `from`, restore `to`'s, and
-// `br x30` to the x30 the last `ldp` restored: a resumed thread's await-loop continuation, or, for a
-// fresh one, `__gt_trampoline`. No frame, no `.data`, no OS call. Not a `ret`, for the reason
-// `markIndirectJumpReturns` gives.
+// Save the current green thread's callee-saved register + SP/FP state into `from`, restore `to`'s,
+// and `br x30` to `to`'s saved pc, which the `ldp` at `GtOffFp` restored with x29: a resumed
+// thread's await-loop continuation, or, for a fresh one, `__gt_trampoline`. No frame, no `.data`,
+// no OS call. Not a `ret`, for the reason `markIndirectJumpReturns` gives.
 // On Linux the OS thread's errno slot moves with them (`GtRuntime.GtOffLastError`); Darwin carries
 // nothing, its failure arms stash instead.
-//
-// ⚠ **`gt.fp` IS WRITTEN AND NOT READ BACK, AND THAT IS THE ISA DIFFERENCE AGAIN.** x64 restores rbp from
-// `to->fp` because rbp is NOT one of its pushed registers; here x29 rides the frame-record pair, so the
-// destination stack's own copy is the authoritative one and loading the field would be a second opinion
-// about it. The field is still maintained, because `__gt_morestack` relocates it and a stale pointer into
-// a freed stack is exactly the kind of thing a later reader would trust.
 function buildArm64GtContextSwitchChunk(target Target) returns FunctionCodeChunk
 	assertArm64GtFrameConsistent(target)
 	var asm = Arm64RuntimeAsm.beginRawFunction()
 
-	emitArm64GtSavedBlock(asm, direction: Arm64GtBlockDirection.push)
+	emitArm64GtSavedBlock(asm, gtReg: Arm64GtSwitchFromReg, direction: Arm64GtBlockDirection.push)
 
-	// from->sp = SP ; from->fp = x29.
 	arm64EmitMovFromSp(asm.code, dest: arm64RuntimeReg(Arm64GtSwitchSpScratch))
 	arm64EmitStoreWord64At(asm, src: Arm64GtSwitchSpScratch, base: Arm64GtSwitchFromReg, byteOffset: GtOffSp)
-	arm64EmitStoreWord64At(asm, src: Arm64Register.x29, base: Arm64GtSwitchFromReg, byteOffset: GtOffFp)
 	emitArm64GtCarryLastError(asm, gtReg: Arm64GtSwitchFromReg, os: target.os, direction: GtLastErrorDirection.intoGt)
 
-	// SP = to->sp — from here on we are on the destination green thread's stack.
 	arm64EmitLoadWord64At(asm, dest: Arm64GtSwitchSpScratch, base: Arm64GtSwitchToReg, byteOffset: GtOffSp)
 	arm64EmitMovToSp(asm.code, src: arm64RuntimeReg(Arm64GtSwitchSpScratch))
 	emitArm64GtCarryLastError(asm, gtReg: Arm64GtSwitchToReg, os: target.os, direction: GtLastErrorDirection.fromGt)
 
-	emitArm64GtSavedBlock(asm, direction: Arm64GtBlockDirection.pop)
+	emitArm64GtSavedBlock(asm, gtReg: Arm64GtSwitchToReg, direction: Arm64GtBlockDirection.pop)
 	arm64EmitReturnTransfer(asm.code, transfer: ReturnTransfer.indirectJump)
 
 	var chunk = asm.finishChunk(GtContextSwitchName)
-	chunk.leavesCallerStack(gtInitialFrameBytes(target) as StackSize)
+	chunk.leavesCallerStack(0)
 	return chunk
 end 'buildArm64GtContextSwitchChunk'
 
@@ -192,50 +184,40 @@ enum Arm64GtBlockDirection
 	pop
 end 'Arm64GtBlockDirection'
 
-// ⭐⭐ **THE SAVED BLOCK, EMITTED FROM ONE LIST IN BOTH DIRECTIONS.** Push order is
-// `x19/x20 … x27/x28 · d8/d9 … d14/d15 · x29/x30`; pop order is that list read BACKWARDS, which the
-// pre-indexed `stp` / post-indexed `ldp` pair then makes balance by construction. Writing the two sequences
-// out separately is how they would come to disagree — and a disagreement here is not a crash at the switch,
-// it is a register file that silently belongs to the wrong green thread.
-//
-// ⚠ **THE FRAME RECORD IS LAST IN THE LIST, WHICH PUTS IT AT THE LOWEST ADDRESS** — at `gt.sp` itself, with
-// x29 at `gt.sp + 0` and x30 at `gt.sp + 8`. `GtRuntime.emitGtSeedInitialFrame`'s arm64 arm writes
-// `&__gt_trampoline` at exactly that second word. Reverse this order and a fresh green thread returns into
-// whatever the seed zeros happen to be.
-function emitArm64GtSavedBlock(asm Arm64RuntimeAsm, direction Arm64GtBlockDirection)
+function emitArm64GtSavedBlock(asm Arm64RuntimeAsm, gtReg Arm64Register, direction Arm64GtBlockDirection)
+	if GtOffSavedPc != GtOffFp + SpillSlotBytes 'frameRecordPairLayout'
+		panic("emitArm64GtSavedBlock: GtOffSavedPc ({GtOffSavedPc}) is not the word after GtOffFp ({GtOffFp}), so the x29/x30 pair at GtOffFp does not carry the saved pc")
+	end 'frameRecordPairLayout'
+
+	emitArm64GtSavedGprPair(asm, gtReg: gtReg, first: arm64RuntimeReg(Arm64Register.x29), byteOffset: GtOffFp as MachineWord, direction: direction)
+
 	let pairs = arm64GtSavedPairs()
 
 	for i in 0 upto pairs.count() 'eachPair'
-		let index = match direction 'order'
-			push gives i
-			pop gives pairs.count() - 1 - i
-		end 'order'
-
-		let pair = try pairs.get(index) otherwise panic("emitArm64GtSavedBlock: index derived from count is in range")
-		emitArm64GtSavedPair(asm, pair: pair, direction: direction)
+		let pair = try pairs.get(i) otherwise panic("emitArm64GtSavedBlock: index derived from count is in range")
+		let byteOffset = (GtOffSavedRegs + (i as FullRangeInt) * Arm64GtPairBytes) as MachineWord
+		emitArm64GtSavedPair(asm, gtReg: gtReg, pair: pair, byteOffset: byteOffset, direction: direction)
 	end 'eachPair'
 end 'emitArm64GtSavedBlock'
 
-// One pair moved. The four spellings — GPR/SIMD × push/pop — are chosen HERE and nowhere else, so a file
-// whose callee-saved lists grow a register never has to be edited in two places.
-function emitArm64GtSavedPair(asm Arm64RuntimeAsm, pair Arm64GtSavedPair, direction Arm64GtBlockDirection)
+function emitArm64GtSavedPair(asm Arm64RuntimeAsm, gtReg Arm64Register, pair Arm64GtSavedPair, byteOffset MachineWord, direction Arm64GtBlockDirection)
 	match pair.file 'file'
-		gpr then emitArm64GtSavedGprPair(asm, first: pair.first, direction: direction)
-		simd then emitArm64GtSavedFpPair(asm, first: pair.first, direction: direction)
+		gpr then emitArm64GtSavedGprPair(asm, gtReg: gtReg, first: pair.first, byteOffset: byteOffset, direction: direction)
+		simd then emitArm64GtSavedFpPair(asm, gtReg: gtReg, first: pair.first, byteOffset: byteOffset, direction: direction)
 	end 'file'
 end 'emitArm64GtSavedPair'
 
-function emitArm64GtSavedGprPair(asm Arm64RuntimeAsm, first MachineWord, direction Arm64GtBlockDirection)
+function emitArm64GtSavedGprPair(asm Arm64RuntimeAsm, gtReg Arm64Register, first MachineWord, byteOffset MachineWord, direction Arm64GtBlockDirection)
 	match direction 'dir'
-		push then arm64EmitPushPairGpr(asm.code, rt1: first, rt2: first + 1)
-		pop then arm64EmitPopPairGpr(asm.code, rt1: first, rt2: first + 1)
+		push then arm64EmitStorePairGprAt(asm.code, rt1: first, rt2: first + 1, baseReg: arm64RuntimeReg(gtReg), byteOffset: byteOffset)
+		pop then arm64EmitLoadPairGprAt(asm.code, rt1: first, rt2: first + 1, baseReg: arm64RuntimeReg(gtReg), byteOffset: byteOffset)
 	end 'dir'
 end 'emitArm64GtSavedGprPair'
 
-function emitArm64GtSavedFpPair(asm Arm64RuntimeAsm, first MachineWord, direction Arm64GtBlockDirection)
+function emitArm64GtSavedFpPair(asm Arm64RuntimeAsm, gtReg Arm64Register, first MachineWord, byteOffset MachineWord, direction Arm64GtBlockDirection)
 	match direction 'dir'
-		push then arm64EmitPushPairFp(asm.code, rt1: first, rt2: first + 1)
-		pop then arm64EmitPopPairFp(asm.code, rt1: first, rt2: first + 1)
+		push then arm64EmitStorePairFpAt(asm.code, rt1: first, rt2: first + 1, baseReg: arm64RuntimeReg(gtReg), byteOffset: byteOffset)
+		pop then arm64EmitLoadPairFpAt(asm.code, rt1: first, rt2: first + 1, baseReg: arm64RuntimeReg(gtReg), byteOffset: byteOffset)
 	end 'dir'
 end 'emitArm64GtSavedFpPair'
 
@@ -261,7 +243,7 @@ typealias Arm64GtSavedPairArray = Array with Arm64GtSavedPair
 
 // ⭐ The block's contents, DERIVED from the prologue pass's own callee-saved bounds rather than restated.
 // Add a callee-saved register to either file there and it is saved across a green-thread switch here, with
-// `assertArm64GtFrameConsistent` catching the initial frame that did not grow with it.
+// `assertArm64GtFrameConsistent` catching the record block that did not grow with it.
 //
 // The encoding FIELD is the register's own number in both files (x19's GPR field is 19; d8's SIMD field is
 // 8, `Arm64FirstVectorRegister` having already been subtracted out of the bounds the prologue pass states).
@@ -269,9 +251,6 @@ function arm64GtSavedPairs() returns Arm64GtSavedPairArray
 	var pairs = Arm64GtSavedPairArray.create()
 	arm64GtAppendPairs(pairs, file: Arm64GtRegisterFile.gpr, first: Arm64CalleeSavedGprLow, limit: Arm64CalleeSavedGprEnd)
 	arm64GtAppendPairs(pairs, file: Arm64GtRegisterFile.simd, first: Arm64CalleeSavedFpFirst, limit: Arm64CalleeSavedFpEnd)
-
-	// The x29/x30 frame record, LAST — see `emitArm64GtSavedBlock` for why that position is load-bearing.
-	pairs.push(Arm64GtSavedPair.create(Arm64GtRegisterFile.gpr, first: arm64RuntimeReg(Arm64Register.x29)))
 	return pairs
 end 'arm64GtSavedPairs'
 
@@ -288,9 +267,10 @@ end 'arm64GtAppendPairs'
 // `__gt_trampoline`
 // ==========================================================================
 
-// The entry a FRESH green thread branches into on its first switch-in. NOT a normal call: no incoming
-// register arguments, no prologue, and x29 is the seed frame's zero — which is what stops the panic
-// backtrace at a green thread's boundary instead of walking into the scheduler context that switched it in.
+// The entry a FRESH green thread branches into on its first switch-in. NOT a normal call: no
+// incoming register arguments, no prologue, and x29 is the zero `__gt_spawn` leaves in `gt.fp` —
+// which is what stops the panic backtrace at a green thread's boundary instead of walking into the
+// scheduler context that switched it in.
 //
 // It reads its own GT out of x1 (the switch left `to` there), loads the async function and its argument
 // buffer from the struct, fills every `MaxAsyncArgs` argument register, calls, captures x0 into
@@ -453,13 +433,6 @@ end 'emitArm64LoadCurrentMOrBail'
 // walk the chain adding the offset to each interior link. Frame pointers on EVERY function
 // (`Arm64PrologueEpilogue`'s first paragraph, leaves included) is what pays for that.
 //
-// ⭐⭐ **THE ONE ISA DIFFERENCE IN THE RELOCATION: A PARKED THREAD's x29 IS ALSO ON ITS STACK.** x64's switch keeps
-// rbp only in `gt.fp`. This lane's switch pushes the x29/x30 record LAST, so `[gt.sp]` holds the x29 the
-// switch-in restores, beside the copy in `gt.fp`; `__gt_stack_relocate` rebases that word as well as `gt.fp`,
-// then walks the chain from `gt.fp`. At a grow the same word is the guard's saved x30 — a `.text` address, which
-// the old-stack range test leaves alone — so the one routine is right in both directions without being told
-// which it is serving.
-//
 // ENTRY CONTRACT (from a prologue guard, directly or through `__gt_guard_tripped`'s branch): x11 = the current
 // GT, x12 = this M's system-stack top, x14 = the guard's PROJECTED SP, SP = the GT stack pointing at the guard's
 // saved-x30 cell, x30 = the return into the guard. Everything it saves goes on the SYSTEM stack, so the
@@ -532,7 +505,7 @@ end 'arm64MorestackSavedGprs'
 // and the system stack's top is page-aligned (`__gt_system_stack_alloc`), so a 16-aligned frame
 // lands SP on AAPCS64's required residue.
 function arm64MorestackFrameBytes(savedGprs Arm64RegisterArray) returns StackSize
-	return alignUpStack(Arm64MorestackSaveBase as StackSize + arm64RegisterBlockBytes(savedGprs), alignment: StackFrameAlignment)
+	return alignUpStack(Arm64MorestackSaveBase as StackSize + arm64RegisterBlockBytes(savedGprs, fps: arm64FpArgRegisters), alignment: StackFrameAlignment)
 end 'arm64MorestackFrameBytes'
 
 function buildArm64GtMorestackChunk(target Target) returns FunctionCodeChunk
@@ -552,7 +525,7 @@ function buildArm64GtMorestackChunk(target Target) returns FunctionCodeChunk
 	arm64GtStoreSp(asm, src: Arm64MoreSpReg, byteOffset: Arm64MorestackEntrySpSlot)
 
 	// Step 2: save everything the ENTRY CONTRACT names, then take the GT into a body register.
-	emitArm64RegisterBlock(asm, gprs: savedGprs, base: Arm64MorestackSaveBase, direction: Arm64GtBlockDirection.push)
+	emitArm64RegisterBlock(asm, gprs: savedGprs, fps: arm64FpArgRegisters, base: Arm64MorestackSaveBase, direction: Arm64GtBlockDirection.push)
 	arm64EmitMovRuntimeReg(asm, dest: Arm64MoreGtReg, src: Arm64MorestackEntryGtReg)
 
 	// Step 3: old_base, old_size; TempB = need = old_top - projected + guard height; TempA = the ceiling;
@@ -607,7 +580,7 @@ function buildArm64GtMorestackChunk(target Target) returns FunctionCodeChunk
 	arm64EmitLoadWord64At(asm, dest: Arm64MoreSpReg, base: Arm64MoreGtReg, byteOffset: GtOffSp)
 
 	asm.placeLabel(returning)
-	emitArm64RegisterBlock(asm, gprs: savedGprs, base: Arm64MorestackSaveBase, direction: Arm64GtBlockDirection.pop)
+	emitArm64RegisterBlock(asm, gprs: savedGprs, fps: arm64FpArgRegisters, base: Arm64MorestackSaveBase, direction: Arm64GtBlockDirection.pop)
 	arm64EmitStackFree(asm.code, amount: frameBytes)
 	arm64EmitMovToSp(asm.code, src: arm64RuntimeReg(Arm64MoreSpReg))
 	arm64EmitRet(asm.code)
@@ -666,21 +639,24 @@ function arm64GtLoadSp(asm Arm64RuntimeAsm, dest Arm64Register, byteOffset Machi
 	arm64EmitLoadWord64Sp(asm.code, dest: arm64RuntimeReg(dest), byteOffset: byteOffset)
 end 'arm64GtLoadSp'
 
-// The SP offset of slot `index` of a register block laid from `base`: `gprs` first, then the float argument
-// registers.
+// The SP offset of slot `index` of a register block laid from `base`: `gprs` first, then `fps`.
 function arm64RegisterBlockSlot(base MachineWord, index RegCount) returns MachineWord
 	return base + ((index as StackSize) * SpillSlotBytes) as MachineWord
 end 'arm64RegisterBlockSlot'
 
-// The bytes a register block of `gprs` spans.
-function arm64RegisterBlockBytes(gprs Arm64RegisterArray) returns StackSize
-	return ((gprs.count() + arm64FpArgRegisters.count()) as StackSize) * SpillSlotBytes
+function arm64RegisterBlockBytes(gprs Arm64RegisterArray, fps Arm64RegisterArray) returns StackSize
+	return arm64RegisterBlockSlots(gprs, fps: fps) * SpillSlotBytes
 end 'arm64RegisterBlockBytes'
 
-// ⭐ **SAVE OR RESTORE `gprs` AND EVERY FLOAT ARGUMENT REGISTER AT CONSECUTIVE SP SLOTS FROM `base`, FROM ONE WALK
-// IN BOTH DIRECTIONS** — the reason `emitArm64GtSavedBlock` gives, in the two chunks where a mismatch is a
-// caller's argument silently replaced by a kernel return value or by `__gt_preempt`'s.
-function emitArm64RegisterBlock(asm Arm64RuntimeAsm, gprs Arm64RegisterArray, base MachineWord, direction Arm64GtBlockDirection)
+function arm64RegisterBlockSlots(gprs Arm64RegisterArray, fps Arm64RegisterArray) returns StackSize
+	return (gprs.count() + fps.count()) as StackSize
+end 'arm64RegisterBlockSlots'
+
+// ⭐ **SAVE OR RESTORE `gprs` THEN `fps` AT CONSECUTIVE SP SLOTS FROM `base`, FROM ONE WALK IN BOTH
+// DIRECTIONS** — a save and a restore written out separately are how the two come to disagree, and
+// in the chunks this serves a disagreement is a register silently replaced by a kernel return
+// value, by `__gt_preempt`'s, or by somebody else's at an asynchronous stop.
+function emitArm64RegisterBlock(asm Arm64RuntimeAsm, gprs Arm64RegisterArray, fps Arm64RegisterArray, base MachineWord, direction Arm64GtBlockDirection)
 	for k in 0 upto gprs.count() 'gprs'
 		let reg = try gprs.get(k) otherwise panic("emitArm64RegisterBlock: index derived from count is in range")
 		let slot = arm64RegisterBlockSlot(base, index: k as RegCount)
@@ -691,8 +667,8 @@ function emitArm64RegisterBlock(asm Arm64RuntimeAsm, gprs Arm64RegisterArray, ba
 		end 'dir'
 	end 'gprs'
 
-	for k in 0 upto arm64FpArgRegisters.count() 'fps'
-		let reg = try arm64FpArgRegisters.get(k) otherwise panic("emitArm64RegisterBlock: index derived from count is in range")
+	for k in 0 upto fps.count() 'fps'
+		let reg = try fps.get(k) otherwise panic("emitArm64RegisterBlock: index derived from count is in range")
 		let slot = arm64RegisterBlockSlot(base, index: (gprs.count() + k) as RegCount)
 
 		match direction 'dir'
@@ -757,10 +733,6 @@ function buildArm64GtStackRelocateChunk(target Target) returns FunctionCodeChunk
 	asm.placeLabel(copyDone)
 	arm64EmitStoreWord64At(asm, src: Arm64RelocNewLowReg, base: Arm64RelocGtReg, byteOffset: GtOffSp)
 
-	// `[gt.sp]`: a parked thread's x29 as its switch record holds it, or at a grow the guard's saved x30 — see this
-	// section's header for why one range test serves both.
-	emitArm64RelocateRebaseWord(asm, reg: Arm64RelocLinkReg, base: Arm64RelocNewLowReg, byteOffset: 0)
-
 	// `gt.fp` rebased in place, then the chain from it.
 	emitArm64RelocateRebaseWord(asm, reg: Arm64RelocWalkReg, base: Arm64RelocGtReg, byteOffset: GtOffFp)
 	emitArm64RelocateChainWalk(asm)
@@ -792,9 +764,9 @@ end 'emitArm64GtGuardWordRestore'
 // `__gt_stack_relocate` keeps nothing in its frame but the record.
 let NoRelocateSlots = 0
 
-// `reg += offset` IFF `reg` points inside the OLD stack `[old_base, old_top)`. The one statement of that test, for
-// the switch record's word, `gt.fp` and each interior chain link — a second copy is where one of them would come
-// to test a bound the others do not.
+// `reg += offset` IFF `reg` points inside the OLD stack `[old_base, old_top)`. The one statement of
+// that test, for `gt.fp` and each interior chain link — a second copy is where one of them would
+// come to test a bound the others do not.
 //
 // ⚠ **UNSIGNED COMPARES.** These are addresses; a signed `lt` would read a stack near the top of the
 // address space as negative and skip every rebase, which is a use-after-free rather than a crash.
@@ -818,9 +790,10 @@ function emitArm64RelocateRebaseWord(asm Arm64RuntimeAsm, reg Arm64Register, bas
 end 'emitArm64RelocateRebaseWord'
 
 // The saved-x29 chain walk — the correctness crux. Entered with the walker (the rebased `gt.fp`) in
-// `Arm64RelocWalkReg`. For each frame record whose link points into the OLD stack it adds the relocation offset,
-// then follows the now-adjusted link. It ends when the walker leaves the relocated region `[new_low, new_high)`,
-// which a null link does too: a green thread's outermost frame is the trampoline's, whose x29 is the seed zero.
+// `Arm64RelocWalkReg`. For each frame record whose link points into the OLD stack it adds the
+// relocation offset, then follows the now-adjusted link. It ends when the walker leaves the
+// relocated region `[new_low, new_high)`, which a null link does too: a green thread's outermost
+// frame is the trampoline's, whose x29 is the zero `__gt_spawn` leaves in `gt.fp`.
 function emitArm64RelocateChainWalk(asm Arm64RuntimeAsm)
 	let head = asm.newLabel()
 	let done = asm.newLabel()
@@ -965,11 +938,6 @@ function buildArm64GtGuardTrippedChunk() returns FunctionCodeChunk
 	return chunk
 end 'buildArm64GtGuardTrippedChunk'
 
-// One local per argument register, integer first.
-function arm64GtPreemptArmSlots() returns StackSize
-	return (arm64ArgRegisters.count() + arm64FpArgRegisters.count()) as StackSize
-end 'arm64GtPreemptArmSlots'
-
 // ⭐ **WHAT A HONOURED PREEMPTION REQUEST COSTS THE GREEN THREAD's STACK BELOW THE GUARD, BEFORE
 // `__gt_preempt` RUNS**: the guard's x30 cell and the frame the arm opens.
 // `UnguardedChains.requireUnguardedChainsFitTheGuardMargin` adds `__gt_preempt`'s tree to it.
@@ -980,12 +948,12 @@ end 'arm64GtPreemptArmStackBytes'
 // The arm as a framed fragment, closed with its own `br x30`, for `__gt_guard_tripped` to splice in. The frame
 // record sits at SP, so the locals' SP displacements are their x29 ones.
 function buildArm64GtPreemptArm() returns Arm64RuntimeAsm
-	var arm = Arm64RuntimeAsm.beginFunction(arm64GtPreemptArmSlots())
+	var arm = Arm64RuntimeAsm.beginFunction(arm64RegisterBlockSlots(arm64ArgRegisters, fps: arm64FpArgRegisters))
 	let locals = arm.slotOffset(0)
-	emitArm64RegisterBlock(arm, gprs: arm64ArgRegisters, base: locals, direction: Arm64GtBlockDirection.push)
+	emitArm64RegisterBlock(arm, gprs: arm64ArgRegisters, fps: arm64FpArgRegisters, base: locals, direction: Arm64GtBlockDirection.push)
 	arm64EmitMovRuntimeReg(arm, dest: arm64ArgRegisterAt(0), src: Arm64MorestackEntryGtReg)
 	arm64EmitBranchLink(arm.code, callFixups: arm.callFixups, targetName: GtPreemptName)
-	emitArm64RegisterBlock(arm, gprs: arm64ArgRegisters, base: locals, direction: Arm64GtBlockDirection.pop)
+	emitArm64RegisterBlock(arm, gprs: arm64ArgRegisters, fps: arm64FpArgRegisters, base: locals, direction: Arm64GtBlockDirection.pop)
 	arm.closeFrame(ReturnTransfer.indirectJump)
 	return arm
 end 'buildArm64GtPreemptArm'
@@ -1278,8 +1246,18 @@ end 'arm64AsyncPreemptGprs'
 
 // The trampoline's block, in slots: every general register above, the flags, then the whole SIMD file.
 function arm64AsyncPreemptFlagsSlot() returns MachineWord
-	return ((arm64AsyncPreemptGprs().count() as StackSize) * SpillSlotBytes) as MachineWord
+	return arm64RegisterBlockBytes(arm64AsyncPreemptGprs(), fps: Arm64RegisterArray.create()) as MachineWord
 end 'arm64AsyncPreemptFlagsSlot'
+
+function arm64AsyncPreemptVectors() returns Arm64RegisterArray
+	var vectors = Arm64RegisterArray.create()
+
+	for k in 0 upto vectorRegisterCount(arm64RegisterFile()) 'vectors'
+		vectors.push(try Arm64Register.fromRawValue((Arm64FirstVectorRegister + k) as RegNum) otherwise panic("arm64AsyncPreemptVectors: {k} vector registers past the boundary is inside a file of {vectorRegisterCount(arm64RegisterFile())}"))
+	end 'vectors'
+
+	return vectors
+end 'arm64AsyncPreemptVectors'
 
 function arm64AsyncPreemptVectorBase() returns MachineWord
 	return arm64AsyncPreemptFlagsSlot() + (SpillSlotBytes as MachineWord)
@@ -1287,10 +1265,10 @@ end 'arm64AsyncPreemptVectorBase'
 
 // ⚠ **EIGHT BYTES PER VECTOR REGISTER, NOT SIXTEEN, AND THAT IS THIS COMPILER'S OWN INVARIANT rather than a
 // shortcut.** Every value the backend puts in the SIMD file is a scalar f64 in the `d` view — every spill,
-// every argument and the context switch's own callee-saved block are 8-byte `STR Dt` / `LDR Dt` — so no
+// every argument and the context switch's own callee-saved block are 8-byte `d` stores and loads — so no
 // upper half is ever live and a `d`-width save is the whole of what an interrupted function can lose.
 function arm64AsyncPreemptBlockBytes() returns StackSize
-	return alignUpStack((arm64AsyncPreemptVectorBase() as StackSize) + ((vectorRegisterCount(arm64RegisterFile()) as StackSize) * SpillSlotBytes), alignment: StackFrameAlignment)
+	return alignUpStack((arm64AsyncPreemptVectorBase() as StackSize) + arm64RegisterBlockBytes(Arm64RegisterArray.create(), fps: arm64AsyncPreemptVectors()), alignment: StackFrameAlignment)
 end 'arm64AsyncPreemptBlockBytes'
 
 // ⭐ **WHAT AN ASYNCHRONOUS STOP COSTS THE GREEN THREAD's STACK BELOW THE INTERRUPTED SP, BEFORE
@@ -1340,11 +1318,12 @@ end 'buildArm64GtAsyncPreemptChunk'
 // Where the interrupted PC lands in the block: x30's slot, because the injection handed it over IN x30.
 function arm64AsyncPreemptResumePcSlot() returns MachineWord
 	let gprs = arm64AsyncPreemptGprs()
-	return (((gprs.count() - 1) as StackSize) * SpillSlotBytes) as MachineWord
+	return arm64RegisterBlockSlot(0, index: (gprs.count() - 1) as RegCount)
 end 'arm64AsyncPreemptResumePcSlot'
 
-// The register block, laid and lifted from ONE list in both directions — `emitArm64GtSavedBlock`'s reason,
-// in the chunk where a mismatch is an interrupted function silently given somebody else's register.
+// The register block, laid and lifted from ONE list in both directions — `emitArm64RegisterBlock`'s
+// reason, in the chunk where a mismatch is an interrupted function silently given somebody else's
+// register.
 //
 // ⛔ **THE FLAGS MOVE THROUGH x0, SO THE RESTORE ORDER IS FORCED**: flags first, then the general registers,
 // the first of which is x0 itself. `x30` is restored by neither direction — the pop leaves it holding the
@@ -1357,15 +1336,7 @@ function emitArm64AsyncPreemptBlock(asm Arm64RuntimeAsm, direction Arm64GtBlockD
 		pop then emitArm64AsyncPreemptFlags(asm, direction: direction)
 	end 'flagsFirst'
 
-	for k in 0 upto vectorRegisterCount(arm64RegisterFile()) 'vectors'
-		let reg = try Arm64Register.fromRawValue((Arm64FirstVectorRegister + k) as RegNum) otherwise panic("emitArm64AsyncPreemptBlock: {k} vector registers past the boundary is inside a file of {vectorRegisterCount(arm64RegisterFile())}")
-		let slot = arm64AsyncPreemptVectorBase() + ((k as StackSize) * SpillSlotBytes) as MachineWord
-
-		match direction 'dir'
-			push then arm64EmitStoreFpSp(asm.code, src: arm64RuntimeFpReg(reg), byteOffset: slot)
-			pop then arm64EmitLoadFpSp(asm.code, dest: arm64RuntimeFpReg(reg), byteOffset: slot)
-		end 'dir'
-	end 'vectors'
+	emitArm64RegisterBlock(asm, gprs: Arm64RegisterArray.create(), fps: arm64AsyncPreemptVectors(), base: arm64AsyncPreemptVectorBase(), direction: direction)
 
 	match direction 'flagsLast'
 		push then emitArm64AsyncPreemptFlags(asm, direction: direction)
@@ -1393,15 +1364,13 @@ function emitArm64AsyncPreemptGprs(asm Arm64RuntimeAsm, gprs Arm64RegisterArray,
 		pop gives gprs.count() - 1
 	end 'count'
 
-	for k in 0 upto restored 'gprs'
-		let reg = try gprs.get(k) otherwise panic("emitArm64AsyncPreemptGprs: index derived from count is in range")
-		let slot = ((k as StackSize) * SpillSlotBytes) as MachineWord
+	var moved = Arm64RegisterArray.create()
 
-		match direction 'dir'
-			push then arm64GtStoreSp(asm, src: reg, byteOffset: slot)
-			pop then arm64GtLoadSp(asm, dest: reg, byteOffset: slot)
-		end 'dir'
+	for k in 0 upto restored 'gprs'
+		moved.push(try gprs.get(k) otherwise panic("emitArm64AsyncPreemptGprs: index derived from count is in range"))
 	end 'gprs'
+
+	emitArm64RegisterBlock(asm, gprs: moved, fps: Arm64RegisterArray.create(), base: 0, direction: direction)
 end 'emitArm64AsyncPreemptGprs'
 
 // `__gt_preempt_self_register(x0 = m)` — see `SchedRuntime.PreemptSelfRegisterName`. Run by the thread that

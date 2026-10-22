@@ -31,9 +31,9 @@
 // `installGtRuntime`, which runs only under `usesGt`, so a second OS thread can exist by construction.
 //
 // THE SPLIT:
-//   HAND-ASSEMBLED raw bytes (X64GtRuntime / Arm64GtRuntime) — the context switch, the trampoline, the
-//     relocating morestack and the syscall shim. rsp/rbp manipulation and `ret`-into-a-fresh-frame are
-//     unrepresentable in Std.
+//   HAND-ASSEMBLED raw bytes (X64GtRuntime / Arm64GtRuntime) — the context switch, the trampoline,
+//     the relocating morestack and the syscall shim. rsp/rbp manipulation and resuming a thread at
+//     a saved pc on another stack are unrepresentable in Std.
 //   BUILDER-BUILT `StdModule` (here) — everything else, so it gets register allocation, the frame layout and
 //     the leak-safe backend for free.
 //
@@ -231,15 +231,25 @@ export let GtOffRenounced = GtOffReplyWitness + PointerFieldBytes
 // sees only that the prefix tiles, never which fields a cell's readers touch.
 export let GtCellBytes = GtOffRenounced + PointerFieldBytes
 
-export let GtOffSp = GtCellBytes  // saved stack pointer at the context-switch point
-export let GtOffFp = GtOffSp + PointerFieldBytes  // saved frame pointer (rbp) at the context-switch point
+export let GtOffSp = GtCellBytes  // the SP the thread resumes with, once the switch has returned
+export let GtOffFp = GtOffSp + PointerFieldBytes  // saved frame pointer (rbp / x29) at the switch
+
+// The context switch saves into the record, never onto the stack it leaves: reloading from the
+// arriving stack right after moving SP stalls the load that follows, and the switch is the
+// scheduler's hot path.
+export let GtOffSavedPc = GtOffFp + PointerFieldBytes
+export let GtOffSavedRegs = GtOffSavedPc + PointerFieldBytes
+
+// The larger lane's block, because the layout is target-independent; `requireGtRecordLayout` checks
+// that every lane's fits.
+let GtSavedRegisterBytes = Arm64GtSavedRegisterBytes
 
 // ⭐⭐ **THE SCHEDULER CONTEXT TO SWITCH BACK TO WHEN THIS GT PARKS, YIELDS OR COMPLETES — and ALSO THE ANSWER
 // TO "HAS THIS THREAD EVER RUN?".** `emitGtExecute` stores the executing machine's scheduler context here
 // immediately before every switch-in; that is never 0 and nothing clears it. So `waiter == 0` means no machine
 // has ever switched into it — the population whose stack and struct may be freed without asking its own code
 // first, which is what `emitGtIsDropped` reads it for.
-export let GtOffWaiter = GtOffFp + PointerFieldBytes
+export let GtOffWaiter = GtOffSavedRegs + GtSavedRegisterBytes
 
 export let GtOffArgBuf = GtOffWaiter + PointerFieldBytes  // a self-pointer to this struct's inline argument region (`GtOffArgInline`)
 
@@ -907,9 +917,8 @@ export function gtAsyncPreemptMargin(target Target) returns FullRangeInt
 	end 'cpu'
 end 'gtAsyncPreemptMargin'
 
-// 0x400 (1024 B). MEASURED on x64-windows: the trampoline's own frame is 312 bytes and everything
-// `__gt_async_preempt_park` reaches adds 272, so 584 of it is spent and the rest is headroom the certificate
-// re-proves on every build.
+// 0x400 (1024 B): the trampoline's own frame and everything `__gt_async_preempt_park` reaches fit
+// in it with headroom, which the certificate re-proves on every build.
 let GtAsyncPreemptMarginBytes = 0x400 as FullRangeInt
 
 // The SYSTEM (scratch) stack a green thread's kernel calls run on: a 64 KB region
@@ -919,37 +928,25 @@ let GtAsyncPreemptMarginBytes = 0x400 as FullRangeInt
 // subtracts it from the system-stack top to compute the TIB StackLimit it publishes for the call.
 export let GtSystemStackSize = 0x10000
 
-// The saved-register frame `__gt_context_switch` builds on a GT stack, and the ONE fact the Std
-// tier and the Target tier share about a fresh green thread. `__gt_spawn` lays a frame of exactly
-// this size with the trampoline's address in the word the first switch-in takes its return address
-// from; every other word is zero (`emitGtSeedInitialFrame` clears the frame, because a pooled stack
-// arrives holding another thread's words), which is correct because they become this GT's initial
-// callee-saved registers and the user function establishes each before reading it.
+// The bytes of a GT record's `GtOffSavedRegs` block that `__gt_context_switch` fills on this
+// target. A fresh thread's block holds whatever the record last held, which is sound because the
+// trampoline reads no callee-saved register it has not set.
 //
-// **x64 — 128 bytes.** The five callee-saved GPRs (rbx, r12-r15 — `calleeSavedOrder`) as pushed words, the ten
-// callee-saved XMMs (xmm6-15 — `calleeSavedXmmOrder`) as `movsd` words below them, plus the RETURN-ADDRESS
-// word, which sits at the TOP because the switch ends in `ret` and `ret` POPS.
-//
-// **arm64 — 160 bytes.** Ten `stp` PAIRS: x19..x28, d8..d15, and the x29/x30 frame record. There is no
-// return-address WORD at all — AArch64's `ret` branches to x30 — so the trampoline's address rides the frame
-// record, which the switch pushes LAST and therefore places at the LOWEST address. That is a STRUCTURAL
-// difference in how a fresh frame is seeded rather than merely a different number, and
-// `emitGtSeedInitialFrame` below is where the two shapes are written out.
-//
-// ⚠ It MUST byte-match the context switch's save/restore layout — a mismatch is a wild return on the first
-// switch-in — so EACH backend CHECKS this against its OWN callee-saved lists at chunk-build time
-// (`X64GtRuntime.assertGtFrameConsistent`, `Arm64GtRuntime.assertArm64GtFrameConsistent`). Add a callee-saved
-// register to either file without moving its number and the next async compile panics rather than miscompiling.
-export function gtInitialFrameBytes(target Target) returns FullRangeInt
+// ⚠ It MUST byte-match the context switch's save/restore layout — a mismatch writes into the next
+// record field or leaves a register unsaved — so EACH backend CHECKS this against its OWN
+// callee-saved lists at chunk-build time (`X64GtRuntime.assertGtFrameConsistent`,
+// `Arm64GtRuntime.assertArm64GtFrameConsistent`). Add a callee-saved register to either file
+// without moving its number and the next async compile panics rather than miscompiling.
+export function gtSavedRegisterBytes(target Target) returns FullRangeInt
 	return match target.cpu 'cpu'
-		x64 gives X64GtInitialFrameBytes
-		arm64 gives Arm64GtInitialFrameBytes
-		wasm32 panic("gtInitialFrameBytes: wasm32 has no context switch — a WASI component's call stack is not addressable, so there is no saved-register frame to lay. `targetProvidesFacility` denies `greenThreads` there, and reaching here means a compiler-inserted scheduler op got past that gate")
+		x64 gives X64GtSavedRegisterBytes
+		arm64 gives Arm64GtSavedRegisterBytes
+		wasm32 panic("gtSavedRegisterBytes: wasm32 has no context switch — a WASI component's call stack is not addressable, so there is no saved-register block to lay. `targetProvidesFacility` denies `greenThreads` there, and reaching here means a compiler-inserted scheduler op got past that gate")
 	end 'cpu'
-end 'gtInitialFrameBytes'
+end 'gtSavedRegisterBytes'
 
-let X64GtInitialFrameBytes = 128 as FullRangeInt  // 5 GPR words + 10 XMM words + the return-address word
-let Arm64GtInitialFrameBytes = 160 as FullRangeInt  // 5 GPR pairs + 4 SIMD pairs + the x29/x30 frame record
+let X64GtSavedRegisterBytes = 120
+let Arm64GtSavedRegisterBytes = 144
 
 // The argument buffer holds MaxAsyncArgs i64 slots. The trampoline loads ALL of them into the GPR
 // argument registers unconditionally (a callee reads only the slots it declares; the rest are the
@@ -962,9 +959,9 @@ export let MaxAsyncArgs = 6
 export let GtArgSlotBytes = 8
 let ArgBufBytes = MaxAsyncArgs * GtArgSlotBytes
 
-// One machine word ON THE STACK: what a `push r64` moves rsp by, what a `call`'s pushed return address
-// occupies, and the stride of every saved-register word in the hand-laid frames this file's `__gt_spawn`
-// lays and `__gt_context_switch`/`__gt_morestack` build (X64GtRuntime).
+// One machine word ON THE STACK: what a `push r64` moves rsp by, what a `call`'s pushed return
+// address occupies, and the stride of every saved general-register word `__gt_context_switch` and
+// `__gt_morestack` write (X64GtRuntime).
 //
 // ⚠ DISTINCT FROM `GtArgSlotBytes` THOUGH BOTH ARE 8. That one is the async ARGUMENT BUFFER's stride — a
 // heap object's layout — and it had quietly become the spelling for "a stack word" as well, in four
@@ -2528,6 +2525,8 @@ function gtFieldRoster() returns GtFieldArray
 	fields.push(GtField.create("GtOffRenounced", offset: GtOffRenounced, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawn))
 	fields.push(GtField.create("GtOffSp", offset: GtOffSp, width: PointerFieldBytes, rule: GtFieldRule.setBySpawn))
 	fields.push(GtField.create("GtOffFp", offset: GtOffFp, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawn))
+	fields.push(GtField.create("GtOffSavedPc", offset: GtOffSavedPc, width: PointerFieldBytes, rule: GtFieldRule.setBySpawn))
+	fields.push(GtField.create("GtOffSavedRegs", offset: GtOffSavedRegs, width: GtSavedRegisterBytes as ByteOffset, rule: GtFieldRule.setBeforeRead))
 	fields.push(GtField.create("GtOffWaiter", offset: GtOffWaiter, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawn))
 	fields.push(GtField.create("GtOffArgBuf", offset: GtOffArgBuf, width: PointerFieldBytes, rule: GtFieldRule.setBySpawn))
 	fields.push(GtField.create("GtOffOverlapped", offset: GtOffOverlapped, width: GtOverlappedBytes, rule: GtFieldRule.setBeforeRead))
@@ -2600,6 +2599,10 @@ function requireGtRecordLayout()
 	if cursor != GtStructSize 'structEnds'
 		panic("requireGtRecordLayout: the fields end at offset {cursor} but GtStructSize is {GtStructSize}")
 	end 'structEnds'
+
+	if X64GtSavedRegisterBytes > GtSavedRegisterBytes or Arm64GtSavedRegisterBytes > GtSavedRegisterBytes 'savedRegistersFit'
+		panic("requireGtRecordLayout: the record's saved-register block is {GtSavedRegisterBytes} bytes but a lane saves up to {X64GtSavedRegisterBytes} (x64) / {Arm64GtSavedRegisterBytes} (arm64) — a switch past the block's end would write into the next field")
+	end 'savedRegistersFit'
 
 	if GtOffStackGuard > i8.max 'guardReachesX64Disp8'
 		panic("requireGtRecordLayout: the stack guard word is at offset {GtOffStackGuard}, past the {i8.max} a signed disp8 reaches, which the x64 prologue guard's compare is encoded with")
@@ -2845,9 +2848,9 @@ function gtSpawnNameOf(kind GtSpawnKind) returns ByteArray
 end 'gtSpawnNameOf'
 
 // `__gt_spawn(funcPtr) -> gt` — create a ready green thread. Takes a GT struct with its seed stack
-// from `__gt_free_get`, lays the initial context-switch frame so the first switch-in `ret`s into
-// the trampoline, and points the GT's `GtOffArgBuf` word at the struct's OWN inline arg region.
-// Returns the GT pointer as the promise handle.
+// from `__gt_free_get`, seeds its resume context (`gt.sp` the stack top, the saved pc the
+// trampoline) so the first switch-in jumps into the trampoline, and points the GT's `GtOffArgBuf`
+// word at the struct's OWN inline arg region. Returns the GT pointer as the promise handle.
 //
 // ⭐ **THE ARG BUFFER IS NOT A PARAMETER.** It lives INLINE at `gt + GtOffArgInline` (the slots the
 // lowering fills after this returns, safe because a spawned GT does not run until it is published);
@@ -2858,7 +2861,7 @@ end 'gtSpawnNameOf'
 //
 // ⭐⭐⭐ **IT BUILDS `__gt_spawn`, `__gt_spawn_green` AND `__gt_spawn_main`, AND THEY DIFFER ONLY WHERE
 // `GtSpawnKind` SAYS.** Everything else a spawn does — the struct, the guard, the TIB bounds,
-// the initial context-switch frame — is identical for the three, so building them from three bodies would be
+// the resume context — is identical for the three, so building them from three bodies would be
 // one algorithm written three times with nothing making the copies agree.
 function buildGtSpawn(module StdModule, kind GtSpawnKind, tracing GtTracing, target Target)
 	var func = IrFunction.createFromStd(gtSpawnNameOf(kind), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
@@ -2933,7 +2936,7 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, tracing GtTracing, tar
 	module.appendOp(initBlock, op: StdOp.binOp(stackTop, lhs: stackBase, rhs: stackSizeVal, opcode: StdBinOpcode.add, operandType: StdType.i64))
 
 	emitGtRestoreStackGuard(module, block: initBlock, gt: gt, target: target, ids: ids)
-	emitGtSeedInitialFrame(module, block: initBlock, gt: gt, stackBase: stackBase, stackTop: stackTop, target: target, ids: ids)
+	emitGtSeedResumeContext(module, block: initBlock, gt: gt, stackBase: stackBase, stackTop: stackTop, target: target, ids: ids)
 
 	var seeded = initBlock
 
@@ -3063,59 +3066,25 @@ function emitGtMintTraceId(module StdModule, func IrFunction, cur IrBlock, minte
 	emitBranchCarrying(module, from: take, to: minted, value: id)
 end 'emitGtMintTraceId'
 
-// ⭐⭐⭐ **SEED A FRESH GREEN THREAD'S INITIAL CONTEXT-SWITCH FRAME — the ONE place the two ISAs disagree
-// STRUCTURALLY rather than numerically, which is why it is a per-target ARM and not a per-target constant.**
-//
-// Both lanes lay `gtInitialFrameBytes(target)` bytes at the top of the fresh stack, leave every word the
-// mapping's zeros (they become this green thread's initial callee-saved registers, each established by the
-// user function before it is read), write `&__gt_trampoline` into the ONE word the first switch-in takes its
-// return address from, and point `gt.sp` at the bottom of the block. What differs is WHICH word that is:
-//
-//   • **x64** ends its switch in `ret`, which POPS. So the trampoline's address is the frame's TOP word,
-//     `[stackTop - 8]`, and the fifteen saved-register words sit below it.
-//   • **arm64**'s `ret` branches to x30, which the switch's LAST `ldp` restores — and the switch pushes the
-//     x29/x30 record last, so that pair sits at the LOWEST address. The trampoline's address therefore goes
-//     to `[frameBase + 8]`, the record's second word, with `frameBase == gt.sp` itself. x29's slot beside it
-//     stays zero, which is what stops the panic backtrace at a green thread's boundary.
-//
-// ⚠ **THE TIB BOUNDS ARE SEEDED ON x64 ONLY, AND THAT IS NOT AN OMISSION HERE.** `GtOffTibStackBase`/
-// `GtOffTibStackLimit` exist because a Win32 kernel call PROBES `gs:[0x08]`/`gs:[0x10]` and faults when RSP
-// is outside them, so the syscall shim and the context switch must keep those two words describing the stack
-// that is executing. Darwin has no such contract: nothing reads the fields on that lane, and writing them
-// would be two stores maintaining a fact with no reader — see `Arm64GtRuntime`'s header, which states the
-// same split from the other side.
-function emitGtSeedInitialFrame(module StdModule, block IrBlock, gt ValueId, stackBase ValueId, stackTop ValueId, target Target, ids ValueMinter)
-	let frameBytes = emitConst(module, block: block, value: gtInitialFrameBytes(target), ids: ids)
-	let frameBase = emitBin(module, block: block, a: stackTop, b: frameBytes, opcode: StdBinOpcode.sub, ids: ids)
-	module.appendOp(block, op: StdOp.memFill(frameBase, byteCountId: frameBytes, value: 0))
+function emitGtSeedResumeContext(module StdModule, block IrBlock, gt ValueId, stackBase ValueId, stackTop ValueId, target Target, ids ValueMinter)
 	let trampAddr = ids.mint()
 	module.appendOp(block, op: StdOp.funcAddr(trampAddr, funcName: GtTrampolineName))
 
 	match target.cpu 'cpu'
-		x64 then emitGtSeedX64ReturnWord(module, block: block, gt: gt, stackBase: stackBase, stackTop: stackTop, trampAddr: trampAddr, ids: ids)
-		arm64 then emitStoreField(module, block: block, record: frameBase, offset: Arm64GtSeedLinkRegisterOffset, value: trampAddr)
-		wasm32 then panic("emitGtSeedInitialFrame: wasm32 has no context switch to seed a frame for — `targetProvidesFacility` denies `greenThreads` there, and reaching here means a compiler-inserted `__gt_spawn` got past that gate")
+		x64 then emitGtSeedX64TibBounds(module, block: block, gt: gt, stackBase: stackBase, stackTop: stackTop)
+		arm64 then break
+		wasm32 then panic("emitGtSeedResumeContext: wasm32 has no context switch to seed a context for — `targetProvidesFacility` denies `greenThreads` there, and reaching here means a compiler-inserted `__gt_spawn` got past that gate")
 	end 'cpu'
 
-	// gt.sp = the bottom of the saved block; gt.fp is the slab zero on both lanes.
-	emitStoreField(module, block: block, record: gt, offset: GtOffSp, value: frameBase)
-end 'emitGtSeedInitialFrame'
+	emitStoreField(module, block: block, record: gt, offset: GtOffSavedPc, value: trampAddr)
+	emitStoreField(module, block: block, record: gt, offset: GtOffSp, value: stackTop)
+end 'emitGtSeedResumeContext'
 
-// The trampoline address's offset within the arm64 seed frame: the SECOND word of the x29/x30 record the
-// context switch pushes last, i.e. the x30 half. `StackWordBytes` rather than a bare 8 — it is a stack word,
-// which is exactly what that constant names.
-let Arm64GtSeedLinkRegisterOffset = StackWordBytes as ByteOffset
-
-// x64's half of the seed: the trampoline address in the frame's TOP word, plus the NT_TIB bounds this GT's
-// stack occupies. `tibStackBase = stackTop` (high address), `tibStackLimit = stackBase` (low);
-// `__gt_stack_relocate` moves both when a grow or a shrink moves the stack.
-function emitGtSeedX64ReturnWord(module StdModule, block IrBlock, gt ValueId, stackBase ValueId, stackTop ValueId, trampAddr ValueId, ids ValueMinter)
+function emitGtSeedX64TibBounds(module StdModule, block IrBlock, gt ValueId, stackBase ValueId, stackTop ValueId)
 	emitStoreField(module, block: block, record: gt, offset: GtOffTibStackBase, value: stackTop)
 	emitStoreField(module, block: block, record: gt, offset: GtOffTibStackLimit, value: stackBase)
 	emitStoreField(module, block: block, record: gt, offset: GtOffTibDeallocation, value: stackBase)
-	let retSlotAddr = emitBin(module, block: block, a: stackTop, b: emitConst(module, block: block, value: StackWordBytes, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
-	emitStoreField(module, block: block, record: retSlotAddr, offset: 0, value: trampAddr)
-end 'emitGtSeedX64ReturnWord'
+end 'emitGtSeedX64TibBounds'
 
 // `__gt_ready(gt)` — make a spawned GT discoverable. See `GtReadyName` for why this is not the tail
 // of `__gt_spawn`. A coroutine is readied through `__gt_ready_runnable` and joins its owner's

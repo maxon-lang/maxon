@@ -1,0 +1,97 @@
+let CaseLabel = "spawn-seeds-no-frame"
+
+let SpawnFunctionName = "__gt_spawn"
+
+let X64LinuxTargetName = "x64-linux"
+let X64WindowsTargetName = "x64-windows"
+let X64InstructionPrefix = "x64."
+let Arm64InstructionPrefix = "arm64."
+
+let StoreMnemonic = "storeBaseDispReg.word64 "
+let MoveMnemonic = "movRegReg "
+let MemFillInfix = "MemFill"
+let SubtractInfix = ".sub"
+let NegativeOperandInfix = ", -"
+let StoredOperandSeparator = "], "
+let StoredOperandIndex = 1
+let MoveSourceIndex = 1
+
+let GtSpFieldName = "sp"
+
+// The record's saved-stack-pointer displacement, restated: a test program cannot import `GtRuntime`'s
+// `GtOffSp`.
+let GtSpOffset = 144 as FieldOffset
+
+let SeedReason = "A green thread's saved registers live in its GT record, so `__gt_context_switch` never reads a frame off the stack it enters. A new thread's first resume therefore needs nothing below its stack top: `__gt_spawn` seeds the record's saved stack pointer with the top itself and keeps the trampoline and the initial frame pointer in record fields. A seed frame carved below the top is stack the thread never gets back, and a switch that still reads one reads registers the record already holds."
+
+test 'a new green thread is seeded with its stack top and no frame below it'
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: CaseLabel, fixture: PinnedMachineBlockedFixtureName)
+
+	var findings = StringArray.create()
+	noteTarget(findings, staged: staged, target: MacosTargetName, isa: Arm64InstructionPrefix)
+	noteTarget(findings, staged: staged, target: LinuxTargetName, isa: Arm64InstructionPrefix)
+	noteTarget(findings, staged: staged, target: X64LinuxTargetName, isa: X64InstructionPrefix)
+	noteTarget(findings, staged: staged, target: X64WindowsTargetName, isa: X64InstructionPrefix)
+
+	Expect.isTrue(findings.isEmpty(), message: "the emitted `{SpawnFunctionName}` still carves a seed frame below a new green thread's stack top:{renderedFindings(findings)}\n\n  {SeedReason}")
+end 'a new green thread is seeded with its stack top and no frame below it'
+
+function noteTarget(findings StringArray, staged FilePath, target String, isa String)
+	let body = functionBody(irLines(buildStagedProgram(staged, caseLabel: CaseLabel, target: target, functionName: SpawnFunctionName)), functionName: SpawnFunctionName, target: target)
+
+	noteSeededStackPointer(findings, body: body, target: target, isa: isa)
+	noteSeedFrameFill(findings, body: body, target: target, isa: isa)
+end 'noteTarget'
+
+function noteSeededStackPointer(findings StringArray, body StringArray, target String, isa String)
+	let storePrefix = "{isa}{StoreMnemonic}"
+	let addressed = " + {GtSpOffset}{StoredOperandSeparator}"
+	let site = try firstLineIndex(body, startingWith: storePrefix, containing: addressed, endingWith: NoFurtherDemand) otherwise panic("emitted-runtime tests: the gate could not run — on {target}, nothing in `{SpawnFunctionName}` stores to the new record's `{GtSpFieldName}` (`{storePrefix.trim()} [… + {GtSpOffset}], …`). The field's displacement or the shape of its store has moved, and this case reads the value seeded into it.")
+	let store = lineAt(body, index: site)
+	let stored = try store.split(StoredOperandSeparator).get(StoredOperandIndex) otherwise panic("emitted-runtime tests: the gate could not run — on {target}, `{store}` names no stored register after `{StoredOperandSeparator.trim()}`.")
+	let origin = originOf(body, register: stored, site: site, target: target, isa: isa)
+
+	if origin.contains(SubtractInfix) or origin.contains(NegativeOperandInfix) 'carved'
+		findings.push("on {target}, `{SpawnFunctionName}` seeds the record's `{GtSpFieldName}` (GT+{GtSpOffset}) with `{store}`, and that value is `{origin}` — an offset below the stack top, not the top itself")
+	end 'carved'
+end 'noteSeededStackPointer'
+
+function noteSeedFrameFill(findings StringArray, body StringArray, target String, isa String)
+	let site = try firstLineIndex(body, startingWith: isa, containing: MemFillInfix, endingWith: NoFurtherDemand) otherwise return
+
+	findings.push("on {target}, `{SpawnFunctionName}` still fills a block of the new thread's stack with `{lineAt(body, index: site)}`")
+end 'noteSeedFrameFill'
+
+function originOf(body StringArray, register String, site LineIndex, target String, isa String) returns String
+	var traced = register
+	var before = site
+
+	while true 'chase'
+		let write = try lastWriteBefore(body, register: traced, site: before) otherwise panic("emitted-runtime tests: the gate could not run — on {target}, nothing in `{SpawnFunctionName}` writes `{traced}` before line {before}, so the value stored to the record's `{GtSpFieldName}` cannot be traced to where it was computed.")
+
+		if not write.line.startsWith("{isa}{MoveMnemonic}") 'computed'
+			return write.line
+		end 'computed'
+
+		traced = try write.line.split(ArgumentSeparator).get(MoveSourceIndex) otherwise panic("emitted-runtime tests: the gate could not run — on {target}, `{write.line}` names no source register.")
+		before = write.index
+	end 'chase'
+
+	panic("emitted-runtime tests: the gate could not run — on {target}, the trace of `{register}` left its loop without a result.")
+end 'originOf'
+
+function lastWriteBefore(body StringArray, register String, site LineIndex) returns RegisterEvent throws IrScanError
+	var found = RegisterEventArray.create()
+
+	for event in registerEvents(body, register: register) 'eachEvent'
+		if event.index >= site 'atOrAfterTheSite'
+			break
+		end 'atOrAfterTheSite'
+
+		if event.overwrites 'aWrite'
+			found.push(event)
+		end 'aWrite'
+	end 'eachEvent'
+
+	return try found.last() otherwise throw IrScanError.noSuchLine
+end 'lastWriteBefore'

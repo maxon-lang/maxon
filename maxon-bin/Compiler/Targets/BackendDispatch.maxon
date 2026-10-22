@@ -560,11 +560,11 @@ function appendMainCall(module TargetModule, block IrBlock, initGlobals bool, re
 	appendGlobalCleanupGate(module, block: block, releasesGlobals: releasesGlobals)
 end 'appendMainCall'
 
-// The main thread's entry (`MainThreadEntryName`): `__gt_trampoline` calls it on `main`'s fresh green-thread
-// stack, and it returns `main`'s ExitCode in R8 for the trampoline to capture. It carries no symbol of its own,
-// so a return address inside it symbolizes as `mrt_start`, and it leaves the seed frame's zero rbp in place, so
-// `main`'s saved rbp ends the walk there — the same `in main` / `in mrt_start` a program without green threads
-// prints.
+// The main thread's entry (`MainThreadEntryName`): `__gt_trampoline` calls it on `main`'s fresh
+// green-thread stack, and it returns `main`'s ExitCode in R8 for the trampoline to capture. It
+// carries no symbol of its own, so a return address inside it symbolizes as `mrt_start`, and it
+// leaves a fresh green thread's zero rbp in place, so `main`'s saved rbp ends the walk there — the
+// same `in main` / `in mrt_start` a program without green threads prints.
 function prependMainThreadEntry(module TargetModule, initGlobals bool, entryFunction ByteArray)
 	var func = IrFunction.createFromStd(MainThreadEntryName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
 	var block = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -722,8 +722,8 @@ end 'appendExitCodePassThroughCall'
 // The compiler function expects — with no push to invert the parity. The Windows stub's `push rbp` (which opens
 // the backtrace chain) would flip it the WRONG way here and misalign `main`. And the stub needs no
 // frame: a fault backtrace chains through MAIN's frame (main's saved rbp is the kernel-zeroed rbp
-// this frameless stub left, or a green thread's seed zero, so the trace is `in main` -> `in mrt_start`
-// -> ends), there is no Win64
+// this frameless stub left, or a fresh green thread's zero, so the trace is `in main` ->
+// `in mrt_start` -> ends), there is no Win64
 // shadow space to reserve (raw syscalls carry no imports, and the compiler functions spill to their OWN frames),
 // and exit_group never returns. The kernel zeroes rbp at entry (SysV ABI), so the saved-rbp chain
 // terminates cleanly without this stub setting one up.

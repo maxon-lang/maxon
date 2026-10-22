@@ -285,17 +285,18 @@ function arm64EmitMainCall(code ByteArray, callFixups CallFixupArray, initGlobal
 	end 'globalCleanup'
 end 'arm64EmitMainCall'
 
-// The main thread's entry (`MainThreadEntryName`), the arm64 twin of `BackendDispatch.prependMainThreadEntry`:
-// `__gt_trampoline` calls it on `main`'s fresh green-thread stack, and it returns `main`'s ExitCode in x0 for
-// the trampoline to capture. It saves x30 because it calls, and it NEVER WRITES x29: the seed frame's zero
-// stays in place, so `main`'s saved x29 ends the walk right after the return address into this chunk — which
+// The main thread's entry (`MainThreadEntryName`), the arm64 twin of
+// `BackendDispatch.prependMainThreadEntry`: `__gt_trampoline` calls it on `main`'s fresh
+// green-thread stack, and it returns `main`'s ExitCode in x0 for the trampoline to capture. It
+// saves x30 because it calls, and it NEVER WRITES x29: a fresh green thread's zero stays in place,
+// so `main`'s saved x29 ends the walk right after the return address into this chunk — which
 // carries no symbol and so prints `in mrt_start`, the line a program without green threads prints.
 export function buildArm64MainThreadEntryChunk(initGlobals bool, entryFunction ByteArray) returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginRawFunction()
 
-	arm64EmitStpPreIndex(asm.code, frameSize: Arm64FrameRecordBytes)
+	arm64EmitPushPairGpr(asm.code, rt1: arm64RuntimeReg(Arm64Register.x29), rt2: arm64RuntimeReg(Arm64Register.x30))
 	arm64EmitMainCall(asm.code, callFixups: asm.callFixups, initGlobals: initGlobals, releasesGlobals: false, entryFunction: entryFunction)
-	arm64EmitLdpPostIndex(asm.code, frameSize: Arm64FrameRecordBytes)
+	arm64EmitPopPairGpr(asm.code, rt1: arm64RuntimeReg(Arm64Register.x29), rt2: arm64RuntimeReg(Arm64Register.x30))
 	arm64EmitRet(asm.code)
 
 	var chunk = asm.finishChunk(MainThreadEntryName)
