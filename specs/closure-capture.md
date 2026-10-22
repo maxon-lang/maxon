@@ -4431,7 +4431,38 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:25:11: cannot pass 'b', which is read-only (a `let` binding), to a function that writes parameter 'b' (in main); pass a clone()
+error E3078: <fragment>:25:11: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
+```
+
+<!-- test: closure-capture.error.a-reading-closure-in-a-returned-array-literal-refuses-a-let-argument -->
+A closure in the returned literal keeps `b` as a closure returned bare does, whether it reads or writes it, so handing `arm` the `let` is refused at the call.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias Read = function() returns Count
+typealias Reads = Array with Read
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+function arm(b Box) returns Reads
+	return [function() gives b.n]
+end 'arm'
+
+function main() returns ExitCode
+	let b = Box.create(1)
+	let fs = arm(b)
+	print("{fs.count()} {b.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:20:11: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
 ```
 
 <!-- test: closure-capture.error.an-array-literal-of-closures-stored-into-a-module-var-keeps-what-they-capture -->

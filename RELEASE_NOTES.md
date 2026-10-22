@@ -11,6 +11,14 @@ one `- ` bullet each: the change, then an indented `Fix:` line saying how to put
 `## Unreleased`, when present, holds the breaking changes of the release being prepared and takes the
 release's version as its heading when the release is cut.
 
+## Unreleased
+
+### Breaking changes
+
+- Passing a `let` to a function whose result holds a closure capturing that parameter — in a container,
+  a record or bare — is E3078, also when the result is bound by a `let` and the closure only reads.
+  Fix: pass a `clone()`.
+
 ## 0.5.0 — 2026-10-08
 
 ### Breaking changes
