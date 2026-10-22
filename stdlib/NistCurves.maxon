@@ -1,0 +1,819 @@
+/// NIST P-256 and P-384 elliptic curves: ECDH key agreement, ECDSA verification and deterministic ECDSA signing.
+/// @category Crypto
+typealias NistLimb = bits(64)
+typealias NistLimbs = Array with NistLimb
+typealias NistPoint = (NistLimbs, NistLimbs, NistLimbs)
+typealias NistAffinePoint = (NistLimbs, NistLimbs)
+typealias NistPoints = Array with NistPoint
+typealias NistScalarBytes = int(32 to 48) implements Count
+typealias NistSpan = (ElementIndex, ElementIndex)
+
+let nistLimbBits = 32
+let nistLimbBytes = 4
+let nistBitsPerByte = 8
+let nistWindowBits = 4
+let nistWindowsPerLimb = 8
+let nistWindowsPerLimbShift = 3
+let nistTableSize = 16
+let nistInverseRefinements = 4
+let nistTopBit = 63
+
+let nistLimbMask = 0xFFFFFFFF as NistLimb
+let nistWindowMask = 0xF as NistLimb
+let nistWindowsPerLimbMask = 0x7 as NistLimb
+let nistAllOnes = u64.max as NistLimb
+let nistZero = 0 as NistLimb
+let nistOne = 1 as NistLimb
+let nistTwo = 2
+let nistByteMask = 0xFF as NistLimb
+
+let nistUncompressedTag = 0x04 as Byte
+let nistDerSequenceTag = 0x30
+let nistDerIntegerTag = 0x02
+let nistDerLongForm = 0x80
+let nistDerSignBit = 0x80
+let nistDerLengthBytesLimit = 4
+let nistDerHeaderBytes = 2
+let nistPointTagBytes = 1
+let nistPointCoordinates = 2
+let nistAccumulatorExtraLimbs = 2
+let p256ScalarBytes = 32
+let p384ScalarBytes = 48
+let nistByteRadix = 256
+let nistZeroByte = 0 as Byte
+let nistNonceOneByte = 0x01 as Byte
+
+let nistHexLetterStart = 0x61
+let nistHexLetterBase = 0x57
+let nistHexDigitBase = 0x30
+let nistHexDigitsPerByte = 2
+let nistHexDigitBits = 4
+
+let p256PrimeHex = "ffffffff00000001000000000000000000000000ffffffffffffffffffffffff"
+let p256OrderHex = "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551"
+let p256BHex = "5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b"
+let p256GxHex = "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296"
+let p256GyHex = "4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5"
+
+let p384PrimeHex = "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffeffffffff0000000000000000ffffffff"
+let p384OrderHex = "ffffffffffffffffffffffffffffffffffffffffffffffffc7634d81f4372ddf581a0db248b0a77aecec196accc52973"
+let p384BHex = "b3312fa7e23ee7e4988e056be3f82d19181d9c6efe8141120314088f5013875ac656398d8a2ed19d2a85c8edd3ec2aef"
+let p384GxHex = "aa87ca22be8b05378eb1c71ef320ad746e1d3b628ba79b9859f741e082542a385502f25dbf55296c3a545e3872760ab7"
+let p384GyHex = "3617de4a96262c6f5d9e98bf9292dc29f8f41dbd289a147ce9da3113b5f0b8c00a60b1ce1d7e819d7a431d7c90ea0e5f"
+
+enum NistRefusal implements Error
+	invalidEncoding
+	rejectedNonce
+end 'NistRefusal'
+
+function nistLimb(limbs NistLimbs, index ElementIndex) returns NistLimb
+	return try limbs.get(index) otherwise panic("nist: limb index past the operand")
+end 'nistLimb'
+
+function nistByte(bytes ByteArray, index ElementIndex) returns Byte throws NistRefusal
+	return try bytes.get(index) otherwise throw NistRefusal.invalidEncoding
+end 'nistByte'
+
+function nistZeros(count Count) returns NistLimbs
+	var limbs = NistLimbs.create()
+	limbs.growFilled(count, value: nistZero)
+	return limbs
+end 'nistZeros'
+
+function nistSmall(count Count, value NistLimb) returns NistLimbs
+	var limbs = nistZeros(count)
+	try limbs.set(0, value: value) otherwise panic("nist: an operand has limbs")
+	return limbs
+end 'nistSmall'
+
+function nistMask(bit NistLimb) returns NistLimb
+	return bit * nistAllOnes
+end 'nistMask'
+
+function nistEqualMask(a NistLimb, b NistLimb) returns NistLimb
+	return nistMask(((a xor b) - nistOne) shr nistTopBit)
+end 'nistEqualMask'
+
+function nistSelect(kept NistLimbs, replacement NistLimbs, mask NistLimb) returns NistLimbs
+	var selected = NistLimbs.create()
+	selected.reserve(kept.count())
+
+	for (iter, limb) in kept.withIterator() 'eachLimb'
+		selected.push((limb and (mask xor nistAllOnes)) or (nistLimb(replacement, index: iter.index()) and mask))
+	end 'eachLimb'
+
+	return selected
+end 'nistSelect'
+
+function nistAdd(a NistLimbs, b NistLimbs) returns (NistLimbs, NistLimb)
+	var sum = NistLimbs.create()
+	sum.reserve(a.count())
+	var carry = nistZero
+
+	for (iter, limb) in a.withIterator() 'eachLimb'
+		let total = limb + nistLimb(b, index: iter.index()) + carry
+		sum.push(total and nistLimbMask)
+		carry = total shr nistLimbBits
+	end 'eachLimb'
+
+	return (sum, carry)
+end 'nistAdd'
+
+function nistSubtract(a NistLimbs, b NistLimbs) returns (NistLimbs, NistLimb)
+	var difference = NistLimbs.create()
+	difference.reserve(a.count())
+	var borrow = nistZero
+
+	for (iter, limb) in a.withIterator() 'eachLimb'
+		let total = limb - nistLimb(b, index: iter.index()) - borrow
+		difference.push(total and nistLimbMask)
+		borrow = total shr nistTopBit
+	end 'eachLimb'
+
+	return (difference, borrow)
+end 'nistSubtract'
+
+function nistIsZero(limbs NistLimbs) returns bool
+	return nistEqual(limbs, b: nistZeros(limbs.count()))
+end 'nistIsZero'
+
+function nistEqual(a NistLimbs, b NistLimbs) returns bool
+	var difference = nistZero
+
+	for (iter, limb) in a.withIterator() 'eachLimb'
+		difference = difference or (limb xor nistLimb(b, index: iter.index()))
+	end 'eachLimb'
+
+	return difference == nistZero
+end 'nistEqual'
+
+function nistLimbsFromBytes(bytes ByteArray, start ElementIndex, count Count) returns NistLimbs
+	let limbCount = count / nistLimbBytes
+	var limbs = NistLimbs.create()
+	limbs.reserve(limbCount)
+
+	for index in 0 upto limbCount 'eachLimb'
+		let first = start + count - (index + 1) * nistLimbBytes
+		var word = nistZero
+
+		for offset in 0 upto nistLimbBytes 'eachByte'
+			let byte = try bytes.get(first + offset) otherwise panic("nist: byte index past the checked length")
+			word = (word shl nistBitsPerByte) or (byte as NistLimb)
+		end 'eachByte'
+
+		limbs.push(word)
+	end 'eachLimb'
+
+	return limbs
+end 'nistLimbsFromBytes'
+
+function nistBytesFromLimbs(limbs NistLimbs) returns ByteArray
+	var bytes = ByteArray.create()
+	bytes.reserve(limbs.count() * nistLimbBytes)
+
+	for step in 0 upto limbs.count() 'eachLimb'
+		let limb = nistLimb(limbs, index: limbs.count() - 1 - step)
+
+		for offset in 0 upto nistLimbBytes 'eachByte'
+			let shift = (nistLimbBytes - 1 - offset) * nistBitsPerByte
+			bytes.push(((limb shr shift) and nistByteMask) as Byte)
+		end 'eachByte'
+	end 'eachLimb'
+
+	return bytes
+end 'nistBytesFromLimbs'
+
+function nistHexDigit(symbol Byte) returns Byte
+	if symbol >= nistHexLetterStart 'letter'
+		return symbol - nistHexLetterBase
+	end 'letter'
+
+	return symbol - nistHexDigitBase
+end 'nistHexDigit'
+
+function nistLimbsFromHex(hex String) returns NistLimbs
+	var bytes = ByteArray.create()
+	bytes.reserve(hex.byteLength() / nistHexDigitsPerByte)
+	var high = nistZeroByte
+	var isHigh = true
+
+	for symbol in hex.bytes() 'eachSymbol'
+		if isHigh 'first'
+			high = nistHexDigit(symbol)
+		end 'first' else 'second'
+			bytes.push((high shl nistHexDigitBits) or nistHexDigit(symbol))
+		end 'second'
+
+		isHigh = not isHigh
+	end 'eachSymbol'
+
+	return nistLimbsFromBytes(bytes, start: 0, count: bytes.count())
+end 'nistLimbsFromHex'
+
+function nistMontgomeryInverse(low NistLimb) returns NistLimb
+	var inverse = low
+
+	for _ in 0 upto nistInverseRefinements 'eachRefinement'
+		inverse = (inverse * (nistTwo - low * inverse)) and nistLimbMask
+	end 'eachRefinement'
+
+	return (nistZero - inverse) and nistLimbMask
+end 'nistMontgomeryInverse'
+
+function nistMultiplyAccumulate(accumulator NistLimbs, a NistLimbs, word NistLimb)
+	let count = a.count()
+	var carry = nistZero
+
+	for (iter, limb) in a.withIterator() 'eachLimb'
+		let index = iter.index()
+		let total = nistLimb(accumulator, index: index) + limb * word + carry
+		try accumulator.set(index, value: total and nistLimbMask) otherwise panic("nist: accumulator index unreachable")
+		carry = total shr nistLimbBits
+	end 'eachLimb'
+
+	let top = nistLimb(accumulator, index: count) + carry
+	try accumulator.set(count, value: top and nistLimbMask) otherwise panic("nist: accumulator index unreachable")
+	try accumulator.set(count + 1, value: top shr nistLimbBits) otherwise panic("nist: accumulator index unreachable")
+end 'nistMultiplyAccumulate'
+
+function nistReduceStep(accumulator NistLimbs, modulus NistLimbs, inverse NistLimb)
+	let count = modulus.count()
+	let quotient = (nistLimb(accumulator, index: 0) * inverse) and nistLimbMask
+	var carry = (nistLimb(accumulator, index: 0) + quotient * nistLimb(modulus, index: 0)) shr nistLimbBits
+
+	for index in 1 upto count 'eachLimb'
+		let total = nistLimb(accumulator, index: index) + quotient * nistLimb(modulus, index: index) + carry
+		try accumulator.set(index - 1, value: total and nistLimbMask) otherwise panic("nist: accumulator index unreachable")
+		carry = total shr nistLimbBits
+	end 'eachLimb'
+
+	let top = nistLimb(accumulator, index: count) + carry
+	try accumulator.set(count - 1, value: top and nistLimbMask) otherwise panic("nist: accumulator index unreachable")
+	try accumulator.set(count, value: nistLimb(accumulator, index: count + 1) + (top shr nistLimbBits)) otherwise panic("nist: accumulator index unreachable")
+end 'nistReduceStep'
+
+function nistLookup(table NistPoints, digit NistLimb) returns NistPoint
+	let (first, _, _) = try table.first() otherwise panic("nist: the window table is never empty")
+	var x = nistZeros(first.count())
+	var y = nistZeros(first.count())
+	var z = nistZeros(first.count())
+
+	for (iter, entry) in table.withIterator() 'eachEntry'
+		let mask = nistEqualMask(iter.index() as NistLimb, b: digit)
+		x = nistSelect(x, replacement: entry.0, mask: mask)
+		y = nistSelect(y, replacement: entry.1, mask: mask)
+		z = nistSelect(z, replacement: entry.2, mask: mask)
+	end 'eachEntry'
+
+	return (x, y, z)
+end 'nistLookup'
+
+function nistDerSpan(der ByteArray, position ElementIndex, tag Byte) returns NistSpan throws NistRefusal
+	let found = try nistByte(der, index: position)
+
+	if found != tag 'wrongTag'
+		throw NistRefusal.invalidEncoding
+	end 'wrongTag'
+
+	let lengthStart = position + 1
+	let first = try nistByte(der, index: lengthStart)
+
+	if first < nistDerLongForm 'shortForm'
+		return try nistDerBounded(der, start: lengthStart + 1, length: first as ElementIndex)
+	end 'shortForm'
+
+	let lengthBytes = (first - nistDerLongForm) as ElementIndex
+
+	if lengthBytes == 0 or lengthBytes > nistDerLengthBytesLimit 'unsupportedLength'
+		throw NistRefusal.invalidEncoding
+	end 'unsupportedLength'
+
+	var length = 0 as ElementIndex
+
+	for offset in 1 to lengthBytes 'eachLengthByte'
+		let byte = try nistByte(der, index: lengthStart + offset)
+		length = length * nistByteRadix + (byte as ElementIndex)
+	end 'eachLengthByte'
+
+	if length < nistDerLongForm or length shr ((lengthBytes - 1) * nistBitsPerByte) == 0 'nonMinimalLength'
+		throw NistRefusal.invalidEncoding
+	end 'nonMinimalLength'
+
+	return try nistDerBounded(der, start: lengthStart + 1 + lengthBytes, length: length)
+end 'nistDerSpan'
+
+function nistDerBounded(der ByteArray, start ElementIndex, length ElementIndex) returns NistSpan throws NistRefusal
+	if start + length > der.count() 'truncated'
+		throw NistRefusal.invalidEncoding
+	end 'truncated'
+
+	return (start, start + length)
+end 'nistDerBounded'
+
+function nistDerInteger(der ByteArray, position ElementIndex) returns NistSpan throws NistRefusal
+	let (start, limit) = try nistDerSpan(der, position: position, tag: nistDerIntegerTag)
+
+	if start == limit 'empty'
+		throw NistRefusal.invalidEncoding
+	end 'empty'
+
+	let lead = try nistByte(der, index: start)
+
+	if lead >= nistDerSignBit 'negative'
+		throw NistRefusal.invalidEncoding
+	end 'negative'
+
+	if lead == nistZeroByte and limit - start > 1 'leadingZero'
+		let next = try nistByte(der, index: start + 1)
+
+		if next < nistDerSignBit 'paddedInteger'
+			throw NistRefusal.invalidEncoding
+		end 'paddedInteger'
+	end 'leadingZero'
+
+	return (start, limit)
+end 'nistDerInteger'
+
+function nistParseSignature(der ByteArray) returns (ByteArray, ByteArray) throws NistRefusal
+	let (start, limit) = try nistDerSpan(der, position: 0, tag: nistDerSequenceTag)
+
+	if limit != der.count() 'trailingBytes'
+		throw NistRefusal.invalidEncoding
+	end 'trailingBytes'
+
+	let (rStart, rEnd) = try nistDerInteger(der, position: start)
+	let (sStart, sEnd) = try nistDerInteger(der, position: rEnd)
+
+	if sEnd != limit 'extraElements'
+		throw NistRefusal.invalidEncoding
+	end 'extraElements'
+
+	let r = try der.slice(rStart, endIndex: rEnd) otherwise panic("nist: integer span checked against the input")
+	let s = try der.slice(sStart, endIndex: sEnd) otherwise panic("nist: integer span checked against the input")
+	return (r, s)
+end 'nistParseSignature'
+
+function nistDerEncodedInteger(value NistLimbs) returns ByteArray
+	var content = ByteArray.create()
+
+	for byte in nistBytesFromLimbs(value) 'eachByte'
+		if content.isEmpty() and byte == nistZeroByte 'leadingZero'
+			continue
+		end 'leadingZero'
+
+		if content.isEmpty() and byte >= nistDerSignBit 'signPad'
+			content.push(nistZeroByte)
+		end 'signPad'
+
+		content.push(byte)
+	end 'eachByte'
+
+	return nistDerElement(nistDerIntegerTag, content: content)
+end 'nistDerEncodedInteger'
+
+function nistDerElement(tag Byte, content ByteArray) returns ByteArray
+	if content.count() >= nistDerLongForm 'longForm'
+		panic("nist: a signature element is always shorter than the long length form")
+	end 'longForm'
+
+	var element = ByteArray.create()
+	element.reserve(content.count() + nistDerHeaderBytes)
+	element.push(tag)
+	element.push(content.count() as Byte)
+	element.append(content)
+	return element
+end 'nistDerElement'
+
+function nistNonceStep(hash HashAlgorithm, key ByteArray, value ByteArray, suffix ByteArray) returns (ByteArray, ByteArray)
+	var keyed = value.clone()
+	keyed.append(suffix)
+	let nextKey = hmac(hash, key: key, message: keyed)
+	return (nextKey, hmac(hash, key: nextKey, message: value))
+end 'nistNonceStep'
+
+type NistModulus
+	let limbs as NistLimbs
+	let inverse as NistLimb
+	let one as NistLimbs
+
+	static function create(hex String) returns NistModulus
+		let limbs = nistLimbsFromHex(hex)
+		let (one, _) = nistSubtract(nistZeros(limbs.count()), b: limbs)
+		return NistModulus{limbs: limbs, inverse: nistMontgomeryInverse(nistLimb(limbs, index: 0)), one: one}
+	end 'create'
+
+	function zero() returns NistLimbs
+		return nistZeros(self.limbs.count())
+	end 'zero'
+
+	function montgomeryOne() returns NistLimbs
+		return self.one.clone()
+	end 'montgomeryOne'
+
+	function isBelow(value NistLimbs) returns bool
+		let (_, borrow) = nistSubtract(value, b: self.limbs)
+		return borrow == nistOne
+	end 'isBelow'
+
+	function reduced(value NistLimbs, carry NistLimb) returns NistLimbs
+		let (difference, borrow) = nistSubtract(value, b: self.limbs)
+		return nistSelect(value, replacement: difference, mask: nistMask(carry or (borrow xor nistOne)))
+	end 'reduced'
+
+	function reduceOnce(value NistLimbs) returns NistLimbs
+		return reduced(value, carry: nistZero)
+	end 'reduceOnce'
+
+	function add(a NistLimbs, b NistLimbs) returns NistLimbs
+		let (sum, carry) = nistAdd(a, b: b)
+		return reduced(sum, carry: carry)
+	end 'add'
+
+	function triple(a NistLimbs) returns NistLimbs
+		return add(a, b: add(a, b: a))
+	end 'triple'
+
+	function subtract(a NistLimbs, b NistLimbs) returns NistLimbs
+		let (difference, borrow) = nistSubtract(a, b: b)
+		let (corrected, _) = nistAdd(difference, b: self.limbs)
+		return nistSelect(difference, replacement: corrected, mask: nistMask(borrow))
+	end 'subtract'
+
+	function multiply(a NistLimbs, b NistLimbs) returns NistLimbs
+		let count = self.limbs.count()
+		var accumulator = nistZeros(count + nistAccumulatorExtraLimbs)
+
+		for word in b 'eachWord'
+			nistMultiplyAccumulate(accumulator, a: a, word: word)
+			nistReduceStep(accumulator, modulus: self.limbs, inverse: self.inverse)
+		end 'eachWord'
+
+		let carry = nistLimb(accumulator, index: count)
+		accumulator.truncate(count)
+		return reduced(accumulator, carry: carry)
+	end 'multiply'
+
+	function toMontgomery(value NistLimbs) returns NistLimbs
+		var converted = reduceOnce(value)
+
+		for _ in 0 upto self.limbs.count() * nistLimbBits 'eachDoubling'
+			converted = add(converted, b: converted)
+		end 'eachDoubling'
+
+		return converted
+	end 'toMontgomery'
+
+	function fromMontgomery(value NistLimbs) returns NistLimbs
+		return multiply(value, b: nistSmall(self.limbs.count(), value: nistOne))
+	end 'fromMontgomery'
+
+	function inverted(value NistLimbs) returns NistLimbs
+		let (exponent, _) = nistSubtract(self.limbs, b: nistSmall(self.limbs.count(), value: nistTwo))
+		var power = self.one.clone()
+
+		for step in 0 upto exponent.count() 'eachLimb'
+			let limb = nistLimb(exponent, index: exponent.count() - 1 - step)
+
+			for offset in 1 to nistLimbBits 'eachBit'
+				power = multiply(power, b: power)
+
+				if ((limb shr (nistLimbBits - offset)) and nistOne) == nistOne 'setBit'
+					power = multiply(power, b: value)
+				end 'setBit'
+			end 'eachBit'
+		end 'eachLimb'
+
+		return power
+	end 'inverted'
+end 'NistModulus'
+
+type NistCurve
+	let primeField as NistModulus
+	let scalarField as NistModulus
+	let b as NistLimbs
+	let generator as NistPoint
+	let scalarBytes as NistScalarBytes
+	let hash as HashAlgorithm
+
+	static function create(prime String, order String, b String, gx String, gy String, scalarBytes NistScalarBytes, hash HashAlgorithm) returns NistCurve
+		let field = NistModulus.create(prime)
+		let generator = (field.toMontgomery(nistLimbsFromHex(gx)), field.toMontgomery(nistLimbsFromHex(gy)), field.montgomeryOne())
+		return NistCurve{primeField: field, scalarField: NistModulus.create(order), b: field.toMontgomery(nistLimbsFromHex(b)), generator: generator, scalarBytes: scalarBytes, hash: hash}
+	end 'create'
+
+	static function of(curve EcdsaCurve) returns NistCurve
+		return match curve 'parameters'
+			p256 gives NistCurve.create(p256PrimeHex, order: p256OrderHex, b: p256BHex, gx: p256GxHex, gy: p256GyHex, scalarBytes: p256ScalarBytes, hash: HashAlgorithm.sha256)
+			p384 gives NistCurve.create(p384PrimeHex, order: p384OrderHex, b: p384BHex, gx: p384GxHex, gy: p384GyHex, scalarBytes: p384ScalarBytes, hash: HashAlgorithm.sha384)
+		end 'parameters'
+	end 'of'
+
+	function identity() returns NistPoint
+		return (self.primeField.zero(), self.primeField.montgomeryOne(), self.primeField.zero())
+	end 'identity'
+
+	function add(p NistPoint, q NistPoint) returns NistPoint
+		let field = self.primeField
+		let t0 = field.multiply(p.0, b: q.0)
+		let t1 = field.multiply(p.1, b: q.1)
+		let t2 = field.multiply(p.2, b: q.2)
+		let t3 = field.subtract(field.multiply(field.add(p.0, b: p.1), b: field.add(q.0, b: q.1)), b: field.add(t0, b: t1))
+		let t4 = field.subtract(field.multiply(field.add(p.1, b: p.2), b: field.add(q.1, b: q.2)), b: field.add(t1, b: t2))
+		let xz = field.multiply(field.add(p.0, b: p.2), b: field.add(q.0, b: q.2))
+		let y3a = field.subtract(xz, b: field.add(t0, b: t2))
+		let x3a = field.triple(field.subtract(y3a, b: field.multiply(self.b, b: t2)))
+		let z3a = field.subtract(t1, b: x3a)
+		let x3b = field.add(t1, b: x3a)
+		let t2b = field.triple(t2)
+		let y3b = field.triple(field.subtract(field.subtract(field.multiply(self.b, b: y3a), b: t2b), b: t0))
+		let t0b = field.subtract(field.triple(t0), b: t2b)
+		let y3 = field.add(field.multiply(x3b, b: z3a), b: field.multiply(t0b, b: y3b))
+		let x3 = field.subtract(field.multiply(t3, b: x3b), b: field.multiply(t4, b: y3b))
+		let z3 = field.add(field.multiply(t4, b: z3a), b: field.multiply(t3, b: t0b))
+		return (x3, y3, z3)
+	end 'add'
+
+	function double(p NistPoint) returns NistPoint
+		let field = self.primeField
+		let t0 = field.multiply(p.0, b: p.0)
+		let t1 = field.multiply(p.1, b: p.1)
+		let t2 = field.multiply(p.2, b: p.2)
+		let xy = field.multiply(p.0, b: p.1)
+		let t3 = field.add(xy, b: xy)
+		let xz = field.multiply(p.0, b: p.2)
+		let z3a = field.add(xz, b: xz)
+		let y3a = field.triple(field.subtract(field.multiply(self.b, b: t2), b: z3a))
+		let x3a = field.subtract(t1, b: y3a)
+		let y3b = field.multiply(x3a, b: field.add(t1, b: y3a))
+		let x3b = field.multiply(x3a, b: t3)
+		let t2b = field.triple(t2)
+		let z3b = field.triple(field.subtract(field.subtract(field.multiply(self.b, b: z3a), b: t2b), b: t0))
+		let y3 = field.add(y3b, b: field.multiply(field.subtract(field.triple(t0), b: t2b), b: z3b))
+		let yz = field.multiply(p.1, b: p.2)
+		let t0b = field.add(yz, b: yz)
+		let x3 = field.subtract(x3b, b: field.multiply(t0b, b: z3b))
+		let z3c = field.multiply(t0b, b: t1)
+		let z3d = field.add(z3c, b: z3c)
+		return (x3, y3, field.add(z3d, b: z3d))
+	end 'double'
+
+	function multiples(point NistPoint) returns NistPoints
+		var table = NistPoints.create()
+		table.reserve(nistTableSize)
+		table.push(identity())
+		var current = point
+
+		for _ in 1 upto nistTableSize 'eachMultiple'
+			table.push(current)
+			current = add(current, q: point)
+		end 'eachMultiple'
+
+		return table
+	end 'multiples'
+
+	function multiply(scalar NistLimbs, point NistPoint) returns NistPoint
+		let table = multiples(point)
+		let windowCount = scalar.count() * nistWindowsPerLimb
+		var result = identity()
+
+		for step in 0 upto windowCount 'eachWindow'
+			let window = (windowCount - 1 - step) as NistLimb
+
+			for _ in 0 upto nistWindowBits 'eachDoubling'
+				result = double(result)
+			end 'eachDoubling'
+
+			let limb = nistLimb(scalar, index: (window shr nistWindowsPerLimbShift) as ElementIndex)
+			let digit = (limb shr ((window and nistWindowsPerLimbMask) * nistWindowBits)) and nistWindowMask
+			result = add(result, q: nistLookup(table, digit: digit))
+		end 'eachWindow'
+
+		return result
+	end 'multiply'
+
+	function affine(point NistPoint) returns NistAffinePoint
+		let zInverse = self.primeField.inverted(point.2)
+		return (self.primeField.fromMontgomery(self.primeField.multiply(point.0, b: zInverse)), self.primeField.fromMontgomery(self.primeField.multiply(point.1, b: zInverse)))
+	end 'affine'
+
+	function scalar(value NistLimbs) returns NistLimbs throws NistRefusal
+		if nistIsZero(value) or not self.scalarField.isBelow(value) 'outOfRange'
+			throw NistRefusal.invalidEncoding
+		end 'outOfRange'
+
+		return value
+	end 'scalar'
+
+	function decodeScalar(bytes ByteArray) returns NistLimbs throws NistRefusal
+		if bytes.count() != self.scalarBytes 'wrongLength'
+			throw NistRefusal.invalidEncoding
+		end 'wrongLength'
+
+		return try scalar(nistLimbsFromBytes(bytes, start: 0, count: self.scalarBytes))
+	end 'decodeScalar'
+
+	function signatureScalar(content ByteArray) returns NistLimbs throws NistRefusal
+		var padded = ByteArray.create()
+		padded.reserve(self.scalarBytes)
+
+		for byte in content 'eachByte'
+			if padded.isEmpty() and byte == nistZeroByte 'leadingZero'
+				continue
+			end 'leadingZero'
+
+			padded.push(byte)
+		end 'eachByte'
+
+		if padded.count() > self.scalarBytes 'tooLong'
+			throw NistRefusal.invalidEncoding
+		end 'tooLong'
+
+		while padded.count() < self.scalarBytes 'eachPad'
+			padded.insert(0, value: nistZeroByte)
+		end 'eachPad'
+
+		return try decodeScalar(padded)
+	end 'signatureScalar'
+
+	function decodePoint(bytes ByteArray) returns NistPoint throws NistRefusal
+		if bytes.count() != nistPointTagBytes + nistPointCoordinates * self.scalarBytes 'wrongLength'
+			throw NistRefusal.invalidEncoding
+		end 'wrongLength'
+
+		let tag = try nistByte(bytes, index: 0)
+
+		if tag != nistUncompressedTag 'notUncompressed'
+			throw NistRefusal.invalidEncoding
+		end 'notUncompressed'
+
+		let x = nistLimbsFromBytes(bytes, start: nistPointTagBytes, count: self.scalarBytes)
+		let y = nistLimbsFromBytes(bytes, start: nistPointTagBytes + self.scalarBytes, count: self.scalarBytes)
+
+		if not self.primeField.isBelow(x) or not self.primeField.isBelow(y) 'nonCanonical'
+			throw NistRefusal.invalidEncoding
+		end 'nonCanonical'
+
+		let field = self.primeField
+		let xm = field.toMontgomery(x)
+		let ym = field.toMontgomery(y)
+		let rightSide = field.add(field.subtract(field.multiply(xm, b: field.multiply(xm, b: xm)), b: field.triple(xm)), b: self.b)
+
+		if not nistEqual(field.multiply(ym, b: ym), b: rightSide) 'offCurve'
+			throw NistRefusal.invalidEncoding
+		end 'offCurve'
+
+		return (xm, ym, field.montgomeryOne())
+	end 'decodePoint'
+
+	function encodePoint(point NistPoint) returns ByteArray
+		let (x, y) = affine(point)
+		var encoded = ByteArray.create()
+		encoded.reserve(nistPointTagBytes + nistPointCoordinates * self.scalarBytes)
+		encoded.push(nistUncompressedTag)
+		encoded.append(nistBytesFromLimbs(x))
+		encoded.append(nistBytesFromLimbs(y))
+		return encoded
+	end 'encodePoint'
+
+	function digest(message ByteArray) returns NistLimbs
+		var digest = Digest.create(self.hash)
+		digest.update(message)
+		return nistLimbsFromBytes(digest.finalize(), start: 0, count: self.scalarBytes)
+	end 'digest'
+
+	function verifies(q NistPoint, message ByteArray, rContent ByteArray, sContent ByteArray) returns bool
+		let r = try signatureScalar(rContent) otherwise return false
+		let s = try signatureScalar(sContent) otherwise return false
+		let order = self.scalarField
+		let sInverse = order.inverted(order.toMontgomery(s))
+		let u1 = order.fromMontgomery(order.multiply(order.toMontgomery(digest(message)), b: sInverse))
+		let u2 = order.fromMontgomery(order.multiply(order.toMontgomery(r), b: sInverse))
+		let sum = add(baseMultiple(u1), q: multiply(u2, point: q))
+
+		if nistIsZero(sum.2) 'infinity'
+			return false
+		end 'infinity'
+
+		let (x, _) = affine(sum)
+		return nistEqual(order.reduceOnce(x), b: r)
+	end 'verifies'
+
+	function signature(nonce NistLimbs, key NistLimbs, hashed NistLimbs) returns ByteArray throws NistRefusal
+		let k = try scalar(nonce) otherwise throw NistRefusal.rejectedNonce
+		let order = self.scalarField
+		let (x, _) = affine(baseMultiple(k))
+		let r = order.reduceOnce(x)
+
+		if nistIsZero(r) 'zeroR'
+			throw NistRefusal.rejectedNonce
+		end 'zeroR'
+
+		let kInverse = order.inverted(order.toMontgomery(k))
+		let sum = order.add(order.toMontgomery(hashed), b: order.multiply(order.toMontgomery(key), b: order.toMontgomery(r)))
+		let s = order.fromMontgomery(order.multiply(kInverse, b: sum))
+
+		if nistIsZero(s) 'zeroS'
+			throw NistRefusal.rejectedNonce
+		end 'zeroS'
+
+		var content = nistDerEncodedInteger(r)
+		content.append(nistDerEncodedInteger(s))
+		return nistDerElement(nistDerSequenceTag, content: content)
+	end 'signature'
+
+	function deterministicSignature(key NistLimbs, privateKey ByteArray, message ByteArray) returns ByteArray
+		let hashed = digest(message)
+		let hashOctets = nistBytesFromLimbs(self.scalarField.reduceOnce(hashed))
+		var nonceKey = ByteArray.create()
+		nonceKey.growFilled(self.scalarBytes, value: nistZeroByte)
+		var nonceValue = ByteArray.create()
+		nonceValue.growFilled(self.scalarBytes, value: nistNonceOneByte)
+
+		for separator in ByteArray from [nistZeroByte, nistNonceOneByte] 'eachSeed'
+			var suffix = ByteArray from [separator]
+			suffix.append(privateKey)
+			suffix.append(hashOctets)
+			(nonceKey, nonceValue) = nistNonceStep(self.hash, key: nonceKey, value: nonceValue, suffix: suffix)
+		end 'eachSeed'
+
+		while true 'eachCandidate'
+			nonceValue = hmac(self.hash, key: nonceKey, message: nonceValue)
+			let nonce = nistLimbsFromBytes(nonceValue, start: 0, count: self.scalarBytes)
+
+			if let accepted = try signature(nonce, key: key, hashed: hashed) 'accepted'
+				return accepted
+			end 'accepted'
+
+			(nonceKey, nonceValue) = nistNonceStep(self.hash, key: nonceKey, value: nonceValue, suffix: ByteArray from [nistZeroByte])
+		end 'eachCandidate'
+
+		panic("nist: the nonce loop returns from inside")
+	end 'deterministicSignature'
+
+	function baseMultiple(scalar NistLimbs) returns NistPoint
+		return multiply(scalar, point: self.generator)
+	end 'baseMultiple'
+end 'NistCurve'
+
+/// Why `EcdhP256` refused a key.
+public enum EcdhError implements Error
+	invalidPrivateKey
+	invalidPublicKey
+end 'EcdhError'
+
+/// Elliptic-curve Diffie-Hellman over NIST P-256 (SP 800-56A ECC CDH, cofactor 1).
+public type EcdhP256
+	/// The 65-byte uncompressed point `04 ‖ x ‖ y` of `d · G` for a 32-byte big-endian private key `d` in `[1, n - 1]`.
+	public static function publicKey(privateKey ByteArray) returns ByteArray throws EcdhError
+		let curve = NistCurve.of(EcdsaCurve.p256)
+		let d = try curve.decodeScalar(privateKey) otherwise throw EcdhError.invalidPrivateKey
+		return curve.encodePoint(curve.baseMultiple(d))
+	end 'publicKey'
+
+	/// The 32-byte x-coordinate of `d · Q` for a private key `d` and a validated uncompressed peer point `Q`.
+	public static function sharedSecret(privateKey ByteArray, peerPublicKey ByteArray) returns ByteArray throws EcdhError
+		let curve = NistCurve.of(EcdsaCurve.p256)
+		let d = try curve.decodeScalar(privateKey) otherwise throw EcdhError.invalidPrivateKey
+		let q = try curve.decodePoint(peerPublicKey) otherwise throw EcdhError.invalidPublicKey
+		let (x, _) = curve.affine(curve.multiply(d, point: q))
+		return nistBytesFromLimbs(x)
+	end 'sharedSecret'
+end 'EcdhP256'
+
+/// A curve and hash pair `Ecdsa.verify` accepts: P-256 with SHA-256 or P-384 with SHA-384.
+public enum EcdsaCurve
+	p256
+	p384
+end 'EcdsaCurve'
+
+/// Why `Ecdsa.verify` refused its input.
+public enum EcdsaError implements Error
+	invalidPublicKey
+	invalidSignatureEncoding
+end 'EcdsaError'
+
+/// ECDSA signature verification (FIPS 186-5).
+public type Ecdsa
+	/// Whether the strict-DER `signature` is valid for `message` under the uncompressed point `publicKey`.
+	public static function verify(curve EcdsaCurve, publicKey ByteArray, message ByteArray, signature ByteArray) returns bool throws EcdsaError
+		let nist = NistCurve.of(curve)
+		let q = try nist.decodePoint(publicKey) otherwise throw EcdsaError.invalidPublicKey
+		let (r, s) = try nistParseSignature(signature) otherwise throw EcdsaError.invalidSignatureEncoding
+		return nist.verifies(q, message: message, rContent: r, sContent: s)
+	end 'verify'
+end 'Ecdsa'
+
+/// Why `EcdsaP256.sign` refused a key.
+public enum EcdsaSignError implements Error
+	invalidPrivateKey
+end 'EcdsaSignError'
+
+/// Deterministic ECDSA signing on P-256 with SHA-256 (RFC 6979).
+public type EcdsaP256
+	/// The DER signature of `message` under a 32-byte private key, with the RFC 6979 nonce over HMAC-SHA-256.
+	public static function sign(privateKey ByteArray, message ByteArray) returns ByteArray throws EcdsaSignError
+		let curve = NistCurve.of(EcdsaCurve.p256)
+		let key = try curve.decodeScalar(privateKey) otherwise throw EcdsaSignError.invalidPrivateKey
+		return curve.deterministicSignature(key, privateKey: privateKey, message: message)
+	end 'sign'
+end 'EcdsaP256'

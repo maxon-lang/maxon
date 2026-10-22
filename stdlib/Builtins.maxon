@@ -2064,12 +2064,12 @@ typealias RadixDigit = int(0 to 15)
 // `bits(n)` is a PATTERN: it admits every value n bits can hold, so its door is guarded by the WIDTH
 // alone — vacuously at 64 — and every ordering comparison on it reads UNSIGNED. An `int(...)` alias is
 // a QUANTITY: its door refuses a value that arrived from a signed domain, because a negative is not a
-// quantity. The ten names below are patterns; everything else in `stdlib/` is a quantity.
+// quantity. The twelve names below are patterns; everything else in `stdlib/` is a quantity.
 //
-// ⇒ **`grep -rnE '^\s*(public )?typealias .* = bits\(' stdlib/` must return exactly the TEN declarations
-// below** — anchored at a declaration so this line is not its own eleventh hit. The spelling is
+// ⇒ **`grep -rnE '^\s*(public )?typealias .* = bits\(' stdlib/` must return exactly the TWELVE declarations
+// below** — anchored at a declaration so this line is not its own thirteenth hit. The spelling is
 // the whole of the claim: an alias that wants an unguarded door has to say `bits`, and one that says
-// `int` gets a checked one whatever its bounds. An eleventh is an alias nobody justified.
+// `int` gets a checked one whatever its bounds. A thirteenth is an alias nobody justified.
 //
 //   • `RenderedPattern`      (this file, below)               — the 64 bits `"{n:x}"` and its siblings
 //     render. A formatted integer is the pattern whatever bit 63 holds, and this is the step that says
@@ -2091,6 +2091,10 @@ typealias RadixDigit = int(0 to 15)
 //     2^32 by masking, XORed and rotated, never ordered as a magnitude.
 //   • `Poly1305Word`         (`Poly1305.maxon`)              — a Poly1305 limb. Its final reduction
 //     selects by a mask with all 64 bits set.
+//   • `NistLimb`             (`NistCurves.maxon`)            — a P-256 or P-384 limb: 32 bits held in 64 so
+//     a limb product plus two carries fits. A borrow is read from bit 63, and selects use all-ones masks.
+//   • `Curve25519Word`       (`Curve25519.maxon`)            — a GF(2^255 - 19) limb of 25 or 26 bits held in 64
+//     so a column of limb products fits; the ladder's swap selects with an all-ones mask.
 //   • `NodePowerWord`        (`helpers/sort/driftsort.maxon`)     — `nodePowerBetween`'s scale
 //     arithmetic: `scale * x` is designed to reach ~2^63 without wrapping, and the leading-zero scan
 //     starts from the top bit, 2^63. ⚠ **IT IS SCOPED TO THAT ONE FORMULA, AND THAT IS THE POINT.**

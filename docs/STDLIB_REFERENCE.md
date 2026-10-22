@@ -3142,6 +3142,82 @@ is not 64. Any other input is answered with a `bool`: the check is the cofactorl
 decode, and an `S` at or above `L`, are `false`. Verification handles public data only and runs in
 variable time.
 
+## EcdhP256
+
+Elliptic-curve Diffie-Hellman over NIST P-256 (secp256r1): the ECC CDH primitive of SP 800-56A with
+cofactor 1, as the TLS 1.3 `secp256r1` key share uses it.
+
+| Function | Returns | Throws | Description |
+|----------|---------|--------|-------------|
+| `EcdhP256.publicKey(privateKey ByteArray)` | `ByteArray` | `EcdhError` | The 65-byte uncompressed SEC 1 point `04 ‖ x ‖ y` of `d · G`, for a 32-byte big-endian private key `d`. |
+| `EcdhP256.sharedSecret(privateKey ByteArray, peerPublicKey ByteArray)` | `ByteArray` | `EcdhError` | The shared secret: the 32-byte big-endian x-coordinate of `d · Q`, leading zero bytes kept. |
+
+`EcdhError` is `invalidPrivateKey` for a key that is not 32 bytes or whose value is 0 or at least the group
+order `n` (it is never reduced), or `invalidPublicKey` for a peer key that is not 65 bytes starting with
+`04` (compressed points included), has a coordinate at least `p`, or is not on the curve. The private key is
+checked first. The private key is the caller's to choose, uniformly from `[1, n − 1]`.
+
+Both calls run in time independent of the private key. Derive keys from the shared secret with
+[`hkdfExtract`](#hkdf); never use it as a key directly.
+
+```maxon
+function main() returns ExitCode
+	var alice = ByteArray.create()
+	alice.growFilled(32, value: 1)
+	var bob = ByteArray.create()
+	bob.growFilled(32, value: 2)
+
+	try 'agree'
+		let fromAlice = EcdhP256.sharedSecret(alice, peerPublicKey: EcdhP256.publicKey(bob))
+		let fromBob = EcdhP256.sharedSecret(bob, peerPublicKey: EcdhP256.publicKey(alice))
+		print("{constantTimeEqual(fromAlice, b: fromBob)}\n")
+	end 'agree' otherwise (failure) 'refused'
+		match failure 'why'
+			invalidPrivateKey then print("bad private key\n")
+			invalidPublicKey then print("bad public key\n")
+		end 'why'
+	end 'refused'
+
+	return 0
+end 'main'
+```
+
+Output: `true`.
+
+## Ecdsa
+
+ECDSA signature verification (FIPS 186-5) for the two pairs TLS 1.3 uses, `ecdsa_secp256r1_sha256` and
+`ecdsa_secp384r1_sha384`.
+
+| Function | Returns | Throws | Description |
+|----------|---------|--------|-------------|
+| `Ecdsa.verify(curve EcdsaCurve, publicKey ByteArray, message ByteArray, signature ByteArray)` | `bool` | `EcdsaError` | Whether `signature`, a DER `ECDSA-Sig-Value`, is valid for `message` under the uncompressed point `publicKey`. The message is hashed with the curve's hash. |
+
+`EcdsaCurve` is `p256` (P-256 with SHA-256, 65-byte keys) or `p384` (P-384 with SHA-384, 97-byte keys).
+`EcdsaError` is the first failure of, in order:
+
+1. `invalidPublicKey`: the key is not `04 ‖ x ‖ y` at the curve's size, has a coordinate at least `p`, or
+   is not on the curve;
+2. `invalidSignatureEncoding`: the signature is not exactly one strict-DER `SEQUENCE` of two `INTEGER`s,
+   each minimal and non-negative, with minimal definite lengths. A negative `INTEGER` is an encoding error.
+
+A well-formed signature whose `r` or `s` is 0 or at least `n` returns `false`; neither is reduced. Both
+`s` and `n − s` verify. Verification handles only public data.
+
+## EcdsaP256
+
+Deterministic ECDSA signing on P-256 with SHA-256 (RFC 6979), as a TLS 1.3 server with a P-256 certificate
+signs `CertificateVerify`.
+
+| Function | Returns | Throws | Description |
+|----------|---------|--------|-------------|
+| `EcdsaP256.sign(privateKey ByteArray, message ByteArray)` | `ByteArray` | `EcdsaSignError` | The DER signature of `message` under a 32-byte big-endian private key, with the nonce of RFC 6979 section 3.2 over HMAC-SHA-256. |
+
+`EcdsaSignError` has one case, `invalidPrivateKey`: a key that is not 32 bytes or whose value is 0 or at
+least `n`. The signature is a function of the key and the message alone; `s` is not normalized to the low
+half, and each `INTEGER` is minimal. The nonce, its inverse and the private key are handled in constant
+time. [`Ecdsa.verify`](#ecdsa) with `EcdsaCurve.p256` accepts every signature it makes.
+
 ## Hasher
 
 `Hasher` is an incremental FNV-1a 64-bit hash, for content keys and cache digests. It is not cryptographic.
