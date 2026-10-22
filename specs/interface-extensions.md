@@ -897,3 +897,121 @@ end 'main'
 ```exitcode
 3
 ```
+
+### A conformer's file-private cursor does not refuse an `Iterable` extension call
+
+<!-- test: a-file-private-cursor-conformer-and-an-iterable-extension-call -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type BagIter uses E implements Iterator with Int
+	typealias EArray = Array with E
+	var items as EArray
+	var i as Int
+
+	static function create() returns Self
+		return Self{items: EArray.create(), i: 3}
+	end 'create'
+
+	function current() returns Int
+		return i
+	end 'current'
+
+	function advance() throws IterationError
+		i = i - 1
+		if i <= 0 'exhausted'
+			throw IterationError.exhausted
+		end 'exhausted'
+	end 'advance'
+end 'BagIter'
+
+type Bag uses Element implements Iterable with (Int, BIter)
+	typealias BIter = BagIter with Element
+	var n as Int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function createIterator() returns BIter throws IterationError
+		return BIter.create()
+	end 'createIterator'
+
+	function walk() returns Int
+		var total = 0 as Int
+		for x in self 'loop'
+			total = total + x
+		end 'loop'
+		return total
+	end 'walk'
+end 'Bag'
+
+typealias IntBag = Bag with Int
+
+function main() returns ExitCode
+	let doubled = [1, 2, 3].map(function(x) gives x + x)
+	let b = IntBag.create()
+	return (doubled.count() as Int + b.walk()) as ExitCode
+end 'main'
+```
+```exitcode
+9
+```
+
+<!-- test: error.another-file-naming-a-file-private-cursor-is-still-refused -->
+```maxon
+// --- file: lib.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+type BagIter implements Iterator with Integer
+	var i as Integer
+
+	static function create() returns Self
+		return Self{i: 3}
+	end 'create'
+
+	function current() returns Integer
+		return i
+	end 'current'
+
+	function advance() throws IterationError
+		i = i - 1
+		if i <= 0 'exhausted'
+			throw IterationError.exhausted
+		end 'exhausted'
+	end 'advance'
+end 'BagIter'
+
+export type Bag implements Iterable with (Integer, BagIter)
+	var n as Integer
+
+	export static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function createIterator() returns BagIter throws IterationError
+		return BagIter.create()
+	end 'createIterator'
+
+	export function walk() returns Integer
+		var total = 0 as Integer
+
+		for x in self 'loop'
+			total = total + x
+		end 'loop'
+
+		return total
+	end 'walk'
+end 'Bag'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let doubled = [1, 2, 3].map(function(x) gives x + x)
+	let c = BagIter.create()
+	return (doubled.count() as Integer + Bag.create().walk() + c.current()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3008: <fragment>:50:63: type 'BagIter' is not exported
+error E3008: <fragment>:49:10: type 'BagIter' is not exported
+```

@@ -5519,7 +5519,19 @@ end 'IterableIterationSource'
 union CursorEntrySeed
 	atTheFirstElement
 	fromFactory(flag ValueId)
+
+	function receiverOrigin() returns ProtocolReceiverOrigin
+		return match self 'seed'
+			atTheFirstElement gives ProtocolReceiverOrigin.authored
+			fromFactory gives ProtocolReceiverOrigin.factoryMinted
+		end 'seed'
+	end 'receiverOrigin'
 end 'CursorEntrySeed'
+
+enum ProtocolReceiverOrigin
+	authored
+	factoryMinted
+end 'ProtocolReceiverOrigin'
 
 // ⭐ **WHERE A `[…]`'s ELEMENT TYPE COMES FROM.** Every bare array literal INFERS it from its own first
 // element; an `<alias> from […]` head STATES it, and stating it is the whole of what that spelling adds —
@@ -52682,7 +52694,7 @@ export type Parser
 			src.claimsWithIteratorPromise = not self.patternNamesOneWholeElement(nameToks) and self.pairsAnArrayIteratorWithAPromise(source)
 			let savedClaim = self.bodyState.loopClaimsWithIteratorPromise
 			self.bodyState.loopClaimsWithIteratorPromise = src.claimsWithIteratorPromise
-			loopValue = try self.emitReceiverProtocolCall(src.cursorSurface, methodName: CurrentMethodName, anchor: patternTok, resultUsed: true)
+			loopValue = try self.emitReceiverProtocolCall(src.cursorSurface, methodName: CurrentMethodName, anchor: patternTok, resultUsed: true, origin: src.cursorEntrySeed.receiverOrigin())
 			self.bodyState.loopClaimsWithIteratorPromise = savedClaim
 			self.giveTemporaryScopeLifetime(loopValue, name: IterationElementBindingName)
 
@@ -52767,7 +52779,7 @@ export type Parser
 		var nextIndex = graphemeEnd
 
 		if methodSurfaceExists(src.cursorSurface) 'cursorAdvanceStep'
-			(_, nextIndex) = try self.emitProtocolTryCall(src.cursorSurface, methodName: AdvanceMethodName, anchor: forTok, resultUsed: false)
+			(_, nextIndex) = try self.emitProtocolTryCall(src.cursorSurface, methodName: AdvanceMethodName, anchor: forTok, resultUsed: false, origin: src.cursorEntrySeed.receiverOrigin())
 		end 'cursorAdvanceStep' else 'builtinSourceStep'
 			if not src.isString 'ordinalStep'
 				let one = self.emitLiteral(1, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
@@ -53257,19 +53269,22 @@ export type Parser
 	// `s.current()` on that value emits. Everything the loop then does to the result is shared: the
 	// try-channel rewrite treats a `witnessDispatch` as routable (`routableOpAt`), so
 	// `emitProtocolTryCall` needs no arm of its own for the throwing half.
-	function emitReceiverProtocolCall(surface MethodSurface, methodName ByteArray, anchor Token, resultUsed bool) returns ValueId throws SourceParseError
+	function emitReceiverProtocolCall(surface MethodSurface, methodName ByteArray, anchor Token, resultUsed bool, origin ProtocolReceiverOrigin) returns ValueId throws SourceParseError
 		match surface 'how'
 			none then panic("emitReceiverProtocolCall: a `{String.from(methodName)}` protocol call on a value with no method surface — every caller emits only after `surfaceDeclaresCursorProtocol` or `surfaceIterableFactory` answered off this same surface")
 			witnessDispatched(receiver) then return try self.emitWitnessProtocolCall(receiver, methodName: methodName, anchor: anchor, resultUsed: resultUsed)
-			declared(declaringType, receiver) then return try self.emitDeclaredProtocolCall(declaringType, methodName: methodName, source: receiver, anchor: anchor, resultUsed: resultUsed)
+			declared(declaringType, receiver) then return try self.emitDeclaredProtocolCall(declaringType, methodName: methodName, source: receiver, anchor: anchor, resultUsed: resultUsed, origin: origin)
 		end 'how'
 	end 'emitReceiverProtocolCall'
 
 	// The DIRECT-CALL fork of the router above — the body this function had before the second receiver kind
 	// arrived, unchanged, and a fork of its own so the `declared` arm binds both of its payloads in the one
 	// statement a `match` arm is.
-	function emitDeclaredProtocolCall(typeName ByteArray, methodName ByteArray, source ValueId, anchor Token, resultUsed bool) returns ValueId throws SourceParseError
-		try self.requireImplicitMethodReachable(typeName, methodName: methodName, anchor: anchor)
+	function emitDeclaredProtocolCall(typeName ByteArray, methodName ByteArray, source ValueId, anchor Token, resultUsed bool, origin ProtocolReceiverOrigin) returns ValueId throws SourceParseError
+		match origin 'judgement'
+			authored then try self.requireImplicitMethodReachable(typeName, methodName: methodName, anchor: anchor)
+			factoryMinted then break
+		end 'judgement'
 
 		// `var` on all three: `emitCall` supplies omitted defaults by PUSHING onto the argument columns
 		// (`fillOmittedArgDefaults`), so they are its output as well as its input. No protocol method declares
@@ -53324,7 +53339,7 @@ export type Parser
 	// `surfaceIterableFactory` admit only `IterationError`, compiler-owned and payload-free, so there
 	// is nothing to release; both receiver kinds read the clause through
 	// `throwsClauseIsIterationError`.
-	function emitProtocolTryCall(surface MethodSurface, methodName ByteArray, anchor Token, resultUsed bool) returns (ValueId, ValueId) throws SourceParseError
+	function emitProtocolTryCall(surface MethodSurface, methodName ByteArray, anchor Token, resultUsed bool, origin ProtocolReceiverOrigin) returns (ValueId, ValueId) throws SourceParseError
 		// The floor `rewriteLastCallToTryCall` measures "the target's own op" against — see `parseTry`, which
 		// captures it at the same point and for the same reason.
 		let targetOpFloor = self.artifact.module.ops.count()
@@ -53334,7 +53349,7 @@ export type Parser
 		// no router may rewrite it first, or `rewriteLastCallToTryCall` would meet a `tryCall` it must
 		// refuse.
 		let savedRouteClaim = self.swapClaim(ThrowRouteClaim.everyDestination)
-		let value = try self.emitReceiverProtocolCall(surface, methodName: methodName, anchor: anchor, resultUsed: resultUsed)
+		let value = try self.emitReceiverProtocolCall(surface, methodName: methodName, anchor: anchor, resultUsed: resultUsed, origin: origin)
 		self.restoreClaim(savedRouteClaim)
 		let (_, flag) = try self.rewriteLastCallToTryCall(value, tryTok: anchor, targetDeferralFloor: targetDeferralFloor, targetOpFloor: targetOpFloor)
 		return (value, flag)
@@ -53424,12 +53439,12 @@ export type Parser
 
 		match try self.surfaceIterableFactory(surface, anchor: forTok) 'factory'
 			notDeclared then return IterableIterationSource.notIterable
-			infallible then return IterableIterationSource.cursor(try self.emitReceiverProtocolCall(surface, methodName: CreateIteratorMethodName, anchor: forTok, resultUsed: true), entrySeed: self.emitLiteral(NoErrorFlag, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok)))
+			infallible then return IterableIterationSource.cursor(try self.emitReceiverProtocolCall(surface, methodName: CreateIteratorMethodName, anchor: forTok, resultUsed: true, origin: ProtocolReceiverOrigin.authored), entrySeed: self.emitLiteral(NoErrorFlag, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok)))
 			throwsIterationError then break
 			throwsSomethingElse(errorName) then throw SourceParseError.unsupported("`for … in` over a `{String.from(self.methodSurfaceTypeName(surface))}`, whose `{String.from(CreateIteratorMethodName)}()` throws `{errorName}` — the loop absorbs what the traversal protocol throws without binding it, which is sound only for the payload-free `{String.from(IterationErrorTypeName)}`; a factory throwing anything else must be called with an explicit `try` and its result iterated", line: forTok.line, column: forTok.column)
 		end 'factory'
 
-		let (cursor, flag) = try self.emitProtocolTryCall(surface, methodName: CreateIteratorMethodName, anchor: forTok, resultUsed: true)
+		let (cursor, flag) = try self.emitProtocolTryCall(surface, methodName: CreateIteratorMethodName, anchor: forTok, resultUsed: true, origin: ProtocolReceiverOrigin.authored)
 		return IterableIterationSource.cursor(cursor, entrySeed: flag)
 	end 'materializeIterableIterationSource'
 
