@@ -35,6 +35,10 @@ The lexer reached end-of-file in the middle of a token.
 
 A '\#' compiler directive names a directive the lexer does not know.
 
+### E1010 — `lexerUnexpectedCharacter`
+
+The lexer met a character that starts no token outside a string literal or a comment: `?`, `;`, `|`, `&`, `$`, `%`, `~`, `^`, a backtick, a control character or a non-ASCII character. Delete it, or move it into a string literal or a comment. A UTF-8 byte order mark at the very start of a file is accepted.
+
 ## Parser (E2xxx)
 
 Syntax, grammar, block matching, expected tokens.

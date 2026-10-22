@@ -343,7 +343,7 @@ error E2001: specs/lexer-parser-robustness/near-keyword-uppercase.maxon:2:1: Exp
 q1};+(=*foo,)bar
 ```
 ```maxoncstderr
-error E2001: specs/lexer-parser-robustness/random-printable-garbage-1.maxon:2:1: Expected function declaration, got 'q1'
+error E1010: specs/lexer-parser-robustness/random-printable-garbage-1.maxon:2:4: Unexpected character ';'
 ```
 
 <!-- test: random-printable-garbage-2 -->
@@ -351,7 +351,7 @@ error E2001: specs/lexer-parser-robustness/random-printable-garbage-1.maxon:2:1:
 abc 123 def!? xyz
 ```
 ```maxoncstderr
-error E2001: specs/lexer-parser-robustness/random-printable-garbage-2.maxon:2:1: Expected function declaration, got 'abc'
+error E1010: specs/lexer-parser-robustness/random-printable-garbage-2.maxon:2:13: Unexpected character '?'
 ```
 
 <!-- test: random-printable-garbage-3 -->
@@ -359,7 +359,7 @@ error E2001: specs/lexer-parser-robustness/random-printable-garbage-2.maxon:2:1:
 foo: bar baz; qux | zap
 ```
 ```maxoncstderr
-error E2001: specs/lexer-parser-robustness/random-printable-garbage-3.maxon:2:1: Expected function declaration, got 'foo'
+error E1010: specs/lexer-parser-robustness/random-printable-garbage-3.maxon:2:13: Unexpected character ';'
 ```
 
 <!-- test: random-operator-soup-1 -->
@@ -375,7 +375,7 @@ error E2001: specs/lexer-parser-robustness/random-operator-soup-1.maxon:2:1: Exp
 == != <= >= && || << >>
 ```
 ```maxoncstderr
-error E2001: specs/lexer-parser-robustness/random-operator-soup-2.maxon:2:1: Expected function declaration, got '=='
+error E1010: specs/lexer-parser-robustness/random-operator-soup-2.maxon:2:13: Unexpected character '&'
 ```
 
 <!-- test: random-operator-soup-3 -->
@@ -383,7 +383,7 @@ error E2001: specs/lexer-parser-robustness/random-operator-soup-2.maxon:2:1: Exp
 .....,,,,;;;;
 ```
 ```maxoncstderr
-error E2001: specs/lexer-parser-robustness/random-operator-soup-3.maxon:2:1: Expected function declaration, got '.'
+error E1010: specs/lexer-parser-robustness/random-operator-soup-3.maxon:2:10: Unexpected character ';'
 ```
 
 <!-- test: random-mixed-delim-1 -->

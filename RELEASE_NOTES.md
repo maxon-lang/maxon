@@ -84,6 +84,9 @@ release's version as its heading when the release is cut.
   array literal), is E3005.
   Fix: store a function whose parameters and result match the declared function type, or change the
   declared type.
+- A `?`, `;`, `|`, `&`, `$`, `%`, `~`, `^`, backtick, control character or non-ASCII character outside a
+  string literal or a comment is E1010 (`Unexpected character`); the lexer skipped it before.
+  Fix: delete the character, or move it into a string literal or a comment.
 
 ## 0.5.0 — 2026-10-08
 

@@ -75,6 +75,8 @@ export union LexerError implements Error
 	// directive keywords (`if`, `else`, `endif`). Carries the bare name so
 	// the surfacing diagnostic can quote the offending text.
 	unknownDirective(name String, line LineNumber, column ColumnNumber)
+
+	unexpectedCharacter(description String, line LineNumber, column ColumnNumber)
 end 'LexerError'
 
 // --- Character classes ---
@@ -147,7 +149,7 @@ enum DfaState
 	enterComment
 	enterBlockComment
 	slash
-	skipOther
+	rejectOther
 	dot
 	lBracket
 	rBracket
@@ -170,6 +172,7 @@ enum Action
 	enterIdent
 	enterComment
 	enterBlockComment
+	reject
 end 'Action'
 
 // --- Token kind enum ---
@@ -968,7 +971,7 @@ let charClassTable = [
 // Columns: other space tab  cr   lf   (    )    {    }    [    ]    =    !    <    >    +    -    *    :    /    '    "    \    .    0-9  a-z  eof  ,
 let transitionTable = [
 	// start: dispatch on first character
-	DfaState.skipOther, DfaState.skipWs, DfaState.skipWs, DfaState.skipCr, DfaState.newline, DfaState.lParen, DfaState.rParen, DfaState.lBrace, DfaState.rBrace, DfaState.lBracket, DfaState.rBracket, DfaState.sawEq, DfaState.sawBang, DfaState.sawLt, DfaState.sawGt, DfaState.plus, DfaState.minus, DfaState.star, DfaState.colon, DfaState.sawSlash, DfaState.enterSquote, DfaState.enterDquote, DfaState.emitBackslash, DfaState.dot, DfaState.enterDigit, DfaState.enterAlpha, DfaState.skipOther, DfaState.comma,
+	DfaState.rejectOther, DfaState.skipWs, DfaState.skipWs, DfaState.skipCr, DfaState.newline, DfaState.lParen, DfaState.rParen, DfaState.lBrace, DfaState.rBrace, DfaState.lBracket, DfaState.rBracket, DfaState.sawEq, DfaState.sawBang, DfaState.sawLt, DfaState.sawGt, DfaState.plus, DfaState.minus, DfaState.star, DfaState.colon, DfaState.sawSlash, DfaState.enterSquote, DfaState.enterDquote, DfaState.emitBackslash, DfaState.dot, DfaState.enterDigit, DfaState.enterAlpha, DfaState.rejectOther, DfaState.comma,
 	// sawEq: '=' seen, looking for '='
 	DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eqEq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq,
 	// sawBang: '!' seen, looking for '='
@@ -980,33 +983,33 @@ let transitionTable = [
 	// sawSlash: '/' seen, looking for '/' or '*'
 	DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.enterBlockComment, DfaState.slash, DfaState.enterComment, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash,
 	// Terminal states (rows 6-32) — never transitioned from
-	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther,
+	DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther,
+	DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther,
+	DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther,
+	DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther,
+	DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther,
+	DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther,
+	DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther,
+	DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther,
+	DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther,
+	DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther,
+	DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther,
+	DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther,
+	DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther,
+	DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther,
 	// dot (terminal, never transitioned from)
-	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther,
 	// lBracket (terminal)
-	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther,
 	// rBracket (terminal)
-	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther,
 	// emitBackslash (terminal — emits a synthetic identifier holding the
 	// `\` byte so downstream "Expected function declaration, got '\\'"
 	// diagnostics carry a real token to point at)
-	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther,
 	// comma (terminal, emits a Comma token)
-	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther
+	DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther, DfaState.rejectOther
 ]
 
 // actionTable: 36 entries indexed by state -> action to perform
@@ -1016,8 +1019,8 @@ let actionTable = [Action.skip, Action.skip, Action.skip, Action.skip, Action.sk
 	Action.newline, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit,
 	//              eq              eqEq           bangEq         lt             ltEq           gt             gtEq
 	Action.emit, Action.emit2, Action.emit2, Action.emit, Action.emit2, Action.emit, Action.emit2,
-	//              bang            enterSquote      enterDquote      enterDigit       enterAlpha       enterComment        enterBlockComment  slash          skipOther      dot         lBracket    rBracket    emitBackslash   comma
-	Action.emit, Action.enterStrSq, Action.enterStrDq, Action.enterNumber, Action.enterIdent, Action.enterComment, Action.enterBlockComment, Action.emit, Action.skip, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit
+	//              bang            enterSquote      enterDquote      enterDigit       enterAlpha       enterComment        enterBlockComment  slash          rejectOther      dot         lBracket    rBracket    emitBackslash   comma
+	Action.emit, Action.enterStrSq, Action.enterStrDq, Action.enterNumber, Action.enterIdent, Action.enterComment, Action.enterBlockComment, Action.emit, Action.reject, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit
 ]
 
 // Single dispatch point for all fixed-text tokens (operators, punctuation).
@@ -1342,9 +1345,73 @@ type Lexer
 			enterIdent then try scanIdentifierFromDfa(lastChar, startLine: startLine, startCol: startCol)
 			enterComment then try handleEnterComment(startLine, startCol: startCol, startByte: startByte)
 			enterBlockComment then try handleEnterBlockComment(startLine, startCol: startCol, startByte: startByte)
+			reject then try rejectStrayByte(startLine, startCol: startCol, startByte: startByte)
 			default panic("Lexer: unhandled action {action}")
 		end 'dispatch'
 	end 'dispatchAction'
+
+	function byteAt(offset ByteOffset) returns Byte
+		return try bytes.get(offset) otherwise panic("Lexer.byteAt: offset {offset} is outside the {len}-byte source")
+	end 'byteAt'
+
+	function startsWithByteOrderMark() returns bool
+		return len >= ByteOrderMark.length and self.byteAt(0) == ByteOrderMark.first and self.byteAt(1) == ByteOrderMark.second and self.byteAt(2) == ByteOrderMark.third
+	end 'startsWithByteOrderMark'
+
+	function allContinuationBytes(from ByteOffset, until ByteOffset) returns bool
+		var at = from
+
+		while at < until 'each'
+			if not isContinuationByte(self.byteAt(at)) 'broken'
+				return false
+			end 'broken'
+
+			at = at + 1
+		end 'each'
+
+		return true
+	end 'allContinuationBytes'
+
+	function describeStrayByte(at ByteOffset) returns String
+		let lead = self.byteAt(at)
+		let characterEnd = at + 1 + (continuationCount(lead) as ByteOffset)
+
+		if isGraphicAscii(lead) or (continuationCount(lead) > 0 and characterEnd <= len and self.allContinuationBytes(at + 1, until: characterEnd)) 'wholeCharacter'
+			let text = try bytes.slice(at, endIndex: characterEnd) otherwise panic("Lexer.describeStrayByte: slice {at} to {characterEnd} is outside the {len}-byte source")
+			return "character '{String.from(text)}'"
+		end 'wholeCharacter'
+
+		return "byte 0x{lead:02x}"
+	end 'describeStrayByte'
+
+	// Only an error naming the offending byte outranks `failInterp`. Any other error raised inside an
+	// interpolation body is a symptom of the unclosed `{`, which `failInterp` reports at the brace.
+	function pendingErrorIsPrecise() returns bool
+		if not hasPendingError 'nothingStashed'
+			return false
+		end 'nothingStashed'
+
+		return match pendingError 'kind'
+			unexpectedCharacter or
+			unknownDirective gives true
+			unexpectedEof or
+			unterminatedString or
+			unterminatedBlockComment or
+			unescapedBrace gives false
+		end 'kind'
+	end 'pendingErrorIsPrecise'
+
+	function rejectStrayByte(startLine LineNumber, startCol ColumnNumber, startByte ByteOffset) throws CursorError
+		// A byte order mark that editors write at the start of a UTF-8 file is an encoding marker, not
+		// program text, so its three bytes pass without a token.
+		if startByte < ByteOrderMark.length and self.startsWithByteOrderMark() 'insideByteOrderMark'
+			return
+		end 'insideByteOrderMark'
+
+		hasPendingError = true
+		pendingError = LexerError.unexpectedCharacter(self.describeStrayByte(startByte), line: startLine, column: startCol)
+		throw CursorError.exhausted
+	end 'rejectStrayByte'
 
 	// On enterNumber/enterIdent the DFA has already consumed the token's first
 	// character; retreat so the dedicated scanner re-reads it from the start —
@@ -1665,6 +1732,10 @@ type Lexer
 			end 'openBrace'
 
 			let atEnd = try stepDfa(line, startCol: column) otherwise 'subEof'
+				if self.pendingErrorIsPrecise() 'alreadyDiagnosed'
+					throw CursorError.exhausted
+				end 'alreadyDiagnosed'
+
 				try failInterp(openLine, openCol: openCol, bodyStart: bodyStart)
 			end 'subEof'
 
@@ -2100,9 +2171,6 @@ type Lexer
 		let kind = classifyDirective(name)
 
 		if kind == TokenKind.identifier 'unknown'
-			// Unknown directive name — stash a distinct lexer error so the
-			// diagnostic can quote the offending name; run()'s caller maps
-			// this to ErrorCode.lexerUnexpectedCharacter.
 			hasPendingError = true
 			pendingError = LexerError.unknownDirective(name, line: startLine, column: startCol)
 			throw CursorError.exhausted
@@ -2535,7 +2603,53 @@ module enum AsciiByte
 	lowerE = 101
 	lowerO = 111
 	lowerX = 120
+	delete = 127
 end 'AsciiByte'
+
+enum ByteOrderMark
+	length = 3
+	first = 239
+	second = 187
+	third = 191
+end 'ByteOrderMark'
+
+enum Utf8Continuation
+	first = 128
+	last = 191
+end 'Utf8Continuation'
+
+enum Utf8Lead
+	twoBytes = 194
+	threeBytes = 224
+	fourBytes = 240
+	fourBytesLast = 244
+end 'Utf8Lead'
+
+function isGraphicAscii(b Byte) returns bool
+	return b > AsciiByte.space and b < AsciiByte.delete
+end 'isGraphicAscii'
+
+function isContinuationByte(b Byte) returns bool
+	return b >= Utf8Continuation.first and b <= Utf8Continuation.last
+end 'isContinuationByte'
+
+typealias ContinuationCount = int(0 to 3)
+
+function continuationCount(lead Byte) returns ContinuationCount
+	if lead >= Utf8Lead.fourBytes and lead <= Utf8Lead.fourBytesLast 'fourBytes'
+		return 3
+	end 'fourBytes'
+
+	if lead >= Utf8Lead.threeBytes and lead < Utf8Lead.fourBytes 'threeBytes'
+		return 2
+	end 'threeBytes'
+
+	if lead >= Utf8Lead.twoBytes and lead < Utf8Lead.threeBytes 'twoBytes'
+		return 1
+	end 'twoBytes'
+
+	return 0
+end 'continuationCount'
 
 function isBinaryDigit(b Byte) returns bool
 	return b == '0' or b == '1'

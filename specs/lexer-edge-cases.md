@@ -237,3 +237,168 @@ let y = 2
 ```maxoncstderr
 error E3001: No 'main' function found
 ```
+
+### Stray characters
+
+<!-- test: stray-question-mark-after-type -->
+```maxon
+function f(a Count?, b Count)
+```
+```maxoncstderr
+error E1010: specs/lexer-edge-cases/stray-question-mark-after-type.maxon:2:19: Unexpected character '?'
+```
+
+<!-- test: stray-question-mark-after-expression -->
+```maxon
+let x = 5 ?
+```
+```maxoncstderr
+error E1010: specs/lexer-edge-cases/stray-question-mark-after-expression.maxon:2:11: Unexpected character '?'
+```
+
+<!-- test: stray-question-mark-before-more-source -->
+```maxon
+let x = 5 ?
+let y = 6
+```
+```maxoncstderr
+error E1010: specs/lexer-edge-cases/stray-question-mark-before-more-source.maxon:2:11: Unexpected character '?'
+```
+
+<!-- test: stray-question-mark-in-interpolation -->
+```maxon
+let s = "n{5 ?}"
+```
+```maxoncstderr
+error E1010: specs/lexer-edge-cases/stray-question-mark-in-interpolation.maxon:2:14: Unexpected character '?'
+```
+
+<!-- test: stray-question-mark-in-function-body -->
+```maxon
+function main() returns ExitCode
+	let x = 1?
+	return x
+end 'main'
+```
+```maxoncstderr
+error E1010: specs/lexer-edge-cases/stray-question-mark-in-function-body.maxon:3:11: Unexpected character '?'
+```
+
+<!-- test: stray-semicolon -->
+```maxon
+let x = 1;
+```
+```maxoncstderr
+error E1010: specs/lexer-edge-cases/stray-semicolon.maxon:2:10: Unexpected character ';'
+```
+
+<!-- test: stray-pipe -->
+```maxon
+let x = a | b
+```
+```maxoncstderr
+error E1010: specs/lexer-edge-cases/stray-pipe.maxon:2:11: Unexpected character '|'
+```
+
+<!-- test: stray-ampersand -->
+```maxon
+let x = a && b
+```
+```maxoncstderr
+error E1010: specs/lexer-edge-cases/stray-ampersand.maxon:2:11: Unexpected character '&'
+```
+
+<!-- test: stray-dollar -->
+```maxon
+let x = $y
+```
+```maxoncstderr
+error E1010: specs/lexer-edge-cases/stray-dollar.maxon:2:9: Unexpected character '$'
+```
+
+<!-- test: stray-percent -->
+```maxon
+let x = 7 % 2
+```
+```maxoncstderr
+error E1010: specs/lexer-edge-cases/stray-percent.maxon:2:11: Unexpected character '%'
+```
+
+<!-- test: stray-tilde -->
+```maxon
+let x = ~1
+```
+```maxoncstderr
+error E1010: specs/lexer-edge-cases/stray-tilde.maxon:2:9: Unexpected character '~'
+```
+
+<!-- test: stray-caret -->
+```maxon
+let x = 1 ^ 2
+```
+```maxoncstderr
+error E1010: specs/lexer-edge-cases/stray-caret.maxon:2:11: Unexpected character '^'
+```
+
+<!-- test: stray-backtick -->
+```maxon
+let x = `y`
+```
+```maxoncstderr
+error E1010: specs/lexer-edge-cases/stray-backtick.maxon:2:9: Unexpected character '`'
+```
+
+<!-- test: stray-non-ascii-letter -->
+```maxon
+let x = é
+```
+```maxoncstderr
+error E1010: specs/lexer-edge-cases/stray-non-ascii-letter.maxon:2:9: Unexpected character 'é'
+```
+
+<!-- test: stray-curly-quote -->
+```maxon
+let x = “hello”
+```
+```maxoncstderr
+error E1010: specs/lexer-edge-cases/stray-curly-quote.maxon:2:9: Unexpected character '“'
+```
+
+<!-- test: question-mark-is-text-in-strings-and-comments -->
+```maxon
+// is this a comment?
+/* or a block comment? */
+function main() returns ExitCode
+	let q = "why?"
+	let c = '?'
+	print("{q}{c}\n")
+	return 0
+end 'main'
+```
+```stdout
+why??
+```
+```exitcode
+0
+```
+
+<!-- test: byte-order-mark-at-start-is-accepted -->
+```maxon
+// --- file: main.maxon
+﻿function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: stray-byte-order-mark-mid-file -->
+```maxon
+function main() returns ExitCode
+	﻿return 0
+end 'main'
+```
+```maxoncstderr
+error E1010: specs/lexer-edge-cases/stray-byte-order-mark-mid-file.maxon:3:2: Unexpected character '﻿'
+```

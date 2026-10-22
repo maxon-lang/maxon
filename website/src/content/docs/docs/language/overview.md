@@ -120,7 +120,10 @@ Directives may surround top-level declarations, statements inside a function bod
 
 ## Lexical Elements
 
-Maxon source is UTF-8 text.
+Maxon source is UTF-8 text, and a UTF-8 byte order mark at the start of a file is accepted. Outside
+string literals and comments, every character belongs to a token. Any other character there — `?`, `;`,
+`|`, `&`, `$`, `%`, `~`, `^`, a backtick, a control character or a non-ASCII character — is **E1010**
+(`Unexpected character`).
 
 ### Comments
 
