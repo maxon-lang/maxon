@@ -413,7 +413,7 @@ A match arm names a case in qualified form (`Color.red`). The scrutinee's enum i
 
 ### E3076 — `semanticConstructorRestriction`
 
-a struct literal (`Type{...}`) is written outside the type's own methods. Construction is restricted to the type's own methods / static factories so invariants can be enforced at the single construction point; external callers must go through a `static function create(...)`. Exempt: `Self{...}` and `Type{...}` inside `Type`'s own body, plus construction through a typealias visible at the site (inner alias of the current type/extension, or a top-level alias). Emitted by `parseStructLiteral`.
+a struct literal (`Type{...}`) is written outside the type's own methods. Construction is restricted to the type's own methods / static factories so invariants can be enforced at the single construction point; external callers must go through a `static function create(...)`. Exempt: `Self{...}` and `Type{...}` inside `Type`'s own body, plus an inner alias of the body being parsed that names a container the compiler owns (`Map`'s `KeyArray{}`). An inner alias naming a user generic, and every top-level alias, keep E3076: use `<Alias>.create(...)`. Emitted by `parseStructLiteral`.
 
 ### E3077 — `semanticVarShouldBeLet`
 
