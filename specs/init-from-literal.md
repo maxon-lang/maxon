@@ -130,6 +130,32 @@ end 'main'
 len: 0
 ```
 
+<!-- test: init-from-string-literal-init-reassigns-its-parameter -->
+An `init` that reassigns its parameter takes it by reference, and the literal is handed to it exactly as the
+written-out `Tag.init("hello")` hands its argument: in a cell of its own.
+```maxon
+type Tag implements InitableFromStringLiteral
+	export let text as String
+
+	static function init(value String) returns Tag
+		value = "{value}!"
+
+		return Self{text: value}
+	end 'init'
+end 'Tag'
+
+function main() returns ExitCode
+	let tag = Tag from "hello"
+	let written = Tag.init("hello")
+	print("{tag.text} {written.text}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+hello! hello!
+```
+
 ### From a character literal
 
 `<Type> from 'A'` is the same sugar over `stdlib/Builtins.maxon:47`'s

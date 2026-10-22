@@ -61279,7 +61279,7 @@ export type Parser
 		var args = pairArgs(lo, second: hi)
 		var argLabels = emptyArgLabels(args)
 		var argRanges = uniformArgRanges(args, range: range)
-		return try self.emitCall(qualifiedMethodName(self.signatures.interfaceMap().libraryNameOf(typeName), methodName: CreateMethod), anchor: rangeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: rangeTok, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.rangeOperator)
+		return try self.emitCall(qualifiedMethodName(self.signatures.interfaceMap().libraryNameOf(typeName), methodName: CreateMethod), anchor: rangeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: rangeTok, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.rangeOperator, places: self.placesOfArguments(args, anchor: rangeTok))
 	end 'emitRangeValue'
 
 	// ⭐ **THE INLINE CONDITIONAL `<t> if <c> else <f>`.** Called with the TRUE arm already
@@ -65745,7 +65745,7 @@ export type Parser
 		var args = pairArgs(lhs, second: rhs)
 		var argLabels = emptyArgLabels(args)
 		var argRanges = uniformArgRanges(args, range: range)
-		let verdict = try self.emitCall(callee, anchor: opTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: opTok, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.resolvedTypeQualifier)
+		let verdict = try self.emitCall(callee, anchor: opTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: opTok, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.resolvedTypeQualifier, places: self.placesOfArguments(args, anchor: opTok))
 		let resultTag = self.tagOf(verdict)
 
 		if comparisonIsEquality(op) and resultTag != ValueTypeTag.boolean 'equalsResultNotBool'
@@ -65831,7 +65831,7 @@ export type Parser
 		end 'theBytesAreTheContent'
 
 		var args = pairArgs(lhs, second: rhs)
-		return try self.emitCall(qualifiedMethodName(self.signatures.genericInstanceBaseName(instance), methodName: EqualsMethodName), anchor: opTok, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames, rparenTok: opTok, resultUsed: true, constructorInstance: ConstructorInstance.instance(instance), mint: CalleeMint.resolvedTypeQualifier)
+		return try self.emitCall(qualifiedMethodName(self.signatures.genericInstanceBaseName(instance), methodName: EqualsMethodName), anchor: opTok, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames, rparenTok: opTok, resultUsed: true, constructorInstance: ConstructorInstance.instance(instance), mint: CalleeMint.resolvedTypeQualifier, places: self.placesOfArguments(args, anchor: opTok))
 	end 'emitArrayEquals'
 
 	function requireSameInstanceToCompare(lhs ValueId, rhs ValueId, opTok Token) throws SourceParseError
@@ -68243,7 +68243,7 @@ export type Parser
 			argRanges.push(range)
 		end 'eachArg'
 
-		let result = try self.emitCall(callee, anchor: exprTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: exprTok, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: mint)
+		let result = try self.emitCall(callee, anchor: exprTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: exprTok, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: mint, places: self.placesOfArguments(args, anchor: exprTok))
 		self.materializeStringRecordPart(result, partBufs: partBufs, partLens: partLens, range: range)
 	end 'materializeCallPart'
 
@@ -79838,7 +79838,7 @@ export type Parser
 		var args = pairArgs(container, second: value)
 		var argLabels = emptyArgLabels(args)
 		var argRanges = uniformArgRanges(args, range: range)
-		_ = try self.emitCall(qualifiedMethodName(baseName, methodName: method), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: false, constructorInstance: self.receiverConstructorInstance(container), mint: CalleeMint.notMinted)
+		_ = try self.emitCall(qualifiedMethodName(baseName, methodName: method), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: false, constructorInstance: self.receiverConstructorInstance(container), mint: CalleeMint.notMinted, places: self.placesOfArguments(args, anchor: anchor))
 	end 'emitContainerLiteralElement'
 
 	// ⚠⚠ **A SET MEMBER IS NEVER MOVED AT THE PARSE, AND NO `__set_create(elemDrop)` IS EMITTED.** The corpus
@@ -80173,7 +80173,7 @@ export type Parser
 		// `stringLiteralInit`, not `notMinted`: the author wrote `FilePath from "…"` and never named `init`, and
 		// that is the only fact distinguishing this call from a written-out `FilePath.init("…")` — they build
 		// the identical callee. See `CalleeMint.stringLiteralInit`.
-		return try self.emitCall(callee, anchor: typeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: literalTok, resultUsed: true, constructorInstance: self.constructorInstanceOf(typeTok.value), mint: CalleeMint.stringLiteralInit)
+		return try self.emitCall(callee, anchor: typeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: literalTok, resultUsed: true, constructorInstance: self.constructorInstanceOf(typeTok.value), mint: CalleeMint.stringLiteralInit, places: self.placesOfArguments(args, anchor: literalTok))
 	end 'parseLiteralInitConstruction'
 
 	// The operand each form takes. A String literal goes through `parseStringLiteral` so an INTERPOLATED
@@ -80303,7 +80303,7 @@ export type Parser
 		var argLabels = emptyArgLabels(args)
 		try argLabels.set(MapUpsertValueArgSlot, value: MapUpsertValueLabel) otherwise panic("emitMapLiteralUpsert: the label column for a three-argument call has no slot {MapUpsertValueArgSlot} — `emptyArgLabels` mints one entry per argument")
 		var argRanges = uniformArgRanges(args, range: range)
-		_ = try self.emitCall(qualifiedMethodName(MapBuiltinBaseName, methodName: UpsertMethod), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: false, constructorInstance: self.receiverConstructorInstance(map), mint: CalleeMint.notMinted)
+		_ = try self.emitCall(qualifiedMethodName(MapBuiltinBaseName, methodName: UpsertMethod), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: false, constructorInstance: self.receiverConstructorInstance(map), mint: CalleeMint.notMinted, places: self.placesOfArguments(args, anchor: anchor))
 	end 'emitMapLiteralUpsert'
 
 	// ⭐⭐ **`[k0: v0, k1: v1, …]` — A MAP LITERAL.** The cursor sits on the `:` after the first key, which
@@ -96906,6 +96906,20 @@ export type Parser
 		self.markArgumentStorage(storage)
 		return storage
 	end 'byRefArgumentValue'
+
+	function placesOfArguments(args ValueIdArray, anchor Token) returns PlaceArgumentArray
+		if not self.signatures.programTakesAParamByRef() 'nothingIsPassedByReference'
+			return noPlaceArguments
+		end 'nothingIsPassedByReference'
+
+		var places = PlaceArgumentArray.create()
+
+		for column in 0 upto args.count() 'eachColumn'
+			places.push(PlaceArgument.create(column as ParamCount, value: try args.get(column) otherwise panic("placesOfArguments: args.get OOB at {column} below count {args.count()}"), storage: noHandedPlaceStorage, anchor: anchor))
+		end 'eachColumn'
+
+		return places
+	end 'placesOfArguments'
 
 	function byRefArgumentStorage(value ValueId, handedTheCell bool, target CallArgTarget, argIndex ParamCount, label ByteArray, anchor Token) returns ValueId throws SourceParseError
 		let callee = try target.declaredName() otherwise return try self.ownStorageOrScratchCell(value, handedTheCell: handedTheCell, cellType: self.typeOf(value), anchor: anchor)
