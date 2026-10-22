@@ -152,10 +152,22 @@ function entryAt(entries StringArray, position ElementIndex) returns String
 	return try entries.get(position) otherwise panic("entryAt: the generated breaking-change lists are parallel, and position {position} is past the end of one")
 end 'entryAt'
 
-export function changesSince(recorded RecordedRelease) returns BreakingChangeArray
+union RecordedChanges
+	unrecorded
+	sinceRecorded(text String, changes BreakingChangeArray)
+end 'RecordedChanges'
+
+function recordedChangesOf(recorded RecordedRelease) returns RecordedChanges
 	return match recorded 'standing'
-		absent gives BreakingChangeArray.create()
-		recorded(_, rank) gives breakingChangesAfter(rank)
+		absent gives RecordedChanges.unrecorded
+		recorded(text, rank) gives RecordedChanges.sinceRecorded(text, changes: breakingChangesAfter(rank))
+	end 'standing'
+end 'recordedChangesOf'
+
+export function changesSince(recorded RecordedRelease) returns BreakingChangeArray
+	return match recordedChangesOf(recorded) 'standing'
+		unrecorded gives BreakingChangeArray.create()
+		sinceRecorded(_, changes) gives changes
 	end 'standing'
 end 'changesSince'
 
@@ -233,9 +245,9 @@ end 'changeEntry'
 export function breakingChangeNotices(projectDir FilePath) returns StringArray throws VersionRecordError
 	let recorded = try recordedReleaseOf(projectDir)
 
-	return match recorded 'standing'
-		absent gives StringArray.create()
-		recorded(text, rank) gives noticesFor(text, changes: breakingChangesAfter(rank))
+	return match recordedChangesOf(recorded) 'standing'
+		unrecorded gives StringArray.create()
+		sinceRecorded(text, changes) gives noticesFor(text, changes: changes)
 	end 'standing'
 end 'breakingChangeNotices'
 
@@ -269,9 +281,9 @@ export function reportBreakingChanges(projectDir FilePath, onto ReportStream) re
 		return VersionRecordVerdict.refused
 	end 'unusable'
 
-	match recorded 'standing'
-		absent then return VersionRecordVerdict.proceed
-		recorded(text, rank) then reportChanges(text, changes: breakingChangesAfter(rank), onto: onto)
+	match recordedChangesOf(recorded) 'standing'
+		unrecorded then return VersionRecordVerdict.proceed
+		sinceRecorded(text, changes) then reportChanges(text, changes: changes, onto: onto)
 	end 'standing'
 
 	return VersionRecordVerdict.proceed
