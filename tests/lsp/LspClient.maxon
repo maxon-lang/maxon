@@ -2048,7 +2048,6 @@ let RecordedProjectSubdirName = "proj"
 let RecordedCacheDirName = "cache"
 export let RecordedManifestFileName = "app.maxproj"
 let RecordedManifestSource = "export function build() returns ExitCode\n\tBuild.build(\".\", output: \"program\")\n\treturn 0\nend 'build'\n"
-let FixPart = "Fix: "
 export let RecordedMainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
 
 function recordedProjectOf(staged FilePath) returns FilePath
@@ -2107,22 +2106,22 @@ export function recordedManifestDiagnostics(client LspClient, staged FilePath) r
 end 'recordedManifestDiagnostics'
 
 export function expectBreakingChangeNotices(items PublishedDiagnosticArray) throws TestFailure
-	let lastBuilt = "{LastBuiltWording} {OlderRelease}."
-	var notices = 0 as Count
-
-	try Expect.greaterThan(items.count(), than: 0, message: "the `.maxproj` of a project last built by maxon {OlderRelease} published no diagnostics, where it owes one notice per breaking change since that release.")
+	var notices = StringArray.create()
 
 	for item in items 'eachItem'
 		try Expect.notEqual(item.severity, expected: PublishedErrorSeverity, message: "a record of an older release is not an error: {item.message}")
 
-		if item.severity != PublishedInformationSeverity 'notANotice'
-			continue
-		end 'notANotice'
-
-		try Expect.startsWith(item.message, needle: lastBuilt, message: "a breaking-change notice does not open with `{lastBuilt}`: {item.message}")
-		try Expect.contains(item.message, needle: FixPart, message: "a breaking-change notice carries no `{FixPart}` part: {item.message}")
-		notices = notices + 1
+		if item.severity == PublishedInformationSeverity 'aNotice'
+			notices.push(item.message)
+		end 'aNotice'
 	end 'eachItem'
 
-	try Expect.greaterThan(notices, than: 0, message: "the `.maxproj` of a project last built by maxon {OlderRelease} published {items.count()} diagnostic(s) and no Information-severity notice of a breaking change among them.")
+	let lastBuilt = "{LastBuiltWording} {OlderRelease}."
+	var expected = StringArray.create()
+
+	for change in try expectedBreakingChangesSince(OlderRelease) 'eachChange'
+		expected.push("{lastBuilt} {change.headline()} {change.fixLine()}")
+	end 'eachChange'
+
+	try Expect.equal(terminatedLines(notices), expected: terminatedLines(expected), message: "the `.maxproj` of a project last built by maxon {OlderRelease} did not carry exactly one Information-severity notice per breaking change RELEASE_NOTES.md names since that release, newest first.")
 end 'expectBreakingChangeNotices'

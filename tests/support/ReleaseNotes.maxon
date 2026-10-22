@@ -1,0 +1,273 @@
+let ReleaseNotesDocument = "RELEASE_NOTES.md"
+let VersionCommandName = "version"
+let ReleaseHeadingPrefix = "## "
+let SubsectionHeadingPrefix = "### "
+let ReleaseHeadingDateSeparator = " — "
+let UnreleasedHeading = "Unreleased"
+let BreakingChangesHeading = "Breaking changes"
+let ChangeBulletPrefix = "- "
+let ContinuationIndent = "  "
+let FixLabel = "Fix:"
+let EntryVersionSeparator = ": "
+let ReleaseComponentSeparator = "."
+let ReleaseComponentCount = 3
+
+public type NotedBreakingChange
+	public let version as String
+	public let change as String
+	public let fix as String
+
+	static function of(version String, change String, fix String) returns NotedBreakingChange
+		return Self{version: version, change: change, fix: fix}
+	end 'of'
+
+	public function headline() returns String
+		return "{self.version}{EntryVersionSeparator}{self.change}"
+	end 'headline'
+
+	public function fixLine() returns String
+		return "{FixLabel}{Space}{self.fix}"
+	end 'fixLine'
+end 'NotedBreakingChange'
+
+public typealias NotedBreakingChangeArray = Array with NotedBreakingChange
+
+union CompilerRelease
+	released(text String)
+	unreleased
+end 'CompilerRelease'
+
+type NotesReader
+	var releases = StringArray.create()
+	var changes = NotedBreakingChangeArray.create()
+	var version = ""
+	var inBreakingChanges = false
+	var drafting = false
+	var inFix = false
+	var draftChange = ""
+	var draftFix = ""
+	var draftLine = 0 as ElementIndex
+
+	static function create() returns NotesReader
+		return Self{}
+	end 'create'
+
+	function read(line String, lineNumber ElementIndex) throws TestFailure
+		if line.startsWith(ReleaseHeadingPrefix) 'aRelease'
+			try finishEntry()
+			try openRelease(line.replaceFirst(ReleaseHeadingPrefix, with: ""), lineNumber: lineNumber)
+			return
+		end 'aRelease'
+
+		if line.startsWith(SubsectionHeadingPrefix) 'aSubsection'
+			try finishEntry()
+			self.inBreakingChanges = line.replaceFirst(SubsectionHeadingPrefix, with: "") == BreakingChangesHeading
+			return
+		end 'aSubsection'
+
+		if not self.inBreakingChanges 'notAChange'
+			return
+		end 'notAChange'
+
+		if line.trim().isEmpty() 'blank'
+			try finishEntry()
+			return
+		end 'blank'
+
+		if line.startsWith(ChangeBulletPrefix) 'aBullet'
+			try finishEntry()
+			self.drafting = true
+			self.inFix = false
+			self.draftChange = line.replaceFirst(ChangeBulletPrefix, with: "").trim()
+			self.draftFix = ""
+			self.draftLine = lineNumber
+			return
+		end 'aBullet'
+
+		try continueEntry(line, lineNumber: lineNumber)
+	end 'read'
+
+	function continueEntry(line String, lineNumber ElementIndex) throws TestFailure
+		let rest = line.replaceFirst(ContinuationIndent, with: "")
+
+		if not self.drafting or not line.startsWith(ContinuationIndent) or rest.isEmpty() or rest.trimStart() != rest 'malformed'
+			try Expect.fail("the gate could not run — {ReleaseNotesDocument}:{lineNumber} is neither a `{ChangeBulletPrefix}` breaking change nor a line of one indented `{ContinuationIndent}`: `{line}`")
+			return
+		end 'malformed'
+
+		let text = rest.trim()
+
+		if text == FixLabel or text.startsWith("{FixLabel}{Space}") 'opensTheFix'
+			try Expect.isFalse(self.inFix, message: "the gate could not run — the breaking change on {ReleaseNotesDocument}:{self.draftLine} has a second `{FixLabel}` line, on line {lineNumber}.")
+			self.inFix = true
+			self.draftFix = text.replaceFirst(FixLabel, with: "").trim()
+			return
+		end 'opensTheFix'
+
+		if self.inFix 'fixWraps'
+			self.draftFix = "{self.draftFix}{Space}{text}"
+		end 'fixWraps' else 'changeWraps'
+			self.draftChange = "{self.draftChange}{Space}{text}"
+		end 'changeWraps'
+	end 'continueEntry'
+
+	function openRelease(heading String, lineNumber ElementIndex) throws TestFailure
+		self.inBreakingChanges = false
+
+		if heading == UnreleasedHeading 'unreleased'
+			self.version = heading
+			return
+		end 'unreleased'
+
+		let release = try heading.split(ReleaseHeadingDateSeparator).get(0) otherwise panic("the gate could not run — a split always yields a first part")
+
+		if not heading.contains(ReleaseHeadingDateSeparator) or not isDottedRelease(release) 'malformed'
+			try Expect.fail("the gate could not run — {ReleaseNotesDocument}:{lineNumber} `{ReleaseHeadingPrefix}{heading}` is neither `{ReleaseHeadingPrefix}{UnreleasedHeading}` nor `{ReleaseHeadingPrefix}X.Y.Z{ReleaseHeadingDateSeparator}<date>`.")
+			return
+		end 'malformed'
+
+		self.version = release
+		self.releases.push(release)
+	end 'openRelease'
+
+	function finishEntry() throws TestFailure
+		if not self.drafting 'nothingDrafted'
+			return
+		end 'nothingDrafted'
+
+		self.drafting = false
+
+		try Expect.isTrue(self.inFix and not self.draftFix.isEmpty(), message: "the gate could not run — the breaking change on {ReleaseNotesDocument}:{self.draftLine} has no `{ContinuationIndent}{FixLabel} …` line, or an empty one.")
+
+		self.changes.push(NotedBreakingChange.of(self.version, change: self.draftChange, fix: self.draftFix))
+	end 'finishEntry'
+
+	function newestRelease() returns String throws TestFailure
+		var newest = ""
+
+		for release in self.releases 'eachRelease'
+			if newest.isEmpty() or isNewerRelease(release, than: newest) 'newer'
+				newest = release
+			end 'newer'
+		end 'eachRelease'
+
+		try Expect.isFalse(newest.isEmpty(), message: "{ReleaseNotesDocument} names no release in a `{ReleaseHeadingPrefix}X.Y.Z{ReleaseHeadingDateSeparator}<date>` heading, so there is no release a dev compiler records.")
+
+		return newest
+	end 'newestRelease'
+
+	function changesSince(since String, compiler CompilerRelease) returns NotedBreakingChangeArray throws TestFailure
+		var reported = NotedBreakingChangeArray.create()
+
+		for change in self.changes 'eachChange'
+			if isReportedSince(change.version, since: since, compiler: compiler) 'reported'
+				reported.push(NotedBreakingChange.of(change.version, change: change.change, fix: change.fix))
+			end 'reported'
+		end 'eachChange'
+
+		try Expect.greaterThan(reported.count(), than: 0, message: "the gate could not run — {ReleaseNotesDocument} lists no breaking change after maxon {since} up to this compiler's release, so there is no report to compare.")
+
+		return reported
+	end 'changesSince'
+end 'NotesReader'
+
+public function expectedRecordedRelease() returns String throws TestFailure
+	let notes = try readReleaseNotes()
+
+	match compilerRelease() 'release'
+		released(text) then return text
+		unreleased then return try notes.newestRelease()
+	end 'release'
+end 'expectedRecordedRelease'
+
+public function expectedBreakingChangesSince(since String) returns NotedBreakingChangeArray throws TestFailure
+	let compiler = compilerRelease()
+	let notes = try readReleaseNotes()
+
+	return try notes.changesSince(since, compiler: compiler)
+end 'expectedBreakingChangesSince'
+
+function compilerRelease() returns CompilerRelease
+	let line = spawnCompiler([VersionCommandName]).stdout.trim()
+	let token = try whitespaceTokens(line).get(1) otherwise panic("the gate could not run — `maxon {VersionCommandName}` printed `{line}`, which names no version after its first word.")
+
+	if isDottedRelease(token) 'aRelease'
+		return CompilerRelease.released(token)
+	end 'aRelease'
+
+	return CompilerRelease.unreleased
+end 'compilerRelease'
+
+function readReleaseNotes() returns NotesReader throws TestFailure
+	let notes = try FilePath.from(ReleaseNotesDocument) otherwise panic("the gate could not run — '{ReleaseNotesDocument}' is not a spellable path")
+	try Expect.isTrue(File.exists(notes), message: "the gate could not run — the checkout holds no {ReleaseNotesDocument}, which names the releases and their breaking changes.")
+
+	var reader = NotesReader.create()
+
+	for (iter, line) in outputLines(checkoutDocumentText(ReleaseNotesDocument)).withIterator() 'eachLine'
+		try reader.read(line, lineNumber: iter.index() + 1)
+	end 'eachLine'
+
+	try reader.finishEntry()
+
+	return reader
+end 'readReleaseNotes'
+
+function isReportedSince(version String, since String, compiler CompilerRelease) returns bool
+	if version == UnreleasedHeading 'unreleasedChange'
+		return match compiler 'release'
+			released gives false
+			unreleased gives true
+		end 'release'
+	end 'unreleasedChange'
+
+	if not isNewerRelease(version, than: since) 'notAfterTheRecord'
+		return false
+	end 'notAfterTheRecord'
+
+	return match compiler 'release'
+		released(text) gives not isNewerRelease(version, than: text)
+		unreleased gives true
+	end 'release'
+end 'isReportedSince'
+
+function isDottedRelease(text String) returns bool
+	let parts = text.split(ReleaseComponentSeparator)
+
+	if parts.count() != ReleaseComponentCount 'wrongShape'
+		return false
+	end 'wrongShape'
+
+	for part in parts 'eachPart'
+		if part.isEmpty() 'emptyPart'
+			return false
+		end 'emptyPart'
+
+		for c in part 'eachCharacter'
+			if not Ascii.isDigit(c) 'notADigit'
+				return false
+			end 'notADigit'
+		end 'eachCharacter'
+	end 'eachPart'
+
+	return true
+end 'isDottedRelease'
+
+function isNewerRelease(candidate String, than String) returns bool
+	let theirs = than.split(ReleaseComponentSeparator)
+
+	for (iter, part) in candidate.split(ReleaseComponentSeparator).withIterator() 'eachComponent'
+		let mine = releaseComponent(part)
+		let other = releaseComponent(try theirs.get(iter.index()) otherwise panic("the gate could not run — both releases were held to {ReleaseComponentCount} components"))
+
+		if mine != other 'differs'
+			return mine > other
+		end 'differs'
+	end 'eachComponent'
+
+	return false
+end 'isNewerRelease'
+
+function releaseComponent(part String) returns FullRangeInt
+	return try int.fromString(part) otherwise panic("the gate could not run — '{part}' was held to digits and is not a number")
+end 'releaseComponent'

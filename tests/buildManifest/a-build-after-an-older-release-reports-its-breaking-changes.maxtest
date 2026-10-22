@@ -1,5 +1,6 @@
-let FixLinePrefix = "Fix: "
 let HeaderLineCount = 2
+let ReportSinceThen = "Breaking changes since then:"
+let ReportFixIndent = "  "
 
 test 'a build after an older release reports the breaking changes since it, once'
 	let staged = stagedProject("a-build-after-an-older-release-reports-its-breaking-changes", fixture: DefaultFixtureName)
@@ -12,12 +13,12 @@ test 'a build after an older release reports the breaking changes since it, once
 
 	let reported = spawnManifestBuild(staged, options: StringArray.create())
 	let said = "It wrote to stdout: {reported.stdout} and to stderr: {reported.stderr}"
-	let lastBuilt = "{LastBuiltWording} {OlderRelease}."
+	let reportHead = "{LastBuiltWording} {OlderRelease}. {ReportSinceThen}"
 
 	Expect.equal(reported.exitCode(), expected: 0, message: "`maxon build` after a build recorded by maxon {OlderRelease} exited {reported.exitCode()}. {said}")
 	requireNoReportInHeader(reported.stdout)
-	Expect.contains(reported.stdout, needle: lastBuilt, message: "`maxon build` after a build recorded by maxon {OlderRelease} did not say `{lastBuilt}`. {said}")
-	Expect.isTrue(hasFixLine(reported.stdout), message: "`maxon build` after a build recorded by maxon {OlderRelease} reported no change with a line opening `{FixLinePrefix}`. {said}")
+	Expect.contains(reported.stdout, needle: reportHead, message: "`maxon build` after a build recorded by maxon {OlderRelease} did not say `{reportHead}`. {said}")
+	Expect.equal(terminatedLines(reportEntries(reported.stdout, head: reportHead)), expected: terminatedLines(expectedReportEntries()), message: "`maxon build` after a build recorded by maxon {OlderRelease} did not list exactly the breaking changes RELEASE_NOTES.md names since it, newest first. {said}")
 
 	let expected = expectedRecordedRelease()
 	Expect.equal(fileText(record), expected: recordLine(expected), message: "a successful build after a build recorded by maxon {OlderRelease} left the record {record.toString()} not holding `{expected}`.")
@@ -37,12 +38,33 @@ function requireNoReportInHeader(stdout String) throws TestFailure
 	end 'eachHeaderLine'
 end 'requireNoReportInHeader'
 
-function hasFixLine(stdout String) returns bool
+function reportEntries(stdout String, head String) returns StringArray
+	var entries = StringArray.create()
+	var inReport = false
+
 	for line in outputLines(stdout) 'eachLine'
-		if line.trim().startsWith(FixLinePrefix) 'aFix'
-			return true
-		end 'aFix'
+		if not inReport 'beforeTheReport'
+			inReport = line == head
+			continue
+		end 'beforeTheReport'
+
+		if line.isEmpty() 'reportEnds'
+			break
+		end 'reportEnds'
+
+		entries.push(line)
 	end 'eachLine'
 
-	return false
-end 'hasFixLine'
+	return entries
+end 'reportEntries'
+
+function expectedReportEntries() returns StringArray throws TestFailure
+	var lines = StringArray.create()
+
+	for change in try expectedBreakingChangesSince(OlderRelease) 'eachChange'
+		lines.push(change.headline())
+		lines.push("{ReportFixIndent}{change.fixLine()}")
+	end 'eachChange'
+
+	return lines
+end 'expectedReportEntries'
