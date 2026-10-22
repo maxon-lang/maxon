@@ -71,6 +71,7 @@ let ReturnPointLiftVerb = "lift the walk's return point"
 let StillWalkingMessage = "a step is still walking: pause it before moving the program again"
 let NoLocalsWhileRunningMessage = "the program is running: there are no locals until it stops"
 let DetachRoundCap = 64
+let OffsetListSeparator = ", "
 let WordGap = " "
 
 export type DebugCommandRow
@@ -2149,8 +2150,16 @@ export type DebugConversation
 		end 'itIsAlreadyOver'
 
 		self.endWalk(replies)
-		_ = self.engine.clearEveryBreakpoint()
+
+		let cleared = self.engine.clearEveryBreakpoint()
 		self.keepPurposesOfStandingTraps()
+
+		if not cleared.accepted() 'aTrapStays'
+			self.refuseToFinish(replies)
+
+			return
+		end 'aTrapStays'
+
 		var rounds = 0 as DebugTally
 
 		var finishing = true
@@ -2160,6 +2169,18 @@ export type DebugConversation
 			finishing = self.finishedARound(replies)
 		end 'untilItEnds'
 	end 'letItFinish'
+
+	function refuseToFinish(replies DebugReplyArray)
+		var spelled = StringArray.create()
+
+		for offset in self.engine.standingBreakpointOffsets() 'eachStanding'
+			spelled.push("0x{offset:x}")
+		end 'eachStanding'
+
+		let noun = "breakpoint at offset" if spelled.count() == 1 else "breakpoints at offsets"
+		self.failed = true
+		replies.push(DebugReply.failed("the program cannot be let finish: the {noun} {joinedWith(spelled, separator: OffsetListSeparator)} could not be removed, so the program is closed instead", suggestion: StatedText.unstated))
+	end 'refuseToFinish'
 
 	function finishedARound(replies DebugReplyArray) returns bool
 		match self.engine.resume() 'posted'

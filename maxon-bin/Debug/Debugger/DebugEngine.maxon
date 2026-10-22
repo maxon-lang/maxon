@@ -728,13 +728,8 @@ export type DebugEngine implements DebugMemory
 
 	export function clearEveryBreakpoint() returns CommandOutcome
 		_ = self.liftReturnPoint()
-		var armed = DebugAddressArray.create()
 
-		for breakpoint in self.breakpoints 'eachBreakpoint'
-			armed.push(breakpoint.offset)
-		end 'eachBreakpoint'
-
-		for offset in armed 'eachArmed'
+		for offset in self.standingBreakpointOffsets() 'eachArmed'
 			_ = self.clearBreakpoint(offset)
 		end 'eachArmed'
 
@@ -767,6 +762,16 @@ export type DebugEngine implements DebugMemory
 
 		return EngineBreakpointLookup.none
 	end 'breakpointAt'
+
+	export function standingBreakpointOffsets() returns DebugAddressArray
+		var standing = DebugAddressArray.create()
+
+		for breakpoint in self.breakpoints 'eachBreakpoint'
+			standing.push(breakpoint.offset)
+		end 'eachBreakpoint'
+
+		return standing
+	end 'standingBreakpointOffsets'
 
 	function recordBreakpoint(offset DebugAddress, originalBytes ByteArray, usersOwn bool, condition DebugConditionRequest)
 		self.forgetBreakpoint(offset)

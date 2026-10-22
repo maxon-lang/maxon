@@ -1693,7 +1693,8 @@ reason it reports, and a `*0x<offset>` target the offset asked; `not-set`, `no-m
 `no-code` answers name none. `reason` comes with a `refused` answer. A `trace` event carries `since`,
 the previous stop's position in the ring, when there was a previous stop.
 The driver exits 0 when the session completed — the program's own exit code is DATA in the `exit` event —
-and 1 on a timeout, a refused session or a crash. A command issued after the
+and 1 on a timeout, a refused session or a crash. A session that lets the program finish and cannot
+remove a breakpoint's trap says which offsets stand, closes the program instead and exits 1. A command issued after the
 program has ended is an `error`, and the verdict stands.
 
 **Without `--batch`** the same commands are read from stdin, one per line, and answered as text for a
