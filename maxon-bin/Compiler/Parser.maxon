@@ -4762,16 +4762,6 @@ union ConformanceUsesArity
 	unresolvable
 end 'ConformanceUsesArity'
 
-// How `with (A, B)` is read against a one-associated-type interface: `tupleAtArityOne` as one tuple argument
-// (`parenthesizedWithBindsOneTuple`), `itemList` as one binding per item. ⚠ The declaration sweep
-// (`readOptionalImplementsClause`) reads `itemList`, so where the real parse reads one tuple the swept
-// binding count differs from the interface's arity and `ConformanceCheck.pairableConformanceBindings`
-// empties it, so a conditional extension's `where` clause is unmet for that conformer.
-enum ParenthesizedWithReading
-	tupleAtArityOne
-	itemList
-end 'ParenthesizedWithReading'
-
 // ⭐⭐ **WHAT A BARE `int`/`float` MEANS AT THE TYPE POSITION BEING READ** — the argument every
 // `parseTypeReference` caller must answer, and the roster of the rule's exemptions.
 //
@@ -26328,12 +26318,12 @@ export type Parser
 	// the two must not differ: this accessor's whole stated purpose is that the CONDITION and the TYPES come
 	// from one reading.
 	//
-	// It is reachable because the DECLARATION SWEEP cannot know an arity — `Queries.foldInterfaceDeclarations`
-	// runs after the last file is folded — so `with (Source, Element)` against a one-`uses` `Iterator` is
-	// recorded as two items by the sweep and as one interned tuple by the real parse
-	// (`parenthesizedWithBindsOneTuple`, which argues why that cannot be settled later). Emptied here, the
-	// consequence is a conditional extension WITHHELD from that conformer and a body parsed with no
-	// substitution — `readOptionalImplementsClause`'s standard, bounded and missing rather than wrong.
+	// It is reachable on a clause that binds more or fewer types than the interface declares, which
+	// E3016 or `checkParenthesizedConformanceArgs` refuses separately, and on a clause
+	// `foldConformanceClauseInto` cannot re-read, which leaves the declaration sweep's arity-blind
+	// record standing (`parenthesizedWithBindsOneTuple`). Emptied here, the consequence is a
+	// conditional extension WITHHELD from that conformer and a body parsed with no substitution —
+	// `readOptionalImplementsClause`'s standard, bounded and missing rather than wrong.
 	function conformerAssociatedBindings(header ExtensionHeader, conformer ByteArray, index ProgramSignatures) returns ConformanceBinding
 		return pairableConformanceBindings(self.extensionConformerLayout(conformer, index: index).bindingsForInterface(header.nameTok.value), associatedTypeNames: extensionTargetParamNames(header.target))
 	end 'conformerAssociatedBindings'
@@ -26761,7 +26751,7 @@ export type Parser
 		var types = RequirementTypeArray.create()
 
 		if self.at(TokenKind.leftParen) 'delimited'
-			_ = try self.parseConformanceWithArgs(interfaceName, reading: ParenthesizedWithReading.tupleAtArityOne, spellings: NameRoster.create(), types: types)
+			_ = try self.parseConformanceWithArgs(interfaceName, spellings: NameRoster.create(), types: types)
 			return types
 		end 'delimited'
 
@@ -31139,7 +31129,7 @@ export type Parser
 		try self.consume(TokenKind.with)
 		var spellings = NameRoster.create()
 		var types = RequirementTypeArray.create()
-		let withArgs = try self.parseConformanceWithArgs(ifaceTok.value, reading: ParenthesizedWithReading.tupleAtArityOne, spellings: spellings, types: types)
+		let withArgs = try self.parseConformanceWithArgs(ifaceTok.value, spellings: spellings, types: types)
 		return InterfaceConformance.create(ifaceTok.value, withArgs: withArgs, withArgSpellings: spellings, withArgTypes: types)
 	end 'parseOneConformance'
 
@@ -31176,12 +31166,10 @@ export type Parser
 	// its written spelling, neither of which records the parentheses, so the two list forms are already
 	// indistinguishable one line later — recording a flag on it purely so a later pass could re-derive what
 	// this function is looking straight at would be plumbing a parse fact through the whole tier for no gain.
-	//
-	// ⚠⚠ **`reading` IS WHAT THE CALLERS DO NOT SHARE** — see `ParenthesizedWithReading`.
-	function parseConformanceWithArgs(interfaceName ByteArray, reading ParenthesizedWithReading, spellings NameRoster, types RequirementTypeArray) returns NameRoster throws SourceParseError
+	function parseConformanceWithArgs(interfaceName ByteArray, spellings NameRoster, types RequirementTypeArray) returns NameRoster throws SourceParseError
 		var args = NameRoster.create()
 
-		if self.at(TokenKind.leftParen) and reading == ParenthesizedWithReading.tupleAtArityOne and self.parenthesizedWithBindsOneTuple(interfaceName) 'oneTupleArgument'
+		if self.at(TokenKind.leftParen) and self.parenthesizedWithBindsOneTuple(interfaceName) 'oneTupleArgument'
 			// ONE argument, read by the ordinary reference reader — `parseTypeReference` meets the `(` and
 			// routes to `parseTupleTypeReference`, which is what mints and interns the tuple's layout. So the
 			// binding this records is the same tuple instance `WithIterIterator.current`'s declared
@@ -31251,7 +31239,7 @@ export type Parser
 
 	// ⭐ **`with (A, B)` AGAINST A ONE-ASSOCIATED-TYPE INTERFACE IS ONE TUPLE ARGUMENT, NOT TWO
 	// BINDINGS.** A pure LIST reading, with `((A, B))` as the tuple spelling, collides with
-	// `stdlib/helpers/itertools/withIterator.maxon` the day that file is loadable: it writes
+	// `stdlib/helpers/itertools/withIterator.maxon`: it writes
 	// `implements Iterator with (Source, Element)` against a one-`uses` `Iterator` and declares
 	// `current() returns (Source, Element)`, so NO list reading can make it conform. The corpus is the
 	// reference, so the arity discrimination is: where a single type argument is expected, `(A, B)` is
@@ -31263,16 +31251,15 @@ export type Parser
 	// comma one level DOWN, so it too stays one binding, whose single item is the tuple. Only `with
 	// (A, B)` moves, and only at arity one.
 	//
-	// ⚠ **IT ANSWERS `false` FOR THE WHOLE DECLARATION SWEEP, BECAUSE THE ARITY IS NOT KNOWN THERE** —
-	// `Queries.foldInterfaceDeclarations` runs after the last file is folded, so `conformanceUsesArity` reads
-	// `unresolvable` for every interface while the sweep is walking. The sweep therefore records the ITEM
-	// LIST where the real parse records one tuple, and the two disagreeing is contained rather than tolerated:
-	// `conformerAssociatedBindings` refuses to pair a bindings list against an associated-type list of a
-	// different LENGTH, so the consequence is a conditional extension WITHHELD from that conformer and a body
-	// parsed with no substitution — `readOptionalImplementsClause`'s own standard, *"bounded, and a missing
-	// extension, never a wrong one"*. It cannot be fixed by asking earlier: the binding a tuple carries is the
-	// INTERNED tuple layout's name, whose elements are canonicalized through `mangleTypeArg` (a type
-	// parameter's is a digest of its declaration and name), so it cannot be reconstructed later from the argument SPELLINGS.
+	// ⚠ **IT ANSWERS `false` IN THE FIRST DECLARATION SWEEP, BECAUSE THE ARITY IS NOT KNOWN THERE**
+	// — `Queries.foldInterfaceDeclarations` runs after the last file is folded, so
+	// `conformanceUsesArity` reads `unresolvable` for every interface while the sweep is walking, and
+	// the sweep records the ITEM LIST. Every clause that writes a `with` is re-read by
+	// `foldConformanceClauseInto` once the arity resolves, and that record replaces the sweep's. The
+	// re-read is a parse rather than a repair of the sweep's record: the binding a tuple carries is
+	// the INTERNED tuple layout's name, whose elements are canonicalized through `mangleTypeArg` (a
+	// type parameter's is a digest of its declaration and name), so it cannot be rebuilt from the
+	// SPELLINGS.
 	function parenthesizedWithBindsOneTuple(interfaceName ByteArray) returns bool
 		match self.conformanceUsesArity(interfaceName) 'arity'
 			declared(count) then return count == SingleAssociatedType and self.parenGroupHoldsTopLevelComma(self.pos)
@@ -35434,7 +35421,7 @@ export type Parser
 				let delimited = self.at(TokenKind.leftParen)
 				var spellings = NameRoster.create()
 				var types = RequirementTypeArray.create()
-				_ = try self.parseConformanceWithArgs(nameTok.value, reading: ParenthesizedWithReading.itemList, spellings: spellings, types: types)
+				_ = try self.parseConformanceWithArgs(nameTok.value, spellings: spellings, types: types)
 				bindings.push(ConformanceBinding.create(spellings, types: types))
 
 				if not delimited and not self.conformanceArityResolves(nameTok.value) 'theArityIsNotKnownYet'

@@ -400,3 +400,28 @@ end 'main'
 ```exitcode
 13
 ```
+
+<!-- test: withIterator.the-wrapper-takes-an-extension-method-over-the-iterator-element -->
+The wrapper conforms to `Iterator` with the tuple `(Source, Element)` as its one associated type, so an `extension Iterator` method that names `Element` reaches it and answers that tuple.
+```maxon
+extension Iterator
+	function currentAgain() returns Element
+		return self.current()
+	end 'currentAgain'
+end 'Iterator'
+
+function main() returns ExitCode
+	let arr = [10, 20, 30, 40]
+	var wrapped = try arr.withIterator() otherwise return 90
+	try wrapped.advance() otherwise return 91
+	let (iter, value) = wrapped.currentAgain()
+	print("{iter.index()}:{value}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1:20
+```

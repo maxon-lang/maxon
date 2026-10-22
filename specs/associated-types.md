@@ -1447,9 +1447,6 @@ meant two bindings and had one to give.
 ⚠ It is pinned because nothing else in the suite would notice it going away. The count comes off
 `args.count()`, so a reader that flattened the parenthesized arm — or that counted commas instead of
 items — would turn this legal program into an arity complaint while every other case stayed green.
-It is also the spelling `stdlib/helpers/itertools/withIterator.maxon` needs the day it is loadable:
-that file writes `implements Iterator with (Source, Element)` against a one-`uses` `Iterator`, which
-under the compiler's settled LIST reading is exactly the surplus this rule refuses.
 
 <!-- test: conformance-argument-in-parentheses-is-a-tuple-type -->
 ```maxon
