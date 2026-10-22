@@ -2734,6 +2734,8 @@ end 'main'
 So a `let` binds only a value nothing writes while it lives:
 
 - a fresh record no other name reaches (`let x = Box.create(1)`), frozen at birth;
+- an element a library `pop`, `remove`, `removeFirst` or `removeLast` moves out of a container
+  (`let x = try self.items.pop() otherwise return`), which the container no longer holds;
 - a read-only value, such as a module-level `let`'s record or a `let` field of a read-only holder;
 - a part of a parameter (`let z = p.child`), which is as immutable as the argument the caller passed. A caller
   that passes the same record through a second, writable argument may write it while the `let` lives.

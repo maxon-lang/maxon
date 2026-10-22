@@ -1573,12 +1573,21 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 		self.flowModuleLets(result, calleeIndex: calleeIndex)
 		self.seedReadOnlyElementRead(func, result: result, callee: self.functionAt(calleeIndex).name, args: args)
+		let movesAnElementOut = try self.callsALibraryMoveOutDoor(op) otherwise false
 
 		for (iter, arg) in args.withIterator() 'eachArg'
 			let pos = try self.calls.argPositionAt(iter.index() as ParamCount) otherwise continue
-			self.flowThroughSummary(func, result: result, arg: arg, calleeIndex: calleeIndex, pos: pos)
+			self.flowThroughSummary(func, result: result, arg: arg, calleeIndex: calleeIndex, pos: pos, movesAnElementOut: movesAnElementOut)
 		end 'eachArg'
 	end 'applyCalleeSummary'
+
+	function callsALibraryMoveOutDoor(op MaxonOp) returns bool throws AbsentError
+		match op 'op'
+			call(_, callee, _, argLabels, _, _, _, _) then return self.signatures.declaresALibraryMoveOutDoor(callee, argLabels: argLabels)
+			tryCall(_, _, callee, _, argLabels, _, _, _, _) then return self.signatures.declaresALibraryMoveOutDoor(callee, argLabels: argLabels)
+			default throws AbsentError.absent
+		end 'op'
+	end 'callsALibraryMoveOutDoor'
 
 	function storeHandedValue(func IrFunction, receiver ValueId, stored ValueId, sharesItsElements bool, opIdx ElementIndex)
 		if self.tracingImmutableBindings and self.isTracked(stored) and not self.elementsAreReadOnlyIn(func, container: receiver) 'aSinkToJudge'
@@ -4111,7 +4120,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'storeThroughSummary'
 
 	// What the callee's summary says its result is to parameter `pos`, said of `arg`.
-	function flowThroughSummary(func IrFunction, result ValueId, arg ValueId, calleeIndex ElementIndex, pos ParamCount)
+	function flowThroughSummary(func IrFunction, result ValueId, arg ValueId, calleeIndex ElementIndex, pos ParamCount, movesAnElementOut bool)
 		if not maskHasParam(self.summary.sharesAt(calleeIndex), param: pos) 'unrelated'
 			return
 		end 'unrelated'
@@ -4135,12 +4144,12 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			self.unionMask(ProvenanceColumn.holdsWithin, to: result, from: ProvenanceColumn.holdsWithin, source: arg)
 		end 'reachesWhatItHolds'
 
-		if withinTheArgument 'withinIt'
+		if withinTheArgument and not movesAnElementOut 'withinIt'
 			self.unionInsideOfIdentity(result, source: arg, reach: TupleColumnReach.anyColumn)
 			self.unionMask(ProvenanceColumn.inside, to: result, from: ProvenanceColumn.inside, source: arg)
 		end 'withinIt'
 
-		if takesItsContents and withinTheArgument 'withinWhatItHolds'
+		if takesItsContents and withinTheArgument and not movesAnElementOut 'withinWhatItHolds'
 			self.unionMaskWithoutLetFields(ProvenanceColumn.inside, to: result, from: ProvenanceColumn.holdsWithin, source: arg)
 		end 'withinWhatItHolds'
 

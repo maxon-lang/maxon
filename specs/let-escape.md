@@ -5283,3 +5283,298 @@ end 'main'
 ```maxoncstderr
 error E3188: <fragment>:56:6: cannot bind `let` 'layout' to a value reached through 'world', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
 ```
+
+<!-- test: let-escape.a-let-bound-to-an-element-moved-out-of-a-field-of-a-generic-type-is-accepted-for-an-integer -->
+`pop` moves the element out of `self.items`, so the `let` holds a value nothing else holds and the later `push` cannot reach it. The generic body is accepted and returns the element.
+
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to 1000)
+
+type Stack uses T
+	typealias Items = Array with T
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	function push(v T)
+		self.items.push(v)
+	end 'push'
+
+	function pop() returns T
+		let v = try self.items.pop() otherwise panic("empty")
+		return v
+	end 'pop'
+
+	function popThenPush(extra T) returns T
+		let v = try self.items.pop() otherwise panic("empty")
+		self.items.push(extra)
+		return v
+	end 'popThenPush'
+end 'Stack'
+
+typealias CountStack = Stack with Count
+
+function main() returns ExitCode
+	var s = CountStack.create()
+	s.push(7)
+	s.push(9)
+	let a = s.popThenPush(3)
+	let b = s.pop()
+	print("{a} {b}\n")
+	return 0
+end 'main'
+```
+```stdout
+9 3
+```
+```exitcode
+0
+```
+
+<!-- test: let-escape.a-let-bound-to-an-element-moved-out-of-a-field-of-a-generic-type-is-accepted-for-a-string -->
+The same generic body instantiated with a `String`: the moved-out string is owned by the `let`, handed to the caller by `return`, and released exactly once, so the run exits 0 rather than 101.
+
+```maxon
+typealias ExitCode = int(0 to 125)
+
+type Stack uses T
+	typealias Items = Array with T
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	function push(v T)
+		self.items.push(v)
+	end 'push'
+
+	function pop() returns T
+		let v = try self.items.pop() otherwise panic("empty")
+		return v
+	end 'pop'
+
+	function popThenPush(extra T) returns T
+		let v = try self.items.pop() otherwise panic("empty")
+		self.items.push(extra)
+		return v
+	end 'popThenPush'
+end 'Stack'
+
+typealias StringStack = Stack with String
+
+function main() returns ExitCode
+	var s = StringStack.create()
+	s.push("first string long enough to force a heap allocation")
+	s.push("second string long enough to force a heap allocation")
+	let a = s.popThenPush("third string long enough to force a heap allocation")
+	let b = s.pop()
+	print("{a}\n{b}\n")
+	return 0
+end 'main'
+```
+```stdout
+second string long enough to force a heap allocation
+third string long enough to force a heap allocation
+```
+```exitcode
+0
+```
+
+<!-- test: let-escape.a-let-bound-to-an-element-moved-out-of-a-field-of-a-generic-type-is-accepted-for-a-record -->
+The same generic body instantiated with a record type, whose element is a heap record rather than a scalar or a string.
+
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Stack uses T
+	typealias Items = Array with T
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	function push(v T)
+		self.items.push(v)
+	end 'push'
+
+	function popThenPush(extra T) returns T
+		let v = try self.items.pop() otherwise panic("empty")
+		self.items.push(extra)
+		return v
+	end 'popThenPush'
+end 'Stack'
+
+typealias BoxStack = Stack with Box
+
+function main() returns ExitCode
+	var s = BoxStack.create()
+	s.push(Box.create(7))
+	let a = s.popThenPush(Box.create(9))
+	print("{a.n}\n")
+	return 0
+end 'main'
+```
+```stdout
+7
+```
+```exitcode
+0
+```
+
+<!-- test: let-escape.a-let-bound-to-an-element-moved-out-of-a-field-of-a-plain-type-is-accepted -->
+The control with no type parameter: `pop` and `remove` on a record field, bound to a `let`, leave nothing in the field that the `let` could still reach, so the body is accepted.
+
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+typealias Boxes = Array with Box
+
+type Stack
+	var items as Boxes
+
+	static function create() returns Self
+		return Self{items: Boxes.create()}
+	end 'create'
+
+	function push(v Box)
+		self.items.push(v)
+	end 'push'
+
+	function popThenPush(extra Box) returns Box
+		let v = try self.items.pop() otherwise panic("empty")
+		self.items.push(extra)
+		return v
+	end 'popThenPush'
+
+	function removeFirstOne() returns Box
+		let v = try self.items.remove(0) otherwise panic("empty")
+		return v
+	end 'removeFirstOne'
+end 'Stack'
+
+function main() returns ExitCode
+	var s = Stack.create()
+	s.push(Box.create(7))
+	s.push(Box.create(8))
+	let a = s.popThenPush(Box.create(9))
+	let b = s.removeFirstOne()
+	print("{a.n} {b.n}\n")
+	return 0
+end 'main'
+```
+```stdout
+8 7
+```
+```exitcode
+0
+```
+
+<!-- test: let-escape.error.a-let-bound-to-a-borrowed-element-of-a-field-of-a-generic-type-is-refused -->
+`last` borrows the element and leaves it in `self.items`, and `push` can still write that storage while the `let` is read, so the `let` is refused where a moved-out element is accepted.
+
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to 1000)
+
+type Stack uses T
+	typealias Items = Array with T
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	function push(v T)
+		self.items.push(v)
+	end 'push'
+
+	function peekThenPush(extra T) returns T
+		let v = try self.items.last() otherwise panic("empty")
+		self.items.push(extra)
+		return v
+	end 'peekThenPush'
+end 'Stack'
+
+typealias CountStack = Stack with Count
+
+function main() returns ExitCode
+	var s = CountStack.create()
+	s.push(7)
+	let a = s.peekThenPush(9)
+	print("{a}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3188: <fragment>:18:7: cannot bind `let` 'v' to a value reached through 'self', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```
+
+<!-- test: let-escape.error.a-let-bound-to-a-borrowed-element-of-a-field-of-a-plain-type-is-refused -->
+The control with no type parameter: a record borrowed by `last` and read after a `push` is refused.
+
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+typealias Boxes = Array with Box
+
+type Stack
+	var items as Boxes
+
+	static function create() returns Self
+		return Self{items: Boxes.create()}
+	end 'create'
+
+	function push(v Box)
+		self.items.push(v)
+	end 'push'
+
+	function peekThenPush(extra Box) returns Box
+		let v = try self.items.last() otherwise panic("empty")
+		self.items.push(extra)
+		return v
+	end 'peekThenPush'
+end 'Stack'
+
+function main() returns ExitCode
+	var s = Stack.create()
+	s.push(Box.create(7))
+	let a = s.peekThenPush(Box.create(9))
+	print("{a.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3188: <fragment>:27:7: cannot bind `let` 'v' to a value reached through 'self', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```

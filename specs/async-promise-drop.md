@@ -1860,7 +1860,7 @@ type Stack uses T
 	end 'push'
 
 	function pop() returns T
-		var v = try self.items.pop() otherwise panic("empty")
+		let v = try self.items.pop() otherwise panic("empty")
 		return v
 	end 'pop'
 end 'Stack'
