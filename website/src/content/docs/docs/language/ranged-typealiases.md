@@ -348,6 +348,8 @@ no cost, and `return` re-brands implicitly.
   brands and two types, whatever their shapes: each file's declarations mean its own, and a value of one
   reaches a door declared with the other only through `as`. Two declarations of one generic-instance alias over the
   same instance are two brands in the same way.
+- A call's result wears the alias its callee's `returns` clause names, bare or directory-qualified, as the
+  file that declares the callee resolves it: a caller's own declaration of that name is another brand.
 - A bare reference that reaches two `export`ed declarations is ambiguous in every file, a declaring file
   included: **E3063**, resolved by qualifying with the directory namespace or by renaming.
 - A diagnostic names each type as source would qualify it: the standard library's as `stdlib.Name`,

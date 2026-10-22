@@ -2608,3 +2608,113 @@ end 'refill'
 ```maxoncstderr
 error E3005: <fragment>:23:13: cannot assign a value of type 'Xs' to union payload 'ys', which holds 'Ys'
 ```
+
+<!-- test: error.a-call-result-of-a-qualified-return-wears-the-brand-it-names -->
+`alpha/` and `beta/` each export a `Numbers` over one instance, so each file that writes one qualifies it. `makeA` returns `alpha.Numbers` and `takeB` takes `beta.Numbers`: the result wears `alpha/`'s brand and does not reach `beta/`'s parameter.
+```maxon
+// --- file: alpha/a.maxon
+export typealias Integer = int(i64.min to i64.max)
+export typealias Numbers = Array with Integer
+
+export function makeA() returns alpha.Numbers
+	var xs = alpha.Numbers.create()
+	xs.push(3)
+	return xs
+end 'makeA'
+
+// --- file: beta/b.maxon
+export typealias Numbers = Array with alpha.Integer
+
+export function takeB(xs beta.Numbers) returns ExitCode
+	return xs.count() as ExitCode
+end 'takeB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return takeB(makeA())
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:21:9: argument type mismatch for 'xs': expected 'beta.Numbers', got 'alpha.Numbers'
+```
+
+<!-- test: error.a-call-result-wears-the-brand-of-the-file-that-declared-the-callee -->
+`a/` exports a `Numbers` and `makeA` returns it, written bare. `p/` declares a `Numbers` of its own over the same instance, visible to `p/` alone, and takes it as `p.Numbers`. `makeA` is declared in `a/a.maxon`, so its result is `a/`'s `Numbers` and not the `Numbers` the calling file declares.
+```maxon
+// --- file: a/a.maxon
+export typealias Integer = int(i64.min to i64.max)
+export typealias Numbers = Array with Integer
+
+export function makeA() returns Numbers
+	var xs = Numbers.create()
+	xs.push(3)
+	return xs
+end 'makeA'
+
+// --- file: p/c.maxon
+typealias Numbers = Array with a.Integer
+
+function takeC(xs p.Numbers) returns ExitCode
+	return xs.count() as ExitCode
+end 'takeC'
+
+function main() returns ExitCode
+	return takeC(makeA())
+end 'main'
+```
+```maxoncstderr
+error E3005: p/<fragment>:20:9: argument type mismatch for 'xs': expected 'p.Numbers', got 'a.Numbers'
+```
+
+<!-- test: a-call-result-of-a-qualified-existential-return-is-iterated -->
+`makeSeq` returns a parameterized existential spelled through its directory, `alpha.IntegerSeq`. The caller in `main.maxon` iterates the result, so the witness half of the returned value is resolved in `alpha/`, where the alias is declared, from the written qualified name.
+```maxon
+// --- file: alpha/a.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+export interface Seq uses Element
+	function current() returns Element
+	function advance() throws IterationError
+end 'Seq'
+
+export typealias IntegerSeq = Seq with Integer
+
+type Upto implements Seq with Integer
+	var pos as Integer
+	let limit as Integer
+
+	static function create(limit Integer) returns Self
+		return Self{pos: 1, limit: limit}
+	end 'create'
+
+	function current() returns Integer
+		return self.pos
+	end 'current'
+
+	function advance() throws IterationError
+		if self.pos >= self.limit 'atTheLast'
+			throw IterationError.exhausted
+		end 'atTheLast'
+
+		self.pos = self.pos + 1
+	end 'advance'
+end 'Upto'
+
+export function makeSeq(limit Integer) returns alpha.IntegerSeq
+	return Upto.create(limit)
+end 'makeSeq'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	var sum = 0 as Integer
+
+	for item in makeSeq(4) 'walk'
+		sum = sum + item
+	end 'walk'
+
+	return sum as ExitCode
+end 'main'
+```
+```exitcode
+10
+```

@@ -34247,7 +34247,7 @@ export type Parser
 			throw AbsentError.absent
 		end 'namesNoInstance'
 
-		match self.signatures.scopedGenericAliasDecl(aliasName, readerFilePath: readerFilePath) 'declared'
+		match self.signatures.writtenGenericAliasDecl(aliasName, readerFilePath: readerFilePath) 'declared'
 			undeclared then panic("existentialClaimOf: '{String.from(aliasName)}' is a generic alias as '{readerFilePath.toString()}' reads it, yet no declaration of it is held — `isAliasOfFormFor` and `scopedGenericAliasDecl` read one registry")
 			declared(decl) then return ExistentialClaim.create(self.signatures.genericAliasInstanceFrom(aliasName, readerFilePath: readerFilePath), scopeFilePath: decl.filePath)
 		end 'declared'
@@ -34256,13 +34256,9 @@ export type Parser
 	function declaredReturnExistentialClaim(callee ByteArray, declFilePath FilePath) returns ExistentialClaim throws AbsentError
 		view aliasName = try self.signatures.returnAliasNameOf(callee)
 
-		let nested = try self.signatures.aliasNestedInDeclaringTypeOf(callee, aliasName: aliasName) otherwise return try self.existentialClaimOf(aliasName, readerFilePath: declFilePath)
+		let written = try self.signatures.returnInnerAliasOf(callee, aliasName: aliasName) otherwise aliasName
 
-		if self.signatures.isAliasOfFormFor(nested, readerFilePath: declFilePath, wanted: FormAliasKind.generic) 'anInnerAliasOfTheDeclaringType'
-			return try self.existentialClaimOf(nested, readerFilePath: declFilePath)
-		end 'anInnerAliasOfTheDeclaringType'
-
-		return try self.existentialClaimOf(aliasName, readerFilePath: declFilePath)
+		return try self.existentialClaimOf(written, readerFilePath: declFilePath)
 	end 'declaredReturnExistentialClaim'
 
 	// ⭐⭐ **THE SIGNATURE'S HALF OF THE SAME FACT** — which PARAMETERS were declared at a parameterized
@@ -42087,20 +42083,27 @@ export type Parser
 	//
 	// Two file-scope declarations of one name over ONE instance are two types, so each declaration's mint
 	// brands (`genericAliasMintIsABrand`).
-	//
-	// A COMPILER-RESERVED spelling (`__ManagedMemory`, the buffer surface of a byte array) brands nothing
-	// either: it is a surface the compiler registers over an author's instance, not a type the author declared.
 	function brandOfSpelling(spelled ByteArray) returns ByteArray
 		if self.signatures.genericAliasMintIsABrand(spelled) 'aDeclarationsOwnMint'
 			return spelled
 		end 'aDeclarationsOwnMint'
 
-		if self.namesInnerAliasHere(spelled) or isCompilerReservedName(spelled) 'notAnAuthorsAlias'
+		if self.namesInnerAliasHere(spelled) 'anInnerAliasBrandsNothing'
+			return EmptySourceText
+		end 'anInnerAliasBrandsNothing'
+
+		return self.brandOfAuthorsAlias(spelled, readerFilePath: self.job.path)
+	end 'brandOfSpelling'
+
+	// A COMPILER-RESERVED spelling (`__ManagedMemory`, the buffer surface of a byte array) brands nothing:
+	// it is a surface the compiler registers over an author's instance, not a type the author declared.
+	function brandOfAuthorsAlias(spelled ByteArray, readerFilePath FilePath) returns ByteArray
+		if isCompilerReservedName(spelled) 'notAnAuthorsAlias'
 			return EmptySourceText
 		end 'notAnAuthorsAlias'
 
-		return self.signatures.genericBrandOfWritten(spelled, readerFilePath: self.job.path)
-	end 'brandOfSpelling'
+		return self.signatures.genericBrandOfWritten(spelled, readerFilePath: readerFilePath)
+	end 'brandOfAuthorsAlias'
 
 	// The brand an ELEMENT read out of instance `giid` wears — the alias the instantiation spelled its one
 	// type argument with (`Rows = Array with Row` yields `Row`s). A base with several arguments (`Map`)
@@ -89720,42 +89723,48 @@ export type Parser
 		return starts
 	end 'tupleElementStartsAt'
 
-	// ⭐⭐ **THE BARE NAME THE `returns` CLAUSE WROTE — the CALL RESULT's half of the surface provenance.**
-	// `returns DenseColumn` gives `DenseColumn`; `returns Array with Integer`, a primitive, or no clause at
-	// all gives EMPTY, because none of those names an alias. Read at the same moment as
-	// `returnDeclaredSurface` and for the same reason: the clause has not been consumed yet.
-	//
-	// ⚠ **IT ASKS NOTHING ABOUT THE NAME, and that is deliberate.** Whether the spelling is a generic alias
-	// is a WHOLE-PROGRAM question and this runs inside the declaration sweep that answers it. `brandCallResult`
-	// asks, at parse time.
 	// ⭐⭐ **A CALL RESULT WEARS THE BRAND ITS CALLEE'S `returns` CLAUSE SPELLED.** `makeXs() returns Xs` hands
 	// back an `Xs`; `returns Array with Integer` hands back an unbranded instance that fits any brand. It is
 	// `markDeclaredSurface`'s neighbour at the same door and reads the same kind of per-callee fact.
 	//
 	// ⚠ **ONLY HERE IS IT SAFE TO ASK WHETHER THE SPELLING IS AN ALIAS** — the sweep that answers that is
 	// complete, which is why `returnAliasSpelling` below records the token's text and asks nothing.
+	//
+	// The spelling is resolved in the callee's declaring file: read in the caller's, a caller that declares
+	// its own alias of that name would take the result as its own brand. `FuncSignature.returnBrand` cannot
+	// serve, because a caller's parse sees only its own file's signatures.
 	function brandCallResult(result ValueId, callee ByteArray)
 		if self.tagOf(result) != ValueTypeTag.genericInstance 'theResultIsNotAnInstance'
 			return
 		end 'theResultIsNotAnInstance'
 
 		if let aliasName = try self.signatures.returnAliasNameOf(callee) 'theClauseNamedAnAlias'
-			self.brandValue(result, brand: self.brandOfSpelling(aliasName))
+			if self.signatures.returnNamesInnerAlias(callee, aliasName: aliasName) 'anInnerAliasBrandsNothing'
+				return
+			end 'anInnerAliasBrandsNothing'
+
+			self.brandValue(result, brand: self.brandOfAuthorsAlias(aliasName, readerFilePath: self.signatures.recordedReturnDeclFileOf(callee)))
 		end 'theClauseNamedAnAlias'
 	end 'brandCallResult'
 
+	// ⭐⭐ **THE TYPE NAME THE `returns` CLAUSE WROTE, bare or directory-qualified — the CALL RESULT's half of
+	// the surface provenance.** `returns DenseColumn` gives `DenseColumn` and `returns alpha.Numbers` gives
+	// `alpha.Numbers`; `returns Array with Integer`, a primitive, or no clause at all gives EMPTY, because
+	// none of those names an alias. Read at the same moment as `returnDeclaredSurface` and for the same
+	// reason: the clause has not been consumed yet.
+	//
+	// ⚠ **IT ASKS NOTHING ABOUT THE NAME, and that is deliberate.** Whether the spelling is a generic alias
+	// is a WHOLE-PROGRAM question and this runs inside the declaration sweep that answers it. `brandCallResult`
+	// asks, at parse time.
 	function returnAliasSpelling() returns ReturnAliasSpelling
 		if not self.at(TokenKind.returns) 'noReturnClause'
 			return ReturnAliasSpelling.none
 		end 'noReturnClause'
 
-		let named = self.tokenAt(self.returnTypeTokenIndex())
-
-		if not tokenCanBeAName(named) 'theClauseDoesNotOpenWithAWrittenNAME'
-			return ReturnAliasSpelling.none
-		end 'theClauseDoesNotOpenWithAWrittenNAME'
-
-		return ReturnAliasSpelling.named(named.value)
+		match self.writtenTypeNameAt(self.returnTypeTokenIndex()) 'spelling'
+			named(name) then return ReturnAliasSpelling.named(name)
+			unnamed then return ReturnAliasSpelling.none
+		end 'spelling'
 	end 'returnAliasSpelling'
 
 	function returnDeclaredSurface() returns DeclaredSurface

@@ -30158,6 +30158,12 @@ export type ProgramSignatures
 		ownDeclarations.genericAliasDeclsIndexedThrough = self.settledDeclarations().genericAliasDecls.count()
 	end 'indexGenericAliasDeclarations'
 
+	module function writtenGenericAliasDecl(name ByteArray, readerFilePath FilePath) returns ScopedGenericAliasDecl
+		let written = self.writtenAlias(name, readerFilePath: readerFilePath, wanted: WantedAliasKinds.generic)
+
+		return self.scopedGenericAliasDecl(written.keyOf(), readerFilePath: written.meaningFileOf())
+	end 'writtenGenericAliasDecl'
+
 	module function scopedGenericAliasDecl(name ByteArray, readerFilePath FilePath) returns ScopedGenericAliasDecl
 		self.indexGenericAliasDeclarations()
 
@@ -30295,11 +30301,8 @@ export type ProgramSignatures
 	// `isGenericAlias` or `isTupleAlias` with the contest applied — `isFunctionAliasFor`'s twin for the other
 	// two alias forms. A directory-qualified name is asked in the file it names.
 	export function isAliasOfFormFor(name ByteArray, readerFilePath FilePath, wanted FormAliasKind) returns bool
-		if not containsQualifier(name) 'aBareName'
-			return self.formHeldUnder(self.bareWrittenKey(name, readerFilePath: readerFilePath), readerFilePath: readerFilePath, wanted: wanted)
-		end 'aBareName'
-
 		let written = self.writtenAlias(name, readerFilePath: readerFilePath, wanted: self.wantedKindsOfForm(wanted))
+
 		return self.formHeldUnder(written.keyOf(), readerFilePath: written.meaningFileOf(), wanted: wanted)
 	end 'isAliasOfFormFor'
 
@@ -33720,11 +33723,8 @@ export type ProgramSignatures
 	// and WHOSE contested names are spelled `fileScopedInstance`'s way. Both are identities in a program with no
 	// contest, which is every program in the corpus.
 	export function genericAliasInstanceFrom(name ByteArray, readerFilePath FilePath) returns GenericInstanceId
-		if not containsQualifier(name) 'aBareName'
-			return self.genericAliasInstanceUnder(self.bareWrittenKey(name, readerFilePath: readerFilePath), readerFilePath: readerFilePath, written: name)
-		end 'aBareName'
-
 		let written = self.writtenAlias(name, readerFilePath: readerFilePath, wanted: WantedAliasKinds.generic)
+
 		return self.genericAliasInstanceUnder(written.keyOf(), readerFilePath: written.meaningFileOf(), written: name)
 	end 'genericAliasInstanceFrom'
 
@@ -39393,7 +39393,7 @@ export type ProgramSignatures
 		return self.contestedDeclarationSpelling(entry.aliasName, declFilePath: entry.filePath).toByteArray()
 	end 'unambiguousAliasSpelling'
 
-	// The bare name this callee's `returns` clause wrote; `absent` where it wrote none. The caller
+	// The type name this callee's `returns` clause wrote; `absent` where it wrote none. The caller
 	// decides whether that name is a generic alias — this index cannot be asked during the sweep that
 	// fills it.
 	export function returnAliasNameOf(callee ByteArray) returns ByteArray throws AbsentError
@@ -39403,6 +39403,22 @@ export type ProgramSignatures
 
 		return try self.settledDeclarations().funcReturnAliasNames.get(callee) otherwise throw AbsentError.absent
 	end 'returnAliasNameOf'
+
+	export function returnInnerAliasOf(callee ByteArray, aliasName ByteArray) returns ByteArray throws AbsentError
+		let nested = try self.aliasNestedInDeclaringTypeOf(callee, aliasName: aliasName)
+
+		if not self.declaresInnerAlias(nested) 'notAnInnerAlias'
+			throw AbsentError.absent
+		end 'notAnInnerAlias'
+
+		return nested
+	end 'returnInnerAliasOf'
+
+	export function returnNamesInnerAlias(callee ByteArray, aliasName ByteArray) returns bool
+		let nested = try self.returnInnerAliasOf(callee, aliasName: aliasName) otherwise EmptySourceText
+
+		return not nested.isEmpty()
+	end 'returnNamesInnerAlias'
 
 	// ⭐ **HOW A DIAGNOSTIC SPELLS A GENERIC INSTANCE** — the author's `typealias` when the program holds one,
 	// else the canonical mint (see `InstanceDisplayNameMap` for why a miss is an answer). It is the DISPLAY

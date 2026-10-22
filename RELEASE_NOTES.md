@@ -29,6 +29,10 @@ release's version as its heading when the release is cut.
 - The result of a call through an interface keeps the requirement's typealias, so passing it where another
   typealias of the same instance is expected is E3005.
   Fix: re-brand the result with `as`, or declare the destination with the requirement's typealias.
+- A call's result wears the typealias its callee returns as the callee's declaring file resolves it, a
+  directory-qualified `returns alpha.Numbers` included, so passing it where another declaration of that
+  alias name is expected is E3005.
+  Fix: convert the result with `as`, or declare the destination with the typealias the callee returns.
 
 - Passing a `let` to a function whose result holds a closure capturing that parameter — in a container,
   a record or bare — is E3078, also when the result is bound by a `let` and the closure only reads.
