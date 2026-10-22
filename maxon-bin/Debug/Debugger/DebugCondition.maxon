@@ -20,7 +20,6 @@ let BoolTypeSpelling = "i1"
 let DoubleTypeSpelling = "f64"
 let SingleTypeSpelling = "f32"
 
-let UnsignedCompare = 0 as DebugAddress
 let NegativeSign = "-"
 let HexLiteralPrefix = "0x"
 
@@ -44,29 +43,35 @@ let AsciiUpperF = 70
 let LetterDigitBase = 10
 
 export type DebugConditionRecord
-	export let kind as DebugAddress
-	export let operand as DebuggeeWord
+	export let operand as DebugConditionOperand
 	export let width as DebugConditionWidth
-	export let signedCompare as DebugAddress
-	export let op as DebugAddress
+	export let signedness as DebugConditionSignedness
+	export let comparison as DebugConditionComparison
 	export let literal as DebuggeeWord
 
-	static function create(kind DebugAddress, operand DebuggeeWord, width DebugConditionWidth, signedCompare DebugAddress, op DebugAddress, literal DebuggeeWord) returns DebugConditionRecord
-		return Self{kind: kind, operand: operand, width: width, signedCompare: signedCompare, op: op, literal: literal}
+	static function create(operand DebugConditionOperand, width DebugConditionWidth, signedness DebugConditionSignedness, comparison DebugConditionComparison, literal DebuggeeWord) returns DebugConditionRecord
+		return Self{operand: operand, width: width, signedness: signedness, comparison: comparison, literal: literal}
 	end 'create'
 end 'DebugConditionRecord'
 
-let DbgCondKindRegister = 1
-let DbgCondKindStackSlot = 2
+export union DebugConditionOperand
+	register(number EngineRegisterNumber)
+	stackSlot(offset DebuggeeWord)
+end 'DebugConditionOperand'
 
-let DbgCondOpEqual = 1
-let DbgCondOpNotEqual = 2
-let DbgCondOpLess = 3
-let DbgCondOpLessOrEqual = 4
-let DbgCondOpGreater = 5
-let DbgCondOpGreaterOrEqual = 6
+export enum DebugConditionSignedness
+	signed
+	unsigned
+end 'DebugConditionSignedness'
 
-let DbgCondSignedYes = 1
+export enum DebugConditionComparison
+	equal
+	notEqual
+	less
+	lessOrEqual
+	greater
+	greaterOrEqual
+end 'DebugConditionComparison'
 
 let DbgWidthByte = 1
 let DbgWidthHalf = 2
@@ -78,89 +83,67 @@ union ConditionOperandRead
 	word(value DebuggeeWord)
 end 'ConditionOperandRead'
 
-// ⚠ Every road this cannot decide answers TRUE — an operand outside the general file, an unreadable
-// frame slot. A breakpoint the reader armed then stops on every hit, which is the recoverable
-// direction: answering false would swallow the stop and read as a breakpoint that was never placed.
+// ⚠ Every road this cannot decide answers TRUE — an unreadable frame slot. A breakpoint the reader
+// armed then stops on every hit, which is the recoverable direction: answering false would swallow
+// the stop and read as a breakpoint that was never placed.
 function debugConditionHolds(record DebugConditionRecord, memory DebugMemory, framePointer DebugAddress) returns bool
-	if not conditionIsEvaluable(record) 'nothingToJudgeItBy'
-		return true
-	end 'nothingToJudgeItBy'
-
-	let signed = record.signedCompare == DbgCondSignedYes
-
-	match conditionOperandValue(record, memory: memory, framePointer: framePointer) 'read'
+	match conditionOperandValue(record.operand, memory: memory, framePointer: framePointer) 'read'
 		unreadable then return true
-		word(raw) then return conditionCompare(narrowedToWidth(raw, width: record.width, signed: signed), literal: record.literal, op: record.op, signed: signed)
+		word(raw) then return conditionCompare(narrowedToWidth(raw, width: record.width, signedness: record.signedness), literal: record.literal, comparison: record.comparison, signedness: record.signedness)
 	end 'read'
 end 'debugConditionHolds'
 
-function conditionIsEvaluable(record DebugConditionRecord) returns bool
-	return record.op >= DbgCondOpEqual and record.op <= DbgCondOpGreaterOrEqual
-end 'conditionIsEvaluable'
+function conditionOperandValue(operand DebugConditionOperand, memory DebugMemory, framePointer DebugAddress) returns ConditionOperandRead
+	return match operand 'located'
+		register(number) gives ConditionOperandRead.word(memory.registerValue(number))
+		stackSlot(offset) gives frameSlotValue(offset, memory: memory, framePointer: framePointer)
+	end 'located'
+end 'conditionOperandValue'
 
-function conditionOperandValue(record DebugConditionRecord, memory DebugMemory, framePointer DebugAddress) returns ConditionOperandRead
-	if record.kind == DbgCondKindRegister 'aRegister'
-		if record.operand < 0 or record.operand >= (BackendGprSlots as DebuggeeWord) 'outsideTheGeneralFile'
-			return ConditionOperandRead.unreadable
-		end 'outsideTheGeneralFile'
-
-		return ConditionOperandRead.word(memory.registerValue(record.operand as EngineRegisterNumber))
-	end 'aRegister'
-
-	if record.kind != DbgCondKindStackSlot 'anUnreadableKind'
-		return ConditionOperandRead.unreadable
-	end 'anUnreadableKind'
-
-	let slot = (framePointer as DebuggeeWord) + record.operand
+function frameSlotValue(offset DebuggeeWord, memory DebugMemory, framePointer DebugAddress) returns ConditionOperandRead
+	let slot = (framePointer as DebuggeeWord) + offset
 
 	if slot <= 0 'notAnAddressAtAll'
 		return ConditionOperandRead.unreadable
 	end 'notAnAddressAtAll'
 
 	return ConditionOperandRead.word(try memory.readDebuggeeWord(slot as DebugAddress, width: DebuggeeWordBytes) otherwise return ConditionOperandRead.unreadable)
-end 'conditionOperandValue'
+end 'frameSlotValue'
 
-function narrowedToWidth(raw DebuggeeWord, width DebugConditionWidth, signed bool) returns DebuggeeWord
+function narrowedToWidth(raw DebuggeeWord, width DebugConditionWidth, signedness DebugConditionSignedness) returns DebuggeeWord
 	let masked = debugMaskedToWidth(raw, width: width as DebugWidth)
 
-	return debugSignExtended(masked, width: width as DebugWidth) if signed else masked
+	return match signedness 'extended'
+		signed gives debugSignExtended(masked, width: width as DebugWidth)
+		unsigned gives masked
+	end 'extended'
 end 'narrowedToWidth'
 
-function conditionCompare(value DebuggeeWord, literal DebuggeeWord, op DebugAddress, signed bool) returns bool
-	if op == DbgCondOpEqual 'equal'
-		return value == literal
-	end 'equal'
-
-	if op == DbgCondOpNotEqual 'notEqual'
-		return value != literal
-	end 'notEqual'
-
-	if op == DbgCondOpLess 'less'
-		return conditionIsBelow(value, than: literal, signed: signed)
-	end 'less'
-
-	if op == DbgCondOpLessOrEqual 'lessOrEqual'
-		return not conditionIsBelow(literal, than: value, signed: signed)
-	end 'lessOrEqual'
-
-	if op == DbgCondOpGreater 'greater'
-		return conditionIsBelow(literal, than: value, signed: signed)
-	end 'greater'
-
-	return not conditionIsBelow(value, than: literal, signed: signed)
+function conditionCompare(value DebuggeeWord, literal DebuggeeWord, comparison DebugConditionComparison, signedness DebugConditionSignedness) returns bool
+	return match comparison 'compared'
+		equal gives value == literal
+		notEqual gives value != literal
+		less gives conditionIsBelow(value, than: literal, signedness: signedness)
+		lessOrEqual gives not conditionIsBelow(literal, than: value, signedness: signedness)
+		greater gives conditionIsBelow(literal, than: value, signedness: signedness)
+		greaterOrEqual gives not conditionIsBelow(value, than: literal, signedness: signedness)
+	end 'compared'
 end 'conditionCompare'
 
-function conditionIsBelow(a DebuggeeWord, than DebuggeeWord, signed bool) returns bool
-	if signed 'aSignedCompare'
-		return a < than
-	end 'aSignedCompare'
+function conditionIsBelow(a DebuggeeWord, than DebuggeeWord, signedness DebugConditionSignedness) returns bool
+	return match signedness 'ordered'
+		signed gives a < than
+		unsigned gives unsignedIsBelow(a, than: than)
+	end 'ordered'
+end 'conditionIsBelow'
 
+function unsignedIsBelow(a DebuggeeWord, than DebuggeeWord) returns bool
 	if (a < 0) != (than < 0) 'oneHasTheTopBit'
 		return than < 0
 	end 'oneHasTheTopBit'
 
 	return a < than
-end 'conditionIsBelow'
+end 'unsignedIsBelow'
 
 export union DebugConditionCompile
 	compiled(record DebugConditionRecord)
@@ -259,23 +242,23 @@ export function compileDebugCondition(symbols DebugSymbols, offset DebugAddress,
 		return DebugConditionCompile.unsupported
 	end 'aFieldPath'
 
-	match conditionOperatorOf(opSpelling) 'known'
+	match conditionComparisonOf(opSpelling) 'known'
 		none then return DebugConditionCompile.unsupported
-		code(op) then return compiledAgainstName(symbols, offset: offset, site: site, name: name, op: op, literalSpelling: literalSpelling)
+		comparison(known) then return compiledAgainstName(symbols, offset: offset, site: site, name: name, comparison: known, literalSpelling: literalSpelling)
 	end 'known'
 end 'compileDebugCondition'
 
-function compiledAgainstName(symbols DebugSymbols, offset DebugAddress, site MxdbgInlineSiteLookup, name String, op DebugAddress, literalSpelling String) returns DebugConditionCompile
+function compiledAgainstName(symbols DebugSymbols, offset DebugAddress, site MxdbgInlineSiteLookup, name String, comparison DebugConditionComparison, literalSpelling String) returns DebugConditionCompile
 	let locals = symbols.localsAt(offset, site: site)
 
 	match symbols.localCoveringIn(locals, offset: offset, name: name) 'known'
 		undeclared or
 		notLiveHere then return DebugConditionCompile.unsupported
-		live(local) then return compiledAgainstLocal(symbols, local: local, op: op, literalSpelling: literalSpelling)
+		live(local) then return compiledAgainstLocal(symbols, local: local, comparison: comparison, literalSpelling: literalSpelling)
 	end 'known'
 end 'compiledAgainstName'
 
-function compiledAgainstLocal(symbols DebugSymbols, local MxdbgLocalInfo, op DebugAddress, literalSpelling String) returns DebugConditionCompile
+function compiledAgainstLocal(symbols DebugSymbols, local MxdbgLocalInfo, comparison DebugConditionComparison, literalSpelling String) returns DebugConditionCompile
 	if local.isAConstant() or local.isAFoldedAggregate() or local.holdsAPointer() or local.locKind == MxdbgLocKindOptimizedOut 'nowhereTheDriverCanRead'
 		return DebugConditionCompile.unsupported
 	end 'nowhereTheDriverCanRead'
@@ -293,35 +276,47 @@ function compiledAgainstLocal(symbols DebugSymbols, local MxdbgLocalInfo, op Deb
 
 	match conditionWidthOf(record) 'sized'
 		none then return DebugConditionCompile.unsupported
-		bytes(width) then return compiledWithWidth(local, signedCompare: DbgCondSignedYes if record.isSigned() else UnsignedCompare, op: op, width: width, literalSpelling: literalSpelling, isABool: typeName == BoolTypeSpelling)
+		bytes(width) then return compiledWithWidth(local, signedness: DebugConditionSignedness.signed if record.isSigned() else DebugConditionSignedness.unsigned, comparison: comparison, width: width, literalSpelling: literalSpelling, isABool: typeName == BoolTypeSpelling)
 	end 'sized'
 end 'compiledAgainstLocal'
 
-function compiledWithWidth(local MxdbgLocalInfo, signedCompare DebugAddress, op DebugAddress, width DebugConditionWidth, literalSpelling String, isABool bool) returns DebugConditionCompile
+function compiledWithWidth(local MxdbgLocalInfo, signedness DebugConditionSignedness, comparison DebugConditionComparison, width DebugConditionWidth, literalSpelling String, isABool bool) returns DebugConditionCompile
 	match conditionLiteralOf(literalSpelling, isABool: isABool) 'read'
 		none then return DebugConditionCompile.invalid
-		value(literal) then return compiledWithLiteral(local, signedCompare: signedCompare, op: op, width: width, literal: literal)
+		value(literal) then return compiledWithLiteral(local, signedness: signedness, comparison: comparison, width: width, literal: literal)
 
 		// A signed compare reads the word as a negative, so it would stop on a value nobody wrote.
-		aboveSignedRange(literal) then return compiledWithLiteral(local, signedCompare: signedCompare, op: op, width: width, literal: literal) if signedCompare == UnsignedCompare else DebugConditionCompile.invalid
+		aboveSignedRange(literal) then return compiledWithLiteral(local, signedness: signedness, comparison: comparison, width: width, literal: literal) if signedness == DebugConditionSignedness.unsigned else DebugConditionCompile.invalid
 	end 'read'
 end 'compiledWithWidth'
 
-function compiledWithLiteral(local MxdbgLocalInfo, signedCompare DebugAddress, op DebugAddress, width DebugConditionWidth, literal DebuggeeWord) returns DebugConditionCompile
+function compiledWithLiteral(local MxdbgLocalInfo, signedness DebugConditionSignedness, comparison DebugConditionComparison, width DebugConditionWidth, literal DebuggeeWord) returns DebugConditionCompile
+	match conditionOperandOf(local) 'located'
+		none then return DebugConditionCompile.unsupported
+		operand(located) then return DebugConditionCompile.compiled(DebugConditionRecord.create(located, width: width, signedness: signedness, comparison: comparison, literal: literal))
+	end 'located'
+end 'compiledWithLiteral'
+
+union ConditionOperandLookup
+	none
+	operand(let located DebugConditionOperand)
+end 'ConditionOperandLookup'
+
+function conditionOperandOf(local MxdbgLocalInfo) returns ConditionOperandLookup
 	if local.locKind == MxdbgLocKindRegister 'aRegister'
 		if local.locValue < 0 or local.locValue >= BackendGprSlots 'outsideTheGeneralFile'
-			return DebugConditionCompile.unsupported
+			return ConditionOperandLookup.none
 		end 'outsideTheGeneralFile'
 
-		return DebugConditionCompile.compiled(DebugConditionRecord.create(DbgCondKindRegister, operand: local.locValue as DebuggeeWord, width: width, signedCompare: signedCompare, op: op, literal: literal))
+		return ConditionOperandLookup.operand(DebugConditionOperand.register(local.locValue as EngineRegisterNumber))
 	end 'aRegister'
 
 	if local.locKind != MxdbgLocKindStackSlot 'notASlotEither'
-		return DebugConditionCompile.unsupported
+		return ConditionOperandLookup.none
 	end 'notASlotEither'
 
-	return DebugConditionCompile.compiled(DebugConditionRecord.create(DbgCondKindStackSlot, operand: local.locValue as DebuggeeWord, width: width, signedCompare: signedCompare, op: op, literal: literal))
-end 'compiledWithLiteral'
+	return ConditionOperandLookup.operand(DebugConditionOperand.stackSlot(local.locValue as DebuggeeWord))
+end 'conditionOperandOf'
 
 function comparesAsAWholeNumber(record MxdbgTypeInfo, typeName String) returns bool
 	if typeName == DoubleTypeSpelling or typeName == SingleTypeSpelling 'aRealNumber'
@@ -346,38 +341,38 @@ function conditionWidthOf(record MxdbgTypeInfo) returns ConditionWidthLookup
 	return ConditionWidthLookup.none
 end 'conditionWidthOf'
 
-union ConditionOperatorLookup
+union ConditionComparisonLookup
 	none
-	code(value DebugAddress)
-end 'ConditionOperatorLookup'
+	comparison(value DebugConditionComparison)
+end 'ConditionComparisonLookup'
 
-function conditionOperatorOf(spelling String) returns ConditionOperatorLookup
+function conditionComparisonOf(spelling String) returns ConditionComparisonLookup
 	if spelling == EqualSpelling 'equal'
-		return ConditionOperatorLookup.code(DbgCondOpEqual)
+		return ConditionComparisonLookup.comparison(DebugConditionComparison.equal)
 	end 'equal'
 
 	if spelling == NotEqualSpelling 'notEqual'
-		return ConditionOperatorLookup.code(DbgCondOpNotEqual)
+		return ConditionComparisonLookup.comparison(DebugConditionComparison.notEqual)
 	end 'notEqual'
 
 	if spelling == LessSpelling 'less'
-		return ConditionOperatorLookup.code(DbgCondOpLess)
+		return ConditionComparisonLookup.comparison(DebugConditionComparison.less)
 	end 'less'
 
 	if spelling == LessOrEqualSpelling 'lessOrEqual'
-		return ConditionOperatorLookup.code(DbgCondOpLessOrEqual)
+		return ConditionComparisonLookup.comparison(DebugConditionComparison.lessOrEqual)
 	end 'lessOrEqual'
 
 	if spelling == GreaterSpelling 'greater'
-		return ConditionOperatorLookup.code(DbgCondOpGreater)
+		return ConditionComparisonLookup.comparison(DebugConditionComparison.greater)
 	end 'greater'
 
 	if spelling == GreaterOrEqualSpelling 'greaterOrEqual'
-		return ConditionOperatorLookup.code(DbgCondOpGreaterOrEqual)
+		return ConditionComparisonLookup.comparison(DebugConditionComparison.greaterOrEqual)
 	end 'greaterOrEqual'
 
-	return ConditionOperatorLookup.none
-end 'conditionOperatorOf'
+	return ConditionComparisonLookup.none
+end 'conditionComparisonOf'
 
 union ConditionLiteralLookup
 	none
