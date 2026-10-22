@@ -1,18 +1,12 @@
 let SlowProjectDirName = "diagnostics-project-slow-project-file"
-let SlowManifestFileName = "app.maxproj"
 let SlowMainFileName = "main.maxon"
 let SlowOtherFileName = "other.maxon"
-let SlowFinishedFileName = "finished.txt"
-let SlowManifestSource = "export function build() returns ExitCode\n\tsleep(3000)\n\tlet marker = try FilePath.from(\"finished.txt\") otherwise return 1\n\ttry File.writeText(marker, content: \"done\") otherwise return 1\n\tBuild.build(\".\")\n\treturn 0\nend 'build'\n"
 let SlowMainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
 let SlowOtherSource = "function other() returns ExitCode\n\treturn 0\nend 'other'\n"
-let SlowAnswerBudgetMs = 2500
-let SlowFinishBoundMs = 30000
-let SlowFinishPollMs = 200
 
 test 'project diagnostics: a slow project file does not stall a request on another open document'
 	let root = freshOutsideCheckoutDir(SlowProjectDirName)
-	writeCorpusFile(root, fileName: SlowManifestFileName, content: SlowManifestSource)
+	writeCorpusFile(root, fileName: GatedManifestFileName, content: GatedManifestSource)
 	writeCorpusFile(root, fileName: SlowMainFileName, content: SlowMainSource)
 	writeCorpusFile(root, fileName: SlowOtherFileName, content: SlowOtherSource)
 
@@ -20,33 +14,22 @@ test 'project diagnostics: a slow project file does not stall a request on anoth
 
 	if let answered = try symbolsWhileResolving(client, root: root) 'answered'
 		client.release()
-		waitForTheManifestToFinish(root.join(SlowFinishedFileName))
+		releaseGatedManifest(root)
 		discardOutsideCheckoutDir(root)
-		let (symbols, tookMs, finishedMeanwhile) = answered
-		expectAnsweredWhileResolving(symbols, tookMs: tookMs, finishedMeanwhile: finishedMeanwhile)
+		let (symbols, finishedMeanwhile) = answered
+		expectAnsweredWhileResolving(symbols, finishedMeanwhile: finishedMeanwhile)
 	end 'answered' else (e) 'failed'
-		waitForTheManifestToFinish(root.join(SlowFinishedFileName))
+		releaseGatedManifest(root)
 		abandonedStagedSession(client, staged: root, failure: e, doing: "the session did not complete")
 	end 'failed'
 end 'project diagnostics: a slow project file does not stall a request on another open document'
 
-function expectAnsweredWhileResolving(symbols ElementIndex, tookMs DurationMs, finishedMeanwhile bool) throws TestFailure
-	try Expect.isFalse(finishedMeanwhile, message: "`{SlowManifestFileName}` sleeps for three seconds before it writes `{SlowFinishedFileName}`, and it had finished by the time the request on `{SlowOtherFileName}` was answered: the server ran the project file on the thread that reads requests.")
-	try Expect.atMost(tookMs, than: SlowAnswerBudgetMs, message: "a `documentSymbol` request on `{SlowOtherFileName}` took {tookMs} ms while `{SlowManifestFileName}` was still being run for `{SlowMainFileName}`")
+function expectAnsweredWhileResolving(symbols ElementIndex, finishedMeanwhile bool) throws TestFailure
+	try Expect.isFalse(finishedMeanwhile, message: "`{GatedManifestFileName}` waits for `{GatedReleaseFileName}`, which the test writes only after the request on `{SlowOtherFileName}` was answered, and it had finished by then: the server ran the project file on the thread that reads requests.")
 	try Expect.equal(symbols, expected: 1, message: "`{SlowOtherFileName}` declares one function")
 end 'expectAnsweredWhileResolving'
 
-function waitForTheManifestToFinish(marker FilePath)
-	let started = Clock.nowMs()
-
-	while not File.exists(marker) and Clock.elapsedMs(started) < SlowFinishBoundMs 'untilItFinishes'
-		sleep(SlowFinishPollMs)
-	end 'untilItFinishes'
-
-	sleep(SlowFinishPollMs)
-end 'waitForTheManifestToFinish'
-
-function symbolsWhileResolving(client LspClient, root FilePath) returns (ElementIndex, DurationMs, bool) throws LspClientError
+function symbolsWhileResolving(client LspClient, root FilePath) returns (ElementIndex, bool) throws LspClientError
 	let mainUri = fileUriOf(root.join(SlowMainFileName))
 	let otherUri = fileUriOf(root.join(SlowOtherFileName))
 
@@ -55,9 +38,9 @@ function symbolsWhileResolving(client LspClient, root FilePath) returns (Element
 	try client.openDocument(otherUri, content: SlowOtherSource)
 	try client.openDocument(mainUri, content: SlowMainSource)
 
-	let started = Clock.nowMs()
-	let answer = try client.documentSymbols(otherUri)
-	let took = Clock.elapsedMs(started)
+	try awaitGatedManifestRunning(root)
 
-	return (answer.symbols.count(), took, File.exists(root.join(SlowFinishedFileName)))
+	let answer = try client.documentSymbols(otherUri)
+
+	return (answer.symbols.count(), File.exists(root.join(GatedFinishedFileName)))
 end 'symbolsWhileResolving'

@@ -21,15 +21,34 @@ let ProjectDiagnosticsNothingRendering = "nothing at all"
 
 export let GatedManifestFileName = "app.maxproj"
 export let GatedReleaseFileName = "release.txt"
+let GatedStartedFileName = "started.txt"
 export let GatedFinishedFileName = "finished.txt"
-export let GatedManifestSource = "export function build() returns ExitCode\n\tlet gate = try FilePath.from(\"release.txt\") otherwise return 1\n\tlet marker = try FilePath.from(\"finished.txt\") otherwise return 1\n\tvar polls = 0 as Count\n\n\twhile not File.exists(gate) and polls < 1200 'untilReleased'\n\t\tsleep(50)\n\t\tpolls = polls + 1\n\tend 'untilReleased'\n\n\ttry File.writeText(marker, content: \"done\") otherwise return 1\n\tBuild.build(\".\")\n\treturn 0\nend 'build'\n"
+export let GatedManifestSource = "export function build() returns ExitCode\n\tlet gate = try FilePath.from(\"release.txt\") otherwise return 1\n\tlet started = try FilePath.from(\"started.txt\") otherwise return 1\n\tlet marker = try FilePath.from(\"finished.txt\") otherwise return 1\n\tvar polls = 0 as Count\n\n\ttry File.writeText(started, content: \"running\") otherwise return 1\n\n\twhile not File.exists(gate) and polls < 2400 'untilReleased'\n\t\tsleep(50)\n\t\tpolls = polls + 1\n\tend 'untilReleased'\n\n\ttry File.writeText(marker, content: \"done\") otherwise return 1\n\tBuild.build(\".\")\n\treturn 0\nend 'build'\n"
 export let UngatedManifestSource = "export function build() returns ExitCode\n\tBuild.build(\".\")\n\treturn 0\nend 'build'\n"
 
 let GatedFinishBoundMs = 30000
 let GatedFinishPollMs = 200
+let GatedStartPollMs = 25
+
+export function awaitGatedManifestRunning(project FilePath) throws LspClientError
+	let started = project.join(GatedStartedFileName)
+	let begun = Clock.nowMs()
+
+	while not File.exists(started) and Clock.elapsedMs(begun) < ProjectCheckPublishFailureBoundMs 'untilItRuns'
+		sleep(GatedStartPollMs)
+	end 'untilItRuns'
+
+	if not File.exists(started) 'neverRan'
+		throw LspClientError.transportFailed("the project file in {project.toString()} never started within {ProjectCheckPublishFailureBoundMs} ms")
+	end 'neverRan'
+end 'awaitGatedManifestRunning'
 
 export function releaseGatedManifest(project FilePath)
 	writeCorpusFile(project, fileName: GatedReleaseFileName, content: "go")
+
+	if not File.exists(project.join(GatedStartedFileName)) 'neverRan'
+		return
+	end 'neverRan'
 
 	let marker = project.join(GatedFinishedFileName)
 	let started = Clock.nowMs()
