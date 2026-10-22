@@ -1893,6 +1893,9 @@ export type MoveSite
 	export var destinationKind = MoveDestinationKind.mutableName
 	export var readAfter = false
 	export var readInALaterIteration = false
+	// The value was built at the store, so only what it holds is judged; such a site is filed only when
+	// the value may hold a record.
+	export var freshAtTheTop = false
 	export var readLine = 0 as LineNumber
 	export var readColumn = 0 as ColumnNumber
 	export var refused = false
@@ -1935,6 +1938,7 @@ export type MoveSite
 		writer.unsigned(self.destinationKind.ordinal as CacheUnsigned)
 		writer.flag(self.readAfter)
 		writer.flag(self.readInALaterIteration)
+		writer.flag(self.freshAtTheTop)
 		writer.unsigned(self.readLine as CacheUnsigned)
 		writer.unsigned(self.readColumn as CacheUnsigned)
 		writer.flag(self.refused)
@@ -1953,16 +1957,17 @@ export type MoveSite
 		let f_destinationKind = try cacheReadMoveDestinationKind(reader)
 		let f_readAfter = try reader.flag()
 		let f_readInALaterIteration = try reader.flag()
+		let f_freshAtTheTop = try reader.flag()
 		let f_readLine = (try reader.unsigned()) as LineNumber
 		let f_readColumn = (try reader.unsigned()) as ColumnNumber
 		let f_refused = try reader.flag()
 		let f_refusal = try reader.bytes()
 
-		return Self{value: f_value, source: f_source, sourceValue: f_sourceValue, sourceIsMutable: f_sourceIsMutable, destination: f_destination, line: f_line, column: f_column, token: f_token, destinationKind: f_destinationKind, readAfter: f_readAfter, readInALaterIteration: f_readInALaterIteration, readLine: f_readLine, readColumn: f_readColumn, refused: f_refused, refusal: f_refusal}
+		return Self{value: f_value, source: f_source, sourceValue: f_sourceValue, sourceIsMutable: f_sourceIsMutable, destination: f_destination, line: f_line, column: f_column, token: f_token, destinationKind: f_destinationKind, readAfter: f_readAfter, readInALaterIteration: f_readInALaterIteration, freshAtTheTop: f_freshAtTheTop, readLine: f_readLine, readColumn: f_readColumn, refused: f_refused, refusal: f_refusal}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize120
-		return sizeof(MoveSite) as CacheSize120
+	static function cacheLayoutBytes() returns CacheSize128
+		return sizeof(MoveSite) as CacheSize128
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

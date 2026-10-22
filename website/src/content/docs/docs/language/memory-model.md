@@ -154,7 +154,9 @@ The rules:
   - a value type;
   - or moved in, either as a sole-owned value or as a `var` at its last use.
 
-  A mutable value that is still shared elsewhere is **E3078**. The same rule applies to a parameter whose callee
+  A mutable value that is still shared elsewhere is **E3078**. A sole-owned tuple or record is moved in only
+  when the records it holds are unwritten too: one that holds a record a `var` of the function, or a module
+  `var`, may still write is **E3078**. The same rule applies to a parameter whose callee
   stores it into a `let` field; the compiler reads that from the callee's body.
 - **`let b = a`, where `a` is a `var`, moves `a`.** `b` is then the record's only holder, and read-only.
 - **Keys are read-only.** A stored Map key or Set element cannot be written through its container, and a key read

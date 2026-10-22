@@ -380,6 +380,7 @@ let AliasLivenessColumns = [ProvenanceColumn.identity, ProvenanceColumn.inside]
 let ViewReachColumns = [ProvenanceColumn.identity, ProvenanceColumn.inside, ProvenanceColumn.holds, ProvenanceColumn.deepHolds]
 let HandedOffRecordColumns = [ProvenanceColumn.identity, ProvenanceColumn.holds, ProvenanceColumn.deepHolds]
 let LetReachColumns = [ProvenanceColumn.identity, ProvenanceColumn.inside, ProvenanceColumn.holds, ProvenanceColumn.storedHolds, ProvenanceColumn.deepHolds, ProvenanceColumn.holdsWithin]
+let StoredContentsColumns = [ProvenanceColumn.holds, ProvenanceColumn.storedHolds, ProvenanceColumn.deepHolds, ProvenanceColumn.holdsWithin]
 let ModuleVariableSubject = "a module variable"
 let MaxFreshRounds = 16
 let ReadOnlySlotKindCount = 3
@@ -396,6 +397,13 @@ let SlotAccessFunctionShift = 32 as StoreSlotKey
 let SlotAccessOpMask = 0xFFFFFFFF as StoreSlotKey
 let NoSlotAccess = 0xFFFFFFFFFFFFFFFF as StoreSlotKey
 let LetFieldSlotInstanceBit = 0x4000000000000000 as StoreSlotKey
+
+// `storedContents` asks only what a stored value holds. The stored record itself is the move door's
+// question, so its own identity, what it lies inside and the holder it was placed within are not asked.
+enum LetReach
+	boundValue
+	storedContents
+end 'LetReach'
 
 enum LetSlotKind
 	none
@@ -621,6 +629,20 @@ type RootSets
 	function hasRank(set ElementIndex, rank ElementIndex) returns bool
 		return maskHasParam(self.wordAt(set, word: (rank shr RootWordShift) as MaskWordCount), param: (rank and RootBitIndexMask) as ParamCount)
 	end 'hasRank'
+
+	function intersects(set ElementIndex, other ElementIndex) returns bool
+		var chunk = try self.first(set) otherwise return false
+
+		while true 'eachWord'
+			if (self.wordOf(chunk) and self.wordAt(other, word: self.indexOf(chunk))) != NoParamPositions 'sharesARoot'
+				return true
+			end 'sharesARoot'
+
+			chunk = try self.next(chunk) otherwise break
+		end 'eachWord'
+
+		return false
+	end 'intersects'
 
 	function addRank(set ElementIndex, rank ElementIndex)
 		_ = self.orWordFrom(RootLinkSlot.setHead, at: set, index: (rank shr RootWordShift) as MaskWordCount, word: maskWithParam(NoParamPositions, param: (rank and RootBitIndexMask) as ParamCount))
@@ -5122,9 +5144,19 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'firstKeptRoot'
 
 	function decideLetFieldValue(func IrFunction, index ElementIndex, site MoveSite, into ReadOnlyRootKind)
-		if site.value < valueIdAtParamPosition(func.paramCount) or self.valueGivesAStoreNoWriter(func, value: site.value) or self.deferToInstantiation(func, value: site.value, owner: index) 'callersOwnNoWriterOrDeferred'
+		if site.value < valueIdAtParamPosition(func.paramCount) or self.valueGivesAStoreNoWriter(func, value: site.value) 'callersOwnOrNoWriter'
 			return
-		end 'callersOwnNoWriterOrDeferred'
+		end 'callersOwnOrNoWriter'
+
+		if site.freshAtTheTop 'builtHere'
+			_ = self.bindingsTraceOf(func, index: index)
+			self.refuseWritableContentsStored(func, site: site, into: into)
+			return
+		end 'builtHere'
+
+		if self.deferToInstantiation(func, value: site.value, owner: index) 'decidedWhereItIsInstantiated'
+			return
+		end 'decidedWhereItIsInstantiated'
 
 		_ = self.bindingsTraceOf(func, index: index)
 
@@ -5134,17 +5166,42 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'aViewIsKept'
 
 		if self.acceptsAsSole(func, value: site.value) 'soleToTheStore'
+			self.refuseWritableContentsStored(func, site: site, into: into)
 			return
 		end 'soleToTheStore'
 
 		self.noteKeptReadOnly(func, value: site.value, at: positionKey(site.line, column: site.column))
 
-		if self.keptValueIsReadOnly(func, value: site.value) or (not self.valueIsHandedOut(func, value: site.value) and self.valueTakesNoOtherWriter(func, value: site.value, placedByTheStore: true)) 'readOnlyOrNoOtherWriter'
+		if self.keptValueIsReadOnly(func, value: site.value) 'readOnly'
 			return
-		end 'readOnlyOrNoOtherWriter'
+		end 'readOnly'
+
+		if not self.valueIsHandedOut(func, value: site.value) and self.valueTakesNoOtherWriter(func, value: site.value, placedByTheStore: true) 'noOtherWriter'
+			self.refuseWritableContentsStored(func, site: site, into: into)
+			return
+		end 'noOtherWriter'
 
 		self.refuse(site.line, column: site.column, code: ErrorCode.semanticVarFromImmutable, message: deepLetKeptStoreMessage(into, subject: "a value other names may still write", place: String.from(site.destination)))
 	end 'decideLetFieldValue'
+
+	function refuseWritableContentsStored(func IrFunction, site MoveSite, into ReadOnlyRootKind)
+		let through = try self.writableStateReachedBy(func, value: site.value, token: site.token) otherwise return
+		self.refuse(site.line, column: site.column, code: ErrorCode.semanticVarFromImmutable, message: deepLetKeptStoreMessage(into, subject: deepLetWritableContentsSubject(through), place: String.from(site.destination)))
+	end 'refuseWritableContentsStored'
+
+	function writableStateReachedBy(func IrFunction, value ValueId, token ElementIndex) returns String throws AbsentError
+		self.indexDefinitions(func, ir: self.module)
+		self.askAtDoor(token)
+
+		let reached = try self.firstWritableStateReached(func, value: value, kinds: self.recordKindsWithinValue(func, value: value), reach: LetReach.storedContents) otherwise 'nothingWritable'
+			self.leaveDoor()
+			throw AbsentError.absent
+		end 'nothingWritable'
+
+		let through = self.writableRootName(func, rank: reached)
+		self.leaveDoor()
+		return through
+	end 'writableStateReachedBy'
 
 	// Does the body at `index` write through a record — a field, a receiver, an argument a callee writes — while it
 	// may be handed one a module-level `let` holds?
@@ -5700,7 +5757,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			end 'notALetBinding'
 
 			self.askAtDoor(try self.rootDeclTokens.get(rank) otherwise panic("ProvenanceTracer.checkLetBindings: rootDeclTokens.get OOB at {rank}"))
-			let reached = try self.firstWritableStateReached(func, value: self.rootValueAt(rank), rank: rank) otherwise continue
+			let reached = try self.firstWritableStateReached(func, value: self.rootValueAt(rank), kinds: try self.rootRecordKinds.get(rank) otherwise panic("ProvenanceTracer.checkLetBindings: rootRecordKinds.get OOB at {rank}"), reach: LetReach.boundValue) otherwise continue
 			try self.letRefused.set(rank, value: true) otherwise panic("ProvenanceTracer.checkLetBindings: letRefused.set OOB at {rank}")
 
 			if alreadyReported 'queuedByAnEarlierTrace'
@@ -5714,7 +5771,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		self.leaveDoor()
 	end 'checkLetBindings'
 
-	function firstWritableStateReached(func IrFunction, value ValueId, rank ElementIndex) returns ElementIndex throws AbsentError
+	function firstWritableStateReached(func IrFunction, value ValueId, kinds HeldRecordKinds, reach LetReach) returns ElementIndex throws AbsentError
 		if self.valueIsInertAtADoor(func, value: value) or self.permanentViewOf(value) != PermanentView.none 'nothingWritableCanBeReached'
 			throw AbsentError.absent
 		end 'nothingWritableCanBeReached'
@@ -5728,13 +5785,15 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 		var found = beyondEveryRank
 
-		for column in LetReachColumns 'eachColumn'
-			found = self.lowestWritableRankIn(func, column: column, value: value, rank: rank, skipped: varsOwnRank, bound: found)
+		let columns = LetReachColumns if reach == LetReach.boundValue else StoredContentsColumns
+
+		for column in columns 'eachColumn'
+			found = self.lowestWritableRankIn(func, column: column, value: value, kinds: kinds, skipped: varsOwnRank, own: value, reach: reach, bound: found)
 		end 'eachColumn'
 
-		found = self.lowestWritableRankPlacedByTheCall(func, value: value, rank: rank, skipped: varsOwnRank, bound: found)
+		found = self.lowestWritableRankPlacedByTheCall(func, value: value, kinds: kinds, skipped: varsOwnRank, reach: reach, bound: found)
 
-		if varsOwnRank < found and self.sets.hasWords(self.setOf(ProvenanceColumn.placedWithin, value: value)) 'theVarsRecordWasStoredElsewhere'
+		if reach == LetReach.boundValue and varsOwnRank < found and self.sets.hasWords(self.setOf(ProvenanceColumn.placedWithin, value: value)) 'theVarsRecordWasStoredElsewhere'
 			found = varsOwnRank
 		end 'theVarsRecordWasStoredElsewhere'
 
@@ -5747,11 +5806,11 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 	function valueReachesWritableState(func IrFunction, value ValueId, rank ElementIndex) returns bool
 		self.indexDefinitions(func, ir: self.module)
-		_ = try self.firstWritableStateReached(func, value: value, rank: rank) otherwise return false
+		_ = try self.firstWritableStateReached(func, value: value, kinds: try self.rootRecordKinds.get(rank) otherwise panic("ProvenanceTracer.valueReachesWritableState: rootRecordKinds.get OOB at {rank}"), reach: LetReach.boundValue) otherwise return false
 		return true
 	end 'valueReachesWritableState'
 
-	function lowestWritableRankPlacedByTheCall(func IrFunction, value ValueId, rank ElementIndex, skipped ElementIndex, bound ElementIndex) returns ElementIndex
+	function lowestWritableRankPlacedByTheCall(func IrFunction, value ValueId, kinds HeldRecordKinds, skipped ElementIndex, reach LetReach, bound ElementIndex) returns ElementIndex
 		let defining = try self.definingOpIndexOf(value) otherwise return bound
 		view op = try self.module.ops.get(defining) otherwise panic("ProvenanceTracer.lowestWritableRankPlacedByTheCall: op {defining} not in module.ops")
 		view callee = try freshCalleeOf(op) otherwise return bound
@@ -5773,19 +5832,19 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			let argument = try calledArgumentAt(op, sig: sig, position: position) otherwise continue
 
 			if let own = try self.writableRankOf(argument) 'aVarsOwnRecord'
-				if own < lowest and not self.varMovedBeforeDoor(own) 'lower'
+				if own < lowest and not self.varMovedBeforeDoor(own) and not self.isOutsideTheStoredContents(value, reach: reach, candidate: own) 'lower'
 					lowest = own
 				end 'lower'
 			end 'aVarsOwnRecord'
 
-			lowest = self.lowestWritableRankIn(func, column: ProvenanceColumn.identity, value: argument, rank: rank, skipped: skipped, bound: lowest)
-			lowest = self.lowestWritableRankIn(func, column: ProvenanceColumn.inside, value: argument, rank: rank, skipped: skipped, bound: lowest)
+			lowest = self.lowestWritableRankIn(func, column: ProvenanceColumn.identity, value: argument, kinds: kinds, skipped: skipped, own: value, reach: reach, bound: lowest)
+			lowest = self.lowestWritableRankIn(func, column: ProvenanceColumn.inside, value: argument, kinds: kinds, skipped: skipped, own: value, reach: reach, bound: lowest)
 		end 'eachParameter'
 
 		return lowest
 	end 'lowestWritableRankPlacedByTheCall'
 
-	function lowestWritableRankIn(func IrFunction, column ProvenanceColumn, value ValueId, rank ElementIndex, skipped ElementIndex, bound ElementIndex) returns ElementIndex
+	function lowestWritableRankIn(func IrFunction, column ProvenanceColumn, value ValueId, kinds HeldRecordKinds, skipped ElementIndex, own ValueId, reach LetReach, bound ElementIndex) returns ElementIndex
 		var lowest = bound
 
 		if var chunk = try self.sets.first(self.setOf(column, value: value)) 'hasWords'
@@ -5803,7 +5862,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 							break
 						end 'pastTheLowest'
 
-						if maskHasParam(candidates, param: bit as ParamCount) and candidate != skipped and not (self.varMovedBeforeDoor(candidate) if column == ProvenanceColumn.placedWithin else self.varGoneBeforeDoor(candidate)) and not self.isTheParameterItselfWrittenOnlyByACall(column, value: value, candidate: candidate) and self.writableRankAdmits(func, column: column, value: value, rank: rank, candidate: candidate) 'admitted'
+						if maskHasParam(candidates, param: bit as ParamCount) and candidate != skipped and not self.isOutsideTheStoredContents(own, reach: reach, candidate: candidate) and not (self.varMovedBeforeDoor(candidate) if column == ProvenanceColumn.placedWithin else self.varGoneBeforeDoor(candidate)) and not self.isTheParameterItselfWrittenOnlyByACall(column, value: value, candidate: candidate) and self.writableRankAdmits(func, column: column, value: value, kinds: kinds, candidate: candidate) 'admitted'
 							lowest = candidate
 							break
 						end 'admitted'
@@ -5817,6 +5876,31 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return lowest
 	end 'lowestWritableRankIn'
 
+	// A root that is the stored record itself, or the holder it was placed within, writes the record and
+	// not its contents. Parameter and `let` roots are not counted: call summaries are conservative about
+	// what they reach, and counting them refuses stores that are sound.
+	function isOutsideTheStoredContents(own ValueId, reach LetReach, candidate ElementIndex) returns bool
+		if reach != LetReach.storedContents 'aBoundValue'
+			return false
+		end 'aBoundValue'
+
+		if candidate < self.firstWritableValueRank 'aParameterOrALet'
+			return true
+		end 'aParameterOrALet'
+
+		let storedRecord = self.setOf(ProvenanceColumn.identity, value: own)
+
+		if self.sets.hasRank(self.setOf(ProvenanceColumn.placedWithin, value: own), rank: candidate) 'itsHolder'
+			return true
+		end 'itsHolder'
+
+		if candidate >= self.writableRank 'moduleVarStorage'
+			return self.sets.hasRank(storedRecord, rank: candidate)
+		end 'moduleVarStorage'
+
+		return self.sets.intersects(storedRecord, other: self.setOf(ProvenanceColumn.identity, value: self.rootValueAt(candidate)))
+	end 'isOutsideTheStoredContents'
+
 	function isTheParameterItselfWrittenOnlyByACall(column ProvenanceColumn, value ValueId, candidate ElementIndex) returns bool
 		if column != ProvenanceColumn.identity or candidate >= self.writableRank or self.rootValueAt(candidate) != value 'notTheParameterAlias'
 			return false
@@ -5825,8 +5909,12 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return not maskHasParam(try self.mutablePlaceWords.get(candidate shr RootWordShift) otherwise panic("ProvenanceTracer.isTheParameterItselfWrittenOnlyByACall: mutablePlaceWords.get OOB at {candidate}"), param: (candidate and RootBitIndexMask) as ParamCount)
 	end 'isTheParameterItselfWrittenOnlyByACall'
 
-	function writableRankAdmits(func IrFunction, column ProvenanceColumn, value ValueId, rank ElementIndex, candidate ElementIndex) returns bool
+	function writableRankAdmits(func IrFunction, column ProvenanceColumn, value ValueId, kinds HeldRecordKinds, candidate ElementIndex) returns bool
 		if candidate == self.writableRank 'moduleVarStorage'
+			if columnNamesWhatItHolds(column) 'whatTheValueHolds'
+				return kinds.overlaps(self.moduleVarKinds)
+			end 'whatTheValueHolds'
+
 			return self.moduleVarKinds.mayHold(try self.heldRecordKindOf(func, value: value) otherwise return true)
 		end 'moduleVarStorage'
 
@@ -5836,8 +5924,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			placedWithin gives self.kindsMayHoldValue(func, kinds: try self.rootRecordKinds.get(candidate) otherwise panic("ProvenanceTracer.writableRankAdmits: rootRecordKinds.get OOB at {candidate}"), value: value)
 			holds or
 			storedHolds or
-			deepHolds gives self.kindsMayHoldValue(func, kinds: try self.rootRecordKinds.get(rank) otherwise panic("ProvenanceTracer.writableRankAdmits: rootRecordKinds.get OOB at {rank}"), value: self.rootValueAt(candidate))
-			holdsWithin gives (try self.rootRecordKinds.get(rank) otherwise panic("ProvenanceTracer.writableRankAdmits: rootRecordKinds.get OOB at {rank}")).overlaps(try self.rootRecordKinds.get(candidate) otherwise panic("ProvenanceTracer.writableRankAdmits: rootRecordKinds.get OOB at {candidate}"))
+			deepHolds gives self.kindsMayHoldValue(func, kinds: kinds, value: self.rootValueAt(candidate))
+			holdsWithin gives kinds.overlaps(try self.rootRecordKinds.get(candidate) otherwise panic("ProvenanceTracer.writableRankAdmits: rootRecordKinds.get OOB at {candidate}"))
 			shares or
 			storedDeep panic("ProvenanceTracer.writableRankAdmits: the '{column.name}' set says nothing about what a record holds or lies within")
 		end 'column'
@@ -9600,6 +9688,10 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'aNamedVar'
 
 		if self.valueTakesNoOtherWriter(func, value: value, placedByTheStore: false) 'soleOrAParameter'
+			if let through = try self.writableStateReachedBy(func, value: value, token: self.callTokenAtPosition(func, line: call.line, column: call.column)) 'contentsStayWritable'
+				self.refuseLetFieldKeptArgument(func, note: note, value: value, into: into, subject: deepLetWritableContentsSubject(through))
+			end 'contentsStayWritable'
+
 			return
 		end 'soleOrAParameter'
 
@@ -10333,6 +10425,20 @@ function opProducesAnImage(op MaxonOp) returns bool
 		holdEnd gives false
 	end 'op'
 end 'opProducesAnImage'
+
+function columnNamesWhatItHolds(column ProvenanceColumn) returns bool
+	return match column 'column'
+		holds or
+		storedHolds or
+		deepHolds or
+		holdsWithin gives true
+		identity or
+		inside or
+		placedWithin gives false
+		shares or
+		storedDeep panic("columnNamesWhatItHolds: the '{column.name}' set says nothing about what a record holds or lies within")
+	end 'column'
+end 'columnNamesWhatItHolds'
 
 function freshCalleeOf(op MaxonOp) returns ByteArray throws AbsentError
 	match op 'op'

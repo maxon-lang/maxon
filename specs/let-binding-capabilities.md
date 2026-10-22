@@ -1647,3 +1647,426 @@ end 'main'
 ```maxoncstderr
 error E3159: <fragment>:26:2: cannot write through 'r', which may be a record read out of a `let` field that a call or a merge handed back; nothing reachable through a `let` field may be written; use clone()
 ```
+
+<!-- test: let-binding-capabilities.error.a-fresh-tuple-holding-a-writable-record-is-refused-by-a-let-field -->
+The tuple is fresh, but its second column is the record `id(p)` hands back, which is `p`'s, and `bump` writes `p` after the `let` field has been given the tuple.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Frozen
+	export let held as (Box, Box)
+
+	static function create(h (Box, Box)) returns Self
+		return Self{held: h}
+	end 'create'
+end 'Frozen'
+
+function id(b Box) returns Box
+	return b
+end 'id'
+
+function bump(b Box)
+	b.n = b.n + 1
+end 'bump'
+
+function main() returns ExitCode
+	var p = Box.create(5)
+	let fr = Frozen.create((Box.create(1), id(p)))
+	bump(p)
+	print("{fr.held.1.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:30:18: cannot pass a value that reaches 'p', which something may still write, to parameter 'h' of 'Frozen.create', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```
+
+<!-- test: let-binding-capabilities.error.a-fresh-record-holding-a-writable-record-is-refused-by-a-let-field -->
+The `Wrap` is fresh, but its `b` field is the record `id(p)` hands back, which is `p`'s, and `bump` writes `p` after the `let` field has been given the `Wrap`.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Wrap
+	export var a as Box
+	export var b as Box
+
+	static function create(a Box, b Box) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Wrap'
+
+type Frozen
+	export let held as Wrap
+
+	static function create(h Wrap) returns Self
+		return Self{held: h}
+	end 'create'
+end 'Frozen'
+
+function id(b Box) returns Box
+	return b
+end 'id'
+
+function bump(b Box)
+	b.n = b.n + 1
+end 'bump'
+
+function main() returns ExitCode
+	var p = Box.create(5)
+	let fr = Frozen.create(Wrap.create(Box.create(1), b: id(p)))
+	bump(p)
+	print("{fr.held.b.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:39:18: cannot pass a value that reaches 'p', which something may still write, to parameter 'h' of 'Frozen.create', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```
+
+<!-- test: let-binding-capabilities.a-fresh-tuple-of-fresh-records-is-accepted-by-a-let-field -->
+Both columns are records the tuple alone holds, so the `let` field keeps nothing another name can write.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Frozen
+	export let held as (Box, Box)
+
+	static function create(h (Box, Box)) returns Self
+		return Self{held: h}
+	end 'create'
+end 'Frozen'
+
+function main() returns ExitCode
+	let fr = Frozen.create((Box.create(1), Box.create(2)))
+	print("{fr.held.0.n} {fr.held.1.n}\n")
+	return 0
+end 'main'
+```
+```stdout
+1 2
+```
+```exitcode
+0
+```
+
+<!-- test: let-binding-capabilities.error.a-fresh-tuple-holding-a-writable-record-is-refused-by-a-let-field-literal -->
+The factory stores the fresh tuple into its own `let` field directly, and `bump` writes `p` after the store.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Frozen
+	export let held as (Box, Box)
+
+	static function build() returns Self
+		var p = Box.create(5)
+		let f = Self{held: (Box.create(1), id(p))}
+		bump(p)
+		return f
+	end 'build'
+end 'Frozen'
+
+function id(b Box) returns Box
+	return b
+end 'id'
+
+function bump(b Box)
+	b.n = b.n + 1
+end 'bump'
+
+function main() returns ExitCode
+	let fr = Frozen.build()
+	print("{fr.held.1.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:17:16: cannot store a value that reaches 'p', which something may still write, into a `let` field 'Frozen.held': a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```
+
+<!-- test: let-binding-capabilities.a-fresh-generic-container-kept-by-a-let-field-is-accepted-for-a-writable-item -->
+The `let` field holds an empty array of its own, so a `Bag` of a type with a `var` field keeps nothing anything else can write.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias CounterBag = Bag with Counter
+
+type Counter
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Counter'
+
+type Bag uses Item
+	typealias ItemArray = Array with Item
+
+	let kept as ItemArray
+
+	static function create() returns Self
+		return Self{kept: ItemArray.create()}
+	end 'create'
+
+	function size() returns Count
+		return self.kept.count() as Count
+	end 'size'
+end 'Bag'
+
+function main() returns ExitCode
+	let bag = CounterBag.create()
+	print("{bag.size()}\n")
+	return 0
+end 'main'
+```
+```stdout
+0
+```
+```exitcode
+0
+```
+
+<!-- test: let-binding-capabilities.a-var-never-used-again-is-moved-into-a-fresh-record-kept-by-a-let-field -->
+`q` is written before it is handed over and never named again, so nothing can write the record the `let` field ends up holding.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Wrap
+	export var a as Box
+	export var b as Box
+
+	static function create(a Box, b Box) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Wrap'
+
+type Frozen
+	export let held as Wrap
+
+	static function create(h Wrap) returns Self
+		return Self{held: h}
+	end 'create'
+end 'Frozen'
+
+function bump(b Box)
+	b.n = b.n + 1
+end 'bump'
+
+function main() returns ExitCode
+	var q = Box.create(2)
+	bump(q)
+	let fr = Frozen.create(Wrap.create(Box.create(1), b: q))
+	print("{fr.held.b.n}\n")
+	return 0
+end 'main'
+```
+```stdout
+3
+```
+```exitcode
+0
+```
+
+<!-- test: let-binding-capabilities.a-var-never-used-again-is-moved-into-a-fresh-record-bound-by-a-let -->
+The same hand-over into a `let` binding: `q` is dead after the `Wrap` takes it.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Wrap
+	export var a as Box
+	export var b as Box
+
+	static function create(a Box, b Box) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Wrap'
+
+function bump(b Box)
+	b.n = b.n + 1
+end 'bump'
+
+function main() returns ExitCode
+	var q = Box.create(2)
+	bump(q)
+	let w = Wrap.create(Box.create(1), b: q)
+	print("{w.b.n}\n")
+	return 0
+end 'main'
+```
+```stdout
+3
+```
+```exitcode
+0
+```
+
+<!-- test: let-binding-capabilities.error.a-fresh-tuple-holding-a-module-var-is-refused-by-a-let-field -->
+`gBox` is module storage that `main` writes after the `let` field has been given the tuple.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Frozen
+	export let held as (Box, Box)
+
+	static function create() returns Self
+		let f = Self{held: (Box.create(1), gBox)}
+		gBox.n = 9
+		return f
+	end 'create'
+end 'Frozen'
+
+var gBox = Box.create(5)
+
+function main() returns ExitCode
+	let fr = Frozen.create()
+	print("{fr.held.1.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:16:16: cannot store a value that reaches 'a module variable', which something may still write, into a `let` field 'Frozen.held': a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```
+
+<!-- test: let-binding-capabilities.error.a-let-tuple-holding-a-module-var-is-refused -->
+The tuple is bound with `let`, and `gBox` is written after it.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+var gBox = Box.create(5)
+
+function main() returns ExitCode
+	let t = (Box.create(1), gBox)
+	gBox.n = 9
+	print("{t.1.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3188: <fragment>:15:6: cannot bind `let` 't' to a value reached through 'a module variable', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```
+
+<!-- test: let-binding-capabilities.a-let-bound-to-the-awaited-result-of-a-promise-removed-from-a-var-array-is-accepted -->
+`remove` moves the promise out of `replies`, so the record `await` hands back no longer lies inside the array that `dispatch` keeps pushing to.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Reply
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Reply'
+
+typealias ReplyPromise = Promise with Reply
+typealias ReplyPromises = Array with ReplyPromise
+
+function answer(n Count) returns Reply
+	return Reply.create(n)
+end 'answer'
+
+function dispatch(n Count, replies ReplyPromises)
+	replies.push(async answer(n))
+end 'dispatch'
+
+function drain() returns Count
+	var replies = ReplyPromises.create()
+	var total = 0 as Count
+
+	for n in 1 to 3 'each'
+		dispatch(n as Count, replies: replies)
+	end 'each'
+
+	while replies.count() > 0 'serveWhoeverFinishedFirst'
+		let ready = replies.awaitAny()
+		let reply = try replies.remove(ready) otherwise panic("awaitAny answered a slot of this very array")
+		let result = await reply
+		total = total + result.n
+	end 'serveWhoeverFinishedFirst'
+
+	return total
+end 'drain'
+
+function main() returns ExitCode
+	print("{drain()}\n")
+	return 0
+end 'main'
+```
+```stdout
+6
+```
+```exitcode
+0
+```

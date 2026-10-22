@@ -22177,7 +22177,7 @@ export type Parser
 			if freshReturnForwards.count() == 0 'everyReturnBuiltItsOwn'
 				bodyFacts.push(SweptBodyFactEntry.create(funcName, takesReceiver: takesReceiver, fact: SweptBodyFact.returnsAFreshRecord))
 			end 'everyReturnBuiltItsOwn' else if self.noForwardHeadIsBoundHere(forwardHeads, forwardHeadsAt: forwardHeadsAt, bodyStart: bodyStart, paramNames: paramNames) 'someReturnHandedTheCalleesBack'
-				bodyFacts.push(SweptBodyFactEntry.create(funcName, takesReceiver: takesReceiver, fact: SweptBodyFact.returnsAFreshRecordIfCalleeDoes(freshReturnForwards)))
+				bodyFacts.push(SweptBodyFactEntry.create(funcName, takesReceiver: takesReceiver, fact: SweptBodyFact.returnsAFreshRecordIfCalleeDoes(freshReturnForwards.clone())))
 			end 'someReturnHandedTheCalleesBack'
 		end 'returnsAFreshRecord'
 
@@ -37455,6 +37455,18 @@ export type Parser
 	function valueIsNoRecordAWriteReaches(value ValueId) returns bool
 		return not self.valueMayNameARecord(value) or self.valueIsAMintedStringLiteral(value) or typeIsPromiseStorage(self.signatures, t: self.typeOf(value))
 	end 'valueIsNoRecordAWriteReaches'
+
+	function valueHoldsNoRecordWithin(value ValueId) returns bool
+		if self.tagOf(value) == ValueTypeTag.genericInstance 'anInstance'
+			return self.signatures.recordKindsWithinInstance(self.valueInstanceId(value)).holdsNothing()
+		end 'anInstance'
+
+		if not self.signatures.tagMayNameAggregate(self.tagOf(value)) 'anyOtherKind'
+			return false
+		end 'anyOtherKind'
+
+		return self.signatures.recordKindsWithinAggregate(self.valueTypeName(value)).holdsNothing()
+	end 'valueHoldsNoRecordWithin'
 
 	function valueMayNameARecord(value ValueId) returns bool
 		return self.valueIsManagedHeap(value) or self.tagOf(value) == ValueTypeTag.typeParameter
@@ -69055,7 +69067,7 @@ export type Parser
 
 		if layout.fieldIsMutable(index) 'aVarField'
 			if readOnly and self.valueIsOpaque(value) 'decidedWhereItIsInstantiated'
-				self.noteLetFieldValueSite(value, destination: site.place, into: ReadOnlyRootKind.letField, anchor: site.anchor)
+				self.noteLetFieldValueSite(value, destination: site.place, into: ReadOnlyRootKind.letField, anchor: site.anchor, freshAtTheTop: false)
 			end 'decidedWhereItIsInstantiated' else if readOnly and not self.valueMayAliasAnImmutableGlobal(value) 'aReadOnlyValueIntoAVar'
 				try self.refuseStoreOfReadOnly(value, place: site.place, anchor: site.anchor)
 			end 'aReadOnlyValueIntoAVar' else 'aWritableValueIntoAVar'
@@ -69092,7 +69104,7 @@ export type Parser
 			var binding = self.bodyState.scope.getInfo(localName)
 
 			if binding.isSelfField and self.valueIsOpaque(value) 'decidedWhereItIsInstantiated'
-				self.noteLetFieldValueSite(value, destination: place, into: into, anchor: anchor)
+				self.noteLetFieldValueSite(value, destination: place, into: into, anchor: anchor, freshAtTheTop: false)
 				return
 			end 'decidedWhereItIsInstantiated'
 
@@ -69106,21 +69118,29 @@ export type Parser
 			end 'aParameter'
 
 			if not binding.isMutable() and not binding.elementWritable 'aLocalLet'
-				self.noteLetFieldValueSite(value, destination: place, into: into, anchor: anchor)
+				self.noteLetFieldValueSite(value, destination: place, into: into, anchor: anchor, freshAtTheTop: false)
 				return
 			end 'aLocalLet'
 
 			self.noteLetFieldMove(value, binding: binding, destination: place, into: into, anchor: anchor)
-			self.noteLetFieldValueSite(value, destination: place, into: into, anchor: anchor)
+			self.noteLetFieldValueSite(value, destination: place, into: into, anchor: anchor, freshAtTheTop: false)
 			return
 		end 'aBareLocal'
 
-		if self.expressionImmutableBlame(self.tokenAt(valueStart), valueStart: valueStart, value: value).isBlamed() or self.valueIsSolelyOwnedHere(value) 'readOnlyOrFresh'
+		if self.expressionImmutableBlame(self.tokenAt(valueStart), valueStart: valueStart, value: value).isBlamed() 'readOnly'
 			return
-		end 'readOnlyOrFresh'
+		end 'readOnly'
+
+		if self.valueIsSolelyOwnedHere(value) 'freshAtTheTop'
+			if not self.valueHoldsNoRecordWithin(value) 'contentsToJudge'
+				self.noteLetFieldValueSite(value, destination: place, into: into, anchor: anchor, freshAtTheTop: true)
+			end 'contentsToJudge'
+
+			return
+		end 'freshAtTheTop'
 
 		if self.valueIsOwnedHeap(value) or self.valueIsOpaque(value) 'judgedOnceEveryBodyIsParsed'
-			self.noteLetFieldValueSite(value, destination: place, into: into, anchor: anchor)
+			self.noteLetFieldValueSite(value, destination: place, into: into, anchor: anchor, freshAtTheTop: false)
 			return
 		end 'judgedOnceEveryBodyIsParsed'
 
@@ -69131,13 +69151,14 @@ export type Parser
 		return self.tagOf(value) == ValueTypeTag.typeParameter
 	end 'valueIsOpaque'
 
-	function noteLetFieldValueSite(value ValueId, destination String, into ReadOnlyRootKind, anchor Token)
+	function noteLetFieldValueSite(value ValueId, destination String, into ReadOnlyRootKind, anchor Token, freshAtTheTop bool)
 		if self.bodyState.deferredProvenance is self.anchors.noDeferredProvenance 'noBody'
 			return
 		end 'noBody'
 
 		var site = MoveSite.create(value, source: EmptySourceText, sourceValue: value, sourceIsMutable: false, destination: destination.toByteArray(), line: anchor.line, column: anchor.column, token: self.pos)
 		site.destinationKind = moveDestinationOfLetSlot(into, movesAVar: false)
+		site.freshAtTheTop = freshAtTheTop
 		self.bodyState.deferredProvenance.noteMoveSite(site)
 	end 'noteLetFieldValueSite'
 
@@ -86756,7 +86777,7 @@ export type Parser
 		// f64. Same door as the struct literal and the bare self-field spelling.
 		let value = try self.requireFieldType(step.layout, index: index, fieldType: storedType, value: parsed, valueStart: valueStart, anchor: step.lastFieldTok)
 		try self.requireStoreRootStillLive(self.storeRootOf(step.baseBinding), rootTok: step.baseTok)
-		self.noteClosureStoreSite(ClosureStoreDestination.field(step.box, base: ClosureStoreBase.spelled(step.baseBinding.boundValue, name: step.baseBinding.name)), value: value, at: self.tokenAt(valueStart))
+		self.noteClosureStoreSite(ClosureStoreDestination.field(step.box, base: ClosureStoreBase.spelled(step.baseBinding.boundValue, name: step.baseBinding.name.clone())), value: value, at: self.tokenAt(valueStart))
 
 		self.noteWriteThroughAField(func, target: step.box, stored: value, fieldName: step.lastFieldTok.value, baseIndex: baseIndex, lastDotIndex: lastDotIndex, anchor: step.baseTok)
 		try self.emitFieldWrite(target, layout: step.layout, index: index, value: value, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: step.lastFieldTok, range: SourceRange.between(step.baseTok, last: step.lastFieldTok))

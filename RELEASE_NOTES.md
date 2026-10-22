@@ -102,6 +102,13 @@ release's version as its heading when the release is cut.
   generic `describe`) is E3010.
   Fix: drop the cast.
 
+- A fresh tuple or record that holds a record a `var` of the function, or a module `var`, may still write
+  is E3078 when it is stored into a `let` field, a `let` payload or a `readonly` element, or passed to a
+  parameter that stores it there (`Frozen.create((Box.create(1), id(p)))` with `p` a `var` written later);
+  it compiled before, with the `let` field's contents writable through `p`. A `let` bound to a fresh tuple
+  or record holding a module `var`'s record that is written later is E3188 (`let t = (Box.create(1), gBox)`).
+  Fix: hold a `.clone()` of the record, or a record of its own.
+
 ## 0.5.0 — 2026-10-08
 
 ### Breaking changes

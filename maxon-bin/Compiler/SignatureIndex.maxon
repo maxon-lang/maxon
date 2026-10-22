@@ -59,6 +59,12 @@ let TypeArgumentSeparator = ", "
 
 let WrittenInstanceMarker = " with "
 
+function rosterOfOneName(name ByteArray) returns NameRoster
+	var roster = NameRoster.create()
+	roster.push(name)
+	return roster
+end 'rosterOfOneName'
+
 function liftedFunctionHost(segments StringArray, name ByteArray) returns ByteArray
 	return (try segments.get(0) otherwise panic("liftedFunctionHost: splitting '{String.from(name)}' at '{CompilerMintSeparator}' produced no segment")).toByteArray()
 end 'liftedFunctionHost'
@@ -31718,15 +31724,11 @@ export type ProgramSignatures
 		// pre-empt. `byte` is an ordinary identifier and is NOT in this table (`primitiveTagOfTypeName` states
 		// why), so a user's `type byte` still resolves through the struct arm below.
 		if primitiveTagOfTypeName(targetName) != ValueTypeTag.unresolved 'aPrimitive'
-			var itsOwnConformer = NameRoster.create()
-			itsOwnConformer.push(targetName)
-			return ExtensionTarget.typeExtension(NameRoster.create(), conformers: itsOwnConformer)
+			return ExtensionTarget.typeExtension(NameRoster.create(), conformers: rosterOfOneName(targetName))
 		end 'aPrimitive'
 
 		if let layout = try self.registeredLayout(targetName) 'aDeclaredType'
-			var itself = NameRoster.create()
-			itself.push(targetName)
-			return ExtensionTarget.typeExtension(layout.typeParamNames, conformers: itself)
+			return ExtensionTarget.typeExtension(layout.typeParamNames, conformers: rosterOfOneName(targetName))
 		end 'aDeclaredType'
 
 		match lookupInterface(self.settledDeclarations().interfaces, name: targetName) 'iface'
