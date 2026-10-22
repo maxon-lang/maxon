@@ -10692,6 +10692,15 @@ type FieldTypeSpelling
 	end 'create'
 end 'FieldTypeSpelling'
 
+type SlotStoreSite
+	export let place as String
+	export let anchor as Token
+
+	static function create(place String, anchor Token) returns Self
+		return Self{place: place, anchor: anchor}
+	end 'create'
+end 'SlotStoreSite'
+
 union WholeInitializerCast
 	none
 	at(line LineNumber, column ColumnNumber)
@@ -39914,7 +39923,7 @@ export type Parser
 
 		// The same nominal question every other store asks: `structRef == structRef` above agrees for any two
 		// structs, and one gid is every brand of its instance.
-		try self.requireSlotAggregateIdentity(valueType, value: value, placeDoor: FunctionTypeDoor.global, placeName: nameTok.value, placeOwner: SlotOwner.unowned, placeBrand: self.declaredBrand(brand, resolved: valueType), placeSpelling: brand, voice: SlotMismatchVoice.assignedPlace, anchor: nameTok)
+		try self.requireSlotAggregateIdentity(valueType, value: value, placeDoor: FunctionTypeDoor.global, placeName: nameTok.value, placeOwner: SlotOwner.unowned, placeBrand: self.declaredBrand(brand, resolved: valueType, readerFilePath: self.job.path), placeSpelling: brand, voice: SlotMismatchVoice.assignedPlace, anchor: nameTok)
 		self.recordRangeCheckSite(stored, destination: valueType, line: nameTok.line, column: nameTok.column)
 		self.recordAdoptableStore(moduleVarBrandKey(label), declaredBrand: brand, valueType: valueType, value: value, phrase: assignedPlacePhrase(FunctionTypeDoor.global, name: nameTok.value, owner: SlotOwner.unowned), anchor: nameTok)
 
@@ -42017,13 +42026,21 @@ export type Parser
 	// The brand a place declared as `spelled` confers on a value of the `resolved` type: the spelling when it
 	// names a file-scope generic alias and the type is an instance, else nothing. A ranged alias's spelling is
 	// an IDENTITY (`ProgramSignatures.namedIdentityOf`), not a brand, and a primitive brands nothing.
-	function declaredBrand(spelled ByteArray, resolved MaxonType) returns ByteArray
+	function declaredBrand(spelled ByteArray, resolved MaxonType, readerFilePath FilePath) returns ByteArray
 		if maxonTypeTag(resolved) != ValueTypeTag.genericInstance 'notAnInstance'
 			return EmptySourceText
 		end 'notAnInstance'
 
-		return self.brandOfSpelling(spelled)
+		return self.brandOfSpelling(spelled, readerFilePath: readerFilePath)
 	end 'declaredBrand'
+
+	function fieldPlaceBrand(layout StructLayout, index FieldIndex, resolved MaxonType) returns ByteArray
+		return self.declaredBrand(layout.fieldDeclaredBrand(index), resolved: resolved, readerFilePath: layout.declFilePath)
+	end 'fieldPlaceBrand'
+
+	function payloadPlaceBrand(field PayloadField, layout EnumLayout, resolved MaxonType) returns ByteArray
+		return self.declaredBrand(field.declaredBrand, resolved: resolved, readerFilePath: layout.declFilePath)
+	end 'payloadPlaceBrand'
 
 	function declaredParamSpelling(paramTypeStarts TokenIndexArray, position ElementIndex, resolved MaxonType) returns ByteArray
 		let brand = self.declaredBrandAt(paramTypeStartAt(paramTypeStarts, position: position), resolved: resolved)
@@ -42048,7 +42065,7 @@ export type Parser
 		end 'notAnInstance'
 
 		match self.writtenTypeNameAt(typeStart) 'spelling'
-			named(name) then return ownedBrand(self.declaredBrand(name, resolved: resolved))
+			named(name) then return ownedBrand(self.declaredBrand(name, resolved: resolved, readerFilePath: self.job.path))
 			unnamed then return EmptySourceText
 		end 'spelling'
 	end 'declaredBrandAt'
@@ -42070,7 +42087,11 @@ export type Parser
 	//
 	// Two file-scope declarations of one name over ONE instance are two types, so each declaration's mint
 	// brands (`genericAliasMintIsABrand`).
-	function brandOfSpelling(spelled ByteArray) returns ByteArray
+	//
+	// `readerFilePath` is the file that wrote `spelled`: for a stored field or payload, its declaring file.
+	// One spelling names a different alias in another file (a file-private `Numbers`, a qualified
+	// `alpha.Numbers`), so resolved in the reading file it would brand the value with the reader's alias.
+	function brandOfSpelling(spelled ByteArray, readerFilePath FilePath) returns ByteArray
 		if self.signatures.genericAliasMintIsABrand(spelled) 'aDeclarationsOwnMint'
 			return spelled
 		end 'aDeclarationsOwnMint'
@@ -42079,7 +42100,7 @@ export type Parser
 			return EmptySourceText
 		end 'anInnerAliasBrandsNothing'
 
-		return self.brandOfAuthorsAlias(spelled, readerFilePath: self.job.path)
+		return self.brandOfAuthorsAlias(spelled, readerFilePath: readerFilePath)
 	end 'brandOfSpelling'
 
 	// A COMPILER-RESERVED spelling (`__ManagedMemory`, the buffer surface of a byte array) brands nothing:
@@ -59352,6 +59373,7 @@ export type Parser
 			let storage = payloadStorageOf(class)
 			let loaded = self.emitUnionPayloadLoad(scrutBox, field: binding.field, offset: offset, valueType: payloadValueTypeOf(class, declared: declared), storage: storage, range: range)
 			self.wearIndexSpaceAlias(loaded, declared: binding.field.declaredType, scopeFilePath: layout.declFilePath)
+			self.brandValue(loaded, brand: self.payloadPlaceBrand(binding.field, layout: layout, resolved: declared))
 
 			// Whatever the payload's own mutability: a read-only scrutinee is read-only all the way down.
 			if self.valueMayNameARecord(loaded) or self.valueIsPromise(loaded) 'payloadOwnsARecord'
@@ -63413,7 +63435,7 @@ export type Parser
 		// Asked ahead of every conversion rule, because none of them has anything to say about a value that
 		// keeps its representation — and ahead of the container refusal, which is about a DIFFERENT instance.
 		if self.castIsARebrand(value, targetType: targetType) 'aBrandOfTheSameInstance'
-			return self.rebrandValue(value, targetType: targetType, brand: self.declaredBrand(targetTok.value, resolved: targetType), sourceIsBareLocal: sourceIsBareLocal, opTok: asTok)
+			return self.rebrandValue(value, targetType: targetType, brand: self.declaredBrand(targetTok.value, resolved: targetType, readerFilePath: self.job.path), sourceIsBareLocal: sourceIsBareLocal, opTok: asTok)
 		end 'aBrandOfTheSameInstance'
 
 		// The target's ranged-alias declaration, resolved ONCE for every question that needs it — WHICH
@@ -66911,7 +66933,7 @@ export type Parser
 
 		let closeTok = try self.consume(TokenKind.rightParen)
 		view layout = try self.internTupleLayout(elementTypes, brands: elementBrands, anchor: openTok)
-		try self.requireAliasedTupleColumns(layout, elementValues: elementValues, elementStarts: elementStarts, anchor: openTok)
+		try self.requireTupleColumns(layout, elementValues: elementValues, elementStarts: elementStarts, anchor: openTok)
 
 		let literal = try self.emitStructLiteral(layout, fieldValues: elementValues, fieldBareLocal: elementBareLocal, anchor: openTok, range: SourceRange.between(openTok, last: closeTok))
 		self.bodyState.lastTupleLiteral = LastTupleLiteral.built(literal, elements: elementValues)
@@ -69009,7 +69031,8 @@ export type Parser
 	// A MANAGED field returns its value untouched — there is no scalar widening on a pointer, and the
 	// move-in the callers perform is a separate decision made downstream.
 	function requireFieldType(layout StructLayout, index FieldIndex, fieldType MaxonType, value ValueId, valueStart ElementIndex, anchor Token) returns ValueId throws SourceParseError
-		try self.requireStoreMeetsReadOnlyRules(layout, index: index, value: value, valueStart: valueStart, anchor: anchor)
+		let site = self.slotStoreSiteOf(layout, index: index, valueStart: valueStart, anchor: anchor)
+		try self.requireStoreMeetsReadOnlyRules(layout, index: index, value: value, valueStart: valueStart, site: site)
 		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: fieldType, slotScopeFilePath: layout.declFilePath)
 
 		// ⭐⭐ **AN INTERFACE-TYPED FIELD ASKS ITS OWN QUESTION** — it is the one
@@ -69022,7 +69045,7 @@ export type Parser
 
 		if payloadClassIsManaged(class) 'managed'
 			let widened = self.interfaceHandleOf(try self.destinationTemporary(value, declared: fieldType, anchor: anchor), declared: fieldType, first: anchor, last: anchor)
-			try self.requireManagedSlotValueMatches(class, declared: fieldType, value: widened, placeDoor: FunctionTypeDoor.field, placeName: self.fieldNameAt(layout, index: index), placeOwner: SlotOwner.declaredBy(layout.name), placeBrand: self.declaredBrand(layout.fieldDeclaredBrand(index), resolved: fieldType), placeSpelling: self.fieldPlaceSpelling(layout, index: index, fieldType: fieldType), voice: SlotMismatchVoice.assignedPlace, anchor: anchor)
+			try self.requireManagedSlotValueMatches(class, declared: fieldType, value: widened, placeDoor: FunctionTypeDoor.field, placeName: self.fieldNameAt(layout, index: index), placeOwner: SlotOwner.declaredBy(layout.name), placeBrand: self.fieldPlaceBrand(layout, index: index, resolved: fieldType), placeSpelling: self.fieldPlaceSpelling(layout, index: index, fieldType: fieldType), voice: SlotMismatchVoice.assignedPlace, anchor: anchor)
 			return widened
 		end 'managed'
 
@@ -69037,7 +69060,7 @@ export type Parser
 		// named)` AGREES for any two enums, and `h.c = Shade.light` on a `Color` field compiled and stored
 		// (MEASURED 2026-08-06, `requireSlotAggregateIdentity` carries the full note). All three
 		// field doors funnel through here, so the literal and the two writes are closed by the one check.
-		try self.requireSlotAggregateIdentity(self.fieldTypeKeepingAlias(layout, index: index, collapsed: fieldType), value: value, placeDoor: FunctionTypeDoor.field, placeName: self.fieldNameAt(layout, index: index), placeOwner: SlotOwner.declaredBy(layout.name), placeBrand: self.declaredBrand(layout.fieldDeclaredBrand(index), resolved: fieldType), placeSpelling: self.fieldPlaceSpelling(layout, index: index, fieldType: fieldType), voice: SlotMismatchVoice.assignedPlace, anchor: anchor)
+		try self.requireSlotAggregateIdentity(self.fieldTypeKeepingAlias(layout, index: index, collapsed: fieldType), value: value, placeDoor: FunctionTypeDoor.field, placeName: self.fieldNameAt(layout, index: index), placeOwner: SlotOwner.declaredBy(layout.name), placeBrand: self.fieldPlaceBrand(layout, index: index, resolved: fieldType), placeSpelling: self.fieldPlaceSpelling(layout, index: index, fieldType: fieldType), voice: SlotMismatchVoice.assignedPlace, anchor: anchor)
 
 		// ⭐ **THE FIELD'S DECLARED RANGE BINDS WHAT IS STORED IN IT.** The site is recorded on the
 		// COERCED value, not the parsed one: that is the value the slot receives, and for a widening door
@@ -69047,9 +69070,17 @@ export type Parser
 		// ⚠ The alias is read off the field's DECLARED spelling, in the declaring file: `fieldType` has a
 		// ranged float alias erased to bare `float` (`declaredSlotType`), and a store written in another
 		// file must not be checked against that file's same-named alias.
-		self.recordFieldRangeChecks(value, stored: stored, valueStart: valueStart, layout: layout, index: index, storedType: fieldType, anchor: self.tokenAt(valueStart) if isTupleTypeName(layout.name) else anchor)
+		self.recordFieldRangeChecks(value, stored: stored, valueStart: valueStart, layout: layout, index: index, storedType: fieldType, anchor: site.anchor)
 		return stored
 	end 'requireFieldType'
+
+	function slotStoreSiteOf(layout StructLayout, index FieldIndex, valueStart ElementIndex, anchor Token) returns SlotStoreSite
+		if isTupleTypeName(layout.name) 'aTupleElement'
+			return SlotStoreSite.create("element {index} of tuple {self.signatures.displayNameOfAggregate(ValueTypeTag.structRef, aggregate: layout.name)}", anchor: self.tokenAt(valueStart))
+		end 'aTupleElement'
+
+		return SlotStoreSite.create("{String.from(layout.name)}.{String.from(anchor.value)}", anchor: anchor)
+	end 'slotStoreSiteOf'
 
 	function fieldTypeKeepingAlias(layout StructLayout, index FieldIndex, collapsed MaxonType) returns MaxonType
 		let declared = try layout.fieldTypes.get(index) otherwise panic("Parser.fieldTypeKeepingAlias: field {index} is out of range for `type {String.from(layout.name)}`, which declares {layout.fieldCount()}")
@@ -69064,27 +69095,26 @@ export type Parser
 		return self.signatures.adoptType(declared, into: self.artifact.typeNames)
 	end 'typeKeepingAlias'
 
-	function requireStoreMeetsReadOnlyRules(layout StructLayout, index FieldIndex, value ValueId, valueStart ElementIndex, anchor Token) throws SourceParseError
+	function requireStoreMeetsReadOnlyRules(layout StructLayout, index FieldIndex, value ValueId, valueStart ElementIndex, site SlotStoreSite) throws SourceParseError
 		if not self.valueIsARecordAStoreAliases(value) 'nothingToAlias'
 			return
 		end 'nothingToAlias'
 
-		let place = "{String.from(layout.name)}.{String.from(anchor.value)}"
 		let readOnly = self.valueIsReadOnlyIn(value, class: ReadOnlyClass.readOnly)
 
 		if layout.fieldIsMutable(index) 'aVarField'
 			if readOnly and self.valueIsOpaque(value) 'decidedWhereItIsInstantiated'
-				self.noteLetFieldValueSite(value, destination: place, into: ReadOnlyRootKind.letField, anchor: anchor)
+				self.noteLetFieldValueSite(value, destination: site.place, into: ReadOnlyRootKind.letField, anchor: site.anchor)
 			end 'decidedWhereItIsInstantiated' else if readOnly and not self.valueMayAliasAnImmutableGlobal(value) 'aReadOnlyValueIntoAVar'
-				try self.refuseStoreOfReadOnly(value, place: place, anchor: anchor)
+				try self.refuseStoreOfReadOnly(value, place: site.place, anchor: site.anchor)
 			end 'aReadOnlyValueIntoAVar' else 'aWritableValueIntoAVar'
-				self.noteMutableStoreSite(value, valueStart: valueStart, place: place, anchor: anchor)
+				self.noteMutableStoreSite(value, valueStart: valueStart, place: site.place, anchor: site.anchor)
 			end 'aWritableValueIntoAVar'
 
 			return
 		end 'aVarField'
 
-		try self.requireValueMeetsLetFieldRules(value, valueStart: valueStart, place: place, into: ReadOnlyRootKind.letField, anchor: anchor)
+		try self.requireValueMeetsLetFieldRules(value, valueStart: valueStart, place: site.place, into: ReadOnlyRootKind.letField, anchor: site.anchor)
 	end 'requireStoreMeetsReadOnlyRules'
 
 	function requireLetPayloadStore(layout EnumLayout, field PayloadField, value ValueId, valueStart ElementIndex, caseTok Token, anchor Token) throws SourceParseError
@@ -69284,7 +69314,7 @@ export type Parser
 			return value
 		end 'aConcreteConformer'
 
-		try self.requireManagedValueMatches(fieldType, isString: false, value: value, placeDoor: FunctionTypeDoor.field, placeName: self.fieldNameAt(layout, index: index), placeOwner: SlotOwner.declaredBy(layout.name), placeBrand: self.declaredBrand(layout.fieldDeclaredBrand(index), resolved: fieldType), placeSpelling: self.fieldPlaceSpelling(layout, index: index, fieldType: fieldType), voice: SlotMismatchVoice.assignedPlace, anchor: anchor)
+		try self.requireManagedValueMatches(fieldType, isString: false, value: value, placeDoor: FunctionTypeDoor.field, placeName: self.fieldNameAt(layout, index: index), placeOwner: SlotOwner.declaredBy(layout.name), placeBrand: self.fieldPlaceBrand(layout, index: index, resolved: fieldType), placeSpelling: self.fieldPlaceSpelling(layout, index: index, fieldType: fieldType), voice: SlotMismatchVoice.assignedPlace, anchor: anchor)
 		return value
 	end 'widenValueIntoExistentialField'
 
@@ -71582,7 +71612,7 @@ export type Parser
 			let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared, slotScopeFilePath: layout.declFilePath)
 			let arg = try slotValues.get(i) otherwise panic("parseEnumFromNameCase: slotValues.get OOB at {i} — the columns are filled one per declared slot")
 			let anchorIndex = try slotAnchors.get(i) otherwise panic("parseEnumFromNameCase: slotAnchors.get OOB at {i} — captured in lockstep with the values")
-			try slotValues.set(i, value: try self.requirePayloadArgType(field, declared: declared, declaredWithAlias: self.typeKeepingAlias(field.declaredType, collapsed: declared, scopeFilePath: layout.declFilePath), class: class, value: arg, caseTok: memberTok, argTok: self.tokenAt(anchorIndex), voice: SlotMismatchVoice.payloadArgument)) otherwise panic("parseEnumFromNameCase: slotValues.set OOB at {i} — the columns are filled one per declared slot")
+			try slotValues.set(i, value: try self.requirePayloadArgType(field, declared: declared, declaredWithAlias: self.typeKeepingAlias(field.declaredType, collapsed: declared, scopeFilePath: layout.declFilePath), class: class, value: arg, caseTok: memberTok, argTok: self.tokenAt(anchorIndex), voice: SlotMismatchVoice.payloadArgument, layout: layout)) otherwise panic("parseEnumFromNameCase: slotValues.set OOB at {i} — the columns are filled one per declared slot")
 			classes.push(class)
 		end 'validate'
 
@@ -71881,7 +71911,7 @@ export type Parser
 			let arg = try args.get(i) otherwise panic("emitEnumBox: args.count() was checked to equal the arity but get OOB at {i}")
 			let anchorIndex = try argAnchors.get(i) otherwise panic("emitEnumBox: argAnchors.get OOB at {i} — captured in lockstep with the args")
 			let declaredWithAlias = self.typeKeepingAlias(field.declaredType, collapsed: declared, scopeFilePath: layout.declFilePath)
-			let checked = try self.requirePayloadArgType(field, declared: declared, declaredWithAlias: declaredWithAlias, class: class, value: arg, caseTok: caseTok, argTok: self.tokenAt(anchorIndex), voice: payloadFillVoice(fill))
+			let checked = try self.requirePayloadArgType(field, declared: declared, declaredWithAlias: declaredWithAlias, class: class, value: arg, caseTok: caseTok, argTok: self.tokenAt(anchorIndex), voice: payloadFillVoice(fill), layout: layout)
 			try args.set(i, value: checked) otherwise panic("emitEnumBox: args.set OOB at {i} — args.count() was checked to equal the arity")
 
 			match fill 'fill'
@@ -72569,15 +72599,15 @@ export type Parser
 	// refusal about the case as a whole belongs (a payload the tier cannot lower, a slot left unfilled);
 	// `argTok` is the token following THIS argument and is where a refusal about ONE argument's type
 	// belongs, which is the position the canonical specs pin (`union-payload.error.wrong-struct`).
-	function requirePayloadArgType(field PayloadField, declared MaxonType, declaredWithAlias MaxonType, class PayloadClass, value ValueId, caseTok Token, argTok Token, voice SlotMismatchVoice) returns ValueId throws SourceParseError
+	function requirePayloadArgType(field PayloadField, declared MaxonType, declaredWithAlias MaxonType, class PayloadClass, value ValueId, caseTok Token, argTok Token, voice SlotMismatchVoice, layout EnumLayout) returns ValueId throws SourceParseError
 		match class 'c'
 			// An opaque `T` payload takes the scalar rule: `checkDeclaredType`'s type-parameter arm is where
 			// an argument meets an opaque formal. ⚠ Never as a `scalar to typeParam` range: `scalar` is the
 			// first variant of `PayloadClass` and `typeParam` the last, so the range would swallow every
 			// case between.
 			scalar or
-			typeParam then return try self.requireScalarPayloadArg(field, declared: declared, declaredWithAlias: declaredWithAlias, value: value, caseTok: caseTok, argTok: argTok, voice: voice)
-			managed(storage, isString) then return try self.requireManagedPayloadArg(field, storage: storage, isString: isString, declared: declared, value: value, caseTok: caseTok, argTok: argTok, voice: voice)
+			typeParam then return try self.requireScalarPayloadArg(field, declared: declared, declaredWithAlias: declaredWithAlias, value: value, caseTok: caseTok, argTok: argTok, voice: voice, layout: layout)
+			managed(storage, isString) then return try self.requireManagedPayloadArg(field, storage: storage, isString: isString, declared: declared, value: value, caseTok: caseTok, argTok: argTok, voice: voice, layout: layout)
 
 			// A nested boxed union takes the managed door, over its `named(<union>)` value type and not over
 			// the machine word its slot is. A boxed union's value carries `named`, which every ranged-int
@@ -72603,12 +72633,12 @@ export type Parser
 		return value
 	end 'requirePayloadArgType'
 
-	function requireManagedPayloadArg(field PayloadField, storage MaxonType, isString bool, declared MaxonType, value ValueId, caseTok Token, argTok Token, voice SlotMismatchVoice) returns ValueId throws SourceParseError
+	function requireManagedPayloadArg(field PayloadField, storage MaxonType, isString bool, declared MaxonType, value ValueId, caseTok Token, argTok Token, voice SlotMismatchVoice, layout EnumLayout) returns ValueId throws SourceParseError
 		if maxonTypeTag(storage) == ValueTypeTag.function 'aFunctionValue'
-			return try self.requireScalarPayloadArg(field, declared: declared, declaredWithAlias: declared, value: value, caseTok: caseTok, argTok: argTok, voice: voice)
+			return try self.requireScalarPayloadArg(field, declared: declared, declaredWithAlias: declared, value: value, caseTok: caseTok, argTok: argTok, voice: voice, layout: layout)
 		end 'aFunctionValue'
 
-		try self.requireManagedValueMatches(storage, isString: isString, value: value, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: SlotOwner.unowned, placeBrand: self.declaredBrand(field.declaredBrand, resolved: storage), placeSpelling: field.declaredBrand, voice: voice, anchor: argTok)
+		try self.requireManagedValueMatches(storage, isString: isString, value: value, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: SlotOwner.unowned, placeBrand: self.payloadPlaceBrand(field, layout: layout, resolved: storage), placeSpelling: field.declaredBrand, voice: voice, anchor: argTok)
 		return value
 	end 'requireManagedPayloadArg'
 
@@ -72624,7 +72654,7 @@ export type Parser
 	// ⚠ **THE TAG COMES OFF THE RESOLVED `declared`, NEVER OFF `field.declaredType`.** Read raw, a
 	// FUNCTION-alias payload is a `named` — an int — so `Payload.op(twice)` would meet the
 	// `functionIntoNonFunction` arm below and be refused E3005. Resolved, it is the function type the value is.
-	function requireScalarPayloadArg(field PayloadField, declared MaxonType, declaredWithAlias MaxonType, value ValueId, caseTok Token, argTok Token, voice SlotMismatchVoice) returns ValueId throws SourceParseError
+	function requireScalarPayloadArg(field PayloadField, declared MaxonType, declaredWithAlias MaxonType, value ValueId, caseTok Token, argTok Token, voice SlotMismatchVoice, layout EnumLayout) returns ValueId throws SourceParseError
 		let declaredTag = maxonTypeTag(declared)
 		let got = self.tagOf(value)
 
@@ -72666,7 +72696,7 @@ export type Parser
 		//
 		// Asked past the verdict rather than instead of it: a tag disagreement is the coarser fact and reads
 		// better said first, and a value that failed it has no identity worth comparing.
-		try self.requireSlotAggregateIdentity(declaredWithAlias, value: value, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: SlotOwner.unowned, placeBrand: self.declaredBrand(field.declaredBrand, resolved: declared), placeSpelling: field.declaredBrand, voice: SlotMismatchVoice.payloadArgument, anchor: argTok)
+		try self.requireSlotAggregateIdentity(declaredWithAlias, value: value, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: SlotOwner.unowned, placeBrand: self.payloadPlaceBrand(field, layout: layout, resolved: declared), placeSpelling: field.declaredBrand, voice: SlotMismatchVoice.payloadArgument, anchor: argTok)
 
 		self.admitUnsignedLiteralIntoSlot(value, slot: declaredTag, slotNameId: typeNameIdOf(declared))
 		return self.coerceToDeclared(value, declared: declaredTag, anchor: argTok)
@@ -73833,7 +73863,7 @@ export type Parser
 		// would file a per-instance question under a name that answers no per-instance registry; the
 		// substitution the value actually needs is `typeCallResultThroughInstance`'s, which reads the gid and
 		// never the spelling.
-		self.brandValue(result, brand: self.brandOfSpelling(aliasName))
+		self.brandValue(result, brand: self.brandOfSpelling(aliasName, readerFilePath: self.job.path))
 
 		// ⭐ **AND THE ALIAS'S OWN ARGUMENT SPELLING** — `emitOwnedContainerCreate`'s line for the builtin
 		// `Array`, at the door a DECLARED generic's factory leaves through. `BufCell.make(…)` mints the only
@@ -79039,21 +79069,24 @@ export type Parser
 		return self.signatures.fieldTypeOf(layout, index: column, into: self.artifact.typeNames)
 	end 'declaredTupleColumnType'
 
-	// A tuple element keeps its alias as a struct field does, so a column whose layout spells an alias
-	// binds its element through the field door — identity and range — after the layout is interned.
-	function requireAliasedTupleColumns(layout StructLayout, elementValues ValueIdArray, elementStarts TokenIndexArray, anchor Token) throws SourceParseError
+	// A tuple's columns are mutable places (`t.0 = …`), so every column's value meets the read-only rules
+	// a `var` field's store meets. A column whose layout spells an alias also binds its element through
+	// the field door — identity and range — as a struct field does, after the layout is interned.
+	function requireTupleColumns(layout StructLayout, elementValues ValueIdArray, elementStarts TokenIndexArray, anchor Token) throws SourceParseError
 		for i in 0 upto layout.fieldCount() 'eachColumn'
+			let value = try elementValues.get(i) otherwise panic("Parser.requireTupleColumns: elementValues.get OOB at {i} — the column is sized to the layout's field count")
+			let valueStart = try elementStarts.get(i) otherwise panic("Parser.requireTupleColumns: elementStarts.get OOB at {i} — the column is sized to the layout's field count")
+
 			if layout.fieldDeclaredBrand(i).count() == 0 'noAliasToHold'
+				try self.requireStoreMeetsReadOnlyRules(layout, index: i, value: value, valueStart: valueStart, site: self.slotStoreSiteOf(layout, index: i, valueStart: valueStart, anchor: anchor))
 				continue
 			end 'noAliasToHold'
 
-			let value = try elementValues.get(i) otherwise panic("Parser.requireAliasedTupleColumns: elementValues.get OOB at {i} — the column is sized to the layout's field count")
-			let valueStart = try elementStarts.get(i) otherwise panic("Parser.requireAliasedTupleColumns: elementStarts.get OOB at {i} — the column is sized to the layout's field count")
 			let stored = try self.requireFieldType(layout, index: i, fieldType: self.signatures.fieldTypeOf(layout, index: i, into: self.artifact.typeNames), value: value, valueStart: valueStart, anchor: anchor)
 
-			try elementValues.set(i, value: stored) otherwise panic("Parser.requireAliasedTupleColumns: elementValues.set OOB at {i} — the column is sized to the layout's field count")
+			try elementValues.set(i, value: stored) otherwise panic("Parser.requireTupleColumns: elementValues.set OOB at {i} — the column is sized to the layout's field count")
 		end 'eachColumn'
-	end 'requireAliasedTupleColumns'
+	end 'requireTupleColumns'
 
 	function numericColumnType(value ValueId, layout StructLayout, column FieldIndex) returns MaxonType
 		let own = self.valueSlotType(value)
@@ -79517,7 +79550,7 @@ export type Parser
 		let container = try self.emitOwnedContainerRecord(giid, aliasTok: aliasTok, aliasName: aliasName, range: range)
 
 		// `Xs.create()` builds an `Xs`; a bare `Array with Integer` spelled at the site builds an unbranded one.
-		self.brandValue(container, brand: self.brandOfSpelling(aliasName))
+		self.brandValue(container, brand: self.brandOfSpelling(aliasName, readerFilePath: self.job.path))
 
 		return container
 	end 'emitOwnedContainerCreate'
@@ -87941,7 +87974,7 @@ export type Parser
 		self.wearDeclaredFloatAlias(result, declared: self.fieldTypeKeepingAlias(layout, index: index, collapsed: declared), scopeFilePath: layout.declFilePath)
 
 		// A field read wears the brand the field was declared under (`export var xs as Xs` reads as an `Xs`).
-		self.brandValue(result, brand: self.declaredBrand(layout.fieldDeclaredBrand(index), resolved: declared))
+		self.brandValue(result, brand: self.fieldPlaceBrand(layout, index: index, resolved: declared))
 
 		// ⭐⭐ **READING A PROMISE OUT OF A FIELD IS A PENDING MOVE, exactly as reading one out of a container
 		// element is.** The field goes on owning the thread until the read is CONSUMED; at that point the
@@ -92525,7 +92558,7 @@ export type Parser
 			throw ConstEvalError.defective(SourceParseError.unsupported("a top-level `{String.from(aliasTok.value)}.{String.from(CreateMethod)}()` — its elements are `{String.from(ManagedMemoryTypeName)}` buffers, and a global is re-loaded at every use, so an element read out of it would carry the `{String.from(self.signatures.arrayRecordDeclaredName())}` surface instead. Declare an array of buffers inside a function", line: aliasTok.line, column: aliasTok.column))
 		end 'elementsAreBuffers'
 
-		return ConstFoldedValue.containerCreate(giid, brand: self.brandOfSpelling(aliasTok.value), elements: sharedEmptyConstArrayElements)
+		return ConstFoldedValue.containerCreate(giid, brand: self.brandOfSpelling(aliasTok.value, readerFilePath: self.job.path), elements: sharedEmptyConstArrayElements)
 	end 'evalConstContainerCreate'
 
 	// ⭐⭐ **`CharSet from ['a', 'e', 'i', 'o', 'u']` AS A TOP-LEVEL INITIALIZER** (spec-port `lazy-static`) —
@@ -92605,7 +92638,7 @@ export type Parser
 		let elements = try self.signatures.constantBlobElementsOfRoot(calls, root: walked.1) otherwise return ConstInitializerValue.factoryCall(calls, root: walked.1)
 		let giid = self.signatures.genericAliasInstanceFrom(walked.0.value, readerFilePath: self.job.path)
 
-		return ConstInitializerValue.direct(ConstFoldedValue.containerCreate(giid, brand: self.brandOfSpelling(walked.0.value), elements: elements))
+		return ConstInitializerValue.direct(ConstFoldedValue.containerCreate(giid, brand: self.brandOfSpelling(walked.0.value, readerFilePath: self.job.path), elements: elements))
 	end 'evalConstArrayFromInitializer'
 
 	function evalConstSetFrom(stack TopLevelDeclIndexArray) returns ConstFoldedValue throws ConstEvalError
@@ -92621,7 +92654,7 @@ export type Parser
 
 		let giid = self.signatures.genericAliasInstanceFrom(aliasTok.value, readerFilePath: self.job.path)
 
-		return ConstFoldedValue.containerCreate(giid, brand: self.brandOfSpelling(aliasTok.value), elements: try self.evalConstSetMembers(stack, giid: giid, aliasTok: aliasTok))
+		return ConstFoldedValue.containerCreate(giid, brand: self.brandOfSpelling(aliasTok.value, readerFilePath: self.job.path), elements: try self.evalConstSetMembers(stack, giid: giid, aliasTok: aliasTok))
 	end 'evalConstSetFrom'
 
 	// The `[…]` half — one member per element, each held to the SET'S OWN KEY TYPE. The bracket walk is the

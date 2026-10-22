@@ -2718,3 +2718,233 @@ end 'main'
 ```exitcode
 10
 ```
+
+<!-- test: error.a-field-read-wears-the-brand-of-the-file-that-declared-the-field -->
+`a/` exports a `Numbers` and a type whose exported field `xs` holds one, written bare. `p/` declares a `Numbers` of its own over the same instance, visible to `p/` alone, and takes it as `p.Numbers`. The field is declared in `a/a.maxon`, so reading it from `p/` yields `a/`'s `Numbers` and not the `Numbers` the reading file declares.
+```maxon
+// --- file: a/a.maxon
+export typealias Integer = int(i64.min to i64.max)
+export typealias Numbers = Array with Integer
+
+export type Box
+	export var xs as Numbers
+
+	export static function create() returns Self
+		var xs = Numbers.create()
+		xs.push(3)
+		return Self{xs: xs}
+	end 'create'
+end 'Box'
+
+// --- file: p/c.maxon
+typealias Numbers = Array with a.Integer
+
+function takeC(xs p.Numbers) returns ExitCode
+	return xs.count() as ExitCode
+end 'takeC'
+
+function main() returns ExitCode
+	let b = Box.create()
+	return takeC(b.xs)
+end 'main'
+```
+```maxoncstderr
+error E3005: p/<fragment>:25:9: argument type mismatch for 'xs': expected 'p.Numbers', got 'a.Numbers'
+```
+
+<!-- test: error.a-union-payload-read-wears-the-brand-of-the-file-that-declared-the-union -->
+`a/` exports a `Numbers` and a union whose payload holds one. `p/` declares a `Numbers` of its own over the same instance and takes it as `p.Numbers`. The payload is declared in `a/a.maxon`, so the binding a `match` in `p/` makes wears `a/`'s `Numbers`.
+```maxon
+// --- file: a/a.maxon
+export typealias Integer = int(i64.min to i64.max)
+export typealias Numbers = Array with Integer
+
+export union Slot
+	held(xs Numbers)
+	empty
+end 'Slot'
+
+export function makeSlot() returns Slot
+	var xs = Numbers.create()
+	xs.push(3)
+	return Slot.held(xs)
+end 'makeSlot'
+
+// --- file: p/c.maxon
+typealias Numbers = Array with a.Integer
+
+function takeC(xs p.Numbers) returns ExitCode
+	return xs.count() as ExitCode
+end 'takeC'
+
+function main() returns ExitCode
+	let s = makeSlot()
+
+	match s 'go'
+		held(xs) then return takeC(xs)
+		empty then return 1
+	end 'go'
+end 'main'
+```
+```maxoncstderr
+error E3005: p/<fragment>:28:24: argument type mismatch for 'xs': expected 'p.Numbers', got 'a.Numbers'
+```
+
+<!-- test: error.a-global-read-wears-the-brand-of-the-file-that-declared-the-global -->
+`a/` exports a `Numbers` and a global holding one. `p/` declares a `Numbers` of its own over the same instance and takes it as `p.Numbers`. The global is declared in `a/a.maxon`, so reading it from `p/` yields `a/`'s `Numbers`.
+```maxon
+// --- file: a/a.maxon
+export typealias Integer = int(i64.min to i64.max)
+export typealias Numbers = Array with Integer
+
+export var shared = Numbers.create()
+
+// --- file: p/c.maxon
+typealias Numbers = Array with a.Integer
+
+function takeC(xs p.Numbers) returns ExitCode
+	return xs.count() as ExitCode
+end 'takeC'
+
+function main() returns ExitCode
+	return takeC(shared)
+end 'main'
+```
+```maxoncstderr
+error E3005: p/<fragment>:16:9: argument type mismatch for 'xs': expected 'p.Numbers', got 'a.Numbers'
+```
+
+<!-- test: error.a-field-store-judges-the-value-against-the-brand-of-the-file-that-declared-the-field -->
+`a/`'s `Box` holds its field `xs` as `a/`'s `Numbers`. `p/` declares a `Numbers` of its own over the same instance and stores one into the field, so the store meets a `p.Numbers` against `a.Numbers`.
+```maxon
+// --- file: a/a.maxon
+export typealias Integer = int(i64.min to i64.max)
+export typealias Numbers = Array with Integer
+
+export type Box
+	export var xs as Numbers
+
+	export static function create() returns Self
+		var xs = Numbers.create()
+		xs.push(3)
+		return Self{xs: xs}
+	end 'create'
+end 'Box'
+
+// --- file: p/c.maxon
+typealias Numbers = Array with a.Integer
+
+function main() returns ExitCode
+	var b = Box.create()
+	var mine = p.Numbers.create()
+	mine.push(4)
+	b.xs = mine
+	return b.xs.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: p/<fragment>:23:4: cannot assign a value of type 'p.Numbers' to field 'xs' of 'Box', which holds 'a.Numbers'
+```
+
+<!-- test: error.a-field-declared-with-a-qualified-alias-wears-the-brand-it-names -->
+`alpha/` and `beta/` each export a `Numbers` over one instance, so each file that writes one qualifies it. `Box` declares its field `xs` as `alpha.Numbers`; reading it yields `alpha/`'s brand, which does not reach `beta/`'s parameter.
+```maxon
+// --- file: base/s.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+// --- file: alpha/a.maxon
+export typealias Numbers = Array with base.Integer
+
+// --- file: beta/b.maxon
+export typealias Numbers = Array with base.Integer
+
+export function takeB(xs beta.Numbers) returns ExitCode
+	return xs.count() as ExitCode
+end 'takeB'
+
+// --- file: holder/h.maxon
+export type Box
+	export var xs as alpha.Numbers
+
+	export static function create() returns Self
+		var xs = alpha.Numbers.create()
+		xs.push(3)
+		return Self{xs: xs}
+	end 'create'
+end 'Box'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let b = Box.create()
+	return takeB(b.xs)
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:29:9: argument type mismatch for 'xs': expected 'beta.Numbers', got 'alpha.Numbers'
+```
+
+<!-- test: error.a-field-declared-with-a-qualified-alias-is-read-in-the-declaring-file -->
+`holder/` and the reading directory `q/` each see a different `alpha`: the root `alpha/` and `q/alpha/` both export a `Numbers` over one instance. `Box`'s field is declared `alpha.Numbers` in `holder/`, where `alpha` is the root directory, so the read in `q/` wears the root brand and does not reach `q/alpha`'s parameter.
+```maxon
+// --- file: base/s.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+// --- file: alpha/a.maxon
+export typealias Numbers = Array with base.Integer
+
+// --- file: holder/h.maxon
+export type Box
+	export var xs as alpha.Numbers
+
+	export static function create() returns Self
+		var xs = alpha.Numbers.create()
+		xs.push(3)
+		return Self{xs: xs}
+	end 'create'
+end 'Box'
+
+// --- file: q/alpha/b.maxon
+export typealias Numbers = Array with base.Integer
+
+export function takeQ(xs q.alpha.Numbers) returns ExitCode
+	return xs.count() as ExitCode
+end 'takeQ'
+
+// --- file: q/main.maxon
+function main() returns ExitCode
+	let b = Box.create()
+	return takeQ(b.xs)
+end 'main'
+```
+```maxoncstderr
+error E3005: q/<fragment>:29:9: argument type mismatch for 'xs': expected 'q.alpha.Numbers', got 'alpha.Numbers'
+```
+
+<!-- test: error.a-union-payload-read-carries-the-payloads-brand -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Xs = Array with Integer
+typealias Ys = Array with Integer
+
+union Slot
+	held(v Xs)
+	empty
+end 'Slot'
+
+function sumYs(ys Ys) returns Integer
+	return ys.count() as Integer
+end 'sumYs'
+
+function main() returns ExitCode
+	var xs = Xs.create()
+	xs.push(1)
+	let s = Slot.held(xs)
+	match s 'go'
+		held(v) then return sumYs(v) as ExitCode
+		empty then return 1
+	end 'go'
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:20:23: argument type mismatch for 'ys': expected 'Ys', got 'Xs'
+```

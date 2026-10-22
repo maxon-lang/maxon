@@ -134,7 +134,7 @@ The rules:
 - **No mutable alias of a read-only value.** Binding a read-only value to a `var` is **E3078**, and so is a module
   `var` initializer that may take a module-level `let`'s record. A module-level `let`'s record reaching a `var`
   through a ternary, a `match … gives` or a `try … otherwise` is the same **E3078**. Storing a read-only value into a `var` field, a
-  mutable container element or module storage, or passing it to a parameter that keeps it where something may
+  tuple element, a mutable container element or module storage, or passing it to a parameter that keeps it where something may
   write it, is **E3078** too. A `let` bound to a fresh record is the one exception, at its last use: the store
   consumes the name, so no `let` sees what the new holder writes. Stored there and read again afterwards, it is
   refused. A last use is judged per path: a store on one arm of an `if`, a `match` or a ternary is the last use on

@@ -1022,6 +1022,9 @@ no cost, and `return` re-brands implicitly.
   same instance are two brands in the same way.
 - A call's result wears the alias its callee's `returns` clause names, bare or directory-qualified, as the
   file that declares the callee resolves it: a caller's own declaration of that name is another brand.
+- A field read, a read of a module-level `var` and a `match` payload binding wear the alias the field,
+  variable or payload was declared with, as its declaring file resolves it: with `held(v Xs)`, the
+  binding `v` in `held(v) then …` is an `Xs`.
 - A bare reference that reaches two `export`ed declarations is ambiguous in every file, a declaring file
   included: **E3063**, resolved by qualifying with the directory namespace or by renaming.
 - A diagnostic names each type as source would qualify it: the standard library's as `stdlib.Name`,
@@ -5826,7 +5829,7 @@ The rules:
 - **No mutable alias of a read-only value.** Binding a read-only value to a `var` is **E3078**, and so is a module
   `var` initializer that may take a module-level `let`'s record. A module-level `let`'s record reaching a `var`
   through a ternary, a `match … gives` or a `try … otherwise` is the same **E3078**. Storing a read-only value into a `var` field, a
-  mutable container element or module storage, or passing it to a parameter that keeps it where something may
+  tuple element, a mutable container element or module storage, or passing it to a parameter that keeps it where something may
   write it, is **E3078** too. A `let` bound to a fresh record is the one exception, at its last use: the store
   consumes the name, so no `let` sees what the new holder writes. Stored there and read again afterwards, it is
   refused. A last use is judged per path: a store on one arm of an `if`, a `match` or a ternary is the last use on
