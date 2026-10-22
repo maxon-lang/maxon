@@ -229,3 +229,94 @@ public function utf8DecodeAt(s String, pos BytePos) returns Codepoint
 
 	return ((b0 and Utf8FourByteLeadMask) shl (Utf8ContinuationShift * 3)) or ((b1 and Utf8ContinuationMask) shl (Utf8ContinuationShift * 2)) or ((b2 and Utf8ContinuationMask) shl Utf8ContinuationShift) or (b3 and Utf8ContinuationMask)
 end 'utf8DecodeAt'
+
+let Utf8LeadMarkers = ByteArray from [0x00, 0x00, 0xC0, 0xE0, 0xF0]
+let Utf8ContinuationMarker = 0x80
+let Utf8ContinuationLast = 0xBF
+let Utf8TwoByteLeadFirst = 0xC2
+let Utf8ThreeByteLeadFirst = 0xE0
+let Utf8SurrogateLead = 0xED
+let Utf8FourByteLeadFirst = 0xF0
+let Utf8FourByteLeadLast = 0xF4
+let Utf8ThreeByteSecondFirst = 0xA0
+let Utf8SurrogateLeadSecondLast = 0x9F
+let Utf8FourByteSecondFirst = 0x90
+let Utf8LastLeadSecondLast = 0x8F
+
+enum Utf8Malformation implements Error
+	malformed
+end 'Utf8Malformation'
+
+/// Append the UTF-8 encoding of `codepoint` to `out`.
+public function utf8AppendCodepoint(codepoint Codepoint, out ByteArray)
+	let width = utf8EncodeLength(codepoint)
+	let continuations = (width as Count) - 1
+	let marker = try Utf8LeadMarkers.get(width as ElementIndex) otherwise panic("a UTF-8 width is 1 to 4")
+	out.push(((marker as Codepoint) or (codepoint shr (continuations * Utf8ContinuationShift))) as Byte)
+
+	for index in 0 upto continuations 'eachContinuation'
+		let shift = (continuations - 1 - index) * Utf8ContinuationShift
+		out.push((Utf8ContinuationMarker or ((codepoint shr shift) and Utf8ContinuationMask)) as Byte)
+	end 'eachContinuation'
+end 'utf8AppendCodepoint'
+
+/// Whether `bytes` is well-formed UTF-8 (RFC 3629): no overlong form, surrogate, value above U+10FFFF or
+/// truncated sequence.
+public function utf8IsWellFormed(bytes ByteArray) returns bool
+	var position = 0 as ElementIndex
+
+	while position < bytes.count() 'eachSequence'
+		position = try utf8SequenceEnd(bytes, start: position) otherwise return false
+	end 'eachSequence'
+
+	return true
+end 'utf8IsWellFormed'
+
+function utf8SecondByteRange(lead Byte) returns (Byte, Byte)
+	if lead == Utf8ThreeByteLeadFirst 'overlongThree'
+		return (Utf8ThreeByteSecondFirst, Utf8ContinuationLast)
+	end 'overlongThree'
+
+	if lead == Utf8SurrogateLead 'surrogates'
+		return (Utf8ContinuationMarker, Utf8SurrogateLeadSecondLast)
+	end 'surrogates'
+
+	if lead == Utf8FourByteLeadFirst 'overlongFour'
+		return (Utf8FourByteSecondFirst, Utf8ContinuationLast)
+	end 'overlongFour'
+
+	if lead == Utf8FourByteLeadLast 'beyondUnicode'
+		return (Utf8ContinuationMarker, Utf8LastLeadSecondLast)
+	end 'beyondUnicode'
+
+	return (Utf8ContinuationMarker, Utf8ContinuationLast)
+end 'utf8SecondByteRange'
+
+function utf8SequenceEnd(bytes ByteArray, start ElementIndex) returns ElementIndex throws Utf8Malformation
+	let lead = try bytes.get(start) otherwise panic("a sequence starts inside the bytes")
+
+	if lead < Utf8ContinuationMarker 'ascii'
+		return start + 1
+	end 'ascii'
+
+	let width = utf8ByteLength(lead) as ElementIndex
+
+	if lead < Utf8TwoByteLeadFirst or lead > Utf8FourByteLeadLast or start + width > bytes.count() 'badLead'
+		throw Utf8Malformation.malformed
+	end 'badLead'
+
+	let (low, high) = utf8SecondByteRange(lead)
+	let second = try bytes.get(start + 1) otherwise panic("the sequence was checked to fit")
+
+	if second < low or second > high 'badSecond'
+		throw Utf8Malformation.malformed
+	end 'badSecond'
+
+	for offset in 2 upto width 'eachContinuation'
+		if not utf8IsContinuation(try bytes.get(start + offset) otherwise panic("the sequence was checked to fit")) 'notContinuation'
+			throw Utf8Malformation.malformed
+		end 'notContinuation'
+	end 'eachContinuation'
+
+	return start + width
+end 'utf8SequenceEnd'

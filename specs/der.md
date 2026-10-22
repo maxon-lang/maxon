@@ -1,7 +1,7 @@
 ---
 feature: der
 status: stable
-keywords: [der, DerReader, DerHeader, DerBitString, DerError, DerTagClass, asn.1, x.690, encoding]
+keywords: [der, DerReader, readString, readBoolean, readElement, readImplicit, DerHeader, DerBitString, DerError, DerTagClass, asn.1, x.690, encoding]
 category: stdlib
 ---
 
@@ -22,6 +22,11 @@ category: stdlib
 | `reader.readBitString()` | a `DerBitString`: `bytes()` and `unusedBits()` |
 | `reader.readOctetString()` | an OCTET STRING's content |
 | `reader.readUtcTime()`, `readGeneralizedTime()` | the time as `UnixSeconds` |
+| `reader.readSignedInteger()` | an INTEGER of either sign, as its minimal two's-complement content octets |
+| `reader.readBoolean()` | a BOOLEAN, whose one content octet is `00` or `ff` |
+| `reader.readElement()` | the next element, whatever its tag, as its whole encoding |
+| `reader.readImplicit(n)`, `readImplicitBitString(n)`, `readImplicitSignedInteger(n)` | a primitive context-specific `[n]`: its content, or that content read as a BIT STRING or an INTEGER |
+| `reader.readString()` | a UTF8String, PrintableString, IA5String, TeletexString, BMPString or UniversalString, decoded to a `String`; text outside its type's characters is `invalidString` |
 
 A read refuses anything outside DER with a `DerError`. A length is definite and minimal; a tag number of 31
 or more is in the high-tag-number form, minimally; an INTEGER has at least one octet and no redundant
@@ -90,6 +95,8 @@ function errorName(failure DerError) returns String
 		invalidBitString gives "invalidBitString"
 		invalidObjectIdentifier gives "invalidObjectIdentifier"
 		invalidTime gives "invalidTime"
+		invalidBoolean gives "invalidBoolean"
+		invalidString gives "invalidString"
 	end 'name'
 end 'errorName'
 
@@ -207,6 +214,8 @@ function errorName(failure DerError) returns String
 		invalidBitString gives "invalidBitString"
 		invalidObjectIdentifier gives "invalidObjectIdentifier"
 		invalidTime gives "invalidTime"
+		invalidBoolean gives "invalidBoolean"
+		invalidString gives "invalidString"
 	end 'name'
 end 'errorName'
 
@@ -336,6 +345,8 @@ function errorName(failure DerError) returns String
 		invalidBitString gives "invalidBitString"
 		invalidObjectIdentifier gives "invalidObjectIdentifier"
 		invalidTime gives "invalidTime"
+		invalidBoolean gives "invalidBoolean"
+		invalidString gives "invalidString"
 	end 'name'
 end 'errorName'
 
@@ -444,6 +455,8 @@ function errorName(failure DerError) returns String
 		invalidBitString gives "invalidBitString"
 		invalidObjectIdentifier gives "invalidObjectIdentifier"
 		invalidTime gives "invalidTime"
+		invalidBoolean gives "invalidBoolean"
+		invalidString gives "invalidString"
 	end 'name'
 end 'errorName'
 
@@ -597,6 +610,8 @@ function errorName(failure DerError) returns String
 		invalidBitString gives "invalidBitString"
 		invalidObjectIdentifier gives "invalidObjectIdentifier"
 		invalidTime gives "invalidTime"
+		invalidBoolean gives "invalidBoolean"
+		invalidString gives "invalidString"
 	end 'name'
 end 'errorName'
 
@@ -727,6 +742,8 @@ function errorName(failure DerError) returns String
 		invalidBitString gives "invalidBitString"
 		invalidObjectIdentifier gives "invalidObjectIdentifier"
 		invalidTime gives "invalidTime"
+		invalidBoolean gives "invalidBoolean"
+		invalidString gives "invalidString"
 	end 'name'
 end 'errorName'
 
@@ -814,4 +831,230 @@ time-025 invalidTime
 time-026 invalidTime
 time-027 invalidTime
 time-028 unexpectedTag
+```
+
+<!-- test: der.x509-reads -->
+The reads X.509 needs beyond the universal types: BOOLEAN (X.690 sections 8.2 and 11.1), an INTEGER of either sign (8.3), an implicitly tagged primitive (8.14), a whole element, and the six string types with their character rules.
+```maxon
+function digit(symbol Byte) returns Byte
+	if symbol >= 0x61 'letter'
+		return symbol - 0x57
+	end 'letter'
+
+	return symbol - 0x30
+end 'digit'
+
+function fromHex(hex String) returns ByteArray
+	var bytes = ByteArray.create()
+	var high = 0 as Byte
+	var isHigh = true
+
+	for symbol in hex.bytes() 'eachSymbol'
+		if isHigh 'first'
+			high = digit(symbol)
+		end 'first' else 'second'
+			bytes.push(high * 16 + digit(symbol))
+		end 'second'
+
+		isHigh = not isHigh
+	end 'eachSymbol'
+
+	return bytes
+end 'fromHex'
+
+function toHex(bytes ByteArray) returns String
+	var text = ""
+
+	for byte in bytes 'eachByte'
+		text.append("{byte:02x}")
+	end 'eachByte'
+
+	return text
+end 'toHex'
+
+function errorName(failure DerError) returns String
+	return match failure 'name'
+		truncated gives "truncated"
+		indefiniteLength gives "indefiniteLength"
+		nonMinimalLength gives "nonMinimalLength"
+		nonMinimalTagNumber gives "nonMinimalTagNumber"
+		tagNumberTooLarge gives "tagNumberTooLarge"
+		unexpectedTag gives "unexpectedTag"
+		trailingData gives "trailingData"
+		emptyInteger gives "emptyInteger"
+		nonMinimalInteger gives "nonMinimalInteger"
+		negativeInteger gives "negativeInteger"
+		invalidNull gives "invalidNull"
+		invalidBitString gives "invalidBitString"
+		invalidObjectIdentifier gives "invalidObjectIdentifier"
+		invalidTime gives "invalidTime"
+		invalidBoolean gives "invalidBoolean"
+		invalidString gives "invalidString"
+	end 'name'
+end 'errorName'
+
+function readBoolean(id String, hex String)
+	var reader = DerReader.create(fromHex(hex))
+
+	if let value = try reader.readBoolean() 'read'
+		print("{id} {value}\n")
+	end 'read' else (failure) 'refused'
+		print("{id} {errorName(failure)}\n")
+	end 'refused'
+end 'readBoolean'
+
+function readSigned(id String, hex String)
+	var reader = DerReader.create(fromHex(hex))
+
+	if let content = try reader.readSignedInteger() 'read'
+		print("{id} [{toHex(content)}]\n")
+	end 'read' else (failure) 'refused'
+		print("{id} {errorName(failure)}\n")
+	end 'refused'
+end 'readSigned'
+
+function readImplicit(id String, tagNumber DerTagNumber, hex String)
+	var reader = DerReader.create(fromHex(hex))
+
+	if let content = try reader.readImplicit(tagNumber) 'read'
+		print("{id} [{toHex(content)}]\n")
+	end 'read' else (failure) 'refused'
+		print("{id} {errorName(failure)}\n")
+	end 'refused'
+end 'readImplicit'
+
+function readImplicitBits(id String, tagNumber DerTagNumber, hex String)
+	var reader = DerReader.create(fromHex(hex))
+
+	if let bits = try reader.readImplicitBitString(tagNumber) 'read'
+		print("{id} {bits.unusedBits()} [{toHex(bits.bytes())}]\n")
+	end 'read' else (failure) 'refused'
+		print("{id} {errorName(failure)}\n")
+	end 'refused'
+end 'readImplicitBits'
+
+function readImplicitSigned(id String, tagNumber DerTagNumber, hex String)
+	var reader = DerReader.create(fromHex(hex))
+
+	if let content = try reader.readImplicitSignedInteger(tagNumber) 'read'
+		print("{id} [{toHex(content)}]\n")
+	end 'read' else (failure) 'refused'
+		print("{id} {errorName(failure)}\n")
+	end 'refused'
+end 'readImplicitSigned'
+
+function readElements(id String, hex String)
+	var reader = DerReader.create(fromHex(hex))
+
+	while not reader.isAtEnd() 'eachElement'
+		let element = try reader.readElement() otherwise (failure) 'refused'
+			print("{id} {errorName(failure)}\n")
+			return
+		end 'refused'
+
+		print("{id} [{toHex(element)}]\n")
+	end 'eachElement'
+end 'readElements'
+
+function readText(id String, hex String)
+	var reader = DerReader.create(fromHex(hex))
+
+	if let text = try reader.readString() 'read'
+		print("{id} [{toHex(text.toByteArray())}]\n")
+	end 'read' else (failure) 'refused'
+		print("{id} {errorName(failure)}\n")
+	end 'refused'
+end 'readText'
+
+function main() returns ExitCode
+	readBoolean("bool-001", hex: "0101ff")
+	readBoolean("bool-002", hex: "010100")
+	readBoolean("bool-003", hex: "010101")
+	readBoolean("bool-004", hex: "0102ffff")
+	readBoolean("bool-005", hex: "0100")
+	readBoolean("bool-006", hex: "020100")
+	readSigned("signed-001", hex: "0202fb2e")
+	readSigned("signed-002", hex: "020100")
+	readSigned("signed-003", hex: "0201ff")
+	readSigned("signed-004", hex: "0202ff80")
+	readSigned("signed-005", hex: "02020001")
+	readSigned("signed-006", hex: "0200")
+	readImplicit("implicit-001", tagNumber: 2, hex: "820461626364")
+	readImplicit("implicit-002", tagNumber: 2, hex: "a2020500")
+	readImplicit("implicit-003", tagNumber: 2, hex: "8100")
+	readImplicit("implicit-004", tagNumber: 0, hex: "0400")
+	readImplicitBits("implicit-bits-001", tagNumber: 1, hex: "810300abcd")
+	readImplicitBits("implicit-bits-002", tagNumber: 1, hex: "81020101")
+	readImplicitSigned("implicit-signed-001", tagNumber: 2, hex: "820105")
+	readImplicitSigned("implicit-signed-002", tagNumber: 2, hex: "82020005")
+	readElements("element-001", hex: "300302010504020102")
+	readElements("element-002", hex: "3005020105")
+	readText("string-001", hex: "0c03e282ac")
+	readText("string-002", hex: "0c02c328")
+	readText("string-003", hex: "0c02c0af")
+	readText("string-004", hex: "0c03eda080")
+	readText("string-005", hex: "0c04f4908080")
+	readText("string-006", hex: "0c01e2")
+	readText("string-007", hex: "13054162632d3f")
+	readText("string-008", hex: "13012a")
+	readText("string-009", hex: "160140")
+	readText("string-010", hex: "160180")
+	readText("string-011", hex: "1401c9")
+	readText("string-012", hex: "1e0400e9d55c")
+	readText("string-013", hex: "1e03006100")
+	readText("string-014", hex: "1e02d800")
+	readText("string-015", hex: "1c040001f600")
+	readText("string-016", hex: "1c0400110000")
+	readText("string-017", hex: "1c03000041")
+	readText("string-018", hex: "0400")
+	readText("string-019", hex: "2c00")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+bool-001 true
+bool-002 false
+bool-003 invalidBoolean
+bool-004 invalidBoolean
+bool-005 invalidBoolean
+bool-006 unexpectedTag
+signed-001 [fb2e]
+signed-002 [00]
+signed-003 [ff]
+signed-004 nonMinimalInteger
+signed-005 nonMinimalInteger
+signed-006 emptyInteger
+implicit-001 [61626364]
+implicit-002 unexpectedTag
+implicit-003 unexpectedTag
+implicit-004 unexpectedTag
+implicit-bits-001 0 [abcd]
+implicit-bits-002 invalidBitString
+implicit-signed-001 [05]
+implicit-signed-002 nonMinimalInteger
+element-001 [3003020105]
+element-001 [04020102]
+element-002 truncated
+string-001 [e282ac]
+string-002 invalidString
+string-003 invalidString
+string-004 invalidString
+string-005 invalidString
+string-006 invalidString
+string-007 [4162632d3f]
+string-008 invalidString
+string-009 [40]
+string-010 invalidString
+string-011 [c389]
+string-012 [c3a9ed959c]
+string-013 invalidString
+string-014 invalidString
+string-015 [f09f9880]
+string-016 invalidString
+string-017 invalidString
+string-018 unexpectedTag
+string-019 unexpectedTag
 ```

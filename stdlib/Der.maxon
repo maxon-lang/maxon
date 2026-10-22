@@ -17,6 +17,8 @@ public enum DerError implements Error
 	invalidBitString
 	invalidObjectIdentifier
 	invalidTime
+	invalidBoolean
+	invalidString
 end 'DerError'
 
 /// The class bits of an identifier octet (X.690 section 8.1.2.2).
@@ -29,14 +31,18 @@ end 'DerTagClass'
 
 /// A tag number. A larger one is refused as `tagNumberTooLarge`.
 public typealias DerTagNumber = int(0 to u32.max)
+
 /// The number of content octets of an element.
 public typealias DerLength = int(0 to u64.max) implements Count
+
 /// The unused low bits of a BIT STRING's last octet.
 public typealias DerUnusedBits = int(0 to 7)
 
 typealias DerTimeField = int(0 to 9999)
+typealias DerUnitBytes = int(1 to 4) implements Count
 
 enum DerUniversalTag
+	boolean = 1
 	integer = 2
 	bitString = 3
 	octetString = 4
@@ -47,6 +53,15 @@ enum DerUniversalTag
 	utcTime = 23
 	generalizedTime = 24
 end 'DerUniversalTag'
+
+enum DerStringType
+	utf8 = 12
+	printable = 19
+	teletex = 20
+	ia5 = 22
+	universal = 28
+	bmp = 30
+end 'DerStringType'
 
 enum DerTimeLayout
 	utc
@@ -97,6 +112,18 @@ let derLongMonthDays = 31
 let derShortMonthDays = 30
 let derLeapFebruaryDays = 29
 let derFebruaryDays = 28
+let derAsciiLimit = 0x80
+let derAsciiUpperA = 0x41
+let derAsciiUpperZ = 0x5A
+let derAsciiLowerA = 0x61
+let derAsciiLowerZ = 0x7A
+let derPrintablePunctuation = ByteArray from [0x20, 0x27, 0x28, 0x29, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F, 0x3A, 0x3D, 0x3F]
+let derTeletexUnitBytes = 1
+let derBmpUnitBytes = 2
+let derUniversalUnitBytes = 4
+let derSurrogateFirst = 0xD800
+let derSurrogateLast = 0xDFFF
+let derLastCodepoint = 0x10FFFF
 
 /// The identifier and length octets of one element.
 public type DerHeader
@@ -245,38 +272,93 @@ public type DerReader
 	/// The next element, a non-negative INTEGER, as its big-endian magnitude without the sign octet.
 	/// Zero is one zero octet.
 	public function readInteger() returns ByteArray throws DerError
-		let content = try readPrimitive(DerUniversalTag.integer)
-
-		if content.isEmpty() 'empty'
-			throw DerError.emptyInteger
-		end 'empty'
-
-		let first = try content.get(0) otherwise panic("a non-empty INTEGER has a first octet")
-
-		if content.count() == 1 'single'
-			if first >= derSignBit 'negative'
-				throw DerError.negativeInteger
-			end 'negative'
-
-			return content
-		end 'single'
-
-		let second = try content.get(1) otherwise panic("an INTEGER of two or more octets has a second octet")
-
-		if (first == 0 and second < derSignBit) or (first == derAllOnesOctet and second >= derSignBit) 'redundant'
-			throw DerError.nonMinimalInteger
-		end 'redundant'
+		let content = try readSignedInteger()
+		let first = try content.get(0) otherwise panic("a minimal INTEGER has a first octet")
 
 		if first >= derSignBit 'negative'
 			throw DerError.negativeInteger
 		end 'negative'
 
-		if first == 0 'signOctet'
+		if first == 0 and content.count() > 1 'signOctet'
 			return try content.slice(1, endIndex: content.count()) otherwise panic("the sign octet precedes at least one octet")
 		end 'signOctet'
 
 		return content
 	end 'readInteger'
+
+	/// The next element, an INTEGER of either sign, as its content octets: minimal big-endian two's
+	/// complement.
+	public function readSignedInteger() returns ByteArray throws DerError
+		let content = try readPrimitive(DerUniversalTag.integer)
+		try derCheckInteger(content)
+		return content
+	end 'readSignedInteger'
+
+	/// The next element, a primitive context-specific `[tagNumber]` holding an implicitly tagged INTEGER,
+	/// as its content octets: minimal big-endian two's complement.
+	public function readImplicitSignedInteger(tagNumber DerTagNumber) returns ByteArray throws DerError
+		let content = try readImplicit(tagNumber)
+		try derCheckInteger(content)
+		return content
+	end 'readImplicitSignedInteger'
+
+	/// The next element, a BOOLEAN: one octet, `00` or `ff`.
+	public function readBoolean() returns bool throws DerError
+		let content = try readPrimitive(DerUniversalTag.boolean)
+
+		if content.count() != 1 'length'
+			throw DerError.invalidBoolean
+		end 'length'
+
+		let octet = try content.get(0) otherwise panic("a one-octet BOOLEAN has its octet")
+
+		if octet != 0 and octet != derAllOnesOctet 'notDer'
+			throw DerError.invalidBoolean
+		end 'notDer'
+
+		return octet == derAllOnesOctet
+	end 'readBoolean'
+
+	/// The next element, whatever its tag, as its whole encoding: identifier, length and content octets.
+	public function readElement() returns ByteArray throws DerError
+		let header = try peekHeader()
+		let start = position
+		position = header.contentEnd()
+
+		return try bytes.slice(start, endIndex: position) otherwise panic("a header's element lies inside its reader")
+	end 'readElement'
+
+	/// The next element, a primitive context-specific `[tagNumber]`, as its content octets: the implicit tag
+	/// X.509 writes on a key identifier or a dNSName.
+	public function readImplicit(tagNumber DerTagNumber) returns ByteArray throws DerError
+		let header = try peekHeader()
+
+		if header.tagClass() != DerTagClass.contextSpecific or header.isConstructed() or header.tagNumber() != tagNumber 'otherTag'
+			throw DerError.unexpectedTag
+		end 'otherTag'
+
+		return take(header)
+	end 'readImplicit'
+
+	/// The next element, a primitive context-specific `[tagNumber]` holding an implicitly tagged BIT STRING.
+	public function readImplicitBitString(tagNumber DerTagNumber) returns DerBitString throws DerError
+		return try derBitString(try readImplicit(tagNumber))
+	end 'readImplicitBitString'
+
+	/// The next element, one of the ASN.1 string types, decoded: UTF8String, PrintableString, IA5String,
+	/// TeletexString (each octet one ISO 8859-1 character), BMPString (UTF-16BE without surrogates) or
+	/// UniversalString (UTF-32BE).
+	public function readString() returns String throws DerError
+		let header = try peekHeader()
+
+		if header.tagClass() != DerTagClass.universal or header.isConstructed() 'notString'
+			throw DerError.unexpectedTag
+		end 'notString'
+
+		let kind = try DerStringType.fromRawValue(header.tagNumber()) otherwise throw DerError.unexpectedTag
+
+		return try derDecodeString(take(header), kind: kind)
+	end 'readString'
 
 	/// The next element, an OBJECT IDENTIFIER, as its content octets.
 	public function readObjectIdentifier() returns ByteArray throws DerError
@@ -309,22 +391,7 @@ public type DerReader
 
 	/// The next element, a primitive BIT STRING.
 	public function readBitString() returns DerBitString throws DerError
-		let content = try readPrimitive(DerUniversalTag.bitString)
-
-		if content.isEmpty() 'noUnusedBitsOctet'
-			throw DerError.invalidBitString
-		end 'noUnusedBitsOctet'
-
-		let unused = try content.get(0) otherwise panic("a non-empty BIT STRING has its unused-bits octet")
-		let last = try content.get(content.count() - 1) otherwise panic("a non-empty BIT STRING has a last octet")
-
-		if unused > derMaxUnusedBits or (unused > 0 and content.count() == 1) or (last and ((1 shl unused) - 1)) != 0 'badPadding'
-			throw DerError.invalidBitString
-		end 'badPadding'
-
-		let bits = try content.slice(1, endIndex: content.count()) otherwise panic("the unused-bits octet is inside the content")
-
-		return DerBitString.create(bits, unusedBits: unused as DerUnusedBits)
+		return try derBitString(try readPrimitive(DerUniversalTag.bitString))
 	end 'readBitString'
 
 	/// The next element, a primitive OCTET STRING, as its content.
@@ -438,11 +505,115 @@ public type DerReader
 			throw DerError.unexpectedTag
 		end 'otherTag'
 
+		return take(header)
+	end 'readPrimitive'
+
+	function take(header DerHeader) returns ByteArray
 		position = header.contentEnd()
 
 		return try bytes.slice(header.contentStart(), endIndex: header.contentEnd()) otherwise panic("a header's content lies inside its reader")
-	end 'readPrimitive'
+	end 'take'
 end 'DerReader'
+
+function derCheckInteger(content ByteArray) throws DerError
+	if content.isEmpty() 'empty'
+		throw DerError.emptyInteger
+	end 'empty'
+
+	if content.count() == 1 'single'
+		return
+	end 'single'
+
+	let first = try content.get(0) otherwise panic("a non-empty INTEGER has a first octet")
+	let second = try content.get(1) otherwise panic("an INTEGER of two or more octets has a second octet")
+
+	if (first == 0 and second < derSignBit) or (first == derAllOnesOctet and second >= derSignBit) 'redundant'
+		throw DerError.nonMinimalInteger
+	end 'redundant'
+end 'derCheckInteger'
+
+function derBitString(content ByteArray) returns DerBitString throws DerError
+	if content.isEmpty() 'noUnusedBitsOctet'
+		throw DerError.invalidBitString
+	end 'noUnusedBitsOctet'
+
+	let unused = try content.get(0) otherwise panic("a non-empty BIT STRING has its unused-bits octet")
+	let last = try content.get(content.count() - 1) otherwise panic("a non-empty BIT STRING has a last octet")
+
+	if unused > derMaxUnusedBits or (unused > 0 and content.count() == 1) or (last and ((1 shl unused) - 1)) != 0 'badPadding'
+		throw DerError.invalidBitString
+	end 'badPadding'
+
+	let bits = try content.slice(1, endIndex: content.count()) otherwise panic("the unused-bits octet is inside the content")
+
+	return DerBitString.create(bits, unusedBits: unused as DerUnusedBits)
+end 'derBitString'
+
+function derIsPrintable(octet Byte) returns bool
+	return (octet >= derAsciiUpperA and octet <= derAsciiUpperZ) or (octet >= derAsciiLowerA and octet <= derAsciiLowerZ) or (octet >= derAsciiZero and octet <= derAsciiNine) or derPrintablePunctuation.contains(octet)
+end 'derIsPrintable'
+
+function derAllAscii(content ByteArray, printableOnly bool) returns bool
+	for octet in content 'eachOctet'
+		if octet >= derAsciiLimit or (printableOnly and not derIsPrintable(octet)) 'outside'
+			return false
+		end 'outside'
+	end 'eachOctet'
+
+	return true
+end 'derAllAscii'
+
+function derUnitAt(content ByteArray, start ElementIndex, unitBytes DerUnitBytes) returns Codepoint throws DerError
+	var value = 0 as DerLength
+
+	for offset in 0 upto unitBytes as Count 'eachOctet'
+		value = (value shl derBitsPerByte) + ((try content.get(start + offset) otherwise panic("the content holds whole units")) as DerLength)
+	end 'eachOctet'
+
+	if value > derLastCodepoint or (value >= derSurrogateFirst and value <= derSurrogateLast) 'notScalar'
+		throw DerError.invalidString
+	end 'notScalar'
+
+	return value as Codepoint
+end 'derUnitAt'
+
+function derWideString(content ByteArray, unitBytes DerUnitBytes) returns String throws DerError
+	if content.count() mod unitBytes != 0 'partialUnit'
+		throw DerError.invalidString
+	end 'partialUnit'
+
+	var text = ByteArray.create()
+
+	for unit in 0 upto content.count() / unitBytes 'eachUnit'
+		utf8AppendCodepoint(try derUnitAt(content, start: unit * unitBytes, unitBytes: unitBytes), out: text)
+	end 'eachUnit'
+
+	return String.from(text)
+end 'derWideString'
+
+function derDecodeString(content ByteArray, kind DerStringType) returns String throws DerError
+	let isWellFormed = match kind 'check'
+		utf8 gives utf8IsWellFormed(content)
+		printable gives derAllAscii(content, printableOnly: true)
+		ia5 gives derAllAscii(content, printableOnly: false)
+		teletex or
+		bmp or
+		universal gives true
+	end 'check'
+
+	if not isWellFormed 'malformed'
+		throw DerError.invalidString
+	end 'malformed'
+
+	return match kind 'decode'
+		utf8 or
+		printable or
+		ia5 gives String.from(content)
+		teletex gives try derWideString(content, unitBytes: derTeletexUnitBytes)
+		bmp gives try derWideString(content, unitBytes: derBmpUnitBytes)
+		universal gives try derWideString(content, unitBytes: derUniversalUnitBytes)
+	end 'decode'
+end 'derDecodeString'
 
 function derDigits(text ByteArray, start ElementIndex, count Count) returns DerTimeField throws DerError
 	var value = 0 as DerTimeField

@@ -1,0 +1,2508 @@
+/// X.509 certificates (RFC 5280): strict-DER parsing, and the path validation a TLS client applies to a
+/// server's certificate chain.
+/// @category Crypto
+
+/// Why `X509.parse` refused a certificate: the first failing step of its decoding.
+public enum X509Error implements Error
+	invalidEncoding
+	unsupportedVersion
+	unsupportedAlgorithm
+	unhandledCriticalExtension
+	duplicateExtension
+end 'X509Error'
+
+/// An optional field the certificate does not carry.
+public enum X509FieldError implements Error
+	absent
+end 'X509FieldError'
+
+/// Why `X509.verify` refused a chain.
+public enum X509VerifyError implements Error
+	invalidCertificate
+	unsupportedAlgorithm
+	expired
+	notYetValid
+	incompatibleKeyUsage
+	hostnameMismatch
+	unknownAuthority
+	notAuthorizedToSign
+	pathLengthExceeded
+	nameConstraintViolation
+	badSignature
+	signatureCheckLimitExceeded
+end 'X509VerifyError'
+
+/// A certificate's signature algorithm.
+public enum X509SignatureAlgorithm
+	ecdsaWithSha256
+	ecdsaWithSha384
+	sha256WithRsaEncryption
+	sha384WithRsaEncryption
+	sha512WithRsaEncryption
+	rsassaPssSha256
+	rsassaPssSha384
+	rsassaPssSha512
+	ed25519
+end 'X509SignatureAlgorithm'
+
+/// The algorithm of a certificate's public key.
+public enum X509KeyAlgorithm
+	rsa
+	ecP256
+	ecP384
+	ed25519
+end 'X509KeyAlgorithm'
+
+/// A keyUsage bit, in bit order.
+public enum X509KeyUsage
+	digitalSignature
+	contentCommitment
+	keyEncipherment
+	dataEncipherment
+	keyAgreement
+	keyCertSign
+	crlSign
+	encipherOnly
+	decipherOnly
+end 'X509KeyUsage'
+
+/// A list of DER encodings, such as the certificates of a chain.
+public typealias ByteArrays = Array with ByteArray
+
+/// A certificate's version: 1 or 3.
+public typealias CertificateVersion = int(1 to 3)
+
+/// A basicConstraints pathLenConstraint.
+public typealias X509PathLength = int(0 to i64.max)
+
+/// The keyUsage bits a certificate sets, in bit order.
+public typealias X509KeyUsages = Array with X509KeyUsage
+
+/// The attributes of a name, its RDNs flattened in encoded order.
+public typealias X509Attributes = Array with X509Attribute
+
+typealias X509Chain = Array with X509Candidate
+typealias X509Candidates = Array with X509Candidate
+typealias X509PartIndices = Array with ElementIndex
+typealias X509CheckedLinks = Array with X509CheckedLink
+typealias X509SignatureAttempts = int(0 to 100)
+typealias X509TaggedField = (Count, ByteArray)
+typealias X509TaggedFields = Array with X509TaggedField
+typealias X509OidArc = int(0 to i64.max)
+typealias X509DecimalOctet = int(0 to 999)
+
+let x509TagBoolean = 0x01
+let x509TagInteger = 0x02
+let x509TagBitString = 0x03
+let x509TagOctetString = 0x04
+let x509TagObjectIdentifier = 0x06
+let x509TagUtcTime = 0x17
+let x509TagGeneralizedTime = 0x18
+let x509TagSequence = 0x30
+let x509TagSet = 0x31
+let x509TagVersion = 0xA0
+let x509TagIssuerUniqueId = 0x81
+let x509TagSubjectUniqueId = 0x82
+let x509TagExtensions = 0xA3
+let x509TagKeyIdentifier = 0x80
+let x509TagAuthorityCertIssuer = 0xA1
+let x509TagAuthorityCertSerial = 0x82
+let x509TagPermittedSubtrees = 0xA0
+let x509TagExcludedSubtrees = 0xA1
+let x509PssFirstTag = 0xA0
+let x509PssLastTag = 0xA3
+let x509HighTagNumber = 31
+let x509ClassMask = 0xC0
+let x509ContextClass = 0x80
+let x509ConstructedBit = 0x20
+let x509TagNumberMask = 0x1F
+
+let x509VersionExplicitTag = 0
+let x509ExtensionsExplicitTag = 3
+let x509IssuerUniqueIdTag = 1
+let x509SubjectUniqueIdTag = 2
+let x509KeyIdentifierTag = 0
+let x509AuthorityCertIssuerTag = 1
+let x509AuthorityCertSerialTag = 2
+let x509PermittedSubtreesTag = 0
+let x509ExcludedSubtreesTag = 1
+let x509PssHashField = 0
+let x509PssMaskField = 1
+let x509PssSaltField = 2
+let x509PssTrailerField = 3
+
+let x509VersionOne = 0
+let x509VersionThree = 2
+let x509DefaultSaltLength = 20
+let x509DefaultTrailerField = 1
+let x509LastGeneralNameTag = 8
+let x509DirectoryNameTag = 4
+let x509DnsNameTag = 2
+let x509IpAddressTag = 7
+let x509ConstructedGeneralNames = ByteArray from [0, 3, 4, 5]
+let x509Ipv4AddressBytes = 4
+let x509Ipv6AddressBytes = 16
+let x509Ipv4RangeBytes = 8
+let x509Ipv6RangeBytes = 32
+let x509UncompressedPoint = 0x04
+let x509P256PointBytes = 65
+let x509P384PointBytes = 97
+let x509Ed25519KeyBytes = 32
+let x509SignBit = 0x80
+let x509AsciiLimit = 0x80
+let x509BitsPerByte = 8
+let x509HighBit = 0x80
+let x509LargestPathLengthBytes = 8
+let x509MaxChain = 10
+let x509MaxSignatureChecks = 100
+let x509FirstVersion = 1
+let x509ThirdVersion = 3
+let x509CertificateParts = 3
+let x509TbsPart = 0
+let x509SignatureAlgorithmPart = 1
+let x509SignatureValuePart = 2
+let x509AlgorithmIdentifierParts = 2
+let x509AttributeParts = 2
+let x509ValidityParts = 2
+let x509PublicKeyInfoParts = 2
+let x509RsaPublicKeyParts = 2
+let x509ExtensionParts = 3
+let x509DefaultedExtensionParts = 2
+let x509RangeHalves = 2
+let x509LeadingGap = 1
+let x509TrailingGapOffset = 2
+let x509MinimumModulusBits = 2048
+let x509MaximumModulusBits = 4096
+
+let x509OidEcdsaWithSha256 = ByteArray from [0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x02]
+let x509OidEcdsaWithSha384 = ByteArray from [0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x03]
+let x509OidSha256WithRsaEncryption = ByteArray from [0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B]
+let x509OidSha384WithRsaEncryption = ByteArray from [0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0C]
+let x509OidSha512WithRsaEncryption = ByteArray from [0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0D]
+let x509OidRsassaPss = ByteArray from [0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0A]
+let x509OidMgf1 = ByteArray from [0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x08]
+let x509OidEd25519 = ByteArray from [0x2B, 0x65, 0x70]
+let x509OidSha256 = ByteArray from [0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01]
+let x509OidSha384 = ByteArray from [0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02]
+let x509OidSha512 = ByteArray from [0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03]
+let x509OidRsaEncryption = ByteArray from [0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01]
+let x509OidEcPublicKey = ByteArray from [0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01]
+let x509OidCommonName = ByteArray from [0x55, 0x04, 0x03]
+let x509OidOrganization = ByteArray from [0x55, 0x04, 0x0A]
+let x509OidOrganizationalUnit = ByteArray from [0x55, 0x04, 0x0B]
+let x509OidCountry = ByteArray from [0x55, 0x04, 0x06]
+let x509OidBasicConstraints = ByteArray from [0x55, 0x1D, 0x13]
+let x509OidKeyUsage = ByteArray from [0x55, 0x1D, 0x0F]
+let x509OidExtendedKeyUsage = ByteArray from [0x55, 0x1D, 0x25]
+let x509OidSubjectAltName = ByteArray from [0x55, 0x1D, 0x11]
+let x509OidAuthorityKeyId = ByteArray from [0x55, 0x1D, 0x23]
+let x509OidSubjectKeyId = ByteArray from [0x55, 0x1D, 0x0E]
+let x509OidNameConstraints = ByteArray from [0x55, 0x1D, 0x1E]
+let x509ParametersNull = ByteArray from [0x05, 0x00]
+let x509ParametersP256 = ByteArray from [0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07]
+let x509ParametersP384 = ByteArray from [0x06, 0x05, 0x2B, 0x81, 0x04, 0x00, 0x22]
+let x509OidServerAuth = ByteArray from [0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01]
+let x509OidAnyExtendedKeyUsage = ByteArray from [0x55, 0x1D, 0x25, 0x00]
+
+let x509BitsPerArcOctet = 7
+let x509MaxArcOctets = 9
+let x509ArcDigitMask = 0x7F
+let x509ArcContinuation = 0x80
+let x509DecimalBase = 10
+let x509JointIsoItuArc = 2
+let x509ArcsPerRoot = 40
+let x509ThirdRootOffset = 80
+let x509AsciiZero = 0x30
+let x509AsciiNine = 0x39
+let x509AsciiUpperA = 0x41
+let x509AsciiUpperZ = 0x5A
+let x509AsciiLowerA = 0x61
+let x509AsciiLowerZ = 0x7A
+let x509AsciiLowerF = 0x66
+let x509AsciiCaseOffset = 0x20
+let x509Hyphen = 0x2D
+let x509Dot = 0x2E
+let x509Colon = 0x3A
+let x509Asterisk = 0x2A
+let x509FirstVisibleAscii = 0x21
+let x509LastVisibleAscii = 0x7E
+let x509MaxLabelBytes = 63
+let x509MaxNameBytes = 253
+let x509MinWildcardLabels = 3
+let x509Ipv4Parts = 4
+let x509MaxDecimalDigits = 3
+let x509MaxOctet = 255
+let x509HexBase = 16
+let x509HexLetterOffset = 10
+let x509MaxHextetDigits = 4
+let x509HextetBytes = 2
+let x509ByteMask = 0xFF
+
+/// One AttributeTypeAndValue of a name.
+public type X509Attribute
+	var oid as String
+	var shortName as String
+	var hasShortName as bool
+	var value as String
+
+	/// The attribute type, dotted decimal, such as `2.5.4.3`.
+	public function oid() returns String
+		return oid
+	end 'oid'
+
+	/// `CN`, `O`, `OU` or `C` for 2.5.4.3, 2.5.4.10, 2.5.4.11 and 2.5.4.6; `absent` for any other type.
+	public function shortName() returns String throws X509FieldError
+		if not hasShortName 'unnamed'
+			throw X509FieldError.absent
+		end 'unnamed'
+
+		return shortName
+	end 'shortName'
+
+	/// The decoded text.
+	public function value() returns String
+		return value
+	end 'value'
+
+	static function create(oid ByteArray, value String) returns X509Attribute
+		if let shortName = try x509ShortName(oid) 'named'
+			return X509Attribute{oid: x509DottedOid(oid), shortName: shortName, hasShortName: true, value: value}
+		end 'named'
+
+		return X509Attribute{oid: x509DottedOid(oid), shortName: "", hasShortName: false, value: value}
+	end 'create'
+end 'X509Attribute'
+
+/// An issuer or subject name.
+public type X509Name
+	var der as ByteArray
+	var attributes as X509Attributes
+
+	/// The whole Name DER, tag and length included: what names are compared by.
+	public function der() returns ByteArray
+		return der
+	end 'der'
+
+	/// Every attribute, its RDNs flattened in encoded order.
+	public function attributes() returns X509Attributes
+		return attributes
+	end 'attributes'
+
+	static function create(der ByteArray, attributes X509Attributes) returns X509Name
+		return X509Name{der: der, attributes: attributes}
+	end 'create'
+end 'X509Name'
+
+/// A certificate's SubjectPublicKeyInfo.
+public type X509PublicKey
+	var algorithm as X509KeyAlgorithm
+	var der as ByteArray
+	var keyBytes as ByteArray
+
+	/// The key's algorithm.
+	public function algorithm() returns X509KeyAlgorithm
+		return algorithm
+	end 'algorithm'
+
+	/// The whole SubjectPublicKeyInfo DER, the form `Rsa` takes.
+	public function der() returns ByteArray
+		return der
+	end 'der'
+
+	/// The subjectPublicKey: an uncompressed point, 32 Ed25519 bytes or an `RSAPublicKey` DER.
+	public function keyBytes() returns ByteArray
+		return keyBytes
+	end 'keyBytes'
+
+	static function create(algorithm X509KeyAlgorithm, der ByteArray, keyBytes ByteArray) returns X509PublicKey
+		return X509PublicKey{algorithm: algorithm, der: der, keyBytes: keyBytes}
+	end 'create'
+end 'X509PublicKey'
+
+/// A basicConstraints extension.
+public type X509BasicConstraints
+	var isCertificateAuthority as bool
+	var pathLength as X509PathLength
+	var hasPathLength as bool
+
+	/// Whether `cA` is true.
+	public function isCertificateAuthority() returns bool
+		return isCertificateAuthority
+	end 'isCertificateAuthority'
+
+	/// The pathLenConstraint.
+	public function pathLength() returns X509PathLength throws X509FieldError
+		if not hasPathLength 'unlimited'
+			throw X509FieldError.absent
+		end 'unlimited'
+
+		return pathLength
+	end 'pathLength'
+
+	static function create(isCertificateAuthority bool, pathLength X509PathLength, hasPathLength bool) returns X509BasicConstraints
+		return X509BasicConstraints{isCertificateAuthority: isCertificateAuthority, pathLength: pathLength, hasPathLength: hasPathLength}
+	end 'create'
+end 'X509BasicConstraints'
+
+/// A subjectAltName extension's DNS names and IP addresses.
+public type X509SubjectAltName
+	var dnsNames = StringArray.create()
+	var ipAddresses = ByteArrays.create()
+
+	/// The dNSName entries, in encoded order.
+	public function dnsNames() returns StringArray
+		return dnsNames
+	end 'dnsNames'
+
+	/// The iPAddress entries, 4 or 16 bytes each, in encoded order.
+	public function ipAddresses() returns ByteArrays
+		return ipAddresses
+	end 'ipAddresses'
+
+	static function create() returns X509SubjectAltName
+		return X509SubjectAltName{}
+	end 'create'
+
+	function addDnsName(name String)
+		dnsNames.push(name)
+	end 'addDnsName'
+
+	function addIpAddress(address ByteArray)
+		ipAddresses.push(address)
+	end 'addIpAddress'
+end 'X509SubjectAltName'
+
+/// A nameConstraints extension's dNSName and iPAddress subtrees.
+public type X509NameConstraints
+	var permittedDnsNames = StringArray.create()
+	var excludedDnsNames = StringArray.create()
+	var permittedIpRanges = ByteArrays.create()
+	var excludedIpRanges = ByteArrays.create()
+
+	/// The dNSName bases of permittedSubtrees, as encoded.
+	public function permittedDnsNames() returns StringArray
+		return permittedDnsNames
+	end 'permittedDnsNames'
+
+	/// The dNSName bases of excludedSubtrees, as encoded.
+	public function excludedDnsNames() returns StringArray
+		return excludedDnsNames
+	end 'excludedDnsNames'
+
+	/// The iPAddress bases of permittedSubtrees: an address then a mask, 8 or 32 bytes.
+	public function permittedIpRanges() returns ByteArrays
+		return permittedIpRanges
+	end 'permittedIpRanges'
+
+	/// The iPAddress bases of excludedSubtrees: an address then a mask, 8 or 32 bytes.
+	public function excludedIpRanges() returns ByteArrays
+		return excludedIpRanges
+	end 'excludedIpRanges'
+
+	static function create() returns X509NameConstraints
+		return X509NameConstraints{}
+	end 'create'
+
+	function addDnsName(name String, isPermitted bool)
+		if isPermitted 'permitted'
+			permittedDnsNames.push(name)
+		end 'permitted' else 'excluded'
+			excludedDnsNames.push(name)
+		end 'excluded'
+	end 'addDnsName'
+
+	function addIpRange(range ByteArray, isPermitted bool)
+		if isPermitted 'permitted'
+			permittedIpRanges.push(range)
+		end 'permitted' else 'excluded'
+			excludedIpRanges.push(range)
+		end 'excluded'
+	end 'addIpRange'
+
+	function constrainsDnsNames() returns bool
+		return not permittedDnsNames.isEmpty() or not excludedDnsNames.isEmpty()
+	end 'constrainsDnsNames'
+
+	function constrainsIpAddresses() returns bool
+		return not permittedIpRanges.isEmpty() or not excludedIpRanges.isEmpty()
+	end 'constrainsIpAddresses'
+end 'X509NameConstraints'
+
+type X509Extensions
+	var seen = ByteArrays.create()
+	module var basicConstraints = X509BasicConstraints.create(false, pathLength: 0, hasPathLength: false)
+	module var hasBasicConstraints = false
+	module var keyUsage = X509KeyUsages.create()
+	module var hasKeyUsage = false
+	module var extendedKeyUsage = ByteArrays.create()
+	module var hasExtendedKeyUsage = false
+	module var subjectAltName = X509SubjectAltName.create()
+	module var hasSubjectAltName = false
+	module var authorityKeyId = ByteArray.create()
+	module var hasAuthorityKeyId = false
+	module var subjectKeyId = ByteArray.create()
+	module var hasSubjectKeyId = false
+	module var nameConstraints = X509NameConstraints.create()
+	module var hasNameConstraints = false
+
+	static function create() returns X509Extensions
+		return X509Extensions{}
+	end 'create'
+
+	function record(extension ByteArray) throws X509Error
+		let parts = try X509Reader.over(extension).sequenceElements()
+		view identifier = try parts.get(0) otherwise throw X509Error.invalidEncoding
+
+		if parts.count() < x509DefaultedExtensionParts or parts.count() > x509ExtensionParts or x509Tag(identifier) != x509TagObjectIdentifier 'shape'
+			throw X509Error.invalidEncoding
+		end 'shape'
+
+		let oid = try X509Reader.over(identifier).readObjectIdentifier()
+		let critical = try x509Critical(parts)
+		let value = try parts.get(parts.count() - 1) otherwise panic("an extension has a value")
+
+		if x509Tag(value) != x509TagOctetString 'notOctets'
+			throw X509Error.invalidEncoding
+		end 'notOctets'
+
+		if seen.contains(oid) 'repeated'
+			throw X509Error.duplicateExtension
+		end 'repeated'
+
+		seen.push(oid.clone())
+		let content = try X509Reader.over(value).readOctetString()
+
+		if not (try decode(oid, value: content, critical: critical)) and critical 'unknownCritical'
+			throw X509Error.unhandledCriticalExtension
+		end 'unknownCritical'
+	end 'record'
+
+	function decode(oid ByteArray, value ByteArray, critical bool) returns bool throws X509Error
+		if oid == x509OidBasicConstraints 'basicConstraints'
+			basicConstraints = try x509BasicConstraints(value)
+			hasBasicConstraints = true
+		end 'basicConstraints' else if oid == x509OidKeyUsage 'keyUsage'
+			keyUsage = try x509KeyUsage(value)
+			hasKeyUsage = true
+		end 'keyUsage' else if oid == x509OidExtendedKeyUsage 'extendedKeyUsage'
+			extendedKeyUsage = try x509ExtendedKeyUsage(value)
+			hasExtendedKeyUsage = true
+		end 'extendedKeyUsage' else if oid == x509OidSubjectAltName 'subjectAltName'
+			subjectAltName = try x509SubjectAltName(value)
+			hasSubjectAltName = true
+		end 'subjectAltName' else if oid == x509OidAuthorityKeyId 'authorityKeyId'
+			try decodeAuthorityKeyId(value)
+		end 'authorityKeyId' else if oid == x509OidSubjectKeyId 'subjectKeyId'
+			var whole = try X509Reader.whole(value)
+			subjectKeyId = try whole.readOctetString()
+			hasSubjectKeyId = true
+		end 'subjectKeyId' else if oid == x509OidNameConstraints 'nameConstraints'
+			nameConstraints = try x509NameConstraints(value, critical: critical)
+			hasNameConstraints = true
+		end 'nameConstraints' else 'unknown'
+			return false
+		end 'unknown'
+
+		return true
+	end 'decode'
+
+	function decodeAuthorityKeyId(value ByteArray) throws X509Error
+		var last = 0 as Count
+		var hasLast = false
+		var whole = try X509Reader.whole(value)
+
+		for field in try whole.sequenceElements() 'eachField'
+			let number = try x509AuthorityField(field)
+
+			if hasLast and number <= last 'order'
+				throw X509Error.invalidEncoding
+			end 'order'
+
+			last = number
+			hasLast = true
+
+			if number == x509KeyIdentifierTag 'keyIdentifier'
+				authorityKeyId = try X509Reader.over(field).readImplicit(x509KeyIdentifierTag)
+				hasAuthorityKeyId = true
+			end 'keyIdentifier'
+		end 'eachField'
+	end 'decodeAuthorityKeyId'
+end 'X509Extensions'
+
+/// A decoded X.509 certificate.
+public type Certificate
+	var version as CertificateVersion
+	var serialNumber as ByteArray
+	var signatureAlgorithm as X509SignatureAlgorithm
+	var issuer as X509Name
+	var subject as X509Name
+	var notBefore as UnixSeconds
+	var notAfter as UnixSeconds
+	var publicKey as X509PublicKey
+	var extensions as X509Extensions
+	var tbsCertificate as ByteArray
+	var signature as ByteArray
+
+	/// 1 or 3.
+	public function version() returns CertificateVersion
+		return version
+	end 'version'
+
+	/// The content octets of the serialNumber INTEGER, as encoded: two's complement, of any sign and length.
+	public function serialNumber() returns ByteArray
+		return serialNumber
+	end 'serialNumber'
+
+	/// The algorithm the issuer signed with.
+	public function signatureAlgorithm() returns X509SignatureAlgorithm
+		return signatureAlgorithm
+	end 'signatureAlgorithm'
+
+	/// The issuer's name.
+	public function issuer() returns X509Name
+		return issuer
+	end 'issuer'
+
+	/// The subject's name.
+	public function subject() returns X509Name
+		return subject
+	end 'subject'
+
+	/// The start of the validity period.
+	public function notBefore() returns UnixSeconds
+		return notBefore
+	end 'notBefore'
+
+	/// The end of the validity period, inclusive.
+	public function notAfter() returns UnixSeconds
+		return notAfter
+	end 'notAfter'
+
+	/// The subject's public key.
+	public function publicKey() returns X509PublicKey
+		return publicKey
+	end 'publicKey'
+
+	/// The basicConstraints extension.
+	public function basicConstraints() returns X509BasicConstraints throws X509FieldError
+		if not extensions.hasBasicConstraints 'missing'
+			throw X509FieldError.absent
+		end 'missing'
+
+		return extensions.basicConstraints
+	end 'basicConstraints'
+
+	/// The keyUsage bits that are set.
+	public function keyUsage() returns X509KeyUsages throws X509FieldError
+		if not extensions.hasKeyUsage 'missing'
+			throw X509FieldError.absent
+		end 'missing'
+
+		return extensions.keyUsage
+	end 'keyUsage'
+
+	/// The extKeyUsage purposes, dotted decimal, in encoded order.
+	public function extendedKeyUsage() returns StringArray throws X509FieldError
+		if not extensions.hasExtendedKeyUsage 'missing'
+			throw X509FieldError.absent
+		end 'missing'
+
+		var purposes = StringArray.create()
+
+		for purpose in extensions.extendedKeyUsage 'eachPurpose'
+			purposes.push(x509DottedOid(purpose))
+		end 'eachPurpose'
+
+		return purposes
+	end 'extendedKeyUsage'
+
+	function allowsServerAuth() returns bool
+		if not extensions.hasExtendedKeyUsage 'unrestricted'
+			return true
+		end 'unrestricted'
+
+		return extensions.extendedKeyUsage.contains(x509OidServerAuth) or extensions.extendedKeyUsage.contains(x509OidAnyExtendedKeyUsage)
+	end 'allowsServerAuth'
+
+	/// The subjectAltName extension.
+	public function subjectAltName() returns X509SubjectAltName throws X509FieldError
+		if not extensions.hasSubjectAltName 'missing'
+			throw X509FieldError.absent
+		end 'missing'
+
+		return extensions.subjectAltName
+	end 'subjectAltName'
+
+	/// The keyIdentifier of the authorityKeyIdentifier extension.
+	public function authorityKeyId() returns ByteArray throws X509FieldError
+		if not extensions.hasAuthorityKeyId 'missing'
+			throw X509FieldError.absent
+		end 'missing'
+
+		return extensions.authorityKeyId
+	end 'authorityKeyId'
+
+	/// The subjectKeyIdentifier extension.
+	public function subjectKeyId() returns ByteArray throws X509FieldError
+		if not extensions.hasSubjectKeyId 'missing'
+			throw X509FieldError.absent
+		end 'missing'
+
+		return extensions.subjectKeyId
+	end 'subjectKeyId'
+
+	/// The nameConstraints extension.
+	public function nameConstraints() returns X509NameConstraints throws X509FieldError
+		if not extensions.hasNameConstraints 'missing'
+			throw X509FieldError.absent
+		end 'missing'
+
+		return extensions.nameConstraints
+	end 'nameConstraints'
+
+	/// The whole TBSCertificate DER, tag and length included: the signed message.
+	public function tbsCertificate() returns ByteArray
+		return tbsCertificate
+	end 'tbsCertificate'
+
+	/// The signatureValue BIT STRING's octets.
+	public function signature() returns ByteArray
+		return signature
+	end 'signature'
+
+	static function create(fields X509TbsFields, extensions X509Extensions, tbsCertificate ByteArray, signature ByteArray) returns Certificate
+		return Certificate{version: fields.version, serialNumber: fields.serialNumber, signatureAlgorithm: fields.signatureAlgorithm, issuer: fields.issuer, subject: fields.subject, notBefore: fields.notBefore, notAfter: fields.notAfter, publicKey: fields.publicKey, extensions: extensions, tbsCertificate: tbsCertificate, signature: signature}
+	end 'create'
+end 'Certificate'
+
+type X509TbsFields
+	module var version as CertificateVersion
+	module var serialNumber as ByteArray
+	module var signatureAlgorithm as X509SignatureAlgorithm
+	module var issuer as X509Name
+	module var subject as X509Name
+	module var notBefore as UnixSeconds
+	module var notAfter as UnixSeconds
+	module var publicKey as X509PublicKey
+
+	static function create(version CertificateVersion, serialNumber ByteArray, signatureAlgorithm X509SignatureAlgorithm, issuer X509Name, subject X509Name, validity(UnixSeconds, UnixSeconds), publicKey X509PublicKey) returns X509TbsFields
+		return X509TbsFields{version: version, serialNumber: serialNumber, signatureAlgorithm: signatureAlgorithm, issuer: issuer, subject: subject, notBefore: validity.0, notAfter: validity.1, publicKey: publicKey}
+	end 'create'
+end 'X509TbsFields'
+
+type X509Reader
+	module var der as DerReader
+
+	static function over(bytes ByteArray) returns X509Reader
+		return X509Reader{der: DerReader.create(bytes.clone())}
+	end 'over'
+
+	static function whole(bytes ByteArray) returns X509Reader throws X509Error
+		var reader = X509Reader.over(bytes)
+		_ = try reader.element()
+
+		if not reader.der.isAtEnd() 'trailing'
+			throw X509Error.invalidEncoding
+		end 'trailing'
+
+		return X509Reader.over(bytes)
+	end 'whole'
+
+	function element() returns ByteArray throws X509Error
+		let header = try der.peekHeader() otherwise throw X509Error.invalidEncoding
+
+		if header.tagNumber() >= x509HighTagNumber 'highTagNumber'
+			throw X509Error.invalidEncoding
+		end 'highTagNumber'
+
+		return try der.readElement() otherwise throw X509Error.invalidEncoding
+	end 'element'
+
+	function elements() returns ByteArrays throws X509Error
+		var all = ByteArrays.create()
+
+		while not der.isAtEnd() 'eachElement'
+			all.push(try element())
+		end 'eachElement'
+
+		return all
+	end 'elements'
+
+	function sequenceElements() returns ByteArrays throws X509Error
+		var inner = X509Reader{der: try der.enterSequence() otherwise throw X509Error.invalidEncoding}
+		return try inner.elements()
+	end 'sequenceElements'
+
+	function setElements() returns ByteArrays throws X509Error
+		var inner = X509Reader{der: try der.enterSet() otherwise throw X509Error.invalidEncoding}
+		return try inner.elements()
+	end 'setElements'
+
+	function explicitElements(tagNumber DerTagNumber) returns ByteArrays throws X509Error
+		var inner = X509Reader{der: try der.enterExplicit(tagNumber) otherwise throw X509Error.invalidEncoding}
+		return try inner.elements()
+	end 'explicitElements'
+
+	function readSignedInteger() returns ByteArray throws X509Error
+		return try der.readSignedInteger() otherwise throw X509Error.invalidEncoding
+	end 'readSignedInteger'
+
+	function readObjectIdentifier() returns ByteArray throws X509Error
+		let content = try der.readObjectIdentifier() otherwise throw X509Error.invalidEncoding
+
+		if not x509HasBoundedArcs(content) 'arcTooLarge'
+			throw X509Error.invalidEncoding
+		end 'arcTooLarge'
+
+		return content
+	end 'readObjectIdentifier'
+
+	function readBitString() returns DerBitString throws X509Error
+		return try der.readBitString() otherwise throw X509Error.invalidEncoding
+	end 'readBitString'
+
+	function readOctetString() returns ByteArray throws X509Error
+		return try der.readOctetString() otherwise throw X509Error.invalidEncoding
+	end 'readOctetString'
+
+	function readBoolean() returns bool throws X509Error
+		return try der.readBoolean() otherwise throw X509Error.invalidEncoding
+	end 'readBoolean'
+
+	function readString() returns String throws X509Error
+		return try der.readString() otherwise throw X509Error.invalidEncoding
+	end 'readString'
+
+	function readImplicit(tagNumber DerTagNumber) returns ByteArray throws X509Error
+		return try der.readImplicit(tagNumber) otherwise throw X509Error.invalidEncoding
+	end 'readImplicit'
+
+	function readImplicitBitString(tagNumber DerTagNumber) returns DerBitString throws X509Error
+		return try der.readImplicitBitString(tagNumber) otherwise throw X509Error.invalidEncoding
+	end 'readImplicitBitString'
+
+	function readImplicitSignedInteger(tagNumber DerTagNumber) returns ByteArray throws X509Error
+		return try der.readImplicitSignedInteger(tagNumber) otherwise throw X509Error.invalidEncoding
+	end 'readImplicitSignedInteger'
+
+	function readTime() returns UnixSeconds throws X509Error
+		let header = try der.peekHeader() otherwise throw X509Error.invalidEncoding
+
+		if header.tagClass() == DerTagClass.universal and header.tagNumber() == x509TagUtcTime 'utc'
+			return try der.readUtcTime() otherwise throw X509Error.invalidEncoding
+		end 'utc'
+
+		return try der.readGeneralizedTime() otherwise throw X509Error.invalidEncoding
+	end 'readTime'
+end 'X509Reader'
+
+type X509FieldCursor
+	var fields as ByteArrays
+	var next as ElementIndex
+
+	static function create(fields ByteArrays) returns X509FieldCursor
+		return X509FieldCursor{fields: fields, next: 0}
+	end 'create'
+
+	function nextHasTag(tag Byte) returns bool
+		view field = try fields.get(next) otherwise return false
+		return x509Tag(field) == tag
+	end 'nextHasTag'
+
+	function take() returns ByteArray throws X509Error
+		let field = (try fields.get(next) otherwise throw X509Error.invalidEncoding).clone()
+		next = next + 1
+		return field
+	end 'take'
+
+	function takeTagged(tag Byte) returns ByteArray throws X509Error
+		if not nextHasTag(tag) 'otherTag'
+			throw X509Error.invalidEncoding
+		end 'otherTag'
+
+		return try take()
+	end 'takeTagged'
+
+	function isAtEnd() returns bool
+		return next == fields.count()
+	end 'isAtEnd'
+end 'X509FieldCursor'
+
+type X509Candidate
+	module var certificate as Certificate
+	module var der as ByteArray
+	module var isRoot as bool
+
+	static function create(certificate Certificate, der ByteArray, isRoot bool) returns X509Candidate
+		return X509Candidate{certificate: certificate, der: der, isRoot: isRoot}
+	end 'create'
+end 'X509Candidate'
+
+enum X509Malformation implements Error
+	malformed
+end 'X509Malformation'
+
+union X509Host
+	dnsName(labels ByteArrays)
+	ipAddress(address ByteArray)
+	invalid
+end 'X509Host'
+
+union X509SignatureOutcome
+	verified
+	refused(error X509VerifyError)
+end 'X509SignatureOutcome'
+
+type X509CheckedLink
+	module var child as ByteArray
+	module var issuer as ByteArray
+	module var outcome as X509SignatureOutcome
+
+	static function create(child ByteArray, issuer ByteArray, outcome X509SignatureOutcome) returns X509CheckedLink
+		return X509CheckedLink{child: child, issuer: issuer, outcome: outcome}
+	end 'create'
+end 'X509CheckedLink'
+
+type X509PathSearch
+	var pool as X509Candidates
+	var host as X509Host
+	var now as UnixSeconds
+	var accepted = X509Chain.create()
+	var failure = X509VerifyError.unknownAuthority
+	var hasFailure = false
+	var attempts = 0 as X509SignatureAttempts
+	var checkedLinks = X509CheckedLinks.create()
+
+	static function create(pool X509Candidates, host X509Host, now UnixSeconds) returns X509PathSearch
+		return X509PathSearch{pool: pool, host: host, now: now}
+	end 'create'
+
+	function run(leaf X509Candidate) returns ByteArrays throws X509VerifyError
+		let found = try search(X509Chain from [leaf])
+
+		if not found 'noChain'
+			throw failure
+		end 'noChain'
+
+		var chain = ByteArrays.create()
+
+		for link in accepted 'eachLink'
+			chain.push(link.der)
+		end 'eachLink'
+
+		return chain
+	end 'run'
+
+	function search(chain X509Chain) returns bool throws X509VerifyError
+		if chain.count() == x509MaxChain 'longest'
+			return false
+		end 'longest'
+
+		for candidate in pool 'eachCandidate'
+			let found = try extend(chain, candidate: candidate)
+
+			if found 'found'
+				return true
+			end 'found'
+		end 'eachCandidate'
+
+		return false
+	end 'search'
+
+	function extend(chain X509Chain, candidate X509Candidate) returns bool throws X509VerifyError
+		let child = try chain.get(chain.count() - 1) otherwise panic("a chain holds at least the leaf")
+
+		if not x509IssuedBy(child.certificate, issuer: candidate.certificate) or x509Repeats(chain, candidate: candidate) 'skipped'
+			return false
+		end 'skipped'
+
+		if attempts == x509MaxSignatureChecks 'budget'
+			throw X509VerifyError.signatureCheckLimitExceeded
+		end 'budget'
+
+		attempts = attempts + 1
+		var longer = chain.clone()
+		longer.push(candidate)
+
+		if candidate.isRoot 'complete'
+			return accept(longer)
+		end 'complete'
+
+		return try search(longer)
+	end 'extend'
+
+	function accept(chain X509Chain) returns bool
+		try checkChain(chain) otherwise (error) 'failed'
+			if not hasFailure 'first'
+				failure = error
+				hasFailure = true
+			end 'first'
+
+			return false
+		end 'failed'
+
+		accepted = chain
+		return true
+	end 'accept'
+
+	function checkChain(chain X509Chain) throws X509VerifyError
+		let leaf = try chain.get(0) otherwise panic("a chain holds at least the leaf")
+
+		for index in 1 upto chain.count() 'eachLink'
+			let child = try chain.get(index - 1) otherwise panic("the link's child precedes it")
+			let issuer = try chain.get(index) otherwise panic("the index is inside the chain")
+			try x509CheckIssuer(issuer.certificate, below: index - 1, leaf: leaf.certificate, host: host, now: now)
+			try checkSignature(child, issuer: issuer)
+		end 'eachLink'
+	end 'checkChain'
+
+	function checkSignature(child X509Candidate, issuer X509Candidate) throws X509VerifyError
+		view outcome = signatureOutcome(child, issuer: issuer)
+
+		match outcome 'outcome'
+			verified then return
+			refused(error) then throw error
+		end 'outcome'
+	end 'checkSignature'
+
+	function signatureOutcome(child X509Candidate, issuer X509Candidate) returns X509SignatureOutcome
+		for link in checkedLinks 'eachLink'
+			if link.child == child.der and link.issuer == issuer.der 'cached'
+				return link.outcome
+			end 'cached'
+		end 'eachLink'
+
+		var outcome = X509SignatureOutcome.verified
+
+		try x509CheckSignature(child.certificate, issuer: issuer.certificate) otherwise (error) 'refused'
+			outcome = X509SignatureOutcome.refused(error)
+		end 'refused'
+
+		checkedLinks.push(X509CheckedLink.create(child.der, issuer: issuer.der, outcome: outcome))
+		return outcome
+	end 'signatureOutcome'
+end 'X509PathSearch'
+
+/// X.509 certificate parsing and TLS server path validation.
+public type X509
+	/// The certificate one DER X.509 v1 or v3 certificate encodes, or the `X509Error` of the first failing
+	/// step: the outer structure, version, serial, signature algorithm, issuer, validity, subject, public
+	/// key, unique identifiers, extensions and signature, each in turn.
+	public static function parse(der ByteArray) returns Certificate throws X509Error
+		let top = try x509TopElements(der)
+		let tbs = try top.get(x509TbsPart) otherwise panic("a certificate has three elements")
+		var cursor = X509FieldCursor.create(try X509Reader.over(tbs).sequenceElements())
+		let version = try x509Version(cursor)
+		let serialNumber = try X509Reader.over(try cursor.takeTagged(x509TagInteger)).readSignedInteger()
+		let algorithm = try x509SignatureField(try cursor.takeTagged(x509TagSequence), outer: try top.get(x509SignatureAlgorithmPart) otherwise panic("a certificate has three elements"))
+		let issuer = try x509Name(try cursor.take())
+		let validity = try x509Validity(try cursor.takeTagged(x509TagSequence))
+		let subject = try x509Name(try cursor.take())
+		let publicKey = try x509PublicKey(try cursor.take())
+		try x509UniqueIdentifiers(cursor, version: version)
+		let extensions = try x509Extensions(cursor, version: version)
+
+		if not cursor.isAtEnd() 'unexpectedField'
+			throw X509Error.invalidEncoding
+		end 'unexpectedField'
+
+		let signature = try X509Reader.over(try top.get(x509SignatureValuePart) otherwise panic("a certificate has three elements")).readBitString()
+
+		if signature.unusedBits() != 0 'partialOctet'
+			throw X509Error.invalidEncoding
+		end 'partialOctet'
+
+		let fields = X509TbsFields.create(version, serialNumber: serialNumber, signatureAlgorithm: algorithm, issuer: issuer, subject: subject, validity: validity, publicKey: publicKey)
+
+		return Certificate.create(fields, extensions: extensions, tbsCertificate: tbs, signature: signature.bytes())
+	end 'parse'
+
+	/// The chain from `leaf` through `intermediates` to one of `roots`, leaf first, each certificate exactly
+	/// as passed in, that is valid at `now` for the TLS server `host`: a DNS name or an IP address literal.
+	/// Candidate chains are searched depth first, roots before intermediates, each in the order given; the
+	/// first that passes every check is returned, and when none does, the first candidate's error is thrown.
+	public static function verify(leaf ByteArray, intermediates ByteArrays, roots ByteArrays, host String, now UnixSeconds) returns ByteArrays throws X509VerifyError
+		let certificate = try X509.parse(leaf) otherwise (error) 'unparsed'
+			if error == X509Error.unsupportedAlgorithm 'algorithm'
+				throw X509VerifyError.unsupportedAlgorithm
+			end 'algorithm'
+
+			throw X509VerifyError.invalidCertificate
+		end 'unparsed'
+
+		try x509CheckValidity(certificate, now: now)
+
+		if not certificate.allowsServerAuth() 'leafUsage'
+			throw X509VerifyError.incompatibleKeyUsage
+		end 'leafUsage'
+
+		let target = x509Host(host)
+
+		if not x509HostMatches(certificate, host: target) 'otherHost'
+			throw X509VerifyError.hostnameMismatch
+		end 'otherHost'
+
+		if roots.contains(leaf) 'trustedLeaf'
+			return ByteArrays from [leaf]
+		end 'trustedLeaf'
+
+		var pool = x509Pool(roots, isRoot: true, excluded: ByteArrays.create())
+		pool.append(x509Pool(intermediates, isRoot: false, excluded: roots))
+		var search = X509PathSearch.create(pool, host: target, now: now)
+
+		return try search.run(X509Candidate.create(certificate, der: leaf, isRoot: false))
+	end 'verify'
+end 'X509'
+
+function x509Tag(element ByteArray) returns Byte
+	return try element.get(0) otherwise panic("an element has an identifier octet")
+end 'x509Tag'
+
+function x509TopElements(der ByteArray) returns ByteArrays throws X509Error
+	var input = X509Reader.over(der)
+	let certificate = try input.element()
+
+	if not input.der.isAtEnd() or x509Tag(certificate) != x509TagSequence 'outer'
+		throw X509Error.invalidEncoding
+	end 'outer'
+
+	let top = try X509Reader.over(certificate).sequenceElements()
+
+	if top.count() != x509CertificateParts 'parts'
+		throw X509Error.invalidEncoding
+	end 'parts'
+
+	let first = try top.get(x509TbsPart) otherwise panic("three elements were counted")
+	let second = try top.get(x509SignatureAlgorithmPart) otherwise panic("three elements were counted")
+	let third = try top.get(x509SignatureValuePart) otherwise panic("three elements were counted")
+
+	if x509Tag(first) != x509TagSequence or x509Tag(second) != x509TagSequence or x509Tag(third) != x509TagBitString 'tags'
+		throw X509Error.invalidEncoding
+	end 'tags'
+
+	return top
+end 'x509TopElements'
+
+function x509IsSmallInteger(content ByteArray, value Byte) returns bool
+	return content.count() == 1 and (try content.get(0) otherwise panic("one octet was counted")) == value
+end 'x509IsSmallInteger'
+
+function x509Version(cursor X509FieldCursor) returns CertificateVersion throws X509Error
+	if not cursor.nextHasTag(x509TagVersion) 'versionOne'
+		return x509FirstVersion
+	end 'versionOne'
+
+	let inner = try X509Reader.over(try cursor.take()).explicitElements(x509VersionExplicitTag)
+	let integer = try inner.get(0) otherwise throw X509Error.invalidEncoding
+
+	if inner.count() != 1 or x509Tag(integer) != x509TagInteger 'shape'
+		throw X509Error.invalidEncoding
+	end 'shape'
+
+	let value = try X509Reader.over(integer).readSignedInteger()
+
+	if x509IsSmallInteger(value, value: x509VersionOne) 'defaultEncoded'
+		throw X509Error.invalidEncoding
+	end 'defaultEncoded'
+
+	if not x509IsSmallInteger(value, value: x509VersionThree) 'otherVersion'
+		throw X509Error.unsupportedVersion
+	end 'otherVersion'
+
+	return x509ThirdVersion
+end 'x509Version'
+
+function x509CheckAlgorithmShape(element ByteArray) throws X509Error
+	let items = try X509Reader.over(element).sequenceElements()
+	view first = try items.get(0) otherwise throw X509Error.invalidEncoding
+
+	if items.count() > x509AlgorithmIdentifierParts or x509Tag(first) != x509TagObjectIdentifier 'shape'
+		throw X509Error.invalidEncoding
+	end 'shape'
+
+	var reader = X509Reader.over(first)
+	_ = try reader.readObjectIdentifier()
+end 'x509CheckAlgorithmShape'
+
+function x509AlgorithmParts(element ByteArray) returns (ByteArray, ByteArrays) throws X509Error
+	try x509CheckAlgorithmShape(element)
+	var items = try X509Reader.over(element).sequenceElements()
+	let oid = try X509Reader.over(try items.remove(0) otherwise panic("the shape check found an OID")).readObjectIdentifier()
+	return (oid, items)
+end 'x509AlgorithmParts'
+
+function x509SignatureField(inner ByteArray, outer ByteArray) returns X509SignatureAlgorithm throws X509Error
+	let (oid, parameters) = try x509AlgorithmParts(inner)
+
+	if inner != outer 'mismatch'
+		throw X509Error.invalidEncoding
+	end 'mismatch'
+
+	if oid == x509OidRsassaPss 'pss'
+		return try x509PssAlgorithm(try parameters.get(0) otherwise throw X509Error.unsupportedAlgorithm)
+	end 'pss'
+
+	let algorithm = try x509PlainSignatureAlgorithm(oid)
+	let isRsa = algorithm == X509SignatureAlgorithm.sha256WithRsaEncryption or algorithm == X509SignatureAlgorithm.sha384WithRsaEncryption or algorithm == X509SignatureAlgorithm.sha512WithRsaEncryption
+
+	if not parameters.isEmpty() and not (isRsa and x509IsNullParameters(parameters)) 'parameters'
+		throw X509Error.unsupportedAlgorithm
+	end 'parameters'
+
+	return algorithm
+end 'x509SignatureField'
+
+function x509IsNullParameters(parameters ByteArrays) returns bool
+	return parameters.count() == 1 and (try parameters.get(0) otherwise panic("one parameter was counted")) == x509ParametersNull
+end 'x509IsNullParameters'
+
+function x509PlainSignatureAlgorithm(oid ByteArray) returns X509SignatureAlgorithm throws X509Error
+	if oid == x509OidEcdsaWithSha256 'ecdsaSha256'
+		return X509SignatureAlgorithm.ecdsaWithSha256
+	end 'ecdsaSha256'
+
+	if oid == x509OidEcdsaWithSha384 'ecdsaSha384'
+		return X509SignatureAlgorithm.ecdsaWithSha384
+	end 'ecdsaSha384'
+
+	if oid == x509OidSha256WithRsaEncryption 'rsaSha256'
+		return X509SignatureAlgorithm.sha256WithRsaEncryption
+	end 'rsaSha256'
+
+	if oid == x509OidSha384WithRsaEncryption 'rsaSha384'
+		return X509SignatureAlgorithm.sha384WithRsaEncryption
+	end 'rsaSha384'
+
+	if oid == x509OidSha512WithRsaEncryption 'rsaSha512'
+		return X509SignatureAlgorithm.sha512WithRsaEncryption
+	end 'rsaSha512'
+
+	if oid == x509OidEd25519 'ed25519'
+		return X509SignatureAlgorithm.ed25519
+	end 'ed25519'
+
+	throw X509Error.unsupportedAlgorithm
+end 'x509PlainSignatureAlgorithm'
+
+function x509HashAlgorithm(element ByteArray) returns HashAlgorithm throws X509Error
+	let (oid, parameters) = try x509AlgorithmParts(element)
+
+	if not parameters.isEmpty() and not x509IsNullParameters(parameters) 'parameters'
+		throw X509Error.unsupportedAlgorithm
+	end 'parameters'
+
+	if oid == x509OidSha256 'sha256'
+		return HashAlgorithm.sha256
+	end 'sha256'
+
+	if oid == x509OidSha384 'sha384'
+		return HashAlgorithm.sha384
+	end 'sha384'
+
+	if oid == x509OidSha512 'sha512'
+		return HashAlgorithm.sha512
+	end 'sha512'
+
+	throw X509Error.unsupportedAlgorithm
+end 'x509HashAlgorithm'
+
+function x509PssFields(parameters ByteArray) returns X509TaggedFields throws X509Error
+	if x509Tag(parameters) != x509TagSequence 'notSequence'
+		throw X509Error.invalidEncoding
+	end 'notSequence'
+
+	var fields = X509TaggedFields.create()
+
+	for item in try X509Reader.over(parameters).sequenceElements() 'eachField'
+		fields.push(try x509PssField(item, previous: fields))
+	end 'eachField'
+
+	return fields
+end 'x509PssFields'
+
+function x509PssField(item ByteArray, previous X509TaggedFields) returns X509TaggedField throws X509Error
+	let tag = x509Tag(item)
+
+	if tag < x509PssFirstTag or tag > x509PssLastTag 'tag'
+		throw X509Error.invalidEncoding
+	end 'tag'
+
+	let number = (tag - x509PssFirstTag) as Count
+
+	if not previous.isEmpty() 'ordered'
+		let last = try previous.get(previous.count() - 1) otherwise panic("a non-empty list has a last field")
+
+		if number <= last.0 'order'
+			throw X509Error.invalidEncoding
+		end 'order'
+	end 'ordered'
+
+	let inner = try X509Reader.over(item).explicitElements(number as DerTagNumber)
+
+	if inner.count() != 1 'explicit'
+		throw X509Error.invalidEncoding
+	end 'explicit'
+
+	let field = try inner.get(0) otherwise panic("one element was counted")
+	try x509CheckPssFieldShape(number, field: field)
+	return (number, field)
+end 'x509PssField'
+
+function x509CheckPssFieldShape(number Count, field ByteArray) throws X509Error
+	if number == x509PssHashField or number == x509PssMaskField 'algorithm'
+		let (_, parameters) = try x509AlgorithmParts(field)
+		view parameter = try parameters.get(0) otherwise return
+
+		if number == x509PssMaskField and x509Tag(parameter) == x509TagSequence 'maskHash'
+			try x509CheckAlgorithmShape(parameter)
+		end 'maskHash'
+
+		return
+	end 'algorithm'
+
+	if x509Tag(field) != x509TagInteger 'notInteger'
+		throw X509Error.invalidEncoding
+	end 'notInteger'
+
+	let value = try X509Reader.over(field).readSignedInteger()
+	let defaultValue = x509DefaultSaltLength if number == x509PssSaltField else x509DefaultTrailerField
+
+	if x509IsSmallInteger(value, value: defaultValue) 'defaultEncoded'
+		throw X509Error.invalidEncoding
+	end 'defaultEncoded'
+end 'x509CheckPssFieldShape'
+
+union X509FieldLookup
+	present(field ByteArray)
+	missing
+end 'X509FieldLookup'
+
+function x509LookupTaggedField(fields X509TaggedFields, number Count) returns X509FieldLookup
+	for field in fields 'eachField'
+		if field.0 == number 'found'
+			return X509FieldLookup.present(field.1)
+		end 'found'
+	end 'eachField'
+
+	return X509FieldLookup.missing
+end 'x509LookupTaggedField'
+
+function x509HasTaggedField(fields X509TaggedFields, number Count) returns bool
+	return match x509LookupTaggedField(fields, number: number) 'lookup'
+		present gives true
+		missing gives false
+	end 'lookup'
+end 'x509HasTaggedField'
+
+function x509TaggedField(fields X509TaggedFields, number Count) returns ByteArray throws X509FieldError
+	return match x509LookupTaggedField(fields, number: number) 'lookup'
+		present(field) gives field
+		default throws X509FieldError.absent
+	end 'lookup'
+end 'x509TaggedField'
+
+function x509PssAlgorithm(parameters ByteArray) returns X509SignatureAlgorithm throws X509Error
+	let fields = try x509PssFields(parameters)
+	let hashField = try x509TaggedField(fields, number: x509PssHashField) otherwise throw X509Error.unsupportedAlgorithm
+	let maskField = try x509TaggedField(fields, number: x509PssMaskField) otherwise throw X509Error.unsupportedAlgorithm
+	let saltField = try x509TaggedField(fields, number: x509PssSaltField) otherwise throw X509Error.unsupportedAlgorithm
+
+	let hash = try x509HashAlgorithm(hashField)
+	try x509CheckMaskGeneration(maskField, hash: hash)
+
+	let salt = try X509Reader.over(saltField).readSignedInteger()
+
+	if not x509IsSmallInteger(salt, value: hash.digestBytes() as Byte) 'saltLength'
+		throw X509Error.unsupportedAlgorithm
+	end 'saltLength'
+
+	if x509HasTaggedField(fields, number: x509PssTrailerField) 'trailer'
+		throw X509Error.unsupportedAlgorithm
+	end 'trailer'
+
+	return match hash 'algorithm'
+		sha256 gives X509SignatureAlgorithm.rsassaPssSha256
+		sha384 gives X509SignatureAlgorithm.rsassaPssSha384
+		sha512 gives X509SignatureAlgorithm.rsassaPssSha512
+	end 'algorithm'
+end 'x509PssAlgorithm'
+
+function x509CheckMaskGeneration(field ByteArray, hash HashAlgorithm) throws X509Error
+	let (oid, parameters) = try x509AlgorithmParts(field)
+	let maskHash = try parameters.get(0) otherwise throw X509Error.unsupportedAlgorithm
+
+	if oid != x509OidMgf1 or parameters.count() != 1 or x509Tag(maskHash) != x509TagSequence 'notMgf1'
+		throw X509Error.unsupportedAlgorithm
+	end 'notMgf1'
+
+	if (try x509HashAlgorithm(maskHash)) != hash 'otherHash'
+		throw X509Error.unsupportedAlgorithm
+	end 'otherHash'
+end 'x509CheckMaskGeneration'
+
+function x509Name(element ByteArray) returns X509Name throws X509Error
+	if x509Tag(element) != x509TagSequence 'notSequence'
+		throw X509Error.invalidEncoding
+	end 'notSequence'
+
+	var attributes = X509Attributes.create()
+
+	for relativeName in try X509Reader.over(element).sequenceElements() 'eachRelativeName'
+		try x509AppendRelativeName(relativeName, attributes: attributes)
+	end 'eachRelativeName'
+
+	return X509Name.create(element, attributes: attributes)
+end 'x509Name'
+
+function x509AppendRelativeName(relativeName ByteArray, attributes X509Attributes) throws X509Error
+	if x509Tag(relativeName) != x509TagSet 'notSet'
+		throw X509Error.invalidEncoding
+	end 'notSet'
+
+	let members = try X509Reader.over(relativeName).setElements()
+
+	if members.isEmpty() or not x509IsSetOrdered(members) 'members'
+		throw X509Error.invalidEncoding
+	end 'members'
+
+	for member in members 'eachMember'
+		attributes.push(try x509Attribute(member))
+	end 'eachMember'
+end 'x509AppendRelativeName'
+
+function x509IsSetOrdered(members ByteArrays) returns bool
+	for (iter, member) in members.withIterator() 'eachMember'
+		let following = try members.get(iter.index() + 1) otherwise return true
+
+		if x509PaddedGreater(member, right: following) 'descending'
+			return false
+		end 'descending'
+	end 'eachMember'
+
+	return true
+end 'x509IsSetOrdered'
+
+function x509PaddedGreater(left ByteArray, right ByteArray) returns bool
+	let length = left.count() if left.count() > right.count() else right.count()
+
+	for index in 0 upto length 'eachOctet'
+		let a = try left.get(index) otherwise 0
+		let b = try right.get(index) otherwise 0
+
+		if a != b 'differs'
+			return a > b
+		end 'differs'
+	end 'eachOctet'
+
+	return false
+end 'x509PaddedGreater'
+
+function x509Attribute(member ByteArray) returns X509Attribute throws X509Error
+	if x509Tag(member) != x509TagSequence 'notSequence'
+		throw X509Error.invalidEncoding
+	end 'notSequence'
+
+	let parts = try X509Reader.over(member).sequenceElements()
+	let attributeType = try parts.get(0) otherwise throw X509Error.invalidEncoding
+
+	if parts.count() != x509AttributeParts or x509Tag(attributeType) != x509TagObjectIdentifier 'shape'
+		throw X509Error.invalidEncoding
+	end 'shape'
+
+	let oid = try X509Reader.over(attributeType).readObjectIdentifier()
+	let value = try X509Reader.over(try parts.get(1) otherwise panic("two parts were counted")).readString()
+
+	return X509Attribute.create(oid, value: value)
+end 'x509Attribute'
+
+function x509ShortName(oid ByteArray) returns String throws X509FieldError
+	if oid == x509OidCommonName 'commonName'
+		return "CN"
+	end 'commonName'
+
+	if oid == x509OidOrganization 'organization'
+		return "O"
+	end 'organization'
+
+	if oid == x509OidOrganizationalUnit 'organizationalUnit'
+		return "OU"
+	end 'organizationalUnit'
+
+	if oid == x509OidCountry 'country'
+		return "C"
+	end 'country'
+
+	throw X509FieldError.absent
+end 'x509ShortName'
+
+function x509Validity(element ByteArray) returns (UnixSeconds, UnixSeconds) throws X509Error
+	let times = try X509Reader.over(element).sequenceElements()
+
+	if times.count() != x509ValidityParts 'shape'
+		throw X509Error.invalidEncoding
+	end 'shape'
+
+	let notBefore = try x509Time(try times.get(0) otherwise panic("two times were counted"))
+	let notAfter = try x509Time(try times.get(1) otherwise panic("two times were counted"))
+	return (notBefore, notAfter)
+end 'x509Validity'
+
+function x509Time(element ByteArray) returns UnixSeconds throws X509Error
+	let tag = x509Tag(element)
+
+	if tag != x509TagUtcTime and tag != x509TagGeneralizedTime 'notTime'
+		throw X509Error.invalidEncoding
+	end 'notTime'
+
+	return try X509Reader.over(element).readTime()
+end 'x509Time'
+
+function x509PublicKey(element ByteArray) returns X509PublicKey throws X509Error
+	if x509Tag(element) != x509TagSequence 'notSequence'
+		throw X509Error.invalidEncoding
+	end 'notSequence'
+
+	let items = try X509Reader.over(element).sequenceElements()
+	let identifier = try items.get(0) otherwise throw X509Error.invalidEncoding
+	let key = try items.get(1) otherwise throw X509Error.invalidEncoding
+
+	if items.count() != x509PublicKeyInfoParts or x509Tag(identifier) != x509TagSequence or x509Tag(key) != x509TagBitString 'shape'
+		throw X509Error.invalidEncoding
+	end 'shape'
+
+	let (oid, parameters) = try x509AlgorithmParts(identifier)
+	let bits = try X509Reader.over(key).readBitString()
+	let algorithm = try x509KeyAlgorithm(oid, parameters: parameters)
+
+	if bits.unusedBits() != 0 'partialOctet'
+		throw X509Error.invalidEncoding
+	end 'partialOctet'
+
+	try x509CheckKeyBytes(bits.bytes(), algorithm: algorithm)
+
+	return X509PublicKey.create(algorithm, der: element, keyBytes: bits.bytes())
+end 'x509PublicKey'
+
+function x509KeyAlgorithm(oid ByteArray, parameters ByteArrays) returns X509KeyAlgorithm throws X509Error
+	if oid == x509OidRsaEncryption and x509IsNullParameters(parameters) 'rsa'
+		return X509KeyAlgorithm.rsa
+	end 'rsa'
+
+	if oid == x509OidEd25519 and parameters.isEmpty() 'ed25519'
+		return X509KeyAlgorithm.ed25519
+	end 'ed25519'
+
+	let curve = try parameters.get(0) otherwise throw X509Error.unsupportedAlgorithm
+
+	if oid == x509OidEcPublicKey and curve == x509ParametersP256 'p256'
+		return X509KeyAlgorithm.ecP256
+	end 'p256'
+
+	if oid == x509OidEcPublicKey and curve == x509ParametersP384 'p384'
+		return X509KeyAlgorithm.ecP384
+	end 'p384'
+
+	throw X509Error.unsupportedAlgorithm
+end 'x509KeyAlgorithm'
+
+function x509CheckKeyBytes(key ByteArray, algorithm X509KeyAlgorithm) throws X509Error
+	let isWellFormed = match algorithm 'form'
+		rsa gives try x509IsRsaPublicKey(key)
+		ecP256 gives x509IsUncompressedPoint(key, length: x509P256PointBytes)
+		ecP384 gives x509IsUncompressedPoint(key, length: x509P384PointBytes)
+		ed25519 gives key.count() == x509Ed25519KeyBytes
+	end 'form'
+
+	if not isWellFormed 'malformed'
+		throw X509Error.invalidEncoding
+	end 'malformed'
+end 'x509CheckKeyBytes'
+
+function x509IsUncompressedPoint(key ByteArray, length Count) returns bool
+	return key.count() == length and (try key.get(0) otherwise panic("the length was checked")) == x509UncompressedPoint
+end 'x509IsUncompressedPoint'
+
+function x509IsRsaPublicKey(key ByteArray) returns bool throws X509Error
+	var whole = try X509Reader.whole(key)
+	let integers = try whole.sequenceElements()
+	let modulus = try integers.get(0) otherwise throw X509Error.invalidEncoding
+	let exponent = try integers.get(1) otherwise throw X509Error.invalidEncoding
+
+	if integers.count() != x509RsaPublicKeyParts or x509Tag(modulus) != x509TagInteger or x509Tag(exponent) != x509TagInteger 'shape'
+		throw X509Error.invalidEncoding
+	end 'shape'
+
+	return x509IsPositive(try X509Reader.over(modulus).readSignedInteger()) and x509IsPositive(try X509Reader.over(exponent).readSignedInteger())
+end 'x509IsRsaPublicKey'
+
+function x509IsPositive(content ByteArray) returns bool
+	let first = try content.get(0) otherwise panic("an INTEGER has a first octet")
+	return first < x509SignBit and not x509IsSmallInteger(content, value: 0)
+end 'x509IsPositive'
+
+function x509UniqueIdentifiers(cursor X509FieldCursor, version CertificateVersion) throws X509Error
+	try x509UniqueIdentifier(cursor, tag: x509TagIssuerUniqueId, tagNumber: x509IssuerUniqueIdTag, version: version)
+	try x509UniqueIdentifier(cursor, tag: x509TagSubjectUniqueId, tagNumber: x509SubjectUniqueIdTag, version: version)
+end 'x509UniqueIdentifiers'
+
+function x509UniqueIdentifier(cursor X509FieldCursor, tag Byte, tagNumber DerTagNumber, version CertificateVersion) throws X509Error
+	if not cursor.nextHasTag(tag) 'absent'
+		return
+	end 'absent'
+
+	if version == x509FirstVersion 'versionOne'
+		throw X509Error.invalidEncoding
+	end 'versionOne'
+
+	_ = try X509Reader.over(try cursor.take()).readImplicitBitString(tagNumber)
+end 'x509UniqueIdentifier'
+
+function x509Extensions(cursor X509FieldCursor, version CertificateVersion) returns X509Extensions throws X509Error
+	var extensions = X509Extensions.create()
+
+	if not cursor.nextHasTag(x509TagExtensions) 'none'
+		return extensions
+	end 'none'
+
+	if version == x509FirstVersion 'versionOne'
+		throw X509Error.invalidEncoding
+	end 'versionOne'
+
+	let wrapper = try X509Reader.over(try cursor.take()).explicitElements(x509ExtensionsExplicitTag)
+	let list = try wrapper.get(0) otherwise throw X509Error.invalidEncoding
+
+	if wrapper.count() != 1 or x509Tag(list) != x509TagSequence 'wrapper'
+		throw X509Error.invalidEncoding
+	end 'wrapper'
+
+	let items = try X509Reader.over(list).sequenceElements()
+
+	if items.isEmpty() 'empty'
+		throw X509Error.invalidEncoding
+	end 'empty'
+
+	for item in items 'eachExtension'
+		if x509Tag(item) != x509TagSequence 'notSequence'
+			throw X509Error.invalidEncoding
+		end 'notSequence'
+
+		try extensions.record(item)
+	end 'eachExtension'
+
+	return extensions
+end 'x509Extensions'
+
+function x509Critical(parts ByteArrays) returns bool throws X509Error
+	if parts.count() != x509ExtensionParts 'defaulted'
+		return false
+	end 'defaulted'
+
+	let flag = try parts.get(1) otherwise panic("three parts were counted")
+
+	if x509Tag(flag) != x509TagBoolean or not (try X509Reader.over(flag).readBoolean()) 'notCritical'
+		throw X509Error.invalidEncoding
+	end 'notCritical'
+
+	return true
+end 'x509Critical'
+
+function x509BasicConstraints(value ByteArray) returns X509BasicConstraints throws X509Error
+	var whole = try X509Reader.whole(value)
+	var cursor = X509FieldCursor.create(try whole.sequenceElements())
+	var isCertificateAuthority = false
+	var pathLength = 0 as X509PathLength
+	var hasPathLength = false
+
+	if cursor.nextHasTag(x509TagBoolean) 'flag'
+		isCertificateAuthority = try X509Reader.over(try cursor.take()).readBoolean()
+
+		if not isCertificateAuthority 'defaultEncoded'
+			throw X509Error.invalidEncoding
+		end 'defaultEncoded'
+	end 'flag'
+
+	if cursor.nextHasTag(x509TagInteger) 'limit'
+		pathLength = try x509PathLength(try X509Reader.over(try cursor.take()).readSignedInteger())
+		hasPathLength = true
+	end 'limit'
+
+	if not cursor.isAtEnd() 'shape'
+		throw X509Error.invalidEncoding
+	end 'shape'
+
+	return X509BasicConstraints.create(isCertificateAuthority, pathLength: pathLength, hasPathLength: hasPathLength)
+end 'x509BasicConstraints'
+
+function x509PathLength(content ByteArray) returns X509PathLength throws X509Error
+	let first = try content.get(0) otherwise panic("an INTEGER has a first octet")
+
+	if first >= x509SignBit or content.count() > x509LargestPathLengthBytes 'outOfRange'
+		throw X509Error.invalidEncoding
+	end 'outOfRange'
+
+	var value = 0 as X509PathLength
+
+	for octet in content 'eachOctet'
+		value = (value shl x509BitsPerByte) + (octet as X509PathLength)
+	end 'eachOctet'
+
+	return value
+end 'x509PathLength'
+
+function x509KeyUsage(value ByteArray) returns X509KeyUsages throws X509Error
+	var whole = try X509Reader.whole(value)
+	let bits = try whole.readBitString()
+	var usages = X509KeyUsages.create()
+
+	for usage in X509KeyUsage.allCases 'eachUsage'
+		if x509BitIsSet(bits, index: usage.ordinal) 'set'
+			usages.push(usage)
+		end 'set'
+	end 'eachUsage'
+
+	if usages.isEmpty() 'noBits'
+		throw X509Error.invalidEncoding
+	end 'noBits'
+
+	return usages
+end 'x509KeyUsage'
+
+function x509BitIsSet(bits DerBitString, index ElementIndex) returns bool
+	let octet = try bits.bytes().get(index / x509BitsPerByte) otherwise return false
+	return (octet and (x509HighBit shr (index mod x509BitsPerByte))) != 0
+end 'x509BitIsSet'
+
+function x509ExtendedKeyUsage(value ByteArray) returns ByteArrays throws X509Error
+	var whole = try X509Reader.whole(value)
+	let items = try whole.sequenceElements()
+	var purposes = ByteArrays.create()
+
+	for item in items 'eachPurpose'
+		if x509Tag(item) != x509TagObjectIdentifier 'notOid'
+			throw X509Error.invalidEncoding
+		end 'notOid'
+
+		purposes.push(try X509Reader.over(item).readObjectIdentifier())
+	end 'eachPurpose'
+
+	if purposes.isEmpty() 'empty'
+		throw X509Error.invalidEncoding
+	end 'empty'
+
+	return purposes
+end 'x509ExtendedKeyUsage'
+
+function x509GeneralName(element ByteArray) returns DerTagNumber throws X509Error
+	let tag = x509Tag(element)
+	let number = tag and x509TagNumberMask
+	let isConstructed = (tag and x509ConstructedBit) != 0
+
+	if (tag and x509ClassMask) != x509ContextClass or number > x509LastGeneralNameTag or isConstructed != x509ConstructedGeneralNames.contains(number) 'tag'
+		throw X509Error.invalidEncoding
+	end 'tag'
+
+	if number == x509DirectoryNameTag and (try X509Reader.over(element).explicitElements(number as DerTagNumber)).count() != 1 'directoryName'
+		throw X509Error.invalidEncoding
+	end 'directoryName'
+
+	if isConstructed 'constructed'
+		_ = try X509Reader.over(element).explicitElements(number as DerTagNumber)
+	end 'constructed'
+
+	return number
+end 'x509GeneralName'
+
+function x509Ascii(content ByteArray) returns String throws X509Error
+	for octet in content 'eachOctet'
+		if octet >= x509AsciiLimit 'notAscii'
+			throw X509Error.invalidEncoding
+		end 'notAscii'
+	end 'eachOctet'
+
+	return String.from(content)
+end 'x509Ascii'
+
+function x509SubjectAltName(value ByteArray) returns X509SubjectAltName throws X509Error
+	var whole = try X509Reader.whole(value)
+	let items = try whole.sequenceElements()
+	var names = X509SubjectAltName.create()
+
+	if items.isEmpty() 'empty'
+		throw X509Error.invalidEncoding
+	end 'empty'
+
+	for item in items 'eachName'
+		try x509AppendAltName(item, names: names)
+	end 'eachName'
+
+	return names
+end 'x509SubjectAltName'
+
+function x509AppendAltName(item ByteArray, names X509SubjectAltName) throws X509Error
+	let number = try x509GeneralName(item)
+
+	if number == x509DnsNameTag 'dnsName'
+		names.addDnsName(try x509Ascii(try X509Reader.over(item).readImplicit(number)))
+	end 'dnsName' else if number == x509IpAddressTag 'ipAddress'
+		let address = try X509Reader.over(item).readImplicit(number)
+
+		if address.count() != x509Ipv4AddressBytes and address.count() != x509Ipv6AddressBytes 'length'
+			throw X509Error.invalidEncoding
+		end 'length'
+
+		names.addIpAddress(address)
+	end 'ipAddress'
+end 'x509AppendAltName'
+
+function x509AuthorityField(field ByteArray) returns Count throws X509Error
+	let tag = x509Tag(field)
+
+	if tag == x509TagKeyIdentifier 'keyIdentifier'
+		return x509KeyIdentifierTag
+	end 'keyIdentifier'
+
+	if tag == x509TagAuthorityCertIssuer 'issuer'
+		_ = try X509Reader.over(field).explicitElements(x509AuthorityCertIssuerTag)
+		return x509AuthorityCertIssuerTag
+	end 'issuer'
+
+	if tag == x509TagAuthorityCertSerial 'serial'
+		_ = try X509Reader.over(field).readImplicitSignedInteger(x509AuthorityCertSerialTag)
+		return x509AuthorityCertSerialTag
+	end 'serial'
+
+	throw X509Error.invalidEncoding
+end 'x509AuthorityField'
+
+function x509NameConstraints(value ByteArray, critical bool) returns X509NameConstraints throws X509Error
+	var whole = try X509Reader.whole(value)
+	let fields = try whole.sequenceElements()
+	var constraints = X509NameConstraints.create()
+	var hasSkipped = false
+	var lastTag = 0 as Byte
+
+	if fields.isEmpty() 'empty'
+		throw X509Error.invalidEncoding
+	end 'empty'
+
+	for field in fields 'eachField'
+		let tag = x509Tag(field)
+
+		if (tag != x509TagPermittedSubtrees and tag != x509TagExcludedSubtrees) or tag <= lastTag 'tag'
+			throw X509Error.invalidEncoding
+		end 'tag'
+
+		lastTag = tag
+		let isPermitted = tag == x509TagPermittedSubtrees
+		let number = x509PermittedSubtreesTag if isPermitted else x509ExcludedSubtreesTag
+
+		let skipped = try x509AppendSubtrees(try X509Reader.over(field).explicitElements(number), constraints: constraints, isPermitted: isPermitted)
+		hasSkipped = hasSkipped or skipped
+	end 'eachField'
+
+	if hasSkipped and critical 'unsupportedForm'
+		throw X509Error.unhandledCriticalExtension
+	end 'unsupportedForm'
+
+	return constraints
+end 'x509NameConstraints'
+
+function x509AppendSubtrees(subtrees ByteArrays, constraints X509NameConstraints, isPermitted bool) returns bool throws X509Error
+	var hasSkipped = false
+
+	if subtrees.isEmpty() 'empty'
+		throw X509Error.invalidEncoding
+	end 'empty'
+
+	for subtree in subtrees 'eachSubtree'
+		if not (try x509AppendSubtree(subtree, constraints: constraints, isPermitted: isPermitted)) 'skipped'
+			hasSkipped = true
+		end 'skipped'
+	end 'eachSubtree'
+
+	return hasSkipped
+end 'x509AppendSubtrees'
+
+function x509AppendSubtree(subtree ByteArray, constraints X509NameConstraints, isPermitted bool) returns bool throws X509Error
+	if x509Tag(subtree) != x509TagSequence 'notSequence'
+		throw X509Error.invalidEncoding
+	end 'notSequence'
+
+	let parts = try X509Reader.over(subtree).sequenceElements()
+	let base = try parts.get(0) otherwise throw X509Error.invalidEncoding
+
+	if parts.count() != 1 'bounds'
+		throw X509Error.invalidEncoding
+	end 'bounds'
+
+	let number = try x509GeneralName(base)
+
+	if number == x509DnsNameTag 'dnsName'
+		let name = try x509Ascii(try X509Reader.over(base).readImplicit(number))
+
+		if not x509IsSubtreeName(name) 'syntax'
+			throw X509Error.invalidEncoding
+		end 'syntax'
+
+		constraints.addDnsName(name, isPermitted: isPermitted)
+		return true
+	end 'dnsName'
+
+	if number == x509IpAddressTag 'ipAddress'
+		let range = try X509Reader.over(base).readImplicit(number)
+
+		if (range.count() != x509Ipv4RangeBytes and range.count() != x509Ipv6RangeBytes) or not x509IsMask(range) 'range'
+			throw X509Error.invalidEncoding
+		end 'range'
+
+		constraints.addIpRange(range, isPermitted: isPermitted)
+		return true
+	end 'ipAddress'
+
+	return false
+end 'x509AppendSubtree'
+
+function x509IsMask(range ByteArray) returns bool
+	var hasZero = false
+
+	for index in range.count() / x509RangeHalves upto range.count() 'eachOctet'
+		let octet = try range.get(index) otherwise panic("the mask is the range's second half")
+
+		for bit in 0 upto x509BitsPerByte 'eachBit'
+			let isSet = (octet and (x509HighBit shr bit)) != 0
+
+			if isSet and hasZero 'gap'
+				return false
+			end 'gap'
+
+			hasZero = hasZero or not isSet
+		end 'eachBit'
+	end 'eachOctet'
+
+	return true
+end 'x509IsMask'
+
+function x509DottedOid(content ByteArray) returns String
+	var text = ""
+	var arc = 0 as X509OidArc
+	var isFirst = true
+
+	for octet in content 'eachOctet'
+		arc = (arc shl x509BitsPerArcOctet) or ((octet and x509ArcDigitMask) as X509OidArc)
+
+		if (octet and x509ArcContinuation) == 0 'lastOctet'
+			text.append(x509ArcText(arc, isFirst: isFirst))
+			arc = 0
+			isFirst = false
+		end 'lastOctet'
+	end 'eachOctet'
+
+	return text
+end 'x509DottedOid'
+
+function x509ArcText(arc X509OidArc, isFirst bool) returns String
+	if not isFirst 'later'
+		return ".{arc}"
+	end 'later'
+
+	if arc >= x509ThirdRootOffset 'jointIsoItu'
+		return "{x509JointIsoItuArc}.{arc - x509ThirdRootOffset}"
+	end 'jointIsoItu'
+
+	return "{arc / x509ArcsPerRoot}.{arc mod x509ArcsPerRoot}"
+end 'x509ArcText'
+
+function x509HasBoundedArcs(content ByteArray) returns bool
+	var octets = 0 as Count
+
+	for octet in content 'eachOctet'
+		octets = octets + 1
+
+		if octets > x509MaxArcOctets 'tooLong'
+			return false
+		end 'tooLong'
+
+		if (octet and x509ArcContinuation) == 0 'lastOctet'
+			octets = 0
+		end 'lastOctet'
+	end 'eachOctet'
+
+	return true
+end 'x509HasBoundedArcs'
+
+function x509Pool(ders ByteArrays, isRoot bool, excluded ByteArrays) returns X509Candidates
+	var pool = X509Candidates.create()
+
+	for der in ders 'eachCertificate'
+		let certificate = try X509.parse(der) otherwise continue
+
+		if not excluded.contains(der) 'kept'
+			pool.push(X509Candidate.create(certificate, der: der, isRoot: isRoot))
+		end 'kept'
+	end 'eachCertificate'
+
+	return pool
+end 'x509Pool'
+
+function x509IssuedBy(child Certificate, issuer Certificate) returns bool
+	if child.issuer().der() != issuer.subject().der() 'otherName'
+		return false
+	end 'otherName'
+
+	let authority = try child.authorityKeyId() otherwise return true
+	let subject = try issuer.subjectKeyId() otherwise return true
+	return authority == subject
+end 'x509IssuedBy'
+
+function x509Repeats(chain X509Chain, candidate X509Candidate) returns bool
+	for link in chain 'eachLink'
+		if link.certificate.subject().der() == candidate.certificate.subject().der() and link.certificate.publicKey().der() == candidate.certificate.publicKey().der() 'same'
+			return true
+		end 'same'
+	end 'eachLink'
+
+	return false
+end 'x509Repeats'
+
+function x509CheckValidity(certificate Certificate, now UnixSeconds) throws X509VerifyError
+	if now < certificate.notBefore() 'early'
+		throw X509VerifyError.notYetValid
+	end 'early'
+
+	if now > certificate.notAfter() 'late'
+		throw X509VerifyError.expired
+	end 'late'
+end 'x509CheckValidity'
+
+function x509CheckIssuer(issuer Certificate, below Count, leaf Certificate, host X509Host, now UnixSeconds) throws X509VerifyError
+	try x509CheckValidity(issuer, now: now)
+	let constraints = try issuer.basicConstraints() otherwise throw X509VerifyError.notAuthorizedToSign
+	let usages = try issuer.keyUsage() otherwise X509KeyUsages from [X509KeyUsage.keyCertSign]
+
+	if not constraints.isCertificateAuthority() or not usages.contains(X509KeyUsage.keyCertSign) 'notCa'
+		throw X509VerifyError.notAuthorizedToSign
+	end 'notCa'
+
+	let limit = try constraints.pathLength() otherwise x509MaxChain
+
+	if (below as X509PathLength) > limit 'tooDeep'
+		throw X509VerifyError.pathLengthExceeded
+	end 'tooDeep'
+
+	let names = try issuer.nameConstraints() otherwise X509NameConstraints.create()
+	try x509CheckNameConstraints(names, leaf: leaf, host: host)
+
+	if not issuer.allowsServerAuth() 'issuerUsage'
+		throw X509VerifyError.incompatibleKeyUsage
+	end 'issuerUsage'
+end 'x509CheckIssuer'
+
+function x509CheckSignature(child Certificate, issuer Certificate) throws X509VerifyError
+	let key = issuer.publicKey()
+	let message = child.tbsCertificate()
+	let signature = child.signature()
+
+	let isValid = match child.signatureAlgorithm() 'verify'
+		ecdsaWithSha256 gives try x509VerifyEcdsa(key, curve: EcdsaCurve.p256, message: message, signature: signature)
+		ecdsaWithSha384 gives try x509VerifyEcdsa(key, curve: EcdsaCurve.p384, message: message, signature: signature)
+		sha256WithRsaEncryption gives try x509VerifyRsa(key, hash: HashAlgorithm.sha256, isPss: false, message: message, signature: signature)
+		sha384WithRsaEncryption gives try x509VerifyRsa(key, hash: HashAlgorithm.sha384, isPss: false, message: message, signature: signature)
+		sha512WithRsaEncryption gives try x509VerifyRsa(key, hash: HashAlgorithm.sha512, isPss: false, message: message, signature: signature)
+		rsassaPssSha256 gives try x509VerifyRsa(key, hash: HashAlgorithm.sha256, isPss: true, message: message, signature: signature)
+		rsassaPssSha384 gives try x509VerifyRsa(key, hash: HashAlgorithm.sha384, isPss: true, message: message, signature: signature)
+		rsassaPssSha512 gives try x509VerifyRsa(key, hash: HashAlgorithm.sha512, isPss: true, message: message, signature: signature)
+		ed25519 gives try x509VerifyEd25519(key, message: message, signature: signature)
+	end 'verify'
+
+	if not isValid 'forged'
+		throw X509VerifyError.badSignature
+	end 'forged'
+end 'x509CheckSignature'
+
+function x509VerifyEcdsa(key X509PublicKey, curve EcdsaCurve, message ByteArray, signature ByteArray) returns bool throws X509VerifyError
+	let keyCurve = match key.algorithm() 'curve'
+		ecP256 gives EcdsaCurve.p256
+		ecP384 gives EcdsaCurve.p384
+		default throws X509VerifyError.badSignature
+	end 'curve'
+
+	if keyCurve != curve 'pairing'
+		throw X509VerifyError.unsupportedAlgorithm
+	end 'pairing'
+
+	return try Ecdsa.verify(curve, publicKey: key.keyBytes(), message: message, signature: signature) otherwise false
+end 'x509VerifyEcdsa'
+
+function x509VerifyRsa(key X509PublicKey, hash HashAlgorithm, isPss bool, message ByteArray, signature ByteArray) returns bool throws X509VerifyError
+	if key.algorithm() != X509KeyAlgorithm.rsa 'family'
+		throw X509VerifyError.badSignature
+	end 'family'
+
+	var integers = try DerReader.create(key.keyBytes()).enterSequence() otherwise panic("a parsed RSA key is an RSAPublicKey")
+	let bits = x509ModulusBits(try integers.readInteger() otherwise panic("a parsed RSA key has a positive modulus"))
+
+	if bits < x509MinimumModulusBits or bits > x509MaximumModulusBits 'size'
+		throw X509VerifyError.unsupportedAlgorithm
+	end 'size'
+
+	if isPss 'pss'
+		return try Rsa.verifyPss(key.der(), hash: hash, message: message, signature: signature) otherwise false
+	end 'pss'
+
+	return try Rsa.verifyPkcs1v15(key.der(), hash: hash, message: message, signature: signature) otherwise false
+end 'x509VerifyRsa'
+
+function x509ModulusBits(modulus ByteArray) returns Count
+	var top = try modulus.get(0) otherwise panic("a positive modulus has a first octet")
+	var bits = (modulus.count() - 1) * x509BitsPerByte
+
+	while top != 0 'eachBit'
+		bits = bits + 1
+		top = top shr 1
+	end 'eachBit'
+
+	return bits
+end 'x509ModulusBits'
+
+function x509VerifyEd25519(key X509PublicKey, message ByteArray, signature ByteArray) returns bool throws X509VerifyError
+	if key.algorithm() != X509KeyAlgorithm.ed25519 'family'
+		throw X509VerifyError.badSignature
+	end 'family'
+
+	return try Ed25519.verify(key.keyBytes(), message: message, signature: signature) otherwise false
+end 'x509VerifyEd25519'
+
+function x509CheckNameConstraints(constraints X509NameConstraints, leaf Certificate, host X509Host) throws X509VerifyError
+	let names = try leaf.subjectAltName() otherwise panic("a leaf that matched its host has a subjectAltName")
+
+	if constraints.constrainsDnsNames() 'dnsNames'
+		for name in names.dnsNames() 'eachDnsName'
+			try x509CheckDnsName(try x509NameLabels(name.toByteArray()) otherwise throw X509VerifyError.nameConstraintViolation, constraints: constraints)
+		end 'eachDnsName'
+
+		if let labels = try x509HostLabels(host) 'dnsHost'
+			try x509CheckDnsName(labels, constraints: constraints)
+		end 'dnsHost'
+	end 'dnsNames'
+
+	if constraints.constrainsIpAddresses() 'ipAddresses'
+		for address in names.ipAddresses() 'eachAddress'
+			try x509CheckIpAddress(address, constraints: constraints)
+		end 'eachAddress'
+
+		if let address = try x509HostAddress(host) 'ipHost'
+			try x509CheckIpAddress(address, constraints: constraints)
+		end 'ipHost'
+	end 'ipAddresses'
+end 'x509CheckNameConstraints'
+
+function x509HostLabels(host X509Host) returns ByteArrays throws X509Malformation
+	return match host 'labels'
+		dnsName(labels) gives labels
+		default throws X509Malformation.malformed
+	end 'labels'
+end 'x509HostLabels'
+
+function x509HostAddress(host X509Host) returns ByteArray throws X509Malformation
+	return match host 'address'
+		ipAddress(address) gives address
+		default throws X509Malformation.malformed
+	end 'address'
+end 'x509HostAddress'
+
+function x509CheckDnsName(labels ByteArrays, constraints X509NameConstraints) throws X509VerifyError
+	if labels.isEmpty() 'empty'
+		throw X509VerifyError.nameConstraintViolation
+	end 'empty'
+
+	for subtree in constraints.excludedDnsNames() 'eachExcluded'
+		if x509DnsSubtreeMatches(labels, subtree: subtree, isExcluded: true) 'excluded'
+			throw X509VerifyError.nameConstraintViolation
+		end 'excluded'
+	end 'eachExcluded'
+
+	if constraints.permittedDnsNames().isEmpty() 'unrestricted'
+		return
+	end 'unrestricted'
+
+	for subtree in constraints.permittedDnsNames() 'eachPermitted'
+		if x509DnsSubtreeMatches(labels, subtree: subtree, isExcluded: false) 'permitted'
+			return
+		end 'permitted'
+	end 'eachPermitted'
+
+	throw X509VerifyError.nameConstraintViolation
+end 'x509CheckDnsName'
+
+function x509DnsSubtreeMatches(labels ByteArrays, subtree String, isExcluded bool) returns bool
+	let mustHaveSubdomain = subtree.startsWith(".")
+	let wanted = try x509ConstraintLabels(subtree) otherwise panic("a parsed dNSName subtree has labels")
+
+	if labels.count() < wanted.count() or (mustHaveSubdomain and labels.count() == wanted.count()) 'tooShort'
+		return false
+	end 'tooShort'
+
+	let offset = labels.count() - wanted.count()
+
+	for (iter, label) in wanted.withIterator() 'eachLabel'
+		let position = offset + iter.index()
+		let candidate = try labels.get(position) otherwise panic("the name has at least the subtree's labels")
+
+		if candidate != label and not (isExcluded and position == 0 and candidate == ByteArray from [x509Asterisk]) 'differs'
+			return false
+		end 'differs'
+	end 'eachLabel'
+
+	return true
+end 'x509DnsSubtreeMatches'
+
+function x509CheckIpAddress(address ByteArray, constraints X509NameConstraints) throws X509VerifyError
+	for range in constraints.excludedIpRanges() 'eachExcluded'
+		if x509InRange(address, range: range) 'excluded'
+			throw X509VerifyError.nameConstraintViolation
+		end 'excluded'
+	end 'eachExcluded'
+
+	if constraints.permittedIpRanges().isEmpty() 'unrestricted'
+		return
+	end 'unrestricted'
+
+	for range in constraints.permittedIpRanges() 'eachPermitted'
+		if x509InRange(address, range: range) 'permitted'
+			return
+		end 'permitted'
+	end 'eachPermitted'
+
+	throw X509VerifyError.nameConstraintViolation
+end 'x509CheckIpAddress'
+
+function x509InRange(address ByteArray, range ByteArray) returns bool
+	if range.count() != x509RangeHalves * address.count() 'otherFamily'
+		return false
+	end 'otherFamily'
+
+	for (iter, octet) in address.withIterator() 'eachOctet'
+		let network = try range.get(iter.index()) otherwise panic("the range is twice the address")
+		let mask = try range.get(iter.index() + address.count()) otherwise panic("the range is twice the address")
+
+		if (octet and mask) != (network and mask) 'outside'
+			return false
+		end 'outside'
+	end 'eachOctet'
+
+	return true
+end 'x509InRange'
+
+function x509Lowercase(octet Byte) returns Byte
+	if octet >= x509AsciiUpperA and octet <= x509AsciiUpperZ 'upper'
+		return octet + x509AsciiCaseOffset
+	end 'upper'
+
+	return octet
+end 'x509Lowercase'
+
+function x509Split(bytes ByteArray, separator Byte) returns ByteArrays
+	var parts = ByteArrays.create()
+	var part = ByteArray.create()
+
+	for octet in bytes 'eachOctet'
+		if octet == separator 'boundary'
+			parts.push(part)
+			part = ByteArray.create()
+		end 'boundary' else 'inside'
+			part.push(x509Lowercase(octet))
+		end 'inside'
+	end 'eachOctet'
+
+	parts.push(part)
+	return parts
+end 'x509Split'
+
+function x509NameLabels(bytes ByteArray) returns ByteArrays throws X509Malformation
+	let labels = x509Split(bytes, separator: x509Dot)
+
+	if bytes.isEmpty() 'everything'
+		return ByteArrays.create()
+	end 'everything'
+
+	if not x509AreNameLabels(labels) 'malformed'
+		throw X509Malformation.malformed
+	end 'malformed'
+
+	return labels
+end 'x509NameLabels'
+
+function x509AreNameLabels(labels ByteArrays) returns bool
+	for label in labels 'eachLabel'
+		if label.isEmpty() or not x509IsVisibleAscii(label) 'malformed'
+			return false
+		end 'malformed'
+	end 'eachLabel'
+
+	return true
+end 'x509AreNameLabels'
+
+function x509SubtreeBytes(subtree String) returns ByteArray
+	let bytes = subtree.toByteArray()
+
+	if subtree.startsWith(".") 'leadingDot'
+		return try bytes.slice(1, endIndex: bytes.count()) otherwise panic("the leading dot is inside the subtree")
+	end 'leadingDot'
+
+	return bytes
+end 'x509SubtreeBytes'
+
+function x509IsSubtreeName(subtree String) returns bool
+	let bytes = x509SubtreeBytes(subtree)
+	return bytes.isEmpty() or x509AreNameLabels(x509Split(bytes, separator: x509Dot))
+end 'x509IsSubtreeName'
+
+function x509ConstraintLabels(subtree String) returns ByteArrays throws X509Malformation
+	return try x509NameLabels(x509SubtreeBytes(subtree))
+end 'x509ConstraintLabels'
+
+function x509IsVisibleAscii(label ByteArray) returns bool
+	for octet in label 'eachOctet'
+		if octet < x509FirstVisibleAscii or octet > x509LastVisibleAscii 'invisible'
+			return false
+		end 'invisible'
+	end 'eachOctet'
+
+	return true
+end 'x509IsVisibleAscii'
+
+function x509IsHostLabel(label ByteArray) returns bool
+	if label.isEmpty() or label.count() > x509MaxLabelBytes 'length'
+		return false
+	end 'length'
+
+	for octet in label 'eachOctet'
+		if not ((octet >= x509AsciiLowerA and octet <= x509AsciiLowerZ) or (octet >= x509AsciiZero and octet <= x509AsciiNine) or octet == x509Hyphen) 'symbol'
+			return false
+		end 'symbol'
+	end 'eachOctet'
+
+	return true
+end 'x509IsHostLabel'
+
+function x509AreHostLabels(labels ByteArrays) returns bool
+	for label in labels 'eachLabel'
+		if not x509IsHostLabel(label) 'invalid'
+			return false
+		end 'invalid'
+	end 'eachLabel'
+
+	return true
+end 'x509AreHostLabels'
+
+function x509Host(host String) returns X509Host
+	let bytes = host.toByteArray()
+
+	if let ipv4 = try x509Ipv4(bytes) 'ipv4'
+		return X509Host.ipAddress(ipv4)
+	end 'ipv4'
+
+	if bytes.contains(x509Colon) 'ipv6'
+		let ipv6 = try x509Ipv6(bytes) otherwise return X509Host.invalid
+		return X509Host.ipAddress(ipv6)
+	end 'ipv6'
+
+	let name = x509WithoutTrailingDot(bytes)
+	let labels = x509Split(name, separator: x509Dot)
+
+	if name.isEmpty() or name.count() > x509MaxNameBytes or not x509AreHostLabels(labels) 'invalid'
+		return X509Host.invalid
+	end 'invalid'
+
+	return X509Host.dnsName(labels)
+end 'x509Host'
+
+function x509WithoutTrailingDot(bytes ByteArray) returns ByteArray
+	if bytes.isEmpty() or (try bytes.get(bytes.count() - 1) otherwise panic("the host is not empty")) != x509Dot 'noDot'
+		return bytes
+	end 'noDot'
+
+	return try bytes.slice(0, endIndex: bytes.count() - 1) otherwise panic("the dot is inside the host")
+end 'x509WithoutTrailingDot'
+
+function x509Ipv4(bytes ByteArray) returns ByteArray throws X509Malformation
+	let parts = x509Split(bytes, separator: x509Dot)
+	var address = ByteArray.create()
+
+	if parts.count() != x509Ipv4Parts 'parts'
+		throw X509Malformation.malformed
+	end 'parts'
+
+	for part in parts 'eachPart'
+		address.push(try x509Ipv4Octet(part))
+	end 'eachPart'
+
+	return address
+end 'x509Ipv4'
+
+function x509Ipv4Octet(part ByteArray) returns Byte throws X509Malformation
+	let first = try part.get(0) otherwise throw X509Malformation.malformed
+
+	if part.count() > x509MaxDecimalDigits or (first == x509AsciiZero and part.count() > 1) 'shape'
+		throw X509Malformation.malformed
+	end 'shape'
+
+	var value = 0 as X509DecimalOctet
+
+	for symbol in part 'eachDigit'
+		if symbol < x509AsciiZero or symbol > x509AsciiNine 'notDigit'
+			throw X509Malformation.malformed
+		end 'notDigit'
+
+		value = value * x509DecimalBase + ((symbol - x509AsciiZero) as X509DecimalOctet)
+	end 'eachDigit'
+
+	if value > x509MaxOctet 'large'
+		throw X509Malformation.malformed
+	end 'large'
+
+	return value as Byte
+end 'x509Ipv4Octet'
+
+function x509Ipv6(bytes ByteArray) returns ByteArray throws X509Malformation
+	let parts = x509Split(bytes, separator: x509Colon)
+	let last = try parts.get(parts.count() - 1) otherwise panic("a split has a part")
+	let hasTail = last.contains(x509Dot)
+	var tail = ByteArray.create()
+
+	if hasTail 'ipv4Tail'
+		tail = try x509Ipv4(last)
+	end 'ipv4Tail'
+
+	let gaps = x509InnerGaps(parts)
+	try x509CheckGaps(parts, gaps: gaps)
+	var address = ByteArray.create()
+
+	for (iter, part) in parts.withIterator() 'eachPart'
+		if gaps.contains(iter.index()) 'gap'
+			try x509FillGap(address, parts: parts, tailBytes: tail.count())
+		end 'gap' else if not part.isEmpty() and not (hasTail and iter.index() + 1 == parts.count()) 'hextet'
+			try x509AppendHextet(address, part: part)
+		end 'hextet'
+	end 'eachPart'
+
+	address.append(tail)
+
+	if address.count() != x509Ipv6AddressBytes 'length'
+		throw X509Malformation.malformed
+	end 'length'
+
+	return address
+end 'x509Ipv6'
+
+function x509InnerGaps(parts ByteArrays) returns X509PartIndices
+	var gaps = X509PartIndices.create()
+
+	for (iter, part) in parts.withIterator() 'eachPart'
+		if iter.index() > 0 and iter.index() + 1 < parts.count() and part.isEmpty() 'empty'
+			gaps.push(iter.index())
+		end 'empty'
+	end 'eachPart'
+
+	return gaps
+end 'x509InnerGaps'
+
+function x509CheckGaps(parts ByteArrays, gaps X509PartIndices) throws X509Malformation
+	let first = try parts.get(0) otherwise panic("a split has a part")
+	let last = try parts.get(parts.count() - 1) otherwise panic("a split has a part")
+	let leading = X509PartIndices from [x509LeadingGap]
+	let trailing = X509PartIndices from [parts.count() - x509TrailingGapOffset]
+
+	if gaps.count() > 1 or (first.isEmpty() and gaps != leading) or (last.isEmpty() and gaps != trailing) 'malformed'
+		throw X509Malformation.malformed
+	end 'malformed'
+end 'x509CheckGaps'
+
+function x509FillGap(address ByteArray, parts ByteArrays, tailBytes Count) throws X509Malformation
+	var present = tailBytes
+
+	for part in parts 'eachPart'
+		if not part.isEmpty() 'hextet'
+			present = present + x509HextetBytes
+		end 'hextet'
+	end 'eachPart'
+
+	if tailBytes > 0 'tailPart'
+		present = present - x509HextetBytes
+	end 'tailPart'
+
+	if present >= x509Ipv6AddressBytes 'noRoom'
+		throw X509Malformation.malformed
+	end 'noRoom'
+
+	for _ in present upto x509Ipv6AddressBytes 'eachZero'
+		address.push(0)
+	end 'eachZero'
+end 'x509FillGap'
+
+function x509AppendHextet(address ByteArray, part ByteArray) throws X509Malformation
+	if part.isEmpty() or part.count() > x509MaxHextetDigits 'length'
+		throw X509Malformation.malformed
+	end 'length'
+
+	var value = 0 as DerLength
+
+	for symbol in part 'eachDigit'
+		value = value * x509HexBase + ((try x509HexDigit(symbol)) as DerLength)
+	end 'eachDigit'
+
+	address.push((value shr x509BitsPerByte) as Byte)
+	address.push((value and x509ByteMask) as Byte)
+end 'x509AppendHextet'
+
+function x509HexDigit(symbol Byte) returns Byte throws X509Malformation
+	if symbol >= x509AsciiZero and symbol <= x509AsciiNine 'decimal'
+		return symbol - x509AsciiZero
+	end 'decimal'
+
+	if symbol >= x509AsciiLowerA and symbol <= x509AsciiLowerF 'letter'
+		return symbol - x509AsciiLowerA + x509HexLetterOffset
+	end 'letter'
+
+	throw X509Malformation.malformed
+end 'x509HexDigit'
+
+function x509HostMatches(certificate Certificate, host X509Host) returns bool
+	let names = try certificate.subjectAltName() otherwise return false
+
+	return match host 'kind'
+		dnsName(labels) gives x509AnyPatternMatches(names.dnsNames(), labels: labels)
+		ipAddress(address) gives names.ipAddresses().contains(address)
+		invalid gives false
+	end 'kind'
+end 'x509HostMatches'
+
+function x509AnyPatternMatches(patterns StringArray, labels ByteArrays) returns bool
+	for pattern in patterns 'eachPattern'
+		if x509PatternMatches(pattern, labels: labels) 'matched'
+			return true
+		end 'matched'
+	end 'eachPattern'
+
+	return false
+end 'x509AnyPatternMatches'
+
+function x509PatternMatches(pattern String, labels ByteArrays) returns bool
+	let bytes = pattern.toByteArray()
+
+	if bytes.isEmpty() or bytes.count() > x509MaxNameBytes 'length'
+		return false
+	end 'length'
+
+	var parts = x509Split(bytes, separator: x509Dot)
+	view first = try parts.get(0) otherwise panic("a split has a part")
+
+	if first == ByteArray from [x509Asterisk] 'wildcard'
+		_ = try parts.remove(0) otherwise panic("a split has a part")
+		var rest = labels.clone()
+		_ = try rest.remove(0) otherwise return false
+		return parts.count() + 1 >= x509MinWildcardLabels and x509AreHostLabels(parts) and rest == parts
+	end 'wildcard'
+
+	return x509AreHostLabels(parts) and labels == parts
+end 'x509PatternMatches'

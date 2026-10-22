@@ -15,6 +15,9 @@ release's version as its heading when the release is cut.
 
 ### Breaking changes
 
+- `DerError` has two more cases, `invalidBoolean` and `invalidString`, so a `match` over it that lists
+  every case is no longer exhaustive.
+  Fix: add arms for `invalidBoolean` and `invalidString`.
 - An interface requirement returning one typealias of a generic instance is not met by a method returning
   another typealias of that instance (E3016), as a parameter already was not.
   Fix: declare the method's return with the requirement's own typealias.

@@ -610,7 +610,7 @@ type JsonParser
 			end 'badLow'
 
 			let cp = 0x10000 + (cu - 0xD800) * 0x400 + (low - 0xDC00)
-			encodeCodepoint(cp, out: out)
+			utf8AppendCodepoint(cp as Codepoint, out: out)
 			return
 		end 'high'
 
@@ -620,7 +620,7 @@ type JsonParser
 			throw JsonError.invalidSurrogate
 		end 'lowAlone'
 
-		encodeCodepoint(cu, out: out)
+		utf8AppendCodepoint(cu as Codepoint, out: out)
 	end 'decodeUnicodeEscape'
 
 	function parseHex4() returns JsonInt throws JsonError
@@ -747,40 +747,6 @@ function hexDigit(b Byte) returns JsonInt throws JsonError
 		notAHexDigit then throw JsonError.invalidEscape
 	end 'reading'
 end 'hexDigit'
-
-function encodeCodepoint(cp JsonInt, out ByteArray)
-	if cp < 0 'badCp'
-		panic("encodeCodepoint: negative codepoint")
-	end 'badCp'
-
-	if cp <= 0x7F 'oneByte'
-		out.push(cp)
-		return
-	end 'oneByte'
-
-	if cp <= 0x7FF 'twoBytes'
-		out.push(0xC0 or (cp / 0x40))
-		out.push(0x80 or (cp and 0x3F))
-		return
-	end 'twoBytes'
-
-	if cp <= 0xFFFF 'threeBytes'
-		out.push(0xE0 or (cp / 0x1000))
-		out.push(0x80 or ((cp / 0x40) and 0x3F))
-		out.push(0x80 or (cp and 0x3F))
-		return
-	end 'threeBytes'
-
-	if cp <= 0x10FFFF 'fourBytes'
-		out.push(0xF0 or (cp / 0x40000))
-		out.push(0x80 or ((cp / 0x1000) and 0x3F))
-		out.push(0x80 or ((cp / 0x40) and 0x3F))
-		out.push(0x80 or (cp and 0x3F))
-		return
-	end 'fourBytes'
-
-	panic("encodeCodepoint: codepoint above U+10FFFF")
-end 'encodeCodepoint'
 
 // =============================================================================
 // Stringify

@@ -2916,6 +2916,13 @@ the DER rules; a constructed element is entered as a new reader over its content
 | `readOctetString()` | `ByteArray` | `DerError` | A primitive OCTET STRING's content. |
 | `readUtcTime()` | `UnixSeconds` | `DerError` | A UTCTime `YYMMDDHHMMSSZ`. Years `50` to `99` are 1950 to 1999 and `00` to `49` are 2000 to 2049 (RFC 5280 section 4.1.2.5.1). |
 | `readGeneralizedTime()` | `UnixSeconds` | `DerError` | A GeneralizedTime `YYYYMMDDHHMMSSZ`. Fractional seconds, which RFC 5280 forbids, are refused. |
+| `readSignedInteger()` | `ByteArray` | `DerError` | An INTEGER of either sign, as its content octets: minimal big-endian two's complement. |
+| `readBoolean()` | `bool` | `DerError` | A BOOLEAN, whose one content octet is `00` or `ff`. |
+| `readString()` | `String` | `DerError` | A UTF8String, PrintableString, IA5String, TeletexString (each octet one ISO 8859-1 character), BMPString (UTF-16BE) or UniversalString (UTF-32BE), decoded. |
+| `readElement()` | `ByteArray` | `DerError` | The next element, whatever its tag, as its whole encoding: identifier, length and content octets. |
+| `readImplicit(tagNumber DerTagNumber)` | `ByteArray` | `DerError` | The content of a primitive context-specific `[tagNumber]`, the implicit tag X.509 writes on a key identifier or a dNSName. |
+| `readImplicitBitString(tagNumber DerTagNumber)` | `DerBitString` | `DerError` | A primitive context-specific `[tagNumber]` holding an implicitly tagged BIT STRING. |
+| `readImplicitSignedInteger(tagNumber DerTagNumber)` | `ByteArray` | `DerError` | A primitive context-specific `[tagNumber]` holding an implicitly tagged INTEGER, as `readSignedInteger` answers it. |
 
 A `DerHeader` has `tagClass()`, a `DerTagClass` (`universal`, `application`, `contextSpecific` or
 `private`), `isConstructed()`, `tagNumber()` and `length()`, the number of content octets. A `DerBitString`
@@ -2944,6 +2951,8 @@ octet are not part of the string.
 | `invalidBitString` | A BIT STRING with no unused-bits octet, more than 7 unused bits, unused bits and no data, or a set unused bit. |
 | `invalidObjectIdentifier` | An empty OBJECT IDENTIFIER, a subidentifier with a leading `0x80` octet, or a last octet with its continuation bit set. |
 | `invalidTime` | A time not in the form above, or a date or clock time that does not exist. |
+| `invalidBoolean` | A BOOLEAN that is not one octet of `00` or `ff`. |
+| `invalidString` | Text outside its string type: malformed UTF-8, a PrintableString character outside `A-Z a-z 0-9`, space and `' ( ) + , - . / : = ?`, an IA5String octet above `7f`, a BMPString or UniversalString of partial units, or a surrogate or a value above U+10FFFF. |
 
 ```maxon
 function hex(bytes ByteArray) returns String
@@ -3347,6 +3356,118 @@ signs `CertificateVerify`.
 least `n`. The signature is a function of the key and the message alone; `s` is not normalized to the low
 half, and each `INTEGER` is minimal. The nonce, its inverse and the private key are handled in constant
 time. [`Ecdsa.verify`](#ecdsa) with `EcdsaCurve.p256` accepts every signature it makes.
+
+## X509
+
+`X509` decodes X.509 certificates (RFC 5280) and validates the chain a TLS server presents, the way a TLS
+client decides whether to trust it. Everything is strict DER, read with [`DerReader`](#der); signatures
+are checked with [`Ecdsa`](#ecdsa), [`Rsa`](#rsa) and [`Ed25519`](#ed25519).
+
+| Function | Returns | Throws | Description |
+|----------|---------|--------|-------------|
+| `X509.parse(der ByteArray)` | `Certificate` | `X509Error` | The certificate one DER X.509 v1 or v3 certificate encodes. |
+| `X509.verify(leaf ByteArray, intermediates ByteArrays, roots ByteArrays, host String, now UnixSeconds)` | `ByteArrays` | `X509VerifyError` | The chain from `leaf` to one of `roots`, leaf first, each certificate exactly as passed in, valid at `now` for the TLS server `host`. |
+
+`parse` runs its steps in order and throws the first failure: the outer structure, the version (v1 or
+v3), the serial, the signature algorithm (the TBSCertificate's copy must equal the outer one byte for
+byte), issuer, validity, subject, the public key, the unique identifiers, the extensions, and the signature.
+
+| `X509Error` case | When |
+|------------------|------|
+| `invalidEncoding` | Anything that is not strict DER (definite minimal lengths, single-octet tags, minimal INTEGERs, no encoded DEFAULT, a SET OF in order), an OBJECT IDENTIFIER arc above 2^63 - 1, or not the RFC 5280 structure. RSASSA-PSS parameters are read whole first, so an encoded DEFAULT there is `invalidEncoding` even when the parameters are also unsupported. |
+| `unsupportedVersion` | A version other than v1 or v3. |
+| `unsupportedAlgorithm` | A signature or key algorithm outside the tables below, or RSASSA-PSS parameters other than SHA-2 with MGF1 over the same hash and a salt as long as the digest. |
+| `unhandledCriticalExtension` | A critical extension not listed below, or a critical nameConstraints holding a subtree that is neither a dNSName nor an iPAddress. |
+| `duplicateExtension` | Two extensions with the same OID. |
+
+The signature algorithms are `X509SignatureAlgorithm` cases: `ecdsaWithSha256`, `ecdsaWithSha384`,
+`sha256WithRsaEncryption`, `sha384WithRsaEncryption`, `sha512WithRsaEncryption` (with NULL or absent
+parameters), `rsassaPssSha256`, `rsassaPssSha384`, `rsassaPssSha512` and `ed25519`. The keys are
+`X509KeyAlgorithm` cases: `rsa`, `ecP256` and `ecP384` (an uncompressed point) and `ed25519`. Key sizes and
+whether a point is on its curve are not checked by `parse`.
+
+A `Certificate` answers each field:
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `version()` | `CertificateVersion` | — | 1 or 3. |
+| `serialNumber()` | `ByteArray` | — | The serial's content octets as encoded: two's complement, of any sign and length. |
+| `signatureAlgorithm()` | `X509SignatureAlgorithm` | — | The algorithm the issuer signed with. |
+| `issuer()`, `subject()` | `X509Name` | — | `der()`, the whole Name DER names are compared by, and `attributes()`, an `X509Attributes` in encoded order, each with `oid()` (dotted decimal), `value()` (the decoded text) and `shortName()` (`CN`, `O`, `OU` or `C`, throwing `X509FieldError.absent` for other types). |
+| `notBefore()`, `notAfter()` | `UnixSeconds` | — | The validity period, both ends inclusive. |
+| `publicKey()` | `X509PublicKey` | — | `algorithm()`, `der()` (the SubjectPublicKeyInfo, the form `Rsa` takes) and `keyBytes()` (the point, the Ed25519 key or the `RSAPublicKey` DER). |
+| `basicConstraints()` | `X509BasicConstraints` | `X509FieldError` | `isCertificateAuthority()` and `pathLength()`, an `X509PathLength` that throws `absent` when there is none. |
+| `keyUsage()` | `X509KeyUsages` | `X509FieldError` | The `X509KeyUsage` bits that are set, in bit order: `digitalSignature`, `contentCommitment`, `keyEncipherment`, `dataEncipherment`, `keyAgreement`, `keyCertSign`, `crlSign`, `encipherOnly`, `decipherOnly`. |
+| `extendedKeyUsage()` | `StringArray` | `X509FieldError` | The purposes, dotted decimal, in encoded order. |
+| `subjectAltName()` | `X509SubjectAltName` | `X509FieldError` | `dnsNames()`, a `StringArray`, and `ipAddresses()`, 4- or 16-byte `ByteArrays`. Other name forms are skipped. |
+| `authorityKeyId()`, `subjectKeyId()` | `ByteArray` | `X509FieldError` | The key identifiers. |
+| `nameConstraints()` | `X509NameConstraints` | `X509FieldError` | `permittedDnsNames()` and `excludedDnsNames()`, the dNSName subtrees as encoded, and `permittedIpRanges()` and `excludedIpRanges()`, each an address followed by its mask. |
+| `tbsCertificate()` | `ByteArray` | — | The whole TBSCertificate DER: the signed message. |
+| `signature()` | `ByteArray` | — | The signature octets. |
+
+An extension-backed member throws `X509FieldError.absent` when the certificate does not carry the
+extension.
+
+`verify` first checks the leaf: it parses (otherwise `invalidCertificate`, or `unsupportedAlgorithm` when
+that is why), is valid at `now`, its extended key usage allows TLS server authentication, and one of its
+subjectAltName entries names `host` — the Common Name is never read. `host` is an IPv4 or IPv6 literal,
+matched against `ipAddresses()` byte for byte, or a DNS name, matched case-insensitively against
+`dnsNames()`, where `*` as a whole first label stands for exactly one label and must be followed by at least
+two. Then it builds candidate chains depth first, roots before intermediates, each in the order given, at
+most 10 certificates long, linking a certificate to an issuer whose subject DER equals its issuer DER and
+whose subjectKeyIdentifier does not contradict its authorityKeyIdentifier. Certificates that do not parse
+are left out of the pools. Each link is checked in order: the issuer is valid at `now`, is a CA whose
+keyUsage (when present) allows certificate signing, has not exceeded its path length, holds the leaf's names
+inside its name constraints, allows TLS server authentication, and its key verifies the child's signature.
+The root is checked like any issuer, except that its own signature is not. The first candidate that passes
+is returned; when none does, the first candidate's error is thrown. Every candidate issuer the search
+considers counts against a budget of 100, as Go's `maxChainSignatureChecks` does, so a pool of same-named
+intermediates cannot make the search exponential; each signature is verified at most once per call.
+
+| `X509VerifyError` case | When |
+|------------------------|------|
+| `invalidCertificate` | The leaf does not parse. |
+| `unsupportedAlgorithm` | The leaf's algorithm is not supported, a P-256 key signs with SHA-384 or a P-384 key with SHA-256, or an issuer's RSA modulus is outside 2048 to 4096 bits. |
+| `expired`, `notYetValid` | A certificate in the chain is not valid at `now`. |
+| `incompatibleKeyUsage` | A certificate's extended key usage lists neither serverAuth nor anyExtendedKeyUsage. |
+| `hostnameMismatch` | No subjectAltName entry of the leaf names `host`. |
+| `unknownAuthority` | No chain links the leaf to a root. |
+| `notAuthorizedToSign` | An issuer is not a CA, or its keyUsage lacks keyCertSign. |
+| `pathLengthExceeded` | More intermediates sit below an issuer than its pathLenConstraint allows. |
+| `nameConstraintViolation` | A dNSName or iPAddress of the leaf, or `host`, falls outside an issuer's name constraints. |
+| `badSignature` | A signature does not verify under its issuer's key. |
+| `signatureCheckLimitExceeded` | The search considered more than 100 candidate issuers before a chain passed. |
+
+Name constraints apply to every dNSName and iPAddress of the leaf and to `host`, from every CA in the chain,
+the root included. A DNS name matches a subtree when its last labels equal the subtree's; a subtree with a
+leading `.` needs at least one more label, and an empty one matches every name. A wildcard leaf name is
+refused when an excluded subtree lies under it. An address matches a range of its own family whose masked
+bits it shares. A CA with only dNSName subtrees leaves addresses unconstrained, and the reverse.
+
+`verify` does not check revocation, certificate policies or Certificate Transparency. Pass the wall clock as
+`now` in production; `X509.verify` takes the trusted roots as an argument.
+
+| Name | Definition |
+|------|------------|
+| `ByteArrays` | `Array with ByteArray` |
+| `CertificateVersion` | `int(1 to 3)` |
+| `X509PathLength` | `int(0 to i64.max)` |
+| `X509KeyUsages` | `Array with X509KeyUsage` |
+| `X509Attributes` | `Array with X509Attribute` |
+
+```maxon
+function main() returns ExitCode
+	let chain = try X509.verify(ByteArray.create(), intermediates: ByteArrays.create(), roots: ByteArrays.create(), host: "example.com", now: 1767225600) otherwise (e) 'refused'
+		print("{e}\n")
+		return 0
+	end 'refused'
+
+	print("{chain.count()}\n")
+	return 1
+end 'main'
+```
+
+Output: `invalidCertificate`.
 
 ## Hasher
 

@@ -29,3 +29,5 @@ of the spec here.
 | `ecdsa-sign-p256` | `stdlib/NistCurves.maxon` | `specs/ecdsa.md` |
 | `rsa-verify` | `stdlib/Rsa.maxon` | `specs/rsa.md` |
 | `rsa-pss-sign` | `stdlib/Rsa.maxon` | `specs/rsa.md` |
+| `x509-parse` | `stdlib/X509.maxon` | `specs/x509.md` |
+| `x509-verify` | `stdlib/X509.maxon` | `specs/x509.md` |
