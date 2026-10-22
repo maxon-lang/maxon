@@ -3206,6 +3206,11 @@ function main() returns ExitCode
 end 'main'
 ```
 
+A function value fits a function type only when its parameter types, in order, and its result match the
+type's. That is checked wherever the value meets the type: a variable, a global, a field, a tuple or
+container element, a union payload, an argument and a `return` are **E3005**, and an `as` cast is
+**E3009**.
+
 Omit `returns` for a function type that returns nothing: `typealias Callback = function()`. A function type cannot express `throws`, so a
 throwing function cannot be used as a value (**E3101**) — wrap it in a function that handles the error.
 `Type.method` written without its call — a static method, an instance method read through its type, or a

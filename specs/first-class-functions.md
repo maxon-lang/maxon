@@ -6882,3 +6882,340 @@ end 'main'
 ```maxoncstderr
 error E3036: <fragment>:6:10: 'Op' expects 1 argument(s) but 300 were provided
 ```
+
+<!-- test: error.a-function-of-the-wrong-shape-written-into-a-function-typed-field-is-refused -->
+A function-typed field is a slot with a declared shape, and a write into it is judged against that shape as a call through the field will rely on it: a one-parameter function stored in a field that declares none is refused, rather than called later with an argument nobody passed.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+
+function seven() returns Integer
+	return 7
+end 'seven'
+
+function add(a Integer) returns Integer
+	return a + 1
+end 'add'
+
+type Holder
+	export var op as Thunk
+
+	static function create() returns Holder
+		return Holder{op: seven}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create()
+	h.op = add
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:23:4: function type mismatch assigning to field 'op': expected 'fn() returns Integer', got 'fn(Integer) returns Integer'
+```
+
+<!-- test: error.a-function-of-the-wrong-shape-written-into-a-function-typed-field-through-self-is-refused -->
+The write through `self` inside a method is the same door as the write through a variable.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+
+function seven() returns Integer
+	return 7
+end 'seven'
+
+function add(a Integer) returns Integer
+	return a + 1
+end 'add'
+
+type Holder
+	var op as Thunk
+
+	static function create() returns Holder
+		return Holder{op: seven}
+	end 'create'
+
+	function rebind()
+		self.op = add
+	end 'rebind'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create()
+	h.rebind()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:21:8: function type mismatch assigning to field 'op': expected 'fn() returns Integer', got 'fn(Integer) returns Integer'
+```
+
+<!-- test: error.a-function-of-the-wrong-shape-in-a-struct-literal-field-is-refused -->
+The struct literal is the third door into the same slot.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+
+function add(a Integer) returns Integer
+	return a + 1
+end 'add'
+
+type Holder
+	var op as Thunk
+	export var size as Integer
+
+	static function create() returns Holder
+		return Holder{op: add, size: 1}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	print("{h.size}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:14:17: function type mismatch assigning to field 'op': expected 'fn() returns Integer', got 'fn(Integer) returns Integer'
+```
+
+<!-- test: error.a-function-of-the-wrong-shape-written-into-a-tuple-element-is-refused -->
+A tuple element declared with a function type judges a later write to it the way the tuple literal judges its initial value.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+
+function seven() returns Integer
+	return 7
+end 'seven'
+
+function add(a Integer) returns Integer
+	return a + 1
+end 'add'
+
+function main() returns ExitCode
+	var t = (seven as Thunk, 1 as Integer)
+	t.0 = add
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:15:8: function type mismatch in a tuple element: expected 'fn() returns Integer', got 'fn(Integer) returns Integer'
+```
+
+<!-- test: error.a-function-of-the-wrong-shape-reassigned-to-a-variable-is-refused -->
+The variable door, which already judged the shape, stays refused.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+
+function seven() returns Integer
+	return 7
+end 'seven'
+
+function add(a Integer) returns Integer
+	return a + 1
+end 'add'
+
+function main() returns ExitCode
+	var f = seven as Thunk
+	f = add
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:15:2: function type mismatch assigning to variable 'f': expected 'fn() returns Integer', got 'fn(Integer) returns Integer'
+```
+
+<!-- test: error.a-function-of-the-wrong-shape-written-to-a-global-is-refused -->
+The global door, which already judged the shape, stays refused.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function seven() returns Integer
+	return 7
+end 'seven'
+
+function add(a Integer) returns Integer
+	return a + 1
+end 'add'
+
+var g = seven
+
+function main() returns ExitCode
+	g = add
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:15:2: function type mismatch assigning to global 'g': expected 'fn() returns Integer', got 'fn(Integer) returns Integer'
+```
+
+<!-- test: error.a-function-of-the-wrong-shape-pushed-onto-an-array-of-functions-is-refused -->
+An array element is a slot of the container's declared element type, so `push` judges the shape.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+typealias ThunkArray = Array with Thunk
+
+function seven() returns Integer
+	return 7
+end 'seven'
+
+function add(a Integer) returns Integer
+	return a + 1
+end 'add'
+
+function main() returns ExitCode
+	var xs = ThunkArray.create()
+	xs.push(seven)
+	xs.push(add)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:17:5: function type mismatch in a container element: expected 'fn() returns Integer', got 'fn(Integer) returns Integer'
+```
+
+<!-- test: error.a-function-of-the-wrong-shape-set-into-an-array-of-functions-is-refused -->
+`set` is the second mutator that writes an element of an array in place.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+typealias ThunkArray = Array with Thunk
+
+function seven() returns Integer
+	return 7
+end 'seven'
+
+function add(a Integer) returns Integer
+	return a + 1
+end 'add'
+
+function main() returns ExitCode
+	var xs = ThunkArray.create()
+	xs.push(seven)
+	try xs.set(0, value: add) otherwise ignore
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:17:9: function type mismatch in a container element: expected 'fn() returns Integer', got 'fn(Integer) returns Integer'
+```
+
+<!-- test: error.a-function-of-the-wrong-shape-in-an-array-literal-of-functions-is-refused -->
+An array literal naming its element type judges every element against it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+typealias ThunkArray = Array with Thunk
+
+function seven() returns Integer
+	return 7
+end 'seven'
+
+function add(a Integer) returns Integer
+	return a + 1
+end 'add'
+
+function main() returns ExitCode
+	let xs = ThunkArray from [seven, add]
+	return xs.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:15:35: function type mismatch in a container element: expected 'fn() returns Integer', got 'fn(Integer) returns Integer'
+```
+
+<!-- test: error.a-function-of-the-wrong-shape-inserted-into-an-array-of-functions-is-refused -->
+`insert` is a signatured call, so its argument is judged as any call argument is.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+typealias ThunkArray = Array with Thunk
+
+function seven() returns Integer
+	return 7
+end 'seven'
+
+function add(a Integer) returns Integer
+	return a + 1
+end 'add'
+
+function main() returns ExitCode
+	var xs = ThunkArray.create()
+	xs.push(seven)
+	xs.insert(0, value: add)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:17:5: argument type mismatch for 'value': expected 'fn() returns Integer', got 'fn(Integer) returns Integer'
+```
+
+<!-- test: error.a-function-of-the-wrong-shape-upserted-into-a-map-of-functions-is-refused -->
+`upsert` is a signatured call, so its argument is judged as any call argument is.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+typealias ThunkMap = Map with (Integer, Thunk)
+
+function add(a Integer) returns Integer
+	return a + 1
+end 'add'
+
+function main() returns ExitCode
+	var m = ThunkMap.create()
+	m.upsert(1, value: add)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:12:4: argument type mismatch for 'value': expected 'fn() returns Integer', got 'fn(Integer) returns Integer'
+```
+
+<!-- test: a-function-of-the-declared-shape-is-accepted-by-every-store-into-a-function-typed-slot -->
+The shape check refuses a different shape and nothing else: a function of the declared shape is stored through a field write, a tuple element write, a `push`, a `set` and an array literal, and each is called back.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+typealias ThunkArray = Array with Thunk
+
+function seven() returns Integer
+	return 7
+end 'seven'
+
+function nine() returns Integer
+	return 9
+end 'nine'
+
+type Holder
+	export var op as Thunk
+
+	static function create() returns Holder
+		return Holder{op: seven}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create()
+	h.op = nine
+	var t = (seven as Thunk, 1 as Integer)
+	t.0 = nine
+	var xs = ThunkArray from [seven, seven]
+	xs.push(nine)
+	try xs.set(0, value: nine) otherwise panic("set")
+	let fromTuple = t.0
+	let fromArray = try xs.get(0) otherwise panic("get")
+	let pushed = try xs.get(2) otherwise panic("get")
+	print("{h.op()} {fromTuple()} {fromArray()} {pushed()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+9 9 9 9
+```

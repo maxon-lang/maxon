@@ -40562,20 +40562,19 @@ export type Parser
 	// **CHECK AN ASSIGNED VALUE AGAINST ITS DECLARED SLOT AND HAND BACK THE VALUE THAT SLOT WANTS** — the
 	// verdict and the coercion in ONE call, so a caller cannot take the `ok` and forget the conversion.
 	// `voice` is the SENTENCE the refusal is told in and nothing else — see `SlotMismatchVoice`.
-	// Every assignment-shaped door in the parser goes through it: a local `var` rebind, a top-level global
-	// store, a struct-literal field, a field write, a self-field write.
+	// A local `var` rebind and a top-level global store go through it, and so does a field or container
+	// element whose slot is unmanaged; a managed slot is `requireManagedValueMatches`'.
 	//
 	// It returns a value rather than nothing precisely because the caller must REBIND: the promoted id is
 	// a different SSA value from the one that was parsed, and a caller that stored the original would
-	// store the raw integer bits — which is what all five of them did.
+	// store the raw integer bits.
 	//
 	// ⚠ **EVERY ARGUMENT IT TAKES IS A SCALAR, AND THAT IS MEASURED RATHER THAN STYLISTIC.** This is one of
 	// the hottest paths in the parser — every `var` rebind, every struct-literal field, every field write
 	// and every global store — so what crosses the boundary is what the program pays per assignment. The
 	// declared type arrives as the `(tag, nameId)` PAIR every other type-deciding door in this file takes
 	// rather than a noun STRING: threading a string on into the function-type door costs
-	// **one allocation per call, +1,852 in `phase:parse` at scale rung 0**, for a record almost every call
-	// then discards. See `FunctionTypeDoor`.
+	// one allocation per call, for a record almost every call then discards. See `FunctionTypeDoor`.
 	//
 	// ⚠ **`placeOwner` IS THE ONE NON-SCALAR, AND IT IS A BORROWED NAME THAT ALREADY EXISTS — never a built
 	// one.** A FIELD is worded `field 'x' of 'Point'`, so the declaring type is part of the place and the
@@ -40587,8 +40586,8 @@ export type Parser
 		try self.requireAssignable(nameTok, value: got, declared: declared, declaredNameId: declaredNameId, door: door, placeOwner: placeOwner, voice: voice)
 		self.admitUnsignedLiteralIntoSlot(value, slot: declared, slotNameId: declaredNameId)
 
-		if isFunctionTypeDoor(declared, got: got) and not slotOwnerIsATupleElement(placeOwner) 'functionTypeDoor'
-			self.recordFunctionTypeDoor(declaredNameId, gotNameId: self.functionValueGoverningId(value), door: door, place: FunctionTypeDoorPlace.named(nameTok.value), anchor: nameTok, handedAt: nameTok)
+		if isFunctionTypeDoor(declared, got: got) 'functionTypeDoor'
+			self.recordFunctionStoreDoor(declaredNameId, value: value, door: door, placeName: nameTok.value, placeOwner: placeOwner, anchor: nameTok)
 		end 'functionTypeDoor'
 
 		return self.coerceToDeclared(value, declared: declared, anchor: nameTok)
@@ -42241,6 +42240,20 @@ export type Parser
 	function recordFunctionTypeDoorByName(declaredName ByteArray, gotName ByteArray, door FunctionTypeDoor, place FunctionTypeDoorPlace, anchor Token, handedAt Token)
 		self.artifact.recordFunctionTypeDoor(PendingFunctionTypeDoor.create(gotName, declaredName: declaredName, door: door, place: place, line: anchor.line, column: anchor.column, handedLine: handedAt.line, handedColumn: handedAt.column, filePath: self.job.path))
 	end 'recordFunctionTypeDoorByName'
+
+	function recordFunctionStoreDoor(declaredNameId TypeNameId, value ValueId, door FunctionTypeDoor, placeName ByteArray, placeOwner SlotOwner, anchor Token)
+		var recorded = door
+		var place = FunctionTypeDoorPlace.named(placeName)
+
+		if slotOwnerIsATupleElement(placeOwner) 'tupleElement'
+			recorded = FunctionTypeDoor.tupleElement
+			place = FunctionTypeDoorPlace.unnamed
+		end 'tupleElement' else if door == FunctionTypeDoor.containerElement 'containerElement'
+			place = FunctionTypeDoorPlace.unnamed
+		end 'containerElement'
+
+		self.recordFunctionTypeDoor(declaredNameId, gotNameId: self.functionValueGoverningId(value), door: recorded, place: place, anchor: anchor, handedAt: anchor)
+	end 'recordFunctionStoreDoor'
 
 	// ⭐⭐ **THE IDENTITY `resolveTypes` IS ABOUT TO DESTROY — the ONE extraction EVERY pre-erasure column
 	// fills through (including the function-TYPE tier).** The interned name
@@ -69446,6 +69459,12 @@ export type Parser
 			return
 		end 'tagMismatch'
 
+		// The tag check above passes any two function shapes. Without this record a wrongly shaped
+		// function is stored, and a later call through the slot runs it with the wrong arguments.
+		if isFunctionTypeDoor(wantTag, got: got) 'functionIntoFunctionSlot'
+			self.recordFunctionStoreDoor(typeNameIdOf(storage), value: value, door: placeDoor, placeName: placeName, placeOwner: placeOwner, anchor: anchor)
+		end 'functionIntoFunctionSlot'
+
 		if isString 'stringOk'
 			return
 		end 'stringOk'
@@ -85179,9 +85198,9 @@ export type Parser
 			return widened
 		end 'managed'
 
-		// The `field` door, because an element IS a slot of the container's storage and the noun a function
-		// value's E3005 needs is the container-slot one. A fourth noun would have to be minted in
-		// `FunctionTypeDoor`, and there is no fourth RULE here to justify one.
+		// The `field` door, not `containerElement`: on this arm the door only names the slot a function value
+		// is refused from (a function-typed element is managed and recorded by the arm above), and
+		// `functionTypeDoorNoun` panics for `containerElement`.
 		//
 		// The VOICE is the other axis and is the mutator's own: `push` is a METHOD and its element is that
 		// method's ARGUMENT, so the type refusal is the argument sentence rather than the assignment one.

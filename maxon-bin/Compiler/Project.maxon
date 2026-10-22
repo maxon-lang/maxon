@@ -11165,9 +11165,10 @@ end 'cacheReadPendingFnMergeCheckArray'
 // `castHasNoLegalConversion` refusal), everything else is a type mismatch (E3005, the sibling of every
 // other door's refusal).
 //
-// The CALL-ARGUMENT door is deliberately absent. It is checked in place by `SemanticCheck.checkArgTypes`,
-// which already holds both sides and already owns the sentence a bad argument earns; recording it here
-// would be the same rule asked twice, and the reader's next question at an argument is WHICH argument.
+// A signatured call's argument is deliberately absent. It is checked in place by
+// `SemanticCheck.checkArgTypes`, which already holds both sides and already owns the sentence a bad
+// argument earns; recording it here would be the same rule asked twice, and the reader's next question at
+// an argument is WHICH argument.
 export enum FunctionTypeDoor
 	cast
 	returned
@@ -11188,10 +11189,10 @@ export enum FunctionTypeDoor
 	// It names the CASE, so it is not assignment-shaped and sits ahead of the contiguous band below.
 	enumCaseBacking
 
-	// ⭐ **AN ARRAY LITERAL'S ELEMENT PAST THE FIRST.** The instance is keyed on ONE element type, so every
-	// later element is read back at the FIRST one's shape: `[oneArg, twoArg]` then `.get(1)` would call
-	// `twoArg` with an argument nobody passed. No later door sees it — a literal's elements travel through
-	// runtime entries carrying no `FuncSignature`.
+	// ⭐ **A CONTAINER ELEMENT — an array literal's, or one a `push` or `set` stores.** The instance is keyed
+	// on ONE element type, so every element is read back at that shape: `[oneArg, twoArg]` then `.get(1)`
+	// would call `twoArg` with an argument nobody passed. No later door sees it — these elements travel
+	// through runtime entries carrying no `FuncSignature`.
 	//
 	// ⚠ **THE MAP LITERAL IS NOT THIS DOOR, THOUGH IT LOOKS LIKE ITS TWIN.** `["k": v]` desugars to real
 	// `Map.upsert` calls, so `SemanticCheck.checkTypeParameterArgsAt` judges its columns like any other
@@ -11340,9 +11341,9 @@ end 'brandedPlacePhrase'
 
 // ⭐ **A RECORDED FUNCTION-TYPE DOOR awaiting whole-program shape agreement.** A function value meeting a
 // function-typed place — `f as Scaler`, `return twice` from a `returns Scaler`, `slot.op = twice` — must
-// be a function of THAT type, and until this record existed only the `function` TAG was compared: every
-// signature disagreement flowed through untouched and the call site then typed its call from a promise
-// the callee does not keep (`intish as FloatFn` read an integer back out of the float return register).
+// be a function of THAT type. The `function` TAG cannot tell two shapes apart, so a disagreement this
+// record misses flows through, and the call site types its call from a promise the callee does not keep
+// (`intish as FloatFn` reads an integer back out of the float return register).
 //
 // It is recorded rather than checked because the parser cannot answer it: a function value's own shape
 // lives in the whole-program `funcSignatures`, which is not assembled until merge, and the shapes are
@@ -11359,8 +11360,8 @@ export type PendingFunctionTypeDoor
 	export let declaredName as ByteArray
 	export let door as FunctionTypeDoor
 
-	// The NAME of the place written into, for an assignment-shaped door. `unnamed` for a cast, a `return`
-	// and a container element, which name no place.
+	// The NAME of the place written into, for an assignment-shaped door. `unnamed` for a cast, a `return`,
+	// a container element and a tuple element, which name no place.
 	export let place as FunctionTypeDoorPlace
 	export let line as LineNumber
 	export let column as ColumnNumber

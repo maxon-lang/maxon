@@ -78,6 +78,11 @@ release's version as its heading when the release is cut.
 - A primitive's static called in a module-level initializer (`let n = int.fromString("5")`) is E2015, where
   it was E2004.
   Fix: compute the value in a function, or write it as a literal.
+- A function whose shape differs from the declared function type, stored into a field (`h.op = f`,
+  `self.op = f`, a struct literal), a tuple element (`t.0 = f`) or an array element (`push`, `set`, a typed
+  array literal), is E3005.
+  Fix: store a function whose parameters and result match the declared function type, or change the
+  declared type.
 
 ## 0.5.0 — 2026-10-08
 
