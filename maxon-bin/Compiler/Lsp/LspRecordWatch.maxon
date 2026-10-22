@@ -7,9 +7,9 @@ end 'RecordKind'
 
 module union RecordWatch
 	unlocatable
-	absent
-	unreadable
-	present(stamp SourceFileStamp)
+	absent(record FilePath)
+	unreadable(record FilePath)
+	present(record FilePath, stamp SourceFileStamp)
 
 	function kind() returns RecordKind
 		return match self 'watch'
@@ -32,23 +32,24 @@ module function observeRecord(dir FilePath) returns RecordWatch
 	let record = try versionRecordPathOf(dir) otherwise return RecordWatch.unlocatable
 
 	return match fileStateOf(record) 'state'
-		absent gives RecordWatch.absent
-		unreadable gives RecordWatch.unreadable
-		present(size, modifiedTime, _) gives RecordWatch.present(SourceFileStamp.create(size, modifiedTime: modifiedTime, observedAt: observedAt))
+		absent gives RecordWatch.absent(record)
+		unreadable gives RecordWatch.unreadable(record)
+		present(size, modifiedTime, _) gives RecordWatch.present(record, stamp: SourceFileStamp.create(size, modifiedTime: modifiedTime, observedAt: observedAt))
 	end 'state'
 end 'observeRecord'
 
-module function recordWatchHolds(held RecordWatch, dir FilePath) returns bool
-	let record = try versionRecordPathOf(dir) otherwise return held.kind() == RecordKind.unlocatable
-	let now = fileStateOf(record)
-
+module function recordWatchHolds(held RecordWatch) returns bool
 	return match held 'held'
-		present(stamp) gives stamp.describes(now)
-		unlocatable or
-		absent or
-		unreadable gives held.kind() == recordKindOf(now)
+		unlocatable gives true
+		absent(record) gives recordKindHolds(held, record: record)
+		unreadable(record) gives recordKindHolds(held, record: record)
+		present(record, stamp) gives stamp.describes(fileStateOf(record))
 	end 'held'
 end 'recordWatchHolds'
+
+function recordKindHolds(held RecordWatch, record FilePath) returns bool
+	return held.kind() == recordKindOf(fileStateOf(record))
+end 'recordKindHolds'
 
 function recordKindOf(state FileState) returns RecordKind
 	return match state 'state'
