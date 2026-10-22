@@ -5844,7 +5844,7 @@ The rules:
   [`clone()`](#explicit-cloning) makes an independent mutable copy.
 - **A tuple carries the mark of what it holds.** A tuple literal may hold read-only values, and the tuple is
   read-only wherever it goes, one a call returns included: `let (a, b) = ends(p)` keeps both names read-only.
-  Binding the tuple or one of its elements to a `var`, assigning it to existing `var` names, or storing it into a
+  Binding the tuple, or one of its read-only elements, to a `var`, assigning it to existing `var` names, or storing it into a
   `var` field or a container is **E3078**, and passing it to a function that writes it is **E3159**.
 - **A `let` binds only what nothing writes.** A `let` bound to state something may still write is **E3188**; see
   [Immutable Variables](#immutable-variables-let). A `let` bound from a parameter is as immutable as the caller's

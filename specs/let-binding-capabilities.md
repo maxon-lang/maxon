@@ -1393,3 +1393,257 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: let-binding-capabilities.a-writable-column-of-a-local-tuple-with-a-read-only-column-is-destructured-into-a-var -->
+Only the first column of the tuple literal is a `let` field's record. The second column is a fresh box, so `var (_, c)` takes a writable record.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Pair
+	export let left as Box
+	export let right as Box
+
+	static function create(left Box, right Box) returns Self
+		return Self{left: left, right: right}
+	end 'create'
+end 'Pair'
+
+function fresh(p Pair) returns Count
+	var (_, c) = (p.left, Box.create(3))
+	c.n = 4
+	return c.n
+end 'fresh'
+
+function main() returns ExitCode
+	let p = Pair.create(Box.create(1), right: Box.create(2))
+	print("{fresh(p)} {p.left.n}\n")
+	return 0
+end 'main'
+```
+```stdout
+4 1
+```
+```exitcode
+0
+```
+
+<!-- test: let-binding-capabilities.a-writable-column-of-a-tuple-a-call-returns-is-destructured-into-a-var -->
+`mixed` returns a `let` field in its first column and a fresh box in its second. Destructuring only the second column with `var` takes a writable record.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Pair
+	export let left as Box
+	export let right as Box
+
+	static function create(left Box, right Box) returns Self
+		return Self{left: left, right: right}
+	end 'create'
+end 'Pair'
+
+function mixed(p Pair) returns (Box, Box)
+	return (p.left, Box.create(3))
+end 'mixed'
+
+function main() returns ExitCode
+	let p = Pair.create(Box.create(1), right: Box.create(2))
+	var (_, b) = mixed(p)
+	b.n = 4
+	print("{b.n} {p.left.n}\n")
+	return 0
+end 'main'
+```
+```stdout
+4 1
+```
+```exitcode
+0
+```
+
+<!-- test: let-binding-capabilities.a-writable-column-a-function-returns-out-of-a-local-tuple-is-bound-to-a-var -->
+`second` builds a tuple with a read-only first column and returns its fresh second column, which the caller binds to a `var` and writes.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Pair
+	export let left as Box
+	export let right as Box
+
+	static function create(left Box, right Box) returns Self
+		return Self{left: left, right: right}
+	end 'create'
+end 'Pair'
+
+function second(p Pair) returns Box
+	let t = (p.left, Box.create(3))
+	return t.1
+end 'second'
+
+function main() returns ExitCode
+	let p = Pair.create(Box.create(1), right: Box.create(2))
+	var b = second(p)
+	b.n = 4
+	print("{b.n} {p.left.n}\n")
+	return 0
+end 'main'
+```
+```stdout
+4 1
+```
+```exitcode
+0
+```
+
+<!-- test: let-binding-capabilities.error.a-read-only-column-of-a-tuple-a-call-returns-is-destructured-into-a-var-beside-a-writable-one -->
+The same `mixed` result destructured with `var` takes the first column, which is the `let` field's record, so it is refused at that name while the writable second column is not.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Pair
+	export let left as Box
+	export let right as Box
+
+	static function create(left Box, right Box) returns Self
+		return Self{left: left, right: right}
+	end 'create'
+end 'Pair'
+
+function mixed(p Pair) returns (Box, Box)
+	return (p.left, Box.create(3))
+end 'mixed'
+
+function main() returns ExitCode
+	let p = Pair.create(Box.create(1), right: Box.create(2))
+	var (a, _) = mixed(p)
+	a.n = 4
+	print("{a.n} {p.left.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:27:7: cannot assign a value, which may share storage with a `let` field, to mutable binding 'a'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: let-binding-capabilities.error.a-record-below-a-let-field-stored-into-a-tuple-column-is-refused-when-the-column-is-read-back-into-a-var -->
+`m.x.y` lies within the `let` field `x`, so the tuple column that holds it is read-only; destructuring that column into a `var` and writing it would write through `m`.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Leaf
+	export var z as Count
+
+	static function create(z Count) returns Self
+		return Self{z: z}
+	end 'create'
+end 'Leaf'
+
+type Inner
+	export var y as Leaf
+
+	static function create(y Leaf) returns Self
+		return Self{y: y}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let x as Inner
+
+	static function create(x Inner) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Outer'
+
+function run(m Outer) returns Count
+	var (r, _) = (m.x.y, 1)
+	r.z = 5
+	return r.z
+end 'run'
+
+function main() returns ExitCode
+	let m = Outer.create(Inner.create(Leaf.create(1)))
+	print("{run(m)} {m.x.y.z}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:30:2: cannot write through 'r', which may be a record read out of a `let` field that a call or a merge handed back; nothing reachable through a `let` field may be written; use clone()
+```
+
+<!-- test: let-binding-capabilities.error.a-result-within-a-tuple-argument-keeps-the-read-only-mark -->
+`first` returns the first column of the tuple it is passed. The tuple holds a `let` field's record, so the result may be that record and writing it is refused.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Rec
+	export var v as Count
+
+	static function create(v Count) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Rec'
+
+type Holder
+	export let r as Rec
+
+	static function create(r Rec) returns Self
+		return Self{r: r}
+	end 'create'
+end 'Holder'
+
+function first(t (Rec, Count)) returns Rec
+	return t.0
+end 'first'
+
+function run(h Holder) returns Count
+	var r = first((h.r, 1))
+	r.v = 5
+	return r.v
+end 'run'
+
+function main() returns ExitCode
+	let h = Holder.create(Rec.create(1))
+	print("{run(h)} {h.r.v}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:26:2: cannot write through 'r', which may be a record read out of a `let` field that a call or a merge handed back; nothing reachable through a `let` field may be written; use clone()
+```

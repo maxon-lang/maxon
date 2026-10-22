@@ -362,7 +362,9 @@ let ParameterTraceWritableRank = RootBitIndexMask + 1
 
 // The bits of a summary's `moduleLets` word, two per read-only kind of record — a module-level
 // `let`'s, a shared view's, a `let` field's, a `let` payload's, a `readonly` element's: the result
-// may be or lie within one, and it may hold one.
+// may be or lie within one, and it may hold one. Above them, per field, payload and element kind: a
+// tuple holding one, then a result that may be one; from `TupleColumnSummaryFirstBit`, one bit per
+// marked tuple column.
 let ResultLiesWithinAModuleLet = 1 as ParamPositionMask
 let ResultHoldsAModuleLet = 2 as ParamPositionMask
 let ResultLiesWithinASharedView = 4 as ParamPositionMask
@@ -373,9 +375,6 @@ let ResultLiesWithinALetPayload = 64 as ParamPositionMask
 let ResultHoldsALetPayload = 128 as ParamPositionMask
 let ResultLiesWithinAReadOnlyElement = 256 as ParamPositionMask
 let ResultHoldsAReadOnlyElement = 512 as ParamPositionMask
-let ResultIsATupleWithALetField = 1024 as ParamPositionMask
-let ResultIsATupleWithALetPayload = 2048 as ParamPositionMask
-let ResultIsATupleWithAReadOnlyElement = 4096 as ParamPositionMask
 
 let AliasLivenessColumns = [ProvenanceColumn.identity, ProvenanceColumn.inside]
 let ViewReachColumns = [ProvenanceColumn.identity, ProvenanceColumn.inside, ProvenanceColumn.holds, ProvenanceColumn.deepHolds]
@@ -384,7 +383,14 @@ let LetReachColumns = [ProvenanceColumn.identity, ProvenanceColumn.inside, Prove
 let ModuleVariableSubject = "a module variable"
 let MaxFreshRounds = 16
 let ReadOnlySlotKindCount = 3
-let HiddenViewRankCount = 6
+let ResultProvenViewBitCount = 10
+let ResultTupleKindFirstBit = ResultProvenViewBitCount
+let ResultMayBeKindFirstBit = ResultTupleKindFirstBit + ReadOnlySlotKindCount
+let TupleColumnSummaryFirstBit = ResultMayBeKindFirstBit + ReadOnlySlotKindCount
+let TupleColumnMarkCount = RootBitIndexMask + 1 - TupleColumnSummaryFirstBit
+let TupleMarkRankCount = ReadOnlySlotKindCount + TupleColumnMarkCount
+let HiddenViewRankCount = ReadOnlySlotKindCount + ReadOnlySlotKindCount + TupleMarkRankCount
+let EveryParamPosition = 0xFFFFFFFFFFFFFFFF as ParamPositionMask
 let LetFieldSlotNameShift = 24 as StoreSlotKey
 let SlotAccessFunctionShift = 32 as StoreSlotKey
 let SlotAccessOpMask = 0xFFFFFFFF as StoreSlotKey
@@ -453,6 +459,11 @@ enum RecordClaim
 	permanentOrFresh
 	inertModuleLet
 end 'RecordClaim'
+
+union TupleColumnReach
+	anyColumn
+	columnAt(offset ByteOffset)
+end 'TupleColumnReach'
 
 enum PermanentView
 	none
@@ -646,17 +657,17 @@ type RootSets
 		var source = try self.first(from) otherwise return false
 		var slot = RootLinkSlot.setHead
 		var at = to
+		let lastSkipped = firstSkipped + skippedCount - 1
 
 		while true 'eachSourceWord'
+			let wordFirstRank = (self.indexOf(source) as ElementIndex) shl RootWordShift
 			var word = self.wordOf(source)
 
-			for offset in 0 upto skippedCount 'eachSkippedRank'
-				let skipped = firstSkipped + offset
-
-				if self.indexOf(source) == (skipped shr RootWordShift) as MaskWordCount 'theSkippedWord'
-					word = maskWithoutParam(word, param: (skipped and RootBitIndexMask) as ParamCount)
-				end 'theSkippedWord'
-			end 'eachSkippedRank'
+			if wordFirstRank <= lastSkipped and wordFirstRank + RootBitIndexMask >= firstSkipped 'aWordHoldingSkippedRanks'
+				let firstBit = (firstSkipped - wordFirstRank) if firstSkipped > wordFirstRank else 0
+				let lastBit = (lastSkipped - wordFirstRank) if lastSkipped < wordFirstRank + RootBitIndexMask else RootBitIndexMask
+				word = maskWithout(word, removed: (EveryParamPosition shr (RootBitIndexMask - (lastBit - firstBit)) as ParamCount) shl firstBit as ParamCount)
+			end 'aWordHoldingSkippedRanks'
 
 			if word != NoParamPositions 'hasRanksToTake'
 				at = self.orWordFrom(slot, at: at, index: self.indexOf(source), word: word)
@@ -3027,17 +3038,25 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			self.seedBit(ProvenanceColumn.holds, value: result, rank: self.readOnlyElementRank())
 		end 'holdsAReadOnlyElement'
 
-		if (reach and ResultIsATupleWithALetField) != NoParamPositions 'aTupleWithALetField'
-			self.seedBit(ProvenanceColumn.identity, value: result, rank: self.tupleLetFieldRank())
-		end 'aTupleWithALetField'
+		for kind in 0 upto ReadOnlySlotKindCount 'eachSlotKind'
+			if maskHasParam(reach, param: ResultTupleKindFirstBit + kind as ParamCount) 'aTupleWithAKind'
+				self.seedBit(ProvenanceColumn.identity, value: result, rank: self.tupleLetFieldRank() + kind)
+			end 'aTupleWithAKind'
 
-		if (reach and ResultIsATupleWithALetPayload) != NoParamPositions 'aTupleWithALetPayload'
-			self.seedBit(ProvenanceColumn.identity, value: result, rank: self.tupleLetFieldRank() + 1)
-		end 'aTupleWithALetPayload'
+			if maskHasParam(reach, param: ResultMayBeKindFirstBit + kind as ParamCount) 'mayBeOfAKind'
+				self.seedBit(ProvenanceColumn.identity, value: result, rank: self.maybeLetFieldRank() + kind)
+			end 'mayBeOfAKind'
+		end 'eachSlotKind'
 
-		if (reach and ResultIsATupleWithAReadOnlyElement) != NoParamPositions 'aTupleWithAReadOnlyElement'
-			self.seedBit(ProvenanceColumn.identity, value: result, rank: self.tupleLetFieldRank() + 2)
-		end 'aTupleWithAReadOnlyElement'
+		if (reach shr TupleColumnSummaryFirstBit) == NoParamPositions 'noColumnIsMarked'
+			return
+		end 'noColumnIsMarked'
+
+		for column in 0 upto TupleColumnMarkCount 'eachColumn'
+			if maskHasParam(reach, param: TupleColumnSummaryFirstBit + column as ParamCount) 'aMarkedColumn'
+				self.seedBit(ProvenanceColumn.identity, value: result, rank: self.tupleColumnRank(column))
+			end 'aMarkedColumn'
+		end 'eachColumn'
 	end 'flowModuleLets'
 
 	function setHasRank(column ProvenanceColumn, value ValueId, rank ElementIndex) returns bool
@@ -3048,10 +3067,10 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return self.setHasRank(ProvenanceColumn.identity, value: value, rank: rank) or self.setHasRank(ProvenanceColumn.inside, value: value, rank: rank)
 	end 'valueIsOrLiesWithin'
 
-	// The ranks past `moduleLetRank` each stand for every record of one read-only kind that no root
-	// value names, and `isPermanentViewRank` and `permanentViewOf` list them.
+	// The ranks past `moduleLetRank` stand for the records of each read-only kind that no root value
+	// names, and for a tuple's marks over them; `isPermanentViewRank` and `permanentViewOf` list them.
 	// `unionMaskWithoutLetFields` skips `HiddenViewRankCount` ranks as one run from `letFieldRank`, so
-	// the field, payload and element ranks stay consecutive.
+	// every rank from there through the last tuple column stays consecutive.
 	function sharedViewRank() returns ElementIndex
 		return self.writableRank + 2
 	end 'sharedViewRank'
@@ -3069,16 +3088,30 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'letFieldRank'
 
 	function letPayloadRank() returns ElementIndex
-		return self.writableRank + 4
+		return self.letFieldRank() + 1
 	end 'letPayloadRank'
 
 	function readOnlyElementRank() returns ElementIndex
-		return self.writableRank + 5
+		return self.letFieldRank() + 2
 	end 'readOnlyElementRank'
 
+	function maybeLetFieldRank() returns ElementIndex
+		return self.letFieldRank() + ReadOnlySlotKindCount
+	end 'maybeLetFieldRank'
+
 	function tupleLetFieldRank() returns ElementIndex
-		return self.writableRank + 6
+		return self.maybeLetFieldRank() + ReadOnlySlotKindCount
 	end 'tupleLetFieldRank'
+
+	function tupleColumnRank(column ElementIndex) returns ElementIndex
+		return self.tupleLetFieldRank() + ReadOnlySlotKindCount + column
+	end 'tupleColumnRank'
+
+	// Columns past the last share its rank, which can only refuse more, never less.
+	function tupleColumnOfOffset(offset ByteOffset) returns ElementIndex
+		let slot = (offset / FieldSlotBytes) as ElementIndex
+		return slot if slot < TupleColumnMarkCount else TupleColumnMarkCount - 1
+	end 'tupleColumnOfOffset'
 
 	function seedLetSlotRead(result ValueId, rank ElementIndex)
 		self.seedBit(ProvenanceColumn.identity, value: result, rank: rank)
@@ -3094,7 +3127,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return PermanentView.sharedView
 		end 'aSharedView'
 
-		return self.readOnlySlotViewOf(value, firstRank: self.letFieldRank())
+		return self.readOnlySlotViewOf(value, firstRank: self.letFieldRank(), lyingWithin: true)
 	end 'permanentViewOf'
 
 	function maybePermanentViewOf(value ValueId) returns PermanentView
@@ -3104,21 +3137,23 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return proven
 		end 'provenReadOnly'
 
-		return self.readOnlySlotViewOf(value, firstRank: self.tupleLetFieldRank())
+		let element = self.readOnlySlotViewOf(value, firstRank: self.maybeLetFieldRank(), lyingWithin: true)
+
+		if element != PermanentView.none 'anElementThatMayBeReadOnly'
+			return element
+		end 'anElementThatMayBeReadOnly'
+
+		return self.readOnlySlotViewOf(value, firstRank: self.tupleLetFieldRank(), lyingWithin: false)
 	end 'maybePermanentViewOf'
 
-	function readOnlySlotViewOf(value ValueId, firstRank ElementIndex) returns PermanentView
-		if self.valueIsOrLiesWithin(value, rank: firstRank) 'aLetField'
-			return PermanentView.letField
-		end 'aLetField'
+	function readOnlySlotViewOf(value ValueId, firstRank ElementIndex, lyingWithin bool) returns PermanentView
+		for kind in 0 upto ReadOnlySlotKindCount 'eachSlotKind'
+			let marked = self.valueIsOrLiesWithin(value, rank: firstRank + kind) if lyingWithin else self.setHasRank(ProvenanceColumn.identity, value: value, rank: firstRank + kind)
 
-		if self.valueIsOrLiesWithin(value, rank: firstRank + 1) 'aLetPayload'
-			return PermanentView.letPayload
-		end 'aLetPayload'
-
-		if self.valueIsOrLiesWithin(value, rank: firstRank + 2) 'aReadOnlyElement'
-			return PermanentView.readOnlyElement
-		end 'aReadOnlyElement'
+			if marked 'aMarkedKind'
+				return readOnlySlotViewOfKind(kind)
+			end 'aMarkedKind'
+		end 'eachSlotKind'
 
 		return PermanentView.none
 	end 'readOnlySlotViewOf'
@@ -3310,7 +3345,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'fresh'
 
 		self.unionShares(result, source: addr)
-		self.unionMask(ProvenanceColumn.inside, to: result, from: ProvenanceColumn.identity, source: addr)
+		self.unionInsideOfIdentity(result, source: addr, reach: TupleColumnReach.columnAt(offset))
 		self.unionMask(ProvenanceColumn.inside, to: result, from: ProvenanceColumn.inside, source: addr)
 
 		match self.letSlotKindMemoized(func, addr: addr, offset: offset, held: result) 'slotKind'
@@ -3340,23 +3375,75 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'storedInsideIt'
 	end 'traceLoad'
 
-	function valueIsOrLiesWithinAReadOnlySlot(value ValueId) returns bool
-		for offset in 0 upto HiddenViewRankCount 'eachSlotKind'
-			if self.valueIsOrLiesWithin(value, rank: self.letFieldRank() + offset) 'readOnly'
+	// The tuple and column ranks stay on identity: in `inside` they would make every element and field
+	// below the tuple read as read-only, refusing a store into a writable column.
+	function unionInsideOfIdentity(to ValueId, source ValueId, reach TupleColumnReach)
+		if self.sets.unionWithoutRanks(self.setOf(ProvenanceColumn.inside, value: to), from: self.setOf(ProvenanceColumn.identity, value: source), firstSkipped: self.tupleLetFieldRank(), skippedCount: TupleMarkRankCount) 'grew'
+			self.changed = true
+		end 'grew'
+
+		if self.valueMarksSomeTupleColumn(source) and not self.tupleColumnsMissReach(source, reach: reach) 'aColumnThatMayBeReadOnly'
+			self.markFromTupleKinds(to, tuple: source)
+		end 'aColumnThatMayBeReadOnly'
+	end 'unionInsideOfIdentity'
+
+	function valueIsReadOnlyOfKind(value ValueId, kind ElementIndex) returns bool
+		return self.valueIsOrLiesWithin(value, rank: self.letFieldRank() + kind) or self.valueIsOrLiesWithin(value, rank: self.maybeLetFieldRank() + kind) or self.setHasRank(ProvenanceColumn.identity, value: value, rank: self.tupleLetFieldRank() + kind)
+	end 'valueIsReadOnlyOfKind'
+
+	function valueMayBeReadOnly(value ValueId) returns bool
+		for kind in 0 upto ReadOnlySlotKindCount 'eachSlotKind'
+			if self.valueIsReadOnlyOfKind(value, kind: kind) 'readOnly'
 				return true
 			end 'readOnly'
 		end 'eachSlotKind'
 
 		return false
-	end 'valueIsOrLiesWithinAReadOnlySlot'
+	end 'valueMayBeReadOnly'
 
-	function seedReadOnlySlotsInto(tuple ValueId, from ValueId)
-		for offset in 0 upto ReadOnlySlotKindCount 'eachSlotKind'
-			if self.valueIsOrLiesWithin(from, rank: self.letFieldRank() + offset) or self.valueIsOrLiesWithin(from, rank: self.tupleLetFieldRank() + offset) 'readOnly'
-				self.seedBit(ProvenanceColumn.identity, value: tuple, rank: self.tupleLetFieldRank() + offset)
+	function valueMarksSomeTupleColumn(value ValueId) returns bool
+		for kind in 0 upto ReadOnlySlotKindCount 'eachSlotKind'
+			if self.setHasRank(ProvenanceColumn.identity, value: value, rank: self.tupleLetFieldRank() + kind) 'marked'
+				return true
+			end 'marked'
+		end 'eachSlotKind'
+
+		return false
+	end 'valueMarksSomeTupleColumn'
+
+	function markTupleColumn(tuple ValueId, offset ByteOffset, from ValueId)
+		for kind in 0 upto ReadOnlySlotKindCount 'eachSlotKind'
+			if self.valueIsReadOnlyOfKind(from, kind: kind) 'readOnly'
+				self.seedBit(ProvenanceColumn.identity, value: tuple, rank: self.tupleLetFieldRank() + kind)
+				self.seedBit(ProvenanceColumn.identity, value: tuple, rank: self.tupleColumnRank(self.tupleColumnOfOffset(offset)))
 			end 'readOnly'
 		end 'eachSlotKind'
-	end 'seedReadOnlySlotsInto'
+	end 'markTupleColumn'
+
+	function tupleColumnsAreRecorded(tuple ValueId) returns bool
+		for column in 0 upto TupleColumnMarkCount 'eachColumn'
+			if self.setHasRank(ProvenanceColumn.identity, value: tuple, rank: self.tupleColumnRank(column)) 'recorded'
+				return true
+			end 'recorded'
+		end 'eachColumn'
+
+		return false
+	end 'tupleColumnsAreRecorded'
+
+	function tupleColumnsMissReach(tuple ValueId, reach TupleColumnReach) returns bool
+		return match reach 'reach'
+			anyColumn gives false
+			columnAt(offset) gives self.tupleColumnsAreRecorded(tuple) and not self.setHasRank(ProvenanceColumn.identity, value: tuple, rank: self.tupleColumnRank(self.tupleColumnOfOffset(offset)))
+		end 'reach'
+	end 'tupleColumnsMissReach'
+
+	function markFromTupleKinds(result ValueId, tuple ValueId)
+		for kind in 0 upto ReadOnlySlotKindCount 'eachSlotKind'
+			if self.setHasRank(ProvenanceColumn.identity, value: tuple, rank: self.tupleLetFieldRank() + kind) 'aKindThisTupleHolds'
+				self.seedBit(ProvenanceColumn.identity, value: result, rank: self.maybeLetFieldRank() + kind)
+			end 'aKindThisTupleHolds'
+		end 'eachSlotKind'
+	end 'markFromTupleKinds'
 
 	function valueIsATuple(func IrFunction, value ValueId) returns bool
 		if valueTagOf(func, value: value) != ValueTypeTag.structRef 'notATupleRecord'
@@ -3373,10 +3460,11 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'storesNoRecord'
 
 		// A tuple has no `let` slots, so a load out of it drops the read-only ranks of what it holds
-		// (`unionMaskWithoutLetFields`). The mark lives on the tuple's identity, which a call result
-		// inherits; anywhere else it is lost once the tuple crosses a call.
-		if self.valueIsOrLiesWithinAReadOnlySlot(value) and self.valueIsATuple(func, value: addr) 'aTupleIsAsReadOnlyAsWhatItHolds'
-			self.seedReadOnlySlotsInto(addr, from: value)
+		// (`unionMaskWithoutLetFields`). The tuple's identity keeps the kinds it holds and the columns
+		// holding them, which a call result inherits; a load takes "may be read-only" from a marked column
+		// (`unionInsideOfIdentity`).
+		if self.valueMayBeReadOnly(value) and self.valueIsATuple(func, value: addr) 'aTupleIsAsReadOnlyAsWhatItHolds'
+			self.markTupleColumn(addr, offset: offset, from: value)
 		end 'aTupleIsAsReadOnlyAsWhatItHolds'
 
 		let slotKind = LetSlotKind.none if self.tracingImmutableBindings else self.letSlotKindMemoized(func, addr: addr, offset: offset, held: value)
@@ -4048,7 +4136,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'reachesWhatItHolds'
 
 		if withinTheArgument 'withinIt'
-			self.unionMask(ProvenanceColumn.inside, to: result, from: ProvenanceColumn.identity, source: arg)
+			self.unionInsideOfIdentity(result, source: arg, reach: TupleColumnReach.anyColumn)
 			self.unionMask(ProvenanceColumn.inside, to: result, from: ProvenanceColumn.inside, source: arg)
 		end 'withinIt'
 
@@ -4135,7 +4223,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	// `to` may be a record `from` holds, or contain what it contains.
 	function flowFromWithin(to ValueId, from ValueId)
 		self.unionShares(to, source: from)
-		self.unionMask(ProvenanceColumn.inside, to: to, from: ProvenanceColumn.identity, source: from)
+		self.unionInsideOfIdentity(to, source: from, reach: TupleColumnReach.anyColumn)
 		self.unionMask(ProvenanceColumn.inside, to: to, from: ProvenanceColumn.inside, source: from)
 
 		if self.readsParameterStorage(from) 'theCallersToJudge'
@@ -4296,17 +4384,25 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			self.returnedModuleLets = self.returnedModuleLets or ResultHoldsAReadOnlyElement
 		end 'holdsAReadOnlyElement'
 
-		if self.valueIsOrLiesWithin(value, rank: self.tupleLetFieldRank()) 'aTupleWithALetField'
-			self.returnedModuleLets = self.returnedModuleLets or ResultIsATupleWithALetField
-		end 'aTupleWithALetField'
+		for kind in 0 upto ReadOnlySlotKindCount 'eachSlotKind'
+			if self.setHasRank(ProvenanceColumn.identity, value: value, rank: self.tupleLetFieldRank() + kind) 'aTupleWithAKind'
+				self.returnedModuleLets = maskWithParam(self.returnedModuleLets, param: ResultTupleKindFirstBit + kind as ParamCount)
+			end 'aTupleWithAKind'
 
-		if self.valueIsOrLiesWithin(value, rank: self.tupleLetFieldRank() + 1) 'aTupleWithALetPayload'
-			self.returnedModuleLets = self.returnedModuleLets or ResultIsATupleWithALetPayload
-		end 'aTupleWithALetPayload'
+			if self.valueIsOrLiesWithin(value, rank: self.maybeLetFieldRank() + kind) 'mayBeOfAKind'
+				self.returnedModuleLets = maskWithParam(self.returnedModuleLets, param: ResultMayBeKindFirstBit + kind as ParamCount)
+			end 'mayBeOfAKind'
+		end 'eachSlotKind'
 
-		if self.valueIsOrLiesWithin(value, rank: self.tupleLetFieldRank() + 2) 'aTupleWithAReadOnlyElement'
-			self.returnedModuleLets = self.returnedModuleLets or ResultIsATupleWithAReadOnlyElement
-		end 'aTupleWithAReadOnlyElement'
+		if not self.valueMarksSomeTupleColumn(value) 'noColumnIsMarked'
+			return
+		end 'noColumnIsMarked'
+
+		for column in 0 upto TupleColumnMarkCount 'eachColumn'
+			if self.setHasRank(ProvenanceColumn.identity, value: value, rank: self.tupleColumnRank(column)) 'aMarkedColumn'
+				self.returnedModuleLets = maskWithParam(self.returnedModuleLets, param: TupleColumnSummaryFirstBit + column as ParamCount)
+			end 'aMarkedColumn'
+		end 'eachColumn'
 	end 'addReturned'
 
 	function recordHeldIn(func IrFunction, value ValueId) returns ValueId
@@ -10459,6 +10555,15 @@ function moduleGlobalTypesOf(globals ManagedGlobalArray, vars bool) returns Maxo
 
 	return types
 end 'moduleGlobalTypesOf'
+
+function readOnlySlotViewOfKind(kind ElementIndex) returns PermanentView
+	return match kind 'kind'
+		0 gives PermanentView.letField
+		1 gives PermanentView.letPayload
+		2 gives PermanentView.readOnlyElement
+		default panic("readOnlySlotViewOfKind: {kind} is not one of the {ReadOnlySlotKindCount} read-only slot kinds")
+	end 'kind'
+end 'readOnlySlotViewOfKind'
 
 function viewRootKind(view PermanentView) returns ReadOnlyRootKind
 	return match view 'view'
