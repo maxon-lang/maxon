@@ -127,7 +127,7 @@ let DebugThreadIsRunningReason = "thread-is-running"
 let DebugNotPausableReason = "not-pausable"
 let DebugNoSchedulerReason = "no-scheduler"
 let DebugUnwritableReason = "unwritable"
-export let DebugDetachRefusedReason = "detach-refused"
+let DebugDetachRefusedReason = "detach-refused"
 
 let PollIntervalMs = 1
 let WaitSliceMs = 5
@@ -173,6 +173,12 @@ union EngineLiftedTrapLookup
 	none
 	at(lifted EngineLiftedTrap)
 end 'EngineLiftedTrapLookup'
+
+export enum EngineAttachment
+	attached
+	letGo
+	detachFailed
+end 'EngineAttachment'
 
 union EngineReaderStep
 	none
@@ -272,7 +278,7 @@ export type DebugEngine implements DebugMemory
 	var stopped as bool
 	var answeredUnder as DebugAddress
 	var liftedTraps as EngineLiftedTrapArray
-	var detached as bool
+	var attachment as EngineAttachment
 	var closed as bool
 	var holdArmed as bool
 	var lastReason as DebugAddress
@@ -332,7 +338,7 @@ export type DebugEngine implements DebugMemory
 		end 'adopted'
 
 		var contract = DebugRuntimeContract.readFrom(reader, textBytes: textBytes, placement: placement)
-		var engine = Self{pin: pin, launched: launched, backend: backend, target: target, contract: contract, stopTimeoutMs: stopTimeoutMs, lastStopSeq: 0, breakpoints: EngineBreakpointArray.create(), returnPoints: DebugReturnPointArray.create(), textBase: contract.textBase(), textSize: contract.textSize(), cacheBase: 0, cacheBytes: ByteArray.create(), cacheFilled: false, trace: trace, routing: routing, registers: DebugRegisterFile.create(), stopThread: 0, stopped: false, answeredUnder: 0, liftedTraps: EngineLiftedTrapArray.create(), detached: false, closed: false, holdArmed: false, lastReason: 0, lastFault: 0, lastPc: 0, lastConditionMissed: false, pausePending: false, readerStep: EngineReaderStep.none}
+		var engine = Self{pin: pin, launched: launched, backend: backend, target: target, contract: contract, stopTimeoutMs: stopTimeoutMs, lastStopSeq: 0, breakpoints: EngineBreakpointArray.create(), returnPoints: DebugReturnPointArray.create(), textBase: contract.textBase(), textSize: contract.textSize(), cacheBase: 0, cacheBytes: ByteArray.create(), cacheFilled: false, trace: trace, routing: routing, registers: DebugRegisterFile.create(), stopThread: 0, stopped: false, answeredUnder: 0, liftedTraps: EngineLiftedTrapArray.create(), attachment: EngineAttachment.attached, closed: false, holdArmed: false, lastReason: 0, lastFault: 0, lastPc: 0, lastConditionMissed: false, pausePending: false, readerStep: EngineReaderStep.none}
 
 		return engine.awaitEntryStop()
 	end 'start'
@@ -401,6 +407,11 @@ export type DebugEngine implements DebugMemory
 	// is outstanding and its debugger is still alive, so reaping before letting go wedges the pair — the
 	// child sits burning nothing and the reap never returns.
 	export function close() returns TargetOutcome
+		// A program the reader let go is closed leaving it running.
+		if self.attachment == EngineAttachment.letGo 'itWasLetGo'
+			return self.closedWith(TargetSettling.letGo)
+		end 'itWasLetGo'
+
 		if self.backend.endsTheProgramItself() 'theBackendEndsTheProgramItself'
 			return self.closedWith(TargetSettling.killed if self.backend.killTheProgram() else TargetSettling.reaped)
 		end 'theBackendEndsTheProgramItself'
@@ -413,6 +424,10 @@ export type DebugEngine implements DebugMemory
 	export function closeLeavingItRunning() returns TargetOutcome
 		self.clearWhatCanBeClearedAndLetGo()
 
+		if self.attachment != EngineAttachment.letGo 'theKernelRefusedToLetGo'
+			return self.close()
+		end 'theKernelRefusedToLetGo'
+
 		return self.closedWith(TargetSettling.letGo)
 	end 'closeLeavingItRunning'
 
@@ -420,13 +435,17 @@ export type DebugEngine implements DebugMemory
 	// while skipping the let-go leaves every lane's holds and asynchronous preemption withdrawn and a
 	// Windows debuggee unreapable (see `close`).
 	function clearWhatCanBeClearedAndLetGo()
-		if self.detached 'alreadyLetGo'
-			return
-		end 'alreadyLetGo'
+		match self.attachment 'attachment'
+			letGo then return
+			detachFailed then _ = self.askTheKernelToLetGo()
+			attached then self.clearAndLetGo()
+		end 'attachment'
+	end 'clearWhatCanBeClearedAndLetGo'
 
+	function clearAndLetGo()
 		_ = self.clearEveryBreakpoint()
 		_ = self.letGo()
-	end 'clearWhatCanBeClearedAndLetGo'
+	end 'clearAndLetGo'
 
 	function closedWith(how TargetSettling) returns TargetOutcome
 		if self.closed 'alreadyClosed'
@@ -452,9 +471,11 @@ export type DebugEngine implements DebugMemory
 	// kill-on-debugger-exit default could never do. It refuses while a trap byte cannot be written back,
 	// so the reader can still kill the program.
 	export function detach() returns CommandOutcome
-		if self.detached 'alreadyLetGo'
-			return CommandOutcome.done
-		end 'alreadyLetGo'
+		match self.attachment 'attachment'
+			letGo or
+			detachFailed then panic("DebugEngine.detach: the conversation refuses every live command once the engine no longer holds the program")
+			attached then break
+		end 'attachment'
 
 		let cleared = self.clearEveryBreakpoint()
 
@@ -466,30 +487,38 @@ export type DebugEngine implements DebugMemory
 	end 'detach'
 
 	// The holds and the preemption word are debuggee writes that work only while attached, and the
-	// kernel's detach cannot be undone, so they are lifted first; a refused detach puts both back and
-	// leaves the session as it was.
+	// kernel's detach cannot be undone, so they are lifted first.
 	function letGo() returns CommandOutcome
-		let heldThreads = self.liftEveryHold()
+		self.liftEveryHold()
 		self.restoreAsyncPreemption()
 
-		if not self.backend.detach() 'theKernelRefused'
-			self.withdrawAsyncPreemption()
-			self.holdAgain(heldThreads)
+		return self.askTheKernelToLetGo()
+	end 'letGo'
 
-			return CommandOutcome.refused(DebugDetachRefusedReason)
-		end 'theKernelRefused'
+	function askTheKernelToLetGo() returns CommandOutcome
+		let accepted = self.backend.detach()
 
-		self.detached = true
 		self.stopped = false
 		self.pausePending = false
 		self.readerStep = EngineReaderStep.none
 
-		return CommandOutcome.done
-	end 'letGo'
+		// A refusing backend has already changed the program's state (Windows resumes every thread,
+		// ptrace may have detached some, gdb-remote forgets its stop), so nothing is put back: a hold or
+		// preemption write now could land in a running program.
+		if not accepted 'theKernelRefused'
+			self.attachment = EngineAttachment.detachFailed
 
-	export function hasDetached() returns bool
-		return self.detached
-	end 'hasDetached'
+			return CommandOutcome.refused(DebugDetachRefusedReason)
+		end 'theKernelRefused'
+
+		self.attachment = EngineAttachment.letGo
+
+		return CommandOutcome.done
+	end 'askTheKernelToLetGo'
+
+	export function attachmentState() returns EngineAttachment
+		return self.attachment
+	end 'attachmentState'
 
 	export function takeOutput() returns CollectedLines
 		self.target.pump()
@@ -1013,9 +1042,11 @@ export type DebugEngine implements DebugMemory
 		self.target.pump()
 		self.pumpTrace()
 
-		if self.detached 'letGo'
-			return self.lookAtADetachedProgram()
-		end 'letGo'
+		match self.attachment 'attachment'
+			letGo or
+			detachFailed then return self.lookAtAProgramNoLongerHeld()
+			attached then break
+		end 'attachment'
 
 		if self.stopped 'aStopAlreadyStands'
 			return StopWait.timedOut if self.parkedAtEntry() else StopWait.stopped(self.currentStop())
@@ -1036,7 +1067,7 @@ export type DebugEngine implements DebugMemory
 		return self.lastReason == (DbgStopReasonEntry as DebugAddress)
 	end 'parkedAtEntry'
 
-	function lookAtADetachedProgram() returns StopWait
+	function lookAtAProgramNoLongerHeld() returns StopWait
 		view outcome = self.target.settle(TargetSettling.polled)
 
 		if targetIsRunning(outcome) 'stillRunning'
@@ -1044,7 +1075,7 @@ export type DebugEngine implements DebugMemory
 		end 'stillRunning'
 
 		return StopWait.ended(self.target.settle(TargetSettling.reaped))
-	end 'lookAtADetachedProgram'
+	end 'lookAtAProgramNoLongerHeld'
 
 	function settledWith(code BackendExitCode) returns TargetOutcome
 		self.stopped = false
@@ -1724,17 +1755,9 @@ export type DebugEngine implements DebugMemory
 		return CommandOutcome.done
 	end 'releaseGreenThread'
 
-	function holdAgain(heldThreads DebugAddressArray)
-		for gt in heldThreads 'eachHeld'
-			_ = self.holdGreenThread(gt)
-		end 'eachHeld'
-	end 'holdAgain'
-
-	function liftEveryHold() returns DebugAddressArray
-		var heldThreads = DebugAddressArray.create()
-
+	function liftEveryHold()
 		if not self.holdArmed 'nothingWasHeld'
-			return heldThreads
+			return
 		end 'nothingWasHeld'
 
 		let roster = self.contractWord(String.from(GtAllGLabel))
@@ -1745,18 +1768,12 @@ export type DebugEngine implements DebugMemory
 			let gt = debugAddressOrZero(self.wordAt((roster as DebugAddress) + (index as DebugAddress) * (DebuggeeWordBytes as DebugAddress)))
 
 			if gt != 0 'aRecord'
-				if self.fieldHoldsFigure(gt, offset: GtOffHoldFigureName, figure: GtHoldRequestedFigureName) 'itWasHeld'
-					heldThreads.push(gt)
-				end 'itWasHeld'
-
 				_ = self.holdFieldSetTo(gt, hold: released)
 			end 'aRecord'
 		end 'eachSlot'
 
 		self.stepHoldEpoch(HoldEpochLiftStep)
 		self.holdArmed = false
-
-		return heldThreads
 	end 'liftEveryHold'
 end 'DebugEngine'
 

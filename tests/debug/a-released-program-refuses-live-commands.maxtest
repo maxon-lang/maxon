@@ -1,0 +1,44 @@
+let ReleasedRefusesCaseLabel = "a-released-program-refuses-live-commands"
+let OutlivesDetachFixtureName = "outlivesdetach"
+
+let DetachCommand = "detach"
+let WaitRoundAnchorName = "wait-round"
+let FinishedMarkerName = "outlived-the-detach.txt"
+let ShortStopTimeout = "0.05"
+let CommandsAfterTheDetach = 2
+let MarkerLooks = 60
+let MarkerLookGapMs = 500
+
+typealias MarkerLook = int(0 to 60)
+
+test 'a command that needs the program held is refused once the session has detached from it, and the program runs on to its own end'
+	let staged = builtFixture(ReleasedRefusesCaseLabel, fixture: OutlivesDetachFixtureName)
+	let marker = staged.join(FinishedMarkerName)
+	let waitLine = anchorLine(staged.join(StagedProgramFileName), anchor: WaitRoundAnchorName)
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(waitLine)}", RunCommand, DetachCommand, PauseCommand, BacktraceCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: ["{DebugStopTimeoutOptionPrefix}{ShortStopTimeout}"])
+	let events = batchEvents(session.stdout)
+	let kinds = eventKinds(events)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	Expect.equal(eventsOfKind(events, kind: StopEventName).count(), expected: 1, message: "the program must be STOPPED at its breakpoint when it is detached from, and nothing after the detach may stop it again. It printed: {listedLines(kinds)}. {said}")
+	Expect.equal(eventsOfKind(events, kind: ExitEventName).count(), expected: 0, message: "the fixture sleeps for seconds past the detach's wait, so it must still be running when the commands after the detach are given; an `{ExitEventName}` here means the case no longer measures a released, running program. {said}")
+
+	let errors = eventsOfKind(events, kind: ErrorEventName)
+	Expect.equal(errors.count(), expected: CommandsAfterTheDetach, message: "⛔ A DETACHED PROGRAM IS NO LONGER HELD. `{PauseCommand}` would interrupt a process no debugger owns and `{BacktraceCommand}` would answer a stop the program has long since left, so each must be refused. It printed: {listedLines(kinds)}. {said}")
+
+	for error in errors 'eachRefusal'
+		Expect.contains(textOf(error, node: error.root, key: MessageKey), needle: DetachCommand, message: "each refusal names why: the session detached from the program. {said}")
+	end 'eachRefusal'
+
+	Expect.equal(eventsOfKind(events, kind: BacktraceEventName).count(), expected: 0, message: "`{BacktraceCommand}` after the detach answered frames of a program the session no longer holds. {said}")
+
+	var looks = 0 as MarkerLook
+
+	while not File.exists(marker) and looks < MarkerLooks 'untilTheProgramEnds'
+		sleep(MarkerLookGapMs)
+		looks = looks + 1
+	end 'untilTheProgramEnds'
+
+	Expect.isTrue(File.exists(marker), message: "⭐ A DETACHED PROGRAM RUNS TO ITS OWN END. The fixture writes {FinishedMarkerName} as its last act, and it never appeared: something the session did after letting the program go, a command or its close, ended it. {said}")
+end 'a command that needs the program held is refused once the session has detached from it, and the program runs on to its own end'

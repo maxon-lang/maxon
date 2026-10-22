@@ -64,6 +64,8 @@ let ContinueVerb = "continue"
 let PauseVerb = "pause"
 let DetachVerb = "detach"
 let DetachClearedWhatItCould = "; every breakpoint the debugger could write back is cleared"
+let DetachedMessage = "the session has detached from the program, so it runs on by itself and can no longer be inspected or controlled: only `quit` remains"
+let DetachFailedMessage = "the detach failed, so the program's state is unknown (it may be running) and it can no longer be inspected or controlled: only `quit` remains"
 let WalkVerb = "move for the walk"
 let ReturnPointLiftVerb = "lift the walk's return point"
 let StillWalkingMessage = "a step is still walking: pause it before moving the program again"
@@ -516,6 +518,8 @@ export enum DebugProgramState
 	stopped
 	running
 	walking
+	detached
+	detachFailed
 	ended
 end 'DebugProgramState'
 
@@ -676,6 +680,12 @@ export type DebugConversation
 			return DebugProgramState.ended
 		end 'itEnded'
 
+		match self.engine.attachmentState() 'attachment'
+			letGo then return DebugProgramState.detached
+			detachFailed then return DebugProgramState.detachFailed
+			attached then break
+		end 'attachment'
+
 		if self.isWalking() 'aStepIsUnderWay'
 			return DebugProgramState.walking
 		end 'aStepIsUnderWay'
@@ -788,8 +798,11 @@ export type DebugConversation
 
 		// A stop that landed while the session sat at the prompt is reported before this command's own
 		// reply, so the transcript shows it where it happened rather than after the word that followed
-		// it.
-		if not resumes and not self.isWalking() 'itMayHaveStoppedAlready'
+		// it. A program no longer held is looked at before a resuming command too, so an exit it already
+		// made is reported ahead of the refusal.
+		let held = self.engine.attachmentState() == EngineAttachment.attached
+
+		if (not resumes or not held) and not self.isWalking() 'itMayHaveStoppedAlready'
 			self.noticeAPendingStop(replies)
 		end 'itMayHaveStoppedAlready'
 
@@ -799,7 +812,13 @@ export type DebugConversation
 			return false
 		end 'itEndedWhileWeLooked'
 
-		return true
+		match self.engine.attachmentState() 'attachment'
+			attached then return true
+			letGo then replies.push(DebugReply.failed(DetachedMessage, suggestion: StatedText.unstated))
+			detachFailed then replies.push(DebugReply.failed(DetachFailedMessage, suggestion: StatedText.unstated))
+		end 'attachment'
+
+		return false
 	end 'readyForALiveCommand'
 
 	function noticeAPendingStop(replies DebugReplyArray)
@@ -2165,8 +2184,7 @@ export type DebugConversation
 
 	function reportTimeout(replies DebugReplyArray, waitingFor String)
 		self.failed = true
-		self.position = DebugStopState.none
-		self.letTheProgramRun()
+		self.loseTheStop()
 		replies.push(DebugReply.timedOut(waitingFor))
 	end 'reportTimeout'
 
@@ -2179,10 +2197,23 @@ export type DebugConversation
 		match answered 'letGo'
 			done or
 			nothingParked then self.awaitDetachedEnd(replies)
-			refused(reason) then replies.push(detachRefused(reason))
+			refused(reason) then self.reportDetachRefused(replies, reason: reason)
 			gone(ending) then self.reportOutcome(replies, ending: ending)
 		end 'letGo'
 	end 'detachAndReport'
+
+	function reportDetachRefused(replies DebugReplyArray, reason String)
+		match self.engine.attachmentState() 'attachment'
+			detachFailed then self.reportDetachFailed(replies, reason: reason)
+			attached then replies.push(motionRefused(DetachVerb, reason: reason, afterwards: DetachClearedWhatItCould))
+			letGo then panic("DebugConversation.reportDetachRefused: a refused detach leaves the engine holding the program or failed to let it go, never letting it go")
+		end 'attachment'
+	end 'reportDetachRefused'
+
+	function reportDetachFailed(replies DebugReplyArray, reason String)
+		self.loseTheStop()
+		replies.push(motionRefused(DetachVerb, reason: reason, afterwards: "; {DetachFailedMessage}"))
+	end 'reportDetachFailed'
 
 	function keepPurposesOfStandingTraps()
 		var standing = DebugArmPurposeMap.create()
@@ -2197,14 +2228,14 @@ export type DebugConversation
 	end 'keepPurposesOfStandingTraps'
 
 	function awaitDetachedEnd(replies DebugReplyArray)
-		self.letTheProgramRun()
+		self.loseTheStop()
 		var rounds = 0 as DebugTally
 
 		while targetIsRunning(self.outcome) and rounds < DetachRoundCap 'untilItEnds'
 			rounds = rounds + 1
 
 			match self.engine.pollForStop(self.engine.walkBudgetMs()) 'waited'
-				stopped then break 'untilItEnds'
+				stopped then panic("DebugConversation.awaitDetachedEnd: a program the engine no longer holds reports no stop")
 				ended(ending) then self.reportOutcome(replies, ending: ending)
 				timedOut then continue
 			end 'waited'
@@ -2231,10 +2262,14 @@ export type DebugConversation
 		end 'which'
 	end 'reportOutcome'
 
-	function settle(ending TargetOutcome)
-		self.outcome = ending
+	function loseTheStop()
 		self.position = DebugStopState.none
 		self.letTheProgramRun()
+	end 'loseTheStop'
+
+	function settle(ending TargetOutcome)
+		self.outcome = ending
+		self.loseTheStop()
 
 		match ending 'which'
 			running or
@@ -2446,14 +2481,6 @@ end 'callOf'
 function motionRefused(verb String, reason String, afterwards String = "") returns DebugReply
 	return DebugReply.failed("the program refused to {verb} ({reason}){afterwards}", suggestion: StatedText.unstated)
 end 'motionRefused'
-
-function detachRefused(reason String) returns DebugReply
-	if reason == DebugDetachRefusedReason 'theKernelRefused'
-		return motionRefused(DetachVerb, reason: reason)
-	end 'theKernelRefused'
-
-	return motionRefused(DetachVerb, reason: reason, afterwards: DetachClearedWhatItCould)
-end 'detachRefused'
 
 function wordsOf(line String) returns StringArray
 	var words = StringArray.create()

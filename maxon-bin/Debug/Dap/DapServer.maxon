@@ -198,9 +198,14 @@ type DapAdapter
 			return false
 		end 'notReleased'
 
-		let state = self.programState()
-
-		return state == DebugProgramState.running or state == DebugProgramState.walking
+		return match self.programState() 'program'
+			running or
+			walking or
+			detached or
+			detachFailed gives true
+			stopped or
+			ended gives false
+		end 'program'
 	end 'isWatching'
 
 	function wantsASlice() returns bool

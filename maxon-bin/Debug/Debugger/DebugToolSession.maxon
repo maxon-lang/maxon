@@ -76,11 +76,13 @@ export type DebugToolSession
 	end 'over'
 
 	export function currentState() returns DebugToolState
-		return match self.conversation.programState() 'program'
-			stopped gives DebugToolState.stopped
+		match self.conversation.programState() 'program'
+			stopped then return DebugToolState.stopped
 			running or
-			walking gives DebugToolState.running
-			ended gives DebugToolState.ended
+			walking then return DebugToolState.running
+			ended then return DebugToolState.ended
+			detached or
+			detachFailed then panic("DebugToolSession.currentState: only the `detach` command lets a program go, and no tool issues it")
 		end 'program'
 	end 'currentState'
 
