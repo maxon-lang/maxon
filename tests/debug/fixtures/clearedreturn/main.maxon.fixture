@@ -1,0 +1,20 @@
+typealias Marker = int(0 to 1000)
+
+function awaitGate(gate FilePath)
+	while not File.exists(gate) 'waiting'
+		continue
+	end 'waiting'
+end 'awaitGate'
+
+function main() returns ExitCode
+	let arguments = CommandLine.args()
+	let spelled = try arguments.get(1) otherwise panic("the test passes the gate file as the first argument")
+	let gate = try FilePath.from(spelled) otherwise panic("the test passes a spellable gate path")
+	let plan = [1 as Marker]
+	var marker = try plan.get(0) otherwise 0
+	awaitGate(gate)  // anchor: main-long-call
+	marker = marker + 1  // anchor: main-after
+	print("done {marker}\n")
+
+	return 0
+end 'main'

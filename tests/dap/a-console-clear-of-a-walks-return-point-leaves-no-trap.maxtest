@@ -1,0 +1,86 @@
+let ClearedReturnCaseLabel = "a-console-clear-of-a-walks-return-point-leaves-no-trap"
+let ClearedReturnFixtureName = "clearedreturn"
+let LongCallAnchor = "main-long-call"
+let AfterAnchor = "main-after"
+let ReplContextName = "repl"
+let NoFrame = 0
+let WalkBudgetSeconds = 20
+let PostGateAllowanceMs = 4000
+let WalkHeadStartMs = 300
+let GateFileName = "gate.open"
+let GateOpenText = "open"
+let ProgramDoneLine = "done 2"
+
+type ClearedReturnSession implements DapSession
+	let launchArguments as String
+	let source as FilePath
+	let gate as FilePath
+	let callLine as SourceLine
+	let afterLine as SourceLine
+	export var nextAnswered as bool
+	export var clearAnswer as String
+	export var landedReason as String
+	export var landedLine as DapNumber
+	export var ranToItsEnd as bool
+	export var finalOutput as String
+
+	static function create(launchArguments String, source FilePath, gate FilePath, callLine SourceLine, afterLine SourceLine) returns ClearedReturnSession
+		return Self{launchArguments: launchArguments, source: source, gate: gate, callLine: callLine, afterLine: afterLine, nextAnswered: false, clearAnswer: "", landedReason: "", landedLine: 0, ranToItsEnd: false, finalOutput: ""}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+		_ = try client.request(LaunchCommand, argumentsJson: self.launchArguments)
+		_ = try client.awaitEvent(InitializedEvent)
+		_ = try client.request(SetBreakpointsCommand, argumentsJson: dapSetBreakpointsArguments(self.source, line: self.callLine))
+		_ = try client.request(EvaluateCommand, argumentsJson: dapEvaluateArguments("break {self.source.filename()}:{self.afterLine}", context: ReplContextName, frameId: NoFrame))
+		_ = try client.request(ConfigurationDoneCommand)
+
+		let threadId = dapBodyNumber(try client.awaitEvent(StoppedEvent), key: "threadId")
+		_ = try client.request(SetBreakpointsCommand, argumentsJson: dapClearBreakpointsArguments(self.source))
+
+		self.nextAnswered = dapSuccess(try client.request(NextCommand, argumentsJson: dapThreadArguments(threadId)))
+
+		sleep(WalkHeadStartMs)
+
+		self.clearAnswer = dapBodyString(try client.request(EvaluateCommand, argumentsJson: dapEvaluateArguments("clear {self.source.filename()}:{self.afterLine}", context: ReplContextName, frameId: NoFrame)), key: "result")
+
+		writeStagedFile(self.gate, content: GateOpenText)
+		sleep(PostGateAllowanceMs)
+		_ = try client.request(PauseCommand, argumentsJson: dapThreadArguments(threadId))
+
+		self.landedReason = dapBodyString(try client.awaitEvent(StoppedEvent), key: "reason")
+		self.landedLine = dapFrameNumberAt(dapStackFrameLines(try client.request(StackTraceCommand, argumentsJson: dapThreadArguments(threadId))), frame: 0)
+
+		if self.landedReason != StepReason 'theLandingWentWrong'
+			_ = try client.request(DisconnectCommand)
+
+			return
+		end 'theLandingWentWrong'
+
+		_ = try client.request(ContinueCommand, argumentsJson: dapThreadArguments(threadId))
+		let finalPieces = try client.collectOutputUntil(ExitedEvent)
+		self.finalOutput = dapOutputOf(finalPieces, category: StdoutCategory)
+		self.ranToItsEnd = true
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'ClearedReturnSession'
+
+test 'a breakpoint the console clears at the address a next walk returns to leaves no trap behind it'
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: ClearedReturnCaseLabel, fixture: ClearedReturnFixtureName)
+	let program = staged.join(StagedProgramFileName)
+	let executable = buildStagedSource(program, staged: staged)
+	let gate = staged.join(GateFileName)
+	let launchArguments = "\{\"program\":{Json.quote(executable.toString())},\"args\":[{Json.quote(gate.toString())}],\"stopTimeoutSeconds\":{WalkBudgetSeconds}\}"
+	let afterLine = anchorLine(program, anchor: AfterAnchor)
+	var session = ClearedReturnSession.create(launchArguments, source: program, gate: gate, callLine: anchorLine(program, anchor: LongCallAnchor), afterLine: afterLine)
+	try dapRunSession(session, completing: "land the next and run the program to its end")
+
+	try Expect.isTrue(session.nextAnswered, message: "`{NextCommand}` over the long call must answer success at once")
+	try Expect.isTrue(session.clearAnswer.contains("cleared"), message: "the console's `clear` of the line after the call, sent while `{NextCommand}` walks, clears the console's own breakpoint; it answered `{session.clearAnswer}`")
+	try Expect.equal(session.landedReason, expected: StepReason, message: "⛔ the console cleared its breakpoint at the address the walk returns to, so the walk still holds that byte: it lands there as a `{StepReason}` stop and lifts the trap. The call returns only once the gate file opens, which happens after the clear was answered, so a `{PauseReason}` sent {PostGateAllowanceMs} ms after the gate opens is the only stop a walk that never lands can report: the trap left at the cleared address is one no record owns, and the program is resumed into it again and again. It said `{session.landedReason}`")
+	try Expect.equal(session.landedLine, expected: afterLine as DapNumber, message: "`{NextCommand}` lands on the line after the call")
+	try Expect.isTrue(session.ranToItsEnd, message: "after the landing, `{ContinueCommand}` runs the program to its exit with no trap left at the cleared address")
+	try Expect.isTrue(session.finalOutput.contains(ProgramDoneLine), message: "the program finishes and prints `{ProgramDoneLine}`; it printed `{session.finalOutput}`")
+end 'a breakpoint the console clears at the address a next walk returns to leaves no trap behind it'

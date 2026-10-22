@@ -121,7 +121,6 @@ export let DebugUnclassifiedReason = "unclassified"
 export let DebugOutOfTextReason = "out-of-text"
 export let DebugInsideRuntimeSymbolReason = "inside-runtime-symbol"
 export let DebugNotRunningReason = "not-running"
-let DebugNoSuchBreakpointReason = "no-such-breakpoint"
 export let DebugFaultIsTerminalReason = "fault-is-terminal"
 let DebugNotStoppedReason = "not-stopped"
 let DebugThreadIsRunningReason = "thread-is-running"
@@ -604,8 +603,11 @@ export type DebugEngine implements DebugMemory
 		end 'pastTheImage'
 
 		if self.armedAt(self.textBase + offset) 'armedAlready'
-			view original = self.originalBytesAt(offset)
-			self.recordBreakpoint(offset, originalBytes: original, usersOwn: forTheUser or self.userBreakpointAt(self.textBase + offset), condition: condition)
+			if not forTheUser 'aWalkAskedForAnArmedByte'
+				panic("DebugEngine.armBreakpoint: a walk reaches this only for a byte nobody armed, and the one at offset 0x{offset:x} is armed")
+			end 'aWalkAskedForAnArmedByte'
+
+			self.reownedBreakpoint(offset, usersOwn: true, condition: condition)
 
 			return CommandOutcome.done
 		end 'armedAlready'
@@ -631,24 +633,19 @@ export type DebugEngine implements DebugMemory
 		end 'planted'
 	end 'plantTrapAt'
 
-	function originalBytesAt(offset DebugAddress) returns ByteArray
-		return match self.breakpointAt(self.textBase + offset) 'known'
-			none gives ByteArray.create()
-			at(breakpoint) gives breakpoint.originalBytes
+	function reownedBreakpoint(offset DebugAddress, usersOwn bool, condition DebugConditionRequest)
+		match self.breakpointAt(self.textBase + offset) 'known'
+			none then panic("DebugEngine.reownedBreakpoint: no breakpoint is recorded at offset 0x{offset:x}")
+			at(breakpoint) then self.recordBreakpoint(offset, originalBytes: breakpoint.originalBytes, usersOwn: usersOwn, condition: condition)
 		end 'known'
-	end 'originalBytesAt'
+	end 'reownedBreakpoint'
 
 	export function clearBreakpoint(offset DebugAddress) returns CommandOutcome
 		if self.returnPointAt(self.textBase + offset) 'theWalkHoldsTheAddress'
-			self.forgetBreakpoint(offset)
+			self.reownedBreakpoint(offset, usersOwn: false, condition: DebugConditionRequest.none)
 
 			return CommandOutcome.done
 		end 'theWalkHoldsTheAddress'
-
-		match self.breakpointAt(self.textBase + offset) 'known'
-			none then return CommandOutcome.refused(DebugNoSuchBreakpointReason)
-			at then break
-		end 'known'
 
 		let restored = self.restoreBytesAt(offset)
 		self.forgetBreakpoint(offset)
@@ -659,11 +656,9 @@ export type DebugEngine implements DebugMemory
 
 	function restoreBytesAt(offset DebugAddress) returns bool
 		match self.breakpointAt(self.textBase + offset) 'known'
-			none then return true
-			at then break
+			none then panic("DebugEngine.restoreBytesAt: no breakpoint is recorded at offset 0x{offset:x}")
+			at(breakpoint) then return self.backend.liftTrap(breakpoint.address, original: breakpoint.originalBytes)
 		end 'known'
-
-		return self.backend.liftTrap(self.textBase + offset, original: self.originalBytesAt(offset))
 	end 'restoreBytesAt'
 
 	export function clearEveryBreakpoint()
@@ -770,8 +765,8 @@ export type DebugEngine implements DebugMemory
 	end 'returnPointReachedBy'
 
 	// ⛔ The roster is DRAINED before the loop, not iterated in place. `clearBreakpoint` short-circuits on an
-	// address the walk still holds — it forgets the record and restores no byte — so lifting from a roster
-	// that still names the point leaves a live `int3` in the debuggee with `armedAt` reading clean.
+	// address the walk still holds — it hands the record to the walk and restores no byte — so lifting from a
+	// roster that still names the point leaves a live `int3` in the debuggee.
 	export function liftReturnPoint() returns CommandOutcome
 		view standing = self.returnPoints
 		self.returnPoints = DebugReturnPointArray.create()
