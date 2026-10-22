@@ -151,6 +151,7 @@ the PROGRAM can assert catches it.
 ## Tests
 
 <!-- test: slab-census.dropping-a-population-moves-bytes-from-live-to-free -->
+<!-- preempt: off -->
 **THE IDENTITY CASE.** A population is built, measured, dropped and measured again. Dropping it must
 LOWER `live`, RAISE `free`, and may not RAISE `live + free` — a dropped slot moves from one column to the
 other, and the only thing that can take it out of the accounting altogether is a span being destroyed,
@@ -1378,6 +1379,7 @@ end 'main'
 ```
 
 <!-- test: slab-census.dropping-the-population-returns-the-bucket -->
+<!-- preempt: off -->
 **THE IDENTITY CASE, ASKED OF ONE BUCKET.** `dropping-a-population-moves-bytes-from-live-to-free` says a
 drop moves bytes from `live` to `free` and may not raise their sum; this says WHICH bucket the slots
 left. One bucket must fall by exactly the population, and the sum of the two levels must not rise across
