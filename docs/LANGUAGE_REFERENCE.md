@@ -3222,10 +3222,14 @@ function main() returns ExitCode
 end 'main'
 ```
 
-A function value fits a function type only when its parameter types, in order, and its result match the
-type's. That is checked wherever the value meets the type: a variable, a global, a field, a tuple or
-container element, a union payload, an argument and a `return` are **E3005**, and an `as` cast is
-**E3009**.
+A function value fits a function type only by variance. A read-only parameter
+may be wider than the type's (the function accepts every value the type's callers pass), a parameter the
+function writes by reference must be the same type, and the result may be narrower (everything the function
+returns is something the type promises). A bare `int` in the type's declaration is an unranged integer, so
+a function over a narrower alias does not fit it. That is checked wherever the value meets the type: a
+variable, a global, a field, a tuple or container element, a union payload, an argument and a `return`
+are **E3005**, and an `as` cast is **E3009**. A call through a function value is checked against the type
+the value is held at, and dispatches to the function it holds.
 
 Omit `returns` for a function type that returns nothing: `typealias Callback = function()`. A function type cannot express `throws`, so a
 throwing function cannot be used as a value (**E3101**) — wrap it in a function that handles the error.

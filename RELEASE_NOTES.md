@@ -108,6 +108,22 @@ release's version as its heading when the release is cut.
   it compiled before, with the `let` field's contents writable through `p`. A `let` bound to a fresh tuple
   or record holding a module `var`'s record that is written later is E3188 (`let t = (Box.create(1), gBox)`).
   Fix: hold a `.clone()` of the record, or a record of its own.
+- A function value fits a function type only by variance: a read-only parameter may be wider than the
+  type's, a parameter the program writes by reference must be the same type, and a result may be narrower.
+  A function whose read-only parameter is narrower, whose written parameter differs, or whose result is
+  wider than the function type it is stored or passed as — a ranged alias, or a bare `int` in the type's
+  declaration, against a function over a narrower alias — is E3005, or E3009 as an `as` cast.
+  Fix: declare the function with the function type's parameter and result types.
+- A closure literal bound by `let` or `var`, or written where no function type is declared, has an unranged
+  result, so it no longer fits a function type declaring a ranged result (E3005); a closure written at a
+  parameter, returned value, struct field, field write, variable write or union payload of a function type
+  takes that type's parameter and result types, as it did at a parameter.
+  Fix: write the closure where the function type is declared, or end its body in a cast to the result alias
+  (`function(n Integer) gives (n + 1) as Byte`).
+- A call through a function value is checked against the function type the value is held at, not against
+  the function behind it: after `let f = one as Bin`, `f(3)` against a two-parameter `Bin` is E3036 beside
+  the cast's E3009, where only the E3009 was reported.
+  Fix: call the value with the arguments of the type it is held at.
 
 ## 0.5.0 — 2026-10-08
 

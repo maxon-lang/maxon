@@ -30555,6 +30555,42 @@ export type ProgramSignatures
 		return not self.aliasWidensTo(got, ancestor: expected, readerFilePath: readerFilePath)
 	end 'identitiesConflict'
 
+	export function identityFitsSlot(source ByteArray, slot ByteArray, readerFilePath FilePath) returns bool
+		if not namedAggregatesConflict(slot, got: source) 'theTwoIdentitiesAgree'
+			return true
+		end 'theTwoIdentitiesAgree'
+
+		if isTupleTypeName(slot) and isTupleTypeName(source) 'twoTuples'
+			return not self.tuplesConflict(slot, got: source)
+		end 'twoTuples'
+
+		if source.isEmpty() 'anUnnamedValueIntoANamedSlot'
+			return self.aliasIdentityDecays(slot) and self.namedAliasAdmitsEveryValue(slot, readerFilePath: readerFilePath)
+		end 'anUnnamedValueIntoANamedSlot'
+
+		if slot.isEmpty() 'aNamedValueIntoAnUnnamedSlot'
+			return self.aliasIdentityDecays(source)
+		end 'aNamedValueIntoAnUnnamedSlot'
+
+		if self.instantiatesInnerAlias(source, template: slot) or self.instantiatesInnerAlias(slot, template: source) 'anInstanceOfTheTemplateAlias'
+			return true
+		end 'anInstanceOfTheTemplateAlias'
+
+		return self.aliasWidensTo(source, ancestor: slot, readerFilePath: readerFilePath)
+	end 'identityFitsSlot'
+
+	function namedAliasAdmitsEveryValue(identity ByteArray, readerFilePath FilePath) returns bool
+		match self.fileScopedOrInnerAliasNamed(identity, readerFilePath: readerFilePath) 'scoped'
+			declared(alias) then return aliasAdmitsEveryValue(alias)
+			undeclared then break
+		end 'scoped'
+
+		return match self.perInstanceAliasOf(identity, readerFilePath: readerFilePath) 'perInstance'
+			declared(alias) gives aliasAdmitsEveryValue(alias)
+			undeclared gives false
+		end 'perInstance'
+	end 'namedAliasAdmitsEveryValue'
+
 	function tuplesConflict(expected ByteArray, got ByteArray) returns bool
 		view expectedLayout = self.registeredTupleLayoutNamed(expected)
 		view gotLayout = self.registeredTupleLayoutNamed(got)

@@ -3850,16 +3850,19 @@ error E3005: specs/ranged-typealias/error.top-level-const-cast-to-bare-int.maxon
 ```
 
 <!-- test: the-typealias-rhs-admits-the-keyword -->
-⭐ **THE ONE POSITION THAT STAYS LEGAL, AND IT IS THE WHOLE RHS — not just the ranged form.** A FUNCTION
+⭐ **THE ONE POSITION WHERE THE BARE KEYWORD IS LEGAL IS THE WHOLE RHS — not just the ranged form.** A FUNCTION
 alias's parameters and return and a TUPLE alias's elements are inside the RHS too, and all three are
-accepted. `bool` stays bare everywhere. Read this with the case below: the tuple spelling that is legal
-HERE is refused one position over, which is what says the exemption is the RHS rather than the construct.
+accepted. `bool` stays bare everywhere. A bare `int` there is an unranged integer and no wildcard: a
+function stands for the alias only when its own types fit it, so `dbl` takes and returns the full-range
+`Whole`. Read this with the case below: the tuple spelling that is legal HERE is refused one position over,
+which is what says the exemption is the RHS rather than the construct.
 ```maxon
 typealias Small = int(0 to 100)
+typealias Whole = int(i64.min to i64.max)
 typealias IntOp = function(n int) returns int
 typealias Pair = (int, int)
 
-function dbl(n Small) returns Small
+function dbl(n Whole) returns Whole
 	return n + n
 end 'dbl'
 

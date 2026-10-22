@@ -4110,7 +4110,7 @@ union PendingClosureParamOffer
 end 'PendingClosureParamOffer'
 
 union ClosureResult
-	declared(returnType MaxonType)
+	declared(returnType MaxonType, offeredAlias ByteArray)
 	inferred
 end 'ClosureResult'
 
@@ -4121,6 +4121,13 @@ function closureResultOf(offer ClosureParamOffer) returns ClosureResult
 		none gives ClosureResult.inferred
 	end 'offer'
 end 'closureResultOf'
+
+function offeredAliasOf(result ClosureResult) returns ByteArray
+	return match result 'result'
+		declared(_, offeredAlias) gives offeredAlias.clone()
+		inferred gives EmptySourceText
+	end 'result'
+end 'offeredAliasOf'
 
 function inferredClosureResultType(bodyType MaxonType) returns MaxonType
 	return MaxonType.integer if tagIsUnresolved(maxonTypeTag(bodyType)) else bodyType
@@ -27766,7 +27773,7 @@ export type Parser
 		self.publishExistentialInstances(initializer)
 		self.fileDeferredProvenance(initializer)
 		self.publishDebugLocals(initializer)
-		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(NameRoster.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: NameRoster.create(), paramDeclaredNames: NameRoster.create(), returnAggregateName: self.erasedAggregateNameOfReturn(declaredReturn), returnBrand: EmptySourceText, paramExistentialSites: ParamExistentialSiteArray.create(), returnExistentialSites: GenericInstanceIdArray.create(), extensionConstraints: WhereConstraintArray.create(), writtenTypeNames: sharedEmptyWrittenTypeNames, selfSpelledParams: NoParamPositions), returnType: declaredReturn, nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.job.path, synthesized: true, role: FunctionDeclarationRole.ordinary)
+		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(NameRoster.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: NameRoster.create(), paramDeclaredNames: NameRoster.create(), returnAggregateName: self.erasedAggregateNameOfReturn(declaredReturn), returnBrand: EmptySourceText, paramExistentialSites: ParamExistentialSiteArray.create(), returnExistentialSites: GenericInstanceIdArray.create(), extensionConstraints: WhereConstraintArray.create(), writtenTypeNames: sharedEmptyWrittenTypeNames, selfSpelledParams: NoParamPositions, offeredResultAlias: EmptySourceText), returnType: declaredReturn, nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.job.path, synthesized: true, role: FunctionDeclarationRole.ordinary)
 		self.commitRangeChecks(name)
 	end 'parseDefaultInitializer'
 
@@ -28037,12 +28044,12 @@ export type Parser
 		end 'eachSourceArg'
 	end 'widenArgsToDeclaration'
 
-	function widenFunctionValueArgs(callee ValueId, args ValueIdArray, anchor Token, rparenTok Token)
+	function widenFunctionValueArgs(governing TypeNameId, args ValueIdArray, anchor Token, rparenTok Token)
 		if not self.signatures.declaresAnInterfaceHandle() 'noInterfaceHandle'
 			return
 		end 'noInterfaceHandle'
 
-		for (position, declared) in self.functionValueShape(callee).paramTypes.withIterator() 'eachParam'
+		for (position, declared) in self.functionValueShape(governing).paramTypes.withIterator() 'eachParam'
 			let i = position.index()
 			let given = try args.get(i) otherwise break
 			try args.set(i, value: self.interfaceHandleOf(given, declared: declared, first: anchor, last: rparenTok)) otherwise panic("widenFunctionValueArgs: args.set OOB at {i}")
@@ -33146,7 +33153,7 @@ export type Parser
 		self.stampLetCastScopes(nameTok.line, lastLine: self.tokenAt(self.pos - 1).line)
 		self.fileDeferredProvenance(func)
 		self.publishDebugLocals(func)
-		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramNames, paramTypes: paramTypes, paramTypeStarts: paramTypeStarts), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), returnBrand: returnBrand, paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: self.returnExistentialSitesOf(returnType, returnTypeStart: returnTypeStart), extensionConstraints: self.enclosingExtensionConstraints, writtenTypeNames: signatureTypeNames, selfSpelledParams: self.selfSpelledParamsOf(paramNames, paramTypeStarts: paramTypeStarts), returnCapability: qualifiedReturn.capability), returnType: returnType, nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.job.path, synthesized: false, role: self.declarationRoleOf(nameTok))
+		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramNames, paramTypes: paramTypes, paramTypeStarts: paramTypeStarts), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), returnBrand: returnBrand, paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: self.returnExistentialSitesOf(returnType, returnTypeStart: returnTypeStart), extensionConstraints: self.enclosingExtensionConstraints, writtenTypeNames: signatureTypeNames, selfSpelledParams: self.selfSpelledParamsOf(paramNames, paramTypeStarts: paramTypeStarts), offeredResultAlias: EmptySourceText, returnCapability: qualifiedReturn.capability), returnType: returnType, nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.job.path, synthesized: false, role: self.declarationRoleOf(nameTok))
 		self.commitRangeChecks(name)
 	end 'parseFunction'
 
@@ -34715,7 +34722,7 @@ export type Parser
 		self.publishExistentialInstances(helper)
 		self.fileDeferredProvenance(helper)
 		self.publishDebugLocals(helper)
-		self.artifact.recordFuncSignature(helperName, signature: FuncSignature.create(NameRoster.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: NameRoster.create(), paramDeclaredNames: NameRoster.create(), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), returnBrand: EmptySourceText, paramExistentialSites: ParamExistentialSiteArray.create(), returnExistentialSites: GenericInstanceIdArray.create(), extensionConstraints: WhereConstraintArray.create(), writtenTypeNames: sharedEmptyWrittenTypeNames, selfSpelledParams: NoParamPositions), returnType: returnType, nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.job.path, synthesized: true, role: FunctionDeclarationRole.ordinary)
+		self.artifact.recordFuncSignature(helperName, signature: FuncSignature.create(NameRoster.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: NameRoster.create(), paramDeclaredNames: NameRoster.create(), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), returnBrand: EmptySourceText, paramExistentialSites: ParamExistentialSiteArray.create(), returnExistentialSites: GenericInstanceIdArray.create(), extensionConstraints: WhereConstraintArray.create(), writtenTypeNames: sharedEmptyWrittenTypeNames, selfSpelledParams: NoParamPositions, offeredResultAlias: EmptySourceText), returnType: returnType, nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.job.path, synthesized: true, role: FunctionDeclarationRole.ordinary)
 		self.commitRangeChecks(helperName)
 	end 'parseDefaultHelperBody'
 
@@ -39112,6 +39119,8 @@ export type Parser
 			self.brandValue(value, brand: declaredBrand)
 		end 'aFreshValue'
 
+		self.stampDeclaredFunctionType(assigned, binding: binding, sourceIsBareLocal: rhsBareLocalName.isLocal())
+
 		let stored = self.storedValueNamedByBinding(assigned, binding: binding, nameTok: nameTok, sourceIsBareLocal: rhsBareLocalName.isLocal())
 		try self.requireRebindTakesNoReadOnlyRecord(nameTok, value: written)
 
@@ -39141,6 +39150,15 @@ export type Parser
 			self.writeBackPayload(func, binding: binding, nameTok: nameTok)
 		end 'writeBackIntoTheBox'
 	end 'completeLocalRebind'
+
+	function stampDeclaredFunctionType(value ValueId, binding VarInfo, sourceIsBareLocal bool)
+		if sourceIsBareLocal or self.tagOf(value) != ValueTypeTag.function or maxonTypeTag(binding.varType) != ValueTypeTag.function 'nothingToStamp'
+			return
+		end 'nothingToStamp'
+
+		let declared = binding.brandId if binding.brandId != UnnamedTypeId else typeNameIdOf(binding.varType)
+		try self.bodyState.valueBrandIds.set(value, value: declared) otherwise panic("stampDeclaredFunctionType: v{value} has no brand slot — every SSA value is minted through mintValue, which seeds the column")
+	end 'stampDeclaredFunctionType'
 
 	function adoptFirstBrandedStore(binding VarInfo, value ValueId, nameTok Token)
 		let brand = self.brandIdOf(value)
@@ -55150,8 +55168,8 @@ export type Parser
 		end 'eachArg'
 	end 'guardCellsTheCalleeMayWiden'
 
-	function guardCellsAFunctionValueMayWiden(callee ValueId, places PlaceArgumentArray, opIndex ElementIndex, range SourceRange)
-		view shape = self.functionValueShape(callee)
+	function guardCellsAFunctionValueMayWiden(governing TypeNameId, places PlaceArgumentArray, opIndex ElementIndex, range SourceRange)
+		view shape = self.functionValueShape(governing)
 
 		for place in places 'eachPlace'
 			let box = try self.handedStorageOf(place.storage) otherwise continue
@@ -78904,18 +78922,18 @@ export type Parser
 
 		let result = match maxonTypeOfStoredAliasReturn(alias, typeNames: self.artifact.typeNames) 'declaredReturn'
 			void gives ClosureResult.inferred
-			value(inner) gives self.declaredClosureResult(self.slotTypeThroughCallReceiver(self.repairSweptType(inner, scopeFilePath: alias.declFilePath), args: args, receiverArgs: receiverArgs, scopeFilePath: alias.declFilePath))
+			value(inner) gives self.declaredClosureResult(self.slotTypeThroughCallReceiver(self.repairSweptType(inner, scopeFilePath: alias.declFilePath), args: args, receiverArgs: receiverArgs, scopeFilePath: alias.declFilePath), offeredAlias: self.signatures.declaredIdentityOfSpelling(alias.name, declFilePath: alias.declFilePath))
 		end 'declaredReturn'
 
 		return ClosureParamOffer.offered(paramTypes, result: result)
 	end 'offeredClosureParamTypes'
 
-	function declaredClosureResult(declared MaxonType) returns ClosureResult
+	function declaredClosureResult(declared MaxonType, offeredAlias ByteArray) returns ClosureResult
 		if tagIsUnresolved(maxonTypeTag(declared)) or self.namesTypeParameterOutOfScope(declared) 'nothingThisBodyCanHold'
 			return ClosureResult.inferred
 		end 'nothingThisBodyCanHold'
 
-		return ClosureResult.declared(declared)
+		return ClosureResult.declared(declared, offeredAlias: offeredAlias.clone())
 	end 'declaredClosureResult'
 
 	// A slot declared in a shared generic body, read through this call's receiver when it has one.
@@ -78965,7 +78983,19 @@ export type Parser
 	function stateDeclaredLiteralTarget(declared MaxonType, scopeFilePath FilePath, valueStart ElementIndex)
 		self.stateArrayLiteralTargetAt(self.signatures.arrayInstanceOfDeclaredType(declared, interner: self.artifact.typeNames, readerFilePath: scopeFilePath), tokenIndex: valueStart)
 		self.stateTupleLiteralTargetAt(self.declaredTupleTargetOf(declared), tokenIndex: valueStart)
+		self.stateClosureOfferOfDeclaredType(declared, valueStart: valueStart)
 	end 'stateDeclaredLiteralTarget'
+
+	function stateClosureOfferOfDeclaredType(declared MaxonType, valueStart ElementIndex)
+		if maxonTypeTag(declared) != ValueTypeTag.function or not self.argumentOpensAClosure(valueStart) 'noClosureToOffer'
+			return
+		end 'noClosureToOffer'
+
+		match self.functionAliasForName(self.internedName(typeNameIdOf(declared))) 'alias'
+			declared(alias) then self.stateClosureParamOfferAt(valueStart, offer: self.offeredClosureParamTypes(alias, args: ValueIdArray.create(), receiverArgs: 0))
+			undeclared then break
+		end 'alias'
+	end 'stateClosureOfferOfDeclaredType'
 
 	function declaredTupleTargetOf(declared MaxonType) returns DeclaredTupleTarget
 		if maxonTypeTag(declared) != ValueTypeTag.structRef 'noTupleLiteralToType'
@@ -90178,14 +90208,14 @@ export type Parser
 
 	function closurePlaceholderReturn(declaredResult ClosureResult) returns MaxonReturnType
 		return match declaredResult 'result'
-			declared(returnType) gives MaxonReturnType.value(returnType.clone())
+			declared(returnType, _) gives MaxonReturnType.value(returnType.clone())
 			inferred gives MaxonReturnType.value(MaxonType.unresolved)
 		end 'result'
 	end 'closurePlaceholderReturn'
 
 	function parseClosureBody(lifted IrFunction, block IrBlock, declaredResult ClosureResult, givesTok Token) returns MaxonType throws SourceParseError
 		match declaredResult 'result'
-			declared(returnType) then return try self.parseDeclaredClosureBody(lifted, block: block, returnType: returnType, givesTok: givesTok)
+			declared(returnType, _) then return try self.parseDeclaredClosureBody(lifted, block: block, returnType: returnType, givesTok: givesTok)
 			inferred then return try self.parseInferredClosureBody(lifted, block: block, givesTok: givesTok)
 		end 'result'
 	end 'parseClosureBody'
@@ -90407,7 +90437,7 @@ export type Parser
 		// closure's parameters ARE spelled (`function(t IntTaker) gives …`) and carry the same `paramTypeStarts`
 		// every declared function's do, while its return type is INFERRED from the body and names no token for
 		// `declaredExistentialInstanceAt` to read.
-		var signature = FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramNames, paramTypes: paramTypes, paramTypeStarts: paramTypeStarts), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), returnBrand: EmptySourceText, paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: GenericInstanceIdArray.create(), extensionConstraints: WhereConstraintArray.create(), writtenTypeNames: sharedEmptyWrittenTypeNames, selfSpelledParams: NoParamPositions)
+		var signature = FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramNames, paramTypes: paramTypes, paramTypeStarts: paramTypeStarts), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), returnBrand: EmptySourceText, paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: GenericInstanceIdArray.create(), extensionConstraints: WhereConstraintArray.create(), writtenTypeNames: sharedEmptyWrittenTypeNames, selfSpelledParams: NoParamPositions, offeredResultAlias: offeredAliasOf(declaredResult))
 		self.publishLiftedBody(lifted, returnType: returnType, signature: signature, anchor: functionTok, synthesized: false)
 		self.closureShapes.upsert(closureName, value: FunctionValueShape.create(signature.paramTypes, returnType: returnType, scopeFilePath: self.job.path, promisesTaken: BoolArray.create()))
 
@@ -90781,7 +90811,7 @@ export type Parser
 
 		var paramNames = NameRoster.create()
 		paramNames.push(ClosureEnvDropParamName)
-		self.publishLiftedBody(drop, returnType: MaxonReturnType.void, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: NameRoster.create(), returnAggregateName: EmptySourceText, returnBrand: EmptySourceText, paramExistentialSites: ParamExistentialSiteArray.create(), returnExistentialSites: GenericInstanceIdArray.create(), extensionConstraints: WhereConstraintArray.create(), writtenTypeNames: sharedEmptyWrittenTypeNames, selfSpelledParams: NoParamPositions), anchor: anchor, synthesized: true)
+		self.publishLiftedBody(drop, returnType: MaxonReturnType.void, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: NameRoster.create(), returnAggregateName: EmptySourceText, returnBrand: EmptySourceText, paramExistentialSites: ParamExistentialSiteArray.create(), returnExistentialSites: GenericInstanceIdArray.create(), extensionConstraints: WhereConstraintArray.create(), writtenTypeNames: sharedEmptyWrittenTypeNames, selfSpelledParams: NoParamPositions, offeredResultAlias: EmptySourceText), anchor: anchor, synthesized: true)
 		self.fileDeferredProvenance(drop)
 
 		self.bodyState = savedBody
@@ -101503,18 +101533,19 @@ export type Parser
 	function parseIndirectCall(func IrFunction, callee ValueId, resultUsed bool) returns ValueId throws SourceParseError
 		let calleeTok = self.tokenAt(self.pos - 1)
 		let anchor = self.current()
+		let governing = self.functionValueGoverningId(callee)
 		try self.consume(TokenKind.leftParen)
 		self.anchorCalleeReadOutOfASlot(callee, range: SourceRange.ofToken(anchor))
 
 		var args = ValueIdArray.create()
 		var argImmutableNames = WriteBlameArray.create()
 		var argRanges = SourceRangeArray.create()
-		let places = try self.parseIndirectCallArgs(func, callee: callee, args: args, names: argImmutableNames, argRanges: argRanges, anchor: anchor, calleeName: calleeTok.value)
-		let argsAreChecked = self.indirectArgumentsAreChecked(callee, args: args, anchor: anchor)
+		let places = try self.parseIndirectCallArgs(func, governing: governing, args: args, names: argImmutableNames, argRanges: argRanges, anchor: anchor, calleeName: calleeTok.value)
+		let argsAreChecked = self.indirectArgumentsAreChecked(governing, args: args, anchor: anchor)
 
 		let rparenTok = try self.consume(TokenKind.rightParen)
-		self.widenFunctionValueArgs(callee, args: args, anchor: anchor, rparenTok: rparenTok)
-		try self.takePromisesTheFunctionTypeTakes(callee, args: args, argRanges: argRanges, anchor: anchor)
+		self.widenFunctionValueArgs(governing, args: args, anchor: anchor, rparenTok: rparenTok)
+		try self.takePromisesTheFunctionTypeTakes(governing, args: args, argRanges: argRanges, anchor: anchor)
 
 		// ⭐ **THE FUNCTION RECORD IS THE TRAILING ARGUMENT — UNIFORMLY.** The callee reads its captures
 		// out of the record it was called through, which is what lets a callee only known to be
@@ -101522,9 +101553,9 @@ export type Parser
 		// static knowledge of whether it captures.
 		args.push(callee)
 
-		let result = try self.mintIndirectCallResult(callee, resultUsed: resultUsed, anchor: anchor)
+		let result = try self.mintIndirectCallResult(governing, resultUsed: resultUsed, anchor: anchor)
 		let pending = try self.pendingIndirectPlaces(places)
-		try self.notePromiseCellsTheFunctionTypeTakes(callee, pending: pending, args: args, argRanges: argRanges, anchor: anchor)
+		try self.notePromiseCellsTheFunctionTypeTakes(governing, pending: pending, args: args, argRanges: argRanges, anchor: anchor)
 
 		// The indirect twin of `emitCall`'s enrolment, and in the same place — between the mint and the op.
 		// No retype stands in between here (a function VALUE's return type is already concrete), so the
@@ -101539,7 +101570,7 @@ export type Parser
 		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.indirectCall(result, callee: callee, args: args, argImmutableNames: argImmutableNames), range: SourceRange.between(anchor, last: rparenTok))
 		self.recordDeferredArgumentBindings(pending, transfers: PendingArgumentBindingArray.create(), callResult: result)
 		self.noteCallToken(SourceRange.between(anchor, last: rparenTok), args: args, start: SourceRange.ofToken(calleeTok))
-		self.guardCellsAFunctionValueMayWiden(callee, places: places, opIndex: callOpIndex, range: SourceRange.between(anchor, last: rparenTok))
+		self.guardCellsAFunctionValueMayWiden(governing, places: places, opIndex: callOpIndex, range: SourceRange.between(anchor, last: rparenTok))
 		return result
 	end 'parseIndirectCall'
 
@@ -101575,12 +101606,12 @@ export type Parser
 		self.bodyState.checkedCalls = withValueMarked(self.bodyState.checkedCalls, value: result)
 	end 'markCallChecked'
 
-	function indirectArgumentsAreChecked(callee ValueId, args ValueIdArray, anchor Token) returns bool
+	function indirectArgumentsAreChecked(governing TypeNameId, args ValueIdArray, anchor Token) returns bool
 		if not self.anyArgOwesTheQuantityDoor(args) 'nothingOwed'
 			return true
 		end 'nothingOwed'
 
-		view shape = self.functionValueShape(callee)
+		view shape = self.functionValueShape(governing)
 
 		for (position, given) in args.withIterator() 'eachArg'
 			if not self.argOwesTheQuantityDoor(given) 'owesNothing'
@@ -101689,7 +101720,7 @@ export type Parser
 	// TYPE has no parameter names, so `indirectCall` carries no `argLabels`/`argRanges`; see MaxonDialect).
 	// `parseValueExpression` (the climber plus a trailing ternary), not `parseExpression`, for
 	// `parseCallArgs`' reason: an argument is parsed inside an expression that already seeded `currentBlock`.
-	function parseIndirectCallArgs(func IrFunction, callee ValueId, args ValueIdArray, names WriteBlameArray, argRanges SourceRangeArray, anchor Token, calleeName ByteArray) returns PlaceArgumentArray throws SourceParseError
+	function parseIndirectCallArgs(func IrFunction, governing TypeNameId, args ValueIdArray, names WriteBlameArray, argRanges SourceRangeArray, anchor Token, calleeName ByteArray) returns PlaceArgumentArray throws SourceParseError
 		var places = PlaceArgumentColumn.unwritten
 
 		if self.at(TokenKind.rightParen) 'noArgs'
@@ -101705,7 +101736,7 @@ export type Parser
 			let readsAPlace = maskHasParam(byRefPositions, param: column)
 			self.cellArgumentToken = self.cellArgumentAnchorAt(valueStart) if readsAPlace else CellArgumentToken.none
 			self.cellArgumentWantsAPlace = readsAPlace
-			self.stateLiteralTargetForIndirectArgument(callee, position: args.count(), valueStart: valueStart)
+			self.stateLiteralTargetForIndirectArgument(governing, position: args.count(), valueStart: valueStart)
 			let value = try self.parseValueExpression(func)
 			self.cellArgumentToken = CellArgumentToken.none
 			self.cellArgumentWantsAPlace = false
@@ -101751,14 +101782,14 @@ export type Parser
 		return pending
 	end 'pendingIndirectPlaces'
 
-	function stateLiteralTargetForIndirectArgument(callee ValueId, position ElementIndex, valueStart ElementIndex)
+	function stateLiteralTargetForIndirectArgument(governing TypeNameId, position ElementIndex, valueStart ElementIndex)
 		let opening = self.kindAt(valueStart)
 
 		if opening != TokenKind.leftBracket and opening != TokenKind.leftParen 'noLiteralToType'
 			return
 		end 'noLiteralToType'
 
-		view shape = self.functionValueShape(callee)
+		view shape = self.functionValueShape(governing)
 		let param = try shape.paramTypes.get(position) otherwise return
 
 		if opening == TokenKind.leftBracket 'anArrayLiteral'
@@ -101784,8 +101815,8 @@ export type Parser
 	// reports E2004. Statement position (`resultUsed: false`) still mints the discarded
 	// void value; every value position (`resultUsed: true` — a binding, `return`, an operand, an argument)
 	// reports E2004 HERE, at the call, the same anchor and text the direct-call diagnostic uses.
-	function mintIndirectCallResult(callee ValueId, resultUsed bool, anchor Token) returns ValueId throws SourceParseError
-		view recovered = self.functionValueShape(callee)
+	function mintIndirectCallResult(governing TypeNameId, resultUsed bool, anchor Token) returns ValueId throws SourceParseError
+		view recovered = self.functionValueShape(governing)
 
 		match recovered.returnType 'r'
 			value(inner) then return self.mintSettledCallResult(inner, scopeFilePath: recovered.scopeFilePath)
@@ -101796,7 +101827,7 @@ export type Parser
 		// name (`functionValueShape` proved it resolvable to reach the `void` arm), the E2004 spelling
 		// `mintDeclaredCallResult` renders for a void direct call.
 		if resultUsed 'noValueToUse'
-			throw SourceParseError.voidCallResultUsed(String.from(overloadRegistrationBaseName(self.internedName(self.valueNameId(callee)))), line: anchor.line, column: anchor.column)
+			throw SourceParseError.voidCallResultUsed(String.from(overloadRegistrationBaseName(self.internedName(governing))), line: anchor.line, column: anchor.column)
 		end 'noValueToUse'
 
 		return self.mintValue(ValueTypeTag.void, nameId: UnnamedTypeId)
@@ -101823,8 +101854,8 @@ export type Parser
 	//     asks.
 	// A name is a function alias or a function, never both, so the order of those two lookups is
 	// immaterial.
-	function functionValueShape(callee ValueId) returns FunctionValueShape
-		let name = self.internedName(self.valueNameId(callee))
+	function functionValueShape(governing TypeNameId) returns FunctionValueShape
+		let name = self.internedName(governing)
 
 		// A closure's `$`-suffixed name is unwritable in source, so it shadows no function or alias.
 		if let closure = try self.closureShapes.get(name) 'closure'
@@ -101867,8 +101898,8 @@ export type Parser
 		self.noteCellPromiseTaken(cell)
 	end 'takePromiseOutOfCell'
 
-	function notePromiseCellsTheFunctionTypeTakes(callee ValueId, pending PendingArgumentBindingArray, args ValueIdArray, argRanges SourceRangeArray, anchor Token) throws SourceParseError
-		view shape = self.functionValueShape(callee)
+	function notePromiseCellsTheFunctionTypeTakes(governing TypeNameId, pending PendingArgumentBindingArray, args ValueIdArray, argRanges SourceRangeArray, anchor Token) throws SourceParseError
+		view shape = self.functionValueShape(governing)
 
 		for binding in pending 'eachPlace'
 			if not shape.takesPromiseAt(binding.column) 'notTaken'
@@ -101897,8 +101928,8 @@ export type Parser
 		owned.setMovedFrom(true, ledger: self.bodyState.moveLedger)
 	end 'noteCellPromiseTaken'
 
-	function takePromisesTheFunctionTypeTakes(callee ValueId, args ValueIdArray, argRanges SourceRangeArray, anchor Token) throws SourceParseError
-		view shape = self.functionValueShape(callee)
+	function takePromisesTheFunctionTypeTakes(governing TypeNameId, args ValueIdArray, argRanges SourceRangeArray, anchor Token) throws SourceParseError
+		view shape = self.functionValueShape(governing)
 		let byRefPositions = self.indirectByRefPositionsAt(args.count() as ParamCount)
 
 		for position in 0 upto args.count() 'eachArgument'

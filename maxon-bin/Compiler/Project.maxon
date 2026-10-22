@@ -10389,9 +10389,10 @@ export type FuncSignature
 	export var writtenTypeNames as WrittenTypeNames
 	export let selfSpelledParams as ParamPositionMask
 	export let returnCapability as ResultCapability
+	export let offeredResultAlias as ByteArray
 
-	export static function create(paramNames NameRoster, paramTypes MaxonTypeArray, paramAggregateNames NameRoster, paramDeclaredNames NameRoster, returnAggregateName ByteArray, returnBrand ByteArray, paramExistentialSites ParamExistentialSiteArray, returnExistentialSites GenericInstanceIdArray, extensionConstraints WhereConstraintArray, writtenTypeNames WrittenTypeNames, selfSpelledParams ParamPositionMask, returnCapability ResultCapability = ResultCapability.unqualified) returns FuncSignature
-		return Self{paramNames: paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames, paramDeclaredNames: paramDeclaredNames, returnAggregateName: returnAggregateName, returnBrand: returnBrand, paramExistentialSites: paramExistentialSites, returnExistentialSites: returnExistentialSites, extensionConstraints: extensionConstraints, writtenTypeNames: writtenTypeNames, selfSpelledParams: selfSpelledParams, returnCapability: returnCapability}
+	export static function create(paramNames NameRoster, paramTypes MaxonTypeArray, paramAggregateNames NameRoster, paramDeclaredNames NameRoster, returnAggregateName ByteArray, returnBrand ByteArray, paramExistentialSites ParamExistentialSiteArray, returnExistentialSites GenericInstanceIdArray, extensionConstraints WhereConstraintArray, writtenTypeNames WrittenTypeNames, selfSpelledParams ParamPositionMask, offeredResultAlias ByteArray, returnCapability ResultCapability = ResultCapability.unqualified) returns FuncSignature
+		return Self{paramNames: paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames, paramDeclaredNames: paramDeclaredNames, returnAggregateName: returnAggregateName, returnBrand: returnBrand, paramExistentialSites: paramExistentialSites, returnExistentialSites: returnExistentialSites, extensionConstraints: extensionConstraints, writtenTypeNames: writtenTypeNames, selfSpelledParams: selfSpelledParams, offeredResultAlias: offeredResultAlias, returnCapability: returnCapability}
 	end 'create'
 
 	// The declared parameter count — the arity a call must match.
@@ -10460,6 +10461,7 @@ export type FuncSignature
 		self.writtenTypeNames.cacheWrite(writer)
 		writer.unsigned(self.selfSpelledParams as CacheUnsigned)
 		writer.unsigned(self.returnCapability.ordinal as CacheUnsigned)
+		writer.bytes(self.offeredResultAlias)
 	end 'cacheWrite'
 
 	module static function cacheRead(reader LibraryCacheReader) returns FuncSignature throws LibraryCacheDamage
@@ -10475,12 +10477,13 @@ export type FuncSignature
 		let f_writtenTypeNames = try WrittenTypeNames.cacheRead(reader)
 		let f_selfSpelledParams = (try reader.unsigned()) as ParamPositionMask
 		let f_returnCapability = try cacheReadResultCapability(reader)
+		let f_offeredResultAlias = try reader.bytes()
 
-		return Self{paramNames: f_paramNames, paramTypes: f_paramTypes, paramAggregateNames: f_paramAggregateNames, paramDeclaredNames: f_paramDeclaredNames, returnAggregateName: f_returnAggregateName, returnBrand: f_returnBrand, paramExistentialSites: f_paramExistentialSites, returnExistentialSites: f_returnExistentialSites, extensionConstraints: f_extensionConstraints, writtenTypeNames: f_writtenTypeNames, selfSpelledParams: f_selfSpelledParams, returnCapability: f_returnCapability}
+		return Self{paramNames: f_paramNames, paramTypes: f_paramTypes, paramAggregateNames: f_paramAggregateNames, paramDeclaredNames: f_paramDeclaredNames, returnAggregateName: f_returnAggregateName, returnBrand: f_returnBrand, paramExistentialSites: f_paramExistentialSites, returnExistentialSites: f_returnExistentialSites, extensionConstraints: f_extensionConstraints, writtenTypeNames: f_writtenTypeNames, selfSpelledParams: f_selfSpelledParams, returnCapability: f_returnCapability, offeredResultAlias: f_offeredResultAlias}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize96
-		return sizeof(FuncSignature) as CacheSize96
+	static function cacheLayoutBytes() returns CacheSize104
+		return sizeof(FuncSignature) as CacheSize104
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

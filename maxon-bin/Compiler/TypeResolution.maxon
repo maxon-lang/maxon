@@ -598,11 +598,25 @@ module union DeclaredFunctionShape
 	undeclared
 end 'DeclaredFunctionShape'
 
+function signatureReturnIdentity(registry FunctionTypeRegistry, sig FuncSignature) returns ByteArray
+	if sig.offeredResultAlias.isEmpty() 'itsOwnResult'
+		return sig.returnAggregateName
+	end 'itsOwnResult'
+
+	view offered = try registry.aliasShapes.get(sig.offeredResultAlias) otherwise return sig.returnAggregateName
+
+	if offered.returnAggregateName.isEmpty() 'theAliasRecordsNoIdentity'
+		return sig.returnAggregateName
+	end 'theAliasRecordsNoIdentity'
+
+	return offered.returnAggregateName.clone()
+end 'signatureReturnIdentity'
+
 // The registries this reads travel as one `FunctionTypeRegistry` — see there for why all four move together.
 module function declaredFunctionShapeOf(registry FunctionTypeRegistry, name ByteArray) returns DeclaredFunctionShape
 	if let sig = try registry.funcSignatures.get(name) 'declaredFn'
 		let returnType = try registry.funcReturnTypes.get(name) otherwise panic("declaredFunctionShapeOf: '{String.from(name)}' is in funcSignatures but not funcReturnTypes — the two are committed together per function and re-synced together by resolveTypes")
-		return DeclaredFunctionShape.declared(FunctionShape.create(sig.paramTypes, returnType: returnType, paramAggregateNames: sig.paramAggregateNames, returnAggregateName: sig.returnAggregateName, paramCapabilities: lentParams(sig.paramCount()), returnCapability: sig.returnCapability))
+		return DeclaredFunctionShape.declared(FunctionShape.create(sig.paramTypes, returnType: returnType, paramAggregateNames: sig.paramAggregateNames, returnAggregateName: signatureReturnIdentity(registry, sig: sig), paramCapabilities: lentParams(sig.paramCount()), returnCapability: sig.returnCapability))
 	end 'declaredFn'
 
 	if let aliasShape = try registry.aliasShapes.get(name) 'alias'
@@ -690,11 +704,10 @@ export function functionShapesAgreeUnderSomeInstantiation(registry FunctionTypeR
 		return false
 	end 'arity'
 
-	for i in 0 upto declared.paramTypes.count() 'eachParam'
-		let declaredParam = try declared.paramTypes.get(i) otherwise panic("functionShapesAgreeUnderSomeInstantiation: declared.paramTypes.get OOB at {i} — the count was just read from the same array")
-		let gotParam = try got.paramTypes.get(i) otherwise panic("functionShapesAgreeUnderSomeInstantiation: got.paramTypes.get OOB at {i} — the arity check above proved the two counts equal")
+	let writtenPositions = signatures.declaredByRefPositionsAtArity(declared.paramTypes.count() as ParamCount)
 
-		if not positionAgreesUnderSomeInstantiation(registry, signatures: signatures, declaredType: declaredParam, gotType: gotParam, declaredIdentity: shapeParamIdentity(declared, index: i as ParamCount), gotIdentity: shapeParamIdentity(got, index: i as ParamCount), readerFilePath: readerFilePath) 'paramMismatch'
+	for i in 0 upto declared.paramTypes.count() 'eachParam'
+		if not parameterAgreesUnderSomeInstantiation(registry, signatures: signatures, declared: declared, got: got, index: i as ParamCount, written: maskHasParam(writtenPositions, param: i as ParamCount), readerFilePath: readerFilePath) 'paramMismatch'
 			return false
 		end 'paramMismatch'
 	end 'eachParam'
@@ -702,18 +715,36 @@ export function functionShapesAgreeUnderSomeInstantiation(registry FunctionTypeR
 	let gotValue = try valueTypeOfReturn(got.returnType) otherwise return maxonReturnTypeIsVoid(declared.returnType)
 	let declaredValue = try valueTypeOfReturn(declared.returnType) otherwise return false
 
-	return positionAgreesUnderSomeInstantiation(registry, signatures: signatures, declaredType: declaredValue, gotType: gotValue, declaredIdentity: declared.returnAggregateName, gotIdentity: got.returnAggregateName, readerFilePath: readerFilePath)
+	return positionAgreesUnderSomeInstantiation(registry, signatures: signatures, slotType: declaredValue, sourceType: gotValue, slotIdentity: declared.returnAggregateName, sourceIdentity: got.returnAggregateName, readerFilePath: readerFilePath)
 end 'functionShapesAgreeUnderSomeInstantiation'
 
-function positionAgreesUnderSomeInstantiation(registry FunctionTypeRegistry, signatures ProgramSignatures, declaredType MaxonType, gotType MaxonType, declaredIdentity ByteArray, gotIdentity ByteArray, readerFilePath FilePath) returns bool
-	let declaredIsOpen = typeMentionsATypeParameter(registry, signatures: signatures, t: declaredType)
+function positionAgreesUnderSomeInstantiation(registry FunctionTypeRegistry, signatures ProgramSignatures, slotType MaxonType, sourceType MaxonType, slotIdentity ByteArray, sourceIdentity ByteArray, readerFilePath FilePath) returns bool
+	let slotIsOpen = typeMentionsATypeParameter(registry, signatures: signatures, t: slotType)
 
-	if declaredIsOpen or typeMentionsATypeParameter(registry, signatures: signatures, t: gotType) 'aWildcardPosition'
-		return maxonTypeTag(declaredType) == ValueTypeTag.typeParameter or maxonTypeTag(gotType) == ValueTypeTag.typeParameter or maxonTypeTag(declaredType) == maxonTypeTag(gotType)
+	if slotIsOpen or typeMentionsATypeParameter(registry, signatures: signatures, t: sourceType) 'aWildcardPosition'
+		return maxonTypeTag(slotType) == ValueTypeTag.typeParameter or maxonTypeTag(sourceType) == ValueTypeTag.typeParameter or maxonTypeTag(slotType) == maxonTypeTag(sourceType)
 	end 'aWildcardPosition'
 
-	return resolvedTypesMatch(registry, signatures: signatures, declared: declaredType, got: gotType, pending: sharedEmptyFunctionTypePairs, readerFilePath: readerFilePath) and not signatures.identitiesConflict(declaredIdentity, got: gotIdentity, readerFilePath: readerFilePath)
+	return resolvedTypesMatch(registry, signatures: signatures, declared: slotType, got: sourceType, pending: sharedEmptyFunctionTypePairs, readerFilePath: readerFilePath) and signatures.identityFitsSlot(sourceIdentity, slot: slotIdentity, readerFilePath: readerFilePath)
 end 'positionAgreesUnderSomeInstantiation'
+
+function writtenParameterFlowsBack(registry FunctionTypeRegistry, signatures ProgramSignatures, declared FunctionShape, got FunctionShape, index ParamCount, pending FunctionTypePairArray, readerFilePath FilePath) returns bool
+	let declaredParam = try declared.paramTypes.get(index) otherwise panic("writtenParameterFlowsBack: declared.paramTypes.get OOB at {index} — the caller iterates the declared shape's parameters")
+	let gotParam = try got.paramTypes.get(index) otherwise panic("writtenParameterFlowsBack: got.paramTypes.get OOB at {index} — the caller proved the two arities equal")
+
+	return resolvedTypesMatch(registry, signatures: signatures, declared: declaredParam, got: gotParam, pending: pending, readerFilePath: readerFilePath) and signatures.identityFitsSlot(shapeParamIdentity(got, index: index), slot: shapeParamIdentity(declared, index: index), readerFilePath: readerFilePath)
+end 'writtenParameterFlowsBack'
+
+function parameterAgreesUnderSomeInstantiation(registry FunctionTypeRegistry, signatures ProgramSignatures, declared FunctionShape, got FunctionShape, index ParamCount, written bool, readerFilePath FilePath) returns bool
+	let declaredParam = try declared.paramTypes.get(index) otherwise panic("parameterAgreesUnderSomeInstantiation: declared.paramTypes.get OOB at {index} — the caller iterates the declared shape's parameters")
+	let gotParam = try got.paramTypes.get(index) otherwise panic("parameterAgreesUnderSomeInstantiation: got.paramTypes.get OOB at {index} — the caller proved the two arities equal")
+
+	if not positionAgreesUnderSomeInstantiation(registry, signatures: signatures, slotType: gotParam, sourceType: declaredParam, slotIdentity: shapeParamIdentity(got, index: index), sourceIdentity: shapeParamIdentity(declared, index: index), readerFilePath: readerFilePath) 'declaredFlowsIn'
+		return false
+	end 'declaredFlowsIn'
+
+	return not written or positionAgreesUnderSomeInstantiation(registry, signatures: signatures, slotType: declaredParam, sourceType: gotParam, slotIdentity: shapeParamIdentity(declared, index: index), sourceIdentity: shapeParamIdentity(got, index: index), readerFilePath: readerFilePath)
+end 'parameterAgreesUnderSomeInstantiation'
 
 // The rule proper, carrying the pairs of function-type names already under comparison further down the
 // same descent (see `FunctionTypePair`). Split from the entry point above only so the cycle guard is one
@@ -723,11 +754,13 @@ function shapesAgreeUnder(registry FunctionTypeRegistry, signatures ProgramSigna
 		return false
 	end 'arity'
 
+	let writtenPositions = signatures.declaredByRefPositionsAtArity(declared.paramTypes.count() as ParamCount)
+
 	for i in 0 upto declared.paramTypes.count() 'eachParam'
 		let declaredParam = try declared.paramTypes.get(i) otherwise panic("shapesAgreeUnder: declared.paramTypes.get OOB at {i} — the count was just read from the same array")
 		let gotParam = try got.paramTypes.get(i) otherwise panic("shapesAgreeUnder: got.paramTypes.get OOB at {i} — the arity check above proved the two counts equal")
 
-		if not resolvedTypesMatch(registry, signatures: signatures, declared: declaredParam, got: gotParam, pending: pending, readerFilePath: readerFilePath) 'paramMismatch'
+		if not resolvedTypesMatch(registry, signatures: signatures, declared: gotParam, got: declaredParam, pending: pending, readerFilePath: readerFilePath) 'paramMismatch'
 			return false
 		end 'paramMismatch'
 
@@ -750,14 +783,18 @@ function shapesAgreeUnder(registry FunctionTypeRegistry, signatures ProgramSigna
 		// `function(Integer)` reaching a `function(Color)` place would have the callee read an ordinal as a
 		// number, or a number as an ordinal. `identitiesConflict` is the same rule every coercion site asks,
 		// so a ranged alias — a scalar wearing a name — decays here exactly as it does there.
-		if signatures.identitiesConflict(shapeParamIdentity(declared, index: i as ParamCount), got: shapeParamIdentity(got, index: i as ParamCount), readerFilePath: readerFilePath) 'paramIdentityMismatch'
+		if not signatures.identityFitsSlot(shapeParamIdentity(declared, index: i as ParamCount), slot: shapeParamIdentity(got, index: i as ParamCount), readerFilePath: readerFilePath) 'paramIdentityMismatch'
 			return false
 		end 'paramIdentityMismatch'
+
+		if maskHasParam(writtenPositions, param: i as ParamCount) and not writtenParameterFlowsBack(registry, signatures: signatures, declared: declared, got: got, index: i as ParamCount, pending: pending, readerFilePath: readerFilePath) 'writtenParameterIsInvariant'
+			return false
+		end 'writtenParameterIsInvariant'
 	end 'eachParam'
 
 	// The RETURN slot asks both halves too, and for the same measurement — a shape carries ONE return identity
 	// rather than a per-position array, because a function type returns exactly one thing.
-	return returnSlotsMatch(registry, signatures: signatures, declared: declared.returnType, got: got.returnType, pending: pending, readerFilePath: readerFilePath) and not signatures.identitiesConflict(declared.returnAggregateName, got: got.returnAggregateName, readerFilePath: readerFilePath)
+	return returnSlotsMatch(registry, signatures: signatures, declared: declared.returnType, got: got.returnType, pending: pending, readerFilePath: readerFilePath) and signatures.identityFitsSlot(got.returnAggregateName, slot: declared.returnAggregateName, readerFilePath: readerFilePath)
 end 'shapesAgreeUnder'
 
 // ⭐ **RENDER A RESOLVED SHAPE THE WAY IT WAS WRITTEN — the diagnostic twin of `functionShapesAgree`, and it
@@ -1072,7 +1109,7 @@ function syncResolvedSignature(project Project, func IrFunction)
 	end 'noSig'
 
 	var sig = try project.funcSignatures.get(func.name) otherwise panic("syncResolvedSignature: contains({String.from(func.name)}) true but get failed")
-	project.funcSignatures.upsert(func.name, value: FuncSignature.create(sig.paramNames, paramTypes: sourceParamTypesOf(func, declaredCount: sig.paramNames.count() as ParamCount), paramAggregateNames: sig.paramAggregateNames, paramDeclaredNames: sig.paramDeclaredNames, returnAggregateName: sig.returnAggregateName, returnBrand: sig.returnBrand, paramExistentialSites: sig.paramExistentialSites, returnExistentialSites: sig.returnExistentialSites, extensionConstraints: sig.extensionConstraints, writtenTypeNames: sig.writtenTypeNames, selfSpelledParams: sig.selfSpelledParams, returnCapability: sig.returnCapability))
+	project.funcSignatures.upsert(func.name, value: FuncSignature.create(sig.paramNames, paramTypes: sourceParamTypesOf(func, declaredCount: sig.paramNames.count() as ParamCount), paramAggregateNames: sig.paramAggregateNames, paramDeclaredNames: sig.paramDeclaredNames, returnAggregateName: sig.returnAggregateName, returnBrand: sig.returnBrand, paramExistentialSites: sig.paramExistentialSites, returnExistentialSites: sig.returnExistentialSites, extensionConstraints: sig.extensionConstraints, writtenTypeNames: sig.writtenTypeNames, selfSpelledParams: sig.selfSpelledParams, offeredResultAlias: sig.offeredResultAlias, returnCapability: sig.returnCapability))
 end 'syncResolvedSignature'
 
 // ⭐ **THE FUNCTION'S SOURCE PARAMETER TYPES — WHICH IS NOT ALWAYS ALL OF `maxonParamTypes`.** A LIFTED

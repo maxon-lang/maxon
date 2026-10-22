@@ -4886,10 +4886,9 @@ end 'main'
 ```
 
 <!-- test: first-class-function.closure-into-alias-typed-param-accepted -->
-A closure passed into a parameter declared with a function typealias. Its declared parameter types
-are the alias's, and its RETURN type is INFERRED — `float`, where the alias spells `Ratio` — so a
-signature rule that compared the two by NAME would refuse a program that has to be accepted.
-The rule compares the RESOLVED representation, which is what the call ABI actually depends on.
+A closure passed into a parameter declared with a function typealias takes the alias's parameter
+and result types: its body is a `float` computation, checked against the alias's `Ratio` result at the
+closure.
 ```maxon
 
 typealias Ratio = float(0.0 to 1000.0)
@@ -4900,8 +4899,7 @@ function apply(f ScaleFn, v Ratio) returns Ratio
 end 'apply'
 
 function main() returns ExitCode
-	let g = function(x Ratio) gives x * 3.0
-	return trunc(apply(g, v: 4.0)) as ExitCode
+	return trunc(apply(function(x Ratio) gives x * 3.0, v: 4.0)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -4971,6 +4969,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
+error E3036: <fragment>:12:10: 'Bin' expects 2 argument(s) but 1 were provided
 error E3009: <fragment>:11:14: function type mismatch in cast: expected 'fn(Integer, Integer) returns Integer', got 'fn(Integer) returns Integer'
 ```
 
@@ -5227,7 +5226,7 @@ end 'bump'
 
 function main() returns ExitCode
 	let f = bump as ColorFn
-	return f(Color.red) as ExitCode
+	return f(Color.red).ordinal as ExitCode
 end 'main'
 ```
 ```maxoncstderr
@@ -7218,4 +7217,434 @@ end 'main'
 ```
 ```stdout
 9 9 9 9
+```
+
+<!-- test: error.a-call-through-a-reassigned-function-typed-variable-reports-only-the-refused-assignment -->
+A call through a function-typed variable is typed by the variable's declared function type, not by the function last assigned to it, so a refused assignment is the only diagnostic: the call is not also judged against the refused function's parameters.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+
+function seven() returns Integer
+	return 7
+end 'seven'
+
+function add(a Integer) returns Integer
+	return a + 1
+end 'add'
+
+function main() returns ExitCode
+	var f = seven as Thunk
+	f = add
+	return f() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:15:2: function type mismatch assigning to variable 'f': expected 'fn() returns Integer', got 'fn(Integer) returns Integer'
+```
+
+<!-- test: a-call-through-a-function-typed-variable-assigned-on-one-branch-calls-the-function-it-holds -->
+A function-typed variable reassigned on one branch only is called through the value it holds at run time: the call reaches the reassigned function when the branch ran and the original when it did not.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+
+function seven() returns Integer
+	return 7
+end 'seven'
+
+function eight() returns Integer
+	return 8
+end 'eight'
+
+function pick(c bool) returns Integer
+	var f = seven as Thunk
+	if c 'b'
+		f = eight
+	end 'b'
+	return f()
+end 'pick'
+
+function main() returns ExitCode
+	print("{pick(true)} {pick(false)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8 7
+```
+
+<!-- test: error.a-call-through-a-reassigned-function-typed-parameter-reports-only-the-refused-assignment -->
+A function-typed parameter is a variable of its declared function type too, so a call after a refused reassignment is typed by that declared type.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+
+function seven() returns Integer
+	return 7
+end 'seven'
+
+function add(a Integer) returns Integer
+	return a + 1
+end 'add'
+
+function run(f Thunk) returns Integer
+	f = add
+	return f()
+end 'run'
+
+function main() returns ExitCode
+	return run(seven) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:14:2: function type mismatch assigning to variable 'f': expected 'fn() returns Integer', got 'fn(Integer) returns Integer'
+```
+
+<!-- test: a-call-through-a-function-typed-variable-reassigned-to-another-function-calls-the-function-it-holds -->
+A function-typed variable, a parameter and a closure-holding variable reassigned in a straight line or on one branch each call the function they hold when called, whether the function was a named one, a closure or another variable's value.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+
+function seven() returns Integer
+	return 7
+end 'seven'
+
+function eight() returns Integer
+	return 8
+end 'eight'
+
+function nine() returns Integer
+	return 9
+end 'nine'
+
+function viaParam(f Thunk, c bool) returns Integer
+	if c 'b'
+		f = eight
+	end 'b'
+
+	return f()
+end 'viaParam'
+
+function straight() returns Integer
+	var f = seven as Thunk
+	f = nine
+	return f()
+end 'straight'
+
+function pick(c bool) returns Integer
+	var f = seven as Thunk
+	var g = nine as Thunk
+	let h = eight
+
+	if c 'b'
+		f = g
+		g = h
+	end 'b'
+
+	let captured = 100 as Integer
+	var k = seven
+
+	if c 'cl'
+		k = function() gives captured + 1
+	end 'cl'
+
+	return f() * 1000 + g() * 100 + k()
+end 'pick'
+
+function main() returns ExitCode
+	print("{viaParam(seven, c: true)} {viaParam(seven, c: false)} {straight()} {pick(true)} {pick(false)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8 7 9 9901 7907
+```
+
+<!-- test: error.a-call-through-a-cast-result-is-checked-against-the-cast-type -->
+A variable bound to a refused cast is declared at the cast's function type, so a call that matches that type adds no diagnostic of its own and the cast is the only refusal.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+
+function add(a Integer) returns Integer
+	return a + 1
+end 'add'
+
+function main() returns ExitCode
+	let k = add as Thunk
+	return k() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3009: <fragment>:10:14: function type mismatch in cast: expected 'fn() returns Integer', got 'fn(Integer) returns Integer'
+```
+
+<!-- test: error.a-function-over-a-narrower-parameter-is-refused-at-a-wider-function-type -->
+Agreement is variance-aware. A function type's parameter is a place the caller writes into, so the declared parameter must fit inside the range the function itself accepts: `takesByte` accepts `0 to 255`, so it is refused as a function over an unranged `int`, whose caller may pass `1000`.
+```maxon
+typealias Byte = int(0 to 255)
+typealias Thunk = function(x int)
+
+function takesByte(b Byte)
+	print("{b}\n")
+end 'takesByte'
+
+function main() returns ExitCode
+	let f = takesByte as Thunk
+	f(1000)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3009: <fragment>:10:20: function type mismatch in cast: expected 'fn(int)', got 'fn(Byte)'
+```
+
+<!-- test: error.a-function-over-a-wider-return-is-refused-at-a-narrower-function-type -->
+The return slot runs the other way: the declared return must contain every value the function can return, so a function whose result is an unranged `int` is refused where a `Byte` result is declared.
+```maxon
+typealias Byte = int(0 to 255)
+typealias Wide = function() returns int
+typealias Narrow = function() returns Byte
+
+function run(g Wide) returns ExitCode
+	let f = g as Narrow
+	return f() as ExitCode
+end 'run'
+
+function one() returns Byte
+	return 1
+end 'one'
+
+function main() returns ExitCode
+	return run(one)
+end 'main'
+```
+```maxoncstderr
+error E3009: <fragment>:7:12: function type mismatch in cast: expected 'fn() returns Byte', got 'fn() returns int'
+```
+
+<!-- test: a-function-over-a-wider-parameter-and-a-narrower-return-is-accepted -->
+The two sound directions stay accepted: a function over a wider parameter stands where a `Byte` parameter is declared, and a function returning a `Byte` stands where an unranged result is declared.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = int(0 to 255)
+typealias Wide = function(x int) returns int
+typealias Narrow = function(b Byte) returns int
+typealias WideReturn = function() returns int
+
+function small() returns Byte
+	return 200
+end 'small'
+
+function twice(x Integer) returns Integer
+	return x * 2
+end 'twice'
+
+function through(g Wide) returns Integer
+	let f = g as Narrow
+	return f(9)
+end 'through'
+
+function main() returns ExitCode
+	let h = small as WideReturn
+	print("{through(twice)} {h()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18 200
+```
+
+<!-- test: error.a-function-over-a-narrower-parameter-is-refused-at-a-function-typed-argument -->
+The same variance holds at an argument door: a function over a `Byte` parameter is refused where a function over an unranged parameter is declared.
+```maxon
+typealias Byte = int(0 to 255)
+typealias Wide = function(x int)
+
+function takesByte(b Byte)
+	print("{b}\n")
+end 'takesByte'
+
+function run(g Wide)
+	g(1000)
+end 'run'
+
+function main() returns ExitCode
+	run(takesByte)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:14:2: argument type mismatch for 'g': expected 'fn(int)', got 'fn(Byte)'
+```
+
+<!-- test: error.a-function-held-at-a-function-type-is-judged-at-that-type-by-every-door -->
+A function value held at a function type is judged at that type, not at the function behind it: `f` is held at `Thunk`, so `apply` declaring a distinct brand `Callback` of the same shape refuses it after a reassignment too, exactly as it refuses any value of type `Thunk`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+typealias Callback = function() returns Integer
+
+function seven() returns Integer
+	return 7
+end 'seven'
+
+function eight() returns Integer
+	return 8
+end 'eight'
+
+function apply(c Callback) returns Integer
+	return c()
+end 'apply'
+
+function through(t Thunk) returns Integer
+	var f = t
+	f = eight
+	return apply(f)
+end 'through'
+
+function main() returns ExitCode
+	return through(seven) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:21:9: argument type mismatch for 'c': expected 'Callback', got 'Thunk'
+```
+
+<!-- test: error.a-function-typed-parameter-is-judged-at-its-declared-type-at-an-argument-door -->
+The control for the case above: a value that IS a `Thunk` is refused by `apply` the same way, with the same sentence.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+typealias Callback = function() returns Integer
+
+function seven() returns Integer
+	return 7
+end 'seven'
+
+function apply(c Callback) returns Integer
+	return c()
+end 'apply'
+
+function through(t Thunk) returns Integer
+	return apply(t)
+end 'through'
+
+function main() returns ExitCode
+	return through(seven) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:15:9: argument type mismatch for 'c': expected 'Callback', got 'Thunk'
+```
+
+<!-- test: error.a-closure-without-an-offered-result-does-not-fit-a-narrower-declared-result -->
+A closure literal bound by `let` is parsed without the function type it will meet, so its result is the unranged `int` its body computes and nothing range-checks it. It therefore does not fit a function type declaring a `Byte` result, however it is passed.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = int(0 to 255)
+typealias Make = function(n Integer) returns Byte
+
+function run(m Make) returns Byte
+	return m(1000)
+end 'run'
+
+function main() returns ExitCode
+	let f = function(_ Integer) gives 1000
+	print("{run(f)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:12:10: argument type mismatch for 'm': expected 'fn(Integer) returns Byte', got 'fn(Integer) returns int'
+```
+
+<!-- test: a-closure-written-at-a-function-typed-field-takes-the-fields-result -->
+A closure literal written where a function type is declared (a struct-literal field, a field or variable write) is offered that type's parameter and result types, so its result is checked against the declared `Count` rather than inferred as an unranged `int`.
+```maxon
+typealias Count = int(0 to 1000)
+typealias Read = function() returns Count
+
+type Slot
+	export var show as Read
+
+	static function create() returns Self
+		return Self{show: function() gives 7}
+	end 'create'
+end 'Slot'
+
+function main() returns ExitCode
+	var s = Slot.create()
+	print("{s.show()}\n")
+	s.show = function() gives 9
+	print("{s.show()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+9
+```
+
+<!-- test: a-closure-returned-from-a-function-declared-to-return-a-function-type-takes-its-result -->
+A closure literal returned from a function declared to return a function type is written where that type is declared, so it is offered the type's parameter and result types and its result is checked against the declared `Count`.
+```maxon
+typealias Count = int(0 to 1000)
+typealias Read = function() returns Count
+typealias Scale = function(n Count) returns Count
+
+function make() returns Read
+	return function() gives 7
+end 'make'
+
+function scaler() returns Scale
+	return function(n) gives n * 2
+end 'scaler'
+
+function main() returns ExitCode
+	let r = make()
+	let s = scaler()
+	print("{r()} {s(21)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 42
+```
+
+<!-- test: error.a-closure-returned-from-a-function-declared-to-return-a-function-type-is-range-checked -->
+The offer is what checks the returned closure: a body outside the declared `Count` range is refused at the closure.
+```maxon
+typealias Count = int(0 to 1000)
+typealias Read = function() returns Count
+
+function make() returns Read
+	return function() gives 5000
+end 'make'
+
+function main() returns ExitCode
+	let r = make()
+	print("{r()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:6:20: Value 5000 is outside the range of 'Count' (int(0 to 1000))
 ```

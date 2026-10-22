@@ -4068,10 +4068,7 @@ end 'checkIndirectCall'
 function checkIndirectCallArgs(project Project, module MaxonModule, calls CallSummaryIndex, func IrFunction, opIndex ElementIndex, callee ValueId, args ValueIdArray, argImmutableNames WriteBlameArray, mutationSummary ParamMutationSummary, provenance ProvenanceTracer)
 	let callRange = project.opRanges.get(opIndex)
 
-	// A call through a value reads the value's OWN shape, never the brand a cast gave it: the brand is a
-	// door question, and a cast whose shape disagrees with its target is refused at the cast (E3009, the
-	// recorded door) rather than at every later call.
-	let calleeName = functionValueOwnTypeName(project, func: func, value: callee)
+	let calleeName = functionValueGoverningName(project, func: func, value: callee)
 
 	// Unreachable `undeclared`, and PROVEN so at the point the op was emitted rather than assumed here:
 	// `Parser.mintIndirectCallResult` types every indirect call's result through `functionValueReturnType`,

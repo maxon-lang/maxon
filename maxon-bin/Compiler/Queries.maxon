@@ -2781,7 +2781,10 @@ end 'checkOneValueMergeSignature'
 // alike and two renderings of one type can differ. Comparing captions refuses a merge that is legal
 // and accepts one that is not.
 function armFnShapesAgree(project Project, registry FunctionTypeRegistry, first ByteArray, other ByteArray, readerFilePath FilePath) returns bool
-	return functionShapesAgree(registry, signatures: programSignaturesIn(project, asker: "armFnShapesAgree"), declared: requireFunctionShapeOf(registry, name: first, side: "first arm"), got: requireFunctionShapeOf(registry, name: other, side: "arriving arm"), readerFilePath: readerFilePath)
+	view firstShape = requireFunctionShapeOf(registry, name: first, side: "first arm")
+	view otherShape = requireFunctionShapeOf(registry, name: other, side: "arriving arm")
+
+	return functionShapesAgree(registry, signatures: programSignaturesIn(project, asker: "armFnShapesAgree"), declared: firstShape, got: otherShape, readerFilePath: readerFilePath) and functionShapesAgree(registry, signatures: programSignaturesIn(project, asker: "armFnShapesAgree"), declared: otherShape, got: firstShape, readerFilePath: readerFilePath)
 end 'armFnShapesAgree'
 
 function armDeclaringFileNote(project Project, name ByteArray, captionsDiffer bool) returns String

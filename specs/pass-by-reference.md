@@ -2227,13 +2227,12 @@ end 'main'
 ```
 
 <!-- test: pass-by-reference.agreeing-shapes-share-one-convention-bump-first -->
-Two function values whose parameter types differ only by an `implements` widening are one convention: the call through the `Percent` callback passes the cell the `Small` body writes through, whichever value is taken first.
+Two function values of one shape are one convention: the call through the `Percent` callback passes the cell the writing body writes through, whichever value is taken first.
 ```maxon
 typealias Percent = int(0 to 100)
-typealias Small = int(0 to 10) implements Percent
 typealias Cb = function(Percent)
 
-function bump(v Small)
+function bump(v Percent)
 	v = 3
 end 'bump'
 
@@ -2250,12 +2249,12 @@ end 'run'
 function main() returns ExitCode
 	let b = bump
 	let s = show
-	var small = 8 as Small
+	var low = 8 as Percent
 	var big = 9 as Percent
-	b(small)
+	b(low)
 	s(big)
 	run(bump)
-	print("{small}\n")
+	print("{low}\n")
 	return 0
 end 'main'
 ```
@@ -2272,10 +2271,9 @@ end 'main'
 The same program with the values taken in the other order.
 ```maxon
 typealias Percent = int(0 to 100)
-typealias Small = int(0 to 10) implements Percent
 typealias Cb = function(Percent)
 
-function bump(v Small)
+function bump(v Percent)
 	v = 3
 end 'bump'
 
@@ -2292,12 +2290,12 @@ end 'run'
 function main() returns ExitCode
 	let s = show
 	let b = bump
-	var small = 8 as Small
+	var low = 8 as Percent
 	var big = 9 as Percent
-	b(small)
+	b(low)
 	s(big)
 	run(bump)
-	print("{small}\n")
+	print("{low}\n")
 	return 0
 end 'main'
 ```
@@ -2427,14 +2425,13 @@ end 'main'
 error E3005: <fragment>:17:2: argument type mismatch for 'xs': expected 'Xs', got 'Ys'
 ```
 
-<!-- test: pass-by-reference.error.a-let-handed-to-a-callback-is-refused-when-only-a-widening-body-writes-it -->
-A body whose parameter alias implements the callback's parameter alias stands for that callback type, so a `let` handed through the callback is refused even though no body of the callback's own alias writes it.
+<!-- test: pass-by-reference.error.a-let-handed-to-a-callback-is-refused-when-a-body-of-its-shape-writes-it -->
+A `let` handed through a callback is refused when any body of the callback's shape writes the parameter, although other bodies of that shape only read it.
 ```maxon
 typealias Wide = int(1 to 100)
-typealias Narrow = int(1 to 10) implements Wide
 typealias Step = function(Wide)
 
-function bump(n Narrow)
+function bump(n Wide)
 	n = 7
 end 'bump'
 
@@ -2454,7 +2451,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:16:3: cannot pass 'v', which is read-only (a `let` binding), to a function that writes parameter 'n' (in run); pass a clone()
+error E3159: <fragment>:15:3: cannot pass 'v', which is read-only (a `let` binding), to a function that writes parameter 'n' (in run); pass a clone()
 ```
 
 <!-- test: pass-by-reference.error.a-function-variable-repointed-by-a-callee-takes-the-union -->
