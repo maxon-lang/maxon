@@ -62,7 +62,7 @@ The standard library declares a few aliases every file can use, among them `Exit
 
 An integer alias declares a **quantity**: `int(lo to hi)` includes `hi`, `int(lo upto hi)` excludes it.
 Bounds are literals or the limits of a sized type: `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`
-(`.min` / `.max`).
+(`.min` / `.max`). `.min` and `.max` belong to the sized types: `Score.max` on a ranged alias is **E2073**.
 
 ```maxon
 typealias Score = int(0 to 100)

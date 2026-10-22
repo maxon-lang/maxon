@@ -2722,9 +2722,8 @@ end 'conformanceSelfTypeNameOf'
 // that function for the two wrong answers measured without the name covered.
 //
 // ⛔⛔ **A SOURCE-WRITTEN `String.<member>(…)` REACHES THE RESERVED-CALLEE GATE.** It is not intercepted
-// away from it: `Parser.parseStringStaticCall`'s corpus fall-through forwards a
-// member `stdlib/String.maxon` declares STRAIGHT to `parseCallNamed`, and every other `String.<member>(…)`
-// goes down the ordinary qualified path — so a synthesized impl the corpus does NOT declare arrives here
+// away from it: `Parser.compilerOwnedStaticSurface` has no `String` arm, so every `String.<member>(…)`
+// goes down the ordinary qualified path — and a synthesized impl the corpus does NOT declare arrives here
 // too. MEASURED, with the qualifier admitted on its own:
 // **`E3004 call to undefined function 'String.hash': the '__' prefix names a compiler intrinsic, and no
 // intrinsic of that name exists`** — a message whose stated REASON is false of a name carrying no `__`.
@@ -2768,37 +2767,9 @@ export function isBuiltinConformanceImplName(name ByteArray) returns bool
 	end 'parts'
 end 'isBuiltinConformanceImplName'
 
-// ⭐⭐ **THE *QUALIFIER* QUESTION, WHICH IS NOT THE SYMBOL QUESTION — AND COLLAPSING THE TWO WAS A MEASURED
-// REGRESSION.** `isBuiltinConformanceImplName` above answers *"did the compiler MINT this symbol?"*, which
-// is what `MmRuntime.isCompilerInternalCallee` needs in order to wave a callee past E3004 — and narrowing
-// it to the methods actually synthesized is what keeps it from claiming `stdlib/String.maxon`'s own methods.
-// **This one answers *"does the compiler OWN this qualifier?"***, which is what
-// `Parser.requirePrimitiveStaticIsResolvable` needs in order to say *"'int' has no static method named
-// 'frobnicate'"* in the author's own words instead of letting the reserved-callee gate describe a `__`
-// prefix the program does not have.
-//
-// ⚠ MEASURED, by making the second reader ask the first: `parsable-interface/error.unknown-primitive-static`
-// went from that E2015 to `E3004 call to undefined function 'int.frobnicate'` — the right code describing a
-// program the author does not have, which is the exact wrong answer that function's header was written to
-// close. One predicate cannot serve both, because the two answers differ exactly once a DECLARATION
-// can wear a compiler-owned qualifier.
-//
-// ⚠ **IT KEEPS ALL FOUR QUALIFIERS, INCLUDING `String`, AND WHAT MAKES THAT SAFE IS THE CALLER'S GATE.** Its
-// one caller (`Parser.requirePrimitiveStaticIsResolvable`) sits behind `namesAPrimitiveType`, which admits
-// `int`/`float`/`bool`/`byte` and no other spelling — so a `String.` qualifier cannot reach here whatever
-// door it came through. That is a fact about the CALLER, and it rests on no parser interception.
-export function isBuiltinConformanceQualifier(name ByteArray) returns bool
-	return match splitQualifiedName(name) 'parts'
-		notQualified gives false
-		parts(conformer, _) gives namesADirectDispatchConformer(conformer)
-	end 'parts'
-end 'isBuiltinConformanceQualifier'
-
 // ⭐⭐ **THE CONFORMER SPELLINGS A DIRECT `<value>.<method>()` DISPATCH CAN BE EMITTED UNDER — `BuiltinConformer`'s
-// cases as NAMES, in ONE place.** The two predicates on either side of it both need the set and both wrote
-// it out: the QUALIFIER question above and the SYMBOL question below, which is exactly the pair measured
-// diverging one level up. Why the set is SOUND — two different arguments, neither covering the other — is
-// `isBuiltinConformanceImplName`'s header, not repeated here.
+// cases as NAMES, in ONE place.** Why the set is SOUND — two different arguments, neither covering the
+// other — is `isBuiltinConformanceImplName`'s header, not repeated here.
 //
 // ⛔ **THE ARRAY RECORD IS NOT IN IT AND MAY NOT JOIN**, though the compiler does mint `Array.hash` /
 // `Array.equals`: its name is the CORPUS's to choose and a user program may take it, so neither argument

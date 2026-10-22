@@ -588,6 +588,11 @@ end 'Tagged'
 - An instantiation whose argument does not conform is **E3017** (`Type 'X' does not satisfy constraint
   'Digest' required by type parameter 'T' of 'Tagged'`).
 - A constraint can bind an associated type: `where S is Cursor with E`.
+- In the body, `T.member` reaches a member through the parameter, whatever top-level type or alias shares
+  its spelling. A `static` requirement dispatches on a concrete type, so calling one through `T`
+  (`T.make()`) is **E3116**, and naming one without its call is **E2078**. An instance requirement called
+  through `T` (`T.id()`) and an undeclared member are **E2073**: call an instance requirement on a value of
+  type `T`.
 
 ### Generic Functions
 

@@ -5898,7 +5898,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: <fragment>:22:20: Expected 'min or max' but got 'pick'
+error E2078: <fragment>:22:20: 'IntHolder.pick' is a method, and a method is not a function value: wrap the call in a closure, such as 'function(...) gives IntHolder.pick(...)'
 ```
 
 <!-- test: a-static-takes-its-instance-from-its-alias-and-not-from-an-argument-of-the-same-base -->

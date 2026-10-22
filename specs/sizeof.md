@@ -790,7 +790,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: <fragment>:14:16: Expected 'min or max' but got 'width'
+error E2078: <fragment>:14:16: 'Self.width' is a method, and a method is not a function value: wrap the call in a closure, such as 'function(...) gives Self.width(...)'
 ```
 
 <!-- test: sizeof-read-by-a-field-default-built-through-a-typealias -->
@@ -845,5 +845,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: <fragment>:18:19: Expected 'min or max' but got 'width'
+error E2078: <fragment>:18:19: 'SmallBox.width' is a method, and a method is not a function value: wrap the call in a closure, such as 'function(...) gives SmallBox.width(...)'
 ```

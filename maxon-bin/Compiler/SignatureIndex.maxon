@@ -10402,9 +10402,9 @@ function surfaceSlotStart(surface DeclaredSurface, slot FieldIndex) returns Fiel
 	return at
 end 'surfaceSlotStart'
 
-// The thirteen `__ManagedFile` methods: nine statics and four instance methods. A name outside this
+// The fifteen `__ManagedFile` methods: ten statics and five instance methods. A name outside this
 // set is refused by name at its own span rather than mangled into a callee no file declares
-// (`Parser.parseManagedFileStaticCall` / `Parser.dispatchManagedFileMethod`).
+// (`Parser.resolveStaticMember` / `Parser.dispatchManagedFileMethod`).
 //
 // ⚠ There is deliberately no `seek`. A fourteenth method here would be surface the language does
 // not have.
@@ -10468,7 +10468,7 @@ export let ManagedFileIndexParamName = b"index"
 // ⚠ **NOR IS `stdlib/Array.maxon` A MODULE *"no whitelisted module imports and the compiler cannot
 // compile at all"*** — the loader takes all of `stdlib/`, so it is loaded by every compile. What stands is
 // the narrower claim, that nothing REACHES those calls, and it is not re-measured here: measure it before
-// calling any of the eight absent again. `Parser.parseManagedMemoryStaticCall` (the statics) and `Parser.dispatchArrayMethod`
+// calling any of the eight absent again. `Parser.handleStaticRefusal` (the statics) and `Parser.dispatchArrayMethod`
 // (the members) name them in their refusals so the gap is a diagnostic rather than a silence.
 //
 // ⚠ **THE TWO REFUSALS EACH MISFILE ONE NAME:** `createCursor` is an INSTANCE method that the
@@ -10884,7 +10884,7 @@ export let ManagedDirectoryTypeName = b"__ManagedDirectory"
 
 // The nine `__ManagedDirectory` methods: six statics and three instance methods. A name outside
 // this set is refused by name at its own span rather than mangled into a callee no file declares
-// (`Parser.parseManagedDirectoryStaticCall` / `Parser.dispatchManagedDirectoryMethod`).
+// (`Parser.resolveStaticMember` / `Parser.dispatchManagedDirectoryMethod`).
 export let ManagedDirectoryOpenSearchMethod = b"openSearch"
 export let ManagedDirectoryExistsMethod = b"exists"
 export let ManagedDirectoryCreateMethod = b"create"
@@ -23061,7 +23061,7 @@ export type ProgramSignatures
 	//     (`isImplicitSelfMethod`), else the one declaration `resolveFunctionName` finds visible from the
 	//     declaring file.
 	//   • `self.name(…)` / `Self.name(…)` name the enclosing type's instance / static member.
-	//   • `Type.name(…)` is `Parser.qualifiedStaticCallee` for a head that names a plain `type` and nothing
+	//   • `Type.name(…)` is `Parser.resolveStaticMember` for a head that names a plain `type` and nothing
 	//     else: no alias, enum, union or other kind shares the name, it is outside the reserved `__` space whose
 	//     members the parser intercepts by name, and `ChainResolution.classifiedChainHead` reads the head as a
 	//     nominal type from the declaring file. A user type that displaces a stdlib one needs no refusal: every

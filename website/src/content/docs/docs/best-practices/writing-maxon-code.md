@@ -1038,8 +1038,8 @@ function apply(f UnaryOp, x Integer) returns Integer
 end 'apply'
 ```
 
-A function value is a bare free-function name or a closure literal. A static method in value position,
-`apply(Ops.twice, x: 3)`, is a parse error (**E2010**); pass a closure that calls it —
+A function value is a bare free-function name or a closure literal. A method in value position, static
+or instance, `apply(Ops.twice, x: 3)`, is **E2078**; pass a closure that calls it —
 `apply(function(n) gives Ops.twice(n), x: 3)` — or a free function that does.
 
 ### Tuples

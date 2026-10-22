@@ -290,7 +290,10 @@ end 'main'
 ```
 
 Omit `returns` for a function type that returns nothing: `typealias Callback = function()`. A function type cannot express `throws`, so a
-throwing function cannot be used as a value (**E3101**) — wrap it in a function that handles the error. A function type says
+throwing function cannot be used as a value (**E3101**) — wrap it in a function that handles the error.
+`Type.method` written without its call — a static method, an instance method read through its type, or a
+static the compiler provides such as `int.fromString` — is **E2078**, and assigning to one (`Ops.twice = f`)
+is **E2013**; pass a closure that calls it, `apply(function(n) gives Ops.twice(n), x: 4)`. A function type says
 which promise parameters its callee takes: see [Capability Qualifiers](#capability-qualifiers-keep-sole-returns-readonly).
 Function-type aliases are [brands](/docs/language/ranged-typealiases/#generic-instance-and-function-type-aliases-are-brands).
 

@@ -277,7 +277,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:17: Unsupported: 'String' has no static method named 'create' — the compiler owns that type name, so a static of its own can only come from the module that declares it or from an `extension` of it, and no declaration of that name exists
+error E2073: <fragment>:3:17: 'String' has no static method named 'create' — the compiler owns that type name, so a static of its own can only come from the module that declares it or from an `extension` of it, and no declaration of that name exists
 ```
 
 <!-- test: error.codepoint-is-a-compiler-owned-type-name -->

@@ -427,7 +427,7 @@ The standard library declares a few aliases every file can use, among them `Exit
 
 An integer alias declares a **quantity**: `int(lo to hi)` includes `hi`, `int(lo upto hi)` excludes it.
 Bounds are literals or the limits of a sized type: `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`
-(`.min` / `.max`).
+(`.min` / `.max`). `.min` and `.max` belong to the sized types: `Score.max` on a ranged alias is **E2073**.
 
 ```maxon
 typealias Score = int(0 to 100)
@@ -1674,6 +1674,11 @@ end 'Tagged'
 - An instantiation whose argument does not conform is **E3017** (`Type 'X' does not satisfy constraint
   'Digest' required by type parameter 'T' of 'Tagged'`).
 - A constraint can bind an associated type: `where S is Cursor with E`.
+- In the body, `T.member` reaches a member through the parameter, whatever top-level type or alias shares
+  its spelling. A `static` requirement dispatches on a concrete type, so calling one through `T`
+  (`T.make()`) is **E3116**, and naming one without its call is **E2078**. An instance requirement called
+  through `T` (`T.id()`) and an undeclared member are **E2073**: call an instance requirement on a value of
+  type `T`.
 
 ### Generic Functions
 
@@ -3192,7 +3197,10 @@ end 'main'
 ```
 
 Omit `returns` for a function type that returns nothing: `typealias Callback = function()`. A function type cannot express `throws`, so a
-throwing function cannot be used as a value (**E3101**) — wrap it in a function that handles the error. A function type says
+throwing function cannot be used as a value (**E3101**) — wrap it in a function that handles the error.
+`Type.method` written without its call — a static method, an instance method read through its type, or a
+static the compiler provides such as `int.fromString` — is **E2078**, and assigning to one (`Ops.twice = f`)
+is **E2013**; pass a closure that calls it, `apply(function(n) gives Ops.twice(n), x: 4)`. A function type says
 which promise parameters its callee takes: see [Capability Qualifiers](#capability-qualifiers-keep-sole-returns-readonly).
 Function-type aliases are [brands](#generic-instance-and-function-type-aliases-are-brands).
 
@@ -4688,7 +4696,10 @@ A qualified name resolves the same way wherever it is written — an expression,
 declares). When a binding in scope — a local, a parameter, or a top-level binding the file sees — has the
 name of the chain's head, the chain starts at that binding: with `let util = 4` in the file, `util.f()` is a
 method call on `util`. A top-level binding that shares its name with a type yields to the type where the
-type declares the member written after it, a static or a static function. A call whose qualifier names
+type declares the member written after it, a static or a static function. A directory may share its name
+with a type or a primitive: beside a `type Point`, `Point.helper()` calls the directory `Point`'s `helper`
+and `Point.create()` the type's static, and `byte.helper()` calls `byte/`'s `helper`. Reading an
+undeclared member of a directory is **E2073**. A call whose qualifier names
 no binding, directory or type is [E3004](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3004), and the
 message names the qualifier: for `foo.bar.baz()`, nothing declares a binding, directory or type `foo.bar`.
 

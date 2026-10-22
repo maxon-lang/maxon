@@ -159,7 +159,10 @@ A qualified name resolves the same way wherever it is written — an expression,
 declares). When a binding in scope — a local, a parameter, or a top-level binding the file sees — has the
 name of the chain's head, the chain starts at that binding: with `let util = 4` in the file, `util.f()` is a
 method call on `util`. A top-level binding that shares its name with a type yields to the type where the
-type declares the member written after it, a static or a static function. A call whose qualifier names
+type declares the member written after it, a static or a static function. A directory may share its name
+with a type or a primitive: beside a `type Point`, `Point.helper()` calls the directory `Point`'s `helper`
+and `Point.create()` the type's static, and `byte.helper()` calls `byte/`'s `helper`. Reading an
+undeclared member of a directory is **E2073**. A call whose qualifier names
 no binding, directory or type is [E3004](/docs/cli/error-codes/#e3004--callunknownfunction), and the
 message names the qualifier: for `foo.bar.baz()`, nothing declares a binding, directory or type `foo.bar`.
 

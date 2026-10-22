@@ -2529,6 +2529,1960 @@ end 'main'
 42
 ```
 
+### A method is not a function value
+
+A function value is a bare free-function name or a closure literal. `Type.method` written without its call
+names a method, static or instance, which has no function value, and the refusal says so and offers the
+closure that calls it. A base that declares no such method is refused for what it is: a sized type keeps its
+`.min` and `.max`, and any other base is told it has no such member.
+
+<!-- test: error.static-method-of-a-plain-type-is-not-a-function-value -->
+A static method of a plain type passed where a function is wanted.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Transform = function(Integer) returns Integer
+
+type Ops
+	static function twice(n Integer) returns Integer
+		return n * 2
+	end 'twice'
+end 'Ops'
+
+function apply(f Transform, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	return apply(Ops.twice, x: 21) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2078: specs/first-class-functions/error.static-method-of-a-plain-type-is-not-a-function-value.maxon:16:19: 'Ops.twice' is a method, and a method is not a function value: wrap the call in a closure, such as 'function(...) gives Ops.twice(...)'
+```
+
+<!-- test: error.static-method-of-a-generic-instance-alias-is-not-a-function-value -->
+The base is a `typealias` of a generic instance, so the declaration lives on the generic type.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Holder uses T
+	var item as T
+
+	static function pick(a T, b T) returns T
+		return a
+	end 'pick'
+end 'Holder'
+
+typealias IntHolder = Holder with Integer
+
+function main() returns ExitCode
+	let f = IntHolder.pick
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2078: specs/first-class-functions/error.static-method-of-a-generic-instance-alias-is-not-a-function-value.maxon:15:20: 'IntHolder.pick' is a method, and a method is not a function value: wrap the call in a closure, such as 'function(...) gives IntHolder.pick(...)'
+```
+
+<!-- test: error.static-method-of-a-bare-generic-type-is-not-a-function-value -->
+The base is the generic type itself.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Holder uses T
+	var item as T
+
+	static function pick(a T, b T) returns T
+		return a
+	end 'pick'
+end 'Holder'
+
+function main() returns ExitCode
+	let f = Holder.pick
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2078: specs/first-class-functions/error.static-method-of-a-bare-generic-type-is-not-a-function-value.maxon:13:17: 'Holder.pick' is a method, and a method is not a function value: wrap the call in a closure, such as 'function(...) gives Holder.pick(...)'
+```
+
+<!-- test: error.static-method-of-a-ranged-instance-alias-is-not-a-function-value -->
+The alias argument is itself ranged, and the member is not one of its bounds.
+```maxon
+typealias Small = int(0 to 100)
+
+type Box uses T
+	var item as T
+
+	static function width(b Self) returns Small
+		return 1
+	end 'width'
+end 'Box'
+
+typealias SmallBox = Box with Small
+
+function main() returns ExitCode
+	let f = SmallBox.width
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2078: specs/first-class-functions/error.static-method-of-a-ranged-instance-alias-is-not-a-function-value.maxon:15:19: 'SmallBox.width' is a method, and a method is not a function value: wrap the call in a closure, such as 'function(...) gives SmallBox.width(...)'
+```
+
+<!-- test: error.static-method-named-like-a-bound-is-not-a-function-value -->
+A static method whose name spells a bound is still a static method.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Clamp
+	static function min(a Integer, b Integer) returns Integer
+		return a
+	end 'min'
+end 'Clamp'
+
+function main() returns ExitCode
+	let f = Clamp.min
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2078: specs/first-class-functions/error.static-method-named-like-a-bound-is-not-a-function-value.maxon:11:16: 'Clamp.min' is a method, and a method is not a function value: wrap the call in a closure, such as 'function(...) gives Clamp.min(...)'
+```
+
+<!-- test: error.static-method-through-self-is-not-a-function-value -->
+`Self` denotes the enclosing type, so the sentence names it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Transform = function(Integer) returns Integer
+
+type Ops
+	static function twice(n Integer) returns Integer
+		return n * 2
+	end 'twice'
+
+	static function chosen() returns Transform
+		return Self.twice
+	end 'chosen'
+end 'Ops'
+
+function main() returns ExitCode
+	let f = Ops.chosen()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2078: specs/first-class-functions/error.static-method-through-self-is-not-a-function-value.maxon:11:15: 'Self.twice' is a method, and a method is not a function value: wrap the call in a closure, such as 'function(...) gives Self.twice(...)'
+```
+
+<!-- test: error.static-method-through-self-in-a-generic-body-is-not-a-function-value -->
+Inside the body of a generic type, `Self` names the generic base itself.
+```maxon
+type Box uses T
+	var n as Count
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	static function width() returns Count
+		return 4
+	end 'width'
+
+	function viaValue() returns Count
+		let f = Self.width
+		return f()
+	end 'viaValue'
+end 'Box'
+
+typealias Small = int(0 to 65535)
+typealias SmallBox = Box with Small
+
+function main() returns ExitCode
+	let a = SmallBox.create()
+	print("{a.viaValue()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2078: <fragment>:14:16: 'Self.width' is a method, and a method is not a function value: wrap the call in a closure, such as 'function(...) gives Self.width(...)'
+```
+
+<!-- test: error.static-method-through-a-directory-is-not-a-function-value -->
+The type is named through the directory that declares it.
+```maxon
+// --- file: lib/ops.maxon
+export typealias Quantity = int(0 to 200)
+
+export type Ops
+	export static function twice(n Quantity) returns Quantity
+		return n * 2
+	end 'twice'
+end 'Ops'
+
+// --- file: main.maxon
+typealias Transform = function(lib.Quantity) returns lib.Quantity
+
+function apply(f Transform, x lib.Quantity) returns lib.Quantity
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	return apply(lib.Ops.twice, x: 21) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2078: <fragment>:19:23: 'lib.Ops.twice' is a method, and a method is not a function value: wrap the call in a closure, such as 'function(...) gives lib.Ops.twice(...)'
+```
+
+<!-- test: static-method-closure-and-sized-bounds-still-work -->
+The cure the sentence offers runs, and a sized type still reads its bounds.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Transform = function(Integer) returns Integer
+
+type Ops
+	static function twice(n Integer) returns Integer
+		return n * 2
+	end 'twice'
+end 'Ops'
+
+function apply(f Transform, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	let doubled = apply(function(n) gives Ops.twice(n), x: 1)
+	let ok = doubled == 2 and (u8.max as Integer) == 255 and (u8.min as Integer) == 0
+	return 0 if ok else 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-method-name-on-a-ranged-alias-is-a-missing-member -->
+The bare name means the author's ranged alias, which declares no members, even though the library's type of
+that name declares `stdin`.
+```maxon
+// --- file: lib/console.maxon
+export typealias Console = int(0 to 9)
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let c = Console.stdin
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2073: app/<fragment>:7:18: 'Console' is a ranged alias and has no member 'stdin'
+```
+
+<!-- test: error.an-instance-method-read-through-its-type-is-not-a-function-value -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Adder
+	var n as Integer
+
+	function bump(by Integer) returns Integer
+		return n + by
+	end 'bump'
+end 'Adder'
+
+function main() returns ExitCode
+	let f = Adder.bump
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2078: <fragment>:13:16: 'Adder.bump' is an instance method, and a method is not a function value: call it on a value, or wrap that call in a closure, such as 'function(value) gives value.bump(...)'
+```
+
+<!-- test: error.assigning-to-a-method-is-refused -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Ops
+	static function twice(n Integer) returns Integer
+		return n * 2
+	end 'twice'
+end 'Ops'
+
+function other(n Integer) returns Integer
+	return n
+end 'other'
+
+function main() returns ExitCode
+	Ops.twice = other
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2013: <fragment>:15:6: 'Ops.twice' is a method, and a method cannot be assigned
+```
+
+<!-- test: error.a-primitive-static-int-is-not-a-function-value -->
+```maxon
+function main() returns ExitCode
+	let f = int.fromString
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2078: <fragment>:3:14: 'int.fromString' is a method, and a method is not a function value: wrap the call in a closure, such as 'function(...) gives int.fromString(...)'
+```
+
+<!-- test: error.a-primitive-static-float-is-not-a-function-value -->
+```maxon
+function main() returns ExitCode
+	let f = float.fromString
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2078: <fragment>:3:16: 'float.fromString' is a method, and a method is not a function value: wrap the call in a closure, such as 'function(...) gives float.fromString(...)'
+```
+
+<!-- test: error.a-primitive-static-byte-is-not-a-function-value -->
+```maxon
+function main() returns ExitCode
+	let f = byte.fromString
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2078: <fragment>:3:15: 'byte.fromString' is a method, and a method is not a function value: wrap the call in a closure, such as 'function(...) gives byte.fromString(...)'
+```
+
+<!-- test: error.a-static-declared-in-a-primitive-extension-is-not-a-function-value -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+extension int
+	static function make() returns Integer
+		return 1
+	end 'make'
+end 'int'
+
+function main() returns ExitCode
+	let f = int.make
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2078: <fragment>:11:14: 'int.make' is a method, and a method is not a function value: wrap the call in a closure, such as 'function(...) gives int.make(...)'
+```
+
+<!-- test: error.a-requirement-through-a-type-parameter-is-not-a-function-value -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Maker
+	static function make() returns Integer
+	function id() returns Integer
+end 'Maker'
+
+type Widget implements Maker
+	var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	static function make() returns Integer
+		return 7
+	end 'make'
+
+	function id() returns Integer
+		return self.n
+	end 'id'
+end 'Widget'
+
+function build(x T) uses T returns Integer where T is Maker
+	let f = T.make
+	return x.id()
+end 'build'
+
+function main() returns ExitCode
+	let w = Widget.create(1)
+	return build(w) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2078: <fragment>:26:12: 'T.make' is a requirement of 'Maker', and a requirement is not a function value: it is reached on a concrete type that implements 'Maker'
+```
+
+<!-- test: error.an-unknown-member-of-a-type-parameter-is-refused -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Maker
+	function id() returns Integer
+end 'Maker'
+
+type Widget implements Maker
+	var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function id() returns Integer
+		return self.n
+	end 'id'
+end 'Widget'
+
+function build(x T) uses T returns Integer where T is Maker
+	let f = T.nope
+	return x.id()
+end 'build'
+
+function main() returns ExitCode
+	let w = Widget.create(1)
+	return build(w) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2073: <fragment>:21:12: 'T' is a type parameter, so 'T.nope' names no value: a static member is read through a concrete type
+```
+
+<!-- test: error.a-static-requirement-through-its-interface-is-not-a-function-value -->
+```maxon
+function main() returns ExitCode
+	let f = Parsable.fromString
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2073: <fragment>:3:19: 'Parsable' is an interface, so 'Parsable.fromString' names no value: a static member is read through a concrete type
+```
+
+<!-- test: error.a-static-of-a-type-named-like-a-sized-type-is-not-a-function-value -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type u8
+	static function parse() returns Integer
+		return 1
+	end 'parse'
+end 'u8'
+
+function main() returns ExitCode
+	let f = u8.parse
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2078: <fragment>:11:13: 'u8.parse' is a method, and a method is not a function value: wrap the call in a closure, such as 'function(...) gives u8.parse(...)'
+```
+
+<!-- test: error.a-static-of-a-directory-qualified-generic-alias-is-not-a-function-value -->
+```maxon
+// --- file: lib/holder.maxon
+export type Holder uses T
+	export var item as T
+
+	export static function pick(a T, b T) returns T
+		return a
+	end 'pick'
+end 'Holder'
+
+export typealias FlagHolder = Holder with bool
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let f = lib.FlagHolder.pick
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2078: <fragment>:15:25: 'lib.FlagHolder.pick' is a method, and a method is not a function value: wrap the call in a closure, such as 'function(...) gives lib.FlagHolder.pick(...)'
+```
+
+<!-- test: error.a-static-read-at-module-scope-is-not-a-function-value -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Ops
+	static function twice(n Integer) returns Integer
+		return n * 2
+	end 'twice'
+end 'Ops'
+
+let chosen = Ops.twice
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2078: <fragment>:10:18: 'Ops.twice' is a method, and a method is not a function value: wrap the call in a closure, such as 'function(...) gives Ops.twice(...)'
+```
+
+<!-- test: error.a-hidden-static-read-as-a-value-is-refused-for-its-visibility -->
+```maxon
+// --- file: lib/ops.maxon
+export type Ops
+	static function twice(b bool) returns bool
+		return b
+	end 'twice'
+end 'Ops'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let f = lib.Ops.twice
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3008: <fragment>:11:18: function 'lib.Ops.twice' is not exported
+```
+
+<!-- test: error.a-container-alias-create-is-not-a-function-value -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Numbers = Array with Integer
+
+function main() returns ExitCode
+	let f = Numbers.create
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2078: <fragment>:6:18: 'Numbers.create' is a method, and a method is not a function value: wrap the call in a closure, such as 'function(...) gives Numbers.create(...)'
+```
+
+<!-- test: error.a-compiler-owned-surface-static-is-not-a-function-value -->
+<!-- tier: stdlib -->
+```maxon
+function main() returns ExitCode
+	let f = __ManagedFile.openRead
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2078: <fragment>:3:24: '__ManagedFile.openRead' is a method, and a method is not a function value: wrap the call in a closure, such as 'function(...) gives __ManagedFile.openRead(...)'
+```
+
+<!-- test: error.an-unknown-static-of-int-is-refused-for-what-it-lacks -->
+```maxon
+function main() returns ExitCode
+	let f = int.max
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2073: <fragment>:3:14: 'int' has no static method named 'max' — a primitive type's statics are the free functions `stdlib/Builtins.maxon` declares, and it declares none of that name
+```
+
+<!-- test: error.an-unknown-static-of-bool-is-refused-for-what-it-lacks -->
+```maxon
+function main() returns ExitCode
+	let f = bool.x
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2073: <fragment>:3:15: 'bool' has no static method named 'x' — a primitive type's statics are the free functions `stdlib/Builtins.maxon` declares, and it declares none of that name
+```
+
+<!-- test: error.an-unknown-static-of-byte-is-refused-for-what-it-lacks -->
+```maxon
+function main() returns ExitCode
+	let f = byte.max
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2073: <fragment>:3:15: 'byte' has no static method named 'max' — a primitive type's statics are the free functions `stdlib/Builtins.maxon` declares, and it declares none of that name
+```
+
+<!-- test: error.a-member-of-a-directory-it-does-not-declare-is-refused -->
+```maxon
+// --- file: lib/helper.maxon
+export function helper() returns bool
+	return true
+end 'helper'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let f = lib.nope
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2073: <fragment>:9:14: 'lib' is a directory and has no member 'nope'
+```
+
+<!-- test: error.a-shared-value-alias-static-it-lacks-is-refused-as-a-value -->
+```maxon
+typealias Flag = SharedValue with bool
+
+function main() returns ExitCode
+	let f = Flag.nope
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2073: <fragment>:5:15: type 'Flag' has no static member named 'nope'
+```
+
+<!-- test: error.a-shared-value-alias-static-it-lacks-is-refused-as-a-call -->
+```maxon
+typealias Flag = SharedValue with bool
+
+function main() returns ExitCode
+	let f = Flag.nope()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2073: <fragment>:5:15: type 'Flag' has no static member named 'nope'
+```
+
+<!-- test: error.a-shared-value-alias-static-it-lacks-is-refused-as-a-store -->
+```maxon
+typealias Flag = SharedValue with bool
+
+function main() returns ExitCode
+	Flag.nope = true
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2073: <fragment>:5:7: type 'Flag' has no static member named 'nope'
+```
+
+<!-- test: error.a-shared-value-alias-static-is-not-a-function-value -->
+```maxon
+typealias Flag = SharedValue with bool
+
+function main() returns ExitCode
+	let f = Flag.create
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2078: <fragment>:5:15: 'Flag.create' is a method, and a method is not a function value: wrap the call in a closure, such as 'function(...) gives Flag.create(...)'
+```
+
+<!-- test: error.a-shared-value-alias-instance-method-is-not-a-function-value -->
+```maxon
+typealias Flag = SharedValue with bool
+
+function main() returns ExitCode
+	let f = Flag.current
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2078: <fragment>:5:15: 'Flag.current' is an instance method, and a method is not a function value: call it on a value, or wrap that call in a closure, such as 'function(value) gives value.current(...)'
+```
+
+<!-- test: error.a-directory-qualified-shared-value-alias-static-it-lacks-is-refused -->
+```maxon
+// --- file: lib/flag.maxon
+export typealias Flag = SharedValue with bool
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let f = lib.Flag.nope
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2073: <fragment>:7:19: type 'lib.Flag' has no static member named 'nope'
+```
+
+<!-- test: error.an-interface-instance-alias-static-names-no-value -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntIter = Iterator with Integer
+
+function main() returns ExitCode
+	let f = IntIter.next
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2073: <fragment>:6:18: 'IntIter' is an interface instance, so 'IntIter.next' names no value: a static member is read through a concrete type
+```
+
+<!-- test: error.a-static-of-a-generic-type-read-through-its-alias-names-the-type -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	var item as T
+	static let LIMIT = 42
+end 'Box'
+
+typealias IntBox = Box with Integer
+
+function main() returns ExitCode
+	let n = IntBox.LIMIT
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2073: <fragment>:12:17: 'IntBox.LIMIT' is a static of 'Box', which is read through the type itself: write 'Box.LIMIT'
+```
+
+<!-- test: a-static-of-a-generic-type-is-read-through-the-type -->
+```maxon
+type Box uses T
+	var item as T
+	static let LIMIT = 42
+end 'Box'
+
+function main() returns ExitCode
+	return Box.LIMIT
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: a-module-scope-factory-beside-a-same-named-instance-method-takes-the-static -->
+```maxon
+typealias Num = int(0 to 100)
+
+type Pair
+	export var a as Num
+
+	static function make() returns Self
+		return Self{a: 7}
+	end 'make'
+
+	function make() returns Num
+		return self.a
+	end 'make'
+end 'Pair'
+
+let p = Pair.make()
+
+function main() returns ExitCode
+	return p.make() as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: error.a-directory-qualified-shared-value-alias-static-it-lacks-is-refused-as-a-call -->
+```maxon
+// --- file: lib/flag.maxon
+export typealias Flag = SharedValue with bool
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let f = lib.Flag.nope()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2073: <fragment>:7:19: type 'lib.Flag' has no static member named 'nope'
+```
+
+<!-- test: error.an-unknown-static-of-a-primitive-at-module-scope-is-refused-for-what-it-lacks -->
+```maxon
+let n = int.nope()
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2073: <fragment>:2:13: 'int' has no static method named 'nope' — a primitive type's statics are the free functions `stdlib/Builtins.maxon` declares, and it declares none of that name
+```
+
+<!-- test: error.an-unknown-static-of-byte-at-module-scope-is-refused-for-what-it-lacks -->
+```maxon
+let n = byte.nope()
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2073: <fragment>:2:14: 'byte' has no static method named 'nope' — a primitive type's statics are the free functions `stdlib/Builtins.maxon` declares, and it declares none of that name
+```
+
+<!-- test: error.a-requirement-through-a-type-parameter-outranks-a-top-level-type-of-that-name -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Maker
+	static function make() returns Integer
+	function id() returns Integer
+end 'Maker'
+
+type T
+	static function make() returns Integer
+		return 3
+	end 'make'
+end 'T'
+
+type Widget implements Maker
+	var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	static function make() returns Integer
+		return 7
+	end 'make'
+
+	function id() returns Integer
+		return self.n
+	end 'id'
+end 'Widget'
+
+function build(x T) uses T returns Integer where T is Maker
+	let f = T.make
+	return 0
+end 'build'
+
+function main() returns ExitCode
+	return build(Widget.create(1)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2078: <fragment>:32:12: 'T.make' is a requirement of 'Maker', and a requirement is not a function value: it is reached on a concrete type that implements 'Maker'
+```
+
+<!-- test: error.a-call-through-a-type-parameter-outranks-a-top-level-type-of-that-name -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Maker
+	static function make() returns Integer
+	function id() returns Integer
+end 'Maker'
+
+type T
+	static function make() returns Integer
+		return 3
+	end 'make'
+end 'T'
+
+type Widget implements Maker
+	var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	static function make() returns Integer
+		return 7
+	end 'make'
+
+	function id() returns Integer
+		return self.n
+	end 'id'
+end 'Widget'
+
+function build(x T) uses T returns Integer where T is Maker
+	return T.make() + x.id()
+end 'build'
+
+function main() returns ExitCode
+	return build(Widget.create(1)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3116: <fragment>:32:11: 'T.make' is a `static` requirement, and a `static` member has no receiver to dispatch on — so the type parameter 'T' cannot reach it. Call a `static` member on a concrete type
+```
+
+<!-- test: error.an-instance-requirement-called-through-a-type-parameter-is-not-called-static -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Maker
+	function id() returns Integer
+end 'Maker'
+
+type Widget implements Maker
+	var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function id() returns Integer
+		return self.n
+	end 'id'
+end 'Widget'
+
+function build(x T) uses T returns Integer where T is Maker
+	return T.id()
+end 'build'
+
+function main() returns ExitCode
+	return build(Widget.create(1)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2073: <fragment>:21:11: 'T' is a type parameter and 'id' is an instance requirement of 'Maker', so 'T.id' names no static: call it on a value of type 'T'
+```
+
+<!-- test: error.an-instance-requirement-read-through-a-type-parameter-is-not-a-static-value -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Maker
+	function id() returns Integer
+end 'Maker'
+
+type Widget implements Maker
+	var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function id() returns Integer
+		return self.n
+	end 'id'
+end 'Widget'
+
+function build(x T) uses T returns Integer where T is Maker
+	let f = T.id
+	return 0
+end 'build'
+
+function main() returns ExitCode
+	return build(Widget.create(1)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2078: <fragment>:21:12: 'T.id' is an instance method, and a method is not a function value: call it on a value, or wrap that call in a closure, such as 'function(value) gives value.id(...)'
+```
+
+<!-- test: error.a-static-requirement-called-as-a-statement-through-a-type-parameter -->
+```maxon
+typealias Digit = int(0 to 9)
+
+interface Pinger
+	static function ping()
+end 'Pinger'
+
+type Widget implements Pinger
+	var n as Digit
+
+	static function create(n Digit) returns Self
+		return Self{n: n}
+	end 'create'
+
+	static function ping()
+		return
+	end 'ping'
+end 'Widget'
+
+function build(x T) uses T where T is Pinger
+	T.ping()
+end 'build'
+
+function main() returns ExitCode
+	build(Widget.create(1))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3116: <fragment>:21:4: 'T.ping' is a `static` requirement, and a `static` member has no receiver to dispatch on — so the type parameter 'T' cannot reach it. Call a `static` member on a concrete type
+```
+
+<!-- test: error.a-static-requirement-called-as-a-statement-through-a-type-parameter-beside-a-top-level-type-of-that-name -->
+```maxon
+typealias Digit = int(0 to 9)
+
+interface Pinger
+	static function ping()
+end 'Pinger'
+
+type T
+	static function ping()
+		return
+	end 'ping'
+end 'T'
+
+type Widget implements Pinger
+	var n as Digit
+
+	static function create(n Digit) returns Self
+		return Self{n: n}
+	end 'create'
+
+	static function ping()
+		return
+	end 'ping'
+end 'Widget'
+
+function build(x T) uses T where T is Pinger
+	T.ping()
+end 'build'
+
+function main() returns ExitCode
+	build(Widget.create(1))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3116: <fragment>:27:4: 'T.ping' is a `static` requirement, and a `static` member has no receiver to dispatch on — so the type parameter 'T' cannot reach it. Call a `static` member on a concrete type
+```
+
+<!-- test: error.a-module-scope-factory-through-a-generic-instance-alias-is-refused -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	export var item as T
+
+	static function make(item T) returns Self
+		return Self{item: item}
+	end 'make'
+end 'Box'
+
+typealias IntBox = Box with Integer
+
+let b = IntBox.make(5)
+
+function main() returns ExitCode
+	return b.item as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:14:16: Unsupported: `IntBox.make` as a top-level initializer — a global container is declared with `create()`, the one static a constant initializer can name; every other method needs the program to be running
+```
+
+<!-- test: error.a-type-call-through-a-type-parameter-picks-the-static-requirement-beside-an-instance-of-the-same-name -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Maker
+	static function make() returns Integer
+end 'Maker'
+
+interface Namer
+	function make() returns Integer
+end 'Namer'
+
+type Widget implements Maker, Namer
+	var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	static function make() returns Integer
+		return 7
+	end 'make'
+
+	function make() returns Integer
+		return self.n
+	end 'make'
+end 'Widget'
+
+function build(x T) uses T returns Integer where T is Maker and Namer
+	return T.make() + x.make()
+end 'build'
+
+function main() returns ExitCode
+	return build(Widget.create(3)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3116: <fragment>:29:11: 'T.make' is a `static` requirement, and a `static` member has no receiver to dispatch on — so the type parameter 'T' cannot reach it. Call a `static` member on a concrete type
+```
+
+<!-- test: error.an-unknown-static-of-a-compiler-owned-type-is-refused-as-a-value -->
+```maxon
+function main() returns ExitCode
+	let x = String.nope
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2073: <fragment>:3:17: 'String' has no static method named 'nope' — the compiler owns that type name, so a static of its own can only come from the module that declares it or from an `extension` of it, and no declaration of that name exists
+```
+
+<!-- test: error.an-unknown-static-of-a-compiler-owned-type-at-module-scope-is-refused-as-a-value -->
+```maxon
+let x = String.nope
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2073: <fragment>:2:16: 'String' has no static method named 'nope' — the compiler owns that type name, so a static of its own can only come from the module that declares it or from an `extension` of it, and no declaration of that name exists
+```
+
+<!-- test: error.an-unknown-static-of-a-builtin-container-at-module-scope-is-refused-as-a-value -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+let x = IntArray.nope
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2073: <fragment>:5:18: `Array` static method 'nope' — the compiler provides two: `create()` and `init(managed)`
+```
+
+<!-- test: a-module-scope-call-through-a-directory-named-like-a-primitive-reaches-the-directory -->
+```maxon
+// --- file: byte/m.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+export type Pair
+	export var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Pair'
+
+export function make() returns Pair
+	return Pair.create(3)
+end 'make'
+
+// --- file: main.maxon
+let h = byte.make()
+
+function main() returns ExitCode
+	return h.n as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: error.a-raw-handle-static-read-as-a-value-in-user-code-is-not-reachable -->
+```maxon
+function main() returns ExitCode
+	let f = __ManagedFile.openRead
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3185: <fragment>:3:10: '__ManagedFile' named outside the library tiers: the raw OS file handle type is nameable only from a source file under stdlib/ or runtime/ — use 'File'
+```
+
+<!-- test: error.a-raw-handle-static-stored-to-in-user-code-is-not-reachable -->
+```maxon
+function main() returns ExitCode
+	__ManagedFile.openRead = 1
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3185: <fragment>:3:2: '__ManagedFile' named outside the library tiers: the raw OS file handle type is nameable only from a source file under stdlib/ or runtime/ — use 'File'
+```
+
+<!-- test: error.a-raw-handle-static-at-module-scope-in-user-code-is-not-reachable -->
+```maxon
+let h = __ManagedFile.openRead("p")
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3185: <fragment>:2:9: '__ManagedFile' named outside the library tiers: the raw OS file handle type is nameable only from a source file under stdlib/ or runtime/ — use 'File'
+```
+
+<!-- test: error.a-raw-handle-unknown-static-called-in-user-code-is-not-reachable -->
+```maxon
+function main() returns ExitCode
+	let f = __ManagedFile.bogus("p")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3185: <fragment>:3:10: '__ManagedFile' named outside the library tiers: the raw OS file handle type is nameable only from a source file under stdlib/ or runtime/ — use 'File'
+```
+
+<!-- test: error.an-instance-method-read-through-its-type-is-an-instance-method -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function size() returns Integer
+		return self.n
+	end 'size'
+end 'Box'
+
+function main() returns ExitCode
+	let f = Box.size
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2078: <fragment>:17:14: 'Box.size' is an instance method, and a method is not a function value: call it on a value, or wrap that call in a closure, such as 'function(value) gives value.size(...)'
+```
+
+<!-- test: error.an-instance-method-of-a-compiler-owned-type-read-through-its-type-is-an-instance-method -->
+```maxon
+function main() returns ExitCode
+	let f = String.byteLength
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2078: <fragment>:3:17: 'String.byteLength' is an instance method, and a method is not a function value: call it on a value, or wrap that call in a closure, such as 'function(value) gives value.byteLength(...)'
+```
+
+<!-- test: error.a-primitive-keyword-static-call-at-module-scope-is-refused -->
+```maxon
+let n = int.fromString("5")
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:2:13: Unsupported: `int.fromString` as a top-level initializer — it returns 'FullRangeInt', and a global holding a scalar has its value written into the `.data` image, which happens before any code can run. A factory-built global must return a record (a struct, a String or a container)
+```
+
+<!-- test: a-module-binding-named-like-a-primitive-calls-the-binding -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Pair
+	export var a as Integer
+
+	static function make() returns Self
+		return Self{a: 6}
+	end 'make'
+
+	function get() returns Integer
+		return self.a
+	end 'get'
+end 'Pair'
+
+let byte = Pair.make()
+
+function main() returns ExitCode
+	return byte.get() as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: a-statement-call-through-a-directory-named-like-a-primitive-reaches-the-directory -->
+```maxon
+// --- file: byte/m.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+export function ping()
+	print("ping\n")
+end 'ping'
+
+export function twice(n Integer) returns Integer
+	return n * 2
+end 'twice'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	byte.ping()
+	return byte.twice(2) as ExitCode
+end 'main'
+```
+```exitcode
+4
+```
+```stdout
+ping
+```
+
+
+<!-- test: a-directory-function-read-as-a-value-through-a-directory-named-like-a-primitive-is-called -->
+```maxon
+// --- file: byte/m.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+export function ping()
+	print("ping\n")
+end 'ping'
+
+export function twice(n Integer) returns Integer
+	return n * 2
+end 'twice'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	byte.ping()
+	let f = byte.twice
+	return f(3) as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+```stdout
+ping
+```
+
+
+<!-- test: error.a-directory-let-read-in-a-body-through-a-directory-named-like-a-primitive-names-the-directory -->
+```maxon
+// --- file: byte/m.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+export let LIMIT = 7
+
+export var counter = 1 as Integer
+
+export function ping()
+	print("ping\n")
+end 'ping'
+
+export function twice(n Integer) returns Integer
+	return n * 2
+end 'twice'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let a = byte.LIMIT
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2073: <fragment>:19:15: 'byte' is a directory and has no member 'LIMIT'
+```
+
+
+<!-- test: error.a-directory-let-read-at-module-scope-through-a-directory-named-like-a-primitive-is-not-a-constant -->
+```maxon
+// --- file: byte/m.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+export let LIMIT = 7
+
+export var counter = 1 as Integer
+
+export function ping()
+	print("ping\n")
+end 'ping'
+
+export function twice(n Integer) returns Integer
+	return n * 2
+end 'twice'
+
+// --- file: main.maxon
+let a = byte.LIMIT
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:18:9: Unsupported: `byte.LIMIT` in a constant initializer — a constant is settled before `main`, either folded to a number or materialized by the module initializer, so it can name another top-level `let`, a literal, an empty container, an enum or union case (a case that declares a payload must be written with its arguments), a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else
+```
+
+
+<!-- test: error.a-store-to-a-directory-var-through-a-directory-named-like-a-primitive-names-nothing -->
+```maxon
+// --- file: byte/m.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+export let LIMIT = 7
+
+export var counter = 1 as Integer
+
+export function ping()
+	print("ping\n")
+end 'ping'
+
+export function twice(n Integer) returns Integer
+	return n * 2
+end 'twice'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	byte.counter = 3
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:19:2: Undefined variable 'byte'
+```
+
+
+<!-- test: error.a-directory-function-read-as-a-value-at-module-scope-through-a-directory-named-like-a-primitive-is-not-a-constant -->
+```maxon
+// --- file: byte/m.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+export let LIMIT = 7
+
+export var counter = 1 as Integer
+
+export function ping()
+	print("ping\n")
+end 'ping'
+
+export function twice(n Integer) returns Integer
+	return n * 2
+end 'twice'
+
+// --- file: main.maxon
+let f = byte.twice
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:18:9: Unsupported: `byte.twice` in a constant initializer — a constant is settled before `main`, either folded to a number or materialized by the module initializer, so it can name another top-level `let`, a literal, an empty container, an enum or union case (a case that declares a payload must be written with its arguments), a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else
+```
+
+
+<!-- test: a-statement-call-through-an-ordinary-directory-reaches-the-directory -->
+```maxon
+// --- file: lib/m.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+export function ping()
+	print("ping\n")
+end 'ping'
+
+export function twice(n Integer) returns Integer
+	return n * 2
+end 'twice'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	lib.ping()
+	return lib.twice(2) as ExitCode
+end 'main'
+```
+```exitcode
+4
+```
+```stdout
+ping
+```
+
+
+<!-- test: a-directory-function-read-as-a-value-through-an-ordinary-directory-is-called -->
+```maxon
+// --- file: lib/m.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+export function ping()
+	print("ping\n")
+end 'ping'
+
+export function twice(n Integer) returns Integer
+	return n * 2
+end 'twice'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	lib.ping()
+	let f = lib.twice
+	return f(3) as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+```stdout
+ping
+```
+
+
+<!-- test: error.a-directory-let-read-in-a-body-through-an-ordinary-directory-names-the-directory -->
+```maxon
+// --- file: lib/m.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+export let LIMIT = 7
+
+export var counter = 1 as Integer
+
+export function ping()
+	print("ping\n")
+end 'ping'
+
+export function twice(n Integer) returns Integer
+	return n * 2
+end 'twice'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let a = lib.LIMIT
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2073: <fragment>:19:14: 'lib' is a directory and has no member 'LIMIT'
+```
+
+
+<!-- test: error.a-directory-let-read-at-module-scope-through-an-ordinary-directory-is-not-a-constant -->
+```maxon
+// --- file: lib/m.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+export let LIMIT = 7
+
+export var counter = 1 as Integer
+
+export function ping()
+	print("ping\n")
+end 'ping'
+
+export function twice(n Integer) returns Integer
+	return n * 2
+end 'twice'
+
+// --- file: main.maxon
+let a = lib.LIMIT
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:18:9: Unsupported: `lib.LIMIT` in a constant initializer — a constant is settled before `main`, either folded to a number or materialized by the module initializer, so it can name another top-level `let`, a literal, an empty container, an enum or union case (a case that declares a payload must be written with its arguments), a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else
+```
+
+
+<!-- test: error.a-store-to-a-directory-var-through-an-ordinary-directory-names-nothing -->
+```maxon
+// --- file: lib/m.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+export let LIMIT = 7
+
+export var counter = 1 as Integer
+
+export function ping()
+	print("ping\n")
+end 'ping'
+
+export function twice(n Integer) returns Integer
+	return n * 2
+end 'twice'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	lib.counter = 3
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:19:2: Undefined variable 'lib'
+```
+
+
+<!-- test: error.a-directory-function-read-as-a-value-at-module-scope-through-an-ordinary-directory-is-not-a-constant -->
+```maxon
+// --- file: lib/m.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+export let LIMIT = 7
+
+export var counter = 1 as Integer
+
+export function ping()
+	print("ping\n")
+end 'ping'
+
+export function twice(n Integer) returns Integer
+	return n * 2
+end 'twice'
+
+// --- file: main.maxon
+let f = lib.twice
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:18:9: Unsupported: `lib.twice` in a constant initializer — a constant is settled before `main`, either folded to a number or materialized by the module initializer, so it can name another top-level `let`, a literal, an empty container, an enum or union case (a case that declares a payload must be written with its arguments), a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else
+```
+
+
+<!-- test: a-statement-call-through-a-directory-beside-a-type-of-its-name-reaches-the-directory -->
+```maxon
+// --- file: Point/free.maxon
+public function helper()
+	print("helped\n")
+end 'helper'
+
+// --- file: app/main.maxon
+public type Point
+	export var x as ExitCode
+
+	export static function create() returns ExitCode
+		return 9
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	Point.helper()
+	return Point.create()
+end 'main'
+```
+```exitcode
+9
+```
+```stdout
+helped
+```
+
+
+<!-- test: error.a-type-parameter-outranks-a-container-alias-of-its-name -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias T = Array with Integer
+
+interface Maker
+	static function create() returns Integer
+end 'Maker'
+
+type Widget implements Maker
+	var n as Integer
+
+	static function make(n Integer) returns Self
+		return Self{n: n}
+	end 'make'
+
+	static function create() returns Integer
+		return 7
+	end 'create'
+end 'Widget'
+
+function build(x T) uses T returns Integer where T is Maker
+	return T.create()
+end 'build'
+
+function main() returns ExitCode
+	return build(Widget.make(1)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3116: <fragment>:22:11: 'T.create' is a `static` requirement, and a `static` member has no receiver to dispatch on — so the type parameter 'T' cannot reach it. Call a `static` member on a concrete type
+```
+
+
+<!-- test: error.a-type-parameter-outranks-a-shared-value-alias-of-its-name -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias T = SharedValue with bool
+
+interface Maker
+	static function create() returns Integer
+end 'Maker'
+
+type Widget implements Maker
+	var n as Integer
+
+	static function make(n Integer) returns Self
+		return Self{n: n}
+	end 'make'
+
+	static function create() returns Integer
+		return 7
+	end 'create'
+end 'Widget'
+
+function build(x T) uses T returns Integer where T is Maker
+	return T.create()
+end 'build'
+
+function main() returns ExitCode
+	return build(Widget.make(1)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3116: <fragment>:22:11: 'T.create' is a `static` requirement, and a `static` member has no receiver to dispatch on — so the type parameter 'T' cannot reach it. Call a `static` member on a concrete type
+```
+
+
+<!-- test: error.the-raw-cursor-type-named-as-a-static-base-is-not-reachable -->
+```maxon
+function main() returns ExitCode
+	let x = __ManagedMemoryCursor.create()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3185: <fragment>:3:10: '__ManagedMemoryCursor' named outside the library tiers: the raw buffer cursor type is nameable only from a source file under stdlib/ or runtime/ — use a 'for' loop over the 'Array'
+```
+
+
+<!-- test: error.the-raw-cursor-type-named-as-a-spawn-base-is-not-reachable -->
+```maxon
+function main() returns ExitCode
+	let p = async __ManagedMemoryCursor.create()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3185: <fragment>:3:16: '__ManagedMemoryCursor' named outside the library tiers: the raw buffer cursor type is nameable only from a source file under stdlib/ or runtime/ — use a 'for' loop over the 'Array'
+```
+
+
+<!-- test: error.a-static-of-a-directory-type-read-as-a-value-at-module-scope-is-named-by-its-whole-chain -->
+```maxon
+// --- file: lib/ops.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+export type Ops
+	export static function twice(n Integer) returns Integer
+		return n * 2
+	end 'twice'
+end 'Ops'
+
+// --- file: main.maxon
+let f = lib.Ops.twice
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2078: <fragment>:12:17: 'lib.Ops.twice' is a method, and a method is not a function value: wrap the call in a closure, such as 'function(...) gives lib.Ops.twice(...)'
+```
+
+
+<!-- test: error.a-generic-instance-method-read-through-its-type-is-an-instance-method -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function pick(other U) uses U returns Integer
+		return self.n
+	end 'pick'
+end 'Box'
+
+function main() returns ExitCode
+	let f = Box.pick
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2078: <fragment>:17:14: 'Box.pick' is an instance method, and a method is not a function value: call it on a value, or wrap that call in a closure, such as 'function(value) gives value.pick(...)'
+```
+
+
+<!-- test: error.a-generic-static-read-through-its-type-is-a-method -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	static function wrap(other U) uses U returns Integer
+		return 1
+	end 'wrap'
+end 'Box'
+
+function main() returns ExitCode
+	let f = Box.wrap
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2078: <fragment>:17:14: 'Box.wrap' is a method, and a method is not a function value: wrap the call in a closure, such as 'function(...) gives Box.wrap(...)'
+```
+
+
+<!-- test: error.a-call-through-a-type-parameter-names-a-static-requirement-in-a-generic-type-body -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Maker
+	static function make() returns Integer
+end 'Maker'
+
+type Widget implements Maker
+	var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	static function make() returns Integer
+		return 7
+	end 'make'
+end 'Widget'
+
+type Holder uses T where T is Maker
+	var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function go() returns Integer
+		return T.make()
+	end 'go'
+end 'Holder'
+
+typealias WidgetHolder = Holder with Widget
+
+function main() returns ExitCode
+	let h = WidgetHolder.create(1)
+	return h.go() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3116: <fragment>:28:12: 'T.make' is a `static` requirement, and a `static` member has no receiver to dispatch on — so the type parameter 'T' cannot reach it. Call a `static` member on a concrete type
+```
+
+<!-- test: error.a-requirement-through-a-type-parameter-of-a-generic-type-is-not-a-function-value -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Maker
+	static function make() returns Integer
+end 'Maker'
+
+type Widget implements Maker
+	var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	static function make() returns Integer
+		return 7
+	end 'make'
+end 'Widget'
+
+type Holder uses T where T is Maker
+	var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function go() returns Integer
+		let f = T.make
+		return 0
+	end 'go'
+end 'Holder'
+
+typealias WidgetHolder = Holder with Widget
+
+function main() returns ExitCode
+	let h = WidgetHolder.create(1)
+	return h.go() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2078: <fragment>:28:13: 'T.make' is a requirement of 'Maker', and a requirement is not a function value: it is reached on a concrete type that implements 'Maker'
+```
+
+<!-- test: error.a-call-through-a-type-parameter-names-a-static-requirement-in-a-generic-function -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Maker
+	static function make() returns Integer
+	function id() returns Integer
+end 'Maker'
+
+type Widget implements Maker
+	var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	static function make() returns Integer
+		return 7
+	end 'make'
+
+	function id() returns Integer
+		return self.n
+	end 'id'
+end 'Widget'
+
+function build(x T) uses T returns Integer where T is Maker
+	return T.make() + x.id()
+end 'build'
+
+function main() returns ExitCode
+	return build(Widget.create(1)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3116: <fragment>:26:11: 'T.make' is a `static` requirement, and a `static` member has no receiver to dispatch on — so the type parameter 'T' cannot reach it. Call a `static` member on a concrete type
+```
+
+<!-- test: error.an-async-spawn-of-a-static-a-container-alias-lacks-is-refused-for-what-it-lacks -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Numbers = Array with Integer
+
+function main() returns ExitCode
+	let p = async Numbers.nope()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2073: <fragment>:6:24: `Array` static method 'nope' — the compiler provides two: `create()` and `init(managed)`
+```
+
+<!-- test: error.an-undeclared-base-is-an-undefined-variable -->
+```maxon
+function main() returns ExitCode
+	let f = Nope.thing
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:3:10: Undefined variable 'Nope'
+```
+
+<!-- test: error.a-range-bound-on-a-declared-type-wants-a-sized-type -->
+```maxon
+type Ops
+	static function foo() returns bool
+		return true
+	end 'foo'
+end 'Ops'
+
+typealias Bad = int(0 to Ops.foo)
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:8:26: Expected 'a sized numeric type (u8/u16/u32/u64/i8/i16/i32/i64/f32/f64)' but got 'Ops'
+```
+
 ### Float function values carry the callee's float result and param types
 
 A function VALUE returns and takes floats exactly as a direct call does. The indirect-call

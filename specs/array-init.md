@@ -707,7 +707,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:6:20: Unsupported: `Array` static method 'nosuch' — the compiler provides two: `create()` and `init(managed)`
+error E2073: <fragment>:6:20: `Array` static method 'nosuch' — the compiler provides two: `create()` and `init(managed)`
 ```
 
 <!-- test: a-synthesized-byte-buffer-adopts -->

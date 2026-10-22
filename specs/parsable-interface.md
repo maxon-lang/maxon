@@ -630,17 +630,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:14: Unsupported: 'int' has no static method named 'frobnicate' — a primitive type's statics are the free functions `stdlib/Builtins.maxon` declares, and it declares none of that name
+error E2073: <fragment>:3:18: 'int' has no static method named 'frobnicate' — a primitive type's statics are the free functions `stdlib/Builtins.maxon` declares, and it declares none of that name
 ```
 
-<!-- test: error.unknown-byte-static-is-an-ordinary-undefined-function -->
-**THE `byte` TWIN, AND THE CONTROL ON THE ASYMMETRY ABOVE.** `byte.` is an ordinary identifier qualifier —
-nothing declares it compiler-owned — so an unresolved member is left to the authority for "no such
-function", `SemanticCheck`, reading the registry the real parse built. That is `parseQualifiedCall`'s own
-rule (*"the sweep must never own a veto"*) obeyed wherever it can be, and it is also what keeps a user's
-`type byte` answerable in its own terms rather than in the primitive's. Pinning this diagnostic is what
-would catch the refusal above
-being widened to a qualifier that does not need it.
+<!-- test: error.unknown-byte-static-is-refused-like-the-other-primitives -->
+**THE `byte` TWIN: ONE WORDING AND ONE CODE FOR EVERY PRIMITIVE.** `byte` is an ordinary identifier, not a
+keyword, but the compiler's primitive name all the same, so an unresolved member of it is refused in the
+primitives' own words and not left to `SemanticCheck`'s E3004.
 ```maxon
 function main() returns ExitCode
 	let n = try byte.frobnicate("41") otherwise 0
@@ -648,7 +644,29 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:3:19: call to undefined function 'byte.frobnicate'
+error E2073: <fragment>:3:19: 'byte' has no static method named 'frobnicate' — a primitive type's statics are the free functions `stdlib/Builtins.maxon` declares, and it declares none of that name
+```
+
+<!-- test: error.unknown-static-of-a-user-type-named-byte-is-an-ordinary-undefined-function -->
+**THE CONTROL: A USER'S `type byte` STAYS ANSWERABLE IN ITS OWN TERMS.** A declaration outranks the primitive
+reading, so a member that user type lacks is the authority's "no such function", not the primitive refusal.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type byte
+	export let n as Integer
+
+	static function fromString(_ String) returns Integer
+		return 7
+	end 'fromString'
+end 'byte'
+
+function main() returns ExitCode
+	return byte.frobnicate("41")
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:13:14: call to undefined function 'byte.frobnicate'
 ```
 
 <!-- test: error.minted-callee-arity-names-the-source-spelling -->

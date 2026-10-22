@@ -2004,12 +2004,6 @@ export union SourceParseError implements Error
 	// same producer, which is what keeps a static and a function from drifting on what `module` means.
 	symbolNotVisible(kind HiddenSymbolKind, symbol String, tier Visibility, line LineNumber, column ColumnNumber)
 
-	// ⭐ **A QUALIFIED READ NAMING A MEMBER THE TYPE DOES NOT DECLARE** — `Config.MIN_SIZE`, `Box.min`,
-	// `Self.nope`. Renders as **E2073**, at the MEMBER token. Raised by `Parser.throwStaticRosterRefusal`;
-	// `typeName` is the type whose roster was searched, which for a `Self.` spelling is the enclosing type
-	// rather than the keyword the author wrote.
-	unknownStaticMember(typeName String, member String, line LineNumber, column ColumnNumber)
-
 	// ⭐ **A PLACE ASSIGNED TO ITSELF, TEXTUALLY** — `x = x`, `p.x = p.x`, `self.n = self.n`. Renders
 	// as **E3067**, positioned at the statement's FIRST token. `place` is the chain as written, which
 	// the message prints on BOTH sides of the `=`. Raised by `Parser.rejectDegenerateAssignment`,
@@ -5243,6 +5237,27 @@ union ConstructorInstance
 	none
 end 'ConstructorInstance'
 
+union TypeParameterScope
+	ofTheEnclosingType(position ElementIndex)
+	ofTheGenericFunction(position ElementIndex)
+	notAParameter
+end 'TypeParameterScope'
+
+union SurfaceReach
+	reachable
+	refused(let refusal SourceParseError)
+end 'SurfaceReach'
+
+enum HandleSurface
+	file
+	directory
+	socket
+	pages
+	osHandle
+	pin
+	memory
+end 'HandleSurface'
+
 // ⭐⭐ **THE COMPILER-OWNED SURFACE A `<Type>.` BASE DENOTES, OR `none`** — the statics that lower to a
 // runtime entry of the compiler's own rather than to a function the program declares. Decided from the base
 // alone, so it is asked BEFORE the `.` is consumed and each arm's sub-reader still receives the cursor it
@@ -5256,29 +5271,99 @@ end 'ConstructorInstance'
 //
 // `none` is LAST so the refusable arms are one contiguous range in a match.
 union CompilerOwnedStaticSurface
-	managedFile
-	managedDirectory
-	managedSocket
-	managedPages
-	managedHandle
-	managedPin
-	managedMemory
+	handle(surface HandleSurface)
 	containerAlias(giid GenericInstanceId)
 	sharedValue(giid GenericInstanceId)
 	none
 end 'CompilerOwnedStaticSurface'
 
-// ⭐⭐ **THE CALLEE A `<Type>.<member>(…)` NAMES once the compiler-owned surfaces have declined** — the half
-// of the qualified-call resolution that needs the member token. The two arms are two answers to *"whose
-// name is this?"*, and the answer is the `CalleeMint` the call carries: `primitiveStatic` for a MINTED
-// name, the head's own mint for a declared one.
-union QualifiedStaticCallee
+// ⭐⭐ **WHAT A `<Type>.<member>` NAMES** — the one answer the call, `async`, read, store, statement and
+// constant doors and `staticCallClaimsBase` all read, so no spelling is accepted at one door and refused
+// at another. For the callee arms the `CalleeMint` the call carries is `primitiveStatic` for a MINTED
+// name and the head's own mint otherwise.
+union StaticMemberResolution
+	surface(surface CompilerOwnedStaticSurface)
+
 	// `int.fromString` → `__int_fromString` (`CalleeMint.primitiveStatic`).
 	minted(let callee ByteArray)
 
-	// `File.readText` at its registration key — the ordinary static.
-	declared(let callee ByteArray)
-end 'QualifiedStaticCallee'
+	// `File.readText` at its registration key — the ordinary static. `declaredByAFile` is false for a key
+	// nothing declares, which a call carries on to `SemanticCheck`'s E3004.
+	named(let callee ByteArray, declaredByAFile bool)
+
+	directory(let callee ByteArray)
+
+	requirement(interfaceName ByteArray)
+
+	refused(refusal SourceParseError, readsAsAMethod bool)
+
+	function calleeToCall() returns ByteArray
+		return match self 'resolution'
+			minted(callee) gives callee
+			named(callee, _) gives callee
+			directory(callee) gives callee
+			surface or
+			requirement or
+			refused panic("StaticMemberResolution.calleeToCall: a compiler-owned surface, a requirement and a refusal name no callee to call")
+		end 'resolution'
+	end 'calleeToCall'
+end 'StaticMemberResolution'
+
+// The resolution `qualifiedStaticCallsAt` reached, handed to the `parseQualifiedCall` that parses the same
+// base index so a statement is parsed by the answer that claimed it. It is taken once and cleared.
+union HandedResolution
+	empty
+	handed(at ElementIndex, let resolution StaticMemberResolution)
+
+	function handsOverAt(index ElementIndex) returns bool
+		return match self 'handed'
+			empty gives false
+			handed(at, _) gives at == index
+		end 'handed'
+	end 'handsOverAt'
+
+	function held() returns StaticMemberResolution
+		return match self 'handed'
+			handed(_, resolution) gives resolution.clone()
+			empty panic("HandedResolution.held: nothing is handed — every caller asks `handsOverAt` first")
+		end 'handed'
+	end 'held'
+end 'HandedResolution'
+
+let NothingHanded = HandedResolution.empty
+
+enum StaticBaseKind
+	typeParameter
+	primitive
+	declaredName
+end 'StaticBaseKind'
+
+enum SurfaceStatic
+	absent
+	emitted
+	corpus
+end 'SurfaceStatic'
+
+type ConstraintOnParameter
+	export let constraintIndex as ElementIndex
+	export let interfaceName as ByteArray
+	export let iface as IrInterface
+	export let declaresStatic as bool
+	export let declaresInstance as bool
+
+	static function create(constraintIndex ElementIndex, interfaceName ByteArray, iface IrInterface, declaresStatic bool, declaresInstance bool) returns ConstraintOnParameter
+		return Self{constraintIndex: constraintIndex, interfaceName: interfaceName, iface: iface, declaresStatic: declaresStatic, declaresInstance: declaresInstance}
+	end 'create'
+end 'ConstraintOnParameter'
+
+typealias ConstraintOnParameterArray = Array with ConstraintOnParameter
+
+union ConstraintRequirement
+	staticDeclaredBy(let interfaceName ByteArray)
+	instanceDeclaredBy(let interfaceName ByteArray)
+	unresolved(let refusal SourceParseError)
+	notDeclared
+end 'ConstraintRequirement'
 
 // The callee an `async` spawn names, with the token its diagnostics anchor on — the MEMBER for a qualified
 // spawn, which is `parseQualifiedCall`'s anchor too, so `async File.frobnicate(…)` reports at the member the
@@ -6478,69 +6563,13 @@ function requireNotABarePrimitive(tok Token, voice BarePrimitiveVoice) throws So
 	end 'position'
 end 'requireNotABarePrimitive'
 
-// ⛔⛔ **AN UNRESOLVED MEMBER ON A PRIMITIVE IS REFUSED *HERE* WHEN THE QUALIFIER IS COMPILER-OWNED — AND
-// THE ASYMMETRY WITH `byte.` IS DERIVED, NOT CHOSEN.**
-//
-// `isBuiltinConformanceImplName` declares EVERY callee under `int.`/`float.`/`bool.` to be the compiler's
-// own, and its soundness argument is that those three are KEYWORDS so no user symbol can wear the
-// qualifier. Two consequences follow, and BOTH were measured by removing a guard rather than reasoned at:
-//
-//   • **Without this refusal, `int.frobnicate` is caught by the RESERVED-CALLEE gate and told about a
-//     prefix it does not have** — `E3004 … 'int.frobnicate': the '__' prefix names a compiler intrinsic,
-//     and no intrinsic of that name exists`. The right code, describing a program the author does not
-//     have. That gate reaches it only because `isCompilerInternalCallee` folds the qualifier test in.
-//   • **Narrow that gate to the `__` prefix as well, and there is NO DIAGNOSTIC AT ALL:** `let n =
-//     int.frobnicate("41")` reaches the backend and panics — `resolveCallFixups: call to unknown function
-//     'int.frobnicate'` — because the same qualifier makes it an `isSignaturelessCompilerCallee`, and
-//     `SemanticCheck.validateCall` returns for exactly those BEFORE its E3004.
-//
-// ⇒ The parser is the only tier that can answer this in the author's own words, and refusing it here is
-// also what keeps that predicate's premise TRUE: no `int.`-qualified callee reaches the IR except one the
-// compiler minted.
-//
-// `byte.` is an ordinary identifier qualifier and carries none of that, so an unresolved `byte.<member>`
-// returns from here untouched and is answered by the authority for "no such function" — `SemanticCheck`,
-// reading the registry the real parse built (`E3004: call to undefined function 'byte.frobnicate'`,
-// measured on this tree before the rewrite existed and unchanged by it). That is `parseQualifiedCall`'s own
-// rule — *"the sweep must never own a veto"* — obeyed wherever it can be, and departed from only where
-// obeying it answers in the wrong words or not at all. It is also what keeps a user's `type byte`
-// answerable in its own terms rather than in the primitive's.
-//
-// ⛔ **THE MESSAGE NAMES WHAT THE AUTHOR WROTE AND NOTHING ELSE.** Not `__int_frobnicate`: that
-// symbol is the compiler's answer to a question, and quoting it describes a program the author does
-// not have. The two available wrong answers are rewriting unconditionally and reporting **E2004
-// `Undefined function '__int_frobnicate'`**, or reporting NOTHING and panicking in the backend. It
-// names no ROSTER of the statics that DO exist either: that set is `stdlib/Builtins.maxon`'s to
-// state, and a list here would be a second copy of it, stale the first time that module grows one.
-// E2015 is the code its siblings already use for an unknown member on a compiler-owned type —
-// `requireCompilerOwnedStaticIsResolvable`'s unknown static (the retired
-// `parseCharacterSetStaticCall` was the first to raise it, on a `CharacterSet` one), and the
-// *"'int' has no method named 'make'"* of a builtin-conformance dispatch. `String` is a third such
-// sibling: its statics are `stdlib/String.maxon`'s, so the tier that knows the surface is the corpus and
-// the refusal is `requireCompilerOwnedStaticIsResolvable`'s — same code, same shape of sentence, one
-// screen down.
-// ⚠ **IT ASKS THE *QUALIFIER* PREDICATE, NOT THE IMPL ONE, AND THE TWO DIFFER.** This door
-// wants "does the compiler own `int.`?" — true of every member under it, resolvable or not, which is the
-// whole point of refusing here. `isBuiltinConformanceImplName` answers the narrower "did the compiler
-// MINT this symbol?", so asking it would let `int.frobnicate` fall through to the reserved-callee gate and
-// be told about a `__` prefix it does not have — that is the first bullet above, re-measured as a live
-// regression (`parsable-interface/error.unknown-primitive-static`) rather than left as a hazard.
-function requirePrimitiveStaticIsResolvable(typeTok Token, memberTok Token, declaredCallee ByteArray) throws SourceParseError
-	if not isBuiltinConformanceQualifier(declaredCallee) 'ordinaryQualifier'
-		return
-	end 'ordinaryQualifier'
-
-	throw SourceParseError.unsupported(noSuchCompilerOwnedStaticMessage(typeTok, memberTok: memberTok, surfaceClause: "a primitive type's statics are the free functions `stdlib/Builtins.maxon` declares, and it declares none of that name"), line: typeTok.line, column: typeTok.column)
-end 'requirePrimitiveStaticIsResolvable'
-
 // ⭐ **THE ONE SENTENCE BOTH COMPILER-OWNED-STATIC REFUSALS SAY.** The FACT is one — the base names a type
 // whose surface the compiler owns, and nothing declares the member written after it — and the only thing
 // that differs between the two doors is WHERE such a member would have had to be declared. Written once so
-// the two cannot come to describe one mistake in two voices, which is what the roster sentences they replaced
-// did.
-function noSuchCompilerOwnedStaticMessage(typeTok Token, memberTok Token, surfaceClause String) returns String
-	return "'{String.from(typeTok.value)}' has no static method named '{String.from(memberTok.value)}' — {surfaceClause}"
-end 'noSuchCompilerOwnedStaticMessage'
+// the two cannot come to describe one mistake in two voices.
+function noSuchOwnedStatic(typeTok Token, memberTok Token, surfaceClause String) returns SourceParseError
+	return missingStaticMember("'{String.from(typeTok.value)}' has no static method named '{String.from(memberTok.value)}' — {surfaceClause}", anchor: memberTok)
+end 'noSuchOwnedStatic'
 
 // An unknown static on any other base is left to mangle, and `SemanticCheck.validateCall` reports
 // E3004 — pinned by `method-calls`, `self-type-member-expression` and `static-method-statement`.
@@ -6563,7 +6592,7 @@ function requireCompilerOwnedStaticIsResolvable(typeTok Token, memberTok Token, 
 		return
 	end 'theCompilersOwnSymbolOrTheProgramsOwnDeclaration'
 
-	throw SourceParseError.unsupported(noSuchCompilerOwnedStaticMessage(typeTok, memberTok: memberTok, surfaceClause: "the compiler owns that type name, so a static of its own can only come from the module that declares it or from an `extension` of it, and no declaration of that name exists"), line: memberTok.line, column: memberTok.column)
+	throw noSuchOwnedStatic(typeTok, memberTok: memberTok, surfaceClause: "the compiler owns that type name, so a static of its own can only come from the module that declares it or from an `extension` of it, and no declaration of that name exists")
 end 'requireCompilerOwnedStaticIsResolvable'
 
 // Every function name this FILE has registered — bare names and mangled overload members alike. THE answer
@@ -7544,6 +7573,24 @@ union ConstBareCallee
 	unclaimed
 end 'ConstBareCallee'
 
+union DirectoryFunction
+	declared(let callee ByteArray)
+	notADirectoryFunction
+end 'DirectoryFunction'
+
+union ConstQualifiedCallee
+	key(let callee ByteArray)
+	notAUserCallee
+	refused(let refusal SourceParseError)
+end 'ConstQualifiedCallee'
+
+enum ArrayStaticKind
+	builtinCreate
+	builtinInit
+	corpus
+	none
+end 'ArrayStaticKind'
+
 function factoryReturnRefusal(callee ConstInitializerCallee, message String) returns ConstEvalError
 	return ConstEvalError.defective(SourceParseError.unsupported(message, line: callee.anchor.line, column: callee.anchor.column))
 end 'factoryReturnRefusal'
@@ -7684,6 +7731,145 @@ module function isSizedTypeName(name ByteArray) returns bool
 		notASizedType gives false
 	end 'kind'
 end 'isSizedTypeName'
+
+function namesASizedBound(typeName ByteArray, member ByteArray) returns bool
+	return isSizedTypeName(typeName) and (member.equals(MinBoundField) or member.equals(MaxBoundField))
+end 'namesASizedBound'
+
+function builtinArrayStaticKind(member ByteArray) returns ArrayStaticKind
+	if member.equals(CreateMethod) 'create'
+		return ArrayStaticKind.builtinCreate
+	end 'create'
+
+	if member.equals(StringInitMethod) 'init'
+		return ArrayStaticKind.builtinInit
+	end 'init'
+
+	return ArrayStaticKind.none
+end 'builtinArrayStaticKind'
+
+// The one roster of the handle surfaces' statics. Admission (`surfaceStaticOf`), the refusal's list and
+// count word, and the dispatch (`emitCompilerOwnedStatic`) all read it, so the three cannot disagree.
+enum CompilerOwnedStatic
+	fileOpenRead
+	fileOpenWrite
+	fileOpenWriteExecutable
+	fileOpenCreateNew
+	fileExists
+	fileDelete
+	fileRename
+	fileStat
+	fileStatField
+	fileStatFree
+	directoryOpenSearch
+	directoryExists
+	directoryCreate
+	directoryDelete
+	directoryCurrentPath
+	directoryResolve
+	socketTcpConnect
+	socketBindListener
+	pagesReserve
+	handleTimer
+	handleAdopting
+	pinAcquire
+	memoryCreate
+	memoryFromCString
+end 'CompilerOwnedStatic'
+
+union CompilerOwnedStaticLookup
+	found(kind CompilerOwnedStatic)
+	notAStatic
+end 'CompilerOwnedStaticLookup'
+
+typealias CompilerOwnedStaticArray = Array with CompilerOwnedStatic
+
+let CountWords = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"]
+
+function compilerOwnedStaticSpelling(kind CompilerOwnedStatic) returns ByteArray
+	return match kind 'kind'
+		fileOpenRead gives ManagedFileOpenReadMethod
+		fileOpenWrite gives ManagedFileOpenWriteMethod
+		fileOpenWriteExecutable gives ManagedFileOpenWriteExecutableMethod
+		fileOpenCreateNew gives ManagedFileOpenCreateNewMethod
+		fileExists gives ManagedFileExistsMethod
+		fileDelete gives ManagedFileDeleteMethod
+		fileRename gives ManagedFileRenameMethod
+		fileStat gives ManagedFileStatMethod
+		fileStatField gives ManagedFileStatFieldMethod
+		fileStatFree gives ManagedFileStatFreeMethod
+		directoryOpenSearch gives ManagedDirectoryOpenSearchMethod
+		directoryExists gives ManagedDirectoryExistsMethod
+		directoryCreate gives ManagedDirectoryCreateMethod
+		directoryDelete gives ManagedDirectoryDeleteMethod
+		directoryCurrentPath gives ManagedDirectoryCurrentPathMethod
+		directoryResolve gives ManagedDirectoryResolveMethod
+		socketTcpConnect gives ManagedSocketTcpConnectMethod
+		socketBindListener gives ManagedSocketBindListenerMethod
+		pagesReserve gives ManagedPagesReserveMethod
+		handleTimer gives ManagedHandleTimerMethod
+		handleAdopting gives ManagedHandleAdoptMethod
+		pinAcquire gives ManagedPinAcquireMethod
+		memoryCreate gives ManagedMemoryCreateMethod
+		memoryFromCString gives ManagedMemoryFromCStringMethod
+	end 'kind'
+end 'compilerOwnedStaticSpelling'
+
+function compilerOwnedStaticsOf(surface HandleSurface) returns CompilerOwnedStaticArray
+	return match surface 'surface'
+		file gives [CompilerOwnedStatic.fileOpenRead, CompilerOwnedStatic.fileOpenWrite, CompilerOwnedStatic.fileOpenWriteExecutable, CompilerOwnedStatic.fileOpenCreateNew, CompilerOwnedStatic.fileExists, CompilerOwnedStatic.fileDelete, CompilerOwnedStatic.fileRename, CompilerOwnedStatic.fileStat, CompilerOwnedStatic.fileStatField, CompilerOwnedStatic.fileStatFree]
+		directory gives [CompilerOwnedStatic.directoryOpenSearch, CompilerOwnedStatic.directoryExists, CompilerOwnedStatic.directoryCreate, CompilerOwnedStatic.directoryDelete, CompilerOwnedStatic.directoryCurrentPath, CompilerOwnedStatic.directoryResolve]
+		socket gives [CompilerOwnedStatic.socketTcpConnect, CompilerOwnedStatic.socketBindListener]
+		pages gives [CompilerOwnedStatic.pagesReserve]
+		osHandle gives [CompilerOwnedStatic.handleTimer, CompilerOwnedStatic.handleAdopting]
+		pin gives [CompilerOwnedStatic.pinAcquire]
+		memory gives [CompilerOwnedStatic.memoryCreate, CompilerOwnedStatic.memoryFromCString]
+	end 'surface'
+end 'compilerOwnedStaticsOf'
+
+function compilerOwnedSurfaceTypeName(surface HandleSurface) returns ByteArray
+	return match surface 'surface'
+		file gives ManagedFileTypeName
+		directory gives ManagedDirectoryTypeName
+		socket gives ManagedSocketTypeName
+		pages gives ManagedPagesTypeName
+		osHandle gives ManagedHandleTypeName
+		pin gives ManagedPinTypeName
+		memory gives ManagedMemoryTypeName
+	end 'surface'
+end 'compilerOwnedSurfaceTypeName'
+
+function compilerOwnedStaticNamed(surface HandleSurface, member ByteArray) returns CompilerOwnedStaticLookup
+	for kind in compilerOwnedStaticsOf(surface) 'eachStatic'
+		if member.equals(compilerOwnedStaticSpelling(kind)) 'named'
+			return CompilerOwnedStaticLookup.found(kind)
+		end 'named'
+	end 'eachStatic'
+
+	return CompilerOwnedStaticLookup.notAStatic
+end 'compilerOwnedStaticNamed'
+
+function compilerOwnedStaticRoster(surface HandleSurface) returns String
+	view statics = compilerOwnedStaticsOf(surface)
+	var list = ""
+
+	for i in 0 upto statics.count() 'eachStatic'
+		let item = "`{String.from(compilerOwnedStaticSpelling(try statics.get(i) otherwise panic("compilerOwnedStaticRoster: statics.get OOB at {i} below count {statics.count()}")))}`"
+
+		if i == 0 'first'
+			list = item.clone()
+		end 'first' else if i + 1 == statics.count() 'last'
+			list = "{list} and {item}"
+		end 'last' else 'middle'
+			list = "{list}, {item}"
+		end 'middle'
+	end 'eachStatic'
+
+	let word = try CountWords.get(statics.count()) otherwise "{statics.count()}"
+	let lead = "exactly {word}" if statics.count() == 1 else "exactly these {word}"
+
+	return "the type has {lead}: {list}"
+end 'compilerOwnedStaticRoster'
 
 // ⭐ **ONE ENDPOINT OF A DECLARED RANGE, WITH THE PROVENANCE THE DECLARATION CHECK NEEDS.**
 //
@@ -10014,6 +10200,74 @@ function viewMisplaced(tok Token) returns SourceParseError
 	return SourceParseError.registryRefused(ErrorCode.viewMisplaced, explanation: "`view` binds a local name, so it cannot declare a field, a module-level binding, an extension member or a `@heap` binding; use `let` or `var`", line: tok.line, column: tok.column, note: DiagnosticNote.none)
 end 'viewMisplaced'
 
+function methodAsFunctionValueAt(explanation String, memberTok Token) returns SourceParseError
+	return SourceParseError.registryRefused(ErrorCode.methodAsFunctionValue, explanation: explanation, line: memberTok.line, column: memberTok.column, note: DiagnosticNote.none)
+end 'methodAsFunctionValueAt'
+
+function methodAsFunctionValue(spelled String, memberTok Token) returns SourceParseError
+	return methodAsFunctionValueAt("'{spelled}' is a method, and a method is not a function value: wrap the call in a closure, such as 'function(...) gives {spelled}(...)'", memberTok: memberTok)
+end 'methodAsFunctionValue'
+
+function methodAssigned(spelled String, memberTok Token) returns SourceParseError
+	return SourceParseError.registryRefused(ErrorCode.assignToImmutable, explanation: "'{spelled}' is a method, and a method cannot be assigned", line: memberTok.line, column: memberTok.column, note: DiagnosticNote.none)
+end 'methodAssigned'
+
+union MethodKind
+	callable
+	ofAValue
+	requirementOf(interfaceName ByteArray)
+end 'MethodKind'
+
+function methodReadRefusal(kind MethodKind, written String, memberTok Token) returns SourceParseError
+	return match kind 'kind'
+		callable gives methodAsFunctionValue(written, memberTok: memberTok)
+		ofAValue gives methodAsFunctionValueAt("'{written}' is an instance method, and a method is not a function value: call it on a value, or wrap that call in a closure, such as 'function(value) gives value.{String.from(memberTok.value)}(...)'", memberTok: memberTok)
+		requirementOf(interfaceName) gives methodAsFunctionValueAt("'{written}' is a requirement of '{String.from(interfaceName)}', and a requirement is not a function value: it is reached on a concrete type that implements '{String.from(interfaceName)}'", memberTok: memberTok)
+	end 'kind'
+end 'methodReadRefusal'
+
+function missingStaticMember(explanation String, anchor Token) returns SourceParseError
+	return SourceParseError.registryRefused(ErrorCode.unknownStaticMember, explanation: explanation, line: anchor.line, column: anchor.column, note: DiagnosticNote.none)
+end 'missingStaticMember'
+
+function undeclaredStaticMember(typeTok Token, memberTok Token) returns SourceParseError
+	return missingStaticMember("type '{String.from(typeTok.value)}' has no static member named '{String.from(memberTok.value)}'", anchor: memberTok)
+end 'undeclaredStaticMember'
+
+function primitiveMemberRefusal(typeTok Token, memberTok Token) returns SourceParseError
+	return noSuchOwnedStatic(typeTok, memberTok: memberTok, surfaceClause: "a primitive type's statics are the free functions `stdlib/Builtins.maxon` declares, and it declares none of that name")
+end 'primitiveMemberRefusal'
+
+function memberOfABaseWithNoSuchMember(base String, noun String, memberTok Token) returns SourceParseError
+	return missingStaticMember("'{base}' is {noun} and has no member '{String.from(memberTok.value)}'", anchor: memberTok)
+end 'memberOfABaseWithNoSuchMember'
+
+function memberThroughABaseThatNamesNoValue(base String, noun String, memberTok Token) returns SourceParseError
+	return missingStaticMember("'{base}' is {noun}, so '{base}.{String.from(memberTok.value)}' names no value: a static member is read through a concrete type", anchor: memberTok)
+end 'memberThroughABaseThatNamesNoValue'
+
+function instanceRequirementThroughTypeParameter(written String, interfaceName ByteArray, typeTok Token, memberTok Token) returns SourceParseError
+	return missingStaticMember("'{String.from(typeTok.value)}' is a type parameter and '{String.from(memberTok.value)}' is an instance requirement of '{String.from(interfaceName)}', so '{written}' names no static: call it on a value of type '{String.from(typeTok.value)}'", anchor: memberTok)
+end 'instanceRequirementThroughTypeParameter'
+
+module union StaticRequirementReach
+	valueOf(let receiver String)
+	typeParameter(let name String)
+end 'StaticRequirementReach'
+
+module function staticRequirementMessage(requirement String, reach StaticRequirementReach) returns String
+	let reacher = match reach 'reach'
+		valueOf(receiver) gives "a value of {receiver}"
+		typeParameter(name) gives "the type parameter '{name}'"
+	end 'reach'
+
+	return "'{requirement}' is a `static` requirement, and a `static` member has no receiver to dispatch on — so {reacher} cannot reach it. Call a `static` member on a concrete type"
+end 'staticRequirementMessage'
+
+function staticRequirementCalled(written String, typeTok Token, memberTok Token) returns SourceParseError
+	return SourceParseError.registryRefused(ErrorCode.semanticStaticRequirementNotDispatchable, explanation: staticRequirementMessage(written, reach: StaticRequirementReach.typeParameter(String.from(typeTok.value))), line: memberTok.line, column: memberTok.column, note: DiagnosticNote.none)
+end 'staticRequirementCalled'
+
 function paramOwnerAdmitsCapabilities(owner ParamDefaultOwner) returns bool
 	return match owner 'owner'
 		interfaceRequirement gives true
@@ -10676,7 +10930,7 @@ end 'appendArgParamName'
 // entry in a table something can enumerate), so the check sits at the one moment it is observable.
 //
 // ⚠ **`fromCString` IS NOT A MEMBER OF THIS SURFACE.** It is `isStatic: true` in both references, so it
-// belongs to `parseManagedMemoryStaticCall`, and a line here would put a static on the roster the INSTANCE
+// belongs to `parseCompilerOwnedStatic`, and a line here would put a static on the roster the INSTANCE
 // dispatch reads. A roster's "absent on purpose" note is two claims — that the name belongs here, and that
 // it cannot be built — so check the category before adding a name, and re-measure a blocker before
 // repeating it.
@@ -17433,17 +17687,17 @@ export let MaxFormatFieldWidth = u32.max as FormatFieldWidth
 
 // ⭐⭐ **WHAT A DECLARED TYPE'S STATIC ROSTER SAYS ABOUT `<Type>.<member>` ONCE EVERY ARM THAT COULD HAVE
 // CLAIMED THE FORM HAS DECLINED IT** — `Parser.staticRosterVerdictFor`, asked by the READ door
-// (`parseDottedPrimary`) and the STORE door (`parseStatement`) so the two cannot answer one program
-// differently.
+// (`parseDottedPrimary`), the STORE door (`parseStatement`) and the constant tier (`evalConstNamed`) so
+// they cannot answer one program differently.
 //
-// Three arms because the caller has to tell "not mine" from the two refusals, and the refusals differ in
-// code, in sentence and — for `hidden` — in the tier that picks between E3008 and E3088.
+// The caller has to tell "not mine" from the refusals, and the refusals differ in code and in sentence: a
+// missing member is E2073, a hidden one E3008 or E3088 by its tier, and a method or requirement written
+// without its call E2078, or E2013 when it is stored to.
 //
-// Ordered least-known to most-known, and the two doors consolidate their arms along that order: the READ
-// door refuses both refusals, the STORE door only the last.
+// The READ door refuses every refusal; the STORE door refuses all but `undeclaredMember`.
 union StaticRosterVerdict
-	// The base does not name a declared struct, or the member half is not a name. Some other arm's business,
-	// and the answer for every sized-type bound (`u64.max`) on this path.
+	// The base names no type whose roster this reads, or a directory function, or the member half is not a
+	// name. Some other arm's business, and the answer for every sized-type bound (`u64.max`) on this path.
 	notADeclaredTypeMember
 
 	// The type declares no static member of that name.
@@ -17451,7 +17705,22 @@ union StaticRosterVerdict
 
 	// The type declares the member and this file may not read it.
 	hidden(tier Visibility)
+
+	declaredMethod
+
+	declaredInstanceMethod
+
+	hiddenMethod(tier Visibility)
+
+	refused(refusal SourceParseError, readsAsAMethod bool)
+
+	requirement(interfaceName ByteArray)
 end 'StaticRosterVerdict'
+
+enum StaticMemberUse
+	read
+	store
+end 'StaticMemberUse'
 
 // ⭐⭐ **THE THREE `<Type> from <literal>` SUGARS, WHICH DIFFER IN EXACTLY TWO FACTS.** All desugar to the
 // type's own `init` static and share every other rule — the arity and argument checks, the ownership of the
@@ -19000,13 +19269,14 @@ end 'QualifiedTypeChain'
 type GenericBindingScope
 	export let names as NameRoster
 	export let bound as GenericFunctionArgumentArray
+	export let constraints as WhereConstraintArray
 
-	static function over(names NameRoster, bound GenericFunctionArgumentArray) returns GenericBindingScope
-		return Self{names: names, bound: bound}
+	static function over(names NameRoster, bound GenericFunctionArgumentArray, constraints WhereConstraintArray) returns GenericBindingScope
+		return Self{names: names, bound: bound, constraints: constraints}
 	end 'over'
 
 	static function empty() returns GenericBindingScope
-		return Self{names: NameRoster.create(), bound: GenericFunctionArgumentArray.create()}
+		return Self{names: NameRoster.create(), bound: GenericFunctionArgumentArray.create(), constraints: WhereConstraintArray.create()}
 	end 'empty'
 end 'GenericBindingScope'
 
@@ -19043,6 +19313,7 @@ export type Parser
 	var qualifiedTypeBase as QualifiedTypeBase
 	let respelledStarts as RespelledTokenStartSet
 	var settledTypeNames as SettledTypeNameMap
+	var handedResolution as HandedResolution
 	var declaredAliasAnswers as DeclaredAliasAnswerMap
 	var globalMapColumnAnswers as GlobalMapColumnsAnswerMap
 
@@ -19766,6 +20037,7 @@ export type Parser
 			tokens: prepared.tokens,
 			respelledStarts: prepared.respelledStarts,
 			settledTypeNames: SettledTypeNameMap.create(),
+			handedResolution: NothingHanded,
 			declaredAliasAnswers: DeclaredAliasAnswerMap.create(),
 			globalMapColumnAnswers: GlobalMapColumnsAnswerMap.create(),
 			pos: 0,
@@ -21022,7 +21294,7 @@ export type Parser
 
 	function openGenericInstance(template GenericFunctionTemplate, position ElementIndex)
 		let instance = self.signatures.genericInstanceAt(template.siteKey(), position: position)
-		self.genericBindings = GenericBindingScope.over(template.typeParamNames, bound: instance.arguments)
+		self.genericBindings = GenericBindingScope.over(template.typeParamNames, bound: instance.arguments, constraints: template.constraints)
 		self.genericInstanceName = GenericInstanceBody.named(instance.instanceName)
 	end 'openGenericInstance'
 
@@ -27723,7 +27995,7 @@ export type Parser
 		let memberTok = try self.consume(TokenKind.identifier)
 
 		if not memberTok.value.equals(RegistryCreateMemberName) 'notTheFactory'
-			throw SourceParseError.unknownStaticMember(String.from(typeTok.value), member: String.from(memberTok.value), line: memberTok.line, column: memberTok.column)
+			panic("parseSharedValueCreate: '{String.from(memberTok.value)}' passed `surfaceStaticOf` and is not the factory — the roster and this reader read one list")
 		end 'notTheFactory'
 
 		try self.consume(TokenKind.leftParen)
@@ -29931,11 +30203,15 @@ export type Parser
 	// is what is wanted; false for an int alias and for expression position (`let x = u16.max`),
 	// where a float bound has no integer value to carry and is rejected.
 	function parseTypeQualifiedBound(isFloat bool) returns ParsedRangeBound throws SourceParseError
-		// Read through `consumeTypeBaseToken` for the reason every other type-named base is: this is the
-		// LAST-RESORT arm of `parseDottedPrimary`, so it is where a `Self.<member>` that is neither an enum
-		// case nor a static call lands — and it must report what the same program spelled `<TypeName>.<member>`
-		// reports ("expected a sized numeric type … but got 'Box'"), not an E2010 about the keyword.
+		// Read through `consumeTypeBaseToken` for the reason every other type-named base is: a `Self.max`
+		// bound must report what the same program spelled `<TypeName>.max` reports ("expected a sized
+		// numeric type … but got 'Box'"), not an E2010 about the keyword.
 		let typeTok = try self.consumeTypeBaseToken()
+
+		if not isSizedTypeName(typeTok.value) 'notASizedBase'
+			throw SourceParseError.unexpectedToken("a sized numeric type (u8/u16/u32/u64/i8/i16/i32/i64/f32/f64)", got: tokenDisplayText(typeTok), line: typeTok.line, column: typeTok.column)
+		end 'notASizedBase'
+
 		try self.consume(TokenKind.dot)
 		let fieldTok = try self.consume(TokenKind.identifier)
 		let wantMax = try self.boundFieldIsMax(fieldTok)
@@ -29947,7 +30223,7 @@ export type Parser
 			// existing laxness rather than adding a validation the int path does not have).
 			value(bound) then return ParsedRangeBound.qualified(bound, qualifier: typeTok.value, isMax: wantMax)
 			floatBound(bits) then return ParsedRangeBound.qualified(try floatBoundInFloatAlias(bits, isFloat: isFloat, typeTok: typeTok, fieldTok: fieldTok), qualifier: typeTok.value, isMax: wantMax)
-			notASizedType then throw SourceParseError.unexpectedToken("a sized numeric type (u8/u16/u32/u64/i8/i16/i32/i64/f32/f64)", got: tokenDisplayText(typeTok), line: typeTok.line, column: typeTok.column)
+			notASizedType then panic("parseTypeQualifiedBound: '{String.from(typeTok.value)}' passed `isSizedTypeName` and `sizedTypeBound` answers notASizedType — the two read one table")
 		end 'resolve'
 	end 'parseTypeQualifiedBound'
 
@@ -35757,7 +36033,7 @@ export type Parser
 	end 'requireNoManagedTypeInRuntimeSource'
 
 	function rawSurfaceIsRefusedHere() returns bool
-		return self.isTheReportingWalk and not self.job.livesUnderStdlibDirectory and not self.job.isRuntimeSource
+		return (self.isTheReportingWalk or self.job.foldsAConstantInitializer) and not self.job.livesUnderStdlibDirectory and not self.job.isRuntimeSource
 	end 'rawSurfaceIsRefusedHere'
 
 	function rawSurfaceRefusal(door RawSurfaceDoor, anchor Token) returns SourceParseError
@@ -36132,7 +36408,7 @@ export type Parser
 	// With `typealias B = __ManagedMemory with Byte` in one file and `typealias B = Array with Int` in
 	// another, an unscoped read would give the second file's own `B` the BUFFER's surface — its parameter
 	// refusing `count`, and its `B.create()` routing to the buffer's two-argument static.
-	function spellingDenotesBufferSurface(spelling ByteArray) returns bool
+	function spellingDenotesBufferSurface(spelling ByteArray, nameReader FilePath) returns bool
 		if spelling.equals(ManagedMemoryTypeName) 'spelledTheReservedNameItself'
 			return true
 		end 'spelledTheReservedNameItself'
@@ -36141,11 +36417,11 @@ export type Parser
 			return false
 		end 'sweepAnswersFromTokensAlone'
 
-		if self.signatures.aliasDenotesBufferSurface(spelling, readerFilePath: self.job.path) 'aFileScopeAlias'
+		if self.signatures.aliasDenotesBufferSurface(spelling, readerFilePath: nameReader) 'aFileScopeAlias'
 			return true
 		end 'aFileScopeAlias'
 
-		return self.enclosingType.isType() and self.signatures.aliasDenotesBufferSurface(joinQualifiedName(self.enclosingTypeName(), member: spelling), readerFilePath: self.job.path)
+		return self.enclosingType.isType() and self.signatures.aliasDenotesBufferSurface(joinQualifiedName(self.enclosingTypeName(), member: spelling), readerFilePath: nameReader)
 	end 'spellingDenotesBufferSurface'
 
 	function namesInnerAliasHere(name ByteArray) returns bool
@@ -36489,7 +36765,7 @@ export type Parser
 			// LEGAL store and above the field arm, which is the same separation that pair already draws: a
 			// base naming a TYPE is never a chain through a binding, so the field arm's refusal would name
 			// the wrong mistake. See `staticStoreRefusedAt`.
-			try self.refuseStaticMemberHiddenStore()
+			try self.refuseStaticMemberStore()
 		end 'refusedStaticStore' else if form == StatementForm.fieldAssign 'fieldAssign'
 			// `p.x = 5` — a store THROUGH a binding rather than a rebinding of one. Its own
 			// predicate, and `assignedBindingsIn` reads only `assignsAt`: see `assignsAt` for why
@@ -43348,8 +43624,9 @@ export type Parser
 		// `try int.fromString(s) otherwise 0` — the primitive-static spelling of the qualified static above,
 		// and the position that MATTERS for it: all four `__<prim>_fromString` declarations throw,
 		// so `try` is the only way a program calls one. `int`/`float`/`bool` are keywords, so they cannot ride
-		// the `named` arm; the SHAPE gate is `parsePrimary`'s, asked from one place so the try target and the
-		// expression admit the same set. `byte.fromString(…)` is an identifier and is served by `named` above.
+		// the `named` arm; the SHAPE gate is `parsePrimary`'s read shape with the call's `(` added, so the try
+		// target admits the calls the expression does. `byte.fromString(…)` is an identifier and is served by
+		// `named` above.
 		if self.primitiveStaticCallAt(self.pos) 'primitiveStaticTarget'
 			return try self.parseDottedPrimary(func, resultUsed: false)
 		end 'primitiveStaticTarget'
@@ -66158,9 +66435,9 @@ export type Parser
 		// `parseDottedPrimary`, which is where every OTHER type-named dotted form is split, so the scope
 		// shadowing rule and the arm order are read from one place rather than restated. `byte.fromString(…)`
 		// needs no arm at all — `byte` is an identifier here, so it is already below.
-		if self.primitiveStaticCallAt(self.pos) 'primitiveStaticCall'
+		if self.primitiveStaticReadAt(self.pos) 'primitiveStaticRead'
 			return try self.parseDottedPrimary(func, resultUsed: true)
-		end 'primitiveStaticCall'
+		end 'primitiveStaticRead'
 
 		// ⭐ **A KEYWORD JOINS THE NAMED ARM WHEN A NAME IS ALL IT CAN BE** — `return type` reading the
 		// parameter of `function identity(type Integer)`, `return from(41)` calling a function named `from`.
@@ -69946,8 +70223,8 @@ export type Parser
 	//      SECOND and by SCOPE, which is the same "LOCAL FIRST" rule `parseVariableReference`
 	//      already resolves a bare name by: a local named `u16` would shadow the sized type, exactly
 	//      as a local `OFFSET` shadows a top-level constant of that name.
-	//   3. `u16.max` — a TYPE-QUALIFIED NUMERIC BOUND, the fallback. It is the answer
-	//      for a base name that is neither callable nor bound.
+	//   3. `u16.max` — a TYPE-QUALIFIED NUMERIC BOUND, the fallback for a sized base that is neither
+	//      callable nor bound. Any other such base is refused for the member it lacks.
 	//
 	// The order is the decision. Testing the bound table FIRST would have to guess whether `p` is a
 	// sized type before knowing `p` is a local, and `sizedTypeBound` answers `notASizedType` for
@@ -70013,6 +70290,7 @@ export type Parser
 		// named `Self` is admitted by the keyword-as-a-declared-name rule, so the exclusion has to be stated
 		// rather than assumed. It is stated once, in `valueBaseAt`.
 		let baseTok = try self.typeBaseTokenAt(self.pos)
+		let memberIndex = self.pos + TokensPerQualifierSegment
 
 		// ⭐ **A DOTTED PRIMARY WHOSE HEAD NAMES A TYPE IS A MENTION OF THAT TYPE** — `Color.blue`,
 		// `Point.create(…)`, `Config.MAX_SIZE`. Recorded HERE, above the arms that decide WHICH of those
@@ -70097,7 +70375,7 @@ export type Parser
 		// `top-level-let-name-shadowed-by-type` already pins: a form that names a TYPE is tried before the
 		// managed-global fallback beneath it, and a base bound to a VALUE has already claimed the whole
 		// expression above.
-		if self.namesStaticMemberAt(baseTok, memberIndex: self.pos + TokensPerQualifierSegment) 'staticMemberRead'
+		if self.namesStaticMemberAt(baseTok, memberIndex: memberIndex) 'staticMemberRead'
 			return try self.parseStaticMemberAccess(func, baseTok: baseTok, resultUsed: resultUsed)
 		end 'staticMemberRead'
 
@@ -70134,18 +70412,26 @@ export type Parser
 		// the sentence's premise — that the base is a type this file may name — is true when it is
 		// spoken.
 		//
-		// What the arm claims, and the residual it leaves, are both stated at `staticRosterVerdictFor`: a
-		// sized-type base keeps the bound grammar, and an alias base and an undeclared base still read as a
-		// malformed bound.
-		let rosterVerdict = self.staticRosterVerdictFor(baseTok, memberIndex: self.pos + TokensPerQualifierSegment)
+		// What the arm claims is stated at `staticRosterVerdictFor`. Of the residual, a sized-type base keeps
+		// the bound grammar and every other base is refused for what it is (`nonBoundMemberRefusal`).
+		let rosterVerdict = self.staticRosterVerdictFor(baseTok, memberIndex: memberIndex)
 
 		match rosterVerdict 'roster'
 			notADeclaredTypeMember then break
 			undeclaredMember or
-			hidden then try self.throwStaticRosterRefusal(rosterVerdict, baseTok: baseTok, memberTok: self.tokenAt(self.pos + TokensPerQualifierSegment))
+			hidden or
+			declaredMethod or
+			declaredInstanceMethod or
+			hiddenMethod or
+			refused or
+			requirement then throw self.staticRosterRefusal(rosterVerdict, baseTok: baseTok, memberTok: self.tokenAt(memberIndex), written: self.writtenSpellingOfMemberAt(memberIndex), use: StaticMemberUse.read)
 		end 'roster'
 
-		return try self.parseTypeQualifiedBoundExpression()
+		if isSizedTypeName(baseTok.value) 'aSizedBound'
+			return try self.parseTypeQualifiedBoundExpression()
+		end 'aSizedBound'
+
+		throw self.nonBoundMemberRefusal(baseTok, baseIndex: self.pos)
 	end 'parseDottedPrimary'
 
 	function parseThisFrameDottedPrimary(func IrFunction) returns ValueId throws SourceParseError
@@ -70315,51 +70601,33 @@ export type Parser
 	// recognizer both the read arm (`parseDottedPrimary`) and the write arm (`staticMemberAssignsAt`) ask,
 	// so an expression `Counter.count` and a statement `Counter.count = 1` cannot come to disagree about
 	// which spellings are static members. They would: only one of them would then take the static route, and
-	// the other would be refused as a malformed sized-numeric bound or as a field chain through a binding
-	// that does not exist.
+	// the other would be refused as a missing member or as a field chain through a binding that does not
+	// exist.
 	//
+	// **`containsStruct` IS THE COST, and it is `containsEnum`'s gate for exactly its reason.** This runs on
+	// every dotted form that reaches the recognizer — `v == u64.max` among them — and everything past it
+	// ALLOCATES the joined name plus the union box each lookup door returns. `containsStruct` is a set
+	// membership on bytes already in hand, allocating nothing. A static member is declared in a `type` body,
+	// so its base is a declared struct by construction and `u16` never pays the join.
+	//
+	// A declaration may take a keyword as its name, so the member half is `tokenCanBeAName` rather than
+	// `identifier` — the same asymmetry `dottedChainLengthAt` draws between a chain's head and its trailing
+	// segments, and for the same reason.
 	function namesStaticMemberAt(baseTok Token, memberIndex ElementIndex) returns bool
-		if not self.couldNameAStaticMember(baseTok, memberIndex: memberIndex) 'notACandidate'
+		if not self.signatures.containsStructFor(baseTok.value, readerFilePath: self.typeNameReaderAt((memberIndex - TokensPerQualifierSegment) as ElementIndex)) or not tokenCanBeAName(self.tokenAt(memberIndex)) 'notACandidate'
 			return false
 		end 'notACandidate'
 
 		return self.namesTopLevelBinding(qualifiedMethodName(baseTok.value, methodName: self.tokenAt(memberIndex).value))
 	end 'namesStaticMemberAt'
 
-	// ⚠⚠ **CAN `<baseTok>.<member at memberIndex>` NAME A STATIC MEMBER AT ALL?** — the gate in front of
-	// every door that joins the qualified name, asked once by the recognizer above and once by the refusal
-	// below so the two cannot come to disagree about which spellings are candidates.
-	//
-	// **`containsStruct` IS THE COST, and it is `containsEnum`'s gate for exactly its reason.** This runs on
-	// every dotted form that reaches those doors — `v == u64.max` among them — and everything past it
-	// ALLOCATES the joined name plus the union box each lookup door returns. `containsStruct` is a set
-	// membership on bytes already in hand, allocating nothing.
-	//
-	// **A `false` IS FINAL, and deliberately so in both directions.** A static member is declared in a `type`
-	// body, so its base is a declared struct by construction and `u16` never pays the join — while a ranged
-	// ALIAS base keeps its bound reading (`specs/type-name-collision.md` pins `Status.big` against an
-	// alias) and an UNDECLARED base has no roster for the noun "type" to be true of. Both of those report as
-	// a malformed bound, which is a true statement about each; a base-kind-aware noun is what would sharpen
-	// them.
-	//
-	// A declaration may take a keyword as its name, so the member half is `tokenCanBeAName` rather than
-	// `identifier` — the same asymmetry `dottedChainLengthAt` draws between a chain's head and its trailing
-	// segments, and for the same reason.
-	function couldNameAStaticMember(baseTok Token, memberIndex ElementIndex) returns bool
-		if not self.signatures.containsStructFor(baseTok.value, readerFilePath: self.typeNameReaderAt((memberIndex - TokensPerQualifierSegment) as ElementIndex)) 'notADeclaredTypeBase'
-			return false
-		end 'notADeclaredTypeBase'
-
-		return tokenCanBeAName(self.tokenAt(memberIndex))
-	end 'couldNameAStaticMember'
-
 	// ⭐⭐ **WHAT `<baseTok>.<member>` IS, ONCE `namesStaticMemberAt` HAS SAID IT IS NOT A READABLE STATIC.**
-	// The refusing half of that recognizer, and the ONE reader both refusal doors share.
+	// The refusing half of that recognizer, and the ONE reader every refusal door shares.
 	//
 	// ⭐ **A HIDDEN MEMBER IS INVISIBLE TO `namesStaticMemberAt` BY CONSTRUCTION, WHICH IS THE WHOLE REASON
 	// THIS EXISTS.** Visibility is carried by the storage KEY (`SignatureIndex`'s `TopLevelDecl.storageKey`), so a
-	// reader's probe MISSES a file-private declaration rather than meeting it, leaving the statement to the
-	// last-resort sized-bound arm and the author told `Expected 'min or max'` about a member that exists.
+	// reader's probe MISSES a file-private declaration rather than meeting it, leaving the author told the
+	// type has no such member about a member that exists.
 	// `declVisibilityFrom` asks the declaring file's key instead, which is the only key that can answer.
 	//
 	// ⭐ **AND A `visible` VERDICT HERE MEANS NO DECLARATION AT ALL.** `declVisibilityFrom` answers `visible`
@@ -70367,39 +70635,41 @@ export type Parser
 	// the caller having already routed every readable static to `parseStaticMemberAccess`. So the remaining
 	// case is the roster's honest `undeclaredMember`.
 	function staticRosterVerdictFor(baseTok Token, memberIndex ElementIndex) returns StaticRosterVerdict
-		// ⛔ **THE TEN SIZED-TYPE SPELLINGS BELONG TO THE BOUND GRAMMAR, AND A DECLARATION WEARING ONE DOES
-		// NOT TAKE THEM AWAY.** `type u64` is legal, and without this a program declaring it loses `u64.max`
-		// — MEASURED, E2073 on source the runnable oracle compiles, which reads the bound through the very
-		// same fixed roster (`evalConstNamed` gates the constant walk on `isSizedTypeName` one door over).
-		//
-		// Deliberately NOT part of `couldNameAStaticMember`: a sized-named type that DOES declare the member
-		// is a readable static, and the recognizer must still claim it.
-		if isSizedTypeName(baseTok.value) 'aSizedBoundBase'
+		let memberTok = self.tokenAt(memberIndex)
+
+		// A program that declares `type u64` keeps `u64.max` as a bound.
+		if not tokenCanBeAName(memberTok) or namesASizedBound(baseTok.value, member: memberTok.value) 'aFormOtherThanAMember'
 			return StaticRosterVerdict.notADeclaredTypeMember
-		end 'aSizedBoundBase'
+		end 'aFormOtherThanAMember'
 
-		if not self.couldNameAStaticMember(baseTok, memberIndex: memberIndex) 'notACandidate'
+		let nameReader = self.typeNameReaderAt((memberIndex - TokensPerQualifierSegment) as ElementIndex)
+		let aliasName = self.genericAliasKeyFor(baseTok.value)
+		let namesAStruct = self.signatures.containsStructFor(baseTok.value, readerFilePath: nameReader)
+
+		if not namesAStruct and self.staticBaseKindOf(baseTok.value) == StaticBaseKind.declaredName and not self.signatures.isAliasOfFormFor(aliasName, readerFilePath: nameReader, wanted: FormAliasKind.generic) 'notATypeBase'
 			return StaticRosterVerdict.notADeclaredTypeMember
-		end 'notACandidate'
+		end 'notATypeBase'
 
-		// Joined ONCE for both rosters below, so the "does a function wear this name" probe and the "may this
-		// file read this binding" probe cannot come to ask about two different names.
-		let member = qualifiedMethodName(baseTok.value, methodName: self.tokenAt(memberIndex).value)
+		let found = self.methodVerdictOf(self.resolveStaticMember(baseTok, baseIndex: (memberIndex - TokensPerQualifierSegment) as ElementIndex, aliasName: aliasName))
 
-		// ⛔ **A DECLARED METHOD IS A MEMBER THIS ROSTER MAY NOT CALL MISSING.** `declVisibilityFrom` reads the
-		// top-level BINDING index, which no function is filed in, so `Box.make` written WITHOUT its call parens
-		// — a form the language does not have — reaches the visibility probe, misses, and would be refused
-		// "type 'Box' has no static member named 'make'" about a method declared four lines up. Existence is
-		// `declaresCallee`; `SignatureIndex.conformerDeclaresOwnMethod` records what asking a near-miss
-		// predicate instead cost the last door to try it. Declining leaves the form to the last-resort bound
-		// arm, whose sentence is at least true of it.
-		if self.signatures.declaresCallee(member) 'aDeclaredMethod'
+		match found 'method'
+			undeclaredMember then break
+			notADeclaredTypeMember or
+			hidden or
+			declaredMethod or
+			declaredInstanceMethod or
+			hiddenMethod or
+			refused or
+			requirement then return found
+		end 'method'
+
+		if not namesAStruct 'noStaticBindings'
 			return StaticRosterVerdict.notADeclaredTypeMember
-		end 'aDeclaredMethod'
+		end 'noStaticBindings'
 
-		// A static's declaring file IS its type's — see `ProgramSignatures.declVisibilityFrom` for the case
-		// that makes that a rule rather than an observation.
-		let declFilePath = match self.signatures.structFor(baseTok.value, readerFilePath: self.typeNameReaderAt((memberIndex - TokensPerQualifierSegment) as ElementIndex)) 'layout'
+		let member = qualifiedMethodName(baseTok.value, methodName: memberTok.value)
+
+		let declFilePath = match self.signatures.structFor(baseTok.value, readerFilePath: nameReader) 'layout'
 			declared(layout) gives layout.declFilePath
 			undeclared panic("staticRosterVerdictFor: containsStruct answered yes for '{String.from(baseTok.value)}' but structFor answered undeclared — the two read one registry under one key")
 		end 'layout'
@@ -70410,21 +70680,178 @@ export type Parser
 		end 'visibility'
 	end 'staticRosterVerdictFor'
 
-	// The refusal `staticRosterVerdictFor` names, raised at the MEMBER token — the name that is
-	// missing or unreadable. Its own routine because the READ door and the STORE door owe the author
-	// identical sentences.
-	//
-	// The `notADeclaredTypeMember` arm panics rather than inventing a third: both callers ask the verdict
-	// first and route this only what it refused.
-	function throwStaticRosterRefusal(verdict StaticRosterVerdict, baseTok Token, memberTok Token) throws SourceParseError
+	function methodVerdictOf(resolution StaticMemberResolution) returns StaticRosterVerdict
+		return match resolution 'resolution'
+			surface gives StaticRosterVerdict.declaredMethod
+			minted(callee) gives self.methodVerdict(callee)
+			named(callee, declaredByAFile) gives self.methodVerdict(callee) if declaredByAFile else StaticRosterVerdict.undeclaredMember
+			directory gives StaticRosterVerdict.notADeclaredTypeMember
+			requirement(interfaceName) gives StaticRosterVerdict.requirement(interfaceName)
+			refused(refusal, readsAsAMethod) gives StaticRosterVerdict.refused(refusal, readsAsAMethod: readsAsAMethod)
+		end 'resolution'
+	end 'methodVerdictOf'
+
+	function methodVerdict(callee ByteArray) returns StaticRosterVerdict
+		return match self.signatures.calleeVisibilityFrom(callee, readerFilePath: self.job.path) 'visibility'
+			visible gives StaticRosterVerdict.declaredInstanceMethod if self.signatures.calleeReceiverOf(callee) == CalleeReceiver.takesReceiver else StaticRosterVerdict.declaredMethod
+			hidden(tier) gives StaticRosterVerdict.hiddenMethod(tier)
+		end 'visibility'
+	end 'methodVerdict'
+
+	function staticRosterRefusal(verdict StaticRosterVerdict, baseTok Token, memberTok Token, written String, use StaticMemberUse) returns SourceParseError
 		let member = String.from(qualifiedMethodName(baseTok.value, methodName: memberTok.value))
 
-		match verdict 'verdict'
-			hidden(tier) then throw SourceParseError.symbolNotVisible(HiddenSymbolKind.staticMember, symbol: member, tier: tier, line: memberTok.line, column: memberTok.column)
-			undeclaredMember then throw SourceParseError.unknownStaticMember(String.from(baseTok.value), member: String.from(memberTok.value), line: memberTok.line, column: memberTok.column)
-			notADeclaredTypeMember then panic("throwStaticRosterRefusal: '{member}' is not a refusal — both callers ask `staticRosterVerdictFor` and route only what it refused")
+		return match verdict 'verdict'
+			hidden(tier) gives SourceParseError.symbolNotVisible(HiddenSymbolKind.staticMember, symbol: member, tier: tier, line: memberTok.line, column: memberTok.column)
+			undeclaredMember gives undeclaredStaticMember(baseTok, memberTok: memberTok)
+			hiddenMethod(tier) gives SourceParseError.symbolNotVisible(HiddenSymbolKind.functionDeclaration, symbol: written, tier: tier, line: memberTok.line, column: memberTok.column)
+			declaredMethod gives self.methodRefusal(MethodKind.callable, written: written, memberTok: memberTok, use: use)
+			declaredInstanceMethod gives self.methodRefusal(MethodKind.ofAValue, written: written, memberTok: memberTok, use: use)
+			refused(refusal, readsAsAMethod) gives self.methodRefusal(MethodKind.ofAValue, written: written, memberTok: memberTok, use: use) if readsAsAMethod else refusal
+			requirement(interfaceName) gives self.methodRefusal(MethodKind.requirementOf(interfaceName), written: written, memberTok: memberTok, use: use)
+			notADeclaredTypeMember panic("staticRosterRefusal: '{member}' is not a refusal — every caller asks `staticRosterVerdictFor` and routes only what it refused")
 		end 'verdict'
-	end 'throwStaticRosterRefusal'
+	end 'staticRosterRefusal'
+
+	function methodRefusal(kind MethodKind, written String, memberTok Token, use StaticMemberUse) returns SourceParseError
+		return match use 'use'
+			read gives methodReadRefusal(kind, written: written, memberTok: memberTok)
+			store gives methodAssigned(written, memberTok: memberTok)
+		end 'use'
+	end 'methodRefusal'
+
+	function nonBoundMemberRefusal(baseTok Token, baseIndex ElementIndex) returns SourceParseError
+		let base = String.from(baseTok.value)
+		let memberTok = self.tokenAt(baseIndex + TokensPerQualifierSegment)
+		let nameReader = self.typeNameReaderAt(baseIndex)
+
+		match self.staticBaseKindOf(baseTok.value) 'kind'
+			typeParameter then return memberThroughABaseThatNamesNoValue(base, noun: "a type parameter", memberTok: memberTok)
+			primitive then return self.undeclaredBaseRefusal(baseTok, memberTok: memberTok) if self.signatures.namesANamespace(baseTok.value) else primitiveMemberRefusal(baseTok, memberTok: memberTok)
+			declaredName then break
+		end 'kind'
+
+		let form = try self.signatures.declaredFormOf(baseTok.value, readerFilePath: nameReader) otherwise return self.undeclaredBaseRefusal(baseTok, memberTok: memberTok)
+
+		return match form 'form'
+			interfaceType gives memberThroughABaseThatNamesNoValue(base, noun: "an interface", memberTok: memberTok)
+			structType gives undeclaredStaticMember(baseTok, memberTok: memberTok)
+			enumType gives memberOfABaseWithNoSuchMember(base, noun: "an enum", memberTok: memberTok)
+			unionType gives memberOfABaseWithNoSuchMember(base, noun: "a union", memberTok: memberTok)
+			rangedAlias gives memberOfABaseWithNoSuchMember(base, noun: "a ranged alias", memberTok: memberTok)
+			functionAlias gives memberOfABaseWithNoSuchMember(base, noun: "a function type alias", memberTok: memberTok)
+			genericAlias gives self.genericAliasMemberRefusal(baseTok, memberTok: memberTok, nameReader: nameReader, written: self.writtenSpellingOfMemberAt(baseIndex + TokensPerQualifierSegment))
+			tupleAlias gives memberOfABaseWithNoSuchMember(base, noun: "a tuple alias", memberTok: memberTok)
+		end 'form'
+	end 'nonBoundMemberRefusal'
+
+	function undeclaredBaseRefusal(baseTok Token, memberTok Token) returns SourceParseError
+		if self.signatures.namesANamespace(baseTok.value) 'aDirectory'
+			return memberOfABaseWithNoSuchMember(String.from(baseTok.value), noun: "a directory", memberTok: memberTok)
+		end 'aDirectory'
+
+		return SourceParseError.undefinedVariable(String.from(baseTok.value), line: baseTok.line, column: baseTok.column)
+	end 'undeclaredBaseRefusal'
+
+	function genericAliasMemberRefusal(aliasTok Token, memberTok Token, nameReader FilePath, written String) returns SourceParseError
+		let instanceBase = self.signatures.genericInstanceBaseName(self.signatures.genericAliasInstanceFrom(self.genericAliasKeyFor(aliasTok.value), readerFilePath: nameReader))
+
+		if self.namesTopLevelBinding(qualifiedMethodName(instanceBase, methodName: memberTok.value)) 'aStaticOfTheBase'
+			return missingStaticMember("'{written}' is a static of '{String.from(instanceBase)}', which is read through the type itself: write '{String.from(instanceBase)}.{String.from(memberTok.value)}'", anchor: memberTok)
+		end 'aStaticOfTheBase'
+
+		let baseForm = try self.signatures.declaredFormOf(instanceBase, readerFilePath: nameReader) otherwise return undeclaredStaticMember(aliasTok, memberTok: memberTok)
+
+		return match baseForm 'baseForm'
+			interfaceType gives memberThroughABaseThatNamesNoValue(String.from(aliasTok.value), noun: "an interface instance", memberTok: memberTok)
+			structType or
+			enumType or
+			unionType or
+			rangedAlias or
+			functionAlias or
+			genericAlias or
+			tupleAlias gives undeclaredStaticMember(aliasTok, memberTok: memberTok)
+		end 'baseForm'
+	end 'genericAliasMemberRefusal'
+
+	function typeParameterScopeOf(name ByteArray) returns TypeParameterScope
+		if let position = try self.enclosingTypeParams.positionOfName(name) 'ofTheEnclosingType'
+			return TypeParameterScope.ofTheEnclosingType(position)
+		end 'ofTheEnclosingType'
+
+		if let position = try self.genericBindings.names.positionOfName(name) 'ofTheGenericFunction'
+			return TypeParameterScope.ofTheGenericFunction(position)
+		end 'ofTheGenericFunction'
+
+		return TypeParameterScope.notAParameter
+	end 'typeParameterScopeOf'
+
+	function namesATypeParameter(name ByteArray) returns bool
+		return match self.typeParameterScopeOf(name) 'scope'
+			ofTheEnclosingType or
+			ofTheGenericFunction gives true
+			notAParameter gives false
+		end 'scope'
+	end 'namesATypeParameter'
+
+	function constraintRequirement(paramName ByteArray, memberTok Token) returns ConstraintRequirement
+		return match self.typeParameterScopeOf(paramName) 'scope'
+			ofTheEnclosingType(position) gives self.requirementThroughConstraints(self.enclosingWhereConstraints, position: position, memberTok: memberTok)
+			ofTheGenericFunction(position) gives self.requirementThroughConstraints(self.genericBindings.constraints, position: position, memberTok: memberTok)
+			notAParameter panic("constraintRequirement: '{String.from(paramName)}' is neither a parameter of the enclosing type nor of the enclosing generic function — every caller asks `namesATypeParameter` first")
+		end 'scope'
+	end 'constraintRequirement'
+
+	// A static requirement outranks an instance one of the same name on any constraint: written through the
+	// type, `T.m` can only mean the static.
+	function requirementThroughConstraints(constraints WhereConstraintArray, position ElementIndex, memberTok Token) returns ConstraintRequirement
+		let found = try self.constraintsOnParameter(constraints, position: position, methodName: memberTok.value, errorTok: memberTok) otherwise (err) 'theInterfaceDoesNotResolve'
+			return ConstraintRequirement.unresolved(err.clone())
+		end 'theInterfaceDoesNotResolve'
+
+		var instanceHolder = ConstraintRequirement.notDeclared
+
+		for constraint in found 'eachConstraint'
+			if constraint.declaresStatic 'aStaticRequirement'
+				return ConstraintRequirement.staticDeclaredBy(constraint.interfaceName.clone())
+			end 'aStaticRequirement'
+
+			if constraint.declaresInstance 'anInstanceRequirement'
+				instanceHolder = ConstraintRequirement.instanceDeclaredBy(constraint.interfaceName.clone())
+			end 'anInstanceRequirement'
+		end 'eachConstraint'
+
+		return instanceHolder
+	end 'requirementThroughConstraints'
+
+	function constraintsOnParameter(constraints WhereConstraintArray, position ElementIndex, methodName ByteArray, errorTok Token) returns ConstraintOnParameterArray throws SourceParseError
+		var found = ConstraintOnParameterArray.create()
+
+		for i in 0 upto constraints.count() 'eachConstraint'
+			let constraint = try constraints.get(i) otherwise panic("constraintsOnParameter: constraints.get OOB at {i} below count {constraints.count()}")
+
+			if constraint.typeParamIndex != position 'otherParam'
+				continue
+			end 'otherParam'
+
+			view iface = try self.requireInterfaceForParse(constraint.interfaceName, methodTok: errorTok)
+			view slots = self.witnessSlotsOf(iface)
+			var declaresStatic = false
+			var declaresInstance = false
+
+			for slotIndex in self.witnessSlotIndicesNamed(slots, methodName: methodName) 'eachNamedSlot'
+				if (try slots.get(slotIndex) otherwise panic("constraintsOnParameter: slots.get OOB at {slotIndex} below count {slots.count()}")).method.isStatic 'aStaticSlot'
+					declaresStatic = true
+				end 'aStaticSlot' else 'anInstanceSlot'
+					declaresInstance = true
+				end 'anInstanceSlot'
+			end 'eachNamedSlot'
+
+			found.push(ConstraintOnParameter.create(i, interfaceName: constraint.interfaceName.clone(), iface: iface, declaresStatic: declaresStatic, declaresInstance: declaresInstance))
+		end 'eachConstraint'
+
+		return found
+	end 'constraintsOnParameter'
 
 	// Does `name` denote a top-level binding this file may read — a `let` it would INLINE, or a slot it
 	// would LOAD? Asked as ONE question because the two doors are disjoint by construction (one storage key
@@ -72398,8 +72825,8 @@ export type Parser
 	// which is not this routine's doing and is not restated here — see the receiver prepend in
 	// `parseCallNamed`, the one place that causes it, for both callers.)
 	// ⭐⭐ **WHICH COMPILER-OWNED SURFACE `typeName` DENOTES — the whole roster, in one reader.** See
-	// `CompilerOwnedStaticSurface` for why it is a value: `parseQualifiedCall` routes on it and the `async`
-	// spawn reader refuses on it, and a second roster would admit whichever surface is added next.
+	// `CompilerOwnedStaticSurface` for why it is a value. Its one asker is `resolveStaticMember`, and a
+	// second roster would admit whichever surface is added next.
 	//
 	// ⚠ **THE ARM ORDER IS LOAD-BEARING** — each arm's own note says against what — so this reader keeps it
 	// and no caller may re-ask the questions in another order.
@@ -72407,40 +72834,18 @@ export type Parser
 	// `aliasName` is the caller's resolved generic-alias key rather than one derived here: the caller needs
 	// the same key for the ordinary path, and deriving it twice is the two-readings-of-one-alias trap that
 	// `parseQualifiedCall`'s own resolve records.
-	function compilerOwnedStaticSurface(typeName ByteArray, aliasName ByteArray) returns CompilerOwnedStaticSurface
+	function compilerOwnedStaticSurface(typeName ByteArray, aliasName ByteArray, nameReader FilePath) returns CompilerOwnedStaticSurface
 		// ⭐ **`CharacterSet.letters()` IS AN ORDINARY MANGLED STATIC, NOT AN INTERCEPTION.** `stdlib/CharacterSet.maxon` is
 		// listed, so all twelve (the eleven presets and `from`) are declared statics on a declared struct and mangle
 		// exactly as `Point.create` does.
 		// `__ManagedFile.openRead(path)` — the compiler-owned handle type's statics. Intercepted here
 		// because the type has a registered LAYOUT but no `type` declaration and no user methods, so the
 		// mangled `__ManagedFile.openRead` below would name a callee no file declares.
-		if typeName.equals(ManagedFileTypeName) 'managedFileStatic'
-			return CompilerOwnedStaticSurface.managedFile
-		end 'managedFileStatic'
-
-		// `__ManagedDirectory.openSearch(path)` — the search type's statics, intercepted here for the
-		// identical reason.
-		if typeName.equals(ManagedDirectoryTypeName) 'managedDirectoryStatic'
-			return CompilerOwnedStaticSurface.managedDirectory
-		end 'managedDirectoryStatic'
-
-		// `__ManagedSocket.tcpConnect(host, port: p)` — the socket type's one static, intercepted here for the
-		// identical reason.
-		if typeName.equals(ManagedSocketTypeName) 'managedSocketStatic'
-			return CompilerOwnedStaticSurface.managedSocket
-		end 'managedSocketStatic'
-
-		if typeName.equals(ManagedPagesTypeName) 'managedPagesStatic'
-			return CompilerOwnedStaticSurface.managedPages
-		end 'managedPagesStatic'
-
-		if typeName.equals(ManagedHandleTypeName) 'managedHandleStatic'
-			return CompilerOwnedStaticSurface.managedHandle
-		end 'managedHandleStatic'
-
-		if typeName.equals(ManagedPinTypeName) 'managedPinStatic'
-			return CompilerOwnedStaticSurface.managedPin
-		end 'managedPinStatic'
+		for kind in HandleSurface.allCases 'eachHandleSurface'
+			if typeName.equals(compilerOwnedSurfaceTypeName(kind)) 'aHandleSurfaceSpelling'
+				return CompilerOwnedStaticSurface.handle(kind)
+			end 'aHandleSurfaceSpelling'
+		end 'eachHandleSurface'
 
 		// `__ManagedMemory.create(count, elementSize)` — intercepted BEFORE the generic-alias arm
 		// below, which would route it to `parseArrayStaticCall` (the alias IS bound to an `Array` instance)
@@ -72454,19 +72859,19 @@ export type Parser
 		// `aliasDenotesBufferSurface` is the existing answer to "does this spelling denote the buffer?" and is
 		// already what `typeSpellingAtDenotesBuffer` asks in the other position, so this is that one
 		// question asked here rather than a second test of it.
-		if self.spellingDenotesBufferSurface(typeName) 'managedMemoryStatic'
-			return CompilerOwnedStaticSurface.managedMemory
+		if self.spellingDenotesBufferSurface(typeName, nameReader: nameReader) 'managedMemoryStatic'
+			return CompilerOwnedStaticSurface.handle(HandleSurface.memory)
 		end 'managedMemoryStatic'
 
 		// ⚠ **`String` HAS NO ARM HERE.** `stdlib/String.maxon` declares `String.from(bytes)` and `String.init(managed)`,
-		// so the mangling `qualifiedStaticCallee` builds names exactly the corpus functions that serve them.
+		// so the mangling `resolveUnownedStatic` builds names exactly the corpus functions that serve them.
 		// `__ManagedFile`, `__ManagedDirectory`, `__ManagedSocket` and `__ManagedMemory` keep theirs because none has a
 		// `type` declaration anywhere, so the mangled name would name a callee no file declares.
 
 		// `IntArray.create()` / `IntSet.create()` / `StrMap.create()` / `PointList.create()`, and
 		// `ElementArray.create()` for the inner spelling of the same thing
 		// — a static call on a BUILTIN-CONTAINER instance alias. Every one is intercepted
-		// before the generic-alias → base rewrite `qualifiedStaticCallee` makes, which would mangle them to `Array.create` /
+		// before the generic-alias → base rewrite `resolveUnownedStatic` makes, which would mangle them to `Array.create` /
 		// `Set.create` / `Map.create` / `List.create` — callees no file declares, because no builtin container
 		// has a base struct. Their statics lower to their own runtime, not to a user method.
 		//
@@ -72482,8 +72887,8 @@ export type Parser
 		// the identical failure one category over: `typealias IntPair = Pair with ExitCode` then
 		// `IntPair.create(9)`, refused for a field access on `unknown`. Two rosters of "which containers
 		// does this compiler own", and two keys for one alias, are the same duplication in two columns.
-		if self.signatures.isAliasOfFormFor(aliasName, readerFilePath: self.job.path, wanted: FormAliasKind.generic) 'containerAliasStatic'
-			let aliasGiid = self.signatures.genericAliasInstanceFrom(aliasName, readerFilePath: self.job.path)
+		if self.signatures.isAliasOfFormFor(aliasName, readerFilePath: nameReader, wanted: FormAliasKind.generic) 'containerAliasStatic'
+			let aliasGiid = self.signatures.genericAliasInstanceFrom(aliasName, readerFilePath: nameReader)
 
 			if self.signatures.instanceBaseIsSharedValue(aliasGiid) 'sharedValueStatic'
 				return CompilerOwnedStaticSurface.sharedValue(aliasGiid)
@@ -72507,11 +72912,10 @@ export type Parser
 		return CompilerOwnedStaticSurface.none
 	end 'compilerOwnedStaticSurface'
 
-	// ⭐⭐ **WHOSE NAME A `<Type>.<member>(…)` CALLS, once the compiler-owned surfaces have declined** — the
-	// half of the resolution that needs the member token, shared by `parseQualifiedCall` and the `async`
-	// spawn reader. It MOVES NO CURSOR: the ordinary caller has the member peeked and hands it to
-	// `parseCallNamed`, which consumes it.
-	function qualifiedStaticCallee(typeTok Token, memberTok Token, aliasName ByteArray) returns QualifiedStaticCallee throws SourceParseError
+	// ⭐⭐ **WHOSE NAME A `<Type>.<member>` CALLS, once the compiler-owned surfaces have declined it or left it
+	// to the corpus** — `resolveStaticMember`'s ordinary half. It MOVES NO CURSOR: every door asks with the
+	// member only peeked, and the call door hands it to `parseCallNamed`, which consumes it.
+	function resolveUnownedStatic(typeTok Token, memberTok Token, aliasName ByteArray, nameReader FilePath, kind StaticBaseKind) returns StaticMemberResolution
 		// ⭐⭐ **`int.fromString(s)` / `byte.fromString(s)` — A PRIMITIVE'S STATIC, WHICH IS A FREE FUNCTION IN
 		// THE RESERVED SPACE.** THE join site, and the only one: door 1 (`int`/`float`/`bool`, a
 		// keyword resolved by `typeBaseTokenAt`) and door 2 (`byte`, a plain identifier that has always flowed
@@ -72525,8 +72929,7 @@ export type Parser
 		// unconditionally would report **E2004 `Undefined function '__int_frobnicate'`**, naming a symbol
 		// the author never wrote, so the check that decides whether to rewrite is the same check that
 		// keeps the user's own spelling in the message — one question, not a rewrite plus an apology.
-		// Where that spelling then goes is `requirePrimitiveStaticIsResolvable`'s, which is where the two
-		// qualifiers part company.
+		// Where that spelling then goes is the E2073 refusal below.
 		//
 		// ⚠⚠ **A USER DECLARATION OUTRANKS THE PRIMITIVE READING, AND A DECLARED `type` CONTESTS IT FOR `byte` ALONE.** `type
 		// int` is refused at its own name (`E2010: Expected identifier but got 'int'`, measured), so
@@ -72543,30 +72946,38 @@ export type Parser
 		// `extension int` can write one, and a `static function make()` in it publishes `int.make`. This
 		// clause is what makes that call LINK, by declining to mint `__int_make` for a name the program
 		// actually has. The rule is *"a declaration outranks the primitive reading"*, and a premise nobody
-		// re-checks is how a guard gets deleted as dead. What `requirePrimitiveStaticIsResolvable` then tests is a
-		// qualifier the author wrote for which NO declaration exists, which is exactly the case it words its sentence for.
+		// re-checks is how a guard gets deleted as dead. What the refusal below then answers is a qualifier the
+		// author wrote for which NO declaration exists, which is exactly the case it words its sentence for.
 		//
 		// The order of the two probes is cost: `namesAPrimitiveType` is four `equals` on a short slice and
 		// allocates nothing (the discipline the math-intrinsic table measured), while each `declaresCallee`
 		// needs a joined name. Every qualified call in the program pays the first; only a primitive-based one
 		// pays the rest.
-		let declaredCallee = qualifiedMethodName(self.signatures.denotedGenericBaseName(aliasName, readerFilePath: self.job.path), methodName: memberTok.value)
+		let declaredCallee = self.denotedStaticCallee(aliasName, member: memberTok.value, nameReader: nameReader)
 
-		if namesAPrimitiveType(typeTok.value) and (not self.signatures.declaresCallee(declaredCallee) or self.primitiveNameIsOnlyDeclaredOutOfSight(typeTok.value)) 'primitiveStatic'
+		if kind == StaticBaseKind.primitive and (not self.signatures.declaresCallee(declaredCallee) or self.primitiveNameIsOnlyDeclaredOutOfSight(typeTok.value)) 'primitiveStatic'
 			let minted = primitiveStaticCallee(typeTok.value, methodName: memberTok.value)
 
 			if self.signatures.declaresCallee(minted) 'declaredPrimitiveStatic'
-				return QualifiedStaticCallee.minted(minted)
+				return StaticMemberResolution.minted(minted)
 			end 'declaredPrimitiveStatic'
 
-			try requirePrimitiveStaticIsResolvable(typeTok, memberTok: memberTok, declaredCallee: declaredCallee)
+			if not self.signatures.containsStructFor(typeTok.value, readerFilePath: nameReader) or self.primitiveNameIsOnlyDeclaredOutOfSight(typeTok.value) 'noUserTypeOfThatName'
+				if self.signatures.namesANamespace(typeTok.value) 'aDirectoryNamedLikeThePrimitive'
+					return StaticMemberResolution.directory(qualifiedMethodName(typeTok.value, methodName: memberTok.value))
+				end 'aDirectoryNamedLikeThePrimitive'
+
+				return StaticMemberResolution.refused(primitiveMemberRefusal(typeTok, memberTok: memberTok), readsAsAMethod: false)
+			end 'noUserTypeOfThatName'
 		end 'primitiveStatic'
 
 		// ⭐ `String.create(…)` — an unknown static on a type name the COMPILER owns. LAST of the doors,
 		// so every interception above still wins: it speaks only for a base no file may declare and a member
 		// no file does. See `requireCompilerOwnedStaticIsResolvable` for why this one class is the parser's to
 		// refuse while a user type's stays SemanticCheck's.
-		try requireCompilerOwnedStaticIsResolvable(typeTok, memberTok: memberTok, declaredCallee: declaredCallee, signatures: self.signatures)
+		try requireCompilerOwnedStaticIsResolvable(typeTok, memberTok: memberTok, declaredCallee: declaredCallee, signatures: self.signatures) otherwise (err) 'unresolvableOwnedType'
+			return StaticMemberResolution.refused(err, readsAsAMethod: false)
+		end 'unresolvableOwnedType'
 
 		// ⭐ **ASKED ONCE AND READ TWICE.** The consume side (which argument OWNS the box being built) and the
 		// result side (which instance the value IS) are two halves of one fact; re-deriving each of them
@@ -72590,8 +73001,172 @@ export type Parser
 		//
 		// `takesReceiver: false` is the reason and not a convention: a `Type.m(…)` call passes no receiver, so
 		// it is asking for the receiverless member of that name.
-		return QualifiedStaticCallee.declared(self.signatures.memberRegistrationKey(declaredCallee, takesReceiver: false))
-	end 'qualifiedStaticCallee'
+		let registered = self.signatures.memberRegistrationKey(declaredCallee, takesReceiver: false)
+		let declaredByAFile = self.signatures.declaresCallee(registered) or self.signatures.isGenericFunctionKey(registered)
+
+		return StaticMemberResolution.named(registered.clone(), declaredByAFile: declaredByAFile)
+	end 'resolveUnownedStatic'
+
+	// The order is the precedence. A type parameter first: in its scope `T` names the parameter, whatever
+	// top-level type or alias shares the spelling. A directory function next, so a directory named like a
+	// primitive or a compiler-owned type reaches its own functions; a type's static of the same key still
+	// wins, because `resolvesAsNamespaceQualifiedFunction` declines a key a type method wears.
+	function resolveStaticMember(typeTok Token, baseIndex ElementIndex, aliasName ByteArray) returns StaticMemberResolution
+		let memberTok = self.tokenAt(baseIndex + TokensPerQualifierSegment)
+		let kind = self.staticBaseKindOf(typeTok.value)
+
+		if kind == StaticBaseKind.typeParameter 'aTypeParameterBase'
+			return self.typeParameterStatic(typeTok, memberTok: memberTok, baseIndex: baseIndex)
+		end 'aTypeParameterBase'
+
+		match self.directoryFunctionNamed(typeTok, memberTok: memberTok) 'directory'
+			declared(callee) then return StaticMemberResolution.directory(callee.clone())
+			notADirectoryFunction then break
+		end 'directory'
+
+		let nameReader = self.typeNameReaderAt(baseIndex)
+		let owned = self.compilerOwnedStaticSurface(typeTok.value, aliasName: aliasName, nameReader: nameReader)
+
+		match self.surfaceReach(owned, typeTok: typeTok) 'reach'
+			refused(refusal) then return StaticMemberResolution.refused(refusal.clone(), readsAsAMethod: false)
+			reachable then break
+		end 'reach'
+
+		match owned 'owned'
+			none then return self.resolveUnownedStatic(typeTok, memberTok: memberTok, aliasName: aliasName, nameReader: nameReader, kind: kind)
+			handle or
+			containerAlias or
+			sharedValue then break
+		end 'owned'
+
+		return match self.surfaceStaticOf(owned, member: memberTok.value, aliasName: aliasName, nameReader: nameReader) 'static'
+			emitted gives StaticMemberResolution.surface(owned)
+			corpus gives self.resolveUnownedStatic(typeTok, memberTok: memberTok, aliasName: aliasName, nameReader: nameReader, kind: kind)
+			absent gives StaticMemberResolution.refused(self.surfaceStaticRefusal(owned, typeTok: typeTok, memberTok: memberTok), readsAsAMethod: self.surfaceDeclaresInstanceMethod(owned, member: memberTok.value))
+		end 'static'
+	end 'resolveStaticMember'
+
+	function staticBaseKindOf(name ByteArray) returns StaticBaseKind
+		if self.namesATypeParameter(name) 'aTypeParameter'
+			return StaticBaseKind.typeParameter
+		end 'aTypeParameter'
+
+		if namesAPrimitiveType(name) 'aPrimitiveType'
+			return StaticBaseKind.primitive
+		end 'aPrimitiveType'
+
+		return StaticBaseKind.declaredName
+	end 'staticBaseKindOf'
+
+	function typeParameterStatic(typeTok Token, memberTok Token, baseIndex ElementIndex) returns StaticMemberResolution
+		return match self.constraintRequirement(typeTok.value, memberTok: memberTok) 'requirement'
+			staticDeclaredBy(interfaceName) gives StaticMemberResolution.requirement(interfaceName.clone())
+			instanceDeclaredBy(interfaceName) gives StaticMemberResolution.refused(instanceRequirementThroughTypeParameter(self.writtenSpellingOfMemberAt(baseIndex + TokensPerQualifierSegment), interfaceName: interfaceName, typeTok: typeTok, memberTok: memberTok), readsAsAMethod: true)
+			unresolved(refusal) gives StaticMemberResolution.refused(refusal.clone(), readsAsAMethod: false)
+			notDeclared gives StaticMemberResolution.refused(memberThroughABaseThatNamesNoValue(String.from(typeTok.value), noun: "a type parameter", memberTok: memberTok), readsAsAMethod: false)
+		end 'requirement'
+	end 'typeParameterStatic'
+
+	function directoryFunctionNamed(headTok Token, memberTok Token) returns DirectoryFunction
+		if not self.signatures.namesANamespace(headTok.value) 'notADirectory'
+			return DirectoryFunction.notADirectoryFunction
+		end 'notADirectory'
+
+		return match self.signatures.resolveFunctionName(joinQualifiedName(headTok.value, member: memberTok.value), readerFilePath: self.job.path) 'resolution'
+			declaration(name) gives DirectoryFunction.declared(name.clone())
+			undeclared gives DirectoryFunction.notADirectoryFunction
+			ambiguous panic("directoryFunctionNamed: a qualified function name resolves to a declaration or to nothing — `resolveQualifiedFunctionName` has no ambiguous answer, and only a bare name can have several visible candidates")
+		end 'resolution'
+	end 'directoryFunctionNamed'
+
+	function surfaceStaticOf(surface CompilerOwnedStaticSurface, member ByteArray, aliasName ByteArray, nameReader FilePath) returns SurfaceStatic
+		return match surface 'surface'
+			handle(kind) gives SurfaceStatic.emitted if self.surfaceTableDeclares(kind, member: member) else SurfaceStatic.absent
+			containerAlias(giid) gives self.containerStaticOf(giid, member: member, aliasName: aliasName, nameReader: nameReader)
+			sharedValue gives SurfaceStatic.emitted if member.equals(RegistryCreateMemberName) else SurfaceStatic.absent
+			none panic("surfaceStaticOf: `none` is no compiler-owned surface — every caller opens by routing it to the ordinary resolution")
+		end 'surface'
+	end 'surfaceStaticOf'
+
+	function surfaceTableDeclares(surface HandleSurface, member ByteArray) returns bool
+		return match compilerOwnedStaticNamed(surface, member: member) 'lookup'
+			found gives true
+			notAStatic gives false
+		end 'lookup'
+	end 'surfaceTableDeclares'
+
+	function containerStaticOf(giid GenericInstanceId, member ByteArray, aliasName ByteArray, nameReader FilePath) returns SurfaceStatic
+		if not self.signatures.isArrayInstance(giid) 'notAnArray'
+			return SurfaceStatic.emitted if member.equals(CreateMethod) and self.signatures.instanceHasBuiltinCreate(giid) else SurfaceStatic.absent
+		end 'notAnArray'
+
+		return match self.arrayStaticKind(member, aliasName: aliasName, nameReader: nameReader) 'kind'
+			builtinCreate or
+			builtinInit gives SurfaceStatic.emitted
+			corpus gives SurfaceStatic.corpus
+			none gives SurfaceStatic.absent
+		end 'kind'
+	end 'containerStaticOf'
+
+	function denotedStaticCallee(aliasName ByteArray, member ByteArray, nameReader FilePath) returns ByteArray
+		return qualifiedMethodName(self.signatures.denotedGenericBaseName(aliasName, readerFilePath: nameReader), methodName: member)
+	end 'denotedStaticCallee'
+
+	function arrayStaticKind(member ByteArray, aliasName ByteArray, nameReader FilePath) returns ArrayStaticKind
+		let builtin = builtinArrayStaticKind(member)
+
+		if builtin != ArrayStaticKind.none 'aBuiltin'
+			return builtin
+		end 'aBuiltin'
+
+		if self.signatures.declaresCallee(self.denotedStaticCallee(aliasName, member: member, nameReader: nameReader)) 'corpus'
+			return ArrayStaticKind.corpus
+		end 'corpus'
+
+		return ArrayStaticKind.none
+	end 'arrayStaticKind'
+
+	function surfaceDeclaresInstanceMethod(surface CompilerOwnedStaticSurface, member ByteArray) returns bool
+		return match surface 'surface'
+			sharedValue gives member.equals(RegistryCurrentMemberName) or member.equals(CloneMethodName) or member.equals(RegistryPublishMemberName)
+			handle or
+			containerAlias gives false
+			none panic("surfaceDeclaresInstanceMethod: `none` is no compiler-owned surface")
+		end 'surface'
+	end 'surfaceDeclaresInstanceMethod'
+
+	function handleStaticRefusal(surface HandleSurface, memberTok Token) returns SourceParseError
+		let member = String.from(memberTok.value)
+
+		// The names and labels are rendered from the constants the two statics are parsed with, so the
+		// sentence and the parse agree by construction. `createCursor` is named because it is an INSTANCE
+		// method (`dispatchArrayMethod`'s arm), and the cure a reader needs is the spelling.
+		if surface == HandleSurface.memory 'theBufferSurface'
+			return missingStaticMember("`{String.from(ManagedMemoryTypeName)}` static '{member}' — the statics are `{String.from(compilerOwnedStaticSpelling(CompilerOwnedStatic.memoryCreate))}({String.from(ManagedMemoryCountParamName)}, {String.from(ManagedMemoryElementSizeParamName)})` and `{String.from(compilerOwnedStaticSpelling(CompilerOwnedStatic.memoryFromCString))}({String.from(ManagedMemoryCStringParamName)})`; `{String.from(ManagedMemoryCreateCursorMethod)}` is an INSTANCE method, so write it on a receiver", anchor: memberTok)
+		end 'theBufferSurface'
+
+		return missingStaticMember("`{String.from(compilerOwnedSurfaceTypeName(surface))}` static '{member}' — {compilerOwnedStaticRoster(surface)}", anchor: memberTok)
+	end 'handleStaticRefusal'
+
+	function surfaceStaticRefusal(surface CompilerOwnedStaticSurface, typeTok Token, memberTok Token) returns SourceParseError
+		return match surface 'surface'
+			handle(kind) gives self.handleStaticRefusal(kind, memberTok: memberTok)
+			containerAlias(giid) gives self.containerStaticRefusal(giid, memberTok: memberTok)
+			sharedValue gives undeclaredStaticMember(typeTok, memberTok: memberTok)
+			none panic("surfaceStaticRefusal: `none` is no compiler-owned surface")
+		end 'surface'
+	end 'surfaceStaticRefusal'
+
+	// ⚠ **THE `Array` REFUSAL NAMES WHAT THE COMPILER PROVIDES, AND KEEPING IT CURRENT IS NOT COSMETIC**: a
+	// reader trusts a refusal's NOUN over the source, and a stale one sends them looking for a mechanism that
+	// is one line away.
+	function containerStaticRefusal(giid GenericInstanceId, memberTok Token) returns SourceParseError
+		if self.signatures.isArrayInstance(giid) 'array'
+			return missingStaticMember("`Array` static method '{String.from(memberTok.value)}' — the compiler provides two: `create()` and `init(managed)`", anchor: memberTok)
+		end 'array'
+
+		return missingStaticMember(self.containerStaticSurfaceSentence(giid, method: memberTok.value), anchor: memberTok)
+	end 'containerStaticRefusal'
 
 	// The ORDINARY static call — `File.readText(p)`, `StrBox.create(s)`. Split out so `parseQualifiedCall`'s
 	// callee match keeps one statement per arm; the constructor half is what makes it more than a call, and
@@ -72861,34 +73436,56 @@ export type Parser
 		// three is exactly how one call site comes to hold two readings of one alias.
 		let aliasName = self.genericAliasKeyFor(typeTok.value)
 
-		match self.compilerOwnedStaticSurface(typeTok.value, aliasName: aliasName) 'surface'
-			none then break
-			managedFile then return try self.parseManagedFileStaticCall(func, typeTok: typeTok)
-			managedDirectory then return try self.parseManagedDirectoryStaticCall(func, typeTok: typeTok)
-			managedSocket then return try self.parseManagedSocketStaticCall(func, typeTok: typeTok)
-			managedPages then return try self.parseManagedPagesStaticCall(func, typeTok: typeTok)
-			managedHandle then return try self.parseManagedHandleStaticCall(func, typeTok: typeTok)
-			managedPin then return try self.parseManagedPinStaticCall(typeTok)
-			managedMemory then return try self.parseManagedMemoryStaticCall(func, typeTok: typeTok)
-			containerAlias(giid) then return try self.parseContainerAliasStaticCall(func, aliasTok: typeTok, aliasName: aliasName, giid: giid, resultUsed: resultUsed)
-			sharedValue(giid) then return try self.parseSharedValueCreate(func, typeTok: typeTok, giid: giid)
-		end 'surface'
+		let resolved = self.staticMemberResolutionAt(typeTok, baseIndex: baseIndex, aliasName: aliasName)
+
+		match resolved 'member'
+			surface(owned) then return try self.parseOwnedStaticCall(func, owned: owned, typeTok: typeTok, aliasName: aliasName)
+			refused(refusal, _) then throw refusal
+			minted or
+			named or
+			directory or
+			requirement then break
+		end 'member'
 
 		try self.consume(TokenKind.dot)
-		return try self.parseStaticMemberCall(func, typeTok: typeTok, aliasName: aliasName, resultUsed: resultUsed)
+		return try self.parseStaticMemberCall(func, typeTok: typeTok, aliasName: aliasName, resolved: resolved, resultUsed: resultUsed)
 	end 'parseQualifiedCall'
+
+	function staticMemberResolutionAt(typeTok Token, baseIndex ElementIndex, aliasName ByteArray) returns StaticMemberResolution
+		if self.handedResolution.handsOverAt(baseIndex) 'handedByThePredicate'
+			let handed = self.handedResolution.held()
+			self.handedResolution = NothingHanded
+
+			return handed
+		end 'handedByThePredicate'
+
+		return self.resolveStaticMember(typeTok, baseIndex: baseIndex, aliasName: aliasName)
+	end 'staticMemberResolutionAt'
+
+	function parseOwnedStaticCall(func IrFunction, owned CompilerOwnedStaticSurface, typeTok Token, aliasName ByteArray) returns ValueId throws SourceParseError
+		match owned 'surface'
+			handle(kind) then return try self.parseCompilerOwnedStatic(func, surface: kind, typeTok: typeTok)
+			containerAlias(giid) then return try self.parseContainerAliasStaticCall(func, aliasTok: typeTok, aliasName: aliasName, giid: giid)
+			sharedValue(giid) then return try self.parseSharedValueCreate(func, typeTok: typeTok, giid: giid)
+			none then panic("parseOwnedStaticCall: `none` is no compiler-owned surface — `resolveStaticMember` answers `surface` only for one")
+		end 'surface'
+	end 'parseOwnedStaticCall'
 
 	// The `<member>(…)` of a `Type.member(…)` call whose base no compiler-owned surface claimed, the cursor past
 	// the dot — or of a container alias's member the compiler emits no code for (`parseArrayStaticCall`).
-	function parseStaticMemberCall(func IrFunction, typeTok Token, aliasName ByteArray, resultUsed bool) returns ValueId throws SourceParseError
+	function parseStaticMemberCall(func IrFunction, typeTok Token, aliasName ByteArray, resolved StaticMemberResolution, resultUsed bool) returns ValueId throws SourceParseError
 		// PEEKED, not consumed: `parseCallNamed` consumes its own callee token (`dispatchMethodOnBase` says
 		// so where it hands the cursor over), and consuming it here would leave the arguments to a second
 		// reader.
 		let memberTok = self.current()
 
-		match try self.qualifiedStaticCallee(typeTok, memberTok: memberTok, aliasName: aliasName) 'callee'
+		match resolved 'callee'
 			minted(minted) then return try self.parseCallNamed(func, callee: minted, anchor: memberTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.primitiveStatic)
-			declared(callee) then return try self.parseDeclaredStaticCall(func, callee: callee, aliasName: aliasName, typeTok: typeTok, memberTok: memberTok, resultUsed: resultUsed, mint: self.staticCallHeadMint(self.pos - TokensPerQualifierSegment, typeTok: typeTok))
+			named or
+			directory then return try self.parseDeclaredStaticCall(func, callee: resolved.calleeToCall(), aliasName: aliasName, typeTok: typeTok, memberTok: memberTok, resultUsed: resultUsed, mint: self.staticCallHeadMint(self.pos - TokensPerQualifierSegment, typeTok: typeTok))
+			requirement then throw staticRequirementCalled(self.writtenSpellingOfMemberAt(self.pos), typeTok: typeTok, memberTok: memberTok)
+			refused(refusal, _) then throw refusal
+			surface then panic("parseStaticMemberCall: a compiler-owned surface is dispatched by `parseOwnedStaticCall`, which has already consumed the member")
 		end 'callee'
 	end 'parseStaticMemberCall'
 
@@ -74360,10 +74957,10 @@ export type Parser
 	//     structurally cannot see: `Array`/`Set` have no base struct, so their statics lower to the array
 	//     and set runtimes and NO file declares an `Array.create` to be found.
 	//   • a DECLARED callee under the mangled static name — every plain struct's `Widget.byteLength`, and
-	//     a user generic alias's `IntBox.create` through its base. The name is built by the SAME
-	//     expression `parseQualifiedCall` builds it with, `denotedGenericBaseName` included, rather than
-	//     re-spelled here: two derivations of one callee name is the drift `qualifiedStaticCallsAt`
-	//     documents at length, and its failure is a call accepted at one door and refused at the other.
+	//     a user generic alias's `IntBox.create` through its base. The answer is the SAME resolution
+	//     `parseQualifiedCall` reads (`resolveStaticMember`) rather than one re-derived here: two derivations
+	//     of one callee name is the drift `qualifiedStaticCallsAt` documents at length, and its failure is a
+	//     call accepted at one door and refused at the other.
 	function staticCallClaimsBase(index ElementIndex) returns bool
 		let written = self.tokenAt(index).value
 
@@ -74378,7 +74975,14 @@ export type Parser
 			return true
 		end 'enumOrGenericAlias'
 
-		return self.signatures.declaresCallee(qualifiedMethodName(self.signatures.denotedGenericBaseName(baseName, readerFilePath: self.job.path), methodName: self.tokenAt(index + 2).value))
+		return match self.resolveStaticMember(self.tokenAt(index), baseIndex: index, aliasName: baseName) 'member'
+			surface or
+			minted gives true
+			named(_, declaredByAFile) gives declaredByAFile
+			directory or
+			requirement or
+			refused gives false
+		end 'member'
 	end 'staticCallClaimsBase'
 
 	// Dispatch a method (or a function-typed FIELD load) on an already-resolved struct base — the shared tail
@@ -75883,87 +76487,122 @@ export type Parser
 		panic("{drift}")
 	end 'dispatchCharacterMethod'
 
-	// ⭐ **THE NINE `__ManagedFile` STATICS — the complete surface.** A name outside it is REFUSED BY
-	// NAME here rather than left to fall through: falling through would mangle `__ManagedFile.seek`
-	// into a callee no file declares and surface as E3004 against a name the author did write — the
-	// same "reject positioned, do not mangle" argument `requireCompilerOwnedStaticIsResolvable` makes
-	// above (the retired `parseCharacterSetStaticCall` made it first, and its door is the corpus's
-	// now). ⚠ That argument turns on `__ManagedFile` having NO `type` declaration; where one exists,
-	// E3004 off the mangled callee IS the right answer and the interception is the wrong one (`String`
-	// is such a type).
-	//
-	// ⚠ **OWNERSHIP DIFFERS PER STATIC AND IS NOT A DETAIL.** The three OPENS return a `__mm_alloc`'d box,
-	// so they go through `emitOwnedRuntimeResult` and are tracked as owned temporaries — whose drop is
-	// `__mf_destruct`, the RAII close (`SignatureIndex.managedNameDropCallee`). `stat` returns a RAW pointer
-	// the caller must hand back to `statFree`, so it is deliberately NOT tracked: nothing in the ownership
-	// model can free a bare `int`, and the exit-101 leak gate is what reports a caller that forgets.
-	//
-	// ⚠ Throwing-ness is NOT decided here. `isThrowingManagedFileRuntimeCallee` names the callee and the
-	// composed `isThrowingRuntimeCallee` is read by the parser's E3055 accept and SemanticCheck's E3057
-	// reject, so a `try` is required at exactly the places those two agree on.
-	function parseManagedFileStaticCall(func IrFunction, typeTok Token) returns ValueId throws SourceParseError
-		try self.requireTypeSpellingIsNotRawBuffer(typeTok)
+	function parseCompilerOwnedStatic(func IrFunction, surface HandleSurface, typeTok Token) returns ValueId throws SourceParseError
 		try self.consume(TokenKind.dot)
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.between(typeTok, last: methodTok)
 
-		if methodTok.value.equals(ManagedFileOpenReadMethod) 'openRead'
-			return try self.parseManagedFileOpen(func, callee: ManagedFileOpenReadName, methodTok: methodTok, range: range)
-		end 'openRead'
+		match compilerOwnedStaticNamed(surface, member: methodTok.value) 'lookup'
+			found(kind) then return try self.emitCompilerOwnedStatic(func, kind: kind, typeTok: typeTok, methodTok: methodTok, range: range)
+			notAStatic then panic("parseCompilerOwnedStatic: '{String.from(methodTok.value)}' passed `surfaceStaticOf` and the member table has no row for it — the roster and this dispatcher read one table")
+		end 'lookup'
+	end 'parseCompilerOwnedStatic'
 
-		// ⭐ **TWO METHODS, TWO CALLEES.** `openWriteExecutable` differs from `openWrite` only in a Unix 0755
-		// permission bit, and with a POSIX lane that bit is observable — so the two are two calls rather than
-		// one.
-		if methodTok.value.equals(ManagedFileOpenWriteMethod) 'openWrite'
-			return try self.parseManagedFileOpen(func, callee: ManagedFileOpenWriteName, methodTok: methodTok, range: range)
-		end 'openWrite'
+	function surfaceReach(owned CompilerOwnedStaticSurface, typeTok Token) returns SurfaceReach
+		try self.requireSurfaceIsReachable(owned, typeTok: typeTok) otherwise (err) 'theSurfaceIsNotReachable'
+			return SurfaceReach.refused(err.clone())
+		end 'theSurfaceIsNotReachable'
 
-		if methodTok.value.equals(ManagedFileOpenWriteExecutableMethod) 'openWriteExecutable'
-			return try self.parseManagedFileOpen(func, callee: ManagedFileOpenWriteExecutableName, methodTok: methodTok, range: range)
-		end 'openWriteExecutable'
+		return SurfaceReach.reachable
+	end 'surfaceReach'
 
-		if methodTok.value.equals(ManagedFileOpenCreateNewMethod) 'openCreateNew'
-			return try self.parseManagedFileOpen(func, callee: ManagedFileOpenCreateNewName, methodTok: methodTok, range: range)
-		end 'openCreateNew'
+	function requireSurfaceIsReachable(owned CompilerOwnedStaticSurface, typeTok Token) throws SourceParseError
+		match owned 'surface'
+			handle(kind) then try self.requireHandleSurfaceIsReachable(kind, typeTok: typeTok)
+			none then try self.requireTypeSpellingIsNotRawBuffer(typeTok)
+			containerAlias or
+			sharedValue then break
+		end 'surface'
+	end 'requireSurfaceIsReachable'
 
-		if methodTok.value.equals(ManagedFileExistsMethod) 'exists'
-			let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
-			return self.emitLibraryAliasedRuntimeCall(ManagedFileExistsName, args: singletonArgs(path), alias: FullRangeIntAliasName, range: range)
-		end 'exists'
+	function requireHandleSurfaceIsReachable(surface HandleSurface, typeTok Token) throws SourceParseError
+		match surface 'surface'
+			memory then try self.requireBufferSurfaceIsReachable(typeTok)
+			file or
+			directory or
+			socket or
+			pages or
+			osHandle or
+			pin then try self.requireTypeSpellingIsNotRawBuffer(typeTok)
+		end 'surface'
+	end 'requireHandleSurfaceIsReachable'
 
-		if methodTok.value.equals(ManagedFileDeleteMethod) 'delete'
-			let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
-			return self.emitRuntimeCall(ManagedFileDeleteName, args: singletonArgs(path), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
-		end 'delete'
+	function requireBufferSurfaceIsReachable(typeTok Token) throws SourceParseError
+		if self.rawSurfaceIsRefusedHere() 'refused'
+			throw self.rawSurfaceRefusal(RawSurfaceDoor.bufferType(typeTok.value), anchor: typeTok)
+		end 'refused'
+	end 'requireBufferSurfaceIsReachable'
 
-		if methodTok.value.equals(ManagedFileRenameMethod) 'rename'
-			try self.consume(TokenKind.leftParen)
-			let oldPath = try self.parseManagedMemoryArg(func, paramName: ManagedFileOldPathParamName, methodTok: methodTok)
-			try self.consume(TokenKind.comma)
-			let newPath = try self.parseManagedMemoryArg(func, paramName: ManagedFileNewPathParamName, methodTok: methodTok)
-			try self.consume(TokenKind.rightParen)
-			return self.emitRuntimeCall(ManagedFileRenameName, args: pairArgs(oldPath, second: newPath), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
-		end 'rename'
+	// ⚠ Throwing-ness is NOT decided here. The per-surface `isThrowingManaged…RuntimeCallee` predicates name
+	// the callees and the composed `isThrowingRuntimeCallee` is read by the parser's E3055 accept and
+	// SemanticCheck's E3057 reject, so a `try` is required at exactly the places those two agree on.
+	function emitCompilerOwnedStatic(func IrFunction, kind CompilerOwnedStatic, typeTok Token, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
+		match kind 'static'
+			fileOpenRead then return try self.parseManagedFileOpen(func, callee: ManagedFileOpenReadName, methodTok: methodTok, range: range)
+			fileOpenWrite then return try self.parseManagedFileOpen(func, callee: ManagedFileOpenWriteName, methodTok: methodTok, range: range)
+			fileOpenWriteExecutable then return try self.parseManagedFileOpen(func, callee: ManagedFileOpenWriteExecutableName, methodTok: methodTok, range: range)
+			fileOpenCreateNew then return try self.parseManagedFileOpen(func, callee: ManagedFileOpenCreateNewName, methodTok: methodTok, range: range)
+			fileExists then return try self.parseManagedFileExists(func, methodTok: methodTok, range: range)
+			fileDelete then return try self.parseManagedFileDelete(func, methodTok: methodTok, range: range)
+			fileRename then return try self.parseManagedFileRename(func, methodTok: methodTok, range: range)
+			fileStat then return try self.parseManagedFileStat(func, methodTok: methodTok, range: range)
+			fileStatField then return try self.parseManagedFileStatField(func, methodTok: methodTok, range: range)
+			fileStatFree then return try self.parseManagedFileStatFree(func, methodTok: methodTok, range: range)
+			directoryOpenSearch then return try self.parseManagedDirectoryOpenSearch(func, methodTok: methodTok, range: range)
+			directoryExists then return try self.parseManagedDirectoryExists(func, methodTok: methodTok, range: range)
+			directoryCreate then return try self.parseManagedDirectoryCreate(func, methodTok: methodTok, range: range)
+			directoryDelete then return try self.parseManagedDirectoryDelete(func, methodTok: methodTok, range: range)
+			directoryCurrentPath then return try self.parseManagedDirectoryCurrentPath(range)
+			directoryResolve then return try self.parseManagedDirectoryResolve(func, methodTok: methodTok, range: range)
+			socketTcpConnect then return try self.emitManagedSocketTcpConnectCall(func, methodTok: methodTok, range: range)
+			socketBindListener then return try self.emitManagedSocketBindCall(func, methodTok: methodTok, range: range)
+			pagesReserve then return try self.parseManagedPagesReserve(func, methodTok: methodTok, range: range)
+			handleTimer then return try self.parseManagedHandleTimer(range)
+			handleAdopting then return try self.parseManagedHandleAdopting(func, methodTok: methodTok, range: range)
+			pinAcquire then return try self.parseManagedPinAcquire(range)
+			memoryCreate then return try self.parseManagedMemoryCreate(func, typeTok: typeTok, methodTok: methodTok, range: range)
+			memoryFromCString then return try self.parseManagedMemoryFromCString(func, methodTok: methodTok, range: range)
+		end 'static'
+	end 'emitCompilerOwnedStatic'
 
-		if methodTok.value.equals(ManagedFileStatMethod) 'stat'
-			let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
-			return self.emitLibraryAliasedRuntimeCall(ManagedFileStatName, args: singletonArgs(path), alias: FullRangeIntAliasName, range: range)
-		end 'stat'
+	function parseManagedFileExists(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
+		let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
+		return self.emitLibraryAliasedRuntimeCall(ManagedFileExistsName, args: singletonArgs(path), alias: FullRangeIntAliasName, range: range)
+	end 'parseManagedFileExists'
 
-		if methodTok.value.equals(ManagedFileStatFieldMethod) 'statField'
-			let args = try self.parseTwoBuiltinIntegerArgList(func, firstParam: ManagedFileBufferParamName, secondParam: ManagedFileIndexParamName, methodTok: methodTok)
-			return self.emitLibraryAliasedRuntimeCall(ManagedFileStatFieldName, args: args, alias: FullRangeIntAliasName, range: range)
-		end 'statField'
+	function parseManagedFileDelete(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
+		let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
+		return self.emitRuntimeCall(ManagedFileDeleteName, args: singletonArgs(path), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+	end 'parseManagedFileDelete'
 
-		// ⚠ VOID and NON-throwing, so a bare STATEMENT is the only position it has — see the
-		// `qualifiedStaticCallStmt` arm, which exists for it.
-		if methodTok.value.equals(ManagedFileStatFreeMethod) 'statFree'
-			let buffer = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedFileBufferParamName, methodTok: methodTok)
-			return self.emitRuntimeCall(ManagedFileStatFreeName, args: singletonArgs(buffer), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
-		end 'statFree'
+	function parseManagedFileRename(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
+		try self.consume(TokenKind.leftParen)
+		let oldPath = try self.parseManagedMemoryArg(func, paramName: ManagedFileOldPathParamName, methodTok: methodTok)
+		try self.consume(TokenKind.comma)
+		let newPath = try self.parseManagedMemoryArg(func, paramName: ManagedFileNewPathParamName, methodTok: methodTok)
+		try self.consume(TokenKind.rightParen)
+		return self.emitRuntimeCall(ManagedFileRenameName, args: pairArgs(oldPath, second: newPath), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+	end 'parseManagedFileRename'
 
-		throw SourceParseError.unsupported("`{String.from(ManagedFileTypeName)}` static '{String.from(methodTok.value)}' — the type has exactly these ten: `openRead`, `openWrite`, `openWriteExecutable`, `openCreateNew`, `exists`, `delete`, `rename`, `stat`, `statField` and `statFree`", line: methodTok.line, column: methodTok.column)
-	end 'parseManagedFileStaticCall'
+	// ⚠ `stat` returns a RAW pointer the caller must hand back to `statFree`, so it is deliberately NOT
+	// tracked: nothing in the ownership model can free a bare `int`, and the exit-101 leak gate is what
+	// reports a caller that forgets.
+	function parseManagedFileStat(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
+		let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
+		return self.emitLibraryAliasedRuntimeCall(ManagedFileStatName, args: singletonArgs(path), alias: FullRangeIntAliasName, range: range)
+	end 'parseManagedFileStat'
+
+	function parseManagedFileStatField(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
+		let args = try self.parseTwoBuiltinIntegerArgList(func, firstParam: ManagedFileBufferParamName, secondParam: ManagedFileIndexParamName, methodTok: methodTok)
+		return self.emitLibraryAliasedRuntimeCall(ManagedFileStatFieldName, args: args, alias: FullRangeIntAliasName, range: range)
+	end 'parseManagedFileStatField'
+
+	// ⚠ VOID and NON-throwing, so a bare STATEMENT is the only position it has — see the
+	// `qualifiedStaticCallStmt` arm, which exists for it.
+	function parseManagedFileStatFree(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
+		let buffer = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedFileBufferParamName, methodTok: methodTok)
+		return self.emitRuntimeCall(ManagedFileStatFreeName, args: singletonArgs(buffer), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+	end 'parseManagedFileStatFree'
 
 	// One of the three OPENS: a single `__ManagedMemory` path, and an OWNED `__ManagedFile` box back. Its tag
 	// is `structRef` over the registered `__ManagedFile` layout, which is what lets it be stored into a
@@ -75973,65 +76612,46 @@ export type Parser
 		return self.emitOwnedRuntimeResult(callee, args: singletonArgs(path), resultTag: ValueTypeTag.structRef, resultNameId: self.managedFileNameId(), range: range)
 	end 'parseManagedFileOpen'
 
-	// ⭐ **THE SIX `__ManagedDirectory` STATICS — the complete surface.** A name outside it is REFUSED
-	// BY NAME here rather than left to fall through, exactly as `parseManagedFileStaticCall` argues:
-	// falling through would mangle `__ManagedDirectory.list` into a callee no file declares and
-	// surface as E3004 against a name the author did write.
-	//
-	// ⚠ **OWNERSHIP: only `openSearch` produces an owned box.** It goes through `emitOwnedRuntimeResult`, so
-	// it is tracked as an owned temporary whose drop is `__md_destruct` — the RAII close
-	// (`SignatureIndex.managedNameDropCallee`). `currentPath` and `resolve` return an owned `__ManagedMemory`
-	// (an `Array` record), which is tracked the same way `__ManagedMemory.create`'s result is.
-	//
-	// ⚠ Throwing-ness is NOT decided here — `isThrowingManagedDirectoryRuntimeCallee` names the callee and
-	// the composed `isThrowingRuntimeCallee` is read by the parser's E3055 accept and SemanticCheck's E3057
-	// reject, so a `try` is required at exactly the places those two agree on.
-	function parseManagedDirectoryStaticCall(func IrFunction, typeTok Token) returns ValueId throws SourceParseError
-		try self.requireTypeSpellingIsNotRawBuffer(typeTok)
-		try self.consume(TokenKind.dot)
-		let methodTok = try self.consume(TokenKind.identifier)
-		let range = SourceRange.between(typeTok, last: methodTok)
+	// ⚠ **OWNERSHIP: the one directory static that produces an owned box.** It goes through
+	// `emitOwnedRuntimeResult`, so it is tracked as an owned temporary whose drop is `__md_destruct` — the
+	// RAII close (`SignatureIndex.managedNameDropCallee`).
+	function parseManagedDirectoryOpenSearch(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
+		let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
+		return self.emitOwnedRuntimeResult(ManagedDirectoryOpenSearchName, args: singletonArgs(path), resultTag: ValueTypeTag.structRef, resultNameId: self.managedDirectoryNameId(), range: range)
+	end 'parseManagedDirectoryOpenSearch'
 
-		if methodTok.value.equals(ManagedDirectoryOpenSearchMethod) 'openSearch'
-			let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
-			return self.emitOwnedRuntimeResult(ManagedDirectoryOpenSearchName, args: singletonArgs(path), resultTag: ValueTypeTag.structRef, resultNameId: self.managedDirectoryNameId(), range: range)
-		end 'openSearch'
+	// ⭐ **`exists` IS `bool`, NOT `int`.** `specs/managed-directory.md:205` writes `if not
+	// __ManagedDirectory.exists(…)`, so `not` has to be logical negation rather than bitwise
+	// complement. The RUNTIME still answers a 0/1 i64 — this tier has no `setcc` — and it is this TAG
+	// that makes the value a bool to everything above, the same arrangement `__managed_is_empty` has.
+	function parseManagedDirectoryExists(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
+		let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
+		return self.emitRuntimeCall(ManagedDirectoryExistsName, args: singletonArgs(path), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+	end 'parseManagedDirectoryExists'
 
-		// ⭐ **`exists` IS `bool`, NOT `int`.** `specs/managed-directory.md:205` writes `if not
-		// __ManagedDirectory.exists(…)`, so `not` has to be logical negation rather than bitwise
-		// complement. The RUNTIME still answers a 0/1 i64 — this tier has no `setcc` — and it is this TAG
-		// that makes the value a bool to everything above, the same arrangement `__managed_is_empty` has.
-		if methodTok.value.equals(ManagedDirectoryExistsMethod) 'exists'
-			let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
-			return self.emitRuntimeCall(ManagedDirectoryExistsName, args: singletonArgs(path), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
-		end 'exists'
+	function parseManagedDirectoryCreate(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
+		let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
+		return self.emitRuntimeCall(ManagedDirectoryCreateName, args: singletonArgs(path), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+	end 'parseManagedDirectoryCreate'
 
-		if methodTok.value.equals(ManagedDirectoryCreateMethod) 'create'
-			let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
-			return self.emitRuntimeCall(ManagedDirectoryCreateName, args: singletonArgs(path), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
-		end 'create'
+	// `create`'s twin, and void for its reason: the removal either happened or threw, so there is no
+	// verdict left to answer with.
+	function parseManagedDirectoryDelete(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
+		let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
+		return self.emitRuntimeCall(ManagedDirectoryDeleteName, args: singletonArgs(path), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+	end 'parseManagedDirectoryDelete'
 
-		// `create`'s twin, and void for its reason: the removal either happened or threw, so there is no
-		// verdict left to answer with.
-		if methodTok.value.equals(ManagedDirectoryDeleteMethod) 'delete'
-			let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
-			return self.emitRuntimeCall(ManagedDirectoryDeleteName, args: singletonArgs(path), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
-		end 'delete'
+	// The one static with NO arguments, and the one that hands back memory: an owned `__ManagedMemory`
+	// the caller drops like any other array record.
+	function parseManagedDirectoryCurrentPath(range SourceRange) returns ValueId throws SourceParseError
+		try self.consumeEmptyArgList()
+		return self.emitOwnedManagedMemoryResult(ManagedDirectoryCurrentPathName, args: ValueIdArray.create(), range: range)
+	end 'parseManagedDirectoryCurrentPath'
 
-		// The one static with NO arguments, and the one that hands back memory: an owned `__ManagedMemory`
-		// the caller drops like any other array record.
-		if methodTok.value.equals(ManagedDirectoryCurrentPathMethod) 'currentPath'
-			try self.consumeEmptyArgList()
-			return self.emitOwnedManagedMemoryResult(ManagedDirectoryCurrentPathName, args: ValueIdArray.create(), range: range)
-		end 'currentPath'
-
-		if methodTok.value.equals(ManagedDirectoryResolveMethod) 'resolve'
-			let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
-			return self.emitOwnedManagedMemoryResult(ManagedDirectoryResolveName, args: singletonArgs(path), range: range)
-		end 'resolve'
-
-		throw SourceParseError.unsupported("`{String.from(ManagedDirectoryTypeName)}` static '{String.from(methodTok.value)}' — the type has exactly these six: `openSearch`, `exists`, `create`, `delete`, `currentPath` and `resolve`", line: methodTok.line, column: methodTok.column)
-	end 'parseManagedDirectoryStaticCall'
+	function parseManagedDirectoryResolve(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
+		let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
+		return self.emitOwnedManagedMemoryResult(ManagedDirectoryResolveName, args: singletonArgs(path), range: range)
+	end 'parseManagedDirectoryResolve'
 
 	// ⭐ **THE THREE `__ManagedDirectory` INSTANCE METHODS — `next`, `filename`, `close`.** The cursor
 	// sits on the method NAME (`dispatchMethodOnReceiver` consumed the `.`).
@@ -76068,38 +76688,6 @@ export type Parser
 
 		throw SourceParseError.unsupported("`{String.from(ManagedDirectoryTypeName)}` method '{String.from(methodTok.value)}' — the type has exactly these three: `next()`, `filename()` and `close()`", line: methodTok.line, column: methodTok.column)
 	end 'dispatchManagedDirectoryMethod'
-
-	// ⭐ **THE TWO `__ManagedSocket` STATICS — `tcpConnect(host, port: p)` and `bindListener(host, port: p)`.**
-	// A name outside them is REFUSED BY NAME here rather than left to fall through, exactly as
-	// `parseManagedFileStaticCall` argues: falling through would mangle `__ManagedSocket.dial` into a callee no
-	// file declares and surface as E3004 against a name the author did write.
-	//
-	// ⚠ **OWNERSHIP: each produces an OWNED box.** Both go through `emitOwnedRuntimeResult`, so each is tracked
-	// as an owned temporary whose drop is `__ms_destruct` — the RAII close
-	// (`SignatureIndex.managedNameDropCallee`).
-	//
-	// ⚠ Throwing-ness is NOT decided here — `isThrowingManagedSocketRuntimeCallee` names the callee and the
-	// composed `isThrowingRuntimeCallee` is read by the parser's E3055 accept and SemanticCheck's E3057
-	// reject, so a `try` is required at exactly the places those two agree on.
-	function parseManagedSocketStaticCall(func IrFunction, typeTok Token) returns ValueId throws SourceParseError
-		try self.requireTypeSpellingIsNotRawBuffer(typeTok)
-		try self.consume(TokenKind.dot)
-		let methodTok = try self.consume(TokenKind.identifier)
-		let range = SourceRange.between(typeTok, last: methodTok)
-
-		if methodTok.value.equals(ManagedSocketTcpConnectMethod) 'tcpConnect'
-			return try self.emitManagedSocketTcpConnectCall(func, methodTok: methodTok, range: range)
-		end 'tcpConnect'
-
-		// ⭐ **`bindListener(host, port: p)` — THE SERVER SIDE's ONLY STATIC.** It BINDS and LISTENS in one
-		// call and answers a socket that can do neither `sendFrom` nor `recv`; `stdlib/TcpListener.maxon` is
-		// the wrapper that states that in the type system, and its header carries why the box is this type.
-		if methodTok.value.equals(ManagedSocketBindListenerMethod) 'bindListener'
-			return try self.emitManagedSocketBindCall(func, methodTok: methodTok, range: range)
-		end 'bindListener'
-
-		throw SourceParseError.unsupported("`{String.from(ManagedSocketTypeName)}` static '{String.from(methodTok.value)}' — the type has exactly these two: `tcpConnect` and `bindListener`", line: methodTok.line, column: methodTok.column)
-	end 'parseManagedSocketStaticCall'
 
 	// ⭐ **THE `__ManagedSocket` INSTANCE METHODS — the transfers, the deadlines, the close, and the server
 	// side's two.** The cursor sits on the method NAME (`dispatchMethodOnReceiver` consumed the `.`).
@@ -76187,6 +76775,9 @@ export type Parser
 		return (host, port)
 	end 'parseManagedSocketEndpointArgs'
 
+	// ⭐ **`bindListener(host, port: p)` — THE SERVER SIDE's ONLY STATIC.** It BINDS and LISTENS in one
+	// call and answers a socket that can do neither `sendFrom` nor `recv`; `stdlib/TcpListener.maxon` is
+	// the wrapper that states that in the type system, and its header carries why the box is this type.
 	function emitManagedSocketBindCall(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
 		let endpoint = try self.parseManagedSocketEndpointArgs(func, methodTok: methodTok)
 		try self.consume(TokenKind.rightParen)
@@ -76194,56 +76785,29 @@ export type Parser
 		return self.emitOwnedRuntimeResult(ManagedListenerBindName, args: pairArgs(endpoint.0, second: endpoint.1), resultTag: ValueTypeTag.structRef, resultNameId: self.managedSocketNameId(), range: range)
 	end 'emitManagedSocketBindCall'
 
-	function parseManagedPagesStaticCall(func IrFunction, typeTok Token) returns ValueId throws SourceParseError
-		try self.requireTypeSpellingIsNotRawBuffer(typeTok)
-		try self.consume(TokenKind.dot)
-		let methodTok = try self.consume(TokenKind.identifier)
-		let range = SourceRange.between(typeTok, last: methodTok)
+	function parseManagedPagesReserve(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
+		let bytes = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedPagesBytesParamName, methodTok: methodTok)
 
-		if methodTok.value.equals(ManagedPagesReserveMethod) 'reserve'
-			let bytes = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedPagesBytesParamName, methodTok: methodTok)
+		return self.emitOwnedRuntimeResult(ProfilePagesReserveName, args: singletonArgs(bytes), resultTag: ValueTypeTag.structRef, resultNameId: self.managedPagesNameId(), range: range)
+	end 'parseManagedPagesReserve'
 
-			return self.emitOwnedRuntimeResult(ProfilePagesReserveName, args: singletonArgs(bytes), resultTag: ValueTypeTag.structRef, resultNameId: self.managedPagesNameId(), range: range)
-		end 'reserve'
+	function parseManagedHandleTimer(range SourceRange) returns ValueId throws SourceParseError
+		try self.consumeEmptyArgList()
 
-		throw SourceParseError.unsupported("`{String.from(ManagedPagesTypeName)}` static '{String.from(methodTok.value)}' — the type has exactly one: `reserve`", line: methodTok.line, column: methodTok.column)
-	end 'parseManagedPagesStaticCall'
+		return self.emitOwnedRuntimeResult(ProfileTimerOpenName, args: ValueIdArray.create(), resultTag: ValueTypeTag.structRef, resultNameId: self.managedHandleNameId(), range: range)
+	end 'parseManagedHandleTimer'
 
-	function parseManagedHandleStaticCall(func IrFunction, typeTok Token) returns ValueId throws SourceParseError
-		try self.requireTypeSpellingIsNotRawBuffer(typeTok)
-		try self.consume(TokenKind.dot)
-		let methodTok = try self.consume(TokenKind.identifier)
-		let range = SourceRange.between(typeTok, last: methodTok)
+	function parseManagedHandleAdopting(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
+		let handle = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedHandleWordParamName, methodTok: methodTok)
 
-		if methodTok.value.equals(ManagedHandleTimerMethod) 'timer'
-			try self.consumeEmptyArgList()
+		return self.emitOwnedRuntimeResult(ProfileHandleAdoptName, args: singletonArgs(handle), resultTag: ValueTypeTag.structRef, resultNameId: self.managedHandleNameId(), range: range)
+	end 'parseManagedHandleAdopting'
 
-			return self.emitOwnedRuntimeResult(ProfileTimerOpenName, args: ValueIdArray.create(), resultTag: ValueTypeTag.structRef, resultNameId: self.managedHandleNameId(), range: range)
-		end 'timer'
+	function parseManagedPinAcquire(range SourceRange) returns ValueId throws SourceParseError
+		try self.consumeEmptyArgList()
 
-		if methodTok.value.equals(ManagedHandleAdoptMethod) 'adopting'
-			let handle = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedHandleWordParamName, methodTok: methodTok)
-
-			return self.emitOwnedRuntimeResult(ProfileHandleAdoptName, args: singletonArgs(handle), resultTag: ValueTypeTag.structRef, resultNameId: self.managedHandleNameId(), range: range)
-		end 'adopting'
-
-		throw SourceParseError.unsupported("`{String.from(ManagedHandleTypeName)}` static '{String.from(methodTok.value)}' — the type has exactly these two: `timer` and `adopting`", line: methodTok.line, column: methodTok.column)
-	end 'parseManagedHandleStaticCall'
-
-	function parseManagedPinStaticCall(typeTok Token) returns ValueId throws SourceParseError
-		try self.requireTypeSpellingIsNotRawBuffer(typeTok)
-		try self.consume(TokenKind.dot)
-		let methodTok = try self.consume(TokenKind.identifier)
-		let range = SourceRange.between(typeTok, last: methodTok)
-
-		if methodTok.value.equals(ManagedPinAcquireMethod) 'acquire'
-			try self.consumeEmptyArgList()
-
-			return self.emitOwnedRuntimeResult(GtPinAcquireName, args: ValueIdArray.create(), resultTag: ValueTypeTag.structRef, resultNameId: self.managedPinNameId(), range: range)
-		end 'acquire'
-
-		throw SourceParseError.unsupported("`{String.from(ManagedPinTypeName)}` static '{String.from(methodTok.value)}' — the type has exactly one: `acquire`", line: methodTok.line, column: methodTok.column)
-	end 'parseManagedPinStaticCall'
+		return self.emitOwnedRuntimeResult(GtPinAcquireName, args: ValueIdArray.create(), resultTag: ValueTypeTag.structRef, resultNameId: self.managedPinNameId(), range: range)
+	end 'parseManagedPinAcquire'
 
 	function dispatchManagedPagesMethod(recv MethodReceiver) returns ValueId throws SourceParseError
 		let methodTok = try self.consume(TokenKind.identifier)
@@ -76490,7 +77054,25 @@ export type Parser
 	// `specs/string-views.md`'s `a-user-ranged-alias-element-keeps-its-name` for the program, which
 	// proves its element survives through the buffer surface rather than through this door.
 
-	// ⭐ **`__ManagedMemory.create(count, elementSize)` — THE ONE `__ManagedMemory` STATIC.** It yields an OWNED
+	// ⭐⭐ **`fromCString(cstr)` — A NUL-TERMINATED POINTER BACK INTO AN OWNED BUFFER**, `toCString()`'s
+	// dual and the surface's second static. The whole emit is one runtime call: `__mm_from_cstring` walks
+	// the pointer with a `strlen` and blits it into a fresh byte-element `Array` record, which is the
+	// builder `__md_filename` and `__cl_arg` have used rather than a second copy of the loop.
+	//
+	// ⚠ **THE RESULT IS OWNED AND IT IS A BYTE BUFFER, so it takes the SAME door `filename()` does**
+	// (`emitOwnedManagedMemoryResult`): the record is freshly allocated, nothing else will ever drop it,
+	// and its element is a byte — the synthesized byte instance, not `create`'s element-size-chosen one,
+	// because a `cstring` IS a byte pointer and no width argument exists to choose from.
+	//
+	// ⚠ **THE ARGUMENT IS CHECKED AS A `cstring` AND AN INTEGER IS REFUSED.** This door is the reason the
+	// tag exists said the other way round: an address the parser cannot tell from a byte count is one
+	// `strlen` away from walking whatever follows it in memory.
+	function parseManagedMemoryFromCString(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
+		let cstr = try self.parseOneBuiltinCStringArgList(func, paramName: ManagedMemoryCStringParamName, methodTok: methodTok)
+		return self.emitOwnedManagedMemoryResult(MmFromCStringName, args: singletonArgs(cstr), range: range)
+	end 'parseManagedMemoryFromCString'
+
+	// ⭐ **`__ManagedMemory.create(count, elementSize)` — THE BUFFER'S CONSTRUCTOR.** It yields an OWNED
 	// `Array` record, so its scope-exit drop routes through `__managed_decref` (which frees the record AND its
 	// element buffer) exactly as a `.create()`d array's does, and the value is MARKED as the buffer surface
 	// (`markBufferSurface`) so its members are reachable through it — the one thing that makes it more than an
@@ -76500,52 +77082,14 @@ export type Parser
 	// runtime stores it into `element_size@24` (the stride every accessor moves by); the FRONT END additionally
 	// picks the result's `Array` instance from it (`managedMemoryInstanceForElementSize`), because `get`/`set`
 	// are typed off the element and nothing later can recover a type from a register.
-	function parseManagedMemoryStaticCall(func IrFunction, typeTok Token) returns ValueId throws SourceParseError
-		if self.rawSurfaceIsRefusedHere() 'refused'
-			throw self.rawSurfaceRefusal(RawSurfaceDoor.bufferType(typeTok.value), anchor: typeTok)
-		end 'refused'
-
-		try self.consume(TokenKind.dot)
-		let methodTok = try self.consume(TokenKind.identifier)
-		let range = SourceRange.between(typeTok, last: methodTok)
-
-		// ⭐⭐ **`fromCString(cstr)` — A NUL-TERMINATED POINTER BACK INTO AN OWNED BUFFER**, `toCString()`'s
-		// dual and the surface's second static. The whole emit is one runtime call: `__mm_from_cstring` walks
-		// the pointer with a `strlen` and blits it into a fresh byte-element `Array` record, which is the
-		// builder `__md_filename` and `__cl_arg` have used rather than a second copy of the loop.
-		//
-		// ⚠ **THE RESULT IS OWNED AND IT IS A BYTE BUFFER, so it takes the SAME door `filename()` does**
-		// (`emitOwnedManagedMemoryResult`): the record is freshly allocated, nothing else will ever drop it,
-		// and its element is a byte — the synthesized byte instance, not `create`'s element-size-chosen one,
-		// because a `cstring` IS a byte pointer and no width argument exists to choose from.
-		//
-		// ⚠ **THE ARGUMENT IS CHECKED AS A `cstring` AND AN INTEGER IS REFUSED.** This door is the reason the
-		// tag exists said the other way round: an address the parser cannot tell from a byte count is one
-		// `strlen` away from walking whatever follows it in memory.
-		if methodTok.value.equals(ManagedMemoryFromCStringMethod) 'fromCString'
-			let cstr = try self.parseOneBuiltinCStringArgList(func, paramName: ManagedMemoryCStringParamName, methodTok: methodTok)
-			return self.emitOwnedManagedMemoryResult(MmFromCStringName, args: singletonArgs(cstr), range: range)
-		end 'fromCString'
-
-		// ⚠ **THE NAMES AND THEIR PARAMETER LABELS ARE RENDERED FROM THE VERY CONSTANTS THE ARMS ABOVE ARE
-		// PARSED WITH, and not from a hand-written roster** — the `(count, elementSize)` in this sentence
-		// and the `parseTwoBuiltinIntegerArgList` below must agree about what the argument labels ARE,
-		// and do so by construction.
-		//
-		// ⚠ **`createCursor` IS THE ONE `__ManagedMemory` SPELLING THIS DOOR STILL REFUSES, AND IT IS NOT
-		// UNBUILT — IT IS AN INSTANCE METHOD.** It is served off a RECEIVER instead
-		// (`dispatchArrayMethod`'s `createCursor` arm), so the cure a reader needs here is the spelling.
-		if not methodTok.value.equals(ManagedMemoryCreateMethod) 'unknownStatic'
-			throw SourceParseError.unsupported("`{String.from(ManagedMemoryTypeName)}` static '{String.from(methodTok.value)}' — the statics are `{String.from(ManagedMemoryCreateMethod)}({String.from(ManagedMemoryCountParamName)}, {String.from(ManagedMemoryElementSizeParamName)})` and `{String.from(ManagedMemoryFromCStringMethod)}({String.from(ManagedMemoryCStringParamName)})`; `{String.from(ManagedMemoryCreateCursorMethod)}` is an INSTANCE method, so write it on a receiver", line: methodTok.line, column: methodTok.column)
-		end 'unknownStatic'
-
+	function parseManagedMemoryCreate(func IrFunction, typeTok Token, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
 		let elementSizeStart = self.pos
 		let args = try self.parseTwoBuiltinIntegerArgList(func, firstParam: ManagedMemoryCountParamName, secondParam: ManagedMemoryElementSizeParamName, methodTok: methodTok)
-		let elementSize = try args.get(1) otherwise panic("parseManagedMemoryStaticCall: the two-int arg list returned fewer than two values")
+		let elementSize = try args.get(1) otherwise panic("parseManagedMemoryCreate: the two-int arg list returned fewer than two values")
 		let created = self.emitOwnedRuntimeResult(ManagedMemCreateName, args: args, resultTag: ValueTypeTag.genericInstance, resultNameId: (try self.managedMemoryCreateInstance(typeTok, elementSize: elementSize, argStart: elementSizeStart) as TypeNameId), range: range)
 		self.markBufferSurface(created, origin: EmptySourceText)
 		return created
-	end 'parseManagedMemoryStaticCall'
+	end 'parseManagedMemoryCreate'
 
 	function managedMemoryCreateInstance(typeTok Token, elementSize ValueId, argStart ElementIndex) returns GenericInstanceId throws SourceParseError
 		let named = try self.requireManagedMemoryElementSize(elementSize, argStart: argStart)
@@ -76897,7 +77441,7 @@ export type Parser
 	// the spec's "Does not throw"; the other four throw `__ManagedFileError`.
 	//
 	// An unknown method is refused by name here rather than mangled into a callee no file declares —
-	// `parseManagedFileStaticCall`'s argument, on the instance side.
+	// `compilerOwnedStaticSurface`'s argument for the statics, on the instance side.
 	function dispatchManagedFileMethod(func IrFunction, recv MethodReceiver) returns ValueId throws SourceParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.between(recv.anchor, last: methodTok)
@@ -78712,9 +79256,9 @@ export type Parser
 	// destructor off the enclosing instance's layout descriptor at run time, exactly as an
 	// `Array with <type parameter>` does. What the door refuses is a NODE HANDLE, which has no `create()` at
 	// all.
-	function parseContainerAliasStaticCall(func IrFunction, aliasTok Token, aliasName ByteArray, giid GenericInstanceId, resultUsed bool) returns ValueId throws SourceParseError
+	function parseContainerAliasStaticCall(func IrFunction, aliasTok Token, aliasName ByteArray, giid GenericInstanceId) returns ValueId throws SourceParseError
 		if self.signatures.isArrayInstance(giid) 'array'
-			return try self.parseArrayStaticCall(func, aliasTok: aliasTok, aliasName: aliasName, giid: giid, resultUsed: resultUsed)
+			return try self.parseArrayStaticCall(func, aliasTok: aliasTok, aliasName: aliasName, giid: giid)
 		end 'array'
 
 		return try self.parseBuiltinContainerStaticCall(aliasTok, aliasName: aliasName, giid: giid)
@@ -78733,46 +79277,24 @@ export type Parser
 	// Every OTHER static `stdlib/Array.maxon` declares — `from(source)` — is an ordinary corpus call, and goes
 	// through the door every declared static takes. Its member may be a keyword (`from`), which is a name
 	// after the dot.
-	//
-	// ⚠ **THE REFUSAL BELOW NAMES WHAT THE COMPILER PROVIDES, AND KEEPING IT CURRENT IS NOT COSMETIC**: a
-	// reader trusts a refusal's NOUN over the source, and a stale one sends them looking for a mechanism that
-	// is one line away.
-	function parseArrayStaticCall(func IrFunction, aliasTok Token, aliasName ByteArray, giid GenericInstanceId, resultUsed bool) returns ValueId throws SourceParseError
+	function parseArrayStaticCall(func IrFunction, aliasTok Token, aliasName ByteArray, giid GenericInstanceId) returns ValueId throws SourceParseError
 		try self.consume(TokenKind.dot)
-
-		if self.arrayStaticIsACorpusCall(self.current(), aliasName: aliasName) 'aCorpusStatic'
-			return try self.parseStaticMemberCall(func, typeTok: aliasTok, aliasName: aliasName, resultUsed: resultUsed)
-		end 'aCorpusStatic'
 
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.between(aliasTok, last: methodTok)
 
-		if methodTok.value.equals(CreateMethod) 'createStatic'
-			try self.consumeEmptyArgList()
-			return try self.emitOwnedContainerCreate(giid, aliasTok: aliasTok, aliasName: aliasName, range: range)
-		end 'createStatic'
-
-		// `StringInitMethod` is the ONE constant over the spelling `init`, not a borrowed one: this file's
-		// method-name block states the rule (*"a method NAME is a token spelling, not a container's
-		// property"*) and `parseLiteralInitConstruction` already builds a USER type's `Type.init` callee
-		// from this very constant. A second `b"init"` here would be the one-fact-written-twice it exists to stop.
-		// (What its `String`-prefixed NAME now understates is a naming debt, not a second fact.)
-		if methodTok.value.equals(StringInitMethod) 'initStatic'
-			return try self.parseArrayInitStatic(func, giid: giid, methodTok: methodTok, range: range)
-		end 'initStatic'
-
-		throw SourceParseError.unsupported("`Array` static method '{String.from(methodTok.value)}' — the compiler provides two: `create()` and `init(managed)`", line: methodTok.line, column: methodTok.column)
+		match builtinArrayStaticKind(methodTok.value) 'kind'
+			builtinCreate then return try self.parseArrayCreateStatic(giid, aliasTok: aliasTok, aliasName: aliasName, range: range)
+			builtinInit then return try self.parseArrayInitStatic(func, giid: giid, methodTok: methodTok, range: range)
+			corpus or
+			none then panic("parseArrayStaticCall: '{String.from(methodTok.value)}' reached the compiler's own Array statics and is neither `create` nor `init` — `resolveStaticMember` answers every other member that way as a corpus call or a refusal")
+		end 'kind'
 	end 'parseArrayStaticCall'
 
-	// Is the member at the cursor an `Array` static the corpus declares and the compiler does NOT emit itself?
-	// `create` and `init` are declared too, and are the compiler's (`parseArrayStaticCall`).
-	function arrayStaticIsACorpusCall(memberTok Token, aliasName ByteArray) returns bool
-		if not tokenCanBeAName(memberTok) or memberTok.value.equals(CreateMethod) or memberTok.value.equals(StringInitMethod) 'notACorpusStatic'
-			return false
-		end 'notACorpusStatic'
-
-		return self.signatures.declaresCallee(qualifiedMethodName(self.signatures.denotedGenericBaseName(aliasName, readerFilePath: self.job.path), methodName: memberTok.value))
-	end 'arrayStaticIsACorpusCall'
+	function parseArrayCreateStatic(giid GenericInstanceId, aliasTok Token, aliasName ByteArray, range SourceRange) returns ValueId throws SourceParseError
+		try self.consumeEmptyArgList()
+		return try self.emitOwnedContainerCreate(giid, aliasTok: aliasTok, aliasName: aliasName, range: range)
+	end 'parseArrayCreateStatic'
 
 	// ⭐⭐ **`ByteArray.init(managed)` — ADOPT A BUFFER AS THE ARRAY AROUND IT.**
 	// `stdlib/Array.maxon:110-115` declares `init(managed ElementMemory) returns Self` with the body
@@ -78906,13 +79428,13 @@ export type Parser
 	// --- The `create()` static surface the compiler-owned containers SHARE (`Set` / `Map` / `List`) ---
 
 	// ⭐ **`IntSet.create()` / `StrMap.create()` / `PointList.create()` — ONE PARSE.** Every container whose
-	// whole static surface is `create()` is born here: consume `.<name>`, refuse anything but `create`, consume
-	// the empty argument list, gate the element/column types, emit the create, and TRACK THE RESULT as an owned
-	// temporary so an unbound one drops at statement end and a bound one transfers to its binding.
+	// whole static surface is `create()` is born here: consume `.create`, consume the empty argument list, gate
+	// the element/column types, emit the create, and TRACK THE RESULT as an owned temporary so an unbound one
+	// drops at statement end and a bound one transfers to its binding.
 	//
-	// ⚠ **THE `trackOwnedTemp` IS THE REASON THIS IS ONE FUNCTION AND NOT THREE.** It was written three times,
-	// and a fourth container whose copy omitted it would LEAK with no diagnostic anywhere — the record is
-	// created, nothing tracks it, and `genericInstanceBoxDropCallee` is never asked. The two things a container
+	// ⚠ **THE `trackOwnedTemp` IS THE REASON THIS IS ONE FUNCTION AND NOT THREE.** A container whose copy
+	// omitted it would LEAK with no diagnostic anywhere — the record is created, nothing tracks it, and
+	// `genericInstanceBoxDropCallee` is never asked. The two things a container
 	// genuinely does differently (the sentence its unknown static is refused with, and the gate/emit pair) are
 	// the two routers below; the skeleton around them cannot drift because there is one of it.
 	//
@@ -78922,16 +79444,13 @@ export type Parser
 	// ⚠ **`aliasName` IS THE CALLER'S AND IS NEVER RE-DERIVED FROM `aliasTok`.** The two doors
 	// spell the key differently — a top-level alias is its own token, a NESTED one is base-qualified
 	// (`Container.ElementArray`) — so `aliasTok.value` is the right key for one of them and the wrong one for
-	// the other. It is only ever read by the producer's `Array` arm today, which this router cannot reach, so
-	// a bare `aliasTok.value` here answered nothing and was merely a SECOND derivation of a name the caller
-	// had already computed correctly: the day a non-`Array` container carries an element-spelling stamp it
-	// would have started answering, wrongly, for every inner alias.
+	// the other.
 	function parseBuiltinContainerStaticCall(aliasTok Token, aliasName ByteArray, giid GenericInstanceId) returns ValueId throws SourceParseError
 		try self.consume(TokenKind.dot)
 		let methodTok = try self.consume(TokenKind.identifier)
 
 		if not methodTok.value.equals(CreateMethod) 'unknownStatic'
-			throw SourceParseError.unsupported(self.containerStaticSurfaceSentence(giid, method: methodTok.value), line: methodTok.line, column: methodTok.column)
+			panic("parseBuiltinContainerStaticCall: '{String.from(methodTok.value)}' passed `surfaceStaticOf` and is not `create` — the roster and this chain read one list")
 		end 'unknownStatic'
 
 		try self.consumeEmptyArgList()
@@ -79105,7 +79624,7 @@ export type Parser
 		// `containerStaticSurfaceSentence` owns, rather than reaching either router's panic, which is about a
 		// container they forgot rather than one that has no create.
 		if not self.signatures.instanceHasBuiltinCreate(giid) 'noCreate'
-			throw SourceParseError.unsupported(self.containerStaticSurfaceSentence(giid, method: CreateMethod), line: aliasTok.line, column: aliasTok.column)
+			throw missingStaticMember(self.containerStaticSurfaceSentence(giid, method: CreateMethod), anchor: aliasTok)
 		end 'noCreate'
 
 		try self.requireContainerColumnTypes(giid, aliasTok: aliasTok)
@@ -81300,17 +81819,13 @@ export type Parser
 		let typeName = try self.enclosingType.typeName() otherwise return candidates
 		let receiverPosition = try typeParamPositionIn(self.valueTypeParamId(receiver), declarationName: typeName, paramNames: self.enclosingTypeParams) otherwise return candidates
 
-		for i in 0 upto self.enclosingWhereConstraints.count() 'eachConstraint'
-			let constraint = try self.enclosingWhereConstraints.get(i) otherwise panic("findWitnessDispatchCandidates: enclosingWhereConstraints.get OOB at {i}")
+		let constraintsOfReceiver = try self.constraintsOnParameter(self.enclosingWhereConstraints, position: receiverPosition, methodName: methodName, errorTok: errorTok)
 
-			if constraint.typeParamIndex != receiverPosition 'otherParam'
-				continue
-			end 'otherParam'
-
-			view iface = try self.requireInterfaceForParse(constraint.interfaceName, methodTok: errorTok)
+		for constraint in constraintsOfReceiver 'eachConstraint'
+			let i = constraint.constraintIndex
 
 			if i as ParamCount >= self.declaringWitnessParamCount 'noTableToDispatchThrough'
-				if self.interfaceRequiresReceiverMethod(iface, methodName: methodName) 'dispatchHasNoTable'
+				if constraint.declaresInstance 'dispatchHasNoTable'
 					throw self.noWitnessTablesRefusal(methodName, arrival: NoWitnessTablesArrival.dispatchedOnATypeParameter if self.closureEnclosingFrames.isEmpty() else NoWitnessTablesArrival.dispatchedInAClosure, anchor: errorTok)
 				end 'dispatchHasNoTable'
 
@@ -81324,7 +81839,7 @@ export type Parser
 			// dispatched, and it buys the property this file spends most on: ONE candidate builder, reached
 			// identically by both receiver kinds (see `appendInterfaceDispatchCandidates`). Splitting the
 			// witness out to resolve it lazily would give the constraint route its own copy of the slot walk.
-			self.appendInterfaceDispatchCandidates(candidates, iface: iface, witness: self.witnessValueForConstraint(i as WitnessSlotIndex, anchor: errorTok), methodName: methodName)
+			self.appendInterfaceDispatchCandidates(candidates, iface: constraint.iface, witness: self.witnessValueForConstraint(i as WitnessSlotIndex, anchor: errorTok), methodName: methodName)
 		end 'eachConstraint'
 
 		return candidates
@@ -81450,18 +81965,6 @@ export type Parser
 
 		return named
 	end 'witnessSlotIndicesNamed'
-
-	function interfaceRequiresReceiverMethod(iface IrInterface, methodName ByteArray) returns bool
-		view slots = self.witnessSlotsOf(iface)
-
-		for slotIndex in self.witnessSlotIndicesNamed(slots, methodName: methodName) 'eachNamedSlot'
-			if not (try slots.get(slotIndex) otherwise panic("interfaceRequiresReceiverMethod: slots.get OOB at {slotIndex} below count {slots.count()}")).method.isStatic 'takesAReceiver'
-				return true
-			end 'takesAReceiver'
-		end 'eachNamedSlot'
-
-		return false
-	end 'interfaceRequiresReceiverMethod'
 
 	// ⭐ **EVERY REQUIREMENT OF `iface` (TRANSITIVELY) NAMED `methodName`, AS A DISPATCH TARGET THROUGH
 	// `witness`** — the per-interface half of the search above, shared by both receiver kinds so a candidate is
@@ -85434,22 +85937,19 @@ export type Parser
 	end 'namesMemberAt'
 
 	// ⭐⭐ **THE TOKEN SHAPE THAT ROUTES A PRIMITIVE-TYPE KEYWORD INTO A DOTTED EXPRESSION** —
-	// `<int|float|bool> . <member> (`, and nothing shorter. It is the ONE gate both expression doors ask
-	// (`parsePrimary`, `parseTryCallReceiver`), so the two positions cannot come to disagree about which
-	// keyword shapes open a dotted form — the asymmetry that left `try int.fromString(s)` reporting
-	// *"`try` must be applied to a call … (got 'int')"* while the same call in a `let` had no arm at all.
-	//
-	// ⚠ **IT IS THE WHOLE FOUR-TOKEN SHAPE ON PURPOSE, NOT JUST `<primitive> .`.** A primitive keyword has
-	// no OTHER dotted meaning to fall into — there is no `int.max` bound in this language, and the oracle
-	// says so too (`E3003 Undefined variable 'int'`) — so a two-token gate would route `int.max` to
-	// `parseTypeQualifiedBoundExpression` and answer it with a sized-type complaint in place of the
-	// `expectedExpression` it reports today. Claiming exactly the call shape moves no diagnostic.
+	// `<int|float|bool> . <member>`. Expression position (`parsePrimary`) claims the read, so `int.fromString`
+	// written without its call meets the refusals `parseDottedPrimary` gives every other base; a `try` target
+	// (`parseTryCallReceiver`) asks `primitiveStaticCallAt`, the same shape with its `(`.
 	//
 	// `byte` is deliberately NOT here: it is a plain identifier, so `byte.fromString(…)` is already
 	// routed by the identifier arms and joins the primitive reading further down, at
 	// `parseQualifiedCall`. See `namesAPrimitiveType` for why one door is not enough.
+	function primitiveStaticReadAt(index ElementIndex) returns bool
+		return keywordNamesAPrimitiveType(self.tokenAt(index)) and self.kindAt(index + 1) == TokenKind.dot and self.namesMemberAt(index + 2)
+	end 'primitiveStaticReadAt'
+
 	function primitiveStaticCallAt(index ElementIndex) returns bool
-		return keywordNamesAPrimitiveType(self.tokenAt(index)) and self.memberCallFollows(index + 1)
+		return self.primitiveStaticReadAt(index) and self.kindAt(index + 3) == TokenKind.leftParen
 	end 'primitiveStaticCallAt'
 
 	// **Is the `.member` at `index` a CALL — `. <member> (`?** The one question that tells a field-chain HOP
@@ -89008,7 +89508,7 @@ export type Parser
 	// first — a file-scope alias is the common case and `enclosingType` is empty at file scope, where the join
 	// would build a string for a key that cannot exist.
 	function typeSpellingAtDenotesBuffer(index ElementIndex) returns bool
-		return self.spellingDenotesBufferSurface(try self.identifierNameAt(index) otherwise return false)
+		return self.spellingDenotesBufferSurface(try self.identifierNameAt(index) otherwise return false, nameReader: self.job.path)
 	end 'typeSpellingAtDenotesBuffer'
 
 	// ⭐⭐ **WHERE DOES THE TYPE WRITTEN AT `index` NAME `__ManagedMemory`?** THE one reader every
@@ -90516,9 +91016,9 @@ export type Parser
 	// (spec-port `lazy-static`). The two shapes differ in what ELSE already claims them:
 	//
 	//   * `<Type>.<method>(` has NO other reading in a constant initializer — the scalar walk reads
-	//     `<identifier> .` as a ranged-type bound (`i64.min`) and fails at the `(` — so claiming it whole and
-	//     then EXPLAINING the refusal (`requireFactoryReturnsARecord`) is strictly better than any message
-	//     the bound reader could give.
+	//     `<identifier> .` as a sized-type bound (`i64.min`) or a member and fails at the `(` — so claiming
+	//     it whole and then EXPLAINING the refusal (`requireFactoryReturnsARecord`) is strictly better than
+	//     any message the bound reader could give.
 	//   * a bare `<name>(` this test declines is recorded as an unclaimed initializer call (`evalConstNamed`),
 	//     and `SemanticCheck.checkInitializerCalls` gives it a body call's verdict — for a declared callee
 	//     returning a SCALAR, E2045 *"Function calls are not allowed in global variable initializers"*, which
@@ -90531,7 +91031,7 @@ export type Parser
 	// the REFUSAL differs, which is the same split `requireFactoryReturnsARecord`'s sentence table already
 	// makes between the slot position and the argument position.
 	function atConstInitializerCall() returns bool
-		if not self.at(TokenKind.identifier) 'notANameAtAll'
+		if not self.at(TokenKind.identifier) and not keywordNamesAPrimitiveType(self.current()) 'notANameAtAll'
 			return false
 		end 'notANameAtAll'
 
@@ -90540,8 +91040,20 @@ export type Parser
 				return false
 			end 'notACall'
 
-			return self.signatures.declaresCallee(self.constQualifiedCalleeKey(self.current(), methodTok: self.tokenAt(self.pos + 2)))
+			let headTok = try self.typeBaseTokenAt(self.pos) otherwise panic("atConstInitializerCall: typeBaseTokenAt refused the identifier or primitive keyword the cursor sits on, and it refuses only a token that is no type name")
+
+			// A refused member is claimed so the consume raises the resolver's refusal (`int.nope()` is
+			// E2073) rather than the scalar walk's.
+			match self.constQualifiedCallee(headTok, baseIndex: self.pos) 'callee'
+				refused then return true
+				notAUserCallee then return false
+				key(callee) then return self.signatures.declaresCallee(callee)
+			end 'callee'
 		end 'qualified'
+
+		if not self.at(TokenKind.identifier) 'aKeywordNeedsADot'
+			return false
+		end 'aKeywordNeedsADot'
 
 		if self.peekKind() != TokenKind.leftParen 'notACall'
 			return false
@@ -90575,13 +91087,21 @@ export type Parser
 		return try self.enclosingType.typeName() otherwise EmptySourceText
 	end 'enclosingTypeNameOrEmpty'
 
-	function constQualifiedCalleeKey(headTok Token, methodTok Token) returns ByteArray
-		return match self.signatures.resolveFunctionName(joinQualifiedName(headTok.value, member: methodTok.value), readerFilePath: self.job.path) 'resolution'
-			declaration(name) gives name
-			undeclared gives qualifiedMethodName(headTok.value, methodName: methodTok.value)
-			ambiguous panic("constQualifiedCalleeKey: a qualified function name resolves to a declaration or to nothing — `resolveQualifiedFunctionName` has no ambiguous answer, and only a bare name can have several visible candidates")
-		end 'resolution'
-	end 'constQualifiedCalleeKey'
+	// A static named through a generic-instance alias is no user callee here: it is left to
+	// `evalConstContainerCreate`, which admits `create()` alone.
+	function constQualifiedCallee(headTok Token, baseIndex ElementIndex) returns ConstQualifiedCallee
+		let aliasName = self.genericAliasKeyFor(headTok.value)
+		let namesAnInstance = self.signatures.isAliasOfFormFor(aliasName, readerFilePath: self.typeNameReaderAt(baseIndex), wanted: FormAliasKind.generic)
+
+		return match self.resolveStaticMember(headTok, baseIndex: baseIndex, aliasName: aliasName) 'member'
+			minted(callee) gives ConstQualifiedCallee.key(callee.clone())
+			directory(callee) gives ConstQualifiedCallee.key(callee.clone())
+			named(callee, _) gives ConstQualifiedCallee.notAUserCallee if namesAnInstance else ConstQualifiedCallee.key(callee.clone())
+			surface gives ConstQualifiedCallee.notAUserCallee
+			requirement panic("constQualifiedCallee: a type parameter is never in scope in a module-scope initializer, so no requirement through one can reach the constant tier")
+			refused(refusal, _) gives ConstQualifiedCallee.refused(refusal.clone())
+		end 'member'
+	end 'constQualifiedCallee'
 
 	// ⭐⭐ **SEAT THIS THROWAWAY EVALUATOR IN THE BODY THE DECLARATION WAS WRITTEN IN.** The evaluator is
 	// a `Parser` built per DECL over a token range (`ProgramSignatures.walkConstInitializer`), so it starts at
@@ -91159,7 +91679,8 @@ export type Parser
 
 	// ⭐⭐ **READ THE NAME A TOP-LEVEL CALL IS MADE THROUGH, IN EITHER SPELLING** — the one reader, so the
 	// registry key, the diagnostic spelling and the blame anchor are derived together and cannot drift.
-	// `atConstInitializerCall` has already established that some file declares whichever name is here.
+	// `atConstInitializerCall` has already established that some file declares whichever name is here, or
+	// that the qualified name's resolution is a refusal, which is raised here.
 	//
 	// ⚠ **THE TWO SHAPES DIFFER IN EXACTLY ONE CHECK, AND IT IS THE ONE ONLY THE QUALIFIED FORM HAS A
 	// SUBJECT FOR**: a TYPE name, which must be visible here (the type-name verdict every other
@@ -91179,13 +91700,50 @@ export type Parser
 			end 'callee'
 		end 'aFreeFunction'
 
-		let typeHead = try self.consumeConstTypeNameHead(TypeNameHeadForm.reference)
-		let headTok = typeHead.token
+		let baseIndex = self.pos
+		let headTok = try self.consumeConstCalleeHead()
 		try self.consumeConstToken(TokenKind.dot)
 		let methodTok = try self.consumeConst(TokenKind.identifier)
 
-		return ConstInitializerCallee.create(self.constQualifiedCalleeKey(headTok, methodTok: methodTok), display: "{String.from(headTok.value)}.{String.from(methodTok.value)}", anchor: methodTok, callStart: startTok, contestedByABinding: false)
+		match self.constQualifiedCallee(headTok, baseIndex: baseIndex) 'callee'
+			refused(refusal) then throw ConstEvalError.defective(refusal.clone())
+			notAUserCallee then panic("consumeConstInitializerCallee: `atConstInitializerCall` answers false for a compiler-owned surface, so no such call is consumed here")
+			key(callee) then return ConstInitializerCallee.create(callee.clone(), display: self.writtenSpellingOfMemberAt(baseIndex + TokensPerQualifierSegment), anchor: methodTok, callStart: startTok, contestedByABinding: false)
+		end 'callee'
 	end 'consumeConstInitializerCallee'
+
+	function writtenSpellingOfMemberAt(memberIndex ElementIndex) returns String
+		let headIndex = self.writtenChainHeadIndex((memberIndex - TokensPerQualifierSegment) as ElementIndex)
+		return String.from(self.assembleDottedChainAt(headIndex, dots: ((memberIndex - headIndex) / TokensPerQualifierSegment) as ElementIndex))
+	end 'writtenSpellingOfMemberAt'
+
+	function writtenChainHeadIndex(baseIndex ElementIndex) returns ElementIndex
+		var head = baseIndex
+
+		if not self.qualifiedTypeBaseIsAt(baseIndex) 'aPlainBase'
+			return head
+		end 'aPlainBase'
+
+		while head >= TokensPerQualifierSegment and self.kindAt(head - 1) == TokenKind.dot and self.kindAt(head - TokensPerQualifierSegment) == TokenKind.identifier 'eachQualifier'
+			head = (head - TokensPerQualifierSegment) as ElementIndex
+		end 'eachQualifier'
+
+		return head
+	end 'writtenChainHeadIndex'
+
+	function consumeConstCalleeHead() returns Token throws ConstEvalError
+		let headTok = try self.typeBaseTokenAt(self.pos) otherwise (err) 'notAName'
+			throw ConstEvalError.defective(err)
+		end 'notAName'
+
+		if keywordNamesAPrimitiveType(self.current()) 'aPrimitiveKeyword'
+			self.advance()
+			return headTok
+		end 'aPrimitiveKeyword'
+
+		_ = try self.consumeConstTypeNameHead(TypeNameHeadForm.reference)
+		return headTok
+	end 'consumeConstCalleeHead'
 
 	// ⭐⭐ **A TOP-LEVEL FACTORY MUST HAND BACK A RECORD, WHEREVER THE CALL WAS WRITTEN — ONE MATCH, TWO
 	// SENTENCE TABLES.** A `.data` slot holds either a baked VALUE or a POINTER filled before `main`, and only
@@ -91915,10 +92473,17 @@ export type Parser
 	// invisible from here, or not returning `Self` — and so are arguments, which no `containerCreate`
 	// outcome carries. See `requireDeclaredGenericGlobalCreate`.
 	function evalConstContainerCreate() returns ConstFoldedValue throws ConstEvalError
+		let baseIndex = self.pos
 		let aliasHead = try self.consumeConstTypeNameHead(TypeNameHeadForm.reference)
 		let aliasTok = aliasHead.token
 		try self.consumeConstToken(TokenKind.dot)
 		let methodTok = try self.consumeConst(TokenKind.identifier)
+
+		match self.constQualifiedCallee(aliasTok, baseIndex: baseIndex) 'member'
+			refused(refusal) then throw ConstEvalError.defective(refusal.clone())
+			key or
+			notAUserCallee then break
+		end 'member'
 
 		if not methodTok.value.equals(CreateMethod) 'notTheFactory'
 			throw ConstEvalError.defective(SourceParseError.unsupported("`{String.from(aliasTok.value)}.{String.from(methodTok.value)}` as a top-level initializer — a global container is declared with `{String.from(CreateMethod)}()`, the one static a constant initializer can name; every other method needs the program to be running", line: methodTok.line, column: methodTok.column))
@@ -92993,10 +93558,38 @@ export type Parser
 		// `lib.inner.pick()` — as `i64.min` and refuses it with
 		// **E2010 `Expected ''min' or 'max'' but got 'create'`**, a message about a grammar the author was
 		// not writing in. The bound's base is a fixed roster of ten spellings (`sizedTypeBound`), so asking
-		// FIRST whether the head is one of them costs one comparison and makes the misreading unreachable:
-		// everything else gets a sentence naming the real gap, which is that a constant initializer cannot
-		// reach a member of a user type.
-		if self.peekKind() == TokenKind.dot and (isSizedTypeName(tok.value) or self.signatures.writtenNameMeansARangedAlias(tok.value, readerFilePath: self.job.path)) 'qualifiedBound'
+		// FIRST whether the head is one of them costs one comparison and makes the misreading unreachable.
+		// A method or requirement read without its call is refused as one, a ranged alias's member as one it
+		// lacks, and everything else gets a sentence naming the real gap, which is that a constant
+		// initializer cannot reach a member of a user type.
+		let memberIndex = self.pos + TokensPerQualifierSegment
+
+		if self.peekKind() == TokenKind.dot 'aDottedName'
+			let baseTok = try self.typeBaseTokenAt(self.pos) otherwise (err) 'badBase'
+				throw ConstEvalError.defective(err)
+			end 'badBase'
+
+			if self.kindAt(memberIndex + 1) != TokenKind.leftParen 'aReadWithoutACall'
+				let verdict = self.staticRosterVerdictFor(baseTok, memberIndex: memberIndex)
+
+				match verdict 'method'
+					declaredMethod or
+					declaredInstanceMethod or
+					hiddenMethod or
+					refused or
+					requirement then throw ConstEvalError.defective(self.staticRosterRefusal(verdict, baseTok: baseTok, memberTok: self.tokenAt(memberIndex), written: self.writtenSpellingOfMemberAt(memberIndex), use: StaticMemberUse.read))
+					notADeclaredTypeMember or
+					undeclaredMember or
+					hidden then break
+				end 'method'
+			end 'aReadWithoutACall'
+
+			if self.signatures.writtenNameMeansARangedAlias(tok.value, readerFilePath: self.job.path) 'aRangedAliasBase'
+				throw ConstEvalError.defective(self.nonBoundMemberRefusal(baseTok, baseIndex: self.pos))
+			end 'aRangedAliasBase'
+		end 'aDottedName'
+
+		if self.peekKind() == TokenKind.dot and isSizedTypeName(tok.value) 'qualifiedBound'
 			let bound = try self.parseTypeQualifiedBound(false) otherwise (err) 'badBound'
 				throw ConstEvalError.defective(err)
 			end 'badBound'
@@ -93009,7 +93602,7 @@ export type Parser
 		end 'qualifiedBound'
 
 		if self.peekKind() == TokenKind.dot 'dottedNonBound'
-			let memberTok = self.tokenAt(self.pos + 2)
+			let memberTok = self.tokenAt(memberIndex)
 
 			// ⭐⭐ **A PAYLOAD-FREE ENUM CASE *IS* A CONSTANT — its value is its TAG, a number fixed at
 			// declaration.** `let JumpTableBaseReg = X64Register.r10` (`Targets/X64/X64Backend.maxon:1135`)
@@ -98267,7 +98860,17 @@ export type Parser
 		end 'unionConstruct'
 
 		let aliasName = self.genericAliasKeyFor(typeTok.value)
-		try self.requireAsyncSpawnTargetIsLinkable(typeTok, aliasName: aliasName)
+
+		let resolved = self.resolveStaticMember(typeTok, baseIndex: baseIndex, aliasName: aliasName)
+
+		match resolved 'member'
+			surface then throw self.asyncOwnedSurfaceRefusal(typeTok)
+			refused(refusal, _) then throw refusal
+			requirement then throw staticRequirementCalled(self.writtenSpellingOfMemberAt(self.pos + 1), typeTok: typeTok, memberTok: self.tokenAt(self.pos + 1))
+			minted or
+			named or
+			directory then break
+		end 'member'
 
 		try self.consume(TokenKind.dot)
 
@@ -98276,9 +98879,13 @@ export type Parser
 		let memberTok = self.current()
 		self.advance()
 
-		match try self.qualifiedStaticCallee(typeTok, memberTok: memberTok, aliasName: aliasName) 'callee'
+		match resolved 'callee'
 			minted(mintedCallee) then return try self.declaredStaticAsyncSpawnCallee(mintedCallee, aliasName: aliasName, typeTok: typeTok, memberTok: memberTok, mint: CalleeMint.primitiveStatic)
-			declared(callee) then return try self.declaredStaticAsyncSpawnCallee(callee, aliasName: aliasName, typeTok: typeTok, memberTok: memberTok, mint: self.staticCallHeadMint(baseIndex, typeTok: typeTok))
+			named or
+			directory then return try self.declaredStaticAsyncSpawnCallee(resolved.calleeToCall(), aliasName: aliasName, typeTok: typeTok, memberTok: memberTok, mint: self.staticCallHeadMint(baseIndex, typeTok: typeTok))
+			surface or
+			requirement or
+			refused then panic("qualifiedAsyncSpawnCallee: a surface, a requirement and a refusal were thrown above")
 		end 'callee'
 	end 'qualifiedAsyncSpawnCallee'
 
@@ -98306,22 +98913,9 @@ export type Parser
 	// `__managed_create`, an `Array` create op) rather than to a function the program declares, while a spawn
 	// hands the scheduler the ADDRESS of a linked function. The roster is `compilerOwnedStaticSurface`'s, so
 	// a surface added there is refused here without this reader learning it exists.
-	function requireAsyncSpawnTargetIsLinkable(typeTok Token, aliasName ByteArray) throws SourceParseError
-		try self.requireTypeSpellingIsNotRawBuffer(typeTok)
-
-		match self.compilerOwnedStaticSurface(typeTok.value, aliasName: aliasName) 'surface'
-			none then return
-			managedFile or
-			managedDirectory or
-			managedSocket or
-			managedPages or
-			managedHandle or
-			managedPin or
-			managedMemory or
-			sharedValue or
-			containerAlias then throw SourceParseError.unsupported("`async {String.from(typeTok.value)}.…` — a static on this type is served by a runtime entry the compiler emits rather than by a function the program declares, and a spawn hands the scheduler the ADDRESS of a linked function. Call it directly, or spawn a function of your own that wraps it", line: typeTok.line, column: typeTok.column)
-		end 'surface'
-	end 'requireAsyncSpawnTargetIsLinkable'
+	function asyncOwnedSurfaceRefusal(typeTok Token) returns SourceParseError
+		return SourceParseError.unsupported("`async {String.from(typeTok.value)}.…` — a static on this type is served by a runtime entry the compiler emits rather than by a function the program declares, and a spawn hands the scheduler the ADDRESS of a linked function. Call it directly, or spawn a function of your own that wraps it", line: typeTok.line, column: typeTok.column)
+	end 'asyncOwnedSurfaceRefusal'
 
 	// ⛔ **A GENERIC-INSTANCE CONSTRUCTOR (`StrBox.create(s)`) IS REFUSED.** An ordinary call retypes its
 	// result to the instance the alias fixes (`retypeGenericAliasConstructorResult`); a spawn's result is the
@@ -102278,7 +102872,8 @@ export type Parser
 	end 'staticRosterVerdictAt'
 
 	// ⭐ **THE TOKEN SHAPE OF A STORE TO A STATIC MEMBER THIS FILE MAY NOT SEE** — `Counter.hits = 9` where
-	// `hits` is declared and hidden. The refusing twin of `staticMemberAssignsAt`, and its own predicate
+	// `hits` is declared and hidden — or to a method or requirement (`Ops.twice = f`, E2013). The refusing
+	// twin of `staticMemberAssignsAt`, and its own predicate
 	// rather than a widening of that one, whose base half the CALL door shares (`staticMemberCallsAt`): what
 	// is refused here is the STORE.
 	//
@@ -102289,8 +102884,8 @@ export type Parser
 	// perfectly visible.
 	//
 	// ⛔ **IT DELIBERATELY DOES NOT CLAIM `undeclaredMember`, WHICH THE READ DOOR DOES.** The two positions
-	// fall through to different places: a read's last resort is the SIZED-BOUND grammar, whose refusal
-	// describes a program the author is not writing, while a store's is the field arm — and `Gate.n = 5`
+	// fall through to different places: a read is refused as a missing member, while a store's last resort
+	// is the field arm — and `Gate.n = 5`
 	// against an INSTANCE FIELD is exactly that, an assignment through a base binding no value.
 	// `self-type-member-expression`'s two `error.store-through-…` cases pin that sentence, and it is the
 	// right one: the member is not missing, it needs a receiver.
@@ -102305,7 +102900,12 @@ export type Parser
 		return match self.staticRosterVerdictAt(index) 'roster'
 			notADeclaredTypeMember or
 			undeclaredMember gives false
-			hidden gives true
+			hidden or
+			declaredMethod or
+			declaredInstanceMethod or
+			hiddenMethod or
+			refused or
+			requirement gives true
 		end 'roster'
 	end 'staticStoreRefusedAt'
 
@@ -102313,11 +102913,11 @@ export type Parser
 	// `staticRosterVerdictFor` rather than `staticRosterVerdictAt`: `staticStoreRefusedAt` admitted the base
 	// rules one predicate ago off this same cursor, so re-asking them would be a second answer to a question
 	// already settled.
-	function refuseStaticMemberHiddenStore() throws SourceParseError
-		let baseTok = try self.typeBaseTokenAt(self.pos) otherwise panic("refuseStaticMemberHiddenStore: no type base at this statement — `staticStoreRefusedAt` read one here one predicate ago, off the same cursor")
+	function refuseStaticMemberStore() throws SourceParseError
+		let baseTok = try self.typeBaseTokenAt(self.pos) otherwise panic("refuseStaticMemberStore: no type base at this statement — `staticStoreRefusedAt` read one here one predicate ago, off the same cursor")
 		let memberIndex = self.pos + TokensPerQualifierSegment
-		try self.throwStaticRosterRefusal(self.staticRosterVerdictFor(baseTok, memberIndex: memberIndex), baseTok: baseTok, memberTok: self.tokenAt(memberIndex))
-	end 'refuseStaticMemberHiddenStore'
+		throw self.staticRosterRefusal(self.staticRosterVerdictFor(baseTok, memberIndex: memberIndex), baseTok: baseTok, memberTok: self.tokenAt(memberIndex), written: self.writtenSpellingOfMemberAt(memberIndex), use: StaticMemberUse.store)
+	end 'refuseStaticMemberStore'
 
 	// **The token shape of an EXPLICIT self-field store** — `self . <field> =`.
 	//
@@ -103335,6 +103935,17 @@ export type Parser
 		end 'managed'
 	end 'methodCallsAt'
 
+	function namesTheStatementOnlyOwnedStatic(index ElementIndex) returns bool
+		if not self.tokenAt(index).value.equals(compilerOwnedSurfaceTypeName(HandleSurface.file)) 'notTheFileSurface'
+			return false
+		end 'notTheFileSurface'
+
+		return match compilerOwnedStaticNamed(HandleSurface.file, member: self.tokenAt(index + TokensPerQualifierSegment).value) 'lookup'
+			found(kind) gives kind == CompilerOwnedStatic.fileStatFree
+			notAStatic gives false
+		end 'lookup'
+	end 'namesTheStatementOnlyOwnedStatic'
+
 	// **The token shape of A STATIC CALLED ON A LINE OF ITS OWN** — `<type> . <member> (`, the qualified call
 	// shape that IS a statement. Four families reach it: `__ManagedFile.statFree(buffer)`, the `__Builtins`
 	// intrinsics, the `__DebugStream` members, and any member written on a base a `type` declaration names —
@@ -103390,7 +104001,7 @@ export type Parser
 			return false
 		end 'notAQualifiedCall'
 
-		if self.tokenAt(index).value.equals(ManagedFileTypeName) and self.tokenAt(index + 2).value.equals(ManagedFileStatFreeMethod) 'statFree'
+		if self.namesTheStatementOnlyOwnedStatic(index) 'statFree'
 			return true
 		end 'statFree'
 
@@ -103410,8 +104021,8 @@ export type Parser
 		// perfectly — a call accepted at one door and refused at the other, which is the exact failure this
 		// predicate's header names. `staticCallClaimsBase` asks the same key for the same reason.
 		let baseTok = try self.typeBaseTokenAt(index) otherwise panic("qualifiedStaticCallsAt: typeBaseTokenAt refused the identifier at {index}, and it refuses only a base that is not a name")
-		let baseName = self.signatures.denotedGenericBaseName(self.genericAliasKeyFor(baseTok.value), readerFilePath: self.job.path)
-		let callee = qualifiedMethodName(baseName, methodName: self.tokenAt(index + 2).value)
+		let aliasName = self.genericAliasKeyFor(baseTok.value)
+		let callee = self.denotedStaticCallee(aliasName, member: self.tokenAt(index + 2).value, nameReader: self.job.path)
 
 		if isBuiltinsIntrinsicCallee(callee) 'builtinsIntrinsic'
 			return true
@@ -103472,7 +104083,22 @@ export type Parser
 			return true
 		end 'aRegistryCall'
 
-		return self.signatures.containsStructFor(baseName, readerFilePath: self.typeNameReaderAt(index))
+		let resolved = self.resolveStaticMember(baseTok, baseIndex: index, aliasName: aliasName)
+
+		// A refusal or a requirement is claimed so the statement earns that diagnostic rather than a shape
+		// one; a directory function is left to the `namespaceQualifiedCallStmt` arm.
+		let claimed = match resolved 'member'
+			requirement or
+			refused gives true
+			directory gives false
+			surface or
+			minted or
+			named gives self.signatures.containsStructFor(self.signatures.denotedGenericBaseName(aliasName, readerFilePath: self.job.path), readerFilePath: self.typeNameReaderAt(index))
+		end 'member'
+
+		self.handedResolution = HandedResolution.handed(index, resolution: resolved.clone()) if claimed else NothingHanded
+
+		return claimed
 	end 'qualifiedStaticCallsAt'
 
 	// The kind of the token ONE past the cursor. The parser's two-token lookahead:
@@ -103592,12 +104218,9 @@ export type Parser
 		// keyword's own, so a diagnostic still points at what the author wrote; `identifier`-kinded for the
 		// reason the `Self` rewrite below is, that the token is a NAME now.
 		//
-		// ⚠ **NOTHING ROUTES A NON-CALL PRIMITIVE BASE HERE, AND THAT IS DELIBERATE.** The two doors that
-		// send a primitive keyword into a dotted expression (`parsePrimary`, `parseTryCallReceiver`) both
-		// gate on the WHOLE `<primitive> . <member> (` shape, so `int.max` never reaches this reader and
-		// reports `expectedExpression`. The oracle has no such form either
-		// (measured: `int.max` is `E3003 Undefined variable 'int'`), so admitting it here would be inventing
-		// a bound expression, not restoring one.
+		// ⚠ **A NON-CALL PRIMITIVE BASE ARRIVES TOO, AND IT READS NO BOUND.** Expression position
+		// (`parsePrimary`) routes `<primitive> . <member>`, so `int.max` reaches this reader and is refused as
+		// a member `int` lacks (E2073): the language has no `int.max` bound.
 		if keywordNamesAPrimitiveType(tok) 'primitiveTypeName'
 			return Token.create(TokenKind.identifier, line: tok.line, column: tok.column, value: tok.value, startByte: tok.startByte, endByte: tok.endByte)
 		end 'primitiveTypeName'

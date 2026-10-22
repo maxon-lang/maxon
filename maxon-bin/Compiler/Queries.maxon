@@ -3357,9 +3357,6 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		// a top-level initializer's call and a hidden static member.
 		symbolNotVisible(kind, symbol, tier, line, column) gives hiddenSymbolDiagnostic(kind, noun: symbol, tier: tier, line: line, column: column, filePath: path)
 
-		// The wording rhymes with the FIELD refusal one tier down, because the author's mistake is the
-		// same one about a different roster.
-		unknownStaticMember(typeName, member, line, column) gives Diagnostic.create(ErrorCode.unknownStaticMember, message: "type '{typeName}' has no static member named '{member}'", line: line, column: column, filePath: path)
 		missingReturn(name, line, column) gives Diagnostic.create(ErrorCode.missingReturn, message: "missing return statement: '{name}'", line: line, column: column, filePath: path)
 		returnValueFromVoid(name, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "type mismatch: '{name}' declares no return type, so it cannot return a value", line: line, column: column, filePath: path)
 		returnWithoutValue(name, line, column) gives Diagnostic.create(ErrorCode.missingReturn, message: "missing return value: '{name}' declares a return type, so every 'return' must carry a value", line: line, column: column, filePath: path)
@@ -3399,7 +3396,7 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		// author has to edit.
 		ambiguousWitnessDispatch(method, provider, argCount, first, second, line, column) gives Diagnostic.create(ErrorCode.semanticAmbiguousWitnessDispatch, message: "'{method}' taking {argCount} argument(s) is provided by both {first} and {second} through {provider} — a witness dispatch binds ONE table slot, and these are two, so there is nothing to choose by. Rename one requirement, or drop one of the constraints", line: line, column: column, filePath: path)
 		noWitnessRequirementOfArity(method, provider, argCount, available, line, column) gives Diagnostic.create(ErrorCode.semanticNoWitnessRequirementForArgCount, message: "no requirement named '{method}' provided by {provider} takes {argCount} argument(s); they provide {available}", line: line, column: column, filePath: path)
-		staticRequirementNotDispatchable(requirement, receiver, line, column) gives Diagnostic.create(ErrorCode.semanticStaticRequirementNotDispatchable, message: "'{requirement}' is a `static` requirement, and a `static` member has no receiver to dispatch on — so a value of {receiver} cannot reach it. Call a `static` member on a concrete type", line: line, column: column, filePath: path)
+		staticRequirementNotDispatchable(requirement, receiver, line, column) gives Diagnostic.create(ErrorCode.semanticStaticRequirementNotDispatchable, message: staticRequirementMessage(requirement, reach: StaticRequirementReach.valueOf(receiver)), line: line, column: column, filePath: path)
 		operandTypeMismatch(op, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "operator '{op}' requires both operands to be the same type (both bool or both int)", line: line, column: column, filePath: path)
 		operandAliasMismatch(op, left, right, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "operator '{op}' requires both operands to be the same type: '{left}' and '{right}' are different typealiases — cast one side with 'as'", line: line, column: column, filePath: path)
 		undefinedOperatorForType(op, typeName, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "operator '{op}' is not defined for type '{typeName}'", line: line, column: column, filePath: path)

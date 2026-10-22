@@ -176,5 +176,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:27: Unsupported: `__ManagedMemory` static 'createCursor' — the statics are `create(count, elementSize)` and `fromCString(cstr)`; `createCursor` is an INSTANCE method, so write it on a receiver
+error E2073: <fragment>:3:27: `__ManagedMemory` static 'createCursor' — the statics are `create(count, elementSize)` and `fromCString(cstr)`; `createCursor` is an INSTANCE method, so write it on a receiver
 ```

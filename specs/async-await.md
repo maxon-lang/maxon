@@ -4104,12 +4104,26 @@ declared function whose address the scheduler could be handed. The roster (`__Ma
 because it shares one reason.
 ```maxon
 function main() returns ExitCode
-	let p = async __ManagedFile.readAll("x")
+	let p = async __ManagedFile.openRead("x")
 	return await p
 end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:3:16: Unsupported: `async __ManagedFile.…` — a static on this type is served by a runtime entry the compiler emits rather than by a function the program declares, and a spawn hands the scheduler the ADDRESS of a linked function. Call it directly, or spawn a function of your own that wraps it
+```
+
+<!-- test: async-await.error.qualified-spawn-compiler-owned-static-it-lacks -->
+<!-- tier: stdlib -->
+The spawn reads the member through the one resolution a call reads it through, so a static the surface does
+not have is refused for that, before the spawn is.
+```maxon
+function main() returns ExitCode
+	let p = async __ManagedFile.readAll("x")
+	return await p
+end 'main'
+```
+```maxoncstderr
+error E2073: <fragment>:3:30: `__ManagedFile` static 'readAll' — the type has exactly these ten: `openRead`, `openWrite`, `openWriteExecutable`, `openCreateNew`, `exists`, `delete`, `rename`, `stat`, `statField` and `statFree`
 ```
 
 <!-- test: async-await.error.qualified-spawn-container-alias-static -->

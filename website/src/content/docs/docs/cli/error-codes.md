@@ -73,7 +73,7 @@ A declaration cycle: something is defined in terms of itself. Broader than 'impo
 
 ### E2013 — `assignToImmutable`
 
-An assignment targets a binding declared 'let', a loop counter, or a field of a `let` tuple. Declare it 'var', or do not reassign it.
+An assignment targets a binding declared 'let', a loop counter, or a field of a `let` tuple. Declare it 'var', or do not reassign it. An assignment to a method, a requirement or a static the compiler provides (`Ops.twice = f`) is refused here too: a method is not a binding, and only a binding is assigned.
 
 ### E2014 — `duplicateParameter`
 
@@ -217,7 +217,7 @@ A '\_\_Builtins.ucd\*' load names a compiler-owned Unicode table its intrinsic d
 
 ### E2073 — `unknownStaticMember`
 
-A qualified read names a member the type does not declare -- `Config.MIN_SIZE` where `Config` declares only `MAX_SIZE`. The base is a type the AUTHOR declared, so the type has a static roster to answer from and the honest sentence is about that roster. Blamed at the MEMBER token, which is the name that is missing. Without it the form falls to its last-resort reading as a SIZED NUMERIC BOUND (`u64.max`) and is refused E2010 -- "Expected 'min or max' but got 'MIN\_SIZE'", a demand the author never made, in words for a base this program does not have; and for `Box.min`, whose member spells a bound, on the BASE token, blaming a name that resolves perfectly well. THE GATE IS "the base names a declared STRUCT", deliberately not "the base is not a sized type name". A ranged ALIAS base keeps the bound reading -- specs/type-name-collision.md pins `Status.big` against an alias as E2010 -- and an UNDECLARED base has no roster, so the noun "type" would be false of it. Both still report as a malformed bound, which is a true statement about each; narrowing them further needs a base-kind-aware noun. The runnable oracle answers the same programs E3018 "Type 'Config' has no static member 'MIN\_SIZE'" -- one subject, each compiler in its own house spelling.
+A qualified name reads or calls a member its base does not have: `Config.MIN_SIZE` where `Config` declares only `MAX_SIZE`, `int.nope()`, or `Status.big` where `Status` is a ranged alias. The base may be a declared type, a primitive, a compiler-owned type (`String`, `__ManagedFile`), a container or `SharedValue` alias, a ranged, function or tuple alias, an interface, a type parameter or a directory, and the message says which; where the base has a fixed set of statics, it lists them. Reported at the member. Only a sized type (`u8` to `u64`, `i8` to `i64`, `f32`, `f64`) has `.min` and `.max`, and a ranged alias declares no members. Correct the member's name, or reach it through what declares it: a static of a generic type through the type itself (`Box.make`, not `IntBox.make`), a static requirement through a concrete type that implements the interface, and an instance requirement on a value.
 
 ### E2074 — `nestedProjectFile`
 
@@ -234,6 +234,10 @@ A capability qualifier is written where no boundary takes one. `keep` and `sole`
 ### E2077 — `viewMisplaced`
 
 `view` declares something other than a local binding: a field, a module-level binding, an extension member, or an `@heap` binding. A `view` is a read-only name over data something else owns, valid only inside the function that binds it. Use `let` or `var`.
+
+### E2078 — `methodAsFunctionValue`
+
+A method is named without its call where a value is wanted: `apply(Ops.twice, x: 21)`. `Type.method` names a method -- a static one, an instance one read through its type, a static the compiler provides (`int.fromString`, `__ManagedFile.openRead`), or a requirement read through a type parameter (`T.make`) -- and a method is not a function value. Only a free function's name or a closure is. Wrap the call in a closure: `function(n) gives Ops.twice(n)`. An instance method is called on a value, `function(value) gives value.size()`, and a requirement on a concrete type that implements its interface.
 
 ## Semantic Analysis (E3xxx)
 
@@ -552,7 +556,7 @@ A method call on a constrained type parameter names a method that the parameter'
 
 ### E3116 — `semanticStaticRequirementNotDispatchable`
 
-A method call on a VALUE of a constrained type parameter names a requirement its `where` constraints declare `static`. A `static` member has no receiver, so there is nothing for the call to dispatch on; a `static` member is called on a concrete type, which is exactly what a `where` constraint does not name. The resolver matched a requirement by NAME alone, so it bound the static's witness slot and prepended a receiver the callee has no parameter for. That is an ABI disagreement inside a slot, not a near-miss: x64 compiled clean and answered correctly only because the spurious receiver landed in an argument register a zero-parameter callee never reads, while wasm's `call_indirect` -- which checks the declared functype against the target's own -- trapped `indirect call type mismatch` at runtime. Neither neighbouring message could carry it. E3036 states an argument COUNT, which is what the same call shape gets on a CONCRETE receiver and is about the wrong thing; E2015's "no `where` constraint declares a method" would be FALSE, since the constraint declares it and only its receiver kind is wrong. The OPERATOR form of the same hole takes E3005 instead, and deliberately: there the question is "is this requirement the `Equatable`/`Comparable` protocol?", a static one is not, and the author's cure is the sentence E3005 already prints for a throwing or wrong-arity look-alike.
+A call reaches a requirement its `where` constraints declare `static` through a constrained type parameter: as a method call on a VALUE of that parameter, or through the parameter itself, `T.make()`, written as an expression or as a statement. A `static` member has no receiver, so there is nothing for the call to dispatch on; a `static` member is called on a concrete type, which is exactly what a `where` constraint does not name. Neither neighbouring message could carry it. E3036 states an argument COUNT, which is what the same call shape gets on a CONCRETE receiver and is about the wrong thing; E2015's "no `where` constraint declares a method" would be FALSE, since the constraint declares it and only its receiver kind is wrong. The OPERATOR form of the same hole takes E3005 instead, and deliberately: there the question is "is this requirement the `Equatable`/`Comparable` protocol?", a static one is not, and the author's cure is the sentence E3005 already prints for a throwing or wrong-arity look-alike.
 
 ### E3117 — `rawByteFillNarrowElement`
 
@@ -833,7 +837,7 @@ A field of a generic type holds that same type again over a type built from its 
 
 ### E3185 — `rawSurfaceOutsideLibraryTier`
 
-A source file outside `stdlib/` and `runtime/` reached the raw memory surface: a `__Builtins` call, a `.managed` field, a `__ManagedMemory` or `__ManagedMemoryCursor` type or method, `.cstr()` or the `cstring` type, a promise's `.inner` handle, or a raw handle type (`__ManagedFile`, `__ManagedDirectory`, `__ManagedSocket`, `__ManagedPages`, `__ManagedHandle`, `__ManagedPin`). These read and write memory with no bounds or ownership check, so only the library tiers may name them; a program reaches the same facilities through the standard library's checked APIs, which the message names where there is one (`Process.id()`, `HeapStats.slab()`, `Scheduler.counters()`, `File`, `isComplete()`). Reported once per file, at its first raw use. `__Raw` is narrower still: E3152.
+A source file outside `stdlib/` and `runtime/` reached the raw memory surface: a `__Builtins` call, a `.managed` field, a `__ManagedMemory` or `__ManagedMemoryCursor` type or method, `.cstr()` or the `cstring` type, a promise's `.inner` handle, or a raw handle type (`__ManagedFile`, `__ManagedDirectory`, `__ManagedSocket`, `__ManagedPages`, `__ManagedHandle`, `__ManagedPin`). These read and write memory with no bounds or ownership check, so only the library tiers may name them; a program reaches the same facilities through the standard library's checked APIs, which the message names where there is one (`Process.id()`, `HeapStats.slab()`, `Scheduler.counters()`, `File`, `isComplete()`). A raw type named as the base of a static call, a static read, an `async` spawn or a module-level initializer is such a use. Reported once per file, at its first raw use. `__Raw` is narrower still: E3152.
 
 ### E3186 — `argumentOverlapsWrittenParameter`
 

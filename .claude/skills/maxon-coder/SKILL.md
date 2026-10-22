@@ -81,8 +81,8 @@ After each edit:
   parameters and the same defaults. Give the short form its own overload that calls the long one, and add
   the new parameter LAST — a second function-typed parameter at argument 0 withholds closure parameter
   inference from every caller.
-- **A static method is not a function value.** `apply(Ops.twice, …)` fails with a misleading
-  `E2010: Expected 'min or max'`; pass `function(n) gives Ops.twice(n)`.
+- **A method is not a function value.** `apply(Ops.twice, …)` is E2078, for a static or an instance
+  method; pass `function(n) gives Ops.twice(n)`.
 - **An unmarked field is private to its type (E3014); an unmarked method is private to its file (E3008).**
   An `export` no other file uses is E3092, and an exported signature naming a file-private typealias is
   E3167 — so a one-file program marks nothing `export`, and files sharing one directory use `module`.

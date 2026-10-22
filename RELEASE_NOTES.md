@@ -34,6 +34,24 @@ release's version as its heading when the release is cut.
 - A static called on a bare generic name whose result is written over a type parameter no argument fixes
   (`Holder.make()` declared `returns T`) is E3162.
   Fix: call it through a typealias that names the instance (`typealias IntHolder = Holder with Integer`).
+- `Type.method` written without its call — a static or instance method, a static the compiler provides
+  (`int.fromString`), or a requirement through a type parameter — is E2078, where it was E2010, E2004 or,
+  at module scope, E2015.
+  Fix: pass a closure that calls it, `function(n) gives Ops.twice(n)`.
+- A static a primitive (`int.nope()`, `byte.nope()`), a compiler-owned type (`String`, `__ManagedFile`) or a
+  builtin container alias does not have is E2073, reported at the member, where it was E2015, or E3004 for
+  `byte`.
+  Fix: call a static the type provides; expect E2073 wherever a script or test matches the code.
+- A member read through a ranged, function or tuple alias, an interface, a type parameter or a directory
+  that does not declare it is E2073, where it was E2010 (`Expected 'min or max'`).
+  Fix: read the member through the type that declares it; only a sized type has `.min` and `.max`.
+- A `static` requirement called through a type parameter (`T.make()`) is E3116, where it was E3004.
+  Fix: call the static on a concrete type that implements the interface.
+- Assigning to a method (`Ops.twice = f`) is E2013, where it was E2004.
+  Fix: store the function value in a `var` or a `static var`.
+- A primitive's static called in a module-level initializer (`let n = int.fromString("5")`) is E2015, where
+  it was E2004.
+  Fix: compute the value in a function, or write it as a literal.
 
 ## 0.5.0 — 2026-10-08
 

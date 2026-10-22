@@ -659,7 +659,7 @@ the node handle as a builtin without a `create`. Admitted at that gate, this pro
 cursor can never satisfy because it has no columns to gate.
 
 ⇒ The predicate names both uncreatable builtins, so the refusal is the one the node handle
-gets: the sentence `containerStaticSurfaceSentence` owns, anchored on the alias the author wrote.
+gets: the sentence `containerStaticSurfaceSentence` owns, anchored on the member the author wrote.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Cur = __ManagedMemoryCursor with Int
@@ -670,7 +670,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:6:10: Unsupported: `__ManagedMemoryCursor` static method 'create' — a cursor has no static surface at all, not even `create()`: one exists only because a `__ManagedMemory` handed it out, and `createCursor()` is what mints one
+error E2073: <fragment>:6:14: `__ManagedMemoryCursor` static method 'create' — a cursor has no static surface at all, not even `create()`: one exists only because a `__ManagedMemory` handed it out, and `createCursor()` is what mints one
 ```
 
 <!-- test: error.a-cursor-alias-has-no-other-static-either -->
@@ -690,5 +690,38 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:6:14: Unsupported: `__ManagedMemoryCursor` static method 'frobnicate' — a cursor has no static surface at all, not even `create()`: one exists only because a `__ManagedMemory` handed it out, and `createCursor()` is what mints one
+error E2073: <fragment>:6:14: `__ManagedMemoryCursor` static method 'frobnicate' — a cursor has no static surface at all, not even `create()`: one exists only because a `__ManagedMemory` handed it out, and `createCursor()` is what mints one
+```
+
+<!-- test: error.a-cursor-alias-create-is-refused-as-a-value -->
+<!-- tier: stdlib -->
+The READ door asks the same roster as the call door, so `Cur.create` is the cursor's own refusal and never a
+claim that `create` is a method.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Cur = __ManagedMemoryCursor with Int
+
+function main() returns ExitCode
+	let f = Cur.create
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2073: <fragment>:6:14: `__ManagedMemoryCursor` static method 'create' — a cursor has no static surface at all, not even `create()`: one exists only because a `__ManagedMemory` handed it out, and `createCursor()` is what mints one
+```
+
+<!-- test: error.a-cursor-alias-create-is-refused-as-a-store -->
+<!-- tier: stdlib -->
+The STORE door is the third reader of the roster.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Cur = __ManagedMemoryCursor with Int
+
+function main() returns ExitCode
+	Cur.create = 5
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2073: <fragment>:6:6: `__ManagedMemoryCursor` static method 'create' — a cursor has no static surface at all, not even `create()`: one exists only because a `__ManagedMemory` handed it out, and `createCursor()` is what mints one
 ```

@@ -567,7 +567,7 @@ compiler holds as data"* — a false claim, and a more confident sentence than t
 inside a function.
 
 ⇒ what a stdlib-declared type's undeclared static earns here is the sentence EVERY declared type's
-undeclared static earns. Add such an arm and this case reads the roster claim instead.
+undeclared static earns, in the same code and words a read of it gets (E2073). Add such an arm and this case reads the roster claim instead.
 ```maxon
 let bogus = CharacterSet.inverted()
 
@@ -576,7 +576,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:2:13: Unsupported: `CharacterSet.inverted` in a constant initializer — a constant is settled before `main`, either folded to a number or materialized by the module initializer, so it can name another top-level `let`, a literal, an empty container, an enum or union case (a case that declares a payload must be written with its arguments), a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else
+error E2073: <fragment>:2:26: 'CharacterSet' has no static method named 'inverted' — the compiler owns that type name, so a static of its own can only come from the module that declares it or from an `extension` of it, and no declaration of that name exists
 ```
 
 <!-- test: error.characterset-from-at-a-top-level-initializer -->

@@ -2388,9 +2388,8 @@ resolved to `b.maxon`'s enum and stored **200** into a slot `a.maxon` declares a
 range from one declaration, the value from the other, **compiling clean and exiting 201.**
 
 `a.maxon` means the ALIAS by `Status` — `b.maxon`'s enum is file-private, so it is the only `Status`
-`a.maxon` sees — and the only members a ranged alias has are its BOUNDS. So the access is refused by the
-rule that already governs `Status.min` / `Status.max`, naming what this file's declaration actually offers
-instead of silently reaching the other one.
+`a.maxon` sees — and a ranged alias declares no members. So the access is refused as a member the alias
+does not have, naming the alias for what it is, instead of silently reaching the other one.
 ```maxon
 // --- file: a.maxon
 typealias Status = int(0 to 5)
@@ -2413,7 +2412,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: <fragment>:7:13: Expected 'min or max' but got 'big'
+error E2073: <fragment>:7:13: 'Status' is a ranged alias and has no member 'big'
 ```
 
 
@@ -4474,7 +4473,7 @@ error E3008: app/<fragment>:11:14: typealias 'lib.Score' is not exported
 
 <!-- test: error.a-member-beside-the-librarys-enum-is-refused-on-the-authors-alias-at-top-level -->
 A directory exports a typealias `Ordering` beside the library's enum. The bare name means the author's int alias,
-because the library takes no part in ambiguity, and an int alias has only the members `min` and `max`, so
+because the library takes no part in ambiguity, and a ranged alias declares no members, so
 a top-level read of the enum's case `Ordering.lessThan` is refused.
 ```maxon
 // --- file: lib/order.maxon
@@ -4488,12 +4487,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: app/<fragment>:6:18: Expected 'min or max' but got 'lessThan'
+error E2073: app/<fragment>:6:18: 'Ordering' is a ranged alias and has no member 'lessThan'
 ```
 
 <!-- test: error.a-member-beside-the-librarys-union-is-refused-on-the-authors-alias-at-top-level -->
 A directory exports a typealias `LogValue` beside the library's union. The bare name means the author's int alias,
-because the library takes no part in ambiguity, and an int alias has only the members `min` and `max`, so
+because the library takes no part in ambiguity, and a ranged alias declares no members, so
 a top-level construction of the union's case `LogValue.boolean(true)` is refused.
 ```maxon
 // --- file: lib/value.maxon
@@ -4507,12 +4506,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: app/<fragment>:6:18: Expected 'min or max' but got 'boolean'
+error E2073: app/<fragment>:6:18: 'LogValue' is a ranged alias and has no member 'boolean'
 ```
 
 <!-- test: error.a-member-beside-the-librarys-payload-carrying-union-is-refused-on-the-authors-alias-at-top-level -->
 A directory exports a typealias `StatusCode` beside the library's payload-carrying union. The bare name means the author's int alias,
-because the library takes no part in ambiguity, and an int alias has only the members `min` and `max`, so
+because the library takes no part in ambiguity, and a ranged alias declares no members, so
 a top-level read of the payload-free case `StatusCode.ok` is refused.
 ```maxon
 // --- file: lib/status.maxon
@@ -4526,12 +4525,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: app/<fragment>:6:20: Expected 'min or max' but got 'ok'
+error E2073: app/<fragment>:6:20: 'StatusCode' is a ranged alias and has no member 'ok'
 ```
 
 <!-- test: error.a-member-beside-the-librarys-type-is-refused-on-the-authors-alias-at-top-level -->
 A directory exports a typealias `Console` beside the library's type. The bare name means the author's int alias,
-because the library takes no part in ambiguity, and an int alias has only the members `min` and `max`, so
+because the library takes no part in ambiguity, and a ranged alias declares no members, so
 a top-level call of the library type's static factory `Console.stdin()` is refused.
 ```maxon
 // --- file: lib/console.maxon
@@ -4545,5 +4544,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: app/<fragment>:6:17: Expected 'min or max' but got 'stdin'
+error E2073: app/<fragment>:6:17: 'Console' is a ranged alias and has no member 'stdin'
 ```
