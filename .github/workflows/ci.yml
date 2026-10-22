@@ -214,6 +214,29 @@ jobs:
         if: steps.seed.outputs.seeded == 'yes'
         run: ./maxon-bin/.maxon/maxon spec-test ir-specs
 
+      # A lane's `TargetIr` pins are minted on that lane's own host and compared against a COMPILE,
+      # so a lane this runner cannot run is still compiled and compared (reported NOTRUN, which is
+      # not a pass). Running every lane from a second and third host checks that a cross-compile's
+      # output does not depend on the host that compiled it, and catches a pin another lane's change
+      # left stale. Linux only: the harness runs a Linux target under WSL or OrbStack and refuses
+      # without them, while a Linux host runs no foreign lane and only compiles and compares.
+      - name: IR suite, the other native lanes
+        if: steps.seed.outputs.seeded == 'yes' && runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          targets="$(./scripts/targets/matrix.sh list target native)"
+          failed=0
+
+          for target in $targets; do
+            if [ "$target" = "${{ matrix.target }}" ]; then
+              continue
+            fi
+
+            ./maxon-bin/.maxon/maxon spec-test ir-specs --target="$target" || failed=1
+          done
+
+          exit "$failed"
+
       # ⭐ IN THE MATRIX RATHER THAN IN A JOB OF ITS OWN, because this area is host-specific where
       # almost nothing else is: percent-decoding a uri, un-rooting a drive letter, and
       # `FilePath.equals` being case-insensitive on Windows alone. A single-host lane would leave

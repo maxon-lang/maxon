@@ -403,7 +403,8 @@ no doc comment, which is how it finds them.
   the first differing line. A pin is compared against the COMPILE, so `--target=arm64-macos` on Windows checks
   it too (the cases report NOTRUN). A change that moves emitted code re-mints the pins it moves with
   `--update-required --filter=<spec>/` on each lane, reads the diff, and commits it with the change; CI runs
-  `spec-test ir-specs` natively on every lane beside the suite.
+  `spec-test ir-specs` natively on every lane beside the suite, and each Linux runner also compiles and
+  compares every other native lane's pins.
 - **A default run batches.** A spec's plain run cases compile into the fewest programs whose type names and
   extension methods do not overlap, and in which no case declaring a module-level `var` shares a program
   with a case that spawns a service, and run once each; a case whose end marker is missing or reports green
