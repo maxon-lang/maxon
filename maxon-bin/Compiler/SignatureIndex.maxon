@@ -560,7 +560,7 @@ let DeclShapeReturnsFreshRecord = 109
 // The shape a CONDITIONAL fresh-return claim mixes, and its own rather than `DeclShapeReturnsFreshRecord`'s:
 // a body that stops building its record and starts forwarding to a callee is a different program, and a memo
 // that could not tell the two apart would serve the old answer.
-let DeclShapeFreshReturnForward = 113 as HashDigest
+let DeclShapeFreshReturnForward = 113
 
 // The four `FreshReturnForward` spellings, as distinct marks: one call written two ways can reach two
 // different declarations.
@@ -568,6 +568,7 @@ let FreshForwardUnqualifiedShape = 120
 let FreshForwardSelfReceiverShape = 121 as HashDigest
 let FreshForwardSelfTypeShape = 122 as HashDigest
 let FreshForwardNamedTypeShape = 123
+let FreshForwardFieldMemberShape = 140
 
 // ⭐ A static factory whose whole body is `return Self{p: p, …}` over its own parameters — the four
 // above's sibling, and its own tag for their reason one fact over: a callee that gains or loses the property
@@ -576,6 +577,8 @@ let FreshForwardNamedTypeShape = 123
 let DeclShapeConstructsFromParams = 114
 
 let DeclShapeReturnsReceiverField = 135
+let DeclShapeReturnsParameter = 138
+let DeclShapeFieldMoveOutForward = 139
 
 let DeclShapeAliasImplements = 126 as HashDigest
 
@@ -5117,7 +5120,7 @@ export function payloadValueTypeOf(class PayloadClass, declared MaxonType) retur
 		undeclaredName or
 
 		// A loaded `T` must read back as the opaque `typeParameter` its slot is declared at, which is
-		// what the caller's `retypeOpaqueMethodResult` substitutes and what `decrefCalleeFor` routes to
+		// what the caller's `typeResultThroughInstance` substitutes and what `decrefCalleeFor` routes to
 		// `__drop_type_param` on.
 		typeParam then return declared
 		managed(storage, _) then return storage
@@ -7677,11 +7680,11 @@ export union SweptBodyFact
 	// The body's tail is a `throw` and nothing in it can return.
 	leavesByThrowing
 
-	// ⭐⭐ Every `return` in the body hands back a RECORD LITERAL written in the `return` itself. The
-	// record is therefore allocated by the returning frame and has had no opportunity to be referenced from
+	// ⭐⭐ Every `return` in the body hands back a RECORD LITERAL or an interpolated String written in the
+	// `return` itself. The record is therefore allocated by the returning frame and has had no opportunity to be referenced from
 	// anywhere — there is no statement between its construction and its hand-off — so the caller adopting the
-	// `+1` is that allocation's SOLE owner. See `Parser.noteFreshReturnShape` for why the shape is exactly
-	// that and nothing wider.
+	// `+1` is that allocation's SOLE owner. See `Parser.noteFreshReturnShape` for why the shapes are exactly
+	// those and nothing wider.
 	returnsAFreshRecord
 
 	// ⭐⭐ ONE HOP: every `return` in the body hands back a record literal OR the result of a call, and
@@ -7700,6 +7703,12 @@ export union SweptBodyFact
 	constructsSelfFromItsParameters
 
 	returnsAFieldOfItsReceiver
+
+	returnsAParameter
+
+	// Its own fact and never `returnsAFreshRecord`: an element a field's move-out hands back has left the
+	// container, but nothing proves it the sole reference, so a send of it is still refused (E3138).
+	returnsAMovedOutElementIfFieldDoes(forwards FreshReturnForwardArray)
 end 'SweptBodyFact'
 
 export type SweptBodyFactEntry
@@ -7810,6 +7819,10 @@ export union FreshReturnForward
 	// `Type.name(…)` with the type written by name. The sweep has already refused a head that a local, a
 	// parameter, a type parameter or an inner alias of the enclosing type could be.
 	ofNamedType(let typeName ByteArray, let name ByteArray)
+
+	// `self.f….name(…)`, a move-out door on a field of the enclosing type. Only the move-out channel
+	// (`ProgramSignatures.returnsAMovedOutElement`) records or reads one.
+	ofFieldOfEnclosingType(let typeName ByteArray, let fields NameRoster, let name ByteArray, let argLabels NameRoster)
 end 'FreshReturnForward'
 
 // @generated library-cache begin
@@ -7820,6 +7833,7 @@ function cacheWriteFreshReturnForward(writer LibraryCacheWriter, value FreshRetu
 		unqualified(a0, a1) then cacheWriteFreshReturnForwardUnqualified(writer, a0: a0, a1: a1)
 		ofEnclosingType(a0, a1, a2) then cacheWriteFreshReturnForwardOfEnclosingType(writer, a0: a0, a1: a1, a2: a2)
 		ofNamedType(a0, a1) then cacheWriteFreshReturnForwardOfNamedType(writer, a0: a0, a1: a1)
+		ofFieldOfEnclosingType(a0, a1, a2, a3) then cacheWriteFreshReturnForwardOfFieldOfEnclosingType(writer, a0: a0, a1: a1, a2: a2, a3: a3)
 	end 'payload'
 end 'cacheWriteFreshReturnForward'
 
@@ -7839,6 +7853,13 @@ function cacheWriteFreshReturnForwardOfNamedType(writer LibraryCacheWriter, a0 B
 	writer.bytes(a1)
 end 'cacheWriteFreshReturnForwardOfNamedType'
 
+function cacheWriteFreshReturnForwardOfFieldOfEnclosingType(writer LibraryCacheWriter, a0 ByteArray, a1 NameRoster, a2 ByteArray, a3 NameRoster)
+	writer.bytes(a0)
+	cacheWriteNameRoster(writer, value: a1)
+	writer.bytes(a2)
+	cacheWriteNameRoster(writer, value: a3)
+end 'cacheWriteFreshReturnForwardOfFieldOfEnclosingType'
+
 function cacheReadFreshReturnForward(reader LibraryCacheReader) returns FreshReturnForward throws LibraryCacheDamage
 	let tag = try reader.unsigned()
 
@@ -7846,6 +7867,7 @@ function cacheReadFreshReturnForward(reader LibraryCacheReader) returns FreshRet
 		0 gives try cacheReadFreshReturnForwardUnqualified(reader)
 		1 gives try cacheReadFreshReturnForwardOfEnclosingType(reader)
 		2 gives try cacheReadFreshReturnForwardOfNamedType(reader)
+		3 gives try cacheReadFreshReturnForwardOfFieldOfEnclosingType(reader)
 		default throws LibraryCacheDamage.unknownTag(tag)
 	end 'case'
 end 'cacheReadFreshReturnForward'
@@ -7871,6 +7893,15 @@ function cacheReadFreshReturnForwardOfNamedType(reader LibraryCacheReader) retur
 
 	return FreshReturnForward.ofNamedType(a0, name: a1)
 end 'cacheReadFreshReturnForwardOfNamedType'
+
+function cacheReadFreshReturnForwardOfFieldOfEnclosingType(reader LibraryCacheReader) returns FreshReturnForward throws LibraryCacheDamage
+	let a0 = try reader.bytes()
+	let a1 = try cacheReadNameRoster(reader)
+	let a2 = try reader.bytes()
+	let a3 = try cacheReadNameRoster(reader)
+
+	return FreshReturnForward.ofFieldOfEnclosingType(a0, fields: a1, name: a2, argLabels: a3)
+end 'cacheReadFreshReturnForwardOfFieldOfEnclosingType'
 
 // @generated library-cache end
 
@@ -7991,6 +8022,12 @@ union FreshReturnForwardTarget
 	declaration(let key ByteArray)
 	unnameable
 end 'FreshReturnForwardTarget'
+
+union FieldMoveOutTarget
+	libraryDoor
+	declaration(let key ByteArray)
+	unnameable
+end 'FieldMoveOutTarget'
 
 typealias FreshReturnForwarderIndexArray = Array with ElementIndex
 typealias UnsettledTargetCount = int(0 to u32.max)
@@ -10556,7 +10593,7 @@ export let AppendMethod = b"append"
 export let AppendMemoryMethod = b"appendMemory"
 export let GetMethod = b"get"
 export let ArrayFirstMethod = b"first"
-export let ArrayPopMethod = b"pop"
+let ArrayPopMethod = b"pop"
 export let RemoveMethod = b"remove"
 export let SliceMethod = b"slice"
 
@@ -10604,8 +10641,12 @@ export let ListPrependMethod = b"prepend"
 
 module let ListLastMethod = b"last"
 
-export let ListRemoveFirstMethod = b"removeFirst"
-export let ListRemoveLastMethod = b"removeLast"
+module let ListRemoveFirstMethod = b"removeFirst"
+module let ListRemoveLastMethod = b"removeLast"
+
+export function isElementMoveOutName(name ByteArray) returns bool
+	return name.equals(ArrayPopMethod) or name.equals(RemoveMethod) or name.equals(ListRemoveFirstMethod) or name.equals(ListRemoveLastMethod)
+end 'isElementMoveOutName'
 
 // The spellings only the `__ManagedList` surface has (`/specs/managed-list.md`).
 // They live here beside `List`'s pair so the chain's whole vocabulary is read in one place. `create`,
@@ -12731,6 +12772,9 @@ enum DeclarationSweepFact
 	constructingDeclarationCount
 	returnsReceiverField
 	receiverFieldReturningDeclarationCount
+	returnsParameter
+	parameterReturningDeclarationCount
+	fieldMoveOutForwards
 end 'DeclarationSweepFact'
 
 extension Map
@@ -17694,6 +17738,12 @@ export type SettledDeclarations
 
 	module var funcReceiverFieldReturningDeclarationCounts as FunctionDeclarationCountMap
 
+	module var funcReturnsParameter as DeclaredBodyFactNameSet
+
+	module var funcParameterReturningDeclarationCounts as FunctionDeclarationCountMap
+
+	module var funcFieldMoveOutForwards as FreshReturnForwardMap
+
 	module var interfaceRequirementNames as MethodNameSet
 
 	// ⭐ Function name -> its per-parameter DEFAULTS. `defaultsOf(callee)` is the door
@@ -18131,7 +18181,7 @@ export type SettledDeclarations
 	export static function create(os Os) returns SettledDeclarations
 		let interfaces = IrInterfaceMap.create()
 
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionAliasRegistry.create(), nestedFunctionAliasMembers: NestedFunctionAliasNameSet.create(), pendingImplementsClauses: AliasImplementsClauseArray.create(), implementsParents: AliasImplementsParentMap.create(), implementsVerdicts: AliasImplementsVerdictMap.create(), structLayouts: StructLayoutArray.create(), structNamesInDeclOrder: NameRoster.create(), enumTypes: createEnumRegistry(interfaces), genericAliasDecls: GenericAliasEntryArray.create(), genericAliasDeclIndexByName: GenericAliasDeclIndexMap.create(), genericAliasDeclsIndexedThrough: 0, instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), typeParamOwners: TypeParamOwnerMap.create(), crossKindContests: noCrossKindContests, typeNameClaimIndex: TypeNameClaimIndex.unsettled, vectorFromSizes: FixedSizeArray.create(), fromHeadNames: FromHeadNameSet.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: noGenericAliasContests, multiplyDeclaredGenericAliases: noDisagreeingAliasNames, sharedInstanceGenericAliases: DisagreeingAliasNameSet.create(), genericAliasMints: GenericAliasMintTable.create(), runtimeFilePaths: LibraryFilePathSet.create(), scriptlibFilePaths: LibraryFilePathSet.create(), genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: interfaces, interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), interfaceDeclSiteNames: InterfaceNameSet.create(), interfaceDeclSiteIndexByName: InterfaceDeclSiteIndexMap.create(), interfaceDeclSitesIndexedThrough: 0, extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), fixedElementCountNeeds: DescriptorNeedNameSet.create(), conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, conformerIndex: DeclaredConformerIndex.unbuilt(), extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), declParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), byRefSitesOfKey: DeclarationSitesByKeyMap.create(), byRefForwardingLive: ByRefForwardingMap.create(), byRefBareNames: ByRefBareNameSet.create(), opaqueByRefBareNames: ByRefBareNameSet.create(), calleeBareNames: BareNameSet.create(), genericInstanceNameMarker: genericInstanceNameMarker(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcConstructingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsReceiverField: DeclaredBodyFactNameSet.create(), funcReceiverFieldReturningDeclarationCounts: FunctionDeclarationCountMap.create(), interfaceRequirementNames: MethodNameSet.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), interfaceExtensionMembers: InterfaceExtensionMemberMap.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), authorDeclaredNames: HashDigestSet.create(), libraryMeantNames: HashDigestSet.create(), managedTopLevelNames: ManagedTopLevelNameSet.create(), corpusSlotInitCallees: SlotInitCalleeMap.create(), constInitializerTypeNames: ConstInitializerTypeNameSet.create(), constInitializerTypeSites: NameInFileArray.create(), userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: NameRoster.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceSpawnCandidateKeys: ServiceSpawnCandidateKeySet.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), corpusArrayRecordName: ArrayRecordName.of(SynthesizedArrayRecordSeed), shadowRoster: ShadowSpellingRoster.none(), qualifiedTypeClaims: TypeNameClaimLog.create(), typeHeadClaims: TypeNameClaimLog.create(), topLevelBindingSites: TopLevelBindingSiteMap.create(), writtenTypeClaims: TypeNameClaimLog.create(), aliasFamiliesBesideNominals: DeclaredTypeNameSet.create(), headerTypeNameDecls: TypeNameDeclArray.create(), nominalNameCollisions: TypeNameCollisionArray.create(), fileModuleDirectories: ModuleDirectoryByFile.create(), namespaceQualifiers: DeclaredTypeNameSet.create(), libraryFilePaths: LibraryFilePathSet.create(), declTokenStreams: DeclTokenStreamMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionAliasRegistry.create(), nestedFunctionAliasMembers: NestedFunctionAliasNameSet.create(), pendingImplementsClauses: AliasImplementsClauseArray.create(), implementsParents: AliasImplementsParentMap.create(), implementsVerdicts: AliasImplementsVerdictMap.create(), structLayouts: StructLayoutArray.create(), structNamesInDeclOrder: NameRoster.create(), enumTypes: createEnumRegistry(interfaces), genericAliasDecls: GenericAliasEntryArray.create(), genericAliasDeclIndexByName: GenericAliasDeclIndexMap.create(), genericAliasDeclsIndexedThrough: 0, instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), typeParamOwners: TypeParamOwnerMap.create(), crossKindContests: noCrossKindContests, typeNameClaimIndex: TypeNameClaimIndex.unsettled, vectorFromSizes: FixedSizeArray.create(), fromHeadNames: FromHeadNameSet.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: noGenericAliasContests, multiplyDeclaredGenericAliases: noDisagreeingAliasNames, sharedInstanceGenericAliases: DisagreeingAliasNameSet.create(), genericAliasMints: GenericAliasMintTable.create(), runtimeFilePaths: LibraryFilePathSet.create(), scriptlibFilePaths: LibraryFilePathSet.create(), genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: interfaces, interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), interfaceDeclSiteNames: InterfaceNameSet.create(), interfaceDeclSiteIndexByName: InterfaceDeclSiteIndexMap.create(), interfaceDeclSitesIndexedThrough: 0, extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), fixedElementCountNeeds: DescriptorNeedNameSet.create(), conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, conformerIndex: DeclaredConformerIndex.unbuilt(), extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), declParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), byRefSitesOfKey: DeclarationSitesByKeyMap.create(), byRefForwardingLive: ByRefForwardingMap.create(), byRefBareNames: ByRefBareNameSet.create(), opaqueByRefBareNames: ByRefBareNameSet.create(), calleeBareNames: BareNameSet.create(), genericInstanceNameMarker: genericInstanceNameMarker(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcConstructingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsReceiverField: DeclaredBodyFactNameSet.create(), funcReceiverFieldReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsParameter: DeclaredBodyFactNameSet.create(), funcParameterReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcFieldMoveOutForwards: FreshReturnForwardMap.create(), interfaceRequirementNames: MethodNameSet.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), interfaceExtensionMembers: InterfaceExtensionMemberMap.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), authorDeclaredNames: HashDigestSet.create(), libraryMeantNames: HashDigestSet.create(), managedTopLevelNames: ManagedTopLevelNameSet.create(), corpusSlotInitCallees: SlotInitCalleeMap.create(), constInitializerTypeNames: ConstInitializerTypeNameSet.create(), constInitializerTypeSites: NameInFileArray.create(), userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: NameRoster.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceSpawnCandidateKeys: ServiceSpawnCandidateKeySet.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), corpusArrayRecordName: ArrayRecordName.of(SynthesizedArrayRecordSeed), shadowRoster: ShadowSpellingRoster.none(), qualifiedTypeClaims: TypeNameClaimLog.create(), typeHeadClaims: TypeNameClaimLog.create(), topLevelBindingSites: TopLevelBindingSiteMap.create(), writtenTypeClaims: TypeNameClaimLog.create(), aliasFamiliesBesideNominals: DeclaredTypeNameSet.create(), headerTypeNameDecls: TypeNameDeclArray.create(), nominalNameCollisions: TypeNameCollisionArray.create(), fileModuleDirectories: ModuleDirectoryByFile.create(), namespaceQualifiers: DeclaredTypeNameSet.create(), libraryFilePaths: LibraryFilePathSet.create(), declTokenStreams: DeclTokenStreamMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create()}
 	end 'create'
 
 	static function unused() returns SettledDeclarations
@@ -18221,6 +18271,9 @@ export type SettledDeclarations
 		cacheWriteFunctionDeclarationCountMap(writer, value: self.funcConstructingDeclarationCounts)
 		cacheWriteDeclaredBodyFactNameSet(writer, value: self.funcReturnsReceiverField)
 		cacheWriteFunctionDeclarationCountMap(writer, value: self.funcReceiverFieldReturningDeclarationCounts)
+		cacheWriteDeclaredBodyFactNameSet(writer, value: self.funcReturnsParameter)
+		cacheWriteFunctionDeclarationCountMap(writer, value: self.funcParameterReturningDeclarationCounts)
+		cacheWriteFreshReturnForwardMap(writer, value: self.funcFieldMoveOutForwards)
 		cacheWriteMethodNameSet(writer, value: self.interfaceRequirementNames)
 		cacheWriteParamDefaultMap(writer, value: self.funcParamDefaults)
 		cacheWriteOpaqueParamMap(writer, value: self.funcOpaqueParams)
@@ -18372,6 +18425,9 @@ export type SettledDeclarations
 		let f_funcConstructingDeclarationCounts = try cacheReadFunctionDeclarationCountMap(reader)
 		let f_funcReturnsReceiverField = try cacheReadDeclaredBodyFactNameSet(reader)
 		let f_funcReceiverFieldReturningDeclarationCounts = try cacheReadFunctionDeclarationCountMap(reader)
+		let f_funcReturnsParameter = try cacheReadDeclaredBodyFactNameSet(reader)
+		let f_funcParameterReturningDeclarationCounts = try cacheReadFunctionDeclarationCountMap(reader)
+		let f_funcFieldMoveOutForwards = try cacheReadFreshReturnForwardMap(reader)
 		let f_interfaceRequirementNames = try cacheReadMethodNameSet(reader)
 		let f_funcParamDefaults = try cacheReadParamDefaultMap(reader)
 		let f_funcOpaqueParams = try cacheReadOpaqueParamMap(reader)
@@ -18440,11 +18496,11 @@ export type SettledDeclarations
 		let f_genericInstancesByName = try cacheReadGenericFunctionInstanceMap(reader)
 		let f_initializerCallSites = try cacheReadInitializerCallSiteArray(reader)
 
-		return Self{misclosedBlocks: f_misclosedBlocks, returnTypes: f_returnTypes, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, nestedFunctionAliasMembers: f_nestedFunctionAliasMembers, pendingImplementsClauses: f_pendingImplementsClauses, implementsParents: f_implementsParents, implementsVerdicts: f_implementsVerdicts, structLayouts: f_structLayouts, structNamesInDeclOrder: f_structNamesInDeclOrder, enumTypes: f_enumTypes, genericAliasDecls: f_genericAliasDecls, genericAliasDeclIndexByName: f_genericAliasDeclIndexByName, genericAliasDeclsIndexedThrough: f_genericAliasDeclsIndexedThrough, instanceDisplayNames: f_instanceDisplayNames, funcReturnAliasNames: f_funcReturnAliasNames, typeParamOwners: f_typeParamOwners, crossKindContests: f_crossKindContests, typeNameClaimIndex: f_typeNameClaimIndex, vectorFromSizes: f_vectorFromSizes, fromHeadNames: f_fromHeadNames, genericAliases: f_genericAliases, interfaceAliases: f_interfaceAliases, interfaceAliasOwners: f_interfaceAliasOwners, contestedGenericAliases: f_contestedGenericAliases, multiplyDeclaredGenericAliases: f_multiplyDeclaredGenericAliases, sharedInstanceGenericAliases: f_sharedInstanceGenericAliases, genericAliasMints: f_genericAliasMints, runtimeFilePaths: f_runtimeFilePaths, scriptlibFilePaths: f_scriptlibFilePaths, genericAliasSites: f_genericAliasSites, constLiteralSites: f_constLiteralSites, innerAliases: f_innerAliases, extensionInnerAliasMembers: f_extensionInnerAliasMembers, droppedSignatures: f_droppedSignatures, methodInnerAliasParams: f_methodInnerAliasParams, interfaces: f_interfaces, interfaceNamesInDeclOrder: f_interfaceNamesInDeclOrder, interfaceDeclIndexByName: f_interfaceDeclIndexByName, interfaceDeclSites: f_interfaceDeclSites, interfaceDeclSiteNames: f_interfaceDeclSiteNames, interfaceDeclSiteIndexByName: f_interfaceDeclSiteIndexByName, interfaceDeclSitesIndexedThrough: f_interfaceDeclSitesIndexedThrough, extensionDeclSites: f_extensionDeclSites, conformanceClauseSites: f_conformanceClauseSites, descriptorScanSites: f_descriptorScanSites, fixedElementCountNeeds: f_fixedElementCountNeeds, conditionalExtensionSkips: f_conditionalExtensionSkips, associatedTypeHoldings: f_associatedTypeHoldings, sweptConformances: f_sweptConformances, sweptConformancesBuilt: f_sweptConformancesBuilt, conformerIndex: f_conformerIndex, extensionDeclaredConformances: f_extensionDeclaredConformances, extensionMethodConstraints: f_extensionMethodConstraints, unconstrainedExtensionMethods: f_unconstrainedExtensionMethods, decls: f_decls, declIndex: f_declIndex, funcParamConsumes: f_funcParamConsumes, declParamConsumes: f_declParamConsumes, funcParamReassigns: f_funcParamReassigns, byRefSitesOfKey: f_byRefSitesOfKey, byRefForwardingLive: f_byRefForwardingLive, funcGlobalAliasReturns: f_funcGlobalAliasReturns, globalAliasReturnKeys: f_globalAliasReturnKeys, byRefBareNames: f_byRefBareNames, opaqueByRefBareNames: f_opaqueByRefBareNames, calleeBareNames: f_calleeBareNames, genericInstanceNameMarker: genericInstanceNameMarker(), funcThrows: f_funcThrows, disagreeingThrows: f_disagreeingThrows, funcThrowingDeclarationCounts: f_funcThrowingDeclarationCounts, funcDiverges: f_funcDiverges, funcDivergingDeclarationCounts: f_funcDivergingDeclarationCounts, funcAlwaysThrows: f_funcAlwaysThrows, funcAlwaysThrowingDeclarationCounts: f_funcAlwaysThrowingDeclarationCounts, funcReturnsFreshRecord: f_funcReturnsFreshRecord, funcFreshReturnForwards: f_funcFreshReturnForwards, funcFreshReturningDeclarationCounts: f_funcFreshReturningDeclarationCounts, funcConstructsFromParams: f_funcConstructsFromParams, funcConstructingDeclarationCounts: f_funcConstructingDeclarationCounts, funcReturnsReceiverField: f_funcReturnsReceiverField, funcReceiverFieldReturningDeclarationCounts: f_funcReceiverFieldReturningDeclarationCounts, interfaceRequirementNames: f_interfaceRequirementNames, funcParamDefaults: f_funcParamDefaults, funcOpaqueParams: f_funcOpaqueParams, contestedOpaqueParams: f_contestedOpaqueParams, disagreeingParamDefaults: f_disagreeingParamDefaults, funcDeclarationCounts: f_funcDeclarationCounts, funcDefaultingDeclarationCounts: f_funcDefaultingDeclarationCounts, declaredReturnSurfaces: f_declaredReturnSurfaces, funcReturnDeclFiles: f_funcReturnDeclFiles, funcDeclSites: f_funcDeclSites, overloadedDecls: f_overloadedDecls, bufferElementAliases: f_bufferElementAliases, bufferSurfaceAliases: f_bufferSurfaceAliases, extensionPublishedMethods: f_extensionPublishedMethods, extensionShadowedMethods: f_extensionShadowedMethods, extensionMethodDeclFiles: f_extensionMethodDeclFiles, contestedExtensionMethods: f_contestedExtensionMethods, interfaceExtensionMembers: f_interfaceExtensionMembers, stdlibPublishedExtensionMethods: f_stdlibPublishedExtensionMethods, stdlibExtensionMethodsBeatenByUser: f_stdlibExtensionMethodsBeatenByUser, staticInstanceContests: f_staticInstanceContests, authorDeclaredNames: f_authorDeclaredNames, libraryMeantNames: f_libraryMeantNames, managedTopLevelNames: f_managedTopLevelNames, corpusSlotInitCallees: f_corpusSlotInitCallees, inlineRecordByTypeNameId: f_inlineRecordByTypeNameId, defineProblems: f_defineProblems, constInitializerTypeNames: f_constInitializerTypeNames, constInitializerTypeSites: f_constInitializerTypeSites, userDeclaredTypeNames: f_userDeclaredTypeNames, stdlibDeclaredTypeNames: f_stdlibDeclaredTypeNames, arrayLiteralConformers: f_arrayLiteralConformers, serviceSpawnCandidateList: f_serviceSpawnCandidateList, serviceSpawnCandidateKeys: f_serviceSpawnCandidateKeys, serviceHandleOwners: f_serviceHandleOwners, defaultDeclarationList: f_defaultDeclarationList, serviceMessages: f_serviceMessages, interfaceHandleOwners: f_interfaceHandleOwners, interfaceHandleRepresentatives: f_interfaceHandleRepresentatives, interfaceHandleOrder: f_interfaceHandleOrder, serviceSendErrorNames: f_serviceSendErrorNames, corpusArrayRecordName: f_corpusArrayRecordName, shadowRoster: f_shadowRoster, qualifiedTypeClaims: f_qualifiedTypeClaims, typeHeadClaims: f_typeHeadClaims, topLevelBindingSites: f_topLevelBindingSites, writtenTypeClaims: f_writtenTypeClaims, claimedTypeClaims: f_claimedTypeClaims, aliasFamiliesBesideNominals: f_aliasFamiliesBesideNominals, headerTypeNameDecls: f_headerTypeNameDecls, nominalNameCollisions: f_nominalNameCollisions, fileModuleDirectories: f_fileModuleDirectories, namespaceQualifiers: f_namespaceQualifiers, libraryFilePaths: f_libraryFilePaths, declTokenStreams: DeclTokenStreamMap.create(), declaredTests: f_declaredTests, namespaceQualifiedFunctions: f_namespaceQualifiedFunctions, freeFunctionDirectories: f_freeFunctionDirectories, contestedFreeFunctions: f_contestedFreeFunctions, contestedRegistrationNames: f_contestedRegistrationNames, contestedKeysAnotherDeclarationHolds: f_contestedKeysAnotherDeclarationHolds, freeFunctionDeclFiles: f_freeFunctionDeclFiles, crossFileOverloadedFreeFunctions: f_crossFileOverloadedFreeFunctions, instantiatedByAParse: f_instantiatedByAParse, genericTemplates: f_genericTemplates, genericInstancesBySite: f_genericInstancesBySite, genericInstancesByName: f_genericInstancesByName, initializerCallSites: f_initializerCallSites}
+		return Self{misclosedBlocks: f_misclosedBlocks, returnTypes: f_returnTypes, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, nestedFunctionAliasMembers: f_nestedFunctionAliasMembers, pendingImplementsClauses: f_pendingImplementsClauses, implementsParents: f_implementsParents, implementsVerdicts: f_implementsVerdicts, structLayouts: f_structLayouts, structNamesInDeclOrder: f_structNamesInDeclOrder, enumTypes: f_enumTypes, genericAliasDecls: f_genericAliasDecls, genericAliasDeclIndexByName: f_genericAliasDeclIndexByName, genericAliasDeclsIndexedThrough: f_genericAliasDeclsIndexedThrough, instanceDisplayNames: f_instanceDisplayNames, funcReturnAliasNames: f_funcReturnAliasNames, typeParamOwners: f_typeParamOwners, crossKindContests: f_crossKindContests, typeNameClaimIndex: f_typeNameClaimIndex, vectorFromSizes: f_vectorFromSizes, fromHeadNames: f_fromHeadNames, genericAliases: f_genericAliases, interfaceAliases: f_interfaceAliases, interfaceAliasOwners: f_interfaceAliasOwners, contestedGenericAliases: f_contestedGenericAliases, multiplyDeclaredGenericAliases: f_multiplyDeclaredGenericAliases, sharedInstanceGenericAliases: f_sharedInstanceGenericAliases, genericAliasMints: f_genericAliasMints, runtimeFilePaths: f_runtimeFilePaths, scriptlibFilePaths: f_scriptlibFilePaths, genericAliasSites: f_genericAliasSites, constLiteralSites: f_constLiteralSites, innerAliases: f_innerAliases, extensionInnerAliasMembers: f_extensionInnerAliasMembers, droppedSignatures: f_droppedSignatures, methodInnerAliasParams: f_methodInnerAliasParams, interfaces: f_interfaces, interfaceNamesInDeclOrder: f_interfaceNamesInDeclOrder, interfaceDeclIndexByName: f_interfaceDeclIndexByName, interfaceDeclSites: f_interfaceDeclSites, interfaceDeclSiteNames: f_interfaceDeclSiteNames, interfaceDeclSiteIndexByName: f_interfaceDeclSiteIndexByName, interfaceDeclSitesIndexedThrough: f_interfaceDeclSitesIndexedThrough, extensionDeclSites: f_extensionDeclSites, conformanceClauseSites: f_conformanceClauseSites, descriptorScanSites: f_descriptorScanSites, fixedElementCountNeeds: f_fixedElementCountNeeds, conditionalExtensionSkips: f_conditionalExtensionSkips, associatedTypeHoldings: f_associatedTypeHoldings, sweptConformances: f_sweptConformances, sweptConformancesBuilt: f_sweptConformancesBuilt, conformerIndex: f_conformerIndex, extensionDeclaredConformances: f_extensionDeclaredConformances, extensionMethodConstraints: f_extensionMethodConstraints, unconstrainedExtensionMethods: f_unconstrainedExtensionMethods, decls: f_decls, declIndex: f_declIndex, funcParamConsumes: f_funcParamConsumes, declParamConsumes: f_declParamConsumes, funcParamReassigns: f_funcParamReassigns, byRefSitesOfKey: f_byRefSitesOfKey, byRefForwardingLive: f_byRefForwardingLive, funcGlobalAliasReturns: f_funcGlobalAliasReturns, globalAliasReturnKeys: f_globalAliasReturnKeys, byRefBareNames: f_byRefBareNames, opaqueByRefBareNames: f_opaqueByRefBareNames, calleeBareNames: f_calleeBareNames, genericInstanceNameMarker: genericInstanceNameMarker(), funcThrows: f_funcThrows, disagreeingThrows: f_disagreeingThrows, funcThrowingDeclarationCounts: f_funcThrowingDeclarationCounts, funcDiverges: f_funcDiverges, funcDivergingDeclarationCounts: f_funcDivergingDeclarationCounts, funcAlwaysThrows: f_funcAlwaysThrows, funcAlwaysThrowingDeclarationCounts: f_funcAlwaysThrowingDeclarationCounts, funcReturnsFreshRecord: f_funcReturnsFreshRecord, funcFreshReturnForwards: f_funcFreshReturnForwards, funcFreshReturningDeclarationCounts: f_funcFreshReturningDeclarationCounts, funcConstructsFromParams: f_funcConstructsFromParams, funcConstructingDeclarationCounts: f_funcConstructingDeclarationCounts, funcReturnsReceiverField: f_funcReturnsReceiverField, funcReceiverFieldReturningDeclarationCounts: f_funcReceiverFieldReturningDeclarationCounts, funcReturnsParameter: f_funcReturnsParameter, funcParameterReturningDeclarationCounts: f_funcParameterReturningDeclarationCounts, funcFieldMoveOutForwards: f_funcFieldMoveOutForwards, interfaceRequirementNames: f_interfaceRequirementNames, funcParamDefaults: f_funcParamDefaults, funcOpaqueParams: f_funcOpaqueParams, contestedOpaqueParams: f_contestedOpaqueParams, disagreeingParamDefaults: f_disagreeingParamDefaults, funcDeclarationCounts: f_funcDeclarationCounts, funcDefaultingDeclarationCounts: f_funcDefaultingDeclarationCounts, declaredReturnSurfaces: f_declaredReturnSurfaces, funcReturnDeclFiles: f_funcReturnDeclFiles, funcDeclSites: f_funcDeclSites, overloadedDecls: f_overloadedDecls, bufferElementAliases: f_bufferElementAliases, bufferSurfaceAliases: f_bufferSurfaceAliases, extensionPublishedMethods: f_extensionPublishedMethods, extensionShadowedMethods: f_extensionShadowedMethods, extensionMethodDeclFiles: f_extensionMethodDeclFiles, contestedExtensionMethods: f_contestedExtensionMethods, interfaceExtensionMembers: f_interfaceExtensionMembers, stdlibPublishedExtensionMethods: f_stdlibPublishedExtensionMethods, stdlibExtensionMethodsBeatenByUser: f_stdlibExtensionMethodsBeatenByUser, staticInstanceContests: f_staticInstanceContests, authorDeclaredNames: f_authorDeclaredNames, libraryMeantNames: f_libraryMeantNames, managedTopLevelNames: f_managedTopLevelNames, corpusSlotInitCallees: f_corpusSlotInitCallees, inlineRecordByTypeNameId: f_inlineRecordByTypeNameId, defineProblems: f_defineProblems, constInitializerTypeNames: f_constInitializerTypeNames, constInitializerTypeSites: f_constInitializerTypeSites, userDeclaredTypeNames: f_userDeclaredTypeNames, stdlibDeclaredTypeNames: f_stdlibDeclaredTypeNames, arrayLiteralConformers: f_arrayLiteralConformers, serviceSpawnCandidateList: f_serviceSpawnCandidateList, serviceSpawnCandidateKeys: f_serviceSpawnCandidateKeys, serviceHandleOwners: f_serviceHandleOwners, defaultDeclarationList: f_defaultDeclarationList, serviceMessages: f_serviceMessages, interfaceHandleOwners: f_interfaceHandleOwners, interfaceHandleRepresentatives: f_interfaceHandleRepresentatives, interfaceHandleOrder: f_interfaceHandleOrder, serviceSendErrorNames: f_serviceSendErrorNames, corpusArrayRecordName: f_corpusArrayRecordName, shadowRoster: f_shadowRoster, qualifiedTypeClaims: f_qualifiedTypeClaims, typeHeadClaims: f_typeHeadClaims, topLevelBindingSites: f_topLevelBindingSites, writtenTypeClaims: f_writtenTypeClaims, claimedTypeClaims: f_claimedTypeClaims, aliasFamiliesBesideNominals: f_aliasFamiliesBesideNominals, headerTypeNameDecls: f_headerTypeNameDecls, nominalNameCollisions: f_nominalNameCollisions, fileModuleDirectories: f_fileModuleDirectories, namespaceQualifiers: f_namespaceQualifiers, libraryFilePaths: f_libraryFilePaths, declTokenStreams: DeclTokenStreamMap.create(), declaredTests: f_declaredTests, namespaceQualifiedFunctions: f_namespaceQualifiedFunctions, freeFunctionDirectories: f_freeFunctionDirectories, contestedFreeFunctions: f_contestedFreeFunctions, contestedRegistrationNames: f_contestedRegistrationNames, contestedKeysAnotherDeclarationHolds: f_contestedKeysAnotherDeclarationHolds, freeFunctionDeclFiles: f_freeFunctionDeclFiles, crossFileOverloadedFreeFunctions: f_crossFileOverloadedFreeFunctions, instantiatedByAParse: f_instantiatedByAParse, genericTemplates: f_genericTemplates, genericInstancesBySite: f_genericInstancesBySite, genericInstancesByName: f_genericInstancesByName, initializerCallSites: f_initializerCallSites}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize1200
-		return sizeof(SettledDeclarations) as CacheSize1200
+	static function cacheLayoutBytes() returns CacheSize1224
+		return sizeof(SettledDeclarations) as CacheSize1224
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -20666,6 +20722,8 @@ export type ProgramSignatures
 				returnsAFreshRecordIfCalleeDoes(forwards) then self.recordFreshReturnForward(factKey, forwards: forwards, declFilePath: filePath)
 				constructsSelfFromItsParameters then self.recordSweptBodyFact(factKey, marked: self.mainThreadSettled().funcConstructsFromParams, counts: self.mainThreadSettled().funcConstructingDeclarationCounts, shape: DeclShapeConstructsFromParams)
 				returnsAFieldOfItsReceiver then self.recordSweptBodyFact(factKey, marked: self.mainThreadSettled().funcReturnsReceiverField, counts: self.mainThreadSettled().funcReceiverFieldReturningDeclarationCounts, shape: DeclShapeReturnsReceiverField)
+				returnsAMovedOutElementIfFieldDoes(forwards) then self.recordFieldMoveOutForward(factKey, forwards: forwards, declFilePath: filePath)
+				returnsAParameter then self.recordSweptBodyFact(factKey, marked: self.mainThreadSettled().funcReturnsParameter, counts: self.mainThreadSettled().funcParameterReturningDeclarationCounts, shape: DeclShapeReturnsParameter)
 			end 'which'
 		end 'eachProvedBodyFact'
 	end 'foldFile'
@@ -21147,7 +21205,7 @@ export type ProgramSignatures
 	//     shape `Parser.promoteBareGenericResultToCalleeScope` exists for, minted by `scopedGenericInstanceOf`.
 	//
 	// The scope that binds the second is the CALLEE'S DECLARING TYPE, which here is the receiver instance's
-	// base: `Parser.retypeOpaqueMethodResult` has already refused any callee not qualified under it, so the
+	// base: `Parser.instanceSourceOfCall` has already refused any callee not qualified under it, so the
 	// two cannot disagree.
 	//
 	// Both resolvers are the ONE door for their spelling — `genericAliasInstanceFrom` is what the parser
@@ -21551,7 +21609,7 @@ export type ProgramSignatures
 		for forwarder in emptied 'eachEmptied'
 			_ = self.mainThreadSettled().declParamConsumes.remove(forwarder.decl.site)
 
-			if self.keyNamesOneDeclaration(forwarder.key) 'theOnlyDeclarationOfItsName'
+			if not self.isAnOverloadSet(forwarder.key) 'theOnlyDeclarationOfItsName'
 				_ = self.mainThreadSettled().funcParamConsumes.remove(forwarder.key)
 			end 'theOnlyDeclarationOfItsName'
 		end 'eachEmptied'
@@ -21639,7 +21697,7 @@ export type ProgramSignatures
 	function publishForwardedInfo(forwarder Forwarder, info ParamConsumeInfo)
 		self.mainThreadSettled().declParamConsumes.upsert(forwarder.decl.site, value: info)
 
-		if self.keyNamesOneDeclaration(forwarder.key) 'theOnlyDeclarationOfItsName'
+		if not self.isAnOverloadSet(forwarder.key) 'theOnlyDeclarationOfItsName'
 			self.mainThreadSettled().funcParamConsumes.upsert(forwarder.key, value: info)
 		end 'theOnlyDeclarationOfItsName'
 	end 'publishForwardedInfo'
@@ -22414,7 +22472,7 @@ export type ProgramSignatures
 	end 'byRefOf'
 
 	export function byRefOfDeclarationUnder(key ByteArray, site ByteArray) returns ByRefConvention
-		if self.keyNamesOneDeclaration(key) 'theOnlyDeclarationOfItsName'
+		if not self.isAnOverloadSet(key) 'theOnlyDeclarationOfItsName'
 			return self.byRefOf(key)
 		end 'theOnlyDeclarationOfItsName'
 
@@ -22422,7 +22480,7 @@ export type ProgramSignatures
 	end 'byRefOfDeclarationUnder'
 
 	export function consumeOfDeclarationUnder(key ByteArray, site ByteArray) returns CalleeConsume
-		if self.keyNamesOneDeclaration(key) 'theOnlyDeclarationOfItsName'
+		if not self.isAnOverloadSet(key) 'theOnlyDeclarationOfItsName'
 			return self.consumeOf(key)
 		end 'theOnlyDeclarationOfItsName'
 
@@ -22434,9 +22492,9 @@ export type ProgramSignatures
 		return CalleeConsume.consumes(info)
 	end 'consumeOfDeclaration'
 
-	function keyNamesOneDeclaration(key ByteArray) returns bool
-		return self.overloadedDeclsOf(key).count() < 2
-	end 'keyNamesOneDeclaration'
+	export function isAnOverloadSet(callee ByteArray) returns bool
+		return self.overloadedDeclsOf(callee).count() >= 2
+	end 'isAnOverloadSet'
 
 	export function byRefOfDeclaration(site ByteArray) returns ByRefConvention
 		if not self.settledDeclarations().funcParamReassigns.contains(site) 'statesNothing'
@@ -22764,6 +22822,62 @@ export type ProgramSignatures
 		return self.everyDeclarationOfThisNamePublishes(callee, marked: self.settledDeclarations().funcConstructsFromParams, counts: self.settledDeclarations().funcConstructingDeclarationCounts)
 	end 'functionConstructsFromParams'
 
+	export function returnsAMovedOutElement(callee ByteArray) returns bool
+		var visiting = NameRoster.create()
+		return self.keyMovesAnElementOut(callee, visiting: visiting)
+	end 'returnsAMovedOutElement'
+
+	function keyMovesAnElementOut(key ByteArray, visiting NameRoster) returns bool
+		if self.returnsFreshValue(key) 'movedOutAlready'
+			return true
+		end 'movedOutAlready'
+
+		let declarations = try self.settledDeclarations().funcFieldMoveOutForwards.get(key) otherwise return false
+
+		// A key already on the walk is a cycle, which proves nothing.
+		if declarations.count() as FunctionDeclarationCount != self.declarationCountIn(self.settledDeclarations().funcDeclarationCounts, name: key) or visiting.contains(key) 'notEveryDeclarationForwards'
+			return false
+		end 'notEveryDeclarationForwards'
+
+		visiting.push(key.clone())
+		let moves = self.declarationsMoveAnElementOut(declarations, visiting: visiting)
+		_ = try visiting.pop() otherwise panic("ProgramSignatures.keyMovesAnElementOut: pop from the list just pushed to")
+		return moves
+	end 'keyMovesAnElementOut'
+
+	function declarationsMoveAnElementOut(declarations FreshReturnForwardingDeclarations, visiting NameRoster) returns bool
+		for declaration in declarations 'eachDeclaration'
+			for forward in declaration.forwards 'eachForward'
+				if not self.fieldForwardMovesAnElementOut(forward, visiting: visiting) 'aBorrow'
+					return false
+				end 'aBorrow'
+			end 'eachForward'
+		end 'eachDeclaration'
+
+		return true
+	end 'declarationsMoveAnElementOut'
+
+	function fieldForwardMovesAnElementOut(forward FreshReturnForward, visiting NameRoster) returns bool
+		return match forward 'shape'
+			ofFieldOfEnclosingType(typeName, fields, name, argLabels) gives self.fieldTargetMovesAnElementOut(self.fieldMemberForwardTarget(typeName, fields: fields, name: name, argLabels: argLabels), visiting: visiting)
+			unqualified or
+			ofEnclosingType or
+			ofNamedType panic("ProgramSignatures.fieldForwardMovesAnElementOut: a call forward reached the field move-out channel")
+		end 'shape'
+	end 'fieldForwardMovesAnElementOut'
+
+	function fieldTargetMovesAnElementOut(target FieldMoveOutTarget, visiting NameRoster) returns bool
+		return match target 'target'
+			libraryDoor gives true
+			declaration(key) gives self.keyMovesAnElementOut(key, visiting: visiting)
+			unnameable gives false
+		end 'target'
+	end 'fieldTargetMovesAnElementOut'
+
+	export function returnsAParameter(callee ByteArray) returns bool
+		return self.everyDeclarationOfThisNamePublishes(callee, marked: self.settledDeclarations().funcReturnsParameter, counts: self.settledDeclarations().funcParameterReturningDeclarationCounts)
+	end 'returnsAParameter'
+
 	export function returnsAReceiverField(callee ByteArray) returns bool
 		if not self.everyDeclarationOfThisNamePublishes(callee, marked: self.settledDeclarations().funcReturnsReceiverField, counts: self.settledDeclarations().funcReceiverFieldReturningDeclarationCounts) 'notProved'
 			return false
@@ -22784,19 +22898,41 @@ export type ProgramSignatures
 	// reason: a body that starts forwarding somewhere else is a different program — and the declaring file rides
 	// because it decides which declaration an unqualified call names.
 	function recordFreshReturnForward(name ByteArray, forwards FreshReturnForwardArray, declFilePath FilePath)
-		var declarations = try self.mainThreadSettled().funcFreshReturnForwards.get(name) otherwise FreshReturnForwardingDeclarations.create()
+		self.recordForwardingDeclaration(self.mainThreadSettled().funcFreshReturnForwards, shape: DeclShapeFreshReturnForward, name: name, forwards: forwards, declFilePath: declFilePath)
+	end 'recordFreshReturnForward'
+
+	function recordFieldMoveOutForward(name ByteArray, forwards FreshReturnForwardArray, declFilePath FilePath)
+		self.recordForwardingDeclaration(self.mainThreadSettled().funcFieldMoveOutForwards, shape: DeclShapeFieldMoveOutForward, name: name, forwards: forwards, declFilePath: declFilePath)
+	end 'recordFieldMoveOutForward'
+
+	function recordForwardingDeclaration(into FreshReturnForwardMap, shape HashDigest, name ByteArray, forwards FreshReturnForwardArray, declFilePath FilePath)
+		var declarations = try into.get(name) otherwise FreshReturnForwardingDeclarations.create()
 		declarations.push(FreshReturnForwardingDeclaration.create(forwards, declFilePath: declFilePath))
-		self.mainThreadSettled().funcFreshReturnForwards.upsert(name, value: declarations)
-		self.hash = mixBytes(mixBytes(Hasher.combined(self.hash, value: DeclShapeFreshReturnForward), bytes: name), bytes: declFilePath.toString().toByteArray())
+		into.upsert(name, value: declarations)
+		self.hash = mixBytes(mixBytes(Hasher.combined(self.hash, value: shape), bytes: name), bytes: declFilePath.toString().toByteArray())
 
 		for forward in forwards 'eachForward'
 			match forward 'shape'
 				unqualified(enclosingType, callee) then self.mixFreshReturnForward(FreshForwardUnqualifiedShape, typeName: try enclosingType.typeName() otherwise EmptySourceText, callee: callee)
 				ofEnclosingType(typeName, callee, takesReceiver) then self.mixFreshReturnForward(FreshForwardSelfReceiverShape if takesReceiver else FreshForwardSelfTypeShape, typeName: typeName, callee: callee)
 				ofNamedType(typeName, callee) then self.mixFreshReturnForward(FreshForwardNamedTypeShape, typeName: typeName, callee: callee)
+				ofFieldOfEnclosingType(typeName, fields, callee, argLabels) then self.mixFreshReturnForwardThroughFields(typeName, fields: fields, callee: callee, argLabels: argLabels)
 			end 'shape'
 		end 'eachForward'
-	end 'recordFreshReturnForward'
+	end 'recordForwardingDeclaration'
+
+	function mixFreshReturnForwardThroughFields(typeName ByteArray, fields NameRoster, callee ByteArray, argLabels NameRoster)
+		self.mixFreshReturnForward(FreshForwardFieldMemberShape, typeName: typeName, callee: callee)
+
+		for field in fields 'eachField'
+			self.hash = mixBytes(self.hash, bytes: field)
+			self.noteMentionedName(field)
+		end 'eachField'
+
+		for label in argLabels 'eachLabel'
+			self.hash = mixBytes(self.hash, bytes: label)
+		end 'eachLabel'
+	end 'mixFreshReturnForwardThroughFields'
 
 	function mixFreshReturnForward(shape HashDigest, typeName ByteArray, callee ByteArray)
 		self.hash = mixBytes(mixBytes(Hasher.combined(self.hash, value: shape), bytes: typeName), bytes: callee)
@@ -22936,6 +23072,7 @@ export type ProgramSignatures
 			unqualified(enclosingType, name) gives self.unqualifiedForwardTarget(enclosingType, name: name, readerFilePath: declFilePath)
 			ofEnclosingType(typeName, name, takesReceiver) gives self.declaredForwardTarget(self.memberRegistrationKey(qualifiedMethodName(typeName, methodName: name), takesReceiver: takesReceiver))
 			ofNamedType(typeName, name) gives self.namedTypeForwardTarget(typeName, name: name, readerFilePath: declFilePath)
+			ofFieldOfEnclosingType panic("freshReturnForwardTarget: a field move-out forward is read by `returnsAMovedOutElement` and never reaches the sole-owner close")
 		end 'shape'
 	end 'freshReturnForwardTarget'
 
@@ -22966,6 +23103,97 @@ export type ProgramSignatures
 
 		return self.declaredForwardTarget(self.memberRegistrationKey(qualifiedMethodName(typeName, methodName: name), takesReceiver: false))
 	end 'namedTypeForwardTarget'
+
+	function fieldMemberForwardTarget(typeName ByteArray, fields NameRoster, name ByteArray, argLabels NameRoster) returns FieldMoveOutTarget
+		if not isElementMoveOutName(name) 'notADoor'
+			panic("fieldMemberForwardTarget: `{String.from(name)}` is not on the move-out roster — the sweep records a field forward only for a roster name")
+		end 'notADoor'
+
+		var owner = typeName
+
+		for field in fields 'eachField'
+			owner = (try self.declaredTypeNameOfField(owner, field: field) otherwise return FieldMoveOutTarget.unnameable).clone()
+		end 'eachField'
+
+		let member = qualifiedMethodName(owner, methodName: name)
+
+		if self.declaresALibraryMoveOutDoor(member, argLabels: argLabels) 'aLibraryDoor'
+			return FieldMoveOutTarget.libraryDoor
+		end 'aLibraryDoor'
+
+		let key = self.memberRegistrationKey(member, takesReceiver: true)
+
+		if not self.declaresCallee(key) 'noSuchMember'
+			return FieldMoveOutTarget.unnameable
+		end 'noSuchMember'
+
+		return FieldMoveOutTarget.declaration(key)
+	end 'fieldMemberForwardTarget'
+
+	export function declaresALibraryMoveOutDoor(member ByteArray, argLabels NameRoster) returns bool
+		return isElementMoveOutName(unqualifiedMemberOf(member)) and self.everyBindableDeclarationIsTheCorpus(member, argLabels: argLabels)
+	end 'declaresALibraryMoveOutDoor'
+
+	export function everyBindableDeclarationIsTheCorpus(member ByteArray, argLabels NameRoster) returns bool
+		view bindable = declarationsTheCallSlots(self.overloadedDeclsOf(self.memberRegistrationKey(member, takesReceiver: true)), argLabels: argLabels)
+
+		if bindable.isEmpty() 'nothingDeclared'
+			return false
+		end 'nothingDeclared'
+
+		for decl in bindable 'eachDeclaration'
+			if not self.declaredByTheCorpus(decl.declFilePath) 'aUserDeclaration'
+				return false
+			end 'aUserDeclaration'
+		end 'eachDeclaration'
+
+		return true
+	end 'everyBindableDeclarationIsTheCorpus'
+
+	function declaredTypeNameOfField(owner ByteArray, field ByteArray) returns ByteArray throws AbsentError
+		if not self.containsStructInAnyFile(owner) 'ownerIsNoStruct'
+			throw AbsentError.absent
+		end 'ownerIsNoStruct'
+
+		view layout = self.structLayoutOf(owner)
+
+		for i in 0 upto layout.fieldCount() 'eachField'
+			if (try layout.fieldNames.get(i) otherwise panic("ProgramSignatures.declaredTypeNameOfField: fieldNames.get OOB at {i}")).equals(field) 'theField'
+				return try self.declaredTypeNameOfSlot(try layout.fieldTypes.get(i) otherwise panic("ProgramSignatures.declaredTypeNameOfField: fieldTypes.get OOB at {i}"), owner: owner)
+			end 'theField'
+		end 'eachField'
+
+		throw AbsentError.absent
+	end 'declaredTypeNameOfField'
+
+	function declaredTypeNameOfSlot(t MaxonType, owner ByteArray) returns ByteArray throws AbsentError
+		let tag = maxonTypeTag(t)
+
+		if tag == ValueTypeTag.genericInstance 'anInstance'
+			return self.genericInstanceBaseName(genericInstanceIdOf(t))
+		end 'anInstance'
+
+		if not self.tagMayNameAggregate(tag) 'namesNoType'
+			throw AbsentError.absent
+		end 'namesNoType'
+
+		let written = self.denotedSlotAggregateName(t)
+		let scoped = qualifiedMethodName(owner, methodName: written)
+
+		if self.isGenericAliasInAnyFile(scoped) 'anInnerAlias'
+			return try self.genericAliasBaseName(scoped)
+		end 'anInnerAlias'
+
+		if self.isGenericAliasInAnyFile(written) 'aGenericAlias'
+			return try self.genericAliasBaseName(written)
+		end 'aGenericAlias'
+
+		return written
+	end 'declaredTypeNameOfSlot'
+
+	function genericAliasBaseName(aliasName ByteArray) returns ByteArray throws AbsentError
+		return self.genericInstanceBaseName(try self.liveGenericAliasInstance(aliasName) otherwise throw AbsentError.absent)
+	end 'genericAliasBaseName'
 
 	function declaredForwardTarget(key ByteArray) returns FreshReturnForwardTarget
 		return FreshReturnForwardTarget.declaration(key) if self.declaresCallee(key) else FreshReturnForwardTarget.unnameable
@@ -24263,6 +24491,9 @@ export type ProgramSignatures
 			constructingDeclarationCount then self.mainThreadSettled().funcConstructingDeclarationCounts.moveEntry(from, to: to)
 			returnsReceiverField then self.mainThreadSettled().funcReturnsReceiverField.moveMember(from, to: to)
 			receiverFieldReturningDeclarationCount then self.mainThreadSettled().funcReceiverFieldReturningDeclarationCounts.moveEntry(from, to: to)
+			returnsParameter then self.mainThreadSettled().funcReturnsParameter.moveMember(from, to: to)
+			parameterReturningDeclarationCount then self.mainThreadSettled().funcParameterReturningDeclarationCounts.moveEntry(from, to: to)
+			fieldMoveOutForwards then self.mainThreadSettled().funcFieldMoveOutForwards.moveEntry(from, to: to)
 		end 'fact'
 	end 'moveDeclarationSweepFact'
 
@@ -35083,7 +35314,7 @@ export type ProgramSignatures
 	// extension maps onto itself; applying it to a value that was never truncated cannot change it. So a
 	// reader does not have to establish that its value CAME from a narrow slot — only that it COULD have —
 	// and `Parser.emitContainerElementAccessor` (the direct element read) and
-	// `Parser.retypeOpaqueReturnValue` (a value handed back through the opaque word by a shared corpus body,
+	// `Parser.typeResultThroughInstance` (a value handed back through the opaque word by a shared corpus body,
 	// which is how `pop`/`last`/`remove` and a cursor's `current()` read one) ask the identical question.
 	//
 	// ⛔⛔ **IT TAKES A NAME AND NOT A `MaxonType`, AND THAT IS THE WHOLE POINT: IDS DO NOT TRAVEL BETWEEN
@@ -37054,7 +37285,7 @@ export type ProgramSignatures
 	// type — the whole reason a call can read the overload it MEANS — which makes it a SECOND COPY of a fact
 	// three whole-program passes re-decide after the sweep and before any file is parsed. A copy no rewrite
 	// reaches is this project's signature bug across a pass boundary, and here its divergence is a WRONG TYPE
-	// at a parsed call rather than a diagnostic: `Parser.overloadedCallResultType` hands its answer straight
+	// at a parsed call rather than a diagnostic: `Parser.boundReturnOf` hands its answer straight
 	// to `mintDeclaredCallResult`.
 	//
 	// ⚠ **THE DECLARING FILE IS THE DECLARATION'S OWN, WHICH IS STRICTLY BETTER THAN THE ONE THE KEY KEEPS.**
@@ -44086,6 +44317,58 @@ export type ProgramSignatures
 		end 'subject'
 	end 'transferSubjectHoldsAPromise'
 
+	// `type` is in this index's interner (`Parser.spawnTypeArgumentOfValue`), never a file's.
+	export function typeNamesTheBareBase(type MaxonType, base ByteArray) returns bool
+		let tag = maxonTypeTag(type)
+
+		if tag == ValueTypeTag.genericInstance 'anInstance'
+			let id = genericInstanceIdOf(type)
+
+			for position in 0 upto self.genericInstanceArgCount(id) 'eachArg'
+				if self.typeNamesTheBareBase(self.substitutedInstanceArg(id, position: position), base: base) 'anArgumentNamesIt'
+					return true
+				end 'anArgumentNamesIt'
+			end 'eachArg'
+
+			return false
+		end 'anInstance'
+
+		if not tagNamesADeclaredType(tag) 'namesNoType'
+			return false
+		end 'namesNoType'
+
+		return self.aggregateNamesTheBareBase(self.nameOfId(typeNameIdOf(type)), base: base)
+	end 'typeNamesTheBareBase'
+
+	function aggregateNamesTheBareBase(rawName ByteArray, base ByteArray) returns bool
+		view name = self.denotedAggregateName(rawName)
+
+		if name.equals(base) 'theBareBase'
+			return true
+		end 'theBareBase'
+
+		if self.isGenericAliasInAnyFile(name) 'genericAlias'
+			let live = try self.liveGenericAliasInstance(name) otherwise return false
+			return self.typeNamesTheBareBase(MaxonType.genericInstance(live), base: base)
+		end 'genericAlias'
+
+		let tupleName = self.canonicalNameOfStruct(name)
+
+		if not isTupleTypeName(tupleName) 'notATuple'
+			return false
+		end 'notATuple'
+
+		view layout = self.structLayoutOf(tupleName)
+
+		for i in 0 upto layout.fieldCount() 'eachElement'
+			if self.typeNamesTheBareBase(try layout.fieldTypes.get(i) otherwise panic("ProgramSignatures.typeNamesTheBareBase: fieldTypes.get OOB at {i}"), base: base) 'anElementNamesIt'
+				return true
+			end 'anElementNamesIt'
+		end 'eachElement'
+
+		return false
+	end 'aggregateNamesTheBareBase'
+
 	function typeReachesAPromise(type MaxonType, visited ClonerSet) returns bool
 		if self.typeIsAGreenThreadHandle(type, from: self.typeNames) 'aPromise'
 			return true
@@ -46474,6 +46757,9 @@ export type ProgramSignatures
 		fingerprint.note("funcConstructingDeclarationCounts", value: declarations.funcConstructingDeclarationCounts.count())
 		fingerprint.note("funcReturnsReceiverField", value: declarations.funcReturnsReceiverField.count())
 		fingerprint.note("funcReceiverFieldReturningDeclarationCounts", value: declarations.funcReceiverFieldReturningDeclarationCounts.count())
+		fingerprint.note("funcReturnsParameter", value: declarations.funcReturnsParameter.count())
+		fingerprint.note("funcParameterReturningDeclarationCounts", value: declarations.funcParameterReturningDeclarationCounts.count())
+		fingerprint.note("funcFieldMoveOutForwards", value: declarations.funcFieldMoveOutForwards.count())
 		fingerprint.note("interfaceRequirementNames", value: declarations.interfaceRequirementNames.count())
 		fingerprint.note("funcParamDefaults", value: declarations.funcParamDefaults.count())
 		fingerprint.note("funcOpaqueParams", value: declarations.funcOpaqueParams.count())

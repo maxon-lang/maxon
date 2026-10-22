@@ -2768,3 +2768,77 @@ Stack trace:
   in main
   in mrt_start
 ```
+
+<!-- test: a-user-pop-over-a-literal-array-proves-nothing-about-its-result -->
+A user declaration named like a library move-out door is decided by its own body, not by its name: `Picker.pop` returns its `fallback`, so nothing known about the elements of the literal array it was handed bounds that result, and `show` checks the value against `Small` where it enters.
+```maxon
+typealias Small = int(0 to 10)
+
+type Picker uses T
+	export typealias Items = Array with T
+
+	static function pop(a Items, fallback T) returns T
+		_ = a
+		return fallback
+	end 'pop'
+end 'Picker'
+
+function show(s Small) returns Small
+	return s
+end 'show'
+
+function main() returns ExitCode
+	let a = [1, 2, 3]
+	let hundred = 100
+	let s = show(Picker.pop(a, fallback: hundred))
+	print("{s}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-user-pop-over-a-literal-array-proves-nothing-about-its-result.test:13: Range check failed: value outside typealias 'Small'
+Stack trace:
+  in show
+  in main
+  in mrt_start
+```
+
+<!-- test: a-user-get-over-a-literal-array-proves-nothing-about-its-result -->
+The same rule for a user declaration named like a library read: `Picker.get` returns its `fallback`, not an element of the literal array it was handed, so the result carries no bound from that array and `show` checks it against `Small`.
+```maxon
+typealias Small = int(0 to 10)
+
+type Picker uses T
+	export typealias Items = Array with T
+
+	static function get(a Items, fallback T) returns T
+		_ = a
+		return fallback
+	end 'get'
+end 'Picker'
+
+function show(s Small) returns Small
+	return s
+end 'show'
+
+function main() returns ExitCode
+	let a = [1, 2, 3]
+	let hundred = 100
+	let s = show(Picker.get(a, fallback: hundred))
+	print("{s}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-user-get-over-a-literal-array-proves-nothing-about-its-result.test:13: Range check failed: value outside typealias 'Small'
+Stack trace:
+  in show
+  in main
+  in mrt_start
+```

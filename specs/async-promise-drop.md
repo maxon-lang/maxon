@@ -1007,6 +1007,853 @@ end 'main'
 error E3141: <fragment>:14:17: a promise cannot be borrowed through 'last': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. Read it through a door that names its slot (`get(i)`, `first()`, `for … in`, or an array's cursor), or move it out with `pop`/`remove`
 ```
 
+<!-- test: async-promise-drop.error.a-promise-element-handed-out-by-a-static-through-an-instance-alias -->
+A static of a generic type that returns the element of the instance it is handed reads a promise out of the box that holds it, exactly as a method does, so it is refused where the instance is concrete.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+type Box uses T
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function first(b Self) returns T
+		return b.v
+	end 'first'
+end 'Box'
+
+typealias PromiseBox = Box with IntPromise
+
+function plain() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'plain'
+
+function main() returns ExitCode
+	let b = PromiseBox.create(async plain())
+	let p = PromiseBox.first(b)
+	return (await p) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:26:21: a promise cannot be borrowed through 'first': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. Read it through a door that names its slot (`get(i)`, `first()`, `for … in`, or an array's cursor), or move it out with `pop`/`remove`
+```
+
+<!-- test: async-promise-drop.error.a-promise-element-handed-out-by-a-static-on-an-inferred-instance -->
+The same read through a bare generic name, where the call infers the instance from its argument.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+type Box uses T
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function first(b Self) returns T
+		return b.v
+	end 'first'
+end 'Box'
+
+typealias PromiseBox = Box with IntPromise
+
+function plain() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'plain'
+
+function main() returns ExitCode
+	let b = PromiseBox.create(async plain())
+	let p = Box.first(b)
+	return (await p) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:26:14: a promise cannot be borrowed through 'first': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. Read it through a door that names its slot (`get(i)`, `first()`, `for … in`, or an array's cursor), or move it out with `pop`/`remove`
+```
+
+<!-- test: async-promise-drop.error.a-promise-element-handed-out-by-a-static-through-a-later-argument -->
+The instance a static reads from need not be its first argument: any argument that is an instance of the generic type holds the promise the static would hand out.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+type Box uses T
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function second(i Integer, b Self) returns T
+		if i < 0 'negative'
+			panic("negative")
+		end 'negative'
+
+		return b.v
+	end 'second'
+end 'Box'
+
+typealias PromiseBox = Box with IntPromise
+
+function plain() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'plain'
+
+function main() returns ExitCode
+	let b = PromiseBox.create(async plain())
+	let p = PromiseBox.second(0, b: b)
+	return (await p) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:30:21: a promise cannot be borrowed through 'second': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. Read it through a door that names its slot (`get(i)`, `first()`, `for … in`, or an array's cursor), or move it out with `pop`/`remove`
+```
+
+<!-- test: async-promise-drop.error.a-promise-element-handed-out-by-a-static-through-an-array-of-instances -->
+An argument that holds the generic type's instances, here an array of boxes, can carry the promise out just as one box can.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+type Box uses T
+	var v as T
+
+	typealias Peers = Array with Self
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function peers(v T) returns Peers
+		var out = Peers.create()
+		out.push(Self{v: v})
+		return out
+	end 'peers'
+
+	static function firstOf(bs Peers) returns T
+		let first = try bs.get(0) otherwise panic("has one")
+		return first.v
+	end 'firstOf'
+end 'Box'
+
+typealias PromiseBox = Box with IntPromise
+
+function plain() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'plain'
+
+function main() returns ExitCode
+	let boxes = PromiseBox.peers(async plain())
+	let p = PromiseBox.firstOf(boxes)
+	return (await p) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:35:21: a promise cannot be borrowed through 'firstOf': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. Read it through a door that names its slot (`get(i)`, `first()`, `for … in`, or an array's cursor), or move it out with `pop`/`remove`
+```
+
+<!-- test: async-promise-drop.error.a-user-generics-pop-that-returns-a-borrowed-promise-is-refused -->
+The move-out exemption belongs to the library's `pop`/`remove` doors, which take the element out of the container. A user generic that gives its own method one of those names and returns the element it still holds is refused like any other accessor.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+type Slot uses T
+	var held as T
+
+	static function create(held T) returns Self
+		return Self{held: held}
+	end 'create'
+
+	function pop() returns T
+		return self.held
+	end 'pop'
+end 'Slot'
+
+typealias PromiseSlot = Slot with IntPromise
+
+function plain() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'plain'
+
+function main() returns ExitCode
+	let s = PromiseSlot.create(async plain())
+	let p = s.pop()
+	return (await p) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:26:12: a promise cannot be borrowed through 'pop': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. Read it through a door that names its slot (`get(i)`, `first()`, `for … in`, or an array's cursor), or move it out with `pop`/`remove`
+```
+
+<!-- test: async-promise-drop.error.a-promise-element-handed-out-by-a-static-through-nested-arrays -->
+A holder is any argument whose type graph reaches a promise, however deep: an array of arrays of the generic type's element holds the thread the static would hand out.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+type Box uses T
+	var v as T
+
+	typealias Inner = Array with T
+	typealias Rows = Array with Inner
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function rows(v T) returns Rows
+		var inner = Inner.create()
+		inner.push(v)
+		var out = Rows.create()
+		out.push(inner)
+		return out
+	end 'rows'
+
+	static function firstOf(rows Rows) returns T
+		let inner = try rows.get(0) otherwise panic("has one")
+		return try inner.get(0) otherwise panic("has one")
+	end 'firstOf'
+end 'Box'
+
+typealias PromiseBox = Box with IntPromise
+
+function plain() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'plain'
+
+function main() returns ExitCode
+	let rows = PromiseBox.rows(async plain())
+	let p = PromiseBox.firstOf(rows)
+	return (await p) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:38:21: a promise cannot be borrowed through 'firstOf': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. Read it through a door that names its slot (`get(i)`, `first()`, `for … in`, or an array's cursor), or move it out with `pop`/`remove`
+```
+
+<!-- test: async-promise-drop.error.a-promise-element-handed-out-by-a-static-through-a-map -->
+A map whose values are the generic type's element holds the thread just as an array does.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+type Box uses T
+	var v as T
+
+	typealias Named = Map with (String, T)
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function named(v T) returns Named
+		var out = Named.create()
+		out.upsert("a", value: v)
+		return out
+	end 'named'
+
+	static function fromMap(m Named) returns T
+		return try m.get("a") otherwise panic("has one")
+	end 'fromMap'
+end 'Box'
+
+typealias PromiseBox = Box with IntPromise
+
+function plain() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'plain'
+
+function main() returns ExitCode
+	let m = PromiseBox.named(async plain())
+	let p = PromiseBox.fromMap(m)
+	return (await p) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:34:21: a promise cannot be borrowed through 'fromMap': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. Read it through a door that names its slot (`get(i)`, `first()`, `for … in`, or an array's cursor), or move it out with `pop`/`remove`
+```
+
+<!-- test: async-promise-drop.error.a-promise-element-handed-out-by-a-static-through-a-tuple -->
+A tuple argument that carries an instance of the generic type is a holder.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+type Box uses T
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function paired(v T) returns (Self, Integer)
+		return (Self{v: v}, 1 as Integer)
+	end 'paired'
+
+	static function fromPair(pair (Self, Integer)) returns T
+		return pair.0.v
+	end 'fromPair'
+end 'Box'
+
+typealias PromiseBox = Box with IntPromise
+
+function plain() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'plain'
+
+function main() returns ExitCode
+	let pair = PromiseBox.paired(async plain())
+	let p = PromiseBox.fromPair(pair)
+	return (await p) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:30:21: a promise cannot be borrowed through 'fromPair': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. Read it through a door that names its slot (`get(i)`, `first()`, `for … in`, or an array's cursor), or move it out with `pop`/`remove`
+```
+
+<!-- test: async-promise-drop.error.a-promise-element-handed-out-by-a-static-through-a-struct-holding-an-instance -->
+A struct with a field of the generic type's instance is a holder.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+type Box uses T
+	var v as T
+
+	typealias Pocketed = Pocket with T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function through(pocket Pocketed) returns T
+		return pocket.inner.v
+	end 'through'
+end 'Box'
+
+type Pocket uses P
+	typealias Boxed = Box with P
+
+	export var inner as Boxed
+
+	static function create(p P) returns Self
+		return Self{inner: Boxed.create(p)}
+	end 'create'
+end 'Pocket'
+
+typealias PromiseBox = Box with IntPromise
+typealias PromisePocket = Pocket with IntPromise
+
+function plain() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'plain'
+
+function main() returns ExitCode
+	let pocket = PromisePocket.create(async plain())
+	let p = PromiseBox.through(pocket)
+	return (await p) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:39:21: a promise cannot be borrowed through 'through': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. Read it through a door that names its slot (`get(i)`, `first()`, `for … in`, or an array's cursor), or move it out with `pop`/`remove`
+```
+
+<!-- test: async-promise-drop.a-static-whose-arguments-reach-no-promise-hands-a-fresh-one-out -->
+An instance of the generic type that holds no promise is not a holder, even though it is an instance of the base: the static builds its promise from a function, so nothing is borrowed and the call runs.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+type Box uses T
+	var v as T
+
+	typealias Maker = function() returns T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	function ready() returns bool
+		return true
+	end 'ready'
+
+	static function build(template IntBox, make Maker) returns T
+		if not template.ready() 'notReady'
+			panic("not ready")
+		end 'notReady'
+
+		return make()
+	end 'build'
+end 'Box'
+
+typealias IntBox = Box with Integer
+typealias PromiseBox = Box with IntPromise
+
+function plain() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'plain'
+
+function spawnIt() returns IntPromise
+	return async plain()
+end 'spawnIt'
+
+function main() returns ExitCode
+	let template = IntBox.create(1 as Integer)
+	let p = PromiseBox.build(template, make: spawnIt)
+	return (await p) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: async-promise-drop.a-user-generics-pop-that-moves-the-element-out-is-accepted -->
+A user generic's `pop` is decided from its body: this one returns what `Array.pop` took out of its array, a value nothing else holds, so the caller owns the promise and awaits it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+type Stack uses T
+	typealias Items = Array with T
+
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	function push(v T)
+		self.items.push(v)
+	end 'push'
+
+	function pop() returns T
+		return try self.items.pop() otherwise panic("empty")
+	end 'pop'
+end 'Stack'
+
+typealias PromiseStack = Stack with IntPromise
+
+function plain() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'plain'
+
+function main() returns ExitCode
+	var s = PromiseStack.create()
+	s.push(async plain())
+	let p = s.pop()
+	return (await p) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: async-promise-drop.error.a-user-generics-pop-that-returns-a-borrow-of-its-array-is-refused -->
+The same `pop` that returns `self.items.last()` hands back an element its array still holds, so the name earns it nothing.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+type Stack uses T
+	typealias Items = Array with T
+
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	function push(v T)
+		self.items.push(v)
+	end 'push'
+
+	function pop() returns T
+		return try self.items.last() otherwise panic("empty")
+	end 'pop'
+end 'Stack'
+
+typealias PromiseStack = Stack with IntPromise
+
+function plain() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'plain'
+
+function main() returns ExitCode
+	var s = PromiseStack.create()
+	s.push(async plain())
+	let p = s.pop()
+	return (await p) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:33:12: a promise cannot be borrowed through 'pop': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. Read it through a door that names its slot (`get(i)`, `first()`, `for … in`, or an array's cursor), or move it out with `pop`/`remove`
+```
+
+<!-- test: async-promise-drop.a-user-generics-pop-forwarded-through-a-nested-user-type-that-moves-out-is-accepted -->
+The field's declared type is read: `Outer.pop` returns `self.inner.pop()`, `inner` is an `Inner`, and `Inner.pop` is itself a move-out of its array, so the promise is handed on and the caller awaits it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+type Inner uses T
+	typealias Items = Array with T
+
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	function push(v T)
+		self.items.push(v)
+	end 'push'
+
+	function pop() returns T
+		return try self.items.pop() otherwise panic("empty")
+	end 'pop'
+end 'Inner'
+
+type Outer uses T
+	typealias Wrapped = Inner with T
+
+	var inner as Wrapped
+
+	static function create() returns Self
+		return Self{inner: Wrapped.create()}
+	end 'create'
+
+	function push(v T)
+		self.inner.push(v)
+	end 'push'
+
+	function pop() returns T
+		return self.inner.pop()
+	end 'pop'
+end 'Outer'
+
+typealias PromiseOuter = Outer with IntPromise
+
+function plain() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'plain'
+
+function main() returns ExitCode
+	var o = PromiseOuter.create()
+	o.push(async plain())
+	let p = o.pop()
+	return (await p) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: async-promise-drop.error.a-user-generics-pop-through-a-nested-user-type-whose-pop-borrows-is-refused -->
+The name `pop` on a field earns nothing: `inner` is a user type whose `pop` returns what its array still holds, so the outer `pop` hands back a borrow and is refused like any accessor.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+type Inner uses T
+	typealias Items = Array with T
+
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	function push(v T)
+		self.items.push(v)
+	end 'push'
+
+	function pop() returns T
+		return try self.items.last() otherwise panic("empty")
+	end 'pop'
+end 'Inner'
+
+type Outer uses T
+	typealias Wrapped = Inner with T
+
+	var inner as Wrapped
+
+	static function create() returns Self
+		return Self{inner: Wrapped.create()}
+	end 'create'
+
+	function push(v T)
+		self.inner.push(v)
+	end 'push'
+
+	function pop() returns T
+		return self.inner.pop()
+	end 'pop'
+end 'Outer'
+
+typealias PromiseOuter = Outer with IntPromise
+
+function plain() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'plain'
+
+function main() returns ExitCode
+	var o = PromiseOuter.create()
+	o.push(async plain())
+	let p = o.pop()
+	return (await p) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:51:12: a promise cannot be borrowed through 'pop': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. Read it through a door that names its slot (`get(i)`, `first()`, `for … in`, or an array's cursor), or move it out with `pop`/`remove`
+```
+
+<!-- test: async-promise-drop.a-method-that-returns-a-parameter-it-consumes-hands-it-on -->
+A method returning a type-parameter value that is its own consumed parameter hands on what the caller moved in, not what the receiver holds, so the call is not a borrow.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+type Box uses T
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	function echo(w T) returns T
+		return w
+	end 'echo'
+end 'Box'
+
+typealias PromiseBox = Box with IntPromise
+
+function plain() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'plain'
+
+function main() returns ExitCode
+	let bx = PromiseBox.create(async plain())
+	let p = bx.echo(async plain())
+	return (await p) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: async-promise-drop.a-static-that-returns-a-parameter-it-consumes-beside-an-unconsumed-holder-hands-it-on -->
+The same for a static: the holder `a` is only read, and the value returned is the consumed `w`, so nothing is borrowed.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+type Box uses T
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function other(a Self, w T) returns T
+		if not a.ready() 'notReady'
+			panic("not ready")
+		end 'notReady'
+
+		return w
+	end 'other'
+
+	function ready() returns bool
+		return true
+	end 'ready'
+end 'Box'
+
+typealias PromiseBox = Box with IntPromise
+
+function plain() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'plain'
+
+function main() returns ExitCode
+	let a = PromiseBox.create(async plain())
+	let p = PromiseBox.other(a, w: async plain())
+	return ((await p) + (3 if a.ready() else 0)) as ExitCode
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: async-promise-drop.error.a-static-returning-a-parameter-written-as-an-alias-hands-back-a-borrowed-promise -->
+The parameter `x` is written through the `Pair` alias and the result as the tuple itself, so the two spellings differ while naming one type: `x` is what `relay` hands back, and the caller's `held` only lent it, so the result is a borrow.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias Pair = (IntPromise, Integer)
+
+type Box uses T
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function relay(x Pair) returns (IntPromise, Integer)
+		return x
+	end 'relay'
+end 'Box'
+
+typealias PromiseBox = Box with IntPromise
+
+function plain() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'plain'
+
+function main() returns ExitCode
+	let held = (async plain(), 1 as Integer)
+	let (p, n) = PromiseBox.relay(held)
+	return ((await p) + n) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:27:26: a promise cannot be borrowed through 'relay': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. A pair keeps no slot for the promise it carries: destructure an array's `withIterator()` pair in the loop header (`for (it, p) in a.withIterator()`), read the array with `get(i)`, or move the promise out with `pop`/`remove`
+```
+
+<!-- test: async-promise-drop.a-user-pop-moving-out-through-a-local-hands-the-thread-over -->
+`Stack.pop` binds the element it moves out of its field to a local and returns that local, which is the same move-out as returning the call itself, so the popped promise is the caller's to await.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+type Stack uses T
+	typealias Items = Array with T
+
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	function push(v T)
+		self.items.push(v)
+	end 'push'
+
+	function pop() returns T
+		var v = try self.items.pop() otherwise panic("empty")
+		return v
+	end 'pop'
+end 'Stack'
+
+typealias PromiseStack = Stack with IntPromise
+
+function plain() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'plain'
+
+function main() returns ExitCode
+	var s = PromiseStack.create()
+	s.push(async plain())
+	let p = s.pop()
+	return (await p) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: async-promise-drop.a-user-method-forwarding-a-field-remove-hands-the-thread-over -->
+The library `remove` takes one positional argument, and a user method that forwards `self.items.remove(0)` moves the element out exactly as the library door does.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+type Stack uses T
+	typealias Items = Array with T
+
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	function push(v T)
+		self.items.push(v)
+	end 'push'
+
+	function take() returns T
+		return try self.items.remove(0) otherwise panic("empty")
+	end 'take'
+end 'Stack'
+
+typealias PromiseStack = Stack with IntPromise
+
+function plain() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'plain'
+
+function main() returns ExitCode
+	var s = PromiseStack.create()
+	s.push(async plain())
+	let p = s.take()
+	return (await p) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: async-promise-drop.error.a-user-extension-cannot-overload-a-library-move-out-door -->
+A library move-out door cannot be overloaded from an `extension`: the name belongs to the container's own member, so which declaration a call to it binds is never in question.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+extension Array
+	function remove(element Element) returns bool
+		_ = element
+		return false
+	end 'remove'
+end 'Array'
+
+function plain() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'plain'
+
+function main() returns ExitCode
+	var promises = [async plain()]
+	let p = try promises.remove(0) otherwise panic("empty")
+	return (await p) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3176: <fragment>:6:11: the extension member `Array.remove` has the name of `Array`'s own instance member, which would hide it — rename one
+note: stdlib/Array.maxon:289:18: `Array`'s own `remove`
+```
+
 <!-- test: async-promise-drop.a-cursor-over-a-container-of-promises-names-its-slot -->
 A cursor over an array stands at an index, so a promise read through its `current()` has a slot exactly as
 one read through `get(i)` does: awaiting it empties that slot, and the array's own element walk has nothing

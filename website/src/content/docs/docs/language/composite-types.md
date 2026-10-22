@@ -525,7 +525,10 @@ end 'main'
 
 - Several parameters: `type Pair uses A, B`, instantiated `Pair with (Integer, String)`.
 - A static called on the bare generic name infers the arguments from its parameters: a parameter written
-  at a type parameter, or at an instance over one (`Array with T`, or the generic itself).
+  at a type parameter, or at an instance over one (`Array with T`, or the generic itself). An overloaded
+  static infers them when every overload the call can slot fixes the same ones. A call whose result is
+  written over a parameter that no argument fixes (`Holder.make()` declared `returns T`) has no type and is
+  **E3162**; inside the generic's own body the enclosing instance types it.
 - One compiled body serves every instantiation. A method learns how its type arguments are laid out and
   owned from the instance it is called on, and that includes instances the body composes over its own
   parameters — `Array with (Pair with T)`, `Box with (T, Integer)`. A closure uses what the function it is

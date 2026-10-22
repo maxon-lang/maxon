@@ -5409,6 +5409,736 @@ end 'main'
 2 top payload long enough to allocate
 ```
 
+<!-- test: a-closure-in-main-returns-the-parameter-a-generic-static-picks-over-a-scalar-instance -->
+A closure written in a plain function calls an equality-guarded static of a generic type through its instance alias, and the static hands back one of its parameters.
+```maxon
+type Holder uses T where T is Equatable
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function pick(a T, b T) returns T
+		if a == b 'same'
+			return b
+		end 'same'
+
+		return a
+	end 'pick'
+end 'Holder'
+
+typealias Integer = int(i64.min to i64.max)
+typealias IntHolder = Holder with Integer
+
+function main() returns ExitCode
+	let xs = [1, 2]
+	let ys = xs.map(function(n) gives IntHolder.pick(n, b: 1))
+	print("{try ys.get(0) otherwise 0} {try ys.get(1) otherwise 0}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 2
+```
+
+<!-- test: a-closure-in-main-returns-the-parameter-a-generic-static-picks-over-a-string-instance -->
+The same closure over a managed type argument hands back a heap string, and every string is released exactly once.
+```maxon
+type Holder uses T where T is Equatable
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function pick(a T, b T) returns T
+		if a == b 'same'
+			return b
+		end 'same'
+
+		return a
+	end 'pick'
+end 'Holder'
+
+typealias StrHolder = Holder with String
+
+function main() returns ExitCode
+	let xs = ["first {40 + 2} value long enough for a heap record", "second {40 + 3} value long enough for a heap record"]
+	let ys = xs.map(function(s) gives StrHolder.pick(s, b: "first {40 + 2} value long enough for a heap record"))
+	print("{try ys.get(0) otherwise ""}|{try ys.get(1) otherwise ""}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+first 42 value long enough for a heap record|second 43 value long enough for a heap record
+```
+
+<!-- test: a-plain-function-returns-the-parameter-a-generic-static-picks-over-a-scalar-instance -->
+A function with scalar parameters and a scalar result returns what an equality-guarded static of a generic type picks.
+```maxon
+type Holder uses T where T is Equatable
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function pick(a T, b T) returns T
+		if a == b 'same'
+			return b
+		end 'same'
+
+		return a
+	end 'pick'
+end 'Holder'
+
+typealias Integer = int(i64.min to i64.max)
+typealias IntHolder = Holder with Integer
+
+function viaFree(n Integer) returns Integer
+	return IntHolder.pick(n, b: 1)
+end 'viaFree'
+
+function main() returns ExitCode
+	print("{viaFree(1)} {viaFree(2)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 2
+```
+
+<!-- test: a-static-returning-the-type-parameter-through-an-instance-alias-is-a-value-of-the-argument -->
+The result of such a call outside any closure is a `String` where the alias fixes `T` to one: it interpolates, and its heap string is released once.
+```maxon
+type Holder uses T where T is Equatable
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function pick(a T, b T) returns T
+		if a == b 'same'
+			return b
+		end 'same'
+
+		return a
+	end 'pick'
+end 'Holder'
+
+typealias StrHolder = Holder with String
+
+function main() returns ExitCode
+	let r = StrHolder.pick("pick {40 + 2} value long enough for a heap record", b: "other")
+	print("{r}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+pick 42 value long enough for a heap record
+```
+
+<!-- test: a-scalar-result-of-a-static-through-an-instance-alias-is-read-bound-interpolated-and-dropped -->
+A scalar result of a static through an instance alias owns nothing, so a bound one, one interpolated into a string and one that is only a temporary of the statement all release nothing.
+```maxon
+type Holder uses T where T is Equatable
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function pick(a T, b T) returns T
+		if a == b 'same'
+			return b
+		end 'same'
+
+		return a
+	end 'pick'
+end 'Holder'
+
+typealias Integer = int(i64.min to i64.max)
+typealias IntHolder = Holder with Integer
+
+function main() returns ExitCode
+	let r = IntHolder.pick(2, b: 1)
+	print("{r} {IntHolder.pick(1, b: 2)}\n")
+	print("{IntHolder.pick(1, b: 1)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 1
+1
+```
+
+<!-- test: a-heap-result-of-a-static-through-an-instance-alias-is-read-bound-interpolated-and-dropped -->
+A heap result of the same static is released once however it is used.
+```maxon
+type Holder uses T where T is Equatable
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function pick(a T, b T) returns T
+		if a == b 'same'
+			return b
+		end 'same'
+
+		return a
+	end 'pick'
+end 'Holder'
+
+typealias StrHolder = Holder with String
+
+function main() returns ExitCode
+	let first = "first {40 + 2} value long enough for a heap record"
+	let second = "second {40 + 3} value long enough for a heap record"
+	let r = StrHolder.pick(first, b: second)
+	print("{r} {StrHolder.pick(second, b: first)}\n")
+	print("{StrHolder.pick(first, b: first)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+first 42 value long enough for a heap record second 43 value long enough for a heap record
+first 42 value long enough for a heap record
+```
+
+<!-- test: an-overloaded-bare-static-infers-its-instance-from-the-declaration-the-call-binds -->
+Two statics of one name, and the call binds the one whose parameters its arguments fit: the instance is inferred from that declaration, so the result is an `Integer` in a closure and outside it.
+```maxon
+type Holder uses T where T is Equatable
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function pick(a T, b T) returns T
+		if a == b 'same'
+			return b
+		end 'same'
+
+		return a
+	end 'pick'
+
+	static function pick(a T) returns T
+		return a
+	end 'pick'
+end 'Holder'
+
+function main() returns ExitCode
+	let xs = [1, 2]
+	let ys = xs.map(function(n) gives Holder.pick(n, b: 1))
+	print("{try ys.get(0) otherwise 0} {try ys.get(1) otherwise 0}\n")
+	print("{Holder.pick(1, b: 1)} {Holder.pick(2, b: 1)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 2
+1 2
+```
+
+<!-- test: an-overloaded-static-through-an-alias-whose-overloads-return-different-types-is-typed-by-the-bound-one -->
+The two overloads disagree about what they return, and the call binds one of them: its result is typed by that declaration read through the alias.
+```maxon
+type Holder uses T where T is Equatable
+	export var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function pick(a T, b T) returns T
+		if a == b 'same'
+			return b
+		end 'same'
+
+		return a
+	end 'pick'
+
+	static function pick(c Integer) returns Integer
+		return c
+	end 'pick'
+end 'Holder'
+
+typealias Integer = int(i64.min to i64.max)
+typealias IntHolder = Holder with Integer
+
+function main() returns ExitCode
+	let xs = [1, 2]
+	let ys = xs.map(function(n) gives IntHolder.pick(n, b: 1))
+	let h = IntHolder.pick(9)
+	print("{try ys.get(0) otherwise 0} {try ys.get(1) otherwise 0} {h}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 2 9
+```
+
+<!-- test: a-static-returning-a-bare-generic-type-is-read-in-the-callees-scope-through-the-alias -->
+A static returning `Inner` inside `type Holder uses T` returns `Inner with Holder.T`, which the alias fixes to `Inner with String`.
+```maxon
+type Inner uses T
+	export var v as T
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+
+	function get() returns T
+		return self.v
+	end 'get'
+end 'Inner'
+
+type Holder uses T
+	static function wrap(v T) returns Inner
+		return Inner.make(v)
+	end 'wrap'
+end 'Holder'
+
+typealias StrHolder = Holder with String
+
+function main() returns ExitCode
+	let w = StrHolder.wrap("x {40 + 2} value long enough for a heap record")
+	print("{w.get()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+x 42 value long enough for a heap record
+```
+
+<!-- test: a-bare-generic-static-call-in-a-closure-infers-its-instance-from-the-arguments -->
+`Holder.pick(n, b: 1)` names the generic type outright, so the arguments fix `T` and the closure's result is an `Integer`.
+```maxon
+type Holder uses T where T is Equatable
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function pick(a T, b T) returns T
+		if a == b 'same'
+			return b
+		end 'same'
+
+		return a
+	end 'pick'
+end 'Holder'
+
+function main() returns ExitCode
+	let xs = [1, 2]
+	let ys = xs.map(function(n) gives Holder.pick(n, b: 1))
+	print("{try ys.get(0) otherwise 0} {try ys.get(1) otherwise 0}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 2
+```
+
+<!-- test: error.a-bare-generic-static-whose-arguments-fix-no-type-parameter-of-its-result-is-refused -->
+`Holder.make()` returns `T`, and neither the arguments nor an alias fix it, so the call has no type and is refused where it is written.
+```maxon
+enum HolderError implements Error
+	empty
+end 'HolderError'
+
+type Holder uses T
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function make() returns T throws HolderError
+		throw HolderError.empty
+	end 'make'
+end 'Holder'
+
+function main() returns ExitCode
+	let m = try Holder.make() otherwise 0
+	print("{m}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3162: <fragment>:19:21: 'Holder' is named without type arguments and nothing binds its parameter 'T', so 'Holder.make' has no type: its result is written over a parameter of 'Holder' that no argument fixes. Name the instance with a typealias, giving each of its parameters a type argument
+```
+
+<!-- test: error.a-bare-generic-static-whose-arguments-fix-no-type-parameter-of-its-result-is-refused-without-an-otherwise -->
+The same call bound with no `otherwise` has no type either, and is refused at the call rather than at a later use of the binding.
+```maxon
+type Holder uses T
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function make() returns T
+		panic("nothing to make")
+	end 'make'
+end 'Holder'
+
+function main() returns ExitCode
+	let m = Holder.make()
+	print("{m}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3162: <fragment>:15:17: 'Holder' is named without type arguments and nothing binds its parameter 'T', so 'Holder.make' has no type: its result is written over a parameter of 'Holder' that no argument fixes. Name the instance with a typealias, giving each of its parameters a type argument
+```
+
+<!-- test: a-bare-generic-static-called-inside-its-own-type-is-typed-by-the-enclosing-instance -->
+Inside `Holder`'s own body the base names the enclosing instance, so `Holder.make()` is typed at the enclosing `T` and is not refused.
+```maxon
+type Holder uses T
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function make() returns T
+		panic("nothing to make")
+	end 'make'
+
+	static function orMake(flag bool, v T) returns T
+		if flag 'wantsOne'
+			return Holder.make()
+		end 'wantsOne'
+
+		return v
+	end 'orMake'
+end 'Holder'
+
+typealias Integer = int(i64.min to i64.max)
+typealias IntHolder = Holder with Integer
+
+function main() returns ExitCode
+	let kept = IntHolder.orMake(false, v: 7)
+	print("{kept}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: error.a-static-of-a-generic-type-is-not-a-function-value -->
+A static method in value position, through an instance alias, is refused.
+```maxon
+type Holder uses T where T is Equatable
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function pick(a T, b T) returns T
+		if a == b 'same'
+			return b
+		end 'same'
+
+		return a
+	end 'pick'
+end 'Holder'
+
+typealias Integer = int(i64.min to i64.max)
+typealias IntHolder = Holder with Integer
+
+function main() returns ExitCode
+	let f = IntHolder.pick
+	print("{f(1, b: 2)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:22:20: Expected 'min or max' but got 'pick'
+```
+
+<!-- test: a-static-takes-its-instance-from-its-alias-and-not-from-an-argument-of-the-same-base -->
+An argument that is an instance of the static's own base fixes nothing about the static's `T`: the alias does.
+```maxon
+type Holder uses T
+	export var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function keep(other StrHolder, fallback T) returns T
+		print("{other.v}\n")
+		return fallback
+	end 'keep'
+end 'Holder'
+
+typealias Integer = int(i64.min to i64.max)
+typealias IntHolder = Holder with Integer
+typealias StrHolder = Holder with String
+
+function main() returns ExitCode
+	let n = IntHolder.keep(StrHolder.create("seen"), fallback: 7)
+	print("{n + 1}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+seen
+8
+```
+
+<!-- test: a-narrow-signed-result-of-a-static-through-an-instance-alias-keeps-its-sign -->
+A `returns T` the alias fixes to a narrow signed range keeps its sign when the call site reads it.
+```maxon
+type Holder uses T where T is Equatable
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function pick(a T, b T) returns T
+		if a == b 'same'
+			return b
+		end 'same'
+
+		return a
+	end 'pick'
+end 'Holder'
+
+typealias Small = int(-100 to 100)
+typealias SmallHolder = Holder with Small
+
+function main() returns ExitCode
+	let s = SmallHolder.pick(-3, b: 4)
+	print("{s} {SmallHolder.pick(-5, b: -5) + 1}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+-3 -4
+```
+
+<!-- test: a-void-static-through-an-instance-alias-has-no-result-to-type -->
+A static with no result, called through an instance alias, types nothing and leaves nothing to drop.
+```maxon
+type Holder uses T
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function note(n Count)
+		print("noted {n}\n")
+	end 'note'
+end 'Holder'
+
+typealias IntHolder = Holder with Count
+
+function main() returns ExitCode
+	IntHolder.note(5)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+noted 5
+```
+
+<!-- test: method-overloads-that-disagree-about-their-return-type-are-typed-by-the-bound-one -->
+Two `get` methods differ in arity and in what they return. Each call is typed, and its heap result released, by the declaration it binds and not by the by-name return type.
+```maxon
+type Box uses T
+	export var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	function get(_ Count) returns T
+		return self.v
+	end 'get'
+
+	function get(index Count, by Count) returns Count
+		return index + by
+	end 'get'
+end 'Box'
+
+typealias StrBox = Box with String
+
+function main() returns ExitCode
+	let b = StrBox.create("held {40 + 2} long enough for a heap record")
+	let s = b.get(0)
+	let n = b.get(1, by: 2)
+	print("{s} {n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+held 42 long enough for a heap record 3
+```
+
+<!-- test: error.an-instance-method-named-statically-without-its-receiver-is-an-arity-error -->
+An instance method called as `Adder.bump()` carries no receiver argument, and the call is refused as a wrong argument count.
+```maxon
+type Adder
+	export var total as Count
+
+	static function create() returns Self
+		return Self{total: 0}
+	end 'create'
+
+	function bump(by Count)
+		self.total = self.total + by
+	end 'bump'
+end 'Adder'
+
+function main() returns ExitCode
+	Adder.bump()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3036: <fragment>:15:8: 'Adder.bump' expects 2 argument(s) but 0 were provided
+```
+
+<!-- test: error.an-instance-method-named-through-an-instance-alias-without-its-receiver-is-an-arity-error -->
+The same call through an instance alias, where the call already names an instance, is refused as a wrong argument count and not typed through it.
+```maxon
+type Box uses T
+	export var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	function widen(by Count) returns Count
+		return by + 1
+	end 'widen'
+end 'Box'
+
+typealias CountBox = Box with Count
+
+function main() returns ExitCode
+	let n = CountBox.widen()
+	print("{n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3036: <fragment>:17:19: 'Box.widen' expects 2 argument(s) but 0 were provided
+```
+
+<!-- test: an-implicit-self-helper-returning-a-bare-generic-name-is-typed-like-a-call-on-self -->
+`helper()` called without a receiver inside `type Outer uses T` returns a bare `Inner`, which is `Inner with Outer.T`, and the result is used through that instance.
+```maxon
+type Inner uses T
+	export var v as T
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+
+	function get() returns T
+		return self.v
+	end 'get'
+end 'Inner'
+
+type Outer uses T
+	export var seed as T
+
+	static function create(seed T) returns Self
+		return Self{seed: seed}
+	end 'create'
+
+	function helper() returns Inner
+		return Inner.make(self.seed)
+	end 'helper'
+
+	function viaImplicit() returns T
+		let w = helper()
+		return w.get()
+	end 'viaImplicit'
+
+	function viaSelf() returns T
+		let w = self.helper()
+		return w.get()
+	end 'viaSelf'
+end 'Outer'
+
+typealias StrOuter = Outer with String
+
+function main() returns ExitCode
+	let o = StrOuter.create("outer {40 + 2} value long enough for a heap record")
+	print("{o.viaImplicit()}\n{o.viaSelf()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+outer 42 value long enough for a heap record
+outer 42 value long enough for a heap record
+```
+
 <!-- test: a-static-storing-a-copied-parameter-into-self-through-an-inferred-instance-retains-it -->
 A `static function` of a generic type copies its `T` parameter into a `var`, builds `Self{v: copy}` and is called on the bare base, so the instance is inferred from the argument. The record owns its own reference to the string.
 ```maxon

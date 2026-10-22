@@ -3279,9 +3279,9 @@ export type IrFunction
 	// ⭐ **WHETHER THE OP DEFINING A VALUE MINTED ITS RECORD (`Parser.valueMintedSole`), DENSE in the same
 	// lockstep** — the ownership model's own `sole` claim as its emitter made it, and `StorageProvenance`'s
 	// answer to "is this value fresh, or an alias of its operands?". False is the default every emitter gets
-	// without asking, so a door added later is read as an alias until it says otherwise. The parser files it
-	// only for a function that pass traces, and leaves every other one the shared empty column
-	// (`FunctionPlaceholders.mintedSole`), which nothing reads.
+	// without asking, so a door added later is read as an alias until it says otherwise. That pass traces
+	// exactly the functions the parser files it for (`keepsSoleOwnerMarks`), and every other one keeps the
+	// shared empty column (`FunctionPlaceholders.mintedSole`), whose marks nothing reads.
 	export var valueMintedSole as BoolArray
 
 	export var filedProvenance as FiledProvenance
@@ -3980,6 +3980,10 @@ export type IrFunction
 			filed gives true
 		end 'filed'
 	end 'holdsFiledProvenance'
+
+	export function keepsSoleOwnerMarks() returns bool
+		return self.valueMintedSole.count() == self.valueTags.count()
+	end 'keepsSoleOwnerMarks'
 
 	// What `StorageProvenance` reads of this function, or the asker's own empty answer for one that filed nothing.
 	export function provenanceSites(nothingFiled ProvenanceSites) returns ProvenanceSites

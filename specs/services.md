@@ -852,7 +852,7 @@ end 'main'
 typealias Whole = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E2015: <fragment>:15:20: Unsupported: `spawn Box.create(…)` fixes nothing for the type parameter `T` of `type Box` — a `spawn` names the type outright, so its type arguments are read off the factory's own arguments and `create` declares no parameter typed at `T`. Give the factory a parameter of that type, or spawn a type that fixes it
+error E2015: <fragment>:15:10: Unsupported: `spawn Box.create(…)` fixes nothing for the type parameter `T` of `type Box` — a `spawn` names the type outright, so its type arguments are read off the factory's own arguments and `create` declares no parameter typed at `T`. Give the factory a parameter of that type, or spawn a type that fixes it
 ```
 
 <!-- test: error.a-spawn-inside-a-generic-body-is-refused -->
@@ -892,7 +892,7 @@ end 'main'
 typealias Whole = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E2015: <fragment>:22:21: Unsupported: `spawn Box.create(…)` fixes `type Box`'s type arguments to the enclosing declaration's own type parameters, which name no layout — and `Box.__loop` is synthesized per instantiation, so it has no dictionary to read one from. Spawn the service from a body that knows the concrete type
+error E2015: <fragment>:22:11: Unsupported: `spawn Box.create(…)` fixes `type Box`'s type arguments to the enclosing declaration's own type parameters, which name no layout — and `Box.__loop` is synthesized per instantiation, so it has no dictionary to read one from. Spawn the service from a body that knows the concrete type
 ```
 
 <!-- test: a-private-method-is-not-a-message -->
@@ -10824,8 +10824,8 @@ end 'main'
 ```
 
 <!-- test: error.a-spawn-of-an-overloaded-generic-factory-is-refused -->
-A `spawn` reads its type arguments off the factory's own argument list, and an OVERLOADED factory has no
-single list to read: which overload the arguments resolve to is settled after the point where the
+A `spawn` reads its type arguments off the factory's own argument list. It is refused because the overloads
+the call can slot fix different instances: which overload the arguments resolve to is settled after the point where the
 instantiation must already be known. Refused rather than guessed — reading the first declaration would fix
 `T` from a parameter the resolved overload does not have, and the instance, its layout and its destructor
 would all be the wrong ones with no diagnostic.
@@ -10835,11 +10835,11 @@ typealias Whole = int(i64.min to i64.max)
 type Box uses T
 	export var n as Whole
 
-	static function create(x T) returns Self
+	static function create(x T, a Whole) returns Self
 		return Self{n: 1}
 	end 'create'
 
-	static function create(a Whole, x T) returns Self
+	static function create(b Whole, a T) returns Self
 		return Self{n: 2}
 	end 'create'
 
@@ -10849,12 +10849,85 @@ type Box uses T
 end 'Box'
 
 function main() returns ExitCode
-	let h = spawn Box.create(7 as Whole, x: 9 as Whole)
+	let h = spawn Box.create("hi", a: 7 as Whole)
 	return try await h.peek() otherwise 0 as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:21:20: Unsupported: `spawn Box.create(…)` — `Box` is generic and `create` is declared 2 times, so its type arguments cannot be read off the call: which overload the arguments resolve to is settled after this point, and the parameter list they must be matched against is that overload's. Give the factories distinct names, or spawn a type whose factory is declared once
+error E2015: <fragment>:21:10: Unsupported: `spawn Box.create(…)` — `Box` is generic and `create` is declared 2 times, so its type arguments cannot be read off the call: the overloads the call can slot do not all fix the same type arguments (they fix different ones, or one of them fixes none), and which overload the arguments resolve to is settled after this point. Give the factories that disagree distinct names, or spawn a type whose factory is declared once
+```
+
+<!-- test: a-spawn-of-an-overloaded-generic-factory-whose-overloads-fix-one-instance-starts-it -->
+When every overload fixes `T` to the same type, the instance is known whichever one the call binds, so the spawn starts a `Box with Whole`.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+type Box uses T
+	export var n as Whole
+
+	static function create(x T) returns Self
+		_ = x
+		return Self{n: 1}
+	end 'create'
+
+	static function create(a Whole, x T) returns Self
+		_ = x
+		return Self{n: a}
+	end 'create'
+
+	export function peek() returns Whole
+		return self.n
+	end 'peek'
+end 'Box'
+
+function start(a Whole, x Whole) returns ExitCode
+	let h = spawn Box.create(a, x: x)
+	let n = try await h.peek() otherwise panic("peek")
+	return n as ExitCode
+end 'start'
+
+function main() returns ExitCode
+	return start(7, x: 9)
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-spawn-of-an-overloaded-generic-factory-binds-only-the-overloads-the-call-can-slot -->
+`create()` takes no argument, so the call `Box.create(a)` can only bind `create(x T)`, and that one overload fixes `T`.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+type Box uses T
+	export var n as Whole
+
+	static function create(x T) returns Self
+		_ = x
+		return Self{n: 5}
+	end 'create'
+
+	static function create() returns Self
+		return Self{n: 6}
+	end 'create'
+
+	export function peek() returns Whole
+		return self.n
+	end 'peek'
+end 'Box'
+
+function start(a Whole) returns ExitCode
+	let h = spawn Box.create(a)
+	let n = try await h.peek() otherwise panic("peek")
+	return n as ExitCode
+end 'start'
+
+function main() returns ExitCode
+	return start(9)
+end 'main'
+```
+```exitcode
+5
 ```
 
 <!-- test: error.a-spawn-of-factories-that-keep-an-argument-differently-is-refused -->
@@ -10901,7 +10974,125 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E2015: <fragment>:36:23: Unsupported: `spawn Keeper.create(…)` — `Keeper.create` is declared 2 times and they do not all keep argument 1 alike. A `spawn` MOVES every argument its factory keeps into the service, and which declaration this call binds is settled after this point, so there is no one move to make. Give the factories distinct names
+error E2015: <fragment>:36:10: Unsupported: `spawn Keeper.create(…)` — `Keeper.create` is declared 2 times and they do not all keep argument 1 alike. A `spawn` MOVES every argument its factory keeps into the service, and which declaration this call binds is settled after this point, so there is no one move to make. Give the factories distinct names
+```
+
+<!-- test: error.a-value-popped-from-a-field-container-is-moved-out-not-solely-owned -->
+A `take` that returns `self.queue.pop()` moves the element out of the queue, but the queue may have shared it: `stash` pushed the very `Job` that `current` still names. The element is not provably solely owned, so sending it is refused.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Job
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Job'
+
+typealias Jobs = Array with Job
+
+type Holder
+	var queue as Jobs
+	var current as Job
+
+	static function create() returns Self
+		return Self{queue: Jobs.create(), current: Job.create(1)}
+	end 'create'
+
+	function stash()
+		self.queue.push(self.current)
+	end 'stash'
+
+	function take() returns Job
+		return try self.queue.pop() otherwise panic("empty")
+	end 'take'
+end 'Holder'
+
+type Worker
+	var total as Integer
+
+	static function create() returns Self
+		return Self{total: 0}
+	end 'create'
+
+	export function run(j Job) returns Integer
+		self.total = self.total + j.n
+		return self.total
+	end 'run'
+end 'Worker'
+
+function main() returns ExitCode
+	var h = Holder.create()
+	h.stash()
+	let j = h.take()
+	let worker = spawn Worker.create()
+	let total = try await worker.run(j) otherwise panic("running")
+	return total as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:49:35: argument `j` of the message `Worker.run` cannot be proven to have exactly one owner (`j`): this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+```
+
+<!-- test: error.a-value-popped-from-a-generic-stack-is-moved-out-not-solely-owned -->
+The same through a generic `Stack with Job`: `pop` returns `self.items.pop()`, the pushed `Job` is still held by `current`, and the send is refused.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Job
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Job'
+
+type Stack uses T
+	typealias Items = Array with T
+
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	function push(v T)
+		self.items.push(v)
+	end 'push'
+
+	function pop() returns T
+		return try self.items.pop() otherwise panic("empty")
+	end 'pop'
+end 'Stack'
+
+typealias JobStack = Stack with Job
+
+type Worker
+	var total as Integer
+
+	static function create() returns Self
+		return Self{total: 0}
+	end 'create'
+
+	export function run(j Job) returns Integer
+		self.total = self.total + j.n
+		return self.total
+	end 'run'
+end 'Worker'
+
+function main() returns ExitCode
+	var current = Job.create(1)
+	var s = JobStack.create()
+	s.push(current)
+	let j = s.pop()
+	let worker = spawn Worker.create()
+	let total = try await worker.run(j) otherwise panic("running")
+	return (total + current.n) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:51:35: argument `j` of the message `Worker.run` cannot be proven to have exactly one owner (`j`): this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
 ```
 
 <!-- test: a-borrowed-string-parameter-is-copied-into-the-send -->
@@ -13554,7 +13745,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:37:20: Unsupported: a type argument inferred from a factory argument declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a slot standing at a type parameter is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+error E2015: <fragment>:37:10: Unsupported: a type argument inferred from a factory argument declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a slot standing at a type parameter is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
 ```
 
 <!-- test: services.an-interface-argument-sent-to-a-stopped-service-is-handed-back -->
@@ -16452,5 +16643,5 @@ export type Box uses T
 end 'Box'
 ```
 ```maxoncstderr
-error E3008: <fragment>:4:20: function 'Box.create' is not exported
+error E3008: <fragment>:4:10: function 'Box.create' is not exported
 ```

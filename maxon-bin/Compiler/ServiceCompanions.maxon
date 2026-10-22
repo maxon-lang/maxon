@@ -1102,12 +1102,12 @@ module function serviceReplyInstanceUnknownRefusal(typeName ByteArray, methodNam
 	return "`{String.from(typeName)}.{String.from(methodName)}` replies at `{String.from(typeName)}`'s own type parameter `{String.from(paramName)}`, and this handle stands at the bare `{String.from(serviceHandleCompanionName(typeName))}` — the ONE handle companion every instantiation of `{String.from(typeName)}` shares — so it names no instantiation and the reply has no type. SPELL the instantiation: `{String.from(serviceHandleCompanionName(typeName))} with <the type argument>` is a generic instance like any other, and a `typealias` over it carries the reply's type through a parameter, a struct field or an array element. Or send `{String.from(methodName)}` where the `spawn {String.from(typeName)}.{String.from(member)}(…)` binding is, which carries the instantiation already"
 end 'serviceReplyInstanceUnknownRefusal'
 
-// ⭐⭐ **THE WORDS FOR A `spawn` WHOSE FACTORY IS OVERLOADED.** Which member a call resolves to is
-// `SemanticCheck.resolveOverloadedCalls`' answer and it is not available here, so the arguments cannot be
-// matched against a parameter list without guessing which one — and a guess binds the type argument from
-// the wrong position.
+// ⭐⭐ **THE WORDS FOR A `spawn` WHOSE OVERLOADED FACTORY'S OVERLOADS DO NOT ALL FIX ONE INSTANCE.** Which
+// member a call resolves to is `SemanticCheck.resolveOverloadedCalls`' answer and it is not available here, so
+// when the overloads the call can slot disagree the arguments cannot be matched against a parameter list
+// without guessing which one — and a guess binds the type argument from the wrong position.
 module function spawnOverloadedFactoryRefusal(typeName ByteArray, member ByteArray, declarationCount ElementIndex) returns String
-	return "`spawn {String.from(typeName)}.{String.from(member)}(…)` — `{String.from(typeName)}` is generic and `{String.from(member)}` is declared {declarationCount} times, so its type arguments cannot be read off the call: which overload the arguments resolve to is settled after this point, and the parameter list they must be matched against is that overload's. Give the factories distinct names, or spawn a type whose factory is declared once"
+	return "`spawn {String.from(typeName)}.{String.from(member)}(…)` — `{String.from(typeName)}` is generic and `{String.from(member)}` is declared {declarationCount} times, so its type arguments cannot be read off the call: the overloads the call can slot do not all fix the same type arguments (they fix different ones, or one of them fixes none), and which overload the arguments resolve to is settled after this point. Give the factories that disagree distinct names, or spawn a type whose factory is declared once"
 end 'spawnOverloadedFactoryRefusal'
 
 // ⭐⭐ **THE WORDS FOR A `spawn` WHOSE TYPE ARGUMENT IS STILL OPAQUE.** Written inside another generic

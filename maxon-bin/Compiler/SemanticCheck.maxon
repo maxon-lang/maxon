@@ -300,8 +300,8 @@ type FunctionValueOrigins
 
 	// The op that defined `value` in `func`. It PANICS for a value no op defines, because the one caller
 	// asks only about a value `Parser.emitDefaultArgValue` synthesized — the result of a nullary helper
-	// `call`, and of nothing else: `retypeOpaqueMethodResult` answers `asItStands` on an empty argument
-	// list, so no reinterpretation is ever wrapped around it and the call's own result IS the argument.
+	// `call`, and of nothing else: `typeCallResultThroughInstance` answers `asItStands` for a call with no
+	// argument and no constructed instance, so no reinterpretation is ever wrapped around it and the call's own result IS the argument.
 	function definingOp(module MaxonModule, func IrFunction, value ValueId) returns ElementIndex
 		if not self.filled 'theFirstAskInThisFunction'
 			self.fill(module, func: func)
@@ -433,9 +433,9 @@ end 'leaveUnmatchedCallOnFirstCandidate'
 
 // An opaque argument cannot discriminate, and "cannot discriminate" is not "is a scalar".
 //
-// A `typeParameter` value is a generic's `T` that `retypeOpaqueMethodResult` could not make
-// concrete — which it declines to do exactly when the concrete type is managed, because the drop
-// decision the tag governs is already emitted. It names no aggregate: `aggregateNameFor` answers
+// A `typeParameter` value is a generic's `T` that `typeCallResultThroughInstance` could not make
+// concrete — a call that names no instance (a receiver, or a qualifier, whose argument fixes `T`)
+// leaves the declared opaque tag as it stands. It names no aggregate: `aggregateNameFor` answers
 // empty for it and `namedAggregatesConflict` reads empty as "a scalar", so the candidate with a scalar
 // parameter would match while the one with the correct aggregate parameter was refused for
 // disagreeing with it.
@@ -560,7 +560,7 @@ end 'OverloadPick'
 // The numbers only have to ORDER the candidates.
 //
 // ⭐⭐ **EXPORTED BECAUSE A SECOND DECIDER RANKS BY THEM, AND MUST RANK THE SAME WAY.**
-// `Parser.overloadedCallResultType` picks a member at PARSE time, for its return type alone, from what the
+// `Parser.boundReturnOf` picks a member at PARSE time, for its return type alone, from what the
 // token sweep publishes — and the member it picks has to be the one this pass will pick a whole pass later,
 // or the program earns `reportOverloadReturnDisagreement` for a call it got right. The two cannot share a
 // scoring FUNCTION (one reads swept types, the other the merged registry), so they share the ORDER: the same
@@ -1246,8 +1246,8 @@ let sharedCallResultSubject = OverloadDisagreementSubject.theCallsResult
 // ⭐⭐ **THE ONE THING SELECTING LATE COSTS: the parser has ALREADY TYPED the call's result, and it may have
 // typed it from a registry that cannot tell overloads apart.**
 //
-// A call's result value is minted during the parse (`Parser.mintCallResult`). Its FIRST question is
-// `Parser.overloadedCallResultType`, which asks the sweep's per-declaration parameter types which member the
+// A call's result value is minted during the parse (`Parser.mintCallResult`), typed by
+// `Parser.boundReturnOf`, which asks the sweep's per-declaration parameter types which member the
 // call means and answers that member's return type — so for a set whose members disagree, and whose
 // arguments settle which one is meant, the tag the parser minted is already the right one and this pass finds
 // nothing to do. Where that decider DECLINES (it does not read every parameter type, and it will not
@@ -1314,7 +1314,7 @@ end 'reconcileOverloadResultTag'
 // quadrant.
 //
 // ⭐⭐ **BOTH OF THOSE PROGRAMS NOW COMPILE AND ARE RIGHT, and this arm is what would catch it if they
-// stopped being.** `Parser.overloadedCallResultType` types each of them from the member its ARGUMENT means,
+// stopped being.** `Parser.boundReturnOf` types each of them from the member its ARGUMENT means,
 // so the void call has no managed result to enrol a drop for and the value call has one to drop — pinned as
 // `function-overloads.md`'s two `*-overload-beside-a-*-one-*-resolves-by-argument` cases, which assert the
 // answer and the exit code rather than a refusal. What still reaches here is a set with a member

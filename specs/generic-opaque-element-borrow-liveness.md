@@ -1238,7 +1238,42 @@ end 'main'
 ```
 
 <!-- test: error.an-overloaded-factory-through-a-bare-generic-base-names-no-instance -->
-An overloaded factory fixes no instantiation from its arguments, and nothing else names one, so the static that needs a descriptor to copy its argument is reached through no instance and the call is refused rather than handed a zero descriptor.
+An overloaded factory whose overloads fix different instances fixes no instantiation from its arguments, and nothing else names one, so the static that needs a descriptor to copy its argument is reached through no instance and the call is refused rather than handed a zero descriptor.
+```maxon
+type Box uses T
+	export typealias Items = Array with T
+	export var v as T
+
+	function touch() returns Count
+		return 1
+	end 'touch'
+
+	static function keep(x T, n Count) returns Count
+		var copy = x
+		copy = x
+		let pair = Self{v: copy}
+		return pair.touch() + n
+	end 'keep'
+
+	static function keep(a Count, n T) returns Count
+		let pair = Self{v: n}
+		return pair.touch() + a
+	end 'keep'
+end 'Box'
+
+function main() returns ExitCode
+	let s = "alpha {40 + 2} value long enough for a heap record"
+	let k = Box.keep(s, n: 3)
+	print("{k} {s}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3162: <fragment>:25:14: 'Box' is named without type arguments and nothing binds its parameter 'T', so 'Box.keep' has no layout descriptor to be handed: the base has none, and neither does this function. Name the instance with a typealias, giving each of its parameters a type argument
+```
+
+<!-- test: an-overloaded-factory-through-a-bare-generic-base-whose-overloads-fix-one-instance-infers-it -->
+Every overload of the factory fixes `T` to the type of `x`, so whichever one the call binds the instantiation is `Box with String`, and the static that needs a descriptor to copy its argument is handed that instance's descriptor.
 ```maxon
 type Box uses T
 	export typealias Items = Array with T
@@ -1268,8 +1303,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3162: <fragment>:25:14: 'Box' is named without type arguments and nothing binds its parameter 'T', so 'Box.keep' has no layout descriptor to be handed: the base has none, and neither does this function. Name the instance with a typealias, giving each of its parameters a type argument
+```exitcode
+0
+```
+```stdout
+1 alpha 42 value long enough for a heap record
 ```
 
 <!-- test: a-field-read-binary-operand-survives-a-later-call-releasing-its-owner -->

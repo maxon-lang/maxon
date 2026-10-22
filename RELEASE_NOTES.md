@@ -26,6 +26,14 @@ release's version as its heading when the release is cut.
   Fix: re-brand the element with `as` (`[b as A]`).
 - An array-literal element of another type is E3005, where it was E2015.
   Fix: expect E3005 wherever a script or test matches the code.
+- A member of your own type named `pop`, `remove`, `removeFirst` or `removeLast` that hands back a promise is
+  judged by its body, and one that returns a borrow (`self.items.last()`) is E3141; so is a generic static
+  that hands back a promise one of its arguments still holds.
+  Fix: return what a library `pop`/`remove` takes out of the field, or have every declaration of the static
+  take that argument.
+- A static called on a bare generic name whose result is written over a type parameter no argument fixes
+  (`Holder.make()` declared `returns T`) is E3162.
+  Fix: call it through a typealias that names the instance (`typealias IntHolder = Holder with Integer`).
 
 ## 0.5.0 — 2026-10-08
 

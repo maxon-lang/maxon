@@ -1745,6 +1745,8 @@ export enum ErrorCode
 	// run-time walk of the service's state described below (exit 96). A field read off a temporary
 	// built in the factory call's own argument list crosses, because the `spawn` releases that
 	// temporary.
+	// An element a member hands back out of a field's container (`return self.queue.pop()`) has left the
+	// container but may still have another owner, so it is refused like a value read out of a field.
 	// The THIRD is about what the record HOLDS rather than about the record: SOLENESS IS NOT TRANSITIVE.
 	// A box this frame owns alone may point at a record a second owner holds too, because every co-owning
 	// store (a struct-field or union-payload move-in of a borrow, a consuming call, a container push) takes
@@ -1815,6 +1817,13 @@ export enum ErrorCode
 	// record its source cannot be finished: a list's `value()` or its iterator's `current()`, `last()`, a
 	// library member handing back a pair that carries a promise the container still holds, and a consume
 	// of a promise no frame owns (read twice from one slot, or merged from two branches).
+	// A member of a user type, a `pop` of its own included, is judged by its body: it moves its element out
+	// when every `return` hands back what a library `pop`/`remove` took out of a field of `self` (directly,
+	// through a `var` local bound to one, or through another such member of a field's type), or a parameter
+	// every declaration of it takes; one that returns a borrow (`self.items.last()`) is refused. A static of a
+	// generic type that hands back a promise an argument holds -- an instance passed in, or an array, map,
+	// tuple or struct reaching one -- is refused on the same terms, unless every declaration of it takes that
+	// argument.
 	// A struct FIELD is a slot on the same terms as a container element, and every door that spends a
 	// promise asks this -- `await`, `.cancel()`, a store into a container, a store into a field or a union
 	// case, an argument at a parameter the callee takes, an `otherwise` fallback merged into a `try`'s
@@ -2082,8 +2091,11 @@ export enum ErrorCode
 	// type body, a layout-needing callee, static or through a receiver, is refused where the calling
 	// function has no descriptor of its own (`Holder.create()` in `main`). A static call whose
 	// arguments fix every parameter to a concrete type, through parameters written at a type parameter
-	// or at an instance over one (`Array with T`), names that instance and is not refused. Name the
-	// instance with a typealias: `typealias Inner = Box with T`.
+	// or at an instance over one (`Array with T`), names that instance and is not refused; an overloaded
+	// static names it when every overload the call can slot fixes the same instance. A static whose result
+	// is written over a parameter that no argument fixes (`Holder.make()` declared `returns T`) has no type
+	// and is refused, outside the generic's own body. Name the instance with a typealias:
+	// `typealias Inner = Box with T`.
 	bareGenericSubjectUnbound = "E3162"
 
 	// A message of a service may read a module-level `let` whose value no share walk can mark. In a program that

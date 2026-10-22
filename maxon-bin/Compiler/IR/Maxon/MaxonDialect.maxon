@@ -711,14 +711,13 @@ export function hiddenBlockEndOf(func IrFunction, carriesALayoutSlot bool) retur
 end 'hiddenBlockEndOf'
 
 // Rebuild a `MaxonType` from the two columns — the inverse of `maxonTypeTag` +
-// `typeNameIdOf`. THIS ALLOCATES (it constructs a union), which is why it is called only
-// where a `MaxonType` is genuinely stored: a binding's declared type, a `literal` op's type.
-// Never on a per-value or per-op path.
+// `typeNameIdOf`. THIS ALLOCATES (it constructs a union), so ask it only for a question that needs a
+// `MaxonType` itself, never one the tag column alone answers.
 //
 // The `void` tag has no `MaxonType` to rebuild — a non-value is not a value-type, which is the
-// whole reason void lives on `MaxonReturnType` and not here. Its one caller is `Parser.typeOf`,
-// which types a `let`/`var` BINDING, and a binding can never hold a void call's result: that is
-// a call in value position, which the parser rejects.
+// whole reason void lives on `MaxonReturnType` and not here. A `let`/`var` BINDING is typed through
+// it and can never hold a void call's result: that is a call in value position, which the parser
+// rejects.
 export function maxonTypeOfTag(tag ValueTypeTag, nameId TypeNameId) returns MaxonType
 	match tag 'k'
 		boolean then return MaxonType.boolean

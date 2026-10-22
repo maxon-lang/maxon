@@ -3049,10 +3049,6 @@ end 'aliasPromisesTaken'
 // every compound-typed declaration in the program. NEVER mutated (a `MaxonType` has no mutable state).
 let sharedUnreadParamType = MaxonType.unresolved
 
-// ⭐⭐ **WHAT `Parser.overloadedCallResultType` DECIDED.** `undecided` is not "no such name" and not an
-// error: it means the by-name answer (`ProgramSignatures.returnTypeOf`) is either already exact or is the
-// best anything can do here, and it is the answer for every call in every program that does not overload a
-// name across two return types.
 // How many candidates of one set hold the best score — a count of OVERLOADS, not of parameters, which is why
 // it is not `ParamCount`. Wide because nothing bounds how many declarations may wear one name: the
 // registration mint counts up an ordinal rather than refusing (`unclaimedRegistrationName`).
@@ -3077,14 +3073,12 @@ function overloadRankTagOf(paramTag ValueTypeTag) returns ValueTypeTag
 	return ValueTypeTag.integer if paramTag == ValueTypeTag.named else paramTag
 end 'overloadRankTagOf'
 
-union SweptOverloadPick
-	resolved(returnType MaxonReturnType)
-	undecided
-end 'SweptOverloadPick'
+union BoundReturn
+	declared(returnType MaxonReturnType, scopeFilePath FilePath, pick SweptDeclarationPick)
+	undeclared
+end 'BoundReturn'
 
-// The one `undecided`, shared: a payload-free union case is still a heap object in Maxon, and this is the
-// answer at EVERY call in the program.
-let sharedUndecidedOverloadPick = SweptOverloadPick.undecided
+let sharedUndeclaredReturn = BoundReturn.undeclared
 
 let sharedUndecidedDeclarationPick = SweptDeclarationPick.undecided
 
@@ -3093,6 +3087,27 @@ let sharedUndecidedDeclarationPick = SweptDeclarationPick.undecided
 function sweptSlotNames(candidate OverloadedDecl) returns NameRoster
 	return callAlignedFrom(candidate.paramNames) if candidate.takesReceiver else candidate.paramNames
 end 'sweptSlotNames'
+
+export function declarationsTheCallSlots(candidates OverloadedDeclArray, argLabels NameRoster) returns OverloadedDeclArray
+	var placeholders = ValueIdArray.create()
+
+	for _ in 0 upto argLabels.count() 'eachArgument'
+		placeholders.push(0 as ValueId)
+	end 'eachArgument'
+
+	var slotted = OverloadedDeclArray.create()
+
+	for decl in candidates 'eachDeclaration'
+		match slotCallArgs(sweptSlotNames(decl), args: placeholders, argLabels: argLabels) 'slot'
+			ordered then slotted.push(decl)
+			arityMismatch or
+			unknownLabel or
+			duplicateArg then continue
+		end 'slot'
+	end 'eachDeclaration'
+
+	return candidates.clone() if slotted.isEmpty() else slotted
+end 'declarationsTheCallSlots'
 
 // One candidate's verdict. `unscoreable` is its own arm and not a second spelling of `incompatible`: a
 // candidate whose parameter types the sweep could not read cannot be refused, so counting it out would make
@@ -5129,6 +5144,42 @@ union InferredTypeArgument
 	absent
 end 'InferredTypeArgument'
 
+union FactoryTypeArguments
+	fixed(let typeArgs MaxonTypeArray)
+	unfixed(let paramName ByteArray)
+
+	function arguments() returns MaxonTypeArray throws AbsentError
+		match self 'fixes'
+			fixed(typeArgs) then return typeArgs.clone()
+			unfixed then throw AbsentError.absent
+		end 'fixes'
+	end 'arguments'
+end 'FactoryTypeArguments'
+
+// A type the sweep could not read may be anything, so it never provably differs: a column whose type is
+// unread may be the parameter a body returns, and answering otherwise would let a borrow through as moved.
+function typesProvablyDiffer(a MaxonType, other MaxonType) returns bool
+	if maxonTypeTag(a) == ValueTypeTag.unresolved or maxonTypeTag(other) == ValueTypeTag.unresolved 'unreadByTheSweep'
+		return false
+	end 'unreadByTheSweep'
+
+	return not maxonTypesDenoteSame(a, b: other)
+end 'typesProvablyDiffer'
+
+function typeArgumentListsDenoteSame(list MaxonTypeArray, other MaxonTypeArray) returns bool
+	if list.count() != other.count() 'differentLengths'
+		return false
+	end 'differentLengths'
+
+	for i in 0 upto list.count() 'eachArgument'
+		if not maxonTypesDenoteSame(try list.get(i) otherwise panic("typeArgumentListsDenoteSame: list.get OOB at {i} below its own count"), b: try other.get(i) otherwise panic("typeArgumentListsDenoteSame: other.get OOB at {i} below the equal count")) 'anotherType'
+			return false
+		end 'anotherType'
+	end 'eachArgument'
+
+	return true
+end 'typeArgumentListsDenoteSame'
+
 // ⭐ **WHY AN INFERENCE FIXED NOTHING** — the two shapes, carried to the one door that decides between a
 // refusal and the base `structRef`. A verdict and not a sentence, so the road that discards it renders
 // nothing.
@@ -5148,6 +5199,7 @@ end 'UninferredFactoryReason'
 module enum BareGenericSubjectUse
 	fedAnEnclosingParameter
 	needsALayoutDescriptor
+	resultTypedAtAnUnboundParameter
 end 'BareGenericSubjectUse'
 
 module function bareGenericSubjectSentence(signatures ProgramSignatures, base ByteArray, callee ByteArray, use BareGenericSubjectUse, scopeTypeName ByteArray, scopeParams NameRoster) returns String
@@ -5164,6 +5216,7 @@ module function bareGenericSubjectSentence(signatures ProgramSignatures, base By
 	let consequence = match use 'why'
 		fedAnEnclosingParameter gives "may not be handed a value typed at a parameter of '{String.from(scopeTypeName)}': no instance of '{baseName}' describes what it would hold"
 		needsALayoutDescriptor gives "has no layout descriptor to be handed: the base has none, and {frameDescriptor}"
+		resultTypedAtAnUnboundParameter gives "has no type: its result is written over a parameter of '{baseName}' that no argument fixes"
 	end 'why'
 
 	let typeArguments = scopeParamList if scopeParams.count() == 1 else "({scopeParamList})"
@@ -5554,8 +5607,8 @@ union WitnessProtocolTarget
 	notRequired
 end 'WitnessProtocolTarget'
 
-// ⭐⭐ **HOW A VALUE HANDED BACK IN THE OPAQUE WORD HAS TO BE READ, once the receiver's instance says what it
-// really is** — `Parser.retypeOpaqueMethodResult`'s answer, and what `emitCall` spends. A shared generic body
+// ⭐⭐ **HOW A VALUE HANDED BACK IN THE OPAQUE WORD HAS TO BE READ, once the call's instance says what it
+// really is** — `Parser.typeCallResultThroughInstance`'s answer, and what `emitCall` spends. A shared generic body
 // is compiled ONCE against an opaque `T` and returns a bare 64-bit word, so two kinds of value arrive needing
 // work the callee could not do: an f64's BITS sitting in a general-purpose register, and a narrow SIGNED
 // value the zero-extending element load truncated the sign off.
@@ -5566,6 +5619,52 @@ union OpaqueWordReading
 	aFloatsBits(alias TypeNameId)
 	aNarrowSignedSlot(slotBytes ByteOffset)
 end 'OpaqueWordReading'
+
+union CallInstanceSource
+	receiver(value ValueId)
+	qualifier(gid GenericInstanceId)
+	scopeOnly(typeName ByteArray)
+	nowhere
+end 'CallInstanceSource'
+
+union ServiceSpawnSite
+	notASpawn
+	at(spawnTok Token)
+
+	function isASpawn() returns bool
+		return match self 'site'
+			notASpawn gives false
+			at gives true
+		end 'site'
+	end 'isASpawn'
+
+	function token() returns Token throws AbsentError
+		match self 'site'
+			notASpawn then throw AbsentError.absent
+			at(spawnTok) then return spawnTok
+		end 'site'
+	end 'token'
+end 'ServiceSpawnSite'
+
+// Shared: a payload-free union case is still a heap object, and these two are the answers at nearly every
+// call in the program.
+let sharedNotAServiceSpawn = ServiceSpawnSite.notASpawn
+
+let sharedNoCallInstanceSource = CallInstanceSource.nowhere
+
+union HolderArgument
+	holds(argument ValueId)
+	none
+
+	function value() returns ValueId throws AbsentError
+		match self 'holder'
+			holds(argument) then return argument
+			none then throw AbsentError.absent
+		end 'holder'
+	end 'value'
+end 'HolderArgument'
+
+let sharedNoHolderArgument = HolderArgument.none
 
 // Whether this `for` statement grew the second entry edge a throwing `createIterator()` needs — and, if
 // so, the block that edge lands in, which is the one the statement's continuation has to merge with. See
@@ -6669,22 +6768,6 @@ end 'requireUnclaimedInterfaceRequirementName'
 // the first spelling of that suffix (see `Parser.unclaimedRegistrationName`).
 let FirstOverloadNameOrdinal = 2
 
-// ⭐ **DOES `name` WEAR `typeName`'S QUALIFIER — i.e. is it `qualifiedMethodName(typeName, <anything>)`?**
-// The join's INVERSE, and deliberately allocation-free: its caller
-// (`IrInterface.isBuiltinConformanceImplName` → `MmRuntime.isCompilerInternalCallee`) is asked of EVERY
-// callee in the program by `SemanticCheck.validateCall` and `LowerMaxonToStd.lowerCall`, so materializing
-// a joined name here would allocate once per call site in every compile.
-//
-// ⚠ **THE SEPARATOR TEST IS LOAD-BEARING, NOT TIDINESS.** Without it this is a bare `bytesStartWith`, and
-// a user function called `internNames` begins with `int` — it would be classified compiler-internal and
-// so skip arity validation and signature slotting. A miscompile, from a missing byte compare.
-// Does this qualified corpus callee (`Array.pop`) name a member that MOVES the element out of the
-// container? See `settleCorpusPromiseRead` for why the answer is closed rather than
-// open-ended.
-function calleeIsAnElementMoveOut(callee ByteArray) returns bool
-	return qualifiedMemberIs(callee, member: ArrayPopMethod) or qualifiedMemberIs(callee, member: RemoveMethod) or qualifiedMemberIs(callee, member: ListRemoveFirstMethod) or qualifiedMemberIs(callee, member: ListRemoveLastMethod)
-end 'calleeIsAnElementMoveOut'
-
 // The MEMBER half of a qualified corpus callee — `Array.last` → `last`. A diagnostic must name what the
 // AUTHOR wrote; `calleeMemberNoun` states the same rule for the compiler-emitted doors, and this is it for
 // the corpus ones. Returns the whole name when it carries no separator, which is not reachable from the one
@@ -6764,6 +6847,15 @@ export function qualifiedNameIs(callee ByteArray, typeName ByteArray, member Byt
 	return isQualifiedUnderTypeName(callee, typeName: typeName) and qualifiedMemberIs(callee, member: member)
 end 'qualifiedNameIs'
 
+// ⭐ **DOES `name` WEAR `typeName`'S QUALIFIER — i.e. is it `qualifiedMethodName(typeName, <anything>)`?**
+// The join's INVERSE, and deliberately allocation-free: its caller
+// (`IrInterface.isBuiltinConformanceImplName` → `MmRuntime.isCompilerInternalCallee`) is asked of EVERY
+// callee in the program by `SemanticCheck.validateCall` and `LowerMaxonToStd.lowerCall`, so materializing
+// a joined name here would allocate once per call site in every compile.
+//
+// ⚠ **THE SEPARATOR TEST IS LOAD-BEARING, NOT TIDINESS.** Without it this is a bare `bytesStartWith`, and
+// a user function called `internNames` begins with `int` — it would be classified compiler-internal and
+// so skip arity validation and signature slotting. A miscompile, from a missing byte compare.
 function isQualifiedUnderTypeName(name ByteArray, typeName ByteArray) returns bool
 	if name.count() <= typeName.count() 'noRoomForAMethod'
 		return false
@@ -17036,6 +17128,23 @@ end 'ReturnedLocal'
 
 typealias ReturnedLocalArray = Array with ReturnedLocal
 
+enum ReturnedLocalBinding
+	freshRecord
+	fieldMoveOut
+end 'ReturnedLocalBinding'
+
+let noBoundParameters = NameRoster.create()
+
+function namesIncludeAParameter(names NameRoster, paramNames NameRoster) returns bool
+	for name in names 'eachName'
+		if paramNames.contains(name) 'aParameter'
+			return true
+		end 'aParameter'
+	end 'eachName'
+
+	return false
+end 'namesIncludeAParameter'
+
 // Keeps one entry per open `(`, `{` or `[`, true for a `[`.
 function trackGroupKindAt(kind TokenKind, openGroupIsBracket BoolArray)
 	if tokenKindOpensABracket(kind) 'opens'
@@ -21500,6 +21609,9 @@ export type Parser
 		// `return` at all (a `void` function, a diverging one) states nothing rather than vacuously everything.
 		var everyReturnIsAFreshRecord = true
 		var everyReturnIsAReceiverField = true
+		var everyReturnIsAFieldMoveOut = true
+		var fieldMoveOutForwards = FreshReturnForwardArray.create()
+		var fieldReturnedLocals = NameRoster.create()
 
 		// The calls a forwarding `return` hands its answer straight back from, one per such return, and the
 		// written NAME each one's resolution could lose to a binding of this body (`forwardHeads`, positioned by
@@ -21589,6 +21701,10 @@ export type Parser
 				if everyReturnIsAReceiverField and not self.returnedValueIsAReceiverField(q + 1) 'notAReceiverField'
 					everyReturnIsAReceiverField = false
 				end 'notAReceiverField'
+
+				if everyReturnIsAFieldMoveOut and not self.noteFieldMoveOutReturn(q + 1, forwards: fieldMoveOutForwards, returnedLocals: fieldReturnedLocals) 'notAFieldMoveOut'
+					everyReturnIsAFieldMoveOut = false
+				end 'notAFieldMoveOut'
 			end 'returnStatement'
 
 			if scansParams 'aBodyWithParametersToWatch'
@@ -21804,7 +21920,7 @@ export type Parser
 		// that reaches this fact — the error edge carries no value for it to be wrong about.
 		if declaredSole 'theDeclarationSaysSole'
 			bodyFacts.push(SweptBodyFactEntry.create(funcName, takesReceiver: takesReceiver, fact: SweptBodyFact.returnsAFreshRecord))
-		end 'theDeclarationSaysSole' else if sawTheFunctionsOwnEnd and bodySpellsAReturn and everyReturnIsAFreshRecord and (returnedLocals.count() == 0 or self.everyReturnedLocalHoldsAFreshRecord(returnedLocals, bodyStart: bodyStart, forwards: freshReturnForwards, forwardHeads: forwardHeads, forwardHeadsAt: forwardHeadsAt)) 'returnsAFreshRecord'
+		end 'theDeclarationSaysSole' else if sawTheFunctionsOwnEnd and bodySpellsAReturn and everyReturnIsAFreshRecord and (returnedLocals.count() == 0 or self.everyReturnedLocalHoldsAFreshRecord(returnedLocals, bodyStart: bodyStart, forwards: freshReturnForwards, forwardHeads: forwardHeads, forwardHeadsAt: forwardHeadsAt, boundParams: noBoundParameters, binding: ReturnedLocalBinding.freshRecord)) 'returnsAFreshRecord'
 			// ⭐ **AN UNCONDITIONAL CLAIM ONLY WHEN NO RETURN FORWARDED.** With a forward in the list the body's
 			// freshness is the CALLEES', and the one entry below says so — carrying every forwarding return's
 			// call, closed whole-program by `ProgramSignatures.closeFreshReturnForwards`. Publishing both would be
@@ -21819,6 +21935,14 @@ export type Parser
 		if sawTheFunctionsOwnEnd and bodySpellsAReturn and everyReturnIsAReceiverField and takesReceiver and paramNames.count() == 0 and not declaresThrows and not genericScope 'returnsAReceiverField'
 			bodyFacts.push(SweptBodyFactEntry.create(funcName, takesReceiver: takesReceiver, fact: SweptBodyFact.returnsAFieldOfItsReceiver))
 		end 'returnsAReceiverField'
+
+		if sawTheFunctionsOwnEnd and bodySpellsAReturn and everyReturnIsAFreshRecord and freshReturnForwards.count() == 0 and namesIncludeAParameter(returnedLocals, paramNames: paramNames) and self.everyReturnedLocalHoldsAFreshRecord(returnedLocals, bodyStart: bodyStart, forwards: freshReturnForwards, forwardHeads: forwardHeads, forwardHeadsAt: forwardHeadsAt, boundParams: paramNames, binding: ReturnedLocalBinding.freshRecord) 'returnsAParameterOrARecord'
+			bodyFacts.push(SweptBodyFactEntry.create(funcName, takesReceiver: takesReceiver, fact: SweptBodyFact.returnsAParameter))
+		end 'returnsAParameterOrARecord'
+
+		if sawTheFunctionsOwnEnd and bodySpellsAReturn and everyReturnIsAFieldMoveOut and (fieldReturnedLocals.count() == 0 or self.everyReturnedLocalHoldsAFreshRecord(fieldReturnedLocals, bodyStart: bodyStart, forwards: fieldMoveOutForwards, forwardHeads: forwardHeads, forwardHeadsAt: forwardHeadsAt, boundParams: noBoundParameters, binding: ReturnedLocalBinding.fieldMoveOut)) 'returnsAMovedOutElement'
+			bodyFacts.push(SweptBodyFactEntry.create(funcName, takesReceiver: takesReceiver, fact: SweptBodyFact.returnsAMovedOutElementIfFieldDoes(fieldMoveOutForwards)))
+		end 'returnsAMovedOutElement'
 
 		// ⭐⭐ **THE BODY IS THE CONSTRUCTION IT PERFORMS.** Five conditions, and every one of them is what
 		// makes a CALL to this declaration substitutable by that construction:
@@ -21873,12 +21997,13 @@ export type Parser
 	end 'scanBodyFacts'
 
 	// ⭐⭐⭐ **DOES THIS `return` HAND BACK A RECORD THE `return` ITSELF BUILDS? — the whole freshness proof,
-	// and it is a proof rather than a heuristic.** Exactly one shape is recognised as fresh by itself:
+	// and it is a proof rather than a heuristic.** Two shapes are recognised as fresh by themselves:
 	//
 	//   `return <Name>{ … }`  — a struct literal, with the matching `}` the last token on the line.
+	//   `return "…{x}…"`      — one interpolated String, ending the line.
 	//
-	// ⭐⭐ **WHY THAT SHAPE NEEDS NOTHING ELSE READ.** A record literal written IN the return expression is
-	// allocated by this frame at that instant and handed over in the same expression: there is no statement
+	// ⭐⭐ **WHY THOSE SHAPES NEED NOTHING ELSE READ.** A record literal or an interpolated String written IN the
+	// return expression is allocated by this frame at that instant and handed over in the same expression: there is no statement
 	// between its construction and the hand-off, so no `push`, no field store, no closure capture and no
 	// consuming call can have taken a second reference to it. The caller adopting the `+1` is therefore that
 	// allocation's SOLE owner — which is exactly what a send has to know, and exactly what
@@ -21913,18 +22038,26 @@ export type Parser
 	// shape costs the whole declaration its claim. That is this family's rule (*"every ambiguity resolves
 	// toward recording NOTHING"*) and here the wrong direction is a heap-corrupting move rather than a refusal.
 	function noteFreshReturnShape(valueStart ElementIndex, forwards FreshReturnForwardArray, forwardHeads NameRoster, forwardHeadsAt TokenIndexArray, returnedLocals NameRoster) returns bool
-		if self.kindAt(valueStart) == TokenKind.identifier and self.kindAt(valueStart + 1) == TokenKind.newline 'aReturnedName'
-			let name = self.tokenAt(valueStart).value
-
-			if not returnedLocals.contains(name) 'firstReturnOfThisName'
-				returnedLocals.push(name)
-			end 'firstReturnOfThisName'
-
+		if self.noteReturnedLocalName(valueStart, returnedLocals: returnedLocals) 'aReturnedName'
 			return true
 		end 'aReturnedName'
 
 		return self.noteFreshValueShape(valueStart, forwards: forwards, forwardHeads: forwardHeads, forwardHeadsAt: forwardHeadsAt)
 	end 'noteFreshReturnShape'
+
+	function noteReturnedLocalName(valueStart ElementIndex, returnedLocals NameRoster) returns bool
+		if self.kindAt(valueStart) != TokenKind.identifier or self.kindAt(valueStart + 1) != TokenKind.newline 'notAReturnedName'
+			return false
+		end 'notAReturnedName'
+
+		let name = self.tokenAt(valueStart).value
+
+		if not returnedLocals.contains(name) 'firstReturnOfThisName'
+			returnedLocals.push(name)
+		end 'firstReturnOfThisName'
+
+		return true
+	end 'noteReturnedLocalName'
 
 	function valueIsOneInterpolatedString(valueStart ElementIndex) returns bool
 		let last = try interpolatedLiteralLastFragment(self.tokens, first: valueStart) otherwise return false
@@ -21996,11 +22129,12 @@ export type Parser
 		return true
 	end 'noteFreshValueShape'
 
-	// ⭐⭐⭐ **IS EVERY RETURNED LOCAL THE ONLY REFERENCE TO A RECORD THIS BODY BUILT?** One walk of the body for
-	// all of them. Each must be bound exactly once, by a `let <name> = …` or `var <name> = …` opening its line whose
-	// value is a fresh shape (`noteFreshValueShape`, so a forwarding call becomes a dependency like any other), and every
-	// other token spelling the name must be one this ADMIT-LIST names — anything else is a second reference or
-	// a use the list cannot vouch for, and costs the claim:
+	// ⭐⭐⭐ **IS EVERY RETURNED LOCAL THE ONLY REFERENCE TO WHAT IT WAS BOUND TO?** One walk of the body for
+	// all of them. Each must be bound exactly once — as one of `boundParams`, or by a `let <name> = …` or
+	// `var <name> = …` opening its line whose value `binding` admits (`bindingValueIsAdmitted`; a forwarding
+	// call becomes a dependency like any other) — and every other token spelling the name must be one this
+	// ADMIT-LIST names — anything else is a second reference or a use the list cannot vouch for, and costs
+	// the claim:
 	//
 	//   • `return <name>` inside the binding's scope;
 	//   • `<name>.f…` — a field read, or a store into the record's own field; a field's graph is proved at the
@@ -22012,11 +22146,17 @@ export type Parser
 	// So an argument, a bare read (`let b = <name>`), a reassignment, an interpolation of the whole record, a
 	// `for`/`match` binder, and any use outside the binding's scope all retract. A body holding a closure
 	// literal states nothing: a closure that reads even a field of a local captures the local itself.
-	function everyReturnedLocalHoldsAFreshRecord(returnedLocals NameRoster, bodyStart ElementIndex, forwards FreshReturnForwardArray, forwardHeads NameRoster, forwardHeadsAt TokenIndexArray) returns bool
+	function everyReturnedLocalHoldsAFreshRecord(returnedLocals NameRoster, bodyStart ElementIndex, forwards FreshReturnForwardArray, forwardHeads NameRoster, forwardHeadsAt TokenIndexArray, boundParams NameRoster, binding ReturnedLocalBinding) returns bool
 		var locals = ReturnedLocalArray.create()
 
 		for name in returnedLocals 'eachName'
-			locals.push(ReturnedLocal.create(name))
+			var local = ReturnedLocal.create(name)
+
+			if boundParams.contains(name) 'aParameter'
+				local.bind(0)
+			end 'aParameter'
+
+			locals.push(local)
 		end 'eachName'
 
 		var depth = 0 as BlockDepth
@@ -22036,7 +22176,7 @@ export type Parser
 
 			if q > bodyStart and kind == TokenKind.identifier and self.kindAt((q - 1) as ElementIndex) != TokenKind.dot 'aNameThatIsNotAMember'
 				for local in locals 'eachLocal'
-					if local.name.equals(self.tokenAt(q).value) and not self.localMentionKeepsItFresh(q, local: local, depth: depth, labelsAreSpelledHere: innermostGroupSpellsLabels(openGroupIsBracket), forwards: forwards, forwardHeads: forwardHeads, forwardHeadsAt: forwardHeadsAt) 'aSecondReference'
+					if local.name.equals(self.tokenAt(q).value) and not self.localMentionKeepsItFresh(q, local: local, depth: depth, labelsAreSpelledHere: innermostGroupSpellsLabels(openGroupIsBracket), forwards: forwards, forwardHeads: forwardHeads, forwardHeadsAt: forwardHeadsAt, binding: binding) 'aSecondReference'
 						return false
 					end 'aSecondReference'
 				end 'eachLocal'
@@ -22067,7 +22207,7 @@ export type Parser
 	// One token spelling a returned local's name, classified against `everyReturnedLocalHoldsAFreshRecord`'s
 	// admit-list. Its binding's value is judged where the binding is met, so a local bound to anything else — a
 	// scalar counter is the common case — ends the walk there.
-	function localMentionKeepsItFresh(at ElementIndex, local ReturnedLocal, depth BlockDepth, labelsAreSpelledHere bool, forwards FreshReturnForwardArray, forwardHeads NameRoster, forwardHeadsAt TokenIndexArray) returns bool
+	function localMentionKeepsItFresh(at ElementIndex, local ReturnedLocal, depth BlockDepth, labelsAreSpelledHere bool, forwards FreshReturnForwardArray, forwardHeads NameRoster, forwardHeadsAt TokenIndexArray, binding ReturnedLocalBinding) returns bool
 		let before = self.kindAt((at - 1) as ElementIndex)
 		let after = self.kindAt(at + 1)
 
@@ -22079,7 +22219,7 @@ export type Parser
 		if bindingKeywordSpells(before) and after == TokenKind.equals 'itsBinding'
 			// A binding that does not open its line is a `match` arm's, scoped to that arm where the block depth
 			// would carry it across the sibling arms.
-			if local.bound or not tokenKindIsSkippedLayout(self.kindAt((at - 2) as ElementIndex)) or not self.noteFreshValueShape(at + 2, forwards: forwards, forwardHeads: forwardHeads, forwardHeadsAt: forwardHeadsAt) 'aSecondBindingOrNotAFreshValue'
+			if local.bound or not tokenKindIsSkippedLayout(self.kindAt((at - 2) as ElementIndex)) or not self.bindingValueIsAdmitted(at + 2, binding: binding, forwards: forwards, forwardHeads: forwardHeads, forwardHeadsAt: forwardHeadsAt) 'aSecondBindingOrNotAFreshValue'
 				return false
 			end 'aSecondBindingOrNotAFreshValue'
 
@@ -22110,6 +22250,69 @@ export type Parser
 		// In `<name>.f.m(…)` the last hop is the method, so a receiver that is a field needs two.
 		return self.kindAt(chainEnd) != TokenKind.leftParen or memberHops >= HopsToCallOnAField
 	end 'localMentionKeepsItFresh'
+
+	function bindingValueIsAdmitted(valueStart ElementIndex, binding ReturnedLocalBinding, forwards FreshReturnForwardArray, forwardHeads NameRoster, forwardHeadsAt TokenIndexArray) returns bool
+		return match binding 'binding'
+			freshRecord gives self.noteFreshValueShape(valueStart, forwards: forwards, forwardHeads: forwardHeads, forwardHeadsAt: forwardHeadsAt)
+			fieldMoveOut gives self.noteFieldMoveOutValue(valueStart, forwards: forwards)
+		end 'binding'
+	end 'bindingValueIsAdmitted'
+
+	function noteFieldMoveOutReturn(valueStart ElementIndex, forwards FreshReturnForwardArray, returnedLocals NameRoster) returns bool
+		if self.noteReturnedLocalName(valueStart, returnedLocals: returnedLocals) 'aReturnedName'
+			return true
+		end 'aReturnedName'
+
+		return self.noteFieldMoveOutValue(valueStart, forwards: forwards)
+	end 'noteFieldMoveOutReturn'
+
+	function noteFieldMoveOutValue(valueStart ElementIndex, forwards FreshReturnForwardArray) returns bool
+		let tryWrapped = self.kindAt(valueStart) == TokenKind.try
+		let forward = try self.fieldMoveOutForward(valueStart + 1 if tryWrapped else valueStart, tryWrapped: tryWrapped) otherwise return false
+
+		forwards.push(forward)
+		return true
+	end 'noteFieldMoveOutValue'
+
+	function fieldMoveOutForward(callStart ElementIndex, tryWrapped bool) returns FreshReturnForward throws AbsentError
+		if self.kindAt(callStart) != TokenKind.self or not self.enclosingType.isType() 'notAFieldOfTheReceiver'
+			throw AbsentError.absent
+		end 'notAFieldOfTheReceiver'
+
+		var fields = NameRoster.create()
+		var dot = callStart + 1
+
+		while self.kindAt(dot) == TokenKind.dot and tokenCanBeAName(self.tokenAt(dot + 1)) 'eachHop'
+			if self.kindAt(dot + 2) == TokenKind.leftParen 'theCall'
+				if fields.count() == 0 or not self.containerMoveOutMethodAt(dot + 1) or not self.callEndsTheReturn(dot + 2, tryWrapped: tryWrapped) 'notAMoveOutThatEndsTheReturn'
+					throw AbsentError.absent
+				end 'notAMoveOutThatEndsTheReturn'
+
+				return FreshReturnForward.ofFieldOfEnclosingType(self.enclosingTypeName(), fields: fields, name: self.tokenAt(dot + 1).value, argLabels: self.receiverAlignedLabelsOfCallAt(dot + 2))
+			end 'theCall'
+
+			fields.push(self.tokenAt(dot + 1).value)
+			dot = dot + 2
+		end 'eachHop'
+
+		throw AbsentError.absent
+	end 'fieldMoveOutForward'
+
+	function receiverAlignedLabelsOfCallAt(openParen ElementIndex) returns NameRoster
+		var labels = NameRoster.create()
+		labels.push(ByteArray.create())
+
+		for start in self.argumentStartsOf(openParen) 'eachArgument'
+			if tokenCanBeAName(self.tokenAt(start)) and self.kindAt(start + 1) == TokenKind.colon 'aLabelledArgument'
+				labels.push(self.tokenAt(start).value.clone())
+				continue
+			end 'aLabelledArgument'
+
+			labels.push(ByteArray.create())
+		end 'eachArgument'
+
+		return labels
+	end 'receiverAlignedLabelsOfCallAt'
 
 	// Does the call opening at `openParen` end the `return`? Its `)` ends the line, or — under `try` — is
 	// followed by `otherwise panic(…)` that does.
@@ -22979,6 +23182,14 @@ export type Parser
 	function isDotMethodCallHeadAt(q ElementIndex) returns bool
 		return q != 0 and self.kindAt((q - 1) as ElementIndex) == TokenKind.dot and self.kindAt(q + 1) == TokenKind.leftParen
 	end 'isDotMethodCallHeadAt'
+
+	function containerMoveOutMethodAt(q ElementIndex) returns bool
+		if not self.isDotMethodCallHeadAt(q) 'notMethodCall'
+			return false
+		end 'notMethodCall'
+
+		return isElementMoveOutName(self.tokenAt(q).value)
+	end 'containerMoveOutMethodAt'
 
 	// ⭐ **THE `self . <field> =` REASSIGNMENT HEAD — ONE token-shape recognizer**, read by the sweep feed
 	// (`markOpaqueFieldReassignFeed`), which adds its own tail (the RHS is a bare type-parameter parameter).
@@ -34363,7 +34574,7 @@ export type Parser
 			// ⭐⭐ **THE THIRD SIGN-EXTENSION DOOR: A PARAMETER MAY ARRIVE RAW OUT OF A NARROW SIGNED SLOT
 			// (`enum-narrow-storage`).** The other two answer *"a value coming OUT of a call"* —
 			// `emitContainerElementAccessor` for a compiler-emitted element read,
-			// `retypeOpaqueReturnValue` for one a corpus body hands back. Neither stands in front of the
+			// `typeResultThroughInstance` for one a corpus body hands back. Neither stands in front of the
 			// third shape: a shared corpus body reads a slot with the zero-extending element load and passes
 			// the raw word INTO user code as an ARGUMENT, through a function value or a witness call. The
 			// body is compiled once against an opaque `Element` and cannot extend it; the caller cannot
@@ -34761,7 +34972,7 @@ export type Parser
 			return false
 		end 'notAnInstance'
 
-		return not typeIsPromiseStorage(self.signatures, t: self.valueMaxonType(value))
+		return not typeIsPromiseStorage(self.signatures, t: self.typeOf(value))
 	end 'instanceValueIsAManagedRecord'
 
 	// `returns <Type>`, with an optional `sole`/`readonly` qualifier, or nothing (void). The return type
@@ -35821,19 +36032,17 @@ export type Parser
 	//
 	// ⭐ **THE SCOPE IS THE CALLEE'S DECLARING TYPE, NOT THE CALLER'S** — `MyMapIterator` written in `MyMap`'s
 	// body means `MyMapIterator with (MyMap.Key, MyMap.Value)` whoever is calling, and the caller's own
-	// parameters have nothing to do with it. `retypeInstanceMethodResult` then fixes THAT with the receiver's
+	// parameters have nothing to do with it. `typeCallResultThroughInstance` then fixes THAT with the call's
 	// concrete instance, which is the second half and a different question.
-	function promoteBareGenericResultToCalleeScope(result ValueId, receiver ValueId)
-		let resultTag = self.tagOf(result)
-
-		if resultTag != ValueTypeTag.named and not tagNamesADeclaredType(resultTag) 'namesNoDeclaredType'
+	function promoteBareGenericResultToCalleeScope(result ValueId, source CallInstanceSource)
+		if not self.resultNamesADeclaredType(result) 'namesNoDeclaredType'
 			return
 		end 'namesNoDeclaredType'
 
 		// A dispatched receiver has no callee scope either: its result was typed off the interface
 		// requirement (`mintWitnessDispatchResult`), which is already concrete, and an interface's name
 		// is not a struct any type-parameter registry answers for.
-		let declaringType = try self.methodSurfaceOf(receiver).declaredTypeName() otherwise return
+		let declaringType = try self.declaringTypeOfSource(source) otherwise return
 
 		// ⚠ **THE COST GATE, and it is the same one `ProgramSignatures.fieldTypeOf` spells for its own door**:
 		// this runs at every method call in the program whose result names a declared type, and the answer is a
@@ -35850,6 +36059,20 @@ export type Parser
 			instance(gid) then self.retypeValue(result, valueType: MaxonType.genericInstance(gid))
 		end 'scoped'
 	end 'promoteBareGenericResultToCalleeScope'
+
+	function resultNamesADeclaredType(result ValueId) returns bool
+		let resultTag = self.tagOf(result)
+		return resultTag == ValueTypeTag.named or tagNamesADeclaredType(resultTag)
+	end 'resultNamesADeclaredType'
+
+	function declaringTypeOfSource(source CallInstanceSource) returns ByteArray throws AbsentError
+		match source 'source'
+			receiver(value) then return self.signatures.genericInstanceBaseName(self.valueInstanceId(value))
+			qualifier(gid) then return self.signatures.genericInstanceBaseName(gid)
+			scopeOnly(typeName) then return typeName
+			nowhere then throw AbsentError.absent
+		end 'source'
+	end 'declaringTypeOfSource'
 
 	// ⭐⭐ **DOES THE WRITTEN NAME `name` DENOTE AN INNER `typealias` OF THE BODY BEING PARSED — the ONE home
 	// of that question.** THREE doors ask it and they must not answer one written name with two
@@ -36940,7 +37163,7 @@ export type Parser
 	// and a string literal is an immortal one every door copies before anything writes it. An opaque `T` may be a
 	// record.
 	function valueIsNoRecordAWriteReaches(value ValueId) returns bool
-		return not self.valueMayNameARecord(value) or self.valueIsAMintedStringLiteral(value) or typeIsPromiseStorage(self.signatures, t: self.valueMaxonType(value))
+		return not self.valueMayNameARecord(value) or self.valueIsAMintedStringLiteral(value) or typeIsPromiseStorage(self.signatures, t: self.typeOf(value))
 	end 'valueIsNoRecordAWriteReaches'
 
 	function valueMayNameARecord(value ValueId) returns bool
@@ -38003,7 +38226,7 @@ export type Parser
 	function producerIsOverloaded(producer DiscardedCallee) returns bool
 		return match producer 'producer'
 			notACall gives false
-			named(callee, _, _) gives self.signatures.overloadedDeclsOf(callee).count() > 1
+			named(callee, _, _) gives self.signatures.isAnOverloadSet(callee)
 		end 'producer'
 	end 'producerIsOverloaded'
 
@@ -40695,8 +40918,9 @@ export type Parser
 		return column
 	end 'mintedSoleColumn'
 
-	// ⭐ **MAY A PARAMETER OF `func` HOLD A RECORD?** — `ProvenanceTracer.anyParameterHoldsARecord`, which decides
-	// whether a summary is traced for it, asked without the whole program, so it says yes wherever that one might.
+	// ⭐ **MAY A PARAMETER OF `func` HOLD A RECORD?** — `ProvenanceTracer.anyParameterHoldsARecord`, the
+	// predicate `tracesFirst` checks this file's filing against, asked without the whole program, so it says
+	// yes wherever that one might.
 	//
 	// ⚠ **A `named` PARAMETER IS TAKEN AS ONE THAT MAY, WHATEVER THIS FILE RESOLVES IT TO.** The tracer asks the
 	// whole program by the bare name, which may be another file's record where this file reads a ranged alias
@@ -40712,12 +40936,12 @@ export type Parser
 	end 'parameterMayHoldARecord'
 
 	// `ProvenanceTracer.resultMayHandBackAModuleLetsRecord`, asked without the whole program, so it says yes wherever that one might.
-	// A result type `resolveTypes` later erases to `integer` is still `named` here, which answers yes; only a bare
-	// scalar tag answers no, and no function declared one returns a record.
+	// A result type `resolveTypes` later erases to `integer` is still `named` here, which answers yes; a declared
+	// scalar is asked of the values the body returns, as the tracer's `returnsARecordValue` is.
 	function resultMayHoldARecord(func IrFunction) returns bool
 		return match func.maxonReturnType 'result'
 			void gives false
-			value(inner) gives not tagIsAScalarWhateverIsDeclared(maxonTypeTag(inner))
+			value(inner) gives not tagIsAScalarWhateverIsDeclared(maxonTypeTag(inner)) or anyReturnedValue(func, ir: self.artifact.module, test: function(returned) gives not tagIsAScalarWhateverIsDeclared(self.tagOf(returned)))
 		end 'result'
 	end 'resultMayHoldARecord'
 
@@ -42317,7 +42541,7 @@ export type Parser
 		// here whatever `T` is, and only the GRAPH moves to the `spawn`, where the same walk runs over the
 		// type the instantiation substitutes. One body serves every instantiation, so nothing here can see
 		// what a `T` holds.
-		if typeIsFixedByAnInstantiation(self.signatures, t: self.valueMaxonType(value)) 'theSpawnJudgesTheSubstitution'
+		if typeIsFixedByAnInstantiation(self.signatures, t: self.typeOf(value)) 'theSpawnJudgesTheSubstitution'
 			return
 		end 'theSpawnJudgesTheSubstitution'
 
@@ -44599,7 +44823,7 @@ export type Parser
 		// The token index the fallback expression starts at, kept so the range check below can ask what
 		// the expression parser ACTUALLY consumed — see `requireOtherwiseInRangedReturn`.
 		let otherwiseStart = self.pos
-		self.stateDeclaredLiteralTarget(maxonTypeOfTag(self.tagOf(result), nameId: self.valueNameId(result)), scopeFilePath: self.job.path, valueStart: otherwiseStart)
+		self.stateDeclaredLiteralTarget(self.typeOf(result), scopeFilePath: self.job.path, valueStart: otherwiseStart)
 		let otherwiseValue = try self.parseExpression(func, block: self.bodyState.currentBlock)
 		try self.requireOtherwiseInRangedReturn(result, from: otherwiseStart, to: self.pos, tryTok: tryTok)
 
@@ -48347,15 +48571,8 @@ export type Parser
 	end 'valueOwnsGreenThread'
 
 	function valueIsPromise(value ValueId) returns bool
-		return self.valueOwnsGreenThread(value) or typeIsPromiseStorage(self.signatures, t: self.valueMaxonType(value))
+		return self.valueOwnsGreenThread(value) or typeIsPromiseStorage(self.signatures, t: self.typeOf(value))
 	end 'valueIsPromise'
-
-	// The value's own `(tag, nameId)` pair as a `MaxonType` — the two dense columns read back as the one
-	// thing they encode. `maxonTypeOfTag` is the shared decoder, so a value's type is reconstructed the same
-	// way here as everywhere else it is asked for.
-	function valueMaxonType(value ValueId) returns MaxonType
-		return maxonTypeOfTag(self.tagOf(value), nameId: self.valueNameId(value))
-	end 'valueMaxonType'
 
 	// ⭐ **THE ONE DEFINITION OF "OWNED": does `value` own a droppable heap allocation it must transfer or
 	// drop?** The single predicate the DECLARATION (`parseBinding`), the REASSIGNMENT
@@ -49470,7 +49687,7 @@ export type Parser
 		end 'aBoxWithPointerSlots'
 
 		if self.valueIsImmortalFunction(source) 'anImmortalRecord'
-			let copy = self.emitRetaggedCastValue(source, targetType: self.valueMaxonType(source), range: range)
+			let copy = self.emitRetaggedCastValue(source, targetType: self.typeOf(source), range: range)
 			self.markImmortalFunction(copy)
 			self.carryFromSharedRecord(copy, from: source, source: self.bodyState, path: ValueCarryPath.value)
 			return copy
@@ -52710,7 +52927,7 @@ export type Parser
 		var argRanges = uniformArgRanges(args, range: SourceRange.ofToken(anchor))
 		let callee = qualifiedMethodName(typeName, methodName: methodName)
 		let result = try self.emitCall(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: resultUsed, constructorInstance: self.receiverConstructorInstance(source), mint: CalleeMint.resolvedTypeQualifier)
-		self.retypeInstanceMethodResult(result, receiver: source, callee: callee)
+		self.retypeInstanceMethodResult(result, receiver: source)
 		return result
 	end 'emitDeclaredProtocolCall'
 
@@ -52719,7 +52936,7 @@ export type Parser
 	// `s.current()` — the same target resolution, the same result mint, the same single emit door — with the
 	// argument list built rather than parsed, because the loop has no source text to read one from.
 	//
-	// ⚠ **NO `retypeInstanceMethodResult`, and that is not an omission.** That retype exists to reopen a
+	// ⚠ **NO `typeCallResultThroughInstance`, and that is not an omission.** That retype exists to reopen a
 	// SHARED generic body's opaque return against the receiver's concrete instance; an interface's declared
 	// return type is already concrete, and the one that is not — `Self` — is answered by the receiver inside
 	// `mintWitnessDispatchResult` rather than substituted afterwards. `mintWitnessDispatchResult`'s own header
@@ -60505,8 +60722,7 @@ export type Parser
 	end 'valueIsUnsigned'
 
 	// The full `MaxonType` of an SSA value, REBUILT from the two columns. It CONSTRUCTS a
-	// union, so it allocates — which is why it is called only where a `MaxonType` is genuinely
-	// STORED (a binding's declared type), and never on a per-value or per-operator path.
+	// union, so it allocates.
 	function typeOf(value ValueId) returns MaxonType
 		return maxonTypeOfTag(self.tagOf(value), nameId: self.valueNameId(value))
 	end 'typeOf'
@@ -62553,8 +62769,6 @@ export type Parser
 			typeIsAConstrainedGeneric then throw SourceParseError.unsupported(serviceTargetRefusalMessage(target, typeName: typeName, member: memberTok.value), line: spawnTok.line, column: spawnTok.column)
 		end 'target'
 
-		try self.requireServiceRosterIsDispatchable(typeTok.value, knowledge: ServiceRosterKnowledge.declarationOnly, spawnTok: spawnTok)
-
 		// ⭐⭐ **THE FACTORY IS CALLED DIRECTLY, THROUGH THE ORDINARY STATIC-CALL DOOR.** `spawn Calc.create(…)`
 		// is `Calc.create(…)` plus a transfer: the arguments, the labels, the defaults, the overload
 		// resolution and the diagnostics are all the ordinary call's, and only what happens to the RESULT and
@@ -62569,19 +62783,20 @@ export type Parser
 		// cleared to those this argument list makes, and an enclosing `spawn`'s are restored after it.
 		var outerTemporaryFieldReads = self.bodyState.temporaryFieldReads
 		self.bodyState.temporaryFieldReads = noValueMarks
-		let state = try self.parseCallNamed(func, callee: qualifiedMethodName(typeTok.value, methodName: memberTok.value), anchor: memberTok, receiver: ReceiverArg.none, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: self.staticCallHeadMint(baseIndex, typeTok: typeTok), inferInstanceOf: FactoryInference.of(typeTok.value), spawned: true)
+		let state = try self.parseCallNamed(func, callee: qualifiedMethodName(typeName, methodName: memberTok.value), anchor: memberTok, receiver: ReceiverArg.none, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: self.staticCallHeadMint(baseIndex, typeTok: typeTok), inferInstanceOf: FactoryInference.of(typeName), serviceSite: ServiceSpawnSite.at(spawnTok))
 		self.bodyState.temporaryFieldReads = outerTemporaryFieldReads
+		try self.requireServiceRosterIsDispatchable(typeName, knowledge: ServiceRosterKnowledge.declarationOnly, spawnTok: spawnTok)
 		let instance = self.serviceStateInstanceOf(state)
 
 		// The deferred half, asked only where something was deferred: a monomorphic service has no type
 		// parameter for the first ask to have left open, so it is judged once and exactly as it always was.
 		match instance 'fixed'
 			monomorphic then break
-			at then try self.requireServiceRosterIsDispatchable(typeTok.value, knowledge: ServiceRosterKnowledge.atInstance(instance), spawnTok: spawnTok)
+			at then try self.requireServiceRosterIsDispatchable(typeName, knowledge: ServiceRosterKnowledge.atInstance(instance), spawnTok: spawnTok)
 		end 'fixed'
 
 		self.releaseHandOffBuildTemps(factoryTempFloor, ownedFloor: factoryOwnedFloor, handedOff: singletonArgs(state), anchor: memberTok)
-		return try self.emitServiceSpawn(typeTok.value, member: memberTok.value, state: state, capacity: capacity, instance: instance, spawnTok: spawnTok, memberTok: memberTok)
+		return try self.emitServiceSpawn(typeName, member: memberTok.value, state: state, capacity: capacity, instance: instance, spawnTok: spawnTok, memberTok: memberTok)
 	end 'parseSpawn'
 
 	function spawnedTypeAt(headIndex ElementIndex, spawnTok Token) returns SpawnedType throws SourceParseError
@@ -63292,7 +63507,7 @@ export type Parser
 	// the cast refusal it is. The brand is what the doors compare by name (`functionValueGoverningId`).
 	function rebrandValue(value ValueId, targetType MaxonType, brand ByteArray, sourceIsBareLocal bool, opTok Token) returns ValueId
 		let isFunction = self.tagOf(value) == ValueTypeTag.function
-		let rebrandedType = self.valueMaxonType(value) if isFunction else targetType
+		let rebrandedType = self.typeOf(value) if isFunction else targetType
 		let rebrandedBrand = self.internedName(typeNameIdOf(targetType)) if isFunction else brand
 
 		if not sourceIsBareLocal 'thisExpressionsOwnResult'
@@ -72392,9 +72607,10 @@ export type Parser
 		// descriptor and no synthesized `__destruct_<instance>` for what it builds.
 		//
 		// ⚠ **A MISS KEEPS THE SUPPLIED ANSWER.** An inference that cannot fix every parameter hands
-		// `constructed` back untouched, so this road adds information and never a refusal; the `spawn` road is
-		// the only one that turns a miss into a diagnostic, because there the instantiation is the whole point.
-		let result = try self.parseCallNamed(func, callee: callee, anchor: memberTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: constructed, mint: mint, inferInstanceOf: self.bareGenericFactoryBase(constructed, typeTok: typeTok), spawned: false)
+		// `constructed` back untouched. A miss is a diagnostic at a `spawn`, where the instantiation is the
+		// whole point, and here only when the result is written over a parameter it left unfixed
+		// (`requireBareGenericResultIsTyped`), since such a result has no type.
+		let result = try self.parseCallNamed(func, callee: callee, anchor: memberTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: constructed, mint: mint, inferInstanceOf: self.bareGenericFactoryBase(constructed, typeTok: typeTok))
 
 		match constructed 'constructed'
 			none then break
@@ -72498,7 +72714,7 @@ export type Parser
 		end 'notABareGenericBase'
 
 		if self.bareGenericBaseIsFedAnEnclosingParameter(base, callee: callee, args: args, argLabels: argLabels) 'fed'
-			throw self.bareGenericSubjectRefusal(base, callee: callee, anchor: anchor)
+			throw self.bareGenericSubjectRefusal(base, callee: callee, use: BareGenericSubjectUse.fedAnEnclosingParameter, anchor: anchor)
 		end 'fed'
 	end 'requireBareGenericBaseIsBound'
 
@@ -72553,7 +72769,7 @@ export type Parser
 			let argument = try slotted.get(callPositionOfColumn(decl.takesReceiver, column: i as ParamCount)) otherwise panic("slottedMemberFeed: slotted.get OOB at column {i} — `slotCallArgs` answered `ordered`, so the counts agree")
 
 			if self.typeIsWrittenOverTheBase(declared, base: base) 'aSlotOfTheBase'
-				fed = fed or not self.signatures.argIsFullyConcrete(self.valueMaxonType(argument))
+				fed = fed or not self.signatures.argIsFullyConcrete(self.typeOf(argument))
 			end 'aSlotOfTheBase' else if not self.sweptArgumentFits(declared, argValue: argument) 'anotherMembersArgument'
 				return MemberFeed.unfilled
 			end 'anotherMembersArgument'
@@ -72596,9 +72812,30 @@ export type Parser
 
 	// ⚠ **THE REMEDY IS A `typealias`, BECAUSE A `with` INSTANCE IS SPELLED IN ONE** — a field typed
 	// `Box with T` inline does not parse.
-	function bareGenericSubjectRefusal(base ByteArray, callee ByteArray, anchor Token) returns SourceParseError
-		return SourceParseError.bareGenericSubjectUnbound(bareGenericSubjectSentence(self.signatures, base: base, callee: callee, use: BareGenericSubjectUse.fedAnEnclosingParameter, scopeTypeName: self.enclosingTypeName(), scopeParams: self.enclosingTypeParams), line: anchor.line, column: anchor.column)
+	function bareGenericSubjectRefusal(base ByteArray, callee ByteArray, use BareGenericSubjectUse, anchor Token) returns SourceParseError
+		return SourceParseError.bareGenericSubjectUnbound(bareGenericSubjectSentence(self.signatures, base: base, callee: callee, use: use, scopeTypeName: self.enclosingTypeNameOrEmpty(), scopeParams: self.enclosingTypeParams), line: anchor.line, column: anchor.column)
 	end 'bareGenericSubjectRefusal'
+
+	function requireBareGenericResultIsTyped(result ValueId, callee ByteArray, constructed ConstructorInstance, inferInstanceOf FactoryInference, anchor Token) throws SourceParseError
+		let base = try inferInstanceOf.baseName() otherwise return
+
+		if self.namesEnclosingType(base) 'theEnclosingInstanceTypesIt'
+			return
+		end 'theEnclosingInstanceTypesIt'
+
+		match constructed 'instance'
+			instance then return
+			none then break
+		end 'instance'
+
+		if self.signatures.calleeReceiverOf(callee) == CalleeReceiver.takesReceiver 'theReceiverNamesTheInstance'
+			return
+		end 'theReceiverNamesTheInstance'
+
+		if self.typeIsWrittenOverTheBase(self.typeOf(result), base: base) 'theResultHasNoType'
+			throw self.bareGenericSubjectRefusal(base, callee: callee, use: BareGenericSubjectUse.resultTypedAtAnUnboundParameter, anchor: anchor)
+		end 'theResultHasNoType'
+	end 'requireBareGenericResultIsTyped'
 
 	function parseQualifiedCall(func IrFunction, resultUsed bool) returns ValueId throws SourceParseError
 		// `Self.create(…)` reaches here as `Point.create(…)` — `consumeTypeBaseToken` resolved the keyword, so
@@ -72688,7 +72925,7 @@ export type Parser
 	//
 	// `constructorInstanceOf`'s third road, and deliberately not an arm of it: that door answers from the
 	// BASE NAME alone and is asked before any argument exists.
-	function spawnFactoryConstructorInstance(supplied ConstructorInstance, inferInstanceOf FactoryInference, callee ByteArray, args ValueIdArray, argLabels NameRoster, anchor Token, spawned bool) returns ConstructorInstance throws SourceParseError
+	function spawnFactoryConstructorInstance(supplied ConstructorInstance, inferInstanceOf FactoryInference, callee ByteArray, args ValueIdArray, argLabels NameRoster, anchor Token, serviceSite ServiceSpawnSite) returns ConstructorInstance throws SourceParseError
 		let base = try inferInstanceOf.baseName() otherwise return supplied
 
 		view params = self.signatures.structTypeParamsOf(base)
@@ -72697,47 +72934,77 @@ export type Parser
 			return supplied
 		end 'aPlainType'
 
-		// ⛔⛔ **AN OVERLOADED FACTORY FIXES NOTHING, BECAUSE THE PARAMETER LIST TO MATCH AGAINST IS NOT
-		// SETTLED YET.** `ServiceCompanions.classifyServiceTarget` may read an overloaded factory off its
-		// FIRST member for the receiver and the return type — every member agrees about those, since they are
-		// what make it a factory at all. Parameter types are a third fact with no such argument: with
-		// `make(x T)` declared ahead of `make(a Whole, x T)`, `Box.make(2 as Whole, x: "hi")` resolves to the
-		// second while a first-declaration read matches argument 0 against `x T` and fixes `T` to `int` —
-		// a legal program refused, or, once the value is used, a wrong instance and a wrong destructor with
-		// no diagnostic at all. Which member a call resolves to is `SemanticCheck.resolveOverloadedCalls`'
-		// answer, and it is settled after this point.
+		// ⛔⛔ **AN OVERLOADED FACTORY FIXES ITS INSTANCE ONLY WHERE EVERY MEMBER THE CALL CAN SLOT AGREES,
+		// BECAUSE WHICH MEMBER IT BINDS IS NOT SETTLED YET.** `ServiceCompanions.classifyServiceTarget` may read
+		// an overloaded factory off its FIRST member for the receiver and the return type — every member agrees
+		// about those, since they are what make it a factory at all. Parameter types are a third fact with no
+		// such argument: with `make(x T)` declared ahead of `make(a Whole, x T)`, `Box.make(2 as Whole, x:
+		// "hi")` resolves to the second while a first-declaration read matches argument 0 against `x T` and
+		// fixes `T` to `int` — a legal program refused, or, once the value is used, a wrong instance and a wrong
+		// destructor with no diagnostic at all. Which member a call resolves to is
+		// `SemanticCheck.resolveOverloadedCalls`' answer, and it is settled after this point; type arguments
+		// every slottable member fixes alike are the answer whichever one it picks.
 		//
-		// ⇒ **REFUSED HERE RATHER THAN GUESSED.** The `spawn` road says so with a sentence; the ordinary road
-		// keeps the base `structRef` it had before this inference existed, so nothing legal is lost either way.
+		// ⇒ **WHERE THEY DISAGREE, REFUSED HERE RATHER THAN GUESSED.** The `spawn` road says so with a
+		// sentence; the ordinary road keeps the base `structRef`, so nothing legal is lost either way.
 		view visible = self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path)
 
-		if visible.isEmpty() and spawned 'noDeclarationIsNameable'
-			throw self.unnameableFactoryRefusal(callee, anchor: anchor)
+		if visible.isEmpty() and serviceSite.isASpawn() 'noDeclarationIsNameable'
+			throw self.unnameableFactoryRefusal(callee, anchor: try serviceSite.token() otherwise anchor)
 		end 'noDeclarationIsNameable'
 
 		if visible.isEmpty() 'anOrdinaryCallOfAnUnnameableFactory'
 			return supplied
 		end 'anOrdinaryCallOfAnUnnameableFactory'
 
-		if visible.count() > 1 'anOverloadedFactory'
-			return try self.uninferredFactoryInstance(supplied, reason: UninferredFactoryReason.theFactoryIsOverloaded(self.signatures.overloadedDeclsOf(callee).count()), typeName: base, callee: callee, anchor: anchor, spawned: spawned)
+		view bindable = declarationsTheCallSlots(visible, argLabels: argLabels)
+
+		if bindable.count() > 1 'anOverloadedFactory'
+			if let typeArgs = try self.typeArgumentsEveryOverloadFixes(base, callee: callee, declarations: bindable, args: args, argLabels: argLabels) 'everyOverloadAgrees'
+				return try self.instanceOfFactoryTypeArguments(supplied, base: base, typeArgs: typeArgs, callee: callee, anchor: anchor, site: serviceSite)
+			end 'everyOverloadAgrees'
+
+			return try self.uninferredFactoryInstance(supplied, reason: UninferredFactoryReason.theFactoryIsOverloaded(visible.count()), typeName: base, callee: callee, site: serviceSite)
 		end 'anOverloadedFactory'
 
-		let decl = serviceFirstDeclOf(visible, key: callee)
+		match self.factoryTypeArgumentsOf(base, decl: serviceFirstDeclOf(bindable, key: callee), args: args, argLabels: argLabels) 'fixes'
+			fixed(typeArgs) then return try self.instanceOfFactoryTypeArguments(supplied, base: base, typeArgs: typeArgs.clone(), callee: callee, anchor: anchor, site: serviceSite)
+			unfixed(paramName) then return try self.uninferredFactoryInstance(supplied, reason: UninferredFactoryReason.noParameterFixesIt(paramName), typeName: base, callee: callee, site: serviceSite)
+		end 'fixes'
+	end 'spawnFactoryConstructorInstance'
+
+	function typeArgumentsEveryOverloadFixes(base ByteArray, callee ByteArray, declarations OverloadedDeclArray, args ValueIdArray, argLabels NameRoster) returns MaxonTypeArray throws AbsentError
+		let reference = try self.factoryTypeArgumentsOf(base, decl: serviceFirstDeclOf(declarations, key: callee), args: args, argLabels: argLabels).arguments()
+
+		for decl in declarations 'eachDeclaration'
+			if not typeArgumentListsDenoteSame(reference, other: try self.factoryTypeArgumentsOf(base, decl: decl, args: args, argLabels: argLabels).arguments()) 'anotherInstance'
+				throw AbsentError.absent
+			end 'anotherInstance'
+		end 'eachDeclaration'
+
+		return reference
+	end 'typeArgumentsEveryOverloadFixes'
+
+	function factoryTypeArgumentsOf(base ByteArray, decl OverloadedDecl, args ValueIdArray, argLabels NameRoster) returns FactoryTypeArguments
+		view params = self.signatures.structTypeParamsOf(base)
 		var typeArgs = MaxonTypeArray.create()
 
 		for position in 0 upto params.count() 'eachTypeParam'
-			view paramName = try params.get(position) otherwise panic("spawnFactoryConstructorInstance: params.get OOB at {position} on a list walked to its own count")
+			view paramName = try params.get(position) otherwise panic("factoryTypeArgumentsOf: params.get OOB at {position} on a list walked to its own count")
 
 			match self.factoryTypeArgumentAt(base, paramName: paramName, position: position, decl: decl, args: args, argLabels: argLabels) 'argument'
-				found(t) then typeArgs.push(try self.requireInferableTypeArgument(t, anchor: anchor))
-
-				// ⭐ **A MISS IS A REFUSAL ONLY AT A `spawn`.** There the instantiation is the whole point and
-				// nothing else can supply it; at an ORDINARY static call the value keeps the base `structRef`
-				// it has always had, so this road adds information and never a new refusal.
-				absent then return try self.uninferredFactoryInstance(supplied, reason: UninferredFactoryReason.noParameterFixesIt(paramName), typeName: base, callee: callee, anchor: anchor, spawned: spawned)
+				found(t) then typeArgs.push(t)
+				absent then return FactoryTypeArguments.unfixed(paramName.clone())
 			end 'argument'
 		end 'eachTypeParam'
+
+		return FactoryTypeArguments.fixed(typeArgs)
+	end 'factoryTypeArgumentsOf'
+
+	function instanceOfFactoryTypeArguments(supplied ConstructorInstance, base ByteArray, typeArgs MaxonTypeArray, callee ByteArray, anchor Token, site ServiceSpawnSite) returns ConstructorInstance throws SourceParseError
+		for t in typeArgs 'eachTypeArgument'
+			_ = try self.requireInferableTypeArgument(t, anchor: try site.token() otherwise anchor)
+		end 'eachTypeArgument'
 
 		// ⛔⛔ **THE CONCRETENESS TEST IS ASKED OF THE ARGUMENTS, NOT OF AN INTERNED ID, AND THAT IS A
 		// CORRECTNESS RULE.** `internGenericInstanceOf` MINTS a row on a miss and CLEARS the speculative mark
@@ -72749,7 +73016,7 @@ export type Parser
 		// one shape `ServiceLoop` cannot build a loop for: `receiverLayoutSourceOf` would forward a descriptor
 		// the synthesized body has no slot for. Refused here rather than aborting the compiler two tiers down.
 		if not self.signatures.argsAreFullyConcrete(typeArgs) 'stillOpaque'
-			return try self.uninferredFactoryInstance(supplied, reason: UninferredFactoryReason.theArgumentsAreStillOpaque, typeName: base, callee: callee, anchor: anchor, spawned: spawned)
+			return try self.uninferredFactoryInstance(supplied, reason: UninferredFactoryReason.theArgumentsAreStillOpaque, typeName: base, callee: callee, site: site)
 		end 'stillOpaque'
 
 		let gid = self.signatures.internGenericInstanceOf(base, args: typeArgs)
@@ -72762,7 +73029,7 @@ export type Parser
 		// way to mint an instance did not record one.
 		self.artifact.inferredInstantiationSites.push(GenericInstantiationSite.create(gid, nameLine: anchor.line, nameColumn: anchor.column, filePath: self.job.path))
 		return ConstructorInstance.instance(gid)
-	end 'spawnFactoryConstructorInstance'
+	end 'instanceOfFactoryTypeArguments'
 
 	function unnameableFactoryRefusal(callee ByteArray, anchor Token) returns SourceParseError
 		return match self.signatures.calleeVisibilityFrom(callee, readerFilePath: self.job.path) 'visibility'
@@ -72781,19 +73048,15 @@ export type Parser
 	// ⭐ **WHAT AN INFERENCE THAT FIXED NOTHING ANSWERS — ONE HOME, because both misses answer identically on
 	// the ordinary road and differ only in the sentence the `spawn` road raises.** The reason travels as a
 	// verdict rather than a rendered sentence so the ordinary road builds no String it will not use.
-	function uninferredFactoryInstance(supplied ConstructorInstance, reason UninferredFactoryReason, typeName ByteArray, callee ByteArray, anchor Token, spawned bool) returns ConstructorInstance throws SourceParseError
-		if not spawned 'anOrdinaryStaticCall'
-			return supplied
-		end 'anOrdinaryStaticCall'
-
+	function uninferredFactoryInstance(supplied ConstructorInstance, reason UninferredFactoryReason, typeName ByteArray, callee ByteArray, site ServiceSpawnSite) returns ConstructorInstance throws SourceParseError
+		let spawnTok = try site.token() otherwise return supplied
 		let member = unqualifiedMemberOf(callee)
-		let refusal = match reason 'why'
-			noParameterFixesIt(paramName) gives spawnUninferrableTypeArgumentRefusal(typeName, member: member, paramName: paramName)
-			theArgumentsAreStillOpaque gives spawnOpaqueTypeArgumentRefusal(typeName, member: member)
-			theFactoryIsOverloaded(declarationCount) gives spawnOverloadedFactoryRefusal(typeName, member: member, declarationCount: declarationCount)
-		end 'why'
 
-		throw SourceParseError.unsupported(refusal, line: anchor.line, column: anchor.column)
+		match reason 'why'
+			noParameterFixesIt(paramName) then throw SourceParseError.unsupported(spawnUninferrableTypeArgumentRefusal(typeName, member: member, paramName: paramName), line: spawnTok.line, column: spawnTok.column)
+			theArgumentsAreStillOpaque then throw SourceParseError.unsupported(spawnOpaqueTypeArgumentRefusal(typeName, member: member), line: spawnTok.line, column: spawnTok.column)
+			theFactoryIsOverloaded(declarationCount) then throw SourceParseError.unsupported(spawnOverloadedFactoryRefusal(typeName, member: member, declarationCount: declarationCount), line: spawnTok.line, column: spawnTok.column)
+		end 'why'
 	end 'uninferredFactoryInstance'
 
 	// What the arguments fix one type parameter to, or `absent`. The FIRST factory parameter declared
@@ -72884,7 +73147,7 @@ export type Parser
 	// NAME — the value's id belongs to this file's table — and the canonical `structRef`/`named` split is the
 	// index's own, asked through its door so an inferred instantiation and a spelled one intern once.
 	function spawnTypeArgumentOfValue(value ValueId) returns MaxonType
-		let declared = self.valueMaxonType(value)
+		let declared = self.typeOf(value)
 		let tag = maxonTypeTag(declared)
 
 		if tag != ValueTypeTag.named and not tagNamesADeclaredType(tag) 'carriesNoName'
@@ -72937,8 +73200,8 @@ export type Parser
 		// per-instance registries are keyed on alias names (`perInstanceAliasFromParts` resolves the prefix
 		// through the generic-alias registry, which has no entry for a base). Stamping the base name here
 		// would file a per-instance question under a name that answers no per-instance registry; the
-		// substitution the value actually needs is `retypeInstanceMethodResult`'s instance arm, which reads
-		// the gid and never the spelling.
+		// substitution the value actually needs is `typeCallResultThroughInstance`'s, which reads the gid and
+		// never the spelling.
 		self.brandValue(result, brand: self.brandOfSpelling(aliasName))
 
 		// ⭐ **AND THE ALIAS'S OWN ARGUMENT SPELLING** — `emitOwnedContainerCreate`'s line for the builtin
@@ -74242,7 +74505,7 @@ export type Parser
 		// `resolvedTypeQualifier`: the author wrote the MEMBER and a receiver; the head above came from
 		// `base.layout`, so no token at this call site spells it.
 		let result = try self.parseCallNamed(func, callee: callee, anchor: memberTok, receiver: ReceiverArg.value(base.box, immutableName: base.immutableName, anchor: baseTok), resultUsed: resultUsed, constructorInstance: self.receiverConstructorInstance(base.box), mint: CalleeMint.resolvedTypeQualifier)
-		self.retypeInstanceMethodResult(result, receiver: base.box, callee: callee)
+		self.retypeInstanceMethodResult(result, receiver: base.box)
 
 		if producesAByteView 'aFoldableByteView'
 			self.recordStringBytesViewOp(result, opIndex: byteViewOpFloor)
@@ -75110,42 +75373,7 @@ export type Parser
 	//     to `named("{alias}.Idx")` — so `a.getTag()` is a `WrapperA.Idx` value the arg check compares by
 	//     name. That one IS the alias, so a receiver with no alias leaves it plain.
 	// `receiver` is BORROWED; only the result's type moves.
-	//
-	// ⭐⭐ **AND A THIRD SHAPE NEEDS NO ALIAS AT ALL: A RETURN THAT IS ITSELF WRITTEN IN THE SHARED BODY'S
-	// DECLARATION VIEW.** `Outer.wrap() returns Inner` resolves, inside `type Outer uses T`, to
-	// `genericInstance(Inner with Outer.T)` — a type that still mentions the DECLARING type's parameter, so a
-	// call on a `Outer with Integer` receiver must read it as `Inner with Integer` or nothing downstream can
-	// type `w.first()`. The same is true of a bare `returns T`, which is `typeParameter(Outer.T)` and must
-	// become `Integer`. Both are exactly `substituteThroughInstance` — the ONE substitution the field read, the
-	// drop cascade and the argument check already share — so this arm ADDS no rule, it reaches the
-	// existing one from the method-RESULT position.
-	//
-	// ⚠ It sits ABOVE the alias gate because it does not need a spelling, only the receiver's gid: a receiver
-	// minted by a bare generic base (`Inner.make(items)` inside another generic body) carries an instance and
-	// no alias, and is precisely the value this arm exists for. It cannot disturb the two arms below, which
-	// answer only for a `named` or `structRef` result.
-	//
-	// ⚠ It goes through `slotTypeThroughReceiver` rather than calling the substitution directly, because the
-	// answer has to CROSS INTERNERS: a `typeParameter` return substitutes to the instance's stored ARGUMENT,
-	// which is a type in the INDEX's table, and a bare `adoptType` of it would re-intern the name while
-	// leaving a `named` tag that reads as an INTEGER. That door already owns both steps and the measured
-	// three-faced defect behind them; asking it here is the same field-read question at the return position,
-	// and a second spelling of it is the one thing that could make the two disagree. It also returns the
-	// declared type unchanged when the instance fixes nothing, so a method returning a FULLY CONCRETE instance
-	// (`entries() returns IntArray`) is retyped to exactly what it already was.
-	function retypeInstanceMethodResult(result ValueId, receiver ValueId, callee ByteArray)
-		// FIRST, because the two are stages of one reading and not alternatives: the callee's own scope is what
-		// the declared return MEANS, and the receiver's instance is what fixes it. A result promoted here to
-		// `MyMapIterator with (MyMap.Key, MyMap.Value)` is then reduced by the arm below to
-		// `MyMapIterator with (Integer, Integer)` when the receiver has that much; a result the promotion does
-		// not touch reaches the arm unchanged.
-		self.promoteBareGenericResultToCalleeScope(result, receiver: receiver)
-
-		if self.tagOf(receiver) == ValueTypeTag.genericInstance and self.carriesDeclarationView(result) 'declarationViewReturn'
-			self.retypeValue(result, valueType: self.slotTypeThroughReceiver(receiver, declared: maxonTypeOfTag(self.tagOf(result), nameId: self.valueNameId(result)), scopeFilePath: self.signatures.recordedReturnDeclFileOf(callee)))
-			return
-		end 'declarationViewReturn'
-
+	function retypeInstanceMethodResult(result ValueId, receiver ValueId)
 		let receiverAlias = brandBeneathBufferView(self.brandOf(receiver))
 
 		// ⭐⭐ **A `Self` RETURN IS FIXED BY THE RECEIVER'S *INSTANCE*, AND THE ALIAS IS ONLY A SPELLING IT MAY
@@ -75205,30 +75433,6 @@ export type Parser
 			end 'innerAliasReturn'
 		end 'namedReturn'
 	end 'retypeInstanceMethodResult'
-
-	// ⭐ **IS THIS VALUE'S TYPE STILL WRITTEN IN THE SHARED GENERIC BODY'S DECLARATION VIEW?** — the
-	// exact set of shapes a concrete receiver can FIX, and therefore the gate on the substituting arm above.
-	// Three, and each is a whole family rather than a case:
-	//   • a `genericInstance` (`returns Inner`, `returns ElementArray`) — its ARGUMENTS may name the declaring
-	//     type's parameters;
-	//   • a bare `typeParameter` (`returns T`) — it IS one;
-	//   • a TUPLE `structRef` (`returns Entry`, where `typealias Entry = (Key, Value)`) — its canonical name
-	//     CITES them (`substituteTupleThroughInstance`).
-	//
-	// ⚠ **A NON-TUPLE `structRef` IS DELIBERATELY EXCLUDED, AND THAT EXCLUSION IS LOAD-BEARING.** A `Self`
-	// return is one, and it needs the OTHER arm — the one that also propagates the receiver's instance ALIAS,
-	// which the substitution neither carries nor could. Answering `true` here would substitute it (a no-op, a
-	// plain struct names no parameter) and then RETURN, silently dropping the alias every per-instance
-	// inner-alias re-qualification downstream reads.
-	function carriesDeclarationView(value ValueId) returns bool
-		let tag = self.tagOf(value)
-
-		if tag == ValueTypeTag.genericInstance or tag == ValueTypeTag.typeParameter or tag == ValueTypeTag.function 'nestedOpaqueOrAFunctionType'
-			return true
-		end 'nestedOpaqueOrAFunctionType'
-
-		return tagNamesADeclaredType(tag) and self.valueTypeNameIsATuple(value)
-	end 'carriesDeclarationView'
 
 	// A callee that reads `countof` of the sized
 	// container's own `Self` takes the answer from a hidden argument the call site fills in, from one
@@ -77492,7 +77696,7 @@ export type Parser
 		self.applyColumnBounds(result, bounds: pair.first)
 	end 'noteCursorRead'
 
-	function noteLiteralColumnsCorpusCall(result ValueId, callee ByteArray, args ValueIdArray)
+	function noteLiteralColumnsCorpusCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster)
 		if args.isEmpty() 'noReceiver'
 			return
 		end 'noReceiver'
@@ -77502,7 +77706,14 @@ export type Parser
 
 		if qualifiedMemberIs(callee, member: StringInitMethod) and qualifyingTypeName(callee).equals(VectorBuiltinBaseName) 'aVectorOverTheLiteral'
 			self.recordLiteralColumns(result, pair: pair)
-		end 'aVectorOverTheLiteral' else if calleeIsAnElementMoveOut(callee) or qualifiedMemberIs(callee, member: ListLastMethod) 'aStoredElementRead'
+			return
+		end 'aVectorOverTheLiteral'
+
+		if not self.signatures.everyBindableDeclarationIsTheCorpus(callee, argLabels: argLabels) 'aUserDeclaration'
+			return
+		end 'aUserDeclaration'
+
+		if isElementMoveOutName(unqualifiedMemberName(callee)) or qualifiedMemberIs(callee, member: ListLastMethod) 'aStoredElementRead'
 			self.applyColumnBounds(result, bounds: pair.first)
 		end 'aStoredElementRead' else if qualifiedMemberIs(callee, member: GetMethod) 'aGetRead'
 			self.applyColumnBounds(result, bounds: pair.boundsOf(LiteralColumn.second if self.signatures.isMapShapedInstanceAt(self.tagOf(receiver), nameId: self.valueNameId(receiver)) else LiteralColumn.first))
@@ -83746,7 +83957,7 @@ export type Parser
 	// GOES from there is what splits the doors:
 	//
 	//   1. **`emitContainerElementAccessor`** (here) — a read the compiler emits, which holds the instance.
-	//   2. **`retypeOpaqueReturnValue`** — a value a corpus body RETURNS through the opaque word; the caller
+	//   2. **`typeResultThroughInstance`** — a value a corpus body RETURNS through the opaque word; the caller
 	//      holds the instance. Two facts cross there, an f64 riding the general-purpose register and a
 	//      narrow SIGNED value, and both have a twin here.
 	//   3. **`bindParameters`** — a value a corpus body passes INTO user code as an ARGUMENT, through a
@@ -83872,7 +84083,7 @@ export type Parser
 			// against an opaque `Element` — so it cannot know the sign and this door never sees those calls.
 			// MEASURED on a three-case `Signal { minus = -1 }`: `for s in a` summed to **256** where 0 is
 			// correct, and `a.pop()` answered **255** for `-1`, while `get`/`first`/`match` through here were
-			// right. The corpus half is `retypeOpaqueReturnValue`'s, off the SAME `narrowSignedSlotOf` question
+			// right. The corpus half is `typeResultThroughInstance`'s, off the SAME `narrowSignedSlotOf` question
 			// — see `emitNarrowSignedSlotRead` for why asking it twice is one derivation and not two.
 			//
 			// ⚠ **THE `for … in` HALF OF THAT MEASUREMENT COMES BACK THROUGH THIS DOOR.** An `Array` is not
@@ -84511,7 +84722,7 @@ export type Parser
 	end 'storedPromiseValue'
 
 	function requirePromiseSlotAgrees(value ValueId, storage GenericInstanceId, anchor Token) throws SourceParseError
-		let held = self.valueMaxonType(value)
+		let held = self.typeOf(value)
 
 		if maxonTypeTag(held) == ValueTypeTag.unresolved 'reportedElsewhere'
 			return
@@ -85619,7 +85830,7 @@ export type Parser
 			return false
 		end 'noRequestPending'
 
-		if layout.fieldIsTheInlineManagedRecord(index) or fieldReadIsThePromiseHandle(self.signatures, receiverType: self.valueMaxonType(box), layout: layout, index: index) 'theFieldIsTheReceiver'
+		if layout.fieldIsTheInlineManagedRecord(index) or fieldReadIsThePromiseHandle(self.signatures, receiverType: self.typeOf(box), layout: layout, index: index) 'theFieldIsTheReceiver'
 			return false
 		end 'theFieldIsTheReceiver'
 
@@ -86637,14 +86848,14 @@ export type Parser
 		// asked about here is no longer a promise and the escape still admits it.
 		// ⚠ **THE MARK (`valueOwnsGreenThread`) AND NOT THE WIDER `valueIsPromise`, AND THE DIFFERENCE IS ONE
 		// ALLOCATION PER SCALAR READ.** `valueIsPromise` is `valueOwnsGreenThread(v) or typeIsPromiseStorage(…,
-		// valueMaxonType(v))`, and `valueMaxonType` CONSTRUCTS a `MaxonType` — a union case, which is a heap
+		// typeOf(v))`, and `typeOf` CONSTRUCTS a `MaxonType` — a union case, which is a heap
 		// object even when it carries no payload. This line is reached on every read of every
 		// `int`/`bool`/`float` binding in every program, so that second disjunct minted one MaxonType per
 		// scalar read.
 		//
 		// ⭐⭐ **AND IT COULD NEVER ANSWER TRUE HERE, so asking the narrow one changes no program.** The two
 		// disjuncts are MUTUALLY EXCLUSIVE at this line: `typeIsPromiseStorage` is false for anything whose tag
-		// is not `genericInstance`, `valueMaxonType(v)` carries `tagOf(v)` as its tag, and this line only runs
+		// is not `genericInstance`, `typeOf(v)` carries `tagOf(v)` as its tag, and this line only runs
 		// once `tagOwnsNoHeapValue` has said that tag IS `integer`/`boolean`/`float`. So a promise reaching the
 		// escape would wear a SCALAR tag, and the mark is the one column that records such a mint whatever
 		// road makes it. A promise read back out of a container carries the `Promise with (T[, E])` type,
@@ -87227,7 +87438,7 @@ export type Parser
 		// witness to pair, no instance substitution to apply (the field's type names no type parameter), no
 		// `named` throw-source to record and no buffer surface; and it is a `let`, so the rebindable-slot
 		// mark is unreachable twice over (immutable, and not managed heap).
-		if fieldReadIsThePromiseHandle(self.signatures, receiverType: self.valueMaxonType(box), layout: layout, index: index) 'handleIsTheValue'
+		if fieldReadIsThePromiseHandle(self.signatures, receiverType: self.typeOf(box), layout: layout, index: index) 'handleIsTheValue'
 			return self.emitRetaggedCastValue(box, targetType: declared, range: range)
 		end 'handleIsTheValue'
 
@@ -89071,7 +89282,7 @@ export type Parser
 	//   • a FIELD READ (`emitFieldLoad`), which is THREE of them in one function — the field's own declared
 	//     surface, the receiver's instance-argument spelling, and the per-value tuple-slot mask;
 	//   • a CALL RESULT's declared return (`emitCall`);
-	//   • a CALL RESULT's receiver instance-argument spelling (`retypeOpaqueReturnValue`).
+	//   • a CALL RESULT's receiver instance-argument spelling (`markReceiverSurfaceOfResult`).
 	//
 	// ⚠ **THE LAST TWO OF THOSE ARE NOT A DECLARED SPELLING AT ALL**, which is why this header does not say
 	// "declared": `Cell with __ManagedMemory` and `Cell with ByteArray` are one `GenericInstanceId`, so a
@@ -89257,7 +89468,7 @@ export type Parser
 	end 'emitNamedFunctionRef'
 
 	function functionValueMember(key ByteArray) returns OverloadedDecl throws AbsentError
-		if self.signatures.overloadedDeclsOf(key).count() < 2 'aSingleDeclaration'
+		if not self.signatures.isAnOverloadSet(key) 'aSingleDeclaration'
 			throw AbsentError.absent
 		end 'aSingleDeclaration'
 
@@ -93295,7 +93506,7 @@ export type Parser
 	// `spelling` is threaded straight through to `emitCall`'s reserved-space door and read nowhere else:
 	// every caller but ONE hands it the author's own bytes, and the exception is the primitive-static mint
 	// (`parseQualifiedCall`). See `CalleeMint`.
-	function parseCallNamed(func IrFunction, callee ByteArray, anchor Token, receiver ReceiverArg, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint, inferInstanceOf FactoryInference = FactoryInference.none, spawned bool = false) returns ValueId throws SourceParseError
+	function parseCallNamed(func IrFunction, callee ByteArray, anchor Token, receiver ReceiverArg, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint, inferInstanceOf FactoryInference = FactoryInference.none, serviceSite ServiceSpawnSite = sharedNotAServiceSpawn) returns ValueId throws SourceParseError
 		// The callee's final name token may be a KEYWORD — `FilePath.from(path)`, `c.to()`, `from(41)`.
 		// The `callee` bytes the caller passed were read off this very token, so refusing it here would
 		// refuse every call to a name the declaration accepts.
@@ -94305,7 +94516,7 @@ export type Parser
 			end 'text'
 		end 'debugStreamMember'
 
-		return try self.emitCall(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: rparenTok, resultUsed: resultUsed, constructorInstance: constructorInstance, mint: mint, inferInstanceOf: inferInstanceOf, spawned: spawned, places: places)
+		return try self.emitCall(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: rparenTok, resultUsed: resultUsed, constructorInstance: constructorInstance, mint: mint, inferInstanceOf: inferInstanceOf, serviceSite: serviceSite, places: places)
 	end 'parseCallNamed'
 
 	// ⭐ **THE ONE `__DebugStream` MEMBER THAT ANSWERS A VALUE — the SOURCE-LEVEL half of the run-time gate.**
@@ -95929,12 +96140,12 @@ export type Parser
 		return conventions
 	end 'byRefConventionsReachableFrom'
 
-	function declarationsTheCallMayBind(callee ByteArray, places PlaceArgumentArray, args ValueIdArray, argLabels NameRoster) returns DeclarationFactsArray
-		if places.isEmpty() and self.signatures.overloadedDeclsOf(callee).count() < 2 'oneDeclarationAnswers'
+	function declarationsTheCallMayBind(callee ByteArray, places PlaceArgumentArray, argLabels NameRoster) returns DeclarationFactsArray
+		if places.isEmpty() and not self.signatures.isAnOverloadSet(callee) 'oneDeclarationAnswers'
 			return noDeclarationFacts
 		end 'oneDeclarationAnswers'
 
-		return self.declarationFactsBoundBy(callee, args: args, argLabels: argLabels)
+		return self.declarationFactsBoundBy(callee, argLabels: argLabels)
 	end 'declarationsTheCallMayBind'
 
 	function consumeOfTheOneDeclaration(callee ByteArray, declarations DeclarationFactsArray) returns CalleeConsume
@@ -95942,7 +96153,7 @@ export type Parser
 		return only.consume
 	end 'consumeOfTheOneDeclaration'
 
-	function declarationFactsBoundBy(callee ByteArray, args ValueIdArray, argLabels NameRoster) returns DeclarationFactsArray
+	function declarationFactsBoundBy(callee ByteArray, argLabels NameRoster) returns DeclarationFactsArray
 		if let site = try self.artifact.requestedGenericInstanceSiteKey(callee) 'aGenericInstance'
 			let byRef = self.signatures.byRefOfDeclaration(site)
 			return singleDeclarationFacts(DeclarationFacts.create(site, byRef: byRef, consume: self.signatures.consumeOf(callee)))
@@ -95954,18 +96165,7 @@ export type Parser
 			return self.nonGenericDeclarationFacts(callee)
 		end 'oneDeclarationAnswers'
 
-		var slotted = OverloadedDeclArray.create()
-
-		for decl in callable 'eachDeclaration'
-			match slotCallArgs(sweptSlotNames(decl), args: args, argLabels: argLabels) 'slot'
-				ordered then slotted.push(decl)
-				arityMismatch or
-				unknownLabel or
-				duplicateArg then continue
-			end 'slot'
-		end 'eachDeclaration'
-
-		return self.factsOfDeclarations(callable if slotted.isEmpty() else slotted)
+		return self.factsOfDeclarations(declarationsTheCallSlots(callable, argLabels: argLabels))
 	end 'declarationFactsBoundBy'
 
 	function nonGenericDeclarationFacts(callee ByteArray) returns DeclarationFactsArray
@@ -95979,7 +96179,7 @@ export type Parser
 	end 'nonGenericDeclarationFacts'
 
 	function callableMembersOfASet(callee ByteArray) returns OverloadedDeclArray
-		if self.signatures.overloadedDeclsOf(callee).count() < 2 'notASet'
+		if not self.signatures.isAnOverloadSet(callee) 'notASet'
 			return OverloadedDeclArray.create()
 		end 'notASet'
 
@@ -96250,7 +96450,7 @@ export type Parser
 	//
 	// `spelling` says whether those callee bytes are the AUTHOR'S or the COMPILER'S, which is the one
 	// question the reserved-space door cannot answer from the name — see `CalleeMint`.
-	function emitCall(writtenCallee ByteArray, anchor Token, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint, inferInstanceOf FactoryInference = FactoryInference.none, spawned bool = false, places PlaceArgumentArray = noPlaceArguments) returns ValueId throws SourceParseError
+	function emitCall(writtenCallee ByteArray, anchor Token, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint, inferInstanceOf FactoryInference = FactoryInference.none, serviceSite ServiceSpawnSite = sharedNotAServiceSpawn, places PlaceArgumentArray = noPlaceArguments) returns ValueId throws SourceParseError
 		let callee = try self.genericInstanceCallee(writtenCallee, anchor: anchor, args: args, argLabels: argLabels)
 		try self.requireCalleeIsNotReservedName(callee, anchor: anchor, mint: mint)
 
@@ -96278,22 +96478,24 @@ export type Parser
 		// is what makes the consume transfer, the drop enrollment and `slotCallArgs`' arity gate correct for
 		// it with no change to any of them.
 		let defaultedArgs = try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, receiverSlots: NoReceiverSlots)
-		view declarations = self.declarationsTheCallMayBind(callee, places: places, args: args, argLabels: argLabels)
+		view declarations = self.declarationsTheCallMayBind(callee, places: places, argLabels: argLabels)
 		let placeBindings = try self.bindPlaceArguments(places, declarations: declarations, args: args, argLabels: argLabels)
 		self.widenArgsToInterfaceHandles(callee, args: args, argLabels: argLabels, anchor: anchor, rparenTok: rparenTok)
 		try self.admitOperandAliasSetArgs(callee, args: args, argLabels: argLabels, anchor: anchor)
+		let bound = self.boundReturnOf(callee, args: args, argLabels: argLabels)
 
 		// ⭐ **A FACTORY CALL ON A BARE GENERIC BASE HAS ITS INSTANCE FIXED BY ITS ARGUMENTS**, and this is the
 		// first line at which they are all in hand — the fill above included, so a DEFAULTED argument fixes a
 		// type parameter exactly as a written one does. Every other caller gets back what it supplied.
-		let constructed = try self.spawnFactoryConstructorInstance(constructorInstance, inferInstanceOf: inferInstanceOf, callee: callee, args: args, argLabels: argLabels, anchor: anchor, spawned: spawned)
+		let constructed = try self.spawnFactoryConstructorInstance(constructorInstance, inferInstanceOf: inferInstanceOf, callee: callee, args: args, argLabels: argLabels, anchor: anchor, serviceSite: serviceSite)
 		self.stampDefaultsSubject(callee, args: args, argLabels: argLabels, defaultedArgs: defaultedArgs, receiverSlots: NoReceiverSlots, constructorInstance: constructed)
 		try self.requireBareGenericSubjectIsBound(callee, args: args, argLabels: argLabels, constructed: constructed, inferInstanceOf: inferInstanceOf, anchor: anchor)
 		try self.requireACountSourceForAStaticCall(callee, constructed: constructed, anchor: anchor)
-		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed, args: args, argLabels: argLabels)
+		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed, bound: bound)
+		try self.requireBareGenericResultIsTyped(result, callee: callee, constructed: constructed, inferInstanceOf: inferInstanceOf, anchor: anchor)
 		self.adoptPendingOverlaps(result, mint: mint, anchor: anchor)
-		let opaqueWordReading = try self.retypeOpaqueMethodResult(result, callee: callee, args: args, anchor: anchor)
-		self.noteLiteralColumnsCorpusCall(result, callee: callee, args: args)
+		let opaqueWordReading = try self.typeCallResultThroughInstance(result, callee: callee, args: args, argLabels: argLabels, bound: bound, constructed: constructed, anchor: anchor)
+		self.noteLiteralColumnsCorpusCall(result, callee: callee, args: args, argLabels: argLabels)
 		self.noteIdentityPrimitiveClone(result, callee: callee, args: args)
 		self.settleFloatResult(result)
 
@@ -96359,7 +96561,7 @@ export type Parser
 		// CONSUMES — a plain-field store, or a type-parameter field of a concrete instance whose argument owns
 		// managed heap — is moved (poisoned / drained); a borrowed one is refused. Done BEFORE the op is
 		// emitted so a refused call emits nothing.
-		let transfers = try self.applyCallerConsume(callee, declarations: declarations, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructed, callResult: result, spawned: spawned)
+		let transfers = try self.applyCallerConsume(callee, declarations: declarations, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructed, callResult: result, site: serviceSite)
 		self.holdScratchCellsEmptiedWhenTheMemberTakesTheValue(placeBindings.pending, callResult: result, anchor: anchor)
 		self.recordDeferredArgumentBindings(placeBindings.pending, transfers: transfers, callResult: result)
 
@@ -96403,7 +96605,7 @@ export type Parser
 		self.routeBareThrowingCall(callee, opIdx: opIdx, result: result)
 
 		// ⭐⭐ **THE OPAQUE WORD IS READ BACK AS THE FLOAT THE RECEIVER'S INSTANCE SAYS IT IS** —
-		// `retypeOpaqueReturnValue`'s answer, spent HERE because the reinterpretation is an op and an op must
+		// `typeResultThroughInstance`'s answer, spent HERE because the reinterpretation is an op and an op must
 		// come after the `call` that defines its operand. Everything above deliberately keeps working on the
 		// CALL's own value: the drop enrolment, the declared surface, the caller-consume and the throwing-call
 		// routing are all facts about the callee's hand-off, and the bitcast is a fact about how this caller
@@ -96419,7 +96621,7 @@ export type Parser
 
 		let read = match opaqueWordReading 'reading'
 			asItStands gives result
-			aFloatsBits(alias) gives self.floatReadFromTheOpaqueWord(result, alias: alias, callee: callee, args: args, range: callRange)
+			aFloatsBits(alias) gives self.floatReadFromTheOpaqueWord(result, alias: alias, callee: callee, args: args, argLabels: argLabels, range: callRange)
 			aNarrowSignedSlot(slotBytes) gives self.emitSignExtendFromSlot(result, slotBytes: slotBytes, valueType: self.typeOf(result), range: callRange)
 		end 'reading'
 
@@ -96427,14 +96629,14 @@ export type Parser
 		return read
 	end 'emitCall'
 
-	function floatReadFromTheOpaqueWord(word ValueId, alias TypeNameId, callee ByteArray, args ValueIdArray, range SourceRange) returns ValueId
+	function floatReadFromTheOpaqueWord(word ValueId, alias TypeNameId, callee ByteArray, args ValueIdArray, argLabels NameRoster, range SourceRange) returns ValueId
 		let reinterpreted = self.emitUnaryOp(word, op: MaxonUnaryOp.bitsToFloat, resultTag: ValueTypeTag.float, range: range)
 
 		if alias != UnnamedTypeId 'anAliasedElement'
 			self.wearFloatAlias(reinterpreted, aliasId: alias)
 		end 'anAliasedElement'
 
-		self.noteLiteralColumnsCorpusCall(reinterpreted, callee: callee, args: args)
+		self.noteLiteralColumnsCorpusCall(reinterpreted, callee: callee, args: args, argLabels: argLabels)
 		self.settleFloatResult(reinterpreted)
 		return reinterpreted
 	end 'floatReadFromTheOpaqueWord'
@@ -97252,47 +97454,174 @@ export type Parser
 	// owns heap. A field read is a BORROW and this an OWNED result; what they share is that both learn
 	// what `T` is before anything reads the answer.
 	//
-	// The gate is ordered cheapest-first: almost every call in a program has a non-generic first argument, and
-	// that test is one array read. Only past it is the callee's return type looked up.
+	// The gate is ordered cheapest-first: almost every call in a program has neither a generic first argument
+	// nor a constructed instance, and that test is one array read. Only past it is the callee's declaration
+	// looked up.
 	//
 	// ⚠ **IT REPORTS NO OWNERSHIP BIT.** Whether the result is co-owned would be answered from the
 	// DECLARED return type while the obligation belongs to the RETURNED VALUE, and the two disagree
 	// for every body that returns a value it already owns. The callee discharges the hand-off for
 	// every shape (`emitOwnedValueReturn`), so there is one convention and nothing here for a caller
 	// to read back.
-	function retypeOpaqueMethodResult(result ValueId, callee ByteArray, args ValueIdArray, anchor Token) returns OpaqueWordReading throws SourceParseError
-		if args.isEmpty() 'noReceiver'
-			return OpaqueWordReading.asItStands
-		end 'noReceiver'
+	function typeCallResultThroughInstance(result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, bound BoundReturn, constructed ConstructorInstance, anchor Token) returns OpaqueWordReading throws SourceParseError
+		let source = self.instanceSourceOfCall(result, callee: callee, args: args, constructed: constructed)
+		self.promoteBareGenericResultToCalleeScope(result, source: source)
 
-		let receiver = try args.get(0) otherwise panic("retypeOpaqueMethodResult: args.get(0) failed on a non-empty list")
+		match bound 'bound'
+			undeclared then return OpaqueWordReading.asItStands
+			declared(returnType, scopeFilePath, _) then return try self.typeResultThroughSource(result, source: source, callee: callee, args: args, argLabels: argLabels, returnType: returnType, scopeFilePath: scopeFilePath, anchor: anchor)
+		end 'bound'
+	end 'typeCallResultThroughInstance'
 
-		if self.tagOf(receiver) != ValueTypeTag.genericInstance 'concreteReceiverOnly'
-			return OpaqueWordReading.asItStands
-		end 'concreteReceiverOnly'
+	function typeResultThroughSource(result ValueId, source CallInstanceSource, callee ByteArray, args ValueIdArray, argLabels NameRoster, returnType MaxonReturnType, scopeFilePath FilePath, anchor Token) returns OpaqueWordReading throws SourceParseError
+		match source 'source'
+			nowhere or
+			scopeOnly then return OpaqueWordReading.asItStands
+			qualifier(gid) then return try self.typeStaticResultThroughInstance(result, gid: gid, callee: callee, args: args, argLabels: argLabels, returnType: returnType, scopeFilePath: scopeFilePath, anchor: anchor)
+			receiver(value) then return try self.retypeDeclaredMethodResult(result, callee: callee, args: args, argLabels: argLabels, receiver: value, returnType: returnType, scopeFilePath: scopeFilePath, anchor: anchor)
+		end 'source'
+	end 'typeResultThroughSource'
 
-		// The callee must be a method OF the receiver's own generic base, or `T` names a different type's
-		// parameter and the substitution would be against the wrong binding.
-		if not isQualifiedUnderTypeName(callee, typeName: self.signatures.genericInstanceBaseName(self.valueInstanceId(receiver))) 'notItsOwnMethod'
-			return OpaqueWordReading.asItStands
-		end 'notItsOwnMethod'
+	function typeStaticResultThroughInstance(result ValueId, gid GenericInstanceId, callee ByteArray, args ValueIdArray, argLabels NameRoster, returnType MaxonReturnType, scopeFilePath FilePath, anchor Token) returns OpaqueWordReading throws SourceParseError
+		try self.settleStaticPromiseHandout(result, callee: callee, args: args, argLabels: argLabels, returnType: returnType, gid: gid, scopeFilePath: scopeFilePath, anchor: anchor)
+		self.markSurfaceOfStaticResult(result, args: args, gid: gid, returnType: returnType)
+		return self.typeResultThroughInstance(result, gid: gid, scopeFilePath: scopeFilePath)
+	end 'typeStaticResultThroughInstance'
 
+	function settleStaticPromiseHandout(result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, returnType MaxonReturnType, gid GenericInstanceId, scopeFilePath FilePath, anchor Token) throws SourceParseError
+		if not self.returnHandsBackAGreenThread(returnType, gid: gid, scopeFilePath: scopeFilePath) 'nothingToBorrow'
+			return
+		end 'nothingToBorrow'
+
+		let holder = try self.holderArgumentOf(callee, args: args, argLabels: argLabels, gid: gid).value() otherwise return
+		try self.settleCorpusPromiseRead(result, callee: callee, args: args, argLabels: argLabels, holder: holder, returnType: returnType, gid: gid, scopeFilePath: scopeFilePath, anchor: anchor)
+	end 'settleStaticPromiseHandout'
+
+	function returnHandsBackAGreenThread(returnType MaxonReturnType, gid GenericInstanceId, scopeFilePath FilePath) returns bool
+		let declared = try valueTypeOfReturn(returnType) otherwise return false
+		return self.typeHandsBackAGreenThread(self.slotTypeThroughInstance(declared, gid: gid, scopeFilePath: scopeFilePath))
+	end 'returnHandsBackAGreenThread'
+
+	function markSurfaceOfStaticResult(result ValueId, args ValueIdArray, gid GenericInstanceId, returnType MaxonReturnType)
+		for argument in args 'eachArgument'
+			if self.valueIsInstance(argument, giid: gid) 'theQualifiersInstance'
+				self.markReceiverSurfaceOfResult(result, receiver: argument, returnType: returnType)
+				return
+			end 'theQualifiersInstance'
+		end 'eachArgument'
+	end 'markSurfaceOfStaticResult'
+
+	function holderArgumentOf(callee ByteArray, args ValueIdArray, argLabels NameRoster, gid GenericInstanceId) returns HolderArgument
+		let facts = self.declarationFactsBoundBy(callee, argLabels: argLabels)
+
+		for column in 0 upto args.count() as ParamCount 'eachArgument'
+			let argument = try args.get(column) otherwise panic("holderArgumentOf: args.get OOB at {column}")
+
+			// A type over the bare base may hold the instance itself: `substituteThroughInstance` hands a
+			// top-level `structRef` back unchanged, so such a type never says what `T` holds.
+			if not self.argumentHoldsAPromise(argument) and not self.signatures.typeNamesTheBareBase(self.spawnTypeArgumentOfValue(argument), base: self.signatures.genericInstanceBaseName(gid)) 'holdsNone'
+				continue
+			end 'holdsNone'
+
+			// A position every declaration takes moves the promise into the callee, so the caller holds
+			// nothing the result could borrow.
+			if self.columnIsMovedIn(facts, column: column, label: callArgumentLabel(argLabels, argIndex: column), argValue: argument, gid: gid) 'movedIn'
+				continue
+			end 'movedIn'
+
+			return HolderArgument.holds(argument)
+		end 'eachArgument'
+
+		return sharedNoHolderArgument
+	end 'holderArgumentOf'
+
+	function instanceSourceOfCall(result ValueId, callee ByteArray, args ValueIdArray, constructed ConstructorInstance) returns CallInstanceSource
+		if not self.callMayNameAnInstance(args, constructed: constructed) 'noGenericOperand'
+			return sharedNoCallInstanceSource
+		end 'noGenericOperand'
+
+		view declarations = self.signatures.overloadedDeclsOf(callee)
+
+		if declarations.isEmpty() 'nothingDeclared'
+			return sharedNoCallInstanceSource
+		end 'nothingDeclared'
+
+		if (try declarations.get(0) otherwise panic("Parser.instanceSourceOfCall: overloadedDeclsOf('{String.from(callee)}') is non-empty yet holds no first member")).takesReceiver 'aMethod'
+			let receiver = try args.get(0) otherwise return sharedNoCallInstanceSource
+			return self.sourceOfReceiver(result, callee: callee, receiver: receiver)
+		end 'aMethod'
+
+		match constructed 'qualifier'
+			none then return sharedNoCallInstanceSource
+			instance(gid) then return CallInstanceSource.qualifier(gid) if isQualifiedUnderTypeName(callee, typeName: self.signatures.genericInstanceBaseName(gid)) else sharedNoCallInstanceSource
+		end 'qualifier'
+	end 'instanceSourceOfCall'
+
+	function callMayNameAnInstance(args ValueIdArray, constructed ConstructorInstance) returns bool
+		match constructed 'qualifier'
+			instance then return true
+			none then break
+		end 'qualifier'
+
+		if args.isEmpty() 'noFirstArgument'
+			return false
+		end 'noFirstArgument'
+
+		let firstTag = self.tagOf(try args.get(0) otherwise panic("Parser.callMayNameAnInstance: args.get(0) failed on a non-empty list"))
+		return firstTag == ValueTypeTag.structRef or firstTag == ValueTypeTag.genericInstance
+	end 'callMayNameAnInstance'
+
+	function sourceOfReceiver(result ValueId, callee ByteArray, receiver ValueId) returns CallInstanceSource
+		if self.tagOf(receiver) == ValueTypeTag.genericInstance 'anInstance'
+			let base = self.signatures.genericInstanceBaseName(self.valueInstanceId(receiver))
+
+			// The callee must be a method OF the receiver's own generic base, or `T` names a different type's
+			// parameter and the substitution would be against the wrong binding.
+			if isQualifiedUnderTypeName(callee, typeName: base) 'aMethodOfTheBase'
+				return CallInstanceSource.receiver(receiver)
+			end 'aMethodOfTheBase'
+
+			if not self.resultNamesADeclaredType(result) 'nothingToPromoteInTheInstance'
+				return sharedNoCallInstanceSource
+			end 'nothingToPromoteInTheInstance'
+
+			return self.scopeOnlySourceOfForeignCallee(callee)
+		end 'anInstance'
+
+		if not self.resultNamesADeclaredType(result) 'nothingToPromote'
+			return sharedNoCallInstanceSource
+		end 'nothingToPromote'
+
+		let declaringType = try self.methodSurfaceOf(receiver).declaredTypeName() otherwise return sharedNoCallInstanceSource
+
+		if isQualifiedUnderTypeName(callee, typeName: declaringType) 'aMethodOfTheReceiversType'
+			return CallInstanceSource.scopeOnly(declaringType)
+		end 'aMethodOfTheReceiversType'
+
+		return self.scopeOnlySourceOfForeignCallee(callee)
+	end 'sourceOfReceiver'
+
+	// A callee that is not a method of the receiver's type reads a bare generic result in the scope of its own
+	// declaring type, which is not the receiver's.
+	function scopeOnlySourceOfForeignCallee(callee ByteArray) returns CallInstanceSource
+		match self.signatures.functionDeclaringType(callee) 'declaring'
+			method(typeName) then return CallInstanceSource.scopeOnly(typeName.clone())
+			freeFunction or
+			undeclared then return sharedNoCallInstanceSource
+		end 'declaring'
+	end 'scopeOnlySourceOfForeignCallee'
+
+	function retypeDeclaredMethodResult(result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, receiver ValueId, returnType MaxonReturnType, scopeFilePath FilePath, anchor Token) returns OpaqueWordReading throws SourceParseError
 		// ⭐⭐ **THE CORPUS-CALL DOOR IS THE ONLY PLACE A CORPUS MEMBER'S ELEMENT TYPE IS CONCRETE**.
 		// `stdlib/Array.maxon` is compiled ONCE over an opaque `Element`, so no rule about
 		// promise elements can be written inside `last()` or `cursor()` — in there the element is a type
 		// parameter and nothing about green threads is true of it yet. Here the receiver's instance is
 		// known, so here is where a member that hands back a BORROWED promise element, or a copy of a
 		// receiver holding one, is refused.
-		match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'declared'
-			declared(returnType) then return try self.retypeDeclaredMethodResult(result, callee: callee, args: args, receiver: receiver, returnType: returnType, anchor: anchor)
-			undeclared then return OpaqueWordReading.asItStands
-		end 'declared'
-	end 'retypeOpaqueMethodResult'
-
-	function retypeDeclaredMethodResult(result ValueId, callee ByteArray, args ValueIdArray, receiver ValueId, returnType MaxonReturnType, anchor Token) returns OpaqueWordReading throws SourceParseError
 		try self.requireCorpusCopyHoldsNoGreenThread(callee, receiver: receiver, anchor: anchor)
-		try self.settleCorpusPromiseRead(result, callee: callee, args: args, returnType: returnType, anchor: anchor)
-		let reading = self.retypeOpaqueReturn(result, receiver: receiver, returnType: returnType, scopeFilePath: self.signatures.recordedReturnDeclFileOf(callee))
+		try self.settleCorpusPromiseRead(result, callee: callee, args: args, argLabels: argLabels, holder: receiver, returnType: returnType, gid: self.valueInstanceId(receiver), scopeFilePath: scopeFilePath, anchor: anchor)
+		self.markReceiverSurfaceOfResult(result, receiver: receiver, returnType: returnType)
+		let reading = self.typeResultThroughInstance(result, gid: self.valueInstanceId(receiver), scopeFilePath: scopeFilePath)
 
 		// After the retype: the result is tagged `typeParameter` until then, and the image-record carry marks
 		// only a non-text aggregate, so marking first leaves the `let`'s element writable through a `var`.
@@ -97361,30 +97690,30 @@ export type Parser
 	// ⛔ **`try s.last() …` then `await` runs to exit 75 unrefused**, because the await reclaims the thread and
 	// the array's element walk reclaims it again — hence a refusal here rather than a note.
 	//
-	// ⚠ **THE ROSTERS ARE OF LIBRARY DOORS, NOT OF SPELLINGS AUTHORS MAY INVENT.** A member on neither the
-	// move-out list nor the array-cursor one is refused rather than assumed safe — so a user generic's
-	// `take()` is refused (conservative) instead of silently double-freeing (unsound). The array-cursor arm
+	// ⚠ **THE ROSTERS ARE OF LIBRARY DOORS, NOT OF SPELLINGS AUTHORS MAY INVENT.** Any other member, a user
+	// `pop` included, moves its element out only when its body is proved to (`calleeMovesItsElementOut`): it
+	// returns what a library move-out took from a field of `self`, or a parameter every declaration moves in.
+	// The rest is refused rather than assumed safe — conservative instead of silently double-freeing
+	// (unsound). The array-cursor arm
 	// trusts that a `current()`/`peek(n)` on a record holding a `__ManagedMemoryCursor` reads the element that
 	// cursor stands on; a record whose read comes from anywhere else names a slot not holding that thread, and
 	// `__managed_vacate`'s occupant check aborts at the consume rather than emptying it.
 	//
 	// ⚠ The cursor slot's ops are emitted HERE, before the call op, so the call stays the last op a `try`
 	// rewrite looks for (`try it.peek(1)`); the position they read is the one the call reads.
-	function settleCorpusPromiseRead(result ValueId, callee ByteArray, args ValueIdArray, returnType MaxonReturnType, anchor Token) throws SourceParseError
-		let receiver = try args.get(0) otherwise panic("settleCorpusPromiseRead: a method call's argument list holds its receiver")
-
+	function settleCorpusPromiseRead(result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, holder ValueId, returnType MaxonReturnType, gid GenericInstanceId, scopeFilePath FilePath, anchor Token) throws SourceParseError
 		// ⚠ **GATED ON WHAT THE MEMBER RETURNS, NOT ON THE RECEIVER ALONE.** The rule is about handing an
 		// ELEMENT over; a member of the same container that returns something else — `count()`, `push()`,
 		// `clear()` — is untouched by it.
 		let declared = try valueTypeOfReturn(returnType) otherwise return
-		let handedBack = self.slotTypeThroughReceiver(receiver, declared: declared, scopeFilePath: self.signatures.recordedReturnDeclFileOf(callee))
+		let handedBack = self.slotTypeThroughInstance(declared, gid: gid, scopeFilePath: scopeFilePath)
 
-		if not self.typeHandsBackAGreenThread(handedBack) or calleeIsAnElementMoveOut(callee) 'nothingBorrowed'
+		if not self.typeHandsBackAGreenThread(handedBack) or self.calleeMovesItsElementOut(callee, args: args, argLabels: argLabels, gid: gid) 'nothingBorrowed'
 			return
 		end 'nothingBorrowed'
 
 		if self.signatures.typeIsAGreenThreadHandle(handedBack, from: self.artifact.typeNames) and (qualifiedMemberIs(callee, member: CursorCurrentMethod) or qualifiedMemberIs(callee, member: CursorPeekMethod)) 'aCursorRead'
-			if let slot = try self.emitIteratorCursorSlot(receiver, args: args, range: SourceRange.ofToken(anchor)) 'overAnArray'
+			if let slot = try self.emitIteratorCursorSlot(holder, args: args, range: SourceRange.ofToken(anchor)) 'overAnArray'
 				self.recordConsumablePromiseSlot(result, container: slot.container, index: slot.index, isField: false)
 				return
 			end 'overAnArray'
@@ -97397,6 +97726,69 @@ export type Parser
 		let cure = PromisePairReadCure if tagNamesADeclaredType(maxonTypeTag(handedBack)) else PromiseSlotReadCure
 		throw SourceParseError.promiseCannotBeBorrowed(String.from(unqualifiedMemberName(callee)), cure: cure, line: anchor.line, column: anchor.column)
 	end 'settleCorpusPromiseRead'
+
+	function calleeMovesItsElementOut(callee ByteArray, args ValueIdArray, argLabels NameRoster, gid GenericInstanceId) returns bool
+		if self.signatures.declaresALibraryMoveOutDoor(callee, argLabels: argLabels) 'aLibraryDoor'
+			return true
+		end 'aLibraryDoor'
+
+		if self.signatures.returnsAMovedOutElement(callee) 'movesOneOutOfAField'
+			return true
+		end 'movesOneOutOfAField'
+
+		return self.signatures.returnsAParameter(callee) and self.returnableParametersAreMovedIn(callee, args: args, argLabels: argLabels, gid: gid)
+	end 'calleeMovesItsElementOut'
+
+	function returnableParametersAreMovedIn(callee ByteArray, args ValueIdArray, argLabels NameRoster, gid GenericInstanceId) returns bool
+		view declarations = self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path)
+
+		if declarations.isEmpty() 'noDeclarationToRead'
+			return false
+		end 'noDeclarationToRead'
+
+		let facts = self.declarationFactsBoundBy(callee, argLabels: argLabels)
+
+		for column in 0 upto args.count() as ParamCount 'eachArgument'
+			let label = callArgumentLabel(argLabels, argIndex: column)
+
+			if not self.columnMayBeTheReturnedParameter(declarations, column: column, label: label) 'cannotBeReturned'
+				continue
+			end 'cannotBeReturned'
+
+			if not self.columnIsMovedIn(facts, column: column, label: label, argValue: try args.get(column) otherwise panic("returnableParametersAreMovedIn: args.get OOB at {column}"), gid: gid) 'isNotMovedIn'
+				return false
+			end 'isNotMovedIn'
+		end 'eachArgument'
+
+		return true
+	end 'returnableParametersAreMovedIn'
+
+	function columnMayBeTheReturnedParameter(declarations OverloadedDeclArray, column ParamCount, label ByteArray) returns bool
+		for decl in declarations 'eachDeclaration'
+			if self.declarationMayReturnColumn(decl, column: column, label: label) 'thisOneMay'
+				return true
+			end 'thisOneMay'
+		end 'eachDeclaration'
+
+		return false
+	end 'columnMayBeTheReturnedParameter'
+
+	function declarationMayReturnColumn(decl OverloadedDecl, column ParamCount, label ByteArray) returns bool
+		if decl.takesReceiver and column == 0 'theReceiver'
+			return false
+		end 'theReceiver'
+
+		let returned = try valueTypeOfReturn(decl.returnType) otherwise return false
+		let argIndex = (column - 1) if decl.takesReceiver else column
+		let slot = try argSlotPosition(decl.paramNames, argIndex: argIndex, label: label) otherwise return true
+		let declared = try decl.paramTypes.get(slot) otherwise panic("declarationMayReturnColumn: paramTypes.get OOB at {slot} — a declaration's parameter columns are built in lockstep")
+
+		return not typesProvablyDiffer(self.sweptParamType(declared, scopeFilePath: decl.declFilePath), other: self.sweptParamType(returned, scopeFilePath: decl.declFilePath))
+	end 'declarationMayReturnColumn'
+
+	function columnIsMovedIn(facts DeclarationFactsArray, column ParamCount, label ByteArray, argValue ValueId, gid GenericInstanceId) returns bool
+		return self.columnTakers(facts, column: column, label: label, argValue: argValue, constructorInstance: ConstructorInstance.instance(gid)).everyDeclarationTakes()
+	end 'columnIsMovedIn'
 
 	// ⭐ **DOES THIS RETURN TYPE PUT A GREEN THREAD IN THE CALLER'S HANDS?** Three shapes: the promise ITSELF
 	// (`last()` → `Element`), a TUPLE carrying one (`WithIterIterator.current()` → `(Source, Element)`), or a
@@ -97430,14 +97822,20 @@ export type Parser
 		return self.signatures.managedCursorFieldsOf(gid).isEmpty()
 	end 'typeHandsBackAGreenThread'
 
-	function retypeOpaqueReturn(result ValueId, receiver ValueId, returnType MaxonReturnType, scopeFilePath FilePath) returns OpaqueWordReading
+	// ⭐ **THE SURFACE CROSSES THE INSTANCE WITH THE TYPE** — `emitFieldLoad`'s pairing at the method-RESULT
+	// position, and it is marked even where `typeResultThroughInstance` fixes nothing: which roster the result
+	// serves is a fact about the receiver's ARGUMENT SPELLING, and the substitution can leave a type untouched
+	// while that spelling still decides what the value may be asked for. `inner` is the CALLEE'S DECLARED
+	// return — the declaration view, before anything has retyped the result — which is exactly the view
+	// `surfaceBitsThroughInstanceArg` reads.
+	function markReceiverSurfaceOfResult(result ValueId, receiver ValueId, returnType MaxonReturnType)
 		match returnType 'r'
-			value(inner) then return self.retypeOpaqueReturnValue(result, receiver: receiver, inner: inner, scopeFilePath: scopeFilePath)
-			void then return OpaqueWordReading.asItStands
+			value(inner) then self.markDeclaredSurface(result, declared: self.slotSurfaceThroughReceiver(receiver, declared: inner))
+			void then break
 		end 'r'
-	end 'retypeOpaqueReturn'
+	end 'markReceiverSurfaceOfResult'
 
-	// ⛔ **THERE IS NO MANAGED/TRIVIAL SPLIT HERE.** A `managedConcrete` guard between these two statements,
+	// ⛔ **THERE IS NO MANAGED/TRIVIAL SPLIT HERE.** A `managedConcrete` guard before the retype,
 	// refusing the substitution whenever the instance's argument owns heap, rests entirely on the ORDER
 	// `emitCall` runs in — the drop enrolment taken from the opaque tag inside the mint, so a later retype
 	// would contradict it. With the enrolment after this call (`enrolOwnedCallTemp`) there is nothing left
@@ -97447,10 +97845,10 @@ export type Parser
 	//
 	// ⚠ **The guard would be wrong; the RULE it sits next to is not.** `typeIsManaged` and every other
 	// `ProgramSignatures` classifier must be asked of the INDEX-SPACE type, never of one
-	// `slotTypeThroughReceiver` has already re-interned into this file's table — the two interners assign ids
+	// `slotTypeThroughInstance` has already re-interned into this file's table — the two interners assign ids
 	// in their own insertion orders, so such an answer is right exactly while they coincide and silently
 	// wrong when they drift (the reason the substitution and `adoptType` are two steps). That is
-	// why the substitution below goes through `slotTypeThroughReceiver` and not a bare `adoptType`:
+	// why the substitution below goes through `slotTypeThroughInstance` and not a bare `adoptType`:
 	// `declaredSlotType` re-tags a struct / generic-alias / function name and leaves a union's `named` alone,
 	// which is what makes `Box with Shape` pick `over(x Shape)` rather than reading the box pointer as an
 	// integer (`generic-managed-union-return-overload-selection` — exit 25 where 7 is correct, the failure this
@@ -97474,18 +97872,16 @@ export type Parser
 	// GPR-defined value into the XMM file, which is `X64Backend`'s cross-register-file assertion verbatim.
 	// So this door reports the case and `emitCall` reinterprets, exactly as `emitContainerElementAccessor`
 	// does at the element boundary: the same sentence, the other kind of slot.
-	function retypeOpaqueReturnValue(result ValueId, receiver ValueId, inner MaxonType, scopeFilePath FilePath) returns OpaqueWordReading
-		// ⭐ **THE SURFACE CROSSES THE INSTANCE WITH THE TYPE** — `emitFieldLoad`'s pairing at the method-RESULT
-		// position, and it sits ABOVE the "fixes nothing" return deliberately: which roster the result serves is
-		// a fact about the receiver's ARGUMENT SPELLING, and the substitution below can leave a type untouched
-		// while that spelling still decides what the value may be asked for. `inner` is the CALLEE'S DECLARED
-		// return — the declaration view, before anything has retyped the result — which is exactly the view
-		// `surfaceBitsThroughInstanceArg` reads.
-		self.markDeclaredSurface(result, declared: self.slotSurfaceThroughReceiver(receiver, declared: inner))
+	function typeResultThroughInstance(result ValueId, gid GenericInstanceId, scopeFilePath FilePath) returns OpaqueWordReading
+		// `typeOf` panics on a void tag.
+		if self.tagOf(result) == ValueTypeTag.void 'noValueToType'
+			return OpaqueWordReading.asItStands
+		end 'noValueToType'
 
-		let fixedByTheInstance = self.slotTypeThroughReceiver(receiver, declared: inner, scopeFilePath: scopeFilePath)
+		let declared = self.typeOf(result)
+		let fixedByTheInstance = self.slotTypeThroughInstance(declared, gid: gid, scopeFilePath: scopeFilePath)
 
-		if maxonTypesDenoteSame(fixedByTheInstance, b: inner) 'theInstanceFixesNothingHere'
+		if maxonTypesDenoteSame(fixedByTheInstance, b: declared) 'theInstanceFixesNothingHere'
 			return OpaqueWordReading.asItStands
 		end 'theInstanceFixesNothingHere'
 
@@ -97493,12 +97889,12 @@ export type Parser
 		// `genericInstance` and a `returns Entry` to a tuple; neither can BECOME a float, and only a BARE type
 		// parameter occupies the opaque word this rule is about. Testing `tagIsFloat(fixed)` alone would state
 		// a rule about a slot KIND while checking only its contents.
-		if maxonTypeTag(inner) == ValueTypeTag.typeParameter and tagIsFloat(maxonTypeTag(fixedByTheInstance)) 'aFloatRidingTheOpaqueWord'
+		if maxonTypeTag(declared) == ValueTypeTag.typeParameter and tagIsFloat(maxonTypeTag(fixedByTheInstance)) 'aFloatRidingTheOpaqueWord'
 			// The call's own result is what the ABI says it is — an i64 — which is also what makes
 			// `enrolOwnedCallTemp` decline it correctly: a float owns no heap, so the descriptor-gated drop an
 			// opaque tag would have enrolled is work with no effect on every trip of every loop.
 			self.retypeValue(result, valueType: MaxonType.integer)
-			return OpaqueWordReading.aFloatsBits(self.floatAliasThroughInstance(inner, gid: self.valueInstanceId(receiver)))
+			return OpaqueWordReading.aFloatsBits(self.floatAliasThroughInstance(declared, gid: gid))
 		end 'aFloatRidingTheOpaqueWord'
 
 		self.retypeValue(result, valueType: fixedByTheInstance)
@@ -97512,7 +97908,7 @@ export type Parser
 		// `for s in a` (the cursor's `current()`) summed to **256** where 0 is correct and `a.pop()` answered
 		// **255** for `-1`, while the compiler-emitted `get`/`first` were already right.
 		//
-		// ⚠ It asks the SUBSTITUTED type, not the declared one, and it does NOT require `inner` to be a bare
+		// ⚠ It asks the SUBSTITUTED type, not the declared one, and it does NOT require `declared` to be a bare
 		// type parameter the way the float arm does. A float can only ride the opaque word as an ABI
 		// accident of a bare `T`; a narrow signed slot is a property of the VALUE's own type wherever it came
 		// from, and `narrowSignedSlotOf`'s header carries why re-extending an already-correct value is the
@@ -97522,7 +97918,7 @@ export type Parser
 			fromBytes(slotBytes) then return OpaqueWordReading.aNarrowSignedSlot(slotBytes)
 			notASignExtension then return OpaqueWordReading.asItStands
 		end 'slot'
-	end 'retypeOpaqueReturnValue'
+	end 'typeResultThroughInstance'
 
 	// ⭐ A CALL ARGUMENT MEETS THE PARAMETER'S DECLARED RANGE. Unchecked, `clamp(101)` runs the callee
 	// with `p = 101` and the body observes `p > 100` as true. A kind is a lossy projection of a type,
@@ -97706,7 +98102,7 @@ export type Parser
 	// structurally cannot — there is no exemption to inherit, and `b.put(grow(5))` would otherwise
 	// exit 505.
 	//
-	// ⚠ **THE GATES ARE ORDERED CHEAPEST-FIRST, exactly as `retypeOpaqueMethodResult`'s are**, and for its
+	// ⚠ **THE GATES ARE ORDERED CHEAPEST-FIRST, exactly as `instanceSourceOfCall`'s are**, and for its
 	// reason: almost every call in a program has neither a generic-instance receiver nor a constructed
 	// instance, and that test is one dense array read. Only past it is the whole-program index probed.
 	//
@@ -97762,7 +98158,7 @@ export type Parser
 	// `slotCallArgs` use, so a labelled `insert(0, value: 300)` cannot be checked against a different
 	// parameter than it is passed to.
 	//
-	// ⚠ **THE CALLEE MUST BE QUALIFIED UNDER THE INSTANCE'S OWN BASE**, `retypeOpaqueMethodResult`'s guard and
+	// ⚠ **THE CALLEE MUST BE QUALIFIED UNDER THE INSTANCE'S OWN BASE**, `instanceSourceOfCall`'s guard and
 	// for its reason: a `T` recorded against another type's `uses` list is numbered against a list that does
 	// not describe this instance, so substituting through it would bind the wrong type argument. It is asked
 	// HERE rather than at each of the two doors above so both arms carry it — a fact one caller could forget.
@@ -98078,8 +98474,8 @@ export type Parser
 		// `fillOmittedArgDefaults`, so a MANAGED default is transferred exactly as a written argument is.
 		try self.transferAsyncSpawnArgs(callee, args: args, argImmutableNames: argImmutableNames, argAnchors: argAnchors, anchor: anchor)
 
-		let result = match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'spawned'
-			declared(returnType) gives try self.spawnAtItsPromiseInstance(callee, declaredReturn: returnType, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor)
+		let result = match self.boundReturnOf(callee, args: args, argLabels: argLabels) 'spawned'
+			declared(returnType, scopeFilePath, pick) gives try self.spawnAtItsPromiseInstance(callee, returnType: returnType, scopeFilePath: scopeFilePath, pick: pick, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor)
 			undeclared gives self.mintDeferredValue()
 		end 'spawned'
 
@@ -98106,10 +98502,8 @@ export type Parser
 
 	// One pick serves the result gate and the minted instance, so an overloaded callee is checked and
 	// awaited at the same declaration.
-	function spawnAtItsPromiseInstance(callee ByteArray, declaredReturn MaxonReturnType, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, anchor Token) returns ValueId throws SourceParseError
-		let pick = self.returnDecidingDeclaration(callee, args: args, argLabels: argLabels)
-
-		try self.requireAsyncResult(callee, returnType: self.spawnedReturnType(callee, declaredReturn: declaredReturn, pick: pick), anchor: anchor)
+	function spawnAtItsPromiseInstance(callee ByteArray, returnType MaxonReturnType, scopeFilePath FilePath, pick SweptDeclarationPick, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, anchor Token) returns ValueId throws SourceParseError
+		try self.requireAsyncResult(callee, returnType: self.repairSweptReturnType(returnType, scopeFilePath: scopeFilePath), anchor: anchor)
 		try self.transferAsyncPromiseArgs(callee, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor)
 
 		return self.mintSpawnPromise(callee, pick: pick)
@@ -98198,7 +98592,7 @@ export type Parser
 			return
 		end 'noPromiseTravels'
 
-		let declarations = self.declarationFactsBoundBy(callee, args: args, argLabels: argLabels)
+		let declarations = self.declarationFactsBoundBy(callee, argLabels: argLabels)
 		var borrowedColumns = ParamCountArray.create()
 
 		for column in promiseColumns 'eachPromiseColumn'
@@ -98350,7 +98744,7 @@ export type Parser
 			serviceReply(messageName, awaitedService) then return AwaitedPromise.create(AwaitedResult.declared(self.serviceReplyResultType(messageName, cell: promise)), tryTarget: TryTarget.serviceReply(messageName, awaitedService: awaitedService))
 		end 'reply'
 
-		let promiseType = self.valueMaxonType(promise)
+		let promiseType = self.typeOf(promise)
 
 		if typeIsPromiseStorage(self.signatures, t: promiseType) 'fromStorage'
 			let storage = typeNameIdOf(promiseType)
@@ -98361,7 +98755,7 @@ export type Parser
 	end 'awaitedPromiseFacts'
 
 	// What `await <reply>` yields: the message's declared return type, repaired through the same swept
-	// walk `spawnedReturnType` uses.
+	// walk `spawnAtItsPromiseInstance` uses.
 	function serviceReplyResultType(messageName ByteArray, cell ValueId) returns MaxonReturnType
 		let declaredReturn = try self.signatures.declaredReturnTypeOf(messageName, into: self.artifact.typeNames) otherwise panic("serviceReplyResultType: `{String.from(messageName)}` declares no return type — a reply cell is minted for a declared message only")
 		return self.fixedReplyResultType(declaredReturn, messageName: messageName, cell: cell)
@@ -98431,7 +98825,7 @@ export type Parser
 		end 'repair'
 	end 'repairSweptReturnType'
 
-	// What the spawn's result channel carries: `spawnedReturnType`'s answer with a ranged alias
+	// What the spawn's result channel carries: the spawned call's repaired return type with a ranged alias
 	// reduced to the primitive it underlies (`Integer` → `integer`, `Percent` → `float`). Void answers
 	// `void`, which the gate admits.
 	//
@@ -98446,13 +98840,6 @@ export type Parser
 			value(inner) gives self.rangedAliasResolvedTag(maxonTypeTag(inner), nameId: typeNameIdOf(inner))
 		end 'r'
 	end 'asyncCarriedResultTag'
-
-	function spawnedReturnType(callee ByteArray, declaredReturn MaxonReturnType, pick SweptDeclarationPick) returns MaxonReturnType
-		return match pick 'pick'
-			chosen(decl) gives self.repairSweptReturnType(self.signatures.adoptReturnType(decl.returnType, into: self.artifact.typeNames), scopeFilePath: decl.declFilePath)
-			undecided gives self.repairSweptReturnType(declaredReturn, scopeFilePath: self.signatures.recordedReturnDeclFileOf(callee))
-		end 'pick'
-	end 'spawnedReturnType'
 
 	function emitAwait(func IrFunction, promise ValueId, awaitTok Token) returns ValueId throws SourceParseError
 		match try self.awaitOperandOf(func, promise: promise, awaitTok: awaitTok) 'operand'
@@ -98604,11 +98991,11 @@ export type Parser
 	// (poisoned if it is a live binding, drained if a temporary), a borrowed struct/union is refused
 	// (E2015) and a scalar is inert, and a promise moves at every position the callee takes. The
 	// common callee `borrowsAll`, so this is one `match`.
-	function applyCallerConsume(callee ByteArray, declarations DeclarationFactsArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance, callResult ValueId, spawned bool) returns PendingArgumentBindingArray throws SourceParseError
+	function applyCallerConsume(callee ByteArray, declarations DeclarationFactsArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance, callResult ValueId, site ServiceSpawnSite) returns PendingArgumentBindingArray throws SourceParseError
 		if declarations.count() < 2 'oneDeclarationDecides'
 			match self.consumeOfTheOneDeclaration(callee, declarations: declarations) 'c'
 				borrowsAll then break
-				consumes(info) then try self.transferConsumedArgs(info, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance, spawned: spawned, callee: callee)
+				consumes(info) then try self.transferConsumedArgs(info, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance, site: site, callee: callee)
 			end 'c'
 
 			return noPendingArgumentBindings
@@ -98636,12 +99023,12 @@ export type Parser
 			let asPromise = self.takesAsAPromise(first, column: column, label: label, argValue: argValue)
 
 			if taking.everyDeclarationTakes() and self.everyTakerTakesAlike(takers, asPromise: asPromise, column: column, label: label, argValue: argValue) 'everyDeclarationTakesItAlike'
-				try self.transferConsumedColumn(first, column: column, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance, consumedOwned: consumedOwned, spawned: spawned, callee: callee)
+				try self.transferConsumedColumn(first, column: column, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance, consumedOwned: consumedOwned, site: site, callee: callee)
 				continue
 			end 'everyDeclarationTakesItAlike'
 
-			if spawned 'aSpawnCannotMoveConditionally'
-				throw SourceParseError.unsupported("`spawn {String.from(callee)}(…)` — `{String.from(callee)}` is declared {declarations.count()} times and they do not all keep argument {column + 1} alike. A `spawn` MOVES every argument its factory keeps into the service, and which declaration this call binds is settled after this point, so there is no one move to make. Give the factories distinct names", line: anchor.line, column: anchor.column)
+			if let spawnTok = try site.token() 'aSpawnCannotMoveConditionally'
+				throw SourceParseError.unsupported("`spawn {String.from(callee)}(…)` — `{String.from(callee)}` is declared {declarations.count()} times and they do not all keep argument {column + 1} alike. A `spawn` MOVES every argument its factory keeps into the service, and which declaration this call binds is settled after this point, so there is no one move to make. Give the factories distinct names", line: spawnTok.line, column: spawnTok.column)
 			end 'aSpawnCannotMoveConditionally'
 
 			try self.transferTakenColumn(self.anyTakerTakesAsAPromise(takers, column: column, label: label, argValue: argValue), column: column, label: label, takingSites: taking.sites, args: args, argRanges: argRanges, anchor: anchor, consumedOwned: consumedOwned, transfers: transfers, callResult: callResult)
@@ -98779,15 +99166,15 @@ export type Parser
 		return noTakingDeclaration
 	end 'consumeFactsTakeArgument'
 
-	function transferConsumedArgs(info ParamConsumeInfo, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance, spawned bool, callee ByteArray) throws SourceParseError
+	function transferConsumedArgs(info ParamConsumeInfo, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance, site ServiceSpawnSite, callee ByteArray) throws SourceParseError
 		var consumedOwned = ValueIdArray.create()
 
 		for column in 0 upto args.count() as ParamCount 'eachArg'
-			try self.transferConsumedColumn(info, column: column, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance, consumedOwned: consumedOwned, spawned: spawned, callee: callee)
+			try self.transferConsumedColumn(info, column: column, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance, consumedOwned: consumedOwned, site: site, callee: callee)
 		end 'eachArg'
 	end 'transferConsumedArgs'
 
-	function transferConsumedColumn(info ParamConsumeInfo, column ParamCount, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance, consumedOwned ValueIdArray, spawned bool, callee ByteArray) throws SourceParseError
+	function transferConsumedColumn(info ParamConsumeInfo, column ParamCount, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance, consumedOwned ValueIdArray, site ServiceSpawnSite, callee ByteArray) throws SourceParseError
 		let label = try argLabels.get(column) otherwise panic("transferConsumedColumn: argLabels.get OOB at {column} — args and argLabels are pushed in lockstep")
 		let position = try argSlotPosition(info.paramNames, argIndex: column, label: label) otherwise return
 		let argValue = try args.get(column) otherwise panic("transferConsumedColumn: args.get OOB at {column}")
@@ -98806,7 +99193,7 @@ export type Parser
 
 		let range = try argRanges.get(column) otherwise panic("transferConsumedColumn: argRanges.get OOB at {column} — args and argRanges are pushed in lockstep")
 		let consumed = self.argIsConsumedAt(info, position: position, constructorInstance: constructorInstance) or self.isOpaqueOwnedFeedArg(info, position: position, argValue: argValue)
-		let spawnedStateKeepsIt = spawned and self.valueIsManagedHeap(argValue) and (consumed or info.typeParamFeedOf(position).isFeed())
+		let spawnedStateKeepsIt = site.isASpawn() and self.valueIsManagedHeap(argValue) and (consumed or info.typeParamFeedOf(position).isFeed())
 
 		if not consumed and not spawnedStateKeepsIt 'borrowed'
 			try args.set(column, value: self.handleEscapingBorrowFeed(info, position: position, argValue: argValue, anchor: anchor)) otherwise panic("transferConsumedColumn: args.set OOB at {column}")
@@ -99666,7 +100053,7 @@ export type Parser
 
 	// The aggregate identity of a SWEPT return type, read in this file's own interner. ADOPTED first because
 	// `aggregateNameOf` resolves ids against `self.artifact.typeNames` and a swept id is the INDEX's — the
-	// same crossing `overloadedCallResultType` makes for the type it finally hands back. Reached only once
+	// same crossing `boundReturnOf` makes for the type it finally hands back. Reached only once
 	// the tags have already agreed, so no set the tag test parts pays for it.
 	function adoptedReturnAggregateName(swept MaxonReturnType) returns ByteArray
 		return match self.signatures.adoptReturnType(swept, into: self.artifact.typeNames) 'adopted'
@@ -99716,12 +100103,12 @@ export type Parser
 	// set was typed from whichever declaration the sweep read last. See `ProgramSignatures.OverloadedDecl`
 	// for the two measured failures that produced — an access violation and a leak.
 	//
-	// ⭐ **IT ANSWERS `undecided` WHENEVER THE SET AGREES, AND THAT IS WHAT MAKES THIS DOOR INERT FOR EVERY
+	// ⭐ **ITS PICK IS `undecided` WHENEVER THE SET AGREES, AND THAT IS WHAT MAKES THIS DOOR INERT FOR EVERY
 	// PROGRAM THAT ALREADY COMPILED.** An agreeing set has one return type however the call resolves, so the
 	// by-name answer is already exact and is taken unchanged — no corpus program and no `stdlib` call takes a
 	// different path or emits a different byte because of this door.
 	//
-	// ⚠⚠ **IT IS A NARROW DECIDER, AND IT IS *CHECKED* RATHER THAN TRUSTED.** It answers `undecided` -
+	// ⚠⚠ **IT IS A NARROW DECIDER, AND IT IS *CHECKED* RATHER THAN TRUSTED.** Its pick is `undecided` -
 	// falling back to the by-name type and to the refusal that has always guarded it
 	// (`SemanticCheck.reportOverloadReturnDisagreement`) — for anything it cannot settle: a member the sweep
 	// could not read a parameter type for, a call that fits several visible members, a call that fits none.
@@ -99745,7 +100132,7 @@ export type Parser
 	// one member nameable from either file, so no type has to be compared to know which one a call means. The
 	// DISAGREEMENT is still read across ALL declarations, because it is `returnTypeOf`'s answer that the
 	// member this file cannot name is what spoils.
-	function overloadedCallResultType(callee ByteArray, args ValueIdArray, argLabels NameRoster) returns SweptOverloadPick
+	function boundReturnOf(callee ByteArray, args ValueIdArray, argLabels NameRoster) returns BoundReturn
 		// ⚡ **THE COST GATE, and it is the first thing this function does because it runs at EVERY call in the
 		// program.** A name with one declaration — which is nearly every callee, every builtin and every
 		// runtime symbol — leaves here on a count, having allocated nothing: `overloadedDeclsOf` answers a
@@ -99756,14 +100143,16 @@ export type Parser
 		// duplicates then compare as agreeing (they are the same declaration), so the set still lands on
 		// `undecided` and the by-name answer still serves. The gate is a cost gate; it is not what makes a
 		// double-fold safe.
-		return match self.returnDecidingDeclaration(callee, args: args, argLabels: argLabels) 'pick'
+		let pick = self.returnDecidingDeclaration(callee, args: args, argLabels: argLabels)
+
+		match pick 'pick'
 			// ADOPTED into this file's interner, exactly as `returnTypeOf` adopts the by-name answer: the
 			// index's ids are its own, and a `named`/`structRef` return read raw would name whatever this
 			// file's table happens to hold at that id.
-			chosen(decl) gives SweptOverloadPick.resolved(self.signatures.adoptReturnType(decl.returnType, into: self.artifact.typeNames))
-			undecided gives sharedUndecidedOverloadPick
+			chosen(decl) then return BoundReturn.declared(self.signatures.adoptReturnType(decl.returnType, into: self.artifact.typeNames), scopeFilePath: decl.declFilePath, pick: pick)
+			undecided then return self.boundByName(callee)
 		end 'pick'
-	end 'overloadedCallResultType'
+	end 'boundReturnOf'
 
 	function returnDecidingDeclaration(callee ByteArray, args ValueIdArray, argLabels NameRoster) returns SweptDeclarationPick
 		view candidates = self.signatures.overloadedDeclsOf(callee)
@@ -99778,6 +100167,13 @@ export type Parser
 
 		return self.sweptOverloadAmong(self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path), args: args, argLabels: argLabels)
 	end 'returnDecidingDeclaration'
+
+	function boundByName(callee ByteArray) returns BoundReturn
+		match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'byName'
+			declared(returnType) then return BoundReturn.declared(returnType, scopeFilePath: self.signatures.recordedReturnDeclFileOf(callee), pick: sharedUndecidedDeclarationPick)
+			undeclared then return sharedUndeclaredReturn
+		end 'byName'
+	end 'boundByName'
 
 	function sweptDeclarationOf(callee ByteArray, args ValueIdArray, argLabels NameRoster) returns SweptDeclarationPick
 		view candidates = self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path)
@@ -99927,19 +100323,10 @@ export type Parser
 		return not self.signatures.aggregatesConflict(self.aggregateNameOf(paramTag, nameId: typeNameIdOf(paramType)), expectedTag: paramTag, expectedNameId: typeNameIdOf(paramType), expectedBrand: EmptySourceText, got: self.aggregateNameOf(argTag, nameId: argNameId), gotTag: argTag, gotNameId: argNameId, gotBrand: self.operandAliasSetOf(argValue), readerFilePath: self.job.path)
 	end 'sweptArgumentFits'
 
-	function mintCallResult(callee ByteArray, anchor Token, resultUsed bool, args ValueIdArray, argLabels NameRoster) returns ValueId throws SourceParseError
-		// ⭐⭐ **AN OVERLOAD SET WHOSE MEMBERS DISAGREE ABOUT WHAT THEY RETURN IS ASKED FIRST, AND ONLY THEN.**
-		// `returnTypeOf` records ONE return type per registration key and is LAST-WINS over the declarations
-		// wearing it, which is exactly right for every name whose declarations agree — every name in every
-		// program the corpus compiles — and is a wrong answer for one whose declarations do not. See
-		// `overloadedCallResultType` for what it will and will not decide.
-		match self.overloadedCallResultType(callee, args: args, argLabels: argLabels) 'overloaded'
-			resolved(returnType) then return try self.mintDeclaredCallResult(callee, anchor: anchor, returnType: returnType, resultUsed: resultUsed)
-			undecided then break
-		end 'overloaded'
-
-		match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'callee'
-			declared(returnType) then return try self.mintDeclaredCallResult(callee, anchor: anchor, returnType: returnType, resultUsed: resultUsed)
+	function mintCallResult(callee ByteArray, anchor Token, resultUsed bool, bound BoundReturn) returns ValueId throws SourceParseError
+		// `bound` is `boundReturnOf`'s, which owns why an overload set is not typed by name alone.
+		match bound 'callee'
+			declared(returnType, scopeFilePath, _) then return try self.mintDeclaredCallResult(callee, anchor: anchor, returnType: returnType, scopeFilePath: scopeFilePath, resultUsed: resultUsed)
 
 			// NO file declares this callee. DEFER, and keep deferring: `SemanticCheck.validateCall` owns
 			// that diagnostic (E3004, "call to undefined function") because it reads the registry the
@@ -100107,8 +100494,7 @@ export type Parser
 
 	// The result of a call to a callee some file DOES declare — where the void/value split is
 	// finally a split and not a sentinel.
-	function mintDeclaredCallValue(callee ByteArray, inner MaxonType) returns ValueId
-		let declFilePath = self.signatures.recordedReturnDeclFileOf(callee)
+	function mintDeclaredCallValue(callee ByteArray, inner MaxonType, declFilePath FilePath) returns ValueId
 		let result = self.mintDirectCallValueResult(inner, scopeFilePath: declFilePath)
 
 		if self.tagOf(result) == ValueTypeTag.interfaceRef 'existentialReturn'
@@ -100120,12 +100506,12 @@ export type Parser
 		return result
 	end 'mintDeclaredCallValue'
 
-	function mintDeclaredCallResult(callee ByteArray, anchor Token, returnType MaxonReturnType, resultUsed bool) returns ValueId throws SourceParseError
+	function mintDeclaredCallResult(callee ByteArray, anchor Token, returnType MaxonReturnType, scopeFilePath FilePath, resultUsed bool) returns ValueId throws SourceParseError
 		match returnType 'r'
 			// ⭐ **THE CALLEE'S OWN DECLARING FILE — see `resolveNamedStruct`'s `scopeFilePath`.** A return
 			// type is a slot of the function that declared it, so the repair below is scoped by that file
 			// and never by the one making the call.
-			value(inner) then return self.mintDeclaredCallValue(callee, inner: inner)
+			value(inner) then return self.mintDeclaredCallValue(callee, inner: inner, declFilePath: scopeFilePath)
 			void then break
 		end 'r'
 
@@ -100330,9 +100716,9 @@ export type Parser
 	// reads the value's TAG, and an OPAQUE tag is none of `string` / `character` / `structRef` /
 	// `genericInstance` / `interfaceRef` and is not `named`, so it always answers `false`. Asked while a
 	// generic method's result still carried its declared `T`, it therefore enrolled nothing for a
-	// `Box with Alpha` — and forced `retypeOpaqueReturnValue` to decline the substitution rather than
+	// `Box with Alpha` — and forced `typeResultThroughInstance` to decline the substitution rather than
 	// contradict a decision already taken. So the DIRECT-call door (`emitCall`) asks AFTER
-	// `retypeOpaqueMethodResult`; the WITNESS door (`mintWitnessDispatchResult`) and the INDIRECT one
+	// `typeCallResultThroughInstance`; the WITNESS door (`mintWitnessDispatchResult`) and the INDIRECT one
 	// (`parseIndirectCall`) have no retype to wait for and ask as soon as the value exists.
 	//
 	// ⚠ **ASKING AFTER THE RETYPE CAN ONLY ADD ENROLMENTS, NEVER REMOVE ONE.** The retype declines unless the instance
@@ -100366,7 +100752,7 @@ export type Parser
 		// give — a spawn, a `pop`/`remove`, or a promise parameter it takes. Adopting a borrow would
 		// reclaim one thread twice.
 		//
-		// The void test comes first and is not redundant: `valueMaxonType` panics on a void tag, and
+		// The void test comes first and is not redundant: `typeOf` panics on a void tag, and
 		// every call reaches here, statement-position void ones included.
 		//
 		// A result that names the array slot it was read from (`settleCorpusPromiseRead`) is that slot's

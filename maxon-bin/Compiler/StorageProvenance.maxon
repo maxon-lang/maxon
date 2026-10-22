@@ -1508,7 +1508,13 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 	function tracesFirst(index ElementIndex) returns bool
 		view func = self.functionAt(index)
-		return self.anyParameterHoldsARecord(func) or self.resultMayHandBackAModuleLetsRecord(func)
+		let filed = func.keepsSoleOwnerMarks()
+
+		if not filed and (self.anyParameterHoldsARecord(func) or self.resultMayHandBackAModuleLetsRecord(func)) 'unfiledYetRecordHolding'
+			panic("ProvenanceTracer.tracesFirst: '{String.from(func.name)}' holds a record in a parameter or its result but `Parser.fileDeferredProvenance` filed no sole-owner marks for it — the parser's filing decision must cover every function this pass would trace")
+		end 'unfiledYetRecordHolding'
+
+		return filed
 	end 'tracesFirst'
 
 	function traceAndWiden(index ElementIndex) returns bool
@@ -1722,11 +1728,10 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		throw AbsentError.absent
 	end 'storedKeyParameterOf'
 
-	// A function with no parameter that holds a record has nothing of its caller's to hand back or store, so it
-	// is not traced and keeps empty masks.
+	// A function with no parameter that holds a record has nothing of its caller's to hand back or store.
 	function anyParameterHoldsARecord(func IrFunction) returns bool
 		if func.closureEnvFields.count() > 0 'aLiftedClosure'
-			return func.valueMintedSole.count() == func.valueTags.count()
+			return func.keepsSoleOwnerMarks()
 		end 'aLiftedClosure'
 
 		for p in 0 upto func.paramCount 'eachParam'
@@ -2834,7 +2839,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		self.isWritableValue.refill(valueCount, value: false)
 		self.isImmutableBindingValue.refill(valueCount, value: false)
 
-		if func.valueMintedSole.count() != valueCount 'columnsOutOfStep'
+		if not func.keepsSoleOwnerMarks() 'columnsOutOfStep'
 			panic("ProvenanceTracer.begin: '{String.from(func.name)}' has {valueCount} value types but {func.valueMintedSole.count()} sole-owner marks — both are pushed by `Parser.mintValue`/`recordValueType`")
 		end 'columnsOutOfStep'
 
@@ -7692,21 +7697,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'seedReturnedFreshGraph'
 
 	function returnsARecordValue(func IrFunction) returns bool
-		for blockRef in func.blockRefs 'eachBlock'
-			view block = try self.module.blocks.get(blockRef) otherwise panic("ProvenanceTracer.returnsARecordValue: blockRef from func.blockRefs not in module.blocks")
-
-			if not block.hasTerminatorOp() 'unterminated'
-				continue
-			end 'unterminated'
-
-			let returned = try returnedValueOf(try self.module.ops.get(block.terminatorIndex()) otherwise panic("ProvenanceTracer.returnsARecordValue: terminatorIndex not in module.ops")) otherwise continue
-
-			if self.valueTagCarriesProvenance(func, value: returned) 'aRecord'
-				return true
-			end 'aRecord'
-		end 'eachBlock'
-
-		return false
+		return anyReturnedValue(func, ir: self.module, test: function(returned) gives self.valueTagCarriesProvenance(func, value: returned))
 	end 'returnsARecordValue'
 
 	function seedReturnedFreshValue(func IrFunction, value ValueId) returns bool
@@ -10563,6 +10554,26 @@ end 'shapeStoresOperand'
 function tagCarriesProvenance(tag ValueTypeTag) returns bool
 	return tagIsByteRecord(tag) or tagNamesADeclaredType(tag) or tag == ValueTypeTag.genericInstance or tag == ValueTypeTag.interfaceRef or tag == ValueTypeTag.typeParameter or tag == ValueTypeTag.function
 end 'tagCarriesProvenance'
+
+module typealias ReturnedValueTest = function(ValueId) returns bool
+
+module function anyReturnedValue(func IrFunction, ir MaxonModule, test ReturnedValueTest) returns bool
+	for blockRef in func.blockRefs 'eachBlock'
+		view block = try ir.blocks.get(blockRef) otherwise panic("anyReturnedValue: blockRef from func.blockRefs not in module.blocks")
+
+		if not block.hasTerminatorOp() 'unterminated'
+			continue
+		end 'unterminated'
+
+		let returned = try returnedValueOf(try ir.ops.get(block.terminatorIndex()) otherwise panic("anyReturnedValue: terminatorIndex not in module.ops")) otherwise continue
+
+		if test(returned) 'aMatch'
+			return true
+		end 'aMatch'
+	end 'eachBlock'
+
+	return false
+end 'anyReturnedValue'
 
 function returnedValueOf(terminator MaxonOp) returns ValueId throws AbsentError
 	match terminator 'term'

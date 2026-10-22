@@ -194,7 +194,13 @@ consumed stays the container's and is dropped with it. `get(i)`, `first()`, `for
 iterator's `current()` and `peek(n)`, a destructured `for (iter, p) in array.withIterator()`, and a read of a
 promise-typed field all name their slot. A read that cannot name one is **E3141**: `last()`, a list's elements,
 a `Map`'s values, and a `withIterator()` pair bound whole. `pop` and `remove` move the promise out, and the
-caller owns it outright. Reading a promise out of a temporary — `try make().get(0)` — keeps that temporary
+caller owns it outright. A member of a type you declare, a `pop` of your own included, is judged by its
+body: it moves its element out when every `return` hands back what a library `pop`/`remove` took out of a
+field of `self` (directly, through a `var` local bound to one, or through another such member of a field's
+type), or a parameter every declaration of it takes; one that returns a borrow (`self.items.last()`) is
+**E3141**. A static of a generic type that hands back a promise an argument holds — an instance passed in,
+or an array, map, tuple or struct reaching one — reads it out of that argument as a method reads its
+receiver, so it is **E3141** too, unless every declaration of the static takes that argument. Reading a promise out of a temporary — `try make().get(0)` — keeps that temporary
 alive to the end of the enclosing scope, so the promise outlives the expression it came from.
 
 **Consuming a promise.** `await`, `.cancel()`, a `push` or `set` into another container, a store into a field
@@ -327,7 +333,12 @@ end 'main'
   directories down, and `spawn stdlib.Range.create(1, finish: 4)` the library's `Range` in a program that
   declares its own. A factory the spawning file cannot see is **E3008** (**E3088** for a `module` one).
 - **Generic services.** A generic type can be spawned; its handle type is spelled through an alias,
-  `typealias StringBoxHandle = Box.handle with String`.
+  `typealias StringBoxHandle = Box.handle with String`. A `spawn` on the bare generic name reads its type
+  arguments off the factory's arguments, and an overloaded factory is spawned when every overload the call
+  can slot fixes the same ones; a factory that fixes no type, or overloads that fix different ones, are
+  **E2015**.
+- A refusal of a `spawn`'s target or factory (**E3134**, **E3008**, **E2015**) points at the `spawn`
+  keyword.
 - Services that `await` each other in a cycle are **E3139**.
 - `spawn` is a contextual keyword; it remains usable as a name.
 
@@ -347,7 +358,9 @@ either side could write, because the two green threads may run at the same time 
   one owner, it is copied wherever it crosses: a send, a factory argument the factory keeps,
   `SharedValue.publish` or `Key.register`. The service gets the copy and the sender keeps its own.
 - A value with an owner besides the sender that is not read-only — held in a container, read out of a field
-  or an element of a `var`, or the source of an enclosing `for` loop — is **E3138**; send a `.clone()`. A
+  or an element of a `var`, or the source of an enclosing `for` loop — is **E3138**; send a `.clone()`. So is
+  an element a member hands back out of a field's container (`return self.queue.pop()`): it has left the
+  container, and another owner may still hold it. A
   borrowed factory argument the factory keeps is **E3138** too, a generic factory's argument at a type
   parameter included; one the sender owns but also shares is caught by the run-time check of the
   service's state below (exit code **96**). A field read off a temporary built inside the factory call's own
