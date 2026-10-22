@@ -44,8 +44,10 @@ readied by that operation's own completion.
 **Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
 statement of it.** Dropping a promise reaps a green-thread struct and its stack, which come from
 `osAllocPages`/`VirtualAlloc` and go back to `osFreePages`/`VirtualFree`, which every native lane provides; a WASI component is refused by E3104,
-which is why the cases here carry no `unsupported-targets` marker for it. A case marked for one lane
-family is marked because its CHILD COMMAND is a shell's or `cmd`'s, never because the drop is.
+which is why the cases here carry no `unsupported-targets` marker for it — except a case that calls
+`Subprocess.run`, which a WASI component answers with E3074 ahead of E3104 and so names `wasm32-wasi`. A
+case marked for one native lane family is marked because its CHILD COMMAND is a shell's or `cmd`'s, never
+because the drop is.
 
 A case observes a thread without consuming its promise through `p.isComplete()`. The cases that park on a
 child spawned by `__Builtins.runProcess` compile in the library tier (`<!-- tier: stdlib -->`): that
@@ -424,7 +426,7 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: async-promise-drop.posix-a-dropped-child-is-reaped-when-it-exits -->
 <!-- tier: stdlib -->
-<!-- unsupported-targets: x64-windows -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
 A dropped promise abandons the child's wait, and the child must still be reaped when it exits. Three coroutines each
 park on a `sleep 1` child and are dropped while it runs; the program then sleeps past every exit and asks `ps` for the
 zombies among its own children.
@@ -478,7 +480,7 @@ zombies=0
 
 <!-- test: async-promise-drop.posix-children-cancelled-around-their-exit-are-all-reaped -->
 <!-- tier: stdlib -->
-<!-- unsupported-targets: x64-windows -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
 Sixty children each live about ten milliseconds, and each is cancelled after a different delay, so the cancellations land
 before, during and after the exits. Whichever side of the exit a cancel falls on, the child is reaped, so no zombie is left
 once the last of them has had time to finish.
