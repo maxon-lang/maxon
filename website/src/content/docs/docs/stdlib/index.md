@@ -39,7 +39,7 @@ end 'main'
 | [Collections](/docs/stdlib/collections/#array) | Array, List, Map, Set, Vector, Range, Iterators, Interfaces |
 | [I/O and processes](/docs/stdlib/io/#file) | File, FilePath, Directory, Console, CommandLine, Log, TraceCapture, Process, Subprocess, SharedMemory, Debuggee, Sampler |
 | [Network](/docs/stdlib/network/#tcpclient) | TcpClient, TcpListener, HttpClient, HttpServer, URL |
-| [Data](/docs/stdlib/data/#json) | Json, Sha256, Hasher |
+| [Data](/docs/stdlib/data/#json) | Json, Base64, Pem, Sha2, Hmac, Hkdf, Hasher |
 | [System](/docs/stdlib/runtime/#clock) | Clock, Scheduler, HeapStats, SharedValue, Random, Math, Primitive Extensions |
 | [Testing](/docs/stdlib/testing/) | Testing |
 | [Build](/docs/stdlib/build/) | Build |
@@ -58,7 +58,7 @@ end 'main'
 | `FullRangeInt` / `FullRangeIntArray` | `int(i64.min to i64.max)` / `Array with FullRangeInt` | Builtins |
 | `FullRangeFloat` | `float(f64.min to f64.max)` | Builtins |
 | `IndentDepth` | `int(0 to u64.max)` — a nesting depth while `Json` renders | Json |
-| `RandomDraw` / `RandomBound` | `int(0 to u64.max)` / `int(1 to u64.max)` | Random |
+| `RandomDraw` / `RandomBound` / `RandomByteCount` | `int(0 to u64.max)` / `int(1 to u64.max)` / `int(0 to u64.max)` | Random |
 | `BytePos`, `GraphemeIndex` | `int(0 to u64.max)` | String |
 | `Codepoint` | `int(0 to 1114111)` | Character |
 | `CodepointDelta` | `int(-1114111 to 1114111)` | Character |
@@ -146,8 +146,8 @@ qualified: `Array.ElementIterator`, `Array.ElementMemory`, `Map.Entry`, `List.Li
 
 ### Target support
 
-Everything that is pure computation (strings, collections, `Json`, `Sha256`, `Hasher`, `Math`, `URL`
-parsing) works on every target, and so does `Random`. Operating-system facilities are available on `x64-windows`,
+Everything that is pure computation (strings, collections, `Json`, `Base64`, `Pem`, the SHA-2, HMAC
+and HKDF functions, `Hasher`, `Math`, `URL` parsing) works on every target, and so does `Random`. Operating-system facilities are available on `x64-windows`,
 `arm64-macos`, `arm64-linux` and `x64-linux`.
 
 On `wasm32-wasi` a call that needs a facility the target does not provide is refused **at compile time**,

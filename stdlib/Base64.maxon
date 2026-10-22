@@ -1,0 +1,168 @@
+/// Base64 with the standard alphabet and padding (RFC 4648 section 4), decoded strictly.
+/// @category Text
+
+/// Why `Base64.decode` refused its input.
+public enum Base64Error implements Error
+	invalidSymbol  // a character outside the alphabet, whitespace included
+	invalidLength  // a length that is not a multiple of 4
+	invalidPadding  // `=` other than one or two final characters, or non-zero pad bits
+end 'Base64Error'
+
+typealias Base64Value = int(0 to 63)
+typealias Base64Accumulator = int(0 to 4095)
+typealias Base64BitCount = int(0 to 12)
+
+let Base64UpperFirst = 0x41
+let Base64LowerFirst = 0x61
+let Base64DigitFirst = 0x30
+let Base64PlusSymbol = 0x2B
+let Base64SlashSymbol = 0x2F
+let Base64PadSymbol = 0x3D
+
+let Base64LetterCount = 26
+let Base64DigitCount = 10
+let Base64LowerFirstValue = 26
+let Base64DigitFirstValue = 52
+let Base64PlusValue = 62
+let Base64SlashValue = 63
+
+let Base64SextetBits = 6
+let Base64SextetMask = 63
+let Base64ByteBits = 8
+let Base64ByteMask = 255
+let Base64GroupLength = 4
+let Base64GroupBytes = 3
+let Base64MaxPadding = 2
+
+public type Base64
+	/// The canonical encoding of `data`: padded to a multiple of 4 characters, with no line breaks.
+	public static function encode(data ByteArray) returns String
+		var symbols = ByteArray.create()
+		symbols.reserve((data.count() + Base64GroupBytes - 1) / Base64GroupBytes * Base64GroupLength)
+
+		var accumulator = 0 as Base64Accumulator
+		var bitCount = 0 as Base64BitCount
+
+		for byte in data 'eachByte'
+			accumulator = ((accumulator shl Base64ByteBits) or (byte as Base64Accumulator)) as Base64Accumulator
+			bitCount = (bitCount + Base64ByteBits) as Base64BitCount
+
+			while bitCount >= Base64SextetBits 'drain'
+				bitCount = (bitCount - Base64SextetBits) as Base64BitCount
+				symbols.push(symbolOf(((accumulator shr bitCount) and Base64SextetMask) as Base64Value))
+				accumulator = lowBits(accumulator, count: bitCount)
+			end 'drain'
+		end 'eachByte'
+
+		if bitCount > 0 'partialSextet'
+			symbols.push(symbolOf(((accumulator shl (Base64SextetBits - bitCount)) and Base64SextetMask) as Base64Value))
+		end 'partialSextet'
+
+		while symbols.count() mod Base64GroupLength != 0 'pad'
+			symbols.push(Base64PadSymbol)
+		end 'pad'
+
+		return String.from(symbols)
+	end 'encode'
+
+	/// The bytes `text` encodes. It accepts exactly what `encode` produces, and checks the symbols,
+	/// then the length, then where the padding sits, then the pad bits, so each input has one error.
+	public static function decode(text String) returns ByteArray throws Base64Error
+		let symbolCount = text.byteLength()
+		var bytes = ByteArray.create()
+		bytes.reserve(symbolCount / Base64GroupLength * Base64GroupBytes)
+
+		var padding = 0 as Count
+		var paddingInterrupted = false
+		var accumulator = 0 as Base64Accumulator
+		var bitCount = 0 as Base64BitCount
+
+		for symbol in text.bytes() 'scan'
+			if symbol == Base64PadSymbol 'pad'
+				padding = padding + 1
+				continue
+			end 'pad'
+
+			let value = try valueOf(symbol)
+
+			if padding > 0 'afterPadding'
+				paddingInterrupted = true
+			end 'afterPadding'
+
+			accumulator = ((accumulator shl Base64SextetBits) or (value as Base64Accumulator)) as Base64Accumulator
+			bitCount = (bitCount + Base64SextetBits) as Base64BitCount
+
+			if bitCount >= Base64ByteBits 'completeByte'
+				bitCount = (bitCount - Base64ByteBits) as Base64BitCount
+				bytes.push(((accumulator shr bitCount) and Base64ByteMask) as Byte)
+				accumulator = lowBits(accumulator, count: bitCount)
+			end 'completeByte'
+		end 'scan'
+
+		if symbolCount mod Base64GroupLength != 0 'length'
+			throw Base64Error.invalidLength
+		end 'length'
+
+		if padding > Base64MaxPadding or paddingInterrupted 'placement'
+			throw Base64Error.invalidPadding
+		end 'placement'
+
+		if accumulator != 0 'padBits'
+			throw Base64Error.invalidPadding
+		end 'padBits'
+
+		return bytes
+	end 'decode'
+
+	static function lowBits(accumulator Base64Accumulator, count Base64BitCount) returns Base64Accumulator
+		return accumulator and ((1 shl count) - 1)
+	end 'lowBits'
+
+	static function symbolOf(value Base64Value) returns Byte
+		if value < Base64LetterCount 'upper'
+			return (Base64UpperFirst + value) as Byte
+		end 'upper'
+
+		if value < Base64LowerFirstValue + Base64LetterCount 'lower'
+			return (Base64LowerFirst + value - Base64LowerFirstValue) as Byte
+		end 'lower'
+
+		if value < Base64DigitFirstValue + Base64DigitCount 'digit'
+			return (Base64DigitFirst + value - Base64DigitFirstValue) as Byte
+		end 'digit'
+
+		if value == Base64PlusValue 'plus'
+			return Base64PlusSymbol as Byte
+		end 'plus'
+
+		if value == Base64SlashValue 'slash'
+			return Base64SlashSymbol as Byte
+		end 'slash'
+
+		panic("a base64 value is at most 63")
+	end 'symbolOf'
+
+	static function valueOf(symbol Byte) returns Base64Value throws Base64Error
+		if symbol >= Base64UpperFirst and symbol < Base64UpperFirst + Base64LetterCount 'upper'
+			return (symbol - Base64UpperFirst) as Base64Value
+		end 'upper'
+
+		if symbol >= Base64LowerFirst and symbol < Base64LowerFirst + Base64LetterCount 'lower'
+			return (symbol - Base64LowerFirst + Base64LowerFirstValue) as Base64Value
+		end 'lower'
+
+		if symbol >= Base64DigitFirst and symbol < Base64DigitFirst + Base64DigitCount 'digit'
+			return (symbol - Base64DigitFirst + Base64DigitFirstValue) as Base64Value
+		end 'digit'
+
+		if symbol == Base64PlusSymbol 'plus'
+			return Base64PlusValue as Base64Value
+		end 'plus'
+
+		if symbol == Base64SlashSymbol 'slash'
+			return Base64SlashValue as Base64Value
+		end 'slash'
+
+		throw Base64Error.invalidSymbol
+	end 'valueOf'
+end 'Base64'

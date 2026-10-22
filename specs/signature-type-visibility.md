@@ -921,7 +921,7 @@ end 'main'
 
 <!-- test: a-users-own-generic-alias-does-not-reach-the-librarys-readers -->
 ⭐ **THE SAME LAYER RULE AT THE GENERIC-INSTANCE DOOR.** `api/lib.maxon` declares an `export typealias
-ByteArray` of its own, over a two-byte element, and `stdlib/File.maxon` declares the library's. `stdlib/Sha256.maxon`
+ByteArray` of its own, over a two-byte element, and `stdlib/File.maxon` declares the library's. `stdlib/Sha2.maxon`
 declares none of the name and its `public function sha256(data ByteArray) returns ByteArray` names it, so
 the library's own declaration has to answer there; the author's alias answers only where the author wrote
 it.

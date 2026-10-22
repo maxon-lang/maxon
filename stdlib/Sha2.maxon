@@ -1,0 +1,486 @@
+/// The SHA-2 hash functions SHA-256, SHA-384 and SHA-512 (FIPS 180-4), in one call or streamed.
+/// @category Crypto
+
+// One word type serves both cores, so one state, schedule, reader and writer do too. SHA-256 masks
+// to 32 bits after every operation that can carry; a missing mask is a wrong digest, not an error.
+typealias Sha2Word = bits(64)
+typealias Sha2Words = Array with Sha2Word
+typealias Sha2State = Vector with 8 Sha2Word
+
+typealias Sha256RotateAmount = int(1 to 31)
+typealias Sha512RotateAmount = int(1 to 63)
+typealias Sha2StateSlot = int(0 to 7)
+typealias Sha2WordBytes = int(4 to 8) implements Count
+
+typealias DigestByteTally = int(0 to u64.max) implements Count
+public typealias HashBlockBytes = int(64 to 128) implements Count
+public typealias HashDigestBytes = int(32 to 64) implements Count
+typealias LengthFieldBytes = int(8 to 16) implements Count
+
+let sha2BlockWords = 16
+let sha256RoundCount = 64
+let sha512RoundCount = 80
+let sha256WordBytes = 4
+let sha512WordBytes = 8
+let sha256WordBits = 32
+let sha512WordBits = 64
+let sha256WordMask = 0xFFFFFFFF as Sha2Word
+let sha512WordMask = u64.max as Sha2Word
+let bitsPerByte = 8
+let byteMask = 0xFF as Sha2Word
+
+let sha256BlockBytes = 64
+let sha512BlockBytes = 128
+let sha256DigestBytes = 32
+let sha384DigestBytes = 48
+let sha512DigestBytes = 64
+let sha256LengthFieldBytes = 8
+let sha512LengthFieldBytes = 16
+let messageLengthBytes = 8
+let paddingMarkerByte = 0x80 as Byte
+let paddingFillByte = 0 as Byte
+
+let sha256KTable = Sha2Words from [
+	0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
+	0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+	0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+	0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+	0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
+	0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+	0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+	0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+	0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+	0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+	0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
+	0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+	0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
+	0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+	0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+	0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+]
+
+let sha512KTable = Sha2Words from [
+	0x428a2f98d728ae22, 0x7137449123ef65cd,
+	0xb5c0fbcfec4d3b2f, 0xe9b5dba58189dbbc,
+	0x3956c25bf348b538, 0x59f111f1b605d019,
+	0x923f82a4af194f9b, 0xab1c5ed5da6d8118,
+	0xd807aa98a3030242, 0x12835b0145706fbe,
+	0x243185be4ee4b28c, 0x550c7dc3d5ffb4e2,
+	0x72be5d74f27b896f, 0x80deb1fe3b1696b1,
+	0x9bdc06a725c71235, 0xc19bf174cf692694,
+	0xe49b69c19ef14ad2, 0xefbe4786384f25e3,
+	0x0fc19dc68b8cd5b5, 0x240ca1cc77ac9c65,
+	0x2de92c6f592b0275, 0x4a7484aa6ea6e483,
+	0x5cb0a9dcbd41fbd4, 0x76f988da831153b5,
+	0x983e5152ee66dfab, 0xa831c66d2db43210,
+	0xb00327c898fb213f, 0xbf597fc7beef0ee4,
+	0xc6e00bf33da88fc2, 0xd5a79147930aa725,
+	0x06ca6351e003826f, 0x142929670a0e6e70,
+	0x27b70a8546d22ffc, 0x2e1b21385c26c926,
+	0x4d2c6dfc5ac42aed, 0x53380d139d95b3df,
+	0x650a73548baf63de, 0x766a0abb3c77b2a8,
+	0x81c2c92e47edaee6, 0x92722c851482353b,
+	0xa2bfe8a14cf10364, 0xa81a664bbc423001,
+	0xc24b8b70d0f89791, 0xc76c51a30654be30,
+	0xd192e819d6ef5218, 0xd69906245565a910,
+	0xf40e35855771202a, 0x106aa07032bbd1b8,
+	0x19a4c116b8d2d0c8, 0x1e376c085141ab53,
+	0x2748774cdf8eeb99, 0x34b0bcb5e19b48a8,
+	0x391c0cb3c5c95a63, 0x4ed8aa4ae3418acb,
+	0x5b9cca4f7763e373, 0x682e6ff3d6b2b8a3,
+	0x748f82ee5defb2fc, 0x78a5636f43172f60,
+	0x84c87814a1f0ab72, 0x8cc702081a6439ec,
+	0x90befffa23631e28, 0xa4506cebde82bde9,
+	0xbef9a3f7b2c67915, 0xc67178f2e372532b,
+	0xca273eceea26619c, 0xd186b8c721c0c207,
+	0xeada7dd6cde0eb1e, 0xf57d4f7fee6ed178,
+	0x06f067aa72176fba, 0x0a637dc5a2c898a6,
+	0x113f9804bef90dae, 0x1b710b35131c471b,
+	0x28db77f523047d84, 0x32caab7b40c72493,
+	0x3c9ebe0a15c9bebc, 0x431d67c49c100d4c,
+	0x4cc5d4becb3e42b6, 0x597f299cfc657e2a,
+	0x5fcb6fab3ad6faec, 0x6c44198c4a475817
+]
+
+function readBigEndian(buf ByteArray, off ElementIndex, wordBytes Sha2WordBytes) returns Sha2Word
+	var word = 0 as Sha2Word
+
+	for i in 0 upto (wordBytes as Count) 'eachByte'
+		let b = try buf.get(off + i) otherwise panic("sha2: read past the block the caller sized")
+		word = (word shl bitsPerByte) or (b as Sha2Word)
+	end 'eachByte'
+
+	return word
+end 'readBigEndian'
+
+function appendBigEndian(bytes ByteArray, word Sha2Word, wordBytes Sha2WordBytes)
+	for i in 0 upto (wordBytes as Count) 'eachByte'
+		let shift = (wordBytes - 1 - i) * bitsPerByte
+		bytes.push(((word shr shift) and byteMask) as Byte)
+	end 'eachByte'
+end 'appendBigEndian'
+
+function sha2ReadBlock(schedule Sha2Words, padded ByteArray, blockOff ElementIndex, wordBytes Sha2WordBytes)
+	schedule.clear()
+
+	for wi in 0 upto sha2BlockWords 'readWords'
+		schedule.push(readBigEndian(padded, off: blockOff + wi * wordBytes, wordBytes: wordBytes))
+	end 'readWords'
+end 'sha2ReadBlock'
+
+function sha2FoldRoundConstants(schedule Sha2Words, roundConstants Sha2Words, mask Sha2Word)
+	for (iter, kv) in roundConstants.withIterator() 'foldRoundConstants'
+		let index = iter.index()
+		let raw = try schedule.get(index) otherwise panic("sha2: schedule index unreachable")
+		try schedule.set(index, value: (raw + kv) and mask) otherwise panic("sha2: schedule index unreachable")
+	end 'foldRoundConstants'
+end 'sha2FoldRoundConstants'
+
+function sha2AddIntoState(state Sha2State, slot Sha2StateSlot, addend Sha2Word, mask Sha2Word)
+	let current = try state.get(slot as ElementIndex) otherwise panic("sha2: state index unreachable")
+	try state.set(slot as ElementIndex, value: (current + addend) and mask) otherwise panic("sha2: state index unreachable")
+end 'sha2AddIntoState'
+
+function sha256RotR(v Sha2Word, n Sha256RotateAmount) returns Sha2Word
+	return ((v shr n) or (v shl (sha256WordBits - n))) and sha256WordMask
+end 'sha256RotR'
+
+function sha256BigSigma0(v Sha2Word) returns Sha2Word
+	return sha256RotR(v, n: 2) xor sha256RotR(v, n: 13) xor sha256RotR(v, n: 22)
+end 'sha256BigSigma0'
+
+function sha256BigSigma1(v Sha2Word) returns Sha2Word
+	return sha256RotR(v, n: 6) xor sha256RotR(v, n: 11) xor sha256RotR(v, n: 25)
+end 'sha256BigSigma1'
+
+function sha256SmSigma0(v Sha2Word) returns Sha2Word
+	return sha256RotR(v, n: 7) xor sha256RotR(v, n: 18) xor (v shr 3)
+end 'sha256SmSigma0'
+
+function sha256SmSigma1(v Sha2Word) returns Sha2Word
+	return sha256RotR(v, n: 17) xor sha256RotR(v, n: 19) xor (v shr 10)
+end 'sha256SmSigma1'
+
+function sha2Ch(a Sha2Word, b Sha2Word, c Sha2Word, mask Sha2Word) returns Sha2Word
+	return (a and b) xor ((a xor mask) and c)
+end 'sha2Ch'
+
+function sha2Maj(a Sha2Word, b Sha2Word, c Sha2Word) returns Sha2Word
+	return (a and b) xor (a and c) xor (b and c)
+end 'sha2Maj'
+
+// The extend and round loops are forked per word size because the sigma functions and round counts
+// differ. Passing those as function values would cost a call every round of the hot loop.
+function sha256Compress(state Sha2State, schedule Sha2Words, padded ByteArray, blockOff ElementIndex)
+	sha2ReadBlock(schedule, padded: padded, blockOff: blockOff, wordBytes: sha256WordBytes)
+
+	for wi in sha2BlockWords upto sha256RoundCount 'extend'
+		let wm2 = try schedule.get(wi - 2) otherwise panic("sha256: extend w[wi-2] unreachable")
+		let wm7 = try schedule.get(wi - 7) otherwise panic("sha256: extend w[wi-7] unreachable")
+		let wm15 = try schedule.get(wi - 15) otherwise panic("sha256: extend w[wi-15] unreachable")
+		let wm16 = try schedule.get(wi - 16) otherwise panic("sha256: extend w[wi-16] unreachable")
+		schedule.push((wm16 + sha256SmSigma0(wm15) + wm7 + sha256SmSigma1(wm2)) and sha256WordMask)
+	end 'extend'
+
+	sha2FoldRoundConstants(schedule, roundConstants: sha256KTable, mask: sha256WordMask)
+
+	var a = try state.get(0) otherwise panic("sha256: state index unreachable")
+	var b = try state.get(1) otherwise panic("sha256: state index unreachable")
+	var c = try state.get(2) otherwise panic("sha256: state index unreachable")
+	var d = try state.get(3) otherwise panic("sha256: state index unreachable")
+	var ve = try state.get(4) otherwise panic("sha256: state index unreachable")
+	var f = try state.get(5) otherwise panic("sha256: state index unreachable")
+	var g = try state.get(6) otherwise panic("sha256: state index unreachable")
+	var hv = try state.get(7) otherwise panic("sha256: state index unreachable")
+
+	for wri in schedule 'rounds'
+		let t1 = (hv + sha256BigSigma1(ve) + sha2Ch(ve, b: f, c: g, mask: sha256WordMask) + wri) and sha256WordMask
+		let t2 = (sha256BigSigma0(a) + sha2Maj(a, b: b, c: c)) and sha256WordMask
+
+		hv = g
+		g = f
+		f = ve
+		ve = (d + t1) and sha256WordMask
+		d = c
+		c = b
+		b = a
+		a = (t1 + t2) and sha256WordMask
+	end 'rounds'
+
+	sha2AddIntoState(state, slot: 0, addend: a, mask: sha256WordMask)
+	sha2AddIntoState(state, slot: 1, addend: b, mask: sha256WordMask)
+	sha2AddIntoState(state, slot: 2, addend: c, mask: sha256WordMask)
+	sha2AddIntoState(state, slot: 3, addend: d, mask: sha256WordMask)
+	sha2AddIntoState(state, slot: 4, addend: ve, mask: sha256WordMask)
+	sha2AddIntoState(state, slot: 5, addend: f, mask: sha256WordMask)
+	sha2AddIntoState(state, slot: 6, addend: g, mask: sha256WordMask)
+	sha2AddIntoState(state, slot: 7, addend: hv, mask: sha256WordMask)
+end 'sha256Compress'
+
+function sha512RotR(v Sha2Word, n Sha512RotateAmount) returns Sha2Word
+	return (v shr n) or (v shl (sha512WordBits - n))
+end 'sha512RotR'
+
+function sha512BigSigma0(v Sha2Word) returns Sha2Word
+	return sha512RotR(v, n: 28) xor sha512RotR(v, n: 34) xor sha512RotR(v, n: 39)
+end 'sha512BigSigma0'
+
+function sha512BigSigma1(v Sha2Word) returns Sha2Word
+	return sha512RotR(v, n: 14) xor sha512RotR(v, n: 18) xor sha512RotR(v, n: 41)
+end 'sha512BigSigma1'
+
+function sha512SmSigma0(v Sha2Word) returns Sha2Word
+	return sha512RotR(v, n: 1) xor sha512RotR(v, n: 8) xor (v shr 7)
+end 'sha512SmSigma0'
+
+function sha512SmSigma1(v Sha2Word) returns Sha2Word
+	return sha512RotR(v, n: 19) xor sha512RotR(v, n: 61) xor (v shr 6)
+end 'sha512SmSigma1'
+
+function sha512Compress(state Sha2State, schedule Sha2Words, padded ByteArray, blockOff ElementIndex)
+	sha2ReadBlock(schedule, padded: padded, blockOff: blockOff, wordBytes: sha512WordBytes)
+
+	for wi in sha2BlockWords upto sha512RoundCount 'extend'
+		let wm2 = try schedule.get(wi - 2) otherwise panic("sha512: extend w[wi-2] unreachable")
+		let wm7 = try schedule.get(wi - 7) otherwise panic("sha512: extend w[wi-7] unreachable")
+		let wm15 = try schedule.get(wi - 15) otherwise panic("sha512: extend w[wi-15] unreachable")
+		let wm16 = try schedule.get(wi - 16) otherwise panic("sha512: extend w[wi-16] unreachable")
+		schedule.push(wm16 + sha512SmSigma0(wm15) + wm7 + sha512SmSigma1(wm2))
+	end 'extend'
+
+	sha2FoldRoundConstants(schedule, roundConstants: sha512KTable, mask: sha512WordMask)
+
+	var a = try state.get(0) otherwise panic("sha512: state index unreachable")
+	var b = try state.get(1) otherwise panic("sha512: state index unreachable")
+	var c = try state.get(2) otherwise panic("sha512: state index unreachable")
+	var d = try state.get(3) otherwise panic("sha512: state index unreachable")
+	var ve = try state.get(4) otherwise panic("sha512: state index unreachable")
+	var f = try state.get(5) otherwise panic("sha512: state index unreachable")
+	var g = try state.get(6) otherwise panic("sha512: state index unreachable")
+	var hv = try state.get(7) otherwise panic("sha512: state index unreachable")
+
+	for wri in schedule 'rounds'
+		let t1 = hv + sha512BigSigma1(ve) + sha2Ch(ve, b: f, c: g, mask: sha512WordMask) + wri
+		let t2 = sha512BigSigma0(a) + sha2Maj(a, b: b, c: c)
+
+		hv = g
+		g = f
+		f = ve
+		ve = d + t1
+		d = c
+		c = b
+		b = a
+		a = t1 + t2
+	end 'rounds'
+
+	sha2AddIntoState(state, slot: 0, addend: a, mask: sha512WordMask)
+	sha2AddIntoState(state, slot: 1, addend: b, mask: sha512WordMask)
+	sha2AddIntoState(state, slot: 2, addend: c, mask: sha512WordMask)
+	sha2AddIntoState(state, slot: 3, addend: d, mask: sha512WordMask)
+	sha2AddIntoState(state, slot: 4, addend: ve, mask: sha512WordMask)
+	sha2AddIntoState(state, slot: 5, addend: f, mask: sha512WordMask)
+	sha2AddIntoState(state, slot: 6, addend: g, mask: sha512WordMask)
+	sha2AddIntoState(state, slot: 7, addend: hv, mask: sha512WordMask)
+end 'sha512Compress'
+
+function sha256InitialState() returns Sha2State
+	return Sha2State from [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]
+end 'sha256InitialState'
+
+function sha384InitialState() returns Sha2State
+	return Sha2State from [
+		0xcbbb9d5dc1059ed8, 0x629a292a367cd507,
+		0x9159015a3070dd17, 0x152fecd8f70e5939,
+		0x67332667ffc00b31, 0x8eb44a8768581511,
+		0xdb0c2e0d64f98fa7, 0x47b5481dbefa4fa4
+	]
+end 'sha384InitialState'
+
+function sha512InitialState() returns Sha2State
+	return Sha2State from [
+		0x6a09e667f3bcc908, 0xbb67ae8584caa73b,
+		0x3c6ef372fe94f82b, 0xa54ff53a5f1d36f1,
+		0x510e527fade682d1, 0x9b05688c2b3e6c1f,
+		0x1f83d9abfb41bd6b, 0x5be0cd19137e2179
+	]
+end 'sha512InitialState'
+
+/// A SHA-2 function, as `Digest`, `hmac` and the HKDF functions take it.
+public enum HashAlgorithm
+	sha256
+	sha384
+	sha512
+
+	/// The size of the block the function compresses: 64 bytes for SHA-256, 128 for the others.
+	public function blockBytes() returns HashBlockBytes
+		return match self 'width'
+			sha256 gives sha256BlockBytes
+			sha384 or
+			sha512 gives sha512BlockBytes
+		end 'width'
+	end 'blockBytes'
+
+	/// The size of the digest: 32, 48 or 64 bytes.
+	public function digestBytes() returns HashDigestBytes
+		return match self 'width'
+			sha256 gives sha256DigestBytes
+			sha384 gives sha384DigestBytes
+			sha512 gives sha512DigestBytes
+		end 'width'
+	end 'digestBytes'
+
+	function wordBytes() returns Sha2WordBytes
+		return match self 'width'
+			sha256 gives sha256WordBytes
+			sha384 or
+			sha512 gives sha512WordBytes
+		end 'width'
+	end 'wordBytes'
+
+	function lengthFieldBytes() returns LengthFieldBytes
+		return match self 'width'
+			sha256 gives sha256LengthFieldBytes
+			sha384 or
+			sha512 gives sha512LengthFieldBytes
+		end 'width'
+	end 'lengthFieldBytes'
+end 'HashAlgorithm'
+
+/// A SHA-2 hash fed in chunks. The digest depends only on the bytes passed to `update`, never on
+/// how they were split.
+public type Digest
+	var algorithm as HashAlgorithm
+	var state as Sha2State
+	// Reused by every block, so compressing one allocates nothing.
+	var schedule as Sha2Words
+	var pending as ByteArray
+	var consumed as DigestByteTally
+	var finished as bool
+
+	/// A new hash of the empty message, sharing nothing with any other `Digest`.
+	public static function create(algorithm HashAlgorithm) returns Digest
+		let initial = match algorithm 'initial'
+			sha256 gives sha256InitialState()
+			sha384 gives sha384InitialState()
+			sha512 gives sha512InitialState()
+		end 'initial'
+
+		var schedule = Sha2Words.create()
+		schedule.reserve(sha512RoundCount)
+
+		return Digest{algorithm: algorithm, state: initial, schedule: schedule, pending: ByteArray.create(), consumed: 0, finished: false}
+	end 'create'
+
+	/// Feed `data` into the hash. It panics after `finalize`.
+	public function update(data ByteArray)
+		requireOpen("update")
+		consumed = consumed + data.count()
+
+		let blockBytes = algorithm.blockBytes()
+		var offset = 0 as ElementIndex
+
+		if pending.count() > 0 'topUp'
+			let room = blockBytes - pending.count()
+			let taken = data.count() if data.count() < room else room
+			buffer(data, firstIndex: 0, limit: taken)
+			offset = taken
+
+			if pending.count() == blockBytes 'filled'
+				compress(pending, blockOff: 0)
+				pending.clear()
+			end 'filled'
+		end 'topUp'
+
+		while data.count() - offset >= blockBytes 'wholeBlocks'
+			compress(data, blockOff: offset)
+			offset = offset + blockBytes
+		end 'wholeBlocks'
+
+		buffer(data, firstIndex: offset, limit: data.count())
+	end 'update'
+
+	/// The digest of every byte passed to `update`. It ends the hash: a later `update` or `finalize`
+	/// panics.
+	public function finalize() returns ByteArray
+		requireOpen("finalize")
+		finished = true
+
+		let blockBytes = algorithm.blockBytes()
+		let lengthBytes = algorithm.lengthFieldBytes()
+
+		pending.push(paddingMarkerByte)
+
+		while pending.count() mod blockBytes != blockBytes - lengthBytes 'pad'
+			pending.push(paddingFillByte)
+		end 'pad'
+
+		for _ in 0 upto (lengthBytes - messageLengthBytes) as Count 'uncountedHighBytes'
+			pending.push(paddingFillByte)
+		end 'uncountedHighBytes'
+
+		appendBigEndian(pending, word: (consumed * bitsPerByte) as Sha2Word, wordBytes: messageLengthBytes)
+
+		var blockOff = 0 as ElementIndex
+
+		while blockOff < pending.count() 'finalBlocks'
+			compress(pending, blockOff: blockOff)
+			blockOff = blockOff + blockBytes
+		end 'finalBlocks'
+
+		let digestBytes = algorithm.digestBytes()
+		let wordBytes = algorithm.wordBytes()
+		var digest = ByteArray.create()
+		digest.reserve(digestBytes)
+
+		for word in state 'eachWord'
+			if digest.count() == digestBytes 'complete'
+				break
+			end 'complete'
+
+			appendBigEndian(digest, word: word, wordBytes: wordBytes)
+		end 'eachWord'
+
+		return digest
+	end 'finalize'
+
+	function requireOpen(operation String)
+		if finished 'used'
+			panic("Digest.{operation} was called after finalize")
+		end 'used'
+	end 'requireOpen'
+
+	function buffer(data ByteArray, firstIndex ElementIndex, limit ElementIndex)
+		for index in firstIndex upto limit 'eachByte'
+			pending.push(try data.get(index) otherwise panic("Digest: buffered byte past the data the caller sized"))
+		end 'eachByte'
+	end 'buffer'
+
+	function compress(padded ByteArray, blockOff ElementIndex)
+		match algorithm 'compression'
+			sha256 then sha256Compress(state, schedule: schedule, padded: padded, blockOff: blockOff)
+			sha384 or
+			sha512 then sha512Compress(state, schedule: schedule, padded: padded, blockOff: blockOff)
+		end 'compression'
+	end 'compress'
+end 'Digest'
+
+function sha2Once(algorithm HashAlgorithm, data ByteArray) returns ByteArray
+	var digest = Digest.create(algorithm)
+	digest.update(data)
+	return digest.finalize()
+end 'sha2Once'
+
+/// The 32-byte SHA-256 digest of `data`.
+public function sha256(data ByteArray) returns ByteArray
+	return sha2Once(HashAlgorithm.sha256, data: data)
+end 'sha256'
+
+/// The 48-byte SHA-384 digest of `data`.
+public function sha384(data ByteArray) returns ByteArray
+	return sha2Once(HashAlgorithm.sha384, data: data)
+end 'sha384'
+
+/// The 64-byte SHA-512 digest of `data`.
+public function sha512(data ByteArray) returns ByteArray
+	return sha2Once(HashAlgorithm.sha512, data: data)
+end 'sha512'

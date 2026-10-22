@@ -1,4 +1,4 @@
-/// Random integers from the operating system's cryptographic random source, on every target.
+/// Random integers and bytes from the operating system's cryptographic source, on every target.
 /// @category System
 
 /// Why `Random` could not draw.
@@ -8,6 +8,7 @@ end 'RandomError'
 
 public typealias RandomDraw = int(0 to u64.max)
 public typealias RandomBound = int(1 to u64.max) implements RandomDraw
+public typealias RandomByteCount = int(0 to u64.max) implements ElementIndex
 
 let RandomWordBytes = 8
 let RandomFillSucceeded = 0
@@ -18,21 +19,33 @@ let RandomHalfWordMask = 4294967295
 public type Random
 	/// A uniformly distributed integer from 0 to `u64.max`.
 	public static function draw() returns RandomDraw throws RandomError
-		var bytes = ByteArray.create()
-		bytes.resize(RandomWordBytes)
-
-		if __Builtins.fillRandom(bytes.managed) != RandomFillSucceeded 'refused'
-			throw RandomError.unavailable
-		end 'refused'
-
+		let drawn = try bytes(RandomWordBytes)
 		var value = 0 as RandomDraw
 
-		for byte in bytes 'eachByte'
+		for byte in drawn 'eachByte'
 			value = value * RandomByteRadix + (byte as RandomDraw)
 		end 'eachByte'
 
 		return value
 	end 'draw'
+
+	/// `count` fresh bytes, every one from the operating system's source. `bytes(0)` is empty and asks
+	/// the operating system for nothing.
+	public static function bytes(count RandomByteCount) returns ByteArray throws RandomError
+		var drawn = ByteArray.create()
+
+		if count == 0 'nothingToDraw'
+			return drawn
+		end 'nothingToDraw'
+
+		drawn.resize(count)
+
+		if __Builtins.fillRandom(drawn.managed) != RandomFillSucceeded 'refused'
+			throw RandomError.unavailable
+		end 'refused'
+
+		return drawn
+	end 'bytes'
 
 	/// A uniformly distributed integer from 0 to `bound - 1`.
 	public static function below(bound RandomBound) returns RandomDraw throws RandomError

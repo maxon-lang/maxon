@@ -1,0 +1,263 @@
+/// PEM text (RFC 7468): the `-----BEGIN label-----` blocks that carry certificates and keys.
+/// @category Crypto
+
+/// Why `Pem.decode` or `Pem.encode` refused its input.
+public enum PemError implements Error
+	unterminatedBlock  // a BEGIN line with no END line before the next BEGIN line or the text's end
+	labelMismatch  // an END line inside a block that does not name the block's label exactly
+	invalidBody  // a body that is not strict base64 once whitespace is removed
+	invalidLabel  // `encode` only: a label that is not a valid RFC 7468 label
+end 'PemError'
+
+public typealias PemBlocks = Array with PemBlock
+
+let PemBeginPrefix = "-----BEGIN "
+let PemEndPrefix = "-----END "
+let PemBoundarySuffix = "-----"
+
+let PemLineWidth = 64
+let PemLineFeed = 0x0A
+let PemCarriageReturn = 0x0D
+let PemSpace = 0x20
+let PemTab = 0x09
+let PemVerticalTab = 0x0B
+let PemFormFeed = 0x0C
+let PemHyphen = 0x2D
+let PemLabelCharFirst = 0x21
+let PemLabelCharLast = 0x7E
+
+/// One block of PEM text.
+public type PemBlock
+	var label as String
+	var bytes as ByteArray
+
+	/// The text between `-----BEGIN ` and `-----`, such as `CERTIFICATE`.
+	public function label() returns String
+		return label
+	end 'label'
+
+	/// The decoded body.
+	public function bytes() returns ByteArray
+		return bytes
+	end 'bytes'
+
+	static function create(label String, bytes ByteArray) returns PemBlock
+		return PemBlock{label: label, bytes: bytes}
+	end 'create'
+end 'PemBlock'
+
+type PemScanner
+	var blocks as PemBlocks
+	var inBlock as bool
+	var label as ByteArray
+	var body as ByteArray
+	var beginPrefix as ByteArray
+	var endPrefix as ByteArray
+	var boundarySuffix as ByteArray
+
+	static function create() returns PemScanner
+		return PemScanner{blocks: PemBlocks.create(), inBlock: false, label: ByteArray.create(), body: ByteArray.create(), beginPrefix: PemBeginPrefix.toByteArray(), endPrefix: PemEndPrefix.toByteArray(), boundarySuffix: PemBoundarySuffix.toByteArray()}
+	end 'create'
+
+	function accept(line ByteArray) throws PemError
+		if not inBlock 'outside'
+			let boundaryLength = pemBoundaryLength(line)
+
+			if isBegin(line, boundaryLength: boundaryLength) 'begins'
+				label = labelOf(line, boundaryLength: boundaryLength)
+				body = ByteArray.create()
+				inBlock = true
+			end 'begins'
+
+			return
+		end 'outside'
+
+		if pemMatchesAt(line, offset: 0, pattern: endPrefix) 'ends'
+			if not isEndOfBlock(line, boundaryLength: pemBoundaryLength(line)) 'mismatch'
+				throw PemError.labelMismatch
+			end 'mismatch'
+
+			try closeBlock()
+
+			return
+		end 'ends'
+
+		if pemMatchesAt(line, offset: 0, pattern: beginPrefix) 'nestedBegin'
+			throw PemError.unterminatedBlock
+		end 'nestedBegin'
+
+		for byte in line 'eachBodyByte'
+			if not pemIsBodyWhitespace(byte) 'kept'
+				body.push(byte)
+			end 'kept'
+		end 'eachBodyByte'
+	end 'accept'
+
+	function finish() returns PemBlocks throws PemError
+		if inBlock 'unterminated'
+			throw PemError.unterminatedBlock
+		end 'unterminated'
+
+		return blocks
+	end 'finish'
+
+	function isBegin(line ByteArray, boundaryLength Count) returns bool
+		if boundaryLength < beginPrefix.count() + boundarySuffix.count() 'tooShort'
+			return false
+		end 'tooShort'
+
+		if not pemMatchesAt(line, offset: 0, pattern: beginPrefix) or not hasBoundarySuffix(line, boundaryLength: boundaryLength) 'notBoundary'
+			return false
+		end 'notBoundary'
+
+		return pemIsValidLabel(labelOf(line, boundaryLength: boundaryLength))
+	end 'isBegin'
+
+	function labelOf(line ByteArray, boundaryLength Count) returns ByteArray
+		return try line.slice(beginPrefix.count(), endIndex: suffixStart(boundaryLength)) otherwise panic("a boundary line is longer than its prefix and suffix")
+	end 'labelOf'
+
+	function suffixStart(boundaryLength Count) returns ElementIndex
+		return boundaryLength - boundarySuffix.count()
+	end 'suffixStart'
+
+	function hasBoundarySuffix(line ByteArray, boundaryLength Count) returns bool
+		return pemMatchesAt(line, offset: suffixStart(boundaryLength), pattern: boundarySuffix)
+	end 'hasBoundarySuffix'
+
+	function isEndOfBlock(line ByteArray, boundaryLength Count) returns bool
+		if boundaryLength != endPrefix.count() + label.count() + boundarySuffix.count() 'wrongLength'
+			return false
+		end 'wrongLength'
+
+		return pemMatchesAt(line, offset: endPrefix.count(), pattern: label) and hasBoundarySuffix(line, boundaryLength: boundaryLength)
+	end 'isEndOfBlock'
+
+	function closeBlock() throws PemError
+		let decoded = try Base64.decode(String.from(body)) otherwise throw PemError.invalidBody
+
+		blocks.push(PemBlock.create(String.from(label), bytes: decoded))
+		inBlock = false
+	end 'closeBlock'
+end 'PemScanner'
+
+function pemBoundaryLength(line ByteArray) returns Count
+	var kept = line.count()
+
+	if kept > 0 and (try line.get(kept - 1) otherwise panic("kept never exceeds the line length")) == PemCarriageReturn 'carriageReturn'
+		kept = kept - 1
+	end 'carriageReturn'
+
+	while kept > 0 'trim'
+		let last = try line.get(kept - 1) otherwise panic("kept never exceeds the line length")
+
+		if last != PemSpace and last != PemTab 'notBlank'
+			break
+		end 'notBlank'
+
+		kept = kept - 1
+	end 'trim'
+
+	return kept
+end 'pemBoundaryLength'
+
+function pemMatchesAt(line ByteArray, offset ElementIndex, pattern ByteArray) returns bool
+	if line.count() < offset + pattern.count() 'tooShort'
+		return false
+	end 'tooShort'
+
+	for (iter, expected) in pattern.withIterator() 'eachByte'
+		if (try line.get(offset + iter.index()) otherwise panic("the line holds the whole pattern at this offset")) != expected 'differs'
+			return false
+		end 'differs'
+	end 'eachByte'
+
+	return true
+end 'pemMatchesAt'
+
+function pemIsBodyWhitespace(byte Byte) returns bool
+	return byte == PemSpace or byte == PemTab or byte == PemCarriageReturn or byte == PemLineFeed or byte == PemVerticalTab or byte == PemFormFeed
+end 'pemIsBodyWhitespace'
+
+function pemIsValidLabel(label ByteArray) returns bool
+	var previousWasLabelChar = false
+
+	for byte in label 'eachByte'
+		if byte >= PemLabelCharFirst and byte <= PemLabelCharLast and byte != PemHyphen 'labelChar'
+			previousWasLabelChar = true
+		end 'labelChar' else if (byte == PemSpace or byte == PemHyphen) and previousWasLabelChar 'separator'
+			previousWasLabelChar = false
+		end 'separator' else 'invalid'
+			return false
+		end 'invalid'
+	end 'eachByte'
+
+	return previousWasLabelChar or label.isEmpty()
+end 'pemIsValidLabel'
+
+function pemAppendBoundary(text ByteArray, prefix String, label String)
+	for part in [prefix, label, PemBoundarySuffix] 'eachPart'
+		for byte in part.bytes() 'eachByte'
+			text.push(byte)
+		end 'eachByte'
+	end 'eachPart'
+
+	text.push(PemLineFeed)
+end 'pemAppendBoundary'
+
+public type Pem
+	/// The blocks in `text`, in order. Lines end in LF or CRLF. Text outside a block is skipped,
+	/// including a stray END line or a malformed BEGIN line, and whitespace inside a body is skipped.
+	/// Inside a block, a line starting `-----END ` must name the block's label (`labelMismatch`), and
+	/// a line starting `-----BEGIN ` is `unterminatedBlock`.
+	public static function decode(text String) returns PemBlocks throws PemError
+		var scanner = PemScanner.create()
+		var line = ByteArray.create()
+
+		// Bytes, because a `\r\n` is one grapheme: a character scan never sees its line feed.
+		for byte in text.bytes() 'eachByte'
+			if byte == PemLineFeed 'lineEnd'
+				try scanner.accept(line)
+				line.clear()
+			end 'lineEnd' else 'lineByte'
+				line.push(byte)
+			end 'lineByte'
+		end 'eachByte'
+
+		try scanner.accept(line)
+
+		return try scanner.finish()
+	end 'decode'
+
+	/// One block in the strict RFC 7468 layout: the BEGIN line, base64 in lines of 64 characters, and
+	/// the END line, each ending in LF. A label `decode` could not read back is `invalidLabel`.
+	public static function encode(label String, data ByteArray) returns String throws PemError
+		if not pemIsValidLabel(label.toByteArray()) 'invalid'
+			throw PemError.invalidLabel
+		end 'invalid'
+
+		let symbols = Base64.encode(data)
+		var text = ByteArray.create()
+		var column = 0 as Count
+
+		pemAppendBoundary(text, prefix: PemBeginPrefix, label: label)
+
+		for symbol in symbols.bytes() 'eachSymbol'
+			text.push(symbol)
+			column = column + 1
+
+			if column == PemLineWidth 'fullLine'
+				text.push(PemLineFeed)
+				column = 0
+			end 'fullLine'
+		end 'eachSymbol'
+
+		if column > 0 'lastLine'
+			text.push(PemLineFeed)
+		end 'lastLine'
+
+		pemAppendBoundary(text, prefix: PemEndPrefix, label: label)
+
+		return String.from(text)
+	end 'encode'
+end 'Pem'

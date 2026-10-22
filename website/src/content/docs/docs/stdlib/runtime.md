@@ -292,18 +292,20 @@ Output: `1 false true 5`.
 
 ## Random
 
-`Random` draws integers from the operating system's cryptographic random source, on every target —
-`wasm32-wasi` included, through `wasi:random`.
+`Random` draws integers and bytes from the operating system's cryptographic random source, on every
+target — `wasm32-wasi` included, through `wasi:random`.
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
 | `Random.draw()` | `RandomDraw` | `RandomError` | A uniformly distributed integer from 0 to `u64.max` — all 64 bits random. |
 | `Random.below(bound RandomBound)` | `RandomDraw` | `RandomError` | A uniformly distributed integer from 0 to `bound - 1`, for any bound up to `u64.max`. |
+| `Random.bytes(count RandomByteCount)` | `ByteArray` | `RandomError` | `count` fresh random bytes, for keys and nonces. `Random.bytes(0)` is empty and asks the operating system for nothing. |
 
 | Name | Definition |
 |------|------------|
 | `RandomDraw` | `int(0 to u64.max)` |
 | `RandomBound` | `int(1 to u64.max)`, implementing `RandomDraw` |
+| `RandomByteCount` | `int(0 to u64.max)`, implementing `ElementIndex` |
 
 `RandomError` has one case, `unavailable`: the operating system refused to supply random bytes.
 

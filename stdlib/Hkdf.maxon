@@ -1,0 +1,68 @@
+/// HKDF key derivation over HMAC (RFC 5869): extract a pseudorandom key, then expand it.
+/// @category Crypto
+
+// One past SHA-512's maximum of 255 blocks of 64 bytes, so `outputTooLong` is expressible for every
+// algorithm.
+public typealias HkdfOutputLength = int(0 to 16321) implements Count
+
+let hkdfMaxBlocks = 255
+
+public enum HkdfError implements Error
+	outputTooLong  // the length is over 255 times the digest size
+end 'HkdfError'
+
+/// The pseudorandom key: the HMAC of `inputKeyMaterial` keyed by `salt`. An empty salt gives the
+/// same key as `digestBytes()` zero bytes.
+public function hkdfExtract(algorithm HashAlgorithm, salt ByteArray, inputKeyMaterial ByteArray) returns ByteArray
+	return hmac(algorithm, key: salt, message: inputKeyMaterial)
+end 'hkdfExtract'
+
+/// `length` bytes of key material from a pseudorandom key and `info`, at most 255 times the digest
+/// size. A shorter output is a prefix of a longer one from the same inputs.
+public function hkdfExpand(algorithm HashAlgorithm, pseudoRandomKey ByteArray, info ByteArray, length HkdfOutputLength) returns ByteArray throws HkdfError
+	try hkdfRequireLength(algorithm, length: length)
+	return hkdfBlocks(algorithm, pseudoRandomKey: pseudoRandomKey, info: info, length: length)
+end 'hkdfExpand'
+
+/// `hkdfExpand` of `hkdfExtract`, with `length` checked before anything is derived.
+public function hkdf(algorithm HashAlgorithm, salt ByteArray, inputKeyMaterial ByteArray, info ByteArray, length HkdfOutputLength) returns ByteArray throws HkdfError
+	try hkdfRequireLength(algorithm, length: length)
+	let pseudoRandomKey = hkdfExtract(algorithm, salt: salt, inputKeyMaterial: inputKeyMaterial)
+	return hkdfBlocks(algorithm, pseudoRandomKey: pseudoRandomKey, info: info, length: length)
+end 'hkdf'
+
+function hkdfRequireLength(algorithm HashAlgorithm, length HkdfOutputLength) throws HkdfError
+	if length > hkdfMaxBlocks * algorithm.digestBytes() 'tooLong'
+		throw HkdfError.outputTooLong
+	end 'tooLong'
+end 'hkdfRequireLength'
+
+function hkdfBlocks(algorithm HashAlgorithm, pseudoRandomKey ByteArray, info ByteArray, length HkdfOutputLength) returns ByteArray
+	var output = ByteArray.create()
+	output.reserve(length)
+
+	var block = ByteArray.create()
+	var input = ByteArray.create()
+	// Cannot pass 255: `hkdfRequireLength` runs first on every path here.
+	var counter = 0 as Byte
+
+	while output.count() < length 'eachBlock'
+		counter = counter + 1
+		input.clear()
+		input.append(block)
+		input.append(info)
+		input.push(counter)
+
+		block = hmac(algorithm, key: pseudoRandomKey, message: input)
+
+		let wanted = length - output.count()
+
+		if block.count() <= wanted 'whole'
+			output.append(block)
+		end 'whole' else 'partial'
+			output.append(try block.slice(0, endIndex: wanted) otherwise panic("hkdf: a block is longer than the bytes still wanted"))
+		end 'partial'
+	end 'eachBlock'
+
+	return output
+end 'hkdfBlocks'

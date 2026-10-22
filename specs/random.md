@@ -246,3 +246,141 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: random.bytes-returns-exactly-the-count-asked-for -->
+Each count is drawn as many times as the vector repeats it: 0, 1, 16, 32, 64, either side of `getentropy`'s 256-byte limit, 1000, past one `getRandomValues` call, a mebibyte, and past one `getrandom` call at 32 MiB.
+```maxon
+typealias DrawRepeat = int(1 to 1000)
+typealias FailureTally = int(0 to 100)
+
+function lengthFailures(id String, count RandomByteCount, repeat DrawRepeat) returns FailureTally
+	for _ in 1 to repeat 'eachDraw'
+		let drawn = try Random.bytes(count) otherwise return 1
+
+		if drawn.count() != count 'wrongLength'
+			print("{id} length {drawn.count()}\n")
+			return 1
+		end 'wrongLength'
+	end 'eachDraw'
+
+	print("{id} length {count}\n")
+	return 0
+end 'lengthFailures'
+
+function main() returns ExitCode
+	let failures = lengthFailures("random-bytes-001", count: 0, repeat: 10) + lengthFailures("random-bytes-002", count: 1, repeat: 100) + lengthFailures("random-bytes-003", count: 16, repeat: 100) + lengthFailures("random-bytes-004", count: 32, repeat: 100) + lengthFailures("random-bytes-005", count: 64, repeat: 100) + lengthFailures("random-bytes-006", count: 256, repeat: 10) + lengthFailures("random-bytes-007", count: 257, repeat: 10) + lengthFailures("random-bytes-008", count: 1000, repeat: 10) + lengthFailures("random-bytes-009", count: 65537, repeat: 3) + lengthFailures("random-bytes-010", count: 1048576, repeat: 1) + lengthFailures("random-bytes-011", count: 33554432, repeat: 1)
+	return failures as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+random-bytes-001 length 0
+random-bytes-002 length 1
+random-bytes-003 length 16
+random-bytes-004 length 32
+random-bytes-005 length 64
+random-bytes-006 length 256
+random-bytes-007 length 257
+random-bytes-008 length 1000
+random-bytes-009 length 65537
+random-bytes-010 length 1048576
+random-bytes-011 length 33554432
+```
+
+<!-- test: random.bytes-draws-differ -->
+Two equal 32-byte draws happen with probability 2^-256, and a repeat among a thousand 16-byte draws with probability below 2^-108.
+```maxon
+function toHex(bytes ByteArray) returns String
+	var text = ""
+
+	for byte in bytes 'eachByte'
+		text.append("{byte:02x}")
+	end 'eachByte'
+
+	return text
+end 'toHex'
+
+typealias DrawRepeat = int(1 to 1000)
+typealias FailureTally = int(0 to 100)
+typealias DrawSet = Set with String
+
+function uniqueFailures(id String, count RandomByteCount, repeat DrawRepeat) returns FailureTally
+	var seen = DrawSet.create()
+
+	for _ in 1 to repeat 'eachDraw'
+		let drawn = try Random.bytes(count) otherwise return 1
+		let hex = toHex(drawn)
+
+		if seen.contains(hex) 'repeated'
+			print("{id} repeated\n")
+			return 1
+		end 'repeated'
+
+		seen.insert(hex)
+	end 'eachDraw'
+
+	print("{id} all unique\n")
+	return 0
+end 'uniqueFailures'
+
+function main() returns ExitCode
+	let failures = uniqueFailures("random-bytes-012", count: 32, repeat: 2) + uniqueFailures("random-bytes-013", count: 16, repeat: 1000)
+	return failures as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+random-bytes-012 all unique
+random-bytes-013 all unique
+```
+
+<!-- test: random.bytes-reach-every-byte-value -->
+A byte value missing from 65536 random bytes happens with probability below 2^-360; five draws are checked.
+```maxon
+typealias DistinctTally = int(0 to 256)
+typealias ValueSeen = Array with bool
+
+function distinctValues(drawn ByteArray) returns DistinctTally
+	var seen = ValueSeen.create()
+	seen.resize(256)
+
+	for byte in drawn 'eachByte'
+		try seen.set(byte as ElementIndex, value: true) otherwise panic("a byte indexes 256 slots")
+	end 'eachByte'
+
+	var distinct = 0 as DistinctTally
+
+	for wasSeen in seen 'eachValue'
+		if wasSeen 'counted'
+			distinct = distinct + 1
+		end 'counted'
+	end 'eachValue'
+
+	return distinct
+end 'distinctValues'
+
+function main() returns ExitCode
+	for _ in 0 upto 5 'eachDraw'
+		let drawn = try Random.bytes(65536) otherwise return 1
+		let distinct = distinctValues(drawn)
+
+		if distinct != 256 'missing'
+			print("random-bytes-014 {distinct} distinct\n")
+			return 2
+		end 'missing'
+	end 'eachDraw'
+
+	print("random-bytes-014 256 distinct\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+random-bytes-014 256 distinct
+```
