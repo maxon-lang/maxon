@@ -319,6 +319,45 @@ end 'main'
 
 It prints a number from 1 to 6.
 
+## TrustStore
+
+`TrustStore` reads the root certificates the operating system trusts, as DER bytes ready for
+[`DerReader`](/docs/stdlib/data/#der). Parsing them is X.509's job.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `TrustStore.systemRoots()` | `RootCertificates` | `TrustStoreError` | The DER bytes of every root certificate in the operating system's store, one `ByteArray` each. |
+
+| Name | Definition |
+|------|------------|
+| `RootCertificates` | `Array with ByteArray` |
+
+Each target reads its own store:
+
+| Target | Source |
+|--------|--------|
+| `x64-windows` | The `ROOT` system store, through `crypt32.dll`. Only a program that uses `TrustStore` imports it. |
+| `arm64-macos` | The system anchor certificates (`SecTrustCopyAnchorCertificates`), through the Security and CoreFoundation frameworks. Only a program that uses `TrustStore` links them. |
+| `x64-linux`, `arm64-linux` | The first existing file of `/etc/ssl/certs/ca-certificates.crt`, `/etc/pki/tls/certs/ca-bundle.crt`, `/etc/ssl/ca-bundle.pem`, `/etc/pki/tls/cacert.pem`, `/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem` and `/etc/ssl/cert.pem`, read as the `CERTIFICATE` blocks of a PEM file. |
+| `wasm32-wasi` | A call is refused at compile time (E3104). |
+
+The macOS answer is the system anchor set that ships with the operating system.
+
+| `TrustStoreError` case | When |
+|------------------------|------|
+| `unavailable` | The store cannot be opened or enumerated to its end (Windows, macOS), or none of the bundle files exists (Linux). |
+| `malformed` | The store holds no certificates or a certificate with no bytes (Windows, macOS), or a Linux bundle is invalid PEM or holds zero `CERTIFICATE` blocks. |
+
+```maxon
+function main() returns ExitCode
+	let roots = try TrustStore.systemRoots() otherwise return 1
+	print("{roots.count()} roots\n")
+	return 0
+end 'main'
+```
+
+It prints the number of roots the store holds.
+
 ## Math
 
 `Math` provides the elementary functions over `FullRangeFloat`, which is `float(f64.min to f64.max)`. The rounding and

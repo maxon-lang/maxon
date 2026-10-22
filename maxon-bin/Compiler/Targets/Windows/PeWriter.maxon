@@ -7,11 +7,11 @@
 // debuggers when debug symbols are present. `.data` is a WRITABLE section holding the
 // initial image of every top-level `var`. The `.rsrc` manifest opts every
 // produced binary out of Windows' UAC installer-detection heuristic (see buildRsrcSection).
-// The import table is MULTI-DLL — kernel32, ws2_32, ntdll and bcryptprimitives, one thunk run,
-// one directory entry and one Hint/Name region each, derived from `ImportDll` rather than from
-// a hard-coded count (see `ImportDll`, and `emittedDllCount` for the derivation). A `--coverage`
-// build's counters need no section of their own — they are a reserved run inside `.data`. The
-// writer is x64-only and takes no arm64 relocation.
+// The import table is MULTI-DLL — kernel32, ws2_32, ntdll, bcryptprimitives and crypt32, one
+// thunk run, one directory entry and one Hint/Name region each, derived from `ImportDll` rather
+// than from a hard-coded count (see `ImportDll`, and `emittedDllCount` for the derivation).
+// A `--coverage` build's counters need no section of their own — they are a reserved run inside
+// `.data`. The writer is x64-only and takes no arm64 relocation.
 
 // A relative virtual address — an OFFSET from the image base, and a PE one is 32-bit, so it can
 // never carry bit 63. A coordinate, not a pattern.
@@ -118,6 +118,7 @@ enum ImportDll
 	// run goes after every existing one so no existing slot changes its position within its own run.
 	ntdll
 	bcryptprimitives
+	crypt32
 end 'ImportDll'
 
 let ImportThunkPasses = 2  // the IAT and the ILT hold identical thunks
@@ -638,6 +639,12 @@ export enum IatSlot
 	NtGetNextThread = IatSlotMeta{dll: ImportDll.ntdll}
 
 	ProcessPrng = IatSlotMeta{dll: ImportDll.bcryptprimitives}
+
+	// The `ROOT` store walk of `TrustStoreRuntime`. The crypt32 run is emitted only when
+	// `IrModule.usesTrustStore` is set, so no other binary loads the DLL.
+	CertOpenSystemStoreW = IatSlotMeta{dll: ImportDll.crypt32}
+	CertEnumCertificatesInStore = IatSlotMeta{dll: ImportDll.crypt32}
+	CertCloseStore = IatSlotMeta{dll: ImportDll.crypt32}
 end 'IatSlot'
 
 // Which DLL an import comes from. `IatSlotMeta` carries it, so this is the one reader of that field
@@ -682,6 +689,8 @@ export function importAnswerOf(slot IatSlot) returns ImportAnswer
 		CreateJobObjectW or
 		VirtualQuery or
 		WSASocketW or
+		CertOpenSystemStoreW or
+		CertEnumCertificatesInStore or
 		accept gives ImportAnswer.fullWord
 		WaitForSingleObject or
 		GetLastError or
@@ -776,6 +785,7 @@ export function importAnswerOf(slot IatSlot) returns ImportAnswer
 		InitializeProcThreadAttributeList or
 		UpdateProcThreadAttribute or
 		ReadFileOverlapped or
+		CertCloseStore or
 		ProcessPrng gives ImportAnswer.signedDword
 	end 'answer'
 end 'importAnswerOf'
@@ -787,6 +797,7 @@ function dllFileName(dll ImportDll) returns String
 		ws2_32 gives "ws2_32.dll"
 		ntdll gives "ntdll.dll"
 		bcryptprimitives gives "bcryptprimitives.dll"
+		crypt32 gives "crypt32.dll"
 	end 'name'
 end 'dllFileName'
 
@@ -810,8 +821,10 @@ type ImportGates
 
 	export let entropy as bool
 
-	static function create(optionalImports bool, sockets bool, threadWalk bool, entropy bool) returns ImportGates
-		return Self{optionalImports: optionalImports, sockets: sockets, threadWalk: threadWalk, entropy: entropy}
+	export let trustStore as bool
+
+	static function create(optionalImports bool, sockets bool, threadWalk bool, entropy bool, trustStore bool) returns ImportGates
+		return Self{optionalImports: optionalImports, sockets: sockets, threadWalk: threadWalk, entropy: entropy, trustStore: trustStore}
 	end 'create'
 end 'ImportGates'
 
@@ -827,6 +840,7 @@ function dllIsEmitted(dll ImportDll, gates ImportGates) returns bool
 		ws2_32 gives gates.sockets
 		ntdll gives gates.threadWalk
 		bcryptprimitives gives gates.entropy
+		crypt32 gives gates.trustStore
 	end 'emitted'
 end 'dllIsEmitted'
 
@@ -983,6 +997,9 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 		getsockname or
 		shutdown or
 		NtGetNextThread or
+		CertOpenSystemStoreW or
+		CertEnumCertificatesInStore or
+		CertCloseStore or
 		ProcessPrng gives false
 	end 'band'
 end 'isOptionalTrailingImport'
@@ -1985,7 +2002,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// are read off `stdModule` AFTER `pipeline.run()` replaced it (`Compiler.maxon`'s build seam); a read
 	// taken before that measures a module the lowering discards and emits `iatCall`s at slot indices past
 	// the end of the table it actually writes.
-	let gates = ImportGates.create(optionalImports, sockets: codeResult.stdModule.usesSockets, threadWalk: codeResult.stdModule.usesProcessSampling, entropy: codeResult.stdModule.usesEntropy)
+	let gates = ImportGates.create(optionalImports, sockets: codeResult.stdModule.usesSockets, threadWalk: codeResult.stdModule.usesProcessSampling, entropy: codeResult.stdModule.usesEntropy, trustStore: codeResult.stdModule.usesTrustStore)
 	let idata = buildImportSection(idataRva as Rva, gates: gates)
 	let idataSize = idata.data.count()
 	let idataSizeAligned = alignUp(idataSize as BytePos, alignment: FileAlignment)

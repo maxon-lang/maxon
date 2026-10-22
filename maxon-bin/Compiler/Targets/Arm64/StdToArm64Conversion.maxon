@@ -2131,10 +2131,22 @@ export type StdToArm64Lowering
 	// which is a `CallFixup` that `arm64ResolveCallFixups` panics on.
 	function lowerOsHostProcess(resultId ValueId, service HostProcessCall, operands ValueIdArray, dstRef ElementIndex)
 		match arm64OsCallKind(self.target.os) 'route'
-			importCall then self.lowerHostValue(resultId, callee: Arm64HostCallee.import(machHostProcessSlot(service)), args: operands, dstRef: dstRef)
+			importCall then self.lowerHostProcessImport(resultId, slot: machHostProcessSlot(service), operands: operands, dstRef: dstRef)
 			syscall then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(posixTraceChunk(service)), args: operands, dstRef: dstRef)
 		end 'route'
 	end 'lowerOsHostProcess'
+
+	function lowerHostProcessImport(resultId ValueId, slot OsImportSlot, operands ValueIdArray, dstRef ElementIndex)
+		// A void import leaves nothing in x0 to capture, so the op's result is defined as 0.
+		if osImportAnswerOf(slot) == ImportAnswer.nothing 'answersNothing'
+			self.emitHostCall(dstRef, callee: Arm64HostCallee.import(slot), args: operands)
+			self.emit(dstRef, op: TargetOp.arm64MovImm(TargetVReg.virtual(resultId), value: 0))
+
+			return
+		end 'answersNothing'
+
+		self.lowerHostValue(resultId, callee: Arm64HostCallee.import(slot), args: operands, dstRef: dstRef)
+	end 'lowerHostProcessImport'
 
 	function lowerOsCpuCount(resultId ValueId, dstRef ElementIndex)
 		match arm64OsCallKind(self.target.os) 'route'
@@ -3047,6 +3059,13 @@ function machHostProcessSlot(service HostProcessCall) returns OsImportSlot
 		machTaskInfo gives OsImportSlot.taskInfo
 		machReleasePort gives OsImportSlot.machPortDeallocate
 		machReleaseMemory gives OsImportSlot.machVmDeallocate
+		secCopyAnchorCertificates gives OsImportSlot.secTrustCopyAnchorCertificates
+		secCertificateCopyData gives OsImportSlot.secCertificateCopyData
+		cfArrayCount gives OsImportSlot.cfArrayGetCount
+		cfArrayElement gives OsImportSlot.cfArrayGetValueAtIndex
+		cfDataLength gives OsImportSlot.cfDataGetLength
+		cfDataBytes gives OsImportSlot.cfDataGetBytePtr
+		cfRelease gives OsImportSlot.cfRelease
 
 		openProcess or
 		nextThread or
@@ -3075,6 +3094,9 @@ function machHostProcessSlot(service HostProcessCall) returns OsImportSlot
 		traceeMemoryRead or
 		awaitTracee or
 		threadGroupSignal or
+		certOpenRootStore or
+		certEnumCertificate or
+		certCloseStore or
 		processSignal panic("machHostProcessSlot: `{service.name}` is a Win32 or ptrace primitive, and this lane reaches another process through Mach task ports — `ProfileRuntime.profileHostShapeOf` builds the Mach entries for it, and `HostFacility.machTaskPorts` is what refuses a program that names one on a lane without them (E3104), so reaching here is a compiler bug that got past both")
 	end 'slot'
 end 'machHostProcessSlot'

@@ -1,0 +1,266 @@
+// The OS certificate store behind `stdlib/TrustStore.maxon`: Windows' `ROOT` system store and macOS'
+// system anchors. Linux reads a bundle file and reaches none of these entries.
+//
+// `__trust_open() -> store` (0 when there is none), `__trust_next(store, cursor) -> cursor`,
+// `__trust_certificate(store, cursor) -> ByteArray` and `__trust_close(store)`. A cursor is opaque:
+// 0 starts the walk and 0 ends it, and `TrustStoreWalkFailed` (-1) answers a walk the host could not
+// continue. On Windows a cursor is the `CERT_CONTEXT` that `CertEnumCertificatesInStore` frees when the
+// walk steps past it, so `__trust_certificate` must run before the next `__trust_next`; `__trust_close`
+// forces the store shut, which frees the context of a walk abandoned part-way. On macOS a cursor is a
+// 1-based array position. A certificate with no bytes comes back as an empty array.
+export let TrustStoreOpenName = b"__trust_open"
+export let TrustStoreNextName = b"__trust_next"
+export let TrustStoreCertificateName = b"__trust_certificate"
+export let TrustStoreCloseName = b"__trust_close"
+
+let TrustStoreRuntimePrefix = b"__trust_"
+
+let TrustStoreRootNameSlot = 0 as SpillSlot
+let TrustStoreRootTerminatorSlot = 1 as SpillSlot
+let TrustStoreRootFrameBytes = 16
+let TrustStoreAnchorsOutSlot = 0 as SpillSlot
+let TrustStoreAnchorsFrameBytes = 8
+
+let TrustStoreRootNameUtf16 = 0x0054004F004F0052
+let TrustStoreNoContext = 0
+let TrustStoreNoArgument = 0
+let TrustStoreSuccessStatus = 0
+let TrustStoreFirstCursor = 1
+let TrustStoreLowDwordMask = 0xFFFFFFFF
+let TrustStoreForceClose = 1
+let TrustStoreWalkFailed = -1
+let CryptENotFound = 0x80092004
+
+let CertContextEncodedOffset = 8
+let CertContextEncodedLengthOffset = 16
+
+export function isTrustStoreRuntimeCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: TrustStoreRuntimePrefix)
+end 'isTrustStoreRuntimeCallee'
+
+function emitTrustStoreCall(module StdModule, block IrBlock, service HostProcessCall, a0 ValueId, a1 ValueId, ids ValueMinter) returns ValueId
+	let unused = emitConst(module, block: block, value: TrustStoreNoArgument, ids: ids)
+
+	return emitHostSample(module, block: block, service: service, a0: a0, a1: a1, a2: unused, a3: unused, a4: unused, a5: unused, ids: ids)
+end 'emitTrustStoreCall'
+
+function emitFreshBytesRecord(module StdModule, func IrFunction, cur IrBlock, record ValueId, src ValueId, byteCount ValueId, ids ValueMinter) returns IrBlock
+	let destination = emitManagedByteBuffer(module, block: cur, record: record, byteCount: byteCount, ids: ids)
+	var copied = emitForwardCopy(module, func: func, cur: cur, dest: destination, src: src, byteCount: byteCount, ids: ids)
+	emitStoreField(module, block: copied, record: record, offset: ManagedRecordLengthOffset, value: byteCount)
+
+	return copied
+end 'emitFreshBytesRecord'
+
+function buildTrustStoreClose(module StdModule, service HostProcessCall, flags FullRangeInt)
+	var func = IrFunction.createFromStd(TrustStoreCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let store = 0
+
+	let closeFlags = emitConst(module, block: entry, value: flags, ids: ids)
+	_ = emitTrustStoreCall(module, block: entry, service: service, a0: store, a1: closeFlags, ids: ids)
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildTrustStoreClose'
+
+function buildWindowsTrustStoreOpen(module StdModule)
+	var func = IrFunction.createFromStd(TrustStoreOpenName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	func.stackSize = TrustStoreRootFrameBytes
+	let namePtr = ids.mint()
+	module.appendOp(entry, op: StdOp.stackRecordAddr(namePtr, slot: TrustStoreRootNameSlot))
+	let terminatorPtr = ids.mint()
+	module.appendOp(entry, op: StdOp.stackRecordAddr(terminatorPtr, slot: TrustStoreRootTerminatorSlot))
+
+	let name = emitConst(module, block: entry, value: TrustStoreRootNameUtf16, ids: ids)
+	let terminator = emitConst(module, block: entry, value: 0, ids: ids)
+	emitStoreField(module, block: entry, record: namePtr, offset: 0, value: name)
+	emitStoreField(module, block: entry, record: terminatorPtr, offset: 0, value: terminator)
+
+	let noProvider = emitConst(module, block: entry, value: TrustStoreNoContext, ids: ids)
+	let store = emitTrustStoreCall(module, block: entry, service: HostProcessCall.certOpenRootStore, a0: noProvider, a1: namePtr, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(store))
+
+	module.functions.push(func)
+end 'buildWindowsTrustStoreOpen'
+
+function buildWindowsTrustStoreNext(module StdModule)
+	var func = IrFunction.createFromStd(TrustStoreNextName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var found = module.addBlock(func, label: b"tsfound", heat: BlockHeat.normal)
+	var ended = module.addBlock(func, label: b"tsended", heat: BlockHeat.cold)
+	var checkNoMoreFiles = module.addBlock(func, label: b"tscheck", heat: BlockHeat.cold)
+	var failed = module.addBlock(func, label: b"tsfailed", heat: BlockHeat.cold)
+	var complete = module.addBlock(func, label: b"tscomplete", heat: BlockHeat.cold)
+
+	emitParams(module, block: entry, count: 2)
+	let store = 0
+	let cursor = 1
+
+	let next = emitTrustStoreCall(module, block: entry, service: HostProcessCall.certEnumCertificate, a0: store, a1: cursor, ids: ids)
+	let reason = ids.mint()
+	module.appendOp(entry, op: StdOp.osLastError(reason))
+	emitBranchOnCompare(module, block: entry, value: next, pred: StdCmpPred.ne, against: TrustStoreNoContext, whenTrue: found, whenFalse: ended, ids: ids)
+
+	module.setTerminator(found, op: StdOp.ret(next))
+
+	emitBranchOnCompare(module, block: ended, value: reason, pred: StdCmpPred.eq, against: CryptENotFound, whenTrue: complete, whenFalse: checkNoMoreFiles, ids: ids)
+	emitBranchOnCompare(module, block: checkNoMoreFiles, value: reason, pred: StdCmpPred.eq, against: ErrorNoMoreFiles, whenTrue: complete, whenFalse: failed, ids: ids)
+
+	emitConstReturn(module, block: complete, value: TrustStoreNoContext, ids: ids)
+	emitConstReturn(module, block: failed, value: TrustStoreWalkFailed, ids: ids)
+
+	module.functions.push(func)
+end 'buildWindowsTrustStoreNext'
+
+function buildWindowsTrustStoreCertificate(module StdModule)
+	var func = IrFunction.createFromStd(TrustStoreCertificateName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 2)
+	let cursor = 1
+
+	let encoded = emitLoadField(module, block: entry, record: cursor, offset: CertContextEncodedOffset, ids: ids)
+
+	// `cbCertEncoded` is a DWORD; the other half of the word read here is struct padding.
+	let encodedWord = emitLoadField(module, block: entry, record: cursor, offset: CertContextEncodedLengthOffset, ids: ids)
+	let lowDwordMask = emitConst(module, block: entry, value: TrustStoreLowDwordMask, ids: ids)
+	let encodedBytes = emitBin(module, block: entry, a: encodedWord, b: lowDwordMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+
+	let record = ids.mint()
+	var copied = emitFreshBytesRecord(module, func: func, cur: entry, record: record, src: encoded, byteCount: encodedBytes, ids: ids)
+	module.setTerminator(copied, op: StdOp.ret(record))
+
+	module.functions.push(func)
+end 'buildWindowsTrustStoreCertificate'
+
+function installWindowsTrustStore(module StdModule)
+	buildWindowsTrustStoreOpen(module)
+	buildWindowsTrustStoreNext(module)
+	buildWindowsTrustStoreCertificate(module)
+	buildTrustStoreClose(module, service: HostProcessCall.certCloseStore, flags: TrustStoreForceClose)
+end 'installWindowsTrustStore'
+
+function buildMacosTrustStoreOpen(module StdModule)
+	var func = IrFunction.createFromStd(TrustStoreOpenName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var copied = module.addBlock(func, label: b"tsanchors", heat: BlockHeat.normal)
+	var refused = module.addBlock(func, label: b"tsrefused", heat: BlockHeat.cold)
+
+	func.stackSize = TrustStoreAnchorsFrameBytes
+	let outPtr = ids.mint()
+	module.appendOp(entry, op: StdOp.stackRecordAddr(outPtr, slot: TrustStoreAnchorsOutSlot))
+
+	let empty = emitConst(module, block: entry, value: TrustStoreNoContext, ids: ids)
+	emitStoreField(module, block: entry, record: outPtr, offset: 0, value: empty)
+
+	let status = emitTrustStoreCall(module, block: entry, service: HostProcessCall.secCopyAnchorCertificates, a0: outPtr, a1: empty, ids: ids)
+	emitBranchOnCompare(module, block: entry, value: status, pred: StdCmpPred.eq, against: TrustStoreSuccessStatus, whenTrue: copied, whenFalse: refused, ids: ids)
+
+	let anchors = emitLoadField(module, block: copied, record: outPtr, offset: 0, ids: ids)
+	module.setTerminator(copied, op: StdOp.ret(anchors))
+
+	emitConstReturn(module, block: refused, value: TrustStoreNoContext, ids: ids)
+
+	module.functions.push(func)
+end 'buildMacosTrustStoreOpen'
+
+function buildMacosTrustStoreNext(module StdModule)
+	var func = IrFunction.createFromStd(TrustStoreNextName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var advance = module.addBlock(func, label: b"tsadvance", heat: BlockHeat.normal)
+	var finished = module.addBlock(func, label: b"tsfinished", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 2)
+	let anchors = 0
+	let cursor = 1
+
+	let unused = emitConst(module, block: entry, value: TrustStoreNoArgument, ids: ids)
+	let count = emitTrustStoreCall(module, block: entry, service: HostProcessCall.cfArrayCount, a0: anchors, a1: unused, ids: ids)
+	emitBranchOnCompareValues(module, block: entry, a: cursor, pred: StdCmpPred.lt, b: count, whenTrue: advance, whenFalse: finished, ids: ids)
+
+	let step = emitConst(module, block: advance, value: 1, ids: ids)
+	let next = emitBin(module, block: advance, a: cursor, b: step, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(advance, op: StdOp.ret(next))
+
+	emitConstReturn(module, block: finished, value: TrustStoreNoContext, ids: ids)
+
+	module.functions.push(func)
+end 'buildMacosTrustStoreNext'
+
+function buildMacosTrustStoreCertificate(module StdModule)
+	var func = IrFunction.createFromStd(TrustStoreCertificateName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var present = module.addBlock(func, label: b"tspresent", heat: BlockHeat.normal)
+	var absent = module.addBlock(func, label: b"tsabsent", heat: BlockHeat.cold)
+
+	emitParams(module, block: entry, count: 2)
+	let anchors = 0
+	let cursor = 1
+
+	let unused = emitConst(module, block: entry, value: TrustStoreNoArgument, ids: ids)
+	let firstCursor = emitConst(module, block: entry, value: TrustStoreFirstCursor, ids: ids)
+	let index = emitBin(module, block: entry, a: cursor, b: firstCursor, opcode: StdBinOpcode.sub, ids: ids)
+	let certificate = emitTrustStoreCall(module, block: entry, service: HostProcessCall.cfArrayElement, a0: anchors, a1: index, ids: ids)
+	let data = emitTrustStoreCall(module, block: entry, service: HostProcessCall.secCertificateCopyData, a0: certificate, a1: unused, ids: ids)
+	emitBranchOnCompare(module, block: entry, value: data, pred: StdCmpPred.ne, against: TrustStoreNoContext, whenTrue: present, whenFalse: absent, ids: ids)
+
+	let dataBytes = emitTrustStoreCall(module, block: present, service: HostProcessCall.cfDataLength, a0: data, a1: unused, ids: ids)
+	let dataStart = emitTrustStoreCall(module, block: present, service: HostProcessCall.cfDataBytes, a0: data, a1: unused, ids: ids)
+	let record = ids.mint()
+	var copied = emitFreshBytesRecord(module, func: func, cur: present, record: record, src: dataStart, byteCount: dataBytes, ids: ids)
+	_ = emitTrustStoreCall(module, block: copied, service: HostProcessCall.cfRelease, a0: data, a1: unused, ids: ids)
+	module.setTerminator(copied, op: StdOp.ret(record))
+
+	// `SecCertificateCopyData` answers NULL for an invalid certificate reference; the empty array that
+	// becomes is refused by the stdlib.
+	let nothing = emitConst(module, block: absent, value: 0, ids: ids)
+	let emptyRecord = ids.mint()
+	var emptied = emitFreshBytesRecord(module, func: func, cur: absent, record: emptyRecord, src: nothing, byteCount: nothing, ids: ids)
+	module.setTerminator(emptied, op: StdOp.ret(emptyRecord))
+
+	module.functions.push(func)
+end 'buildMacosTrustStoreCertificate'
+
+function installMacosTrustStore(module StdModule)
+	buildMacosTrustStoreOpen(module)
+	buildMacosTrustStoreNext(module)
+	buildMacosTrustStoreCertificate(module)
+	buildTrustStoreClose(module, service: HostProcessCall.cfRelease, flags: TrustStoreNoArgument)
+end 'installMacosTrustStore'
+
+export function installTrustStoreRuntime(module StdModule, usage RuntimeUsage, target Target)
+	if not usage.usesTrustStore 'noTrustStore'
+		return
+	end 'noTrustStore'
+
+	if not targetProvidesFacility(target, facility: HostFacility.trustStore) 'noSubstrate'
+		return
+	end 'noSubstrate'
+
+	if target.os == Os.windows 'windows'
+		installWindowsTrustStore(module)
+	end 'windows' else if target.os == Os.macos 'macos'
+		installMacosTrustStore(module)
+	end 'macos' else 'noRoute'
+		panic("installTrustStoreRuntime: {targetToString(target)} answers the trustStore facility true, but only Windows and macOS read their store through the runtime")
+	end 'noRoute'
+end 'installTrustStoreRuntime'

@@ -530,6 +530,9 @@ function hostProcessCallSlot(service HostProcessCall) returns IatSlot
 		protectRegion gives IatSlot.VirtualProtectEx
 		flushCode gives IatSlot.FlushInstructionCache
 		closeHandle gives IatSlot.CloseHandle
+		certOpenRootStore gives IatSlot.CertOpenSystemStoreW
+		certEnumCertificate gives IatSlot.CertEnumCertificatesInStore
+		certCloseStore gives IatSlot.CertCloseStore
 		traceRequest or
 		traceeMemoryRead or
 		awaitTracee or
@@ -547,7 +550,14 @@ function hostProcessCallSlot(service HostProcessCall) returns IatSlot
 		machReadMemory or
 		machTaskInfo or
 		machReleasePort or
-		machReleaseMemory panic("hostProcessCallSlot: `{service.name}` is a Mach primitive with no Win32 import — only the arm64-macOS lowering of `osHostProcess` serves it, so reaching this map with one means a body survived a lane that cannot serve it")
+		machReleaseMemory or
+		secCopyAnchorCertificates or
+		secCertificateCopyData or
+		cfArrayCount or
+		cfArrayElement or
+		cfDataLength or
+		cfDataBytes or
+		cfRelease panic("hostProcessCallSlot: `{service.name}` is a Mach or Apple-framework primitive with no Win32 import — only the arm64-macOS lowering of `osHostProcess` serves it, so reaching this map with one means a body survived a lane that cannot serve it")
 	end 'slot'
 end 'hostProcessCallSlot'
 

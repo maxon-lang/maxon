@@ -1,0 +1,115 @@
+/// The root certificates the operating system trusts, as DER bytes, on Windows, macOS and Linux.
+/// @category System
+
+/// Why `TrustStore.systemRoots` could not answer.
+public enum TrustStoreError implements Error
+	/// The machine's certificate store cannot be opened or read to its end.
+	unavailable
+
+	/// A store was found, but it holds no certificates, holds a certificate with no bytes, or is not
+	/// valid PEM.
+	malformed
+end 'TrustStoreError'
+
+/// DER-encoded certificates, one `ByteArray` each.
+public typealias RootCertificates = Array with ByteArray
+
+#if os(Linux)
+	let TrustBundleLocations = ["/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt", "/etc/ssl/ca-bundle.pem", "/etc/pki/tls/cacert.pem", "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", "/etc/ssl/cert.pem"]
+	let TrustBundleCertificateLabel = "CERTIFICATE"
+
+	function bundleRoots() returns RootCertificates throws TrustStoreError
+		for location in TrustBundleLocations 'eachLocation'
+			let path = try FilePath.from(location) otherwise panic("TrustStore: the fixed bundle location '{location}' is not a path")
+
+			if not File.exists(path) 'absent'
+				continue
+			end 'absent'
+
+			let text = try File.readText(path) otherwise continue
+
+			return try certificatesIn(text)
+		end 'eachLocation'
+
+		throw TrustStoreError.unavailable
+	end 'bundleRoots'
+
+	function certificatesIn(text String) returns RootCertificates throws TrustStoreError
+		let blocks = try Pem.decode(text) otherwise throw TrustStoreError.malformed
+		var roots = RootCertificates.create()
+
+		for block in blocks 'eachBlock'
+			if block.label() == TrustBundleCertificateLabel 'isCertificate'
+				roots.push(block.bytes().clone())
+			end 'isCertificate'
+		end 'eachBlock'
+
+		if roots.isEmpty() 'noCertificates'
+			throw TrustStoreError.malformed
+		end 'noCertificates'
+
+		return roots
+	end 'certificatesIn'
+#else
+	typealias TrustStoreWord = int(i64.min to i64.max)
+
+	let TrustStoreNoHandle = 0
+	let TrustStoreNoCursor = 0
+	let TrustStoreWalkFailed = -1
+
+	function hostRoots() returns RootCertificates throws TrustStoreError
+		let store = __Builtins.trustStoreOpen() as TrustStoreWord
+
+		if store == TrustStoreNoHandle 'unavailable'
+			throw TrustStoreError.unavailable
+		end 'unavailable'
+
+		var roots = RootCertificates.create()
+
+		try walkStore(store, roots: roots) otherwise (reason) 'unreadable'
+			__Builtins.trustStoreClose(store)
+
+			throw reason
+		end 'unreadable'
+
+		__Builtins.trustStoreClose(store)
+
+		if roots.isEmpty() 'noCertificates'
+			throw TrustStoreError.malformed
+		end 'noCertificates'
+
+		return roots
+	end 'hostRoots'
+
+	function walkStore(store TrustStoreWord, roots RootCertificates) throws TrustStoreError
+		var cursor = __Builtins.trustStoreNext(store, TrustStoreNoCursor) as TrustStoreWord
+
+		while cursor != TrustStoreNoCursor 'eachCertificate'
+			if cursor == TrustStoreWalkFailed 'walkFailed'
+				throw TrustStoreError.unavailable
+			end 'walkFailed'
+
+			let certificate = ByteArray.init(__Builtins.trustStoreCertificate(store, cursor))
+
+			if certificate.isEmpty() 'emptyCertificate'
+				throw TrustStoreError.malformed
+			end 'emptyCertificate'
+
+			roots.push(certificate)
+			cursor = __Builtins.trustStoreNext(store, cursor) as TrustStoreWord
+		end 'eachCertificate'
+	end 'walkStore'
+#endif
+
+public type TrustStore
+	/// The DER bytes of every root certificate the operating system's store holds, one `ByteArray`
+	/// each. Windows reads the `ROOT` system store, macOS the system anchors, and Linux the first
+	/// existing distribution CA bundle. Refused at compile time (E3104) on wasm32-wasi.
+	public static function systemRoots() returns RootCertificates throws TrustStoreError
+		#if os(Linux)
+			return try bundleRoots()
+		#else
+			return try hostRoots()
+		#endif
+	end 'systemRoots'
+end 'TrustStore'

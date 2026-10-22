@@ -9128,6 +9128,10 @@ let BuiltinsReadStdinName = b"__Builtins.readStdin"
 let BuiltinsExecutablePathName = b"__Builtins.executablePath"
 let BuiltinsProcessNamespaceName = b"__Builtins.processNamespace"
 let BuiltinsFillRandomName = b"__Builtins.fillRandom"
+let BuiltinsTrustStoreOpenName = b"__Builtins.trustStoreOpen"
+let BuiltinsTrustStoreNextName = b"__Builtins.trustStoreNext"
+let BuiltinsTrustStoreCertificateName = b"__Builtins.trustStoreCertificate"
+let BuiltinsTrustStoreCloseName = b"__Builtins.trustStoreClose"
 
 // ⭐ **`__Builtins.currentProcessId()` — THE RUNNING PROCESS'S OWN ID, AND THE ONE `__Builtins`
 // INTRINSIC WITH NO `stdlib/` WRAPPER OVER IT.** `/specs/builtins-type.md:37` declares it (*"Pid of
@@ -9553,6 +9557,9 @@ let ReadStdinArity = 1
 let ExecutablePathArity = 0
 let ProcessNamespaceArity = 0
 let FillRandomArity = 1
+let TrustStoreOpenArity = 0
+let TrustStoreCloseArity = 1
+let TrustStoreCursorArity = 2
 
 // `currentProcessId()` takes nothing. Stated here beside the two above for `CommandLineArgArity`'s reason —
 // an intrinsic has no signature for SemanticCheck's ordinary arity check to read, because no file declares
@@ -94444,6 +94451,22 @@ export type Parser
 				try self.requireRawByteFillFitsItsElement(self.valueInstanceId(buffer), methodTok: anchor)
 				return self.emitLibraryAliasedRuntimeCall(RandomFillName, args: singletonArgs(buffer), alias: FullRangeIntAliasName, range: SourceRange.ofToken(anchor))
 			end 'fillRandom'
+
+			if callee.equals(BuiltinsTrustStoreOpenName) 'trustStoreOpen'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: TrustStoreOpenName, arity: TrustStoreOpenArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultAlias: FullRangeIntAliasName, resultUsed: resultUsed, calleeTok: anchor)
+			end 'trustStoreOpen'
+
+			if callee.equals(BuiltinsTrustStoreNextName) 'trustStoreNext'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: TrustStoreNextName, arity: TrustStoreCursorArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultAlias: FullRangeIntAliasName, resultUsed: resultUsed, calleeTok: anchor)
+			end 'trustStoreNext'
+
+			if callee.equals(BuiltinsTrustStoreCertificateName) 'trustStoreCertificate'
+				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: TrustStoreCertificateName, arity: TrustStoreCursorArity, shape: IntrinsicArgShape.allMachineWords, calleeTok: anchor)
+			end 'trustStoreCertificate'
+
+			if callee.equals(BuiltinsTrustStoreCloseName) 'trustStoreClose'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: TrustStoreCloseName, arity: TrustStoreCloseArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.void, resultAlias: NoAnswerAlias, resultUsed: resultUsed, calleeTok: anchor)
+			end 'trustStoreClose'
 
 			// ⭐ **THE SECOND PROCESS-INTROSPECTION INTRINSIC, AND IT ANSWERS AN `int` RATHER THAN A BUFFER** —
 			// so it takes `commandLineCount`'s emit and not `executablePath`'s, one arm up. There is nothing to

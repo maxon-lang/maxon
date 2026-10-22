@@ -161,10 +161,13 @@ let DyldChainedRebaseTargetMask = (1 shl DyldChainedRebaseTargetBits) - 1
 // scales by and the `next` stride the got's own bind chain steps (8 / 4 = 2 words).
 let MachoGotEntryBytes = 8
 
-// The dyld path and the one dylib every OS call resolves through. macOS forbids raw
-// syscalls, so `_exit`/`_write`/... are GOT-indirect calls into libSystem.
+// The dyld path and the dylib every OS call resolves through. macOS forbids raw
+// syscalls, so `_exit`/`_write`/... are GOT-indirect calls into libSystem. The two frameworks
+// below join it only in an image that reads the trust store.
 let DyldPath = "/usr/lib/dyld"
 let LibSystemPath = "/usr/lib/libSystem.B.dylib"
+let SecurityFrameworkPath = "/System/Library/Frameworks/Security.framework/Versions/A/Security"
+let CoreFoundationFrameworkPath = "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation"
 
 // nlist_64 bits for the (debugger-only) symbol table.
 let NExt = 0x01
@@ -190,14 +193,16 @@ let ExportsTrieCommandSize = 16
 // LC_LOAD_DYLINKER: 12-byte header + "/usr/lib/dyld\0" (14), aligned up to 8 → 32.
 let DylinkerCommandSize = 32
 
-// LC_LOAD_DYLIB: 24-byte header + "/usr/lib/libSystem.B.dylib\0" (27), up to 8 → 56.
-let DylibCommandSize = 56
+// LC_LOAD_DYLIB: a 24-byte header, then the path and its NUL, padded up to a multiple of 8.
+let DylibCommandHeaderSize = 24
+let DylibCommandAlignment = 8
 let MachHeaderSize = 32
 
 // Always emitted: __PAGEZERO, __TEXT, __DATA, __LINKEDIT, LC_SYMTAB, LC_DYSYMTAB,
-// LC_LOAD_DYLINKER, LC_MAIN, LC_UUID, LC_LOAD_DYLIB, LC_BUILD_VERSION,
-// LC_DYLD_CHAINED_FIXUPS, LC_DYLD_EXPORTS_TRIE, LC_CODE_SIGNATURE.
-let MachoNumCommands = 15
+// LC_LOAD_DYLINKER, LC_MAIN, LC_UUID, LC_BUILD_VERSION, LC_SOURCE_VERSION, LC_DYLD_CHAINED_FIXUPS,
+// LC_DYLD_EXPORTS_TRIE, LC_CODE_SIGNATURE. The LC_LOAD_DYLIB commands come on top of these, one per
+// dylib the image links.
+let MachoFixedCommands = 14
 
 // LC_BUILD_VERSION platform = PLATFORM_MACOS, minos = 13.0.0 (encoded X<<16 | Y<<8).
 let PlatformMacos = 1
@@ -209,8 +214,8 @@ let MinOsMacos13 = 0x000D0000
 // lives in `Targets/Shared/OsImportSlot.maxon` (it is PE's `IatSlot` shape, and arm64-linux
 // needs the same three primitives with no import table at all); what stays here is the one
 // genuinely Mach-O fact — how a slot's symbol is SPELLED. The GOT + the chained-fixup import
-// table + the symbol pool all size themselves off `allCases`, so adding an import is: append
-// a case there and its symbol in `machoImportSymbol` here.
+// table + the symbol pool all size themselves off `machoLinkedImportSlots`, so adding an import is:
+// append a case there, its dylib in `osImportDylibOf` and its symbol in `machoImportSymbol` here.
 //
 // The Mach-O symbol name for a slot, INCLUDING the platform ABI's leading underscore (a C
 // `exit` is the Mach-O symbol `_exit`). Kept as an explicit map, not the enum case name,
@@ -355,23 +360,84 @@ function machoImportSymbol(slot OsImportSlot) returns String
 		taskInfo gives "_task_info"
 		machPortDeallocate gives "_mach_port_deallocate"
 		machVmDeallocate gives "_mach_vm_deallocate"
+		secTrustCopyAnchorCertificates gives "_SecTrustCopyAnchorCertificates"
+		secCertificateCopyData gives "_SecCertificateCopyData"
+		cfArrayGetCount gives "_CFArrayGetCount"
+		cfArrayGetValueAtIndex gives "_CFArrayGetValueAtIndex"
+		cfDataGetLength gives "_CFDataGetLength"
+		cfDataGetBytePtr gives "_CFDataGetBytePtr"
+		cfRelease gives "_CFRelease"
 	end 'sym'
 end 'machoImportSymbol'
 
-// libSystem import symbols in slot order — the sequence the GOT, the import table
-// and the symbol pool all iterate.
-function machoImportSymbols() returns StringArray
-	var names = StringArray.create()
+typealias OsImportDylibArray = Array with OsImportDylib
+typealias OsImportSlotArray = Array with OsImportSlot
 
-	for slot in OsImportSlot.allCases 'each'
-		names.push(machoImportSymbol(slot))
+function machoDylibPath(dylib OsImportDylib) returns String
+	return match dylib 'path'
+		libSystem gives LibSystemPath
+		security gives SecurityFrameworkPath
+		coreFoundation gives CoreFoundationFrameworkPath
+	end 'path'
+end 'machoDylibPath'
+
+function machoDylibCommandSize(dylib OsImportDylib) returns BytePos
+	return alignUp(DylibCommandHeaderSize + machoDylibPath(dylib).toByteArray().count() + 1 as BytePos, alignment: DylibCommandAlignment)
+end 'machoDylibCommandSize'
+
+// dyld loads every LC_LOAD_DYLIB at launch, so the frameworks are linked only into an image that reads
+// the trust store.
+function machoDylibIsLinked(dylib OsImportDylib, usesTrustStore bool) returns bool
+	return match dylib 'linked'
+		libSystem gives true
+		security or
+		coreFoundation gives usesTrustStore
+	end 'linked'
+end 'machoDylibIsLinked'
+
+function machoLinkedDylibs(usesTrustStore bool) returns OsImportDylibArray
+	var linked = OsImportDylibArray.create()
+
+	for dylib in OsImportDylib.allCases 'each'
+		if machoDylibIsLinked(dylib, usesTrustStore: usesTrustStore) 'isLinked'
+			linked.push(dylib)
+		end 'isLinked'
 	end 'each'
 
-	return names
-end 'machoImportSymbols'
+	return linked
+end 'machoLinkedDylibs'
 
-function machoImportCount() returns BytePos
-	return OsImportSlot.allCases.count()
+function machoDylibOrdinal(dylib OsImportDylib, usesTrustStore bool) returns BytePos
+	for (iter, linked) in machoLinkedDylibs(usesTrustStore).withIterator() 'eachLinked'
+		if linked == dylib 'found'
+			return iter.index() + 1
+		end 'found'
+	end 'eachLinked'
+
+	panic("machoDylibOrdinal: '{machoDylibPath(dylib)}' is not linked into this image, so no import of it can be bound")
+end 'machoDylibOrdinal'
+
+function machoLinkedImportSlots(usesTrustStore bool) returns OsImportSlotArray
+	var slots = OsImportSlotArray.create()
+	var dropped = false
+
+	for slot in OsImportSlot.allCases 'each'
+		if machoDylibIsLinked(osImportDylibOf(slot), usesTrustStore: usesTrustStore) 'isLinked'
+			if dropped 'followsADroppedSlot'
+				panic("machoLinkedImportSlots: '{slot.name}' follows a slot of a dylib this image does not link — the slots of an optional dylib must trail every slot that is always linked")
+			end 'followsADroppedSlot'
+
+			slots.push(slot)
+		end 'isLinked' else 'notLinked'
+			dropped = true
+		end 'notLinked'
+	end 'each'
+
+	return slots
+end 'machoLinkedImportSlots'
+
+function machoImportCount(usesTrustStore bool) returns BytePos
+	return machoLinkedImportSlots(usesTrustStore).count()
 end 'machoImportCount'
 
 // --- Segment / section header helpers ---
@@ -433,16 +499,16 @@ end 'writeMachoSectionHeader'
 // NOTHING ELSE MAKES THAT TRUE.** dyld walks each page independently from that page's own
 // `page_start[]` entry, so a chain that runs off the end of its page is unwalkable — every slot
 // past the boundary keeps its raw BIND word (bit 63 set) and calling one jumps to
-// `0x8000000000000000 | ordinal`. Here the GOT is page-ALIGNED and holds one slot per `OsImportSlot`
+// `0x8000000000000000 | ordinal`. Here the GOT is page-ALIGNED and holds one slot per linked `OsImportSlot`
 // (well under the 512 a 4 KiB page fits), which is why `buildMachoDataPageStarts` can push a single
 // `0` for it, and why the cross-page cut that `writeMachoRdataRebases` carries is not needed.
 // A GOT packed at an unaligned offset straddles a page as soon as the image grows past a few tens of
 // KB, and then needs that cut. The invariant is silent and load-bearing, so it is checked
 // rather than trusted: the day a change adds enough imports (or moves the GOT off a page
 // boundary) this fails the build instead of shipping a binary that jumps into the bind words.
-function buildGot() returns ByteArray
+function buildGot(usesTrustStore bool) returns ByteArray
 	var got = ByteArray.create()
-	let count = machoImportCount()
+	let count = machoImportCount(usesTrustStore)
 	got.reserve(((count * MachoGotEntryBytes) as ElementIndex))
 
 	if count * MachoGotEntryBytes > MachoPageSize 'gotCrossesPage'
@@ -650,11 +716,11 @@ end 'buildMachoDataPageStarts'
 // of that page's first fixup, or START_NONE. A __DATA that outgrows one page therefore
 // still points dyld at the right page; a page that is not indexed reports
 // "chain overflow … max=1" at launch.
-function buildChainedFixups(dataSegmentFileOff MachineWord, pageStarts ByteOffsetArray) returns ByteArray
+function buildChainedFixups(dataSegmentFileOff MachineWord, pageStarts ByteOffsetArray, usesTrustStore bool) returns ByteArray
 	var cf = ByteArray.create()
 	cf.reserve(256)
 
-	let importCount = machoImportCount()
+	let importCount = machoImportCount(usesTrustStore)
 	let startsOffset = 0x20
 	let segCount = 4
 	let startsSize = 4 + segCount * 4
@@ -700,23 +766,25 @@ function buildChainedFixups(dataSegmentFileOff MachineWord, pageStarts ByteOffse
 
 	padTo(cf, size: importsOffset)
 
-	// dyld_chained_import entries (4 bytes each): lib_ordinal=1 (libSystem), weak=0,
-	// name_offset into the symbol pool. The pool opens with a NUL, so the first name
-	// sits at offset 1 and each following name trails the previous `_name\0`.
-	let importNames = machoImportSymbols()
+	// dyld_chained_import entries (4 bytes each): lib_ordinal = the 1-based position of the symbol's
+	// dylib among the image's LC_LOAD_DYLIB commands, weak=0, name_offset into the symbol pool. The pool
+	// opens with a NUL, so the first name sits at offset 1 and each following name trails the previous
+	// `_name\0`.
+	let importSlots = machoLinkedImportSlots(usesTrustStore)
 	var nameOff = 1 as MachineWord
 
-	for name in importNames 'eachImport'
-		let importEntry = 1 or (0 shl 8) or (nameOff shl 9)
+	for slot in importSlots 'eachImport'
+		let ordinal = machoDylibOrdinal(osImportDylibOf(slot), usesTrustStore: usesTrustStore) as MachineWord
+		let importEntry = ordinal or (0 shl 8) or (nameOff shl 9)
 		writeDword(cf, value: importEntry)
-		nameOff = nameOff + (name.toByteArray().count() as MachineWord) + 1
+		nameOff = nameOff + (machoImportSymbol(slot).toByteArray().count() as MachineWord) + 1
 	end 'eachImport'
 
 	// Symbol pool: leading NUL, then each `_name\0`.
 	cf.push(0)
 
-	for name in importNames 'eachSymbol'
-		cf.append(name.toByteArray())
+	for slot in importSlots 'eachSymbol'
+		cf.append(machoImportSymbol(slot).toByteArray())
 		cf.push(0)
 	end 'eachSymbol'
 
@@ -1126,9 +1194,17 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	end 'countSymtab'
 
 	// --- Load-command sizes ---
+	let usesTrustStore = codeResult.stdModule.usesTrustStore
+	let linkedDylibs = machoLinkedDylibs(usesTrustStore)
+	var dylibCommandsSize = 0 as BytePos
+
+	for dylib in linkedDylibs 'eachDylib'
+		dylibCommandsSize = dylibCommandsSize + machoDylibCommandSize(dylib)
+	end 'eachDylib'
+
 	let textCmdSize = SegmentCommandBaseSize + SectionHeaderSize * textSectionCount
 	let dataCmdSize = SegmentCommandBaseSize + SectionHeaderSize * dataSectionCount
-	let loadCommandsSize = SegmentCommandBaseSize + textCmdSize + dataCmdSize + SegmentCommandBaseSize + SymtabCommandSize + DysymtabCommandSize + DylinkerCommandSize + MainCommandSize + UuidCommandSize + DylibCommandSize + BuildVersionCommandSize + SourceVersionCommandSize + ChainedFixupsCommandSize + ExportsTrieCommandSize + CodeSignatureCommandSize
+	let loadCommandsSize = SegmentCommandBaseSize + textCmdSize + dataCmdSize + SegmentCommandBaseSize + SymtabCommandSize + DysymtabCommandSize + DylinkerCommandSize + MainCommandSize + UuidCommandSize + dylibCommandsSize + BuildVersionCommandSize + SourceVersionCommandSize + ChainedFixupsCommandSize + ExportsTrieCommandSize + CodeSignatureCommandSize
 
 	// --- __TEXT layout: __text only ---
 	let textSectionOffset = alignUp(MachHeaderSize + loadCommandsSize, alignment: 4)
@@ -1151,7 +1227,7 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	let rdataPages = rdataAreaSize / MachoPageSize
 	let gotOffsetInData = rdataAreaSize
 	let gotSectionVmAddr = dataSegmentVmAddr + (gotOffsetInData as MachineWord)
-	let got = buildGot()
+	let got = buildGot(usesTrustStore)
 	let gotSize = got.count()
 	let constGotFileSize = alignUp(gotOffsetInData + gotSize as BytePos, alignment: MachoPageSize)
 	let dataSectionFileOff = dataSegmentFileOff + constGotFileSize
@@ -1177,7 +1253,7 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	// import binds. `textSectionOffset` is __text's offset from the image base, since __TEXT is at file 0.
 	let rebaseSlots = writeMachoRdataRebases(codeResult.rdata, globalData: codeResult.globalData, debugSymbols: codeResult.debugSymbols, constImageOffset: dataSegmentFileOff as MachineWord, textImageOffset: textSectionOffset as MachineWord)
 	let dataPageStarts = buildMachoDataPageStarts(rebaseSlots, rdataPages: rdataPages)
-	let chainedFixupsData = buildChainedFixups(dataSegmentFileOff as MachineWord, pageStarts: dataPageStarts)
+	let chainedFixupsData = buildChainedFixups(dataSegmentFileOff as MachineWord, pageStarts: dataPageStarts, usesTrustStore: usesTrustStore)
 	let chainedFixupsOff = linkeditFileOff
 	let chainedFixupsSize = chainedFixupsData.count()
 
@@ -1229,7 +1305,7 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	writeDword(macho, value: CpuTypeArm64)
 	writeDword(macho, value: CpuSubtypeArm64All)
 	writeDword(macho, value: MhExecute)
-	writeDword(macho, value: MachoNumCommands)
+	writeDword(macho, value: (MachoFixedCommands + linkedDylibs.count()) as MachineWord)
 	writeDword(macho, value: loadCommandsSize as MachineWord)
 	writeDword(macho, value: flags)
 	writeDword(macho, value: 0)  // reserved
@@ -1297,14 +1373,17 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	writeDword(macho, value: UuidCommandSize)
 	macho.append(machoUuid(code))
 
-	// LC_LOAD_DYLIB (libSystem).
-	writeDword(macho, value: LcLoadDylib)
-	writeDword(macho, value: DylibCommandSize)
-	writeDword(macho, value: 24)  // name offset within the command
-	writeDword(macho, value: 0)  // timestamp
-	writeDword(macho, value: 0)  // current_version
-	writeDword(macho, value: 0)  // compat_version
-	writeMachoLcString(macho, text: LibSystemPath, commandSize: DylibCommandSize, nameOffset: 24)
+	// LC_LOAD_DYLIB: libSystem, then the frameworks a program that uses the trust store links.
+	for dylib in linkedDylibs 'writeDylibs'
+		let commandSize = machoDylibCommandSize(dylib)
+		writeDword(macho, value: LcLoadDylib)
+		writeDword(macho, value: commandSize as MachineWord)
+		writeDword(macho, value: DylibCommandHeaderSize)  // name offset within the command
+		writeDword(macho, value: 0)  // timestamp
+		writeDword(macho, value: 0)  // current_version
+		writeDword(macho, value: 0)  // compat_version
+		writeMachoLcString(macho, text: machoDylibPath(dylib), commandSize: commandSize, nameOffset: DylibCommandHeaderSize)
+	end 'writeDylibs'
 
 	// LC_BUILD_VERSION.
 	writeDword(macho, value: LcBuildVersion)

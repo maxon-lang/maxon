@@ -35,7 +35,7 @@ end 'main'
 | [I/O and processes](#file) | File, FilePath, Directory, Console, CommandLine, Log, TraceCapture, Process, Subprocess, SharedMemory, Debuggee, Sampler |
 | [Network](#tcpclient) | TcpClient, TcpListener, HttpClient, HttpServer, URL |
 | [Data](#json) | Json, Base64, Pem, Der, Sha2, Hmac, Hkdf, Rsa, Aead, AesGcm, ChaCha20Poly1305, Aes, ChaCha20, Poly1305, X25519, Ed25519, EcdhP256, Ecdsa, EcdsaP256, Hasher |
-| [System](#clock) | Clock, Scheduler, HeapStats, SharedValue, Random, Math, Primitive Extensions |
+| [System](#clock) | Clock, Scheduler, HeapStats, SharedValue, Random, TrustStore, Math, Primitive Extensions |
 | [Testing](#testing) | Testing |
 | [Build](#build) | Build |
 
@@ -54,6 +54,7 @@ end 'main'
 | `FullRangeFloat` | `float(f64.min to f64.max)` | Builtins |
 | `IndentDepth` | `int(0 to u64.max)` — a nesting depth while `Json` renders | Json |
 | `RandomDraw` / `RandomBound` / `RandomByteCount` | `int(0 to u64.max)` / `int(1 to u64.max)` / `int(0 to u64.max)` | Random |
+| `RootCertificates` | `Array with ByteArray` | TrustStore |
 | `BytePos`, `GraphemeIndex` | `int(0 to u64.max)` | String |
 | `Codepoint` | `int(0 to 1114111)` | Character |
 | `CodepointDelta` | `int(-1114111 to 1114111)` | Character |
@@ -154,7 +155,7 @@ at the call site, rather than failing at run time:
 | `Clock`, `WallClock`, `sleep`, `MachinePin`, every `Scheduler` member but `parallelBoundary` | E3104 |
 | `Log`, `Logger`, `LogSink` and the log handlers: logging runs on services, which need green threads | E3104 |
 | `TcpClient`, `TcpListener`, `HttpClient`, `HttpServer` | E3104 |
-| `Process.executablePath`, `FilePath.resolvedPhysically`, `SharedSegment` | E3104 |
+| `Process.executablePath`, `FilePath.resolvedPhysically`, `SharedSegment`, `TrustStore` | E3104 |
 | `Subprocess`, `StreamingSubprocess`, `Configuration`, `Process.environmentVariable` | E3074 |
 
 E3104 means this compiler has not implemented the facility for the target; E3074 means the platform has
@@ -3815,6 +3816,45 @@ end 'main'
 ```
 
 It prints a number from 1 to 6.
+
+## TrustStore
+
+`TrustStore` reads the root certificates the operating system trusts, as DER bytes ready for
+[`DerReader`](#der). Parsing them is X.509's job.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `TrustStore.systemRoots()` | `RootCertificates` | `TrustStoreError` | The DER bytes of every root certificate in the operating system's store, one `ByteArray` each. |
+
+| Name | Definition |
+|------|------------|
+| `RootCertificates` | `Array with ByteArray` |
+
+Each target reads its own store:
+
+| Target | Source |
+|--------|--------|
+| `x64-windows` | The `ROOT` system store, through `crypt32.dll`. Only a program that uses `TrustStore` imports it. |
+| `arm64-macos` | The system anchor certificates (`SecTrustCopyAnchorCertificates`), through the Security and CoreFoundation frameworks. Only a program that uses `TrustStore` links them. |
+| `x64-linux`, `arm64-linux` | The first existing file of `/etc/ssl/certs/ca-certificates.crt`, `/etc/pki/tls/certs/ca-bundle.crt`, `/etc/ssl/ca-bundle.pem`, `/etc/pki/tls/cacert.pem`, `/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem` and `/etc/ssl/cert.pem`, read as the `CERTIFICATE` blocks of a PEM file. |
+| `wasm32-wasi` | A call is refused at compile time (E3104). |
+
+The macOS answer is the system anchor set that ships with the operating system.
+
+| `TrustStoreError` case | When |
+|------------------------|------|
+| `unavailable` | The store cannot be opened or enumerated to its end (Windows, macOS), or none of the bundle files exists (Linux). |
+| `malformed` | The store holds no certificates or a certificate with no bytes (Windows, macOS), or a Linux bundle is invalid PEM or holds zero `CERTIFICATE` blocks. |
+
+```maxon
+function main() returns ExitCode
+	let roots = try TrustStore.systemRoots() otherwise return 1
+	print("{roots.count()} roots\n")
+	return 0
+end 'main'
+```
+
+It prints the number of roots the store holds.
 
 ## Math
 

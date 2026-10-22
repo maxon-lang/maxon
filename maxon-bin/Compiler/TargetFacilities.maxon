@@ -125,6 +125,11 @@ export enum HostFacility
 
 	entropy
 
+	// The operating system's certificate store (`__trust_*`): Windows' crypt32 and macOS' Security
+	// framework. Linux answers false because `stdlib/TrustStore.maxon` reads a CA bundle file there and
+	// reaches no `__trust_` entry; wasm32-wasi has no store.
+	trustStore
+
 	// How many processors the machine has (`__cpu_count`).
 	cpuCount
 
@@ -562,6 +567,10 @@ function calleeHostFacility(callee ByteArray) returns CalleeFacility
 		return CalleeFacility.needs(HostFacility.entropy)
 	end 'entropy'
 
+	if isTrustStoreRuntimeCallee(callee) 'trustStore'
+		return CalleeFacility.needs(HostFacility.trustStore)
+	end 'trustStore'
+
 	if isProcessRuntimeCallee(callee) 'processBand'
 		return CalleeFacility.needs(HostFacility.processInfo)
 	end 'processBand'
@@ -644,6 +653,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			processLiveness or
 			processNamespace or
 			entropy or
+			trustStore or
 			cpuCount or
 			pageMemory or
 			hostMutex or
@@ -698,6 +708,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			processLiveness or
 			processNamespace or
 			entropy or
+			trustStore or
 			cpuCount or
 			pageMemory or
 			hostMutex or
@@ -786,7 +797,8 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 
 			processDebug gives true
 
-			machTaskPorts gives false
+			machTaskPorts or
+			trustStore gives false
 		end 'f'
 	end 'linuxArm64'
 
@@ -847,7 +859,8 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 
 			processDebug gives true
 
-			machTaskPorts gives false
+			machTaskPorts or
+			trustStore gives false
 		end 'f'
 	end 'linuxX64'
 
@@ -895,6 +908,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			machTaskPorts or
 			microsecondSleep or
 			processDebug or
+			trustStore or
 			faultHandler gives false
 		end 'f'
 	end 'wasmWasi'
