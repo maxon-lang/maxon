@@ -127,6 +127,7 @@ let DebugThreadIsRunningReason = "thread-is-running"
 let DebugNotPausableReason = "not-pausable"
 let DebugNoSchedulerReason = "no-scheduler"
 let DebugUnwritableReason = "unwritable"
+export let DebugDetachRefusedReason = "detach-refused"
 
 let PollIntervalMs = 1
 let WaitSliceMs = 5
@@ -404,16 +405,28 @@ export type DebugEngine implements DebugMemory
 			return self.closedWith(TargetSettling.killed if self.backend.killTheProgram() else TargetSettling.reaped)
 		end 'theBackendEndsTheProgramItself'
 
-		_ = self.detach()
+		self.clearWhatCanBeClearedAndLetGo()
 
 		return self.closedWith(TargetSettling.reaped)
 	end 'close'
 
 	export function closeLeavingItRunning() returns TargetOutcome
-		_ = self.detach()
+		self.clearWhatCanBeClearedAndLetGo()
 
 		return self.closedWith(TargetSettling.letGo)
 	end 'closeLeavingItRunning'
+
+	// Lets go even when a trap stays, unlike `detach`: a stray byte is the one thing a close cannot fix,
+	// while skipping the let-go leaves every lane's holds and asynchronous preemption withdrawn and a
+	// Windows debuggee unreapable (see `close`).
+	function clearWhatCanBeClearedAndLetGo()
+		if self.detached 'alreadyLetGo'
+			return
+		end 'alreadyLetGo'
+
+		_ = self.clearEveryBreakpoint()
+		_ = self.letGo()
+	end 'clearWhatCanBeClearedAndLetGo'
 
 	function closedWith(how TargetSettling) returns TargetOutcome
 		if self.closed 'alreadyClosed'
@@ -436,18 +449,34 @@ export type DebugEngine implements DebugMemory
 
 	// ⭐ A detach restores every byte the debugger wrote, lifts every hold, puts asynchronous preemption
 	// back and then lets the kernel go: the program runs on and reports its OWN ending, which the
-	// kill-on-debugger-exit default could never do.
+	// kill-on-debugger-exit default could never do. It refuses while a trap byte cannot be written back,
+	// so the reader can still kill the program.
 	export function detach() returns CommandOutcome
 		if self.detached 'alreadyLetGo'
 			return CommandOutcome.done
 		end 'alreadyLetGo'
 
-		self.clearEveryBreakpoint()
-		self.liftEveryHold()
+		let cleared = self.clearEveryBreakpoint()
+
+		if not cleared.accepted() 'aTrapStays'
+			return cleared
+		end 'aTrapStays'
+
+		return self.letGo()
+	end 'detach'
+
+	// The holds and the preemption word are debuggee writes that work only while attached, and the
+	// kernel's detach cannot be undone, so they are lifted first; a refused detach puts both back and
+	// leaves the session as it was.
+	function letGo() returns CommandOutcome
+		let heldThreads = self.liftEveryHold()
 		self.restoreAsyncPreemption()
 
 		if not self.backend.detach() 'theKernelRefused'
-			return CommandOutcome.refused(DebugUnwritableReason)
+			self.withdrawAsyncPreemption()
+			self.holdAgain(heldThreads)
+
+			return CommandOutcome.refused(DebugDetachRefusedReason)
 		end 'theKernelRefused'
 
 		self.detached = true
@@ -456,7 +485,7 @@ export type DebugEngine implements DebugMemory
 		self.readerStep = EngineReaderStep.none
 
 		return CommandOutcome.done
-	end 'detach'
+	end 'letGo'
 
 	export function hasDetached() returns bool
 		return self.detached
@@ -648,10 +677,17 @@ export type DebugEngine implements DebugMemory
 		end 'theWalkHoldsTheAddress'
 
 		let restored = self.restoreBytesAt(offset)
-		self.forgetBreakpoint(offset)
 		self.cacheFilled = false
 
-		return CommandOutcome.done if restored else CommandOutcome.refused(DebugUnwritableReason)
+		// The record outlives a refused restore: forgetting it would leave a trap in the program that
+		// nothing owns.
+		if not restored 'theTrapStays'
+			return CommandOutcome.refused(DebugUnwritableReason)
+		end 'theTrapStays'
+
+		self.forgetBreakpoint(offset)
+
+		return CommandOutcome.done
 	end 'clearBreakpoint'
 
 	function restoreBytesAt(offset DebugAddress) returns bool
@@ -661,7 +697,7 @@ export type DebugEngine implements DebugMemory
 		end 'known'
 	end 'restoreBytesAt'
 
-	export function clearEveryBreakpoint()
+	export function clearEveryBreakpoint() returns CommandOutcome
 		_ = self.liftReturnPoint()
 		var armed = DebugAddressArray.create()
 
@@ -672,6 +708,8 @@ export type DebugEngine implements DebugMemory
 		for offset in armed 'eachArmed'
 			_ = self.clearBreakpoint(offset)
 		end 'eachArmed'
+
+		return CommandOutcome.done if self.breakpoints.isEmpty() else CommandOutcome.refused(DebugUnwritableReason)
 	end 'clearEveryBreakpoint'
 
 	// ⚠ Two questions that must not be confused: this one is PHYSICAL — a trap byte stands here, whoever
@@ -1207,9 +1245,12 @@ export type DebugEngine implements DebugMemory
 			at then break
 		end 'known'
 
-		let holds = self.conditionHoldsAt(address)
+		// A walk point whose lift was refused: no one asked to stop here, so it is not a hit.
+		if not self.userBreakpointAt(address) and not self.returnPointAt(address) 'noOneWantsIt'
+			return self.hiddenStopResumed(DbgStopReasonBreakpoint, pc: address, conditionMissed: false)
+		end 'noOneWantsIt'
 
-		if holds 'theConditionIsMet'
+		if self.conditionHoldsAt(address) 'theConditionIsMet'
 			return self.stoodAt(DbgStopReasonBreakpoint, fault: 0, pc: address, conditionMissed: false)
 		end 'theConditionIsMet'
 
@@ -1683,9 +1724,17 @@ export type DebugEngine implements DebugMemory
 		return CommandOutcome.done
 	end 'releaseGreenThread'
 
-	function liftEveryHold()
+	function holdAgain(heldThreads DebugAddressArray)
+		for gt in heldThreads 'eachHeld'
+			_ = self.holdGreenThread(gt)
+		end 'eachHeld'
+	end 'holdAgain'
+
+	function liftEveryHold() returns DebugAddressArray
+		var heldThreads = DebugAddressArray.create()
+
 		if not self.holdArmed 'nothingWasHeld'
-			return
+			return heldThreads
 		end 'nothingWasHeld'
 
 		let roster = self.contractWord(String.from(GtAllGLabel))
@@ -1696,12 +1745,18 @@ export type DebugEngine implements DebugMemory
 			let gt = debugAddressOrZero(self.wordAt((roster as DebugAddress) + (index as DebugAddress) * (DebuggeeWordBytes as DebugAddress)))
 
 			if gt != 0 'aRecord'
+				if self.fieldHoldsFigure(gt, offset: GtOffHoldFigureName, figure: GtHoldRequestedFigureName) 'itWasHeld'
+					heldThreads.push(gt)
+				end 'itWasHeld'
+
 				_ = self.holdFieldSetTo(gt, hold: released)
 			end 'aRecord'
 		end 'eachSlot'
 
 		self.stepHoldEpoch(HoldEpochLiftStep)
 		self.holdArmed = false
+
+		return heldThreads
 	end 'liftEveryHold'
 end 'DebugEngine'
 

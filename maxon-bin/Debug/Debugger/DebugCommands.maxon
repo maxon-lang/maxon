@@ -63,6 +63,7 @@ let NotStartedMessage = "the program is parked before its first line: `continue`
 let ContinueVerb = "continue"
 let PauseVerb = "pause"
 let DetachVerb = "detach"
+let DetachClearedWhatItCould = "; every breakpoint the debugger could write back is cleared"
 let WalkVerb = "move for the walk"
 let ReturnPointLiftVerb = "lift the walk's return point"
 let StillWalkingMessage = "a step is still walking: pause it before moving the program again"
@@ -1199,11 +1200,9 @@ export type DebugConversation
 			return PurposeDrop.notArmed
 		end 'notThisPurpose'
 
+		// Left in the map: a refused clear leaves the trap standing, so the purpose goes only once the
+		// engine confirms the clear (`forgetClearedByte`).
 		if kept.isEmpty() 'theLastPurpose'
-			if not self.armPurposes.remove(offset) 'alreadyGone'
-				panic("DebugConversation.dropPurpose: offset 0x{offset:x} was read out of the purpose map a moment ago")
-			end 'alreadyGone'
-
 			return PurposeDrop.lastOne
 		end 'theLastPurpose'
 
@@ -1271,12 +1270,20 @@ export type DebugConversation
 
 	function clearArmedByte(offset DebugAddress, cleared DebugAddressArray, refusals DebugRefusals)
 		match self.engine.clearBreakpoint(offset) 'answered'
-			done then cleared.push(offset)
+			done then self.forgetClearedByte(offset, cleared: cleared)
 			nothingParked then refusals.push(DebugRefusal.create(DebugNotRunningReason, offset: offset))
 			refused(reason) then refusals.push(DebugRefusal.create(reason, offset: offset))
 			gone(ending) then self.settle(ending)
 		end 'answered'
 	end 'clearArmedByte'
+
+	function forgetClearedByte(offset DebugAddress, cleared DebugAddressArray)
+		if not self.armPurposes.remove(offset) 'alreadyGone'
+			panic("DebugConversation.forgetClearedByte: offset 0x{offset:x} was read out of the purpose map a moment ago")
+		end 'alreadyGone'
+
+		cleared.push(offset)
+	end 'forgetClearedByte'
 
 	function resumeAndReport(replies DebugReplyArray)
 		// Nothing is held, so no resume is posted: a thread parked at a stop this session has not yet
@@ -2123,8 +2130,8 @@ export type DebugConversation
 		end 'itIsAlreadyOver'
 
 		self.endWalk(replies)
-		self.engine.clearEveryBreakpoint()
-		self.armPurposes = DebugArmPurposeMap.create()
+		_ = self.engine.clearEveryBreakpoint()
+		self.keepPurposesOfStandingTraps()
 		var rounds = 0 as DebugTally
 
 		var finishing = true
@@ -2165,15 +2172,29 @@ export type DebugConversation
 
 	function detachAndReport(replies DebugReplyArray)
 		self.endWalk(replies)
-		self.armPurposes = DebugArmPurposeMap.create()
 
-		match self.engine.detach() 'letGo'
+		let answered = self.engine.detach()
+		self.keepPurposesOfStandingTraps()
+
+		match answered 'letGo'
 			done or
 			nothingParked then self.awaitDetachedEnd(replies)
-			refused(reason) then replies.push(motionRefused(DetachVerb, reason: reason))
+			refused(reason) then replies.push(detachRefused(reason))
 			gone(ending) then self.reportOutcome(replies, ending: ending)
 		end 'letGo'
 	end 'detachAndReport'
+
+	function keepPurposesOfStandingTraps()
+		var standing = DebugArmPurposeMap.create()
+
+		for (offset, purposes) in self.armPurposes 'eachArmedOffset'
+			if self.engine.userBreakpointAt(self.engine.imageTextBase() + offset) 'trapStillStands'
+				standing.upsert(offset, value: purposes)
+			end 'trapStillStands'
+		end 'eachArmedOffset'
+
+		self.armPurposes = standing
+	end 'keepPurposesOfStandingTraps'
 
 	function awaitDetachedEnd(replies DebugReplyArray)
 		self.letTheProgramRun()
@@ -2422,9 +2443,17 @@ function callOf(instruction DecodedInstruction, at DebugAddress) returns DebugCa
 	return DebugCallLookup.none
 end 'callOf'
 
-function motionRefused(verb String, reason String) returns DebugReply
-	return DebugReply.failed("the program refused to {verb} ({reason})", suggestion: StatedText.unstated)
+function motionRefused(verb String, reason String, afterwards String = "") returns DebugReply
+	return DebugReply.failed("the program refused to {verb} ({reason}){afterwards}", suggestion: StatedText.unstated)
 end 'motionRefused'
+
+function detachRefused(reason String) returns DebugReply
+	if reason == DebugDetachRefusedReason 'theKernelRefused'
+		return motionRefused(DetachVerb, reason: reason)
+	end 'theKernelRefused'
+
+	return motionRefused(DetachVerb, reason: reason, afterwards: DetachClearedWhatItCould)
+end 'detachRefused'
 
 function wordsOf(line String) returns StringArray
 	var words = StringArray.create()

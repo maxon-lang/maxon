@@ -1541,7 +1541,10 @@ hardware fault reach the program's own handler; where an older one is found the 
 `detach` restores every byte the debugger wrote, lifts every held green thread, puts asynchronous
 preemption back and lets the program run on under its own steam; the session then waits for the program's
 own ending and reports it. On `arm64-macos` the re-signed copy the program was launched from is removed at
-the detach, and the program keeps running from the file it already has open. `quit` ends the program.
+the detach, and the program keeps running from the file it already has open. While a trap byte cannot be
+written back, `detach` is refused `unwritable` with every breakpoint the debugger could write back
+cleared, and the program stays attached; a kernel that refuses to let the program go refuses it
+`detach-refused`, and the session stays as it was. `quit` ends the program.
 
 `break <target> if <local> <op> <literal>` arms a conditional breakpoint the driver judges at the stop, so a
 hit that fails it resumes at once; a condition over a float, a `String`, a field path, a constant or a local
@@ -1571,6 +1574,7 @@ lives: every word that names one re-lists the roster first, and an id whose thre
 - `not-running` — for a word that needs a stop while the program is running.
 - `fault-is-terminal` — for a step from a `fault` stop.
 - `unwritable` — for a byte the debugger could not write into the program's code.
+- `detach-refused` — for a `detach` the kernel refused to carry out.
 - `inside-runtime-symbol` — for a `break` at code that is the runtime's own: the runtime tier, and
   anything the compiler synthesized.
 
