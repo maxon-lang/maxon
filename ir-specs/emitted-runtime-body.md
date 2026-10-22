@@ -5611,13 +5611,10 @@ chunk @mrt_start {
 ```
 
 <!-- test: panic-runtime-chunk -->
-<!-- unsupported-targets: arm64-macos, arm64-linux -->
-⚠ **THE ASSERTION IS EMITTED x64 TEXT.** The ```RequiredRuntime body below is this backend's instruction
-sequence; arm64 emits its own, so the pin is meaningless there rather than merely different.
 The panic runtime is HAND-ASSEMBLED bytes, not `TargetOp`s — so it has no IR body, is skipped
 by every rendering that does not name it, and has no other gate of any kind: not an exit code (a program
 that never panics never enters it), not the leak gate, not a section pin, not a body pin. It is
-installed in EVERY x64 program, so the smallest possible one pins it. The zero
+installed in EVERY native program, so the smallest possible one pins it on each lane. The zero
 displacements are the unresolved call fixups the linker fills in; see the note above.
 
 ```maxon
@@ -5682,15 +5679,53 @@ chunk @mrt_panic {
     0040: 6b 20 74 72 61 63 65 3a 0a 00
 }
 ```
+```TargetIr:arm64-macos
+data {
+  __mrt_program_started@0 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+chunk @mrt_panic {
+    0000: fd 7b bf a9 fd 03 00 91 00 00 00 94 00 00 00 90
+    0010: 00 00 00 91 00 00 00 94 e0 03 1d aa e1 03 1d aa
+    0020: 82 0c 80 d2 00 00 00 94 20 00 80 d2 10 00 00 90
+    0030: 10 02 40 f9 00 00 00 94 00 00 20 d4
+}
+```
+```TargetIr:arm64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __mrt_program_started@24 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+chunk @mrt_panic {
+    0000: fd 7b bf a9 fd 03 00 91 00 00 00 94 00 00 00 90
+    0010: 00 00 00 91 00 00 00 94 e0 03 1d aa e1 03 1d aa
+    0020: 82 0c 80 d2 00 00 00 94 20 00 80 d2 c8 0b 80 d2
+    0030: 01 00 00 d4 00 00 20 d4
+}
+```
 
 <!-- test: stack-growth-chunk -->
-<!-- unsupported-targets: arm64-macos, arm64-linux -->
-⚠ **THE ASSERTION IS EMITTED x64 TEXT**, as `panic-runtime-chunk`'s: the grower's arm64 body is a
-different instruction sequence, so this pin does not describe it.
-`__gt_morestack` — the relocating stack grower every green thread's prologue calls. It is installed on demand, so
-the program has to actually run a green thread. Gated to x64-windows for
-`async-stack-growth.md`'s reason: the grower is hand-written x64 assembly over a
-`VirtualAlloc`ed stack.
+`__gt_morestack` — the relocating stack grower every green thread's prologue calls, hand-assembled per
+backend. It is installed on demand, so the program has to actually run a green thread.
 
 ```maxon
 function deepRecurse(n Integer) returns Integer
@@ -6062,6 +6097,341 @@ chunk @__gt_morestack {
     0130: b8 00 00 00 48 8b 08 48 89 28 48 89 c2 49 89 c0
     0140: e8 00 00 00 00 bf 63 00 00 00 b8 e7 00 00 00 0f
     0150: 05
+}
+```
+```TargetIr:arm64-macos
+data {
+  __gt_allg@0 = i64 0
+  __gt_allglen@8 = i64 0
+  __gt_allgcap@16 = i64 0
+  __gt_allg_lock@24 = i64 0
+  __gt_hold_epoch@32 = i64 0
+  __gt_run_queue_head@40 = i64 0
+  __gt_run_queue_tail@48 = i64 0
+  __gt_timer_count@56 = i64 0
+  __gt_timer_heap_base@64 = i64 0
+  __gt_timer_capacity@72 = i64 0
+  __gt_timer_seq@80 = i64 0
+  __gt_timer_when@88 = i64 9223372036854775807
+  __gt_quiesce_waiter@96 = i64 0
+  __gt_seed_bytes@104 = i64 2048
+  __gt_seed_sum_seen@112 = i64 0
+  __gt_seed_count_seen@120 = i64 0
+  __gt_seed_guard@128 = i64 0
+  __gt_keeps_cpu_clock@136 = i64 0
+  __gt_stack_pool@144 = i64 0
+  __sched_active_workers@152 = i64 1
+  __sched_max_active_workers@160 = i64 1
+  __sched_tls_index@168 = i64 0
+  __sched_tls_teb_offset@176 = i64 0
+  __sched_procs@184 = i64 0
+  __sched_allm@192 = i64 0
+  __sched_async_preempt_off@200 = i64 0
+  __sched_midle@208 = i64 0
+  __sched_pidle@216 = i64 0
+  __gt_gfree_head@224 = i64 0
+  __gt_gfree_nostack_head@232 = i64 0
+  __gt_cell_gfree_head@240 = i64 0
+  __sched_arena_cursor@248 = i64 0
+  __sched_arena_limit@256 = i64 0
+  __gt_records_carved@264 = i64 0
+  __gt_gfree_lock@272 = i64 0
+  __gt_gfree_lock_owner@280 = i64 0
+  __gt_gfree_lock_depth@288 = i64 0
+  __sched_npidle@296 = i64 0
+  __sched_runq_size@304 = i64 0
+  __sched_global_pushes@312 = i64 0
+  __sched_timer_scan_steps@320 = i64 0
+  __sched_mcount@328 = i64 0
+  __sched_nmidle@336 = i64 0
+  __sched_nmidlelocked@344 = i64 0
+  __sched_main_m@352 = i64 0
+  __sched_phase@360 = i64 0
+  __sched_lastpoll@368 = i64 0
+  __sched_poll_until@376 = i64 0
+  __sched_regain_head@384 = i64 0
+  __np_poller@392 = i64 0
+  __np_break@400 = i64 0
+  __np_wake_sig@408 = i64 0
+  __np_pd_table@416 = i64 0
+  __np_pd_cap@424 = i64 0
+  __np_waiters@432 = i64 0
+  __np_orphan_exited@440 = i64 0
+  __sched_num_procs@448 = i64 0
+  __sched_ncpu@456 = i64 0
+  __sched_shutdown_flag@464 = i64 0
+  __sched_lock@472 = i64 0
+  __sched_lock_depth_sink@480 = i64 0
+  __sched_nmspinning@488 = i64 0
+  __sched_needspinning@496 = i64 0
+  __sched_sysmon_event@504 = i64 0
+  __sched_sysmon_wait@512 = i64 0
+  __sched_timer_starts@520 = i64 0
+  __slab_arena_list@528 = i64 0
+  __slab_arena_map_l1@536 = i64 0
+  __slab_state@544 = i64 0
+  __mrt_program_started@552 = i8 0
+}
+
+func @deepRecurse {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+  __il_body:
+    arm64.bl __gt_resched
+  __il_cont:
+    arm64.cmp x19, 0
+    arm64.b.ne ifcont
+  base:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.retIndirect
+  ifcont:
+    arm64.sub x0, x19, 1
+    arm64.bl deepRecurse
+    arm64.add x0, x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.retIndirect
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 200
+    arm64.leaFuncAddr x0, deepRecurse
+    arm64.bl __gt_spawn
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 272], x19
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_await
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.retIndirect
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at stack-growth-chunk.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.retIndirect
+}
+
+chunk @__gt_morestack {
+    0000: ed 03 00 91 9f 01 00 91 ff c3 03 d1 ed 03 00 f9
+    0010: e0 0b 00 f9 e1 0f 00 f9 e2 13 00 f9 e3 17 00 f9
+    0020: e4 1b 00 f9 e5 1f 00 f9 e6 23 00 f9 e7 27 00 f9
+    0030: f3 2b 00 f9 f4 2f 00 f9 f5 33 00 f9 f6 37 00 f9
+    0040: f7 3b 00 f9 f8 3f 00 f9 f9 43 00 f9 fa 47 00 f9
+    0050: fb 4b 00 f9 fc 4f 00 f9 fd 53 00 f9 fe 57 00 f9
+    0060: e0 5b 00 fd e1 5f 00 fd e2 63 00 fd e3 67 00 fd
+    0070: e4 6b 00 fd e5 6f 00 fd e6 73 00 fd e7 77 00 fd
+    0080: f3 03 0b aa 74 0e 40 f9 75 12 40 f9 8a 02 15 8b
+    0090: 4a 01 0e cb 4a 81 0e 91 5f 01 15 eb 09 07 00 54
+    00a0: 09 00 a8 d2 f6 03 15 aa d6 02 16 8b df 02 09 eb
+    00b0: a8 06 00 54 df 02 0a eb 83 ff ff 54 e0 03 16 aa
+    00c0: 00 00 00 94 1f 00 00 f1 ed 06 00 54 f7 03 00 aa
+    00d0: e9 03 40 f9 69 4a 00 f9 7d 4e 00 f9 e0 03 13 aa
+    00e0: e1 03 17 aa e2 03 16 aa 00 00 00 94 69 00 80 d2
+    00f0: 69 da 00 f9 69 4e 40 f9 e9 53 00 f9 6d 4a 40 f9
+    0100: e0 0b 40 f9 e1 0f 40 f9 e2 13 40 f9 e3 17 40 f9
+    0110: e4 1b 40 f9 e5 1f 40 f9 e6 23 40 f9 e7 27 40 f9
+    0120: f3 2b 40 f9 f4 2f 40 f9 f5 33 40 f9 f6 37 40 f9
+    0130: f7 3b 40 f9 f8 3f 40 f9 f9 43 40 f9 fa 47 40 f9
+    0140: fb 4b 40 f9 fc 4f 40 f9 fd 53 40 f9 fe 57 40 f9
+    0150: e0 5b 40 fd e1 5f 40 fd e2 63 40 fd e3 67 40 fd
+    0160: e4 6b 40 fd e5 6f 40 fd e6 73 40 fd e7 77 40 fd
+    0170: ff c3 03 91 bf 01 00 91 c0 03 5f d6 ed 03 40 f9
+    0180: e0 ff ff 17 ed 03 40 f9 a9 01 40 f9 a9 05 00 f9
+    0190: bd 01 00 f9 e0 03 1e aa e1 03 0d aa e2 03 0d aa
+    01a0: 00 00 00 94 60 0c 80 d2 10 00 00 90 10 02 40 f9
+    01b0: 00 00 00 94 00 00 20 d4
+}
+```
+```TargetIr:arm64-linux
+data {
+  __gt_allg@0 = i64 0
+  __gt_allglen@8 = i64 0
+  __gt_allgcap@16 = i64 0
+  __gt_allg_lock@24 = i64 0
+  __gt_hold_epoch@32 = i64 0
+  __gt_run_queue_head@40 = i64 0
+  __gt_run_queue_tail@48 = i64 0
+  __gt_timer_count@56 = i64 0
+  __gt_timer_heap_base@64 = i64 0
+  __gt_timer_capacity@72 = i64 0
+  __gt_timer_seq@80 = i64 0
+  __gt_timer_when@88 = i64 9223372036854775807
+  __gt_quiesce_waiter@96 = i64 0
+  __gt_seed_bytes@104 = i64 2048
+  __gt_seed_sum_seen@112 = i64 0
+  __gt_seed_count_seen@120 = i64 0
+  __gt_seed_guard@128 = i64 0
+  __gt_keeps_cpu_clock@136 = i64 0
+  __gt_stack_pool@144 = i64 0
+  __sched_active_workers@152 = i64 1
+  __sched_max_active_workers@160 = i64 1
+  __sched_tls_index@168 = i64 0
+  __sched_tls_teb_offset@176 = i64 0
+  __sched_procs@184 = i64 0
+  __sched_allm@192 = i64 0
+  __sched_async_preempt_off@200 = i64 0
+  __sched_midle@208 = i64 0
+  __sched_pidle@216 = i64 0
+  __gt_gfree_head@224 = i64 0
+  __gt_gfree_nostack_head@232 = i64 0
+  __gt_cell_gfree_head@240 = i64 0
+  __sched_arena_cursor@248 = i64 0
+  __sched_arena_limit@256 = i64 0
+  __gt_records_carved@264 = i64 0
+  __gt_gfree_lock@272 = i64 0
+  __gt_gfree_lock_owner@280 = i64 0
+  __gt_gfree_lock_depth@288 = i64 0
+  __sched_npidle@296 = i64 0
+  __sched_runq_size@304 = i64 0
+  __sched_global_pushes@312 = i64 0
+  __sched_timer_scan_steps@320 = i64 0
+  __sched_mcount@328 = i64 0
+  __sched_nmidle@336 = i64 0
+  __sched_nmidlelocked@344 = i64 0
+  __sched_main_m@352 = i64 0
+  __sched_phase@360 = i64 0
+  __sched_lastpoll@368 = i64 0
+  __sched_poll_until@376 = i64 0
+  __sched_regain_head@384 = i64 0
+  __np_poller@392 = i64 0
+  __np_break@400 = i64 0
+  __np_wake_sig@408 = i64 0
+  __np_pd_table@416 = i64 0
+  __np_pd_cap@424 = i64 0
+  __np_waiters@432 = i64 0
+  __np_orphan_exited@440 = i64 0
+  __np_src_key_free@448 = i64 0
+  __np_src_key_high@456 = i64 0
+  __np_child_signal@464 = i64 0
+  __np_pd_mtable@472 = i64 0
+  __np_pd_mcap@480 = i64 0
+  __sched_num_procs@488 = i64 0
+  __sched_ncpu@496 = i64 0
+  __sched_shutdown_flag@504 = i64 0
+  __sched_lock@512 = i64 0
+  __sched_lock_depth_sink@520 = i64 0
+  __sched_nmspinning@528 = i64 0
+  __sched_needspinning@536 = i64 0
+  __sched_sysmon_event@544 = i64 0
+  __sched_sysmon_wait@552 = i64 0
+  __sched_timer_starts@560 = i64 0
+  __mrt_envp@568 = i64 0
+  __mrt_signal_stack_bytes@576 = i64 0
+  __mrt_hwcap_atomics@584 = i64 0
+  __mrt_tls_next_key@592 = i64 0
+  __slab_arena_list@600 = i64 0
+  __slab_arena_map_l1@608 = i64 0
+  __slab_state@616 = i64 0
+  __mrt_program_started@624 = i8 0
+}
+
+func @deepRecurse {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+  __il_body:
+    arm64.bl __gt_resched
+  __il_cont:
+    arm64.cmp x19, 0
+    arm64.b.ne ifcont
+  base:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.retIndirect
+  ifcont:
+    arm64.sub x0, x19, 1
+    arm64.bl deepRecurse
+    arm64.add x0, x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.retIndirect
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 200
+    arm64.leaFuncAddr x0, deepRecurse
+    arm64.bl __gt_spawn
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 272], x19
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_await
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.retIndirect
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at stack-growth-chunk.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.retIndirect
+}
+
+chunk @__gt_morestack {
+    0000: ed 03 00 91 9f 01 00 91 ff c3 03 d1 ed 03 00 f9
+    0010: e0 0b 00 f9 e1 0f 00 f9 e2 13 00 f9 e3 17 00 f9
+    0020: e4 1b 00 f9 e5 1f 00 f9 e6 23 00 f9 e7 27 00 f9
+    0030: f3 2b 00 f9 f4 2f 00 f9 f5 33 00 f9 f6 37 00 f9
+    0040: f7 3b 00 f9 f8 3f 00 f9 f9 43 00 f9 fa 47 00 f9
+    0050: fb 4b 00 f9 fc 4f 00 f9 fd 53 00 f9 fe 57 00 f9
+    0060: e0 5b 00 fd e1 5f 00 fd e2 63 00 fd e3 67 00 fd
+    0070: e4 6b 00 fd e5 6f 00 fd e6 73 00 fd e7 77 00 fd
+    0080: f3 03 0b aa 74 0e 40 f9 75 12 40 f9 8a 02 15 8b
+    0090: 4a 01 0e cb 4a 81 0e 91 5f 01 15 eb 09 07 00 54
+    00a0: 09 00 a8 d2 f6 03 15 aa d6 02 16 8b df 02 09 eb
+    00b0: a8 06 00 54 df 02 0a eb 83 ff ff 54 e0 03 16 aa
+    00c0: 00 00 00 94 1f 00 00 f1 ed 06 00 54 f7 03 00 aa
+    00d0: e9 03 40 f9 69 4a 00 f9 7d 4e 00 f9 e0 03 13 aa
+    00e0: e1 03 17 aa e2 03 16 aa 00 00 00 94 69 00 80 d2
+    00f0: 69 da 00 f9 69 4e 40 f9 e9 53 00 f9 6d 4a 40 f9
+    0100: e0 0b 40 f9 e1 0f 40 f9 e2 13 40 f9 e3 17 40 f9
+    0110: e4 1b 40 f9 e5 1f 40 f9 e6 23 40 f9 e7 27 40 f9
+    0120: f3 2b 40 f9 f4 2f 40 f9 f5 33 40 f9 f6 37 40 f9
+    0130: f7 3b 40 f9 f8 3f 40 f9 f9 43 40 f9 fa 47 40 f9
+    0140: fb 4b 40 f9 fc 4f 40 f9 fd 53 40 f9 fe 57 40 f9
+    0150: e0 5b 40 fd e1 5f 40 fd e2 63 40 fd e3 67 40 fd
+    0160: e4 6b 40 fd e5 6f 40 fd e6 73 40 fd e7 77 40 fd
+    0170: ff c3 03 91 bf 01 00 91 c0 03 5f d6 ed 03 40 f9
+    0180: e0 ff ff 17 ed 03 40 f9 a9 01 40 f9 a9 05 00 f9
+    0190: bd 01 00 f9 e0 03 1e aa e1 03 0d aa e2 03 0d aa
+    01a0: 00 00 00 94 60 0c 80 d2 c8 0b 80 d2 01 00 00 d4
+    01b0: 00 00 20 d4
 }
 ```
 
