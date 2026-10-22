@@ -11272,6 +11272,7 @@ end 'functionTypeDoorNoun'
 export union SlotOwner
 	unowned
 	declaredBy(let typeName ByteArray)
+	tupleElement(let place String)
 end 'SlotOwner'
 
 // ⭐ **THE PLACE AN ASSIGNMENT NAMES, WORDED THE WAY `specs/assignment.md` WORDS IT.** The noun comes from
@@ -11302,9 +11303,26 @@ export function assignedPlacePhrase(door FunctionTypeDoor, name ByteArray, owner
 
 	match owner 'owner'
 		declaredBy(typeName) then return "{place} of '{String.from(typeName)}'"
+		tupleElement(elementPlace) then return elementPlace.clone()
 		unowned then panic("assignedPlacePhrase: a FIELD is named `field 'f' of 'Owner'`, so the declaring type is not optional — a caller reaching this sentence through the field door must thread it")
 	end 'owner'
 end 'assignedPlacePhrase'
+
+export function slotOwnerIsATupleElement(owner SlotOwner) returns bool
+	match owner 'owner'
+		tupleElement then return true
+		declaredBy or
+		unowned then return false
+	end 'owner'
+end 'slotOwnerIsATupleElement'
+
+export function functionMisusePlacePhrase(door FunctionTypeDoor, name ByteArray, owner SlotOwner) returns String
+	match owner 'owner'
+		tupleElement(elementPlace) then return elementPlace.clone()
+		declaredBy or
+		unowned then return "{functionTypeDoorNoun(door)} '{String.from(name)}'"
+	end 'owner'
+end 'functionMisusePlacePhrase'
 
 export function brandedPlacePhrase(door FunctionTypeDoor, name ByteArray, owner SlotOwner) returns String
 	match door 'door'

@@ -2111,7 +2111,7 @@ function pairCount(p (Ys, Count)) returns Count
 end 'pairCount'
 ```
 ```maxoncstderr
-error E3005: <fragment>:8:20: cannot assign a value of type 'Xs' to field '_0' of '__Tuple2.Array_String@Ys.Count$0_100', which holds 'Ys'
+error E3005: <fragment>:8:21: cannot assign a value of type 'Xs' to element 0 of tuple (Ys, Count), which holds 'Ys'
 ```
 
 <!-- test: error.the-first-store-fixes-the-brand-even-when-it-stores-a-read-adopted-later -->

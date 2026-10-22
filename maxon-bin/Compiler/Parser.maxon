@@ -829,7 +829,7 @@ export union SourceParseError implements Error
 	// {noun} '{name}', which holds '{heldType}': …" — positioned at the target. `noun` is "variable" for
 	// a local and "global" for a top-level one (the two spellings the spec distinguishes). Its own
 	// variant, not `assignTypeMismatch`, because the wording and the noun both differ.
-	functionValueIntoNonFunction(noun String, name String, heldType String, line LineNumber, column ColumnNumber)
+	functionValueIntoNonFunction(place String, heldType String, line LineNumber, column ColumnNumber)
 
 	// A FUNCTION VALUE RETURNED where a NON-function return type is declared (`return dbl` from
 	// a `returns Integer` function). Renders as E3005 with the spec's exact text — "Cannot return
@@ -10695,9 +10695,10 @@ end 'FieldTypeSpelling'
 type SlotStoreSite
 	export let place as String
 	export let anchor as Token
+	export let owner as SlotOwner
 
-	static function create(place String, anchor Token) returns Self
-		return Self{place: place, anchor: anchor}
+	static function create(place String, anchor Token, owner SlotOwner) returns Self
+		return Self{place: place, anchor: anchor, owner: owner}
 	end 'create'
 end 'SlotStoreSite'
 
@@ -40586,7 +40587,7 @@ export type Parser
 		try self.requireAssignable(nameTok, value: got, declared: declared, declaredNameId: declaredNameId, door: door, placeOwner: placeOwner, voice: voice)
 		self.admitUnsignedLiteralIntoSlot(value, slot: declared, slotNameId: declaredNameId)
 
-		if isFunctionTypeDoor(declared, got: got) 'functionTypeDoor'
+		if isFunctionTypeDoor(declared, got: got) and not slotOwnerIsATupleElement(placeOwner) 'functionTypeDoor'
 			self.recordFunctionTypeDoor(declaredNameId, gotNameId: self.functionValueGoverningId(value), door: door, place: FunctionTypeDoorPlace.named(nameTok.value), anchor: nameTok, handedAt: nameTok)
 		end 'functionTypeDoor'
 
@@ -40612,7 +40613,7 @@ export type Parser
 			// A FUNCTION VALUE into a NON-function place — the spec's specific E3005 ("cannot
 			// assign a value of type 'function' to {noun} '{name}', which holds '{held}'"). The noun comes
 			// from the DOOR the caller named, so this site and the function-type check word one place alike.
-			functionIntoNonFunction then throw SourceParseError.functionValueIntoNonFunction(functionTypeDoorNoun(door), name: String.from(nameTok.value), heldType: typeTagName(declared), line: nameTok.line, column: nameTok.column)
+			functionIntoNonFunction then throw SourceParseError.functionValueIntoNonFunction(functionMisusePlacePhrase(door, name: nameTok.value, owner: placeOwner), heldType: typeTagName(declared), line: nameTok.line, column: nameTok.column)
 		end 'declared'
 	end 'requireAssignable'
 
@@ -69040,19 +69041,19 @@ export type Parser
 		// (`widenValueIntoExistentialField`), not by the storage-type comparison below. Routed out FIRST
 		// because that comparison would otherwise be asked with a one-word storage type it has no answer for.
 		if payloadClassIsExistential(class) 'existentialField'
-			return try self.widenValueIntoExistentialField(layout, index: index, fieldType: fieldType, value: value, anchor: anchor)
+			return try self.widenValueIntoExistentialField(layout, index: index, fieldType: fieldType, value: value, site: site)
 		end 'existentialField'
 
 		if payloadClassIsManaged(class) 'managed'
 			let widened = self.interfaceHandleOf(try self.destinationTemporary(value, declared: fieldType, anchor: anchor), declared: fieldType, first: anchor, last: anchor)
-			try self.requireManagedSlotValueMatches(class, declared: fieldType, value: widened, placeDoor: FunctionTypeDoor.field, placeName: self.fieldNameAt(layout, index: index), placeOwner: SlotOwner.declaredBy(layout.name), placeBrand: self.fieldPlaceBrand(layout, index: index, resolved: fieldType), placeSpelling: self.fieldPlaceSpelling(layout, index: index, fieldType: fieldType), voice: SlotMismatchVoice.assignedPlace, anchor: anchor)
+			try self.requireManagedSlotValueMatches(class, declared: fieldType, value: widened, placeDoor: FunctionTypeDoor.field, placeName: self.fieldNameAt(layout, index: index), placeOwner: site.owner, placeBrand: self.fieldPlaceBrand(layout, index: index, resolved: fieldType), placeSpelling: self.fieldPlaceSpelling(layout, index: index, fieldType: fieldType), voice: SlotMismatchVoice.assignedPlace, anchor: site.anchor)
 			return widened
 		end 'managed'
 
 		// The SAME verdict-plus-coercion the assignment doors ask, through the `field` door — which is what it always
 		// was, spelled out a second time: the four `DeclaredTypeMatch` arms that stood here were a
 		// character-for-character copy of `requireAssignable`'s, and a rule with two homes drifts.
-		let stored = try self.assignableValue(anchor, value: value, declared: maxonTypeTag(fieldType), declaredNameId: typeNameIdOf(fieldType), door: FunctionTypeDoor.field, placeOwner: SlotOwner.declaredBy(layout.name), voice: SlotMismatchVoice.assignedPlace)
+		let stored = try self.assignableValue(site.anchor, value: value, declared: maxonTypeTag(fieldType), declaredNameId: typeNameIdOf(fieldType), door: FunctionTypeDoor.field, placeOwner: site.owner, voice: SlotMismatchVoice.assignedPlace)
 
 		// ⭐⭐ **AND THE IDENTITY THAT VERDICT CANNOT SEE — the door `parseAssignment` also has
 		// and this one needs.** `assignableValue`'s verdict is tag-based, and a payload-free ENUM field is
@@ -69060,7 +69061,7 @@ export type Parser
 		// named)` AGREES for any two enums, and `h.c = Shade.light` on a `Color` field compiled and stored
 		// (MEASURED 2026-08-06, `requireSlotAggregateIdentity` carries the full note). All three
 		// field doors funnel through here, so the literal and the two writes are closed by the one check.
-		try self.requireSlotAggregateIdentity(self.fieldTypeKeepingAlias(layout, index: index, collapsed: fieldType), value: value, placeDoor: FunctionTypeDoor.field, placeName: self.fieldNameAt(layout, index: index), placeOwner: SlotOwner.declaredBy(layout.name), placeBrand: self.fieldPlaceBrand(layout, index: index, resolved: fieldType), placeSpelling: self.fieldPlaceSpelling(layout, index: index, fieldType: fieldType), voice: SlotMismatchVoice.assignedPlace, anchor: anchor)
+		try self.requireSlotAggregateIdentity(self.fieldTypeKeepingAlias(layout, index: index, collapsed: fieldType), value: value, placeDoor: FunctionTypeDoor.field, placeName: self.fieldNameAt(layout, index: index), placeOwner: site.owner, placeBrand: self.fieldPlaceBrand(layout, index: index, resolved: fieldType), placeSpelling: self.fieldPlaceSpelling(layout, index: index, fieldType: fieldType), voice: SlotMismatchVoice.assignedPlace, anchor: site.anchor)
 
 		// ⭐ **THE FIELD'S DECLARED RANGE BINDS WHAT IS STORED IN IT.** The site is recorded on the
 		// COERCED value, not the parsed one: that is the value the slot receives, and for a widening door
@@ -69076,10 +69077,11 @@ export type Parser
 
 	function slotStoreSiteOf(layout StructLayout, index FieldIndex, valueStart ElementIndex, anchor Token) returns SlotStoreSite
 		if isTupleTypeName(layout.name) 'aTupleElement'
-			return SlotStoreSite.create("element {index} of tuple {self.signatures.displayNameOfAggregate(ValueTypeTag.structRef, aggregate: layout.name)}", anchor: self.tokenAt(valueStart))
+			let elementPlace = "element {index} of tuple {self.signatures.displayNameOfAggregate(ValueTypeTag.structRef, aggregate: layout.name)}"
+			return SlotStoreSite.create(elementPlace, anchor: self.tokenAt(valueStart), owner: SlotOwner.tupleElement(elementPlace.clone()))
 		end 'aTupleElement'
 
-		return SlotStoreSite.create("{String.from(layout.name)}.{String.from(anchor.value)}", anchor: anchor)
+		return SlotStoreSite.create("{String.from(layout.name)}.{String.from(anchor.value)}", anchor: anchor, owner: SlotOwner.declaredBy(layout.name.clone()))
 	end 'slotStoreSiteOf'
 
 	function fieldTypeKeepingAlias(layout StructLayout, index FieldIndex, collapsed MaxonType) returns MaxonType
@@ -69309,12 +69311,12 @@ export type Parser
 	// A CONCRETE value is admitted and widened at the store (`fieldStoreWitness`). Whether it conforms is
 	// decided whole-program, for the reason `parseReturnStatement` gives at the other widening position the
 	// parser admits unjudged.
-	function widenValueIntoExistentialField(layout StructLayout, index FieldIndex, fieldType MaxonType, value ValueId, anchor Token) returns ValueId throws SourceParseError
+	function widenValueIntoExistentialField(layout StructLayout, index FieldIndex, fieldType MaxonType, value ValueId, site SlotStoreSite) returns ValueId throws SourceParseError
 		if self.tagOf(value) != ValueTypeTag.interfaceRef 'aConcreteConformer'
 			return value
 		end 'aConcreteConformer'
 
-		try self.requireManagedValueMatches(fieldType, isString: false, value: value, placeDoor: FunctionTypeDoor.field, placeName: self.fieldNameAt(layout, index: index), placeOwner: SlotOwner.declaredBy(layout.name), placeBrand: self.fieldPlaceBrand(layout, index: index, resolved: fieldType), placeSpelling: self.fieldPlaceSpelling(layout, index: index, fieldType: fieldType), voice: SlotMismatchVoice.assignedPlace, anchor: anchor)
+		try self.requireManagedValueMatches(fieldType, isString: false, value: value, placeDoor: FunctionTypeDoor.field, placeName: self.fieldNameAt(layout, index: index), placeOwner: site.owner, placeBrand: self.fieldPlaceBrand(layout, index: index, resolved: fieldType), placeSpelling: self.fieldPlaceSpelling(layout, index: index, fieldType: fieldType), voice: SlotMismatchVoice.assignedPlace, anchor: site.anchor)
 		return value
 	end 'widenValueIntoExistentialField'
 
@@ -72680,7 +72682,7 @@ export type Parser
 			// A FUNCTION VALUE into a scalar union PAYLOAD whose declared type is NOT a function — the same
 			// E3005 a function value meeting any other non-function slot earns. A function-ALIAS payload no
 			// longer reaches it: `declaredTag` is `function` there and `checkDeclaredType` answers `ok`.
-			functionIntoNonFunction then throw SourceParseError.functionValueIntoNonFunction("payload", name: String.from(field.name), heldType: typeTagName(declaredTag), line: argTok.line, column: argTok.column)
+			functionIntoNonFunction then throw SourceParseError.functionValueIntoNonFunction("payload '{String.from(field.name)}'", heldType: typeTagName(declaredTag), line: argTok.line, column: argTok.column)
 		end 'declared'
 
 		// ⭐⭐ **AND THE NOMINAL IDENTITY, WHICH `checkDeclaredType` STRUCTURALLY CANNOT ASK — THE SIXTH DOOR

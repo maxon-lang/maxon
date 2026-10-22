@@ -2773,7 +2773,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:6:9: cannot assign a value of type 'Integer' to field '_0' of '__Tuple2.Wide.Wide', which holds 'Wide'
+error E3005: <fragment>:6:10: cannot assign a value of type 'Integer' to element 0 of tuple (Wide, Wide), which holds 'Wide'
 ```
 
 <!-- test: error.a-tuple-of-one-alias-does-not-pass-as-another -->
@@ -3582,4 +3582,24 @@ end 'main'
 ```
 ```exitcode
 43
+```
+
+<!-- test: error.a-function-value-into-a-tuple-element-names-the-element -->
+A function value stored into a tuple element of a scalar alias is refused naming the element in source terms, the way a struct field names itself.
+```maxon
+typealias Wide = int(0 to 1000)
+
+function f(x Wide) returns Wide
+	return x
+end 'f'
+
+function main() returns ExitCode
+	var t = (1 as Wide, 2 as Wide)
+	t.0 = f
+	print("{t.1}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:10:8: cannot assign a value of type 'function' to element 0 of tuple (Wide, Wide), which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
 ```
