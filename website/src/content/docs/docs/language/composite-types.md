@@ -462,7 +462,10 @@ end 'main'
 The standard collections accept bracketed literals: a plain `[1, 2, 3]` is an `Array`, `["a": 1]` is a
 `Map`, and `Array`, `Set`, `List` and `Vector` aliases take `Alias from [ ... ]`, for example
 `CharSet from ['a', 'e']`; the alias states the element type, and a `Vector` alias's literal must write
-exactly as many elements as the alias holds. A type that declares `implements InitableFromArrayLiteral with
+exactly as many elements as the alias holds. When that element is itself an array alias, each element is a
+value of it: another `Alias from [ ... ]`, a bare `[ ... ]` that takes its element type from the alias, or
+a local of the inner alias — `Rows from [Ints from [1, 2], [3], row]` over `typealias Rows = Array with
+Ints`. A type that declares `implements InitableFromArrayLiteral with
 Element` takes `Type from [ ... ]`, which is `Type.init(value ElementArray)` over the literal:
 
 ```maxon

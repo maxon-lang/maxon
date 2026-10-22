@@ -7645,13 +7645,7 @@ end 'PlaceBindings'
 
 let noPlaceBindings = PlaceBindings.create(PendingArgumentBindingArray.create(), blamed: ArgumentBlameArray.create())
 
-// An array literal's elements must all have the FIRST element's type — one rule, so one wording, read by
-// the two walks over that grammar: the emitting one in a function body (`requireArrayLiteralElementMatches`)
-// and the folding one at top level (`evalConstArrayLiteral`). Two copies would let the same
-// mistake be described two ways depending on where it was written.
-let MixedArrayLiteralElementsMessage = "an array literal with mixed element types — every element must have the same type as the first"
-
-// The map-literal twin of the sentence above, for the TOP-LEVEL literal. It is composed the way
+// The TOP-LEVEL map literal's column refusal. It is composed the way
 // `parseHashTableColumnArg`'s is — the COLUMN's subject, then what arrived — so a mixed literal is refused in
 // the same shape wherever it was written; what it cannot share is the type SPELLINGS, which only the index's
 // own interner can render (`ProgramSignatures.constContainerColumnCheck`, whose header carries why).
@@ -14275,8 +14269,6 @@ typealias InnerAliasNameSet = Set with ByteArray
 //
 //   • `[7 as N, 3 as N]`      ⇒ `Array with N`,   `elementSize()` = **-4** (packed)
 //   • `[v as N, w as N]`      ⇒ `Array with int`, `elementSize()` = **8**  (both operands bare locals)
-//   • `[v as N, 3 as N]`      ⇒ **E2015 "mixed element types"**, on a literal whose two elements are
-//                               written with the SAME type
 //
 // ⇒ **A SECOND READER NEEDS A SECOND ARGUMENT, AND THIS ONE DOES NOT HAVE IT.** The fix is not here: a
 // no-op cast whose source is a bare local has no distinct ValueId to carry the alias, so the alias must be
@@ -16152,6 +16144,29 @@ function payloadFillVoice(fill PayloadFill) returns SlotMismatchVoice
 		serviceMessage gives SlotMismatchVoice.messageArgument
 	end 'fill'
 end 'payloadFillVoice'
+
+union ContainerElementSite
+	call(let method Token)
+	literalElement(let element Token)
+end 'ContainerElementSite'
+
+function containerElementSiteAnchor(site ContainerElementSite) returns Token
+	return match site 'site'
+		call(method) gives method
+		literalElement(element) gives element
+	end 'site'
+end 'containerElementSiteAnchor'
+
+function arrayElementArgumentMismatch(expected String, got String, line LineNumber, column ColumnNumber) returns SourceParseError
+	return SourceParseError.builtinArgumentType(String.from(ArrayValueLabel), expected: expected, got: got, line: line, column: column)
+end 'arrayElementArgumentMismatch'
+
+function containerElementSiteName(site ContainerElementSite) returns ByteArray
+	return match site 'site'
+		call(method) gives method.value
+		literalElement gives ArrayLiteralElementPlace.toByteArray()
+	end 'site'
+end 'containerElementSiteName'
 
 // ⭐⭐ **THE TWO DOORS AN ERROR LEAVES A FUNCTION BY.** Both hand the caller a flag the
 // caller decodes against the enclosing function's DECLARED `throws` clause, so both owe that clause the same
@@ -42867,7 +42882,7 @@ export type Parser
 		let gotDisplay = "{got}{gotNote}"
 		return match voice 'v'
 			assignedPlace gives SourceParseError.assignTypeMismatch(assignedPlacePhrase(placeDoor, name: placeName, owner: placeOwner), got: got, gotNote: gotNote, expected: resolvedExpected if placeSpelling.isEmpty() else placeDisplay, expectedNote: expectedNote, line: line, column: column)
-			containerElementArgument gives SourceParseError.builtinArgumentType(String.from(ArrayValueLabel), expected: slotDisplay, got: gotDisplay, line: line, column: column)
+			containerElementArgument gives arrayElementArgumentMismatch(slotDisplay, got: gotDisplay, line: line, column: column)
 
 			// The payload voice quotes no name at all (there is none to quote) and spells the EXPECTED side
 			// through `declaredSlotDisplayName`, the same probe the argument voice makes — which is what puts
@@ -66479,8 +66494,8 @@ export type Parser
 	//
 	// ⚠ And the obvious narrowing does not work: gating on a CONSTANT source restores the exact three-answers
 	// inconsistency the paragraph below records — it would make `[7 as Byte, 3 as Byte]` an `Array with Byte`,
-	// `[v as Byte, w as Byte]` an `Array with int`, and `[v as Byte, 3 as Byte]` a false *"mixed element
-	// types"* refusal of a legal program. Single-use and constant are different questions; only the first is
+	// `[v as Byte, w as Byte]` an `Array with int`, and `[v as Byte, 3 as Byte]` a false refusal of a
+	// legal program. Single-use and constant are different questions; only the first is
 	// sound, and it is the one the rename asks.
 	//
 	// ⚠⚠ **WITHOUT IT THE SAME WRITTEN TYPE PRODUCED THREE DIFFERENT ANSWERS — MEASURED, and one of them
@@ -66490,8 +66505,8 @@ export type Parser
 	// alias survived a cast of a LITERAL and vanished on a cast of a LOCAL, for `N = int(0 to 15)`:
 	//   • `[7 as N, 3 as N]`  →  `Array with N`,   element_size **-4**
 	//   • `[v as N, w as N]`  →  `Array with int`, element_size **8**
-	//   • `[v as N, 3 as N]`  →  **E2015 "mixed element types"** — on a literal whose two elements are
-	//     written with the SAME type, so the refusal is of a legal program and its message is false.
+	//   • `[v as N, 3 as N]`  →  refused as an element of another type — on a literal whose two elements
+	//     are written with the SAME type, so the refusal is of a legal program.
 	// Minting settles all three at once, because the result then carries the alias in its own TAG and the
 	// element type is read off the VALUE rather than off a record a sharing rule may withhold. ⭐ It is also
 	// what keeps `ValueDeclaredAliasMap` to the ONE reader its safety argument assumes: a missing entry there
@@ -80049,7 +80064,7 @@ export type Parser
 		// first element.
 		let firstTok = self.current()
 		let firstStart = self.pos
-		self.stateArrayLiteralElementTupleTarget(element, slot: slot, valueStart: firstStart)
+		self.stateArrayLiteralElementTargets(element, slot: slot, valueStart: firstStart)
 		let first = try self.parseExpression(func, block: self.bodyState.currentBlock)
 
 		// ⭐ **A `:` AFTER THE FIRST ELEMENT MAKES THE WHOLE THING A MAP LITERAL** — `["a": 1, "b": 2]`.
@@ -80617,28 +80632,33 @@ export type Parser
 		return arr
 	end 'finishArrayLiteral'
 
+	function stateArrayLiteralElementTargets(element ArrayLiteralElementSource, slot DeclaredArrayInstance, valueStart ElementIndex)
+		match element 'elementSource'
+			stated(headGiid) then self.stateContainerElementLiteralTargets(headGiid, valueStart: valueStart)
+			inferred then self.stateSlotElementTargets(slot, valueStart: valueStart)
+		end 'elementSource'
+	end 'stateArrayLiteralElementTargets'
+
+	function stateSlotElementTargets(slot DeclaredArrayInstance, valueStart ElementIndex)
+		match slot 'slot'
+			instance(giid) then self.stateContainerElementLiteralTargets(giid, valueStart: valueStart)
+			none then self.stateNoElementLiteralTargets(valueStart)
+		end 'slot'
+	end 'stateSlotElementTargets'
+
+	function stateNoElementLiteralTargets(valueStart ElementIndex)
+		self.stateTupleLiteralTargetAt(NoDeclaredTupleTarget, tokenIndex: valueStart)
+		self.stateArrayLiteralTargetAt(DeclaredArrayInstance.none, tokenIndex: valueStart)
+	end 'stateNoElementLiteralTargets'
+
 	// One element after the first, and its type match against the literal's instance: the one home of
 	// the element rule, shared by `finishArrayLiteral` (which pushes what it gets) and
 	// `parseCollectedArrayLiteralBody` (which collects it). The separator, and the newline skip that
 	// must follow the push (see `finishArrayLiteral`), are `atAnotherLiteralEntry`'s.
-	function stateArrayLiteralElementTupleTarget(element ArrayLiteralElementSource, slot DeclaredArrayInstance, valueStart ElementIndex)
-		match element 'elementSource'
-			stated(headGiid) then self.stateContainerElementTupleTarget(headGiid, valueStart: valueStart)
-			inferred then self.stateSlotElementTupleTarget(slot, valueStart: valueStart)
-		end 'elementSource'
-	end 'stateArrayLiteralElementTupleTarget'
-
-	function stateSlotElementTupleTarget(slot DeclaredArrayInstance, valueStart ElementIndex)
-		match slot 'slot'
-			instance(giid) then self.stateContainerElementTupleTarget(giid, valueStart: valueStart)
-			none then self.stateTupleLiteralTargetAt(NoDeclaredTupleTarget, tokenIndex: valueStart)
-		end 'slot'
-	end 'stateSlotElementTupleTarget'
-
 	function parseArrayLiteralTailElement(func IrFunction, giid GenericInstanceId) returns ArrayLiteralElement throws SourceParseError
 		let elemTok = self.current()
 		let elemStart = self.pos
-		self.stateContainerElementTupleTarget(giid, valueStart: elemStart)
+		self.stateContainerElementLiteralTargets(giid, valueStart: elemStart)
 		let elem = try self.parseExpression(func, block: self.bodyState.currentBlock)
 
 		if self.valueIsDeferred(elem) 'aDeferredElement'
@@ -80670,8 +80690,7 @@ export type Parser
 	// ⚠ **`[10 as Byte, 20]` IS THE CASE THAT DISPROVES IT, AND IT IS ACCEPTED DELIBERATELY.** Element
 	// 1 is renamed to `Byte` by its own `as` (`mayRetypeForNarrowerStorage`), so the literal mints an
 	// `Array with Byte`; element 2 is a bare `20` at a machine word against a one-byte slot, so it
-	// DOES convert here. Refusing it as `MixedArrayLiteralElementsMessage` would be stricter than the
-	// language: the program answers 20. The rule is the instance's slot, not the spelling of the head.
+	// DOES convert here. Refusing it would be stricter than the language: the program answers 20. The rule is the instance's slot, not the spelling of the head.
 	//
 	// ⭐ **A STATED HEAD IS THE CASE WHERE IT IS TRUE, AND WHAT IT DOES THEN IS THE `as <element>` THE SOURCE
 	// DID NOT HAVE TO WRITE.** `ByteArray from [10, 20, 30]` hands over three bare `int` constants at a
@@ -80706,15 +80725,15 @@ export type Parser
 		// refusal it dropped let `ByteArray from [Color.red, …]` through. They live inside
 		// `convertValueToDeclaredType` now, so reaching the conversion is what grants them.
 		let converted = try self.convertedArrayLiteralElement(value, targetAlias: targetAlias, indexSpaceElement: indexSpaceElement, giid: giid, elemTok: elemTok, valueStart: valueStart)
-		try self.requireArrayLiteralElementMatches(converted, giid: giid, elemTok: elemTok)
+		let fitted = try self.requireElementFitsSlot(giid, value: converted, valueStart: valueStart, site: ContainerElementSite.literalElement(elemTok))
 		try self.requireLiteralElementIsStorable(value, giid: giid, elemTok: elemTok, valueStart: valueStart)
 
-		return converted
+		return fitted
 	end 'admitArrayLiteralElement'
 
 	// The element itself, converted into the instance's element type when it is not already that type and
-	// handed straight back when it is. Split from the homogeneity check above so that check is written ONCE
-	// for both arms — calling it in each arm is one question asked from two places.
+	// handed straight back when it is. Split from the `requireElementFitsSlot` call above so that call is
+	// written ONCE for both arms — calling it in each arm is one question asked from two places.
 	function convertedArrayLiteralElement(value ValueId, targetAlias DeclaredAlias, indexSpaceElement MaxonType, giid GenericInstanceId, elemTok Token, valueStart ElementIndex) returns ValueId throws SourceParseError
 		if not (try self.elementMustBeConvertedInto(value, giid: giid, targetAlias: targetAlias, elemTok: elemTok)) 'alreadyThisInstancesElement'
 			return value
@@ -80734,25 +80753,19 @@ export type Parser
 	//   • **IDENTITY** — is this value already the slot's element type at all? It reads the DECLARED type, so
 	//     it sees what the stride cannot.
 	//
-	// ⛔⛔ **THE IDENTITY HALF WAS MISSING, AND THE TWO ANSWERS DIVERGE FOR EVERY 8-BYTE RANGED ALIAS.**
-	// `int(0 to i64.max)` — stdlib's own `ElementIndex`, `FileSize`, `DurationMs`, `Count` — occupies a
-	// machine word exactly as a bare `int` does, so the storage question alone answered NO, the element kept
-	// its `integer` tag, and `requireArrayLiteralElementMatches` then re-derived `Array with integer` and
-	// reported three identical integer literals as **`E2015 mixed element types`** where the oracle prints 6.
-	// Skipping the conversion skipped its RANGE CHECK too, so `[-1]` reached an `int(0 to u64.max)` slot with
-	// no diagnostic at all.
-	//
-	// ⚠ **THE IDENTITY HALF IS THE VERY QUESTION `requireArrayLiteralElementMatches` PUTS TO THE RESULT**, so
-	// the gate and the check cannot answer differently: anything that could be made into the element type has
-	// been by the time that check runs, and what still wears another type is a genuinely different element.
+	// ⛔⛔ **THE TWO ANSWERS DIVERGE FOR EVERY 8-BYTE RANGED ALIAS.** `int(0 to i64.max)` — stdlib's own
+	// `ElementIndex`, `FileSize`, `DurationMs`, `Count` — occupies a machine word exactly as a bare `int`
+	// does, so the storage question alone answers NO and the element keeps its `integer` tag. Skipping the
+	// conversion skips its RANGE CHECK too, so `[-1]` would reach an `int(0 to u64.max)` slot with no
+	// diagnostic at all.
 	//
 	// ⚠ **A SLOT WHOSE ELEMENT DECLARES NO RANGED ALIAS HAS NOTHING TO CONVERT INTO** — a `String`, a struct,
-	// an enum or a nested container element is the type it is, and a value of another type there is that
-	// check's to refuse. It is also what keeps the `named` spelling in the conversion correct: the conversion
+	// an enum or a nested container element is the type it is, and a value of another type there is
+	// `requireElementFitsSlot`'s to refuse. It is also what keeps the `named` spelling in the conversion correct: the conversion
 	// runs only where the element type IS a declared alias name.
 	//
-	// ⚠ **A FUNCTION VALUE IS COMPARED BY SHAPE, NOT CONVERTED** — that check records a function-type door for
-	// it, where converting one into a ranged int slot would refuse `[double, triple]` with a cast diagnostic.
+	// ⚠ **A FUNCTION VALUE IS COMPARED BY SHAPE, NOT CONVERTED** — `requireElementFitsSlot` records a
+	// function-type door for it, where converting one into a ranged int slot would refuse `[double, triple]` with a cast diagnostic.
 	function elementMustBeConvertedInto(value ValueId, giid GenericInstanceId, targetAlias DeclaredAlias, elemTok Token) returns bool throws SourceParseError
 		if self.storageDiffersFromAlias(value, targetAlias: targetAlias) 'wouldOccupyTheSlotDifferently'
 			return true
@@ -80817,9 +80830,10 @@ export type Parser
 	// rather than a rule about ranges.
 	//
 	// ⭐⭐ **AND THE SLOT ANSWERS ONLY FOR AN ELEMENT COLUMN THE COMPILER ITSELF INFERRED**
-	// (`arrayElementMayBeRestated`) — a literal of `Octet`s, of `String`s or of ARRAYS names its own
-	// element type, and restating one would overrule the source. Those keep the instance they infer
-	// and so keep the positioned argument refusal they earn.
+	// (`arrayElementMayBeRestated`) — a literal of `Octet`s or of `String`s names its own element type,
+	// and restating one would overrule the source. Those keep the instance they infer and so keep the
+	// positioned argument refusal they earn. A literal of ARRAYS is restated only when its element is
+	// already the instance the slot's element names.
 	//
 	// ⭐ **IT WIDENS NOTHING FOR THE COLUMN IT DOES ANSWER: EVERY ELEMENT IS STILL ADMITTED AGAINST THE
 	// INSTANCE** by the element rule a `from` head already goes through (`admitArrayLiteralElement`), so a
@@ -81141,15 +81155,6 @@ export type Parser
 		return self.declaredTupleTargetOf(self.signatures.fieldTypeOf(layout, index: column, into: self.artifact.typeNames))
 	end 'declaredTupleColumnTarget'
 
-	function stateContainerElementTupleTarget(giid GenericInstanceId, valueStart ElementIndex)
-		if self.signatures.containerElementIsOpaque(giid) 'opaqueInSharedBody'
-			self.stateTupleLiteralTargetAt(NoDeclaredTupleTarget, tokenIndex: valueStart)
-			return
-		end 'opaqueInSharedBody'
-
-		self.stateTupleLiteralTargetAt(self.declaredTupleTargetOf(self.signatures.adoptType(self.signatures.containerElementType(giid), into: self.artifact.typeNames)), tokenIndex: valueStart)
-	end 'stateContainerElementTupleTarget'
-
 	function stateTupleLiteralTargetAt(target DeclaredTupleTarget, tokenIndex ElementIndex)
 		self.tupleLiteralTargetTokenIndex = tokenIndex
 		self.tupleLiteralTarget = target
@@ -81270,14 +81275,14 @@ export type Parser
 		end 'declared'
 	end 'stateDeclaredReturnArrayLiteralTarget'
 
-	function stateContainerElementArrayLiteralTarget(giid GenericInstanceId, valueStart ElementIndex)
+	function stateContainerElementLiteralTargets(giid GenericInstanceId, valueStart ElementIndex)
 		if self.signatures.containerElementIsOpaque(giid) 'opaqueInSharedBody'
-			self.stateArrayLiteralTargetAt(DeclaredArrayInstance.none, tokenIndex: valueStart)
+			self.stateNoElementLiteralTargets(valueStart)
 			return
 		end 'opaqueInSharedBody'
 
 		self.stateDeclaredLiteralTarget(self.signatures.adoptType(self.signatures.containerElementType(giid), into: self.artifact.typeNames), scopeFilePath: self.job.path, valueStart: valueStart)
-	end 'stateContainerElementArrayLiteralTarget'
+	end 'stateContainerElementLiteralTargets'
 
 	function stateArrayLiteralTargetAt(slot DeclaredArrayInstance, tokenIndex ElementIndex)
 		self.arrayLiteralTargetTokenIndex = tokenIndex
@@ -81403,48 +81408,6 @@ export type Parser
 		// whoever owns that file — not a side effect of adding an arm here.
 		throw SourceParseError.unsupported("{literalKind} {columnNoun} of type '{typeTagName(tag)}' — a literal's {columnNoun}s are an integer, a float, a bool, a String, a struct, or a boxed union (a bare `[…]` infers the type from the first {columnNoun})", line: valueTok.line, column: valueTok.column)
 	end 'literalColumnTypeFor'
-
-	// Every element after the first must have the SAME element type — its inferred instance must equal the
-	// first's. A mismatch is an array literal with mixed element types (E2015).
-	//
-	// ⭐⭐ **TWO FUNCTION VALUES DO NOT ANSWER THE GID QUESTION, SO THEY ARE ASKED THE SHAPE QUESTION INSTEAD.**
-	// A function element's instance is keyed on its governing NAME (`literalColumnTypeFor`), so `[double,
-	// triple]` is two names for what may well be one type, and a gid compare refused it *"mixed element
-	// types"* with both spellings naming the same shape. What the instance genuinely asks of an element —
-	// *what does this cost to store* — has one answer for every function value: one machine word, trivially
-	// copied, no destructor.
-	//
-	// ⛔⛔ **BUT RETURNING BARE HERE WAS A WRONG ANSWER, AND THIS IS THE ONLY CHECK ON THE ROUTE.** A literal
-	// reaches `requireContainerElementType` from NO path — that door's own header says so ("THE ARRAY LITERAL
-	// IS NOT A CALLER … every later one is compared against it by `requireArrayLiteralElementMatches`") — and
-	// nothing downstream sees it either, because `Array` is parser-intrinsic: `[a, b]` builds through
-	// `__managed_create`/`__managed_push`, runtime entries carrying no `FuncSignature`, so `SemanticCheck`'s argument
-	// doors have nothing to check. MEASURED: `[oneArg, twoArg]` then `try ops.get(1)` compiled and CALLED
-	// `twoArg` with an argument nobody passed. The shape comparison itself still cannot happen here (it is
-	// over RESOLVED parameter lists, and `ProgramSignatures` holds return types and no parameter types), so it
-	// is RECORDED — the same `PendingFunctionTypeDoor` every other cross-shape question uses.
-	//
-	// ⚠ **THE MAP LITERAL NEEDS NO SUCH DOOR, AND ONE WAS BUILT HERE AND THEN MEASURED AWAY.** `["k": v]`
-	// desugars to real `Map.upsert` CALLS (`emitMapLiteralUpsert`), so its columns are already judged by
-	// `SemanticCheck.checkTypeParameterArgsAt`'s substituted arm — a second door in `parseHashTableColumnArg`
-	// reported the same mistake twice. Deleting it left the mismatch refused exactly once and every legal map
-	// working, which is what identified it as redundant rather than load-bearing.
-	function requireArrayLiteralElementMatches(elem ValueId, giid GenericInstanceId, elemTok Token) throws SourceParseError
-		let declaredElement = self.signatures.containerElementType(giid)
-
-		if self.tagOf(elem) == ValueTypeTag.function and self.signatures.slotTypeIsAFunctionValue(declaredElement) 'bothAreFunctionValues'
-			self.recordFunctionTypeDoorByName(self.signatures.indexSpaceTypeName(declaredElement), gotName: self.internedName(self.valueNameId(elem)), door: FunctionTypeDoor.containerElement, place: FunctionTypeDoorPlace.unnamed, anchor: elemTok, handedAt: elemTok)
-			return
-		end 'bothAreFunctionValues'
-
-		// ⚠ **THE ELEMENT ARRIVES ALREADY CONVERTED, AND THAT IS WHAT MAKES A BARE ID COMPARISON EXACT.**
-		// `elementMustBeConvertedInto` asks this same question as the conversion's gate, so anything that
-		// COULD be made into the instance's element type already has been — and what reaches here still
-		// wearing another type is a genuinely different element.
-		if (try self.arrayLiteralInstanceFor(elem, elemTok: elemTok)) != giid 'mismatch'
-			throw SourceParseError.unsupported(MixedArrayLiteralElementsMessage, line: elemTok.line, column: elemTok.column)
-		end 'mismatch'
-	end 'requireArrayLiteralElementMatches'
 
 	// Emit `__managed_create(elementSize, elementDestroy)` for instance `giid`, yielding the array
 	// record — the shared producer for a literal and an `IntArray.create()`. Element size is a
@@ -82612,7 +82575,7 @@ export type Parser
 
 		while try self.atAnotherLiteralEntry() 'morePairs'
 			// Every later pair is checked AGAINST the first's columns — the map-literal twin of
-			// `requireArrayLiteralElementMatches` — and rides the ordinary column-argument door, which
+			// `admitArrayLiteralElement` — and rides the ordinary column-argument door, which
 			// characterizes a lone literal and refuses a mismatched tag. A mixed literal is
 			// therefore refused by the same sentence a mismatched `upsert` argument is.
 			// ⚠ The desugared `Map.upsert` declares both parameters, so the call machinery takes each column
@@ -83094,7 +83057,7 @@ export type Parser
 		try self.requireManagedListNodeArg(target, giid: giid, subject: methodTok.value, argTok: targetTok)
 		try self.consumeArrayArgLabel(ArrayValueLabel, required: true)
 		let valueStart = self.pos
-		self.stateContainerElementArrayLiteralTarget(giid, valueStart: valueStart)
+		self.stateContainerElementLiteralTargets(giid, valueStart: valueStart)
 		let raw = try self.parseExpression(func, block: self.bodyState.currentBlock)
 		let checked = try self.storedContainerElement(giid, value: raw, valueStart: valueStart, methodTok: methodTok)
 		let value = try self.moveElementIntoContainer(checked, giid: giid, valueStart: valueStart, destination: self.elementStoreDestination)
@@ -83537,7 +83500,7 @@ export type Parser
 			return try self.parseAliasedVectorLiteral(func, vecTok: vecTok)
 		end 'statedByTheAlias'
 
-		// The literal is parsed FIRST so its own refusals — an empty `[]`, mixed element types, an element type
+		// The literal is parsed FIRST so its own refusals — an empty `[]`, an element of another type, an element type
 		// no literal admits — are reported by the reader that owns those sentences, before this arm asks a
 		// question about an element the program does not have.
 		let openIndex = self.pos
@@ -85953,7 +85916,7 @@ export type Parser
 			let count = try self.parseBuiltinIntegerArg(func, paramName: ManagedMemoryCountParamName, methodTok: methodTok)
 			try self.consumeArrayArgLabel(ManagedMemoryValueParamName, required: false)
 			let valueStart = self.pos
-			self.stateContainerElementArrayLiteralTarget(giid, valueStart: valueStart)
+			self.stateContainerElementLiteralTargets(giid, valueStart: valueStart)
 			let raw = try self.parseExpression(func, block: self.bodyState.currentBlock)
 			let checked = try self.requireContainerElementType(giid, value: raw, valueStart: valueStart, methodTok: methodTok)
 			try self.consume(TokenKind.rightParen)
@@ -87428,9 +87391,8 @@ export type Parser
 	// A shared generic body compiles ONCE, so `self.items.push(item)` has no concrete element type to compare
 	// against; the instantiation's argument is checked in the CALLER's frame, where the type is concrete.
 	//
-	// ⚠ **THE ARRAY LITERAL IS NOT A CALLER, and does not need to be.** `[a, b, c]` has no DECLARED element
-	// type to violate — its first element FIXES the instance (`arrayLiteralInstanceFor`) and every later one
-	// is compared against it by `requireArrayLiteralElementMatches`. It also has no method token to name.
+	// ⚠ **THE ARRAY LITERAL ENTERS BELOW, AT `requireElementFitsSlot`.** Its element has no method token to
+	// name, and its read-only and mutable-store questions are `requireLiteralElementIsStorable`'s.
 	//
 	// ⚠ **AN INTEGRAL ELEMENT SLOT COERCES A CHARACTER LITERAL BEFORE IT COMPARES.** `a.push('e')`
 	// into an `Array with Character` needs nothing — the literal already IS a Character — but pushing one into
@@ -87446,17 +87408,22 @@ export type Parser
 			self.noteMutableStoreSite(value, valueStart: valueStart, place: "an element of the container {String.from(methodTok.value)} writes", anchor: methodTok)
 		end 'aWritableElement'
 
+		return try self.requireElementFitsSlot(giid, value: value, valueStart: valueStart, site: ContainerElementSite.call(methodTok))
+	end 'requireContainerElementType'
+
+	function requireElementFitsSlot(giid GenericInstanceId, value ValueId, valueStart ElementIndex, site ContainerElementSite) returns ValueId throws SourceParseError
 		if self.signatures.containerElementIsOpaque(giid) 'opaqueInSharedBody'
 			return value
 		end 'opaqueInSharedBody'
 
+		let anchor = containerElementSiteAnchor(site)
 		let declared = self.resolvedSlotType(self.signatures.containerElementType(giid))
 
 		// A promise element is compared by its whole promise type, here and not by the two arms below: they
 		// compare a tag, and the type's result and error are what must agree. The check only checks; taking the
 		// promise is `storedContainerElement`'s.
 		if self.valueIsPromise(value) and self.containerElementHoldsPromises(giid) 'promiseElement'
-			try self.requirePromiseSlotAgrees(value, storage: genericInstanceIdOf(declared), anchor: methodTok)
+			try self.requirePromiseSlotAgrees(value, storage: genericInstanceIdOf(declared), anchor: anchor)
 			return value
 		end 'promiseElement'
 
@@ -87464,8 +87431,8 @@ export type Parser
 		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared, slotScopeFilePath: self.job.path)
 
 		if payloadClassIsManaged(class) 'managed'
-			let widened = self.interfaceHandleOf(element, declared: declared, first: methodTok, last: methodTok)
-			try self.requireManagedSlotValueMatches(class, declared: declared, value: widened, placeDoor: FunctionTypeDoor.containerElement, placeName: methodTok.value, placeOwner: SlotOwner.unowned, placeBrand: self.elementBrandOf(giid), placeSpelling: self.elementBrandOf(giid), voice: SlotMismatchVoice.containerElementArgument, anchor: methodTok)
+			let widened = self.interfaceHandleOf(element, declared: declared, first: anchor, last: anchor)
+			try self.requireManagedSlotValueMatches(class, declared: declared, value: widened, placeDoor: FunctionTypeDoor.containerElement, placeName: containerElementSiteName(site), placeOwner: SlotOwner.unowned, placeBrand: self.elementBrandOf(giid), placeSpelling: self.elementBrandOf(giid), voice: SlotMismatchVoice.containerElementArgument, anchor: anchor)
 			return widened
 		end 'managed'
 
@@ -87476,7 +87443,14 @@ export type Parser
 		// The VOICE is the other axis and is the mutator's own: `push` is a METHOD and its element is that
 		// method's ARGUMENT, so the type refusal is the argument sentence rather than the assignment one.
 		// See `SlotMismatchVoice`, which records what calling `push` a "variable" was measured to say.
-		let stored = try self.assignableValue(methodTok, value: element, declared: maxonTypeTag(declared), declaredNameId: typeNameIdOf(declared), door: FunctionTypeDoor.field, placeOwner: SlotOwner.unowned, voice: SlotMismatchVoice.containerElementArgument)
+		let stored = try self.assignableValue(anchor, value: element, declared: maxonTypeTag(declared), declaredNameId: typeNameIdOf(declared), door: FunctionTypeDoor.field, placeOwner: SlotOwner.unowned, voice: SlotMismatchVoice.containerElementArgument)
+
+		// An enum is the one aggregate that reaches here: its value is a scalar `named` tag, so
+		// `assignableValue`'s verdict agrees for any two enums. A managed aggregate's identity is the
+		// `managed` arm's.
+		if self.typeIsEnumOrUnion(maxonTypeTag(declared), nameId: typeNameIdOf(declared)) 'anEnumElement'
+			try self.requireSlotAggregateIdentity(declared, value: element, placeDoor: FunctionTypeDoor.containerElement, placeName: containerElementSiteName(site), placeOwner: SlotOwner.unowned, placeBrand: self.elementBrandOf(giid), placeSpelling: self.elementBrandOf(giid), voice: SlotMismatchVoice.containerElementArgument, anchor: anchor)
+		end 'anEnumElement'
 
 		// ⭐⭐ **THE ELEMENT'S DECLARED RANGE BINDS IT AT RUNTIME TOO — AND THE GUARD GOES
 		// HERE, AT THE STORE, WHICH IS THE LAST PLACE THAT KNOWS THE ELEMENT TYPE.** The element
@@ -87494,9 +87468,16 @@ export type Parser
 		//
 		// ⚠ The zero-initialized slot `Array.resize` EXPOSES crosses no store, so it is refused at the
 		// `resize` instead (E3106) for an element range that excludes zero.
-		self.recordRangeCheckSite(stored, destination: declared, line: methodTok.line, column: methodTok.column)
+		//
+		// A literal element records no site: its range is checked by its conversion in
+		// `admitArrayLiteralElement`.
+		match site 'site'
+			call(method) then self.recordRangeCheckSite(stored, destination: declared, line: method.line, column: method.column)
+			literalElement then break
+		end 'site'
+
 		return stored
-	end 'requireContainerElementType'
+	end 'requireElementFitsSlot'
 
 	function containerElementHoldsPromises(giid GenericInstanceId) returns bool
 		return not self.signatures.containerElementIsOpaque(giid) and typeIsPromiseStorage(self.signatures, t: self.resolvedSlotType(self.signatures.containerElementType(giid)))
@@ -87735,7 +87716,7 @@ export type Parser
 		// adopts an owned temporary, and co-owns a borrowed aggregate. `__managed_set` destroys the LIVE occupant it overwrites (its element_destroy walk of one
 		// slot), so no leak. The TYPE check precedes the move-in for the reason `requireContainerElementType` states.
 		let valueStart = self.pos
-		self.stateContainerElementArrayLiteralTarget(giid, valueStart: valueStart)
+		self.stateContainerElementLiteralTargets(giid, valueStart: valueStart)
 		let raw = try self.parseExpression(func, block: self.bodyState.currentBlock)
 		let checked = try self.storedContainerElement(giid, value: raw, valueStart: valueStart, methodTok: methodTok)
 		let value = try self.moveElementIntoContainer(checked, giid: giid, valueStart: valueStart, destination: self.elementStoreDestination)
@@ -87770,7 +87751,7 @@ export type Parser
 	function parseContainerElementArg(func IrFunction, giid GenericInstanceId, methodTok Token) returns ValueId throws SourceParseError
 		try self.consume(TokenKind.leftParen)
 		let valueStart = self.pos
-		self.stateContainerElementArrayLiteralTarget(giid, valueStart: valueStart)
+		self.stateContainerElementLiteralTargets(giid, valueStart: valueStart)
 		let value = try self.parseExpression(func, block: self.bodyState.currentBlock)
 
 		// The move-in MUST run before the `)` is consumed: `rhsWasBareLocalReference` reads `[valueStart, self.pos)`
@@ -94525,12 +94506,12 @@ export type Parser
 	end 'evalConstElementAtInstance'
 
 	// Every element must belong to the array the first one typed — the folding walk's homogeneity rule, over
-	// TYPES rather than element kinds because that is what this tier has. The SENTENCE is the folding walk's
-	// own (`MixedArrayLiteralElementsMessage`), so one mistake reads one way whichever walk claimed the literal.
+	// TYPES rather than element kinds because that is what this tier has. The SENTENCE is
+	// `arrayElementArgumentMismatch`'s, so one mistake reads one way whichever walk claimed the literal.
 	function requireConstArrayElementAgrees(value ConstFactoryArgumentValue, calls ConstFactoryCallArray, element MaxonType, tok Token) throws ConstEvalError
 		match self.signatures.constContainerColumnCheck(element, value: value, calls: calls, declName: self.signatures.arrayRecordBaseName(), elementFilePath: self.job.path) 'verdict'
 			agrees then return
-			mismatch then throw ConstEvalError.defective(SourceParseError.unsupported(MixedArrayLiteralElementsMessage, line: tok.line, column: tok.column))
+			mismatch(got, expected) then throw ConstEvalError.defective(arrayElementArgumentMismatch(expected, got: got, line: tok.line, column: tok.column))
 		end 'verdict'
 	end 'requireConstArrayElementAgrees'
 
@@ -94712,7 +94693,7 @@ export type Parser
 	// read off the same grammar: an EMPTY literal has no element type to infer, the FIRST element fixes the
 	// element type, and every later element must match it. What differs is only what the walk produces —
 	// folded VALUES here, ops there — which is the fork `evalConstInitializer`'s header states for the whole
-	// evaluator. The two REJECTIONS are worded once and shared (`MixedArrayLiteralElementsMessage`) or
+	// evaluator. The two REJECTIONS are worded once and shared (`arrayElementArgumentMismatch`) or
 	// deliberately not (`EmptyConstArrayLiteralMessage` — see there).
 	//
 	// ⚠ **NO OWNERSHIP BOOKKEEPING, and that is a property of the position rather than an omission.** A
@@ -94751,7 +94732,7 @@ export type Parser
 			// element the walk happened to see first. The comparison is against the FIRST element for that
 			// reason — it is the one the instance is built from.
 			if not constArrayElementsAgree(elem, b: first) 'mixed'
-				throw ConstEvalError.defective(SourceParseError.unsupported(MixedArrayLiteralElementsMessage, line: elemTok.line, column: elemTok.column))
+				throw ConstEvalError.defective(arrayElementArgumentMismatch(constArrayElementDisplayName(first), got: constArrayElementDisplayName(elem), line: elemTok.line, column: elemTok.column))
 			end 'mixed'
 
 			signs = constArrayElementSigns(signs, element: elem)

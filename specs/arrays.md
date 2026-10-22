@@ -2019,7 +2019,7 @@ error E2015: specs/arrays/multi-line-literal-empty-still-rejected.maxon:3:10: Un
 
 The literal's element type comes from what the first element IS, not from the token it starts with. An
 `as`-cast to a ranged alias starts with an int literal and is not an `int`, and reading the token alone
-would report "mixed element types" against a literal with ONE element. The corpus's own case
+would refuse a literal with ONE element as holding an element of another type. The corpus's own case
 (`short-circuit-evaluation`'s `guard-protects-right-side`) covers the multi-element spelling, and these
 pin the one-element and formatting-independence halves it cannot.
 

@@ -325,7 +325,10 @@ Integer` and `typealias Ys = Array with Integer` are one instance (one layout, o
 **brands**: an `Xs` does not flow into a `Ys` slot unless you write `xs as Ys`, which re-brands the value at
 no cost, and `return` re-brands implicitly.
 
-- A `[...]` literal carries no brand and fits either.
+- A `[...]` literal carries no brand and fits either, with or without an `Alias from` head.
+- An element stored into a branded slot must carry the slot's brand, in a literal as in `push`: with
+  `typealias Rows = Array with Xs`, both `Rows from [ys]` and `rows.push(ys)` for a `Ys` value are
+  **E3005**.
 - A brand travels with the value: through a tuple element (`(Xs, Item)` and `(Ys, Item)` are two types),
   a destructuring, a merge and a read of a `var`. The arms of a merge holding two brands are refused.
 - An unbranded `var` takes the brand of the first branded value stored into it, and keeps it: a later

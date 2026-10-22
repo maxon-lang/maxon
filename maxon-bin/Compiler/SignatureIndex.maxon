@@ -1767,6 +1767,16 @@ export function constArrayElementsAgree(a ConstArrayElement, b ConstArrayElement
 	return constArrayElementEnumName(a).equals(constArrayElementEnumName(b))
 end 'constArrayElementsAgree'
 
+export function constArrayElementDisplayName(element ConstArrayElement) returns String
+	return match element 'e'
+		integer or
+		unsignedInteger gives typeTagName(ValueTypeTag.integer)
+		string gives typeTagName(ValueTypeTag.string)
+		character gives typeTagName(ValueTypeTag.character)
+		enumCase(_, typeName) gives String.from(typeName)
+	end 'e'
+end 'constArrayElementDisplayName'
+
 // The enum an element belongs to, or EMPTY for every element kind that names none. Empty is the truth about
 // them rather than a sentinel, and it is what lets the comparison above be one `equals` instead of a second
 // match on the kind.
@@ -35722,14 +35732,24 @@ export type ProgramSignatures
 	//
 	// ⚠ **ONE HALF ALONE IS A WORSE DIAGNOSTIC, MEASURED.** Asked of the arriving column only, a literal of
 	// `Octet`s at a `ByteArray` parameter and a literal of ints at a `String`-element one were both adopted
-	// and then re-refused element by element as *"mixed element types"*, losing the argument's own sentence.
+	// and then re-refused element by element, losing the argument's own sentence.
+	//
+	// A nested-container column is restated only to the instance the declared column already denotes. The
+	// literal adopts the declared id rather than one canonical id for the two: `instanceArgBrand` reads the
+	// raw argument, so only the declared id carries the brand its elements are held to.
 	export function arrayElementMayBeRestated(declared GenericInstanceId, got GenericInstanceId) returns bool
-		let gotTag = maxonTypeTag(self.containerElementType(got))
+		let gotElement = self.containerElementType(got)
+		let gotTag = maxonTypeTag(gotElement)
 		let declaredElement = self.containerElementType(declared)
 
 		if gotTag == ValueTypeTag.integer 'anIntegerElement'
 			return maxonTypeTag(declaredElement) == ValueTypeTag.named
 		end 'anIntegerElement'
+
+		if gotTag == ValueTypeTag.genericInstance 'aNestedContainerElement'
+			let denoted = try self.denotedInstance(declaredElement) otherwise return false
+			return denoted == genericInstanceIdOf(gotElement)
+		end 'aNestedContainerElement'
 
 		return gotTag == ValueTypeTag.function and self.slotTypeIsAFunctionValue(declaredElement)
 	end 'arrayElementMayBeRestated'

@@ -6648,11 +6648,8 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 		//
 		// ⚠ **THE ARRAY LITERAL IS NOT HERE, AND THAT IS WHY ITS OWN DOOR EXISTS.** `Array` is
 		// parser-intrinsic: `[a, b]` builds through `__managed_create`/`__managed_push` runtime entries carrying no
-		// signature, so nothing in this pass sees its elements. `Parser.requireArrayLiteralElementMatches`
-		// records a `containerElement` door for exactly that gap — MEASURED both ways, by deleting each and
-		// watching which programs went quiet. `Array.push` and `List.append` are a third route again (the
-		// parser's `field` door), which is the asymmetry that hid all of this: one rule, covered on some
-		// containers and not their siblings.
+		// signature, so nothing in this pass sees its elements. `Parser.requireElementFitsSlot`, the door
+		// `Array.push` and `List.append` take as well, records a function-type door for exactly that gap.
 		if maxonTypeTag(substituted) == ValueTypeTag.function and argTag == ValueTypeTag.function 'functionTypeArgument'
 			if checkFunctionArgShape(project, func: func, declaredShape: requireFunctionShapeOf(functionTypeRegistryOf(project), name: signatures.indexSpaceTypeName(substituted), side: "declared"), declaredBrand: signatures.indexSpaceTypeName(substituted), argId: argId, param: ArgumentParameter.named(paramName), position: i as ParamCount, callRange: callRange, handedAt: callRange, filePath: filePath, provenance: provenance) 'signatureMismatch'
 				return

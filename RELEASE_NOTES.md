@@ -18,6 +18,14 @@ release's version as its heading when the release is cut.
 - Passing a `let` to a function whose result holds a closure capturing that parameter — in a container,
   a record or bare — is E3078, also when the result is bound by a `let` and the closure only reads.
   Fix: pass a `clone()`.
+- An element of another enum stored into an array by `push`, `set`, `insert` or `fill`, or written in an
+  array literal, is refused (E3005).
+  Fix: store a value of the element's own enum.
+- An array-literal element of another brand is refused (E3005), as `push` refuses one: a `B` value in a
+  `[...]` written at an `Array with A` slot.
+  Fix: re-brand the element with `as` (`[b as A]`).
+- An array-literal element of another type is E3005, where it was E2015.
+  Fix: expect E3005 wherever a script or test matches the code.
 
 ## 0.5.0 — 2026-10-08
 

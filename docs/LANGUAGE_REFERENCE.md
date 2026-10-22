@@ -359,7 +359,8 @@ var known = ["ada": 36 as Age]         // a Map with (String, Age) that can grow
 var seen = AgeArray from [36, 41]      // an AgeArray that can grow
 ```
 
-The element type comes from the first element (or pair). A `let` bound to a literal of bare numbers is a
+The element type comes from the first element (or pair), and every later element is converted to it the
+way an argument is to its parameter: `[1.5, 1]` holds `1.0`, and `["a", 1]` is **E3005**. A `let` bound to a literal of bare numbers is a
 constant: its elements fit any element alias that admits them at each use, and it is immutable — a method
 that writes it is **E3159**. A `var` of such a literal is **E2004**: cast the numbers, or name the alias of an
 `Array`, `Set`, `List` or `Vector` (`AgeArray from [...]`). See
@@ -996,7 +997,10 @@ Integer` and `typealias Ys = Array with Integer` are one instance (one layout, o
 **brands**: an `Xs` does not flow into a `Ys` slot unless you write `xs as Ys`, which re-brands the value at
 no cost, and `return` re-brands implicitly.
 
-- A `[...]` literal carries no brand and fits either.
+- A `[...]` literal carries no brand and fits either, with or without an `Alias from` head.
+- An element stored into a branded slot must carry the slot's brand, in a literal as in `push`: with
+  `typealias Rows = Array with Xs`, both `Rows from [ys]` and `rows.push(ys)` for a `Ys` value are
+  **E3005**.
 - A brand travels with the value: through a tuple element (`(Xs, Item)` and `(Ys, Item)` are two types),
   a destructuring, a merge and a read of a `var`. The arms of a merge holding two brands are refused.
 - An unbranded `var` takes the brand of the first branded value stored into it, and keeps it: a later
@@ -1544,7 +1548,10 @@ end 'main'
 The standard collections accept bracketed literals: a plain `[1, 2, 3]` is an `Array`, `["a": 1]` is a
 `Map`, and `Array`, `Set`, `List` and `Vector` aliases take `Alias from [ ... ]`, for example
 `CharSet from ['a', 'e']`; the alias states the element type, and a `Vector` alias's literal must write
-exactly as many elements as the alias holds. A type that declares `implements InitableFromArrayLiteral with
+exactly as many elements as the alias holds. When that element is itself an array alias, each element is a
+value of it: another `Alias from [ ... ]`, a bare `[ ... ]` that takes its element type from the alias, or
+a local of the inner alias — `Rows from [Ints from [1, 2], [3], row]` over `typealias Rows = Array with
+Ints`. A type that declares `implements InitableFromArrayLiteral with
 Element` takes `Type from [ ... ]`, which is `Type.init(value ElementArray)` over the literal:
 
 ```maxon

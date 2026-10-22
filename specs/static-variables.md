@@ -2007,7 +2007,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:2:14: Unsupported: an array literal with mixed element types — every element must have the same type as the first
+error E3005: <fragment>:2:14: argument type mismatch for 'value': expected 'int', got 'String'
 ```
 
 <!-- test: error.top-level-array-bool-element -->
@@ -3953,7 +3953,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/static-variables/error.an-array-literal-may-not-mix-two-enums.maxon:12:23: Unsupported: an array literal with mixed element types — every element must have the same type as the first
+error E3005: specs/static-variables/error.an-array-literal-may-not-mix-two-enums.maxon:12:23: argument type mismatch for 'value': expected 'Reg', got 'CharClass'
 ```
 
 ### A STATIC MEMBER'S VISIBILITY IS THE MEMBER'S, NOT ITS TYPE'S

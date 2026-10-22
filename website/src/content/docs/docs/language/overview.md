@@ -362,7 +362,8 @@ var known = ["ada": 36 as Age]         // a Map with (String, Age) that can grow
 var seen = AgeArray from [36, 41]      // an AgeArray that can grow
 ```
 
-The element type comes from the first element (or pair). A `let` bound to a literal of bare numbers is a
+The element type comes from the first element (or pair), and every later element is converted to it the
+way an argument is to its parameter: `[1.5, 1]` holds `1.0`, and `["a", 1]` is **E3005**. A `let` bound to a literal of bare numbers is a
 constant: its elements fit any element alias that admits them at each use, and it is immutable — a method
 that writes it is **E3159**. A `var` of such a literal is **E2004**: cast the numbers, or name the alias of an
 `Array`, `Set`, `List` or `Vector` (`AgeArray from [...]`). See
