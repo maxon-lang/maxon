@@ -22,3 +22,5 @@ of the spec here.
 | `chacha20` | `stdlib/ChaCha20.maxon` | `specs/chacha20.md` |
 | `poly1305` | `stdlib/Poly1305.maxon` | `specs/poly1305.md` |
 | `chacha20-poly1305` | `stdlib/ChaCha20Poly1305.maxon` | `specs/chacha20-poly1305.md` |
+| `x25519` | `stdlib/Curve25519.maxon` | `specs/x25519.md` |
+| `ed25519-verify` | `stdlib/Curve25519.maxon` | `specs/ed25519.md` |

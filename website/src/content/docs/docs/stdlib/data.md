@@ -396,6 +396,35 @@ The Poly1305 one-time authenticator (RFC 8439), the tag under [`ChaCha20Poly1305
 `Poly1305Error` has one case, `invalidKeyLength`. A key tags exactly one message: two tags under one key
 let an attacker forge a third. Compare tags with [`constantTimeEqual`](#hmac).
 
+## X25519
+
+X25519 Diffie-Hellman key agreement (RFC 7748). Keys and the shared secret are 32 bytes, little-endian.
+
+| Function | Returns | Throws | Description |
+|----------|---------|--------|-------------|
+| `X25519.publicKey(privateKey ByteArray)` | `ByteArray` | `X25519Error` | The public key of a 32-byte private key: the clamped key times the base point `u = 9`. |
+| `X25519.sharedSecret(privateKey ByteArray, peerPublicKey ByteArray)` | `ByteArray` | `X25519Error` | The secret shared by a private key and a peer's public key. |
+
+`X25519Error` is `invalidLength` when a key is not exactly 32 bytes, or `allZeroSharedSecret` when the
+secret is 32 zero bytes, which a low-order public key forces (TLS 1.3 requires the check). The private key
+is clamped, bit 255 of the public key is ignored, a public key at or above 2^255 − 19 is reduced, and a
+public key on the curve's twist is accepted. Both functions run in time independent of the private key.
+Derive keys from the shared secret with [`hkdfExtract`](#hkdf), never use it directly.
+
+## Ed25519
+
+Ed25519 signature verification (RFC 8032).
+
+| Function | Returns | Throws | Description |
+|----------|---------|--------|-------------|
+| `Ed25519.verify(publicKey ByteArray, message ByteArray, signature ByteArray)` | `bool` | `Ed25519Error` | Whether a 64-byte signature of `message` is valid under a 32-byte public key. |
+
+`Ed25519Error` has one case, `invalidLength`, for a public key that is not 32 bytes or a signature that
+is not 64. Any other input is answered with a `bool`: the check is the cofactorless `[S]B = R + [k]A`, with
+`k` the SHA-512 digest of `R`, the public key and the message reduced mod `L`. A public key that does not
+decode, and an `S` at or above `L`, are `false`. Verification handles public data only and runs in
+variable time.
+
 ## Hasher
 
 `Hasher` is an incremental FNV-1a 64-bit hash, for content keys and cache digests. It is not cryptographic.

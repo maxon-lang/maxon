@@ -1,0 +1,646 @@
+/// X25519 key agreement (RFC 7748) and Ed25519 signature verification (RFC 8032), over the field of
+/// integers modulo 2^255 - 19.
+/// @category Crypto
+
+typealias Curve25519Word = bits(64)
+typealias Curve25519Field = Vector with 10 Curve25519Word
+typealias Curve25519WideProduct = Vector with 19 Curve25519Word
+typealias Curve25519Scalar = Vector with 8 Curve25519Word
+typealias Curve25519LimbIndex = int(0 to 9) implements ElementIndex
+typealias Curve25519WideIndex = int(0 to 18) implements ElementIndex
+typealias Curve25519ScalarWordIndex = int(0 to 7) implements ElementIndex
+typealias Curve25519LimbWidth = int(25 to 26)
+typealias Curve25519LimbOffset = int(0 to 230) implements ElementIndex
+typealias Curve25519PendingBits = int(0 to 33)
+typealias Curve25519SquaringCount = int(1 to 100)
+typealias Curve25519ScalarBit = int(0 to 255)
+typealias Curve25519DigestBit = int(0 to 511) implements ElementIndex
+typealias Curve25519FieldPair = (Curve25519Field, Curve25519Field)
+typealias Curve25519LadderState = (Curve25519Field, Curve25519Field, Curve25519Field, Curve25519Field)
+
+/// Why `X25519.publicKey` or `X25519.sharedSecret` refused its input.
+public enum X25519Error implements Error
+	invalidLength
+	allZeroSharedSecret
+end 'X25519Error'
+
+/// Why `Ed25519.verify` refused its input.
+public enum Ed25519Error implements Error
+	invalidLength
+end 'Ed25519Error'
+
+enum EdwardsDecodingError implements Error
+	nonCanonical
+	notOnCurve
+	negativeZero
+end 'EdwardsDecodingError'
+
+let curve25519KeyBytes = 32
+let ed25519SignatureBytes = 64
+let curve25519LimbCount = 10
+let curve25519WideCount = 19
+let curve25519BitsPerByte = 8
+let curve25519ByteShift = 3
+let curve25519ByteBitMask = 7
+let curve25519ReadBytes = 4
+let curve25519LastByte = 31
+let curve25519SignShift = 7
+let curve25519LimbStride = 25
+let curve25519OddLimbBit = 1
+let curve25519ScalarWordCount = 8
+let curve25519ScalarWordBits = 32
+let curve25519ScalarWordShift = 5
+let curve25519ScalarWordBitMask = 31
+let curve25519InversionTailSquarings = 5
+let curve25519SquareRootTailSquarings = 2
+let x25519LadderSteps = 255
+let x25519TopLadderBit = 254
+let ed25519ScalarBits = 256
+let ed25519TopScalarBit = 255
+let ed25519DigestBits = 512
+let ed25519TopDigestBit = 511
+let ed25519SignatureScalarStart = 32
+
+let curve25519EvenLimbWidth = 26
+let curve25519EvenLimbMask = 0x3FFFFFF as Curve25519Word
+let curve25519OddLimbMask = 0x1FFFFFF as Curve25519Word
+let curve25519ByteMask = 0xFF as Curve25519Word
+let curve25519ScalarWordMask = 0xFFFFFFFF as Curve25519Word
+let curve25519AllOnes = u64.max as Curve25519Word
+let curve25519ZeroWord = 0 as Curve25519Word
+let curve25519OneWord = 1 as Curve25519Word
+let curve25519WrapFactor = 19
+let curve25519Doubling = 2
+
+let x25519ClampLowMask = 248 as Byte
+let x25519ClampHighMask = 127 as Byte
+let x25519ClampHighBit = 64 as Byte
+let x25519BasePointU = 9 as Byte
+let x25519A24 = 121665
+let curve25519ZeroByte = 0 as Byte
+let curve25519SignMask = 0x7F as Byte
+
+function curve25519FieldZero() returns Curve25519Field
+	return Curve25519Field from [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+end 'curve25519FieldZero'
+
+function curve25519FieldOne() returns Curve25519Field
+	return Curve25519Field from [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+end 'curve25519FieldOne'
+
+function curve25519TwiceP() returns Curve25519Field
+	return Curve25519Field from [134217690, 67108862, 134217726, 67108862, 134217726, 67108862, 134217726, 67108862, 134217726, 67108862]
+end 'curve25519TwiceP'
+
+function ed25519CurveD() returns Curve25519Field
+	return Curve25519Field from [56195235, 13857412, 51736253, 6949390, 114729, 24766616, 60832955, 30306712, 48412415, 21499315]
+end 'ed25519CurveD'
+
+function ed25519CurveTwiceD() returns Curve25519Field
+	return Curve25519Field from [45281625, 27714825, 36363642, 13898781, 229458, 15978800, 54557047, 27058993, 29715967, 9444199]
+end 'ed25519CurveTwiceD'
+
+function ed25519SqrtMinusOne() returns Curve25519Field
+	return Curve25519Field from [34513072, 25610706, 9377949, 3500415, 12389472, 33281959, 41962654, 31548777, 326685, 11406482]
+end 'ed25519SqrtMinusOne'
+
+function ed25519BaseX() returns Curve25519Field
+	return Curve25519Field from [52811034, 25909283, 16144682, 17082669, 27570973, 30858332, 40966398, 8378388, 20764389, 8758491]
+end 'ed25519BaseX'
+
+function ed25519BaseY() returns Curve25519Field
+	return Curve25519Field from [40265304, 26843545, 13421772, 20132659, 26843545, 6710886, 53687091, 13421772, 40265318, 26843545]
+end 'ed25519BaseY'
+
+function ed25519BaseT() returns Curve25519Field
+	return Curve25519Field from [28827043, 27438313, 39759291, 244362, 8635006, 11264893, 19351346, 13413597, 16611511, 27139452]
+end 'ed25519BaseT'
+
+function ed25519GroupOrder() returns Curve25519Scalar
+	return Curve25519Scalar from [0x5CF5D3ED, 0x5812631A, 0xA2F79CD6, 0x14DEF9DE, 0, 0, 0, 0x10000000]
+end 'ed25519GroupOrder'
+
+function curve25519Byte(bytes ByteArray, index ElementIndex) returns Curve25519Word
+	return (try bytes.get(index) otherwise panic("curve25519: byte index past the 32 bytes the caller checked")) as Curve25519Word
+end 'curve25519Byte'
+
+function curve25519ReadWord(bytes ByteArray, first ElementIndex) returns Curve25519Word
+	var word = curve25519ZeroWord
+
+	for k in 0 upto curve25519ReadBytes 'eachByte'
+		word = word or (curve25519Byte(bytes, index: first + k) shl (k * curve25519BitsPerByte))
+	end 'eachByte'
+
+	return word
+end 'curve25519ReadWord'
+
+function curve25519Parity(encoded ByteArray) returns Curve25519Word
+	return curve25519Byte(encoded, index: 0) and curve25519OneWord
+end 'curve25519Parity'
+
+function curve25519BitOf(bytes ByteArray, index Curve25519DigestBit) returns Curve25519Word
+	return (curve25519Byte(bytes, index: index shr curve25519ByteShift) shr (index and curve25519ByteBitMask)) and curve25519OneWord
+end 'curve25519BitOf'
+
+function feLimb(f Curve25519Field, index Curve25519LimbIndex) returns Curve25519Word
+	return try f.get(index) otherwise panic("curve25519: limb index past the field element")
+end 'feLimb'
+
+function feSetLimb(f Curve25519Field, index Curve25519LimbIndex, value Curve25519Word)
+	try f.set(index, value: value) otherwise panic("curve25519: limb index past the field element")
+end 'feSetLimb'
+
+function feLimbWidth(index Curve25519LimbIndex) returns Curve25519LimbWidth
+	return curve25519EvenLimbWidth - (index and curve25519OddLimbBit)
+end 'feLimbWidth'
+
+function feLimbMask(index Curve25519LimbIndex) returns Curve25519Word
+	return curve25519OddLimbMask if (index and curve25519OddLimbBit) == curve25519OddLimbBit else curve25519EvenLimbMask
+end 'feLimbMask'
+
+function feLimbOffset(index Curve25519LimbIndex) returns Curve25519LimbOffset
+	return curve25519LimbStride * index + ((index + 1) shr 1)
+end 'feLimbOffset'
+
+function feCarryPass(h Curve25519Field) returns Curve25519Word
+	var carry = curve25519ZeroWord
+
+	for index in 0 upto curve25519LimbCount 'eachLimb'
+		let value = feLimb(h, index: index) + carry
+		carry = value shr feLimbWidth(index)
+		feSetLimb(h, index: index, value: value and feLimbMask(index))
+	end 'eachLimb'
+
+	return carry
+end 'feCarryPass'
+
+function feCarry(h Curve25519Field)
+	let overflow = feCarryPass(h)
+	let low = feLimb(h, index: 0) + overflow * curve25519WrapFactor
+	feSetLimb(h, index: 0, value: low and curve25519EvenLimbMask)
+	feSetLimb(h, index: 1, value: feLimb(h, index: 1) + (low shr curve25519EvenLimbWidth))
+end 'feCarry'
+
+function feAdd(a Curve25519Field, b Curve25519Field) returns Curve25519Field
+	var sum = Curve25519Field.create()
+
+	for index in 0 upto curve25519LimbCount 'eachLimb'
+		feSetLimb(sum, index: index, value: feLimb(a, index: index) + feLimb(b, index: index))
+	end 'eachLimb'
+
+	feCarry(sum)
+	return sum
+end 'feAdd'
+
+function feSub(a Curve25519Field, b Curve25519Field) returns Curve25519Field
+	let twiceP = curve25519TwiceP()
+	var difference = Curve25519Field.create()
+
+	for index in 0 upto curve25519LimbCount 'eachLimb'
+		feSetLimb(difference, index: index, value: feLimb(a, index: index) + feLimb(twiceP, index: index) - feLimb(b, index: index))
+	end 'eachLimb'
+
+	feCarry(difference)
+	return difference
+end 'feSub'
+
+function feMulSmall(a Curve25519Field, factor Curve25519Word) returns Curve25519Field
+	var product = Curve25519Field.create()
+
+	for index in 0 upto curve25519LimbCount 'eachLimb'
+		feSetLimb(product, index: index, value: feLimb(a, index: index) * factor)
+	end 'eachLimb'
+
+	feCarry(product)
+	return product
+end 'feMulSmall'
+
+function feAccumulate(wide Curve25519WideProduct, index Curve25519WideIndex, term Curve25519Word)
+	let sum = (try wide.get(index) otherwise panic("curve25519: product index past the wide product")) + term
+	try wide.set(index, value: sum) otherwise panic("curve25519: product index past the wide product")
+end 'feAccumulate'
+
+function feWideLimb(wide Curve25519WideProduct, index Curve25519WideIndex) returns Curve25519Word
+	return try wide.get(index) otherwise panic("curve25519: product index past the wide product")
+end 'feWideLimb'
+
+function feMul(a Curve25519Field, b Curve25519Field) returns Curve25519Field
+	var wide = Curve25519WideProduct.create()
+
+	for i in 0 upto curve25519LimbCount 'eachLeft'
+		let left = feLimb(a, index: i)
+
+		for j in 0 upto curve25519LimbCount 'eachRight'
+			let factor = ((i and j and curve25519OddLimbBit) + 1) as Curve25519Word
+			feAccumulate(wide, index: i + j, term: left * feLimb(b, index: j) * factor)
+		end 'eachRight'
+	end 'eachLeft'
+
+	for high in curve25519LimbCount upto curve25519WideCount 'eachHighLimb'
+		feAccumulate(wide, index: high - curve25519LimbCount, term: feWideLimb(wide, index: high) * curve25519WrapFactor)
+	end 'eachHighLimb'
+
+	var product = Curve25519Field.create()
+
+	for index in 0 upto curve25519LimbCount 'eachLimb'
+		feSetLimb(product, index: index, value: feWideLimb(wide, index: index))
+	end 'eachLimb'
+
+	feCarry(product)
+	return product
+end 'feMul'
+
+function feSquareTimes(a Curve25519Field, times Curve25519SquaringCount) returns Curve25519Field
+	var result = feMul(a, b: a)
+
+	for _ in 1 upto times 'eachSquaring'
+		result = feMul(result, b: result)
+	end 'eachSquaring'
+
+	return result
+end 'feSquareTimes'
+
+function fePow2250Minus1(z Curve25519Field) returns Curve25519FieldPair
+	let z2 = feMul(z, b: z)
+	let z9 = feMul(feSquareTimes(z2, times: 2), b: z)
+	let z11 = feMul(z9, b: z2)
+	let z2to5 = feMul(feMul(z11, b: z11), b: z9)
+	let z2to10 = feMul(feSquareTimes(z2to5, times: 5), b: z2to5)
+	let z2to20 = feMul(feSquareTimes(z2to10, times: 10), b: z2to10)
+	let z2to40 = feMul(feSquareTimes(z2to20, times: 20), b: z2to20)
+	let z2to50 = feMul(feSquareTimes(z2to40, times: 10), b: z2to10)
+	let z2to100 = feMul(feSquareTimes(z2to50, times: 50), b: z2to50)
+	let z2to200 = feMul(feSquareTimes(z2to100, times: 100), b: z2to100)
+	let z2to250 = feMul(feSquareTimes(z2to200, times: 50), b: z2to50)
+
+	return (z2to250, z11)
+end 'fePow2250Minus1'
+
+function feInvert(z Curve25519Field) returns Curve25519Field
+	let (z2to250, z11) = fePow2250Minus1(z)
+	return feMul(feSquareTimes(z2to250, times: curve25519InversionTailSquarings), b: z11)
+end 'feInvert'
+
+function fePowPMinus5Over8(z Curve25519Field) returns Curve25519Field
+	let (z2to250, _) = fePow2250Minus1(z)
+	return feMul(feSquareTimes(z2to250, times: curve25519SquareRootTailSquarings), b: z)
+end 'fePowPMinus5Over8'
+
+function feDecode(bytes ByteArray) returns Curve25519Field
+	var f = Curve25519Field.create()
+
+	for index in 0 upto curve25519LimbCount 'eachLimb'
+		let offset = feLimbOffset(index)
+		let window = curve25519ReadWord(bytes, first: offset shr curve25519ByteShift)
+		feSetLimb(f, index: index, value: (window shr (offset and curve25519ByteBitMask)) and feLimbMask(index))
+	end 'eachLimb'
+
+	return f
+end 'feDecode'
+
+function feOffset(h Curve25519Field, addend Curve25519Word) returns Curve25519Field
+	var shifted = Curve25519Field.create()
+
+	for index in 0 upto curve25519LimbCount 'eachLimb'
+		feSetLimb(shifted, index: index, value: feLimb(h, index: index))
+	end 'eachLimb'
+
+	feSetLimb(shifted, index: 0, value: feLimb(h, index: 0) + addend)
+	return shifted
+end 'feOffset'
+
+function feEncode(h Curve25519Field) returns ByteArray
+	var probe = feOffset(h, addend: curve25519WrapFactor)
+	let quotient = feCarryPass(probe)
+	var reduced = feOffset(h, addend: quotient * curve25519WrapFactor)
+	_ = feCarryPass(reduced)
+
+	var bytes = ByteArray.create()
+	bytes.reserve(curve25519KeyBytes)
+	var pending = curve25519ZeroWord
+	var pendingBits = 0 as Curve25519PendingBits
+
+	for index in 0 upto curve25519LimbCount 'eachLimb'
+		pending = pending or (feLimb(reduced, index: index) shl pendingBits)
+		pendingBits = pendingBits + (feLimbWidth(index) as Curve25519PendingBits)
+
+		while pendingBits >= curve25519BitsPerByte 'eachByte'
+			bytes.push((pending and curve25519ByteMask) as Byte)
+			pending = pending shr curve25519BitsPerByte
+			pendingBits = pendingBits - curve25519BitsPerByte
+		end 'eachByte'
+	end 'eachLimb'
+
+	bytes.push(pending as Byte)
+	return bytes
+end 'feEncode'
+
+function feEqual(a Curve25519Field, b Curve25519Field) returns bool
+	return feEncode(a).equals(feEncode(b))
+end 'feEqual'
+
+function feSwap(a Curve25519Field, b Curve25519Field, mask Curve25519Word) returns Curve25519FieldPair
+	var left = Curve25519Field.create()
+	var right = Curve25519Field.create()
+
+	for index in 0 upto curve25519LimbCount 'eachLimb'
+		let first = feLimb(a, index: index)
+		let second = feLimb(b, index: index)
+		let flip = mask and (first xor second)
+		feSetLimb(left, index: index, value: first xor flip)
+		feSetLimb(right, index: index, value: second xor flip)
+	end 'eachLimb'
+
+	return (left, right)
+end 'feSwap'
+
+function x25519LadderStep(x1 Curve25519Field, x2 Curve25519Field, z2 Curve25519Field, x3 Curve25519Field, z3 Curve25519Field) returns Curve25519LadderState
+	let a = feAdd(x2, b: z2)
+	let aa = feMul(a, b: a)
+	let b = feSub(x2, b: z2)
+	let bb = feMul(b, b: b)
+	let e = feSub(aa, b: bb)
+	let c = feAdd(x3, b: z3)
+	let d = feSub(x3, b: z3)
+	let da = feMul(d, b: a)
+	let cb = feMul(c, b: b)
+	let sum = feAdd(da, b: cb)
+	let difference = feSub(da, b: cb)
+
+	return (feMul(aa, b: bb), feMul(e, b: feAdd(aa, b: feMulSmall(e, factor: x25519A24))), feMul(sum, b: sum), feMul(x1, b: feMul(difference, b: difference)))
+end 'x25519LadderStep'
+
+function x25519ClampedScalar(privateKey ByteArray) returns ByteArray
+	var scalar = privateKey.clone()
+	let low = try scalar.get(0) otherwise panic("x25519: private key length checked")
+	let high = try scalar.get(curve25519LastByte) otherwise panic("x25519: private key length checked")
+	try scalar.set(0, value: low and x25519ClampLowMask) otherwise panic("x25519: private key length checked")
+	try scalar.set(curve25519LastByte, value: (high and x25519ClampHighMask) or x25519ClampHighBit) otherwise panic("x25519: private key length checked")
+	return scalar
+end 'x25519ClampedScalar'
+
+function x25519Multiply(privateKey ByteArray, uCoordinate ByteArray) returns ByteArray
+	let scalar = x25519ClampedScalar(privateKey)
+	let x1 = feDecode(uCoordinate)
+	var x2 = curve25519FieldOne()
+	var z2 = curve25519FieldZero()
+	var x3 = feDecode(uCoordinate)
+	var z3 = curve25519FieldOne()
+	var swap = curve25519ZeroWord
+
+	for step in 0 upto x25519LadderSteps 'eachBit'
+		let bit = curve25519BitOf(scalar, index: x25519TopLadderBit - step)
+		let mask = (swap xor bit) * curve25519AllOnes
+		(x2, x3) = feSwap(x2, b: x3, mask: mask)
+		(z2, z3) = feSwap(z2, b: z3, mask: mask)
+		swap = bit
+		(x2, z2, x3, z3) = x25519LadderStep(x1, x2: x2, z2: z2, x3: x3, z3: z3)
+	end 'eachBit'
+
+	let mask = swap * curve25519AllOnes
+	let (x, _) = feSwap(x2, b: x3, mask: mask)
+	let (z, _) = feSwap(z2, b: z3, mask: mask)
+
+	return feEncode(feMul(x, b: feInvert(z)))
+end 'x25519Multiply'
+
+function x25519BasePoint() returns ByteArray
+	var point = ByteArray.create()
+	point.growFilled(curve25519KeyBytes, value: curve25519ZeroByte)
+	try point.set(0, value: x25519BasePointU) otherwise panic("x25519: base point has 32 bytes")
+	return point
+end 'x25519BasePoint'
+
+/// X25519 Diffie-Hellman key agreement (RFC 7748).
+public type X25519
+	/// The 32-byte public key of a 32-byte `privateKey`.
+	public static function publicKey(privateKey ByteArray) returns ByteArray throws X25519Error
+		if privateKey.count() != curve25519KeyBytes 'keyLength'
+			throw X25519Error.invalidLength
+		end 'keyLength'
+
+		return x25519Multiply(privateKey, uCoordinate: x25519BasePoint())
+	end 'publicKey'
+
+	/// The 32-byte secret shared by `privateKey` and the peer whose public key is `peerPublicKey`.
+	public static function sharedSecret(privateKey ByteArray, peerPublicKey ByteArray) returns ByteArray throws X25519Error
+		if privateKey.count() != curve25519KeyBytes or peerPublicKey.count() != curve25519KeyBytes 'keyLength'
+			throw X25519Error.invalidLength
+		end 'keyLength'
+
+		let secret = x25519Multiply(privateKey, uCoordinate: peerPublicKey)
+		var combined = curve25519ZeroByte
+
+		for byte in secret 'eachByte'
+			combined = combined or byte
+		end 'eachByte'
+
+		if combined == curve25519ZeroByte 'lowOrder'
+			throw X25519Error.allZeroSharedSecret
+		end 'lowOrder'
+
+		return secret
+	end 'sharedSecret'
+end 'X25519'
+
+function scalarWord(s Curve25519Scalar, index Curve25519ScalarWordIndex) returns Curve25519Word
+	return try s.get(index) otherwise panic("ed25519: scalar word index past the scalar")
+end 'scalarWord'
+
+function scalarSetWord(s Curve25519Scalar, index Curve25519ScalarWordIndex, value Curve25519Word)
+	try s.set(index, value: value) otherwise panic("ed25519: scalar word index past the scalar")
+end 'scalarSetWord'
+
+function scalarFromBytes(bytes ByteArray, first ElementIndex) returns Curve25519Scalar
+	var s = Curve25519Scalar.create()
+
+	for index in 0 upto curve25519ScalarWordCount 'eachWord'
+		scalarSetWord(s, index: index, value: curve25519ReadWord(bytes, first: first + index * curve25519ReadBytes))
+	end 'eachWord'
+
+	return s
+end 'scalarFromBytes'
+
+function scalarAtLeast(a Curve25519Scalar, b Curve25519Scalar) returns bool
+	for step in 0 upto curve25519ScalarWordCount 'eachWord'
+		let index = curve25519ScalarWordCount - 1 - step
+		let left = scalarWord(a, index: index)
+		let right = scalarWord(b, index: index)
+
+		if left != right 'differs'
+			return left > right
+		end 'differs'
+	end 'eachWord'
+
+	return true
+end 'scalarAtLeast'
+
+function scalarSubtract(a Curve25519Scalar, b Curve25519Scalar) returns Curve25519Scalar
+	var difference = Curve25519Scalar.create()
+	var carry = curve25519OneWord
+
+	for index in 0 upto curve25519ScalarWordCount 'eachWord'
+		let sum = scalarWord(a, index: index) + (scalarWord(b, index: index) xor curve25519ScalarWordMask) + carry
+		scalarSetWord(difference, index: index, value: sum and curve25519ScalarWordMask)
+		carry = sum shr curve25519ScalarWordBits
+	end 'eachWord'
+
+	return difference
+end 'scalarSubtract'
+
+function scalarShiftIn(s Curve25519Scalar, bit Curve25519Word) returns Curve25519Scalar
+	var shifted = Curve25519Scalar.create()
+	var carry = bit
+
+	for index in 0 upto curve25519ScalarWordCount 'eachWord'
+		let doubled = (scalarWord(s, index: index) shl 1) + carry
+		scalarSetWord(shifted, index: index, value: doubled and curve25519ScalarWordMask)
+		carry = doubled shr curve25519ScalarWordBits
+	end 'eachWord'
+
+	return shifted
+end 'scalarShiftIn'
+
+function scalarReduce(digest ByteArray) returns Curve25519Scalar
+	let order = ed25519GroupOrder()
+	var reduced = Curve25519Scalar.create()
+
+	for step in 0 upto ed25519DigestBits 'eachBit'
+		reduced = scalarShiftIn(reduced, bit: curve25519BitOf(digest, index: ed25519TopDigestBit - step))
+
+		if scalarAtLeast(reduced, b: order) 'wrap'
+			reduced = scalarSubtract(reduced, b: order)
+		end 'wrap'
+	end 'eachBit'
+
+	return reduced
+end 'scalarReduce'
+
+function scalarBit(s Curve25519Scalar, index Curve25519ScalarBit) returns Curve25519Word
+	return (scalarWord(s, index: (index shr curve25519ScalarWordShift) as Curve25519ScalarWordIndex) shr (index and curve25519ScalarWordBitMask)) and curve25519OneWord
+end 'scalarBit'
+
+type EdwardsPoint
+	let x as Curve25519Field
+	let y as Curve25519Field
+	let z as Curve25519Field
+	let t as Curve25519Field
+
+	static function identity() returns EdwardsPoint
+		return EdwardsPoint{x: curve25519FieldZero(), y: curve25519FieldOne(), z: curve25519FieldOne(), t: curve25519FieldZero()}
+	end 'identity'
+
+	static function base() returns EdwardsPoint
+		return EdwardsPoint{x: ed25519BaseX(), y: ed25519BaseY(), z: curve25519FieldOne(), t: ed25519BaseT()}
+	end 'base'
+
+	static function decode(encoded ByteArray) returns EdwardsPoint throws EdwardsDecodingError
+		let y = feDecode(encoded)
+		let canonical = feEncode(y)
+
+		for (iter, byte) in encoded.withIterator() 'eachByte'
+			let expected = try canonical.get(iter.index()) otherwise panic("ed25519: encoding has 32 bytes")
+			let given = byte and curve25519SignMask if iter.index() == curve25519LastByte else byte
+
+			if given != expected 'mismatch'
+				throw EdwardsDecodingError.nonCanonical
+			end 'mismatch'
+		end 'eachByte'
+
+		let sign = curve25519Byte(encoded, index: curve25519LastByte) shr curve25519SignShift
+		let yy = feMul(y, b: y)
+		let u = feSub(yy, b: curve25519FieldOne())
+		let v = feAdd(feMul(yy, b: ed25519CurveD()), b: curve25519FieldOne())
+		let v3 = feMul(feMul(v, b: v), b: v)
+		let v7 = feMul(feMul(v3, b: v3), b: v)
+		var x = feMul(feMul(u, b: v3), b: fePowPMinus5Over8(feMul(u, b: v7)))
+		let vxx = feMul(v, b: feMul(x, b: x))
+
+		if feEqual(vxx, b: feSub(curve25519FieldZero(), b: u)) 'negated'
+			x = feMul(x, b: ed25519SqrtMinusOne())
+		end 'negated' else if not feEqual(vxx, b: u) 'noRoot'
+			throw EdwardsDecodingError.notOnCurve
+		end 'noRoot'
+
+		let xBytes = feEncode(x)
+		let parity = curve25519Parity(xBytes)
+
+		if sign == curve25519OneWord and xBytes.equals(feEncode(curve25519FieldZero())) 'zeroWithSign'
+			throw EdwardsDecodingError.negativeZero
+		end 'zeroWithSign'
+
+		if parity != sign 'flip'
+			x = feSub(curve25519FieldZero(), b: x)
+		end 'flip'
+
+		let t = feMul(x, b: y)
+		return EdwardsPoint{x: x, y: y, z: curve25519FieldOne(), t: t}
+	end 'decode'
+
+	function add(other EdwardsPoint) returns EdwardsPoint
+		let a = feMul(feSub(y, b: x), b: feSub(other.y, b: other.x))
+		let b = feMul(feAdd(y, b: x), b: feAdd(other.y, b: other.x))
+		let c = feMul(feMul(t, b: ed25519CurveTwiceD()), b: other.t)
+		let d = feMulSmall(feMul(z, b: other.z), factor: curve25519Doubling)
+		let e = feSub(b, b: a)
+		let f = feSub(d, b: c)
+		let g = feAdd(d, b: c)
+		let h = feAdd(b, b: a)
+
+		return EdwardsPoint{x: feMul(e, b: f), y: feMul(g, b: h), z: feMul(f, b: g), t: feMul(e, b: h)}
+	end 'add'
+
+	function negate() returns EdwardsPoint
+		return EdwardsPoint{x: feSub(curve25519FieldZero(), b: x), y: y.clone(), z: z.clone(), t: feSub(curve25519FieldZero(), b: t)}
+	end 'negate'
+
+	function encode() returns ByteArray
+		let inverse = feInvert(z)
+		var encoded = feEncode(feMul(y, b: inverse))
+		let parity = curve25519Parity(feEncode(feMul(x, b: inverse)))
+		let last = try encoded.get(curve25519LastByte) otherwise panic("ed25519: encoding has 32 bytes")
+		try encoded.set(curve25519LastByte, value: last or ((parity shl curve25519SignShift) as Byte)) otherwise panic("ed25519: encoding has 32 bytes")
+		return encoded
+	end 'encode'
+end 'EdwardsPoint'
+
+/// Ed25519 signature verification (RFC 8032).
+public type Ed25519
+	/// Whether `signature` is a valid Ed25519 signature of `message` under `publicKey`.
+	public static function verify(publicKey ByteArray, message ByteArray, signature ByteArray) returns bool throws Ed25519Error
+		if publicKey.count() != curve25519KeyBytes or signature.count() != ed25519SignatureBytes 'lengths'
+			throw Ed25519Error.invalidLength
+		end 'lengths'
+
+		let a = try EdwardsPoint.decode(publicKey) otherwise return false
+		let s = scalarFromBytes(signature, first: ed25519SignatureScalarStart)
+
+		if scalarAtLeast(s, b: ed25519GroupOrder()) 'nonCanonicalS'
+			return false
+		end 'nonCanonicalS'
+
+		let rBytes = try signature.slice(0, endIndex: ed25519SignatureScalarStart) otherwise panic("ed25519: signature length checked")
+		var hashed = rBytes.clone()
+		hashed.append(publicKey)
+		hashed.append(message)
+		let k = scalarReduce(sha512(hashed))
+		let negatedA = a.negate()
+		let basePoint = EdwardsPoint.base()
+		var sum = EdwardsPoint.identity()
+
+		for step in 0 upto ed25519ScalarBits 'eachBit'
+			let index = ed25519TopScalarBit - step
+			sum = sum.add(sum)
+
+			if scalarBit(s, index: index) == curve25519OneWord 'baseBit'
+				sum = sum.add(basePoint)
+			end 'baseBit'
+
+			if scalarBit(k, index: index) == curve25519OneWord 'keyBit'
+				sum = sum.add(negatedA)
+			end 'keyBit'
+		end 'eachBit'
+
+		return sum.encode().equals(rBytes)
+	end 'verify'
+end 'Ed25519'
