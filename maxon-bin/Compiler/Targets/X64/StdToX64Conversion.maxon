@@ -624,6 +624,16 @@ function callOutgoingArgBytes(argFloatMask ArgFloatMask, argCount ParamCount) re
 	return win64OutgoingArgBytes(abiStackSlotsBefore(argFloatMask, index: argCount, capacity: x64RegisterArgCapacity()) as MachineWord)
 end 'callOutgoingArgBytes'
 
+function pathQueryOutgoingArgBytes(verb PathQueryVerb) returns StackSize
+	return match verb 'v'
+		openForResolve gives win64OutgoingArgBytes(CreateFileStackArgWords)
+		systemDirectory or
+		windowsDirectory or
+		fullPath or
+		finalPath gives 0
+	end 'v'
+end 'pathQueryOutgoingArgBytes'
+
 // How many arguments of ONE file this ABI passes in registers — the capacity the shared placement rule
 // (`abiArgIsOnStack`) is asked against. Read off the array itself, so adding a register to the file moves it
 // with no second number to update.
@@ -1144,7 +1154,6 @@ export type StdToX64Lowering
 			osSocketSend or
 			osSocketRecv or
 			osSocketClose or
-			osPathQuery or
 			osSocketServe or
 			osCpuCount or
 			osThreadCpuTicks or
@@ -1244,6 +1253,7 @@ export type StdToX64Lowering
 			// only unread words.
 			osSocketError gives win64OutgoingArgBytes(SocketOptionStackArgWords)
 			osSocketCreate gives win64OutgoingArgBytes(SocketCreateStackArgWords)
+			osPathQuery(_, verb, _, _, _) gives pathQueryOutgoingArgBytes(verb)
 
 			// The two NAME-callee calls: the callee's declared parameter files decide which arguments overflow,
 			// exactly as they decide which register each of the others travels in (`emitCallArgMoves` reads the

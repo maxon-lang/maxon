@@ -91,7 +91,8 @@ function main() returns ExitCode
 
 	try File.writeText(inner.join("f.txt"), content: "x") otherwise return 2
 
-	let script = "New-Item -ItemType Junction -Path '{base.join("link").toString()}' -Target '{base.join("real").toString()}' | Out-Null"
+	let link = base.join("link").toString()
+	let script = "Remove-Item -LiteralPath '{link}' -Force -ErrorAction SilentlyContinue; New-Item -ItemType Junction -Path '{link}' -Target '{base.join("real").toString()}' | Out-Null"
 	let made = try Subprocess.run(Executable.name("powershell"), arguments: ["-NoProfile", "-Command", script]) otherwise return 3
 
 	if not made.succeeded() 'noJunction'
@@ -126,6 +127,40 @@ true
 true
 true
 false
+```
+
+<!-- test: filepath-resolved-physically-keeps-the-callers-registers -->
+Values the caller holds across several `resolvedPhysically` calls are still intact after them: the open that
+begins a resolve passes stack arguments, and the frame has to reserve room for them.
+```maxon
+function main() returns ExitCode
+	let base = Directory.currentPath().join("resolved-physically-registers")
+	let inner = base.join("inner")
+
+	if not Directory.create(inner) 'noDirectory'
+		return 1
+	end 'noDirectory'
+
+	let root = try base.resolvedPhysically() otherwise return 2
+	let file = root.join("inner")
+	let viaFirst = try base.join("inner").resolvedPhysically() otherwise return 3
+	let viaSecond = try base.join("inner").resolvedPhysically() otherwise return 4
+
+	print("{viaFirst.equals(file)}\n")
+	print("{viaSecond.equals(root.join("inner"))}\n")
+
+	try Directory.delete(inner) otherwise return 5
+	try Directory.delete(base) otherwise return 6
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true
+true
 ```
 
 <!-- test: filepath-resolved-physically-throws-for-a-missing-path -->
