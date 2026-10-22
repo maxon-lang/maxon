@@ -1,0 +1,87 @@
+let InlinedHandlerCaseLabel = "an-address-inside-a-handler-inlined-into-a-synthesized-loop-is-armed"
+
+let ServiceLoopName = "Mixer.__loop"
+let HandlerName = "mixRounds"
+let HandlerQualifier = "."
+let RangeSiteColumn = 1
+
+test 'an address inside an authored handler inlined into a synthesized loop is armed and stops as the handler'
+	let staged = builtFixture(InlinedHandlerCaseLabel, fixture: ServiceHandlerFixtureName)
+	let executable = builtExecutable(staged)
+	let dump = spawnDumpInfo(executable, staged: staged, sections: StringArray.create())
+
+	try Expect.equal(dump.exitCode(), expected: 0, message: "`{DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar. It wrote to stderr: {dump.stderr}")
+
+	let printed = withoutCarriageReturns(dump.stdout)
+	let loopRow = functionRowOf(dumpSectionRows(printed, heading: DumpFunctionsHeading), name: ServiceLoopName)
+	let (loopStart, loopLimit) = requiredCodeRange(loopRow, what: "`{ServiceLoopName}`'s function row")
+	let rangeRows = dumpSectionRows(printed, heading: DumpInlineRangesHeading)
+	let (handlerOffset, siteRow) = handlerRangeInLoop(dumpSectionRows(printed, heading: DumpInlineSitesHeading), rangeRows: rangeRows, start: loopStart, limit: loopLimit)
+
+	try Expect.equal(originIn(loopRow), expected: SynthesizedOrigin, message: "the message loop of a spawned type is written by the compiler, and the sidecar must say so; the row was: {loopRow}")
+	try Expect.equal(originIn(siteRow), expected: AuthoredOrigin, message: "`{HandlerName}` is the program's own code wherever the inliner copied it, and its inline site must say so; the row was: {siteRow}")
+
+	if anInlineRangeStartsAt(rangeRows, offset: loopStart) 'noControlOffset'
+		panic("{InlinedHandlerCaseLabel}: the gate could not run — `{ServiceLoopName}` opens with an inlined body at {hexSpelling(loopStart)}, so there is no offset of the loop's own code to aim the control at")
+	end 'noControlOffset'
+
+	let commands = debugCommandLine(["{BreakCommand} {exactOffsetTarget(handlerOffset)}", "{BreakCommand} {exactOffsetTarget(loopStart)}", RunCommand])
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: BreakpointEventName)
+
+	try Expect.equal(answers.count(), expected: 2, message: "each `{BreakCommand}` answers one `{BreakpointEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	let handler = eventAt(answers, index: 0)
+	try Expect.equal(textOf(handler, node: handler.root, key: ActionKey), expected: SetAction, message: "{hexSpelling(handlerOffset)} is `{HandlerName}`'s code, inlined into `{ServiceLoopName}`: whose code an offset is follows the innermost inline site there, not the physical function that holds it. {said}")
+
+	let loop = eventAt(answers, index: 1)
+	try Expect.equal(textOf(loop, node: loop.root, key: ActionKey), expected: RefusedAction, message: "the control: `{ServiceLoopName}`'s own entry is the compiler's code. {said}")
+	try Expect.equal(textOf(loop, node: loop.root, key: ReasonKey), expected: InsideRuntimeSymbolReason, message: "the control's refusal names why. {said}")
+
+	let stops = eventsOfKind(events, kind: StopEventName)
+	try Expect.atLeast(stops.count(), than: 1, message: "every message runs `{HandlerName}`, so the armed offset is reached. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	let stopped = eventAt(stops, index: 0)
+	try Expect.equal(textOf(stopped, node: stopped.root, key: OffsetKey), expected: hexSpelling(handlerOffset), message: "the stop is at the armed offset. {said}")
+
+	let frames = childrenOf(stopped, node: stopped.root, key: BacktraceKey)
+	try Expect.atLeast(frames.count(), than: 1, message: "a `{StopEventName}` carries its walk under `{BacktraceKey}`. {said}")
+	try Expect.isTrue(namesTheHandler(textOf(stopped, node: nodeAt(frames, index: 0), key: FunctionKey)), message: "the innermost frame at a stop inside the inlined handler is `{HandlerName}`, not the loop it was copied into. {said}")
+end 'an address inside an authored handler inlined into a synthesized loop is armed and stops as the handler'
+
+function namesTheHandler(name String) returns bool
+	return name == HandlerName or name.endsWith("{HandlerQualifier}{HandlerName}")
+end 'namesTheHandler'
+
+function handlerRangeInLoop(siteRows StringArray, rangeRows StringArray, start PrintedNumber, limit PrintedNumber) returns (PrintedNumber, String)
+	for rangeRow in rangeRows 'eachRange'
+		let offset = hexValue(firstToken(rangeRow))
+		let site = try whitespaceTokens(rangeRow).get(RangeSiteColumn) otherwise continue
+
+		if offset < start or offset >= limit 'outsideTheLoop'
+			continue
+		end 'outsideTheLoop'
+
+		for siteRow in siteRows 'eachSite'
+			let name = try inlineSiteNameIn(siteRow) otherwise continue
+
+			if firstToken(siteRow) == site and namesTheHandler(name) 'theHandlersSite'
+				return (offset, siteRow)
+			end 'theHandlersSite'
+		end 'eachSite'
+	end 'eachRange'
+
+	panic("{InlinedHandlerCaseLabel}: the gate could not run — no inline range of `{HandlerName}` lies inside `{ServiceLoopName}` [{hexSpelling(start)}, {hexSpelling(limit)}), so the compiler did not inline the handler into its loop. Sites:{listedLines(siteRows)}{LineFeed}Ranges:{listedLines(rangeRows)}")
+end 'handlerRangeInLoop'
+
+function anInlineRangeStartsAt(rangeRows StringArray, offset PrintedNumber) returns bool
+	for rangeRow in rangeRows 'eachRange'
+		if hexValue(firstToken(rangeRow)) == offset 'startsThere'
+			return true
+		end 'startsThere'
+	end 'eachRange'
+
+	return false
+end 'anInlineRangeStartsAt'

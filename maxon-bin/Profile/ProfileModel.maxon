@@ -242,11 +242,7 @@
 		// about what was sampled. The tables are weighted by `charged`; the capture counts and the truncated and
 		// unreadable STACK counts are not, because each is a count of stacks read.
 		export function accept(frames ProfileStringArray, charged ProfileCharges, stackIdentity ProfileStackBase, lostItsRoot bool, hadNoChain bool)
-			let weight = charged as ProfileTally
-			self.samples = self.samples + weight
-			self.captures = self.captures + 1
-			self.truncated = self.truncated + (1 if lostItsRoot else 0)
-			self.unreadable = self.unreadable + (1 if hadNoChain else 0)
+			let weight = self.countCapture(charged, lostItsRoot: lostItsRoot, hadNoChain: hadNoChain)
 
 			// The LEAF is what decides whether this sample was symbolized: it is the code that was actually
 			// executing, and the only frame the profile attributes SELF time to.
@@ -284,12 +280,20 @@
 			bumpProfileTally(self.stackTotal, key: "{stackIdentity}{ProfilePathSeparator}{profileOutermostNamedFrame(frames)}", by: weight)
 		end 'accept'
 
-		export function acceptRuntime(charged ProfileCharges)
+		export function acceptRuntime(charged ProfileCharges, lostItsRoot bool, hadNoChain bool)
+			let weight = self.countCapture(charged, lostItsRoot: lostItsRoot, hadNoChain: hadNoChain)
+			self.inRuntime = self.inRuntime + weight
+		end 'acceptRuntime'
+
+		function countCapture(charged ProfileCharges, lostItsRoot bool, hadNoChain bool) returns ProfileTally
 			let weight = charged as ProfileTally
 			self.samples = self.samples + weight
 			self.captures = self.captures + 1
-			self.inRuntime = self.inRuntime + weight
-		end 'acceptRuntime'
+			self.truncated = self.truncated + (1 if lostItsRoot else 0)
+			self.unreadable = self.unreadable + (1 if hadNoChain else 0)
+
+			return weight
+		end 'countCapture'
 
 		export function finish(exePath String, targetStatus ProfileTargetStatus, runCompleted bool, requestedRateHz ProfileRate, ticks ProfileTally, durationSeconds ProfileSeconds, minPercent ProfileShare) returns ProfileReport
 			return ProfileReport.create(exePath, targetStatus: targetStatus, runCompleted: runCompleted, requestedRateHz: requestedRateHz, ticks: ticks, durationSeconds: durationSeconds, samples: self.samples, captures: self.captures, samplesUnsymbolized: self.unsymbolized, samplesInRuntime: self.inRuntime, stacksUnreadable: self.unreadable, stacksTruncated: self.truncated, minPercent: minPercent, functions: rankedProfileFunctions(self.selfByName, totals: self.totalByName), nodes: rankedProfileNodes(self.pathTotal, leaves: self.pathSelf), stacks: rankedProfileStacks(self.stackTotal))

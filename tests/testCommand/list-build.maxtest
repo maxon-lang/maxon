@@ -16,8 +16,6 @@ let BinaryPassedExit = 0
 let BinaryFailedExit = 3
 let OneTestRan = 1
 let ListedTests = 2
-let DebugCommandWord = "debug"
-let DumpInfoOption = "--dump-info"
 let FilesSection = "files"
 let LedgerSourceName = "ledger.maxtest"
 let StagedSourcesDir = ".maxon/test/staged/"
@@ -37,12 +35,10 @@ test 'list-build builds a binary with its sidecar, each select runs one test, an
 	try Expect.isTrue(File.exists(binary), message: "`{BinaryKey}` names the binary `{BuildFlag}` built, and there is none at {binarySpelled}")
 	try Expect.isTrue(File.exists(try FilePath.from("{binarySpelled}{SidecarSuffix}") otherwise binary), message: "a test binary is built with its debug-info sidecar beside it, which is what a debugger needs to launch one test; there is none beside {binarySpelled}")
 
-	let dumped = try Subprocess.run(Executable.path(testedCompilerPath()), arguments: [DebugCommandWord, DumpInfoOption, binarySpelled, FilesSection]) otherwise (e) 'dumpFailed'
-		panic("list-build.test: the gate could not run — could not spawn `{DebugCommandWord} {DumpInfoOption}` over {binarySpelled} ({e.displayReason()})")
-	end 'dumpFailed'
+	let dumped = spawnDumpInfo(binary, staged: Directory.currentPath(), sections: [FilesSection])
 
 	let ledgerRows = fileRowsNaming(dumped.stdout, file: LedgerSourceName)
-	try Expect.equal(ledgerRows.count(), expected: 1, message: "the test binary's sidecar names `{LedgerSourceName}` once in its file table; `{DebugCommandWord} {DumpInfoOption} {FilesSection}` printed {dumped.stdout}{dumped.stderr}")
+	try Expect.equal(ledgerRows.count(), expected: 1, message: "the test binary's sidecar names `{LedgerSourceName}` once in its file table; `{DebugSubcommandName} {DumpInfoOptionName} {FilesSection}` printed {dumped.stdout}{dumped.stderr}")
 
 	for row in ledgerRows 'eachLedgerRow'
 		try Expect.isFalse(row.replace(WindowsSeparator, with: PortableSeparator).contains(StagedSourcesDir), message: "the sidecar records the project's own `{LedgerSourceName}`, which a debugger opens and a breakpoint names, not the copy `{TestCommandName}` staged under `{StagedSourcesDir}` and the next run deletes; it recorded {row}")

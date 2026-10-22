@@ -154,7 +154,7 @@
 	function pushProfileFunctionFrame(frames ProfileStringArray, image ProfileImage, offset MxdbgCodeOffset) returns bool
 		return match image.sidecar.functionContaining(offset) 'lookup'
 			none gives pushUnnamedProfileFrame(frames)
-			found(info) gives pushNamedProfileFrame(frames, info: info)
+			found(info) gives pushProfileFrameOf(frames, name: info.name, owner: info.owner())
 		end 'lookup'
 	end 'pushProfileFunctionFrame'
 
@@ -164,11 +164,13 @@
 		return false
 	end 'pushUnnamedProfileFrame'
 
-	function pushNamedProfileFrame(frames ProfileStringArray, info MxdbgFunctionInfo) returns bool
-		frames.push(ProfileUnnamedTextFrame if info.name.isEmpty() else info.name)
+	// Library and generated code count toward the program, unlike the debugger, which presents only
+	// program-owned code: their work is done on the program's behalf and stays visible in a profile.
+	function pushProfileFrameOf(frames ProfileStringArray, name String, owner MxdbgCodeOwner) returns bool
+		frames.push(ProfileUnnamedTextFrame if name.isEmpty() else name)
 
-		return not mxdbgOriginIsTheRuntimes(info.origin)
-	end 'pushNamedProfileFrame'
+		return owner != MxdbgCodeOwner.runtime
+	end 'pushProfileFrameOf'
 
 	// ⭐ **ONE PHYSICAL FRAME IS AS MANY PROFILE FRAMES AS THE CODE AT `offset` HAS CALLEES SPLICED INTO
 	// IT.** A body the inliner spliced away has no frame of its own, so the chain alone would credit its
@@ -176,23 +178,25 @@
 	// innermost spliced body first — where self time goes — then each body it nests under, then the
 	// function whose frame this is, exactly as the panic runtime prints the same frame.
 	function pushProfileFramesAt(frames ProfileStringArray, image ProfileImage, offset MxdbgCodeOffset) returns bool
-		var site = image.sidecar.inlineSiteContaining(offset)
+		let splicedBodyRanTheProgram = pushInlineChainFrames(frames, image: image, site: image.sidecar.inlineSiteContaining(offset))
+		let functionRanTheProgram = pushProfileFunctionFrame(frames, image: image, offset: offset)
 
-		while true 'eachSpliceOutwards'
-			match site 's'
-				none then break 'eachSpliceOutwards'
-				site(index) then site = pushInlineSiteFrame(frames, image: image, index: index)
-			end 's'
-		end 'eachSpliceOutwards'
-
-		return pushProfileFunctionFrame(frames, image: image, offset: offset)
+		return splicedBodyRanTheProgram or functionRanTheProgram
 	end 'pushProfileFramesAt'
 
-	// Push one spliced body's name and answer the site it nests under.
-	function pushInlineSiteFrame(frames ProfileStringArray, image ProfileImage, index MxdbgIndex) returns MxdbgInlineSiteLookup
+	function pushInlineChainFrames(frames ProfileStringArray, image ProfileImage, site MxdbgInlineSiteLookup) returns bool
+		return match site 's'
+			none gives false
+			site(index) gives pushInlineSiteFrame(frames, image: image, index: index)
+		end 's'
+	end 'pushInlineChainFrames'
+
+	function pushInlineSiteFrame(frames ProfileStringArray, image ProfileImage, index MxdbgIndex) returns bool
 		let site = image.sidecar.inlineSite(index)
-		frames.push(site.name)
-		return site.parent
+		let bodyIsTheProgram = pushProfileFrameOf(frames, name: site.name, owner: site.owner())
+		let enclosingRanTheProgram = pushInlineChainFrames(frames, image: image, site: site.parent)
+
+		return bodyIsTheProgram or enclosingRanTheProgram
 	end 'pushInlineSiteFrame'
 
 	// ⭐ **ONLY THE LEAF EARNS A FOREIGN PLACEHOLDER.** Above the leaf, leaving `.text` is where our code ends
@@ -212,8 +216,8 @@
 	// THE WALK
 	// ========================================================================================
 
-	// Follow the frame-pointer chain through the COPIED window, naming each frame as it goes. True when the
-	// walk hit its depth bound, which means it lost the stack's outermost frames.
+	// Follow the frame-pointer chain through the COPIED window, naming each frame as it goes. `lostItsRoot`
+	// is true when the walk hit its depth bound, which means it lost the stack's outermost frames.
 	//
 	// Two things bound it, and they close different failures. The WINDOW bounds reads, so a frame pointer
 	// into the target's heap or into another stack simply ends the walk. STRICT INCREASE bounds cycles: a
@@ -245,14 +249,14 @@
 			frames.push(profileForeignLeafFrame(image, address: leafPc))
 
 			if not SampledProcess.foreignCodeKeepsTheFrameChain() 'chainUntrusted'
-				return ProfileWalk.of(false, rootFrame: 0, runtimeOnly: false)
+				return ProfileWalk.of(false, rootFrame: 0, sawOurCode: sawOurCode, ranTheProgram: ranTheProgram)
 			end 'chainUntrusted'
 		end 'foreignLeaf'
 
 		let windowBytes = window.byteCount()
 
 		if windowBytes < ProfileFrameLinkBytes 'nothingToWalk'
-			return ProfileWalk.of(false, rootFrame: 0, runtimeOnly: false)
+			return ProfileWalk.of(false, rootFrame: 0, sawOurCode: sawOurCode, ranTheProgram: ranTheProgram)
 		end 'nothingToWalk'
 
 		// The largest offset at which BOTH words of a frame link still fit, computed ONCE by SUBTRACTING the
@@ -263,20 +267,20 @@
 
 		while walked < ProfileMaxWalkFrames 'eachFrame'
 			if fp < stackPointer 'belowTheWindow'
-				return ProfileWalk.of(false, rootFrame: 0, runtimeOnly: false)
+				return ProfileWalk.of(false, rootFrame: 0, sawOurCode: sawOurCode, ranTheProgram: ranTheProgram)
 			end 'belowTheWindow'
 
 			let offset = fp - stackPointer
 
 			if offset > lastFrameLinkOffset 'pastTheWindow'
-				return ProfileWalk.of(false, rootFrame: 0, runtimeOnly: false)
+				return ProfileWalk.of(false, rootFrame: 0, sawOurCode: sawOurCode, ranTheProgram: ranTheProgram)
 			end 'pastTheWindow'
 
-			let savedFp = try window.word(offset as StackWindowOffset) otherwise return ProfileWalk.of(false, rootFrame: 0, runtimeOnly: false)
-			let returnAddress = try window.word((offset + ProfileWordBytes) as StackWindowOffset) otherwise return ProfileWalk.of(false, rootFrame: 0, runtimeOnly: false)
+			let savedFp = try window.word(offset as StackWindowOffset) otherwise return ProfileWalk.of(false, rootFrame: 0, sawOurCode: sawOurCode, ranTheProgram: ranTheProgram)
+			let returnAddress = try window.word((offset + ProfileWordBytes) as StackWindowOffset) otherwise return ProfileWalk.of(false, rootFrame: 0, sawOurCode: sawOurCode, ranTheProgram: ranTheProgram)
 
 			if returnAddress == 0 'rootOfTheStack'
-				return ProfileWalk.of(false, rootFrame: fp, runtimeOnly: sawOurCode and not ranTheProgram)
+				return ProfileWalk.of(false, rootFrame: fp, sawOurCode: sawOurCode, ranTheProgram: ranTheProgram)
 			end 'rootOfTheStack'
 
 			if profileAddressInText(image, address: returnAddress) 'ourCode'
@@ -290,20 +294,20 @@
 				end 'aProgramFrame'
 			end 'ourCode' else 'foreignCode'
 				if not SampledProcess.foreignCodeKeepsTheFrameChain() 'endOfOurCode'
-					return ProfileWalk.of(false, rootFrame: fp, runtimeOnly: sawOurCode and not ranTheProgram)
+					return ProfileWalk.of(false, rootFrame: fp, sawOurCode: sawOurCode, ranTheProgram: ranTheProgram)
 				end 'endOfOurCode'
 			end 'foreignCode'
 
 			walked = walked + 1
 
 			if savedFp <= fp 'notGrowingOutwards'
-				return ProfileWalk.of(false, rootFrame: fp, runtimeOnly: sawOurCode and not ranTheProgram)
+				return ProfileWalk.of(false, rootFrame: fp, sawOurCode: sawOurCode, ranTheProgram: ranTheProgram)
 			end 'notGrowingOutwards'
 
 			fp = savedFp
 		end 'eachFrame'
 
-		return ProfileWalk.of(true, rootFrame: 0, runtimeOnly: sawOurCode and not ranTheProgram)
+		return ProfileWalk.of(true, rootFrame: 0, sawOurCode: sawOurCode, ranTheProgram: ranTheProgram)
 	end 'walkProfileFrames'
 
 	// ========================================================================================
@@ -519,15 +523,16 @@
 		// depth.
 		function chargedWithStack(stack SampledStack, thread SampledThread, charges ProfileCharges, accumulator ProfileAccumulator, image ProfileImage, frames ProfileStringArray) returns ProfileThreadSample
 			let walk = walkProfileFrames(frames, image: image, leafPc: stack.programCounter, framePointer: stack.framePointer, stackPointer: stack.stackPointer, window: stack.window)
+			let hadNoChain = stack.window.byteCount() == 0
 
 			if walk.runtimeOnly 'theRuntimesOwnMachinery'
-				accumulator.acceptRuntime(charges)
+				accumulator.acceptRuntime(charges, lostItsRoot: walk.lostItsRoot, hadNoChain: hadNoChain)
 
 				return ProfileThreadSample.charged(stack.suspendedCycles)
 			end 'theRuntimesOwnMachinery'
 
 			let identity = walk.rootFrame as ProfileStackBase if walk.rootFrame != 0 else profileStackIdentity(stack.reservation, thread: thread)
-			accumulator.accept(frames, charged: charges, stackIdentity: identity, lostItsRoot: walk.lostItsRoot, hadNoChain: stack.window.byteCount() == 0)
+			accumulator.accept(frames, charged: charges, stackIdentity: identity, lostItsRoot: walk.lostItsRoot, hadNoChain: hadNoChain)
 
 			return ProfileThreadSample.charged(stack.suspendedCycles)
 		end 'chargedWithStack'
@@ -545,8 +550,8 @@
 		export let rootFrame as RegisterWord
 		export let runtimeOnly as bool
 
-		static function of(lostItsRoot bool, rootFrame RegisterWord, runtimeOnly bool) returns ProfileWalk
-			return Self{lostItsRoot: lostItsRoot, rootFrame: rootFrame, runtimeOnly: runtimeOnly}
+		static function of(lostItsRoot bool, rootFrame RegisterWord, sawOurCode bool, ranTheProgram bool) returns ProfileWalk
+			return Self{lostItsRoot: lostItsRoot, rootFrame: rootFrame, runtimeOnly: sawOurCode and not ranTheProgram}
 		end 'of'
 	end 'ProfileWalk'
 

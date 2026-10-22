@@ -199,6 +199,10 @@ export type MxdbgFunctionInfo
 	export static function create(name String, codeStart MxdbgCodeOffset, codeEnd MxdbgCodeOffset, prologueOffset MxdbgCodeOffset, frameSize MxdbgIndex, paramCount MxdbgIndex, lineFirst MxdbgIndex, lineCount MxdbgIndex, localFirst MxdbgIndex, localCount MxdbgIndex, displayName String, origin MxdbgOrigin) returns MxdbgFunctionInfo
 		return Self{name: name, codeStart: codeStart, codeEnd: codeEnd, frameSize: frameSize, paramCount: paramCount, lineFirst: lineFirst, lineCount: lineCount, localFirst: localFirst, localCount: localCount, displayName: displayName, origin: origin, prologueOffset: prologueOffset}
 	end 'create'
+
+	export function owner() returns MxdbgCodeOwner
+		return mxdbgCodeOwnerOf(self.origin)
+	end 'owner'
 end 'MxdbgFunctionInfo'
 
 // One line record, materialized. `file` is the path the row's file id names, resolved here so a caller
@@ -352,6 +356,10 @@ export type MxdbgInlineSiteInfo
 	export static function create(name String, parent MxdbgInlineSiteLookup, call MxdbgCallPosition, origin MxdbgOrigin) returns MxdbgInlineSiteInfo
 		return Self{name: name, parent: parent, call: call, origin: origin}
 	end 'create'
+
+	export function owner() returns MxdbgCodeOwner
+		return mxdbgCodeOwnerOf(self.origin)
+	end 'owner'
 end 'MxdbgInlineSiteInfo'
 
 export union MxdbgCallPosition
@@ -840,6 +848,13 @@ export type MxdbgReader
 
 		return MxdbgInlineSiteLookup.site(self.inlineRangeField(lo - 1, field: MxdbgInlineRangeSite))
 	end 'inlineSiteContaining'
+
+	export function ownerWithin(fn MxdbgFunctionInfo, codeOffset MxdbgCodeOffset) returns MxdbgCodeOwner
+		return match self.inlineSiteContaining(codeOffset) 'innermost'
+			none gives fn.owner()
+			site(index) gives self.inlineSite(index).owner()
+		end 'innermost'
+	end 'ownerWithin'
 
 	export function inlineRangeStart(index MxdbgIndex) returns MxdbgCodeOffset
 		return self.boundedInlineRangeField(index, field: MxdbgInlineRangeCodeStart) as MxdbgCodeOffset

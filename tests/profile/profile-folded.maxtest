@@ -29,10 +29,6 @@
 //
 // Staging, spawning and the folds applied to a captured stream come from `ProfileHarness.maxon`.
 
-// The format's own separators: what joins two frames, and what separates a path from its count.
-let FoldedFrameSeparator = ";"
-let FoldedCountSeparator = " "
-
 // The fewest words a `<path> <samples>` line can be. It is a LOWER bound and not an equality: a frame name
 // may carry a space of its own (`[unnamed .text]`), and the count is the LAST word rather than the second.
 let FoldedMinimumFields = 2
@@ -118,19 +114,3 @@ function foldedPathsAboveFloor(report String) returns StringArray throws TestFai
 
 	return paths
 end 'foldedPathsAboveFloor'
-
-// One line's path: everything before the sample count, which is the LAST word. Runs of spacing are folded to
-// one so a name carrying its own space reads the same however the line was laid out.
-function foldedPathIn(tokens StringArray) returns String
-	var path = ""
-
-	for (iter, token) in tokens.withIterator() 'eachToken'
-		if iter.index() == tokens.count() - 1 'theCount'
-			break
-		end 'theCount'
-
-		path.append(token if path.isEmpty() else "{FoldedCountSeparator}{token}")
-	end 'eachToken'
-
-	return path
-end 'foldedPathIn'

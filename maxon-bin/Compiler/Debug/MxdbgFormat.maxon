@@ -431,13 +431,23 @@ export function mxdbgOriginOfWord(word MxdbgIndex) returns MxdbgOriginLookup
 	return MxdbgOriginLookup.unknown
 end 'mxdbgOriginOfWord'
 
-export function mxdbgOriginIsTheAuthors(origin MxdbgOrigin) returns bool
-	return origin == MxdbgOrigin.authored or origin == MxdbgOrigin.test
-end 'mxdbgOriginIsTheAuthors'
+export enum MxdbgCodeOwner
+	program
+	library
+	generated
+	runtime
+end 'MxdbgCodeOwner'
 
-export function mxdbgOriginIsTheRuntimes(origin MxdbgOrigin) returns bool
-	return origin == MxdbgOrigin.runtime or origin == MxdbgOrigin.synthesized
-end 'mxdbgOriginIsTheRuntimes'
+export function mxdbgCodeOwnerOf(origin MxdbgOrigin) returns MxdbgCodeOwner
+	return match origin 'which'
+		authored or
+		test gives MxdbgCodeOwner.program
+		library gives MxdbgCodeOwner.library
+		generated gives MxdbgCodeOwner.generated
+		runtime or
+		synthesized gives MxdbgCodeOwner.runtime
+	end 'which'
+end 'mxdbgCodeOwnerOf'
 
 // Signedness is a property of the declared type and cannot be recovered from the bits, so a reader
 // without this flag renders a narrow signed local as the unsigned pattern it holds.

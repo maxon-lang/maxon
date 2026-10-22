@@ -1,0 +1,40 @@
+// The profiled program the service-loop case measures: a spawned type whose one message handler does all
+// of the program's arithmetic, and a caller that awaits it once per message, so the run is the handler's
+// work interleaved with a park and a context switch on every message.
+
+let MessageCount = 120000
+let RoundsPerMessage = 4000
+let MixMultiplier = 31
+let MixMask = 0xFFFFFF
+
+type Mixer
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function mixRounds(seed Count) returns Count
+		var acc = seed and MixMask
+		var round = 0 as Count
+
+		while round < RoundsPerMessage 'eachRound'
+			acc = (acc * MixMultiplier + round) and MixMask
+			round = round + 1
+		end 'eachRound'
+
+		return acc
+	end 'mixRounds'
+end 'Mixer'
+
+function main() returns ExitCode
+	let mixer = spawn Mixer.create()
+	var total = 0 as Count
+
+	for message in 0 upto MessageCount 'eachMessage'
+		let mixed = try await mixer.mixRounds(message) otherwise panic("serviceloop: the mixer stopped before it answered")
+		total = (total + mixed) and MixMask
+	end 'eachMessage'
+
+	print("mixed {total}\n")
+
+	return 0
+end 'main'

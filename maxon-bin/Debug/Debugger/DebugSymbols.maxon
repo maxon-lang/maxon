@@ -199,7 +199,7 @@ function presentedThrough(reader MxdbgReader, chain MxdbgIndexArray, site MxdbgI
 	var presented = 0 as DebugTally
 
 	for index in chain 'eachSplicedBody'
-		if mxdbgOriginIsTheAuthors(reader.inlineSite(index).origin) 'theAuthorsBody'
+		if reader.inlineSite(index).owner() == MxdbgCodeOwner.program 'theAuthorsBody'
 			presented = presented + 1
 		end 'theAuthorsBody'
 
@@ -345,7 +345,7 @@ export type DebugSymbols
 		for i in 0 upto self.reader.functionCount() 'eachFunction'
 			let fn = self.reader.functionRecord(i as MxdbgIndex)
 
-			if bodyIsTheProgramsOwn(fn, origin: fn.origin) 'aProgramFunction'
+			if bodyIsTheProgramsOwn(fn, owner: fn.owner()) 'aProgramFunction'
 				noteDebugName(names, seen: seen, name: fn.displayName)
 			end 'aProgramFunction'
 		end 'eachFunction'
@@ -356,7 +356,7 @@ export type DebugSymbols
 		for i in 0 upto self.reader.inlineSiteCount() 'eachSplicedBody'
 			let site = self.reader.inlineSite(i as MxdbgIndex)
 
-			if mxdbgOriginIsTheAuthors(site.origin) 'theAuthorsBody'
+			if site.owner() == MxdbgCodeOwner.program 'theAuthorsBody'
 				noteDebugName(names, seen: seen, name: site.name)
 			end 'theAuthorsBody'
 		end 'eachSplicedBody'
@@ -503,7 +503,7 @@ export type DebugSymbols
 	end 'prologueOf'
 
 	export function spliceExitAt(offset DebugAddress) returns DebugSpliceExit
-		match self.libraryBodyAround(codeOffsetIn(offset)) 'body'
+		match self.foreignBodyAround(codeOffsetIn(offset)) 'body'
 			none then return DebugSpliceExit.none
 			site(root) then return self.memoizedExitOfSplice(root)
 		end 'body'
@@ -520,11 +520,11 @@ export type DebugSymbols
 		return exit
 	end 'memoizedExitOfSplice'
 
-	function libraryBodyAround(offset MxdbgCodeOffset) returns MxdbgInlineSiteLookup
+	function foreignBodyAround(offset MxdbgCodeOffset) returns MxdbgInlineSiteLookup
 		var root = MxdbgInlineSiteLookup.none
 
 		for index in self.inlineChainAt(offset) 'eachSplicedBody'
-			if mxdbgOriginIsTheAuthors(self.reader.inlineSite(index).origin) 'theAuthorsBody'
+			if self.reader.inlineSite(index).owner() == MxdbgCodeOwner.program 'theAuthorsBody'
 				break
 			end 'theAuthorsBody'
 
@@ -532,7 +532,7 @@ export type DebugSymbols
 		end 'eachSplicedBody'
 
 		return root
-	end 'libraryBodyAround'
+	end 'foreignBodyAround'
 
 	function exitOfSplice(root MxdbgIndex) returns DebugSpliceExit
 		var ranges = DebugCodeRangeArray.create()
@@ -591,7 +591,7 @@ export type DebugSymbols
 
 		while index != root 'eachEnclosingSite'
 			let enclosing = self.reader.inlineSite(index)
-			throughTheAuthors = throughTheAuthors or mxdbgOriginIsTheAuthors(enclosing.origin)
+			throughTheAuthors = throughTheAuthors or enclosing.owner() == MxdbgCodeOwner.program
 
 			match enclosing.parent 'parent'
 				none then return DebugSpliceDescent.outside
@@ -599,13 +599,13 @@ export type DebugSymbols
 			end 'parent'
 		end 'eachEnclosingSite'
 
-		return DebugSpliceDescent.throughTheAuthors if throughTheAuthors else DebugSpliceDescent.libraryOnly
+		return DebugSpliceDescent.throughTheAuthors if throughTheAuthors else DebugSpliceDescent.foreignOnly
 	end 'descentFrom'
 
 	export function functionAtIsTheProgramsOwn(offset DebugAddress) returns bool
 		return match self.reader.functionContaining(codeOffsetIn(offset)) 'enclosing'
 			none gives false
-			found(fn) gives bodyIsTheProgramsOwn(fn, origin: fn.origin)
+			found(fn) gives bodyIsTheProgramsOwn(fn, owner: fn.owner())
 		end 'enclosing'
 	end 'functionAtIsTheProgramsOwn'
 
@@ -734,14 +734,14 @@ export type DebugSymbols
 		for index in self.inlineChainAt(offset) 'eachSplicedBody'
 			let site = self.reader.inlineSite(index)
 
-			if mxdbgOriginIsTheAuthors(site.origin) 'theAuthorsBody'
+			if site.owner() == MxdbgCodeOwner.program 'theAuthorsBody'
 				frames.push(DebugFrame.create(frames.count() as DebugFrameNumber, functionName: site.name, path: position.path.clone(), spot: position.spot.clone(), offset: offset as DebugAddress, inlined: true, site: MxdbgInlineSiteLookup.site(index), framePointer: framePointer))
 			end 'theAuthorsBody'
 
 			position = self.callerPositionOf(site, fn: fn, offset: offset)
 		end 'eachSplicedBody'
 
-		if mxdbgOriginIsTheAuthors(fn.origin) 'theAuthorsFunction'
+		if fn.owner() == MxdbgCodeOwner.program 'theAuthorsFunction'
 			frames.push(DebugFrame.create(frames.count() as DebugFrameNumber, functionName: fn.displayName, path: position.path.clone(), spot: position.spot.clone(), offset: offset as DebugAddress, inlined: false, site: MxdbgInlineSiteLookup.none, framePointer: framePointer))
 		end 'theAuthorsFunction'
 	end 'appendKnownFrames'
@@ -794,7 +794,7 @@ export type DebugSymbols
 		var presented = MxdbgIndexArray.create()
 
 		for index in self.inlineChainAt(offset) 'eachSplicedBody'
-			if mxdbgOriginIsTheAuthors(self.reader.inlineSite(index).origin) 'theAuthorsBody'
+			if self.reader.inlineSite(index).owner() == MxdbgCodeOwner.program 'theAuthorsBody'
 				presented.push(index)
 			end 'theAuthorsBody'
 		end 'eachSplicedBody'
@@ -934,9 +934,11 @@ export type DebugSymbols
 		let file = position.path.fileName()
 		let named = DebugFunctionNameLookup.named(self.presentedNameAt(offset as DebugAddress, hidden: 0))
 
-		if mxdbgOriginIsTheRuntimes(fn.origin) 'notABodyTheProgramsAuthorWrote'
+		// Only the runtime's code is refused: library and generated code at an exact offset is armable,
+		// though the debugger presents and steps only program-owned code.
+		if self.reader.ownerWithin(fn, codeOffset: offset) == MxdbgCodeOwner.runtime 'theRuntimesCode'
 			return BreakResolution.refused(file, line: position.spot.lineLookup(), functionName: named, reason: DebugInsideRuntimeSymbolReason)
-		end 'notABodyTheProgramsAuthorWrote'
+		end 'theRuntimesCode'
 
 		return match self.instructionStartAt(fn, offset: offset) 'boundary'
 			start gives BreakResolution.atLine(file, line: position.spot.lineLookup(), bodies: singleBody(offset as DebugAddress), functionName: named, breakpoint: exactOffsetSpelling(offset))
@@ -1091,7 +1093,7 @@ export type DebugSymbols
 			let offset = self.reader.inlineRangeStart(i as MxdbgIndex)
 			let site = self.reader.inlineSite(self.reader.inlineRangeSite(i as MxdbgIndex))
 
-			if site.name != name or not mxdbgOriginIsTheAuthors(site.origin) 'anotherBody'
+			if site.name != name or site.owner() != MxdbgCodeOwner.program 'anotherBody'
 				continue
 			end 'anotherBody'
 
@@ -1347,7 +1349,7 @@ typealias DebugSpliceExitMap = Map with (MxdbgIndex, DebugSpliceExit)
 
 enum DebugSpliceDescent
 	outside
-	libraryOnly
+	foreignOnly
 	throughTheAuthors
 end 'DebugSpliceDescent'
 
@@ -1640,23 +1642,16 @@ function prologueStartOf(fn MxdbgFunctionInfo) returns DecodedOffset
 	return (fn.codeStart + fn.prologueOffset) as DecodedOffset
 end 'prologueStartOf'
 
-function bodyIsTheProgramsOwn(fn MxdbgFunctionInfo, origin MxdbgOrigin) returns bool
-	return mxdbgOriginIsTheAuthors(origin) and fn.lineCount > 0
+function bodyIsTheProgramsOwn(fn MxdbgFunctionInfo, owner MxdbgCodeOwner) returns bool
+	return owner == MxdbgCodeOwner.program and fn.lineCount > 0
 end 'bodyIsTheProgramsOwn'
 
 function offsetIsTheProgramsOwnIn(reader MxdbgReader, offset MxdbgCodeOffset) returns bool
 	match reader.functionContaining(offset) 'enclosing'
 		none then return false
-		found(fn) then return bodyIsTheProgramsOwn(fn, origin: innermostOriginOf(reader, fn: fn, offset: offset))
+		found(fn) then return bodyIsTheProgramsOwn(fn, owner: reader.ownerWithin(fn, codeOffset: offset))
 	end 'enclosing'
 end 'offsetIsTheProgramsOwnIn'
-
-function innermostOriginOf(reader MxdbgReader, fn MxdbgFunctionInfo, offset MxdbgCodeOffset) returns MxdbgOrigin
-	return match reader.inlineSiteContaining(offset) 'innermost'
-		none gives fn.origin
-		site(index) gives reader.inlineSite(index).origin
-	end 'innermost'
-end 'innermostOriginOf'
 
 function pathComponentsOf(path String) returns StringArray
 	var components = StringArray.create()

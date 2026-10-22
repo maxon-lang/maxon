@@ -51,6 +51,7 @@ export let StagingRootDirName = "temp/profile"
 // The programs this corpus stages, by their fixture directory names.
 export let HotWarmFixtureName = "hotwarm"
 export let GreenThreadsFixtureName = "greenthreads"
+export let ServiceLoopFixtureName = "serviceloop"
 let SelfCopyFixtureName = "selfcopy"
 export let EndsAtOnceFixtureName = "endsatonce"
 
@@ -60,6 +61,10 @@ export let ProfileRunVerb = "run"
 export let FoldedFlag = "--folded"
 export let MinPercentFlagPrefix = "--min-percent="
 export let TargetEnvFlagPrefix = "--target-env="
+
+// The `--folded` format's own separators: what joins two frames, and what separates a path from its count.
+export let FoldedFrameSeparator = ";"
+export let FoldedCountSeparator = " "
 
 let MacosTargetOption = "--target=arm64-macos"
 export let LinuxTargetOption = "--target=x64-linux"
@@ -554,3 +559,49 @@ function countOnLine(report String, prefix String, profilerLabel String) returns
 
 	panic("profile tests: the gate could not run — '{profilerLabel}' printed no '{prefix}' line, so how many readings its report rests on is unknown. It printed:{LineFeed}{report}")
 end 'countOnLine'
+
+// One `--folded` line's path: everything before the sample count, which is the LAST word. Runs of spacing
+// are folded to one so a name carrying its own space reads the same however the line was laid out.
+export function foldedPathIn(tokens StringArray) returns String
+	var path = ""
+
+	for (iter, token) in tokens.withIterator() 'eachToken'
+		if iter.index() == tokens.count() - 1 'theCount'
+			break
+		end 'theCount'
+
+		path.append(token if path.isEmpty() else "{FoldedCountSeparator}{token}")
+	end 'eachToken'
+
+	return path
+end 'foldedPathIn'
+
+let DumpFunctionsSectionName = "functions"
+let DumpInlineSectionName = "inline"
+
+export function runtimeOwnedNames(staged FilePath) returns StringSet
+	let dump = spawnDumpInfo(executableIn(staged, stem: OutputFileStem), staged: staged, sections: [DumpFunctionsSectionName, DumpInlineSectionName])
+
+	if dump.exitCode() != 0 'noSidecarPrinted'
+		panic("profile tests: the gate could not run — `{DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar, so which code is the runtime's is unknown. It wrote to stderr: {dump.stderr}")
+	end 'noSidecarPrinted'
+
+	var names = StringSet.create()
+
+	for line in outputLines(dump.stdout) 'eachLine'
+		let row = line.trim()
+		let origin = try originOfRow(row) otherwise continue
+
+		if origin != RuntimeOrigin and origin != SynthesizedOrigin 'notTheRuntimes'
+			continue
+		end 'notTheRuntimes'
+
+		names.insert(try rowNameIn(row) otherwise panic("profile tests: the gate could not run — the sidecar row '{row}' carries an origin and no name"))
+	end 'eachLine'
+
+	if names.count() == 0 'noRuntimeListed'
+		panic("profile tests: the gate could not run — the sidecar names no function or inline site whose origin is `{RuntimeOrigin}` or `{SynthesizedOrigin}`. It printed:{LineFeed}{dump.stdout}")
+	end 'noRuntimeListed'
+
+	return names
+end 'runtimeOwnedNames'

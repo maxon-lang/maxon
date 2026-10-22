@@ -1,0 +1,96 @@
+// profile-service-handler-is-attributed-as-itself.maxtest — a spawned type's message handler, which the
+// compiler inlines into the message loop it synthesizes for that type, is reported as the user function it
+// is; and a sample taken inside the green-thread machinery (a park, a context switch) is counted on the
+// `runtime:` line or under its callers, never as a stack of its own rooted in a runtime symbol.
+//
+// The fixture's handler does all of the program's arithmetic and is awaited once per message, so the run
+// carries both a dominant user function and a context switch on every message. MAXON_MAX_PROCS is pinned to
+// one worker, and the rate is the profiler's ceiling, so samples landing inside a switch are near-certain.
+
+let HandlerMethodName = "mixRounds"
+let MethodQualifier = "."
+
+let PinnedProcessorCount = "MAXON_MAX_PROCS=1"
+let SamplingRateArgument = "--rate=10000"
+
+let MaxRuntimeShareDivisor = 2
+
+let SyntheticFramePrefix = "["
+
+test 'a service handler inlined into its synthesized loop is attributed as itself and a switch is not a stack of its own'
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "profile-service-handler-is-attributed-as-itself", fixture: ServiceLoopFixtureName)
+	_ = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: ServiceLoopFixtureName)
+
+	let run = runProfiler(staged, extraArguments: profilerArguments(false))
+	Expect.equal(run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb} {SamplingRateArgument} {TargetEnvFlagPrefix}{PinnedProcessorCount}` did not complete a measurement of the service-loop fixture. It printed:{LineFeed}{run.stdout}{LineFeed}— and wrote to stderr: {run.stderr}")
+
+	let lines = outputLines(run.stdout)
+	Expect.isFalse(reportHasLineStartingWith(lines, prefix: TooFewSamplesPrefix), message: "the profiler reported too few samples to rank anything. It printed:{LineFeed}{run.stdout}")
+	Expect.isTrue(reportHasLine(lines, wanted: HotFunctionsHeader), message: "the report carries no '{HotFunctionsHeader}' section. It printed:{LineFeed}{run.stdout}")
+	Expect.isTrue(reportHasLineStartingWith(lines, prefix: RuntimeLinePrefix), message: "the report carries no '{RuntimeLinePrefix}' line. It printed:{LineFeed}{run.stdout}")
+
+	let samples = totalSamples(run.stdout, profilerLabel: TestedCompilerStem)
+
+	let selfTimeNames = rowNames(significantRows(sectionRows(lines, header: HotFunctionsHeader), totalSamples: samples))
+	Expect.isTrue(listsTheHandler(selfTimeNames), message: "'{HotFunctionsHeader}' does not list the handler `{HandlerMethodName}` above this corpus's floor, though it does all of the fixture's arithmetic. The compiler inlines it into the message loop it synthesizes for the spawned type, so a profiler that names only the physical function — and counts a synthesized one as the runtime's — loses the program's whole workload. It listed:{LineFeed}{terminatedLines(selfTimeNames)}{LineFeed}The whole report was:{LineFeed}{run.stdout}")
+
+	let counted = runtimeSamples(run.stdout, profilerLabel: TestedCompilerStem)
+	Expect.isTrue(counted * MaxRuntimeShareDivisor <= samples, message: "the report counts {counted} of its {samples} samples in the runtime's own machinery, more than one in {MaxRuntimeShareDivisor}. Every message does {HandlerMethodName}'s arithmetic loop and only one park and switch around it, so a larger share means the handler's samples were folded into the runtime. It printed:{LineFeed}{run.stdout}")
+
+	let folded = runProfiler(staged, extraArguments: profilerArguments(true))
+	Expect.equal(folded.exitCode(), expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb} {FoldedFlag}` did not complete a measurement of the service-loop fixture. It printed:{LineFeed}{folded.stdout}{LineFeed}— and wrote to stderr: {folded.stderr}")
+
+	let rootless = runtimeOnlyFoldedLines(folded.stdout, runtimeOwned: runtimeOwnedNames(staged))
+	Expect.isTrue(rootless.isEmpty(), message: "`{FoldedFlag}` printed {rootless.count()} collapsed stack(s) rooted in the runtime that carry no frame of the program. A walk that stopped inside the runtime — inside a context switch, between its stack-pointer switch and its frame-pointer restore — has lost the stack it belongs to, and its sample belongs on the '{RuntimeLinePrefix}' line, not on a stack of its own. They were:{LineFeed}{terminatedLines(rootless)}{LineFeed}The whole output was:{LineFeed}{folded.stdout}")
+end 'a service handler inlined into its synthesized loop is attributed as itself and a switch is not a stack of its own'
+
+function profilerArguments(folded bool) returns StringArray
+	var arguments = StringArray.create()
+	arguments.push(SamplingRateArgument)
+	arguments.push("{TargetEnvFlagPrefix}{PinnedProcessorCount}")
+
+	if folded 'machineFormat'
+		arguments.push(FoldedFlag)
+	end 'machineFormat'
+
+	return arguments
+end 'profilerArguments'
+
+function listsTheHandler(names StringArray) returns bool
+	for name in names 'eachName'
+		if name == HandlerMethodName or name.endsWith("{MethodQualifier}{HandlerMethodName}") 'theHandler'
+			return true
+		end 'theHandler'
+	end 'eachName'
+
+	return false
+end 'listsTheHandler'
+
+function runtimeOnlyFoldedLines(report String, runtimeOwned StringSet) returns StringArray
+	var found = StringArray.create()
+
+	for line in outputLines(report) 'eachLine'
+		if line.isEmpty() 'blank'
+			continue
+		end 'blank'
+
+		let frames = foldedPathIn(whitespaceTokens(line)).split(FoldedFrameSeparator)
+		let root = try frames.get(0) otherwise panic("profile-service-handler-is-attributed-as-itself.test: a split always has a first element")
+
+		if runtimeOwned.contains(root) and not carriesAProgramFrame(frames, runtimeOwned: runtimeOwned) 'rootedInTheRuntime'
+			found.push(line)
+		end 'rootedInTheRuntime'
+	end 'eachLine'
+
+	return found
+end 'runtimeOnlyFoldedLines'
+
+function carriesAProgramFrame(frames StringArray, runtimeOwned StringSet) returns bool
+	for frame in frames 'eachFrame'
+		if not runtimeOwned.contains(frame) and not frame.startsWith(SyntheticFramePrefix) 'aProgramFrame'
+			return true
+		end 'aProgramFrame'
+	end 'eachFrame'
+
+	return false
+end 'carriesAProgramFrame'

@@ -1571,8 +1571,8 @@ lives: every word that names one re-lists the roster first, and an id whose thre
 - `not-running` — for a word that needs a stop while the program is running.
 - `fault-is-terminal` — for a step from a `fault` stop.
 - `unwritable` — for a byte the debugger could not write into the program's code.
-- `inside-runtime-symbol` — for a `break` inside a body the program's author did not write: the runtime
-  tier, and anything the compiler synthesized.
+- `inside-runtime-symbol` — for a `break` at code that is the runtime's own: the runtime tier, and
+  anything the compiler synthesized.
 - `return-hold-taken` — for a conditional `break` on the instruction of a running step's temporary
   breakpoint, when another of that step's temporary breakpoints already shares its instruction with a
   condition. One such instruction at a time may carry a condition.
@@ -1634,7 +1634,9 @@ from 1, so line 0, bare or in a file, is an `error` saying so.
   whose only code is a narrowing cast's range check is a line with code. A line with none answers
   `no-code`.
 - **The runtime's own code** — the entry stub, the scheduler and the rest of the compiler's scaffolding
-  — is refused `inside-runtime-symbol`. Which code is the runtime's is recorded by the build. A `test`
+  — is refused `inside-runtime-symbol`. Which code is the runtime's is recorded by the build, and code
+  the compiler inlined is judged as the body it came from: an offset inside a service's message handler,
+  inlined into the message loop the compiler synthesizes, is armed and stops as the handler. A `test`
   body is the program's own, and is named `test '<prose>'` in stops, backtraces and break answers, as
   `maxon test` names it.
 
@@ -1750,10 +1752,11 @@ Every instruction is four bytes, and the classes are the same numbers; arm64 con
 | `layout` | The record geometry it reads them by: each figure's name and value |
 
 An `origin` says where a function or an inlined body came from: `authored` (the program's own source),
-`test` (a `test` body), `library` (the standard library), `runtime` (the runtime tier), `generated`
+`test` (a `test` body), `library` (the standard library or a scriptlib package), `runtime` (the runtime tier), `generated`
 (source the compiler wrote for this build) or `synthesized` (code with no source, such as the entry
-stub). The debugger treats `authored` and `test` code as the program's own, and refuses a breakpoint
-inside a `runtime` or `synthesized` body by that origin.
+stub). Code inside an inlined body has that body's origin. The debugger treats `authored` and `test`
+code as the program's own, and refuses a breakpoint at `runtime` or `synthesized` code by that origin.
+The profiler counts every frame but a `runtime` or `synthesized` one toward the program.
 
 ```text
 $ maxon debug --dump-info app.exe header
@@ -1950,8 +1953,11 @@ mrt_start;main;spin 10
 mrt_start;main;spin;mix 2194
 ```
 
-The `runtime:` line counts the samples whose stack ran only the runtime's own code, such as the loop a
-scheduler worker runs between green threads. Those samples are counted on that line alone.
+The `runtime:` line counts the samples whose stack, as far as its walk read it, ran only the runtime's
+own code, such as the loop a scheduler worker runs between green threads or a context switch. Those
+samples are counted on that line alone. Library code counts toward the program, and code the compiler
+inlined is named as the body it came from, so a service's message handler, inlined into the message
+loop the compiler synthesizes, has rows of its own.
 
 `--json` prints one object with `exe`, `targetExitCode`, `runCompleted`, `achievedRateHz`,
 `requestedRateHz`, `samples`, `captures`, `samplesUnsymbolized`, `samplesInRuntime` and related counts, and

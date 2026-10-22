@@ -1,12 +1,7 @@
 let NonAuthoredBreakCaseLabel = "break-in-a-non-authored-function-is-refused"
 
 let RuntimeHelperName = "__slab_assert_os_alloc"
-let RuntimeOrigin = "runtime"
-let LibraryOrigin = "library"
 let EntryStubName = "mrt_start"
-let SynthesizedOrigin = "synthesized"
-let OriginColumn = "origin="
-let InsideRuntimeSymbolReason = "inside-runtime-symbol"
 
 test 'a breakpoint in a function the program did not author is refused for where the body came from'
 	let staged = builtFixture(NonAuthoredBreakCaseLabel, fixture: SteppingFixtureName)
@@ -41,16 +36,6 @@ test 'a breakpoint in a function the program did not author is refused for where
 	try Expect.equal(textOf(stub, node: stub.root, key: ReasonKey), expected: InsideRuntimeSymbolReason, message: "the control's refusal names why. {said}")
 	try Expect.equal(eventsOfKind(events, kind: ExitEventName).count(), expected: 1, message: "nothing was armed, so the program runs to its exit. {said}")
 end 'a breakpoint in a function the program did not author is refused for where the body came from'
-
-function originIn(row String) returns String
-	for token in whitespaceTokens(row) 'eachToken'
-		if token.startsWith(OriginColumn) 'thisColumn'
-			return token.replace(OriginColumn, with: "")
-		end 'thisColumn'
-	end 'eachToken'
-
-	panic("break-in-a-non-authored-function-is-refused: the gate could not run — the sidecar's function row names no origin: {row}")
-end 'originIn'
 
 function functionStartIn(row String, name String) returns PrintedNumber
 	match codeRangeIn(row) 'ranged'

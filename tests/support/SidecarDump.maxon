@@ -1,0 +1,57 @@
+public let DebugSubcommandName = "debug"
+public let DumpInfoOptionName = "--dump-info"
+
+public let AuthoredOrigin = "authored"
+public let LibraryOrigin = "library"
+public let RuntimeOrigin = "runtime"
+public let SynthesizedOrigin = "synthesized"
+public let OriginColumn = "origin="
+
+// Naming no section prints the whole sidecar.
+public function spawnDumpInfo(executable FilePath, staged FilePath, sections StringArray) returns CollectedOutput
+	var arguments = StringArray.create()
+	arguments.push(DebugSubcommandName)
+	arguments.push(DumpInfoOptionName)
+	arguments.push(executable.toString())
+
+	for section in sections 'eachSection'
+		arguments.push(section)
+	end 'eachSection'
+
+	return spawnCompiler(arguments, staged: staged, what: "`{TestedCompilerStem} {DebugSubcommandName} {DumpInfoOptionName}`")
+end 'spawnDumpInfo'
+
+let InlineSiteRowPrefix = "["
+let InlineSiteNameColumn = 1
+let FunctionNameColumn = 0
+
+public enum SidecarRowError implements Error
+	noOrigin
+	noName
+end 'SidecarRowError'
+
+public function originOfRow(row String) returns String throws SidecarRowError
+	for token in whitespaceTokens(row) 'eachToken'
+		if token.startsWith(OriginColumn) 'thisColumn'
+			return token.replace(OriginColumn, with: "")
+		end 'thisColumn'
+	end 'eachToken'
+
+	throw SidecarRowError.noOrigin
+end 'originOfRow'
+
+public function originIn(row String) returns String
+	return try originOfRow(row) otherwise panic("the gate could not run — the sidecar's row names no origin: {row}")
+end 'originIn'
+
+public function inlineSiteNameIn(row String) returns String throws SidecarRowError
+	return try whitespaceTokens(row).get(InlineSiteNameColumn) otherwise throw SidecarRowError.noName
+end 'inlineSiteNameIn'
+
+public function rowNameIn(row String) returns String throws SidecarRowError
+	if row.startsWith(InlineSiteRowPrefix) 'anInlineSite'
+		return try inlineSiteNameIn(row)
+	end 'anInlineSite'
+
+	return try whitespaceTokens(row).get(FunctionNameColumn) otherwise throw SidecarRowError.noName
+end 'rowNameIn'

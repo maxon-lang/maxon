@@ -1,0 +1,36 @@
+let MessageCount = 3
+let RoundsPerMessage = 50
+let MixMultiplier = 31
+let MixMask = 0xFFFFFF
+
+type Mixer
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function mixRounds(seed Count) returns Count
+		var acc = seed and MixMask
+		var round = 0 as Count
+
+		while round < RoundsPerMessage 'eachRound'
+			acc = (acc * MixMultiplier + round) and MixMask
+			round = round + 1
+		end 'eachRound'
+
+		return acc
+	end 'mixRounds'
+end 'Mixer'
+
+function main() returns ExitCode
+	let mixer = spawn Mixer.create()
+	var total = 0 as Count
+
+	for message in 0 upto MessageCount 'eachMessage'
+		let mixed = try await mixer.mixRounds(message) otherwise panic("servicehandler: the mixer stopped before it answered")
+		total = (total + mixed) and MixMask
+	end 'eachMessage'
+
+	print("mixed {total}\n")
+
+	return 0
+end 'main'

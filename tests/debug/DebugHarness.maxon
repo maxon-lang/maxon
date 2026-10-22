@@ -35,34 +35,10 @@ export let StagingRootDirName = "temp/debug"
 export let FunctionDeclarationPrefix = "function "
 export let DeclarationNameEnd = "("
 
-// The read-only sidecar surface every dump case in this directory goes through.
-export let DebugSubcommandName = "debug"
-export let DumpInfoOptionName = "--dump-info"
-
 // How the dump writes its numbers, and the ASCII runs their digits come from. Spelled as numbers rather
 // than as character literals, which a receiver position cannot carry.
 export let HexPrefix = "0x"
 let HexBase = 16
-
-// ============================================================================================
-// STAGING AND SPAWNING
-// ============================================================================================
-
-// `<compiler> debug --dump-info <exe> [section...]`. The sections ride as trailing arguments because that
-// is what the command line takes — naming none prints the whole sidecar, which is the default this corpus
-// must not let move.
-export function spawnDumpInfo(executable FilePath, staged FilePath, sections StringArray) returns CollectedOutput
-	var arguments = StringArray.create()
-	arguments.push(DebugSubcommandName)
-	arguments.push(DumpInfoOptionName)
-	arguments.push(executable.toString())
-
-	for section in sections 'eachSection'
-		arguments.push(section)
-	end 'eachSection'
-
-	return spawnCompiler(arguments, staged: staged, what: "`{TestedCompilerStem} {DebugSubcommandName} {DumpInfoOptionName}`")
-end 'spawnDumpInfo'
 
 // ============================================================================================
 // THE DUMP'S SECTIONS
@@ -74,8 +50,8 @@ export let DumpFilesHeading = "files ("
 export let DumpFunctionsHeading = "functions ("
 export let DumpTypesHeading = "types ("
 export let DumpLineTableHeading = "line table ("
-let DumpInlineSitesHeading = "inline sites ("
-let DumpInlineRangesHeading = "inline ranges ("
+export let DumpInlineSitesHeading = "inline sites ("
+export let DumpInlineRangesHeading = "inline ranges ("
 export let DumpGlobalsSectionHeading = "globals ("
 export let DumpLayoutSectionHeading = "layout ("
 
@@ -263,6 +239,7 @@ export let RecursionFixtureName = "recursion"
 export let LibraryCallbackFixtureName = "librarycallback"
 export let ValueCallFixtureName = "valuecall"
 export let ParkingCallFixtureName = "parkingcall"
+export let ServiceHandlerFixtureName = "servicehandler"
 
 export let DebugBatchOption = "--batch"
 export let DebugCommandsOptionPrefix = "--commands="
@@ -802,6 +779,8 @@ function dumpedFunctionRow(executable FilePath, staged FilePath, name String) re
 end 'dumpedFunctionRow'
 
 let PrologueColumn = "prologue=+"
+
+export let InsideRuntimeSymbolReason = "inside-runtime-symbol"
 
 #if arch(arm64)
 	export let PushedFramePointerBytes = 4 as PrintedNumber
