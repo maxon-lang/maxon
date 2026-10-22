@@ -1440,8 +1440,9 @@ The `a-…-reuses-library-parses` cases assert the driver's library-reuse proper
 programs are served every library file's parse from the shared store and still emit what a cold compile of
 each emits. The case name says what its fixture's program declares: `library-reuse/` (a second program),
 `own-types/`, `own-type-names/` (type names different from the first's), `iterating/` (an interface),
-`managed-clone/` (nested managed elements cloned) and `batch-shape/` (per-case directories after a primer
-of another shape). `shadowing/` declares its own `Clock`, and its case asserts the library is parsed cold
+`managed-clone/` (nested managed elements cloned), `batch-shape/` (per-case directories after a primer
+of another shape) and `library-interface-aliases/` (typealiases implementing `ElementIndex` and
+`FullRangeFloat`, which move the library hash, so the driver's sibling program is what serves its third). `shadowing/` declares its own `Clock`, and its case asserts the library is parsed cold
 instead (`library parsed cold (shadowed)`). `contested-library-function/` declares `sleep` in two
 per-case directories, which `stdlib/Sleep.maxon` also declares, and its case asserts the same
 (`library parsed cold (namesOverlap)`).

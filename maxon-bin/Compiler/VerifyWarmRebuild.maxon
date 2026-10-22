@@ -12,9 +12,10 @@
 //      exactly what a cold compile of the edited program emits, and leave every parse artifact it
 //      reuses as the first merge left it.
 //   5. Library reuse: a second program (the input plus a probe declaring its own interface) and a
-//      third declaring none of the input's type names, compiled in one session, are served every
-//      library parse with no footprint drift and emit what a cold compile of each emits. A program
-//      that shadows a library name parses the library cold and never consults the store.
+//      third declaring none of the input's type names, compiled in one session after a sibling of
+//      the third, are served every library parse with no footprint drift and emit what a cold
+//      compile of each emits. A program that shadows a library name parses the library cold and
+//      never consults the store.
 //
 // ⚠ **(3) IS THE ONE WITH TEETH.** (1) and (2) both prove a memo is STABLE; neither can catch the
 // opposite failure — a memo that stays valid after an input it read has CHANGED — and that is the
@@ -1056,6 +1057,11 @@ function verifyLibraryParseReuse(inputPath FilePath, target Target) returns Libr
 	view coldResult = try compileToCodeResult(cold)
 	let storeIsBounded = sharedStoreIsBounded(primer, second: second)
 
+	if verdict == LibraryParseSharing.shareable 'aSiblingPublishes'
+		var sibling = try loadReplacedProject(inputPath, target: target, session: session, firstFileText: siblingProgramText())
+		_ = try compileToCodeResult(sibling)
+	end 'aSiblingPublishes'
+
 	var third = try loadReplacedProject(inputPath, target: target, session: session, firstFileText: RenamedProgramText)
 	view thirdResult = try compileToCodeResult(third)
 
@@ -1087,6 +1093,16 @@ end 'reusedMatchesCold'
 let PrimerMainText = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
 let PrimerBlankText = "// verify-warm-rebuild: the primer program declares nothing here.\n"
 let RenamedProgramText = "enum RenamedProbeDirection\n\tnorth\n\teast\nend 'RenamedProbeDirection'\n\nenum RenamedProbeSurface\n\tpaved\n\tgravel\nend 'RenamedProbeSurface'\n\ntypealias RenamedProbeMeters = int(0 to 1000)\n\ninterface RenamedProbeMeasured\n\tfunction metres() returns RenamedProbeMeters\nend 'RenamedProbeMeasured'\n\ntype RenamedProbeLeg implements RenamedProbeMeasured\n\tlet heading as RenamedProbeDirection\n\tlet surface as RenamedProbeSurface\n\tlet length as RenamedProbeMeters\n\n\tstatic function create(heading RenamedProbeDirection, surface RenamedProbeSurface, length RenamedProbeMeters) returns RenamedProbeLeg\n\t\treturn Self\{heading: heading, surface: surface, length: length\}\n\tend 'create'\n\n\tfunction metres() returns RenamedProbeMeters\n\t\treturn self.length\n\tend 'metres'\nend 'RenamedProbeLeg'\n\nunion RenamedProbeStep\n\tleg(value RenamedProbeLeg)\n\trest\nend 'RenamedProbeStep'\n\nunion RenamedProbeWeather\n\tclear\n\train(millimetres RenamedProbeMeters)\nend 'RenamedProbeWeather'\n\ntypealias RenamedProbeLegs = Array with RenamedProbeLeg\ntypealias RenamedProbeRoutes = Array with RenamedProbeLegs\ntypealias RenamedProbeNames = Map with (String, RenamedProbeMeters)\n\nfunction main() returns ExitCode\n\tvar legs = RenamedProbeLegs.create()\n\tlegs.push(RenamedProbeLeg.create(RenamedProbeDirection.north, surface: RenamedProbeSurface.paved, length: 5))\n\n\tvar routes = RenamedProbeRoutes.create()\n\troutes.push(legs)\n\n\tvar names = RenamedProbeNames.create()\n\tnames.upsert(\"first\", value: 5)\n\n\tlet step = RenamedProbeStep.leg(try legs.get(0) otherwise return 1)\n\tlet weather = RenamedProbeWeather.rain(2)\n\tvar travelled = 0 as RenamedProbeMeters\n\n\tmatch step 'inspect'\n\t\tleg(value) then travelled = value.metres()\n\t\trest then travelled = 0\n\tend 'inspect'\n\n\tmatch weather 'sky'\n\t\tclear then travelled = travelled + 1\n\t\train(millimetres) then travelled = travelled + millimetres\n\tend 'sky'\n\n\tlet wanted = try names.get(\"first\") otherwise 0\n\n\tif routes.count() == 1 and travelled > wanted 'aRoute'\n\t\treturn 0\n\tend 'aRoute'\n\n\treturn 1\nend 'main'"
+
+// The store holds one parse per library file and variant, keyed on the library hash, which an input
+// whose own typealiases implement a library interface moves. The third's key then equals no earlier
+// program's, so a sibling with the third's declarations under other names publishes it first.
+let RenamedProbeNamePrefix = "RenamedProbe"
+let SiblingProbeNamePrefix = "SiblingProbe"
+
+function siblingProgramText() returns String
+	return RenamedProgramText.replace(RenamedProbeNamePrefix, with: SiblingProbeNamePrefix)
+end 'siblingProgramText'
 
 function loadReplacedProject(inputPath FilePath, target Target, session CompileSession, firstFileText String) returns Project throws CompileError
 	var project = try loadProject([inputPath], target: target, session: session)

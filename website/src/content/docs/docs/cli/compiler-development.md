@@ -116,12 +116,20 @@ maxon verify-recheck <file|dir>
   record, struct layout and run of blocks and ops reading the same after each pipeline and after the second
   merge. That check prints `PASS immutable:`, or one `FAIL immutable:` line per change naming the file, the
   stage that made it and the part it changed. It also compiles, in one session, a second program (the file plus a
-  probe that declares its own types and an interface) and a third that shares none of the file's type
-  names, and checks that both are served every library file's parse from the session's store and emit what
-  a cold compile of each emits; for a program that shadows a library type, or declares a name the library
-  declares, it checks instead that the library is parsed cold, and the `PASS` line says
-  `library parsed cold (shadowed)` or `library parsed cold (namesOverlap)`. A file with compile
+  probe that declares its own types and an interface), a sibling program and a third that shares none of the
+  file's type names, and checks that the second and the third are served every library file's parse from the
+  session's store and emit what a cold compile of each emits. The store keeps one parse of a library file
+  for each way it is parsed, keyed on facts of the whole program that the file reads, so a program whose
+  typealiases implement a library interface (`implements ElementIndex`) cannot serve one without them. The
+  sibling declares what the third declares under other type names and is compiled just before it, so the
+  third is served from a program that carries its key. For a program that shadows a library type, or
+  declares a name the library declares, it checks instead that the library is parsed cold, and the `PASS`
+  line says `library parsed cold (shadowed)` or `library parsed cold (namesOverlap)`. A file with compile
   errors reports them and exits 1.
+
+  The invalidation and warm-equals-cold properties need at least two source files of the project's own, and
+  report `FAIL` on a project of one file, where they would hold for any parse key; give the command a
+  directory of two or more files.
 - **`verify-recheck`** checks that one project can be re-checked the way an editor does: two checks of
   unchanged input agree, and a diagnostic introduced by an edit clears when the edit is undone. It takes
   `--define=<name>=<value>` as `build` does, so a define is checked on every re-check.

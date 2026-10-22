@@ -1,0 +1,9 @@
+let LibraryInterfaceAliasesPassLine = "verify-warm-rebuild: PASS (determinism + cache + invalidation + warm equals cold + library parses reused across programs)"
+
+test 'a program whose typealiases implement library interfaces still has a third program served every library parse'
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "a-program-with-aliases-implementing-library-interfaces-reuses-library-parses", fixture: "library-interface-aliases")
+	let run = spawnVerify(staged)
+
+	Expect.contains(run.stdout, needle: LibraryInterfaceAliasesPassLine, message: "`{TestedCompilerStem} {VerifyCommandName}` did not report every library parse reused by a third program after a first whose typealiases implement ElementIndex and FullRangeFloat. It printed: {run.stdout} — and wrote to stderr: {run.stderr}")
+	Expect.equal(run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {VerifyCommandName}` exited {run.exitCode()}. It wrote to stderr: {run.stderr}")
+end 'a program whose typealiases implement library interfaces still has a third program served every library parse'
