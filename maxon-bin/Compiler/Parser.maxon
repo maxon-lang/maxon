@@ -69023,6 +69023,13 @@ export type Parser
 		end 'fieldLoop'
 	end 'parseStructLiteralFields'
 
+	function requireFieldType(layout StructLayout, index FieldIndex, fieldType MaxonType, value ValueId, valueStart ElementIndex, anchor Token) returns ValueId throws SourceParseError
+		let site = self.slotStoreSiteOf(layout, index: index, valueStart: valueStart, anchor: anchor)
+		try self.requireStoreMeetsReadOnlyRules(layout, index: index, value: value, valueStart: valueStart, site: site)
+
+		return try self.requireFieldTypeFit(layout, index: index, fieldType: fieldType, value: value, valueStart: valueStart, anchor: anchor, site: site)
+	end 'requireFieldType'
+
 	// A field initializer / assignment must agree with the field's DECLARED type. A SCALAR field takes the
 	// `checkDeclaredType` coercion-site rule (the same one a call argument, a `return` and an assignment
 	// ask). A MANAGED field (a `String` or a `struct`) takes the tag-AND-name check `requirePayloadArgType`
@@ -69036,17 +69043,13 @@ export type Parser
 	//
 	// ⭐ **IT RETURNS THE VALUE THE FIELD WANTS, AND EVERY CALLER REBINDS.** A scalar field is a coercion
 	// site like any other, so an int meeting a declared `float` widens (`assignableValue`) — and the
-	// promoted id is a DIFFERENT SSA value from the one that was parsed. All three callers (the struct
-	// literal, the field write, the self-field write) once stored the value they already held, so
-	// `Self{v: 3}` into a float field wrote the integer's raw bytes into an f64 slot and read back
-	// 1.5e-323. Answering with the coerced value is what makes that unwriteable rather than merely fixed
-	// at three sites: the check and the conversion are ONE call, in ONE place, for all three doors.
+	// promoted id is a DIFFERENT SSA value from the one that was parsed. A caller that stores the value it
+	// already held writes the integer's raw bytes into an f64 slot. Answering with the coerced value makes
+	// the check and the conversion ONE call, in ONE place, for every door.
 	//
 	// A MANAGED field returns its value untouched — there is no scalar widening on a pointer, and the
 	// move-in the callers perform is a separate decision made downstream.
-	function requireFieldType(layout StructLayout, index FieldIndex, fieldType MaxonType, value ValueId, valueStart ElementIndex, anchor Token) returns ValueId throws SourceParseError
-		let site = self.slotStoreSiteOf(layout, index: index, valueStart: valueStart, anchor: anchor)
-		try self.requireStoreMeetsReadOnlyRules(layout, index: index, value: value, valueStart: valueStart, site: site)
+	function requireFieldTypeFit(layout StructLayout, index FieldIndex, fieldType MaxonType, value ValueId, valueStart ElementIndex, anchor Token, site SlotStoreSite) returns ValueId throws SourceParseError
 		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: fieldType, slotScopeFilePath: layout.declFilePath)
 
 		// ⭐⭐ **AN INTERFACE-TYPED FIELD ASKS ITS OWN QUESTION** — it is the one
@@ -69086,7 +69089,7 @@ export type Parser
 		// file must not be checked against that file's same-named alias.
 		self.recordFieldRangeChecks(value, stored: stored, valueStart: valueStart, layout: layout, index: index, storedType: fieldType, anchor: site.anchor)
 		return stored
-	end 'requireFieldType'
+	end 'requireFieldTypeFit'
 
 	function slotStoreSiteOf(layout StructLayout, index FieldIndex, valueStart ElementIndex, anchor Token) returns SlotStoreSite
 		if isTupleTypeName(layout.name) 'aTupleElement'
@@ -79090,20 +79093,21 @@ export type Parser
 		return self.signatures.fieldTypeOf(layout, index: column, into: self.artifact.typeNames)
 	end 'declaredTupleColumnType'
 
-	// A tuple's columns are mutable places (`t.0 = …`), so every column's value meets the read-only rules
-	// a `var` field's store meets. A column whose layout spells an alias also binds its element through
-	// the field door — identity and range — as a struct field does, after the layout is interned.
+	// A column takes no read-only refusal: a tuple may hold read-only values and carries their mark on its
+	// own identity (`ProvenanceTracer.traceStore`). A column whose layout spells an alias still binds its
+	// element through the field door's fit — identity and range — as a struct field does, after the
+	// layout is interned.
 	function requireTupleColumns(layout StructLayout, elementValues ValueIdArray, elementStarts TokenIndexArray, anchor Token) throws SourceParseError
 		for i in 0 upto layout.fieldCount() 'eachColumn'
 			let value = try elementValues.get(i) otherwise panic("Parser.requireTupleColumns: elementValues.get OOB at {i} — the column is sized to the layout's field count")
 			let valueStart = try elementStarts.get(i) otherwise panic("Parser.requireTupleColumns: elementStarts.get OOB at {i} — the column is sized to the layout's field count")
 
 			if layout.fieldDeclaredBrand(i).count() == 0 'noAliasToHold'
-				try self.requireStoreMeetsReadOnlyRules(layout, index: i, value: value, valueStart: valueStart, site: self.slotStoreSiteOf(layout, index: i, valueStart: valueStart, anchor: anchor))
 				continue
 			end 'noAliasToHold'
 
-			let stored = try self.requireFieldType(layout, index: i, fieldType: self.signatures.fieldTypeOf(layout, index: i, into: self.artifact.typeNames), value: value, valueStart: valueStart, anchor: anchor)
+			let site = self.slotStoreSiteOf(layout, index: i, valueStart: valueStart, anchor: anchor)
+			let stored = try self.requireFieldTypeFit(layout, index: i, fieldType: self.signatures.fieldTypeOf(layout, index: i, into: self.artifact.typeNames), value: value, valueStart: valueStart, anchor: anchor, site: site)
 
 			try elementValues.set(i, value: stored) otherwise panic("Parser.requireTupleColumns: elementValues.set OOB at {i} — the column is sized to the layout's field count")
 		end 'eachColumn'

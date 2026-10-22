@@ -36,10 +36,11 @@ release's version as its heading when the release is cut.
 - A `match` payload binding wears the typealias its payload was declared with, as the union's declaring
   file resolves it, so passing it where another typealias of the same instance is expected is E3005.
   Fix: convert the binding with `as`, or declare the parameter with the payload's typealias.
-- Every element of a tuple literal is judged as a store into a `var` field is, whatever its type: a value
-  read out of a `let` field, a `let` payload or a read-only element is E3078, and so is a `let` value
-  that is read again after it is stored.
-  Fix: store a `.clone()` of it.
+- A tuple holding a value read out of a `let` field, a `let` payload or a read-only element is read-only
+  wherever it goes, a tuple a call returns included. Binding it or one of its elements to a `var`, assigning
+  it to existing `var` names, storing it into a `var` field or an array, or passing it to a function that
+  writes it is E3078 (E3159 for the call); each of these compiled before.
+  Fix: bind it with `let`, or take a `.clone()` of the elements.
 
 - Passing a `let` to a function whose result holds a closure capturing that parameter — in a container,
   a record or bare — is E3078, also when the result is bound by a `let` and the closure only reads.

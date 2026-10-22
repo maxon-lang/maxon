@@ -5834,7 +5834,7 @@ The rules:
 - **No mutable alias of a read-only value.** Binding a read-only value to a `var` is **E3078**, and so is a module
   `var` initializer that may take a module-level `let`'s record. A module-level `let`'s record reaching a `var`
   through a ternary, a `match … gives` or a `try … otherwise` is the same **E3078**. Storing a read-only value into a `var` field, a
-  tuple element, a mutable container element or module storage, or passing it to a parameter that keeps it where something may
+  mutable container element or module storage, or passing it to a parameter that keeps it where something may
   write it, is **E3078** too. A `let` bound to a fresh record is the one exception, at its last use: the store
   consumes the name, so no `let` sees what the new holder writes. Stored there and read again afterwards, it is
   refused. A last use is judged per path: a store on one arm of an `if`, a `match` or a ternary is the last use on
@@ -5842,6 +5842,10 @@ The rules:
   (`return`, `throw`, `panic`), whatever the code after the `if` reads. A store on an arm that falls through to a
   later read is refused. When a callee both keeps and writes a read-only argument, the keep is the error reported.
   [`clone()`](#explicit-cloning) makes an independent mutable copy.
+- **A tuple carries the mark of what it holds.** A tuple literal may hold read-only values, and the tuple is
+  read-only wherever it goes, one a call returns included: `let (a, b) = ends(p)` keeps both names read-only.
+  Binding the tuple or one of its elements to a `var`, assigning it to existing `var` names, or storing it into a
+  `var` field or a container is **E3078**, and passing it to a function that writes it is **E3159**.
 - **A `let` binds only what nothing writes.** A `let` bound to state something may still write is **E3188**; see
   [Immutable Variables](#immutable-variables-let). A `let` bound from a parameter is as immutable as the caller's
   argument.

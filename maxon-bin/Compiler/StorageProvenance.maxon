@@ -373,6 +373,9 @@ let ResultLiesWithinALetPayload = 64 as ParamPositionMask
 let ResultHoldsALetPayload = 128 as ParamPositionMask
 let ResultLiesWithinAReadOnlyElement = 256 as ParamPositionMask
 let ResultHoldsAReadOnlyElement = 512 as ParamPositionMask
+let ResultIsATupleWithALetField = 1024 as ParamPositionMask
+let ResultIsATupleWithALetPayload = 2048 as ParamPositionMask
+let ResultIsATupleWithAReadOnlyElement = 4096 as ParamPositionMask
 
 let AliasLivenessColumns = [ProvenanceColumn.identity, ProvenanceColumn.inside]
 let ViewReachColumns = [ProvenanceColumn.identity, ProvenanceColumn.inside, ProvenanceColumn.holds, ProvenanceColumn.deepHolds]
@@ -380,7 +383,8 @@ let HandedOffRecordColumns = [ProvenanceColumn.identity, ProvenanceColumn.holds,
 let LetReachColumns = [ProvenanceColumn.identity, ProvenanceColumn.inside, ProvenanceColumn.holds, ProvenanceColumn.storedHolds, ProvenanceColumn.deepHolds, ProvenanceColumn.holdsWithin]
 let ModuleVariableSubject = "a module variable"
 let MaxFreshRounds = 16
-let HiddenViewRankCount = 3
+let ReadOnlySlotKindCount = 3
+let HiddenViewRankCount = 6
 let LetFieldSlotNameShift = 24 as StoreSlotKey
 let SlotAccessFunctionShift = 32 as StoreSlotKey
 let SlotAccessOpMask = 0xFFFFFFFF as StoreSlotKey
@@ -3022,6 +3026,18 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		if (reach and ResultHoldsAReadOnlyElement) != NoParamPositions 'holdsAReadOnlyElement'
 			self.seedBit(ProvenanceColumn.holds, value: result, rank: self.readOnlyElementRank())
 		end 'holdsAReadOnlyElement'
+
+		if (reach and ResultIsATupleWithALetField) != NoParamPositions 'aTupleWithALetField'
+			self.seedBit(ProvenanceColumn.identity, value: result, rank: self.tupleLetFieldRank())
+		end 'aTupleWithALetField'
+
+		if (reach and ResultIsATupleWithALetPayload) != NoParamPositions 'aTupleWithALetPayload'
+			self.seedBit(ProvenanceColumn.identity, value: result, rank: self.tupleLetFieldRank() + 1)
+		end 'aTupleWithALetPayload'
+
+		if (reach and ResultIsATupleWithAReadOnlyElement) != NoParamPositions 'aTupleWithAReadOnlyElement'
+			self.seedBit(ProvenanceColumn.identity, value: result, rank: self.tupleLetFieldRank() + 2)
+		end 'aTupleWithAReadOnlyElement'
 	end 'flowModuleLets'
 
 	function setHasRank(column ProvenanceColumn, value ValueId, rank ElementIndex) returns bool
@@ -3060,13 +3076,17 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return self.writableRank + 5
 	end 'readOnlyElementRank'
 
+	function tupleLetFieldRank() returns ElementIndex
+		return self.writableRank + 6
+	end 'tupleLetFieldRank'
+
 	function seedLetSlotRead(result ValueId, rank ElementIndex)
 		self.seedBit(ProvenanceColumn.identity, value: result, rank: rank)
 		self.moduleLetStorageReached = true
 	end 'seedLetSlotRead'
 
 	function isPermanentViewRank(rank ElementIndex) returns bool
-		return rank == self.moduleLetRank() or rank == self.sharedViewRank() or rank == self.letFieldRank() or rank == self.letPayloadRank() or rank == self.readOnlyElementRank()
+		return rank == self.moduleLetRank() or rank == self.sharedViewRank() or (rank >= self.letFieldRank() and rank < self.letFieldRank() + HiddenViewRankCount)
 	end 'isPermanentViewRank'
 
 	function permanentViewOf(value ValueId) returns PermanentView
@@ -3074,20 +3094,34 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return PermanentView.sharedView
 		end 'aSharedView'
 
-		if self.valueIsOrLiesWithin(value, rank: self.letFieldRank()) 'aLetField'
+		return self.readOnlySlotViewOf(value, firstRank: self.letFieldRank())
+	end 'permanentViewOf'
+
+	function maybePermanentViewOf(value ValueId) returns PermanentView
+		let proven = self.permanentViewOf(value)
+
+		if proven != PermanentView.none 'provenReadOnly'
+			return proven
+		end 'provenReadOnly'
+
+		return self.readOnlySlotViewOf(value, firstRank: self.tupleLetFieldRank())
+	end 'maybePermanentViewOf'
+
+	function readOnlySlotViewOf(value ValueId, firstRank ElementIndex) returns PermanentView
+		if self.valueIsOrLiesWithin(value, rank: firstRank) 'aLetField'
 			return PermanentView.letField
 		end 'aLetField'
 
-		if self.valueIsOrLiesWithin(value, rank: self.letPayloadRank()) 'aLetPayload'
+		if self.valueIsOrLiesWithin(value, rank: firstRank + 1) 'aLetPayload'
 			return PermanentView.letPayload
 		end 'aLetPayload'
 
-		if self.valueIsOrLiesWithin(value, rank: self.readOnlyElementRank()) 'aReadOnlyElement'
+		if self.valueIsOrLiesWithin(value, rank: firstRank + 2) 'aReadOnlyElement'
 			return PermanentView.readOnlyElement
 		end 'aReadOnlyElement'
 
 		return PermanentView.none
-	end 'permanentViewOf'
+	end 'readOnlySlotViewOf'
 
 	function slotIsALetSlot(func IrFunction, addr ValueId, offset ByteOffset, held ValueId) returns bool
 		return self.letSlotKindMemoized(func, addr: addr, offset: offset, held: held) != LetSlotKind.none
@@ -3306,11 +3340,44 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'storedInsideIt'
 	end 'traceLoad'
 
+	function valueIsOrLiesWithinAReadOnlySlot(value ValueId) returns bool
+		for offset in 0 upto HiddenViewRankCount 'eachSlotKind'
+			if self.valueIsOrLiesWithin(value, rank: self.letFieldRank() + offset) 'readOnly'
+				return true
+			end 'readOnly'
+		end 'eachSlotKind'
+
+		return false
+	end 'valueIsOrLiesWithinAReadOnlySlot'
+
+	function seedReadOnlySlotsInto(tuple ValueId, from ValueId)
+		for offset in 0 upto ReadOnlySlotKindCount 'eachSlotKind'
+			if self.valueIsOrLiesWithin(from, rank: self.letFieldRank() + offset) or self.valueIsOrLiesWithin(from, rank: self.tupleLetFieldRank() + offset) 'readOnly'
+				self.seedBit(ProvenanceColumn.identity, value: tuple, rank: self.tupleLetFieldRank() + offset)
+			end 'readOnly'
+		end 'eachSlotKind'
+	end 'seedReadOnlySlotsInto'
+
+	function valueIsATuple(func IrFunction, value ValueId) returns bool
+		if valueTagOf(func, value: value) != ValueTypeTag.structRef 'notATupleRecord'
+			return false
+		end 'notATupleRecord'
+
+		return isTupleTypeName(try self.project.typeNames.nameOf(self.nameIdOf(func, value: value)) otherwise panic("ProvenanceTracer.valueIsATuple: the structRef v{value} names a type the interner never assigned"))
+	end 'valueIsATuple'
+
 	// `value` now lies within `addr`, in the field `offset` names.
 	function traceStore(func IrFunction, addr ValueId, offset ByteOffset, value ValueId)
 		if not self.isTracked(value) 'storesNoRecord'
 			return
 		end 'storesNoRecord'
+
+		// A tuple has no `let` slots, so a load out of it drops the read-only ranks of what it holds
+		// (`unionMaskWithoutLetFields`). The mark lives on the tuple's identity, which a call result
+		// inherits; anywhere else it is lost once the tuple crosses a call.
+		if self.valueIsOrLiesWithinAReadOnlySlot(value) and self.valueIsATuple(func, value: addr) 'aTupleIsAsReadOnlyAsWhatItHolds'
+			self.seedReadOnlySlotsInto(addr, from: value)
+		end 'aTupleIsAsReadOnlyAsWhatItHolds'
 
 		let slotKind = LetSlotKind.none if self.tracingImmutableBindings else self.letSlotKindMemoized(func, addr: addr, offset: offset, held: value)
 		let keptReadOnly = slotKind != LetSlotKind.none
@@ -4228,6 +4295,18 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		if self.valueHoldsRank(value, rank: self.readOnlyElementRank()) 'holdsAReadOnlyElement'
 			self.returnedModuleLets = self.returnedModuleLets or ResultHoldsAReadOnlyElement
 		end 'holdsAReadOnlyElement'
+
+		if self.valueIsOrLiesWithin(value, rank: self.tupleLetFieldRank()) 'aTupleWithALetField'
+			self.returnedModuleLets = self.returnedModuleLets or ResultIsATupleWithALetField
+		end 'aTupleWithALetField'
+
+		if self.valueIsOrLiesWithin(value, rank: self.tupleLetFieldRank() + 1) 'aTupleWithALetPayload'
+			self.returnedModuleLets = self.returnedModuleLets or ResultIsATupleWithALetPayload
+		end 'aTupleWithALetPayload'
+
+		if self.valueIsOrLiesWithin(value, rank: self.tupleLetFieldRank() + 2) 'aTupleWithAReadOnlyElement'
+			self.returnedModuleLets = self.returnedModuleLets or ResultIsATupleWithAReadOnlyElement
+		end 'aTupleWithAReadOnlyElement'
 	end 'addReturned'
 
 	function recordHeldIn(func IrFunction, value ValueId) returns ValueId
@@ -4828,7 +4907,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	function decideSharedSend(func IrFunction, site MoveSite, mutationSummary ParamMutationSummary)
 		let (senderMask, senderRecordMask) = mutationSummary.writesOf(func.name)
 		let (handlerType, handlerMember) = match splitQualifiedName(site.destination) 'handler'
-			parts(prefix, member) gives (prefix.clone(), member.clone())
+			parts(prefix, member) gives (prefix, member)
 			notQualified panic("ProvenanceTracer.decideSharedSend: the handler '{String.from(site.destination)}' is not a qualified message name")
 		end 'handler'
 
@@ -5461,7 +5540,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 				continue
 			end 'noWriterToShare'
 
-			let view = self.permanentViewOf(site.value)
+			let view = self.maybePermanentViewOf(site.value)
 
 			if view != PermanentView.none and self.deferToInstantiation(func, value: site.value, owner: index) 'decidedWhereItIsInstantiated'
 				continue
@@ -5760,7 +5839,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 		let field = "{String.from(site.place)}.{String.from(site.field)}"
 
-		let view = self.permanentViewOf(site.stored)
+		let view = self.maybePermanentViewOf(site.stored)
 
 		if view != PermanentView.none and self.deferToInstantiation(func, value: site.stored, owner: index) 'decidedWhereItIsInstantiated'
 			return
@@ -5816,7 +5895,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return
 		end 'writtenByNothing'
 
-		let view = self.permanentViewOf(target)
+		let view = self.maybePermanentViewOf(target)
 
 		if view != PermanentView.none 'aPermanentViewsRecord'
 			self.refuse(line, column: column, code: ErrorCode.semanticWriteThroughImmutableRecord, message: writeThroughViewMessage(view, place: String.from(place)))
@@ -6442,7 +6521,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			let callLine = call.line
 			let callColumn = call.column
 
-			let view = self.permanentViewOf(value)
+			let view = self.maybePermanentViewOf(value)
 
 			if view != PermanentView.none and not self.writeWasRefusedAtItsDoor(func, target: value) 'aPermanentViewsRecord'
 				let viewMessage = writtenArgumentMessage(readOnlyRootSubject(try self.viewRootName(func, ir: ir, value: value) otherwise "", kind: viewRootKind(view)), parameter: try self.writtenArgParams.get(k) otherwise panic("ProvenanceTracer.checkWrittenArguments: writtenArgParams.get OOB at {k}"), functionName: self.signatures.sourceNameOfFunction(func.name))
@@ -9575,7 +9654,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'refuseLetFieldKeptArgument'
 
 	function judgeMutablyKeptArgument(func IrFunction, note ElementIndex, value ValueId)
-		let view = self.permanentViewOf(value)
+		let view = self.maybePermanentViewOf(value)
 
 		if view == PermanentView.none or self.deferToInstantiation(func, value: value, owner: try self.keptArgFuncs.get(note) otherwise panic("ProvenanceTracer.judgeMutablyKeptArgument: keptArgFuncs.get OOB at {note}")) 'nothingToRefuseHere'
 			return
@@ -9622,7 +9701,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 	function checkViewSinks(func IrFunction, index ElementIndex)
 		for (opIdx, stored) in self.viewSinks 'eachSink'
-			let view = self.permanentViewOf(stored)
+			let view = self.maybePermanentViewOf(stored)
 
 			if view == PermanentView.none or self.valueIsInertAtADoor(func, value: stored) or self.deferToInstantiation(func, value: stored, owner: index) 'nothingShared'
 				continue

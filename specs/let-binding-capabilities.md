@@ -841,3 +841,555 @@ end 'main'
 ```maxoncstderr
 error E3188: <fragment>:19:7: cannot bind `let` 'x' to a value reached through 'a', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
 ```
+
+<!-- test: let-binding-capabilities.a-tuple-of-let-fields-is-read-after-it-is-bound-with-let-and-returned-on -->
+The tuple a call returns keeps the read-only mark of the `let` fields it holds: `let (a, b)` and a `let` tuple read it, and a function may hand it on, because nothing in any of those lets a writer reach the fields.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Pair
+	export let left as Box
+	export let right as Box
+
+	static function create(left Box, right Box) returns Self
+		return Self{left: left, right: right}
+	end 'create'
+end 'Pair'
+
+function ends(p Pair) returns (Box, Box)
+	return (p.left, p.right)
+end 'ends'
+
+function relay(p Pair) returns (Box, Box)
+	return ends(p)
+end 'relay'
+
+function main() returns ExitCode
+	let p = Pair.create(Box.create(1), right: Box.create(2))
+	let (a, b) = relay(p)
+	let t = (p.left, p.right)
+	let u = ends(p)
+	print("{a.n} {b.n} {t.0.n} {t.1.n} {u.0.n} {p.left.n}\n")
+	return 0
+end 'main'
+```
+```stdout
+1 2 1 2 1 1
+```
+```exitcode
+0
+```
+
+<!-- test: let-binding-capabilities.error.a-tuple-of-let-fields-destructured-into-a-var-is-refused -->
+`ends` returns a tuple holding two `let` fields. Destructuring it with `var` would make the first name a writable alias of `p.left`, so it is refused at the name.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Pair
+	export let left as Box
+	export let right as Box
+
+	static function create(left Box, right Box) returns Self
+		return Self{left: left, right: right}
+	end 'create'
+end 'Pair'
+
+function ends(p Pair) returns (Box, Box)
+	return (p.left, p.right)
+end 'ends'
+
+function main() returns ExitCode
+	let p = Pair.create(Box.create(1), right: Box.create(2))
+	var (a, _) = ends(p)
+	a.n = 9
+	print("{a.n} {p.left.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:27:7: cannot assign a value, which may share storage with a `let` field, to mutable binding 'a'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: let-binding-capabilities.error.a-tuple-of-let-fields-returned-by-a-call-and-bound-to-a-var-is-refused -->
+The whole tuple a call returns is bound to a `var`, so its elements would become writable.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Pair
+	export let left as Box
+	export let right as Box
+
+	static function create(left Box, right Box) returns Self
+		return Self{left: left, right: right}
+	end 'create'
+end 'Pair'
+
+function ends(p Pair) returns (Box, Box)
+	return (p.left, p.right)
+end 'ends'
+
+function main() returns ExitCode
+	let p = Pair.create(Box.create(1), right: Box.create(2))
+	var t = ends(p)
+	t.0.n = 9
+	print("{t.0.n} {p.left.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:27:6: cannot assign a value, which may share storage with a `let` field, to mutable binding 't'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: let-binding-capabilities.error.a-tuple-literal-of-let-fields-bound-to-a-var-is-refused -->
+The tuple literal is accepted, and binding it to a `var` is where it becomes writable.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Pair
+	export let left as Box
+	export let right as Box
+
+	static function create(left Box, right Box) returns Self
+		return Self{left: left, right: right}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.create(Box.create(1), right: Box.create(2))
+	var t = (p.left, p.right)
+	t.0.n = 9
+	print("{t.0.n} {p.left.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:23:6: cannot assign a value, which may share storage with a `let` field, to mutable binding 't'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: let-binding-capabilities.error.a-tuple-of-let-fields-assigned-to-existing-vars-is-refused -->
+A tuple assignment to existing `var` names is a mutable door like a `var` binding.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Pair
+	export let left as Box
+	export let right as Box
+
+	static function create(left Box, right Box) returns Self
+		return Self{left: left, right: right}
+	end 'create'
+end 'Pair'
+
+function ends(p Pair) returns (Box, Box)
+	return (p.left, p.right)
+end 'ends'
+
+function main() returns ExitCode
+	let p = Pair.create(Box.create(1), right: Box.create(2))
+	var a = Box.create(5)
+	(a, _) = ends(p)
+	a.n = 9
+	print("{a.n} {p.left.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:28:3: cannot assign a value, which may share storage with a `let` field, to mutable binding 'a'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: let-binding-capabilities.error.a-tuple-of-let-fields-stored-into-a-var-field-is-refused -->
+Storing the tuple into a `var` field makes its elements writable through that field.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Pair
+	export let left as Box
+	export let right as Box
+
+	static function create(left Box, right Box) returns Self
+		return Self{left: left, right: right}
+	end 'create'
+end 'Pair'
+
+type Holder
+	export var held as (Box, Box)
+
+	static function create(h (Box, Box)) returns Self
+		return Self{held: h}
+	end 'create'
+end 'Holder'
+
+function ends(p Pair) returns (Box, Box)
+	return (p.left, p.right)
+end 'ends'
+
+function main() returns ExitCode
+	let p = Pair.create(Box.create(1), right: Box.create(2))
+	var h = Holder.create((Box.create(3), Box.create(4)))
+	h.held = ends(p)
+	print("{h.held.0.n} {p.left.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:36:2: cannot store a value, which may share storage with a `let` field, into writable field 'h.held'; use clone()
+```
+
+<!-- test: let-binding-capabilities.error.a-tuple-of-let-fields-passed-to-a-function-that-writes-it-is-refused -->
+`bump` writes through its tuple parameter, so the tuple holding `p`'s `let` fields may not be passed to it.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Pair
+	export let left as Box
+	export let right as Box
+
+	static function create(left Box, right Box) returns Self
+		return Self{left: left, right: right}
+	end 'create'
+end 'Pair'
+
+function ends(p Pair) returns (Box, Box)
+	return (p.left, p.right)
+end 'ends'
+
+function bump(t (Box, Box))
+	t.0.n = 9
+end 'bump'
+
+function main() returns ExitCode
+	let p = Pair.create(Box.create(1), right: Box.create(2))
+	bump(ends(p))
+	print("{p.left.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:31:2: cannot pass a value read out of a `let` field, which is read-only, to a function that writes parameter 't' (in main); pass a clone()
+```
+
+<!-- test: let-binding-capabilities.error.a-tuple-of-let-fields-pushed-into-an-array-is-refused -->
+An array element is a mutable place, so the tuple may not be pushed into one.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias BoxPair = (Box, Box)
+typealias Ends = Array with BoxPair
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Pair
+	export let left as Box
+	export let right as Box
+
+	static function create(left Box, right Box) returns Self
+		return Self{left: left, right: right}
+	end 'create'
+end 'Pair'
+
+function ends(p Pair) returns (Box, Box)
+	return (p.left, p.right)
+end 'ends'
+
+function main() returns ExitCode
+	let p = Pair.create(Box.create(1), right: Box.create(2))
+	var all = Ends.create()
+	all.push(ends(p))
+	print("{all.count()} {p.left.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:30:6: cannot store a `let` field into mutable place 'an element of the container this call writes'; use clone()
+```
+
+<!-- test: let-binding-capabilities.error.a-let-tuple-with-a-read-only-column-and-a-writable-one-is-refused -->
+Only the first column of the tuple is read-only. The second is the `var` `p`'s record, which `bump` writes, so the `let` that holds the tuple would see the write and is refused.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Pair
+	export let left as Box
+	export let right as Box
+
+	static function create(left Box, right Box) returns Self
+		return Self{left: left, right: right}
+	end 'create'
+end 'Pair'
+
+function id(b Box) returns Box
+	return b
+end 'id'
+
+function bump(b Box)
+	b.n = b.n + 1
+end 'bump'
+
+function main() returns ExitCode
+	let q = Pair.create(Box.create(1), right: Box.create(2))
+	var p = Box.create(5)
+	let t = (q.left, id(p))
+	bump(p)
+	print("{t.1.n} {q.left.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3188: <fragment>:32:6: cannot bind `let` 't' to a value reached through 'p', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```
+
+<!-- test: let-binding-capabilities.error.a-let-destructure-of-a-tuple-with-a-writable-column-is-refused -->
+The same tuple destructured with `let`: the name bound to the writable column is refused.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Pair
+	export let left as Box
+	export let right as Box
+
+	static function create(left Box, right Box) returns Self
+		return Self{left: left, right: right}
+	end 'create'
+end 'Pair'
+
+function id(b Box) returns Box
+	return b
+end 'id'
+
+function bump(b Box)
+	b.n = b.n + 1
+end 'bump'
+
+function main() returns ExitCode
+	let q = Pair.create(Box.create(1), right: Box.create(2))
+	var p = Box.create(5)
+	let (_, y) = (q.left, id(p))
+	bump(p)
+	print("{y.n} {q.left.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3188: <fragment>:32:10: cannot bind `let` 'y' to a value reached through 'p', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```
+
+<!-- test: let-binding-capabilities.error.a-let-destructure-of-a-tuple-a-call-returns-with-a-writable-column-is-refused -->
+`ends2` returns a tuple of a `let` field and its second argument. The argument is the `var` `p`'s record, so binding the second column with `let` is refused.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Pair
+	export let left as Box
+	export let right as Box
+
+	static function create(left Box, right Box) returns Self
+		return Self{left: left, right: right}
+	end 'create'
+end 'Pair'
+
+function id(b Box) returns Box
+	return b
+end 'id'
+
+function bump(b Box)
+	b.n = b.n + 1
+end 'bump'
+
+function ends2(a Pair, b Box) returns (Box, Box)
+	return (a.left, b)
+end 'ends2'
+
+function main() returns ExitCode
+	let q = Pair.create(Box.create(1), right: Box.create(2))
+	var p = Box.create(5)
+	let (_, y) = ends2(q, b: id(p))
+	bump(p)
+	print("{y.n} {q.left.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3188: <fragment>:36:10: cannot bind `let` 'y' to a value reached through 'p', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```
+
+<!-- test: let-binding-capabilities.a-tuple-of-let-fields-stored-into-a-let-field-is-accepted -->
+Both columns of the tuple are read-only, so a `let` field holding it keeps nothing writable.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Pair
+	export let left as Box
+	export let right as Box
+
+	static function create(left Box, right Box) returns Self
+		return Self{left: left, right: right}
+	end 'create'
+end 'Pair'
+
+type Frozen
+	export let held as (Box, Box)
+
+	static function create(h (Box, Box)) returns Self
+		return Self{held: h}
+	end 'create'
+end 'Frozen'
+
+function main() returns ExitCode
+	let q = Pair.create(Box.create(1), right: Box.create(2))
+	let fr = Frozen.create((q.left, q.right))
+	print("{fr.held.0.n} {fr.held.1.n} {q.left.n}\n")
+	return 0
+end 'main'
+```
+```stdout
+1 2 1
+```
+```exitcode
+0
+```
+
+<!-- test: let-binding-capabilities.a-tuple-built-from-let-field-arguments-is-bound-with-let -->
+`pairUp` returns a tuple of its two parameters. Passing it two `let` fields gives a tuple of read-only columns, which `let (x, y)` binds and reads.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Pair
+	export let left as Box
+	export let right as Box
+
+	static function create(left Box, right Box) returns Self
+		return Self{left: left, right: right}
+	end 'create'
+end 'Pair'
+
+function pairUp(a Box, b Box) returns (Box, Box)
+	return (a, b)
+end 'pairUp'
+
+function main() returns ExitCode
+	let p = Pair.create(Box.create(1), right: Box.create(2))
+	let (x, y) = pairUp(p.left, b: p.right)
+	print("{x.n} {y.n} {p.left.n}\n")
+	return 0
+end 'main'
+```
+```stdout
+1 2 1
+```
+```exitcode
+0
+```

@@ -684,8 +684,8 @@ end 'main'
 error E3078: specs/let-union-payloads/error.a-var-read-again-after-a-wrapper-that-stores-into-a-let-payload.maxon:18:11: cannot pass the `var` 'scratch', which is read again, to parameter 'callee' of 'wrapOp', which stores it into a `let` payload: a `let` payload has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
 ```
 
-<!-- test: error.a-let-payload-of-an-aliased-array-stored-into-a-tuple -->
-`Bytes` names the payload type, so the tuple column the two payloads are stored into is declared `Bytes`. A tuple is a mutable place, so a read-only payload is refused there.
+<!-- test: a-let-payload-of-an-aliased-array-stored-into-a-tuple -->
+`Bytes` names the payload type, so the tuple column the two payloads are stored into is declared `Bytes`. The read-only mark travels with the tuple, and `let (a, b)` keeps both payloads read-only, so the store is accepted.
 ```maxon
 typealias Bytes = Array with Byte
 
@@ -709,12 +709,12 @@ function main() returns ExitCode
 	return (a.count() + b.count()) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:17:22: cannot store a value read out of a `let` payload into mutable place 'element 0 of tuple (Bytes, Bytes)'; use clone()
+```exitcode
+0
 ```
 
-<!-- test: error.a-let-payload-of-a-contested-alias-stored-into-a-tuple -->
-The same program where `Bytes` is also declared, over another instance, in a second file. The name is contested, so it brands nothing and the tuple column is declared without a brand; the payload is refused the same way.
+<!-- test: a-let-payload-of-a-contested-alias-stored-into-a-tuple -->
+The same program where `Bytes` is also declared, over another instance, in a second file. The name is contested, so it brands nothing and the tuple column is declared without a brand; the payloads are accepted the same way.
 ```maxon
 // --- file: a.maxon
 typealias Bytes = Array with Byte
@@ -746,6 +746,6 @@ function names(xs Bytes) returns Count
 	return xs.count()
 end 'names'
 ```
-```maxoncstderr
-error E3078: <fragment>:18:22: cannot store a value read out of a `let` payload into mutable place 'element 0 of tuple (Bytes, Bytes)'; use clone()
+```exitcode
+0
 ```
