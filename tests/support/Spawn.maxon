@@ -10,6 +10,8 @@ let PosixYear2000Stamp = "200001010000"
 
 #if not os(Windows)
 	public let PosixShellPath = "/bin/sh"
+	let PosixShellCommandFlag = "-c"
+	let PosixPhysicalWorkingDirectoryCommand = "pwd -P"
 #endif
 
 public let NoTimeoutMs = 0 as DurationMs
@@ -41,6 +43,21 @@ public function runSystemTool(tool String, arguments StringArray, what String) r
 
 	return ran
 end 'runSystemTool'
+
+public function physicalSpellingOf(dir FilePath) returns FilePath
+	#if os(Windows)
+		return dir
+	#else
+		let shell = try FilePath.from(PosixShellPath) otherwise panic("{PosixShellPath} is a spellable path")
+		let ran = spawnIn(Executable.path(shell), arguments: [PosixShellCommandFlag, PosixPhysicalWorkingDirectoryCommand], staged: dir, what: "the physical working directory of {dir.toString()}")
+
+		if not ran.succeeded() 'failed'
+			panic("the gate could not run — the physical working directory of {dir.toString()} exited {ran.exitCode()}: {ran.stderr}")
+		end 'failed'
+
+		return try FilePath.from(ran.stdout.trim()) otherwise panic("the gate could not run — the physical working directory of {dir.toString()} is not a spellable path: {ran.stdout}")
+	#endif
+end 'physicalSpellingOf'
 
 public function backdatedToTheYear2000(path FilePath)
 	#if os(Windows)
