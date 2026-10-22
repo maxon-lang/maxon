@@ -1,0 +1,32 @@
+#if not os(Windows)
+	let CycleFmtCaseDirName = "fmt-link-back-to-the-root"
+	let CycleFmtLibraryDirName = "lib"
+	let CycleFmtLinkName = "back"
+	let CycleFmtSourceFileName = "Answer.maxon"
+	let CycleFmtUnformattedSource = "function answer() returns ExitCode\n        return 0\nend 'answer'\n"
+	let CycleFmtFormattedSource = "function answer() returns ExitCode\n\treturn 0\nend 'answer'\n"
+	let CycleFmtSummaryLine = "fmt: 1 file(s) changed, 0 unchanged."
+
+	test 'fmt over a tree holding a link back to its own root formats each file once'
+		let dir = freshOutsideCheckoutDir(CycleFmtCaseDirName)
+		let library = stagingDir(dir.join(CycleFmtLibraryDirName).toString())
+		let source = library.join(CycleFmtSourceFileName)
+		writeStagedFile(source, content: CycleFmtUnformattedSource)
+
+		let link = library.join(CycleFmtLinkName)
+		_ = runSystemTool("ln", arguments: ["-s", "..", link.toString()], what: "`ln -s` making a link from a subdirectory back to the staged root")
+
+		let run = spawnCompiler(["fmt"], staged: dir, what: "`maxon fmt` over a tree holding a link back to its own root")
+
+		try File.delete(link) otherwise panic("the gate could not run — could not remove the link {link.toString()}.")
+
+		let formatted = try File.readText(source) otherwise panic("the gate could not run — could not read {source.toString()}.")
+		discardOutsideCheckoutDir(dir)
+
+		let said = "It wrote to stdout: {run.stdout} and to stderr: {run.stderr}"
+
+		try Expect.equal(run.exitCode(), expected: 0, message: "`maxon fmt` did not finish a walk that holds a link back to its own root. {said}")
+		try Expect.equal(formatted, expected: CycleFmtFormattedSource, message: "`maxon fmt` did not format the file. {said}")
+		try Expect.contains(run.stdout, needle: CycleFmtSummaryLine, message: "`{CycleFmtLinkName}` leads back to the root, so the walk reaches each file once. {said}")
+	end 'fmt over a tree holding a link back to its own root formats each file once'
+#endif

@@ -1,0 +1,39 @@
+#if not os(Windows)
+	let NamedThroughLinkCaseDirName = "build-named-file-through-a-link"
+	let NamedThroughLinkLibraryDirName = "lib"
+	let NamedThroughLinkName = "mirror"
+	let NamedThroughLinkFileName = "Answer.maxon"
+	let NamedThroughLinkOutputStem = "program"
+	let NamedThroughLinkMainSource = "function main() returns ExitCode\n\treturn answer()\nend 'main'\n"
+	let NamedThroughLinkLibrarySource = "export function answer() returns ExitCode\n\treturn 0\nend 'answer'\n"
+	let NamedThroughLinkDuplicateDefinitionCode = "E3006"
+
+	test 'a file named through a link and then the directory holding it is loaded once'
+		requireHeldOutsideCheckout(NamedThroughLinkCaseDirName, check: FileNamedThroughALinkIsLoadedOnce.create())
+	end 'a file named through a link and then the directory holding it is loaded once'
+
+	type FileNamedThroughALinkIsLoadedOnce implements OutsideCheckoutCase
+		static function create() returns FileNamedThroughALinkIsLoadedOnce
+			return Self{}
+		end 'create'
+
+		export function requireHeldIn(dir FilePath) throws TestFailure
+			let library = stagingDir(dir.join(NamedThroughLinkLibraryDirName).toString())
+
+			writeStagedFile(dir.join(StagedProgramFileName), content: NamedThroughLinkMainSource)
+			writeStagedFile(library.join(NamedThroughLinkFileName), content: NamedThroughLinkLibrarySource)
+
+			let link = dir.join(NamedThroughLinkName)
+			_ = runSystemTool("ln", arguments: ["-s", NamedThroughLinkLibraryDirName, link.toString()], what: "`ln -s` making a link to a sibling directory in the staged project")
+
+			let build = spawnCompiler([BuildCommandWord, "{NamedThroughLinkName}/{NamedThroughLinkFileName}", StagedProgramFileName, NamedThroughLinkLibraryDirName, "--output={NamedThroughLinkOutputStem}"], staged: dir)
+
+			try File.delete(link) otherwise panic("the gate could not run — could not remove the link {link.toString()}.")
+
+			let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+
+			try Expect.isFalse(build.stderr.contains(NamedThroughLinkDuplicateDefinitionCode), message: "`{NamedThroughLinkName}/{NamedThroughLinkFileName}` and `{NamedThroughLinkLibraryDirName}/{NamedThroughLinkFileName}` are one file, so naming the directory after the link loaded it twice. {said}")
+			try Expect.equal(build.exitCode(), expected: 0, message: "a build naming a file through a link and then the directory holding it did not succeed. {said}")
+		end 'requireHeldIn'
+	end 'FileNamedThroughALinkIsLoadedOnce'
+#endif

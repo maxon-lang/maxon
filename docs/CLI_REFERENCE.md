@@ -357,7 +357,10 @@ maxon build [<target name>] [options]
 directory contributes every `.maxon` file beneath it, minus the subtrees marked with a `.maxonignore`;
 `.maxproj`, `.maxtasks` and `.maxtest` files are left to the commands that read them. A `.maxonignore`
 excludes a directory the walk **discovers**, and a path you **named** is compiled whatever a
-`.maxonignore` above it — or on it — says.
+`.maxonignore` above it — or on it — says. **Symbolic links are followed**, including one that leaves the
+directory you named. Each physical directory and file is taken once, under the first spelling the walk
+reaches: a link to a sibling directory lists its files once, a link back to an ancestor ends the walk
+there, and a file named through a link and then the directory holding it is loaded once.
 
 **No path** builds the target of the `.maxproj` file in the current directory. With several targets it
 lists them and exits 1. **A single word naming a target** builds that target, each `_` of the target's
@@ -649,6 +652,9 @@ called. A **directory** is walked for `.maxon`, `.maxtest`, `.maxproj` and `.max
 any subdirectory the walk finds under a `.maxonignore` and any subdirectory that holds a `.git` (a nested
 clone or worktree), so a run leaves another repository's files alone. As with `build`, the directory you
 **named** is formatted whatever a `.maxonignore` on or above it says — naming it is the explicit act.
+Symbolic links are followed, and each physical directory and file is formatted once, under the first
+spelling the walk reaches, so a link back to an ancestor ends the walk there. A directory the walk cannot
+list, or an entry it cannot identify, ends the run with `fmt: <reason>` and exit 1.
 
 **It takes no options.** Any `-`-leading argument is refused with exit 1 and nothing written, and so
 is a second path.

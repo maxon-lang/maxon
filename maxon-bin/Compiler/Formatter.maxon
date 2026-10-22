@@ -1879,15 +1879,27 @@ end 'sliceOf'
 /// descending through that boundary edits files the caller never named and cannot see in their own
 /// `git status`. The traversal root is exempt: every checkout contains `.git`, so pruning it there
 /// would make `maxon fmt` inside a repo format nothing at all.
-export function collectFormattableFiles(root FilePath) returns FilePathArray
+///
+/// Symbolic links are followed. Each physical directory and file is taken once, under the first
+/// spelling the walk reaches, so a link back to an ancestor ends the walk there. It throws when a
+/// directory cannot be listed or an entry cannot be identified.
+export function collectFormattableFiles(root FilePath) returns FilePathArray throws CompileError
 	var files = FilePathArray.create()
+	var ledger = PhysicalEntryLedger.create()
 
 	var pending = FilePathArray.create()
 	pending.push(root)
 
 	while pending.count() > 0 'walk'
 		let dir = try pending.pop() otherwise panic("collectFormattableFiles: the stack is non-empty on the line above")
-		let entries = try Directory.list(dir) otherwise panic("collectFormattableFiles: {dir} was listed as a directory and cannot now be unlistable")
+
+		let dirFirst = try ledger.claimsFirst(dir)
+
+		if not dirFirst 'walkedAlready'
+			continue
+		end 'walkedAlready'
+
+		let entries = try Directory.list(dir) otherwise throw CompileError.directoryNotFound(dir)
 
 		var subdirectories = FilePathArray.create()
 		var here = FilePathArray.create()
@@ -1915,7 +1927,11 @@ export function collectFormattableFiles(root FilePath) returns FilePathArray
 		end 'eachSubdirectory'
 
 		for file in here 'eachFile'
-			files.push(file)
+			let fileFirst = try ledger.claimsFirst(file)
+
+			if fileFirst 'unseen'
+				files.push(file)
+			end 'unseen'
 		end 'eachFile'
 	end 'walk'
 

@@ -1,0 +1,38 @@
+#if not os(Windows)
+	let FileLinkCaseDirName = "build-link-to-a-source-file"
+	let FileLinkTargetFileName = "Answer.maxon"
+	let FileLinkName = "Alias.maxon"
+	let FileLinkMainSource = "function main() returns ExitCode\n\treturn answer()\nend 'main'\n"
+	let FileLinkLibrarySource = "export function answer() returns ExitCode\n\treturn 0\nend 'answer'\n"
+	let FileLinkDuplicateDefinitionCode = "E3006"
+
+	test 'a project holding a link to one of its source files builds, the file loaded once'
+		requireHeldOutsideCheckout(FileLinkCaseDirName, check: LinkToASourceFileLoadsOnce.create())
+	end 'a project holding a link to one of its source files builds, the file loaded once'
+
+	type LinkToASourceFileLoadsOnce implements OutsideCheckoutCase
+		static function create() returns LinkToASourceFileLoadsOnce
+			return Self{}
+		end 'create'
+
+		export function requireHeldIn(dir FilePath) throws TestFailure
+			writeStagedFile(dir.join(StagedProgramFileName), content: FileLinkMainSource)
+			writeStagedFile(dir.join(FileLinkTargetFileName), content: FileLinkLibrarySource)
+
+			let link = dir.join(FileLinkName)
+			_ = runSystemTool("ln", arguments: ["-s", FileLinkTargetFileName, link.toString()], what: "`ln -s` making a link to a source file in the staged project")
+
+			let build = spawnCompiler([BuildCommandWord, "."], staged: dir)
+
+			try File.delete(link) otherwise panic("the gate could not run — could not remove the link {link.toString()}.")
+
+			let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+
+			try Expect.isFalse(build.stderr.contains(FileLinkDuplicateDefinitionCode), message: "`{FileLinkName}` is a link to `{FileLinkTargetFileName}`, so the walk loaded one file under two spellings and every declaration in it collided with itself. {said}")
+			try Expect.equal(build.exitCode(), expected: 0, message: "a project holding a link to one of its own source files did not build. {said}")
+
+			let named = dir.join("{dir.filename()}{executableSuffix()}")
+			try Expect.isTrue(File.exists(named), message: "the build exited 0 and wrote no {named.toString()}. {said}")
+		end 'requireHeldIn'
+	end 'LinkToASourceFileLoadsOnce'
+#endif

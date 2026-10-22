@@ -1,0 +1,32 @@
+#if not os(Windows)
+	let LinkedFmtCaseDirName = "fmt-link-to-a-sibling-directory"
+	let LinkedFmtTargetDirName = "lib"
+	let LinkedFmtLinkName = "mirror"
+	let LinkedFmtSourceFileName = "Answer.maxon"
+	let LinkedFmtUnformattedSource = "function answer() returns ExitCode\n        return 0\nend 'answer'\n"
+	let LinkedFmtFormattedSource = "function answer() returns ExitCode\n\treturn 0\nend 'answer'\n"
+	let LinkedFmtSummaryLine = "fmt: 1 file(s) changed, 0 unchanged."
+
+	test 'fmt over a tree holding a link to a sibling directory formats each file once'
+		let dir = freshOutsideCheckoutDir(LinkedFmtCaseDirName)
+		let library = stagingDir(dir.join(LinkedFmtTargetDirName).toString())
+		let source = library.join(LinkedFmtSourceFileName)
+		writeStagedFile(source, content: LinkedFmtUnformattedSource)
+
+		let link = dir.join(LinkedFmtLinkName)
+		_ = runSystemTool("ln", arguments: ["-s", LinkedFmtTargetDirName, link.toString()], what: "`ln -s` making a link to a sibling directory in the staged tree")
+
+		let run = spawnCompiler(["fmt"], staged: dir, what: "`maxon fmt` over a tree holding a link to a sibling directory")
+
+		try File.delete(link) otherwise panic("the gate could not run — could not remove the link {link.toString()}.")
+
+		let formatted = try File.readText(source) otherwise panic("the gate could not run — could not read {source.toString()}.")
+		discardOutsideCheckoutDir(dir)
+
+		let said = "It wrote to stdout: {run.stdout} and to stderr: {run.stderr}"
+
+		try Expect.equal(run.exitCode(), expected: 0, message: "`maxon fmt` did not succeed. {said}")
+		try Expect.equal(formatted, expected: LinkedFmtFormattedSource, message: "`maxon fmt` did not format the file. {said}")
+		try Expect.contains(run.stdout, needle: LinkedFmtSummaryLine, message: "`{LinkedFmtLinkName}` is a link to `{LinkedFmtTargetDirName}`, so its file is one file and is counted once. {said}")
+	end 'fmt over a tree holding a link to a sibling directory formats each file once'
+#endif

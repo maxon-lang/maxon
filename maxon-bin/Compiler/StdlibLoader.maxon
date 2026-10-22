@@ -238,13 +238,12 @@ export function loadLibrarySources(project Project) throws CompileError
 end 'loadLibrarySources'
 
 export function scriptlibPackageSources(scriptlibDir FilePath) returns MaxonSourcePathArray throws CompileError
-	var found = MaxonSourcePathArray.create()
-
 	if not Directory.exists(scriptlibDir) 'noPackages'
-		return found
+		return MaxonSourcePathArray.create()
 	end 'noPackages'
 
 	let entries = try Directory.list(scriptlibDir) otherwise throw CompileError.directoryNotFound(scriptlibDir)
+	var packageDirectories = MaxonSourcePathArray.create()
 
 	// A `.maxon` directly in the directory belongs to no package, so no `scriptlib.<package>` can name
 	// it; it is skipped and draws no diagnostic.
@@ -253,10 +252,11 @@ export function scriptlibPackageSources(scriptlibDir FilePath) returns MaxonSour
 			continue
 		end 'notAPackage'
 
-		_ = try collectMaxonSources(entry, into: found)
+		packageDirectories.push(entry)
 	end 'eachEntry'
 
-	return found
+	// One call for every package directory: a link from one package to another lists a file once.
+	return try namedSourceFiles(packageDirectories)
 end 'scriptlibPackageSources'
 
 // Only a program whose root is one file loads scriptlib: a directory program already composes its own

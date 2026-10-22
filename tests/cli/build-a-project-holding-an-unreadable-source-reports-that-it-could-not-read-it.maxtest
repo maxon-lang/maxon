@@ -1,0 +1,38 @@
+#if not os(Windows)
+	let UnreadableSourceCaseDirName = "build-unreadable-source"
+	let UnreadableSourceFileName = "locked.maxon"
+	let UnreadableSourceMainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+	let UnreadableSourceLockedSource = "module function locked() returns ExitCode\n\treturn 1\nend 'locked'\n"
+	let UnreadableSourceNoAccessMode = "000"
+	let UnreadableSourceRestoredMode = "644"
+	let UnreadableSourceWording = "could not read"
+
+	test 'a project holding a source the process may not read is refused for reading it, not for identifying it'
+		requireHeldOutsideCheckout(UnreadableSourceCaseDirName, check: UnreadableSourceIsReportedAsUnreadable.create())
+	end 'a project holding a source the process may not read is refused for reading it, not for identifying it'
+
+	type UnreadableSourceIsReportedAsUnreadable implements OutsideCheckoutCase
+		static function create() returns UnreadableSourceIsReportedAsUnreadable
+			return Self{}
+		end 'create'
+
+		export function requireHeldIn(dir FilePath) throws TestFailure
+			let locked = dir.join(UnreadableSourceFileName)
+
+			writeStagedFile(dir.join(StagedProgramFileName), content: UnreadableSourceMainSource)
+			writeStagedFile(locked, content: UnreadableSourceLockedSource)
+
+			_ = runSystemTool("chmod", arguments: [UnreadableSourceNoAccessMode, locked.toString()], what: "`chmod` denying every access to {locked.toString()}")
+
+			let build = spawnCompiler([BuildCommandWord, "."], staged: dir)
+
+			_ = runSystemTool("chmod", arguments: [UnreadableSourceRestoredMode, locked.toString()], what: "`chmod` restoring access to {locked.toString()}")
+
+			let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+
+			try Expect.equal(build.exitCode(), expected: 1, message: "a build over a source the process may not read did not fail with the driver's failure exit. {said}")
+			try Expect.contains(build.stderr, needle: UnreadableSourceWording, message: "the build did not say it could not read {UnreadableSourceFileName}. {said}")
+			try Expect.contains(build.stderr, needle: UnreadableSourceFileName, message: "the build did not name {UnreadableSourceFileName}. {said}")
+		end 'requireHeldIn'
+	end 'UnreadableSourceIsReportedAsUnreadable'
+#endif

@@ -1,0 +1,36 @@
+typealias PhysicalIdentitySet = Set with FilePath
+
+/// The physical identities a source walk has already taken. A walk claims each directory before
+/// descending into it and each file before registering it, so an entry reached through several
+/// spellings (a link to a sibling directory, a link back to an ancestor) is taken once, under the
+/// first spelling the walk reaches.
+export type PhysicalEntryLedger
+	var identities as PhysicalIdentitySet
+
+	export static function create() returns Self
+		return Self{identities: PhysicalIdentitySet.create()}
+	end 'create'
+
+	export function claimsFirst(entry FilePath) returns bool throws CompileError
+		let identity = try walkIdentityOf(entry) otherwise (e) 'unidentifiable'
+			throw unidentifiablePathFailure(e)
+		end 'unidentifiable'
+
+		if self.identities.contains(identity) 'seenBefore'
+			return false
+		end 'seenBefore'
+
+		self.identities.insert(identity)
+		return true
+	end 'claimsFirst'
+end 'PhysicalEntryLedger'
+
+// A path the host refuses to resolve (access denied, a link loop) is keyed by its resolved parent and its own
+// name, so the load that follows reports `could not read` instead of the walk failing.
+function walkIdentityOf(entry FilePath) returns FilePath throws RunCacheError
+	let physical = try projectIdentityPathOf(entry) otherwise 'refused'
+		return try entryIdentityPathOf(entry)
+	end 'refused'
+
+	return physical
+end 'walkIdentityOf'

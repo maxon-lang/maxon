@@ -1106,27 +1106,42 @@ function runFmt(args MaxonArgs) returns ExitCode
 		return OwnFailureExit
 	end 'refusedSecondPath'
 
-	let spelling = try args.positionalAt(SolePositionalIndex) otherwise return formatEachFile(collectFormattableFiles(Directory.currentPath()))
+	let spelling = try args.positionalAt(SolePositionalIndex) otherwise return formatSelected(formattableFilesUnder(Directory.currentPath()))
 
-	return match fmtSelection(spelling) 'selection'
-		files(paths) gives formatEachFile(paths)
-		notFound gives refusedFmtPath(spelling)
-	end 'selection'
+	return formatSelected(fmtSelection(spelling))
 end 'runFmt'
+
+function formatSelected(selection FmtSelection) returns ExitCode
+	return match selection 'selection'
+		files(paths) gives formatEachFile(paths)
+		notFound(spelling) gives refusedFmtPath(spelling)
+		unwalkable(reason) gives refusedFmtWalk(reason)
+	end 'selection'
+end 'formatSelected'
 
 union FmtSelection
 	files(paths FilePathArray)
 
-	notFound
+	notFound(spelling String)
+
+	unwalkable(reason String)
 end 'FmtSelection'
+
+function formattableFilesUnder(root FilePath) returns FmtSelection
+	let files = try collectFormattableFiles(root) otherwise (e) 'unwalkable'
+		return FmtSelection.unwalkable(driverErrorSentence(e))
+	end 'unwalkable'
+
+	return FmtSelection.files(files)
+end 'formattableFilesUnder'
 
 // A named file is formatted whatever it is called and wherever it sits, as `maxon build` does: the
 // exclusions belong to the walk (`Formatter.collectFormattableFiles`).
 function fmtSelection(spelling String) returns FmtSelection
-	let target = try FilePath.from(spelling) otherwise return FmtSelection.notFound
+	let target = try FilePath.from(spelling) otherwise return FmtSelection.notFound(spelling)
 
 	if Directory.isDirectory(target) 'aDirectory'
-		return FmtSelection.files(collectFormattableFiles(target))
+		return formattableFilesUnder(target)
 	end 'aDirectory'
 
 	if File.exists(target) 'aFile'
@@ -1135,7 +1150,7 @@ function fmtSelection(spelling String) returns FmtSelection
 		return FmtSelection.files(only)
 	end 'aFile'
 
-	return FmtSelection.notFound
+	return FmtSelection.notFound(spelling)
 end 'fmtSelection'
 
 // An already-canonical file is not rewritten: `fmt` over a clean tree must leave every mtime alone.
@@ -1169,6 +1184,11 @@ function refusedFmtPath(spelling String) returns ExitCode
 	printError("fmt: path not found: {spelling}\n")
 	return OwnFailureExit
 end 'refusedFmtPath'
+
+function refusedFmtWalk(reason String) returns ExitCode
+	printError("fmt: {reason}\n")
+	return OwnFailureExit
+end 'refusedFmtWalk'
 
 typealias FormattedFileCount = int(0 to u64.max)
 

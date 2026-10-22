@@ -231,11 +231,11 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	end 'writerToolsMissing'
 
 	let outputIdentity = try entryIdentityPathOf(outputPath) otherwise (e) 'unidentifiable'
-		throw CompileError.unidentifiablePath(e.sentence())
+		throw unidentifiablePathFailure(e)
 	end 'unidentifiable'
 
 	let rebuildsItself = try outputIsRunningImage(outputIdentity) otherwise (e) 'unidentifiableImage'
-		throw CompileError.unidentifiablePath(e.sentence())
+		throw unidentifiablePathFailure(e)
 	end 'unidentifiableImage'
 
 	if not rebuildsItself 'discardAheadOfThePipeline'
@@ -1978,24 +1978,24 @@ function loadSourceFiles(project Project, paths MaxonSourcePathArray, selection 
 	end 'noFiles'
 end 'loadSourceFiles'
 
-// A path named twice — directly and again through a directory that contains it — is listed once,
-// at its first position. That is what lets `build a.maxon b.maxon <theirDirectory>` mean "these two
-// first, then whatever else is under there", the form the spec runner uses to state a case's file
-// order while rooting the project at the case's own directory.
+// A source reached twice — named directly, named through a link, or found again under a directory
+// that contains it — is listed once, at its first position, by physical identity. That is what
+// lets `build a.maxon b.maxon <theirDirectory>` mean "these two first, then whatever else is under
+// there", the form the spec runner uses to state a case's file order while rooting the project at
+// the case's own directory.
 export function namedSourceFiles(paths MaxonSourcePathArray, selection SourceSelection = SourceSelection.productionOnly, nestedProjects NestedProjectRule = NestedProjectRule.refused) returns MaxonSourcePathArray throws CompileError
 	var files = MaxonSourcePathArray.create()
-	var registered = MaxonSourcePathSet.create()
+	var ledger = PhysicalEntryLedger.create()
 
 	for path in paths 'eachNamed'
 		if File.exists(path) 'isFile'
-			appendOnce(files, registered: registered, path: path)
-		end 'isFile' else if Directory.exists(path) 'isDir'
-			var below = MaxonSourcePathArray.create()
-			_ = try collectMaxonSources(path, into: below, selection: selection, nestedProjects: nestedProjects)
+			let namedFirst = try ledger.claimsFirst(path)
 
-			for source in below 'eachBelow'
-				appendOnce(files, registered: registered, path: source)
-			end 'eachBelow'
+			if namedFirst 'unseen'
+				files.push(path)
+			end 'unseen'
+		end 'isFile' else if Directory.exists(path) 'isDir'
+			_ = try collectIfFirst(path, into: files, selection: selection, nestedProjects: nestedProjects, ledger: ledger)
 		end 'isDir' else 'notFound'
 			throw CompileError.fileNotFound(path)
 		end 'notFound'
@@ -2004,14 +2004,9 @@ export function namedSourceFiles(paths MaxonSourcePathArray, selection SourceSel
 	return files
 end 'namedSourceFiles'
 
-function appendOnce(files MaxonSourcePathArray, registered MaxonSourcePathSet, path FilePath)
-	if registered.contains(path) 'namedTwice'
-		return
-	end 'namedTwice'
-
-	registered.insert(path)
-	files.push(path)
-end 'appendOnce'
+export function unidentifiablePathFailure(cause RunCacheError) returns CompileError
+	return CompileError.unidentifiablePath(cause.sentence())
+end 'unidentifiablePathFailure'
 
 // ⭐⭐ **THE PROJECT ROOT OF A BUILD THAT NAMED SEVERAL PATHS — the ONE directory every one of them
 // lies under.** It is what `Project.rootPath` becomes, and through it what
@@ -2103,6 +2098,12 @@ end 'commonAncestorOf'
 //     rule, and `tests/cli/build-a-named-directory-under-a-maxonignore.maxtest` pins both halves: a
 //     named directory under a marker, and a named directory carrying one.
 //
+// Symbolic links are followed, including one that leaves the root, whose files are part of the
+// build. Each directory descended into and each file registered is taken once under the first
+// spelling the walk reaches, in walk order, which nothing sorts. Without that, a link to a sibling
+// directory lists its files twice and a link back to an ancestor recurses until the host refuses
+// the path depth.
+//
 // It collects rather than loading, because the callers do different things with the answer: the
 // user walk registers every path it is given, while the library loader filters first and records
 // what it kept.
@@ -2113,6 +2114,22 @@ end 'commonAncestorOf'
 // (see `printLibraryWalkCensus`). The count comes from the recursion rather than a second
 // traversal, which would be free to disagree the moment this one grows an exclusion.
 export function collectMaxonSources(dir FilePath, into MaxonSourcePathArray, selection SourceSelection = SourceSelection.productionOnly, nestedProjects NestedProjectRule = NestedProjectRule.refused) returns DirectoryWalkCount throws CompileError
+	var ledger = PhysicalEntryLedger.create()
+
+	return try collectIfFirst(dir, into: into, selection: selection, nestedProjects: nestedProjects, ledger: ledger)
+end 'collectMaxonSources'
+
+function collectIfFirst(dir FilePath, into MaxonSourcePathArray, selection SourceSelection, nestedProjects NestedProjectRule, ledger PhysicalEntryLedger) returns DirectoryWalkCount throws CompileError
+	let first = try ledger.claimsFirst(dir)
+
+	if not first 'walkedAlready'
+		return 0
+	end 'walkedAlready'
+
+	return try collectBelow(dir, into: into, selection: selection, nestedProjects: nestedProjects, ledger: ledger)
+end 'collectIfFirst'
+
+function collectBelow(dir FilePath, into MaxonSourcePathArray, selection SourceSelection, nestedProjects NestedProjectRule, ledger PhysicalEntryLedger) returns DirectoryWalkCount throws CompileError
 	let entries = try Directory.list(dir) otherwise throw CompileError.directoryNotFound(dir)
 
 	match nestedProjects 'rule'
@@ -2120,15 +2137,15 @@ export function collectMaxonSources(dir FilePath, into MaxonSourcePathArray, sel
 		pruned then break
 	end 'rule'
 
-	return try collectListedSources(entries, into: into, selection: selection, nestedProjects: nestedProjects)
-end 'collectMaxonSources'
+	return try collectListedSources(entries, into: into, selection: selection, nestedProjects: nestedProjects, ledger: ledger)
+end 'collectBelow'
 
 export enum NestedProjectRule
 	refused
 	pruned
 end 'NestedProjectRule'
 
-function collectListedSources(entries FilePathArray, into MaxonSourcePathArray, selection SourceSelection, nestedProjects NestedProjectRule) returns DirectoryWalkCount throws CompileError
+function collectListedSources(entries FilePathArray, into MaxonSourcePathArray, selection SourceSelection, nestedProjects NestedProjectRule, ledger PhysicalEntryLedger) returns DirectoryWalkCount throws CompileError
 	// The directory these entries list counts itself, so a leaf directory answers 1.
 	var walked = 1 as DirectoryWalkCount
 
@@ -2136,38 +2153,55 @@ function collectListedSources(entries FilePathArray, into MaxonSourcePathArray, 
 		if Directory.isDirectory(entry) 'isSubdir'
 			// Pruned rather than descended-into-and-filtered, so the exclusion costs ONE probe for a
 			// whole subtree and the "and everything beneath it" half of the rule is structural instead
-			// of being a condition every level has to remember to repeat.
+			// of being a condition every level has to remember to repeat. The marker is asked before the
+			// directory claims its identity, so a directory named later is still walked.
 			if holdsIgnoreMarker(entry) 'ignoredSubtree'
 				continue
 			end 'ignoredSubtree'
 
-			let below = try collectSubdirectorySources(entry, into: into, selection: selection, nestedProjects: nestedProjects)
+			let below = try collectSubdirectorySources(entry, into: into, selection: selection, nestedProjects: nestedProjects, ledger: ledger)
 			walked = walked + below
 		end 'isSubdir' else 'isFile'
-			if selectionAdmits(selection, name: entry.filename()) 'isSource'
+			if not selectionAdmits(selection, name: entry.filename()) 'notASource'
+				continue
+			end 'notASource'
+
+			let sourceFirst = try ledger.claimsFirst(entry)
+
+			if sourceFirst 'unseen'
 				into.push(entry)
-			end 'isSource'
+			end 'unseen'
 		end 'isFile'
 	end 'each'
 
 	return walked
 end 'collectListedSources'
 
-function collectSubdirectorySources(dir FilePath, into MaxonSourcePathArray, selection SourceSelection, nestedProjects NestedProjectRule) returns DirectoryWalkCount throws CompileError
+function collectSubdirectorySources(dir FilePath, into MaxonSourcePathArray, selection SourceSelection, nestedProjects NestedProjectRule, ledger PhysicalEntryLedger) returns DirectoryWalkCount throws CompileError
 	match nestedProjects 'rule'
-		refused then return try collectMaxonSources(dir, into: into, selection: selection, nestedProjects: nestedProjects)
-		pruned then return try collectUnlessAProject(dir, into: into, selection: selection)
+		refused then return try collectIfFirst(dir, into: into, selection: selection, nestedProjects: nestedProjects, ledger: ledger)
+		pruned then return try collectUnlessAProject(dir, into: into, selection: selection, ledger: ledger)
 	end 'rule'
 end 'collectSubdirectorySources'
 
-function collectUnlessAProject(dir FilePath, into MaxonSourcePathArray, selection SourceSelection) returns DirectoryWalkCount throws CompileError
+function collectUnlessAProject(dir FilePath, into MaxonSourcePathArray, selection SourceSelection, ledger PhysicalEntryLedger) returns DirectoryWalkCount throws CompileError
 	let entries = try Directory.list(dir) otherwise throw CompileError.directoryNotFound(dir)
 
 	match driverFilesAmong(entries, extension: ProjectFileExtension) 'declared'
-		none then return try collectListedSources(entries, into: into, selection: selection, nestedProjects: NestedProjectRule.pruned)
+		none then break
 		one or
 		several then return 1
 	end 'declared'
+
+	// A project's directory is skipped before it claims its identity, so naming it later still
+	// walks it.
+	let first = try ledger.claimsFirst(dir)
+
+	if not first 'walkedAlready'
+		return 0
+	end 'walkedAlready'
+
+	return try collectListedSources(entries, into: into, selection: selection, nestedProjects: NestedProjectRule.pruned, ledger: ledger)
 end 'collectUnlessAProject'
 
 function requireProjectStandsAlone(entries FilePathArray) throws CompileError
@@ -2588,9 +2622,9 @@ end 'mintedNamesInclude'
 // instrument comparing two checkouts needs, and not "how many directories exist" (a walk that grows an
 // exclusion stops answering that question and keeps answering this one).
 //
-// A call that returns at all lists at least the directory it was handed, so the answer is 1 or more; a
-// root that cannot be listed throws instead. The floor is 0 because the type has no narrower honest
-// bound to state, not because a walk reports it.
+// A `collectMaxonSources` call lists at least the directory it was handed, so its answer is 1 or
+// more; a root that cannot be listed throws instead. The floor is 0 because the walk below a call
+// answers 0 for a directory it has already taken under another spelling.
 export typealias DirectoryWalkCount = int(0 to u64.max)
 
 // The same paths where the question is MEMBERSHIP rather than order, so it is answered by one hash

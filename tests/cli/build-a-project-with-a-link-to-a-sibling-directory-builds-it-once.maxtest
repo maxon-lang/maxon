@@ -1,0 +1,40 @@
+#if not os(Windows)
+	let SiblingLinkCaseDirName = "build-link-to-a-sibling-directory"
+	let SiblingLinkTargetDirName = "lib"
+	let SiblingLinkName = "mirror"
+	let SiblingLinkMainSource = "function main() returns ExitCode\n\treturn answer()\nend 'main'\n"
+	let SiblingLinkLibrarySource = "export function answer() returns ExitCode\n\treturn 0\nend 'answer'\n"
+	let SiblingLinkAmbiguousCallCode = "E3095"
+
+	test 'a project holding a link to a sibling directory builds, the files below it counted once'
+		requireHeldOutsideCheckout(SiblingLinkCaseDirName, check: LinkToASiblingDirectoryBuildsOnce.create())
+	end 'a project holding a link to a sibling directory builds, the files below it counted once'
+
+	type LinkToASiblingDirectoryBuildsOnce implements OutsideCheckoutCase
+		static function create() returns LinkToASiblingDirectoryBuildsOnce
+			return Self{}
+		end 'create'
+
+		export function requireHeldIn(dir FilePath) throws TestFailure
+			let library = stagingDir(dir.join(SiblingLinkTargetDirName).toString())
+
+			writeStagedFile(dir.join(StagedProgramFileName), content: SiblingLinkMainSource)
+			writeStagedFile(library.join("Answer.maxon"), content: SiblingLinkLibrarySource)
+
+			let link = dir.join(SiblingLinkName)
+			_ = runSystemTool("ln", arguments: ["-s", SiblingLinkTargetDirName, link.toString()], what: "`ln -s` making a link to a sibling directory in the staged project")
+
+			let build = spawnCompiler([BuildCommandWord, "."], staged: dir)
+
+			try File.delete(link) otherwise panic("the gate could not run — could not remove the link {link.toString()}.")
+
+			let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+
+			try Expect.isFalse(build.stderr.contains(SiblingLinkAmbiguousCallCode), message: "`{SiblingLinkName}` is a link to the sibling directory `{SiblingLinkTargetDirName}`, so the walk listed one file under two spellings and read one export as declared in two directories. {said}")
+			try Expect.equal(build.exitCode(), expected: 0, message: "a project holding a link to a sibling directory inside its own root did not build. {said}")
+
+			let named = dir.join("{dir.filename()}{executableSuffix()}")
+			try Expect.isTrue(File.exists(named), message: "the build exited 0 and wrote no {named.toString()}. {said}")
+		end 'requireHeldIn'
+	end 'LinkToASiblingDirectoryBuildsOnce'
+#endif
