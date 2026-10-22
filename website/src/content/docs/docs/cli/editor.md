@@ -211,6 +211,16 @@ In an untrusted workspace every project is its directory's walk, and a `.maxproj
 be run carries one Information diagnostic at its first character:
 `this project's source list applies once the workspace is trusted; until then the project is its directory`.
 
+**A project's `.maxproj` document carries the breaking changes since the project's last build.** Each
+publish of the `.maxproj` reads the project's
+[compiler-version record](/docs/cli/#breaking-changes-since-the-last-build), in a trusted and an untrusted
+workspace alike, and adds one Information diagnostic at the document's first character for each breaking
+change since the recorded release:
+`This project was last built with maxon <release>. <version>: <change> Fix: <fix>`. A record that does
+not hold a release version, or cannot be read, is one Error diagnostic carrying the line `maxon build`
+refuses with. `maxon build` writes the record and the server reads it, so a build shows in these
+diagnostics the next time the `.maxproj` is published, such as after an edit to it.
+
 **A project is built when a document in it opens.** On `didOpen` the server builds the index that
 document reads, before it publishes the document's diagnostics, when the document's root is a known
 project: a directory holding a `.maxproj`, `stdlib/` or `runtime/`. A single-file document has only
@@ -229,7 +239,8 @@ it as gone.
 
 **Diagnostics** are published with `textDocument/publishDiagnostics` after every `didOpen` and
 `didChange`, and cleared on `didClose`. Each has the error code (for example `E3005`) as `code`,
-`source: "maxon"` and severity Error; the untrusted-workspace notice above has severity Information. "No `main` function" (E3001) and the unused-export diagnostics
+`source: "maxon"` and severity Error; the untrusted-workspace notice and the breaking-change notices
+above have severity Information. "No `main` function" (E3001) and the unused-export diagnostics
 (E3092, E3093, E3094) appear in `maxon build`'s output alone.
 
 **A `.maxon` document in a project is published twice per version: the buffer check's set, then the

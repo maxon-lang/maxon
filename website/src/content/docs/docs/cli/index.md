@@ -425,7 +425,8 @@ This project was last built with maxon 0.4.0. Breaking changes since then:
 
 Each line pair is one `### Breaking changes` entry of the [release notes](/docs/release-notes/) of a
 release after the recorded one, up to this compiler's, with its fix. The MCP
-[`breaking_changes`](/docs/cli/mcp-server/#breaking_changes) tool answers the same list.
+[`breaking_changes`](/docs/cli/mcp-server/#breaking_changes) tool answers the same list, and the language server publishes it
+on the project's `.maxproj` document (see [`maxon lsp-server`](/docs/cli/editor/#maxon-lsp-server)).
 
 The release is kept in a **compiler-version record** under the cache root, at
 `<cache>/project/v1/<key>.mxpv`, where `<cache>` is the first usable row of the table under

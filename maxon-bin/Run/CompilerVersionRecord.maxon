@@ -7,10 +7,12 @@ let VersionRecordExtension = ".mxpv"
 let MostVersionRecords = 4096
 let RecordLineEnd = "\n"
 let EntryVersionSeparator = ": "
-let FixIndent = "  "
+let ReportFixSeparator = "\n  "
+let NoticeFixSeparator = " "
 let FixLabel = "Fix: "
 let ReportHeadPrefix = "This project was last built with maxon "
-let ReportHeadSuffix = ". Breaking changes since then:"
+let ReportSentenceEnd = "."
+let ReportSinceThen = " Breaking changes since then:"
 let ReportEnd = "\n"
 let RecordCure = "Delete it, or run `maxon cache clear`."
 
@@ -220,11 +222,39 @@ export function recordedReleaseOf(projectDir FilePath) returns RecordedRelease t
 	return RecordedRelease.recorded(release, rank: rank)
 end 'recordedReleaseOf'
 
-function changesReport(recorded String, changes BreakingChangeArray) returns String
-	var report = "{ReportHeadPrefix}{recorded}{ReportHeadSuffix}\n"
+function lastBuiltSentence(recorded String) returns String
+	return "{ReportHeadPrefix}{recorded}{ReportSentenceEnd}"
+end 'lastBuiltSentence'
+
+function changeEntry(change BreakingChange, fixSeparator String) returns String
+	return "{change.version}{EntryVersionSeparator}{change.change}{fixSeparator}{FixLabel}{change.fix}"
+end 'changeEntry'
+
+export function breakingChangeNotices(projectDir FilePath) returns StringArray throws VersionRecordError
+	let recorded = try recordedReleaseOf(projectDir)
+
+	return match recorded 'standing'
+		absent gives StringArray.create()
+		recorded(text, rank) gives noticesFor(text, changes: breakingChangesAfter(rank))
+	end 'standing'
+end 'breakingChangeNotices'
+
+function noticesFor(recorded String, changes BreakingChangeArray) returns StringArray
+	let lastBuilt = lastBuiltSentence(recorded)
+	var notices = StringArray.create()
 
 	for change in changes 'eachChange'
-		report.append("{change.version}{EntryVersionSeparator}{change.change}\n{FixIndent}{FixLabel}{change.fix}\n")
+		notices.push("{lastBuilt} {changeEntry(change, fixSeparator: NoticeFixSeparator)}")
+	end 'eachChange'
+
+	return notices
+end 'noticesFor'
+
+function changesReport(recorded String, changes BreakingChangeArray) returns String
+	var report = "{lastBuiltSentence(recorded)}{ReportSinceThen}\n"
+
+	for change in changes 'eachChange'
+		report.append("{changeEntry(change, fixSeparator: ReportFixSeparator)}\n")
 	end 'eachChange'
 
 	report.append(ReportEnd)

@@ -4,7 +4,6 @@ let UntrustedManifestFileName = "app.maxproj"
 let UntrustedMarkerFileName = "manifest-ran.txt"
 let UntrustedManifestSource = "export function build() returns ExitCode\n\tlet marker = try FilePath.from(\"manifest-ran.txt\") otherwise return 1\n\ttry File.writeText(marker, content: \"ran\") otherwise return 1\n\tBuild.buildWithConfig(BuildConfig.create([\".\", \"../shared\"], output: \"program\"))\n\treturn 0\nend 'build'\n"
 let UntrustedNoteNeedle = "once the workspace is trusted"
-let InformationSeverity = 3
 
 test 'project diagnostics: an untrusted workspace never runs the project file and says its source list waits for trust'
 	let staged = freshOutsideCheckoutDir(UntrustedProjectDirName)
@@ -40,7 +39,7 @@ function expectOneInformationNote(items PublishedDiagnosticArray) throws TestFai
 		panic("expectOneInformationNote: `Expect.fail` always throws")
 	end 'noItem'
 
-	try Expect.equal(note.severity, expected: InformationSeverity, message: "the note is informational, not an error: {note.message}")
+	try Expect.equal(note.severity, expected: PublishedInformationSeverity, message: "the note is informational, not an error: {note.message}")
 	try Expect.contains(note.message, needle: UntrustedNoteNeedle, message: "the note does not say the source list applies once the workspace is trusted: {note.message}")
 end 'expectOneInformationNote'
 

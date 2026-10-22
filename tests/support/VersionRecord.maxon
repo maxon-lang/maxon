@@ -1,0 +1,43 @@
+public let OlderRelease = "0.1.0"
+public let LastBuiltWording = "This project was last built with maxon"
+
+let VersionRecordLineEnd = "\n"
+let ProjectRecordDirName = "project"
+let ProjectRecordLayoutDirName = "v1"
+let ProjectRecordKeyDigits = 16
+let HexLetters = "abcdefABCDEF"
+
+public function recordLine(release String) returns String
+	return "{release}{VersionRecordLineEnd}"
+end 'recordLine'
+
+public function soleVersionRecordUnder(cacheRoot FilePath) returns FilePath throws TestFailure
+	let records = filesUnderEndingWith(cacheRoot, suffix: VersionRecordSuffix)
+
+	try Expect.equal(records.count(), expected: 1, message: "a successful build of one project left {records.count()} compiler-version records (`*{VersionRecordSuffix}`) under the cache root {cacheRoot.toString()}, where one project has one: {spacedPaths(records)}")
+
+	let record = try records.get(0) otherwise panic("the gate could not run — a list holding one record has a first")
+	let recordDir = cacheRoot.join(CacheVendorDirName).join(ProjectRecordDirName).join(ProjectRecordLayoutDirName)
+	let parent = try record.parent() otherwise panic("the gate could not run — a file found under a directory has a parent: {record.toString()}")
+
+	try Expect.equal(parent.toString(), expected: recordDir.toString(), message: "the compiler-version record {record.toString()} is not in {recordDir.toString()}.")
+
+	let key = record.filename().replace(VersionRecordSuffix, with: "")
+	try Expect.isTrue(isHexKey(key), message: "the compiler-version record's name `{record.filename()}` is not {ProjectRecordKeyDigits} hex digits and `{VersionRecordSuffix}`.")
+
+	return record
+end 'soleVersionRecordUnder'
+
+function isHexKey(key String) returns bool
+	if key.byteLength() != ProjectRecordKeyDigits 'wrongLength'
+		return false
+	end 'wrongLength'
+
+	for c in key 'eachDigit'
+		if not Ascii.isDigit(c) and not HexLetters.contains(c.toString()) 'notHex'
+			return false
+		end 'notHex'
+	end 'eachDigit'
+
+	return true
+end 'isHexKey'

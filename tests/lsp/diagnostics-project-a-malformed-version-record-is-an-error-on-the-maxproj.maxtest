@@ -1,0 +1,41 @@
+let MalformedRecordDirName = "diagnostics-project-malformed-version-record"
+let MalformedRelease = "banana"
+
+test 'project diagnostics: a malformed compiler-version record is one error on the .maxproj naming the record'
+	let staged = freshOutsideCheckoutDir(MalformedRecordDirName)
+	let record = stageRecordedProject(staged, recording: recordLine(MalformedRelease))
+
+	var client = startedOverRecordedCache(staged)
+
+	if let items = try recordedManifestDiagnostics(client, staged: staged) 'answered'
+		client.release()
+
+		let kept = fileText(record)
+
+		discardOutsideCheckoutDir(staged)
+
+		expectOneRecordError(items, record: record)
+		Expect.equal(kept, expected: recordLine(MalformedRelease), message: "the language server rewrote the compiler-version record {record.toString()}, which only `maxon build` writes.")
+	end 'answered' else (e) 'failed'
+		abandonedStagedSession(client, staged: staged, failure: e, doing: "the session did not complete")
+	end 'failed'
+end 'project diagnostics: a malformed compiler-version record is one error on the .maxproj naming the record'
+
+function expectOneRecordError(items PublishedDiagnosticArray, record FilePath) throws TestFailure
+	var errors = StringArray.create()
+
+	for item in items 'eachItem'
+		if item.severity == PublishedErrorSeverity 'anError'
+			errors.push(item.message)
+		end 'anError'
+	end 'eachItem'
+
+	try Expect.equal(errors.count(), expected: 1, message: "a compiler-version record holding `{MalformedRelease}` publishes ONE error on the `.maxproj`. It published {errors.count()} among {items.count()} diagnostic(s)")
+
+	let error = try errors.get(0) otherwise 'noError'
+		try Expect.fail("the count above was 1, so element 0 exists.")
+		panic("expectOneRecordError: `Expect.fail` always throws")
+	end 'noError'
+
+	try Expect.contains(error, needle: record.toString(), message: "the error on a malformed compiler-version record does not name the record {record.toString()}: {error}")
+end 'expectOneRecordError'

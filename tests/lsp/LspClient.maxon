@@ -536,11 +536,11 @@ public type LspClient
 	//
 	// ⛔ Everything that would stop the session happening at all PANICS rather than throwing: neither a
 	// missing binary nor a refused spawn is the server answering wrongly.
-	public static function start(binary FilePath = testedCompilerPath()) returns LspClient
+	public static function start(binary FilePath = testedCompilerPath(), environment Environment = Environment.inherit) returns LspClient
 		var argv = StringArray.create()
 		argv.push(LspServerCommandName)
 
-		let spawned = try StreamingSubprocess.spawn(Executable.path(binary), arguments: argv) otherwise (e) 'spawnFailed'
+		let spawned = try StreamingSubprocess.spawnWithEnvironment(Executable.path(binary), arguments: argv, workingDirectory: Directory.currentPath(), environment: environment) otherwise (e) 'spawnFailed'
 			panic("LspClient: the test could not run — `{binary.toString()} {LspServerCommandName}` did not spawn ({e.displayReason()}).")
 		end 'spawnFailed'
 
@@ -2018,3 +2018,56 @@ public let InitialDocumentVersion = 1 as DocumentVersion
 
 // How hover sections are stacked when a server answers with a list.
 let HoverSectionSeparator = "\n"
+
+let RecordedProjectSubdirName = "proj"
+let RecordedCacheDirName = "cache"
+let RecordedManifestFileName = "app.maxproj"
+let RecordedManifestSource = "export function build() returns ExitCode\n\tBuild.build(\".\", output: \"program\")\n\treturn 0\nend 'build'\n"
+let RecordedMainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+
+function recordedProjectOf(staged FilePath) returns FilePath
+	return staged.join(RecordedProjectSubdirName)
+end 'recordedProjectOf'
+
+function recordedCacheEnvironment(staged FilePath) returns Environment
+	return Environment.inheritUpdating([CacheRootVariable: staged.join(RecordedCacheDirName).toString()])
+end 'recordedCacheEnvironment'
+
+export function stageRecordedProject(staged FilePath, recording String) returns FilePath throws TestFailure
+	let project = recordedProjectOf(staged)
+
+	if not Directory.create(project) 'couldNotCreate'
+		panic("the test could not run: could not create {project.toString()}")
+	end 'couldNotCreate'
+
+	writeCorpusFile(project, fileName: RecordedManifestFileName, content: RecordedManifestSource)
+	writeCorpusFile(project, fileName: StagedProgramFileName, content: RecordedMainSource)
+
+	let built = spawnCompiler([BuildCommandName], staged: project, what: "`maxon {BuildCommandName}` in {project.toString()}", environment: recordedCacheEnvironment(staged))
+
+	if built.exitCode() != 0 'buildFailed'
+		panic("the test could not run: `maxon {BuildCommandName}` in {project.toString()} exited {built.exitCode()}, so no compiler-version record was written. It wrote to stdout: {built.stdout} and to stderr: {built.stderr}")
+	end 'buildFailed'
+
+	let record = try soleVersionRecordUnder(staged.join(RecordedCacheDirName))
+	writeStagedFile(record, content: recording)
+
+	return record
+end 'stageRecordedProject'
+
+export function startedOverRecordedCache(staged FilePath) returns LspClient
+	return LspClient.start(environment: recordedCacheEnvironment(staged))
+end 'startedOverRecordedCache'
+
+export function recordedManifestDiagnostics(client LspClient, staged FilePath) returns PublishedDiagnosticArray throws LspClientError
+	let project = recordedProjectOf(staged)
+	let uri = fileUriOf(project.join(RecordedManifestFileName))
+
+	_ = try client.initializeAtRootWithTrust(project, trusted: true)
+	try client.initialized()
+	try client.openDocument(uri, content: RecordedManifestSource)
+
+	let published = try client.awaitPublishedDiagnostics(uri)
+
+	return published.items
+end 'recordedManifestDiagnostics'

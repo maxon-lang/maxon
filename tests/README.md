@@ -65,6 +65,7 @@ tests/
     Text.maxon                   the folds of a captured stream and the readers of a printed number, `joined`, `compareBytes`, `checkoutDocumentText`, `sectionOf`
     StagedSource.maxon           `anchorLine`, `sourceColumnOf`, `linesOfStagedSource`, `buildStagedSource`, `builtTestBinary`, `sidecarOf`
     RepositoryFacts.maxon        the names of the repository's own files and variables every corpus spells: `SidecarSuffix`, `MaxonSourceSuffix`, `TestSourceSuffix`, `StagedProgramFileName`, `CacheRootVariable`, `CacheVendorDirName`, `VersionRecordSuffix`, `StdlibDirName`
+    VersionRecord.maxon          the compiler-version record: `soleVersionRecordUnder` a cache root, `recordLine`, `OlderRelease`, `LastBuiltWording`
   fmt/
     fixtures.maxtest             the fixture corpus: the harness, the guards and 30 tests
     engine-cases.maxtest         the engine corpus: 5 tests, on the staging and spawn the file above exports
@@ -96,7 +97,7 @@ tests/
     gates/<case>.maxtest         a well-formed spec it must ACCEPT, then REPORT something about
     gates/<case>/                the gate's one or two `.md`
   lsp/
-    LspClient.maxon              a live JSON-RPC client the tests import - see rule 1; `abandonedSession` and `abandonedStagedSession` release a session that failed, then fail the test naming what it was doing
+    LspClient.maxon              a live JSON-RPC client the tests import - see rule 1; `abandonedSession` and `abandonedStagedSession` release a session that failed, then fail the test naming what it was doing; `start` takes the server's environment; `stageRecordedProject`, `startedOverRecordedCache` and `recordedManifestDiagnostics` build a project into a private cache, rewrite its compiler-version record and read its `.maxproj` diagnostics
     <area>.maxtest               one LSP method area per file
     diagnostics-project-declared-inputs-probe.maxtest   the shared half of the declared-input cases: a project file whose sources come from a file it reads, declared in `inputs` or not, delegating or with two targets, and a gate that holds its run until released
     diagnostics-project-<change>.maxtest   the cases built on it, one each: which change to a declared input, a delegated `.maxproj` or an undeclared read runs the project file again, and which keeps the held answer
@@ -117,7 +118,7 @@ tests/
     reported-on-recheck.maxtest             a refused define is reported by the second check of one project too
     fixtures/<program>/...                  stored names only - see rule 1
   buildManifest/
-    BuildManifestHarness.maxon                          the shared half: the staging, the path-less `build` spawn, the sidecar reader, the held tree lock, the refusal check, the compiler-version record reader
+    BuildManifestHarness.maxon                          the shared half: the staging, the path-less `build` spawn, the sidecar reader, the held tree lock, the refusal check, the private cache root and the release a build records
     a-project-build-records-the-compiler-release.maxtest      a project build records this compiler's release in the cache root, and writes nothing into the project
     a-build-after-an-older-release-reports-its-breaking-changes.maxtest      a build over an older release's record reports its breaking changes after the header, each with a fix, records this release, and reports nothing the next time
     a-failed-build-reports-again-and-keeps-the-record.maxtest      a build that fails after an older release reports the changes and keeps the older record
