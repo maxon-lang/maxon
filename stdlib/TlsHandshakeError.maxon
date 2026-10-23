@@ -1,0 +1,97 @@
+module enum TlsHandshakeError implements Error
+	unexpectedMessage
+	badRecordMac
+	recordOverflow
+	handshakeFailure
+	badCertificate
+	unsupportedCertificate
+	certificateExpired
+	unknownCa
+	illegalParameter
+	decodeError
+	decryptError
+	protocolVersion
+	missingExtension
+	unsupportedExtension
+	noApplicationProtocol
+	inappropriateFallback
+	certificateRequired
+	internalError
+	alertReceived
+
+	module function sentAlert() returns TlsAlert throws TlsHandshakeError
+		match self 'alert'
+			unexpectedMessage then return TlsAlert.unexpectedMessage
+			badRecordMac then return TlsAlert.badRecordMac
+			recordOverflow then return TlsAlert.recordOverflow
+			handshakeFailure then return TlsAlert.handshakeFailure
+			badCertificate then return TlsAlert.badCertificate
+			unsupportedCertificate then return TlsAlert.unsupportedCertificate
+			certificateExpired then return TlsAlert.certificateExpired
+			unknownCa then return TlsAlert.unknownCa
+			illegalParameter then return TlsAlert.illegalParameter
+			decodeError then return TlsAlert.decodeError
+			decryptError then return TlsAlert.decryptError
+			protocolVersion then return TlsAlert.protocolVersion
+			missingExtension then return TlsAlert.missingExtension
+			unsupportedExtension then return TlsAlert.unsupportedExtension
+			noApplicationProtocol then return TlsAlert.noApplicationProtocol
+			inappropriateFallback then return TlsAlert.inappropriateFallback
+			certificateRequired then return TlsAlert.certificateRequired
+			internalError then return TlsAlert.internalError
+			alertReceived then throw TlsHandshakeError.alertReceived
+		end 'alert'
+	end 'sentAlert'
+end 'TlsHandshakeError'
+
+module function tlsCodecFailure(failure TlsCodecError) returns TlsHandshakeError
+	return match failure 'failure'
+		decodeError gives TlsHandshakeError.decodeError
+		illegalParameter gives TlsHandshakeError.illegalParameter
+		unexpectedMessage gives TlsHandshakeError.unexpectedMessage
+		missingExtension gives TlsHandshakeError.missingExtension
+	end 'failure'
+end 'tlsCodecFailure'
+
+module function tlsRecordFailure(failure TlsRecordError) returns TlsHandshakeError
+	return match failure 'failure'
+		recordOverflow gives TlsHandshakeError.recordOverflow
+		decodeError gives TlsHandshakeError.decodeError
+		unexpectedMessage gives TlsHandshakeError.unexpectedMessage
+		protocolVersion gives TlsHandshakeError.protocolVersion
+		badRecordMac gives TlsHandshakeError.badRecordMac
+		invalidKeyLength or
+		invalidIvLength or
+		invalidContentType or
+		emptyFragment or
+		sequenceNumberExhausted gives TlsHandshakeError.internalError
+	end 'failure'
+end 'tlsRecordFailure'
+
+module function tlsVerifyFailure(failure X509VerifyError) returns TlsHandshakeError
+	return match failure 'failure'
+		unknownAuthority gives TlsHandshakeError.unknownCa
+		expired or
+		notYetValid gives TlsHandshakeError.certificateExpired
+		unsupportedAlgorithm gives TlsHandshakeError.unsupportedCertificate
+		invalidCertificate or
+		incompatibleKeyUsage or
+		hostnameMismatch or
+		notAuthorizedToSign or
+		pathLengthExceeded or
+		nameConstraintViolation or
+		badSignature or
+		signatureCheckLimitExceeded or
+		invalidArgument gives TlsHandshakeError.badCertificate
+	end 'failure'
+end 'tlsVerifyFailure'
+
+module function tlsParseFailure(failure X509Error) returns TlsHandshakeError
+	return match failure 'failure'
+		unsupportedAlgorithm gives TlsHandshakeError.unsupportedCertificate
+		invalidEncoding or
+		unsupportedVersion or
+		unhandledCriticalExtension or
+		duplicateExtension gives TlsHandshakeError.badCertificate
+	end 'failure'
+end 'tlsParseFailure'

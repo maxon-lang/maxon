@@ -71,6 +71,28 @@ public type Tls13Secrets
 	end 'create'
 end 'Tls13Secrets'
 
+module type Tls13HandshakeStage
+	module var earlySecret as ByteArray
+	module var handshakeSecret as ByteArray
+	module var clientTrafficSecret as ByteArray
+	module var serverTrafficSecret as ByteArray
+	module var masterSecret as ByteArray
+
+	module static function create(earlySecret ByteArray, handshakeSecret ByteArray, clientTrafficSecret ByteArray, serverTrafficSecret ByteArray, masterSecret ByteArray) returns Tls13HandshakeStage
+		return Self{earlySecret: earlySecret, handshakeSecret: handshakeSecret, clientTrafficSecret: clientTrafficSecret, serverTrafficSecret: serverTrafficSecret, masterSecret: masterSecret}
+	end 'create'
+end 'Tls13HandshakeStage'
+
+module type Tls13ApplicationStage
+	module var clientTrafficSecret as ByteArray
+	module var serverTrafficSecret as ByteArray
+	module var exporterSecret as ByteArray
+
+	module static function create(clientTrafficSecret ByteArray, serverTrafficSecret ByteArray, exporterSecret ByteArray) returns Tls13ApplicationStage
+		return Self{clientTrafficSecret: clientTrafficSecret, serverTrafficSecret: serverTrafficSecret, exporterSecret: exporterSecret}
+	end 'create'
+end 'Tls13ApplicationStage'
+
 public type Tls13TrafficKeys
 	var key as ByteArray
 	var iv as ByteArray
@@ -134,12 +156,18 @@ public type Tls13KeySchedule
 	end 'messageHash'
 
 	public static function keySchedule(suite Tls13CipherSuite, sharedSecret ByteArray, helloHash ByteArray, serverFinishedHash ByteArray) returns Tls13Secrets throws Tls13KeyScheduleError
+		let handshake = try Tls13KeySchedule.handshakeStage(suite, sharedSecret: sharedSecret, helloHash: helloHash)
+		let application = try Tls13KeySchedule.applicationStage(suite, masterSecret: handshake.masterSecret, serverFinishedHash: serverFinishedHash)
+
+		return Tls13Secrets.create(handshake.earlySecret, handshakeSecret: handshake.handshakeSecret, clientHandshakeTrafficSecret: handshake.clientTrafficSecret, serverHandshakeTrafficSecret: handshake.serverTrafficSecret, masterSecret: handshake.masterSecret, clientApplicationTrafficSecret0: application.clientTrafficSecret, serverApplicationTrafficSecret0: application.serverTrafficSecret, exporterMasterSecret: application.exporterSecret)
+	end 'keySchedule'
+
+	module static function handshakeStage(suite Tls13CipherSuite, sharedSecret ByteArray, helloHash ByteArray) returns Tls13HandshakeStage throws Tls13KeyScheduleError
 		if sharedSecret.count() == 0 'sharedSecret'
 			throw Tls13KeyScheduleError.invalidSharedSecretLength
 		end 'sharedSecret'
 
 		try tls13RequireHash(suite, hash: helloHash)
-		try tls13RequireHash(suite, hash: serverFinishedHash)
 
 		let hash = suite.hashAlgorithm()
 		var zeros = ByteArray.create()
@@ -154,12 +182,21 @@ public type Tls13KeySchedule
 
 		let clientHandshake = tls13Derive(hash, secret: handshakeSecret, label: tls13ClientHandshakeLabel, transcriptHash: helloHash)
 		let serverHandshake = tls13Derive(hash, secret: handshakeSecret, label: tls13ServerHandshakeLabel, transcriptHash: helloHash)
+
+		return Tls13HandshakeStage.create(earlySecret, handshakeSecret: handshakeSecret, clientTrafficSecret: clientHandshake, serverTrafficSecret: serverHandshake, masterSecret: masterSecret)
+	end 'handshakeStage'
+
+	module static function applicationStage(suite Tls13CipherSuite, masterSecret ByteArray, serverFinishedHash ByteArray) returns Tls13ApplicationStage throws Tls13KeyScheduleError
+		try tls13RequireSecret(suite, secret: masterSecret)
+		try tls13RequireHash(suite, hash: serverFinishedHash)
+
+		let hash = suite.hashAlgorithm()
 		let clientApplication = tls13Derive(hash, secret: masterSecret, label: tls13ClientApplicationLabel, transcriptHash: serverFinishedHash)
 		let serverApplication = tls13Derive(hash, secret: masterSecret, label: tls13ServerApplicationLabel, transcriptHash: serverFinishedHash)
 		let exporter = tls13Derive(hash, secret: masterSecret, label: tls13ExporterLabel, transcriptHash: serverFinishedHash)
 
-		return Tls13Secrets.create(earlySecret, handshakeSecret: handshakeSecret, clientHandshakeTrafficSecret: clientHandshake, serverHandshakeTrafficSecret: serverHandshake, masterSecret: masterSecret, clientApplicationTrafficSecret0: clientApplication, serverApplicationTrafficSecret0: serverApplication, exporterMasterSecret: exporter)
-	end 'keySchedule'
+		return Tls13ApplicationStage.create(clientApplication, serverTrafficSecret: serverApplication, exporterSecret: exporter)
+	end 'applicationStage'
 
 	public static function trafficKeys(suite Tls13CipherSuite, trafficSecret ByteArray) returns Tls13TrafficKeys throws Tls13KeyScheduleError
 		try tls13RequireSecret(suite, secret: trafficSecret)

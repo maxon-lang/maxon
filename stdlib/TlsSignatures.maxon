@@ -1,0 +1,212 @@
+let tlsCertificateVerifyPadding = 0x20
+let tlsCertificateVerifyPaddingBytes = 64
+let tlsCertificateVerifySeparator = 0
+let tlsServerCertificateVerifyContext = "TLS 1.3, server CertificateVerify"
+let tlsClientCertificateVerifyContext = "TLS 1.3, client CertificateVerify"
+
+module enum TlsSchemeSelectionError implements Error
+	noCommonScheme
+end 'TlsSchemeSelectionError'
+
+module enum TlsSignatureScheme
+	rsaPkcs1Sha256 = 0x0401
+	rsaPkcs1Sha384 = 0x0501
+	rsaPkcs1Sha512 = 0x0601
+	ecdsaSecp256r1Sha256 = 0x0403
+	ecdsaSecp384r1Sha384 = 0x0503
+	rsaPssRsaeSha256 = 0x0804
+	rsaPssRsaeSha384 = 0x0805
+	rsaPssRsaeSha512 = 0x0806
+	ed25519 = 0x0807
+
+	module function isPkcs1() returns bool
+		return self == TlsSignatureScheme.rsaPkcs1Sha256 or self == TlsSignatureScheme.rsaPkcs1Sha384 or self == TlsSignatureScheme.rsaPkcs1Sha512
+	end 'isPkcs1'
+
+	module function digest() returns HashAlgorithm
+		return match self 'digest'
+			rsaPkcs1Sha256 or
+			ecdsaSecp256r1Sha256 or
+			rsaPssRsaeSha256 gives HashAlgorithm.sha256
+			rsaPkcs1Sha384 or
+			ecdsaSecp384r1Sha384 or
+			rsaPssRsaeSha384 gives HashAlgorithm.sha384
+			rsaPkcs1Sha512 or
+			rsaPssRsaeSha512 or
+			ed25519 gives HashAlgorithm.sha512
+		end 'digest'
+	end 'digest'
+
+	module function fits(algorithm X509KeyAlgorithm) returns bool
+		return match self 'scheme'
+			rsaPkcs1Sha256 or
+			rsaPkcs1Sha384 or
+			rsaPkcs1Sha512 or
+			rsaPssRsaeSha256 or
+			rsaPssRsaeSha384 or
+			rsaPssRsaeSha512 gives algorithm == X509KeyAlgorithm.rsa
+			ecdsaSecp256r1Sha256 gives algorithm == X509KeyAlgorithm.ecP256
+			ecdsaSecp384r1Sha384 gives algorithm == X509KeyAlgorithm.ecP384
+			ed25519 gives algorithm == X509KeyAlgorithm.ed25519
+		end 'scheme'
+	end 'fits'
+
+	module function code() returns TlsSignatureSchemeCode
+		return self.rawValue as TlsSignatureSchemeCode
+	end 'code'
+
+	module function requireSignature(key X509PublicKey, message ByteArray, signature ByteArray) throws TlsHandshakeError
+		if not (try verifies(key, message: message, signature: signature)) 'forged'
+			throw TlsHandshakeError.decryptError
+		end 'forged'
+	end 'requireSignature'
+
+	function verifies(key X509PublicKey, message ByteArray, signature ByteArray) returns bool throws TlsHandshakeError
+		match self 'scheme'
+			ecdsaSecp256r1Sha256 then return try verifiesEcdsa(EcdsaCurve.p256, key: key, message: message, signature: signature)
+			ecdsaSecp384r1Sha384 then return try verifiesEcdsa(EcdsaCurve.p384, key: key, message: message, signature: signature)
+			ed25519 then return try verifiesEd25519(key, message: message, signature: signature)
+			rsaPkcs1Sha256 or
+			rsaPkcs1Sha384 or
+			rsaPkcs1Sha512 then return try verifiesRsa(key, message: message, signature: signature, pss: false)
+			rsaPssRsaeSha256 or
+			rsaPssRsaeSha384 or
+			rsaPssRsaeSha512 then return try verifiesRsa(key, message: message, signature: signature, pss: true)
+		end 'scheme'
+	end 'verifies'
+
+	function verifiesEcdsa(curve EcdsaCurve, key X509PublicKey, message ByteArray, signature ByteArray) returns bool throws TlsHandshakeError
+		return try Ecdsa.verify(curve, publicKey: key.keyBytes(), message: message, signature: signature) otherwise (failure) 'refused'
+			match failure 'reason'
+				invalidPublicKey then throw TlsHandshakeError.badCertificate
+				invalidSignatureEncoding then throw TlsHandshakeError.decryptError
+			end 'reason'
+		end 'refused'
+	end 'verifiesEcdsa'
+
+	function verifiesEd25519(key X509PublicKey, message ByteArray, signature ByteArray) returns bool throws TlsHandshakeError
+		return try Ed25519.verify(key.keyBytes(), message: message, signature: signature) otherwise throw TlsHandshakeError.decryptError
+	end 'verifiesEd25519'
+
+	function verifiesRsa(key X509PublicKey, message ByteArray, signature ByteArray, pss bool) returns bool throws TlsHandshakeError
+		let outcome = try verifiesRsaBlock(key, message: message, signature: signature, pss: pss) otherwise (failure) 'refused'
+			match failure 'reason'
+				invalidPublicKey then throw TlsHandshakeError.badCertificate
+				invalidSignatureLength then throw TlsHandshakeError.decryptError
+				invalidPrivateKey or
+				invalidSaltLength then throw TlsHandshakeError.internalError
+			end 'reason'
+		end 'refused'
+
+		return outcome
+	end 'verifiesRsa'
+
+	function verifiesRsaBlock(key X509PublicKey, message ByteArray, signature ByteArray, pss bool) returns bool throws RsaError
+		if pss 'probabilistic'
+			return try Rsa.verifyPss(key.der(), hash: digest(), message: message, signature: signature)
+		end 'probabilistic'
+
+		return try Rsa.verifyPkcs1v15(key.der(), hash: digest(), message: message, signature: signature)
+	end 'verifiesRsaBlock'
+end 'TlsSignatureScheme'
+
+module union TlsPrivateKey
+	ecP256(scalar ByteArray)
+	ecP384(scalar ByteArray)
+	rsa(pkcs8 ByteArray)
+	ed25519(seed ByteArray)
+
+	module function algorithm() returns X509KeyAlgorithm
+		return match self 'key'
+			ecP256 gives X509KeyAlgorithm.ecP256
+			ecP384 gives X509KeyAlgorithm.ecP384
+			rsa gives X509KeyAlgorithm.rsa
+			ed25519 gives X509KeyAlgorithm.ed25519
+		end 'key'
+	end 'algorithm'
+
+	module function sign(scheme TlsSignatureScheme, message ByteArray, salt ByteArray) returns ByteArray throws TlsHandshakeError
+		if not scheme.fits(algorithm()) 'mismatch'
+			throw TlsHandshakeError.internalError
+		end 'mismatch'
+
+		return match self 'key'
+			ecP256(scalar) gives try EcdsaP256.sign(scalar, message: message) otherwise throw TlsHandshakeError.internalError
+			ecP384(scalar) gives try EcdsaP384.sign(scalar, message: message) otherwise throw TlsHandshakeError.internalError
+			rsa(pkcs8) gives try signRsa(pkcs8, scheme: scheme, message: message, salt: salt)
+			ed25519(seed) gives try Ed25519.sign(seed, message: message) otherwise throw TlsHandshakeError.internalError
+		end 'key'
+	end 'sign'
+
+	function signRsa(pkcs8 ByteArray, scheme TlsSignatureScheme, message ByteArray, salt ByteArray) returns ByteArray throws TlsHandshakeError
+		let digestBytes = scheme.digest().digestBytes()
+
+		if salt.count() < digestBytes 'shortSalt'
+			throw TlsHandshakeError.internalError
+		end 'shortSalt'
+
+		if scheme.isPkcs1() 'deterministic'
+			return try Rsa.signPkcs1v15(pkcs8, hash: scheme.digest(), message: message) otherwise throw TlsHandshakeError.internalError
+		end 'deterministic'
+
+		let pssSalt = tlsRecordPart(salt, start: 0, endIndex: digestBytes)
+
+		return try Rsa.signPss(pkcs8, hash: scheme.digest(), message: message, salt: pssSalt) otherwise throw TlsHandshakeError.internalError
+	end 'signRsa'
+end 'TlsPrivateKey'
+
+module enum TlsCertificateVerifyRole
+	server
+	client
+
+	module function context() returns String
+		return match self 'role'
+			server gives tlsServerCertificateVerifyContext
+			client gives tlsClientCertificateVerifyContext
+		end 'role'
+	end 'context'
+end 'TlsCertificateVerifyRole'
+
+module function tlsCertificateVerifyContent(role TlsCertificateVerifyRole, transcriptHash ByteArray) returns ByteArray
+	var content = ByteArray.create()
+	content.growFilled(tlsCertificateVerifyPaddingBytes, value: tlsCertificateVerifyPadding)
+	content.append(role.context().toByteArray())
+	content.push(tlsCertificateVerifySeparator as Byte)
+	content.append(transcriptHash)
+
+	return content
+end 'tlsCertificateVerifyContent'
+
+module function tlsPickScheme(preference TlsSignatureSchemeCodeArray, offered TlsSignatureSchemeCodeArray, algorithm X509KeyAlgorithm, protocol TlsProtocol) returns TlsSignatureScheme throws TlsSchemeSelectionError
+	for code in preference 'eachPreference'
+		if not offered.contains(code) 'notOffered'
+			continue
+		end 'notOffered'
+
+		let scheme = try TlsSignatureScheme.fromRawValue(code) otherwise continue
+
+		if scheme.fits(algorithm) and not (protocol == TlsProtocol.tls13 and scheme.isPkcs1()) 'usable'
+			return scheme
+		end 'usable'
+	end 'eachPreference'
+
+	throw TlsSchemeSelectionError.noCommonScheme
+end 'tlsPickScheme'
+
+module function tlsRequireOfferedScheme(code TlsSignatureSchemeCode, offered TlsSignatureSchemeCodeArray, algorithm X509KeyAlgorithm, protocol TlsProtocol) returns TlsSignatureScheme throws TlsHandshakeError
+	if not offered.contains(code) 'notOffered'
+		throw TlsHandshakeError.illegalParameter
+	end 'notOffered'
+
+	let scheme = try TlsSignatureScheme.fromRawValue(code) otherwise throw TlsHandshakeError.illegalParameter
+
+	if protocol == TlsProtocol.tls13 and scheme.isPkcs1() 'pkcs1'
+		throw TlsHandshakeError.illegalParameter
+	end 'pkcs1'
+
+	if not scheme.fits(algorithm) 'misfit'
+		throw TlsHandshakeError.illegalParameter
+	end 'misfit'
+
+	return scheme
+end 'tlsRequireOfferedScheme'

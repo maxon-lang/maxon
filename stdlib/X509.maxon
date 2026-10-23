@@ -2342,7 +2342,16 @@ function x509Host(host String) returns X509Host
 	return X509Host.dnsName(labels)
 end 'x509Host'
 
-function x509WithoutTrailingDot(bytes ByteArray) returns ByteArray
+module function x509IsIpAddress(host String) returns bool
+	return match x509Host(host) 'host'
+		ipAddress gives true
+		dnsName or
+		invalid or
+		absent gives false
+	end 'host'
+end 'x509IsIpAddress'
+
+module function x509WithoutTrailingDot(bytes ByteArray) returns ByteArray
 	if bytes.isEmpty() or (try bytes.get(bytes.count() - 1) otherwise panic("the host is not empty")) != x509Dot 'noDot'
 		return bytes
 	end 'noDot'

@@ -101,6 +101,18 @@ public enum Tls12CipherSuite
 	end 'aeadKind'
 end 'Tls12CipherSuite'
 
+module union TlsServerSuite
+	tls13(suite Tls13CipherSuite)
+	tls12(suite Tls12CipherSuite)
+end 'TlsServerSuite'
+
+module function tlsServerSuite(code TlsCipherSuiteCode, protocol TlsProtocol) returns TlsServerSuite throws TlsHandshakeError
+	return match protocol 'protocol'
+		tls13 gives TlsServerSuite.tls13(try Tls13CipherSuite.fromRawValue(code) otherwise throw TlsHandshakeError.illegalParameter)
+		tls12 gives TlsServerSuite.tls12(try Tls12CipherSuite.fromRawValue(code) otherwise throw TlsHandshakeError.illegalParameter)
+	end 'protocol'
+end 'tlsServerSuite'
+
 module function tlsIsPrintableAscii(text String) returns bool
 	if text.byteLength() == 0 'empty'
 		return false

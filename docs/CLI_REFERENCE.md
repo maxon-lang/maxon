@@ -3178,7 +3178,8 @@ maxon verify-recheck <file|dir>
 Stages a private copy of this compiler's library tiers and its executable under a directory, so a program
 can be compiled as library-tier source: one placed under the staged `stdlib/` and built by the staged
 compiler may name what only `stdlib/` and `runtime/` sources may (`__Builtins`, `.managed`,
-`__ManagedMemory`, `cstring`; [E3185](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3185) elsewhere). The spec
+`__ManagedMemory`, `cstring`; [E3185](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3185) elsewhere) and sees the
+`module` declarations of `stdlib/`. The spec
 harness's `<!-- tier: stdlib -->` cases and the debugger's fault fixtures are staged this way.
 
 ```bash

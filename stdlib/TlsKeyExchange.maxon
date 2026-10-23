@@ -1,0 +1,40 @@
+module enum TlsNamedGroup
+	secp256r1 = 0x0017
+	x25519 = 0x001D
+
+	module function code() returns TlsGroupCode
+		return self.rawValue as TlsGroupCode
+	end 'code'
+
+	module function publicKey(privateKey ByteArray) returns ByteArray throws TlsHandshakeError
+		return match self 'group'
+			secp256r1 gives try EcdhP256.publicKey(privateKey) otherwise throw TlsHandshakeError.internalError
+			x25519 gives try X25519.publicKey(privateKey) otherwise throw TlsHandshakeError.internalError
+		end 'group'
+	end 'publicKey'
+
+	module function sharedSecret(privateKey ByteArray, peerShare ByteArray) returns ByteArray throws TlsHandshakeError
+		return match self 'group'
+			secp256r1 gives try sharedSecretP256(privateKey, peerShare: peerShare)
+			x25519 gives try sharedSecretX25519(privateKey, peerShare: peerShare)
+		end 'group'
+	end 'sharedSecret'
+
+	function sharedSecretP256(privateKey ByteArray, peerShare ByteArray) returns ByteArray throws TlsHandshakeError
+		return try EcdhP256.sharedSecret(privateKey, peerPublicKey: peerShare) otherwise (failure) 'refused'
+			match failure 'reason'
+				invalidPublicKey then throw TlsHandshakeError.illegalParameter
+				invalidPrivateKey then throw TlsHandshakeError.internalError
+			end 'reason'
+		end 'refused'
+	end 'sharedSecretP256'
+
+	function sharedSecretX25519(privateKey ByteArray, peerShare ByteArray) returns ByteArray throws TlsHandshakeError
+		return try X25519.sharedSecret(privateKey, peerPublicKey: peerShare) otherwise (failure) 'refused'
+			match failure 'reason'
+				invalidLength then throw TlsHandshakeError.illegalParameter
+				allZeroSharedSecret then throw TlsHandshakeError.illegalParameter
+			end 'reason'
+		end 'refused'
+	end 'sharedSecretX25519'
+end 'TlsNamedGroup'

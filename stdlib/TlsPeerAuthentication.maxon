@@ -1,0 +1,54 @@
+module interface TlsPeerAuthenticator
+	function verifyChain(leaf keep ByteArray, intermediates keep ByteArrays, host X509VerifyHost) throws TlsHandshakeError
+	function verifySignature(scheme TlsSignatureScheme, key keep X509PublicKey, message ByteArray, signature ByteArray) throws TlsHandshakeError
+	function authenticates() returns bool
+end 'TlsPeerAuthenticator'
+
+module type TlsX509Peer implements TlsPeerAuthenticator
+	module var roots as ByteArrays
+	module var now as UnixSeconds
+	module var purpose as X509Purpose
+
+	module static function create(roots ByteArrays, now UnixSeconds, purpose X509Purpose) returns TlsX509Peer
+		return Self{roots: roots, now: now, purpose: purpose}
+	end 'create'
+
+	module static function system(purpose X509Purpose) returns TlsX509Peer throws TrustStoreError
+		let installed = try TrustStore.systemRoots()
+		var roots = ByteArrays.create()
+
+		for certificate in installed 'eachRoot'
+			roots.push(certificate.clone())
+		end 'eachRoot'
+
+		return Self{roots: roots, now: WallClock.nowUnixSeconds(), purpose: purpose}
+	end 'system'
+
+	module function verifyChain(leaf ByteArray, intermediates ByteArrays, host X509VerifyHost) throws TlsHandshakeError
+		_ = try X509.verify(leaf, intermediates: intermediates, roots: roots, host: host, now: now, purpose: purpose) otherwise (failure) 'refused'
+			throw tlsVerifyFailure(failure)
+		end 'refused'
+	end 'verifyChain'
+
+	module function verifySignature(scheme TlsSignatureScheme, key X509PublicKey, message ByteArray, signature ByteArray) throws TlsHandshakeError
+		try scheme.requireSignature(key, message: message, signature: signature)
+	end 'verifySignature'
+
+	module function authenticates() returns bool
+		return true
+	end 'authenticates'
+end 'TlsX509Peer'
+
+module function tlsAuthenticateChain(chain ByteArrays, host X509VerifyHost, peer TlsPeerAuthenticator) returns Certificate throws TlsHandshakeError
+	let leafDer = try chain.first() otherwise throw TlsHandshakeError.decodeError
+
+	let leaf = try X509.parse(leafDer) otherwise (failure) 'unparsed'
+		throw tlsParseFailure(failure)
+	end 'unparsed'
+
+	let intermediates = try chain.slice(1, endIndex: chain.count()) otherwise panic("tlsAuthenticateChain: a chain with a leaf has an intermediate range")
+
+	try peer.verifyChain(leafDer, intermediates: intermediates, host: host)
+
+	return leaf
+end 'tlsAuthenticateChain'

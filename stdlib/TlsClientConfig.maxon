@@ -1,0 +1,183 @@
+module typealias TlsProtocolArray = Array with TlsProtocol
+module typealias TlsKeySecretArray = Array with TlsKeySecret
+
+let tlsRandomLength = 32
+let tlsSessionIdLength = 32
+let tlsPrivateKeyLength = 32
+let tlsPssSaltLength = 64
+module let tlsNullCompression = 0
+let tlsUncompressedPointFormat = 0
+module let tlsLegacyVersion = 0x0303
+
+module type TlsKeySecret
+	module var group as TlsGroupCode
+	module var privateKey as ByteArray
+	module var publicKey as ByteArray
+
+	module static function create(group TlsGroupCode, privateKey ByteArray) returns TlsKeySecret throws TlsHandshakeError
+		let named = try TlsNamedGroup.fromRawValue(group) otherwise throw TlsHandshakeError.internalError
+
+		return Self{group: group, privateKey: privateKey, publicKey: try named.publicKey(privateKey)}
+	end 'create'
+end 'TlsKeySecret'
+
+module union TlsClientIdentity
+	anonymous
+	certified(chain ByteArrays, key TlsPrivateKey)
+end 'TlsClientIdentity'
+
+module type TlsClientConfig
+	module var peerName as X509VerifyHost
+	module var protocols as TlsProtocolArray
+	module var cipherSuites as TlsCipherSuiteCodeArray
+	module var groups as TlsGroupCodeArray
+	module var keyShareGroups as TlsGroupCodeArray
+	module var signatureAlgorithms as TlsSignatureSchemeCodeArray
+	module var applicationProtocols as TlsProtocolNameArray
+	module var identity as TlsClientIdentity
+
+	module static function create(peerName X509VerifyHost, protocols TlsProtocolArray, cipherSuites TlsCipherSuiteCodeArray, groups TlsGroupCodeArray, keyShareGroups TlsGroupCodeArray, signatureAlgorithms TlsSignatureSchemeCodeArray, applicationProtocols TlsProtocolNameArray, identity TlsClientIdentity) returns TlsClientConfig
+		return Self{peerName: peerName, protocols: protocols, cipherSuites: cipherSuites, groups: groups, keyShareGroups: keyShareGroups, signatureAlgorithms: signatureAlgorithms, applicationProtocols: applicationProtocols, identity: identity}
+	end 'create'
+
+	module static function defaults(peerName X509VerifyHost) returns TlsClientConfig
+		return Self{peerName: peerName, protocols: TlsProtocolArray from [TlsProtocol.tls13, TlsProtocol.tls12], cipherSuites: TlsCipherSuiteCodeArray from [0x1303, 0x1301, 0x1302, 0xCCA9, 0xCCA8, 0xC02B, 0xC02F, 0xC02C, 0xC030], groups: TlsGroupCodeArray from [0x001D, 0x0017], keyShareGroups: TlsGroupCodeArray from [0x001D], signatureAlgorithms: TlsSignatureSchemeCodeArray from [0x0403, 0x0804, 0x0807, 0x0503, 0x0805, 0x0806, 0x0401, 0x0501, 0x0601], applicationProtocols: TlsProtocolNameArray.create(), identity: TlsClientIdentity.anonymous}
+	end 'defaults'
+end 'TlsClientConfig'
+
+module type TlsClientEntropy
+	module var random as ByteArray
+	module var sessionId as ByteArray
+	module var keySecrets as TlsKeySecretArray
+	module var pssSalt as ByteArray
+
+	module static function create(random ByteArray, sessionId ByteArray, keySecrets TlsKeySecretArray, pssSalt ByteArray) returns TlsClientEntropy
+		return Self{random: random, sessionId: sessionId, keySecrets: keySecrets, pssSalt: pssSalt}
+	end 'create'
+
+	module static function fresh(config TlsClientConfig) returns TlsClientEntropy throws TlsHandshakeError
+		var secrets = TlsKeySecretArray.create()
+
+		for group in config.groups 'eachGroup'
+			let named = try TlsNamedGroup.fromRawValue(group) otherwise continue
+			secrets.push(try drawSecret(named))
+		end 'eachGroup'
+
+		return Self{random: try drawBytes(tlsRandomLength), sessionId: try drawBytes(tlsSessionIdLength), keySecrets: secrets, pssSalt: try drawBytes(tlsPssSaltLength)}
+	end 'fresh'
+
+	module function secret(group TlsGroupCode) returns TlsKeySecret throws TlsHandshakeError
+		for candidate in keySecrets 'eachSecret'
+			if candidate.group == group 'found'
+				return candidate
+			end 'found'
+		end 'eachSecret'
+
+		throw TlsHandshakeError.internalError
+	end 'secret'
+end 'TlsClientEntropy'
+
+function drawBytes(count RandomByteCount) returns ByteArray throws TlsHandshakeError
+	return try Random.bytes(count) otherwise throw TlsHandshakeError.internalError
+end 'drawBytes'
+
+function drawSecret(group TlsNamedGroup) returns TlsKeySecret throws TlsHandshakeError
+	while true 'attempts'
+		let candidate = try drawBytes(tlsPrivateKeyLength)
+		let secret = try TlsKeySecret.create(group.code(), privateKey: candidate) otherwise continue
+
+		return secret
+	end 'attempts'
+
+	panic("drawSecret: the loop returns once a private key is accepted")
+end 'drawSecret'
+
+module interface TlsClientHelloSource
+	function first(built ByteArray) returns ByteArray
+	function second(built ByteArray) returns ByteArray
+end 'TlsClientHelloSource'
+
+module type TlsBuiltClientHello implements TlsClientHelloSource
+	module static function create() returns TlsBuiltClientHello
+		return Self{}
+	end 'create'
+
+	module function first(built ByteArray) returns ByteArray
+		return built
+	end 'first'
+
+	module function second(built ByteArray) returns ByteArray
+		return built
+	end 'second'
+end 'TlsBuiltClientHello'
+
+module function tlsBuildClientHello(config TlsClientConfig, entropy TlsClientEntropy) returns ByteArray throws TlsHandshakeError
+	if entropy.random.count() != tlsRandomLength or entropy.sessionId.count() > tlsSessionIdLength 'entropyLength'
+		throw TlsHandshakeError.internalError
+	end 'entropyLength'
+
+	var extensions = match config.peerName 'peer'
+		named(name) gives tlsServerNameExtensions(name)
+		none gives TlsExtensionArray.create()
+	end 'peer'
+
+	if config.protocols.contains(TlsProtocol.tls12) 'tls12'
+		extensions.push(TlsExtension.extendedMasterSecret)
+		extensions.push(TlsExtension.renegotiationInfo(ByteArray.create()))
+	end 'tls12'
+
+	extensions.push(TlsExtension.supportedGroups(config.groups))
+
+	if config.protocols.contains(TlsProtocol.tls12) 'pointFormats'
+		extensions.push(TlsExtension.ecPointFormats(ByteArray from [tlsUncompressedPointFormat]))
+	end 'pointFormats'
+
+	extensions.push(TlsExtension.signatureAlgorithms(config.signatureAlgorithms))
+
+	if not config.applicationProtocols.isEmpty() 'alpn'
+		extensions.push(TlsExtension.applicationProtocols(config.applicationProtocols))
+	end 'alpn'
+
+	if config.protocols.contains(TlsProtocol.tls13) 'tls13'
+		extensions.push(TlsExtension.clientKeyShares(try tlsClientShares(config, entropy: entropy)))
+		extensions.push(TlsExtension.supportedVersions(tlsVersionCodes(config.protocols)))
+	end 'tls13'
+
+	let hello = TlsClientHello.create(tlsLegacyVersion, random: entropy.random, legacySessionId: entropy.sessionId, cipherSuites: config.cipherSuites, compressionMethods: ByteArray from [tlsNullCompression], extensions: TlsExtensionBlock.listed(extensions))
+
+	return try TlsHandshakeCodec.encode(TlsHandshakeMessage.clientHello(hello)) otherwise throw TlsHandshakeError.internalError
+end 'tlsBuildClientHello'
+
+function tlsServerNameExtensions(name String) returns TlsExtensionArray
+	var extensions = TlsExtensionArray.create()
+
+	if not x509IsIpAddress(name) 'dnsName'
+		extensions.push(TlsExtension.serverName(String.from(x509WithoutTrailingDot(name.toByteArray()))))
+	end 'dnsName'
+
+	return extensions
+end 'tlsServerNameExtensions'
+
+function tlsClientShares(config TlsClientConfig, entropy TlsClientEntropy) returns TlsKeyShareArray throws TlsHandshakeError
+	var shares = TlsKeyShareArray.create()
+
+	for group in config.keyShareGroups 'eachGroup'
+		let secret = try entropy.secret(group)
+		shares.push(TlsKeyShare.create(group, keyExchange: secret.publicKey))
+	end 'eachGroup'
+
+	return shares
+end 'tlsClientShares'
+
+function tlsVersionCodes(protocols TlsProtocolArray) returns TlsVersionCodeArray
+	var codes = TlsVersionCodeArray.create()
+
+	for protocol in protocols 'eachProtocol'
+		codes.push(match protocol 'protocol'
+			tls13 gives tlsTls13VersionCode
+			tls12 gives tlsLegacyVersion
+		end 'protocol')
+	end 'eachProtocol'
+
+	return codes
+end 'tlsVersionCodes'

@@ -40,3 +40,5 @@ of the spec here.
 | `tls12-prf` | `stdlib/Tls12Prf.maxon` | `specs/tls12-prf.md` |
 | `tls-record` | `stdlib/TlsRecordProtection.maxon` | `specs/tls-record.md` |
 | `tls-handshake-codec` | `stdlib/TlsHandshakeMessage.maxon` | `specs/tls-handshake-codec.md` |
+| `tls-handshake` | `stdlib/TlsClientHandshake.maxon` | `specs/tls-handshake.md` |
+| `tls-handshake-negotiation` | `stdlib/TlsClientHandshake.maxon` | `specs/tls-handshake-negotiation.md` |

@@ -1,0 +1,310 @@
+let tlsHandshakeHeaderBytes = 4
+let tlsHandshakeLengthOffset = 1
+let tlsHandshakeLengthBytes = 3
+let tlsAlertBodyBytes = 2
+let tlsChangeCipherSpecBody = 1
+let tlsChangeCipherSpecBytes = 1
+let tlsAlertLevelOffset = 0
+let tlsAlertDescriptionOffset = 1
+let tlsFirstBodyByte = 0
+
+module enum TlsAlertLevel
+	warning = 1
+	fatal = 2
+end 'TlsAlertLevel'
+
+module enum TlsInboundVersion
+	undecided
+	tls13
+	tls12
+end 'TlsInboundVersion'
+
+module interface TlsRecordCipher
+	function seal(contentType TlsContentType, plaintext ByteArray) returns ByteArray throws TlsRecordError
+	function open(record ByteArray) returns TlsOpenedRecord throws TlsRecordError
+end 'TlsRecordCipher'
+
+module type TlsPlaintextCipher implements TlsRecordCipher
+	var nextVersion as TlsRecordVersion
+
+	module static function create(firstVersion TlsRecordVersion) returns TlsPlaintextCipher
+		return Self{nextVersion: firstVersion}
+	end 'create'
+
+	module function seal(contentType TlsContentType, plaintext ByteArray) returns ByteArray throws TlsRecordError
+		if plaintext.count() > tlsMaxPlaintextBytes 'overflow'
+			throw TlsRecordError.recordOverflow
+		end 'overflow'
+
+		var record = tlsRecordHeader(contentType, version: nextVersion, bodyBytes: plaintext.count())
+		record.append(plaintext)
+		nextVersion = tlsRecordVersion
+
+		return record
+	end 'seal'
+
+	module function open(record ByteArray) returns TlsOpenedRecord throws TlsRecordError
+		return try tlsOpenPlaintext(record)
+	end 'open'
+end 'TlsPlaintextCipher'
+
+module type TlsTls13Cipher implements TlsRecordCipher
+	var protection as Tls13RecordProtection
+
+	module static function create(suite Tls13CipherSuite, keys Tls13TrafficKeys) returns TlsTls13Cipher throws TlsHandshakeError
+		let protection = try Tls13RecordProtection.create(suite, key: keys.key(), iv: keys.iv()) otherwise (failure) 'refused'
+			throw tlsRecordFailure(failure)
+		end 'refused'
+
+		return Self{protection: protection}
+	end 'create'
+
+	module function seal(contentType TlsContentType, plaintext ByteArray) returns ByteArray throws TlsRecordError
+		return try protection.seal(contentType, plaintext: plaintext)
+	end 'seal'
+
+	module function open(record ByteArray) returns TlsOpenedRecord throws TlsRecordError
+		if tlsIsChangeCipherSpec(record) 'unprotected'
+			return try tlsOpenPlaintext(record)
+		end 'unprotected'
+
+		return try protection.open(record)
+	end 'open'
+end 'TlsTls13Cipher'
+
+function tlsIsChangeCipherSpec(record ByteArray) returns bool
+	if record.count() <= tlsRecordTypeOffset 'empty'
+		return false
+	end 'empty'
+
+	let contentType = try TlsContentType.fromRawValue(tlsRecordByte(record, offset: tlsRecordTypeOffset)) otherwise return false
+
+	return contentType == TlsContentType.changeCipherSpec
+end 'tlsIsChangeCipherSpec'
+
+function tlsOpenPlaintext(record ByteArray) returns TlsOpenedRecord throws TlsRecordError
+	try tlsRequireFraming(record)
+
+	if record.count() - tlsRecordHeaderBytes > tlsMaxPlaintextBytes 'overflow'
+		throw TlsRecordError.recordOverflow
+	end 'overflow'
+
+	let contentType = try TlsContentType.fromRawValue(tlsRecordByte(record, offset: tlsRecordTypeOffset)) otherwise throw TlsRecordError.unexpectedMessage
+
+	return TlsOpenedRecord.create(contentType, plaintext: tlsRecordPart(record, start: tlsRecordHeaderBytes, endIndex: record.count()))
+end 'tlsOpenPlaintext'
+
+module type TlsRecordWriter
+	var cipher as TlsRecordCipher
+	var records as ByteArrays
+	var changeCipherSpecWritten as bool
+
+	module static function create(firstVersion TlsRecordVersion) returns TlsRecordWriter
+		return Self{cipher: TlsPlaintextCipher.create(firstVersion), records: ByteArrays.create(), changeCipherSpecWritten: false}
+	end 'create'
+
+	module function install(next TlsRecordCipher)
+		cipher = next
+	end 'install'
+
+	module function writeHandshake(messages ByteArray) throws TlsHandshakeError
+		try writeFragments(TlsContentType.handshake, data: messages)
+	end 'writeHandshake'
+
+	module function writeApplicationData(data ByteArray) throws TlsHandshakeError
+		try writeFragments(TlsContentType.applicationData, data: data)
+	end 'writeApplicationData'
+
+	module function writeAlert(level TlsAlertLevel, alert TlsAlert) throws TlsHandshakeError
+		var body = ByteArray.create()
+		body.push(level.rawValue as Byte)
+		body.push(alert.rawValue as Byte)
+
+		try writeFragments(TlsContentType.alert, data: body)
+	end 'writeAlert'
+
+	module function writeChangeCipherSpecOnce()
+		if changeCipherSpecWritten 'written'
+			return
+		end 'written'
+
+		var record = tlsRecordHeader(TlsContentType.changeCipherSpec, version: tlsRecordVersion, bodyBytes: tlsChangeCipherSpecBytes)
+		record.push(tlsChangeCipherSpecBody as Byte)
+		records.push(record)
+		changeCipherSpecWritten = true
+	end 'writeChangeCipherSpecOnce'
+
+	module function takeRecords() returns ByteArrays
+		let taken = records.clone()
+		records.clear()
+
+		return taken
+	end 'takeRecords'
+
+	function writeFragments(contentType TlsContentType, data ByteArray) throws TlsHandshakeError
+		var start = 0 as ElementIndex
+
+		while true 'eachFragment'
+			var stop = start + tlsMaxPlaintextBytes
+
+			if stop > data.count() 'lastFragment'
+				stop = data.count()
+			end 'lastFragment'
+
+			let sealed = try cipher.seal(contentType, plaintext: tlsRecordPart(data, start: start, endIndex: stop)) otherwise (failure) 'refused'
+				throw tlsRecordFailure(failure)
+			end 'refused'
+
+			records.push(sealed)
+			start = stop
+
+			if start == data.count() 'finished'
+				return
+			end 'finished'
+		end 'eachFragment'
+	end 'writeFragments'
+end 'TlsRecordWriter'
+
+module type TlsRecordReader
+	var cipher as TlsRecordCipher
+
+	module static function create() returns TlsRecordReader
+		return Self{cipher: TlsPlaintextCipher.create(tlsRecordVersion)}
+	end 'create'
+
+	module function install(next TlsRecordCipher)
+		cipher = next
+	end 'install'
+
+	module function read(record ByteArray) returns TlsOpenedRecord throws TlsHandshakeError
+		return try cipher.open(record) otherwise (failure) 'refused'
+			throw tlsRecordFailure(failure)
+		end 'refused'
+	end 'read'
+end 'TlsRecordReader'
+
+module union TlsInboundEvent
+	handshakeData
+	applicationData(data ByteArray)
+	closeNotify
+	ignored
+end 'TlsInboundEvent'
+
+module union TlsHandshakeSlot
+	complete(message ByteArray)
+	incomplete
+end 'TlsHandshakeSlot'
+
+module type TlsRecordInput
+	var reader as TlsRecordReader
+	var buffer as ByteArray
+	module var version as TlsInboundVersion
+	module var established as bool
+	module var changeCipherSpecAllowed as bool
+
+	module static function create() returns TlsRecordInput
+		return Self{reader: TlsRecordReader.create(), buffer: ByteArray.create(), version: TlsInboundVersion.undecided, established: false, changeCipherSpecAllowed: false}
+	end 'create'
+
+	module function install(next TlsRecordCipher)
+		reader.install(next)
+	end 'install'
+
+	module function accept(record ByteArray) returns TlsInboundEvent throws TlsHandshakeError
+		let opened = try reader.read(record)
+
+		return match opened.contentType() 'contentType'
+			changeCipherSpec gives try acceptChangeCipherSpec(opened.plaintext())
+			alert gives try acceptAlert(opened.plaintext())
+			handshake gives try acceptHandshake(opened.plaintext())
+			applicationData gives try acceptApplicationData(opened.plaintext())
+		end 'contentType'
+	end 'accept'
+
+	module function nextMessage() returns TlsHandshakeSlot
+		if buffer.count() < tlsHandshakeHeaderBytes 'noHeader'
+			return TlsHandshakeSlot.incomplete
+		end 'noHeader'
+
+		let length = readOrderedWord(buffer, off: tlsHandshakeLengthOffset, width: tlsHandshakeLengthBytes, limit: buffer.count(), order: ByteOrder.bigEndian) as Count
+		let total = tlsHandshakeHeaderBytes + length
+
+		if buffer.count() < total 'partial'
+			return TlsHandshakeSlot.incomplete
+		end 'partial'
+
+		let message = tlsRecordPart(buffer, start: 0, endIndex: total)
+		buffer = tlsRecordPart(buffer, start: total, endIndex: buffer.count())
+
+		return TlsHandshakeSlot.complete(message)
+	end 'nextMessage'
+
+	module function requireKeyBoundary() throws TlsHandshakeError
+		if buffer.count() != 0 'spanning'
+			throw TlsHandshakeError.unexpectedMessage
+		end 'spanning'
+	end 'requireKeyBoundary'
+
+	function acceptChangeCipherSpec(body ByteArray) returns TlsInboundEvent throws TlsHandshakeError
+		if version != TlsInboundVersion.tls13 or not changeCipherSpecAllowed or body.count() != tlsChangeCipherSpecBytes or tlsRecordByte(body, offset: tlsFirstBodyByte) != tlsChangeCipherSpecBody or buffer.count() != 0 'misplaced'
+			throw TlsHandshakeError.unexpectedMessage
+		end 'misplaced'
+
+		return TlsInboundEvent.ignored
+	end 'acceptChangeCipherSpec'
+
+	function acceptAlert(body ByteArray) returns TlsInboundEvent throws TlsHandshakeError
+		if buffer.count() != 0 'insideMessage'
+			throw TlsHandshakeError.unexpectedMessage
+		end 'insideMessage'
+
+		if body.count() != tlsAlertBodyBytes 'bodyLength'
+			throw TlsHandshakeError.decodeError
+		end 'bodyLength'
+
+		let level = tlsRecordByte(body, offset: tlsAlertLevelOffset)
+		let alert = try TlsAlert.fromRawValue(tlsRecordByte(body, offset: tlsAlertDescriptionOffset)) otherwise return try acceptOtherAlert(level)
+
+		if alert == TlsAlert.closeNotify 'closing'
+			if not established 'early'
+				throw TlsHandshakeError.alertReceived
+			end 'early'
+
+			return TlsInboundEvent.closeNotify
+		end 'closing'
+
+		if version == TlsInboundVersion.tls13 and alert == TlsAlert.userCanceled 'canceled'
+			return TlsInboundEvent.ignored
+		end 'canceled'
+
+		return try acceptOtherAlert(level)
+	end 'acceptAlert'
+
+	function acceptOtherAlert(level Byte) returns TlsInboundEvent throws TlsHandshakeError
+		let parsed = try TlsAlertLevel.fromRawValue(level) otherwise throw TlsHandshakeError.alertReceived
+
+		if version == TlsInboundVersion.tls12 and parsed == TlsAlertLevel.warning 'warning'
+			return TlsInboundEvent.ignored
+		end 'warning'
+
+		throw TlsHandshakeError.alertReceived
+	end 'acceptOtherAlert'
+
+	function acceptHandshake(body ByteArray) returns TlsInboundEvent throws TlsHandshakeError
+		if body.count() == 0 'emptyFragment'
+			throw TlsHandshakeError.unexpectedMessage
+		end 'emptyFragment'
+
+		buffer.append(body)
+
+		return TlsInboundEvent.handshakeData
+	end 'acceptHandshake'
+
+	function acceptApplicationData(body ByteArray) returns TlsInboundEvent throws TlsHandshakeError
+		if not established 'handshaking'
+			throw TlsHandshakeError.unexpectedMessage
+		end 'handshaking'
+
+		return TlsInboundEvent.applicationData(body)
+	end 'acceptApplicationData'
+end 'TlsRecordInput'

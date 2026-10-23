@@ -1,0 +1,37 @@
+module typealias TlsHandshakeTypeArray = Array with TlsHandshakeType
+
+module function tlsDecodeHandshake(raw ByteArray, protocol TlsProtocol) returns TlsHandshakeMessage throws TlsHandshakeError
+	return try TlsHandshakeCodec.decode(raw, protocol: protocol) otherwise (failure) 'refused'
+		throw tlsCodecFailure(failure)
+	end 'refused'
+end 'tlsDecodeHandshake'
+
+module function tlsDecodeAllowing(raw ByteArray, protocol TlsProtocol, allowed TlsHandshakeTypeArray) returns TlsHandshakeMessage throws TlsHandshakeError
+	let kind = try TlsHandshakeType.fromRawValue(tlsRecordByte(raw, offset: 0)) otherwise throw TlsHandshakeError.unexpectedMessage
+
+	if not allowed.contains(kind) 'unexpected'
+		throw TlsHandshakeError.unexpectedMessage
+	end 'unexpected'
+
+	return try tlsDecodeHandshake(raw, protocol: protocol)
+end 'tlsDecodeAllowing'
+
+module function tlsEncodedMessage(message TlsHandshakeMessage) returns ByteArray throws TlsHandshakeError
+	return try TlsHandshakeCodec.encode(message) otherwise throw TlsHandshakeError.internalError
+end 'tlsEncodedMessage'
+
+module function tlsDecodeClientHello(raw ByteArray) returns TlsClientHello throws TlsHandshakeError
+	let message = try tlsDecodeHandshake(raw, protocol: TlsProtocol.tls13)
+
+	match message 'message'
+		clientHello(hello) then return hello
+		default throws TlsHandshakeError.internalError
+	end 'message'
+end 'tlsDecodeClientHello'
+
+module function tlsExtensionsOf(block TlsExtensionBlock) returns TlsExtensionArray
+	return match block 'block'
+		absent gives TlsExtensionArray.create()
+		listed(extensions) gives extensions.clone()
+	end 'block'
+end 'tlsExtensionsOf'

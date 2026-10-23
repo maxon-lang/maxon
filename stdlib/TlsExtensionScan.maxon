@@ -1,0 +1,58 @@
+module typealias TlsExtensionTypeTally = Set with TlsExtensionType
+
+module type TlsExtensionScan
+	module var types as TlsExtensionTypeTally
+	module var supportedVersions as TlsVersionCodeArray
+	module var selectedVersions as TlsVersionCodeArray
+	module var supportedGroups as TlsGroupCodeArray
+	module var signatureSchemes as TlsSignatureSchemeCodeArray
+	module var applicationProtocols as TlsProtocolNameArray
+	module var clientShares as TlsKeyShareArray
+	module var serverShares as TlsKeyShareArray
+	module var selectedGroups as TlsGroupCodeArray
+	module var cookies as ByteArrays
+
+	module static function ofBlock(block TlsExtensionBlock) returns TlsExtensionScan
+		return match block 'block'
+			absent gives TlsExtensionScan.ofExtensions(TlsExtensionArray.create())
+			listed(extensions) gives TlsExtensionScan.ofExtensions(extensions)
+		end 'block'
+	end 'ofBlock'
+
+	module static function ofExtensions(extensions TlsExtensionArray) returns TlsExtensionScan
+		var typeTally = TlsExtensionTypeTally.create()
+		var offeredVersions = TlsVersionCodeArray.create()
+		var chosenVersions = TlsVersionCodeArray.create()
+		var offeredGroups = TlsGroupCodeArray.create()
+		var offeredSchemes = TlsSignatureSchemeCodeArray.create()
+		var offeredProtocols = TlsProtocolNameArray.create()
+		var offeredShares = TlsKeyShareArray.create()
+		var chosenShares = TlsKeyShareArray.create()
+		var chosenGroups = TlsGroupCodeArray.create()
+		var cookieList = ByteArrays.create()
+
+		for item in extensions 'eachExtension'
+			typeTally.insert(item.extensionType())
+
+			match item 'form'
+				supportedVersions(versions) then offeredVersions = versions.clone()
+				selectedVersion(version) then chosenVersions.push(version)
+				supportedGroups(groups) then offeredGroups = groups.clone()
+				signatureAlgorithms(schemes) then offeredSchemes = schemes.clone()
+				applicationProtocols(protocols) then offeredProtocols = protocols.clone()
+				clientKeyShares(shares) then offeredShares = shares.clone()
+				serverKeyShare(share) then chosenShares.push(share)
+				selectedGroup(group) then chosenGroups.push(group)
+				cookie(value) then cookieList.push(value.clone())
+				serverName or
+				serverNameAcknowledgement or
+				ecPointFormats or
+				extendedMasterSecret or
+				renegotiationInfo or
+				opaque then continue
+			end 'form'
+		end 'eachExtension'
+
+		return Self{types: typeTally, supportedVersions: offeredVersions, selectedVersions: chosenVersions, supportedGroups: offeredGroups, signatureSchemes: offeredSchemes, applicationProtocols: offeredProtocols, clientShares: offeredShares, serverShares: chosenShares, selectedGroups: chosenGroups, cookies: cookieList}
+	end 'ofExtensions'
+end 'TlsExtensionScan'

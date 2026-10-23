@@ -21,18 +21,18 @@ public enum TlsContentType
 	applicationData = 23
 end 'TlsContentType'
 
-let tlsRecordHeaderBytes = 5
-let tlsRecordVersionMajor = 3
-let tlsRecordVersionMinor = 3
-let tlsRecordVersion = 0x0303
-let tlsRecordTypeOffset = 0
+module typealias TlsRecordVersion = int(0 to u16.max) implements TlsWireValue
+
+module let tlsRecordHeaderBytes = 5
+module let tlsRecordVersion = 0x0303
+module let tlsRecordTypeOffset = 0
 let tlsRecordVersionOffset = 1
 let tlsRecordLengthOffset = 3
 let tlsRecordFieldBytes = 2
 let tlsTagBytes = 16
 let tlsExplicitNonceBytes = 8
 let tlsSequenceBytes = 8
-let tlsMaxPlaintextBytes = 16384
+module let tlsMaxPlaintextBytes = 16384
 let tlsMaxInnerPlaintextBytes = 16385
 let tlsMaxCiphertext13Bytes = 16640
 let tlsMaxCiphertext12Bytes = 18432
@@ -50,7 +50,7 @@ public type TlsOpenedRecord
 		return plaintext
 	end 'plaintext'
 
-	static function create(contentType TlsContentType, plaintext ByteArray) returns TlsOpenedRecord
+	module static function create(contentType TlsContentType, plaintext ByteArray) returns TlsOpenedRecord
 		return Self{contentType: contentType, plaintext: plaintext}
 	end 'create'
 end 'TlsOpenedRecord'
@@ -151,7 +151,7 @@ public type Tls13RecordProtection
 		inner.push(contentType.rawValue as Byte)
 		inner.resize(inner.count() + paddingLength)
 
-		let header = tlsRecordHeader(TlsContentType.applicationData, bodyBytes: inner.count() + tlsTagBytes)
+		let header = tlsRecordHeader(TlsContentType.applicationData, version: tlsRecordVersion, bodyBytes: inner.count() + tlsTagBytes)
 		var record = header.clone()
 		record.append(state.seal(state.xorNonce(sequenceNumber), plaintext: inner, additionalData: header))
 
@@ -223,7 +223,7 @@ public type Tls12RecordProtection
 		let nonce = state.tls12Nonce(sequenceNumber, explicit: body)
 		body.append(state.seal(nonce, plaintext: plaintext, additionalData: additionalData))
 
-		var record = tlsRecordHeader(contentType, bodyBytes: body.count())
+		var record = tlsRecordHeader(contentType, version: tlsRecordVersion, bodyBytes: body.count())
 		record.append(body)
 
 		state.advance()
@@ -306,7 +306,7 @@ function tlsProtectedType(code Byte) returns TlsContentType throws TlsRecordErro
 	end 'protected'
 end 'tlsProtectedType'
 
-function tlsRequireFraming(record ByteArray) throws TlsRecordError
+module function tlsRequireFraming(record ByteArray) throws TlsRecordError
 	if record.count() < tlsRecordHeaderBytes 'short'
 		throw TlsRecordError.decodeError
 	end 'short'
@@ -318,21 +318,20 @@ function tlsRequireFraming(record ByteArray) throws TlsRecordError
 	end 'length'
 end 'tlsRequireFraming'
 
-function tlsRecordHeader(contentType TlsContentType, bodyBytes Count) returns ByteArray
+module function tlsRecordHeader(contentType TlsContentType, version TlsRecordVersion, bodyBytes Count) returns ByteArray
 	var header = ByteArray.create()
 	header.push(contentType.rawValue as Byte)
-	header.push(tlsRecordVersionMajor as Byte)
-	header.push(tlsRecordVersionMinor as Byte)
+	appendOrderedWord(header, word: version as ByteWord, width: tlsRecordFieldBytes, order: ByteOrder.bigEndian)
 	appendOrderedWord(header, word: bodyBytes as ByteWord, width: tlsRecordFieldBytes, order: ByteOrder.bigEndian)
 
 	return header
 end 'tlsRecordHeader'
 
-function tlsRecordByte(bytes ByteArray, offset ElementIndex) returns Byte
+module function tlsRecordByte(bytes ByteArray, offset ElementIndex) returns Byte
 	return try bytes.get(offset) otherwise panic("tlsRecordByte: the offset was checked against the length")
 end 'tlsRecordByte'
 
-function tlsRecordPart(bytes ByteArray, start ElementIndex, endIndex ElementIndex) returns ByteArray
+module function tlsRecordPart(bytes ByteArray, start ElementIndex, endIndex ElementIndex) returns ByteArray
 	return try bytes.slice(start, endIndex: endIndex) otherwise panic("tlsRecordPart: the range was checked against the length")
 end 'tlsRecordPart'
 
@@ -349,7 +348,7 @@ end 'tls12ExplicitNonce'
 function tls12AdditionalData(sequenceNumber TlsSequenceNumber, contentType TlsContentType, plaintextBytes Count) returns ByteArray
 	var additionalData = ByteArray.create()
 	appendOrderedWord(additionalData, word: sequenceNumber as ByteWord, width: tlsSequenceBytes, order: ByteOrder.bigEndian)
-	additionalData.append(tlsRecordHeader(contentType, bodyBytes: plaintextBytes))
+	additionalData.append(tlsRecordHeader(contentType, version: tlsRecordVersion, bodyBytes: plaintextBytes))
 
 	return additionalData
 end 'tls12AdditionalData'
