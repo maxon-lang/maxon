@@ -822,6 +822,10 @@ type RsaPrivateKey
 		return publicKey.modulusBits()
 	end 'modulusBits'
 
+	function modulusBytes() returns Count
+		return publicKey.modulusBytes()
+	end 'modulusBytes'
+
 	function chineseRemainder(value RsaLimbs) returns RsaLimbs
 		let first = primeOneMontgomery.secretPower(rsaReduce(value, modulus: primeOne), exponent: exponentOne)
 		let second = primeTwoMontgomery.secretPower(rsaReduce(value, modulus: primeTwo), exponent: exponentTwo)
@@ -864,6 +868,12 @@ public type Rsa
 
 		return try key.verify(signature, check: function(block ByteArray, modulusBits Count) gives rsaPssMatches(block, hash: hash, message: message, modulusBits: modulusBits))
 	end 'verifyPss'
+
+	public static function signPkcs1v15(privateKey ByteArray, hash HashAlgorithm, message ByteArray) returns ByteArray throws RsaError
+		let key = try RsaPrivateKey.parse(privateKey)
+
+		return try key.sign(rsaPkcs1Block(hash, message: message, length: key.modulusBytes()))
+	end 'signPkcs1v15'
 
 	/// The RSASSA-PSS signature of `message` under `privateKey`, a DER PKCS #8 two-prime RSA key, with
 	/// MGF1 over `hash` and `salt`, which must be exactly as long as the digest.

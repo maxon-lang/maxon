@@ -24,10 +24,15 @@ of the spec here.
 | `chacha20-poly1305` | `stdlib/ChaCha20Poly1305.maxon` | `specs/chacha20-poly1305.md` |
 | `x25519` | `stdlib/Curve25519.maxon` | `specs/x25519.md` |
 | `ed25519-verify` | `stdlib/Curve25519.maxon` | `specs/ed25519.md` |
+| `ed25519-sign` | `stdlib/Curve25519.maxon` | `specs/ed25519.md` |
 | `ecdh-p256` | `stdlib/NistCurves.maxon` | `specs/ecdh.md` |
 | `ecdsa-verify` | `stdlib/NistCurves.maxon` | `specs/ecdsa.md` |
 | `ecdsa-sign-p256` | `stdlib/NistCurves.maxon` | `specs/ecdsa.md` |
+| `ecdsa-sign-p384` | `stdlib/NistCurves.maxon` | `specs/ecdsa.md` |
 | `rsa-verify` | `stdlib/Rsa.maxon` | `specs/rsa.md` |
 | `rsa-pss-sign` | `stdlib/Rsa.maxon` | `specs/rsa.md` |
+| `rsa-pkcs1-sign` | `stdlib/Rsa.maxon` | `specs/rsa.md` |
 | `x509-parse` | `stdlib/X509.maxon` | `specs/x509.md` |
 | `x509-verify` | `stdlib/X509.maxon` | `specs/x509.md` |
+| `x509-verify-go` | `stdlib/X509.maxon` | `specs/x509.md` |
+| `x509-verify-client-auth` | `stdlib/X509.maxon` | `specs/x509.md` |

@@ -30,7 +30,18 @@ public enum X509VerifyError implements Error
 	nameConstraintViolation
 	badSignature
 	signatureCheckLimitExceeded
+	invalidArgument
 end 'X509VerifyError'
+
+public enum X509Purpose
+	serverAuth
+	clientAuth
+end 'X509Purpose'
+
+public union X509VerifyHost
+	named(name String)
+	none
+end 'X509VerifyHost'
 
 /// A certificate's signature algorithm.
 public enum X509SignatureAlgorithm
@@ -202,6 +213,7 @@ let x509ParametersNull = ByteArray from [0x05, 0x00]
 let x509ParametersP256 = ByteArray from [0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07]
 let x509ParametersP384 = ByteArray from [0x06, 0x05, 0x2B, 0x81, 0x04, 0x00, 0x22]
 let x509OidServerAuth = ByteArray from [0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01]
+let x509OidClientAuth = ByteArray from [0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x02]
 let x509OidAnyExtendedKeyUsage = ByteArray from [0x55, 0x1D, 0x25, 0x00]
 
 let x509BitsPerArcOctet = 7
@@ -616,13 +628,18 @@ public type Certificate
 		return purposes
 	end 'extendedKeyUsage'
 
-	function allowsServerAuth() returns bool
+	function allows(purpose X509Purpose) returns bool
 		if not extensions.hasExtendedKeyUsage 'unrestricted'
 			return true
 		end 'unrestricted'
 
-		return extensions.extendedKeyUsage.contains(x509OidServerAuth) or extensions.extendedKeyUsage.contains(x509OidAnyExtendedKeyUsage)
-	end 'allowsServerAuth'
+		let identifier = match purpose 'identifier'
+			serverAuth gives x509OidServerAuth
+			clientAuth gives x509OidClientAuth
+		end 'identifier'
+
+		return extensions.extendedKeyUsage.contains(identifier) or extensions.extendedKeyUsage.contains(x509OidAnyExtendedKeyUsage)
+	end 'allows'
 
 	/// The subjectAltName extension.
 	public function subjectAltName() returns X509SubjectAltName throws X509FieldError
@@ -846,6 +863,7 @@ union X509Host
 	dnsName(labels ByteArrays)
 	ipAddress(address ByteArray)
 	invalid
+	absent
 end 'X509Host'
 
 union X509SignatureOutcome
@@ -866,6 +884,7 @@ end 'X509CheckedLink'
 type X509PathSearch
 	var pool as X509Candidates
 	var host as X509Host
+	var purpose as X509Purpose
 	var now as UnixSeconds
 	var accepted = X509Chain.create()
 	var failure = X509VerifyError.unknownAuthority
@@ -873,8 +892,8 @@ type X509PathSearch
 	var attempts = 0 as X509SignatureAttempts
 	var checkedLinks = X509CheckedLinks.create()
 
-	static function create(pool X509Candidates, host X509Host, now UnixSeconds) returns X509PathSearch
-		return X509PathSearch{pool: pool, host: host, now: now}
+	static function create(pool X509Candidates, host X509Host, purpose X509Purpose, now UnixSeconds) returns X509PathSearch
+		return X509PathSearch{pool: pool, host: host, purpose: purpose, now: now}
 	end 'create'
 
 	function run(leaf X509Candidate) returns ByteArrays throws X509VerifyError
@@ -951,7 +970,7 @@ type X509PathSearch
 		for index in 1 upto chain.count() 'eachLink'
 			let child = try chain.get(index - 1) otherwise panic("the link's child precedes it")
 			let issuer = try chain.get(index) otherwise panic("the index is inside the chain")
-			try x509CheckIssuer(issuer.certificate, below: index - 1, leaf: leaf.certificate, host: host, now: now)
+			try x509CheckIssuer(issuer.certificate, below: index - 1, leaf: leaf.certificate, host: host, purpose: purpose, now: now)
 			try checkSignature(child, issuer: issuer)
 		end 'eachLink'
 	end 'checkChain'
@@ -1021,7 +1040,9 @@ public type X509
 	/// as passed in, that is valid at `now` for the TLS server `host`: a DNS name or an IP address literal.
 	/// Candidate chains are searched depth first, roots before intermediates, each in the order given; the
 	/// first that passes every check is returned, and when none does, the first candidate's error is thrown.
-	public static function verify(leaf ByteArray, intermediates ByteArrays, roots ByteArrays, host String, now UnixSeconds) returns ByteArrays throws X509VerifyError
+	public static function verify(leaf ByteArray, intermediates ByteArrays, roots ByteArrays, host X509VerifyHost, now UnixSeconds, purpose X509Purpose = X509Purpose.serverAuth) returns ByteArrays throws X509VerifyError
+		let target = try x509PeerHost(host, purpose: purpose)
+
 		let certificate = try X509.parse(leaf) otherwise (error) 'unparsed'
 			if error == X509Error.unsupportedAlgorithm 'algorithm'
 				throw X509VerifyError.unsupportedAlgorithm
@@ -1032,13 +1053,11 @@ public type X509
 
 		try x509CheckValidity(certificate, now: now)
 
-		if not certificate.allowsServerAuth() 'leafUsage'
+		if not certificate.allows(purpose) 'leafUsage'
 			throw X509VerifyError.incompatibleKeyUsage
 		end 'leafUsage'
 
-		let target = x509Host(host)
-
-		if not x509HostMatches(certificate, host: target) 'otherHost'
+		if purpose == X509Purpose.serverAuth and not x509HostMatches(certificate, host: target) 'otherHost'
 			throw X509VerifyError.hostnameMismatch
 		end 'otherHost'
 
@@ -1048,7 +1067,7 @@ public type X509
 
 		var pool = x509Pool(roots, isRoot: true, excluded: ByteArrays.create())
 		pool.append(x509Pool(intermediates, isRoot: false, excluded: roots))
-		var search = X509PathSearch.create(pool, host: target, now: now)
+		var search = X509PathSearch.create(pool, host: target, purpose: purpose, now: now)
 
 		return try search.run(X509Candidate.create(certificate, der: leaf, isRoot: false))
 	end 'verify'
@@ -1974,7 +1993,7 @@ function x509CheckValidity(certificate Certificate, now UnixSeconds) throws X509
 	end 'late'
 end 'x509CheckValidity'
 
-function x509CheckIssuer(issuer Certificate, below Count, leaf Certificate, host X509Host, now UnixSeconds) throws X509VerifyError
+function x509CheckIssuer(issuer Certificate, below Count, leaf Certificate, host X509Host, purpose X509Purpose, now UnixSeconds) throws X509VerifyError
 	try x509CheckValidity(issuer, now: now)
 	let constraints = try issuer.basicConstraints() otherwise throw X509VerifyError.notAuthorizedToSign
 	let usages = try issuer.keyUsage() otherwise X509KeyUsages from [X509KeyUsage.keyCertSign]
@@ -1992,7 +2011,7 @@ function x509CheckIssuer(issuer Certificate, below Count, leaf Certificate, host
 	let names = try issuer.nameConstraints() otherwise X509NameConstraints.create()
 	try x509CheckNameConstraints(names, leaf: leaf, host: host)
 
-	if not issuer.allowsServerAuth() 'issuerUsage'
+	if not issuer.allows(purpose) 'issuerUsage'
 		throw X509VerifyError.incompatibleKeyUsage
 	end 'issuerUsage'
 end 'x509CheckIssuer'
@@ -2073,7 +2092,7 @@ function x509VerifyEd25519(key X509PublicKey, message ByteArray, signature ByteA
 end 'x509VerifyEd25519'
 
 function x509CheckNameConstraints(constraints X509NameConstraints, leaf Certificate, host X509Host) throws X509VerifyError
-	let names = try leaf.subjectAltName() otherwise panic("a leaf that matched its host has a subjectAltName")
+	let names = try leaf.subjectAltName() otherwise X509SubjectAltName.create()
 
 	if constraints.constrainsDnsNames() 'dnsNames'
 		for name in names.dnsNames() 'eachDnsName'
@@ -2295,6 +2314,27 @@ function x509AreHostLabels(labels ByteArrays) returns bool
 	return true
 end 'x509AreHostLabels'
 
+function x509PeerHost(host X509VerifyHost, purpose X509Purpose) returns X509Host throws X509VerifyError
+	return match purpose 'purpose'
+		serverAuth gives try x509ServerHost(host)
+		clientAuth gives try x509ClientHost(host)
+	end 'purpose'
+end 'x509PeerHost'
+
+function x509ServerHost(host X509VerifyHost) returns X509Host throws X509VerifyError
+	return match host 'named'
+		named(name) gives x509Host(name)
+		default throws X509VerifyError.invalidArgument
+	end 'named'
+end 'x509ServerHost'
+
+function x509ClientHost(host X509VerifyHost) returns X509Host throws X509VerifyError
+	return match host 'unnamed'
+		none gives X509Host.absent
+		default throws X509VerifyError.invalidArgument
+	end 'unnamed'
+end 'x509ClientHost'
+
 function x509Host(host String) returns X509Host
 	let bytes = host.toByteArray()
 
@@ -2474,6 +2514,7 @@ function x509HostMatches(certificate Certificate, host X509Host) returns bool
 		dnsName(labels) gives x509AnyPatternMatches(names.dnsNames(), labels: labels)
 		ipAddress(address) gives names.ipAddresses().contains(address)
 		invalid gives false
+		absent gives false
 	end 'kind'
 end 'x509HostMatches'
 

@@ -34,7 +34,7 @@ end 'main'
 | [Collections](#array) | Array, List, Map, Set, Vector, Range, Iterators, Interfaces |
 | [I/O and processes](#file) | File, FilePath, Directory, Console, CommandLine, Log, TraceCapture, Process, Subprocess, SharedMemory, Debuggee, Sampler |
 | [Network](#tcpclient) | TcpClient, TcpListener, HttpClient, HttpServer, URL |
-| [Data](#json) | Json, Base64, Pem, Der, Sha2, Hmac, Hkdf, Rsa, Aead, AesGcm, ChaCha20Poly1305, Aes, ChaCha20, Poly1305, X25519, Ed25519, EcdhP256, Ecdsa, EcdsaP256, Hasher |
+| [Data](#json) | Json, Base64, Pem, Der, Sha2, Hmac, Hkdf, Rsa, Aead, AesGcm, ChaCha20Poly1305, Aes, ChaCha20, Poly1305, X25519, Ed25519, EcdhP256, Ecdsa, EcdsaP256, EcdsaP384, Hasher |
 | [System](#clock) | Clock, Scheduler, HeapStats, SharedValue, Random, TrustStore, Math, Primitive Extensions |
 | [Testing](#testing) | Testing |
 | [Build](#build) | Build |
@@ -3109,14 +3109,16 @@ Output: `16` and `outputTooLong`.
 
 ## Rsa
 
-`Rsa` verifies RSA signatures under RSASSA-PKCS1-v1_5 and RSASSA-PSS, and makes RSASSA-PSS signatures
+`Rsa` verifies RSA signatures under RSASSA-PKCS1-v1_5 and RSASSA-PSS, and makes signatures under both
 (RFC 8017), over SHA-256, SHA-384 or SHA-512. PSS uses MGF1 over the same hash and a salt as long as the
-digest, the parameters of TLS 1.3's `rsa_pss_rsae_*` schemes.
+digest, the parameters of TLS 1.3's `rsa_pss_rsae_*` schemes; PKCS #1 v1.5 is the `rsa_pkcs1_*` schemes of
+TLS 1.2.
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
 | `Rsa.verifyPkcs1v15(publicKey ByteArray, hash HashAlgorithm, message ByteArray, signature ByteArray)` | `bool` | `RsaError` | Whether `signature` is the PKCS #1 v1.5 signature of `message`. The expected encoded block is built and compared whole, so no lenient parse of the signature's block can accept a forgery. |
 | `Rsa.verifyPss(publicKey ByteArray, hash HashAlgorithm, message ByteArray, signature ByteArray)` | `bool` | `RsaError` | Whether `signature` is the PSS signature of `message`. A signature made with another salt length is `false`. |
+| `Rsa.signPkcs1v15(privateKey ByteArray, hash HashAlgorithm, message ByteArray)` | `ByteArray` | `RsaError` | The PKCS #1 v1.5 signature of `message`, exactly as long as the modulus. The signature is a function of the key, the hash and the message alone. |
 | `Rsa.signPss(privateKey ByteArray, hash HashAlgorithm, message ByteArray, salt ByteArray)` | `ByteArray` | `RsaError` | The PSS signature of `message`, exactly as long as the modulus. Pass `hash.digestBytes()` fresh bytes from `Random.bytes` as `salt` for every signature. |
 
 A public key is a DER SubjectPublicKeyInfo (RFC 5280), the form a certificate carries: `rsaEncryption` with
@@ -3137,11 +3139,11 @@ The checks run in order and the first that fails is thrown:
 
 Every other wrong signature, including one whose value is not below the modulus, verifies as `false`.
 
-`signPss` takes time independent of the private key: the exponentiation walks the exponent in fixed
-4-bit windows, picks each table entry by masking every entry, and never branches or indexes memory on a
-secret value. The input is blinded by a random factor drawn from `Random.bytes`, and the signature is
-checked with the public exponent before it is returned. When the operating system cannot supply random
-bytes, `signPss` panics.
+`signPkcs1v15` and `signPss` take time independent of the private key: the exponentiation walks the
+exponent in fixed 4-bit windows, picks each table entry by masking every entry, and never branches or
+indexes memory on a secret value. The input is blinded by a random factor drawn from `Random.bytes`, and
+the signature is checked with the public exponent before it is returned. When the operating system cannot
+supply random bytes, `signPkcs1v15` and `signPss` panic.
 
 ```maxon
 function main() returns ExitCode
@@ -3270,17 +3272,25 @@ Derive keys from the shared secret with [`hkdfExtract`](#hkdf), never use it dir
 
 ## Ed25519
 
-Ed25519 signature verification (RFC 8032).
+Ed25519 key derivation, signing and signature verification (RFC 8032).
 
 | Function | Returns | Throws | Description |
 |----------|---------|--------|-------------|
 | `Ed25519.verify(publicKey ByteArray, message ByteArray, signature ByteArray)` | `bool` | `Ed25519Error` | Whether a 64-byte signature of `message` is valid under a 32-byte public key. |
+| `Ed25519.publicKey(privateKey ByteArray)` | `ByteArray` | `Ed25519Error` | The 32-byte public key of a 32-byte private key. |
+| `Ed25519.sign(privateKey ByteArray, message ByteArray)` | `ByteArray` | `Ed25519Error` | The 64-byte signature `R ‖ S` of `message` under a 32-byte private key. |
 
-`Ed25519Error` has one case, `invalidLength`, for a public key that is not 32 bytes or a signature that
-is not 64. Any other input is answered with a `bool`: the check is the cofactorless `[S]B = R + [k]A`, with
-`k` the SHA-512 digest of `R`, the public key and the message reduced mod `L`. A public key that does not
-decode, and an `S` at or above `L`, are `false`. Verification handles public data only and runs in
-variable time.
+`Ed25519Error` has one case, `invalidLength`, for a private or public key that is not 32 bytes or a
+signature that is not 64; a 64-byte expanded private key is refused. Any other input to `verify` is
+answered with a `bool`: the check is the cofactorless `[S]B = R + [k]A`, with `k` the SHA-512 digest of
+`R`, the public key and the message reduced mod `L`. A public key that does not decode, and an `S` at or
+above `L`, are `false`. Verification handles public data only and runs in variable time.
+
+`publicKey` and `sign` hash the private key with SHA-512 and use its first half, clamped, as the scalar and
+its second half as the nonce prefix, so every 32-byte key is valid, an all-zero one included. The signature
+is a function of the key and the message alone, and `S` is below `L`. The base-point multiplications and
+the reductions modulo `L` take time independent of the key: every step runs, and a masked select keeps the
+result. `verify` accepts every signature `sign` makes under the key `publicKey` returns.
 
 ## EcdhP256
 
@@ -3358,16 +3368,37 @@ least `n`. The signature is a function of the key and the message alone; `s` is 
 half, and each `INTEGER` is minimal. The nonce, its inverse and the private key are handled in constant
 time. [`Ecdsa.verify`](#ecdsa) with `EcdsaCurve.p256` accepts every signature it makes.
 
+## EcdsaP384
+
+Deterministic ECDSA signing on P-384 with SHA-384 (RFC 6979), as a TLS server with a P-384 certificate signs
+`CertificateVerify` and `ServerKeyExchange` (`ecdsa_secp384r1_sha384`). It is [`EcdsaP256`](#ecdsap256) with
+the curve, the hash and the sizes of P-384.
+
+| Function | Returns | Throws | Description |
+|----------|---------|--------|-------------|
+| `EcdsaP384.sign(privateKey ByteArray, message ByteArray)` | `ByteArray` | `EcdsaSignError` | The DER signature of `message` under a 48-byte big-endian private key, with the nonce of RFC 6979 section 3.2 over HMAC-SHA-384. |
+
+`EcdsaSignError.invalidPrivateKey` is a key that is not 48 bytes, so a P-256 key is refused rather than
+zero-extended, or whose value is 0 or at least `n`. The signature is a function of the key and the message
+alone, `s` is not normalized to the low half, and each `INTEGER` is minimal, so a signature is 8 to 104
+bytes. The nonce, its inverse and the private key are handled in constant time. [`Ecdsa.verify`](#ecdsa)
+with `EcdsaCurve.p384` accepts every signature it makes.
+
 ## X509
 
-`X509` decodes X.509 certificates (RFC 5280) and validates the chain a TLS server presents, the way a TLS
-client decides whether to trust it. Everything is strict DER, read with [`DerReader`](#der); signatures
+`X509` decodes X.509 certificates (RFC 5280) and validates the chain a TLS peer presents, the way a TLS
+client decides whether to trust a server and a TLS server decides whether to trust a client. Everything is strict DER, read with [`DerReader`](#der); signatures
 are checked with [`Ecdsa`](#ecdsa), [`Rsa`](#rsa) and [`Ed25519`](#ed25519).
 
 | Function | Returns | Throws | Description |
 |----------|---------|--------|-------------|
 | `X509.parse(der ByteArray)` | `Certificate` | `X509Error` | The certificate one DER X.509 v1 or v3 certificate encodes. |
-| `X509.verify(leaf ByteArray, intermediates ByteArrays, roots ByteArrays, host String, now UnixSeconds)` | `ByteArrays` | `X509VerifyError` | The chain from `leaf` to one of `roots`, leaf first, each certificate exactly as passed in, valid at `now` for the TLS server `host`. |
+| `X509.verify(leaf ByteArray, intermediates ByteArrays, roots ByteArrays, host X509VerifyHost, now UnixSeconds, purpose X509Purpose = X509Purpose.serverAuth)` | `ByteArrays` | `X509VerifyError` | The chain from `leaf` to one of `roots`, leaf first, each certificate exactly as passed in, valid at `now` for `purpose`: the TLS server `host`, or a TLS client. |
+
+`purpose` is an `X509Purpose`, `serverAuth` (a TLS client verifying a server) or `clientAuth` (a TLS server
+verifying a client). `host` is an `X509VerifyHost`: `X509VerifyHost.named(name)` carries the DNS name or IP
+address literal a client connected to, and `X509VerifyHost.none` is the absence of one. `serverAuth` needs
+`named` and `clientAuth` needs `none`; any other pairing throws `invalidArgument` before the leaf is read.
 
 `parse` runs its steps in order and throws the first failure: the outer structure, the version (v1 or
 v3), the serial, the signature algorithm (the TBSCertificate's copy must equal the outer one byte for
@@ -3410,16 +3441,18 @@ An extension-backed member throws `X509FieldError.absent` when the certificate d
 extension.
 
 `verify` first checks the leaf: it parses (otherwise `invalidCertificate`, or `unsupportedAlgorithm` when
-that is why), is valid at `now`, its extended key usage allows TLS server authentication, and one of its
-subjectAltName entries names `host` — the Common Name is never read. `host` is an IPv4 or IPv6 literal,
+that is why), is valid at `now`, its extended key usage allows `purpose`, and, with `serverAuth`, one of its
+subjectAltName entries names `host` — the Common Name is never read. A certificate allows a purpose when it
+has no extended key usage extension or lists the purpose's identifier (`serverAuth` 1.3.6.1.5.5.7.3.1,
+`clientAuth` 1.3.6.1.5.5.7.3.2) or `anyExtendedKeyUsage`. `host` is an IPv4 or IPv6 literal,
 matched against `ipAddresses()` byte for byte, or a DNS name, matched case-insensitively against
 `dnsNames()`, where `*` as a whole first label stands for exactly one label and must be followed by at least
-two. Then it builds candidate chains depth first, roots before intermediates, each in the order given, at
+two. With `clientAuth` no name is matched and the leaf needs no subjectAltName. Then it builds candidate chains depth first, roots before intermediates, each in the order given, at
 most 10 certificates long, linking a certificate to an issuer whose subject DER equals its issuer DER and
 whose subjectKeyIdentifier does not contradict its authorityKeyIdentifier. Certificates that do not parse
 are left out of the pools. Each link is checked in order: the issuer is valid at `now`, is a CA whose
 keyUsage (when present) allows certificate signing, has not exceeded its path length, holds the leaf's names
-inside its name constraints, allows TLS server authentication, and its key verifies the child's signature.
+inside its name constraints, allows `purpose`, and its key verifies the child's signature.
 The root is checked like any issuer, except that its own signature is not. The first candidate that passes
 is returned; when none does, the first candidate's error is thrown. Every candidate issuer the search
 considers counts against a budget of 100, as Go's `maxChainSignatureChecks` does, so a pool of same-named
@@ -3430,17 +3463,18 @@ intermediates cannot make the search exponential; each signature is verified at 
 | `invalidCertificate` | The leaf does not parse. |
 | `unsupportedAlgorithm` | The leaf's algorithm is not supported, a P-256 key signs with SHA-384 or a P-384 key with SHA-256, or an issuer's RSA modulus is outside 2048 to 4096 bits. |
 | `expired`, `notYetValid` | A certificate in the chain is not valid at `now`. |
-| `incompatibleKeyUsage` | A certificate's extended key usage lists neither serverAuth nor anyExtendedKeyUsage. |
-| `hostnameMismatch` | No subjectAltName entry of the leaf names `host`. |
+| `incompatibleKeyUsage` | A certificate's extended key usage lists neither the purpose nor anyExtendedKeyUsage. |
+| `hostnameMismatch` | `serverAuth` only: no subjectAltName entry of the leaf names `host`. |
 | `unknownAuthority` | No chain links the leaf to a root. |
 | `notAuthorizedToSign` | An issuer is not a CA, or its keyUsage lacks keyCertSign. |
 | `pathLengthExceeded` | More intermediates sit below an issuer than its pathLenConstraint allows. |
 | `nameConstraintViolation` | A dNSName or iPAddress of the leaf, or `host`, falls outside an issuer's name constraints. |
 | `badSignature` | A signature does not verify under its issuer's key. |
 | `signatureCheckLimitExceeded` | The search considered more than 100 candidate issuers before a chain passed. |
+| `invalidArgument` | `host` and `purpose` disagree: `none` with `serverAuth`, or `named` with `clientAuth`. |
 
-Name constraints apply to every dNSName and iPAddress of the leaf and to `host`, from every CA in the chain,
-the root included. A DNS name matches a subtree when its last labels equal the subtree's; a subtree with a
+Name constraints apply to every dNSName and iPAddress of the leaf's subjectAltName and, with `serverAuth`, to
+`host`, from every CA in the chain, the root included. A DNS name matches a subtree when its last labels equal the subtree's; a subtree with a
 leading `.` needs at least one more label, and an empty one matches every name. A wildcard leaf name is
 refused when an excluded subtree lies under it. An address matches a range of its own family whose masked
 bits it shares. A CA with only dNSName subtrees leaves addresses unconstrained, and the reverse.
@@ -3458,7 +3492,7 @@ bits it shares. A CA with only dNSName subtrees leaves addresses unconstrained, 
 
 ```maxon
 function main() returns ExitCode
-	let chain = try X509.verify(ByteArray.create(), intermediates: ByteArrays.create(), roots: ByteArrays.create(), host: "example.com", now: 1767225600) otherwise (e) 'refused'
+	let chain = try X509.verify(ByteArray.create(), intermediates: ByteArrays.create(), roots: ByteArrays.create(), host: X509VerifyHost.named("example.com"), now: 1767225600) otherwise (e) 'refused'
 		print("{e}\n")
 		return 0
 	end 'refused'

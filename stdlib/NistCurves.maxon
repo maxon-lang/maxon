@@ -721,6 +721,11 @@ type NistCurve
 		return nistDerElement(nistDerSequenceTag, content: content)
 	end 'signature'
 
+	function sign(privateKey ByteArray, message ByteArray) returns ByteArray throws EcdsaSignError
+		let key = try decodeScalar(privateKey) otherwise throw EcdsaSignError.invalidPrivateKey
+		return deterministicSignature(key, privateKey: privateKey, message: message)
+	end 'sign'
+
 	function deterministicSignature(key NistLimbs, privateKey ByteArray, message ByteArray) returns ByteArray
 		let hashed = digest(message)
 		let hashOctets = nistBytesFromLimbs(self.scalarField.reduceOnce(hashed))
@@ -812,8 +817,12 @@ end 'EcdsaSignError'
 public type EcdsaP256
 	/// The DER signature of `message` under a 32-byte private key, with the RFC 6979 nonce over HMAC-SHA-256.
 	public static function sign(privateKey ByteArray, message ByteArray) returns ByteArray throws EcdsaSignError
-		let curve = NistCurve.of(EcdsaCurve.p256)
-		let key = try curve.decodeScalar(privateKey) otherwise throw EcdsaSignError.invalidPrivateKey
-		return curve.deterministicSignature(key, privateKey: privateKey, message: message)
+		return try NistCurve.of(EcdsaCurve.p256).sign(privateKey, message: message)
 	end 'sign'
 end 'EcdsaP256'
+
+public type EcdsaP384
+	public static function sign(privateKey ByteArray, message ByteArray) returns ByteArray throws EcdsaSignError
+		return try NistCurve.of(EcdsaCurve.p384).sign(privateKey, message: message)
+	end 'sign'
+end 'EcdsaP384'

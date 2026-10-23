@@ -89,7 +89,7 @@ const SOURCES = [
         sections: ['File', 'FilePath', 'Directory', 'Console', 'CommandLine', 'Log', 'TraceCapture', 'Process', 'Subprocess', 'SharedMemory', 'Debuggee', 'Sampler'],
       },
       { page: 'stdlib/network.md', sections: ['TcpClient', 'TcpListener', 'HttpClient', 'HttpServer', 'URL'] },
-      { page: 'stdlib/data.md', sections: ['Json', 'Base64', 'Pem', 'Der', 'Sha2', 'Hmac', 'Hkdf', 'Rsa', 'Aead', 'AesGcm', 'ChaCha20Poly1305', 'Aes', 'ChaCha20', 'Poly1305', 'X25519', 'Ed25519', 'EcdhP256', 'Ecdsa', 'EcdsaP256', 'X509', 'Hasher'] },
+      { page: 'stdlib/data.md', sections: ['Json', 'Base64', 'Pem', 'Der', 'Sha2', 'Hmac', 'Hkdf', 'Rsa', 'Aead', 'AesGcm', 'ChaCha20Poly1305', 'Aes', 'ChaCha20', 'Poly1305', 'X25519', 'Ed25519', 'EcdhP256', 'Ecdsa', 'EcdsaP256', 'EcdsaP384', 'X509', 'Hasher'] },
       { page: 'stdlib/runtime.md', sections: ['Clock', 'Scheduler', 'HeapStats', 'SharedValue', 'Random', 'TrustStore', 'Math', 'Primitive Extensions'] },
       { page: 'stdlib/testing.md', sections: ['Testing'] },
       { page: 'stdlib/build.md', sections: ['Build'] },
