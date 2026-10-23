@@ -440,17 +440,18 @@ end 'ParseStamp'
 export type RawStreamFacts
 	export let declaredTypeNames as NameRoster
 	export let reservedSpellings as NameRoster
+	export let conditionalSpellings as NameRoster
 
-	export static function create(declaredTypeNames NameRoster, reservedSpellings NameRoster) returns RawStreamFacts
-		return Self{declaredTypeNames: declaredTypeNames, reservedSpellings: reservedSpellings}
+	export static function create(declaredTypeNames NameRoster, reservedSpellings NameRoster, conditionalSpellings NameRoster) returns RawStreamFacts
+		return Self{declaredTypeNames: declaredTypeNames, reservedSpellings: reservedSpellings, conditionalSpellings: conditionalSpellings}
 	end 'create'
 
 	export static function nothing() returns RawStreamFacts
-		return Self{declaredTypeNames: NameRoster.create(), reservedSpellings: NameRoster.create()}
+		return Self{declaredTypeNames: NameRoster.create(), reservedSpellings: NameRoster.create(), conditionalSpellings: NameRoster.create()}
 	end 'nothing'
 
 	export static function of(tokens TokenArray) returns RawStreamFacts
-		return Self{declaredTypeNames: declaredTypeNamesIn(tokens), reservedSpellings: reservedSpellingsIn(tokens)}
+		return Self{declaredTypeNames: declaredTypeNamesIn(tokens), reservedSpellings: reservedSpellingsIn(tokens), conditionalSpellings: conditionalSpellingsIn(tokens)}
 	end 'of'
 end 'RawStreamFacts'
 
@@ -982,6 +983,51 @@ module function reservedSpellingsIn(tokens TokenArray) returns NameRoster
 
 	return spellings
 end 'reservedSpellingsIn'
+
+typealias ConditionalDepth = int(0 to u64.max)
+
+// Read off the RAW stream: a spelling in an arm the target excludes has no token in the active stream,
+// so it is taken from every arm, which also keeps the fact independent of the target. A directive's
+// own condition is not a spelling.
+module function conditionalSpellingsIn(tokens TokenArray) returns NameRoster
+	var spellings = NameRoster.create()
+	var seen = UsedTypeNameSet.create()
+	var depth = 0 as ConditionalDepth
+	var onDirectiveLine = false
+
+	for token in tokens 'eachToken'
+		if token.kind == TokenKind.hashIf 'opensARegion'
+			depth = depth + 1
+			onDirectiveLine = true
+			continue
+		end 'opensARegion'
+
+		if token.kind == TokenKind.hashElse 'anotherArm'
+			onDirectiveLine = true
+			continue
+		end 'anotherArm'
+
+		if token.kind == TokenKind.hashEndif 'closesARegion'
+			if depth > 0 'anOpenRegion'
+				depth = depth - 1
+			end 'anOpenRegion'
+
+			continue
+		end 'closesARegion'
+
+		if token.kind == TokenKind.newline 'endsTheDirectiveLine'
+			onDirectiveLine = false
+			continue
+		end 'endsTheDirectiveLine'
+
+		if token.kind == TokenKind.identifier and depth > 0 and not onDirectiveLine and not seen.contains(token.value) 'aNewSpelling'
+			seen.insert(token.value)
+			spellings.push(token.value)
+		end 'aNewSpelling'
+	end 'eachToken'
+
+	return spellings
+end 'conditionalSpellingsIn'
 
 function tokenKindDeclaresATypeName(kind TokenKind) returns bool
 	return kind == TokenKind.type or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.interface or kind == TokenKind.typealias

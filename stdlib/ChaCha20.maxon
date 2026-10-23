@@ -38,17 +38,6 @@ let chaChaZeroWord = 0 as ChaChaWord
 
 let chaChaConstantWords = ChaChaWords from [0x61707865, 0x3320646e, 0x79622d32, 0x6b206574]
 
-function chaChaReadWord(source ByteArray, off ElementIndex) returns ChaChaWord
-	var word = 0 as ChaChaWord
-
-	for i in 0 upto chaChaWordBytes 'eachByte'
-		let b = try source.get(off + i) otherwise panic("chacha20: read past the key or nonce the caller sized")
-		word = word or ((b as ChaChaWord) shl (i * chaChaBitsPerByte))
-	end 'eachByte'
-
-	return word
-end 'chaChaReadWord'
-
 function chaChaRotL(v ChaChaWord, n ChaChaRotateAmount) returns ChaChaWord
 	return ((v shl n) or (v shr (chaChaWordBits - n))) and chaChaWordMask
 end 'chaChaRotL'
@@ -72,13 +61,13 @@ function chaChaInitialState(key ByteArray, nonce ByteArray) returns ChaChaWords
 	state.append(chaChaConstantWords)
 
 	for i in 0 upto chaChaKeyWords 'keyWords'
-		state.push(chaChaReadWord(key, off: i * chaChaWordBytes))
+		state.push(readOrderedWord(key, off: i * chaChaWordBytes, width: chaChaWordBytes, limit: key.count(), order: ByteOrder.littleEndian) as ChaChaWord)
 	end 'keyWords'
 
 	state.push(chaChaZeroWord)
 
 	for i in 0 upto chaChaNonceWords 'nonceWords'
-		state.push(chaChaReadWord(nonce, off: i * chaChaWordBytes))
+		state.push(readOrderedWord(nonce, off: i * chaChaWordBytes, width: chaChaWordBytes, limit: nonce.count(), order: ByteOrder.littleEndian) as ChaChaWord)
 	end 'nonceWords'
 
 	return state

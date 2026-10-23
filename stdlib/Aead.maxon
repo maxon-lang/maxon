@@ -19,3 +19,45 @@ public interface Aead
 	/// released on failure.
 	function open(nonce ByteArray, sealed ByteArray, additionalData ByteArray) returns ByteArray throws AeadError
 end 'Aead'
+
+module type AeadSealedParts
+	module let ciphertext as ByteArray
+	module let tag as ByteArray
+
+	module static function create(ciphertext ByteArray, tag ByteArray) returns AeadSealedParts
+		return Self{ciphertext: ciphertext, tag: tag}
+	end 'create'
+end 'AeadSealedParts'
+
+module function aeadRequireNonce(nonce ByteArray, nonceBytes Count) throws AeadError
+	if nonce.count() != nonceBytes 'nonceLength'
+		throw AeadError.invalidNonceLength
+	end 'nonceLength'
+end 'aeadRequireNonce'
+
+module function aeadRequirePlaintextLength(plaintext ByteArray, limit Count) throws AeadError
+	if plaintext.count() > limit 'plaintextLength'
+		throw AeadError.plaintextTooLong
+	end 'plaintextLength'
+end 'aeadRequirePlaintextLength'
+
+/// The ciphertext and the tag of `sealed`, or `authenticationFailed` when it cannot hold a tag or its
+/// ciphertext is longer than `plaintextLimit`.
+module function aeadSplitSealed(sealed ByteArray, tagBytes Count, plaintextLimit Count) returns AeadSealedParts throws AeadError
+	if sealed.count() < tagBytes or sealed.count() - tagBytes > plaintextLimit 'badLength'
+		throw AeadError.authenticationFailed
+	end 'badLength'
+
+	let ciphertextBytes = sealed.count() - tagBytes
+	let ciphertext = try sealed.slice(0, endIndex: ciphertextBytes) otherwise panic("aeadSplitSealed: ciphertext range unreachable")
+	let tag = try sealed.slice(ciphertextBytes, endIndex: sealed.count()) otherwise panic("aeadSplitSealed: tag range unreachable")
+
+	return AeadSealedParts.create(ciphertext, tag: tag)
+end 'aeadSplitSealed'
+
+/// Throws `authenticationFailed` unless the tags are equal, compared in constant time.
+module function aeadRequireTag(expected ByteArray, received ByteArray) throws AeadError
+	if not constantTimeEqual(expected, b: received) 'forged'
+		throw AeadError.authenticationFailed
+	end 'forged'
+end 'aeadRequireTag'

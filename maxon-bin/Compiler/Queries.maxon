@@ -77,6 +77,16 @@ module function reservedSpellingsOf(project Project, path FilePath, entry Source
 	return reservedSpellingsIn(try validMemoValue(project.db.tokenCache, path: path, entry: entry))
 end 'reservedSpellingsOf'
 
+module function conditionalSpellingsOf(project Project, path FilePath) returns NameRoster throws CompileError
+	view entry = try sourceEntryOf(project, path: path)
+
+	if let facts = try sharedRawStreamFactsOf(project, contentHash: entry.contentHash) 'heldWithTheBytes'
+		return facts.conditionalSpellings
+	end 'heldWithTheBytes'
+
+	return conditionalSpellingsIn(try queryTokens(project, path: path))
+end 'conditionalSpellingsOf'
+
 // A per-file memo's value when it was stamped with these bytes' hash.
 function validMemoValue(cache TokenCacheMap, path FilePath, entry SourceFileEntry) returns TokenArray throws TokenMemoMiss
 	let memo = try cache.get(path) otherwise throw TokenMemoMiss.absent

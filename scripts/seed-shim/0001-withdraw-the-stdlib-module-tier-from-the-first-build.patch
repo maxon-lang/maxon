@@ -1,0 +1,92 @@
+diff --git a/stdlib/Aead.maxon b/stdlib/Aead.maxon
+index da7a5ed27..34cd7b0da 100644
+--- a/stdlib/Aead.maxon
++++ b/stdlib/Aead.maxon
+@@ -20,7 +20,7 @@ public interface Aead
+ 	function open(nonce ByteArray, sealed ByteArray, additionalData ByteArray) returns ByteArray throws AeadError
+ end 'Aead'
+ 
+-module type AeadSealedParts
++public type AeadSealedParts
+ 	module let ciphertext as ByteArray
+ 	module let tag as ByteArray
+ 
+@@ -29,13 +29,13 @@ module type AeadSealedParts
+ 	end 'create'
+ end 'AeadSealedParts'
+ 
+-module function aeadRequireNonce(nonce ByteArray, nonceBytes Count) throws AeadError
++public function aeadRequireNonce(nonce ByteArray, nonceBytes Count) throws AeadError
+ 	if nonce.count() != nonceBytes 'nonceLength'
+ 		throw AeadError.invalidNonceLength
+ 	end 'nonceLength'
+ end 'aeadRequireNonce'
+ 
+-module function aeadRequirePlaintextLength(plaintext ByteArray, limit Count) throws AeadError
++public function aeadRequirePlaintextLength(plaintext ByteArray, limit Count) throws AeadError
+ 	if plaintext.count() > limit 'plaintextLength'
+ 		throw AeadError.plaintextTooLong
+ 	end 'plaintextLength'
+@@ -43,7 +43,7 @@ end 'aeadRequirePlaintextLength'
+ 
+ /// The ciphertext and the tag of `sealed`, or `authenticationFailed` when it cannot hold a tag or its
+ /// ciphertext is longer than `plaintextLimit`.
+-module function aeadSplitSealed(sealed ByteArray, tagBytes Count, plaintextLimit Count) returns AeadSealedParts throws AeadError
++public function aeadSplitSealed(sealed ByteArray, tagBytes Count, plaintextLimit Count) returns AeadSealedParts throws AeadError
+ 	if sealed.count() < tagBytes or sealed.count() - tagBytes > plaintextLimit 'badLength'
+ 		throw AeadError.authenticationFailed
+ 	end 'badLength'
+@@ -56,7 +56,7 @@ module function aeadSplitSealed(sealed ByteArray, tagBytes Count, plaintextLimit
+ end 'aeadSplitSealed'
+ 
+ /// Throws `authenticationFailed` unless the tags are equal, compared in constant time.
+-module function aeadRequireTag(expected ByteArray, received ByteArray) throws AeadError
++public function aeadRequireTag(expected ByteArray, received ByteArray) throws AeadError
+ 	if not constantTimeEqual(expected, b: received) 'forged'
+ 		throw AeadError.authenticationFailed
+ 	end 'forged'
+diff --git a/stdlib/ByteOrder.maxon b/stdlib/ByteOrder.maxon
+index 366df9392..9146166d1 100644
+--- a/stdlib/ByteOrder.maxon
++++ b/stdlib/ByteOrder.maxon
+@@ -1,7 +1,7 @@
+-module typealias ByteWord = bits(64)
+-module typealias ByteWordWidth = int(1 to 16) implements Count
++public typealias ByteWord = bits(64)
++public typealias ByteWordWidth = int(1 to 16) implements Count
+ 
+-module enum ByteOrder
++public enum ByteOrder
+ 	bigEndian
+ 	littleEndian
+ end 'ByteOrder'
+@@ -22,14 +22,14 @@ function byteWordShift(index Count, width ByteWordWidth, order ByteOrder) return
+ end 'byteWordShift'
+ 
+ /// Appends the low `width` bytes of `word` in `order`; a byte past the eighth is zero.
+-module function appendOrderedWord(output ByteArray, word ByteWord, width ByteWordWidth, order ByteOrder)
++public function appendOrderedWord(output ByteArray, word ByteWord, width ByteWordWidth, order ByteOrder)
+ 	for index in 0 upto (width as Count) 'eachByte'
+ 		output.push(((word shr byteWordShift(index, width: width, order: order)) and byteOrderByteMask) as Byte)
+ 	end 'eachByte'
+ end 'appendOrderedWord'
+ 
+ /// The `width` bytes at `off` as a word, in `order`; a byte at or past `limit` reads as zero.
+-module function readOrderedWord(source ByteArray, off ElementIndex, width ByteWordWidth, limit ElementIndex, order ByteOrder) returns ByteWord
++public function readOrderedWord(source ByteArray, off ElementIndex, width ByteWordWidth, limit ElementIndex, order ByteOrder) returns ByteWord
+ 	var word = 0 as ByteWord
+ 
+ 	for index in 0 upto (width as Count) 'eachByte'
+diff --git a/stdlib/Sha2.maxon b/stdlib/Sha2.maxon
+index a96f61976..fcc7e44be 100644
+--- a/stdlib/Sha2.maxon
++++ b/stdlib/Sha2.maxon
+@@ -445,7 +445,7 @@ public type Digest
+ 	end 'compress'
+ end 'Digest'
+ 
+-module function sha2Once(algorithm HashAlgorithm, data ByteArray) returns ByteArray
++public function sha2Once(algorithm HashAlgorithm, data ByteArray) returns ByteArray
+ 	var digest = Digest.create(algorithm)
+ 	digest.update(data)
+ 	return digest.finalize()

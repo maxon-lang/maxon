@@ -27,7 +27,6 @@ let sha512WordBits = 64
 let sha256WordMask = 0xFFFFFFFF as Sha2Word
 let sha512WordMask = u64.max as Sha2Word
 let bitsPerByte = 8
-let byteMask = 0xFF as Sha2Word
 
 let sha256BlockBytes = 64
 let sha512BlockBytes = 128
@@ -102,29 +101,11 @@ let sha512KTable = Sha2Words from [
 	0x5fcb6fab3ad6faec, 0x6c44198c4a475817
 ]
 
-function readBigEndian(buf ByteArray, off ElementIndex, wordBytes Sha2WordBytes) returns Sha2Word
-	var word = 0 as Sha2Word
-
-	for i in 0 upto (wordBytes as Count) 'eachByte'
-		let b = try buf.get(off + i) otherwise panic("sha2: read past the block the caller sized")
-		word = (word shl bitsPerByte) or (b as Sha2Word)
-	end 'eachByte'
-
-	return word
-end 'readBigEndian'
-
-function appendBigEndian(bytes ByteArray, word Sha2Word, wordBytes Sha2WordBytes)
-	for i in 0 upto (wordBytes as Count) 'eachByte'
-		let shift = (wordBytes - 1 - i) * bitsPerByte
-		bytes.push(((word shr shift) and byteMask) as Byte)
-	end 'eachByte'
-end 'appendBigEndian'
-
 function sha2ReadBlock(schedule Sha2Words, padded ByteArray, blockOff ElementIndex, wordBytes Sha2WordBytes)
 	schedule.clear()
 
 	for wi in 0 upto sha2BlockWords 'readWords'
-		schedule.push(readBigEndian(padded, off: blockOff + wi * wordBytes, wordBytes: wordBytes))
+		schedule.push(readOrderedWord(padded, off: blockOff + wi * wordBytes, width: wordBytes as ByteWordWidth, limit: padded.count(), order: ByteOrder.bigEndian) as Sha2Word)
 	end 'readWords'
 end 'sha2ReadBlock'
 
@@ -418,7 +399,7 @@ public type Digest
 			pending.push(paddingFillByte)
 		end 'uncountedHighBytes'
 
-		appendBigEndian(pending, word: (consumed * bitsPerByte) as Sha2Word, wordBytes: messageLengthBytes)
+		appendOrderedWord(pending, word: (consumed * bitsPerByte) as ByteWord, width: messageLengthBytes, order: ByteOrder.bigEndian)
 
 		var blockOff = 0 as ElementIndex
 
@@ -437,7 +418,7 @@ public type Digest
 				break
 			end 'complete'
 
-			appendBigEndian(digest, word: word, wordBytes: wordBytes)
+			appendOrderedWord(digest, word: word as ByteWord, width: wordBytes as ByteWordWidth, order: ByteOrder.bigEndian)
 		end 'eachWord'
 
 		return digest
@@ -464,7 +445,7 @@ public type Digest
 	end 'compress'
 end 'Digest'
 
-function sha2Once(algorithm HashAlgorithm, data ByteArray) returns ByteArray
+module function sha2Once(algorithm HashAlgorithm, data ByteArray) returns ByteArray
 	var digest = Digest.create(algorithm)
 	digest.update(data)
 	return digest.finalize()

@@ -32,6 +32,7 @@ module function encodedViewSection(facts RawStreamFacts, view SharedBuildView) r
 	var writer = LibraryCacheWriter.create()
 	encodedSourceSpellings(writer, spellings: facts.declaredTypeNames)
 	encodedSourceSpellings(writer, spellings: facts.reservedSpellings)
+	encodedSourceSpellings(writer, spellings: facts.conditionalSpellings)
 	writer.flag(view.producerMaskComputed)
 	writer.unsigned(view.producerMask as CacheUnsigned)
 	cacheWriteTokenArray(writer, value: view.activeTokens)
@@ -42,12 +43,13 @@ end 'encodedViewSection'
 module function decodedViewSection(reader LibraryCacheReader, buildKey BuildKey) returns ViewEntry throws LibraryCacheDamage
 	let names = try decodedSourceSpellings(reader)
 	let reserved = try decodedSourceSpellings(reader)
+	let conditional = try decodedSourceSpellings(reader)
 	let maskComputed = try reader.flag()
 	let mask = try cacheReadProducerMask(reader)
 	let tokens = try cacheReadTokenArray(reader)
 	try reader.finished()
 
-	return ViewEntry.create(RawStreamFacts.create(names, reservedSpellings: reserved), view: SharedBuildView.restored(buildKey, activeTokens: tokens, producerMask: mask, producerMaskComputed: maskComputed))
+	return ViewEntry.create(RawStreamFacts.create(names, reservedSpellings: reserved, conditionalSpellings: conditional), view: SharedBuildView.restored(buildKey, activeTokens: tokens, producerMask: mask, producerMaskComputed: maskComputed))
 end 'decodedViewSection'
 
 export function cacheWriteSourceParseError(writer LibraryCacheWriter, value SourceParseError)

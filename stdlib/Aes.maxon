@@ -138,19 +138,6 @@ function aesOrtho(planes AesWords)
 	end 'eachLayer'
 end 'aesOrtho'
 
-// `ChaCha20.maxon` keeps its own copy: a `module` function shared across stdlib files is refused by E3094
-// in any program that never reaches its caller.
-function aesReadWord(source ByteArray, off ElementIndex) returns AesWord
-	var word = aesZeroWord
-
-	for i in 0 upto aesWordBytes 'eachByte'
-		let b = try source.get(off + i) otherwise panic("aes: read past the block or key the caller sized")
-		word = word or ((b as AesWord) shl (i * aesBitsPerByte))
-	end 'eachByte'
-
-	return word
-end 'aesReadWord'
-
 function aesInterleave(even AesWord, odd AesWord) returns AesWord
 	var spread = aesZeroWord
 
@@ -179,22 +166,14 @@ function aesPackColumns(c0 AesWord, c1 AesWord, c2 AesWord, c3 AesWord) returns 
 end 'aesPackColumns'
 
 function aesPackBlock(source ByteArray, off ElementIndex) returns AesPair
-	return aesPackColumns(aesReadWord(source, off: off), c1: aesReadWord(source, off: off + aesWordBytes), c2: aesReadWord(source, off: off + 2 * aesWordBytes), c3: aesReadWord(source, off: off + 3 * aesWordBytes))
+	let limit = source.count()
+	let c0 = readOrderedWord(source, off: off, width: aesWordBytes, limit: limit, order: ByteOrder.littleEndian) as AesWord
+	let c1 = readOrderedWord(source, off: off + aesWordBytes, width: aesWordBytes, limit: limit, order: ByteOrder.littleEndian) as AesWord
+	let c2 = readOrderedWord(source, off: off + 2 * aesWordBytes, width: aesWordBytes, limit: limit, order: ByteOrder.littleEndian) as AesWord
+	let c3 = readOrderedWord(source, off: off + 3 * aesWordBytes, width: aesWordBytes, limit: limit, order: ByteOrder.littleEndian) as AesWord
+
+	return aesPackColumns(c0, c1: c1, c2: c2, c3: c3)
 end 'aesPackBlock'
-
-function aesAppendColumn(output ByteArray, column AesWord)
-	for i in 0 upto aesWordBytes 'eachByte'
-		output.push(((column shr (i * aesBitsPerByte)) and aesByteMask) as Byte)
-	end 'eachByte'
-end 'aesAppendColumn'
-
-function aesAppendCounter(output ByteArray, counter AesCounter)
-	let word = counter as AesWord
-
-	for i in 0 upto aesCounterBytes 'eachByte'
-		output.push(((word shr ((aesCounterBytes - 1 - i) * aesBitsPerByte)) and aesByteMask) as Byte)
-	end 'eachByte'
-end 'aesAppendCounter'
 
 function aesXorKeyStream(output ByteArray, data ByteArray, keystream ByteArray, off ElementIndex)
 	for (iter, pad) in keystream.withIterator() 'eachByte'
@@ -210,10 +189,10 @@ function aesXorKeyStream(output ByteArray, data ByteArray, keystream ByteArray, 
 end 'aesXorKeyStream'
 
 function aesAppendBlock(output ByteArray, low AesWord, high AesWord)
-	aesAppendColumn(output, column: aesDeinterleave(low, parity: 0))
-	aesAppendColumn(output, column: aesDeinterleave(high, parity: 0))
-	aesAppendColumn(output, column: aesDeinterleave(low, parity: 1))
-	aesAppendColumn(output, column: aesDeinterleave(high, parity: 1))
+	appendOrderedWord(output, word: aesDeinterleave(low, parity: 0) as ByteWord, width: aesWordBytes, order: ByteOrder.littleEndian)
+	appendOrderedWord(output, word: aesDeinterleave(high, parity: 0) as ByteWord, width: aesWordBytes, order: ByteOrder.littleEndian)
+	appendOrderedWord(output, word: aesDeinterleave(low, parity: 1) as ByteWord, width: aesWordBytes, order: ByteOrder.littleEndian)
+	appendOrderedWord(output, word: aesDeinterleave(high, parity: 1) as ByteWord, width: aesWordBytes, order: ByteOrder.littleEndian)
 end 'aesAppendBlock'
 
 function aesLoadBatch(planes AesWords, source ByteArray, blocks AesBlockSlots)
@@ -517,7 +496,7 @@ function aesKeySchedule(key ByteArray, rounds AesRoundCount) returns AesWords
 	words.reserve(totalWords)
 
 	for i in 0 upto keyWords 'keyWords'
-		words.push(aesReadWord(key, off: i * aesWordBytes))
+		words.push(readOrderedWord(key, off: i * aesWordBytes, width: aesWordBytes, limit: key.count(), order: ByteOrder.littleEndian) as AesWord)
 	end 'keyWords'
 
 	var previous = try words.get(keyWords - 1) otherwise panic("aes: key word index unreachable")
@@ -640,7 +619,7 @@ public type Aes
 
 			for slot in 0 upto batch 'eachCounter'
 				counterBlocks.append(nonce)
-				aesAppendCounter(counterBlocks, counter: (firstBlock + done + slot) as AesCounter)
+				appendOrderedWord(counterBlocks, word: ((firstBlock + done + slot) as AesCounter) as ByteWord, width: aesCounterBytes, order: ByteOrder.bigEndian)
 			end 'eachCounter'
 
 			keystream.clear()

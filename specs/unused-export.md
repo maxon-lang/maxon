@@ -57,6 +57,11 @@ or are reached through indirect dispatch:
 The file count is not part of the question: a one-file program is audited
 like any other, and an `export` nothing names is reported there too.
 
+A reference is a name spelled in source, whether or not the compiler built the
+body that spells it. An identifier in a generic function nothing instantiates,
+in a branch of `#if` the target excludes, or in a standard library body no
+program path reaches counts as a reference.
+
 The pass is scheduled after `semanticCheck` and the pipeline stops at the
 first pass that reports, so a program with any lexer, parser or semantic
 error is never audited — a half-resolved reader cannot produce spurious
@@ -1020,4 +1025,302 @@ end 'main'
 ```
 ```maxoncstderr
 error E3092: <fragment>:2:17: exported function 'neverCalled' is never referenced outside its declaring file
+```
+
+## A library `module` declaration is judged by the source that names it, not by which bodies the program builds
+
+A library file's bodies are built only when a path from `main` reaches the file, so in each program below
+`overlayCaller` is never built, and no op of it exists for the audit to read. The declaration it names is
+still named from outside the file that declares it: that is a fact of the source, and E3094 is about the
+source.
+
+<!-- test: a-library-module-function-named-by-a-sibling-file-the-program-never-reaches -->
+```maxon
+// --- stdlib-overlay: Builtins.maxon
+public typealias OverlayCount = int(0 to 1000)
+
+module function overlayShared() returns OverlayCount
+	return 7
+end 'overlayShared'
+
+// --- stdlib-overlay: Math.maxon
+public function overlayCaller() returns OverlayCount
+	return overlayShared()
+end 'overlayCaller'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-library-module-constant-named-by-a-sibling-file-the-program-never-reaches -->
+```maxon
+// --- stdlib-overlay: Builtins.maxon
+public typealias OverlayCount = int(0 to 1000)
+
+module let overlayShared = 5 as OverlayCount
+
+// --- stdlib-overlay: Math.maxon
+public function overlayCaller() returns OverlayCount
+	return overlayShared
+end 'overlayCaller'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-library-module-variable-named-by-a-sibling-file-the-program-never-reaches -->
+```maxon
+// --- stdlib-overlay: Builtins.maxon
+public typealias OverlayCount = int(0 to 1000)
+
+module var overlayShared = 5 as OverlayCount
+
+// --- stdlib-overlay: Math.maxon
+public function overlayCaller() returns OverlayCount
+	return overlayShared
+end 'overlayCaller'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-library-module-function-no-sibling-file-names -->
+The negative control: the declaration is the same, and no other library file spells its name, so the
+audit still says what it says of any `module` declaration nothing outside its file names.
+```maxon
+// --- stdlib-overlay: Builtins.maxon
+public typealias OverlayCount = int(0 to 1000)
+
+module function overlayShared() returns OverlayCount
+	return 7
+end 'overlayShared'
+
+// --- stdlib-overlay: Math.maxon
+public function overlayCaller() returns OverlayCount
+	return 8
+end 'overlayCaller'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3094: <fragment>:5:17: module function 'stdlib.overlayShared' is never referenced outside its declaring file
+```
+
+<!-- test: a-library-module-function-named-by-a-never-instantiated-template-in-a-built-file -->
+The reader's file is built here (`main` calls into it), so it is the template, not the file, whose body
+no op exists for: `overlayTemplate` is never instantiated.
+```maxon
+// --- stdlib-overlay: Builtins.maxon
+public typealias OverlayCount = int(0 to 1000)
+
+module function overlayShared() returns OverlayCount
+	return 7
+end 'overlayShared'
+
+// --- stdlib-overlay: Math.maxon
+public function overlayCaller() returns OverlayCount
+	return 1
+end 'overlayCaller'
+
+public function overlayTemplate(a T) uses T returns T where T is Comparable
+	let shared = overlayShared()
+
+	return a if shared > 0 else a
+end 'overlayTemplate'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return overlayCaller()
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: a-library-module-function-named-only-in-an-excluded-branch-of-a-sibling -->
+The sibling's only mention sits in a `#if` branch no target takes, so no op and no token of the active
+stream holds it.
+```maxon
+// --- stdlib-overlay: Builtins.maxon
+public typealias OverlayCount = int(0 to 1000)
+
+module function overlayShared() returns OverlayCount
+	return 7
+end 'overlayShared'
+
+// --- stdlib-overlay: Math.maxon
+#if testing(true)
+public function overlayCaller() returns OverlayCount
+	return overlayShared()
+end 'overlayCaller'
+#endif
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-library-module-function-no-excluded-branch-names -->
+The negative control: the excluded branch exists and does not spell the name.
+```maxon
+// --- stdlib-overlay: Builtins.maxon
+public typealias OverlayCount = int(0 to 1000)
+
+module function overlayShared() returns OverlayCount
+	return 7
+end 'overlayShared'
+
+// --- stdlib-overlay: Math.maxon
+#if testing(true)
+public function overlayCaller() returns OverlayCount
+	return 8
+end 'overlayCaller'
+#endif
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3094: <fragment>:5:17: module function 'stdlib.overlayShared' is never referenced outside its declaring file
+```
+
+## A declaration is judged by the source that names it, not by which bodies were built
+
+Two kinds of author code have a body no op exists for: a generic function nothing instantiates, whose body
+is read once per instantiation, and the branch of a `#if` the target excludes. A name spelled there is
+still a reference.
+
+<!-- test: a-module-function-named-only-by-a-generic-function-nothing-instantiates -->
+```maxon
+// --- file: lib.maxon
+module function helper() returns ExitCode
+	return 7
+end 'helper'
+
+// --- file: generic.maxon
+function viaGeneric(a T) uses T returns T where T is Comparable
+	let h = helper()
+
+	return a if h > 0 else a
+end 'viaGeneric'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: an-export-named-only-by-a-generic-function-nothing-instantiates -->
+```maxon
+// --- file: api/lib.maxon
+export function helper() returns ExitCode
+	return 7
+end 'helper'
+
+// --- file: use/generic.maxon
+function viaGeneric(a T) uses T returns T where T is Comparable
+	let h = helper()
+
+	return a if h > 0 else a
+end 'viaGeneric'
+
+// --- file: use/main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-module-function-named-only-in-an-inactive-branch -->
+```maxon
+// --- file: lib.maxon
+module function helper() returns ExitCode
+	return 7
+end 'helper'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	#if testing(true)
+	return helper()
+	#endif
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-module-function-spelled-only-in-a-string-of-a-generic-function-nothing-instantiates -->
+The negative control: only an identifier is a reference, so a template that holds the name in a string
+literal leaves the declaration unreferenced.
+```maxon
+// --- file: lib.maxon
+module function helper() returns ExitCode
+	return 7
+end 'helper'
+
+// --- file: generic.maxon
+function viaGeneric(a T) uses T returns T where T is Comparable
+	print("helper")
+
+	return a
+end 'viaGeneric'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3094: <fragment>:3:17: module function 'helper' is never referenced outside its declaring file
+```
+
+<!-- test: error.a-module-function-no-inactive-branch-names -->
+```maxon
+// --- file: lib.maxon
+module function helper() returns ExitCode
+	return 7
+end 'helper'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	#if testing(true)
+	return 1
+	#endif
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3094: <fragment>:3:17: module function 'helper' is never referenced outside its declaring file
 ```

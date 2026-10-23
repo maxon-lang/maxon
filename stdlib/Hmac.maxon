@@ -19,16 +19,12 @@ public function hmac(algorithm HashAlgorithm, key ByteArray, message ByteArray) 
 	return outer.finalize()
 end 'hmac'
 
-// The three `Digest` calls repeat `Sha2.maxon`'s file-private `sha2Once`: a `module` function
-// shared across stdlib files is refused by E3094 in any program that never reaches this caller.
 function hmacBlockKey(algorithm HashAlgorithm, key ByteArray, blockBytes HashBlockBytes) returns ByteArray
 	if key.count() <= blockBytes 'fits'
 		return key
 	end 'fits'
 
-	var digest = Digest.create(algorithm)
-	digest.update(key)
-	return digest.finalize()
+	return sha2Once(algorithm, data: key)
 end 'hmacBlockKey'
 
 function hmacMaskedKey(key ByteArray, mask Byte, blockBytes HashBlockBytes) returns ByteArray

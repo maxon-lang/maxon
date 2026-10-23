@@ -32755,7 +32755,9 @@ export type Parser
 			throw SourceParseError.unsupported("a method of the generic type '{String.from(self.enclosingTypeName())}' declaring type parameters of its own — declare it as a `static function` or on a type with no `uses` list", line: nameTok.line, column: nameTok.column)
 		end 'aMethodOfAGenericType'
 
-		for position in 0 upto self.signatures.genericInstanceCountAt(template.siteKey()) 'eachInstance'
+		let instanceCount = self.signatures.genericInstanceCountAt(template.siteKey())
+
+		for position in 0 upto instanceCount 'eachInstance'
 			self.openGenericInstance(template, position: position)
 			self.pos = functionIndex
 			try self.parseFunction(visibility, takesReceiver: takesReceiver, form: form)
@@ -32764,6 +32766,10 @@ export type Parser
 
 		self.pos = functionIndex
 		self.skipGenericTemplateDeclaration()
+
+		if instanceCount == 0 'neverInstantiated'
+			self.artifact.unbuiltBodies.push(UnbuiltBody.create(functionIndex, limit: self.pos))
+		end 'neverInstantiated'
 	end 'parseGenericTemplate'
 
 	function requireEveryTypeParamInferable(template GenericFunctionTemplate, nameIndex ElementIndex) throws SourceParseError
@@ -33780,7 +33786,9 @@ export type Parser
 	// touches, and `DeadFunctionElimination.requireUnreachableLibraryStayedDead` turns a disagreement
 	// into a panic rather than letting a `retVoid` stand in for a value the program would have read.
 	function skipUnreachedFunctionBody(entry IrBlock, nameTok Token)
+		let bodyStart = self.pos
 		self.advanceToOwnBlockEnd()
+		self.artifact.unbuiltBodies.push(UnbuiltBody.create(bodyStart, limit: self.pos))
 		self.artifact.emitTerminator(entry, op: MaxonOp.retVoid, range: SourceRange.ofToken(nameTok))
 	end 'skipUnreachedFunctionBody'
 

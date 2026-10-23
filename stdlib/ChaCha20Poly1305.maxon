@@ -6,8 +6,6 @@ let chaCha20Poly1305NonceBytes = 12
 let chaCha20Poly1305TagBytes = 16
 let chaCha20Poly1305PaddingBlockBytes = 16
 let chaCha20Poly1305LengthFieldBytes = 8
-let chaCha20Poly1305BitsPerByte = 8
-let chaCha20Poly1305ByteMask = 0xFF
 let chaCha20Poly1305OneTimeKeyBlock = 0
 let chaCha20Poly1305FirstDataBlock = 1
 // 2^32 − 1 blocks of 64 bytes: the most the 32-bit counter covers from `chaCha20Poly1305FirstDataBlock` on.
@@ -19,12 +17,6 @@ function chaCha20Poly1305PadToBlock(buffer ByteArray)
 		buffer.push(chaCha20Poly1305ZeroByte)
 	end 'padding'
 end 'chaCha20Poly1305PadToBlock'
-
-function chaCha20Poly1305AppendLength(buffer ByteArray, length Count)
-	for i in 0 upto chaCha20Poly1305LengthFieldBytes 'eachByte'
-		buffer.push(((length shr (i * chaCha20Poly1305BitsPerByte)) and chaCha20Poly1305ByteMask) as Byte)
-	end 'eachByte'
-end 'chaCha20Poly1305AppendLength'
 
 /// ChaCha20-Poly1305 under one 32-byte key.
 public type ChaCha20Poly1305 implements Aead
@@ -41,11 +33,8 @@ public type ChaCha20Poly1305 implements Aead
 	end 'create'
 
 	public function seal(nonce ByteArray, plaintext ByteArray, additionalData ByteArray) returns ByteArray throws AeadError
-		try requireNonce(nonce)
-
-		if plaintext.count() > chaCha20Poly1305MaxPlaintextBytes 'plaintextLength'
-			throw AeadError.plaintextTooLong
-		end 'plaintextLength'
+		try aeadRequireNonce(nonce, nonceBytes: chaCha20Poly1305NonceBytes)
+		try aeadRequirePlaintextLength(plaintext, limit: chaCha20Poly1305MaxPlaintextBytes)
 
 		var sealed = apply(nonce, counter: chaCha20Poly1305FirstDataBlock, data: plaintext)
 		let tag = authenticate(nonce, additionalData: additionalData, ciphertext: sealed)
@@ -55,35 +44,20 @@ public type ChaCha20Poly1305 implements Aead
 	end 'seal'
 
 	public function open(nonce ByteArray, sealed ByteArray, additionalData ByteArray) returns ByteArray throws AeadError
-		try requireNonce(nonce)
+		try aeadRequireNonce(nonce, nonceBytes: chaCha20Poly1305NonceBytes)
 
-		if sealed.count() < chaCha20Poly1305TagBytes or sealed.count() - chaCha20Poly1305TagBytes > chaCha20Poly1305MaxPlaintextBytes 'badLength'
-			throw AeadError.authenticationFailed
-		end 'badLength'
+		let parts = try aeadSplitSealed(sealed, tagBytes: chaCha20Poly1305TagBytes, plaintextLimit: chaCha20Poly1305MaxPlaintextBytes)
+		let expected = authenticate(nonce, additionalData: additionalData, ciphertext: parts.ciphertext)
+		try aeadRequireTag(expected, received: parts.tag)
 
-		let ciphertextBytes = sealed.count() - chaCha20Poly1305TagBytes
-		let ciphertext = try sealed.slice(0, endIndex: ciphertextBytes) otherwise panic("ChaCha20Poly1305: ciphertext range unreachable")
-		let received = try sealed.slice(ciphertextBytes, endIndex: sealed.count()) otherwise panic("ChaCha20Poly1305: tag range unreachable")
-		let expected = authenticate(nonce, additionalData: additionalData, ciphertext: ciphertext)
-
-		if not constantTimeEqual(expected, b: received) 'forged'
-			throw AeadError.authenticationFailed
-		end 'forged'
-
-		return apply(nonce, counter: chaCha20Poly1305FirstDataBlock, data: ciphertext)
+		return apply(nonce, counter: chaCha20Poly1305FirstDataBlock, data: parts.ciphertext)
 	end 'open'
-
-	function requireNonce(nonce ByteArray) throws AeadError
-		if nonce.count() != chaCha20Poly1305NonceBytes 'nonceLength'
-			throw AeadError.invalidNonceLength
-		end 'nonceLength'
-	end 'requireNonce'
 
 	function apply(nonce ByteArray, counter ChaCha20Counter, data ByteArray) returns ByteArray
 		let transformed = try ChaCha20.xorKeyStream(key, nonce: nonce, counter: counter, data: data) otherwise (failure) 'refused'
 			match failure 'reason'
 				invalidKeyLength then panic("ChaCha20Poly1305: xorKeyStream refused a key that create accepted")
-				invalidNonceLength then panic("ChaCha20Poly1305: xorKeyStream refused a nonce that requireNonce accepted")
+				invalidNonceLength then panic("ChaCha20Poly1305: xorKeyStream refused a nonce that aeadRequireNonce accepted")
 				counterOverflow then panic("ChaCha20Poly1305: xorKeyStream wrapped the block counter for data no longer than 2^38 - 64 bytes")
 			end 'reason'
 		end 'refused'
@@ -102,8 +76,8 @@ public type ChaCha20Poly1305 implements Aead
 		chaCha20Poly1305PadToBlock(input)
 		input.append(ciphertext)
 		chaCha20Poly1305PadToBlock(input)
-		chaCha20Poly1305AppendLength(input, length: additionalData.count())
-		chaCha20Poly1305AppendLength(input, length: ciphertext.count())
+		appendOrderedWord(input, word: additionalData.count() as ByteWord, width: chaCha20Poly1305LengthFieldBytes, order: ByteOrder.littleEndian)
+		appendOrderedWord(input, word: ciphertext.count() as ByteWord, width: chaCha20Poly1305LengthFieldBytes, order: ByteOrder.littleEndian)
 
 		return try Poly1305.mac(oneTimeKey, message: input) otherwise panic("ChaCha20Poly1305: Poly1305 refused a 32-byte key")
 	end 'authenticate'

@@ -37,7 +37,6 @@ let ghashPairMask = 0x3333333333333333
 let ghashNibbleMask = 0x0F0F0F0F0F0F0F0F
 let ghashByteMask = 0x00FF00FF00FF00FF
 let ghashHalfwordMask = 0x0000FFFF0000FFFF
-let ghashLowByteMask = 0xFF as GhashWord
 
 function ghashSwapUnits(word GhashWord, mask GhashWord, shift GhashShift) returns GhashWord
 	return ((word and mask) shl shift) or ((word shr shift) and mask)
@@ -80,29 +79,6 @@ function ghashFoldSpill(word GhashWord) returns GhashWord
 	return (word shl (ghashWordBits - ghashTapLow)) xor (word shl (ghashWordBits - ghashTapMid)) xor (word shl (ghashWordBits - ghashTapHigh))
 end 'ghashFoldSpill'
 
-function aesGcmReadBigEndian(source ByteArray, off ElementIndex, limit ElementIndex) returns GhashWord
-	var word = ghashZeroWord
-
-	for i in 0 upto aesGcmWordBytes 'eachByte'
-		let index = off + i
-		var b = 0 as Byte
-
-		if index < limit 'inside'
-			b = try source.get(index) otherwise panic("AesGcm: read inside the limit unreachable")
-		end 'inside'
-
-		word = (word shl aesGcmBitsPerByte) or (b as GhashWord)
-	end 'eachByte'
-
-	return word
-end 'aesGcmReadBigEndian'
-
-function aesGcmAppendBigEndian(output ByteArray, word GhashWord)
-	for i in 0 upto aesGcmWordBytes 'eachByte'
-		output.push(((word shr ((aesGcmWordBytes - 1 - i) * aesGcmBitsPerByte)) and ghashLowByteMask) as Byte)
-	end 'eachByte'
-end 'aesGcmAppendBigEndian'
-
 type GhashKey
 	var h0 as GhashWord
 	var h1 as GhashWord
@@ -112,8 +88,8 @@ type GhashKey
 	var h2r as GhashWord
 
 	static function create(hashSubkey ByteArray) returns GhashKey
-		let h1 = aesGcmReadBigEndian(hashSubkey, off: 0, limit: hashSubkey.count())
-		let h0 = aesGcmReadBigEndian(hashSubkey, off: aesGcmWordBytes, limit: hashSubkey.count())
+		let h1 = readOrderedWord(hashSubkey, off: 0, width: aesGcmWordBytes, limit: hashSubkey.count(), order: ByteOrder.bigEndian) as GhashWord
+		let h0 = readOrderedWord(hashSubkey, off: aesGcmWordBytes, width: aesGcmWordBytes, limit: hashSubkey.count(), order: ByteOrder.bigEndian) as GhashWord
 		let h0r = ghashReverse(h0)
 		let h1r = ghashReverse(h1)
 
@@ -161,8 +137,8 @@ type GhashKey
 		let limit = data.count()
 
 		while blockStart < limit 'eachBlock'
-			let blockHigh = aesGcmReadBigEndian(data, off: blockStart, limit: limit)
-			let blockLow = aesGcmReadBigEndian(data, off: blockStart + aesGcmWordBytes, limit: limit)
+			let blockHigh = readOrderedWord(data, off: blockStart, width: aesGcmWordBytes, limit: limit, order: ByteOrder.bigEndian) as GhashWord
+			let blockLow = readOrderedWord(data, off: blockStart + aesGcmWordBytes, width: aesGcmWordBytes, limit: limit, order: ByteOrder.bigEndian) as GhashWord
 			(high, low) = multiply((high xor blockHigh, low xor blockLow))
 			blockStart = blockStart + aesGcmBlockBytes
 		end 'eachBlock'
@@ -176,8 +152,8 @@ type GhashKey
 		let (digestHigh, digestLow) = multiply(lengths)
 		var digest = ByteArray.create()
 		digest.reserve(aesGcmBlockBytes)
-		aesGcmAppendBigEndian(digest, word: digestHigh)
-		aesGcmAppendBigEndian(digest, word: digestLow)
+		appendOrderedWord(digest, word: digestHigh as ByteWord, width: aesGcmWordBytes, order: ByteOrder.bigEndian)
+		appendOrderedWord(digest, word: digestLow as ByteWord, width: aesGcmWordBytes, order: ByteOrder.bigEndian)
 
 		return digest
 	end 'finish'
@@ -205,11 +181,8 @@ public type AesGcm implements Aead
 	end 'create'
 
 	public function seal(nonce ByteArray, plaintext ByteArray, additionalData ByteArray) returns ByteArray throws AeadError
-		try requireNonce(nonce)
-
-		if plaintext.count() > aesGcmMaxPlaintextBytes 'plaintextLength'
-			throw AeadError.plaintextTooLong
-		end 'plaintextLength'
+		try aeadRequireNonce(nonce, nonceBytes: aesGcmNonceBytes)
+		try aeadRequirePlaintextLength(plaintext, limit: aesGcmMaxPlaintextBytes)
 
 		var sealed = apply(nonce, counter: aesGcmFirstDataCounter, data: plaintext)
 		let tag = authenticate(nonce, additionalData: additionalData, ciphertext: sealed)
@@ -219,34 +192,19 @@ public type AesGcm implements Aead
 	end 'seal'
 
 	public function open(nonce ByteArray, sealed ByteArray, additionalData ByteArray) returns ByteArray throws AeadError
-		try requireNonce(nonce)
+		try aeadRequireNonce(nonce, nonceBytes: aesGcmNonceBytes)
 
-		if sealed.count() < aesGcmTagBytes or sealed.count() - aesGcmTagBytes > aesGcmMaxPlaintextBytes 'badLength'
-			throw AeadError.authenticationFailed
-		end 'badLength'
+		let parts = try aeadSplitSealed(sealed, tagBytes: aesGcmTagBytes, plaintextLimit: aesGcmMaxPlaintextBytes)
+		let expected = authenticate(nonce, additionalData: additionalData, ciphertext: parts.ciphertext)
+		try aeadRequireTag(expected, received: parts.tag)
 
-		let ciphertextBytes = sealed.count() - aesGcmTagBytes
-		let ciphertext = try sealed.slice(0, endIndex: ciphertextBytes) otherwise panic("AesGcm: ciphertext range unreachable")
-		let received = try sealed.slice(ciphertextBytes, endIndex: sealed.count()) otherwise panic("AesGcm: tag range unreachable")
-		let expected = authenticate(nonce, additionalData: additionalData, ciphertext: ciphertext)
-
-		if not constantTimeEqual(expected, b: received) 'forged'
-			throw AeadError.authenticationFailed
-		end 'forged'
-
-		return apply(nonce, counter: aesGcmFirstDataCounter, data: ciphertext)
+		return apply(nonce, counter: aesGcmFirstDataCounter, data: parts.ciphertext)
 	end 'open'
-
-	function requireNonce(nonce ByteArray) throws AeadError
-		if nonce.count() != aesGcmNonceBytes 'nonceLength'
-			throw AeadError.invalidNonceLength
-		end 'nonceLength'
-	end 'requireNonce'
 
 	function apply(nonce ByteArray, counter AesCounter, data ByteArray) returns ByteArray
 		let transformed = try cipher.xorKeyStream(nonce, counter: counter, data: data) otherwise (failure) 'refused'
 			match failure 'reason'
-				invalidNonceLength then panic("AesGcm: xorKeyStream refused a nonce that requireNonce accepted")
+				invalidNonceLength then panic("AesGcm: xorKeyStream refused a nonce that aeadRequireNonce accepted")
 				counterOverflow then panic("AesGcm: xorKeyStream wrapped the block counter for data no longer than 2^36 - 32 bytes")
 			end 'reason'
 		end 'refused'

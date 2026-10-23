@@ -1,0 +1,47 @@
+module typealias ByteWord = bits(64)
+module typealias ByteWordWidth = int(1 to 16) implements Count
+
+module enum ByteOrder
+	bigEndian
+	littleEndian
+end 'ByteOrder'
+
+typealias ByteWordPosition = int(0 to 15)
+typealias ByteWordShift = int(0 to 120)
+
+let byteOrderBitsPerByte = 8
+let byteOrderByteMask = 0xFF as ByteWord
+
+function byteWordShift(index Count, width ByteWordWidth, order ByteOrder) returns ByteWordShift
+	let position = match order 'position'
+		bigEndian gives (width - 1 - index) as ByteWordPosition
+		littleEndian gives index as ByteWordPosition
+	end 'position'
+
+	return (position * byteOrderBitsPerByte) as ByteWordShift
+end 'byteWordShift'
+
+/// Appends the low `width` bytes of `word` in `order`; a byte past the eighth is zero.
+module function appendOrderedWord(output ByteArray, word ByteWord, width ByteWordWidth, order ByteOrder)
+	for index in 0 upto (width as Count) 'eachByte'
+		output.push(((word shr byteWordShift(index, width: width, order: order)) and byteOrderByteMask) as Byte)
+	end 'eachByte'
+end 'appendOrderedWord'
+
+/// The `width` bytes at `off` as a word, in `order`; a byte at or past `limit` reads as zero.
+module function readOrderedWord(source ByteArray, off ElementIndex, width ByteWordWidth, limit ElementIndex, order ByteOrder) returns ByteWord
+	var word = 0 as ByteWord
+
+	for index in 0 upto (width as Count) 'eachByte'
+		let at = off + index
+		var byte = 0 as Byte
+
+		if at < limit 'inside'
+			byte = try source.get(at) otherwise panic("readOrderedWord: a byte inside the limit the caller sized is missing")
+		end 'inside'
+
+		word = word or ((byte as ByteWord) shl byteWordShift(index, width: width, order: order))
+	end 'eachByte'
+
+	return word
+end 'readOrderedWord'

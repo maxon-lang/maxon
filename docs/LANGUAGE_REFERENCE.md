@@ -4702,7 +4702,8 @@ project/
 
 Using a `module` declaration from outside its subtree is **E3088** (`function 'helper' is module-scoped
 and not visible from this directory`). A `module` declaration that nothing outside its file uses is
-**E3094**.
+**E3094**; a name spelled in a generic function nothing instantiates, or in a branch of `#if` the target
+excludes, counts as a use.
 
 ### Qualified Names
 

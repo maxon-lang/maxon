@@ -23,12 +23,10 @@ let poly1305BitsPerByte = 8
 let poly1305LimbStrideBytes = 3
 let poly1305LimbShiftStep = 2
 let poly1305PadOffset = 16
-let poly1305PadByte = 1 as Byte
-let poly1305ZeroByte = 0 as Byte
+let poly1305PadByte = 1
 
 let poly1305LimbMask = 0x3FFFFFF as Poly1305Word
 let poly1305WordMask = 0xFFFFFFFF as Poly1305Word
-let poly1305ByteMask = 0xFF as Poly1305Word
 let poly1305AllOnes = u64.max as Poly1305Word
 let poly1305ZeroWord = 0 as Poly1305Word
 let poly1305FullBlockBit = 0x1000000 as Poly1305Word
@@ -38,20 +36,11 @@ let poly1305PackStep = 6
 let poly1305ClampMasks = Poly1305Words from [0x3FFFFFF, 0x3FFFF03, 0x3FFC0FF, 0x3F03FFF, 0x00FFFFF]
 
 function poly1305ReadWord(source ByteArray, off ElementIndex, limit ElementIndex) returns Poly1305Word
-	var word = 0 as Poly1305Word
+	let word = readOrderedWord(source, off: off, width: poly1305WordBytes, limit: limit, order: ByteOrder.littleEndian) as Poly1305Word
 
-	for i in 0 upto poly1305WordBytes 'eachByte'
-		let index = off + i
-		var b = poly1305ZeroByte
-
-		if index < limit 'inside'
-			b = try source.get(index) otherwise panic("poly1305: read inside the limit unreachable")
-		end 'inside' else if index == limit 'marker'
-			b = poly1305PadByte
-		end 'marker'
-
-		word = word or ((b as Poly1305Word) shl (i * poly1305BitsPerByte))
-	end 'eachByte'
+	if limit >= off and limit < off + poly1305WordBytes 'marker'
+		return word or ((poly1305PadByte as Poly1305Word) shl ((limit - off) * poly1305BitsPerByte))
+	end 'marker'
 
 	return word
 end 'poly1305ReadWord'
@@ -126,9 +115,7 @@ function poly1305Tag(limbs Poly1305Words, key ByteArray) returns ByteArray
 		let total = packed + padWord + carry
 		carry = total shr poly1305WordBits
 
-		for i in 0 upto poly1305WordBytes 'eachByte'
-			tag.push(((total shr (i * poly1305BitsPerByte)) and poly1305ByteMask) as Byte)
-		end 'eachByte'
+		appendOrderedWord(tag, word: total as ByteWord, width: poly1305WordBytes, order: ByteOrder.littleEndian)
 	end 'eachWord'
 
 	return tag

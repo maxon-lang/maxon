@@ -17,10 +17,11 @@
 // surface would. Without that, the pass would emit E3092 against every stdlib typealias the user
 // happens not to mention — an exemption by PATH is what a library that is not `public` would force.
 //
-// ⚠ **THE PASS DOES KNOW ABOUT THE LIBRARY IN ONE PLACE, AND IT IS THE READER SIDE** — `noteRead`
+// ⚠ **THE PASS DOES KNOW ABOUT THE LIBRARY IN TWO PLACES, BOTH ON THE READER SIDE.** `noteRead`
 // refuses to let a library file be credited with a reference to an AUTHOR's declaration, because a
 // monomorphized `Array with Item` body carries `stdlib/Array.maxon` as its source file and cannot
-// possibly have named `Item`. The rule and what it cost are stated in full there.
+// possibly have named `Item`. The rule and what it cost are stated in full there. The other is
+// `noteSpelledUnbuiltReferences`, which reads the library bodies the build skipped.
 //
 // ⛔ **THE RUNTIME TIER IS EXEMPT BY PATH.** The argument above turns on every exported `stdlib/`
 // declaration being `public`; a `runtime/` declaration is not, so an `export`ed one would be audited like
@@ -40,10 +41,12 @@
 // name is credited at the tier E3167 judges that function at, so this pass and E3167 cannot contradict each other on one
 // program.
 //
-// ⚠ **WHAT IS STILL AUDITED IN `stdlib/`: its `module` declarations** (all in `String.maxon`).
+// ⚠ **WHAT IS STILL AUDITED IN `stdlib/`: its `module` declarations.**
 // That is deliberate — `module` is the marked, narrower tier there, and E3094 is exactly the signal its
-// author wants if a door stops being reached. Each of them is named from outside `String.maxon`, so none
-// fires.
+// author wants if a door stops being reached. A stdlib file's bodies are built only once a path from
+// `main` reaches the file, so a sibling file's reference to a `module` declaration is usually in a body no
+// op exists for; `noteSpelledUnbuiltReferences` credits it from the source, so E3094 fires only when no
+// built body calls the name and no skipped body spells it.
 
 // ── Gates ────────────────────────────────────────────────────────────────────────────────────────
 
@@ -90,6 +93,19 @@ type TrackedDecl
 	static function create(kind TrackedDeclKind, key ByteArray, displayName String, noun String, visibility Visibility, declFile AuditedFile, nameLine LineNumber, nameColumn ColumnNumber, isAlias bool) returns TrackedDecl
 		return Self{kind: kind, key: key, displayName: displayName, noun: noun, visibility: visibility, declFile: declFile, nameLine: nameLine, nameColumn: nameColumn, sawOutsideFile: false, sawOutsideModule: false, isAlias: isAlias}
 	end 'create'
+
+	function spelling() returns ByteArray
+		return unqualifiedMemberOf(self.displayName.toByteArray())
+	end 'spelling'
+
+	function isVisibleFrom(reader AuditedFile) returns bool
+		match self.visibility 'tier'
+			module then return moduleDirectoryContains(self.declFile.moduleDirectory, inner: reader.moduleDirectory)
+			global then return true
+			file or
+			public then panic("TrackedDecl.isVisibleFrom: a `{self.visibility.name}` declaration ({self.noun} '{self.displayName}') is never tracked — `tierIsAudited` filters it at seed time")
+		end 'tier'
+	end 'isVisibleFrom'
 end 'TrackedDecl'
 
 typealias TrackedDeclArray = Array with TrackedDecl
@@ -169,11 +185,12 @@ typealias EntryPointNameSet = Set with ByteArray
 // additionally exempt from emission.
 type SourcePathSplit
 	export let userFiles as FilePathArray
+	export let stdlibFiles as FilePathArray
 	export let libraryFiles as LibrarySourcePathSet
 	export let unauditedFiles as LibrarySourcePathSet
 
-	static function create(userFiles FilePathArray, libraryFiles LibrarySourcePathSet, unauditedFiles LibrarySourcePathSet) returns SourcePathSplit
-		return Self{userFiles: userFiles, libraryFiles: libraryFiles, unauditedFiles: unauditedFiles}
+	static function create(userFiles FilePathArray, stdlibFiles FilePathArray, libraryFiles LibrarySourcePathSet, unauditedFiles LibrarySourcePathSet) returns SourcePathSplit
+		return Self{userFiles: userFiles, stdlibFiles: stdlibFiles, libraryFiles: libraryFiles, unauditedFiles: unauditedFiles}
 	end 'create'
 end 'SourcePathSplit'
 
@@ -314,17 +331,21 @@ module function checkUnusedExports(project Project, module MaxonModule, signatur
 	try requireStillWanted(project)
 	try collectFileTypeReferences(project, signatures: signatures, userFiles: sources.userFiles, tracked: tracked)
 	try requireStillWanted(project)
+	try noteSpelledUnbuiltReferences(project, signatures: signatures, tracked: tracked, sources: sources)
+	try requireStillWanted(project)
 	emitDiagnostics(project, tracked: tracked, unauditedFiles: sources.unauditedFiles, demanded: reachedSignatureDemands(project, tracked: tracked))
 end 'checkUnusedExports'
 
 function splitSourcePaths(project Project) returns SourcePathSplit
 	var paths = FilePathArray.create()
+	var stdlibPaths = FilePathArray.create()
 	var libraryFiles = LibrarySourcePathSet.create()
 	var unauditedFiles = LibrarySourcePathSet.create()
 
 	for path in project.db.sourcePaths 'eachFile'
 		if isStdlibSourceFile(project, path: path) 'stdlibFile'
 			libraryFiles.insert(path.toString())
+			stdlibPaths.push(path)
 			continue
 		end 'stdlibFile'
 
@@ -337,7 +358,7 @@ function splitSourcePaths(project Project) returns SourcePathSplit
 		paths.push(path)
 	end 'eachFile'
 
-	return SourcePathSplit.create(paths, libraryFiles: libraryFiles, unauditedFiles: unauditedFiles)
+	return SourcePathSplit.create(paths, stdlibFiles: stdlibPaths, libraryFiles: libraryFiles, unauditedFiles: unauditedFiles)
 end 'splitSourcePaths'
 
 // One pass over the declaration arena, so `noteGlobalLabel` is a lookup and not a scan of it.
@@ -776,6 +797,89 @@ function noteCrossFileConstantReads(signatures ProgramSignatures, tracked Tracke
 	end 'eachRead'
 end 'noteCrossFileConstantReads'
 
+// A body the build skipped has no op for the walk above to read: a stdlib body no path from `main`
+// reaches, a generic function nothing instantiates (`FileParseArtifact.unbuiltBodies`), and the arm of
+// a `#if` the target excludes (`RawStreamFacts.conditionalSpellings`). A declaration still unread is
+// credited when an identifier spelling its name stands in one of them. The match is by name, so it can
+// only suppress a finding.
+function noteSpelledUnbuiltReferences(project Project, signatures ProgramSignatures, tracked TrackedDecls, sources SourcePathSplit) throws CompileError
+	let unread = unreadDeclSpellingsOf(tracked, unauditedFiles: sources.unauditedFiles)
+
+	if unread.count() == 0 'everyDeclarationIsRead'
+		return
+	end 'everyDeclarationIsRead'
+
+	try noteSpelledNamesInUnbuiltBodies(project, signatures: signatures, tracked: tracked, unread: unread, files: sources.stdlibFiles)
+	try noteSpelledNamesInUnbuiltBodies(project, signatures: signatures, tracked: tracked, unread: unread, files: sources.userFiles)
+	try noteSpelledNamesInConditionalRegions(project, signatures: signatures, tracked: tracked, unread: unread, files: sources.stdlibFiles)
+	try noteSpelledNamesInConditionalRegions(project, signatures: signatures, tracked: tracked, unread: unread, files: sources.userFiles)
+end 'noteSpelledUnbuiltReferences'
+
+function unreadDeclSpellingsOf(tracked TrackedDecls, unauditedFiles LibrarySourcePathSet) returns TrackedDeclIndexMap
+	var spellings = TrackedDeclIndexMap.create()
+
+	for i in 0 upto tracked.entries.count() 'eachTracked'
+		let decl = tracked.at(i)
+
+		if decl.sawOutsideModule or unauditedFiles.contains(decl.declFile.pathText) 'readOrUnaudited'
+			continue
+		end 'readOrUnaudited'
+
+		tracked.indexUnder(spellings, key: decl.spelling(), at: i)
+	end 'eachTracked'
+
+	return spellings
+end 'unreadDeclSpellingsOf'
+
+function noteSpelledNamesInUnbuiltBodies(project Project, signatures ProgramSignatures, tracked TrackedDecls, unread TrackedDeclIndexMap, files FilePathArray) throws CompileError
+	for path in files 'eachFile'
+		view artifact = try queryParseOps(project, path: path)
+
+		if artifact.unbuiltBodies.isEmpty() 'everyBodyIsBuilt'
+			continue
+		end 'everyBodyIsBuilt'
+
+		let reader = tracked.fileOf(path, signatures: signatures)
+		view tokens = try queryActiveTokens(project, path: path)
+
+		for body in artifact.unbuiltBodies 'eachBody'
+			for at in body.first upto body.limit 'eachToken'
+				let token = try tokens.get(at) otherwise panic("noteSpelledNamesInUnbuiltBodies: token {at} of an unbuilt body is past the {tokens.count()} tokens the parse that recorded it read")
+
+				if token.kind == TokenKind.identifier 'aName'
+					noteSpelledName(tracked, name: token.value, unread: unread, reader: reader)
+				end 'aName'
+			end 'eachToken'
+		end 'eachBody'
+	end 'eachFile'
+end 'noteSpelledNamesInUnbuiltBodies'
+
+function noteSpelledNamesInConditionalRegions(project Project, signatures ProgramSignatures, tracked TrackedDecls, unread TrackedDeclIndexMap, files FilePathArray) throws CompileError
+	for path in files 'eachFile'
+		let spellings = try conditionalSpellingsOf(project, path: path)
+
+		if spellings.isEmpty() 'noConditionalRegion'
+			continue
+		end 'noConditionalRegion'
+
+		let reader = tracked.fileOf(path, signatures: signatures)
+
+		for spelling in spellings 'eachSpelling'
+			noteSpelledName(tracked, name: spelling, unread: unread, reader: reader)
+		end 'eachSpelling'
+	end 'eachFile'
+end 'noteSpelledNamesInConditionalRegions'
+
+function noteSpelledName(tracked TrackedDecls, name ByteArray, unread TrackedDeclIndexMap, reader AuditedFile)
+	let claimants = try unread.get(name) otherwise return
+
+	for at in claimants 'eachClaimant'
+		if tracked.at(at).isVisibleFrom(reader) 'theReaderCanNameIt'
+			noteRead(tracked, index: at, reader: reader)
+		end 'theReaderCanNameIt'
+	end 'eachClaimant'
+end 'noteSpelledName'
+
 // ── Matching a reference to a seeded declaration ─────────────────────────────────────────────────
 
 function noteFunctionName(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, reader AuditedFile)
@@ -1047,7 +1151,7 @@ function noteRead(tracked TrackedDecls, index ElementIndex, reader AuditedFile)
 	// through a library generic.
 	//
 	// ⚠ **ONE DIRECTION ONLY.** A library file reading a LIBRARY declaration is an ordinary reference, and it
-	// is what keeps `stdlib/String.maxon`'s `module` declarations audited (see this file's header).
+	// is what keeps the stdlib's `module` declarations audited (see this file's header).
 	if reader.isLibrary and not decl.declFile.isLibrary 'aLibraryBodyNamedNothingTheAuthorWrote'
 		return
 	end 'aLibraryBodyNamedNothingTheAuthorWrote'

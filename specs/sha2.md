@@ -327,7 +327,7 @@ end 'main'
 ```stdout
 ```
 ```stderr
-panic at Sha2.maxon:448: Digest.finalize was called after finalize
+panic at Sha2.maxon:429: Digest.finalize was called after finalize
 Stack trace:
   in Digest.requireOpen
   in Digest.finalize
@@ -351,7 +351,7 @@ end 'main'
 ```stdout
 ```
 ```stderr
-panic at Sha2.maxon:448: Digest.update was called after finalize
+panic at Sha2.maxon:429: Digest.update was called after finalize
 Stack trace:
   in Digest.requireOpen
   in Digest.update

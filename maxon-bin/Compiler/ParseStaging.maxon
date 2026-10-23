@@ -477,6 +477,60 @@ end 'cacheReadFunctionRangeCheckEntryArray'
 
 // @generated library-cache end
 
+export type UnbuiltBody
+	export let first as ElementIndex
+	export let limit as ElementIndex
+
+	export static function create(first ElementIndex, limit ElementIndex) returns UnbuiltBody
+		return Self{first: first, limit: limit}
+	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.first as CacheUnsigned)
+		writer.unsigned(self.limit as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns UnbuiltBody throws LibraryCacheDamage
+		let f_first = (try reader.unsigned()) as ElementIndex
+		let f_limit = (try reader.unsigned()) as ElementIndex
+
+		return Self{first: f_first, limit: f_limit}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(UnbuiltBody) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'UnbuiltBody'
+
+export typealias UnbuiltBodyArray = Array with UnbuiltBody
+
+// @generated library-cache begin
+function cacheWriteUnbuiltBodyArray(writer LibraryCacheWriter, value UnbuiltBodyArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteUnbuiltBodyArray'
+
+function cacheReadUnbuiltBodyArray(reader LibraryCacheReader) returns UnbuiltBodyArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = UnbuiltBodyArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try UnbuiltBody.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadUnbuiltBodyArray'
+
+// @generated library-cache end
+
 export type FileParseArtifact
 	// The file this artifact was parsed from (its identity + merge order anchor).
 	export var filePath as FilePath
@@ -651,6 +705,11 @@ export type FileParseArtifact
 	// `Parser.memberAccessedTypeNames`.
 	export var memberAccessedTypeNames as UsedTypeNameRoster
 
+	// The token ranges `[first, limit)` of this file's active stream whose bodies the parse skipped: a
+	// stdlib body no path from `main` reaches, and a generic function nothing instantiates.
+	// `checkUnusedExports` reads the names spelled there, because no op exists for them.
+	export var unbuiltBodies as UnbuiltBodyArray
+
 	// This file's `type X implements …` conformance declarations. Each carries the
 	// type-name token position so the whole-program `checkConformance` can anchor an E3015/E3016 on it.
 	// Remap-free (all names are plain ByteArrays). Folded into `project.conformances` by `mergeArtifact`.
@@ -761,6 +820,7 @@ export type FileParseArtifact
 			typeNameDecls: TypeNameDeclArray.create(),
 			usedTypeNames: noUsedTypeNames,
 			memberAccessedTypeNames: noUsedTypeNames,
+			unbuiltBodies: UnbuiltBodyArray.create(),
 			conformances: ConformanceDeclArray.create(),
 			literalInitSites: LiteralInitSiteArray.create(),
 			inferredInstantiationSites: GenericInstantiationSiteArray.create(),
@@ -1119,6 +1179,7 @@ export type FileParseArtifact
 		cacheWriteGenericFunctionInstanceArray(writer, value: self.genericInstanceRequests)
 		cacheWriteUsedTypeNameRoster(writer, value: self.usedTypeNames)
 		cacheWriteUsedTypeNameRoster(writer, value: self.memberAccessedTypeNames)
+		cacheWriteUnbuiltBodyArray(writer, value: self.unbuiltBodies)
 		cacheWriteConformanceDeclArray(writer, value: self.conformances)
 		cacheWriteLiteralInitSiteArray(writer, value: self.literalInitSites)
 		cacheWriteGenericInstantiationSiteArray(writer, value: self.inferredInstantiationSites)
@@ -1165,6 +1226,7 @@ export type FileParseArtifact
 		let f_genericInstanceRequests = try cacheReadGenericFunctionInstanceArray(reader)
 		let f_usedTypeNames = try cacheReadUsedTypeNameRoster(reader)
 		let f_memberAccessedTypeNames = try cacheReadUsedTypeNameRoster(reader)
+		let f_unbuiltBodies = try cacheReadUnbuiltBodyArray(reader)
 		let f_conformances = try cacheReadConformanceDeclArray(reader)
 		let f_literalInitSites = try cacheReadLiteralInitSiteArray(reader)
 		let f_inferredInstantiationSites = try cacheReadGenericInstantiationSiteArray(reader)
@@ -1177,11 +1239,11 @@ export type FileParseArtifact
 		let f_parseMints = try cacheReadParseMints(reader)
 		let f_instanceIdsInUse = try cacheReadGenericInstanceIdArray(reader)
 
-		return Self{filePath: f_filePath, livesUnderStdlibDirectory: f_livesUnderStdlibDirectory, typeIdsAreProjectGlobal: f_typeIdsAreProjectGlobal, module: f_module, opRanges: f_opRanges, covPoints: f_covPoints, asyncSpawnSites: f_asyncSpawnSites, overloadAnswers: f_overloadAnswers, serviceAwaitSites: f_serviceAwaitSites, registryUseSites: f_registryUseSites, allocTagSites: f_allocTagSites, debugStreamNameSites: f_debugStreamNameSites, immortalConstArraySites: f_immortalConstArraySites, valueOrigins: f_valueOrigins, deferredChains: f_deferredChains, funcSignatures: f_funcSignatures, overloadSets: f_overloadSets, pendingFnMergeChecks: f_pendingFnMergeChecks, pendingFunctionTypeDoors: f_pendingFunctionTypeDoors, pendingBrandRecords: f_pendingBrandRecords, pendingDiscardedResults: f_pendingDiscardedResults, rangeChecks: f_rangeChecks, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, structTypes: f_structTypes, writtenTupleTypes: f_writtenTupleTypes, enumTypes: f_enumTypes, interfaces: f_interfaces, typeNameDecls: f_typeNameDecls, genericInstanceRequests: f_genericInstanceRequests, usedTypeNames: f_usedTypeNames, memberAccessedTypeNames: f_memberAccessedTypeNames, conformances: f_conformances, literalInitSites: f_literalInitSites, inferredInstantiationSites: f_inferredInstantiationSites, typeNames: f_typeNames, currentFuncIndex: f_currentFuncIndex, diagnostics: f_diagnostics, unusedTypeAliases: f_unusedTypeAliases, hiddenTypeNames: f_hiddenTypeNames, bindingHygieneDiagnostics: f_bindingHygieneDiagnostics, parseMints: f_parseMints, instanceIdsInUse: f_instanceIdsInUse}
+		return Self{filePath: f_filePath, livesUnderStdlibDirectory: f_livesUnderStdlibDirectory, typeIdsAreProjectGlobal: f_typeIdsAreProjectGlobal, module: f_module, opRanges: f_opRanges, covPoints: f_covPoints, asyncSpawnSites: f_asyncSpawnSites, overloadAnswers: f_overloadAnswers, serviceAwaitSites: f_serviceAwaitSites, registryUseSites: f_registryUseSites, allocTagSites: f_allocTagSites, debugStreamNameSites: f_debugStreamNameSites, immortalConstArraySites: f_immortalConstArraySites, valueOrigins: f_valueOrigins, deferredChains: f_deferredChains, funcSignatures: f_funcSignatures, overloadSets: f_overloadSets, pendingFnMergeChecks: f_pendingFnMergeChecks, pendingFunctionTypeDoors: f_pendingFunctionTypeDoors, pendingBrandRecords: f_pendingBrandRecords, pendingDiscardedResults: f_pendingDiscardedResults, rangeChecks: f_rangeChecks, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, structTypes: f_structTypes, writtenTupleTypes: f_writtenTupleTypes, enumTypes: f_enumTypes, interfaces: f_interfaces, typeNameDecls: f_typeNameDecls, genericInstanceRequests: f_genericInstanceRequests, usedTypeNames: f_usedTypeNames, memberAccessedTypeNames: f_memberAccessedTypeNames, unbuiltBodies: f_unbuiltBodies, conformances: f_conformances, literalInitSites: f_literalInitSites, inferredInstantiationSites: f_inferredInstantiationSites, typeNames: f_typeNames, currentFuncIndex: f_currentFuncIndex, diagnostics: f_diagnostics, unusedTypeAliases: f_unusedTypeAliases, hiddenTypeNames: f_hiddenTypeNames, bindingHygieneDiagnostics: f_bindingHygieneDiagnostics, parseMints: f_parseMints, instanceIdsInUse: f_instanceIdsInUse}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize344
-		return sizeof(FileParseArtifact) as CacheSize344
+	static function cacheLayoutBytes() returns CacheSize352
+		return sizeof(FileParseArtifact) as CacheSize352
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
