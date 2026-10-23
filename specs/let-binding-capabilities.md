@@ -2070,3 +2070,138 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: let-binding-capabilities.a-var-moved-into-a-fresh-record-bound-by-a-let-is-accepted-beside-an-unrelated-module-var -->
+`shelf` is a module `var` of the same type as `box`, and `holder` holds `box`, a local `var` that is dead after `wrap` takes it: nothing `holder` holds is `shelf`'s record.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	function read() returns Count
+		return self.n
+	end 'read'
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+var shelf = Box.create(7)
+
+type Holder
+	var box as Box
+
+	static function wrap(box Box) returns Self
+		return Self{box: box}
+	end 'wrap'
+end 'Holder'
+
+function keep() returns Count
+	var box = Box.create(1)
+	let holder = Holder.wrap(box)
+	_ = holder
+	return 1
+end 'keep'
+
+function main() returns ExitCode
+	let kept = keep()
+	return (shelf.read() + kept) as ExitCode
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: let-binding-capabilities.a-let-of-a-fresh-record-literal-holding-a-parameter-is-accepted-beside-an-unrelated-module-var -->
+The literal `built` holds the parameter `box`, which is the caller's record and no module `var`'s; `shelf` is only another `Box`.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	function read() returns Count
+		return self.n
+	end 'read'
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+var shelf = Box.create(7)
+
+type Holder
+	var box as Box
+
+	static function wrap(box Box) returns Self
+		let built = Self{box: box}
+		return built
+	end 'wrap'
+end 'Holder'
+
+function main() returns ExitCode
+	let holder = Holder.wrap(Box.create(1))
+	_ = holder
+	return shelf.read() as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: let-binding-capabilities.error.a-var-a-function-stored-in-a-module-var-is-refused-when-a-fresh-record-takes-it-into-a-let -->
+`register` stores `box` in the module `var` `shelf`, so the `holder` that takes `box` still reaches a record `shelf` writes.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias BoxArray = Array with Box
+
+type Box
+	var n as Count
+
+	function read() returns Count
+		return self.n
+	end 'read'
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+var shelf = BoxArray.create()
+
+function register(b Box)
+	shelf.push(b)
+end 'register'
+
+type Holder
+	var box as Box
+
+	function peek() returns Count
+		return self.box.read()
+	end 'peek'
+
+	static function wrap(box Box) returns Self
+		return Self{box: box}
+	end 'wrap'
+end 'Holder'
+
+function keep() returns Count
+	var box = Box.create(1)
+	register(box)
+	let holder = Holder.wrap(box)
+	return holder.peek()
+end 'keep'
+
+function main() returns ExitCode
+	return keep() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3188: <fragment>:38:6: cannot bind `let` 'holder' to a value reached through 'box', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```

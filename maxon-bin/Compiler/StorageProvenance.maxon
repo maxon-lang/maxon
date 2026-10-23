@@ -1942,6 +1942,16 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return (try self.varMovedAt.get(rank) otherwise panic("ProvenanceTracer.varMovedBeforeDoor: varMovedAt.get OOB at {rank}")) <= self.doorToken
 	end 'varMovedBeforeDoor'
 
+	// A var's record that a call stored into a module `var` is still written through it after the var is
+	// moved into a fresh record, so the move does not take the var out of the count.
+	function varEscapedIntoWritableStorage(rank ElementIndex) returns bool
+		if rank < self.firstWritableValueRank or rank >= self.writableRank 'notAVarsRecord'
+			return false
+		end 'notAVarsRecord'
+
+		return self.sets.hasRank(self.escapedSet, rank: rank)
+	end 'varEscapedIntoWritableStorage'
+
 	function varGoneBeforeDoor(rank ElementIndex) returns bool
 		if self.varMovedBeforeDoor(rank) 'moved'
 			return true
@@ -3828,7 +3838,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 	function noteKept(func IrFunction, value ValueId, holders ParamPositionMask, destination KeepDestination, content KeptContent)
 		if self.tracingImmutableBindings 'aBindingsTrace'
-			if not self.valueIsAFreshTemporary(func, value: value) 'namedOrSharedElsewhere'
+			if not self.valueIsAFreshTemporary(func, value: value) and not self.keptWithinAFreshRecord(func, destination: destination) 'namedOrSharedElsewhere'
 				self.seedBit(ProvenanceColumn.placedWithin, value: value, rank: self.writableRank)
 			end 'namedOrSharedElsewhere'
 
@@ -3840,6 +3850,18 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			within(record) then self.pendingKeeps.push(PendingKeep.create(value, holders: holders, destination: self.recordHoldingAt(func, address: record), content: content))
 		end 'destination'
 	end 'noteKept'
+
+	// A record minted by this body is not module `var` storage, so a value kept within it is held by it and
+	// placed nowhere writable. Seeding the writable rank anyway makes every `let` that holds the value
+	// reach "a module variable" whenever a module `var`'s type shares a record kind with it.
+	function keptWithinAFreshRecord(func IrFunction, destination KeepDestination) returns bool
+		self.indexDefinitions(func, ir: self.module)
+
+		return match destination 'destination'
+			unknown gives false
+			within(record) gives self.recordIsMintedHere(func, base: self.sameRecordBase(func, ir: self.module, value: record), usesFreshReturns: true)
+		end 'destination'
+	end 'keptWithinAFreshRecord'
 
 	function keepWhereverItLands(func IrFunction, value ValueId, holders ParamPositionMask, content KeptContent)
 		self.markKeptEscape(func, value: value)
@@ -5832,7 +5854,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			let argument = try calledArgumentAt(op, sig: sig, position: position) otherwise continue
 
 			if let own = try self.writableRankOf(argument) 'aVarsOwnRecord'
-				if own < lowest and not self.varMovedBeforeDoor(own) and not self.isOutsideTheStoredContents(value, reach: reach, candidate: own) 'lower'
+				if own < lowest and not (self.varMovedBeforeDoor(own) and not self.varEscapedIntoWritableStorage(own)) and not self.isOutsideTheStoredContents(value, reach: reach, candidate: own) 'lower'
 					lowest = own
 				end 'lower'
 			end 'aVarsOwnRecord'
@@ -5862,7 +5884,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 							break
 						end 'pastTheLowest'
 
-						if maskHasParam(candidates, param: bit as ParamCount) and candidate != skipped and not self.isOutsideTheStoredContents(own, reach: reach, candidate: candidate) and not (self.varMovedBeforeDoor(candidate) if column == ProvenanceColumn.placedWithin else self.varGoneBeforeDoor(candidate)) and not self.isTheParameterItselfWrittenOnlyByACall(column, value: value, candidate: candidate) and self.writableRankAdmits(func, column: column, value: value, kinds: kinds, candidate: candidate) 'admitted'
+						if maskHasParam(candidates, param: bit as ParamCount) and candidate != skipped and not self.isOutsideTheStoredContents(own, reach: reach, candidate: candidate) and not ((self.varMovedBeforeDoor(candidate) if column == ProvenanceColumn.placedWithin else self.varGoneBeforeDoor(candidate)) and not self.varEscapedIntoWritableStorage(candidate)) and not self.isTheParameterItselfWrittenOnlyByACall(column, value: value, candidate: candidate) and self.writableRankAdmits(func, column: column, value: value, kinds: kinds, candidate: candidate) 'admitted'
 							lowest = candidate
 							break
 						end 'admitted'
