@@ -1,0 +1,605 @@
+public typealias TlsCipherSuiteCode = int(0 to u16.max) implements TlsWireValue
+public typealias TlsCompressionMethod = int(0 to u8.max) implements TlsWireValue
+public typealias TlsTicketLifetime = int(0 to u32.max) implements TlsWireValue
+public typealias TlsTicketAgeAdd = int(0 to u32.max) implements TlsWireValue
+public typealias TlsCipherSuiteCodeArray = Array with TlsCipherSuiteCode
+public typealias TlsCertificateDataArray = Array with ByteArray
+public typealias TlsCertificateEntryArray = Array with TlsCertificateEntry
+public typealias TlsAuthorityNameArray = Array with ByteArray
+
+let tlsRandomBytes = 32
+let tlsMaxSessionIdBytes = 32
+let tlsNamedCurveType = 3
+module let tlsTls13VersionCode = 0x0304
+let tlsHelloRetryRequestRandom = ByteArray from [0xCF, 0x21, 0xAD, 0x74, 0xE5, 0x9A, 0x61, 0x11, 0xBE, 0x1D, 0x8C, 0x02, 0x1E, 0x65, 0xB8, 0x91, 0xC2, 0xA2, 0x11, 0x16, 0x7A, 0xBB, 0x8C, 0x5E, 0x07, 0x9E, 0x09, 0xE2, 0xC8, 0xA8, 0x33, 0x9C]
+
+public enum TlsProtocol
+	tls13
+	tls12
+end 'TlsProtocol'
+
+public enum TlsCodecError implements Error
+	decodeError
+	illegalParameter
+	unexpectedMessage
+	missingExtension
+
+	public function alert() returns TlsAlert
+		return match self 'alert'
+			decodeError gives TlsAlert.decodeError
+			illegalParameter gives TlsAlert.illegalParameter
+			unexpectedMessage gives TlsAlert.unexpectedMessage
+			missingExtension gives TlsAlert.missingExtension
+		end 'alert'
+	end 'alert'
+end 'TlsCodecError'
+
+public enum TlsEncodeError implements Error
+	vectorTooLong
+end 'TlsEncodeError'
+
+public enum TlsKeyUpdateRequest
+	updateNotRequested = 0
+	updateRequested = 1
+end 'TlsKeyUpdateRequest'
+
+enum TlsHandshakeType
+	helloRequest = 0
+	clientHello = 1
+	serverHello = 2
+	newSessionTicket = 4
+	encryptedExtensions = 8
+	certificate = 11
+	serverKeyExchange = 12
+	certificateRequest = 13
+	serverHelloDone = 14
+	certificateVerify = 15
+	clientKeyExchange = 16
+	finished = 20
+	keyUpdate = 24
+
+	function isDefinedIn(protocol TlsProtocol) returns bool
+		return match self 'type'
+			helloRequest or
+			serverKeyExchange or
+			serverHelloDone or
+			clientKeyExchange gives protocol == TlsProtocol.tls12
+			newSessionTicket or
+			encryptedExtensions or
+			keyUpdate gives protocol == TlsProtocol.tls13
+			clientHello or
+			serverHello or
+			certificate or
+			certificateRequest or
+			certificateVerify or
+			finished gives true
+		end 'type'
+	end 'isDefinedIn'
+end 'TlsHandshakeType'
+
+public type TlsCertificateEntry
+	var certificate as ByteArray
+	var extensions as TlsExtensionArray
+
+	public function certificate() returns ByteArray
+		return certificate
+	end 'certificate'
+
+	public function extensions() returns TlsExtensionArray
+		return extensions
+	end 'extensions'
+
+	public static function create(certificate ByteArray, extensions TlsExtensionArray) returns TlsCertificateEntry
+		return Self{certificate: certificate, extensions: extensions}
+	end 'create'
+end 'TlsCertificateEntry'
+
+public type TlsClientHello
+	var legacyVersion as TlsVersionCode
+	var random as ByteArray
+	var legacySessionId as ByteArray
+	var cipherSuites as TlsCipherSuiteCodeArray
+	var compressionMethods as ByteArray
+	var extensions as TlsExtensionBlock
+
+	public function legacyVersion() returns TlsVersionCode
+		return legacyVersion
+	end 'legacyVersion'
+
+	public function random() returns ByteArray
+		return random
+	end 'random'
+
+	public function legacySessionId() returns ByteArray
+		return legacySessionId
+	end 'legacySessionId'
+
+	public function cipherSuites() returns TlsCipherSuiteCodeArray
+		return cipherSuites
+	end 'cipherSuites'
+
+	public function compressionMethods() returns ByteArray
+		return compressionMethods
+	end 'compressionMethods'
+
+	public function extensions() returns TlsExtensionBlock
+		return extensions
+	end 'extensions'
+
+	public static function create(legacyVersion TlsVersionCode, random ByteArray, legacySessionId ByteArray, cipherSuites TlsCipherSuiteCodeArray, compressionMethods ByteArray, extensions TlsExtensionBlock) returns TlsClientHello
+		return Self{legacyVersion: legacyVersion, random: random, legacySessionId: legacySessionId, cipherSuites: cipherSuites, compressionMethods: compressionMethods, extensions: extensions}
+	end 'create'
+end 'TlsClientHello'
+
+public type TlsServerHello
+	var legacyVersion as TlsVersionCode
+	var random as ByteArray
+	var legacySessionIdEcho as ByteArray
+	var cipherSuite as TlsCipherSuiteCode
+	var compressionMethod as TlsCompressionMethod
+	var extensions as TlsExtensionBlock
+
+	public function legacyVersion() returns TlsVersionCode
+		return legacyVersion
+	end 'legacyVersion'
+
+	public function random() returns ByteArray
+		return random
+	end 'random'
+
+	public function legacySessionIdEcho() returns ByteArray
+		return legacySessionIdEcho
+	end 'legacySessionIdEcho'
+
+	public function cipherSuite() returns TlsCipherSuiteCode
+		return cipherSuite
+	end 'cipherSuite'
+
+	public function compressionMethod() returns TlsCompressionMethod
+		return compressionMethod
+	end 'compressionMethod'
+
+	public function extensions() returns TlsExtensionBlock
+		return extensions
+	end 'extensions'
+
+	public static function create(legacyVersion TlsVersionCode, random ByteArray, legacySessionIdEcho ByteArray, cipherSuite TlsCipherSuiteCode, compressionMethod TlsCompressionMethod, extensions TlsExtensionBlock) returns TlsServerHello
+		return Self{legacyVersion: legacyVersion, random: random, legacySessionIdEcho: legacySessionIdEcho, cipherSuite: cipherSuite, compressionMethod: compressionMethod, extensions: extensions}
+	end 'create'
+end 'TlsServerHello'
+
+public type TlsNewSessionTicket
+	var lifetime as TlsTicketLifetime
+	var ageAdd as TlsTicketAgeAdd
+	var nonce as ByteArray
+	var ticket as ByteArray
+	var extensions as TlsExtensionArray
+
+	public function lifetime() returns TlsTicketLifetime
+		return lifetime
+	end 'lifetime'
+
+	public function ageAdd() returns TlsTicketAgeAdd
+		return ageAdd
+	end 'ageAdd'
+
+	public function nonce() returns ByteArray
+		return nonce
+	end 'nonce'
+
+	public function ticket() returns ByteArray
+		return ticket
+	end 'ticket'
+
+	public function extensions() returns TlsExtensionArray
+		return extensions
+	end 'extensions'
+
+	public static function create(lifetime TlsTicketLifetime, ageAdd TlsTicketAgeAdd, nonce ByteArray, ticket ByteArray, extensions TlsExtensionArray) returns TlsNewSessionTicket
+		return Self{lifetime: lifetime, ageAdd: ageAdd, nonce: nonce, ticket: ticket, extensions: extensions}
+	end 'create'
+end 'TlsNewSessionTicket'
+
+public type Tls12CertificateRequest
+	var certificateTypes as ByteArray
+	var signatureSchemes as TlsSignatureSchemeCodeArray
+	var authorities as TlsAuthorityNameArray
+
+	public function certificateTypes() returns ByteArray
+		return certificateTypes
+	end 'certificateTypes'
+
+	public function signatureSchemes() returns TlsSignatureSchemeCodeArray
+		return signatureSchemes
+	end 'signatureSchemes'
+
+	public function authorities() returns TlsAuthorityNameArray
+		return authorities
+	end 'authorities'
+
+	public static function create(certificateTypes ByteArray, signatureSchemes TlsSignatureSchemeCodeArray, authorities TlsAuthorityNameArray) returns Tls12CertificateRequest
+		return Self{certificateTypes: certificateTypes, signatureSchemes: signatureSchemes, authorities: authorities}
+	end 'create'
+end 'Tls12CertificateRequest'
+
+public type Tls12ServerKeyExchange
+	var namedGroup as TlsGroupCode
+	var publicKey as ByteArray
+	var signatureScheme as TlsSignatureSchemeCode
+	var signature as ByteArray
+
+	public function namedGroup() returns TlsGroupCode
+		return namedGroup
+	end 'namedGroup'
+
+	public function publicKey() returns ByteArray
+		return publicKey
+	end 'publicKey'
+
+	public function signatureScheme() returns TlsSignatureSchemeCode
+		return signatureScheme
+	end 'signatureScheme'
+
+	public function signature() returns ByteArray
+		return signature
+	end 'signature'
+
+	public static function create(namedGroup TlsGroupCode, publicKey ByteArray, signatureScheme TlsSignatureSchemeCode, signature ByteArray) returns Tls12ServerKeyExchange
+		return Self{namedGroup: namedGroup, publicKey: publicKey, signatureScheme: signatureScheme, signature: signature}
+	end 'create'
+end 'Tls12ServerKeyExchange'
+
+public union TlsHandshakeMessage
+	helloRequest
+	clientHello(hello TlsClientHello)
+	serverHello(hello TlsServerHello)
+	helloRetryRequest(hello TlsServerHello)
+	newSessionTicket(ticket TlsNewSessionTicket)
+	encryptedExtensions(extensions TlsExtensionArray)
+	tls13Certificate(requestContext ByteArray, entries TlsCertificateEntryArray)
+	tls12Certificate(certificates TlsCertificateDataArray)
+	tls13CertificateRequest(requestContext ByteArray, extensions TlsExtensionArray)
+	tls12CertificateRequest(request Tls12CertificateRequest)
+	certificateVerify(scheme TlsSignatureSchemeCode, signature ByteArray)
+	finished(verifyData ByteArray)
+	keyUpdate(request TlsKeyUpdateRequest)
+	serverKeyExchange(exchange Tls12ServerKeyExchange)
+	clientKeyExchange(publicKey ByteArray)
+	serverHelloDone
+
+	function handshakeType() returns TlsHandshakeType
+		return match self 'type'
+			helloRequest gives TlsHandshakeType.helloRequest
+			clientHello gives TlsHandshakeType.clientHello
+			serverHello or
+			helloRetryRequest gives TlsHandshakeType.serverHello
+			newSessionTicket gives TlsHandshakeType.newSessionTicket
+			encryptedExtensions gives TlsHandshakeType.encryptedExtensions
+			tls13Certificate or
+			tls12Certificate gives TlsHandshakeType.certificate
+			tls13CertificateRequest or
+			tls12CertificateRequest gives TlsHandshakeType.certificateRequest
+			certificateVerify gives TlsHandshakeType.certificateVerify
+			finished gives TlsHandshakeType.finished
+			keyUpdate gives TlsHandshakeType.keyUpdate
+			serverKeyExchange gives TlsHandshakeType.serverKeyExchange
+			clientKeyExchange gives TlsHandshakeType.clientKeyExchange
+			serverHelloDone gives TlsHandshakeType.serverHelloDone
+		end 'type'
+	end 'handshakeType'
+
+	function encodedBody() returns ByteArray throws TlsEncodeError
+		var body = ByteArray.create()
+
+		match self 'message'
+			helloRequest or
+			serverHelloDone then return body
+			clientHello(hello) then try appendClientHello(body, hello: hello)
+			serverHello(hello) then try appendServerHello(body, hello: hello)
+			helloRetryRequest(hello) then try appendServerHello(body, hello: hello)
+			newSessionTicket(ticket) then try appendNewSessionTicket(body, ticket: ticket)
+			encryptedExtensions(extensions) then try tlsAppendExtensions(body, extensions: extensions)
+			tls13Certificate(requestContext, entries) then try appendTls13Certificate(body, requestContext: requestContext, entries: entries)
+			tls12Certificate(certificates) then try appendTls12Certificate(body, certificates: certificates)
+			tls13CertificateRequest(requestContext, extensions) then try appendTls13CertificateRequest(body, requestContext: requestContext, extensions: extensions)
+			tls12CertificateRequest(request) then try appendTls12CertificateRequest(body, request: request)
+			certificateVerify(scheme, signature) then try appendCertificateVerify(body, scheme: scheme, signature: signature)
+			finished(verifyData) then body.append(verifyData)
+			keyUpdate(request) then appendUnsigned(body, value: request.rawValue as TlsWireValue, width: TlsWireWidth.uint8)
+			serverKeyExchange(exchange) then try appendServerKeyExchange(body, exchange: exchange)
+			clientKeyExchange(publicKey) then try appendVector(body, prefix: TlsLengthPrefix.uint8, contents: publicKey)
+		end 'message'
+
+		return body
+	end 'encodedBody'
+end 'TlsHandshakeMessage'
+
+public type TlsHandshakeCodec
+	public static function decode(message ByteArray, protocol TlsProtocol) returns TlsHandshakeMessage throws TlsCodecError
+		var header = TlsReader.over(message)
+		let typeCode = try header.readUnsigned(TlsWireWidth.uint8)
+		var body = TlsReader.over(try header.readVectorBytes(TlsLengthPrefix.uint24, minimum: tlsAnyLength))
+		try header.finish()
+
+		let kind = try TlsHandshakeType.fromRawValue(typeCode) otherwise throw TlsCodecError.unexpectedMessage
+
+		if not kind.isDefinedIn(protocol) 'undefined'
+			throw TlsCodecError.unexpectedMessage
+		end 'undefined'
+
+		let decoded = try decodeBody(kind, protocol: protocol, body: body)
+		try body.finish()
+
+		return decoded
+	end 'decode'
+
+	public static function encode(message TlsHandshakeMessage) returns ByteArray throws TlsEncodeError
+		var encoded = ByteArray.create()
+		appendUnsigned(encoded, value: message.handshakeType().rawValue as TlsWireValue, width: TlsWireWidth.uint8)
+		try appendVector(encoded, prefix: TlsLengthPrefix.uint24, contents: try message.encodedBody())
+
+		return encoded
+	end 'encode'
+end 'TlsHandshakeCodec'
+
+function decodeBody(kind TlsHandshakeType, protocol TlsProtocol, body TlsReader) returns TlsHandshakeMessage throws TlsCodecError
+	return match kind 'kind'
+		helloRequest gives TlsHandshakeMessage.helloRequest
+		clientHello gives try decodeClientHello(body)
+		serverHello gives try decodeServerHello(body)
+		newSessionTicket gives try decodeNewSessionTicket(body)
+		encryptedExtensions gives TlsHandshakeMessage.encryptedExtensions(try tlsReadExtensions(body, context: TlsExtensionContext.encryptedExtensions))
+		certificate gives try decodeCertificate(body, protocol: protocol)
+		serverKeyExchange gives try decodeServerKeyExchange(body)
+		certificateRequest gives try decodeCertificateRequest(body, protocol: protocol)
+		serverHelloDone gives TlsHandshakeMessage.serverHelloDone
+		certificateVerify gives try decodeCertificateVerify(body)
+		clientKeyExchange gives TlsHandshakeMessage.clientKeyExchange(try body.readVectorBytes(TlsLengthPrefix.uint8, minimum: tlsNonEmpty))
+		finished gives TlsHandshakeMessage.finished(body.readRemaining())
+		keyUpdate gives try decodeKeyUpdate(body)
+	end 'kind'
+end 'decodeBody'
+
+function decodeClientHello(body TlsReader) returns TlsHandshakeMessage throws TlsCodecError
+	let legacyVersion = (try body.readUnsigned(TlsWireWidth.uint16)) as TlsVersionCode
+	let random = try body.readBytes(tlsRandomBytes)
+	let sessionId = try body.readVectorBytes(TlsLengthPrefix.uint8, minimum: tlsAnyLength, maximum: tlsMaxSessionIdBytes)
+	var suites = try body.readCodePointList(TlsLengthPrefix.uint16, minimum: tlsNonEmpty, maximum: tlsMaxCodePointCount)
+	var cipherSuites = TlsCipherSuiteCodeArray.create()
+
+	while not suites.isAtEnd() 'eachSuite'
+		cipherSuites.push((try suites.readUnsigned(TlsWireWidth.uint16)) as TlsCipherSuiteCode)
+	end 'eachSuite'
+
+	let compressionMethods = try body.readVectorBytes(TlsLengthPrefix.uint8, minimum: tlsNonEmpty)
+	var extensions = TlsExtensionBlock.absent
+
+	if not body.isAtEnd() 'present'
+		extensions = TlsExtensionBlock.listed(try tlsReadExtensions(body, context: TlsExtensionContext.clientHello))
+	end 'present'
+
+	return TlsHandshakeMessage.clientHello(TlsClientHello.create(legacyVersion, random: random, legacySessionId: sessionId, cipherSuites: cipherSuites, compressionMethods: compressionMethods, extensions: extensions))
+end 'decodeClientHello'
+
+function decodeServerHello(body TlsReader) returns TlsHandshakeMessage throws TlsCodecError
+	let legacyVersion = (try body.readUnsigned(TlsWireWidth.uint16)) as TlsVersionCode
+	let random = try body.readBytes(tlsRandomBytes)
+	let sessionIdEcho = try body.readVectorBytes(TlsLengthPrefix.uint8, minimum: tlsAnyLength, maximum: tlsMaxSessionIdBytes)
+	let cipherSuite = (try body.readUnsigned(TlsWireWidth.uint16)) as TlsCipherSuiteCode
+	let compressionMethod = (try body.readUnsigned(TlsWireWidth.uint8)) as TlsCompressionMethod
+	let isRetry = random == tlsHelloRetryRequestRandom
+	var extensions = TlsExtensionBlock.absent
+
+	if not body.isAtEnd() 'present'
+		let raws = try tlsReadRawExtensions(body)
+		let context = serverHelloContext(raws, isRetry: isRetry)
+		let decoded = try tlsDecodeExtensions(raws, context: context)
+		try body.finish()
+		try tlsRequireTls13Selection(decoded)
+		extensions = TlsExtensionBlock.listed(decoded)
+	end 'present'
+
+	let hello = TlsServerHello.create(legacyVersion, random: random, legacySessionIdEcho: sessionIdEcho, cipherSuite: cipherSuite, compressionMethod: compressionMethod, extensions: extensions)
+
+	return TlsHandshakeMessage.helloRetryRequest(hello) if isRetry else TlsHandshakeMessage.serverHello(hello)
+end 'decodeServerHello'
+
+function serverHelloContext(raws TlsRawExtensionArray, isRetry bool) returns TlsExtensionContext
+	if isRetry 'retry'
+		return TlsExtensionContext.helloRetryRequest
+	end 'retry'
+
+	if tlsHasSupportedVersions(raws) 'tls13'
+		return TlsExtensionContext.serverHello
+	end 'tls13'
+
+	return TlsExtensionContext.serverHello12
+end 'serverHelloContext'
+
+function decodeNewSessionTicket(body TlsReader) returns TlsHandshakeMessage throws TlsCodecError
+	let lifetime = (try body.readUnsigned(TlsWireWidth.uint32)) as TlsTicketLifetime
+	let ageAdd = (try body.readUnsigned(TlsWireWidth.uint32)) as TlsTicketAgeAdd
+	let nonce = try body.readVectorBytes(TlsLengthPrefix.uint8, minimum: tlsAnyLength)
+	let ticket = try body.readVectorBytes(TlsLengthPrefix.uint16, minimum: tlsNonEmpty)
+	let extensions = try tlsReadExtensions(body, context: TlsExtensionContext.newSessionTicket)
+
+	return TlsHandshakeMessage.newSessionTicket(TlsNewSessionTicket.create(lifetime, ageAdd: ageAdd, nonce: nonce, ticket: ticket, extensions: extensions))
+end 'decodeNewSessionTicket'
+
+function decodeCertificate(body TlsReader, protocol TlsProtocol) returns TlsHandshakeMessage throws TlsCodecError
+	return match protocol 'protocol'
+		tls13 gives try decodeTls13Certificate(body)
+		tls12 gives try decodeTls12Certificate(body)
+	end 'protocol'
+end 'decodeCertificate'
+
+function decodeTls13Certificate(body TlsReader) returns TlsHandshakeMessage throws TlsCodecError
+	let requestContext = try body.readVectorBytes(TlsLengthPrefix.uint8, minimum: tlsAnyLength)
+	var list = try body.readVector(TlsLengthPrefix.uint24, minimum: tlsAnyLength)
+	var entries = TlsCertificateEntryArray.create()
+
+	while not list.isAtEnd() 'eachEntry'
+		let certificate = try list.readVectorBytes(TlsLengthPrefix.uint24, minimum: tlsNonEmpty)
+		let extensions = try tlsReadExtensions(list, context: TlsExtensionContext.certificateEntry)
+		entries.push(TlsCertificateEntry.create(certificate, extensions: extensions))
+	end 'eachEntry'
+
+	return TlsHandshakeMessage.tls13Certificate(requestContext, entries: entries)
+end 'decodeTls13Certificate'
+
+function decodeTls12Certificate(body TlsReader) returns TlsHandshakeMessage throws TlsCodecError
+	var list = try body.readVector(TlsLengthPrefix.uint24, minimum: tlsAnyLength)
+	var certificates = TlsCertificateDataArray.create()
+
+	while not list.isAtEnd() 'eachCertificate'
+		certificates.push(try list.readVectorBytes(TlsLengthPrefix.uint24, minimum: tlsNonEmpty))
+	end 'eachCertificate'
+
+	return TlsHandshakeMessage.tls12Certificate(certificates)
+end 'decodeTls12Certificate'
+
+function decodeCertificateRequest(body TlsReader, protocol TlsProtocol) returns TlsHandshakeMessage throws TlsCodecError
+	return match protocol 'protocol'
+		tls13 gives try decodeTls13CertificateRequest(body)
+		tls12 gives try decodeTls12CertificateRequest(body)
+	end 'protocol'
+end 'decodeCertificateRequest'
+
+function decodeTls13CertificateRequest(body TlsReader) returns TlsHandshakeMessage throws TlsCodecError
+	let requestContext = try body.readVectorBytes(TlsLengthPrefix.uint8, minimum: tlsAnyLength)
+	let extensions = try tlsReadExtensions(body, context: TlsExtensionContext.certificateRequest)
+	try body.finish()
+	try tlsRequireSignatureAlgorithms(extensions)
+
+	return TlsHandshakeMessage.tls13CertificateRequest(requestContext, extensions: extensions)
+end 'decodeTls13CertificateRequest'
+
+function decodeTls12CertificateRequest(body TlsReader) returns TlsHandshakeMessage throws TlsCodecError
+	let certificateTypes = try body.readVectorBytes(TlsLengthPrefix.uint8, minimum: tlsNonEmpty)
+	var schemes = try body.readCodePointList(TlsLengthPrefix.uint16, minimum: tlsNonEmpty, maximum: tlsMaxCodePointCount)
+	var list = try body.readVector(TlsLengthPrefix.uint16, minimum: tlsAnyLength)
+	var authorities = TlsAuthorityNameArray.create()
+
+	while not list.isAtEnd() 'eachAuthority'
+		authorities.push(try list.readVectorBytes(TlsLengthPrefix.uint16, minimum: tlsNonEmpty))
+	end 'eachAuthority'
+
+	return TlsHandshakeMessage.tls12CertificateRequest(Tls12CertificateRequest.create(certificateTypes, signatureSchemes: try tlsReadSignatureSchemes(schemes), authorities: authorities))
+end 'decodeTls12CertificateRequest'
+
+function decodeCertificateVerify(body TlsReader) returns TlsHandshakeMessage throws TlsCodecError
+	let scheme = (try body.readUnsigned(TlsWireWidth.uint16)) as TlsSignatureSchemeCode
+	let signature = try body.readVectorBytes(TlsLengthPrefix.uint16, minimum: tlsAnyLength)
+
+	return TlsHandshakeMessage.certificateVerify(scheme, signature: signature)
+end 'decodeCertificateVerify'
+
+function decodeKeyUpdate(body TlsReader) returns TlsHandshakeMessage throws TlsCodecError
+	let value = try body.readUnsigned(TlsWireWidth.uint8)
+	try body.finish()
+
+	let request = try TlsKeyUpdateRequest.fromRawValue(value) otherwise throw TlsCodecError.illegalParameter
+
+	return TlsHandshakeMessage.keyUpdate(request)
+end 'decodeKeyUpdate'
+
+function decodeServerKeyExchange(body TlsReader) returns TlsHandshakeMessage throws TlsCodecError
+	if (try body.readUnsigned(TlsWireWidth.uint8)) != tlsNamedCurveType 'curveType'
+		throw TlsCodecError.illegalParameter
+	end 'curveType'
+
+	let namedGroup = (try body.readUnsigned(TlsWireWidth.uint16)) as TlsGroupCode
+	let publicKey = try body.readVectorBytes(TlsLengthPrefix.uint8, minimum: tlsNonEmpty)
+	let scheme = (try body.readUnsigned(TlsWireWidth.uint16)) as TlsSignatureSchemeCode
+	let signature = try body.readVectorBytes(TlsLengthPrefix.uint16, minimum: tlsAnyLength)
+
+	return TlsHandshakeMessage.serverKeyExchange(Tls12ServerKeyExchange.create(namedGroup, publicKey: publicKey, signatureScheme: scheme, signature: signature))
+end 'decodeServerKeyExchange'
+
+function appendClientHello(body ByteArray, hello TlsClientHello) throws TlsEncodeError
+	appendUnsigned(body, value: hello.legacyVersion(), width: TlsWireWidth.uint16)
+	body.append(hello.random())
+	try appendVector(body, prefix: TlsLengthPrefix.uint8, contents: hello.legacySessionId())
+	try appendCipherSuites(body, suites: hello.cipherSuites())
+	try appendVector(body, prefix: TlsLengthPrefix.uint8, contents: hello.compressionMethods())
+	try tlsAppendExtensionBlock(body, block: hello.extensions())
+end 'appendClientHello'
+
+function appendCipherSuites(output ByteArray, suites TlsCipherSuiteCodeArray) throws TlsEncodeError
+	var list = ByteArray.create()
+
+	for suite in suites 'eachSuite'
+		appendUnsigned(list, value: suite, width: TlsWireWidth.uint16)
+	end 'eachSuite'
+
+	try appendVector(output, prefix: TlsLengthPrefix.uint16, contents: list)
+end 'appendCipherSuites'
+
+function appendServerHello(body ByteArray, hello TlsServerHello) throws TlsEncodeError
+	appendUnsigned(body, value: hello.legacyVersion(), width: TlsWireWidth.uint16)
+	body.append(hello.random())
+	try appendVector(body, prefix: TlsLengthPrefix.uint8, contents: hello.legacySessionIdEcho())
+	appendUnsigned(body, value: hello.cipherSuite(), width: TlsWireWidth.uint16)
+	appendUnsigned(body, value: hello.compressionMethod(), width: TlsWireWidth.uint8)
+	try tlsAppendExtensionBlock(body, block: hello.extensions())
+end 'appendServerHello'
+
+function appendNewSessionTicket(body ByteArray, ticket TlsNewSessionTicket) throws TlsEncodeError
+	appendUnsigned(body, value: ticket.lifetime(), width: TlsWireWidth.uint32)
+	appendUnsigned(body, value: ticket.ageAdd(), width: TlsWireWidth.uint32)
+	try appendVector(body, prefix: TlsLengthPrefix.uint8, contents: ticket.nonce())
+	try appendVector(body, prefix: TlsLengthPrefix.uint16, contents: ticket.ticket())
+	try tlsAppendExtensions(body, extensions: ticket.extensions())
+end 'appendNewSessionTicket'
+
+function appendTls13Certificate(body ByteArray, requestContext ByteArray, entries TlsCertificateEntryArray) throws TlsEncodeError
+	var list = ByteArray.create()
+
+	for entry in entries 'eachEntry'
+		try appendVector(list, prefix: TlsLengthPrefix.uint24, contents: entry.certificate())
+		try tlsAppendExtensions(list, extensions: entry.extensions())
+	end 'eachEntry'
+
+	try appendVector(body, prefix: TlsLengthPrefix.uint8, contents: requestContext)
+	try appendVector(body, prefix: TlsLengthPrefix.uint24, contents: list)
+end 'appendTls13Certificate'
+
+function appendTls12Certificate(body ByteArray, certificates TlsCertificateDataArray) throws TlsEncodeError
+	var list = ByteArray.create()
+
+	for certificate in certificates 'eachCertificate'
+		try appendVector(list, prefix: TlsLengthPrefix.uint24, contents: certificate)
+	end 'eachCertificate'
+
+	try appendVector(body, prefix: TlsLengthPrefix.uint24, contents: list)
+end 'appendTls12Certificate'
+
+function appendTls13CertificateRequest(body ByteArray, requestContext ByteArray, extensions TlsExtensionArray) throws TlsEncodeError
+	try appendVector(body, prefix: TlsLengthPrefix.uint8, contents: requestContext)
+	try tlsAppendExtensions(body, extensions: extensions)
+end 'appendTls13CertificateRequest'
+
+function appendTls12CertificateRequest(body ByteArray, request Tls12CertificateRequest) throws TlsEncodeError
+	var list = ByteArray.create()
+
+	for authority in request.authorities() 'eachAuthority'
+		try appendVector(list, prefix: TlsLengthPrefix.uint16, contents: authority)
+	end 'eachAuthority'
+
+	try appendVector(body, prefix: TlsLengthPrefix.uint8, contents: request.certificateTypes())
+	try tlsAppendSignatureSchemes(body, schemes: request.signatureSchemes())
+	try appendVector(body, prefix: TlsLengthPrefix.uint16, contents: list)
+end 'appendTls12CertificateRequest'
+
+function appendCertificateVerify(body ByteArray, scheme TlsSignatureSchemeCode, signature ByteArray) throws TlsEncodeError
+	appendUnsigned(body, value: scheme, width: TlsWireWidth.uint16)
+	try appendVector(body, prefix: TlsLengthPrefix.uint16, contents: signature)
+end 'appendCertificateVerify'
+
+function appendServerKeyExchange(body ByteArray, exchange Tls12ServerKeyExchange) throws TlsEncodeError
+	appendUnsigned(body, value: tlsNamedCurveType, width: TlsWireWidth.uint8)
+	appendUnsigned(body, value: exchange.namedGroup(), width: TlsWireWidth.uint16)
+	try appendVector(body, prefix: TlsLengthPrefix.uint8, contents: exchange.publicKey())
+	appendUnsigned(body, value: exchange.signatureScheme(), width: TlsWireWidth.uint16)
+	try appendVector(body, prefix: TlsLengthPrefix.uint16, contents: exchange.signature())
+end 'appendServerKeyExchange'

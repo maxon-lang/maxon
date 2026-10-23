@@ -954,6 +954,141 @@ end 'main'
 
 Output: `27 23 5`.
 
+## TlsHandshakeCodec
+
+`TlsHandshakeCodec` encodes and strictly decodes the handshake messages of TLS 1.3 (RFC 8446 section 4) and
+TLS 1.2 (RFC 5246 section 7.4): ClientHello, ServerHello and HelloRetryRequest, EncryptedExtensions,
+Certificate, CertificateRequest, CertificateVerify, Finished, NewSessionTicket and KeyUpdate, and for TLS 1.2
+HelloRequest, ServerKeyExchange and ClientKeyExchange (ECDHE with a named curve) and ServerHelloDone. A message
+is one complete handshake message, the 4-byte header and the body.
+
+| Function | Returns | Throws | Description |
+|----------|---------|--------|-------------|
+| `TlsHandshakeCodec.decode(message ByteArray, protocol TlsProtocol)` | `TlsHandshakeMessage` | `TlsCodecError` | The message, or the error that names the alert to send. `TlsProtocol` is `tls13` or `tls12`: it decides which message types exist and the layout of Certificate and CertificateRequest. |
+| `TlsHandshakeCodec.encode(message TlsHandshakeMessage)` | `ByteArray` | `TlsEncodeError` | The message with minimal-width length prefixes and its 4-byte header. `encode(decode(m)) == m` for every `m` that decodes. |
+
+`TlsHandshakeMessage` has one case per message layout:
+
+| Case | Message |
+|------|---------|
+| `helloRequest`, `serverHelloDone` | TLS 1.2, empty body |
+| `clientHello(hello TlsClientHello)` | ClientHello, either protocol |
+| `serverHello(hello TlsServerHello)` | ServerHello |
+| `helloRetryRequest(hello TlsServerHello)` | A ServerHello whose random is the RFC 8446 section 4.1.3 HelloRetryRequest value |
+| `newSessionTicket(ticket TlsNewSessionTicket)` | TLS 1.3 NewSessionTicket |
+| `encryptedExtensions(extensions TlsExtensionArray)` | TLS 1.3 EncryptedExtensions |
+| `tls13Certificate(requestContext ByteArray, entries TlsCertificateEntryArray)` | TLS 1.3 Certificate: a request context and entries of a DER certificate and its extensions |
+| `tls12Certificate(certificates TlsCertificateDataArray)` | TLS 1.2 Certificate: the DER certificates |
+| `tls13CertificateRequest(requestContext ByteArray, extensions TlsExtensionArray)` | TLS 1.3 CertificateRequest |
+| `tls12CertificateRequest(request Tls12CertificateRequest)` | TLS 1.2 CertificateRequest |
+| `certificateVerify(scheme TlsSignatureSchemeCode, signature ByteArray)` | CertificateVerify, either protocol |
+| `finished(verifyData ByteArray)` | Finished, either protocol; the whole body, any length |
+| `keyUpdate(request TlsKeyUpdateRequest)` | TLS 1.3 KeyUpdate: `updateNotRequested` (0) or `updateRequested` (1) |
+| `serverKeyExchange(exchange Tls12ServerKeyExchange)` | TLS 1.2 ServerKeyExchange; the curve type is always named_curve (3) |
+| `clientKeyExchange(publicKey ByteArray)` | TLS 1.2 ClientKeyExchange |
+
+A message of more than two fields is a record, built by its `create` (a first argument unlabelled, the others
+named in the order below) and read by a function of each field's name:
+
+| Record | Fields |
+|--------|--------|
+| `TlsClientHello` | `legacyVersion` (`TlsVersionCode`), `random`, `legacySessionId`, `cipherSuites` (`TlsCipherSuiteCodeArray`), `compressionMethods`, `extensions` (`TlsExtensionBlock`) |
+| `TlsServerHello` | `legacyVersion`, `random`, `legacySessionIdEcho`, `cipherSuite` (`TlsCipherSuiteCode`), `compressionMethod` (`TlsCompressionMethod`), `extensions` (`TlsExtensionBlock`) |
+| `TlsNewSessionTicket` | `lifetime` (`TlsTicketLifetime`), `ageAdd` (`TlsTicketAgeAdd`), `nonce`, `ticket`, `extensions` (`TlsExtensionArray`) |
+| `Tls12CertificateRequest` | `certificateTypes`, `signatureSchemes` (`TlsSignatureSchemeCodeArray`), `authorities` (`TlsAuthorityNameArray`, DER names) |
+| `Tls12ServerKeyExchange` | `namedGroup` (`TlsGroupCode`), `publicKey`, `signatureScheme` (`TlsSignatureSchemeCode`), `signature` |
+| `TlsCertificateEntry` | `certificate`, `extensions` (`TlsExtensionArray`) |
+| `TlsKeyShare` | `group` (`TlsGroupCode`), `keyExchange` |
+
+A ClientHello or ServerHello holds a `TlsExtensionBlock`: `absent` when the message ends after its fixed fields
+(legal in TLS 1.2), or `listed(extensions)`, possibly an empty list. A `TlsExtension` is one of these decoded
+forms or `opaque(extensionType TlsExtensionType, data ByteArray)`, which keeps the exact bytes of every other
+extension in wire order, so a transcript re-encodes byte for byte:
+
+| `TlsExtension` case | Extension |
+|---------------------|-----------|
+| `serverName(hostName String)` | server_name in a ClientHello: one host name of 1 to 65535 bytes of 0x21 to 0x7E, not ending in `.` |
+| `serverNameAcknowledgement` | server_name in any other message, with empty data |
+| `supportedGroups(groups TlsGroupCodeArray)` | supported_groups, non-empty |
+| `ecPointFormats(formats ByteArray)` | ec_point_formats, 1 to 255 bytes |
+| `signatureAlgorithms(schemes TlsSignatureSchemeCodeArray)` | signature_algorithms, non-empty |
+| `applicationProtocols(protocols TlsProtocolNameArray)` | application_layer_protocol_negotiation: names of 1 to 255 bytes, non-empty in a ClientHello, exactly one elsewhere |
+| `extendedMasterSecret` | extended_master_secret, empty data |
+| `supportedVersions(versions TlsVersionCodeArray)` | supported_versions in a ClientHello, 1 to 127 versions |
+| `selectedVersion(version TlsVersionCode)` | supported_versions in a ServerHello or HelloRetryRequest |
+| `cookie(cookie ByteArray)` | cookie, 1 to 65535 bytes |
+| `clientKeyShares(shares TlsKeyShareArray)` | key_share in a ClientHello: possibly no shares, distinct groups |
+| `serverKeyShare(share TlsKeyShare)` | key_share in a ServerHello |
+| `selectedGroup(group TlsGroupCode)` | key_share in a HelloRetryRequest |
+| `renegotiationInfo(renegotiatedConnection ByteArray)` | renegotiation_info, 0 to 255 bytes |
+
+`extensionType()` is the extension's type code. The other extensions, including certificate_authorities, are
+`opaque`; in a TLS 1.2 ServerHello only server_name, ec_point_formats, ALPN, extended_master_secret and
+renegotiation_info are decoded. A TLS 1.3 message refuses an extension outside the placement of RFC 8446
+section 4.2, whether the codec decodes it or not.
+
+`decode` reads every vector against the range its table allows and reports the first failure in wire order, except
+the three checks that need the whole body. `TlsCodecError` has four cases, each naming the alert to send with
+`alert()`, a [`TlsAlert`](#tlshandshakecodec):
+
+| `TlsCodecError` case | Alert | When |
+|----------------------|-------|------|
+| `decodeError` | `decodeError` | Truncated or trailing bytes, a length outside its range, or an invalid value inside an extension. |
+| `illegalParameter` | `illegalParameter` | A duplicate extension, an extension outside its placement, a duplicate key_share group, a ServerKeyExchange curve type other than named_curve, a KeyUpdate value above 1, or a ServerHello or HelloRetryRequest selecting a version other than TLS 1.3. |
+| `unexpectedMessage` | `unexpectedMessage` | A message type the protocol does not define, including end_of_early_data and message_hash. |
+| `missingExtension` | `missingExtension` | A TLS 1.3 CertificateRequest without signature_algorithms. |
+
+A ServerHello whose random is the HelloRetryRequest value is decoded with the HelloRetryRequest placements; any
+other ServerHello with a supported_versions extension with the TLS 1.3 ServerHello placements; one without it is
+a TLS 1.2 ServerHello. `encode` performs no validation beyond the length prefixes: it throws
+`TlsEncodeError.vectorTooLong` for a field that does not fit its uint8, uint16 or uint24 prefix, and encodes a message
+that would not decode (an empty cipher suite list, a 40-byte session id) as given.
+
+`TlsAlert` is every alert description of RFC 8446 section 6, with its code point as the raw value: `closeNotify` (0),
+`unexpectedMessage` (10), `badRecordMac` (20), `recordOverflow` (22), `handshakeFailure` (40), `badCertificate` (42),
+`unsupportedCertificate` (43), `certificateRevoked` (44), `certificateExpired` (45), `certificateUnknown` (46),
+`illegalParameter` (47), `unknownCa` (48), `accessDenied` (49), `decodeError` (50), `decryptError` (51),
+`protocolVersion` (70), `insufficientSecurity` (71), `internalError` (80), `inappropriateFallback` (86),
+`userCanceled` (90), `noRenegotiation` (100), `missingExtension` (109), `unsupportedExtension` (110),
+`unrecognizedName` (112), `badCertificateStatusResponse` (113), `unknownPskIdentity` (115),
+`certificateRequired` (116) and `noApplicationProtocol` (120).
+
+The code point aliases are `TlsVersionCode`, `TlsCipherSuiteCode`, `TlsGroupCode`, `TlsSignatureSchemeCode` and
+`TlsExtensionType`, each `int(0 to u16.max)`; `TlsCompressionMethod` is `int(0 to u8.max)` and `TlsTicketLifetime` and
+`TlsTicketAgeAdd` are `int(0 to u32.max)`. Their arrays are `TlsVersionCodeArray`, `TlsCipherSuiteCodeArray`,
+`TlsGroupCodeArray`, `TlsSignatureSchemeCodeArray`, `TlsProtocolNameArray`, `TlsKeyShareArray`, `TlsExtensionArray`,
+`TlsCertificateDataArray`, `TlsCertificateEntryArray` and `TlsAuthorityNameArray`. A code point is carried as sent:
+the codec does not interpret `legacyVersion`, the cipher suites, the groups or the compression methods.
+
+```maxon
+function main() returns ExitCode
+	var random = ByteArray.create()
+	random.resize(32)
+
+	let hello = TlsClientHello.create(771, random: random, legacySessionId: ByteArray.create(), cipherSuites: TlsCipherSuiteCodeArray from [4865], compressionMethods: ByteArray from [0], extensions: TlsExtensionBlock.listed(TlsExtensionArray from [TlsExtension.serverName("example.com")]))
+	let encoded = try TlsHandshakeCodec.encode(TlsHandshakeMessage.clientHello(hello)) otherwise return 1
+	print("{encoded.count()}\n")
+
+	let update = try TlsHandshakeCodec.encode(TlsHandshakeMessage.keyUpdate(TlsKeyUpdateRequest.updateRequested)) otherwise return 1
+	let message = try TlsHandshakeCodec.decode(update, protocol: TlsProtocol.tls13) otherwise return 1
+
+	match message 'kind'
+		keyUpdate(request) then print("{request.rawValue}\n")
+		default panic("a KeyUpdate decodes to keyUpdate")
+	end 'kind'
+
+	let bad = ByteArray from [0x18, 0, 0, 1, 2]
+
+	try TlsHandshakeCodec.decode(bad, protocol: TlsProtocol.tls13) otherwise (failure) 'refused'
+		print("{failure} {failure.alert().rawValue}\n")
+	end 'refused'
+
+	return 0
+end 'main'
+```
+
+Output: `67`, `1` and `illegalParameter 47`, one per line.
+
 ## Hasher
 
 `Hasher` is an incremental FNV-1a 64-bit hash, for content keys and cache digests. It is not cryptographic.

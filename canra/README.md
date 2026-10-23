@@ -39,3 +39,4 @@ of the spec here.
 | `tls13-key-schedule` | `stdlib/Tls13KeySchedule.maxon` | `specs/tls13-key-schedule.md` |
 | `tls12-prf` | `stdlib/Tls12Prf.maxon` | `specs/tls12-prf.md` |
 | `tls-record` | `stdlib/TlsRecordProtection.maxon` | `specs/tls-record.md` |
+| `tls-handshake-codec` | `stdlib/TlsHandshakeMessage.maxon` | `specs/tls-handshake-codec.md` |

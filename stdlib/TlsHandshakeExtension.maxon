@@ -1,0 +1,559 @@
+public typealias TlsVersionCode = int(0 to u16.max) implements TlsWireValue
+public typealias TlsGroupCode = int(0 to u16.max) implements TlsWireValue
+public typealias TlsSignatureSchemeCode = int(0 to u16.max) implements TlsWireValue
+public typealias TlsExtensionType = int(0 to u16.max) implements TlsWireValue
+public typealias TlsVersionCodeArray = Array with TlsVersionCode
+public typealias TlsGroupCodeArray = Array with TlsGroupCode
+public typealias TlsSignatureSchemeCodeArray = Array with TlsSignatureSchemeCode
+public typealias TlsProtocolNameArray = Array with ByteArray
+public typealias TlsKeyShareArray = Array with TlsKeyShare
+public typealias TlsExtensionArray = Array with TlsExtension
+
+module typealias TlsRawExtensionArray = Array with TlsRawExtension
+typealias TlsExtensionTypeSet = Set with TlsExtensionType
+typealias TlsGroupCodeSet = Set with TlsGroupCode
+
+let tlsNameTypeHostName = 0
+let tlsHostNameFirst = 0x21
+let tlsHostNameLast = 0x7E
+let tlsDot = 0x2E
+let tlsMaxVersionCount = 127
+let tlsMinProtocolListBytes = 2
+let tlsServerProtocolCount = 1
+
+public type TlsKeyShare
+	var group as TlsGroupCode
+	var keyExchange as ByteArray
+
+	public function group() returns TlsGroupCode
+		return group
+	end 'group'
+
+	public function keyExchange() returns ByteArray
+		return keyExchange
+	end 'keyExchange'
+
+	public static function create(group TlsGroupCode, keyExchange ByteArray) returns TlsKeyShare
+		return Self{group: group, keyExchange: keyExchange}
+	end 'create'
+end 'TlsKeyShare'
+
+public union TlsExtension
+	serverName(hostName String)
+	serverNameAcknowledgement
+	supportedGroups(groups TlsGroupCodeArray)
+	ecPointFormats(formats ByteArray)
+	signatureAlgorithms(schemes TlsSignatureSchemeCodeArray)
+	applicationProtocols(protocols TlsProtocolNameArray)
+	extendedMasterSecret
+	supportedVersions(versions TlsVersionCodeArray)
+	selectedVersion(version TlsVersionCode)
+	cookie(cookie ByteArray)
+	clientKeyShares(shares TlsKeyShareArray)
+	serverKeyShare(share TlsKeyShare)
+	selectedGroup(group TlsGroupCode)
+	renegotiationInfo(renegotiatedConnection ByteArray)
+	opaque(extensionType TlsExtensionType, data ByteArray)
+
+	public function extensionType() returns TlsExtensionType
+		return match self 'kind'
+			serverName or
+			serverNameAcknowledgement gives TlsExtensionKind.serverName.code()
+			supportedGroups gives TlsExtensionKind.supportedGroups.code()
+			ecPointFormats gives TlsExtensionKind.ecPointFormats.code()
+			signatureAlgorithms gives TlsExtensionKind.signatureAlgorithms.code()
+			applicationProtocols gives TlsExtensionKind.applicationLayerProtocolNegotiation.code()
+			extendedMasterSecret gives TlsExtensionKind.extendedMasterSecret.code()
+			supportedVersions or
+			selectedVersion gives TlsExtensionKind.supportedVersions.code()
+			cookie gives TlsExtensionKind.cookie.code()
+			clientKeyShares or
+			serverKeyShare or
+			selectedGroup gives TlsExtensionKind.keyShare.code()
+			renegotiationInfo gives TlsExtensionKind.renegotiationInfo.code()
+			opaque(extensionType, _) gives extensionType
+		end 'kind'
+	end 'extensionType'
+end 'TlsExtension'
+
+public union TlsExtensionBlock
+	absent
+	listed(extensions TlsExtensionArray)
+end 'TlsExtensionBlock'
+
+module enum TlsExtensionKind
+	serverName = 0
+	maxFragmentLength = 1
+	statusRequest = 5
+	supportedGroups = 10
+	ecPointFormats = 11
+	signatureAlgorithms = 13
+	useSrtp = 14
+	heartbeat = 15
+	applicationLayerProtocolNegotiation = 16
+	signedCertificateTimestamp = 18
+	clientCertificateType = 19
+	serverCertificateType = 20
+	padding = 21
+	extendedMasterSecret = 23
+	recordSizeLimit = 28
+	preSharedKey = 41
+	earlyData = 42
+	supportedVersions = 43
+	cookie = 44
+	pskKeyExchangeModes = 45
+	certificateAuthorities = 47
+	oidFilters = 48
+	postHandshakeAuth = 49
+	signatureAlgorithmsCert = 50
+	keyShare = 51
+	renegotiationInfo = 65281
+
+	function code() returns TlsExtensionType
+		return self.rawValue as TlsExtensionType
+	end 'code'
+
+	function isDecodedInTls12ServerHello() returns bool
+		return self == TlsExtensionKind.serverName or self == TlsExtensionKind.ecPointFormats or self == TlsExtensionKind.applicationLayerProtocolNegotiation or self == TlsExtensionKind.extendedMasterSecret or self == TlsExtensionKind.renegotiationInfo
+	end 'isDecodedInTls12ServerHello'
+end 'TlsExtensionKind'
+
+module enum TlsExtensionContext
+	clientHello
+	serverHello
+	helloRetryRequest
+	serverHello12
+	encryptedExtensions
+	certificateEntry
+	certificateRequest
+	newSessionTicket
+
+	function allows(kind TlsExtensionKind) returns bool
+		return match self 'context'
+			clientHello gives kind != TlsExtensionKind.oidFilters
+			serverHello gives kind == TlsExtensionKind.preSharedKey or kind == TlsExtensionKind.supportedVersions or kind == TlsExtensionKind.keyShare
+			helloRetryRequest gives kind == TlsExtensionKind.supportedVersions or kind == TlsExtensionKind.cookie or kind == TlsExtensionKind.keyShare
+			serverHello12 gives true
+			encryptedExtensions gives kind == TlsExtensionKind.serverName or kind == TlsExtensionKind.maxFragmentLength or kind == TlsExtensionKind.supportedGroups or kind == TlsExtensionKind.useSrtp or kind == TlsExtensionKind.heartbeat or kind == TlsExtensionKind.applicationLayerProtocolNegotiation or kind == TlsExtensionKind.clientCertificateType or kind == TlsExtensionKind.serverCertificateType or kind == TlsExtensionKind.recordSizeLimit or kind == TlsExtensionKind.earlyData
+			certificateEntry gives kind == TlsExtensionKind.statusRequest or kind == TlsExtensionKind.signedCertificateTimestamp
+			certificateRequest gives kind == TlsExtensionKind.statusRequest or kind == TlsExtensionKind.signedCertificateTimestamp or kind == TlsExtensionKind.signatureAlgorithms or kind == TlsExtensionKind.certificateAuthorities or kind == TlsExtensionKind.oidFilters or kind == TlsExtensionKind.signatureAlgorithmsCert
+			newSessionTicket gives kind == TlsExtensionKind.earlyData
+		end 'context'
+	end 'allows'
+end 'TlsExtensionContext'
+
+module type TlsRawExtension
+	var extensionType as TlsExtensionType
+	var data as ByteArray
+
+	function extensionType() returns TlsExtensionType
+		return extensionType
+	end 'extensionType'
+
+	function data() returns ByteArray
+		return data
+	end 'data'
+
+	static function create(extensionType TlsExtensionType, data ByteArray) returns TlsRawExtension
+		return Self{extensionType: extensionType, data: data}
+	end 'create'
+end 'TlsRawExtension'
+
+module function tlsReadExtensions(reader TlsReader, context TlsExtensionContext) returns TlsExtensionArray throws TlsCodecError
+	return try tlsDecodeExtensions(try tlsReadRawExtensions(reader), context: context)
+end 'tlsReadExtensions'
+
+module function tlsReadRawExtensions(reader TlsReader) returns TlsRawExtensionArray throws TlsCodecError
+	var block = try reader.readVector(TlsLengthPrefix.uint16, minimum: tlsAnyLength)
+	var raws = TlsRawExtensionArray.create()
+
+	while not block.isAtEnd() 'eachExtension'
+		let extensionType = (try block.readUnsigned(TlsWireWidth.uint16)) as TlsExtensionType
+		let data = try block.readVectorBytes(TlsLengthPrefix.uint16, minimum: tlsAnyLength)
+		raws.push(TlsRawExtension.create(extensionType, data: data))
+	end 'eachExtension'
+
+	return raws
+end 'tlsReadRawExtensions'
+
+module function tlsDecodeExtensions(raws TlsRawExtensionArray, context TlsExtensionContext) returns TlsExtensionArray throws TlsCodecError
+	var seen = TlsExtensionTypeSet.create()
+	var decoded = TlsExtensionArray.create()
+
+	for raw in raws 'eachExtension'
+		if seen.contains(raw.extensionType()) 'duplicate'
+			throw TlsCodecError.illegalParameter
+		end 'duplicate'
+
+		seen.insert(raw.extensionType())
+		decoded.push(try decodeExtension(raw, context: context))
+	end 'eachExtension'
+
+	return decoded
+end 'tlsDecodeExtensions'
+
+function decodeExtension(raw TlsRawExtension, context TlsExtensionContext) returns TlsExtension throws TlsCodecError
+	let kind = try TlsExtensionKind.fromRawValue(raw.extensionType()) otherwise return TlsExtension.opaque(raw.extensionType(), data: raw.data())
+
+	if not context.allows(kind) 'placement'
+		throw TlsCodecError.illegalParameter
+	end 'placement'
+
+	if context == TlsExtensionContext.serverHello12 and not kind.isDecodedInTls12ServerHello() 'undecoded'
+		return TlsExtension.opaque(raw.extensionType(), data: raw.data())
+	end 'undecoded'
+
+	var data = TlsReader.over(raw.data())
+
+	return match kind 'kind'
+		serverName gives try decodeServerName(data, context: context)
+		supportedGroups gives try decodeSupportedGroups(data)
+		ecPointFormats gives try decodeEcPointFormats(data)
+		signatureAlgorithms gives try decodeSignatureAlgorithms(data)
+		applicationLayerProtocolNegotiation gives try decodeApplicationProtocols(data, context: context)
+		extendedMasterSecret gives try decodeExtendedMasterSecret(data)
+		supportedVersions gives try decodeSupportedVersions(data, context: context)
+		cookie gives try decodeCookie(data)
+		keyShare gives try decodeKeyShare(data, context: context)
+		renegotiationInfo gives try decodeRenegotiationInfo(data)
+		maxFragmentLength or
+		statusRequest or
+		useSrtp or
+		heartbeat or
+		signedCertificateTimestamp or
+		clientCertificateType or
+		serverCertificateType or
+		padding or
+		recordSizeLimit or
+		preSharedKey or
+		earlyData or
+		pskKeyExchangeModes or
+		certificateAuthorities or
+		oidFilters or
+		postHandshakeAuth or
+		signatureAlgorithmsCert gives TlsExtension.opaque(raw.extensionType(), data: raw.data())
+	end 'kind'
+end 'decodeExtension'
+
+function decodeServerName(data TlsReader, context TlsExtensionContext) returns TlsExtension throws TlsCodecError
+	if context != TlsExtensionContext.clientHello 'acknowledgement'
+		try data.finish()
+
+		return TlsExtension.serverNameAcknowledgement
+	end 'acknowledgement'
+
+	var list = try data.readVector(TlsLengthPrefix.uint16, minimum: tlsNonEmpty)
+	try data.finish()
+
+	if (try list.readUnsigned(TlsWireWidth.uint8)) != tlsNameTypeHostName 'nameType'
+		throw TlsCodecError.decodeError
+	end 'nameType'
+
+	let name = try list.readVectorBytes(TlsLengthPrefix.uint16, minimum: tlsNonEmpty)
+	try list.finish()
+
+	for byte in name 'eachByte'
+		if byte < tlsHostNameFirst or byte > tlsHostNameLast 'outside'
+			throw TlsCodecError.decodeError
+		end 'outside'
+	end 'eachByte'
+
+	if (try name.get(name.count() - 1) otherwise panic("decodeServerName: the name has a last byte")) == tlsDot 'trailingDot'
+		throw TlsCodecError.decodeError
+	end 'trailingDot'
+
+	return TlsExtension.serverName(String.from(name))
+end 'decodeServerName'
+
+function decodeSupportedGroups(data TlsReader) returns TlsExtension throws TlsCodecError
+	var list = try data.readCodePointList(TlsLengthPrefix.uint16, minimum: tlsNonEmpty, maximum: tlsMaxCodePointCount)
+	try data.finish()
+
+	var groups = TlsGroupCodeArray.create()
+
+	while not list.isAtEnd() 'eachGroup'
+		groups.push((try list.readUnsigned(TlsWireWidth.uint16)) as TlsGroupCode)
+	end 'eachGroup'
+
+	return TlsExtension.supportedGroups(groups)
+end 'decodeSupportedGroups'
+
+function decodeEcPointFormats(data TlsReader) returns TlsExtension throws TlsCodecError
+	let formats = try data.readVectorBytes(TlsLengthPrefix.uint8, minimum: tlsNonEmpty)
+	try data.finish()
+
+	return TlsExtension.ecPointFormats(formats)
+end 'decodeEcPointFormats'
+
+function decodeSignatureAlgorithms(data TlsReader) returns TlsExtension throws TlsCodecError
+	var list = try data.readCodePointList(TlsLengthPrefix.uint16, minimum: tlsNonEmpty, maximum: tlsMaxCodePointCount)
+	try data.finish()
+
+	return TlsExtension.signatureAlgorithms(try tlsReadSignatureSchemes(list))
+end 'decodeSignatureAlgorithms'
+
+function decodeApplicationProtocols(data TlsReader, context TlsExtensionContext) returns TlsExtension throws TlsCodecError
+	var list = try data.readVector(TlsLengthPrefix.uint16, minimum: tlsMinProtocolListBytes)
+	try data.finish()
+
+	var protocols = TlsProtocolNameArray.create()
+
+	while not list.isAtEnd() 'eachName'
+		protocols.push(try list.readVectorBytes(TlsLengthPrefix.uint8, minimum: tlsNonEmpty))
+	end 'eachName'
+
+	if context != TlsExtensionContext.clientHello and protocols.count() != tlsServerProtocolCount 'selection'
+		throw TlsCodecError.decodeError
+	end 'selection'
+
+	return TlsExtension.applicationProtocols(protocols)
+end 'decodeApplicationProtocols'
+
+function decodeExtendedMasterSecret(data TlsReader) returns TlsExtension throws TlsCodecError
+	try data.finish()
+
+	return TlsExtension.extendedMasterSecret
+end 'decodeExtendedMasterSecret'
+
+function decodeSupportedVersions(data TlsReader, context TlsExtensionContext) returns TlsExtension throws TlsCodecError
+	if context != TlsExtensionContext.clientHello 'selection'
+		let selected = (try data.readUnsigned(TlsWireWidth.uint16)) as TlsVersionCode
+		try data.finish()
+
+		return TlsExtension.selectedVersion(selected)
+	end 'selection'
+
+	var list = try data.readCodePointList(TlsLengthPrefix.uint8, minimum: tlsNonEmpty, maximum: tlsMaxVersionCount)
+	try data.finish()
+
+	var versions = TlsVersionCodeArray.create()
+
+	while not list.isAtEnd() 'eachVersion'
+		versions.push((try list.readUnsigned(TlsWireWidth.uint16)) as TlsVersionCode)
+	end 'eachVersion'
+
+	return TlsExtension.supportedVersions(versions)
+end 'decodeSupportedVersions'
+
+function decodeCookie(data TlsReader) returns TlsExtension throws TlsCodecError
+	let cookie = try data.readVectorBytes(TlsLengthPrefix.uint16, minimum: tlsNonEmpty)
+	try data.finish()
+
+	return TlsExtension.cookie(cookie)
+end 'decodeCookie'
+
+function decodeKeyShare(data TlsReader, context TlsExtensionContext) returns TlsExtension throws TlsCodecError
+	return match context 'context'
+		helloRetryRequest gives try decodeSelectedGroup(data)
+		clientHello gives try decodeClientKeyShares(data)
+		serverHello gives try decodeServerKeyShare(data)
+		default panic("decodeKeyShare: placement refuses key_share outside ClientHello, ServerHello and HelloRetryRequest")
+	end 'context'
+end 'decodeKeyShare'
+
+function decodeSelectedGroup(data TlsReader) returns TlsExtension throws TlsCodecError
+	let group = (try data.readUnsigned(TlsWireWidth.uint16)) as TlsGroupCode
+	try data.finish()
+
+	return TlsExtension.selectedGroup(group)
+end 'decodeSelectedGroup'
+
+function decodeClientKeyShares(data TlsReader) returns TlsExtension throws TlsCodecError
+	var list = try data.readVector(TlsLengthPrefix.uint16, minimum: tlsAnyLength)
+	try data.finish()
+
+	var shares = TlsKeyShareArray.create()
+	var seen = TlsGroupCodeSet.create()
+
+	while not list.isAtEnd() 'eachShare'
+		let share = try readKeyShare(list)
+
+		if seen.contains(share.group()) 'duplicate'
+			throw TlsCodecError.illegalParameter
+		end 'duplicate'
+
+		seen.insert(share.group())
+		shares.push(share)
+	end 'eachShare'
+
+	return TlsExtension.clientKeyShares(shares)
+end 'decodeClientKeyShares'
+
+function decodeServerKeyShare(data TlsReader) returns TlsExtension throws TlsCodecError
+	let share = try readKeyShare(data)
+	try data.finish()
+
+	return TlsExtension.serverKeyShare(share)
+end 'decodeServerKeyShare'
+
+function readKeyShare(reader TlsReader) returns TlsKeyShare throws TlsCodecError
+	let group = (try reader.readUnsigned(TlsWireWidth.uint16)) as TlsGroupCode
+	let keyExchange = try reader.readVectorBytes(TlsLengthPrefix.uint16, minimum: tlsNonEmpty)
+
+	return TlsKeyShare.create(group, keyExchange: keyExchange)
+end 'readKeyShare'
+
+function decodeRenegotiationInfo(data TlsReader) returns TlsExtension throws TlsCodecError
+	let connection = try data.readVectorBytes(TlsLengthPrefix.uint8, minimum: tlsAnyLength)
+	try data.finish()
+
+	return TlsExtension.renegotiationInfo(connection)
+end 'decodeRenegotiationInfo'
+
+module function tlsReadSignatureSchemes(list TlsReader) returns TlsSignatureSchemeCodeArray throws TlsCodecError
+	var schemes = TlsSignatureSchemeCodeArray.create()
+
+	while not list.isAtEnd() 'eachScheme'
+		schemes.push((try list.readUnsigned(TlsWireWidth.uint16)) as TlsSignatureSchemeCode)
+	end 'eachScheme'
+
+	return schemes
+end 'tlsReadSignatureSchemes'
+
+module function tlsHasSupportedVersions(raws TlsRawExtensionArray) returns bool
+	for raw in raws 'eachExtension'
+		if raw.extensionType() == TlsExtensionKind.supportedVersions.code() 'found'
+			return true
+		end 'found'
+	end 'eachExtension'
+
+	return false
+end 'tlsHasSupportedVersions'
+
+module function tlsRequireTls13Selection(extensions TlsExtensionArray) throws TlsCodecError
+	for item in extensions 'eachExtension'
+		let selectsTls13 = match item 'form'
+			selectedVersion(version) gives version == tlsTls13VersionCode
+			serverName or
+			serverNameAcknowledgement or
+			supportedGroups or
+			ecPointFormats or
+			signatureAlgorithms or
+			applicationProtocols or
+			extendedMasterSecret or
+			supportedVersions or
+			cookie or
+			clientKeyShares or
+			serverKeyShare or
+			selectedGroup or
+			renegotiationInfo or
+			opaque gives true
+		end 'form'
+
+		if not selectsTls13 'other'
+			throw TlsCodecError.illegalParameter
+		end 'other'
+	end 'eachExtension'
+end 'tlsRequireTls13Selection'
+
+module function tlsRequireSignatureAlgorithms(extensions TlsExtensionArray) throws TlsCodecError
+	for item in extensions 'eachExtension'
+		if item.extensionType() == TlsExtensionKind.signatureAlgorithms.code() 'found'
+			return
+		end 'found'
+	end 'eachExtension'
+
+	throw TlsCodecError.missingExtension
+end 'tlsRequireSignatureAlgorithms'
+
+module function tlsAppendExtensionBlock(output ByteArray, block TlsExtensionBlock) throws TlsEncodeError
+	match block 'block'
+		absent then return
+		listed(extensions) then try tlsAppendExtensions(output, extensions: extensions)
+	end 'block'
+end 'tlsAppendExtensionBlock'
+
+module function tlsAppendExtensions(output ByteArray, extensions TlsExtensionArray) throws TlsEncodeError
+	var list = ByteArray.create()
+
+	for item in extensions 'eachExtension'
+		var data = ByteArray.create()
+		try appendExtensionData(data, item: item)
+		appendUnsigned(list, value: item.extensionType(), width: TlsWireWidth.uint16)
+		try appendVector(list, prefix: TlsLengthPrefix.uint16, contents: data)
+	end 'eachExtension'
+
+	try appendVector(output, prefix: TlsLengthPrefix.uint16, contents: list)
+end 'tlsAppendExtensions'
+
+function appendExtensionData(output ByteArray, item TlsExtension) throws TlsEncodeError
+	match item 'form'
+		serverName(hostName) then try appendServerName(output, hostName: hostName)
+		serverNameAcknowledgement or
+		extendedMasterSecret then return
+		supportedGroups(groups) then try appendGroups(output, groups: groups)
+		ecPointFormats(formats) then try appendVector(output, prefix: TlsLengthPrefix.uint8, contents: formats)
+		signatureAlgorithms(schemes) then try tlsAppendSignatureSchemes(output, schemes: schemes)
+		applicationProtocols(protocols) then try appendProtocolNames(output, protocols: protocols)
+		supportedVersions(versions) then try appendVersions(output, versions: versions)
+		selectedVersion(version) then appendUnsigned(output, value: version, width: TlsWireWidth.uint16)
+		cookie(cookie) then try appendVector(output, prefix: TlsLengthPrefix.uint16, contents: cookie)
+		clientKeyShares(shares) then try appendClientKeyShares(output, shares: shares)
+		serverKeyShare(share) then try appendKeyShare(output, share: share)
+		selectedGroup(group) then appendUnsigned(output, value: group, width: TlsWireWidth.uint16)
+		renegotiationInfo(renegotiatedConnection) then try appendVector(output, prefix: TlsLengthPrefix.uint8, contents: renegotiatedConnection)
+		opaque(_, data) then output.append(data)
+	end 'form'
+end 'appendExtensionData'
+
+function appendGroups(output ByteArray, groups TlsGroupCodeArray) throws TlsEncodeError
+	var list = ByteArray.create()
+
+	for group in groups 'eachGroup'
+		appendUnsigned(list, value: group, width: TlsWireWidth.uint16)
+	end 'eachGroup'
+
+	try appendVector(output, prefix: TlsLengthPrefix.uint16, contents: list)
+end 'appendGroups'
+
+function appendVersions(output ByteArray, versions TlsVersionCodeArray) throws TlsEncodeError
+	var list = ByteArray.create()
+
+	for version in versions 'eachVersion'
+		appendUnsigned(list, value: version, width: TlsWireWidth.uint16)
+	end 'eachVersion'
+
+	try appendVector(output, prefix: TlsLengthPrefix.uint8, contents: list)
+end 'appendVersions'
+
+module function tlsAppendSignatureSchemes(output ByteArray, schemes TlsSignatureSchemeCodeArray) throws TlsEncodeError
+	var list = ByteArray.create()
+
+	for scheme in schemes 'eachScheme'
+		appendUnsigned(list, value: scheme, width: TlsWireWidth.uint16)
+	end 'eachScheme'
+
+	try appendVector(output, prefix: TlsLengthPrefix.uint16, contents: list)
+end 'tlsAppendSignatureSchemes'
+
+function appendServerName(output ByteArray, hostName String) throws TlsEncodeError
+	var entry = ByteArray.create()
+	appendUnsigned(entry, value: tlsNameTypeHostName, width: TlsWireWidth.uint8)
+	try appendVector(entry, prefix: TlsLengthPrefix.uint16, contents: hostName.toByteArray())
+	try appendVector(output, prefix: TlsLengthPrefix.uint16, contents: entry)
+end 'appendServerName'
+
+function appendProtocolNames(output ByteArray, protocols TlsProtocolNameArray) throws TlsEncodeError
+	var list = ByteArray.create()
+
+	for name in protocols 'eachName'
+		try appendVector(list, prefix: TlsLengthPrefix.uint8, contents: name)
+	end 'eachName'
+
+	try appendVector(output, prefix: TlsLengthPrefix.uint16, contents: list)
+end 'appendProtocolNames'
+
+function appendClientKeyShares(output ByteArray, shares TlsKeyShareArray) throws TlsEncodeError
+	var list = ByteArray.create()
+
+	for share in shares 'eachShare'
+		try appendKeyShare(list, share: share)
+	end 'eachShare'
+
+	try appendVector(output, prefix: TlsLengthPrefix.uint16, contents: list)
+end 'appendClientKeyShares'
+
+function appendKeyShare(output ByteArray, share TlsKeyShare) throws TlsEncodeError
+	appendUnsigned(output, value: share.group(), width: TlsWireWidth.uint16)
+	try appendVector(output, prefix: TlsLengthPrefix.uint16, contents: share.keyExchange())
+end 'appendKeyShare'
