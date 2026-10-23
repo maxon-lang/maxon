@@ -85348,8 +85348,11 @@ export type Parser
 	//
 	// The alias is the one the declaration names, resolved in its declaring file and carried on the
 	// site (`RangeCheckSiteTarget.alias`): re-resolved against the calling file it would enforce a
-	// program's own `typealias ElementIndex` instead. `arrayReceiverDeclaredName` makes a program's
-	// own array conformer answer to its own declaration.
+	// program's own `typealias ElementIndex` instead.
+	//
+	// The declaration is the receiver's own, found by its base name. `arrayReceiverDeclaredName` spells
+	// a library array `Array` even when a program's own `Array` is declared, so it would find the
+	// program's declaration and enforce its index alias on a library array.
 	//
 	// ⚠ The buffer surface is exempt: a `__ManagedMemory` index is a machine word, and
 	// `specs/managed-memory-methods.md` pins that `mm.set(-1, …)` still throws.
@@ -85358,7 +85361,7 @@ export type Parser
 			return
 		end 'aMachineWordNotAStdlibAlias'
 
-		let receiverName = self.arrayReceiverDeclaredName(giid)
+		let receiverName = self.signatures.genericInstanceBaseName(giid)
 		view declarations = self.signatures.overloadedDeclsOf(qualifiedMethodName(receiverName, methodName: member))
 
 		// A program's own array record may leave a roster member undeclared; its synthesized surface
@@ -85384,7 +85387,7 @@ export type Parser
 			return self.mintValueOfType(self.signatures.libraryAliasType(CountAliasName, into: self.artifact.typeNames))
 		end 'theBuffersOwnCount'
 
-		let receiverName = self.arrayReceiverDeclaredName(giid)
+		let receiverName = self.signatures.genericInstanceBaseName(giid)
 
 		match self.signatures.returnTypeOf(qualifiedMethodName(receiverName, methodName: CountMethod), into: self.artifact.typeNames) 'declaration'
 			undeclared then return self.mintValueOfType(self.signatures.libraryAliasType(CountAliasName, into: self.artifact.typeNames))

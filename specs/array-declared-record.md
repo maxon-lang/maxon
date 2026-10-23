@@ -1836,6 +1836,76 @@ end 'main'
 error E3005: <fragment>:27:16: argument type mismatch for 'key': expected 'String', got 'int'
 ```
 
+<!-- test: a-library-array-is-indexed-by-the-librarys-get-when-the-program-declares-another -->
+<!-- tier: stdlib -->
+The program's `get` is keyed by a `String`, and the library array `String.split` returns still takes an element index: the index is judged against the library's own declaration.
+```maxon
+type Array uses Element implements BuiltinArrayLiteral
+	export typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function get(key String) returns Element throws ArrayError
+		return try managed.get(key.count()) otherwise throw ArrayError.indexOutOfBounds
+	end 'get'
+end 'Array'
+
+function main() returns ExitCode
+	let parts = "ab,c".split(",")
+	let first = try parts.get(0) otherwise "none"
+	return first.count() as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: error.a-library-arrays-count-keeps-the-librarys-type-when-the-program-declares-another -->
+<!-- tier: stdlib -->
+The program's `count` answers `Small`, and the library array `String.split` returns still answers `Count`: a `Small` parameter refuses it.
+```maxon
+typealias Small = int(0 to 1)
+typealias Wide = int(0 to 1000)
+
+type Array uses Element implements BuiltinArrayLiteral
+	export typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function count() returns Small
+		return 1
+	end 'count'
+end 'Array'
+
+function takesSmall(n Small) returns Wide
+	return n as Wide
+end 'takesSmall'
+
+function main() returns ExitCode
+	let parts = "ab,c,d".split(",")
+	return takesSmall(parts.count()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:29:9: argument type mismatch for 'n': expected 'Small', got 'Count'
+```
+
 <!-- test: a-declared-roster-member-keyed-by-an-enum-is-served-from-the-declaration -->
 <!-- tier: stdlib -->
 An enum is not an element index either, so a `get` keyed by one is the declaration's own.
