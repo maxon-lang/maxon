@@ -1,0 +1,362 @@
+public typealias TlsSequenceNumber = int(0 to u64.max)
+public typealias TlsPaddingLength = int(0 to u32.max) implements Count
+
+public enum TlsRecordError implements Error
+	invalidKeyLength
+	invalidIvLength
+	invalidContentType
+	emptyFragment
+	recordOverflow
+	decodeError
+	unexpectedMessage
+	protocolVersion
+	badRecordMac
+	sequenceNumberExhausted
+end 'TlsRecordError'
+
+public enum TlsContentType
+	changeCipherSpec = 20
+	alert = 21
+	handshake = 22
+	applicationData = 23
+end 'TlsContentType'
+
+let tlsRecordHeaderBytes = 5
+let tlsRecordVersionMajor = 3
+let tlsRecordVersionMinor = 3
+let tlsRecordVersion = 0x0303
+let tlsRecordTypeOffset = 0
+let tlsRecordVersionOffset = 1
+let tlsRecordLengthOffset = 3
+let tlsRecordFieldBytes = 2
+let tlsTagBytes = 16
+let tlsExplicitNonceBytes = 8
+let tlsSequenceBytes = 8
+let tlsMaxPlaintextBytes = 16384
+let tlsMaxInnerPlaintextBytes = 16385
+let tlsMaxCiphertext13Bytes = 16640
+let tlsMaxCiphertext12Bytes = 18432
+let tlsLastSequenceNumber = 18446744073709551615 as TlsSequenceNumber
+
+public type TlsOpenedRecord
+	var contentType as TlsContentType
+	var plaintext as ByteArray
+
+	public function contentType() returns TlsContentType
+		return contentType
+	end 'contentType'
+
+	public function plaintext() returns ByteArray
+		return plaintext
+	end 'plaintext'
+
+	static function create(contentType TlsContentType, plaintext ByteArray) returns TlsOpenedRecord
+		return Self{contentType: contentType, plaintext: plaintext}
+	end 'create'
+end 'TlsOpenedRecord'
+
+type TlsRecordState
+	var aead as Aead
+	var kind as TlsAeadKind
+	var iv as ByteArray
+	var next as TlsSequenceNumber
+	var exhausted as bool
+
+	static function create(kind TlsAeadKind, key ByteArray, iv ByteArray, sequenceNumber TlsSequenceNumber) returns TlsRecordState
+		return match kind 'kind'
+			aesGcm gives Self{aead: try AesGcm.create(key) otherwise panic("TlsRecordState: a key of the suite's length was refused"), kind: kind, iv: iv.clone(), next: sequenceNumber, exhausted: false}
+			chaCha20Poly1305 gives Self{aead: try ChaCha20Poly1305.create(key) otherwise panic("TlsRecordState: a key of the suite's length was refused"), kind: kind, iv: iv.clone(), next: sequenceNumber, exhausted: false}
+		end 'kind'
+	end 'create'
+
+	function sequence() returns TlsSequenceNumber throws TlsRecordError
+		if exhausted 'exhausted'
+			throw TlsRecordError.sequenceNumberExhausted
+		end 'exhausted'
+
+		return next
+	end 'sequence'
+
+	function advance()
+		if next == tlsLastSequenceNumber 'last'
+			exhausted = true
+		end 'last' else 'following'
+			next = next + 1
+		end 'following'
+	end 'advance'
+
+	function tls12ExplicitBytes() returns Count
+		return match kind 'width'
+			aesGcm gives tlsExplicitNonceBytes
+			chaCha20Poly1305 gives 0
+		end 'width'
+	end 'tls12ExplicitBytes'
+
+	function tls12Nonce(sequenceNumber TlsSequenceNumber, explicit ByteArray) returns ByteArray
+		return match kind 'nonce'
+			aesGcm gives tlsConcatenated(iv, tail: explicit)
+			chaCha20Poly1305 gives xorNonce(sequenceNumber)
+		end 'nonce'
+	end 'tls12Nonce'
+
+	function xorNonce(sequenceNumber TlsSequenceNumber) returns ByteArray
+		var mask = ByteArray.create()
+		mask.resize(iv.count() - tlsSequenceBytes)
+		appendOrderedWord(mask, word: sequenceNumber as ByteWord, width: tlsSequenceBytes, order: ByteOrder.bigEndian)
+
+		var nonce = ByteArray.create()
+		nonce.reserve(iv.count())
+
+		for (iter, byte) in iv.withIterator() 'eachByte'
+			nonce.push(byte xor (try mask.get(iter.index()) otherwise panic("TlsRecordState: the nonce mask is as long as the IV")))
+		end 'eachByte'
+
+		return nonce
+	end 'xorNonce'
+
+	function seal(nonce ByteArray, plaintext ByteArray, additionalData ByteArray) returns ByteArray
+		return try aead.seal(nonce, plaintext: plaintext, additionalData: additionalData) otherwise panic("TlsRecordState: the AEAD refused a nonce or a plaintext this layer sized")
+	end 'seal'
+
+	function open(nonce ByteArray, sealed ByteArray, additionalData ByteArray) returns ByteArray throws TlsRecordError
+		return try aead.open(nonce, sealed: sealed, additionalData: additionalData) otherwise (failure) 'refused'
+			match failure 'reason'
+				authenticationFailed then throw TlsRecordError.badRecordMac
+				default panic("TlsRecordState: the AEAD refused a nonce this layer sized")
+			end 'reason'
+		end 'refused'
+	end 'open'
+end 'TlsRecordState'
+
+public type Tls13RecordProtection
+	var state as TlsRecordState
+
+	public static function create(suite Tls13CipherSuite, key ByteArray, iv ByteArray, sequenceNumber TlsSequenceNumber = 0) returns Tls13RecordProtection throws TlsRecordError
+		try tlsRequireKeyMaterial(key, iv: iv, keyBytes: suite.keyBytes(), ivBytes: suite.ivBytes())
+
+		return Self{state: TlsRecordState.create(suite.aeadKind(), key: key, iv: iv, sequenceNumber: sequenceNumber)}
+	end 'create'
+
+	public function seal(contentType TlsContentType, plaintext ByteArray, paddingLength TlsPaddingLength = 0) returns ByteArray throws TlsRecordError
+		let sequenceNumber = try state.sequence()
+		try tlsRequireProtectedType(contentType)
+
+		if plaintext.count() + 1 + paddingLength > tlsMaxInnerPlaintextBytes 'overflow'
+			throw TlsRecordError.recordOverflow
+		end 'overflow'
+
+		try tlsRequireContent(contentType, plaintext: plaintext)
+
+		var inner = plaintext.clone()
+		inner.push(contentType.rawValue as Byte)
+		inner.resize(inner.count() + paddingLength)
+
+		let header = tlsRecordHeader(TlsContentType.applicationData, bodyBytes: inner.count() + tlsTagBytes)
+		var record = header.clone()
+		record.append(state.seal(state.xorNonce(sequenceNumber), plaintext: inner, additionalData: header))
+
+		state.advance()
+
+		return record
+	end 'seal'
+
+	public function open(record ByteArray) returns TlsOpenedRecord throws TlsRecordError
+		let sequenceNumber = try state.sequence()
+		try tlsRequireFraming(record)
+
+		if (try tlsProtectedType(tlsRecordByte(record, offset: tlsRecordTypeOffset))) != TlsContentType.applicationData 'outerType'
+			throw TlsRecordError.unexpectedMessage
+		end 'outerType'
+
+		if record.count() - tlsRecordHeaderBytes > tlsMaxCiphertext13Bytes 'ciphertextLength'
+			throw TlsRecordError.recordOverflow
+		end 'ciphertextLength'
+
+		let header = tlsRecordPart(record, start: 0, endIndex: tlsRecordHeaderBytes)
+		let body = tlsRecordPart(record, start: tlsRecordHeaderBytes, endIndex: record.count())
+		let inner = try state.open(state.xorNonce(sequenceNumber), sealed: body, additionalData: header)
+
+		if inner.count() > tlsMaxInnerPlaintextBytes 'innerLength'
+			throw TlsRecordError.recordOverflow
+		end 'innerLength'
+
+		var typeIndex = inner.count()
+
+		while typeIndex > 0 and tlsRecordByte(inner, offset: typeIndex - 1) == 0 'padding'
+			typeIndex = typeIndex - 1
+		end 'padding'
+
+		if typeIndex == 0 'allPadding'
+			throw TlsRecordError.unexpectedMessage
+		end 'allPadding'
+
+		let contentType = try tlsProtectedType(tlsRecordByte(inner, offset: typeIndex - 1))
+
+		state.advance()
+
+		return TlsOpenedRecord.create(contentType, plaintext: tlsRecordPart(inner, start: 0, endIndex: typeIndex - 1))
+	end 'open'
+end 'Tls13RecordProtection'
+
+public type Tls12RecordProtection
+	var state as TlsRecordState
+
+	public static function create(suite Tls12CipherSuite, key ByteArray, iv ByteArray, sequenceNumber TlsSequenceNumber = 0) returns Tls12RecordProtection throws TlsRecordError
+		try tlsRequireKeyMaterial(key, iv: iv, keyBytes: suite.keyBytes(), ivBytes: suite.ivBytes())
+
+		return Self{state: TlsRecordState.create(suite.aeadKind(), key: key, iv: iv, sequenceNumber: sequenceNumber)}
+	end 'create'
+
+	public function seal(contentType TlsContentType, plaintext ByteArray) returns ByteArray throws TlsRecordError
+		let sequenceNumber = try state.sequence()
+		try tlsRequireProtectedType(contentType)
+
+		if plaintext.count() > tlsMaxPlaintextBytes 'overflow'
+			throw TlsRecordError.recordOverflow
+		end 'overflow'
+
+		try tlsRequireContent(contentType, plaintext: plaintext)
+
+		let additionalData = tls12AdditionalData(sequenceNumber, contentType: contentType, plaintextBytes: plaintext.count())
+
+		var body = tls12ExplicitNonce(sequenceNumber, bytes: state.tls12ExplicitBytes())
+		let nonce = state.tls12Nonce(sequenceNumber, explicit: body)
+		body.append(state.seal(nonce, plaintext: plaintext, additionalData: additionalData))
+
+		var record = tlsRecordHeader(contentType, bodyBytes: body.count())
+		record.append(body)
+
+		state.advance()
+
+		return record
+	end 'seal'
+
+	public function open(record ByteArray) returns TlsOpenedRecord throws TlsRecordError
+		let sequenceNumber = try state.sequence()
+		try tlsRequireFraming(record)
+
+		if readOrderedWord(record, off: tlsRecordVersionOffset, width: tlsRecordFieldBytes, limit: record.count(), order: ByteOrder.bigEndian) != tlsRecordVersion 'version'
+			throw TlsRecordError.protocolVersion
+		end 'version'
+
+		let contentType = try tlsProtectedType(tlsRecordByte(record, offset: tlsRecordTypeOffset))
+
+		if record.count() - tlsRecordHeaderBytes > tlsMaxCiphertext12Bytes 'ciphertextLength'
+			throw TlsRecordError.recordOverflow
+		end 'ciphertextLength'
+
+		let body = tlsRecordPart(record, start: tlsRecordHeaderBytes, endIndex: record.count())
+
+		let explicitBytes = state.tls12ExplicitBytes()
+
+		if body.count() < explicitBytes + tlsTagBytes 'tooShort'
+			throw TlsRecordError.badRecordMac
+		end 'tooShort'
+
+		let explicit = tlsRecordPart(body, start: 0, endIndex: explicitBytes)
+		let sealed = tlsRecordPart(body, start: explicitBytes, endIndex: body.count())
+		let nonce = state.tls12Nonce(sequenceNumber, explicit: explicit)
+
+		let additionalData = tls12AdditionalData(sequenceNumber, contentType: contentType, plaintextBytes: sealed.count() - tlsTagBytes)
+		let plaintext = try state.open(nonce, sealed: sealed, additionalData: additionalData)
+
+		if plaintext.count() > tlsMaxPlaintextBytes 'plaintextLength'
+			throw TlsRecordError.recordOverflow
+		end 'plaintextLength'
+
+		state.advance()
+
+		return TlsOpenedRecord.create(contentType, plaintext: plaintext)
+	end 'open'
+end 'Tls12RecordProtection'
+
+function tlsRequireKeyMaterial(key ByteArray, iv ByteArray, keyBytes TlsKeyBytes, ivBytes TlsIvBytes) throws TlsRecordError
+	if key.count() != keyBytes 'key'
+		throw TlsRecordError.invalidKeyLength
+	end 'key'
+
+	if iv.count() != ivBytes 'iv'
+		throw TlsRecordError.invalidIvLength
+	end 'iv'
+end 'tlsRequireKeyMaterial'
+
+function tlsRequireProtectedType(contentType TlsContentType) throws TlsRecordError
+	match contentType 'protected'
+		alert or
+		handshake or
+		applicationData then return
+		changeCipherSpec then throw TlsRecordError.invalidContentType
+	end 'protected'
+end 'tlsRequireProtectedType'
+
+function tlsRequireContent(contentType TlsContentType, plaintext ByteArray) throws TlsRecordError
+	if plaintext.count() == 0 and contentType != TlsContentType.applicationData 'empty'
+		throw TlsRecordError.emptyFragment
+	end 'empty'
+end 'tlsRequireContent'
+
+function tlsProtectedType(code Byte) returns TlsContentType throws TlsRecordError
+	let contentType = try TlsContentType.fromRawValue(code) otherwise throw TlsRecordError.unexpectedMessage
+
+	match contentType 'protected'
+		alert or
+		handshake or
+		applicationData then return contentType
+		changeCipherSpec then throw TlsRecordError.unexpectedMessage
+	end 'protected'
+end 'tlsProtectedType'
+
+function tlsRequireFraming(record ByteArray) throws TlsRecordError
+	if record.count() < tlsRecordHeaderBytes 'short'
+		throw TlsRecordError.decodeError
+	end 'short'
+
+	let declared = readOrderedWord(record, off: tlsRecordLengthOffset, width: tlsRecordFieldBytes, limit: record.count(), order: ByteOrder.bigEndian)
+
+	if declared != (record.count() - tlsRecordHeaderBytes) as ByteWord 'length'
+		throw TlsRecordError.decodeError
+	end 'length'
+end 'tlsRequireFraming'
+
+function tlsRecordHeader(contentType TlsContentType, bodyBytes Count) returns ByteArray
+	var header = ByteArray.create()
+	header.push(contentType.rawValue as Byte)
+	header.push(tlsRecordVersionMajor as Byte)
+	header.push(tlsRecordVersionMinor as Byte)
+	appendOrderedWord(header, word: bodyBytes as ByteWord, width: tlsRecordFieldBytes, order: ByteOrder.bigEndian)
+
+	return header
+end 'tlsRecordHeader'
+
+function tlsRecordByte(bytes ByteArray, offset ElementIndex) returns Byte
+	return try bytes.get(offset) otherwise panic("tlsRecordByte: the offset was checked against the length")
+end 'tlsRecordByte'
+
+function tlsRecordPart(bytes ByteArray, start ElementIndex, endIndex ElementIndex) returns ByteArray
+	return try bytes.slice(start, endIndex: endIndex) otherwise panic("tlsRecordPart: the range was checked against the length")
+end 'tlsRecordPart'
+
+function tls12ExplicitNonce(sequenceNumber TlsSequenceNumber, bytes Count) returns ByteArray
+	var explicit = ByteArray.create()
+
+	if bytes != 0 'present'
+		appendOrderedWord(explicit, word: sequenceNumber as ByteWord, width: bytes as ByteWordWidth, order: ByteOrder.bigEndian)
+	end 'present'
+
+	return explicit
+end 'tls12ExplicitNonce'
+
+function tls12AdditionalData(sequenceNumber TlsSequenceNumber, contentType TlsContentType, plaintextBytes Count) returns ByteArray
+	var additionalData = ByteArray.create()
+	appendOrderedWord(additionalData, word: sequenceNumber as ByteWord, width: tlsSequenceBytes, order: ByteOrder.bigEndian)
+	additionalData.append(tlsRecordHeader(contentType, bodyBytes: plaintextBytes))
+
+	return additionalData
+end 'tls12AdditionalData'
+
+function tlsConcatenated(head ByteArray, tail ByteArray) returns ByteArray
+	var joined = head.clone()
+	joined.append(tail)
+
+	return joined
+end 'tlsConcatenated'

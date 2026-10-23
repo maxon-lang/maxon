@@ -3504,6 +3504,174 @@ end 'main'
 
 Output: `invalidCertificate`.
 
+## Tls13KeySchedule
+
+`Tls13KeySchedule` is the key schedule of TLS 1.3 (RFC 8446 section 7) for a full (EC)DHE handshake without
+a pre-shared key: the secret ladder from the shared secret to the traffic secrets, the keys and IVs of the
+record layer, the Finished `verify_data`, and the KeyUpdate step. It is built on [`Hkdf`](#hkdf),
+[`Hmac`](#hmac) and [`Sha2`](#sha2); record protection with its keys is [`Tls13RecordProtection`](#tlsrecordprotection).
+
+`Tls13CipherSuite` names the three suites, with their code points as raw values: `aes128GcmSha256` (0x1301),
+`aes256GcmSha384` (0x1302) and `chaCha20Poly1305Sha256` (0x1303). `hashAlgorithm()` is the suite's
+[`HashAlgorithm`](#sha2), `keyBytes()` (a `TlsKeyBytes`: 16 or 32) the AEAD key size and `ivBytes()` (a
+`TlsIvBytes`) the IV size, 12. Every secret and transcript hash below is as long as the suite's hash: 32
+bytes, or 48 for `aes256GcmSha384`.
+
+| Function | Returns | Throws | Description |
+|----------|---------|--------|-------------|
+| `Tls13KeySchedule.expandLabel(suite Tls13CipherSuite, secret ByteArray, label String, context ByteArray, length HkdfOutputLength)` | `ByteArray` | `Tls13KeyScheduleError` | `HKDF-Expand-Label`: `length` bytes of the secret expanded under `"tls13 "` followed by `label` and `context`. |
+| `Tls13KeySchedule.deriveSecret(suite Tls13CipherSuite, secret ByteArray, label String, transcriptHash ByteArray)` | `ByteArray` | `Tls13KeyScheduleError` | `Derive-Secret`: `expandLabel` with the transcript hash as context and the hash length as the length. |
+| `Tls13KeySchedule.transcriptHash(suite Tls13CipherSuite, messages ByteArrays)` | `ByteArray` | — | The hash of the handshake messages, each a complete message with its 4-byte header. No messages hash the empty string. |
+| `Tls13KeySchedule.messageHash(suite Tls13CipherSuite, clientHello ByteArray)` | `ByteArray` | — | The synthetic `message_hash` message that replaces the first ClientHello in the transcript after a HelloRetryRequest (RFC 8446 section 4.4.1). |
+| `Tls13KeySchedule.keySchedule(suite Tls13CipherSuite, sharedSecret ByteArray, helloHash ByteArray, serverFinishedHash ByteArray)` | `Tls13Secrets` | `Tls13KeyScheduleError` | The whole ladder: `helloHash` is the transcript hash through the ServerHello and `serverFinishedHash` the one through the server's Finished. |
+| `Tls13KeySchedule.trafficKeys(suite Tls13CipherSuite, trafficSecret ByteArray)` | `Tls13TrafficKeys` | `Tls13KeyScheduleError` | The AEAD key and IV of a traffic secret. |
+| `Tls13KeySchedule.finishedVerifyData(suite Tls13CipherSuite, baseKey ByteArray, transcriptHash ByteArray)` | `ByteArray` | `Tls13KeyScheduleError` | The `verify_data` of a Finished message: the HMAC of the transcript hash under the finished key of `baseKey`, the sender's handshake traffic secret. |
+| `Tls13KeySchedule.nextApplicationTrafficSecret(suite Tls13CipherSuite, secret ByteArray)` | `ByteArray` | `Tls13KeyScheduleError` | The KeyUpdate step: `application_traffic_secret_N+1` from `application_traffic_secret_N`. |
+
+`Tls13Secrets` holds the eight secrets of `keySchedule`, each read by a function of its name:
+`earlySecret()`, `handshakeSecret()`, `clientHandshakeTrafficSecret()`, `serverHandshakeTrafficSecret()`,
+`masterSecret()`, `clientApplicationTrafficSecret0()`, `serverApplicationTrafficSecret0()` and
+`exporterMasterSecret()`. `Tls13TrafficKeys` holds `key()` and `iv()`.
+
+A throwing function reports the first check that fails, in this order. `Tls13KeyScheduleError` has six cases:
+`invalidSecretLength` for a secret, traffic secret or base key that is not as long as the hash,
+`invalidLabel` for a label that is empty, longer than 249 bytes or not printable ASCII (0x20 to 0x7E),
+`contextTooLong` for a context over 255 bytes, `outputTooLong` for a length over 255 times the hash length,
+`invalidTranscriptHashLength` for a transcript hash of another length, and `invalidSharedSecretLength` for
+an empty shared secret. A shared secret shorter than the hash, such as a short test value, is accepted;
+X25519 and P-256 give 32 bytes. `keySchedule` uses a zero-filled pre-shared key and no early traffic
+secrets: resumption, pre-shared keys and 0-RTT are not supported.
+
+```maxon
+function main() returns ExitCode
+	let suite = Tls13CipherSuite.aes128GcmSha256
+	var shared = ByteArray.create()
+	shared.resize(32)
+
+	let empty = Tls13KeySchedule.transcriptHash(suite, messages: ByteArrays.create())
+	let secrets = try Tls13KeySchedule.keySchedule(suite, sharedSecret: shared, helloHash: empty, serverFinishedHash: empty) otherwise return 1
+	let keys = try Tls13KeySchedule.trafficKeys(suite, trafficSecret: secrets.clientHandshakeTrafficSecret()) otherwise return 1
+
+	print("{secrets.earlySecret().count()} {keys.key().count()} {keys.iv().count()}\n")
+	return 0
+end 'main'
+```
+
+Output: `32 16 12`.
+
+## Tls12Prf
+
+`Tls12Prf` is the pseudorandom function of TLS 1.2 (RFC 5246 section 5) over HMAC-SHA-256 or HMAC-SHA-384,
+with the derivations built on it for the ECDHE suites with AEAD ciphers: the master secret (RFC 5246
+section 8.1), the extended master secret (RFC 7627), the key block (section 6.3) and the Finished
+`verify_data` (section 7.4.9). It is built on [`Hmac`](#hmac); record protection with the key block is
+[`Tls12RecordProtection`](#tlsrecordprotection).
+
+`Tls12CipherSuite` names the six suites, with their code points as raw values: `ecdheEcdsaAes128GcmSha256`
+(0xC02B), `ecdheRsaAes128GcmSha256` (0xC02F), `ecdheEcdsaAes256GcmSha384` (0xC02C),
+`ecdheRsaAes256GcmSha384` (0xC030), `ecdheEcdsaChaCha20Poly1305Sha256` (0xCCA9) and
+`ecdheRsaChaCha20Poly1305Sha256` (0xCCA8). `hashAlgorithm()` is the suite's PRF hash, `keyBytes()` the AEAD key
+size (16 or 32) and `ivBytes()` the implicit IV size: 4 for AES-GCM and 12 for ChaCha20-Poly1305.
+
+| Function | Returns | Throws | Description |
+|----------|---------|--------|-------------|
+| `Tls12Prf.prf(hash HashAlgorithm, secret ByteArray, label String, seed ByteArray, length Tls12PrfLength)` | `ByteArray` | `Tls12PrfError` | `length` bytes of `P_hash(secret, label ‖ seed)`. The secret and the seed may be empty; the label is 1 or more printable ASCII characters. |
+| `Tls12Prf.masterSecret(suite Tls12CipherSuite, preMasterSecret ByteArray, clientRandom ByteArray, serverRandom ByteArray)` | `ByteArray` | `Tls12PrfError` | The 48-byte master secret, from the client random then the server random. |
+| `Tls12Prf.extendedMasterSecret(suite Tls12CipherSuite, preMasterSecret ByteArray, sessionHash ByteArray)` | `ByteArray` | `Tls12PrfError` | The 48-byte master secret bound to the session hash, the `handshakeHash` of every message through the ClientKeyExchange. |
+| `Tls12Prf.keyBlock(suite Tls12CipherSuite, masterSecret ByteArray, clientRandom ByteArray, serverRandom ByteArray)` | `Tls12KeyBlock` | `Tls12PrfError` | The write keys and implicit IVs of both directions; the seed is the server random then the client random. |
+| `Tls12Prf.finishedVerifyData(suite Tls12CipherSuite, masterSecret ByteArray, sender Tls12Sender, handshakeHash ByteArray)` | `ByteArray` | `Tls12PrfError` | The 12-byte `verify_data` of the `client` or `server` Finished message. |
+| `Tls12Prf.handshakeHash(suite Tls12CipherSuite, messages ByteArrays)` | `ByteArray` | — | The PRF hash of the handshake messages, each a complete message with its 4-byte header. |
+
+`Tls12KeyBlock` holds `clientWriteKey()`, `serverWriteKey()`, `clientWriteIv()` and `serverWriteIv()`;
+`Tls12PrfLength` is `int(0 to u32.max)`, implementing `Count`. A throwing function reports the first check
+that fails. `Tls12PrfError` has seven cases: `unsupportedAlgorithm` for a `prf` hash other than SHA-256 and
+SHA-384, `invalidLabel` for an empty or non-printable-ASCII `prf` label, `invalidPreMasterSecretLength` for an
+empty pre-master secret, `invalidRandomLength` for a random that is not 32 bytes, `invalidSessionHashLength` and
+`invalidHandshakeHashLength` for a hash that is not as long as the suite's PRF hash, and
+`invalidMasterSecretLength` for a master secret that is not 48 bytes. For ECDHE the pre-master secret is the
+raw shared secret, leading zero bytes kept.
+
+```maxon
+function main() returns ExitCode
+	let suite = Tls12CipherSuite.ecdheRsaAes128GcmSha256
+	var master = ByteArray.create()
+	master.resize(48)
+	var random = ByteArray.create()
+	random.resize(32)
+
+	let block = try Tls12Prf.keyBlock(suite, masterSecret: master, clientRandom: random, serverRandom: random) otherwise return 1
+
+	print("{block.clientWriteKey().count()} {block.serverWriteIv().count()}\n")
+	return 0
+end 'main'
+```
+
+Output: `16 4`.
+
+## TlsRecordProtection
+
+`Tls13RecordProtection` and `Tls12RecordProtection` protect the records of one direction of a TLS
+connection: they hold the AEAD key, the IV and the sequence number, and seal or open one record at a time.
+[`Tls13RecordProtection`](#tlsrecordprotection) follows RFC 8446 section 5 (the inner content type, padding,
+the record header as additional data, a per-record nonce of the IV XOR the sequence number);
+`Tls12RecordProtection` follows RFC 5246 section 6.2.3.3 with AES-GCM (RFC 5288: a 4-byte implicit IV and an
+8-byte explicit nonce) or ChaCha20-Poly1305 (RFC 7905: the IV XOR the sequence number). The AEADs are
+[`AesGcm`](#aesgcm) and [`ChaCha20Poly1305`](#chacha20poly1305), and the tag is compared in constant time.
+Keys come from [`Tls13KeySchedule.trafficKeys`](#tls13keyschedule) and [`Tls12Prf.keyBlock`](#tls12prf).
+
+| Function | Returns | Throws | Description |
+|----------|---------|--------|-------------|
+| `Tls13RecordProtection.create(suite Tls13CipherSuite, key ByteArray, iv ByteArray, sequenceNumber TlsSequenceNumber = 0)` | `Tls13RecordProtection` | `TlsRecordError` | A protection for `key` and the 12-byte `iv`, whose first record is number `sequenceNumber`. |
+| `Tls13RecordProtection.seal(contentType TlsContentType, plaintext ByteArray, paddingLength TlsPaddingLength = 0)` | `ByteArray` | `TlsRecordError` | The record of `plaintext` with `paddingLength` zero bytes of padding after the content type. |
+| `Tls13RecordProtection.open(record ByteArray)` | `TlsOpenedRecord` | `TlsRecordError` | The content type and plaintext of one whole record, the padding removed. |
+| `Tls12RecordProtection.create(suite Tls12CipherSuite, key ByteArray, iv ByteArray, sequenceNumber TlsSequenceNumber = 0)` | `Tls12RecordProtection` | `TlsRecordError` | A protection for `key` and the implicit `iv` of the suite (4 bytes for AES-GCM, 12 for ChaCha20-Poly1305). |
+| `Tls12RecordProtection.seal(contentType TlsContentType, plaintext ByteArray)` | `ByteArray` | `TlsRecordError` | The record of `plaintext`. An AES-GCM record carries the sequence number as its explicit nonce. |
+| `Tls12RecordProtection.open(record ByteArray)` | `TlsOpenedRecord` | `TlsRecordError` | The content type and plaintext of one whole record. An AES-GCM record's explicit nonce is taken as sent, whatever its value. |
+
+`TlsContentType` is `changeCipherSpec` (20), `alert` (21), `handshake` (22) or `applicationData` (23), with
+the wire values as raw values; a record carries only the last three. `TlsOpenedRecord` holds `contentType()`
+and `plaintext()`; an empty plaintext is returned as it is. `TlsSequenceNumber` is `int(0 to u64.max)` and
+`TlsPaddingLength` is `int(0 to u32.max)`, implementing `Count`.
+
+Each successful `seal` or `open` moves to the next sequence number; a refused one leaves it unchanged. The
+record of number 2^64 - 1 can still be sealed or opened, and every call after it throws
+`sequenceNumberExhausted`: a protection never reuses a nonce.
+
+A throwing function reports the first check that fails. `TlsRecordError` has ten cases:
+
+| `TlsRecordError` case | When |
+|-----------------------|------|
+| `invalidKeyLength` | `create`: the key is not the suite's size. |
+| `invalidIvLength` | `create`: the IV is not the suite's size. |
+| `sequenceNumberExhausted` | `seal` or `open` after the record of number 2^64 - 1. |
+| `invalidContentType` | `seal`: the content type is `changeCipherSpec`, which is never protected. |
+| `emptyFragment` | `seal`: an empty `handshake` or `alert` plaintext. |
+| `recordOverflow` | `seal`: more than 2^14 bytes of content (2^14 + 1 with the TLS 1.3 content type byte and padding); `open`: a body over 2^14 + 256 bytes (TLS 1.3) or 2^14 + 2048 (TLS 1.2), or an opened plaintext over its limit. |
+| `decodeError` | `open`: the record is shorter than its 5-byte header, or its length field is not the length of the rest. |
+| `protocolVersion` | `Tls12RecordProtection.open`: the record version is not 0x0303. A TLS 1.3 record's version is not checked; it is authenticated as part of the additional data. |
+| `unexpectedMessage` | `open`: an outer content type that is not allowed (`applicationData` only for TLS 1.3; `alert`, `handshake` or `applicationData` for TLS 1.2), or a TLS 1.3 inner plaintext that is all zero or ends in a content type other than 21 to 23. |
+| `badRecordMac` | `open`: the tag does not verify, including a body too short to hold the nonce and tag. No plaintext is released. |
+
+```maxon
+function main() returns ExitCode
+	var key = ByteArray.create()
+	key.resize(16)
+	var iv = ByteArray.create()
+	iv.resize(12)
+
+	var writer = try Tls13RecordProtection.create(Tls13CipherSuite.aes128GcmSha256, key: key, iv: iv) otherwise return 1
+	var reader = try Tls13RecordProtection.create(Tls13CipherSuite.aes128GcmSha256, key: key, iv: iv) otherwise return 1
+
+	let record = try writer.seal(TlsContentType.applicationData, plaintext: "hello".toByteArray()) otherwise return 1
+	let opened = try reader.open(record) otherwise return 1
+
+	print("{record.count()} {opened.contentType().rawValue} {opened.plaintext().count()}\n")
+	return 0
+end 'main'
+```
+
+Output: `27 23 5`.
+
 ## Hasher
 
 `Hasher` is an incremental FNV-1a 64-bit hash, for content keys and cache digests. It is not cryptographic.

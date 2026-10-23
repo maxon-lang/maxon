@@ -36,3 +36,6 @@ of the spec here.
 | `x509-verify` | `stdlib/X509.maxon` | `specs/x509.md` |
 | `x509-verify-go` | `stdlib/X509.maxon` | `specs/x509.md` |
 | `x509-verify-client-auth` | `stdlib/X509.maxon` | `specs/x509.md` |
+| `tls13-key-schedule` | `stdlib/Tls13KeySchedule.maxon` | `specs/tls13-key-schedule.md` |
+| `tls12-prf` | `stdlib/Tls12Prf.maxon` | `specs/tls12-prf.md` |
+| `tls-record` | `stdlib/TlsRecordProtection.maxon` | `specs/tls-record.md` |

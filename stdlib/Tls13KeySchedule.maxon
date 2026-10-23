@@ -1,0 +1,224 @@
+public enum Tls13KeyScheduleError implements Error
+	invalidSecretLength
+	invalidLabel
+	contextTooLong
+	outputTooLong
+	invalidTranscriptHashLength
+	invalidSharedSecretLength
+end 'Tls13KeyScheduleError'
+
+let tls13LabelPrefix = "tls13 "
+let tls13MaxLabelBytes = 249
+let tls13MaxContextBytes = 255
+let tls13LengthFieldBytes = 2
+let tls13MessageHashType = 0xFE
+let tls13MessageHashLengthBytes = 3
+let tls13DerivedLabel = "derived"
+let tls13ClientHandshakeLabel = "c hs traffic"
+let tls13ServerHandshakeLabel = "s hs traffic"
+let tls13ClientApplicationLabel = "c ap traffic"
+let tls13ServerApplicationLabel = "s ap traffic"
+let tls13ExporterLabel = "exp master"
+let tls13KeyLabel = "key"
+let tls13IvLabel = "iv"
+let tls13FinishedLabel = "finished"
+let tls13KeyUpdateLabel = "traffic upd"
+
+public type Tls13Secrets
+	var earlySecret as ByteArray
+	var handshakeSecret as ByteArray
+	var clientHandshakeTrafficSecret as ByteArray
+	var serverHandshakeTrafficSecret as ByteArray
+	var masterSecret as ByteArray
+	var clientApplicationTrafficSecret0 as ByteArray
+	var serverApplicationTrafficSecret0 as ByteArray
+	var exporterMasterSecret as ByteArray
+
+	public function earlySecret() returns ByteArray
+		return earlySecret
+	end 'earlySecret'
+
+	public function handshakeSecret() returns ByteArray
+		return handshakeSecret
+	end 'handshakeSecret'
+
+	public function clientHandshakeTrafficSecret() returns ByteArray
+		return clientHandshakeTrafficSecret
+	end 'clientHandshakeTrafficSecret'
+
+	public function serverHandshakeTrafficSecret() returns ByteArray
+		return serverHandshakeTrafficSecret
+	end 'serverHandshakeTrafficSecret'
+
+	public function masterSecret() returns ByteArray
+		return masterSecret
+	end 'masterSecret'
+
+	public function clientApplicationTrafficSecret0() returns ByteArray
+		return clientApplicationTrafficSecret0
+	end 'clientApplicationTrafficSecret0'
+
+	public function serverApplicationTrafficSecret0() returns ByteArray
+		return serverApplicationTrafficSecret0
+	end 'serverApplicationTrafficSecret0'
+
+	public function exporterMasterSecret() returns ByteArray
+		return exporterMasterSecret
+	end 'exporterMasterSecret'
+
+	static function create(earlySecret ByteArray, handshakeSecret ByteArray, clientHandshakeTrafficSecret ByteArray, serverHandshakeTrafficSecret ByteArray, masterSecret ByteArray, clientApplicationTrafficSecret0 ByteArray, serverApplicationTrafficSecret0 ByteArray, exporterMasterSecret ByteArray) returns Tls13Secrets
+		return Self{earlySecret: earlySecret, handshakeSecret: handshakeSecret, clientHandshakeTrafficSecret: clientHandshakeTrafficSecret, serverHandshakeTrafficSecret: serverHandshakeTrafficSecret, masterSecret: masterSecret, clientApplicationTrafficSecret0: clientApplicationTrafficSecret0, serverApplicationTrafficSecret0: serverApplicationTrafficSecret0, exporterMasterSecret: exporterMasterSecret}
+	end 'create'
+end 'Tls13Secrets'
+
+public type Tls13TrafficKeys
+	var key as ByteArray
+	var iv as ByteArray
+
+	public function key() returns ByteArray
+		return key
+	end 'key'
+
+	public function iv() returns ByteArray
+		return iv
+	end 'iv'
+
+	static function create(key ByteArray, iv ByteArray) returns Tls13TrafficKeys
+		return Self{key: key, iv: iv}
+	end 'create'
+end 'Tls13TrafficKeys'
+
+public type Tls13KeySchedule
+	public static function expandLabel(suite Tls13CipherSuite, secret ByteArray, label String, context ByteArray, length HkdfOutputLength) returns ByteArray throws Tls13KeyScheduleError
+		try tls13RequireSecret(suite, secret: secret)
+		try tls13RequireLabel(label)
+
+		if context.count() > tls13MaxContextBytes 'context'
+			throw Tls13KeyScheduleError.contextTooLong
+		end 'context'
+
+		if length > hkdfMaxBlocks * suite.hashAlgorithm().digestBytes() 'length'
+			throw Tls13KeyScheduleError.outputTooLong
+		end 'length'
+
+		return tls13Expand(suite.hashAlgorithm(), secret: secret, label: label, context: context, length: length)
+	end 'expandLabel'
+
+	public static function deriveSecret(suite Tls13CipherSuite, secret ByteArray, label String, transcriptHash ByteArray) returns ByteArray throws Tls13KeyScheduleError
+		try tls13RequireSecret(suite, secret: secret)
+		try tls13RequireLabel(label)
+		try tls13RequireHash(suite, hash: transcriptHash)
+
+		return tls13Derive(suite.hashAlgorithm(), secret: secret, label: label, transcriptHash: transcriptHash)
+	end 'deriveSecret'
+
+	public static function transcriptHash(suite Tls13CipherSuite, messages ByteArrays) returns ByteArray
+		var digest = Digest.create(suite.hashAlgorithm())
+
+		for message in messages 'eachMessage'
+			digest.update(message)
+		end 'eachMessage'
+
+		return digest.finalize()
+	end 'transcriptHash'
+
+	public static function messageHash(suite Tls13CipherSuite, clientHello ByteArray) returns ByteArray
+		let hash = suite.hashAlgorithm()
+
+		var message = ByteArray.create()
+		message.push(tls13MessageHashType as Byte)
+		appendOrderedWord(message, word: hash.digestBytes() as ByteWord, width: tls13MessageHashLengthBytes, order: ByteOrder.bigEndian)
+		message.append(sha2Once(hash, data: clientHello))
+
+		return message
+	end 'messageHash'
+
+	public static function keySchedule(suite Tls13CipherSuite, sharedSecret ByteArray, helloHash ByteArray, serverFinishedHash ByteArray) returns Tls13Secrets throws Tls13KeyScheduleError
+		if sharedSecret.count() == 0 'sharedSecret'
+			throw Tls13KeyScheduleError.invalidSharedSecretLength
+		end 'sharedSecret'
+
+		try tls13RequireHash(suite, hash: helloHash)
+		try tls13RequireHash(suite, hash: serverFinishedHash)
+
+		let hash = suite.hashAlgorithm()
+		var zeros = ByteArray.create()
+		zeros.resize(hash.digestBytes())
+
+		let emptyHash = sha2Once(hash, data: ByteArray.create())
+		let earlySecret = hkdfExtract(hash, salt: zeros, inputKeyMaterial: zeros)
+		let handshakeSalt = tls13Derive(hash, secret: earlySecret, label: tls13DerivedLabel, transcriptHash: emptyHash)
+		let handshakeSecret = hkdfExtract(hash, salt: handshakeSalt, inputKeyMaterial: sharedSecret)
+		let masterSalt = tls13Derive(hash, secret: handshakeSecret, label: tls13DerivedLabel, transcriptHash: emptyHash)
+		let masterSecret = hkdfExtract(hash, salt: masterSalt, inputKeyMaterial: zeros)
+
+		let clientHandshake = tls13Derive(hash, secret: handshakeSecret, label: tls13ClientHandshakeLabel, transcriptHash: helloHash)
+		let serverHandshake = tls13Derive(hash, secret: handshakeSecret, label: tls13ServerHandshakeLabel, transcriptHash: helloHash)
+		let clientApplication = tls13Derive(hash, secret: masterSecret, label: tls13ClientApplicationLabel, transcriptHash: serverFinishedHash)
+		let serverApplication = tls13Derive(hash, secret: masterSecret, label: tls13ServerApplicationLabel, transcriptHash: serverFinishedHash)
+		let exporter = tls13Derive(hash, secret: masterSecret, label: tls13ExporterLabel, transcriptHash: serverFinishedHash)
+
+		return Tls13Secrets.create(earlySecret, handshakeSecret: handshakeSecret, clientHandshakeTrafficSecret: clientHandshake, serverHandshakeTrafficSecret: serverHandshake, masterSecret: masterSecret, clientApplicationTrafficSecret0: clientApplication, serverApplicationTrafficSecret0: serverApplication, exporterMasterSecret: exporter)
+	end 'keySchedule'
+
+	public static function trafficKeys(suite Tls13CipherSuite, trafficSecret ByteArray) returns Tls13TrafficKeys throws Tls13KeyScheduleError
+		try tls13RequireSecret(suite, secret: trafficSecret)
+
+		let hash = suite.hashAlgorithm()
+		let key = tls13Expand(hash, secret: trafficSecret, label: tls13KeyLabel, context: ByteArray.create(), length: suite.keyBytes() as HkdfOutputLength)
+		let iv = tls13Expand(hash, secret: trafficSecret, label: tls13IvLabel, context: ByteArray.create(), length: suite.ivBytes() as HkdfOutputLength)
+
+		return Tls13TrafficKeys.create(key, iv: iv)
+	end 'trafficKeys'
+
+	public static function finishedVerifyData(suite Tls13CipherSuite, baseKey ByteArray, transcriptHash ByteArray) returns ByteArray throws Tls13KeyScheduleError
+		try tls13RequireSecret(suite, secret: baseKey)
+		try tls13RequireHash(suite, hash: transcriptHash)
+
+		let hash = suite.hashAlgorithm()
+		let finishedKey = tls13Expand(hash, secret: baseKey, label: tls13FinishedLabel, context: ByteArray.create(), length: hash.digestBytes() as HkdfOutputLength)
+
+		return hmac(hash, key: finishedKey, message: transcriptHash)
+	end 'finishedVerifyData'
+
+	public static function nextApplicationTrafficSecret(suite Tls13CipherSuite, secret ByteArray) returns ByteArray throws Tls13KeyScheduleError
+		try tls13RequireSecret(suite, secret: secret)
+
+		return tls13Derive(suite.hashAlgorithm(), secret: secret, label: tls13KeyUpdateLabel, transcriptHash: ByteArray.create())
+	end 'nextApplicationTrafficSecret'
+end 'Tls13KeySchedule'
+
+function tls13RequireSecret(suite Tls13CipherSuite, secret ByteArray) throws Tls13KeyScheduleError
+	if secret.count() != suite.hashAlgorithm().digestBytes() 'length'
+		throw Tls13KeyScheduleError.invalidSecretLength
+	end 'length'
+end 'tls13RequireSecret'
+
+function tls13RequireHash(suite Tls13CipherSuite, hash ByteArray) throws Tls13KeyScheduleError
+	if hash.count() != suite.hashAlgorithm().digestBytes() 'length'
+		throw Tls13KeyScheduleError.invalidTranscriptHashLength
+	end 'length'
+end 'tls13RequireHash'
+
+function tls13RequireLabel(label String) throws Tls13KeyScheduleError
+	if not tlsIsPrintableAscii(label) or label.byteLength() > tls13MaxLabelBytes 'label'
+		throw Tls13KeyScheduleError.invalidLabel
+	end 'label'
+end 'tls13RequireLabel'
+
+function tls13Derive(hash HashAlgorithm, secret ByteArray, label String, transcriptHash ByteArray) returns ByteArray
+	return tls13Expand(hash, secret: secret, label: label, context: transcriptHash, length: hash.digestBytes() as HkdfOutputLength)
+end 'tls13Derive'
+
+function tls13Expand(hash HashAlgorithm, secret ByteArray, label String, context ByteArray, length HkdfOutputLength) returns ByteArray
+	let fullLabel = "{tls13LabelPrefix}{label}".toByteArray()
+
+	var info = ByteArray.create()
+	appendOrderedWord(info, word: length as ByteWord, width: tls13LengthFieldBytes, order: ByteOrder.bigEndian)
+	info.push(fullLabel.count() as Byte)
+	info.append(fullLabel)
+	info.push(context.count() as Byte)
+	info.append(context)
+
+	return try hkdfExpand(hash, pseudoRandomKey: secret, info: info, length: length) otherwise panic("tls13Expand: a length the callers bounded was refused")
+end 'tls13Expand'

@@ -1,0 +1,116 @@
+public typealias TlsKeyBytes = int(16 to 32) implements Count
+public typealias TlsIvBytes = int(4 to 12) implements Count
+
+let tlsAes128KeyBytes = 16
+let tlsAes256KeyBytes = 32
+let tlsChaCha20KeyBytes = 32
+let tlsFullIvBytes = 12
+let tlsAesGcmSaltBytes = 4
+let tlsPrintableFirst = 0x20
+let tlsPrintableLast = 0x7E
+
+module enum TlsAeadKind
+	aesGcm
+	chaCha20Poly1305
+end 'TlsAeadKind'
+
+public enum Tls13CipherSuite
+	aes128GcmSha256 = 0x1301
+	aes256GcmSha384 = 0x1302
+	chaCha20Poly1305Sha256 = 0x1303
+
+	public function hashAlgorithm() returns HashAlgorithm
+		return match self 'algorithm'
+			aes128GcmSha256 or
+			chaCha20Poly1305Sha256 gives HashAlgorithm.sha256
+			aes256GcmSha384 gives HashAlgorithm.sha384
+		end 'algorithm'
+	end 'hashAlgorithm'
+
+	public function keyBytes() returns TlsKeyBytes
+		return match self 'width'
+			aes128GcmSha256 gives tlsAes128KeyBytes
+			aes256GcmSha384 gives tlsAes256KeyBytes
+			chaCha20Poly1305Sha256 gives tlsChaCha20KeyBytes
+		end 'width'
+	end 'keyBytes'
+
+	public function ivBytes() returns TlsIvBytes
+		return tlsFullIvBytes
+	end 'ivBytes'
+
+	module function aeadKind() returns TlsAeadKind
+		return match self 'kind'
+			aes128GcmSha256 or
+			aes256GcmSha384 gives TlsAeadKind.aesGcm
+			chaCha20Poly1305Sha256 gives TlsAeadKind.chaCha20Poly1305
+		end 'kind'
+	end 'aeadKind'
+end 'Tls13CipherSuite'
+
+public enum Tls12CipherSuite
+	ecdheEcdsaAes128GcmSha256 = 0xC02B
+	ecdheRsaAes128GcmSha256 = 0xC02F
+	ecdheEcdsaAes256GcmSha384 = 0xC02C
+	ecdheRsaAes256GcmSha384 = 0xC030
+	ecdheEcdsaChaCha20Poly1305Sha256 = 0xCCA9
+	ecdheRsaChaCha20Poly1305Sha256 = 0xCCA8
+
+	public function hashAlgorithm() returns HashAlgorithm
+		return match self 'algorithm'
+			ecdheEcdsaAes128GcmSha256 or
+			ecdheRsaAes128GcmSha256 or
+			ecdheEcdsaChaCha20Poly1305Sha256 or
+			ecdheRsaChaCha20Poly1305Sha256 gives HashAlgorithm.sha256
+			ecdheEcdsaAes256GcmSha384 or
+			ecdheRsaAes256GcmSha384 gives HashAlgorithm.sha384
+		end 'algorithm'
+	end 'hashAlgorithm'
+
+	public function keyBytes() returns TlsKeyBytes
+		return match self 'width'
+			ecdheEcdsaAes128GcmSha256 or
+			ecdheRsaAes128GcmSha256 gives tlsAes128KeyBytes
+			ecdheEcdsaAes256GcmSha384 or
+			ecdheRsaAes256GcmSha384 gives tlsAes256KeyBytes
+			ecdheEcdsaChaCha20Poly1305Sha256 or
+			ecdheRsaChaCha20Poly1305Sha256 gives tlsChaCha20KeyBytes
+		end 'width'
+	end 'keyBytes'
+
+	public function ivBytes() returns TlsIvBytes
+		return match self 'width'
+			ecdheEcdsaAes128GcmSha256 or
+			ecdheRsaAes128GcmSha256 or
+			ecdheEcdsaAes256GcmSha384 or
+			ecdheRsaAes256GcmSha384 gives tlsAesGcmSaltBytes
+			ecdheEcdsaChaCha20Poly1305Sha256 or
+			ecdheRsaChaCha20Poly1305Sha256 gives tlsFullIvBytes
+		end 'width'
+	end 'ivBytes'
+
+	module function aeadKind() returns TlsAeadKind
+		return match self 'kind'
+			ecdheEcdsaAes128GcmSha256 or
+			ecdheRsaAes128GcmSha256 or
+			ecdheEcdsaAes256GcmSha384 or
+			ecdheRsaAes256GcmSha384 gives TlsAeadKind.aesGcm
+			ecdheEcdsaChaCha20Poly1305Sha256 or
+			ecdheRsaChaCha20Poly1305Sha256 gives TlsAeadKind.chaCha20Poly1305
+		end 'kind'
+	end 'aeadKind'
+end 'Tls12CipherSuite'
+
+module function tlsIsPrintableAscii(text String) returns bool
+	if text.byteLength() == 0 'empty'
+		return false
+	end 'empty'
+
+	for byte in text.bytes() 'eachByte'
+		if byte < tlsPrintableFirst or byte > tlsPrintableLast 'outside'
+			return false
+		end 'outside'
+	end 'eachByte'
+
+	return true
+end 'tlsIsPrintableAscii'

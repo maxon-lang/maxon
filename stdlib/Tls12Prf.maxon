@@ -1,0 +1,187 @@
+public typealias Tls12PrfLength = int(0 to u32.max) implements Count
+
+public enum Tls12PrfError implements Error
+	unsupportedAlgorithm
+	invalidLabel
+	invalidPreMasterSecretLength
+	invalidRandomLength
+	invalidSessionHashLength
+	invalidMasterSecretLength
+	invalidHandshakeHashLength
+end 'Tls12PrfError'
+
+public enum Tls12Sender
+	client
+	server
+end 'Tls12Sender'
+
+let tls12RandomBytes = 32
+let tls12MasterSecretBytes = 48
+let tls12VerifyDataBytes = 12
+let tls12MasterSecretLabel = "master secret"
+let tls12ExtendedMasterSecretLabel = "extended master secret"
+let tls12KeyExpansionLabel = "key expansion"
+let tls12ClientFinishedLabel = "client finished"
+let tls12ServerFinishedLabel = "server finished"
+
+public type Tls12KeyBlock
+	var clientWriteKey as ByteArray
+	var serverWriteKey as ByteArray
+	var clientWriteIv as ByteArray
+	var serverWriteIv as ByteArray
+
+	public function clientWriteKey() returns ByteArray
+		return clientWriteKey
+	end 'clientWriteKey'
+
+	public function serverWriteKey() returns ByteArray
+		return serverWriteKey
+	end 'serverWriteKey'
+
+	public function clientWriteIv() returns ByteArray
+		return clientWriteIv
+	end 'clientWriteIv'
+
+	public function serverWriteIv() returns ByteArray
+		return serverWriteIv
+	end 'serverWriteIv'
+
+	static function create(clientWriteKey ByteArray, serverWriteKey ByteArray, clientWriteIv ByteArray, serverWriteIv ByteArray) returns Tls12KeyBlock
+		return Self{clientWriteKey: clientWriteKey, serverWriteKey: serverWriteKey, clientWriteIv: clientWriteIv, serverWriteIv: serverWriteIv}
+	end 'create'
+end 'Tls12KeyBlock'
+
+public type Tls12Prf
+	public static function prf(hash HashAlgorithm, secret ByteArray, label String, seed ByteArray, length Tls12PrfLength) returns ByteArray throws Tls12PrfError
+		try tls12RequireHash(hash)
+
+		if not tlsIsPrintableAscii(label) 'label'
+			throw Tls12PrfError.invalidLabel
+		end 'label'
+
+		return tls12Expand(hash, secret: secret, label: label, seed: seed, length: length)
+	end 'prf'
+
+	public static function masterSecret(suite Tls12CipherSuite, preMasterSecret ByteArray, clientRandom ByteArray, serverRandom ByteArray) returns ByteArray throws Tls12PrfError
+		try tls12RequirePreMasterSecret(preMasterSecret)
+		try tls12RequireRandom(clientRandom)
+		try tls12RequireRandom(serverRandom)
+
+		var seed = clientRandom.clone()
+		seed.append(serverRandom)
+
+		return tls12Expand(suite.hashAlgorithm(), secret: preMasterSecret, label: tls12MasterSecretLabel, seed: seed, length: tls12MasterSecretBytes)
+	end 'masterSecret'
+
+	public static function extendedMasterSecret(suite Tls12CipherSuite, preMasterSecret ByteArray, sessionHash ByteArray) returns ByteArray throws Tls12PrfError
+		try tls12RequirePreMasterSecret(preMasterSecret)
+
+		if sessionHash.count() != suite.hashAlgorithm().digestBytes() 'sessionHash'
+			throw Tls12PrfError.invalidSessionHashLength
+		end 'sessionHash'
+
+		return tls12Expand(suite.hashAlgorithm(), secret: preMasterSecret, label: tls12ExtendedMasterSecretLabel, seed: sessionHash, length: tls12MasterSecretBytes)
+	end 'extendedMasterSecret'
+
+	public static function keyBlock(suite Tls12CipherSuite, masterSecret ByteArray, clientRandom ByteArray, serverRandom ByteArray) returns Tls12KeyBlock throws Tls12PrfError
+		try tls12RequireMasterSecret(masterSecret)
+		try tls12RequireRandom(clientRandom)
+		try tls12RequireRandom(serverRandom)
+
+		var seed = serverRandom.clone()
+		seed.append(clientRandom)
+
+		let keyBytes = suite.keyBytes()
+		let ivBytes = suite.ivBytes()
+		let block = tls12Expand(suite.hashAlgorithm(), secret: masterSecret, label: tls12KeyExpansionLabel, seed: seed, length: (2 * keyBytes + 2 * ivBytes) as Tls12PrfLength)
+		let clientKey = tls12Part(block, start: 0, length: keyBytes)
+		let serverKey = tls12Part(block, start: keyBytes, length: keyBytes)
+		let clientIv = tls12Part(block, start: 2 * keyBytes, length: ivBytes)
+		let serverIv = tls12Part(block, start: 2 * keyBytes + ivBytes, length: ivBytes)
+
+		return Tls12KeyBlock.create(clientKey, serverWriteKey: serverKey, clientWriteIv: clientIv, serverWriteIv: serverIv)
+	end 'keyBlock'
+
+	public static function finishedVerifyData(suite Tls12CipherSuite, masterSecret ByteArray, sender Tls12Sender, handshakeHash ByteArray) returns ByteArray throws Tls12PrfError
+		try tls12RequireMasterSecret(masterSecret)
+
+		if handshakeHash.count() != suite.hashAlgorithm().digestBytes() 'handshakeHash'
+			throw Tls12PrfError.invalidHandshakeHashLength
+		end 'handshakeHash'
+
+		let label = match sender 'label'
+			client gives tls12ClientFinishedLabel
+			server gives tls12ServerFinishedLabel
+		end 'label'
+
+		return tls12Expand(suite.hashAlgorithm(), secret: masterSecret, label: label, seed: handshakeHash, length: tls12VerifyDataBytes)
+	end 'finishedVerifyData'
+
+	public static function handshakeHash(suite Tls12CipherSuite, messages ByteArrays) returns ByteArray
+		var digest = Digest.create(suite.hashAlgorithm())
+
+		for message in messages 'eachMessage'
+			digest.update(message)
+		end 'eachMessage'
+
+		return digest.finalize()
+	end 'handshakeHash'
+end 'Tls12Prf'
+
+function tls12RequireHash(hash HashAlgorithm) throws Tls12PrfError
+	match hash 'supported'
+		sha256 or
+		sha384 then return
+		sha512 then throw Tls12PrfError.unsupportedAlgorithm
+	end 'supported'
+end 'tls12RequireHash'
+
+function tls12RequirePreMasterSecret(preMasterSecret ByteArray) throws Tls12PrfError
+	if preMasterSecret.count() == 0 'empty'
+		throw Tls12PrfError.invalidPreMasterSecretLength
+	end 'empty'
+end 'tls12RequirePreMasterSecret'
+
+function tls12RequireMasterSecret(masterSecret ByteArray) throws Tls12PrfError
+	if masterSecret.count() != tls12MasterSecretBytes 'length'
+		throw Tls12PrfError.invalidMasterSecretLength
+	end 'length'
+end 'tls12RequireMasterSecret'
+
+function tls12RequireRandom(random ByteArray) throws Tls12PrfError
+	if random.count() != tls12RandomBytes 'length'
+		throw Tls12PrfError.invalidRandomLength
+	end 'length'
+end 'tls12RequireRandom'
+
+function tls12Part(block ByteArray, start ElementIndex, length Count) returns ByteArray
+	return try block.slice(start, endIndex: start + length) otherwise panic("tls12Part: the key block is shorter than its parts")
+end 'tls12Part'
+
+function tls12Expand(hash HashAlgorithm, secret ByteArray, label String, seed ByteArray, length Tls12PrfLength) returns ByteArray
+	var labelledSeed = label.toByteArray()
+	labelledSeed.append(seed)
+
+	var output = ByteArray.create()
+	output.reserve(length)
+
+	var chain = labelledSeed.clone()
+
+	while output.count() < length 'eachBlock'
+		chain = hmac(hash, key: secret, message: chain)
+
+		var input = chain.clone()
+		input.append(labelledSeed)
+
+		let block = hmac(hash, key: secret, message: input)
+		let wanted = length - output.count()
+
+		if block.count() <= wanted 'whole'
+			output.append(block)
+		end 'whole' else 'partial'
+			output.append(try block.slice(0, endIndex: wanted) otherwise panic("tls12Expand: a block is longer than the bytes still wanted"))
+		end 'partial'
+	end 'eachBlock'
+
+	return output
+end 'tls12Expand'

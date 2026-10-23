@@ -182,8 +182,6 @@ let x509DefaultedExtensionParts = 2
 let x509RangeHalves = 2
 let x509LeadingGap = 1
 let x509TrailingGapOffset = 2
-let x509MinimumModulusBits = 2048
-let x509MaximumModulusBits = 4096
 
 let x509OidEcdsaWithSha256 = ByteArray from [0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x02]
 let x509OidEcdsaWithSha384 = ByteArray from [0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x03]
@@ -196,7 +194,6 @@ let x509OidEd25519 = ByteArray from [0x2B, 0x65, 0x70]
 let x509OidSha256 = ByteArray from [0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01]
 let x509OidSha384 = ByteArray from [0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02]
 let x509OidSha512 = ByteArray from [0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03]
-let x509OidRsaEncryption = ByteArray from [0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01]
 let x509OidEcPublicKey = ByteArray from [0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01]
 let x509OidCommonName = ByteArray from [0x55, 0x04, 0x03]
 let x509OidOrganization = ByteArray from [0x55, 0x04, 0x0A]
@@ -1503,7 +1500,7 @@ function x509PublicKey(element ByteArray) returns X509PublicKey throws X509Error
 end 'x509PublicKey'
 
 function x509KeyAlgorithm(oid ByteArray, parameters ByteArrays) returns X509KeyAlgorithm throws X509Error
-	if oid == x509OidRsaEncryption and x509IsNullParameters(parameters) 'rsa'
+	if oid == rsaEncryptionOid and x509IsNullParameters(parameters) 'rsa'
 		return X509KeyAlgorithm.rsa
 	end 'rsa'
 
@@ -2058,9 +2055,9 @@ function x509VerifyRsa(key X509PublicKey, hash HashAlgorithm, isPss bool, messag
 	end 'family'
 
 	var integers = try DerReader.create(key.keyBytes()).enterSequence() otherwise panic("a parsed RSA key is an RSAPublicKey")
-	let bits = x509ModulusBits(try integers.readInteger() otherwise panic("a parsed RSA key has a positive modulus"))
+	let bits = rsaBitLength(try integers.readInteger() otherwise panic("a parsed RSA key has a positive modulus"))
 
-	if bits < x509MinimumModulusBits or bits > x509MaximumModulusBits 'size'
+	if bits < rsaMinimumModulusBits or bits > rsaMaximumModulusBits 'size'
 		throw X509VerifyError.unsupportedAlgorithm
 	end 'size'
 
@@ -2070,18 +2067,6 @@ function x509VerifyRsa(key X509PublicKey, hash HashAlgorithm, isPss bool, messag
 
 	return try Rsa.verifyPkcs1v15(key.der(), hash: hash, message: message, signature: signature) otherwise false
 end 'x509VerifyRsa'
-
-function x509ModulusBits(modulus ByteArray) returns Count
-	var top = try modulus.get(0) otherwise panic("a positive modulus has a first octet")
-	var bits = (modulus.count() - 1) * x509BitsPerByte
-
-	while top != 0 'eachBit'
-		bits = bits + 1
-		top = top shr 1
-	end 'eachBit'
-
-	return bits
-end 'x509ModulusBits'
 
 function x509VerifyEd25519(key X509PublicKey, message ByteArray, signature ByteArray) returns bool throws X509VerifyError
 	if key.algorithm() != X509KeyAlgorithm.ed25519 'family'
