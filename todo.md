@@ -137,3 +137,33 @@ Since you're building the compiler itself, you can provide the AI with a "Mental
   byte-identical exes from before and after that change and passed 60/60 direct + 30/30 spec-test each, but both
   landed on the OLD image. Needs a sample on 20260925.250.1 (the diag workflow keeps crash dumps). The VEH is the
   only converter: no `SetUnhandledExceptionFilter` exists in the tree.
+- E3077 (`semanticVarShouldBeLet`) covers locals only, so a `var` field nothing writes goes unflagged — 21 such fields
+  sat in `MxdbgReader.maxon` until c7a076e57. A user-approved design: extend E3077 to file-private and `module` `var`
+  fields of the program's own types (`public`/`export` exempt, library tiers not audited in a user compile) with
+  "field 'T.f' is never written; use 'let' instead of 'var'", every such field reported; a `maxon check-stdlib`
+  maintenance command (library tier, every stdlib body built, sharing `check-scriptlib`'s path) audits stdlib, since
+  stdlib cannot be compiled as a program. The test is "would `let` compile": a field needs `var` wherever a `let`
+  field is refused — E2013 assignment after construction, E3159 write-through / mutating method / by-reference /
+  writing parameter, E3078 a store a `let` field refuses, E3188 a read-out value reaching writable state — and that
+  answer must come from `ProvenanceTracer` treating each audited field as a hypothetical read-only root, not from a
+  second analysis. Converting a field can make its type an all-`let` value type and inline-packable
+  (`inlineRecordShapeOf`), and `is` on a packed type is E3068, so an identity comparison is a needs-`var` door too.
+  A first implementation (parallel `FieldFlow` pass) was abandoned in review for duplicating the tracer and missing
+  writes through `holdValue` and through records appended into a writable container. A landing owes a
+  `## Unreleased` entry (Fix: declare the field `let`), the E3077 registry doc, LANGUAGE_REFERENCE's rule, and the
+  conversion of every field the rule names (in that attempt: 37 in maxon-bin, 44 in stdlib, and ~400 lines of
+  spec/test/example programs whose subject was not the field).
+- `maxon build stdlib/URL.maxon` (and `stdlib/Clock.maxon`) panics at `SemanticCheck.maxon` `hiddenSymbolDiagnostic`
+  via `Parser.recordHiddenTypeName` — a compiler panic on a stdlib file built as a program; reproduces with the
+  previous compiler too. `maxon build stdlib` refuses with E3005 (`String.maxon:112`, `managed` holding `ByteMemory`)
+  and E2015 (`Vector.maxon:12`).
+- x64-windows `ir-specs` pin `a-getter-result-kept-across-a-store-to-its-field-is-counted`
+  (ir-specs/borrowed-field-getters.md) does not match what the compiler renders at HEAD; minting it on the lane fixes
+  it once the render is confirmed right.
+- `DebugEngine.closeLeavingItRunning` on a `detachFailed` engine asks the kernel to detach twice:
+  `clearWhatCanBeClearedAndLetGo` retries once, then the fallback `close()` runs it again. And a `detachFailed`
+  program that ptrace only partly detached may sit stopped with DAP watching it until `quit` (found by reading).
+- Against Go 1.27.3 on arm64 (docs/concurrency-benchmark-log.md, 8028c639c rows) every workload is at or under Go
+  except spawn-many at P>1 (2.21x macos, 1.15x orb, as x64's 2.1-2.7x) and peak working set of spawn-many (2-3x) and
+  coroutine-churn (1.4-1.7x), the same shape as x64. The record-resident context switch (8028c639c) is unmeasured on
+  x64: the next windows/wsl run should A/B it.
