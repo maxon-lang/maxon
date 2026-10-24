@@ -1,4 +1,4 @@
-/// HTTP/1.1 server for answering requests over TCP connections.
+/// HTTP/1.1 server for answering requests over TCP and TLS connections.
 /// @category Network
 /// Server-side HTTP errors. `tlsFailed` carries the `TlsError` of a connection whose handshake or TLS session failed.
 public union HttpServerError implements Error
@@ -279,7 +279,8 @@ public type HttpServer
 
 	/// Take the next connection and the one request on it. A request this server refuses is answered
 	/// on the connection with its status and then thrown, so the peer is not left waiting. An
-	/// `OPTIONS *` is answered here, and the next connection taken.
+	/// `OPTIONS *` is answered here, and the next connection taken. A connection whose TLS handshake
+	/// fails is thrown as `tlsFailed`.
 	public function accept() returns HttpExchange throws HttpServerError
 		while true 'nextConnection'
 			if self.closing.asked 'alreadyClosed'

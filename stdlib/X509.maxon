@@ -1,5 +1,5 @@
 /// X.509 certificates (RFC 5280): strict-DER parsing, and the path validation a TLS client applies to a
-/// server's certificate chain.
+/// server's certificate chain and a TLS server to a client's.
 /// @category Crypto
 
 /// Why `X509.parse` refused a certificate: the first failing step of its decoding.
@@ -33,11 +33,13 @@ public enum X509VerifyError implements Error
 	invalidArgument
 end 'X509VerifyError'
 
+/// Whom `X509.verify` checks a chain for: a TLS server, `serverAuth`, or a client, `clientAuth`.
 public enum X509Purpose
 	serverAuth
 	clientAuth
 end 'X509Purpose'
 
+/// The name `X509.verify` matches: the DNS name or IP address a client connected to, or `none`.
 public union X509VerifyHost
 	named(name String)
 	none
@@ -999,7 +1001,7 @@ type X509PathSearch
 	end 'signatureOutcome'
 end 'X509PathSearch'
 
-/// X.509 certificate parsing and TLS server path validation.
+/// X.509 certificate parsing and TLS path validation.
 public type X509
 	/// The certificate one DER X.509 v1 or v3 certificate encodes, or the `X509Error` of the first failing
 	/// step: the outer structure, version, serial, signature algorithm, issuer, validity, subject, public
@@ -1034,7 +1036,8 @@ public type X509
 	end 'parse'
 
 	/// The chain from `leaf` through `intermediates` to one of `roots`, leaf first, each certificate exactly
-	/// as passed in, that is valid at `now` for the TLS server `host`: a DNS name or an IP address literal.
+	/// as passed in, that is valid at `now` for `purpose`. `serverAuth` takes the server's name as
+	/// `host`, `clientAuth` takes `X509VerifyHost.none`, and any other pairing is `invalidArgument`.
 	/// Candidate chains are searched depth first, roots before intermediates, each in the order given; the
 	/// first that passes every check is returned, and when none does, the first candidate's error is thrown.
 	public static function verify(leaf ByteArray, intermediates ByteArrays, roots ByteArrays, host X509VerifyHost, now UnixSeconds, purpose X509Purpose = X509Purpose.serverAuth) returns ByteArrays throws X509VerifyError

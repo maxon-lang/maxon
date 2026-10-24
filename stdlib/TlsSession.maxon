@@ -227,6 +227,7 @@ module type TlsSession
 
 		input.install(try tlsTrafficCipher(suite, secret: nextPeer))
 
+		// The reply is sealed under the old write keys, which the peer still reads with until it arrives.
 		if request == TlsKeyUpdateRequest.updateRequested 'respond'
 			try writer.writeHandshake(try tlsEncodedMessage(TlsHandshakeMessage.keyUpdate(TlsKeyUpdateRequest.updateNotRequested)))
 			nextOwn = try tlsNextTrafficSecret(suite, secret: ownSecret)

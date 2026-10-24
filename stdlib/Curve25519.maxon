@@ -1,5 +1,5 @@
-/// X25519 key agreement (RFC 7748) and Ed25519 signature verification (RFC 8032), over the field of
-/// integers modulo 2^255 - 19.
+/// X25519 key agreement (RFC 7748) and Ed25519 signing and signature verification (RFC 8032), over
+/// the field of integers modulo 2^255 - 19.
 /// @category Crypto
 typealias Curve25519Word = bits(64)
 typealias Curve25519Field = Vector with 10 Curve25519Word
@@ -25,7 +25,7 @@ public enum X25519Error implements Error
 	allZeroSharedSecret
 end 'X25519Error'
 
-/// Why `Ed25519.verify` refused its input.
+/// Why an `Ed25519` call refused its input.
 public enum Ed25519Error implements Error
 	invalidLength
 end 'Ed25519Error'
@@ -567,6 +567,8 @@ function scalarShiftIn(s Curve25519Scalar, bit Curve25519Word) returns Curve2551
 	return shifted
 end 'scalarShiftIn'
 
+// Reduces secret values for `Ed25519.sign`, so the subtraction is kept by a masked select: a branch
+// on the carry would leak the nonce through timing.
 function scalarReduce(digest ByteArray) returns Curve25519Scalar
 	let order = ed25519GroupOrder()
 	var reduced = Curve25519Scalar.create()
@@ -654,6 +656,8 @@ type EdwardsPoint
 		return EdwardsPoint{x: feMul(e, b: f), y: feMul(g, b: h), z: feMul(f, b: g), t: feMul(e, b: h)}
 	end 'add'
 
+	// Every bit computes the addition and a masked select keeps it: the scalar is secret, and a branch
+	// on its bits would leak it through timing.
 	static function encodedBaseMultiple(scalar ByteArray) returns ByteArray
 		let base = EdwardsPoint.base()
 		var sum = EdwardsPoint.identity()
@@ -696,7 +700,7 @@ function ed25519Expand(privateKey ByteArray) returns (ByteArray, ByteArray) thro
 	return (curve25519ClampedScalar(scalar), prefix)
 end 'ed25519Expand'
 
-/// Ed25519 signature verification (RFC 8032).
+/// Ed25519 key derivation, signing and signature verification (RFC 8032).
 public type Ed25519
 	/// Whether `signature` is a valid Ed25519 signature of `message` under `publicKey`.
 	public static function verify(publicKey ByteArray, message ByteArray, signature ByteArray) returns bool throws Ed25519Error
@@ -736,11 +740,14 @@ public type Ed25519
 		return sum.encode().equals(rBytes)
 	end 'verify'
 
+	/// The 32-byte public key of a 32-byte private key.
 	public static function publicKey(privateKey ByteArray) returns ByteArray throws Ed25519Error
 		let (scalar, _) = try ed25519Expand(privateKey)
 		return EdwardsPoint.encodedBaseMultiple(scalar)
 	end 'publicKey'
 
+	/// The 64-byte signature `R ‖ S` of `message` under a 32-byte private key, in time independent
+	/// of the key.
 	public static function sign(privateKey ByteArray, message ByteArray) returns ByteArray throws Ed25519Error
 		let (scalar, prefix) = try ed25519Expand(privateKey)
 		let publicKey = EdwardsPoint.encodedBaseMultiple(scalar)

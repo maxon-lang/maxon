@@ -799,7 +799,7 @@ public type Ecdsa
 	end 'verify'
 end 'Ecdsa'
 
-/// Why `EcdsaP256.sign` refused a key.
+/// Why `EcdsaP256.sign` or `EcdsaP384.sign` refused a key.
 public enum EcdsaSignError implements Error
 	invalidPrivateKey
 end 'EcdsaSignError'
@@ -812,7 +812,10 @@ public type EcdsaP256
 	end 'sign'
 end 'EcdsaP256'
 
+/// Deterministic ECDSA signing on P-384 with SHA-384 (RFC 6979).
 public type EcdsaP384
+	/// The DER signature of `message` under a 48-byte private key, with the RFC 6979 nonce over
+	/// HMAC-SHA-384.
 	public static function sign(privateKey ByteArray, message ByteArray) returns ByteArray throws EcdsaSignError
 		return try NistCurve.of(EcdsaCurve.p384).sign(privateKey, message: message)
 	end 'sign'

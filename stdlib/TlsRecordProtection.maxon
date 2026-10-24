@@ -1,6 +1,9 @@
+/// The number of a record in one direction: the next one a record protection seals or opens.
 public typealias TlsSequenceNumber = int(0 to u64.max)
+/// How many zero bytes of padding a TLS 1.3 record carries after its content type.
 public typealias TlsPaddingLength = int(0 to u32.max) implements Count
 
+/// Why a record protection refused a key, a record or a plaintext: the first check that failed.
 public enum TlsRecordError implements Error
 	invalidKeyLength
 	invalidIvLength
@@ -14,6 +17,8 @@ public enum TlsRecordError implements Error
 	sequenceNumberExhausted
 end 'TlsRecordError'
 
+/// A record's content type, with its wire value as the raw value. `changeCipherSpec` is never
+/// protected.
 public enum TlsContentType
 	changeCipherSpec = 20
 	alert = 21
@@ -51,14 +56,17 @@ let tlsMaxCiphertext13Bytes = 16640
 module let tlsMaxCiphertext12Bytes = 18432
 let tlsLastSequenceNumber = 18446744073709551615 as TlsSequenceNumber
 
+/// The content type and plaintext of one opened record.
 public type TlsOpenedRecord
 	var contentType as TlsContentType
 	var plaintext as ByteArray
 
+	/// The record's content type; for TLS 1.3, the inner one.
 	public function contentType() returns TlsContentType
 		return contentType
 	end 'contentType'
 
+	/// The record's plaintext, the TLS 1.3 padding removed.
 	public function plaintext() returns ByteArray
 		return plaintext
 	end 'plaintext'
@@ -141,15 +149,20 @@ type TlsRecordState
 	end 'open'
 end 'TlsRecordState'
 
+/// One direction's TLS 1.3 record protection (RFC 8446 section 5): it seals or opens one record at
+/// a time and numbers the records itself.
 public type Tls13RecordProtection implements TlsRecordOpener
 	var state as TlsRecordState
 
+	/// A protection for `key` and the 12-byte `iv`, whose first record is number `sequenceNumber`.
 	public static function create(suite Tls13CipherSuite, key ByteArray, iv ByteArray, sequenceNumber TlsSequenceNumber = 0) returns Tls13RecordProtection throws TlsRecordError
 		try tlsRequireKeyMaterial(key, iv: iv, keyBytes: suite.keyBytes(), ivBytes: suite.ivBytes())
 
 		return Self{state: TlsRecordState.create(suite.aeadKind(), key: key, iv: iv, sequenceNumber: sequenceNumber)}
 	end 'create'
 
+	/// The protected record of `plaintext`, with `paddingLength` zero bytes after the inner content
+	/// type.
 	public function seal(contentType TlsContentType, plaintext ByteArray, paddingLength TlsPaddingLength = 0) returns ByteArray throws TlsRecordError
 		let sequenceNumber = try state.sequence()
 		try tlsRequireProtectedType(contentType)
@@ -173,6 +186,7 @@ public type Tls13RecordProtection implements TlsRecordOpener
 		return record
 	end 'seal'
 
+	/// The content type and plaintext of one whole protected record.
 	public function open(record ByteArray) returns TlsOpenedRecord throws TlsRecordError
 		let sequenceNumber = try state.sequence()
 		try tlsRequireFraming(record)
@@ -211,15 +225,21 @@ public type Tls13RecordProtection implements TlsRecordOpener
 	end 'open'
 end 'Tls13RecordProtection'
 
+/// One direction's TLS 1.2 AEAD record protection (RFC 5246 section 6.2.3.3): it seals or opens one
+/// record at a time and numbers the records itself.
 public type Tls12RecordProtection implements TlsRecordOpener
 	var state as TlsRecordState
 
+	/// A protection for `key` and the suite's implicit `iv`: 4 bytes for AES-GCM, 12 for
+	/// ChaCha20-Poly1305.
 	public static function create(suite Tls12CipherSuite, key ByteArray, iv ByteArray, sequenceNumber TlsSequenceNumber = 0) returns Tls12RecordProtection throws TlsRecordError
 		try tlsRequireKeyMaterial(key, iv: iv, keyBytes: suite.keyBytes(), ivBytes: suite.ivBytes())
 
 		return Self{state: TlsRecordState.create(suite.aeadKind(), key: key, iv: iv, sequenceNumber: sequenceNumber)}
 	end 'create'
 
+	/// The protected record of `plaintext`; an AES-GCM record carries the sequence number as its
+	/// explicit nonce.
 	public function seal(contentType TlsContentType, plaintext ByteArray) returns ByteArray throws TlsRecordError
 		let sequenceNumber = try state.sequence()
 		try tlsRequireProtectedType(contentType)
@@ -244,6 +264,8 @@ public type Tls12RecordProtection implements TlsRecordOpener
 		return record
 	end 'seal'
 
+	/// The content type and plaintext of one whole protected record. An AES-GCM explicit nonce is
+	/// taken as sent.
 	public function open(record ByteArray) returns TlsOpenedRecord throws TlsRecordError
 		let sequenceNumber = try state.sequence()
 		try tlsRequireFraming(record)

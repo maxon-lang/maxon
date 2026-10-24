@@ -1,3 +1,4 @@
+/// Why a `Tls13KeySchedule` function refused its input: the first check that failed.
 public enum Tls13KeyScheduleError implements Error
 	invalidSecretLength
 	invalidLabel
@@ -24,6 +25,7 @@ let tls13IvLabel = "iv"
 let tls13FinishedLabel = "finished"
 let tls13KeyUpdateLabel = "traffic upd"
 
+/// The secrets `Tls13KeySchedule.keySchedule` derives, each read by a function of its name.
 public type Tls13Secrets
 	var earlySecret as ByteArray
 	var handshakeSecret as ByteArray
@@ -34,34 +36,42 @@ public type Tls13Secrets
 	var serverApplicationTrafficSecret0 as ByteArray
 	var exporterMasterSecret as ByteArray
 
+	/// The Early Secret, from a zero pre-shared key.
 	public function earlySecret() returns ByteArray
 		return earlySecret
 	end 'earlySecret'
 
+	/// The Handshake Secret.
 	public function handshakeSecret() returns ByteArray
 		return handshakeSecret
 	end 'handshakeSecret'
 
+	/// `client_handshake_traffic_secret`.
 	public function clientHandshakeTrafficSecret() returns ByteArray
 		return clientHandshakeTrafficSecret
 	end 'clientHandshakeTrafficSecret'
 
+	/// `server_handshake_traffic_secret`.
 	public function serverHandshakeTrafficSecret() returns ByteArray
 		return serverHandshakeTrafficSecret
 	end 'serverHandshakeTrafficSecret'
 
+	/// The Master Secret.
 	public function masterSecret() returns ByteArray
 		return masterSecret
 	end 'masterSecret'
 
+	/// `client_application_traffic_secret_0`.
 	public function clientApplicationTrafficSecret0() returns ByteArray
 		return clientApplicationTrafficSecret0
 	end 'clientApplicationTrafficSecret0'
 
+	/// `server_application_traffic_secret_0`.
 	public function serverApplicationTrafficSecret0() returns ByteArray
 		return serverApplicationTrafficSecret0
 	end 'serverApplicationTrafficSecret0'
 
+	/// `exporter_master_secret`.
 	public function exporterMasterSecret() returns ByteArray
 		return exporterMasterSecret
 	end 'exporterMasterSecret'
@@ -93,14 +103,17 @@ module type Tls13ApplicationStage
 	end 'create'
 end 'Tls13ApplicationStage'
 
+/// The AEAD key and IV of one traffic secret, from `Tls13KeySchedule.trafficKeys`.
 public type Tls13TrafficKeys
 	var key as ByteArray
 	var iv as ByteArray
 
+	/// The AEAD key.
 	public function key() returns ByteArray
 		return key
 	end 'key'
 
+	/// The 12-byte IV.
 	public function iv() returns ByteArray
 		return iv
 	end 'iv'
@@ -110,7 +123,11 @@ public type Tls13TrafficKeys
 	end 'create'
 end 'Tls13TrafficKeys'
 
+/// The TLS 1.3 key schedule (RFC 8446 section 7) for a full (EC)DHE handshake without a
+/// pre-shared key.
 public type Tls13KeySchedule
+	/// `HKDF-Expand-Label`: `length` bytes of `secret` expanded under `"tls13 "` + `label` and
+	/// `context`.
 	public static function expandLabel(suite Tls13CipherSuite, secret ByteArray, label String, context ByteArray, length HkdfOutputLength) returns ByteArray throws Tls13KeyScheduleError
 		try tls13RequireSecret(suite, secret: secret)
 		try tls13RequireLabel(label)
@@ -126,6 +143,8 @@ public type Tls13KeySchedule
 		return tls13Expand(suite.hashAlgorithm(), secret: secret, label: label, context: context, length: length)
 	end 'expandLabel'
 
+	/// `Derive-Secret`: `expandLabel` with `transcriptHash` as the context and the hash length as the
+	/// length.
 	public static function deriveSecret(suite Tls13CipherSuite, secret ByteArray, label String, transcriptHash ByteArray) returns ByteArray throws Tls13KeyScheduleError
 		try tls13RequireSecret(suite, secret: secret)
 		try tls13RequireLabel(label)
@@ -134,10 +153,13 @@ public type Tls13KeySchedule
 		return tls13Derive(suite.hashAlgorithm(), secret: secret, label: label, transcriptHash: transcriptHash)
 	end 'deriveSecret'
 
+	/// The suite's hash of the handshake messages, each with its 4-byte header.
 	public static function transcriptHash(suite Tls13CipherSuite, messages ByteArrays) returns ByteArray
 		return sha2OfMessages(suite.hashAlgorithm(), messages: messages)
 	end 'transcriptHash'
 
+	/// The `message_hash` message that stands for the first ClientHello in the transcript after a
+	/// HelloRetryRequest.
 	public static function messageHash(suite Tls13CipherSuite, clientHello ByteArray) returns ByteArray
 		let hash = suite.hashAlgorithm()
 
@@ -149,6 +171,8 @@ public type Tls13KeySchedule
 		return message
 	end 'messageHash'
 
+	/// Every secret of the schedule: `helloHash` is the transcript hash through the ServerHello and
+	/// `serverFinishedHash` the one through the server's Finished.
 	public static function keySchedule(suite Tls13CipherSuite, sharedSecret ByteArray, helloHash ByteArray, serverFinishedHash ByteArray) returns Tls13Secrets throws Tls13KeyScheduleError
 		let handshake = try Tls13KeySchedule.handshakeStage(suite, sharedSecret: sharedSecret, helloHash: helloHash)
 		let application = try Tls13KeySchedule.applicationStage(suite, masterSecret: handshake.masterSecret, serverFinishedHash: serverFinishedHash)
@@ -192,6 +216,7 @@ public type Tls13KeySchedule
 		return Tls13ApplicationStage.create(clientApplication, serverTrafficSecret: serverApplication, exporterSecret: exporter)
 	end 'applicationStage'
 
+	/// The AEAD key and IV of a traffic secret.
 	public static function trafficKeys(suite Tls13CipherSuite, trafficSecret ByteArray) returns Tls13TrafficKeys throws Tls13KeyScheduleError
 		try tls13RequireSecret(suite, secret: trafficSecret)
 
@@ -202,6 +227,8 @@ public type Tls13KeySchedule
 		return Tls13TrafficKeys.create(key, iv: iv)
 	end 'trafficKeys'
 
+	/// The `verify_data` of a Finished message, under the finished key of `baseKey`, the sender's
+	/// handshake traffic secret.
 	public static function finishedVerifyData(suite Tls13CipherSuite, baseKey ByteArray, transcriptHash ByteArray) returns ByteArray throws Tls13KeyScheduleError
 		try tls13RequireSecret(suite, secret: baseKey)
 		try tls13RequireHash(suite, hash: transcriptHash)
@@ -212,6 +239,7 @@ public type Tls13KeySchedule
 		return hmac(hash, key: finishedKey, message: transcriptHash)
 	end 'finishedVerifyData'
 
+	/// The KeyUpdate step: `application_traffic_secret_N+1` from `application_traffic_secret_N`.
 	public static function nextApplicationTrafficSecret(suite Tls13CipherSuite, secret ByteArray) returns ByteArray throws Tls13KeyScheduleError
 		try tls13RequireSecret(suite, secret: secret)
 

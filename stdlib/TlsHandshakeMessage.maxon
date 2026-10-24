@@ -1,9 +1,16 @@
+/// A cipher suite code point, carried as sent.
 public typealias TlsCipherSuiteCode = int(0 to u16.max) implements TlsWireValue
+/// A compression method code point, carried as sent.
 public typealias TlsCompressionMethod = int(0 to u8.max) implements TlsWireValue
+/// A NewSessionTicket's lifetime, in seconds.
 public typealias TlsTicketLifetime = int(0 to u32.max) implements TlsWireValue
+/// A NewSessionTicket's `ticket_age_add`.
 public typealias TlsTicketAgeAdd = int(0 to u32.max) implements TlsWireValue
+/// Cipher suite code points, in wire order.
 public typealias TlsCipherSuiteCodeArray = Array with TlsCipherSuiteCode
+/// TLS 1.3 certificate entries, leaf first.
 public typealias TlsCertificateEntryArray = Array with TlsCertificateEntry
+/// DER distinguished names of certificate authorities.
 public typealias TlsAuthorityNameArray = Array with ByteArray
 
 let tlsRandomBytes = 32
@@ -12,17 +19,20 @@ let tlsNamedCurveType = 3
 module let tlsTls13VersionCode = 0x0304
 module let tlsHelloRetryRequestRandom = ByteArray from [0xCF, 0x21, 0xAD, 0x74, 0xE5, 0x9A, 0x61, 0x11, 0xBE, 0x1D, 0x8C, 0x02, 0x1E, 0x65, 0xB8, 0x91, 0xC2, 0xA2, 0x11, 0x16, 0x7A, 0xBB, 0x8C, 0x5E, 0x07, 0x9E, 0x09, 0xE2, 0xC8, 0xA8, 0x33, 0x9C]
 
+/// A TLS version.
 public enum TlsProtocol
 	tls13
 	tls12
 end 'TlsProtocol'
 
+/// Why `TlsHandshakeCodec.decode` refused a message, named after the alert to send.
 public enum TlsCodecError implements Error
 	decodeError
 	illegalParameter
 	unexpectedMessage
 	missingExtension
 
+	/// The alert to send for this error.
 	public function alert() returns TlsAlert
 		return match self 'alert'
 			decodeError gives TlsAlert.decodeError
@@ -33,10 +43,12 @@ public enum TlsCodecError implements Error
 	end 'alert'
 end 'TlsCodecError'
 
+/// Why `TlsHandshakeCodec.encode` refused a message: a field does not fit its length prefix.
 public enum TlsEncodeError implements Error
 	vectorTooLong
 end 'TlsEncodeError'
 
+/// A KeyUpdate's request_update value.
 public enum TlsKeyUpdateRequest
 	updateNotRequested = 0
 	updateRequested = 1
@@ -76,23 +88,28 @@ module enum TlsHandshakeType
 	end 'isDefinedIn'
 end 'TlsHandshakeType'
 
+/// One entry of a TLS 1.3 Certificate message.
 public type TlsCertificateEntry
 	var certificate as ByteArray
 	var extensions as TlsExtensionArray
 
+	/// The DER certificate.
 	public function certificate() returns ByteArray
 		return certificate
 	end 'certificate'
 
+	/// The entry's extensions.
 	public function extensions() returns TlsExtensionArray
 		return extensions
 	end 'extensions'
 
+	/// An entry of `certificate` with `extensions`.
 	public static function create(certificate ByteArray, extensions TlsExtensionArray) returns TlsCertificateEntry
 		return Self{certificate: certificate, extensions: extensions}
 	end 'create'
 end 'TlsCertificateEntry'
 
+/// A ClientHello message.
 public type TlsClientHello
 	var legacyVersion as TlsVersionCode
 	var random as ByteArray
@@ -101,35 +118,43 @@ public type TlsClientHello
 	var compressionMethods as ByteArray
 	var extensions as TlsExtensionBlock
 
+	/// The `legacy_version` field.
 	public function legacyVersion() returns TlsVersionCode
 		return legacyVersion
 	end 'legacyVersion'
 
+	/// The 32-byte random.
 	public function random() returns ByteArray
 		return random
 	end 'random'
 
+	/// The `legacy_session_id` field.
 	public function legacySessionId() returns ByteArray
 		return legacySessionId
 	end 'legacySessionId'
 
+	/// The offered cipher suites, in the client's order.
 	public function cipherSuites() returns TlsCipherSuiteCodeArray
 		return cipherSuites
 	end 'cipherSuites'
 
+	/// The offered compression methods.
 	public function compressionMethods() returns ByteArray
 		return compressionMethods
 	end 'compressionMethods'
 
+	/// The extensions.
 	public function extensions() returns TlsExtensionBlock
 		return extensions
 	end 'extensions'
 
+	/// A ClientHello of these fields, encoded as given.
 	public static function create(legacyVersion TlsVersionCode, random ByteArray, legacySessionId ByteArray, cipherSuites TlsCipherSuiteCodeArray, compressionMethods ByteArray, extensions TlsExtensionBlock) returns TlsClientHello
 		return Self{legacyVersion: legacyVersion, random: random, legacySessionId: legacySessionId, cipherSuites: cipherSuites, compressionMethods: compressionMethods, extensions: extensions}
 	end 'create'
 end 'TlsClientHello'
 
+/// A ServerHello or HelloRetryRequest message.
 public type TlsServerHello
 	var legacyVersion as TlsVersionCode
 	var random as ByteArray
@@ -138,35 +163,43 @@ public type TlsServerHello
 	var compressionMethod as TlsCompressionMethod
 	var extensions as TlsExtensionBlock
 
+	/// The `legacy_version` field.
 	public function legacyVersion() returns TlsVersionCode
 		return legacyVersion
 	end 'legacyVersion'
 
+	/// The 32-byte random; the HelloRetryRequest value marks a HelloRetryRequest.
 	public function random() returns ByteArray
 		return random
 	end 'random'
 
+	/// The `legacy_session_id_echo` field.
 	public function legacySessionIdEcho() returns ByteArray
 		return legacySessionIdEcho
 	end 'legacySessionIdEcho'
 
+	/// The selected cipher suite.
 	public function cipherSuite() returns TlsCipherSuiteCode
 		return cipherSuite
 	end 'cipherSuite'
 
+	/// The selected compression method.
 	public function compressionMethod() returns TlsCompressionMethod
 		return compressionMethod
 	end 'compressionMethod'
 
+	/// The extensions.
 	public function extensions() returns TlsExtensionBlock
 		return extensions
 	end 'extensions'
 
+	/// A ServerHello of these fields, encoded as given.
 	public static function create(legacyVersion TlsVersionCode, random ByteArray, legacySessionIdEcho ByteArray, cipherSuite TlsCipherSuiteCode, compressionMethod TlsCompressionMethod, extensions TlsExtensionBlock) returns TlsServerHello
 		return Self{legacyVersion: legacyVersion, random: random, legacySessionIdEcho: legacySessionIdEcho, cipherSuite: cipherSuite, compressionMethod: compressionMethod, extensions: extensions}
 	end 'create'
 end 'TlsServerHello'
 
+/// A TLS 1.3 NewSessionTicket message.
 public type TlsNewSessionTicket
 	var lifetime as TlsTicketLifetime
 	var ageAdd as TlsTicketAgeAdd
@@ -174,80 +207,98 @@ public type TlsNewSessionTicket
 	var ticket as ByteArray
 	var extensions as TlsExtensionArray
 
+	/// The ticket lifetime, in seconds.
 	public function lifetime() returns TlsTicketLifetime
 		return lifetime
 	end 'lifetime'
 
+	/// The `ticket_age_add` field.
 	public function ageAdd() returns TlsTicketAgeAdd
 		return ageAdd
 	end 'ageAdd'
 
+	/// The ticket nonce.
 	public function nonce() returns ByteArray
 		return nonce
 	end 'nonce'
 
+	/// The opaque ticket.
 	public function ticket() returns ByteArray
 		return ticket
 	end 'ticket'
 
+	/// The extensions.
 	public function extensions() returns TlsExtensionArray
 		return extensions
 	end 'extensions'
 
+	/// A NewSessionTicket of these fields.
 	public static function create(lifetime TlsTicketLifetime, ageAdd TlsTicketAgeAdd, nonce ByteArray, ticket ByteArray, extensions TlsExtensionArray) returns TlsNewSessionTicket
 		return Self{lifetime: lifetime, ageAdd: ageAdd, nonce: nonce, ticket: ticket, extensions: extensions}
 	end 'create'
 end 'TlsNewSessionTicket'
 
+/// A TLS 1.2 CertificateRequest message.
 public type Tls12CertificateRequest
 	var certificateTypes as ByteArray
 	var signatureSchemes as TlsSignatureSchemeCodeArray
 	var authorities as TlsAuthorityNameArray
 
+	/// The accepted certificate types.
 	public function certificateTypes() returns ByteArray
 		return certificateTypes
 	end 'certificateTypes'
 
+	/// The accepted signature schemes.
 	public function signatureSchemes() returns TlsSignatureSchemeCodeArray
 		return signatureSchemes
 	end 'signatureSchemes'
 
+	/// The DER names of the accepted certificate authorities.
 	public function authorities() returns TlsAuthorityNameArray
 		return authorities
 	end 'authorities'
 
+	/// A CertificateRequest of these fields.
 	public static function create(certificateTypes ByteArray, signatureSchemes TlsSignatureSchemeCodeArray, authorities TlsAuthorityNameArray) returns Tls12CertificateRequest
 		return Self{certificateTypes: certificateTypes, signatureSchemes: signatureSchemes, authorities: authorities}
 	end 'create'
 end 'Tls12CertificateRequest'
 
+/// A TLS 1.2 ECDHE ServerKeyExchange message over a named curve.
 public type Tls12ServerKeyExchange
 	var namedGroup as TlsGroupCode
 	var publicKey as ByteArray
 	var signatureScheme as TlsSignatureSchemeCode
 	var signature as ByteArray
 
+	/// The curve of the server's ephemeral key.
 	public function namedGroup() returns TlsGroupCode
 		return namedGroup
 	end 'namedGroup'
 
+	/// The server's ephemeral public key.
 	public function publicKey() returns ByteArray
 		return publicKey
 	end 'publicKey'
 
+	/// The scheme the server signed the parameters with.
 	public function signatureScheme() returns TlsSignatureSchemeCode
 		return signatureScheme
 	end 'signatureScheme'
 
+	/// The signature over the randoms and the parameters.
 	public function signature() returns ByteArray
 		return signature
 	end 'signature'
 
+	/// A ServerKeyExchange of these fields.
 	public static function create(namedGroup TlsGroupCode, publicKey ByteArray, signatureScheme TlsSignatureSchemeCode, signature ByteArray) returns Tls12ServerKeyExchange
 		return Self{namedGroup: namedGroup, publicKey: publicKey, signatureScheme: signatureScheme, signature: signature}
 	end 'create'
 end 'Tls12ServerKeyExchange'
 
+/// One handshake message, with a case per message layout.
 public union TlsHandshakeMessage
 	helloRequest
 	clientHello(hello TlsClientHello)
@@ -313,7 +364,10 @@ public union TlsHandshakeMessage
 	end 'encodedBody'
 end 'TlsHandshakeMessage'
 
+/// Encodes and strictly decodes TLS 1.3 and TLS 1.2 handshake messages.
 public type TlsHandshakeCodec
+	/// The message one complete handshake message, its 4-byte header included, encodes under
+	/// `protocol`.
 	public static function decode(message ByteArray, protocol TlsProtocol) returns TlsHandshakeMessage throws TlsCodecError
 		var header = TlsReader.over(message)
 		let typeCode = try header.readUnsigned(TlsWireWidth.uint8)
@@ -332,6 +386,8 @@ public type TlsHandshakeCodec
 		return decoded
 	end 'decode'
 
+	/// The message with its 4-byte header and minimal-width length prefixes; `encode(decode(m)) == m`
+	/// for every `m` that decodes.
 	public static function encode(message TlsHandshakeMessage) returns ByteArray throws TlsEncodeError
 		var encoded = ByteArray.create()
 		appendUnsigned(encoded, value: message.handshakeType().rawValue as TlsWireValue, width: TlsWireWidth.uint8)

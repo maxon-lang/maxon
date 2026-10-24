@@ -1,12 +1,22 @@
+/// A protocol version code point, carried as sent.
 public typealias TlsVersionCode = int(0 to u16.max) implements TlsWireValue
+/// A named group code point, carried as sent.
 public typealias TlsGroupCode = int(0 to u16.max) implements TlsWireValue
+/// A signature scheme code point, carried as sent.
 public typealias TlsSignatureSchemeCode = int(0 to u16.max) implements TlsWireValue
+/// An extension type code point.
 public typealias TlsExtensionType = int(0 to u16.max) implements TlsWireValue
+/// Protocol version code points, in wire order.
 public typealias TlsVersionCodeArray = Array with TlsVersionCode
+/// Named group code points, in wire order.
 public typealias TlsGroupCodeArray = Array with TlsGroupCode
+/// Signature scheme code points, in wire order.
 public typealias TlsSignatureSchemeCodeArray = Array with TlsSignatureSchemeCode
+/// ALPN protocol names, in wire order.
 public typealias TlsProtocolNameArray = Array with ByteArray
+/// Key shares, in wire order.
 public typealias TlsKeyShareArray = Array with TlsKeyShare
+/// Extensions, in wire order.
 public typealias TlsExtensionArray = Array with TlsExtension
 
 module typealias TlsRawExtensionArray = Array with TlsRawExtension
@@ -21,23 +31,28 @@ let tlsMaxVersionCount = 127
 let tlsMinProtocolListBytes = 2
 let tlsServerProtocolCount = 1
 
+/// One key_share entry: a group and its public key.
 public type TlsKeyShare
 	var group as TlsGroupCode
 	var keyExchange as ByteArray
 
+	/// The share's named group.
 	public function group() returns TlsGroupCode
 		return group
 	end 'group'
 
+	/// The share's public key, as encoded for its group.
 	public function keyExchange() returns ByteArray
 		return keyExchange
 	end 'keyExchange'
 
+	/// A key share of `keyExchange` for `group`.
 	public static function create(group TlsGroupCode, keyExchange ByteArray) returns TlsKeyShare
 		return Self{group: group, keyExchange: keyExchange}
 	end 'create'
 end 'TlsKeyShare'
 
+/// One extension, decoded into the form its message gives it, or `opaque` with its exact bytes.
 public union TlsExtension
 	serverName(hostName String)
 	serverNameAcknowledgement
@@ -55,6 +70,7 @@ public union TlsExtension
 	renegotiationInfo(renegotiatedConnection ByteArray)
 	opaque(extensionType TlsExtensionType, data ByteArray)
 
+	/// The extension's type code point.
 	public function extensionType() returns TlsExtensionType
 		return match self 'kind'
 			serverName or
@@ -76,6 +92,8 @@ public union TlsExtension
 	end 'extensionType'
 end 'TlsExtension'
 
+/// The extensions of a ClientHello or ServerHello: `absent` when the message ends after its fixed
+/// fields, which TLS 1.2 allows.
 public union TlsExtensionBlock
 	absent
 	listed(extensions TlsExtensionArray)

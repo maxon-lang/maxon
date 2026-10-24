@@ -1,5 +1,7 @@
+/// How many bytes `Tls12Prf.prf` produces.
 public typealias Tls12PrfLength = int(0 to u32.max) implements Count
 
+/// Why a `Tls12Prf` function refused its input: the first check that failed.
 public enum Tls12PrfError implements Error
 	unsupportedAlgorithm
 	invalidLabel
@@ -10,6 +12,7 @@ public enum Tls12PrfError implements Error
 	invalidHandshakeHashLength
 end 'Tls12PrfError'
 
+/// Which side's Finished message `Tls12Prf.finishedVerifyData` computes.
 public enum Tls12Sender
 	client
 	server
@@ -24,24 +27,29 @@ let tls12KeyExpansionLabel = "key expansion"
 let tls12ClientFinishedLabel = "client finished"
 let tls12ServerFinishedLabel = "server finished"
 
+/// The write keys and implicit IVs of both directions, from `Tls12Prf.keyBlock`.
 public type Tls12KeyBlock
 	var clientWriteKey as ByteArray
 	var serverWriteKey as ByteArray
 	var clientWriteIv as ByteArray
 	var serverWriteIv as ByteArray
 
+	/// The AEAD key of the records the client sends.
 	public function clientWriteKey() returns ByteArray
 		return clientWriteKey
 	end 'clientWriteKey'
 
+	/// The AEAD key of the records the server sends.
 	public function serverWriteKey() returns ByteArray
 		return serverWriteKey
 	end 'serverWriteKey'
 
+	/// The implicit IV of the records the client sends.
 	public function clientWriteIv() returns ByteArray
 		return clientWriteIv
 	end 'clientWriteIv'
 
+	/// The implicit IV of the records the server sends.
 	public function serverWriteIv() returns ByteArray
 		return serverWriteIv
 	end 'serverWriteIv'
@@ -51,7 +59,9 @@ public type Tls12KeyBlock
 	end 'create'
 end 'Tls12KeyBlock'
 
+/// The TLS 1.2 pseudorandom function (RFC 5246 section 5) and the secrets derived with it.
 public type Tls12Prf
+	/// `length` bytes of `P_hash(secret, label ‖ seed)` over SHA-256 or SHA-384.
 	public static function prf(hash HashAlgorithm, secret ByteArray, label String, seed ByteArray, length Tls12PrfLength) returns ByteArray throws Tls12PrfError
 		try tls12RequireHash(hash)
 
@@ -62,6 +72,7 @@ public type Tls12Prf
 		return tls12Expand(hash, secret: secret, label: label, seed: seed, length: length)
 	end 'prf'
 
+	/// The 48-byte master secret (RFC 5246 section 8.1).
 	public static function masterSecret(suite Tls12CipherSuite, preMasterSecret ByteArray, clientRandom ByteArray, serverRandom ByteArray) returns ByteArray throws Tls12PrfError
 		try tls12RequirePreMasterSecret(preMasterSecret)
 		try tls12RequireRandom(clientRandom)
@@ -73,6 +84,8 @@ public type Tls12Prf
 		return tls12Expand(suite.hashAlgorithm(), secret: preMasterSecret, label: tls12MasterSecretLabel, seed: seed, length: tls12MasterSecretBytes)
 	end 'masterSecret'
 
+	/// The 48-byte extended master secret (RFC 7627), bound to `sessionHash`: the `handshakeHash`
+	/// of every message through the ClientKeyExchange.
 	public static function extendedMasterSecret(suite Tls12CipherSuite, preMasterSecret ByteArray, sessionHash ByteArray) returns ByteArray throws Tls12PrfError
 		try tls12RequirePreMasterSecret(preMasterSecret)
 
@@ -83,6 +96,7 @@ public type Tls12Prf
 		return tls12Expand(suite.hashAlgorithm(), secret: preMasterSecret, label: tls12ExtendedMasterSecretLabel, seed: sessionHash, length: tls12MasterSecretBytes)
 	end 'extendedMasterSecret'
 
+	/// The write keys and implicit IVs of both directions (RFC 5246 section 6.3).
 	public static function keyBlock(suite Tls12CipherSuite, masterSecret ByteArray, clientRandom ByteArray, serverRandom ByteArray) returns Tls12KeyBlock throws Tls12PrfError
 		try tls12RequireMasterSecret(masterSecret)
 		try tls12RequireRandom(clientRandom)
@@ -102,6 +116,7 @@ public type Tls12Prf
 		return Tls12KeyBlock.create(clientKey, serverWriteKey: serverKey, clientWriteIv: clientIv, serverWriteIv: serverIv)
 	end 'keyBlock'
 
+	/// The 12-byte `verify_data` of `sender`'s Finished message.
 	public static function finishedVerifyData(suite Tls12CipherSuite, masterSecret ByteArray, sender Tls12Sender, handshakeHash ByteArray) returns ByteArray throws Tls12PrfError
 		try tls12RequireMasterSecret(masterSecret)
 
@@ -117,6 +132,7 @@ public type Tls12Prf
 		return tls12Expand(suite.hashAlgorithm(), secret: masterSecret, label: label, seed: handshakeHash, length: tls12VerifyDataBytes)
 	end 'finishedVerifyData'
 
+	/// The suite's PRF hash of the handshake messages, each with its 4-byte header.
 	public static function handshakeHash(suite Tls12CipherSuite, messages ByteArrays) returns ByteArray
 		return sha2OfMessages(suite.hashAlgorithm(), messages: messages)
 	end 'handshakeHash'

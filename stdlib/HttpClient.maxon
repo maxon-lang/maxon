@@ -303,11 +303,12 @@ public type HttpClientLimits
 end 'HttpClientLimits'
 
 /// Stateless HTTP/1.1 client. All methods are static.
-/// HTTP only (no TLS). A response body is framed by `Transfer-Encoding`, then `Content-Length`, and
-/// is otherwise read until the server closes the connection.
+/// A response body is framed by `Transfer-Encoding`, then `Content-Length`, and is otherwise read
+/// until the server closes the connection; over TLS that close must be a close_notify.
 public type HttpClient
 	/// Send an HTTP request and return the response. Throws `timedOut` past `limits.timeoutMs` and
-	/// `bodyTooLarge` past `limits.maxBodyBytes`.
+	/// `bodyTooLarge` past `limits.maxBodyBytes`. An https URL is fetched over TLS under `tls`, and
+	/// a failure of its handshake or session is `tlsFailed`.
 	public static function send(request HttpRequest, limits HttpClientLimits = HttpClientLimits.create(), tls TlsClientOptions = TlsClientOptions.create()) returns HttpResponse throws HttpError
 		let start = Clock.nowMs()
 		let target = try httpConnectTargetOf(request.url())

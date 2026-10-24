@@ -17,7 +17,8 @@ end 'TlsWriteHealth'
 
 /// An established TLS connection. Use it through a `var` from one green thread. A stream that goes
 /// out of scope closes its socket without a close_notify, which the peer reads as `truncated`;
-/// `close()` sends one.
+/// `close()` sends one. A failed write ends the write side: every later `send` and `shutdownWrite`
+/// throws the same error, while reads go on.
 public type TlsStream
 	var transport as TcpClient
 	var endpoint as TlsEndpoint
@@ -29,6 +30,9 @@ public type TlsStream
 	var unread as ByteArray
 	var unreadConsumed as BytePos
 	var writeClosed as bool
+
+	// A send that failed part-way may have cut a record, and anything written after it would reach the
+	// peer as garbage, so the first failure is kept and thrown by every later write.
 	var writeHealth as TlsWriteHealth
 	var closed as bool
 	var handshaking as bool
@@ -113,7 +117,8 @@ public type TlsStream
 		return endpoint.session().peerChain.clone()
 	end 'peerCertificates'
 
-	/// Make a read that waits longer than `milliseconds` throw `timedOut`; the stream stays usable. `0` clears it.
+	/// Make a read still waiting `milliseconds` after this call throw `timedOut`; the stream stays
+	/// usable. `0` clears it.
 	public function setReadDeadline(milliseconds SocketDeadlineMs) throws TlsError
 		if closed 'unreadable'
 			throw TlsError.closed
@@ -150,7 +155,8 @@ public type TlsStream
 		end 'refused'
 	end 'shutdownWrite'
 
-	/// Send close_notify and close the connection. Idempotent; never throws, since the peer may already be gone.
+	/// Send close_notify, waiting at most 5 s for it to go out, and close the connection. Idempotent;
+	/// never throws, since the peer may already be gone.
 	public function close()
 		if closed 'already'
 			return

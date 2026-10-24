@@ -303,6 +303,8 @@ module type TlsRecordInput
 		let messageType = tlsRecordByte(buffer, offset: consumed + tlsHandshakeTypeOffset)
 		let length = readOrderedWord(buffer, off: consumed + tlsHandshakeLengthOffset, width: tlsHandshakeLengthBytes, limit: buffer.count(), order: ByteOrder.bigEndian) as Count
 
+		// Refused from the header alone: waiting for the body would let an unauthenticated peer make the
+		// connection buffer up to 16 MiB. The canra tls-handshake vectors pin the alert, internal_error.
 		if length > maxMessageBytes(messageType) 'oversized'
 			throw TlsHandshakeError.internalError
 		end 'oversized'
