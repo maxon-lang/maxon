@@ -1,0 +1,42 @@
+let RewrittenLinePrefix = "formatted: "
+let LibraryTierDirNames = ["stdlib", "runtime"]
+let LibraryTiersStagingDirName = "temp/fmt-library-tiers"
+let LibraryTiersSpawnName = "the library tiers"
+let LibraryTiersTreeDescription = "the stdlib and runtime sources staged from the tree"
+
+// `maxon-bin/` is left out: formatting it takes longer than a test file's deadline.
+test 'every source under stdlib and runtime is already formatted'
+	let staging = freshStagingDir(LibraryTiersStagingDirName)
+	var stagedCount = 0 as FileTally
+
+	for tierName in LibraryTierDirNames 'eachTier'
+		let tier = fixtureDir(tierName).resolve(Directory.currentPath())
+
+		for source in filesUnderEndingWith(tier, suffix: MaxonSourceSuffix) 'eachSource'
+			let relative = try source.resolve(Directory.currentPath()).relativeTo(tier) otherwise panic("the gate could not run — {source.toString()} was listed under {tier.toString()} and does not lie below it.")
+			let target = staging.join(tierName).join(relative)
+			let targetDir = try target.parent() otherwise panic("the gate could not run — {target.toString()} has no parent directory to stage into.")
+
+			writeStagedFile(stagingDir(targetDir.toString()).join(target.filename()), content: fileText(source))
+			stagedCount = stagedCount + 1
+		end 'eachSource'
+	end 'eachTier'
+
+	if stagedCount == 0 'nothingStaged'
+		panic("the gate could not run — no source was found under {LibraryTierDirNames.count()} library tier directories, so `fmt` would run over an empty tree and this test would pass having formatted nothing.")
+	end 'nothingStaged'
+
+	let run = spawnFmtOverStagedTree(LibraryTiersStagingDirName, what: LibraryTiersSpawnName)
+	requireFmtRunSucceeded(run, runLabel: FirstRunLabel, over: LibraryTiersTreeDescription)
+
+	var rewritten = StringArray.create()
+
+	for line in outputLines(run.stdout) 'eachLine'
+		if line.startsWith(RewrittenLinePrefix) 'aRewrite'
+			rewritten.push(line.replace(RewrittenLinePrefix, with: ""))
+		end 'aRewrite'
+	end 'eachLine'
+
+	Expect.isEmpty(listedLines(rewritten), message: "`fmt` rewrites these library sources, so the committed text is not what `maxon fmt` writes. Run `./maxon-bin/.maxon/maxon fmt <file>` on each and commit the result.")
+	Expect.contains(withoutCarriageReturns(run.stdout), needle: "{stagedCount} unchanged.", message: "`fmt` did not report all {stagedCount} staged sources as unchanged. It wrote to stdout: {run.stdout}")
+end 'every source under stdlib and runtime is already formatted'

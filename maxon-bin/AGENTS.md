@@ -347,6 +347,10 @@ exactly one comment line with the same opener and words, in order, and every cod
 A preservation check phrased as *presence* passes duplication, and a count passes a comment moved
 across code. What it cannot see is stated on `contentChange`. Run it with `maxon test tests/fmt`.
 
+⚠ **`stdlib/` AND `runtime/` ARE HELD FMT-CLEAN BY `tests/fmt/the-library-tiers-are-already-formatted.maxtest`**,
+which stages both and fails naming every file `maxon fmt` would rewrite. CI runs it with the rest of
+`tests/fmt` on every lane. `maxon-bin/` is not gated: run `maxon fmt` on a file you changed.
+
 ## ⚠ Running a suite by hand: REDIRECT IT TO A FILE. Never pipe through `head`/`tail`/`grep`.
 
 ```

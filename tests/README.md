@@ -70,6 +70,7 @@ tests/
     fixtures.maxtest             the fixture corpus: the harness, the guards and 32 tests
     engine-cases.maxtest         the engine corpus: 4 tests, on the staging and spawn the file above exports
     content-gate.maxtest         the content gate both corpora compare with, and its 19 red checks
+    the-library-tiers-are-already-formatted.maxtest   every `stdlib/` and `runtime/` source is staged, and `fmt` must rewrite none of them
     generate-expectations.py     mints every expectation BY RUNNING THE COMPILER
     census-sources.txt           the real compiler files the scale case formats
     engine-cases/<Name>.in       formatter engine cases, with .expected beside them
@@ -746,8 +747,9 @@ Written down because a limit nobody states gets mistaken for coverage.
   ⭐ **RUN IT AS A DIAGNOSTIC THE MOMENT A FORMATTING DEFECT IS SUSPECTED**: format all
   real `.maxon` files — `maxon-bin/`, `stdlib/` — in a tree copy
   outside the repo and read what moved. It is not wired in as a gate because it is slow
-  and needs that copy. Against a formatter believed correct it should touch the 8 files
-  it is known to touch and nothing else.
+  and needs that copy. Against a formatter believed correct it should touch nothing:
+  `stdlib/` and `runtime/` are gated that way by
+  `the-library-tiers-are-already-formatted.maxtest`, and `maxon-bin/` is only as clean as its last run.
 - **Scale-dependent state is under-reported.** The formatter's indent level, block
   stack and group counters are monotonic across a file; fixtures reach nesting depth
   2-3 where `Parser.maxon` reaches far more. A state imbalance moves three lines in a
