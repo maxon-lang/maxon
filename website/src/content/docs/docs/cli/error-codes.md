@@ -293,7 +293,7 @@ A local binding is declared and never read.
 
 ### E3013 — `missingReturn`
 
-A value-returning function can reach its end without returning, or a 'return' in it carries no value.
+A value-returning function can reach its end without returning, or a 'return' in it carries no value. A `while true` loop that no `break` targets has no end to reach, so the returns inside it satisfy the function.
 
 ### E3014 — `unexportedFieldAccess`
 

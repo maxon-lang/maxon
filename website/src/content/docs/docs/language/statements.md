@@ -27,7 +27,9 @@ return
 ```
 
 A function with a `returns` clause must return a value on every path; a path that falls off the end is
-**E3013** (`missing return statement`). A function without `returns` uses a bare `return`, or none.
+**E3013** (`missing return statement`). A `while true` loop that no `break` targets has no end to fall
+off, so a function whose `return`s are all inside such a loop is missing none. A function without `returns`
+uses a bare `return`, or none.
 
 ## Variable Declaration and Assignment
 

@@ -120,3 +120,81 @@ end 'main'
 3
 ```
 
+
+<!-- test: while-true-with-no-break-leaves-only-by-return -->
+A `while true` loop no `break` targets has no exit, so the code after it is unreachable and a function
+whose only way out is a `return` inside the loop is missing no return.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function firstAbove(limit Integer) returns Integer
+	var n = 0 as Integer
+
+	while true 'search'
+		if n > limit 'found'
+			return n
+		end 'found'
+
+		n = n + 7
+	end 'search'
+end 'firstAbove'
+
+function main() returns ExitCode
+	return firstAbove(20) as ExitCode
+end 'main'
+```
+```exitcode
+21
+```
+
+<!-- test: while-true-with-a-break-still-falls-off-the-end -->
+A `break` gives the loop an exit, so control can reach the end of the function.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function firstAbove(limit Integer) returns Integer
+	var n = 0 as Integer
+
+	while true 'search'
+		if n > limit 'found'
+			break
+		end 'found'
+
+		n = n + 7
+	end 'search'
+end 'firstAbove'
+
+function main() returns ExitCode
+	return firstAbove(20) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3013: specs/missing-return-error/while-true-with-a-break-still-falls-off-the-end.maxon:4:10: missing return statement: 'firstAbove'
+```
+
+<!-- test: while-true-left-by-a-labelled-break-from-an-inner-loop-still-falls-off-the-end -->
+A labelled `break` in an inner loop that targets the outer `while true` gives the outer loop an exit.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function drain(limit Integer) returns Integer
+	var n = 0 as Integer
+
+	while true 'outer'
+		while true 'inner'
+			n = n + 1
+
+			if n > limit 'done'
+				break 'outer'
+			end 'done'
+		end 'inner'
+	end 'outer'
+end 'drain'
+
+function main() returns ExitCode
+	return drain(4) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3013: specs/missing-return-error/while-true-left-by-a-labelled-break-from-an-inner-loop-still-falls-off-the-end.maxon:4:10: missing return statement: 'drain'
+```

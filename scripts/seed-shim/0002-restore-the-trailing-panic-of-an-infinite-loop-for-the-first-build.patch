@@ -1,0 +1,96 @@
+diff --git a/stdlib/HttpServer.maxon b/stdlib/HttpServer.maxon
+index d08580df4..b24c33fcd 100644
+--- a/stdlib/HttpServer.maxon
++++ b/stdlib/HttpServer.maxon
+@@ -300,6 +300,8 @@ public type HttpServer
+ 				forTheServer(leftoverArrived) then answerServerWideOptions(transport, leftoverArrived: leftoverArrived, writeDeadlineMs: self.limits.writeDeadlineMs)
+ 			end 'arrival'
+ 		end 'nextConnection'
++
++		panic("HttpServer.accept: the loop ends only by answering an exchange or throwing")
+ 	end 'accept'
+ 
+ 	/// Hand each accepted exchange to `handler` until `close()`, a listener failure or the accept
+diff --git a/stdlib/Json.maxon b/stdlib/Json.maxon
+index 004219ae1..4fa0ee809 100644
+--- a/stdlib/Json.maxon
++++ b/stdlib/Json.maxon
+@@ -451,6 +451,8 @@ type JsonParser
+ 				throw JsonError.unexpectedChar
+ 			end 'notComma'
+ 		end 'loop'
++
++		panic("parseArray: fell out of infinite loop")
+ 	end 'parseArray'
+ 
+ 	function parseObject() returns JsonNodeId throws JsonError
+@@ -499,6 +501,8 @@ type JsonParser
+ 				throw JsonError.unexpectedChar
+ 			end 'notComma'
+ 		end 'loop'
++
++		panic("parseObject: fell out of infinite loop")
+ 	end 'parseObject'
+ 
+ 	function parseString() returns String throws JsonError
+@@ -525,6 +529,8 @@ type JsonParser
+ 				try advance()
+ 			end 'literalByte'
+ 		end 'scan'
++
++		panic("parseString: fell out of infinite loop")
+ 	end 'parseString'
+ 
+ 	function decodeEscape(out ByteArray) throws JsonError
+diff --git a/stdlib/NistCurves.maxon b/stdlib/NistCurves.maxon
+index 92fe89fc3..ee6a1b129 100644
+--- a/stdlib/NistCurves.maxon
++++ b/stdlib/NistCurves.maxon
+@@ -737,6 +737,8 @@ type NistCurve
+ 
+ 			(nonceKey, nonceValue) = nistNonceStep(self.hash, key: nonceKey, value: nonceValue, suffix: ByteArray from [nistZeroByte])
+ 		end 'eachCandidate'
++
++		panic("nist: the nonce loop returns from inside")
+ 	end 'deterministicSignature'
+ 
+ 	function baseMultiple(scalar NistLimbs) returns NistPoint
+diff --git a/stdlib/Rsa.maxon b/stdlib/Rsa.maxon
+index 70edb792a..9e8dd5b91 100644
+--- a/stdlib/Rsa.maxon
++++ b/stdlib/Rsa.maxon
+@@ -772,6 +772,8 @@ type RsaPublicKey
+ 
+ 			return (raise(factor), inverse)
+ 		end 'eachDraw'
++
++		panic("the blinding loop returns from inside")
+ 	end 'blinding'
+ end 'RsaPublicKey'
+ 
+diff --git a/stdlib/TlsClientConfig.maxon b/stdlib/TlsClientConfig.maxon
+index 441426ea7..9a2a3180e 100644
+--- a/stdlib/TlsClientConfig.maxon
++++ b/stdlib/TlsClientConfig.maxon
+@@ -151,6 +151,8 @@ function drawSecret(group TlsNamedGroup) returns TlsKeySecret throws TlsHandshak
+ 
+ 		return secret
+ 	end 'attempts'
++
++	panic("drawSecret: the loop returns once a private key is accepted")
+ end 'drawSecret'
+ 
+ module interface TlsClientHelloSource
+diff --git a/stdlib/helpers/http/httpHelpers.maxon b/stdlib/helpers/http/httpHelpers.maxon
+index 770251e72..8ecb31c60 100644
+--- a/stdlib/helpers/http/httpHelpers.maxon
++++ b/stdlib/helpers/http/httpHelpers.maxon
+@@ -347,6 +347,8 @@ public function httpReadDelimited(inbound HttpInbound, delimiter HttpDelimiter,
+ 
+ 		try inbound.receiveMore()
+ 	end 'fill'
++
++	panic("httpReadDelimited: the fill loop ends only by returning what it read or throwing")
+ end 'httpReadDelimited'
+ 
+ function delimitedAt(inbound HttpInbound, textEnd BytePos, terminator String, cap BytePos) returns HttpDelimitedRead

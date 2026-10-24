@@ -52010,8 +52010,19 @@ export type Parser
 
 		var finished = try self.finishLoopMoves(func, falseSource: condExit, exit: exit, anchor: whileTok)
 		self.wireLoopExit(finished.falseEdge, exit: exit, ctx: ctx)
+
+		if self.loopHasNoExit(cond, ctx: ctx) 'nothingLeavesTheLoop'
+			exit.terminator = Terminator.dead
+		end 'nothingLeavesTheLoop'
+
 		return exit
 	end 'parseWhileStatement'
+
+	// The false edge of a constant-true condition never runs, so only a `break` can reach the exit; a
+	// `return` or `throw` inside the loop does not give it one.
+	function loopHasNoExit(cond ValueId, ctx LoopContext) returns bool
+		return self.constIsKnown(cond) and self.constOf(cond) == BoolTrueValue and not ctx.hasBreak
+	end 'loopHasNoExit'
 
 	// ⭐ **MINT ONE HEADER PHI PER CARRIED BINDING** — the front half BOTH loop statements run, and the
 	// only place a loop-carried phi is created. `carried` is the construct's carried set, read off the

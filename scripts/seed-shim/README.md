@@ -84,6 +84,14 @@ with the seed for one native target at a time until it is clean, and again for a
 since its last clean build, so the code a lane's `#if` selects is judged too. A refusal it cannot rewrite stops it,
 naming the site.
 
+A rule the tree relaxed is written by hand and sorts below the generated patch. A `while true` loop that no `break`
+targets has no end, so the tree's functions leave it by `return` alone; the seed reads the function's end as
+reachable (E3013), and the second patch puts back the `panic` after the loop in the functions the seed refuses:
+`HttpServer.accept`, `Json.parseArray`, `Json.parseObject`, `Json.parseString`, `NistCurves.deterministicSignature`,
+`Rsa.blinding`, `TlsClientConfig.drawSecret` and `httpReadDelimited`. A `match` returned from a function that
+returns an interface gives a different conformer per arm; the seed reads the arms as disagreeing (E3005), and the
+first patch withdraws `TlsRecordProtection.tlsAead` and writes `TlsRecordState.create` as one struct literal per arm.
+
 The seed's parser ends a file's parse at its first type refusal, so one build reports at most one such site per
 file, and a file holding hundreds would cost hundreds of builds. Once a file has been refused at a single site in
 two rounds running, the script builds a copy of the tree under the work directory's `view/` in which that file's
