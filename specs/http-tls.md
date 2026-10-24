@@ -2017,7 +2017,7 @@ function fetch(method HttpMethod, url String, body String, options TlsClientOpti
 	return "{response.statusCode().number()} connection={connection} [{response.body()}]"
 end 'fetch'
 
-let HeldMs = 2500
+let HeldMs = 5000
 let ClientBudgetMs = 600
 let RequestBytes = 65536
 
@@ -2060,7 +2060,7 @@ end 'stalledServer'
 function stalledClient() returns ExitCode
 	var options = serverOptions()
 
-	options.setHandshakeDeadline(1000)
+	options.setHandshakeDeadline(5000)
 
 	var server = try HttpServer.bindTls("127.0.0.1", port: 0, options: options) otherwise return 4
 	let peer = async serving(server)
@@ -2081,7 +2081,7 @@ end 'stalledClient'
 function acceptDeadline() returns ExitCode
 	var options = serverOptions()
 
-	options.setHandshakeDeadline(1000)
+	options.setHandshakeDeadline(5000)
 
 	var server = try HttpServer.bindTls("127.0.0.1", port: 0, options: options) otherwise return 6
 

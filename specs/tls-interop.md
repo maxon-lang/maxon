@@ -1691,6 +1691,8 @@ let clientKeyHex = "3041020100301306072a8648ce3d020106082a8648ce3d03010704273025
 
 let verificationTime = 1767225600
 let probeTimeoutMs = 30000
+let maxClientAttempts = 5
+let abandonedInputMarker = "SSL_write:bad length"
 
 enum InteropError implements Error
 	noPort
@@ -1800,7 +1802,12 @@ function serveOnce(listener TlsListener) returns String
 	return "{summary} then data [{after}]"
 end 'serveOnce'
 
-function runClient(directory String, port NetworkPort, options StringArray) returns String
+union ClientOutcome
+	observed(report String)
+	abandoned
+end 'ClientOutcome'
+
+function attemptClient(directory String, port NetworkPort, options StringArray) returns ClientOutcome
 	var arguments = ["s_client", "-connect", "127.0.0.1:{port}", "-servername", "example.com", "-CAfile", "{directory}/root.pem", "-verify_return_error", "-verify_hostname", "example.com", "-attime", "{verificationTime}", "-ign_eof"]
 
 	for option in options 'eachOption'
@@ -1814,7 +1821,7 @@ function runClient(directory String, port NetworkPort, options StringArray) retu
 	configuration.timeoutMs = probeTimeoutMs
 
 	let result = try configuration.run() otherwise (error) 'failed'
-		return "s_client: {error.displayReason()}"
+		return ClientOutcome.observed("s_client: {error.displayReason()}")
 	end 'failed'
 
 	var lines = StringArray.create()
@@ -1823,25 +1830,38 @@ function runClient(directory String, port NetworkPort, options StringArray) retu
 		lines.push(line.trim())
 	end 'eachLine'
 
-	return "exit={result.exitCode()} reply={lines.contains("echo:ping")} verification={valueAfter(lines, prefix: "Verification: ")} negotiated={valueAfter(lines, prefix: "New, ")}"
-end 'runClient'
+	let replied = lines.contains("echo:ping")
+
+	if not replied and result.stderr.contains(abandonedInputMarker) 'abandoned'
+		return ClientOutcome.abandoned
+	end 'abandoned'
+
+	return ClientOutcome.observed("exit={result.exitCode()} reply={replied} verification={valueAfter(lines, prefix: "Verification: ")} negotiated={valueAfter(lines, prefix: "New, ")}")
+end 'attemptClient'
 
 function exchange(label String, directory String, serverOptions TlsServerOptions, clientOptions StringArray) returns String
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
-		return "{label}: bind: {describe(error)}"
-	end 'refused'
+	for _ in 0 upto maxClientAttempts 'attempts'
+		var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
+			return "{label}: bind: {describe(error)}"
+		end 'refused'
 
-	try listener.setAcceptDeadline(probeTimeoutMs) otherwise (error) 'unbounded'
-		return "{label}: deadline: {describe(error)}"
-	end 'unbounded'
+		try listener.setAcceptDeadline(probeTimeoutMs) otherwise (error) 'unbounded'
+			return "{label}: deadline: {describe(error)}"
+		end 'unbounded'
 
-	let peer = async serveOnce(listener)
-	let client = runClient(directory, port: listener.port(), options: clientOptions)
-	let server = await peer
+		let peer = async serveOnce(listener)
+		let outcome = attemptClient(directory, port: listener.port(), options: clientOptions)
+		let server = await peer
 
-	listener.close()
+		listener.close()
 
-	return "{label}: server[{server}] s_client[{client}]"
+		match outcome 'outcome'
+			observed(client) then return "{label}: server[{server}] s_client[{client}]"
+			abandoned then continue
+		end 'outcome'
+	end 'attempts'
+
+	return "{label}: s_client abandoned its own input in all {maxClientAttempts} attempts"
 end 'exchange'
 
 
@@ -1982,6 +2002,8 @@ let clientKeyHex = "3041020100301306072a8648ce3d020106082a8648ce3d03010704273025
 
 let verificationTime = 1767225600
 let probeTimeoutMs = 30000
+let maxClientAttempts = 5
+let abandonedInputMarker = "SSL_write:bad length"
 
 enum InteropError implements Error
 	noPort
@@ -2091,7 +2113,12 @@ function serveOnce(listener TlsListener) returns String
 	return "{summary} then data [{after}]"
 end 'serveOnce'
 
-function runClient(directory String, port NetworkPort, options StringArray) returns String
+union ClientOutcome
+	observed(report String)
+	abandoned
+end 'ClientOutcome'
+
+function attemptClient(directory String, port NetworkPort, options StringArray) returns ClientOutcome
 	var arguments = ["s_client", "-connect", "127.0.0.1:{port}", "-servername", "example.com", "-CAfile", "{directory}/root.pem", "-verify_return_error", "-verify_hostname", "example.com", "-attime", "{verificationTime}", "-ign_eof"]
 
 	for option in options 'eachOption'
@@ -2105,7 +2132,7 @@ function runClient(directory String, port NetworkPort, options StringArray) retu
 	configuration.timeoutMs = probeTimeoutMs
 
 	let result = try configuration.run() otherwise (error) 'failed'
-		return "s_client: {error.displayReason()}"
+		return ClientOutcome.observed("s_client: {error.displayReason()}")
 	end 'failed'
 
 	var lines = StringArray.create()
@@ -2114,25 +2141,38 @@ function runClient(directory String, port NetworkPort, options StringArray) retu
 		lines.push(line.trim())
 	end 'eachLine'
 
-	return "exit={result.exitCode()} reply={lines.contains("echo:ping")} verification={valueAfter(lines, prefix: "Verification: ")} negotiated={valueAfter(lines, prefix: "New, ")}"
-end 'runClient'
+	let replied = lines.contains("echo:ping")
+
+	if not replied and result.stderr.contains(abandonedInputMarker) 'abandoned'
+		return ClientOutcome.abandoned
+	end 'abandoned'
+
+	return ClientOutcome.observed("exit={result.exitCode()} reply={replied} verification={valueAfter(lines, prefix: "Verification: ")} negotiated={valueAfter(lines, prefix: "New, ")}")
+end 'attemptClient'
 
 function exchange(label String, directory String, serverOptions TlsServerOptions, clientOptions StringArray) returns String
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
-		return "{label}: bind: {describe(error)}"
-	end 'refused'
+	for _ in 0 upto maxClientAttempts 'attempts'
+		var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
+			return "{label}: bind: {describe(error)}"
+		end 'refused'
 
-	try listener.setAcceptDeadline(probeTimeoutMs) otherwise (error) 'unbounded'
-		return "{label}: deadline: {describe(error)}"
-	end 'unbounded'
+		try listener.setAcceptDeadline(probeTimeoutMs) otherwise (error) 'unbounded'
+			return "{label}: deadline: {describe(error)}"
+		end 'unbounded'
 
-	let peer = async serveOnce(listener)
-	let client = runClient(directory, port: listener.port(), options: clientOptions)
-	let server = await peer
+		let peer = async serveOnce(listener)
+		let outcome = attemptClient(directory, port: listener.port(), options: clientOptions)
+		let server = await peer
 
-	listener.close()
+		listener.close()
 
-	return "{label}: server[{server}] s_client[{client}]"
+		match outcome 'outcome'
+			observed(client) then return "{label}: server[{server}] s_client[{client}]"
+			abandoned then continue
+		end 'outcome'
+	end 'attempts'
+
+	return "{label}: s_client abandoned its own input in all {maxClientAttempts} attempts"
 end 'exchange'
 
 
@@ -2288,6 +2328,8 @@ let clientKeyHex = "3041020100301306072a8648ce3d020106082a8648ce3d03010704273025
 
 let verificationTime = 1767225600
 let probeTimeoutMs = 30000
+let maxClientAttempts = 5
+let abandonedInputMarker = "SSL_write:bad length"
 
 enum InteropError implements Error
 	noPort
@@ -2397,7 +2439,12 @@ function serveOnce(listener TlsListener) returns String
 	return "{summary} then data [{after}]"
 end 'serveOnce'
 
-function runClient(directory String, port NetworkPort, options StringArray) returns String
+union ClientOutcome
+	observed(report String)
+	abandoned
+end 'ClientOutcome'
+
+function attemptClient(directory String, port NetworkPort, options StringArray) returns ClientOutcome
 	var arguments = ["s_client", "-connect", "127.0.0.1:{port}", "-servername", "example.com", "-CAfile", "{directory}/root.pem", "-verify_return_error", "-verify_hostname", "example.com", "-attime", "{verificationTime}", "-ign_eof"]
 
 	for option in options 'eachOption'
@@ -2411,7 +2458,7 @@ function runClient(directory String, port NetworkPort, options StringArray) retu
 	configuration.timeoutMs = probeTimeoutMs
 
 	let result = try configuration.run() otherwise (error) 'failed'
-		return "s_client: {error.displayReason()}"
+		return ClientOutcome.observed("s_client: {error.displayReason()}")
 	end 'failed'
 
 	var lines = StringArray.create()
@@ -2420,25 +2467,38 @@ function runClient(directory String, port NetworkPort, options StringArray) retu
 		lines.push(line.trim())
 	end 'eachLine'
 
-	return "exit={result.exitCode()} reply={lines.contains("echo:ping")} verification={valueAfter(lines, prefix: "Verification: ")} negotiated={valueAfter(lines, prefix: "New, ")}"
-end 'runClient'
+	let replied = lines.contains("echo:ping")
+
+	if not replied and result.stderr.contains(abandonedInputMarker) 'abandoned'
+		return ClientOutcome.abandoned
+	end 'abandoned'
+
+	return ClientOutcome.observed("exit={result.exitCode()} reply={replied} verification={valueAfter(lines, prefix: "Verification: ")} negotiated={valueAfter(lines, prefix: "New, ")}")
+end 'attemptClient'
 
 function exchange(label String, directory String, serverOptions TlsServerOptions, clientOptions StringArray) returns String
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
-		return "{label}: bind: {describe(error)}"
-	end 'refused'
+	for _ in 0 upto maxClientAttempts 'attempts'
+		var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
+			return "{label}: bind: {describe(error)}"
+		end 'refused'
 
-	try listener.setAcceptDeadline(probeTimeoutMs) otherwise (error) 'unbounded'
-		return "{label}: deadline: {describe(error)}"
-	end 'unbounded'
+		try listener.setAcceptDeadline(probeTimeoutMs) otherwise (error) 'unbounded'
+			return "{label}: deadline: {describe(error)}"
+		end 'unbounded'
 
-	let peer = async serveOnce(listener)
-	let client = runClient(directory, port: listener.port(), options: clientOptions)
-	let server = await peer
+		let peer = async serveOnce(listener)
+		let outcome = attemptClient(directory, port: listener.port(), options: clientOptions)
+		let server = await peer
 
-	listener.close()
+		listener.close()
 
-	return "{label}: server[{server}] s_client[{client}]"
+		match outcome 'outcome'
+			observed(client) then return "{label}: server[{server}] s_client[{client}]"
+			abandoned then continue
+		end 'outcome'
+	end 'attempts'
+
+	return "{label}: s_client abandoned its own input in all {maxClientAttempts} attempts"
 end 'exchange'
 
 
@@ -3001,6 +3061,8 @@ let clientKeyHex = "3041020100301306072a8648ce3d020106082a8648ce3d03010704273025
 let verificationTime = 1767225600
 
 let probeTimeoutMs = 30000
+let maxClientAttempts = 5
+let abandonedInputMarker = "SSL_write:bad length"
 let FileRows = 1500
 
 enum InteropError implements Error
@@ -3106,9 +3168,23 @@ type InteropHandler implements HttpHandler
 	end 'handle'
 
 	function faulted(fault HttpHandlerFault)
-		print("faulted {fault.describe()}\n")
+		if not peerLeft(fault) 'unexpected'
+			print("faulted {fault.describe()}\n")
+		end 'unexpected'
 	end 'faulted'
 end 'InteropHandler'
+
+function peerLeft(fault HttpHandlerFault) returns bool
+	return match fault 'which'
+		threwAfterAFailedResponse gives true
+		threw or
+		threwAfterResponding or
+		threwWithoutAnyAnswer or
+		returnedWithoutResponding or
+		returnedWithoutAnyAnswer or
+		acceptInterrupted gives false
+	end 'which'
+end 'peerLeft'
 
 function serveInterop(server HttpServer) returns HttpServeEnd
 	return server.serve(InteropHandler.create())
@@ -3124,7 +3200,12 @@ function lineContaining(lines StringArray, text String) returns String
 	return "-"
 end 'lineContaining'
 
-function runClient(directory String, port NetworkPort, request String, options StringArray) returns String
+union ClientOutcome
+	observed(report String)
+	abandoned
+end 'ClientOutcome'
+
+function attemptClient(directory String, port NetworkPort, request String, options StringArray) returns ClientOutcome
 	var arguments = ["s_client", "-connect", "127.0.0.1:{port}", "-servername", "localhost", "-CAfile", "{directory}/root.pem", "-verify_return_error", "-verify_hostname", "localhost", "-attime", "{verificationTime}", "-ign_eof"]
 
 	for option in options 'eachOption'
@@ -3138,7 +3219,7 @@ function runClient(directory String, port NetworkPort, request String, options S
 	configuration.timeoutMs = probeTimeoutMs
 
 	let result = try configuration.run() otherwise (error) 'failed'
-		return "s_client: {error.displayReason()}"
+		return ClientOutcome.observed("s_client: {error.displayReason()}")
 	end 'failed'
 
 	var lines = StringArray.create()
@@ -3151,10 +3232,25 @@ function runClient(directory String, port NetworkPort, request String, options S
 	let answer = lineContaining(lines, text: " body=")
 
 	if status == "-" 'unanswered'
-		return "unanswered"
+		if result.stderr.contains(abandonedInputMarker) 'abandoned'
+			return ClientOutcome.abandoned
+		end 'abandoned'
+
+		return ClientOutcome.observed("unanswered")
 	end 'unanswered'
 
-	return "exit={result.exitCode()} verification={valueAfter(lines, prefix: "Verification: ")} {status} [{answer}]"
+	return ClientOutcome.observed("exit={result.exitCode()} verification={valueAfter(lines, prefix: "Verification: ")} {status} [{answer}]")
+end 'attemptClient'
+
+function runClient(directory String, port NetworkPort, request String, options StringArray) returns String
+	for _ in 0 upto maxClientAttempts 'attempts'
+		match attemptClient(directory, port: port, request: request, options: options) 'attempt'
+			observed(report) then return report
+			abandoned then continue
+		end 'attempt'
+	end 'attempts'
+
+	return "s_client abandoned its own input in all {maxClientAttempts} attempts"
 end 'runClient'
 
 function getRequest(target String) returns String

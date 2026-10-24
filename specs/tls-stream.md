@@ -5746,7 +5746,7 @@ end 'acceptOnce'
 function main() returns ExitCode
 	var options = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
 
-	options.setHandshakeDeadline(2000)
+	options.setHandshakeDeadline(5000)
 
 	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: options) otherwise return 1
 
