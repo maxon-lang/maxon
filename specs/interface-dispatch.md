@@ -4201,3 +4201,195 @@ end 'main'
 ```maxoncstderr
 error E3005: <fragment>:27:11: argument type mismatch for 'c': expected 'Character', got 'int'
 ```
+
+<!-- test: interface-returning-function-with-a-panic-path -->
+A function that returns an interface type may abort on a path of its own. The abort's dead return carries
+no conformer, so it widens through no witness table.
+```maxon
+interface Speaker
+	function speak() returns ExitCode
+end 'Speaker'
+
+type Dog implements Speaker
+	let volume as ExitCode
+
+	static function create(volume ExitCode) returns Self
+		return Self{volume: volume}
+	end 'create'
+
+	function speak() returns ExitCode
+		return self.volume
+	end 'speak'
+end 'Dog'
+
+function adopt(volume ExitCode) returns Speaker
+	if volume > 100 'tooLoud'
+		panic("too loud")
+	end 'tooLoud'
+
+	return Dog.create(volume)
+end 'adopt'
+
+function main() returns ExitCode
+	let speaker = adopt(7)
+	return speaker.speak()
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: interface-returning-function-with-a-guarded-shift -->
+The guard a shift by a count of unknown sign adds aborts on a path of its own, and a function returning an
+interface type widens nothing there either.
+```maxon
+typealias Signed = int(i64.min to i64.max)
+
+interface Speaker
+	function speak() returns Signed
+end 'Speaker'
+
+type Dog implements Speaker
+	let volume as Signed
+
+	static function create(volume Signed) returns Self
+		return Self{volume: volume}
+	end 'create'
+
+	function speak() returns Signed
+		return self.volume
+	end 'speak'
+end 'Dog'
+
+function adopt(volume Signed, count Signed) returns Speaker
+	return Dog.create(volume shl count)
+end 'adopt'
+
+function main() returns ExitCode
+	let speaker = adopt(3, count: 2)
+	return speaker.speak() as ExitCode
+end 'main'
+```
+```exitcode
+12
+```
+
+<!-- test: interface-return-of-a-try-otherwise-panic-in-two-match-arms -->
+A function declared to return an interface type returns a different conformer from each arm of a `match`,
+each reached through `try … otherwise panic`.
+```maxon
+enum SpeakerError implements Error
+	tooLoud
+end 'SpeakerError'
+
+interface Speaker
+	function speak() returns ExitCode
+end 'Speaker'
+
+type Dog implements Speaker
+	let volume as ExitCode
+
+	static function create(volume ExitCode) returns Self throws SpeakerError
+		if volume > 100 'tooLoud'
+			throw SpeakerError.tooLoud
+		end 'tooLoud'
+
+		return Self{volume: volume}
+	end 'create'
+
+	function speak() returns ExitCode
+		return self.volume
+	end 'speak'
+end 'Dog'
+
+type Cat implements Speaker
+	let volume as ExitCode
+
+	static function create(volume ExitCode) returns Self throws SpeakerError
+		if volume > 100 'tooLoud'
+			throw SpeakerError.tooLoud
+		end 'tooLoud'
+
+		return Self{volume: volume}
+	end 'create'
+
+	function speak() returns ExitCode
+		return self.volume + 1
+	end 'speak'
+end 'Cat'
+
+enum Kind
+	dog
+	cat
+end 'Kind'
+
+function adopt(kind Kind, volume ExitCode) returns Speaker
+	match kind 'kind'
+		dog then return try Dog.create(volume) otherwise panic("a dog of this volume was refused")
+		cat then return try Cat.create(volume) otherwise panic("a cat of this volume was refused")
+	end 'kind'
+end 'adopt'
+
+function main() returns ExitCode
+	let first = adopt(Kind.dog, volume: 10)
+	let second = adopt(Kind.cat, volume: 20)
+	return first.speak() + second.speak()
+end 'main'
+```
+```exitcode
+31
+```
+
+<!-- test: match-expression-returning-two-conformers-through-the-declared-interface -->
+A `match` expression returned from a function declared to return an interface type gives a different
+conformer from each arm.
+```maxon
+interface Speaker
+	function speak() returns ExitCode
+end 'Speaker'
+
+type Dog implements Speaker
+	let volume as ExitCode
+
+	static function create(volume ExitCode) returns Self
+		return Self{volume: volume}
+	end 'create'
+
+	function speak() returns ExitCode
+		return self.volume
+	end 'speak'
+end 'Dog'
+
+type Cat implements Speaker
+	let volume as ExitCode
+
+	static function create(volume ExitCode) returns Self
+		return Self{volume: volume}
+	end 'create'
+
+	function speak() returns ExitCode
+		return self.volume + 1
+	end 'speak'
+end 'Cat'
+
+enum Kind
+	dog
+	cat
+end 'Kind'
+
+function adopt(kind Kind, volume ExitCode) returns Speaker
+	return match kind 'kind'
+		dog gives Dog.create(volume)
+		cat gives Cat.create(volume)
+	end 'kind'
+end 'adopt'
+
+function main() returns ExitCode
+	let first = adopt(Kind.dog, volume: 10)
+	let second = adopt(Kind.cat, volume: 20)
+	return first.speak() + second.speak()
+end 'main'
+```
+```exitcode
+31
+```

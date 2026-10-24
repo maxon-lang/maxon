@@ -16743,6 +16743,13 @@ enum ConstPayloadDomain
 	stringBytePos
 end 'ConstPayloadDomain'
 
+function mergeConstructOf(isExpression bool, destination ArmDestination) returns MergeConstruct
+	match destination 'destination'
+		returned then return MergeConstruct.matchStatement
+		merged then return MergeConstruct.matchExpression if isExpression else MergeConstruct.matchStatement
+	end 'destination'
+end 'mergeConstructOf'
+
 export typealias ConstPayloadDomainArray = Array with ConstPayloadDomain
 
 // ⭐⭐ **THE `stdlib/String.maxon` DECLARATIONS THE CONSTANT-SLICE FOLD RECOGNIZES**
@@ -17023,6 +17030,11 @@ type MatchArmBody
 		return Self{fellThrough: fellThrough, reachesMerge: reachesMerge, exitBlock: exitBlock, exitVals: exitVals, give: give, blame: blame}
 	end 'create'
 end 'MatchArmBody'
+
+union ArmDestination
+	merged
+	returned(anchor Token)
+end 'ArmDestination'
 
 // What a parsed match leaves behind: the continuation block control resumes in (`cont`, which
 // becomes `currentBlock`), and the value it produced — `none` for a statement match, `value(phi)`
@@ -42587,7 +42599,19 @@ export type Parser
 		// nothing: the literal already IS one. See `integerizedOperand`.
 		let retStart = self.pos
 		self.stateDeclaredReturnArrayLiteralTarget(func.maxonReturnType, valueStart: retStart)
+
+		// Each arm returns its own give: a merge phi carries one word, and the witness half of a returned
+		// interface value is chosen from the conformer at the `ret`.
+		if maxonReturnTypeTag(func.maxonReturnType) == ValueTypeTag.interfaceRef and self.at(TokenKind.match) 'eachArmReturnsItsGive'
+			_ = try self.parseMatchCommon(func, block: block, isExpression: true, destination: ArmDestination.returned(anchor))
+			return
+		end 'eachArmReturnsItsGive'
+
 		let expression = try self.parseExpression(func, block: block)
+		try self.returnCheckedValue(func, expression: expression, retStart: retStart, anchor: anchor)
+	end 'parseCheckedValueReturn'
+
+	function returnCheckedValue(func IrFunction, expression ValueId, retStart ElementIndex, anchor Token) throws SourceParseError
 		self.fileReturnedValueSite(retStart, returned: expression)
 		let parsed = try self.integerizedOperand(expression, expected: maxonReturnTypeTag(func.maxonReturnType), start: retStart, pastEnd: self.pos)
 
@@ -42712,7 +42736,7 @@ export type Parser
 			undeclared then break
 			declared(alias) then self.recordRangedReturnSite(returned, alias: alias, anchor: anchor)
 		end 'rangedReturn'
-	end 'parseCheckedValueReturn'
+	end 'returnCheckedValue'
 
 	// ⭐⭐ **THE NOMINAL HALF OF A `return` — the identity check, and the ONE implicit conversion the language
 	// has.** A `return` carries exactly the conversion an explicit `as <declared type>` would perform, and no
@@ -43290,8 +43314,14 @@ export type Parser
 			return
 		end 'void'
 
-		let zero = self.emitLiteral(0, valueType: self.deadReturnZeroType(func), range: SourceRange.ofToken(anchor))
-		self.artifact.emitTerminator(self.bodyState.currentBlock, op: MaxonOp.ret(zero), range: SourceRange.ofToken(anchor))
+		let range = SourceRange.ofToken(anchor)
+		let zero = self.emitLiteral(0, valueType: self.deadReturnZeroType(func), range: range)
+
+		if self.tagOf(zero) == ValueTypeTag.interfaceRef 'anExistentialReturn'
+			self.pairInterfaceWitness(zero, witness: self.emitLiteral(0, valueType: MaxonType.integer, range: range))
+		end 'anExistentialReturn'
+
+		self.artifact.emitTerminator(self.bodyState.currentBlock, op: MaxonOp.ret(zero), range: range)
 	end 'emitDeadReturn'
 
 	// Every statement door that ends in a call finishes here. The router runs at emission, where
@@ -43397,15 +43427,20 @@ export type Parser
 	end 'tryTargetAlwaysThrows'
 
 	// The type a dead return's zero is born with — `float` when the declared return occupies XMM,
-	// `integer` otherwise. Every non-float return type takes the integer zero: a String / struct /
+	// the declared interface type for an interface return, `integer` otherwise. A String / struct /
 	// boxed-union return is a POINTER, which is a GPR value exactly as an `int` is, and the bits are
-	// dead on every one of them.
+	// dead on every one of them. An interface return is the exception: lowering widens a `ret` of a
+	// non-existential value through that value's witness table, and an integer zero has none.
 	function deadReturnZeroType(func IrFunction) returns MaxonType
 		let declared = func.maxonReturnType
 
 		if tagIsFloat(self.floatResolvedTag(maxonReturnTypeTag(declared), nameId: maxonReturnTypeNameId(declared))) 'floatReturn'
 			return MaxonType.float
 		end 'floatReturn'
+
+		if maxonReturnTypeTag(declared) == ValueTypeTag.interfaceRef 'existentialReturn'
+			return try valueTypeOfReturn(declared) otherwise panic("deadReturnZeroType: a void return type has no tag, so it is not an interface return")
+		end 'existentialReturn'
 
 		return MaxonType.integer
 	end 'deadReturnZeroType'
@@ -56033,7 +56068,7 @@ export type Parser
 	// The STATEMENT form: `match <expr> 'l' <arms> end 'l'`. Returns the continuation control
 	// resumes in — reachable when an arm falls through to it, `dead` when every arm terminates.
 	function parseMatchStatement(func IrFunction, block IrBlock) returns IrBlock throws SourceParseError
-		var outcome = try self.parseMatchCommon(func, block: block, isExpression: false)
+		var outcome = try self.parseMatchCommon(func, block: block, isExpression: false, destination: ArmDestination.merged)
 		return outcome.cont
 	end 'parseMatchStatement'
 
@@ -56041,7 +56076,7 @@ export type Parser
 	// leaves control in the merge, exactly as `emitShortCircuit` does — so the climber continues
 	// from `currentBlock` after it.
 	function parseMatchExpression(func IrFunction) returns ValueId throws SourceParseError
-		view outcome = try self.parseMatchCommon(func, block: self.bodyState.currentBlock, isExpression: true)
+		view outcome = try self.parseMatchCommon(func, block: self.bodyState.currentBlock, isExpression: true, destination: ArmDestination.merged)
 
 		match outcome.result 'r'
 			value(id) then return id
@@ -56057,7 +56092,7 @@ export type Parser
 	// The shared core, driving both forms off `isExpression` (which decides `then` vs `gives` and
 	// whether the merge carries a result phi). The single owner of the scrutinee, the block label,
 	// the arm loop, exhaustiveness, and the merge join.
-	function parseMatchCommon(func IrFunction, block IrBlock, isExpression bool) returns MatchOutcome throws SourceParseError
+	function parseMatchCommon(func IrFunction, block IrBlock, isExpression bool, destination ArmDestination) returns MatchOutcome throws SourceParseError
 		let matchIndex = self.pos
 		var armTarget = self.pendingArrayLiteralTargetAt(matchIndex)
 		let tupleArmTarget = self.pendingTupleLiteralTargetAt(matchIndex)
@@ -56458,7 +56493,7 @@ export type Parser
 					end 'enumPlainDefault'
 
 					armStarts.push(self.pos)
-					var defaultArmBody = try self.parseArmBody(func, bodyBlock: defaultBody, isExpression: isExpression, carried: carried, armTarget: armTarget, tupleArmTarget: tupleArmTarget)
+					var defaultArmBody = try self.parseArmBody(func, bodyBlock: defaultBody, isExpression: isExpression, destination: destination, carried: carried, armTarget: armTarget, tupleArmTarget: tupleArmTarget)
 					armEnds.push(self.pos + CallNotedPastItsLastToken)
 					defaultArmBody.give = try self.finishArmExit(defaultArmBody.give, tempFloor: defaultTempFloor, ownedFloor: defaultOwnedFloor, exitBlock: defaultArmBody.exitBlock, anchor: matchTok)
 
@@ -56634,7 +56669,7 @@ export type Parser
 
 				let armTempFloor = self.bodyState.pendingTempDrops.count()
 				armStarts.push(self.pos)
-				var armBody = try self.parseArmBody(func, bodyBlock: bodyBlock, isExpression: isExpression, carried: carried, armTarget: armTarget, tupleArmTarget: tupleArmTarget)
+				var armBody = try self.parseArmBody(func, bodyBlock: bodyBlock, isExpression: isExpression, destination: destination, carried: carried, armTarget: armTarget, tupleArmTarget: tupleArmTarget)
 				armEnds.push(self.pos + CallNotedPastItsLastToken)
 
 				if opensArmScope 'closeArmScope'
@@ -56789,7 +56824,7 @@ export type Parser
 			end 'eachBreakExit'
 		end 'drainBreakExits'
 
-		var outcome = try self.finalizeMatchMerge(func, matchTok: matchTok, carried: carried, reachingArms: reachingArms, construct: MergeConstruct.matchExpression if isExpression else MergeConstruct.matchStatement)
+		var outcome = try self.finalizeMatchMerge(func, matchTok: matchTok, carried: carried, reachingArms: reachingArms, construct: mergeConstructOf(isExpression, destination: destination))
 		self.bodyState.currentBlock = outcome.cont
 		return outcome
 	end 'parseMatchCommon'
@@ -56929,7 +56964,7 @@ export type Parser
 	// A `then` arm is a single statement, and `and fallthrough` may follow it. Reports E2049 for a
 	// block-opening statement body, E2025 for `return … and fallthrough`, and E2001 for a stray
 	// `and` after either shape of expression arm.
-	function parseArmBody(func IrFunction, bodyBlock IrBlock, isExpression bool, carried VarInfoArray, armTarget DeclaredArrayInstance, tupleArmTarget DeclaredTupleTarget) returns MatchArmBody throws SourceParseError
+	function parseArmBody(func IrFunction, bodyBlock IrBlock, isExpression bool, destination ArmDestination, carried VarInfoArray, armTarget DeclaredArrayInstance, tupleArmTarget DeclaredTupleTarget) returns MatchArmBody throws SourceParseError
 		self.bodyState.currentBlock = bodyBlock
 
 		if isExpression 'givesArm'
@@ -56970,6 +57005,11 @@ export type Parser
 			self.stateArrayLiteralTargetAt(armTarget, tokenIndex: valueStart)
 			self.stateTupleLiteralTargetAt(tupleArmTarget, tokenIndex: valueStart)
 			let value = try self.parseArmValue(func, block: self.bodyState.currentBlock)
+
+			match destination 'destination'
+				returned(returnAnchor) then return try self.returnedArmBody(func, give: value, valueStart: valueStart, anchor: returnAnchor)
+				merged then break
+			end 'destination'
 
 			var exitBlock = self.bodyState.currentBlock
 			try self.rejectStrayAndOnExpressionArm()
@@ -57016,6 +57056,13 @@ export type Parser
 		let reachesMerge = not exitBlock.isTerminated() and not fellThrough
 		return MatchArmBody.create(fellThrough, reachesMerge: reachesMerge, exitBlock: exitBlock, exitVals: self.snapshotBindings(carried), give: MatchGiveValue.none, blame: WriteBlame.unblamed)
 	end 'parseArmBody'
+
+	function returnedArmBody(func IrFunction, give ValueId, valueStart ElementIndex, anchor Token) returns MatchArmBody throws SourceParseError
+		try self.returnCheckedValue(func, expression: give, retStart: valueStart, anchor: anchor)
+		var returnedBlock = self.bodyState.currentBlock
+		try self.rejectStrayAndOnExpressionArm()
+		return MatchArmBody.create(false, reachesMerge: false, exitBlock: returnedBlock, exitVals: ValueIdArray.create(), give: MatchGiveValue.none, blame: WriteBlame.unblamed)
+	end 'returnedArmBody'
 
 	// ⭐ **`and fallthrough` IS MEANINGLESS ON EITHER SHAPE OF MATCH-EXPRESSION ARM, so the refusal is one
 	// thing.** A `gives` arm yields a value and a DIVERGING arm leaves the function; neither has a successor

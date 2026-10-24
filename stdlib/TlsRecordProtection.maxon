@@ -76,6 +76,13 @@ public type TlsOpenedRecord
 	end 'create'
 end 'TlsOpenedRecord'
 
+function tlsAead(kind TlsAeadKind, key ByteArray) returns Aead
+	return match kind 'kind'
+		aesGcm gives try AesGcm.create(key) otherwise panic("tlsAead: a key of the suite's length was refused")
+		chaCha20Poly1305 gives try ChaCha20Poly1305.create(key) otherwise panic("tlsAead: a key of the suite's length was refused")
+	end 'kind'
+end 'tlsAead'
+
 type TlsRecordState
 	var aead as Aead
 	var kind as TlsAeadKind
@@ -84,10 +91,7 @@ type TlsRecordState
 	var exhausted as bool
 
 	static function create(kind TlsAeadKind, key ByteArray, iv ByteArray, sequenceNumber TlsSequenceNumber) returns TlsRecordState
-		return match kind 'kind'
-			aesGcm gives Self{aead: try AesGcm.create(key) otherwise panic("TlsRecordState: a key of the suite's length was refused"), kind: kind, iv: iv.clone(), next: sequenceNumber, exhausted: false}
-			chaCha20Poly1305 gives Self{aead: try ChaCha20Poly1305.create(key) otherwise panic("TlsRecordState: a key of the suite's length was refused"), kind: kind, iv: iv.clone(), next: sequenceNumber, exhausted: false}
-		end 'kind'
+		return Self{aead: tlsAead(kind, key: key), kind: kind, iv: iv.clone(), next: sequenceNumber, exhausted: false}
 	end 'create'
 
 	function sequence() returns TlsSequenceNumber throws TlsRecordError
