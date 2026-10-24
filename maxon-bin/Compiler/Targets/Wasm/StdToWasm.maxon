@@ -116,14 +116,28 @@ end 'wasmStreamAccessorImportFuncIdx'
 
 // The canonical-ABI RETURN AREA `osWriteStdout` hands `blocking-write-and-flush` its
 // `result<_, stream-error>` into. It sits in the low scratch region BELOW the `.data` base
-// (1024) and within page 0, so it never overlaps real data. The write result is ignored
-// (fire-and-forget), so the area is written but never read — 256 leaves ample room to the
+// (1024) and within page 0, so it never overlaps real data. Only the result's tag byte is read
+// (`mrt_write_stream` stops on an error); the error payload is not — 256 leaves ample room to the
 // data base.
 let WasmRetAreaBase = 256
 
 // `blocking-write-and-flush(handle, ptr, len, retArea)` takes four i32 params — the stream handle,
 // the contents pointer, the contents length, and the canonical-ABI return area.
 let WasmWriteFlushParamCount = 4
+
+// The WIT contract caps one `blocking-write-and-flush` call at 4096 bytes, and wasmtime traps on a
+// longer buffer.
+let WasiStreamWriteChunkLimit = 4096
+let WasmStreamWriteParamCount = 3
+let WasmStreamWriteHandleLocal = 0
+let WasmStreamWritePtrLocal = 1
+let WasmStreamWriteLenLocal = 2
+let WasmStreamWriteChunkLocal = 3
+let WasmStreamWriteDeclaredLocalCount = 1
+let WasmStreamWriteContinueDepth = 0
+let WasmStreamWriteExitDepth = 1
+let WasmStreamResultTagOffset = 0
+let StreamWriteName = b"mrt_write_stream"
 
 // The linear-memory address the top-level-`var` `.data` image is laid at. Low memory below it is
 // a NULL GUARD — no global's address is ever 0 — keeping any future
@@ -297,10 +311,12 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 		end 'indexDrift'
 	end 'eachFunc'
 
-	// The two SYNTHETIC functions, appended in the order `wasmPanicFuncIdx` fixes: `mrt_panic` first
-	// (its index is read by every panic site, which was emitted above), then the entry stub.
+	// The three SYNTHETIC functions, appended in the order `wasmPanicFuncIdx` fixes: `mrt_panic` first
+	// (its index is read by every panic site, which was emitted above), then the entry stub, then
+	// `mrt_write_stream` (its index is read by every write site, panic included).
 	appendPanicRuntime(builder, funcNames: funcNames, frames: frames)
 	let runFuncIdx = appendRunEntry(builder, module: module, funcNames: funcNames, frames: frames, checkLeaks: checkLeaks, initGlobals: initGlobals, releasesRegistry: releasesRegistry, entryFunction: entryFunction)
+	appendStreamWriteRuntime(builder, funcNames: funcNames)
 	view functionNames = builder.functionDebugNames()
 
 	if functionNames.count() != wasmFirstInlinePosition(funcNames) 'positionDrift'
@@ -472,17 +488,16 @@ function appendPanicRuntime(builder WasmModuleBuilder, funcNames FunctionNameInd
 	body.endOp()
 	body.endOp()
 
-	// `blocking-write-and-flush(get-stderr(), ptr, cursor - ptr, retArea)` — the same four-operand
-	// shape and the same fire-and-forget return area as `emitOsWriteStream`, over the stderr handle.
+	// `mrt_write_stream(get-stderr(), ptr, cursor - ptr)`, the same writer as `emitOsWriteStream`.
 	body.call(GetStderrImportFuncIdx)
 	body.localGet(WasmPanicMsgPtrLocal)
 	body.localGet(WasmPanicCursorLocal)
 	body.localGet(WasmPanicMsgPtrLocal)
 	body.i32Sub()
-	emitBlockingWriteAndFlush(body)
+	body.call(wasmStreamWriteFuncIdx(funcNames))
 
-	emitStderrWriteOfConstant(body, address: frames.headerAddress, length: frames.headerLength)
-	emitFrameWalk(body, frames: frames)
+	emitStderrWriteOfConstant(body, address: frames.headerAddress, length: frames.headerLength, writeFuncIdx: wasmStreamWriteFuncIdx(funcNames))
+	emitFrameWalk(body, frames: frames, writeFuncIdx: wasmStreamWriteFuncIdx(funcNames))
 
 	body.i32Const(PanicExitCode)
 	body.call(ExitImportFuncIdx)
@@ -516,9 +531,78 @@ function wasmRunFuncIdx(funcNames FunctionNameIndex) returns Wasm32Index
 	return (wasmPanicFuncIdx(funcNames) + 1) as Wasm32Index
 end 'wasmRunFuncIdx'
 
-function wasmFirstInlinePosition(funcNames FunctionNameIndex) returns Wasm32Index
+function wasmStreamWriteFuncIdx(funcNames FunctionNameIndex) returns Wasm32Index
 	return (wasmRunFuncIdx(funcNames) + 1) as Wasm32Index
+end 'wasmStreamWriteFuncIdx'
+
+function wasmFirstInlinePosition(funcNames FunctionNameIndex) returns Wasm32Index
+	return (wasmStreamWriteFuncIdx(funcNames) + 1) as Wasm32Index
 end 'wasmFirstInlinePosition'
+
+// `mrt_write_stream(handle, ptr, len)` writes `len` bytes as consecutive `blocking-write-and-flush`
+// calls of at most `WasiStreamWriteChunkLimit` bytes, and stops at the first call that reports a
+// stream error. The error is not surfaced: `emitOsWriteStream` still reports `len` as the count.
+function appendStreamWriteRuntime(builder WasmModuleBuilder, funcNames FunctionNameIndex)
+	var body = WasmBody.create()
+
+	body.beginBlock()
+	body.beginLoop()
+
+	body.localGet(WasmStreamWriteLenLocal)
+	body.i32Eqz()
+	body.brIf(WasmStreamWriteExitDepth)
+
+	body.i32Const(WasiStreamWriteChunkLimit)
+	body.localGet(WasmStreamWriteLenLocal)
+	body.localGet(WasmStreamWriteLenLocal)
+	body.i32Const(WasiStreamWriteChunkLimit)
+	body.i32GeU()
+	body.select()
+	body.localSet(WasmStreamWriteChunkLocal)
+
+	body.localGet(WasmStreamWriteHandleLocal)
+	body.localGet(WasmStreamWritePtrLocal)
+	body.localGet(WasmStreamWriteChunkLocal)
+	body.i32Const(WasmRetAreaBase)
+	body.call(BlockingWriteFlushImportFuncIdx)
+
+	body.i32Const(WasmRetAreaBase)
+	body.i32Load8U(WasmStreamResultTagOffset)
+	body.brIf(WasmStreamWriteExitDepth)
+
+	body.localGet(WasmStreamWritePtrLocal)
+	body.localGet(WasmStreamWriteChunkLocal)
+	body.i32Add()
+	body.localSet(WasmStreamWritePtrLocal)
+
+	body.localGet(WasmStreamWriteLenLocal)
+	body.localGet(WasmStreamWriteChunkLocal)
+	body.i32Sub()
+	body.localSet(WasmStreamWriteLenLocal)
+
+	body.br(WasmStreamWriteContinueDepth)
+	body.endOp()
+	body.endOp()
+
+	var localTypes = WasmValTypeArray.create()
+
+	for _ in 0 upto WasmStreamWriteDeclaredLocalCount 'eachLocal'
+		localTypes.push(WasmValType.i32)
+	end 'eachLocal'
+
+	var paramTypes = WasmValTypeArray.create()
+
+	for _ in 0 upto WasmStreamWriteParamCount 'eachParam'
+		paramTypes.push(WasmValType.i32)
+	end 'eachParam'
+
+	let typeIdx = builder.internFuncType(paramTypes, results: WasmValTypeArray.create())
+	let funcIdx = builder.addFunction(typeIdx, localTypes: localTypes, body: body.bytes(), debugName: StreamWriteName)
+
+	if funcIdx != wasmStreamWriteFuncIdx(funcNames) 'indexDrift'
+		panic("appendStreamWriteRuntime: `{String.from(StreamWriteName)}` landed at wasm function index {funcIdx}, but every write site was emitted calling {wasmStreamWriteFuncIdx(funcNames)} — it is no longer appended directly after `{String.from(EntryPointName)}`")
+	end 'indexDrift'
+end 'appendStreamWriteRuntime'
 
 // `mrt_panic`'s locals. Local 0 is its one parameter (identity-local model: a wasm function's params
 // occupy the first local indices), local 1 the scan cursor, the rest the frame walk's.
@@ -536,19 +620,14 @@ let WasmPanicScanContinueDepth = 0
 let WasmPanicScanBreakDepth = 1
 let WasmPanicWalkBreakFromIfDepth = 2
 
-function emitStderrWriteOfConstant(body WasmBody, address Imm32, length Imm32)
+function emitStderrWriteOfConstant(body WasmBody, address Imm32, length Imm32, writeFuncIdx Wasm32Index)
 	body.call(GetStderrImportFuncIdx)
 	body.i32Const(address)
 	body.i32Const(length)
-	emitBlockingWriteAndFlush(body)
+	body.call(writeFuncIdx)
 end 'emitStderrWriteOfConstant'
 
-function emitBlockingWriteAndFlush(body WasmBody)
-	body.i32Const(WasmRetAreaBase)
-	body.call(BlockingWriteFlushImportFuncIdx)
-end 'emitBlockingWriteAndFlush'
-
-function emitFrameWalk(body WasmBody, frames WasmFrameStack)
+function emitFrameWalk(body WasmBody, frames WasmFrameStack, writeFuncIdx Wasm32Index)
 	body.i32Const(frames.depthAddress)
 	body.i32Load(WasmFrameWordDisplacement)
 	body.localSet(WasmPanicDepthLocal)
@@ -565,7 +644,7 @@ function emitFrameWalk(body WasmBody, frames WasmFrameStack)
 	body.i32Const(MaxBacktraceFrames)
 	body.i32GeU()
 	body.beginIf()
-	emitStderrWriteOfConstant(body, address: frames.elidedAddress, length: frames.elidedLength)
+	emitStderrWriteOfConstant(body, address: frames.elidedAddress, length: frames.elidedLength, writeFuncIdx: writeFuncIdx)
 	body.br(WasmPanicWalkBreakFromIfDepth)
 	body.endOp()
 
@@ -585,7 +664,7 @@ function emitFrameWalk(body WasmBody, frames WasmFrameStack)
 	body.i32Load(frames.lineTableBase + WasmFrameLineAddressColumn)
 	body.localGet(WasmPanicLineEntryLocal)
 	body.i32Load(frames.lineTableBase + WasmFrameLineLengthColumn)
-	emitBlockingWriteAndFlush(body)
+	body.call(writeFuncIdx)
 
 	body.localGet(WasmPanicFrameLocal)
 	body.i32Const(1)
@@ -3551,9 +3630,8 @@ type WasmFuncEmitter
 	// `osWriteStdout`/`osWriteStderr(result, buf, len)` → the WASI-Preview2 stream write. Stack-balanced:
 	// the stream accessor pushes the i32 handle; the buffer address and the byte length are each wrapped
 	// to i32 (a String's `buffer@0`/`length@8` are i64 in the Std IR — a 64-bit pointer/count in a
-	// register on the native backends — but a wasm address/length is i32); the canonical-ABI return area
-	// is a constant i32. `blocking-write-and-flush` writes its `result<_, stream-error>` into that area
-	// and returns nothing, so the stack is empty after the call. The stream handle leaks, which is
+	// register on the native backends — but a wasm address/length is i32). `mrt_write_stream` takes the
+	// three and returns nothing, so the stack is empty after the call. The stream handle leaks, which is
 	// acceptable: both streams are process-lived and the host reclaims them on exit.
 	//
 	// ⭐ ONE EMITTER FOR BOTH STREAMS: the accessor import is the whole difference — a `wasi:io/streams`
@@ -3562,15 +3640,15 @@ type WasmFuncEmitter
 	//
 	// ⚠⚠ **THE BYTE COUNT IS `lenId`, AND ON THIS LANE THAT IS THE ABI'S ANSWER RATHER THAN A STAND-IN.**
 	// The other three lanes read a count the OS reports (`WriteFile`'s out-param, `write`'s return);
-	// `blocking-write-and-flush` reports none, because its contract is to write the WHOLE contents or fail
-	// — so on success the count written IS the length asked for. The result is re-pushed from the operand
+	// `mrt_write_stream` reports none, so on success the count written IS the length asked for; a stream
+	// error ends the write early and is not reflected in the count. The result is re-pushed from the operand
 	// at the Std tier's i64 width, not from the i32 already consumed by the call, so no truncation is
 	// carried into the count.
 	function emitOsWriteStream(resultId ValueId, bufId ValueId, lenId ValueId, stream OsOutputStream)
 		self.body.call(wasmStreamAccessorImportFuncIdx(stream))
 		self.pushOperandAt(bufId, targetVt: WasmValType.i32)
 		self.pushOperandAt(lenId, targetVt: WasmValType.i32)
-		emitBlockingWriteAndFlush(self.body)
+		self.body.call(wasmStreamWriteFuncIdx(self.funcNames))
 
 		self.pushOperandAt(lenId, targetVt: WasmValType.i64)
 		self.body.localSet(resultId as Wasm32Index)
