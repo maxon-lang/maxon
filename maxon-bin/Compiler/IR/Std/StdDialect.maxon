@@ -1201,8 +1201,8 @@ end 'SocketOverlappedVerb'
 // syscall on the two Linux lanes — because binding and accepting are readiness-driven everywhere. What differs
 // per lane is only how the accepted descriptor is born non-blocking; see `StdOp.osSocketServe`.
 export enum SocketServeVerb
-	// `(socket, addrPtr, unused)`. `bind(s, addrPtr, sizeof(sockaddr_in))` — the length is fixed for
-	// `osSocketConnect`'s reason: the caller always hands an IPv4 `sockaddr_in`.
+	// `(socket, addrPtr, addrLen)`. `bind(s, addrPtr, addrLen)` — the length is an operand because the
+	// address is an IPv4 `sockaddr_in` or an IPv6 `sockaddr_in6`.
 	bind
 
 	// `(socket, backlog, unused)`. `listen(s, backlog)`. The backlog is an operand rather than a constant of
@@ -2366,10 +2366,10 @@ export union StdOp
 	// `SemanticCheck.reportTargetUnsupportedCallee`), so that backend never sees these ops and its arm panics
 	// as a backstop for a compiler bug rather than stubbing an answer nothing checks.
 	//
-	// ⭐ **THE CONSTANTS LIVE IN THE LOWERING, NOT IN THE OPERANDS** — `AF_INET`, `SOCK_STREAM`, `IPPROTO_TCP`,
-	// the `0` send/recv flags and `sizeof(sockaddr_in)` are Win32 facts, not Maxon ones, so they are spelled
-	// once in `StdToX64Conversion` the way `osFileOpenRead` spells `GENERIC_READ`. A POSIX lane supplies its
-	// own numbers for the same ops.
+	// ⭐ **THE CONSTANTS LIVE IN THE LOWERING, NOT IN THE OPERANDS** — `SOCK_STREAM`, `IPPROTO_TCP` and the
+	// `0` send/recv flags are Win32 facts, not Maxon ones, so they are spelled once in `StdToX64Conversion`
+	// the way `osFileOpenRead` spells `GENERIC_READ`. A POSIX lane supplies its own numbers for the same
+	// ops. The address family and the address length are operands, because they differ per address.
 
 	// `osSocketStartup(result, wsaDataPtr)` = `WSAStartup(0x0202, wsaDataPtr)`, the returned int in `result`
 	// (0 = success). Winsock REQUIRES this before any other ws2_32 call. This op is the raw call; the
@@ -2396,10 +2396,9 @@ export union StdOp
 	// resolve with no matching free leaks OS memory for the process lifetime, and that leak is invisible to the exit-101 gate.
 	osSocketFreeAddrInfo(addrInfoPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
-	// `osSocketCreate(result)` = `socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)` (`WSASocketW` on
-	// Windows), the raw descriptor in `result`, or a negative failure. No value operands: every
-	// argument is a fixed constant, so the op is a pure def in the shape `osReadClock`'s direct-return
-	// siblings use.
+	// `osSocketCreate(result, family)` = `socket(family, SOCK_STREAM, IPPROTO_TCP)` (`WSASocketW` on
+	// Windows), the raw descriptor in `result`, or a negative failure. `family` is the lane's own
+	// `AF_INET` or `AF_INET6` number (`ManagedSocketRuntime.addressFamilyIpv6`).
 	//
 	// The failure vocabulary is the lane's, and every reader tests `< 0` — see
 	// `ManagedSocketRuntime.emitSocketCallFailed`. A POSIX lane answers `-errno`, because the band
@@ -2407,16 +2406,15 @@ export union StdOp
 	// which is -1 and negative too. A POSIX descriptor is born non-blocking and close-on-exec, and a
 	// Windows one overlapped and `WSA_FLAG_NO_HANDLE_INHERIT`, which is the lowering's to arrange and
 	// not an operand.
-	osSocketCreate(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	osSocketCreate(resultId ValueId, familyId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
-	// `osSocketConnect(result, sock, addrPtr)` = `connect(sock, addrPtr, sizeof(sockaddr_in))`, the returned int
-	// in `result` (0 = success, else a negative failure in the lane's vocabulary — see `osSocketCreate`). The
-	// length is fixed because the caller always hands an IPv4 `sockaddr_in`; IPv6 would take a length
-	// operand rather than widening this one silently.
+	// `osSocketConnect(result, sock, addrPtr, addrLen)` = `connect(sock, addrPtr, addrLen)`, the returned int
+	// in `result` (0 = success, else a negative failure in the lane's vocabulary — see `osSocketCreate`).
+	// `addrLen` is the size of the `sockaddr_in` or `sockaddr_in6` `addrPtr` points at.
 	//
 	// ⚠ **ON A POSIX LANE `-EINPROGRESS` IS NOT A FAILURE**: the descriptor is non-blocking, so the handshake
 	// runs on and `osSocketError` is what reports its outcome.
-	osSocketConnect(resultId ValueId, sockId ValueId, addrPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	osSocketConnect(resultId ValueId, sockId ValueId, addrPtrId ValueId, addrLenId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// ⭐⭐ **`osSocketError(result, sock, valuePtr, lenPtr)` = `getsockopt(sock, SOL_SOCKET, SO_ERROR, valuePtr,
 	// lenPtr)` — THE VERDICT OF A NON-BLOCKING `connect`.** `result` is the CALL's status (0, or a negative
@@ -4942,7 +4940,6 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		covPoint or
 		stackRecordAddr or
 		osTickCountMs or
-		osSocketCreate or
 		osCpuCount or
 		tlsAlloc or
 		osThreadToken or
@@ -4969,7 +4966,8 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osMapNamedSegment(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
 		osPipePeek(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
 		osProcessTerminate(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
-		osSocketConnect(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
+		osSocketCreate(_, familyId) then referenced.insert(familyId)
+		osSocketConnect(_, sockId, addrPtrId, addrLenId) then insertUseTriple(referenced, a: sockId, b: addrPtrId, c: addrLenId)
 		osCommitPages(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
 		osGuardPages(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
 		atomicRmw(_, lhs, rhs, _) then insertUsePair(referenced, a: lhs, b: rhs)
@@ -5236,8 +5234,8 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 		osProcessTerminate(resultId, _, _) then def.recordOne(resultId)
 		osSocketStartup(resultId, _) then def.recordOne(resultId)
 		osSocketResolve(resultId, _, _, _) then def.recordOne(resultId)
-		osSocketCreate(resultId) then def.recordOne(resultId)
-		osSocketConnect(resultId, _, _) then def.recordOne(resultId)
+		osSocketCreate(resultId, _) then def.recordOne(resultId)
+		osSocketConnect(resultId, _, _, _) then def.recordOne(resultId)
 		osSocketError(resultId, _, _, _) then def.recordOne(resultId)
 		osSocketSend(resultId, _, _, _) then def.recordOne(resultId)
 		osSocketRecv(resultId, _, _, _) then def.recordOne(resultId)
@@ -5383,7 +5381,6 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		covPoint or
 		osCommandLine or
 		osEnvBlock or
-		osSocketCreate or
 		osCpuCount or
 		tlsAlloc or
 		osThreadToken or
@@ -5518,7 +5515,8 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osSocketStartup(resultId, wsaDataPtr) gives StdOp.osSocketStartup(resultId, wsaDataPtrId: remappedValue(wsaDataPtr, subst: subst))
 		osSocketResolve(resultId, hostPtr, hintsPtr, outPtr) gives StdOp.osSocketResolve(resultId, hostPtrId: remappedValue(hostPtr, subst: subst), hintsPtrId: remappedValue(hintsPtr, subst: subst), outPtrId: remappedValue(outPtr, subst: subst))
 		osSocketFreeAddrInfo(addrInfoPtr) gives StdOp.osSocketFreeAddrInfo(remappedValue(addrInfoPtr, subst: subst))
-		osSocketConnect(resultId, sock, addrPtr) gives StdOp.osSocketConnect(resultId, sockId: remappedValue(sock, subst: subst), addrPtrId: remappedValue(addrPtr, subst: subst))
+		osSocketCreate(resultId, family) gives StdOp.osSocketCreate(resultId, familyId: remappedValue(family, subst: subst))
+		osSocketConnect(resultId, sock, addrPtr, addrLen) gives StdOp.osSocketConnect(resultId, sockId: remappedValue(sock, subst: subst), addrPtrId: remappedValue(addrPtr, subst: subst), addrLenId: remappedValue(addrLen, subst: subst))
 		osSocketError(resultId, sock, valuePtr, lenPtr) gives StdOp.osSocketError(resultId, sockId: remappedValue(sock, subst: subst), valuePtrId: remappedValue(valuePtr, subst: subst), lenPtrId: remappedValue(lenPtr, subst: subst))
 		osSocketSend(resultId, sock, bufPtr, len) gives StdOp.osSocketSend(resultId, sockId: remappedValue(sock, subst: subst), bufPtrId: remappedValue(bufPtr, subst: subst), lenId: remappedValue(len, subst: subst))
 		osSocketRecv(resultId, sock, bufPtr, len) gives StdOp.osSocketRecv(resultId, sockId: remappedValue(sock, subst: subst), bufPtrId: remappedValue(bufPtr, subst: subst), lenId: remappedValue(len, subst: subst))

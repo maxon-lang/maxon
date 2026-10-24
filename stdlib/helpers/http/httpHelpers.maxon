@@ -97,15 +97,16 @@ end 'httpDefaultPortOf'
 
 public type HttpConnectTarget
 	public let host as String
+	public let authorityHost as String
 	public let port as NetworkPort
 	public let scheme as HttpUrlScheme
 
-	static function create(host String, port NetworkPort, scheme HttpUrlScheme) returns HttpConnectTarget
-		return HttpConnectTarget{host: host, port: port, scheme: scheme}
+	static function create(host String, authorityHost String, port NetworkPort, scheme HttpUrlScheme) returns HttpConnectTarget
+		return HttpConnectTarget{host: host, authorityHost: authorityHost, port: port, scheme: scheme}
 	end 'create'
 
 	public function authority() returns String
-		return self.host if self.port == httpDefaultPortOf(self.scheme) else "{self.host}:{self.port}"
+		return self.authorityHost if self.port == httpDefaultPortOf(self.scheme) else "{self.authorityHost}:{self.port}"
 	end 'authority'
 end 'HttpConnectTarget'
 
@@ -126,9 +127,10 @@ end 'httpUrlSchemeOf'
 public function httpConnectTargetOf(url URL) returns HttpConnectTarget throws HttpError
 	let scheme = try httpUrlSchemeOf(url.scheme())
 	let host = try url.host() otherwise throw HttpError.invalidUrl
+	let authorityHost = try url.authorityHost() otherwise throw HttpError.invalidUrl
 	let port = try url.port() otherwise httpDefaultPortOf(scheme)
 
-	return HttpConnectTarget.create(host, port: port, scheme: scheme)
+	return HttpConnectTarget.create(host, authorityHost: authorityHost, port: port, scheme: scheme)
 end 'httpConnectTargetOf'
 
 public function httpBuildRequest(request HttpRequest, target HttpConnectTarget) returns String

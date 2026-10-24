@@ -1057,8 +1057,8 @@ export type StdToArm64Lowering
 			osSocketStartup(resultId, _) then self.lowerOsSocketStartup(resultId, dstRef: dstRef)
 			osSocketResolve(resultId, hostPtrId, hintsPtrId, outPtrId) then self.lowerOsSocketResolve(resultId, hostPtrId: hostPtrId, hintsPtrId: hintsPtrId, outPtrId: outPtrId, dstRef: dstRef)
 			osSocketFreeAddrInfo(addrInfoPtrId) then self.lowerOsSocketFreeAddrInfo(addrInfoPtrId, dstRef: dstRef)
-			osSocketCreate(resultId) then self.lowerOsSocketCreate(resultId, dstRef: dstRef)
-			osSocketConnect(resultId, sockId, addrPtrId) then self.lowerOsSocketConnect(resultId, sockId: sockId, addrPtrId: addrPtrId, dstRef: dstRef)
+			osSocketCreate(resultId, familyId) then self.lowerOsSocketCreate(resultId, familyId: familyId, dstRef: dstRef)
+			osSocketConnect(resultId, sockId, addrPtrId, addrLenId) then self.lowerOsSocketConnect(resultId, sockId: sockId, addrPtrId: addrPtrId, addrLenId: addrLenId, dstRef: dstRef)
 			osSocketError(resultId, sockId, valuePtrId, lenPtrId) then self.lowerOsSocketError(resultId, sockId: sockId, valuePtrId: valuePtrId, lenPtrId: lenPtrId, dstRef: dstRef)
 			osSocketSend(resultId, sockId, bufPtrId, lenId) then self.lowerOsSocketTransfer(resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, importSlot: OsImportSlot.send, syscallNumber: Arm64LinuxSyscallSendto, suppressSigpipe: true, dstRef: dstRef)
 			osSocketRecv(resultId, sockId, bufPtrId, lenId) then self.lowerOsSocketTransfer(resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, importSlot: OsImportSlot.recv, syscallNumber: Arm64LinuxSyscallRecvfrom, suppressSigpipe: false, dstRef: dstRef)
@@ -2473,12 +2473,12 @@ export type StdToArm64Lowering
 		self.emitHostCall(dstRef, callee: Arm64HostCallee.import(OsImportSlot.freeaddrinfo), args: argsOf(addrInfoPtrId))
 	end 'lowerOsSocketFreeAddrInfoDarwin'
 
-	// `socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)` — the three protocol arguments are the Std tier's
-	// (`ManagedSocketRuntime`'s protocol block owns them, because the `hints` it fills must agree with them),
-	// and all three values are portable. The TYPE argument also carries Linux's two birth flags, which is why
+	// `socket(family, SOCK_STREAM, IPPROTO_TCP)` — the family is the operand, and the type and protocol are
+	// the Std tier's (`ManagedSocketRuntime`'s protocol block owns them, because the `hints` it fills must
+	// agree with them) and portable. The TYPE argument also carries Linux's two birth flags, which is why
 	// it is asked for rather than spelled — see `lowerStatusAnswer`.
-	function lowerOsSocketCreate(resultId ValueId, dstRef ElementIndex)
-		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: AfInet as MachineWord))
+	function lowerOsSocketCreate(resultId ValueId, familyId ValueId, dstRef ElementIndex)
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(familyId)))
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x1), value: self.socketCreateType()))
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: IpprotoTcp as MachineWord))
 		self.lowerStatusAnswer(resultId, callee: self.hostCalleeOn(OsImportSlot.socket, linux: Arm64LinuxRoute.syscall(Arm64LinuxSyscallSocket)), darwinFold: HostSocketBirthName, dstRef: dstRef)
@@ -2491,13 +2491,10 @@ export type StdToArm64Lowering
 		end 'route'
 	end 'socketCreateType'
 
-	// `connect(sock, addr, sizeof(sockaddr_in))` — the length is the Std tier's `SockaddrInBytes`, which is
-	// also the size of the block it allocated for the address. ⚠ MEASURED on Darwin: an `addrlen` below 16 is
-	// refused with `EINVAL`, so the two really are one number.
-	function lowerOsSocketConnect(resultId ValueId, sockId ValueId, addrPtrId ValueId, dstRef ElementIndex)
+	function lowerOsSocketConnect(resultId ValueId, sockId ValueId, addrPtrId ValueId, addrLenId ValueId, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(sockId)))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(addrPtrId)))
-		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: SockaddrInBytes as MachineWord))
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x2), srcReg: TargetVReg.virtual(addrLenId)))
 		self.lowerStatusAnswer(resultId, callee: self.hostCalleeOn(OsImportSlot.connect, linux: Arm64LinuxRoute.syscall(Arm64LinuxSyscallConnect)), darwinFold: HostStatusOrErrnoName, dstRef: dstRef)
 	end 'lowerOsSocketConnect'
 
@@ -2563,10 +2560,6 @@ export type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(socketServeOperand(operands, index: 0))))
 
 		match verb 'v'
-			// `bind(s, name, sizeof(sockaddr_in))` — the length is the Std tier's `SockaddrInBytes`, which is
-			// also the size of the block it allocated, exactly as `connect`'s is.
-			bind then self.emitArm64ArgPtrThenImm(socketServeOperand(operands, index: 1), third: SockaddrInBytes as MachineWord, dstRef: dstRef)
-
 			// `listen(s, backlog)`.
 			listen then self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(socketServeOperand(operands, index: 1))))
 
@@ -2575,23 +2568,19 @@ export type StdToArm64Lowering
 			// ignores a fourth register, and writing it unconditionally keeps the two argument setups one.
 			accept then self.emitArm64AcceptArgs(dstRef)
 
-			// `getsockname(s, name, namelen)`.
-			localName then self.emitArm64ArgPtrThenPtr(socketServeOperand(operands, index: 1), secondPtrId: socketServeOperand(operands, index: 2), dstRef: dstRef)
+			// `bind(s, name, namelen)` and `getsockname(s, name, namelen)`.
+			bind or
+			localName then self.emitArm64ArgPair(socketServeOperand(operands, index: 1), secondId: socketServeOperand(operands, index: 2), dstRef: dstRef)
 			shutdownWrite then self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x1), value: PosixShutdownWrite))
 		end 'v'
 
 		self.lowerStatusAnswer(resultId, callee: self.hostCalleeOn(socketServeImportSlot(verb), linux: Arm64LinuxRoute.syscall(socketServeSyscall(verb))), darwinFold: socketServeFold(verb), dstRef: dstRef)
 	end 'lowerOsSocketServe'
 
-	function emitArm64ArgPtrThenImm(ptrId ValueId, third MachineWord, dstRef ElementIndex)
-		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(ptrId)))
-		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: third))
-	end 'emitArm64ArgPtrThenImm'
-
-	function emitArm64ArgPtrThenPtr(ptrId ValueId, secondPtrId ValueId, dstRef ElementIndex)
-		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(ptrId)))
-		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x2), srcReg: TargetVReg.virtual(secondPtrId)))
-	end 'emitArm64ArgPtrThenPtr'
+	function emitArm64ArgPair(firstId ValueId, secondId ValueId, dstRef ElementIndex)
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(firstId)))
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x2), srcReg: TargetVReg.virtual(secondId)))
+	end 'emitArm64ArgPair'
 
 	function emitArm64AcceptArgs(dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x1), value: LinuxSocketNoPeerAddress))

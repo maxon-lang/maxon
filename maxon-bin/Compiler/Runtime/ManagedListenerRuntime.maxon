@@ -16,7 +16,7 @@
 // halves, and the poll record a listener needs is the one a peer socket needs.
 //
 // ⭐ **IT REUSES `ManagedSocketRuntime` RATHER THAN RE-SPELLING IT.** The box shape, the poll-descriptor
-// doors, the resolve fork, the `EAGAIN` classifier, the retry-and-park loop and the `sockaddr_in` writer are
+// doors, the resolve fork, the `EAGAIN` classifier, the retry-and-park loop and the sockaddr writer are
 // that file's and are exported from it. What lives here is the three graphs no peer socket has.
 //
 // ⭐⭐ **EVERY NATIVE LANE SERVES IT; `wasm32-wasi` REFUSES IT.** The refusal needs no new wiring: the
@@ -48,12 +48,13 @@
 let ListenBacklog = 128
 
 // ⭐ **THE SCRATCH `getsockname` FILLS, AND WHY IT IS BIGGER THAN THE ADDRESS.** The call writes a
-// `sockaddr_in` AND reads back an in-out `socklen_t`, so one block carries both: the address at 0, and the
-// length — seeded with the address's own size — one word past it. This tier has no narrow store, so the
-// 32-bit length is written as the low half of that word (`emitStoreDwordPair`).
+// `sockaddr_in` or `sockaddr_in6` AND reads back an in-out `socklen_t`, so one block carries both: the
+// address at 0, and the length — seeded with the larger address size, `sockaddr_in6`'s — one word past
+// it. This tier has no narrow store, so the 32-bit length is written as the low half of that word
+// (`emitStoreDwordPair`).
 let ListenerNameAddressOffset = 0
-let ListenerNameLengthOffset = 16
-let ListenerNameScratchBytes = 24
+let ListenerNameLengthOffset = 32
+let ListenerNameScratchBytes = 40
 
 // `sin_port` is at byte 2 on every platform this compiler targets, and big-endian there. Linux and
 // Windows open the record with a 16-bit `sin_family`; the BSDs open it with a one-byte `sin_len`
@@ -144,8 +145,8 @@ end 'emitLiveListenerOrThrow'
 
 // `__ml_bind(hostRec, port) -> (box, flag)`: resolve, create, bind, listen, or throw.
 //
-//   WSAStartup(2.2), once per process  →  resolve `host` to a network-order `sin_addr`  →  socket()
-//   →  build a `sockaddr_in`  →  bind()  →  listen(backlog)  →  join the poller  →  the box
+//   WSAStartup(2.2), once per process  →  resolve `host`  →  socket()
+//   →  build the sockaddr  →  bind()  →  listen(backlog)  →  join the poller  →  the box
 //
 // Binding and listening are one call because a bound socket nobody listens on is a box that owns a
 // port and refuses every connection, which no operation in this surface could serve.
@@ -165,6 +166,7 @@ function buildManagedListenerBind(module StdModule, target Target)
 	var resolved = module.addBlock(func, label: b"mladdr", heat: BlockHeat.normal)
 	var noSocket = module.addBlock(func, label: b"mlnosock", heat: BlockHeat.normal)
 	var doBind = module.addBlock(func, label: b"mlbind", heat: BlockHeat.normal)
+	var bindAddressed = module.addBlock(func, label: b"mlbindaddr", heat: BlockHeat.normal)
 	var doListen = module.addBlock(func, label: b"mllisten", heat: BlockHeat.normal)
 	var closeAndFail = module.addBlock(func, label: b"mlbindfail", heat: BlockHeat.normal)
 	var bound = module.addBlock(func, label: b"mlbound", heat: BlockHeat.normal)
@@ -184,24 +186,22 @@ function buildManagedListenerBind(module StdModule, target Target)
 	// A name's resolve is this function's only wait, so `emitResolveHostIp` takes the one park.
 	// `socket`, `bind` and `listen` each allocate or rearrange a kernel object and return, which is
 	// not a wait — see `emitIoPark`'s once-per-blocking-operation invariant.
-	let ip = emitResolveHostIp(module, func: func, resolve: resolve, resolved: resolved, resolveFailed: resolveFailed, renounced: noWinsock, host: host, shape: socketResolveShape(target), park: GtIoOperation.netListen, ids: ids)
+	let address = emitResolveHostIp(module, func: func, resolve: resolve, resolved: resolved, resolveFailed: resolveFailed, renounced: noWinsock, host: host, shape: socketResolveShape(target), park: GtIoOperation.netListen, target: target, ids: ids)
 	emitErrorReturn(module, block: resolveFailed, flag: ManagedListenerResolveFailedFlag, ids: ids)
 
 	let socket = ids.mint()
-	module.appendOp(resolved, op: StdOp.osSocketCreate(socket))
+	module.appendOp(resolved, op: StdOp.osSocketCreate(socket, familyId: address.family))
 	let socketFailed = emitSocketCallFailed(module, block: resolved, answer: socket, ids: ids)
 	module.setTerminator(resolved, op: StdOp.condBranch(socketFailed, thenBlockId: noSocket.id, elseBlockId: doBind.id))
 
 	emitErrorReturn(module, block: noSocket, flag: ManagedListenerBindFailedFlag, ids: ids)
 
-	let addr = emitRawAlloc(module, block: doBind, byteCount: emitConst(module, block: doBind, value: SockaddrInBytes, ids: ids), ids: ids)
-	let addrWord = emitSockaddrInWord(module, block: doBind, port: port, ip: ip, familyHalfword: sockaddrFamilyHalfword(target), ids: ids)
-	emitStoreField(module, block: doBind, record: addr, offset: SockaddrFamilyPortAddrOffset, value: addrWord)
+	let built = emitSockaddrFor(module, func: func, entry: doBind, joined: bindAddressed, address: address, port: port, target: target, ids: ids)
 	let bindResult = ids.mint()
-	module.appendOp(doBind, op: StdOp.osSocketServe(bindResult, verb: SocketServeVerb.bind, a0Id: socket, a1Id: addr, a2Id: emitConst(module, block: doBind, value: 0, ids: ids)))
-	emitRawFree(module, block: doBind, ptr: addr, ids: ids)
-	let bindRefused = emitSocketCallFailed(module, block: doBind, answer: bindResult, ids: ids)
-	module.setTerminator(doBind, op: StdOp.condBranch(bindRefused, thenBlockId: closeAndFail.id, elseBlockId: doListen.id))
+	module.appendOp(bindAddressed, op: StdOp.osSocketServe(bindResult, verb: SocketServeVerb.bind, a0Id: socket, a1Id: built.addr, a2Id: built.length))
+	emitRawFree(module, block: bindAddressed, ptr: built.addr, ids: ids)
+	let bindRefused = emitSocketCallFailed(module, block: bindAddressed, answer: bindResult, ids: ids)
+	module.setTerminator(bindAddressed, op: StdOp.condBranch(bindRefused, thenBlockId: closeAndFail.id, elseBlockId: doListen.id))
 
 	let listenResult = ids.mint()
 	let unusedListen = emitConst(module, block: doListen, value: 0, ids: ids)
@@ -245,7 +245,7 @@ function buildManagedListenerPort(module StdModule)
 	let socket = emitLiveListenerOrThrow(module, func: func, entry: entry, join: ask, box: box, ids: ids)
 
 	let scratch = emitRawAlloc(module, block: ask, byteCount: emitConst(module, block: ask, value: ListenerNameScratchBytes, ids: ids), ids: ids)
-	emitStoreDwordPair(module, block: ask, record: scratch, offset: ListenerNameLengthOffset, low: SockaddrInBytes, high: 0, ids: ids)
+	emitStoreDwordPair(module, block: ask, record: scratch, offset: ListenerNameLengthOffset, low: SockaddrIn6Bytes, high: 0, ids: ids)
 	let lengthAt = emitBin(module, block: ask, a: scratch, b: emitConst(module, block: ask, value: ListenerNameLengthOffset as FullRangeInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 	let status = ids.mint()
 	module.appendOp(ask, op: StdOp.osSocketServe(status, verb: SocketServeVerb.localName, a0Id: socket, a1Id: scratch, a2Id: lengthAt))

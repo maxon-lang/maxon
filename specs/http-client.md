@@ -214,6 +214,90 @@ example.com:443 [Host: example.com:443]
 0
 ```
 
+<!-- test: http-client.an-ipv6-url-dials-the-bare-address-and-names-itself-in-brackets -->
+An IPv6 literal in a URL is bracketed to keep its colons apart from the port, and the brackets are the URL's, not the
+address's: the connect target and the TLS server name are the bare address, and the `Host` header, which is an authority,
+keeps the brackets and drops the port only when it is the scheme's default.
+```maxon
+function hostLine(url String) returns String
+	let request = try HttpRequest.create(HttpMethod.get, url: url) otherwise return "no-request"
+	let target = try httpConnectTargetOf(request.url()) otherwise return "no-target"
+	var found = ""
+
+	for line in httpBuildRequest(request, target: target).split("\r\n") 'eachLine'
+		if line.startsWith("Host:") 'aHostLine'
+			found.append("[{line}]")
+		end 'aHostLine'
+	end 'eachLine'
+
+	return "{target.host} {target.port} {found}"
+end 'hostLine'
+
+function main() returns ExitCode
+	print("{hostLine("http://[::1]/")}\n")
+	print("{hostLine("http://[::1]:8080/")}\n")
+	print("{hostLine("https://[2001:db8::1]/")}\n")
+	print("{hostLine("https://[2001:db8::1]:80/")}\n")
+	print("{hostLine("http://[v1.fe]:81/")}\n")
+	return 0
+end 'main'
+```
+```stdout
+::1 80 [Host: [::1]]
+::1 8080 [Host: [::1]:8080]
+2001:db8::1 443 [Host: [2001:db8::1]]
+2001:db8::1 80 [Host: [2001:db8::1]:80]
+v1.fe 81 [Host: [v1.fe]:81]
+```
+```exitcode
+0
+```
+
+<!-- test: http-client.an-ipv6-loopback-server-is-reached-by-its-bracketed-url -->
+<!-- procs: 1 -->
+`http://[::1]:<port>/` reaches a server listening on the IPv6 loopback: the client connects to `::1` and sends the
+authority `[::1]:<port>` as `Host`. The peer is a raw listener so the case reads the `Host` line the client wrote.
+```maxon
+let RequestBytes = 4096
+
+function answer(listener TcpListener) returns String
+	let conn = try listener.accept() otherwise return "accept-failed"
+	let request = try conn.recv(RequestBytes) otherwise return "recv-failed"
+	_ = try conn.send("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi") otherwise return "send-failed"
+	var hostLine = "no-host-line"
+
+	for line in request.split("\r\n") 'eachLine'
+		if line.startsWith("Host:") 'aHostLine'
+			hostLine = line
+		end 'aHostLine'
+	end 'eachLine'
+
+	return hostLine
+end 'answer'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("::1", port: 0) otherwise return 1
+	let port = listener.port()
+	let peer = async answer(listener)
+
+	let response = try HttpClient.get("http://[::1]:{port}/x") otherwise (e) 'failed'
+		print("failed {e.name}\n")
+		return 2
+	end 'failed'
+
+	let hostLine = await peer
+
+	print("status={response.statusCode().number()} body={response.body()} host-line-ok={hostLine == "Host: [::1]:{port}"}\n")
+	return 0
+end 'main'
+```
+```stdout
+status=200 body=hi host-line-ok=true
+```
+```exitcode
+0
+```
+
 <!-- test: http-client.a-kept-alive-response-ends-at-its-declared-length -->
 <!-- procs: 1 -->
 **A RESPONSE WITH A `Content-Length` ENDS AT THAT LENGTH, NOT AT THE CLOSE.** A caller that asks for

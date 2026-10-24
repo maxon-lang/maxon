@@ -37,13 +37,25 @@ public type URL implements Equatable, Stringable
 
 	// --- Throwing accessors for optional fields ---
 
+	/// The host without the brackets of an IP literal, the address a socket connects to. Throws
+	/// `fieldNotPresent` for a URL without an authority.
 	public function host() returns String throws URLError
 		if not hasHost 'absent'
 			throw URLError.fieldNotPresent
 		end 'absent'
 
-		return host
+		return urlBareHost(host)
 	end 'host'
+
+	/// The host as the authority spells it, an IP literal keeping its brackets: the form a `Host` header
+	/// and a serialized URL carry. Throws `fieldNotPresent` for a URL without an authority.
+	public function authorityHost() returns String throws URLError
+		if not hasHost 'absent'
+			throw URLError.fieldNotPresent
+		end 'absent'
+
+		return host
+	end 'authorityHost'
 
 	public function port() returns NetworkPort throws URLError
 		if not hasPort 'absent'
@@ -513,6 +525,7 @@ let FragmentMarkByte = 35
 let PortSeparator = ":"
 let IpLiteralOpen = "["
 let IpLiteralClose = "]"
+let IpLiteralDelimiterBytes = 1
 let QueryMark = "?"
 let FutureVersionLower = 118
 let FutureVersionUpper = 86
@@ -577,6 +590,14 @@ function urlHostAuthorityOf(authority String) returns URLHostAuthority throws UR
 
 	return URLHostAuthority.create(host, port: try urlPortOf(authority, from: portStart.bytePos()), hasPort: true)
 end 'urlHostAuthorityOf'
+
+function urlBareHost(spelled String) returns String
+	if not spelled.startsWith(IpLiteralOpen) 'notALiteral'
+		return spelled
+	end 'notALiteral'
+
+	return urlByteRange(spelled, from: IpLiteralDelimiterBytes, until: spelled.byteLength() - IpLiteralDelimiterBytes)
+end 'urlBareHost'
 
 function urlHostEndOf(authority String) returns StringIndex throws URLError
 	if authority.startsWith(IpLiteralOpen) 'ipLiteral'

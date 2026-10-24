@@ -135,6 +135,57 @@ served=3 status=200 body=get /hello q=1 connection=close
 0
 ```
 
+### A server on the IPv6 loopback
+
+`HttpServer.bind("::1", port:)` listens on the IPv6 loopback and the real `HttpClient` reaches it by the bracketed
+URL. The `Host` header arrives bracketed, so the handler's `request.url()` carries the bracketed authority:
+`host()` is the bare address and `authorityHost()` keeps the brackets.
+
+<!-- test: http-server.an-ipv6-loopback-server-answers-a-bracketed-url -->
+<!-- procs: 1 -->
+```maxon
+typealias Served = int(0 to 9)
+
+function serveOne(server HttpServer) returns Served
+	var exchange = try server.accept() otherwise return 1
+	view url = exchange.request().url()
+	let host = try url.host() otherwise "no-host"
+	let authorityHost = try url.authorityHost() otherwise "no-host"
+	let described = "host={host} authorityHost={authorityHost} path={url.path()}"
+
+	try exchange.respondWith(StatusCode.ok, body: described, contentType: "text/plain") otherwise return 2
+
+	return 3
+end 'serveOne'
+
+function exchangeOver(server HttpServer) returns ExitCode
+	let peer = async serveOne(server)
+
+	let response = try HttpClient.get("http://[::1]:{server.port()}/hello") otherwise (e) 'failed'
+		print("failed {e.name}\n")
+		return 2
+	end 'failed'
+
+	let served = await peer
+
+	print("served={served} status={response.statusCode().number()} body={response.body()}\n")
+	server.close()
+
+	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	var server = try HttpServer.bind("::1", port: 0) otherwise return 1
+	return exchangeOver(server)
+end 'main'
+```
+```stdout
+served=3 status=200 body=host=::1 authorityHost=[::1] path=/hello
+```
+```exitcode
+0
+```
+
 ### A POST body arrives whole
 
 ⚠ **A BODY LARGER THAN ONE READ IS THE POINT.** A server that answered after its first `recv` would be
@@ -1272,9 +1323,9 @@ status=400 accept=malformedRequest
 status=400 accept=malformedRequest
 status=400 accept=malformedRequest
 status=400 accept=malformedRequest
-status=200 accept=served [::1] /public no-query
-status=200 accept=served [::ffff:127.0.0.1] /public no-query
-status=200 accept=served [v1.fe80::a+en1] /public no-query
+status=200 accept=served ::1 /public no-query
+status=200 accept=served ::ffff:127.0.0.1 /public no-query
+status=200 accept=served v1.fe80::a+en1 /public no-query
 status=200 accept=served exa%41mple.com /public no-query
 status=200 accept=served x /p q=/x?y
 ```

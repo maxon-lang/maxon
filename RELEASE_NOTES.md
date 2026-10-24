@@ -15,6 +15,11 @@ release's version as its heading when the release is cut.
 
 ### Breaking changes
 
+- `URL.host()` answers an IP literal without its brackets (`::1` for `http://[::1]/`), where it answered
+  `[::1]`; the new `URL.authorityHost()` answers the bracketed spelling. An `HttpRequest`'s URL read in a
+  handler follows the same rule.
+  Fix: call `authorityHost()` where the brackets are wanted, such as building an authority or a `Host`
+  header by hand; code that stripped the brackets itself can drop that step.
 - `DerError` has two more cases, `invalidBoolean` and `invalidString`, so a `match` over it that lists
   every case is no longer exhaustive.
   Fix: add arms for `invalidBoolean` and `invalidString`.

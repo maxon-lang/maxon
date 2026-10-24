@@ -265,13 +265,11 @@ let FinalPathNormalizedDos = 0x0
 
 // --- The ws2_32 constants ---
 //
-// ⚠⚠ **`AfInet` / `SockStream` / `IpprotoTcp` / `SockaddrInBytes` ARE `ManagedSocketRuntime`'s, AND THIS FILE
-// READS THEM.** Code above the target tier has to WRITE those values into an OS structure:
-// `__ms_tcp_connect` fills a 48-byte `addrinfo` hints
-// record with the SAME three values `socket()` is called with, and a 16-byte `sockaddr_in` whose length must
-// equal what `connect` is handed below. Resolve for one family and create a socket in another and `connect`
-// fails on a family mismatch, with no diagnostic anywhere — one fact, so one home. See
-// `ManagedSocketRuntime`'s protocol block for the full argument and for what a POSIX or IPv6 lane changes.
+// ⚠⚠ **`SockStream` / `IpprotoTcp` ARE `ManagedSocketRuntime`'s, AND THIS FILE READS THEM.** Code above the
+// target tier has to WRITE those values into an OS structure: `__ms_tcp_connect` fills a 48-byte `addrinfo`
+// hints record with the SAME values `socket()` is called with. Resolve for one family and create a socket in
+// another and `connect` fails on a family mismatch, with no diagnostic anywhere — one fact, so one home. See
+// `ManagedSocketRuntime`'s protocol block for the full argument.
 
 // `MAKEWORD(2, 2)` - the Winsock version `WSAStartup` is asked for. This one IS only this file's:
 // nothing above the target tier reads a Winsock version.
@@ -1507,8 +1505,8 @@ export type StdToX64Lowering
 			osSocketStartup(resultId, wsaDataPtrId) then self.lowerOsSocketStartup(resultId, wsaDataPtrId: wsaDataPtrId, dstBlock: dstBlock)
 			osSocketResolve(resultId, hostPtrId, hintsPtrId, outPtrId) then self.lowerOsSocketResolve(resultId, hostPtrId: hostPtrId, hintsPtrId: hintsPtrId, outPtrId: outPtrId, dstBlock: dstBlock)
 			osSocketFreeAddrInfo(addrInfoPtrId) then self.lowerOsSocketFreeAddrInfo(addrInfoPtrId, dstBlock: dstBlock)
-			osSocketCreate(resultId) then self.lowerOsSocketCreate(resultId, dstBlock: dstBlock)
-			osSocketConnect(resultId, sockId, addrPtrId) then self.lowerOsSocketConnect(resultId, sockId: sockId, addrPtrId: addrPtrId, dstBlock: dstBlock)
+			osSocketCreate(resultId, familyId) then self.lowerOsSocketCreate(resultId, familyId: familyId, dstBlock: dstBlock)
+			osSocketConnect(resultId, sockId, addrPtrId, addrLenId) then self.lowerOsSocketConnect(resultId, sockId: sockId, addrPtrId: addrPtrId, addrLenId: addrLenId, dstBlock: dstBlock)
 			osSocketError(resultId, sockId, valuePtrId, lenPtrId) then self.lowerOsSocketError(resultId, sockId: sockId, valuePtrId: valuePtrId, lenPtrId: lenPtrId, dstBlock: dstBlock)
 			osSocketSend(resultId, sockId, bufPtrId, lenId) then self.lowerOsSocketSend(resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, dstBlock: dstBlock)
 			osSocketRecv(resultId, sockId, bufPtrId, lenId) then self.lowerOsSocketRecv(resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, dstBlock: dstBlock)
@@ -3630,12 +3628,12 @@ export type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.FreeAddrInfoW)))
 	end 'lowerOsSocketFreeAddrInfo'
 
-	// The three protocol values are the Std tier's (`ManagedSocketRuntime`'s protocol block owns them,
-	// because the `hints` it fills must agree with them) and all three are portable.
-	function lowerOsSocketCreate(resultId ValueId, dstBlock IrBlock)
+	// The family is the operand; the type and protocol are the Std tier's (`ManagedSocketRuntime`'s
+	// protocol block owns them, because the `hints` it fills must agree with them) and portable.
+	function lowerOsSocketCreate(resultId ValueId, familyId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.lowerOsSocketCreateWin64(resultId, dstBlock: dstBlock)
-			syscall then self.lowerOsSocketCreateLinux(resultId, dstBlock: dstBlock)
+			importCall then self.lowerOsSocketCreateWin64(resultId, familyId: familyId, dstBlock: dstBlock)
+			syscall then self.lowerOsSocketCreateLinux(resultId, familyId: familyId, dstBlock: dstBlock)
 		end 'route'
 	end 'lowerOsSocketCreate'
 
@@ -3643,10 +3641,10 @@ export type StdToX64Lowering
 	// transfers need and `socket` sets implicitly, and not inheritable, so a child spawned with
 	// inherited handles does not hold a copy of the socket. The Linux route's `SOCK_CLOEXEC` is the
 	// same rule.
-	function lowerOsSocketCreateWin64(resultId ValueId, dstBlock IrBlock)
+	function lowerOsSocketCreateWin64(resultId ValueId, familyId ValueId, dstBlock IrBlock)
 		self.emitWin64StackArgImm(dstBlock, slot: SocketCreateGroupSlot, value: WsaNoSocketGroup)
 		self.emitWin64StackArgImm(dstBlock, slot: SocketCreateFlagsSlot, value: WsaFlagOverlapped or WsaFlagNoHandleInherit)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: AfInet))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(familyId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: SockStream))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: IpprotoTcp))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: WsaNoProtocolInfo))
@@ -3658,35 +3656,32 @@ export type StdToX64Lowering
 	// syscall to pay for — the BSDs have neither flag and need an `fcntl` apiece. Non-blocking is what makes a
 	// socket call able to answer `EAGAIN` instead of holding its machine, which is the whole of this band's
 	// contract with the poller; `FD_CLOEXEC` keeps a spawned child out of the scheduler's descriptors.
-	function lowerOsSocketCreateLinux(resultId ValueId, dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rdi), value: AfInet as MachineWord))
+	function lowerOsSocketCreateLinux(resultId ValueId, familyId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdi), srcReg: TargetVReg.virtual(familyId)))
 		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rsi), value: (SockStream + LinuxSockNonBlock + LinuxSockCloexec) as MachineWord))
 		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rdx), value: IpprotoTcp as MachineWord))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(X64LinuxSyscallSocket))
 		self.emitCaptureRax(dstBlock, into: TargetVReg.virtual(resultId))
 	end 'lowerOsSocketCreateLinux'
 
-	// `connect(sock, addr, sizeof(sockaddr_in))` — the length is the Std tier's `SockaddrInBytes`, which is
-	// also the size of the block it allocated for the address, and MEASURED to be the minimum either kernel
-	// accepts (a shorter `addrlen` is refused with `EINVAL`).
-	function lowerOsSocketConnect(resultId ValueId, sockId ValueId, addrPtrId ValueId, dstBlock IrBlock)
+	function lowerOsSocketConnect(resultId ValueId, sockId ValueId, addrPtrId ValueId, addrLenId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.lowerOsSocketConnectWin64(resultId, sockId: sockId, addrPtrId: addrPtrId, dstBlock: dstBlock)
-			syscall then self.lowerOsSocketConnectLinux(resultId, sockId: sockId, addrPtrId: addrPtrId, dstBlock: dstBlock)
+			importCall then self.lowerOsSocketConnectWin64(resultId, sockId: sockId, addrPtrId: addrPtrId, addrLenId: addrLenId, dstBlock: dstBlock)
+			syscall then self.lowerOsSocketConnectLinux(resultId, sockId: sockId, addrPtrId: addrPtrId, addrLenId: addrLenId, dstBlock: dstBlock)
 		end 'route'
 	end 'lowerOsSocketConnect'
 
-	function lowerOsSocketConnectWin64(resultId ValueId, sockId ValueId, addrPtrId ValueId, dstBlock IrBlock)
+	function lowerOsSocketConnectWin64(resultId ValueId, sockId ValueId, addrPtrId ValueId, addrLenId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(sockId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(addrPtrId)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: SockaddrInBytes))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(addrLenId)))
 		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.connect, into: TargetVReg.virtual(resultId))
 	end 'lowerOsSocketConnectWin64'
 
-	function lowerOsSocketConnectLinux(resultId ValueId, sockId ValueId, addrPtrId ValueId, dstBlock IrBlock)
+	function lowerOsSocketConnectLinux(resultId ValueId, sockId ValueId, addrPtrId ValueId, addrLenId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdi), srcReg: TargetVReg.virtual(sockId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rsi), srcReg: TargetVReg.virtual(addrPtrId)))
-		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rdx), value: SockaddrInBytes as MachineWord))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(addrLenId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(X64LinuxSyscallConnect))
 		self.emitCaptureRax(dstBlock, into: TargetVReg.virtual(resultId))
 	end 'lowerOsSocketConnectLinux'
@@ -3927,39 +3922,31 @@ export type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(socketServeOperand(operands, index: 0))))
 
 		match verb 'v'
-			// `bind(s, name, sizeof(sockaddr_in))` — the length is the Std tier's `SockaddrInBytes`, which is
-			// also the size of the block it allocated, exactly as `connect`'s is.
-			bind then self.emitWin64ArgPtrThenImm(socketServeOperand(operands, index: 1), third: SockaddrInBytes, dstBlock: dstBlock)
-
 			// `listen(s, backlog)`.
 			listen then self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(socketServeOperand(operands, index: 1))))
 
 			// `accept(s, NULL, NULL)` — Winsock takes a NULL `addrlen` beside a NULL `addr`.
 			accept then self.emitWin64ArgImmThenImm(WinsockNoPeerAddress, third: WinsockNoPeerAddress, dstBlock: dstBlock)
 
-			// `getsockname(s, name, namelen)` — `namelen` is the in-out length, an operand for the reason
-			// `StdOp.osSocketServe` states.
-			localName then self.emitWin64ArgPtrThenPtr(socketServeOperand(operands, index: 1), secondPtrId: socketServeOperand(operands, index: 2), dstBlock: dstBlock)
+			// `bind(s, name, namelen)` and `getsockname(s, name, namelen)` — `namelen` is an operand for the
+			// reason `StdOp.osSocketServe` states.
+			bind or
+			localName then self.emitWin64ArgPair(socketServeOperand(operands, index: 1), secondId: socketServeOperand(operands, index: 2), dstBlock: dstBlock)
 			shutdownWrite then self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: WinsockShutdownSend))
 		end 'v'
 
 		self.emitWin64ImportAnswer(dstBlock, slot: socketServeSlot(verb), into: TargetVReg.virtual(resultId))
 	end 'lowerOsSocketServeWin64'
 
-	function emitWin64ArgPtrThenImm(ptrId ValueId, third MachineWord, dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(ptrId)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: third))
-	end 'emitWin64ArgPtrThenImm'
-
 	function emitWin64ArgImmThenImm(second MachineWord, third MachineWord, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: second))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: third))
 	end 'emitWin64ArgImmThenImm'
 
-	function emitWin64ArgPtrThenPtr(ptrId ValueId, secondPtrId ValueId, dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(ptrId)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(secondPtrId)))
-	end 'emitWin64ArgPtrThenPtr'
+	function emitWin64ArgPair(firstId ValueId, secondId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(firstId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(secondId)))
+	end 'emitWin64ArgPair'
 
 	function socketServeSlot(verb SocketServeVerb) returns IatSlot
 		return match verb 'v'
@@ -3977,14 +3964,14 @@ export type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdi), srcReg: TargetVReg.virtual(socketServeOperand(operands, index: 0))))
 
 		match verb 'v'
-			bind then self.emitLinuxArgPtrThenImm(socketServeOperand(operands, index: 1), third: SockaddrInBytes as MachineWord, dstBlock: dstBlock)
 			listen then self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rsi), srcReg: TargetVReg.virtual(socketServeOperand(operands, index: 1))))
 
 			// ⭐ `accept4(s, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC)` — the two flags this lane's `socket()`
 			// also takes in one call, so the accepted descriptor is never momentarily blocking.
 			accept then self.emitLinuxAcceptFlags(dstBlock)
 
-			localName then self.emitLinuxArgPtrThenPtr(socketServeOperand(operands, index: 1), secondPtrId: socketServeOperand(operands, index: 2), dstBlock: dstBlock)
+			bind or
+			localName then self.emitLinuxArgPair(socketServeOperand(operands, index: 1), secondId: socketServeOperand(operands, index: 2), dstBlock: dstBlock)
 			shutdownWrite then self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rsi), value: PosixShutdownWrite as MachineWord))
 		end 'v'
 
@@ -3992,15 +3979,10 @@ export type StdToX64Lowering
 		self.emitCaptureRax(dstBlock, into: TargetVReg.virtual(resultId))
 	end 'lowerOsSocketServeLinux'
 
-	function emitLinuxArgPtrThenImm(ptrId ValueId, third MachineWord, dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rsi), srcReg: TargetVReg.virtual(ptrId)))
-		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rdx), value: third))
-	end 'emitLinuxArgPtrThenImm'
-
-	function emitLinuxArgPtrThenPtr(ptrId ValueId, secondPtrId ValueId, dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rsi), srcReg: TargetVReg.virtual(ptrId)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(secondPtrId)))
-	end 'emitLinuxArgPtrThenPtr'
+	function emitLinuxArgPair(firstId ValueId, secondId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rsi), srcReg: TargetVReg.virtual(firstId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(secondId)))
+	end 'emitLinuxArgPair'
 
 	// The 4th syscall argument is r10, not rcx: rcx is clobbered by `syscall` in hardware.
 	function emitLinuxAcceptFlags(dstBlock IrBlock)

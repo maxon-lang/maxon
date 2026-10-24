@@ -2362,6 +2362,165 @@ ended: closed
 0
 ```
 
+<!-- test: http-tls.an-ipv6-loopback-server-is-reached-over-https -->
+<!-- unsupported-targets: wasm32-wasi -->
+<!-- procs: 1 -->
+An `https://[::1]:<port>/` URL reaches a TLS server bound on the IPv6 loopback: the client dials the bare `::1`, runs the
+handshake with `::1` as the name the certificate must match (a leaf of its own, a CA-flagged P-256 certificate trusted as
+its own root, whose SAN holds `localhost`, `127.0.0.1` and `::1`), and the handler sees the bracketed authority in
+`request.url()`. The control trusts the case set's other root, so the handshake runs and the chain is refused.
+```maxon
+function digit(symbol Byte) returns Byte
+	if symbol >= 0x61 'letter'
+		return symbol - 0x57
+	end 'letter'
+
+	return symbol - 0x30
+end 'digit'
+
+function fromHex(hex String) returns ByteArray
+	var bytes = ByteArray.create()
+	var high = 0 as Byte
+	var isHigh = true
+
+	for symbol in hex.bytes() 'eachSymbol'
+		if isHigh 'first'
+			high = digit(symbol)
+		end 'first' else 'second'
+			bytes.push(high * 16 + digit(symbol))
+		end 'second'
+
+		isHigh = not isHigh
+	end 'eachSymbol'
+
+	return bytes
+end 'fromHex'
+
+function describe(error TlsError) returns String
+	return match error 'error'
+		certificateRejected(reason) gives "certificateRejected({reason.name})"
+		protocolError(alert) gives "protocolError({alert.name})"
+		peerAlert(alert) gives "peerAlert({alert.name})"
+		peerAlertUnrecognised(code) gives "peerAlertUnrecognised({code})"
+		resolveFailed or
+		connectFailed or
+		bindFailed or
+		acceptFailed or
+		acceptInterrupted or
+		timedOut or
+		handshakeTimedOut or
+		sendFailed or
+		recvFailed or
+		connectionClosed or
+		truncated or
+		closed or
+		trustStoreUnavailable or
+		entropyUnavailable or
+		invalidConfiguration or
+		invalidCertificate or
+		invalidPrivateKey or
+		invalidPem gives error.name
+	end 'error'
+end 'describe'
+
+function describeHttp(error HttpError) returns String
+	return match error 'error'
+		tlsFailed(cause) gives "tlsFailed({describe(cause)})"
+		invalidUrl or
+		connectFailed or
+		sendFailed or
+		recvFailed or
+		invalidResponse or
+		unsupportedScheme or
+		timedOut or
+		bodyTooLarge gives error.name
+	end 'error'
+end 'describeHttp'
+
+type EchoHandler implements HttpHandler
+	static function create() returns EchoHandler
+		return EchoHandler{}
+	end 'create'
+
+	function handle(exchange HttpExchange) throws HttpServerError
+		view url = exchange.request().url()
+		let host = try url.host() otherwise "-"
+		let authorityHost = try url.authorityHost() otherwise "-"
+		let summary = "{url.scheme()} host={host} authorityHost={authorityHost} path={url.path()}"
+
+		try exchange.respondWith(StatusCode.ok, body: summary, contentType: "text/plain")
+	end 'handle'
+
+	function faulted(fault HttpHandlerFault)
+		print("faulted {fault.describe()}\n")
+	end 'faulted'
+end 'EchoHandler'
+
+function serving(server HttpServer) returns HttpServeEnd
+	return server.serve(EchoHandler.create())
+end 'serving'
+
+function serverOptions() returns TlsServerOptions
+	var options = TlsServerOptions.create(try TlsIdentity.fromDer(ByteArrays from [fromHex(ipv6LeafHex)], key: fromHex(ipv6KeyHex)) otherwise panic("the case's identity was refused"))
+	options.setVerificationTime(verificationTime)
+
+	return options
+end 'serverOptions'
+
+function clientTrusting(rootHex String) returns TlsClientOptions
+	var options = TlsClientOptions.create()
+	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
+	options.setVerificationTime(verificationTime)
+
+	return options
+end 'clientTrusting'
+
+function fetch(url String, options TlsClientOptions) returns String
+	let request = try HttpRequest.create(HttpMethod.get, url: url) otherwise return "bad-url"
+
+	let response = try HttpClient.send(request, tls: options) otherwise (error) 'failed'
+		return "error {describeHttp(error)}"
+	end 'failed'
+
+	return "{response.statusCode().number()} [{response.body()}]"
+end 'fetch'
+
+function exchangeOver(server HttpServer) returns ExitCode
+	let peer = async serving(server)
+	let port = server.port()
+
+	print("trusted: {fetch("https://[::1]:{port}/hello", options: clientTrusting(ipv6LeafHex))}\n")
+	print("untrusted: {fetch("https://[::1]:{port}/hello", options: clientTrusting(otherRootHex))}\n")
+
+	server.close()
+
+	let ended = await peer
+
+	print("ended: {ended.name}\n")
+
+	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	var server = try HttpServer.bindTls("::1", port: 0, options: serverOptions()) otherwise return 1
+
+	return exchangeOver(server)
+end 'main'
+
+let ipv6LeafHex = "3082017e30820123a003020102020101300a06082a8648ce3d04030230143112301006035504030c096c6f63616c686f7374301e170d3235303630313030303030305a170d3236303630313030303030305a30143112301006035504030c096c6f63616c686f73743059301306072a8648ce3d020106082a8648ce3d0301070342000447d4c97c85edaf10936c536fbac9dec9e04fc5b9b89327147779dee7a4a3951b94853517a6e5800399ea7b9b3ff9055227e60709b45909d937de3ab8c49a2fd3a3663064300f0603551d130101ff040530030101ff300e0603551d0f0101ff04040302028430130603551d25040c300a06082b06010505070301302c0603551d110425302382096c6f63616c686f737487047f000001871000000000000000000000000000000001300a06082a8648ce3d0403020349003046022100fd6656f0ec0b0409247e47ff0b4da57ea839883176ae0658015eef00caede8e5022100a7da1239fffe62baf5373ad68208aa218a274fc9c34fc0d3fcf9eb7d7a1134a4"
+let ipv6KeyHex = "308187020100301306072a8648ce3d020106082a8648ce3d030107046d306b0201010420bf08be140ec271e232c1081101d26a091bc64c958e318d34a3f21bdade6ba412a1440342000447d4c97c85edaf10936c536fbac9dec9e04fc5b9b89327147779dee7a4a3951b94853517a6e5800399ea7b9b3ff9055227e60709b45909d937de3ab8c49a2fd3"
+let otherRootHex = "308201313081d8a003020102020102300a06082a8648ce3d0403023010310e300c06035504030c054f74686572301e170d3234303130313030303030305a170d3334303130313030303030305a3010310e300c06035504030c054f746865723059301306072a8648ce3d020106082a8648ce3d030107034200047432c1205849f970ce2416f602690f3d19e6790708c1f3b18f50978b340cbd90510d403ed2cd0b1fd6e43d92da9cf7ab7ad0c5e0bf2e39cbc3176966857e9780a3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d0403020348003045022100e0bb40fbfa3b426334dd4d96ef7d4d8e7973b1cc725b15bf0870f30a38d66cc60220403efa1ce958392af9fc8e0cebf8676fac6c55cd865874fcef051b635310e43c"
+let verificationTime = 1767225600
+```
+```stdout
+trusted: 200 [https host=::1 authorityHost=[::1] path=/hello]
+untrusted: error tlsFailed(certificateRejected(unknownAuthority))
+ended: closed
+```
+```exitcode
+0
+```
+
 <!-- test: http-tls.binding-a-taken-port-throws-bindfailed -->
 <!-- unsupported-targets: wasm32-wasi -->
 A second TLS bind on a port a TLS server already holds throws `TlsError.bindFailed`.

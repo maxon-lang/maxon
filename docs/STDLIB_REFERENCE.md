@@ -2272,8 +2272,12 @@ every native target.
 
 ## TcpClient
 
-`TcpClient` is a TCP connection over IPv4. It closes its socket when the last reference to it goes away, so
-`close()` is optional.
+`TcpClient` is a TCP connection over IPv4 or IPv6. It closes its socket when the last reference to it goes
+away, so `close()` is optional.
+
+A host holding a colon is a bare IPv6 literal (`::1`, `2001:db8::7`, `::ffff:192.0.2.1`; no brackets and no
+zone id) and connects over an IPv6 socket; one outside the address grammar throws `resolveFailed`. Every
+other host resolves to an IPv4 address.
 
 Available on `x64-windows`, `arm64-macos`, `arm64-linux` and `x64-linux`; refused at compile time (E3104) on
 `wasm32-wasi`. Windows and macOS resolve host names through the platform resolver. On Windows a non-ASCII
@@ -2340,7 +2344,7 @@ thread. It closes when the last reference goes away. Same targets as `TcpClient`
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
-| `TcpListener.bind(host String, port NetworkPort)` | `TcpListener` | `NetworkError` | Bind and listen. Port `0` takes any free port. |
+| `TcpListener.bind(host String, port NetworkPort)` | `TcpListener` | `NetworkError` | Bind and listen. Port `0` takes any free port. A bare IPv6 literal such as `::1` binds an IPv6 socket, as `TcpClient.connect` reads one. |
 | `port()` | `NetworkPort` | — | The bound port, as the OS reports it. |
 | `accept()` | `TcpClient` | `NetworkError` | The next connection. Throws `timedOut` past the accept deadline, `acceptInterrupted` when the OS refused one connection, and `acceptFailed` when the listener is closed or has failed. |
 | `setAcceptDeadline(milliseconds SocketDeadlineMs)` | — | `NetworkError` | Make an `accept()` still waiting `milliseconds` after this call throw `timedOut`; `0` clears it. Throws `acceptFailed` when the listener is closed. |
@@ -2593,7 +2597,9 @@ HelloRequest), end with `protocolError(unexpectedMessage)`.
 
 An HTTP/1.1 client over `TcpClient`, and over [`TlsStream`](#tlsstream) for an `https` URL. A request carries
 `Host` and `Connection: close` unless it sets its own, and a `Content-Length` whenever it has a body. `Host` leaves
-out the port when it is the default of the URL's scheme, 80 for `http` and 443 for `https`.
+out the port when it is the default of the URL's scheme, 80 for `http` and 443 for `https`. An IPv6 literal in the
+URL (`http://[::1]:8080/`) is connected to, and verified against a certificate, as the bare address `::1`, and
+`Host` carries it bracketed: `Host: [::1]:8080`.
 
 A response body is framed by `Transfer-Encoding` when the response has one: a final `chunked` coding is
 decoded (a chunk extension after `;` is ignored, and the trailer section is discarded), and any other coding
@@ -3034,7 +3040,8 @@ end 'main'
 | `URL.resolve(base URL, reference String)` | `URL` | `URLError` | Resolve `reference` against `base` (RFC 3986 section 5). |
 | `scheme()` | `String` | — | `""` for a relative reference. |
 | `path()` | `String` | — | Always present, possibly empty. |
-| `host()` | `String` | `URLError.fieldNotPresent` | |
+| `host()` | `String` | `URLError.fieldNotPresent` | The host with an IP literal's brackets removed: `::1` for `http://[::1]/`, the address a socket connects to. |
+| `authorityHost()` | `String` | `URLError.fieldNotPresent` | The host as the authority spells it, an IP literal keeping its brackets: `[::1]`. It is what `toString()` writes and what a `Host` header carries. |
 | `port()` | `int(0 to 65535)` | `URLError.fieldNotPresent` | |
 | `userinfo()` | `String` | `URLError.fieldNotPresent` | The part before `@`. |
 | `query()` | `String` | `URLError.fieldNotPresent` | Without the `?`. |

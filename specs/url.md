@@ -204,9 +204,59 @@ end 'main'
 0
 ```
 ```stdout
-[::1]
+::1
 8080
 /path
+```
+
+<!-- test: url.an-ip-literal-host-is-bare-and-its-authority-spelling-keeps-the-brackets -->
+`host()` answers the address a socket connects to, so an IP literal loses its brackets there, as Go's `Hostname()`
+does; `authorityHost()` answers the host as the authority spells it, brackets kept, which is what a `Host` header or a
+serialized URL carries (Go's `Host` without its port). A name or an IPv4 address is the same in both. `toString()`, `==`
+and `resolve` see the authority spelling, so `[::1]` survives a round trip and `[v1.fe]` stays distinct from the name
+`v1.fe`.
+```maxon
+function show(spelled String)
+	let url = try URL.parse(spelled) otherwise return
+	let host = try url.host() otherwise "no-host"
+	let authorityHost = try url.authorityHost() otherwise "no-host"
+	print("{spelled} -> host={host} authorityHost={authorityHost} string={url.toString()}\n")
+end 'show'
+
+function main() returns ExitCode
+	show("http://[::1]:8080/p")
+	show("http://[2001:db8::7]/")
+	show("http://[v1.fe]/")
+	show("http://v1.fe/")
+	show("http://example.com:81/")
+	show("http://127.0.0.1/")
+	show("mailto:user@example.com")
+
+	let literal = try URL.parse("http://[v1.fe]/") otherwise return 1
+	let name = try URL.parse("http://v1.fe/") otherwise return 2
+	let base = try URL.parse("http://[::1]:8080/a/b") otherwise return 3
+	let resolved = try URL.resolve(base, reference: "c") otherwise return 4
+	let resolvedHost = try resolved.host() otherwise "no-host"
+	let resolvedAuthority = try resolved.authorityHost() otherwise "no-host"
+
+	print("literal equals name: {literal.equals(name)}\n")
+	print("resolved: {resolved.toString()} {resolvedHost} {resolvedAuthority}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+http://[::1]:8080/p -> host=::1 authorityHost=[::1] string=http://[::1]:8080/p
+http://[2001:db8::7]/ -> host=2001:db8::7 authorityHost=[2001:db8::7] string=http://[2001:db8::7]/
+http://[v1.fe]/ -> host=v1.fe authorityHost=[v1.fe] string=http://[v1.fe]/
+http://v1.fe/ -> host=v1.fe authorityHost=v1.fe string=http://v1.fe/
+http://example.com:81/ -> host=example.com authorityHost=example.com string=http://example.com:81/
+http://127.0.0.1/ -> host=127.0.0.1 authorityHost=127.0.0.1 string=http://127.0.0.1/
+mailto:user@example.com -> host=no-host authorityHost=no-host string=mailto:user@example.com
+literal equals name: false
+resolved: http://[::1]:8080/a/c ::1 [::1]
 ```
 
 <!-- test: url.parse-mailto -->
@@ -690,10 +740,10 @@ http://[::1]x/ -> invalidHost
 http://exa^mple.com/ -> invalidHost
 http://host:99999/ -> invalidPort
 http://host:8x/ -> invalidPort
-http://[::1]:8080/p -> host=[::1] port=8080
+http://[::1]:8080/p -> host=::1 port=8080
 http://host:/p -> host=host port=0
 http://exa%41mple.com/ -> host=exa%41mple.com port=0
-http://[v1.fe80::a+en1]/ -> host=[v1.fe80::a+en1] port=0
+http://[v1.fe80::a+en1]/ -> host=v1.fe80::a+en1 port=0
 file:///etc/hosts -> host= port=0
 ```
 

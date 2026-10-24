@@ -152,6 +152,155 @@ refused resolveFailed
 0
 ```
 
+<!-- test: tcp-client.an-ipv6-literal-binds-connects-and-echoes-in-every-spelling -->
+<!-- procs: 1 -->
+A bare IPv6 literal is an address, not a name: `TcpListener.bind` and `TcpClient.connect` take it as `::1` and talk
+over an `AF_INET6` socket, whatever way the address is written. Every spelling below is the loopback address, so
+each client reaches the one listener and its echo comes back; `port()` reads the kernel's choice back off the
+IPv6 socket.
+```maxon
+let RequestBytes = 64
+
+function echoOnce(listener TcpListener) returns String
+	let conn = try listener.accept() otherwise return "accept-failed"
+	let heard = try conn.recv(RequestBytes) otherwise return "recv-failed"
+	_ = try conn.send(heard) otherwise return "send-failed"
+
+	return heard
+end 'echoOnce'
+
+function reach(spelling String, port NetworkPort, listener TcpListener) returns String
+	let peer = async echoOnce(listener)
+
+	let client = try TcpClient.connect(spelling, port: port) otherwise (e) 'refused'
+		return "refused {e.name}"
+	end 'refused'
+
+	_ = try client.send("ping") otherwise return "send-failed"
+	let answer = try client.recv(RequestBytes) otherwise return "recv-failed"
+	let heard = await peer
+
+	return "{answer}/{heard}"
+end 'reach'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("::1", port: 0) otherwise return 1
+	let port = listener.port()
+
+	let spellings = [
+		"::1",
+		"0:0:0:0:0:0:0:1",
+		"0::1",
+		"0:0:0:0:0:0::1",
+		"0000:0000:0000:0000:0000:0000:0000:0001",
+		"::0.0.0.1",
+		"0:0:0:0:0:0:0.0.0.1",
+		"0:0:0:0:0::0.0.0.1"
+	]
+
+	for spelling in spellings 'eachSpelling'
+		print("{spelling} -> {reach(spelling, port: port, listener: listener)}\n")
+	end 'eachSpelling'
+
+	return 0
+end 'main'
+```
+```stdout
+::1 -> ping/ping
+0:0:0:0:0:0:0:1 -> ping/ping
+0::1 -> ping/ping
+0:0:0:0:0:0::1 -> ping/ping
+0000:0000:0000:0000:0000:0000:0000:0001 -> ping/ping
+::0.0.0.1 -> ping/ping
+0:0:0:0:0:0:0.0.0.1 -> ping/ping
+0:0:0:0:0::0.0.0.1 -> ping/ping
+```
+```exitcode
+0
+```
+
+<!-- test: tcp-client.an-ipv6-literal-is-read-to-the-address-grammar -->
+A host holding a colon is an IPv6 literal or nothing: a spelling outside the grammar fails to resolve without ever
+being handed to a name resolver, and a well-formed one that no local interface owns is a bind failure, so the two
+verdicts tell a rejected spelling from an accepted one. The accepted spellings mix hex case, drop leading zeros,
+compress at either end and embed a dotted quad; the rejected ones are two `::`, a short or long group list, a group
+over four digits, a stray single colon, a bad or misplaced dotted quad, a zone, brackets and a name.
+```maxon
+function verdict(host String) returns String
+	if let listener = try TcpListener.bind(host, port: 0) 'bound'
+		return "bound {listener.port() > 0}"
+	end 'bound' else (e) 'refused'
+		return e.name
+	end 'refused'
+end 'verdict'
+
+function main() returns ExitCode
+	let spellings = [
+		"2001:DB8:abcd:EF01::1",
+		"2001:db8:0:0:0:0:0:1",
+		"2001:db8::1.2.3.4",
+		"1:2:3:4:5:6:7::",
+		"::1:2:3:4:5:6:7",
+		"1:2:3:4:5:6:1.2.3.4",
+		"::1::",
+		"1:2:3:4:5:6:7",
+		"1:2:3:4:5:6:7:8:9",
+		"1:2:3:4:5:6:7::8",
+		":1",
+		"1:",
+		"::1:",
+		":::",
+		"12345::1",
+		"::g",
+		"1::2::3",
+		"::1.2.3",
+		"::1.2.3.4.5",
+		"::1.2.3.256",
+		"1.2.3.4::",
+		"1:2:3:4:5:6:1.2.3.4:5",
+		"::1%eth0",
+		"[::1]",
+		"host:80"
+	]
+
+	for spelling in spellings 'eachSpelling'
+		print("{spelling} -> {verdict(spelling)}\n")
+	end 'eachSpelling'
+
+	return 0
+end 'main'
+```
+```stdout
+2001:DB8:abcd:EF01::1 -> bindFailed
+2001:db8:0:0:0:0:0:1 -> bindFailed
+2001:db8::1.2.3.4 -> bindFailed
+1:2:3:4:5:6:7:: -> bindFailed
+::1:2:3:4:5:6:7 -> bindFailed
+1:2:3:4:5:6:1.2.3.4 -> bindFailed
+::1:: -> resolveFailed
+1:2:3:4:5:6:7 -> resolveFailed
+1:2:3:4:5:6:7:8:9 -> resolveFailed
+1:2:3:4:5:6:7::8 -> resolveFailed
+:1 -> resolveFailed
+1: -> resolveFailed
+::1: -> resolveFailed
+::: -> resolveFailed
+12345::1 -> resolveFailed
+::g -> resolveFailed
+1::2::3 -> resolveFailed
+::1.2.3 -> resolveFailed
+::1.2.3.4.5 -> resolveFailed
+::1.2.3.256 -> resolveFailed
+1.2.3.4:: -> resolveFailed
+1:2:3:4:5:6:1.2.3.4:5 -> resolveFailed
+::1%eth0 -> resolveFailed
+[::1] -> resolveFailed
+host:80 -> resolveFailed
+```
+```exitcode
+0
+```
+
 <!-- test: tcp-client.a-non-ascii-host-name-resolves-through-its-unicode-form -->
 <!-- network: live -->
 <!-- unsupported-targets: x64-linux, arm64-linux, arm64-macos -->
