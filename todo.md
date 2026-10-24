@@ -167,3 +167,89 @@ Since you're building the compiler itself, you can provide the AI with a "Mental
   except spawn-many at P>1 (2.21x macos, 1.15x orb, as x64's 2.1-2.7x) and peak working set of spawn-many (2-3x) and
   coroutine-churn (1.4-1.7x), the same shape as x64. The record-resident context switch (8028c639c) is unmeasured on
   x64: the next windows/wsl run should A/B it.
+- Reference capabilities, stage 2: the Pony-style declared design was cancelled on 2026-10-24. The capability model
+  (`C:\Users\Eric\Dev\capmodel`, local only and never pushed, up to 39e94b1) keeps three findings about Maxon's own
+  runtime, which any replacement design must answer. None of the three has been checked against a HEAD compiler:
+  - **Target first.** A write `x.b.n = f(…)` resolves its target chain before the right-hand side runs. If `f` swaps
+    `x.b` out and sends it to a service, the write lands in an object that another thread now owns, so a
+    cross-thread write results. Pony evaluates the right-hand side first. The model's repro is in
+    capmodel `redteam3/rev6/REPORT.md`, H1.
+  - **Write-back while a release parks.** A match-binding write-back can have its new value freed by another
+    coroutine while the release of the old value parks. The cure is to count the binding before releasing the old
+    value (H2).
+  - **Lingering counts after a push.** A call after a push can yield, or run an awaited coroutine, that sends the
+    pushed element while the local's count still lingers (H3).
+- `__module_init`'s synthesized calls pass a bare value to an inferred by-reference parameter (ModuleInit
+  `calledFactoryRecord` ~552, `emitMapEntryUpsert` ~462, `builtArrayLiteralRecord` ~440). `let g = Tag from "hello"`,
+  where `init` reassigns its parameter, prints `!` and exits 101. Inferred by-reference also reaches stdlib
+  parameters by name coincidence (`DeclNodeSpace` `pushDottedTargets`). The call sites a parse synthesizes were fixed
+  in 1b9466d24b.
+- Unverified: a member that writes its receiver may drop the receiver bit from its summary (StorageProvenance ~4141:
+  `inside` loses the receiver when the returned value is `frozen` and the callee writes its receiver). If so,
+  `let e = try self.items.get(0); self.reads = self.reads + 1; return e` on a read-only-element instance is not
+  refused.
+- An overloaded generic constructor skips the escaping-borrow feed (Parser ~101194, `applyCallerConsume`
+  `'everyDeclarationBorrowsIt'`). When every declaration borrows a column, an escaping borrowed feed never reaches
+  `handleEscapingBorrowFeed`, so a borrowed trivial struct box may be stored without a retain. The tuple spawn hand-off
+  is skipped on the same road. Unverified repro: `Box uses T` with `create(item T)` beside `create(item T, tag Num)`,
+  both storing `item`, called with a borrowed `Point`, both plain and as `spawn`.
+- A coOwned `var` cell holding a trivial tuple is refused at a send instead of copied (`handOffTakeOf`'s
+  `'aCellsOccupant'` arm runs before the copy arm). The shape has not been built yet, because a closure capture moves
+  the `var` (E3102).
+- Latent use-after-free: `markStoredElementResult` decides "stored element" from the return type
+  (SignatureIndex ~31760 `storedElementPositionOf`). On an image `let`, every library method returning `T` is marked
+  `imageRecord` and its hold is elided. That is sound for today's stdlib, but a future `f(x T) returns T` that returns
+  its argument would break it. Decide per method, from the body summary or a roster.
+- E3078 wording splits:
+  - Permanent-view values get `viewProducer`'s sharing form (StorageProvenance ~5431, ~5749) in some places, and
+    `readOnlyRootSubject("", viewRootKind)` (~6334, ~9489) in others.
+  - Bindings read "the read-only 'x'" at the binding door, and "'x', which is read-only (kind)," elsewhere.
+  - `rootKindOfBlame` (~7318) defaults silently to `letBinding`.
+- An overloaded factory on a bare generic base leaks (exit 101): `Box.create(p)` with no typealias, where `Box` declares
+  `create(item T)` and `create(item T, tag Num)`. `spawnFactoryConstructorInstance` (Parser ~75108) returns the
+  uninstantiated base, so no `__destruct_Box_Point` releases the `Point`. Infer from the declarations `slotCallArgs`
+  leaves, and refuse only when two or more still slot.
+- The opaque-overload refusal (E2015 "resolving an overload of 'add' against an argument of opaque generic type") has
+  two defects:
+  - its text says "whose concrete type is managed", which is false, since there is no managed/trivial split;
+  - it cascades into a false E3005, because the op stays on the first member and `checkCalls` re-checks it.
+
+  Repro: `Holder uses T` whose `put(item T)` calls an overloaded `Bag.add` with `tag: 1` and `tag: "x"`.
+- SemanticCheck's merge-incoming scan is quadratic (~570-593, `pushBlockArgumentInputs` / `pushEdgeInputs`).
+  The same pairing of edge values with block arguments is walked separately by:
+  - `EffectSummary.noteMergeEdges`
+  - ClosureCycleCheck (~765)
+  - `Parser.phiIncomingValues` (~46069)
+  - `LoopEdgeIndex.noteEdge` (~14542)
+  - StorageProvenance's `indexEdgePairs`
+
+  One IR-level merge-incomings index should answer all of them.
+- Possible E3077 false negative: `storeOwnedValueIntoDurableSink` (Parser ~74220) marks the owner's mutability as
+  exercised even when the borrowing overload of a multi-declaration call is the one bound.
+- E3078 gives two verdicts for one borrowed union payload stored into a `let` field. A payload reached through a
+  parameter of the filing function is refused, while the same payload taken from a `for` element of a parameter
+  array is accepted. One of the two is wrong: write both shapes as cases and decide.
+- E3138 refuses a service-message argument filled from a default, even an interpolated one:
+  `take(first String, second String = "{rebindCurrent()}")` called as `h.take(current.label)`.
+- `async intBox.work()`, `async` of a method on a concrete generic instance, is refused although the program is
+  legal. The spawn trampoline passes user arguments only, so the spawn should carry the layout descriptor
+  (`settleLayoutCarriers`'s spawn loop).
+- A closure that calls a witness-carrying static is refused (E2015) although the program is legal. The closure should
+  capture the witness tables. It is pinned as `where-clauses` `a-closure-calling-a-witness-carrying-static-is-refused`.
+- An alias-typed argument ties between `f(x T)` and `f(x Whole)` with E3007 (`Box.create(7 as Whole)`), because the
+  alias stays in the type tag. A `Whole` argument to a `Whole` parameter should be exact, since aliases are nominal.
+  It is pinned as E3007 by `an-overloaded-factory-called-with-an-alias-valued-argument-both-members-take-equally-is-ambiguous`.
+- Module-scope factories through a generic-instance alias (`let b = IntBox.make(5)`, `IntBox.create(…)`, nested
+  `Outer.create(IntBox.make(4))`), imaged as image data. A saved patch from the E2078 change has four open review
+  findings:
+  - the deep-clone verdict skips the field-graph check (a `Directory` field panics at MmRuntime:4185);
+  - `imagedInstanceBoxes` is read before it is filled;
+  - the library parse cache does not key on that set;
+  - SharedValue instances are not excluded.
+- `Self.wrap(x)` inside a generic body, returning a bare generic of another type, is a false E3005 ("Cannot return
+  'Holder' from function declared to return 'Holder'"). A static with no receiver reaches no source in
+  `instanceSourceOfCall`.
+- Generic templates vanish for a name declared in two directories. Template keys stay bare (`describe`) while the
+  non-generic declarations are directory-qualified (`ca.describe`), so `isGenericFunctionKey` is false.
+- `paramDefaultsCollide` over-enforces: two independent file-private helpers in two files of one directory, one with a
+  default, are refused.
