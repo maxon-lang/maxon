@@ -108,7 +108,7 @@ The PascalCase name of the alert the endpoint sends, or `AlertReceived` when the
 type HandshakeError =
   | UnexpectedMessage | BadRecordMac | RecordOverflow | HandshakeFailure | BadCertificate
   | UnsupportedCertificate | CertificateExpired | UnknownCa | IllegalParameter | DecodeError
-  | DecryptError | ProtocolVersion | MissingExtension | UnsupportedExtension
+  | DecryptError | ProtocolVersion | InternalError | MissingExtension | UnsupportedExtension
   | NoApplicationProtocol | InappropriateFallback | CertificateRequired | AlertReceived
 ```
 
@@ -129,9 +129,12 @@ are `tls13_seal` (padding 0) or `tls12_seal` with the direction's sequence numbe
 3. **change_cipher_spec in TLS 1.3** is dropped when its body is the single byte `01`, it arrives after the ServerHello or HelloRetryRequest (client) or ClientHello (server) and before the peer's Finished, and no partial handshake message is buffered. Any other change_cipher_spec is `UnexpectedMessage`. TLS 1.2 rules are in the `tls12-handshake` spec.
 4. **Alerts.** An alert record with a partial handshake message buffered is `UnexpectedMessage`; one whose body is not 2 bytes is `DecodeError`. close_notify after the handshake sets `peer_closed`; every later record is ignored unread. close_notify during the handshake is `AlertReceived`. Before a version is selected every alert is `AlertReceived`. In TLS 1.3 user_canceled is
 ignored and every other alert is `AlertReceived`; in TLS 1.2 a warning-level alert (level 1) other than close_notify is ignored.
-5. **Handshake data** is appended to a buffer from which whole messages (4-byte header plus body) are taken; a message may span records and a record may hold several messages. An empty handshake fragment is `UnexpectedMessage`. Application data during the handshake is `UnexpectedMessage`. A handshake record that arrives in plaintext when protected records are expected, or the reverse, is `UnexpectedMessage`.
+5. **Handshake data** is appended to a buffer from which whole messages (4-byte header plus body) are taken; a message may span records and a record may hold several messages. **Length caps.** As soon as a message's 4-byte header is buffered its length is checked: more than 65536 bytes, or more than 262144 for a Certificate (type 11), is `InternalError` (Go's `maxHandshake` and
+`maxHandshakeCertificateMsg`), and no more of the message is read. The caps hold after the handshake too. An empty handshake fragment is `UnexpectedMessage`. **No other record inside a handshake message.** Application data is `UnexpectedMessage` during the handshake and also while a partial handshake message is buffered after it (RFC 8446 section 5.1: handshake messages MUST
+NOT be interleaved with other record types); an alert is refused the same way (rule 4). A handshake record that arrives in plaintext when protected records are expected, or the reverse, is `UnexpectedMessage`.
 6. **Key changes.** When the reader is about to install new read keys (after the ServerHello, after the peer's Finished, after a KeyUpdate), no handshake bytes may remain buffered: `UnexpectedMessage` (RFC 8446 section 5.1).
-7. If the records run out, the function returns the trace with the state reached; it is not an error.
+7. **Useless records.** A record that advances nothing is useless: a change_cipher_spec dropped in TLS 1.3 (rule 3), an alert ignored (rule 4: user_canceled in TLS 1.3, a warning in TLS 1.2), and, during a TLS 1.2 handshake, a skipped HelloRequest. Application data and every other handshake message end a run of useless records. More than 16 in a row is `UnexpectedMessage` (Go's `maxUselessRecords`): the sixteenth is dropped and the seventeenth refused.
+8. If the records run out, the function returns the trace with the state reached; it is not an error.
 
 ## The TLS 1.3 client
 
@@ -196,7 +199,8 @@ Application data is appended to the received data. NewSessionTicket is decoded a
 | Defect | Error |
 |---|---|
 | Record framing wrong, alert body not 2 bytes, codec decode failure, empty Certificate, Finished of the wrong length | `DecodeError` |
-| Message out of order or of the wrong type, change_cipher_spec misuse, application data during the handshake, data spanning a key change, empty handshake fragment, a second HelloRetryRequest | `UnexpectedMessage` |
+| Message out of order or of the wrong type, change_cipher_spec misuse, application data during the handshake or inside a partial handshake message, data spanning a key change, empty handshake fragment, a second HelloRetryRequest, more than 16 useless records in a row | `UnexpectedMessage` |
+| A handshake message longer than 65536 bytes (262144 for a Certificate), decided by its header | `InternalError` |
 | Record fails authentication | `BadRecordMac` |
 | Record or plaintext too long | `RecordOverflow` |
 | ServerHello version, suite, compression, session id echo, key_share group, or HelloRetryRequest not as offered; invalid key share; ALPN not offered; signature scheme not offered, not fitting the key, or PKCS#1 in TLS 1.3; non-empty certificate_request_context; codec placement or duplicate rules; KeyUpdate value | `IllegalParameter` |
@@ -223,6 +227,8 @@ Application data is appended to the received data. NewSessionTicket is decoded a
 5. MUST reject a HelloRetryRequest that would not change the ClientHello, and MUST NOT accept a second one.
 6. MUST NOT accept rsa_pkcs1 signatures in a TLS 1.3 CertificateVerify, although it offers those schemes for TLS 1.2 and certificates.
 7. MUST treat RFC 8446 section 4.1.3's downgrade sentinel as the `tls12-handshake` spec defines whenever TLS 1.3 was offered.
+
+10. MUST decide a handshake message's length from its header alone and read no more of an oversized message, MUST NOT accept application data or an alert inside a partial handshake message, and MUST stop reading a connection that sends more than 16 useless records in a row (Records rules 5 and 7).
 
 ## Test Vectors
 
@@ -312,6 +318,8 @@ Application data is appended to the received data. NewSessionTicket is decoded a
 - **KeyUpdate with `request_update` 1** after the handshake makes the client send its own KeyUpdate (0) before close_notify; close_notify is then protected with the updated key.
 - **NewSessionTicket** messages, which most servers send, are parsed and dropped.
 
+- **Length caps** apply to the header alone: a Certificate header announcing 262145 bytes is `InternalError` with no body following, and one announcing exactly 262144 waits for more records (`client13-err-certificate-too-long` and `client13-certificate-at-the-length-limit` in `tls-handshake-negotiation`).
+- **Useless records** are counted per connection: sixteen ignored alerts after the handshake are accepted and a seventeenth is `UnexpectedMessage`; application data or a handshake message between them starts the count again (`client13-ignored-alerts-at-the-limit`, `client13-err-too-many-ignored-alerts`).
 ## Implementation Notes
 
 - **Drive it with an event loop.** The function's form -- all records in, all records out -- is for testing; a real client feeds records as they arrive. Determinism comes from the configuration: the randoms, the session id and the private keys.

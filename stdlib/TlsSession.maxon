@@ -78,7 +78,7 @@ module type TlsSession
 		end 'nothingBuffered'
 
 		while true 'eachMessage'
-			match input.nextMessage() 'slot'
+			match try input.nextMessage() 'slot'
 				complete(message) then try handler.dispatch(message)
 				incomplete then return
 			end 'slot'
@@ -192,6 +192,20 @@ module type TlsSession
 			application then throw TlsHandshakeError.internalError
 		end 'keys'
 	end 'flightSecrets'
+
+	module function requireTls13Finished(verifyData ByteArray, baseKey ByteArray) throws TlsHandshakeError
+		let suite = try negotiatedSuite()
+
+		if verifyData.count() != suite.hashAlgorithm().digestBytes() 'length'
+			throw TlsHandshakeError.decodeError
+		end 'length'
+
+		let expected = try Tls13KeySchedule.finishedVerifyData(suite, baseKey: baseKey, transcriptHash: transcript.hash(suite.hashAlgorithm())) otherwise throw TlsHandshakeError.internalError
+
+		if not constantTimeEqual(verifyData, b: expected) 'forged'
+			throw TlsHandshakeError.decryptError
+		end 'forged'
+	end 'requireTls13Finished'
 
 	module function followKeyUpdate(request TlsKeyUpdateRequest) throws TlsHandshakeError
 		try input.requireKeyBoundary()

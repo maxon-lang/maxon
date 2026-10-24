@@ -8,6 +8,11 @@ module let tlsPssSaltLength = 64
 module let tlsNullCompression = 0
 module let tlsUncompressedPointFormat = 0
 module let tlsLegacyVersion = 0x0303
+module let tlsDefaultCipherSuites = TlsCipherSuiteCodeArray from [0x1303, 0x1301, 0x1302, 0xCCA9, 0xCCA8, 0xC02B, 0xC02F, 0xC02C, 0xC030]
+module let tlsDefaultGroups = TlsGroupCodeArray from [0x001D, 0x0017]
+let tlsDefaultKeyShareGroups = TlsGroupCodeArray from [0x001D]
+let tlsClientDefaultSignatureAlgorithms = TlsSignatureSchemeCodeArray from [0x0403, 0x0804, 0x0807, 0x0503, 0x0805, 0x0806, 0x0401, 0x0501, 0x0601]
+module let tlsServerDefaultSignatureAlgorithms = TlsSignatureSchemeCodeArray from [0x0403, 0x0503, 0x0807, 0x0804, 0x0805, 0x0806, 0x0401, 0x0501, 0x0601]
 
 module type TlsKeySecret
 	module var group as TlsGroupCode
@@ -90,7 +95,7 @@ module type TlsClientConfig
 	end 'create'
 
 	module static function defaults(peerName X509VerifyHost) returns TlsClientConfig
-		return Self{peerName: peerName, protocols: TlsProtocolArray from [TlsProtocol.tls13, TlsProtocol.tls12], cipherSuites: TlsCipherSuiteCodeArray from [0x1303, 0x1301, 0x1302, 0xCCA9, 0xCCA8, 0xC02B, 0xC02F, 0xC02C, 0xC030], groups: TlsGroupCodeArray from [0x001D, 0x0017], keyShareGroups: TlsGroupCodeArray from [0x001D], signatureAlgorithms: TlsSignatureSchemeCodeArray from [0x0403, 0x0804, 0x0807, 0x0503, 0x0805, 0x0806, 0x0401, 0x0501, 0x0601], applicationProtocols: TlsProtocolNameArray.create(), identity: TlsClientIdentity.anonymous}
+		return Self{peerName: peerName, protocols: TlsProtocolArray from [TlsProtocol.tls13, TlsProtocol.tls12], cipherSuites: tlsDefaultCipherSuites.clone(), groups: tlsDefaultGroups.clone(), keyShareGroups: tlsDefaultKeyShareGroups.clone(), signatureAlgorithms: tlsClientDefaultSignatureAlgorithms.clone(), applicationProtocols: TlsProtocolNameArray.create(), identity: TlsClientIdentity.anonymous}
 	end 'defaults'
 end 'TlsClientConfig'
 

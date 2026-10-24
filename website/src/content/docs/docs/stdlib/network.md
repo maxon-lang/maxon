@@ -316,6 +316,11 @@ end 'TlsError'
 
 A record header is checked as it is read: content type, version and length are bounded before any body is waited for,
 so input that is not TLS, or a header that declares more than a record holds, ends with `protocolError` at once.
+A handshake message is bounded the same way: one that announces more than 65536 bytes, or more than 262144 for a
+Certificate, ends with `protocolError(internalError)` as soon as its 4-byte header is read, so a peer cannot make the
+connection buffer megabytes. An alert or application data that arrives inside an unfinished handshake message, and more
+than 16 records in a row that change nothing (a dropped `change_cipher_spec`, an ignored alert, a skipped TLS 1.2
+HelloRequest), end with `protocolError(unexpectedMessage)`.
 
 ## HttpClient
 

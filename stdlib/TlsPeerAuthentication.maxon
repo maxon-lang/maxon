@@ -62,6 +62,14 @@ module function tlsCertificates(installed RootCertificates) returns ByteArrays
 	return certificates
 end 'tlsCertificates'
 
+module function tlsVerifyCertificateVerify(session TlsSession, peer TlsPeerAuthenticator, signer TlsRole, key X509PublicKey, offered TlsSignatureSchemeCodeArray, code TlsSignatureSchemeCode, signature ByteArray) throws TlsHandshakeError
+	let suite = try session.negotiatedSuite()
+	let scheme = try tlsRequireOfferedScheme(code, offered: offered, algorithm: key.algorithm(), protocol: TlsProtocol.tls13)
+	let content = tlsCertificateVerifyContent(signer, transcriptHash: session.transcript.hash(suite.hashAlgorithm()))
+
+	try peer.verifySignature(scheme, key: key, message: content, signature: signature)
+end 'tlsVerifyCertificateVerify'
+
 module function tlsAuthenticateChain(chain ByteArrays, host X509VerifyHost, peer TlsPeerAuthenticator, session TlsSession) returns Certificate throws TlsHandshakeError
 	let leafDer = try chain.first() otherwise throw TlsHandshakeError.decodeError
 

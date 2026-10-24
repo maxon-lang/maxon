@@ -3,7 +3,6 @@ public typealias TlsCompressionMethod = int(0 to u8.max) implements TlsWireValue
 public typealias TlsTicketLifetime = int(0 to u32.max) implements TlsWireValue
 public typealias TlsTicketAgeAdd = int(0 to u32.max) implements TlsWireValue
 public typealias TlsCipherSuiteCodeArray = Array with TlsCipherSuiteCode
-public typealias TlsCertificateDataArray = Array with ByteArray
 public typealias TlsCertificateEntryArray = Array with TlsCertificateEntry
 public typealias TlsAuthorityNameArray = Array with ByteArray
 
@@ -257,7 +256,7 @@ public union TlsHandshakeMessage
 	newSessionTicket(ticket TlsNewSessionTicket)
 	encryptedExtensions(extensions TlsExtensionArray)
 	tls13Certificate(requestContext ByteArray, entries TlsCertificateEntryArray)
-	tls12Certificate(certificates TlsCertificateDataArray)
+	tls12Certificate(certificates ByteArrays)
 	tls13CertificateRequest(requestContext ByteArray, extensions TlsExtensionArray)
 	tls12CertificateRequest(request Tls12CertificateRequest)
 	certificateVerify(scheme TlsSignatureSchemeCode, signature ByteArray)
@@ -449,7 +448,7 @@ end 'decodeTls13Certificate'
 
 function decodeTls12Certificate(body TlsReader) returns TlsHandshakeMessage throws TlsCodecError
 	var list = try body.readVector(TlsLengthPrefix.uint24, minimum: tlsAnyLength)
-	var certificates = TlsCertificateDataArray.create()
+	var certificates = ByteArrays.create()
 
 	while not list.isAtEnd() 'eachCertificate'
 		certificates.push(try list.readVectorBytes(TlsLengthPrefix.uint24, minimum: tlsNonEmpty))
@@ -564,7 +563,7 @@ function appendTls13Certificate(body ByteArray, requestContext ByteArray, entrie
 	try appendVector(body, prefix: TlsLengthPrefix.uint24, contents: list)
 end 'appendTls13Certificate'
 
-function appendTls12Certificate(body ByteArray, certificates TlsCertificateDataArray) throws TlsEncodeError
+function appendTls12Certificate(body ByteArray, certificates ByteArrays) throws TlsEncodeError
 	var list = ByteArray.create()
 
 	for certificate in certificates 'eachCertificate'

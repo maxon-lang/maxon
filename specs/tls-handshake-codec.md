@@ -224,7 +224,7 @@ function renderEntries(entries TlsCertificateEntryArray) returns String
 	return joined(texts)
 end 'renderEntries'
 
-function renderCertificates(certificates TlsCertificateDataArray) returns String
+function renderCertificates(certificates ByteArrays) returns String
 	var texts = TextArray.create()
 
 	for certificate in certificates 'eachCertificate'
@@ -501,7 +501,7 @@ function renderEntries(entries TlsCertificateEntryArray) returns String
 	return joined(texts)
 end 'renderEntries'
 
-function renderCertificates(certificates TlsCertificateDataArray) returns String
+function renderCertificates(certificates ByteArrays) returns String
 	var texts = TextArray.create()
 
 	for certificate in certificates 'eachCertificate'
@@ -796,7 +796,7 @@ function renderEntries(entries TlsCertificateEntryArray) returns String
 	return joined(texts)
 end 'renderEntries'
 
-function renderCertificates(certificates TlsCertificateDataArray) returns String
+function renderCertificates(certificates ByteArrays) returns String
 	var texts = TextArray.create()
 
 	for certificate in certificates 'eachCertificate'
@@ -1083,7 +1083,7 @@ function renderEntries(entries TlsCertificateEntryArray) returns String
 	return joined(texts)
 end 'renderEntries'
 
-function renderCertificates(certificates TlsCertificateDataArray) returns String
+function renderCertificates(certificates ByteArrays) returns String
 	var texts = TextArray.create()
 
 	for certificate in certificates 'eachCertificate'

@@ -7,6 +7,10 @@ let tlsChangeCipherSpecBytes = 1
 let tlsAlertLevelOffset = 0
 let tlsAlertDescriptionOffset = 1
 let tlsFirstBodyByte = 0
+let tlsHandshakeTypeOffset = 0
+let tlsMaxHandshakeBytes = 65536
+let tlsMaxCertificateMessageBytes = 262144
+let tlsMaxUselessRecords = 16
 
 module enum TlsAlertLevel
 	warning = 1
@@ -232,6 +236,8 @@ end 'TlsReceivedAlert'
 module type TlsRecordInput
 	var reader as TlsRecordReader
 	var buffer as ByteArray
+	var consumed as Count
+	var uselessRecords as Count
 	var stagedCipher as TlsStagedCipher
 	module var version as TlsInboundVersion
 	module var established as bool
@@ -239,7 +245,7 @@ module type TlsRecordInput
 	module var receivedAlert as TlsReceivedAlert
 
 	module static function create() returns TlsRecordInput
-		return Self{reader: TlsRecordReader.create(), buffer: ByteArray.create(), stagedCipher: TlsStagedCipher.none, version: TlsInboundVersion.undecided, established: false, changeCipherSpecAllowed: false, receivedAlert: TlsReceivedAlert.none}
+		return Self{reader: TlsRecordReader.create(), buffer: ByteArray.create(), consumed: 0, uselessRecords: 0, stagedCipher: TlsStagedCipher.none, version: TlsInboundVersion.undecided, established: false, changeCipherSpecAllowed: false, receivedAlert: TlsReceivedAlert.none}
 	end 'create'
 
 	module function install(next TlsRecordCipher)
@@ -271,37 +277,84 @@ module type TlsRecordInput
 		end 'contentType'
 	end 'accept'
 
-	module function nextMessage() returns TlsHandshakeSlot
-		if buffer.count() < tlsHandshakeHeaderBytes 'noHeader'
+	function pendingBytes() returns Count
+		return buffer.count() - consumed
+	end 'pendingBytes'
+
+	function isHandshakeType(messageType Byte, expected TlsHandshakeType) returns bool
+		let kind = try TlsHandshakeType.fromRawValue(messageType) otherwise return false
+
+		return kind == expected
+	end 'isHandshakeType'
+
+	function maxMessageBytes(messageType Byte) returns Count
+		if isHandshakeType(messageType, expected: TlsHandshakeType.certificate) 'certificate'
+			return tlsMaxCertificateMessageBytes
+		end 'certificate'
+
+		return tlsMaxHandshakeBytes
+	end 'maxMessageBytes'
+
+	module function nextMessage() returns TlsHandshakeSlot throws TlsHandshakeError
+		if pendingBytes() < tlsHandshakeHeaderBytes 'noHeader'
 			return TlsHandshakeSlot.incomplete
 		end 'noHeader'
 
-		let length = readOrderedWord(buffer, off: tlsHandshakeLengthOffset, width: tlsHandshakeLengthBytes, limit: buffer.count(), order: ByteOrder.bigEndian) as Count
+		let messageType = tlsRecordByte(buffer, offset: consumed + tlsHandshakeTypeOffset)
+		let length = readOrderedWord(buffer, off: consumed + tlsHandshakeLengthOffset, width: tlsHandshakeLengthBytes, limit: buffer.count(), order: ByteOrder.bigEndian) as Count
+
+		if length > maxMessageBytes(messageType) 'oversized'
+			throw TlsHandshakeError.internalError
+		end 'oversized'
+
 		let total = tlsHandshakeHeaderBytes + length
 
-		if buffer.count() < total 'partial'
+		if pendingBytes() < total 'partial'
 			return TlsHandshakeSlot.incomplete
 		end 'partial'
 
-		let message = tlsRecordPart(buffer, start: 0, endIndex: total)
-		buffer = tlsRecordPart(buffer, start: total, endIndex: buffer.count())
+		let message = tlsRecordPart(buffer, start: consumed, endIndex: consumed + total)
+		consumed = consumed + total
+
+		if consumed == buffer.count() 'drained'
+			buffer.clear()
+			consumed = 0
+		end 'drained'
+
+		if not isHandshakeType(messageType, expected: TlsHandshakeType.helloRequest) 'advances'
+			uselessRecords = 0
+		end 'advances'
 
 		return TlsHandshakeSlot.complete(message)
 	end 'nextMessage'
 
+	module function noteUseless() throws TlsHandshakeError
+		uselessRecords = uselessRecords + 1
+
+		if uselessRecords > tlsMaxUselessRecords 'tooMany'
+			throw TlsHandshakeError.unexpectedMessage
+		end 'tooMany'
+	end 'noteUseless'
+
+	function ignoredRecord() returns TlsInboundEvent throws TlsHandshakeError
+		try noteUseless()
+
+		return TlsInboundEvent.ignored
+	end 'ignoredRecord'
+
 	module function requireKeyBoundary() throws TlsHandshakeError
-		if buffer.count() != 0 'spanning'
+		if pendingBytes() != 0 'spanning'
 			throw TlsHandshakeError.unexpectedMessage
 		end 'spanning'
 	end 'requireKeyBoundary'
 
 	function acceptChangeCipherSpec(body ByteArray) returns TlsInboundEvent throws TlsHandshakeError
-		if not changeCipherSpecAllowed or body.count() != tlsChangeCipherSpecBytes or tlsRecordByte(body, offset: tlsFirstBodyByte) != tlsChangeCipherSpecBody or buffer.count() != 0 'misplaced'
+		if not changeCipherSpecAllowed or body.count() != tlsChangeCipherSpecBytes or tlsRecordByte(body, offset: tlsFirstBodyByte) != tlsChangeCipherSpecBody or pendingBytes() != 0 'misplaced'
 			throw TlsHandshakeError.unexpectedMessage
 		end 'misplaced'
 
 		match version 'version'
-			tls13 then return TlsInboundEvent.ignored
+			tls13 then return try ignoredRecord()
 			tls12 then return try installStagedCipher()
 			undecided then throw TlsHandshakeError.unexpectedMessage
 		end 'version'
@@ -320,7 +373,7 @@ module type TlsRecordInput
 	end 'installStagedCipher'
 
 	function acceptAlert(body ByteArray) returns TlsInboundEvent throws TlsHandshakeError
-		if buffer.count() != 0 'insideMessage'
+		if pendingBytes() != 0 'insideMessage'
 			throw TlsHandshakeError.unexpectedMessage
 		end 'insideMessage'
 
@@ -344,7 +397,7 @@ module type TlsRecordInput
 		end 'closing'
 
 		if version == TlsInboundVersion.tls13 and alert == TlsAlert.userCanceled 'canceled'
-			return TlsInboundEvent.ignored
+			return try ignoredRecord()
 		end 'canceled'
 
 		return try acceptOtherAlert(level)
@@ -354,7 +407,7 @@ module type TlsRecordInput
 		let parsed = try TlsAlertLevel.fromRawValue(level) otherwise throw TlsHandshakeError.alertReceived
 
 		if version == TlsInboundVersion.tls12 and parsed == TlsAlertLevel.warning 'warning'
-			return TlsInboundEvent.ignored
+			return try ignoredRecord()
 		end 'warning'
 
 		throw TlsHandshakeError.alertReceived
@@ -365,15 +418,22 @@ module type TlsRecordInput
 			throw TlsHandshakeError.unexpectedMessage
 		end 'unexpected'
 
+		if consumed > 0 'compact'
+			buffer = tlsRecordPart(buffer, start: consumed, endIndex: buffer.count())
+			consumed = 0
+		end 'compact'
+
 		buffer.append(body)
 
 		return TlsInboundEvent.handshakeData
 	end 'acceptHandshake'
 
 	function acceptApplicationData(body ByteArray) returns TlsInboundEvent throws TlsHandshakeError
-		if not established 'handshaking'
+		if not established or pendingBytes() != 0 'misplaced'
 			throw TlsHandshakeError.unexpectedMessage
-		end 'handshaking'
+		end 'misplaced'
+
+		uselessRecords = 0
 
 		return TlsInboundEvent.applicationData(body)
 	end 'acceptApplicationData'

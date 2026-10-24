@@ -1276,6 +1276,499 @@ client12-err-missing-change-cipher-spec unexpectedMessage
 client12-err-session-ticket unexpectedMessage
 ```
 
+<!-- test: tls12-handshake.message-length-limits -->
+<!-- tier: stdlib -->
+A handshake message is refused, with InternalError, as soon as its 4-byte header announces more than 65536 bytes, or more than 262144 for a Certificate: a ServerHello header one byte over the cap and a Certificate header one byte over. A Certificate header exactly at the cap is not refused: the client waits for the rest.
+```maxon
+function digit(symbol Byte) returns Byte
+	if symbol >= 0x61 'letter'
+		return symbol - 0x57
+	end 'letter'
+
+	return symbol - 0x30
+end 'digit'
+
+function fromHex(hex String) returns ByteArray
+	var bytes = ByteArray.create()
+	var high = 0 as Byte
+	var isHigh = true
+
+	for symbol in hex.bytes() 'eachSymbol'
+		if isHigh 'first'
+			high = digit(symbol)
+		end 'first' else 'second'
+			bytes.push(high * 16 + digit(symbol))
+		end 'second'
+
+		isHigh = not isHigh
+	end 'eachSymbol'
+
+	return bytes
+end 'fromHex'
+
+function toHex(bytes ByteArray) returns String
+	var text = ""
+
+	for byte in bytes 'eachByte'
+		text.append("{byte:02x}")
+	end 'eachByte'
+
+	return text
+end 'toHex'
+
+function secret(group TlsGroupCode, privateKey ByteArray) returns TlsKeySecret
+	return try TlsKeySecret.create(group, privateKey: privateKey) otherwise panic("a canra private key was refused")
+end 'secret'
+
+typealias TextArray = Array with String
+
+function joined(items TextArray) returns String
+	var text = ""
+
+	for (iter, item) in items.withIterator() 'eachItem'
+		if iter.index() > 0 'separator'
+			text.append(",")
+		end 'separator'
+
+		text.append(item)
+	end 'eachItem'
+
+	return "[{text}]"
+end 'joined'
+
+function renderRecords(records ByteArrays) returns String
+	var texts = TextArray.create()
+
+	for record in records 'eachRecord'
+		texts.push("\"{toHex(record)}\"")
+	end 'eachRecord'
+
+	return joined(texts)
+end 'renderRecords'
+
+function renderVersion(negotiation TlsNegotiation) returns String
+	return match negotiation 'negotiation'
+		pending gives "null"
+		accepted or
+		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
+	end 'negotiation'
+end 'renderVersion'
+
+function renderSuite(negotiation TlsNegotiation) returns String
+	return match negotiation 'negotiation'
+		pending gives "null"
+		accepted(suite) gives "{suite.rawValue}"
+		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
+	end 'negotiation'
+end 'renderSuite'
+
+function renderGroup(negotiation TlsNegotiation) returns String
+	return match negotiation 'negotiation'
+		pending or
+		accepted or
+		accepted12 gives "null"
+		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
+	end 'negotiation'
+end 'renderGroup'
+
+function renderAlpn(alpn TlsAlpnChoice) returns String
+	return match alpn 'alpn'
+		absent gives "null"
+		negotiated(protocol) gives "\"{toHex(protocol)}\""
+	end 'alpn'
+end 'renderAlpn'
+
+function renderTrace(trace TlsReplayTrace) returns String
+	let state = "connected" if trace.connected else "handshaking"
+
+	return "\{\"state\":\"{state}\",\"version\":{renderVersion(trace.negotiation)},\"cipher_suite\":{renderSuite(trace.negotiation)},\"group\":{renderGroup(trace.negotiation)},\"alpn_protocol_hex\":{renderAlpn(trace.alpn)},\"outbound_records_hex\":{renderRecords(trace.outbound)},\"received_application_data_hex\":\"{toHex(trace.received)}\",\"peer_closed\":{trace.peerClosed},\"peer_authenticated\":{trace.peerAuthenticated}\}"
+end 'renderTrace'
+
+function report(id String, config TlsClientConfig, entropy TlsClientEntropy, peer TlsPeerAuthenticator, helloSource TlsClientHelloSource, inbound ByteArrays, writes ByteArrays, closeNotify bool)
+	if let trace = try TlsClientReplay.run(config, entropy: entropy, peer: peer, helloSource: helloSource, inbound: inbound, writes: writes, closeNotify: closeNotify) 'replayed'
+		print("{id} {renderTrace(trace)}\n")
+	end 'replayed' else (failure) 'refused'
+		print("{id} {failure}\n")
+	end 'refused'
+end 'report'
+
+function vector0()
+	let config = TlsClientConfig.create(X509VerifyHost.named("example.com"), protocols: TlsProtocolArray from [TlsProtocol.tls13, TlsProtocol.tls12], cipherSuites: TlsCipherSuiteCodeArray from [4867, 4865, 4866, 52393, 52392, 49195, 49199, 49196, 49200], groups: TlsGroupCodeArray from [29, 23], keyShareGroups: TlsGroupCodeArray from [29], signatureAlgorithms: TlsSignatureSchemeCodeArray from [1027, 2052, 2055, 1283, 2053, 2054, 1025, 1281, 1537], applicationProtocols: TlsProtocolNameArray from [fromHex("687474702f312e31")], identity: TlsClientIdentity.anonymous)
+	let entropy = TlsClientEntropy.create(fromHex("b91e8b5e1ba07644da53f01fd277f1ef45898a9e5191f498056bb9f103f1fb00"), sessionId: fromHex("34c7c125d6bab984e66f56bd5014a2711bb2be5b33369067d72272f30a44e92d"), keySecrets: TlsKeySecretArray from [secret(29, privateKey: fromHex("9d8897f92af23dd9d7d0d6fa801d595e8b5f5d73d6c4e82e1ba9517102bb75b6")), secret(23, privateKey: fromHex("2151f6b100d3c089104edabfa6899e6bfed43c0005a5dea3865f70ead119be2a"))], pssSalt: fromHex("19ff56f7aa4a8e9ac922f3cb91129341644789114cc25abb57f7c1e812c495f685cbac63f9ed24fa264b8fb58c92b27cad0fb7fede7d6c5368eaaddf344bacbc"))
+	let peer = TlsX509Peer.create(ByteArrays from [fromHex("3082012f3081d6a003020102020101300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a300f310d300b06035504030c04526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000469fd1970f970c21034e836c954aefc78dffef4a3d72650f1ec5e70559cc0663d0722d3408f27d8be5a08ceb432c37b7049cc8758c88c3d85e4db83aa471b62b7a3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d0403020348003045022053bac2d2f62299dd459d79bce22d671aeeb6ee3ed03a2f344be8a8392fd47b3e022100d8f59bc3b1ba00dc51028c7f1b8e99d86d4bb4126e22717c32988498c07f64d7")], now: 1767225600, purpose: X509Purpose.serverAuth)
+	let helloSource = TlsBuiltClientHello.create()
+	report("client12-err-message-too-long", config: config, entropy: entropy, peer: peer, helloSource: helloSource, inbound: ByteArrays from [fromHex("160303000402010001")], writes: ByteArrays from [fromHex("474554202f20485454502f312e310d0a486f73743a206578616d706c652e636f6d0d0a0d0a")], closeNotify: true)
+end 'vector0'
+
+function vector1()
+	let config = TlsClientConfig.create(X509VerifyHost.named("example.com"), protocols: TlsProtocolArray from [TlsProtocol.tls13, TlsProtocol.tls12], cipherSuites: TlsCipherSuiteCodeArray from [4867, 4865, 4866, 52393, 52392, 49195, 49199, 49196, 49200], groups: TlsGroupCodeArray from [29, 23], keyShareGroups: TlsGroupCodeArray from [29], signatureAlgorithms: TlsSignatureSchemeCodeArray from [1027, 2052, 2055, 1283, 2053, 2054, 1025, 1281, 1537], applicationProtocols: TlsProtocolNameArray from [fromHex("687474702f312e31")], identity: TlsClientIdentity.anonymous)
+	let entropy = TlsClientEntropy.create(fromHex("bf1d0721045e465edfd6a28b7991bde3703e323e3e99a53eb38035232d945956"), sessionId: fromHex("4199d727cbc4b1c4f843b027d51204ee526d14d6cb6bbd6da46c0793f793fb2b"), keySecrets: TlsKeySecretArray from [secret(29, privateKey: fromHex("7d132f343618ed7f4d85b8c1cac829bbc375f60771e0840360559b9f1f674761")), secret(23, privateKey: fromHex("27d3813289cc5f213e1586cb135e856f2170301834b6834ac4e4ce66271367ad"))], pssSalt: fromHex("a1e9a23c96e6f1706422ff8d561f232615cd438336fa5dd91a1ad672c42d765c5844292bae9fe119c9e3094dc119432a11e0c0507a35659dc6267c77b6eeb0a4"))
+	let peer = TlsX509Peer.create(ByteArrays from [fromHex("3082012f3081d6a003020102020101300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a300f310d300b06035504030c04526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000469fd1970f970c21034e836c954aefc78dffef4a3d72650f1ec5e70559cc0663d0722d3408f27d8be5a08ceb432c37b7049cc8758c88c3d85e4db83aa471b62b7a3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d0403020348003045022053bac2d2f62299dd459d79bce22d671aeeb6ee3ed03a2f344be8a8392fd47b3e022100d8f59bc3b1ba00dc51028c7f1b8e99d86d4bb4126e22717c32988498c07f64d7")], now: 1767225600, purpose: X509Purpose.serverAuth)
+	let helloSource = TlsBuiltClientHello.create()
+	report("client12-err-certificate-too-long", config: config, entropy: entropy, peer: peer, helloSource: helloSource, inbound: ByteArrays from [fromHex("16030300520200004a0303e5f87c600d13b616d5ec49cc399f2d4b6f4cb328a2da4094fc10729d7473d21200cca90000220000000000170000ff01000100000b000201000010000b000908687474702f312e310b040001")], writes: ByteArrays from [fromHex("474554202f20485454502f312e310d0a486f73743a206578616d706c652e636f6d0d0a0d0a")], closeNotify: true)
+end 'vector1'
+
+function vector2()
+	let config = TlsClientConfig.create(X509VerifyHost.named("example.com"), protocols: TlsProtocolArray from [TlsProtocol.tls13, TlsProtocol.tls12], cipherSuites: TlsCipherSuiteCodeArray from [4867, 4865, 4866, 52393, 52392, 49195, 49199, 49196, 49200], groups: TlsGroupCodeArray from [29, 23], keyShareGroups: TlsGroupCodeArray from [29], signatureAlgorithms: TlsSignatureSchemeCodeArray from [1027, 2052, 2055, 1283, 2053, 2054, 1025, 1281, 1537], applicationProtocols: TlsProtocolNameArray from [fromHex("687474702f312e31")], identity: TlsClientIdentity.anonymous)
+	let entropy = TlsClientEntropy.create(fromHex("2b18f2077d3614aeb616aa36228586809bd33e8b810779b767e31c632b5eb9af"), sessionId: fromHex("d9ba1c9c82dc44a2e93cd6a4b3a20a15e2043bb642cbc08d82878ef59aa32e2f"), keySecrets: TlsKeySecretArray from [secret(29, privateKey: fromHex("e05ddb01b5aad758be5934c523e25a29629cbd33236023e740f49b3e055b5039")), secret(23, privateKey: fromHex("a067ea86d5e9034323d6f2b9111cd97bfea2b8e3aef863096a9bb5c97b9bb0c2"))], pssSalt: fromHex("f9b3eabb52953595af7b3d19f22e97ab1578a8151e548cdbec67ba377f62631b93280171ac397793a6ffb6ddb4085990604fb4b9fc88aed125607761249f19ac"))
+	let peer = TlsX509Peer.create(ByteArrays from [fromHex("3082012f3081d6a003020102020101300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a300f310d300b06035504030c04526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000469fd1970f970c21034e836c954aefc78dffef4a3d72650f1ec5e70559cc0663d0722d3408f27d8be5a08ceb432c37b7049cc8758c88c3d85e4db83aa471b62b7a3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d0403020348003045022053bac2d2f62299dd459d79bce22d671aeeb6ee3ed03a2f344be8a8392fd47b3e022100d8f59bc3b1ba00dc51028c7f1b8e99d86d4bb4126e22717c32988498c07f64d7")], now: 1767225600, purpose: X509Purpose.serverAuth)
+	let helloSource = TlsBuiltClientHello.create()
+	report("client12-certificate-at-the-length-limit", config: config, entropy: entropy, peer: peer, helloSource: helloSource, inbound: ByteArrays from [fromHex("16030300520200004a0303a48aeb52d38309722c6750d108d5baa8467aa58373c78366ee0f880935a99cf700cca90000220000000000170000ff01000100000b000201000010000b000908687474702f312e310b040000")], writes: ByteArrays from [fromHex("474554202f20485454502f312e310d0a486f73743a206578616d706c652e636f6d0d0a0d0a")], closeNotify: true)
+end 'vector2'
+
+function main() returns ExitCode
+	vector0()
+	vector1()
+	vector2()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+client12-err-message-too-long internalError
+client12-err-certificate-too-long internalError
+client12-certificate-at-the-length-limit {"state":"handshaking","version":771,"cipher_suite":52393,"group":null,"alpn_protocol_hex":"687474702f312e31","outbound_records_hex":["16030100e6010000e203032b18f2077d3614aeb616aa36228586809bd33e8b810779b767e31c632b5eb9af20d9ba1c9c82dc44a2e93cd6a4b3a20a15e2043bb642cbc08d82878ef59aa32e2f0012130313011302cca9cca8c02bc02fc02cc0300100008700000010000e00000b6578616d706c652e636f6d00170000ff01000100000a00060004001d0017000b00020100000d001400120403080408070503080508060401050106010010000b000908687474702f312e31003300260024001d0020d31a805225f9be293aaca9766256e03681b21411afffa18bd6c1fcdeb91a6039002b00050403040303"],"received_application_data_hex":"","peer_closed":false,"peer_authenticated":false}
+```
+
+<!-- test: tls12-handshake.no-record-inside-a-handshake-message -->
+<!-- tier: stdlib -->
+While a partial HelloRequest is buffered after the handshake, application data is UnexpectedMessage; a HelloRequest split over two records and followed by application data is answered with no_renegotiation.
+```maxon
+function digit(symbol Byte) returns Byte
+	if symbol >= 0x61 'letter'
+		return symbol - 0x57
+	end 'letter'
+
+	return symbol - 0x30
+end 'digit'
+
+function fromHex(hex String) returns ByteArray
+	var bytes = ByteArray.create()
+	var high = 0 as Byte
+	var isHigh = true
+
+	for symbol in hex.bytes() 'eachSymbol'
+		if isHigh 'first'
+			high = digit(symbol)
+		end 'first' else 'second'
+			bytes.push(high * 16 + digit(symbol))
+		end 'second'
+
+		isHigh = not isHigh
+	end 'eachSymbol'
+
+	return bytes
+end 'fromHex'
+
+function toHex(bytes ByteArray) returns String
+	var text = ""
+
+	for byte in bytes 'eachByte'
+		text.append("{byte:02x}")
+	end 'eachByte'
+
+	return text
+end 'toHex'
+
+function secret(group TlsGroupCode, privateKey ByteArray) returns TlsKeySecret
+	return try TlsKeySecret.create(group, privateKey: privateKey) otherwise panic("a canra private key was refused")
+end 'secret'
+
+typealias TextArray = Array with String
+
+function joined(items TextArray) returns String
+	var text = ""
+
+	for (iter, item) in items.withIterator() 'eachItem'
+		if iter.index() > 0 'separator'
+			text.append(",")
+		end 'separator'
+
+		text.append(item)
+	end 'eachItem'
+
+	return "[{text}]"
+end 'joined'
+
+function renderRecords(records ByteArrays) returns String
+	var texts = TextArray.create()
+
+	for record in records 'eachRecord'
+		texts.push("\"{toHex(record)}\"")
+	end 'eachRecord'
+
+	return joined(texts)
+end 'renderRecords'
+
+function renderVersion(negotiation TlsNegotiation) returns String
+	return match negotiation 'negotiation'
+		pending gives "null"
+		accepted or
+		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
+	end 'negotiation'
+end 'renderVersion'
+
+function renderSuite(negotiation TlsNegotiation) returns String
+	return match negotiation 'negotiation'
+		pending gives "null"
+		accepted(suite) gives "{suite.rawValue}"
+		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
+	end 'negotiation'
+end 'renderSuite'
+
+function renderGroup(negotiation TlsNegotiation) returns String
+	return match negotiation 'negotiation'
+		pending or
+		accepted or
+		accepted12 gives "null"
+		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
+	end 'negotiation'
+end 'renderGroup'
+
+function renderAlpn(alpn TlsAlpnChoice) returns String
+	return match alpn 'alpn'
+		absent gives "null"
+		negotiated(protocol) gives "\"{toHex(protocol)}\""
+	end 'alpn'
+end 'renderAlpn'
+
+function renderTrace(trace TlsReplayTrace) returns String
+	let state = "connected" if trace.connected else "handshaking"
+
+	return "\{\"state\":\"{state}\",\"version\":{renderVersion(trace.negotiation)},\"cipher_suite\":{renderSuite(trace.negotiation)},\"group\":{renderGroup(trace.negotiation)},\"alpn_protocol_hex\":{renderAlpn(trace.alpn)},\"outbound_records_hex\":{renderRecords(trace.outbound)},\"received_application_data_hex\":\"{toHex(trace.received)}\",\"peer_closed\":{trace.peerClosed},\"peer_authenticated\":{trace.peerAuthenticated}\}"
+end 'renderTrace'
+
+function report(id String, config TlsClientConfig, entropy TlsClientEntropy, peer TlsPeerAuthenticator, helloSource TlsClientHelloSource, inbound ByteArrays, writes ByteArrays, closeNotify bool)
+	if let trace = try TlsClientReplay.run(config, entropy: entropy, peer: peer, helloSource: helloSource, inbound: inbound, writes: writes, closeNotify: closeNotify) 'replayed'
+		print("{id} {renderTrace(trace)}\n")
+	end 'replayed' else (failure) 'refused'
+		print("{id} {failure}\n")
+	end 'refused'
+end 'report'
+
+function vector0()
+	let config = TlsClientConfig.create(X509VerifyHost.named("example.com"), protocols: TlsProtocolArray from [TlsProtocol.tls13, TlsProtocol.tls12], cipherSuites: TlsCipherSuiteCodeArray from [4867, 4865, 4866, 52393, 52392, 49195, 49199, 49196, 49200], groups: TlsGroupCodeArray from [29, 23], keyShareGroups: TlsGroupCodeArray from [29], signatureAlgorithms: TlsSignatureSchemeCodeArray from [1027, 2052, 2055, 1283, 2053, 2054, 1025, 1281, 1537], applicationProtocols: TlsProtocolNameArray from [fromHex("687474702f312e31")], identity: TlsClientIdentity.anonymous)
+	let entropy = TlsClientEntropy.create(fromHex("6d8e39c05de7e012796039dc4ee0bc9de8b837e4eb9c5e9e8f5a87354e973e4b"), sessionId: fromHex("1e25b4095a77eaa194efb0f8679e815c0fa7261464c85c32d8368fc9216f01e0"), keySecrets: TlsKeySecretArray from [secret(29, privateKey: fromHex("b73f146ec7ddc64c70aa94c503b04f281f94215adbd855dde53a1dc0b276bf80")), secret(23, privateKey: fromHex("4ba3eba04ee17eb9884821448ea5b8cbe96a500e6198b7546bd6b9aa0f787559"))], pssSalt: fromHex("508729c8f5e9a7788aa3c70d540d48ea5ef360f4fbe580f0265d17f30d76a1e4ae165d15f9df48b88bf2d38738d6df26fc9ace29a2a4e852b62464556f9b709b"))
+	let peer = TlsX509Peer.create(ByteArrays from [fromHex("3082012f3081d6a003020102020101300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a300f310d300b06035504030c04526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000469fd1970f970c21034e836c954aefc78dffef4a3d72650f1ec5e70559cc0663d0722d3408f27d8be5a08ceb432c37b7049cc8758c88c3d85e4db83aa471b62b7a3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d0403020348003045022053bac2d2f62299dd459d79bce22d671aeeb6ee3ed03a2f344be8a8392fd47b3e022100d8f59bc3b1ba00dc51028c7f1b8e99d86d4bb4126e22717c32988498c07f64d7")], now: 1767225600, purpose: X509Purpose.serverAuth)
+	let helloSource = TlsBuiltClientHello.create()
+	report("client12-err-application-data-inside-a-handshake-message", config: config, entropy: entropy, peer: peer, helloSource: helloSource, inbound: ByteArrays from [fromHex("160303022b0200004a0303826cc4517a696d237c0d9b18c5cdc3c4401a1ba7499b3c07f1558d8fd1ad8e7800cca90000220000000000170000ff01000100000b000201000010000b000908687474702f312e310b00016300016000015d3082015930820100a00302010202010a300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3235303630313030303030305a170d3236303630313030303030305a300f310d300b06035504030c046c6561663059301306072a8648ce3d020106082a8648ce3d030107034200040b019cfdb984d032a96907cca9a63888323695b6404a7ddaacc63b5559364f2ca48f2b5d0e1151b6c0b5d17286d9a522cee437c42f410742ebb8493775fc47e9a34d304b300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b0601050507030130160603551d11040f300d820b6578616d706c652e636f6d300a06082a8648ce3d040302034700304402203bc12c6f77062e5eed59186b72a95e9652f4398685b8845ad8112a5085bb7ab602207c9761426fa260535fb0fa49efe2624a1f34e8e04eb43d8f3c72dd072e7361970c00006e03001d2043df2d0542d83d0fd4124aa870cb76b0d8f578e6b2be99465a6b5d5cd8763d68040300463044022000d1e3a56633cfbce9c7b87739dabb2ab22916d66ea854ed5f36aa7c99a82d5e0220279222add4f285311c29985c5474044cbd18a47d4d92902e8090d8295841b34a0e000000"), fromHex("140303000101"), fromHex("16030300201a28eb1b2c074c05328b1a8518ed975302387872bf3be053a6f9c174f2b4d42e"), fromHex("16030300127931590e19712b54ab8f840724ba1acf28ee"), fromHex("17030300145f30fbc2b7e74f14e84839b6fe1ddf8806fa8ca5")], writes: ByteArrays from [fromHex("474554202f20485454502f312e310d0a486f73743a206578616d706c652e636f6d0d0a0d0a")], closeNotify: true)
+end 'vector0'
+
+function vector1()
+	let config = TlsClientConfig.create(X509VerifyHost.named("example.com"), protocols: TlsProtocolArray from [TlsProtocol.tls13, TlsProtocol.tls12], cipherSuites: TlsCipherSuiteCodeArray from [4867, 4865, 4866, 52393, 52392, 49195, 49199, 49196, 49200], groups: TlsGroupCodeArray from [29, 23], keyShareGroups: TlsGroupCodeArray from [29], signatureAlgorithms: TlsSignatureSchemeCodeArray from [1027, 2052, 2055, 1283, 2053, 2054, 1025, 1281, 1537], applicationProtocols: TlsProtocolNameArray from [fromHex("687474702f312e31")], identity: TlsClientIdentity.anonymous)
+	let entropy = TlsClientEntropy.create(fromHex("49c81a5d0216d795819142246e365e5a7d0f57ffdeaddd6405732550cdc17bda"), sessionId: fromHex("194fd8efe6bfe82b2a8e345fefbada256fbc34937db8aa6674a4b4c4c992a321"), keySecrets: TlsKeySecretArray from [secret(29, privateKey: fromHex("60e814c53ca8ca70399ced7a614b7a6896edc73b87e467fb64467675a62b2ebf")), secret(23, privateKey: fromHex("6c3571bbcb9fedba246bbc07dbbf9e5943b54b6dbeba498026092053e3e2b109"))], pssSalt: fromHex("f78c2681a19789e57cb7db87644be4e458488378926da6f4f6732d282304fcd870cb74f8b0ff1093decbb121a5c215b96f7db503907a2341e9a33d35032004e2"))
+	let peer = TlsX509Peer.create(ByteArrays from [fromHex("3082012f3081d6a003020102020101300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a300f310d300b06035504030c04526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000469fd1970f970c21034e836c954aefc78dffef4a3d72650f1ec5e70559cc0663d0722d3408f27d8be5a08ceb432c37b7049cc8758c88c3d85e4db83aa471b62b7a3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d0403020348003045022053bac2d2f62299dd459d79bce22d671aeeb6ee3ed03a2f344be8a8392fd47b3e022100d8f59bc3b1ba00dc51028c7f1b8e99d86d4bb4126e22717c32988498c07f64d7")], now: 1767225600, purpose: X509Purpose.serverAuth)
+	let helloSource = TlsBuiltClientHello.create()
+	report("client12-handshake-message-split-before-application-data", config: config, entropy: entropy, peer: peer, helloSource: helloSource, inbound: ByteArrays from [fromHex("160303022c0200004a03036e0ee3352471483aa9047d5591f5b4f7099d2235997c04235824e833d743e3a500cca90000220000000000170000ff01000100000b000201000010000b000908687474702f312e310b00016300016000015d3082015930820100a00302010202010a300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3235303630313030303030305a170d3236303630313030303030305a300f310d300b06035504030c046c6561663059301306072a8648ce3d020106082a8648ce3d030107034200040b019cfdb984d032a96907cca9a63888323695b6404a7ddaacc63b5559364f2ca48f2b5d0e1151b6c0b5d17286d9a522cee437c42f410742ebb8493775fc47e9a34d304b300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b0601050507030130160603551d11040f300d820b6578616d706c652e636f6d300a06082a8648ce3d040302034700304402203bc12c6f77062e5eed59186b72a95e9652f4398685b8845ad8112a5085bb7ab602207c9761426fa260535fb0fa49efe2624a1f34e8e04eb43d8f3c72dd072e7361970c00006f03001d203d960d53092171c70d63d7b51cb0fc45f36117044a5c4c4f9f712b004235853404030047304502206fd97855922b8349e175c8f77a6740b844e6ee6b7536d3816e87ff8478586249022100907f2896724d92c47fece21e56b749bfaf0f0af1afbcde0c420f0fc7fedcfe3f0e000000"), fromHex("140303000101"), fromHex("1603030020203f78a1abbae064c222cadd901269a6edcd825a541aed6ec406b92ebd14ecc6"), fromHex("1603030012e2b5c63cc965bfdf8fba5e2bf8f10a8f08f7"), fromHex("1603030012a3a0f8121400b3c64aeb0214924b2c5ce2e5"), fromHex("17030300147ceb6b80b64d8a469fc2479c3407ca691b83a730"), fromHex("17030300388dd36ef664c2375d4535c397ece04bb239d3f22f41454b39909de50eea6834c937c1f5e2cb9a40e76cff888699471e9648f64c069b8496af"), fromHex("1503030012bc8a423467a97ff07a5ba7a9d1887ee7df0e")], writes: ByteArrays from [fromHex("474554202f20485454502f312e310d0a486f73743a206578616d706c652e636f6d0d0a0d0a")], closeNotify: true)
+end 'vector1'
+
+function main() returns ExitCode
+	vector0()
+	vector1()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+client12-err-application-data-inside-a-handshake-message unexpectedMessage
+client12-handshake-message-split-before-application-data {"state":"connected","version":771,"cipher_suite":52393,"group":29,"alpn_protocol_hex":"687474702f312e31","outbound_records_hex":["16030100e6010000e2030349c81a5d0216d795819142246e365e5a7d0f57ffdeaddd6405732550cdc17bda20194fd8efe6bfe82b2a8e345fefbada256fbc34937db8aa6674a4b4c4c992a3210012130313011302cca9cca8c02bc02fc02cc0300100008700000010000e00000b6578616d706c652e636f6d00170000ff01000100000a00060004001d0017000b00020100000d001400120403080408070503080508060401050106010010000b000908687474702f312e31003300260024001d0020985bf39c978da78b490f0e8b6a2effa9859c093c94d1fd937069cfd97ad8db2f002b00050403040303","16030300251000002120985bf39c978da78b490f0e8b6a2effa9859c093c94d1fd937069cfd97ad8db2f","140303000101","1603030020ef8b2a6182ded8f60ac48c1dd80c77a11cb5859a1e0b23d7124827e6639a7a71","1703030035af5a6cb2e725972d296d3a8faede7b05c5dc192b0754cad9410036cba764c847cefb9e682aeee4cc5b2a9b876b6c3862b3b5848b5d","1503030012cf146921ea8e4a3e6069c9a449304ecfdbe4","1503030012dcc1eee737b82fb7b88f4fe4de10f490e8b0"],"received_application_data_hex":"6c617465485454502f312e3120323030204f4b0d0a436f6e74656e742d4c656e6774683a20320d0a0d0a6f6b","peer_closed":true,"peer_authenticated":true}
+```
+
+<!-- test: tls12-handshake.useless-records -->
+<!-- tier: stdlib -->
+Records that advance nothing are limited to 16 in a row: sixteen warning alerts before the server's change_cipher_spec, and sixteen HelloRequests in the server flight, are skipped and a seventeenth of either is UnexpectedMessage; application data between two runs of sixteen warnings restarts the count.
+```maxon
+function digit(symbol Byte) returns Byte
+	if symbol >= 0x61 'letter'
+		return symbol - 0x57
+	end 'letter'
+
+	return symbol - 0x30
+end 'digit'
+
+function fromHex(hex String) returns ByteArray
+	var bytes = ByteArray.create()
+	var high = 0 as Byte
+	var isHigh = true
+
+	for symbol in hex.bytes() 'eachSymbol'
+		if isHigh 'first'
+			high = digit(symbol)
+		end 'first' else 'second'
+			bytes.push(high * 16 + digit(symbol))
+		end 'second'
+
+		isHigh = not isHigh
+	end 'eachSymbol'
+
+	return bytes
+end 'fromHex'
+
+function toHex(bytes ByteArray) returns String
+	var text = ""
+
+	for byte in bytes 'eachByte'
+		text.append("{byte:02x}")
+	end 'eachByte'
+
+	return text
+end 'toHex'
+
+function secret(group TlsGroupCode, privateKey ByteArray) returns TlsKeySecret
+	return try TlsKeySecret.create(group, privateKey: privateKey) otherwise panic("a canra private key was refused")
+end 'secret'
+
+typealias TextArray = Array with String
+
+function joined(items TextArray) returns String
+	var text = ""
+
+	for (iter, item) in items.withIterator() 'eachItem'
+		if iter.index() > 0 'separator'
+			text.append(",")
+		end 'separator'
+
+		text.append(item)
+	end 'eachItem'
+
+	return "[{text}]"
+end 'joined'
+
+function renderRecords(records ByteArrays) returns String
+	var texts = TextArray.create()
+
+	for record in records 'eachRecord'
+		texts.push("\"{toHex(record)}\"")
+	end 'eachRecord'
+
+	return joined(texts)
+end 'renderRecords'
+
+function renderVersion(negotiation TlsNegotiation) returns String
+	return match negotiation 'negotiation'
+		pending gives "null"
+		accepted or
+		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
+	end 'negotiation'
+end 'renderVersion'
+
+function renderSuite(negotiation TlsNegotiation) returns String
+	return match negotiation 'negotiation'
+		pending gives "null"
+		accepted(suite) gives "{suite.rawValue}"
+		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
+	end 'negotiation'
+end 'renderSuite'
+
+function renderGroup(negotiation TlsNegotiation) returns String
+	return match negotiation 'negotiation'
+		pending or
+		accepted or
+		accepted12 gives "null"
+		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
+	end 'negotiation'
+end 'renderGroup'
+
+function renderAlpn(alpn TlsAlpnChoice) returns String
+	return match alpn 'alpn'
+		absent gives "null"
+		negotiated(protocol) gives "\"{toHex(protocol)}\""
+	end 'alpn'
+end 'renderAlpn'
+
+function renderTrace(trace TlsReplayTrace) returns String
+	let state = "connected" if trace.connected else "handshaking"
+
+	return "\{\"state\":\"{state}\",\"version\":{renderVersion(trace.negotiation)},\"cipher_suite\":{renderSuite(trace.negotiation)},\"group\":{renderGroup(trace.negotiation)},\"alpn_protocol_hex\":{renderAlpn(trace.alpn)},\"outbound_records_hex\":{renderRecords(trace.outbound)},\"received_application_data_hex\":\"{toHex(trace.received)}\",\"peer_closed\":{trace.peerClosed},\"peer_authenticated\":{trace.peerAuthenticated}\}"
+end 'renderTrace'
+
+function report(id String, config TlsClientConfig, entropy TlsClientEntropy, peer TlsPeerAuthenticator, helloSource TlsClientHelloSource, inbound ByteArrays, writes ByteArrays, closeNotify bool)
+	if let trace = try TlsClientReplay.run(config, entropy: entropy, peer: peer, helloSource: helloSource, inbound: inbound, writes: writes, closeNotify: closeNotify) 'replayed'
+		print("{id} {renderTrace(trace)}\n")
+	end 'replayed' else (failure) 'refused'
+		print("{id} {failure}\n")
+	end 'refused'
+end 'report'
+
+function vector0()
+	let config = TlsClientConfig.create(X509VerifyHost.named("example.com"), protocols: TlsProtocolArray from [TlsProtocol.tls13, TlsProtocol.tls12], cipherSuites: TlsCipherSuiteCodeArray from [4867, 4865, 4866, 52393, 52392, 49195, 49199, 49196, 49200], groups: TlsGroupCodeArray from [29, 23], keyShareGroups: TlsGroupCodeArray from [29], signatureAlgorithms: TlsSignatureSchemeCodeArray from [1027, 2052, 2055, 1283, 2053, 2054, 1025, 1281, 1537], applicationProtocols: TlsProtocolNameArray from [fromHex("687474702f312e31")], identity: TlsClientIdentity.anonymous)
+	let entropy = TlsClientEntropy.create(fromHex("503d1e126d252dc5a293ed3ce65f058318de00df420b54aba7bc231f44d175ec"), sessionId: fromHex("283a7b9ae2a34920a416baeed01cb437e8d256b1768ee889059a66c3d6c3f780"), keySecrets: TlsKeySecretArray from [secret(29, privateKey: fromHex("7826df91b351a8956e5e8e7b1917d124ecf33379b8de6bfdce3b31aacc94e31e")), secret(23, privateKey: fromHex("c2595c2b1f1eaa24c6ee2e460d11b34516c0e39a5f391211c84b8b179d4982c5"))], pssSalt: fromHex("d114cab2f9f801e0bb2cf353f896cb946c70b9811d57f4a2e2b61352c95bfdaf5b92c3156685374f4aff15e3d8d2cc475c355000fa6e5b218cfb71e901f17e14"))
+	let peer = TlsX509Peer.create(ByteArrays from [fromHex("3082012f3081d6a003020102020101300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a300f310d300b06035504030c04526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000469fd1970f970c21034e836c954aefc78dffef4a3d72650f1ec5e70559cc0663d0722d3408f27d8be5a08ceb432c37b7049cc8758c88c3d85e4db83aa471b62b7a3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d0403020348003045022053bac2d2f62299dd459d79bce22d671aeeb6ee3ed03a2f344be8a8392fd47b3e022100d8f59bc3b1ba00dc51028c7f1b8e99d86d4bb4126e22717c32988498c07f64d7")], now: 1767225600, purpose: X509Purpose.serverAuth)
+	let helloSource = TlsBuiltClientHello.create()
+	report("client12-ignored-alerts-at-the-limit", config: config, entropy: entropy, peer: peer, helloSource: helloSource, inbound: ByteArrays from [fromHex("160303022b0200004a0303b1570c2943ba06cc68e39eec82d7ab473e1d110c8d436fd1141be9894d26bd2300cca90000220000000000170000ff01000100000b000201000010000b000908687474702f312e310b00016300016000015d3082015930820100a00302010202010a300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3235303630313030303030305a170d3236303630313030303030305a300f310d300b06035504030c046c6561663059301306072a8648ce3d020106082a8648ce3d030107034200040b019cfdb984d032a96907cca9a63888323695b6404a7ddaacc63b5559364f2ca48f2b5d0e1151b6c0b5d17286d9a522cee437c42f410742ebb8493775fc47e9a34d304b300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b0601050507030130160603551d11040f300d820b6578616d706c652e636f6d300a06082a8648ce3d040302034700304402203bc12c6f77062e5eed59186b72a95e9652f4398685b8845ad8112a5085bb7ab602207c9761426fa260535fb0fa49efe2624a1f34e8e04eb43d8f3c72dd072e7361970c00006e03001d20b4e2c6d89a6888c69bbb2807f260770e899608d333e6826d739063a092a76c4a04030046304402205e574de3a0ce33a89e7a9c48dee5266875718717854d1b4c8b3b8e3aba91c7c202203920ebeba3844ccff14d663c546856e94c3c75916b5369a7a7ee9078545332010e000000"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("140303000101"), fromHex("16030300202c7740fd19a29285379c3f21aa8ebfadb77a91b7f21fd5e8d7a4f2ba9c8baf46"), fromHex("17030300383e2fc59111a1c0118b6ac8706d0880c6208099bf5e6deae23e60440b96bbb93dc895494e48303cf116b7940df37a362284be607989fa9cd1"), fromHex("1503030012d9067099d858275a5e6463e9417f91aba7a7")], writes: ByteArrays from [fromHex("474554202f20485454502f312e310d0a486f73743a206578616d706c652e636f6d0d0a0d0a")], closeNotify: true)
+end 'vector0'
+
+function vector1()
+	let config = TlsClientConfig.create(X509VerifyHost.named("example.com"), protocols: TlsProtocolArray from [TlsProtocol.tls13, TlsProtocol.tls12], cipherSuites: TlsCipherSuiteCodeArray from [4867, 4865, 4866, 52393, 52392, 49195, 49199, 49196, 49200], groups: TlsGroupCodeArray from [29, 23], keyShareGroups: TlsGroupCodeArray from [29], signatureAlgorithms: TlsSignatureSchemeCodeArray from [1027, 2052, 2055, 1283, 2053, 2054, 1025, 1281, 1537], applicationProtocols: TlsProtocolNameArray from [fromHex("687474702f312e31")], identity: TlsClientIdentity.anonymous)
+	let entropy = TlsClientEntropy.create(fromHex("14d20ea99ff18392066e424fe201bf282ec9f6511fb8ea642974f04e82243a74"), sessionId: fromHex("85373823c0070384d73786c50aaefcb0d0476d3a15d30e13f93469615c23e964"), keySecrets: TlsKeySecretArray from [secret(29, privateKey: fromHex("308e52386b4784e6e5b4cdc929458ad04ac400e87898dcce465d4460c110a9d1")), secret(23, privateKey: fromHex("9cc38dddbc73db3e5970cb3ce39fbaaeedf1f984398b6bbe127a7cbbc5fe8f1f"))], pssSalt: fromHex("5bdfe3b98b941e2cd13791f64af1a6a5194d1f1c00553b879268ac5c2ac15474db7c95851bb14749d56b90f9fe4f8984191c22826fb4351d26244abf18faa342"))
+	let peer = TlsX509Peer.create(ByteArrays from [fromHex("3082012f3081d6a003020102020101300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a300f310d300b06035504030c04526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000469fd1970f970c21034e836c954aefc78dffef4a3d72650f1ec5e70559cc0663d0722d3408f27d8be5a08ceb432c37b7049cc8758c88c3d85e4db83aa471b62b7a3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d0403020348003045022053bac2d2f62299dd459d79bce22d671aeeb6ee3ed03a2f344be8a8392fd47b3e022100d8f59bc3b1ba00dc51028c7f1b8e99d86d4bb4126e22717c32988498c07f64d7")], now: 1767225600, purpose: X509Purpose.serverAuth)
+	let helloSource = TlsBuiltClientHello.create()
+	report("client12-err-too-many-ignored-alerts", config: config, entropy: entropy, peer: peer, helloSource: helloSource, inbound: ByteArrays from [fromHex("160303022b0200004a03034d51856de15f809dd67be98d037dc53a789b7906104696ae63ab4092697784f300cca90000220000000000170000ff01000100000b000201000010000b000908687474702f312e310b00016300016000015d3082015930820100a00302010202010a300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3235303630313030303030305a170d3236303630313030303030305a300f310d300b06035504030c046c6561663059301306072a8648ce3d020106082a8648ce3d030107034200040b019cfdb984d032a96907cca9a63888323695b6404a7ddaacc63b5559364f2ca48f2b5d0e1151b6c0b5d17286d9a522cee437c42f410742ebb8493775fc47e9a34d304b300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b0601050507030130160603551d11040f300d820b6578616d706c652e636f6d300a06082a8648ce3d040302034700304402203bc12c6f77062e5eed59186b72a95e9652f4398685b8845ad8112a5085bb7ab602207c9761426fa260535fb0fa49efe2624a1f34e8e04eb43d8f3c72dd072e7361970c00006e03001d20e1e8e2e26112f7417d09aa25be5922a4e5a23e3ef2859671e1060ae73acfdc1704030046304402202d68e6d0f234f26ce096a76be15534114d1b24c68f63090aca180169001fb9ea02207bbd862600391181e5e6c167d9bc0be47741890ec99eafa535b8a9f0007a980f0e000000"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170"), fromHex("15030300020170")], writes: ByteArrays from [fromHex("474554202f20485454502f312e310d0a486f73743a206578616d706c652e636f6d0d0a0d0a")], closeNotify: true)
+end 'vector1'
+
+function vector2()
+	let config = TlsClientConfig.create(X509VerifyHost.named("example.com"), protocols: TlsProtocolArray from [TlsProtocol.tls13, TlsProtocol.tls12], cipherSuites: TlsCipherSuiteCodeArray from [4867, 4865, 4866, 52393, 52392, 49195, 49199, 49196, 49200], groups: TlsGroupCodeArray from [29, 23], keyShareGroups: TlsGroupCodeArray from [29], signatureAlgorithms: TlsSignatureSchemeCodeArray from [1027, 2052, 2055, 1283, 2053, 2054, 1025, 1281, 1537], applicationProtocols: TlsProtocolNameArray from [fromHex("687474702f312e31")], identity: TlsClientIdentity.anonymous)
+	let entropy = TlsClientEntropy.create(fromHex("a1b6d8f897eaf3a13870384a474a81036b1b202d9147b9b5eb42137766123fc4"), sessionId: fromHex("1253350f855a2192e77d0e3993ed44da53f430d22f6c25eb823c9e46ed44c919"), keySecrets: TlsKeySecretArray from [secret(29, privateKey: fromHex("195ced02283d0fcf9ccbc4b0b6530c70eaf4fca7d725d64b8da9de923fc0b98b")), secret(23, privateKey: fromHex("a2d54629d6e9f4f9cea7d27f70cc71f9584f6c61512338af2cd7d7fcc078aa34"))], pssSalt: fromHex("bc6984025126d369bfa1b33dac0152205f93638d5fd338ddfbfd1c47437eb298931be9e5e6ccc149af960c2608fb0f30a5bb426ccf39d2f5552fbea9768cfdf2"))
+	let peer = TlsX509Peer.create(ByteArrays from [fromHex("3082012f3081d6a003020102020101300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a300f310d300b06035504030c04526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000469fd1970f970c21034e836c954aefc78dffef4a3d72650f1ec5e70559cc0663d0722d3408f27d8be5a08ceb432c37b7049cc8758c88c3d85e4db83aa471b62b7a3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d0403020348003045022053bac2d2f62299dd459d79bce22d671aeeb6ee3ed03a2f344be8a8392fd47b3e022100d8f59bc3b1ba00dc51028c7f1b8e99d86d4bb4126e22717c32988498c07f64d7")], now: 1767225600, purpose: X509Purpose.serverAuth)
+	let helloSource = TlsBuiltClientHello.create()
+	report("client12-hello-requests-at-the-limit", config: config, entropy: entropy, peer: peer, helloSource: helloSource, inbound: ByteArrays from [fromHex("160303026c0200004a0303959647698515114a6b410556311f2119fb3d2d30a774dfa9be81088c8ef6aeb800cca90000220000000000170000ff01000100000b000201000010000b000908687474702f312e31000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000b00016300016000015d3082015930820100a00302010202010a300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3235303630313030303030305a170d3236303630313030303030305a300f310d300b06035504030c046c6561663059301306072a8648ce3d020106082a8648ce3d030107034200040b019cfdb984d032a96907cca9a63888323695b6404a7ddaacc63b5559364f2ca48f2b5d0e1151b6c0b5d17286d9a522cee437c42f410742ebb8493775fc47e9a34d304b300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b0601050507030130160603551d11040f300d820b6578616d706c652e636f6d300a06082a8648ce3d040302034700304402203bc12c6f77062e5eed59186b72a95e9652f4398685b8845ad8112a5085bb7ab602207c9761426fa260535fb0fa49efe2624a1f34e8e04eb43d8f3c72dd072e7361970c00006f03001d20c3dc9bd1bd97210c0595ee79f7919a9da9433a3b5dfbc1a70d0e6ea45e71fb330403004730450220352294c3c90d2953aa7dbe1e4646bea595bb240720fdf63cfe283d31663eb46302210094f57c92990f12b9a5b83617a1eb95cba3c77fc5887f34b213e5e8b499610ade0e000000"), fromHex("140303000101"), fromHex("16030300205ad3942f52aa8e9b9eb6a785896b6311c47540731f2d180ee69bb7dd4eb650e0"), fromHex("1703030038602ef128268b4d63967079375224f457738560887cd61aacf20baaf95e2528bf85d6cfd2ea4c72f5a2ff0dba125108b055ea24b2a55db0a2"), fromHex("1503030012d72ca422226b25e98de604d2b678d5192086")], writes: ByteArrays from [fromHex("474554202f20485454502f312e310d0a486f73743a206578616d706c652e636f6d0d0a0d0a")], closeNotify: true)
+end 'vector2'
+
+function vector3()
+	let config = TlsClientConfig.create(X509VerifyHost.named("example.com"), protocols: TlsProtocolArray from [TlsProtocol.tls13, TlsProtocol.tls12], cipherSuites: TlsCipherSuiteCodeArray from [4867, 4865, 4866, 52393, 52392, 49195, 49199, 49196, 49200], groups: TlsGroupCodeArray from [29, 23], keyShareGroups: TlsGroupCodeArray from [29], signatureAlgorithms: TlsSignatureSchemeCodeArray from [1027, 2052, 2055, 1283, 2053, 2054, 1025, 1281, 1537], applicationProtocols: TlsProtocolNameArray from [fromHex("687474702f312e31")], identity: TlsClientIdentity.anonymous)
+	let entropy = TlsClientEntropy.create(fromHex("a5af20498782c64cfff09c7dbba2d0fe2fad177f3f7bea257212fc0f2b286e79"), sessionId: fromHex("b4649ed5e359bd93396bcad3c0e6b5f9abd6a159a3fa6cc4b2b4bb657e2ce210"), keySecrets: TlsKeySecretArray from [secret(29, privateKey: fromHex("6d9a255ab1ede09409d7df360e38b0b78f11747c4979a79fb730683354a43288")), secret(23, privateKey: fromHex("5c56f47480770b049e32d35c0d709f053fdeedba3bb7c918d5e829d12599bb15"))], pssSalt: fromHex("2d5794d71f68c6615b25ec202d504aea3b807e82f885571e3331162e9e643c1976626140707809e6b02faae261fffc8ef17b53f92475b9942d8703ad5cc744d6"))
+	let peer = TlsX509Peer.create(ByteArrays from [fromHex("3082012f3081d6a003020102020101300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a300f310d300b06035504030c04526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000469fd1970f970c21034e836c954aefc78dffef4a3d72650f1ec5e70559cc0663d0722d3408f27d8be5a08ceb432c37b7049cc8758c88c3d85e4db83aa471b62b7a3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d0403020348003045022053bac2d2f62299dd459d79bce22d671aeeb6ee3ed03a2f344be8a8392fd47b3e022100d8f59bc3b1ba00dc51028c7f1b8e99d86d4bb4126e22717c32988498c07f64d7")], now: 1767225600, purpose: X509Purpose.serverAuth)
+	let helloSource = TlsBuiltClientHello.create()
+	report("client12-err-too-many-hello-requests", config: config, entropy: entropy, peer: peer, helloSource: helloSource, inbound: ByteArrays from [fromHex("160303026f0200004a030340bdc923aebc55cb4d7217931ad2c67ab26129831c993b7e0391f45dc04207f800cca90000220000000000170000ff01000100000b000201000010000b000908687474702f312e3100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000b00016300016000015d3082015930820100a00302010202010a300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3235303630313030303030305a170d3236303630313030303030305a300f310d300b06035504030c046c6561663059301306072a8648ce3d020106082a8648ce3d030107034200040b019cfdb984d032a96907cca9a63888323695b6404a7ddaacc63b5559364f2ca48f2b5d0e1151b6c0b5d17286d9a522cee437c42f410742ebb8493775fc47e9a34d304b300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b0601050507030130160603551d11040f300d820b6578616d706c652e636f6d300a06082a8648ce3d040302034700304402203bc12c6f77062e5eed59186b72a95e9652f4398685b8845ad8112a5085bb7ab602207c9761426fa260535fb0fa49efe2624a1f34e8e04eb43d8f3c72dd072e7361970c00006e03001d206642a861f541290cad846a4201e81ff916f6e6574de084f306d0ddd3b09b5d3b040300463044022009acd83529eef7291e4edd24b603d973cfcc676478953f11dfde8d01099ede6602203c768f003d47901f8e8cf264990cbfed588ecbedf57f2e776837d25a265e29280e000000")], writes: ByteArrays from [fromHex("474554202f20485454502f312e310d0a486f73743a206578616d706c652e636f6d0d0a0d0a")], closeNotify: true)
+end 'vector3'
+
+function vector4()
+	let config = TlsClientConfig.create(X509VerifyHost.named("example.com"), protocols: TlsProtocolArray from [TlsProtocol.tls13, TlsProtocol.tls12], cipherSuites: TlsCipherSuiteCodeArray from [4867, 4865, 4866, 52393, 52392, 49195, 49199, 49196, 49200], groups: TlsGroupCodeArray from [29, 23], keyShareGroups: TlsGroupCodeArray from [29], signatureAlgorithms: TlsSignatureSchemeCodeArray from [1027, 2052, 2055, 1283, 2053, 2054, 1025, 1281, 1537], applicationProtocols: TlsProtocolNameArray from [fromHex("687474702f312e31")], identity: TlsClientIdentity.anonymous)
+	let entropy = TlsClientEntropy.create(fromHex("401a861e86fc52573f0ac2e1f619af92432f901fe0d6d7607263882fecbd0b6e"), sessionId: fromHex("f76aefae9cc5ac3c17bbd39316abd542c0834e16d7194c60209387dad394f794"), keySecrets: TlsKeySecretArray from [secret(29, privateKey: fromHex("1f61aae869c607187ae851fe2a58bb8c0ae0c313aea200fbe998ad5e54117216")), secret(23, privateKey: fromHex("1c9fd5482c538038e866aecd02aeeceef6c6f1b737bc61f153e926a2ed59bee5"))], pssSalt: fromHex("d4e5ff9d3ed80918a508cd8b77c81e75a039fa865049aa8fd40e4ef6c143061d596fed639c23703d9921e95fca869bc09eb5b47b898a4011cb3e3dcb32a87c4f"))
+	let peer = TlsX509Peer.create(ByteArrays from [fromHex("3082012f3081d6a003020102020101300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a300f310d300b06035504030c04526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000469fd1970f970c21034e836c954aefc78dffef4a3d72650f1ec5e70559cc0663d0722d3408f27d8be5a08ceb432c37b7049cc8758c88c3d85e4db83aa471b62b7a3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d0403020348003045022053bac2d2f62299dd459d79bce22d671aeeb6ee3ed03a2f344be8a8392fd47b3e022100d8f59bc3b1ba00dc51028c7f1b8e99d86d4bb4126e22717c32988498c07f64d7")], now: 1767225600, purpose: X509Purpose.serverAuth)
+	let helloSource = TlsBuiltClientHello.create()
+	report("client12-ignored-alerts-restart-after-application-data", config: config, entropy: entropy, peer: peer, helloSource: helloSource, inbound: ByteArrays from [fromHex("160303022d0200004a0303bd0fe73ce315ae53be50207b7c80aaed6afd885cffd556c6a444fa9681c80d3200cca90000220000000000170000ff01000100000b000201000010000b000908687474702f312e310b00016300016000015d3082015930820100a00302010202010a300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3235303630313030303030305a170d3236303630313030303030305a300f310d300b06035504030c046c6561663059301306072a8648ce3d020106082a8648ce3d030107034200040b019cfdb984d032a96907cca9a63888323695b6404a7ddaacc63b5559364f2ca48f2b5d0e1151b6c0b5d17286d9a522cee437c42f410742ebb8493775fc47e9a34d304b300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b0601050507030130160603551d11040f300d820b6578616d706c652e636f6d300a06082a8648ce3d040302034700304402203bc12c6f77062e5eed59186b72a95e9652f4398685b8845ad8112a5085bb7ab602207c9761426fa260535fb0fa49efe2624a1f34e8e04eb43d8f3c72dd072e7361970c00007003001d20cc12f3ff914dd9f1316944627eea5bd58df380ab56a86fdaa83af1fc75992467040300483046022100e102129849c0ab4aad1e188f89bf1934f87c1ef373c7ddde0130d18e29ce9a1a0221008d3f44128a9240ce37dc0f8927ee8db253bd51b44b67d20f85ee111156a5b8070e000000"), fromHex("140303000101"), fromHex("16030300201286dd14bc23659510f4b376773c3edd378cf748170948abb92eb25d7e94f7e5"), fromHex("150303001251610436eb99dc92ae3e524dcc9624a2e62d"), fromHex("15030300128f3302dc26af94201d6a8e0ef4ddcf78af0a"), fromHex("1503030012027efeeb1fa7251e5ac01224941505539896"), fromHex("1503030012259249f8645e81d9908c0d210c47a33c011d"), fromHex("15030300129e8adedfba71e935c74e5b15b5d4d0227ad9"), fromHex("1503030012e6b3c7a58eb61b91f3705e1a3188a934f607"), fromHex("1503030012104be17b162447141c997d03b1273307c7f6"), fromHex("1503030012d2bd809e60753a954955a7d0a555097b18d5"), fromHex("1503030012312e3a8251f5c7543ef135eb7082ae94a199"), fromHex("1503030012c9abd8222cf4b73145df39ba9a515390b996"), fromHex("1503030012c5ed48c2c30b861388be7d45f361a680e230"), fromHex("1503030012db0555fbb54639ccabd5f61905cac17d274f"), fromHex("150303001275d855deab9322f6b58e595ad626b9fbae1d"), fromHex("150303001239b0e7cdec0d43fb7017c526a3395630c71f"), fromHex("150303001274fa04031ad5ddd3e1da886287b453e99050"), fromHex("150303001261aeb5aa6a671c8c0cae38ee6dfde599580f"), fromHex("17030300143aabba650561a06c8c43e6d0521bbd175d1bf8a3"), fromHex("150303001271d2b0097313c43368b2b21a6ef522b1ffac"), fromHex("1503030012211c58f13b84ee15636c43a4fa28a4661186"), fromHex("15030300122c8d356a20eb6087fe66025504ad5328a41d"), fromHex("1503030012f4c39752376d24b5ffe07e2a42720f4a2252"), fromHex("1503030012e7a8b91ff21971c7b88baf71b4329364481e"), fromHex("1503030012f04c1c45c63cb2e5c9eb325e845873724ea4"), fromHex("1503030012117a2407251b5ba7d4e4aba8ccd29d67b491"), fromHex("15030300123599a119b436291590fda407d104ce28d1ef"), fromHex("15030300128694bcfdfa592bebba249b3a3b568b9231c5"), fromHex("1503030012b5ee73008c9f98b6ed3cf18737fc0e036397"), fromHex("15030300126c491cf556e237c44212f9ab36ea64deac19"), fromHex("15030300121e29ebc272707caeeb612867f963824b9802"), fromHex("150303001293c8c4dffc8f48f175c8142c6824e1b6a0a1"), fromHex("150303001276efd06569a78f62d588851e72856576d45e"), fromHex("1503030012b6f40b4a265b42440ab454b42fb3d2f18cf8"), fromHex("15030300122a438c76e0b2194234c490623dc5f2896a2d"), fromHex("170303003853dc57239450138bd5b50c3650c2437e9d0ebb1c3634eccfa0d0d7e27ba1d3306d54b2fbed9077ddb95ec47895a931d8d61cc32bff85cecf"), fromHex("15030300123f404273792ab032d7217ace46a68e224daf")], writes: ByteArrays from [fromHex("474554202f20485454502f312e310d0a486f73743a206578616d706c652e636f6d0d0a0d0a")], closeNotify: true)
+end 'vector4'
+
+function main() returns ExitCode
+	vector0()
+	vector1()
+	vector2()
+	vector3()
+	vector4()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+client12-ignored-alerts-at-the-limit {"state":"connected","version":771,"cipher_suite":52393,"group":29,"alpn_protocol_hex":"687474702f312e31","outbound_records_hex":["16030100e6010000e20303503d1e126d252dc5a293ed3ce65f058318de00df420b54aba7bc231f44d175ec20283a7b9ae2a34920a416baeed01cb437e8d256b1768ee889059a66c3d6c3f7800012130313011302cca9cca8c02bc02fc02cc0300100008700000010000e00000b6578616d706c652e636f6d00170000ff01000100000a00060004001d0017000b00020100000d001400120403080408070503080508060401050106010010000b000908687474702f312e31003300260024001d0020039e10fe9e493ecafb372d02d958cf0c69e23a508b876ef0a49b195aa7658333002b00050403040303","16030300251000002120039e10fe9e493ecafb372d02d958cf0c69e23a508b876ef0a49b195aa7658333","140303000101","16030300200c47a6abe78ae1468ce46c1bddac15b4ce543c956007eb70db94ed0cffc9d94e","17030300351a70dd768392b01eee42806ea2e579867a3eefb72c91998f8fe4fa5c892b9e133ddf3328bcc89aab579b56349cb17f0e35d182b934","15030300125c1e0d50dbd0e68a8625361f464791b4bb39"],"received_application_data_hex":"485454502f312e3120323030204f4b0d0a436f6e74656e742d4c656e6774683a20320d0a0d0a6f6b","peer_closed":true,"peer_authenticated":true}
+client12-err-too-many-ignored-alerts unexpectedMessage
+client12-hello-requests-at-the-limit {"state":"connected","version":771,"cipher_suite":52393,"group":29,"alpn_protocol_hex":"687474702f312e31","outbound_records_hex":["16030100e6010000e20303a1b6d8f897eaf3a13870384a474a81036b1b202d9147b9b5eb42137766123fc4201253350f855a2192e77d0e3993ed44da53f430d22f6c25eb823c9e46ed44c9190012130313011302cca9cca8c02bc02fc02cc0300100008700000010000e00000b6578616d706c652e636f6d00170000ff01000100000a00060004001d0017000b00020100000d001400120403080408070503080508060401050106010010000b000908687474702f312e31003300260024001d00207aa724fc9116089964379435dd6a24ad541acc6f83740153f47b3bb238ccef26002b00050403040303","160303002510000021207aa724fc9116089964379435dd6a24ad541acc6f83740153f47b3bb238ccef26","140303000101","1603030020b2b723a6f012c5bbb669d37f858cbc9f300ccfe57d3e0c413b5ca0cedabcfbe6","1703030035e247dc61b29b4bbe26fed7577efb76c1dde78729a34e2ca950e4508cbfb590dbd0af58a266e13ae238aeeb9891538b5ac8a75193aa","1503030012bf3c63715b3e7e10d13245baf76d49085034"],"received_application_data_hex":"485454502f312e3120323030204f4b0d0a436f6e74656e742d4c656e6774683a20320d0a0d0a6f6b","peer_closed":true,"peer_authenticated":true}
+client12-err-too-many-hello-requests unexpectedMessage
+client12-ignored-alerts-restart-after-application-data {"state":"connected","version":771,"cipher_suite":52393,"group":29,"alpn_protocol_hex":"687474702f312e31","outbound_records_hex":["16030100e6010000e20303401a861e86fc52573f0ac2e1f619af92432f901fe0d6d7607263882fecbd0b6e20f76aefae9cc5ac3c17bbd39316abd542c0834e16d7194c60209387dad394f7940012130313011302cca9cca8c02bc02fc02cc0300100008700000010000e00000b6578616d706c652e636f6d00170000ff01000100000a00060004001d0017000b00020100000d001400120403080408070503080508060401050106010010000b000908687474702f312e31003300260024001d0020eed9a79ddbb3ed0ce2b8b3560c6e0d94c2eb0c33d375bb90e1a77886c53de158002b00050403040303","16030300251000002120eed9a79ddbb3ed0ce2b8b3560c6e0d94c2eb0c33d375bb90e1a77886c53de158","140303000101","16030300201459ee1cb976951c5650ddb5e2ebab7c6a203b7d10e6db53c6fd363d8641d6fa","1703030035050e0378b9ede36f0fe57d69839d62309c775347d055b1f7eeac942208a84ce31781b680b0eda4dc68a72539cb9a0b241dea146ea5","1503030012c05f7eeea35f925320912ed5785f01c0262d"],"received_application_data_hex":"6c617465485454502f312e3120323030204f4b0d0a436f6e74656e742d4c656e6774683a20320d0a0d0a6f6b","peer_closed":true,"peer_authenticated":true}
+```
+
 <!-- test: tls12-handshake.reference-handshakes-the-canra-vectors-do-not-list -->
 <!-- tier: stdlib -->
 Handshakes made with the canra reference server and checked by the canra reference client, for shapes the canra vectors do not reach: a HelloRequest between the server flight's messages, which is skipped and not hashed, a server flight in 64-byte records, a session id the server assigns, a warning alert before the change_cipher_spec and one after the handshake, which are ignored, application data written in fragments of 16384 bytes with an empty write between under AES-GCM and under ChaCha20-Poly1305, records after close_notify, which are ignored unread, and a client that offers no ALPN protocol, and a ServerHello without renegotiation_info, which is accepted.

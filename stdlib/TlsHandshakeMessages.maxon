@@ -39,6 +39,76 @@ module function tlsDecodeClientHello(raw ByteArray) returns TlsClientHello throw
 	end 'message'
 end 'tlsDecodeClientHello'
 
+module function tlsDecodeFinished(raw ByteArray, protocol TlsProtocol) returns ByteArray throws TlsHandshakeError
+	let message = try tlsDecodeAllowing(raw, protocol: protocol, allowed: TlsHandshakeTypeArray from [TlsHandshakeType.finished])
+
+	match message 'message'
+		finished(verifyData) then return verifyData
+		default throws TlsHandshakeError.internalError
+	end 'message'
+end 'tlsDecodeFinished'
+
+module function tlsDecodeCertificateVerify(raw ByteArray, protocol TlsProtocol) returns (TlsSignatureSchemeCode, ByteArray) throws TlsHandshakeError
+	let message = try tlsDecodeAllowing(raw, protocol: protocol, allowed: TlsHandshakeTypeArray from [TlsHandshakeType.certificateVerify])
+
+	match message 'message'
+		certificateVerify(code, signature) then return (code, signature)
+		default throws TlsHandshakeError.internalError
+	end 'message'
+end 'tlsDecodeCertificateVerify'
+
+module function tlsDecodeEncryptedExtensions(raw ByteArray) returns TlsExtensionArray throws TlsHandshakeError
+	let message = try tlsDecodeAllowing(raw, protocol: TlsProtocol.tls13, allowed: TlsHandshakeTypeArray from [TlsHandshakeType.encryptedExtensions])
+
+	match message 'message'
+		encryptedExtensions(extensions) then return extensions
+		default throws TlsHandshakeError.internalError
+	end 'message'
+end 'tlsDecodeEncryptedExtensions'
+
+module function tlsDecodeTls13Certificate(raw ByteArray) returns (ByteArray, TlsCertificateEntryArray) throws TlsHandshakeError
+	let message = try tlsDecodeAllowing(raw, protocol: TlsProtocol.tls13, allowed: TlsHandshakeTypeArray from [TlsHandshakeType.certificate])
+
+	match message 'message'
+		tls13Certificate(context, entries) then return (context, entries)
+		default throws TlsHandshakeError.internalError
+	end 'message'
+end 'tlsDecodeTls13Certificate'
+
+module function tlsDecodeTls12Certificate(raw ByteArray) returns ByteArrays throws TlsHandshakeError
+	let message = try tlsDecodeAllowing(raw, protocol: TlsProtocol.tls12, allowed: TlsHandshakeTypeArray from [TlsHandshakeType.certificate])
+
+	match message 'message'
+		tls12Certificate(certificates) then return certificates
+		default throws TlsHandshakeError.internalError
+	end 'message'
+end 'tlsDecodeTls12Certificate'
+
+module function tlsDecodeClientKeyExchange(raw ByteArray) returns ByteArray throws TlsHandshakeError
+	let message = try tlsDecodeAllowing(raw, protocol: TlsProtocol.tls12, allowed: TlsHandshakeTypeArray from [TlsHandshakeType.clientKeyExchange])
+
+	match message 'message'
+		clientKeyExchange(publicKey) then return publicKey
+		default throws TlsHandshakeError.internalError
+	end 'message'
+end 'tlsDecodeClientKeyExchange'
+
+module function tlsCertificateChain(entries TlsCertificateEntryArray, offered TlsExtensionTypeTally) returns ByteArrays throws TlsHandshakeError
+	var chain = ByteArrays.create()
+
+	for entry in entries 'eachEntry'
+		for item in entry.extensions() 'eachExtension'
+			if not offered.contains(item.extensionType()) 'unoffered'
+				throw TlsHandshakeError.unsupportedExtension
+			end 'unoffered'
+		end 'eachExtension'
+
+		chain.push(entry.certificate())
+	end 'eachEntry'
+
+	return chain
+end 'tlsCertificateChain'
+
 module function tlsExtensionsOf(block TlsExtensionBlock) returns TlsExtensionArray
 	return match block 'block'
 		absent gives TlsExtensionArray.create()

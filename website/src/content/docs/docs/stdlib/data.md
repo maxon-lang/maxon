@@ -978,7 +978,7 @@ is one complete handshake message, the 4-byte header and the body.
 | `newSessionTicket(ticket TlsNewSessionTicket)` | TLS 1.3 NewSessionTicket |
 | `encryptedExtensions(extensions TlsExtensionArray)` | TLS 1.3 EncryptedExtensions |
 | `tls13Certificate(requestContext ByteArray, entries TlsCertificateEntryArray)` | TLS 1.3 Certificate: a request context and entries of a DER certificate and its extensions |
-| `tls12Certificate(certificates TlsCertificateDataArray)` | TLS 1.2 Certificate: the DER certificates |
+| `tls12Certificate(certificates ByteArrays)` | TLS 1.2 Certificate: the DER certificates |
 | `tls13CertificateRequest(requestContext ByteArray, extensions TlsExtensionArray)` | TLS 1.3 CertificateRequest |
 | `tls12CertificateRequest(request Tls12CertificateRequest)` | TLS 1.2 CertificateRequest |
 | `certificateVerify(scheme TlsSignatureSchemeCode, signature ByteArray)` | CertificateVerify, either protocol |
@@ -1057,7 +1057,7 @@ The code point aliases are `TlsVersionCode`, `TlsCipherSuiteCode`, `TlsGroupCode
 `TlsExtensionType`, each `int(0 to u16.max)`; `TlsCompressionMethod` is `int(0 to u8.max)` and `TlsTicketLifetime` and
 `TlsTicketAgeAdd` are `int(0 to u32.max)`. Their arrays are `TlsVersionCodeArray`, `TlsCipherSuiteCodeArray`,
 `TlsGroupCodeArray`, `TlsSignatureSchemeCodeArray`, `TlsProtocolNameArray`, `TlsKeyShareArray`, `TlsExtensionArray`,
-`TlsCertificateDataArray`, `TlsCertificateEntryArray` and `TlsAuthorityNameArray`. A code point is carried as sent:
+`TlsCertificateEntryArray` and `TlsAuthorityNameArray`. A code point is carried as sent:
 the codec does not interpret `legacyVersion`, the cipher suites, the groups or the compression methods.
 
 ```maxon
