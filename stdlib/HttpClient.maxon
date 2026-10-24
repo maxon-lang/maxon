@@ -1,7 +1,7 @@
-/// HTTP/1.1 client for making HTTP requests over TCP.
+/// HTTP/1.1 client for making HTTP and HTTPS requests.
 /// @category Network
-/// HTTP client errors
-public enum HttpError implements Error
+/// HTTP client errors. `tlsFailed` carries the `TlsError` of a handshake or a TLS session that failed.
+public union HttpError implements Error
 	invalidUrl
 	connectFailed
 	sendFailed
@@ -10,6 +10,7 @@ public enum HttpError implements Error
 	unsupportedScheme
 	timedOut
 	bodyTooLarge
+	tlsFailed(error TlsError)
 end 'HttpError'
 
 /// HTTP request methods
@@ -307,7 +308,7 @@ end 'HttpClientLimits'
 public type HttpClient
 	/// Send an HTTP request and return the response. Throws `timedOut` past `limits.timeoutMs` and
 	/// `bodyTooLarge` past `limits.maxBodyBytes`.
-	public static function send(request HttpRequest, limits HttpClientLimits = HttpClientLimits.create()) returns HttpResponse throws HttpError
+	public static function send(request HttpRequest, limits HttpClientLimits = HttpClientLimits.create(), tls TlsClientOptions = TlsClientOptions.create()) returns HttpResponse throws HttpError
 		let start = Clock.nowMs()
 		let target = try httpConnectTargetOf(request.url())
 
@@ -315,17 +316,21 @@ public type HttpClient
 
 		let connectBudgetMs = try remainingBudget(start, timeoutMs: limits.timeoutMs)
 
-		var client = try TcpClient.connect(target.host, port: target.port, deadlineMs: connectBudgetMs) otherwise (cause) 'connFail'
+		let client = try TcpClient.connect(target.host, port: target.port, deadlineMs: connectBudgetMs) otherwise (cause) 'connFail'
 			throw HttpError.timedOut if cause == NetworkError.timedOut else HttpError.connectFailed
 		end 'connFail'
 
-		try boundByTheDeadline(client, start: start, timeoutMs: limits.timeoutMs)
+		var transport = try transportOver(client, target: target, tls: tls, start: start, timeoutMs: limits.timeoutMs)
 
-		_ = try client.send(rawRequest) otherwise (cause) 'sendFail'
-			throw HttpError.timedOut if cause == NetworkError.timedOut else HttpError.sendFailed
-		end 'sendFail'
+		try boundByTheDeadline(transport, start: start, timeoutMs: limits.timeoutMs)
 
-		let response = try receiveResponse(client, method: request.method(), cap: limits.maxBodyBytes)
+		let response = try exchangeOver(transport, request: request, rawRequest: rawRequest, limits: limits) otherwise (cause) 'failed'
+			transport.close()
+
+			throw cause
+		end 'failed'
+
+		transport.close()
 
 		return response
 	end 'send'
@@ -368,14 +373,77 @@ let ChunkExtensionIntroducer = ";"
 // A close here ends a message before its framing does, so it is a truncated response. The close
 // that ends a close-delimited body is taken by `receiveMoreBeforeTheClose` and never reaches this
 // mapping.
-function clientReadFault(cause NetworkError) returns HttpError
+function clientReadFault(cause HttpTransportFault) returns HttpError
 	return match cause 'which'
-		connectionClosed gives HttpError.invalidResponse
-		recvFailed gives HttpError.recvFailed
+		closed gives HttpError.invalidResponse
+		failed gives HttpError.recvFailed
 		timedOut gives HttpError.timedOut
-		default panic("HttpClient: `TcpClient.recv` does not throw `{cause.name}`")
+		secure(error) gives HttpError.tlsFailed(error)
 	end 'which'
 end 'clientReadFault'
+
+function clientWriteFault(cause HttpTransportFault) returns HttpError
+	return match cause 'which'
+		closed or
+		failed gives HttpError.sendFailed
+		timedOut gives HttpError.timedOut
+		secure(error) gives HttpError.tlsFailed(error)
+	end 'which'
+end 'clientWriteFault'
+
+function clientHandshakeFault(error TlsError) returns HttpError
+	return match error 'error'
+		timedOut or
+		handshakeTimedOut gives HttpError.timedOut
+		resolveFailed or
+		connectFailed or
+		bindFailed or
+		acceptFailed or
+		acceptInterrupted or
+		sendFailed or
+		recvFailed or
+		connectionClosed or
+		truncated or
+		closed or
+		trustStoreUnavailable or
+		invalidConfiguration or
+		invalidCertificate or
+		invalidPrivateKey or
+		invalidPem or
+		certificateRejected or
+		protocolError or
+		peerAlert or
+		peerAlertUnrecognised gives HttpError.tlsFailed(error)
+	end 'error'
+end 'clientHandshakeFault'
+
+function transportOver(client TcpClient, target HttpConnectTarget, tls TlsClientOptions, start InstantMs, timeoutMs HttpExchangeDeadlineMs) returns HttpTransport throws HttpError
+	match target.scheme 'scheme'
+		http then return HttpTransport.plain(client)
+		https then return try secureTransportOver(client, target: target, tls: tls, start: start, timeoutMs: timeoutMs)
+	end 'scheme'
+end 'transportOver'
+
+function secureTransportOver(client TcpClient, target HttpConnectTarget, tls TlsClientOptions, start InstantMs, timeoutMs HttpExchangeDeadlineMs) returns HttpTransport throws HttpError
+	var options = tls.clone()
+
+	try options.setApplicationProtocols([HttpApplicationProtocol]) otherwise panic("HttpClient: `{HttpApplicationProtocol}` is a usable ALPN protocol name")
+
+	let budgetMs = try remainingBudget(start, timeoutMs: timeoutMs)
+	let stream = try TlsClient.over(client, host: target.host, options: options, deadlineMs: budgetMs) otherwise (error) 'refused'
+		throw clientHandshakeFault(error)
+	end 'refused'
+
+	return HttpTransport.secure(stream)
+end 'secureTransportOver'
+
+function exchangeOver(transport HttpTransport, request HttpRequest, rawRequest String, limits HttpClientLimits) returns HttpResponse throws HttpError
+	try transport.send(rawRequest) otherwise (cause) 'sendFail'
+		throw clientWriteFault(cause)
+	end 'sendFail'
+
+	return try receiveResponse(transport, method: request.method(), cap: limits.maxBodyBytes)
+end 'exchangeOver'
 
 function remainingBudget(start InstantMs, timeoutMs HttpExchangeDeadlineMs) returns SocketDeadlineMs throws HttpError
 	let spentMs = Clock.elapsedMs(start)
@@ -390,11 +458,11 @@ end 'remainingBudget'
 
 // A `TcpClient` deadline counts from the call that sets it, so both are set once, to what is left of the
 // exchange's budget.
-function boundByTheDeadline(client TcpClient, start InstantMs, timeoutMs HttpExchangeDeadlineMs) throws HttpError
+function boundByTheDeadline(transport HttpTransport, start InstantMs, timeoutMs HttpExchangeDeadlineMs) throws HttpError
 	let remainingMs = try remainingBudget(start, timeoutMs: timeoutMs)
 
-	try client.setReadDeadline(remainingMs) otherwise panic("HttpClient: a connection it just opened is not closed")
-	try client.setWriteDeadline(remainingMs) otherwise panic("HttpClient: a connection it just opened is not closed")
+	try transport.setReadDeadline(remainingMs) otherwise panic("HttpClient: a connection it just opened is not closed")
+	try transport.setWriteDeadline(remainingMs) otherwise panic("HttpClient: a connection it just opened is not closed")
 end 'boundByTheDeadline'
 
 function exceedsCap(cap HttpBodyCap, bodyBytes BytePos) returns bool
@@ -404,8 +472,8 @@ function exceedsCap(cap HttpBodyCap, bodyBytes BytePos) returns bool
 	end 'which'
 end 'exceedsCap'
 
-function receiveResponse(client TcpClient, method HttpMethod, cap HttpBodyCap) returns HttpResponse throws HttpError
-	var inbound = HttpInbound.over(client)
+function receiveResponse(transport HttpTransport, method HttpMethod, cap HttpBodyCap) returns HttpResponse throws HttpError
+	var inbound = HttpInbound.over(transport)
 
 	for _ in 0 to MostInterimResponses 'eachHead'
 		let head = try readDelimited(inbound, delimiter: HttpDelimiter.head, cap: MaxResponseHeadBytes)
@@ -459,11 +527,12 @@ end 'readCappedDeclaredBody'
 
 function receiveMoreBeforeTheClose(inbound HttpInbound) returns bool throws HttpError
 	try inbound.receiveMore() otherwise (cause) 'recvErr'
-		if cause == NetworkError.connectionClosed 'serverFinished'
-			return false
-		end 'serverFinished'
-
-		throw clientReadFault(cause)
+		match cause 'which'
+			closed then return false
+			failed or
+			timedOut or
+			secure then throw clientReadFault(cause)
+		end 'which'
 	end 'recvErr'
 
 	return true

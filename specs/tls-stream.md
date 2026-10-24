@@ -83,6 +83,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -283,6 +284,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -486,6 +488,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -688,6 +691,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -908,6 +912,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -1123,6 +1128,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -1344,6 +1350,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -1564,6 +1571,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -1786,6 +1794,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -2002,6 +2011,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -2219,6 +2229,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -2466,6 +2477,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -2644,6 +2656,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -2801,6 +2814,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -3017,6 +3031,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -3222,6 +3237,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -3435,6 +3451,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -3605,6 +3622,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -3811,6 +3829,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -4005,6 +4024,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -4236,6 +4256,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -4466,7 +4487,7 @@ bind a port in use: bindFailed
 ```
 
 <!-- test: tls-stream.handshakes-are-bounded-by-deadlines -->
-A client with a deadline gives up on a server that accepts the connection and never answers its ClientHello (`timedOut`), and a listener with a handshake deadline gives up on a client that connects and says nothing; neither stalls the program.
+A client with a deadline gives up on a server that accepts the connection and never answers its ClientHello (`handshakeTimedOut`), and a listener with a handshake deadline gives up on a client that connects and says nothing; neither stalls the program.
 ```maxon
 function digit(symbol Byte) returns Byte
 	if symbol >= 0x61 'letter'
@@ -4516,6 +4537,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -4702,8 +4724,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-client: timedOut; peer: hello true, then connectionClosed
-server: accept: timedOut
+client: handshakeTimedOut; peer: hello true, then connectionClosed
+server: accept: handshakeTimedOut
 ```
 ```exitcode
 0
@@ -4760,6 +4782,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -4995,6 +5018,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -5191,6 +5215,596 @@ send: closed
 recv: closed
 shutdownWrite: closed
 server: heard last words
+```
+```exitcode
+0
+```
+
+<!-- test: tls-stream.a-handshake-that-times-out-is-not-an-accept-that-times-out -->
+`TlsError.timedOut` is an accept deadline that passed with no connection; `handshakeTimedOut` is a connection that was accepted and did not finish its handshake in time, for the listener and for the client. A listener goes on accepting after a stalled handshake.
+```maxon
+function digit(symbol Byte) returns Byte
+	if symbol >= 0x61 'letter'
+		return symbol - 0x57
+	end 'letter'
+
+	return symbol - 0x30
+end 'digit'
+
+function fromHex(hex String) returns ByteArray
+	var bytes = ByteArray.create()
+	var high = 0 as Byte
+	var isHigh = true
+
+	for symbol in hex.bytes() 'eachSymbol'
+		if isHigh 'first'
+			high = digit(symbol)
+		end 'first' else 'second'
+			bytes.push(high * 16 + digit(symbol))
+		end 'second'
+
+		isHigh = not isHigh
+	end 'eachSymbol'
+
+	return bytes
+end 'fromHex'
+
+function toHex(bytes ByteArray) returns String
+	var text = ""
+
+	for byte in bytes 'eachByte'
+		text.append("{byte:02x}")
+	end 'eachByte'
+
+	return text
+end 'toHex'
+
+function describe(error TlsError) returns String
+	return match error 'error'
+		certificateRejected(reason) gives "certificateRejected({reason.name})"
+		protocolError(alert) gives "protocolError({alert.name})"
+		peerAlert(alert) gives "peerAlert({alert.name})"
+		peerAlertUnrecognised(code) gives "peerAlertUnrecognised({code})"
+		resolveFailed or
+		connectFailed or
+		bindFailed or
+		acceptFailed or
+		acceptInterrupted or
+		timedOut or
+		handshakeTimedOut or
+		sendFailed or
+		recvFailed or
+		connectionClosed or
+		truncated or
+		closed or
+		trustStoreUnavailable or
+		invalidConfiguration or
+		invalidCertificate or
+		invalidPrivateKey or
+		invalidPem gives error.name
+	end 'error'
+end 'describe'
+
+function suiteName(suite TlsCipherSuite) returns String
+	return match suite 'suite'
+		tls13(chosen) gives "tls13/{chosen.name}"
+		tls12(chosen) gives "tls12/{chosen.name}"
+	end 'suite'
+end 'suiteName'
+
+function alpnName(protocol TlsApplicationProtocol) returns String
+	return match protocol 'protocol'
+		negotiated(name) gives name
+		unnegotiated gives "none"
+	end 'protocol'
+end 'alpnName'
+
+function identityOf(chainHex String, keyHex String) returns TlsIdentity
+	return try TlsIdentity.fromDer(ByteArrays from [fromHex(chainHex)], key: fromHex(keyHex)) otherwise panic("the case's identity was refused")
+end 'identityOf'
+
+function trustedClient(rootHex String) returns TlsClientOptions
+	var options = TlsClientOptions.create()
+	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
+	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
+	options.setVerificationTime(1767225600)
+
+	return options
+end 'trustedClient'
+
+function trustedServer(identity TlsIdentity) returns TlsServerOptions
+	var options = TlsServerOptions.create(identity)
+	options.setVerificationTime(1767225600)
+
+	return options
+end 'trustedServer'
+
+let rootHex = "3082012f3081d6a003020102020101300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a300f310d300b06035504030c04526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000469fd1970f970c21034e836c954aefc78dffef4a3d72650f1ec5e70559cc0663d0722d3408f27d8be5a08ceb432c37b7049cc8758c88c3d85e4db83aa471b62b7a3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d0403020348003045022053bac2d2f62299dd459d79bce22d671aeeb6ee3ed03a2f344be8a8392fd47b3e022100d8f59bc3b1ba00dc51028c7f1b8e99d86d4bb4126e22717c32988498c07f64d7"
+let leafP256Hex = "3082015930820100a00302010202010a300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3235303630313030303030305a170d3236303630313030303030305a300f310d300b06035504030c046c6561663059301306072a8648ce3d020106082a8648ce3d030107034200040b019cfdb984d032a96907cca9a63888323695b6404a7ddaacc63b5559364f2ca48f2b5d0e1151b6c0b5d17286d9a522cee437c42f410742ebb8493775fc47e9a34d304b300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b0601050507030130160603551d11040f300d820b6578616d706c652e636f6d300a06082a8648ce3d040302034700304402203bc12c6f77062e5eed59186b72a95e9652f4398685b8845ad8112a5085bb7ab602207c9761426fa260535fb0fa49efe2624a1f34e8e04eb43d8f3c72dd072e736197"
+let keyP256Hex = "3041020100301306072a8648ce3d020106082a8648ce3d0301070427302502010104200f9999d9198528f9f986f8315fe0c7aaf7b2aef840198d77b859dc4f4a8c4a2b"
+
+function serveEcho(listener TlsListener) returns String
+	var stream = try listener.accept() otherwise (error) 'refused'
+		return "accept: {describe(error)}"
+	end 'refused'
+
+	let heard = try stream.recv(1024) otherwise (error) 'unheard'
+		return "recv: {describe(error)}"
+	end 'unheard'
+
+	_ = try stream.send("echo:{heard}") otherwise (error) 'unsent'
+		return "send: {describe(error)}"
+	end 'unsent'
+
+	let peers = stream.peerCertificates().count()
+	let version = stream.protocol().name
+
+	stream.close()
+
+	return "served {heard} {version} peers={peers}"
+end 'serveEcho'
+
+function clientTurn(options TlsClientOptions, port NetworkPort) returns String
+	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+		return "connect: {describe(error)}"
+	end 'refused'
+
+	_ = try stream.send("ping") otherwise (error) 'unsent'
+		return "send: {describe(error)}"
+	end 'unsent'
+
+	let reply = try stream.recv(1024) otherwise (error) 'unheard'
+		return "recv: {describe(error)}"
+	end 'unheard'
+
+	let version = stream.protocol().name
+	let suite = suiteName(stream.cipherSuite())
+	let alpn = alpnName(stream.applicationProtocol())
+
+	stream.close()
+
+	return "{reply} {version} {suite} alpn={alpn}"
+end 'clientTurn'
+
+function clientListens(options TlsClientOptions, port NetworkPort) returns String
+	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+		return "connect: {describe(error)}"
+	end 'refused'
+
+	let reply = try stream.recv(1024) otherwise (error) 'unheard'
+		return "recv: {describe(error)}"
+	end 'unheard'
+
+	return "heard {reply}"
+end 'clientListens'
+
+function exchange(serverOptions TlsServerOptions, clientOptions TlsClientOptions) returns String
+	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
+		return "bind: {describe(error)}"
+	end 'refused'
+
+	let peer = async serveEcho(listener)
+	let client = clientTurn(clientOptions, port: listener.port())
+	let server = await peer
+
+	listener.close()
+
+	return "client[{client}] server[{server}]"
+end 'exchange'
+
+function silentExchange(serverOptions TlsServerOptions, clientOptions TlsClientOptions) returns String
+	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
+		return "bind: {describe(error)}"
+	end 'refused'
+
+	let peer = async serveEcho(listener)
+	let client = clientListens(clientOptions, port: listener.port())
+	let server = await peer
+
+	listener.close()
+
+	return "client[{client}] server[{server}]"
+end 'silentExchange'
+
+function refuseThree(listener TlsListener) returns String
+	var report = ""
+
+	for attempt in 1 to 3 'eachAttempt'
+		_ = try listener.accept() otherwise (error) 'refused'
+			report.append("[{attempt}: {describe(error)}]")
+			continue
+		end 'refused'
+
+		report.append("[{attempt}: accepted]")
+	end 'eachAttempt'
+
+	return report
+end 'refuseThree'
+
+function talk(port NetworkPort, bytes ByteArray) returns String
+	let raw = try TcpClient.connect("127.0.0.1", port: port) otherwise return "connect failed"
+
+	_ = try raw.send(String.from(bytes)) otherwise return "send failed"
+
+	let reply = try raw.recv(64) otherwise (error) 'unanswered'
+		return "no reply: {error.name}"
+	end 'unanswered'
+
+	return toHex(reply.toByteArray())
+end 'talk'
+
+function describeStall(error TlsError) returns String
+	return match error 'error'
+		handshakeTimedOut gives "handshakeTimedOut"
+		timedOut gives "timedOut"
+		resolveFailed or
+		connectFailed or
+		bindFailed or
+		acceptFailed or
+		acceptInterrupted or
+		sendFailed or
+		recvFailed or
+		connectionClosed or
+		truncated or
+		closed or
+		trustStoreUnavailable or
+		invalidConfiguration or
+		invalidCertificate or
+		invalidPrivateKey or
+		invalidPem or
+		certificateRejected or
+		protocolError or
+		peerAlert or
+		peerAlertUnrecognised gives "other: {describe(error)}"
+	end 'error'
+end 'describeStall'
+
+function holdOpen(silent TcpListener) returns String
+	let connection = try silent.accept() otherwise return "accept failed"
+
+	_ = try connection.recv(4096) otherwise return "no hello"
+
+	let ended = try connection.recv(4096) otherwise (error) 'ended'
+		return "then {error.name}"
+	end 'ended'
+
+	return "then {ended.byteLength()} more bytes"
+end 'holdOpen'
+
+function acceptOnce(listener TlsListener) returns String
+	_ = try listener.accept() otherwise (error) 'refused'
+		return "accept: {describeStall(error)}"
+	end 'refused'
+
+	return "accepted"
+end 'acceptOnce'
+
+function main() returns ExitCode
+	var options = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
+
+	options.setHandshakeDeadline(2000)
+
+	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: options) otherwise return 1
+
+	try listener.setAcceptDeadline(300) otherwise return 2
+
+	print("nobody connects: {acceptOnce(listener)}\n")
+
+	try listener.setAcceptDeadline(0) otherwise return 3
+
+	let waiting = async acceptOnce(listener)
+	let mute = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 4
+
+	print("a client that says nothing: {await waiting}\n")
+	mute.close()
+
+	let again = async serveEcho(listener)
+	let reply = clientTurn(trustedClient(rootHex), port: listener.port())
+
+	print("a client after it: {reply} | {await again}\n")
+	listener.close()
+
+	var silent = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 5
+	let holder = async holdOpen(silent)
+
+	print("a client dialling a server that never answers: {dialOutcome(silent.port())} {await holder}\n")
+	silent.close()
+
+	return 0
+end 'main'
+
+function dialOutcome(port NetworkPort) returns String
+	_ = try TlsClient.connect("127.0.0.1", port: port, options: trustedClient(rootHex), deadlineMs: 300) otherwise (error) 'refused'
+		return describeStall(error)
+	end 'refused'
+
+	return "connected"
+end 'dialOutcome'
+```
+```stdout
+nobody connects: accept: timedOut
+a client that says nothing: accept: handshakeTimedOut
+a client after it: echo:ping tls13 tls13/chaCha20Poly1305Sha256 alpn=none | served ping tls13 peers=0
+a client dialling a server that never answers: handshakeTimedOut then connectionClosed
+```
+```exitcode
+0
+```
+
+<!-- test: tls-stream.a-peer-that-sent-more-than-the-header-still-hears-the-alert -->
+A peer that is not speaking TLS and has sent far more than a record header still receives the alert the listener refused it with: the refusing side shuts down its write side and drains what the peer sent, bounded, before it closes, so the close does not reset the connection ahead of the alert. The peer's whole send completes.
+```maxon
+function digit(symbol Byte) returns Byte
+	if symbol >= 0x61 'letter'
+		return symbol - 0x57
+	end 'letter'
+
+	return symbol - 0x30
+end 'digit'
+
+function fromHex(hex String) returns ByteArray
+	var bytes = ByteArray.create()
+	var high = 0 as Byte
+	var isHigh = true
+
+	for symbol in hex.bytes() 'eachSymbol'
+		if isHigh 'first'
+			high = digit(symbol)
+		end 'first' else 'second'
+			bytes.push(high * 16 + digit(symbol))
+		end 'second'
+
+		isHigh = not isHigh
+	end 'eachSymbol'
+
+	return bytes
+end 'fromHex'
+
+function toHex(bytes ByteArray) returns String
+	var text = ""
+
+	for byte in bytes 'eachByte'
+		text.append("{byte:02x}")
+	end 'eachByte'
+
+	return text
+end 'toHex'
+
+function describe(error TlsError) returns String
+	return match error 'error'
+		certificateRejected(reason) gives "certificateRejected({reason.name})"
+		protocolError(alert) gives "protocolError({alert.name})"
+		peerAlert(alert) gives "peerAlert({alert.name})"
+		peerAlertUnrecognised(code) gives "peerAlertUnrecognised({code})"
+		resolveFailed or
+		connectFailed or
+		bindFailed or
+		acceptFailed or
+		acceptInterrupted or
+		timedOut or
+		handshakeTimedOut or
+		sendFailed or
+		recvFailed or
+		connectionClosed or
+		truncated or
+		closed or
+		trustStoreUnavailable or
+		invalidConfiguration or
+		invalidCertificate or
+		invalidPrivateKey or
+		invalidPem gives error.name
+	end 'error'
+end 'describe'
+
+function suiteName(suite TlsCipherSuite) returns String
+	return match suite 'suite'
+		tls13(chosen) gives "tls13/{chosen.name}"
+		tls12(chosen) gives "tls12/{chosen.name}"
+	end 'suite'
+end 'suiteName'
+
+function alpnName(protocol TlsApplicationProtocol) returns String
+	return match protocol 'protocol'
+		negotiated(name) gives name
+		unnegotiated gives "none"
+	end 'protocol'
+end 'alpnName'
+
+function identityOf(chainHex String, keyHex String) returns TlsIdentity
+	return try TlsIdentity.fromDer(ByteArrays from [fromHex(chainHex)], key: fromHex(keyHex)) otherwise panic("the case's identity was refused")
+end 'identityOf'
+
+function trustedClient(rootHex String) returns TlsClientOptions
+	var options = TlsClientOptions.create()
+	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
+	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
+	options.setVerificationTime(1767225600)
+
+	return options
+end 'trustedClient'
+
+function trustedServer(identity TlsIdentity) returns TlsServerOptions
+	var options = TlsServerOptions.create(identity)
+	options.setVerificationTime(1767225600)
+
+	return options
+end 'trustedServer'
+
+let rootHex = "3082012f3081d6a003020102020101300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a300f310d300b06035504030c04526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000469fd1970f970c21034e836c954aefc78dffef4a3d72650f1ec5e70559cc0663d0722d3408f27d8be5a08ceb432c37b7049cc8758c88c3d85e4db83aa471b62b7a3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d0403020348003045022053bac2d2f62299dd459d79bce22d671aeeb6ee3ed03a2f344be8a8392fd47b3e022100d8f59bc3b1ba00dc51028c7f1b8e99d86d4bb4126e22717c32988498c07f64d7"
+let leafP256Hex = "3082015930820100a00302010202010a300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3235303630313030303030305a170d3236303630313030303030305a300f310d300b06035504030c046c6561663059301306072a8648ce3d020106082a8648ce3d030107034200040b019cfdb984d032a96907cca9a63888323695b6404a7ddaacc63b5559364f2ca48f2b5d0e1151b6c0b5d17286d9a522cee437c42f410742ebb8493775fc47e9a34d304b300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b0601050507030130160603551d11040f300d820b6578616d706c652e636f6d300a06082a8648ce3d040302034700304402203bc12c6f77062e5eed59186b72a95e9652f4398685b8845ad8112a5085bb7ab602207c9761426fa260535fb0fa49efe2624a1f34e8e04eb43d8f3c72dd072e736197"
+let keyP256Hex = "3041020100301306072a8648ce3d020106082a8648ce3d0301070427302502010104200f9999d9198528f9f986f8315fe0c7aaf7b2aef840198d77b859dc4f4a8c4a2b"
+
+function serveEcho(listener TlsListener) returns String
+	var stream = try listener.accept() otherwise (error) 'refused'
+		return "accept: {describe(error)}"
+	end 'refused'
+
+	let heard = try stream.recv(1024) otherwise (error) 'unheard'
+		return "recv: {describe(error)}"
+	end 'unheard'
+
+	_ = try stream.send("echo:{heard}") otherwise (error) 'unsent'
+		return "send: {describe(error)}"
+	end 'unsent'
+
+	let peers = stream.peerCertificates().count()
+	let version = stream.protocol().name
+
+	stream.close()
+
+	return "served {heard} {version} peers={peers}"
+end 'serveEcho'
+
+function clientTurn(options TlsClientOptions, port NetworkPort) returns String
+	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+		return "connect: {describe(error)}"
+	end 'refused'
+
+	_ = try stream.send("ping") otherwise (error) 'unsent'
+		return "send: {describe(error)}"
+	end 'unsent'
+
+	let reply = try stream.recv(1024) otherwise (error) 'unheard'
+		return "recv: {describe(error)}"
+	end 'unheard'
+
+	let version = stream.protocol().name
+	let suite = suiteName(stream.cipherSuite())
+	let alpn = alpnName(stream.applicationProtocol())
+
+	stream.close()
+
+	return "{reply} {version} {suite} alpn={alpn}"
+end 'clientTurn'
+
+function clientListens(options TlsClientOptions, port NetworkPort) returns String
+	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+		return "connect: {describe(error)}"
+	end 'refused'
+
+	let reply = try stream.recv(1024) otherwise (error) 'unheard'
+		return "recv: {describe(error)}"
+	end 'unheard'
+
+	return "heard {reply}"
+end 'clientListens'
+
+function exchange(serverOptions TlsServerOptions, clientOptions TlsClientOptions) returns String
+	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
+		return "bind: {describe(error)}"
+	end 'refused'
+
+	let peer = async serveEcho(listener)
+	let client = clientTurn(clientOptions, port: listener.port())
+	let server = await peer
+
+	listener.close()
+
+	return "client[{client}] server[{server}]"
+end 'exchange'
+
+function silentExchange(serverOptions TlsServerOptions, clientOptions TlsClientOptions) returns String
+	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
+		return "bind: {describe(error)}"
+	end 'refused'
+
+	let peer = async serveEcho(listener)
+	let client = clientListens(clientOptions, port: listener.port())
+	let server = await peer
+
+	listener.close()
+
+	return "client[{client}] server[{server}]"
+end 'silentExchange'
+
+function refuseThree(listener TlsListener) returns String
+	var report = ""
+
+	for attempt in 1 to 3 'eachAttempt'
+		_ = try listener.accept() otherwise (error) 'refused'
+			report.append("[{attempt}: {describe(error)}]")
+			continue
+		end 'refused'
+
+		report.append("[{attempt}: accepted]")
+	end 'eachAttempt'
+
+	return report
+end 'refuseThree'
+
+function talk(port NetworkPort, bytes ByteArray) returns String
+	let raw = try TcpClient.connect("127.0.0.1", port: port) otherwise return "connect failed"
+
+	_ = try raw.send(String.from(bytes)) otherwise return "send failed"
+
+	let reply = try raw.recv(64) otherwise (error) 'unanswered'
+		return "no reply: {error.name}"
+	end 'unanswered'
+
+	return toHex(reply.toByteArray())
+end 'talk'
+
+let ExtraBytes = 200000
+let RefusalMs = 300
+
+function filler() returns String
+	var text = StringBuilder.create()
+
+	for row in 0 upto ExtraBytes / 16 'eachRow'
+		text.append("{row:08x}-padding\n")
+	end 'eachRow'
+
+	return text.build()
+end 'filler'
+
+function hearAll(raw TcpClient) returns String
+	var heard = ByteArray.create()
+
+	while true 'reading'
+		let chunk = try raw.recv(1024) otherwise break
+
+		heard.append(chunk.toByteArray())
+	end 'reading'
+
+	return toHex(heard)
+end 'hearAll'
+
+function talkMore(port NetworkPort, head String) returns String
+	let raw = try TcpClient.connect("127.0.0.1", port: port) otherwise return "connect failed"
+
+	_ = try raw.send(head) otherwise (error) 'headUnsent'
+		return "send: {error.name}"
+	end 'headUnsent'
+
+	sleep(RefusalMs)
+
+	_ = try raw.send(filler()) otherwise (error) 'unsent'
+		return "send: {error.name}"
+	end 'unsent'
+
+	try raw.setReadDeadline(5000) otherwise return "deadline refused"
+
+	return "heard {hearAll(raw)}"
+end 'talkMore'
+
+function main() returns ExitCode
+	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
+	let peer = async refuseThree(listener)
+
+	print("http request and more: {talkMore(listener.port(), head: "GET / HTTP/1.1\r\nHost: x\r\n\r\n")}\n")
+	print("other bytes and more: {talkMore(listener.port(), head: "hello hello hello\n")}\n")
+	print("a record of an unknown version and more: {talkMore(listener.port(), head: String.from(ByteArray from [0x16, 0x04, 0x01, 0x00, 0x05]))}\n")
+	print("server: {await peer}\n")
+	listener.close()
+
+	return 0
+end 'main'
+```
+```stdout
+http request and more: heard 1503030002020a
+other bytes and more: heard 1503030002020a
+a record of an unknown version and more: heard 15030300020246
+server: [1: protocolError(unexpectedMessage)][2: protocolError(unexpectedMessage)][3: protocolError(protocolVersion)]
 ```
 ```exitcode
 0

@@ -17,8 +17,9 @@ HTTP/1.1 client for making HTTP requests over TCP connections.
 - `HttpResponse` — represents an HTTP response with status code, headers, body
 - `HttpHeaders` — case-insensitive header map
 - `HttpMethod` — enum of HTTP methods (get, post, put, delete, head, patch)
-- `HttpError` — error enum for HTTP operations: `invalidUrl`, `connectFailed`, `sendFailed`, `recvFailed`,
-  `invalidResponse`, `unsupportedScheme`, `timedOut`, `bodyTooLarge`
+- `HttpError` — error union for HTTP operations: `invalidUrl`, `connectFailed`, `sendFailed`, `recvFailed`,
+  `invalidResponse`, `unsupportedScheme`, `timedOut`, `bodyTooLarge`, and `tlsFailed(error TlsError)` for a TLS
+  failure, which carries the `TlsError`
 - `StatusCode` — union of named status codes plus `other(code HttpStatusNumber)`; `number()` gives the code
 - `HttpClientLimits` — `timeoutMs` bounds the whole exchange, connect included (default 30000);
   `maxBodyBytes` caps the response body (default `HttpBodyCap.unbounded`)
@@ -46,9 +47,13 @@ function postData() returns ExitCode throws HttpError
 end 'postData'
 ```
 
+**HTTPS:** an `https` URL is fetched over TLS (`specs/http-tls.md`): port 443 unless the URL names one, the URL's host
+as the server name and the name the certificate must match, ALPN `http/1.1`, the system roots unless
+`HttpClient.send(request, limits:, tls:)` is given its own `TlsClientOptions`.
+
 **Limitations:**
-- HTTP only (no TLS): a URL whose scheme is anything but `http` — `https` included — throws
-  `HttpError.unsupportedScheme` before any connection is attempted
+- A URL whose scheme is neither `http` nor `https` throws `HttpError.unsupportedScheme` before any connection is
+  attempted
 - A request is sent with `Connection: close` unless the caller sets `Connection`; a response is read to its
   `Content-Length`, through its chunked framing, or to the close when it declares neither. A `101 Switching
   Protocols` is refused (`invalidResponse`)
@@ -73,15 +78,15 @@ end 'main'
 0
 ```
 
-### An https URL is refused
+### A scheme other than http and https is refused
 
-<!-- test: http-client.an-https-url-is-refused-before-connecting -->
-⛔ **`https` IS REFUSED BY SCHEME, NEVER SENT AS PLAINTEXT.** Nothing listens on port 1, so a client that
-ignored the scheme would dial and answer `connectFailed`; only a refusal decided before the connect answers
-`unsupportedScheme`, which is the one arm that exits 7.
+<!-- test: http-client.an-ftp-url-is-refused-before-connecting -->
+⛔ **ONLY `http` AND `https` ARE FETCHED.** Nothing listens on port 1, so a client that ignored the scheme would
+dial and answer `connectFailed`; only a refusal decided before the connect answers `unsupportedScheme`, which is the
+one arm that exits 7. An `https` URL to the same port is dialled, and is a `connectFailed` (exit 3).
 ```maxon
-function main() returns ExitCode
-	let response = try HttpClient.get("https://127.0.0.1:1/") otherwise (e) 'refused'
+function exitOf(url String) returns ExitCode
+	let response = try HttpClient.get(url) otherwise (e) 'refused'
 		return match e 'why'
 			unsupportedScheme gives 7
 			invalidUrl gives 2
@@ -91,15 +96,24 @@ function main() returns ExitCode
 			invalidResponse gives 6
 			timedOut gives 8
 			bodyTooLarge gives 9
+			tlsFailed gives 10
 		end 'why'
 	end 'refused'
 
 	print("answered with a body of {response.body().byteLength()} bytes\n")
 	return 1
+end 'exitOf'
+
+function main() returns ExitCode
+	print("ftp={exitOf("ftp://127.0.0.1:1/")} https={exitOf("https://127.0.0.1:1/")}\n")
+	return 0
 end 'main'
 ```
+```stdout
+ftp=7 https=3
+```
 ```exitcode
-7
+0
 ```
 
 ### Request Building
@@ -155,6 +169,46 @@ end 'main'
 ```
 ```stdout
 default=[connection: close] chosen=[connection: keep-alive]
+```
+```exitcode
+0
+```
+
+<!-- test: http-client.the-default-port-follows-the-scheme -->
+An `https` URL without a port dials 443 and an `http` one dials 80, and the `Host` header leaves out the port only
+when it is the default of the URL's own scheme: `:443` is kept on an `http` URL and `:80` on an `https` one.
+```maxon
+function hostLine(url String) returns String
+	let request = try HttpRequest.create(HttpMethod.get, url: url) otherwise return "no-request"
+	let target = try httpConnectTargetOf(request.url()) otherwise return "no-target"
+	var found = ""
+
+	for line in httpBuildRequest(request, target: target).split("\r\n") 'eachLine'
+		if line.startsWith("Host:") 'aHostLine'
+			found.append("[{line}]")
+		end 'aHostLine'
+	end 'eachLine'
+
+	return "{target.host}:{target.port} {found}"
+end 'hostLine'
+
+function main() returns ExitCode
+	print("{hostLine("https://example.com/")}\n")
+	print("{hostLine("https://example.com:443/")}\n")
+	print("{hostLine("https://example.com:8443/")}\n")
+	print("{hostLine("https://example.com:80/")}\n")
+	print("{hostLine("http://example.com/")}\n")
+	print("{hostLine("http://example.com:443/")}\n")
+	return 0
+end 'main'
+```
+```stdout
+example.com:443 [Host: example.com]
+example.com:443 [Host: example.com]
+example.com:8443 [Host: example.com:8443]
+example.com:80 [Host: example.com:80]
+example.com:80 [Host: example.com]
+example.com:443 [Host: example.com:443]
 ```
 ```exitcode
 0
@@ -736,7 +790,7 @@ length=2
 <!-- test: http-client.conflicting-repeated-singleton-headers-are-refused -->
 ```maxon
 function verdict(head String) returns String
-	_ = try httpParseRequestHead(head) otherwise (e) 'refused'
+	_ = try httpParseRequestHead(head, scheme: HttpUrlScheme.http) otherwise (e) 'refused'
 		return e.name
 	end 'refused'
 

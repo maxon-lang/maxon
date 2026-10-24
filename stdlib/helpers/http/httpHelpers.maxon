@@ -34,7 +34,10 @@ let RepeatedListSeparator = ", "
 let RepeatedLineSeparator = "\n"
 let ObsFoldReplacement = " "
 let DefaultHttpPort = 80
+let DefaultHttpsPort = 443
 let HttpScheme = "http"
+let HttpsScheme = "https"
+public let HttpApplicationProtocol = "http/1.1"
 let HttpVersionPrefix = "HTTP/"
 let HttpSentVersion = "HTTP/1.1"
 let HttpVersionBytes = 8
@@ -73,16 +76,36 @@ public union HttpRequestHead
 	wholeServer(headers HttpHeaders)
 end 'HttpRequestHead'
 
+public enum HttpUrlScheme
+	http
+	https
+end 'HttpUrlScheme'
+
+public function httpSchemeText(scheme HttpUrlScheme) returns String
+	return match scheme 'scheme'
+		http gives HttpScheme
+		https gives HttpsScheme
+	end 'scheme'
+end 'httpSchemeText'
+
+public function httpDefaultPortOf(scheme HttpUrlScheme) returns NetworkPort
+	return match scheme 'scheme'
+		http gives DefaultHttpPort
+		https gives DefaultHttpsPort
+	end 'scheme'
+end 'httpDefaultPortOf'
+
 public type HttpConnectTarget
 	public let host as String
 	public let port as NetworkPort
+	public let scheme as HttpUrlScheme
 
-	static function create(host String, port NetworkPort) returns HttpConnectTarget
-		return HttpConnectTarget{host: host, port: port}
+	static function create(host String, port NetworkPort, scheme HttpUrlScheme) returns HttpConnectTarget
+		return HttpConnectTarget{host: host, port: port, scheme: scheme}
 	end 'create'
 
 	public function authority() returns String
-		return self.host if self.port == DefaultHttpPort else "{self.host}:{self.port}"
+		return self.host if self.port == httpDefaultPortOf(self.scheme) else "{self.host}:{self.port}"
 	end 'authority'
 end 'HttpConnectTarget'
 
@@ -90,16 +113,22 @@ public function httpMethodToString(method HttpMethod) returns String
 	return method.name.toUpper()
 end 'httpMethodToString'
 
+function httpUrlSchemeOf(spelled String) returns HttpUrlScheme throws HttpError
+	for scheme in HttpUrlScheme.allCases 'eachScheme'
+		if httpSchemeText(scheme) == spelled 'named'
+			return scheme
+		end 'named'
+	end 'eachScheme'
+
+	throw HttpError.unsupportedScheme
+end 'httpUrlSchemeOf'
+
 public function httpConnectTargetOf(url URL) returns HttpConnectTarget throws HttpError
-	// There is no TLS here, so an `https` request sent as plaintext would leak what it meant to protect.
-	if url.scheme() != HttpScheme 'notPlainHttp'
-		throw HttpError.unsupportedScheme
-	end 'notPlainHttp'
-
+	let scheme = try httpUrlSchemeOf(url.scheme())
 	let host = try url.host() otherwise throw HttpError.invalidUrl
-	let port = try url.port() otherwise DefaultHttpPort
+	let port = try url.port() otherwise httpDefaultPortOf(scheme)
 
-	return HttpConnectTarget.create(host, port: port)
+	return HttpConnectTarget.create(host, port: port, scheme: scheme)
 end 'httpConnectTargetOf'
 
 public function httpBuildRequest(request HttpRequest, target HttpConnectTarget) returns String
@@ -205,11 +234,11 @@ union HttpFound
 end 'HttpFound'
 
 public type HttpInbound
-	public let connection as TcpClient
+	public var connection as HttpTransport
 	var received as String
 	var consumed as BytePos
 
-	public static function over(connection TcpClient) returns HttpInbound
+	public static function over(connection HttpTransport) returns HttpInbound
 		return HttpInbound{connection: connection, received: "", consumed: 0}
 	end 'over'
 
@@ -217,7 +246,7 @@ public type HttpInbound
 		return self.received.byteLength() - self.consumed
 	end 'unreadBytes'
 
-	public function receiveMore() throws NetworkError
+	public function receiveMore() throws HttpTransportFault
 		let arrived = try self.connection.recv(HttpReadChunkBytes)
 
 		if self.consumed > 0 'compact'
@@ -294,7 +323,7 @@ public union HttpDelimitedRead
 	pastTheCap
 end 'HttpDelimitedRead'
 
-public function httpReadDelimited(inbound HttpInbound, delimiter HttpDelimiter, cap BytePos) returns HttpDelimitedRead throws NetworkError
+public function httpReadDelimited(inbound HttpInbound, delimiter HttpDelimiter, cap BytePos) returns HttpDelimitedRead throws HttpTransportFault
 	let terminator = delimiterText(delimiter)
 	let overlap = terminator.byteLength() - 1
 	var skippable = leadingEmptyLinesSkipped(delimiter)
@@ -333,7 +362,7 @@ function delimitedAt(inbound HttpInbound, textEnd BytePos, terminator String, ca
 	return HttpDelimitedRead.delimited(text)
 end 'delimitedAt'
 
-public function httpReadDeclared(inbound HttpInbound, length BytePos) returns String throws NetworkError
+public function httpReadDeclared(inbound HttpInbound, length BytePos) returns String throws HttpTransportFault
 	while inbound.unreadBytes() < length 'fill'
 		try inbound.receiveMore()
 	end 'fill'
@@ -341,7 +370,7 @@ public function httpReadDeclared(inbound HttpInbound, length BytePos) returns St
 	return inbound.take(length)
 end 'httpReadDeclared'
 
-public function httpParseRequestHead(head String) returns HttpRequestHead throws HttpServerError
+public function httpParseRequestHead(head String, scheme HttpUrlScheme) returns HttpRequestHead throws HttpServerError
 	let lines = head.split(HttpLineBreak)
 	let requestLine = try lines.get(0) otherwise panic("httpParseRequestHead: a split answers at least one part")
 	let parts = requestLine.split(StartLineSeparator)
@@ -380,23 +409,25 @@ public function httpParseRequestHead(head String) returns HttpRequestHead throws
 		return HttpRequestHead.wholeServer(headers)
 	end 'asteriskForm'
 
-	let url = try requestUrlOf(target, headers: headers) otherwise throw HttpServerError.malformedRequest
+	let url = try requestUrlOf(target, headers: headers, scheme: scheme) otherwise throw HttpServerError.malformedRequest
 
 	return HttpRequestHead.resource(method, url: url, headers: headers)
 end 'httpParseRequestHead'
 
-function requestUrlOf(target String, headers HttpHeaders) returns URL throws URLError
+function requestUrlOf(target String, headers HttpHeaders, scheme HttpUrlScheme) returns URL throws URLError
+	let spelled = httpSchemeText(scheme)
+
 	if not target.startsWith(UrlOriginFormRoot) 'absoluteForm'
-		return try URL.forAbsoluteForm(HttpScheme, target: target)
+		return try URL.forAbsoluteForm(spelled, target: target)
 	end 'absoluteForm'
 
 	if not headers.has(HostHeaderName) 'hostless'
-		return try URL.forHostlessOriginForm(HttpScheme, target: target)
+		return try URL.forHostlessOriginForm(spelled, target: target)
 	end 'hostless'
 
 	let authority = try headers.get(HostHeaderName) otherwise panic("requestUrlOf: `{HostHeaderName}` was just found present")
 
-	return try URL.forOriginForm(HttpScheme, authority: authority, target: target)
+	return try URL.forOriginForm(spelled, authority: authority, target: target)
 end 'requestUrlOf'
 
 function hostRequiredBy(version String) returns bool throws HttpServerError

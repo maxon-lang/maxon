@@ -24,9 +24,10 @@ public type TlsStream
 	var unreadConsumed as BytePos
 	var writeClosed as bool
 	var closed as bool
+	var handshaking as bool
 
 	module static function establish(transport TcpClient, endpoint TlsEndpoint, peer TlsX509Peer, deadlineMs SocketDeadlineMs) returns TlsStream throws TlsError
-		var stream = Self{transport: transport, endpoint: endpoint, peer: peer, inbound: ByteArray.create(), consumed: 0, unread: ByteArray.create(), unreadConsumed: 0, writeClosed: false, closed: false}
+		var stream = Self{transport: transport, endpoint: endpoint, peer: peer, inbound: ByteArray.create(), consumed: 0, unread: ByteArray.create(), unreadConsumed: 0, writeClosed: false, closed: false, handshaking: true}
 
 		try stream.handshake(deadlineMs)
 
@@ -148,13 +149,28 @@ public type TlsStream
 
 		closed = true
 
+		announceClose()
+		transport.close()
+	end 'close'
+
+	module function closeAfterDraining()
+		if closed 'already'
+			return
+		end 'already'
+
+		closed = true
+
+		announceClose()
+		lingerForThePeer(transport)
+		transport.close()
+	end 'closeAfterDraining'
+
+	function announceClose()
 		if not writeClosed 'announce'
 			try endpoint.session().close() otherwise ignore
 			try flush() otherwise ignore
 		end 'announce'
-
-		transport.close()
-	end 'close'
+	end 'announceClose'
 
 	function handshake(deadlineMs SocketDeadlineMs) throws TlsError
 		try setReadDeadline(deadlineMs)
@@ -167,6 +183,8 @@ public type TlsStream
 
 		try setReadDeadline(NoDeadlineMs)
 		try setWriteDeadline(NoDeadlineMs)
+
+		handshaking = false
 	end 'handshake'
 
 	function pump() throws TlsError
@@ -185,6 +203,7 @@ public type TlsStream
 
 		try flush() otherwise ignore
 
+		lingerForThePeer(transport)
 		transport.close()
 
 		return tlsPublicFailure(failure, session: endpoint.session(), refusal: peer.refusal)
@@ -210,7 +229,7 @@ public type TlsStream
 		end 'eachRecord'
 
 		_ = try transport.send(String.from(wire)) otherwise (failure) 'refused'
-			throw tlsNetworkFailure(failure)
+			throw transportFailure(failure, ordinary: tlsNetworkFailure(failure))
 		end 'refused'
 	end 'flush'
 
@@ -262,12 +281,20 @@ public type TlsStream
 			end 'compact'
 
 			let chunk = try transport.recv(tlsReadChunkBytes) otherwise (failure) 'unreadable'
-				throw tlsReadFailure(failure)
+				throw transportFailure(failure, ordinary: tlsReadFailure(failure))
 			end 'unreadable'
 
 			inbound.append(chunk.toByteArray())
 		end 'filling'
 	end 'fill'
+
+	function transportFailure(failure NetworkError, ordinary TlsError) returns TlsError
+		if handshaking and failure == NetworkError.timedOut 'stalled'
+			return TlsError.handshakeTimedOut
+		end 'stalled'
+
+		return ordinary
+	end 'transportFailure'
 
 	function unreadCount() returns Count
 		return unread.count() - unreadConsumed

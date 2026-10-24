@@ -124,6 +124,16 @@ release's version as its heading when the release is cut.
   the function behind it: after `let f = one as Bin`, `f(3)` against a two-parameter `Bin` is E3036 beside
   the cast's E3009, where only the E3009 was reported.
   Fix: call the value with the arguments of the type it is held at.
+- `HttpError` and `HttpServerError` are unions, each with a new case `tlsFailed(error TlsError)`, so a
+  `match` over either that lists every case is no longer exhaustive, and `==` or `!=` on one is E3066.
+  Fix: add an arm for `tlsFailed`, and replace a comparison such as `e == HttpError.timedOut` with a `match`
+  on `e` that names the case.
+- `HttpClient` fetches an `https` URL over TLS, on port 443 unless the URL names one, where it threw
+  `HttpError.unsupportedScheme`; the error is now thrown only for a scheme that is neither `http` nor
+  `https`.
+  Fix: a program that relied on the refusal checks the scheme itself before the call; one that now reaches
+  a server over TLS handles `HttpError.tlsFailed`, and passes `tls:` to `HttpClient.send` to trust its own
+  roots.
 
 ## 0.5.0 — 2026-10-08
 

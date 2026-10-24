@@ -13,11 +13,12 @@ HTTP/1.1 server for answering requests over TCP connections, on the same green-t
 `TcpListener` and `HttpClient` run on.
 
 **Types:**
-- `HttpServer` — a bound listener that hands out one parsed request at a time
+- `HttpServer` — a bound listener that hands out one parsed request at a time; `bindTls` serves HTTPS (`specs/http-tls.md`)
 - `HttpExchange` — one accepted connection: the request that arrived and the response owed for it
 - `HttpHandler` — the interface `serve` calls for each exchange
 - `HttpServerLimits` — the caps a server parses under
-- `HttpServerError` — error enum for server operations
+- `HttpServerError` — error union for server operations; `tlsFailed(error TlsError)` carries the error of a TLS connection that failed
+- `HttpConnectionSecurity` — what `HttpExchange.security()` reports: `plaintext`, or `tls` with the protocol, cipher suite, ALPN protocol and the client's chain
 
 **Quick usage:**
 
@@ -62,8 +63,8 @@ end 'serveOne'
 - `Content-Length` bodies only. A request carrying `Transfer-Encoding` is answered `501`
 - Every response carries `Connection: close`, and the connection is closed after it. There is no
   keep-alive, so one connection is one request
-- No TLS, and no `Expect: 100-continue`
-- The request `url()` is built as `http://<Host><target>`, so `path()` and `query()` read the target
+- No `Expect: 100-continue`. TLS is `HttpServer.bindTls`, which runs each connection's handshake before its request is read
+- The request `url()` is built as `http://<Host><target>` (`https://` on a TLS server), so `path()` and `query()` read the target
 
 **Limits, and the status each one answers with.** `HttpServerLimits.create()` is `maxHeaderBytes`
 16384, `maxBodyBytes` 1048576, `readDeadlineMs` 10000. A protocol error is ANSWERED on the connection

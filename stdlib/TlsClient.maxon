@@ -99,11 +99,15 @@ public type TlsClient
 			throw tlsNetworkFailure(failure)
 		end 'unreachable'
 
+		return try over(transport, host: host, options: options, deadlineMs: deadlineMs)
+	end 'connect'
+
+	module static function over(transport TcpClient, host String, options TlsClientOptions, deadlineMs SocketDeadlineMs) returns TlsStream throws TlsError
 		let config = options.configFor(host)
 		var peer = try options.authenticator()
 		let entropy = try TlsClientEntropy.fresh(config) otherwise throw TlsError.protocolError(TlsAlert.internalError)
 		var endpoint = try TlsClientHandshake.create(config, entropy: entropy, peer: peer, helloSource: TlsBuiltClientHello.create()) otherwise throw TlsError.invalidConfiguration
 
 		return try TlsStream.establish(transport, endpoint: endpoint, peer: peer, deadlineMs: deadlineMs)
-	end 'connect'
+	end 'over'
 end 'TlsClient'

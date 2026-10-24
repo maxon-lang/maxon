@@ -1,7 +1,7 @@
 /// HTTP/1.1 server for answering requests over TCP connections.
 /// @category Network
-/// Server-side HTTP errors.
-public enum HttpServerError implements Error
+/// Server-side HTTP errors. `tlsFailed` carries the `TlsError` of a connection whose handshake or TLS session failed.
+public union HttpServerError implements Error
 	acceptFailed
 	malformedRequest
 	headersTooLarge
@@ -17,6 +17,7 @@ public enum HttpServerError implements Error
 	unsupportedVersion
 	acceptInterrupted
 	invalidResponse
+	tlsFailed(error TlsError)
 end 'HttpServerError'
 
 /// Why `serve` returned.
@@ -68,8 +69,6 @@ let DefaultWriteDeadlineMs = 10000
 let PlainTextContentType = "text/plain"
 let AllowHeaderName = "allow"
 let AllowedMethodSeparator = ", "
-let LingerDeadlineMs = 500
-let LingerDrainBytes = 262144
 let NoAcceptRetryMs = 0 as HttpAcceptRetryMs
 let FirstAcceptRetryMs = 5
 let LastAcceptRetryMs = 1000
@@ -109,23 +108,35 @@ type ExchangeProgress
 	end 'create'
 end 'ExchangeProgress'
 
+/// What a handler can tell of the connection a request arrived on. A TLS connection reports the protocol and
+/// cipher suite negotiated, the ALPN protocol, and the chain the client presented, empty when it presented none.
+public union HttpConnectionSecurity
+	plaintext
+	tls(protocol TlsProtocol, cipherSuite TlsCipherSuite, applicationProtocol TlsApplicationProtocol, peerCertificates ByteArrays)
+end 'HttpConnectionSecurity'
+
 /// One accepted connection: the request that arrived and the response owed for it.
 public type HttpExchange
-	let connection as TcpClient
+	var connection as HttpTransport
 	let parsed as HttpRequest
 	var progress as ExchangeProgress
 	let writeDeadlineMs as SocketDeadlineMs
 	let leftoverArrived as bool
 
-	static function create(connection TcpClient, parsed HttpRequest, writeDeadlineMs SocketDeadlineMs, leftoverArrived bool) returns HttpExchange
+	static function create(connection HttpTransport, parsed HttpRequest, writeDeadlineMs SocketDeadlineMs, leftoverArrived bool) returns HttpExchange
 		return HttpExchange{connection: connection, parsed: parsed, progress: ExchangeProgress.create(), writeDeadlineMs: writeDeadlineMs, leftoverArrived: leftoverArrived}
 	end 'create'
 
 	/// The request that arrived. Its `url()` is read from an absolute-form target, and otherwise built
-	/// as `http://<Host><target>`, hostless for an HTTP/1.0 request that sent no `Host`.
+	/// as `http://<Host><target>` (`https` on a TLS server), hostless for an HTTP/1.0 request that sent no `Host`.
 	public function request() returns HttpRequest
 		return self.parsed
 	end 'request'
+
+	/// Whether the request arrived over TLS, and what the handshake settled.
+	public function security() returns HttpConnectionSecurity
+		return self.connection.security()
+	end 'security'
 
 	function stage() returns ResponseStage
 		return self.progress.stage
@@ -180,9 +191,49 @@ type ArrivedBody
 	end 'create'
 end 'ArrivedBody'
 
+union ServerListener
+	plain(listener TcpListener)
+	secure(listener TlsListener)
+
+	function port() returns NetworkPort
+		match self 'which'
+			plain(listener) then return listener.port()
+			secure(listener) then return listener.port()
+		end 'which'
+	end 'port'
+
+	function scheme() returns HttpUrlScheme
+		return match self 'which'
+			plain gives HttpUrlScheme.http
+			secure gives HttpUrlScheme.https
+		end 'which'
+	end 'scheme'
+
+	function accept(closing ServerClosing) returns HttpTransport throws HttpServerError
+		match self 'which'
+			plain(listener) then return try plainConnectionFrom(listener, closing: closing)
+			secure(listener) then return try secureConnectionFrom(listener, closing: closing)
+		end 'which'
+	end 'accept'
+
+	function setAcceptDeadline(milliseconds SocketDeadlineMs) throws HttpServerError
+		match self 'which'
+			plain(listener) then try plainAcceptDeadline(listener, milliseconds: milliseconds)
+			secure(listener) then try secureAcceptDeadline(listener, milliseconds: milliseconds)
+		end 'which'
+	end 'setAcceptDeadline'
+
+	function close()
+		match self 'which'
+			plain(listener) then listener.close()
+			secure(listener) then listener.close()
+		end 'which'
+	end 'close'
+end 'ServerListener'
+
 /// A bound listener that hands out one parsed request at a time.
 public type HttpServer
-	let listener as TcpListener
+	let listener as ServerListener
 	var limits as HttpServerLimits
 	var closing as ServerClosing
 	let boundPort as NetworkPort
@@ -191,8 +242,24 @@ public type HttpServer
 	public static function bind(host String, port NetworkPort) returns HttpServer throws NetworkError
 		let listener = try TcpListener.bind(host, port: port)
 
-		return HttpServer{listener: listener, limits: HttpServerLimits.create(), closing: ServerClosing.create(), boundPort: listener.port()}
+		return HttpServer.listening(ServerListener.plain(listener))
 	end 'bind'
+
+	/// Bind as `bind(host, port:)` does and serve HTTPS: each accepted connection runs the TLS handshake under
+	/// `options`, offering the ALPN protocol `http/1.1`, before its request is read.
+	public static function bindTls(host String, port NetworkPort, options TlsServerOptions) returns HttpServer throws TlsError
+		var offering = options.clone()
+
+		try offering.setApplicationProtocols([HttpApplicationProtocol]) otherwise panic("HttpServer: `{HttpApplicationProtocol}` is a usable ALPN protocol name")
+
+		let listener = try TlsListener.bind(host, port: port, options: offering)
+
+		return HttpServer.listening(ServerListener.secure(listener))
+	end 'bindTls'
+
+	static function listening(listener ServerListener) returns HttpServer
+		return HttpServer{listener: listener, limits: HttpServerLimits.create(), closing: ServerClosing.create(), boundPort: listener.port()}
+	end 'listening'
 
 	/// The port this server is bound to — the one the kernel chose when `bind` was asked for `0`.
 	public function port() returns NetworkPort
@@ -207,9 +274,7 @@ public type HttpServer
 	/// Make an `accept()` still waiting `milliseconds` after this call throw `acceptTimedOut`, which
 	/// ends `serve`. `0` clears it.
 	public function setAcceptDeadline(milliseconds SocketDeadlineMs) throws HttpServerError
-		try self.listener.setAcceptDeadline(milliseconds) otherwise 'noListener'
-			throw HttpServerError.listenerClosed
-		end 'noListener'
+		try self.listener.setAcceptDeadline(milliseconds)
 	end 'setAcceptDeadline'
 
 	/// Take the next connection and the one request on it. A request this server refuses is answered
@@ -221,19 +286,17 @@ public type HttpServer
 				throw HttpServerError.listenerClosed
 			end 'alreadyClosed'
 
-			let connection = try self.listener.accept() otherwise (cause) 'noConnection'
-				throw listenerFaultOf(cause, closing: self.closing)
-			end 'noConnection'
+			var transport = try self.listener.accept(self.closing)
 
-			let arrival = try self.arrivalOn(connection) otherwise (fault) 'protocolFault'
-				answerProtocolFault(connection, fault: fault, writeDeadlineMs: self.limits.writeDeadlineMs)
+			var arrival = try self.arrivalOn(transport) otherwise (fault) 'protocolFault'
+				answerProtocolFault(transport, fault: fault, writeDeadlineMs: self.limits.writeDeadlineMs)
 
 				throw fault
 			end 'protocolFault'
 
 			match arrival 'arrival'
 				forResource(exchange) then return exchange
-				forTheServer(leftoverArrived) then answerServerWideOptions(connection, leftoverArrived: leftoverArrived, writeDeadlineMs: self.limits.writeDeadlineMs)
+				forTheServer(leftoverArrived) then answerServerWideOptions(transport, leftoverArrived: leftoverArrived, writeDeadlineMs: self.limits.writeDeadlineMs)
 			end 'arrival'
 		end 'nextConnection'
 
@@ -275,11 +338,11 @@ public type HttpServer
 		self.listener.close()
 	end 'close'
 
-	function arrivalOn(connection TcpClient) returns RequestArrival throws HttpServerError
+	function arrivalOn(connection HttpTransport) returns RequestArrival throws HttpServerError
 		try connection.setReadDeadline(self.limits.readDeadlineMs) otherwise throw HttpServerError.connectionClosed
 
 		var inbound = HttpInbound.over(connection)
-		let head = try httpParseRequestHead(try readRequestHead(inbound, cap: self.limits.maxHeaderBytes as BytePos))
+		let head = try httpParseRequestHead(try readRequestHead(inbound, cap: self.limits.maxHeaderBytes as BytePos), scheme: self.listener.scheme())
 
 		match head 'target'
 			wholeServer(headers) then return RequestArrival.forTheServer((try self.bodyAfter(headers, inbound: inbound)).leftoverArrived)
@@ -349,7 +412,8 @@ function progressAfter(fault HttpServerError) returns ServeProgress
 		unsupportedMethod or
 		unsupportedVersion or
 		readTimedOut or
-		connectionClosed gives ServeProgress.serving
+		connectionClosed or
+		tlsFailed gives ServeProgress.serving
 		sendFailed or
 		alreadyResponded or
 		invalidResponse panic("HttpServer.serve: `accept()` does not throw `{fault.name}`")
@@ -357,10 +421,27 @@ function progressAfter(fault HttpServerError) returns ServeProgress
 end 'progressAfter'
 
 function acceptRetryAfter(fault HttpServerError, previous HttpAcceptRetryMs) returns HttpAcceptRetryMs
-	if fault != HttpServerError.acceptInterrupted 'noRetry'
-		return NoAcceptRetryMs
-	end 'noRetry'
+	return match fault 'which'
+		acceptInterrupted gives longerRetryThan(previous)
+		acceptFailed or
+		malformedRequest or
+		headersTooLarge or
+		bodyTooLarge or
+		unsupportedTransferEncoding or
+		readTimedOut or
+		connectionClosed or
+		sendFailed or
+		listenerClosed or
+		acceptTimedOut or
+		alreadyResponded or
+		unsupportedMethod or
+		unsupportedVersion or
+		invalidResponse or
+		tlsFailed gives NoAcceptRetryMs
+	end 'which'
+end 'acceptRetryAfter'
 
+function longerRetryThan(previous HttpAcceptRetryMs) returns HttpAcceptRetryMs
 	if previous == NoAcceptRetryMs 'firstRetry'
 		return FirstAcceptRetryMs
 	end 'firstRetry'
@@ -370,7 +451,61 @@ function acceptRetryAfter(fault HttpServerError, previous HttpAcceptRetryMs) ret
 	end 'atTheLongest'
 
 	return previous * AcceptRetryGrowth
-end 'acceptRetryAfter'
+end 'longerRetryThan'
+
+function plainConnectionFrom(listener TcpListener, closing ServerClosing) returns HttpTransport throws HttpServerError
+	let connection = try listener.accept() otherwise (cause) 'noConnection'
+		throw listenerFaultOf(cause, closing: closing)
+	end 'noConnection'
+
+	return HttpTransport.plain(connection)
+end 'plainConnectionFrom'
+
+function secureConnectionFrom(listener TlsListener, closing ServerClosing) returns HttpTransport throws HttpServerError
+	let stream = try listener.accept() otherwise (error) 'noConnection'
+		throw secureListenerFault(error, closing: closing)
+	end 'noConnection'
+
+	return HttpTransport.secure(stream)
+end 'secureConnectionFrom'
+
+function plainAcceptDeadline(listener TcpListener, milliseconds SocketDeadlineMs) throws HttpServerError
+	try listener.setAcceptDeadline(milliseconds) otherwise 'noListener'
+		throw HttpServerError.listenerClosed
+	end 'noListener'
+end 'plainAcceptDeadline'
+
+function secureAcceptDeadline(listener TlsListener, milliseconds SocketDeadlineMs) throws HttpServerError
+	try listener.setAcceptDeadline(milliseconds) otherwise 'noListener'
+		throw HttpServerError.listenerClosed
+	end 'noListener'
+end 'secureAcceptDeadline'
+
+function secureListenerFault(error TlsError, closing ServerClosing) returns HttpServerError
+	return match error 'error'
+		timedOut gives listenerFaultOf(NetworkError.timedOut, closing: closing)
+		acceptFailed gives listenerFaultOf(NetworkError.acceptFailed, closing: closing)
+		acceptInterrupted gives listenerFaultOf(NetworkError.acceptInterrupted, closing: closing)
+		handshakeTimedOut or
+		resolveFailed or
+		connectFailed or
+		bindFailed or
+		sendFailed or
+		recvFailed or
+		connectionClosed or
+		truncated or
+		closed or
+		trustStoreUnavailable or
+		invalidConfiguration or
+		invalidCertificate or
+		invalidPrivateKey or
+		invalidPem or
+		certificateRejected or
+		protocolError or
+		peerAlert or
+		peerAlertUnrecognised gives HttpServerError.tlsFailed(error)
+	end 'error'
+end 'secureListenerFault'
 
 function listenerFaultOf(cause NetworkError, closing ServerClosing) returns HttpServerError
 	if closing.asked 'closedWhileParked'
@@ -389,7 +524,7 @@ function dispatchExchange(exchange HttpExchange, handler HttpHandler)
 	let request = exchange.request()
 
 	try handler.handle(exchange) otherwise (fault) 'handlerThrew'
-		handler.faulted(answerAThrow(exchange, request: request, fault: fault))
+		handler.faulted(answerAThrow(exchange, request: request, fault: fault.clone()))
 
 		return
 	end 'handlerThrew'
@@ -413,29 +548,48 @@ function answerInsteadOfTheHandler(exchange HttpExchange, answered HttpHandlerFa
 	return answered
 end 'answerInsteadOfTheHandler'
 
-function protocolStatusFor(fault HttpServerError) returns StatusCode
+union ProtocolAnswer
+	status(code StatusCode, lingering bool)
+	unanswerable
+end 'ProtocolAnswer'
+
+function protocolAnswerFor(fault HttpServerError) returns ProtocolAnswer
 	return match fault 'which'
-		malformedRequest or
-		connectionClosed gives StatusCode.badRequest
-		headersTooLarge gives StatusCode.headerFieldsTooLarge
-		bodyTooLarge gives StatusCode.payloadTooLarge
+		connectionClosed gives ProtocolAnswer.status(StatusCode.badRequest, lingering: false)
+		malformedRequest gives ProtocolAnswer.status(StatusCode.badRequest, lingering: true)
+		headersTooLarge gives ProtocolAnswer.status(StatusCode.headerFieldsTooLarge, lingering: true)
+		bodyTooLarge gives ProtocolAnswer.status(StatusCode.payloadTooLarge, lingering: true)
 		unsupportedTransferEncoding or
-		unsupportedMethod gives StatusCode.notImplemented
-		unsupportedVersion gives StatusCode.httpVersionNotSupported
-		readTimedOut gives StatusCode.requestTimeout
-		default panic("HttpServer.protocolStatusFor: `{fault.name}` is not a fault reading a request can end in")
+		unsupportedMethod gives ProtocolAnswer.status(StatusCode.notImplemented, lingering: true)
+		unsupportedVersion gives ProtocolAnswer.status(StatusCode.httpVersionNotSupported, lingering: true)
+		readTimedOut gives ProtocolAnswer.status(StatusCode.requestTimeout, lingering: true)
+		tlsFailed gives ProtocolAnswer.unanswerable
+		acceptFailed or
+		sendFailed or
+		listenerClosed or
+		acceptTimedOut or
+		alreadyResponded or
+		acceptInterrupted or
+		invalidResponse panic("HttpServer.protocolAnswerFor: `{fault.name}` is not a fault reading a request can end in")
 	end 'which'
-end 'protocolStatusFor'
+end 'protocolAnswerFor'
 
 // A failed send is ignored: the peer may already be gone, and the caller must see the fault the
 // request was refused for.
-function answerProtocolFault(connection TcpClient, fault HttpServerError, writeDeadlineMs SocketDeadlineMs)
-	let answer = httpResponseWith(protocolStatusFor(fault), body: "", contentType: PlainTextContentType)
-	let head = try httpBuildResponseHead(answer) otherwise panic("answerProtocolFault: a refusal the server builds itself is always sendable")
-	try sendAndClose(connection, wire: head, writeDeadlineMs: writeDeadlineMs, lingering: fault != HttpServerError.connectionClosed) otherwise ignore
+function answerProtocolFault(connection HttpTransport, fault HttpServerError, writeDeadlineMs SocketDeadlineMs)
+	match protocolAnswerFor(fault) 'answer'
+		status(code, lingering) then sendProtocolStatus(connection, code: code, lingering: lingering, writeDeadlineMs: writeDeadlineMs)
+		unanswerable then connection.close()
+	end 'answer'
 end 'answerProtocolFault'
 
-function answerServerWideOptions(connection TcpClient, leftoverArrived bool, writeDeadlineMs SocketDeadlineMs)
+function sendProtocolStatus(connection HttpTransport, code StatusCode, lingering bool, writeDeadlineMs SocketDeadlineMs)
+	let answer = httpResponseWith(code, body: "", contentType: PlainTextContentType)
+	let head = try httpBuildResponseHead(answer) otherwise panic("sendProtocolStatus: a refusal the server builds itself is always sendable")
+	try sendAndClose(connection, wire: head, writeDeadlineMs: writeDeadlineMs, lingering: lingering) otherwise ignore
+end 'sendProtocolStatus'
+
+function answerServerWideOptions(connection HttpTransport, leftoverArrived bool, writeDeadlineMs SocketDeadlineMs)
 	var allowed = StringBuilder.create()
 
 	for (iter, method) in HttpMethod.allCases.withIterator() 'eachMethod'
@@ -454,7 +608,7 @@ function answerServerWideOptions(connection TcpClient, leftoverArrived bool, wri
 	try sendAndClose(connection, wire: head, writeDeadlineMs: writeDeadlineMs, lingering: leftoverArrived) otherwise ignore
 end 'answerServerWideOptions'
 
-function sendAndClose(connection TcpClient, wire String, writeDeadlineMs SocketDeadlineMs, lingering bool) throws NetworkError
+function sendAndClose(connection HttpTransport, wire String, writeDeadlineMs SocketDeadlineMs, lingering bool) throws HttpTransportFault
 	try sendWithin(connection, wire: wire, writeDeadlineMs: writeDeadlineMs) otherwise (e) 'unsent'
 		connection.close()
 
@@ -464,39 +618,24 @@ function sendAndClose(connection TcpClient, wire String, writeDeadlineMs SocketD
 	closeConnection(connection, lingering: lingering)
 end 'sendAndClose'
 
-function sendWithin(connection TcpClient, wire String, writeDeadlineMs SocketDeadlineMs) throws NetworkError
+function sendWithin(connection HttpTransport, wire String, writeDeadlineMs SocketDeadlineMs) throws HttpTransportFault
 	try connection.setWriteDeadline(writeDeadlineMs)
-	_ = try connection.send(wire)
+	try connection.send(wire)
 end 'sendWithin'
 
-function closeConnection(connection TcpClient, lingering bool)
+function closeConnection(connection HttpTransport, lingering bool)
 	if lingering 'peerMayStillSend'
-		lingerForThePeer(connection)
-	end 'peerMayStillSend'
-
-	connection.close()
+		connection.closeAfterDraining()
+	end 'peerMayStillSend' else 'peerHasSaidItAll'
+		connection.close()
+	end 'peerHasSaidItAll'
 end 'closeConnection'
 
-// Closing a socket with received bytes still unread resets the connection, which can destroy the
-// answer before the peer reads it (RFC 9112 section 9.6). So the write side is shut first and the
-// peer's bytes drained, bounded in time and bytes so a peer that keeps sending cannot hold it.
-function lingerForThePeer(connection TcpClient)
-	try connection.shutdownWrite() otherwise return
-	try connection.setReadDeadline(LingerDeadlineMs) otherwise return
-
-	var drained = 0 as BytePos
-
-	while drained < LingerDrainBytes 'drain'
-		let chunk = try connection.recv(HttpReadChunkBytes) otherwise return
-		drained = drained + chunk.byteLength()
-	end 'drain'
-end 'lingerForThePeer'
-
-function serverReadFault(cause NetworkError) returns HttpServerError
+function serverReadFault(cause HttpTransportFault) returns HttpServerError
 	return match cause 'which'
 		timedOut gives HttpServerError.readTimedOut
-		connectionClosed or
-		recvFailed gives HttpServerError.connectionClosed
-		default panic("HttpServer.serverReadFault: `TcpClient.recv` does not throw `{cause.name}`")
+		closed or
+		failed gives HttpServerError.connectionClosed
+		secure(error) gives HttpServerError.tlsFailed(error)
 	end 'which'
 end 'serverReadFault'

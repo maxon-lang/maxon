@@ -176,3 +176,22 @@ public type TcpClient
 		socket.close()
 	end 'close'
 end 'TcpClient'
+
+let LingerDeadlineMs = 500
+let LingerDrainBytes = 262144
+let LingerReadBytes = 8192
+
+// Closing a socket with received bytes still unread resets the connection, which can destroy the
+// answer before the peer reads it (RFC 9112 section 9.6). So the write side is shut first and the
+// peer's bytes drained, bounded in time and bytes so a peer that keeps sending cannot hold it.
+module function lingerForThePeer(connection TcpClient)
+	try connection.shutdownWrite() otherwise return
+	try connection.setReadDeadline(LingerDeadlineMs) otherwise return
+
+	var drained = 0 as BytePos
+
+	while drained < LingerDrainBytes 'drain'
+		let chunk = try connection.recv(LingerReadBytes) otherwise return
+		drained = drained + chunk.byteLength()
+	end 'drain'
+end 'lingerForThePeer'

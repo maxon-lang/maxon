@@ -1,0 +1,178 @@
+/// The byte stream HTTP/1.1 runs over: a plain TCP connection or a TLS session on one.
+/// @category Internal
+public union HttpTransportFault implements Error
+	closed
+	timedOut
+	failed
+	secure(error TlsError)
+end 'HttpTransportFault'
+
+public union HttpTransport
+	plain(connection TcpClient)
+	secure(stream TlsStream)
+
+	public function recv(bufferSize RecvCapacity) returns String throws HttpTransportFault
+		match self 'transport'
+			plain(connection) then return try httpPlainRecv(connection, bufferSize: bufferSize)
+			secure(stream) then return try httpSecureRecv(stream, bufferSize: bufferSize)
+		end 'transport'
+	end 'recv'
+
+	public function send(data String) throws HttpTransportFault
+		match self 'transport'
+			plain(connection) then try httpPlainSend(connection, data: data)
+			secure(stream) then try httpSecureSend(stream, data: data)
+		end 'transport'
+	end 'send'
+
+	public function setReadDeadline(milliseconds SocketDeadlineMs) throws HttpTransportFault
+		match self 'transport'
+			plain(connection) then try httpPlainReadDeadline(connection, milliseconds: milliseconds)
+			secure(stream) then try httpSecureReadDeadline(stream, milliseconds: milliseconds)
+		end 'transport'
+	end 'setReadDeadline'
+
+	public function setWriteDeadline(milliseconds SocketDeadlineMs) throws HttpTransportFault
+		match self 'transport'
+			plain(connection) then try httpPlainWriteDeadline(connection, milliseconds: milliseconds)
+			secure(stream) then try httpSecureWriteDeadline(stream, milliseconds: milliseconds)
+		end 'transport'
+	end 'setWriteDeadline'
+
+	public function shutdownWrite() throws HttpTransportFault
+		match self 'transport'
+			plain(connection) then try httpPlainShutdownWrite(connection)
+			secure(stream) then try httpSecureShutdownWrite(stream)
+		end 'transport'
+	end 'shutdownWrite'
+
+	public function close()
+		match self 'transport'
+			plain(connection) then connection.close()
+			secure(stream) then stream.close()
+		end 'transport'
+	end 'close'
+
+	public function closeAfterDraining()
+		match self 'transport'
+			plain(connection) then httpPlainCloseAfterDraining(connection)
+			secure(stream) then stream.closeAfterDraining()
+		end 'transport'
+	end 'closeAfterDraining'
+
+	public function security() returns HttpConnectionSecurity
+		match self 'transport'
+			plain then return HttpConnectionSecurity.plaintext
+			secure(stream) then return HttpConnectionSecurity.tls(stream.protocol(), cipherSuite: stream.cipherSuite(), applicationProtocol: stream.applicationProtocol(), peerCertificates: stream.peerCertificates())
+		end 'transport'
+	end 'security'
+end 'HttpTransport'
+
+function httpPlainFault(cause NetworkError) returns HttpTransportFault
+	return match cause 'cause'
+		connectionClosed gives HttpTransportFault.closed
+		timedOut gives HttpTransportFault.timedOut
+		recvFailed or
+		sendFailed gives HttpTransportFault.failed
+		resolveFailed or
+		connectFailed or
+		bindFailed or
+		acceptFailed or
+		acceptInterrupted panic("HttpTransport: a connected socket does not throw `{cause.name}`")
+	end 'cause'
+end 'httpPlainFault'
+
+function httpSecureFault(error TlsError) returns HttpTransportFault
+	return match error 'error'
+		connectionClosed gives HttpTransportFault.closed
+		timedOut gives HttpTransportFault.timedOut
+		recvFailed or
+		sendFailed gives HttpTransportFault.failed
+		resolveFailed or
+		connectFailed or
+		bindFailed or
+		acceptFailed or
+		acceptInterrupted or
+		handshakeTimedOut or
+		truncated or
+		closed or
+		trustStoreUnavailable or
+		invalidConfiguration or
+		invalidCertificate or
+		invalidPrivateKey or
+		invalidPem or
+		certificateRejected or
+		protocolError or
+		peerAlert or
+		peerAlertUnrecognised gives HttpTransportFault.secure(error)
+	end 'error'
+end 'httpSecureFault'
+
+function httpPlainCloseAfterDraining(connection TcpClient)
+	lingerForThePeer(connection)
+	connection.close()
+end 'httpPlainCloseAfterDraining'
+
+function httpPlainRecv(connection TcpClient, bufferSize RecvCapacity) returns String throws HttpTransportFault
+	let arrived = try connection.recv(bufferSize) otherwise (cause) 'unread'
+		throw httpPlainFault(cause)
+	end 'unread'
+
+	return arrived
+end 'httpPlainRecv'
+
+function httpSecureRecv(stream TlsStream, bufferSize RecvCapacity) returns String throws HttpTransportFault
+	let arrived = try stream.recv(bufferSize) otherwise (error) 'unread'
+		throw httpSecureFault(error)
+	end 'unread'
+
+	return arrived
+end 'httpSecureRecv'
+
+function httpPlainSend(connection TcpClient, data String) throws HttpTransportFault
+	_ = try connection.send(data) otherwise (cause) 'unsent'
+		throw httpPlainFault(cause)
+	end 'unsent'
+end 'httpPlainSend'
+
+function httpSecureSend(stream TlsStream, data String) throws HttpTransportFault
+	_ = try stream.send(data) otherwise (error) 'unsent'
+		throw httpSecureFault(error)
+	end 'unsent'
+end 'httpSecureSend'
+
+function httpPlainReadDeadline(connection TcpClient, milliseconds SocketDeadlineMs) throws HttpTransportFault
+	try connection.setReadDeadline(milliseconds) otherwise (cause) 'refused'
+		throw httpPlainFault(cause)
+	end 'refused'
+end 'httpPlainReadDeadline'
+
+function httpSecureReadDeadline(stream TlsStream, milliseconds SocketDeadlineMs) throws HttpTransportFault
+	try stream.setReadDeadline(milliseconds) otherwise (error) 'refused'
+		throw httpSecureFault(error)
+	end 'refused'
+end 'httpSecureReadDeadline'
+
+function httpPlainWriteDeadline(connection TcpClient, milliseconds SocketDeadlineMs) throws HttpTransportFault
+	try connection.setWriteDeadline(milliseconds) otherwise (cause) 'refused'
+		throw httpPlainFault(cause)
+	end 'refused'
+end 'httpPlainWriteDeadline'
+
+function httpSecureWriteDeadline(stream TlsStream, milliseconds SocketDeadlineMs) throws HttpTransportFault
+	try stream.setWriteDeadline(milliseconds) otherwise (error) 'refused'
+		throw httpSecureFault(error)
+	end 'refused'
+end 'httpSecureWriteDeadline'
+
+function httpPlainShutdownWrite(connection TcpClient) throws HttpTransportFault
+	try connection.shutdownWrite() otherwise (cause) 'refused'
+		throw httpPlainFault(cause)
+	end 'refused'
+end 'httpPlainShutdownWrite'
+
+function httpSecureShutdownWrite(stream TlsStream) throws HttpTransportFault
+	try stream.shutdownWrite() otherwise (error) 'refused'
+		throw httpSecureFault(error)
+	end 'refused'
+end 'httpSecureShutdownWrite'

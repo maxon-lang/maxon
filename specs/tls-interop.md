@@ -23,6 +23,14 @@ connection, the echo, and how the connection ended.
 - `TlsListener` against `openssl s_client`, which verifies the chain and the name (`-verify_return_error`,
   `-verify_hostname`), sends `ping` and prints the answer. The listener ends its stream with `shutdownWrite` and
   reads the client's close_notify as the end of the stream. Mutual TLS has `s_client` present the client leaf.
+- `HttpClient` against `openssl s_server -www` and `-WWW` fetches the status page and a staged file over `https://localhost:<port>/`,
+  verifying the chain and the name from the URL. These servers frame the body by the close of the connection. OpenSSL 3
+  ends it with a close_notify and `HttpClient` returns the page; OpenSSL 1.1.1 closes the connection without one,
+  and `HttpClient` throws `HttpError.tlsFailed(truncated)` rather than take a possibly cut body for a whole one. The
+  case reads the `-msg` output for the close_notify the server sent and requires the matching outcome.
+- `HttpServer.bindTls` against `openssl s_client`, which sends a raw request and verifies the chain and the name: GET and
+  POST over TLS 1.3 and 1.2, ALPN `http/1.1`, a client that offers only `h2`, and a server that requires client
+  certificates, which reads the chain `s_client` presents from `exchange.security()`.
 - Both verify certificates at the fixed time of the canra test PKI (`setVerificationTime` on our side, `-attime` on
   OpenSSL's), because the certificates are valid for 2025-06-01 to 2026-06-01.
 
@@ -91,6 +99,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -445,6 +454,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -814,6 +824,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -1168,6 +1179,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -1533,6 +1545,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -1814,6 +1827,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -2110,6 +2124,7 @@ function describe(error TlsError) returns String
 		acceptFailed or
 		acceptInterrupted or
 		timedOut or
+		handshakeTimedOut or
 		sendFailed or
 		recvFailed or
 		connectionClosed or
@@ -2342,6 +2357,762 @@ end 'main'
 ```stdout
 tls13: server[heard=ping protocol=tls13 suite=tls13/chaCha20Poly1305Sha256 peers=1 then connectionClosed] s_client[exit=0 reply=true verification=OK negotiated=TLSv1.3, Cipher is TLS_CHACHA20_POLY1305_SHA256]
 tls12: server[heard=ping protocol=tls12 suite=tls12/ecdheEcdsaChaCha20Poly1305Sha256 peers=1 then connectionClosed] s_client[exit=0 reply=true verification=OK negotiated=TLSv1.2, Cipher is ECDHE-ECDSA-CHACHA20-POLY1305]
+```
+```exitcode
+0
+```
+
+<!-- test: tls-interop.http-client-against-openssl-s_server -->
+<!-- unsupported-targets: wasm32-wasi -->
+<!-- procs: 1 -->
+`HttpClient` fetches `https://localhost:<port>/` from a live `openssl s_server`, verifying its chain (the case's root, the name `localhost` taken from the URL) in TLS 1.3 and in TLS 1.2. `-www` answers with its status page, which has no `Content-Length` and ends with the connection, so the body is read to the server's close_notify; `-WWW` serves a staged file the same way and the body must arrive byte for byte. A client that trusts another root refuses the chain with the typed `HttpError.tlsFailed`.
+```maxon
+function digit(symbol Byte) returns Byte
+	if symbol >= 0x61 'letter'
+		return symbol - 0x57
+	end 'letter'
+
+	return symbol - 0x30
+end 'digit'
+
+function fromHex(hex String) returns ByteArray
+	var bytes = ByteArray.create()
+	var high = 0 as Byte
+	var isHigh = true
+
+	for symbol in hex.bytes() 'eachSymbol'
+		if isHigh 'first'
+			high = digit(symbol)
+		end 'first' else 'second'
+			bytes.push(high * 16 + digit(symbol))
+		end 'second'
+
+		isHigh = not isHigh
+	end 'eachSymbol'
+
+	return bytes
+end 'fromHex'
+
+function toHex(bytes ByteArray) returns String
+	var text = ""
+
+	for byte in bytes 'eachByte'
+		text.append("{byte:02x}")
+	end 'eachByte'
+
+	return text
+end 'toHex'
+
+function describe(error TlsError) returns String
+	return match error 'error'
+		certificateRejected(reason) gives "certificateRejected({reason.name})"
+		protocolError(alert) gives "protocolError({alert.name})"
+		peerAlert(alert) gives "peerAlert({alert.name})"
+		peerAlertUnrecognised(code) gives "peerAlertUnrecognised({code})"
+		resolveFailed or
+		connectFailed or
+		bindFailed or
+		acceptFailed or
+		acceptInterrupted or
+		timedOut or
+		handshakeTimedOut or
+		sendFailed or
+		recvFailed or
+		connectionClosed or
+		truncated or
+		closed or
+		trustStoreUnavailable or
+		invalidConfiguration or
+		invalidCertificate or
+		invalidPrivateKey or
+		invalidPem gives error.name
+	end 'error'
+end 'describe'
+
+function describeHttp(error HttpError) returns String
+	return match error 'error'
+		tlsFailed(cause) gives "tlsFailed({describe(cause)})"
+		invalidUrl or
+		connectFailed or
+		sendFailed or
+		recvFailed or
+		invalidResponse or
+		unsupportedScheme or
+		timedOut or
+		bodyTooLarge gives error.name
+	end 'error'
+end 'describeHttp'
+
+function alpnName(protocol TlsApplicationProtocol) returns String
+	return match protocol 'protocol'
+		negotiated(name) gives name
+		unnegotiated gives "none"
+	end 'protocol'
+end 'alpnName'
+
+function describeSecurity(security HttpConnectionSecurity) returns String
+	return match security 'security'
+		plaintext gives "plaintext"
+		tls(protocol, _, alpn, chain) gives "{protocol.name} alpn={alpnName(alpn)} peers={chain.count()}"
+	end 'security'
+end 'describeSecurity'
+
+function identityOf(chainHex String, keyHex String) returns TlsIdentity
+	return try TlsIdentity.fromDer(ByteArrays from [fromHex(chainHex)], key: fromHex(keyHex)) otherwise panic("the case's identity was refused")
+end 'identityOf'
+
+function serverOptions() returns TlsServerOptions
+	var options = TlsServerOptions.create(identityOf(httpLeafHex, keyHex: httpKeyHex))
+	options.setVerificationTime(verificationTime)
+
+	return options
+end 'serverOptions'
+
+function clientOptions() returns TlsClientOptions
+	var options = TlsClientOptions.create()
+	try options.setTrustedRoots(RootCertificates from [fromHex(httpRootHex)]) otherwise panic("the case's root was refused")
+	options.setVerificationTime(verificationTime)
+
+	return options
+end 'clientOptions'
+
+let httpRootHex = "308201393081e0a003020102020101300a06082a8648ce3d04030230143112301006035504030c094874747020526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a30143112301006035504030c094874747020526f6f743059301306072a8648ce3d020106082a8648ce3d030107034200042add37c17913cb18b549a69580089eb9323de7f22de2c3181db98b7b1af13c6b78135256dd11551b86c4f86e3dae6cfcf245eaf6442184dae9ea608c2f3c004aa3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d040302034800304502206d7b3dc25a0ad07455032b4f016cfd69ff1cbc4e021961faeb5b09bf70c9c4a2022100ac903b13c31af0fcbbc8fd0200ef73a4e7877e9f1cd46fdf7e837272898dd63e"
+let httpLeafHex = "308201673082010ea003020102020102300a06082a8648ce3d04030230143112301006035504030c094874747020526f6f74301e170d3235303630313030303030305a170d3236303630313030303030305a30143112301006035504030c096c6f63616c686f73743059301306072a8648ce3d020106082a8648ce3d03010703420004f497701f24f5e42fd21956fde64826c0fc9f7c509714de2f66013c4035563f2626251fd4d3af54f434ef90687ba04a87bbe7ea32e2d44a0ba71f96d2be49042ea351304f300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b06010505070301301a0603551d110413301187047f00000182096c6f63616c686f7374300a06082a8648ce3d04030203470030440220497a1f88f2932abb12b4accf346bd317243ca613a4fa172595c9956b4fde24790220354de8edd3761aae3fd7480214164f9f348b6310a675ae89043a325099c7c49c"
+let httpKeyHex = "308187020100301306072a8648ce3d020106082a8648ce3d030107046d306b02010104207dd23c58ab3675629f5831918dc3ab1f33f01b146b91cf0a5a86d9e701dba53ea14403420004f497701f24f5e42fd21956fde64826c0fc9f7c509714de2f66013c4035563f2626251fd4d3af54f434ef90687ba04a87bbe7ea32e2d44a0ba71f96d2be49042e"
+let exampleRootHex = "3082012f3081d6a003020102020101300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a300f310d300b06035504030c04526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000469fd1970f970c21034e836c954aefc78dffef4a3d72650f1ec5e70559cc0663d0722d3408f27d8be5a08ceb432c37b7049cc8758c88c3d85e4db83aa471b62b7a3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d0403020348003045022053bac2d2f62299dd459d79bce22d671aeeb6ee3ed03a2f344be8a8392fd47b3e022100d8f59bc3b1ba00dc51028c7f1b8e99d86d4bb4126e22717c32988498c07f64d7"
+let exampleLeafHex = "3082015930820100a00302010202010a300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3235303630313030303030305a170d3236303630313030303030305a300f310d300b06035504030c046c6561663059301306072a8648ce3d020106082a8648ce3d030107034200040b019cfdb984d032a96907cca9a63888323695b6404a7ddaacc63b5559364f2ca48f2b5d0e1151b6c0b5d17286d9a522cee437c42f410742ebb8493775fc47e9a34d304b300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b0601050507030130160603551d11040f300d820b6578616d706c652e636f6d300a06082a8648ce3d040302034700304402203bc12c6f77062e5eed59186b72a95e9652f4398685b8845ad8112a5085bb7ab602207c9761426fa260535fb0fa49efe2624a1f34e8e04eb43d8f3c72dd072e736197"
+let exampleKeyHex = "3041020100301306072a8648ce3d020106082a8648ce3d0301070427302502010104200f9999d9198528f9f986f8315fe0c7aaf7b2aef840198d77b859dc4f4a8c4a2b"
+let otherRootHex = "308201313081d8a003020102020102300a06082a8648ce3d0403023010310e300c06035504030c054f74686572301e170d3234303130313030303030305a170d3334303130313030303030305a3010310e300c06035504030c054f746865723059301306072a8648ce3d020106082a8648ce3d030107034200047432c1205849f970ce2416f602690f3d19e6790708c1f3b18f50978b340cbd90510d403ed2cd0b1fd6e43d92da9cf7ab7ad0c5e0bf2e39cbc3176966857e9780a3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d0403020348003045022100e0bb40fbfa3b426334dd4d96ef7d4d8e7973b1cc725b15bf0870f30a38d66cc60220403efa1ce958392af9fc8e0cebf8676fac6c55cd865874fcef051b635310e43c"
+let clientRootHex = "3082017e30820124a003020102020164300a06082a8648ce3d04030230163114301206035504030c0b436c69656e7420526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a30163114301206035504030c0b436c69656e7420526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000440dc1caaaee821a08a60dcb74b34befd018659bdb88f3c7b77e9884ebfb821dd99d3cb7909555d3f0ef6f05a87ec68cff0756403703002efe4607c9b92f86252a3633061300f0603551d130101ff040530030101ff301f0603551d23041830168014b403e63e7c1c8a1890af5fb031868a5afe1d8376301d0603551d0e04160414b403e63e7c1c8a1890af5fb031868a5afe1d8376300e0603551d0f0101ff040403020106300a06082a8648ce3d040302034800304502202b34aae7b62e533d12661be590a736eee7cd71c02124401b1d03f88e0455fa3b022100a9e9fee45aa249f83c6b148e6f1fab78dbfccea918ebcdedf797ec772e634bed"
+let clientLeafHex = "3082016b30820111a00302010202016e300a06082a8648ce3d04030230163114301206035504030c0b436c69656e7420526f6f74301e170d3235303630313030303030305a170d3236303630313030303030305a3010310e300c06035504030c05616c6963653059301306072a8648ce3d020106082a8648ce3d0301070342000445ed538d789570081e327a105a4f0b3a8c146e68fa5b4fa852c5f006f1294b0ccfb91515422cdd61c2e34f354d7ff50528a1e80aad5b4ea3b0f2c6d4fed662d6a3563054300c0603551d130101ff04023000301f0603551d23041830168014b403e63e7c1c8a1890af5fb031868a5afe1d8376300e0603551d0f0101ff04040302078030130603551d25040c300a06082b06010505070302300a06082a8648ce3d04030203480030450221009a640c79afa46ecd65e2ce7f2f960e2c3963a7a3e1383c34ae3958623f1f1c5002207775c241b743bde620aed311c3c7d90a60587c23e70d1aae306966873f7e7d91"
+let clientKeyHex = "3041020100301306072a8648ce3d020106082a8648ce3d030107042730250201010420fd7e8e00621840dac0226ea921c19c18e46a79d944d6a3308b3f64cf009d82da"
+let verificationTime = 1767225600
+
+let probeTimeoutMs = 30000
+let FileRows = 1500
+
+enum InteropError implements Error
+	noPort
+	spawnFailed
+	timedOut
+end 'InteropError'
+
+function opensslExecutable() returns Executable
+	let configured = try Process.environmentVariable("MAXON_OPENSSL") otherwise return Executable.name("openssl")
+	let path = try FilePath.from(configured) otherwise panic("MAXON_OPENSSL is not a path")
+
+	return Executable.path(path)
+end 'opensslExecutable'
+
+function pemOf(label String, hex String) returns String
+	return try Pem.encode(label, data: fromHex(hex)) otherwise panic("the case's PEM was refused")
+end 'pemOf'
+
+function stage(directory String, name String, text String)
+	let path = try FilePath.from("{directory}/{name}") otherwise panic("not a path")
+
+	try File.writeText(path, content: text) otherwise panic("could not write {name}")
+end 'stage'
+
+function servedFile() returns String
+	var text = StringBuilder.create()
+
+	for row in 0 upto FileRows 'eachRow'
+		text.append("{row:06x} the quick brown fox jumps over the lazy dog 0123456789\n")
+	end 'eachRow'
+
+	return text.build()
+end 'servedFile'
+
+let stagedNames = ["root.pem", "server.pem", "server.key", "client-root.pem", "client.pem", "client.key", "served.txt"]
+
+function workspace() returns String
+	let suffix = toHex(try Random.bytes(6) otherwise panic("no randomness"))
+	let name = "tls-interop-http-{suffix}"
+	let path = try FilePath.from(name) otherwise panic("not a path")
+
+	if not Directory.create(path) 'created'
+		panic("could not create {name}")
+	end 'created'
+
+	stage(name, name: "root.pem", text: pemOf("CERTIFICATE", hex: httpRootHex))
+	stage(name, name: "server.pem", text: pemOf("CERTIFICATE", hex: httpLeafHex))
+	stage(name, name: "server.key", text: pemOf("PRIVATE KEY", hex: httpKeyHex))
+	stage(name, name: "client-root.pem", text: pemOf("CERTIFICATE", hex: clientRootHex))
+	stage(name, name: "client.pem", text: pemOf("CERTIFICATE", hex: clientLeafHex))
+	stage(name, name: "client.key", text: pemOf("PRIVATE KEY", hex: clientKeyHex))
+	stage(name, name: "served.txt", text: servedFile())
+
+	return name
+end 'workspace'
+
+function unstage(directory String)
+	for name in stagedNames 'eachFile'
+		let path = try FilePath.from("{directory}/{name}") otherwise panic("not a path")
+
+		try File.delete(path) otherwise ignore
+	end 'eachFile'
+
+	let path = try FilePath.from(directory) otherwise panic("not a path")
+
+	try Directory.delete(path) otherwise ignore
+end 'unstage'
+
+function valueAfter(lines StringArray, prefix String) returns String
+	for line in lines 'eachLine'
+		if line.startsWith(prefix) 'found'
+			return line.replace(prefix, with: "")
+		end 'found'
+	end 'eachLine'
+
+	return "-"
+end 'valueAfter'
+
+function freePort() returns NetworkPort throws InteropError
+	let probe = try TcpListener.bind("127.0.0.1", port: 0) otherwise throw InteropError.noPort
+	let port = probe.port()
+
+	probe.close()
+
+	return port
+end 'freePort'
+
+function isReady(child StreamingSubprocess) returns bool
+	while true 'reading'
+		let line = try child.readStdoutLine() otherwise return false
+
+		if line.startsWith("ACCEPT") 'listening'
+			return true
+		end 'listening'
+	end 'reading'
+
+	panic("isReady: the loop returns when the stream ends")
+end 'isReady'
+
+type OpensslServer
+	export var child as StreamingSubprocess
+	export var port as NetworkPort
+
+	static function start(directory String, options StringArray) returns OpensslServer throws InteropError
+		for _ in 1 to 5 'attempts'
+			let port = try freePort()
+			var arguments = ["s_server", "-accept", "127.0.0.1:{port}", "-naccept", "1", "-msg", "-cert", "{directory}/server.pem", "-key", "{directory}/server.key"]
+
+			for option in options 'eachOption'
+				arguments.push(option)
+			end 'eachOption'
+
+			var child = try StreamingSubprocess.spawn(opensslExecutable(), arguments: arguments) otherwise throw InteropError.spawnFailed
+
+			if isReady(child) 'listening'
+				return Self{child: child, port: port}
+			end 'listening'
+
+			child.release()
+		end 'attempts'
+
+		throw InteropError.noPort
+	end 'start'
+end 'OpensslServer'
+
+function drainOutput(lines StringArray, child StreamingSubprocess)
+	while true 'reading'
+		let line = try child.readStdoutLine() otherwise return
+
+		lines.push(line)
+	end 'reading'
+end 'drainOutput'
+
+function sentCloseNotify(server OpensslServer) returns bool throws InteropError
+	_ = try server.child.waitWithTimeout(probeTimeoutMs) otherwise throw InteropError.timedOut
+
+	var lines = StringArray.create()
+
+	drainOutput(lines, child: server.child)
+	server.child.release()
+
+	for line in lines 'eachLine'
+		if line.startsWith(">>>") and line.contains("close_notify") 'announced'
+			return true
+		end 'announced'
+	end 'eachLine'
+
+	return false
+end 'sentCloseNotify'
+
+function negotiatedProtocol(body String) returns String
+	var lines = StringArray.create()
+
+	for line in body.split("\n") 'eachLine'
+		lines.push(line.trim())
+	end 'eachLine'
+
+	let parts = valueAfter(lines, prefix: "New, ").split(",")
+
+	return try parts.get(0) otherwise "-"
+end 'negotiatedProtocol'
+
+function pageFetched(server OpensslServer) returns String
+	let request = try HttpRequest.create(HttpMethod.get, url: "https://localhost:{server.port}/") otherwise return "bad url"
+	let response = try HttpClient.send(request, tls: clientOptions()) otherwise (error) 'failed'
+		return "error {describeHttp(error)}"
+	end 'failed'
+
+	let contentType = try response.header("content-type") otherwise "-"
+
+	return "{response.statusCode().number()} {response.reason()} content-type={contentType} protocol={negotiatedProtocol(response.body())}"
+end 'pageFetched'
+
+function fileFetched(server OpensslServer, directory String) returns String
+	let request = try HttpRequest.create(HttpMethod.get, url: "https://localhost:{server.port}/{directory}/served.txt") otherwise return "bad url"
+	let response = try HttpClient.send(request, tls: clientOptions()) otherwise (error) 'failed'
+		return "error {describeHttp(error)}"
+	end 'failed'
+
+	let contentType = try response.header("content-type") otherwise "-"
+
+	return "{response.statusCode().number()} content-type={contentType} identical={response.body() == servedFile()}"
+end 'fileFetched'
+
+function untrustedFetched(server OpensslServer) returns String
+	var options = TlsClientOptions.create()
+
+	try options.setTrustedRoots(RootCertificates from [fromHex(otherRootHex)]) otherwise return "the root was refused"
+	options.setVerificationTime(verificationTime)
+
+	let request = try HttpRequest.create(HttpMethod.get, url: "https://localhost:{server.port}/") otherwise return "bad url"
+	let response = try HttpClient.send(request, tls: options) otherwise (error) 'failed'
+		return "error {describeHttp(error)}"
+	end 'failed'
+
+	return "answered {response.statusCode().number()}"
+end 'untrustedFetched'
+
+function verdict(label String, fetched String, success String, server OpensslServer) returns String
+	let announced = try sentCloseNotify(server) otherwise return "{label}: the server did not finish"
+	let expected = success if announced else "error tlsFailed(truncated)"
+
+	return "{label}: matches={fetched == expected}"
+end 'verdict'
+
+function statusPage(label String, directory String, flags StringArray, success String) returns String
+	var server = try OpensslServer.start(directory, options: flags) otherwise (error) 'unstarted'
+		return "{label}: openssl s_server did not start: {error.name}"
+	end 'unstarted'
+
+	return verdict(label, fetched: pageFetched(server), success: success, server: server)
+end 'statusPage'
+
+function stagedFile(label String, directory String, flags StringArray) returns String
+	var server = try OpensslServer.start(directory, options: flags) otherwise (error) 'unstarted'
+		return "{label}: openssl s_server did not start: {error.name}"
+	end 'unstarted'
+
+	return verdict(label, fetched: fileFetched(server, directory: directory), success: "200 content-type=text/plain identical=true", server: server)
+end 'stagedFile'
+
+function untrustedChain(directory String) returns String
+	var server = try OpensslServer.start(directory, options: ["-www"]) otherwise (error) 'unstarted'
+		return "openssl s_server did not start: {error.name}"
+	end 'unstarted'
+
+	let fetched = untrustedFetched(server)
+
+	_ = try sentCloseNotify(server) otherwise return "the server did not finish"
+
+	return fetched
+end 'untrustedChain'
+
+function main() returns ExitCode
+	let directory = workspace()
+
+	print("{statusPage("www tls1.3", directory: directory, flags: ["-www", "-tls1_3"], success: "200 ok content-type=text/html protocol=TLSv1.3")}\n")
+	print("{statusPage("www tls1.2", directory: directory, flags: ["-www", "-tls1_2"], success: "200 ok content-type=text/html protocol=TLSv1.2")}\n")
+	print("{stagedFile("WWW tls1.3", directory: directory, flags: ["-WWW", "-tls1_3"])}\n")
+	print("{stagedFile("WWW tls1.2", directory: directory, flags: ["-WWW", "-tls1_2"])}\n")
+	print("untrusted root: {untrustedChain(directory)}\n")
+
+	unstage(directory)
+
+	return 0
+end 'main'
+```
+```stdout
+www tls1.3: matches=true
+www tls1.2: matches=true
+WWW tls1.3: matches=true
+WWW tls1.2: matches=true
+untrusted root: error tlsFailed(certificateRejected(unknownAuthority))
+```
+```exitcode
+0
+```
+
+<!-- test: tls-interop.http-server-against-openssl-s_client -->
+<!-- unsupported-targets: wasm32-wasi -->
+<!-- procs: 1 -->
+`HttpServer.bindTls` answers a live `openssl s_client` that sends a raw request, in TLS 1.3 and TLS 1.2, with a POST, with and without ALPN `http/1.1`, and with a client that offers only `h2` (the handshake is refused and the server goes on). A server that requires client certificates reads the chain `s_client` presents from `exchange.security()`, refuses the client that has none, and serves the next one. `s_client` verifies the server's chain and the name `localhost`.
+```maxon
+function digit(symbol Byte) returns Byte
+	if symbol >= 0x61 'letter'
+		return symbol - 0x57
+	end 'letter'
+
+	return symbol - 0x30
+end 'digit'
+
+function fromHex(hex String) returns ByteArray
+	var bytes = ByteArray.create()
+	var high = 0 as Byte
+	var isHigh = true
+
+	for symbol in hex.bytes() 'eachSymbol'
+		if isHigh 'first'
+			high = digit(symbol)
+		end 'first' else 'second'
+			bytes.push(high * 16 + digit(symbol))
+		end 'second'
+
+		isHigh = not isHigh
+	end 'eachSymbol'
+
+	return bytes
+end 'fromHex'
+
+function toHex(bytes ByteArray) returns String
+	var text = ""
+
+	for byte in bytes 'eachByte'
+		text.append("{byte:02x}")
+	end 'eachByte'
+
+	return text
+end 'toHex'
+
+function describe(error TlsError) returns String
+	return match error 'error'
+		certificateRejected(reason) gives "certificateRejected({reason.name})"
+		protocolError(alert) gives "protocolError({alert.name})"
+		peerAlert(alert) gives "peerAlert({alert.name})"
+		peerAlertUnrecognised(code) gives "peerAlertUnrecognised({code})"
+		resolveFailed or
+		connectFailed or
+		bindFailed or
+		acceptFailed or
+		acceptInterrupted or
+		timedOut or
+		handshakeTimedOut or
+		sendFailed or
+		recvFailed or
+		connectionClosed or
+		truncated or
+		closed or
+		trustStoreUnavailable or
+		invalidConfiguration or
+		invalidCertificate or
+		invalidPrivateKey or
+		invalidPem gives error.name
+	end 'error'
+end 'describe'
+
+function describeHttp(error HttpError) returns String
+	return match error 'error'
+		tlsFailed(cause) gives "tlsFailed({describe(cause)})"
+		invalidUrl or
+		connectFailed or
+		sendFailed or
+		recvFailed or
+		invalidResponse or
+		unsupportedScheme or
+		timedOut or
+		bodyTooLarge gives error.name
+	end 'error'
+end 'describeHttp'
+
+function alpnName(protocol TlsApplicationProtocol) returns String
+	return match protocol 'protocol'
+		negotiated(name) gives name
+		unnegotiated gives "none"
+	end 'protocol'
+end 'alpnName'
+
+function describeSecurity(security HttpConnectionSecurity) returns String
+	return match security 'security'
+		plaintext gives "plaintext"
+		tls(protocol, _, alpn, chain) gives "{protocol.name} alpn={alpnName(alpn)} peers={chain.count()}"
+	end 'security'
+end 'describeSecurity'
+
+function identityOf(chainHex String, keyHex String) returns TlsIdentity
+	return try TlsIdentity.fromDer(ByteArrays from [fromHex(chainHex)], key: fromHex(keyHex)) otherwise panic("the case's identity was refused")
+end 'identityOf'
+
+function serverOptions() returns TlsServerOptions
+	var options = TlsServerOptions.create(identityOf(httpLeafHex, keyHex: httpKeyHex))
+	options.setVerificationTime(verificationTime)
+
+	return options
+end 'serverOptions'
+
+function clientOptions() returns TlsClientOptions
+	var options = TlsClientOptions.create()
+	try options.setTrustedRoots(RootCertificates from [fromHex(httpRootHex)]) otherwise panic("the case's root was refused")
+	options.setVerificationTime(verificationTime)
+
+	return options
+end 'clientOptions'
+
+let httpRootHex = "308201393081e0a003020102020101300a06082a8648ce3d04030230143112301006035504030c094874747020526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a30143112301006035504030c094874747020526f6f743059301306072a8648ce3d020106082a8648ce3d030107034200042add37c17913cb18b549a69580089eb9323de7f22de2c3181db98b7b1af13c6b78135256dd11551b86c4f86e3dae6cfcf245eaf6442184dae9ea608c2f3c004aa3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d040302034800304502206d7b3dc25a0ad07455032b4f016cfd69ff1cbc4e021961faeb5b09bf70c9c4a2022100ac903b13c31af0fcbbc8fd0200ef73a4e7877e9f1cd46fdf7e837272898dd63e"
+let httpLeafHex = "308201673082010ea003020102020102300a06082a8648ce3d04030230143112301006035504030c094874747020526f6f74301e170d3235303630313030303030305a170d3236303630313030303030305a30143112301006035504030c096c6f63616c686f73743059301306072a8648ce3d020106082a8648ce3d03010703420004f497701f24f5e42fd21956fde64826c0fc9f7c509714de2f66013c4035563f2626251fd4d3af54f434ef90687ba04a87bbe7ea32e2d44a0ba71f96d2be49042ea351304f300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b06010505070301301a0603551d110413301187047f00000182096c6f63616c686f7374300a06082a8648ce3d04030203470030440220497a1f88f2932abb12b4accf346bd317243ca613a4fa172595c9956b4fde24790220354de8edd3761aae3fd7480214164f9f348b6310a675ae89043a325099c7c49c"
+let httpKeyHex = "308187020100301306072a8648ce3d020106082a8648ce3d030107046d306b02010104207dd23c58ab3675629f5831918dc3ab1f33f01b146b91cf0a5a86d9e701dba53ea14403420004f497701f24f5e42fd21956fde64826c0fc9f7c509714de2f66013c4035563f2626251fd4d3af54f434ef90687ba04a87bbe7ea32e2d44a0ba71f96d2be49042e"
+let exampleRootHex = "3082012f3081d6a003020102020101300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a300f310d300b06035504030c04526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000469fd1970f970c21034e836c954aefc78dffef4a3d72650f1ec5e70559cc0663d0722d3408f27d8be5a08ceb432c37b7049cc8758c88c3d85e4db83aa471b62b7a3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d0403020348003045022053bac2d2f62299dd459d79bce22d671aeeb6ee3ed03a2f344be8a8392fd47b3e022100d8f59bc3b1ba00dc51028c7f1b8e99d86d4bb4126e22717c32988498c07f64d7"
+let exampleLeafHex = "3082015930820100a00302010202010a300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3235303630313030303030305a170d3236303630313030303030305a300f310d300b06035504030c046c6561663059301306072a8648ce3d020106082a8648ce3d030107034200040b019cfdb984d032a96907cca9a63888323695b6404a7ddaacc63b5559364f2ca48f2b5d0e1151b6c0b5d17286d9a522cee437c42f410742ebb8493775fc47e9a34d304b300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b0601050507030130160603551d11040f300d820b6578616d706c652e636f6d300a06082a8648ce3d040302034700304402203bc12c6f77062e5eed59186b72a95e9652f4398685b8845ad8112a5085bb7ab602207c9761426fa260535fb0fa49efe2624a1f34e8e04eb43d8f3c72dd072e736197"
+let exampleKeyHex = "3041020100301306072a8648ce3d020106082a8648ce3d0301070427302502010104200f9999d9198528f9f986f8315fe0c7aaf7b2aef840198d77b859dc4f4a8c4a2b"
+let otherRootHex = "308201313081d8a003020102020102300a06082a8648ce3d0403023010310e300c06035504030c054f74686572301e170d3234303130313030303030305a170d3334303130313030303030305a3010310e300c06035504030c054f746865723059301306072a8648ce3d020106082a8648ce3d030107034200047432c1205849f970ce2416f602690f3d19e6790708c1f3b18f50978b340cbd90510d403ed2cd0b1fd6e43d92da9cf7ab7ad0c5e0bf2e39cbc3176966857e9780a3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d0403020348003045022100e0bb40fbfa3b426334dd4d96ef7d4d8e7973b1cc725b15bf0870f30a38d66cc60220403efa1ce958392af9fc8e0cebf8676fac6c55cd865874fcef051b635310e43c"
+let clientRootHex = "3082017e30820124a003020102020164300a06082a8648ce3d04030230163114301206035504030c0b436c69656e7420526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a30163114301206035504030c0b436c69656e7420526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000440dc1caaaee821a08a60dcb74b34befd018659bdb88f3c7b77e9884ebfb821dd99d3cb7909555d3f0ef6f05a87ec68cff0756403703002efe4607c9b92f86252a3633061300f0603551d130101ff040530030101ff301f0603551d23041830168014b403e63e7c1c8a1890af5fb031868a5afe1d8376301d0603551d0e04160414b403e63e7c1c8a1890af5fb031868a5afe1d8376300e0603551d0f0101ff040403020106300a06082a8648ce3d040302034800304502202b34aae7b62e533d12661be590a736eee7cd71c02124401b1d03f88e0455fa3b022100a9e9fee45aa249f83c6b148e6f1fab78dbfccea918ebcdedf797ec772e634bed"
+let clientLeafHex = "3082016b30820111a00302010202016e300a06082a8648ce3d04030230163114301206035504030c0b436c69656e7420526f6f74301e170d3235303630313030303030305a170d3236303630313030303030305a3010310e300c06035504030c05616c6963653059301306072a8648ce3d020106082a8648ce3d0301070342000445ed538d789570081e327a105a4f0b3a8c146e68fa5b4fa852c5f006f1294b0ccfb91515422cdd61c2e34f354d7ff50528a1e80aad5b4ea3b0f2c6d4fed662d6a3563054300c0603551d130101ff04023000301f0603551d23041830168014b403e63e7c1c8a1890af5fb031868a5afe1d8376300e0603551d0f0101ff04040302078030130603551d25040c300a06082b06010505070302300a06082a8648ce3d04030203480030450221009a640c79afa46ecd65e2ce7f2f960e2c3963a7a3e1383c34ae3958623f1f1c5002207775c241b743bde620aed311c3c7d90a60587c23e70d1aae306966873f7e7d91"
+let clientKeyHex = "3041020100301306072a8648ce3d020106082a8648ce3d030107042730250201010420fd7e8e00621840dac0226ea921c19c18e46a79d944d6a3308b3f64cf009d82da"
+let verificationTime = 1767225600
+
+let probeTimeoutMs = 30000
+let FileRows = 1500
+
+enum InteropError implements Error
+	noPort
+	spawnFailed
+	timedOut
+end 'InteropError'
+
+function opensslExecutable() returns Executable
+	let configured = try Process.environmentVariable("MAXON_OPENSSL") otherwise return Executable.name("openssl")
+	let path = try FilePath.from(configured) otherwise panic("MAXON_OPENSSL is not a path")
+
+	return Executable.path(path)
+end 'opensslExecutable'
+
+function pemOf(label String, hex String) returns String
+	return try Pem.encode(label, data: fromHex(hex)) otherwise panic("the case's PEM was refused")
+end 'pemOf'
+
+function stage(directory String, name String, text String)
+	let path = try FilePath.from("{directory}/{name}") otherwise panic("not a path")
+
+	try File.writeText(path, content: text) otherwise panic("could not write {name}")
+end 'stage'
+
+function servedFile() returns String
+	var text = StringBuilder.create()
+
+	for row in 0 upto FileRows 'eachRow'
+		text.append("{row:06x} the quick brown fox jumps over the lazy dog 0123456789\n")
+	end 'eachRow'
+
+	return text.build()
+end 'servedFile'
+
+let stagedNames = ["root.pem", "server.pem", "server.key", "client-root.pem", "client.pem", "client.key", "served.txt"]
+
+function workspace() returns String
+	let suffix = toHex(try Random.bytes(6) otherwise panic("no randomness"))
+	let name = "tls-interop-http-{suffix}"
+	let path = try FilePath.from(name) otherwise panic("not a path")
+
+	if not Directory.create(path) 'created'
+		panic("could not create {name}")
+	end 'created'
+
+	stage(name, name: "root.pem", text: pemOf("CERTIFICATE", hex: httpRootHex))
+	stage(name, name: "server.pem", text: pemOf("CERTIFICATE", hex: httpLeafHex))
+	stage(name, name: "server.key", text: pemOf("PRIVATE KEY", hex: httpKeyHex))
+	stage(name, name: "client-root.pem", text: pemOf("CERTIFICATE", hex: clientRootHex))
+	stage(name, name: "client.pem", text: pemOf("CERTIFICATE", hex: clientLeafHex))
+	stage(name, name: "client.key", text: pemOf("PRIVATE KEY", hex: clientKeyHex))
+	stage(name, name: "served.txt", text: servedFile())
+
+	return name
+end 'workspace'
+
+function unstage(directory String)
+	for name in stagedNames 'eachFile'
+		let path = try FilePath.from("{directory}/{name}") otherwise panic("not a path")
+
+		try File.delete(path) otherwise ignore
+	end 'eachFile'
+
+	let path = try FilePath.from(directory) otherwise panic("not a path")
+
+	try Directory.delete(path) otherwise ignore
+end 'unstage'
+
+function valueAfter(lines StringArray, prefix String) returns String
+	for line in lines 'eachLine'
+		if line.startsWith(prefix) 'found'
+			return line.replace(prefix, with: "")
+		end 'found'
+	end 'eachLine'
+
+	return "-"
+end 'valueAfter'
+
+function chainSummary(chain ByteArrays) returns String
+	let leaf = try chain.first() otherwise 'anonymous'
+		return "no client certificate"
+	end 'anonymous'
+
+	return "{chain.count()} certificate, leaf is alice={toHex(leaf) == clientLeafHex}"
+end 'chainSummary'
+
+type InteropHandler implements HttpHandler
+	static function create() returns InteropHandler
+		return InteropHandler{}
+	end 'create'
+
+	function handle(exchange HttpExchange) throws HttpServerError
+		view request = exchange.request()
+		let query = try request.url().query() otherwise "-"
+		let connection = match exchange.security() 'security'
+			plaintext gives "plaintext"
+			tls(protocol, _, alpn, chain) gives "{protocol.name} alpn={alpnName(alpn)} {chainSummary(chain)}"
+		end 'security'
+		let summary = "{request.method().name} {request.url().path()}?{query} body={request.body()} {connection}\n"
+
+		try exchange.respondWith(StatusCode.ok, body: summary, contentType: "text/plain")
+	end 'handle'
+
+	function faulted(fault HttpHandlerFault)
+		print("faulted {fault.describe()}\n")
+	end 'faulted'
+end 'InteropHandler'
+
+function serveInterop(server HttpServer) returns HttpServeEnd
+	return server.serve(InteropHandler.create())
+end 'serveInterop'
+
+function lineContaining(lines StringArray, text String) returns String
+	for line in lines 'eachLine'
+		if line.contains(text) 'found'
+			return line
+		end 'found'
+	end 'eachLine'
+
+	return "-"
+end 'lineContaining'
+
+function runClient(directory String, port NetworkPort, request String, options StringArray) returns String
+	var arguments = ["s_client", "-connect", "127.0.0.1:{port}", "-servername", "localhost", "-CAfile", "{directory}/root.pem", "-verify_return_error", "-verify_hostname", "localhost", "-attime", "{verificationTime}", "-ign_eof"]
+
+	for option in options 'eachOption'
+		arguments.push(option)
+	end 'eachOption'
+
+	var configuration = Configuration.create(opensslExecutable())
+
+	configuration.arguments = arguments
+	configuration.standardInput = InputSource.bytes(request)
+	configuration.timeoutMs = probeTimeoutMs
+
+	let result = try configuration.run() otherwise (error) 'failed'
+		return "s_client: {error.displayReason()}"
+	end 'failed'
+
+	var lines = StringArray.create()
+
+	for line in result.stdout.split("\n") 'eachLine'
+		lines.push(line.trim())
+	end 'eachLine'
+
+	let status = valueAfter(lines, prefix: "HTTP/1.1 ")
+	let answer = lineContaining(lines, text: " body=")
+
+	if status == "-" 'unanswered'
+		return "unanswered"
+	end 'unanswered'
+
+	return "exit={result.exitCode()} verification={valueAfter(lines, prefix: "Verification: ")} {status} [{answer}]"
+end 'runClient'
+
+function getRequest(target String) returns String
+	return "GET {target} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+end 'getRequest'
+
+type ClientRun
+	export let name as String
+	export let request as String
+	export let flags as StringArray
+
+	static function create(name String, request String, flags StringArray) returns ClientRun
+		return ClientRun{name: name, request: request, flags: flags}
+	end 'create'
+end 'ClientRun'
+
+typealias ClientRunArray = Array with ClientRun
+
+function scenario(label String, directory String, serverOptions TlsServerOptions, runs ClientRunArray) returns String
+	var server = try HttpServer.bindTls("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
+		return "{label}: bind: {describe(error)}"
+	end 'refused'
+
+	let peer = async serveInterop(server)
+	var report = StringBuilder.create()
+
+	report.append("{label}\n")
+
+	for run in runs 'eachRun'
+		report.append("  {run.name}: {runClient(directory, port: server.port(), request: run.request, options: run.flags)}\n")
+	end 'eachRun'
+
+	server.close()
+
+	let ended = await peer
+
+	report.append("  ended={ended.name}")
+
+	return report.build()
+end 'scenario'
+
+function main() returns ExitCode
+	let directory = workspace()
+	let post = "POST /submit HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\nConnection: close\r\n\r\nname=maxon"
+	let clientCertificate = ["-tls1_3", "-cert", "{directory}/client.pem", "-key", "{directory}/client.key"]
+	var mutual = serverOptions()
+
+	try mutual.requireClientCertificates(RootCertificates from [fromHex(clientRootHex)]) otherwise return 1
+
+	var plainRuns = ClientRunArray.create()
+
+	plainRuns.push(ClientRun.create("tls1.3 GET", request: getRequest("/hello?x=1"), flags: ["-tls1_3"]))
+	plainRuns.push(ClientRun.create("tls1.2 GET with ALPN", request: getRequest("/old"), flags: ["-tls1_2", "-alpn", "http/1.1"]))
+	plainRuns.push(ClientRun.create("tls1.3 POST", request: post, flags: ["-tls1_3"]))
+	plainRuns.push(ClientRun.create("ALPN h2 only", request: getRequest("/never"), flags: ["-alpn", "h2"]))
+	plainRuns.push(ClientRun.create("a good one after", request: getRequest("/last"), flags: ["-tls1_3"]))
+
+	var mutualRuns = ClientRunArray.create()
+
+	mutualRuns.push(ClientRun.create("with a certificate", request: getRequest("/who"), flags: clientCertificate))
+	mutualRuns.push(ClientRun.create("without one", request: getRequest("/nobody"), flags: ["-tls1_3"]))
+	mutualRuns.push(ClientRun.create("with a certificate again", request: getRequest("/who"), flags: clientCertificate))
+
+	print("{scenario("plain server", directory: directory, serverOptions: serverOptions(), runs: plainRuns)}\n")
+	print("{scenario("client certificates required", directory: directory, serverOptions: mutual, runs: mutualRuns)}\n")
+
+	unstage(directory)
+
+	return 0
+end 'main'
+```
+```stdout
+plain server
+  tls1.3 GET: exit=0 verification=OK 200 OK [get /hello?x=1 body= tls13 alpn=none no client certificate]
+  tls1.2 GET with ALPN: exit=0 verification=OK 200 OK [get /old?- body= tls12 alpn=http/1.1 no client certificate]
+  tls1.3 POST: exit=0 verification=OK 200 OK [post /submit?- body=name=maxon tls13 alpn=none no client certificate]
+  ALPN h2 only: unanswered
+  a good one after: exit=0 verification=OK 200 OK [get /last?- body= tls13 alpn=none no client certificate]
+  ended=closed
+client certificates required
+  with a certificate: exit=0 verification=OK 200 OK [get /who?- body= tls13 alpn=none 1 certificate, leaf is alice=true]
+  without one: unanswered
+  with a certificate again: exit=0 verification=OK 200 OK [get /who?- body= tls13 alpn=none 1 certificate, leaf is alice=true]
+  ended=closed
 ```
 ```exitcode
 0

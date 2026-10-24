@@ -2386,7 +2386,7 @@ system's root certificates unless `TlsClientOptions` names others. Available on 
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
-| `TlsClient.connect(host String, port NetworkPort, options TlsClientOptions = TlsClientOptions.create(), deadlineMs SocketDeadlineMs = 0)` | `TlsStream` | `TlsError` | Resolve `host`, connect, handshake. `deadlineMs` bounds the connection and, separately, the handshake: either that runs longer throws `timedOut`; `0` waits with no deadline. A failure after the connection was made closes it. |
+| `TlsClient.connect(host String, port NetworkPort, options TlsClientOptions = TlsClientOptions.create(), deadlineMs SocketDeadlineMs = 0)` | `TlsStream` | `TlsError` | Resolve `host`, connect, handshake. `deadlineMs` bounds the connection and, separately, the handshake: a connection that takes longer throws `timedOut`, a handshake that does throws `handshakeTimedOut`; `0` waits with no deadline. A failure after the connection was made closes it. |
 
 The name the certificate is verified for, and the server name sent in the ClientHello, is `host`; `setServerName`
 replaces it. An IP address literal is verified against the certificate's IP addresses, and no server name is
@@ -2456,7 +2456,7 @@ handshake deadline passes (30 s by default).
 | `setApplicationProtocols(names StringArray)` | `TlsError` | The ALPN protocols, in order of preference. A client that offers ALPN and none of them is refused with `no_application_protocol`; a client that offers none is accepted without one. |
 | `requestClientCertificates(roots RootCertificates)` | `TlsError` | Ask clients for a certificate. One that is presented must chain to `roots` for the client authentication purpose, or the handshake ends; a client that presents none is accepted. |
 | `requireClientCertificates(roots RootCertificates)` | `TlsError` | The same, and a client that presents none is refused with `certificate_required` (TLS 1.3) or `handshake_failure` (TLS 1.2). No roots is `invalidConfiguration`. |
-| `setHandshakeDeadline(milliseconds SocketDeadlineMs)` | — | How long `accept()` gives one connection's handshake before it throws `timedOut`; `0` waits with no deadline. |
+| `setHandshakeDeadline(milliseconds SocketDeadlineMs)` | — | How long `accept()` gives one connection's handshake before it throws `handshakeTimedOut`; `0` waits with no deadline. |
 | `setVerificationTime(seconds UnixSeconds)` | — | The Unix time client certificates are checked at, in place of the clock. |
 
 With client certificates asked for, the CertificateRequest names the subjects of `roots`.
@@ -2536,7 +2536,7 @@ PKCS #8 (P-256, P-384, Ed25519 or RSA), SEC1 `ECPrivateKey` (P-256 or P-384) or 
 ## TlsError
 
 Every failure of `TlsClient`, `TlsListener` and `TlsStream` is a `TlsError`, a union. A handshake that fails sends
-the peer the alert that names the failure (`TlsAlert`) and closes the connection.
+the peer the alert that names the failure (`TlsAlert`) and closes the connection. Before it closes, the refusing side shuts down its write side and reads what the peer still sends, for at most 500 ms and 256 KiB, so a peer that is not speaking TLS and is still sending hears the alert and not a reset.
 
 ```maxon
 union TlsError implements Error
@@ -2546,6 +2546,7 @@ union TlsError implements Error
 	acceptFailed
 	acceptInterrupted
 	timedOut
+	handshakeTimedOut
 	sendFailed
 	recvFailed
 	connectionClosed
@@ -2565,7 +2566,8 @@ end 'TlsError'
 
 | Case | Meaning |
 |------|---------|
-| `resolveFailed`, `connectFailed`, `bindFailed`, `acceptFailed`, `acceptInterrupted`, `timedOut`, `sendFailed`, `recvFailed` | The `NetworkError` case of the same name. |
+| `resolveFailed`, `connectFailed`, `bindFailed`, `acceptFailed`, `acceptInterrupted`, `timedOut`, `sendFailed`, `recvFailed` | The `NetworkError` case of the same name. `timedOut` is a connect, accept, read or write deadline that passed. |
+| `handshakeTimedOut` | A connection was made and its handshake did not finish within its deadline. A listener's `accept()` throws this for the connection that stalled and `timedOut` when no connection arrived, so a caller can tell the two apart. |
 | `connectionClosed` | The peer ended the stream with close_notify, and every byte before it was read; or the transport refused a write because the peer had gone. |
 | `truncated` | The TCP connection ended without a close_notify, so the data may be incomplete. |
 | `closed` | The stream was closed, or ended in an error that was already thrown. |
@@ -2582,8 +2584,9 @@ so input that is not TLS, or a header that declares more than a record holds, en
 
 ## HttpClient
 
-An HTTP/1.1 client over `TcpClient`. A request carries `Host` and `Connection: close` unless it sets its own,
-and a `Content-Length` whenever it has a body.
+An HTTP/1.1 client over `TcpClient`, and over [`TlsStream`](#tlsstream) for an `https` URL. A request carries
+`Host` and `Connection: close` unless it sets its own, and a `Content-Length` whenever it has a body. `Host` leaves
+out the port when it is the default of the URL's scheme, 80 for `http` and 443 for `https`.
 
 A response body is framed by `Transfer-Encoding` when the response has one: a final `chunked` coding is
 decoded (a chunk extension after `;` is ignored, and the trailer section is discarded), and any other coding
@@ -2598,21 +2601,92 @@ connect to the last body byte, and throws `HttpError.timedOut` when it passes. A
 `HttpClientLimits.maxBodyBytes` throws `HttpError.bodyTooLarge`, however it is framed; the default is
 `HttpBodyCap.unbounded`.
 
-Limitations: plain HTTP only (no TLS) — a URL whose scheme is anything but `http`, `https` included, throws
-`HttpError.unsupportedScheme` before any connection is attempted. A 3xx is returned as is, and the whole
-response is held in memory. The URL's port defaults to 80.
+Limitations: a URL whose scheme is neither `http` nor `https` throws `HttpError.unsupportedScheme` before any
+connection is attempted. A 3xx is returned as is, across `http` and `https` too, and the whole response is held in
+memory. The URL's port defaults to 80 for `http` and 443 for `https`. Every request is its own connection, over
+TLS as over TCP.
 
 ### HttpClient
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `HttpClient.send(request HttpRequest, limits HttpClientLimits = HttpClientLimits.create())` | `HttpResponse` | Send a request within `limits`. |
+| `HttpClient.send(request HttpRequest, limits HttpClientLimits = HttpClientLimits.create(), tls TlsClientOptions = TlsClientOptions.create())` | `HttpResponse` | Send a request within `limits`; `tls` configures the handshake of an `https` URL and is not read for an `http` one. |
 | `HttpClient.get(url String)` | `HttpResponse` | `GET`. |
 | `HttpClient.post(url String, body String)` | `HttpResponse` | `POST` with a body. |
 | `HttpClient.put(url String, body String)` | `HttpResponse` | `PUT` with a body. |
 | `HttpClient.delete(url String)` | `HttpResponse` | `DELETE`. |
 
-All throw `HttpError`. `get`, `post`, `put` and `delete` use the default limits.
+All throw `HttpError`. `get`, `post`, `put` and `delete` use the default limits and the default TLS options.
+
+### HTTPS
+
+An `https` URL is fetched over TLS: the client dials the URL's port (443 by default), runs the handshake, and sends
+the request inside the session. The URL's host is the server name sent in the ClientHello (SNI) and the name the
+server's certificate must match; an IP address literal is matched against the certificate's IP addresses and
+sends no server name. The client offers the ALPN protocol `http/1.1`, whatever `tls` lists. The chain is verified
+against the operating system's root certificates, at the current time, unless `tls` says otherwise.
+
+`tls` is a [`TlsClientOptions`](#tlsclientoptions), so every option of `TlsClient` applies:
+
+| Option | Effect |
+|--------|--------|
+| `setTrustedRoots(roots)` | Verify against these DER roots in place of the system's. |
+| `setServerName(name)` | Verify and send this name in place of the URL's host. |
+| `setIdentity(identity)` | Present this client certificate to a server that asks for one (mutual TLS). |
+| `setProtocols(protocols)` | Offer only these TLS versions. |
+| `setVerificationTime(seconds)` | Check certificates at this Unix time in place of the clock. |
+
+The handshake runs within `HttpClientLimits.timeoutMs` like the rest of the exchange, and a handshake or a read that
+outlasts it throws `HttpError.timedOut`. Every other TLS failure throws `HttpError.tlsFailed(error)`, which
+carries the [`TlsError`](#tlserror): `certificateRejected(reason)` for a chain the client refused (`unknownAuthority`,
+`hostnameMismatch`, `expired`), `protocolError` and `peerAlert` for an alert, `truncated` for a connection that
+ended without close_notify while a response was still being read, which includes a body that ends with the
+connection. A server that requires a client certificate and gets none answers with an alert, which TLS 1.3
+delivers on the first read, still as `tlsFailed(peerAlert(certificateRequired))`.
+
+```maxon
+function describe(error HttpError) returns String
+	return match error 'which'
+		tlsFailed(cause) gives "TLS failed: {cause.name}"
+		invalidUrl or
+		connectFailed or
+		sendFailed or
+		recvFailed or
+		invalidResponse or
+		unsupportedScheme or
+		timedOut or
+		bodyTooLarge gives error.name
+	end 'which'
+end 'describe'
+
+function main() returns ExitCode
+	let request = try HttpRequest.create(HttpMethod.get, url: "https://example.com/") otherwise return 1
+
+	let response = try HttpClient.send(request) otherwise (error) 'failed'
+		print("request failed: {describe(error)}\n")
+		return 1
+	end 'failed'
+
+	print("{response.statusCode().number()} {response.body().byteLength()} bytes\n")
+	return 0
+end 'main'
+```
+
+With a root of your own and a client certificate:
+
+```maxon
+function fetch(url String, root ByteArray, identity TlsIdentity) returns String
+	var tls = TlsClientOptions.create()
+
+	try tls.setTrustedRoots(RootCertificates from [root]) otherwise return "no usable root"
+	tls.setIdentity(identity)
+
+	let request = try HttpRequest.create(HttpMethod.get, url: url) otherwise return "bad url"
+	let response = try HttpClient.send(request, tls: tls) otherwise return "request failed"
+
+	return response.body()
+end 'fetch'
+```
 
 ### HttpClientLimits
 
@@ -2662,7 +2736,7 @@ field.
 | Enum | Cases |
 |------|-------|
 | `HttpMethod` | `get`, `post`, `put`, `delete`, `head`, `patch`, `options` |
-| `HttpError` | `invalidUrl`, `connectFailed`, `sendFailed`, `recvFailed`, `invalidResponse`, `unsupportedScheme`, `timedOut`, `bodyTooLarge` |
+| `HttpError` | A union: `invalidUrl`, `connectFailed`, `sendFailed`, `recvFailed`, `invalidResponse`, `unsupportedScheme`, `timedOut`, `bodyTooLarge`, and `tlsFailed(error TlsError)`. Unions are matched, not compared with `==`. |
 | `StatusCode` | A union; `number()` gives the code as an `HttpStatusNumber` (`int(100 to 999)`). Any status without a named case is `other(code HttpStatusNumber)`. Named cases: `ok` 200, `created` 201, `accepted` 202, `noContent` 204, `movedPermanently` 301, `found` 302, `notModified` 304, `badRequest` 400, `unauthorized` 401, `forbidden` 403, `notFound` 404, `methodNotAllowed` 405, `requestTimeout` 408, `conflict` 409, `gone` 410, `lengthRequired` 411, `payloadTooLarge` 413, `tooManyRequests` 429, `headerFieldsTooLarge` 431, `internalServerError` 500, `notImplemented` 501, `badGateway` 502, `serviceUnavailable` 503, `httpVersionNotSupported` 505 |
 
 ```maxon
@@ -2721,15 +2795,16 @@ when the caller set none.
 ## HttpServer
 
 An HTTP/1.1 server over `TcpListener`, on the same green-thread scheduler `TcpClient` and `HttpClient`
-run on. It implements a documented subset: bodies framed by `Content-Length`, one request per connection,
-and every response sent with `Connection: close`, after which the connection closes. Keep-alive, chunked
-transfer, TLS and `Expect: 100-continue` are outside it.
+run on, serving HTTPS when it is bound with `bindTls`. It implements a documented subset: bodies framed by
+`Content-Length`, one request per connection, and every response sent with `Connection: close`, after which the
+connection closes. Keep-alive, chunked transfer and `Expect: 100-continue` are outside it.
 
 ### HttpServer
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
 | `HttpServer.bind(host String, port NetworkPort)` | `HttpServer` | `NetworkError` | Bind and listen. `port: 0` takes whichever free port the kernel gives. |
+| `HttpServer.bindTls(host String, port NetworkPort, options TlsServerOptions)` | `HttpServer` | `TlsError` | Bind and serve HTTPS: each accepted connection runs the TLS handshake under `options` before its request is read. See [HTTPS](#https-server). |
 | `port()` | `NetworkPort` | — | The port this server is bound to. |
 | `setLimits(caps HttpServerLimits)` | — | — | Replace the caps later requests are parsed under. |
 | `setAcceptDeadline(milliseconds SocketDeadlineMs)` | — | `HttpServerError` | Make an `accept()` still waiting `milliseconds` after this call throw `acceptTimedOut`; `0` clears it. Throws `listenerClosed` once the server is closed. |
@@ -2755,14 +2830,73 @@ to the next connection. When the OS refuses one connection (`acceptInterrupted`)
 | `listenerFailed` | The listener failed (`acceptFailed`) |
 | `acceptDeadlinePassed` | The accept deadline passed (`acceptTimedOut`) |
 
+### HTTPS server
+
+`HttpServer.bindTls(host, port:, options:)` takes the [`TlsServerOptions`](#tlsserveroptions) of a
+[`TlsListener`](#tlslistener): the identity it presents, the TLS versions, and whether clients are asked for a
+certificate (`requestClientCertificates`) or must present one (`requireClientCertificates`). The server offers
+the ALPN protocol `http/1.1` whatever `options` lists, so a client that offers only other protocols (`h2`) is
+refused by the handshake, and a client that offers none is served. `accept` and `serve` run the handshake of each
+connection after taking it and before reading its request; the handshake is bounded by the options'
+`setHandshakeDeadline` (30 s by default), and a client that stalls holds the accept loop until it passes, as `tlsFailed(handshakeTimedOut)`. The accept deadline of `setAcceptDeadline` is a different outcome: no connection arrived, `acceptTimedOut`, which ends `serve`.
+
+A connection whose handshake fails is `HttpServerError.tlsFailed(error)` from `accept`, carrying the
+[`TlsError`](#tlserror) (`certificateRejected` for a client chain the server refused, `protocolError` for the
+alert it sent, `peerAlert` for the client's), and `serve` goes on to the next connection. A plain HTTP client that
+reaches the TLS port is refused the same way. A TLS session that fails while the request is read is also
+`tlsFailed`.
+
+```maxon
+type HelloHandler implements HttpHandler
+	static function create() returns HelloHandler
+		return HelloHandler{}
+	end 'create'
+
+	function handle(exchange HttpExchange) throws HttpServerError
+		let greeting = match exchange.security() 'security'
+			plaintext gives "hello over plain HTTP\n"
+			tls(protocol, _, _, _) gives "hello over {protocol.name}\n"
+		end 'security'
+
+		try exchange.respondWith(StatusCode.ok, body: greeting, contentType: "text/plain")
+	end 'handle'
+
+	function faulted(fault HttpHandlerFault)
+		printError("{fault.describe()}\n")
+	end 'faulted'
+end 'HelloHandler'
+
+function main() returns ExitCode
+	let certificates = try File.readText(FilePath from "server.pem") otherwise return 1
+	let key = try File.readText(FilePath from "server.key") otherwise return 2
+	let identity = try TlsIdentity.fromPem(certificates, key: key) otherwise return 3
+	let server = try HttpServer.bindTls("0.0.0.0", port: 8443, options: TlsServerOptions.create(identity)) otherwise return 4
+
+	_ = server.serve(HelloHandler.create())
+
+	return 0
+end 'main'
+```
+
+`HttpExchange.security()` tells a handler how the request arrived.
+
+| `HttpConnectionSecurity` case | Meaning |
+|-------------------------------|---------|
+| `plaintext` | The server was bound with `bind`. |
+| `tls(protocol, cipherSuite, applicationProtocol, peerCertificates)` | The TLS version (`TlsProtocol`) and cipher suite (`TlsCipherSuite`) negotiated, the ALPN protocol (`TlsApplicationProtocol`, `unnegotiated` when the client offered none), and the DER chain the client presented, leaf first, empty when it presented none. |
+
+With `requireClientCertificates` the chain has been verified under the roots given there by the time the handler
+reads it. With `requestClientCertificates` it is empty for a client that presented none.
+
 ### Requests
 
 A request line is `METHOD target HTTP/x.y`, its three parts separated by single spaces. The method is one
 of `HttpMethod`'s, in upper case. The target takes one of three forms:
 
 - origin-form, `/path?query`;
-- absolute-form, `http://host:port/path?query`, the scheme in any case. The URL's host and port come from
-  the target, and an HTTP/1.1 request carries a `Host` header beside it as well;
+- absolute-form, `http://host:port/path?query` (`https://` on a server bound with `bindTls`, and only that), the
+  scheme in any case. The URL's host and port come from the target, and an HTTP/1.1 request carries a `Host`
+  header beside it as well;
 - `*`, with `OPTIONS` alone. `accept()` answers `OPTIONS *` itself with `200`, an `Allow` header listing
   every `HttpMethod` and an empty body, and goes on to the next connection.
 
@@ -2774,7 +2908,8 @@ lines ahead of the request line are skipped. Header lines follow [Header parsing
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
-| `request()` | `HttpRequest` | — | The request that arrived, with its body. For an origin-form target `url()` is built as `http://<Host><target>`, so `path()` and `query()` read the target; an HTTP/1.0 request that sent no `Host` has a hostless `url()`, whose `host()` throws `fieldNotPresent`. For an absolute-form target `url()` is read from the target. |
+| `security()` | `HttpConnectionSecurity` | — | Whether the request arrived over TLS, and what the handshake settled. See [HTTPS server](#https-server). |
+| `request()` | `HttpRequest` | — | The request that arrived, with its body. For an origin-form target `url()` is built as `http://<Host><target>` (`https://` on a TLS server), so `path()` and `query()` read the target; an HTTP/1.0 request that sent no `Host` has a hostless `url()`, whose `host()` throws `fieldNotPresent`. For an absolute-form target `url()` is read from the target. |
 | `respond(response HttpResponse)` | — | `HttpServerError` | Write the response and close the connection. Throws `alreadyResponded` on a second answer, `invalidResponse` for a response the rules below refuse, and `sendFailed` when the write fails or outlasts `writeDeadlineMs`. |
 | `respondWith(code StatusCode, body String, contentType String)` | — | `HttpServerError` | Answer a status, a body and its content type, as `respond` does. |
 
@@ -2849,10 +2984,12 @@ its error is thrown, so the peer hears why.
 | A method outside `HttpMethod` | 501 | `unsupportedMethod` |
 | An HTTP major version other than 1 | 505 | `unsupportedVersion` |
 | The request incomplete when `readDeadlineMs` has passed | 408 | `readTimedOut` |
+| The TLS handshake failed, or the TLS session failed while the request was read | none; the connection is closed | `tlsFailed(error)` |
 
 `accept()` also throws `listenerClosed`, `acceptFailed`, `acceptTimedOut` and `acceptInterrupted`, which
 concern the listener alone. `respond` throws `alreadyResponded`, `invalidResponse` and
-`sendFailed`.
+`sendFailed`. `HttpServerError` is a union, matched rather than compared with `==`; `tlsFailed(error)` is its one
+case that carries a value, the [`TlsError`](#tlserror).
 
 ```maxon
 type HelloHandler implements HttpHandler
