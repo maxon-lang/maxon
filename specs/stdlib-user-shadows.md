@@ -809,6 +809,45 @@ end 'main'
 13
 ```
 
+<!-- test: stdlib-user-shadows.an-authors-array-beside-an-extension-alias-leaves-the-librarys-alias-the-librarys -->
+A program declares its own `type Array` and an `extension Array` whose nested alias `SortComparator` the library's
+`stdlib/helpers/sort/insertionSort.maxon` also declares. The program sweeps first, so the only `SortComparator` filed
+when `stdlib/Array.maxon` reads the name is the author's, which a library file never sees: the library keeps its own
+and the program compiles and runs.
+```maxon
+// --- file: arr.maxon
+export type Array
+	export var n as Digit
+
+	export static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+end 'Array'
+
+export typealias Digit = int(0 to 9)
+
+// --- file: ext.maxon
+export extension Array
+	export typealias SortComparator = function(Digit, Digit) returns Ordering
+
+	export function ordered(cmp SortComparator) returns bool
+		return cmp(self.n, self.n) == Ordering.equalTo
+	end 'ordered'
+end 'Array'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	if Array.create().ordered(function(a, b) gives a.compare(b)) 'ok'
+		return 0
+	end 'ok'
+
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: stdlib-user-shadows.error.an-unthrown-clause-names-the-library-type-as-written -->
 A diagnostic names a moved library type as the author writes it, `stdlib.ParseError`, never by the
 `__ParseError` the shadow moved it to.

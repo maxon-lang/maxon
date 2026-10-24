@@ -2669,12 +2669,16 @@ function scopedAliasTier(declPath String, readerPath String, declaredByTheCorpus
 		return ScopedAliasTierReadersOwnFile
 	end 'theReadersOwnDeclaration'
 
-	if not visibleToReader or (readerIsTheCorpus and not declaredByTheCorpus) 'hiddenFromThisReader'
+	if not visibleToReader or layerHidesDeclaration(declaredByTheCorpus, readerIsTheCorpus: readerIsTheCorpus) 'hiddenFromThisReader'
 		return ScopedAliasTierHiddenFromTheReader
 	end 'hiddenFromThisReader'
 
 	return ScopedAliasTierTheLibrarys if declaredByTheCorpus else ScopedAliasTierSomeAuthors
 end 'scopedAliasTier'
+
+function layerHidesDeclaration(declaredByTheCorpus bool, readerIsTheCorpus bool) returns bool
+	return readerIsTheCorpus and not declaredByTheCorpus
+end 'layerHidesDeclaration'
 
 export typealias FoldLayer = int(0 to 1)
 
@@ -2814,6 +2818,10 @@ export type ClaimantProvenance
 	export function claimOf(kind TypeDeclKind, declFilePath FilePath, visibility Visibility) returns TypeNameClaim
 		return TypeNameClaim.create(kind, declFilePath: declFilePath, visibility: visibility, declaredByTheCorpus: self.declaresInTheCorpus(declFilePath.toString()))
 	end 'claimOf'
+
+	export function layerHidesClaim(claim TypeNameClaim, readerPath String) returns bool
+		return layerHidesDeclaration(claim.declaredByTheCorpus, readerIsTheCorpus: self.declaresInTheCorpus(readerPath))
+	end 'layerHidesClaim'
 
 	export function claimIsVisibleFrom(claim TypeNameClaim, readerPath String) returns bool
 		if not isTypeAliasDecl(claim.kind) and (claim.declFilePath.equals(CompilerOwnedDeclFilePath) or readerPath.equals(CompilerOwnedDeclFilePath.toString())) 'theCompilerOwnsOneSide'

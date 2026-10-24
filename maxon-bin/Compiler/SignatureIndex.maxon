@@ -12410,11 +12410,13 @@ end 'AliasForm'
 export union TypeNameHiding
 	notHidden
 	hidden(kind HiddenSymbolKind, tier Visibility)
+	declaredInAnotherLayer
 
 	export function isHidden() returns bool
 		return match self 'hiding'
 			notHidden gives false
-			hidden gives true
+			hidden or
+			declaredInAnotherLayer gives true
 		end 'hiding'
 	end 'isHidden'
 end 'TypeNameHiding'
@@ -29988,6 +29990,12 @@ export type ProgramSignatures
 		if not ranked.hiddenFromTheReader 'theReaderSeesTheWinner'
 			return TypeNameHiding.notHidden
 		end 'theReaderSeesTheWinner'
+
+		// A library file never sees an author declaration, so an author's winning here is not a visibility
+		// refusal: the sweep can fold the author's file before the library's own declaration is filed.
+		if self.settledDeclarations().typeAliases.provenance.layerHidesClaim(ranked.claim, readerPath: readerFilePath.toString()) 'anAuthorsNameToALibraryReader'
+			return TypeNameHiding.declaredInAnotherLayer
+		end 'anAuthorsNameToALibraryReader'
 
 		return hidingClaim(ranked.claim)
 	end 'typeNameHidingFrom'
