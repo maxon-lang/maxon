@@ -224,6 +224,11 @@ module union TlsStagedCipher
 	staged(cipher TlsTls12Cipher)
 end 'TlsStagedCipher'
 
+module union TlsReceivedAlert
+	none
+	described(code Byte)
+end 'TlsReceivedAlert'
+
 module type TlsRecordInput
 	var reader as TlsRecordReader
 	var buffer as ByteArray
@@ -231,9 +236,10 @@ module type TlsRecordInput
 	module var version as TlsInboundVersion
 	module var established as bool
 	module var changeCipherSpecAllowed as bool
+	module var receivedAlert as TlsReceivedAlert
 
 	module static function create() returns TlsRecordInput
-		return Self{reader: TlsRecordReader.create(), buffer: ByteArray.create(), stagedCipher: TlsStagedCipher.none, version: TlsInboundVersion.undecided, established: false, changeCipherSpecAllowed: false}
+		return Self{reader: TlsRecordReader.create(), buffer: ByteArray.create(), stagedCipher: TlsStagedCipher.none, version: TlsInboundVersion.undecided, established: false, changeCipherSpecAllowed: false, receivedAlert: TlsReceivedAlert.none}
 	end 'create'
 
 	module function install(next TlsRecordCipher)
@@ -323,7 +329,11 @@ module type TlsRecordInput
 		end 'bodyLength'
 
 		let level = tlsRecordByte(body, offset: tlsAlertLevelOffset)
-		let alert = try TlsAlert.fromRawValue(tlsRecordByte(body, offset: tlsAlertDescriptionOffset)) otherwise return try acceptOtherAlert(level)
+		let description = tlsRecordByte(body, offset: tlsAlertDescriptionOffset)
+
+		receivedAlert = TlsReceivedAlert.described(description)
+
+		let alert = try TlsAlert.fromRawValue(description) otherwise return try acceptOtherAlert(level)
 
 		if alert == TlsAlert.closeNotify 'closing'
 			if not established 'early'

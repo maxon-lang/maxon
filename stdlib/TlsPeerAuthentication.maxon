@@ -4,28 +4,41 @@ module interface TlsPeerAuthenticator
 	function authenticates() returns bool
 end 'TlsPeerAuthenticator'
 
+module union TlsVerificationTime
+	current
+	fixed(at UnixSeconds)
+
+	module function seconds() returns UnixSeconds
+		return match self 'time'
+			current gives WallClock.nowUnixSeconds()
+			fixed(at) gives at
+		end 'time'
+	end 'seconds'
+end 'TlsVerificationTime'
+
+module union TlsPeerRefusal
+	none
+	refused(reason X509VerifyError)
+end 'TlsPeerRefusal'
+
 module type TlsX509Peer implements TlsPeerAuthenticator
 	module var roots as ByteArrays
 	module var now as UnixSeconds
 	module var purpose as X509Purpose
+	module var refusal as TlsPeerRefusal
 
 	module static function create(roots ByteArrays, now UnixSeconds, purpose X509Purpose) returns TlsX509Peer
-		return Self{roots: roots, now: now, purpose: purpose}
+		return Self{roots: roots, now: now, purpose: purpose, refusal: TlsPeerRefusal.none}
 	end 'create'
 
 	module static function system(purpose X509Purpose) returns TlsX509Peer throws TrustStoreError
-		let installed = try TrustStore.systemRoots()
-		var roots = ByteArrays.create()
-
-		for certificate in installed 'eachRoot'
-			roots.push(certificate.clone())
-		end 'eachRoot'
-
-		return Self{roots: roots, now: WallClock.nowUnixSeconds(), purpose: purpose}
+		return Self{roots: tlsCertificates(try TrustStore.systemRoots()), now: WallClock.nowUnixSeconds(), purpose: purpose, refusal: TlsPeerRefusal.none}
 	end 'system'
 
 	module function verifyChain(leaf ByteArray, intermediates ByteArrays, host X509VerifyHost) throws TlsHandshakeError
 		_ = try X509.verify(leaf, intermediates: intermediates, roots: roots, host: host, now: now, purpose: purpose) otherwise (failure) 'refused'
+			refusal = TlsPeerRefusal.refused(failure)
+
 			throw tlsVerifyFailure(failure)
 		end 'refused'
 	end 'verifyChain'
@@ -39,7 +52,17 @@ module type TlsX509Peer implements TlsPeerAuthenticator
 	end 'authenticates'
 end 'TlsX509Peer'
 
-module function tlsAuthenticateChain(chain ByteArrays, host X509VerifyHost, peer TlsPeerAuthenticator) returns Certificate throws TlsHandshakeError
+module function tlsCertificates(installed RootCertificates) returns ByteArrays
+	var certificates = ByteArrays.create()
+
+	for certificate in installed 'eachCertificate'
+		certificates.push(certificate.clone())
+	end 'eachCertificate'
+
+	return certificates
+end 'tlsCertificates'
+
+module function tlsAuthenticateChain(chain ByteArrays, host X509VerifyHost, peer TlsPeerAuthenticator, session TlsSession) returns Certificate throws TlsHandshakeError
 	let leafDer = try chain.first() otherwise throw TlsHandshakeError.decodeError
 
 	let leaf = try X509.parse(leafDer) otherwise (failure) 'unparsed'
@@ -49,6 +72,8 @@ module function tlsAuthenticateChain(chain ByteArrays, host X509VerifyHost, peer
 	let intermediates = try chain.slice(1, endIndex: chain.count()) otherwise panic("tlsAuthenticateChain: a chain with a leaf has an intermediate range")
 
 	try peer.verifyChain(leafDer, intermediates: intermediates, host: host)
+
+	session.peerChain = chain
 
 	return leaf
 end 'tlsAuthenticateChain'

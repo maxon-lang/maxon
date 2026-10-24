@@ -140,6 +140,14 @@ jobs:
         if: steps.seed.outputs.seeded == 'yes'
         run: ./scripts/build-from-seed.sh
 
+      # `specs/tls-interop.md` handshakes with a live `openssl`, which the suite below runs.
+      - name: OpenSSL for the TLS interop cases
+        if: steps.seed.outputs.seeded == 'yes'
+        run: |
+          set -euo pipefail
+          openssl="$(./scripts/openssl-for-interop.sh)"
+          echo "MAXON_OPENSSL=$openssl" >> "$GITHUB_ENV"
+
       # The suite runs inside --package, before the archive exists: a packaged compiler nobody ran is
       # a claim, and this is the step that makes it a fact.
       - name: Package (runs the suite first)

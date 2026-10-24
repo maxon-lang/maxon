@@ -47,6 +47,7 @@ module type TlsSession
 	module var alpn as TlsAlpnChoice
 	module var keys as TlsTrafficSecrets
 	module var peerVerified as bool
+	module var peerChain as ByteArrays
 	module var compatibility as bool
 	var role as TlsRole
 	var health as TlsConnectionHealth
@@ -54,7 +55,7 @@ module type TlsSession
 	var closedByPeer as bool
 
 	module static function create(role TlsRole, firstRecordVersion TlsRecordVersion) returns TlsSession
-		return Self{input: TlsRecordInput.create(), writer: TlsRecordWriter.create(firstRecordVersion), transcript: TlsTranscript.create(), negotiation: TlsNegotiation.pending, alpn: TlsAlpnChoice.absent, keys: TlsTrafficSecrets.none, peerVerified: false, compatibility: false, role: role, health: TlsConnectionHealth.healthy, received: ByteArray.create(), closedByPeer: false}
+		return Self{input: TlsRecordInput.create(), writer: TlsRecordWriter.create(firstRecordVersion), transcript: TlsTranscript.create(), negotiation: TlsNegotiation.pending, alpn: TlsAlpnChoice.absent, keys: TlsTrafficSecrets.none, peerVerified: false, peerChain: ByteArrays.create(), compatibility: false, role: role, health: TlsConnectionHealth.healthy, received: ByteArray.create(), closedByPeer: false}
 	end 'create'
 
 	module function receive(record ByteArray, handler TlsMessageHandler) throws TlsHandshakeError
@@ -104,7 +105,7 @@ module type TlsSession
 		return false
 	end 'accept'
 
-	function abort(error TlsHandshakeError)
+	module function abort(error TlsHandshakeError)
 		health = TlsConnectionHealth.broken(error)
 
 		let alert = try error.sentAlert() otherwise return
@@ -163,6 +164,16 @@ module type TlsSession
 			keyed12 then throw TlsHandshakeError.internalError
 		end 'negotiation'
 	end 'negotiatedSuite'
+
+	module function negotiatedCipherSuite() returns TlsCipherSuite throws TlsHandshakeError
+		match negotiation 'negotiation'
+			accepted(suite) then return TlsCipherSuite.tls13(suite)
+			keyed(suite, _) then return TlsCipherSuite.tls13(suite)
+			accepted12(suite) then return TlsCipherSuite.tls12(suite)
+			keyed12(suite, _) then return TlsCipherSuite.tls12(suite)
+			pending then throw TlsHandshakeError.internalError
+		end 'negotiation'
+	end 'negotiatedCipherSuite'
 
 	module function handshakeSecrets() returns (ByteArray, ByteArray, ByteArray) throws TlsHandshakeError
 		match keys 'keys'

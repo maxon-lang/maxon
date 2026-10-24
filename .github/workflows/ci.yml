@@ -204,6 +204,15 @@ jobs:
         if: steps.seed.outputs.seeded == 'yes'
         run: ./scripts/build-from-seed.sh
 
+      # `specs/tls-interop.md` handshakes with a live `openssl`; the script names the one this lane uses
+      # (macOS ships LibreSSL, so it installs Homebrew's) and fails the lane when it is too old.
+      - name: OpenSSL for the TLS interop cases
+        if: steps.seed.outputs.seeded == 'yes'
+        run: |
+          set -euo pipefail
+          openssl="$(./scripts/openssl-for-interop.sh)"
+          echo "MAXON_OPENSSL=$openssl" >> "$GITHUB_ENV"
+
       - name: Suite
         if: steps.seed.outputs.seeded == 'yes'
         run: ./maxon-bin/.maxon/maxon spec-test

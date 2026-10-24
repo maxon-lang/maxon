@@ -1,4 +1,4 @@
-module typealias TlsProtocolArray = Array with TlsProtocol
+public typealias TlsProtocolArray = Array with TlsProtocol
 module typealias TlsKeySecretArray = Array with TlsKeySecret
 
 module let tlsRandomLength = 32
@@ -20,6 +20,55 @@ module type TlsKeySecret
 		return Self{group: group, privateKey: privateKey, publicKey: try named.publicKey(privateKey)}
 	end 'create'
 end 'TlsKeySecret'
+
+let tlsMaxProtocolNameBytes = 255
+
+module function tlsCheckedProtocols(protocols TlsProtocolArray) returns TlsProtocolArray throws TlsError
+	if protocols.isEmpty() 'none'
+		throw TlsError.invalidConfiguration
+	end 'none'
+
+	return protocols.clone()
+end 'tlsCheckedProtocols'
+
+module function tlsCheckedProtocolNames(names StringArray) returns TlsProtocolNameArray throws TlsError
+	var checked = TlsProtocolNameArray.create()
+
+	for name in names 'eachName'
+		if name.byteLength() == 0 or name.byteLength() > tlsMaxProtocolNameBytes 'unusable'
+			throw TlsError.invalidConfiguration
+		end 'unusable'
+
+		checked.push(name.toByteArray())
+	end 'eachName'
+
+	return checked
+end 'tlsCheckedProtocolNames'
+
+module function tlsEnabledSuites(codes TlsCipherSuiteCodeArray, protocols TlsProtocolArray) returns TlsCipherSuiteCodeArray
+	var enabled = TlsCipherSuiteCodeArray.create()
+
+	for code in codes 'eachCode'
+		for protocol in protocols 'eachProtocol'
+			if tlsKnowsSuite(code, protocol: protocol) 'belongs'
+				enabled.push(code)
+
+				break
+			end 'belongs'
+		end 'eachProtocol'
+	end 'eachCode'
+
+	return enabled
+end 'tlsEnabledSuites'
+
+function tlsKnowsSuite(code TlsCipherSuiteCode, protocol TlsProtocol) returns bool
+	let selected = try tlsServerSuite(code, protocol: protocol) otherwise return false
+
+	match selected 'selected'
+		tls13 or
+		tls12 then return true
+	end 'selected'
+end 'tlsKnowsSuite'
 
 module union TlsClientIdentity
 	anonymous

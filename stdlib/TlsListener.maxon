@@ -1,0 +1,121 @@
+/// TLS server listeners.
+/// @category Network
+let DefaultHandshakeDeadlineMs = 30000
+
+/// What a server presents and requires: its identity, versions, ALPN protocols and client
+/// authentication.
+public type TlsServerOptions
+	var settings as TlsServerConfig
+	module var clientRoots as ByteArrays
+	module var handshakeDeadlineMs as SocketDeadlineMs
+	module var verificationTime as TlsVerificationTime
+
+	/// TLS 1.3 and 1.2, no ALPN, no client authentication, a 30 s handshake deadline.
+	public static function create(identity TlsIdentity) returns TlsServerOptions
+		return Self{settings: TlsServerConfig.defaults(identity.chain.clone(), key: identity.key.clone()), clientRoots: ByteArrays.create(), handshakeDeadlineMs: DefaultHandshakeDeadlineMs, verificationTime: TlsVerificationTime.current}
+	end 'create'
+
+	/// The TLS versions to accept; at least one.
+	public function setProtocols(protocols TlsProtocolArray) throws TlsError
+		settings.protocols = try tlsCheckedProtocols(protocols)
+	end 'setProtocols'
+
+	/// The ALPN protocols, in order of preference.
+	public function setApplicationProtocols(names StringArray) throws TlsError
+		settings.applicationProtocols = try tlsCheckedProtocolNames(names)
+	end 'setApplicationProtocols'
+
+	/// Ask clients for a certificate and verify one that is presented under `roots`; a client may present none.
+	public function requestClientCertificates(roots RootCertificates) throws TlsError
+		try authenticateClients(roots, mode: TlsClientAuthentication.request)
+	end 'requestClientCertificates'
+
+	/// Ask clients for a certificate, verify it under `roots`, and refuse a client that presents none.
+	public function requireClientCertificates(roots RootCertificates) throws TlsError
+		try authenticateClients(roots, mode: TlsClientAuthentication.require)
+	end 'requireClientCertificates'
+
+	/// The Unix time client certificates are checked at, in place of the clock.
+	public function setVerificationTime(seconds UnixSeconds)
+		verificationTime = TlsVerificationTime.fixed(seconds)
+	end 'setVerificationTime'
+
+	/// How long `accept()` gives one connection's handshake before it throws `timedOut`; `0` waits without a deadline.
+	public function setHandshakeDeadline(milliseconds SocketDeadlineMs)
+		handshakeDeadlineMs = milliseconds
+	end 'setHandshakeDeadline'
+
+	function authenticateClients(roots RootCertificates, mode TlsClientAuthentication) throws TlsError
+		if roots.isEmpty() 'none'
+			throw TlsError.invalidConfiguration
+		end 'none'
+
+		clientRoots = tlsCertificates(roots)
+		settings.clientAuthentication = mode
+	end 'authenticateClients'
+
+	module function listenerConfig() returns TlsServerConfig throws TlsError
+		var config = settings.clone()
+
+		config.cipherSuites = tlsEnabledSuites(config.cipherSuites, protocols: config.protocols)
+
+		for root in clientRoots 'eachRoot'
+			let parsed = try X509.parse(root) otherwise throw TlsError.invalidCertificate
+
+			config.clientAuthorities.push(parsed.subject().der())
+		end 'eachRoot'
+
+		return config
+	end 'listenerConfig'
+end 'TlsServerOptions'
+
+/// A listening socket whose `accept()` also runs the server handshake. A client that stalls holds
+/// `accept()` until the handshake deadline.
+public type TlsListener
+	var listener as TcpListener
+	var config as TlsServerConfig
+	var clientRoots as ByteArrays
+	var handshakeDeadlineMs as SocketDeadlineMs
+	var verificationTime as TlsVerificationTime
+
+	/// Bind and listen; port `0` takes any free port.
+	public static function bind(host String, port NetworkPort, options TlsServerOptions) returns TlsListener throws TlsError
+		let config = try options.listenerConfig()
+
+		let bound = try TcpListener.bind(host, port: port) otherwise (failure) 'refused'
+			throw tlsNetworkFailure(failure)
+		end 'refused'
+
+		return TlsListener{listener: bound, config: config, clientRoots: options.clientRoots.clone(), handshakeDeadlineMs: options.handshakeDeadlineMs, verificationTime: options.verificationTime}
+	end 'bind'
+
+	/// The bound port.
+	public function port() returns NetworkPort
+		return listener.port()
+	end 'port'
+
+	/// The next connection, handshaken. A failed handshake throws its error and leaves the listener accepting.
+	public function accept() returns TlsStream throws TlsError
+		let transport = try listener.accept() otherwise (failure) 'refused'
+			throw tlsNetworkFailure(failure)
+		end 'refused'
+
+		let entropy = try TlsServerEntropy.fresh(config) otherwise throw TlsError.protocolError(TlsAlert.internalError)
+		var peer = TlsX509Peer.create(clientRoots, now: verificationTime.seconds(), purpose: X509Purpose.clientAuth)
+		var endpoint = try TlsServerHandshake.create(config, entropy: entropy, peer: peer) otherwise throw TlsError.invalidConfiguration
+
+		return try TlsStream.establish(transport, endpoint: endpoint, peer: peer, deadlineMs: handshakeDeadlineMs)
+	end 'accept'
+
+	/// Make an `accept()` still waiting `milliseconds` after this call throw `timedOut`; `0` clears it.
+	public function setAcceptDeadline(milliseconds SocketDeadlineMs) throws TlsError
+		try listener.setAcceptDeadline(milliseconds) otherwise (failure) 'refused'
+			throw tlsNetworkFailure(failure)
+		end 'refused'
+	end 'setAcceptDeadline'
+
+	/// Stop listening. Idempotent.
+	public function close()
+		listener.close()
+	end 'close'
+end 'TlsListener'

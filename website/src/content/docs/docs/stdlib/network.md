@@ -110,6 +110,211 @@ end 'main'
 
 Output: `ping`.
 
+## TlsClient
+
+`TlsClient` connects to a TLS server: it opens a `TcpClient` connection, runs the handshake and returns a
+[`TlsStream`](#tlsstream) that reads and writes the decrypted bytes. TLS 1.3 and TLS 1.2 are enabled; the suites
+are ChaCha20-Poly1305, AES-128-GCM and AES-256-GCM (TLS 1.2 with ECDHE and an ECDSA or RSA certificate), over
+X25519 and secp256r1. The server's chain is verified for the name the client connects to, against the operating
+system's root certificates unless `TlsClientOptions` names others. Available on `x64-windows`, `arm64-macos`,
+`arm64-linux` and `x64-linux`; refused at compile time (E3104) on `wasm32-wasi`.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `TlsClient.connect(host String, port NetworkPort, options TlsClientOptions = TlsClientOptions.create(), deadlineMs SocketDeadlineMs = 0)` | `TlsStream` | `TlsError` | Resolve `host`, connect, handshake. `deadlineMs` bounds the connection and, separately, the handshake: either that runs longer throws `timedOut`; `0` waits with no deadline. A failure after the connection was made closes it. |
+
+The name the certificate is verified for, and the server name sent in the ClientHello, is `host`; `setServerName`
+replaces it. An IP address literal is verified against the certificate's IP addresses, and no server name is
+sent for it. A client that gets the server's alert, or sends one, throws the matching [`TlsError`](#tlserror).
+
+### TlsClientOptions
+
+`TlsClientOptions.create()` holds the defaults: the system roots, TLS 1.3 and TLS 1.2, no ALPN protocol, no
+client certificate, the server name of the host, the current time. A setter returns nothing and replaces what the
+option held. A configuration that no handshake could use is refused where it is set.
+
+| Member | Throws | Description |
+|--------|--------|-------------|
+| `TlsClientOptions.create()` | — | The defaults. |
+| `setTrustedRoots(roots RootCertificates)` | `TlsError` | The DER roots a server's chain must end in, in place of the system's. An empty list is `invalidConfiguration`. |
+| `setServerName(name String)` | `TlsError` | The name to verify and to send, in place of the host. An empty name is `invalidConfiguration`. |
+| `setProtocols(protocols TlsProtocolArray)` | `TlsError` | The versions to offer, `TlsProtocol.tls13` and `TlsProtocol.tls12`. An empty array is `invalidConfiguration`. |
+| `setApplicationProtocols(names StringArray)` | `TlsError` | The ALPN protocol names to offer, in order. A name of no bytes or of more than 255 is `invalidConfiguration`. |
+| `setIdentity(identity TlsIdentity)` | — | The certificate chain and key to present when the server asks for a client certificate. |
+| `setVerificationTime(seconds UnixSeconds)` | — | The Unix time certificates are checked at, in place of the clock. |
+
+When the system roots cannot be read, `connect` throws `trustStoreUnavailable` after the connection was made.
+
+```maxon
+function main() returns ExitCode
+	var options = TlsClientOptions.create()
+
+	try options.setApplicationProtocols(["h2", "http/1.1"]) otherwise return 1
+
+	var stream = try TlsClient.connect("example.com", port: 443, options: options) otherwise return 2
+
+	_ = try stream.send("GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n") otherwise return 3
+
+	let head = try stream.recv(4096) otherwise return 4
+
+	stream.close()
+	print(head)
+
+	return 0
+end 'main'
+```
+
+## TlsListener
+
+`TlsListener` accepts TLS connections: a `TcpListener` whose `accept()` also runs the server handshake and returns
+a [`TlsStream`](#tlsstream). The server presents the chain and key of a [`TlsIdentity`](#tlsidentity). It enables TLS 1.3
+and TLS 1.2 and chooses by its own preference: ChaCha20-Poly1305 first, then AES-128-GCM, then AES-256-GCM, and for
+ALPN the first of its protocols the client lists. Same targets as `TlsClient`.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `TlsListener.bind(host String, port NetworkPort, options TlsServerOptions)` | `TlsListener` | `TlsError` | Bind and listen. Port `0` takes any free port. `bindFailed` when the address cannot be bound. |
+| `port()` | `NetworkPort` | — | The bound port. |
+| `accept()` | `TlsStream` | `TlsError` | The next connection, handshaken. A handshake that fails throws its error and leaves the listener accepting; `acceptFailed` when the listener is closed or has failed. |
+| `setAcceptDeadline(milliseconds SocketDeadlineMs)` | — | `TlsError` | Make an `accept()` still waiting for a connection `milliseconds` after this call throw `timedOut`; `0` clears it. |
+| `close()` | — | — | Stop listening. Idempotent. |
+
+The handshake runs inside `accept()`, so a client that connects and then stalls holds the listener until the options'
+handshake deadline passes (30 s by default).
+
+### TlsServerOptions
+
+| Member | Throws | Description |
+|--------|--------|-------------|
+| `TlsServerOptions.create(identity TlsIdentity)` | — | The chain and key the server presents, TLS 1.3 and TLS 1.2, no ALPN protocol, no client authentication, a 30 s handshake deadline, the current time. |
+| `setProtocols(protocols TlsProtocolArray)` | `TlsError` | The versions to accept. An empty array is `invalidConfiguration`. |
+| `setApplicationProtocols(names StringArray)` | `TlsError` | The ALPN protocols, in order of preference. A client that offers ALPN and none of them is refused with `no_application_protocol`; a client that offers none is accepted without one. |
+| `requestClientCertificates(roots RootCertificates)` | `TlsError` | Ask clients for a certificate. One that is presented must chain to `roots` for the client authentication purpose, or the handshake ends; a client that presents none is accepted. |
+| `requireClientCertificates(roots RootCertificates)` | `TlsError` | The same, and a client that presents none is refused with `certificate_required` (TLS 1.3) or `handshake_failure` (TLS 1.2). No roots is `invalidConfiguration`. |
+| `setHandshakeDeadline(milliseconds SocketDeadlineMs)` | — | How long `accept()` gives one connection's handshake before it throws `timedOut`; `0` waits with no deadline. |
+| `setVerificationTime(seconds UnixSeconds)` | — | The Unix time client certificates are checked at, in place of the clock. |
+
+With client certificates asked for, the CertificateRequest names the subjects of `roots`.
+
+```maxon
+function serve(listener TlsListener) returns ExitCode
+	var stream = try listener.accept() otherwise return 1
+	let request = try stream.recv(4096) otherwise return 2
+
+	_ = try stream.send("echo:{request}") otherwise return 3
+	stream.close()
+
+	return 0
+end 'serve'
+
+function main() returns ExitCode
+	let chain = "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"
+	let key = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+	let identity = try TlsIdentity.fromPem(chain, key: key) otherwise return 1
+	var listener = try TlsListener.bind("127.0.0.1", port: 8443, options: TlsServerOptions.create(identity)) otherwise return 2
+
+	return serve(listener)
+end 'main'
+```
+
+## TlsStream
+
+`TlsStream` is an established TLS connection, the one `TlsClient.connect` and `TlsListener.accept()` return. It is
+used from one green thread at a time, through a `var`. `send`, `recv` and the deadlines follow `TcpClient`; the
+bytes are the application data, and a write is split into records of at most 16 KiB.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `send(data String)`, `send(data ByteArray)` | `BytePos` | `TlsError` | Send every byte; returns the count. `closed` after `close` or `shutdownWrite`. |
+| `recv(bufferSize RecvCapacity)` | `String` | `TlsError` | Between one and `bufferSize` bytes of application data. |
+| `recvBytes(bufferSize RecvCapacity)` | `ByteArray` | `TlsError` | The same bytes, unconverted. After the peer's close_notify and the data before it, `connectionClosed`; a TCP connection that ends without one, `truncated`. |
+| `protocol()` | `TlsProtocol` | — | `tls13` or `tls12`, whichever was negotiated. |
+| `cipherSuite()` | `TlsCipherSuite` | — | `tls13(suite)` with a `Tls13CipherSuite`, or `tls12(suite)` with a `Tls12CipherSuite`. |
+| `applicationProtocol()` | `TlsApplicationProtocol` | — | `negotiated(name)` or `unnegotiated`. |
+| `peerCertificates()` | `ByteArrays` | — | The chain the peer presented, DER, in the order sent: the server's for a client, the client's (none when it presented none) for a server. |
+| `setReadDeadline(milliseconds SocketDeadlineMs)` | — | `TlsError` | A read that waits longer than this throws `timedOut`; the stream stays usable. `0` clears it. |
+| `setWriteDeadline(milliseconds SocketDeadlineMs)` | — | `TlsError` | The same for writes. |
+| `shutdownWrite()` | — | `TlsError` | Send close_notify and stop sending: the peer reads the end of the stream while this side can still `recv`. |
+| `close()` | — | — | Send close_notify and close the connection. Idempotent. |
+
+`TlsApplicationProtocol` is a union: `unnegotiated`, or `negotiated(name String)`. `TlsCipherSuite` is a union of
+the two suite enums. A stream that goes out of scope closes its socket as a `TcpClient` does, without a close_notify, which
+the peer reads as `truncated`; `close()` is how a peer is told the data is complete. A fatal alert, from the peer
+or found by this side, ends the stream: the error is thrown once and every later call throws `closed`.
+
+```maxon
+function main() returns ExitCode
+	var stream = try TlsClient.connect("example.com", port: 443) otherwise return 1
+	let suite = match stream.cipherSuite() 'suite'
+		tls13(chosen) gives chosen.name
+		tls12(chosen) gives chosen.name
+	end 'suite'
+
+	print("{stream.protocol().name} {suite}\n")
+	stream.close()
+
+	return 0
+end 'main'
+```
+
+## TlsIdentity
+
+A `TlsIdentity` is a certificate chain and the private key of its first certificate: what a server presents and
+what a client presents to a server that asks. The certificates are DER, the leaf first. The key is accepted as
+PKCS #8 (P-256, P-384, Ed25519 or RSA), SEC1 `ECPrivateKey` (P-256 or P-384) or PKCS #1 `RSAPrivateKey`.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `TlsIdentity.fromDer(chain ByteArrays, key ByteArray)` | `TlsIdentity` | `TlsError` | `invalidCertificate` for an empty chain or a first certificate that is not X.509; `invalidPrivateKey` for a key that cannot be read or whose type is not the first certificate's. |
+| `TlsIdentity.fromPem(certificates String, key String)` | `TlsIdentity` | `TlsError` | The `CERTIFICATE` blocks of `certificates`, in order, and the first `PRIVATE KEY`, `EC PRIVATE KEY` or `RSA PRIVATE KEY` block of `key`, which may be the same text. `invalidPem` for text that is not PEM or a `key` with no key block. |
+
+## TlsError
+
+Every failure of `TlsClient`, `TlsListener` and `TlsStream` is a `TlsError`, a union. A handshake that fails sends
+the peer the alert that names the failure (`TlsAlert`) and closes the connection.
+
+```maxon
+union TlsError implements Error
+	resolveFailed
+	connectFailed
+	bindFailed
+	acceptFailed
+	acceptInterrupted
+	timedOut
+	sendFailed
+	recvFailed
+	connectionClosed
+	truncated
+	closed
+	trustStoreUnavailable
+	invalidConfiguration
+	invalidCertificate
+	invalidPrivateKey
+	invalidPem
+	certificateRejected(reason X509VerifyError)
+	protocolError(alert TlsAlert)
+	peerAlert(alert TlsAlert)
+	peerAlertUnrecognised(code Byte)
+end 'TlsError'
+```
+
+| Case | Meaning |
+|------|---------|
+| `resolveFailed`, `connectFailed`, `bindFailed`, `acceptFailed`, `acceptInterrupted`, `timedOut`, `sendFailed`, `recvFailed` | The `NetworkError` case of the same name. |
+| `connectionClosed` | The peer ended the stream with close_notify, and every byte before it was read; or the transport refused a write because the peer had gone. |
+| `truncated` | The TCP connection ended without a close_notify, so the data may be incomplete. |
+| `closed` | The stream was closed, or ended in an error that was already thrown. |
+| `trustStoreUnavailable` | The system roots cannot be read. |
+| `invalidConfiguration` | An option no handshake could use. |
+| `invalidCertificate`, `invalidPrivateKey`, `invalidPem` | A `TlsIdentity` input could not be used. |
+| `certificateRejected(reason)` | This side refused the peer's chain, for the `X509VerifyError` `reason`: `hostnameMismatch`, `unknownAuthority`, `expired`, and the others. The alert sent is `bad_certificate`, `unknown_ca` or `certificate_expired`. |
+| `protocolError(alert)` | This side ended the connection and sent `alert`: a malformed or unexpected message, no common version (`protocolVersion`), no common ALPN protocol (`noApplicationProtocol`), a missing client certificate (`certificateRequired`, `handshakeFailure`), a record longer than a record can be (`recordOverflow`). |
+| `peerAlert(alert)` | The peer sent a fatal alert, or close_notify before the handshake finished. In TLS 1.3 a server decides about a client certificate after the client's handshake is complete, so the client reads that alert from its first `recv`. |
+| `peerAlertUnrecognised(code)` | The peer sent an alert whose code `TlsAlert` does not name. |
+
+A record header is checked as it is read: content type, version and length are bounded before any body is waited for,
+so input that is not TLS, or a header that declares more than a record holds, ends with `protocolError` at once.
+
 ## HttpClient
 
 An HTTP/1.1 client over `TcpClient`. A request carries `Host` and `Connection: close` unless it sets its own,

@@ -283,6 +283,11 @@ module type TlsClientHandshake implements TlsEndpoint, TlsMessageHandler
 
 		session.keys = TlsTrafficSecrets.handshake(stage.clientTrafficSecret, serverTraffic: stage.serverTrafficSecret, master: stage.masterSecret)
 		session.input.install(try tlsTrafficCipher(suite, secret: stage.serverTrafficSecret))
+
+		// The compatibility change_cipher_spec goes out before the first protected record, which is
+		// the alert a later failure sends as much as the client flight.
+		session.writeCompatibilityChangeCipherSpec()
+		session.writer.install(try tlsTrafficCipher(suite, secret: stage.clientTrafficSecret))
 		phase = TlsClientPhase.awaitingEncryptedExtensions
 	end 'acceptServerHello'
 
@@ -351,7 +356,7 @@ module type TlsClientHandshake implements TlsEndpoint, TlsMessageHandler
 			chain.push(entry.certificate())
 		end 'eachEntry'
 
-		let leaf = try tlsAuthenticateChain(chain, host: config.peerName, peer: peer)
+		let leaf = try tlsAuthenticateChain(chain, host: config.peerName, peer: peer, session: session)
 
 		session.peerVerified = peer.authenticates()
 		session.transcript.append(raw)
@@ -407,8 +412,6 @@ module type TlsClientHandshake implements TlsEndpoint, TlsMessageHandler
 
 		session.input.install(try tlsTrafficCipher(suite, secret: application.serverTrafficSecret))
 		session.input.changeCipherSpecAllowed = false
-		session.writeCompatibilityChangeCipherSpec()
-		session.writer.install(try tlsTrafficCipher(suite, secret: clientSecret))
 		try session.writer.writeHandshake(try clientFlight(request, suite: suite, handshakeSecret: clientSecret))
 		session.writer.install(try tlsTrafficCipher(suite, secret: application.clientTrafficSecret))
 

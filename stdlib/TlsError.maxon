@@ -1,0 +1,85 @@
+/// Failures of the TLS client, listener and stream.
+/// @category Network
+
+/// Why a TLS operation failed. Transport cases mirror `NetworkError`; `connectionClosed` is the
+/// peer's close_notify, `truncated` a transport that ended without one, and `closed` a stream
+/// already closed. `certificateRejected` is this side refusing the peer's chain, `protocolError`
+/// the alert this side sent, `peerAlert` the alert the peer sent.
+public union TlsError implements Error
+	resolveFailed
+	connectFailed
+	bindFailed
+	acceptFailed
+	acceptInterrupted
+	timedOut
+	sendFailed
+	recvFailed
+	connectionClosed
+	truncated
+	closed
+	trustStoreUnavailable
+	invalidConfiguration
+	invalidCertificate
+	invalidPrivateKey
+	invalidPem
+	certificateRejected(reason X509VerifyError)
+	protocolError(alert TlsAlert)
+	peerAlert(alert TlsAlert)
+	peerAlertUnrecognised(code Byte)
+end 'TlsError'
+
+module function tlsNetworkFailure(failure NetworkError) returns TlsError
+	return match failure 'failure'
+		resolveFailed gives TlsError.resolveFailed
+		connectFailed gives TlsError.connectFailed
+		sendFailed gives TlsError.sendFailed
+		recvFailed gives TlsError.recvFailed
+		connectionClosed gives TlsError.connectionClosed
+		timedOut gives TlsError.timedOut
+		bindFailed gives TlsError.bindFailed
+		acceptFailed gives TlsError.acceptFailed
+		acceptInterrupted gives TlsError.acceptInterrupted
+	end 'failure'
+end 'tlsNetworkFailure'
+
+// A close_notify arrives as a record, so a transport that ends while a record is awaited ended
+// without one.
+module function tlsReadFailure(failure NetworkError) returns TlsError
+	if failure == NetworkError.connectionClosed 'transportEnded'
+		return TlsError.truncated
+	end 'transportEnded'
+
+	return tlsNetworkFailure(failure)
+end 'tlsReadFailure'
+
+// A refusal is recorded only by the chain check, which ends the handshake, so a recorded one is
+// the cause.
+module function tlsPublicFailure(failure TlsHandshakeError, session TlsSession, refusal TlsPeerRefusal) returns TlsError
+	match refusal 'refusal'
+		refused(reason) then return TlsError.certificateRejected(reason)
+		none then return tlsSessionFailure(failure, session: session)
+	end 'refusal'
+end 'tlsPublicFailure'
+
+function tlsSessionFailure(failure TlsHandshakeError, session TlsSession) returns TlsError
+	if failure == TlsHandshakeError.alertReceived 'fromPeer'
+		return tlsReceivedAlertFailure(session.input.receivedAlert)
+	end 'fromPeer'
+
+	let alert = try failure.sentAlert() otherwise panic("tlsSessionFailure: every failure but alertReceived names the alert it sent")
+
+	return TlsError.protocolError(alert)
+end 'tlsSessionFailure'
+
+function tlsReceivedAlertFailure(received TlsReceivedAlert) returns TlsError
+	match received 'received'
+		described(code) then return tlsDescribedAlertFailure(code)
+		none then panic("tlsReceivedAlertFailure: alertReceived is thrown only after the alert was recorded")
+	end 'received'
+end 'tlsReceivedAlertFailure'
+
+function tlsDescribedAlertFailure(code Byte) returns TlsError
+	let alert = try TlsAlert.fromRawValue(code) otherwise return TlsError.peerAlertUnrecognised(code)
+
+	return TlsError.peerAlert(alert)
+end 'tlsDescribedAlertFailure'

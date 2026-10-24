@@ -116,15 +116,15 @@ module function tlsSuiteFitsKey(suite Tls12CipherSuite, algorithm X509KeyAlgorit
 	return suite.signsWithRsa() == (algorithm == X509KeyAlgorithm.rsa)
 end 'tlsSuiteFitsKey'
 
-module union TlsServerSuite
+public union TlsCipherSuite
 	tls13(suite Tls13CipherSuite)
 	tls12(suite Tls12CipherSuite)
-end 'TlsServerSuite'
+end 'TlsCipherSuite'
 
-module function tlsServerSuite(code TlsCipherSuiteCode, protocol TlsProtocol) returns TlsServerSuite throws TlsHandshakeError
+module function tlsServerSuite(code TlsCipherSuiteCode, protocol TlsProtocol) returns TlsCipherSuite throws TlsHandshakeError
 	return match protocol 'protocol'
-		tls13 gives TlsServerSuite.tls13(try Tls13CipherSuite.fromRawValue(code) otherwise throw TlsHandshakeError.illegalParameter)
-		tls12 gives TlsServerSuite.tls12(try Tls12CipherSuite.fromRawValue(code) otherwise throw TlsHandshakeError.illegalParameter)
+		tls13 gives TlsCipherSuite.tls13(try Tls13CipherSuite.fromRawValue(code) otherwise throw TlsHandshakeError.illegalParameter)
+		tls12 gives TlsCipherSuite.tls12(try Tls12CipherSuite.fromRawValue(code) otherwise throw TlsHandshakeError.illegalParameter)
 	end 'protocol'
 end 'tlsServerSuite'
 

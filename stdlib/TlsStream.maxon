@@ -1,0 +1,294 @@
+/// TLS connections over sockets: the stream both `TlsClient` and `TlsListener` hand back.
+/// @category Network
+let tlsReadChunkBytes = 32768
+let tlsRecordMajorVersion = 3
+
+/// The ALPN protocol a handshake settled on.
+public union TlsApplicationProtocol
+	unnegotiated
+	negotiated(name String)
+end 'TlsApplicationProtocol'
+
+/// An established TLS connection. Use it through a `var` from one green thread. A stream that goes
+/// out of scope closes its socket without a close_notify, which the peer reads as `truncated`;
+/// `close()` sends one.
+public type TlsStream
+	var transport as TcpClient
+	var endpoint as TlsEndpoint
+
+	// The machine holds this same instance and records on it why it refused a chain; `refuse` reads that back.
+	var peer as TlsX509Peer
+	var inbound as ByteArray
+	var consumed as BytePos
+	var unread as ByteArray
+	var unreadConsumed as BytePos
+	var writeClosed as bool
+	var closed as bool
+
+	module static function establish(transport TcpClient, endpoint TlsEndpoint, peer TlsX509Peer, deadlineMs SocketDeadlineMs) returns TlsStream throws TlsError
+		var stream = Self{transport: transport, endpoint: endpoint, peer: peer, inbound: ByteArray.create(), consumed: 0, unread: ByteArray.create(), unreadConsumed: 0, writeClosed: false, closed: false}
+
+		try stream.handshake(deadlineMs)
+
+		return stream
+	end 'establish'
+
+	/// Send every byte of `data`; returns the byte count.
+	public function send(data String) returns BytePos throws TlsError
+		return try send(data.toByteArray())
+	end 'send'
+
+	/// Send every byte of `data`, split into records of at most 16 KiB; returns the byte count.
+	public function send(data ByteArray) returns BytePos throws TlsError
+		if closed or writeClosed 'unwritable'
+			throw TlsError.closed
+		end 'unwritable'
+
+		if data.isEmpty() 'nothing'
+			return 0
+		end 'nothing'
+
+		try endpoint.session().write(data) otherwise (failure) 'refused'
+			throw refuse(failure)
+		end 'refused'
+
+		try flush()
+
+		return data.count() as BytePos
+	end 'send'
+
+	/// Receive between one and `bufferSize` bytes of application data.
+	public function recv(bufferSize RecvCapacity) returns String throws TlsError
+		return String.from(try recvBytes(bufferSize))
+	end 'recv'
+
+	/// `recv`, as bytes. Throws `connectionClosed` once the peer's close_notify and the data before it were read, and
+	/// `truncated` when the transport ends without one.
+	public function recvBytes(bufferSize RecvCapacity) returns ByteArray throws TlsError
+		if closed 'unreadable'
+			throw TlsError.closed
+		end 'unreadable'
+
+		while unreadCount() == 0 'waiting'
+			if endpoint.session().hasPeerClosed() 'peerFinished'
+				throw TlsError.connectionClosed
+			end 'peerFinished'
+
+			try pump()
+			unread.append(endpoint.session().takeReceived())
+		end 'waiting'
+
+		return takeUnread(bufferSize)
+	end 'recvBytes'
+
+	/// The TLS version negotiated.
+	public function protocol() returns TlsProtocol
+		return match cipherSuite() 'suite'
+			tls13 gives TlsProtocol.tls13
+			tls12 gives TlsProtocol.tls12
+		end 'suite'
+	end 'protocol'
+
+	/// The cipher suite negotiated.
+	public function cipherSuite() returns TlsCipherSuite
+		return try endpoint.session().negotiatedCipherSuite() otherwise panic("TlsStream.cipherSuite: a stream exists only after its handshake negotiated a suite")
+	end 'cipherSuite'
+
+	/// The ALPN protocol negotiated, if any.
+	public function applicationProtocol() returns TlsApplicationProtocol
+		return match endpoint.session().alpn 'alpn'
+			negotiated(name) gives TlsApplicationProtocol.negotiated(String.from(name))
+			absent gives TlsApplicationProtocol.unnegotiated
+		end 'alpn'
+	end 'applicationProtocol'
+
+	/// The DER chain the peer presented, in the order sent; empty for a client that presented none.
+	public function peerCertificates() returns ByteArrays
+		return endpoint.session().peerChain.clone()
+	end 'peerCertificates'
+
+	/// Make a read that waits longer than `milliseconds` throw `timedOut`; the stream stays usable. `0` clears it.
+	public function setReadDeadline(milliseconds SocketDeadlineMs) throws TlsError
+		try transport.setReadDeadline(milliseconds) otherwise (failure) 'refused'
+			throw tlsNetworkFailure(failure)
+		end 'refused'
+	end 'setReadDeadline'
+
+	/// The same for writes.
+	public function setWriteDeadline(milliseconds SocketDeadlineMs) throws TlsError
+		try transport.setWriteDeadline(milliseconds) otherwise (failure) 'refused'
+			throw tlsNetworkFailure(failure)
+		end 'refused'
+	end 'setWriteDeadline'
+
+	/// Send close_notify and stop sending; the peer reads the end of the stream while this side can still `recv`.
+	public function shutdownWrite() throws TlsError
+		if closed or writeClosed 'unwritable'
+			throw TlsError.closed
+		end 'unwritable'
+
+		try endpoint.session().close() otherwise (failure) 'refused'
+			throw refuse(failure)
+		end 'refused'
+
+		try flush()
+
+		writeClosed = true
+
+		try transport.shutdownWrite() otherwise (failure) 'refused'
+			throw tlsNetworkFailure(failure)
+		end 'refused'
+	end 'shutdownWrite'
+
+	/// Send close_notify and close the connection. Idempotent; never throws, since the peer may already be gone.
+	public function close()
+		if closed 'already'
+			return
+		end 'already'
+
+		closed = true
+
+		if not writeClosed 'announce'
+			try endpoint.session().close() otherwise ignore
+			try flush() otherwise ignore
+		end 'announce'
+
+		transport.close()
+	end 'close'
+
+	function handshake(deadlineMs SocketDeadlineMs) throws TlsError
+		try setReadDeadline(deadlineMs)
+		try setWriteDeadline(deadlineMs)
+		try flush()
+
+		while not endpoint.session().isConnected() 'handshaking'
+			try pump()
+		end 'handshaking'
+
+		try setReadDeadline(NoDeadlineMs)
+		try setWriteDeadline(NoDeadlineMs)
+	end 'handshake'
+
+	function pump() throws TlsError
+		let record = try nextRecord()
+
+		try endpoint.receive(record) otherwise (failure) 'refused'
+			throw refuse(failure)
+		end 'refused'
+
+		try flush()
+	end 'pump'
+
+	// The alert the machine queued is flushed before the socket closes, so the peer reads it rather than a reset.
+	function refuse(failure TlsHandshakeError) returns TlsError
+		closed = true
+
+		try flush() otherwise ignore
+
+		transport.close()
+
+		return tlsPublicFailure(failure, session: endpoint.session(), refusal: peer.refusal)
+	end 'refuse'
+
+	function reject(failure TlsHandshakeError) returns TlsError
+		endpoint.session().abort(failure)
+
+		return refuse(failure)
+	end 'reject'
+
+	function flush() throws TlsError
+		let records = endpoint.session().takeRecords()
+
+		if records.isEmpty() 'nothingQueued'
+			return
+		end 'nothingQueued'
+
+		var wire = ByteArray.create()
+
+		for record in records 'eachRecord'
+			wire.append(record)
+		end 'eachRecord'
+
+		_ = try transport.send(String.from(wire)) otherwise (failure) 'refused'
+			throw tlsNetworkFailure(failure)
+		end 'refused'
+	end 'flush'
+
+	// The bound is the largest body either version allows; the record layer applies the stricter TLS 1.3 limit.
+	function nextRecord() returns ByteArray throws TlsError
+		try fill(tlsRecordHeaderBytes)
+		try screenHeader()
+
+		let bodyBytes = readOrderedWord(inbound, off: consumed + tlsRecordLengthOffset, width: tlsRecordFieldBytes, limit: inbound.count(), order: ByteOrder.bigEndian) as Count
+
+		if bodyBytes > tlsMaxCiphertext12Bytes 'oversized'
+			throw reject(TlsHandshakeError.recordOverflow)
+		end 'oversized'
+
+		let recordBytes = tlsRecordHeaderBytes + bodyBytes
+
+		try fill(recordBytes)
+
+		let record = tlsRecordPart(inbound, start: consumed, endIndex: consumed + recordBytes)
+
+		consumed = consumed + recordBytes
+
+		if consumed == inbound.count() 'drained'
+			inbound.clear()
+			consumed = 0
+		end 'drained'
+
+		return record
+	end 'nextRecord'
+
+	// Runs before the body is awaited: input that is not TLS declares an arbitrary length and would stall the read.
+	function screenHeader() throws TlsError
+		let contentType = tlsRecordByte(inbound, offset: consumed + tlsRecordTypeOffset)
+
+		if contentType < TlsContentType.changeCipherSpec.rawValue or contentType > TlsContentType.applicationData.rawValue 'foreignContent'
+			throw reject(TlsHandshakeError.unexpectedMessage)
+		end 'foreignContent'
+
+		if tlsRecordByte(inbound, offset: consumed + tlsRecordVersionOffset) != tlsRecordMajorVersion 'foreignProtocol'
+			throw reject(TlsHandshakeError.protocolVersion)
+		end 'foreignProtocol'
+	end 'screenHeader'
+
+	function fill(needed Count) throws TlsError
+		while inbound.count() - consumed < needed 'filling'
+			if consumed > 0 'compact'
+				inbound = tlsRecordPart(inbound, start: consumed, endIndex: inbound.count())
+				consumed = 0
+			end 'compact'
+
+			let chunk = try transport.recv(tlsReadChunkBytes) otherwise (failure) 'unreadable'
+				throw tlsReadFailure(failure)
+			end 'unreadable'
+
+			inbound.append(chunk.toByteArray())
+		end 'filling'
+	end 'fill'
+
+	function unreadCount() returns Count
+		return unread.count() - unreadConsumed
+	end 'unreadCount'
+
+	function takeUnread(bufferSize RecvCapacity) returns ByteArray
+		var stop = unreadConsumed + (bufferSize as BytePos)
+
+		if stop > unread.count() 'allOfIt'
+			stop = unread.count() as BytePos
+		end 'allOfIt'
+
+		let taken = tlsRecordPart(unread, start: unreadConsumed, endIndex: stop)
+
+		unreadConsumed = stop
+
+		if unreadConsumed == unread.count() 'drained'
+			unread.clear()
+			unreadConsumed = 0
+		end 'drained'
+
+		return taken
+	end 'takeUnread'
+end 'TlsStream'

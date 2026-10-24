@@ -1,0 +1,220 @@
+/// The certificate chain and private key a TLS endpoint presents.
+/// @category Network
+let tlsPemCertificateLabel = "CERTIFICATE"
+let tlsPemPkcs8KeyLabel = "PRIVATE KEY"
+let tlsPemEcKeyLabel = "EC PRIVATE KEY"
+let tlsPemRsaKeyLabel = "RSA PRIVATE KEY"
+
+let tlsDerIntegerTag = 2
+let tlsDerOctetStringTag = 4
+let tlsDerSequenceTag = 16
+let tlsDerIntegerIdentifier = 0x02
+let tlsDerOctetStringIdentifier = 0x04
+let tlsDerSequenceIdentifier = 0x30
+let tlsDerShortLengthLimit = 0x80
+let tlsDerLongLengthMarker = 0x80
+let tlsDerLengthByteMask = 0xFF
+let tlsDerBitsPerByte = 8
+let tlsDerObjectIdentifierIdentifier = 0x06
+let tlsEcParametersTag = 0
+
+let tlsKeyVersionZero = ByteArray from [0]
+let tlsKeyVersionOne = ByteArray from [1]
+let tlsEcP256ScalarBytes = 32
+let tlsEcP384ScalarBytes = 48
+let tlsEd25519SeedBytes = 32
+
+module typealias TlsPemLabelArray = Array with String
+
+/// A certificate chain, leaf first, and the private key of its first certificate.
+public type TlsIdentity
+	module var chain as ByteArrays
+	module var key as TlsPrivateKey
+
+	/// DER certificates and a private key as PKCS #8, SEC1 or PKCS #1. Only the first certificate is read; the rest
+	/// are sent as given.
+	public static function fromDer(chain ByteArrays, key ByteArray) returns TlsIdentity throws TlsError
+		let leafDer = try chain.first() otherwise throw TlsError.invalidCertificate
+
+		let leaf = try X509.parse(leafDer) otherwise throw TlsError.invalidCertificate
+		let parsed = try tlsParsePrivateKey(key.clone())
+
+		if leaf.publicKey().algorithm() != parsed.algorithm() 'foreignKey'
+			throw TlsError.invalidPrivateKey
+		end 'foreignKey'
+
+		return Self{chain: chain.clone(), key: parsed}
+	end 'fromDer'
+
+	/// The `CERTIFICATE` blocks of `certificates` and the first private key block of `key`.
+	public static function fromPem(certificates String, key String) returns TlsIdentity throws TlsError
+		var chain = ByteArrays.create()
+		let certificateBlocks = try Pem.decode(certificates) otherwise throw TlsError.invalidPem
+		let keyBlocks = try Pem.decode(key) otherwise throw TlsError.invalidPem
+
+		for block in certificateBlocks 'eachCertificate'
+			if block.label() == tlsPemCertificateLabel 'isCertificate'
+				chain.push(block.bytes().clone())
+			end 'isCertificate'
+		end 'eachCertificate'
+
+		for block in keyBlocks 'eachKey'
+			if tlsPemKeyLabels().contains(block.label()) 'isKey'
+				return try fromDer(chain, key: block.bytes().clone())
+			end 'isKey'
+		end 'eachKey'
+
+		throw TlsError.invalidPem
+	end 'fromPem'
+end 'TlsIdentity'
+
+function tlsPemKeyLabels() returns TlsPemLabelArray
+	return TlsPemLabelArray from [tlsPemPkcs8KeyLabel, tlsPemEcKeyLabel, tlsPemRsaKeyLabel]
+end 'tlsPemKeyLabels'
+
+function tlsParsePrivateKey(der ByteArray) returns TlsPrivateKey throws TlsError
+	var outer = DerReader.create(der)
+	var info = try outer.enterSequence() otherwise throw TlsError.invalidPrivateKey
+
+	try outer.finish() otherwise throw TlsError.invalidPrivateKey
+
+	let version = try info.readInteger() otherwise throw TlsError.invalidPrivateKey
+	let next = try info.peekHeader() otherwise throw TlsError.invalidPrivateKey
+
+	if next.tagNumber() == tlsDerSequenceTag 'pkcs8'
+		try requireKeyVersion(version, expected: tlsKeyVersionZero)
+
+		return try tlsPkcs8Key(der, info: info)
+	end 'pkcs8' else if next.tagNumber() == tlsDerOctetStringTag 'sec1'
+		try requireKeyVersion(version, expected: tlsKeyVersionOne)
+
+		return try tlsEcKey(info, parameters: ByteArray.create())
+	end 'sec1' else if next.tagNumber() == tlsDerIntegerTag 'pkcs1'
+		try requireKeyVersion(version, expected: tlsKeyVersionZero)
+
+		return TlsPrivateKey.rsa(tlsPkcs8OfPkcs1(der))
+	end 'pkcs1'
+
+	throw TlsError.invalidPrivateKey
+end 'tlsParsePrivateKey'
+
+function requireKeyVersion(version ByteArray, expected ByteArray) throws TlsError
+	if not version.equals(expected) 'unsupportedVersion'
+		throw TlsError.invalidPrivateKey
+	end 'unsupportedVersion'
+end 'requireKeyVersion'
+
+function tlsPkcs8Key(der ByteArray, info DerReader) returns TlsPrivateKey throws TlsError
+	var algorithm = try info.enterSequence() otherwise throw TlsError.invalidPrivateKey
+	let identifier = try algorithm.readObjectIdentifier() otherwise throw TlsError.invalidPrivateKey
+
+	if identifier.equals(rsaEncryptionOid) 'rsa'
+		try algorithm.readNull() otherwise throw TlsError.invalidPrivateKey
+		try algorithm.finish() otherwise throw TlsError.invalidPrivateKey
+
+		return TlsPrivateKey.rsa(der.clone())
+	end 'rsa'
+
+	if identifier.equals(x509OidEd25519) 'ed25519'
+		try algorithm.finish() otherwise throw TlsError.invalidPrivateKey
+
+		return try tlsEd25519Key(try info.readOctetString() otherwise throw TlsError.invalidPrivateKey)
+	end 'ed25519'
+
+	if identifier.equals(x509OidEcPublicKey) 'ec'
+		let parameters = try algorithm.readElement() otherwise throw TlsError.invalidPrivateKey
+
+		try algorithm.finish() otherwise throw TlsError.invalidPrivateKey
+
+		var sec1 = DerReader.create(try info.readOctetString() otherwise throw TlsError.invalidPrivateKey)
+		var key = try sec1.enterSequence() otherwise throw TlsError.invalidPrivateKey
+
+		try sec1.finish() otherwise throw TlsError.invalidPrivateKey
+		try requireKeyVersion(try key.readInteger() otherwise throw TlsError.invalidPrivateKey, expected: tlsKeyVersionOne)
+
+		return try tlsEcKey(key, parameters: parameters)
+	end 'ec'
+
+	throw TlsError.invalidPrivateKey
+end 'tlsPkcs8Key'
+
+function tlsEd25519Key(wrapped ByteArray) returns TlsPrivateKey throws TlsError
+	var wrapper = DerReader.create(wrapped)
+	let seed = try wrapper.readOctetString() otherwise throw TlsError.invalidPrivateKey
+
+	try wrapper.finish() otherwise throw TlsError.invalidPrivateKey
+
+	if seed.count() != tlsEd25519SeedBytes 'seedLength'
+		throw TlsError.invalidPrivateKey
+	end 'seedLength'
+
+	return TlsPrivateKey.ed25519(seed)
+end 'tlsEd25519Key'
+
+function tlsEcKey(key DerReader, parameters ByteArray) returns TlsPrivateKey throws TlsError
+	let scalar = try key.readOctetString() otherwise throw TlsError.invalidPrivateKey
+	var named = parameters
+
+	if not key.isAtEnd() 'trailing'
+		let header = try key.peekHeader() otherwise throw TlsError.invalidPrivateKey
+
+		if header.tagNumber() == tlsEcParametersTag 'explicitParameters'
+			var explicit = try key.enterExplicit(tlsEcParametersTag) otherwise throw TlsError.invalidPrivateKey
+
+			named = try explicit.readElement() otherwise throw TlsError.invalidPrivateKey
+		end 'explicitParameters'
+	end 'trailing'
+
+	if scalar.count() == tlsEcP256ScalarBytes and (named.isEmpty() or named.equals(x509ParametersP256)) 'p256'
+		return TlsPrivateKey.ecP256(scalar)
+	end 'p256'
+
+	if scalar.count() == tlsEcP384ScalarBytes and (named.isEmpty() or named.equals(x509ParametersP384)) 'p384'
+		return TlsPrivateKey.ecP384(scalar)
+	end 'p384'
+
+	throw TlsError.invalidPrivateKey
+end 'tlsEcKey'
+
+function tlsPkcs8OfPkcs1(pkcs1 ByteArray) returns ByteArray
+	var algorithm = tlsDerElement(tlsDerObjectIdentifierIdentifier, contents: rsaEncryptionOid)
+	algorithm.append(x509ParametersNull)
+
+	var body = tlsDerElement(tlsDerIntegerIdentifier, contents: tlsKeyVersionZero)
+	body.append(tlsDerElement(tlsDerSequenceIdentifier, contents: algorithm))
+	body.append(tlsDerElement(tlsDerOctetStringIdentifier, contents: pkcs1))
+
+	return tlsDerElement(tlsDerSequenceIdentifier, contents: body)
+end 'tlsPkcs8OfPkcs1'
+
+function tlsDerElement(identifier Byte, contents ByteArray) returns ByteArray
+	var element = ByteArray.create()
+	element.push(identifier)
+	element.append(tlsDerLength(contents.count()))
+	element.append(contents)
+
+	return element
+end 'tlsDerElement'
+
+function tlsDerLength(length Count) returns ByteArray
+	var octets = ByteArray.create()
+
+	if length < tlsDerShortLengthLimit 'short'
+		octets.push(length as Byte)
+
+		return octets
+	end 'short'
+
+	var digits = ByteArray.create()
+	var rest = length
+
+	while rest > 0 'eachDigit'
+		digits.insert(0, value: (rest and tlsDerLengthByteMask) as Byte)
+		rest = rest shr tlsDerBitsPerByte
+	end 'eachDigit'
+
+	octets.push((digits.count() + tlsDerLongLengthMarker) as Byte)
+	octets.append(digits)
+
+	return octets
+end 'tlsDerLength'

@@ -80,6 +80,10 @@ in this repo to fall back on — a frozen seed compiler, pinned in the repositor
 - Git (on Windows, **Git for Windows**, which includes Git Bash)
 - Node.js 20+, only if you are building the VS Code extension
 - Node.js 22.12+, only if you are building the website (`website/` — Astro 7's minimum)
+- OpenSSL 1.1.1 or later, for the suite's `specs/tls-interop.md` cases, which handshake with a live
+  `openssl`. Git for Windows includes one and Linux distributions install one. macOS ships LibreSSL, which
+  lacks the options they use: install `openssl@3` with Homebrew and set `MAXON_OPENSSL` to its `openssl`
+  (`scripts/openssl-for-interop.sh` prints the path CI uses).
 
 > The build scripts are bash. Run them in **Git Bash** on Windows, or bash on Linux and macOS — not
 > PowerShell or cmd.

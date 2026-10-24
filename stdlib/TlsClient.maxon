@@ -1,0 +1,109 @@
+/// TLS client connections.
+/// @category Network
+module union TlsTrust
+	system
+	custom(roots ByteArrays)
+end 'TlsTrust'
+
+module union TlsServerName
+	fromHost
+	named(name String)
+end 'TlsServerName'
+
+/// What a client verifies and offers: roots, server name, versions, ALPN protocols and a client
+/// certificate.
+public type TlsClientOptions
+	var settings as TlsClientConfig
+	var trust as TlsTrust
+	var serverName as TlsServerName
+	var verificationTime as TlsVerificationTime
+
+	/// The system roots, TLS 1.3 and 1.2, the dialled host as the name, no ALPN, no client certificate.
+	public static function create() returns TlsClientOptions
+		return Self{settings: TlsClientConfig.defaults(X509VerifyHost.none), trust: TlsTrust.system, serverName: TlsServerName.fromHost, verificationTime: TlsVerificationTime.current}
+	end 'create'
+
+	/// The DER roots a server chain must end in, in place of the system's.
+	public function setTrustedRoots(roots RootCertificates) throws TlsError
+		if roots.isEmpty() 'none'
+			throw TlsError.invalidConfiguration
+		end 'none'
+
+		trust = TlsTrust.custom(tlsCertificates(roots))
+	end 'setTrustedRoots'
+
+	/// The name to verify and send in place of the host.
+	public function setServerName(name String) throws TlsError
+		if name.byteLength() == 0 'empty'
+			throw TlsError.invalidConfiguration
+		end 'empty'
+
+		serverName = TlsServerName.named(name)
+	end 'setServerName'
+
+	/// The Unix time certificates are checked at, in place of the clock.
+	public function setVerificationTime(seconds UnixSeconds)
+		verificationTime = TlsVerificationTime.fixed(seconds)
+	end 'setVerificationTime'
+
+	/// The TLS versions to offer; at least one.
+	public function setProtocols(protocols TlsProtocolArray) throws TlsError
+		settings.protocols = try tlsCheckedProtocols(protocols)
+	end 'setProtocols'
+
+	/// The ALPN protocol names to offer, in order.
+	public function setApplicationProtocols(names StringArray) throws TlsError
+		settings.applicationProtocols = try tlsCheckedProtocolNames(names)
+	end 'setApplicationProtocols'
+
+	/// The certificate chain and key to present when the server asks for a client certificate.
+	public function setIdentity(identity TlsIdentity)
+		settings.identity = TlsClientIdentity.certified(identity.chain.clone(), key: identity.key.clone())
+	end 'setIdentity'
+
+	module function configFor(host String) returns TlsClientConfig
+		var config = settings.clone()
+
+		config.peerName = match serverName 'name'
+			fromHost gives X509VerifyHost.named(host)
+			named(override) gives X509VerifyHost.named(override)
+		end 'name'
+
+		config.cipherSuites = tlsEnabledSuites(config.cipherSuites, protocols: config.protocols)
+
+		return config
+	end 'configFor'
+
+	module function authenticator() returns TlsX509Peer throws TlsError
+		match trust 'trust'
+			system then return try systemAuthenticator()
+			custom(roots) then return TlsX509Peer.create(roots, now: verificationTime.seconds(), purpose: X509Purpose.serverAuth)
+		end 'trust'
+	end 'authenticator'
+
+	function systemAuthenticator() returns TlsX509Peer throws TlsError
+		var peer = try TlsX509Peer.system(X509Purpose.serverAuth) otherwise throw TlsError.trustStoreUnavailable
+
+		peer.now = verificationTime.seconds()
+
+		return peer
+	end 'systemAuthenticator'
+end 'TlsClientOptions'
+
+/// Connects to TLS servers.
+public type TlsClient
+	/// Connect to `host` and run the handshake. `deadlineMs` bounds the connection and the handshake separately; `0` waits
+	/// without a deadline. The dial comes first so a network failure is reported as one even when no roots can be loaded.
+	public static function connect(host String, port NetworkPort, options TlsClientOptions = TlsClientOptions.create(), deadlineMs SocketDeadlineMs = NoDeadlineMs) returns TlsStream throws TlsError
+		let transport = try TcpClient.connect(host, port: port, deadlineMs: deadlineMs) otherwise (failure) 'unreachable'
+			throw tlsNetworkFailure(failure)
+		end 'unreachable'
+
+		let config = options.configFor(host)
+		var peer = try options.authenticator()
+		let entropy = try TlsClientEntropy.fresh(config) otherwise throw TlsError.protocolError(TlsAlert.internalError)
+		var endpoint = try TlsClientHandshake.create(config, entropy: entropy, peer: peer, helloSource: TlsBuiltClientHello.create()) otherwise throw TlsError.invalidConfiguration
+
+		return try TlsStream.establish(transport, endpoint: endpoint, peer: peer, deadlineMs: deadlineMs)
+	end 'connect'
+end 'TlsClient'

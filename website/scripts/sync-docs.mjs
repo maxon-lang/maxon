@@ -88,7 +88,7 @@ const SOURCES = [
         page: 'stdlib/io.md',
         sections: ['File', 'FilePath', 'Directory', 'Console', 'CommandLine', 'Log', 'TraceCapture', 'Process', 'Subprocess', 'SharedMemory', 'Debuggee', 'Sampler'],
       },
-      { page: 'stdlib/network.md', sections: ['TcpClient', 'TcpListener', 'HttpClient', 'HttpServer', 'URL'] },
+      { page: 'stdlib/network.md', sections: ['TcpClient', 'TcpListener', 'TlsClient', 'TlsListener', 'TlsStream', 'TlsIdentity', 'TlsError', 'HttpClient', 'HttpServer', 'URL'] },
       { page: 'stdlib/data.md', sections: ['Json', 'Base64', 'Pem', 'Der', 'Sha2', 'Hmac', 'Hkdf', 'Rsa', 'Aead', 'AesGcm', 'ChaCha20Poly1305', 'Aes', 'ChaCha20', 'Poly1305', 'X25519', 'Ed25519', 'EcdhP256', 'Ecdsa', 'EcdsaP256', 'EcdsaP384', 'X509', 'Tls13KeySchedule', 'Tls12Prf', 'TlsRecordProtection', 'TlsHandshakeCodec', 'Hasher'] },
       { page: 'stdlib/runtime.md', sections: ['Clock', 'Scheduler', 'HeapStats', 'SharedValue', 'Random', 'TrustStore', 'Math', 'Primitive Extensions'] },
       { page: 'stdlib/testing.md', sections: ['Testing'] },
