@@ -1,7 +1,4 @@
 let tlsRecordLegacyVersion = 0x0301
-let tlsDowngradeSentinelTls12 = ByteArray from [0x44, 0x4F, 0x57, 0x4E, 0x47, 0x52, 0x44, 0x01]
-let tlsDowngradeSentinelTls11 = ByteArray from [0x44, 0x4F, 0x57, 0x4E, 0x47, 0x52, 0x44, 0x00]
-let tlsDowngradeSentinelOffset = 24
 
 module union TlsCertificateRequest
 	notRequested
@@ -16,6 +13,7 @@ module union TlsClientPhase
 	awaitingCertificateVerify(request TlsCertificateRequest, key X509PublicKey)
 	awaitingFinished(request TlsCertificateRequest)
 	connected
+	tls12
 end 'TlsClientPhase'
 
 module type TlsClientOffer
@@ -52,6 +50,11 @@ module type TlsReadHello
 	end 'create'
 end 'TlsReadHello'
 
+module union TlsAdmittedHello
+	tls13(read TlsReadHello)
+	tls12(read Tls12ReadHello)
+end 'TlsAdmittedHello'
+
 module type TlsClientHandshake implements TlsEndpoint, TlsMessageHandler
 	var config as TlsClientConfig
 	var entropy as TlsClientEntropy
@@ -61,17 +64,20 @@ module type TlsClientHandshake implements TlsEndpoint, TlsMessageHandler
 	var phase as TlsClientPhase
 	var offer as TlsClientOffer
 	var firstHello as TlsClientHello
+	var tls12 as Tls12ClientFlow
 
 	module static function create(config TlsClientConfig, entropy TlsClientEntropy, peer TlsPeerAuthenticator, helloSource TlsClientHelloSource) returns TlsClientHandshake throws TlsHandshakeError
 		let sent = helloSource.first(try tlsBuildClientHello(config, entropy: entropy))
-		let hello = try tlsDecodeClientHello(sent.clone())
+		var hello = try tlsDecodeClientHello(sent.clone())
 		var session = TlsSession.create(TlsRole.client, firstRecordVersion: tlsRecordLegacyVersion)
 
 		session.transcript.append(sent)
 		session.compatibility = hello.legacySessionId().count() != 0
 		try session.writer.writeHandshake(sent)
 
-		return Self{config: config, entropy: entropy, peer: peer, helloSource: helloSource, session: session, phase: TlsClientPhase.awaitingServerHello, offer: TlsClientOffer.of(hello.clone()), firstHello: hello}
+		var offer = TlsClientOffer.of(hello.clone())
+
+		return Self{config: config, entropy: entropy, peer: peer, helloSource: helloSource, session: session, phase: TlsClientPhase.awaitingServerHello, offer: offer, firstHello: hello, tls12: Tls12ClientFlow.create(config, entropy: entropy, peer: peer, session: session, offer: offer, clientRandom: hello.random())}
 	end 'create'
 
 	module function receive(record ByteArray) throws TlsHandshakeError
@@ -91,22 +97,43 @@ module type TlsClientHandshake implements TlsEndpoint, TlsMessageHandler
 			awaitingCertificateVerify(request, key) then try onCertificateVerify(message, request: request, key: key)
 			awaitingFinished(request) then try onFinished(message, request: request)
 			connected then try onEstablishedMessage(message)
+			tls12 then try tls12.dispatch(message)
 		end 'phase'
 	end 'dispatch'
 
 	function onServerHello(raw ByteArray) throws TlsHandshakeError
-		let read = try admitServerHello(raw, retried: false)
+		let admitted = try admitServerHello(raw, retried: false)
 
+		match admitted 'admitted'
+			tls13(read) then try acceptTls13Hello(raw, read: read)
+			tls12(read) then try beginTls12(raw, read: read)
+		end 'admitted'
+	end 'onServerHello'
+
+	function acceptTls13Hello(raw ByteArray, read TlsReadHello) throws TlsHandshakeError
 		if read.isRetry 'retry'
 			try acceptHelloRetryRequest(raw, read: read)
 		end 'retry' else 'direct'
 			try acceptServerHello(raw, read: read)
 		end 'direct'
-	end 'onServerHello'
+	end 'acceptTls13Hello'
+
+	function beginTls12(raw ByteArray, read Tls12ReadHello) throws TlsHandshakeError
+		try tls12.begin(read, raw: raw)
+
+		phase = TlsClientPhase.tls12
+	end 'beginTls12'
 
 	function onRetriedServerHello(raw ByteArray, retrySuite Tls13CipherSuite) throws TlsHandshakeError
-		let read = try admitServerHello(raw, retried: true)
+		let admitted = try admitServerHello(raw, retried: true)
 
+		match admitted 'admitted'
+			tls13(read) then try acceptRetriedHello(raw, read: read, retrySuite: retrySuite)
+			tls12 then throw TlsHandshakeError.illegalParameter
+		end 'admitted'
+	end 'onRetriedServerHello'
+
+	function acceptRetriedHello(raw ByteArray, read TlsReadHello, retrySuite Tls13CipherSuite) throws TlsHandshakeError
 		if read.isRetry 'again'
 			throw TlsHandshakeError.unexpectedMessage
 		end 'again'
@@ -116,9 +143,9 @@ module type TlsClientHandshake implements TlsEndpoint, TlsMessageHandler
 		end 'changedSuite'
 
 		try acceptServerHello(raw, read: read)
-	end 'onRetriedServerHello'
+	end 'acceptRetriedHello'
 
-	function admitServerHello(raw ByteArray, retried bool) returns TlsReadHello throws TlsHandshakeError
+	function admitServerHello(raw ByteArray, retried bool) returns TlsAdmittedHello throws TlsHandshakeError
 		let message = try tlsDecodeAllowing(raw, protocol: TlsProtocol.tls13, allowed: TlsHandshakeTypeArray from [TlsHandshakeType.serverHello])
 		let (hello, isRetry) = try serverHelloOf(message)
 		let scan = TlsExtensionScan.ofBlock(hello.extensions().clone())
@@ -145,17 +172,19 @@ module type TlsClientHandshake implements TlsEndpoint, TlsMessageHandler
 			end 'unoffered'
 		end 'eachExtension'
 
-		let suite = match selected 'selected'
-			tls13(suite) gives suite
-			tls12 gives try refuseTls12(hello)
+		return match selected 'selected'
+			tls13(suite) gives TlsAdmittedHello.tls13(admitTls13(hello, isRetry: isRetry, suite: suite))
+			tls12(suite) gives TlsAdmittedHello.tls12(Tls12ReadHello.create(hello, suite: suite, scan: scan))
 		end 'selected'
+	end 'admitServerHello'
 
+	function admitTls13(hello TlsServerHello, isRetry bool, suite Tls13CipherSuite) returns TlsReadHello
 		session.negotiation = TlsNegotiation.accepted(suite)
 		session.input.version = TlsInboundVersion.tls13
 		session.input.changeCipherSpecAllowed = true
 
 		return TlsReadHello.create(hello, isRetry: isRetry, suite: suite)
-	end 'admitServerHello'
+	end 'admitTls13'
 
 	function selectProtocol(hello TlsServerHello, scan TlsExtensionScan, retried bool) returns TlsProtocol throws TlsHandshakeError
 		var protocol = TlsProtocol.tls13
@@ -176,18 +205,6 @@ module type TlsClientHandshake implements TlsEndpoint, TlsMessageHandler
 
 		return protocol
 	end 'selectProtocol'
-
-	function refuseTls12(hello TlsServerHello) returns Tls13CipherSuite throws TlsHandshakeError
-		if offer.versions.contains(tlsTls13VersionCode) 'offeredTls13'
-			let tail = tlsRecordPart(hello.random(), start: tlsDowngradeSentinelOffset, endIndex: hello.random().count())
-
-			if tail.equals(tlsDowngradeSentinelTls12) or tail.equals(tlsDowngradeSentinelTls11) 'sentinel'
-				throw TlsHandshakeError.illegalParameter
-			end 'sentinel'
-		end 'offeredTls13'
-
-		throw TlsHandshakeError.protocolVersion
-	end 'refuseTls12'
 
 	function acceptHelloRetryRequest(raw ByteArray, read TlsReadHello) throws TlsHandshakeError
 		let scan = TlsExtensionScan.ofBlock(read.hello.extensions())
@@ -287,23 +304,13 @@ module type TlsClientHandshake implements TlsEndpoint, TlsMessageHandler
 			end 'unoffered'
 
 			if item.extensionType() == TlsExtensionKind.applicationLayerProtocolNegotiation.code() 'protocol'
-				try acceptApplicationProtocol(scan.applicationProtocols.clone())
+				try session.acceptApplicationProtocol(scan.applicationProtocols.clone(), offered: offer.scan.applicationProtocols)
 			end 'protocol'
 		end 'eachExtension'
 
 		session.transcript.append(raw)
 		phase = TlsClientPhase.awaitingCertificate(TlsCertificateRequest.notRequested)
 	end 'acceptEncryptedExtensions'
-
-	function acceptApplicationProtocol(protocols TlsProtocolNameArray) throws TlsHandshakeError
-		let name = try protocols.first() otherwise throw TlsHandshakeError.internalError
-
-		if not offer.scan.applicationProtocols.contains(name) 'unoffered'
-			throw TlsHandshakeError.illegalParameter
-		end 'unoffered'
-
-		session.alpn = TlsAlpnChoice.negotiated(name)
-	end 'acceptApplicationProtocol'
 
 	function onCertificate(raw ByteArray, request TlsCertificateRequest) throws TlsHandshakeError
 		let allowed = match request 'request'

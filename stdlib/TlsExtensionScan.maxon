@@ -11,6 +11,8 @@ module type TlsExtensionScan
 	module var serverShares as TlsKeyShareArray
 	module var selectedGroups as TlsGroupCodeArray
 	module var cookies as ByteArrays
+	module var pointFormats as ByteArray
+	module var renegotiated as ByteArray
 
 	module static function ofBlock(block TlsExtensionBlock) returns TlsExtensionScan
 		return match block 'block'
@@ -30,6 +32,8 @@ module type TlsExtensionScan
 		var chosenShares = TlsKeyShareArray.create()
 		var chosenGroups = TlsGroupCodeArray.create()
 		var cookieList = ByteArrays.create()
+		var offeredFormats = ByteArray.create()
+		var offeredRenegotiation = ByteArray.create()
 
 		for item in extensions 'eachExtension'
 			typeTally.insert(item.extensionType())
@@ -44,15 +48,15 @@ module type TlsExtensionScan
 				serverKeyShare(share) then chosenShares.push(share)
 				selectedGroup(group) then chosenGroups.push(group)
 				cookie(value) then cookieList.push(value.clone())
+				ecPointFormats(formats) then offeredFormats = formats.clone()
+				renegotiationInfo(connection) then offeredRenegotiation = connection.clone()
 				serverName or
 				serverNameAcknowledgement or
-				ecPointFormats or
 				extendedMasterSecret or
-				renegotiationInfo or
 				opaque then continue
 			end 'form'
 		end 'eachExtension'
 
-		return Self{types: typeTally, supportedVersions: offeredVersions, selectedVersions: chosenVersions, supportedGroups: offeredGroups, signatureSchemes: offeredSchemes, applicationProtocols: offeredProtocols, clientShares: offeredShares, serverShares: chosenShares, selectedGroups: chosenGroups, cookies: cookieList}
+		return Self{types: typeTally, supportedVersions: offeredVersions, selectedVersions: chosenVersions, supportedGroups: offeredGroups, signatureSchemes: offeredSchemes, applicationProtocols: offeredProtocols, clientShares: offeredShares, serverShares: chosenShares, selectedGroups: chosenGroups, cookies: cookieList, pointFormats: offeredFormats, renegotiated: offeredRenegotiation}
 	end 'ofExtensions'
 end 'TlsExtensionScan'

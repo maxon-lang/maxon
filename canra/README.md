@@ -43,3 +43,5 @@ of the spec here.
 | `tls-handshake` | `stdlib/TlsClientHandshake.maxon` | `specs/tls-handshake.md` |
 | `tls-handshake-negotiation` | `stdlib/TlsClientHandshake.maxon` | `specs/tls-handshake-negotiation.md` |
 | `tls-handshake-server` | `stdlib/TlsServerHandshake.maxon` | `specs/tls-handshake-server.md` |
+| `tls12-handshake` | `stdlib/Tls12ClientFlow.maxon` | `specs/tls12-handshake.md` |
+| `tls12-handshake-server` | `stdlib/Tls12ServerFlow.maxon` | `specs/tls12-handshake-server.md` |

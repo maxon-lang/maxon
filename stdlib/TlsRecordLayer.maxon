@@ -72,6 +72,30 @@ module type TlsTls13Cipher implements TlsRecordCipher
 	end 'open'
 end 'TlsTls13Cipher'
 
+module type TlsTls12Cipher implements TlsRecordCipher
+	var protection as Tls12RecordProtection
+
+	module static function create(suite Tls12CipherSuite, key ByteArray, iv ByteArray) returns TlsTls12Cipher throws TlsHandshakeError
+		let protection = try Tls12RecordProtection.create(suite, key: key, iv: iv) otherwise (failure) 'refused'
+			throw tlsRecordFailure(failure)
+		end 'refused'
+
+		return Self{protection: protection}
+	end 'create'
+
+	module function seal(contentType TlsContentType, plaintext ByteArray) returns ByteArray throws TlsRecordError
+		return try protection.seal(contentType, plaintext: plaintext)
+	end 'seal'
+
+	module function open(record ByteArray) returns TlsOpenedRecord throws TlsRecordError
+		if tlsIsChangeCipherSpec(record) 'unprotected'
+			return try tlsOpenPlaintext(record)
+		end 'unprotected'
+
+		return try protection.open(record)
+	end 'open'
+end 'TlsTls12Cipher'
+
 function tlsIsChangeCipherSpec(record ByteArray) returns bool
 	if record.count() <= tlsRecordTypeOffset 'empty'
 		return false
@@ -195,20 +219,40 @@ module union TlsHandshakeSlot
 	incomplete
 end 'TlsHandshakeSlot'
 
+module union TlsStagedCipher
+	none
+	staged(cipher TlsTls12Cipher)
+end 'TlsStagedCipher'
+
 module type TlsRecordInput
 	var reader as TlsRecordReader
 	var buffer as ByteArray
+	var stagedCipher as TlsStagedCipher
 	module var version as TlsInboundVersion
 	module var established as bool
 	module var changeCipherSpecAllowed as bool
 
 	module static function create() returns TlsRecordInput
-		return Self{reader: TlsRecordReader.create(), buffer: ByteArray.create(), version: TlsInboundVersion.undecided, established: false, changeCipherSpecAllowed: false}
+		return Self{reader: TlsRecordReader.create(), buffer: ByteArray.create(), stagedCipher: TlsStagedCipher.none, version: TlsInboundVersion.undecided, established: false, changeCipherSpecAllowed: false}
 	end 'create'
 
 	module function install(next TlsRecordCipher)
 		reader.install(next)
 	end 'install'
+
+	module function expectChangeCipherSpec(next TlsTls12Cipher) throws TlsHandshakeError
+		try requireKeyBoundary()
+
+		stagedCipher = TlsStagedCipher.staged(next)
+		changeCipherSpecAllowed = true
+	end 'expectChangeCipherSpec'
+
+	function awaitsStagedCipher() returns bool
+		return match stagedCipher 'staged'
+			staged gives true
+			none gives false
+		end 'staged'
+	end 'awaitsStagedCipher'
 
 	module function accept(record ByteArray) returns TlsInboundEvent throws TlsHandshakeError
 		let opened = try reader.read(record)
@@ -246,12 +290,28 @@ module type TlsRecordInput
 	end 'requireKeyBoundary'
 
 	function acceptChangeCipherSpec(body ByteArray) returns TlsInboundEvent throws TlsHandshakeError
-		if version != TlsInboundVersion.tls13 or not changeCipherSpecAllowed or body.count() != tlsChangeCipherSpecBytes or tlsRecordByte(body, offset: tlsFirstBodyByte) != tlsChangeCipherSpecBody or buffer.count() != 0 'misplaced'
+		if not changeCipherSpecAllowed or body.count() != tlsChangeCipherSpecBytes or tlsRecordByte(body, offset: tlsFirstBodyByte) != tlsChangeCipherSpecBody or buffer.count() != 0 'misplaced'
 			throw TlsHandshakeError.unexpectedMessage
 		end 'misplaced'
 
-		return TlsInboundEvent.ignored
+		match version 'version'
+			tls13 then return TlsInboundEvent.ignored
+			tls12 then return try installStagedCipher()
+			undecided then throw TlsHandshakeError.unexpectedMessage
+		end 'version'
 	end 'acceptChangeCipherSpec'
+
+	function installStagedCipher() returns TlsInboundEvent throws TlsHandshakeError
+		match stagedCipher 'staged'
+			staged(cipher) then reader.install(cipher)
+			none then throw TlsHandshakeError.unexpectedMessage
+		end 'staged'
+
+		stagedCipher = TlsStagedCipher.none
+		changeCipherSpecAllowed = false
+
+		return TlsInboundEvent.ignored
+	end 'installStagedCipher'
 
 	function acceptAlert(body ByteArray) returns TlsInboundEvent throws TlsHandshakeError
 		if buffer.count() != 0 'insideMessage'
@@ -291,9 +351,9 @@ module type TlsRecordInput
 	end 'acceptOtherAlert'
 
 	function acceptHandshake(body ByteArray) returns TlsInboundEvent throws TlsHandshakeError
-		if body.count() == 0 'emptyFragment'
+		if body.count() == 0 or awaitsStagedCipher() 'unexpected'
 			throw TlsHandshakeError.unexpectedMessage
-		end 'emptyFragment'
+		end 'unexpected'
 
 		buffer.append(body)
 

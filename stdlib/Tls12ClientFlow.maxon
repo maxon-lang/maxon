@@ -1,0 +1,264 @@
+module type Tls12ReadHello
+	module var hello as TlsServerHello
+	module var suite as Tls12CipherSuite
+	module var scan as TlsExtensionScan
+
+	module static function create(hello TlsServerHello, suite Tls12CipherSuite, scan TlsExtensionScan) returns Tls12ReadHello
+		return Self{hello: hello, suite: suite, scan: scan}
+	end 'create'
+end 'Tls12ReadHello'
+
+module union Tls12ClientRequest
+	notRequested
+	requested(types ByteArray, schemes TlsSignatureSchemeCodeArray)
+end 'Tls12ClientRequest'
+
+union Tls12ClientCredentials
+	unrequested
+	anonymous
+	signing(chain ByteArrays, key TlsPrivateKey, scheme TlsSignatureScheme)
+end 'Tls12ClientCredentials'
+
+module type Tls12ClientExchange
+	module var group as TlsGroupCode
+	module var preMasterSecret as ByteArray
+	module var publicKey as ByteArray
+
+	module static function create(group TlsGroupCode, preMasterSecret ByteArray, publicKey ByteArray) returns Tls12ClientExchange
+		return Self{group: group, preMasterSecret: preMasterSecret, publicKey: publicKey}
+	end 'create'
+end 'Tls12ClientExchange'
+
+module union Tls12ClientPhase
+	idle
+	awaitingCertificate(parameters Tls12Parameters)
+	awaitingServerKeyExchange(parameters Tls12Parameters, key X509PublicKey)
+	awaitingCertificateRequest(parameters Tls12Parameters, exchange Tls12ClientExchange)
+	awaitingServerHelloDone(parameters Tls12Parameters, exchange Tls12ClientExchange, request Tls12ClientRequest)
+	awaitingFinished(secrets Tls12Secrets)
+	connected
+end 'Tls12ClientPhase'
+
+module type Tls12ClientFlow implements TlsMessageHandler
+	var config as TlsClientConfig
+	var entropy as TlsClientEntropy
+	var peer as TlsPeerAuthenticator
+	var session as TlsSession
+	var offer as TlsClientOffer
+	var clientRandom as ByteArray
+	var phase as Tls12ClientPhase
+
+	module static function create(config TlsClientConfig, entropy TlsClientEntropy, peer TlsPeerAuthenticator, session TlsSession, offer TlsClientOffer, clientRandom ByteArray) returns Tls12ClientFlow
+		return Self{config: config, entropy: entropy, peer: peer, session: session, offer: offer, clientRandom: clientRandom, phase: Tls12ClientPhase.idle}
+	end 'create'
+
+	module function begin(read Tls12ReadHello, raw ByteArray) throws TlsHandshakeError
+		let hello = read.hello
+		let random = hello.random()
+
+		if offer.versions.contains(tlsTls13VersionCode) 'offeredTls13'
+			let tail = tlsRecordPart(random, start: tlsDowngradeSentinelOffset, endIndex: random.count())
+
+			if tail.equals(tlsDowngradeSentinelTls12) or tail.equals(tlsDowngradeSentinelTls11) 'sentinel'
+				throw TlsHandshakeError.illegalParameter
+			end 'sentinel'
+		end 'offeredTls13'
+
+		let extensions = tlsExtensionsOf(hello.extensions())
+
+		for item in extensions 'eachType'
+			if not tlsIsTls12ServerHelloExtension(item.extensionType()) 'unsupported'
+				throw TlsHandshakeError.unsupportedExtension
+			end 'unsupported'
+		end 'eachType'
+
+		for item in extensions 'eachExtension'
+			if item.extensionType() == TlsExtensionKind.applicationLayerProtocolNegotiation.code() 'protocol'
+				try session.acceptApplicationProtocol(read.scan.applicationProtocols.clone(), offered: offer.scan.applicationProtocols)
+			end 'protocol' else if item.extensionType() == TlsExtensionKind.ecPointFormats.code() 'formats'
+				if not read.scan.pointFormats.contains(tlsUncompressedPointFormat) 'compressedOnly'
+					throw TlsHandshakeError.illegalParameter
+				end 'compressedOnly'
+			end 'formats' else if item.extensionType() == TlsExtensionKind.renegotiationInfo.code() 'renegotiation'
+				if read.scan.renegotiated.count() != 0 'renegotiated'
+					throw TlsHandshakeError.handshakeFailure
+				end 'renegotiated'
+			end 'renegotiation'
+		end 'eachExtension'
+
+		var parameters = Tls12Parameters.create(read.suite, clientRandom: clientRandom, serverRandom: random, extendedMasterSecret: read.scan.types.contains(TlsExtensionKind.extendedMasterSecret.code()))
+
+		session.negotiation = TlsNegotiation.accepted12(read.suite)
+		session.input.version = TlsInboundVersion.tls12
+		session.transcript.append(raw)
+		phase = Tls12ClientPhase.awaitingCertificate(parameters)
+	end 'begin'
+
+	module function dispatch(message ByteArray) throws TlsHandshakeError
+		match phase 'phase'
+			idle then throw TlsHandshakeError.internalError
+			awaitingCertificate(parameters) then try onCertificate(message, parameters: parameters)
+			awaitingServerKeyExchange(parameters, key) then try onServerKeyExchange(message, parameters: parameters, key: key)
+			awaitingCertificateRequest(parameters, exchange) then try onCertificateRequest(message, parameters: parameters, exchange: exchange)
+			awaitingServerHelloDone(parameters, exchange, request) then try onServerHelloDone(message, parameters: parameters, exchange: exchange, request: request)
+			awaitingFinished(secrets) then try onFinished(message, secrets: secrets)
+			connected then try session.followTls12Message(message)
+		end 'phase'
+	end 'dispatch'
+
+	function onCertificate(raw ByteArray, parameters Tls12Parameters) throws TlsHandshakeError
+		let message = try tlsDecodeAllowing(raw, protocol: TlsProtocol.tls12, allowed: TlsHandshakeTypeArray from [TlsHandshakeType.helloRequest, TlsHandshakeType.certificate])
+
+		match message 'message'
+			helloRequest then return
+			tls12Certificate(certificates) then try acceptCertificate(raw, parameters: parameters, certificates: certificates)
+			default throws TlsHandshakeError.unexpectedMessage
+		end 'message'
+	end 'onCertificate'
+
+	function acceptCertificate(raw ByteArray, parameters Tls12Parameters, certificates TlsCertificateDataArray) throws TlsHandshakeError
+		let leaf = try tlsAuthenticateChain(tls12Chain(certificates), host: config.peerName, peer: peer)
+		let key = leaf.publicKey()
+
+		if not tlsSuiteFitsKey(parameters.suite, algorithm: key.algorithm()) 'unfit'
+			throw TlsHandshakeError.unsupportedCertificate
+		end 'unfit'
+
+		session.peerVerified = peer.authenticates()
+		session.transcript.append(raw)
+		phase = Tls12ClientPhase.awaitingServerKeyExchange(parameters, key: key)
+	end 'acceptCertificate'
+
+	function onServerKeyExchange(raw ByteArray, parameters Tls12Parameters, key X509PublicKey) throws TlsHandshakeError
+		let message = try tlsDecodeAllowing(raw, protocol: TlsProtocol.tls12, allowed: TlsHandshakeTypeArray from [TlsHandshakeType.helloRequest, TlsHandshakeType.serverKeyExchange])
+
+		match message 'message'
+			helloRequest then return
+			serverKeyExchange(exchange) then try acceptServerKeyExchange(raw, parameters: parameters, exchange: exchange, key: key)
+			default throws TlsHandshakeError.unexpectedMessage
+		end 'message'
+	end 'onServerKeyExchange'
+
+	function acceptServerKeyExchange(raw ByteArray, parameters Tls12Parameters, exchange Tls12ServerKeyExchange, key X509PublicKey) throws TlsHandshakeError
+		let group = exchange.namedGroup()
+
+		if not offer.scan.supportedGroups.contains(group) 'unoffered'
+			throw TlsHandshakeError.illegalParameter
+		end 'unoffered'
+
+		let named = try TlsNamedGroup.fromRawValue(group) otherwise throw TlsHandshakeError.illegalParameter
+		var secret = try entropy.secret(group) otherwise throw TlsHandshakeError.illegalParameter
+		let scheme = try tlsRequireOfferedScheme(exchange.signatureScheme(), offered: offer.scan.signatureSchemes, algorithm: key.algorithm(), protocol: TlsProtocol.tls12)
+
+		try peer.verifySignature(scheme, key: key, message: try parameters.signedParameters(group, publicKey: exchange.publicKey()), signature: exchange.signature())
+
+		let shared = try named.sharedSecret(secret.privateKey, peerShare: exchange.publicKey())
+
+		session.negotiation = TlsNegotiation.keyed12(parameters.suite, group: group)
+		session.transcript.append(raw)
+		phase = Tls12ClientPhase.awaitingCertificateRequest(parameters, exchange: Tls12ClientExchange.create(group, preMasterSecret: shared, publicKey: secret.publicKey))
+	end 'acceptServerKeyExchange'
+
+	function onCertificateRequest(raw ByteArray, parameters Tls12Parameters, exchange Tls12ClientExchange) throws TlsHandshakeError
+		let message = try tlsDecodeAllowing(raw, protocol: TlsProtocol.tls12, allowed: TlsHandshakeTypeArray from [TlsHandshakeType.helloRequest, TlsHandshakeType.certificateRequest, TlsHandshakeType.serverHelloDone])
+
+		match message 'message'
+			helloRequest then return
+			tls12CertificateRequest(request) then acceptCertificateRequest(raw, parameters: parameters, request: request, exchange: exchange)
+			serverHelloDone then try acceptServerHelloDone(raw, parameters: parameters, exchange: exchange, request: Tls12ClientRequest.notRequested)
+			default throws TlsHandshakeError.unexpectedMessage
+		end 'message'
+	end 'onCertificateRequest'
+
+	function acceptCertificateRequest(raw ByteArray, parameters Tls12Parameters, request Tls12CertificateRequest, exchange Tls12ClientExchange)
+		session.transcript.append(raw)
+		phase = Tls12ClientPhase.awaitingServerHelloDone(parameters, exchange: exchange, request: Tls12ClientRequest.requested(request.certificateTypes(), schemes: request.signatureSchemes()))
+	end 'acceptCertificateRequest'
+
+	function onServerHelloDone(raw ByteArray, parameters Tls12Parameters, exchange Tls12ClientExchange, request Tls12ClientRequest) throws TlsHandshakeError
+		let message = try tlsDecodeAllowing(raw, protocol: TlsProtocol.tls12, allowed: TlsHandshakeTypeArray from [TlsHandshakeType.helloRequest, TlsHandshakeType.serverHelloDone])
+
+		match message 'message'
+			helloRequest then return
+			serverHelloDone then try acceptServerHelloDone(raw, parameters: parameters, exchange: exchange, request: request)
+			default throws TlsHandshakeError.unexpectedMessage
+		end 'message'
+	end 'onServerHelloDone'
+
+	function acceptServerHelloDone(raw ByteArray, parameters Tls12Parameters, exchange Tls12ClientExchange, request Tls12ClientRequest) throws TlsHandshakeError
+		session.transcript.append(raw)
+		try session.input.requireKeyBoundary()
+
+		var credentials = credentialsFor(request)
+		var flight = ByteArray.create()
+
+		try appendCertificate(flight, credentials: credentials)
+		try session.emit(flight, message: TlsHandshakeMessage.clientKeyExchange(exchange.publicKey))
+
+		var secrets = try Tls12Secrets.derive(parameters, preMasterSecret: exchange.preMasterSecret, sessionHash: session.transcript.hash(parameters.suite.hashAlgorithm()))
+
+		try appendCertificateVerify(flight, credentials: credentials)
+		try session.writer.writeHandshake(flight)
+		try secrets.sendFinished(Tls12Sender.client, session: session)
+		try session.input.expectChangeCipherSpec(try secrets.cipher(Tls12Sender.server))
+
+		phase = Tls12ClientPhase.awaitingFinished(secrets)
+	end 'acceptServerHelloDone'
+
+	function credentialsFor(request Tls12ClientRequest) returns Tls12ClientCredentials
+		match request 'request'
+			notRequested then return Tls12ClientCredentials.unrequested
+			requested(types, schemes) then return answerRequest(types, schemes: schemes)
+		end 'request'
+	end 'credentialsFor'
+
+	function answerRequest(types ByteArray, schemes TlsSignatureSchemeCodeArray) returns Tls12ClientCredentials
+		match config.identity 'identity'
+			anonymous then return Tls12ClientCredentials.anonymous
+			certified(chain, key) then return answerWith(chain, key: key, types: types, schemes: schemes)
+		end 'identity'
+	end 'answerRequest'
+
+	function answerWith(chain ByteArrays, key TlsPrivateKey, types ByteArray, schemes TlsSignatureSchemeCodeArray) returns Tls12ClientCredentials
+		if not types.contains(tls12CertificateTypeOf(key.algorithm()).code()) 'unfit'
+			return Tls12ClientCredentials.anonymous
+		end 'unfit'
+
+		let scheme = try tlsPickScheme(config.signatureAlgorithms, offered: schemes, algorithm: key.algorithm(), protocol: TlsProtocol.tls12) otherwise return Tls12ClientCredentials.anonymous
+
+		return Tls12ClientCredentials.signing(chain, key: key, scheme: scheme)
+	end 'answerWith'
+
+	function appendCertificate(flight ByteArray, credentials Tls12ClientCredentials) throws TlsHandshakeError
+		match credentials 'credentials'
+			unrequested then return
+			anonymous then try session.emit(flight, message: TlsHandshakeMessage.tls12Certificate(TlsCertificateDataArray.create()))
+			signing(chain, _, _) then try session.emit(flight, message: TlsHandshakeMessage.tls12Certificate(tls12CertificateData(chain)))
+		end 'credentials'
+	end 'appendCertificate'
+
+	function appendCertificateVerify(flight ByteArray, credentials Tls12ClientCredentials) throws TlsHandshakeError
+		match credentials 'credentials'
+			unrequested or
+			anonymous then return
+			signing(_, key, scheme) then try session.emit(flight, message: TlsHandshakeMessage.certificateVerify(scheme.code(), signature: try key.sign(scheme, message: session.transcript.content(), salt: entropy.pssSalt)))
+		end 'credentials'
+	end 'appendCertificateVerify'
+
+	function onFinished(raw ByteArray, secrets Tls12Secrets) throws TlsHandshakeError
+		let message = try tlsDecodeAllowing(raw, protocol: TlsProtocol.tls12, allowed: TlsHandshakeTypeArray from [TlsHandshakeType.finished])
+
+		match message 'message'
+			finished(verifyData) then try acceptFinished(raw, secrets: secrets, verifyData: verifyData)
+			default throws TlsHandshakeError.unexpectedMessage
+		end 'message'
+	end 'onFinished'
+
+	function acceptFinished(raw ByteArray, secrets Tls12Secrets, verifyData ByteArray) throws TlsHandshakeError
+		try secrets.requireFinished(Tls12Sender.server, session: session, verifyData: verifyData)
+		session.transcript.append(raw)
+		try session.input.requireKeyBoundary()
+		session.input.established = true
+		phase = Tls12ClientPhase.connected
+	end 'acceptFinished'
+end 'Tls12ClientFlow'

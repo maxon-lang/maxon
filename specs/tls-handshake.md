@@ -23,7 +23,8 @@ values are compared in constant time; a CertificateRequest is answered with a Ce
 CertificateVerify under the client's own context string); NewSessionTicket is ignored, KeyUpdate is followed,
 close_notify is recorded. A defect sends the fatal alert the contract's table names, protected when write keys
 exist, and stops the machine: every later `receive` throws the same `TlsHandshakeError`. A ServerHello that
-selects TLS 1.2 is checked against the downgrade sentinel and then refused with `protocolVersion`.
+selects TLS 1.2 is checked against the downgrade sentinel and then handled by the TLS 1.2 client of
+`specs/tls12-handshake.md`.
 
 Randomness and ephemeral keys come through a `TlsClientEntropy`: `fresh` draws them from `Random.bytes`, `create`
 takes them as given, which is how a case replays a transcript. The two settings only a replay of a foreign
@@ -123,6 +124,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -131,14 +134,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 
@@ -288,6 +295,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -296,14 +305,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 
@@ -453,6 +466,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -461,14 +476,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 
@@ -628,6 +647,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -636,14 +657,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 
@@ -803,6 +828,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -811,14 +838,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 
@@ -923,151 +954,6 @@ client13-err-finished-length decodeError
 client13-err-message-order unexpectedMessage
 ```
 
-<!-- test: tls-handshake.a-server-that-selects-tls12-with-the-downgrade-sentinel-is-refused -->
-<!-- tier: stdlib -->
-A ServerHello that selects TLS 1.2 and ends its random with the RFC 8446 section 4.1.3 downgrade sentinel, `DOWNGRD` followed by 01 (TLS 1.2) or 00 (TLS 1.1), is IllegalParameter when the client offered TLS 1.3. The two vectors are the canra `tls12-handshake` spec's.
-```maxon
-function digit(symbol Byte) returns Byte
-	if symbol >= 0x61 'letter'
-		return symbol - 0x57
-	end 'letter'
-
-	return symbol - 0x30
-end 'digit'
-
-function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
-	var high = 0 as Byte
-	var isHigh = true
-
-	for symbol in hex.bytes() 'eachSymbol'
-		if isHigh 'first'
-			high = digit(symbol)
-		end 'first' else 'second'
-			bytes.push(high * 16 + digit(symbol))
-		end 'second'
-
-		isHigh = not isHigh
-	end 'eachSymbol'
-
-	return bytes
-end 'fromHex'
-
-function toHex(bytes ByteArray) returns String
-	var text = ""
-
-	for byte in bytes 'eachByte'
-		text.append("{byte:02x}")
-	end 'eachByte'
-
-	return text
-end 'toHex'
-
-function secret(group TlsGroupCode, privateKey ByteArray) returns TlsKeySecret
-	return try TlsKeySecret.create(group, privateKey: privateKey) otherwise panic("a canra private key was refused")
-end 'secret'
-
-typealias TextArray = Array with String
-
-function joined(items TextArray) returns String
-	var text = ""
-
-	for (iter, item) in items.withIterator() 'eachItem'
-		if iter.index() > 0 'separator'
-			text.append(",")
-		end 'separator'
-
-		text.append(item)
-	end 'eachItem'
-
-	return "[{text}]"
-end 'joined'
-
-function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create()
-
-	for record in records 'eachRecord'
-		texts.push("\"{toHex(record)}\"")
-	end 'eachRecord'
-
-	return joined(texts)
-end 'renderRecords'
-
-function renderVersion(negotiation TlsNegotiation) returns String
-	return match negotiation 'negotiation'
-		pending gives "null"
-		accepted or
-		keyed gives "772"
-	end 'negotiation'
-end 'renderVersion'
-
-function renderSuite(negotiation TlsNegotiation) returns String
-	return match negotiation 'negotiation'
-		pending gives "null"
-		accepted(suite) gives "{suite.rawValue}"
-		keyed(suite, _) gives "{suite.rawValue}"
-	end 'negotiation'
-end 'renderSuite'
-
-function renderGroup(negotiation TlsNegotiation) returns String
-	return match negotiation 'negotiation'
-		pending or
-		accepted gives "null"
-		keyed(_, group) gives "{group}"
-	end 'negotiation'
-end 'renderGroup'
-
-function renderAlpn(alpn TlsAlpnChoice) returns String
-	return match alpn 'alpn'
-		absent gives "null"
-		negotiated(protocol) gives "\"{toHex(protocol)}\""
-	end 'alpn'
-end 'renderAlpn'
-
-function renderTrace(trace TlsReplayTrace) returns String
-	let state = "connected" if trace.connected else "handshaking"
-
-	return "\{\"state\":\"{state}\",\"version\":{renderVersion(trace.negotiation)},\"cipher_suite\":{renderSuite(trace.negotiation)},\"group\":{renderGroup(trace.negotiation)},\"alpn_protocol_hex\":{renderAlpn(trace.alpn)},\"outbound_records_hex\":{renderRecords(trace.outbound)},\"received_application_data_hex\":\"{toHex(trace.received)}\",\"peer_closed\":{trace.peerClosed},\"peer_authenticated\":{trace.peerAuthenticated}\}"
-end 'renderTrace'
-
-function report(id String, config TlsClientConfig, entropy TlsClientEntropy, peer TlsPeerAuthenticator, helloSource TlsClientHelloSource, inbound ByteArrays, writes ByteArrays, closeNotify bool)
-	if let trace = try TlsClientReplay.run(config, entropy: entropy, peer: peer, helloSource: helloSource, inbound: inbound, writes: writes, closeNotify: closeNotify) 'replayed'
-		print("{id} {renderTrace(trace)}\n")
-	end 'replayed' else (failure) 'refused'
-		print("{id} {failure}\n")
-	end 'refused'
-end 'report'
-
-function vector0()
-	let config = TlsClientConfig.create(X509VerifyHost.named("example.com"), protocols: TlsProtocolArray from [TlsProtocol.tls13, TlsProtocol.tls12], cipherSuites: TlsCipherSuiteCodeArray from [4867, 4865, 4866, 52393, 52392, 49195, 49199, 49196, 49200], groups: TlsGroupCodeArray from [29, 23], keyShareGroups: TlsGroupCodeArray from [29], signatureAlgorithms: TlsSignatureSchemeCodeArray from [1027, 2052, 2055, 1283, 2053, 2054, 1025, 1281, 1537], applicationProtocols: TlsProtocolNameArray from [fromHex("687474702f312e31")], identity: TlsClientIdentity.anonymous)
-	let entropy = TlsClientEntropy.create(fromHex("7d4bec3b0b9d15cbd98d823090cf89e940e463718c6801773bfce6b602e306fe"), sessionId: fromHex("e38fa6686a89e6da03b5d4441a0b760a6b5a66c7a258bd7b9c368507fc40224d"), keySecrets: TlsKeySecretArray from [secret(29, privateKey: fromHex("79f57dda2ae5389aacf4cb7fb836fece8093bae0fc05e2f2a4c6c2a8cbe03584")), secret(23, privateKey: fromHex("7ddf886d40154dd2588f43d3b842b90c06eca8aac6df3bac543acf77a9fd11fa"))], pssSalt: fromHex("e7f98f56cbffd3e846359d32d45c3e1a9c9541f198beffc2ccdcbf481468ca2d9e39436e2b6d0c2e5b2982420a127f89d2a1f0f8dec2e70af6a54826c198f6f4"))
-	let peer = TlsX509Peer.create(ByteArrays from [fromHex("3082012f3081d6a003020102020101300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a300f310d300b06035504030c04526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000469fd1970f970c21034e836c954aefc78dffef4a3d72650f1ec5e70559cc0663d0722d3408f27d8be5a08ceb432c37b7049cc8758c88c3d85e4db83aa471b62b7a3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d0403020348003045022053bac2d2f62299dd459d79bce22d671aeeb6ee3ed03a2f344be8a8392fd47b3e022100d8f59bc3b1ba00dc51028c7f1b8e99d86d4bb4126e22717c32988498c07f64d7")], now: 1767225600, purpose: X509Purpose.serverAuth)
-	let helloSource = TlsBuiltClientHello.create()
-	report("client12-err-downgrade-sentinel", config: config, entropy: entropy, peer: peer, helloSource: helloSource, inbound: ByteArrays from [fromHex("160303022c0200004a0303c2cc32ccfb1ae6cd2d89ddcb8ac66fbe918a274f55fa8ebe444f574e4752440100cca90000220000000000170000ff01000100000b000201000010000b000908687474702f312e310b00016300016000015d3082015930820100a00302010202010a300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3235303630313030303030305a170d3236303630313030303030305a300f310d300b06035504030c046c6561663059301306072a8648ce3d020106082a8648ce3d030107034200040b019cfdb984d032a96907cca9a63888323695b6404a7ddaacc63b5559364f2ca48f2b5d0e1151b6c0b5d17286d9a522cee437c42f410742ebb8493775fc47e9a34d304b300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b0601050507030130160603551d11040f300d820b6578616d706c652e636f6d300a06082a8648ce3d040302034700304402203bc12c6f77062e5eed59186b72a95e9652f4398685b8845ad8112a5085bb7ab602207c9761426fa260535fb0fa49efe2624a1f34e8e04eb43d8f3c72dd072e7361970c00006f03001d206910e7f7bb58735f34101956e1b784aa724ef2899af15c5b8fa7d17b04cce85c040300473045022100e19224bdd52b6e8c24f251f2fa90ec0f024a11b3fcbc81a9508b96abbae4441102204f9bd15f4a343b28d82e4b86b57680858b22f7fbfdf40800c39e948265b381560e000000")], writes: ByteArrays from [fromHex("474554202f20485454502f312e310d0a486f73743a206578616d706c652e636f6d0d0a0d0a")], closeNotify: true)
-end 'vector0'
-
-function vector1()
-	let config = TlsClientConfig.create(X509VerifyHost.named("example.com"), protocols: TlsProtocolArray from [TlsProtocol.tls13, TlsProtocol.tls12], cipherSuites: TlsCipherSuiteCodeArray from [4867, 4865, 4866, 52393, 52392, 49195, 49199, 49196, 49200], groups: TlsGroupCodeArray from [29, 23], keyShareGroups: TlsGroupCodeArray from [29], signatureAlgorithms: TlsSignatureSchemeCodeArray from [1027, 2052, 2055, 1283, 2053, 2054, 1025, 1281, 1537], applicationProtocols: TlsProtocolNameArray from [fromHex("687474702f312e31")], identity: TlsClientIdentity.anonymous)
-	let entropy = TlsClientEntropy.create(fromHex("ad461c530f822b2d23aa8346768d325e06846fe3c40d2860c8fda23cc9d629ca"), sessionId: fromHex("9bc5b138fc7a4fa048db4e6631ab39eb2be8eca62ec9d0fcf8670a4709c4524a"), keySecrets: TlsKeySecretArray from [secret(29, privateKey: fromHex("3bc8ad0aa3836362fe289d6d649e3aad0704bcae595237e85e7e6d0a5e5b5d47")), secret(23, privateKey: fromHex("576580e55ac3cbfe87b26bb66c38b3a1ad1e12a81daab84e22a80c1c365d2e7c"))], pssSalt: fromHex("7f683eb0230148c5f5254220f31002c1a2f8a34db1ef5db67864f0f8c4c5043baa41771b429d63a45888503a0570601814b5af25dd4d42ab26428b8d04bee524"))
-	let peer = TlsX509Peer.create(ByteArrays from [fromHex("3082012f3081d6a003020102020101300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a300f310d300b06035504030c04526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000469fd1970f970c21034e836c954aefc78dffef4a3d72650f1ec5e70559cc0663d0722d3408f27d8be5a08ceb432c37b7049cc8758c88c3d85e4db83aa471b62b7a3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d0403020348003045022053bac2d2f62299dd459d79bce22d671aeeb6ee3ed03a2f344be8a8392fd47b3e022100d8f59bc3b1ba00dc51028c7f1b8e99d86d4bb4126e22717c32988498c07f64d7")], now: 1767225600, purpose: X509Purpose.serverAuth)
-	let helloSource = TlsBuiltClientHello.create()
-	report("client12-err-downgrade-sentinel-tls11", config: config, entropy: entropy, peer: peer, helloSource: helloSource, inbound: ByteArrays from [fromHex("160303022b0200004a03037b3784c2cde3deae29a98bb1acea807451ffc1ff2dbc5b36444f574e4752440000cca90000220000000000170000ff01000100000b000201000010000b000908687474702f312e310b00016300016000015d3082015930820100a00302010202010a300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3235303630313030303030305a170d3236303630313030303030305a300f310d300b06035504030c046c6561663059301306072a8648ce3d020106082a8648ce3d030107034200040b019cfdb984d032a96907cca9a63888323695b6404a7ddaacc63b5559364f2ca48f2b5d0e1151b6c0b5d17286d9a522cee437c42f410742ebb8493775fc47e9a34d304b300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b0601050507030130160603551d11040f300d820b6578616d706c652e636f6d300a06082a8648ce3d040302034700304402203bc12c6f77062e5eed59186b72a95e9652f4398685b8845ad8112a5085bb7ab602207c9761426fa260535fb0fa49efe2624a1f34e8e04eb43d8f3c72dd072e7361970c00006e03001d20465d8841df816e9c132bf834ab1959ac4b6b2c081ffe15858ed1cf2e8cdeb44f0403004630440220216008647dcfd8d843ab445313aad0eaa8eec3b80d96aff7019cfaa5b59ba3f302204b3fc7ec44fd245adfa6c280494376a0f842c733587d59aba96c8f838e0881b90e000000")], writes: ByteArrays from [fromHex("474554202f20485454502f312e310d0a486f73743a206578616d706c652e636f6d0d0a0d0a")], closeNotify: true)
-end 'vector1'
-
-function main() returns ExitCode
-	vector0()
-	vector1()
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-client12-err-downgrade-sentinel illegalParameter
-client12-err-downgrade-sentinel-tls11 illegalParameter
-```
-
 <!-- test: tls-handshake.reference-handshakes-the-canra-vectors-do-not-list -->
 <!-- tier: stdlib -->
 Handshakes made with the canra reference server and checked by the canra reference client, for paths the canra vectors do not reach: a HelloRetryRequest with a cookie (the second ClientHello carries the cookie last and the one new share), a HelloRetryRequest that carries only a cookie (the second ClientHello repeats the first and the client waits), a KeyUpdate that asks for no update, an ignored user_canceled alert, two ALPN protocols offered, application data written in fragments of 16384 bytes with an empty write between, and records after close_notify, which are ignored unread.
@@ -1143,6 +1029,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -1151,14 +1039,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 
@@ -1338,6 +1230,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -1346,14 +1240,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 

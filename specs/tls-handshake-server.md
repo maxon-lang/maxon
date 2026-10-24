@@ -27,8 +27,8 @@ time. With client authentication on it sends a CertificateRequest, verifies the 
 for the clientAuth purpose and no host name, and the client's CertificateVerify under the client context string;
 `require` refuses a client without a certificate with certificate_required, `request` continues without one. A
 defect sends the contract's fatal alert, protected when write keys exist, and stops the machine: every later
-`receive` throws the same `TlsHandshakeError`. A client that offers only TLS 1.2 is refused with
-`protocolVersion`; the TLS 1.2 server continues from there.
+`receive` throws the same `TlsHandshakeError`. A client that selects TLS 1.2 continues in the TLS 1.2 server of
+`specs/tls12-handshake-server.md`.
 
 Randomness and ephemeral keys come through a `TlsServerEntropy`: `fresh` draws them from `Random.bytes`, `create`
 takes them as given, which is how a case replays a transcript. Whether a client certificate is verified is the
@@ -126,6 +126,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -134,14 +136,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 
@@ -287,6 +293,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -295,14 +303,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 
@@ -448,6 +460,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -456,14 +470,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 
@@ -618,6 +636,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -626,14 +646,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 
@@ -779,6 +803,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -787,14 +813,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 
@@ -994,6 +1024,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -1002,14 +1034,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 
@@ -1128,6 +1164,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -1136,14 +1174,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 
@@ -1298,6 +1340,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -1306,14 +1350,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 
@@ -1486,6 +1534,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -1494,14 +1544,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 
@@ -1683,6 +1737,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -1691,14 +1747,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 
@@ -1871,6 +1931,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -1879,14 +1941,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 
@@ -2023,6 +2089,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -2031,14 +2099,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 
@@ -2274,6 +2346,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -2282,14 +2356,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 
@@ -2444,6 +2522,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -2452,14 +2532,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 
@@ -2641,6 +2725,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -2649,14 +2735,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 
@@ -2802,6 +2892,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -2810,14 +2902,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 
@@ -3358,7 +3454,7 @@ records=1 prefix=1703030013 type=21 plaintext=0214
 
 <!-- test: tls-handshake-server.our-client-handshakes-with-our-server -->
 <!-- tier: stdlib -->
-The client of this stdlib and its server handshake with each other in memory, each with the production entropy, the client verifying the server's chain for example.com against a root and the server requiring and verifying the client's chain when asked: each TLS 1.3 suite with and without client authentication, and each server key type (ECDSA P-256, ECDSA P-384, Ed25519, RSA-PSS) with an Ed25519 or RSA client certificate. A line per side prints what it negotiated, whether it authenticated its peer, whether it saw the peer's close_notify and the application data it received (a request, a response).
+The client of this stdlib and its server handshake with each other in memory, each with the production entropy, the client verifying the server's chain for example.com against a root and the server requiring and verifying the client's chain when asked, both limited to TLS 1.3: each TLS 1.3 suite with and without client authentication, and each server key type (ECDSA P-256, ECDSA P-384, Ed25519, RSA-PSS) with an Ed25519 or RSA client certificate. A line per side prints what it negotiated, whether it authenticated its peer, whether it saw the peer's close_notify and the application data it received (a request, a response); the server's line adds whether its ServerHello carried extended_master_secret, which a TLS 1.3 ServerHello never does.
 ```maxon
 function digit(symbol Byte) returns Byte
 	if symbol >= 0x61 'letter'
@@ -3410,6 +3506,14 @@ enum ClientKind
 	rsa
 end 'ClientKind'
 
+enum Tweak
+	none
+	withoutExtendedMasterSecret
+	serverSignsPkcs1
+	clientSignsPkcs1
+	secp256r1Only
+end 'Tweak'
+
 function serverCredential(kind ServerKind) returns (ByteArrays, TlsPrivateKey)
 	return match kind 'kind'
 		p256 gives (ByteArrays from [fromHex("3082015930820100a00302010202010a300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3235303630313030303030305a170d3236303630313030303030305a300f310d300b06035504030c046c6561663059301306072a8648ce3d020106082a8648ce3d030107034200040b019cfdb984d032a96907cca9a63888323695b6404a7ddaacc63b5559364f2ca48f2b5d0e1151b6c0b5d17286d9a522cee437c42f410742ebb8493775fc47e9a34d304b300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b0601050507030130160603551d11040f300d820b6578616d706c652e636f6d300a06082a8648ce3d040302034700304402203bc12c6f77062e5eed59186b72a95e9652f4398685b8845ad8112a5085bb7ab602207c9761426fa260535fb0fa49efe2624a1f34e8e04eb43d8f3c72dd072e736197")], TlsPrivateKey.ecP256(fromHex("0f9999d9198528f9f986f8315fe0c7aaf7b2aef840198d77b859dc4f4a8c4a2b")))
@@ -3428,19 +3532,100 @@ function clientIdentity(kind ClientKind) returns TlsClientIdentity
 	end 'kind'
 end 'clientIdentity'
 
+function onlyTls13() returns TlsProtocolArray
+	return TlsProtocolArray from [TlsProtocol.tls13]
+end 'onlyTls13'
+
+function onlyTls12() returns TlsProtocolArray
+	return TlsProtocolArray from [TlsProtocol.tls12]
+end 'onlyTls12'
+
+function bothVersions() returns TlsProtocolArray
+	return TlsProtocolArray from [TlsProtocol.tls13, TlsProtocol.tls12]
+end 'bothVersions'
+
+function schemes(tweak Tweak, pkcs1Tweak Tweak, pkcs1 TlsSignatureSchemeCodeArray, preference TlsSignatureSchemeCodeArray) returns TlsSignatureSchemeCodeArray
+	if tweak == pkcs1Tweak 'pkcs1Only'
+		return pkcs1
+	end 'pkcs1Only'
+
+	return preference
+end 'schemes'
+
+function groupsFor(tweak Tweak) returns TlsGroupCodeArray
+	if tweak == Tweak.secp256r1Only 'single'
+		return TlsGroupCodeArray from [0x0017]
+	end 'single'
+
+	return TlsGroupCodeArray from [0x001D, 0x0017]
+end 'groupsFor'
+
+function shareGroupsFor(tweak Tweak) returns TlsGroupCodeArray
+	if tweak == Tweak.secp256r1Only 'single'
+		return TlsGroupCodeArray from [0x0017]
+	end 'single'
+
+	return TlsGroupCodeArray from [0x001D]
+end 'shareGroupsFor'
+
+type OptionalExtendedMasterSecret implements TlsClientHelloSource
+	var strips as bool
+
+	static function create(strips bool) returns OptionalExtendedMasterSecret
+		return Self{strips: strips}
+	end 'create'
+
+	function first(built ByteArray) returns ByteArray
+		if not strips 'kept'
+			return built
+		end 'kept'
+
+		let message = try tlsDecodeClientHello(built.clone()) otherwise panic("the ClientHello the config builds decodes")
+		var kept = TlsExtensionArray.create()
+
+		for item in tlsExtensionsOf(message.extensions()) 'eachExtension'
+			if item.extensionType() != TlsExtensionKind.extendedMasterSecret.code() 'other'
+				kept.push(item)
+			end 'other'
+		end 'eachExtension'
+
+		let hello = TlsClientHello.create(message.legacyVersion(), random: message.random(), legacySessionId: message.legacySessionId(), cipherSuites: message.cipherSuites(), compressionMethods: message.compressionMethods(), extensions: TlsExtensionBlock.listed(kept))
+
+		return try TlsHandshakeCodec.encode(TlsHandshakeMessage.clientHello(hello)) otherwise panic("a ClientHello without an extension encodes")
+	end 'first'
+
+	function second(built ByteArray) returns ByteArray
+		return built
+	end 'second'
+end 'OptionalExtendedMasterSecret'
+
+function renderVersion(negotiation TlsNegotiation) returns String
+	return match negotiation 'negotiation'
+		pending gives "none"
+		accepted or
+		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
+	end 'negotiation'
+end 'renderVersion'
+
 function renderSuite(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending gives "none"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "none"
+		accepted or
+		accepted12 gives "none"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 
@@ -3451,43 +3636,107 @@ function renderAlpn(alpn TlsAlpnChoice) returns String
 	end 'alpn'
 end 'renderAlpn'
 
+function serverHelloOffersExtendedMasterSecret(firstRecord ByteArray) returns bool
+	let body = tlsRecordPart(firstRecord, start: tlsRecordHeaderBytes, endIndex: firstRecord.count())
+	let length = (tlsRecordByte(body, offset: 1) as Count) * 65536 + (tlsRecordByte(body, offset: 2) as Count) * 256 + (tlsRecordByte(body, offset: 3) as Count)
+	let message = tlsRecordPart(body, start: 0, endIndex: 4 + length)
+	let decoded = try tlsDecodeHandshake(message, protocol: TlsProtocol.tls13) otherwise panic("the first record of a server holds a ServerHello")
+
+	return match decoded 'decoded'
+		serverHello(hello) gives TlsExtensionScan.ofBlock(hello.extensions()).types.contains(TlsExtensionKind.extendedMasterSecret.code())
+		default panic("the first message of a server is a ServerHello")
+	end 'decoded'
+end 'serverHelloOffersExtendedMasterSecret'
+
+function messagesOf(record ByteArray) returns ByteArrays
+	var messages = ByteArrays.create()
+	var offset = tlsRecordHeaderBytes as ElementIndex
+
+	while offset < record.count() 'eachMessage'
+		let length = (tlsRecordByte(record, offset: offset + 1) as Count) * 65536 + (tlsRecordByte(record, offset: offset + 2) as Count) * 256 + (tlsRecordByte(record, offset: offset + 3) as Count)
+
+		messages.push(tlsRecordPart(record, start: offset, endIndex: offset + 4 + length))
+		offset = offset + 4 + length
+	end 'eachMessage'
+
+	return messages
+end 'messagesOf'
+
+function signatureSchemeOf(raw ByteArray) returns String
+	let message = try tlsDecodeHandshake(raw, protocol: TlsProtocol.tls12) otherwise panic("a plaintext TLS 1.2 flight holds whole messages")
+
+	return match message 'message'
+		serverKeyExchange(exchange) gives "{exchange.signatureScheme()}"
+		certificateVerify(scheme, _) gives "{scheme}"
+		default panic("only signed messages are asked for")
+	end 'message'
+end 'signatureSchemeOf'
+
+function signatureSchemeIn(record ByteArray, kind TlsHandshakeType) returns String
+	for raw in messagesOf(record) 'eachMessage'
+		let found = try TlsHandshakeType.fromRawValue(tlsRecordByte(raw, offset: 0)) otherwise panic("a flight holds known message types")
+
+		if found == kind 'wanted'
+			return signatureSchemeOf(raw)
+		end 'wanted'
+	end 'eachMessage'
+
+	return "-"
+end 'signatureSchemeIn'
+
 function renderSide(trace TlsReplayTrace) returns String
-	return "connected={trace.connected} suite={renderSuite(trace.negotiation)} group={renderGroup(trace.negotiation)} alpn={renderAlpn(trace.alpn)} peer-authenticated={trace.peerAuthenticated} peer-closed={trace.peerClosed} records={trace.outbound.count()} received={toHex(trace.received)}"
+	return "connected={trace.connected} version={renderVersion(trace.negotiation)} suite={renderSuite(trace.negotiation)} group={renderGroup(trace.negotiation)} alpn={renderAlpn(trace.alpn)} peer-authenticated={trace.peerAuthenticated} peer-closed={trace.peerClosed} records={trace.outbound.count()} received={toHex(trace.received)}"
 end 'renderSide'
 
-function scenario(label String, serverKind ServerKind, clientKind ClientKind, suite TlsCipherSuiteCode)
+function renderSchemes(trace TlsLoopbackTrace) returns String
+	match trace.server.negotiation 'negotiation'
+		accepted12 or
+		keyed12 then return " server-key-exchange-scheme={signatureSchemeIn(try trace.server.outbound.first() otherwise panic("a server sent its flight"), kind: TlsHandshakeType.serverKeyExchange)} client-verify-scheme={signatureSchemeIn(try trace.client.outbound.get(1) otherwise panic("a client sent its flight"), kind: TlsHandshakeType.certificateVerify)}"
+		pending or
+		accepted or
+		keyed then return ""
+	end 'negotiation'
+end 'renderSchemes'
+
+function scenario(label String, serverKind ServerKind, clientKind ClientKind, serverProtocols TlsProtocolArray, clientProtocols TlsProtocolArray, suites TlsCipherSuiteCodeArray, tweak Tweak)
 	let (chain, key) = serverCredential(serverKind)
 	let mutual = clientKind != ClientKind.none
-	let serverConfig = TlsServerConfig.create(TlsProtocolArray from [TlsProtocol.tls13], cipherSuites: TlsCipherSuiteCodeArray from [suite], groups: TlsGroupCodeArray from [0x001D, 0x0017], signatureAlgorithms: TlsSignatureSchemeCodeArray from [0x0403, 0x0503, 0x0807, 0x0804, 0x0805, 0x0806, 0x0401, 0x0501, 0x0601], applicationProtocols: TlsProtocolNameArray from [fromHex("687474702f312e31")], chain: chain, key: key, clientAuthentication: TlsClientAuthentication.require if mutual else TlsClientAuthentication.none, clientSignatureAlgorithms: TlsSignatureSchemeCodeArray from [0x0403, 0x0503, 0x0807, 0x0804, 0x0805, 0x0806, 0x0401, 0x0501, 0x0601], clientAuthorities: ByteArrays.create())
-	let clientConfig = TlsClientConfig.create(X509VerifyHost.named("example.com"), protocols: TlsProtocolArray from [TlsProtocol.tls13], cipherSuites: TlsCipherSuiteCodeArray from [suite], groups: TlsGroupCodeArray from [0x001D, 0x0017], keyShareGroups: TlsGroupCodeArray from [0x001D], signatureAlgorithms: TlsSignatureSchemeCodeArray from [0x0403, 0x0804, 0x0807, 0x0503, 0x0805, 0x0806, 0x0401, 0x0501, 0x0601], applicationProtocols: TlsProtocolNameArray from [fromHex("687474702f312e31")], identity: clientIdentity(clientKind))
+	let serverConfig = TlsServerConfig.create(serverProtocols, cipherSuites: suites, groups: groupsFor(tweak), signatureAlgorithms: schemes(tweak, pkcs1Tweak: Tweak.serverSignsPkcs1, pkcs1: TlsSignatureSchemeCodeArray from [0x0401], preference: TlsSignatureSchemeCodeArray from [0x0403, 0x0503, 0x0807, 0x0804, 0x0805, 0x0806, 0x0401, 0x0501, 0x0601]), applicationProtocols: TlsProtocolNameArray from [fromHex("687474702f312e31")], chain: chain, key: key, clientAuthentication: TlsClientAuthentication.require if mutual else TlsClientAuthentication.none, clientSignatureAlgorithms: TlsSignatureSchemeCodeArray from [0x0403, 0x0503, 0x0807, 0x0804, 0x0805, 0x0806, 0x0401, 0x0501, 0x0601], clientAuthorities: ByteArrays.create())
+	let clientConfig = TlsClientConfig.create(X509VerifyHost.named("example.com"), protocols: clientProtocols, cipherSuites: suites, groups: groupsFor(tweak), keyShareGroups: shareGroupsFor(tweak), signatureAlgorithms: schemes(tweak, pkcs1Tweak: Tweak.clientSignsPkcs1, pkcs1: TlsSignatureSchemeCodeArray from [0x0403, 0x0503, 0x0401], preference: TlsSignatureSchemeCodeArray from [0x0403, 0x0804, 0x0807, 0x0503, 0x0805, 0x0806, 0x0401, 0x0501, 0x0601]), applicationProtocols: TlsProtocolNameArray from [fromHex("687474702f312e31")], identity: clientIdentity(clientKind))
 	let serverEntropy = try TlsServerEntropy.fresh(serverConfig) otherwise panic("no server entropy")
 	let clientEntropy = try TlsClientEntropy.fresh(clientConfig) otherwise panic("no client entropy")
 	let serverPeer = TlsX509Peer.create(ByteArrays from [fromHex("3082017e30820124a003020102020164300a06082a8648ce3d04030230163114301206035504030c0b436c69656e7420526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a30163114301206035504030c0b436c69656e7420526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000440dc1caaaee821a08a60dcb74b34befd018659bdb88f3c7b77e9884ebfb821dd99d3cb7909555d3f0ef6f05a87ec68cff0756403703002efe4607c9b92f86252a3633061300f0603551d130101ff040530030101ff301f0603551d23041830168014b403e63e7c1c8a1890af5fb031868a5afe1d8376301d0603551d0e04160414b403e63e7c1c8a1890af5fb031868a5afe1d8376300e0603551d0f0101ff040403020106300a06082a8648ce3d040302034800304502202b34aae7b62e533d12661be590a736eee7cd71c02124401b1d03f88e0455fa3b022100a9e9fee45aa249f83c6b148e6f1fab78dbfccea918ebcdedf797ec772e634bed")], now: 1767225600, purpose: X509Purpose.clientAuth)
 	let clientPeer = TlsX509Peer.create(ByteArrays from [fromHex("3082012f3081d6a003020102020101300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a300f310d300b06035504030c04526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000469fd1970f970c21034e836c954aefc78dffef4a3d72650f1ec5e70559cc0663d0722d3408f27d8be5a08ceb432c37b7049cc8758c88c3d85e4db83aa471b62b7a3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d0403020348003045022053bac2d2f62299dd459d79bce22d671aeeb6ee3ed03a2f344be8a8392fd47b3e022100d8f59bc3b1ba00dc51028c7f1b8e99d86d4bb4126e22717c32988498c07f64d7")], now: 1767225600, purpose: X509Purpose.serverAuth)
 	var server = try TlsServerHandshake.create(serverConfig, entropy: serverEntropy, peer: serverPeer) otherwise panic("no server")
-	var client = try TlsClientHandshake.create(clientConfig, entropy: clientEntropy, peer: clientPeer, helloSource: TlsBuiltClientHello.create()) otherwise panic("no client")
+	var client = try TlsClientHandshake.create(clientConfig, entropy: clientEntropy, peer: clientPeer, helloSource: OptionalExtendedMasterSecret.create(tweak == Tweak.withoutExtendedMasterSecret)) otherwise panic("no client")
 	let request = fromHex("474554202f20485454502f312e310d0a0d0a")
 	let response = fromHex("485454502f312e3120323030204f4b0d0a0d0a6f6b")
 
 	if let trace = try TlsLoopback.run(client, server: server, clientWrites: ByteArrays from [request], serverWrites: ByteArrays from [response], closeNotify: true) 'looped'
+		let extended = serverHelloOffersExtendedMasterSecret(try trace.server.outbound.first() otherwise panic("a server sent its flight"))
+
 		print("{label} client {renderSide(trace.client)}\n")
-		print("{label} server {renderSide(trace.server)}\n")
+		print("{label} server {renderSide(trace.server)} extended-master-secret={extended}{renderSchemes(trace)}\n")
 	end 'looped' else (failure) 'refused'
 		print("{label} refused {failure}\n")
 	end 'refused'
 end 'scenario'
 
+function suiteList(suite TlsCipherSuiteCode) returns TlsCipherSuiteCodeArray
+	return TlsCipherSuiteCodeArray from [suite]
+end 'suiteList'
+
 function main() returns ExitCode
-	scenario("chacha20-poly1305", serverKind: ServerKind.p256, clientKind: ClientKind.none, suite: 0x1303)
-	scenario("aes-128-gcm", serverKind: ServerKind.p256, clientKind: ClientKind.none, suite: 0x1301)
-	scenario("aes-256-gcm", serverKind: ServerKind.p256, clientKind: ClientKind.none, suite: 0x1302)
-	scenario("chacha20-poly1305-mutual", serverKind: ServerKind.p256, clientKind: ClientKind.p256, suite: 0x1303)
-	scenario("aes-128-gcm-mutual", serverKind: ServerKind.p256, clientKind: ClientKind.p256, suite: 0x1301)
-	scenario("aes-256-gcm-mutual", serverKind: ServerKind.p256, clientKind: ClientKind.p256, suite: 0x1302)
-	scenario("p384-server", serverKind: ServerKind.p384, clientKind: ClientKind.none, suite: 0x1302)
-	scenario("ed25519-server", serverKind: ServerKind.ed25519, clientKind: ClientKind.none, suite: 0x1301)
-	scenario("rsa-server-ed25519-client", serverKind: ServerKind.rsa, clientKind: ClientKind.ed25519, suite: 0x1303)
-	scenario("p256-server-rsa-client", serverKind: ServerKind.p256, clientKind: ClientKind.rsa, suite: 0x1301)
+	scenario("chacha20-poly1305", serverKind: ServerKind.p256, clientKind: ClientKind.none, serverProtocols: onlyTls13(), clientProtocols: onlyTls13(), suites: TlsCipherSuiteCodeArray from [0x1303], tweak: Tweak.none)
+	scenario("aes-128-gcm", serverKind: ServerKind.p256, clientKind: ClientKind.none, serverProtocols: onlyTls13(), clientProtocols: onlyTls13(), suites: TlsCipherSuiteCodeArray from [0x1301], tweak: Tweak.none)
+	scenario("aes-256-gcm", serverKind: ServerKind.p256, clientKind: ClientKind.none, serverProtocols: onlyTls13(), clientProtocols: onlyTls13(), suites: TlsCipherSuiteCodeArray from [0x1302], tweak: Tweak.none)
+	scenario("chacha20-poly1305-mutual", serverKind: ServerKind.p256, clientKind: ClientKind.p256, serverProtocols: onlyTls13(), clientProtocols: onlyTls13(), suites: TlsCipherSuiteCodeArray from [0x1303], tweak: Tweak.none)
+	scenario("aes-128-gcm-mutual", serverKind: ServerKind.p256, clientKind: ClientKind.p256, serverProtocols: onlyTls13(), clientProtocols: onlyTls13(), suites: TlsCipherSuiteCodeArray from [0x1301], tweak: Tweak.none)
+	scenario("aes-256-gcm-mutual", serverKind: ServerKind.p256, clientKind: ClientKind.p256, serverProtocols: onlyTls13(), clientProtocols: onlyTls13(), suites: TlsCipherSuiteCodeArray from [0x1302], tweak: Tweak.none)
+	scenario("p384-server", serverKind: ServerKind.p384, clientKind: ClientKind.none, serverProtocols: onlyTls13(), clientProtocols: onlyTls13(), suites: TlsCipherSuiteCodeArray from [0x1302], tweak: Tweak.none)
+	scenario("ed25519-server", serverKind: ServerKind.ed25519, clientKind: ClientKind.none, serverProtocols: onlyTls13(), clientProtocols: onlyTls13(), suites: TlsCipherSuiteCodeArray from [0x1301], tweak: Tweak.none)
+	scenario("rsa-server-ed25519-client", serverKind: ServerKind.rsa, clientKind: ClientKind.ed25519, serverProtocols: onlyTls13(), clientProtocols: onlyTls13(), suites: TlsCipherSuiteCodeArray from [0x1303], tweak: Tweak.none)
+	scenario("p256-server-rsa-client", serverKind: ServerKind.p256, clientKind: ClientKind.rsa, serverProtocols: onlyTls13(), clientProtocols: onlyTls13(), suites: TlsCipherSuiteCodeArray from [0x1301], tweak: Tweak.none)
 
 	return 0
 end 'main'
@@ -3496,26 +3745,26 @@ end 'main'
 0
 ```
 ```stdout
-chacha20-poly1305 client connected=true suite=4867 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=485454502f312e3120323030204f4b0d0a0d0a6f6b
-chacha20-poly1305 server connected=true suite=4867 group=29 alpn=687474702f312e31 peer-authenticated=false peer-closed=true records=5 received=474554202f20485454502f312e310d0a0d0a
-aes-128-gcm client connected=true suite=4865 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=485454502f312e3120323030204f4b0d0a0d0a6f6b
-aes-128-gcm server connected=true suite=4865 group=29 alpn=687474702f312e31 peer-authenticated=false peer-closed=true records=5 received=474554202f20485454502f312e310d0a0d0a
-aes-256-gcm client connected=true suite=4866 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=485454502f312e3120323030204f4b0d0a0d0a6f6b
-aes-256-gcm server connected=true suite=4866 group=29 alpn=687474702f312e31 peer-authenticated=false peer-closed=true records=5 received=474554202f20485454502f312e310d0a0d0a
-chacha20-poly1305-mutual client connected=true suite=4867 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=485454502f312e3120323030204f4b0d0a0d0a6f6b
-chacha20-poly1305-mutual server connected=true suite=4867 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=474554202f20485454502f312e310d0a0d0a
-aes-128-gcm-mutual client connected=true suite=4865 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=485454502f312e3120323030204f4b0d0a0d0a6f6b
-aes-128-gcm-mutual server connected=true suite=4865 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=474554202f20485454502f312e310d0a0d0a
-aes-256-gcm-mutual client connected=true suite=4866 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=485454502f312e3120323030204f4b0d0a0d0a6f6b
-aes-256-gcm-mutual server connected=true suite=4866 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=474554202f20485454502f312e310d0a0d0a
-p384-server client connected=true suite=4866 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=485454502f312e3120323030204f4b0d0a0d0a6f6b
-p384-server server connected=true suite=4866 group=29 alpn=687474702f312e31 peer-authenticated=false peer-closed=true records=5 received=474554202f20485454502f312e310d0a0d0a
-ed25519-server client connected=true suite=4865 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=485454502f312e3120323030204f4b0d0a0d0a6f6b
-ed25519-server server connected=true suite=4865 group=29 alpn=687474702f312e31 peer-authenticated=false peer-closed=true records=5 received=474554202f20485454502f312e310d0a0d0a
-rsa-server-ed25519-client client connected=true suite=4867 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=485454502f312e3120323030204f4b0d0a0d0a6f6b
-rsa-server-ed25519-client server connected=true suite=4867 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=474554202f20485454502f312e310d0a0d0a
-p256-server-rsa-client client connected=true suite=4865 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=485454502f312e3120323030204f4b0d0a0d0a6f6b
-p256-server-rsa-client server connected=true suite=4865 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=474554202f20485454502f312e310d0a0d0a
+chacha20-poly1305 client connected=true version=772 suite=4867 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=485454502f312e3120323030204f4b0d0a0d0a6f6b
+chacha20-poly1305 server connected=true version=772 suite=4867 group=29 alpn=687474702f312e31 peer-authenticated=false peer-closed=true records=5 received=474554202f20485454502f312e310d0a0d0a extended-master-secret=false
+aes-128-gcm client connected=true version=772 suite=4865 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=485454502f312e3120323030204f4b0d0a0d0a6f6b
+aes-128-gcm server connected=true version=772 suite=4865 group=29 alpn=687474702f312e31 peer-authenticated=false peer-closed=true records=5 received=474554202f20485454502f312e310d0a0d0a extended-master-secret=false
+aes-256-gcm client connected=true version=772 suite=4866 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=485454502f312e3120323030204f4b0d0a0d0a6f6b
+aes-256-gcm server connected=true version=772 suite=4866 group=29 alpn=687474702f312e31 peer-authenticated=false peer-closed=true records=5 received=474554202f20485454502f312e310d0a0d0a extended-master-secret=false
+chacha20-poly1305-mutual client connected=true version=772 suite=4867 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=485454502f312e3120323030204f4b0d0a0d0a6f6b
+chacha20-poly1305-mutual server connected=true version=772 suite=4867 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=474554202f20485454502f312e310d0a0d0a extended-master-secret=false
+aes-128-gcm-mutual client connected=true version=772 suite=4865 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=485454502f312e3120323030204f4b0d0a0d0a6f6b
+aes-128-gcm-mutual server connected=true version=772 suite=4865 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=474554202f20485454502f312e310d0a0d0a extended-master-secret=false
+aes-256-gcm-mutual client connected=true version=772 suite=4866 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=485454502f312e3120323030204f4b0d0a0d0a6f6b
+aes-256-gcm-mutual server connected=true version=772 suite=4866 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=474554202f20485454502f312e310d0a0d0a extended-master-secret=false
+p384-server client connected=true version=772 suite=4866 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=485454502f312e3120323030204f4b0d0a0d0a6f6b
+p384-server server connected=true version=772 suite=4866 group=29 alpn=687474702f312e31 peer-authenticated=false peer-closed=true records=5 received=474554202f20485454502f312e310d0a0d0a extended-master-secret=false
+ed25519-server client connected=true version=772 suite=4865 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=485454502f312e3120323030204f4b0d0a0d0a6f6b
+ed25519-server server connected=true version=772 suite=4865 group=29 alpn=687474702f312e31 peer-authenticated=false peer-closed=true records=5 received=474554202f20485454502f312e310d0a0d0a extended-master-secret=false
+rsa-server-ed25519-client client connected=true version=772 suite=4867 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=485454502f312e3120323030204f4b0d0a0d0a6f6b
+rsa-server-ed25519-client server connected=true version=772 suite=4867 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=474554202f20485454502f312e310d0a0d0a extended-master-secret=false
+p256-server-rsa-client client connected=true version=772 suite=4865 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=485454502f312e3120323030204f4b0d0a0d0a6f6b
+p256-server-rsa-client server connected=true version=772 suite=4865 group=29 alpn=687474702f312e31 peer-authenticated=true peer-closed=true records=5 received=474554202f20485454502f312e310d0a0d0a extended-master-secret=false
 ```
 
 <!-- test: tls-handshake-server.a-user-program-cannot-name-the-server-handshake -->

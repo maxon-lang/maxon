@@ -94,6 +94,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -102,14 +104,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 
@@ -269,6 +275,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -277,14 +285,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 
@@ -434,6 +446,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -442,14 +456,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 
@@ -669,6 +687,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -677,14 +697,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 
@@ -844,6 +868,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -852,14 +878,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 
@@ -999,6 +1029,8 @@ function renderVersion(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted or
 		keyed gives "772"
+		accepted12 or
+		keyed12 gives "771"
 	end 'negotiation'
 end 'renderVersion'
 
@@ -1007,14 +1039,18 @@ function renderSuite(negotiation TlsNegotiation) returns String
 		pending gives "null"
 		accepted(suite) gives "{suite.rawValue}"
 		keyed(suite, _) gives "{suite.rawValue}"
+		accepted12(suite) gives "{suite.rawValue}"
+		keyed12(suite, _) gives "{suite.rawValue}"
 	end 'negotiation'
 end 'renderSuite'
 
 function renderGroup(negotiation TlsNegotiation) returns String
 	return match negotiation 'negotiation'
 		pending or
-		accepted gives "null"
+		accepted or
+		accepted12 gives "null"
 		keyed(_, group) gives "{group}"
+		keyed12(_, group) gives "{group}"
 	end 'negotiation'
 end 'renderGroup'
 

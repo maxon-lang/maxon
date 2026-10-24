@@ -2,11 +2,20 @@ module union TlsNegotiation
 	pending
 	accepted(suite Tls13CipherSuite)
 	keyed(suite Tls13CipherSuite, group TlsGroupCode)
+	accepted12(suite Tls12CipherSuite)
+	keyed12(suite Tls12CipherSuite, group TlsGroupCode)
 end 'TlsNegotiation'
 
 module union TlsAlpnChoice
 	absent
 	negotiated(protocol ByteArray)
+
+	module function appendTo(extensions TlsExtensionArray)
+		match self 'alpn'
+			negotiated(protocol) then extensions.push(TlsExtension.applicationProtocols(TlsProtocolNameArray from [protocol]))
+			absent then return
+		end 'alpn'
+	end 'appendTo'
 end 'TlsAlpnChoice'
 
 module union TlsTrafficSecrets
@@ -113,6 +122,13 @@ module type TlsSession
 		try writer.writeAlert(TlsAlertLevel.warning, alert: TlsAlert.closeNotify)
 	end 'close'
 
+	module function emit(flight ByteArray, message TlsHandshakeMessage) throws TlsHandshakeError
+		let encoded = try tlsEncodedMessage(message)
+
+		transcript.append(encoded)
+		flight.append(encoded)
+	end 'emit'
+
 	module function takeRecords() returns ByteArrays
 		return writer.takeRecords()
 	end 'takeRecords'
@@ -142,7 +158,9 @@ module type TlsSession
 		match negotiation 'negotiation'
 			accepted(suite) then return suite
 			keyed(suite, _) then return suite
-			pending then throw TlsHandshakeError.internalError
+			pending or
+			accepted12 or
+			keyed12 then throw TlsHandshakeError.internalError
 		end 'negotiation'
 	end 'negotiatedSuite'
 
@@ -195,6 +213,32 @@ module type TlsSession
 			server gives TlsTrafficSecrets.application(nextPeer, serverTraffic: nextOwn)
 		end 'keys'
 	end 'followKeyUpdate'
+
+	module function followTls12Message(raw ByteArray) throws TlsHandshakeError
+		let message = try tlsDecodeHandshake(raw, protocol: TlsProtocol.tls12)
+
+		match message 'message'
+			helloRequest then try refuseRenegotiation()
+			default throws TlsHandshakeError.unexpectedMessage
+		end 'message'
+	end 'followTls12Message'
+
+	module function acceptApplicationProtocol(selected TlsProtocolNameArray, offered TlsProtocolNameArray) throws TlsHandshakeError
+		let name = try selected.first() otherwise throw TlsHandshakeError.internalError
+
+		if not offered.contains(name) 'unoffered'
+			throw TlsHandshakeError.illegalParameter
+		end 'unoffered'
+
+		alpn = TlsAlpnChoice.negotiated(name)
+	end 'acceptApplicationProtocol'
+
+	function refuseRenegotiation() throws TlsHandshakeError
+		match role 'role'
+			client then try writer.writeAlert(TlsAlertLevel.warning, alert: TlsAlert.noRenegotiation)
+			server then throw TlsHandshakeError.unexpectedMessage
+		end 'role'
+	end 'refuseRenegotiation'
 
 	function requireConnected() throws TlsHandshakeError
 		if not isConnected() 'handshaking'

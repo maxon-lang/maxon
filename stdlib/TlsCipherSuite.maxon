@@ -89,6 +89,17 @@ public enum Tls12CipherSuite
 		end 'width'
 	end 'ivBytes'
 
+	module function signsWithRsa() returns bool
+		return match self 'authentication'
+			ecdheRsaAes128GcmSha256 or
+			ecdheRsaAes256GcmSha384 or
+			ecdheRsaChaCha20Poly1305Sha256 gives true
+			ecdheEcdsaAes128GcmSha256 or
+			ecdheEcdsaAes256GcmSha384 or
+			ecdheEcdsaChaCha20Poly1305Sha256 gives false
+		end 'authentication'
+	end 'signsWithRsa'
+
 	module function aeadKind() returns TlsAeadKind
 		return match self 'kind'
 			ecdheEcdsaAes128GcmSha256 or
@@ -100,6 +111,10 @@ public enum Tls12CipherSuite
 		end 'kind'
 	end 'aeadKind'
 end 'Tls12CipherSuite'
+
+module function tlsSuiteFitsKey(suite Tls12CipherSuite, algorithm X509KeyAlgorithm) returns bool
+	return suite.signsWithRsa() == (algorithm == X509KeyAlgorithm.rsa)
+end 'tlsSuiteFitsKey'
 
 module union TlsServerSuite
 	tls13(suite Tls13CipherSuite)

@@ -596,10 +596,17 @@ function appendCertificateVerify(body ByteArray, scheme TlsSignatureSchemeCode, 
 	try appendVector(body, prefix: TlsLengthPrefix.uint16, contents: signature)
 end 'appendCertificateVerify'
 
+module function tlsServerKeyExchangeParameters(namedGroup TlsGroupCode, publicKey ByteArray) returns ByteArray throws TlsEncodeError
+	var parameters = ByteArray.create()
+	appendUnsigned(parameters, value: tlsNamedCurveType, width: TlsWireWidth.uint8)
+	appendUnsigned(parameters, value: namedGroup, width: TlsWireWidth.uint16)
+	try appendVector(parameters, prefix: TlsLengthPrefix.uint8, contents: publicKey)
+
+	return parameters
+end 'tlsServerKeyExchangeParameters'
+
 function appendServerKeyExchange(body ByteArray, exchange Tls12ServerKeyExchange) throws TlsEncodeError
-	appendUnsigned(body, value: tlsNamedCurveType, width: TlsWireWidth.uint8)
-	appendUnsigned(body, value: exchange.namedGroup(), width: TlsWireWidth.uint16)
-	try appendVector(body, prefix: TlsLengthPrefix.uint8, contents: exchange.publicKey())
+	body.append(try tlsServerKeyExchangeParameters(exchange.namedGroup(), publicKey: exchange.publicKey()))
 	appendUnsigned(body, value: exchange.signatureScheme(), width: TlsWireWidth.uint16)
 	try appendVector(body, prefix: TlsLengthPrefix.uint16, contents: exchange.signature())
 end 'appendServerKeyExchange'
