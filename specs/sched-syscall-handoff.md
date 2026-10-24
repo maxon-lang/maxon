@@ -612,13 +612,93 @@ retaken=yes
 0
 ```
 
-<!-- test: a-child-wait-and-its-kill-hand-their-processor-off -->
+<!-- test: an-async-child-wait-leaves-the-sleeping-coroutine-running -->
 <!-- procs: 1 -->
 <!-- unsupported-targets: wasm32-wasi -->
-A streaming child's `waitWithTimeout` is a kernel wait on another process, and so is the wait for the kill
-its deadline fires. With one processor, the sentinel's sleep ends while the waiter sits in the kernel, so it
-prints ahead of the wait's return only if that processor was handed off, and the retake count read around
-the wait says the hand-off happened there rather than at the spawn.
+Two `async` coroutines share one strand: a streaming child's `waitWithTimeout` in the first and a `sleep` in the
+second. The wait parks its coroutine rather than holding the machine, so the sleep ends while the child is
+still running and prints ahead of the wait's return. A wait that held the machine would keep the sleeper from
+starting until the deadline killed the child, because a strand's coroutines run on the one machine that holds it
+and a processor handed off from that machine cannot carry them.
+```maxon
+let deadlineMs = 1500
+let napMs = 300
+
+function spawnLongChild() returns StreamingSubprocess throws SubprocessError
+	var argv = StringArray.create()
+
+	#if os(Windows)
+		argv.push("-n")
+		argv.push("30")
+		argv.push("127.0.0.1")
+		return try StreamingSubprocess.spawn(Executable.name("ping"), arguments: argv)
+	#else
+		argv.push("30")
+		return try StreamingSubprocess.spawn(Executable.path(FilePath from "/bin/sleep"), arguments: argv)
+	#endif
+end 'spawnLongChild'
+
+function endedByItsDeadline(child StreamingSubprocess) returns bool
+	_ = try child.waitWithTimeout(deadlineMs) otherwise (e) 'ended'
+		return match e 'why'
+			timeout gives true
+			executableNotFound or
+				spawnFailed or
+				ioFailed or
+				inputTooLarge or
+				endOfStream gives false
+		end 'why'
+	end 'ended'
+
+	return false
+end 'endedByItsDeadline'
+
+function outlast(child StreamingSubprocess) returns bool
+	print("W: waiting\n")
+
+	let killed = endedByItsDeadline(child)
+
+	print("W: wait returned\n")
+
+	return killed
+end 'outlast'
+
+function nap() returns bool
+	sleep(napMs)
+	print("S: slept\n")
+
+	return true
+end 'nap'
+
+function main() returns ExitCode
+	var child = try spawnLongChild() otherwise return 1
+	let watcher = async outlast(child)
+	let napper = async nap()
+	let slept = await napper
+	let killed = await watcher
+
+	child.release()
+	print("slept={slept} killed={killed}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+W: waiting
+S: slept
+W: wait returned
+slept=true killed=true
+```
+```exitcode
+0
+```
+
+<!-- test: a-child-wait-parks-instead-of-holding-a-processor -->
+<!-- procs: 1 -->
+<!-- unsupported-targets: wasm32-wasi -->
+A streaming child's `waitWithTimeout` parks its green thread until the child exits or the deadline kills it.
+With one processor, the sentinel's sleep ends while the waiter is parked and prints ahead of the wait's
+return, and `blocked=yes` says the wait really lasted until the deadline rather than returning early.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -669,11 +749,9 @@ type Waiter
 
 		print("W: waiting\n")
 		let tailReply = try sentinel.ping() otherwise panic("an open mailbox with room takes the send")
-		let retakesBefore = Scheduler.counters().retakes
 		let start = Clock.nowMs()
 		let killed = endedByItsDeadline(child)
 		let waitedMs = Clock.elapsedMs(start)
-		let retakesDuring = Scheduler.counters().retakes - retakesBefore
 		child.release()
 		print("W: wait returned\n")
 
@@ -684,13 +762,7 @@ type Waiter
 			blocked = "yes"
 		end 'blocked'
 
-		var retaken = "no"
-
-		if retakesDuring > 0 'retaken'
-			retaken = "yes"
-		end 'retaken'
-
-		print("done sibling={tail} killed={killed} blocked={blocked} retaken={retaken}\n")
+		print("done sibling={tail} killed={killed} blocked={blocked}\n")
 		return 1
 	end 'outlast'
 end 'Waiter'
@@ -726,7 +798,7 @@ end 'main'
 W: waiting
 S: sentinel ran
 W: wait returned
-done sibling=1 killed=true blocked=yes retaken=yes
+done sibling=1 killed=true blocked=yes
 ```
 ```exitcode
 0

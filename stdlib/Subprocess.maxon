@@ -1162,14 +1162,16 @@ public type StreamingSubprocess
 		end 'stillOpen'
 	end 'closeStdin'
 
-	/// Block indefinitely until the child exits, then return its exit code.
-	/// Throws `SubprocessError.ioFailed` on a wait error (e.g. the runtime
-	/// can no longer locate the handle).
+	/// Park the calling green thread until the child exits, then return its
+	/// exit code. Throws `SubprocessError.ioFailed` on a wait error (e.g. the
+	/// runtime can no longer locate the handle).
 	public function wait() returns ExitInt throws SubprocessError
 		return try Self.waitWithTimeout(self, timeoutMs: 0)
 	end 'wait'
 
-	/// Block until the child exits or `timeoutMs` elapses (0 = wait forever).
+	/// Park the calling green thread until the child exits or `timeoutMs`
+	/// elapses (0 = wait forever); other green threads, `async` coroutines of
+	/// the same strand included, keep running meanwhile.
 	/// Returns the exit code on success; throws `SubprocessError.timeout` if
 	/// the timeout fires (the runtime forcibly terminates the child's whole
 	/// process tree in that case) or `SubprocessError.ioFailed` on a wait

@@ -3273,19 +3273,20 @@ end 'buildX64LinuxProcReapChunk'
 // mrt_host_proc_await(rcx = object, rdx = timeoutMs) -> rax = WAIT_OBJECT_0 | WAIT_TIMEOUT
 // ==========================================================================
 
-// ⭐⭐ **`WaitForSingleObject` ON A CHILD, AND ALL THREE TIMEOUTS ITS CALLERS ACTUALLY USE.** They are three
-// different questions and answering them with one poll is a WRONG ANSWER rather than a slow one:
+// ⭐⭐ **`WaitForSingleObject` ON A CHILD, AND THE THREE TIMEOUTS THAT ARE DIFFERENT QUESTIONS.** Answering
+// them with one poll is a WRONG ANSWER rather than a slow one:
 //
-//   • **0 — a POLL.** `__gt_subp_wait_collect`'s exit test drives its own loop.
+//   • **0 — a POLL.** The exit tests of `__gt_subp_wait_collect` and `__gt_subp_wait_exit` drive their own
+//     loops.
 //   • **INFINITE — a real block**, inside the wait syscall itself. There is nothing to poll for: the kernel
 //     already has the notification.
 //   • **anything else — a bounded poll.** A deadline no POSIX wait takes, so it is a scan and a millisecond
 //     sleep.
 //
-// ⚠ **THE INFINITE ARM BLOCKS THE OS THREAD, AND ITS CALLERS ARE WHY IT MAY.** `__gt_subp_wait` and
-// `__gt_subp_wait_exit` are the streaming API's explicit `wait()`, reached with the child's output already
-// drained, so the block is bounded by the child's own exit. It is the one child wait on this lane that does
-// NOT go through the poller's child band, which every other one does.
+// ⚠ **THE INFINITE ARM BLOCKS THE OS THREAD, AND ITS CALLERS ARE WHY IT MAY.** `__gt_subp_wait` is reached
+// with the child's output already drained, so the block is bounded by the child's own exit, and the wait
+// that follows a kill is bounded by the teardown the kill started. It is the one child wait on this lane that
+// does NOT go through the poller's child band, which every other one does.
 //
 // ⚠ **IT CONTAINS NO OS CALL AT ALL** — two calls and a compare — which is why the arm64 pair share one body.
 function buildX64LinuxProcAwaitChunk() returns FunctionCodeChunk

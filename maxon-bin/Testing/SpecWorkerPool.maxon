@@ -17,8 +17,8 @@
 // ⭐⭐ THIS PROCESS RUNS MAXON ON EXACTLY ONE M — AND ⛔ NOT BECAUSE "the compiler IS SINGLE-M"
 // ============================================================================================
 //
-// Four notes below lean on there being ONE OS thread running this file's Maxon — `JobKillGraceMs`,
-// `drainResultsThunk`, the `spokeAt` slot array's declaration and `silenceMs`. ⛔ NOT because the
+// Two notes below lean on there being ONE OS thread running this file's Maxon — `drainResultsThunk`
+// and the `spokeAt` slot array's declaration. ⛔ NOT because the
 // scheduler is single-M: the default processor count is the machine's, and a green-thread program
 // really does run on several Ms.
 //
@@ -28,7 +28,7 @@
 // member of its strand. `SchedRuntime.maxon`'s header states the invariant.
 //
 // ⇒ the dispatcher and its drains interleave only at the drains' own yield points, which is exactly what
-// the four notes need. **A `spawn` added to this harness would end all four at once.**
+// the two notes need. **A `spawn` added to this harness would end both at once.**
 //
 // ============================================================================================
 // THE CONTRACT: `--workers=1` AND `--workers=N` PRINT BYTE-IDENTICAL STDOUT
@@ -253,10 +253,9 @@ let TestProgressDeadlineMs = SpecSpawnTimeoutMs + SlowCompileGraceMs
 // can exercise), and adding one to reach a kill this call already performs would be a second door onto
 // one act.
 //
-// It is SHORT because the call BLOCKS the one OS thread this process runs Maxon on (see the one-M
-// section at the top of this file for why there is exactly one — ⛔ not because the compiler is single-M)
-// — and a worker that has gone silent for its whole progress bound is not about to answer in the next
-// 50 ms. It is not zero because zero means "wait for ever" to `waitWithTimeout`.
+// It is SHORT because a worker that has gone silent for its whole progress bound is not about to answer
+// in the next 50 ms, and the progress sweep waits this long for each slot it gives up on, in turn. It is
+// not zero because zero means "wait for ever" to `waitWithTimeout`.
 let JobKillGraceMs = 50
 
 // The headroom the pool's idleness bound keeps over the interval it measures. The two guards are
@@ -2313,13 +2312,11 @@ end 'spawnReadyWorker'
 // ⚠ **IT CLAMPS, AND `spokeAt`'s WRITER IS WHY.** `Clock.elapsedMs` clamps for the same reason and
 // says so (*"guards against bugs"*), but there both readings are taken by one thread. Here `since` is
 // stamped by the slot's DRAIN GREEN THREAD while `now` is read by the dispatcher, so "the stamp is no
-// newer than the park instant" is an ORDERING property rather than an arithmetic one — it holds today
-// only because nothing between the two yields (`waitWithTimeout` BLOCKS this process's one M rather than
-// yielding, which is what `JobKillGraceMs` says about it — and the one-M section at the top of this file
-// says why there is one). That is a property of the current code, not
-// of the invariant, and what it would cost if it lapsed is not a wrong number: `InstantMs` is
-// `int(0 to u64.max)`, so a subtraction going below the range PANICS — taking the whole run down from
-// inside the one guard whose job is to stop a single bad worker doing exactly that.
+// newer than the park instant" is an ORDERING property rather than an arithmetic one, and it does not
+// hold: the sweep parks in `terminateAndReap` between slots, and a drain can stamp its slot meanwhile.
+// Without the clamp that is not a wrong number: `InstantMs` is `int(0 to u64.max)`, so a subtraction
+// going below the range PANICS — taking the whole run down from inside the one guard whose job is to
+// stop a single bad worker doing exactly that.
 //
 // It is also what keeps the sweep's MESSAGE and its PREDICATE from measuring two different intervals,
 // which is the distinction `abortOnWedgedPool` states about `idleFor`: there is one subtraction and

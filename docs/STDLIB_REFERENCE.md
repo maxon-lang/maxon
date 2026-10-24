@@ -1920,7 +1920,7 @@ can start. A program starts processes through `Subprocess`, which reports its fa
 ### StreamingSubprocess
 
 A child whose standard streams stay open as pipes the caller drives, for a long-lived worker that answers
-request after request. A read parks the calling green thread until data arrives.
+request after request. A read or a wait parks the calling green thread, so its siblings keep running.
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
@@ -1940,8 +1940,8 @@ request after request. A read parks the calling green thread until data arrives.
 | `pollExit()` | `ExitPoll` | — | Whether the child has exited, without blocking or killing it. A released handle answers `running`. On Linux and macOS a child a signal killed reports `exited(128 + signal)`. |
 | `pollTermination()` | `TerminationPoll` | — | As `pollExit()`, answering how the child ended: `signalled(signal)` for a child a signal killed on Linux and macOS, `exited(code)` otherwise. |
 | `closeStdin()` | — | — | Close the child's stdin so it sees end of input. Idempotent. |
-| `wait()` | exit code | `SubprocessError` | Block until the child exits. |
-| `waitWithTimeout(timeoutMs DurationMs)` | exit code | `SubprocessError` | Throws `timeout` and kills the child's whole process tree when the deadline passes; `0` waits forever. The thrown `timeout` carries empty output fields — a streaming child's bytes belong to the caller draining the streams. |
+| `wait()` | exit code | `SubprocessError` | Park the calling green thread until the child exits. |
+| `waitWithTimeout(timeoutMs DurationMs)` | exit code | `SubprocessError` | Parks the calling green thread until the child exits. Throws `timeout` and kills the child's whole process tree when the deadline passes; `0` waits forever. The thrown `timeout` carries empty output fields — a streaming child's bytes belong to the caller draining the streams. |
 | `release()` | — | — | Free the OS handle. Idempotent. Forgetting it leaks the handle and a process slot. |
 | `handle`, `released` | fields | — | The raw handle and whether it has been released. |
 

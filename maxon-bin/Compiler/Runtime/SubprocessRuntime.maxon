@@ -135,10 +135,9 @@ let SubprocessStdlibFileName = "Subprocess.maxon"
 // killed process conventionally reports.
 let SubpKilledExitCode = 1
 
-// `WaitForSingleObject`'s two answers this file distinguishes: the object became signalled, or the timeout
-// elapsed. Named because a bare `0`/`0x102` at a compare says nothing about which.
+// `WaitForSingleObject`'s answer for an object that became signalled. Named because a bare `0` at a
+// compare says nothing about which.
 let WaitObjectSignalled = 0
-let WaitTimedOut = 0x102
 
 // The `dwCreationFlags` bits `stdlib/Subprocess.maxon`'s `SpawnFlag` surface maps onto. The SURFACE
 // values (bit 0 hide window, bit 1 new process group, bit 2 detach, bit 3 traced) are the corpus's; these
@@ -1441,18 +1440,33 @@ end 'emitSubpWaitForTheChild'
 // `__gt_subp_wait_exit(handle, timeoutMs) -> exitCode | -2 (timed out) | -1 (bad handle)` —
 // `__Builtins.subprocessWaitExit`. `timeoutMs == 0` means wait for ever,
 // `stdlib/Subprocess.maxon`'s convention for the whole family.
-function buildSubpWaitExit(module StdModule)
+//
+// The wait parks the calling green thread and never holds its machine. A strand's `async` coroutines all
+// run on the one machine that holds the strand, so a kernel wait there would stall every sibling coroutine,
+// and a processor handed off from that machine cannot carry them. It sleeps green on the completion-port
+// lane and suspends on the child's poll source elsewhere, like `__gt_subp_wait_collect`. The handle is
+// checked again after every park: a `release()` from a sibling can run while this wait is parked.
+function buildSubpWaitExit(module StdModule, target Target)
 	var func = IrFunction.createFromStd(SubpWaitExitName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var bad = module.addBlock(func, label: b"subpbad", heat: BlockHeat.normal)
-	var useTimeout = module.addBlock(func, label: b"subpwtimeout", heat: BlockHeat.normal)
-	var doWait = module.addBlock(func, label: b"subpwwait", heat: BlockHeat.normal)
-	var waitVerdict = module.addBlock(func, label: b"subpwverdict", heat: BlockHeat.normal)
-	var waitFailed = module.addBlock(func, label: b"subpwfailed", heat: BlockHeat.normal)
+	var setDeadline = module.addBlock(func, label: b"subpwdeadline", heat: BlockHeat.normal)
+	var loopHdr = module.addBlock(func, label: b"subpwhdr", heat: BlockHeat.normal)
+	var released = module.addBlock(func, label: b"subpwreleased", heat: BlockHeat.normal)
+	var releasedFree = module.addBlock(func, label: b"subpwreleasedfree", heat: BlockHeat.normal)
+	var pollExit = module.addBlock(func, label: b"subpwpoll", heat: BlockHeat.normal)
+	var deadlineCheck = module.addBlock(func, label: b"subpwdl", heat: BlockHeat.normal)
+	var deadlineSet = module.addBlock(func, label: b"subpwdlset", heat: BlockHeat.normal)
+	var killIt = module.addBlock(func, label: b"subpwkill", heat: BlockHeat.normal)
+	var killUnconfirmed = module.addBlock(func, label: b"subpwkillunconfirmed", heat: BlockHeat.normal)
+	var abandon = module.addBlock(func, label: b"subpwabandon", heat: BlockHeat.normal)
 	var timedOut = module.addBlock(func, label: b"subpwtmo", heat: BlockHeat.normal)
+	var timedOutFree = module.addBlock(func, label: b"subpwtmofree", heat: BlockHeat.normal)
+	var idle = module.addBlock(func, label: b"subpwidle", heat: BlockHeat.normal)
 	var exited = module.addBlock(func, label: b"subpwexit", heat: BlockHeat.normal)
+	var reap = module.addBlock(func, label: b"subpwreap", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let handle = 0
@@ -1462,45 +1476,75 @@ function buildSubpWaitExit(module StdModule)
 	module.setTerminator(bad, op: StdOp.ret(failure))
 
 	var good = emitSubpRequireHandle(module, func: func, ids: ids, cur: entry, handle: handle, whenBad: bad)
+	let state = emitSubpScratch(module, block: good, ids: ids, size: WcBytes)
+	emitStoreField(module, block: good, record: state, offset: WcHandle, value: handle)
 
-	// The wait's duration rides into `doWait` as a block argument rather than the scratch record: one
-	// value across one merge with no loop near it, and `WcDeadline` is an absolute tick count, which
-	// this is not.
-	let waitForever = emitCompareWithConstant(module, block: good, value: timeoutMs, pred: StdCmpPred.eq, against: 0, ids: ids)
-	let infinite = emitConst(module, block: good, value: SubpWaitInfinite, ids: ids)
-	module.setTerminator(good, op: StdOp.condBranch(waitForever, thenBlockId: doWait.id, elseBlockId: useTimeout.id))
-	good.branchEdges.push(BranchEdge.create(doWait.id, argIds: argsOf(infinite)))
+	let streamDone = emitConst(module, block: good, value: 1, ids: ids)
+	emitStoreField(module, block: good, record: state, offset: WcOutDone, value: streamDone)
+	emitStoreField(module, block: good, record: state, offset: WcErrDone, value: streamDone)
 
-	module.setTerminator(useTimeout, op: StdOp.branch(doWait.id))
-	useTimeout.branchEdges.push(BranchEdge.create(doWait.id, argIds: argsOf(timeoutMs)))
+	let startMs = ids.mint()
+	module.appendOp(good, op: StdOp.osTickCountMs(startMs))
+	emitStoreField(module, block: good, record: state, offset: WcStartMs, value: startMs)
 
-	let waitMs = ids.mint()
-	doWait.blockArgs.push(IrBlockArg.create(waitMs, argType: StdType.i64))
-	let slot = emitSubpSlotOf(module, block: doWait, ids: ids, handle: handle)
-	let hProcess = emitLoadField(module, block: doWait, record: slot, offset: SubpSlotHProcess, ids: ids)
-	let waitResult = ids.mint()
-	module.appendOp(doWait, op: StdOp.osWaitChild(waitResult, handleId: hProcess, timeoutMsId: waitMs))
-	emitBranchOnCompare(module, block: doWait, value: waitResult, pred: StdCmpPred.eq, against: WaitObjectSignalled, whenTrue: exited, whenFalse: waitVerdict, ids: ids)
+	var opened = emitSubpOpenChildSource(module, func: func, ids: ids, cur: good, target: target, state: state, handle: handle)
 
-	// `WAIT_TIMEOUT` and `WAIT_FAILED` are different answers: `waitWithTimeout` maps `-2` to
-	// `SubprocessError.timeout` and `-1` to `ioFailed`, so a failed wait must neither report a
-	// deadline nobody set nor terminate a child it knows nothing about.
-	emitBranchOnCompare(module, block: waitVerdict, value: waitResult, pred: StdCmpPred.eq, against: WaitTimedOut, whenTrue: timedOut, whenFalse: waitFailed, ids: ids)
+	emitBranchOnCompare(module, block: opened, value: timeoutMs, pred: StdCmpPred.eq, against: 0, whenTrue: loopHdr, whenFalse: setDeadline, ids: ids)
 
-	emitSubpRecordLastError(module, block: waitFailed, ids: ids)
-	let failure2 = emitConst(module, block: waitFailed, value: SubpFailure, ids: ids)
-	module.setTerminator(waitFailed, op: StdOp.ret(failure2))
+	let startD = emitLoadField(module, block: setDeadline, record: state, offset: WcStartMs, ids: ids)
+	let deadline = emitBin(module, block: setDeadline, a: startD, b: timeoutMs, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: setDeadline, record: state, offset: WcDeadline, value: deadline)
+	module.setTerminator(setDeadline, op: StdOp.branch(loopHdr.id))
 
-	var killed = emitSubpTerminateChild(module, func: func, cur: timedOut, ids: ids, handle: handle, unconfirmed: waitFailed)
-	let timedOutRc = emitConst(module, block: killed, value: SubpTimedOutRc, ids: ids)
-	module.setTerminator(killed, op: StdOp.ret(timedOutRc))
+	var live = emitSubpRequireHandle(module, func: func, ids: ids, cur: loopHdr, handle: emitLoadField(module, block: loopHdr, record: state, offset: WcHandle, ids: ids), whenBad: released)
 
-	let slotE = emitSubpSlotOf(module, block: exited, ids: ids, handle: handle)
-	let hProcessE = emitLoadField(module, block: exited, record: slotE, offset: SubpSlotHProcess, ids: ids)
-	let codePtr = emitLoadField(module, block: exited, record: slotE, offset: SubpSlotBytesOut, ids: ids)
-	module.appendOp(exited, op: StdOp.osProcessExitCode(hProcessE, codePtrId: codePtr))
-	let exitCode = emitLoadDword(module, block: exited, record: codePtr, offset: 0, ids: ids)
-	module.setTerminator(exited, op: StdOp.ret(exitCode))
+	emitSubpCloseChildSource(module, func: func, block: released, target: target, state: state, cont: releasedFree, ids: ids)
+	emitSlabFree(module, block: releasedFree, ptr: state, kind: SlabBufferKind.subprocessState, ids: ids)
+	module.setTerminator(releasedFree, op: StdOp.ret(emitConst(module, block: releasedFree, value: SubpFailure, ids: ids)))
+
+	let reported = emitLoadField(module, block: live, record: state, offset: WcChildExited, ids: ids)
+	emitBranchOnCompare(module, block: live, value: reported, pred: StdCmpPred.ne, against: 0, whenTrue: exited, whenFalse: pollExit, ids: ids)
+
+	let handleP = emitLoadField(module, block: pollExit, record: state, offset: WcHandle, ids: ids)
+	let slotP = emitSubpSlotOf(module, block: pollExit, ids: ids, handle: handleP)
+	let hProcessP = emitLoadField(module, block: pollExit, record: slotP, offset: SubpSlotHProcess, ids: ids)
+	let hasExited = emitSubpChildHasExited(module, block: pollExit, ids: ids, hProcess: hProcessP)
+	module.setTerminator(pollExit, op: StdOp.condBranch(hasExited, thenBlockId: exited.id, elseBlockId: deadlineCheck.id))
+
+	let deadlineD = emitLoadField(module, block: deadlineCheck, record: state, offset: WcDeadline, ids: ids)
+	emitBranchOnCompare(module, block: deadlineCheck, value: deadlineD, pred: StdCmpPred.eq, against: 0, whenTrue: idle, whenFalse: deadlineSet, ids: ids)
+
+	let nowMs = ids.mint()
+	module.appendOp(deadlineSet, op: StdOp.osTickCountMs(nowMs))
+	let deadlineS = emitLoadField(module, block: deadlineSet, record: state, offset: WcDeadline, ids: ids)
+	emitBranchOnCompareValues(module, block: deadlineSet, a: nowMs, pred: StdCmpPred.ge, b: deadlineS, whenTrue: killIt, whenFalse: idle, ids: ids)
+
+	var killed = emitSubpTerminateChild(module, func: func, cur: killIt, ids: ids, handle: emitLoadField(module, block: killIt, record: state, offset: WcHandle, ids: ids), unconfirmed: killUnconfirmed)
+	module.setTerminator(killed, op: StdOp.branch(timedOut.id))
+
+	emitSubpCloseChildSource(module, func: func, block: timedOut, target: target, state: state, cont: timedOutFree, ids: ids)
+	emitSlabFree(module, block: timedOutFree, ptr: state, kind: SlabBufferKind.subprocessState, ids: ids)
+	module.setTerminator(timedOutFree, op: StdOp.ret(emitConst(module, block: timedOutFree, value: SubpTimedOutRc, ids: ids)))
+
+	emitSubpRecordLastError(module, block: killUnconfirmed, ids: ids)
+	emitSubpCloseChildSource(module, func: func, block: killUnconfirmed, target: target, state: state, cont: abandon, ids: ids)
+	emitSlabFree(module, block: abandon, ptr: state, kind: SlabBufferKind.subprocessState, ids: ids)
+	module.setTerminator(abandon, op: StdOp.ret(emitConst(module, block: abandon, value: SubpFailure, ids: ids)))
+
+	match ioCompletionShape(target) 'idle'
+		completionPort then emitSubpIdleSleep(module, block: idle, cont: loopHdr, state: state, ids: ids)
+
+		inlineCompletion then emitSubpWaitForAnySource(module, func: func, ids: ids, cur: idle, state: state, cont: loopHdr)
+	end 'idle'
+
+	emitSubpCloseChildSource(module, func: func, block: exited, target: target, state: state, cont: reap, ids: ids)
+
+	let handleR = emitLoadField(module, block: reap, record: state, offset: WcHandle, ids: ids)
+	let slotR = emitSubpSlotOf(module, block: reap, ids: ids, handle: handleR)
+	let hProcessR = emitLoadField(module, block: reap, record: slotR, offset: SubpSlotHProcess, ids: ids)
+	let exitCode = emitSubpReportedExitCode(module, block: reap, slot: slotR, hProcess: hProcessR, ids: ids)
+	emitSlabFree(module, block: reap, ptr: state, kind: SlabBufferKind.subprocessState, ids: ids)
+	module.setTerminator(reap, op: StdOp.ret(exitCode))
 
 	module.functions.push(func)
 end 'buildSubpWaitExit'
@@ -3464,7 +3508,7 @@ export function installSubprocessRuntime(module StdModule, target Target)
 	buildSubpReadBytes(module, name: SubpReadExactOutBytesName, readerName: SubpReadExactName)
 	buildSubpReadBytes(module, name: SubpTryReadOutBytesName, readerName: SubpTryReadLineName)
 	buildSubpReadBytes(module, name: SubpTryReadErrBytesName, readerName: SubpTryReadErrLineName)
-	buildSubpWaitExit(module)
+	buildSubpWaitExit(module, target: target)
 	buildSubpExitPoll(module, tail: SubpExitTail.exitCode)
 	buildSubpExitPoll(module, tail: SubpExitTail.exitSignal)
 	buildSubpWaitCollect(module, target: target)

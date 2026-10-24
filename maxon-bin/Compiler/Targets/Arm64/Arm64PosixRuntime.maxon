@@ -1079,24 +1079,21 @@ end 'buildArm64PosixSpinPauseChunk'
 // mrt_host_proc_await(x0 = object, x1 = timeoutMs) -> x0 = WAIT_OBJECT_0 | WAIT_TIMEOUT
 // ==========================================================================
 
-// ⭐⭐ **`WaitForSingleObject` ON A CHILD, AND ALL THREE TIMEOUTS ITS CALLERS ACTUALLY USE.** They are three
-// different questions and answering them with one poll is a WRONG ANSWER rather than a slow one — MEASURED:
-// with the infinite arm polling once, `StreamingSubprocess.wait()` reported `WAIT_TIMEOUT` for a child that
-// was merely still exiting, and `__gt_subp_wait_exit` read that as a fired deadline, KILLED the child and
-// threw `SubprocessError.timeout`.
+// ⭐⭐ **`WaitForSingleObject` ON A CHILD, AND THE THREE TIMEOUTS THAT ARE DIFFERENT QUESTIONS.** Answering
+// them with one poll is a WRONG ANSWER rather than a slow one: an infinite arm that polled once reported
+// `WAIT_TIMEOUT` for a child that was merely still exiting.
 //
-//   • **0 — a POLL.** `__gt_subp_wait_collect`'s exit test drives its own loop and wants the state, not a
-//     wait.
-//   • **INFINITE — a real block**, inside the wait syscall itself. `__gt_subp_wait` and
-//     `__gt_subp_wait_exit(h, 0)` mean "until it exits", and there is nothing to poll for: the kernel already
-//     has the notification.
+//   • **0 — a POLL.** The exit tests of `__gt_subp_wait_collect` and `__gt_subp_wait_exit` drive their own
+//     loops and want the state, not a wait.
+//   • **INFINITE — a real block**, inside the wait syscall itself. `__gt_subp_wait` means "until it exits",
+//     and there is nothing to poll for: the kernel already has the notification.
 //   • **anything else — a bounded poll.** A deadline neither lane can hand to a POSIX wait, so it is a scan
 //     and a millisecond sleep.
 //
-// ⚠ **THE INFINITE ARM BLOCKS THE OS THREAD, AND ITS CALLERS ARE WHY IT MAY.** `__gt_subp_wait` and
-// `__gt_subp_wait_exit` are the streaming API's explicit `wait()`, reached with the child's output already
-// drained, so the block is bounded by the child's own exit. It is the one child wait on these lanes that does
-// NOT go through the poller's child band, which every other one does.
+// ⚠ **THE INFINITE ARM BLOCKS THE OS THREAD, AND ITS CALLERS ARE WHY IT MAY.** `__gt_subp_wait` is reached
+// with the child's output already drained, so the block is bounded by the child's own exit, and the wait
+// that follows a kill is bounded by the teardown the kill started. It is the one child wait on these lanes
+// that does NOT go through the poller's child band, which every other one does.
 //
 // ⚠ **IT CONTAINS NO OS CALL AT ALL**, which is why one body serves both lanes: two `bl`s and a compare.
 export function buildArm64PosixProcAwaitChunk() returns FunctionCodeChunk
