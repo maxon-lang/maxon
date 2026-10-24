@@ -2,12 +2,18 @@
 /// @category Network
 let tlsReadChunkBytes = 32768
 let tlsRecordMajorVersion = 3
+let tlsCloseNotifyDeadlineMs = 5000
 
 /// The ALPN protocol a handshake settled on.
 public union TlsApplicationProtocol
 	unnegotiated
 	negotiated(name String)
 end 'TlsApplicationProtocol'
+
+union TlsWriteHealth
+	intact
+	failed(cause TlsError)
+end 'TlsWriteHealth'
 
 /// An established TLS connection. Use it through a `var` from one green thread. A stream that goes
 /// out of scope closes its socket without a close_notify, which the peer reads as `truncated`;
@@ -23,11 +29,12 @@ public type TlsStream
 	var unread as ByteArray
 	var unreadConsumed as BytePos
 	var writeClosed as bool
+	var writeHealth as TlsWriteHealth
 	var closed as bool
 	var handshaking as bool
 
 	module static function establish(transport TcpClient, endpoint TlsEndpoint, peer TlsX509Peer, deadlineMs SocketDeadlineMs) returns TlsStream throws TlsError
-		var stream = Self{transport: transport, endpoint: endpoint, peer: peer, inbound: ByteArray.create(), consumed: 0, unread: ByteArray.create(), unreadConsumed: 0, writeClosed: false, closed: false, handshaking: true}
+		var stream = Self{transport: transport, endpoint: endpoint, peer: peer, inbound: ByteArray.create(), consumed: 0, unread: ByteArray.create(), unreadConsumed: 0, writeClosed: false, writeHealth: TlsWriteHealth.intact, closed: false, handshaking: true}
 
 		try stream.handshake(deadlineMs)
 
@@ -41,9 +48,7 @@ public type TlsStream
 
 	/// Send every byte of `data`, split into records of at most 16 KiB; returns the byte count.
 	public function send(data ByteArray) returns BytePos throws TlsError
-		if closed or writeClosed 'unwritable'
-			throw TlsError.closed
-		end 'unwritable'
+		try requireWritable()
 
 		if data.isEmpty() 'nothing'
 			return 0
@@ -110,29 +115,33 @@ public type TlsStream
 
 	/// Make a read that waits longer than `milliseconds` throw `timedOut`; the stream stays usable. `0` clears it.
 	public function setReadDeadline(milliseconds SocketDeadlineMs) throws TlsError
+		if closed 'unreadable'
+			throw TlsError.closed
+		end 'unreadable'
+
 		try transport.setReadDeadline(milliseconds) otherwise (failure) 'refused'
 			throw tlsNetworkFailure(failure)
 		end 'refused'
 	end 'setReadDeadline'
 
-	/// The same for writes.
+	/// Make a write that cannot finish within `milliseconds` of this call throw `timedOut`. `0` clears it.
 	public function setWriteDeadline(milliseconds SocketDeadlineMs) throws TlsError
-		try transport.setWriteDeadline(milliseconds) otherwise (failure) 'refused'
-			throw tlsNetworkFailure(failure)
-		end 'refused'
+		if closed 'unwritable'
+			throw TlsError.closed
+		end 'unwritable'
+
+		try applyWriteDeadline(milliseconds)
 	end 'setWriteDeadline'
 
 	/// Send close_notify and stop sending; the peer reads the end of the stream while this side can still `recv`.
 	public function shutdownWrite() throws TlsError
-		if closed or writeClosed 'unwritable'
-			throw TlsError.closed
-		end 'unwritable'
+		try requireWritable()
 
 		try endpoint.session().close() otherwise (failure) 'refused'
 			throw refuse(failure)
 		end 'refused'
 
-		try flush()
+		try flushWithinCloseDeadline()
 
 		writeClosed = true
 
@@ -166,11 +175,40 @@ public type TlsStream
 	end 'closeAfterDraining'
 
 	function announceClose()
-		if not writeClosed 'announce'
-			try endpoint.session().close() otherwise ignore
-			try flush() otherwise ignore
-		end 'announce'
+		if writeClosed 'announced'
+			return
+		end 'announced'
+
+		try requireIntactWrites() otherwise return
+		try endpoint.session().close() otherwise ignore
+		try flushWithinCloseDeadline() otherwise ignore
 	end 'announceClose'
+
+	function requireWritable() throws TlsError
+		if closed or writeClosed 'unwritable'
+			throw TlsError.closed
+		end 'unwritable'
+
+		try requireIntactWrites()
+	end 'requireWritable'
+
+	function requireIntactWrites() throws TlsError
+		match writeHealth 'health'
+			intact then return
+			failed(cause) then throw cause
+		end 'health'
+	end 'requireIntactWrites'
+
+	function applyWriteDeadline(milliseconds SocketDeadlineMs) throws TlsError
+		try transport.setWriteDeadline(milliseconds) otherwise (failure) 'refused'
+			throw tlsNetworkFailure(failure)
+		end 'refused'
+	end 'applyWriteDeadline'
+
+	function flushWithinCloseDeadline() throws TlsError
+		try applyWriteDeadline(tlsCloseNotifyDeadlineMs)
+		try flush()
+	end 'flushWithinCloseDeadline'
 
 	function handshake(deadlineMs SocketDeadlineMs) throws TlsError
 		try setReadDeadline(deadlineMs)
@@ -201,7 +239,7 @@ public type TlsStream
 	function refuse(failure TlsHandshakeError) returns TlsError
 		closed = true
 
-		try flush() otherwise ignore
+		try flushWithinCloseDeadline() otherwise ignore
 
 		lingerForThePeer(transport)
 		transport.close()
@@ -222,6 +260,8 @@ public type TlsStream
 			return
 		end 'nothingQueued'
 
+		try requireIntactWrites()
+
 		var wire = ByteArray.create()
 
 		for record in records 'eachRecord'
@@ -229,7 +269,11 @@ public type TlsStream
 		end 'eachRecord'
 
 		_ = try transport.send(String.from(wire)) otherwise (failure) 'refused'
-			throw transportFailure(failure, ordinary: tlsNetworkFailure(failure))
+			let cause = transportFailure(failure, ordinary: tlsNetworkFailure(failure))
+
+			writeHealth = TlsWriteHealth.failed(cause)
+
+			throw cause
 		end 'refused'
 	end 'flush'
 

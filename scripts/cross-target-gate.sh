@@ -222,7 +222,17 @@ fi
 # on a box where WSL works fine.
 banner "x64-linux (WSL) — suite"
 if [ "$IS_WINDOWS" = 1 ] && MSYS_NO_PATHCONV=1 wsl -e /bin/true >/dev/null 2>&1; then
-	if "$MAXON" spec-test --target=x64-linux ${SPEC_FILTER[@]+"${SPEC_FILTER[@]}"} && ir_suite --target=x64-linux; then
+	WSL_ENV=(env MSYS_NO_PATHCONV=1)
+	wsl_openssl="$(MSYS_NO_PATHCONV=1 wsl --cd "$(cygpath -w "$REPO_ROOT")" -e sh scripts/openssl-for-interop.sh)" || wsl_openssl=""
+
+	if [ -n "$wsl_openssl" ]; then
+		echo "x64-linux: specs/tls-interop.md spawns $wsl_openssl inside WSL (MAXON_OPENSSL, forwarded through WSLENV)."
+		WSL_ENV+=("MAXON_OPENSSL=$wsl_openssl" "WSLENV=MAXON_OPENSSL${WSLENV:+:$WSLENV}")
+	else
+		echo "x64-linux: WSL has no OpenSSL 1.1.1 or later, so specs/tls-interop.md cannot pass on this lane — install openssl in the distro." >&2
+	fi
+
+	if "${WSL_ENV[@]}" "$MAXON" spec-test --target=x64-linux ${SPEC_FILTER[@]+"${SPEC_FILTER[@]}"} && ir_suite --target=x64-linux; then
 		row "x64-linux" "PASS" "suite via WSL"
 	else
 		fail_row "x64-linux" "suite via WSL (exit $?)"

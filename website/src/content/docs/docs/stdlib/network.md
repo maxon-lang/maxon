@@ -225,22 +225,22 @@ bytes are the application data, and a write is split into records of at most 16 
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
-| `send(data String)`, `send(data ByteArray)` | `BytePos` | `TlsError` | Send every byte; returns the count. `closed` after `close` or `shutdownWrite`. |
+| `send(data String)`, `send(data ByteArray)` | `BytePos` | `TlsError` | Send every byte; returns the count. `closed` after `close` or `shutdownWrite`. A send that fails part-way, at its write deadline or on a transport error, fails the write side for good: this call throws the failure and every later `send` and `shutdownWrite` throws the same one, because the peer may hold part of a record. |
 | `recv(bufferSize RecvCapacity)` | `String` | `TlsError` | Between one and `bufferSize` bytes of application data. |
 | `recvBytes(bufferSize RecvCapacity)` | `ByteArray` | `TlsError` | The same bytes, unconverted. After the peer's close_notify and the data before it, `connectionClosed`; a TCP connection that ends without one, `truncated`. |
 | `protocol()` | `TlsProtocol` | — | `tls13` or `tls12`, whichever was negotiated. |
 | `cipherSuite()` | `TlsCipherSuite` | — | `tls13(suite)` with a `Tls13CipherSuite`, or `tls12(suite)` with a `Tls12CipherSuite`. |
 | `applicationProtocol()` | `TlsApplicationProtocol` | — | `negotiated(name)` or `unnegotiated`. |
 | `peerCertificates()` | `ByteArrays` | — | The chain the peer presented, DER, in the order sent: the server's for a client, the client's (none when it presented none) for a server. |
-| `setReadDeadline(milliseconds SocketDeadlineMs)` | — | `TlsError` | A read that waits longer than this throws `timedOut`; the stream stays usable. `0` clears it. |
-| `setWriteDeadline(milliseconds SocketDeadlineMs)` | — | `TlsError` | The same for writes. |
-| `shutdownWrite()` | — | `TlsError` | Send close_notify and stop sending: the peer reads the end of the stream while this side can still `recv`. |
-| `close()` | — | — | Send close_notify and close the connection. Idempotent. |
+| `setReadDeadline(milliseconds SocketDeadlineMs)` | — | `TlsError` | A read that waits longer than this throws `timedOut`; the stream stays usable. Measured from this call; `0` clears it. `closed` once the stream is closed. |
+| `setWriteDeadline(milliseconds SocketDeadlineMs)` | — | `TlsError` | A write that cannot finish within this many milliseconds of this call throws `timedOut` and fails the write side (see `send`). Measured from this call; `0` clears it. `closed` once the stream is closed. |
+| `shutdownWrite()` | — | `TlsError` | Send close_notify and stop sending: the peer reads the end of the stream while this side can still `recv`. The close_notify is written under a write deadline of 5 seconds, which replaces the one set; a peer that has stopped reading ends it with `timedOut`. |
+| `close()` | — | — | Send close_notify, under a write deadline of 5 seconds, and close the connection; a stream whose write side has failed sends none. Idempotent. |
 
 `TlsApplicationProtocol` is a union: `unnegotiated`, or `negotiated(name String)`. `TlsCipherSuite` is a union of
 the two suite enums. A stream that goes out of scope closes its socket as a `TcpClient` does, without a close_notify, which
 the peer reads as `truncated`; `close()` is how a peer is told the data is complete. A fatal alert, from the peer
-or found by this side, ends the stream: the error is thrown once and every later call throws `closed`.
+or found by this side, ends the stream: the error is thrown once and every later call, the deadline setters included, throws `closed`.
 
 ```maxon
 function main() returns ExitCode
@@ -288,6 +288,7 @@ union TlsError implements Error
 	truncated
 	closed
 	trustStoreUnavailable
+	entropyUnavailable
 	invalidConfiguration
 	invalidCertificate
 	invalidPrivateKey
@@ -307,9 +308,10 @@ end 'TlsError'
 | `truncated` | The TCP connection ended without a close_notify, so the data may be incomplete. |
 | `closed` | The stream was closed, or ended in an error that was already thrown. |
 | `trustStoreUnavailable` | The system roots cannot be read. |
+| `entropyUnavailable` | The operating system refused the random bytes the handshake needs, before anything was sent: no alert goes out. |
 | `invalidConfiguration` | An option no handshake could use. |
 | `invalidCertificate`, `invalidPrivateKey`, `invalidPem` | A `TlsIdentity` input could not be used. |
-| `certificateRejected(reason)` | This side refused the peer's chain, for the `X509VerifyError` `reason`: `hostnameMismatch`, `unknownAuthority`, `expired`, and the others. The alert sent is `bad_certificate`, `unknown_ca` or `certificate_expired`. |
+| `certificateRejected(reason)` | This side refused the peer's chain, for the `X509VerifyError` `reason`: `hostnameMismatch`, `unknownAuthority`, `expired`, and the others. The alert sent is `bad_certificate`, `unknown_ca`, `certificate_expired` or `unsupported_certificate`. |
 | `protocolError(alert)` | This side ended the connection and sent `alert`: a malformed or unexpected message, no common version (`protocolVersion`), no common ALPN protocol (`noApplicationProtocol`), a missing client certificate (`certificateRequired`, `handshakeFailure`), a record longer than a record can be (`recordOverflow`). |
 | `peerAlert(alert)` | The peer sent a fatal alert, or close_notify before the handshake finished. In TLS 1.3 a server decides about a client certificate after the client's handshake is complete, so the client reads that alert from its first `recv`. |
 | `peerAlertUnrecognised(code)` | The peer sent an alert whose code `TlsAlert` does not name. |

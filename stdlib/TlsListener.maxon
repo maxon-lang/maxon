@@ -100,7 +100,7 @@ public type TlsListener
 			throw tlsNetworkFailure(failure)
 		end 'refused'
 
-		let entropy = try TlsServerEntropy.fresh(config) otherwise throw TlsError.protocolError(TlsAlert.internalError)
+		let entropy = try TlsServerEntropy.fresh(config) otherwise throw TlsError.entropyUnavailable
 		var peer = TlsX509Peer.create(clientRoots.clone(), now: verificationTime.seconds(), purpose: X509Purpose.clientAuth)
 		var endpoint = try TlsServerHandshake.create(config.clone(), entropy: entropy, peer: peer) otherwise throw TlsError.invalidConfiguration
 

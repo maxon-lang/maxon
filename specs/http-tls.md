@@ -95,6 +95,7 @@ function describe(error TlsError) returns String
 		truncated or
 		closed or
 		trustStoreUnavailable or
+		entropyUnavailable or
 		invalidConfiguration or
 		invalidCertificate or
 		invalidPrivateKey or
@@ -291,6 +292,7 @@ function describe(error TlsError) returns String
 		truncated or
 		closed or
 		trustStoreUnavailable or
+		entropyUnavailable or
 		invalidConfiguration or
 		invalidCertificate or
 		invalidPrivateKey or
@@ -494,6 +496,7 @@ function describe(error TlsError) returns String
 		truncated or
 		closed or
 		trustStoreUnavailable or
+		entropyUnavailable or
 		invalidConfiguration or
 		invalidCertificate or
 		invalidPrivateKey or
@@ -697,6 +700,7 @@ function describe(error TlsError) returns String
 		truncated or
 		closed or
 		trustStoreUnavailable or
+		entropyUnavailable or
 		invalidConfiguration or
 		invalidCertificate or
 		invalidPrivateKey or
@@ -895,6 +899,7 @@ function describe(error TlsError) returns String
 		truncated or
 		closed or
 		trustStoreUnavailable or
+		entropyUnavailable or
 		invalidConfiguration or
 		invalidCertificate or
 		invalidPrivateKey or
@@ -1142,6 +1147,7 @@ function describe(error TlsError) returns String
 		truncated or
 		closed or
 		trustStoreUnavailable or
+		entropyUnavailable or
 		invalidConfiguration or
 		invalidCertificate or
 		invalidPrivateKey or
@@ -1408,6 +1414,7 @@ function describe(error TlsError) returns String
 		truncated or
 		closed or
 		trustStoreUnavailable or
+		entropyUnavailable or
 		invalidConfiguration or
 		invalidCertificate or
 		invalidPrivateKey or
@@ -1512,7 +1519,6 @@ function fetch(method HttpMethod, url String, body String, options TlsClientOpti
 end 'fetch'
 
 let ExtraBytes = 200000
-let RefusalMs = 300
 
 function filler() returns String
 	var text = StringBuilder.create()
@@ -1526,20 +1532,23 @@ end 'filler'
 
 function plainBytesHeard(port NetworkPort) returns String
 	var client = try TcpClient.connect("127.0.0.1", port: port) otherwise return "connect failed"
+	let padding = filler()
+
+	try client.setReadDeadline(5000) otherwise return "deadline refused"
 
 	_ = try client.send("GET / HTTP/1.1\r\nHost: x\r\n\r\n") otherwise (error) 'headUnsent'
 		return "send {error.name}"
 	end 'headUnsent'
 
-	sleep(RefusalMs)
+	let alert = try client.recv(1024) otherwise (error) 'unanswered'
+		return "no alert {error.name}"
+	end 'unanswered'
 
-	_ = try client.send(filler()) otherwise (error) 'unsent'
+	_ = try client.send(padding) otherwise (error) 'unsent'
 		return "send {error.name}"
 	end 'unsent'
 
-	try client.setReadDeadline(5000) otherwise return "deadline refused"
-
-	var heard = ByteArray.create()
+	var heard = alert.toByteArray()
 
 	while true 'reading'
 		let chunk = try client.recv(1024) otherwise break
@@ -1683,6 +1692,7 @@ function describe(error TlsError) returns String
 		truncated or
 		closed or
 		trustStoreUnavailable or
+		entropyUnavailable or
 		invalidConfiguration or
 		invalidCertificate or
 		invalidPrivateKey or
@@ -1903,6 +1913,7 @@ function describe(error TlsError) returns String
 		truncated or
 		closed or
 		trustStoreUnavailable or
+		entropyUnavailable or
 		invalidConfiguration or
 		invalidCertificate or
 		invalidPrivateKey or
@@ -2178,6 +2189,7 @@ function describe(error TlsError) returns String
 		truncated or
 		closed or
 		trustStoreUnavailable or
+		entropyUnavailable or
 		invalidConfiguration or
 		invalidCertificate or
 		invalidPrivateKey or
@@ -2409,6 +2421,7 @@ function describe(error TlsError) returns String
 		truncated or
 		closed or
 		trustStoreUnavailable or
+		entropyUnavailable or
 		invalidConfiguration or
 		invalidCertificate or
 		invalidPrivateKey or

@@ -105,7 +105,7 @@ public type TlsClient
 	module static function over(transport TcpClient, host String, options TlsClientOptions, deadlineMs SocketDeadlineMs) returns TlsStream throws TlsError
 		let config = options.configFor(host)
 		var peer = try options.authenticator()
-		let entropy = try TlsClientEntropy.fresh(config) otherwise throw TlsError.protocolError(TlsAlert.internalError)
+		let entropy = try TlsClientEntropy.fresh(config) otherwise throw TlsError.entropyUnavailable
 		var endpoint = try TlsClientHandshake.create(config, entropy: entropy, peer: peer, helloSource: TlsBuiltClientHello.create()) otherwise throw TlsError.invalidConfiguration
 
 		return try TlsStream.establish(transport, endpoint: endpoint, peer: peer, deadlineMs: deadlineMs)

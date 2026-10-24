@@ -34,9 +34,11 @@ connection, the echo, and how the connection ended.
 - Both verify certificates at the fixed time of the canra test PKI (`setVerificationTime` on our side, `-attime` on
   OpenSSL's), because the certificates are valid for 2025-06-01 to 2026-06-01.
 
-The server is started on a port the case found free and the client dials after the server printed `ACCEPT`; when
-the server cannot bind the port the case picks another, five times at most. A hung peer is killed after 30 s
-with its whole process tree. The certificates and keys are written to a directory of the working directory and
+`openssl s_server` is started with `-accept 127.0.0.1:0`, so the kernel picks its port, and the case reads the port off
+the `ACCEPT 127.0.0.1:<port>` line the server prints once it listens; the client dials after that. Every wait is
+bounded by 30 s: the wait for the `ACCEPT` line polls the server's output and kills an `openssl s_server` that has not
+printed it by then, the wait for the server to exit kills it, with its whole process tree, and the client's connect,
+handshake, reads and writes, a listener's accept and read, and an `s_client` run carry deadlines of their own. The certificates and keys are written to a directory of the working directory and
 removed afterwards.
 
 `MAXON_OPENSSL` names the `openssl` binary to spawn; without it the cases spawn `openssl` from `PATH`. They need
@@ -49,7 +51,7 @@ has no process spawning (E3074) and is excluded.
 
 <!-- test: tls-interop.client-against-openssl-s_server-tls13 -->
 <!-- unsupported-targets: wasm32-wasi -->
-A `TlsClient` handshakes with a live `openssl s_server` over loopback in TLS 1.3 under each of the three suites, the server restricted to one with `-ciphersuites`. The client sends `ping`, the server (`-rev`) answers the line reversed, and the client ends the stream with `shutdownWrite`. A line prints the answer, what the client negotiated and what the server's own output reports: its protocol and cipher suite, the client's close_notify (`-msg` prints the alert it read) and its exit code. The server is started on a port the case found free and the client dials once the server has printed `ACCEPT`. `MAXON_OPENSSL` names the `openssl` binary when it is not the one on `PATH`; the case fails when OpenSSL cannot be started.
+A `TlsClient` handshakes with a live `openssl s_server` over loopback in TLS 1.3 under each of the three suites, the server restricted to one with `-ciphersuites`. The client sends `ping`, the server (`-rev`) answers the line reversed, and the client ends the stream with `shutdownWrite`. A line prints the answer, what the client negotiated and what the server's own output reports: its protocol and cipher suite, the client's close_notify (`-msg` prints the alert it read) and its exit code. The server listens on a port the kernel chose and the client dials once the server has printed it on its `ACCEPT` line. `MAXON_OPENSSL` names the `openssl` binary when it is not the one on `PATH`; the case fails when OpenSSL cannot be started.
 ```maxon
 function digit(symbol Byte) returns Byte
 	if symbol >= 0x61 'letter'
@@ -106,6 +108,7 @@ function describe(error TlsError) returns String
 		truncated or
 		closed or
 		trustStoreUnavailable or
+		entropyUnavailable or
 		invalidConfiguration or
 		invalidCertificate or
 		invalidPrivateKey or
@@ -226,50 +229,61 @@ function valueAfter(lines StringArray, prefix String) returns String
 end 'valueAfter'
 
 
-function freePort() returns NetworkPort throws InteropError
-	let probe = try TcpListener.bind("127.0.0.1", port: 0) otherwise throw InteropError.noPort
-	let port = probe.port()
+function idle(child StreamingSubprocess) throws InteropError
+	match child.pollExit() 'exit'
+		exited then throw InteropError.noPort
+		running then Scheduler.yield()
+	end 'exit'
+end 'idle'
 
-	probe.close()
+function waitForLine(child StreamingSubprocess, start InstantMs) returns String throws InteropError
+	while Clock.elapsedMs(start) < probeTimeoutMs 'polling'
+		match child.tryReadStdoutLine() 'polled'
+			line(text) then return text
+			none then try idle(child)
+		end 'polled'
+	end 'polling'
 
-	return port
-end 'freePort'
+	_ = try child.waitWithTimeout(1) otherwise 0
 
-function isReady(child StreamingSubprocess) returns bool
+	throw InteropError.timedOut
+end 'waitForLine'
+
+function acceptedPort(child StreamingSubprocess) returns NetworkPort throws InteropError
+	let start = Clock.nowMs()
+
 	while true 'reading'
-		let line = try child.readStdoutLine() otherwise return false
+		let line = try waitForLine(child, start: start)
 
-		if line.startsWith("ACCEPT") 'listening'
-			return true
+		if line.startsWith("ACCEPT ") 'listening'
+			let address = try URL.parse("https://{line.replace("ACCEPT ", with: "")}") otherwise throw InteropError.noPort
+
+			return try address.port() otherwise throw InteropError.noPort
 		end 'listening'
 	end 'reading'
 
-	panic("isReady: the loop returns when the stream ends")
-end 'isReady'
+	panic("acceptedPort: the loop returns or throws")
+end 'acceptedPort'
 
 type OpensslServer
 	export var child as StreamingSubprocess
 	export var port as NetworkPort
 
 	static function start(options StringArray) returns OpensslServer throws InteropError
-		for _ in 1 to 5 'attempts'
-			let port = try freePort()
-			var arguments = ["s_server", "-accept", "127.0.0.1:{port}", "-naccept", "1", "-rev", "-msg"]
+		var arguments = ["s_server", "-accept", "127.0.0.1:0", "-naccept", "1", "-rev", "-msg"]
 
-			for option in options 'eachOption'
-				arguments.push(option)
-			end 'eachOption'
+		for option in options 'eachOption'
+			arguments.push(option)
+		end 'eachOption'
 
-			var child = try StreamingSubprocess.spawn(opensslExecutable(), arguments: arguments) otherwise throw InteropError.spawnFailed
-
-			if isReady(child) 'listening'
-				return Self{child: child, port: port}
-			end 'listening'
-
+		var child = try StreamingSubprocess.spawn(opensslExecutable(), arguments: arguments) otherwise throw InteropError.spawnFailed
+		let port = try acceptedPort(child) otherwise (error) 'unlistening'
 			child.release()
-		end 'attempts'
 
-		throw InteropError.noPort
+			throw error
+		end 'unlistening'
+
+		return Self{child: child, port: port}
 	end 'start'
 end 'OpensslServer'
 
@@ -337,10 +351,19 @@ function peerEnd(error TlsError) returns String
 	return text
 end 'peerEnd'
 
+function bound(stream TlsStream) throws TlsError
+	try stream.setReadDeadline(probeTimeoutMs)
+	try stream.setWriteDeadline(probeTimeoutMs)
+end 'bound'
+
 function talk(server OpensslServer, options TlsClientOptions, drops bool) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: server.port, options: options) otherwise (error) 'refused'
+	var stream = try TlsClient.connect("127.0.0.1", port: server.port, options: options, deadlineMs: probeTimeoutMs) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
+
+	try bound(stream) otherwise (error) 'unbounded'
+		return "deadline: {describe(error)}"
+	end 'unbounded'
 
 	_ = try stream.send("ping\n") otherwise (error) 'unsent'
 		return "send: {describe(error)}"
@@ -461,6 +484,7 @@ function describe(error TlsError) returns String
 		truncated or
 		closed or
 		trustStoreUnavailable or
+		entropyUnavailable or
 		invalidConfiguration or
 		invalidCertificate or
 		invalidPrivateKey or
@@ -581,50 +605,61 @@ function valueAfter(lines StringArray, prefix String) returns String
 end 'valueAfter'
 
 
-function freePort() returns NetworkPort throws InteropError
-	let probe = try TcpListener.bind("127.0.0.1", port: 0) otherwise throw InteropError.noPort
-	let port = probe.port()
+function idle(child StreamingSubprocess) throws InteropError
+	match child.pollExit() 'exit'
+		exited then throw InteropError.noPort
+		running then Scheduler.yield()
+	end 'exit'
+end 'idle'
 
-	probe.close()
+function waitForLine(child StreamingSubprocess, start InstantMs) returns String throws InteropError
+	while Clock.elapsedMs(start) < probeTimeoutMs 'polling'
+		match child.tryReadStdoutLine() 'polled'
+			line(text) then return text
+			none then try idle(child)
+		end 'polled'
+	end 'polling'
 
-	return port
-end 'freePort'
+	_ = try child.waitWithTimeout(1) otherwise 0
 
-function isReady(child StreamingSubprocess) returns bool
+	throw InteropError.timedOut
+end 'waitForLine'
+
+function acceptedPort(child StreamingSubprocess) returns NetworkPort throws InteropError
+	let start = Clock.nowMs()
+
 	while true 'reading'
-		let line = try child.readStdoutLine() otherwise return false
+		let line = try waitForLine(child, start: start)
 
-		if line.startsWith("ACCEPT") 'listening'
-			return true
+		if line.startsWith("ACCEPT ") 'listening'
+			let address = try URL.parse("https://{line.replace("ACCEPT ", with: "")}") otherwise throw InteropError.noPort
+
+			return try address.port() otherwise throw InteropError.noPort
 		end 'listening'
 	end 'reading'
 
-	panic("isReady: the loop returns when the stream ends")
-end 'isReady'
+	panic("acceptedPort: the loop returns or throws")
+end 'acceptedPort'
 
 type OpensslServer
 	export var child as StreamingSubprocess
 	export var port as NetworkPort
 
 	static function start(options StringArray) returns OpensslServer throws InteropError
-		for _ in 1 to 5 'attempts'
-			let port = try freePort()
-			var arguments = ["s_server", "-accept", "127.0.0.1:{port}", "-naccept", "1", "-rev", "-msg"]
+		var arguments = ["s_server", "-accept", "127.0.0.1:0", "-naccept", "1", "-rev", "-msg"]
 
-			for option in options 'eachOption'
-				arguments.push(option)
-			end 'eachOption'
+		for option in options 'eachOption'
+			arguments.push(option)
+		end 'eachOption'
 
-			var child = try StreamingSubprocess.spawn(opensslExecutable(), arguments: arguments) otherwise throw InteropError.spawnFailed
-
-			if isReady(child) 'listening'
-				return Self{child: child, port: port}
-			end 'listening'
-
+		var child = try StreamingSubprocess.spawn(opensslExecutable(), arguments: arguments) otherwise throw InteropError.spawnFailed
+		let port = try acceptedPort(child) otherwise (error) 'unlistening'
 			child.release()
-		end 'attempts'
 
-		throw InteropError.noPort
+			throw error
+		end 'unlistening'
+
+		return Self{child: child, port: port}
 	end 'start'
 end 'OpensslServer'
 
@@ -692,10 +727,19 @@ function peerEnd(error TlsError) returns String
 	return text
 end 'peerEnd'
 
+function bound(stream TlsStream) throws TlsError
+	try stream.setReadDeadline(probeTimeoutMs)
+	try stream.setWriteDeadline(probeTimeoutMs)
+end 'bound'
+
 function talk(server OpensslServer, options TlsClientOptions, drops bool) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: server.port, options: options) otherwise (error) 'refused'
+	var stream = try TlsClient.connect("127.0.0.1", port: server.port, options: options, deadlineMs: probeTimeoutMs) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
+
+	try bound(stream) otherwise (error) 'unbounded'
+		return "deadline: {describe(error)}"
+	end 'unbounded'
 
 	_ = try stream.send("ping\n") otherwise (error) 'unsent'
 		return "send: {describe(error)}"
@@ -831,6 +875,7 @@ function describe(error TlsError) returns String
 		truncated or
 		closed or
 		trustStoreUnavailable or
+		entropyUnavailable or
 		invalidConfiguration or
 		invalidCertificate or
 		invalidPrivateKey or
@@ -951,50 +996,61 @@ function valueAfter(lines StringArray, prefix String) returns String
 end 'valueAfter'
 
 
-function freePort() returns NetworkPort throws InteropError
-	let probe = try TcpListener.bind("127.0.0.1", port: 0) otherwise throw InteropError.noPort
-	let port = probe.port()
+function idle(child StreamingSubprocess) throws InteropError
+	match child.pollExit() 'exit'
+		exited then throw InteropError.noPort
+		running then Scheduler.yield()
+	end 'exit'
+end 'idle'
 
-	probe.close()
+function waitForLine(child StreamingSubprocess, start InstantMs) returns String throws InteropError
+	while Clock.elapsedMs(start) < probeTimeoutMs 'polling'
+		match child.tryReadStdoutLine() 'polled'
+			line(text) then return text
+			none then try idle(child)
+		end 'polled'
+	end 'polling'
 
-	return port
-end 'freePort'
+	_ = try child.waitWithTimeout(1) otherwise 0
 
-function isReady(child StreamingSubprocess) returns bool
+	throw InteropError.timedOut
+end 'waitForLine'
+
+function acceptedPort(child StreamingSubprocess) returns NetworkPort throws InteropError
+	let start = Clock.nowMs()
+
 	while true 'reading'
-		let line = try child.readStdoutLine() otherwise return false
+		let line = try waitForLine(child, start: start)
 
-		if line.startsWith("ACCEPT") 'listening'
-			return true
+		if line.startsWith("ACCEPT ") 'listening'
+			let address = try URL.parse("https://{line.replace("ACCEPT ", with: "")}") otherwise throw InteropError.noPort
+
+			return try address.port() otherwise throw InteropError.noPort
 		end 'listening'
 	end 'reading'
 
-	panic("isReady: the loop returns when the stream ends")
-end 'isReady'
+	panic("acceptedPort: the loop returns or throws")
+end 'acceptedPort'
 
 type OpensslServer
 	export var child as StreamingSubprocess
 	export var port as NetworkPort
 
 	static function start(options StringArray) returns OpensslServer throws InteropError
-		for _ in 1 to 5 'attempts'
-			let port = try freePort()
-			var arguments = ["s_server", "-accept", "127.0.0.1:{port}", "-naccept", "1", "-rev", "-msg"]
+		var arguments = ["s_server", "-accept", "127.0.0.1:0", "-naccept", "1", "-rev", "-msg"]
 
-			for option in options 'eachOption'
-				arguments.push(option)
-			end 'eachOption'
+		for option in options 'eachOption'
+			arguments.push(option)
+		end 'eachOption'
 
-			var child = try StreamingSubprocess.spawn(opensslExecutable(), arguments: arguments) otherwise throw InteropError.spawnFailed
-
-			if isReady(child) 'listening'
-				return Self{child: child, port: port}
-			end 'listening'
-
+		var child = try StreamingSubprocess.spawn(opensslExecutable(), arguments: arguments) otherwise throw InteropError.spawnFailed
+		let port = try acceptedPort(child) otherwise (error) 'unlistening'
 			child.release()
-		end 'attempts'
 
-		throw InteropError.noPort
+			throw error
+		end 'unlistening'
+
+		return Self{child: child, port: port}
 	end 'start'
 end 'OpensslServer'
 
@@ -1062,10 +1118,19 @@ function peerEnd(error TlsError) returns String
 	return text
 end 'peerEnd'
 
+function bound(stream TlsStream) throws TlsError
+	try stream.setReadDeadline(probeTimeoutMs)
+	try stream.setWriteDeadline(probeTimeoutMs)
+end 'bound'
+
 function talk(server OpensslServer, options TlsClientOptions, drops bool) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: server.port, options: options) otherwise (error) 'refused'
+	var stream = try TlsClient.connect("127.0.0.1", port: server.port, options: options, deadlineMs: probeTimeoutMs) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
+
+	try bound(stream) otherwise (error) 'unbounded'
+		return "deadline: {describe(error)}"
+	end 'unbounded'
 
 	_ = try stream.send("ping\n") otherwise (error) 'unsent'
 		return "send: {describe(error)}"
@@ -1186,6 +1251,7 @@ function describe(error TlsError) returns String
 		truncated or
 		closed or
 		trustStoreUnavailable or
+		entropyUnavailable or
 		invalidConfiguration or
 		invalidCertificate or
 		invalidPrivateKey or
@@ -1306,50 +1372,61 @@ function valueAfter(lines StringArray, prefix String) returns String
 end 'valueAfter'
 
 
-function freePort() returns NetworkPort throws InteropError
-	let probe = try TcpListener.bind("127.0.0.1", port: 0) otherwise throw InteropError.noPort
-	let port = probe.port()
+function idle(child StreamingSubprocess) throws InteropError
+	match child.pollExit() 'exit'
+		exited then throw InteropError.noPort
+		running then Scheduler.yield()
+	end 'exit'
+end 'idle'
 
-	probe.close()
+function waitForLine(child StreamingSubprocess, start InstantMs) returns String throws InteropError
+	while Clock.elapsedMs(start) < probeTimeoutMs 'polling'
+		match child.tryReadStdoutLine() 'polled'
+			line(text) then return text
+			none then try idle(child)
+		end 'polled'
+	end 'polling'
 
-	return port
-end 'freePort'
+	_ = try child.waitWithTimeout(1) otherwise 0
 
-function isReady(child StreamingSubprocess) returns bool
+	throw InteropError.timedOut
+end 'waitForLine'
+
+function acceptedPort(child StreamingSubprocess) returns NetworkPort throws InteropError
+	let start = Clock.nowMs()
+
 	while true 'reading'
-		let line = try child.readStdoutLine() otherwise return false
+		let line = try waitForLine(child, start: start)
 
-		if line.startsWith("ACCEPT") 'listening'
-			return true
+		if line.startsWith("ACCEPT ") 'listening'
+			let address = try URL.parse("https://{line.replace("ACCEPT ", with: "")}") otherwise throw InteropError.noPort
+
+			return try address.port() otherwise throw InteropError.noPort
 		end 'listening'
 	end 'reading'
 
-	panic("isReady: the loop returns when the stream ends")
-end 'isReady'
+	panic("acceptedPort: the loop returns or throws")
+end 'acceptedPort'
 
 type OpensslServer
 	export var child as StreamingSubprocess
 	export var port as NetworkPort
 
 	static function start(options StringArray) returns OpensslServer throws InteropError
-		for _ in 1 to 5 'attempts'
-			let port = try freePort()
-			var arguments = ["s_server", "-accept", "127.0.0.1:{port}", "-naccept", "1", "-rev", "-msg"]
+		var arguments = ["s_server", "-accept", "127.0.0.1:0", "-naccept", "1", "-rev", "-msg"]
 
-			for option in options 'eachOption'
-				arguments.push(option)
-			end 'eachOption'
+		for option in options 'eachOption'
+			arguments.push(option)
+		end 'eachOption'
 
-			var child = try StreamingSubprocess.spawn(opensslExecutable(), arguments: arguments) otherwise throw InteropError.spawnFailed
-
-			if isReady(child) 'listening'
-				return Self{child: child, port: port}
-			end 'listening'
-
+		var child = try StreamingSubprocess.spawn(opensslExecutable(), arguments: arguments) otherwise throw InteropError.spawnFailed
+		let port = try acceptedPort(child) otherwise (error) 'unlistening'
 			child.release()
-		end 'attempts'
 
-		throw InteropError.noPort
+			throw error
+		end 'unlistening'
+
+		return Self{child: child, port: port}
 	end 'start'
 end 'OpensslServer'
 
@@ -1417,10 +1494,19 @@ function peerEnd(error TlsError) returns String
 	return text
 end 'peerEnd'
 
+function bound(stream TlsStream) throws TlsError
+	try stream.setReadDeadline(probeTimeoutMs)
+	try stream.setWriteDeadline(probeTimeoutMs)
+end 'bound'
+
 function talk(server OpensslServer, options TlsClientOptions, drops bool) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: server.port, options: options) otherwise (error) 'refused'
+	var stream = try TlsClient.connect("127.0.0.1", port: server.port, options: options, deadlineMs: probeTimeoutMs) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
+
+	try bound(stream) otherwise (error) 'unbounded'
+		return "deadline: {describe(error)}"
+	end 'unbounded'
 
 	_ = try stream.send("ping\n") otherwise (error) 'unsent'
 		return "send: {describe(error)}"
@@ -1552,6 +1638,7 @@ function describe(error TlsError) returns String
 		truncated or
 		closed or
 		trustStoreUnavailable or
+		entropyUnavailable or
 		invalidConfiguration or
 		invalidCertificate or
 		invalidPrivateKey or
@@ -1688,6 +1775,10 @@ function serveOnce(listener TlsListener) returns String
 		return "accept: {describe(error)}"
 	end 'refused'
 
+	try stream.setReadDeadline(probeTimeoutMs) otherwise (error) 'unbounded'
+		return "deadline: {describe(error)}"
+	end 'unbounded'
+
 	let line = try readLine(stream) otherwise (error) 'unheard'
 		return "recv: {describe(error)}"
 	end 'unheard'
@@ -1739,6 +1830,10 @@ function exchange(label String, directory String, serverOptions TlsServerOptions
 	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
 		return "{label}: bind: {describe(error)}"
 	end 'refused'
+
+	try listener.setAcceptDeadline(probeTimeoutMs) otherwise (error) 'unbounded'
+		return "{label}: deadline: {describe(error)}"
+	end 'unbounded'
 
 	let peer = async serveOnce(listener)
 	let client = runClient(directory, port: listener.port(), options: clientOptions)
@@ -1834,6 +1929,7 @@ function describe(error TlsError) returns String
 		truncated or
 		closed or
 		trustStoreUnavailable or
+		entropyUnavailable or
 		invalidConfiguration or
 		invalidCertificate or
 		invalidPrivateKey or
@@ -1970,6 +2066,10 @@ function serveOnce(listener TlsListener) returns String
 		return "accept: {describe(error)}"
 	end 'refused'
 
+	try stream.setReadDeadline(probeTimeoutMs) otherwise (error) 'unbounded'
+		return "deadline: {describe(error)}"
+	end 'unbounded'
+
 	let line = try readLine(stream) otherwise (error) 'unheard'
 		return "recv: {describe(error)}"
 	end 'unheard'
@@ -2021,6 +2121,10 @@ function exchange(label String, directory String, serverOptions TlsServerOptions
 	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
 		return "{label}: bind: {describe(error)}"
 	end 'refused'
+
+	try listener.setAcceptDeadline(probeTimeoutMs) otherwise (error) 'unbounded'
+		return "{label}: deadline: {describe(error)}"
+	end 'unbounded'
 
 	let peer = async serveOnce(listener)
 	let client = runClient(directory, port: listener.port(), options: clientOptions)
@@ -2131,6 +2235,7 @@ function describe(error TlsError) returns String
 		truncated or
 		closed or
 		trustStoreUnavailable or
+		entropyUnavailable or
 		invalidConfiguration or
 		invalidCertificate or
 		invalidPrivateKey or
@@ -2267,6 +2372,10 @@ function serveOnce(listener TlsListener) returns String
 		return "accept: {describe(error)}"
 	end 'refused'
 
+	try stream.setReadDeadline(probeTimeoutMs) otherwise (error) 'unbounded'
+		return "deadline: {describe(error)}"
+	end 'unbounded'
+
 	let line = try readLine(stream) otherwise (error) 'unheard'
 		return "recv: {describe(error)}"
 	end 'unheard'
@@ -2318,6 +2427,10 @@ function exchange(label String, directory String, serverOptions TlsServerOptions
 	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
 		return "{label}: bind: {describe(error)}"
 	end 'refused'
+
+	try listener.setAcceptDeadline(probeTimeoutMs) otherwise (error) 'unbounded'
+		return "{label}: deadline: {describe(error)}"
+	end 'unbounded'
 
 	let peer = async serveOnce(listener)
 	let client = runClient(directory, port: listener.port(), options: clientOptions)
@@ -2422,6 +2535,7 @@ function describe(error TlsError) returns String
 		truncated or
 		closed or
 		trustStoreUnavailable or
+		entropyUnavailable or
 		invalidConfiguration or
 		invalidCertificate or
 		invalidPrivateKey or
@@ -2568,50 +2682,61 @@ function valueAfter(lines StringArray, prefix String) returns String
 	return "-"
 end 'valueAfter'
 
-function freePort() returns NetworkPort throws InteropError
-	let probe = try TcpListener.bind("127.0.0.1", port: 0) otherwise throw InteropError.noPort
-	let port = probe.port()
+function idle(child StreamingSubprocess) throws InteropError
+	match child.pollExit() 'exit'
+		exited then throw InteropError.noPort
+		running then Scheduler.yield()
+	end 'exit'
+end 'idle'
 
-	probe.close()
+function waitForLine(child StreamingSubprocess, start InstantMs) returns String throws InteropError
+	while Clock.elapsedMs(start) < probeTimeoutMs 'polling'
+		match child.tryReadStdoutLine() 'polled'
+			line(text) then return text
+			none then try idle(child)
+		end 'polled'
+	end 'polling'
 
-	return port
-end 'freePort'
+	_ = try child.waitWithTimeout(1) otherwise 0
 
-function isReady(child StreamingSubprocess) returns bool
+	throw InteropError.timedOut
+end 'waitForLine'
+
+function acceptedPort(child StreamingSubprocess) returns NetworkPort throws InteropError
+	let start = Clock.nowMs()
+
 	while true 'reading'
-		let line = try child.readStdoutLine() otherwise return false
+		let line = try waitForLine(child, start: start)
 
-		if line.startsWith("ACCEPT") 'listening'
-			return true
+		if line.startsWith("ACCEPT ") 'listening'
+			let address = try URL.parse("https://{line.replace("ACCEPT ", with: "")}") otherwise throw InteropError.noPort
+
+			return try address.port() otherwise throw InteropError.noPort
 		end 'listening'
 	end 'reading'
 
-	panic("isReady: the loop returns when the stream ends")
-end 'isReady'
+	panic("acceptedPort: the loop returns or throws")
+end 'acceptedPort'
 
 type OpensslServer
 	export var child as StreamingSubprocess
 	export var port as NetworkPort
 
 	static function start(directory String, options StringArray) returns OpensslServer throws InteropError
-		for _ in 1 to 5 'attempts'
-			let port = try freePort()
-			var arguments = ["s_server", "-accept", "127.0.0.1:{port}", "-naccept", "1", "-msg", "-cert", "{directory}/server.pem", "-key", "{directory}/server.key"]
+		var arguments = ["s_server", "-accept", "127.0.0.1:0", "-naccept", "1", "-msg", "-cert", "{directory}/server.pem", "-key", "{directory}/server.key"]
 
-			for option in options 'eachOption'
-				arguments.push(option)
-			end 'eachOption'
+		for option in options 'eachOption'
+			arguments.push(option)
+		end 'eachOption'
 
-			var child = try StreamingSubprocess.spawn(opensslExecutable(), arguments: arguments) otherwise throw InteropError.spawnFailed
-
-			if isReady(child) 'listening'
-				return Self{child: child, port: port}
-			end 'listening'
-
+		var child = try StreamingSubprocess.spawn(opensslExecutable(), arguments: arguments) otherwise throw InteropError.spawnFailed
+		let port = try acceptedPort(child) otherwise (error) 'unlistening'
 			child.release()
-		end 'attempts'
 
-		throw InteropError.noPort
+			throw error
+		end 'unlistening'
+
+		return Self{child: child, port: port}
 	end 'start'
 end 'OpensslServer'
 
@@ -2808,6 +2933,7 @@ function describe(error TlsError) returns String
 		truncated or
 		closed or
 		trustStoreUnavailable or
+		entropyUnavailable or
 		invalidConfiguration or
 		invalidCertificate or
 		invalidPrivateKey or
