@@ -4465,6 +4465,21 @@ end 'main'
 error E2004: <fragment>:3:10: Undefined variable 'Nope'
 ```
 
+<!-- test: error.an-undeclared-base-as-a-named-argument-is-an-undefined-variable -->
+```maxon
+function take(a String, b String)
+	print("{a}{b}")
+end 'take'
+
+function main() returns ExitCode
+	take("x", b: Nope.thing)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:7:15: Undefined variable 'Nope'
+```
+
 <!-- test: error.a-range-bound-on-a-declared-type-wants-a-sized-type -->
 ```maxon
 type Ops

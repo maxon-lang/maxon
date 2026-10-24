@@ -1356,3 +1356,29 @@ end 'main'
 ```maxoncstderr
 error E3005: <fragment>:9:27: Value 42 is outside the range of 'Digit' (int(0 to 9))
 ```
+
+<!-- test: error.an-undeclared-base-in-a-top-level-initializer-is-an-undefined-variable -->
+A dotted name whose base no file declares is an undefined variable in a top-level initializer, as it is in
+a body, and not a construct the initializer cannot hold.
+```maxon
+let table = Nope.thing
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:2:13: Undefined variable 'Nope'
+```
+
+<!-- test: error.an-undeclared-base-inside-a-top-level-array-is-an-undefined-variable -->
+```maxon
+let table = [Nope.first, Nope.second]
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:2:14: Undefined variable 'Nope'
+```

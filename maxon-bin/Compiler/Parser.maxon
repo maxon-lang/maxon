@@ -70871,6 +70871,21 @@ export type Parser
 		end 'form'
 	end 'nonBoundMemberRefusal'
 
+	function dottedBaseNamesNothing(baseTok Token, baseIndex ElementIndex) returns bool
+		match self.staticBaseKindOf(baseTok.value) 'kind'
+			typeParameter or
+			primitive then return false
+			declaredName then break
+		end 'kind'
+
+		if self.signatures.namesANamespace(baseTok.value) or self.namesTopLevelBinding(baseTok.value) 'aDirectoryOrABinding'
+			return false
+		end 'aDirectoryOrABinding'
+
+		_ = try self.signatures.declaredFormOf(baseTok.value, readerFilePath: self.typeNameReaderAt(baseIndex)) otherwise return true
+		return false
+	end 'dottedBaseNamesNothing'
+
 	function undeclaredBaseRefusal(baseTok Token, memberTok Token) returns SourceParseError
 		if self.signatures.namesANamespace(baseTok.value) 'aDirectory'
 			return memberOfABaseWithNoSuchMember(String.from(baseTok.value), noun: "a directory", memberTok: memberTok)
@@ -93812,6 +93827,11 @@ export type Parser
 			// and a `create()`-style factory are HEAP RECORDS built by `__module_init`, so nothing about them is
 			// folded and code does run. Worded the other way, the sentence justifies refusing a boxed union's
 			// case for being a heap object, which the oracle compiles.
+			// A head no file declares is an undefined name; the sentence below is for a head that exists.
+			if self.dottedBaseNamesNothing(tok, baseIndex: self.pos) 'anUndeclaredBase'
+				throw ConstEvalError.defective(SourceParseError.undefinedVariable(String.from(tok.value), line: tok.line, column: tok.column))
+			end 'anUndeclaredBase'
+
 			try self.requireConstTypeHeadNameable()
 			throw ConstEvalError.defective(SourceParseError.unsupported("`{String.from(tok.value)}.{tokenDisplayText(memberTok)}` in a constant initializer — a constant is settled before `main`, either folded to a number or materialized by the module initializer, so it can name another top-level `let`, a literal, an empty container, an enum or union case (a case that declares a payload must be written with its arguments), a `{String.from(CreateMethod)}()`-style factory at the TOP of an initializer, or a sized type's `.{String.from(MinBoundField)}`/`.{String.from(MaxBoundField)}`, and nothing else", line: tok.line, column: tok.column))
 		end 'dottedNonBound'
