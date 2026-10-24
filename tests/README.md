@@ -67,8 +67,8 @@ tests/
     RepositoryFacts.maxon        the names of the repository's own files and variables every corpus spells: `SidecarSuffix`, `MaxonSourceSuffix`, `TestSourceSuffix`, `StagedProgramFileName`, `CacheRootVariable`, `CacheVendorDirName`, `VersionRecordSuffix`, `StdlibDirName`
     VersionRecord.maxon          the compiler-version record: `soleVersionRecordUnder` a cache root, `recordLine`, `OlderRelease`, `LastBuiltWording`
   fmt/
-    fixtures.maxtest             the fixture corpus: the harness, the guards and 30 tests
-    engine-cases.maxtest         the engine corpus: 5 tests, on the staging and spawn the file above exports
+    fixtures.maxtest             the fixture corpus: the harness, the guards and 32 tests
+    engine-cases.maxtest         the engine corpus: 4 tests, on the staging and spawn the file above exports
     content-gate.maxtest         the content gate both corpora compare with, and its 19 red checks
     generate-expectations.py     mints every expectation BY RUNNING THE COMPILER
     census-sources.txt           the real compiler files the scale case formats
@@ -714,8 +714,8 @@ reproduce it.**
 
 `testCommand/` puts each spawning `test` in its own file because a file is what
 ONE process runs, under one deadline, and its fixtures each compile a project. These format a
-tiny staged tree. `fixtures.maxtest` holds the fixture corpus and the real-sources census (30
-tests), and `engine-cases.maxtest` the engine corpus (5 tests); **both files together measured
+tiny staged tree. `fixtures.maxtest` holds the fixture corpus and the real-sources census (32
+tests), and `engine-cases.maxtest` the engine corpus (4 tests); **both files together measured
 about 1.9 s**. A split would only buy back process startups, which are not where the time goes; if a
 corpus here ever does approach the deadline, shorten its slowest case. `content-gate.maxtest` spawns
 nothing: it holds `contentChange`, which the census and the engine corpus both call, and the red checks
@@ -756,10 +756,6 @@ Written down because a limit nobody states gets mistaken for coverage.
   reaches this, and it is why that case stages **live compiler sources** rather than a
   committed copy — a committed copy would drift from the original and end up measuring
   a file the compiler no longer has.
-- **`unchanged` is two different facts.** A file the lexer rejects is reported exactly
-  like one that was already perfect. One fixture pins that for one file; nothing tells
-  you it is happening to two hundred.
-
 ## Staging outside the checkout — `specHarness/`, `cli/` and `lsp/`
 
 Three corpora stage under the host temp area (`TEMP` on Windows; `TMPDIR`, else `/tmp`, elsewhere),

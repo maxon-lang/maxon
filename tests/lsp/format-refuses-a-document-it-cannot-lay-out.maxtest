@@ -1,0 +1,12 @@
+function unclosedBlockFixture() returns String
+	return String.from(b"function main() returns int
+var x = 1
+if x > 0 'check'
+var y = 2
+return x
+end 'main'")
+end 'unclosedBlockFixture'
+
+test 'formatting a document whose block is never closed answers no edit'
+	Expect.isTrue(formattingMakesNoEdit(unclosedBlockFixture()), message: "the server answered `textDocument/formatting` with an edit for a document whose `if` is never closed. Its `end 'main'` closes the `if`, so every line after the `if` would be indented one level too deep and the function's own `end` would be left open; an editor that applied the edit would mangle a buffer the author is still typing.")
+end 'formatting a document whose block is never closed answers no edit'

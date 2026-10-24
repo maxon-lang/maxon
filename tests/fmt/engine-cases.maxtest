@@ -7,7 +7,6 @@ let EngineTreeDescription = "the engine corpus's staged copies"
 let CaseSourceExtension = ".in"
 let CaseExpectedExtension = ".expected"
 
-let UnlexableCasePrefix = "Unterminated"
 let NoSuchLine = "no such line"
 
 typealias CaseLineNumber = int(1 to u64.max)
@@ -99,27 +98,6 @@ test 'the engine corpus keeps its three negative controls'
 
 	Expect.isEmpty(listedLines(absent), message: "these NEGATIVE CONTROLS are no longer in {EngineCasesDirName}. Each is the case beside a real defect that passed throughout that defect's whole lifetime; without it nothing tells a reader that the neighbouring green is not evidence.")
 end 'the engine corpus keeps its three negative controls'
-
-test 'an unlexable engine case is its own oracle'
-	let corpus = EngineCorpus.read()
-	var unlexable = StringArray.create()
-	var rewritten = StringArray.create()
-
-	for caseName in corpus.pairedCases() 'eachCase'
-		if not caseName.startsWith(UnlexableCasePrefix) 'lexes'
-			continue
-		end 'lexes'
-
-		unlexable.push(caseName)
-
-		if corpus.caseText(caseName, storedExtension: CaseExpectedExtension) != corpus.caseText(caseName, storedExtension: CaseSourceExtension) 'oracleRewrites'
-			rewritten.push(caseName)
-		end 'oracleRewrites'
-	end 'eachCase'
-
-	Expect.isFalse(unlexable.isEmpty(), message: "{EngineCasesDirName} holds no paired `{UnlexableCasePrefix}*` case. This rule is keyed on that name prefix, so a corpus without one checks nothing about a source the lexer rejects.")
-	Expect.isEmpty(listedLines(rewritten), message: "these cases are sources the lexer REJECTS, so each {CaseExpectedExtension} must be byte-identical to its {CaseSourceExtension}: `fmt` leaves such a source untouched, and the alternative is writing the lexer's error text into somebody's file. These oracles say the formatter should CHANGE them.")
-end 'an unlexable engine case is its own oracle'
 
 // One test, because every property here reads the same two `fmt` runs, and the file's 5 s deadline
 // fits two spawns where a test per property would need more.

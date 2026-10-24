@@ -22,7 +22,10 @@ end 'formattingServedMethods'
 
 module function formattingAnswer(request LspRequest) returns LspAnswer throws LspParamsError
 	let options = try lspMember(request.incoming, of: request.params, key: OptionsKey)
-	let formatted = format(request.text, options: try indentAskedFor(request.incoming, options: options))
+	let indent = try indentAskedFor(request.incoming, options: options)
+
+	// A document `format` refuses is a buffer still being typed; an edit would re-indent it wrongly.
+	let formatted = try format(request.text, options: indent) otherwise return LspAnswer.nothing()
 
 	// Already formatted — LSP's "nothing here", and the reference server's answer for the same case. An
 	// edit replacing a document with itself would still dirty the buffer in some editors.

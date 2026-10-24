@@ -85,10 +85,17 @@ let SummaryPrefixWord = "fmt:"
 let SummaryFilesWord = "file(s)"
 let SummaryChangedWord = "changed,"
 let SummaryUnchangedWord = "unchanged."
+let SummaryUnchangedBeforeRefusedWord = "unchanged,"
+let SummaryRefusedWord = "refused."
 let SummaryWordSeparator = " "
 let SummaryWordCount = 6
+let SummaryWordCountWithRefusals = 8
 let ChangedCountWordIndex = 1
 let UnchangedCountWordIndex = 4
+let RefusedCountWordIndex = 6
+
+// The refusal count a summary that names none stands for.
+let NoRefusals = 0
 
 // What a second run must report changed: nothing. Named because it is the assertion, not a literal.
 let IdempotentChangedCount = 0
@@ -405,18 +412,20 @@ type FixtureCase
 	// count is zero. That prediction is derived from the first run's own pin rather than written into
 	// each fixture, so it cannot drift case by case and a new fixture gets it for free.
 	//
-	// A case that was REFUSED changed nothing to begin with, so its second run must say exactly what
-	// its first run said — the same pins, byte for byte. Predicting a summary line there would be
-	// wrong: a refusal prints no summary at all.
+	// A case that was REFUSED before reaching any file changed nothing to begin with, so its second
+	// run must say exactly what its first run said — the same pins, byte for byte. Predicting a
+	// summary line there would be wrong: such a refusal prints no summary at all. A run that
+	// refused some files does print one, and its refused count is the same the second time.
 	function checkIdempotence(run CollectedOutput) throws TestFailure
-		if expectedExit() != SuccessExitCode 'aRefusal'
+		let firstStdout = pinned(ExpectedStdoutFileName, holds: StdoutPinHolds)
+
+		if expectedExit() != SuccessExitCode and firstStdout.isEmpty() 'aRefusalBeforeAnyFile'
 			try checkStreamsAgainstPins(run, runLabel: SecondRunLabel)
 			return
-		end 'aRefusal'
+		end 'aRefusalBeforeAnyFile'
 
-		let firstStdout = pinned(ExpectedStdoutFileName, holds: StdoutPinHolds)
-		let seen = totalFilesSeen(firstStdout, caseName: self.name)
-		let expectedStdout = "{summaryLine(IdempotentChangedCount, unchanged: seen)}{LineFeed}"
+		let first = summaryCountsOf(firstStdout, caseName: self.name)
+		let expectedStdout = "{summaryLine(IdempotentChangedCount, unchanged: first.changed + first.unchanged, refused: first.refused)}{LineFeed}"
 		let expectedStderr = pinned(ExpectedStderrFileName, holds: StderrPinHolds)
 
 		try checkStreams(run, expectedStdout: expectedStdout, expectedStderr: expectedStderr, runLabel: SecondRunLabel)
@@ -424,8 +433,7 @@ type FixtureCase
 
 	// ⭐⭐ **EVERY HALF OF ONE RUN, IN THE ORDER A READER NEEDS THEM.** The status comes first
 	// because it is the half a script reads; stderr comes before stdout because every `fmt` refusal
-	// prints to stderr and NOTHING to stdout, so on a refusal case stderr is the payload and stdout is
-	// empty on both sides. ONE place, so that order and the sentence explaining each question exist
+	// prints its reason to stderr, so on a refusal case stderr is the payload. ONE place, so that order and the sentence explaining each question exist
 	// once rather than once per caller.
 	function checkStreams(run CollectedOutput, expectedStdout String, expectedStderr String, runLabel String) throws TestFailure
 		let observedExit = run.exitCode()
@@ -433,7 +441,7 @@ type FixtureCase
 		let observedStderr = normalized(run.stderr)
 		try Expect.equal(observedExit, expected: expectedStatus as ExitInt, message: "'{self.name}' exited differently from its {ExpectedExitFileName} on {runLabel}. The status is the half of this report a SCRIPT reads, and the half that decides whether a refusal stops anything. It wrote to stderr: {observedStderr}")
 
-		try Expect.equal(observedStderr, expected: expectedStderr, message: "'{self.name}' wrote different stderr on {runLabel}. Every `fmt` refusal goes here and prints NOTHING to stdout, so on a refusal case this is the whole message.")
+		try Expect.equal(observedStderr, expected: expectedStderr, message: "'{self.name}' wrote different stderr on {runLabel}. Every `fmt` refusal prints its reason here, so on a refusal case this is the whole message.")
 
 		let observedStdout = normalized(run.stdout)
 		try Expect.equal(observedStdout, expected: expectedStdout, message: "'{self.name}' wrote different stdout on {runLabel}. The `formatted:` lines name every file written, and the summary counts what the walk FOUND — a `0 unchanged` proves an excluded file was never reached, where `1 unchanged` would mean it was reached and merely left alone.")
@@ -510,36 +518,57 @@ end 'checkFixture'
 // THE SUMMARY LINE
 // ============================================================================================
 
-// The line every successful `fmt` run ends with, built from the one grammar this file holds.
-function summaryLine(changed FileTally, unchanged FileTally) returns String
-	return "{SummaryPrefixWord} {changed} {SummaryFilesWord} {SummaryChangedWord} {unchanged} {SummaryUnchangedWord}"
+// The line every `fmt` run that reached a file ends with, built from the one grammar this file holds.
+// The refused count joins it only when a file was refused.
+function summaryLine(changed FileTally, unchanged FileTally, refused FileTally = 0) returns String
+	if refused == NoRefusals 'noneRefused'
+		return "{SummaryPrefixWord} {changed} {SummaryFilesWord} {SummaryChangedWord} {unchanged} {SummaryUnchangedWord}"
+	end 'noneRefused'
+
+	return "{SummaryPrefixWord} {changed} {SummaryFilesWord} {SummaryChangedWord} {unchanged} {SummaryUnchangedBeforeRefusedWord} {refused} {SummaryRefusedWord}"
 end 'summaryLine'
 
-// How many files a run's walk FOUND, read off its summary: everything it changed plus everything it
-// left alone. That total is what the next run must report as unchanged.
+type SummaryCounts
+	export let changed as FileTally
+	export let unchanged as FileTally
+	export let refused as FileTally
+
+	static function of(changed FileTally, unchanged FileTally, refused FileTally) returns SummaryCounts
+		return Self{changed: changed, unchanged: unchanged, refused: refused}
+	end 'of'
+end 'SummaryCounts'
+
+// The counts a run's summary reports. What it changed plus what it left alone is what the next run
+// must report as unchanged; the refused count carries over.
 //
-// ⚠ **THE PARSE VALIDATES ITSELF BY REBUILDING THE LINE.** Two numbers lifted out by position could
+// ⚠ **THE PARSE VALIDATES ITSELF BY REBUILDING THE LINE.** Numbers lifted out by position could
 // have come from a line of some other shape entirely; reconstructing the whole line from them and
 // requiring it back byte for byte means the grammar is checked with the same spelling that produced
 // it.
-function totalFilesSeen(stdout String, caseName String) returns FileTally
+function summaryCountsOf(stdout String, caseName String) returns SummaryCounts
 	let summary = lastNonBlankLine(stdout)
 	let words = summary.split(SummaryWordSeparator)
 
-	if words.count() != SummaryWordCount 'wrongWordCount'
-		panic("fmt-fixtures.test: the gate could not run — the '{caseName}' case's {ExpectedStdoutFileName} ends with '{summary}', which is not a `fmt` summary line. Every successful run ends with one, and the second run's expectation is derived from its two counts.")
+	if words.count() != SummaryWordCount and words.count() != SummaryWordCountWithRefusals 'wrongWordCount'
+		panic("fmt-fixtures.test: the gate could not run — the '{caseName}' case's {ExpectedStdoutFileName} ends with '{summary}', which is not a `fmt` summary line. Every run that reached a file ends with one, and the second run's expectation is derived from its counts.")
 	end 'wrongWordCount'
 
 	let changed = countWordAt(words, index: ChangedCountWordIndex, summary: summary, caseName: caseName)
 	let unchanged = countWordAt(words, index: UnchangedCountWordIndex, summary: summary, caseName: caseName)
-	let rebuilt = summaryLine(changed, unchanged: unchanged)
+	var refused = NoRefusals as FileTally
+
+	if words.count() == SummaryWordCountWithRefusals 'namesRefusals'
+		refused = countWordAt(words, index: RefusedCountWordIndex, summary: summary, caseName: caseName)
+	end 'namesRefusals'
+
+	let rebuilt = summaryLine(changed, unchanged: unchanged, refused: refused)
 
 	if rebuilt != summary 'wrongShape'
 		panic("fmt-fixtures.test: the gate could not run — the '{caseName}' case's summary line reads '{summary}' where this file's grammar builds '{rebuilt}'. The two must agree: one grammar parses the first run and predicts the second.")
 	end 'wrongShape'
 
-	return changed + unchanged
-end 'totalFilesSeen'
+	return SummaryCounts.of(changed, unchanged: unchanged, refused: refused)
+end 'summaryCountsOf'
 
 // One of the summary line's two counts.
 function countWordAt(words StringArray, index FileTally, summary String, caseName String) returns FileTally
@@ -928,18 +957,22 @@ test 'a second path is refused rather than silently ignored'
 	checkFixture("two-paths-refused")
 end 'a second path is refused rather than silently ignored'
 
-// unlexable-file-left-alone — a source the lexer rejects is left BYTE-IDENTICAL and
-// counted as unchanged, and the run still succeeds: one unformattable file in a tree must not
-// stop the others from being formatted, and must not be half-rewritten from a token stream that
-// stopped early.
-//
-// ⚠ `tests/README.md` records the limit this case cannot cover: `unchanged` means both "already
-// perfect" and "could not be read", and nothing in the report tells the two apart. One fixture
-// pins it for one file; nothing says it is happening to two hundred.
+// unlexable-file-left-alone — a source the lexer rejects is left BYTE-IDENTICAL, named on stderr
+// and counted as refused, and the run exits 1: one unformattable file in a tree must not stop the
+// others from being formatted, and must not be half-rewritten from a token stream that stopped
+// early.
 //
 test 'a file the lexer rejects is left byte-identical while its neighbour is formatted'
 	checkFixture("unlexable-file-left-alone")
 end 'a file the lexer rejects is left byte-identical while its neighbour is formatted'
+
+test 'a source the lexer rejects is refused and left byte-identical, whichever literal or comment it stops inside'
+	checkFixture("unlexable-sources-refused")
+end 'a source the lexer rejects is refused and left byte-identical, whichever literal or comment it stops inside'
+
+test 'a file with a keyword for a name, a stray end or an unclosed block is refused and left byte-identical'
+	checkFixture("unparseable-files-refused")
+end 'a file with a keyword for a name, a stray end or an unclosed block is refused and left byte-identical'
 
 // ============================================================================================
 // REAL SOURCES, AT SCALE

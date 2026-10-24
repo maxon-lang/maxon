@@ -126,8 +126,8 @@ def generate_engine_case_expectations(exe):
     a golden says "the layout moved", the invariants say "something
     was destroyed", and the second reads far better when it fires.
 
-    A case the lexer REJECTS mints an `.expected` identical to its `.in` -- that is
-    the contract for an unformattable source, not an accident.
+    Every case must be one `fmt` formats: a source it refuses belongs in
+    `fixtures/`, where the refusal and the untouched file are pinned.
     """
     if not os.path.isdir(ENGINE_CASES):
         return

@@ -421,9 +421,9 @@ Two things precede the build. Both cost seconds, and both catch what a build can
 `node website/scripts/sync-docs.mjs` still **runs** — it is the regeneration this pass owes, not a
 check. Its `--check` form is the caller's gate and is not run here.
 
-⚠ `mcp__maxon__fmt` is not a substitute for the build: a file `fmt` cannot lex is left byte-identical
-and reported `unchanged`, the same word it uses for an already-canonical file, so `unchanged` alone
-proves nothing.
+⚠ `mcp__maxon__fmt` is not a substitute for the build: it refuses a file it cannot lex or whose blocks
+do not close, but it formats a file with any other error in its grammar, and a file that formatted
+reports `unchanged` just as an already-canonical one does, so `unchanged` alone proves nothing.
 
 ## Report
 

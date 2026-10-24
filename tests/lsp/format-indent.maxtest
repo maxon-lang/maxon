@@ -1,7 +1,8 @@
 // format-indent.maxtest — `textDocument/formatting` on the INDENTATION rules: nesting, type fields,
-// else blocks and spaces-instead-of-tabs. Four of the thirteen formatting tests; the other nine
-// are in `format-preserves.maxtest`, `format-constructs.maxtest` and `format-literals.maxtest`,
-// and all three drive them through the entry point this file exports.
+// else blocks and spaces-instead-of-tabs. Five of the fifteen formatting tests; the other ten
+// are in `format-preserves.maxtest`, `format-constructs.maxtest`, `format-literals.maxtest` and
+// `format-refuses-a-document-it-cannot-lay-out.maxtest`, and all four drive them through the entry
+// points this file exports.
 //
 // Release discipline — why every session is driven into a VALUE before anything is asserted — is
 // stated once, in `LspClient.maxon`'s hazard 1.
@@ -53,6 +54,19 @@ export function formattedDocumentText(source String, insertSpaces bool) returns 
 
 	return text
 end 'formattedDocumentText'
+
+export function formattingMakesNoEdit(source String) returns bool throws TestFailure
+	let probe = probeFormatting(source, insertSpaces: false)
+	var noEdit = false
+
+	match probe 'probe'
+		formatted(editCount, _) then noEdit = editCount == 0
+		refused(code, message) then try Expect.fail(formattingRefusalSentence(code, message: message))
+		broke(detail) then try Expect.fail("the session broke before an answer arrived: {detail}")
+	end 'probe'
+
+	return noEdit
+end 'formattingMakesNoEdit'
 
 function wholeDocumentEdit(editCount FormattingEditTally, newText String) returns String throws TestFailure
 	let observedEdits = editCount

@@ -662,11 +662,16 @@ list, or an entry it cannot identify, ends the run with `fmt: <reason>` and exit
 **It takes no options.** Any `-`-leading argument is refused with exit 1 and nothing written, and so
 is a second path.
 
-A file that is already canonical is not rewritten, so its modification time is untouched. A file that
-cannot be lexed is left as it is and counted as unchanged. A file with no content, empty or only
-whitespace, formats to an empty file, so an empty marker such as a `.maxproj` stays empty and counts as
-unchanged. The run prints one `formatted: <path>` line per rewritten file and a
-`fmt: N file(s) changed, M unchanged.` summary.
+A file that is already canonical is not rewritten, so its modification time is untouched. A file with
+no content, empty or only whitespace, formats to an empty file, so an empty marker such as a `.maxproj`
+stays empty and counts as unchanged. The run prints one `formatted: <path>` line per rewritten file and
+a `fmt: N file(s) changed, M unchanged.` summary.
+
+`fmt` **refuses** a file whose layout it cannot tell: a file the lexer rejects, a file with a keyword
+where `let`, `var` or `for` needs a name, and a file whose `end` lines do not match its blocks. The
+diagnostic goes to stderr, the file is left as it is, and the other files are still formatted. The
+summary then reads `fmt: N file(s) changed, M unchanged, K refused.` and the run exits 1. Every other
+error in a file's grammar is reported by `maxon build`.
 
 The formatter decides **blank lines** as well as indentation. Exactly one blank line separates adjacent
 groups in a scope, and none appears inside a group:

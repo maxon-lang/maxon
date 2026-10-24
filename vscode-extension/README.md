@@ -152,7 +152,7 @@ npm test
 The extension has no formatter of its own. **Format Document** (**Shift+Alt+F**, or **Shift+Option+F** on
 Mac) sends `textDocument/formatting` to the language server, which re-prints the whole document with the
 compiler's formatter and answers with one edit replacing all of it — or with nothing when the document is
-already formatted.
+already formatted or the formatter refuses it (an unclosed block, a keyword where a name must stand).
 
 The extension sets `editor.formatOnSave` to `true` for Maxon files, so saving formats. Turn it off in your
 settings to format only on request:

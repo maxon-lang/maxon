@@ -659,11 +659,16 @@ list, or an entry it cannot identify, ends the run with `fmt: <reason>` and exit
 **It takes no options.** Any `-`-leading argument is refused with exit 1 and nothing written, and so
 is a second path.
 
-A file that is already canonical is not rewritten, so its modification time is untouched. A file that
-cannot be lexed is left as it is and counted as unchanged. A file with no content, empty or only
-whitespace, formats to an empty file, so an empty marker such as a `.maxproj` stays empty and counts as
-unchanged. The run prints one `formatted: <path>` line per rewritten file and a
-`fmt: N file(s) changed, M unchanged.` summary.
+A file that is already canonical is not rewritten, so its modification time is untouched. A file with
+no content, empty or only whitespace, formats to an empty file, so an empty marker such as a `.maxproj`
+stays empty and counts as unchanged. The run prints one `formatted: <path>` line per rewritten file and
+a `fmt: N file(s) changed, M unchanged.` summary.
+
+`fmt` **refuses** a file whose layout it cannot tell: a file the lexer rejects, a file with a keyword
+where `let`, `var` or `for` needs a name, and a file whose `end` lines do not match its blocks. The
+diagnostic goes to stderr, the file is left as it is, and the other files are still formatted. The
+summary then reads `fmt: N file(s) changed, M unchanged, K refused.` and the run exits 1. Every other
+error in a file's grammar is reported by `maxon build`.
 
 The formatter decides **blank lines** as well as indentation. Exactly one blank line separates adjacent
 groups in a scope, and none appears inside a group:
@@ -2375,7 +2380,7 @@ maxon: project check <uri> version <version> <outcome>
 | `textDocument/hover` | Markdown: the declaration as written in a `maxon` code block, its `///` doc comment, and for a variable or parameter what it is and its type. A binding is named for where it lives — a module-level constant, a field of the type that declares it, a local, or a loop variable — and for its kind, a constant (`let`), a variable (`var`) or a view (`view`), and its type is read from whatever gives it one: a written type, a literal, a call's declared return type, a `try … otherwise`, a field of another type, the element type of the collection a `for … in` walks, or the element of a generic container reached through a type alias. A name declared outside the buffer is looked up in the project, and so is a member of one: a field or method of a type declared in a sibling file or in the standard library renders too, and only where that file's visibility rules let this file name it. Where the type cannot be named — an element still standing for a type parameter — the hover says it could not infer the type. A qualified chain reads as the compiler reads it: `sub.Calc` in `sub.Calc.make()` renders the type `sub/` declares and `make` that type's static, and a chain whose head is a binding in scope reads that binding. Keywords and math intrinsics are described too. |
 | `textDocument/definition` | The declaration of the name under the cursor. A declaration in the same document is answered from it; otherwise the project's index says which file declares the name, and the answer points into that file. A member of a chained receiver (`a.b.c`, `a.m().n()`) resolves through the same walk the hover uses, so it lands on its declaration too, and so does a qualified chain: `sub.Calc` lands on the type `sub/` declares, and a chain whose head is a local binding on that binding's member. A name the compiler would refuse as ambiguous, or one no visible declaration carries, answers `null`. |
 | `textDocument/completion` | Members after `.` (the trigger character), and while a partial member name is being typed: fields, methods, static functions and enum cases. The receiver may be a type name, `self` or `Self`, a field of the enclosing type, a `for … in` loop variable, a local whose type is evident — including one bound by a call or by a `try … otherwise` — a chain of any of these (`a.b.c`, `a.m().n()`), a receiver whose declared type is a generic-instance type alias, resolved to the base it names, an element taken out of a generic container (`try xs.get(0)`), a field or method of a type declared in another file of the project, or a service handle, whose surface is its service's messages plus `shutdown` and `clone` — what the compiler accepts on a handle — and not the synthesized companion's own field. A type the buffer declares is answered from the buffer, including the members an `extension` over it adds. There is no completion of bare identifiers. |
-| `textDocument/formatting` | One edit replacing the whole document with `maxon fmt`'s layout, or `null` when it is already formatted. `insertSpaces: false` indents with tabs; `true` indents with `tabSize` spaces. |
+| `textDocument/formatting` | One edit replacing the whole document with `maxon fmt`'s layout, or `null` when it is already formatted or `fmt` would refuse it. `insertSpaces: false` indents with tabs; `true` indents with `tabSize` spaces. |
 | `textDocument/documentSymbol` | The top-level declarations: functions, types, enums, unions, interfaces and extensions. A block whose `end '…'` the author has not typed yet is left out |
 | `textDocument/foldingRange` | Every closed block spanning more than one line |
 | `textDocument/linkedEditingRange` | A block's opening name and its `end '…'` label, edited together |
@@ -2780,7 +2785,7 @@ Formats Maxon source, as `maxon fmt` does.
 | Argument | Type | Description |
 |----------|------|-------------|
 | `path` | string | File or directory, rewritten **in place**. Omitted, the whole working directory is formatted. |
-| `source` | string | Inline source to format and return in the result's `formatted` field, leaving every file as it is. `path` and `source` exclude each other. |
+| `source` | string | Inline source to format and return in the result's `formatted` field, leaving every file as it is. A source `fmt` refuses answers `success: false` with the diagnostic in `stderr`. `path` and `source` exclude each other. |
 | `timeoutSeconds` | number | Seconds the format may take (default 600) |
 | `repoRoot` | string | Developer mode only. The checkout whose compiler formats; see [Which tree, and which compiler](#which-tree-and-which-compiler). |
 

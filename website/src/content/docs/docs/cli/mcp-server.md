@@ -177,7 +177,7 @@ Formats Maxon source, as `maxon fmt` does.
 | Argument | Type | Description |
 |----------|------|-------------|
 | `path` | string | File or directory, rewritten **in place**. Omitted, the whole working directory is formatted. |
-| `source` | string | Inline source to format and return in the result's `formatted` field, leaving every file as it is. `path` and `source` exclude each other. |
+| `source` | string | Inline source to format and return in the result's `formatted` field, leaving every file as it is. A source `fmt` refuses answers `success: false` with the diagnostic in `stderr`. `path` and `source` exclude each other. |
 | `timeoutSeconds` | number | Seconds the format may take (default 600) |
 | `repoRoot` | string | Developer mode only. The checkout whose compiler formats; see [Which tree, and which compiler](#which-tree-and-which-compiler). |
 

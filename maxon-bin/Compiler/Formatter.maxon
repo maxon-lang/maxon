@@ -1,9 +1,11 @@
 // ⭐⭐ **`maxon fmt` — A TOKEN-STREAM RE-PRINTER. IT NEVER PARSES, AND THAT IS THE DESIGN.**
 //
 // The whole formatter is `tokenize` plus a walk that decides, for each token, how much whitespace goes
-// in front of it. There is no AST, so a file that does not PARSE still formats — and a file that does
-// not LEX comes back byte for byte unchanged (`format`'s one `otherwise`), because the alternative is
-// writing a lexer's error text into the author's file.
+// in front of it. There is no AST, so a source with an error in its grammar that no token shape
+// shows still formats. `format` refuses (`FormatRefusal`) the sources whose layout it cannot tell:
+// one that does not lex, one with a keyword where `let`, `var` or `for` needs a name, and one whose
+// blocks do not close, since its indentation is driven by `end` and every later line would sit at
+// the wrong level.
 //
 // ⚠ **COMMENTS ARE NOT IN THE TOKEN STREAM, WITH ONE EXCEPTION**, so the lexer logs them beside
 // it (`tokenizeWithComments`) and `CommentMapBuilder` re-attaches them by line number. Taking them
@@ -128,9 +130,10 @@ end 'ScopeGrouping'
 type GroupFrame
 	export let grouping as ScopeGrouping
 	export let savedPrevKey as GroupKey
+	export let openedAt as BlockPosition
 
-	static function create(grouping ScopeGrouping, savedPrevKey GroupKey) returns GroupFrame
-		return Self{grouping: grouping, savedPrevKey: savedPrevKey}
+	static function create(grouping ScopeGrouping, savedPrevKey GroupKey, openedAt BlockPosition) returns GroupFrame
+		return Self{grouping: grouping, savedPrevKey: savedPrevKey, openedAt: openedAt}
 	end 'create'
 end 'GroupFrame'
 
@@ -157,6 +160,40 @@ enum FormatBlockKind
 end 'FormatBlockKind'
 
 typealias FormatBlockKindArray = Array with FormatBlockKind
+
+type BlockPosition
+	export let line as LineNumber
+	export let column as ColumnNumber
+
+	static function unstarted() returns BlockPosition
+		return Self{line: 0, column: 0}
+	end 'unstarted'
+
+	static function of(tok Token) returns BlockPosition
+		return Self{line: tok.line, column: tok.column}
+	end 'of'
+end 'BlockPosition'
+
+/// Why `format` declined a source. `unbalanced` is the formatter's own refusal, with no compiler
+/// diagnostic behind it.
+export union FormatRefusal implements Error
+	unlexable(error LexerError)
+	ungrammatical(error SourceParseError)
+	unbalanced(line LineNumber, column ColumnNumber, sentence String)
+
+	export function render(path FilePath) returns String
+		return match self 'refusal'
+			unlexable(error) gives lexerErrorDiagnostic(error, path: path).render()
+			ungrammatical(error) gives parseErrorDiagnostic(error, path: path, keywords: KeywordTable.create()).render()
+			unbalanced(line, column, sentence) gives "fmt: {path.toString()}:{line}:{column}: {sentence}"
+		end 'refusal'
+	end 'render'
+end 'FormatRefusal'
+
+union RecordedRefusal
+	none
+	found(refusal FormatRefusal)
+end 'RecordedRefusal'
 
 // --- Comments, filed by line ---------------------------------------------------------------------
 
@@ -667,6 +704,8 @@ type FormatState
 	var consumedLeading as ConsumedLineSet
 	var consumedTrailing as ConsumedLineSet
 	var blocks as FormatBlockKindArray
+	var lineStartedAt as BlockPosition
+	var recorded as RecordedRefusal
 
 	// ⭐ **PUSHED AND POPPED IN LOCKSTEP WITH `indentLevel`** — one frame per open level, and that
 	// lockstep is what makes "which scope is this line in" a single fact. DISTINCT from `blocks`, which
@@ -731,18 +770,25 @@ type FormatState
 	var blankDecisionPending as bool
 
 	static function create(tokens TokenArray, options FormatOptions, lines SourceLines, comments SourceComments, keywords KeywordTable) returns FormatState
-		return Self{out: StringBuilder.create(), options: options, tokens: tokens, lines: lines, comments: comments.byLine, inPlace: comments.inPlace, consumedLeading: ConsumedLineSet.create(), consumedTrailing: ConsumedLineSet.create(), blocks: FormatBlockKindArray.create(), groupFrames: GroupFrameArray.create(), indentLevel: 0, atLineStart: true, newlineRun: 0, pendingIndentIncrease: false, pendingScopeGrouping: ScopeGrouping.memberList, prevKind: TokenKind.eof, prevIsModuleKeyword: false, prevWasDot: false, prevWasUnary: false, prevProducedValue: false, prevBeganLine: false, prevNamesAFunction: false, prevDeclaresAFunction: false, brackets: BracketTracker.create(), inArmPattern: false, armContinuation: false, hasEmitted: false, lastEmittedSourceLine: 0, labelFollowsACloser: false, lineHasLabeledOpener: false, lineHasMatch: false, prevGroupKey: GroupKey.of(GroupKeyKind.none), pendingGroupKey: GroupKey.of(GroupKeyKind.none), currentLineOpenedBlock: false, uniqueGroupCounter: 0, blankDecisionPending: false, keywords: keywords}
+		return Self{out: StringBuilder.create(), options: options, tokens: tokens, lines: lines, comments: comments.byLine, inPlace: comments.inPlace, consumedLeading: ConsumedLineSet.create(), consumedTrailing: ConsumedLineSet.create(), blocks: FormatBlockKindArray.create(), lineStartedAt: BlockPosition.unstarted(), recorded: RecordedRefusal.none, groupFrames: GroupFrameArray.create(), indentLevel: 0, atLineStart: true, newlineRun: 0, pendingIndentIncrease: false, pendingScopeGrouping: ScopeGrouping.memberList, prevKind: TokenKind.eof, prevIsModuleKeyword: false, prevWasDot: false, prevWasUnary: false, prevProducedValue: false, prevBeganLine: false, prevNamesAFunction: false, prevDeclaresAFunction: false, brackets: BracketTracker.create(), inArmPattern: false, armContinuation: false, hasEmitted: false, lastEmittedSourceLine: 0, labelFollowsACloser: false, lineHasLabeledOpener: false, lineHasMatch: false, prevGroupKey: GroupKey.of(GroupKeyKind.none), pendingGroupKey: GroupKey.of(GroupKeyKind.none), currentLineOpenedBlock: false, uniqueGroupCounter: 0, blankDecisionPending: false, keywords: keywords}
 	end 'create'
 
 	// Walk every token, then hand over the built text. A formatted file with content ends with
 	// exactly one newline and no trailing layout; one without content is empty, so an empty
 	// `.maxproj` marker is left unchanged rather than rewritten to a newline.
-	export function run() returns String
+	export function run() returns String throws FormatRefusal
 		var index = 0 as ElementIndex
 
 		while index < tokens.count() 'eachToken'
 			index = self.emitToken(index)
 		end 'eachToken'
+
+		self.refuseGroupsLeftOpen()
+
+		match self.recorded 'inspect'
+			found(refusal) then throw refusal
+			none then break
+		end 'inspect'
 
 		let body = self.out.build().trimEnd()
 
@@ -830,6 +876,7 @@ type FormatState
 		end 'mayHaveCommentsAbove'
 
 		self.newlineRun = 0
+		self.requireNameAfterBinder(tok)
 
 		if not self.hasEmitted and tok.line >= 1 'headComments'
 			self.emitHeadComments(tok.line)
@@ -865,7 +912,9 @@ type FormatState
 		if closesABlock and self.atLineStart 'closesBlock'
 			if self.indentLevel > 0 'dedent'
 				self.dedentOneLevel()
-			end 'dedent'
+			end 'dedent' else 'strayCloser'
+				self.refuseStrayCloser(tok)
+			end 'strayCloser'
 
 			self.popBlock()
 			self.labelFollowsACloser = true
@@ -876,7 +925,9 @@ type FormatState
 				self.currentLineOpenedBlock = false
 			end 'bodyOpenedOnThisLine' else if self.indentLevel > 0 'dedentFollowingLines'
 				self.dedentOneLevel()
-			end 'dedentFollowingLines'
+			end 'dedentFollowingLines' else 'strayMidLineCloser'
+				self.refuseStrayCloser(tok)
+			end 'strayMidLineCloser'
 
 			self.popBlock()
 			self.labelFollowsACloser = true
@@ -1240,6 +1291,7 @@ type FormatState
 		end 'scopeGroups'
 
 		self.blankDecisionPending = false
+		self.lineStartedAt = BlockPosition.of(tok)
 		self.beginCodeLine(tok.line)
 
 		// An arm BEGINS a pattern region; a continuation line is already inside the one it continues.
@@ -1497,6 +1549,38 @@ type FormatState
 		end 'hasABlock'
 	end 'popBlock'
 
+	function refuseStrayCloser(tok Token)
+		self.refuse(FormatRefusal.unbalanced(tok.line, column: tok.column, sentence: "this 'end' closes no block, so the layout of what follows cannot be told"))
+	end 'refuseStrayCloser'
+
+	// Balance is judged on `indentLevel` and `groupFrames`, never on `blocks`: `blocks` drifts on
+	// valid sources, so counting it would refuse files that format correctly.
+	function refuseGroupsLeftOpen()
+		let outermost = try self.groupFrames.get(0) otherwise return
+		self.refuse(FormatRefusal.unbalanced(outermost.openedAt.line, column: outermost.openedAt.column, sentence: "this block is still open at the end of the file, so the layout of what follows it cannot be told"))
+	end 'refuseGroupsLeftOpen'
+
+	// `let`, `var` and `for` are enum members after a dot and pattern words in a match arm, so only
+	// the statement keyword demands an identifier next.
+	function requireNameAfterBinder(tok Token)
+		if self.prevKind != TokenKind.let and self.prevKind != TokenKind.var and self.prevKind != TokenKind.for or self.prevWasDot or self.inArmPattern 'noBinder'
+			return
+		end 'noBinder'
+
+		if self.inDataBlock() or not self.keywords.holdsKind(tok.kind) 'aName'
+			return
+		end 'aName'
+
+		self.refuse(FormatRefusal.ungrammatical(SourceParseError.unexpectedToken("identifier", got: tokenDisplayText(tok), line: tok.line, column: tok.column)))
+	end 'requireNameAfterBinder'
+
+	function refuse(refusal FormatRefusal)
+		match self.recorded 'inspect'
+			none then self.recorded = RecordedRefusal.found(refusal)
+			found then return
+		end 'inspect'
+	end 'refuse'
+
 	function innermostBlock() returns FormatBlockKind
 		// `other` at file scope is not a sentinel: none of the three layout rules keyed on this kind
 		// applies there, which is exactly what `other` means. The guard is not defensive either — the
@@ -1534,7 +1618,7 @@ type FormatState
 	end 'currentGrouping'
 
 	function pushGroupFrame(grouping ScopeGrouping)
-		self.groupFrames.push(GroupFrame.create(grouping, savedPrevKey: self.prevGroupKey))
+		self.groupFrames.push(GroupFrame.create(grouping, savedPrevKey: self.prevGroupKey, openedAt: self.lineStartedAt))
 		self.prevGroupKey = GroupKey.of(GroupKeyKind.none)
 	end 'pushGroupFrame'
 
@@ -1811,28 +1895,37 @@ union SectionSeparator
 	absent
 end 'SectionSeparator'
 
-/// Format `source`. A source the lexer REJECTS comes back unchanged.
+/// Format `source`, or throw the `FormatRefusal` that says why its layout cannot be told.
 ///
 /// ⭐⭐ **THE `---` SPLIT.** A source may carry non-Maxon sections below a `---` separator line. The
 /// lexer has no rule for such a line — it lexes `---` as three `minus` tokens — so without the
 /// split the formatter walks on and RE-LAYS-OUT those sections as though
 /// they were Maxon, destroying the tail.
-export function format(source String, options FormatOptions = FormatOptions.tabs()) returns String
+export function format(source String, options FormatOptions = FormatOptions.tabs()) returns String throws FormatRefusal
 	let bytes = source.toByteArray()
 
-	return match findSectionSeparator(bytes) 'separator'
-		at(offset) gives "{formatCore(sliceOf(bytes, from: 0, to: offset), options: options)}{sliceOf(bytes, from: offset, to: bytes.count() as ByteOffset)}"
-		absent gives formatCore(source, options: options)
+	match findSectionSeparator(bytes) 'separator'
+		at(offset) then return try formatBeforeTheSeparator(bytes, separatorAt: offset, options: options)
+		absent then return try formatCore(source, options: options)
 	end 'separator'
 end 'format'
 
-function formatCore(source String, options FormatOptions) returns String
+function formatBeforeTheSeparator(bytes ByteArray, separatorAt ByteOffset, options FormatOptions) returns String throws FormatRefusal
+	let formatted = try formatCore(sliceOf(bytes, from: 0, to: separatorAt), options: options)
+	return "{formatted}{sliceOf(bytes, from: separatorAt, to: bytes.count() as ByteOffset)}"
+end 'formatBeforeTheSeparator'
+
+function formatCore(source String, options FormatOptions) returns String throws FormatRefusal
 	let keywords = KeywordTable.create()
-	let lexed = try tokenizeWithComments(source, keywords: keywords) otherwise return source
+
+	let lexed = try tokenizeWithComments(source, keywords: keywords) otherwise (lexErr) 'unlexable'
+		throw FormatRefusal.unlexable(lexErr)
+	end 'unlexable'
+
 	let lines = SourceLines.of(source.toByteArray())
 	var builder = CommentMapBuilder.create(lines, tokens: lexed.tokens)
 	var state = FormatState.create(lexed.tokens, options: options, lines: lines, comments: builder.build(lexed.comments), keywords: keywords)
-	return state.run()
+	return try state.run()
 end 'formatCore'
 
 // The byte offset of the first `---` section-separator line, if the source has one. A separator is a

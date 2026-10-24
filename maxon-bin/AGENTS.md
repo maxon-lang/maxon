@@ -338,9 +338,9 @@ root `fmt` walks every directory under `website/node_modules/`. The marker is a 
 never read, and both walks honour it — `fmt`'s and the compiler's own `collectMaxonSources`.
 
 ⚠ **THE FORMATTER ENGINE'S GATE IS `tests/fmt/engine-cases.maxtest`, NOT `spec-test`.** It formats
-the 70 sources in `tests/fmt/engine-cases/` (4 of them unlexable) with the real `maxon fmt`, twice, and
-goes red if an answer differs from its `.expected`, its content changed, a lexer-error sentinel is
-written into a file, or a second run moves anything. `UrlInPlainString`, `NoMultilineLiteral` and
+the 70 sources in `tests/fmt/engine-cases/` with the real `maxon fmt`, twice, and
+goes red if an answer differs from its `.expected`, its content changed, `fmt` refuses one, or a second
+run moves anything. A source `fmt` refuses is pinned in `tests/fmt/fixtures/`. `UrlInPlainString`, `NoMultilineLiteral` and
 `PlainStringNoInterpolation` are negative controls that must stay GREEN. The content check is
 `contentChange` in `tests/fmt/content-gate.maxtest`: every comment line of the source must come out as
 exactly one comment line with the same opener and words, in order, and every code token must survive.

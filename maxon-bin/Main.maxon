@@ -1156,6 +1156,7 @@ end 'fmtSelection'
 // An already-canonical file is not rewritten: `fmt` over a clean tree must leave every mtime alone.
 function formatEachFile(files FilePathArray) returns ExitCode
 	var changed = 0 as FormattedFileCount
+	var refused = 0 as FormattedFileCount
 
 	for file in files 'eachFile'
 		let original = try File.readText(file) otherwise 'unreadable'
@@ -1163,7 +1164,12 @@ function formatEachFile(files FilePathArray) returns ExitCode
 			return OwnFailureExit
 		end 'unreadable'
 
-		let formatted = format(original)
+		let formatted = try format(original) otherwise (refusal) 'unformattable'
+			printError("{refusal.render(file)}\n")
+			printError("fmt: {file} is left as it is\n")
+			refused = refused + 1
+			continue
+		end 'unformattable'
 
 		if formatted != original 'differs'
 			try File.writeText(file, content: formatted) otherwise 'unwritable'
@@ -1176,7 +1182,14 @@ function formatEachFile(files FilePathArray) returns ExitCode
 		end 'differs'
 	end 'eachFile'
 
-	print("fmt: {changed} file(s) changed, {files.count() as FormattedFileCount - changed} unchanged.\n")
+	let unchanged = files.count() as FormattedFileCount - changed - refused
+
+	if refused > 0 'someRefused'
+		print("fmt: {changed} file(s) changed, {unchanged} unchanged, {refused} refused.\n")
+		return OwnFailureExit
+	end 'someRefused'
+
+	print("fmt: {changed} file(s) changed, {unchanged} unchanged.\n")
 	return SucceededExit
 end 'formatEachFile'
 
@@ -1848,7 +1861,7 @@ function commandReference(command MaxonCommand) returns CommandReference throws 
 		checkScriptlib gives CommandReference.create(CheckScriptlibCommandName, arguments: "[<directory>]", summary: "Compile every package of a {ScriptlibDirName} directory, with every function body built.", detail: "A script compiles only the packages' functions it reaches, so a package this compiler no longer accepts stays unseen until a script calls into it. This builds them all and reports every diagnostic on stderr. With no directory it checks the `{ScriptlibDirName}/` beside this compiler's `{StdlibDirName}/`. Only the files inside the directory's immediate subdirectories are packages; a `{MaxonSourceExtension}` file directly in it is never read. A package declares no `main` and needs none. Nothing is written.{ParagraphSeparator}Exit 0 every package compiles, or there is none to check; 1 a package does not compile, or the directory could not be checked.", audience: CommandAudience.usingTheCompiler)
 		coverage gives CommandReference.create(CoverageCommandName, arguments: "<run|report> <exe>", summary: "Run a {CoverageFlag} binary and report line + branch coverage.", detail: "Everything after the executable is the CHILD's command line and reaches it untouched.", audience: CommandAudience.usingTheCompiler)
 		debug gives CommandReference.create(DebugCommandName, arguments: "[<subcommand>] <exe>", summary: "Debug a program interactively, or read back its `.mxdbg` sidecar.", detail: "`maxon debug <exe>` opens a command prompt over the running program: `break`, `run`, `continue`, `step`, `next`, `finish`, `until`, `backtrace`, `print`, `locals`, `clear`, `pause`, `threads`, `gt`, `gt-backtrace`, `gt-park`, `gt-resume`, `trace`, `detach`, `help` and `quit`, with the usual short aliases. `break <target> if <local> <op> <literal>` arms a conditional breakpoint the debugger evaluates at the stop; `break *0x<offset>` arms one exact `.text` offset; `pause` interrupts a program that stops on nothing; the `gt` words list, walk, select and hold green threads; and `trace` prints the DebugStream events committed before the stop when the session was started with {DebugTraceOption}. `{BatchOption} {CommandsOptionPrefix}<cmd;cmd;...>` runs a script instead and writes one JSON object per line on stdout, with the program's own two streams on stderr; `{CompleteOptionPrefix}<partial line>` answers the completions for a line and runs nothing.{ParagraphSeparator}The debugger drives the program from outside it, so the program carries nothing of the debugger in it. It serves a program built for the host's own native target (x64-windows, x64-linux, arm64-linux or arm64-macos): one built for another target and a wasm module are each refused by name, and on arm64-macos it drives the program through Apple's `debugserver`, so a host without the Xcode command line tools is refused too. `detach` lets a stopped program go and leaves it running; `quit` kills it.{ParagraphSeparator}`{DumpInfoOption} <exe>` prints the sidecar; `{SymbolizeOption} <exe> <offset>...` resolves `.text` code offsets to file:line:col.", audience: CommandAudience.usingTheCompiler)
-		fmt gives CommandReference.create(FmtCommandName, arguments: "[<file|directory>]", summary: "Re-print Maxon sources in canonical layout, IN PLACE.", detail: "With no path it formats the working directory. A named FILE is formatted whatever it is called; a DIRECTORY is walked for `{MaxonSourceExtension}`, `{TestSourceExtension}`, `{ProjectFileExtension}` and `{TaskFileExtension}` files, skipping anything under a `.maxonignore`, and any subdirectory that is its own checkout. Takes no options.", audience: CommandAudience.usingTheCompiler)
+		fmt gives CommandReference.create(FmtCommandName, arguments: "[<file|directory>]", summary: "Re-print Maxon sources in canonical layout, IN PLACE.", detail: "With no path it formats the working directory. A named FILE is formatted whatever it is called; a DIRECTORY is walked for `{MaxonSourceExtension}`, `{TestSourceExtension}`, `{ProjectFileExtension}` and `{TaskFileExtension}` files, skipping anything under a `.maxonignore`, and any subdirectory that is its own checkout. A file whose layout it cannot tell (one that does not lex, a keyword where a name must stand, blocks that do not close) is refused, left as it is, and the run exits 1. Takes no options.", audience: CommandAudience.usingTheCompiler)
 		help gives CommandReference.create(HelpCommandName, arguments: "[<command>]", summary: "Print this reference: every command's options, or one command's.", detail: "`maxon` with no arguments prints the short list instead.", audience: CommandAudience.usingTheCompiler)
 		init gives CommandReference.create(InitCommandName, arguments: "[<directory>]", summary: "Scaffold a new project: `<directory>{ProjectFileExtension}` and `{MainSourceFileName}`.", detail: "With no directory it initializes the working directory, and with one it creates that directory. The project is named after the directory: its `{ProjectFileExtension}` file takes that name, and its one target builds `{ProjectProductsDirName}/<name>`.{ParagraphSeparator}It never overwrites: if the directory already holds a `{ProjectFileExtension}` file or a `{MainSourceFileName}`, NOTHING is written and the existing path is named.", audience: CommandAudience.usingTheCompiler)
 		dapServer gives CommandReference.create(DapServerCommandName, arguments: "", summary: "Speak the Debug Adapter Protocol over stdio.", detail: "Content-Length framed DAP messages, so an editor such as VS Code can debug a Maxon program: `launch` names a built executable, a `.maxon` file or a project directory, and a source is built with debug info first. Breakpoints, stepping, pause, threads, stacks, variables and evaluation are the interactive debugger's, and the program's own output arrives as `output` events. Takes no options.", audience: CommandAudience.usingTheCompiler)
