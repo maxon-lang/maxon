@@ -33,7 +33,6 @@ let nistDerIntegerTag = 0x02
 let nistDerLongForm = 0x80
 let nistDerSignBit = 0x80
 let nistDerLengthBytesLimit = 4
-let nistDerHeaderBytes = 2
 let nistPointTagBytes = 1
 let nistPointCoordinates = 2
 let nistAccumulatorExtraLimbs = 2
@@ -368,21 +367,8 @@ function nistDerEncodedInteger(value NistLimbs) returns ByteArray
 		content.push(byte)
 	end 'eachByte'
 
-	return nistDerElement(nistDerIntegerTag, content: content)
+	return derElement(nistDerIntegerTag, contents: content)
 end 'nistDerEncodedInteger'
-
-function nistDerElement(tag Byte, content ByteArray) returns ByteArray
-	if content.count() >= nistDerLongForm 'longForm'
-		panic("nist: a signature element is always shorter than the long length form")
-	end 'longForm'
-
-	var element = ByteArray.create()
-	element.reserve(content.count() + nistDerHeaderBytes)
-	element.push(tag)
-	element.push(content.count() as Byte)
-	element.append(content)
-	return element
-end 'nistDerElement'
 
 function nistNonceStep(hash HashAlgorithm, key ByteArray, value ByteArray, suffix ByteArray) returns (ByteArray, ByteArray)
 	var keyed = value.clone()
@@ -718,7 +704,7 @@ type NistCurve
 
 		var content = nistDerEncodedInteger(r)
 		content.append(nistDerEncodedInteger(s))
-		return nistDerElement(nistDerSequenceTag, content: content)
+		return derElement(nistDerSequenceTag, contents: content)
 	end 'signature'
 
 	function sign(privateKey ByteArray, message ByteArray) returns ByteArray throws EcdsaSignError
@@ -760,6 +746,13 @@ type NistCurve
 	end 'baseMultiple'
 end 'NistCurve'
 
+module function nistPublicKey(curve EcdsaCurve, privateKey ByteArray) returns ByteArray throws EcdhError
+	let nist = NistCurve.of(curve)
+	let d = try nist.decodeScalar(privateKey) otherwise throw EcdhError.invalidPrivateKey
+
+	return nist.encodePoint(nist.baseMultiple(d))
+end 'nistPublicKey'
+
 /// Why `EcdhP256` refused a key.
 public enum EcdhError implements Error
 	invalidPrivateKey
@@ -770,9 +763,7 @@ end 'EcdhError'
 public type EcdhP256
 	/// The 65-byte uncompressed point `04 ‖ x ‖ y` of `d · G` for a 32-byte big-endian private key `d` in `[1, n - 1]`.
 	public static function publicKey(privateKey ByteArray) returns ByteArray throws EcdhError
-		let curve = NistCurve.of(EcdsaCurve.p256)
-		let d = try curve.decodeScalar(privateKey) otherwise throw EcdhError.invalidPrivateKey
-		return curve.encodePoint(curve.baseMultiple(d))
+		return try nistPublicKey(EcdsaCurve.p256, privateKey: privateKey)
 	end 'publicKey'
 
 	/// The 32-byte x-coordinate of `d · Q` for a private key `d` and a validated uncompressed peer point `Q`.

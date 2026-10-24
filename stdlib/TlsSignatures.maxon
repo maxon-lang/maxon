@@ -113,7 +113,7 @@ end 'TlsSignatureScheme'
 module union TlsPrivateKey
 	ecP256(scalar ByteArray)
 	ecP384(scalar ByteArray)
-	rsa(pkcs8 ByteArray)
+	rsa(key RsaPrivateKey)
 	ed25519(seed ByteArray)
 
 	module function algorithm() returns X509KeyAlgorithm
@@ -133,12 +133,12 @@ module union TlsPrivateKey
 		return match self 'key'
 			ecP256(scalar) gives try EcdsaP256.sign(scalar, message: message) otherwise throw TlsHandshakeError.internalError
 			ecP384(scalar) gives try EcdsaP384.sign(scalar, message: message) otherwise throw TlsHandshakeError.internalError
-			rsa(pkcs8) gives try signRsa(pkcs8, scheme: scheme, message: message, salt: salt)
+			rsa(rsaKey) gives try signRsa(rsaKey, scheme: scheme, message: message, salt: salt)
 			ed25519(seed) gives try Ed25519.sign(seed, message: message) otherwise throw TlsHandshakeError.internalError
 		end 'key'
 	end 'sign'
 
-	function signRsa(pkcs8 ByteArray, scheme TlsSignatureScheme, message ByteArray, salt ByteArray) returns ByteArray throws TlsHandshakeError
+	function signRsa(key RsaPrivateKey, scheme TlsSignatureScheme, message ByteArray, salt ByteArray) returns ByteArray throws TlsHandshakeError
 		let digestBytes = scheme.digest().digestBytes()
 
 		if salt.count() < digestBytes 'shortSalt'
@@ -146,12 +146,12 @@ module union TlsPrivateKey
 		end 'shortSalt'
 
 		if scheme.isPkcs1() 'deterministic'
-			return try Rsa.signPkcs1v15(pkcs8, hash: scheme.digest(), message: message) otherwise throw TlsHandshakeError.internalError
+			return try key.signPkcs1v15(scheme.digest(), message: message) otherwise throw TlsHandshakeError.internalError
 		end 'deterministic'
 
 		let pssSalt = tlsRecordPart(salt, start: 0, endIndex: digestBytes)
 
-		return try Rsa.signPss(pkcs8, hash: scheme.digest(), message: message, salt: pssSalt) otherwise throw TlsHandshakeError.internalError
+		return try key.signPss(scheme.digest(), message: message, salt: pssSalt) otherwise throw TlsHandshakeError.internalError
 	end 'signRsa'
 end 'TlsPrivateKey'
 

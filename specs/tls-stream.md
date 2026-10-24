@@ -3973,6 +3973,223 @@ DER: accepted
 0
 ```
 
+<!-- test: tls-stream.identities-refuse-damaged-and-foreign-keys -->
+`TlsIdentity.fromDer` parses the whole private key before any handshake and compares its public key with the leaf certificate's. It refuses, all as `invalidPrivateKey`, an RSA key whose private-key structure is incomplete or whose modulus is outside 2048 to 4096 bits, an EC scalar that is zero or not below the curve order, an element left after the key in a PKCS #8, SEC1 or Ed25519 encoding, a SEC1 curve that differs from the PKCS #8 algorithm parameters, and a key whose public half is not the leaf's key.
+```maxon
+function digit(symbol Byte) returns Byte
+	if symbol >= 0x61 'letter'
+		return symbol - 0x57
+	end 'letter'
+
+	return symbol - 0x30
+end 'digit'
+
+function fromHex(hex String) returns ByteArray
+	var bytes = ByteArray.create()
+	var high = 0 as Byte
+	var isHigh = true
+
+	for symbol in hex.bytes() 'eachSymbol'
+		if isHigh 'first'
+			high = digit(symbol)
+		end 'first' else 'second'
+			bytes.push(high * 16 + digit(symbol))
+		end 'second'
+
+		isHigh = not isHigh
+	end 'eachSymbol'
+
+	return bytes
+end 'fromHex'
+
+function describe(error TlsError) returns String
+	return match error 'error'
+		certificateRejected(reason) gives "certificateRejected({reason.name})"
+		protocolError(alert) gives "protocolError({alert.name})"
+		peerAlert(alert) gives "peerAlert({alert.name})"
+		peerAlertUnrecognised(code) gives "peerAlertUnrecognised({code})"
+		resolveFailed or
+		connectFailed or
+		bindFailed or
+		acceptFailed or
+		acceptInterrupted or
+		timedOut or
+		handshakeTimedOut or
+		sendFailed or
+		recvFailed or
+		connectionClosed or
+		truncated or
+		closed or
+		trustStoreUnavailable or
+		invalidConfiguration or
+		invalidCertificate or
+		invalidPrivateKey or
+		invalidPem gives error.name
+	end 'error'
+end 'describe'
+
+let leafP256Hex = "3082015930820100a00302010202010a300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3235303630313030303030305a170d3236303630313030303030305a300f310d300b06035504030c046c6561663059301306072a8648ce3d020106082a8648ce3d030107034200040b019cfdb984d032a96907cca9a63888323695b6404a7ddaacc63b5559364f2ca48f2b5d0e1151b6c0b5d17286d9a522cee437c42f410742ebb8493775fc47e9a34d304b300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b0601050507030130160603551d11040f300d820b6578616d706c652e636f6d300a06082a8648ce3d040302034700304402203bc12c6f77062e5eed59186b72a95e9652f4398685b8845ad8112a5085bb7ab602207c9761426fa260535fb0fa49efe2624a1f34e8e04eb43d8f3c72dd072e736197"
+let keyP256Hex = "3041020100301306072a8648ce3d020106082a8648ce3d0301070427302502010104200f9999d9198528f9f986f8315fe0c7aaf7b2aef840198d77b859dc4f4a8c4a2b"
+let leafP384Hex = "308201763082011da00302010202010b300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3235303630313030303030305a170d3236303630313030303030305a300f310d300b06035504030c046c6561663076301006072a8648ce3d020106052b81040022036200043832f60f3e4a462626db06a2f111e8d720f6899694ba2596a07cd906daeb6a968ca938e87ee4c4f9ec57ad8ce1a552b6ab95b1c2d8fa4c25e2058b58e08640a26b2d4f953c297511683247a1f620a0854d3ef5ff6ce43855205dce2b0608c88fa34d304b300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b0601050507030130160603551d11040f300d820b6578616d706c652e636f6d300a06082a8648ce3d04030203470030440220315764a5d757ce1d4517a871f74df0fadea37633f3a996a71724d28de559e3af02201fc71642214f349b358fc75323241cdce73b2b3cc39809d83833ed991880cb5c"
+let keyP384Hex = "304e020100301006072a8648ce3d020106052b8104002204373035020101043011afb2f77a2dec51c976f3225ec7e0eea79b70dab08e2ee263317047c621cd679b49f41aa42549e4cc3180e6191498a9"
+let leafEd25519Hex = "308201293081d1a00302010202010d300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3235303630313030303030305a170d3236303630313030303030305a300f310d300b06035504030c046c656166302a300506032b657003210011d1a93d4aa46dc06990a15578b6516e837ef6133e5e2fd6d5588089a2539933a34d304b300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b0601050507030130160603551d11040f300d820b6578616d706c652e636f6d300a06082a8648ce3d0403020347003044022052968aac0bfce24da22eae0ce09a8ea82babf6e91409b5986a62f12f74ab70ee022016592ac0afdbcf4dd110fb33b99d5505b00b0888ec45b3a53a4e6f4bb4e9d008"
+let keyEd25519Hex = "302e020100300506032b657004220420c875a7890a8054f285794a5414fbda9e4693700489f4bd2741908071978533a2"
+let leafRsaHex = "30820225308201cba00302010202010c300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3235303630313030303030305a170d3236303630313030303030305a300f310d300b06035504030c046c65616630820122300d06092a864886f70d01010105000382010f003082010a0282010100980fb5297c6dbb97057a14a202477630baf871afeb1598873f816217be94c5d5f69db47f1cb38ea433cc6df20a2071d12fce4b12f7c44f357c82bae83573a8240420ec7ff7ed2fdd75c89785d558f68d84663e73aaa4c4d45c4601434916cc3eb576b794e589c15c5c0eefb54852ef17f41ea0321ad585779e5c34df68b88e4a180dfeebf9be95476f6f9015ec0d6b51e2523e78fac0682a5c0f5409d6868c59faddc91135f977108adf4fda4a9b2e4740c8ffece5f66f9468aead8395a76c14962637fbfcfdb9014e75b2b9af07691875b56bb80cb023cd6d4d9a6d4fb7f50b8a0ffcd773cef8d7b7ab41d25748c2f53fe2a710047c4488eb9e30eebca677b30203010001a34d304b300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b0601050507030130160603551d11040f300d820b6578616d706c652e636f6d300a06082a8648ce3d04030203480030450221008f6465fe2a8cc5cb795353c12242d8cb423318cce3d16f4211d5e7313fe6916e022032211dd8d9f50b5443107ff9e203161bfaeef8028d75cc6862d584b1905ed1a8"
+let rsa1024Hex = "3082025d02010002818100c186110882736bbf2b5ff0a6bf07fb4c41afa7a4e7f5b42b0a9dfdb53152c6340378b5e2ddbc04143543621ddd519dd932627e250ee226009f744870f554a1b237819621cd6f0677ccee73bece0cc6f7a0d4e59dfc2c881edaaf95fadb6387ee5ab413df1690e27630cff4aa45c1aa8a5ca932f42f969dec24d2173c7a1509730203010001028180364873d8ae36cfff549c59b57c1a320c26d4adb29cfa17aa8714e008862850be6046e8c6152a5afe8c1e359468f32ed2b0c65dd9e93dd8290e91208cc6d411729e1798a2757af05e67ad831438d79084cc2870e35f60d458cd0ab4b22941064895bcdd9f97fe64e82b7015d416fcecdb14ced1c62f9c26d9eec557ca2360af11024100e73a8c4946aea3b61c6734805618755f2d9332765a69f6c742c089d58358d364cdfe3ce6567cbce24a9f3a8c8a810392e6ddffb9ac624c112f2ecd9946c8946b024100d641753ddd162be5cc7e2103baed52a9aaca337161397c235dacb54393e81ea4ed7d3642a1f1756f5a50a0a83a28be5cb1378cacb31ad4335dd050f4b146611902410093f761625abad2c46cb4966231b60115e1023ade85c91d4431b12802dbc471b22627b52ce8d775bf916507807bf94722305e8b9073818b8fcb93b5b98a143cf5024078b9e996323d8bfeb07b619ef875415ed91d965f0ca9978955ff3b2418f37250fc80d1523a6e13fdeaa603e0c6e4ae5f0c7c8087cf640eade2eebeaf2234c6010241009a7f5f7bd691e6b391e01e793446319d989c8fefe8771bed4d7d929373ab68859f5611ac0a367cd77506023c2dc5305c03f9e7510e880795562fb913b02f8ec1"
+let rsaOtherHex = "308204a30201000282010100b69562ad5984050c61af98f9cca16c2f5f6550841c1f1e0268695e6893e8b44ab5680ba84c5b63129b96b2d815fd29dc2490aa519564fe9f5c492f2efd3dd70f2075ac3ee44d55676f7d1ac3fbe90b68c3db41ef6b2bff3ebf5bbde77a119325ed38ae18ff5a4083a081d5dab9a5e37922b18712475294dc771617af39c7e0417bffffa10d9533f49f6e9150a96dd395ad7c650b201b7204c7d4e5aade1313ea1af0f7b3e2edeb42ed979f0148f51b3ac5060441317d3081ec20af13e541a2f1c3b9fb4d5e3ed354ca4570dc112e74080f7da2887dbcad6f3e35f294a1e4d1ce0ee93413118b631aa91238c65e495e65e719e7c149898af52b753b219a03da8f0203010001028201007cfc903b389f0e51a6816d47fb13b99a484473b4ac07852482d336a48233f74f79154b7d9f1fa41775d8d87ee1b6973432f7b10ffe23cfc5c987f3bbc7f1d049739ffa146776a4f314b7e05daf119e14ce9646719dbcd592dfadeeb709b204381f4700aeee069b493fd40150246bf1e6d7a00d65aedb523a056f6331396da10e2a7222fbaebb8c8ed5b1b911cbead180334ce4a170593a053fd1dac2c50eb04633e6f6979b43bccffa41b946ed61b34974cb59cdd225a54c622f9cab237d6ebe7836d8b86eccca985b9f284e27c9cfce9021b5271a59b89a4bb90186a9980c487b65c0f0816cb6a29891e1b5935b0d777f76ba73071605124a030b8256b97b2102818100e374b53deb8a75aee0c4ddd5895a6a0f36ffff8bd725d348eecfca94fa3d8bd2adc0d77d1e1d86373434ab5c87e94e9b5b81872b59a46bf5847080f270172c0d52c0fcf05cd70f25282724731d0a565f318676ba50fa805beb8b82dd28d99dcb003fa5818058a5a82bd08c3a3ae00e2312916d568863d8408e0b2d5b407eab1f02818100cd7f197c50faf830555cb0d48dcc4aed9c3fda7ab858fb27c6e10fce6e771179e02999cb437f2d53666e3c54f899426913a239ea7b46f11477d356598f8c61ed982953758d04e732e6d774a6141ff6c954901a5e3ce9f75288f6fef21c1439b88bf6fbb5f720bdfcd047a8859ab27aef5eee76035effd1aa7ae8173a56eb5291028180685da9b7e2b6e26ebe95b64fffb92bc7156e7b5c37f9142c77df824dbf50b432942552fb06f1771f27662f66c2ba0ba67f633c996885683ffc67fed2bf19f2cd9e360d19611010d3f4cb990ef4b9448e63541670412ddfedcd7373357543fd02237810c20e191ed1be60efa6dc52e849b1806711f87d0fc1f72b2bc19e2340f30281805b29f19277127f9c61a237487487970e066d456d7feee9ace1cbe2893ff44eaa74c9bfd2aee4f2a4b7225c5d8dd3dfe461b36c621bc2831d03739c312b3faa0a0fa0f5c78682105742957ec856d13f585dcd78052a9cd8fda28980dcc39c2d6733a0a4563b862902c91ba12574558db837b32e639c777cfa5680341dcb85a6210281810086071742f1ded95f61ff86bd7306306bee57c6d53159b01929ddf1f834e113612ae3cf99d9883081f7bcd8931f1ac963086c49cd4d5c04b4d342f916d3b8e6a02638897f74fdacd39c30f8b497aafa5d7eec94efa35a8d2323f16eeecc3b18b78e7820b39bb565231466319e29b7aca133009f7ff5ca5868172d8ef01f3b6c28"
+
+let derSequence = 0x30
+let derInteger = 0x02
+let derBitString = 0x03
+let derOctetString = 0x04
+let derExplicitParameters = 0xA0
+let derExplicitPublicKey = 0xA1
+let oidEcPublicKey = "06072a8648ce3d0201"
+let oidP256 = "06082a8648ce3d030107"
+let oidP384 = "06052b81040022"
+let nullElement = "0500"
+let p256Order = "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551"
+let p256Bytes = 32
+let p384Bytes = 48
+let ed25519Bytes = 32
+
+function element(tag Byte, body ByteArray) returns ByteArray
+	if body.count() >= 0x80 'tooLong'
+		panic("the case builds short elements only")
+	end 'tooLong'
+
+	var encoded = ByteArray.create()
+	encoded.push(tag)
+	encoded.push(body.count() as Byte)
+	encoded.append(body)
+
+	return encoded
+end 'element'
+
+function join(first ByteArray, second ByteArray) returns ByteArray
+	var joined = first.clone()
+	joined.append(second)
+
+	return joined
+end 'join'
+
+function lastBytes(der ByteArray, count Count) returns ByteArray
+	return try der.slice(der.count() - count, endIndex: der.count()) otherwise panic("the key is longer than its scalar")
+end 'lastBytes'
+
+function otherScalar(scalar ByteArray) returns ByteArray
+	var other = scalar.clone()
+	let last = try other.get(other.count() - 1) otherwise panic("a scalar has a last byte")
+
+	try other.set(other.count() - 1, value: last xor 1) otherwise panic("the last byte is inside the scalar")
+
+	return other
+end 'otherScalar'
+
+function zeros(count Count) returns ByteArray
+	var bytes = ByteArray.create()
+	bytes.growFilled(count, value: 0)
+
+	return bytes
+end 'zeros'
+
+function sec1(scalar ByteArray, tail ByteArray) returns ByteArray
+	var body = element(derInteger, body: fromHex("01"))
+	body.append(element(derOctetString, body: scalar))
+	body.append(tail)
+
+	return element(derSequence, body: body)
+end 'sec1'
+
+function pkcs8(algorithm ByteArray, privateKey ByteArray, tail ByteArray) returns ByteArray
+	var body = element(derInteger, body: fromHex("00"))
+	body.append(element(derSequence, body: algorithm))
+	body.append(element(derOctetString, body: privateKey))
+	body.append(tail)
+
+	return element(derSequence, body: body)
+end 'pkcs8'
+
+function ecAlgorithm(curveOid String) returns ByteArray
+	return join(fromHex(oidEcPublicKey), second: fromHex(curveOid))
+end 'ecAlgorithm'
+
+function parametersOf(curveOid String) returns ByteArray
+	return element(derExplicitParameters, body: fromHex(curveOid))
+end 'parametersOf'
+
+function reportDer(label String, leafHex String, key ByteArray) returns String
+	_ = try TlsIdentity.fromDer(ByteArrays from [fromHex(leafHex)], key: key) otherwise (error) 'refused'
+		return "{label}: {describe(error)}"
+	end 'refused'
+
+	return "{label}: accepted"
+end 'reportDer'
+
+function main() returns ExitCode
+	let p256Key = fromHex(keyP256Hex)
+	let p256Scalar = lastBytes(p256Key, count: p256Bytes)
+	let p384Scalar = lastBytes(fromHex(keyP384Hex), count: p384Bytes)
+	let ed25519Seed = lastBytes(fromHex(keyEd25519Hex), count: ed25519Bytes)
+	let p256Public = try EcdhP256.publicKey(p256Scalar) otherwise return 1
+	let trailing = fromHex(nullElement)
+	var publicKeyBits = ByteArray.create()
+
+	publicKeyBits.push(0)
+	publicKeyBits.append(p256Public)
+
+	let publicKeyField = element(derExplicitPublicKey, body: element(derBitString, body: publicKeyBits))
+	let rsaWithoutKey = fromHex("3012020100300d06092a864886f70d0101010500")
+	let rsaShell = fromHex("3006020100020105")
+
+	print("{reportDer("PKCS8 P-256 with agreeing parameters", leafHex: leafP256Hex, key: pkcs8(ecAlgorithm(oidP256), privateKey: sec1(p256Scalar, tail: parametersOf(oidP256)), tail: ByteArray.create()))}\n")
+	print("{reportDer("SEC1 P-256 with parameters and public key", leafHex: leafP256Hex, key: sec1(p256Scalar, tail: join(parametersOf(oidP256), second: publicKeyField)))}\n")
+	print("{reportDer("PKCS1 holding two integers", leafHex: leafRsaHex, key: rsaShell)}\n")
+	print("{reportDer("PKCS8 RSA without a private key", leafHex: leafRsaHex, key: rsaWithoutKey)}\n")
+	print("{reportDer("1024-bit RSA", leafHex: leafRsaHex, key: fromHex(rsa1024Hex))}\n")
+	print("{reportDer("RSA key of another certificate", leafHex: leafRsaHex, key: fromHex(rsaOtherHex))}\n")
+	print("{reportDer("P-256 scalar zero", leafHex: leafP256Hex, key: sec1(zeros(p256Bytes), tail: ByteArray.create()))}\n")
+	print("{reportDer("P-256 scalar n", leafHex: leafP256Hex, key: sec1(fromHex(p256Order), tail: ByteArray.create()))}\n")
+	print("{reportDer("P-256 scalar above n", leafHex: leafP256Hex, key: sec1(fromHex("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"), tail: ByteArray.create()))}\n")
+	print("{reportDer("P-384 scalar zero", leafHex: leafP384Hex, key: sec1(zeros(p384Bytes), tail: ByteArray.create()))}\n")
+	print("{reportDer("P-256 key of another certificate", leafHex: leafP256Hex, key: sec1(otherScalar(p256Scalar), tail: ByteArray.create()))}\n")
+	print("{reportDer("P-384 key of another certificate", leafHex: leafP384Hex, key: sec1(otherScalar(p384Scalar), tail: ByteArray.create()))}\n")
+	print("{reportDer("Ed25519 key of another certificate", leafHex: leafEd25519Hex, key: pkcs8(fromHex("06032b6570"), privateKey: element(derOctetString, body: otherScalar(ed25519Seed)), tail: ByteArray.create()))}\n")
+	print("{reportDer("SEC1 with an element after the parameters", leafHex: leafP256Hex, key: sec1(p256Scalar, tail: join(parametersOf(oidP256), second: trailing)))}\n")
+	print("{reportDer("SEC1 with an element after the public key", leafHex: leafP256Hex, key: sec1(p256Scalar, tail: join(publicKeyField, second: trailing)))}\n")
+	print("{reportDer("PKCS8 P-256 with an element after the key", leafHex: leafP256Hex, key: pkcs8(ecAlgorithm(oidP256), privateKey: sec1(p256Scalar, tail: ByteArray.create()), tail: trailing))}\n")
+	print("{reportDer("PKCS8 Ed25519 with an element after the key", leafHex: leafEd25519Hex, key: pkcs8(fromHex("06032b6570"), privateKey: element(derOctetString, body: ed25519Seed), tail: trailing))}\n")
+	print("{reportDer("PKCS8 P-256 whose SEC1 names P-384", leafHex: leafP384Hex, key: pkcs8(ecAlgorithm(oidP256), privateKey: sec1(p384Scalar, tail: parametersOf(oidP384)), tail: ByteArray.create()))}\n")
+	print("{reportDer("PKCS8 P-384 whose SEC1 names P-256", leafHex: leafP256Hex, key: pkcs8(ecAlgorithm(oidP384), privateKey: sec1(p256Scalar, tail: parametersOf(oidP256)), tail: ByteArray.create()))}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+PKCS8 P-256 with agreeing parameters: accepted
+SEC1 P-256 with parameters and public key: accepted
+PKCS1 holding two integers: invalidPrivateKey
+PKCS8 RSA without a private key: invalidPrivateKey
+1024-bit RSA: invalidPrivateKey
+RSA key of another certificate: invalidPrivateKey
+P-256 scalar zero: invalidPrivateKey
+P-256 scalar n: invalidPrivateKey
+P-256 scalar above n: invalidPrivateKey
+P-384 scalar zero: invalidPrivateKey
+P-256 key of another certificate: invalidPrivateKey
+P-384 key of another certificate: invalidPrivateKey
+Ed25519 key of another certificate: invalidPrivateKey
+SEC1 with an element after the parameters: invalidPrivateKey
+SEC1 with an element after the public key: invalidPrivateKey
+PKCS8 P-256 with an element after the key: invalidPrivateKey
+PKCS8 Ed25519 with an element after the key: invalidPrivateKey
+PKCS8 P-256 whose SEC1 names P-384: invalidPrivateKey
+PKCS8 P-384 whose SEC1 names P-256: invalidPrivateKey
+```
+```exitcode
+0
+```
+
 <!-- test: tls-stream.an-identity-from-pem-serves-a-handshake -->
 A server built from PEM text (a P-256 key in the SEC1 form, an Ed25519 PKCS #8 key, then an RSA key in the PKCS #1 form) completes a handshake with a client that trusts the root given as PEM.
 ```maxon

@@ -11,12 +11,9 @@ let tlsDerSequenceTag = 16
 let tlsDerIntegerIdentifier = 0x02
 let tlsDerOctetStringIdentifier = 0x04
 let tlsDerSequenceIdentifier = 0x30
-let tlsDerShortLengthLimit = 0x80
-let tlsDerLongLengthMarker = 0x80
-let tlsDerLengthByteMask = 0xFF
-let tlsDerBitsPerByte = 8
 let tlsDerObjectIdentifierIdentifier = 0x06
 let tlsEcParametersTag = 0
+let tlsEcPublicKeyTag = 1
 
 let tlsKeyVersionZero = ByteArray from [0]
 let tlsKeyVersionOne = ByteArray from [1]
@@ -39,7 +36,7 @@ public type TlsIdentity
 		let leaf = try X509.parse(leafDer) otherwise throw TlsError.invalidCertificate
 		let parsed = try tlsParsePrivateKey(key.clone())
 
-		if leaf.publicKey().algorithm() != parsed.algorithm() 'foreignKey'
+		if leaf.publicKey().algorithm() != parsed.algorithm() or not (try tlsPairsWith(parsed, certificateKey: leaf.publicKey())) 'foreignKey'
 			throw TlsError.invalidPrivateKey
 		end 'foreignKey'
 
@@ -72,11 +69,35 @@ function tlsPemKeyLabels() returns TlsPemLabelArray
 	return TlsPemLabelArray from [tlsPemPkcs8KeyLabel, tlsPemEcKeyLabel, tlsPemRsaKeyLabel]
 end 'tlsPemKeyLabels'
 
-function tlsParsePrivateKey(der ByteArray) returns TlsPrivateKey throws TlsError
-	var outer = DerReader.create(der)
-	var info = try outer.enterSequence() otherwise throw TlsError.invalidPrivateKey
+union TlsEcCurveName
+	unspecified
+	named(oid ByteArray)
 
-	try outer.finish() otherwise throw TlsError.invalidPrivateKey
+	function agreeing(other TlsEcCurveName) returns TlsEcCurveName throws TlsError
+		match self 'self'
+			unspecified then return other
+			named(oid) then return try other.confirming(oid)
+		end 'self'
+	end 'agreeing'
+
+	function confirming(oid ByteArray) returns TlsEcCurveName throws TlsError
+		match self 'self'
+			unspecified then return TlsEcCurveName.named(oid)
+			named(own) then return try tlsRequireSameCurve(own, other: oid)
+		end 'self'
+	end 'confirming'
+end 'TlsEcCurveName'
+
+function tlsRequireSameCurve(first ByteArray, other ByteArray) returns TlsEcCurveName throws TlsError
+	if not first.equals(other) 'differ'
+		throw TlsError.invalidPrivateKey
+	end 'differ'
+
+	return TlsEcCurveName.named(first)
+end 'tlsRequireSameCurve'
+
+function tlsParsePrivateKey(der ByteArray) returns TlsPrivateKey throws TlsError
+	var info = try DerReader.wholeSequence(der) otherwise throw TlsError.invalidPrivateKey
 
 	let version = try info.readInteger() otherwise throw TlsError.invalidPrivateKey
 	let next = try info.peekHeader() otherwise throw TlsError.invalidPrivateKey
@@ -88,11 +109,9 @@ function tlsParsePrivateKey(der ByteArray) returns TlsPrivateKey throws TlsError
 	end 'pkcs8' else if next.tagNumber() == tlsDerOctetStringTag 'sec1'
 		try requireKeyVersion(version, expected: tlsKeyVersionOne)
 
-		return try tlsEcKey(info, parameters: ByteArray.create())
+		return try tlsEcKey(info, outer: TlsEcCurveName.unspecified)
 	end 'sec1' else if next.tagNumber() == tlsDerIntegerTag 'pkcs1'
-		try requireKeyVersion(version, expected: tlsKeyVersionZero)
-
-		return TlsPrivateKey.rsa(tlsPkcs8OfPkcs1(der))
+		return try tlsRsaKey(tlsPkcs8OfPkcs1(der))
 	end 'pkcs1'
 
 	throw TlsError.invalidPrivateKey
@@ -104,21 +123,28 @@ function requireKeyVersion(version ByteArray, expected ByteArray) throws TlsErro
 	end 'unsupportedVersion'
 end 'requireKeyVersion'
 
+function tlsRsaKey(pkcs8 ByteArray) returns TlsPrivateKey throws TlsError
+	let key = try RsaPrivateKey.parse(pkcs8) otherwise throw TlsError.invalidPrivateKey
+
+	return TlsPrivateKey.rsa(key)
+end 'tlsRsaKey'
+
 function tlsPkcs8Key(der ByteArray, info DerReader) returns TlsPrivateKey throws TlsError
 	var algorithm = try info.enterSequence() otherwise throw TlsError.invalidPrivateKey
 	let identifier = try algorithm.readObjectIdentifier() otherwise throw TlsError.invalidPrivateKey
 
 	if identifier.equals(rsaEncryptionOid) 'rsa'
-		try algorithm.readNull() otherwise throw TlsError.invalidPrivateKey
-		try algorithm.finish() otherwise throw TlsError.invalidPrivateKey
-
-		return TlsPrivateKey.rsa(der.clone())
+		return try tlsRsaKey(der)
 	end 'rsa'
 
 	if identifier.equals(x509OidEd25519) 'ed25519'
 		try algorithm.finish() otherwise throw TlsError.invalidPrivateKey
 
-		return try tlsEd25519Key(try info.readOctetString() otherwise throw TlsError.invalidPrivateKey)
+		let wrapped = try info.readOctetString() otherwise throw TlsError.invalidPrivateKey
+
+		try info.finish() otherwise throw TlsError.invalidPrivateKey
+
+		return try tlsEd25519Key(wrapped)
 	end 'ed25519'
 
 	if identifier.equals(x509OidEcPublicKey) 'ec'
@@ -127,12 +153,15 @@ function tlsPkcs8Key(der ByteArray, info DerReader) returns TlsPrivateKey throws
 		try algorithm.finish() otherwise throw TlsError.invalidPrivateKey
 
 		var sec1 = DerReader.create(try info.readOctetString() otherwise throw TlsError.invalidPrivateKey)
+
+		try info.finish() otherwise throw TlsError.invalidPrivateKey
+
 		var key = try sec1.enterSequence() otherwise throw TlsError.invalidPrivateKey
 
 		try sec1.finish() otherwise throw TlsError.invalidPrivateKey
 		try requireKeyVersion(try key.readInteger() otherwise throw TlsError.invalidPrivateKey, expected: tlsKeyVersionOne)
 
-		return try tlsEcKey(key, parameters: parameters)
+		return try tlsEcKey(key, outer: TlsEcCurveName.named(parameters))
 	end 'ec'
 
 	throw TlsError.invalidPrivateKey
@@ -151,70 +180,94 @@ function tlsEd25519Key(wrapped ByteArray) returns TlsPrivateKey throws TlsError
 	return TlsPrivateKey.ed25519(seed)
 end 'tlsEd25519Key'
 
-function tlsEcKey(key DerReader, parameters ByteArray) returns TlsPrivateKey throws TlsError
+function tlsEcKey(key DerReader, outer TlsEcCurveName) returns TlsPrivateKey throws TlsError
 	let scalar = try key.readOctetString() otherwise throw TlsError.invalidPrivateKey
-	var named = parameters
+	var inner = TlsEcCurveName.unspecified
 
-	if not key.isAtEnd() 'trailing'
-		let header = try key.peekHeader() otherwise throw TlsError.invalidPrivateKey
+	if not key.isAtEnd() and (try key.peekHeader() otherwise throw TlsError.invalidPrivateKey).tagNumber() == tlsEcParametersTag 'explicitParameters'
+		var explicit = try key.enterExplicit(tlsEcParametersTag) otherwise throw TlsError.invalidPrivateKey
 
-		if header.tagNumber() == tlsEcParametersTag 'explicitParameters'
-			var explicit = try key.enterExplicit(tlsEcParametersTag) otherwise throw TlsError.invalidPrivateKey
+		inner = TlsEcCurveName.named(try explicit.readElement() otherwise throw TlsError.invalidPrivateKey)
 
-			named = try explicit.readElement() otherwise throw TlsError.invalidPrivateKey
-		end 'explicitParameters'
-	end 'trailing'
+		try explicit.finish() otherwise throw TlsError.invalidPrivateKey
+	end 'explicitParameters'
 
-	if scalar.count() == tlsEcP256ScalarBytes and (named.isEmpty() or named.equals(x509ParametersP256)) 'p256'
-		return TlsPrivateKey.ecP256(scalar)
+	if not key.isAtEnd() 'publicKey'
+		var explicit = try key.enterExplicit(tlsEcPublicKeyTag) otherwise throw TlsError.invalidPrivateKey
+
+		_ = try explicit.readBitString() otherwise throw TlsError.invalidPrivateKey
+
+		try explicit.finish() otherwise throw TlsError.invalidPrivateKey
+	end 'publicKey'
+
+	try key.finish() otherwise throw TlsError.invalidPrivateKey
+
+	let curve = try tlsEcCurve(try outer.agreeing(inner), scalarBytes: scalar.count())
+
+	if scalar.count() != tlsEcScalarBytes(curve) 'scalarLength'
+		throw TlsError.invalidPrivateKey
+	end 'scalarLength'
+
+	return match curve 'curve'
+		p256 gives TlsPrivateKey.ecP256(scalar)
+		p384 gives TlsPrivateKey.ecP384(scalar)
+	end 'curve'
+end 'tlsEcKey'
+
+function tlsEcCurve(name TlsEcCurveName, scalarBytes Count) returns EcdsaCurve throws TlsError
+	match name 'name'
+		unspecified then return try tlsEcCurveOfScalar(scalarBytes)
+		named(oid) then return try tlsEcCurveOfParameters(oid)
+	end 'name'
+end 'tlsEcCurve'
+
+function tlsEcCurveOfScalar(scalarBytes Count) returns EcdsaCurve throws TlsError
+	if scalarBytes == tlsEcP256ScalarBytes 'p256'
+		return EcdsaCurve.p256
 	end 'p256'
 
-	if scalar.count() == tlsEcP384ScalarBytes and (named.isEmpty() or named.equals(x509ParametersP384)) 'p384'
-		return TlsPrivateKey.ecP384(scalar)
+	if scalarBytes == tlsEcP384ScalarBytes 'p384'
+		return EcdsaCurve.p384
 	end 'p384'
 
 	throw TlsError.invalidPrivateKey
-end 'tlsEcKey'
+end 'tlsEcCurveOfScalar'
+
+function tlsEcCurveOfParameters(parameters ByteArray) returns EcdsaCurve throws TlsError
+	if parameters.equals(x509ParametersP256) 'p256'
+		return EcdsaCurve.p256
+	end 'p256'
+
+	if parameters.equals(x509ParametersP384) 'p384'
+		return EcdsaCurve.p384
+	end 'p384'
+
+	throw TlsError.invalidPrivateKey
+end 'tlsEcCurveOfParameters'
+
+function tlsEcScalarBytes(curve EcdsaCurve) returns Count
+	return match curve 'curve'
+		p256 gives tlsEcP256ScalarBytes
+		p384 gives tlsEcP384ScalarBytes
+	end 'curve'
+end 'tlsEcScalarBytes'
+
+function tlsPairsWith(key TlsPrivateKey, certificateKey X509PublicKey) returns bool throws TlsError
+	return match key 'key'
+		ecP256(scalar) gives (try nistPublicKey(EcdsaCurve.p256, privateKey: scalar) otherwise throw TlsError.invalidPrivateKey).equals(certificateKey.keyBytes())
+		ecP384(scalar) gives (try nistPublicKey(EcdsaCurve.p384, privateKey: scalar) otherwise throw TlsError.invalidPrivateKey).equals(certificateKey.keyBytes())
+		rsa(rsaKey) gives rsaKey.pairs(certificateKey.der())
+		ed25519(seed) gives (try Ed25519.publicKey(seed) otherwise throw TlsError.invalidPrivateKey).equals(certificateKey.keyBytes())
+	end 'key'
+end 'tlsPairsWith'
 
 function tlsPkcs8OfPkcs1(pkcs1 ByteArray) returns ByteArray
-	var algorithm = tlsDerElement(tlsDerObjectIdentifierIdentifier, contents: rsaEncryptionOid)
+	var algorithm = derElement(tlsDerObjectIdentifierIdentifier, contents: rsaEncryptionOid)
 	algorithm.append(x509ParametersNull)
 
-	var body = tlsDerElement(tlsDerIntegerIdentifier, contents: tlsKeyVersionZero)
-	body.append(tlsDerElement(tlsDerSequenceIdentifier, contents: algorithm))
-	body.append(tlsDerElement(tlsDerOctetStringIdentifier, contents: pkcs1))
+	var body = derElement(tlsDerIntegerIdentifier, contents: tlsKeyVersionZero)
+	body.append(derElement(tlsDerSequenceIdentifier, contents: algorithm))
+	body.append(derElement(tlsDerOctetStringIdentifier, contents: pkcs1))
 
-	return tlsDerElement(tlsDerSequenceIdentifier, contents: body)
+	return derElement(tlsDerSequenceIdentifier, contents: body)
 end 'tlsPkcs8OfPkcs1'
-
-function tlsDerElement(identifier Byte, contents ByteArray) returns ByteArray
-	var element = ByteArray.create()
-	element.push(identifier)
-	element.append(tlsDerLength(contents.count()))
-	element.append(contents)
-
-	return element
-end 'tlsDerElement'
-
-function tlsDerLength(length Count) returns ByteArray
-	var octets = ByteArray.create()
-
-	if length < tlsDerShortLengthLimit 'short'
-		octets.push(length as Byte)
-
-		return octets
-	end 'short'
-
-	var digits = ByteArray.create()
-	var rest = length
-
-	while rest > 0 'eachDigit'
-		digits.insert(0, value: (rest and tlsDerLengthByteMask) as Byte)
-		rest = rest shr tlsDerBitsPerByte
-	end 'eachDigit'
-
-	octets.push((digits.count() + tlsDerLongLengthMarker) as Byte)
-	octets.append(digits)
-
-	return octets
-end 'tlsDerLength'

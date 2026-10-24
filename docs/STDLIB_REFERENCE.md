@@ -2530,7 +2530,7 @@ PKCS #8 (P-256, P-384, Ed25519 or RSA), SEC1 `ECPrivateKey` (P-256 or P-384) or 
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
-| `TlsIdentity.fromDer(chain ByteArrays, key ByteArray)` | `TlsIdentity` | `TlsError` | `invalidCertificate` for an empty chain or a first certificate that is not X.509; `invalidPrivateKey` for a key that cannot be read or whose type is not the first certificate's. |
+| `TlsIdentity.fromDer(chain ByteArrays, key ByteArray)` | `TlsIdentity` | `TlsError` | `invalidCertificate` for an empty chain or a first certificate that is not X.509; `invalidPrivateKey` for a key that cannot be read (an element left after it, an EC scalar that is zero or not below the curve order, an RSA modulus outside 2048 to 4096 bits, a SEC1 curve that differs from the PKCS #8 one) or whose public key is not the first certificate's. |
 | `TlsIdentity.fromPem(certificates String, key String)` | `TlsIdentity` | `TlsError` | The `CERTIFICATE` blocks of `certificates`, in order, and the first `PRIVATE KEY`, `EC PRIVATE KEY` or `RSA PRIVATE KEY` block of `key`, which may be the same text. `invalidPem` for text that is not PEM or a `key` with no key block. |
 
 ## TlsError

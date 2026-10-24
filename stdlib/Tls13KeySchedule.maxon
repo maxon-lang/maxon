@@ -135,13 +135,7 @@ public type Tls13KeySchedule
 	end 'deriveSecret'
 
 	public static function transcriptHash(suite Tls13CipherSuite, messages ByteArrays) returns ByteArray
-		var digest = Digest.create(suite.hashAlgorithm())
-
-		for message in messages 'eachMessage'
-			digest.update(message)
-		end 'eachMessage'
-
-		return digest.finalize()
+		return sha2OfMessages(suite.hashAlgorithm(), messages: messages)
 	end 'transcriptHash'
 
 	public static function messageHash(suite Tls13CipherSuite, clientHello ByteArray) returns ByteArray

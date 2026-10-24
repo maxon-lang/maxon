@@ -78,6 +78,8 @@ let derBitsPerTagOctet = 7
 let derShortLengthLimit = 0x80
 let derMostLengthOctets = 8
 let derBitsPerByte = 8
+let derLongLengthMarker = 0x80
+let derByteMask = 0xFF
 let derSignBit = 0x80
 let derAllOnesOctet = 0xFF
 let derMaxUnusedBits = 7
@@ -207,6 +209,21 @@ public type DerReader
 	public static function create(bytes ByteArray) returns DerReader
 		return DerReader{bytes: bytes, position: 0, limit: bytes.count()}
 	end 'create'
+
+	module static function wholeSequence(bytes ByteArray) returns DerReader throws DerError
+		let outer = DerReader.create(bytes)
+		let header = try outer.peekHeader()
+
+		if not header.isUniversal(DerUniversalTag.sequence, isConstructed: true) 'otherTag'
+			throw DerError.unexpectedTag
+		end 'otherTag'
+
+		if header.contentEnd() != bytes.count() 'trailing'
+			throw DerError.trailingData
+		end 'trailing'
+
+		return DerReader.over(bytes, start: header.contentStart(), limit: header.contentEnd())
+	end 'wholeSequence'
 
 	static function over(bytes ByteArray, start ElementIndex, limit ElementIndex) returns DerReader
 		return DerReader{bytes: bytes, position: start, limit: limit}
@@ -514,6 +531,38 @@ public type DerReader
 		return try bytes.slice(header.contentStart(), endIndex: header.contentEnd()) otherwise panic("a header's content lies inside its reader")
 	end 'take'
 end 'DerReader'
+
+module function derElement(identifier Byte, contents ByteArray) returns ByteArray
+	var element = ByteArray.create()
+	element.push(identifier)
+	element.append(derLengthOctets(contents.count()))
+	element.append(contents)
+
+	return element
+end 'derElement'
+
+function derLengthOctets(length Count) returns ByteArray
+	var octets = ByteArray.create()
+
+	if length < derShortLengthLimit 'short'
+		octets.push(length as Byte)
+
+		return octets
+	end 'short'
+
+	var digits = ByteArray.create()
+	var rest = length
+
+	while rest > 0 'eachDigit'
+		digits.insert(0, value: (rest and derByteMask) as Byte)
+		rest = rest shr derBitsPerByte
+	end 'eachDigit'
+
+	octets.push((digits.count() + derLongLengthMarker) as Byte)
+	octets.append(digits)
+
+	return octets
+end 'derLengthOctets'
 
 function derCheckInteger(content ByteArray) throws DerError
 	if content.isEmpty() 'empty'

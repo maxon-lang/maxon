@@ -465,15 +465,8 @@ function rsaAlgorithm(reader DerReader) returns ByteArray throws DerError
 	return identifier
 end 'rsaAlgorithm'
 
-function rsaOuterSequence(encoding ByteArray) returns DerReader throws DerError
-	var outer = DerReader.create(encoding)
-	var sequence = try outer.enterSequence()
-	try outer.finish()
-	return sequence
-end 'rsaOuterSequence'
-
 function rsaIntegers(encoding ByteArray, count Count) returns RsaIntegers throws DerError
-	var sequence = try rsaOuterSequence(encoding)
+	var sequence = try DerReader.wholeSequence(encoding)
 
 	var integers = RsaIntegers.create()
 
@@ -486,7 +479,7 @@ function rsaIntegers(encoding ByteArray, count Count) returns RsaIntegers throws
 end 'rsaIntegers'
 
 function rsaPublicKeyParts(der ByteArray) returns (ByteArray, DerBitString) throws DerError
-	var info = try rsaOuterSequence(der)
+	var info = try DerReader.wholeSequence(der)
 
 	let algorithm = try rsaAlgorithm(info)
 	let key = try info.readBitString()
@@ -495,7 +488,7 @@ function rsaPublicKeyParts(der ByteArray) returns (ByteArray, DerBitString) thro
 end 'rsaPublicKeyParts'
 
 function rsaPrivateKeyParts(der ByteArray) returns (ByteArray, ByteArray, ByteArray) throws DerError
-	var info = try rsaOuterSequence(der)
+	var info = try DerReader.wholeSequence(der)
 
 	let version = try info.readInteger()
 	let algorithm = try rsaAlgorithm(info)
@@ -564,12 +557,6 @@ function rsaTopBits(modulusBits Count) returns RsaTopBits
 	return (rsaEncodedLength(modulusBits) * rsaBitsPerByte - (modulusBits - 1)) as RsaTopBits
 end 'rsaTopBits'
 
-function rsaHash(hash HashAlgorithm, data ByteArray) returns ByteArray
-	var digest = Digest.create(hash)
-	digest.update(data)
-	return digest.finalize()
-end 'rsaHash'
-
 function rsaZeroBytes(count Count) returns ByteArray
 	var bytes = ByteArray.create()
 	bytes.reserve(count)
@@ -591,7 +578,7 @@ end 'rsaDigestInfo'
 
 function rsaPkcs1Block(hash HashAlgorithm, message ByteArray, length Count) returns ByteArray
 	let prefix = rsaDigestInfo(hash)
-	let digest = rsaHash(hash, data: message)
+	let digest = sha2Once(hash, data: message)
 	var block = ByteArray.create()
 	block.reserve(length)
 	block.push(0)
@@ -646,7 +633,7 @@ end 'rsaMaskBlock'
 function rsaPssDigest(hash HashAlgorithm, message ByteArray, salt ByteArray) returns ByteArray
 	var digest = Digest.create(hash)
 	digest.update(rsaZeroBytes(rsaPssZeroPrefixBytes))
-	digest.update(rsaHash(hash, data: message))
+	digest.update(sha2Once(hash, data: message))
 	digest.update(salt)
 	return digest.finalize()
 end 'rsaPssDigest'
@@ -739,6 +726,10 @@ type RsaPublicKey
 		return create(modulus, exponent: exponent)
 	end 'parse'
 
+	function isSame(other RsaPublicKey) returns bool
+		return rsaEqual(modulus, right: other.modulus) and rsaEqual(exponent, right: other.exponent)
+	end 'isSame'
+
 	function width() returns Count
 		return modulus.count()
 	end 'width'
@@ -786,7 +777,7 @@ type RsaPublicKey
 	end 'blinding'
 end 'RsaPublicKey'
 
-type RsaPrivateKey
+module type RsaPrivateKey
 	var publicKey as RsaPublicKey
 	var primeOne as RsaLimbs
 	var primeTwo as RsaLimbs
@@ -796,7 +787,7 @@ type RsaPrivateKey
 	var primeOneMontgomery as RsaMontgomery
 	var primeTwoMontgomery as RsaMontgomery
 
-	static function parse(der ByteArray) returns RsaPrivateKey throws RsaError
+	module static function parse(der ByteArray) returns RsaPrivateKey throws RsaError
 		let (version, algorithm, key) = try rsaPrivateKeyParts(der) otherwise throw RsaError.invalidPrivateKey
 
 		if not constantTimeEqual(version, b: rsaVersionZero) or not constantTimeEqual(algorithm, b: rsaEncryptionOid) 'notRsa'
@@ -817,6 +808,24 @@ type RsaPrivateKey
 
 		return RsaPrivateKey{publicKey: RsaPublicKey.create(modulus, exponent: exponent), primeOne: primeOne.clone(), primeTwo: primeTwo.clone(), exponentOne: rsaResized(rsaFieldLimbs(integers, field: RsaPrivateKeyField.exponent1), count: primeOneWidth), exponentTwo: rsaResized(rsaFieldLimbs(integers, field: RsaPrivateKeyField.exponent2), count: primeTwo.count()), coefficient: rsaResized(rsaFieldLimbs(integers, field: RsaPrivateKeyField.coefficient), count: primeOneWidth), primeOneMontgomery: RsaMontgomery.create(primeOne), primeTwoMontgomery: RsaMontgomery.create(primeTwo)}
 	end 'parse'
+
+	module function pairs(certificateKey ByteArray) returns bool
+		let certificate = try RsaPublicKey.parse(certificateKey) otherwise return false
+
+		return publicKey.isSame(certificate)
+	end 'pairs'
+
+	module function signPkcs1v15(hash HashAlgorithm, message ByteArray) returns ByteArray throws RsaError
+		return try sign(rsaPkcs1Block(hash, message: message, length: modulusBytes()))
+	end 'signPkcs1v15'
+
+	module function signPss(hash HashAlgorithm, message ByteArray, salt ByteArray) returns ByteArray throws RsaError
+		if salt.count() != hash.digestBytes() 'wrongSalt'
+			throw RsaError.invalidSaltLength
+		end 'wrongSalt'
+
+		return try sign(rsaPssEncode(hash, message: message, salt: salt, modulusBits: modulusBits()))
+	end 'signPss'
 
 	function modulusBits() returns Count
 		return publicKey.modulusBits()
@@ -872,7 +881,7 @@ public type Rsa
 	public static function signPkcs1v15(privateKey ByteArray, hash HashAlgorithm, message ByteArray) returns ByteArray throws RsaError
 		let key = try RsaPrivateKey.parse(privateKey)
 
-		return try key.sign(rsaPkcs1Block(hash, message: message, length: key.modulusBytes()))
+		return try key.signPkcs1v15(hash, message: message)
 	end 'signPkcs1v15'
 
 	/// The RSASSA-PSS signature of `message` under `privateKey`, a DER PKCS #8 two-prime RSA key, with
@@ -880,10 +889,6 @@ public type Rsa
 	public static function signPss(privateKey ByteArray, hash HashAlgorithm, message ByteArray, salt ByteArray) returns ByteArray throws RsaError
 		let key = try RsaPrivateKey.parse(privateKey)
 
-		if salt.count() != hash.digestBytes() 'wrongSalt'
-			throw RsaError.invalidSaltLength
-		end 'wrongSalt'
-
-		return try key.sign(rsaPssEncode(hash, message: message, salt: salt, modulusBits: key.modulusBits()))
+		return try key.signPss(hash, message: message, salt: salt)
 	end 'signPss'
 end 'Rsa'

@@ -64,11 +64,7 @@ module type TlsTls13Cipher implements TlsRecordCipher
 	end 'seal'
 
 	module function open(record ByteArray) returns TlsOpenedRecord throws TlsRecordError
-		if tlsIsChangeCipherSpec(record) 'unprotected'
-			return try tlsOpenPlaintext(record)
-		end 'unprotected'
-
-		return try protection.open(record)
+		return try tlsOpenProtected(protection, record: record)
 	end 'open'
 end 'TlsTls13Cipher'
 
@@ -88,13 +84,17 @@ module type TlsTls12Cipher implements TlsRecordCipher
 	end 'seal'
 
 	module function open(record ByteArray) returns TlsOpenedRecord throws TlsRecordError
-		if tlsIsChangeCipherSpec(record) 'unprotected'
-			return try tlsOpenPlaintext(record)
-		end 'unprotected'
-
-		return try protection.open(record)
+		return try tlsOpenProtected(protection, record: record)
 	end 'open'
 end 'TlsTls12Cipher'
+
+function tlsOpenProtected(opener TlsRecordOpener, record ByteArray) returns TlsOpenedRecord throws TlsRecordError
+	if tlsIsChangeCipherSpec(record) 'unprotected'
+		return try tlsOpenPlaintext(record)
+	end 'unprotected'
+
+	return try opener.open(record)
+end 'tlsOpenProtected'
 
 function tlsIsChangeCipherSpec(record ByteArray) returns bool
 	if record.count() <= tlsRecordTypeOffset 'empty'

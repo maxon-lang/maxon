@@ -19,7 +19,20 @@ public enum TlsContentType
 	alert = 21
 	handshake = 22
 	applicationData = 23
+
+	module function isProtectable() returns bool
+		return match self 'type'
+			alert or
+			handshake or
+			applicationData gives true
+			changeCipherSpec gives false
+		end 'type'
+	end 'isProtectable'
 end 'TlsContentType'
+
+module interface TlsRecordOpener
+	function open(record ByteArray) returns TlsOpenedRecord throws TlsRecordError
+end 'TlsRecordOpener'
 
 module typealias TlsRecordVersion = int(0 to u16.max) implements TlsWireValue
 
@@ -128,7 +141,7 @@ type TlsRecordState
 	end 'open'
 end 'TlsRecordState'
 
-public type Tls13RecordProtection
+public type Tls13RecordProtection implements TlsRecordOpener
 	var state as TlsRecordState
 
 	public static function create(suite Tls13CipherSuite, key ByteArray, iv ByteArray, sequenceNumber TlsSequenceNumber = 0) returns Tls13RecordProtection throws TlsRecordError
@@ -198,7 +211,7 @@ public type Tls13RecordProtection
 	end 'open'
 end 'Tls13RecordProtection'
 
-public type Tls12RecordProtection
+public type Tls12RecordProtection implements TlsRecordOpener
 	var state as TlsRecordState
 
 	public static function create(suite Tls12CipherSuite, key ByteArray, iv ByteArray, sequenceNumber TlsSequenceNumber = 0) returns Tls12RecordProtection throws TlsRecordError
@@ -281,12 +294,9 @@ function tlsRequireKeyMaterial(key ByteArray, iv ByteArray, keyBytes TlsKeyBytes
 end 'tlsRequireKeyMaterial'
 
 function tlsRequireProtectedType(contentType TlsContentType) throws TlsRecordError
-	match contentType 'protected'
-		alert or
-		handshake or
-		applicationData then return
-		changeCipherSpec then throw TlsRecordError.invalidContentType
-	end 'protected'
+	if not contentType.isProtectable() 'unprotectable'
+		throw TlsRecordError.invalidContentType
+	end 'unprotectable'
 end 'tlsRequireProtectedType'
 
 function tlsRequireContent(contentType TlsContentType, plaintext ByteArray) throws TlsRecordError
@@ -298,12 +308,11 @@ end 'tlsRequireContent'
 function tlsProtectedType(code Byte) returns TlsContentType throws TlsRecordError
 	let contentType = try TlsContentType.fromRawValue(code) otherwise throw TlsRecordError.unexpectedMessage
 
-	match contentType 'protected'
-		alert or
-		handshake or
-		applicationData then return contentType
-		changeCipherSpec then throw TlsRecordError.unexpectedMessage
-	end 'protected'
+	if not contentType.isProtectable() 'unprotectable'
+		throw TlsRecordError.unexpectedMessage
+	end 'unprotectable'
+
+	return contentType
 end 'tlsProtectedType'
 
 module function tlsRequireFraming(record ByteArray) throws TlsRecordError
