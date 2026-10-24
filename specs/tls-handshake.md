@@ -10,8 +10,9 @@ category: crypto
 ## Documentation
 
 `TlsClientHandshake` is the TLS 1.3 client (RFC 8446) as a state machine over records, with no socket: `receive`
-takes one inbound record, `takeRecords` drains the records to send, `write` and `close` add application data and
-close_notify once the handshake is done, and `takeReceived` drains the application data. It is `module` code in
+takes one inbound record, and the `TlsSession` it exposes through `session()` drains the records to send
+(`takeRecords`), adds application data and close_notify once the handshake is done (`write`, `close`) and drains the
+application data (`takeReceived`). It is `module` code in
 `stdlib/`, so a program outside `stdlib/` cannot name it (E3088); the cases here are library-tier
 (`<!-- tier: stdlib -->`) and reach it, and the test seam, as a stdlib source file does.
 
@@ -31,8 +32,8 @@ machine. Whether the peer is authenticated is the
 `TlsPeerAuthenticator` it is built with (`TlsX509Peer` verifies; `TlsUnauthenticatedPeer` skips the chain and the
 signature), and which ClientHello it sends is its `TlsClientHelloSource` (`TlsBuiltClientHello` builds it;
 `TlsReplacedClientHello` sends given bytes). `TlsUnauthenticatedPeer`, `TlsReplacedClientHello` and the
-`TlsClientReplay` driver that runs a whole transcript live in `stdlib/TlsClientReplay.maxon`, which no production
-source names.
+`TlsClientReplay` that builds the machine for `TlsReplay`, the driver that runs a whole transcript, live in
+`stdlib/TlsClientReplay.maxon` and `stdlib/TlsReplay.maxon`, which no production source names.
 
 The vectors are the canra `tls-handshake` contract: RFC 8448 section 3's 1-RTT trace, OpenSSL 3.0.13 transcripts,
 the reference client against the reference server, and the errors. A line prints the vector id and the canra
@@ -1654,7 +1655,7 @@ function main() returns ExitCode
 
 	let peer = TlsX509Peer.create(ByteArrays.create(), now: 0, purpose: X509Purpose.serverAuth)
 	var client = try TlsClientHandshake.create(config, entropy: first, peer: peer, helloSource: TlsBuiltClientHello.create()) otherwise return 3
-	let records = client.takeRecords()
+	let records = client.session().takeRecords()
 	let record = try records.get(0) otherwise return 4
 	let framed = readOrderedWord(record, off: 3, width: 2, limit: record.count(), order: ByteOrder.bigEndian) == (record.count() - 5) as ByteWord
 	let body = try record.slice(5, endIndex: record.count()) otherwise return 5
@@ -1667,7 +1668,7 @@ function main() returns ExitCode
 		default panic("the first record does not hold a ClientHello")
 	end 'message'
 
-	print("connected={client.isConnected()} drained={client.takeRecords().count()}\n")
+	print("connected={client.session().isConnected()} drained={client.session().takeRecords().count()}\n")
 
 	return 0
 end 'main'
@@ -1761,7 +1762,7 @@ function started() returns TlsClientHandshake
 	let entropy = try TlsClientEntropy.fresh(config) otherwise panic("no entropy")
 	let peer = TlsX509Peer.create(ByteArrays.create(), now: 0, purpose: X509Purpose.serverAuth)
 	var client = try TlsClientHandshake.create(config, entropy: entropy, peer: peer, helloSource: TlsBuiltClientHello.create()) otherwise panic("no client")
-	_ = client.takeRecords()
+	_ = client.session().takeRecords()
 
 	return client
 end 'started'
@@ -1770,10 +1771,10 @@ function scenario(label String, record ByteArray)
 	var client = started()
 
 	try client.receive(record) otherwise (failure) 'refused'
-		print("{label} {failure} alert={renderRecords(client.takeRecords())}\n")
+		print("{label} {failure} alert={renderRecords(client.session().takeRecords())}\n")
 
 		try client.receive(record) otherwise (again) 'repeated'
-			print("{label} again {again} queued={client.takeRecords().count()}\n")
+			print("{label} again {again} queued={client.session().takeRecords().count()}\n")
 		end 'repeated'
 	end 'refused'
 end 'scenario'
@@ -1790,15 +1791,15 @@ end 'oversized'
 function early() returns ExitCode
 	var client = started()
 
-	try client.write(fromHex("00")) otherwise (failure) 'writeRefused'
+	try client.session().write(fromHex("00")) otherwise (failure) 'writeRefused'
 		print("write-before-connected {failure}\n")
 	end 'writeRefused'
 
-	try client.close() otherwise (failure) 'closeRefused'
+	try client.session().close() otherwise (failure) 'closeRefused'
 		print("close-before-connected {failure}\n")
 	end 'closeRefused'
 
-	print("queued={client.takeRecords().count()}\n")
+	print("queued={client.session().takeRecords().count()}\n")
 
 	return 0
 end 'early'
@@ -1895,12 +1896,12 @@ function main() returns ExitCode
 	let helloSource = TlsReplacedClientHello.create(fromHex("010000c00303cb34ecb1e78163ba1c38c6dacb196a6dffa21a8d9912ec18a2ef6283024dece7000006130113031302010000910000000b0009000006736572766572ff01000100000a00140012001d0017001800190100010101020103010400230000003300260024001d002099381de560e4bd43d23d8e435a7dbafeb3c06e51c13cae4d5413691e529aaf2c002b0003020304000d0020001e040305030603020308040805080604010501060102010402050206020202002d00020101001c00024001"), retry: ByteArrays.create())
 	var client = try TlsClientHandshake.create(config, entropy: entropy, peer: TlsUnauthenticatedPeer.create(), helloSource: helloSource) otherwise return 2
 
-	_ = client.takeRecords()
+	_ = client.session().takeRecords()
 
 	try client.receive(fromHex("160303005a020000560303a6af06a4121860dc5e6e60249cd34c95930c8ac5cb1434dac155772ed3e2692800130100002e00330024001d0020c9828876112095fe66762bdbf7c672e156d6cc253b833df1dd69b1b04e751f0f002b00020304")) otherwise return 3
 	try client.receive(fromHex("17030302a2d1ff334a56f5bff6594a07cc87b580233f500f45e489e7f33af35edf7869fcf40aa40aa2b8ea73f848a7ca07612ef9f945cb960b4068905123ea78b111b429ba9191cd05d2a389280f526134aadc7fc78c4b729df828b5ecf7b13bd9aefb0e57f271585b8ea9bb355c7c79020716cfb9b1183ef3ab20e37d57a6b9d7477609aee6e122a4cf51427325250c7d0e509289444c9b3a648f1d71035d2ed65b0e3cdd0cbae8bf2d0b227812cbb360987255cc744110c453baa4fcd610928d809810e4b7ed1a8fd991f06aa6248204797e36a6a73b70a2559c09ead686945ba246ab66e5edd8044b4c6de3fcf2a89441ac66272fd8fb330ef8190579b3684596c960bd596eea520a56a8d650f563aad27409960dca63d3e688611ea5e22f4415cf9538d51a200c27034272968a264ed6540c84838d89f72c24461aad6d26f59ecaba9acbbb317b66d902f4f292a36ac1b639c637ce343117b659622245317b49eeda0c6258f100d7d961ffb138647e92ea330faeea6dfa31c7a84dc3bd7e1b7a6c7178af36879018e3f252107f243d243dc7339d5684c8b0378bf30244da8c87c843f5e56eb4c5e8280a2b48052cf93b16499a66db7cca71e4599426f7d461e66f99882bd89fc50800becca62d6c74116dbd2972fda1fa80f85df881edbe5a37668936b335583b599186dc5c6918a396fa48a181d6b6fa4f9d62d513afbb992f2b992f67f8afe67f76913fa388cb5630c8ca01e0c65d11c66a1e2ac4c85977b7c7a6999bbf10dc35ae69f5515614636c0b9b68c19ed2e31c0b3b66763038ebba42f3b38edc0399f3a9f23faa63978c317fc9fa66a73f60f0504de93b5b845e275592c12335ee340bbc4fddd502784016e4b3be7ef04dda49f4b440a30cb5d2af939828fd4ae3794e44f94df5a631ede42c1719bfdabf0253fe5175be898e750edc53370d2b")) otherwise return 4
 
-	print("connected={client.isConnected()} flight={client.takeRecords().count()}\n")
+	print("connected={client.session().isConnected()} flight={client.session().takeRecords().count()}\n")
 
 	try client.receive(fromHex("17030300de3a6b8f90414a97d6959c3487680de5134a2b240e6cffac116e95d41d6af8f6b580dcf3d11d63c758db289a015940252f55713e061dc13e078891a38efbcf5753ad8ef170ad3c7353d16d9da773b9ca7f2b9fa1b6c0d4a3d03f75e09c30ba1e62972ac46f75f7b981be63439b2999ce13064615139891d5e4c5b406f16e3fc181a77ca475840025db2f0a77f81b5ab05b94c01346755f69232c86519d86cbeeac87aac347d143f9605d64f650db4d023e70e952ca49fe5137121c74bc2697687e248746d6df353005f3bce18696129c8153556b3b6c6779b37bf15985684f")) otherwise return 5
 
@@ -1912,7 +1913,7 @@ function main() returns ExitCode
 	try client.receive(forged) otherwise (failure) 'refused'
 		print("failure {failure}\n")
 
-		let records = client.takeRecords()
+		let records = client.session().takeRecords()
 		let alertRecord = try records.get(0) otherwise return 8
 		let keys = try Tls13KeySchedule.trafficKeys(suite, trafficSecret: fromHex("9e40646ce79a7f9dc05af8889bce6552875afa0b06df0087f792ebb7c17504a5")) otherwise return 9
 		var reader = try Tls13RecordProtection.create(suite, key: keys.key(), iv: keys.iv()) otherwise return 10
@@ -2000,7 +2001,7 @@ function scenario(label String, types ContentTypeArray, payloads ByteArrays)
 		end 'refused'
 	end 'eachRecord'
 
-	print("{label} {verdict} closed={client.hasPeerClosed()}\n")
+	print("{label} {verdict} closed={client.session().hasPeerClosed()}\n")
 end 'scenario'
 
 function single(label String, contentType TlsContentType, payload String)

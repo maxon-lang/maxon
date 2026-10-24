@@ -3,26 +3,10 @@ let tlsDowngradeSentinelTls12 = ByteArray from [0x44, 0x4F, 0x57, 0x4E, 0x47, 0x
 let tlsDowngradeSentinelTls11 = ByteArray from [0x44, 0x4F, 0x57, 0x4E, 0x47, 0x52, 0x44, 0x00]
 let tlsDowngradeSentinelOffset = 24
 
-module union TlsNegotiation
-	pending
-	accepted(suite Tls13CipherSuite)
-	keyed(suite Tls13CipherSuite, group TlsGroupCode)
-end 'TlsNegotiation'
-
-module union TlsAlpnChoice
-	absent
-	negotiated(protocol ByteArray)
-end 'TlsAlpnChoice'
-
 module union TlsCertificateRequest
 	notRequested
 	requested(context ByteArray, schemes TlsSignatureSchemeCodeArray)
 end 'TlsCertificateRequest'
-
-module union TlsConnectionHealth
-	healthy
-	broken(error TlsHandshakeError)
-end 'TlsConnectionHealth'
 
 module union TlsClientPhase
 	awaitingServerHello
@@ -33,12 +17,6 @@ module union TlsClientPhase
 	awaitingFinished(request TlsCertificateRequest)
 	connected
 end 'TlsClientPhase'
-
-module union TlsClientKeys
-	none
-	handshake(clientTraffic ByteArray, serverTraffic ByteArray, master ByteArray)
-	application(clientTraffic ByteArray, serverTraffic ByteArray)
-end 'TlsClientKeys'
 
 module type TlsClientOffer
 	module var suites as TlsCipherSuiteCodeArray
@@ -74,142 +52,37 @@ module type TlsReadHello
 	end 'create'
 end 'TlsReadHello'
 
-module type TlsClientHandshake
+module type TlsClientHandshake implements TlsEndpoint, TlsMessageHandler
 	var config as TlsClientConfig
 	var entropy as TlsClientEntropy
 	var peer as TlsPeerAuthenticator
 	var helloSource as TlsClientHelloSource
-	var input as TlsRecordInput
-	var writer as TlsRecordWriter
-	var transcript as TlsTranscript
+	var session as TlsSession
 	var phase as TlsClientPhase
-	var health as TlsConnectionHealth
 	var offer as TlsClientOffer
 	var firstHello as TlsClientHello
-	var negotiation as TlsNegotiation
-	var alpn as TlsAlpnChoice
-	var keys as TlsClientKeys
-	var peerVerified as bool
-	var received as ByteArray
-	var closedByPeer as bool
 
 	module static function create(config TlsClientConfig, entropy TlsClientEntropy, peer TlsPeerAuthenticator, helloSource TlsClientHelloSource) returns TlsClientHandshake throws TlsHandshakeError
 		let sent = helloSource.first(try tlsBuildClientHello(config, entropy: entropy))
 		let hello = try tlsDecodeClientHello(sent.clone())
-		var writer = TlsRecordWriter.create(tlsRecordLegacyVersion)
-		var transcript = TlsTranscript.create()
+		var session = TlsSession.create(TlsRole.client, firstRecordVersion: tlsRecordLegacyVersion)
 
-		transcript.append(sent)
-		try writer.writeHandshake(sent)
+		session.transcript.append(sent)
+		session.compatibility = hello.legacySessionId().count() != 0
+		try session.writer.writeHandshake(sent)
 
-		return Self{config: config, entropy: entropy, peer: peer, helloSource: helloSource, input: TlsRecordInput.create(), writer: writer, transcript: transcript, phase: TlsClientPhase.awaitingServerHello, health: TlsConnectionHealth.healthy, offer: TlsClientOffer.of(hello.clone()), firstHello: hello, negotiation: TlsNegotiation.pending, alpn: TlsAlpnChoice.absent, keys: TlsClientKeys.none, peerVerified: false, received: ByteArray.create(), closedByPeer: false}
+		return Self{config: config, entropy: entropy, peer: peer, helloSource: helloSource, session: session, phase: TlsClientPhase.awaitingServerHello, offer: TlsClientOffer.of(hello.clone()), firstHello: hello}
 	end 'create'
 
 	module function receive(record ByteArray) throws TlsHandshakeError
-		try requireHealthy()
-
-		if closedByPeer 'ignored'
-			return
-		end 'ignored'
-
-		try process(record) otherwise (error) 'failed'
-			abort(error)
-
-			throw error
-		end 'failed'
+		try session.receive(record, handler: self)
 	end 'receive'
 
-	module function write(data ByteArray) throws TlsHandshakeError
-		try requireConnected()
-		try writer.writeApplicationData(data)
-	end 'write'
+	module function session() returns TlsSession
+		return session
+	end 'session'
 
-	module function close() throws TlsHandshakeError
-		try requireConnected()
-		try writer.writeAlert(TlsAlertLevel.warning, alert: TlsAlert.closeNotify)
-	end 'close'
-
-	module function takeRecords() returns ByteArrays
-		return writer.takeRecords()
-	end 'takeRecords'
-
-	module function takeReceived() returns ByteArray
-		let taken = received.clone()
-		received.clear()
-
-		return taken
-	end 'takeReceived'
-
-	module function isConnected() returns bool
-		return match phase 'phase'
-			connected gives true
-			awaitingServerHello or
-			awaitingRetriedServerHello or
-			awaitingEncryptedExtensions or
-			awaitingCertificate or
-			awaitingCertificateVerify or
-			awaitingFinished gives false
-		end 'phase'
-	end 'isConnected'
-
-	module function negotiated() returns TlsNegotiation
-		return negotiation
-	end 'negotiated'
-
-	module function applicationProtocol() returns TlsAlpnChoice
-		return alpn
-	end 'applicationProtocol'
-
-	module function hasVerifiedPeer() returns bool
-		return peerVerified
-	end 'hasVerifiedPeer'
-
-	module function hasPeerClosed() returns bool
-		return closedByPeer
-	end 'hasPeerClosed'
-
-	function requireHealthy() throws TlsHandshakeError
-		match health 'health'
-			broken(error) then throw error
-			healthy then return
-		end 'health'
-	end 'requireHealthy'
-
-	function requireConnected() throws TlsHandshakeError
-		if not isConnected() 'handshaking'
-			throw TlsHandshakeError.unexpectedMessage
-		end 'handshaking'
-	end 'requireConnected'
-
-	function abort(error TlsHandshakeError)
-		health = TlsConnectionHealth.broken(error)
-
-		let alert = try error.sentAlert() otherwise return
-
-		try writer.writeAlert(TlsAlertLevel.fatal, alert: alert) otherwise ignore
-	end 'abort'
-
-	function process(record ByteArray) throws TlsHandshakeError
-		let event = try input.accept(record)
-
-		match event 'event'
-			handshakeData then try drainMessages()
-			applicationData(data) then received.append(data)
-			closeNotify then closedByPeer = true
-			ignored then return
-		end 'event'
-	end 'process'
-
-	function drainMessages() throws TlsHandshakeError
-		while true 'eachMessage'
-			match input.nextMessage() 'slot'
-				complete(message) then try dispatch(message)
-				incomplete then return
-			end 'slot'
-		end 'eachMessage'
-	end 'drainMessages'
-
-	function dispatch(message ByteArray) throws TlsHandshakeError
+	module function dispatch(message ByteArray) throws TlsHandshakeError
 		match phase 'phase'
 			awaitingServerHello then try onServerHello(message)
 			awaitingRetriedServerHello(retrySuite) then try onRetriedServerHello(message, retrySuite: retrySuite)
@@ -277,9 +150,9 @@ module type TlsClientHandshake
 			tls12 gives try refuseTls12(hello)
 		end 'selected'
 
-		negotiation = TlsNegotiation.accepted(suite)
-		input.version = TlsInboundVersion.tls13
-		input.changeCipherSpecAllowed = true
+		session.negotiation = TlsNegotiation.accepted(suite)
+		session.input.version = TlsInboundVersion.tls13
+		session.input.changeCipherSpecAllowed = true
 
 		return TlsReadHello.create(hello, isRetry: isRetry, suite: suite)
 	end 'admitServerHello'
@@ -346,13 +219,13 @@ module type TlsClientHandshake
 		var sent = helloSource.second(try tlsEncodedMessage(TlsHandshakeMessage.clientHello(rebuilt)))
 		let second = try tlsDecodeClientHello(sent)
 
-		transcript.restart(Tls13KeySchedule.messageHash(read.suite, clientHello: transcript.contents()))
-		transcript.append(raw)
-		writeCompatibilityChangeCipherSpec()
-		input.changeCipherSpecAllowed = true
-		try input.requireKeyBoundary()
-		transcript.append(sent)
-		try writer.writeHandshake(sent)
+		session.transcript.restartAsMessageHash(read.suite)
+		session.transcript.append(raw)
+		session.writeCompatibilityChangeCipherSpec()
+		session.input.changeCipherSpecAllowed = true
+		try session.input.requireKeyBoundary()
+		session.transcript.append(sent)
+		try session.writer.writeHandshake(sent)
 
 		offer = TlsClientOffer.of(second)
 		phase = TlsClientPhase.awaitingRetriedServerHello(read.suite)
@@ -382,17 +255,17 @@ module type TlsClientHandshake
 			throw TlsHandshakeError.illegalParameter
 		end 'unsent'
 
-		negotiation = TlsNegotiation.keyed(suite, group: share.group())
-		transcript.append(raw)
-		try input.requireKeyBoundary()
+		session.negotiation = TlsNegotiation.keyed(suite, group: share.group())
+		session.transcript.append(raw)
+		try session.input.requireKeyBoundary()
 
 		let named = try TlsNamedGroup.fromRawValue(share.group()) otherwise throw TlsHandshakeError.illegalParameter
 		var secret = try entropy.secret(share.group())
 		let shared = try named.sharedSecret(secret.privateKey, peerShare: share.keyExchange())
-		let stage = try Tls13KeySchedule.handshakeStage(suite, sharedSecret: shared, helloHash: transcript.hash(suite.hashAlgorithm())) otherwise throw TlsHandshakeError.internalError
+		let stage = try Tls13KeySchedule.handshakeStage(suite, sharedSecret: shared, helloHash: session.transcript.hash(suite.hashAlgorithm())) otherwise throw TlsHandshakeError.internalError
 
-		keys = TlsClientKeys.handshake(stage.clientTrafficSecret, serverTraffic: stage.serverTrafficSecret, master: stage.masterSecret)
-		input.install(try trafficCipher(suite, secret: stage.serverTrafficSecret))
+		session.keys = TlsTrafficSecrets.handshake(stage.clientTrafficSecret, serverTraffic: stage.serverTrafficSecret, master: stage.masterSecret)
+		session.input.install(try tlsTrafficCipher(suite, secret: stage.serverTrafficSecret))
 		phase = TlsClientPhase.awaitingEncryptedExtensions
 	end 'acceptServerHello'
 
@@ -418,7 +291,7 @@ module type TlsClientHandshake
 			end 'protocol'
 		end 'eachExtension'
 
-		transcript.append(raw)
+		session.transcript.append(raw)
 		phase = TlsClientPhase.awaitingCertificate(TlsCertificateRequest.notRequested)
 	end 'acceptEncryptedExtensions'
 
@@ -429,7 +302,7 @@ module type TlsClientHandshake
 			throw TlsHandshakeError.illegalParameter
 		end 'unoffered'
 
-		alpn = TlsAlpnChoice.negotiated(name)
+		session.alpn = TlsAlpnChoice.negotiated(name)
 	end 'acceptApplicationProtocol'
 
 	function onCertificate(raw ByteArray, request TlsCertificateRequest) throws TlsHandshakeError
@@ -450,7 +323,7 @@ module type TlsClientHandshake
 	function acceptCertificateRequest(raw ByteArray, context ByteArray, extensions TlsExtensionArray)
 		let scan = TlsExtensionScan.ofExtensions(extensions)
 
-		transcript.append(raw)
+		session.transcript.append(raw)
 		phase = TlsClientPhase.awaitingCertificate(TlsCertificateRequest.requested(context.clone(), schemes: scan.signatureSchemes))
 	end 'acceptCertificateRequest'
 
@@ -473,8 +346,8 @@ module type TlsClientHandshake
 
 		let leaf = try tlsAuthenticateChain(chain, host: config.peerName, peer: peer)
 
-		peerVerified = peer.authenticates()
-		transcript.append(raw)
+		session.peerVerified = peer.authenticates()
+		session.transcript.append(raw)
 		phase = TlsClientPhase.awaitingCertificateVerify(request, key: leaf.publicKey())
 	end 'acceptCertificate'
 
@@ -488,12 +361,12 @@ module type TlsClientHandshake
 	end 'onCertificateVerify'
 
 	function acceptCertificateVerify(raw ByteArray, request TlsCertificateRequest, key X509PublicKey, code TlsSignatureSchemeCode, signature ByteArray) throws TlsHandshakeError
-		let suite = try negotiatedSuite()
+		let suite = try session.negotiatedSuite()
 		let scheme = try tlsRequireOfferedScheme(code, offered: offer.scan.signatureSchemes, algorithm: key.algorithm(), protocol: TlsProtocol.tls13)
-		let content = tlsCertificateVerifyContent(TlsCertificateVerifyRole.server, transcriptHash: transcript.hash(suite.hashAlgorithm()))
+		let content = tlsCertificateVerifyContent(TlsRole.server, transcriptHash: session.transcript.hash(suite.hashAlgorithm()))
 
 		try peer.verifySignature(scheme, key: key, message: content, signature: signature)
-		transcript.append(raw)
+		session.transcript.append(raw)
 		phase = TlsClientPhase.awaitingFinished(request)
 	end 'acceptCertificateVerify'
 
@@ -507,33 +380,33 @@ module type TlsClientHandshake
 	end 'onFinished'
 
 	function acceptFinished(raw ByteArray, request TlsCertificateRequest, verifyData ByteArray) throws TlsHandshakeError
-		let suite = try negotiatedSuite()
-		var (clientSecret, serverSecret, masterSecret) = try handshakeSecrets()
+		let suite = try session.negotiatedSuite()
+		var (clientSecret, serverSecret, masterSecret) = try session.handshakeSecrets()
 
 		if verifyData.count() != suite.hashAlgorithm().digestBytes() 'length'
 			throw TlsHandshakeError.decodeError
 		end 'length'
 
-		let expected = try Tls13KeySchedule.finishedVerifyData(suite, baseKey: serverSecret, transcriptHash: transcript.hash(suite.hashAlgorithm())) otherwise throw TlsHandshakeError.internalError
+		let expected = try Tls13KeySchedule.finishedVerifyData(suite, baseKey: serverSecret, transcriptHash: session.transcript.hash(suite.hashAlgorithm())) otherwise throw TlsHandshakeError.internalError
 
 		if not constantTimeEqual(verifyData, b: expected) 'forged'
 			throw TlsHandshakeError.decryptError
 		end 'forged'
 
-		transcript.append(raw)
-		try input.requireKeyBoundary()
+		session.transcript.append(raw)
+		try session.input.requireKeyBoundary()
 
-		let application = try Tls13KeySchedule.applicationStage(suite, masterSecret: masterSecret, serverFinishedHash: transcript.hash(suite.hashAlgorithm())) otherwise throw TlsHandshakeError.internalError
+		let application = try Tls13KeySchedule.applicationStage(suite, masterSecret: masterSecret, serverFinishedHash: session.transcript.hash(suite.hashAlgorithm())) otherwise throw TlsHandshakeError.internalError
 
-		input.install(try trafficCipher(suite, secret: application.serverTrafficSecret))
-		input.changeCipherSpecAllowed = false
-		writeCompatibilityChangeCipherSpec()
-		writer.install(try trafficCipher(suite, secret: clientSecret))
-		try writer.writeHandshake(try clientFlight(request, suite: suite, handshakeSecret: clientSecret))
-		writer.install(try trafficCipher(suite, secret: application.clientTrafficSecret))
+		session.input.install(try tlsTrafficCipher(suite, secret: application.serverTrafficSecret))
+		session.input.changeCipherSpecAllowed = false
+		session.writeCompatibilityChangeCipherSpec()
+		session.writer.install(try tlsTrafficCipher(suite, secret: clientSecret))
+		try session.writer.writeHandshake(try clientFlight(request, suite: suite, handshakeSecret: clientSecret))
+		session.writer.install(try tlsTrafficCipher(suite, secret: application.clientTrafficSecret))
 
-		keys = TlsClientKeys.application(application.clientTrafficSecret, serverTraffic: application.serverTrafficSecret)
-		input.established = true
+		session.keys = TlsTrafficSecrets.application(application.clientTrafficSecret, serverTraffic: application.serverTrafficSecret)
+		session.input.established = true
 		phase = TlsClientPhase.connected
 	end 'acceptFinished'
 
@@ -543,10 +416,10 @@ module type TlsClientHandshake
 			requested(context, schemes) gives try clientAuthentication(context, schemes: schemes, suite: suite)
 		end 'request'
 
-		let verifyData = try Tls13KeySchedule.finishedVerifyData(suite, baseKey: handshakeSecret, transcriptHash: transcript.hash(suite.hashAlgorithm())) otherwise throw TlsHandshakeError.internalError
+		let verifyData = try Tls13KeySchedule.finishedVerifyData(suite, baseKey: handshakeSecret, transcriptHash: session.transcript.hash(suite.hashAlgorithm())) otherwise throw TlsHandshakeError.internalError
 		let finished = try tlsEncodedMessage(TlsHandshakeMessage.finished(verifyData))
 
-		transcript.append(finished)
+		session.transcript.append(finished)
 		flight.append(finished)
 
 		return flight
@@ -565,25 +438,19 @@ module type TlsClientHandshake
 		end 'unmatched'
 
 		var authentication = try sentCertificate(context, chain: chain)
-		let content = tlsCertificateVerifyContent(TlsCertificateVerifyRole.client, transcriptHash: transcript.hash(suite.hashAlgorithm()))
+		let content = tlsCertificateVerifyContent(TlsRole.client, transcriptHash: session.transcript.hash(suite.hashAlgorithm()))
 		let signature = try key.sign(scheme, message: content, salt: entropy.pssSalt)
 		let verify = try tlsEncodedMessage(TlsHandshakeMessage.certificateVerify(scheme.code(), signature: signature))
 
-		transcript.append(verify)
+		session.transcript.append(verify)
 		authentication.append(verify)
 
 		return authentication
 	end 'certifiedAuthentication'
 
 	function sentCertificate(context ByteArray, chain ByteArrays) returns ByteArray throws TlsHandshakeError
-		var entries = TlsCertificateEntryArray.create()
-
-		for certificate in chain 'eachCertificate'
-			entries.push(TlsCertificateEntry.create(certificate, extensions: TlsExtensionArray.create()))
-		end 'eachCertificate'
-
-		let encoded = try tlsEncodedMessage(TlsHandshakeMessage.tls13Certificate(context, entries: entries))
-		transcript.append(encoded)
+		let encoded = try tlsEncodedMessage(TlsHandshakeMessage.tls13Certificate(context, entries: tlsCertificateEntries(chain)))
+		session.transcript.append(encoded)
 
 		return encoded
 	end 'sentCertificate'
@@ -593,59 +460,10 @@ module type TlsClientHandshake
 
 		match message 'message'
 			newSessionTicket then return
-			keyUpdate(request) then try acceptKeyUpdate(request)
+			keyUpdate(request) then try session.followKeyUpdate(request)
 			default throws TlsHandshakeError.unexpectedMessage
 		end 'message'
 	end 'onEstablishedMessage'
-
-	function acceptKeyUpdate(request TlsKeyUpdateRequest) throws TlsHandshakeError
-		try input.requireKeyBoundary()
-
-		let suite = try negotiatedSuite()
-		var (clientSecret, serverSecret) = try applicationSecrets()
-		let nextServer = try nextTrafficSecret(suite, secret: serverSecret)
-		var nextClient = clientSecret.clone()
-
-		input.install(try trafficCipher(suite, secret: nextServer))
-
-		if request == TlsKeyUpdateRequest.updateRequested 'respond'
-			try writer.writeHandshake(try tlsEncodedMessage(TlsHandshakeMessage.keyUpdate(TlsKeyUpdateRequest.updateNotRequested)))
-			nextClient = try nextTrafficSecret(suite, secret: clientSecret)
-			writer.install(try trafficCipher(suite, secret: nextClient))
-		end 'respond'
-
-		keys = TlsClientKeys.application(nextClient, serverTraffic: nextServer)
-	end 'acceptKeyUpdate'
-
-	function writeCompatibilityChangeCipherSpec()
-		if firstHello.legacySessionId().count() != 0 'needed'
-			writer.writeChangeCipherSpecOnce()
-		end 'needed'
-	end 'writeCompatibilityChangeCipherSpec'
-
-	function negotiatedSuite() returns Tls13CipherSuite throws TlsHandshakeError
-		match negotiation 'negotiation'
-			accepted(suite) then return suite
-			keyed(suite, _) then return suite
-			pending then throw TlsHandshakeError.internalError
-		end 'negotiation'
-	end 'negotiatedSuite'
-
-	function handshakeSecrets() returns (ByteArray, ByteArray, ByteArray) throws TlsHandshakeError
-		match keys 'keys'
-			handshake(clientTraffic, serverTraffic, master) then return (clientTraffic, serverTraffic, master)
-			none or
-			application then throw TlsHandshakeError.internalError
-		end 'keys'
-	end 'handshakeSecrets'
-
-	function applicationSecrets() returns (ByteArray, ByteArray) throws TlsHandshakeError
-		match keys 'keys'
-			application(clientTraffic, serverTraffic) then return (clientTraffic, serverTraffic)
-			none or
-			handshake then throw TlsHandshakeError.internalError
-		end 'keys'
-	end 'applicationSecrets'
 end 'TlsClientHandshake'
 
 function serverHelloOf(message TlsHandshakeMessage) returns (TlsServerHello, bool) throws TlsHandshakeError
@@ -655,13 +473,3 @@ function serverHelloOf(message TlsHandshakeMessage) returns (TlsServerHello, boo
 		default throws TlsHandshakeError.unexpectedMessage
 	end 'message'
 end 'serverHelloOf'
-
-function trafficCipher(suite Tls13CipherSuite, secret ByteArray) returns TlsTls13Cipher throws TlsHandshakeError
-	let trafficKeys = try Tls13KeySchedule.trafficKeys(suite, trafficSecret: secret) otherwise throw TlsHandshakeError.internalError
-
-	return try TlsTls13Cipher.create(suite, keys: trafficKeys)
-end 'trafficCipher'
-
-function nextTrafficSecret(suite Tls13CipherSuite, secret ByteArray) returns ByteArray throws TlsHandshakeError
-	return try Tls13KeySchedule.nextApplicationTrafficSecret(suite, secret: secret) otherwise throw TlsHandshakeError.internalError
-end 'nextTrafficSecret'

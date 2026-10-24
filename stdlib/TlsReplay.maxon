@@ -1,0 +1,99 @@
+module type TlsReplayTrace
+	module var connected as bool
+	module var negotiation as TlsNegotiation
+	module var alpn as TlsAlpnChoice
+	module var outbound as ByteArrays
+	module var received as ByteArray
+	module var peerClosed as bool
+	module var peerAuthenticated as bool
+
+	module static function of(session TlsSession, outbound ByteArrays) returns TlsReplayTrace
+		return Self{connected: session.isConnected(), negotiation: session.negotiation, alpn: session.alpn, outbound: outbound, received: session.takeReceived(), peerClosed: session.hasPeerClosed(), peerAuthenticated: session.peerVerified}
+	end 'of'
+end 'TlsReplayTrace'
+
+module type TlsLoopbackTrace
+	module var client as TlsReplayTrace
+	module var server as TlsReplayTrace
+
+	module static function create(client TlsReplayTrace, server TlsReplayTrace) returns TlsLoopbackTrace
+		return Self{client: client, server: server}
+	end 'create'
+end 'TlsLoopbackTrace'
+
+module type TlsReplay
+	module static function run(endpoint TlsEndpoint, inbound ByteArrays, writes ByteArrays, closeNotify bool) returns TlsReplayTrace throws TlsHandshakeError
+		var outbound = endpoint.session().takeRecords()
+		var written = false
+
+		for record in inbound 'eachRecord'
+			try endpoint.receive(record)
+
+			if endpoint.session().isConnected() and not written 'handshakeFinished'
+				for data in writes 'eachWrite'
+					try endpoint.session().write(data)
+				end 'eachWrite'
+
+				written = true
+			end 'handshakeFinished'
+
+			outbound.append(endpoint.session().takeRecords())
+		end 'eachRecord'
+
+		if endpoint.session().isConnected() and closeNotify 'closing'
+			try endpoint.session().close()
+			outbound.append(endpoint.session().takeRecords())
+		end 'closing'
+
+		return TlsReplayTrace.of(endpoint.session(), outbound: outbound)
+	end 'run'
+end 'TlsReplay'
+
+module type TlsLoopback
+	module static function run(client TlsEndpoint, server TlsEndpoint, clientWrites ByteArrays, serverWrites ByteArrays, closeNotify bool) returns TlsLoopbackTrace throws TlsHandshakeError
+		var clientOutbound = ByteArrays.create()
+		var serverOutbound = ByteArrays.create()
+
+		try deliver(client, server: server, clientOutbound: clientOutbound, serverOutbound: serverOutbound)
+
+		if client.session().isConnected() and server.session().isConnected() 'connected'
+			for data in clientWrites 'eachClientWrite'
+				try client.session().write(data)
+			end 'eachClientWrite'
+
+			for data in serverWrites 'eachServerWrite'
+				try server.session().write(data)
+			end 'eachServerWrite'
+
+			try deliver(client, server: server, clientOutbound: clientOutbound, serverOutbound: serverOutbound)
+
+			if closeNotify 'closing'
+				try client.session().close()
+				try server.session().close()
+				try deliver(client, server: server, clientOutbound: clientOutbound, serverOutbound: serverOutbound)
+			end 'closing'
+		end 'connected'
+
+		return TlsLoopbackTrace.create(TlsReplayTrace.of(client.session(), outbound: clientOutbound), server: TlsReplayTrace.of(server.session(), outbound: serverOutbound))
+	end 'run'
+
+	static function deliver(client TlsEndpoint, server TlsEndpoint, clientOutbound ByteArrays, serverOutbound ByteArrays) throws TlsHandshakeError
+		var moving = true
+
+		while moving 'settling'
+			moving = false
+
+			for record in client.session().takeRecords() 'eachClientRecord'
+				clientOutbound.push(record)
+				try server.receive(record)
+				moving = true
+			end 'eachClientRecord'
+
+			for record in server.session().takeRecords() 'eachServerRecord'
+				serverOutbound.push(record)
+				try client.receive(record)
+				moving = true
+			end 'eachServerRecord'
+		end 'settling'
+	end 'deliver'
+end 'TlsLoopback'

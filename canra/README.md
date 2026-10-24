@@ -42,3 +42,4 @@ of the spec here.
 | `tls-handshake-codec` | `stdlib/TlsHandshakeMessage.maxon` | `specs/tls-handshake-codec.md` |
 | `tls-handshake` | `stdlib/TlsClientHandshake.maxon` | `specs/tls-handshake.md` |
 | `tls-handshake-negotiation` | `stdlib/TlsClientHandshake.maxon` | `specs/tls-handshake-negotiation.md` |
+| `tls-handshake-server` | `stdlib/TlsServerHandshake.maxon` | `specs/tls-handshake-server.md` |

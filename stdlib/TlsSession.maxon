@@ -1,0 +1,223 @@
+module union TlsNegotiation
+	pending
+	accepted(suite Tls13CipherSuite)
+	keyed(suite Tls13CipherSuite, group TlsGroupCode)
+end 'TlsNegotiation'
+
+module union TlsAlpnChoice
+	absent
+	negotiated(protocol ByteArray)
+end 'TlsAlpnChoice'
+
+module union TlsTrafficSecrets
+	none
+	handshake(clientTraffic ByteArray, serverTraffic ByteArray, master ByteArray)
+	flightSent(clientHandshakeTraffic ByteArray, clientTraffic ByteArray, serverTraffic ByteArray)
+	application(clientTraffic ByteArray, serverTraffic ByteArray)
+end 'TlsTrafficSecrets'
+
+union TlsConnectionHealth
+	healthy
+	broken(error TlsHandshakeError)
+end 'TlsConnectionHealth'
+
+module interface TlsEndpoint
+	function receive(record ByteArray) throws TlsHandshakeError
+	function session() returns TlsSession
+end 'TlsEndpoint'
+
+module interface TlsMessageHandler
+	function dispatch(message keep ByteArray) throws TlsHandshakeError
+end 'TlsMessageHandler'
+
+module type TlsSession
+	module var input as TlsRecordInput
+	module var writer as TlsRecordWriter
+	module var transcript as TlsTranscript
+	module var negotiation as TlsNegotiation
+	module var alpn as TlsAlpnChoice
+	module var keys as TlsTrafficSecrets
+	module var peerVerified as bool
+	module var compatibility as bool
+	var role as TlsRole
+	var health as TlsConnectionHealth
+	var received as ByteArray
+	var closedByPeer as bool
+
+	module static function create(role TlsRole, firstRecordVersion TlsRecordVersion) returns TlsSession
+		return Self{input: TlsRecordInput.create(), writer: TlsRecordWriter.create(firstRecordVersion), transcript: TlsTranscript.create(), negotiation: TlsNegotiation.pending, alpn: TlsAlpnChoice.absent, keys: TlsTrafficSecrets.none, peerVerified: false, compatibility: false, role: role, health: TlsConnectionHealth.healthy, received: ByteArray.create(), closedByPeer: false}
+	end 'create'
+
+	module function receive(record ByteArray, handler TlsMessageHandler) throws TlsHandshakeError
+		if not (try isOpen()) 'ignored'
+			return
+		end 'ignored'
+
+		try process(record, handler: handler) otherwise (error) 'failed'
+			abort(error)
+
+			throw error
+		end 'failed'
+	end 'receive'
+
+	function process(record ByteArray, handler TlsMessageHandler) throws TlsHandshakeError
+		let buffersMessages = try accept(record)
+
+		if not buffersMessages 'nothingBuffered'
+			return
+		end 'nothingBuffered'
+
+		while true 'eachMessage'
+			match input.nextMessage() 'slot'
+				complete(message) then try handler.dispatch(message)
+				incomplete then return
+			end 'slot'
+		end 'eachMessage'
+	end 'process'
+
+	function isOpen() returns bool throws TlsHandshakeError
+		match health 'health'
+			broken(error) then throw error
+			healthy then return not closedByPeer
+		end 'health'
+	end 'isOpen'
+
+	function accept(record ByteArray) returns bool throws TlsHandshakeError
+		let event = try input.accept(record)
+
+		match event 'event'
+			handshakeData then return true
+			applicationData(data) then received.append(data)
+			closeNotify then closedByPeer = true
+			ignored then return false
+		end 'event'
+
+		return false
+	end 'accept'
+
+	function abort(error TlsHandshakeError)
+		health = TlsConnectionHealth.broken(error)
+
+		let alert = try error.sentAlert() otherwise return
+
+		try writer.writeAlert(TlsAlertLevel.fatal, alert: alert) otherwise ignore
+	end 'abort'
+
+	module function write(data ByteArray) throws TlsHandshakeError
+		try requireConnected()
+		try writer.writeApplicationData(data)
+	end 'write'
+
+	module function close() throws TlsHandshakeError
+		try requireConnected()
+		try writer.writeAlert(TlsAlertLevel.warning, alert: TlsAlert.closeNotify)
+	end 'close'
+
+	module function takeRecords() returns ByteArrays
+		return writer.takeRecords()
+	end 'takeRecords'
+
+	module function takeReceived() returns ByteArray
+		let taken = received.clone()
+		received.clear()
+
+		return taken
+	end 'takeReceived'
+
+	module function isConnected() returns bool
+		return input.established
+	end 'isConnected'
+
+	module function hasPeerClosed() returns bool
+		return closedByPeer
+	end 'hasPeerClosed'
+
+	module function writeCompatibilityChangeCipherSpec()
+		if compatibility 'needed'
+			writer.writeChangeCipherSpecOnce()
+		end 'needed'
+	end 'writeCompatibilityChangeCipherSpec'
+
+	module function negotiatedSuite() returns Tls13CipherSuite throws TlsHandshakeError
+		match negotiation 'negotiation'
+			accepted(suite) then return suite
+			keyed(suite, _) then return suite
+			pending then throw TlsHandshakeError.internalError
+		end 'negotiation'
+	end 'negotiatedSuite'
+
+	module function handshakeSecrets() returns (ByteArray, ByteArray, ByteArray) throws TlsHandshakeError
+		match keys 'keys'
+			handshake(clientTraffic, serverTraffic, master) then return (clientTraffic, serverTraffic, master)
+			none or
+			flightSent or
+			application then throw TlsHandshakeError.internalError
+		end 'keys'
+	end 'handshakeSecrets'
+
+	module function flightSecrets() returns (ByteArray, ByteArray, ByteArray) throws TlsHandshakeError
+		match keys 'keys'
+			flightSent(clientHandshakeTraffic, clientTraffic, serverTraffic) then return (clientHandshakeTraffic, clientTraffic, serverTraffic)
+			none or
+			handshake or
+			application then throw TlsHandshakeError.internalError
+		end 'keys'
+	end 'flightSecrets'
+
+	module function followKeyUpdate(request TlsKeyUpdateRequest) throws TlsHandshakeError
+		try input.requireKeyBoundary()
+
+		let suite = try negotiatedSuite()
+		var (clientSecret, serverSecret) = try applicationSecrets()
+		let ownSecret = match role 'own'
+			client gives clientSecret.clone()
+			server gives serverSecret.clone()
+		end 'own'
+
+		let peerSecret = match role 'peer'
+			client gives serverSecret.clone()
+			server gives clientSecret.clone()
+		end 'peer'
+
+		let nextPeer = try tlsNextTrafficSecret(suite, secret: peerSecret)
+		var nextOwn = ownSecret.clone()
+
+		input.install(try tlsTrafficCipher(suite, secret: nextPeer))
+
+		if request == TlsKeyUpdateRequest.updateRequested 'respond'
+			try writer.writeHandshake(try tlsEncodedMessage(TlsHandshakeMessage.keyUpdate(TlsKeyUpdateRequest.updateNotRequested)))
+			nextOwn = try tlsNextTrafficSecret(suite, secret: ownSecret)
+			writer.install(try tlsTrafficCipher(suite, secret: nextOwn))
+		end 'respond'
+
+		keys = match role 'keys'
+			client gives TlsTrafficSecrets.application(nextOwn, serverTraffic: nextPeer)
+			server gives TlsTrafficSecrets.application(nextPeer, serverTraffic: nextOwn)
+		end 'keys'
+	end 'followKeyUpdate'
+
+	function requireConnected() throws TlsHandshakeError
+		if not isConnected() 'handshaking'
+			throw TlsHandshakeError.unexpectedMessage
+		end 'handshaking'
+	end 'requireConnected'
+
+	function applicationSecrets() returns (ByteArray, ByteArray) throws TlsHandshakeError
+		match keys 'keys'
+			application(clientTraffic, serverTraffic) then return (clientTraffic, serverTraffic)
+			none or
+			handshake or
+			flightSent then throw TlsHandshakeError.internalError
+		end 'keys'
+	end 'applicationSecrets'
+end 'TlsSession'
+
+module function tlsTrafficCipher(suite Tls13CipherSuite, secret ByteArray) returns TlsTls13Cipher throws TlsHandshakeError
+	let trafficKeys = try Tls13KeySchedule.trafficKeys(suite, trafficSecret: secret) otherwise throw TlsHandshakeError.internalError
+
+	return try TlsTls13Cipher.create(suite, keys: trafficKeys)
+end 'tlsTrafficCipher'
+
+function tlsNextTrafficSecret(suite Tls13CipherSuite, secret ByteArray) returns ByteArray throws TlsHandshakeError
+	return try Tls13KeySchedule.nextApplicationTrafficSecret(suite, secret: secret) otherwise throw TlsHandshakeError.internalError
+end 'tlsNextTrafficSecret'

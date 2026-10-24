@@ -20,8 +20,18 @@ module function tlsEncodedMessage(message TlsHandshakeMessage) returns ByteArray
 	return try TlsHandshakeCodec.encode(message) otherwise throw TlsHandshakeError.internalError
 end 'tlsEncodedMessage'
 
+module function tlsCertificateEntries(chain ByteArrays) returns TlsCertificateEntryArray
+	var entries = TlsCertificateEntryArray.create()
+
+	for certificate in chain 'eachCertificate'
+		entries.push(TlsCertificateEntry.create(certificate, extensions: TlsExtensionArray.create()))
+	end 'eachCertificate'
+
+	return entries
+end 'tlsCertificateEntries'
+
 module function tlsDecodeClientHello(raw ByteArray) returns TlsClientHello throws TlsHandshakeError
-	let message = try tlsDecodeHandshake(raw, protocol: TlsProtocol.tls13)
+	let message = try tlsDecodeAllowing(raw, protocol: TlsProtocol.tls13, allowed: TlsHandshakeTypeArray from [TlsHandshakeType.clientHello])
 
 	match message 'message'
 		clientHello(hello) then return hello

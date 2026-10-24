@@ -1,10 +1,10 @@
 module typealias TlsProtocolArray = Array with TlsProtocol
 module typealias TlsKeySecretArray = Array with TlsKeySecret
 
-let tlsRandomLength = 32
+module let tlsRandomLength = 32
 let tlsSessionIdLength = 32
 let tlsPrivateKeyLength = 32
-let tlsPssSaltLength = 64
+module let tlsPssSaltLength = 64
 module let tlsNullCompression = 0
 let tlsUncompressedPointFormat = 0
 module let tlsLegacyVersion = 0x0303
@@ -56,34 +56,42 @@ module type TlsClientEntropy
 	end 'create'
 
 	module static function fresh(config TlsClientConfig) returns TlsClientEntropy throws TlsHandshakeError
-		var secrets = TlsKeySecretArray.create()
-
-		for group in config.groups 'eachGroup'
-			let named = try TlsNamedGroup.fromRawValue(group) otherwise continue
-			secrets.push(try drawSecret(named))
-		end 'eachGroup'
-
-		return Self{random: try drawBytes(tlsRandomLength), sessionId: try drawBytes(tlsSessionIdLength), keySecrets: secrets, pssSalt: try drawBytes(tlsPssSaltLength)}
+		return Self{random: try tlsDrawBytes(tlsRandomLength), sessionId: try tlsDrawBytes(tlsSessionIdLength), keySecrets: try tlsFreshSecrets(config.groups), pssSalt: try tlsDrawBytes(tlsPssSaltLength)}
 	end 'fresh'
 
 	module function secret(group TlsGroupCode) returns TlsKeySecret throws TlsHandshakeError
-		for candidate in keySecrets 'eachSecret'
-			if candidate.group == group 'found'
-				return candidate
-			end 'found'
-		end 'eachSecret'
-
-		throw TlsHandshakeError.internalError
+		return try tlsSecretFor(keySecrets, group: group)
 	end 'secret'
 end 'TlsClientEntropy'
 
-function drawBytes(count RandomByteCount) returns ByteArray throws TlsHandshakeError
+module function tlsDrawBytes(count RandomByteCount) returns ByteArray throws TlsHandshakeError
 	return try Random.bytes(count) otherwise throw TlsHandshakeError.internalError
-end 'drawBytes'
+end 'tlsDrawBytes'
+
+module function tlsFreshSecrets(groups TlsGroupCodeArray) returns TlsKeySecretArray throws TlsHandshakeError
+	var secrets = TlsKeySecretArray.create()
+
+	for group in groups 'eachGroup'
+		let named = try TlsNamedGroup.fromRawValue(group) otherwise continue
+		secrets.push(try drawSecret(named))
+	end 'eachGroup'
+
+	return secrets
+end 'tlsFreshSecrets'
+
+module function tlsSecretFor(secrets TlsKeySecretArray, group TlsGroupCode) returns TlsKeySecret throws TlsHandshakeError
+	for candidate in secrets 'eachSecret'
+		if candidate.group == group 'found'
+			return candidate
+		end 'found'
+	end 'eachSecret'
+
+	throw TlsHandshakeError.internalError
+end 'tlsSecretFor'
 
 function drawSecret(group TlsNamedGroup) returns TlsKeySecret throws TlsHandshakeError
 	while true 'attempts'
-		let candidate = try drawBytes(tlsPrivateKeyLength)
+		let candidate = try tlsDrawBytes(tlsPrivateKeyLength)
 		let secret = try TlsKeySecret.create(group.code(), privateKey: candidate) otherwise continue
 
 		return secret

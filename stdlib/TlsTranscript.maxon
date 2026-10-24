@@ -9,13 +9,9 @@ module type TlsTranscript
 		messages.append(message)
 	end 'append'
 
-	module function restart(first ByteArray)
-		messages = first.clone()
-	end 'restart'
-
-	module function contents() returns ByteArray
-		return messages.clone()
-	end 'contents'
+	module function restartAsMessageHash(suite Tls13CipherSuite)
+		messages = Tls13KeySchedule.messageHash(suite, clientHello: messages)
+	end 'restartAsMessageHash'
 
 	module function hash(algorithm HashAlgorithm) returns ByteArray
 		return sha2Once(algorithm, data: messages)

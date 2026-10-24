@@ -155,7 +155,7 @@ module union TlsPrivateKey
 	end 'signRsa'
 end 'TlsPrivateKey'
 
-module enum TlsCertificateVerifyRole
+module enum TlsRole
 	server
 	client
 
@@ -165,9 +165,9 @@ module enum TlsCertificateVerifyRole
 			client gives tlsClientCertificateVerifyContext
 		end 'role'
 	end 'context'
-end 'TlsCertificateVerifyRole'
+end 'TlsRole'
 
-module function tlsCertificateVerifyContent(role TlsCertificateVerifyRole, transcriptHash ByteArray) returns ByteArray
+module function tlsCertificateVerifyContent(role TlsRole, transcriptHash ByteArray) returns ByteArray
 	var content = ByteArray.create()
 	content.growFilled(tlsCertificateVerifyPaddingBytes, value: tlsCertificateVerifyPadding)
 	content.append(role.context().toByteArray())
@@ -192,6 +192,12 @@ module function tlsPickScheme(preference TlsSignatureSchemeCodeArray, offered Tl
 
 	throw TlsSchemeSelectionError.noCommonScheme
 end 'tlsPickScheme'
+
+module function tlsIsPkcs1Code(code TlsSignatureSchemeCode) returns bool
+	let scheme = try TlsSignatureScheme.fromRawValue(code) otherwise return false
+
+	return scheme.isPkcs1()
+end 'tlsIsPkcs1Code'
 
 module function tlsRequireOfferedScheme(code TlsSignatureSchemeCode, offered TlsSignatureSchemeCodeArray, algorithm X509KeyAlgorithm, protocol TlsProtocol) returns TlsSignatureScheme throws TlsHandshakeError
 	if not offered.contains(code) 'notOffered'

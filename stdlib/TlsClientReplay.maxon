@@ -33,45 +33,10 @@ module type TlsReplacedClientHello implements TlsClientHelloSource
 	end 'second'
 end 'TlsReplacedClientHello'
 
-module type TlsReplayTrace
-	module var connected as bool
-	module var negotiation as TlsNegotiation
-	module var alpn as TlsAlpnChoice
-	module var outbound as ByteArrays
-	module var received as ByteArray
-	module var peerClosed as bool
-	module var peerAuthenticated as bool
-
-	module static function create(connected bool, negotiation TlsNegotiation, alpn TlsAlpnChoice, outbound ByteArrays, received ByteArray, peerClosed bool, peerAuthenticated bool) returns TlsReplayTrace
-		return Self{connected: connected, negotiation: negotiation, alpn: alpn, outbound: outbound, received: received, peerClosed: peerClosed, peerAuthenticated: peerAuthenticated}
-	end 'create'
-end 'TlsReplayTrace'
-
 module type TlsClientReplay
 	module static function run(config TlsClientConfig, entropy TlsClientEntropy, peer TlsPeerAuthenticator, helloSource TlsClientHelloSource, inbound ByteArrays, writes ByteArrays, closeNotify bool) returns TlsReplayTrace throws TlsHandshakeError
 		var client = try TlsClientHandshake.create(config, entropy: entropy, peer: peer, helloSource: helloSource)
-		var outbound = client.takeRecords()
-		var written = false
 
-		for record in inbound 'eachRecord'
-			try client.receive(record)
-
-			if client.isConnected() and not written 'handshakeFinished'
-				for data in writes 'eachWrite'
-					try client.write(data)
-				end 'eachWrite'
-
-				written = true
-			end 'handshakeFinished'
-
-			outbound.append(client.takeRecords())
-		end 'eachRecord'
-
-		if client.isConnected() and closeNotify 'closing'
-			try client.close()
-			outbound.append(client.takeRecords())
-		end 'closing'
-
-		return TlsReplayTrace.create(client.isConnected(), negotiation: client.negotiated(), alpn: client.applicationProtocol(), outbound: outbound, received: client.takeReceived(), peerClosed: client.hasPeerClosed(), peerAuthenticated: client.hasVerifiedPeer())
+		return try TlsReplay.run(client, inbound: inbound, writes: writes, closeNotify: closeNotify)
 	end 'run'
 end 'TlsClientReplay'

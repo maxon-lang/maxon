@@ -1,0 +1,60 @@
+module enum TlsClientAuthentication
+	none
+	request
+	require
+end 'TlsClientAuthentication'
+
+module type TlsServerConfig
+	module var protocols as TlsProtocolArray
+	module var cipherSuites as TlsCipherSuiteCodeArray
+	module var groups as TlsGroupCodeArray
+	module var signatureAlgorithms as TlsSignatureSchemeCodeArray
+	module var applicationProtocols as TlsProtocolNameArray
+	module var chain as ByteArrays
+	module var key as TlsPrivateKey
+	module var clientAuthentication as TlsClientAuthentication
+	module var clientSignatureAlgorithms as TlsSignatureSchemeCodeArray
+	module var clientAuthorities as ByteArrays
+
+	module static function create(protocols TlsProtocolArray, cipherSuites TlsCipherSuiteCodeArray, groups TlsGroupCodeArray, signatureAlgorithms TlsSignatureSchemeCodeArray, applicationProtocols TlsProtocolNameArray, chain ByteArrays, key TlsPrivateKey, clientAuthentication TlsClientAuthentication, clientSignatureAlgorithms TlsSignatureSchemeCodeArray, clientAuthorities ByteArrays) returns TlsServerConfig
+		return Self{protocols: protocols, cipherSuites: cipherSuites, groups: groups, signatureAlgorithms: signatureAlgorithms, applicationProtocols: applicationProtocols, chain: chain, key: key, clientAuthentication: clientAuthentication, clientSignatureAlgorithms: clientSignatureAlgorithms, clientAuthorities: clientAuthorities}
+	end 'create'
+
+	module static function defaults(chain ByteArrays, key TlsPrivateKey) returns TlsServerConfig
+		return Self{protocols: TlsProtocolArray from [TlsProtocol.tls13, TlsProtocol.tls12], cipherSuites: TlsCipherSuiteCodeArray from [0x1303, 0x1301, 0x1302, 0xCCA9, 0xCCA8, 0xC02B, 0xC02F, 0xC02C, 0xC030], groups: TlsGroupCodeArray from [0x001D, 0x0017], signatureAlgorithms: TlsSignatureSchemeCodeArray from [0x0403, 0x0503, 0x0807, 0x0804, 0x0805, 0x0806, 0x0401, 0x0501, 0x0601], applicationProtocols: TlsProtocolNameArray.create(), chain: chain, key: key, clientAuthentication: TlsClientAuthentication.none, clientSignatureAlgorithms: TlsSignatureSchemeCodeArray from [0x0403, 0x0503, 0x0807, 0x0804, 0x0805, 0x0806, 0x0401, 0x0501, 0x0601], clientAuthorities: ByteArrays.create()}
+	end 'defaults'
+
+	module function requestedSchemes() returns TlsSignatureSchemeCodeArray throws TlsHandshakeError
+		var schemes = TlsSignatureSchemeCodeArray.create()
+
+		for code in clientSignatureAlgorithms 'eachScheme'
+			if not tlsIsPkcs1Code(code) 'usable'
+				schemes.push(code)
+			end 'usable'
+		end 'eachScheme'
+
+		if schemes.isEmpty() 'none'
+			throw TlsHandshakeError.internalError
+		end 'none'
+
+		return schemes
+	end 'requestedSchemes'
+end 'TlsServerConfig'
+
+module type TlsServerEntropy
+	module var random as ByteArray
+	module var keySecrets as TlsKeySecretArray
+	module var pssSalt as ByteArray
+
+	module static function create(random ByteArray, keySecrets TlsKeySecretArray, pssSalt ByteArray) returns TlsServerEntropy
+		return Self{random: random, keySecrets: keySecrets, pssSalt: pssSalt}
+	end 'create'
+
+	module static function fresh(config TlsServerConfig) returns TlsServerEntropy throws TlsHandshakeError
+		return Self{random: try tlsDrawBytes(tlsRandomLength), keySecrets: try tlsFreshSecrets(config.groups), pssSalt: try tlsDrawBytes(tlsPssSaltLength)}
+	end 'fresh'
+
+	module function secret(group TlsGroupCode) returns TlsKeySecret throws TlsHandshakeError
+		return try tlsSecretFor(keySecrets, group: group)
+	end 'secret'
+end 'TlsServerEntropy'
