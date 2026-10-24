@@ -57,6 +57,12 @@ public typealias RootCertificates = Array with ByteArray
 	let TrustStoreNoCursor = 0
 	let TrustStoreWalkFailed = -1
 
+	// Restated from `TrustStoreRuntime.maxon`, which owns what each verdict means.
+	let TrustVerdictIgnored = 0
+	let TrustVerdictRoot = 2
+	let TrustVerdictNonRoot = 3
+	let TrustVerdictDenied = 4
+
 	function hostRoots() returns RootCertificates throws TrustStoreError
 		let store = __Builtins.trustStoreOpen() as TrustStoreWord
 
@@ -64,15 +70,18 @@ public typealias RootCertificates = Array with ByteArray
 			throw TrustStoreError.unavailable
 		end 'unavailable'
 
-		var roots = RootCertificates.create()
+		var trusted = RootCertificates.create()
+		var denied = RootCertificates.create()
 
-		try walkStore(store, roots: roots) otherwise (reason) 'unreadable'
+		try walkStore(store, trusted: trusted, denied: denied) otherwise (reason) 'unreadable'
 			__Builtins.trustStoreClose(store)
 
 			throw reason
 		end 'unreadable'
 
 		__Builtins.trustStoreClose(store)
+
+		let roots = withoutDenied(trusted, denied: denied)
 
 		if roots.isEmpty() 'noCertificates'
 			throw TrustStoreError.malformed
@@ -81,7 +90,7 @@ public typealias RootCertificates = Array with ByteArray
 		return roots
 	end 'hostRoots'
 
-	function walkStore(store TrustStoreWord, roots RootCertificates) throws TrustStoreError
+	function walkStore(store TrustStoreWord, trusted RootCertificates, denied RootCertificates) throws TrustStoreError
 		var cursor = __Builtins.trustStoreNext(store, TrustStoreNoCursor) as TrustStoreWord
 
 		while cursor != TrustStoreNoCursor 'eachCertificate'
@@ -89,22 +98,82 @@ public typealias RootCertificates = Array with ByteArray
 				throw TrustStoreError.unavailable
 			end 'walkFailed'
 
-			let certificate = ByteArray.init(__Builtins.trustStoreCertificate(store, cursor))
+			let verdict = __Builtins.trustStoreVerdict(store, cursor) as TrustStoreWord
 
-			if certificate.isEmpty() 'emptyCertificate'
-				throw TrustStoreError.malformed
-			end 'emptyCertificate'
+			if verdict != TrustVerdictIgnored 'decided'
+				let certificate = ByteArray.init(__Builtins.trustStoreCertificate(store, cursor))
 
-			roots.push(certificate)
+				if certificate.isEmpty() 'emptyCertificate'
+					throw TrustStoreError.malformed
+				end 'emptyCertificate'
+
+				if verdict == TrustVerdictDenied 'refused'
+					denied.push(certificate)
+				end 'refused' else if fitsVerdict(certificate, verdict: verdict) 'fits'
+					trusted.push(certificate)
+				end 'fits'
+			end 'decided'
+
 			cursor = __Builtins.trustStoreNext(store, cursor) as TrustStoreWord
 		end 'eachCertificate'
 	end 'walkStore'
+
+	function fitsVerdict(certificate ByteArray, verdict TrustStoreWord) returns bool
+		if verdict != TrustVerdictRoot and verdict != TrustVerdictNonRoot 'unconstrained'
+			return true
+		end 'unconstrained'
+
+		// A certificate that does not parse fits neither root verdict.
+		let selfIssued = try isSelfIssued(certificate) otherwise return false
+
+		return selfIssued if verdict == TrustVerdictRoot else not selfIssued
+	end 'fitsVerdict'
+
+	function isSelfIssued(certificate ByteArray) returns bool throws DerError
+		var reader = DerReader.create(certificate.clone())
+		var signed = try reader.enterSequence()
+		var tbs = try signed.enterSequence()
+		let leading = try tbs.peekHeader()
+
+		if leading.tagClass() == DerTagClass.contextSpecific 'versioned'
+			_ = try tbs.readElement()
+		end 'versioned'
+
+		_ = try tbs.readElement()
+		_ = try tbs.readElement()
+		let issuer = try tbs.readElement()
+		_ = try tbs.readElement()
+		let subject = try tbs.readElement()
+
+		return issuer.equals(subject)
+	end 'isSelfIssued'
+
+	function withoutDenied(trusted RootCertificates, denied RootCertificates) returns RootCertificates
+		var kept = RootCertificates.create()
+
+		for root in trusted 'eachTrusted'
+			var refused = false
+
+			for candidate in denied 'eachDenied'
+				if root.equals(candidate) 'same'
+					refused = true
+				end 'same'
+			end 'eachDenied'
+
+			if not refused 'keep'
+				kept.push(root.clone())
+			end 'keep'
+		end 'eachTrusted'
+
+		return kept
+	end 'withoutDenied'
 #endif
 
 public type TrustStore
 	/// The DER bytes of every root certificate the operating system's store holds, one `ByteArray`
-	/// each. Windows reads the `ROOT` system store, macOS the system anchors, and Linux the first
-	/// existing distribution CA bundle. Refused at compile time (E3104) on wasm32-wasi.
+	/// each. Windows reads the `ROOT` system store, macOS the system, admin and user trust-settings
+	/// domains as their SSL trust settings leave them, and Linux the first existing distribution CA
+	/// bundle. Refused at compile time (E3104) on wasm32-wasi.
 	public static function systemRoots() returns RootCertificates throws TrustStoreError
 		#if os(Linux)
 			return try bundleRoots()

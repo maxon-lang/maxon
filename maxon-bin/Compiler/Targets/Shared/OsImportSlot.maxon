@@ -375,15 +375,23 @@ export enum OsImportSlot
 	machPortDeallocate
 	machVmDeallocate
 
-	// The Security and CoreFoundation slots. The Mach-O writer drops them from the end of the GOT in an
-	// image that does not read the trust store, so a libSystem slot added after them fails the build.
-	secTrustCopyAnchorCertificates
+	// The slots only an image that reads the trust store links: the Security and CoreFoundation calls
+	// and `dlsym`, which resolves the Security constants. The Mach-O writer drops them from the end of
+	// the GOT in any other image, so a slot added after them fails the build.
+	dlsym
+	secTrustSettingsCopyCertificates
+	secTrustSettingsCopyTrustSettings
+	secPolicyCopyProperties
 	secCertificateCopyData
 	cfArrayGetCount
 	cfArrayGetValueAtIndex
 	cfDataGetLength
 	cfDataGetBytePtr
 	cfRelease
+	cfDictionaryGetValueIfPresent
+	cfDictionaryContainsKey
+	cfNumberGetValue
+	cfEqual
 end 'OsImportSlot'
 
 export enum OsImportDylib
@@ -394,13 +402,19 @@ end 'OsImportDylib'
 
 export function osImportDylibOf(slot OsImportSlot) returns OsImportDylib
 	return match slot 'dylib'
-		secTrustCopyAnchorCertificates or
+		secTrustSettingsCopyCertificates or
+		secTrustSettingsCopyTrustSettings or
+		secPolicyCopyProperties or
 		secCertificateCopyData gives OsImportDylib.security
 		cfArrayGetCount or
 		cfArrayGetValueAtIndex or
 		cfDataGetLength or
 		cfDataGetBytePtr or
-		cfRelease gives OsImportDylib.coreFoundation
+		cfRelease or
+		cfDictionaryGetValueIfPresent or
+		cfDictionaryContainsKey or
+		cfNumberGetValue or
+		cfEqual gives OsImportDylib.coreFoundation
 		exit or
 		write or
 		mmap or
@@ -502,9 +516,14 @@ export function osImportDylibOf(slot OsImportSlot) returns OsImportDylib
 		machVmReadOverwrite or
 		taskInfo or
 		machPortDeallocate or
-		machVmDeallocate gives OsImportDylib.libSystem
+		machVmDeallocate or
+		dlsym gives OsImportDylib.libSystem
 	end 'dylib'
 end 'osImportDylibOf'
+
+export function osImportIsTrustStoreOnly(slot OsImportSlot) returns bool
+	return osImportDylibOf(slot) != OsImportDylib.libSystem or slot == OsImportSlot.dlsym
+end 'osImportIsTrustStoreOnly'
 
 // The import slot index a call site records and the writer patches against. One accessor
 // over the enum, exactly like `iatSlotIndex`.
@@ -539,7 +558,9 @@ export function osImportAnswerOf(slot OsImportSlot) returns ImportAnswer
 		nsGetEnviron or
 		send or
 		recv or
-		pthreadSelf gives ImportAnswer.fullWord
+		pthreadSelf or
+		secPolicyCopyProperties or
+		dlsym gives ImportAnswer.fullWord
 		munmap or
 		madvise or
 		nanosleep or
@@ -620,9 +641,14 @@ export function osImportAnswerOf(slot OsImportSlot) returns ImportAnswer
 		machVmReadOverwrite or
 		taskInfo or
 		machPortDeallocate or
-		secTrustCopyAnchorCertificates or
+		secTrustSettingsCopyCertificates or
+		secTrustSettingsCopyTrustSettings or
 		machVmDeallocate gives ImportAnswer.signedDword
 		machTaskSelf or
-		machThreadSelf gives ImportAnswer.unsignedDword
+		machThreadSelf or
+		cfDictionaryGetValueIfPresent or
+		cfDictionaryContainsKey or
+		cfNumberGetValue or
+		cfEqual gives ImportAnswer.unsignedDword
 	end 'answer'
 end 'osImportAnswerOf'

@@ -337,11 +337,15 @@ Each target reads its own store:
 | Target | Source |
 |--------|--------|
 | `x64-windows` | The `ROOT` system store, through `crypt32.dll`. Only a program that uses `TrustStore` imports it. |
-| `arm64-macos` | The system anchor certificates (`SecTrustCopyAnchorCertificates`), through the Security and CoreFoundation frameworks. Only a program that uses `TrustStore` links them. |
+| `arm64-macos` | The certificates of the system, admin and user trust-settings domains (`SecTrustSettingsCopyCertificates`), through the Security and CoreFoundation frameworks, filtered by their SSL trust settings. Only a program that uses `TrustStore` links them. |
 | `x64-linux`, `arm64-linux` | The first existing file of `/etc/ssl/certs/ca-certificates.crt`, `/etc/pki/tls/certs/ca-bundle.crt`, `/etc/ssl/ca-bundle.pem`, `/etc/pki/tls/cacert.pem`, `/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem` and `/etc/ssl/cert.pem`, read as the `CERTIFICATE` blocks of a PEM file. |
 | `wasm32-wasi` | A call is refused at compile time (E3104). |
 
-The macOS answer is the system anchor set that ships with the operating system.
+The macOS answer is the set of roots the machine trusts for TLS. A certificate in the system domain is a root when it
+is self-issued. A certificate in the admin or user domain is a root when its trust settings for the SSL policy (the
+user domain first, the admin domain when the user has none) say `TrustRoot` and it is self-issued, or `TrustAsRoot`
+and it is not. Only trust settings that apply to the SSL policy without a host name count, and a certificate those
+settings deny is left out even when the system domain lists it.
 
 | `TrustStoreError` case | When |
 |------------------------|------|

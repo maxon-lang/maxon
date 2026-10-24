@@ -21,7 +21,7 @@ The store is read from the operating system on every other target:
 | Target | Source |
 |---|---|
 | x64-windows | the `ROOT` system store, through `crypt32.dll` (`CertOpenSystemStoreW`, `CertEnumCertificatesInStore`) |
-| arm64-macos | `SecTrustCopyAnchorCertificates` over the Security and CoreFoundation frameworks, linked only into a program that uses `TrustStore` |
+| arm64-macos | the system, admin and user trust-settings domains (`SecTrustSettingsCopyCertificates`) over the Security and CoreFoundation frameworks, filtered by their SSL trust settings and linked only into a program that uses `TrustStore` |
 | x64-linux, arm64-linux | the first existing file of the distribution CA bundle locations, read as PEM `CERTIFICATE` blocks |
 
 The answers are the machine's own, so the case below asserts properties of them rather than values.

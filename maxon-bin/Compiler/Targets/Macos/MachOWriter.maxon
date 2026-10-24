@@ -360,13 +360,20 @@ function machoImportSymbol(slot OsImportSlot) returns String
 		taskInfo gives "_task_info"
 		machPortDeallocate gives "_mach_port_deallocate"
 		machVmDeallocate gives "_mach_vm_deallocate"
-		secTrustCopyAnchorCertificates gives "_SecTrustCopyAnchorCertificates"
+		dlsym gives "_dlsym"
+		secTrustSettingsCopyCertificates gives "_SecTrustSettingsCopyCertificates"
+		secTrustSettingsCopyTrustSettings gives "_SecTrustSettingsCopyTrustSettings"
+		secPolicyCopyProperties gives "_SecPolicyCopyProperties"
 		secCertificateCopyData gives "_SecCertificateCopyData"
 		cfArrayGetCount gives "_CFArrayGetCount"
 		cfArrayGetValueAtIndex gives "_CFArrayGetValueAtIndex"
 		cfDataGetLength gives "_CFDataGetLength"
 		cfDataGetBytePtr gives "_CFDataGetBytePtr"
 		cfRelease gives "_CFRelease"
+		cfDictionaryGetValueIfPresent gives "_CFDictionaryGetValueIfPresent"
+		cfDictionaryContainsKey gives "_CFDictionaryContainsKey"
+		cfNumberGetValue gives "_CFNumberGetValue"
+		cfEqual gives "_CFEqual"
 	end 'sym'
 end 'machoImportSymbol'
 
@@ -422,9 +429,9 @@ function machoLinkedImportSlots(usesTrustStore bool) returns OsImportSlotArray
 	var dropped = false
 
 	for slot in OsImportSlot.allCases 'each'
-		if machoDylibIsLinked(osImportDylibOf(slot), usesTrustStore: usesTrustStore) 'isLinked'
+		if usesTrustStore or not osImportIsTrustStoreOnly(slot) 'isLinked'
 			if dropped 'followsADroppedSlot'
-				panic("machoLinkedImportSlots: '{slot.name}' follows a slot of a dylib this image does not link — the slots of an optional dylib must trail every slot that is always linked")
+				panic("machoLinkedImportSlots: '{slot.name}' follows a slot this image does not link — the slots only a trust-store image links must trail every slot that is always linked")
 			end 'followsADroppedSlot'
 
 			slots.push(slot)

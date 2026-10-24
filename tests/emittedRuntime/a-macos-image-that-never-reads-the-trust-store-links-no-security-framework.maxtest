@@ -1,0 +1,20 @@
+let CaseLabel = "macos-plain-imports"
+let PlainFixtureName = "no-trust-store"
+
+let SecurityFrameworkName = "Security.framework"
+let WalkEntryName = "_SecTrustSettingsCopyCertificates"
+
+let LinkReason = "Only a program that uses TrustStore links Security.framework and CoreFoundation.framework and carries the walk's imports; every other image links libSystem alone."
+
+test 'a macOS image that never reads the trust store links no Security framework and imports none of the walk'
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: CaseLabel, fixture: PlainFixtureName)
+	let image = fileBytes(buildMacosImage(staged, label: CaseLabel))
+
+	Expect.greaterThan(image.count(), than: 0, message: "the {MacosTargetName} build wrote an EMPTY file, so nothing read out of it means anything.")
+
+	var findings = StringArray.create()
+	noteImageName(findings, image: image, name: SecurityFrameworkName, present: false, why: LinkReason)
+	noteImageName(findings, image: image, name: WalkEntryName, present: false, why: LinkReason)
+
+	Expect.isTrue(findings.isEmpty(), message: "the {MacosTargetName} image of a program that never reads the trust store carries trust-store links:{renderedFindings(findings)}")
+end 'a macOS image that never reads the trust store links no Security framework and imports none of the walk'

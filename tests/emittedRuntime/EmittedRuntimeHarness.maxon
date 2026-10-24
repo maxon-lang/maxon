@@ -326,3 +326,33 @@ export function destinationRegisterOf(text String) returns String throws IrScanE
 
 	return try spelled.split(OperandSeparator).get(0) otherwise throw IrScanError.noDestinationRegister
 end 'destinationRegisterOf'
+
+export function buildMacosImage(staged FilePath, label String) returns FilePath
+	let image = staged.join("{OutputFileStem}-{label}-{MacosTargetName}")
+	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, output: image, label: label, extraArguments: ["{TargetOptionPrefix}{MacosTargetName}"])
+
+	requireBuiltOrPanic(build, output: image, what: "`{BuildCommandName} … {TargetOptionPrefix}{MacosTargetName}`, which emits the image to read,")
+
+	return image
+end 'buildMacosImage'
+
+export function noteImageName(findings StringArray, image ByteArray, name String, present bool, why String)
+	if image.contains(asciiBytes(name)) == present 'asDemanded'
+		return
+	end 'asDemanded'
+
+	let demand = "must carry" if present else "must NOT carry"
+	let observed = "the name is nowhere in the image" if present else "the name is in the image"
+
+	findings.push("the {MacosTargetName} image {demand} `{name}`, and {observed}. {why}")
+end 'noteImageName'
+
+function asciiBytes(name String) returns ByteArray
+	var bytes = ByteArray.create()
+
+	for octet in name.bytes() 'eachByte'
+		bytes.push(octet)
+	end 'eachByte'
+
+	return bytes
+end 'asciiBytes'
