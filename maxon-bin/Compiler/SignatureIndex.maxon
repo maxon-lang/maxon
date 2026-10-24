@@ -30204,10 +30204,38 @@ export type ProgramSignatures
 	end 'writtenGenericAliasDecl'
 
 	module function scopedGenericAliasDecl(name ByteArray, readerFilePath FilePath) returns ScopedGenericAliasDecl
+		view held = try self.heldGenericAliasDeclsOf(name) otherwise return ScopedGenericAliasDecl.undeclared
+
+		return self.rankedGenericAliasDecl(held, readerFilePath: readerFilePath)
+	end 'scopedGenericAliasDecl'
+
+	// Ranks only the declarations the contest recorded in `participants`. An `extension` body's alias is
+	// filed per conformer after the contest settles and holds no mint, so ranking it would hand
+	// `genericAliasMintFor` and `scopedGenericAliasInstance` a declaration they cannot resolve.
+	function contestedGenericAliasDecl(name ByteArray, readerFilePath FilePath, participants GenericAliasByDeclaringFile) returns ScopedGenericAliasDecl
+		view held = try self.heldGenericAliasDeclsOf(name) otherwise return ScopedGenericAliasDecl.undeclared
+
+		var participating = GenericAliasDeclIndexArray.create()
+
+		for at in held 'eachDeclaration'
+			if participants.contains(self.indexedGenericAliasDecl(at).filePath.toString()) 'declaredBeforeTheContestSettled'
+				participating.push(at)
+			end 'declaredBeforeTheContestSettled'
+		end 'eachDeclaration'
+
+		return self.rankedGenericAliasDecl(participating, readerFilePath: readerFilePath)
+	end 'contestedGenericAliasDecl'
+
+	function heldGenericAliasDeclsOf(name ByteArray) returns GenericAliasDeclIndexArray throws MapError
 		self.indexGenericAliasDeclarations()
+		return try self.settledDeclarations().genericAliasDeclIndexByName.get(name)
+	end 'heldGenericAliasDeclsOf'
 
-		view held = try self.settledDeclarations().genericAliasDeclIndexByName.get(name) otherwise return ScopedGenericAliasDecl.undeclared
+	function indexedGenericAliasDecl(at ElementIndex) returns GenericAliasEntry
+		return try self.settledDeclarations().genericAliasDecls.get(at) otherwise panic("ProgramSignatures.indexedGenericAliasDecl: genericAliasDecls.get OOB at {at}, an index only `indexGenericAliasDeclarations` minted")
+	end 'indexedGenericAliasDecl'
 
+	function rankedGenericAliasDecl(held GenericAliasDeclIndexArray, readerFilePath FilePath) returns ScopedGenericAliasDecl
 		if held.count() == 0 'noDeclarationHeld'
 			return ScopedGenericAliasDecl.undeclared
 		end 'noDeclarationHeld'
@@ -30215,12 +30243,12 @@ export type ProgramSignatures
 		var claims = TypeNameClaimArray.create()
 
 		for at in held 'eachDeclaration'
-			claims.push(self.genericAliasDeclClaim(try self.settledDeclarations().genericAliasDecls.get(at) otherwise panic("ProgramSignatures.scopedGenericAliasDecl: genericAliasDecls.get OOB at {at}, an index only `indexGenericAliasDeclarations` minted")))
+			claims.push(self.genericAliasDeclClaim(self.indexedGenericAliasDecl(at)))
 		end 'eachDeclaration'
 
 		let ranked = self.settledDeclarations().typeAliases.provenance.rankedClaimIn(claims, readerPath: readerFilePath.toString())
-		return ScopedGenericAliasDecl.declared(try self.heldGenericAliasDecl(held, at: ranked.at) otherwise panic("ProgramSignatures.scopedGenericAliasDecl: the ranked position {ranked.at} is one of the {held.count()} held declarations"))
-	end 'scopedGenericAliasDecl'
+		return ScopedGenericAliasDecl.declared(try self.heldGenericAliasDecl(held, at: ranked.at) otherwise panic("ProgramSignatures.rankedGenericAliasDecl: the ranked position {ranked.at} is one of the {held.count()} held declarations"))
+	end 'rankedGenericAliasDecl'
 
 	function genericAliasDeclClaim(decl GenericAliasEntry) returns TypeNameClaim
 		return self.typeNameClaim(TypeDeclKind.genericAlias, visibility: decl.visibility, declFilePath: decl.filePath)
@@ -33826,7 +33854,7 @@ export type ProgramSignatures
 			return MeantGenericDeclaration.declaredIn(readerFilePath.toString())
 		end 'readersOwnFile'
 
-		match self.scopedGenericAliasDecl(name, readerFilePath: readerFilePath) 'scoped'
+		match self.contestedGenericAliasDecl(name, readerFilePath: readerFilePath, participants: byFile) 'scoped'
 			declared(decl) then return MeantGenericDeclaration.declaredIn(decl.filePath.toString())
 			undeclared then return MeantGenericDeclaration.unresolved
 		end 'scoped'

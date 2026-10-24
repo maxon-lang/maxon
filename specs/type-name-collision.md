@@ -512,6 +512,73 @@ end 'main'
 error E3006: b/<fragment>:12:13: duplicate definition of 'Box' — already declared as `type Box`
 ```
 
+<!-- test: error.duplicate-type-beside-two-extensions-declaring-its-alias -->
+Two copies of a `type` that declares a generic-instance alias, in two directories, beside two copies of an
+`extension` of an interface it implements that declares the same alias. The extensions publish `Box.Items` after
+the two `type` declarations have already contested it, and the second extension reads `Items` while the first
+extension's declaration is filed. The program is refused for the duplicate `Box` and the compiler does not abort.
+```maxon
+// --- file: seq.maxon
+export typealias Digit = int(0 to 9)
+
+export interface Seq uses Item
+	function first() returns Item
+end 'Seq'
+
+// --- file: a/box.maxon
+export type Box implements Seq with Digit
+	typealias Items = Array with Digit
+
+	export var n as Digit
+
+	export function first() returns Digit
+		return self.n
+	end 'first'
+end 'Box'
+
+// --- file: b/box.maxon
+export type Box implements Seq with Digit
+	typealias Items = Array with Digit
+
+	export var n as Digit
+
+	export function first() returns Digit
+		return self.n
+	end 'first'
+end 'Box'
+
+// --- file: a/ext.maxon
+export extension Seq
+	export typealias Items = Array with Item
+
+	export function all() returns Items
+		var result = Items{}
+		result.push(self.first())
+		return result
+	end 'all'
+end 'Seq'
+
+// --- file: b/ext.maxon
+export extension Seq
+	export typealias Items = Array with Item
+
+	export function twice() returns Items
+		var result = Items{}
+		result.push(self.first())
+		result.push(self.first())
+		return result
+	end 'twice'
+end 'Seq'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3006: b/<fragment>:21:13: duplicate definition of 'Box' — already declared as `type Box`
+```
+
 <!-- test: error.duplicate-private-type-across-directories -->
 Two FILE-PRIVATE `type Box` declarations in two directories still collide: a nominal name is whole-program however visible it is.
 ```maxon
