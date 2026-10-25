@@ -19,6 +19,7 @@ let JsonContentType = "application/json"
 let SessionIdBytes = 16
 let McpSessionSeedBase = "mcp-session"
 let ContentTypeHeaderName = "content-type"
+let McpAcceptRetryMs = 50
 let ClearedAcceptDeadline = 0 as SocketDeadlineMs
 let SoonestAcceptDeadline = 1 as SocketDeadlineMs
 let ExpiryPastTheIdleWindow = 1
@@ -182,7 +183,9 @@ function reportedListenerFailure() returns ExitCode
 	return OwnFailureExit
 end 'reportedListenerFailure'
 
-type McpHttpHandler implements HttpHandler
+// Not an `HttpHandler`: `serve` hands its handler to other threads, and the sessions here own debuggees
+// that cannot cross one. Connections are served one at a time on this green thread.
+type McpHttpHandler
 	export var sessions as McpHttpSessionList
 	let devMode as bool
 	let exePath as FilePath
@@ -195,20 +198,53 @@ type McpHttpHandler implements HttpHandler
 	end 'create'
 
 	static function servedSessions(handler McpHttpHandler) returns McpHttpWake
-		view server = handler.server
 		handler.rearm()
-		var outcome = server.serve(handler)
+
+		var outcome = handler.serveUntilEnded()
 
 		while outcome == HttpServeEnd.acceptDeadlinePassed 'sweepOnTime'
 			handler.sweep()
 			handler.rearm()
-			outcome = server.serve(handler)
+			outcome = handler.serveUntilEnded()
 		end 'sweepOnTime'
 
 		handler.reapEverySession()
 
 		return McpHttpWake.served(outcome)
 	end 'servedSessions'
+
+	function serveUntilEnded() returns HttpServeEnd
+		while true 'accepting'
+			var exchange = try self.server.accept() otherwise (fault) 'refused'
+				match fault 'why'
+					listenerClosed then return HttpServeEnd.closed
+					acceptFailed then return HttpServeEnd.listenerFailed
+					acceptTimedOut then return HttpServeEnd.acceptDeadlinePassed
+					acceptInterrupted then sleep(McpAcceptRetryMs)
+					malformedRequest or
+					headersTooLarge or
+					bodyTooLarge or
+					unsupportedTransferEncoding or
+					unsupportedMethod or
+					unsupportedVersion or
+					readTimedOut or
+					connectionClosed or
+					tlsFailed then break
+					sendFailed or
+					alreadyResponded or
+					invalidResponse then panic("McpHttpHandler.serveUntilEnded: taking a connection does not throw `{fault.name}`")
+				end 'why'
+
+				continue
+			end 'refused'
+
+			try self.handle(exchange) otherwise (fault) 'failed'
+				printError("maxon {McpServerCommandName}: a request failed with {fault.name}\n")
+			end 'failed'
+		end 'accepting'
+
+		panic("McpHttpHandler.serveUntilEnded: the loop ends only by returning")
+	end 'serveUntilEnded'
 
 	function handle(exchange HttpExchange) throws HttpServerError
 		let startedMs = Clock.nowMs() as SessionMillis
@@ -267,10 +303,6 @@ type McpHttpHandler implements HttpHandler
 			options then try refuse(exchange, code: StatusCode.methodNotAllowed, reason: "{McpRoutePath} takes POST and DELETE")
 		end 'verb'
 	end 'answer'
-
-	function faulted(fault HttpHandlerFault)
-		printError("maxon {McpServerCommandName}: {fault.describe()}\n")
-	end 'faulted'
 
 	export function sweep()
 		let nowMs = Clock.nowMs() as SessionMillis

@@ -5237,8 +5237,14 @@ either side could write, because the two green threads may run at the same time 
   state is **E3137** there whenever `T` resolves to a managed type; a scalar `T` crosses.
 - A value held at an interface type crosses as a message argument, in a service's state and as a reply,
   moved like any other value. A conformer sent at its own type whose graph the runtime cannot walk
-  (an OS handle) is **E3138**; once it is held at the interface type it is checked through its witness at
-  the send, and such a conformer aborts with exit code **96**.
+  (an OS handle other than a socket, such as a machine pin) is **E3138**; once it is held at the interface type
+  it is checked through its witness at the send, and such a conformer aborts with exit code **96**.
+- **A socket crosses like any other record, because its box counts its owners.** A `TcpClient`, a
+  `TcpListener` or a `TlsStream` that the sender holds alone is moved into a service, sent in a message or
+  handed back in a reply; the receiving green thread reads and writes it, and the network poller wakes it
+  wherever it runs. One with a second owner — a copy in a container, a second `TcpClient` over the same
+  socket — is stopped by the walk below with exit code **96**. A module `let`,
+  a `SharedValue` or a registry value that reaches one is **E3163** or **E3171**.
 - Before a send, the runtime also checks the value's whole object graph. The graph may reach one record
   several times — two fields, two slots of an array — when every owner of that record is one of those
   references, and the record is walked once however many paths reach it. If some nested record has an owner
@@ -5247,7 +5253,7 @@ either side could write, because the two green threads may run at the same time 
   after the handler's locals and the message's arguments are released, so a reply built from them crosses. A
   generic service's reply is checked at the type its `spawn` fixes: a `returns T` message that hands back a
   container or a reference-holding record from the service's own state is **E3137** at the `spawn`, and a
-  reply whose graph holds a type the runtime cannot walk (an OS handle) is **E3138** there. A generic service
+  reply whose graph holds a type the runtime cannot walk (an OS handle other than a socket) is **E3138** there. A generic service
   cannot be spawned over a value held at an interface type (**E2015**).
 
 **Module-level state.** A service handler — and anything it calls — may not read or write a module-level

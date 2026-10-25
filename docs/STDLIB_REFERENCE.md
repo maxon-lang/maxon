@@ -2273,7 +2273,9 @@ every native target.
 ## TcpClient
 
 `TcpClient` is a TCP connection over IPv4 or IPv6. It closes its socket when the last reference to it goes
-away, so `close()` is optional.
+away, so `close()` is optional. A connection its holder owns alone moves into a [service](LANGUAGE_REFERENCE.md#services--spawn),
+a message or a reply, and the receiving green thread reads and writes it; the network poller wakes that thread
+wherever it runs. The same holds for a `TcpListener` and a `TlsStream`.
 
 A host holding a colon is a bare IPv6 literal (`::1`, `2001:db8::7`, `::ffff:192.0.2.1`; no brackets and no
 zone id) and connects over an IPv6 socket; one outside the address grammar throws `resolveFailed`. Every
@@ -2452,7 +2454,8 @@ ALPN the first of its protocols the client lists. Same targets as `TlsClient`.
 
 The handshake runs on the stream's first `send`, `recv`, `shutdownWrite` or `handshake()`, under the options'
 handshake deadline (30 s by default), so a client that connects and then stalls holds only its own stream. A server
-that accepts in a loop and serves each stream in a coroutine (`async`) answers other clients meanwhile.
+that accepts in a loop and moves each stream to a green thread of its own (a `spawn`ed service) answers other
+clients meanwhile.
 
 ### TlsServerOptions
 
@@ -2844,20 +2847,72 @@ connection closes. Keep-alive, chunked transfer and `Expect: 100-continue` are o
 | `setLimits(caps HttpServerLimits)` | — | — | Replace the caps later requests are parsed under. |
 | `setAcceptDeadline(milliseconds SocketDeadlineMs)` | — | `HttpServerError` | Make an `accept()` still waiting `milliseconds` after this call throw `acceptTimedOut`; `0` clears it. Throws `listenerClosed` once the server is closed. |
 | `accept()` | `HttpExchange` | `HttpServerError` | Take the next connection and the one request on it. An `OPTIONS *` is answered here, and the next connection taken. |
-| `serve(handler HttpHandler)` | `HttpServeEnd` | — | Accept and answer until `close()`, a listener failure or the accept deadline, serving each connection in its own coroutine. |
+| `serve(handler HttpHandler)` | `HttpServeEnd` | — | Accept and answer until `close()`, a listener failure or the accept deadline, serving each connection on a green thread of its own. |
 | `close()` | — | — | Stop listening: a parked or later `accept()` throws `listenerClosed`, which ends `serve`. |
 
 `close()` writes the server, so the server it is called on is held in a `var`; through a `let` it is
 [E3159](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3159).
 
-`serve` reads each connection's request, and runs its handler, in a coroutine of its own, so a client that stalls
-delays only itself and handlers of different connections overlap whenever one waits. The coroutines share one
-green thread: a handler that computes without waiting delays the other connections until it returns. `handler` is shared by the
-connections in flight, so `serve` keeps it: pass a fresh handler, a `var` handler that is not read afterwards, or
-`handler.clone()`; a `let` handler, or a `var` handler read again, passed as it is, is
-[E3078](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3078). Connections in flight are bounded by the operating system's socket
-limits, each in time by [`HttpServerLimits`](#httpserverlimits) and, for TLS, by the options' handshake deadline. `serve`
-returns once the listener has ended and every connection it took has finished.
+`serve` moves each accepted connection, a `TcpClient` or a `TlsStream`, to a green thread of its own, which reads its
+request and runs its handler. A client that stalls delays only its own connection, and a handler that computes
+without waiting delays only its own: connections run on as many processors as the program has. Connections in
+flight are bounded by the operating system's socket limits, each in time by [`HttpServerLimits`](#httpserverlimits)
+and, for TLS, by the options' handshake deadline. `serve` returns once the listener has ended and every
+connection it took has finished.
+
+The handler is one value every connection reads at once, so it is read-only. A handler whose methods write one
+of its fields is [E3138](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3138), reported where `serve` sends
+the handler to the connection's thread (in `HttpServer.maxon`). State the connections share, or the caller
+reads when `serve` returns, lives in a [service](LANGUAGE_REFERENCE.md#services--spawn) the handler holds a handle
+to, as in the example below. Build the handler where `serve` is called, with `handle.clone()` for each
+handle it keeps, or give it only `let` fields, which make it a plain value; a handler the calling function
+shares with another coroutine stops the program with exit code 96 at the first connection. A handler that
+holds an OS handle, a function value or a promise does too.
+
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Visits
+	var seen as Count
+
+	static function create() returns Visits
+		return Visits{seen: 0}
+	end 'create'
+
+	export function record() returns Count
+		self.seen = self.seen + 1
+
+		return self.seen
+	end 'record'
+end 'Visits'
+
+type CountingHandler implements HttpHandler
+	let visits as Visits.handle
+
+	static function create(visits Visits.handle) returns CountingHandler
+		return CountingHandler{visits: visits}
+	end 'create'
+
+	function handle(exchange HttpExchange) throws HttpServerError
+		let seen = try await visits.record() otherwise throw HttpServerError.sendFailed
+
+		try exchange.respondWith(StatusCode.ok, body: "visit {seen}", contentType: "text/plain")
+	end 'handle'
+
+	function faulted(fault HttpHandlerFault)
+		printError("{fault.describe()}\n")
+	end 'faulted'
+end 'CountingHandler'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 8080) otherwise return 1
+	let visits = spawn Visits.create()
+
+	_ = server.serve(CountingHandler.create(visits.clone()))
+
+	return 0
+end 'main'
+```
 
 `serve` hands each exchange to `handler.handle`. A handler that throws, or returns without answering, has
 its exchange answered `500` with an empty body, and `handler.faulted` is told. A request `accept()` refuses
@@ -3038,7 +3093,7 @@ case that carries a value, the [`TlsError`](#tlserror).
 
 ```maxon
 type HelloHandler implements HttpHandler
-	var greeting as String
+	let greeting as String
 
 	static function create(greeting String) returns HelloHandler
 		return HelloHandler{greeting: greeting}

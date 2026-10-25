@@ -8622,11 +8622,17 @@ end 'structBoxDropCallee'
 // Which cascade a full-graph gate is asked about.
 enum GraphCascadePurpose
 	deepClone
-	transferWalk
+
+	// The graph a MOVE walks: it admits an OS socket, whose box count is the proof of its one owner.
+	soleWalk
+
+	// The graph a share walk marks: an OS socket is refused, because one owner closes it.
+	shareWalk
 
 	// Lets a function value through, which no transfer may do: asked only to word a refused transfer —
 	// would the graph walk if not for its function values?
-	transferWalkPastFunctionValues
+	soleWalkPastFunctionValues
+	shareWalkPastFunctionValues
 
 	// `deepClone` that also refuses any green thread it reaches: asked only of a source-level copy.
 	// Kept apart because `deepClone` also gates cloner synthesis program-wide, and refusing a promise
@@ -8637,16 +8643,20 @@ end 'GraphCascadePurpose'
 function purposeCrossesAFunctionValue(purpose GraphCascadePurpose) returns bool
 	return match purpose 'purpose'
 		deepClone or
-		transferWalkPastFunctionValues or
+		soleWalkPastFunctionValues or
+		shareWalkPastFunctionValues or
 		sourceClone gives true
-		transferWalk gives false
+		soleWalk or
+		shareWalk gives false
 	end 'purpose'
 end 'purposeCrossesAFunctionValue'
 
 function purposeWalksThroughAWitness(purpose GraphCascadePurpose) returns bool
 	return match purpose 'purpose'
-		transferWalk or
-		transferWalkPastFunctionValues gives true
+		soleWalk or
+		shareWalk or
+		soleWalkPastFunctionValues or
+		shareWalkPastFunctionValues gives true
 		deepClone or
 		sourceClone gives false
 	end 'purpose'
@@ -8656,10 +8666,31 @@ function purposeRefusesAGreenThread(purpose GraphCascadePurpose) returns bool
 	return match purpose 'purpose'
 		sourceClone gives true
 		deepClone or
-		transferWalk or
-		transferWalkPastFunctionValues gives false
+		soleWalk or
+		shareWalk or
+		soleWalkPastFunctionValues or
+		shareWalkPastFunctionValues gives false
 	end 'purpose'
 end 'purposeRefusesAGreenThread'
+
+function purposeAdmitsAnOsSocket(purpose GraphCascadePurpose) returns bool
+	return match purpose 'purpose'
+		soleWalk or
+		soleWalkPastFunctionValues gives true
+		deepClone or
+		shareWalk or
+		shareWalkPastFunctionValues or
+		sourceClone gives false
+	end 'purpose'
+end 'purposeAdmitsAnOsSocket'
+
+function walkPurposeOf(action CascadeAction, pastFunctionValues bool) returns GraphCascadePurpose
+	return match action 'action'
+		clone panic("walkPurposeOf: a clone is gated by `deepClone` or `sourceClone`, which no walk's refusal wording asks")
+		soleWalk gives GraphCascadePurpose.soleWalkPastFunctionValues if pastFunctionValues else GraphCascadePurpose.soleWalk
+		shareWalk gives GraphCascadePurpose.shareWalkPastFunctionValues if pastFunctionValues else GraphCascadePurpose.shareWalk
+	end 'action'
+end 'walkPurposeOf'
 
 module enum SourceCloneVerdict
 	cloneable
@@ -8963,12 +8994,12 @@ end 'transferSubjectOf'
 
 // The per-type walk a gate admitted, read as a transfer. `asElement: true` resolves a managed-element container to
 // its one-argument thunk, so a two-argument strategy is an invariant break rather than a program.
-function transferWalkFrom(strategy ManagedCascadeStrategy, display String) returns TransferWalk
+function transferWalkFrom(strategy ManagedCascadeStrategy, display String, action CascadeAction) returns TransferWalk
 	return match strategy 'strategy'
 		direct(callee) gives TransferWalk.walkedBy(callee)
 		managedElements panic("transferWalkFrom: `{display}` resolved to a two-argument `managedElements` strategy, where `asElement: true` resolves to the one-argument thunk")
 		throughWitness panic("transferWalkFrom: `{display}` resolved to a witness-read walk, which only a FIELD held at an interface type takes")
-		unsupported gives unwalkableTransfer(display, onlyFunctionValuesBlockIt: false)
+		unsupported gives unwalkableTransfer(display, action: action, onlyFunctionValuesBlockIt: false)
 	end 'strategy'
 end 'transferWalkFrom'
 
@@ -9000,13 +9031,21 @@ function byteRecordTransferWalk(action CascadeAction, roots TransferRoots) retur
 	end 'roots'
 end 'byteRecordTransferWalk'
 
-function unwalkableTransfer(display String, onlyFunctionValuesBlockIt bool) returns TransferWalk
+function unwalkableTransfer(display String, action CascadeAction, onlyFunctionValuesBlockIt bool) returns TransferWalk
 	if onlyFunctionValuesBlockIt 'aFunctionValueBlocksIt'
 		return TransferWalk.refused("a `{display}` whose graph reaches {FunctionValueCrossingNoun}")
 	end 'aFunctionValueBlocksIt'
 
-	return TransferWalk.refused("a `{display}` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle or a base-struct-less generic instance")
+	return TransferWalk.refused("a `{display}` whose graph reaches a type this compiler synthesizes no per-type walk for — {unwalkableShapes(action)}")
 end 'unwalkableTransfer'
+
+function unwalkableShapes(action CascadeAction) returns String
+	return match action 'action'
+		clone panic("unwalkableShapes: a clone is not a transfer walk")
+		soleWalk gives "an OS handle other than a socket or a base-struct-less generic instance"
+		shareWalk gives "an OS handle or a base-struct-less generic instance"
+	end 'action'
+end 'unwalkableShapes'
 
 // The clone strategy for a managed field of declared type `fieldType`. Mirrors `managedFieldDropCallee`'s
 // dispatch exactly: `typeNames` resolves a `named`/`structRef` id to a NAME; pass the interner the field
@@ -9044,6 +9083,17 @@ module function managedFieldCascadeStrategy(signatures ProgramSignatures, typeNa
 	return managedNameCascadeStrategy(signatures, declaredName: name, asElement: asElement, action: action)
 end 'managedFieldCascadeStrategy'
 
+// A move walks a socket as a leaf box whose count must equal the owners the walk met. A share would
+// have every thread step that count atomically while one owner closes the descriptor, and a clone would
+// hand two owners one descriptor.
+function socketCascadeStrategy(action CascadeAction) returns ManagedCascadeStrategy
+	return match action 'action'
+		soleWalk gives ManagedCascadeStrategy.direct(MmSoleBoxName)
+		clone or
+		shareWalk gives ManagedCascadeStrategy.unsupported
+	end 'action'
+end 'socketCascadeStrategy'
+
 function functionValueCascadeStrategy(action CascadeAction) returns ManagedCascadeStrategy
 	return match action 'action'
 		clone gives ManagedCascadeStrategy.direct(MmRetainName)
@@ -9077,10 +9127,11 @@ function managedNameCascadeStrategy(signatures ProgramSignatures, declaredName B
 	match compilerOwnedAggregateOf(signatures, name: declaredName) 'compilerOwned'
 		managedFile or
 		managedDirectory or
-		managedSocket or
 		managedPages or
 		managedHandle or
 		managedPin then return ManagedCascadeStrategy.unsupported
+
+		managedSocket then return socketCascadeStrategy(action)
 
 		// ⭐ **A HANDLE IS THE ONE COMPILER-OWNED AGGREGATE THAT CLONES**, and its clone is the design's own
 		// `handle.clone()`: a SECOND HANDLE to the same service, which steps both mailbox counts and mints a
@@ -9134,9 +9185,11 @@ export enum CompilerOwnedAggregate
 	managedFile
 	managedDirectory
 
-	// ⚠ **KEPT ADJACENT TO ITS SIBLINGS ON PURPOSE.** Every reader below answers the same way for all of
-	// them, so they are matched as ONE RANGE — which is also what makes a further compiler-owned aggregate
-	// that needs a different answer fail to compile at each of those arms rather than inherit theirs.
+	// ⚠ **KEPT ADJACENT TO ITS SIBLINGS ON PURPOSE.** Every reader below but the walk strategy answers the
+	// same way for all of them, so they are matched as ONE RANGE — which is also what makes a further
+	// compiler-owned aggregate that needs a different answer fail to compile at each of those arms rather
+	// than inherit theirs. The walk readers (`managedNameCascadeStrategy`, `aggregateNameSupportsDeepClone`)
+	// split the socket off: its box count proves its one owner, so a move walks it.
 	managedSocket
 	managedPages
 	managedHandle
@@ -18894,9 +18947,10 @@ export type ProgramSignatures
 	// LESS state than the map but the same obligation: see there.
 	var deepCloneWalkReadInstances as bool
 
-	// `aggregateSupportsTransferWalk`'s memo — `deepCloneAnswers` asked for the walk, kept on that memo's
-	// conditions.
-	var transferWalkAnswers as DeepCloneAnswerMap
+	// `aggregateSupportsTransferWalk`'s memos — `deepCloneAnswers` asked for each walk, kept on that memo's
+	// conditions. The two walks answer differently for a graph that reaches an OS socket.
+	var soleWalkAnswers as DeepCloneAnswerMap
+	var shareWalkAnswers as DeepCloneAnswerMap
 
 	// Has the close run? It is a least fixpoint over the map above and its answer is memoized into
 	// `funcReturnsFreshRecord` itself, so a second run would re-publish facts already published and bump every
@@ -19032,7 +19086,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{ownSettled: SettledDeclarations.create(os), sharedSettled: SettledDeclarations.unused(), readsPublishedView: false, genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), multiplyDeclaredTupleAliases: MultiplyDeclaredTupleAliasMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, sawManagedHostResourceProducer: false, divergedGenericAliasDecl: AliasCycleResult.none, cascadeWalkRoots: NameRoster.create(), cascadeBreakReached: CascadeWalkBreak.nothingBroke(), interfaceCloneAnswers: DeepCloneAnswerMap.create(), someRecordHoldsAnInterfaceValue: false, recordsHoldingAnInterfaceValueCounted: false, typeNames: TypeNameInterner.createForSource(0), crossFileConstantReads: NameInFileArray.create(), sawParamReassignment: false, byRefForwardingClosed: false, deepCloneAnswers: DeepCloneAnswerMap.create(), transferWalkAnswers: DeepCloneAnswerMap.create(), deepCloneWalkReadInstances: false, sawGlobalNameReturn: false, globalAliasReturnsClosed: false, freshReturnForwardsClosed: false, forwardedStoresClosed: false, hash: Hasher.empty(), hashSource: HashEventSource.whole, authorChainState: Hasher.empty(), libraryChainState: Hasher.empty(), wholeChainState: Hasher.empty(), libraryHash: Hasher.empty(), libraryParseSharing: LibraryParseSharing.undecided, authorNameMeantByTheLibrary: false, storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, projectRootModuleDirectory: "", arrayByteInstance: 0, arrayByteInstanceComputed: false, hasNonCorpusArrayConformer: false, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed()}
+		return Self{ownSettled: SettledDeclarations.create(os), sharedSettled: SettledDeclarations.unused(), readsPublishedView: false, genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), multiplyDeclaredTupleAliases: MultiplyDeclaredTupleAliasMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, sawManagedHostResourceProducer: false, divergedGenericAliasDecl: AliasCycleResult.none, cascadeWalkRoots: NameRoster.create(), cascadeBreakReached: CascadeWalkBreak.nothingBroke(), interfaceCloneAnswers: DeepCloneAnswerMap.create(), someRecordHoldsAnInterfaceValue: false, recordsHoldingAnInterfaceValueCounted: false, typeNames: TypeNameInterner.createForSource(0), crossFileConstantReads: NameInFileArray.create(), sawParamReassignment: false, byRefForwardingClosed: false, deepCloneAnswers: DeepCloneAnswerMap.create(), soleWalkAnswers: DeepCloneAnswerMap.create(), shareWalkAnswers: DeepCloneAnswerMap.create(), deepCloneWalkReadInstances: false, sawGlobalNameReturn: false, globalAliasReturnsClosed: false, freshReturnForwardsClosed: false, forwardedStoresClosed: false, hash: Hasher.empty(), hashSource: HashEventSource.whole, authorChainState: Hasher.empty(), libraryChainState: Hasher.empty(), wholeChainState: Hasher.empty(), libraryHash: Hasher.empty(), libraryParseSharing: LibraryParseSharing.undecided, authorNameMeantByTheLibrary: false, storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, projectRootModuleDirectory: "", arrayByteInstance: 0, arrayByteInstanceComputed: false, hasNonCorpusArrayConformer: false, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed()}
 	end 'freshIndexes'
 
 	module function settledDeclarations() returns SettledDeclarations
@@ -44121,8 +44175,12 @@ export type ProgramSignatures
 	end 'aggregateSupportsDeepClone'
 
 	// The gate above asked for a TRANSFER walk, which admits a value held at an interface type.
-	export function aggregateSupportsTransferWalk(aggregateName ByteArray) returns bool
-		return self.memoizedAggregateCascadeAnswer(aggregateName, purpose: GraphCascadePurpose.transferWalk, answers: self.transferWalkAnswers)
+	export function aggregateSupportsTransferWalk(aggregateName ByteArray, action CascadeAction) returns bool
+		return match action 'action'
+			clone panic("aggregateSupportsTransferWalk: a clone is not a transfer walk — ask `aggregateSupportsDeepClone`")
+			soleWalk gives self.memoizedAggregateCascadeAnswer(aggregateName, purpose: GraphCascadePurpose.soleWalk, answers: self.soleWalkAnswers)
+			shareWalk gives self.memoizedAggregateCascadeAnswer(aggregateName, purpose: GraphCascadePurpose.shareWalk, answers: self.shareWalkAnswers)
+		end 'action'
 	end 'aggregateSupportsTransferWalk'
 
 	// The memo the two entries above share; `answers` is the purpose's own map.
@@ -44529,15 +44587,15 @@ export type ProgramSignatures
 	// It is the same full-graph walk keyed by instance rather than by name, which is what a value tagged
 	// `genericInstance` has — asking it by base NAME would answer about the declaration and not about the
 	// substituted element.
-	export function instanceSupportsTransferWalk(id GenericInstanceId) returns bool
-		return self.instanceGraphSupportsDeepClone(id, visited: ClonerSet.create(), purpose: GraphCascadePurpose.transferWalk)
+	export function instanceSupportsTransferWalk(id GenericInstanceId, action CascadeAction) returns bool
+		return self.instanceGraphSupportsDeepClone(id, visited: ClonerSet.create(), purpose: walkPurposeOf(action, pastFunctionValues: false))
 	end 'instanceSupportsTransferWalk'
 
 	function aggregateSupportsCascade(aggregateName ByteArray, action CascadeAction) returns bool
 		return match action 'action'
 			clone gives self.aggregateSupportsDeepClone(aggregateName)
 			soleWalk or
-			shareWalk gives self.aggregateSupportsTransferWalk(aggregateName)
+			shareWalk gives self.aggregateSupportsTransferWalk(aggregateName, action: action)
 		end 'action'
 	end 'aggregateSupportsCascade'
 
@@ -44545,7 +44603,7 @@ export type ProgramSignatures
 		return match action 'action'
 			clone gives self.instanceGraphSupportsDeepClone(id, visited: ClonerSet.create(), purpose: GraphCascadePurpose.deepClone)
 			soleWalk or
-			shareWalk gives self.instanceSupportsTransferWalk(id)
+			shareWalk gives self.instanceSupportsTransferWalk(id, action: action)
 		end 'action'
 	end 'instanceSupportsCascade'
 
@@ -44792,11 +44850,11 @@ export type ProgramSignatures
 			return TransferWalk.refused("a `{display}` whose graph reaches {PromiseSharedNoun}")
 		end 'aSharedPromise'
 
-		if not self.instanceSupportsTransferWalk(id) 'someNestedTypeHasNoWalk'
-			return unwalkableTransfer(display, onlyFunctionValuesBlockIt: self.instanceGraphSupportsDeepClone(id, visited: ClonerSet.create(), purpose: GraphCascadePurpose.transferWalkPastFunctionValues))
+		if not self.instanceSupportsTransferWalk(id, action: action) 'someNestedTypeHasNoWalk'
+			return unwalkableTransfer(display, action: action, onlyFunctionValuesBlockIt: self.instanceGraphSupportsDeepClone(id, visited: ClonerSet.create(), purpose: walkPurposeOf(action, pastFunctionValues: true)))
 		end 'someNestedTypeHasNoWalk'
 
-		return transferWalkFrom(instanceCascadeStrategy(self, id: id, asElement: true, action: action), display: display)
+		return transferWalkFrom(instanceCascadeStrategy(self, id: id, asElement: true, action: action), display: display, action: action)
 	end 'instanceTransferWalk'
 
 	// What a `structRef` or `named` subject walks, split on which registry declares its name: `emitEnumBox` tags a
@@ -44805,6 +44863,20 @@ export type ProgramSignatures
 		if self.isFunctionAliasInAnyFile(name) 'aFunctionValue'
 			return TransferWalk.refused(FunctionValueCrossingNoun)
 		end 'aFunctionValue'
+
+		// Asked before the record checks: a bare socket box holds no managed field, so it would take the
+		// unwalked move below and cross without its owners being counted.
+		match compilerOwnedAggregateOf(self, name: name) 'compilerOwned'
+			managedSocket then return transferWalkFrom(socketCascadeStrategy(action), display: String.from(name), action: action)
+
+			managedFile or
+			managedDirectory or
+			managedPages or
+			managedHandle or
+			managedPin or
+			serviceHandle or
+			userDeclared then break
+		end 'compilerOwned'
 
 		if self.containsEnumFor(name, readerFilePath: readerFilePath) 'aUnionBox'
 			return self.declaredAggregateTransferWalk(name, action: action, holdsReferences: self.unionHasManagedPayload(name))
@@ -44841,11 +44913,11 @@ export type ProgramSignatures
 			return TransferWalk.closed
 		end 'movesUnwalked'
 
-		if not self.aggregateSupportsTransferWalk(name) 'someNestedTypeHasNoWalk'
-			return unwalkableTransfer(String.from(name), onlyFunctionValuesBlockIt: self.aggregateNameSupportsDeepClone(name, visited: ClonerSet.create(), purpose: GraphCascadePurpose.transferWalkPastFunctionValues))
+		if not self.aggregateSupportsTransferWalk(name, action: action) 'someNestedTypeHasNoWalk'
+			return unwalkableTransfer(String.from(name), action: action, onlyFunctionValuesBlockIt: self.aggregateNameSupportsDeepClone(name, visited: ClonerSet.create(), purpose: walkPurposeOf(action, pastFunctionValues: true)))
 		end 'someNestedTypeHasNoWalk'
 
-		return transferWalkFrom(managedNameCascadeStrategy(self, declaredName: name, asElement: true, action: action), display: String.from(name))
+		return transferWalkFrom(managedNameCascadeStrategy(self, declaredName: name, asElement: true, action: action), display: String.from(name), action: action)
 	end 'declaredAggregateTransferWalk'
 
 	// ⭐ **DOES `name` DENOTE A RECORD WITH A SLOT STANDING AT A BARE TYPE PARAMETER, AND WHOSE `uses` LIST DOES IT
@@ -45005,10 +45077,11 @@ export type ProgramSignatures
 		match compilerOwnedAggregateOf(self, name: name) 'compilerOwned'
 			managedFile or
 			managedDirectory or
-			managedSocket or
 			managedPages or
 			managedHandle or
 			managedPin then return false
+
+			managedSocket then return purposeAdmitsAnOsSocket(purpose)
 
 			// A handle's clone is a real entry (`managedNameCascadeStrategy`), so the GATE must admit what the
 			// STRATEGY answers — this arm and that one are the divergence this function exists to prevent.
@@ -46165,7 +46238,7 @@ export type ProgramSignatures
 	end 'adopting'
 
 	static function reassembled(template ProgramSignatures, own SettledDeclarations, shared SettledDeclarations, readsPublishedView bool) returns ProgramSignatures
-		return Self{ownSettled: own, sharedSettled: shared, readsPublishedView: readsPublishedView, structSlots: template.structSlots, mintedTupleLayouts: template.mintedTupleLayouts, published: template.published, genericInstances: template.genericInstances, compiledInstanceNames: template.compiledInstanceNames, canonicalInstanceNames: template.canonicalInstanceNames, substitutedInstanceOrigins: template.substitutedInstanceOrigins, canonicalInstanceNameIndex: template.canonicalInstanceNameIndex, canonicalNamesIndexedThrough: template.canonicalNamesIndexedThrough, tupleCanonicalNames: template.tupleCanonicalNames, tupleElementTokens: template.tupleElementTokens, tupleElementTokenOwners: template.tupleElementTokenOwners, tupleAliases: template.tupleAliases, multiplyDeclaredTupleAliases: template.multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: template.sawAggregateArrayLiteral, sawListFromConstruction: template.sawListFromConstruction, sawEnumAllCasesAccess: template.sawEnumAllCasesAccess, sawIntArrayLiteral: template.sawIntArrayLiteral, sawByteStringLiteral: template.sawByteStringLiteral, sawStringArrayLiteral: template.sawStringArrayLiteral, sawSetFromConstruction: template.sawSetFromConstruction, sawManagedFileProducer: template.sawManagedFileProducer, sawManagedDirectoryProducer: template.sawManagedDirectoryProducer, sawManagedSocketProducer: template.sawManagedSocketProducer, sawManagedHostResourceProducer: template.sawManagedHostResourceProducer, divergedGenericAliasDecl: template.divergedGenericAliasDecl, cascadeWalkRoots: template.cascadeWalkRoots, cascadeBreakReached: template.cascadeBreakReached, interfaceCloneAnswers: template.interfaceCloneAnswers, someRecordHoldsAnInterfaceValue: template.someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: template.recordsHoldingAnInterfaceValueCounted, typeNames: template.typeNames, crossFileConstantReads: template.crossFileConstantReads, sawParamReassignment: template.sawParamReassignment, byRefForwardingClosed: template.byRefForwardingClosed, sawGlobalNameReturn: template.sawGlobalNameReturn, globalAliasReturnsClosed: template.globalAliasReturnsClosed, deepCloneAnswers: template.deepCloneAnswers, deepCloneWalkReadInstances: template.deepCloneWalkReadInstances, transferWalkAnswers: template.transferWalkAnswers, freshReturnForwardsClosed: template.freshReturnForwardsClosed, forwardedStoresClosed: template.forwardedStoresClosed, hash: template.hash, hashSource: template.hashSource, authorChainState: template.authorChainState, libraryChainState: template.libraryChainState, wholeChainState: template.wholeChainState, libraryHash: template.libraryHash, libraryParseSharing: template.libraryParseSharing, authorNameMeantByTheLibrary: template.authorNameMeantByTheLibrary, storedGlobalCount: template.storedGlobalCount, allFilesFolded: template.allFilesFolded, inlineGeometrySettled: template.inlineGeometrySettled, rangeContestsSettled: template.rangeContestsSettled, rootIsUnderStdlibDirectory: template.rootIsUnderStdlibDirectory, projectRootModuleDirectory: template.projectRootModuleDirectory, arrayByteInstance: template.arrayByteInstance, arrayByteInstanceComputed: template.arrayByteInstanceComputed, spawnsAnyServiceSettled: template.spawnsAnyServiceSettled, spawnsAnyServiceAnswer: template.spawnsAnyServiceAnswer, byRefMasksSettled: template.byRefMasksSettled, byRefMaskColumn: template.byRefMaskColumn, witnessByRefMasks: template.witnessByRefMasks, byRefConventionDigestAnswer: template.byRefConventionDigestAnswer, functionValuedFieldNames: template.functionValuedFieldNames, liveDefaultKeyNames: template.liveDefaultKeyNames, liveKeyAdoptions: template.liveKeyAdoptions, hasNonCorpusArrayConformer: template.hasNonCorpusArrayConformer, recordsTypeClaims: template.recordsTypeClaims, baseline: template.baseline, journal: template.journal, rowSetLog: RowSetLog.closed(), holdsAMerge: template.holdsAMerge, genericInstancesDigest: template.genericInstancesDigest}
+		return Self{ownSettled: own, sharedSettled: shared, readsPublishedView: readsPublishedView, structSlots: template.structSlots, mintedTupleLayouts: template.mintedTupleLayouts, published: template.published, genericInstances: template.genericInstances, compiledInstanceNames: template.compiledInstanceNames, canonicalInstanceNames: template.canonicalInstanceNames, substitutedInstanceOrigins: template.substitutedInstanceOrigins, canonicalInstanceNameIndex: template.canonicalInstanceNameIndex, canonicalNamesIndexedThrough: template.canonicalNamesIndexedThrough, tupleCanonicalNames: template.tupleCanonicalNames, tupleElementTokens: template.tupleElementTokens, tupleElementTokenOwners: template.tupleElementTokenOwners, tupleAliases: template.tupleAliases, multiplyDeclaredTupleAliases: template.multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: template.sawAggregateArrayLiteral, sawListFromConstruction: template.sawListFromConstruction, sawEnumAllCasesAccess: template.sawEnumAllCasesAccess, sawIntArrayLiteral: template.sawIntArrayLiteral, sawByteStringLiteral: template.sawByteStringLiteral, sawStringArrayLiteral: template.sawStringArrayLiteral, sawSetFromConstruction: template.sawSetFromConstruction, sawManagedFileProducer: template.sawManagedFileProducer, sawManagedDirectoryProducer: template.sawManagedDirectoryProducer, sawManagedSocketProducer: template.sawManagedSocketProducer, sawManagedHostResourceProducer: template.sawManagedHostResourceProducer, divergedGenericAliasDecl: template.divergedGenericAliasDecl, cascadeWalkRoots: template.cascadeWalkRoots, cascadeBreakReached: template.cascadeBreakReached, interfaceCloneAnswers: template.interfaceCloneAnswers, someRecordHoldsAnInterfaceValue: template.someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: template.recordsHoldingAnInterfaceValueCounted, typeNames: template.typeNames, crossFileConstantReads: template.crossFileConstantReads, sawParamReassignment: template.sawParamReassignment, byRefForwardingClosed: template.byRefForwardingClosed, sawGlobalNameReturn: template.sawGlobalNameReturn, globalAliasReturnsClosed: template.globalAliasReturnsClosed, deepCloneAnswers: template.deepCloneAnswers, deepCloneWalkReadInstances: template.deepCloneWalkReadInstances, soleWalkAnswers: template.soleWalkAnswers, shareWalkAnswers: template.shareWalkAnswers, freshReturnForwardsClosed: template.freshReturnForwardsClosed, forwardedStoresClosed: template.forwardedStoresClosed, hash: template.hash, hashSource: template.hashSource, authorChainState: template.authorChainState, libraryChainState: template.libraryChainState, wholeChainState: template.wholeChainState, libraryHash: template.libraryHash, libraryParseSharing: template.libraryParseSharing, authorNameMeantByTheLibrary: template.authorNameMeantByTheLibrary, storedGlobalCount: template.storedGlobalCount, allFilesFolded: template.allFilesFolded, inlineGeometrySettled: template.inlineGeometrySettled, rangeContestsSettled: template.rangeContestsSettled, rootIsUnderStdlibDirectory: template.rootIsUnderStdlibDirectory, projectRootModuleDirectory: template.projectRootModuleDirectory, arrayByteInstance: template.arrayByteInstance, arrayByteInstanceComputed: template.arrayByteInstanceComputed, spawnsAnyServiceSettled: template.spawnsAnyServiceSettled, spawnsAnyServiceAnswer: template.spawnsAnyServiceAnswer, byRefMasksSettled: template.byRefMasksSettled, byRefMaskColumn: template.byRefMaskColumn, witnessByRefMasks: template.witnessByRefMasks, byRefConventionDigestAnswer: template.byRefConventionDigestAnswer, functionValuedFieldNames: template.functionValuedFieldNames, liveDefaultKeyNames: template.liveDefaultKeyNames, liveKeyAdoptions: template.liveKeyAdoptions, hasNonCorpusArrayConformer: template.hasNonCorpusArrayConformer, recordsTypeClaims: template.recordsTypeClaims, baseline: template.baseline, journal: template.journal, rowSetLog: RowSetLog.closed(), holdsAMerge: template.holdsAMerge, genericInstancesDigest: template.genericInstancesDigest}
 	end 'reassembled'
 
 	export function releaseTypeNameViews()
@@ -46713,9 +46786,13 @@ export type ProgramSignatures
 			_ = self.deepCloneAnswers.remove(name)
 		end 'eachDeepCloneAnswer'
 
-		for name in self.journal.transferWalkNames 'eachTransferWalkAnswer'
-			_ = self.transferWalkAnswers.remove(name)
-		end 'eachTransferWalkAnswer'
+		for name in self.journal.soleWalkNames 'eachSoleWalkAnswer'
+			_ = self.soleWalkAnswers.remove(name)
+		end 'eachSoleWalkAnswer'
+
+		for name in self.journal.shareWalkNames 'eachShareWalkAnswer'
+			_ = self.shareWalkAnswers.remove(name)
+		end 'eachShareWalkAnswer'
 
 		for name in self.journal.interfaceCloneNames 'eachInterfaceCloneAnswer'
 			_ = self.interfaceCloneAnswers.remove(name)
@@ -47024,7 +47101,8 @@ export type ProgramSignatures
 		fingerprint.note("byRefBareNames", value: declarations.byRefBareNames.count())
 		fingerprint.note("deepCloneAnswers", value: self.deepCloneAnswers.count())
 		fingerprint.note("interfaceCloneAnswers", value: self.interfaceCloneAnswers.count())
-		fingerprint.note("transferWalkAnswers", value: self.transferWalkAnswers.count())
+		fingerprint.note("soleWalkAnswers", value: self.soleWalkAnswers.count())
+		fingerprint.note("shareWalkAnswers", value: self.shareWalkAnswers.count())
 		fingerprint.noteFlag("deepCloneWalkReadInstances", flag: self.deepCloneWalkReadInstances)
 		fingerprint.note("funcThrows", value: declarations.funcThrows.count())
 		fingerprint.note("disagreeingThrows", value: declarations.disagreeingThrows.count())
@@ -47172,7 +47250,8 @@ export type ProgramSignatures
 		writer.flag(self.globalAliasReturnsClosed)
 		cacheWriteDeepCloneAnswerMap(writer, value: self.deepCloneAnswers)
 		writer.flag(self.deepCloneWalkReadInstances)
-		cacheWriteDeepCloneAnswerMap(writer, value: self.transferWalkAnswers)
+		cacheWriteDeepCloneAnswerMap(writer, value: self.soleWalkAnswers)
+		cacheWriteDeepCloneAnswerMap(writer, value: self.shareWalkAnswers)
 		writer.flag(self.freshReturnForwardsClosed)
 		writer.flag(self.forwardedStoresClosed)
 		writer.unsigned(self.hash as CacheUnsigned)
@@ -47246,7 +47325,8 @@ export type ProgramSignatures
 		let f_globalAliasReturnsClosed = try reader.flag()
 		let f_deepCloneAnswers = try cacheReadDeepCloneAnswerMap(reader)
 		let f_deepCloneWalkReadInstances = try reader.flag()
-		let f_transferWalkAnswers = try cacheReadDeepCloneAnswerMap(reader)
+		let f_soleWalkAnswers = try cacheReadDeepCloneAnswerMap(reader)
+		let f_shareWalkAnswers = try cacheReadDeepCloneAnswerMap(reader)
 		let f_freshReturnForwardsClosed = try reader.flag()
 		let f_forwardedStoresClosed = try reader.flag()
 		let f_hash = (try reader.unsigned()) as HashDigest
@@ -47280,11 +47360,11 @@ export type ProgramSignatures
 		let f_holdsAMerge = try reader.flag()
 		let f_genericInstancesDigest = (try reader.unsigned()) as HashDigest
 
-		return Self{ownSettled: f_ownSettled, sharedSettled: SettledDeclarations.unused(), readsPublishedView: false, structSlots: f_structSlots, mintedTupleLayouts: StructLayoutArray.create(), published: SettledCellArray.create(), genericInstances: f_genericInstances, compiledInstanceNames: f_compiledInstanceNames, canonicalInstanceNames: f_canonicalInstanceNames, substitutedInstanceOrigins: f_substitutedInstanceOrigins, canonicalInstanceNameIndex: f_canonicalInstanceNameIndex, canonicalNamesIndexedThrough: f_canonicalNamesIndexedThrough, tupleCanonicalNames: f_tupleCanonicalNames, tupleElementTokens: f_tupleElementTokens, tupleElementTokenOwners: f_tupleElementTokenOwners, tupleAliases: f_tupleAliases, multiplyDeclaredTupleAliases: f_multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: f_sawAggregateArrayLiteral, sawListFromConstruction: f_sawListFromConstruction, sawEnumAllCasesAccess: f_sawEnumAllCasesAccess, sawIntArrayLiteral: f_sawIntArrayLiteral, sawByteStringLiteral: f_sawByteStringLiteral, sawStringArrayLiteral: f_sawStringArrayLiteral, sawSetFromConstruction: f_sawSetFromConstruction, sawManagedFileProducer: f_sawManagedFileProducer, sawManagedDirectoryProducer: f_sawManagedDirectoryProducer, sawManagedSocketProducer: f_sawManagedSocketProducer, sawManagedHostResourceProducer: f_sawManagedHostResourceProducer, divergedGenericAliasDecl: f_divergedGenericAliasDecl, cascadeWalkRoots: f_cascadeWalkRoots, cascadeBreakReached: f_cascadeBreakReached, interfaceCloneAnswers: f_interfaceCloneAnswers, someRecordHoldsAnInterfaceValue: f_someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: f_recordsHoldingAnInterfaceValueCounted, typeNames: f_typeNames, crossFileConstantReads: f_crossFileConstantReads, sawParamReassignment: f_sawParamReassignment, byRefForwardingClosed: f_byRefForwardingClosed, sawGlobalNameReturn: f_sawGlobalNameReturn, globalAliasReturnsClosed: f_globalAliasReturnsClosed, deepCloneAnswers: f_deepCloneAnswers, deepCloneWalkReadInstances: f_deepCloneWalkReadInstances, transferWalkAnswers: f_transferWalkAnswers, freshReturnForwardsClosed: f_freshReturnForwardsClosed, forwardedStoresClosed: f_forwardedStoresClosed, hash: f_hash, hashSource: f_hashSource, authorChainState: f_authorChainState, libraryChainState: f_libraryChainState, wholeChainState: f_wholeChainState, libraryHash: f_libraryHash, libraryParseSharing: f_libraryParseSharing, authorNameMeantByTheLibrary: f_authorNameMeantByTheLibrary, storedGlobalCount: f_storedGlobalCount, allFilesFolded: f_allFilesFolded, inlineGeometrySettled: f_inlineGeometrySettled, rangeContestsSettled: f_rangeContestsSettled, rootIsUnderStdlibDirectory: f_rootIsUnderStdlibDirectory, projectRootModuleDirectory: f_projectRootModuleDirectory, arrayByteInstance: f_arrayByteInstance, arrayByteInstanceComputed: f_arrayByteInstanceComputed, spawnsAnyServiceSettled: f_spawnsAnyServiceSettled, spawnsAnyServiceAnswer: f_spawnsAnyServiceAnswer, byRefMasksSettled: f_byRefMasksSettled, byRefMaskColumn: f_byRefMaskColumn, functionValuedFieldNames: f_functionValuedFieldNames, witnessByRefMasks: f_witnessByRefMasks, byRefConventionDigestAnswer: f_byRefConventionDigestAnswer, liveDefaultKeyNames: f_liveDefaultKeyNames, liveSpawnedTypeNames: f_liveSpawnedTypeNames, liveKeyAdoptions: f_liveKeyAdoptions, hasNonCorpusArrayConformer: f_hasNonCorpusArrayConformer, recordsTypeClaims: f_recordsTypeClaims, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed(), holdsAMerge: f_holdsAMerge, genericInstancesDigest: f_genericInstancesDigest}
+		return Self{ownSettled: f_ownSettled, sharedSettled: SettledDeclarations.unused(), readsPublishedView: false, structSlots: f_structSlots, mintedTupleLayouts: StructLayoutArray.create(), published: SettledCellArray.create(), genericInstances: f_genericInstances, compiledInstanceNames: f_compiledInstanceNames, canonicalInstanceNames: f_canonicalInstanceNames, substitutedInstanceOrigins: f_substitutedInstanceOrigins, canonicalInstanceNameIndex: f_canonicalInstanceNameIndex, canonicalNamesIndexedThrough: f_canonicalNamesIndexedThrough, tupleCanonicalNames: f_tupleCanonicalNames, tupleElementTokens: f_tupleElementTokens, tupleElementTokenOwners: f_tupleElementTokenOwners, tupleAliases: f_tupleAliases, multiplyDeclaredTupleAliases: f_multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: f_sawAggregateArrayLiteral, sawListFromConstruction: f_sawListFromConstruction, sawEnumAllCasesAccess: f_sawEnumAllCasesAccess, sawIntArrayLiteral: f_sawIntArrayLiteral, sawByteStringLiteral: f_sawByteStringLiteral, sawStringArrayLiteral: f_sawStringArrayLiteral, sawSetFromConstruction: f_sawSetFromConstruction, sawManagedFileProducer: f_sawManagedFileProducer, sawManagedDirectoryProducer: f_sawManagedDirectoryProducer, sawManagedSocketProducer: f_sawManagedSocketProducer, sawManagedHostResourceProducer: f_sawManagedHostResourceProducer, divergedGenericAliasDecl: f_divergedGenericAliasDecl, cascadeWalkRoots: f_cascadeWalkRoots, cascadeBreakReached: f_cascadeBreakReached, interfaceCloneAnswers: f_interfaceCloneAnswers, someRecordHoldsAnInterfaceValue: f_someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: f_recordsHoldingAnInterfaceValueCounted, typeNames: f_typeNames, crossFileConstantReads: f_crossFileConstantReads, sawParamReassignment: f_sawParamReassignment, byRefForwardingClosed: f_byRefForwardingClosed, sawGlobalNameReturn: f_sawGlobalNameReturn, globalAliasReturnsClosed: f_globalAliasReturnsClosed, deepCloneAnswers: f_deepCloneAnswers, deepCloneWalkReadInstances: f_deepCloneWalkReadInstances, soleWalkAnswers: f_soleWalkAnswers, shareWalkAnswers: f_shareWalkAnswers, freshReturnForwardsClosed: f_freshReturnForwardsClosed, forwardedStoresClosed: f_forwardedStoresClosed, hash: f_hash, hashSource: f_hashSource, authorChainState: f_authorChainState, libraryChainState: f_libraryChainState, wholeChainState: f_wholeChainState, libraryHash: f_libraryHash, libraryParseSharing: f_libraryParseSharing, authorNameMeantByTheLibrary: f_authorNameMeantByTheLibrary, storedGlobalCount: f_storedGlobalCount, allFilesFolded: f_allFilesFolded, inlineGeometrySettled: f_inlineGeometrySettled, rangeContestsSettled: f_rangeContestsSettled, rootIsUnderStdlibDirectory: f_rootIsUnderStdlibDirectory, projectRootModuleDirectory: f_projectRootModuleDirectory, arrayByteInstance: f_arrayByteInstance, arrayByteInstanceComputed: f_arrayByteInstanceComputed, spawnsAnyServiceSettled: f_spawnsAnyServiceSettled, spawnsAnyServiceAnswer: f_spawnsAnyServiceAnswer, byRefMasksSettled: f_byRefMasksSettled, byRefMaskColumn: f_byRefMaskColumn, functionValuedFieldNames: f_functionValuedFieldNames, witnessByRefMasks: f_witnessByRefMasks, byRefConventionDigestAnswer: f_byRefConventionDigestAnswer, liveDefaultKeyNames: f_liveDefaultKeyNames, liveSpawnedTypeNames: f_liveSpawnedTypeNames, liveKeyAdoptions: f_liveKeyAdoptions, hasNonCorpusArrayConformer: f_hasNonCorpusArrayConformer, recordsTypeClaims: f_recordsTypeClaims, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed(), holdsAMerge: f_holdsAMerge, genericInstancesDigest: f_genericInstancesDigest}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize624
-		return sizeof(ProgramSignatures) as CacheSize624
+	static function cacheLayoutBytes() returns CacheSize632
+		return sizeof(ProgramSignatures) as CacheSize632
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -47691,10 +47771,11 @@ type IndexJournal
 	export var deepCloneNames as NameRoster
 
 	export var interfaceCloneNames as NameRoster
-	export var transferWalkNames as NameRoster
+	export var soleWalkNames as NameRoster
+	export var shareWalkNames as NameRoster
 
 	static function create() returns IndexJournal
-		return Self{tupleNames: NameRoster.create(), separatorBearingTokens: NameRoster.create(), canonicalTupleNames: NameRoster.create(), compiledNameIds: GenericInstanceIdArray.create(), canonicalNameIds: GenericInstanceIdArray.create(), canonicalIndexWrites: CanonicalIndexWriteArray.create(), originIds: GenericInstanceIdArray.create(), tupleAliasWrites: TupleAliasWriteArray.create(), deepCloneNames: NameRoster.create(), transferWalkNames: NameRoster.create(), interfaceCloneNames: NameRoster.create()}
+		return Self{tupleNames: NameRoster.create(), separatorBearingTokens: NameRoster.create(), canonicalTupleNames: NameRoster.create(), compiledNameIds: GenericInstanceIdArray.create(), canonicalNameIds: GenericInstanceIdArray.create(), canonicalIndexWrites: CanonicalIndexWriteArray.create(), originIds: GenericInstanceIdArray.create(), tupleAliasWrites: TupleAliasWriteArray.create(), deepCloneNames: NameRoster.create(), soleWalkNames: NameRoster.create(), shareWalkNames: NameRoster.create(), interfaceCloneNames: NameRoster.create()}
 	end 'create'
 
 	function noteTupleName(name ByteArray)
@@ -47732,8 +47813,10 @@ type IndexJournal
 	function noteCascadeAnswer(name ByteArray, purpose GraphCascadePurpose)
 		match purpose 'purpose'
 			deepClone then self.deepCloneNames.push(name)
-			transferWalk then self.transferWalkNames.push(name)
-			transferWalkPastFunctionValues then panic("IndexJournal.noteCascadeAnswer: the walk past function values names the obstacle of a refused transfer and is never memoized")
+			soleWalk then self.soleWalkNames.push(name)
+			shareWalk then self.shareWalkNames.push(name)
+			soleWalkPastFunctionValues or
+			shareWalkPastFunctionValues then panic("IndexJournal.noteCascadeAnswer: the walk past function values names the obstacle of a refused transfer and is never memoized")
 			sourceClone then panic("IndexJournal.noteCascadeAnswer: a source `.clone()` gate is asked once per receiver and is never memoized")
 		end 'purpose'
 	end 'noteCascadeAnswer'
@@ -47753,7 +47836,8 @@ type IndexJournal
 		fingerprint.note("originIds", value: self.originIds.count() as EntryCount)
 		fingerprint.note("tupleAliasWrites", value: self.tupleAliasWrites.count() as EntryCount)
 		fingerprint.note("deepCloneNames", value: self.deepCloneNames.count() as EntryCount)
-		fingerprint.note("transferWalkNames", value: self.transferWalkNames.count() as EntryCount)
+		fingerprint.note("soleWalkNames", value: self.soleWalkNames.count() as EntryCount)
+		fingerprint.note("shareWalkNames", value: self.shareWalkNames.count() as EntryCount)
 		fingerprint.note("interfaceCloneNames", value: self.interfaceCloneNames.count() as EntryCount)
 		fingerprint.closeGroup()
 	end 'noteFingerprint'

@@ -172,10 +172,16 @@ release's version as its heading when the release is cut.
   lists every case is no longer exhaustive. `HttpTransport.security()` throws `TlsError` the same way.
   Fix: call the four with `try`, after `handshake()` on a stream from `accept()`; add an arm for
   `handshakePending`.
-- `HttpServer.serve` serves each connection in its own coroutine, so handlers of different connections
-  overlap whenever one waits, and it keeps `handler` for them: a `let` handler, or a `var` handler read again
-  after the call, passed as it is is E3078. `serve` returns once every connection it took has finished.
-  Fix: pass a fresh handler, a `var` handler that is not read afterwards, or `handler.clone()`.
+- `HttpServer.serve` moves each connection, a `TcpClient` or a `TlsStream`, to a green thread of its own, so a
+  client that stalls and a handler that computes delay only their own connection, and it returns once every
+  connection it took has finished. The handler is one value every connection reads at once, so it is
+  read-only: a handler whose methods write its fields is E3138 where `serve` sends it to a connection's
+  thread, in `stdlib/HttpServer.maxon`, and a handler that holds an OS handle, a function value or a promise,
+  or that the calling function also shares with a coroutine, stops the program with exit code 96. What the
+  handler wrote in place is no longer shared between requests or visible to the caller.
+  Fix: keep what connections share, or what the caller reads after `serve`, in a service the handler holds a
+  handle to (`CountingHandler.create(visits.clone())`), declare the handler's fields `let`, and build the
+  handler where `serve` is called.
 
 ## 0.5.0 — 2026-10-08
 

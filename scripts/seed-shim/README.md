@@ -137,6 +137,12 @@ parser, lowering and runtime that teach `C1` failable sends stay, so `C1` compil
 and only `C1`'s own services and library send by the seed's rule. Like the eighth case's, it is hand-written over
 the committed tree.
 
+⭐ **A SERVICE STATE THE SEED CANNOT WALK IS THE TENTH CASE.** A seed that predates the socket's per-type walk
+refuses a `spawn` whose state holds a `TcpClient` or a `TlsStream` (E3138). `0001-withdraw-the-per-connection-green-thread-from-the-first-build.patch`
+makes `HttpServer.serve` serve each connection in place and withdraws the `export` its worker's `serve` needs only as a
+message (E3167), so `C1` only serves one connection at a time. The `spawn` stays in the tree, which is what lets
+`C1` build the unshimmed tree.
+
 ⛔ **The commit that pins a new seed deletes every patch.** A patch here is what makes CI freeze, prove and pin
 that seed (`docs/RELEASING.md`), and `scripts/pin-seed.sh` deletes them all in the pinning commit once the seed
 has built the tree with none. A patch is dead from that moment — the plain build succeeds before anything here

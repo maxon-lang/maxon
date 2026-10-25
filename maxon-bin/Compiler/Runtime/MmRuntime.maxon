@@ -426,8 +426,8 @@ export function shareWalkSymbol(typeName ByteArray) returns ByteArray
 end 'shareWalkSymbol'
 
 // ⭐ **`__mm_sole_box(box, visits)` / `__mm_share_box(box, visits)` — ONE BOX'S WALK STEP AS AN ENTRY OF ITS
-// OWN**, for the one record with no synthesized per-type walk: a SERVICE HANDLE box, which holds one machine word
-// and no managed field. Every other walk splices the same step inline (`emitBoxWalkStep`), because it must
+// OWN**, for the records with no synthesized per-type walk: a SERVICE HANDLE box and a SOCKET box (a move walks
+// it), each holding one machine word and no managed field. Every other walk splices the same step inline (`emitBoxWalkStep`), because it must
 // branch on the step's answer and an entry answering only a visit table cannot tell it where to go.
 export let MmSoleBoxName = b"__mm_sole_box"
 export let MmShareBoxName = b"__mm_share_box"
@@ -1889,8 +1889,8 @@ function emitOneMoreOwner(module StdModule, func IrFunction, entry IrBlock, ptr 
 	return emitMmIncrefEvent(module, func: func, block: step.block, ptr: ptr, priorCount: step.prior, ids: ids)
 end 'emitOneMoreOwner'
 
-// `__mm_sole_box(box, visits)` / `__mm_share_box(box, visits)` — the handle's walk step as an entry of its own
-// (see `MmSoleBoxName`). A handle's box addresses no managed record, so there is nothing below it to descend into.
+// `__mm_sole_box(box, visits)` / `__mm_share_box(box, visits)` — a handle's or socket's walk step as an entry of
+// its own (see `MmSoleBoxName`). Neither box addresses a managed record, so there is nothing below it to descend into.
 function buildMmBoxWalk(module StdModule, action CascadeAction)
 	var body = beginWalkBody(module, name: serviceHandleCascadeCallee(action, clone: MboxHandleCloneBoxName), scope: WalkScope.graph, walksElements: false, recursesPerLevel: false)
 	var descend = emitBoxWalkStep(module, func: body.func, cursor: body.entry, box: WalkBoxParam, action: action, meeting: WalkMeeting.owner, stop: body.done, ids: body.ids)

@@ -13188,9 +13188,9 @@ end 'main'
 
 <!-- test: error.a-generic-reply-whose-instantiation-reaches-an-os-handle-is-refused -->
 A reply typed `Array with T` is fresh in the handler's generic body and walkable there. The instantiation makes
-its elements `TcpListener`s, whose socket handle no per-type walk can prove sole — so the `spawn` that fixes
-`T` refuses it (E3138), rather than leaving a reply the loop cannot walk. On wasm32-wasi the socket's E3104 is
-reported first, so the case is pinned on the native lanes.
+its elements `MachinePin`s, whose machine pin no per-type walk can prove sole — so the `spawn` that fixes
+`T` refuses it (E3138), rather than leaving a reply the loop cannot walk. A socket is not such a handle: its box
+counts its owners, and a `TcpListener` crosses when its sender holds it alone.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -13211,15 +13211,14 @@ type Maker uses T
 end 'Maker'
 
 function main() returns ExitCode
-	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
-	let h = spawn Maker.create(listener)
+	let h = spawn Maker.create(MachinePin.acquire())
 	let items = try await h.make() otherwise panic("the maker is running")
 	print("{items.count()}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:22:10: the reply of the message `Maker.make` is a `Array with TcpListener` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle or a base-struct-less generic instance. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
+error E3138: <fragment>:21:10: the reply of the message `Maker.make` is a `Array with MachinePin` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle other than a socket or a base-struct-less generic instance. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
 ```
 
 <!-- test: services.a-reply-a-sibling-builds-in-a-local-is-fresh -->
@@ -14365,10 +14364,10 @@ interface Shape
 end 'Shape'
 
 type Port implements Shape
-	var listener as TcpListener
+	var pin as MachinePin
 
-	static function create(listener TcpListener) returns Self
-		return Self{listener: listener}
+	static function create(pin MachinePin) returns Self
+		return Self{pin: pin}
 	end 'create'
 
 	function area() returns Tally
@@ -14376,8 +14375,8 @@ type Port implements Shape
 	end 'area'
 end 'Port'
 
-function portOf(listener TcpListener) returns Shape
-	return Port.create(listener)
+function portOf(pin MachinePin) returns Shape
+	return Port.create(pin)
 end 'portOf'
 
 type Calc
@@ -14393,9 +14392,8 @@ type Calc
 end 'Calc'
 
 function main() returns ExitCode
-	var listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
 	let h = spawn Calc.create()
-	var shape = portOf(listener)
+	var shape = portOf(MachinePin.acquire())
 	try h.measure(shape) otherwise panic("a running service with room takes the send")
 	return 0
 end 'main'
@@ -14418,10 +14416,10 @@ interface Shape
 end 'Shape'
 
 type Port implements Shape
-	var listener as TcpListener
+	var pin as MachinePin
 
-	static function create(listener TcpListener) returns Self
-		return Self{listener: listener}
+	static function create(pin MachinePin) returns Self
+		return Self{pin: pin}
 	end 'create'
 
 	function area() returns Tally
@@ -14442,14 +14440,13 @@ type Calc
 end 'Calc'
 
 function main() returns ExitCode
-	var listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
 	let h = spawn Calc.create()
-	try h.measure(Port.create(listener)) otherwise panic("a running service with room takes the send")
+	try h.measure(Port.create(MachinePin.acquire())) otherwise panic("a running service with room takes the send")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:35:16: argument `s` of the message `Calc.measure` is a `Port` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle or a base-struct-less generic instance. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
+error E3138: <fragment>:34:16: argument `s` of the message `Calc.measure` is a `Port` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle other than a socket or a base-struct-less generic instance. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
 ```
 
 <!-- test: error.a-reply-may-not-alias-an-interface-value-the-state-holds -->
@@ -17200,4 +17197,330 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+### A socket crosses into a service when its one owner sends it
+
+A `TcpClient` owns an OS socket, and the socket's box counts its owners as every other record does, so the send's
+walk can prove it sole: a connection the sender holds alone moves into the service, which then reads and writes it
+from its own green thread. A connection some other owner still holds is refused by the same walk, before anything is
+enqueued.
+
+<!-- test: services.a-service-owns-a-moved-tcp-client-and-echoes-on-it -->
+<!-- procs: 1 -->
+The accepted connection is moved into `Echo.create`, so the service is its only owner. The service reads what the
+peer sent on its own green thread and writes it back; the peer, still on `main`'s thread, reads the echo.
+```maxon
+typealias Tally = int(0 to 1000000)
+
+type Echo
+	var client as TcpClient
+
+	static function create(client TcpClient) returns Self
+		return Self{client: client}
+	end 'create'
+
+	export function serve() returns Tally
+		let got = try client.recv(64) otherwise return 0
+		_ = try client.send(got) otherwise return 0
+		client.close()
+
+		return got.byteLength() as Tally
+	end 'serve'
+end 'Echo'
+
+function main() returns ExitCode
+	var listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	var out = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 2
+	let accepted = try listener.accept() otherwise return 3
+	let echo = spawn Echo.create(accepted)
+	let reply = try echo.serve() otherwise return 4
+
+	_ = try out.send("hello") otherwise return 5
+
+	let heard = try out.recv(64) otherwise return 6
+	let served = await reply
+
+	print("{heard} {served}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+hello 5
+```
+```exitcode
+0
+```
+
+<!-- test: services.a-moved-tcp-client-works-on-another-processor -->
+<!-- procs: 4 -->
+The same hand-off with four processors, so the service's green thread can run on another OS thread than the one that
+accepted the connection and registered the socket with the network poller. The poller's registration belongs to the
+socket, not to a thread, so the service's `recv` parks on it and is woken wherever it runs.
+```maxon
+typealias Tally = int(0 to 1000000)
+
+type Echo
+	var client as TcpClient
+
+	static function create(client TcpClient) returns Self
+		return Self{client: client}
+	end 'create'
+
+	export function serve() returns Tally
+		var total = 0 as Tally
+
+		for _ in 0 upto 3 'eachRound'
+			let got = try client.recv(64) otherwise return 0
+			_ = try client.send(got) otherwise return 0
+			total = total + (got.byteLength() as Tally)
+		end 'eachRound'
+
+		client.close()
+
+		return total
+	end 'serve'
+end 'Echo'
+
+function main() returns ExitCode
+	var listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	var out = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 2
+	let accepted = try listener.accept() otherwise return 3
+	let echo = spawn Echo.create(accepted)
+	let reply = try echo.serve() otherwise return 4
+
+	for word in ["one", "three", "seven"] 'eachWord'
+		_ = try out.send(word) otherwise return 5
+
+		let heard = try out.recv(64) otherwise return 6
+
+		print("{heard}\n")
+	end 'eachWord'
+
+	let served = await reply
+
+	print("{served}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+one
+three
+seven
+13
+```
+```exitcode
+0
+```
+
+<!-- test: deepmove.abort.a-tcp-client-another-owner-still-holds-aborts-at-the-send -->
+`kept` holds the accepted connection beside the binding that is moved into the service, so the `TcpClient` record has
+two owners and only one of them is in the graph the send walks. Handing it across would put one socket in two green
+threads' hands with a plain reference count between them, so the walk aborts with exit **96** before anything is
+enqueued, exactly as it does for any other record.
+```maxon
+typealias Tally = int(0 to 1000000)
+typealias Clients = Array with TcpClient
+
+type Echo
+	var client as TcpClient
+
+	static function create(client TcpClient) returns Self
+		return Self{client: client}
+	end 'create'
+
+	export function serve() returns Tally
+		client.close()
+
+		return 0
+	end 'serve'
+end 'Echo'
+
+function main() returns ExitCode
+	var listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	var out = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 2
+	var accepted = try listener.accept() otherwise return 3
+	var kept = Clients.create()
+
+	kept.push(accepted)
+
+	let echo = spawn Echo.create(accepted)
+	let reply = try echo.serve() otherwise return 4
+	let served = await reply
+
+	out.close()
+	print("{served} {kept.count()}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+96
+```
+```stderr
+fatal error: runtime abort 96 (transferredRecordNotSole)
+```
+
+<!-- test: deepmove.abort.a-socket-box-two-tcp-clients-share-aborts-at-the-send -->
+<!-- tier: stdlib -->
+Two `TcpClient`s adopt one socket, so the socket's box has three owners — the binding and the two clients — and the
+send walks only one client's graph. The `TcpClient` record itself is sole; the walk finds the count on the socket's
+box above the one owner it met and aborts with exit **96**, so the socket is never closed by one thread while the other
+still uses it.
+```maxon
+typealias Tally = int(0 to 1000000)
+
+type Echo
+	var client as TcpClient
+
+	static function create(client TcpClient) returns Self
+		return Self{client: client}
+	end 'create'
+
+	export function serve() returns Tally
+		client.close()
+
+		return 0
+	end 'serve'
+end 'Echo'
+
+function main() returns ExitCode
+	var listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	var socket = try __ManagedSocket.tcpConnect("127.0.0.1".addressableBytes(), port: listener.port(), milliseconds: 0) otherwise return 2
+	var first = TcpClient.adopt(socket)
+	var second = TcpClient.adopt(socket)
+	let echo = spawn Echo.create(first)
+	let reply = try echo.serve() otherwise return 4
+	let served = await reply
+
+	second.close()
+	print("{served}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+96
+```
+```stderr
+fatal error: runtime abort 96 (transferredRecordNotSole)
+```
+
+<!-- test: services.a-tcp-client-held-at-an-interface-type-crosses-and-echoes -->
+<!-- procs: 4 -->
+A conformer that owns a connection and is held at an interface type crosses through its witness: the walk the table
+names for `Port` proves the connection sole, and the service reads and writes it through the interface.
+```maxon
+typealias Tally = int(0 to 1000000)
+
+interface Speaker
+	function speak() returns Tally
+end 'Speaker'
+
+type Port implements Speaker
+	var client as TcpClient
+
+	static function create(client TcpClient) returns Self
+		return Self{client: client}
+	end 'create'
+
+	function speak() returns Tally
+		let got = try client.recv(64) otherwise return 0
+		_ = try client.send(got) otherwise return 0
+		client.close()
+
+		return got.byteLength() as Tally
+	end 'speak'
+end 'Port'
+
+function speakerFor(listener TcpListener) returns Speaker
+	let accepted = try listener.accept() otherwise panic("a connection is waiting in the backlog")
+
+	return Port.create(accepted)
+end 'speakerFor'
+
+type Stage
+	var heard as Tally
+
+	static function create() returns Self
+		return Self{heard: 0}
+	end 'create'
+
+	export function perform(speaker Speaker) returns Tally
+		self.heard = self.heard + speaker.speak()
+
+		return self.heard
+	end 'perform'
+end 'Stage'
+
+function main() returns ExitCode
+	var listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	var out = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 2
+	let stage = spawn Stage.create()
+	let reply = try stage.perform(speakerFor(listener)) otherwise return 4
+
+	_ = try out.send("interface") otherwise return 5
+
+	let heard = try out.recv(64) otherwise return 6
+	let performed = await reply
+
+	print("{heard} {performed}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+interface 9
+```
+```exitcode
+0
+```
+
+<!-- test: services.a-service-replies-with-a-connection-it-accepted -->
+<!-- procs: 4 -->
+A reply is walked after the handler's locals are released, so a connection the handler accepted and returns has no
+other owner and crosses back to the caller, which reads and writes it on its own thread. The listener moved into the
+service in the first place.
+```maxon
+typealias Tally = int(0 to 1000000)
+
+type Acceptor
+	var listener as TcpListener
+	var accepted as Tally
+
+	static function create(listener TcpListener) returns Self
+		return Self{listener: listener, accepted: 0}
+	end 'create'
+
+	export function next() returns TcpClient throws NetworkError
+		self.accepted = self.accepted + 1
+
+		return try self.listener.accept()
+	end 'next'
+end 'Acceptor'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let port = listener.port()
+	let acceptor = spawn Acceptor.create(listener)
+	let pending = try acceptor.next() otherwise return 2
+	var out = try TcpClient.connect("127.0.0.1", port: port) otherwise return 3
+	var served = try await pending otherwise return 4
+
+	_ = try out.send("accepted") otherwise return 5
+
+	let heard = try served.recv(64) otherwise return 6
+
+	print("{heard}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+accepted
+```
+```exitcode
+0
 ```

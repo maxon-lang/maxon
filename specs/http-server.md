@@ -306,7 +306,7 @@ typealias Served = int(0 to 9)
 let BoomPath = "/boom"
 
 type PickyHandler implements HttpHandler
-	var label as String
+	let label as String
 
 	static function create(label String) returns PickyHandler
 		return PickyHandler{label: label}
@@ -366,7 +366,7 @@ first=500 second=200 body=second served=3
 let LatePath = "/late"
 
 type LateThrowingHandler implements HttpHandler
-	var label as String
+	let label as String
 
 	static function create(label String) returns LateThrowingHandler
 		return LateThrowingHandler{label: label}
@@ -462,7 +462,7 @@ status=200 body=first second=alreadyResponded
 let promptMs = 3000
 
 type EchoPathHandler implements HttpHandler
-	var label as String
+	let label as String
 
 	static function create(label String) returns EchoPathHandler
 		return EchoPathHandler{label: label}
@@ -1125,7 +1125,7 @@ status=431 accept=headersTooLarge
 typealias Served = int(0 to 9)
 
 type PlainHandler implements HttpHandler
-	var label as String
+	let label as String
 
 	static function create(label String) returns PlainHandler
 		return PlainHandler{label: label}
@@ -1582,7 +1582,7 @@ served=3 Content-Length: 5 body=[]
 let SilentPath = "/silent"
 
 type ForgetfulHandler implements HttpHandler
-	var label as String
+	let label as String
 
 	static function create(label String) returns ForgetfulHandler
 		return ForgetfulHandler{label: label}
@@ -1759,7 +1759,7 @@ reset=true reported=true ended=closed
 let ReadBufferBytes = 4096
 
 type PlainHandler implements HttpHandler
-	var label as String
+	let label as String
 
 	static function create(label String) returns PlainHandler
 		return PlainHandler{label: label}
@@ -2546,4 +2546,233 @@ ended: closed
 ```
 ```exitcode
 0
+```
+
+<!-- test: http-server.a-handler-that-computes-does-not-delay-another-connection -->
+<!-- procs: 4 -->
+`serve` gives each accepted connection a green thread of its own, so a handler that computes for a long stretch without
+waiting holds only its own connection. The `/spin` handler tells a `Gate` service it has begun and then loops on the
+clock for `SpinMs`; the prober for `/quick` polls the gate and sends its request only once the handler is inside that
+loop, so the case does not depend on how long anything takes to start. A request made beside the loop is answered
+within a budget well under the loop's length.
+```maxon
+typealias Millis = int(0 to 1000000)
+typealias Turns = int(0 to u64.max)
+
+let SpinMs = 1500
+let QuickBudgetMs = 1000
+let GatePollMs = 2
+
+type Gate
+	var entered as bool
+
+	static function create() returns Gate
+		return Gate{entered: false}
+	end 'create'
+
+	export function enter()
+		self.entered = true
+	end 'enter'
+
+	export function hasEntered() returns bool
+		return self.entered
+	end 'hasEntered'
+end 'Gate'
+
+type SpinHandler implements HttpHandler
+	let gate as Gate.handle
+
+	static function create(gate Gate.handle) returns SpinHandler
+		return SpinHandler{gate: gate}
+	end 'create'
+
+	function handle(exchange HttpExchange) throws HttpServerError
+		if exchange.request().url().path() == "/spin" 'spin'
+			try gate.enter() otherwise panic("the gate is open")
+
+			let start = Clock.nowMs()
+			var turns = 0 as Turns
+
+			while Clock.elapsedMs(start) < SpinMs 'busy'
+				turns = turns + 1
+			end 'busy'
+
+			print("spun {turns > 0}\n")
+		end 'spin'
+
+		try exchange.respondWith(StatusCode.ok, body: "done", contentType: "text/plain")
+	end 'handle'
+
+	function faulted(fault HttpHandlerFault)
+		print("faulted {fault.describe()}\n")
+	end 'faulted'
+end 'SpinHandler'
+
+type Prober
+	let gate as Gate.handle
+
+	static function create(gate Gate.handle) returns Prober
+		return Prober{gate: gate}
+	end 'create'
+
+	export function fetch(port NetworkPort, path String) returns Millis
+		return self.timedGet(port, path: path)
+	end 'fetch'
+
+	export function fetchOnceEntered(port NetworkPort, path String) returns Millis
+		while not (try await gate.hasEntered() otherwise return 999998) 'waiting'
+			sleep(GatePollMs)
+		end 'waiting'
+
+		return self.timedGet(port, path: path)
+	end 'fetchOnceEntered'
+
+	function timedGet(port NetworkPort, path String) returns Millis
+		let start = Clock.nowMs()
+
+		_ = try HttpClient.get("http://127.0.0.1:{port}{path}") otherwise return 999999
+
+		return Clock.elapsedMs(start) as Millis
+	end 'timedGet'
+end 'Prober'
+
+function serving(server HttpServer, gate Gate.handle) returns HttpServeEnd
+	return server.serve(SpinHandler.create(gate.clone()))
+end 'serving'
+
+function main() returns ExitCode
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	let port = server.port()
+	let gate = spawn Gate.create()
+	let peer = async serving(server, gate: gate.clone())
+	let first = spawn Prober.create(gate.clone())
+	let second = spawn Prober.create(gate.clone())
+	let slow = try first.fetch(port, path: "/spin") otherwise return 2
+	let quick = try second.fetchOnceEntered(port, path: "/quick") otherwise return 3
+	let quickMs = await quick
+	let slowMs = await slow
+
+	print("quick answered within budget: {quickMs < QuickBudgetMs}, spin held its own connection: {slowMs >= SpinMs}\n")
+	server.close()
+	print("ended: {(await peer).name}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+spun true
+quick answered within budget: true, spin held its own connection: true
+ended: closed
+```
+```exitcode
+0
+```
+
+<!-- test: http-server.connections-share-state-through-a-service-the-handler-holds -->
+<!-- procs: 4 -->
+The handler is one read-only value every connection reads at once, so what the connections share is a service it holds
+a handle to. Each connection's thread sends the service a message, and the service counts them one at a time: three
+requests, three counts, whichever threads they ran on.
+```maxon
+type Tally
+	var seen as Count
+
+	static function create() returns Tally
+		return Tally{seen: 0}
+	end 'create'
+
+	export function record() returns Count
+		self.seen = self.seen + 1
+
+		return self.seen
+	end 'record'
+
+	export function total() returns Count
+		return self.seen
+	end 'total'
+end 'Tally'
+
+type CountingHandler implements HttpHandler
+	let tally as Tally.handle
+
+	static function create(tally Tally.handle) returns CountingHandler
+		return CountingHandler{tally: tally}
+	end 'create'
+
+	function handle(exchange HttpExchange) throws HttpServerError
+		let seen = try await tally.record() otherwise throw HttpServerError.sendFailed
+
+		try exchange.respondWith(StatusCode.ok, body: "{seen}", contentType: "text/plain")
+	end 'handle'
+
+	function faulted(fault HttpHandlerFault)
+		print("faulted {fault.describe()}\n")
+	end 'faulted'
+end 'CountingHandler'
+
+function serving(server HttpServer, tally Tally.handle) returns HttpServeEnd
+	return server.serve(CountingHandler.create(tally.clone()))
+end 'serving'
+
+function main() returns ExitCode
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	let port = server.port()
+	let tally = spawn Tally.create()
+	let peer = async serving(server, tally: tally.clone())
+
+	for _ in 0 upto 3 'eachRequest'
+		_ = try HttpClient.get("http://127.0.0.1:{port}/count") otherwise return 2
+	end 'eachRequest'
+
+	server.close()
+
+	let ended = await peer
+	let total = try await tally.total() otherwise return 3
+
+	print("{total} {ended.name}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+3 closed
+```
+```exitcode
+0
+```
+
+<!-- test: http-server.error.a-handler-that-writes-its-own-fields-is-refused -->
+The handler is read by every connection at once, so a conformer whose method writes its own field cannot be shared;
+the program is refused where `serve` hands the handler to a connection's thread.
+```maxon
+typealias Served = int(0 to 1000000)
+
+type CountingHandler implements HttpHandler
+	var served as Served
+
+	static function create() returns CountingHandler
+		return CountingHandler{served: 0}
+	end 'create'
+
+	function handle(exchange HttpExchange) throws HttpServerError
+		self.served = self.served + 1
+
+		try exchange.respondWith(StatusCode.ok, body: "{self.served}", contentType: "text/plain")
+	end 'handle'
+
+	function faulted(fault HttpHandlerFault)
+		print("faulted {fault.describe()}\n")
+	end 'faulted'
+end 'CountingHandler'
+
+function main() returns ExitCode
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+
+	_ = server.serve(CountingHandler.create())
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3138: stdlib/HttpServer.maxon:338:35: argument `handler` of the message `ConnectionWorker.serve` is a PARAMETER shared with the service, and the handler `ConnectionWorker.serve` writes or keeps its parameter `handler`. A record both threads reach may be written by neither. Send a `.clone()`, or make `ConnectionWorker.serve` only read `handler`
 ```

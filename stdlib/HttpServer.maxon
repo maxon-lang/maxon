@@ -305,13 +305,13 @@ public type HttpServer
 		return ServerConnection.over(transport, limits: self.limits.clone(), scheme: self.listener.scheme())
 	end 'nextConnection'
 
-	/// Hand each accepted exchange to `handler` until `close()`, a listener failure or the accept
-	/// deadline; the answer says which. Each connection is read, and its handler run, in a coroutine
-	/// of its own, so a client that stalls delays only itself; the coroutines share one green thread,
-	/// so a handler that computes without waiting delays the others. `handler` is shared by the
-	/// connections in flight, and `serve` returns once every connection it took has finished. A
-	/// refused request is skipped, and an interrupted accept is retried after a wait that doubles
-	/// from 5 ms to 1 s.
+	/// Hand each accepted exchange to `handler` on a green thread of its own per connection, until `close()`, a
+	/// listener failure or the accept deadline; the answer says which. A connection is read, and its handler
+	/// run, on its own thread, so a client that stalls or a handler that computes delays only its own
+	/// connection. `handler` is one value every connection reads at once, so it is read-only: a handler whose
+	/// methods write its fields is refused, and state that connections share lives in a service the handler
+	/// holds a handle to. `serve` returns once every connection it took has finished. A refused request is
+	/// skipped, and an interrupted accept is retried after a wait that doubles from 5 ms to 1 s.
 	public function serve(handler HttpHandler) returns HttpServeEnd
 		var progress = ServeProgress.serving
 		var retryMs = NoAcceptRetryMs
@@ -319,7 +319,7 @@ public type HttpServer
 		var reapAt = ConnectionReapFloor
 
 		while stillServing(progress) 'acceptLoop'
-			var connection = try self.nextConnection() otherwise (fault) 'refused'
+			let connection = try self.nextConnection() otherwise (fault) 'refused'
 				progress = progressAfter(fault)
 				retryMs = acceptRetryAfter(fault, previous: retryMs)
 
@@ -332,7 +332,10 @@ public type HttpServer
 			end 'refused'
 
 			retryMs = NoAcceptRetryMs
-			inFlight.push(async serveConnection(ConnectionJob.create(connection, handler: handler)))
+
+			let worker = spawn ConnectionWorker.create(connection)
+
+			inFlight.push(try worker.serve(handler) otherwise panic("HttpServer.serve: a connection worker that has just been spawned takes its first message"))
 
 			if inFlight.count() >= reapAt 'reap'
 				reapFinished(inFlight)
@@ -429,25 +432,26 @@ end 'ConnectionEnd'
 typealias ConnectionPromise = Promise with ConnectionEnd
 typealias ConnectionPromises = Array with ConnectionPromise
 
-type ConnectionJob
-	export var connection as ServerConnection
-	export var handler as HttpHandler
+// The handler travels in the message and is not kept in the state: a service cannot keep a value it
+// shares with the sender, and the shared handler is read-only for every worker at once.
+type ConnectionWorker
+	var connection as ServerConnection
 
-	static function create(connection ServerConnection, handler HttpHandler) returns ConnectionJob
-		return ConnectionJob{connection: connection, handler: handler}
+	static function create(connection ServerConnection) returns ConnectionWorker
+		return ConnectionWorker{connection: connection}
 	end 'create'
-end 'ConnectionJob'
 
-function serveConnection(job ConnectionJob) returns ConnectionEnd
-	var arrival = try job.connection.arrival() otherwise return ConnectionEnd.refused
+	export function serve(handler HttpHandler) returns ConnectionEnd
+		var arrival = try self.connection.arrival() otherwise return ConnectionEnd.refused
 
-	match arrival 'arrival'
-		forResource(exchange) then dispatchExchange(exchange, handler: job.handler)
-		forTheServer(leftoverArrived) then job.connection.answerServerWideOptions(leftoverArrived)
-	end 'arrival'
+		match arrival 'arrival'
+			forResource(exchange) then dispatchExchange(exchange, handler: handler)
+			forTheServer(leftoverArrived) then self.connection.answerServerWideOptions(leftoverArrived)
+		end 'arrival'
 
-	return ConnectionEnd.served
-end 'serveConnection'
+		return ConnectionEnd.served
+	end 'serve'
+end 'ConnectionWorker'
 
 function reapFinished(inFlight ConnectionPromises)
 	var index = 0 as ElementIndex
