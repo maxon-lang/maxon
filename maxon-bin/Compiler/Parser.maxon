@@ -25495,7 +25495,10 @@ export type Parser
 			// stopping here leaves the remaining tokens to the robust outer walk.
 			if depth == 0 and self.atTypeAliasDeclaration() 'isInnerAlias'
 				let nestedVisibility = try self.consumeOptionalVisibility() otherwise break
+				let nestedNameTok = self.tokenAt(self.pos + 1)
 				var nested = try self.readNestedTypeAlias(nestedVisibility, recordFunctionSignature: false, tupleOwner: TupleAliasOwner.enclosingType(self.enclosingTypeName())) otherwise break
+
+				self.signatures.recordTypeBodyInnerAliasMember(joinQualifiedName(self.enclosingTypeName(), member: nestedNameTok.value))
 
 				match nested 'nested'
 					ranged(alias) then innerAliasOut.push(InnerAliasEntry.create(self.enclosingTypeName(), alias: alias))
@@ -26026,8 +26029,14 @@ export type Parser
 					// `unpublished` owner is the "READ ALWAYS, PUBLISH ONLY WHEN THE EXTENSION IS THIS CONFORMER'S"
 					// rule below, applied to the one alias form the READER publishes rather than the caller
 					// (see `TupleAliasOwner`). Every other form is filed after the withheld test; this one cannot be.
-					view nestedTupleOwner = TupleAliasOwner.unpublished if extensionMethodsWithheld(verdict) else TupleAliasOwner.enclosingType(conformer)
 					let nestedNameTok = self.tokenAt(self.pos + 1)
+
+					// Published nowhere when the conformer's body declares the member: the real parse reads the
+					// same verdict (`extensionAliasYieldsToTheTypesOwn`). A published copy would make the
+					// extension's own signatures mean its alias while callers of the conformer see the
+					// conformer's.
+					let nestedIsTheTypesOwn = index.typeBodyDeclaresInnerAlias(joinQualifiedName(conformer, member: nestedNameTok.value))
+					view nestedTupleOwner = TupleAliasOwner.unpublished if extensionMethodsWithheld(verdict) or nestedIsTheTypesOwn else TupleAliasOwner.enclosingType(conformer)
 					var nested = try self.readNestedTypeAlias(memberVisibility, recordFunctionSignature: false, tupleOwner: nestedTupleOwner) otherwise break
 
 					// ⚠ **READ ALWAYS, PUBLISH ONLY WHEN THE EXTENSION IS THIS CONFORMER'S** — the withheld
@@ -26038,7 +26047,7 @@ export type Parser
 					// nameable on a type that receives none of its methods (`parseTypeReference`'s inner-alias arm
 					// resolves that spelling). The real parse skips the conformer whole, so nothing here would
 					// have been looked up — which is precisely why it must not be published.
-					if extensionMethodsWithheld(verdict) 'notThisConformers'
+					if extensionMethodsWithheld(verdict) or nestedIsTheTypesOwn 'notThisConformers'
 						continue
 					end 'notThisConformers'
 
@@ -30622,6 +30631,24 @@ export type Parser
 		end 'someExtensionDeclaresIt'
 	end 'requireExtensionInnerAliasKept'
 
+	// True for an interface extension's member that the conformer's own body also declares: the member is
+	// read and discarded, so the conformer's declaration is the one every body compiled for it resolves.
+	function extensionAliasYieldsToTheTypesOwn(nameTok Token) returns bool throws SourceParseError
+		let typeName = self.enclosingTypeName()
+		let qualified = joinQualifiedName(typeName, member: nameTok.value)
+
+		if not self.signatures.typeBodyDeclaresInnerAlias(qualified) 'noBodyDeclaresIt'
+			try self.requireExtensionInnerAliasKept(nameTok)
+			return false
+		end 'noBodyDeclaresIt'
+
+		if not self.extensionInterfaceName.isNamed() 'aTypeExtension'
+			throw self.duplicateNestedAliasRefusal(nameTok, qualified: qualified, declaredBy: "in the body of `{String.from(typeName)}`")
+		end 'aTypeExtension'
+
+		return true
+	end 'extensionAliasYieldsToTheTypesOwn'
+
 	function duplicateNestedAliasRefusal(nameTok Token, qualified ByteArray, declaredBy String) returns SourceParseError
 		return SourceParseError.registryRefused(ErrorCode.semanticDuplicateTypeAlias, explanation: "Duplicate typealias '{String.from(nameTok.value)}': `{String.from(qualified)}` is already declared {declaredBy}", line: nameTok.line, column: nameTok.column, note: DiagnosticNote.none)
 	end 'duplicateNestedAliasRefusal'
@@ -32755,13 +32782,20 @@ export type Parser
 			// (`publishNestedFunctionAlias`). This is the copy every consumer of a PARAMETER type reads, so a
 			// qualified key filed by the sweep alone would carry the return type and an empty parameter list.
 			let aliasNameTok = self.tokenAt(self.pos + 1)
+			var yieldsToTheTypesOwn = false
 
 			match memberList 'whoseMember'
 				typeBody then try self.requireNestedAliasDeclaredOnce(aliasNameTok)
-				extensionBody then try self.requireExtensionInnerAliasKept(aliasNameTok)
+				extensionBody then yieldsToTheTypesOwn = try self.extensionAliasYieldsToTheTypesOwn(aliasNameTok)
 			end 'whoseMember'
 
-			match try self.readNestedTypeAlias(visibility, recordFunctionSignature: true, tupleOwner: TupleAliasOwner.unpublished) 'nested'
+			let nested = try self.readNestedTypeAlias(visibility, recordFunctionSignature: true, tupleOwner: TupleAliasOwner.unpublished)
+
+			if yieldsToTheTypesOwn 'aDefaultTheConformerOverrides'
+				return
+			end 'aDefaultTheConformerOverrides'
+
+			match nested 'nested'
 				ranged or
 				genericInstance or
 				tupleAlias then return

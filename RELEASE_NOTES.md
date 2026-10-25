@@ -148,6 +148,12 @@ release's version as its heading when the release is cut.
   declaration, for the generic-instance, ranged, function and tuple forms; the compiler kept the last
   declaration and gave the first one's own signatures that meaning without a word.
   Fix: rename one of the two members, or delete the declaration that is not meant.
+- An `extension` of a type that declares a nested `typealias` the type's own body declares is E3061 at the
+  extension's declaration, in any file and for a standard-library type's members too, as an extension
+  method of the type's own method's name is E3176. An interface extension's nested `typealias` yields to a
+  conforming type's own declaration of the same name, and the extension's methods compiled for that
+  type read the type's; they read the extension's alias while callers saw the type's.
+  Fix: rename the extension's member, or delete it and use the type's own.
 
 ## 0.5.0 — 2026-10-08
 

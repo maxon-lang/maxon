@@ -429,6 +429,13 @@ A `type` or `interface` body declares each nested typealias once: a second decla
 same body, whatever its form (generic instance, ranged, function or tuple), is
 [E3061](/docs/cli/error-codes/#e3061--semanticduplicatetypealias) at its name.
 
+A nested typealias follows the rule a method does (see [Static Methods](/docs/language/composite-types/#static-methods)). An `extension` of a
+type that declares a nested typealias the type's own body declares is
+[E3061](/docs/cli/error-codes/#e3061--semanticduplicatetypealias) at the extension's declaration, in any file and
+for a standard-library type too. An [interface extension](/docs/language/composite-types/#interface-extensions)'s nested typealias is a
+default: a conforming type whose body declares the same member keeps its own, and the extension's methods,
+compiled for that type, read it.
+
 A per-instance **function** alias is unbranded: it spells the shared body's signature over the type's own
 parameters. `Array.sort` takes an `Array.SortComparator`, so a field declared with your own `typealias RowComparator =
 function(Row, Row) returns Ordering` passes straight through: `rows.sort(self.compare)` compiles with no

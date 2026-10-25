@@ -1445,6 +1445,470 @@ end 'main'
 2
 ```
 
+## A type's own nested typealias and an extension's of the same name follow the method rule
+
+A nested typealias is a member of its type exactly as a method is, and a name written by the type's body and
+by an extension is resolved the way two methods of that name are (`same-name-methods.md`'s
+`error.an-extension-instance-method-colliding-with-the-types-own` and `extension-overload-set.md`'s
+`a-conformers-own-declaration-still-shadows-an-extensions`):
+
+- **A type extension** (`extension Box`) that declares a member the type's own body declares would hide it,
+  so it is [E3061](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3061) at the extension's declaration, the
+  collision being found across files and for a standard-library type's members too.
+- **An interface extension** supplies a DEFAULT: a conformer whose own body declares the member keeps its own,
+  and the extension's methods, compiled for that conformer, read the conformer's declaration.
+
+### A type extension may not declare a member the type's body declares
+
+<!-- test: error.a-type-extension-declares-a-generic-member-the-types-body-declares -->
+```maxon
+typealias Digit = int(0 to 9)
+
+type Box
+	typealias Items = List with Digit
+	export var n as Digit
+
+	static function create(n Digit) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+extension Box
+	typealias Items = Array with Digit
+
+	function all() returns Items
+		return Items.create()
+	end 'all'
+end 'Box'
+
+function main() returns ExitCode
+	let box = Box.create(3)
+	var xs = box.all()
+	xs.push(box.n)
+	return xs.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3061: <fragment>:14:12: Duplicate typealias 'Items': `Box.Items` is already declared in the body of `Box`
+```
+
+<!-- test: error.a-type-extension-declares-a-ranged-member-the-types-body-declares -->
+```maxon
+type Box
+	typealias Idx = int(0 to 9)
+	export var n as Idx
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+extension Box
+	typealias Idx = int(0 to 99)
+
+	function wide(i Idx) returns Idx
+		return i
+	end 'wide'
+end 'Box'
+
+function main() returns ExitCode
+	let box = Box.create()
+	return box.wide(5) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3061: <fragment>:12:12: Duplicate typealias 'Idx': `Box.Idx` is already declared in the body of `Box`
+```
+
+<!-- test: error.a-type-extension-declares-a-function-member-the-types-body-declares -->
+```maxon
+typealias Number = int(0 to 9)
+
+type Box
+	typealias Op = function(Number) returns Number
+	export var n as Number
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+extension Box
+	typealias Op = function(Number, Number) returns Number
+
+	function apply(op Op) returns Number
+		return op(self.n, 2)
+	end 'apply'
+end 'Box'
+
+function main() returns ExitCode
+	let box = Box.create()
+	return box.apply(function(a, b) gives a + b) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3061: <fragment>:14:12: Duplicate typealias 'Op': `Box.Op` is already declared in the body of `Box`
+```
+
+<!-- test: error.a-type-extension-declares-a-tuple-member-the-types-body-declares -->
+```maxon
+typealias Number = int(0 to 9)
+
+type Box
+	typealias Pair = (Number, Number)
+	export var n as Number
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+extension Box
+	typealias Pair = (Number, Number, Number)
+
+	function triple() returns Pair
+		return (self.n, self.n, self.n)
+	end 'triple'
+end 'Box'
+
+function main() returns ExitCode
+	let box = Box.create()
+	let triple = box.triple()
+	return triple.0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3061: <fragment>:14:12: Duplicate typealias 'Pair': `Box.Pair` is already declared in the body of `Box`
+```
+
+<!-- test: error.a-type-extension-in-another-file-declares-a-member-the-types-body-declares -->
+```maxon
+// --- file: box.maxon
+export typealias Digit = int(0 to 9)
+
+export type Box
+	export typealias Items = List with Digit
+	export var n as Digit
+
+	export static function create(n Digit) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+// --- file: ext.maxon
+export extension Box
+	export typealias Items = Array with Digit
+
+	export function all() returns Items
+		return Items.create()
+	end 'all'
+end 'Box'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let box = Box.create(3)
+	var xs = box.all()
+	xs.push(box.n)
+	return xs.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3061: <fragment>:16:19: Duplicate typealias 'Items': `Box.Items` is already declared in the body of `Box`
+```
+
+<!-- test: error.a-program-extension-of-a-library-type-declares-a-member-the-library-types-body-declares -->
+`stdlib/List.maxon`'s body declares `ElementArray`, so a program's `extension List` writing the name is held
+to the same rule as its extension of `FilePath` writing `stem`.
+```maxon
+extension List
+	typealias ElementArray = List with Element
+
+	function chain() returns ElementArray
+		return ElementArray.create()
+	end 'chain'
+end 'List'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3061: <fragment>:3:12: Duplicate typealias 'ElementArray': `List.ElementArray` is already declared in the body of `List`
+```
+
+### An interface extension's member is a default the conformer's own declaration overrides
+
+<!-- test: an-interface-extension-generic-member-yields-to-the-conformers-own -->
+`Box` declares `Items` over a `List`, and `extension Seq` declares it over an `Array`. The extension's
+`items`, compiled for `Box`, returns `Box`'s `List`.
+```maxon
+typealias Digit = int(0 to 9)
+
+interface Seq uses Item
+	function first() returns Item
+end 'Seq'
+
+type Box implements Seq with Digit
+	typealias Items = List with Digit
+	export var n as Digit
+
+	static function create(n Digit) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function first() returns Digit
+		return self.n
+	end 'first'
+end 'Box'
+
+extension Seq
+	typealias Items = Array with Item
+
+	function items() returns Items
+		return Items.create()
+	end 'items'
+end 'Seq'
+
+function main() returns ExitCode
+	let box = Box.create(3)
+	var xs = box.items()
+	xs.prepend(box.first())
+	return xs.count() as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: an-interface-extension-generic-member-yields-to-the-conformers-own-in-any-file-order -->
+The extension sits in a file that sorts before the type's. A second extension declares a different member,
+which the conformer still receives.
+```maxon
+// --- file: a.maxon
+export typealias Digit = int(0 to 9)
+
+export interface Seq uses Item
+	function first() returns Item
+end 'Seq'
+
+export extension Seq
+	export typealias Items = Array with Item
+
+	export function items() returns Items
+		return Items.create()
+	end 'items'
+end 'Seq'
+
+// --- file: b.maxon
+export type Box implements Seq with Digit
+	export typealias Items = List with Digit
+	export var n as Digit
+
+	export static function create(n Digit) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function first() returns Digit
+		return self.n
+	end 'first'
+end 'Box'
+
+// --- file: c.maxon
+export extension Seq
+	export typealias Wrapped = Array with Item
+
+	export function wrapped() returns Wrapped
+		return Wrapped.create()
+	end 'wrapped'
+end 'Seq'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let box = Box.create(3)
+	var xs = box.items()
+	xs.prepend(box.first())
+	var ys = box.wrapped()
+	ys.push(box.n)
+	return (xs.count() + ys.count()) as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: an-interface-extension-function-member-yields-to-the-conformers-own -->
+```maxon
+typealias Number = int(0 to 9)
+
+interface Seq uses Item
+	function first() returns Item
+end 'Seq'
+
+type Box implements Seq with Number
+	typealias Op = function(Number) returns Number
+	export var n as Number
+
+	static function create(n Number) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function first() returns Number
+		return self.n
+	end 'first'
+end 'Box'
+
+extension Seq
+	typealias Op = function(Item, Item) returns Item
+
+	function apply(op Op) returns Item
+		return op(first())
+	end 'apply'
+end 'Seq'
+
+function main() returns ExitCode
+	let box = Box.create(4)
+	return box.apply(function(a) gives a + 1) as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: an-interface-extension-tuple-member-yields-to-the-conformers-own -->
+```maxon
+typealias Number = int(0 to 9)
+
+interface Seq uses Item
+	function first() returns Item
+end 'Seq'
+
+type Box implements Seq with Number
+	typealias Pair = (Number, Number)
+	export var n as Number
+
+	static function create(n Number) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function first() returns Number
+		return self.n
+	end 'first'
+end 'Box'
+
+extension Seq
+	typealias Pair = (Item, Item, Item)
+
+	function pair() returns Pair
+		return (first(), first())
+	end 'pair'
+end 'Seq'
+
+function main() returns ExitCode
+	let box = Box.create(4)
+	let pair = box.pair()
+	return (pair.0 + pair.1) as ExitCode
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: error.an-interface-extension-ranged-member-yields-to-the-conformers-own -->
+`Box.Idx` is `int(0 to 9)`, so the extension's `widen`, compiled for `Box`, refuses the `50` that the
+extension's own `int(0 to 99)` would take.
+```maxon
+typealias Number = int(0 to 9)
+
+interface Seq uses Item
+	function first() returns Item
+end 'Seq'
+
+type Box implements Seq with Number
+	typealias Idx = int(0 to 9)
+	export var n as Number
+
+	static function create(n Number) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function first() returns Number
+		return self.n
+	end 'first'
+end 'Box'
+
+extension Seq
+	typealias Idx = int(0 to 99)
+
+	function widen(i Idx) returns Idx
+		return i
+	end 'widen'
+end 'Seq'
+
+function main() returns ExitCode
+	let box = Box.create(4)
+	return box.widen(50) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:31:13: Value 50 is outside the range of 'Idx' (int(0 to 9))
+```
+
+<!-- test: a-conformer-without-its-own-member-receives-the-interface-extensions -->
+The control: `Plain` declares no `Items`, so it receives the extension's `Array`.
+```maxon
+typealias Digit = int(0 to 9)
+
+interface Seq uses Item
+	function first() returns Item
+end 'Seq'
+
+type Box implements Seq with Digit
+	typealias Items = List with Digit
+	export var n as Digit
+
+	static function create(n Digit) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function first() returns Digit
+		return self.n
+	end 'first'
+end 'Box'
+
+type Plain implements Seq with Digit
+	export var n as Digit
+
+	static function create(n Digit) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function first() returns Digit
+		return self.n
+	end 'first'
+end 'Plain'
+
+extension Seq
+	typealias Items = Array with Item
+
+	function items() returns Items
+		return Items.create()
+	end 'items'
+end 'Seq'
+
+function main() returns ExitCode
+	let box = Box.create(3)
+	let plain = Plain.create(4)
+	var listed = box.items()
+	listed.prepend(box.first())
+	var arrayed = plain.items()
+	arrayed.push(plain.first())
+	return (listed.count() + arrayed.count()) as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
 ## A NON-GENERIC type's member has a FILE-SCOPE name; a generic type's member does not
 
 Everything above is about which BODY may spell a member — the declaring type's own, or an `extension`
