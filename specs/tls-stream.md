@@ -6827,8 +6827,7 @@ end 'dial'
 
 function main() returns ExitCode
 	let reads = ReadCountCell.create(0 as ReadCount)
-	SystemRoots.register(SystemRoots.unloaded())
-	SystemRootsLoading.register(spawn SystemRootsLoader.create(CountingTrust.create(reads.clone())))
+	SystemRoots.register(SystemRoots.loading(spawn SystemRootsLoader.create(CountingTrust.create(reads.clone()))))
 
 	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
 	let peer = async serveTwice(listener)
@@ -6986,8 +6985,7 @@ end 'dial'
 
 function main() returns ExitCode
 	let reads = ReadCountCell.create(0 as ReadCount)
-	SystemRoots.register(SystemRoots.unloaded())
-	SystemRootsLoading.register(spawn SystemRootsLoader.create(SlowTrust.create(reads.clone())))
+	SystemRoots.register(SystemRoots.loading(spawn SystemRootsLoader.create(SlowTrust.create(reads.clone()))))
 
 	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
 	let peer = async serveFour(listener)
@@ -7121,8 +7119,7 @@ end 'dial'
 
 function main() returns ExitCode
 	let reads = ReadCountCell.create(0 as ReadCount)
-	SystemRoots.register(SystemRoots.unloaded())
-	SystemRootsLoading.register(spawn SystemRootsLoader.create(MissingTrust.create(reads.clone())))
+	SystemRoots.register(SystemRoots.loading(spawn SystemRootsLoader.create(MissingTrust.create(reads.clone()))))
 
 	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
 

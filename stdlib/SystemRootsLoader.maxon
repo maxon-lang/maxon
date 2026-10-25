@@ -12,11 +12,7 @@ module type OperatingSystemTrust implements TrustSource
 	end 'read'
 end 'OperatingSystemTrust'
 
-module interface SystemRootsLoading
-	function load() throws TrustStoreError
-end 'SystemRootsLoading'
-
-module type SystemRootsLoader implements SystemRootsLoading
+module type SystemRootsLoader
 	var source as TrustSource
 
 	module static function create(source TrustSource) returns SystemRootsLoader
@@ -27,9 +23,10 @@ module type SystemRootsLoader implements SystemRootsLoading
 	// the first read serves them all.
 	export function load() throws TrustStoreError
 		match SystemRoots.current().outcome 'cached'
-			unloaded then try readSource()
+			loading then try readSource()
 			loaded then return
 			failed(error) then throw error
+			unloaded then panic("SystemRootsLoader: asked to load before it was claimed")
 		end 'cached'
 	end 'load'
 

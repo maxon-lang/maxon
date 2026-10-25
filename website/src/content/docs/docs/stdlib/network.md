@@ -187,7 +187,7 @@ ALPN the first of its protocols the client lists. Same targets as `TlsClient`.
 
 The handshake runs on the stream's first `send`, `recv`, `shutdownWrite` or `handshake()`, under the options'
 handshake deadline (30 s by default), so a client that connects and then stalls holds only its own stream. A server
-that accepts in a loop and serves each stream on its own green thread answers other clients meanwhile.
+that accepts in a loop and serves each stream in a coroutine (`async`) answers other clients meanwhile.
 
 ### TlsServerOptions
 
@@ -566,14 +566,15 @@ connection closes. Keep-alive, chunked transfer and `Expect: 100-continue` are o
 | `setLimits(caps HttpServerLimits)` | — | — | Replace the caps later requests are parsed under. |
 | `setAcceptDeadline(milliseconds SocketDeadlineMs)` | — | `HttpServerError` | Make an `accept()` still waiting `milliseconds` after this call throw `acceptTimedOut`; `0` clears it. Throws `listenerClosed` once the server is closed. |
 | `accept()` | `HttpExchange` | `HttpServerError` | Take the next connection and the one request on it. An `OPTIONS *` is answered here, and the next connection taken. |
-| `serve(handler HttpHandler)` | `HttpServeEnd` | — | Accept and answer until `close()`, a listener failure or the accept deadline, serving each connection on its own green thread. |
+| `serve(handler HttpHandler)` | `HttpServeEnd` | — | Accept and answer until `close()`, a listener failure or the accept deadline, serving each connection in its own coroutine. |
 | `close()` | — | — | Stop listening: a parked or later `accept()` throws `listenerClosed`, which ends `serve`. |
 
 `close()` writes the server, so the server it is called on is held in a `var`; through a `let` it is
 [E3159](/docs/cli/error-codes/#e3159--semanticwritethroughimmutablerecord).
 
-`serve` reads each connection's request, and runs its handler, on a green thread of its own, so a client that stalls
-delays only itself and handlers of different connections overlap whenever one waits. `handler` is shared by the
+`serve` reads each connection's request, and runs its handler, in a coroutine of its own, so a client that stalls
+delays only itself and handlers of different connections overlap whenever one waits. The coroutines share one
+green thread: a handler that computes without waiting delays the other connections until it returns. `handler` is shared by the
 connections in flight, so `serve` keeps it: pass a fresh handler, a `var` handler that is not read afterwards, or
 `handler.clone()`; a `let` handler, or a `var` handler read again, passed as it is, is
 [E3078](/docs/cli/error-codes/#e3078--semanticvarfromimmutable). Connections in flight are bounded by the operating system's socket

@@ -2481,7 +2481,7 @@ accept=served /first answered=true
 
 <!-- test: http-server.a-silent-client-does-not-delay-another-request -->
 <!-- procs: 1 -->
-`serve` reads each connection's request on its own green thread, so a client that connects and sends nothing holds only its own connection until the read deadline answers it 408: a request made beside it is answered within the client's budget, well inside that deadline.
+`serve` reads each connection's request in its own coroutine, so a client that connects and sends nothing holds only its own connection until the read deadline answers it 408: a request made beside it is answered within the client's budget, well inside that deadline.
 ```maxon
 let ClientBudgetMs = 1500
 let SilentReadDeadlineMs = 5000

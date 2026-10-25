@@ -1109,23 +1109,22 @@ end 'main'
 ```stderr
 spawn #1
 spawn #2
-spawn #3
-io_yield #2 [file_exists]
-io_yield #3 [net_connect]
-io_resume #2 [file_exists]
-await #2 [yield]
+io_yield #1 [file_exists]
+io_yield #2 [net_connect]
+io_resume #1 [file_exists]
+await #1 [yield]
 sleep_yield #0
-io_resume #3 [net_connect]
-io_yield #3 [net_send]
-io_resume #3 [net_send]
-io_yield #3 [net_recv]
-io_resume #3 [net_recv]
+io_resume #2 [net_connect]
+io_yield #2 [net_send]
+io_resume #2 [net_send]
+io_yield #2 [net_recv]
+io_resume #2 [net_recv]
 sleep_resume #0
 io_yield #0 [net_close]
 io_resume #0 [net_close]
-io_yield #3 [net_close]
-io_resume #3 [net_close]
-try_await #3 [yield]
+io_yield #2 [net_close]
+io_resume #2 [net_close]
+try_await #2 [yield]
 ```
 
 ### Response Headers

@@ -25,7 +25,7 @@ sent with `Connection: close`, over `https` as over `http`.
 **The server.** `HttpServer.bindTls(host, port:, options:)` takes `TlsServerOptions` (the identity, the TLS versions, client
 authentication) and offers the ALPN protocol `http/1.1`. The handshake of each connection runs when its request is
 first read; a connection whose handshake fails is `HttpServerError.tlsFailed(error)` from `accept`, and `serve`,
-which serves each connection on its own green thread, goes on accepting. The request's `url()` is built as `https://<Host><target>`, and an absolute-form target
+which serves each connection in its own coroutine, goes on accepting. The request's `url()` is built as `https://<Host><target>`, and an absolute-form target
 must be `https://`. `HttpExchange.security()` tells a handler whether the request arrived over TLS, with which
 protocol and cipher suite, which ALPN protocol, and the client's certificate chain when client authentication is on.
 
@@ -2689,7 +2689,7 @@ a second bind on the same port: bindFailed
 <!-- test: http-tls.a-silent-client-does-not-delay-another-clients-request -->
 <!-- unsupported-targets: wasm32-wasi -->
 <!-- procs: 1 -->
-`HttpServer.serve` serves each connection on its own green thread, so a client that connects to a TLS server and never sends its ClientHello holds only its own connection: a request made beside it is answered within the client's budget, long before the server's handshake deadline would end the silent connection, and `serve` goes on until `close()`.
+`HttpServer.serve` serves each connection in its own coroutine, so a client that connects to a TLS server and never sends its ClientHello holds only its own connection: a request made beside it is answered within the client's budget, long before the server's handshake deadline would end the silent connection, and `serve` goes on until `close()`.
 ```maxon
 function digit(symbol Byte) returns Byte
 	if symbol >= 0x61 'letter'

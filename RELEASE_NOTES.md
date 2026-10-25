@@ -172,7 +172,7 @@ release's version as its heading when the release is cut.
   lists every case is no longer exhaustive. `HttpTransport.security()` throws `TlsError` the same way.
   Fix: call the four with `try`, after `handshake()` on a stream from `accept()`; add an arm for
   `handshakePending`.
-- `HttpServer.serve` serves each connection on its own green thread, so handlers of different connections
+- `HttpServer.serve` serves each connection in its own coroutine, so handlers of different connections
   overlap whenever one waits, and it keeps `handler` for them: a `let` handler, or a `var` handler read again
   after the call, passed as it is is E3078. `serve` returns once every connection it took has finished.
   Fix: pass a fresh handler, a `var` handler that is not read afterwards, or `handler.clone()`.

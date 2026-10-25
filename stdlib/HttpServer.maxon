@@ -306,10 +306,12 @@ public type HttpServer
 	end 'nextConnection'
 
 	/// Hand each accepted exchange to `handler` until `close()`, a listener failure or the accept
-	/// deadline; the answer says which. Each connection is read, and its handler run, on its own green
-	/// thread, so a client that stalls delays only itself; `handler` is shared by the connections in
-	/// flight, and `serve` returns once every connection it took has finished. A refused request is
-	/// skipped, and an interrupted accept is retried after a wait that doubles from 5 ms to 1 s.
+	/// deadline; the answer says which. Each connection is read, and its handler run, in a coroutine
+	/// of its own, so a client that stalls delays only itself; the coroutines share one green thread,
+	/// so a handler that computes without waiting delays the others. `handler` is shared by the
+	/// connections in flight, and `serve` returns once every connection it took has finished. A
+	/// refused request is skipped, and an interrupted accept is retried after a wait that doubles
+	/// from 5 ms to 1 s.
 	public function serve(handler HttpHandler) returns HttpServeEnd
 		var progress = ServeProgress.serving
 		var retryMs = NoAcceptRetryMs

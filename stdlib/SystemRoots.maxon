@@ -1,5 +1,6 @@
 module union SystemRootsOutcome
 	unloaded
+	loading(loader SystemRootsLoader.handle)
 	loaded(anchors X509RootPool)
 	failed(error TrustStoreError)
 end 'SystemRootsOutcome'
@@ -11,6 +12,12 @@ module type SystemRoots
 		return Self{outcome: SystemRootsOutcome.unloaded}
 	end 'unloaded'
 
+	module static function loading(loader SystemRootsLoader.handle) returns SystemRoots
+		// The state keeps its own handle: a reference the caller still holds fails the registered
+		// record's sole-owner check.
+		return Self{outcome: SystemRootsOutcome.loading(loader.clone())}
+	end 'loading'
+
 	module static function loaded(anchors X509RootPool) returns SystemRoots
 		return Self{outcome: SystemRootsOutcome.loaded(anchors)}
 	end 'loaded'
@@ -21,36 +28,62 @@ module type SystemRoots
 
 	module static function authenticator(purpose X509Purpose, now UnixSeconds) returns TlsX509Peer throws TrustStoreError
 		if not SystemRoots.current().isSettled() 'unsettled'
-			try load()
+			try settle()
 		end 'unsettled'
 
 		return try SystemRoots.current().authenticatorOver(purpose, now: now)
 	end 'authenticator'
 
-	static function load() throws TrustStoreError
+	static function settle() throws TrustStoreError
+		let seen = SystemRoots.current()
+
+		if seen.isUnloaded() 'unclaimed'
+			let loader = spawn SystemRootsLoader.create(OperatingSystemTrust.create())
+
+			_ = SystemRoots.register(SystemRoots.loading(loader), replacing: seen)
+		end 'unclaimed'
+
+		match SystemRoots.current().outcome 'outcome'
+			loading(loader) then try load(loader)
+			loaded then return
+			failed(error) then throw error
+			unloaded then panic("SystemRoots: a claimed state was replaced by an unloaded one")
+		end 'outcome'
+	end 'settle'
+
+	static function load(loader SystemRootsLoader.handle) throws TrustStoreError
 		// A `ForeverMs` send fails only for a caller whose promise was dropped.
-		let reply = try SystemRootsLoading.current().load(sendTimeout: ForeverMs) otherwise throw TrustStoreError.unavailable
+		let reply = try loader.load(sendTimeout: ForeverMs) otherwise throw TrustStoreError.unavailable
 
 		try await reply
 	end 'load'
 
 	function isSettled() returns bool
 		return match outcome 'outcome'
-			unloaded gives false
+			unloaded or
+			loading gives false
 			loaded or
 			failed gives true
 		end 'outcome'
 	end 'isSettled'
 
+	function isUnloaded() returns bool
+		return match outcome 'outcome'
+			unloaded gives true
+			loading or
+			loaded or
+			failed gives false
+		end 'outcome'
+	end 'isUnloaded'
+
 	function authenticatorOver(purpose X509Purpose, now UnixSeconds) returns TlsX509Peer throws TrustStoreError
 		match outcome 'outcome'
 			loaded(anchors) then return TlsX509Peer.trusting(anchors, now: now, purpose: purpose)
 			failed(error) then throw error
-			unloaded then panic("SystemRoots: the loader answered before it published")
+			unloaded or
+			loading then panic("SystemRoots: the loader answered before it published")
 		end 'outcome'
 	end 'authenticatorOver'
 end 'SystemRoots'
 
 default SystemRoots = SystemRoots.unloaded()
-
-default SystemRootsLoading = spawn SystemRootsLoader.create(OperatingSystemTrust.create())
