@@ -17598,3 +17598,199 @@ accepted
 ```exitcode
 0
 ```
+
+<!-- test: services.a-service-replies-with-a-connection-it-dialled -->
+<!-- procs: 4 -->
+`TcpClient.connect` has two overloads and the first forwards to the second, which builds the client. A reply of the
+forwarding overload's result is fresh, so the dialled connection has no other owner and crosses back to the caller.
+```maxon
+typealias Tally = int(0 to 1000000)
+
+type Dialer
+	var port as NetworkPort
+	var dialled as Tally
+
+	static function create(port NetworkPort) returns Self
+		return Self{port: port, dialled: 0}
+	end 'create'
+
+	export function next() returns TcpClient throws NetworkError
+		self.dialled = self.dialled + 1
+
+		return try TcpClient.connect("127.0.0.1", port: self.port)
+	end 'next'
+end 'Dialer'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let dialer = spawn Dialer.create(listener.port())
+	let pending = try dialer.next() otherwise return 2
+	var peer = try listener.accept() otherwise return 3
+	var dialled = try await pending otherwise return 4
+
+	_ = try peer.send("dialled") otherwise return 5
+
+	let heard = try dialled.recv(64) otherwise return 6
+
+	print("{heard}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+dialled
+```
+```exitcode
+0
+```
+
+<!-- test: services.a-reply-an-overload-forwarded-to-its-sibling-crosses -->
+An overload that forwards to a sibling overload of its own name is fresh when the sibling is: `Box.make(n)` hands back
+the record `Box.make(n, extra:)` builds, so the handler may return it.
+```maxon
+typealias Tally = int(0 to 1000000)
+
+type Box
+	export var n as Tally
+
+	static function make(n Tally) returns Self
+		return make(n, extra: 0)
+	end 'make'
+
+	static function make(n Tally, extra Tally) returns Self
+		return Self{n: n + extra}
+	end 'make'
+end 'Box'
+
+type Maker
+	var made as Tally
+
+	static function create() returns Self
+		return Self{made: 0}
+	end 'create'
+
+	export function next() returns Box
+		self.made = self.made + 1
+
+		return Box.make(self.made)
+	end 'next'
+end 'Maker'
+
+function main() returns ExitCode
+	let maker = spawn Maker.create()
+	let box = try await maker.next() otherwise return 1
+
+	print("{box.n}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+1
+```
+```exitcode
+0
+```
+
+<!-- test: services.a-send-of-an-overload-forwarded-to-its-sibling-moves-in -->
+An overload that forwards to a sibling overload of its own name is fresh when the sibling is, so the record it hands
+back is the sole owner's to move into a service in a send.
+```maxon
+typealias Tally = int(0 to 1000000)
+
+type Box
+	export var n as Tally
+
+	static function make(n Tally) returns Self
+		return make(n, extra: 0)
+	end 'make'
+
+	static function make(n Tally, extra Tally) returns Self
+		return Self{n: n + extra}
+	end 'make'
+end 'Box'
+
+type Shelf
+	var held as Box
+
+	static function create() returns Self
+		return Self{held: Box.make(0)}
+	end 'create'
+
+	export function keep(box Box)
+		self.held = box
+	end 'keep'
+
+	export function total() returns Tally
+		return self.held.n
+	end 'total'
+end 'Shelf'
+
+function main() returns ExitCode
+	let shelf = spawn Shelf.create()
+
+	try shelf.keep(Box.make(7)) otherwise return 1
+
+	let total = try await shelf.total() otherwise return 2
+
+	print("{total}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+7
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-reply-an-overload-forwarded-beside-a-sibling-that-returns-its-parameter-is-refused -->
+Forwarding to a sibling overload does not make the name fresh by itself: `Box.make(copyOf:)` hands back a record its
+caller still owns, and a call to `Box.make` cannot know which overload it reaches, so the reply is refused.
+```maxon
+typealias Tally = int(0 to 1000000)
+
+type Box
+	export var n as Tally
+
+	static function make(n Tally) returns Self
+		return make(n, extra: 0)
+	end 'make'
+
+	static function make(n Tally, extra Tally) returns Self
+		return Self{n: n + extra}
+	end 'make'
+
+	static function make(copyOf Box) returns Self
+		return copyOf
+	end 'make'
+end 'Box'
+
+type Maker
+	var made as Tally
+
+	static function create() returns Self
+		return Self{made: 0}
+	end 'create'
+
+	export function next() returns Box
+		self.made = self.made + 1
+
+		return Box.make(self.made)
+	end 'next'
+end 'Maker'
+
+function main() returns ExitCode
+	let maker = spawn Maker.create()
+	let box = try await maker.next() otherwise return 1
+
+	print("{box.n}\n")
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3137: <fragment>:30:3: `Maker.next` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Maker` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
+note: <fragment>:35:14: the `spawn` that makes `Maker` a service
+```

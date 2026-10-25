@@ -23121,7 +23121,7 @@ export type ProgramSignatures
 		for (name, declarations) in self.settledDeclarations().funcFreshReturnForwards 'eachForwardingKey'
 			for declaration in declarations 'eachForwardingDeclaration'
 				let forwarder = forwarderNames.count()
-				let pending = self.unsettledTargetsOf(declaration, forwarder: forwarder, waiters: waiters)
+				let pending = self.unsettledTargetsOf(declaration, owner: name, forwarder: forwarder, waiters: waiters)
 				forwarderNames.push(name)
 				unsettled.push(pending)
 
@@ -23159,12 +23159,12 @@ export type ProgramSignatures
 	//
 	// ⚠ It reads `funcReturnsFreshRecord` DIRECTLY rather than through `returnsFreshValue`, whose first act is
 	// to run the close this is part of.
-	function unsettledTargetsOf(declaration FreshReturnForwardingDeclaration, forwarder ElementIndex, waiters FreshReturnWaiterMap) returns UnsettledTargetCount
+	function unsettledTargetsOf(declaration FreshReturnForwardingDeclaration, owner ByteArray, forwarder ElementIndex, waiters FreshReturnWaiterMap) returns UnsettledTargetCount
 		var pending = 0 as UnsettledTargetCount
 
 		for forward in declaration.forwards 'eachForward'
 			match self.freshReturnForwardTarget(forward, declFilePath: declaration.declFilePath) 'target'
-				declaration(key) then pending = pending + self.awaitedKeyCount(key, forwarder: forwarder, waiters: waiters)
+				declaration(key) then pending = pending + self.awaitedKeyCount(key, owner: owner, forwarder: forwarder, waiters: waiters)
 				unnameable then pending = pending + 1
 			end 'target'
 		end 'eachForward'
@@ -23174,10 +23174,14 @@ export type ProgramSignatures
 
 	// One if `forwarder` must wait on `key`, recorded once however many of its calls name that key; zero when
 	// the key is fresh already or the wait is recorded.
-	function awaitedKeyCount(key ByteArray, forwarder ElementIndex, waiters FreshReturnWaiterMap) returns UnsettledTargetCount
-		if self.keyReturnsFreshRecord(key) 'freshAlready'
+	//
+	// It is also zero for the forwarder's own key (`owner`): a call to a sibling overload adds no obligation
+	// beyond the key's other declarations, which the key already waits on, and waiting on a key that includes
+	// the waiter never settles.
+	function awaitedKeyCount(key ByteArray, owner ByteArray, forwarder ElementIndex, waiters FreshReturnWaiterMap) returns UnsettledTargetCount
+		if key.equals(owner) or self.keyReturnsFreshRecord(key) 'settledAlready'
 			return 0
-		end 'freshAlready'
+		end 'settledAlready'
 
 		var waiting = try waiters.get(key) otherwise FreshReturnForwarderIndexArray.create()
 
