@@ -1,26 +1,26 @@
-module enum TlsClientAuthentication
+public enum TlsClientAuthentication
 	none
 	request
 	require
 end 'TlsClientAuthentication'
 
-module type TlsServerConfig
-	module var protocols as TlsProtocolArray
-	module var cipherSuites as TlsCipherSuiteCodeArray
+public type TlsServerConfig
+	public var protocols as TlsProtocolArray
+	public var cipherSuites as TlsCipherSuiteCodeArray
 	module var groups as TlsGroupCodeArray
 	module var signatureAlgorithms as TlsSignatureSchemeCodeArray
-	module var applicationProtocols as TlsProtocolNameArray
+	public var applicationProtocols as TlsProtocolNameArray
 	module var chain as ByteArrays
 	module var key as TlsPrivateKey
-	module var clientAuthentication as TlsClientAuthentication
+	public var clientAuthentication as TlsClientAuthentication
 	module var clientSignatureAlgorithms as TlsSignatureSchemeCodeArray
-	module var clientAuthorities as ByteArrays
+	public var clientAuthorities as ByteArrays
 
 	module static function create(protocols TlsProtocolArray, cipherSuites TlsCipherSuiteCodeArray, groups TlsGroupCodeArray, signatureAlgorithms TlsSignatureSchemeCodeArray, applicationProtocols TlsProtocolNameArray, chain ByteArrays, key TlsPrivateKey, clientAuthentication TlsClientAuthentication, clientSignatureAlgorithms TlsSignatureSchemeCodeArray, clientAuthorities ByteArrays) returns TlsServerConfig
 		return Self{protocols: protocols, cipherSuites: cipherSuites, groups: groups, signatureAlgorithms: signatureAlgorithms, applicationProtocols: applicationProtocols, chain: chain, key: key, clientAuthentication: clientAuthentication, clientSignatureAlgorithms: clientSignatureAlgorithms, clientAuthorities: clientAuthorities}
 	end 'create'
 
-	module static function defaults(chain ByteArrays, key TlsPrivateKey) returns TlsServerConfig
+	public static function defaults(chain ByteArrays, key TlsPrivateKey) returns TlsServerConfig
 		return Self{protocols: TlsProtocolArray from [TlsProtocol.tls13, TlsProtocol.tls12], cipherSuites: tlsDefaultCipherSuites.clone(), groups: tlsDefaultGroups.clone(), signatureAlgorithms: tlsServerDefaultSignatureAlgorithms.clone(), applicationProtocols: TlsProtocolNameArray.create(), chain: chain, key: key, clientAuthentication: TlsClientAuthentication.none, clientSignatureAlgorithms: tlsServerDefaultSignatureAlgorithms.clone(), clientAuthorities: ByteArrays.create()}
 	end 'defaults'
 
@@ -65,7 +65,7 @@ module type TlsServerConfig
 	end 'requestedSchemes'
 end 'TlsServerConfig'
 
-module type TlsServerEntropy
+public type TlsServerEntropy
 	module var random as ByteArray
 	module var keySecrets as TlsKeySecretArray
 	module var pssSalt as ByteArray
@@ -74,7 +74,7 @@ module type TlsServerEntropy
 		return Self{random: random, keySecrets: keySecrets, pssSalt: pssSalt}
 	end 'create'
 
-	module static function fresh(config TlsServerConfig) returns TlsServerEntropy throws TlsHandshakeError
+	public static function fresh(config TlsServerConfig) returns TlsServerEntropy throws TlsHandshakeError
 		return Self{random: try tlsDrawBytes(tlsRandomLength), keySecrets: try tlsFreshSecrets(config.groups), pssSalt: try tlsDrawBytes(tlsPssSaltLength)}
 	end 'fresh'
 

@@ -55,7 +55,7 @@ module union TlsAdmittedHello
 	tls12(read Tls12ReadHello)
 end 'TlsAdmittedHello'
 
-module type TlsClientHandshake implements TlsEndpoint, TlsMessageHandler
+public type TlsClientHandshake implements TlsEndpoint, TlsMessageHandler
 	var config as TlsClientConfig
 	var entropy as TlsClientEntropy
 	var peer as TlsPeerAuthenticator
@@ -66,7 +66,7 @@ module type TlsClientHandshake implements TlsEndpoint, TlsMessageHandler
 	var firstHello as TlsClientHello
 	var tls12 as Tls12ClientFlow
 
-	module static function create(config TlsClientConfig, entropy TlsClientEntropy, peer TlsPeerAuthenticator, helloSource TlsClientHelloSource) returns TlsClientHandshake throws TlsHandshakeError
+	public static function create(config TlsClientConfig, entropy TlsClientEntropy, peer TlsPeerAuthenticator, helloSource TlsClientHelloSource) returns TlsClientHandshake throws TlsHandshakeError
 		let sent = helloSource.first(try tlsBuildClientHello(config, entropy: entropy))
 		var hello = try tlsDecodeClientHello(sent.clone())
 		var session = TlsSession.create(TlsRole.client, firstRecordVersion: tlsRecordLegacyVersion)

@@ -2489,6 +2489,17 @@ function main() returns ExitCode
 end 'main'
 ```
 
+### TlsIdentity
+
+A `TlsIdentity` is a certificate chain and the private key of its first certificate: what a server presents and
+what a client presents to a server that asks. The certificates are DER, the leaf first. The key is accepted as
+PKCS #8 (P-256, P-384, Ed25519 or RSA), SEC1 `ECPrivateKey` (P-256 or P-384) or PKCS #1 `RSAPrivateKey`.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `TlsIdentity.fromDer(chain ByteArrays, key ByteArray)` | `TlsIdentity` | `TlsError` | `invalidCertificate` for an empty chain or a first certificate that is not X.509; `invalidPrivateKey` for a key that cannot be read (an element left after it, an EC scalar that is zero or not below the curve order, an RSA modulus outside 2048 to 4096 bits, a SEC1 curve that differs from the PKCS #8 one) or whose public key is not the first certificate's. |
+| `TlsIdentity.fromPem(certificates String, key String)` | `TlsIdentity` | `TlsError` | The `CERTIFICATE` blocks of `certificates`, in order, and the first `PRIVATE KEY`, `EC PRIVATE KEY` or `RSA PRIVATE KEY` block of `key`, which may be the same text. `invalidPem` for text that is not PEM or a `key` with no key block. |
+
 ## TlsStream
 
 `TlsStream` is a TLS connection, the one `TlsClient.connect` and `TlsListener.accept()` return. `connect` returns an
@@ -2511,8 +2522,12 @@ bytes are the application data, and a write is split into records of at most 16 
 | `shutdownWrite()` | — | `TlsError` | Send close_notify and stop sending: the peer reads the end of the stream while this side can still `recv`. The close_notify is written under a write deadline of 5 seconds, which replaces the one set; a peer that has stopped reading ends it with `timedOut`. |
 | `close()` | — | — | Send close_notify, under a write deadline of 5 seconds, and close the connection; a stream whose write side has failed sends none. Idempotent. |
 
-`TlsApplicationProtocol` is a union: `unnegotiated`, or `negotiated(name String)`. `TlsCipherSuite` is a union of
-the two suite enums. A stream that goes out of scope closes its socket as a `TcpClient` does, without a close_notify, which
+`TlsApplicationProtocol` is a union: `unnegotiated`, or `negotiated(name String)`. `TlsProtocol` is `tls13` or `tls12`.
+`TlsCipherSuite` is a union of the two suite enums: `Tls13CipherSuite` is `aes128GcmSha256` (0x1301),
+`aes256GcmSha384` (0x1302) or `chaCha20Poly1305Sha256` (0x1303), and `Tls12CipherSuite` is
+`ecdheEcdsaAes128GcmSha256` (0xC02B), `ecdheRsaAes128GcmSha256` (0xC02F), `ecdheEcdsaAes256GcmSha384` (0xC02C),
+`ecdheRsaAes256GcmSha384` (0xC030), `ecdheEcdsaChaCha20Poly1305Sha256` (0xCCA9) or
+`ecdheRsaChaCha20Poly1305Sha256` (0xCCA8), each with its code point as the raw value. A stream that goes out of scope closes its socket as a `TcpClient` does, without a close_notify, which
 the peer reads as `truncated`; `close()` is how a peer is told the data is complete. A fatal alert, from the peer
 or found by this side, ends the stream: the error is thrown once and every later call, the deadline setters included, throws `closed`.
 
@@ -2532,17 +2547,6 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-
-## TlsIdentity
-
-A `TlsIdentity` is a certificate chain and the private key of its first certificate: what a server presents and
-what a client presents to a server that asks. The certificates are DER, the leaf first. The key is accepted as
-PKCS #8 (P-256, P-384, Ed25519 or RSA), SEC1 `ECPrivateKey` (P-256 or P-384) or PKCS #1 `RSAPrivateKey`.
-
-| Member | Returns | Throws | Description |
-|--------|---------|--------|-------------|
-| `TlsIdentity.fromDer(chain ByteArrays, key ByteArray)` | `TlsIdentity` | `TlsError` | `invalidCertificate` for an empty chain or a first certificate that is not X.509; `invalidPrivateKey` for a key that cannot be read (an element left after it, an EC scalar that is zero or not below the curve order, an RSA modulus outside 2048 to 4096 bits, a SEC1 curve that differs from the PKCS #8 one) or whose public key is not the first certificate's. |
-| `TlsIdentity.fromPem(certificates String, key String)` | `TlsIdentity` | `TlsError` | The `CERTIFICATE` blocks of `certificates`, in order, and the first `PRIVATE KEY`, `EC PRIVATE KEY` or `RSA PRIVATE KEY` block of `key`, which may be the same text. `invalidPem` for text that is not PEM or a `key` with no key block. |
 
 ## TlsError
 
@@ -2593,6 +2597,15 @@ end 'TlsError'
 | `protocolError(alert)` | This side ended the connection and sent `alert`: a malformed or unexpected message, no common version (`protocolVersion`), no common ALPN protocol (`noApplicationProtocol`), a missing client certificate (`certificateRequired`, `handshakeFailure`), a record longer than a record can be (`recordOverflow`). |
 | `peerAlert(alert)` | The peer sent a fatal alert, or close_notify before the handshake finished. In TLS 1.3 a server decides about a client certificate after the client's handshake is complete, so the client reads that alert from its first `recv`. |
 | `peerAlertUnrecognised(code)` | The peer sent an alert whose code `TlsAlert` does not name. |
+
+`TlsAlert` is every alert description of RFC 8446 section 6, with its code point as the raw value: `closeNotify` (0),
+`unexpectedMessage` (10), `badRecordMac` (20), `recordOverflow` (22), `handshakeFailure` (40), `badCertificate` (42),
+`unsupportedCertificate` (43), `certificateRevoked` (44), `certificateExpired` (45), `certificateUnknown` (46),
+`illegalParameter` (47), `unknownCa` (48), `accessDenied` (49), `decodeError` (50), `decryptError` (51),
+`protocolVersion` (70), `insufficientSecurity` (71), `internalError` (80), `inappropriateFallback` (86),
+`userCanceled` (90), `noRenegotiation` (100), `missingExtension` (109), `unsupportedExtension` (110),
+`unrecognizedName` (112), `badCertificateStatusResponse` (113), `unknownPskIdentity` (115),
+`certificateRequired` (116) and `noApplicationProtocol` (120).
 
 A record header is checked as it is read: content type, version and length are bounded before any body is waited for,
 so input that is not TLS, or a header that declares more than a record holds, ends with `protocolError` at once.
@@ -3535,7 +3548,14 @@ end 'main'
 
 Output: `invalidPublicKey`.
 
-## Aead
+## AesGcm
+
+AES-GCM (NIST SP 800-38D) with a 12-byte nonce and a 16-byte tag, implementing [`Aead`](#aead).
+`AesGcm.create(key ByteArray)` takes a 16-, 24- or 32-byte key and throws `AeadError.invalidKeyLength`
+for any other. `seal` accepts up to 2^36 − 32 bytes of plaintext, the most its 32-bit block counter
+covers.
+
+### Aead
 
 `Aead` is authenticated encryption with associated data: `seal` encrypts a message and appends a 16-byte
 tag over it and the associated data, and `open` checks the tag before decrypting. [`AesGcm`](#aesgcm) and
@@ -3578,57 +3598,11 @@ end 'main'
 
 Output: `21 5` and `authenticationFailed`.
 
-## AesGcm
-
-AES-GCM (NIST SP 800-38D) with a 12-byte nonce and a 16-byte tag, implementing [`Aead`](#aead).
-`AesGcm.create(key ByteArray)` takes a 16-, 24- or 32-byte key and throws `AeadError.invalidKeyLength`
-for any other. `seal` accepts up to 2^36 − 32 bytes of plaintext, the most its 32-bit block counter
-covers.
-
 ## ChaCha20Poly1305
 
 ChaCha20-Poly1305 (RFC 8439) with a 12-byte nonce and a 16-byte tag, implementing [`Aead`](#aead).
 `ChaCha20Poly1305.create(key ByteArray)` takes a 32-byte key, keeping its own copy, and throws
 `AeadError.invalidKeyLength` for any other. `seal` accepts up to 2^38 − 64 bytes of plaintext.
-
-## Aes
-
-The AES block cipher (FIPS 197), the primitive under [`AesGcm`](#aesgcm). It encrypts one 16-byte block
-at a time, or a message in counter mode. The key schedule is computed once by `Aes.create`.
-
-| Member | Returns | Throws | Description |
-|--------|---------|--------|-------------|
-| `Aes.create(key ByteArray)` | `Aes` | `AesError` | The cipher for a 16-, 24- or 32-byte key: AES-128, AES-192 or AES-256. |
-| `encryptBlock(block ByteArray)` | `ByteArray` | `AesError` | The encryption of one 16-byte block. |
-| `decryptBlock(block ByteArray)` | `ByteArray` | `AesError` | The decryption of one 16-byte block. |
-| `xorKeyStream(nonce ByteArray, counter AesCounter, data ByteArray)` | `ByteArray` | `AesKeyStreamError` | `data` XORed with the counter-mode key stream: each block's input is the 12-byte nonce followed by a 32-bit big-endian counter, `counter` for the first block. Encrypting and decrypting are the same call. |
-
-`AesError` is `invalidKeyLength` or `invalidBlockLength`. `AesKeyStreamError` is `invalidNonceLength`, or
-`counterOverflow` when `data` needs a block counter past 2^32 − 1. `AesCounter` is `int(0 to u32.max)`.
-
-A bare block cipher is not authenticated: use [`AesGcm`](#aesgcm) to encrypt messages.
-
-## ChaCha20
-
-The ChaCha20 stream cipher (RFC 8439), the primitive under [`ChaCha20Poly1305`](#chacha20poly1305).
-
-| Function | Returns | Throws | Description |
-|----------|---------|--------|-------------|
-| `ChaCha20.xorKeyStream(key ByteArray, nonce ByteArray, counter ChaCha20Counter, data ByteArray)` | `ByteArray` | `ChaCha20Error` | `data` XORed with the key stream of a 32-byte key and a 12-byte nonce, starting at 64-byte block `counter`. Encrypting and decrypting are the same call. |
-
-`ChaCha20Error` is `invalidKeyLength`, `invalidNonceLength`, or `counterOverflow` when `data` needs a block
-counter past 2^32 − 1. `ChaCha20Counter` is `int(0 to u32.max)`.
-
-## Poly1305
-
-The Poly1305 one-time authenticator (RFC 8439), the tag under [`ChaCha20Poly1305`](#chacha20poly1305).
-
-| Function | Returns | Throws | Description |
-|----------|---------|--------|-------------|
-| `Poly1305.mac(key ByteArray, message ByteArray)` | `ByteArray` | `Poly1305Error` | The 16-byte tag of `message` under a 32-byte key. |
-
-`Poly1305Error` has one case, `invalidKeyLength`. A key tags exactly one message: two tags under one key
-let an attacker forge a third. Compare tags with [`constantTimeEqual`](#hmac).
 
 ## X25519
 
@@ -3878,309 +3852,6 @@ end 'main'
 ```
 
 Output: `invalidCertificate`.
-
-## Tls13KeySchedule
-
-`Tls13KeySchedule` is the key schedule of TLS 1.3 (RFC 8446 section 7) for a full (EC)DHE handshake without
-a pre-shared key: the secret ladder from the shared secret to the traffic secrets, the keys and IVs of the
-record layer, the Finished `verify_data`, and the KeyUpdate step. It is built on [`Hkdf`](#hkdf),
-[`Hmac`](#hmac) and [`Sha2`](#sha2); record protection with its keys is [`Tls13RecordProtection`](#tlsrecordprotection).
-
-`Tls13CipherSuite` names the three suites, with their code points as raw values: `aes128GcmSha256` (0x1301),
-`aes256GcmSha384` (0x1302) and `chaCha20Poly1305Sha256` (0x1303). `hashAlgorithm()` is the suite's
-[`HashAlgorithm`](#sha2), `keyBytes()` (a `TlsKeyBytes`: 16 or 32) the AEAD key size and `ivBytes()` (a
-`TlsIvBytes`) the IV size, 12. Every secret and transcript hash below is as long as the suite's hash: 32
-bytes, or 48 for `aes256GcmSha384`.
-
-| Function | Returns | Throws | Description |
-|----------|---------|--------|-------------|
-| `Tls13KeySchedule.expandLabel(suite Tls13CipherSuite, secret ByteArray, label String, context ByteArray, length HkdfOutputLength)` | `ByteArray` | `Tls13KeyScheduleError` | `HKDF-Expand-Label`: `length` bytes of the secret expanded under `"tls13 "` followed by `label` and `context`. |
-| `Tls13KeySchedule.deriveSecret(suite Tls13CipherSuite, secret ByteArray, label String, transcriptHash ByteArray)` | `ByteArray` | `Tls13KeyScheduleError` | `Derive-Secret`: `expandLabel` with the transcript hash as context and the hash length as the length. |
-| `Tls13KeySchedule.transcriptHash(suite Tls13CipherSuite, messages ByteArrays)` | `ByteArray` | — | The hash of the handshake messages, each a complete message with its 4-byte header. No messages hash the empty string. |
-| `Tls13KeySchedule.messageHash(suite Tls13CipherSuite, clientHello ByteArray)` | `ByteArray` | — | The synthetic `message_hash` message that replaces the first ClientHello in the transcript after a HelloRetryRequest (RFC 8446 section 4.4.1). |
-| `Tls13KeySchedule.keySchedule(suite Tls13CipherSuite, sharedSecret ByteArray, helloHash ByteArray, serverFinishedHash ByteArray)` | `Tls13Secrets` | `Tls13KeyScheduleError` | The whole ladder: `helloHash` is the transcript hash through the ServerHello and `serverFinishedHash` the one through the server's Finished. |
-| `Tls13KeySchedule.trafficKeys(suite Tls13CipherSuite, trafficSecret ByteArray)` | `Tls13TrafficKeys` | `Tls13KeyScheduleError` | The AEAD key and IV of a traffic secret. |
-| `Tls13KeySchedule.finishedVerifyData(suite Tls13CipherSuite, baseKey ByteArray, transcriptHash ByteArray)` | `ByteArray` | `Tls13KeyScheduleError` | The `verify_data` of a Finished message: the HMAC of the transcript hash under the finished key of `baseKey`, the sender's handshake traffic secret. |
-| `Tls13KeySchedule.nextApplicationTrafficSecret(suite Tls13CipherSuite, secret ByteArray)` | `ByteArray` | `Tls13KeyScheduleError` | The KeyUpdate step: `application_traffic_secret_N+1` from `application_traffic_secret_N`. |
-
-`Tls13Secrets` holds the eight secrets of `keySchedule`, each read by a function of its name:
-`earlySecret()`, `handshakeSecret()`, `clientHandshakeTrafficSecret()`, `serverHandshakeTrafficSecret()`,
-`masterSecret()`, `clientApplicationTrafficSecret0()`, `serverApplicationTrafficSecret0()` and
-`exporterMasterSecret()`. `Tls13TrafficKeys` holds `key()` and `iv()`.
-
-A throwing function reports the first check that fails, in this order. `Tls13KeyScheduleError` has six cases:
-`invalidSecretLength` for a secret, traffic secret or base key that is not as long as the hash,
-`invalidLabel` for a label that is empty, longer than 249 bytes or not printable ASCII (0x20 to 0x7E),
-`contextTooLong` for a context over 255 bytes, `outputTooLong` for a length over 255 times the hash length,
-`invalidTranscriptHashLength` for a transcript hash of another length, and `invalidSharedSecretLength` for
-an empty shared secret. A shared secret shorter than the hash, such as a short test value, is accepted;
-X25519 and P-256 give 32 bytes. `keySchedule` uses a zero-filled pre-shared key and no early traffic
-secrets: resumption, pre-shared keys and 0-RTT are not supported.
-
-```maxon
-function main() returns ExitCode
-	let suite = Tls13CipherSuite.aes128GcmSha256
-	var shared = ByteArray.create()
-	shared.resize(32)
-
-	let empty = Tls13KeySchedule.transcriptHash(suite, messages: ByteArrays.create())
-	let secrets = try Tls13KeySchedule.keySchedule(suite, sharedSecret: shared, helloHash: empty, serverFinishedHash: empty) otherwise return 1
-	let keys = try Tls13KeySchedule.trafficKeys(suite, trafficSecret: secrets.clientHandshakeTrafficSecret()) otherwise return 1
-
-	print("{secrets.earlySecret().count()} {keys.key().count()} {keys.iv().count()}\n")
-	return 0
-end 'main'
-```
-
-Output: `32 16 12`.
-
-## Tls12Prf
-
-`Tls12Prf` is the pseudorandom function of TLS 1.2 (RFC 5246 section 5) over HMAC-SHA-256 or HMAC-SHA-384,
-with the derivations built on it for the ECDHE suites with AEAD ciphers: the master secret (RFC 5246
-section 8.1), the extended master secret (RFC 7627), the key block (section 6.3) and the Finished
-`verify_data` (section 7.4.9). It is built on [`Hmac`](#hmac); record protection with the key block is
-[`Tls12RecordProtection`](#tlsrecordprotection).
-
-`Tls12CipherSuite` names the six suites, with their code points as raw values: `ecdheEcdsaAes128GcmSha256`
-(0xC02B), `ecdheRsaAes128GcmSha256` (0xC02F), `ecdheEcdsaAes256GcmSha384` (0xC02C),
-`ecdheRsaAes256GcmSha384` (0xC030), `ecdheEcdsaChaCha20Poly1305Sha256` (0xCCA9) and
-`ecdheRsaChaCha20Poly1305Sha256` (0xCCA8). `hashAlgorithm()` is the suite's PRF hash, `keyBytes()` the AEAD key
-size (16 or 32) and `ivBytes()` the implicit IV size: 4 for AES-GCM and 12 for ChaCha20-Poly1305.
-
-| Function | Returns | Throws | Description |
-|----------|---------|--------|-------------|
-| `Tls12Prf.prf(hash HashAlgorithm, secret ByteArray, label String, seed ByteArray, length Tls12PrfLength)` | `ByteArray` | `Tls12PrfError` | `length` bytes of `P_hash(secret, label ‖ seed)`. The secret and the seed may be empty; the label is 1 or more printable ASCII characters. |
-| `Tls12Prf.masterSecret(suite Tls12CipherSuite, preMasterSecret ByteArray, clientRandom ByteArray, serverRandom ByteArray)` | `ByteArray` | `Tls12PrfError` | The 48-byte master secret, from the client random then the server random. |
-| `Tls12Prf.extendedMasterSecret(suite Tls12CipherSuite, preMasterSecret ByteArray, sessionHash ByteArray)` | `ByteArray` | `Tls12PrfError` | The 48-byte master secret bound to the session hash, the `handshakeHash` of every message through the ClientKeyExchange. |
-| `Tls12Prf.keyBlock(suite Tls12CipherSuite, masterSecret ByteArray, clientRandom ByteArray, serverRandom ByteArray)` | `Tls12KeyBlock` | `Tls12PrfError` | The write keys and implicit IVs of both directions; the seed is the server random then the client random. |
-| `Tls12Prf.finishedVerifyData(suite Tls12CipherSuite, masterSecret ByteArray, sender Tls12Sender, handshakeHash ByteArray)` | `ByteArray` | `Tls12PrfError` | The 12-byte `verify_data` of the `client` or `server` Finished message. |
-| `Tls12Prf.handshakeHash(suite Tls12CipherSuite, messages ByteArrays)` | `ByteArray` | — | The PRF hash of the handshake messages, each a complete message with its 4-byte header. |
-
-`Tls12KeyBlock` holds `clientWriteKey()`, `serverWriteKey()`, `clientWriteIv()` and `serverWriteIv()`;
-`Tls12PrfLength` is `int(0 to u32.max)`, implementing `Count`. A throwing function reports the first check
-that fails. `Tls12PrfError` has seven cases: `unsupportedAlgorithm` for a `prf` hash other than SHA-256 and
-SHA-384, `invalidLabel` for an empty or non-printable-ASCII `prf` label, `invalidPreMasterSecretLength` for an
-empty pre-master secret, `invalidRandomLength` for a random that is not 32 bytes, `invalidSessionHashLength` and
-`invalidHandshakeHashLength` for a hash that is not as long as the suite's PRF hash, and
-`invalidMasterSecretLength` for a master secret that is not 48 bytes. For ECDHE the pre-master secret is the
-raw shared secret, leading zero bytes kept.
-
-```maxon
-function main() returns ExitCode
-	let suite = Tls12CipherSuite.ecdheRsaAes128GcmSha256
-	var master = ByteArray.create()
-	master.resize(48)
-	var random = ByteArray.create()
-	random.resize(32)
-
-	let block = try Tls12Prf.keyBlock(suite, masterSecret: master, clientRandom: random, serverRandom: random) otherwise return 1
-
-	print("{block.clientWriteKey().count()} {block.serverWriteIv().count()}\n")
-	return 0
-end 'main'
-```
-
-Output: `16 4`.
-
-## TlsRecordProtection
-
-`Tls13RecordProtection` and `Tls12RecordProtection` protect the records of one direction of a TLS
-connection: they hold the AEAD key, the IV and the sequence number, and seal or open one record at a time.
-[`Tls13RecordProtection`](#tlsrecordprotection) follows RFC 8446 section 5 (the inner content type, padding,
-the record header as additional data, a per-record nonce of the IV XOR the sequence number);
-`Tls12RecordProtection` follows RFC 5246 section 6.2.3.3 with AES-GCM (RFC 5288: a 4-byte implicit IV and an
-8-byte explicit nonce) or ChaCha20-Poly1305 (RFC 7905: the IV XOR the sequence number). The AEADs are
-[`AesGcm`](#aesgcm) and [`ChaCha20Poly1305`](#chacha20poly1305), and the tag is compared in constant time.
-Keys come from [`Tls13KeySchedule.trafficKeys`](#tls13keyschedule) and [`Tls12Prf.keyBlock`](#tls12prf).
-
-| Function | Returns | Throws | Description |
-|----------|---------|--------|-------------|
-| `Tls13RecordProtection.create(suite Tls13CipherSuite, key ByteArray, iv ByteArray, sequenceNumber TlsSequenceNumber = 0)` | `Tls13RecordProtection` | `TlsRecordError` | A protection for `key` and the 12-byte `iv`, whose first record is number `sequenceNumber`. |
-| `Tls13RecordProtection.seal(contentType TlsContentType, plaintext ByteArray, paddingLength TlsPaddingLength = 0)` | `ByteArray` | `TlsRecordError` | The record of `plaintext` with `paddingLength` zero bytes of padding after the content type. |
-| `Tls13RecordProtection.open(record ByteArray)` | `TlsOpenedRecord` | `TlsRecordError` | The content type and plaintext of one whole record, the padding removed. |
-| `Tls12RecordProtection.create(suite Tls12CipherSuite, key ByteArray, iv ByteArray, sequenceNumber TlsSequenceNumber = 0)` | `Tls12RecordProtection` | `TlsRecordError` | A protection for `key` and the implicit `iv` of the suite (4 bytes for AES-GCM, 12 for ChaCha20-Poly1305). |
-| `Tls12RecordProtection.seal(contentType TlsContentType, plaintext ByteArray)` | `ByteArray` | `TlsRecordError` | The record of `plaintext`. An AES-GCM record carries the sequence number as its explicit nonce. |
-| `Tls12RecordProtection.open(record ByteArray)` | `TlsOpenedRecord` | `TlsRecordError` | The content type and plaintext of one whole record. An AES-GCM record's explicit nonce is taken as sent, whatever its value. |
-
-`TlsContentType` is `changeCipherSpec` (20), `alert` (21), `handshake` (22) or `applicationData` (23), with
-the wire values as raw values; a record carries only the last three. `TlsOpenedRecord` holds `contentType()`
-and `plaintext()`; an empty plaintext is returned as it is. `TlsSequenceNumber` is `int(0 to u64.max)` and
-`TlsPaddingLength` is `int(0 to u32.max)`, implementing `Count`.
-
-Each successful `seal` or `open` moves to the next sequence number; a refused one leaves it unchanged. The
-record of number 2^64 - 1 can still be sealed or opened, and every call after it throws
-`sequenceNumberExhausted`: a protection never reuses a nonce.
-
-A throwing function reports the first check that fails. `TlsRecordError` has ten cases:
-
-| `TlsRecordError` case | When |
-|-----------------------|------|
-| `invalidKeyLength` | `create`: the key is not the suite's size. |
-| `invalidIvLength` | `create`: the IV is not the suite's size. |
-| `sequenceNumberExhausted` | `seal` or `open` after the record of number 2^64 - 1. |
-| `invalidContentType` | `seal`: the content type is `changeCipherSpec`, which is never protected. |
-| `emptyFragment` | `seal`: an empty `handshake` or `alert` plaintext. |
-| `recordOverflow` | `seal`: more than 2^14 bytes of content (2^14 + 1 with the TLS 1.3 content type byte and padding); `open`: a body over 2^14 + 256 bytes (TLS 1.3) or 2^14 + 2048 (TLS 1.2), or an opened plaintext over its limit. |
-| `decodeError` | `open`: the record is shorter than its 5-byte header, or its length field is not the length of the rest. |
-| `protocolVersion` | `Tls12RecordProtection.open`: the record version is not 0x0303. A TLS 1.3 record's version is not checked; it is authenticated as part of the additional data. |
-| `unexpectedMessage` | `open`: an outer content type that is not allowed (`applicationData` only for TLS 1.3; `alert`, `handshake` or `applicationData` for TLS 1.2), or a TLS 1.3 inner plaintext that is all zero or ends in a content type other than 21 to 23. |
-| `badRecordMac` | `open`: the tag does not verify, including a body too short to hold the nonce and tag. No plaintext is released. |
-
-```maxon
-function main() returns ExitCode
-	var key = ByteArray.create()
-	key.resize(16)
-	var iv = ByteArray.create()
-	iv.resize(12)
-
-	var writer = try Tls13RecordProtection.create(Tls13CipherSuite.aes128GcmSha256, key: key, iv: iv) otherwise return 1
-	var reader = try Tls13RecordProtection.create(Tls13CipherSuite.aes128GcmSha256, key: key, iv: iv) otherwise return 1
-
-	let record = try writer.seal(TlsContentType.applicationData, plaintext: "hello".toByteArray()) otherwise return 1
-	let opened = try reader.open(record) otherwise return 1
-
-	print("{record.count()} {opened.contentType().rawValue} {opened.plaintext().count()}\n")
-	return 0
-end 'main'
-```
-
-Output: `27 23 5`.
-
-## TlsHandshakeCodec
-
-`TlsHandshakeCodec` encodes and strictly decodes the handshake messages of TLS 1.3 (RFC 8446 section 4) and
-TLS 1.2 (RFC 5246 section 7.4): ClientHello, ServerHello and HelloRetryRequest, EncryptedExtensions,
-Certificate, CertificateRequest, CertificateVerify, Finished, NewSessionTicket and KeyUpdate, and for TLS 1.2
-HelloRequest, ServerKeyExchange and ClientKeyExchange (ECDHE with a named curve) and ServerHelloDone. A message
-is one complete handshake message, the 4-byte header and the body.
-
-| Function | Returns | Throws | Description |
-|----------|---------|--------|-------------|
-| `TlsHandshakeCodec.decode(message ByteArray, protocol TlsProtocol)` | `TlsHandshakeMessage` | `TlsCodecError` | The message, or the error that names the alert to send. `TlsProtocol` is `tls13` or `tls12`: it decides which message types exist and the layout of Certificate and CertificateRequest. |
-| `TlsHandshakeCodec.encode(message TlsHandshakeMessage)` | `ByteArray` | `TlsEncodeError` | The message with minimal-width length prefixes and its 4-byte header. `encode(decode(m)) == m` for every `m` that decodes. |
-
-`TlsHandshakeMessage` has one case per message layout:
-
-| Case | Message |
-|------|---------|
-| `helloRequest`, `serverHelloDone` | TLS 1.2, empty body |
-| `clientHello(hello TlsClientHello)` | ClientHello, either protocol |
-| `serverHello(hello TlsServerHello)` | ServerHello |
-| `helloRetryRequest(hello TlsServerHello)` | A ServerHello whose random is the RFC 8446 section 4.1.3 HelloRetryRequest value |
-| `newSessionTicket(ticket TlsNewSessionTicket)` | TLS 1.3 NewSessionTicket |
-| `encryptedExtensions(extensions TlsExtensionArray)` | TLS 1.3 EncryptedExtensions |
-| `tls13Certificate(requestContext ByteArray, entries TlsCertificateEntryArray)` | TLS 1.3 Certificate: a request context and entries of a DER certificate and its extensions |
-| `tls12Certificate(certificates ByteArrays)` | TLS 1.2 Certificate: the DER certificates |
-| `tls13CertificateRequest(requestContext ByteArray, extensions TlsExtensionArray)` | TLS 1.3 CertificateRequest |
-| `tls12CertificateRequest(request Tls12CertificateRequest)` | TLS 1.2 CertificateRequest |
-| `certificateVerify(scheme TlsSignatureSchemeCode, signature ByteArray)` | CertificateVerify, either protocol |
-| `finished(verifyData ByteArray)` | Finished, either protocol; the whole body, any length |
-| `keyUpdate(request TlsKeyUpdateRequest)` | TLS 1.3 KeyUpdate: `updateNotRequested` (0) or `updateRequested` (1) |
-| `serverKeyExchange(exchange Tls12ServerKeyExchange)` | TLS 1.2 ServerKeyExchange; the curve type is always named_curve (3) |
-| `clientKeyExchange(publicKey ByteArray)` | TLS 1.2 ClientKeyExchange |
-
-A message of more than two fields is a record, built by its `create` (a first argument unlabelled, the others
-named in the order below) and read by a function of each field's name:
-
-| Record | Fields |
-|--------|--------|
-| `TlsClientHello` | `legacyVersion` (`TlsVersionCode`), `random`, `legacySessionId`, `cipherSuites` (`TlsCipherSuiteCodeArray`), `compressionMethods`, `extensions` (`TlsExtensionBlock`) |
-| `TlsServerHello` | `legacyVersion`, `random`, `legacySessionIdEcho`, `cipherSuite` (`TlsCipherSuiteCode`), `compressionMethod` (`TlsCompressionMethod`), `extensions` (`TlsExtensionBlock`) |
-| `TlsNewSessionTicket` | `lifetime` (`TlsTicketLifetime`), `ageAdd` (`TlsTicketAgeAdd`), `nonce`, `ticket`, `extensions` (`TlsExtensionArray`) |
-| `Tls12CertificateRequest` | `certificateTypes`, `signatureSchemes` (`TlsSignatureSchemeCodeArray`), `authorities` (`TlsAuthorityNameArray`, DER names) |
-| `Tls12ServerKeyExchange` | `namedGroup` (`TlsGroupCode`), `publicKey`, `signatureScheme` (`TlsSignatureSchemeCode`), `signature` |
-| `TlsCertificateEntry` | `certificate`, `extensions` (`TlsExtensionArray`) |
-| `TlsKeyShare` | `group` (`TlsGroupCode`), `keyExchange` |
-
-A ClientHello or ServerHello holds a `TlsExtensionBlock`: `absent` when the message ends after its fixed fields
-(legal in TLS 1.2), or `listed(extensions)`, possibly an empty list. A `TlsExtension` is one of these decoded
-forms or `opaque(extensionType TlsExtensionType, data ByteArray)`, which keeps the exact bytes of every other
-extension in wire order, so a transcript re-encodes byte for byte:
-
-| `TlsExtension` case | Extension |
-|---------------------|-----------|
-| `serverName(hostName String)` | server_name in a ClientHello: one host name of 1 to 65535 bytes of 0x21 to 0x7E, not ending in `.` |
-| `serverNameAcknowledgement` | server_name in any other message, with empty data |
-| `supportedGroups(groups TlsGroupCodeArray)` | supported_groups, non-empty |
-| `ecPointFormats(formats ByteArray)` | ec_point_formats, 1 to 255 bytes |
-| `signatureAlgorithms(schemes TlsSignatureSchemeCodeArray)` | signature_algorithms, non-empty |
-| `applicationProtocols(protocols TlsProtocolNameArray)` | application_layer_protocol_negotiation: names of 1 to 255 bytes, non-empty in a ClientHello, exactly one elsewhere |
-| `extendedMasterSecret` | extended_master_secret, empty data |
-| `supportedVersions(versions TlsVersionCodeArray)` | supported_versions in a ClientHello, 1 to 127 versions |
-| `selectedVersion(version TlsVersionCode)` | supported_versions in a ServerHello or HelloRetryRequest |
-| `cookie(cookie ByteArray)` | cookie, 1 to 65535 bytes |
-| `clientKeyShares(shares TlsKeyShareArray)` | key_share in a ClientHello: possibly no shares, distinct groups |
-| `serverKeyShare(share TlsKeyShare)` | key_share in a ServerHello |
-| `selectedGroup(group TlsGroupCode)` | key_share in a HelloRetryRequest |
-| `renegotiationInfo(renegotiatedConnection ByteArray)` | renegotiation_info, 0 to 255 bytes |
-
-`extensionType()` is the extension's type code. The other extensions, including certificate_authorities, are
-`opaque`; in a TLS 1.2 ServerHello only server_name, ec_point_formats, ALPN, extended_master_secret and
-renegotiation_info are decoded. A TLS 1.3 message refuses an extension outside the placement of RFC 8446
-section 4.2, whether the codec decodes it or not.
-
-`decode` reads every vector against the range its table allows and reports the first failure in wire order, except
-the three checks that need the whole body. `TlsCodecError` has four cases, each naming the alert to send with
-`alert()`, a [`TlsAlert`](#tlshandshakecodec):
-
-| `TlsCodecError` case | Alert | When |
-|----------------------|-------|------|
-| `decodeError` | `decodeError` | Truncated or trailing bytes, a length outside its range, or an invalid value inside an extension. |
-| `illegalParameter` | `illegalParameter` | A duplicate extension, an extension outside its placement, a duplicate key_share group, a ServerKeyExchange curve type other than named_curve, a KeyUpdate value above 1, or a ServerHello or HelloRetryRequest selecting a version other than TLS 1.3. |
-| `unexpectedMessage` | `unexpectedMessage` | A message type the protocol does not define, including end_of_early_data and message_hash. |
-| `missingExtension` | `missingExtension` | A TLS 1.3 CertificateRequest without signature_algorithms. |
-
-A ServerHello whose random is the HelloRetryRequest value is decoded with the HelloRetryRequest placements; any
-other ServerHello with a supported_versions extension with the TLS 1.3 ServerHello placements; one without it is
-a TLS 1.2 ServerHello. `encode` performs no validation beyond the length prefixes: it throws
-`TlsEncodeError.vectorTooLong` for a field that does not fit its uint8, uint16 or uint24 prefix, and encodes a message
-that would not decode (an empty cipher suite list, a 40-byte session id) as given.
-
-`TlsAlert` is every alert description of RFC 8446 section 6, with its code point as the raw value: `closeNotify` (0),
-`unexpectedMessage` (10), `badRecordMac` (20), `recordOverflow` (22), `handshakeFailure` (40), `badCertificate` (42),
-`unsupportedCertificate` (43), `certificateRevoked` (44), `certificateExpired` (45), `certificateUnknown` (46),
-`illegalParameter` (47), `unknownCa` (48), `accessDenied` (49), `decodeError` (50), `decryptError` (51),
-`protocolVersion` (70), `insufficientSecurity` (71), `internalError` (80), `inappropriateFallback` (86),
-`userCanceled` (90), `noRenegotiation` (100), `missingExtension` (109), `unsupportedExtension` (110),
-`unrecognizedName` (112), `badCertificateStatusResponse` (113), `unknownPskIdentity` (115),
-`certificateRequired` (116) and `noApplicationProtocol` (120).
-
-The code point aliases are `TlsVersionCode`, `TlsCipherSuiteCode`, `TlsGroupCode`, `TlsSignatureSchemeCode` and
-`TlsExtensionType`, each `int(0 to u16.max)`; `TlsCompressionMethod` is `int(0 to u8.max)` and `TlsTicketLifetime` and
-`TlsTicketAgeAdd` are `int(0 to u32.max)`. Their arrays are `TlsVersionCodeArray`, `TlsCipherSuiteCodeArray`,
-`TlsGroupCodeArray`, `TlsSignatureSchemeCodeArray`, `TlsProtocolNameArray`, `TlsKeyShareArray`, `TlsExtensionArray`,
-`TlsCertificateEntryArray` and `TlsAuthorityNameArray`. A code point is carried as sent:
-the codec does not interpret `legacyVersion`, the cipher suites, the groups or the compression methods.
-
-```maxon
-function main() returns ExitCode
-	var random = ByteArray.create()
-	random.resize(32)
-
-	let hello = TlsClientHello.create(771, random: random, legacySessionId: ByteArray.create(), cipherSuites: TlsCipherSuiteCodeArray from [4865], compressionMethods: ByteArray from [0], extensions: TlsExtensionBlock.listed(TlsExtensionArray from [TlsExtension.serverName("example.com")]))
-	let encoded = try TlsHandshakeCodec.encode(TlsHandshakeMessage.clientHello(hello)) otherwise return 1
-	print("{encoded.count()}\n")
-
-	let update = try TlsHandshakeCodec.encode(TlsHandshakeMessage.keyUpdate(TlsKeyUpdateRequest.updateRequested)) otherwise return 1
-	let message = try TlsHandshakeCodec.decode(update, protocol: TlsProtocol.tls13) otherwise return 1
-
-	match message 'kind'
-		keyUpdate(request) then print("{request.rawValue}\n")
-		default panic("a KeyUpdate decodes to keyUpdate")
-	end 'kind'
-
-	let bad = ByteArray from [0x18, 0, 0, 1, 2]
-
-	try TlsHandshakeCodec.decode(bad, protocol: TlsProtocol.tls13) otherwise (failure) 'refused'
-		print("{failure} {failure.alert().rawValue}\n")
-	end 'refused'
-
-	return 0
-end 'main'
-```
-
-Output: `67`, `1` and `illegalParameter 47`, one per line.
 
 ## Hasher
 

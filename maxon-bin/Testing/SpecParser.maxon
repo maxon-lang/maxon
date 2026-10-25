@@ -338,8 +338,9 @@ let RunsAloneValue = "alone"
 let ProcessMarker = "<!-- process:"
 let ProcessOwnValue = "own"
 
-let TierMarker = "<!-- tier:"
+export let TierMarker = "<!-- tier:"
 let TierStdlibValue = "stdlib"
+export let TierSubdirectoryPrefix = "stdlib/"
 
 // What separates two arguments in an `<!-- Args: … -->` payload, and what quotes one that must survive
 // the split intact. See `parseProgramArgs` for why the quote is not decoration.
@@ -843,10 +844,10 @@ export enum SpecProcess
 	own
 end 'SpecProcess'
 
-export enum SpecTier
+export union SpecTier
 	user
-
 	stdlib
+	stdlibSubdirectory(directory String)
 end 'SpecTier'
 
 export union SpecTargetIr
@@ -978,6 +979,7 @@ export type SpecTest
 		return match self.tier 'tier'
 			user gives false
 			stdlib gives true
+			stdlibSubdirectory gives true
 		end 'tier'
 	end 'compilesAsLibrary'
 
@@ -1557,7 +1559,7 @@ type CaseBuilder
 		end 'program'
 
 		let traceCapture = self.settledCapture(lines, caseEnd: caseEnd)
-		return SpecTest.create(name, source: source, expectation: self.expectationFor(traceCapture, runtimeNames: runtimeNames), unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin, runs: runs, process: process, tier: tier, targetIr: self.settledTargetIr(lines, caseEnd: caseEnd), pinsTargetIr: pinsAnyLane)
+		return SpecTest.create(name, source: source, expectation: self.expectationFor(traceCapture, runtimeNames: runtimeNames), unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin, runs: runs, process: process, tier: tier.clone(), targetIr: self.settledTargetIr(lines, caseEnd: caseEnd), pinsTargetIr: pinsAnyLane)
 	end 'build'
 
 	function settledCapture(lines StringArray, caseEnd ElementIndex) returns SpecTraceCapture
@@ -2393,8 +2395,17 @@ function parseProcessValue(opening String, lineIndex ElementIndex, specPath File
 end 'parseProcessValue'
 
 function parseTierValue(opening String, lineIndex ElementIndex, specPath FilePath, testName String) returns SpecTier
-	requireSoleMarkerValue(opening, marker: TierMarker, accepted: TierStdlibValue, lineIndex: lineIndex, specPath: specPath, testName: testName, consequence: "It compiles the case as library-tier source, for a case whose subject is a library-tier surface; absence already says the case is the author's code, and an unrecognized value would quietly compile a library-tier case as the author's and report the refusal that tier exists to lift")
-	return SpecTier.stdlib
+	let value = markerValueOf(opening)
+
+	if value == TierStdlibValue 'stdlibRoot'
+		return SpecTier.stdlib
+	end 'stdlibRoot'
+
+	if value.startsWith(TierSubdirectoryPrefix) 'stdlibSubdirectory'
+		return SpecTier.stdlibSubdirectory(value.replaceFirst(TierSubdirectoryPrefix, with: ""))
+	end 'stdlibSubdirectory'
+
+	panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{testName}' carries `{TierMarker} {value} -->`, and '{TierStdlibValue}' and '{TierSubdirectoryPrefix}<directory>' are the only values this marker takes. It compiles the case as library-tier source, for a case whose subject is a library-tier surface; absence already says the case is the author's code, and an unrecognized value would quietly compile a library-tier case as the author's and report the refusal that tier exists to lift")
 end 'parseTierValue'
 
 // What a `<!-- stdin: … -->` marker asks the child's fd 0 to be.

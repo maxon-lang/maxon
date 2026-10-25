@@ -18,3 +18,5 @@ module composes, shared byte helpers, test seams.
   `STDLIB_REFERENCE.md` section and `tests/docs` does not scan `helpers/`.
 - A new feature adds a root file only for an entry point a user calls; its building blocks go in helpers.
 - Promoting a helper to the root is an API decision — ask first.
+- A spec case that reaches a helper's `module` declarations carries `<!-- tier: stdlib/helpers/<area> -->`: it is staged in that
+  directory, because a case at the `stdlib/` root cannot see them.

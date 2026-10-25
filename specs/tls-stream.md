@@ -6696,7 +6696,7 @@ server: recv: protocolError(certificateRequired)
 
 
 <!-- test: tls-stream.the-system-roots-are-read-once-for-every-connection -->
-<!-- tier: stdlib -->
+<!-- tier: stdlib/helpers/tls -->
 Two connections made with default options, which trust the system roots, read the roots from the operating system once between them: the second connection verifies against the roots the first one loaded. The case replaces the program-wide roots source with one that answers the case's root and counts its reads.
 ```maxon
 function digit(symbol Byte) returns Byte
@@ -6853,7 +6853,7 @@ reads: 1
 ```
 
 <!-- test: tls-stream.connections-that-start-together-read-the-system-roots-once -->
-<!-- tier: stdlib -->
+<!-- tier: stdlib/helpers/tls -->
 Four connections made at once with default options, while the roots source is still answering its first read, wait for that one read instead of each making their own: all four verify against it, and the source is read once.
 ```maxon
 function digit(symbol Byte) returns Byte
@@ -7015,7 +7015,7 @@ reads: 1
 ```
 
 <!-- test: tls-stream.a-failed-read-of-the-system-roots-is-kept -->
-<!-- tier: stdlib -->
+<!-- tier: stdlib/helpers/tls -->
 A roots source that cannot be read fails the connection that asked with `trustStoreUnavailable`, and the failure is kept: the next connection fails the same way without the source being read again.
 ```maxon
 function digit(symbol Byte) returns Byte

@@ -224,6 +224,17 @@ function main() returns ExitCode
 end 'main'
 ```
 
+### TlsIdentity
+
+A `TlsIdentity` is a certificate chain and the private key of its first certificate: what a server presents and
+what a client presents to a server that asks. The certificates are DER, the leaf first. The key is accepted as
+PKCS #8 (P-256, P-384, Ed25519 or RSA), SEC1 `ECPrivateKey` (P-256 or P-384) or PKCS #1 `RSAPrivateKey`.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `TlsIdentity.fromDer(chain ByteArrays, key ByteArray)` | `TlsIdentity` | `TlsError` | `invalidCertificate` for an empty chain or a first certificate that is not X.509; `invalidPrivateKey` for a key that cannot be read (an element left after it, an EC scalar that is zero or not below the curve order, an RSA modulus outside 2048 to 4096 bits, a SEC1 curve that differs from the PKCS #8 one) or whose public key is not the first certificate's. |
+| `TlsIdentity.fromPem(certificates String, key String)` | `TlsIdentity` | `TlsError` | The `CERTIFICATE` blocks of `certificates`, in order, and the first `PRIVATE KEY`, `EC PRIVATE KEY` or `RSA PRIVATE KEY` block of `key`, which may be the same text. `invalidPem` for text that is not PEM or a `key` with no key block. |
+
 ## TlsStream
 
 `TlsStream` is a TLS connection, the one `TlsClient.connect` and `TlsListener.accept()` return. `connect` returns an
@@ -246,8 +257,12 @@ bytes are the application data, and a write is split into records of at most 16 
 | `shutdownWrite()` | — | `TlsError` | Send close_notify and stop sending: the peer reads the end of the stream while this side can still `recv`. The close_notify is written under a write deadline of 5 seconds, which replaces the one set; a peer that has stopped reading ends it with `timedOut`. |
 | `close()` | — | — | Send close_notify, under a write deadline of 5 seconds, and close the connection; a stream whose write side has failed sends none. Idempotent. |
 
-`TlsApplicationProtocol` is a union: `unnegotiated`, or `negotiated(name String)`. `TlsCipherSuite` is a union of
-the two suite enums. A stream that goes out of scope closes its socket as a `TcpClient` does, without a close_notify, which
+`TlsApplicationProtocol` is a union: `unnegotiated`, or `negotiated(name String)`. `TlsProtocol` is `tls13` or `tls12`.
+`TlsCipherSuite` is a union of the two suite enums: `Tls13CipherSuite` is `aes128GcmSha256` (0x1301),
+`aes256GcmSha384` (0x1302) or `chaCha20Poly1305Sha256` (0x1303), and `Tls12CipherSuite` is
+`ecdheEcdsaAes128GcmSha256` (0xC02B), `ecdheRsaAes128GcmSha256` (0xC02F), `ecdheEcdsaAes256GcmSha384` (0xC02C),
+`ecdheRsaAes256GcmSha384` (0xC030), `ecdheEcdsaChaCha20Poly1305Sha256` (0xCCA9) or
+`ecdheRsaChaCha20Poly1305Sha256` (0xCCA8), each with its code point as the raw value. A stream that goes out of scope closes its socket as a `TcpClient` does, without a close_notify, which
 the peer reads as `truncated`; `close()` is how a peer is told the data is complete. A fatal alert, from the peer
 or found by this side, ends the stream: the error is thrown once and every later call, the deadline setters included, throws `closed`.
 
@@ -267,17 +282,6 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-
-## TlsIdentity
-
-A `TlsIdentity` is a certificate chain and the private key of its first certificate: what a server presents and
-what a client presents to a server that asks. The certificates are DER, the leaf first. The key is accepted as
-PKCS #8 (P-256, P-384, Ed25519 or RSA), SEC1 `ECPrivateKey` (P-256 or P-384) or PKCS #1 `RSAPrivateKey`.
-
-| Member | Returns | Throws | Description |
-|--------|---------|--------|-------------|
-| `TlsIdentity.fromDer(chain ByteArrays, key ByteArray)` | `TlsIdentity` | `TlsError` | `invalidCertificate` for an empty chain or a first certificate that is not X.509; `invalidPrivateKey` for a key that cannot be read (an element left after it, an EC scalar that is zero or not below the curve order, an RSA modulus outside 2048 to 4096 bits, a SEC1 curve that differs from the PKCS #8 one) or whose public key is not the first certificate's. |
-| `TlsIdentity.fromPem(certificates String, key String)` | `TlsIdentity` | `TlsError` | The `CERTIFICATE` blocks of `certificates`, in order, and the first `PRIVATE KEY`, `EC PRIVATE KEY` or `RSA PRIVATE KEY` block of `key`, which may be the same text. `invalidPem` for text that is not PEM or a `key` with no key block. |
 
 ## TlsError
 
@@ -328,6 +332,15 @@ end 'TlsError'
 | `protocolError(alert)` | This side ended the connection and sent `alert`: a malformed or unexpected message, no common version (`protocolVersion`), no common ALPN protocol (`noApplicationProtocol`), a missing client certificate (`certificateRequired`, `handshakeFailure`), a record longer than a record can be (`recordOverflow`). |
 | `peerAlert(alert)` | The peer sent a fatal alert, or close_notify before the handshake finished. In TLS 1.3 a server decides about a client certificate after the client's handshake is complete, so the client reads that alert from its first `recv`. |
 | `peerAlertUnrecognised(code)` | The peer sent an alert whose code `TlsAlert` does not name. |
+
+`TlsAlert` is every alert description of RFC 8446 section 6, with its code point as the raw value: `closeNotify` (0),
+`unexpectedMessage` (10), `badRecordMac` (20), `recordOverflow` (22), `handshakeFailure` (40), `badCertificate` (42),
+`unsupportedCertificate` (43), `certificateRevoked` (44), `certificateExpired` (45), `certificateUnknown` (46),
+`illegalParameter` (47), `unknownCa` (48), `accessDenied` (49), `decodeError` (50), `decryptError` (51),
+`protocolVersion` (70), `insufficientSecurity` (71), `internalError` (80), `inappropriateFallback` (86),
+`userCanceled` (90), `noRenegotiation` (100), `missingExtension` (109), `unsupportedExtension` (110),
+`unrecognizedName` (112), `badCertificateStatusResponse` (113), `unknownPskIdentity` (115),
+`certificateRequired` (116) and `noApplicationProtocol` (120).
 
 A record header is checked as it is read: content type, version and length are bounded before any body is waited for,
 so input that is not TLS, or a header that declares more than a record holds, ends with `protocolError` at once.

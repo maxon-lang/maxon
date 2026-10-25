@@ -29,7 +29,7 @@ end 'TlsKeySecret'
 
 let tlsMaxProtocolNameBytes = 255
 
-module function tlsCheckedProtocols(protocols TlsProtocolArray) returns TlsProtocolArray throws TlsError
+public function tlsCheckedProtocols(protocols TlsProtocolArray) returns TlsProtocolArray throws TlsError
 	if protocols.isEmpty() 'none'
 		throw TlsError.invalidConfiguration
 	end 'none'
@@ -37,7 +37,7 @@ module function tlsCheckedProtocols(protocols TlsProtocolArray) returns TlsProto
 	return protocols.clone()
 end 'tlsCheckedProtocols'
 
-module function tlsCheckedProtocolNames(names StringArray) returns TlsProtocolNameArray throws TlsError
+public function tlsCheckedProtocolNames(names StringArray) returns TlsProtocolNameArray throws TlsError
 	var checked = TlsProtocolNameArray.create()
 
 	for name in names 'eachName'
@@ -51,7 +51,7 @@ module function tlsCheckedProtocolNames(names StringArray) returns TlsProtocolNa
 	return checked
 end 'tlsCheckedProtocolNames'
 
-module function tlsEnabledSuites(codes TlsCipherSuiteCodeArray, protocols TlsProtocolArray) returns TlsCipherSuiteCodeArray
+public function tlsEnabledSuites(codes TlsCipherSuiteCodeArray, protocols TlsProtocolArray) returns TlsCipherSuiteCodeArray
 	var enabled = TlsCipherSuiteCodeArray.create()
 
 	for code in codes 'eachCode'
@@ -76,31 +76,31 @@ function tlsKnowsSuite(code TlsCipherSuiteCode, protocol TlsProtocol) returns bo
 	end 'selected'
 end 'tlsKnowsSuite'
 
-module union TlsClientIdentity
+public union TlsClientIdentity
 	anonymous
 	certified(chain ByteArrays, key TlsPrivateKey)
 end 'TlsClientIdentity'
 
-module type TlsClientConfig
-	module var peerName as X509VerifyHost
-	module var protocols as TlsProtocolArray
-	module var cipherSuites as TlsCipherSuiteCodeArray
+public type TlsClientConfig
+	public var peerName as X509VerifyHost
+	public var protocols as TlsProtocolArray
+	public var cipherSuites as TlsCipherSuiteCodeArray
 	module var groups as TlsGroupCodeArray
 	module var keyShareGroups as TlsGroupCodeArray
 	module var signatureAlgorithms as TlsSignatureSchemeCodeArray
-	module var applicationProtocols as TlsProtocolNameArray
-	module var identity as TlsClientIdentity
+	public var applicationProtocols as TlsProtocolNameArray
+	public var identity as TlsClientIdentity
 
 	module static function create(peerName X509VerifyHost, protocols TlsProtocolArray, cipherSuites TlsCipherSuiteCodeArray, groups TlsGroupCodeArray, keyShareGroups TlsGroupCodeArray, signatureAlgorithms TlsSignatureSchemeCodeArray, applicationProtocols TlsProtocolNameArray, identity TlsClientIdentity) returns TlsClientConfig
 		return Self{peerName: peerName, protocols: protocols, cipherSuites: cipherSuites, groups: groups, keyShareGroups: keyShareGroups, signatureAlgorithms: signatureAlgorithms, applicationProtocols: applicationProtocols, identity: identity}
 	end 'create'
 
-	module static function defaults(peerName X509VerifyHost) returns TlsClientConfig
+	public static function defaults(peerName X509VerifyHost) returns TlsClientConfig
 		return Self{peerName: peerName, protocols: TlsProtocolArray from [TlsProtocol.tls13, TlsProtocol.tls12], cipherSuites: tlsDefaultCipherSuites.clone(), groups: tlsDefaultGroups.clone(), keyShareGroups: tlsDefaultKeyShareGroups.clone(), signatureAlgorithms: tlsClientDefaultSignatureAlgorithms.clone(), applicationProtocols: TlsProtocolNameArray.create(), identity: TlsClientIdentity.anonymous}
 	end 'defaults'
 end 'TlsClientConfig'
 
-module type TlsClientEntropy
+public type TlsClientEntropy
 	module var random as ByteArray
 	module var sessionId as ByteArray
 	module var keySecrets as TlsKeySecretArray
@@ -110,7 +110,7 @@ module type TlsClientEntropy
 		return Self{random: random, sessionId: sessionId, keySecrets: keySecrets, pssSalt: pssSalt}
 	end 'create'
 
-	module static function fresh(config TlsClientConfig) returns TlsClientEntropy throws TlsHandshakeError
+	public static function fresh(config TlsClientConfig) returns TlsClientEntropy throws TlsHandshakeError
 		return Self{random: try tlsDrawBytes(tlsRandomLength), sessionId: try tlsDrawBytes(tlsSessionIdLength), keySecrets: try tlsFreshSecrets(config.groups), pssSalt: try tlsDrawBytes(tlsPssSaltLength)}
 	end 'fresh'
 
@@ -153,13 +153,13 @@ function drawSecret(group TlsNamedGroup) returns TlsKeySecret throws TlsHandshak
 	end 'attempts'
 end 'drawSecret'
 
-module interface TlsClientHelloSource
+public interface TlsClientHelloSource
 	function first(built ByteArray) returns ByteArray
 	function second(built ByteArray) returns ByteArray
 end 'TlsClientHelloSource'
 
-module type TlsBuiltClientHello implements TlsClientHelloSource
-	module static function create() returns TlsBuiltClientHello
+public type TlsBuiltClientHello implements TlsClientHelloSource
+	public static function create() returns TlsBuiltClientHello
 		return Self{}
 	end 'create'
 

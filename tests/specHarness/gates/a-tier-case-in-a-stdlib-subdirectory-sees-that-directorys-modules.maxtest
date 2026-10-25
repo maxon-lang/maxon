@@ -1,0 +1,21 @@
+let TierSubdirectorySpecName = "tier-subdirectory"
+let TierSubdirectoryMissingCase = "tier-subdirectory.missing-directory"
+let TierSubdirectoryRefusal = "which is not a directory of stdlib/"
+
+test 'a library-tier case staged in a stdlib subdirectory sees that directory module declarations and a missing directory is refused'
+	let run = runGateFixtureOnce(StringArray.create())
+	let said = everythingSaid(run)
+	var broken = StringArray.create()
+
+	collectNotPassed(said, specName: TierSubdirectorySpecName, testNames: ["tier-subdirectory.sees-the-directorys-module", "tier-subdirectory.control"], broken: broken)
+
+	if not said.contains(failVerdictPrefix(testLabel(TierSubdirectorySpecName, testName: TierSubdirectoryMissingCase))) 'notFailed'
+		broken.push("'{TierSubdirectoryMissingCase}' did not FAIL, so a directory the library does not have was staged. The run said:\n{said}\n")
+	end 'notFailed'
+
+	if not said.contains(TierSubdirectoryRefusal) 'notRefusedByName'
+		broken.push("'{TierSubdirectoryMissingCase}' failed, but not with the refusal that says '{TierSubdirectoryRefusal}'. The run said:\n{said}\n")
+	end 'notRefusedByName'
+
+	requireNothingBroken(broken, headline: "a case staged in a stdlib subdirectory sees that directory's module declarations")
+end 'a library-tier case staged in a stdlib subdirectory sees that directory module declarations and a missing directory is refused'

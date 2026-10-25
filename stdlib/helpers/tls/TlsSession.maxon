@@ -6,7 +6,7 @@ module union TlsNegotiation
 	keyed12(suite Tls12CipherSuite, group TlsGroupCode)
 end 'TlsNegotiation'
 
-module union TlsAlpnChoice
+public union TlsAlpnChoice
 	absent
 	negotiated(protocol ByteArray)
 
@@ -30,7 +30,7 @@ union TlsConnectionHealth
 	broken(error TlsHandshakeError)
 end 'TlsConnectionHealth'
 
-module interface TlsEndpoint
+public interface TlsEndpoint
 	function receive(record ByteArray) throws TlsHandshakeError
 	function session() returns TlsSession
 end 'TlsEndpoint'
@@ -39,15 +39,15 @@ module interface TlsMessageHandler
 	function dispatch(message keep ByteArray) throws TlsHandshakeError
 end 'TlsMessageHandler'
 
-module type TlsSession
-	module var input as TlsRecordInput
+public type TlsSession
+	public var input as TlsRecordInput
 	module var writer as TlsRecordWriter
 	module var transcript as TlsTranscript
 	module var negotiation as TlsNegotiation
-	module var alpn as TlsAlpnChoice
+	public var alpn as TlsAlpnChoice
 	module var keys as TlsTrafficSecrets
 	module var peerVerified as bool
-	module var peerChain as ByteArrays
+	public var peerChain as ByteArrays
 	module var compatibility as bool
 	var role as TlsRole
 	var health as TlsConnectionHealth
@@ -105,7 +105,7 @@ module type TlsSession
 		return false
 	end 'accept'
 
-	module function abort(error TlsHandshakeError)
+	public function abort(error TlsHandshakeError)
 		health = TlsConnectionHealth.broken(error)
 
 		let alert = try error.sentAlert() otherwise return
@@ -113,12 +113,12 @@ module type TlsSession
 		try writer.writeAlert(TlsAlertLevel.fatal, alert: alert) otherwise ignore
 	end 'abort'
 
-	module function write(data ByteArray) throws TlsHandshakeError
+	public function write(data ByteArray) throws TlsHandshakeError
 		try requireConnected()
 		try writer.writeApplicationData(data)
 	end 'write'
 
-	module function close() throws TlsHandshakeError
+	public function close() throws TlsHandshakeError
 		try requireConnected()
 		try writer.writeAlert(TlsAlertLevel.warning, alert: TlsAlert.closeNotify)
 	end 'close'
@@ -130,22 +130,22 @@ module type TlsSession
 		flight.append(encoded)
 	end 'emit'
 
-	module function takeRecords() returns ByteArrays
+	public function takeRecords() returns ByteArrays
 		return writer.takeRecords()
 	end 'takeRecords'
 
-	module function takeReceived() returns ByteArray
+	public function takeReceived() returns ByteArray
 		let taken = received.clone()
 		received.clear()
 
 		return taken
 	end 'takeReceived'
 
-	module function isConnected() returns bool
+	public function isConnected() returns bool
 		return input.established
 	end 'isConnected'
 
-	module function hasPeerClosed() returns bool
+	public function hasPeerClosed() returns bool
 		return closedByPeer
 	end 'hasPeerClosed'
 
@@ -165,7 +165,7 @@ module type TlsSession
 		end 'negotiation'
 	end 'negotiatedSuite'
 
-	module function negotiatedCipherSuite() returns TlsCipherSuite throws TlsHandshakeError
+	public function negotiatedCipherSuite() returns TlsCipherSuite throws TlsHandshakeError
 		match negotiation 'negotiation'
 			accepted(suite) then return TlsCipherSuite.tls13(suite)
 			keyed(suite, _) then return TlsCipherSuite.tls13(suite)

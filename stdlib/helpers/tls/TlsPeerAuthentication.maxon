@@ -1,14 +1,14 @@
-module interface TlsPeerAuthenticator
+public interface TlsPeerAuthenticator
 	function verifyChain(leaf keep ByteArray, intermediates keep ByteArrays, host X509VerifyHost) throws TlsHandshakeError
 	function verifySignature(scheme TlsSignatureScheme, key keep X509PublicKey, message ByteArray, signature ByteArray) throws TlsHandshakeError
 	function authenticates() returns bool
 end 'TlsPeerAuthenticator'
 
-module union TlsVerificationTime
+public union TlsVerificationTime
 	current
 	fixed(at UnixSeconds)
 
-	module function seconds() returns UnixSeconds
+	public function seconds() returns UnixSeconds
 		return match self 'time'
 			current gives WallClock.nowUnixSeconds()
 			fixed(at) gives at
@@ -16,18 +16,18 @@ module union TlsVerificationTime
 	end 'seconds'
 end 'TlsVerificationTime'
 
-module union TlsPeerRefusal
+public union TlsPeerRefusal
 	none
 	refused(reason X509VerifyError)
 end 'TlsPeerRefusal'
 
-module type TlsX509Peer implements TlsPeerAuthenticator
+public type TlsX509Peer implements TlsPeerAuthenticator
 	module let anchors as X509RootPool
 	module var now as UnixSeconds
 	module var purpose as X509Purpose
-	module var refusal as TlsPeerRefusal
+	public var refusal as TlsPeerRefusal
 
-	module static function create(roots ByteArrays, now UnixSeconds, purpose X509Purpose) returns TlsX509Peer
+	public static function create(roots ByteArrays, now UnixSeconds, purpose X509Purpose) returns TlsX509Peer
 		return Self{anchors: X509RootPool.create(roots), now: now, purpose: purpose, refusal: TlsPeerRefusal.none}
 	end 'create'
 
@@ -52,7 +52,7 @@ module type TlsX509Peer implements TlsPeerAuthenticator
 	end 'authenticates'
 end 'TlsX509Peer'
 
-module function tlsCertificates(installed RootCertificates) returns ByteArrays
+public function tlsCertificates(installed RootCertificates) returns ByteArrays
 	var certificates = ByteArrays.create()
 
 	for certificate in installed 'eachCertificate'

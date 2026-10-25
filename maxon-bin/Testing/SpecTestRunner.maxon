@@ -3021,7 +3021,9 @@ function stageSourceFiles(tempDir FilePath, test SpecTest, specDirName String) r
 		return StagingResult.failed(tierStagingErrorText(e))
 	end 'tierStagingFailed'
 
-	let testDir = sourceDirectoryFor(tempDir, test: test, tiers: tiers)
+	let testDir = try sourceDirectoryFor(tempDir, test: test, tiers: tiers) otherwise (e) 'sourceDirectoryRefused'
+		return StagingResult.failed(tierStagingErrorText(e))
+	end 'sourceDirectoryRefused'
 
 	if not Directory.create(testDir) 'noTestDir'
 		return StagingResult.failed("could not create source directory {testDir.toString()}")
@@ -3096,13 +3098,30 @@ function sourceTiersFor(tempDir FilePath, test SpecTest, checkoutStdlib FilePath
 	return StagedTierDirs.create(checkoutStdlib, runtime: checkoutRuntime)
 end 'sourceTiersFor'
 
-function sourceDirectoryFor(tempDir FilePath, test SpecTest, tiers StagedTierDirs) returns FilePath
-	if not test.compilesAsLibrary() 'aPrivateSourceDirectory'
-		return tempDir.join("{test.name}{MultiFileSourceDirSuffix}")
-	end 'aPrivateSourceDirectory'
-
-	return tiers.stdlib.join("{SpecTierDirName}")
+function sourceDirectoryFor(tempDir FilePath, test SpecTest, tiers StagedTierDirs) returns FilePath throws TierStagingError
+	match test.tier 'tier'
+		user then return tempDir.join("{test.name}{MultiFileSourceDirSuffix}")
+		stdlib then return tiers.stdlib.join(SpecTierDirName)
+		stdlibSubdirectory(directory) then return try stdlibSubdirectoryTierDir(directory, stagedStdlib: tiers.stdlib)
+	end 'tier'
 end 'sourceDirectoryFor'
+
+// A `module` declaration is visible only in its declaring directory's subtree, so a case reaches the ones
+// under `stdlib/helpers/<area>/` only from a directory inside it. The directory must already exist: a case
+// staged into a new one would see no `module` declaration and report that as its own result.
+function stdlibSubdirectoryTierDir(directory String, stagedStdlib FilePath) returns FilePath throws TierStagingError
+	if not isSafeRelativeName(directory) 'unsafeDirectory'
+		throw TierStagingError.refused("'{TierMarker} {TierSubdirectoryPrefix}{directory} -->' names '{directory}': it must be a relative path of directories under {StdlibDirName}/, with no '.' or '..' segment")
+	end 'unsafeDirectory'
+
+	let subdirectory = stagedStdlib.join(directory)
+
+	if not Directory.isDirectory(subdirectory) 'namesNoDirectory'
+		throw TierStagingError.refused("'{TierMarker} {TierSubdirectoryPrefix}{directory} -->' names '{directory}', which is not a directory of {StdlibDirName}/ — a case staged in a directory nothing else is in would see no `module` declaration of the library, and report that as its own result")
+	end 'namesNoDirectory'
+
+	return subdirectory.join(SpecTierDirName)
+end 'stdlibSubdirectoryTierDir'
 
 function stageFragment(fragmentPath FilePath, test SpecTest, paths FragmentPathMappingArray, written FilePathArray) returns bool
 	if not writeFragment(fragmentPath, test: test) 'writeFailed'

@@ -420,7 +420,9 @@ no doc comment, which is how it finds them.
   in how many programs.
 - **`<!-- tier: stdlib -->` compiles a case as library-tier source** (staged under a private copy of
   `stdlib/`), so it may name `__Builtins`, `.managed`, `__ManagedMemory` and `cstring` (E3185 elsewhere) and
-  sees `stdlib/`'s `module` declarations (E3088 elsewhere). It is for a case whose SUBJECT is that surface; a
+  sees `stdlib/`'s `module` declarations (E3088 elsewhere). `<!-- tier: stdlib/helpers/tls -->` stages the case
+  in that directory instead, because a `module` declaration is visible only in its declaring directory's
+  subtree and a case at the `stdlib/` root cannot see one under `helpers/`. It is for a case whose SUBJECT is that surface; a
   case that merely uses one moves to the safe stdlib API.
   The compiler's own sources under `maxon-bin/` are user tier too.
 - A spec fence the harness does not read (` ```RequiredIR ` among them) is refused, naming the case.
