@@ -18992,7 +18992,8 @@ export type ProgramSignatures
 	var functionValuedFieldNames = BareNameSet.create()
 	var witnessByRefMasks = WitnessByRefMaskMap.create()
 	var byRefConventionDigestAnswer = 0 as HashDigest
-	var liveDefaultKeyNames = DefaultKeyNameSet.create()
+	var liveDefaultKeyNames = LiveNameSet.create()
+	var liveSpawnedTypeNames = LiveNameSet.create()
 	var liveKeyAdoptions = 0 as LiveKeysRevision
 
 	// Does any declaration OTHER than the corpus's carry the marker? The gate `isArrayBaseName` puts in front
@@ -19750,7 +19751,7 @@ export type ProgramSignatures
 
 	function anyServiceSpawnIsLive() returns bool
 		for candidate in self.settledDeclarations().serviceSpawnCandidateList 'eachCandidate'
-			if self.spawnGateIsOpen(candidate.gate) 'aLiveSpawn'
+			if self.spawnIsLive(candidate) 'aLiveSpawn'
 				return true
 			end 'aLiveSpawn'
 		end 'eachCandidate'
@@ -19758,12 +19759,23 @@ export type ProgramSignatures
 		return false
 	end 'anyServiceSpawnIsLive'
 
-	export function spawnGateIsOpen(gate SpawnGate) returns bool
-		return match gate 'gate'
+	export function spawnIsLive(candidate ServiceSpawnCandidate) returns bool
+		return match candidate.gate 'gate'
 			always gives true
 			defaultOf(declaration) gives self.defaultKeyIsLive(declaration.key) and self.defaultDeclarationWins(declaration)
+			libraryBody gives self.liveSpawnedTypeNames.contains(spawnedTypeNameOf(self, candidate: candidate))
 		end 'gate'
-	end 'spawnGateIsOpen'
+	end 'spawnIsLive'
+
+	export function declaresALibraryBodySpawn() returns bool
+		for candidate in self.settledDeclarations().serviceSpawnCandidateList 'eachCandidate'
+			if candidate.gate.isLibraryBody() 'aLibrarySpawn'
+				return true
+			end 'aLibrarySpawn'
+		end 'eachCandidate'
+
+		return false
+	end 'declaresALibraryBodySpawn'
 
 	export function noteDefaultDeclaration(declaration DefaultDeclaration)
 		self.mainThreadSettled().defaultDeclarationList.push(declaration)
@@ -19848,21 +19860,16 @@ export type ProgramSignatures
 		return first
 	end 'keptDefaultBeside'
 
-	export function adoptLiveDefaultKeys(filed LiveDefaultKeys)
-		if filed.sameKeysAs(self.liveDefaultKeyNames) 'alreadyAdopted'
+	export function adoptLiveReach(filed LiveReach)
+		if filed.sameReachAs(self.liveDefaultKeyNames, spawns: self.liveSpawnedTypeNames) 'alreadyAdopted'
 			return
 		end 'alreadyAdopted'
 
-		var names = DefaultKeyNameSet.create()
-
-		for name in filed.names 'eachFiled'
-			names.insert(name)
-		end 'eachFiled'
-
-		self.liveDefaultKeyNames = names
+		self.liveDefaultKeyNames = copiedNames(filed.defaultKeys)
+		self.liveSpawnedTypeNames = copiedNames(filed.spawnedTypes)
 		self.liveKeyAdoptions = self.liveKeyAdoptions + 1
 		self.spawnsAnyServiceSettled = false
-	end 'adoptLiveDefaultKeys'
+	end 'adoptLiveReach'
 
 	module function fileServiceMessages(messages ServiceMessageIndex)
 		var ownDeclarations = self.mainThreadSettled()
@@ -19877,11 +19884,11 @@ export type ProgramSignatures
 		return self.settledDeclarations().serviceMessages.contains(callee)
 	end 'namesAServiceMessage'
 
-	export function liveDefaultKeys() returns LiveDefaultKeys
-		var keys = LiveDefaultKeys.create()
-		keys.replaceWith(self.liveDefaultKeyNames)
-		return keys
-	end 'liveDefaultKeys'
+	export function liveReach() returns LiveReach
+		var reach = LiveReach.create()
+		reach.replaceWith(self.liveDefaultKeyNames, spawns: self.liveSpawnedTypeNames)
+		return reach
+	end 'liveReach'
 
 	export function liveKeysRevision() returns LiveKeysRevision
 		return self.liveKeyAdoptions
@@ -26798,7 +26805,7 @@ export type ProgramSignatures
 	// walk liveness would have been derived from.
 	//
 	// The built `default`s' initializers are roots too — `__module_init` calls them. Which are built
-	// is the key liveness an earlier fold settled (`Queries.liveDefaultKeysMoved`), not the global
+	// is the key liveness an earlier fold settled (`Queries.liveReachDidMove`), not the global
 	// liveness this walk feeds, so they close no cycle either.
 	export function globalInitCallees() returns NameRoster
 		var callees = NameRoster.create()
@@ -47191,7 +47198,8 @@ export type ProgramSignatures
 		cacheWriteBareNameSet(writer, value: self.functionValuedFieldNames)
 		cacheWriteWitnessByRefMaskMap(writer, value: self.witnessByRefMasks)
 		writer.unsigned(self.byRefConventionDigestAnswer as CacheUnsigned)
-		cacheWriteDefaultKeyNameSet(writer, value: self.liveDefaultKeyNames)
+		cacheWriteLiveNameSet(writer, value: self.liveDefaultKeyNames)
+		cacheWriteLiveNameSet(writer, value: self.liveSpawnedTypeNames)
 		writer.unsigned(self.liveKeyAdoptions as CacheUnsigned)
 		writer.flag(self.hasNonCorpusArrayConformer)
 		writer.flag(self.recordsTypeClaims)
@@ -47264,18 +47272,19 @@ export type ProgramSignatures
 		let f_functionValuedFieldNames = try cacheReadBareNameSet(reader)
 		let f_witnessByRefMasks = try cacheReadWitnessByRefMaskMap(reader)
 		let f_byRefConventionDigestAnswer = (try reader.unsigned()) as HashDigest
-		let f_liveDefaultKeyNames = try cacheReadDefaultKeyNameSet(reader)
+		let f_liveDefaultKeyNames = try cacheReadLiveNameSet(reader)
+		let f_liveSpawnedTypeNames = try cacheReadLiveNameSet(reader)
 		let f_liveKeyAdoptions = (try reader.unsigned()) as LiveKeysRevision
 		let f_hasNonCorpusArrayConformer = try reader.flag()
 		let f_recordsTypeClaims = try reader.flag()
 		let f_holdsAMerge = try reader.flag()
 		let f_genericInstancesDigest = (try reader.unsigned()) as HashDigest
 
-		return Self{ownSettled: f_ownSettled, sharedSettled: SettledDeclarations.unused(), readsPublishedView: false, structSlots: f_structSlots, mintedTupleLayouts: StructLayoutArray.create(), published: SettledCellArray.create(), genericInstances: f_genericInstances, compiledInstanceNames: f_compiledInstanceNames, canonicalInstanceNames: f_canonicalInstanceNames, substitutedInstanceOrigins: f_substitutedInstanceOrigins, canonicalInstanceNameIndex: f_canonicalInstanceNameIndex, canonicalNamesIndexedThrough: f_canonicalNamesIndexedThrough, tupleCanonicalNames: f_tupleCanonicalNames, tupleElementTokens: f_tupleElementTokens, tupleElementTokenOwners: f_tupleElementTokenOwners, tupleAliases: f_tupleAliases, multiplyDeclaredTupleAliases: f_multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: f_sawAggregateArrayLiteral, sawListFromConstruction: f_sawListFromConstruction, sawEnumAllCasesAccess: f_sawEnumAllCasesAccess, sawIntArrayLiteral: f_sawIntArrayLiteral, sawByteStringLiteral: f_sawByteStringLiteral, sawStringArrayLiteral: f_sawStringArrayLiteral, sawSetFromConstruction: f_sawSetFromConstruction, sawManagedFileProducer: f_sawManagedFileProducer, sawManagedDirectoryProducer: f_sawManagedDirectoryProducer, sawManagedSocketProducer: f_sawManagedSocketProducer, sawManagedHostResourceProducer: f_sawManagedHostResourceProducer, divergedGenericAliasDecl: f_divergedGenericAliasDecl, cascadeWalkRoots: f_cascadeWalkRoots, cascadeBreakReached: f_cascadeBreakReached, interfaceCloneAnswers: f_interfaceCloneAnswers, someRecordHoldsAnInterfaceValue: f_someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: f_recordsHoldingAnInterfaceValueCounted, typeNames: f_typeNames, crossFileConstantReads: f_crossFileConstantReads, sawParamReassignment: f_sawParamReassignment, byRefForwardingClosed: f_byRefForwardingClosed, sawGlobalNameReturn: f_sawGlobalNameReturn, globalAliasReturnsClosed: f_globalAliasReturnsClosed, deepCloneAnswers: f_deepCloneAnswers, deepCloneWalkReadInstances: f_deepCloneWalkReadInstances, transferWalkAnswers: f_transferWalkAnswers, freshReturnForwardsClosed: f_freshReturnForwardsClosed, forwardedStoresClosed: f_forwardedStoresClosed, hash: f_hash, hashSource: f_hashSource, authorChainState: f_authorChainState, libraryChainState: f_libraryChainState, wholeChainState: f_wholeChainState, libraryHash: f_libraryHash, libraryParseSharing: f_libraryParseSharing, authorNameMeantByTheLibrary: f_authorNameMeantByTheLibrary, storedGlobalCount: f_storedGlobalCount, allFilesFolded: f_allFilesFolded, inlineGeometrySettled: f_inlineGeometrySettled, rangeContestsSettled: f_rangeContestsSettled, rootIsUnderStdlibDirectory: f_rootIsUnderStdlibDirectory, projectRootModuleDirectory: f_projectRootModuleDirectory, arrayByteInstance: f_arrayByteInstance, arrayByteInstanceComputed: f_arrayByteInstanceComputed, spawnsAnyServiceSettled: f_spawnsAnyServiceSettled, spawnsAnyServiceAnswer: f_spawnsAnyServiceAnswer, byRefMasksSettled: f_byRefMasksSettled, byRefMaskColumn: f_byRefMaskColumn, functionValuedFieldNames: f_functionValuedFieldNames, witnessByRefMasks: f_witnessByRefMasks, byRefConventionDigestAnswer: f_byRefConventionDigestAnswer, liveDefaultKeyNames: f_liveDefaultKeyNames, liveKeyAdoptions: f_liveKeyAdoptions, hasNonCorpusArrayConformer: f_hasNonCorpusArrayConformer, recordsTypeClaims: f_recordsTypeClaims, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed(), holdsAMerge: f_holdsAMerge, genericInstancesDigest: f_genericInstancesDigest}
+		return Self{ownSettled: f_ownSettled, sharedSettled: SettledDeclarations.unused(), readsPublishedView: false, structSlots: f_structSlots, mintedTupleLayouts: StructLayoutArray.create(), published: SettledCellArray.create(), genericInstances: f_genericInstances, compiledInstanceNames: f_compiledInstanceNames, canonicalInstanceNames: f_canonicalInstanceNames, substitutedInstanceOrigins: f_substitutedInstanceOrigins, canonicalInstanceNameIndex: f_canonicalInstanceNameIndex, canonicalNamesIndexedThrough: f_canonicalNamesIndexedThrough, tupleCanonicalNames: f_tupleCanonicalNames, tupleElementTokens: f_tupleElementTokens, tupleElementTokenOwners: f_tupleElementTokenOwners, tupleAliases: f_tupleAliases, multiplyDeclaredTupleAliases: f_multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: f_sawAggregateArrayLiteral, sawListFromConstruction: f_sawListFromConstruction, sawEnumAllCasesAccess: f_sawEnumAllCasesAccess, sawIntArrayLiteral: f_sawIntArrayLiteral, sawByteStringLiteral: f_sawByteStringLiteral, sawStringArrayLiteral: f_sawStringArrayLiteral, sawSetFromConstruction: f_sawSetFromConstruction, sawManagedFileProducer: f_sawManagedFileProducer, sawManagedDirectoryProducer: f_sawManagedDirectoryProducer, sawManagedSocketProducer: f_sawManagedSocketProducer, sawManagedHostResourceProducer: f_sawManagedHostResourceProducer, divergedGenericAliasDecl: f_divergedGenericAliasDecl, cascadeWalkRoots: f_cascadeWalkRoots, cascadeBreakReached: f_cascadeBreakReached, interfaceCloneAnswers: f_interfaceCloneAnswers, someRecordHoldsAnInterfaceValue: f_someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: f_recordsHoldingAnInterfaceValueCounted, typeNames: f_typeNames, crossFileConstantReads: f_crossFileConstantReads, sawParamReassignment: f_sawParamReassignment, byRefForwardingClosed: f_byRefForwardingClosed, sawGlobalNameReturn: f_sawGlobalNameReturn, globalAliasReturnsClosed: f_globalAliasReturnsClosed, deepCloneAnswers: f_deepCloneAnswers, deepCloneWalkReadInstances: f_deepCloneWalkReadInstances, transferWalkAnswers: f_transferWalkAnswers, freshReturnForwardsClosed: f_freshReturnForwardsClosed, forwardedStoresClosed: f_forwardedStoresClosed, hash: f_hash, hashSource: f_hashSource, authorChainState: f_authorChainState, libraryChainState: f_libraryChainState, wholeChainState: f_wholeChainState, libraryHash: f_libraryHash, libraryParseSharing: f_libraryParseSharing, authorNameMeantByTheLibrary: f_authorNameMeantByTheLibrary, storedGlobalCount: f_storedGlobalCount, allFilesFolded: f_allFilesFolded, inlineGeometrySettled: f_inlineGeometrySettled, rangeContestsSettled: f_rangeContestsSettled, rootIsUnderStdlibDirectory: f_rootIsUnderStdlibDirectory, projectRootModuleDirectory: f_projectRootModuleDirectory, arrayByteInstance: f_arrayByteInstance, arrayByteInstanceComputed: f_arrayByteInstanceComputed, spawnsAnyServiceSettled: f_spawnsAnyServiceSettled, spawnsAnyServiceAnswer: f_spawnsAnyServiceAnswer, byRefMasksSettled: f_byRefMasksSettled, byRefMaskColumn: f_byRefMaskColumn, functionValuedFieldNames: f_functionValuedFieldNames, witnessByRefMasks: f_witnessByRefMasks, byRefConventionDigestAnswer: f_byRefConventionDigestAnswer, liveDefaultKeyNames: f_liveDefaultKeyNames, liveSpawnedTypeNames: f_liveSpawnedTypeNames, liveKeyAdoptions: f_liveKeyAdoptions, hasNonCorpusArrayConformer: f_hasNonCorpusArrayConformer, recordsTypeClaims: f_recordsTypeClaims, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed(), holdsAMerge: f_holdsAMerge, genericInstancesDigest: f_genericInstancesDigest}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize616
-		return sizeof(ProgramSignatures) as CacheSize616
+	static function cacheLayoutBytes() returns CacheSize624
+		return sizeof(ProgramSignatures) as CacheSize624
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

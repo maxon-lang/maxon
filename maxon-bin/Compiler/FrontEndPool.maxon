@@ -176,9 +176,9 @@ type FrontEndWorker
 		self.state.hold(ProgramSignatures.adopting(declarations, template: template))
 	end 'adopt'
 
-	export function adoptLiveKeys(keys LiveDefaultKeys)
-		self.state.adoptLiveKeys(keys)
-	end 'adoptLiveKeys'
+	export function adoptLiveReach(reach LiveReach)
+		self.state.adoptLiveReach(reach)
+	end 'adoptLiveReach'
 
 	// ⚠ The index is released HERE, on the worker's own thread and awaited, rather than left to the drop of
 	// the last handle to this service. Dropping a handle only lets the service's green thread finish when
@@ -217,10 +217,10 @@ type FrontEndWorkerState
 		self.ownIndex.push(index)
 	end 'hold'
 
-	function adoptLiveKeys(keys LiveDefaultKeys)
-		var index = try self.ownIndex.get(0) otherwise panic("FrontEndWorkerState.adoptLiveKeys: a worker holding no index was sent live keys — the pool sends them only to a worker that adopted the baseline")
-		index.adoptLiveDefaultKeys(keys)
-	end 'adoptLiveKeys'
+	function adoptLiveReach(reach LiveReach)
+		var index = try self.ownIndex.get(0) otherwise panic("FrontEndWorkerState.adoptLiveReach: a worker holding no index was sent live reach — the pool sends it only to a worker that adopted the baseline")
+		index.adoptLiveReach(reach)
+	end 'adoptLiveReach'
 
 	function releaseIndex()
 		self.ownIndex.clear()
@@ -511,7 +511,7 @@ module type FrontEndPool
 			return
 		end 'current'
 
-		try self.workerAt(workerSlot).adoptLiveKeys(self.baselineIndex().liveDefaultKeys().clone()) otherwise panic("{workerRefusedSendMessage("FrontEndPool.refreshLiveKeys", subject: "the worker in slot {workerSlot}")}")
+		try self.workerAt(workerSlot).adoptLiveReach(self.baselineIndex().liveReach().clone()) otherwise panic("{workerRefusedSendMessage("FrontEndPool.refreshLiveKeys", subject: "the worker in slot {workerSlot}")}")
 		try self.heldRevisions.set(workerSlot, value: self.baselineRevision) otherwise panic("FrontEndPool.refreshLiveKeys: heldRevisions.set OOB at {workerSlot} below count {self.heldRevisions.count()}")
 	end 'refreshLiveKeys'
 

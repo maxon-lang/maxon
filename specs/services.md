@@ -17126,3 +17126,78 @@ end 'main'
 ```exitcode
 18
 ```
+
+<!-- test: a-library-spawn-outside-a-default-starts-no-service-while-no-reached-body-spawns-it -->
+<!-- tier: stdlib -->
+A library function whose body writes `spawn Probe.create()` makes `Probe` a service only in a program that
+reaches that body. `main` never calls `startProbe`, so the program carries no scheduler and its raw
+allocation count is zero, exactly as a program that declares no library spawn at all.
+```maxon
+// --- stdlib-overlay: Builtins.maxon
+public typealias ProbeCount = int(i64.min to i64.max)
+
+public type Probe
+	var calls as ProbeCount
+
+	public static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	export function ping() returns ProbeCount
+		self.calls = self.calls + 1
+		return self.calls
+	end 'ping'
+end 'Probe'
+
+public function startProbe() returns ProbeCount
+	let probe = spawn Probe.create()
+	return try await probe.ping() otherwise 0
+end 'startProbe'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	if __Builtins.mmRawAllocTotal() == 0 'noScheduler'
+		return 7
+	end 'noScheduler'
+
+	return 1
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-library-spawn-outside-a-default-starts-its-service-in-a-program-that-reaches-it -->
+<!-- tier: stdlib -->
+The same library function, called: the reached body spawns `Probe`, so the program is a service program and
+`startProbe` gets its answer from the running service.
+```maxon
+// --- stdlib-overlay: Builtins.maxon
+public typealias ProbeCount = int(i64.min to i64.max)
+
+public type Probe
+	var calls as ProbeCount
+
+	public static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	export function ping() returns ProbeCount
+		self.calls = self.calls + 1
+		return self.calls
+	end 'ping'
+end 'Probe'
+
+public function startProbe() returns ProbeCount
+	let probe = spawn Probe.create()
+	return try await probe.ping() otherwise 0
+end 'startProbe'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return (startProbe() + 41) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```

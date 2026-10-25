@@ -111,6 +111,18 @@ end 'cacheReadServiceSpawnCandidateArray'
 export union SpawnGate
 	always
 	defaultOf(let declaration DefaultDeclaration)
+
+	// A library `spawn` outside a `default`: live only while a reached body spawns its type. Gated
+	// `always`, it would make every program a service program, scheduler and share walks included.
+	libraryBody
+
+	export function isLibraryBody() returns bool
+		return match self 'gate'
+			libraryBody gives true
+			always or
+			defaultOf gives false
+		end 'gate'
+	end 'isLibraryBody'
 end 'SpawnGate'
 
 // @generated library-cache begin
@@ -120,6 +132,7 @@ function cacheWriteSpawnGate(writer LibraryCacheWriter, value SpawnGate)
 	match value 'payload'
 		always then break
 		defaultOf(a0) then cacheWriteSpawnGateDefaultOf(writer, a0: a0)
+		libraryBody then break
 	end 'payload'
 end 'cacheWriteSpawnGate'
 
@@ -133,6 +146,7 @@ function cacheReadSpawnGate(reader LibraryCacheReader) returns SpawnGate throws 
 	return match tag 'case'
 		0 gives SpawnGate.always
 		1 gives try cacheReadSpawnGateDefaultOf(reader)
+		2 gives SpawnGate.libraryBody
 		default throws LibraryCacheDamage.unknownTag(tag)
 	end 'case'
 end 'cacheReadSpawnGate'
@@ -221,20 +235,20 @@ end 'cacheReadDefaultDeclarationArray'
 
 // @generated library-cache end
 
-export typealias DefaultKeyNameSet = Set with ByteArray
+export typealias LiveNameSet = Set with ByteArray
 
 // @generated library-cache begin
-module function cacheWriteDefaultKeyNameSet(writer LibraryCacheWriter, value DefaultKeyNameSet)
+module function cacheWriteLiveNameSet(writer LibraryCacheWriter, value LiveNameSet)
 	writer.unsigned(value.count() as CacheUnsigned)
 
 	for item in value 'eachItem'
 		writer.bytes(item)
 	end 'eachItem'
-end 'cacheWriteDefaultKeyNameSet'
+end 'cacheWriteLiveNameSet'
 
-module function cacheReadDefaultKeyNameSet(reader LibraryCacheReader) returns DefaultKeyNameSet throws LibraryCacheDamage
+module function cacheReadLiveNameSet(reader LibraryCacheReader) returns LiveNameSet throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = DefaultKeyNameSet.create()
+	var result = LiveNameSet.create()
 
 	for _ in 0 upto count 'eachItem'
 		let item = try reader.bytes()
@@ -242,13 +256,14 @@ module function cacheReadDefaultKeyNameSet(reader LibraryCacheReader) returns De
 	end 'eachItem'
 
 	return result
-end 'cacheReadDefaultKeyNameSet'
+end 'cacheReadLiveNameSet'
 
 // @generated library-cache end
 
 let SpawnCandidateKeySeparator = "|"
 let SpawnCandidateAlwaysTag = "always"
 let SpawnCandidateDefaultTag = "default"
+let SpawnCandidateLibraryBodyTag = "libraryBody"
 
 export typealias ServiceSpawnCandidateKeySet = Set with ByteArray
 
@@ -278,43 +293,54 @@ end 'cacheReadServiceSpawnCandidateKeySet'
 module function spawnCandidateKey(typeName ByteArray, member ByteArray, gate SpawnGate) returns ByteArray
 	let gateKey = match gate 'gate'
 		always gives SpawnCandidateAlwaysTag
+		libraryBody gives SpawnCandidateLibraryBodyTag
 		defaultOf(declaration) gives "{SpawnCandidateDefaultTag}{SpawnCandidateKeySeparator}{declaration.keyLine}{SpawnCandidateKeySeparator}{declaration.keyColumn}{SpawnCandidateKeySeparator}{declaration.declFilePath.comparisonSpelling()}"
 	end 'gate'
 
 	return "{String.from(typeName)}{SpawnCandidateKeySeparator}{String.from(member)}{SpawnCandidateKeySeparator}{gateKey}".toByteArray()
 end 'spawnCandidateKey'
 
-export type LiveDefaultKeys
-	export var names as DefaultKeyNameSet
+export type LiveReach
+	export var defaultKeys as LiveNameSet
+	export var spawnedTypes as LiveNameSet
 
-	export static function create() returns LiveDefaultKeys
-		return Self{names: DefaultKeyNameSet.create()}
+	export static function create() returns LiveReach
+		return Self{defaultKeys: LiveNameSet.create(), spawnedTypes: LiveNameSet.create()}
 	end 'create'
 
-	export function sameKeysAs(other DefaultKeyNameSet) returns bool
-		if self.names.count() != other.count() 'differentCounts'
-			return false
-		end 'differentCounts'
+	export function sameReachAs(keys LiveNameSet, spawns LiveNameSet) returns bool
+		return sameNames(self.defaultKeys, other: keys) and sameNames(self.spawnedTypes, other: spawns)
+	end 'sameReachAs'
 
-		for name in other 'eachName'
-			if not self.names.contains(name) 'missing'
-				return false
-			end 'missing'
-		end 'eachName'
-
-		return true
-	end 'sameKeysAs'
-
-	export function replaceWith(keys DefaultKeyNameSet)
-		var kept = DefaultKeyNameSet.create()
-
-		for name in keys 'eachName'
-			kept.insert(name)
-		end 'eachName'
-
-		self.names = kept
+	export function replaceWith(keys LiveNameSet, spawns LiveNameSet)
+		self.defaultKeys = copiedNames(keys)
+		self.spawnedTypes = copiedNames(spawns)
 	end 'replaceWith'
-end 'LiveDefaultKeys'
+end 'LiveReach'
+
+function sameNames(held LiveNameSet, other LiveNameSet) returns bool
+	if held.count() != other.count() 'differentCounts'
+		return false
+	end 'differentCounts'
+
+	for name in other 'eachName'
+		if not held.contains(name) 'missing'
+			return false
+		end 'missing'
+	end 'eachName'
+
+	return true
+end 'sameNames'
+
+module function copiedNames(names LiveNameSet) returns LiveNameSet
+	var kept = LiveNameSet.create()
+
+	for name in names 'eachName'
+		kept.insert(name)
+	end 'eachName'
+
+	return kept
+end 'copiedNames'
 
 export let RegistryCurrentMemberName = b"current"
 export let RegistryRegisterMemberName = b"register"
@@ -1762,14 +1788,14 @@ function serviceRosterOf(signatures ProgramSignatures, liveOnly bool) returns Na
 	return services
 end 'serviceRosterOf'
 
-function spawnedTypeNameOf(signatures ProgramSignatures, candidate ServiceSpawnCandidate) returns ByteArray
+module function spawnedTypeNameOf(signatures ProgramSignatures, candidate ServiceSpawnCandidate) returns ByteArray
 	return spelledTypeName(signatures, written: candidate.typeName, readerFilePath: candidate.declFilePath).clone()
 end 'spawnedTypeNameOf'
 
 function candidateStartsAService(signatures ProgramSignatures, candidate ServiceSpawnCandidate, typeName ByteArray, liveOnly bool) returns bool
-	if liveOnly and not signatures.spawnGateIsOpen(candidate.gate) 'aDefaultNothingBuilds'
+	if liveOnly and not signatures.spawnIsLive(candidate) 'nothingBuiltSpawnsIt'
 		return false
-	end 'aDefaultNothingBuilds'
+	end 'nothingBuiltSpawnsIt'
 
 	return match classifyServiceTarget(signatures, typeName: typeName, member: candidate.member) 'verdict'
 		// Refused at the `spawn` by `Parser.parseSpawn`, which asks this same classification. Nothing is

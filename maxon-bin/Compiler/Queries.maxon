@@ -526,7 +526,7 @@ function adoptProgramFacts(project Project, signatures ProgramSignatures)
 	signatures.adoptInstantiatedByAParse(project.db.instantiatedByAParse)
 	signatures.adoptGenericFunctionInstances(project.db.genericInstances)
 	signatures.adoptRequestedTupleLayouts(project.db.genericInstances.tuples, from: project.typeNames)
-	signatures.adoptLiveDefaultKeys(project.db.liveDefaultKeys)
+	signatures.adoptLiveReach(project.db.liveReach)
 end 'adoptProgramFacts'
 
 function projectRootModuleDirectoryOf(project Project) returns String
@@ -824,7 +824,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 
 		// The sweep reads no liveness, so the memo's key omits the live keys and a hit adopts the current
 		// ones.
-		project.db.signatureCache.value.adoptLiveDefaultKeys(project.db.liveDefaultKeys)
+		project.db.signatureCache.value.adoptLiveReach(project.db.liveReach)
 		return project.db.signatureCache.value
 	end 'hit'
 
@@ -1268,7 +1268,8 @@ end 'FileTokenFacts'
 
 function discoveredTokenFactsOf(project Project, signatures ProgramSignatures, path FilePath, isStdlibSource bool) returns FileTokenFacts throws CompileError
 	view tokens = try queryActiveTokens(project, path: path)
-	var gate = SpawnGate.always
+	let outsideADefault = SpawnGate.libraryBody if isStdlibSource else SpawnGate.always
+	var gate = outsideADefault.clone()
 	var gateEnd = 0 as ElementIndex
 	var events = TokenFactEventArray.create()
 	let isRuntimeSource = not isStdlibSource and isRuntimeSourceFile(project, path: path)
@@ -1290,7 +1291,8 @@ function discoveredTokenFactsOf(project Project, signatures ProgramSignatures, p
 		let tok = try tokens.get(i) otherwise panic("discoveredTokenFactsOf: tokens.get OOB at {i} below count {tokens.count()}")
 
 		// A spawn inside a `default`'s expression makes its type a service only while the key is live,
-		// so a program that never reaches the key spawns nothing and keeps its single-threaded runtime.
+		// and a library spawn elsewhere only while a reached body spawns the type, so a program that
+		// reaches neither spawns nothing and keeps its single-threaded runtime.
 		if defaultDeclarationAt(tokens, index: i) 'aDefaultDeclaration'
 			let declaration = defaultDeclarationFrom(tokens, index: i, path: path, isStdlibSource: isStdlibSource)
 			events.push(TokenFactEvent.defaultDeclaration(declaration))
@@ -1299,7 +1301,7 @@ function discoveredTokenFactsOf(project Project, signatures ProgramSignatures, p
 		end 'aDefaultDeclaration'
 
 		if tokenIsTheSpawnKeyword(tok) 'aSpawnMayStartHere'
-			if let spawn = try serviceSpawnFollowing(tokens, index: i, gate: gate.clone() if i < gateEnd else SpawnGate.always) 'aServiceSpawn'
+			if let spawn = try serviceSpawnFollowing(tokens, index: i, gate: gate.clone() if i < gateEnd else outsideADefault.clone()) 'aServiceSpawn'
 				events.push(spawn)
 			end 'aServiceSpawn'
 		end 'aSpawnMayStartHere'
@@ -2175,53 +2177,59 @@ function frontEndMustFoldAgain(project Project, module MaxonModule) returns bool
 	let reach = try libraryReachOf(project, module: module, signatures: signatures)
 	let demandGrew = try growStdlibBodyDemand(project, reach: reach)
 	try requireStillWanted(project)
-	let liveKeysMoved = liveDefaultKeysMoved(project, module: module, signatures: signatures, reached: reachedLibraryNamesOf(reach))
-	return demandGrew or liveKeysMoved
+	let liveReachMoved = liveReachDidMove(project, module: module, signatures: signatures, reached: reachedLibraryNamesOf(reach))
+	return demandGrew or liveReachMoved
 end 'frontEndMustFoldAgain'
 
 // A key goes live when a reached body names its slot, and that changes what its declaring file
-// parses (a `default`'s initializer is built only for a live key), so a moved set folds the front
-// end again.
-function liveDefaultKeysMoved(project Project, module MaxonModule, signatures ProgramSignatures, reached FunctionNameSet) returns bool
-	if not signatures.declaresADefault() or projectHasErrors(project) 'nothingToDecide'
+// parses (a `default`'s initializer is built only for a live key). A library `spawn` outside a
+// `default` goes live when a reached body spawns its type. Either moved set folds the front end
+// again.
+function liveReachDidMove(project Project, module MaxonModule, signatures ProgramSignatures, reached FunctionNameSet) returns bool
+	if not (signatures.declaresADefault() or signatures.declaresALibraryBodySpawn()) or projectHasErrors(project) 'nothingToDecide'
 		return false
 	end 'nothingToDecide'
 
-	var live = DefaultKeyNameSet.create()
+	var liveKeys = LiveNameSet.create()
+	var liveSpawns = LiveNameSet.create()
 
 	for func in module.functions 'eachFunction'
 		if isLibraryFunction(project, func: func) and not reached.contains(func.name) 'anUnreachedLibraryBody'
 			continue
 		end 'anUnreachedLibraryBody'
 
-		noteDefaultKeysNamedBy(module, func: func, into: live)
+		noteLiveReachOf(module, func: func, defaultKeys: liveKeys, spawnedTypes: liveSpawns)
 	end 'eachFunction'
 
-	if project.db.liveDefaultKeys.sameKeysAs(live) 'unchanged'
+	if project.db.liveReach.sameReachAs(liveKeys, spawns: liveSpawns) 'unchanged'
 		return false
 	end 'unchanged'
 
-	project.db.liveDefaultKeys.replaceWith(live)
+	project.db.liveReach.replaceWith(liveKeys, spawns: liveSpawns)
 	return true
-end 'liveDefaultKeysMoved'
+end 'liveReachDidMove'
 
-function noteDefaultKeysNamedBy(module MaxonModule, func IrFunction, into DefaultKeyNameSet)
+function noteLiveReachOf(module MaxonModule, func IrFunction, defaultKeys LiveNameSet, spawnedTypes LiveNameSet)
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("noteDefaultKeysNamedBy: blockRef from func.blockRefs not in module.blocks")
+		let block = try module.blocks.get(blockRef) otherwise panic("noteLiveReachOf: blockRef from func.blockRefs not in module.blocks")
 
 		for opIndex in block.bodyOps() 'eachOp'
-			let op = try module.ops.get(opIndex) otherwise panic("noteDefaultKeysNamedBy: opRef {opIndex} not in module.ops")
+			let op = try module.ops.get(opIndex) otherwise panic("noteLiveReachOf: opRef {opIndex} not in module.ops")
+
+			if maxonOpIsServiceSpawn(op) 'aSpawn'
+				spawnedTypes.insert(maxonOpSpawnedServiceType(op))
+			end 'aSpawn'
 
 			if not maxonOpNamesAGlobalLabel(op) 'namesNoSlot'
 				continue
 			end 'namesNoSlot'
 
 			if let key = try defaultKeyOfSlotLabel(maxonOpGlobalLabelName(op)) 'aDefaultSlot'
-				into.insert(key)
+				defaultKeys.insert(key)
 			end 'aDefaultSlot'
 		end 'eachOp'
 	end 'eachBlock'
-end 'noteDefaultKeysNamedBy'
+end 'noteLiveReachOf'
 
 // One round of the merge: every file's artifact folded into `merged`, with the registries
 // `mergeArtifact` builds reset first. Artifacts are the source of truth for those registries, so a
