@@ -1111,6 +1111,13 @@ for a standard-library type too. An [interface extension](#interface-extensions)
 default: a conforming type whose body declares the same member keeps its own, and the extension's methods,
 compiled for that type, read it.
 
+A nested typealias that an `extension` of the program declares under the name of one a library `extension` of
+the same type also declares (`Array.ElementArray`, `Array.SortComparator`, `Iterable.ElementTransform`) is a
+separate member. The program's extension bodies, in every file, spell it with the bare name, and callers of
+the program's methods see it; the library's bodies and methods keep the library's member. A member without
+a visibility modifier is spelled from its own file only: another file's extension body naming it is
+[E3008](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3008).
+
 A per-instance **function** alias is unbranded: it spells the shared body's signature over the type's own
 parameters. `Array.sort` takes an `Array.SortComparator`, so a field declared with your own `typealias RowComparator =
 function(Row, Row) returns Ordering` passes straight through: `rows.sort(self.compare)` compiles with no

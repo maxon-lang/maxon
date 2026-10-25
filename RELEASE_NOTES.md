@@ -154,6 +154,13 @@ release's version as its heading when the release is cut.
   conforming type's own declaration of the same name, and the extension's methods compiled for that
   type read the type's; they read the extension's alias while callers saw the type's.
   Fix: rename the extension's member, or delete it and use the type's own.
+- A nested `typealias` that a program's `extension` declares under the name of one a library `extension` of
+  the same type declares (`ElementArray`, `SortComparator` or `NodePower` on `Array`, `ElementTransform` on
+  `Iterable`) is the program's own member: the program's extension bodies and the callers of its methods read
+  the program's declaration, where an extension body that wrote the name read the library's and the library's
+  bodies could read the program's. A second file's extension naming a member the first file leaves without a
+  visibility modifier is E3008.
+  Fix: write the extension bodies for the member the program declares, or rename it to keep the library's.
 
 ## 0.5.0 — 2026-10-08
 

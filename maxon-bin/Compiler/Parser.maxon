@@ -24665,7 +24665,7 @@ export type Parser
 	// for it. See the gate in `recordScannedSignature`.
 	function innerAliasMemberOfParamType(typeStart ElementIndex, typeEnd ElementIndex) returns InnerAliasMember
 		if typeEnd == typeStart + 1 and self.kindAt(typeStart) == TokenKind.identifier and self.namesInnerAliasHere(self.tokenAt(typeStart).value) 'innerAlias'
-			return InnerAliasMember.named(self.tokenAt(typeStart).value)
+			return InnerAliasMember.named(self.authorsMemberName(self.tokenAt(typeStart).value))
 		end 'innerAlias'
 
 		return InnerAliasMember.none
@@ -25501,7 +25501,7 @@ export type Parser
 				self.signatures.recordTypeBodyInnerAliasMember(joinQualifiedName(self.enclosingTypeName(), member: nestedNameTok.value))
 
 				match nested 'nested'
-					ranged(alias) then innerAliasOut.push(InnerAliasEntry.create(self.enclosingTypeName(), alias: alias))
+					ranged(alias) then innerAliasOut.push(InnerAliasEntry.create(self.enclosingTypeName(), alias: self.nestedRangedAlias(alias)))
 					genericInstance(entry) then self.publishNestedGenericAlias(entry, into: genericAliasOut)
 
 					// A TUPLE alias is keyed whole-program by the reader itself, under the `<Type>.<member>` name
@@ -25875,9 +25875,11 @@ export type Parser
 		view header = try self.readExtensionHeader() otherwise return
 
 		var members = NameRoster.create()
-		self.collectNestedAliasMembersInBody(members)
+		var functionMembers = NameRoster.create()
+		self.collectNestedAliasMembersInBody(members, functionInto: functionMembers)
+		let siteIsTheLibrarys = index.declaredByTheCorpus(self.job.path)
 
-		if members.isEmpty() 'declaresNone'
+		if members.isEmpty() and functionMembers.isEmpty() 'declaresNone'
 			return
 		end 'declaresNone'
 
@@ -25890,8 +25892,14 @@ export type Parser
 		// fold withheld, in a body that receives no methods and emits nothing.
 		for conformer in extensionTargetConformers(header.target) 'eachConformer'
 			for member in members 'eachMember'
-				index.recordExtensionInnerAliasMember(joinQualifiedName(conformer, member: member))
+				let qualified = joinQualifiedName(conformer, member: member)
+				index.recordExtensionInnerAliasMember(qualified)
+				index.noteExtensionInnerAliasTier(qualified, library: siteIsTheLibrarys)
 			end 'eachMember'
+
+			for member in functionMembers 'eachFunctionMember'
+				index.noteExtensionInnerAliasTier(joinQualifiedName(conformer, member: member), library: siteIsTheLibrarys)
+			end 'eachFunctionMember'
 		end 'eachConformer'
 	end 'publishExtensionInnerAliases'
 
@@ -26056,7 +26064,7 @@ export type Parser
 					end 'anAuthorsMember'
 
 					match nested 'nested'
-						ranged(alias) then innerAliasOut.push(InnerAliasEntry.create(self.enclosingTypeName(), alias: alias))
+						ranged(alias) then innerAliasOut.push(InnerAliasEntry.create(self.enclosingTypeName(), alias: self.nestedRangedAlias(alias)))
 						genericInstance(entry) then genericAliasOut.push(self.qualifiedInnerGenericAlias(entry))
 
 						// Already keyed (or deliberately not) by the reader, off `nestedTupleOwner` above.
@@ -27496,7 +27504,7 @@ export type Parser
 
 	function innerAliasKeyOrName(name ByteArray) returns ByteArray
 		if self.namesInnerAliasHere(name) or self.namesThisBodysNestedFunctionAlias(name) 'aBodysInnerAlias'
-			return joinQualifiedName(self.enclosingTypeName(), member: name)
+			return self.innerAliasKey(name)
 		end 'aBodysInnerAlias'
 
 		return name
@@ -28310,7 +28318,7 @@ export type Parser
 		// or a malformed nested alias inside a withheld extension body would go unreported.
 		match tupleOwner 'owner'
 			fileScope then self.signatures.recordTupleAlias(nameTok.value, tupleName: target, declFilePath: self.job.path, visibility: visibility)
-			enclosingType(owner) then self.signatures.recordTupleAlias(joinQualifiedName(owner, member: nameTok.value), tupleName: target, declFilePath: self.job.path, visibility: visibility)
+			enclosingType(owner) then self.signatures.recordTupleAlias(joinQualifiedName(owner, member: self.authorsMemberName(nameTok.value)), tupleName: target, declFilePath: self.job.path, visibility: visibility)
 			unpublished then break
 		end 'owner'
 	end 'readTupleAliasForm'
@@ -28716,7 +28724,7 @@ export type Parser
 
 		let resume = self.pos
 		var members = NameRoster.create()
-		self.collectNestedAliasMembersInBody(members)
+		self.collectNestedAliasMembersInBody(members, functionInto: NameRoster.create())
 		self.pos = resume
 
 		for member in members 'eachMember'
@@ -28769,11 +28777,11 @@ export type Parser
 	// is asked through `closesBlockAt` because a member may be NAMED `end`. `depth` starts at 1 because
 	// both callers enter INSIDE exactly one open block.
 	//
-	// ⚠ **THE FUNCTION FORM IS EXCLUDED HERE AND NOT AT THE CALLERS**, because both callers want the same
-	// answer and for the same reason: a nested `typealias Fn = function(…)` is a file-scope name written
-	// inside a body and never enters the per-instance scope (`readNestedTypeAlias`'s own arm says why). The
-	// test is the one token `readTypeAliasDeclaration` discriminates the form on, asked of the same position.
-	function collectNestedAliasMembersInBody(into NameRoster)
+	// ⚠ **THE FUNCTION FORM GOES TO `functionInto`, NOT `into`**: a nested `typealias Fn = function(…)` is a
+	// file-scope name written inside a body and never enters the per-instance scope (`readNestedTypeAlias`'s
+	// own arm says why). The test is the one token `readTypeAliasDeclaration` discriminates the form on, asked
+	// of the same position.
+	function collectNestedAliasMembersInBody(into NameRoster, functionInto NameRoster)
 		var depth = 1 as BlockDepth
 
 		while not self.isEof() 'walk'
@@ -28786,7 +28794,9 @@ export type Parser
 			if let member = try self.nestedAliasNameAt(self.pos) 'aNestedAlias'
 				if depth == 1 and not self.nestedAliasRhsBeginsWith(self.pos, kind: TokenKind.function) 'perInstanceNestedAlias'
 					into.push(member)
-				end 'perInstanceNestedAlias'
+				end 'perInstanceNestedAlias' else if depth == 1 'aFunctionNestedAlias'
+					functionInto.push(member)
+				end 'aFunctionNestedAlias'
 			end 'aNestedAlias'
 
 			let closes = self.closesBlockAt(self.pos)
@@ -28883,7 +28893,7 @@ export type Parser
 	// `deriveInstanceDisplayNames` panics on — see `GenericAliasEntry.scopedToEnclosingType`. The ONE
 	// thing that does change beside the name is `typeScoped`, the fact this call site is the sole evidence of.
 	function qualifiedInnerGenericAlias(entry GenericAliasEntry) returns GenericAliasEntry
-		return entry.scopedToEnclosingType(joinQualifiedName(self.enclosingTypeName(), member: entry.aliasName))
+		return entry.scopedToEnclosingType(self.innerAliasKey(entry.aliasName))
 	end 'qualifiedInnerGenericAlias'
 
 	// ⭐⭐ **A NESTED GENERIC-INSTANCE ALIAS OF A PLAIN `type` IS PUBLISHED UNDER TWO KEYS** —
@@ -28969,8 +28979,11 @@ export type Parser
 	// which is exactly why a fourth that forgot would file `.Fn` — a key no source can spell, unreachable
 	// behind the read door's own `isEmpty` gate, and red nowhere. Once per DECLARATION, so the test is free.
 	function publishNestedFunctionAlias(alias FunctionTypeAlias, into FunctionTypeAliasArray)
-		let typeName = try self.enclosingType.typeName() otherwise panic("publishNestedFunctionAlias: nested function typealias '{String.from(alias.name)}' was published with an EMPTY enclosing type — every caller reads a `type`/`extension` BODY, where `enterTypeScope` has set one")
-		let qualified = joinQualifiedName(typeName, member: alias.name)
+		if not self.enclosingType.isType() 'noEnclosingType'
+			panic("publishNestedFunctionAlias: nested function typealias '{String.from(alias.name)}' was published with an EMPTY enclosing type — every caller reads a `type`/`extension` BODY, where `enterTypeScope` has set one")
+		end 'noEnclosingType'
+
+		let qualified = self.innerAliasKey(alias.name)
 
 		into.push(alias)
 		into.push(alias.underName(qualified))
@@ -30648,6 +30661,26 @@ export type Parser
 
 		return true
 	end 'extensionAliasYieldsToTheTypesOwn'
+
+	// Every bare member name of the enclosing body becomes a registry key through `innerAliasKey`, so the
+	// program's member and a library member of the same name stay two keys; `innerAliasMemberFor` owns the rule.
+	function authorsMemberName(member ByteArray) returns ByteArray
+		return self.signatures.innerAliasMemberFor(self.enclosingTypeName(), member: member, inExtensionBody: self.innerAliasesFromIndex, readerPath: self.job.path)
+	end 'authorsMemberName'
+
+	function innerAliasKey(member ByteArray) returns ByteArray
+		return joinQualifiedName(self.enclosingTypeName(), member: self.authorsMemberName(member))
+	end 'innerAliasKey'
+
+	function nestedRangedAlias(alias RangedTypeAlias) returns RangedTypeAlias
+		let member = self.authorsMemberName(alias.name)
+
+		if member.equals(alias.name) 'filedUnderItsOwnName'
+			return alias
+		end 'filedUnderItsOwnName'
+
+		return alias.underName(member)
+	end 'nestedRangedAlias'
 
 	function duplicateNestedAliasRefusal(nameTok Token, qualified ByteArray, declaredBy String) returns SourceParseError
 		return SourceParseError.registryRefused(ErrorCode.semanticDuplicateTypeAlias, explanation: "Duplicate typealias '{String.from(nameTok.value)}': `{String.from(qualified)}` is already declared {declaredBy}", line: nameTok.line, column: nameTok.column, note: DiagnosticNote.none)
@@ -34344,7 +34377,7 @@ export type Parser
 		let name = self.tokenAt(index).value
 
 		if self.namesInnerAliasHere(name) 'innerAliasOfTheEnclosingType'
-			return try self.existentialClaimOf(joinQualifiedName(self.enclosingTypeName(), member: name), readerFilePath: self.job.path)
+			return try self.existentialClaimOf(self.innerAliasKey(name), readerFilePath: self.job.path)
 		end 'innerAliasOfTheEnclosingType'
 
 		return try self.existentialClaimOf(name, readerFilePath: self.job.path)
@@ -35972,7 +36005,7 @@ export type Parser
 		// SECOND file declaring a type of the same name, which the tolerant sweep folds without complaint
 		// and the real parse rejects later.
 		if self.namesInnerAliasHere(name) 'innerAlias'
-			let qualifiedInner = joinQualifiedName(self.enclosingTypeName(), member: name)
+			let qualifiedInner = self.innerAliasKey(name)
 			try self.requireAliasIsNotRawBuffer(qualifiedInner, written: tok.value, anchor: tok)
 
 			if name.equals(tok.value) and not self.namesAnEnclosingInnerAlias(name) 'aMemberAnotherBodyDeclaredAndTheAuthorWrote'
@@ -36031,7 +36064,7 @@ export type Parser
 		// question is "could this reference mean more than one declaration", which is prior to what any one
 		// of them denotes.
 		if self.namesThisBodysNestedFunctionAlias(name) 'thisBodysOwnFunctionAlias'
-			return self.functionAliasType(joinQualifiedName(self.enclosingTypeName(), member: name), readerFilePath: self.job.path)
+			return self.functionAliasType(self.innerAliasKey(name), readerFilePath: self.job.path)
 		end 'thisBodysOwnFunctionAlias'
 
 		try self.requireUnambiguousTypeName(name, anchor: tok)
@@ -36567,7 +36600,7 @@ export type Parser
 			return true
 		end 'aFileScopeAlias'
 
-		return self.enclosingType.isType() and self.signatures.aliasDenotesBufferSurface(joinQualifiedName(self.enclosingTypeName(), member: spelling), readerFilePath: nameReader)
+		return self.enclosingType.isType() and self.signatures.aliasDenotesBufferSurface(self.innerAliasKey(spelling), readerFilePath: nameReader)
 	end 'spellingDenotesBufferSurface'
 
 	function namesInnerAliasHere(name ByteArray) returns bool
@@ -36630,7 +36663,7 @@ export type Parser
 			return name
 		end 'notInnerAlias'
 
-		let qualified = joinQualifiedName(self.enclosingTypeName(), member: name)
+		let qualified = self.innerAliasKey(name)
 
 		if not self.signatures.isGenericAliasInAnyFile(qualified) 'notKeyedWholeProgram'
 			return name
@@ -62890,8 +62923,11 @@ export type Parser
 			return false
 		end 'noFunctionAliasHoldsTheName'
 
-		let typeName = try self.enclosingType.typeName() otherwise return false
-		return self.signatures.isFunctionAliasInAnyFile(joinQualifiedName(typeName, member: name))
+		if not self.enclosingType.isType() 'noEnclosingType'
+			return false
+		end 'noEnclosingType'
+
+		return self.signatures.isFunctionAliasInAnyFile(self.innerAliasKey(name))
 	end 'namesThisBodysNestedFunctionAlias'
 
 	function namespaceQualifiedType(kind TypeDeclKind, declFilePath FilePath, name ByteArray) returns MaxonType
@@ -68895,7 +68931,7 @@ export type Parser
 		// The whole-program key an inner alias is registered under — the SAME name `parseTypeReference`'s
 		// inner-alias arm stamps a field type with and `parseQualifiedCall`'s `<InnerAlias>.create()` looks the
 		// instance up by, because a bare member collides with a same-named inner alias of another type.
-		let qualified = joinQualifiedName(self.enclosingTypeName(), member: aliasTok.value)
+		let qualified = self.innerAliasKey(aliasTok.value)
 
 		// ⛔ A RANGED NUMERIC ALIAS DECLARES NO FIELDS, so there is nothing for a literal to write and no
 		// container for `{}` to mean. No spelling is pinned for it, so the message names the cure instead
@@ -79046,7 +79082,7 @@ export type Parser
 				continue
 			end 'noClosureStandsHere'
 
-			let aliasName = self.functionAliasKeyFor(self.internedName(typeNameIdOf(slotType)), callee: callee)
+			let aliasName = self.functionAliasKeyFor(self.internedName(typeNameIdOf(slotType)), callee: callee, declFilePath: candidate.declFilePath)
 
 			if not self.namesADeclaredFunctionAlias(aliasName) 'aFunctionTypeNoAliasGoverns'
 				return noClosureParamOffer
@@ -79083,8 +79119,8 @@ export type Parser
 	// rule, read from the callee's qualifier because the cursor is not in that body. An `extension Iterable` is
 	// folded once per conformer and each fold files its `ElementTransform` under `<Conformer>.ElementTransform`;
 	// the bare key holds whichever fold ran last.
-	function functionAliasKeyFor(aliasName ByteArray, callee ByteArray) returns ByteArray
-		let nested = try self.signatures.aliasNestedInDeclaringTypeOf(callee, aliasName: aliasName) otherwise return aliasName
+	function functionAliasKeyFor(aliasName ByteArray, callee ByteArray, declFilePath FilePath) returns ByteArray
+		let nested = try self.signatures.aliasNestedInDeclaringTypeOf(callee, aliasName: aliasName, declFilePath: declFilePath) otherwise return aliasName
 		return nested if self.signatures.isFunctionAliasInAnyFile(nested) else aliasName
 	end 'functionAliasKeyFor'
 

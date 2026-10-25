@@ -1909,6 +1909,276 @@ end 'main'
 2
 ```
 
+## A program's extension member and a library extension's of the same name are two members
+
+The library declares nested typealiases in its `extension` bodies (`Array.ElementArray`, `Array.SortComparator`,
+`Array.NodePower`, `Iterable.ElementTransform`). A program's own `extension` may declare a member of one of
+those names, and the library never sees the program's declaration: the program's member is a separate member
+of the type, spelled with the same name inside the program's extension bodies.
+
+- **Inside a program's `extension` bodies of the type, in any file**, the bare name means the program's
+  member, for the declaring body and for a sibling body in another file alike.
+- **A caller of the program's method** sees the program's member in its signature.
+- **A library body, and a caller of a library method, keeps the library's member**: `xs.map(…)` still returns
+  an `Array`, and `xs.sort(…)` still takes a two-parameter comparator.
+- **A file-private member** is spelled from its own file only; another file's extension body naming it is
+  [E3008](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3008), as for any member declared elsewhere.
+
+The rule holds for the generic-instance, function, ranged and tuple forms and for the members an interface
+extension (`extension Iterable`) publishes to each conformer.
+
+<!-- test: an-extension-member-of-the-programs-wins-over-the-librarys-generic-member -->
+`Array.ElementArray` is `Array with Element` in the library. The program's `extension Array` declares it over
+a `List`: `firstTwo` returns a `List`, the sibling extension in `second.maxon` spells the same member, and the
+library's `map` result is still an `Array`.
+```maxon
+// --- file: ext.maxon
+export extension Array
+	export typealias ElementArray = List with Element
+
+	export function firstTwo() returns ElementArray
+		return ElementArray.create()
+	end 'firstTwo'
+end 'Array'
+
+// --- file: second.maxon
+export extension Array
+	export function spare() returns ElementArray
+		return ElementArray.create()
+	end 'spare'
+end 'Array'
+
+// --- file: main.maxon
+typealias Number = int(0 to 99)
+typealias Numbers = Array with Number
+
+function main() returns ExitCode
+	var xs = Numbers.create()
+	xs.push(3)
+	xs.push(1)
+
+	var mapped = xs.map(function(n) gives n)
+	mapped.push(5)
+
+	var ys = xs.firstTwo()
+	ys.prepend(2)
+
+	var zs = xs.spare()
+	zs.prepend(4)
+
+	xs.sort(function(a, b) gives a.compare(b))
+	print("{mapped.count()} {ys.count()} {zs.count()} {xs.count()}\n")
+	return 0
+end 'main'
+```
+```stdout
+3 1 1 2
+```
+```exitcode
+0
+```
+
+<!-- test: an-extension-member-of-the-programs-wins-over-the-librarys-function-member -->
+`Array.SortComparator` is `function(Element, Element) returns Ordering` in the library. The program's member
+takes one parameter, and `sort` still takes the library's two.
+```maxon
+// --- file: ext.maxon
+export extension Array
+	export typealias SortComparator = function(Element) returns Ordering
+
+	export function rank(key SortComparator) returns Ordering throws ArrayError
+		return key(try self.get(0))
+	end 'rank'
+end 'Array'
+
+// --- file: main.maxon
+typealias Number = int(0 to 9)
+typealias Numbers = Array with Number
+
+function main() returns ExitCode
+	var xs = Numbers from [3, 1, 2]
+	xs.sort(function(a, b) gives a.compare(b))
+	let first = try xs.rank(function(_) gives Ordering.equalTo) otherwise Ordering.lessThan
+	print("{xs.count()} {first.rawValue}\n")
+	return 0
+end 'main'
+```
+```stdout
+3 1
+```
+```exitcode
+0
+```
+
+<!-- test: an-extension-member-of-the-programs-wins-over-the-librarys-ranged-member -->
+`Array.NodePower` is `int(0 to 64)` in the library's sort helpers. The program's member is `int(0 to 9)`, and
+sorting a hundred elements still runs the library's code over the library's range. The program's own `Byte`
+declares a name the library declares, so the library is folded after the program.
+```maxon
+// --- file: ext.maxon
+export extension Array
+	export typealias NodePower = int(0 to 9)
+
+	export function power(n NodePower) returns NodePower
+		return n
+	end 'power'
+end 'Array'
+
+// --- file: main.maxon
+typealias Byte = int(0 to 255)
+typealias Number = int(0 to 99)
+typealias Numbers = Array with Number
+
+function main() returns ExitCode
+	var xs = Numbers.create()
+	let marker = 7 as Byte
+
+	for i in 0 upto 100 'fill'
+		xs.push(((i * 7) mod 100) as Number)
+	end 'fill'
+
+	xs.sort(function(a, b) gives a.compare(b))
+	print("{xs.count()} {xs.power(5)} {marker}\n")
+	return 0
+end 'main'
+```
+```stdout
+100 5 7
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-ranged-member-of-the-programs-is-held-to-its-own-range -->
+The program's `NodePower` is `int(0 to 9)`, so the `50` that a sibling extension's `narrow` is handed is held to
+the program's range and not to the library's `int(0 to 64)`.
+```maxon
+// --- file: ext.maxon
+export extension Array
+	export typealias NodePower = int(0 to 9)
+
+	export function power(n NodePower) returns NodePower
+		return n
+	end 'power'
+end 'Array'
+
+// --- file: second.maxon
+export extension Array
+	export function narrow(n NodePower) returns NodePower
+		return n
+	end 'narrow'
+end 'Array'
+
+// --- file: main.maxon
+typealias Number = int(0 to 99)
+typealias Numbers = Array with Number
+
+function main() returns ExitCode
+	var xs = Numbers.create()
+	xs.push(1)
+	return xs.narrow(50) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:25:12: Value 50 is outside the range of 'NodePower' (int(0 to 9))
+```
+
+<!-- test: an-interface-extension-member-of-the-programs-wins-over-the-librarys -->
+`extension Iterable` declares `ElementTransform` in the library. The program's `extension Iterable` declares it
+with two parameters: `combine` takes the program's, and the library's `map` keeps its own.
+```maxon
+// --- file: ext.maxon
+export extension Iterable
+	export typealias ElementTransform = function(Element, Element) returns Element
+
+	export function combine(transform ElementTransform, seed Element) returns Element
+		var total = seed
+
+		for item in self 'each'
+			total = transform(total, item)
+		end 'each'
+
+		return total
+	end 'combine'
+end 'Iterable'
+
+// --- file: main.maxon
+typealias Number = int(0 to 99)
+typealias Numbers = Array with Number
+
+function main() returns ExitCode
+	var xs = Numbers.create()
+	xs.push(3)
+	xs.push(1)
+
+	var mapped = xs.map(function(n) gives n)
+	mapped.push(5)
+
+	let total = xs.combine(function(a, b) gives (a + b) as Number, seed: 0)
+	print("{mapped.count()} {total}\n")
+	return 0
+end 'main'
+```
+```stdout
+3 4
+```
+```exitcode
+0
+```
+
+<!-- test: an-extension-that-declares-no-member-reads-the-librarys -->
+The control: no program declaration of `ElementArray`, so the program's `extension Array` spells the
+library's, an `Array`.
+```maxon
+extension Array
+	function spare() returns ElementArray
+		return ElementArray.create()
+	end 'spare'
+end 'Array'
+
+typealias Number = int(0 to 99)
+typealias Numbers = Array with Number
+
+function main() returns ExitCode
+	var xs = Numbers.create()
+	var zs = xs.spare()
+	zs.push(4)
+	return zs.count() as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: error.another-files-extension-naming-a-private-member-of-the-programs -->
+`ext.maxon` declares `ElementArray` without a visibility modifier, so it is spelled from that file only; the
+sibling extension in `second.maxon` naming it is refused rather than reading the library's.
+```maxon
+// --- file: ext.maxon
+extension Array
+	typealias ElementArray = List with Element
+
+	function firstTwo() returns ElementArray
+		return ElementArray.create()
+	end 'firstTwo'
+end 'Array'
+
+// --- file: second.maxon
+extension Array
+	function spare() returns ElementArray
+		return ElementArray.create()
+	end 'spare'
+end 'Array'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3008: <fragment>:13:27: typealias 'ElementArray' is not exported
+```
+
 ## A NON-GENERIC type's member has a FILE-SCOPE name; a generic type's member does not
 
 Everything above is about which BODY may spell a member — the declaring type's own, or an `extension`
