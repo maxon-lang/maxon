@@ -37,12 +37,24 @@ let TrustStoreSettingsFrameBytes = 16
 let TrustStoreOutOffset = 0
 let TrustStoreNumberOffset = 8
 let TrustStoreKeyNameOffset = TrustStoreOutOffset + WordBytes
+let TrustStoreSlotWordOffset = 0
+let TrustStoreHeaderStart = 0
+let TrustStoreKeyNameStart = 0
 
 let TrustStoreRootNameUtf16 = 0x0054004F004F0052
+let TrustStoreRootTerminatorUtf16 = 0
 let TrustStoreNoContext = 0
 let TrustStoreNoArgument = 0
 let TrustStoreSuccessStatus = 0
 let TrustStoreFirstCursor = 1
+let TrustStoreCursorStep = 1
+let TrustStoreFirstMember = 0
+let TrustStoreMemberStep = 1
+let TrustStoreNoBytes = 0
+let TrustStoreFalseFlag = 0
+let TrustStoreNoCertificates = 0
+let TrustStoreNoResult = 0
+let TrustStoreNotSslPolicy = 0
 let TrustStoreLowDwordMask = 0xFFFFFFFF
 let TrustStoreBooleanMask = 0xFF
 let TrustStoreForceClose = 1
@@ -75,7 +87,7 @@ let TrustStoreByteRadix = 256
 // answered (system, admin, user; 0 for a domain that answered nothing), their counts, then one word
 // per `TrustStoreKey`. `__trust_close` releases whichever arrays are set and the keys the store
 // owns.
-let TrustStoreArraysOffset = 0
+let TrustStoreArraysOffset = TrustStoreHeaderStart
 let TrustStoreCountsOffset = TrustStoreArraysOffset + SecDomainCount * WordBytes
 let TrustStoreKeysOffset = TrustStoreCountsOffset + SecDomainCount * WordBytes
 let CfStringEncodingUtf8 = 0x08000100
@@ -85,6 +97,14 @@ let TrustStoreKeyPolicyStringName = b"kSecTrustSettingsPolicyString"
 let TrustStoreKeyResultName = b"kSecTrustSettingsResult"
 let TrustStoreKeyPolicyOidName = b"kSecPolicyOid"
 let TrustStoreKeyAppleSslName = b"kSecPolicyAppleSSL"
+
+// Declaration order is each domain's word position in the store block. `emitTrustStoreTotal` reads
+// `system` first and sums from `admin` on, so a reorder double-counts or drops a domain's certificates.
+enum TrustStoreDomain
+	system
+	admin
+	user
+end 'TrustStoreDomain'
 
 enum TrustStoreKey
 	policy
@@ -231,9 +251,9 @@ function buildWindowsTrustStoreOpen(module StdModule)
 	module.appendOp(entry, op: StdOp.stackRecordAddr(terminatorPtr, slot: TrustStoreRootTerminatorSlot))
 
 	let name = emitConst(module, block: entry, value: TrustStoreRootNameUtf16, ids: ids)
-	let terminator = emitConst(module, block: entry, value: 0, ids: ids)
-	emitStoreField(module, block: entry, record: namePtr, offset: 0, value: name)
-	emitStoreField(module, block: entry, record: terminatorPtr, offset: 0, value: terminator)
+	let terminator = emitConst(module, block: entry, value: TrustStoreRootTerminatorUtf16, ids: ids)
+	emitStoreField(module, block: entry, record: namePtr, offset: TrustStoreSlotWordOffset, value: name)
+	emitStoreField(module, block: entry, record: terminatorPtr, offset: TrustStoreSlotWordOffset, value: terminator)
 
 	let noProvider = emitConst(module, block: entry, value: TrustStoreNoContext, ids: ids)
 	let store = emitTrustStoreCall(module, block: entry, service: HostProcessCall.certOpenRootStore, a0: noProvider, a1: namePtr, ids: ids)
@@ -317,14 +337,17 @@ function installWindowsTrustStore(module StdModule)
 	buildWindowsTrustStoreClose(module)
 end 'installWindowsTrustStore'
 
-function trustStoreDomainConstant(position FullRangeInt) returns FullRangeInt
-	return match position 'domain'
-		0 gives SecDomainSystem
-		1 gives SecDomainAdmin
-		2 gives SecDomainUser
-		default panic("trustStoreDomainConstant: the store walks {SecDomainCount} domains, and {position} is not one of them")
-	end 'domain'
+function trustStoreDomainConstant(domain TrustStoreDomain) returns FullRangeInt
+	return match domain 'constant'
+		system gives SecDomainSystem
+		admin gives SecDomainAdmin
+		user gives SecDomainUser
+	end 'constant'
 end 'trustStoreDomainConstant'
+
+function trustStoreDomainWord(domain TrustStoreDomain) returns FullRangeInt
+	return domain.ordinal as FullRangeInt
+end 'trustStoreDomainWord'
 
 function trustStoreWordOffset(base FullRangeInt, word FullRangeInt) returns ByteOffset
 	return (base + word * WordBytes) as ByteOffset
@@ -344,9 +367,9 @@ function trustStoreNameWord(name ByteArray, word FullRangeInt) returns FullRange
 end 'trustStoreNameWord'
 
 function emitTrustStoreTotal(module StdModule, block IrBlock, store ValueId, ids ValueMinter) returns ValueId
-	var total = emitLoadField(module, block: block, record: store, offset: trustStoreWordOffset(TrustStoreCountsOffset, word: 0), ids: ids)
+	var total = emitLoadField(module, block: block, record: store, offset: trustStoreWordOffset(TrustStoreCountsOffset, word: trustStoreDomainWord(TrustStoreDomain.system)), ids: ids)
 
-	for position in 1 upto SecDomainCount 'eachCount'
+	for position in trustStoreDomainWord(TrustStoreDomain.admin) upto SecDomainCount 'eachCount'
 		let count = emitLoadField(module, block: block, record: store, offset: trustStoreWordOffset(TrustStoreCountsOffset, word: position), ids: ids)
 		total = emitBin(module, block: block, a: total, b: count, opcode: StdBinOpcode.add, ids: ids)
 	end 'eachCount'
@@ -354,14 +377,15 @@ function emitTrustStoreTotal(module StdModule, block IrBlock, store ValueId, ids
 	return total
 end 'emitTrustStoreTotal'
 
-function emitTrustStoreCopyDomain(module StdModule, func IrFunction, cur IrBlock, header ValueId, scratch ValueId, position FullRangeInt, ids ValueMinter) returns IrBlock
+function emitTrustStoreCopyDomain(module StdModule, func IrFunction, cur IrBlock, header ValueId, scratch ValueId, domain TrustStoreDomain, ids ValueMinter) returns IrBlock
+	let position = trustStoreDomainWord(domain)
 	var copied = module.addBlock(func, label: "tscopied{position}".toByteArray(), heat: BlockHeat.normal)
 	var counted = module.addBlock(func, label: "tscounted{position}".toByteArray(), heat: BlockHeat.normal)
 	var next = module.addBlock(func, label: "tsdomain{position}".toByteArray(), heat: BlockHeat.normal)
 
 	emitStoreField(module, block: cur, record: scratch, offset: TrustStoreOutOffset, value: emitConst(module, block: cur, value: TrustStoreNoContext, ids: ids))
-	let domain = emitConst(module, block: cur, value: trustStoreDomainConstant(position), ids: ids)
-	let status = emitTrustStoreCall(module, block: cur, service: HostProcessCall.secTrustSettingsCopyCertificates, a0: domain, a1: scratch, ids: ids)
+	let domainConstant = emitConst(module, block: cur, value: trustStoreDomainConstant(domain), ids: ids)
+	let status = emitTrustStoreCall(module, block: cur, service: HostProcessCall.secTrustSettingsCopyCertificates, a0: domainConstant, a1: scratch, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: status, pred: StdCmpPred.eq, against: TrustStoreSuccessStatus, whenTrue: copied, whenFalse: next, ids: ids)
 
 	let array = emitLoadField(module, block: copied, record: scratch, offset: TrustStoreOutOffset, ids: ids)
@@ -381,7 +405,7 @@ function emitTrustStoreKeyName(module StdModule, block IrBlock, scratch ValueId,
 	let nameAt = emitBin(module, block: block, a: scratch, b: emitConst(module, block: block, value: TrustStoreKeyNameOffset, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 
 	for word in 0 upto trustStoreKeyNameWords(key) 'eachWord'
-		emitStoreField(module, block: block, record: nameAt, offset: trustStoreWordOffset(0, word: word), value: emitConst(module, block: block, value: trustStoreNameWord(name, word: word), ids: ids))
+		emitStoreField(module, block: block, record: nameAt, offset: trustStoreWordOffset(TrustStoreKeyNameStart, word: word), value: emitConst(module, block: block, value: trustStoreNameWord(name, word: word), ids: ids))
 	end 'eachWord'
 
 	return nameAt
@@ -401,7 +425,7 @@ function emitTrustStoreResolveKey(module StdModule, func IrFunction, cur IrBlock
 	let address = emitTrustStoreCall(module, block: cur, service: HostProcessCall.lookupSymbol, a0: defaultImage, a1: nameAt, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: address, pred: StdCmpPred.ne, against: TrustStoreNoContext, whenTrue: resolved, whenFalse: failed, ids: ids)
 
-	let value = emitLoadField(module, block: resolved, record: address, offset: 0, ids: ids)
+	let value = emitLoadField(module, block: resolved, record: address, offset: TrustStoreSlotWordOffset, ids: ids)
 	emitBranchCarrying(module, from: resolved, to: produced, value: value)
 end 'emitTrustStoreResolveKey'
 
@@ -434,7 +458,7 @@ function emitTrustStoreClearHeader(module StdModule, block IrBlock, header Value
 	let cleared = emitConst(module, block: block, value: TrustStoreNoContext, ids: ids)
 
 	for word in 0 upto trustStoreHeaderWords() 'eachWord'
-		emitStoreField(module, block: block, record: header, offset: trustStoreWordOffset(0, word: word), value: cleared)
+		emitStoreField(module, block: block, record: header, offset: trustStoreWordOffset(TrustStoreHeaderStart, word: word), value: cleared)
 	end 'eachWord'
 end 'emitTrustStoreClearHeader'
 
@@ -449,14 +473,14 @@ function buildMacosTrustStoreOpen(module StdModule)
 	func.stackSize = trustStoreOpenFrameBytes()
 	let scratch = ids.mint()
 	module.appendOp(entry, op: StdOp.stackRecordAddr(scratch, slot: TrustStoreScratchSlot))
-	let header = emitRawAlloc(module, block: entry, byteCount: emitConst(module, block: entry, value: trustStoreWordOffset(0, word: trustStoreHeaderWords()) as FullRangeInt, ids: ids), ids: ids)
+	let header = emitRawAlloc(module, block: entry, byteCount: emitConst(module, block: entry, value: trustStoreWordOffset(TrustStoreHeaderStart, word: trustStoreHeaderWords()) as FullRangeInt, ids: ids), ids: ids)
 
 	emitTrustStoreClearHeader(module, block: entry, header: header, ids: ids)
 
 	var cur = entry
 
-	for position in 0 upto SecDomainCount 'eachDomain'
-		cur = emitTrustStoreCopyDomain(module, func: func, cur: cur, header: header, scratch: scratch, position: position, ids: ids)
+	for domain in TrustStoreDomain.allCases 'eachDomain'
+		cur = emitTrustStoreCopyDomain(module, func: func, cur: cur, header: header, scratch: scratch, domain: domain, ids: ids)
 	end 'eachDomain'
 
 	for key in TrustStoreKey.allCases 'eachKey'
@@ -464,7 +488,7 @@ function buildMacosTrustStoreOpen(module StdModule)
 	end 'eachKey'
 
 	let total = emitTrustStoreTotal(module, block: cur, store: header, ids: ids)
-	emitBranchOnCompare(module, block: cur, value: total, pred: StdCmpPred.eq, against: 0, whenTrue: failed, whenFalse: opened, ids: ids)
+	emitBranchOnCompare(module, block: cur, value: total, pred: StdCmpPred.eq, against: TrustStoreNoCertificates, whenTrue: failed, whenFalse: opened, ids: ids)
 
 	module.setTerminator(opened, op: StdOp.ret(header))
 
@@ -489,7 +513,7 @@ function buildMacosTrustStoreNext(module StdModule)
 	let total = emitTrustStoreTotal(module, block: entry, store: store, ids: ids)
 	emitBranchOnCompareValues(module, block: entry, a: cursor, pred: StdCmpPred.lt, b: total, whenTrue: advance, whenFalse: finished, ids: ids)
 
-	let step = emitConst(module, block: advance, value: 1, ids: ids)
+	let step = emitConst(module, block: advance, value: TrustStoreCursorStep, ids: ids)
 	let next = emitBin(module, block: advance, a: cursor, b: step, opcode: StdBinOpcode.add, ids: ids)
 	module.setTerminator(advance, op: StdOp.ret(next))
 
@@ -513,11 +537,11 @@ function emitTrustEntry(module StdModule, func IrFunction, entry IrBlock, store 
 
 	let firstCursor = emitConst(module, block: entry, value: TrustStoreFirstCursor, ids: ids)
 	let position = emitBin(module, block: entry, a: cursor, b: firstCursor, opcode: StdBinOpcode.sub, ids: ids)
-	let systemCount = emitLoadField(module, block: entry, record: store, offset: trustStoreWordOffset(TrustStoreCountsOffset, word: 0), ids: ids)
-	let adminCount = emitLoadField(module, block: entry, record: store, offset: trustStoreWordOffset(TrustStoreCountsOffset, word: 1), ids: ids)
+	let systemCount = emitLoadField(module, block: entry, record: store, offset: trustStoreWordOffset(TrustStoreCountsOffset, word: trustStoreDomainWord(TrustStoreDomain.system)), ids: ids)
+	let adminCount = emitLoadField(module, block: entry, record: store, offset: trustStoreWordOffset(TrustStoreCountsOffset, word: trustStoreDomainWord(TrustStoreDomain.admin)), ids: ids)
 	emitBranchOnCompareValues(module, block: entry, a: position, pred: StdCmpPred.lt, b: systemCount, whenTrue: system, whenFalse: beyondSystem, ids: ids)
 
-	let systemArray = emitLoadField(module, block: system, record: store, offset: trustStoreWordOffset(TrustStoreArraysOffset, word: 0), ids: ids)
+	let systemArray = emitLoadField(module, block: system, record: store, offset: trustStoreWordOffset(TrustStoreArraysOffset, word: trustStoreDomainWord(TrustStoreDomain.system)), ids: ids)
 	let systemDomain = emitConst(module, block: system, value: SecDomainSystem, ids: ids)
 	module.setTerminator(system, op: StdOp.branch(joined.id))
 	system.branchEdges.push(BranchEdge.create(joined.id, argIds: threeArgs(systemArray, second: position, third: systemDomain)))
@@ -525,13 +549,13 @@ function emitTrustEntry(module StdModule, func IrFunction, entry IrBlock, store 
 	let adminEnd = emitBin(module, block: beyondSystem, a: systemCount, b: adminCount, opcode: StdBinOpcode.add, ids: ids)
 	emitBranchOnCompareValues(module, block: beyondSystem, a: position, pred: StdCmpPred.lt, b: adminEnd, whenTrue: admin, whenFalse: user, ids: ids)
 
-	let adminArray = emitLoadField(module, block: admin, record: store, offset: trustStoreWordOffset(TrustStoreArraysOffset, word: 1), ids: ids)
+	let adminArray = emitLoadField(module, block: admin, record: store, offset: trustStoreWordOffset(TrustStoreArraysOffset, word: trustStoreDomainWord(TrustStoreDomain.admin)), ids: ids)
 	let adminIndex = emitBin(module, block: admin, a: position, b: systemCount, opcode: StdBinOpcode.sub, ids: ids)
 	let adminDomain = emitConst(module, block: admin, value: SecDomainAdmin, ids: ids)
 	module.setTerminator(admin, op: StdOp.branch(joined.id))
 	admin.branchEdges.push(BranchEdge.create(joined.id, argIds: threeArgs(adminArray, second: adminIndex, third: adminDomain)))
 
-	let userArray = emitLoadField(module, block: user, record: store, offset: trustStoreWordOffset(TrustStoreArraysOffset, word: 2), ids: ids)
+	let userArray = emitLoadField(module, block: user, record: store, offset: trustStoreWordOffset(TrustStoreArraysOffset, word: trustStoreDomainWord(TrustStoreDomain.user)), ids: ids)
 	let userIndex = emitBin(module, block: user, a: position, b: adminEnd, opcode: StdBinOpcode.sub, ids: ids)
 	let userDomain = emitConst(module, block: user, value: SecDomainUser, ids: ids)
 	module.setTerminator(user, op: StdOp.branch(joined.id))
@@ -567,7 +591,7 @@ function buildMacosTrustStoreCertificate(module StdModule)
 	emitTrustStoreRelease(module, block: copied, object: data, ids: ids)
 	module.setTerminator(copied, op: StdOp.ret(record))
 
-	let nothing = emitConst(module, block: absent, value: 0, ids: ids)
+	let nothing = emitConst(module, block: absent, value: TrustStoreNoBytes, ids: ids)
 	let emptyRecord = ids.mint()
 	var emptied = emitFreshBytesRecord(module, func: func, cur: absent, record: emptyRecord, src: nothing, byteCount: nothing, ids: ids)
 	module.setTerminator(emptied, op: StdOp.ret(emptyRecord))
@@ -654,7 +678,7 @@ function buildTrustSslPolicy(module StdModule)
 	emitBranchOnCompare(module, block: described, value: emitTrustStoreBoolean(module, block: described, raw: present, ids: ids), pred: StdCmpPred.ne, against: TrustStoreNoContext, whenTrue: hasOid, whenFalse: absentOid, ids: ids)
 
 	emitTrustStoreRelease(module, block: absentOid, object: properties, ids: ids)
-	let absentFlag = emitConst(module, block: absentOid, value: 0, ids: ids)
+	let absentFlag = emitConst(module, block: absentOid, value: TrustStoreFalseFlag, ids: ids)
 	emitBranchCarrying(module, from: absentOid, to: finish, value: absentFlag)
 
 	let oidValue = emitLoadField(module, block: hasOid, record: scratch, offset: TrustStoreOutOffset, ids: ids)
@@ -664,7 +688,7 @@ function buildTrustSslPolicy(module StdModule)
 	emitTrustStoreRelease(module, block: hasOid, object: properties, ids: ids)
 	emitBranchCarrying(module, from: hasOid, to: finish, value: equalFlag)
 
-	let notSsl = emitConst(module, block: noOid, value: 0, ids: ids)
+	let notSsl = emitConst(module, block: noOid, value: TrustStoreFalseFlag, ids: ids)
 	emitBranchCarrying(module, from: noOid, to: finish, value: notSsl)
 
 	let flag = ids.mint()
@@ -739,12 +763,12 @@ function buildTrustSslResult(module StdModule)
 	settingsHeld.blockArgs.push(IrBlockArg.create(settings, argType: StdType.i64))
 	let unused = emitConst(module, block: settingsHeld, value: TrustStoreNoArgument, ids: ids)
 	let count = emitTrustStoreCall(module, block: settingsHeld, service: HostProcessCall.cfArrayCount, a0: settings, a1: unused, ids: ids)
-	emitBranchOnCompare(module, block: settingsHeld, value: count, pred: StdCmpPred.eq, against: 0, whenTrue: emptySettings, whenFalse: walk, ids: ids)
+	emitBranchOnCompare(module, block: settingsHeld, value: count, pred: StdCmpPred.eq, against: TrustStoreNoCertificates, whenTrue: emptySettings, whenFalse: walk, ids: ids)
 
 	emitTrustStoreRelease(module, block: emptySettings, object: settings, ids: ids)
 	emitConstReturn(module, block: emptySettings, value: SecResultTrustRoot, ids: ids)
 
-	let first = emitConst(module, block: walk, value: 0, ids: ids)
+	let first = emitConst(module, block: walk, value: TrustStoreFirstMember, ids: ids)
 	module.setTerminator(walk, op: StdOp.branch(header.id))
 	walk.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(first, second: first)))
 
@@ -762,7 +786,7 @@ function buildTrustSslResult(module StdModule)
 
 	let policy = emitLoadField(module, block: constrained, record: scratch, offset: TrustStoreOutOffset, ids: ids)
 	let isSsl = emitTrustStoreRuntimeCall(module, block: constrained, callee: TrustStoreIsSslPolicyName, args: twoArgs(store, second: policy), ids: ids)
-	emitBranchOnCompare(module, block: constrained, value: isSsl, pred: StdCmpPred.ne, against: 0, whenTrue: checkPolicyString, whenFalse: step, ids: ids)
+	emitBranchOnCompare(module, block: constrained, value: isSsl, pred: StdCmpPred.ne, against: TrustStoreNotSslPolicy, whenTrue: checkPolicyString, whenFalse: step, ids: ids)
 	constrained.branchEdges.push(BranchEdge.create(step.id, argIds: argsOf(latest)))
 
 	let policyStringKey = emitLoadField(module, block: checkPolicyString, record: store, offset: trustStoreKeyOffset(TrustStoreKey.policyString), ids: ids)
@@ -797,12 +821,12 @@ function buildTrustSslResult(module StdModule)
 
 	let carried = ids.mint()
 	step.blockArgs.push(IrBlockArg.create(carried, argType: StdType.i64))
-	let advanceBy = emitConst(module, block: step, value: 1, ids: ids)
+	let advanceBy = emitConst(module, block: step, value: TrustStoreMemberStep, ids: ids)
 	let nextMember = emitBin(module, block: step, a: member, b: advanceBy, opcode: StdBinOpcode.add, ids: ids)
 	module.setTerminator(step, op: StdOp.branch(header.id))
 	step.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(nextMember, second: carried)))
 
-	emitBranchOnCompare(module, block: finished, value: latest, pred: StdCmpPred.eq, against: 0, whenTrue: unmatched, whenFalse: walkExit, ids: ids)
+	emitBranchOnCompare(module, block: finished, value: latest, pred: StdCmpPred.eq, against: TrustStoreNoResult, whenTrue: unmatched, whenFalse: walkExit, ids: ids)
 	finished.branchEdges.push(BranchEdge.create(walkExit.id, argIds: argsOf(latest)))
 
 	let fallback = emitConst(module, block: unmatched, value: SecResultUnspecified, ids: ids)
@@ -829,8 +853,8 @@ function buildMacosTrustStoreClose(module StdModule)
 
 	var cur = entry
 
-	for position in 0 upto SecDomainCount 'eachArray'
-		cur = emitTrustStoreReleaseSlot(module, func: func, cur: cur, store: store, offset: trustStoreWordOffset(TrustStoreArraysOffset, word: position), ids: ids)
+	for domain in TrustStoreDomain.allCases 'eachArray'
+		cur = emitTrustStoreReleaseSlot(module, func: func, cur: cur, store: store, offset: trustStoreWordOffset(TrustStoreArraysOffset, word: trustStoreDomainWord(domain)), ids: ids)
 	end 'eachArray'
 
 	for key in TrustStoreKey.allCases 'eachKey'
@@ -846,6 +870,10 @@ function buildMacosTrustStoreClose(module StdModule)
 end 'buildMacosTrustStoreClose'
 
 function installMacosTrustStore(module StdModule)
+	if TrustStoreDomain.allCases.count() != SecDomainCount 'domainCount'
+		panic("installMacosTrustStore: the store header is laid out for {SecDomainCount} domains and TrustStoreDomain names {TrustStoreDomain.allCases.count()}")
+	end 'domainCount'
+
 	buildMacosTrustStoreOpen(module)
 	buildMacosTrustStoreNext(module)
 	buildMacosTrustStoreCertificate(module)
