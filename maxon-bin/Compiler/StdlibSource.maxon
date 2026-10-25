@@ -2083,7 +2083,7 @@ function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByN
 		panicAbort then break
 		functionRef(_, funcName, _) then noteSubstrateCallee(funcName, callerNode: callerNode, nodeOf: nodeOf, state: state)
 		indirectCall then break
-		asyncCall(_, callee, _, _, _, _, _, _) then noteSubstrateCallee(callee, callerNode: callerNode, nodeOf: nodeOf, state: state)
+		asyncCall(_, callee, _, _, _, _, _, _) then noteSubstrateCalleeAndEntry(callee, entry: GtSpawnName, callerNode: callerNode, nodeOf: nodeOf, state: state)
 		await or
 		tryAwait or
 		sizeofType or
@@ -2098,16 +2098,19 @@ function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByN
 		// The error-flag encode names no callee at all, so it reaches no stdlib substrate.
 		errorFlagEncode then break
 
+		// The service and `async` ops are seeds as well as edges: a stdlib body is never blamed for its own
+		// ops, so the entry each lowers to must reach the user's crossing through this fixpoint.
+		//
 		// A `spawn` names a TYPE; the factory it calls is an ordinary `call` op beside it and is noted there.
-		serviceSpawn then break
+		serviceSpawn then noteSubstrateCallee(SvcSpawnName, callerNode: callerNode, nodeOf: nodeOf, state: state)
 
 		// ⭐ A SEND REACHES ITS MESSAGE, so it is an EDGE exactly as an `async` spawn is — the handler runs on
 		// another green thread, but it is the same function and it reaches whatever that function reaches.
-		serviceSend(_, _, callee, _, _, _, _, _) then noteSubstrateCallee(callee, callerNode: callerNode, nodeOf: nodeOf, state: state)
+		serviceSend(_, _, callee, _, _, _, _, _) then noteSubstrateCalleeAndEntry(callee, entry: MboxSendName, callerNode: callerNode, nodeOf: nodeOf, state: state)
 
 		// A REPLY CELL names the message only to derive its releaser symbol; the `serviceSend` beside it is
 		// the edge to that message, and noting it twice would credit one call graph edge to two ops.
-		serviceReplyCell then break
+		serviceReplyCell then noteSubstrateCallee(GtCellAllocName, callerNode: callerNode, nodeOf: nodeOf, state: state)
 		immortalStructRecord or
 		immortalStringTable or
 		covPoint then break
@@ -2160,3 +2163,8 @@ function noteSubstrateCallee(callee ByteArray, callerNode CsrIndex, nodeOf Stdli
 		state.callEdge(calleeNode, callerNode: callerNode)
 	end 'stdlibSibling'
 end 'noteSubstrateCallee'
+
+function noteSubstrateCalleeAndEntry(callee ByteArray, entry ByteArray, callerNode CsrIndex, nodeOf StdlibNodeByName, state SubstrateFixpoint)
+	noteSubstrateCallee(entry, callerNode: callerNode, nodeOf: nodeOf, state: state)
+	noteSubstrateCallee(callee, callerNode: callerNode, nodeOf: nodeOf, state: state)
+end 'noteSubstrateCalleeAndEntry'

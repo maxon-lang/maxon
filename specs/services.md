@@ -17199,6 +17199,80 @@ end 'main'
 42
 ```
 
+<!-- test: error.a-library-spawn-is-rejected-at-its-crossing-on-wasm -->
+<!-- tier: stdlib -->
+<!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+A library body that spawns reaches the green-thread substrate exactly as a `spawn` in the program does, so on a
+target with none the call that crosses into it is refused with `E3104` at its own span, naming the entry the
+spawn lowers to. The scheduler install is never reached.
+```maxon
+// --- stdlib-overlay: Builtins.maxon
+public typealias ProbeCount = int(i64.min to i64.max)
+
+public type Probe
+	var calls as ProbeCount
+
+	public static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	export function ping() returns ProbeCount
+		self.calls = self.calls + 1
+		return self.calls
+	end 'ping'
+end 'Probe'
+
+public function startProbe() returns ProbeCount
+	let probe = spawn Probe.create()
+	return try await probe.ping() otherwise 0
+end 'startProbe'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return (startProbe() + 41) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:25:10: 'startProbe' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation
+```
+
+<!-- test: error.a-library-send-is-rejected-at-its-crossing-on-wasm -->
+<!-- tier: stdlib -->
+<!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+A library body that sends a message to a service it was handed reaches the substrate the same way, so the call
+into it is refused with `E3104` naming the reply cell the awaited send mints, beside the `spawn` the program itself writes.
+```maxon
+// --- stdlib-overlay: Builtins.maxon
+public typealias ProbeCount = int(i64.min to i64.max)
+
+public type Probe
+	var calls as ProbeCount
+
+	public static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	export function ping() returns ProbeCount
+		self.calls = self.calls + 1
+		return self.calls
+	end 'ping'
+end 'Probe'
+
+public function askProbe(probe Probe.handle) returns ProbeCount
+	return try await probe.ping() otherwise 0
+end 'askProbe'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let probe = spawn Probe.create()
+	return askProbe(probe) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:24:14: 'spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation
+error E3104: <fragment>:25:9: 'askProbe' lowers to the runtime entry '__gt_cell_alloc', which has no wasm32-wasi implementation
+```
+
 ### A socket crosses into a service when its one owner sends it
 
 A `TcpClient` owns an OS socket, and the socket's box counts its owners as every other record does, so the send's

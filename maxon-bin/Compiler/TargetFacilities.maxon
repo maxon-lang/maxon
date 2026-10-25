@@ -442,6 +442,10 @@ function calleeHostFacility(callee ByteArray) returns CalleeFacility
 		return CalleeFacility.needs(HostFacility.greenThreads)
 	end 'select'
 
+	if isServiceOpEntry(callee) 'serviceOps'
+		return CalleeFacility.needs(HostFacility.greenThreads)
+	end 'serviceOps'
+
 	// Each reads the running machine, which only the green-thread floor provides; without this arm
 	// wasm32-wasi dies in its backend rather than refusing at the call.
 	if isMachineBindingCallee(callee) 'machineBinding'
@@ -593,6 +597,13 @@ function calleeHostFacility(callee ByteArray) returns CalleeFacility
 
 	return CalleeFacility.none
 end 'calleeHostFacility'
+
+// The entries a service or `async` op lowers to. No call op names them, so `SemanticCheck` asks for
+// them at the op and `StdlibSource`'s fixpoint seeds them from a stdlib body's op; answering `none` here
+// leaves a library spawn to reach the scheduler install on a target without the green-thread floor.
+function isServiceOpEntry(callee ByteArray) returns bool
+	return callee.equals(SvcSpawnName) or callee.equals(MboxSendName) or callee.equals(GtSpawnName) or callee.equals(GtCellAllocName)
+end 'isServiceOpEntry'
 
 // ⭐ **THE TWO QUESTIONS FUSED BACK TOGETHER FOR THE ONE CALLER THAT WANTS THEM THAT WAY** — *"does this
 // callee need a facility this target does not provide?"*, which is the E3104 verdict itself.
