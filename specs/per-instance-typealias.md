@@ -1251,6 +1251,200 @@ end 'main'
 2
 ```
 
+## A body declares each nested typealias ONCE
+
+A `type` or `interface` body is one member list, so a nested `typealias` name written twice in it is a
+duplicate whatever the two declarations denote: the compiler would otherwise keep whichever it read last and
+give the first declaration's own signatures that instance without a word. The later declaration is
+[E3061](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3061) at its name, and the rule covers the generic-instance,
+ranged, function and tuple forms alike.
+
+### One type body declares a member twice
+
+<!-- test: error.a-type-body-declares-a-generic-member-twice -->
+```maxon
+typealias Digit = int(0 to 9)
+
+type Box
+	typealias Items = List with Digit
+	typealias Items = Array with Digit
+	export var n as Digit
+
+	static function create(n Digit) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function items() returns Items
+		return Items.create()
+	end 'items'
+end 'Box'
+
+function main() returns ExitCode
+	let box = Box.create(3)
+	var xs = box.items()
+	xs.push(box.n)
+	return xs.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3061: <fragment>:6:12: Duplicate typealias 'Items': `Box.Items` is already declared earlier in the body of `Box`
+```
+
+<!-- test: error.a-type-body-declares-a-ranged-member-twice -->
+```maxon
+type Box
+	typealias Idx = int(0 to 9)
+	typealias Idx = int(0 to 99)
+	export var n as Idx
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let box = Box.create()
+	return box.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3061: <fragment>:4:12: Duplicate typealias 'Idx': `Box.Idx` is already declared earlier in the body of `Box`
+```
+
+<!-- test: error.a-type-body-declares-a-function-member-twice -->
+```maxon
+typealias Number = int(0 to 9)
+
+type Box
+	typealias Op = function(Number) returns Number
+	typealias Op = function(Number, Number) returns Number
+	export var n as Number
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+
+	function apply(op Op) returns Number
+		return op(self.n, 2)
+	end 'apply'
+end 'Box'
+
+function main() returns ExitCode
+	let box = Box.create()
+	return box.apply(function(a, b) gives a + b) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3061: <fragment>:6:12: Duplicate typealias 'Op': `Box.Op` is already declared earlier in the body of `Box`
+```
+
+<!-- test: error.a-type-body-declares-a-tuple-member-twice -->
+```maxon
+typealias Number = int(0 to 9)
+
+type Box
+	typealias Pair = (Number, Number)
+	typealias Pair = (Number, Number, Number)
+	export var n as Number
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+
+	function pair() returns Pair
+		return (self.n, self.n, self.n)
+	end 'pair'
+end 'Box'
+
+function main() returns ExitCode
+	let box = Box.create()
+	let pair = box.pair()
+	return pair.0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3061: <fragment>:6:12: Duplicate typealias 'Pair': `Box.Pair` is already declared earlier in the body of `Box`
+```
+
+<!-- test: error.an-interface-body-declares-a-member-twice -->
+```maxon
+typealias Digit = int(0 to 9)
+
+interface Seq uses Item
+	typealias Items = Array with Item
+	typealias Items = List with Item
+	function first() returns Item
+end 'Seq'
+
+type Box implements Seq with Digit
+	export var n as Digit
+
+	static function create(n Digit) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function first() returns Digit
+		return self.n
+	end 'first'
+end 'Box'
+
+function main() returns ExitCode
+	let box = Box.create(3)
+	return box.first() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3061: <fragment>:6:12: Duplicate typealias 'Items': `Seq.Items` is already declared earlier in the body of `Seq`
+```
+
+### What the refusal leaves alone
+
+<!-- test: two-types-each-declare-a-member-of-one-name -->
+The key is `<Type>.<member>`, so two types declaring `Items` once each are not duplicates of each other,
+and neither is a type body beside an `extension` of another type declaring the same name.
+```maxon
+typealias Digit = int(0 to 9)
+
+type Box
+	typealias Items = List with Digit
+	export var n as Digit
+
+	static function create(n Digit) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function items() returns Items
+		return Items.create()
+	end 'items'
+end 'Box'
+
+type Crate
+	typealias Items = Array with Digit
+	export var n as Digit
+
+	static function create(n Digit) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function items() returns Items
+		return Items.create()
+	end 'items'
+end 'Crate'
+
+function main() returns ExitCode
+	let box = Box.create(3)
+	let crate = Crate.create(4)
+	var listed = box.items()
+	listed.prepend(box.n)
+	var arrayed = crate.items()
+	arrayed.push(crate.n)
+	return (listed.count() + arrayed.count()) as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
 ## A NON-GENERIC type's member has a FILE-SCOPE name; a generic type's member does not
 
 Everything above is about which BODY may spell a member — the declaring type's own, or an `extension`

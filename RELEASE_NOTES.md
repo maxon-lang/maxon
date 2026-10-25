@@ -144,6 +144,10 @@ release's version as its heading when the release is cut.
   interface extension; the compiler kept whichever declaration it reached last and gave the other
   extension's own signatures that instance without a word.
   Fix: rename one of the two members, or declare it in one extension and name it from the other.
+- A `type` or `interface` body that declares the same nested `typealias` twice is E3061 at the second
+  declaration, for the generic-instance, ranged, function and tuple forms; the compiler kept the last
+  declaration and gave the first one's own signatures that meaning without a word.
+  Fix: rename one of the two members, or delete the declaration that is not meant.
 
 ## 0.5.0 — 2026-10-08
 

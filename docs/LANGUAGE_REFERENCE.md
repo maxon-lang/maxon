@@ -1100,6 +1100,10 @@ declaration in the file whose absolute path, with `/` separators, sorts first by
 the one written first. A conditional extension declares the member only for the conformers its `where`
 clause admits, and only the program's own extensions are compared.
 
+A `type` or `interface` body declares each nested typealias once: a second declaration of the name in the
+same body, whatever its form (generic instance, ranged, function or tuple), is
+[E3061](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3061) at its name.
+
 A per-instance **function** alias is unbranded: it spells the shared body's signature over the type's own
 parameters. `Array.sort` takes an `Array.SortComparator`, so a field declared with your own `typealias RowComparator =
 function(Row, Row) returns Ordering` passes straight through: `rows.sort(self.compare)` compiles with no

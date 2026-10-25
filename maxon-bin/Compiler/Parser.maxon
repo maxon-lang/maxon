@@ -19590,6 +19590,10 @@ export type Parser
 	// `enclosingType` (`parseTypeDeclaration`/`recordScannedType` are the writers).
 	var enclosingInnerAliases as InnerAliasRoster
 
+	// Every nested typealias member the enclosing body has declared so far, function form included, which
+	// `enclosingInnerAliases` leaves out. Read only by the real parse's redeclaration check.
+	var declaredNestedAliases as InnerAliasRoster
+
 	// ⭐⭐ **THE GENERIC-INSTANCE TYPEALIASES OF THE `interface` CURRENTLY BEING READ** —
 	// `typealias ElementArray = Array with Element` inside `interface Holder uses Element`. It is the RHS,
 	// and only the RHS, that says what a requirement written `absorb(value ElementArray)` actually requires;
@@ -20077,6 +20081,7 @@ export type Parser
 			unsettledSend: UnsettledSend.settled,
 			sentLeg: SentLegSlot.none,
 			enclosingInnerAliases: noInnerAliases,
+			declaredNestedAliases: noInnerAliases,
 			interfaceAliasScratch: anchors.interfaceAliases,
 			innerAliasesFromIndex: false,
 			filedTupleNames: noFiledTupleNames,
@@ -26594,6 +26599,7 @@ export type Parser
 		self.enclosingTypeIsEnum = isEnum
 		self.enclosingTypeParams = self.emptyTypeParams
 		self.enclosingInnerAliases = noInnerAliases
+		self.declaredNestedAliases = noInnerAliases
 		self.innerAliasesFromIndex = false
 		self.enclosingWhereConstraints = WhereConstraintArray.create()
 		self.enclosingExtensionConstraints = WhereConstraintArray.create()
@@ -26734,6 +26740,7 @@ export type Parser
 		// declared one, resolves as an ordinary named type rather than a stale inner alias — and allocates
 		// nothing, exactly as `emptyTypeParams` restores.
 		self.enclosingInnerAliases = noInnerAliases
+		self.declaredNestedAliases = noInnerAliases
 
 		// Restored in lockstep for the same reason, one layer up: a drained default's index-scoped answer must
 		// not survive into the next declaration, where the set above is the only truth again.
@@ -30610,10 +30617,36 @@ export type Parser
 
 		if let keeper = try self.signatures.extensionInnerAliasKeeper(qualified) 'someExtensionDeclaresIt'
 			if self.extensionInnerAliasSiteAt(nameTok).compare(keeper) != Ordering.equalTo 'aLaterDeclaration'
-				throw SourceParseError.registryRefused(ErrorCode.semanticDuplicateTypeAlias, explanation: "Duplicate typealias '{String.from(nameTok.value)}': `{String.from(qualified)}` is already declared by an `extension` in {keeper.declFilePath.filename()}", line: nameTok.line, column: nameTok.column, note: DiagnosticNote.none)
+				throw self.duplicateNestedAliasRefusal(nameTok, qualified: qualified, declaredBy: "by an `extension` in {keeper.declFilePath.filename()}")
 			end 'aLaterDeclaration'
 		end 'someExtensionDeclaresIt'
 	end 'requireExtensionInnerAliasKept'
+
+	function duplicateNestedAliasRefusal(nameTok Token, qualified ByteArray, declaredBy String) returns SourceParseError
+		return SourceParseError.registryRefused(ErrorCode.semanticDuplicateTypeAlias, explanation: "Duplicate typealias '{String.from(nameTok.value)}': `{String.from(qualified)}` is already declared {declaredBy}", line: nameTok.line, column: nameTok.column, note: DiagnosticNote.none)
+	end 'duplicateNestedAliasRefusal'
+
+	function requireNestedAliasDeclaredOnce(nameTok Token) throws SourceParseError
+		var declared = self.nestedAliasesDeclaredForWrite()
+
+		if declared.contains(nameTok.value) 'aRedeclaration'
+			let typeName = self.enclosingTypeName()
+			throw self.duplicateNestedAliasRefusal(nameTok, qualified: joinQualifiedName(typeName, member: nameTok.value), declaredBy: "earlier in the body of `{String.from(typeName)}`")
+		end 'aRedeclaration'
+
+		declared.insert(nameTok.value)
+	end 'requireNestedAliasDeclaredOnce'
+
+	function nestedAliasesDeclaredForWrite() returns InnerAliasNameSet
+		match self.declaredNestedAliases 'state'
+			unwritten then break
+			entries(table) then return table
+		end 'state'
+
+		let fresh = InnerAliasNameSet.create()
+		self.declaredNestedAliases = InnerAliasRoster.entries(fresh)
+		return fresh
+	end 'nestedAliasesDeclaredForWrite'
 
 	function extensionMemberHidesOwnMemberError(conformer ByteArray, qualified ByteArray, takesReceiver bool, nameTok Token) returns SourceParseError
 		let own = self.signatures.ownMemberDeclSite(qualified, takesReceiver: takesReceiver)
@@ -30827,7 +30860,13 @@ export type Parser
 				// `Array_…`, and every conformer would be refused. A ranged inner alias erases to `integer` and
 				// a tuple one resolves to the interned tuple's own `structRef`, so for those two the
 				// requirement's rendered type is already the type.
-				match try self.readNestedTypeAlias(try self.consumeOptionalVisibility(), recordFunctionSignature: false, tupleOwner: TupleAliasOwner.unpublished) 'nested'
+				let aliasVisibility = try self.consumeOptionalVisibility()
+
+				if checksEndLabel 'aRealParseRefusesARedeclaration'
+					try self.requireNestedAliasDeclaredOnce(self.tokenAt(self.pos + 1))
+				end 'aRealParseRefusesARedeclaration'
+
+				match try self.readNestedTypeAlias(aliasVisibility, recordFunctionSignature: false, tupleOwner: TupleAliasOwner.unpublished) 'nested'
 					ranged or
 					tupleAlias then break
 					genericInstance(entry) then self.noteInterfaceAlias(entry)
@@ -32715,9 +32754,12 @@ export type Parser
 			// files into — under BOTH of the names it declares, exactly as the sweep files it
 			// (`publishNestedFunctionAlias`). This is the copy every consumer of a PARAMETER type reads, so a
 			// qualified key filed by the sweep alone would carry the return type and an empty parameter list.
-			if memberList == MemberList.extensionBody 'anExtensionMember'
-				try self.requireExtensionInnerAliasKept(self.tokenAt(self.pos + 1))
-			end 'anExtensionMember'
+			let aliasNameTok = self.tokenAt(self.pos + 1)
+
+			match memberList 'whoseMember'
+				typeBody then try self.requireNestedAliasDeclaredOnce(aliasNameTok)
+				extensionBody then try self.requireExtensionInnerAliasKept(aliasNameTok)
+			end 'whoseMember'
 
 			match try self.readNestedTypeAlias(visibility, recordFunctionSignature: true, tupleOwner: TupleAliasOwner.unpublished) 'nested'
 				ranged or
