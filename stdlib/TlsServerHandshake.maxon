@@ -185,13 +185,7 @@ module type TlsServerHandshake implements TlsEndpoint, TlsMessageHandler
 			end 'eachShare'
 		end 'eachSharedGroup'
 
-		for group in config.groups 'eachRetryGroup'
-			if scan.supportedGroups.contains(group) 'supported'
-				return TlsGroupChoice.retry(group)
-			end 'supported'
-		end 'eachRetryGroup'
-
-		throw TlsHandshakeError.handshakeFailure
+		return TlsGroupChoice.retry(try config.preferredGroup(scan))
 	end 'chooseGroup'
 
 	function requestRetry(choice TlsServerChoice, group TlsGroupCode) throws TlsHandshakeError

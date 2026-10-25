@@ -176,7 +176,7 @@ function tls12Negotiate(config TlsServerConfig, hello TlsClientHello, scan TlsEx
 		throw TlsHandshakeError.illegalParameter
 	end 'pointFormats'
 
-	let group = try tls12ChooseGroup(config, scan: scan)
+	let group = try config.preferredGroup(scan)
 
 	if not scan.types.contains(TlsExtensionKind.signatureAlgorithms.code()) 'noSchemes'
 		throw TlsHandshakeError.handshakeFailure
@@ -198,16 +198,6 @@ function tls12ChooseSuite(config TlsServerConfig, hello TlsClientHello) returns 
 
 	throw TlsHandshakeError.handshakeFailure
 end 'tls12ChooseSuite'
-
-function tls12ChooseGroup(config TlsServerConfig, scan TlsExtensionScan) returns TlsGroupCode throws TlsHandshakeError
-	for group in config.groups 'eachGroup'
-		if scan.supportedGroups.contains(group) 'supported'
-			return group
-		end 'supported'
-	end 'eachGroup'
-
-	throw TlsHandshakeError.handshakeFailure
-end 'tls12ChooseGroup'
 
 function tls12ServerRandom(config TlsServerConfig, entropy TlsServerEntropy) returns ByteArray
 	if not config.protocols.contains(TlsProtocol.tls13) 'single'

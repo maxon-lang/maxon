@@ -38,6 +38,16 @@ module type TlsServerConfig
 		throw TlsHandshakeError.noApplicationProtocol
 	end 'applicationProtocol'
 
+	module function preferredGroup(scan TlsExtensionScan) returns TlsGroupCode throws TlsHandshakeError
+		for group in groups 'eachGroup'
+			if scan.supportedGroups.contains(group) 'supported'
+				return group
+			end 'supported'
+		end 'eachGroup'
+
+		throw TlsHandshakeError.handshakeFailure
+	end 'preferredGroup'
+
 	module function requestedSchemes() returns TlsSignatureSchemeCodeArray throws TlsHandshakeError
 		var schemes = TlsSignatureSchemeCodeArray.create()
 
