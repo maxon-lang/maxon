@@ -2984,8 +2984,7 @@ export function emitGtHonourPreemptRequestOnMachine(module StdModule, func IrFun
 	// The park in `__gt_preempt` may resume this thread on another machine, and the caller steps the lock
 	// depth of the machine this hands it.
 	let after = emitLoadCurrentM(module, block: honour, ids: ids)
-	module.setTerminator(honour, op: StdOp.branch(resume.id))
-	honour.branchEdges.push(BranchEdge.create(resume.id, argIds: argsOf(after)))
+	emitBranchCarrying(module, from: honour, to: resume, value: after)
 
 	return resume
 end 'emitGtHonourPreemptRequestOnMachine'
@@ -3912,8 +3911,7 @@ export function emitGtAllGAppend(module StdModule, func IrFunction, cur IrBlock,
 	let into = emitBin(module, block: copyBody, a: fresh, b: copyOffset, opcode: StdBinOpcode.add, ids: ids)
 	module.appendOp(copyBody, op: StdOp.storeIndirect(into, offset: 0, valueId: word, valueType: StdType.i64))
 	let stepped = emitBin(module, block: copyBody, a: copied, b: emitConst(module, block: copyBody, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(copyBody, op: StdOp.branch(copyHead.id))
-	copyBody.branchEdges.push(BranchEdge.create(copyHead.id, argIds: argsOf(stepped)))
+	emitBranchCarrying(module, from: copyBody, to: copyHead, value: stepped)
 
 	emitStoreGlobalWord(module, block: publish, label: GtAllGCapLabel, value: wanted, ids: ids)
 	emitStoreReleaseGlobalWord(module, block: publish, label: GtAllGLabel, value: fresh, ids: ids)
@@ -4077,8 +4075,7 @@ function buildGtStrandNext(module StdModule)
 
 	emitStoreField(module, block: resume, record: owner, offset: GtOffStrandResume, value: emitConst(module, block: resume, value: 0, ids: ids))
 	var resumePaid = emitGtPayDebtAfterRelease(module, func: func, cur: resume, owed: owed, label: b"snresume", ids: ids)
-	module.setTerminator(resumePaid, op: StdOp.branch(candidate.id))
-	resumePaid.branchEdges.push(BranchEdge.create(candidate.id, argIds: argsOf(resumed)))
+	emitBranchCarrying(module, from: resumePaid, to: candidate, value: resumed)
 
 	let queued = emitLoadAcquireField(module, block: peek, record: owner, offset: GtOffCoroHead, ids: ids)
 	emitBranchOnCompare(module, block: peek, value: queued, pred: StdCmpPred.eq, against: 0, whenTrue: release, whenFalse: dequeue, ids: ids)
@@ -4103,8 +4100,7 @@ function buildGtStrandNext(module StdModule)
 	emitConstReturn(module, block: unreffed, value: 0, ids: ids)
 
 	var gotPaid = emitGtPayDebtAfterRelease(module, func: func, cur: gotOne, owed: owed, label: b"sngot", ids: ids)
-	module.setTerminator(gotPaid, op: StdOp.branch(candidate.id))
-	gotPaid.branchEdges.push(BranchEdge.create(candidate.id, argIds: argsOf(popped)))
+	emitBranchCarrying(module, from: gotPaid, to: candidate, value: popped)
 
 	emitGtTombstoneHandback(module, func: func, candidate: candidate, found: found, retry: pop, requeue: GtCoroEnqueueName, handOff: GtHandOffAnswer.giveUpTheStrand(owner), ids: ids)
 
@@ -4279,8 +4275,7 @@ function emitTimerSiftUp(module StdModule, func IrFunction, ids ValueMinter, sta
 	var body = module.addBlock(func, label: b"siftupbody", heat: BlockHeat.normal)
 	var exchange = module.addBlock(func, label: b"siftupswap", heat: BlockHeat.normal)
 
-	module.setTerminator(startBlock, op: StdOp.branch(hdr.id))
-	startBlock.branchEdges.push(BranchEdge.create(hdr.id, argIds: argsOf(startIndex)))
+	emitBranchCarrying(module, from: startBlock, to: hdr, value: startIndex)
 
 	// hdr(i): the root has no parent, so it is where every walk stops.
 	let i = ids.mint()
@@ -4302,8 +4297,7 @@ function emitTimerSiftUp(module StdModule, func IrFunction, ids ValueMinter, sta
 	// exchange: both entries are already in registers, so the swap is four stores and no reload.
 	emitTimerEntryStore(module, block: exchange, addr: childAddr, entry: parentEntry)
 	emitTimerEntryStore(module, block: exchange, addr: parentAddr, entry: child)
-	module.setTerminator(exchange, op: StdOp.branch(hdr.id))
-	exchange.branchEdges.push(BranchEdge.create(hdr.id, argIds: argsOf(parent)))
+	emitBranchCarrying(module, from: exchange, to: hdr, value: parent)
 end 'emitTimerSiftUp'
 
 // Restore the heap DOWNWARDS from `startIndex` over the first `count` entries, then branch to `cont`: while
@@ -4321,8 +4315,7 @@ function emitHeapSiftDown(module StdModule, func IrFunction, ids ValueMinter, st
 	var compare = module.addBlock(func, label: b"siftdowncompare", heat: BlockHeat.normal)
 	var exchange = module.addBlock(func, label: b"siftdownswap", heat: BlockHeat.normal)
 
-	module.setTerminator(startBlock, op: StdOp.branch(hdr.id))
-	startBlock.branchEdges.push(BranchEdge.create(hdr.id, argIds: argsOf(startIndex)))
+	emitBranchCarrying(module, from: startBlock, to: hdr, value: startIndex)
 
 	// hdr(i): left = 2i + 1. No left child means `i` is a leaf, and a leaf is where every walk stops.
 	let i = ids.mint()
@@ -4348,10 +4341,8 @@ function emitHeapSiftDown(module StdModule, func IrFunction, ids ValueMinter, st
 
 	// takeLeft / takeRight: two blocks rather than one two-armed edge, because a block carries ONE argument
 	// list per successor and these two arms disagree about the index they pass.
-	module.setTerminator(takeLeft, op: StdOp.branch(compare.id))
-	takeLeft.branchEdges.push(BranchEdge.create(compare.id, argIds: argsOf(left)))
-	module.setTerminator(takeRight, op: StdOp.branch(compare.id))
-	takeRight.branchEdges.push(BranchEdge.create(compare.id, argIds: argsOf(right)))
+	emitBranchCarrying(module, from: takeLeft, to: compare, value: left)
+	emitBranchCarrying(module, from: takeRight, to: compare, value: right)
 
 	// compare(child): the heap property holds here as soon as the entry comes before its earliest child.
 	let child = ids.mint()
@@ -4366,8 +4357,7 @@ function emitHeapSiftDown(module StdModule, func IrFunction, ids ValueMinter, st
 	// exchange: both entries are already in registers, so the swap is four stores and no reload.
 	emitSiftEntryStore(module, block: exchange, addr: parentAddr, entry: childEntry)
 	emitSiftEntryStore(module, block: exchange, addr: childAddr, entry: parentEntry)
-	module.setTerminator(exchange, op: StdOp.branch(hdr.id))
-	exchange.branchEdges.push(BranchEdge.create(hdr.id, argIds: argsOf(child)))
+	emitBranchCarrying(module, from: exchange, to: hdr, value: child)
 end 'emitHeapSiftDown'
 
 union SiftHeap
@@ -4654,8 +4644,7 @@ function buildGtTimerCheck(module StdModule, hold SchedLockHold)
 	module.setTerminator(fire, op: StdOp.condBranch(isSleepTag, thenBlockId: fireSleep.id, elseBlockId: fireNotSleep.id))
 
 	let sleepDebt = emitGtReady(module, block: fireSleep, gt: root.gt, gate: GtReadyGate.fromWaiting, hold: SchedLockHold.held, ids: ids)
-	module.setTerminator(fireSleep, op: StdOp.branch(fireJoin.id))
-	fireSleep.branchEdges.push(BranchEdge.create(fireJoin.id, argIds: argsOf(sleepDebt)))
+	emitBranchCarrying(module, from: fireSleep, to: fireJoin, value: sleepDebt)
 
 	let isSendTag = emitCompareWithConstant(module, block: fireNotSleep, value: root.tag, pred: StdCmpPred.eq, against: TimerTagSend, ids: ids)
 	module.setTerminator(fireNotSleep, op: StdOp.condBranch(isSendTag, thenBlockId: fireSend.id, elseBlockId: fireNetpoll.id))
@@ -4663,17 +4652,14 @@ function buildGtTimerCheck(module StdModule, hold SchedLockHold)
 	emitMboxClaimSender(module, block: fireSend, sender: root.gt, outcome: MboxSendWake.timedOut, lost: fireSendLost, won: fireSendWon, ids: ids)
 
 	let sendDebt = emitGtReady(module, block: fireSendWon, gt: root.gt, gate: GtReadyGate.fromWaiting, hold: SchedLockHold.held, ids: ids)
-	module.setTerminator(fireSendWon, op: StdOp.branch(fireJoin.id))
-	fireSendWon.branchEdges.push(BranchEdge.create(fireJoin.id, argIds: argsOf(sendDebt)))
+	emitBranchCarrying(module, from: fireSendWon, to: fireJoin, value: sendDebt)
 
 	let sendLostDebt = emitConst(module, block: fireSendLost, value: WakeDebtNone, ids: ids)
-	module.setTerminator(fireSendLost, op: StdOp.branch(fireJoin.id))
-	fireSendLost.branchEdges.push(BranchEdge.create(fireJoin.id, argIds: argsOf(sendLostDebt)))
+	emitBranchCarrying(module, from: fireSendLost, to: fireJoin, value: sendLostDebt)
 
 	let expireDebt = ids.mint()
 	module.appendOp(fireNetpoll, op: StdOp.call(expireDebt, callee: NetpollPdExpireName, args: argsOf(root.gt)))
-	module.setTerminator(fireNetpoll, op: StdOp.branch(fireJoin.id))
-	fireNetpoll.branchEdges.push(BranchEdge.create(fireJoin.id, argIds: argsOf(expireDebt)))
+	emitBranchCarrying(module, from: fireNetpoll, to: fireJoin, value: expireDebt)
 
 	let firedDebt = ids.mint()
 	fireJoin.blockArgs.push(IrBlockArg.create(firedDebt, argType: StdType.i64))
@@ -4776,8 +4762,7 @@ function buildGtAnyCompleted(module StdModule)
 	let buffer = emitLoadField(module, block: entry, record: record, offset: ManagedRecordBufferOffset, ids: ids)
 	let length = emitLoadField(module, block: entry, record: record, offset: ManagedRecordLengthOffset, ids: ids)
 	let zeroConst = emitConst(module, block: entry, value: 0, ids: ids)
-	module.setTerminator(entry, op: StdOp.branch(scanHdr.id))
-	entry.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: argsOf(zeroConst)))
+	emitBranchCarrying(module, from: entry, to: scanHdr, value: zeroConst)
 
 	// scanHdr(i): past the last live slot → nothing has completed; else inspect slot i.
 	let i = ids.mint()
@@ -4804,8 +4789,7 @@ function buildGtAnyCompleted(module StdModule)
 	// advance: i + 1 → scanHdr.
 	let one = emitConst(module, block: advance, value: 1, ids: ids)
 	let next = emitBin(module, block: advance, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(advance, op: StdOp.branch(scanHdr.id))
-	advance.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: argsOf(next)))
+	emitBranchCarrying(module, from: advance, to: scanHdr, value: next)
 
 	// `i` is scanHdr's block argument and scanHdr dominates this block, so the index needs no second carrier.
 	module.setTerminator(found, op: StdOp.ret(i))
@@ -4876,8 +4860,7 @@ function buildGtAnyLock(module StdModule)
 	emitStoreField(module, block: gathered, record: scratch, offset: 0, value: n)
 	let words = emitWordSlotAddr(module, block: gathered, base: scratch, index: emitConst(module, block: gathered, value: 1, ids: ids), ids: ids)
 	let half = emitBin(module, block: gathered, a: n, b: emitConst(module, block: gathered, value: 1, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
-	module.setTerminator(gathered, op: StdOp.branch(buildHdr.id))
-	gathered.branchEdges.push(BranchEdge.create(buildHdr.id, argIds: argsOf(half)))
+	emitBranchCarrying(module, from: gathered, to: buildHdr, value: half)
 
 	let pending = ids.mint()
 	buildHdr.blockArgs.push(IrBlockArg.create(pending, argType: StdType.i64))
@@ -4886,8 +4869,7 @@ function buildGtAnyLock(module StdModule)
 
 	let root = emitIndexStep(module, block: buildBody, index: pending, delta: OneFewer, ids: ids)
 	emitHeapSiftDown(module, func: func, ids: ids, startBlock: buildBody, heap: SiftHeap.addressWords(words), count: n, startIndex: root, cont: buildStep)
-	module.setTerminator(buildStep, op: StdOp.branch(buildHdr.id))
-	buildStep.branchEdges.push(BranchEdge.create(buildHdr.id, argIds: argsOf(root)))
+	emitBranchCarrying(module, from: buildStep, to: buildHdr, value: root)
 
 	let unsorted = ids.mint()
 	sortHdr.blockArgs.push(IrBlockArg.create(unsorted, argType: StdType.i64))
@@ -4901,11 +4883,9 @@ function buildGtAnyLock(module StdModule)
 	emitStoreField(module, block: sortBody, record: rootAddr, offset: 0, value: displaced)
 	emitStoreField(module, block: sortBody, record: lastAddr, offset: 0, value: largest)
 	emitHeapSiftDown(module, func: func, ids: ids, startBlock: sortBody, heap: SiftHeap.addressWords(words), count: last, startIndex: zero, cont: sortStep)
-	module.setTerminator(sortStep, op: StdOp.branch(sortHdr.id))
-	sortStep.branchEdges.push(BranchEdge.create(sortHdr.id, argIds: argsOf(last)))
+	emitBranchCarrying(module, from: sortStep, to: sortHdr, value: last)
 
-	module.setTerminator(sorted, op: StdOp.branch(lockHdr.id))
-	sorted.branchEdges.push(BranchEdge.create(lockHdr.id, argIds: argsOf(zero)))
+	emitBranchCarrying(module, from: sorted, to: lockHdr, value: zero)
 
 	let index = ids.mint()
 	lockHdr.blockArgs.push(IrBlockArg.create(index, argType: StdType.i64))
@@ -4913,8 +4893,8 @@ function buildGtAnyLock(module StdModule)
 
 	let ordered = emitWordSlotLoad(module, block: lockBody, base: words, index: index, ids: ids)
 	emitGtRecordLockEnter(module, block: lockBody, record: ordered, ids: ids)
-	module.setTerminator(lockBody, op: StdOp.branch(lockHdr.id))
-	lockBody.branchEdges.push(BranchEdge.create(lockHdr.id, argIds: argsOf(emitIndexStep(module, block: lockBody, index: index, delta: OneMore, ids: ids))))
+	let lockedNext = emitIndexStep(module, block: lockBody, index: index, delta: OneMore, ids: ids)
+	emitBranchCarrying(module, from: lockBody, to: lockHdr, value: lockedNext)
 
 	module.setTerminator(locked, op: StdOp.ret(scratch))
 	module.functions.push(func)
@@ -4934,8 +4914,7 @@ function buildGtAnyUnlock(module StdModule)
 
 	let n = emitLoadField(module, block: entry, record: scratch, offset: 0, ids: ids)
 	let words = emitWordSlotAddr(module, block: entry, base: scratch, index: emitConst(module, block: entry, value: 1, ids: ids), ids: ids)
-	module.setTerminator(entry, op: StdOp.branch(unlockHdr.id))
-	entry.branchEdges.push(BranchEdge.create(unlockHdr.id, argIds: argsOf(n)))
+	emitBranchCarrying(module, from: entry, to: unlockHdr, value: n)
 
 	let remaining = ids.mint()
 	unlockHdr.blockArgs.push(IrBlockArg.create(remaining, argType: StdType.i64))
@@ -4944,8 +4923,7 @@ function buildGtAnyUnlock(module StdModule)
 	let index = emitIndexStep(module, block: unlockBody, index: remaining, delta: OneFewer, ids: ids)
 	let ordered = emitWordSlotLoad(module, block: unlockBody, base: words, index: index, ids: ids)
 	emitGtRecordLockLeave(module, block: unlockBody, record: ordered, ids: ids)
-	module.setTerminator(unlockBody, op: StdOp.branch(unlockHdr.id))
-	unlockBody.branchEdges.push(BranchEdge.create(unlockHdr.id, argIds: argsOf(index)))
+	emitBranchCarrying(module, from: unlockBody, to: unlockHdr, value: index)
 
 	emitSlabFree(module, block: unlocked, ptr: scratch, kind: SlabBufferKind.awaitAnyScratch, ids: ids)
 	module.setTerminator(unlocked, op: StdOp.retVoid)
@@ -4981,8 +4959,7 @@ function emitGtAwaitAnySlotWalk(module StdModule, func IrFunction, cur IrBlock, 
 	let length = emitLoadField(module, block: cur, record: record, offset: ManagedRecordLengthOffset, ids: ids)
 	let tagged = emitBin(module, block: cur, a: g, b: emitConst(module, block: cur, value: AwaitAnyTag, ids: ids), opcode: StdBinOpcode.bitOr, ids: ids)
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
-	module.setTerminator(cur, op: StdOp.branch(hdr.id))
-	cur.branchEdges.push(BranchEdge.create(hdr.id, argIds: argsOf(zero)))
+	emitBranchCarrying(module, from: cur, to: hdr, value: zero)
 
 	let i = ids.mint()
 	hdr.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
@@ -4998,8 +4975,7 @@ function emitGtAwaitAnySlotWalk(module StdModule, func IrFunction, cur IrBlock, 
 	end 'slotAction'
 
 	let step = emitBin(module, block: next, a: i, b: emitConst(module, block: next, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(next, op: StdOp.branch(hdr.id))
-	next.branchEdges.push(BranchEdge.create(hdr.id, argIds: argsOf(step)))
+	emitBranchCarrying(module, from: next, to: hdr, value: step)
 end 'emitGtAwaitAnySlotWalk'
 
 // ⭐⭐ **MAKE `awaiter` THE ONE GT `promise` READIES ON COMPLETION — both registrations' claim.**
@@ -6422,8 +6398,7 @@ function buildGtRunnerDone(module StdModule, target Target)
 
 	let highWater = emitLoadField(module, block: sampleDepth, record: gt, offset: GtOffStackHighWater, ids: ids)
 	let depthNeeded = emitBin(module, block: sampleDepth, a: highWater, b: emitConst(module, block: sampleDepth, value: gtStackGuardHeight(target), ids: ids), opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(sampleDepth, op: StdOp.branch(sampled.id))
-	sampleDepth.branchEdges.push(BranchEdge.create(sampled.id, argIds: argsOf(depthNeeded)))
+	emitBranchCarrying(module, from: sampleDepth, to: sampled, value: depthNeeded)
 
 	// The finish that makes its processor's count a multiple of the window closes one (`GtSeedWindowShift`).
 	let sample = ids.mint()
@@ -6517,8 +6492,7 @@ export function emitGtTimerStoreRemove(module StdModule, func IrFunction, ids Va
 	module.appendOp(startBlock, op: StdOp.loadIndirect(count, addrId: countAddr, offset: 0, valueType: StdType.i64))
 	let heapBase = emitLoadGlobalWord(module, block: startBlock, label: GtTimerHeapBaseLabel, ids: ids)
 	let zeroConst = emitConst(module, block: startBlock, value: 0, ids: ids)
-	module.setTerminator(startBlock, op: StdOp.branch(scanHdr.id))
-	startBlock.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: argsOf(zeroConst)))
+	emitBranchCarrying(module, from: startBlock, to: scanHdr, value: zeroConst)
 
 	// scanHdr(i): if i >= count → missing; else inspect entry i.
 	let i = ids.mint()
@@ -6543,8 +6517,7 @@ export function emitGtTimerStoreRemove(module StdModule, func IrFunction, ids Va
 	// advance: i + 1 → scanHdr.
 	let oneAdv = emitConst(module, block: advance, value: 1, ids: ids)
 	let iAdv = emitBin(module, block: advance, a: i, b: oneAdv, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(advance, op: StdOp.branch(scanHdr.id))
-	advance.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: argsOf(iAdv)))
+	emitBranchCarrying(module, from: advance, to: scanHdr, value: iAdv)
 
 	// removeAt: the live region shrinks by one. If `i` WAS the last live slot the array is a heap already.
 	let oneRem = emitConst(module, block: removeAt, value: 1, ids: ids)
@@ -6598,8 +6571,7 @@ export function emitGtDeadlineAfterMs(module StdModule, func IrFunction, cur IrB
 	module.setTerminator(cur, op: StdOp.condBranch(saturatesAtAnyClock, thenBlockId: saturated.id, elseBlockId: finite.id))
 
 	let latestWhenSaturated = emitConst(module, block: saturated, value: GtDeadlineMaxNs, ids: ids)
-	module.setTerminator(saturated, op: StdOp.branch(joined.id))
-	saturated.branchEdges.push(BranchEdge.create(joined.id, argIds: argsOf(latestWhenSaturated)))
+	emitBranchCarrying(module, from: saturated, to: joined, value: latestWhenSaturated)
 
 	let now = emitGtNowNs(module, block: finite, ids: ids)
 	let milliConst = emitConst(module, block: finite, value: NanosPerMilli, ids: ids)
@@ -6611,8 +6583,7 @@ export function emitGtDeadlineAfterMs(module StdModule, func IrFunction, cur IrB
 	let msNs = emitBin(module, block: finite, a: ms, b: milliConst, opcode: StdBinOpcode.mul, ids: ids)
 	let sum = emitBin(module, block: finite, a: now, b: msNs, opcode: StdBinOpcode.add, ids: ids)
 	let deadline = emitSelectWord(module, block: finite, cond: aboveHeadroom, whenSet: latest, whenClear: sum, ids: ids)
-	module.setTerminator(finite, op: StdOp.branch(joined.id))
-	finite.branchEdges.push(BranchEdge.create(joined.id, argIds: argsOf(deadline)))
+	emitBranchCarrying(module, from: finite, to: joined, value: deadline)
 
 	let value = ids.mint()
 	joined.blockArgs.push(IrBlockArg.create(value, argType: StdType.i64))
@@ -7025,8 +6996,7 @@ function buildGtRunStrand(module StdModule, target Target)
 	let schedulerContext = emitFieldAddr(module, block: entry, record: m, offset: MOffSchedulerContext, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	emitStoreField(module, block: entry, record: m, offset: MOffHeldStrand, value: owner)
-	module.setTerminator(entry, op: StdOp.branch(next.id))
-	entry.branchEdges.push(BranchEdge.create(next.id, argIds: argsOf(zero)))
+	emitBranchCarrying(module, from: entry, to: next, value: zero)
 	let nothingParked = ids.mint()
 	next.blockArgs.push(IrBlockArg.create(nothingParked, argType: StdType.i64))
 
@@ -7055,8 +7025,7 @@ function buildGtRunStrand(module StdModule, target Target)
 	module.setTerminator(dropPin, op: StdOp.branch(reapMember.id))
 
 	module.appendOp(reapMember, op: StdOp.call(ids.mint(), callee: GtRunnerDoneName, args: twoArgs(member, second: owner)))
-	module.setTerminator(reapMember, op: StdOp.branch(next.id))
-	reapMember.branchEdges.push(BranchEdge.create(next.id, argIds: argsOf(zero)))
+	emitBranchCarrying(module, from: reapMember, to: next, value: zero)
 
 	// ⭐⭐ **THE ONE DOOR EVERY PARK PASSES WHILE THE THREAD IS STOPPED AND REACHABLE BY NOBODY ELSE** — its
 	// registers are saved and it is on no store and no queue yet, or, as a mailbox receiver, on one no waker
@@ -7095,15 +7064,12 @@ function buildGtRunStrand(module StdModule, target Target)
 	// member on another M, and a shrink then would relocate a stack that is running. Each commit also runs
 	// before `__gt_strand_next`, so this OS thread runs no other green thread while the park's hold is open.
 	emitMboxParkCommit(module, block: mailboxCommit, machine: m, gt: member, mbox: emitLoadField(module, block: mailboxCommit, record: member, offset: GtOffParkArg, ids: ids), ids: ids)
-	module.setTerminator(mailboxCommit, op: StdOp.branch(next.id))
-	mailboxCommit.branchEdges.push(BranchEdge.create(next.id, argIds: argsOf(zero)))
+	emitBranchCarrying(module, from: mailboxCommit, to: next, value: zero)
 
 	var sendCommitted = emitMboxSendParkCommit(module, func: func, block: mailboxSendCommit, machine: m, gt: member, mbox: emitLoadField(module, block: mailboxSendCommit, record: member, offset: GtOffParkArg, ids: ids), ids: ids)
-	module.setTerminator(sendCommitted, op: StdOp.branch(next.id))
-	sendCommitted.branchEdges.push(BranchEdge.create(next.id, argIds: argsOf(zero)))
+	emitBranchCarrying(module, from: sendCommitted, to: next, value: zero)
 
-	module.setTerminator(register, op: StdOp.branch(next.id))
-	register.branchEdges.push(BranchEdge.create(next.id, argIds: argsOf(member)))
+	emitBranchCarrying(module, from: register, to: next, value: member)
 
 	emitGtPollStores(module, func: func, cur: yielded, cont: pollStores, hold: SchedLockHold.free, ids: ids)
 	let pollDebt = ids.mint()
@@ -7118,8 +7084,7 @@ function buildGtRunStrand(module StdModule, target Target)
 	emitGtRecordLockLeave(module, block: place, record: owner, ids: ids)
 	module.setTerminator(place, op: StdOp.condBranch(nothingElse, thenBlockId: behindEveryone.id, elseBlockId: behindSiblings.id))
 
-	module.setTerminator(behindSiblings, op: StdOp.branch(next.id))
-	behindSiblings.branchEdges.push(BranchEdge.create(next.id, argIds: argsOf(zero)))
+	emitBranchCarrying(module, from: behindSiblings, to: next, value: zero)
 
 	emitStoreField(module, block: preempted, record: owner, offset: GtOffStrandResume, value: member)
 	module.setTerminator(preempted, op: StdOp.branch(behindEveryone.id))
@@ -7285,8 +7250,7 @@ function emitGtStackClassOf(module StdModule, func IrFunction, cur IrBlock, foun
 	var header = module.addBlock(func, label: b"stkclasshdr", heat: BlockHeat.normal)
 	var step = module.addBlock(func, label: b"stkclassstep", heat: BlockHeat.normal)
 	let firstShift = emitConst(module, block: cur, value: GtStackPoolMinShift, ids: ids)
-	module.setTerminator(cur, op: StdOp.branch(header.id))
-	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(firstShift)))
+	emitBranchCarrying(module, from: cur, to: header, value: firstShift)
 
 	let shift = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(shift, argType: StdType.i64))
@@ -7294,8 +7258,7 @@ function emitGtStackClassOf(module StdModule, func IrFunction, cur IrBlock, foun
 	emitBranchOnCompareValues(module, block: header, a: bytes, pred: StdCmpPred.ge, b: size, whenTrue: found, whenFalse: step, ids: ids)
 
 	let nextShift = emitBin(module, block: step, a: shift, b: emitConst(module, block: step, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(step, op: StdOp.branch(header.id))
-	step.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(nextShift)))
+	emitBranchCarrying(module, from: step, to: header, value: nextShift)
 
 	return GtStackClass.create(shift, bytes: bytes)
 end 'emitGtStackClassOf'
@@ -7458,8 +7421,7 @@ function buildGtStackAlloc(module StdModule)
 	var refillTop = module.addBlock(func, label: b"stkrefilltop", heat: BlockHeat.normal)
 	let refillTail = ids.mint()
 	refillTop.blockArgs.push(IrBlockArg.create(refillTail, argType: StdType.i64))
-	module.setTerminator(refill, op: StdOp.branch(refillTop.id))
-	refill.branchEdges.push(BranchEdge.create(refillTop.id, argIds: argsOf(entryAddr)))
+	emitBranchCarrying(module, from: refill, to: refillTop, value: entryAddr)
 	emitGtStackPoolTake(module, func: func, cur: refillTop, pool: pool, shift: sized.shift, bytes: sized.bytes, got: refillGot, refused: refillRefused, ids: ids)
 
 	let filled = emitGtStackCacheAppend(module, block: refillGot, tail: refillTail, entry: entryAddr, stack: refillStack, bytes: sized.bytes, ids: ids)
@@ -7748,8 +7710,7 @@ end 'buildGtSeedAdapt'
 // and `publish` and ends `cur` here.
 function emitGtSeedPublishAverage(module StdModule, cur IrBlock, grow IrBlock, fits IrBlock, publish IrBlock, sum ValueId, count ValueId, done IrBlock, target Target, ids ValueMinter)
 	let floorSeed = emitConst(module, block: cur, value: gtSeedStackBytes(target), ids: ids)
-	module.setTerminator(cur, op: StdOp.branch(grow.id))
-	cur.branchEdges.push(BranchEdge.create(grow.id, argIds: argsOf(floorSeed)))
+	emitBranchCarrying(module, from: cur, to: grow, value: floorSeed)
 
 	let seed = ids.mint()
 	grow.blockArgs.push(IrBlockArg.create(seed, argType: StdType.i64))
@@ -8103,8 +8064,7 @@ function buildGtIoPark(module StdModule)
 	// unsynchronised and reads stale as soon as more than one processor runs, so every refusal
 	// built on it silently stops happening.
 	let renounced = emitLoadField(module, block: resumed, record: emitLoadCurrentGt(module, block: resumed, ids: ids), offset: GtOffRenounced, ids: ids)
-	module.setTerminator(resumed, op: StdOp.branch(doneBlock.id))
-	resumed.branchEdges.push(BranchEdge.create(doneBlock.id, argIds: argsOf(renounced)))
+	emitBranchCarrying(module, from: resumed, to: doneBlock, value: renounced)
 
 	let answer = ids.mint()
 	doneBlock.blockArgs.push(IrBlockArg.create(answer, argType: StdType.i64))
@@ -8495,8 +8455,7 @@ function buildPipeName(module StdModule, func IrFunction, ids ValueMinter, start
 	emitStoreWideCharLowByte(module, block: startBlock, ids: ids, bufPtr: bufPtr, wcharIndex: 10, asciiCode: 120)
 	let zeroIdx = ids.mint()
 	module.appendOp(startBlock, op: StdOp.const(zeroIdx, value: 0, valueType: StdType.i64))
-	module.setTerminator(startBlock, op: StdOp.branch(hexHdr.id))
-	startBlock.branchEdges.push(BranchEdge.create(hexHdr.id, argIds: argsOf(zeroIdx)))
+	emitBranchCarrying(module, from: startBlock, to: hexHdr, value: zeroIdx)
 
 	// hexHdr(i): if i >= 16 → cont, else write hex digit i.
 	let i = ids.mint()
@@ -8540,8 +8499,7 @@ function buildPipeName(module StdModule, func IrFunction, ids ValueMinter, start
 	module.appendOp(digitArm, op: StdOp.const(digitZero, value: HexDigitZero, valueType: StdType.i64))
 	let digitCh = ids.mint()
 	module.appendOp(digitArm, op: StdOp.binOp(digitCh, lhs: dNibble, rhs: digitZero, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.setTerminator(digitArm, op: StdOp.branch(storeArm.id))
-	digitArm.branchEdges.push(BranchEdge.create(storeArm.id, argIds: argsOf(digitCh)))
+	emitBranchCarrying(module, from: digitArm, to: storeArm, value: digitCh)
 
 	// letterArm(nibble): ch = nibble + ('a' - 10) → storeArm(ch).
 	let lNibble = ids.mint()
@@ -8550,8 +8508,7 @@ function buildPipeName(module StdModule, func IrFunction, ids ValueMinter, start
 	module.appendOp(letterArm, op: StdOp.const(letterBase, value: HexDigitLetterBase, valueType: StdType.i64))
 	let letterCh = ids.mint()
 	module.appendOp(letterArm, op: StdOp.binOp(letterCh, lhs: lNibble, rhs: letterBase, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.setTerminator(letterArm, op: StdOp.branch(storeArm.id))
-	letterArm.branchEdges.push(BranchEdge.create(storeArm.id, argIds: argsOf(letterCh)))
+	emitBranchCarrying(module, from: letterArm, to: storeArm, value: letterCh)
 
 	// storeArm(ch): buf[(PipeNamePrefixWchars + i)*2] low byte = ch ; loop to hexHdr(i+1). `ch` merges the two arms
 	// (a block arg); `i` is read directly from hexHdr's block arg (it dominates here).
@@ -8572,8 +8529,7 @@ function buildPipeName(module StdModule, func IrFunction, ids ValueMinter, start
 	module.appendOp(storeArm, op: StdOp.const(oneStep, value: 1, valueType: StdType.i64))
 	let iNext = ids.mint()
 	module.appendOp(storeArm, op: StdOp.binOp(iNext, lhs: i, rhs: oneStep, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.setTerminator(storeArm, op: StdOp.branch(hexHdr.id))
-	storeArm.branchEdges.push(BranchEdge.create(hexHdr.id, argIds: argsOf(iNext)))
+	emitBranchCarrying(module, from: storeArm, to: hexHdr, value: iNext)
 end 'buildPipeName'
 
 // ⭐ `__gt_io_read(strPtr) -> bytesRead` — THE YIELDING OVERLAPPED PIPE READ (the `spawnReadLine`
@@ -9290,8 +9246,7 @@ function buildSubpYieldRead(module StdModule, target Target)
 	// stamp. `emitSubpCreateReadPipe` is what makes that impossible rather than unlikely: the pipe does not
 	// exist unless the host granted `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` on this handle.
 	let syncBytes = emitLoadDword(module, block: syncDone, record: bytesOutPtr, offset: 0, ids: ids)
-	module.setTerminator(syncDone, op: StdOp.branch(answer.id))
-	syncDone.branchEdges.push(BranchEdge.create(answer.id, argIds: argsOf(syncBytes)))
+	emitBranchCarrying(module, from: syncDone, to: answer, value: syncBytes)
 
 	let err = ids.mint()
 	module.appendOp(checkErr, op: StdOp.osLastError(err))
@@ -9313,12 +9268,10 @@ function buildSubpYieldRead(module StdModule, target Target)
 	// would make `stdlib/Subprocess.maxon` hand a caller a short answer as though the child had finished.
 	emitBranchOnCompare(module, block: classifyErr, value: err, pred: StdCmpPred.eq, against: ErrorBrokenPipe as FullRangeInt, whenTrue: cleanEof, whenFalse: readFailed, ids: ids)
 
-	module.setTerminator(cleanEof, op: StdOp.branch(answer.id))
-	cleanEof.branchEdges.push(BranchEdge.create(answer.id, argIds: argsOf(zeroConst)))
+	emitBranchCarrying(module, from: cleanEof, to: answer, value: zeroConst)
 
 	let failureConst = emitConst(module, block: readFailed, value: SubpReadFailedCount, ids: ids)
-	module.setTerminator(readFailed, op: StdOp.branch(answer.id))
-	readFailed.branchEdges.push(BranchEdge.create(answer.id, argIds: argsOf(failureConst)))
+	emitBranchCarrying(module, from: readFailed, to: answer, value: failureConst)
 
 	// Every road out gives the operation's poll source back, because every road out is a read the kernel has
 	// finished with — the source outlives the read and nothing else.
@@ -9366,8 +9319,7 @@ function emitSubpAwaitCompletion(module StdModule, func IrFunction, ids ValueMin
 	emitBranchOnCompare(module, block: completed, value: status, pred: StdCmpPred.eq, against: NtStatusSuccess, whenTrue: completedOk, whenFalse: completedErr, ids: ids)
 
 	let bytes = emitLoadField(module, block: completedOk, record: selfGt, offset: GtOffIoResult, ids: ids)
-	module.setTerminator(completedOk, op: StdOp.branch(answer.id))
-	completedOk.branchEdges.push(BranchEdge.create(answer.id, argIds: argsOf(bytes)))
+	emitBranchCarrying(module, from: completedOk, to: answer, value: bytes)
 
 	// ⭐ **THE SAME FOLD THE SYNCHRONOUS ROAD MAKES, IN THE KERNEL'S OWN VOCABULARY.** A completion reports an
 	// NTSTATUS rather than a Win32 error, and the two a child's own exit produces — the write end gone, and the
@@ -9872,8 +9824,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	module.setTerminator(dropTbl, op: StdOp.branch(haveTbl.id))
 
 	let table = emitLoadAcquireGlobalWord(module, block: haveTbl, label: SubpTableLabel, ids: ids)
-	module.setTerminator(haveTbl, op: StdOp.branch(slotHdr.id))
-	haveTbl.branchEdges.push(BranchEdge.create(slotHdr.id, argIds: argsOf(zeroE)))
+	emitBranchCarrying(module, from: haveTbl, to: slotHdr, value: zeroE)
 
 	// slotHdr(i): out of slots → -1; else check slot i.
 	let slotIdx = ids.mint()
@@ -9893,8 +9844,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 
 	let oneS = emitConst(module, block: slotNext, value: 1, ids: ids)
 	let nextIdx = emitBin(module, block: slotNext, a: slotIdx, b: oneS, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(slotNext, op: StdOp.branch(slotHdr.id))
-	slotNext.branchEdges.push(BranchEdge.create(slotHdr.id, argIds: argsOf(nextIdx)))
+	emitBranchCarrying(module, from: slotNext, to: slotHdr, value: nextIdx)
 
 	emitSubpStoreLastError(module, block: noSlot, code: ErrorTooManyOpenFiles, ids: ids)
 	module.setTerminator(noSlot, op: StdOp.ret(negOne))
@@ -10127,10 +10077,8 @@ function emitSubpNonPipeChildHandle(module StdModule, func IrFunction, ids Value
 
 	emitBranchOnCompare(module, block: pathPick, value: kind, pred: StdCmpPred.eq, against: SubpStdioFile, whenTrue: fileArm, whenFalse: nulArm, ids: ids)
 
-	module.setTerminator(fileArm, op: StdOp.branch(openArm.id))
-	fileArm.branchEdges.push(BranchEdge.create(openArm.id, argIds: argsOf(data)))
-	module.setTerminator(nulArm, op: StdOp.branch(openArm.id))
-	nulArm.branchEdges.push(BranchEdge.create(openArm.id, argIds: argsOf(nulName)))
+	emitBranchCarrying(module, from: fileArm, to: openArm, value: data)
+	emitBranchCarrying(module, from: nulArm, to: openArm, value: nulName)
 
 	let path = ids.mint()
 	openArm.blockArgs.push(IrBlockArg.create(path, argType: StdType.i64))
@@ -10347,8 +10295,7 @@ function buildSubpSpawn(module StdModule, commandShape SubprocessCommandShape)
 	let cmBufSize = emitBin(module, block: entry, a: cmdLen, b: nulBytes, opcode: StdBinOpcode.add, ids: ids)
 	let cmBuf = emitSlabAlloc(module, block: entry, bytes: cmBufSize, kind: SlabBufferKind.subprocessState, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	module.setTerminator(entry, op: StdOp.branch(copyHdr.id))
-	entry.branchEdges.push(BranchEdge.create(copyHdr.id, argIds: argsOf(zero)))
+	emitBranchCarrying(module, from: entry, to: copyHdr, value: zero)
 
 	let ci = ids.mint()
 	copyHdr.blockArgs.push(IrBlockArg.create(ci, argType: StdType.i64))
@@ -10361,8 +10308,7 @@ function buildSubpSpawn(module StdModule, commandShape SubprocessCommandShape)
 	module.appendOp(copyBody, op: StdOp.storeIndirect(dstAddr, offset: 0, valueId: srcByte, valueType: StdType.u8))
 	let ciOne = emitConst(module, block: copyBody, value: 1, ids: ids)
 	let ciNext = emitBin(module, block: copyBody, a: ci, b: ciOne, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(copyBody, op: StdOp.branch(copyHdr.id))
-	copyBody.branchEdges.push(BranchEdge.create(copyHdr.id, argIds: argsOf(ciNext)))
+	emitBranchCarrying(module, from: copyBody, to: copyHdr, value: ciNext)
 
 	// The slab zeroes the buffer, so the terminator is already there; the store is kept because the SIZE
 	// arithmetic above is what reserves the byte, and a reader should see the two together.
@@ -10763,8 +10709,7 @@ function buildSubpReadLine(module StdModule, name ByteArray, streamBase ByteOffs
 	let readEnd = emitLoadField(module, block: live, record: streamPtr, offset: SubpStreamReadEnd, ids: ids)
 	let bytesOutPtr = emitLoadField(module, block: live, record: slot, offset: SubpSlotBytesOut, ids: ids)
 	let zeroStart = emitConst(module, block: live, value: 0, ids: ids)
-	module.setTerminator(live, op: StdOp.branch(scanHdr.id))
-	live.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: argsOf(zeroStart)))
+	emitBranchCarrying(module, from: live, to: scanHdr, value: zeroStart)
 
 	// scanHdr(i): i reached the buffered length with no '\n' → noNewline; else look at byte i.
 	let i = ids.mint()
@@ -10780,8 +10725,7 @@ function buildSubpReadLine(module StdModule, name ByteArray, streamBase ByteOffs
 
 	let scanOne = emitConst(module, block: scanInc, value: 1, ids: ids)
 	let scanNext = emitBin(module, block: scanInc, a: i, b: scanOne, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(scanInc, op: StdOp.branch(scanHdr.id))
-	scanInc.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: argsOf(scanNext)))
+	emitBranchCarrying(module, from: scanInc, to: scanHdr, value: scanNext)
 
 	// found(i = the '\n' index): the line is buf[0 .. i] inclusive, so it consumes i+1 bytes.
 	let foundOne = emitConst(module, block: found, value: 1, ids: ids)
@@ -10827,8 +10771,7 @@ function buildSubpReadLine(module StdModule, name ByteArray, streamBase ByteOffs
 
 	// `i` (the scan resume index) is the buffered length the top-up started from — no '\n' was found in [0, i),
 	// so re-entering `scanHdr(i)` scans only the bytes the read appended, keeping the whole read O(total bytes).
-	module.setTerminator(toppedUp, op: StdOp.branch(scanHdr.id))
-	toppedUp.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: argsOf(i)))
+	emitBranchCarrying(module, from: toppedUp, to: scanHdr, value: i)
 	module.functions.push(func)
 end 'buildSubpReadLine'
 

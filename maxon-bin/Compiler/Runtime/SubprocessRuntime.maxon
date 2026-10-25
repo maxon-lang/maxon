@@ -1182,16 +1182,14 @@ function emitSubpEnvPointer(module StdModule, func IrFunction, ids ValueMinter, 
 	emitBranchOnCompare(module, block: entry, value: envInherit, pred: StdCmpPred.eq, against: EnvSourceParent, whenTrue: inheritEnv, whenFalse: callerEnv, ids: ids)
 
 	let nullEnv = emitConst(module, block: inheritEnv, value: 0, ids: ids)
-	module.setTerminator(inheritEnv, op: StdOp.branch(build.id))
-	inheritEnv.branchEdges.push(BranchEdge.create(build.id, argIds: argsOf(nullEnv)))
+	emitBranchCarrying(module, from: inheritEnv, to: build, value: nullEnv)
 
 	let envPointer = match shape 'shape'
 		nulSeparatedBlock gives emitLoadField(module, block: callerEnv, record: env, offset: ManagedRecordBufferOffset, ids: ids)
 		pointerVector gives emitSubpEnvVectorCall(module, block: callerEnv, ids: ids, envRec: env)
 	end 'shape'
 
-	module.setTerminator(callerEnv, op: StdOp.branch(build.id))
-	callerEnv.branchEdges.push(BranchEdge.create(build.id, argIds: argsOf(envPointer)))
+	emitBranchCarrying(module, from: callerEnv, to: build, value: envPointer)
 
 	return envPtr
 end 'emitSubpEnvPointer'
@@ -1990,8 +1988,7 @@ function emitSubpDeadlineWithFeed(module StdModule, func IrFunction, ids ValueMi
 	let sooner = emitCmp(module, block: pickEarlier, a: feedAt, b: collectMs, pred: StdCmpPred.lt, ids: ids)
 	let takeFeed = emitBin(module, block: pickEarlier, a: unbounded, b: sooner, opcode: StdBinOpcode.bitOr, ids: ids)
 	let chosen = emitSelectWord(module, block: pickEarlier, cond: takeFeed, whenSet: feedAt, whenClear: collectMs, ids: ids)
-	module.setTerminator(pickEarlier, op: StdOp.branch(have.id))
-	pickEarlier.branchEdges.push(BranchEdge.create(have.id, argIds: argsOf(chosen)))
+	emitBranchCarrying(module, from: pickEarlier, to: have, value: chosen)
 
 	return have
 end 'emitSubpDeadlineWithFeed'

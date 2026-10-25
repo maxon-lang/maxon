@@ -218,8 +218,7 @@ function buildCommandLineScanOne(module StdModule)
 	// --- skip the separators before the argument ---
 	let skipAt = ids.mint()
 	skipHead.blockArgs.push(IrBlockArg.create(skipAt, argType: StdType.i64))
-	module.setTerminator(entry, op: StdOp.branch(skipHead.id))
-	entry.branchEdges.push(BranchEdge.create(skipHead.id, argIds: argsOf(pos)))
+	emitBranchCarrying(module, from: entry, to: skipHead, value: pos)
 
 	// ⚠ `skipTabTest`, `skipStep` and `argStart` carry NO block args and take no edge arguments: `skipHead`
 	// dominates all three (it is the only way into the first, which is the only way into the other two), so
@@ -229,8 +228,7 @@ function buildCommandLineScanOne(module StdModule)
 
 	let oneStep = emitConst(module, block: skipStep, value: 1, ids: ids)
 	let skipNext = emitBin(module, block: skipStep, a: skipAt, b: oneStep, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(skipStep, op: StdOp.branch(skipHead.id))
-	skipStep.branchEdges.push(BranchEdge.create(skipHead.id, argIds: argsOf(skipNext)))
+	emitBranchCarrying(module, from: skipStep, to: skipHead, value: skipNext)
 
 	// --- is there an argument at all? ---
 	let startByte = emitLoadByte(module, block: argStart, base: cmd, index: skipAt, ids: ids)
@@ -727,13 +725,11 @@ function buildCommandLineVectorArg(module StdModule)
 	let offset = emitBin(module, block: fromVector, a: index, b: stride, opcode: StdBinOpcode.mul, ids: ids)
 	let slot = emitBin(module, block: fromVector, a: base, b: offset, opcode: StdBinOpcode.add, ids: ids)
 	let found = emitLoadField(module, block: fromVector, record: slot, offset: 0, ids: ids)
-	module.setTerminator(fromVector, op: StdOp.branch(copyOut.id))
-	fromVector.branchEdges.push(BranchEdge.create(copyOut.id, argIds: argsOf(found)))
+	emitBranchCarrying(module, from: fromVector, to: copyOut, value: found)
 
 	let empty = ids.mint()
 	module.appendOp(outOfRange, op: StdOp.globalAddr(empty, label: CommandLineEmptyArgLabel))
-	module.setTerminator(outOfRange, op: StdOp.branch(copyOut.id))
-	outOfRange.branchEdges.push(BranchEdge.create(copyOut.id, argIds: argsOf(empty)))
+	emitBranchCarrying(module, from: outOfRange, to: copyOut, value: empty)
 
 	let record = ids.mint()
 	var built = emitCStringToManaged(module, func: func, cur: copyOut, cstr: cstr, record: record, ids: ids)

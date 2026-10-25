@@ -157,8 +157,7 @@ function emitRetainedIfPresent(module StdModule, func IrFunction, block IrBlock,
 
 	let taken = ids.mint()
 	module.appendOp(callIt, op: StdOp.callIndirect(taken, calleeReg: fn, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0, args: argsOf(value)))
-	module.setTerminator(callIt, op: StdOp.branch(after.id))
-	callIt.branchEdges.push(BranchEdge.create(after.id, argIds: argsOf(taken)))
+	emitBranchCarrying(module, from: callIt, to: after, value: taken)
 	return after
 end 'emitRetainedIfPresent'
 

@@ -28,8 +28,7 @@ function buildRandomFill(module StdModule)
 	let buffer = emitLoadField(module, block: measure, record: arrRec, offset: ManagedRecordBufferOffset, ids: ids)
 	let byteLength = emitArrayByteExtent(module, block: measure, arrRec: arrRec, offset: ManagedRecordLengthOffset, ids: ids)
 	let start = emitConst(module, block: measure, value: 0, ids: ids)
-	module.setTerminator(measure, op: StdOp.branch(piece.id))
-	measure.branchEdges.push(BranchEdge.create(piece.id, argIds: argsOf(start)))
+	emitBranchCarrying(module, from: measure, to: piece, value: start)
 
 	let offset = ids.mint()
 	pushI64BlockArgs(piece, values: argsOf(offset))
@@ -39,11 +38,9 @@ function buildRandomFill(module StdModule)
 	emitBranchOnCompare(module, block: sizePiece, value: remaining, pred: StdCmpPred.gt, against: RandomFillPieceBytes, whenTrue: wholePiece, whenFalse: lastPiece, ids: ids)
 
 	let wholeSize = emitConst(module, block: wholePiece, value: RandomFillPieceBytes, ids: ids)
-	module.setTerminator(wholePiece, op: StdOp.branch(fill.id))
-	wholePiece.branchEdges.push(BranchEdge.create(fill.id, argIds: argsOf(wholeSize)))
+	emitBranchCarrying(module, from: wholePiece, to: fill, value: wholeSize)
 
-	module.setTerminator(lastPiece, op: StdOp.branch(fill.id))
-	lastPiece.branchEdges.push(BranchEdge.create(fill.id, argIds: argsOf(remaining)))
+	emitBranchCarrying(module, from: lastPiece, to: fill, value: remaining)
 
 	let size = ids.mint()
 	pushI64BlockArgs(fill, values: argsOf(size))
@@ -53,8 +50,7 @@ function buildRandomFill(module StdModule)
 	emitBranchOnCompare(module, block: fill, value: status, pred: StdCmpPred.ne, against: 0, whenTrue: refused, whenFalse: filled, ids: ids)
 
 	let next = emitBin(module, block: filled, a: offset, b: size, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(filled, op: StdOp.branch(piece.id))
-	filled.branchEdges.push(BranchEdge.create(piece.id, argIds: argsOf(next)))
+	emitBranchCarrying(module, from: filled, to: piece, value: next)
 
 	module.setTerminator(refused, op: StdOp.ret(status))
 	emitConstReturn(module, block: done, value: 0, ids: ids)

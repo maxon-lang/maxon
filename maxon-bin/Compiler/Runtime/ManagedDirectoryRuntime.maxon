@@ -311,17 +311,15 @@ export function emitCStringLength(module StdModule, func IrFunction, cur IrBlock
 	var done = module.addBlock(func, label: b"mdsld", heat: BlockHeat.normal)
 
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
-	module.setTerminator(cur, op: StdOp.branch(header.id))
 	header.blockArgs.push(IrBlockArg.create(length, argType: StdType.i64))
-	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
+	emitBranchCarrying(module, from: cur, to: header, value: zero)
 
 	let ch = emitLoadByte(module, block: header, base: cstr, index: length, ids: ids)
 	emitBranchOnCompare(module, block: header, value: ch, pred: StdCmpPred.eq, against: NulByte, whenTrue: done, whenFalse: body, ids: ids)
 
 	let one = emitConst(module, block: body, value: 1, ids: ids)
 	let next = emitBin(module, block: body, a: length, b: one, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(body, op: StdOp.branch(header.id))
-	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(next)))
+	emitBranchCarrying(module, from: body, to: header, value: next)
 
 	return done
 end 'emitCStringLength'

@@ -605,12 +605,10 @@ export function emitOwedAllocationBase(module StdModule, func IrFunction, cur Ir
 	join.blockArgs.push(IrBlockArg.create(base, argType: StdType.i64))
 
 	let parent = emitLoadField(module, block: viewBase, record: record, offset: ManagedRecordParentOffset, ids: ids)
-	module.setTerminator(viewBase, op: StdOp.branch(join.id))
-	viewBase.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(parent)))
+	emitBranchCarrying(module, from: viewBase, to: join, value: parent)
 
 	let buffer = emitLoadField(module, block: ownBase, record: record, offset: ManagedRecordBufferOffset, ids: ids)
-	module.setTerminator(ownBase, op: StdOp.branch(join.id))
-	ownBase.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(buffer)))
+	emitBranchCarrying(module, from: ownBase, to: join, value: buffer)
 
 	return base
 end 'emitOwedAllocationBase'
@@ -707,8 +705,7 @@ export function emitBufferHostAllocation(module StdModule, func IrFunction, cur 
 
 	emitRouteOnOwedBase(module, block: owedJoin, base: owedBase, whenOwed: separate, whenNone: noSeparate, ids: ids)
 
-	module.setTerminator(separate, op: StdOp.branch(join.id))
-	separate.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(owedBase)))
+	emitBranchCarrying(module, from: separate, to: join, value: owedBase)
 
 	// The ONE positive provenance test — the header states why the residual may not answer `record`. It goes
 	// through the shared link for the reason `emitCapacityIsSentinel` states: this file's own subject is that
@@ -716,12 +713,10 @@ export function emitBufferHostAllocation(module StdModule, func IrFunction, cur 
 	let capacity = emitLoadField(module, block: noSeparate, record: record, offset: ManagedRecordCapacityOffset, ids: ids)
 	emitRouteOnCapacitySentinel(module, block: noSeparate, capacity: capacity, sentinel: InlineBufferCapacity, whenIt: inlineBytes, otherwise: nothingHosts, ids: ids)
 
-	module.setTerminator(inlineBytes, op: StdOp.branch(join.id))
-	inlineBytes.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(record)))
+	emitBranchCarrying(module, from: inlineBytes, to: join, value: record)
 
 	let nothing = emitConst(module, block: nothingHosts, value: NoOwedAllocation, ids: ids)
-	module.setTerminator(nothingHosts, op: StdOp.branch(join.id))
-	nothingHosts.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(nothing)))
+	emitBranchCarrying(module, from: nothingHosts, to: join, value: nothing)
 
 	return base
 end 'emitBufferHostAllocation'

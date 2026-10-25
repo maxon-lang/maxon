@@ -524,8 +524,7 @@ export function emitSockaddrFor(module StdModule, func IrFunction, entry IrBlock
 	let word4 = emitSockaddrInWord(module, block: build4, port: port, ip: address.ip, familyHalfword: sockaddrFamilyHalfword(target), ids: ids)
 	emitStoreField(module, block: build4, record: addr, offset: SockaddrFamilyPortAddrOffset, value: word4)
 	let length4 = emitConst(module, block: build4, value: SockaddrInBytes, ids: ids)
-	module.setTerminator(build4, op: StdOp.branch(joined.id))
-	build4.branchEdges.push(BranchEdge.create(joined.id, argIds: argsOf(length4)))
+	emitBranchCarrying(module, from: build4, to: joined, value: length4)
 
 	let noFlowInfo = emitConst(module, block: build6, value: 0, ids: ids)
 	let word6 = emitSockaddrInWord(module, block: build6, port: port, ip: noFlowInfo, familyHalfword: sockaddrIn6FamilyHalfword(target), ids: ids)
@@ -533,8 +532,7 @@ export function emitSockaddrFor(module StdModule, func IrFunction, entry IrBlock
 	emitStoreField(module, block: build6, record: addr, offset: Sockaddr6AddressLowOffset, value: address.low)
 	emitStoreField(module, block: build6, record: addr, offset: Sockaddr6AddressHighOffset, value: address.high)
 	let length6 = emitConst(module, block: build6, value: SockaddrIn6Bytes, ids: ids)
-	module.setTerminator(build6, op: StdOp.branch(joined.id))
-	build6.branchEdges.push(BranchEdge.create(joined.id, argIds: argsOf(length6)))
+	emitBranchCarrying(module, from: build6, to: joined, value: length6)
 
 	return BuiltSockaddr.create(addr, length: length)
 end 'emitSockaddrFor'
@@ -1204,12 +1202,10 @@ function buildManagedSocketSendFrom(module StdModule, target Target)
 	checkCap.blockArgs.push(IrBlockArg.create(bound, argType: StdType.i64))
 
 	let viewExtent = emitArrayByteExtent(module, block: viewBound, arrRec: arrRec, offset: ManagedRecordLengthOffset, ids: ids)
-	module.setTerminator(viewBound, op: StdOp.branch(checkCap.id))
-	viewBound.branchEdges.push(BranchEdge.create(checkCap.id, argIds: argsOf(viewExtent)))
+	emitBranchCarrying(module, from: viewBound, to: checkCap, value: viewExtent)
 
 	let ownedExtent = emitArrayByteExtent(module, block: ownedBound, arrRec: arrRec, offset: ManagedRecordCapacityOffset, ids: ids)
-	module.setTerminator(ownedBound, op: StdOp.branch(checkCap.id))
-	ownedBound.branchEdges.push(BranchEdge.create(checkCap.id, argIds: argsOf(ownedExtent)))
+	emitBranchCarrying(module, from: ownedBound, to: checkCap, value: ownedExtent)
 
 	// Both operands are non-negative here, so the sum is a real extent and cannot have wrapped.
 	let extent = emitBin(module, block: checkCap, a: offset, b: length, opcode: StdBinOpcode.add, ids: ids)
@@ -1992,9 +1988,8 @@ function buildManagedSocketSpan(module StdModule, name ByteArray, skipBlanks boo
 	let offBlank = done.id if skipBlanks else step.id
 
 	let pos = ids.mint()
-	module.setTerminator(entry, op: StdOp.branch(header.id))
 	header.blockArgs.push(IrBlockArg.create(pos, argType: StdType.i64))
-	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(start)))
+	emitBranchCarrying(module, from: entry, to: header, value: start)
 
 	emitBranchOnCompareValues(module, block: header, a: pos, pred: StdCmpPred.ge, b: limit, whenTrue: done, whenFalse: body, ids: ids)
 
@@ -2007,8 +2002,7 @@ function buildManagedSocketSpan(module StdModule, name ByteArray, skipBlanks boo
 
 	let one = emitConst(module, block: step, value: 1, ids: ids)
 	let next = emitBin(module, block: step, a: pos, b: one, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(step, op: StdOp.branch(header.id))
-	step.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(next)))
+	emitBranchCarrying(module, from: step, to: header, value: next)
 
 	module.setTerminator(done, op: StdOp.ret(pos))
 
@@ -2034,9 +2028,8 @@ function buildManagedSocketEol(module StdModule)
 	let limit = 2
 
 	let pos = ids.mint()
-	module.setTerminator(entry, op: StdOp.branch(header.id))
 	header.blockArgs.push(IrBlockArg.create(pos, argType: StdType.i64))
-	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(start)))
+	emitBranchCarrying(module, from: entry, to: header, value: start)
 
 	emitBranchOnCompareValues(module, block: header, a: pos, pred: StdCmpPred.ge, b: limit, whenTrue: done, whenFalse: body, ids: ids)
 
@@ -2045,8 +2038,7 @@ function buildManagedSocketEol(module StdModule)
 
 	let one = emitConst(module, block: step, value: 1, ids: ids)
 	let next = emitBin(module, block: step, a: pos, b: one, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(step, op: StdOp.branch(header.id))
-	step.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(next)))
+	emitBranchCarrying(module, from: step, to: header, value: next)
 
 	module.setTerminator(done, op: StdOp.ret(pos))
 
@@ -2189,8 +2181,7 @@ function buildManagedSocketHasColon(module StdModule)
 	let pos = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(pos, argType: StdType.i64))
 	let start = emitConst(module, block: entry, value: 0, ids: ids)
-	module.setTerminator(entry, op: StdOp.branch(header.id))
-	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(start)))
+	emitBranchCarrying(module, from: entry, to: header, value: start)
 
 	emitBranchOnCompareValues(module, block: header, a: pos, pred: StdCmpPred.ge, b: len, whenTrue: missing, whenFalse: body, ids: ids)
 
@@ -2199,8 +2190,7 @@ function buildManagedSocketHasColon(module StdModule)
 
 	let one = emitConst(module, block: step, value: 1, ids: ids)
 	let next = emitBin(module, block: step, a: pos, b: one, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(step, op: StdOp.branch(header.id))
-	step.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(next)))
+	emitBranchCarrying(module, from: step, to: header, value: next)
 
 	emitConstReturn(module, block: found, value: 1, ids: ids)
 	emitConstReturn(module, block: missing, value: 0, ids: ids)
@@ -2233,8 +2223,7 @@ function emitIpv6HexValue(module StdModule, block IrBlock, current ValueId, base
 		digitValue = emitBin(module, block: block, a: offset, b: emitConst(module, block: block, value: HexLetterBase, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 	end 'letters'
 
-	module.setTerminator(block, op: StdOp.branch(hex.id))
-	block.branchEdges.push(BranchEdge.create(hex.id, argIds: argsOf(digitValue)))
+	emitBranchCarrying(module, from: block, to: hex, value: digitValue)
 end 'emitIpv6HexValue'
 
 // `__ms_ipv6(buf, len, out)` answers 1 and fills the 16 zeroed bytes at `out` with the address in network
@@ -2398,8 +2387,7 @@ function buildManagedSocketIpv6(module StdModule)
 	end 'eachOctet'
 
 	let outAfterEmbedded = emitBin(module, block: dotStore, a: outIndex, b: emitConst(module, block: dotStore, value: Ipv4OctetCount, ids: ids), opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(dotStore, op: StdOp.branch(closeUp.id))
-	dotStore.branchEdges.push(BranchEdge.create(closeUp.id, argIds: argsOf(outAfterEmbedded)))
+	emitBranchCarrying(module, from: dotStore, to: closeUp, value: outAfterEmbedded)
 
 	let total = ids.mint()
 	closeUp.blockArgs.push(IrBlockArg.create(total, argType: StdType.i64))
@@ -2411,8 +2399,7 @@ function buildManagedSocketIpv6(module StdModule)
 
 	emitIpv6StoreGroup(module, block: finishStore, out: out, outIndex: outIndex, value: value, ids: ids)
 	let outAfterLast = emitBin(module, block: finishStore, a: outIndex, b: emitConst(module, block: finishStore, value: Ipv6GroupBytes, ids: ids), opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(finishStore, op: StdOp.branch(closeUp.id))
-	finishStore.branchEdges.push(BranchEdge.create(closeUp.id, argIds: argsOf(outAfterLast)))
+	emitBranchCarrying(module, from: finishStore, to: closeUp, value: outAfterLast)
 
 	emitBranchOnCompare(module, block: closeUp, value: gap, pred: StdCmpPred.eq, against: Ipv6NoGap, whenTrue: exact, whenFalse: gapped, ids: ids)
 
@@ -2423,11 +2410,10 @@ function buildManagedSocketIpv6(module StdModule)
 	let tailBytes = emitBin(module, block: compress, a: total, b: gap, opcode: StdBinOpcode.sub, ids: ids)
 	let tailStart = emitBin(module, block: compress, a: emitConst(module, block: compress, value: Ipv6AddressBytes, ids: ids), b: tailBytes, opcode: StdBinOpcode.sub, ids: ids)
 	let lastTailIndex = emitBin(module, block: compress, a: tailBytes, b: emitConst(module, block: compress, value: 1, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
-	module.setTerminator(compress, op: StdOp.branch(moveHeader.id))
 
 	let moveIndex = ids.mint()
 	moveHeader.blockArgs.push(IrBlockArg.create(moveIndex, argType: StdType.i64))
-	compress.branchEdges.push(BranchEdge.create(moveHeader.id, argIds: argsOf(lastTailIndex)))
+	emitBranchCarrying(module, from: compress, to: moveHeader, value: lastTailIndex)
 	emitBranchOnCompare(module, block: moveHeader, value: moveIndex, pred: StdCmpPred.lt, against: 0, whenTrue: zeroStart, whenFalse: moveBody, ids: ids)
 
 	let moveSource = emitBin(module, block: moveBody, a: gap, b: moveIndex, opcode: StdBinOpcode.add, ids: ids)
@@ -2435,19 +2421,16 @@ function buildManagedSocketIpv6(module StdModule)
 	let movedByte = emitLoadByte(module, block: moveBody, base: out, index: moveSource, ids: ids)
 	emitStoreByte(module, block: moveBody, base: out, index: moveTarget, value: movedByte, ids: ids)
 	let moveNext = emitBin(module, block: moveBody, a: moveIndex, b: emitConst(module, block: moveBody, value: 1, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
-	module.setTerminator(moveBody, op: StdOp.branch(moveHeader.id))
-	moveBody.branchEdges.push(BranchEdge.create(moveHeader.id, argIds: argsOf(moveNext)))
+	emitBranchCarrying(module, from: moveBody, to: moveHeader, value: moveNext)
 
 	let zeroIndex = ids.mint()
 	zeroHeader.blockArgs.push(IrBlockArg.create(zeroIndex, argType: StdType.i64))
-	module.setTerminator(zeroStart, op: StdOp.branch(zeroHeader.id))
-	zeroStart.branchEdges.push(BranchEdge.create(zeroHeader.id, argIds: argsOf(gap)))
+	emitBranchCarrying(module, from: zeroStart, to: zeroHeader, value: gap)
 	emitBranchOnCompareValues(module, block: zeroHeader, a: zeroIndex, pred: StdCmpPred.ge, b: tailStart, whenTrue: success, whenFalse: zeroBody, ids: ids)
 
 	emitStoreByte(module, block: zeroBody, base: out, index: zeroIndex, value: emitConst(module, block: zeroBody, value: 0, ids: ids), ids: ids)
 	let zeroNext = emitBin(module, block: zeroBody, a: zeroIndex, b: emitConst(module, block: zeroBody, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(zeroBody, op: StdOp.branch(zeroHeader.id))
-	zeroBody.branchEdges.push(BranchEdge.create(zeroHeader.id, argIds: argsOf(zeroNext)))
+	emitBranchCarrying(module, from: zeroBody, to: zeroHeader, value: zeroNext)
 
 	emitConstReturn(module, block: success, value: 1, ids: ids)
 	emitConstReturn(module, block: failed, value: 0, ids: ids)
@@ -2530,9 +2513,8 @@ function emitResolverLineWalk(module StdModule, entry IrBlock, lineHeader IrBloc
 	module.appendOp(entry, op: StdOp.call(count, callee: ManagedSocketSlurpName, args: threeArgs(pathBuf, second: buf, third: cap)))
 	emitRawFree(module, block: entry, ptr: pathBuf, ids: ids)
 	let firstLine = emitConst(module, block: entry, value: 0, ids: ids)
-	module.setTerminator(entry, op: StdOp.branch(lineHeader.id))
 	lineHeader.blockArgs.push(IrBlockArg.create(linePos, argType: StdType.i64))
-	entry.branchEdges.push(BranchEdge.create(lineHeader.id, argIds: argsOf(firstLine)))
+	emitBranchCarrying(module, from: entry, to: lineHeader, value: firstLine)
 
 	emitBranchOnCompareValues(module, block: lineHeader, a: linePos, pred: StdCmpPred.ge, b: count, whenTrue: notFound, whenFalse: lineStart, ids: ids)
 
@@ -2542,8 +2524,7 @@ function emitResolverLineWalk(module StdModule, entry IrBlock, lineHeader IrBloc
 	// header test ends the walk.
 	let lineStep = emitConst(module, block: nextLine, value: 1, ids: ids)
 	let nextLineStart = emitBin(module, block: nextLine, a: lineEnd, b: lineStep, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(nextLine, op: StdOp.branch(lineHeader.id))
-	nextLine.branchEdges.push(BranchEdge.create(lineHeader.id, argIds: argsOf(nextLineStart)))
+	emitBranchCarrying(module, from: nextLine, to: lineHeader, value: nextLineStart)
 end 'emitResolverLineWalk'
 
 // ⭐⭐ **`__ms_hosts4(host, hostLen, buf, cap)` — `/etc/hosts`, THE FIRST PLACE A NAME IS LOOKED UP AFTER A
@@ -2594,9 +2575,8 @@ function buildManagedSocketHosts(module StdModule)
 	// The name walk's cursor rides a block arg, so the entry into it is a plain branch — a `condBranch`
 	// carries no edge arguments at this tier.
 	let nameCursor = ids.mint()
-	module.setTerminator(namesStart, op: StdOp.branch(nameHeader.id))
 	nameHeader.blockArgs.push(IrBlockArg.create(nameCursor, argType: StdType.i64))
-	namesStart.branchEdges.push(BranchEdge.create(nameHeader.id, argIds: argsOf(addressEnd)))
+	emitBranchCarrying(module, from: namesStart, to: nameHeader, value: addressEnd)
 
 	let nameStart = emitResolverCall(module, block: nameHeader, callee: ManagedSocketBlanksName, args: threeArgs(buf, second: nameCursor, third: lineEnd), ids: ids)
 	let nameEnd = emitResolverCall(module, block: nameHeader, callee: ManagedSocketWordName, args: threeArgs(buf, second: nameStart, third: lineEnd), ids: ids)
@@ -2616,8 +2596,7 @@ function buildManagedSocketHosts(module StdModule)
 	let hostsAddress = emitResolverCall(module, block: matched, callee: ManagedSocketIpv4Name, args: twoArgs(addressPtr, second: addressLength), ids: ids)
 	module.setTerminator(matched, op: StdOp.ret(hostsAddress))
 
-	module.setTerminator(nextName, op: StdOp.branch(nameHeader.id))
-	nextName.branchEdges.push(BranchEdge.create(nameHeader.id, argIds: argsOf(nameEnd)))
+	emitBranchCarrying(module, from: nextName, to: nameHeader, value: nameEnd)
 
 	emitConstReturn(module, block: notFound, value: ResolveNoAddress, ids: ids)
 
@@ -2705,9 +2684,8 @@ function buildManagedSocketDnsSkip(module StdModule)
 	let limit = 2
 
 	let pos = ids.mint()
-	module.setTerminator(entry, op: StdOp.branch(header.id))
 	header.blockArgs.push(IrBlockArg.create(pos, argType: StdType.i64))
-	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(start)))
+	emitBranchCarrying(module, from: entry, to: header, value: start)
 
 	emitBranchOnCompareValues(module, block: header, a: pos, pred: StdCmpPred.ge, b: limit, whenTrue: truncated, whenFalse: body, ids: ids)
 
@@ -2729,8 +2707,7 @@ function buildManagedSocketDnsSkip(module StdModule)
 	let labelPrefix = emitConst(module, block: label, value: DnsLabelTerminatorBytes, ids: ids)
 	let afterPrefix = emitBin(module, block: label, a: pos, b: labelPrefix, opcode: StdBinOpcode.add, ids: ids)
 	let afterLabel = emitBin(module, block: label, a: afterPrefix, b: current, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(label, op: StdOp.branch(header.id))
-	label.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(afterLabel)))
+	emitBranchCarrying(module, from: label, to: header, value: afterLabel)
 
 	// A name that runs off the end of what arrived answers the end itself, which every caller then fails its
 	// own bounds check against — one refusal, at the site that knows what it was about to read.
@@ -2922,15 +2899,13 @@ function buildManagedSocketDns(module StdModule, target Target)
 	let received = ids.mint()
 	recvHeader.blockArgs.push(IrBlockArg.create(received, argType: StdType.i64))
 	let receivedFirst = emitConst(module, block: recvStart, value: 0, ids: ids)
-	module.setTerminator(recvStart, op: StdOp.branch(recvHeader.id))
-	recvStart.branchEdges.push(BranchEdge.create(recvHeader.id, argIds: argsOf(receivedFirst)))
+	emitBranchCarrying(module, from: recvStart, to: recvHeader, value: receivedFirst)
 
 	let capacity = emitConst(module, block: recvHeader, value: DnsMessageBytes, ids: ids)
 	let room = emitBin(module, block: recvHeader, a: capacity, b: received, opcode: StdBinOpcode.sub, ids: ids)
 	emitBranchOnCompare(module, block: recvHeader, value: room, pred: StdCmpPred.le, against: 0, whenTrue: recvFull, whenFalse: recvRead, ids: ids)
 
-	module.setTerminator(recvFull, op: StdOp.branch(parse.id))
-	recvFull.branchEdges.push(BranchEdge.create(parse.id, argIds: argsOf(received)))
+	emitBranchCarrying(module, from: recvFull, to: parse, value: received)
 
 	let readAt = emitBin(module, block: recvRead, a: message, b: received, opcode: StdBinOpcode.add, ids: ids)
 	let readCount = ids.mint()
@@ -2943,8 +2918,7 @@ function buildManagedSocketDns(module StdModule, target Target)
 	readOk.blockArgs.push(IrBlockArg.create(arrivedNow, argType: StdType.i64))
 	emitBranchOnCompare(module, block: readOk, value: arrivedNow, pred: StdCmpPred.eq, against: 0, whenTrue: recvEof, whenFalse: recvGot, ids: ids)
 
-	module.setTerminator(recvEof, op: StdOp.branch(parse.id))
-	recvEof.branchEdges.push(BranchEdge.create(parse.id, argIds: argsOf(received)))
+	emitBranchCarrying(module, from: recvEof, to: parse, value: received)
 
 	let receivedNext = emitBin(module, block: recvGot, a: received, b: arrivedNow, opcode: StdBinOpcode.add, ids: ids)
 	let prefixSize = emitConst(module, block: recvGot, value: DnsTcpLengthPrefixBytes, ids: ids)
@@ -2955,11 +2929,9 @@ function buildManagedSocketDns(module StdModule, target Target)
 	let wanted = emitBin(module, block: recvCheck, a: declared, b: prefixSize, opcode: StdBinOpcode.add, ids: ids)
 	emitBranchOnCompareValues(module, block: recvCheck, a: receivedNext, pred: StdCmpPred.ge, b: wanted, whenTrue: recvDone, whenFalse: recvMore, ids: ids)
 
-	module.setTerminator(recvDone, op: StdOp.branch(parse.id))
-	recvDone.branchEdges.push(BranchEdge.create(parse.id, argIds: argsOf(receivedNext)))
+	emitBranchCarrying(module, from: recvDone, to: parse, value: receivedNext)
 
-	module.setTerminator(recvMore, op: StdOp.branch(recvHeader.id))
-	recvMore.branchEdges.push(BranchEdge.create(recvHeader.id, argIds: argsOf(receivedNext)))
+	emitBranchCarrying(module, from: recvMore, to: recvHeader, value: receivedNext)
 
 	// The socket has answered everything it is going to; the parse reads only the scratch.
 	let arrived = ids.mint()

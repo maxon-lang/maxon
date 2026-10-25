@@ -589,12 +589,10 @@ export function emitFloatHashInto(module StdModule, func IrFunction, entry IrBlo
 	emitOrderingTest(module, block: entry, a: bits, b: negativeZeroBits, pred: StdCmpPred.eq, operandType: StdType.i64, thenBlock: negativeZero, elseBlock: folded, ids: ids)
 
 	let zeroTerm = emitConst(module, block: negativeZero, value: ZeroFloatHash, ids: ids)
-	module.setTerminator(negativeZero, op: StdOp.branch(join.id))
-	negativeZero.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(zeroTerm)))
+	emitBranchCarrying(module, from: negativeZero, to: join, value: zeroTerm)
 
 	let foldedTerm = emitFloatBitsFold(module, block: folded, bits: bits, ids: ids)
-	module.setTerminator(folded, op: StdOp.branch(join.id))
-	folded.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(foldedTerm)))
+	emitBranchCarrying(module, from: folded, to: join, value: foldedTerm)
 
 	return hashed
 end 'emitFloatHashInto'

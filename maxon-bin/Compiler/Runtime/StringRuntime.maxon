@@ -681,8 +681,7 @@ function buildStreamWrite(module StdModule, name ByteArray, stream OsOutputStrea
 	var finished = module.addBlock(func, label: b"wrdone", heat: BlockHeat.normal)
 
 	let nothingWritten = emitConst(module, block: entry, value: 0, ids: ids)
-	module.setTerminator(entry, op: StdOp.branch(header.id))
-	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(nothingWritten)))
+	emitBranchCarrying(module, from: entry, to: header, value: nothingWritten)
 
 	let done = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(done, argType: StdType.i64))
@@ -699,14 +698,12 @@ function buildStreamWrite(module StdModule, name ByteArray, stream OsOutputStrea
 
 	emitBranchOnCompare(module, block: lap, value: written, pred: StdCmpPred.eq, against: 0 - PosixErrno.interrupted.rawValue, whenTrue: reissue, whenFalse: answered, ids: ids)
 
-	module.setTerminator(reissue, op: StdOp.branch(header.id))
-	reissue.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(done)))
+	emitBranchCarrying(module, from: reissue, to: header, value: done)
 
 	emitBranchOnCompare(module, block: answered, value: written, pred: StdCmpPred.gt, against: 0, whenTrue: advance, whenFalse: finished, ids: ids)
 
 	let doneAfter = emitBin(module, block: advance, a: done, b: written, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(advance, op: StdOp.branch(header.id))
-	advance.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(doneAfter)))
+	emitBranchCarrying(module, from: advance, to: header, value: doneAfter)
 
 	module.setTerminator(finished, op: StdOp.ret(done))
 
@@ -788,11 +785,10 @@ export function emitByteRangeCompareLoop(module StdModule, func IrFunction, cur 
 	var body = module.addBlock(func, label: b"cmpbody", heat: BlockHeat.normal)
 
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
-	module.setTerminator(cur, op: StdOp.branch(header.id))
 
 	let i = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
+	emitBranchCarrying(module, from: cur, to: header, value: zero)
 
 	emitBranchOnCompareValues(module, block: header, a: i, pred: StdCmpPred.ge, b: len, whenTrue: allMatch, whenFalse: body, ids: ids)
 
@@ -1261,13 +1257,11 @@ function buildStrRetain(module StdModule)
 
 	let copied = ids.mint()
 	module.appendOp(copyImmortal, op: StdOp.call(copied, callee: StrCloneName, args: argsOf(record)))
-	module.setTerminator(copyImmortal, op: StdOp.branch(join.id))
-	copyImmortal.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(copied)))
+	emitBranchCarrying(module, from: copyImmortal, to: join, value: copied)
 
 	let increfed = ids.mint()
 	module.appendOp(coOwn, op: StdOp.call(increfed, callee: MmIncrefName, args: argsOf(record)))
-	module.setTerminator(coOwn, op: StdOp.branch(join.id))
-	coOwn.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(record)))
+	emitBranchCarrying(module, from: coOwn, to: join, value: record)
 
 	module.setTerminator(join, op: StdOp.ret(owned))
 
@@ -1295,11 +1289,9 @@ function buildStrUnshare(module StdModule)
 	let copied = ids.mint()
 	module.appendOp(copyShared, op: StdOp.call(copied, callee: StrCloneName, args: argsOf(record)))
 	module.appendOp(copyShared, op: StdOp.call(ids.mint(), callee: StrDecrefName, args: argsOf(record)))
-	module.setTerminator(copyShared, op: StdOp.branch(join.id))
-	copyShared.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(copied)))
+	emitBranchCarrying(module, from: copyShared, to: join, value: copied)
 
-	module.setTerminator(keepSole, op: StdOp.branch(join.id))
-	keepSole.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(record)))
+	emitBranchCarrying(module, from: keepSole, to: join, value: record)
 
 	module.setTerminator(join, op: StdOp.ret(owned))
 

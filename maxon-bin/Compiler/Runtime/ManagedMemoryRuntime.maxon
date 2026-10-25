@@ -1680,11 +1680,9 @@ function emitElementDestroyRange(module StdModule, func IrFunction, cur IrBlock,
 	var step = module.addBlock(func, label: b"dtorstep", heat: BlockHeat.normal)
 	var done = module.addBlock(func, label: b"dtordone", heat: BlockHeat.normal)
 
-	module.setTerminator(cur, op: StdOp.branch(header.id))
-
 	let i = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(start)))
+	emitBranchCarrying(module, from: cur, to: header, value: start)
 	let atEnd = ids.mint()
 	module.appendOp(header, op: StdOp.cmp(atEnd, lhs: i, rhs: stop, pred: StdCmpPred.ge, operandType: StdType.i64))
 	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
@@ -1699,8 +1697,7 @@ function emitElementDestroyRange(module StdModule, func IrFunction, cur IrBlock,
 
 	let one = emitConst(module, block: step, value: 1, ids: ids)
 	let iNext = emitBin(module, block: step, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(step, op: StdOp.branch(header.id))
-	step.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
+	emitBranchCarrying(module, from: step, to: header, value: iNext)
 
 	return done
 end 'emitElementDestroyRange'
@@ -1751,11 +1748,10 @@ function emitStoreElem(module StdModule, func IrFunction, cur IrBlock, addr Valu
 
 	let zero = ids.mint()
 	module.appendOp(cur, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
-	module.setTerminator(cur, op: StdOp.branch(header.id))
 
 	let i = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
+	emitBranchCarrying(module, from: cur, to: header, value: zero)
 	let atEnd = ids.mint()
 	module.appendOp(header, op: StdOp.cmp(atEnd, lhs: i, rhs: size, pred: StdCmpPred.ge, operandType: StdType.i64))
 	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
@@ -1773,8 +1769,7 @@ function emitStoreElem(module StdModule, func IrFunction, cur IrBlock, addr Valu
 	module.appendOp(body, op: StdOp.const(one, value: 1, valueType: StdType.i64))
 	let iNext = ids.mint()
 	module.appendOp(body, op: StdOp.binOp(iNext, lhs: i, rhs: one, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.setTerminator(body, op: StdOp.branch(header.id))
-	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
+	emitBranchCarrying(module, from: body, to: header, value: iNext)
 
 	return done
 end 'emitStoreElem'
@@ -2401,8 +2396,7 @@ function emitLoadElemAt(module StdModule, func IrFunction, cur IrBlock, exit IrB
 	let raw = emitLoadElem(module, func: func, cur: generic, exit: extract, addr: addr, size: placement.byteSpan, ids: ids)
 	let shifted = emitBin(module, block: extract, a: raw, b: placement.shiftBits, opcode: StdBinOpcode.shrLogical, ids: ids)
 	let extracted = emitBin(module, block: extract, a: shifted, b: placement.widthMask, opcode: StdBinOpcode.bitAnd, ids: ids)
-	module.setTerminator(extract, op: StdOp.branch(join.id))
-	extract.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(extracted)))
+	emitBranchCarrying(module, from: extract, to: join, value: extracted)
 
 	module.setTerminator(join, op: StdOp.branch(exit.id))
 
@@ -2585,13 +2579,11 @@ function buildManagedMoveElems(module StdModule)
 	emitBranchOnCompareValues(module, block: entry, a: destBuffer, pred: StdCmpPred.eq, b: srcBuffer, whenTrue: sameBuf, whenFalse: otherBuf, ids: ids)
 
 	let overlapsUpward = emitCmp(module, block: sameBuf, a: destIndex, b: srcIndex, pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(sameBuf, op: StdOp.branch(direction.id))
-	sameBuf.branchEdges.push(BranchEdge.create(direction.id, argIds: argsOf(overlapsUpward)))
+	emitBranchCarrying(module, from: sameBuf, to: direction, value: overlapsUpward)
 
 	// Distinct buffers cannot overlap — each is its own allocation — so the forward order is always safe.
 	let forwardIsSafe = emitConst(module, block: otherBuf, value: 0, ids: ids)
-	module.setTerminator(otherBuf, op: StdOp.branch(direction.id))
-	otherBuf.branchEdges.push(BranchEdge.create(direction.id, argIds: argsOf(forwardIsSafe)))
+	emitBranchCarrying(module, from: otherBuf, to: direction, value: forwardIsSafe)
 
 	let zero = emitConst(module, block: direction, value: 0, ids: ids)
 	emitBranchOnCompare(module, block: direction, value: es, pred: StdCmpPred.lt, against: 0, whenTrue: packedArm, whenFalse: byteArm, ids: ids)
@@ -3269,8 +3261,7 @@ function emitRecordView(module StdModule, func IrFunction, cur IrBlock, exit IrB
 	let newRec = emitViewRecordHead(module, block: shareArm, srcBuffer: srcBuffer, start: start, sliceLen: sliceLen, elementSize: es, elementDestroy: dtor, ids: ids)
 	let base = emitBufferHostAllocation(module, func: func, cur: shareArm, join: baseJoin, record: srcRecord, ids: ids)
 	emitViewRecordTail(module, func: func, cur: baseJoin, exit: shareDone, view: newRec, base: base, ids: ids)
-	module.setTerminator(shareDone, op: StdOp.branch(exit.id))
-	shareDone.branchEdges.push(BranchEdge.create(exit.id, argIds: argsOf(newRec)))
+	emitBranchCarrying(module, from: shareDone, to: exit, value: newRec)
 
 	return result
 end 'emitRecordView'
@@ -3297,8 +3288,7 @@ function emitPackedWindowCopy(module StdModule, cur IrBlock, exit IrBlock, srcBu
 
 	let destStart = emitConst(module, block: cur, value: 0, ids: ids)
 	emitMoveElems(module, block: cur, destBuffer: newBuf, destIndex: destStart, srcBuffer: srcBuffer, srcIndex: start, count: sliceLen, es: es, ids: ids)
-	module.setTerminator(cur, op: StdOp.branch(exit.id))
-	cur.branchEdges.push(BranchEdge.create(exit.id, argIds: argsOf(newRec)))
+	emitBranchCarrying(module, from: cur, to: exit, value: newRec)
 end 'emitPackedWindowCopy'
 
 // ⭐⭐ **THE FIRST HALF OF A VIEW: MINT THE RECORD AND FILL EVERY SLOT BUT `parent@32`.** Split out of
@@ -3488,10 +3478,9 @@ function buildManagedGrownCap(module StdModule)
 	emitAtLeastMinimumReturn(module, func: func, block: takeDoubled, value: doubled, ids: ids)
 
 	// easeInit → easeHeader(cap = current): ease toward 1.25×.
-	module.setTerminator(easeInit, op: StdOp.branch(easeHeader.id))
 	let cap = ids.mint()
 	easeHeader.blockArgs.push(IrBlockArg.create(cap, argType: StdType.i64))
-	easeInit.branchEdges.push(BranchEdge.create(easeHeader.id, argIds: argsOf(current)))
+	emitBranchCarrying(module, from: easeInit, to: easeHeader, value: current)
 	emitBranchOnCompareValues(module, block: easeHeader, a: cap, pred: StdCmpPred.lt, b: required, whenTrue: easeBody, whenFalse: easeDone, ids: ids)
 
 	let threshConst = emitConst(module, block: easeBody, value: GrowthThreshold, ids: ids)
@@ -3502,8 +3491,7 @@ function buildManagedGrownCap(module StdModule)
 	let step = ids.mint()
 	module.appendOp(easeBody, op: StdOp.div(step, lhs: numerator, rhs: divisor, signedness: IntegerSignedness.signed))
 	let capNext = emitBin(module, block: easeBody, a: cap, b: step, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(easeBody, op: StdOp.branch(easeHeader.id))
-	easeBody.branchEdges.push(BranchEdge.create(easeHeader.id, argIds: argsOf(capNext)))
+	emitBranchCarrying(module, from: easeBody, to: easeHeader, value: capNext)
 
 	module.setTerminator(easeDone, op: StdOp.ret(cap))
 

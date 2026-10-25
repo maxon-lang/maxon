@@ -1009,8 +1009,7 @@ function buildMboxRecv(module StdModule)
 
 	entry = emitGtHonourPreemptRequestOnMachine(module, func: func, block: entry, machine: machine, ids: ids)
 
-	module.setTerminator(entry, op: StdOp.branch(attempt.id))
-	entry.branchEdges.push(BranchEdge.create(attempt.id, argIds: argsOf(machine)))
+	emitBranchCarrying(module, from: entry, to: attempt, value: machine)
 
 	emitMboxLockEnterOnMachine(module, block: attempt, mbox: mbox, machine: attemptMachine, ids: ids)
 	let receiver = emitLoadField(module, block: attempt, record: mbox, offset: MboxOffReceiver, ids: ids)
@@ -1069,8 +1068,7 @@ function buildMboxRecv(module StdModule)
 
 	// The park may resume this thread on another machine, whose lock depth the retry's lock enter steps.
 	let resumedMachine = emitLoadCurrentM(module, block: retry, ids: ids)
-	module.setTerminator(retry, op: StdOp.branch(attempt.id))
-	retry.branchEdges.push(BranchEdge.create(attempt.id, argIds: argsOf(resumedMachine)))
+	emitBranchCarrying(module, from: retry, to: attempt, value: resumedMachine)
 
 	module.functions.push(func)
 end 'buildMboxRecv'

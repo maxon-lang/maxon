@@ -1449,8 +1449,7 @@ function emitSlabLockDepthAddr(module StdModule, func IrFunction, cur IrBlock, s
 	let schedulerWord = emitSlabSchedulerWord(module, block: cur, state: state, model: model, ids: ids)
 
 	if model == MachineModel.singleMachine 'oneThread'
-		module.setTerminator(cur, op: StdOp.branch(merge.id))
-		cur.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(sink)))
+		emitBranchCarrying(module, from: cur, to: merge, value: sink)
 
 		return merge
 	end 'oneThread'
@@ -1461,8 +1460,7 @@ function emitSlabLockDepthAddr(module StdModule, func IrFunction, cur IrBlock, s
 	let m = emitSlabMachineOrBail(module, func: func, cur: cur, schedulerWord: schedulerWord, haveMachine: haveMachine, noScheduler: toSink, noMachine: toSink, ids: ids, label: label, heat: heat)
 
 	let mine = emitFieldAddr(module, block: haveMachine, record: m, offset: MOffLocks, ids: ids)
-	module.setTerminator(haveMachine, op: StdOp.branch(merge.id))
-	haveMachine.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(mine)))
+	emitBranchCarrying(module, from: haveMachine, to: merge, value: mine)
 
 	return merge
 end 'emitSlabLockDepthAddr'
@@ -1772,8 +1770,7 @@ function emitSlabStateBase(module StdModule, func IrFunction, cur IrBlock, state
 
 	let committed = ids.mint()
 	module.appendOp(commit, op: StdOp.call(committed, callee: SlabStateName, args: ValueIdArray.create()))
-	module.setTerminator(commit, op: StdOp.branch(merge.id))
-	commit.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(committed)))
+	emitBranchCarrying(module, from: commit, to: merge, value: committed)
 
 	return merge
 end 'emitSlabStateBase'
@@ -1826,12 +1823,10 @@ function emitSlabClassIndex(module StdModule, func IrFunction, cur IrBlock, size
 	emitBranchOnCompare(module, block: cur, value: size, pred: StdCmpPred.gt, against: SlabSmallTableMaxSize, whenTrue: largeTable, whenFalse: smallTable, ids: ids)
 
 	let small = emitReverseTableLookup(module, block: smallTable, size: size, subtract: 0, divShift: SlabSmallSizeDivShift, divisor: SlabSmallSizeDiv, label: SlabSizeToClass8LabelBytes, ids: ids)
-	module.setTerminator(smallTable, op: StdOp.branch(merge.id))
-	smallTable.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(small)))
+	emitBranchCarrying(module, from: smallTable, to: merge, value: small)
 
 	let large = emitReverseTableLookup(module, block: largeTable, size: size, subtract: SlabSmallSizeMax, divShift: SlabLargeSizeDivShift, divisor: SlabLargeSizeDiv, label: SlabSizeToClass128LabelBytes, ids: ids)
-	module.setTerminator(largeTable, op: StdOp.branch(merge.id))
-	largeTable.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(large)))
+	emitBranchCarrying(module, from: largeTable, to: merge, value: large)
 
 	return merge
 end 'emitSlabClassIndex'
@@ -1971,8 +1966,7 @@ function buildSlabRefill(module StdModule, model MachineModel)
 	emitStoreField(module, block: takePartial, record: mcentralSlot, offset: 0, value: following)
 	emitStoreField(module, block: takePartial, record: partial, offset: MspanNextSpanOffset, value: none)
 	module.appendOp(takePartial, op: StdOp.call(ids.mint(), callee: SlabCollectRemoteName, args: argsOf(partial)))
-	module.setTerminator(takePartial, op: StdOp.branch(install.id))
-	takePartial.branchEdges.push(BranchEdge.create(install.id, argIds: argsOf(partial)))
+	emitBranchCarrying(module, from: takePartial, to: install, value: partial)
 
 	let geom = emitClassGeometry(module, block: grow, classIdx: classIdx, ids: ids)
 	let slotSize = emitGeomSlotSize(module, block: grow, geom: geom, ids: ids)
@@ -2003,8 +1997,7 @@ function buildSlabRefill(module StdModule, model MachineModel)
 	// Every page of the run maps to this span, which is what lets a free of a pointer anywhere INSIDE it
 	// find its owner (`__slab_arena_map_set`). Chunks and pages are the same 8 KiB unit.
 	module.appendOp(cut, op: StdOp.call(ids.mint(), callee: SlabArenaMapSetName, args: threeArgs(pageBase, second: numChunks, third: span)))
-	module.setTerminator(cut, op: StdOp.branch(install.id))
-	cut.branchEdges.push(BranchEdge.create(install.id, argIds: argsOf(span)))
+	emitBranchCarrying(module, from: cut, to: install, value: span)
 
 	let installed = ids.mint()
 	install.blockArgs.push(IrBlockArg.create(installed, argType: StdType.i64))
@@ -2077,8 +2070,7 @@ function emitSlabAllocClass(module StdModule, func IrFunction, cur IrBlock, clas
 
 	let fresh = ids.mint()
 	module.appendOp(refill, op: StdOp.call(fresh, callee: SlabRefillName, args: threeArgs(classIdx, second: myP, third: mcacheRow)))
-	module.setTerminator(refill, op: StdOp.branch(ready.id))
-	refill.branchEdges.push(BranchEdge.create(ready.id, argIds: argsOf(fresh)))
+	emitBranchCarrying(module, from: refill, to: ready, value: fresh)
 
 	let geom = emitClassGeometry(module, block: ready, classIdx: classIdx, ids: ids)
 	let slotSize = emitGeomSlotSize(module, block: ready, geom: geom, ids: ids)
@@ -2094,8 +2086,7 @@ function emitSlabAllocClass(module StdModule, func IrFunction, cur IrBlock, clas
 		module.appendOp(recycled, op: StdOp.memFill(freeList, byteCountId: slotSize, value: 0))
 	end 'restoreTheZeroingContract'
 
-	module.setTerminator(recycled, op: StdOp.branch(consumed.id))
-	recycled.branchEdges.push(BranchEdge.create(consumed.id, argIds: argsOf(freeList)))
+	emitBranchCarrying(module, from: recycled, to: consumed, value: freeList)
 
 	// CARVE. INV-2 says `bump_end == base_addr + slot_size * total_slots`, derived here rather than stored;
 	// INV-1 says `free_count > 0` with an empty free list implies `bump_next < bump_end`.
@@ -2116,8 +2107,7 @@ function emitSlabAllocClass(module StdModule, func IrFunction, cur IrBlock, clas
 
 	let nextBump = emitBin(module, block: handOut, a: bumpNext, b: slotSize, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreField(module, block: handOut, record: span, offset: MspanBumpNextOffset, value: nextBump)
-	module.setTerminator(handOut, op: StdOp.branch(consumed.id))
-	handOut.branchEdges.push(BranchEdge.create(consumed.id, argIds: argsOf(bumpNext)))
+	emitBranchCarrying(module, from: handOut, to: consumed, value: bumpNext)
 
 	let slot = ids.mint()
 	consumed.blockArgs.push(IrBlockArg.create(slot, argType: StdType.i64))
@@ -2137,8 +2127,7 @@ function emitSlabAllocClass(module StdModule, func IrFunction, cur IrBlock, clas
 	let uncached = emitConst(module, block: evict, value: 0, ids: ids)
 	emitStoreField(module, block: evict, record: mcacheSlot, offset: 0, value: uncached)
 	emitStoreSpanOwnerState(module, block: evict, span: span, state: SpanOwnerState.full, ids: ids)
-	module.setTerminator(evict, op: StdOp.branch(done.id))
-	evict.branchEdges.push(BranchEdge.create(done.id, argIds: argsOf(slot)))
+	emitBranchCarrying(module, from: evict, to: done, value: slot)
 
 	return done
 end 'emitSlabAllocClass'
@@ -2545,8 +2534,7 @@ function buildSlabScavenge(module StdModule, model MachineModel)
 	var locked = emitSlabLockDepthAddr(module, func: func, cur: entry, state: state, model: model, addrId: depthAddr, ids: ids, label: b"depth")
 	emitSlabLockEnter(module, block: locked, state: state, depthAddr: depthAddr, ids: ids)
 	let firstClass = emitConst(module, block: locked, value: 0, ids: ids)
-	module.setTerminator(locked, op: StdOp.branch(classLoop.id))
-	locked.branchEdges.push(BranchEdge.create(classLoop.id, argIds: argsOf(firstClass)))
+	emitBranchCarrying(module, from: locked, to: classLoop, value: firstClass)
 
 	let classIdx = ids.mint()
 	classLoop.blockArgs.push(IrBlockArg.create(classIdx, argType: StdType.i64))
@@ -2613,8 +2601,7 @@ function buildSlabScavenge(module StdModule, model MachineModel)
 	emitStoreField(module, block: classDone, record: mcentralSlot, offset: 0, value: survivors)
 	let one = emitConst(module, block: classDone, value: 1, ids: ids)
 	let nextClass = emitBin(module, block: classDone, a: classIdx, b: one, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(classDone, op: StdOp.branch(classLoop.id))
-	classDone.branchEdges.push(BranchEdge.create(classLoop.id, argIds: argsOf(nextClass)))
+	emitBranchCarrying(module, from: classDone, to: classLoop, value: nextClass)
 
 	module.functions.push(func)
 end 'buildSlabScavenge'
@@ -2795,8 +2782,7 @@ function buildSlabCollectRemote(module StdModule)
 
 	let following = emitLoadField(module, block: replay, record: node, offset: 0, ids: ids)
 	module.appendOp(replay, op: StdOp.call(ids.mint(), callee: SlabFreeToSpanName, args: twoArgs(node, second: span)))
-	module.setTerminator(replay, op: StdOp.branch(walk.id))
-	replay.branchEdges.push(BranchEdge.create(walk.id, argIds: argsOf(following)))
+	emitBranchCarrying(module, from: replay, to: walk, value: following)
 
 	module.setTerminator(done, op: StdOp.retVoid)
 
@@ -2873,12 +2859,10 @@ function buildSlabFree(module StdModule, counting SlabCounting, model MachineMod
 	routed.blockArgs.push(IrBlockArg.create(myP, argType: StdType.i64))
 
 	emitSlabRawCredit(module, block: arms.sole.block, rowBase: arms.sole.trafficRow, event: SlabTrafficEvent.free, atomic: false, counting: counting, ids: ids)
-	module.setTerminator(arms.sole.block, op: StdOp.branch(routed.id))
-	arms.sole.block.branchEdges.push(BranchEdge.create(routed.id, argIds: argsOf(slabShardProc(arms.sole))))
+	emitBranchCarrying(module, from: arms.sole.block, to: routed, value: slabShardProc(arms.sole))
 
 	emitSlabRawCredit(module, block: arms.serial.block, rowBase: arms.serial.trafficRow, event: SlabTrafficEvent.free, atomic: true, counting: counting, ids: ids)
-	module.setTerminator(arms.serial.block, op: StdOp.branch(routed.id))
-	arms.serial.block.branchEdges.push(BranchEdge.create(routed.id, argIds: argsOf(slabShardProc(arms.serial))))
+	emitBranchCarrying(module, from: arms.serial.block, to: routed, value: slabShardProc(arms.serial))
 
 	var rawOwned = module.addBlock(func, label: b"rawowned", heat: BlockHeat.normal)
 	var rawSerialised = module.addBlock(func, label: b"rawlocked", heat: BlockHeat.cold)
@@ -2943,8 +2927,7 @@ function buildSlabFree(module StdModule, counting SlabCounting, model MachineMod
 
 	let plainAnswer = ids.mint()
 	module.appendOp(relistPlain, op: StdOp.call(plainAnswer, callee: SlabFreeToFullName, args: twoArgs(ptr, second: span)))
-	module.setTerminator(relistPlain, op: StdOp.branch(relistDone.id))
-	relistPlain.branchEdges.push(BranchEdge.create(relistDone.id, argIds: argsOf(plainAnswer)))
+	emitBranchCarrying(module, from: relistPlain, to: relistDone, value: plainAnswer)
 
 	let relistState = emitSlabStateCommitted(module, block: relistLocked, ids: ids)
 	let relistDepth = ids.mint()
@@ -2953,8 +2936,7 @@ function buildSlabFree(module StdModule, counting SlabCounting, model MachineMod
 	let lockedAnswer = ids.mint()
 	module.appendOp(relistReady, op: StdOp.call(lockedAnswer, callee: SlabFreeToFullName, args: twoArgs(ptr, second: span)))
 	emitSlabLockLeave(module, block: relistReady, state: relistState, depthAddr: relistDepth, ids: ids)
-	module.setTerminator(relistReady, op: StdOp.branch(relistDone.id))
-	relistReady.branchEdges.push(BranchEdge.create(relistDone.id, argIds: argsOf(lockedAnswer)))
+	emitBranchCarrying(module, from: relistReady, to: relistDone, value: lockedAnswer)
 
 	var relistReturned = module.addBlock(func, label: b"relistret", heat: BlockHeat.cold)
 	let tookIt = ids.mint()

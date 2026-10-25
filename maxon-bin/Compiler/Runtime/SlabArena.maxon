@@ -782,12 +782,10 @@ export function emitSlabArenaMapGet(module StdModule, func IrFunction, cur IrBlo
 
 	let pageSlotAddr = emitMapSlotAddr(module, block: atPage, tableBase: l3, addr: ptr, shift: SlabPageShift, mask: ArenaMapLevelMask, ids: ids)
 	let span = emitLoadField(module, block: atPage, record: pageSlotAddr, offset: 0, ids: ids)
-	module.setTerminator(atPage, op: StdOp.branch(merge.id))
-	atPage.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(span)))
+	emitBranchCarrying(module, from: atPage, to: merge, value: span)
 
 	let absent = emitConst(module, block: miss, value: ArenaMapNoSpan, ids: ids)
-	module.setTerminator(miss, op: StdOp.branch(merge.id))
-	miss.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(absent)))
+	emitBranchCarrying(module, from: miss, to: merge, value: absent)
 
 	return merge
 end 'emitSlabArenaMapGet'

@@ -179,12 +179,10 @@ function emitNulRefusedExtent(module StdModule, func IrFunction, cur IrBlock, bu
 
 	let extent = ids.mint()
 	joined.blockArgs.push(IrBlockArg.create(extent, argType: StdType.i64))
-	module.setTerminator(loop.done, op: StdOp.branch(joined.id))
-	loop.done.branchEdges.push(BranchEdge.create(joined.id, argIds: argsOf(len)))
+	emitBranchCarrying(module, from: loop.done, to: joined, value: len)
 
 	let emptyName = emitConst(module, block: refused, value: 0, ids: ids)
-	module.setTerminator(refused, op: StdOp.branch(joined.id))
-	refused.branchEdges.push(BranchEdge.create(joined.id, argIds: argsOf(emptyName)))
+	emitBranchCarrying(module, from: refused, to: joined, value: emptyName)
 
 	return NulRefusedExtent.create(joined, length: extent)
 end 'emitNulRefusedExtent'
