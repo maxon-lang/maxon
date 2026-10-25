@@ -444,7 +444,7 @@ function buildStrToBytes(module StdModule)
 
 	let i = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	emitBranchCarrying(module, from: entry, to: header, value: zero)
+	emitBranchCarrying(module, from: entry, to: header, values: argsOf(zero))
 
 	// `>=` against the BYTE length, not `>`: the cursor is the index about to be read, so equality with the
 	// length is already one past the last byte.
@@ -456,7 +456,7 @@ function buildStrToBytes(module StdModule)
 	module.appendOp(body, op: StdOp.call(pushed, callee: ManagedPushName, args: twoArgs(arr, second: raw)))
 	let one = emitConst(module, block: body, value: 1, ids: ids)
 	let iNext = emitBin(module, block: body, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
-	emitBranchCarrying(module, from: body, to: header, value: iNext)
+	emitBranchCarrying(module, from: body, to: header, values: argsOf(iNext))
 
 	module.functions.push(func)
 end 'buildStrToBytes'

@@ -1682,7 +1682,7 @@ function emitElementDestroyRange(module StdModule, func IrFunction, cur IrBlock,
 
 	let i = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	emitBranchCarrying(module, from: cur, to: header, value: start)
+	emitBranchCarrying(module, from: cur, to: header, values: argsOf(start))
 	let atEnd = ids.mint()
 	module.appendOp(header, op: StdOp.cmp(atEnd, lhs: i, rhs: stop, pred: StdCmpPred.ge, operandType: StdType.i64))
 	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
@@ -1697,7 +1697,7 @@ function emitElementDestroyRange(module StdModule, func IrFunction, cur IrBlock,
 
 	let one = emitConst(module, block: step, value: 1, ids: ids)
 	let iNext = emitBin(module, block: step, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
-	emitBranchCarrying(module, from: step, to: header, value: iNext)
+	emitBranchCarrying(module, from: step, to: header, values: argsOf(iNext))
 
 	return done
 end 'emitElementDestroyRange'
@@ -1751,7 +1751,7 @@ function emitStoreElem(module StdModule, func IrFunction, cur IrBlock, addr Valu
 
 	let i = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	emitBranchCarrying(module, from: cur, to: header, value: zero)
+	emitBranchCarrying(module, from: cur, to: header, values: argsOf(zero))
 	let atEnd = ids.mint()
 	module.appendOp(header, op: StdOp.cmp(atEnd, lhs: i, rhs: size, pred: StdCmpPred.ge, operandType: StdType.i64))
 	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
@@ -1769,7 +1769,7 @@ function emitStoreElem(module StdModule, func IrFunction, cur IrBlock, addr Valu
 	module.appendOp(body, op: StdOp.const(one, value: 1, valueType: StdType.i64))
 	let iNext = ids.mint()
 	module.appendOp(body, op: StdOp.binOp(iNext, lhs: i, rhs: one, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	emitBranchCarrying(module, from: body, to: header, value: iNext)
+	emitBranchCarrying(module, from: body, to: header, values: argsOf(iNext))
 
 	return done
 end 'emitStoreElem'
@@ -1789,13 +1789,12 @@ function emitLoadElem(module StdModule, func IrFunction, cur IrBlock, exit IrBlo
 	module.appendOp(cur, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
 	let accZero = ids.mint()
 	module.appendOp(cur, op: StdOp.const(accZero, value: 0, valueType: StdType.i64))
-	module.setTerminator(cur, op: StdOp.branch(header.id))
 
 	let i = ids.mint()
 	let acc = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
 	header.blockArgs.push(IrBlockArg.create(acc, argType: StdType.i64))
-	cur.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(zero, second: accZero)))
+	emitBranchCarrying(module, from: cur, to: header, values: twoArgs(zero, second: accZero))
 	let atEnd = ids.mint()
 	module.appendOp(header, op: StdOp.cmp(atEnd, lhs: i, rhs: size, pred: StdCmpPred.ge, operandType: StdType.i64))
 	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: exit.id, elseBlockId: body.id))
@@ -1816,8 +1815,7 @@ function emitLoadElem(module StdModule, func IrFunction, cur IrBlock, exit IrBlo
 	module.appendOp(body, op: StdOp.const(one, value: 1, valueType: StdType.i64))
 	let iNext = ids.mint()
 	module.appendOp(body, op: StdOp.binOp(iNext, lhs: i, rhs: one, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.setTerminator(body, op: StdOp.branch(header.id))
-	body.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(iNext, second: accNext)))
+	emitBranchCarrying(module, from: body, to: header, values: twoArgs(iNext, second: accNext))
 
 	return acc
 end 'emitLoadElem'
@@ -2321,7 +2319,7 @@ export function strideDispatchPlanForStamp(stamp ElementStride) returns StrideDi
 	return StrideDispatchPlan.noFastArm
 end 'strideDispatchPlanForStamp'
 
-// One `loadIndirect` of the whole element at its slot, branching to `joinId` with what it read — the body
+// One `loadIndirect` of the whole element at its slot, branching to `join` with what it read — the body
 // of both of `emitLoadElemAt`'s fast arms, which differ in nothing but the access WIDTH.
 //
 // ⚠ **IT MUST ANSWER EXACTLY WHAT THE GENERIC ARM ANSWERS, AND FOR BOTH WIDTHS IT DOES.** At `es == 8` the
@@ -2331,12 +2329,11 @@ end 'strideDispatchPlanForStamp'
 // zero-extended byte. The zero-extension is the half that carries a rule rather than an identity:
 // `SignatureIndex.arrayElementSize` and `LayoutDescriptor.rangedAliasPackedBits`' `low == 0` both rely on a
 // narrow slot arriving with nothing above its own bits, and the parser re-signs it from there.
-function emitSingleOpElementLoad(module StdModule, block IrBlock, joinId BlockId, buffer ValueId, index ValueId, es ValueId, accessType StdType, ids ValueMinter)
+function emitSingleOpElementLoad(module StdModule, block IrBlock, join IrBlock, buffer ValueId, index ValueId, es ValueId, accessType StdType, ids ValueMinter)
 	let slot = emitSlotAddr(module, block: block, buffer: buffer, index: index, elementSize: es, ids: ids)
 	let loaded = ids.mint()
 	module.appendOp(block, op: StdOp.loadIndirect(loaded, addrId: slot, offset: 0, valueType: accessType))
-	module.setTerminator(block, op: StdOp.branch(joinId))
-	block.branchEdges.push(BranchEdge.create(joinId, argIds: argsOf(loaded)))
+	emitBranchCarrying(module, from: block, to: join, values: argsOf(loaded))
 end 'emitSingleOpElementLoad'
 
 // ⭐⭐ **READ ELEMENT `index` OUT OF `buffer` — THE ONE ELEMENT LOAD, PACKED OR NOT.** Every read accessor
@@ -2386,8 +2383,8 @@ function emitLoadElemAt(module StdModule, func IrFunction, cur IrBlock, exit IrB
 
 	emitStrideDispatch(module, func: func, cur: cur, es: es, wordArm: wordArm.id, byteArm: byteArm.id, otherArm: generic.id, ids: ids)
 
-	emitSingleOpElementLoad(module, block: wordArm, joinId: join.id, buffer: buffer, index: index, es: es, accessType: StdType.i64, ids: ids)
-	emitSingleOpElementLoad(module, block: byteArm, joinId: join.id, buffer: buffer, index: index, es: es, accessType: StdType.u8, ids: ids)
+	emitSingleOpElementLoad(module, block: wordArm, join: join, buffer: buffer, index: index, es: es, accessType: StdType.i64, ids: ids)
+	emitSingleOpElementLoad(module, block: byteArm, join: join, buffer: buffer, index: index, es: es, accessType: StdType.u8, ids: ids)
 
 	let placement = emitFieldPlacement(module, block: generic, index: index, es: es, ids: ids)
 	let addr = emitBin(module, block: generic, a: buffer, b: placement.byteOffset, opcode: StdBinOpcode.add, ids: ids)
@@ -2396,7 +2393,7 @@ function emitLoadElemAt(module StdModule, func IrFunction, cur IrBlock, exit IrB
 	let raw = emitLoadElem(module, func: func, cur: generic, exit: extract, addr: addr, size: placement.byteSpan, ids: ids)
 	let shifted = emitBin(module, block: extract, a: raw, b: placement.shiftBits, opcode: StdBinOpcode.shrLogical, ids: ids)
 	let extracted = emitBin(module, block: extract, a: shifted, b: placement.widthMask, opcode: StdBinOpcode.bitAnd, ids: ids)
-	emitBranchCarrying(module, from: extract, to: join, value: extracted)
+	emitBranchCarrying(module, from: extract, to: join, values: argsOf(extracted))
 
 	module.setTerminator(join, op: StdOp.branch(exit.id))
 
@@ -2579,11 +2576,11 @@ function buildManagedMoveElems(module StdModule)
 	emitBranchOnCompareValues(module, block: entry, a: destBuffer, pred: StdCmpPred.eq, b: srcBuffer, whenTrue: sameBuf, whenFalse: otherBuf, ids: ids)
 
 	let overlapsUpward = emitCmp(module, block: sameBuf, a: destIndex, b: srcIndex, pred: StdCmpPred.gt, ids: ids)
-	emitBranchCarrying(module, from: sameBuf, to: direction, value: overlapsUpward)
+	emitBranchCarrying(module, from: sameBuf, to: direction, values: argsOf(overlapsUpward))
 
 	// Distinct buffers cannot overlap — each is its own allocation — so the forward order is always safe.
 	let forwardIsSafe = emitConst(module, block: otherBuf, value: 0, ids: ids)
-	emitBranchCarrying(module, from: otherBuf, to: direction, value: forwardIsSafe)
+	emitBranchCarrying(module, from: otherBuf, to: direction, values: argsOf(forwardIsSafe))
 
 	let zero = emitConst(module, block: direction, value: 0, ids: ids)
 	emitBranchOnCompare(module, block: direction, value: es, pred: StdCmpPred.lt, against: 0, whenTrue: packedArm, whenFalse: byteArm, ids: ids)
@@ -3261,7 +3258,7 @@ function emitRecordView(module StdModule, func IrFunction, cur IrBlock, exit IrB
 	let newRec = emitViewRecordHead(module, block: shareArm, srcBuffer: srcBuffer, start: start, sliceLen: sliceLen, elementSize: es, elementDestroy: dtor, ids: ids)
 	let base = emitBufferHostAllocation(module, func: func, cur: shareArm, join: baseJoin, record: srcRecord, ids: ids)
 	emitViewRecordTail(module, func: func, cur: baseJoin, exit: shareDone, view: newRec, base: base, ids: ids)
-	emitBranchCarrying(module, from: shareDone, to: exit, value: newRec)
+	emitBranchCarrying(module, from: shareDone, to: exit, values: argsOf(newRec))
 
 	return result
 end 'emitRecordView'
@@ -3288,7 +3285,7 @@ function emitPackedWindowCopy(module StdModule, cur IrBlock, exit IrBlock, srcBu
 
 	let destStart = emitConst(module, block: cur, value: 0, ids: ids)
 	emitMoveElems(module, block: cur, destBuffer: newBuf, destIndex: destStart, srcBuffer: srcBuffer, srcIndex: start, count: sliceLen, es: es, ids: ids)
-	emitBranchCarrying(module, from: cur, to: exit, value: newRec)
+	emitBranchCarrying(module, from: cur, to: exit, values: argsOf(newRec))
 end 'emitPackedWindowCopy'
 
 // ⭐⭐ **THE FIRST HALF OF A VIEW: MINT THE RECORD AND FILL EVERY SLOT BUT `parent@32`.** Split out of
@@ -3480,7 +3477,7 @@ function buildManagedGrownCap(module StdModule)
 	// easeInit → easeHeader(cap = current): ease toward 1.25×.
 	let cap = ids.mint()
 	easeHeader.blockArgs.push(IrBlockArg.create(cap, argType: StdType.i64))
-	emitBranchCarrying(module, from: easeInit, to: easeHeader, value: current)
+	emitBranchCarrying(module, from: easeInit, to: easeHeader, values: argsOf(current))
 	emitBranchOnCompareValues(module, block: easeHeader, a: cap, pred: StdCmpPred.lt, b: required, whenTrue: easeBody, whenFalse: easeDone, ids: ids)
 
 	let threshConst = emitConst(module, block: easeBody, value: GrowthThreshold, ids: ids)
@@ -3491,7 +3488,7 @@ function buildManagedGrownCap(module StdModule)
 	let step = ids.mint()
 	module.appendOp(easeBody, op: StdOp.div(step, lhs: numerator, rhs: divisor, signedness: IntegerSignedness.signed))
 	let capNext = emitBin(module, block: easeBody, a: cap, b: step, opcode: StdBinOpcode.add, ids: ids)
-	emitBranchCarrying(module, from: easeBody, to: easeHeader, value: capNext)
+	emitBranchCarrying(module, from: easeBody, to: easeHeader, values: argsOf(capNext))
 
 	module.setTerminator(easeDone, op: StdOp.ret(cap))
 
@@ -4340,8 +4337,7 @@ function buildArrayHash(module StdModule, name ByteArray, element ArrayHashEleme
 	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
 	let h = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(h, argType: StdType.i64))
-	module.setTerminator(entry, op: StdOp.branch(header.id))
-	entry.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(iSeed, second: hSeed)))
+	emitBranchCarrying(module, from: entry, to: header, values: twoArgs(iSeed, second: hSeed))
 
 	emitBranchOnCompareValues(module, block: header, a: i, pred: StdCmpPred.ge, b: count, whenTrue: done, whenFalse: body, ids: ids)
 
@@ -5593,14 +5589,13 @@ export function emitElementRange(module StdModule, func IrFunction, cur IrBlock,
 	var done = module.addBlock(func, label: labels.done, heat: BlockHeat.normal)
 
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
-	module.setTerminator(cur, op: StdOp.branch(header.id))
 
 	let i = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
 	var onThisTrip = appendCarriedBlockArgs(header, template: carried, ids: ids)
 	var entering = argsOf(zero)
 	entering.append(carried)
-	cur.branchEdges.push(BranchEdge.create(header.id, argIds: entering))
+	emitBranchCarrying(module, from: cur, to: header, values: entering)
 	emitBranchOnCompareValues(module, block: header, a: i, pred: StdCmpPred.ge, b: count, whenTrue: done, whenFalse: body, ids: ids)
 
 	let slot = emitSlotAddr(module, block: body, buffer: base, index: i, elementSize: elementSize, ids: ids)
@@ -5611,10 +5606,9 @@ export function emitElementRange(module StdModule, func IrFunction, cur IrBlock,
 
 	let one = emitConst(module, block: step.block, value: 1, ids: ids)
 	let iNext = emitBin(module, block: step.block, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(step.block, op: StdOp.branch(header.id))
 	var looping = argsOf(iNext)
 	looping.append(step.carried)
-	step.block.branchEdges.push(BranchEdge.create(header.id, argIds: looping))
+	emitBranchCarrying(module, from: step.block, to: header, values: looping)
 
 	return ElementRangeLoop.create(elem, index: i, carried: onThisTrip, step: step, done: done)
 end 'emitElementRange'
@@ -5921,14 +5915,12 @@ function buildManagedSliceOpaque(module StdModule)
 	let resTrivial = ids.mint()
 	let flagTrivial = ids.mint()
 	module.appendOp(trivial, op: StdOp.tryCall(resTrivial, errorFlagId: flagTrivial, callee: ManagedSliceName, args: threeArgs(arr, second: start, third: endIndex)))
-	module.setTerminator(trivial, op: StdOp.branch(join.id))
-	trivial.branchEdges.push(BranchEdge.create(join.id, argIds: twoArgs(resTrivial, second: flagTrivial)))
+	emitBranchCarrying(module, from: trivial, to: join, values: twoArgs(resTrivial, second: flagTrivial))
 
 	let resManaged = ids.mint()
 	let flagManaged = ids.mint()
 	module.appendOp(managed, op: StdOp.tryCall(resManaged, errorFlagId: flagManaged, callee: ManagedSliceManagedName, args: fourArgs(arr, second: start, third: endIndex, fourth: copyFn)))
-	module.setTerminator(managed, op: StdOp.branch(join.id))
-	managed.branchEdges.push(BranchEdge.create(join.id, argIds: twoArgs(resManaged, second: flagManaged)))
+	emitBranchCarrying(module, from: managed, to: join, values: twoArgs(resManaged, second: flagManaged))
 
 	let result = ids.mint()
 	let flag = ids.mint()

@@ -507,7 +507,7 @@ function emitMboxClaimFrontSender(module StdModule, func IrFunction, scan IrBloc
 	module.setTerminator(skip, op: StdOp.branch(scan.id))
 
 	if carried.count() > 0 'carriesValues'
-		skip.branchEdges.push(BranchEdge.create(scan.id, argIds: carried))
+		pushBranchEdge(skip, to: scan, values: carried)
 	end 'carriesValues'
 
 	return front
@@ -530,10 +530,10 @@ function emitMboxReadyClaimedSender(module StdModule, func IrFunction, cur IrBlo
 
 	let lockedDebt = emitGtReady(module, block: readyLocked, gt: sender, gate: GtReadyGate.fromWaiting, hold: SchedLockHold.held, ids: ids)
 	emitSchedLockLeave(module, block: readyLocked, ids: ids)
-	emitBranchCarrying(module, from: readyLocked, to: cont, value: lockedDebt)
+	emitBranchCarrying(module, from: readyLocked, to: cont, values: argsOf(lockedDebt))
 
 	let freeDebt = emitGtReady(module, block: readyFree, gt: sender, gate: GtReadyGate.fromWaiting, hold: SchedLockHold.free, ids: ids)
-	emitBranchCarrying(module, from: readyFree, to: cont, value: freeDebt)
+	emitBranchCarrying(module, from: readyFree, to: cont, values: argsOf(freeDebt))
 end 'emitMboxReadyClaimedSender'
 
 function emitMboxHandOffClaimedSender(module StdModule, func IrFunction, cur IrBlock, mbox ValueId, sender ValueId, cont IrBlock, ids ValueMinter)
@@ -1009,7 +1009,7 @@ function buildMboxRecv(module StdModule)
 
 	entry = emitGtHonourPreemptRequestOnMachine(module, func: func, block: entry, machine: machine, ids: ids)
 
-	emitBranchCarrying(module, from: entry, to: attempt, value: machine)
+	emitBranchCarrying(module, from: entry, to: attempt, values: argsOf(machine))
 
 	emitMboxLockEnterOnMachine(module, block: attempt, mbox: mbox, machine: attemptMachine, ids: ids)
 	let receiver = emitLoadField(module, block: attempt, record: mbox, offset: MboxOffReceiver, ids: ids)
@@ -1068,7 +1068,7 @@ function buildMboxRecv(module StdModule)
 
 	// The park may resume this thread on another machine, whose lock depth the retry's lock enter steps.
 	let resumedMachine = emitLoadCurrentM(module, block: retry, ids: ids)
-	emitBranchCarrying(module, from: retry, to: attempt, value: resumedMachine)
+	emitBranchCarrying(module, from: retry, to: attempt, values: argsOf(resumedMachine))
 
 	module.functions.push(func)
 end 'buildMboxRecv'
@@ -1187,7 +1187,7 @@ function buildMboxClose(module StdModule)
 	emitStoreField(module, block: entry, record: mbox, offset: MboxOffClosed, value: emitConst(module, block: entry, value: MboxIsClosed, ids: ids))
 	let sendRoot = emitMboxSendRoot(module, block: entry, mbox: mbox, ids: ids)
 	let noDebt = emitConst(module, block: entry, value: WakeDebtNone, ids: ids)
-	emitBranchCarrying(module, from: entry, to: drainSenders, value: emitConst(module, block: entry, value: MboxChainEnd, ids: ids))
+	emitBranchCarrying(module, from: entry, to: drainSenders, values: argsOf(emitConst(module, block: entry, value: MboxChainEnd, ids: ids)))
 
 	// Every waiting sender is claimed and unlinked in this one hold, so no receive can deliver a
 	// later sender into the closed mailbox; they are readied from a private chain after the leave.
@@ -1198,7 +1198,7 @@ function buildMboxClose(module StdModule)
 
 	emitMboxSendUnlink(module, block: stopSender, sender: waiting, ids: ids)
 	emitStoreField(module, block: stopSender, record: waiting, offset: GtOffSendNext, value: chain)
-	emitBranchCarrying(module, from: stopSender, to: drainSenders, value: waiting)
+	emitBranchCarrying(module, from: stopSender, to: drainSenders, values: argsOf(waiting))
 
 	let parked = emitMboxBranchOnParkedReceiver(module, cur: sendersDrained, mbox: mbox, noReceiver: nobodyParked, handoff: handoff, ids: ids)
 	emitMboxWakeParked(module, func: func, cur: handoff, mbox: mbox, holder: MboxLockHolder.currentMachine, parked: parked, handed: emitConst(module, block: handoff, value: MboxNoHandedMessage, ids: ids), cont: doneBlock, ids: ids)
@@ -1206,8 +1206,7 @@ function buildMboxClose(module StdModule)
 	emitMboxLockLeave(module, block: nobodyParked, mbox: mbox, holder: MboxLockHolder.currentMachine, ids: ids)
 	module.setTerminator(nobodyParked, op: StdOp.branch(doneBlock.id))
 
-	module.setTerminator(doneBlock, op: StdOp.branch(readyLoop.id))
-	doneBlock.branchEdges.push(BranchEdge.create(readyLoop.id, argIds: twoArgs(chain, second: noDebt)))
+	emitBranchCarrying(module, from: doneBlock, to: readyLoop, values: twoArgs(chain, second: noDebt))
 
 	let link = ids.mint()
 	let owed = ids.mint()
@@ -1224,8 +1223,7 @@ function buildMboxClose(module StdModule)
 	let wakeDebt = ids.mint()
 	readied.blockArgs.push(IrBlockArg.create(wakeDebt, argType: StdType.i64))
 	let owedNow = emitBin(module, block: readied, a: owed, b: wakeDebt, opcode: StdBinOpcode.bitOr, ids: ids)
-	module.setTerminator(readied, op: StdOp.branch(readyLoop.id))
-	readied.branchEdges.push(BranchEdge.create(readyLoop.id, argIds: twoArgs(following, second: owedNow)))
+	emitBranchCarrying(module, from: readied, to: readyLoop, values: twoArgs(following, second: owedNow))
 
 	emitSchedWakeIfOwed(module, cur: settled, owed: owed, wake: payWake, cont: finished, ids: ids)
 	module.setTerminator(finished, op: StdOp.retVoid)

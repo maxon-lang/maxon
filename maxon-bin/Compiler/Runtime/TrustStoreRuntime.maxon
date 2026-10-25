@@ -415,7 +415,7 @@ function emitTrustStoreCreateKey(module StdModule, block IrBlock, nameAt ValueId
 	let allocator = emitConst(module, block: block, value: TrustStoreNoContext, ids: ids)
 	let encoding = emitConst(module, block: block, value: CfStringEncodingUtf8, ids: ids)
 	let string = emitTrustStoreCall3(module, block: block, service: HostProcessCall.cfStringCreate, a0: allocator, a1: nameAt, a2: encoding, ids: ids)
-	emitBranchCarrying(module, from: block, to: produced, value: string)
+	emitBranchCarrying(module, from: block, to: produced, values: argsOf(string))
 end 'emitTrustStoreCreateKey'
 
 function emitTrustStoreResolveKey(module StdModule, func IrFunction, cur IrBlock, nameAt ValueId, produced IrBlock, failed IrBlock, ids ValueMinter)
@@ -426,7 +426,7 @@ function emitTrustStoreResolveKey(module StdModule, func IrFunction, cur IrBlock
 	emitBranchOnCompare(module, block: cur, value: address, pred: StdCmpPred.ne, against: TrustStoreNoContext, whenTrue: resolved, whenFalse: failed, ids: ids)
 
 	let value = emitLoadField(module, block: resolved, record: address, offset: TrustStoreSlotWordOffset, ids: ids)
-	emitBranchCarrying(module, from: resolved, to: produced, value: value)
+	emitBranchCarrying(module, from: resolved, to: produced, values: argsOf(value))
 end 'emitTrustStoreResolveKey'
 
 // A null key handed to a `CFDictionary` crashes, so a key that did not resolve fails the open.
@@ -543,8 +543,7 @@ function emitTrustEntry(module StdModule, func IrFunction, entry IrBlock, store 
 
 	let systemArray = emitLoadField(module, block: system, record: store, offset: trustStoreWordOffset(TrustStoreArraysOffset, word: trustStoreDomainWord(TrustStoreDomain.system)), ids: ids)
 	let systemDomain = emitConst(module, block: system, value: SecDomainSystem, ids: ids)
-	module.setTerminator(system, op: StdOp.branch(joined.id))
-	system.branchEdges.push(BranchEdge.create(joined.id, argIds: threeArgs(systemArray, second: position, third: systemDomain)))
+	emitBranchCarrying(module, from: system, to: joined, values: threeArgs(systemArray, second: position, third: systemDomain))
 
 	let adminEnd = emitBin(module, block: beyondSystem, a: systemCount, b: adminCount, opcode: StdBinOpcode.add, ids: ids)
 	emitBranchOnCompareValues(module, block: beyondSystem, a: position, pred: StdCmpPred.lt, b: adminEnd, whenTrue: admin, whenFalse: user, ids: ids)
@@ -552,14 +551,12 @@ function emitTrustEntry(module StdModule, func IrFunction, entry IrBlock, store 
 	let adminArray = emitLoadField(module, block: admin, record: store, offset: trustStoreWordOffset(TrustStoreArraysOffset, word: trustStoreDomainWord(TrustStoreDomain.admin)), ids: ids)
 	let adminIndex = emitBin(module, block: admin, a: position, b: systemCount, opcode: StdBinOpcode.sub, ids: ids)
 	let adminDomain = emitConst(module, block: admin, value: SecDomainAdmin, ids: ids)
-	module.setTerminator(admin, op: StdOp.branch(joined.id))
-	admin.branchEdges.push(BranchEdge.create(joined.id, argIds: threeArgs(adminArray, second: adminIndex, third: adminDomain)))
+	emitBranchCarrying(module, from: admin, to: joined, values: threeArgs(adminArray, second: adminIndex, third: adminDomain))
 
 	let userArray = emitLoadField(module, block: user, record: store, offset: trustStoreWordOffset(TrustStoreArraysOffset, word: trustStoreDomainWord(TrustStoreDomain.user)), ids: ids)
 	let userIndex = emitBin(module, block: user, a: position, b: adminEnd, opcode: StdBinOpcode.sub, ids: ids)
 	let userDomain = emitConst(module, block: user, value: SecDomainUser, ids: ids)
-	module.setTerminator(user, op: StdOp.branch(joined.id))
-	user.branchEdges.push(BranchEdge.create(joined.id, argIds: threeArgs(userArray, second: userIndex, third: userDomain)))
+	emitBranchCarrying(module, from: user, to: joined, values: threeArgs(userArray, second: userIndex, third: userDomain))
 
 	return (arrayId, indexId, domainId)
 end 'emitTrustEntry'
@@ -641,8 +638,8 @@ function buildMacosTrustStoreVerdict(module StdModule)
 	emitConstReturn(module, block: denied, value: TrustVerdictDenied, ids: ids)
 	emitConstReturn(module, block: ignored, value: TrustVerdictIgnored, ids: ids)
 
-	inSettings.branchEdges.push(BranchEdge.create(checkDeny.id, argIds: argsOf(unused)))
-	checkAsRoot.branchEdges.push(BranchEdge.create(checkDeny.id, argIds: argsOf(result)))
+	pushBranchEdge(inSettings, to: checkDeny, values: argsOf(unused))
+	pushBranchEdge(checkAsRoot, to: checkDeny, values: argsOf(result))
 
 	module.functions.push(func)
 end 'buildMacosTrustStoreVerdict'
@@ -679,17 +676,17 @@ function buildTrustSslPolicy(module StdModule)
 
 	emitTrustStoreRelease(module, block: absentOid, object: properties, ids: ids)
 	let absentFlag = emitConst(module, block: absentOid, value: TrustStoreFalseFlag, ids: ids)
-	emitBranchCarrying(module, from: absentOid, to: finish, value: absentFlag)
+	emitBranchCarrying(module, from: absentOid, to: finish, values: argsOf(absentFlag))
 
 	let oidValue = emitLoadField(module, block: hasOid, record: scratch, offset: TrustStoreOutOffset, ids: ids)
 	let sslValue = emitLoadField(module, block: hasOid, record: store, offset: trustStoreKeyOffset(TrustStoreKey.appleSsl), ids: ids)
 	let equal = emitTrustStoreCall(module, block: hasOid, service: HostProcessCall.cfEqual, a0: oidValue, a1: sslValue, ids: ids)
 	let equalFlag = emitTrustStoreBoolean(module, block: hasOid, raw: equal, ids: ids)
 	emitTrustStoreRelease(module, block: hasOid, object: properties, ids: ids)
-	emitBranchCarrying(module, from: hasOid, to: finish, value: equalFlag)
+	emitBranchCarrying(module, from: hasOid, to: finish, values: argsOf(equalFlag))
 
 	let notSsl = emitConst(module, block: noOid, value: TrustStoreFalseFlag, ids: ids)
-	emitBranchCarrying(module, from: noOid, to: finish, value: notSsl)
+	emitBranchCarrying(module, from: noOid, to: finish, values: argsOf(notSsl))
 
 	let flag = ids.mint()
 	finish.blockArgs.push(IrBlockArg.create(flag, argType: StdType.i64))
@@ -745,7 +742,7 @@ function buildTrustSslResult(module StdModule)
 	let userSettings = emitLoadField(module, block: entry, record: scratch, offset: TrustStoreOutOffset, ids: ids)
 	emitBranchOnCompare(module, block: entry, value: userStatus, pred: StdCmpPred.eq, against: TrustStoreSuccessStatus, whenTrue: userAnswered, whenFalse: dropUser, ids: ids)
 	emitBranchOnCompare(module, block: userAnswered, value: userSettings, pred: StdCmpPred.ne, against: TrustStoreNoContext, whenTrue: settingsHeld, whenFalse: dropUser, ids: ids)
-	userAnswered.branchEdges.push(BranchEdge.create(settingsHeld.id, argIds: argsOf(userSettings)))
+	pushBranchEdge(userAnswered, to: settingsHeld, values: argsOf(userSettings))
 
 	emitTrustStoreReleaseIfHeld(module, func: func, cur: dropUser, held: userSettings, done: askAdmin, label: b"tsreleaseuser", ids: ids)
 
@@ -755,7 +752,7 @@ function buildTrustSslResult(module StdModule)
 	let adminSettings = emitLoadField(module, block: askAdmin, record: scratch, offset: TrustStoreOutOffset, ids: ids)
 	emitBranchOnCompare(module, block: askAdmin, value: adminStatus, pred: StdCmpPred.eq, against: TrustStoreSuccessStatus, whenTrue: adminAnswered, whenFalse: dropAdmin, ids: ids)
 	emitBranchOnCompare(module, block: adminAnswered, value: adminSettings, pred: StdCmpPred.ne, against: TrustStoreNoContext, whenTrue: settingsHeld, whenFalse: dropAdmin, ids: ids)
-	adminAnswered.branchEdges.push(BranchEdge.create(settingsHeld.id, argIds: argsOf(adminSettings)))
+	pushBranchEdge(adminAnswered, to: settingsHeld, values: argsOf(adminSettings))
 
 	emitTrustStoreReleaseIfHeld(module, func: func, cur: dropAdmin, held: adminSettings, done: unspecified, label: b"tsreleaseadmin", ids: ids)
 
@@ -769,8 +766,7 @@ function buildTrustSslResult(module StdModule)
 	emitConstReturn(module, block: emptySettings, value: SecResultTrustRoot, ids: ids)
 
 	let first = emitConst(module, block: walk, value: TrustStoreFirstMember, ids: ids)
-	module.setTerminator(walk, op: StdOp.branch(header.id))
-	walk.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(first, second: first)))
+	emitBranchCarrying(module, from: walk, to: header, values: twoArgs(first, second: first))
 
 	let member = ids.mint()
 	let latest = ids.mint()
@@ -787,12 +783,12 @@ function buildTrustSslResult(module StdModule)
 	let policy = emitLoadField(module, block: constrained, record: scratch, offset: TrustStoreOutOffset, ids: ids)
 	let isSsl = emitTrustStoreRuntimeCall(module, block: constrained, callee: TrustStoreIsSslPolicyName, args: twoArgs(store, second: policy), ids: ids)
 	emitBranchOnCompare(module, block: constrained, value: isSsl, pred: StdCmpPred.ne, against: TrustStoreNotSslPolicy, whenTrue: checkPolicyString, whenFalse: step, ids: ids)
-	constrained.branchEdges.push(BranchEdge.create(step.id, argIds: argsOf(latest)))
+	pushBranchEdge(constrained, to: step, values: argsOf(latest))
 
 	let policyStringKey = emitLoadField(module, block: checkPolicyString, record: store, offset: trustStoreKeyOffset(TrustStoreKey.policyString), ids: ids)
 	let hostnameBound = emitTrustStoreCall(module, block: checkPolicyString, service: HostProcessCall.cfDictionaryContainsKey, a0: setting, a1: policyStringKey, ids: ids)
 	emitBranchOnCompare(module, block: checkPolicyString, value: emitTrustStoreBoolean(module, block: checkPolicyString, raw: hostnameBound, ids: ids), pred: StdCmpPred.ne, against: TrustStoreNoContext, whenTrue: step, whenFalse: readResult, ids: ids)
-	checkPolicyString.branchEdges.push(BranchEdge.create(step.id, argIds: argsOf(latest)))
+	pushBranchEdge(checkPolicyString, to: step, values: argsOf(latest))
 
 	emitStoreField(module, block: readResult, record: scratch, offset: TrustStoreOutOffset, value: emitConst(module, block: readResult, value: TrustStoreNoContext, ids: ids))
 	let resultKey = emitLoadField(module, block: readResult, record: store, offset: trustStoreKeyOffset(TrustStoreKey.result), ids: ids)
@@ -806,31 +802,30 @@ function buildTrustSslResult(module StdModule)
 	_ = emitTrustStoreCall3(module, block: numbered, service: HostProcessCall.cfNumberGetValue, a0: number, a1: numberType, a2: numberAt, ids: ids)
 	let wide = emitLoadField(module, block: numbered, record: scratch, offset: TrustStoreNumberOffset as ByteOffset, ids: ids)
 	let narrow = emitBin(module, block: numbered, a: wide, b: emitConst(module, block: numbered, value: TrustStoreLowDwordMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
-	emitBranchCarrying(module, from: numbered, to: decided, value: narrow)
+	emitBranchCarrying(module, from: numbered, to: decided, values: argsOf(narrow))
 
 	let assumed = emitConst(module, block: defaulted, value: SecResultTrustRoot, ids: ids)
-	emitBranchCarrying(module, from: defaulted, to: decided, value: assumed)
+	emitBranchCarrying(module, from: defaulted, to: decided, values: argsOf(assumed))
 
 	let result = ids.mint()
 	decided.blockArgs.push(IrBlockArg.create(result, argType: StdType.i64))
 	emitBranchOnCompare(module, block: decided, value: result, pred: StdCmpPred.lt, against: SecResultTrustRoot, whenTrue: step, whenFalse: checkHigh, ids: ids)
-	decided.branchEdges.push(BranchEdge.create(step.id, argIds: argsOf(result)))
+	pushBranchEdge(decided, to: step, values: argsOf(result))
 	emitBranchOnCompare(module, block: checkHigh, value: result, pred: StdCmpPred.gt, against: SecResultDeny, whenTrue: step, whenFalse: walkExit, ids: ids)
-	checkHigh.branchEdges.push(BranchEdge.create(step.id, argIds: argsOf(result)))
-	checkHigh.branchEdges.push(BranchEdge.create(walkExit.id, argIds: argsOf(result)))
+	pushBranchEdge(checkHigh, to: step, values: argsOf(result))
+	pushBranchEdge(checkHigh, to: walkExit, values: argsOf(result))
 
 	let carried = ids.mint()
 	step.blockArgs.push(IrBlockArg.create(carried, argType: StdType.i64))
 	let advanceBy = emitConst(module, block: step, value: TrustStoreMemberStep, ids: ids)
 	let nextMember = emitBin(module, block: step, a: member, b: advanceBy, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(step, op: StdOp.branch(header.id))
-	step.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(nextMember, second: carried)))
+	emitBranchCarrying(module, from: step, to: header, values: twoArgs(nextMember, second: carried))
 
 	emitBranchOnCompare(module, block: finished, value: latest, pred: StdCmpPred.eq, against: TrustStoreNoResult, whenTrue: unmatched, whenFalse: walkExit, ids: ids)
-	finished.branchEdges.push(BranchEdge.create(walkExit.id, argIds: argsOf(latest)))
+	pushBranchEdge(finished, to: walkExit, values: argsOf(latest))
 
 	let fallback = emitConst(module, block: unmatched, value: SecResultUnspecified, ids: ids)
-	emitBranchCarrying(module, from: unmatched, to: walkExit, value: fallback)
+	emitBranchCarrying(module, from: unmatched, to: walkExit, values: argsOf(fallback))
 
 	let answer = ids.mint()
 	walkExit.blockArgs.push(IrBlockArg.create(answer, argType: StdType.i64))

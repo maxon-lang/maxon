@@ -544,8 +544,7 @@ function buildListNodeAt(module StdModule)
 
 	let head = emitLoadField(module, block: entry, record: list, offset: ListHeadOffset, ids: ids)
 	let firstOrdinal = emitConst(module, block: entry, value: 0, ids: ids)
-	module.setTerminator(entry, op: StdOp.branch(header.id))
-	entry.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(head, second: firstOrdinal)))
+	emitBranchCarrying(module, from: entry, to: header, values: twoArgs(head, second: firstOrdinal))
 
 	// header(node, i): `i == index` is the arrival test — the CALLER's bounds check guarantees it fires
 	// before `node` can reach the chain's end, which is why the walk itself needs no null test.
@@ -558,8 +557,7 @@ function buildListNodeAt(module StdModule)
 	let next = emitLoadField(module, block: advance, record: node, offset: ListNextOffset, ids: ids)
 	let one = emitConst(module, block: advance, value: 1, ids: ids)
 	let nextOrdinal = emitBin(module, block: advance, a: ordinal, b: one, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(advance, op: StdOp.branch(header.id))
-	advance.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(next, second: nextOrdinal)))
+	emitBranchCarrying(module, from: advance, to: header, values: twoArgs(next, second: nextOrdinal))
 
 	module.setTerminator(found, op: StdOp.ret(node))
 
@@ -1250,7 +1248,7 @@ function buildListClear(module StdModule)
 	let record = 0
 
 	let firstNode = emitLoadField(module, block: entry, record: record, offset: ListHeadOffset, ids: ids)
-	emitBranchCarrying(module, from: entry, to: walk, value: firstNode)
+	emitBranchCarrying(module, from: entry, to: walk, values: argsOf(firstNode))
 
 	let node = ids.mint()
 	walk.blockArgs.push(IrBlockArg.create(node, argType: StdType.i64))
@@ -1262,7 +1260,7 @@ function buildListClear(module StdModule)
 	let next = emitLoadField(module, block: body, record: node, offset: ListNextOffset, ids: ids)
 	emitListClearsNodeLinks(module, block: body, node: node, ids: ids)
 	emitListDropsItsNodeRef(module, block: body, node: node, ids: ids)
-	emitBranchCarrying(module, from: body, to: walk, value: next)
+	emitBranchCarrying(module, from: body, to: walk, values: argsOf(next))
 
 	// The header is emptied even when the caller is a teardown about to free the record — three stores, and
 	// the alternative is two walks that have to be kept identical for the rest of this compiler's life.
@@ -1642,7 +1640,7 @@ function buildListFrom(module StdModule)
 	let count = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
 	let buffer = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let scanStart = emitConst(module, block: entry, value: 0, ids: ids)
-	emitBranchCarrying(module, from: entry, to: header, value: scanStart)
+	emitBranchCarrying(module, from: entry, to: header, values: argsOf(scanStart))
 
 	let i = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
@@ -1656,7 +1654,7 @@ function buildListFrom(module StdModule)
 	var advance = emitMovedOutSlotClear(module, func: func, block: body, base: buffer, index: i, elemDrop: elemDrop, ids: ids)
 	let one = emitConst(module, block: advance, value: 1, ids: ids)
 	let iNext = emitBin(module, block: advance, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
-	emitBranchCarrying(module, from: advance, to: header, value: iNext)
+	emitBranchCarrying(module, from: advance, to: header, values: argsOf(iNext))
 
 	module.setTerminator(done, op: StdOp.ret(list))
 
@@ -1703,7 +1701,7 @@ function buildListClone(module StdModule, name ByteArray, clonesElements bool)
 	let copy = ids.mint()
 	module.appendOp(entry, op: StdOp.call(copy, callee: ListCreateName, args: argsOf(elemDrop)))
 	let head = emitLoadField(module, block: entry, record: list, offset: ListHeadOffset, ids: ids)
-	emitBranchCarrying(module, from: entry, to: header, value: head)
+	emitBranchCarrying(module, from: entry, to: header, values: argsOf(head))
 
 	// walk(node): a 0 link is the chain's end — the same test `__list_node_next` licenses a `for … in list`
 	// loop to stop on, and the reason an empty source needs no arm of its own (its `head@0` is that 0).
@@ -1723,7 +1721,7 @@ function buildListClone(module StdModule, name ByteArray, clonesElements bool)
 	// returned handle exactly as `__list_from` does. See `emitListClaimsNode`.
 	module.appendOp(append, op: StdOp.call(ids.mint(), callee: ListAppendName, args: twoArgs(copy, second: elem)))
 	let next = emitLoadField(module, block: append, record: node, offset: ListNextOffset, ids: ids)
-	emitBranchCarrying(module, from: append, to: header, value: next)
+	emitBranchCarrying(module, from: append, to: header, values: argsOf(next))
 
 	module.setTerminator(done, op: StdOp.ret(copy))
 
@@ -1742,7 +1740,7 @@ end 'buildListClone'
 // length is its node count.
 function emitListClonedElement(module StdModule, func IrFunction, body IrBlock, append IrBlock, value ValueId, cloneFn ValueId, clonesElements bool, ids ValueMinter)
 	if not clonesElements 'wordCopy'
-		emitBranchCarrying(module, from: body, to: append, value: value)
+		emitBranchCarrying(module, from: body, to: append, values: argsOf(value))
 		return
 	end 'wordCopy'
 
@@ -1756,9 +1754,9 @@ function emitListClonedElement(module StdModule, func IrFunction, body IrBlock, 
 	// POINTER — never a float, never sub-word.
 	let cloned = ids.mint()
 	module.appendOp(deepCopy, op: StdOp.callIndirect(cloned, calleeReg: cloneFn, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0, args: argsOf(value)))
-	emitBranchCarrying(module, from: deepCopy, to: append, value: cloned)
+	emitBranchCarrying(module, from: deepCopy, to: append, values: argsOf(cloned))
 
-	emitBranchCarrying(module, from: movedOut, to: append, value: absent)
+	emitBranchCarrying(module, from: movedOut, to: append, values: argsOf(absent))
 end 'emitListClonedElement'
 
 // ⭐⭐ **`__list_sole(list, visits)` / `__list_sole_managed(list, visits, soleFn)` — PROVE A CHAIN MOVEABLE;

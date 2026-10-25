@@ -312,14 +312,14 @@ export function emitCStringLength(module StdModule, func IrFunction, cur IrBlock
 
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
 	header.blockArgs.push(IrBlockArg.create(length, argType: StdType.i64))
-	emitBranchCarrying(module, from: cur, to: header, value: zero)
+	emitBranchCarrying(module, from: cur, to: header, values: argsOf(zero))
 
 	let ch = emitLoadByte(module, block: header, base: cstr, index: length, ids: ids)
 	emitBranchOnCompare(module, block: header, value: ch, pred: StdCmpPred.eq, against: NulByte, whenTrue: done, whenFalse: body, ids: ids)
 
 	let one = emitConst(module, block: body, value: 1, ids: ids)
 	let next = emitBin(module, block: body, a: length, b: one, opcode: StdBinOpcode.add, ids: ids)
-	emitBranchCarrying(module, from: body, to: header, value: next)
+	emitBranchCarrying(module, from: body, to: header, values: argsOf(next))
 
 	return done
 end 'emitCStringLength'
@@ -874,8 +874,7 @@ export function emitGrowingPathFill(module StdModule, cur IrBlock, attempt IrBlo
 	let firstSize = emitConst(module, block: cur, value: pathFillFirstUnits(fill), ids: ids)
 	let encoding = pathFillEncoding(module, fill: fill)
 	let firstBuf = emitRawAlloc(module, block: cur, byteCount: emitByteCountOfUnits(module, block: cur, units: firstSize, encoding: encoding, ids: ids), ids: ids)
-	module.setTerminator(cur, op: StdOp.branch(attempt.id))
-	cur.branchEdges.push(BranchEdge.create(attempt.id, argIds: twoArgs(firstBuf, second: firstSize)))
+	emitBranchCarrying(module, from: cur, to: attempt, values: twoArgs(firstBuf, second: firstSize))
 
 	let written = ids.mint()
 	emitPathFillOp(module, block: attempt, fill: fill, written: written, buffer: buffer, capacity: capacity, ids: ids)
@@ -885,8 +884,7 @@ export function emitGrowingPathFill(module StdModule, cur IrBlock, attempt IrBlo
 	let shift = emitConst(module, block: grow, value: PathGrowthShift, ids: ids)
 	let grownCapacity = emitBin(module, block: grow, a: capacity, b: shift, opcode: StdBinOpcode.shl, ids: ids)
 	let grownBuf = emitRawAlloc(module, block: grow, byteCount: emitByteCountOfUnits(module, block: grow, units: grownCapacity, encoding: encoding, ids: ids), ids: ids)
-	module.setTerminator(grow, op: StdOp.branch(attempt.id))
-	grow.branchEdges.push(BranchEdge.create(attempt.id, argIds: twoArgs(grownBuf, second: grownCapacity)))
+	emitBranchCarrying(module, from: grow, to: attempt, values: twoArgs(grownBuf, second: grownCapacity))
 	return (buffer, written)
 end 'emitGrowingPathFill'
 

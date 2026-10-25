@@ -258,7 +258,7 @@ function buildManagedListenerPort(module StdModule)
 	emitRawFree(module, block: ask, ptr: scratch, ids: ids)
 	let askFailed = emitSocketCallFailed(module, block: ask, answer: status, ids: ids)
 	module.setTerminator(ask, op: StdOp.condBranch(askFailed, thenBlockId: refused.id, elseBlockId: answered.id))
-	ask.branchEdges.push(BranchEdge.create(answered.id, argIds: argsOf(portValue)))
+	pushBranchEdge(ask, to: answered, values: argsOf(portValue))
 
 	// A live descriptor `getsockname` refuses is not a listener this box can answer for, and there is no
 	// number it could return instead that would not be a lie.
@@ -418,7 +418,7 @@ function emitListenerWatchedAccept(module StdModule, func IrFunction, ids ValueM
 	module.appendOp(issue, op: StdOp.osSocketServe(conn, verb: SocketServeVerb.accept, a0Id: listener, a1Id: unusedIssue, a2Id: unusedIssue))
 	let acceptRefused = emitSocketCallFailed(module, block: issue, answer: conn, ids: ids)
 	module.setTerminator(issue, op: StdOp.condBranch(acceptRefused, thenBlockId: pending.id, elseBlockId: giveBack.id))
-	issue.branchEdges.push(BranchEdge.create(giveBack.id, argIds: argsOf(conn)))
+	pushBranchEdge(issue, to: giveBack, values: argsOf(conn))
 
 	// `WSAEWOULDBLOCK` and `WSAEINTR` mean "no connection yet"; any other code is a refusal, fatal
 	// only for `acceptFatalCodes`.
@@ -466,7 +466,7 @@ function emitListenerWatchedAccept(module StdModule, func IrFunction, ids ValueM
 	emitSocketOverlappedOnly(module, block: giveBack, verb: SocketOverlappedVerb.disinherit, socket: accepting, ids: ids)
 	emitSocketOverlappedOnly(module, block: giveBack, verb: SocketOverlappedVerb.stopWatching, socket: accepting, ids: ids)
 	emitSocketWatchGiveBack(module, block: giveBack, socket: listener, event: event, ids: ids)
-	emitBranchCarrying(module, from: giveBack, to: accepted, value: accepting)
+	emitBranchCarrying(module, from: giveBack, to: accepted, values: argsOf(accepting))
 
 	// The failure road gives the listener's association back too — it outlives this frame, and an
 	// association naming a closed event is a state the next arm would have to replace.

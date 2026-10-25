@@ -1238,6 +1238,18 @@ export function emitCompareWithConstant(module StdModule, block IrBlock, value V
 	return emitCmp(module, block: block, a: value, b: constant, pred: pred, ids: ids)
 end 'emitCompareWithConstant'
 
+// Records the edge even when `values` is empty, unlike `pushCascadeEdge`: the allocator's serial bail
+// edge and the runtime lock's entry edge are recorded empty, and skipping them changes the Std IR.
+// A caller that means "no edge" guards the call itself.
+export function pushBranchEdge(block IrBlock, to IrBlock, values ValueIdArray)
+	block.branchEdges.push(BranchEdge.create(to.id, argIds: values))
+end 'pushBranchEdge'
+
+export function emitBranchCarrying(module StdModule, from IrBlock, to IrBlock, values ValueIdArray)
+	module.setTerminator(from, op: StdOp.branch(to.id))
+	pushBranchEdge(from, to: to, values: values)
+end 'emitBranchCarrying'
+
 export function emitBranchOnCompareValues(module StdModule, block IrBlock, a ValueId, pred StdCmpPred, b ValueId, whenTrue IrBlock, whenFalse IrBlock, ids ValueMinter, operandType StdType = StdType.i64)
 	let holds = emitCmp(module, block: block, a: a, b: b, pred: pred, ids: ids, operandType: operandType)
 
@@ -1413,7 +1425,7 @@ export function openCountedLoop(module StdModule, func IrFunction, cur IrBlock, 
 
 	let i = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	emitBranchCarrying(module, from: cur, to: header, value: from)
+	emitBranchCarrying(module, from: cur, to: header, values: argsOf(from))
 
 	emitBranchOnCompareValues(module, block: header, a: i, pred: StdCmpPred.ge, b: to, whenTrue: done, whenFalse: body, ids: ids)
 
@@ -1430,7 +1442,7 @@ end 'openCountedLoop'
 export function closeCountedLoop(module StdModule, loop CountedLoop, tail IrBlock, step Imm32, ids ValueMinter)
 	let next = ids.mint()
 	module.appendOp(tail, op: StdOp.binOpImm(next, lhs: loop.index, imm: step, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	emitBranchCarrying(module, from: tail, to: loop.header, value: next)
+	emitBranchCarrying(module, from: tail, to: loop.header, values: argsOf(next))
 end 'closeCountedLoop'
 
 // `byteCount and -8` — how many of `byteCount`'s bytes a run of WHOLE machine words covers. Derived from the
@@ -2034,7 +2046,7 @@ export function pushCascadeEdge(block IrBlock, to CascadeCursor, values ValueIdA
 		return
 	end 'carriesNothing'
 
-	block.branchEdges.push(BranchEdge.create(to.block.id, argIds: values))
+	pushBranchEdge(block, to: to.block, values: values)
 end 'pushCascadeEdge'
 
 // A synthesized walk entry under construction: its function, its minter, the cursor its body starts at and the
@@ -2296,12 +2308,12 @@ function emitStepOwnerCount(module StdModule, func IrFunction, entry IrBlock, pt
 	emitRouteOnRefcountWord(module, func: func, block: entry, word: count.word, counted: counted, immortal: immortal, shared: shared, ids: ids)
 
 	let countedPrior = emitAdjustRefcount(module, block: counted, header: count.header, delta: delta, sharedCount: false, ids: ids)
-	emitBranchCarrying(module, from: counted, to: stepped, value: countedPrior)
+	emitBranchCarrying(module, from: counted, to: stepped, values: argsOf(countedPrior))
 
 	let markedPrior = emitAdjustRefcount(module, block: shared, header: count.header, delta: delta, sharedCount: true, ids: ids)
 	let mark = emitConst(module, block: shared, value: MmSharedRefcountMark, ids: ids)
 	let sharedPrior = emitBin(module, block: shared, a: markedPrior, b: mark, opcode: StdBinOpcode.sub, ids: ids)
-	emitBranchCarrying(module, from: shared, to: stepped, value: sharedPrior)
+	emitBranchCarrying(module, from: shared, to: stepped, values: argsOf(sharedPrior))
 
 	let prior = ids.mint()
 	stepped.blockArgs.push(IrBlockArg.create(prior, argType: StdType.i64))
@@ -2844,7 +2856,7 @@ function emitCurrentThreadOrZero(module StdModule, func IrFunction, cur IrBlock,
 	let noThread = emitConst(module, block: cur, value: 0, ids: ids)
 
 	if model == MachineModel.singleMachine 'oneThread'
-		emitBranchCarrying(module, from: cur, to: merge, value: noThread)
+		emitBranchCarrying(module, from: cur, to: merge, values: argsOf(noThread))
 
 		return merge
 	end 'oneThread'
@@ -2856,7 +2868,7 @@ function emitCurrentThreadOrZero(module StdModule, func IrFunction, cur IrBlock,
 	let schedulerWord = emitSlabSchedulerWord(module, block: cur, state: state, model: model, ids: ids)
 	let m = emitSlabMachineOrBail(module, func: func, cur: cur, schedulerWord: schedulerWord, haveMachine: haveMachine, noScheduler: none, noMachine: none, ids: ids, label: b"thwalk")
 	let owner = emitSlabOwnerThreadOrBail(module, cur: haveMachine, m: m, haveOwner: haveGt, noThread: none, ids: ids)
-	emitBranchCarrying(module, from: haveGt, to: merge, value: owner)
+	emitBranchCarrying(module, from: haveGt, to: merge, values: argsOf(owner))
 
 	return merge
 end 'emitCurrentThreadOrZero'

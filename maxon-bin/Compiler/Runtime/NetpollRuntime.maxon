@@ -346,11 +346,11 @@ export function emitNetpollOpenTimer(module StdModule, func IrFunction, cur IrBl
 
 	let fine = emitNetpoll(module, block: cur, verb: NetpollVerb.openTimer, operands: argsOf(emitConst(module, block: cur, value: CreateWaitableTimerHighResolution, ids: ids)), ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(emitNetpollFailed(module, block: cur, shape: shape, answer: fine, ids: ids), thenBlockId: coarse.id, elseBlockId: cont.id))
-	cur.branchEdges.push(BranchEdge.create(cont.id, argIds: argsOf(fine)))
+	pushBranchEdge(cur, to: cont, values: argsOf(fine))
 
 	let plain = emitNetpoll(module, block: coarse, verb: NetpollVerb.openTimer, operands: argsOf(emitConst(module, block: coarse, value: CreateWaitableTimerOrdinary, ids: ids)), ids: ids)
 	emitNetpollRequire(module, func: func, cur: coarse, shape: shape, verb: NetpollVerb.openTimer, subject: plain, answer: plain, cont: cont, ids: ids)
-	coarse.branchEdges.push(BranchEdge.create(cont.id, argIds: argsOf(plain)))
+	pushBranchEdge(coarse, to: cont, values: argsOf(plain))
 end 'emitNetpollOpenTimer'
 
 // `__np_init()` — see `NetpollInitName`.
@@ -558,7 +558,7 @@ function buildNetpollPoll(module StdModule, target Target)
 	var entryHdr = module.addBlock(func, label: b"nphdr", heat: BlockHeat.normal)
 	entryHdr.blockArgs.push(IrBlockArg.create(index, argType: StdType.i64))
 	let firstIndex = emitConst(module, block: counted, value: 0, ids: ids)
-	emitBranchCarrying(module, from: counted, to: entryHdr, value: firstIndex)
+	emitBranchCarrying(module, from: counted, to: entryHdr, values: argsOf(firstIndex))
 
 	emitBranchOnCompareValues(module, block: entryHdr, a: index, pred: StdCmpPred.ge, b: count, whenTrue: doneBlock, whenFalse: entryBody, ids: ids)
 
@@ -571,7 +571,7 @@ function buildNetpollPoll(module StdModule, target Target)
 	emitNetpollDecodeSource(module, func: func, cur: otherSource, shape: shape, entryAddr: entryAddr, key: source, cont: nextEntry, ids: ids)
 
 	let nextIndex = emitBin(module, block: nextEntry, a: index, b: emitConst(module, block: nextEntry, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)
-	emitBranchCarrying(module, from: nextEntry, to: entryHdr, value: nextIndex)
+	emitBranchCarrying(module, from: nextEntry, to: entryHdr, values: argsOf(nextIndex))
 
 	emitNetpollFinishOrphans(module, func: func, cur: doneBlock, shape: shape, ids: ids)
 	emitNetpollFailWith(module, func: func, block: failedWait, verb: NetpollVerb.wait, subject: poller, answer: answer, ids: ids)
@@ -742,7 +742,7 @@ end 'emitNetpollWaitCount'
 
 function emitBranchOnWaitFailure(module StdModule, cur IrBlock, failedTest ValueId, failed IrBlock, counted IrBlock, count ValueId)
 	module.setTerminator(cur, op: StdOp.condBranch(failedTest, thenBlockId: failed.id, elseBlockId: counted.id))
-	cur.branchEdges.push(BranchEdge.create(counted.id, argIds: argsOf(count)))
+	pushBranchEdge(cur, to: counted, values: argsOf(count))
 end 'emitBranchOnWaitFailure'
 
 function emitNetpollCompletionCount(module StdModule, func IrFunction, cur IrBlock, answer ValueId, scratch ValueId, counted IrBlock, failed IrBlock, ids ValueMinter)
@@ -752,14 +752,14 @@ function emitNetpollCompletionCount(module StdModule, func IrFunction, cur IrBlo
 	emitBranchOnCompare(module, block: cur, value: answer, pred: StdCmpPred.eq, against: 0, whenTrue: empty, whenFalse: dequeued, ids: ids)
 
 	let removed = emitLoadField(module, block: dequeued, record: scratch, offset: 0, ids: ids)
-	emitBranchCarrying(module, from: dequeued, to: counted, value: removed)
+	emitBranchCarrying(module, from: dequeued, to: counted, values: argsOf(removed))
 
 	let lastError = ids.mint()
 	module.appendOp(empty, op: StdOp.osLastError(lastError))
 	let timedOut = emitCompareWithConstant(module, block: empty, value: lastError, pred: StdCmpPred.eq, against: WaitTimeout, ids: ids)
 	let noEntries = emitConst(module, block: empty, value: 0, ids: ids)
 	module.setTerminator(empty, op: StdOp.condBranch(timedOut, thenBlockId: counted.id, elseBlockId: failed.id))
-	empty.branchEdges.push(BranchEdge.create(counted.id, argIds: argsOf(noEntries)))
+	pushBranchEdge(empty, to: counted, values: argsOf(noEntries))
 end 'emitNetpollCompletionCount'
 
 // ⭐ **ONE BREAK RECEIVED.** Terminates `cur` and continues at `cont`. See `buildNetpollPoll` for whose break it
@@ -1355,9 +1355,9 @@ function buildNetpollPdAdopt(module StdModule, hold SchedLockHold, store Netpoll
 
 	// Where the doubling starts: the seed for a table that does not exist yet, the current capacity otherwise.
 	emitBranchOnCompare(module, block: growPick, value: capBefore, pred: StdCmpPred.eq, against: 0, whenTrue: growSeed, whenFalse: growHdr, ids: ids)
-	growPick.branchEdges.push(BranchEdge.create(growHdr.id, argIds: argsOf(capBefore)))
+	pushBranchEdge(growPick, to: growHdr, values: argsOf(capBefore))
 	let seedSlots = emitConst(module, block: growSeed, value: PdTableSeedSlots, ids: ids)
-	emitBranchCarrying(module, from: growSeed, to: growHdr, value: seedSlots)
+	emitBranchCarrying(module, from: growSeed, to: growHdr, values: argsOf(seedSlots))
 
 	// growHdr(c): double until the index fits. The walk is amortized against every adoption already inside the
 	// capacity, and the table is indexed and never walked — so a sparse index space costs slots and no time. What
@@ -1369,7 +1369,7 @@ function buildNetpollPdAdopt(module StdModule, hold SchedLockHold, store Netpoll
 	emitBranchOnCompareValues(module, block: growHdr, a: candidate, pred: StdCmpPred.gt, b: index, whenTrue: growDo, whenFalse: growNext, ids: ids)
 
 	let doubled = emitBin(module, block: growNext, a: candidate, b: emitConst(module, block: growNext, value: 2, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
-	emitBranchCarrying(module, from: growNext, to: growHdr, value: doubled)
+	emitBranchCarrying(module, from: growNext, to: growHdr, values: argsOf(doubled))
 
 	let slotBytes = emitConst(module, block: growDo, value: PdTableSlotBytes, ids: ids)
 	let newBytes = emitBin(module, block: growDo, a: candidate, b: slotBytes, opcode: StdBinOpcode.mul, ids: ids)
@@ -1390,11 +1390,11 @@ function buildNetpollPdAdopt(module StdModule, hold SchedLockHold, store Netpoll
 	let slotAddr = emitNetpollPdSlotAddr(module, block: haveSlot, store: store, index: index, ids: ids)
 	let existing = emitLoadField(module, block: haveSlot, record: slotAddr, offset: 0, ids: ids)
 	emitBranchOnCompare(module, block: haveSlot, value: existing, pred: StdCmpPred.eq, against: 0, whenTrue: carve, whenFalse: reset, ids: ids)
-	haveSlot.branchEdges.push(BranchEdge.create(reset.id, argIds: argsOf(existing)))
+	pushBranchEdge(haveSlot, to: reset, values: argsOf(existing))
 
 	let carved = emitSlabAlloc(module, block: carve, bytes: emitConst(module, block: carve, value: PdBytes, ids: ids), kind: SlabBufferKind.netpollDescriptor, ids: ids)
 	emitStoreField(module, block: carve, record: slotAddr, offset: 0, value: carved)
-	emitBranchCarrying(module, from: carve, to: reset, value: carved)
+	emitBranchCarrying(module, from: carve, to: reset, values: argsOf(carved))
 
 	// A recycled descriptor inherits its predecessor's record, so every word is written rather than assumed.
 	let pd = ids.mint()
@@ -1515,10 +1515,10 @@ function buildNetpollPdRelease(module StdModule)
 	emitSchedLockEnter(module, block: entry, ids: ids)
 	let pd = emitNetpollPdLookup(module, block: entry, fd: fd, ids: ids)
 	emitBranchOnCompare(module, block: entry, value: pd, pred: StdCmpPred.ne, against: 0, whenTrue: clear, whenFalse: unlock, ids: ids)
-	entry.branchEdges.push(BranchEdge.create(unlock.id, argIds: argsOf(emitConst(module, block: entry, value: WakeDebtNone, ids: ids))))
+	pushBranchEdge(entry, to: unlock, values: argsOf(emitConst(module, block: entry, value: WakeDebtNone, ids: ids)))
 
 	let debt = emitNetpollPdClear(module, block: clear, pd: pd, ids: ids)
-	emitBranchCarrying(module, from: clear, to: unlock, value: debt)
+	emitBranchCarrying(module, from: clear, to: unlock, values: argsOf(debt))
 
 	let owed = ids.mint()
 	unlock.blockArgs.push(IrBlockArg.create(owed, argType: StdType.i64))
@@ -1575,10 +1575,10 @@ function buildNetpollPdDeadline(module StdModule)
 	let previous = emitPdDeadline(module, block: known, pd: pd, mode: mode, ids: ids)
 	let cleared = emitConst(module, block: known, value: 0, ids: ids)
 	emitBranchOnCompare(module, block: known, value: ms, pred: StdCmpPred.le, against: 0, whenTrue: store, whenFalse: arm, ids: ids)
-	known.branchEdges.push(BranchEdge.create(store.id, argIds: argsOf(cleared)))
+	pushBranchEdge(known, to: store, values: argsOf(cleared))
 
 	let deadline = emitGtDeadlineAfterMs(module, func: func, cur: arm, ms: ms, joined: armed, ids: ids)
-	emitBranchCarrying(module, from: armed, to: store, value: deadline)
+	emitBranchCarrying(module, from: armed, to: store, values: argsOf(deadline))
 
 	let value = ids.mint()
 	store.blockArgs.push(IrBlockArg.create(value, argType: StdType.i64))
@@ -1952,12 +1952,12 @@ function buildNetpollPdReadyOne(module StdModule)
 	let tag = emitTimerTagOfNetpollMode(module, block: wake, mode: mode, ids: ids)
 	let ownDeadline = emitPdDeadline(module, block: wake, pd: pd, mode: mode, ids: ids)
 	emitNetpollBranchOnGroupPark(module, block: wake, gt: state, several: unhookRest, one: disarmTimer, ids: ids)
-	wake.branchEdges.push(BranchEdge.create(disarmTimer.id, argIds: twoArgs(ownDeadline, second: tag)))
+	pushBranchEdge(wake, to: disarmTimer, values: twoArgs(ownDeadline, second: tag))
 
 	module.appendOp(unhookRest, op: StdOp.call(ids.mint(), callee: NetpollGroupUnhookName, args: argsOf(state)))
 	let groupDeadline = emitNetpollGroupDeadline(module, block: unhookRest, gt: state, ids: ids)
 	module.setTerminator(unhookRest, op: StdOp.branch(disarmTimer.id))
-	unhookRest.branchEdges.push(BranchEdge.create(disarmTimer.id, argIds: twoArgs(groupDeadline, second: emitNetpollGroupTimerTag(module, block: unhookRest, ids: ids))))
+	pushBranchEdge(unhookRest, to: disarmTimer, values: twoArgs(groupDeadline, second: emitNetpollGroupTimerTag(module, block: unhookRest, ids: ids)))
 
 	let deadline = ids.mint()
 	let disarmTag = ids.mint()
@@ -2001,7 +2001,7 @@ end 'emitNetpollWakeGate'
 function emitNetpollWakeCompareGeneration(module StdModule, block IrBlock, key ValueId, pd ValueId, live IrBlock, stale IrBlock, noDebt ValueId, ids ValueMinter)
 	let stamped = emitBin(module, block: block, a: key, b: emitConst(module, block: block, value: NetpollKeyGenShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
 	module.setTerminator(block, op: StdOp.condBranch(emitPdSameLife(module, block: block, pd: pd, gen: stamped, ids: ids), thenBlockId: live.id, elseBlockId: stale.id))
-	block.branchEdges.push(BranchEdge.create(stale.id, argIds: argsOf(noDebt)))
+	pushBranchEdge(block, to: stale, values: argsOf(noDebt))
 end 'emitNetpollWakeCompareGeneration'
 
 function buildNetpollPdWake(module StdModule, target Target)
@@ -2032,30 +2032,30 @@ function buildNetpollPdWake(module StdModule, target Target)
 	// A descriptor with no record is one whose socket has been closed: this event is its last, and there is
 	// nothing left to wake.
 	module.setTerminator(entry, op: StdOp.condBranch(haveRecord, thenBlockId: current.id, elseBlockId: doneBlock.id))
-	entry.branchEdges.push(BranchEdge.create(doneBlock.id, argIds: argsOf(noDebt)))
+	pushBranchEdge(entry, to: doneBlock, values: argsOf(noDebt))
 
 	emitNetpollWakeGate(module, func: func, block: current, shape: netpollShape(target), key: fd, pd: pd, readReady: readReady, live: known, stale: doneBlock, noDebt: noDebt, ids: ids)
 
 	emitBranchOnCompareValues(module, block: known, a: readReady, pred: StdCmpPred.ne, b: zero, whenTrue: doRead, whenFalse: afterRead, ids: ids)
-	known.branchEdges.push(BranchEdge.create(afterRead.id, argIds: argsOf(noDebt)))
+	pushBranchEdge(known, to: afterRead, values: argsOf(noDebt))
 
 	let readDebt = ids.mint()
 	module.appendOp(doRead, op: StdOp.call(readDebt, callee: NetpollPdReadyOneName, args: twoArgs(pd, second: emitConst(module, block: doRead, value: NetpollModeRead, ids: ids))))
-	emitBranchCarrying(module, from: doRead, to: afterRead, value: readDebt)
+	emitBranchCarrying(module, from: doRead, to: afterRead, values: argsOf(readDebt))
 
 	let debtSoFar = ids.mint()
 	afterRead.blockArgs.push(IrBlockArg.create(debtSoFar, argType: StdType.i64))
 	emitBranchOnCompareValues(module, block: afterRead, a: writeReady, pred: StdCmpPred.ne, b: zero, whenTrue: doWrite, whenFalse: afterWrite, ids: ids)
-	afterRead.branchEdges.push(BranchEdge.create(afterWrite.id, argIds: argsOf(debtSoFar)))
+	pushBranchEdge(afterRead, to: afterWrite, values: argsOf(debtSoFar))
 
 	let writeDebt = ids.mint()
 	module.appendOp(doWrite, op: StdOp.call(writeDebt, callee: NetpollPdReadyOneName, args: twoArgs(pd, second: emitConst(module, block: doWrite, value: NetpollModeWrite, ids: ids))))
 	let bothOwed = emitBin(module, block: doWrite, a: debtSoFar, b: writeDebt, opcode: StdBinOpcode.bitOr, ids: ids)
-	emitBranchCarrying(module, from: doWrite, to: afterWrite, value: bothOwed)
+	emitBranchCarrying(module, from: doWrite, to: afterWrite, values: argsOf(bothOwed))
 
 	let owed = ids.mint()
 	afterWrite.blockArgs.push(IrBlockArg.create(owed, argType: StdType.i64))
-	emitBranchCarrying(module, from: afterWrite, to: doneBlock, value: owed)
+	emitBranchCarrying(module, from: afterWrite, to: doneBlock, values: argsOf(owed))
 
 	let debt = ids.mint()
 	doneBlock.blockArgs.push(IrBlockArg.create(debt, argType: StdType.i64))
@@ -2135,8 +2135,8 @@ function buildNetpollPdTimedOut(module StdModule)
 	emitBranchOnCompare(module, block: entry, value: pd, pred: StdCmpPred.ne, against: 0, whenTrue: known, whenFalse: missing, ids: ids)
 
 	let mark = emitLoadField(module, block: known, record: pd, offset: PdOffTimedOut, ids: ids)
-	emitBranchCarrying(module, from: known, to: answer, value: mark)
-	emitBranchCarrying(module, from: missing, to: answer, value: zero)
+	emitBranchCarrying(module, from: known, to: answer, values: argsOf(mark))
+	emitBranchCarrying(module, from: missing, to: answer, values: argsOf(zero))
 
 	let held = ids.mint()
 	answer.blockArgs.push(IrBlockArg.create(held, argType: StdType.i64))
@@ -2343,7 +2343,7 @@ end 'emitNetpollAdoptEitherKey'
 function emitNetpollSourceKeyFromAllocator(module StdModule, block IrBlock, cont IrBlock, ids ValueMinter)
 	let key = ids.mint()
 	module.appendOp(block, op: StdOp.call(key, callee: NetpollSourceKeyAllocName, args: ValueIdArray.create()))
-	emitBranchCarrying(module, from: block, to: cont, value: key)
+	emitBranchCarrying(module, from: block, to: cont, values: argsOf(key))
 end 'emitNetpollSourceKeyFromAllocator'
 
 function emitNetpollChildSourceFromHost(module StdModule, func IrFunction, cur IrBlock, target Target, childHandle ValueId, cont IrBlock, ids ValueMinter)
@@ -2377,7 +2377,7 @@ function emitNetpollJudgeChildSource(module StdModule, func IrFunction, cur IrBl
 	module.setTerminator(gone, op: StdOp.ret(source))
 
 	emitNetpollRequire(module, func: func, cur: checked, shape: shape, verb: NetpollVerb.openChildSource, subject: childHandle, answer: source, cont: cont, ids: ids)
-	checked.branchEdges.push(BranchEdge.create(cont.id, argIds: argsOf(source)))
+	pushBranchEdge(checked, to: cont, values: argsOf(source))
 end 'emitNetpollJudgeChildSource'
 
 function emitNetpollChildSourceByMode(module StdModule, func IrFunction, cur IrBlock, childHandle ValueId, cont IrBlock, ids ValueMinter)
@@ -2393,10 +2393,10 @@ function emitNetpollChildSourceByMode(module StdModule, func IrFunction, cur IrB
 	module.appendOp(minted, op: StdOp.call(ids.mint(), callee: NetpollChildSignalFdName, args: ValueIdArray.create()))
 	let key = ids.mint()
 	module.appendOp(minted, op: StdOp.call(key, callee: NetpollSourceKeyAllocName, args: ValueIdArray.create()))
-	emitBranchCarrying(module, from: minted, to: sourced, value: key)
+	emitBranchCarrying(module, from: minted, to: sourced, values: argsOf(key))
 
 	let asked = emitNetpoll(module, block: pidfd, verb: NetpollVerb.openChildSource, operands: argsOf(childHandle), ids: ids)
-	emitBranchCarrying(module, from: pidfd, to: sourced, value: asked)
+	emitBranchCarrying(module, from: pidfd, to: sourced, values: argsOf(asked))
 
 	emitNetpollJudgeChildSource(module, func: func, cur: sourced, shape: NetpollShape.epoll, childHandle: childHandle, source: source, cont: cont, ids: ids)
 end 'emitNetpollChildSourceByMode'
@@ -2525,7 +2525,7 @@ function emitNetpollReadyChild(module StdModule, func IrFunction, block IrBlock,
 	module.appendOp(awaited, op: StdOp.call(debt, callee: NetpollPdReadyOneName, args: twoArgs(pd, second: emitConst(module, block: awaited, value: NetpollModeRead, ids: ids))))
 	emitStoreField(module, block: awaited, record: pd, offset: PdOffChildHandle, value: emitConst(module, block: awaited, value: 0, ids: ids))
 	let combinedDebt = emitBin(module, block: awaited, a: incoming, b: debt, opcode: StdBinOpcode.bitOr, ids: ids)
-	emitBranchCarrying(module, from: awaited, to: cont, value: combinedDebt)
+	emitBranchCarrying(module, from: awaited, to: cont, values: argsOf(combinedDebt))
 end 'emitNetpollReadyChild'
 
 function emitNetpollBranchOnChildOwner(module StdModule, func IrFunction, block IrBlock, pd ValueId, exitSeen ValueId, awaited IrBlock, spent IrBlock, spentArg ValueId, ids ValueMinter)
@@ -2537,10 +2537,10 @@ function emitNetpollBranchOnChildOwner(module StdModule, func IrFunction, block 
 
 	let firstExit = emitBin(module, block: renounced, a: emitCompareWithConstant(module, block: renounced, value: state, pred: StdCmpPred.eq, against: PdChildOrphaned, ids: ids), b: emitCompareWithConstant(module, block: renounced, value: exitSeen, pred: StdCmpPred.ne, against: 0, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
 	emitBranchOnCompare(module, block: renounced, value: firstExit, pred: StdCmpPred.ne, against: 0, whenTrue: queueOrphan, whenFalse: spent, ids: ids)
-	renounced.branchEdges.push(BranchEdge.create(spent.id, argIds: argsOf(spentArg)))
+	pushBranchEdge(renounced, to: spent, values: argsOf(spentArg))
 
 	emitNetpollQueueOrphan(module, block: queueOrphan, pd: pd, ids: ids)
-	emitBranchCarrying(module, from: queueOrphan, to: spent, value: spentArg)
+	emitBranchCarrying(module, from: queueOrphan, to: spent, values: argsOf(spentArg))
 end 'emitNetpollBranchOnChildOwner'
 
 function emitNetpollQueueOrphan(module StdModule, block IrBlock, pd ValueId, ids ValueMinter)
@@ -2575,7 +2575,7 @@ function buildNetpollChildTrack(module StdModule)
 	emitNetpollReadyChild(module, func: func, block: exited, pd: pd, incoming: emitConst(module, block: exited, value: WakeDebtNone, ids: ids), cont: unlock, ids: ids)
 
 	let runningDebt = emitConst(module, block: running, value: WakeDebtNone, ids: ids)
-	emitBranchCarrying(module, from: running, to: unlock, value: runningDebt)
+	emitBranchCarrying(module, from: running, to: unlock, values: argsOf(runningDebt))
 
 	let owed = ids.mint()
 	unlock.blockArgs.push(IrBlockArg.create(owed, argType: StdType.i64))
@@ -2620,7 +2620,7 @@ function buildNetpollChildSweep(module StdModule)
 	emitSchedLockEnter(module, block: scan, ids: ids)
 	let minted = emitLoadGlobalWord(module, block: scan, label: NetpollSourceKeyHighLabel, ids: ids)
 	module.setTerminator(scan, op: StdOp.branch(hdr.id))
-	scan.branchEdges.push(BranchEdge.create(hdr.id, argIds: twoArgs(emitConst(module, block: scan, value: 0, ids: ids), second: emitConst(module, block: scan, value: WakeDebtNone, ids: ids))))
+	pushBranchEdge(scan, to: hdr, values: twoArgs(emitConst(module, block: scan, value: 0, ids: ids), second: emitConst(module, block: scan, value: WakeDebtNone, ids: ids)))
 
 	let ordinal = ids.mint()
 	let debt = ids.mint()
@@ -2631,22 +2631,21 @@ function buildNetpollChildSweep(module StdModule)
 	let key = emitNetpollMintedKey(module, block: body, layout: NetpollMintedKeys.tagged, ordinal: ordinal, ids: ids)
 	let pd = emitNetpollPdLookup(module, block: body, fd: key, ids: ids)
 	emitBranchOnCompare(module, block: body, value: pd, pred: StdCmpPred.eq, against: 0, whenTrue: next, whenFalse: record, ids: ids)
-	body.branchEdges.push(BranchEdge.create(next.id, argIds: argsOf(debt)))
+	pushBranchEdge(body, to: next, values: argsOf(debt))
 
 	let childHandle = emitLoadField(module, block: record, record: pd, offset: PdOffChildHandle, ids: ids)
 	emitBranchOnCompare(module, block: record, value: childHandle, pred: StdCmpPred.eq, against: 0, whenTrue: next, whenFalse: poll, ids: ids)
-	record.branchEdges.push(BranchEdge.create(next.id, argIds: argsOf(debt)))
+	pushBranchEdge(record, to: next, values: argsOf(debt))
 
 	module.setTerminator(poll, op: StdOp.condBranch(emitNetpollChildExited(module, block: poll, childHandle: childHandle, ids: ids), thenBlockId: ready.id, elseBlockId: next.id))
-	poll.branchEdges.push(BranchEdge.create(next.id, argIds: argsOf(debt)))
+	pushBranchEdge(poll, to: next, values: argsOf(debt))
 
 	emitNetpollReadyChild(module, func: func, block: ready, pd: pd, incoming: debt, cont: next, ids: ids)
 
 	let carried = ids.mint()
 	next.blockArgs.push(IrBlockArg.create(carried, argType: StdType.i64))
 	let nextOrdinal = emitBin(module, block: next, a: ordinal, b: emitConst(module, block: next, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(next, op: StdOp.branch(hdr.id))
-	next.branchEdges.push(BranchEdge.create(hdr.id, argIds: twoArgs(nextOrdinal, second: carried)))
+	emitBranchCarrying(module, from: next, to: hdr, values: twoArgs(nextOrdinal, second: carried))
 
 	emitSchedLockLeave(module, block: finished, ids: ids)
 	module.setTerminator(finished, op: StdOp.ret(debt))
@@ -2904,13 +2903,13 @@ function buildNetpollSourceKeyAlloc(module StdModule, hold SchedLockHold, layout
 	let pd = emitNetpollPdLookupOrAbort(module, func: func, cur: reuse, fd: recycled, known: relink, ids: ids)
 
 	emitStoreGlobalWord(module, block: relink, label: NetpollSourceKeyFreeLabel, value: emitLoadField(module, block: relink, record: pd, offset: PdOffNextFreeKey, ids: ids), ids: ids)
-	emitBranchCarrying(module, from: relink, to: answer, value: recycled)
+	emitBranchCarrying(module, from: relink, to: answer, values: argsOf(recycled))
 
 	let high = emitLoadGlobalWord(module, block: fresh, label: NetpollSourceKeyHighLabel, ids: ids)
 	emitStoreGlobalWord(module, block: fresh, label: NetpollSourceKeyHighLabel, value: emitBin(module, block: fresh, a: high, b: emitConst(module, block: fresh, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids), ids: ids)
 	let minted = emitNetpollMintedKey(module, block: fresh, layout: layout, ordinal: high, ids: ids)
 
-	emitBranchCarrying(module, from: fresh, to: answer, value: minted)
+	emitBranchCarrying(module, from: fresh, to: answer, values: argsOf(minted))
 
 	let key = ids.mint()
 	answer.blockArgs.push(IrBlockArg.create(key, argType: StdType.i64))
@@ -3034,7 +3033,7 @@ function buildNetpollOpWake(module StdModule)
 	let pd = emitNetpollPdLookup(module, block: entry, fd: index, ids: ids)
 	let noDebt = emitConst(module, block: entry, value: WakeDebtNone, ids: ids)
 	emitBranchOnCompare(module, block: entry, value: pd, pred: StdCmpPred.ne, against: 0, whenTrue: current, whenFalse: doneBlock, ids: ids)
-	entry.branchEdges.push(BranchEdge.create(doneBlock.id, argIds: argsOf(noDebt)))
+	pushBranchEdge(entry, to: doneBlock, values: argsOf(noDebt))
 
 	// A packet whose record has moved on names nothing: the thread that issued the operation has already been
 	// readied by whatever reset the record, and the clear above is what tells it not to wait for this packet.
@@ -3042,7 +3041,7 @@ function buildNetpollOpWake(module StdModule)
 
 	let debt = ids.mint()
 	module.appendOp(known, op: StdOp.call(debt, callee: NetpollPdReadyOneName, args: twoArgs(pd, second: mode)))
-	emitBranchCarrying(module, from: known, to: doneBlock, value: debt)
+	emitBranchCarrying(module, from: known, to: doneBlock, values: argsOf(debt))
 
 	let owed = ids.mint()
 	doneBlock.blockArgs.push(IrBlockArg.create(owed, argType: StdType.i64))
@@ -3116,11 +3115,10 @@ function buildNetpollOpSettle(module StdModule)
 	emitSchedLockEnter(module, block: entry, ids: ids)
 	let aimed = emitLoadField(module, block: entry, record: emitLoadCurrentGt(module, block: entry, ids: ids), offset: GtOffIoSource, ids: ids)
 	emitBranchOnCompare(module, block: entry, value: aimed, pred: StdCmpPred.ne, against: 0, whenTrue: mint, whenFalse: settled, ids: ids)
-	entry.branchEdges.push(BranchEdge.create(settled.id, argIds: twoArgs(emitConst(module, block: entry, value: 0, ids: ids), second: emitConst(module, block: entry, value: WakeDebtNone, ids: ids))))
+	pushBranchEdge(entry, to: settled, values: twoArgs(emitConst(module, block: entry, value: 0, ids: ids), second: emitConst(module, block: entry, value: WakeDebtNone, ids: ids)))
 
 	let (source, adoptDebt) = emitNetpollOpMint(module, block: mint, hold: SchedLockHold.held, ids: ids)
-	module.setTerminator(mint, op: StdOp.branch(settled.id))
-	mint.branchEdges.push(BranchEdge.create(settled.id, argIds: twoArgs(source, second: adoptDebt)))
+	emitBranchCarrying(module, from: mint, to: settled, values: twoArgs(source, second: adoptDebt))
 
 	let answer = ids.mint()
 	let owed = ids.mint()
@@ -3448,7 +3446,7 @@ end 'NetpollGroupWalk'
 // the same stop `__np_pd_wait` makes for a single source.
 function emitNetpollGroupWalk(module StdModule, func IrFunction, pre IrBlock, hdr IrBlock, body IrBlock, act IrBlock, exhausted IrBlock, group ValueId, count ValueId, ids ValueMinter) returns NetpollGroupWalk
 	let first = emitConst(module, block: pre, value: 0, ids: ids)
-	emitBranchCarrying(module, from: pre, to: hdr, value: first)
+	emitBranchCarrying(module, from: pre, to: hdr, values: argsOf(first))
 
 	let index = ids.mint()
 	hdr.blockArgs.push(IrBlockArg.create(index, argType: StdType.i64))
@@ -3480,7 +3478,7 @@ end 'emitNetpollGroupMemberBit'
 // Close a walk: step the index in `next` and go round to `hdr`.
 function emitNetpollGroupWalkEnd(module StdModule, next IrBlock, hdr IrBlock, index ValueId, ids ValueMinter)
 	let stepped = emitBin(module, block: next, a: index, b: emitConst(module, block: next, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)
-	emitBranchCarrying(module, from: next, to: hdr, value: stepped)
+	emitBranchCarrying(module, from: next, to: hdr, values: argsOf(stepped))
 end 'emitNetpollGroupWalkEnd'
 
 // `__np_pd_wait_any(group)` — see `NetpollPdWaitAnyName`.

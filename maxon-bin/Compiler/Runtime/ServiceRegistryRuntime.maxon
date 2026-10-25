@@ -153,11 +153,11 @@ function emitRetainedIfPresent(module StdModule, func IrFunction, block IrBlock,
 	after.blockArgs.push(IrBlockArg.create(result, argType: StdType.i64))
 
 	emitBranchOnCompare(module, block: block, value: fn, pred: StdCmpPred.eq, against: NoRuntimeFunction, whenTrue: after, whenFalse: callIt, ids: ids)
-	block.branchEdges.push(BranchEdge.create(after.id, argIds: argsOf(value)))
+	pushBranchEdge(block, to: after, values: argsOf(value))
 
 	let taken = ids.mint()
 	module.appendOp(callIt, op: StdOp.callIndirect(taken, calleeReg: fn, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0, args: argsOf(value)))
-	emitBranchCarrying(module, from: callIt, to: after, value: taken)
+	emitBranchCarrying(module, from: callIt, to: after, values: argsOf(taken))
 	return after
 end 'emitRetainedIfPresent'
 

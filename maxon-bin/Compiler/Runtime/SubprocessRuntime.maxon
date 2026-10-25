@@ -1182,14 +1182,14 @@ function emitSubpEnvPointer(module StdModule, func IrFunction, ids ValueMinter, 
 	emitBranchOnCompare(module, block: entry, value: envInherit, pred: StdCmpPred.eq, against: EnvSourceParent, whenTrue: inheritEnv, whenFalse: callerEnv, ids: ids)
 
 	let nullEnv = emitConst(module, block: inheritEnv, value: 0, ids: ids)
-	emitBranchCarrying(module, from: inheritEnv, to: build, value: nullEnv)
+	emitBranchCarrying(module, from: inheritEnv, to: build, values: argsOf(nullEnv))
 
 	let envPointer = match shape 'shape'
 		nulSeparatedBlock gives emitLoadField(module, block: callerEnv, record: env, offset: ManagedRecordBufferOffset, ids: ids)
 		pointerVector gives emitSubpEnvVectorCall(module, block: callerEnv, ids: ids, envRec: env)
 	end 'shape'
 
-	emitBranchCarrying(module, from: callerEnv, to: build, value: envPointer)
+	emitBranchCarrying(module, from: callerEnv, to: build, values: argsOf(envPointer))
 
 	return envPtr
 end 'emitSubpEnvPointer'
@@ -1977,18 +1977,18 @@ function emitSubpDeadlineWithFeed(module StdModule, func IrFunction, ids ValueMi
 	let slot = emitSubpSlotOf(module, block: cur, ids: ids, handle: emitLoadField(module, block: cur, record: state, offset: WcHandle, ids: ids))
 	let pend = emitLoadField(module, block: cur, record: slot, offset: SubpSlotStdinPend, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: pend, pred: StdCmpPred.ne, against: 0, whenTrue: feedCheck, whenFalse: have, ids: ids)
-	cur.branchEdges.push(BranchEdge.create(have.id, argIds: argsOf(collectMs)))
+	pushBranchEdge(cur, to: have, values: argsOf(collectMs))
 
 	let feedAt = emitLoadField(module, block: feedCheck, record: slot, offset: SubpSlotStdinFeedAt, ids: ids)
 	emitBranchOnCompare(module, block: feedCheck, value: feedAt, pred: StdCmpPred.gt, against: 0, whenTrue: pickEarlier, whenFalse: have, ids: ids)
-	feedCheck.branchEdges.push(BranchEdge.create(have.id, argIds: argsOf(collectMs)))
+	pushBranchEdge(feedCheck, to: have, values: argsOf(collectMs))
 
 	// The earlier of the two, where a collect deadline of 0 means the feed's is the only one there is.
 	let unbounded = emitCompareWithConstant(module, block: pickEarlier, value: collectMs, pred: StdCmpPred.eq, against: 0, ids: ids)
 	let sooner = emitCmp(module, block: pickEarlier, a: feedAt, b: collectMs, pred: StdCmpPred.lt, ids: ids)
 	let takeFeed = emitBin(module, block: pickEarlier, a: unbounded, b: sooner, opcode: StdBinOpcode.bitOr, ids: ids)
 	let chosen = emitSelectWord(module, block: pickEarlier, cond: takeFeed, whenSet: feedAt, whenClear: collectMs, ids: ids)
-	emitBranchCarrying(module, from: pickEarlier, to: have, value: chosen)
+	emitBranchCarrying(module, from: pickEarlier, to: have, values: argsOf(chosen))
 
 	return have
 end 'emitSubpDeadlineWithFeed'

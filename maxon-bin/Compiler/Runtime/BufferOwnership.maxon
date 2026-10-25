@@ -605,10 +605,10 @@ export function emitOwedAllocationBase(module StdModule, func IrFunction, cur Ir
 	join.blockArgs.push(IrBlockArg.create(base, argType: StdType.i64))
 
 	let parent = emitLoadField(module, block: viewBase, record: record, offset: ManagedRecordParentOffset, ids: ids)
-	emitBranchCarrying(module, from: viewBase, to: join, value: parent)
+	emitBranchCarrying(module, from: viewBase, to: join, values: argsOf(parent))
 
 	let buffer = emitLoadField(module, block: ownBase, record: record, offset: ManagedRecordBufferOffset, ids: ids)
-	emitBranchCarrying(module, from: ownBase, to: join, value: buffer)
+	emitBranchCarrying(module, from: ownBase, to: join, values: argsOf(buffer))
 
 	return base
 end 'emitOwedAllocationBase'
@@ -705,7 +705,7 @@ export function emitBufferHostAllocation(module StdModule, func IrFunction, cur 
 
 	emitRouteOnOwedBase(module, block: owedJoin, base: owedBase, whenOwed: separate, whenNone: noSeparate, ids: ids)
 
-	emitBranchCarrying(module, from: separate, to: join, value: owedBase)
+	emitBranchCarrying(module, from: separate, to: join, values: argsOf(owedBase))
 
 	// The ONE positive provenance test — the header states why the residual may not answer `record`. It goes
 	// through the shared link for the reason `emitCapacityIsSentinel` states: this file's own subject is that
@@ -713,10 +713,10 @@ export function emitBufferHostAllocation(module StdModule, func IrFunction, cur 
 	let capacity = emitLoadField(module, block: noSeparate, record: record, offset: ManagedRecordCapacityOffset, ids: ids)
 	emitRouteOnCapacitySentinel(module, block: noSeparate, capacity: capacity, sentinel: InlineBufferCapacity, whenIt: inlineBytes, otherwise: nothingHosts, ids: ids)
 
-	emitBranchCarrying(module, from: inlineBytes, to: join, value: record)
+	emitBranchCarrying(module, from: inlineBytes, to: join, values: argsOf(record))
 
 	let nothing = emitConst(module, block: nothingHosts, value: NoOwedAllocation, ids: ids)
-	emitBranchCarrying(module, from: nothingHosts, to: join, value: nothing)
+	emitBranchCarrying(module, from: nothingHosts, to: join, values: argsOf(nothing))
 
 	return base
 end 'emitBufferHostAllocation'

@@ -589,10 +589,10 @@ export function emitFloatHashInto(module StdModule, func IrFunction, entry IrBlo
 	emitOrderingTest(module, block: entry, a: bits, b: negativeZeroBits, pred: StdCmpPred.eq, operandType: StdType.i64, thenBlock: negativeZero, elseBlock: folded, ids: ids)
 
 	let zeroTerm = emitConst(module, block: negativeZero, value: ZeroFloatHash, ids: ids)
-	emitBranchCarrying(module, from: negativeZero, to: join, value: zeroTerm)
+	emitBranchCarrying(module, from: negativeZero, to: join, values: argsOf(zeroTerm))
 
 	let foldedTerm = emitFloatBitsFold(module, block: folded, bits: bits, ids: ids)
-	emitBranchCarrying(module, from: folded, to: join, value: foldedTerm)
+	emitBranchCarrying(module, from: folded, to: join, values: argsOf(foldedTerm))
 
 	return hashed
 end 'emitFloatHashInto'
@@ -894,12 +894,10 @@ export function buildByteRecordCompare(module StdModule, name ByteArray, orderin
 	header.blockArgs.push(IrBlockArg.create(minLen, argType: StdType.i64))
 
 	let selfZero = emitConst(module, block: selfShorter, value: 0, ids: ids)
-	module.setTerminator(selfShorter, op: StdOp.branch(header.id))
-	selfShorter.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(selfZero, second: selfLen)))
+	emitBranchCarrying(module, from: selfShorter, to: header, values: twoArgs(selfZero, second: selfLen))
 
 	let otherZero = emitConst(module, block: otherShorter, value: 0, ids: ids)
-	module.setTerminator(otherShorter, op: StdOp.branch(header.id))
-	otherShorter.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(otherZero, second: otherLen)))
+	emitBranchCarrying(module, from: otherShorter, to: header, values: twoArgs(otherZero, second: otherLen))
 
 	// `i >= minLen` ⇒ every compared byte agreed, so only the lengths are left to separate them. Two empty
 	// records take this edge immediately and land on `equalTo`.
@@ -914,8 +912,7 @@ export function buildByteRecordCompare(module StdModule, name ByteArray, orderin
 
 	let one = emitConst(module, block: nextByte, value: 1, ids: ids)
 	let iNext = emitBin(module, block: nextByte, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(nextByte, op: StdOp.branch(header.id))
-	nextByte.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(iNext, second: minLen)))
+	emitBranchCarrying(module, from: nextByte, to: header, values: twoArgs(iNext, second: minLen))
 
 	// The tiebreak IS the ordinary cascade over the two lengths — shorter first — and it owns the three
 	// verdict blocks the byte loop branches into, so `lessThan` means one thing in this graph.
@@ -989,8 +986,7 @@ export function emitArrayHashStepTail(module StdModule, block IrBlock, header Ir
 	let hNext = emitDjb2Step(module, block: block, h: h, value: term, ids: ids)
 	let one = emitConst(module, block: block, value: 1, ids: ids)
 	let iNext = emitBin(module, block: block, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(block, op: StdOp.branch(header.id))
-	block.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(iNext, second: hNext)))
+	emitBranchCarrying(module, from: block, to: header, values: twoArgs(iNext, second: hNext))
 end 'emitArrayHashStepTail'
 
 function emitDjb2HashOverByteRange(module StdModule, func IrFunction, cur IrBlock, buffer ValueId, len ValueId, ids ValueMinter)
@@ -1006,8 +1002,7 @@ function emitDjb2HashOverByteRange(module StdModule, func IrFunction, cur IrBloc
 	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
 	let h = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(h, argType: StdType.i64))
-	module.setTerminator(cur, op: StdOp.branch(header.id))
-	cur.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(iSeed, second: hSeed)))
+	emitBranchCarrying(module, from: cur, to: header, values: twoArgs(iSeed, second: hSeed))
 
 	// header: `i >= len` ⇒ every byte folded in ⇒ out to `done`; else fold `buffer[i]`.
 	emitBranchOnCompareValues(module, block: header, a: i, pred: StdCmpPred.ge, b: len, whenTrue: done, whenFalse: body, ids: ids)

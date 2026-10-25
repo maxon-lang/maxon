@@ -681,7 +681,7 @@ function buildStreamWrite(module StdModule, name ByteArray, stream OsOutputStrea
 	var finished = module.addBlock(func, label: b"wrdone", heat: BlockHeat.normal)
 
 	let nothingWritten = emitConst(module, block: entry, value: 0, ids: ids)
-	emitBranchCarrying(module, from: entry, to: header, value: nothingWritten)
+	emitBranchCarrying(module, from: entry, to: header, values: argsOf(nothingWritten))
 
 	let done = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(done, argType: StdType.i64))
@@ -698,12 +698,12 @@ function buildStreamWrite(module StdModule, name ByteArray, stream OsOutputStrea
 
 	emitBranchOnCompare(module, block: lap, value: written, pred: StdCmpPred.eq, against: 0 - PosixErrno.interrupted.rawValue, whenTrue: reissue, whenFalse: answered, ids: ids)
 
-	emitBranchCarrying(module, from: reissue, to: header, value: done)
+	emitBranchCarrying(module, from: reissue, to: header, values: argsOf(done))
 
 	emitBranchOnCompare(module, block: answered, value: written, pred: StdCmpPred.gt, against: 0, whenTrue: advance, whenFalse: finished, ids: ids)
 
 	let doneAfter = emitBin(module, block: advance, a: done, b: written, opcode: StdBinOpcode.add, ids: ids)
-	emitBranchCarrying(module, from: advance, to: header, value: doneAfter)
+	emitBranchCarrying(module, from: advance, to: header, values: argsOf(doneAfter))
 
 	module.setTerminator(finished, op: StdOp.ret(done))
 
@@ -788,7 +788,7 @@ export function emitByteRangeCompareLoop(module StdModule, func IrFunction, cur 
 
 	let i = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	emitBranchCarrying(module, from: cur, to: header, value: zero)
+	emitBranchCarrying(module, from: cur, to: header, values: argsOf(zero))
 
 	emitBranchOnCompareValues(module, block: header, a: i, pred: StdCmpPred.ge, b: len, whenTrue: allMatch, whenFalse: body, ids: ids)
 
@@ -798,7 +798,7 @@ export function emitByteRangeCompareLoop(module StdModule, func IrFunction, cur 
 	let one = emitConst(module, block: body, value: 1, ids: ids)
 	let iNext = emitBin(module, block: body, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
 	emitBranchOnCompareValues(module, block: body, a: aByte, pred: StdCmpPred.eq, b: bByte, whenTrue: header, whenFalse: notEqual, ids: ids)
-	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
+	pushBranchEdge(body, to: header, values: argsOf(iNext))
 end 'emitByteRangeCompareLoop'
 
 // ⭐ **WHAT THE SIGNED RENDERING DERIVES IN `setup` AND THE SHARED GRAPH THEN READS — and what the
@@ -881,14 +881,13 @@ function buildIntegerToString(module StdModule, signedness IntegerSignedness)
 	let renderedSign = emitRenderedSign(module, block: setup, ids: ids, value: value, dest: dest, signedness: signedness)
 	let digitsZero = ids.mint()
 	module.appendOp(setup, op: StdOp.const(digitsZero, value: 0, valueType: StdType.i64))
-	module.setTerminator(setup, op: StdOp.branch(countLoop.id))
 
 	// countLoop(digits, v): count decimal digits — do { v = v/10; digits += 1 } while v != 0.
 	let digits = ids.mint()
 	let v = ids.mint()
 	countLoop.blockArgs.push(IrBlockArg.create(digits, argType: StdType.i64))
 	countLoop.blockArgs.push(IrBlockArg.create(v, argType: StdType.i64))
-	setup.branchEdges.push(BranchEdge.create(countLoop.id, argIds: twoArgs(digitsZero, second: value)))
+	emitBranchCarrying(module, from: setup, to: countLoop, values: twoArgs(digitsZero, second: value))
 
 	let radixCount = ids.mint()
 	module.appendOp(countLoop, op: StdOp.const(radixCount, value: DecimalRadix, valueType: StdType.i64))
@@ -909,7 +908,7 @@ function buildIntegerToString(module StdModule, signedness IntegerSignedness)
 	let countDone = ids.mint()
 	module.appendOp(countLoop, op: StdOp.cmp(countDone, lhs: vNext, rhs: countZero, pred: StdCmpPred.eq, operandType: StdType.i64))
 	module.setTerminator(countLoop, op: StdOp.condBranch(countDone, thenBlockId: writeSetup.id, elseBlockId: countLoop.id))
-	countLoop.branchEdges.push(BranchEdge.create(countLoop.id, argIds: twoArgs(digitsNext, second: vNext)))
+	pushBranchEdge(countLoop, to: countLoop, values: twoArgs(digitsNext, second: vNext))
 
 	// writeSetup: len = digits + neg; the last write position is len - 1. `digitsNext` is read straight —
 	// `countLoop` defines it and dominates `writeSetup`, so the last iteration's count reaches here with no
@@ -920,7 +919,6 @@ function buildIntegerToString(module StdModule, signedness IntegerSignedness)
 	module.appendOp(writeSetup, op: StdOp.const(oneWrite, value: 1, valueType: StdType.i64))
 	let lastPos = ids.mint()
 	module.appendOp(writeSetup, op: StdOp.binOp(lastPos, lhs: len, rhs: oneWrite, opcode: StdBinOpcode.sub, operandType: StdType.i64))
-	module.setTerminator(writeSetup, op: StdOp.branch(writeHeader.id))
 
 	// writeHeader(pos, wv): stop when `wv == 0` — every digit has been consumed. The top-tested guard is
 	// what keeps `writeBody`'s materialized values (not this `cmp`) the last minted; see the block header.
@@ -928,7 +926,7 @@ function buildIntegerToString(module StdModule, signedness IntegerSignedness)
 	let wv = ids.mint()
 	writeHeader.blockArgs.push(IrBlockArg.create(pos, argType: StdType.i64))
 	writeHeader.blockArgs.push(IrBlockArg.create(wv, argType: StdType.i64))
-	writeSetup.branchEdges.push(BranchEdge.create(writeHeader.id, argIds: twoArgs(lastPos, second: value)))
+	emitBranchCarrying(module, from: writeSetup, to: writeHeader, values: twoArgs(lastPos, second: value))
 
 	let writeZero = ids.mint()
 	module.appendOp(writeHeader, op: StdOp.const(writeZero, value: 0, valueType: StdType.i64))
@@ -958,8 +956,7 @@ function buildIntegerToString(module StdModule, signedness IntegerSignedness)
 	module.appendOp(writeBody, op: StdOp.const(oneWriteStep, value: 1, valueType: StdType.i64))
 	let posNext = ids.mint()
 	module.appendOp(writeBody, op: StdOp.binOp(posNext, lhs: pos, rhs: oneWriteStep, opcode: StdBinOpcode.sub, operandType: StdType.i64))
-	module.setTerminator(writeBody, op: StdOp.branch(writeHeader.id))
-	writeBody.branchEdges.push(BranchEdge.create(writeHeader.id, argIds: twoArgs(posNext, second: wvNext)))
+	emitBranchCarrying(module, from: writeBody, to: writeHeader, values: twoArgs(posNext, second: wvNext))
 
 	module.setTerminator(done, op: StdOp.ret(len))
 
@@ -1257,11 +1254,11 @@ function buildStrRetain(module StdModule)
 
 	let copied = ids.mint()
 	module.appendOp(copyImmortal, op: StdOp.call(copied, callee: StrCloneName, args: argsOf(record)))
-	emitBranchCarrying(module, from: copyImmortal, to: join, value: copied)
+	emitBranchCarrying(module, from: copyImmortal, to: join, values: argsOf(copied))
 
 	let increfed = ids.mint()
 	module.appendOp(coOwn, op: StdOp.call(increfed, callee: MmIncrefName, args: argsOf(record)))
-	emitBranchCarrying(module, from: coOwn, to: join, value: record)
+	emitBranchCarrying(module, from: coOwn, to: join, values: argsOf(record))
 
 	module.setTerminator(join, op: StdOp.ret(owned))
 
@@ -1289,9 +1286,9 @@ function buildStrUnshare(module StdModule)
 	let copied = ids.mint()
 	module.appendOp(copyShared, op: StdOp.call(copied, callee: StrCloneName, args: argsOf(record)))
 	module.appendOp(copyShared, op: StdOp.call(ids.mint(), callee: StrDecrefName, args: argsOf(record)))
-	emitBranchCarrying(module, from: copyShared, to: join, value: copied)
+	emitBranchCarrying(module, from: copyShared, to: join, values: argsOf(copied))
 
-	emitBranchCarrying(module, from: keepSole, to: join, value: record)
+	emitBranchCarrying(module, from: keepSole, to: join, values: argsOf(record))
 
 	module.setTerminator(join, op: StdOp.ret(owned))
 
@@ -1348,7 +1345,7 @@ function buildStrFromBytes(module StdModule)
 	scan.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
 	scan.blockArgs.push(IrBlockArg.create(singleByte, argType: StdType.i64))
 	let one = emitConst(module, block: entry, value: 1, ids: ids)
-	entry.branchEdges.push(BranchEdge.create(scan.id, argIds: twoArgs(zero, second: one)))
+	pushBranchEdge(entry, to: scan, values: twoArgs(zero, second: one))
 
 	emitBranchOnCompareValues(module, block: scan, a: i, pred: StdCmpPred.ge, b: len, whenTrue: build, whenFalse: scanBody, ids: ids)
 
@@ -1359,11 +1356,9 @@ function buildStrFromBytes(module StdModule)
 
 	emitBranchOnCompare(module, block: notHigh, value: raw, pred: StdCmpPred.ne, against: CarriageReturnByte as FullRangeInt, whenTrue: stillSingleByte, whenFalse: sawMultiByteGrapheme, ids: ids)
 
-	module.setTerminator(stillSingleByte, op: StdOp.branch(scan.id))
-	stillSingleByte.branchEdges.push(BranchEdge.create(scan.id, argIds: twoArgs(iNext, second: singleByte)))
+	emitBranchCarrying(module, from: stillSingleByte, to: scan, values: twoArgs(iNext, second: singleByte))
 
-	module.setTerminator(sawMultiByteGrapheme, op: StdOp.branch(scan.id))
-	sawMultiByteGrapheme.branchEdges.push(BranchEdge.create(scan.id, argIds: twoArgs(iNext, second: zero)))
+	emitBranchCarrying(module, from: sawMultiByteGrapheme, to: scan, values: twoArgs(iNext, second: zero))
 
 	module.setTerminator(build, op: StdOp.ret(emitBuildOwnedInlineString(module, block: build, ids: ids, srcBuf: buf, srcLen: len, singleByteGraphemes: singleByte)))
 
