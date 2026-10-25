@@ -64,12 +64,12 @@ unreached function is reported, even though dead-function elimination — which 
 would remove the call before any backend saw it. It is pinned below so that relaxing it is a deliberate
 change.
 
-⚠ It is pinned HERE, at the INTRINSIC, because that is the spelling it is true of. A bare
-`sleep(1)` is a call to `stdlib/Sleep.maxon`'s declaration, which moves the
-`__gt_sleep` out of user code and into stdlib source — where the gate is reachability-AWARE, so an
-unreached one COMPILES (`async-sleep.unreached-compiles-on-wasm` pins the other side). Reachability-blind
-for user code and reachability-aware for stdlib source is one rule with two halves, and the two cases
-pin one half each.
+⚠ It is pinned HERE, at the INTRINSIC, where the refusal is raised on the program's own op. A bare
+`sleep(1)` is a call to `stdlib/Sleep.maxon`'s declaration, which moves the `__gt_sleep` out of user code
+and into stdlib source, where the gate exempts a body no path from `main` reaches. The call into that body
+is still the program's own, so a `sleep(1)` in an unreached function is refused too
+(`async-sleep.unreached-call-is-refused-on-wasm`); what the exemption leaves compiling is a program that
+never names `sleep` (`async-sleep.unnamed-sleep-compiles-on-wasm`).
 
 ⚠ **Which cases that gates, exactly**: only the ones that REACH the emit. Arity, operand type, value
 position and unknown member are decided in the front end, are target-neutral, and carry NO marker. See
@@ -191,9 +191,9 @@ error E3104: <fragment>:3:13: this construct lowers to the runtime entry '__gt_s
 The gate is REACHABILITY-BLIND for the program's own source — a library-tier case's files included, because a project rooted under `stdlib/` keeps its own files as the program's rather than recording them as library source (`StdlibLoader.setAsideTheUsersOwnLibraryFiles`): `napper` is never called, yet its intrinsic is still refused.
 `SemanticCheck` visits every function and dead-function elimination runs two tiers later, so this is the
 same rule that reports a type error in an unreached function. Pinned because the stdlib loader's own
-exemption (`checkCalls` skips an unreached stdlib body) points the other way, and it is the INTRINSIC that
-keeps this property: a bare `sleep(1)` reaches the same entry through `stdlib/Sleep.maxon`, so it
-takes the exemption instead.
+exemption (`checkCalls` skips an unreached stdlib body) points the other way: it is the unreached stdlib
+BODY that is exempt, and a bare `sleep(1)` written in an unreached function is refused like the intrinsic
+(`async-sleep.unreached-call-is-refused-on-wasm`).
 ```maxon
 function napper()
 	__Builtins.sleep(1)

@@ -5579,14 +5579,18 @@ end 'opIsTheCompilersOwn'
 // error in an unreached function is: this pass visits every function, and dead-function elimination runs two
 // tiers later. STDLIB source is the ONE exemption, because a stdlib module the program does not use must
 // leave the compile byte-identical: an unreachable stdlib function is in `libraryFacts.unreachable`, so it
-// has no `substrateEntries` entry and no crossing to it can be refused. Clock shows both halves: a
-// `Clock.nowMs()` in code `main` never calls compiles clean for wasm while a reached one is refused.
+// has no `substrateEntries` entry and no crossing to it can be refused. The exemption is for the stdlib BODY:
+// a `Clock.nowMs()` call written in the program's own source is a crossing wherever it sits, so one in a
+// function `main` never calls is refused too (`stdlib-loading.unreached-user-helper-is-still-refused`),
+// while the clock readers no program source names leave a wasm program compiling
+// (`stdlib-loading.unreached-clock-still-compiles-on-wasm`).
 //
 // ⭐ **RETIRING A BARE-NAME BUILTIN ONTO STDLIB MOVES A PROGRAM ACROSS THE ASYMMETRY, AND THAT IS THE
-// CORRECT DIRECTION.** `sleep(1)` is a call into `stdlib/Sleep.maxon`, so an unreached one COMPILES
-// (`async-sleep.unreached-compiles-on-wasm`), while a `__gt_sleep` in user code refuses an unreached one
-// (`builtins-sleep.rejected-on-wasm-when-unreached`, which keeps the property at the intrinsic spelling).
-// The entry genuinely is stdlib's, and a program with no path
+// CORRECT DIRECTION.** `sleep(1)` is a call into `stdlib/Sleep.maxon`, so a program that never names `sleep`
+// COMPILES (`async-sleep.unnamed-sleep-compiles-on-wasm`), while a `sleep(1)` in an unreached function
+// of the program's own source is a refused crossing (`async-sleep.unreached-call-is-refused-on-wasm`), as
+// is a `__gt_sleep` in user code (`builtins-sleep.rejected-on-wasm-when-unreached`, which keeps the property
+// at the intrinsic spelling). The entry genuinely is stdlib's, and a program with no path
 // to it does not contain it. Every builtin retired this way moves the same way.
 // `callee` is the KEY (the registry is keyed by the EMITTED name) and `noun` is what the message QUOTES —
 // the two part company for a primitive-static mint, and the caller has already resolved which is which

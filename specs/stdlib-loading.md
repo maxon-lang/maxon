@@ -400,11 +400,47 @@ error E3104: <fragment>:3:15: 'Clock.nowMs' lowers to the runtime entry '__gt_no
 ```
 
 <!-- test: stdlib-loading.unreached-clock-still-compiles-on-wasm -->
+The crossing gate is reachability-AWARE for a STDLIB body: `WallClock.rfc3339Millis` is pure, but it
+sits in the type whose `nowUnixSeconds` and `nowUnixNanos` reach clock entries wasm has no lowering
+for, and `Clock`'s readers sit beside it. Nothing on a path from `main` calls any of them, so the program
+compiles for wasm and runs. This is the byte-neutrality guarantee stated as a run — attributing the
+refusal to the caller must not turn a clock reader the program never reaches into a refusal.
+
+⚠ **THE UNREACHED READER MUST BE STDLIB'S.** A call to a reader written in the program's own source is
+refused wherever it sits, reached or not (`stdlib-loading.unreached-user-helper-is-still-refused`).
+```maxon
+function main() returns ExitCode
+	print("{WallClock.rfc3339Millis(0)}\n")
+	return 4
+end 'main'
+```
+```exitcode
+4
+```
+```stdout
+1970-01-01T00:00:00.000Z
+```
+
+<!-- test: stdlib-loading.reached-clock-sibling-is-refused-on-wasm -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-The crossing gate is reachability-AWARE, exactly as the runtime-floor skip is: `reader` is never
-called, so no path from `main` crosses into stdlib and the program compiles for wasm
-unchanged. This is the byte-neutrality guarantee stated as a run — attributing the refusal to the
-caller must not turn an untaken crossing into a refusal.
+The contrast to the case above: the same function, with its sibling `WallClock.nowUnixNanos` now on the
+path from `main`. The reader's entry has no wasm32-wasi lowering, so the call into it is refused at the
+span the author wrote.
+```maxon
+function main() returns ExitCode
+	print("{WallClock.rfc3339Millis(WallClock.nowUnixNanos())}\n")
+	return 4
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:3:44: 'WallClock.nowUnixNanos' lowers to the runtime entry '__clock_now_unix_ns', which has no wasm32-wasi implementation
+```
+
+<!-- test: stdlib-loading.unreached-user-helper-is-still-refused -->
+<!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+The other side of the reachability asymmetry: `reader` is the program's own function, so the call to
+`Clock.nowMs` inside it is the crossing, and the gate visits every function of the program's own source
+whether or not a path from `main` reaches it. `main` never calls `reader`, yet the program is refused.
 ```maxon
 function reader() returns Integer
 	return Clock.nowMs()
@@ -415,8 +451,8 @@ function main() returns ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
-```exitcode
-4
+```maxoncstderr
+error E3104: <fragment>:3:15: 'Clock.nowMs' lowers to the runtime entry '__gt_now_ns', which has no wasm32-wasi implementation
 ```
 
 <!-- test: stdlib-loading.user-code-is-refused-on-wasm-even-where-unreached -->

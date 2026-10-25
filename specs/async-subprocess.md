@@ -25,8 +25,8 @@ program declaring its own `runProcess` reaches that declaration with its own ari
 `the-bare-name-is-an-ordinary-declaration` below pins it.
 
 ⚠ **UNLIKE `sleep`, IT IS NOT STDLIB SOURCE, AND THAT IS WHY ITS TARGET ANSWER DIFFERS.** `sleep`'s entry is
-`stdlib/Sleep.maxon`, where the target gate is reachability-AWARE, so an unreached `sleep` compiles for wasm
-(`async-sleep.unreached-compiles-on-wasm`). There is no stdlib declaration for this one:
+`stdlib/Sleep.maxon`, where the target gate is reachability-AWARE, so a program that never names `sleep`
+compiles for wasm (`async-sleep.unnamed-sleep-compiles-on-wasm`). There is no stdlib declaration for this one:
 `stdlib/Subprocess.maxon`'s `Subprocess.run` is a different mechanism (a poll-and-`__gt_sleep` drain over
 `__Builtins.subprocess*`). `__Builtins.runProcess` therefore emits `__gt_process_run` in the program's own code, where the
 gate is reachability-BLIND — pinned by `rejected-on-wasm-when-unreached` below.
@@ -1055,7 +1055,7 @@ error E3104: <fragment>:3:28: this construct lowers to the runtime entry '__gt_p
 **An unreached call is refused too, and that is the half worth pinning.** `spawner` is never called,
 yet its intrinsic is refused: `__Builtins.runProcess` emits `__gt_process_run` in the program's own source — a library-tier case's files included, because a project rooted under `stdlib/` keeps its own files as the program's rather than recording them as library source (`StdlibLoader.setAsideTheUsersOwnLibraryFiles`), where
 `SemanticCheck.requireTargetSupportsCallee` is reachability-BLIND — it visits every function, and
-dead-function elimination runs two tiers later. The twin `async-sleep.unreached-compiles-on-wasm` shows the
+dead-function elimination runs two tiers later. `async-sleep.unnamed-sleep-compiles-on-wasm` shows the
 opposite outcome for an entry written in stdlib source, where the gate is reachability-AWARE; this entry has
 no stdlib declaration (see the *Documentation* section), so it keeps the property, exactly as
 `builtins-sleep.rejected-on-wasm-when-unreached` does for `__Builtins.sleep`.

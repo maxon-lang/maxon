@@ -326,13 +326,32 @@ end 'main'
 error E3104: <fragment>:3:10: 'sleep' lowers to the runtime entry '__gt_sleep', which has no wasm32-wasi implementation
 ```
 
-<!-- test: async-sleep.unreached-compiles-on-wasm -->
+<!-- test: async-sleep.unnamed-sleep-compiles-on-wasm -->
+A program that never names `sleep` compiles for wasm although `stdlib/Sleep.maxon` is loaded. The target
+gate is reachability-AWARE for a STDLIB body: `sleep`'s `__gt_sleep` lives inside stdlib source, no path
+from `main` reaches that body, and so it is not in the program — the same exemption that keeps an unused
+stdlib module byte-neutral (`stdlib-loading.unreached-clock-still-compiles-on-wasm`). A `sleep` on a path from
+`main` is refused, as the case above shows.
+```maxon
+function main() returns ExitCode
+	print("awake\n")
+	return 4
+end 'main'
+```
+```exitcode
+4
+```
+```stdout
+awake
+```
+
+<!-- test: async-sleep.unreached-call-is-refused-on-wasm -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-An UNREACHED `sleep` compiles for wasm. The target gate is reachability-BLIND for user code
-(`builtins-sleep.rejected-on-wasm-when-unreached` pins that for the intrinsic spelled there), but `sleep`'s
-`__gt_sleep` lives INSIDE stdlib source, where the gate is reachability-AWARE — the same exemption that
-keeps an unused stdlib module byte-neutral (`stdlib-loading.unreached-clock-still-compiles-on-wasm`). A
-`sleep` on a path from `main` is refused, as the case above shows.
+The call itself is what the gate refuses, and a call written in the program's own source is visited
+whether or not a path from `main` reaches it: `napper` is never called, yet its `sleep(1)` is the
+crossing into `stdlib/Sleep.maxon` and is refused at the line the author wrote. The reachability exemption
+belongs to the stdlib body, never to the program's own calls into it
+(`builtins-sleep.rejected-on-wasm-when-unreached` pins the same for the intrinsic spelled there).
 ```maxon
 function napper()
 	sleep(1)
@@ -342,6 +361,6 @@ function main() returns ExitCode
 	return 4
 end 'main'
 ```
-```exitcode
-4
+```maxoncstderr
+error E3104: <fragment>:3:2: 'sleep' lowers to the runtime entry '__gt_sleep', which has no wasm32-wasi implementation
 ```
