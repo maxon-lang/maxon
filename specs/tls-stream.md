@@ -20,7 +20,8 @@ machine, and writes what the machine queues.
 
 A client verifies the server's chain for the name it dials (or `setServerName`) against the system roots or the roots
 it was given, and the cases give it the roots of canra's test PKI and a verification time inside its certificates'
-validity (`setVerificationTime`). A server presents a `TlsIdentity` built from DER or PEM, and with
+validity (`setVerificationTime`). The system roots are read from the operating system once per process, by the first connection
+that trusts them, and a failed read is kept. A server presents a `TlsIdentity` built from DER or PEM, and with
 `requestClientCertificates` or `requireClientCertificates` verifies the client's chain under the roots it is given.
 Every failure is a `TlsError` that names what went wrong: the transport's `NetworkError`, the verification reason of
 a chain this side refused (`certificateRejected`), the alert this side sent (`protocolError`), or the alert the peer
@@ -6628,3 +6629,449 @@ server: accept: protocolError(certificateRequired)
 0
 ```
 
+
+<!-- test: tls-stream.the-system-roots-are-read-once-for-every-connection -->
+<!-- tier: stdlib -->
+Two connections made with default options, which trust the system roots, read the roots from the operating system once between them: the second connection verifies against the roots the first one loaded. The case replaces the program-wide roots source with one that answers the case's root and counts its reads.
+```maxon
+function digit(symbol Byte) returns Byte
+	if symbol >= 0x61 'letter'
+		return symbol - 0x57
+	end 'letter'
+
+	return symbol - 0x30
+end 'digit'
+
+function fromHex(hex String) returns ByteArray
+	var bytes = ByteArray.create()
+	var high = 0 as Byte
+	var isHigh = true
+
+	for symbol in hex.bytes() 'eachSymbol'
+		if isHigh 'first'
+			high = digit(symbol)
+		end 'first' else 'second'
+			bytes.push(high * 16 + digit(symbol))
+		end 'second'
+
+		isHigh = not isHigh
+	end 'eachSymbol'
+
+	return bytes
+end 'fromHex'
+
+function describe(error TlsError) returns String
+	return match error 'error'
+		certificateRejected(reason) gives "certificateRejected({reason.name})"
+		protocolError(alert) gives "protocolError({alert.name})"
+		peerAlert(alert) gives "peerAlert({alert.name})"
+		peerAlertUnrecognised(code) gives "peerAlertUnrecognised({code})"
+		resolveFailed or
+		connectFailed or
+		bindFailed or
+		acceptFailed or
+		acceptInterrupted or
+		timedOut or
+		handshakeTimedOut or
+		sendFailed or
+		recvFailed or
+		connectionClosed or
+		truncated or
+		closed or
+		trustStoreUnavailable or
+		entropyUnavailable or
+		invalidConfiguration or
+		invalidCertificate or
+		invalidPrivateKey or
+		invalidPem gives error.name
+	end 'error'
+end 'describe'
+
+function identityOf(chainHex String, keyHex String) returns TlsIdentity
+	return try TlsIdentity.fromDer(ByteArrays from [fromHex(chainHex)], key: fromHex(keyHex)) otherwise panic("the case's identity was refused")
+end 'identityOf'
+
+function trustedServer(identity TlsIdentity) returns TlsServerOptions
+	var options = TlsServerOptions.create(identity)
+	options.setVerificationTime(1767225600)
+
+	return options
+end 'trustedServer'
+
+let rootHex = "3082012f3081d6a003020102020101300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a300f310d300b06035504030c04526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000469fd1970f970c21034e836c954aefc78dffef4a3d72650f1ec5e70559cc0663d0722d3408f27d8be5a08ceb432c37b7049cc8758c88c3d85e4db83aa471b62b7a3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d0403020348003045022053bac2d2f62299dd459d79bce22d671aeeb6ee3ed03a2f344be8a8392fd47b3e022100d8f59bc3b1ba00dc51028c7f1b8e99d86d4bb4126e22717c32988498c07f64d7"
+let leafP256Hex = "3082015930820100a00302010202010a300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3235303630313030303030305a170d3236303630313030303030305a300f310d300b06035504030c046c6561663059301306072a8648ce3d020106082a8648ce3d030107034200040b019cfdb984d032a96907cca9a63888323695b6404a7ddaacc63b5559364f2ca48f2b5d0e1151b6c0b5d17286d9a522cee437c42f410742ebb8493775fc47e9a34d304b300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b0601050507030130160603551d11040f300d820b6578616d706c652e636f6d300a06082a8648ce3d040302034700304402203bc12c6f77062e5eed59186b72a95e9652f4398685b8845ad8112a5085bb7ab602207c9761426fa260535fb0fa49efe2624a1f34e8e04eb43d8f3c72dd072e736197"
+let keyP256Hex = "3041020100301306072a8648ce3d020106082a8648ce3d0301070427302502010104200f9999d9198528f9f986f8315fe0c7aaf7b2aef840198d77b859dc4f4a8c4a2b"
+
+typealias ReadCount = int(0 to 1000000)
+typealias ReadCountCell = SharedValue with ReadCount
+
+type CountingTrust implements TrustSource
+	let reads as ReadCountCell
+
+	static function create(reads ReadCountCell) returns CountingTrust
+		return Self{reads: reads}
+	end 'create'
+
+	function read() returns RootCertificates throws TrustStoreError
+		reads.publish(reads.current() + 1)
+
+		return RootCertificates from [fromHex(rootHex)]
+	end 'read'
+end 'CountingTrust'
+
+function serveTwice(listener TlsListener) returns String
+	var report = ""
+
+	for attempt in 1 to 2 'eachAttempt'
+		var stream = try listener.accept() otherwise (error) 'refused'
+			report.append("[accept {attempt}: {describe(error)}]")
+			continue
+		end 'refused'
+
+		let heard = try stream.recv(1024) otherwise (error) 'unheard'
+			report.append("[recv {attempt}: {describe(error)}]")
+			continue
+		end 'unheard'
+
+		report.append("[served {attempt}: {heard}]")
+		stream.close()
+	end 'eachAttempt'
+
+	return report
+end 'serveTwice'
+
+function dial(port NetworkPort) returns String
+	var options = TlsClientOptions.create()
+
+	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
+	options.setVerificationTime(1767225600)
+
+	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+		return "connect: {describe(error)}"
+	end 'refused'
+
+	_ = try stream.send("hello") otherwise (error) 'unsent'
+		return "send: {describe(error)}"
+	end 'unsent'
+
+	stream.close()
+
+	return "connected"
+end 'dial'
+
+function main() returns ExitCode
+	let reads = ReadCountCell.create(0 as ReadCount)
+	SystemRoots.register(SystemRoots.unloaded())
+	SystemRootsLoading.register(spawn SystemRootsLoader.create(CountingTrust.create(reads.clone())))
+
+	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
+	let peer = async serveTwice(listener)
+
+	print("first: {dial(listener.port())}\n")
+	print("second: {dial(listener.port())}\n")
+	print("server: {await peer}\n")
+	print("reads: {reads.current()}\n")
+
+	listener.close()
+
+	return 0
+end 'main'
+```
+```stdout
+first: connected
+second: connected
+server: [served 1: hello][served 2: hello]
+reads: 1
+```
+```exitcode
+0
+```
+
+<!-- test: tls-stream.connections-that-start-together-read-the-system-roots-once -->
+<!-- tier: stdlib -->
+Four connections made at once with default options, while the roots source is still answering its first read, wait for that one read instead of each making their own: all four verify against it, and the source is read once.
+```maxon
+function digit(symbol Byte) returns Byte
+	if symbol >= 0x61 'letter'
+		return symbol - 0x57
+	end 'letter'
+
+	return symbol - 0x30
+end 'digit'
+
+function fromHex(hex String) returns ByteArray
+	var bytes = ByteArray.create()
+	var high = 0 as Byte
+	var isHigh = true
+
+	for symbol in hex.bytes() 'eachSymbol'
+		if isHigh 'first'
+			high = digit(symbol)
+		end 'first' else 'second'
+			bytes.push(high * 16 + digit(symbol))
+		end 'second'
+
+		isHigh = not isHigh
+	end 'eachSymbol'
+
+	return bytes
+end 'fromHex'
+
+function describe(error TlsError) returns String
+	return match error 'error'
+		certificateRejected(reason) gives "certificateRejected({reason.name})"
+		protocolError(alert) gives "protocolError({alert.name})"
+		peerAlert(alert) gives "peerAlert({alert.name})"
+		peerAlertUnrecognised(code) gives "peerAlertUnrecognised({code})"
+		resolveFailed or
+		connectFailed or
+		bindFailed or
+		acceptFailed or
+		acceptInterrupted or
+		timedOut or
+		handshakeTimedOut or
+		sendFailed or
+		recvFailed or
+		connectionClosed or
+		truncated or
+		closed or
+		trustStoreUnavailable or
+		entropyUnavailable or
+		invalidConfiguration or
+		invalidCertificate or
+		invalidPrivateKey or
+		invalidPem gives error.name
+	end 'error'
+end 'describe'
+
+function identityOf(chainHex String, keyHex String) returns TlsIdentity
+	return try TlsIdentity.fromDer(ByteArrays from [fromHex(chainHex)], key: fromHex(keyHex)) otherwise panic("the case's identity was refused")
+end 'identityOf'
+
+function trustedServer(identity TlsIdentity) returns TlsServerOptions
+	var options = TlsServerOptions.create(identity)
+	options.setVerificationTime(1767225600)
+
+	return options
+end 'trustedServer'
+
+let rootHex = "3082012f3081d6a003020102020101300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a300f310d300b06035504030c04526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000469fd1970f970c21034e836c954aefc78dffef4a3d72650f1ec5e70559cc0663d0722d3408f27d8be5a08ceb432c37b7049cc8758c88c3d85e4db83aa471b62b7a3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d0403020348003045022053bac2d2f62299dd459d79bce22d671aeeb6ee3ed03a2f344be8a8392fd47b3e022100d8f59bc3b1ba00dc51028c7f1b8e99d86d4bb4126e22717c32988498c07f64d7"
+let leafP256Hex = "3082015930820100a00302010202010a300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3235303630313030303030305a170d3236303630313030303030305a300f310d300b06035504030c046c6561663059301306072a8648ce3d020106082a8648ce3d030107034200040b019cfdb984d032a96907cca9a63888323695b6404a7ddaacc63b5559364f2ca48f2b5d0e1151b6c0b5d17286d9a522cee437c42f410742ebb8493775fc47e9a34d304b300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b0601050507030130160603551d11040f300d820b6578616d706c652e636f6d300a06082a8648ce3d040302034700304402203bc12c6f77062e5eed59186b72a95e9652f4398685b8845ad8112a5085bb7ab602207c9761426fa260535fb0fa49efe2624a1f34e8e04eb43d8f3c72dd072e736197"
+let keyP256Hex = "3041020100301306072a8648ce3d020106082a8648ce3d0301070427302502010104200f9999d9198528f9f986f8315fe0c7aaf7b2aef840198d77b859dc4f4a8c4a2b"
+
+typealias ReadCount = int(0 to 1000000)
+typealias ReadCountCell = SharedValue with ReadCount
+
+type SlowTrust implements TrustSource
+	let reads as ReadCountCell
+
+	static function create(reads ReadCountCell) returns SlowTrust
+		return Self{reads: reads}
+	end 'create'
+
+	function read() returns RootCertificates throws TrustStoreError
+		reads.publish(reads.current() + 1)
+		sleep(150)
+
+		return RootCertificates from [fromHex(rootHex)]
+	end 'read'
+end 'SlowTrust'
+
+function serveFour(listener TlsListener) returns String
+	var report = ""
+
+	for attempt in 1 to 4 'eachAttempt'
+		var stream = try listener.accept() otherwise (error) 'refused'
+			report.append("[accept {attempt}: {describe(error)}]")
+			continue
+		end 'refused'
+
+		let heard = try stream.recv(1024) otherwise (error) 'unheard'
+			report.append("[recv {attempt}: {describe(error)}]")
+			continue
+		end 'unheard'
+
+		report.append("[served {heard}]")
+		stream.close()
+	end 'eachAttempt'
+
+	return report
+end 'serveFour'
+
+function dial(port NetworkPort) returns String
+	var options = TlsClientOptions.create()
+
+	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
+	options.setVerificationTime(1767225600)
+
+	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+		return "connect: {describe(error)}"
+	end 'refused'
+
+	_ = try stream.send("hello") otherwise (error) 'unsent'
+		return "send: {describe(error)}"
+	end 'unsent'
+
+	stream.close()
+
+	return "connected"
+end 'dial'
+
+function main() returns ExitCode
+	let reads = ReadCountCell.create(0 as ReadCount)
+	SystemRoots.register(SystemRoots.unloaded())
+	SystemRootsLoading.register(spawn SystemRootsLoader.create(SlowTrust.create(reads.clone())))
+
+	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
+	let peer = async serveFour(listener)
+	let port = listener.port()
+
+	let first = async dial(port)
+	let second = async dial(port)
+	let third = async dial(port)
+	let fourth = async dial(port)
+
+	print("clients: {await first} {await second} {await third} {await fourth}\n")
+	print("server: {await peer}\n")
+	print("reads: {reads.current()}\n")
+
+	listener.close()
+
+	return 0
+end 'main'
+```
+```stdout
+clients: connected connected connected connected
+server: [served hello][served hello][served hello][served hello]
+reads: 1
+```
+```exitcode
+0
+```
+
+<!-- test: tls-stream.a-failed-read-of-the-system-roots-is-kept -->
+<!-- tier: stdlib -->
+A roots source that cannot be read fails the connection that asked with `trustStoreUnavailable`, and the failure is kept: the next connection fails the same way without the source being read again.
+```maxon
+function digit(symbol Byte) returns Byte
+	if symbol >= 0x61 'letter'
+		return symbol - 0x57
+	end 'letter'
+
+	return symbol - 0x30
+end 'digit'
+
+function fromHex(hex String) returns ByteArray
+	var bytes = ByteArray.create()
+	var high = 0 as Byte
+	var isHigh = true
+
+	for symbol in hex.bytes() 'eachSymbol'
+		if isHigh 'first'
+			high = digit(symbol)
+		end 'first' else 'second'
+			bytes.push(high * 16 + digit(symbol))
+		end 'second'
+
+		isHigh = not isHigh
+	end 'eachSymbol'
+
+	return bytes
+end 'fromHex'
+
+function describe(error TlsError) returns String
+	return match error 'error'
+		certificateRejected(reason) gives "certificateRejected({reason.name})"
+		protocolError(alert) gives "protocolError({alert.name})"
+		peerAlert(alert) gives "peerAlert({alert.name})"
+		peerAlertUnrecognised(code) gives "peerAlertUnrecognised({code})"
+		resolveFailed or
+		connectFailed or
+		bindFailed or
+		acceptFailed or
+		acceptInterrupted or
+		timedOut or
+		handshakeTimedOut or
+		sendFailed or
+		recvFailed or
+		connectionClosed or
+		truncated or
+		closed or
+		trustStoreUnavailable or
+		entropyUnavailable or
+		invalidConfiguration or
+		invalidCertificate or
+		invalidPrivateKey or
+		invalidPem gives error.name
+	end 'error'
+end 'describe'
+
+function identityOf(chainHex String, keyHex String) returns TlsIdentity
+	return try TlsIdentity.fromDer(ByteArrays from [fromHex(chainHex)], key: fromHex(keyHex)) otherwise panic("the case's identity was refused")
+end 'identityOf'
+
+function trustedServer(identity TlsIdentity) returns TlsServerOptions
+	var options = TlsServerOptions.create(identity)
+	options.setVerificationTime(1767225600)
+
+	return options
+end 'trustedServer'
+
+let rootHex = "3082012f3081d6a003020102020101300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a300f310d300b06035504030c04526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000469fd1970f970c21034e836c954aefc78dffef4a3d72650f1ec5e70559cc0663d0722d3408f27d8be5a08ceb432c37b7049cc8758c88c3d85e4db83aa471b62b7a3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d0403020348003045022053bac2d2f62299dd459d79bce22d671aeeb6ee3ed03a2f344be8a8392fd47b3e022100d8f59bc3b1ba00dc51028c7f1b8e99d86d4bb4126e22717c32988498c07f64d7"
+let leafP256Hex = "3082015930820100a00302010202010a300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3235303630313030303030305a170d3236303630313030303030305a300f310d300b06035504030c046c6561663059301306072a8648ce3d020106082a8648ce3d030107034200040b019cfdb984d032a96907cca9a63888323695b6404a7ddaacc63b5559364f2ca48f2b5d0e1151b6c0b5d17286d9a522cee437c42f410742ebb8493775fc47e9a34d304b300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b0601050507030130160603551d11040f300d820b6578616d706c652e636f6d300a06082a8648ce3d040302034700304402203bc12c6f77062e5eed59186b72a95e9652f4398685b8845ad8112a5085bb7ab602207c9761426fa260535fb0fa49efe2624a1f34e8e04eb43d8f3c72dd072e736197"
+let keyP256Hex = "3041020100301306072a8648ce3d020106082a8648ce3d0301070427302502010104200f9999d9198528f9f986f8315fe0c7aaf7b2aef840198d77b859dc4f4a8c4a2b"
+
+typealias ReadCount = int(0 to 1000000)
+typealias ReadCountCell = SharedValue with ReadCount
+
+type MissingTrust implements TrustSource
+	let reads as ReadCountCell
+
+	static function create(reads ReadCountCell) returns MissingTrust
+		return Self{reads: reads}
+	end 'create'
+
+	function read() returns RootCertificates throws TrustStoreError
+		reads.publish(reads.current() + 1)
+
+		throw TrustStoreError.unavailable
+	end 'read'
+end 'MissingTrust'
+
+function dial(port NetworkPort) returns String
+	var options = TlsClientOptions.create()
+
+	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
+	options.setVerificationTime(1767225600)
+
+	_ = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+		return "connect: {describe(error)}"
+	end 'refused'
+
+	return "connected"
+end 'dial'
+
+function main() returns ExitCode
+	let reads = ReadCountCell.create(0 as ReadCount)
+	SystemRoots.register(SystemRoots.unloaded())
+	SystemRootsLoading.register(spawn SystemRootsLoader.create(MissingTrust.create(reads.clone())))
+
+	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
+
+	print("first: {dial(listener.port())}\n")
+	print("second: {dial(listener.port())}\n")
+	print("reads: {reads.current()}\n")
+
+	listener.close()
+
+	return 0
+end 'main'
+```
+```stdout
+first: connect: trustStoreUnavailable
+second: connect: trustStoreUnavailable
+reads: 1
+```
+```exitcode
+0
+```

@@ -1,0 +1,47 @@
+module interface TrustSource
+	function read() returns RootCertificates throws TrustStoreError
+end 'TrustSource'
+
+module type OperatingSystemTrust implements TrustSource
+	module static function create() returns OperatingSystemTrust
+		return Self{}
+	end 'create'
+
+	module function read() returns RootCertificates throws TrustStoreError
+		return try TrustStore.systemRoots()
+	end 'read'
+end 'OperatingSystemTrust'
+
+module interface SystemRootsLoading
+	function load() throws TrustStoreError
+end 'SystemRootsLoading'
+
+module type SystemRootsLoader implements SystemRootsLoading
+	var source as TrustSource
+
+	module static function create(source TrustSource) returns SystemRootsLoader
+		return Self{source: source}
+	end 'create'
+
+	// The service takes one message at a time, so connections that start together queue here and
+	// the first read serves them all.
+	export function load() throws TrustStoreError
+		match SystemRoots.current().outcome 'cached'
+			unloaded then try readSource()
+			loaded then return
+			failed(error) then throw error
+		end 'cached'
+	end 'load'
+
+	function readSource() throws TrustStoreError
+		let roots = try source.read() otherwise (error) 'unread'
+			SystemRoots.register(SystemRoots.failed(error))
+
+			throw error
+		end 'unread'
+
+		let anchors = X509RootPool.create(tlsCertificates(roots))
+
+		SystemRoots.register(SystemRoots.loaded(anchors))
+	end 'readSource'
+end 'SystemRootsLoader'

@@ -76,18 +76,10 @@ public type TlsClientOptions
 
 	module function authenticator() returns TlsX509Peer throws TlsError
 		match trust 'trust'
-			system then return try systemAuthenticator()
+			system then return try SystemRoots.authenticator(X509Purpose.serverAuth, now: verificationTime.seconds()) otherwise throw TlsError.trustStoreUnavailable
 			custom(roots) then return TlsX509Peer.create(roots, now: verificationTime.seconds(), purpose: X509Purpose.serverAuth)
 		end 'trust'
 	end 'authenticator'
-
-	function systemAuthenticator() returns TlsX509Peer throws TlsError
-		var peer = try TlsX509Peer.system(X509Purpose.serverAuth) otherwise throw TlsError.trustStoreUnavailable
-
-		peer.now = verificationTime.seconds()
-
-		return peer
-	end 'systemAuthenticator'
 end 'TlsClientOptions'
 
 /// Connects to TLS servers.

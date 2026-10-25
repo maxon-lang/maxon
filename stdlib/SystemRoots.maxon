@@ -1,0 +1,56 @@
+module union SystemRootsOutcome
+	unloaded
+	loaded(anchors X509RootPool)
+	failed(error TrustStoreError)
+end 'SystemRootsOutcome'
+
+module type SystemRoots
+	module let outcome as SystemRootsOutcome
+
+	module static function unloaded() returns SystemRoots
+		return Self{outcome: SystemRootsOutcome.unloaded}
+	end 'unloaded'
+
+	module static function loaded(anchors X509RootPool) returns SystemRoots
+		return Self{outcome: SystemRootsOutcome.loaded(anchors)}
+	end 'loaded'
+
+	module static function failed(error TrustStoreError) returns SystemRoots
+		return Self{outcome: SystemRootsOutcome.failed(error)}
+	end 'failed'
+
+	module static function authenticator(purpose X509Purpose, now UnixSeconds) returns TlsX509Peer throws TrustStoreError
+		if not SystemRoots.current().isSettled() 'unsettled'
+			try load()
+		end 'unsettled'
+
+		return try SystemRoots.current().authenticatorOver(purpose, now: now)
+	end 'authenticator'
+
+	static function load() throws TrustStoreError
+		// A `ForeverMs` send fails only for a caller whose promise was dropped.
+		let reply = try SystemRootsLoading.current().load(sendTimeout: ForeverMs) otherwise throw TrustStoreError.unavailable
+
+		try await reply
+	end 'load'
+
+	function isSettled() returns bool
+		return match outcome 'outcome'
+			unloaded gives false
+			loaded or
+			failed gives true
+		end 'outcome'
+	end 'isSettled'
+
+	function authenticatorOver(purpose X509Purpose, now UnixSeconds) returns TlsX509Peer throws TrustStoreError
+		match outcome 'outcome'
+			loaded(anchors) then return TlsX509Peer.trusting(anchors, now: now, purpose: purpose)
+			failed(error) then throw error
+			unloaded then panic("SystemRoots: the loader answered before it published")
+		end 'outcome'
+	end 'authenticatorOver'
+end 'SystemRoots'
+
+default SystemRoots = SystemRoots.unloaded()
+
+default SystemRootsLoading = spawn SystemRootsLoader.create(OperatingSystemTrust.create())

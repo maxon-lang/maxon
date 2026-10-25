@@ -2295,12 +2295,12 @@ rsa key with a 2 byte salt internalError
 
 <!-- test: tls-handshake.the-default-peer-trusts-the-operating-system-roots -->
 <!-- tier: stdlib -->
-`TlsX509Peer.system` verifies a chain against the roots `TrustStore.systemRoots` returns, at the wall clock's time, for the purpose it is given. The roots are the machine's own, so the case asserts that there are some.
+`SystemRoots.authenticator` builds a peer that verifies a chain against the roots `TrustStore.systemRoots` returns, at the time and for the purpose it is given. The roots are the machine's own, so the case asserts that there are some.
 ```maxon
 function main() returns ExitCode
-	let peer = try TlsX509Peer.system(X509Purpose.serverAuth) otherwise return 1
+	let peer = try SystemRoots.authenticator(X509Purpose.serverAuth, now: WallClock.nowUnixSeconds()) otherwise return 1
 
-	print("roots={peer.roots.count() > 0} now={peer.now > 0} purpose={peer.purpose.name} authenticates={peer.authenticates()}\n")
+	print("roots={peer.anchors.der().count() > 0} now={peer.now > 0} purpose={peer.purpose.name} authenticates={peer.authenticates()}\n")
 
 	return 0
 end 'main'

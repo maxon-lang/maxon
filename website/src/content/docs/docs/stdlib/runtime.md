@@ -322,7 +322,8 @@ It prints a number from 1 to 6.
 ## TrustStore
 
 `TrustStore` reads the root certificates the operating system trusts, as DER bytes ready for
-[`DerReader`](/docs/stdlib/data/#der). Parsing them is X.509's job.
+[`DerReader`](/docs/stdlib/data/#der). Parsing them is X.509's job. Each call reads the store; TLS connections that trust the system
+roots share one read per process ([`TlsClientOptions`](/docs/stdlib/network/#tlsclientoptions)).
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|

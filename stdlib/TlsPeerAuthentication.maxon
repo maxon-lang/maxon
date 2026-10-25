@@ -22,21 +22,21 @@ module union TlsPeerRefusal
 end 'TlsPeerRefusal'
 
 module type TlsX509Peer implements TlsPeerAuthenticator
-	module var roots as ByteArrays
+	module let anchors as X509RootPool
 	module var now as UnixSeconds
 	module var purpose as X509Purpose
 	module var refusal as TlsPeerRefusal
 
 	module static function create(roots ByteArrays, now UnixSeconds, purpose X509Purpose) returns TlsX509Peer
-		return Self{roots: roots, now: now, purpose: purpose, refusal: TlsPeerRefusal.none}
+		return Self{anchors: X509RootPool.create(roots), now: now, purpose: purpose, refusal: TlsPeerRefusal.none}
 	end 'create'
 
-	module static function system(purpose X509Purpose) returns TlsX509Peer throws TrustStoreError
-		return Self{roots: tlsCertificates(try TrustStore.systemRoots()), now: WallClock.nowUnixSeconds(), purpose: purpose, refusal: TlsPeerRefusal.none}
-	end 'system'
+	module static function trusting(anchors X509RootPool, now UnixSeconds, purpose X509Purpose) returns TlsX509Peer
+		return Self{anchors: anchors, now: now, purpose: purpose, refusal: TlsPeerRefusal.none}
+	end 'trusting'
 
 	module function verifyChain(leaf ByteArray, intermediates ByteArrays, host X509VerifyHost) throws TlsHandshakeError
-		_ = try X509.verify(leaf, intermediates: intermediates, roots: roots, host: host, now: now, purpose: purpose) otherwise (failure) 'refused'
+		_ = try X509.verifyUnder(leaf, intermediates: intermediates, anchors: anchors, host: host, now: now, purpose: purpose) otherwise (failure) 'refused'
 			refusal = TlsPeerRefusal.refused(failure)
 
 			throw tlsVerifyFailure(failure)

@@ -95,7 +95,7 @@ public typealias X509KeyUsages = Array with X509KeyUsage
 public typealias X509Attributes = Array with X509Attribute
 
 typealias X509Chain = Array with X509Candidate
-typealias X509Candidates = Array with X509Candidate
+module typealias X509Candidates = Array with X509Candidate
 typealias X509PartIndices = Array with ElementIndex
 typealias X509CheckedLinks = Array with X509CheckedLink
 typealias X509SignatureAttempts = int(0 to 100)
@@ -844,7 +844,7 @@ type X509FieldCursor
 	end 'isAtEnd'
 end 'X509FieldCursor'
 
-type X509Candidate
+module type X509Candidate
 	module var certificate as Certificate
 	module var der as ByteArray
 	module var isRoot as bool
@@ -880,8 +880,30 @@ type X509CheckedLink
 	end 'create'
 end 'X509CheckedLink'
 
+module type X509RootPool
+	let derRoots as ByteArrays
+	let parsedRoots as X509Candidates
+
+	module static function create(roots ByteArrays) returns X509RootPool
+		// A pool is shared between connections, which needs every record it reaches to have no owner
+		// outside it, so it parses from a copy of its own.
+		let owned = roots.clone()
+
+		return Self{derRoots: owned, parsedRoots: x509Pool(owned, isRoot: true, excluded: ByteArrays.create())}
+	end 'create'
+
+	module function der() returns ByteArrays
+		return derRoots
+	end 'der'
+
+	module function parsed() returns X509Candidates
+		return parsedRoots
+	end 'parsed'
+end 'X509RootPool'
+
 type X509PathSearch
-	var pool as X509Candidates
+	let roots as X509Candidates
+	let intermediates as X509Candidates
 	var host as X509Host
 	var purpose as X509Purpose
 	var now as UnixSeconds
@@ -891,8 +913,8 @@ type X509PathSearch
 	var attempts = 0 as X509SignatureAttempts
 	var checkedLinks = X509CheckedLinks.create()
 
-	static function create(pool X509Candidates, host X509Host, purpose X509Purpose, now UnixSeconds) returns X509PathSearch
-		return X509PathSearch{pool: pool, host: host, purpose: purpose, now: now}
+	static function create(roots X509Candidates, intermediates X509Candidates, host X509Host, purpose X509Purpose, now UnixSeconds) returns X509PathSearch
+		return X509PathSearch{roots: roots, intermediates: intermediates, host: host, purpose: purpose, now: now}
 	end 'create'
 
 	function run(leaf X509Candidate) returns ByteArrays throws X509VerifyError
@@ -916,6 +938,16 @@ type X509PathSearch
 			return false
 		end 'longest'
 
+		let viaRoot = try searchAmong(chain, pool: roots)
+
+		if viaRoot 'found'
+			return true
+		end 'found'
+
+		return try searchAmong(chain, pool: intermediates)
+	end 'search'
+
+	function searchAmong(chain X509Chain, pool X509Candidates) returns bool throws X509VerifyError
 		for candidate in pool 'eachCandidate'
 			let found = try extend(chain, candidate: candidate)
 
@@ -925,7 +957,7 @@ type X509PathSearch
 		end 'eachCandidate'
 
 		return false
-	end 'search'
+	end 'searchAmong'
 
 	function extend(chain X509Chain, candidate X509Candidate) returns bool throws X509VerifyError
 		let child = try chain.get(chain.count() - 1) otherwise panic("a chain holds at least the leaf")
@@ -940,7 +972,7 @@ type X509PathSearch
 
 		attempts = attempts + 1
 		var longer = chain.clone()
-		longer.push(candidate)
+		longer.push(candidate.clone())
 
 		if candidate.isRoot 'complete'
 			return accept(longer)
@@ -1041,6 +1073,10 @@ public type X509
 	/// Candidate chains are searched depth first, roots before intermediates, each in the order given; the
 	/// first that passes every check is returned, and when none does, the first candidate's error is thrown.
 	public static function verify(leaf ByteArray, intermediates ByteArrays, roots ByteArrays, host X509VerifyHost, now UnixSeconds, purpose X509Purpose = X509Purpose.serverAuth) returns ByteArrays throws X509VerifyError
+		return try verifyUnder(leaf, intermediates: intermediates, anchors: X509RootPool.create(roots), host: host, now: now, purpose: purpose)
+	end 'verify'
+
+	module static function verifyUnder(leaf ByteArray, intermediates ByteArrays, anchors X509RootPool, host X509VerifyHost, now UnixSeconds, purpose X509Purpose) returns ByteArrays throws X509VerifyError
 		let target = try x509PeerHost(host, purpose: purpose)
 
 		let certificate = try X509.parse(leaf) otherwise (error) 'unparsed'
@@ -1061,16 +1097,15 @@ public type X509
 			throw X509VerifyError.hostnameMismatch
 		end 'otherHost'
 
-		if roots.contains(leaf) 'trustedLeaf'
+		if anchors.der().contains(leaf) 'trustedLeaf'
 			return ByteArrays from [leaf]
 		end 'trustedLeaf'
 
-		var pool = x509Pool(roots, isRoot: true, excluded: ByteArrays.create())
-		pool.append(x509Pool(intermediates, isRoot: false, excluded: roots))
-		var search = X509PathSearch.create(pool, host: target, purpose: purpose, now: now)
+		let candidates = x509Pool(intermediates, isRoot: false, excluded: anchors.der())
+		var search = X509PathSearch.create(anchors.parsed(), intermediates: candidates, host: target, purpose: purpose, now: now)
 
 		return try search.run(X509Candidate.create(certificate, der: leaf, isRoot: false))
-	end 'verify'
+	end 'verifyUnder'
 end 'X509'
 
 function x509Tag(element ByteArray) returns Byte

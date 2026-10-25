@@ -2412,7 +2412,9 @@ option held. A configuration that no handshake could use is refused where it is 
 | `setIdentity(identity TlsIdentity)` | — | The certificate chain and key to present when the server asks for a client certificate. |
 | `setVerificationTime(seconds UnixSeconds)` | — | The Unix time certificates are checked at, in place of the clock. |
 
-When the system roots cannot be read, `connect` throws `trustStoreUnavailable` after the connection was made.
+The system roots are read once per process, by the first connection that trusts them, and every later
+connection uses that read. When they cannot be read, `connect` throws `trustStoreUnavailable` after the connection
+was made, and the failed read is kept: every later connection that trusts the system roots throws the same.
 
 ```maxon
 function main() returns ExitCode
@@ -4513,7 +4515,8 @@ It prints a number from 1 to 6.
 ## TrustStore
 
 `TrustStore` reads the root certificates the operating system trusts, as DER bytes ready for
-[`DerReader`](#der). Parsing them is X.509's job.
+[`DerReader`](#der). Parsing them is X.509's job. Each call reads the store; TLS connections that trust the system
+roots share one read per process ([`TlsClientOptions`](#tlsclientoptions)).
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
