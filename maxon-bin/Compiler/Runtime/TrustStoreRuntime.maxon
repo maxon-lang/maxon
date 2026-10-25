@@ -33,11 +33,10 @@ let TrustStoreRootNameSlot = 0 as SpillSlot
 let TrustStoreRootTerminatorSlot = 1 as SpillSlot
 let TrustStoreRootFrameBytes = 16
 let TrustStoreScratchSlot = 0 as SpillSlot
-let TrustStoreOpenFrameBytes = 48
 let TrustStoreSettingsFrameBytes = 16
 let TrustStoreOutOffset = 0
 let TrustStoreNumberOffset = 8
-let TrustStoreSymbolNameOffset = 8
+let TrustStoreKeyNameOffset = TrustStoreOutOffset + WordBytes
 
 let TrustStoreRootNameUtf16 = 0x0054004F004F0052
 let TrustStoreNoContext = 0
@@ -73,22 +72,77 @@ let WordBytes = 8
 let TrustStoreByteRadix = 256
 
 // The macOS store is a raw block: the three `CFArrayRef`s that `SecTrustSettingsCopyCertificates`
-// answered (system, admin, user; 0 for a domain that answered nothing), their counts, then the five
-// constants `__trust_ssl_result` compares against. `__trust_close` releases whichever arrays are set.
+// answered (system, admin, user; 0 for a domain that answered nothing), their counts, then one word
+// per `TrustStoreKey`. `__trust_close` releases whichever arrays are set and the keys the store
+// owns.
 let TrustStoreArraysOffset = 0
-let TrustStoreCountsOffset = 24
-let TrustStoreKeyPolicyOffset = 48
-let TrustStoreKeyPolicyStringOffset = 56
-let TrustStoreKeyResultOffset = 64
-let TrustStoreKeyPolicyOidOffset = 72
-let TrustStoreKeyAppleSslOffset = 80
-let TrustStoreHeaderBytes = 88
+let TrustStoreCountsOffset = TrustStoreArraysOffset + SecDomainCount * WordBytes
+let TrustStoreKeysOffset = TrustStoreCountsOffset + SecDomainCount * WordBytes
+let CfStringEncodingUtf8 = 0x08000100
 
-let TrustStoreKeyPolicySymbol = b"kSecTrustSettingsPolicy"
-let TrustStoreKeyPolicyStringSymbol = b"kSecTrustSettingsPolicyString"
-let TrustStoreKeyResultSymbol = b"kSecTrustSettingsResult"
-let TrustStoreKeyPolicyOidSymbol = b"kSecPolicyOid"
-let TrustStoreKeyAppleSslSymbol = b"kSecPolicyAppleSSL"
+let TrustStoreKeyPolicyName = b"kSecTrustSettingsPolicy"
+let TrustStoreKeyPolicyStringName = b"kSecTrustSettingsPolicyString"
+let TrustStoreKeyResultName = b"kSecTrustSettingsResult"
+let TrustStoreKeyPolicyOidName = b"kSecPolicyOid"
+let TrustStoreKeyAppleSslName = b"kSecPolicyAppleSSL"
+
+enum TrustStoreKey
+	policy
+	policyString
+	result
+	policyOid
+	appleSsl
+end 'TrustStoreKey'
+
+function trustStoreKeyName(key TrustStoreKey) returns ByteArray
+	return match key 'name'
+		policy gives TrustStoreKeyPolicyName
+		policyString gives TrustStoreKeyPolicyStringName
+		result gives TrustStoreKeyResultName
+		policyOid gives TrustStoreKeyPolicyOidName
+		appleSsl gives TrustStoreKeyAppleSslName
+	end 'name'
+end 'trustStoreKeyName'
+
+// The three trust-settings keys are `CFSTR` macros with no exported symbol, so `dlsym` answers null
+// for them: open creates them, the store owns them, and they match because `CFDictionary` compares
+// keys with `CFEqual`. The two policy keys are exported globals the store borrows and must never
+// release.
+function trustStoreKeyIsCreated(key TrustStoreKey) returns bool
+	return match key 'created'
+		policy or
+		policyString or
+		result gives true
+		policyOid or
+		appleSsl gives false
+	end 'created'
+end 'trustStoreKeyIsCreated'
+
+function trustStoreKeyOffset(key TrustStoreKey) returns ByteOffset
+	return trustStoreWordOffset(TrustStoreKeysOffset, word: key.ordinal as FullRangeInt)
+end 'trustStoreKeyOffset'
+
+function trustStoreHeaderWords() returns FullRangeInt
+	return (TrustStoreKeysOffset / WordBytes + TrustStoreKey.allCases.count()) as FullRangeInt
+end 'trustStoreHeaderWords'
+
+function trustStoreKeyNameWords(key TrustStoreKey) returns FullRangeInt
+	return ((trustStoreKeyName(key).count() + WordBytes) / WordBytes) as FullRangeInt
+end 'trustStoreKeyNameWords'
+
+function trustStoreOpenFrameBytes() returns StackSize
+	var longest = 0 as FullRangeInt
+
+	for key in TrustStoreKey.allCases 'eachKey'
+		let words = trustStoreKeyNameWords(key)
+
+		if words > longest 'longer'
+			longest = words
+		end 'longer'
+	end 'eachKey'
+
+	return trustStoreWordOffset(TrustStoreKeyNameOffset, word: longest) as StackSize
+end 'trustStoreOpenFrameBytes'
 
 export function isTrustStoreRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: TrustStoreRuntimePrefix)
@@ -138,6 +192,15 @@ function emitFreshBytesRecord(module StdModule, func IrFunction, cur IrBlock, re
 
 	return copied
 end 'emitFreshBytesRecord'
+
+function emitTrustStoreReleaseSlot(module StdModule, func IrFunction, cur IrBlock, store ValueId, offset ByteOffset, ids ValueMinter) returns IrBlock
+	var next = module.addBlock(func, label: b"tsclosed", heat: BlockHeat.normal)
+
+	let held = emitLoadField(module, block: cur, record: store, offset: offset, ids: ids)
+	emitTrustStoreReleaseIfHeld(module, func: func, cur: cur, held: held, done: next, label: b"tsreleaseslot", ids: ids)
+
+	return next
+end 'emitTrustStoreReleaseSlot'
 
 function buildWindowsTrustStoreClose(module StdModule)
 	var func = IrFunction.createFromStd(TrustStoreCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
@@ -267,12 +330,12 @@ function trustStoreWordOffset(base FullRangeInt, word FullRangeInt) returns Byte
 	return (base + word * WordBytes) as ByteOffset
 end 'trustStoreWordOffset'
 
-function trustStoreNameWord(symbol ByteArray, word FullRangeInt) returns FullRangeInt
+function trustStoreNameWord(name ByteArray, word FullRangeInt) returns FullRangeInt
 	var packed = 0 as FullRangeInt
 
 	for step in 0 upto WordBytes 'eachByte'
 		let at = word * WordBytes + (WordBytes - 1 - step)
-		let octet = try symbol.get(at as ElementIndex) otherwise 0
+		let octet = try name.get(at as ElementIndex) otherwise 0
 
 		packed = packed * TrustStoreByteRadix + (octet as FullRangeInt)
 	end 'eachByte'
@@ -313,29 +376,67 @@ function emitTrustStoreCopyDomain(module StdModule, func IrFunction, cur IrBlock
 	return next
 end 'emitTrustStoreCopyDomain'
 
-// The Security constants are data symbols and this tier only calls imports, so `dlsym` resolves each
-// name to the address of its `CFStringRef` and the block keeps the string. An unresolved or null
-// constant leaves the store unreadable: a null key handed to a `CFDictionary` crashes.
-function emitTrustStoreLoadSymbol(module StdModule, func IrFunction, cur IrBlock, header ValueId, scratch ValueId, symbol ByteArray, offset FullRangeInt, failed IrBlock, ids ValueMinter) returns IrBlock
-	var resolved = module.addBlock(func, label: b"tssymbol", heat: BlockHeat.normal)
-	var loaded = module.addBlock(func, label: b"tssymbolvalue", heat: BlockHeat.normal)
+function emitTrustStoreKeyName(module StdModule, block IrBlock, scratch ValueId, key TrustStoreKey, ids ValueMinter) returns ValueId
+	let name = trustStoreKeyName(key)
+	let nameAt = emitBin(module, block: block, a: scratch, b: emitConst(module, block: block, value: TrustStoreKeyNameOffset, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 
-	let nameAt = emitBin(module, block: cur, a: scratch, b: emitConst(module, block: cur, value: TrustStoreSymbolNameOffset, ids: ids), opcode: StdBinOpcode.add, ids: ids)
-
-	for word in 0 upto (((symbol.count() + WordBytes) shr 3) as FullRangeInt) 'eachWord'
-		emitStoreField(module, block: cur, record: nameAt, offset: trustStoreWordOffset(0, word: word), value: emitConst(module, block: cur, value: trustStoreNameWord(symbol, word: word), ids: ids))
+	for word in 0 upto trustStoreKeyNameWords(key) 'eachWord'
+		emitStoreField(module, block: block, record: nameAt, offset: trustStoreWordOffset(0, word: word), value: emitConst(module, block: block, value: trustStoreNameWord(name, word: word), ids: ids))
 	end 'eachWord'
+
+	return nameAt
+end 'emitTrustStoreKeyName'
+
+function emitTrustStoreCreateKey(module StdModule, block IrBlock, nameAt ValueId, produced IrBlock, ids ValueMinter)
+	let allocator = emitConst(module, block: block, value: TrustStoreNoContext, ids: ids)
+	let encoding = emitConst(module, block: block, value: CfStringEncodingUtf8, ids: ids)
+	let string = emitTrustStoreCall3(module, block: block, service: HostProcessCall.cfStringCreate, a0: allocator, a1: nameAt, a2: encoding, ids: ids)
+	emitBranchCarrying(module, from: block, to: produced, value: string)
+end 'emitTrustStoreCreateKey'
+
+function emitTrustStoreResolveKey(module StdModule, func IrFunction, cur IrBlock, nameAt ValueId, produced IrBlock, failed IrBlock, ids ValueMinter)
+	var resolved = module.addBlock(func, label: b"tssymbol", heat: BlockHeat.normal)
 
 	let defaultImage = emitConst(module, block: cur, value: RtldDefault, ids: ids)
 	let address = emitTrustStoreCall(module, block: cur, service: HostProcessCall.lookupSymbol, a0: defaultImage, a1: nameAt, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: address, pred: StdCmpPred.ne, against: TrustStoreNoContext, whenTrue: resolved, whenFalse: failed, ids: ids)
 
 	let value = emitLoadField(module, block: resolved, record: address, offset: 0, ids: ids)
-	emitStoreField(module, block: resolved, record: header, offset: offset as ByteOffset, value: value)
-	emitBranchOnCompare(module, block: resolved, value: value, pred: StdCmpPred.ne, against: TrustStoreNoContext, whenTrue: loaded, whenFalse: failed, ids: ids)
+	emitBranchCarrying(module, from: resolved, to: produced, value: value)
+end 'emitTrustStoreResolveKey'
 
-	return loaded
-end 'emitTrustStoreLoadSymbol'
+// A null key handed to a `CFDictionary` crashes, so a key that did not resolve fails the open.
+function emitTrustStoreLoadKey(module StdModule, func IrFunction, cur IrBlock, header ValueId, scratch ValueId, key TrustStoreKey, failed IrBlock, ids ValueMinter) returns IrBlock
+	var produced = module.addBlock(func, label: b"tskey", heat: BlockHeat.normal)
+	var stored = module.addBlock(func, label: b"tskeystored", heat: BlockHeat.normal)
+
+	let value = ids.mint()
+	produced.blockArgs.push(IrBlockArg.create(value, argType: StdType.i64))
+
+	let nameAt = emitTrustStoreKeyName(module, block: cur, scratch: scratch, key: key, ids: ids)
+
+	if trustStoreKeyIsCreated(key) 'created'
+		emitTrustStoreCreateKey(module, block: cur, nameAt: nameAt, produced: produced, ids: ids)
+	end 'created' else 'exported'
+		emitTrustStoreResolveKey(module, func: func, cur: cur, nameAt: nameAt, produced: produced, failed: failed, ids: ids)
+	end 'exported'
+
+	emitStoreField(module, block: produced, record: header, offset: trustStoreKeyOffset(key), value: value)
+	emitBranchOnCompare(module, block: produced, value: value, pred: StdCmpPred.ne, against: TrustStoreNoContext, whenTrue: stored, whenFalse: failed, ids: ids)
+
+	return stored
+end 'emitTrustStoreLoadKey'
+
+// `__mm_alloc` does not zero, and a domain answering errSecNoTrustSettings writes neither its array
+// nor its count, so every slot is cleared before the counts are summed or a failed open's
+// `__trust_close` releases what is set.
+function emitTrustStoreClearHeader(module StdModule, block IrBlock, header ValueId, ids ValueMinter)
+	let cleared = emitConst(module, block: block, value: TrustStoreNoContext, ids: ids)
+
+	for word in 0 upto trustStoreHeaderWords() 'eachWord'
+		emitStoreField(module, block: block, record: header, offset: trustStoreWordOffset(0, word: word), value: cleared)
+	end 'eachWord'
+end 'emitTrustStoreClearHeader'
 
 function buildMacosTrustStoreOpen(module StdModule)
 	var func = IrFunction.createFromStd(TrustStoreOpenName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
@@ -345,10 +446,12 @@ function buildMacosTrustStoreOpen(module StdModule)
 	var failed = module.addBlock(func, label: b"tsfailed", heat: BlockHeat.cold)
 	var opened = module.addBlock(func, label: b"tsopened", heat: BlockHeat.normal)
 
-	func.stackSize = TrustStoreOpenFrameBytes
+	func.stackSize = trustStoreOpenFrameBytes()
 	let scratch = ids.mint()
 	module.appendOp(entry, op: StdOp.stackRecordAddr(scratch, slot: TrustStoreScratchSlot))
-	let header = emitRawAlloc(module, block: entry, byteCount: emitConst(module, block: entry, value: TrustStoreHeaderBytes, ids: ids), ids: ids)
+	let header = emitRawAlloc(module, block: entry, byteCount: emitConst(module, block: entry, value: trustStoreWordOffset(0, word: trustStoreHeaderWords()) as FullRangeInt, ids: ids), ids: ids)
+
+	emitTrustStoreClearHeader(module, block: entry, header: header, ids: ids)
 
 	var cur = entry
 
@@ -356,11 +459,9 @@ function buildMacosTrustStoreOpen(module StdModule)
 		cur = emitTrustStoreCopyDomain(module, func: func, cur: cur, header: header, scratch: scratch, position: position, ids: ids)
 	end 'eachDomain'
 
-	cur = emitTrustStoreLoadSymbol(module, func: func, cur: cur, header: header, scratch: scratch, symbol: TrustStoreKeyPolicySymbol, offset: TrustStoreKeyPolicyOffset, failed: failed, ids: ids)
-	cur = emitTrustStoreLoadSymbol(module, func: func, cur: cur, header: header, scratch: scratch, symbol: TrustStoreKeyPolicyStringSymbol, offset: TrustStoreKeyPolicyStringOffset, failed: failed, ids: ids)
-	cur = emitTrustStoreLoadSymbol(module, func: func, cur: cur, header: header, scratch: scratch, symbol: TrustStoreKeyResultSymbol, offset: TrustStoreKeyResultOffset, failed: failed, ids: ids)
-	cur = emitTrustStoreLoadSymbol(module, func: func, cur: cur, header: header, scratch: scratch, symbol: TrustStoreKeyPolicyOidSymbol, offset: TrustStoreKeyPolicyOidOffset, failed: failed, ids: ids)
-	cur = emitTrustStoreLoadSymbol(module, func: func, cur: cur, header: header, scratch: scratch, symbol: TrustStoreKeyAppleSslSymbol, offset: TrustStoreKeyAppleSslOffset, failed: failed, ids: ids)
+	for key in TrustStoreKey.allCases 'eachKey'
+		cur = emitTrustStoreLoadKey(module, func: func, cur: cur, header: header, scratch: scratch, key: key, failed: failed, ids: ids)
+	end 'eachKey'
 
 	let total = emitTrustStoreTotal(module, block: cur, store: header, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: total, pred: StdCmpPred.eq, against: 0, whenTrue: failed, whenFalse: opened, ids: ids)
@@ -548,26 +649,23 @@ function buildTrustSslPolicy(module StdModule)
 	emitBranchOnCompare(module, block: named, value: properties, pred: StdCmpPred.ne, against: TrustStoreNoContext, whenTrue: described, whenFalse: noOid, ids: ids)
 
 	emitStoreField(module, block: described, record: scratch, offset: TrustStoreOutOffset, value: emitConst(module, block: described, value: TrustStoreNoContext, ids: ids))
-	let oidKey = emitLoadField(module, block: described, record: store, offset: TrustStoreKeyPolicyOidOffset as ByteOffset, ids: ids)
+	let oidKey = emitLoadField(module, block: described, record: store, offset: trustStoreKeyOffset(TrustStoreKey.policyOid), ids: ids)
 	let present = emitTrustStoreCall3(module, block: described, service: HostProcessCall.cfDictionaryGetValueIfPresent, a0: properties, a1: oidKey, a2: scratch, ids: ids)
 	emitBranchOnCompare(module, block: described, value: emitTrustStoreBoolean(module, block: described, raw: present, ids: ids), pred: StdCmpPred.ne, against: TrustStoreNoContext, whenTrue: hasOid, whenFalse: absentOid, ids: ids)
 
 	emitTrustStoreRelease(module, block: absentOid, object: properties, ids: ids)
 	let absentFlag = emitConst(module, block: absentOid, value: 0, ids: ids)
-	module.setTerminator(absentOid, op: StdOp.branch(finish.id))
-	absentOid.branchEdges.push(BranchEdge.create(finish.id, argIds: argsOf(absentFlag)))
+	emitBranchCarrying(module, from: absentOid, to: finish, value: absentFlag)
 
 	let oidValue = emitLoadField(module, block: hasOid, record: scratch, offset: TrustStoreOutOffset, ids: ids)
-	let sslValue = emitLoadField(module, block: hasOid, record: store, offset: TrustStoreKeyAppleSslOffset as ByteOffset, ids: ids)
+	let sslValue = emitLoadField(module, block: hasOid, record: store, offset: trustStoreKeyOffset(TrustStoreKey.appleSsl), ids: ids)
 	let equal = emitTrustStoreCall(module, block: hasOid, service: HostProcessCall.cfEqual, a0: oidValue, a1: sslValue, ids: ids)
 	let equalFlag = emitTrustStoreBoolean(module, block: hasOid, raw: equal, ids: ids)
 	emitTrustStoreRelease(module, block: hasOid, object: properties, ids: ids)
-	module.setTerminator(hasOid, op: StdOp.branch(finish.id))
-	hasOid.branchEdges.push(BranchEdge.create(finish.id, argIds: argsOf(equalFlag)))
+	emitBranchCarrying(module, from: hasOid, to: finish, value: equalFlag)
 
 	let notSsl = emitConst(module, block: noOid, value: 0, ids: ids)
-	module.setTerminator(noOid, op: StdOp.branch(finish.id))
-	noOid.branchEdges.push(BranchEdge.create(finish.id, argIds: argsOf(notSsl)))
+	emitBranchCarrying(module, from: noOid, to: finish, value: notSsl)
 
 	let flag = ids.mint()
 	finish.blockArgs.push(IrBlockArg.create(flag, argType: StdType.i64))
@@ -658,7 +756,7 @@ function buildTrustSslResult(module StdModule)
 
 	let setting = emitTrustStoreCall(module, block: body, service: HostProcessCall.cfArrayElement, a0: settings, a1: member, ids: ids)
 	emitStoreField(module, block: body, record: scratch, offset: TrustStoreOutOffset, value: emitConst(module, block: body, value: TrustStoreNoContext, ids: ids))
-	let policyKey = emitLoadField(module, block: body, record: store, offset: TrustStoreKeyPolicyOffset as ByteOffset, ids: ids)
+	let policyKey = emitLoadField(module, block: body, record: store, offset: trustStoreKeyOffset(TrustStoreKey.policy), ids: ids)
 	let policyPresent = emitTrustStoreCall3(module, block: body, service: HostProcessCall.cfDictionaryGetValueIfPresent, a0: setting, a1: policyKey, a2: scratch, ids: ids)
 	emitBranchOnCompare(module, block: body, value: emitTrustStoreBoolean(module, block: body, raw: policyPresent, ids: ids), pred: StdCmpPred.ne, against: TrustStoreNoContext, whenTrue: constrained, whenFalse: checkPolicyString, ids: ids)
 
@@ -667,13 +765,13 @@ function buildTrustSslResult(module StdModule)
 	emitBranchOnCompare(module, block: constrained, value: isSsl, pred: StdCmpPred.ne, against: 0, whenTrue: checkPolicyString, whenFalse: step, ids: ids)
 	constrained.branchEdges.push(BranchEdge.create(step.id, argIds: argsOf(latest)))
 
-	let policyStringKey = emitLoadField(module, block: checkPolicyString, record: store, offset: TrustStoreKeyPolicyStringOffset as ByteOffset, ids: ids)
+	let policyStringKey = emitLoadField(module, block: checkPolicyString, record: store, offset: trustStoreKeyOffset(TrustStoreKey.policyString), ids: ids)
 	let hostnameBound = emitTrustStoreCall(module, block: checkPolicyString, service: HostProcessCall.cfDictionaryContainsKey, a0: setting, a1: policyStringKey, ids: ids)
 	emitBranchOnCompare(module, block: checkPolicyString, value: emitTrustStoreBoolean(module, block: checkPolicyString, raw: hostnameBound, ids: ids), pred: StdCmpPred.ne, against: TrustStoreNoContext, whenTrue: step, whenFalse: readResult, ids: ids)
 	checkPolicyString.branchEdges.push(BranchEdge.create(step.id, argIds: argsOf(latest)))
 
 	emitStoreField(module, block: readResult, record: scratch, offset: TrustStoreOutOffset, value: emitConst(module, block: readResult, value: TrustStoreNoContext, ids: ids))
-	let resultKey = emitLoadField(module, block: readResult, record: store, offset: TrustStoreKeyResultOffset as ByteOffset, ids: ids)
+	let resultKey = emitLoadField(module, block: readResult, record: store, offset: trustStoreKeyOffset(TrustStoreKey.result), ids: ids)
 	let resultPresent = emitTrustStoreCall3(module, block: readResult, service: HostProcessCall.cfDictionaryGetValueIfPresent, a0: setting, a1: resultKey, a2: scratch, ids: ids)
 	emitBranchOnCompare(module, block: readResult, value: emitTrustStoreBoolean(module, block: readResult, raw: resultPresent, ids: ids), pred: StdCmpPred.ne, against: TrustStoreNoContext, whenTrue: numbered, whenFalse: defaulted, ids: ids)
 
@@ -684,12 +782,10 @@ function buildTrustSslResult(module StdModule)
 	_ = emitTrustStoreCall3(module, block: numbered, service: HostProcessCall.cfNumberGetValue, a0: number, a1: numberType, a2: numberAt, ids: ids)
 	let wide = emitLoadField(module, block: numbered, record: scratch, offset: TrustStoreNumberOffset as ByteOffset, ids: ids)
 	let narrow = emitBin(module, block: numbered, a: wide, b: emitConst(module, block: numbered, value: TrustStoreLowDwordMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
-	module.setTerminator(numbered, op: StdOp.branch(decided.id))
-	numbered.branchEdges.push(BranchEdge.create(decided.id, argIds: argsOf(narrow)))
+	emitBranchCarrying(module, from: numbered, to: decided, value: narrow)
 
 	let assumed = emitConst(module, block: defaulted, value: SecResultTrustRoot, ids: ids)
-	module.setTerminator(defaulted, op: StdOp.branch(decided.id))
-	defaulted.branchEdges.push(BranchEdge.create(decided.id, argIds: argsOf(assumed)))
+	emitBranchCarrying(module, from: defaulted, to: decided, value: assumed)
 
 	let result = ids.mint()
 	decided.blockArgs.push(IrBlockArg.create(result, argType: StdType.i64))
@@ -710,8 +806,7 @@ function buildTrustSslResult(module StdModule)
 	finished.branchEdges.push(BranchEdge.create(walkExit.id, argIds: argsOf(latest)))
 
 	let fallback = emitConst(module, block: unmatched, value: SecResultUnspecified, ids: ids)
-	module.setTerminator(unmatched, op: StdOp.branch(walkExit.id))
-	unmatched.branchEdges.push(BranchEdge.create(walkExit.id, argIds: argsOf(fallback)))
+	emitBranchCarrying(module, from: unmatched, to: walkExit, value: fallback)
 
 	let answer = ids.mint()
 	walkExit.blockArgs.push(IrBlockArg.create(answer, argType: StdType.i64))
@@ -735,16 +830,14 @@ function buildMacosTrustStoreClose(module StdModule)
 	var cur = entry
 
 	for position in 0 upto SecDomainCount 'eachArray'
-		var held = module.addBlock(func, label: "tsclosearray{position}".toByteArray(), heat: BlockHeat.normal)
-		var next = module.addBlock(func, label: "tsclosed{position}".toByteArray(), heat: BlockHeat.normal)
-
-		let array = emitLoadField(module, block: cur, record: store, offset: trustStoreWordOffset(TrustStoreArraysOffset, word: position), ids: ids)
-		emitBranchOnCompare(module, block: cur, value: array, pred: StdCmpPred.ne, against: TrustStoreNoContext, whenTrue: held, whenFalse: next, ids: ids)
-		emitTrustStoreRelease(module, block: held, object: array, ids: ids)
-		module.setTerminator(held, op: StdOp.branch(next.id))
-
-		cur = next
+		cur = emitTrustStoreReleaseSlot(module, func: func, cur: cur, store: store, offset: trustStoreWordOffset(TrustStoreArraysOffset, word: position), ids: ids)
 	end 'eachArray'
+
+	for key in TrustStoreKey.allCases 'eachKey'
+		if trustStoreKeyIsCreated(key) 'created'
+			cur = emitTrustStoreReleaseSlot(module, func: func, cur: cur, store: store, offset: trustStoreKeyOffset(key), ids: ids)
+		end 'created'
+	end 'eachKey'
 
 	emitRawFree(module, block: cur, ptr: store, ids: ids)
 	module.setTerminator(cur, op: StdOp.retVoid)

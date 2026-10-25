@@ -376,8 +376,8 @@ export enum OsImportSlot
 	machVmDeallocate
 
 	// The slots only an image that reads the trust store links: the Security and CoreFoundation calls
-	// and `dlsym`, which resolves the Security constants. The Mach-O writer drops them from the end of
-	// the GOT in any other image, so a slot added after them fails the build.
+	// and `dlsym`, which resolves the exported Security constants. The Mach-O writer drops them from
+	// the end of the GOT in any other image, so a slot added after them fails the build.
 	dlsym
 	secTrustSettingsCopyCertificates
 	secTrustSettingsCopyTrustSettings
@@ -392,6 +392,7 @@ export enum OsImportSlot
 	cfDictionaryContainsKey
 	cfNumberGetValue
 	cfEqual
+	cfStringCreateWithCString
 end 'OsImportSlot'
 
 export enum OsImportDylib
@@ -414,7 +415,8 @@ export function osImportDylibOf(slot OsImportSlot) returns OsImportDylib
 		cfDictionaryGetValueIfPresent or
 		cfDictionaryContainsKey or
 		cfNumberGetValue or
-		cfEqual gives OsImportDylib.coreFoundation
+		cfEqual or
+		cfStringCreateWithCString gives OsImportDylib.coreFoundation
 		exit or
 		write or
 		mmap or
@@ -560,6 +562,7 @@ export function osImportAnswerOf(slot OsImportSlot) returns ImportAnswer
 		recv or
 		pthreadSelf or
 		secPolicyCopyProperties or
+		cfStringCreateWithCString or
 		dlsym gives ImportAnswer.fullWord
 		munmap or
 		madvise or
