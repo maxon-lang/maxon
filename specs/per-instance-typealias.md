@@ -740,6 +740,517 @@ end 'main'
 error E3005: <fragment>:38:11: argument type mismatch for 't': expected 'WB.Idx', got 'WA.Idx'
 ```
 
+## A type has ONE member of each name, however many `extension` bodies write it
+
+An `extension` body's nested `typealias` is a member of every type the extension reaches, keyed
+`<Type>.<member>` for the whole program. A second `extension` declaring the same member for the same type
+therefore declares a second meaning for ONE key, and nothing could tell the two apart at a reader: the
+fold keeps whichever site it reached last, and every signature built from the other site's spelling
+silently means the survivor's instance. Two declarations of one name are ambiguous, whether the instances
+differ or not, so the later one is refused at its name. The earlier one is the one whose file sorts first,
+byte by byte, and then the one written first in the file.
+
+### Two extensions in two files declare different instances of one member
+
+<!-- test: error.two-extensions-declare-different-instances-of-one-member -->
+`Box implements Seq`, and `a.maxon`'s and `b.maxon`'s `extension Seq` each declare `Items` — an `Array`
+and a `List`. `Box.Items` has no single meaning, and a reader of it was handed whichever site folded last.
+```maxon
+// --- file: seq.maxon
+export typealias Digit = int(0 to 9)
+
+export interface Seq uses Item
+	function first() returns Item
+end 'Seq'
+
+// --- file: box.maxon
+export type Box implements Seq with Digit
+	export var n as Digit
+
+	export static function create(n Digit) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function first() returns Digit
+		return self.n
+	end 'first'
+end 'Box'
+
+// --- file: a.maxon
+export extension Seq
+	export typealias Items = Array with Item
+
+	export function all() returns Items
+		return Items.create()
+	end 'all'
+end 'Seq'
+
+// --- file: b.maxon
+export extension Seq
+	export typealias Items = List with Item
+
+	export function listed() returns Items
+		return Items.create()
+	end 'listed'
+end 'Seq'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let box = Box.create(3)
+	let all = box.all()
+	let listed = box.listed()
+	return (all.count() + listed.count()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3061: <fragment>:33:19: Duplicate typealias 'Items': `Box.Items` is already declared by an `extension` in a.maxon
+```
+
+### Two extensions in two files declare the SAME instance of one member
+
+<!-- test: error.two-extensions-declare-the-same-instance-of-one-member -->
+The same program with both sites declaring `Array with Item`. The two spellings denote one instance, but
+each declaration is its own, and a type has one member of each name: the duplicate is refused exactly as
+a different instance is.
+```maxon
+// --- file: seq.maxon
+export typealias Digit = int(0 to 9)
+
+export interface Seq uses Item
+	function first() returns Item
+end 'Seq'
+
+// --- file: box.maxon
+export type Box implements Seq with Digit
+	export var n as Digit
+
+	export static function create(n Digit) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function first() returns Digit
+		return self.n
+	end 'first'
+end 'Box'
+
+// --- file: a.maxon
+export extension Seq
+	export typealias Items = Array with Item
+
+	export function all() returns Items
+		return Items.create()
+	end 'all'
+end 'Seq'
+
+// --- file: b.maxon
+export extension Seq
+	export typealias Items = Array with Item
+
+	export function again() returns Items
+		return Items.create()
+	end 'again'
+end 'Seq'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let box = Box.create(3)
+	let all = box.all()
+	let again = box.again()
+	return (all.count() + again.count()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3061: <fragment>:33:19: Duplicate typealias 'Items': `Box.Items` is already declared by an `extension` in a.maxon
+```
+
+### Two extensions in ONE file declare one member
+
+<!-- test: error.two-extensions-in-one-file-declare-one-member -->
+The refusal does not depend on the sites being in different files: the later `extension Seq` is the
+duplicate, and the message names the file the earlier one is in, which is this one.
+```maxon
+// --- file: seq.maxon
+export typealias Digit = int(0 to 9)
+
+export interface Seq uses Item
+	function first() returns Item
+end 'Seq'
+
+// --- file: box.maxon
+export type Box implements Seq with Digit
+	export var n as Digit
+
+	export static function create(n Digit) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function first() returns Digit
+		return self.n
+	end 'first'
+end 'Box'
+
+// --- file: ext.maxon
+export extension Seq
+	export typealias Items = Array with Item
+
+	export function all() returns Items
+		return Items.create()
+	end 'all'
+end 'Seq'
+
+export extension Seq
+	export typealias Items = List with Item
+
+	export function listed() returns Items
+		return Items.create()
+	end 'listed'
+end 'Seq'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let box = Box.create(3)
+	let all = box.all()
+	let listed = box.listed()
+	return (all.count() + listed.count()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3061: <fragment>:32:19: Duplicate typealias 'Items': `Box.Items` is already declared by an `extension` in ext.maxon
+```
+
+### One extension body declares a member twice
+
+<!-- test: error.one-extension-body-declares-a-member-twice -->
+```maxon
+// --- file: seq.maxon
+export typealias Digit = int(0 to 9)
+
+export interface Seq uses Item
+	function first() returns Item
+end 'Seq'
+
+// --- file: box.maxon
+export type Box implements Seq with Digit
+	export var n as Digit
+
+	export static function create(n Digit) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function first() returns Digit
+		return self.n
+	end 'first'
+end 'Box'
+
+// --- file: ext.maxon
+export extension Seq
+	export typealias Items = Array with Item
+	export typealias Items = List with Item
+
+	export function all() returns Items
+		return Items.create()
+	end 'all'
+end 'Seq'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let box = Box.create(3)
+	let all = box.all()
+	return all.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3061: <fragment>:25:19: Duplicate typealias 'Items': `Box.Items` is already declared by an `extension` in ext.maxon
+```
+
+### The refusal covers the ranged, function and tuple forms too
+
+<!-- test: error.two-extensions-declare-a-ranged-member -->
+A ranged `typealias Idx` is a different registry from the generic-instance forms above, and a
+type extension (`extension Holder`) reaches one type rather than every conformer of an interface.
+```maxon
+// --- file: holder.maxon
+export typealias Num = int(0 to 200)
+
+export type Holder
+	export var v as Num
+
+	export static function create(v Num) returns Holder
+		return Holder{v: v}
+	end 'create'
+end 'Holder'
+
+// --- file: a.maxon
+extension Holder
+	export typealias Idx = int(0 to 100)
+
+	export function fromA(i Idx) returns Num
+		return self.v + (i as Num)
+	end 'fromA'
+end 'Holder'
+
+// --- file: b.maxon
+extension Holder
+	export typealias Idx = int(0 to 50)
+
+	export function fromB(i Idx) returns Num
+		return self.v + (i as Num)
+	end 'fromB'
+end 'Holder'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let h = Holder.create(1)
+	return (h.fromA(3) + h.fromB(30)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3061: <fragment>:24:19: Duplicate typealias 'Idx': `Holder.Idx` is already declared by an `extension` in a.maxon
+```
+
+<!-- test: error.two-extensions-declare-a-function-member -->
+```maxon
+// --- file: holder.maxon
+export typealias Num = int(0 to 200)
+
+export type Holder
+	export var v as Num
+
+	export static function create(v Num) returns Holder
+		return Holder{v: v}
+	end 'create'
+end 'Holder'
+
+// --- file: a.maxon
+extension Holder
+	export typealias Step = function(Num) returns Num
+
+	export function fromA(step Step) returns Num
+		return step(self.v)
+	end 'fromA'
+end 'Holder'
+
+// --- file: b.maxon
+extension Holder
+	export typealias Step = function(Num, Num) returns Num
+
+	export function fromB(step Step) returns Num
+		return step(self.v, 1)
+	end 'fromB'
+end 'Holder'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let h = Holder.create(1)
+	return h.fromA(function(n) gives n) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3061: <fragment>:24:19: Duplicate typealias 'Step': `Holder.Step` is already declared by an `extension` in a.maxon
+```
+
+<!-- test: error.two-extensions-declare-a-tuple-member -->
+```maxon
+// --- file: holder.maxon
+export typealias Num = int(0 to 200)
+
+export type Holder
+	export var v as Num
+
+	export static function create(v Num) returns Holder
+		return Holder{v: v}
+	end 'create'
+end 'Holder'
+
+// --- file: a.maxon
+extension Holder
+	export typealias Pair = (Num, Num)
+
+	export function fromA() returns Pair
+		return (self.v, self.v)
+	end 'fromA'
+end 'Holder'
+
+// --- file: b.maxon
+extension Holder
+	export typealias Pair = (Num, String)
+
+	export function fromB() returns Pair
+		return (self.v, "b")
+	end 'fromB'
+end 'Holder'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let h = Holder.create(1)
+	let pair = h.fromA()
+	return pair.0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3061: <fragment>:24:19: Duplicate typealias 'Pair': `Holder.Pair` is already declared by an `extension` in a.maxon
+```
+
+### What the refusal leaves alone
+
+<!-- test: extensions-declare-members-of-different-names-and-conformers-keep-their-own -->
+Two `extension Seq` bodies declaring DIFFERENT members, and two conformers each receiving the same member
+through ONE extension: the key is `<Type>.<member>`, so neither is a duplicate.
+```maxon
+// --- file: seq.maxon
+export typealias Digit = int(0 to 9)
+
+export interface Seq uses Item
+	function first() returns Item
+end 'Seq'
+
+// --- file: box.maxon
+export type Box implements Seq with Digit
+	export var n as Digit
+
+	export static function create(n Digit) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function first() returns Digit
+		return self.n
+	end 'first'
+end 'Box'
+
+export type Crate implements Seq with Digit
+	export var n as Digit
+
+	export static function create(n Digit) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function first() returns Digit
+		return self.n
+	end 'first'
+end 'Crate'
+
+// --- file: a.maxon
+export extension Seq
+	export typealias Items = Array with Item
+
+	export function all() returns Items
+		return Items.create()
+	end 'all'
+end 'Seq'
+
+// --- file: b.maxon
+export extension Seq
+	export typealias Chain = List with Item
+
+	export function chained() returns Chain
+		return Chain.create()
+	end 'chained'
+end 'Seq'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let box = Box.create(3)
+	let crate = Crate.create(4)
+	var all = box.all()
+	all.push(box.first())
+	var more = crate.all()
+	more.push(crate.first())
+	var chain = crate.chained()
+	chain.append(crate.first())
+	return (all.count() + more.count() + chain.count()) as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: conditional-extensions-withheld-from-a-conformer-declare-one-member -->
+Two CONDITIONAL extensions declaring `Items`, each withheld from the conformer the other reaches: a
+withheld extension gives its conformer no members, so `Flagged.Items` and `Ranked.Items` each have ONE
+declaration.
+```maxon
+// --- file: seq.maxon
+export interface Seq uses Item
+	function first() returns Item
+end 'Seq'
+
+// --- file: items.maxon
+export enum Flag
+	up
+	down
+end 'Flag'
+
+export type Rank implements Comparable
+	export var level as Level
+
+	export static function create(level Level) returns Self
+		return Self{level: level}
+	end 'create'
+
+	export function compare(other Rank) returns Ordering
+		return self.level.compare(other.level)
+	end 'compare'
+end 'Rank'
+
+export typealias Level = int(0 to 9)
+
+export type Flagged implements Seq with Flag
+	export var flag as Flag
+
+	export static function create(flag Flag) returns Self
+		return Self{flag: flag}
+	end 'create'
+
+	export function first() returns Flag
+		return self.flag
+	end 'first'
+end 'Flagged'
+
+export type Ranked implements Seq with Rank
+	export var rank as Rank
+
+	export static function create(rank Rank) returns Self
+		return Self{rank: rank}
+	end 'create'
+
+	export function first() returns Rank
+		return self.rank
+	end 'first'
+end 'Ranked'
+
+// --- file: a.maxon
+export extension Seq where Item is Hashable
+	export typealias Items = Array with Item
+
+	export function hashedItems() returns Items
+		return Items.create()
+	end 'hashedItems'
+end 'Seq'
+
+// --- file: b.maxon
+export extension Seq where Item is Comparable
+	export typealias Items = List with Item
+
+	export function rankedItems() returns Items
+		return Items.create()
+	end 'rankedItems'
+end 'Seq'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let flagged = Flagged.create(Flag.up)
+	let ranked = Ranked.create(Rank.create(2))
+	var hashed = flagged.hashedItems()
+	hashed.push(flagged.first())
+	var listed = ranked.rankedItems()
+	listed.append(ranked.first())
+	return (hashed.count() + listed.count()) as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
 ## A NON-GENERIC type's member has a FILE-SCOPE name; a generic type's member does not
 
 Everything above is about which BODY may spell a member — the declaring type's own, or an `extension`

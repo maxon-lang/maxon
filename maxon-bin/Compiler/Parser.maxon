@@ -26022,6 +26022,7 @@ export type Parser
 					// rule below, applied to the one alias form the READER publishes rather than the caller
 					// (see `TupleAliasOwner`). Every other form is filed after the withheld test; this one cannot be.
 					view nestedTupleOwner = TupleAliasOwner.unpublished if extensionMethodsWithheld(verdict) else TupleAliasOwner.enclosingType(conformer)
+					let nestedNameTok = self.tokenAt(self.pos + 1)
 					var nested = try self.readNestedTypeAlias(memberVisibility, recordFunctionSignature: false, tupleOwner: nestedTupleOwner) otherwise break
 
 					// ⚠ **READ ALWAYS, PUBLISH ONLY WHEN THE EXTENSION IS THIS CONFORMER'S** — the withheld
@@ -26035,6 +26036,10 @@ export type Parser
 					if extensionMethodsWithheld(verdict) 'notThisConformers'
 						continue
 					end 'notThisConformers'
+
+					if not self.job.isStdlibSource 'anAuthorsMember'
+						index.recordExtensionInnerAliasKeeper(joinQualifiedName(conformer, member: nestedNameTok.value), site: self.extensionInnerAliasSiteAt(nestedNameTok))
+					end 'anAuthorsMember'
 
 					match nested 'nested'
 						ranged(alias) then innerAliasOut.push(InnerAliasEntry.create(self.enclosingTypeName(), alias: alias))
@@ -30592,6 +30597,24 @@ export type Parser
 		return at + 1
 	end 'extensionMemberFunctionKeywordAt'
 
+	function extensionInnerAliasSiteAt(nameTok Token) returns ExtensionInnerAliasSite
+		return ExtensionInnerAliasSite.create(self.job.path, nameLine: nameTok.line, nameColumn: nameTok.column)
+	end 'extensionInnerAliasSiteAt'
+
+	function requireExtensionInnerAliasKept(nameTok Token) throws SourceParseError
+		if self.job.isStdlibSource 'theLibraryDeclaresMembersTwice'
+			return
+		end 'theLibraryDeclaresMembersTwice'
+
+		let qualified = joinQualifiedName(self.enclosingTypeName(), member: nameTok.value)
+
+		if let keeper = try self.signatures.extensionInnerAliasKeeper(qualified) 'someExtensionDeclaresIt'
+			if self.extensionInnerAliasSiteAt(nameTok).compare(keeper) != Ordering.equalTo 'aLaterDeclaration'
+				throw SourceParseError.registryRefused(ErrorCode.semanticDuplicateTypeAlias, explanation: "Duplicate typealias '{String.from(nameTok.value)}': `{String.from(qualified)}` is already declared by an `extension` in {keeper.declFilePath.filename()}", line: nameTok.line, column: nameTok.column, note: DiagnosticNote.none)
+			end 'aLaterDeclaration'
+		end 'someExtensionDeclaresIt'
+	end 'requireExtensionInnerAliasKept'
+
 	function extensionMemberHidesOwnMemberError(conformer ByteArray, qualified ByteArray, takesReceiver bool, nameTok Token) returns SourceParseError
 		let own = self.signatures.ownMemberDeclSite(qualified, takesReceiver: takesReceiver)
 		let kind = "instance" if takesReceiver else "static"
@@ -32692,6 +32715,10 @@ export type Parser
 			// files into — under BOTH of the names it declares, exactly as the sweep files it
 			// (`publishNestedFunctionAlias`). This is the copy every consumer of a PARAMETER type reads, so a
 			// qualified key filed by the sweep alone would carry the return type and an empty parameter list.
+			if memberList == MemberList.extensionBody 'anExtensionMember'
+				try self.requireExtensionInnerAliasKept(self.tokenAt(self.pos + 1))
+			end 'anExtensionMember'
+
 			match try self.readNestedTypeAlias(visibility, recordFunctionSignature: true, tupleOwner: TupleAliasOwner.unpublished) 'nested'
 				ranged or
 				genericInstance or

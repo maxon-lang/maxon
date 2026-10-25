@@ -30,9 +30,13 @@ end 'comparePathSpelling'
 
 let PortablePathSeparator = "/"
 
-module function precedesInPathOrder(path FilePath, other FilePath) returns bool
+module function comparePathIdentity(path FilePath, other FilePath) returns Ordering
 	let workingDirectory = Directory.currentPath()
-	return compareBytesOrdinally(pathIdentity(path, workingDirectory: workingDirectory), right: pathIdentity(other, workingDirectory: workingDirectory)) == Ordering.lessThan
+	return compareBytesOrdinally(pathIdentity(path, workingDirectory: workingDirectory), right: pathIdentity(other, workingDirectory: workingDirectory))
+end 'comparePathIdentity'
+
+module function precedesInPathOrder(path FilePath, other FilePath) returns bool
+	return comparePathIdentity(path, other: other) == Ordering.lessThan
 end 'precedesInPathOrder'
 
 // Identity, not spelling, because it decides which duplicate declaration is blamed: a relative user path

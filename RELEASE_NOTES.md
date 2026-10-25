@@ -139,6 +139,11 @@ release's version as its heading when the release is cut.
   Fix: a program that relied on the refusal checks the scheme itself before the call; one that now reaches
   a server over TLS handles `HttpError.tlsFailed`, and passes `tls:` to `HttpClient.send` to trust its own
   roots.
+- Two `extension` bodies in a program that declare the same nested `typealias` for one type are E3061 at
+  the later declaration, in one file or two, over one instance or two, and for every conformer of an
+  interface extension; the compiler kept whichever declaration it reached last and gave the other
+  extension's own signatures that instance without a word.
+  Fix: rename one of the two members, or declare it in one extension and name it from the other.
 
 ## 0.5.0 — 2026-10-08
 

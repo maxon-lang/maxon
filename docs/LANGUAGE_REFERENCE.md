@@ -1092,6 +1092,14 @@ accepted by both.
 A ranged alias declared in a type or extension body is a nominal type by the same rule as a file-scope
 one: a value of any other alias, over the same range or not, crosses into it with a cast.
 
+A type has one member of each name. When two `extension` bodies of the program declare the same nested
+typealias for one type, in one file or two, over one instance or two, and for each conformer of an
+[interface extension](#interface-extensions) that both reach, the later declaration is
+[E3061](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3061), naming the file of the one kept: the
+declaration in the file whose absolute path, with `/` separators, sorts first byte by byte, and within a file
+the one written first. A conditional extension declares the member only for the conformers its `where`
+clause admits, and only the program's own extensions are compared.
+
 A per-instance **function** alias is unbranded: it spells the shared body's signature over the type's own
 parameters. `Array.sort` takes an `Array.SortComparator`, so a field declared with your own `typealias RowComparator =
 function(Row, Row) returns Ordering` passes straight through: `rows.sort(self.compare)` compiles with no
