@@ -125,6 +125,350 @@ end 'main'
 error E4015: <fragment>:4:10: declaration of 'mrt_start' collides with a symbol the compiler EMITS into this program, and a program cannot hold two bodies under one `.text` label. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls and the runtime's own call sites — so the declaration is the side that must move: rename it
 ```
 
+<!-- test: a-service-program-refuses-the-entry-stub-name-taken-as-a-value -->
+<!-- unsupported-targets: wasm32-wasi -->
+wasm32-wasi lays no chunk under this name and answers E3104 for the `spawn` before any name is laid.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Calc
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 7}
+	end 'create'
+
+	export function total() returns Integer
+		return self.count
+	end 'total'
+end 'Calc'
+
+function mrt_start() returns Integer
+	return 7
+end 'mrt_start'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let emitted = mrt_start
+	let t = try await h.total() otherwise 0
+	return (emitted() + t) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E4015: <fragment>:16:10: declaration of 'mrt_start' collides with a symbol the compiler EMITS into this program, and a program cannot hold two bodies under one `.text` label. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls and the runtime's own call sites — so the declaration is the side that must move: rename it
+```
+
+<!-- test: a-service-program-refuses-the-entry-stub-name-called-directly -->
+<!-- unsupported-targets: wasm32-wasi -->
+wasm32-wasi lays no chunk under this name and answers E3104 for the `spawn` before any name is laid.
+
+```maxon
+typealias Tally = int(0 to 1000)
+
+type Calc
+	var count as Tally
+
+	static function create() returns Self
+		return Self{count: 7}
+	end 'create'
+
+	export function total() returns Tally
+		return self.count
+	end 'total'
+end 'Calc'
+
+function mrt_start(n Tally) returns Tally
+	if n == 0 'done'
+		return 0
+	end 'done'
+
+	return 1 + mrt_start(n - 1)
+end 'mrt_start'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let walked = mrt_start(5)
+	let t = try await h.total() otherwise 0
+	return (walked + t) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E4015: <fragment>:16:10: declaration of 'mrt_start' collides with a symbol the compiler EMITS into this program, and a program cannot hold two bodies under one `.text` label. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls and the runtime's own call sites — so the declaration is the side that must move: rename it
+```
+
+<!-- test: a-service-program-refuses-the-preempt-handler-name-off-windows -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
+x64-windows lays no chunk of this name, and wasm32-wasi answers E3104 for the `spawn`.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Calc
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 7}
+	end 'create'
+
+	export function total() returns Integer
+		return self.count
+	end 'total'
+end 'Calc'
+
+function mrt_preempt_handler() returns Integer
+	return 7
+end 'mrt_preempt_handler'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let emitted = mrt_preempt_handler
+	let t = try await h.total() otherwise 0
+	return (emitted() + t) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E4015: <fragment>:16:10: declaration of 'mrt_preempt_handler' collides with a symbol the compiler EMITS into this program, and a program cannot hold two bodies under one `.text` label. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls and the runtime's own call sites — so the declaration is the side that must move: rename it
+```
+
+<!-- test: a-service-program-runs-a-function-named-like-the-other-lanes-preempt-handler -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
+x64-windows lays no chunk named `mrt_preempt_handler`, so the function is the program's own and its address is priced like any other function value; the other lanes refuse the name (see the neighbouring case) and wasm32-wasi answers E3104 for the `spawn`.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Calc
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 7}
+	end 'create'
+
+	export function total() returns Integer
+		return self.count
+	end 'total'
+end 'Calc'
+
+function mrt_preempt_handler() returns Integer
+	return 7
+end 'mrt_preempt_handler'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let emitted = mrt_preempt_handler
+	let t = try await h.total() otherwise 0
+	return (emitted() + t) as ExitCode
+end 'main'
+```
+```exitcode
+14
+```
+
+<!-- test: a-service-program-refuses-the-fault-handler-name-off-windows -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
+x64-windows lays no chunk of this name, and wasm32-wasi answers E3104 for the `spawn`.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Calc
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 7}
+	end 'create'
+
+	export function total() returns Integer
+		return self.count
+	end 'total'
+end 'Calc'
+
+function mrt_fault_handler() returns Integer
+	return 7
+end 'mrt_fault_handler'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let emitted = mrt_fault_handler
+	let t = try await h.total() otherwise 0
+	return (emitted() + t) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E4015: <fragment>:16:10: declaration of 'mrt_fault_handler' collides with a symbol the compiler EMITS into this program, and a program cannot hold two bodies under one `.text` label. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls and the runtime's own call sites — so the declaration is the side that must move: rename it
+```
+
+<!-- test: a-service-program-runs-a-function-named-like-the-other-lanes-fault-handler -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
+x64-windows lays no chunk named `mrt_fault_handler`, so the function is the program's own; the other lanes refuse the name and wasm32-wasi answers E3104 for the `spawn`.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Calc
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 7}
+	end 'create'
+
+	export function total() returns Integer
+		return self.count
+	end 'total'
+end 'Calc'
+
+function mrt_fault_handler() returns Integer
+	return 7
+end 'mrt_fault_handler'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let emitted = mrt_fault_handler
+	let t = try await h.total() otherwise 0
+	return (emitted() + t) as ExitCode
+end 'main'
+```
+```exitcode
+14
+```
+
+<!-- test: a-service-program-refuses-the-fault-thunk-name-on-windows -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+Only x64-windows lays a chunk named `mrt_fault_thunk`; wasm32-wasi answers E3104 for the `spawn`.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Calc
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 7}
+	end 'create'
+
+	export function total() returns Integer
+		return self.count
+	end 'total'
+end 'Calc'
+
+function mrt_fault_thunk() returns Integer
+	return 7
+end 'mrt_fault_thunk'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let emitted = mrt_fault_thunk
+	let t = try await h.total() otherwise 0
+	return (emitted() + t) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E4015: <fragment>:16:10: declaration of 'mrt_fault_thunk' collides with a symbol the compiler EMITS into this program, and a program cannot hold two bodies under one `.text` label. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls and the runtime's own call sites — so the declaration is the side that must move: rename it
+```
+
+<!-- test: a-service-program-runs-a-function-named-like-windows-fault-thunk -->
+<!-- unsupported-targets: x64-windows -->
+Only x64-windows lays a chunk named `mrt_fault_thunk`, so on every other native lane the function is the program's own; wasm32-wasi answers E3104 for the `spawn`.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Calc
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 7}
+	end 'create'
+
+	export function total() returns Integer
+		return self.count
+	end 'total'
+end 'Calc'
+
+function mrt_fault_thunk() returns Integer
+	return 7
+end 'mrt_fault_thunk'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let emitted = mrt_fault_thunk
+	let t = try await h.total() otherwise 0
+	return (emitted() + t) as ExitCode
+end 'main'
+```
+```exitcode
+14
+```
+
+<!-- test: a-service-program-refuses-the-sigreturn-name-on-x64-linux -->
+<!-- unsupported-targets: x64-windows, arm64-macos, arm64-linux, wasm32-wasi -->
+Only x64-linux lays a chunk named `mrt_rt_sigreturn`; wasm32-wasi answers E3104 for the `spawn`.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Calc
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 7}
+	end 'create'
+
+	export function total() returns Integer
+		return self.count
+	end 'total'
+end 'Calc'
+
+function mrt_rt_sigreturn() returns Integer
+	return 7
+end 'mrt_rt_sigreturn'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let emitted = mrt_rt_sigreturn
+	let t = try await h.total() otherwise 0
+	return (emitted() + t) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E4015: <fragment>:16:10: declaration of 'mrt_rt_sigreturn' collides with a symbol the compiler EMITS into this program, and a program cannot hold two bodies under one `.text` label. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls and the runtime's own call sites — so the declaration is the side that must move: rename it
+```
+
+<!-- test: a-service-program-runs-a-function-named-like-x64-linux-sigreturn -->
+<!-- unsupported-targets: x64-linux -->
+Only x64-linux lays a chunk named `mrt_rt_sigreturn`, so on every other native lane the function is the program's own; wasm32-wasi answers E3104 for the `spawn`.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Calc
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 7}
+	end 'create'
+
+	export function total() returns Integer
+		return self.count
+	end 'total'
+end 'Calc'
+
+function mrt_rt_sigreturn() returns Integer
+	return 7
+end 'mrt_rt_sigreturn'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let emitted = mrt_rt_sigreturn
+	let t = try await h.total() otherwise 0
+	return (emitted() + t) as ExitCode
+end 'main'
+```
+```exitcode
+14
+```
+
 <!-- test: an-unemitted-lookalike-name-is-legal -->
 **THE NEGATIVE CONTROL, and it is the half that decides what the rule is ABOUT.** The two refusals above
 would both pass under a rule that simply reserved the `mrt_` prefix — and that rule would be wrong: it

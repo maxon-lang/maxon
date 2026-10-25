@@ -90,9 +90,12 @@ end 'requireUnguardedChainsFitTheGuardMargin'
 // switch-in — entry points, thread starts, fault and signal handlers — which no pointer call in the
 // program reaches, so they are not priced as pointer targets. `edgesOf` panics on a by-name call to
 // one, which keeps the roster honest.
-export function nameIsEnteredByTheOs(name ByteArray) returns bool
-	return name.equals(EntryPointName) or name.equals(SchedWorkerLoopName) or name.equals(SchedSysmonName) or name.equals(FaultThunkName) or name.equals(FaultHandlerName) or name.equals(PreemptHandlerName) or name.equals(LinuxSigreturnName) or name.equals(AsyncPreemptName) or name.equals(GtTrampolineName) or name.equals(NetpollChildFiredName)
-end 'nameIsEnteredByTheOs'
+//
+// `compilerEmitted` is the chunk's provenance: a lane that lays no chunk under one of these names lets a
+// program's own function carry it, and that function is an ordinary callee and pointer target.
+export function isEnteredByTheOs(name ByteArray, compilerEmitted bool) returns bool
+	return compilerEmitted and (name.equals(EntryPointName) or name.equals(SchedWorkerLoopName) or name.equals(SchedSysmonName) or name.equals(FaultThunkName) or name.equals(FaultHandlerName) or name.equals(PreemptHandlerName) or name.equals(LinuxSigreturnName) or name.equals(AsyncPreemptName) or name.equals(GtTrampolineName) or name.equals(NetpollChildFiredName))
+end 'isEnteredByTheOs'
 
 function targetFunctionCallsThroughAPointer(module TargetModule, func IrFunction, verdicts PointerCallMemo) returns bool
 	for blockRef in func.blockRefs 'eachBlock'
@@ -315,7 +318,7 @@ type UnguardedChainWalk
 	function noteAddressTaken(name ByteArray)
 		let index = try self.indexOf.get(name) otherwise return
 
-		if nameIsEnteredByTheOs(name) 'noPointerReachesIt'
+		if isEnteredByTheOs(name, compilerEmitted: self.chunkAt(index).compilerScaffolding) 'noPointerReachesIt'
 			return
 		end 'noPointerReachesIt'
 
@@ -430,11 +433,12 @@ type UnguardedChainWalk
 				continue
 			end 'notACall'
 
-			if nameIsEnteredByTheOs(fixup.targetName) 'calledByName'
-				panic("UnguardedChainWalk.edgesOf: '{String.from(chunk.funcName)}' calls '{String.from(fixup.targetName)}' by name, which `nameIsEnteredByTheOs` lists as entered by the OS and never called — one of the two is wrong")
+			let callee = self.indexOfName(fixup.targetName)
+
+			if isEnteredByTheOs(fixup.targetName, compilerEmitted: self.chunkAt(callee).compilerScaffolding) 'calledByName'
+				panic("UnguardedChainWalk.edgesOf: '{String.from(chunk.funcName)}' calls '{String.from(fixup.targetName)}' by name, which `isEnteredByTheOs` lists as entered by the OS and never called — one of the two is wrong")
 			end 'calledByName'
 
-			let callee = self.indexOfName(fixup.targetName)
 			let below = try self.edgeBytes(callee)
 
 			if self.chunkAt(callee).checksStack 'guardedCallee'
