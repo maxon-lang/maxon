@@ -40,8 +40,8 @@ public type TlsServerOptions
 		verificationTime = TlsVerificationTime.fixed(seconds)
 	end 'setVerificationTime'
 
-	/// How long `accept()` gives one connection's handshake before it throws `handshakeTimedOut`; `0`
-	/// waits without a deadline.
+	/// How long a connection's handshake may take, from its first `send`, `recv` or `handshake()`,
+	/// before that call throws `handshakeTimedOut`; `0` waits without a deadline.
 	public function setHandshakeDeadline(milliseconds SocketDeadlineMs)
 		handshakeDeadlineMs = milliseconds
 	end 'setHandshakeDeadline'
@@ -70,8 +70,8 @@ public type TlsServerOptions
 	end 'listenerConfig'
 end 'TlsServerOptions'
 
-/// A listening socket whose `accept()` also runs the server handshake. A client that stalls holds
-/// `accept()` until the handshake deadline.
+/// A listening socket. `accept()` returns once the TCP connection is accepted, and the stream runs
+/// its handshake on first use, so a client that stalls holds only its own stream.
 public type TlsListener
 	var listener as TcpListener
 	var config as TlsServerConfig
@@ -95,7 +95,8 @@ public type TlsListener
 		return listener.port()
 	end 'port'
 
-	/// The next connection, handshaken. A failed handshake throws its error and leaves the listener accepting.
+	/// The next connection, before its handshake. The handshake's errors surface from the stream's
+	/// first `send`, `recv` or `handshake()`, and the listener goes on accepting.
 	public function accept() returns TlsStream throws TlsError
 		let transport = try listener.accept() otherwise (failure) 'refused'
 			throw tlsNetworkFailure(failure)
@@ -105,7 +106,7 @@ public type TlsListener
 		var peer = TlsX509Peer.create(clientRoots.clone(), now: verificationTime.seconds(), purpose: X509Purpose.clientAuth)
 		var endpoint = try TlsServerHandshake.create(config.clone(), entropy: entropy, peer: peer) otherwise throw TlsError.invalidConfiguration
 
-		return try TlsStream.establish(transport, endpoint: endpoint, peer: peer, deadlineMs: handshakeDeadlineMs)
+		return TlsStream.unshaken(transport, endpoint: endpoint, peer: peer, deadlineMs: handshakeDeadlineMs)
 	end 'accept'
 
 	/// Make an `accept()` still waiting `milliseconds` after this call throw `timedOut`; `0` clears it.

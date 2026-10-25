@@ -15,10 +15,19 @@ union TlsWriteHealth
 	failed(cause TlsError)
 end 'TlsWriteHealth'
 
-/// An established TLS connection. Use it through a `var` from one green thread. A stream that goes
-/// out of scope closes its socket without a close_notify, which the peer reads as `truncated`;
-/// `close()` sends one. A failed write ends the write side: every later `send` and `shutdownWrite`
-/// throws the same error, while reads go on.
+enum TlsHandshakePhase
+	pending
+	running
+	complete
+	failed
+end 'TlsHandshakePhase'
+
+/// A TLS connection. A stream from `TlsClient` is established; one from `TlsListener.accept()` runs
+/// its handshake on its first `send`, `recv` or `shutdownWrite`, or on `handshake()`, and what it
+/// negotiated is readable once that has completed. Use it through a `var` from one green thread. A
+/// stream that goes out of scope closes its socket without a close_notify, which the peer reads as
+/// `truncated`; `close()` sends one. A failed write ends the write side: every later `send` and
+/// `shutdownWrite` throws the same error, while reads go on.
 public type TlsStream
 	var transport as TcpClient
 	var endpoint as TlsEndpoint
@@ -35,15 +44,38 @@ public type TlsStream
 	// peer as garbage, so the first failure is kept and thrown by every later write.
 	var writeHealth as TlsWriteHealth
 	var closed as bool
-	var handshaking as bool
+	var phase as TlsHandshakePhase
+	var handshakeDeadlineMs as SocketDeadlineMs
+	var readDeadlineMs as SocketDeadlineMs
+	var writeDeadlineMs as SocketDeadlineMs
 
 	module static function establish(transport TcpClient, endpoint TlsEndpoint, peer TlsX509Peer, deadlineMs SocketDeadlineMs) returns TlsStream throws TlsError
-		var stream = Self{transport: transport, endpoint: endpoint, peer: peer, inbound: ByteArray.create(), consumed: 0, unread: ByteArray.create(), unreadConsumed: 0, writeClosed: false, writeHealth: TlsWriteHealth.intact, closed: false, handshaking: true}
+		var stream = TlsStream.unshaken(transport, endpoint: endpoint, peer: peer, deadlineMs: deadlineMs)
 
-		try stream.handshake(deadlineMs)
+		try stream.handshake()
 
 		return stream
 	end 'establish'
+
+	module static function unshaken(transport TcpClient, endpoint TlsEndpoint, peer TlsX509Peer, deadlineMs SocketDeadlineMs) returns TlsStream
+		return Self{transport: transport, endpoint: endpoint, peer: peer, inbound: ByteArray.create(), consumed: 0, unread: ByteArray.create(), unreadConsumed: 0, writeClosed: false, writeHealth: TlsWriteHealth.intact, closed: false, phase: TlsHandshakePhase.pending, handshakeDeadlineMs: deadlineMs, readDeadlineMs: NoDeadlineMs, writeDeadlineMs: NoDeadlineMs}
+	end 'unshaken'
+
+	/// Run the handshake if it has not run; returns at once when it has completed. `send`, `recv` and
+	/// `shutdownWrite` run it first. A failure is thrown here, closes the connection, and every later
+	/// call throws `closed`.
+	public function handshake() throws TlsError
+		if closed 'unusable'
+			throw TlsError.closed
+		end 'unusable'
+
+		match phase 'phase'
+			complete then return
+			pending then try runHandshake()
+			running then throw TlsError.handshakePending
+			failed then throw TlsError.closed
+		end 'phase'
+	end 'handshake'
 
 	/// Send every byte of `data`; returns the byte count.
 	public function send(data String) returns BytePos throws TlsError
@@ -53,6 +85,7 @@ public type TlsStream
 	/// Send every byte of `data`, split into records of at most 16 KiB; returns the byte count.
 	public function send(data ByteArray) returns BytePos throws TlsError
 		try requireWritable()
+		try handshake()
 
 		if data.isEmpty() 'nothing'
 			return 0
@@ -79,6 +112,8 @@ public type TlsStream
 			throw TlsError.closed
 		end 'unreadable'
 
+		try handshake()
+
 		while unreadCount() == 0 'waiting'
 			if endpoint.session().hasPeerClosed() 'peerFinished'
 				throw TlsError.connectionClosed
@@ -91,21 +126,28 @@ public type TlsStream
 		return takeUnread(bufferSize)
 	end 'recvBytes'
 
-	/// The TLS version negotiated.
-	public function protocol() returns TlsProtocol
-		return match cipherSuite() 'suite'
+	/// The TLS version negotiated. Throws `handshakePending` until the handshake has completed.
+	public function protocol() returns TlsProtocol throws TlsError
+		let suite = try cipherSuite()
+
+		return match suite 'suite'
 			tls13 gives TlsProtocol.tls13
 			tls12 gives TlsProtocol.tls12
 		end 'suite'
 	end 'protocol'
 
-	/// The cipher suite negotiated.
-	public function cipherSuite() returns TlsCipherSuite
-		return try endpoint.session().negotiatedCipherSuite() otherwise panic("TlsStream.cipherSuite: a stream exists only after its handshake negotiated a suite")
+	/// The cipher suite negotiated. Throws `handshakePending` until the handshake has completed.
+	public function cipherSuite() returns TlsCipherSuite throws TlsError
+		try requireHandshaken()
+
+		return try endpoint.session().negotiatedCipherSuite() otherwise panic("TlsStream.cipherSuite: a completed handshake negotiated a suite")
 	end 'cipherSuite'
 
-	/// The ALPN protocol negotiated, if any.
-	public function applicationProtocol() returns TlsApplicationProtocol
+	/// The ALPN protocol negotiated, if any. Throws `handshakePending` until the handshake has
+	/// completed.
+	public function applicationProtocol() returns TlsApplicationProtocol throws TlsError
+		try requireHandshaken()
+
 		return match endpoint.session().alpn 'alpn'
 			negotiated(name) gives TlsApplicationProtocol.negotiated(String.from(name))
 			absent gives TlsApplicationProtocol.unnegotiated
@@ -113,34 +155,46 @@ public type TlsStream
 	end 'applicationProtocol'
 
 	/// The DER chain the peer presented, in the order sent; empty for a client that presented none.
-	public function peerCertificates() returns ByteArrays
+	/// Throws `handshakePending` until the handshake has completed.
+	public function peerCertificates() returns ByteArrays throws TlsError
+		try requireHandshaken()
+
 		return endpoint.session().peerChain.clone()
 	end 'peerCertificates'
 
 	/// Make a read still waiting `milliseconds` after this call throw `timedOut`; the stream stays
-	/// usable. `0` clears it.
+	/// usable. `0` clears it. Set before the handshake has completed, it applies from the moment the
+	/// handshake completes.
 	public function setReadDeadline(milliseconds SocketDeadlineMs) throws TlsError
 		if closed 'unreadable'
 			throw TlsError.closed
 		end 'unreadable'
 
-		try transport.setReadDeadline(milliseconds) otherwise (failure) 'refused'
-			throw tlsNetworkFailure(failure)
-		end 'refused'
+		readDeadlineMs = milliseconds
+
+		if phase == TlsHandshakePhase.complete 'established'
+			try applyReadDeadline(milliseconds)
+		end 'established'
 	end 'setReadDeadline'
 
 	/// Make a write that cannot finish within `milliseconds` of this call throw `timedOut`. `0` clears it.
+	/// Set before the handshake has completed, it applies from the moment the handshake completes.
 	public function setWriteDeadline(milliseconds SocketDeadlineMs) throws TlsError
 		if closed 'unwritable'
 			throw TlsError.closed
 		end 'unwritable'
 
-		try applyWriteDeadline(milliseconds)
+		writeDeadlineMs = milliseconds
+
+		if phase == TlsHandshakePhase.complete 'established'
+			try applyWriteDeadline(milliseconds)
+		end 'established'
 	end 'setWriteDeadline'
 
 	/// Send close_notify and stop sending; the peer reads the end of the stream while this side can still `recv`.
 	public function shutdownWrite() throws TlsError
 		try requireWritable()
+		try handshake()
 
 		try endpoint.session().close() otherwise (failure) 'refused'
 			throw refuse(failure)
@@ -181,7 +235,7 @@ public type TlsStream
 	end 'closeAfterDraining'
 
 	function announceClose()
-		if writeClosed 'announced'
+		if writeClosed or phase != TlsHandshakePhase.complete 'announced'
 			return
 		end 'announced'
 
@@ -189,6 +243,15 @@ public type TlsStream
 		try endpoint.session().close() otherwise ignore
 		try flushWithinCloseDeadline() otherwise ignore
 	end 'announceClose'
+
+	function requireHandshaken() throws TlsError
+		match phase 'phase'
+			complete then return
+			pending or
+			running then throw TlsError.handshakePending
+			failed then throw TlsError.closed
+		end 'phase'
+	end 'requireHandshaken'
 
 	function requireWritable() throws TlsError
 		if closed or writeClosed 'unwritable'
@@ -205,6 +268,12 @@ public type TlsStream
 		end 'health'
 	end 'requireIntactWrites'
 
+	function applyReadDeadline(milliseconds SocketDeadlineMs) throws TlsError
+		try transport.setReadDeadline(milliseconds) otherwise (failure) 'refused'
+			throw tlsNetworkFailure(failure)
+		end 'refused'
+	end 'applyReadDeadline'
+
 	function applyWriteDeadline(milliseconds SocketDeadlineMs) throws TlsError
 		try transport.setWriteDeadline(milliseconds) otherwise (failure) 'refused'
 			throw tlsNetworkFailure(failure)
@@ -216,20 +285,32 @@ public type TlsStream
 		try flush()
 	end 'flushWithinCloseDeadline'
 
-	function handshake(deadlineMs SocketDeadlineMs) throws TlsError
-		try setReadDeadline(deadlineMs)
-		try setWriteDeadline(deadlineMs)
+	function runHandshake() throws TlsError
+		phase = TlsHandshakePhase.running
+
+		try completeHandshake() otherwise (cause) 'abandoned'
+			phase = TlsHandshakePhase.failed
+			closed = true
+			transport.close()
+
+			throw cause
+		end 'abandoned'
+
+		phase = TlsHandshakePhase.complete
+	end 'runHandshake'
+
+	function completeHandshake() throws TlsError
+		try applyReadDeadline(handshakeDeadlineMs)
+		try applyWriteDeadline(handshakeDeadlineMs)
 		try flush()
 
 		while not endpoint.session().isConnected() 'handshaking'
 			try pump()
 		end 'handshaking'
 
-		try setReadDeadline(NoDeadlineMs)
-		try setWriteDeadline(NoDeadlineMs)
-
-		handshaking = false
-	end 'handshake'
+		try applyReadDeadline(readDeadlineMs)
+		try applyWriteDeadline(writeDeadlineMs)
+	end 'completeHandshake'
 
 	function pump() throws TlsError
 		let record = try nextRecord()
@@ -339,7 +420,7 @@ public type TlsStream
 	end 'fill'
 
 	function transportFailure(failure NetworkError, ordinary TlsError) returns TlsError
-		if handshaking and failure == NetworkError.timedOut 'stalled'
+		if phase == TlsHandshakePhase.running and failure == NetworkError.timedOut 'stalled'
 			return TlsError.handshakeTimedOut
 		end 'stalled'
 

@@ -107,6 +107,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -373,7 +374,15 @@ function talk(server OpensslServer, options TlsClientOptions, drops bool) return
 		return "recv: {describe(error)}"
 	end 'unheard'
 
-	let summary = "reply={reply.trim()} protocol={stream.protocol().name} suite={suiteName(stream.cipherSuite())}"
+	let protocol = try stream.protocol() otherwise (error) 'unestablished'
+		return "protocol: {describe(error)}"
+	end 'unestablished'
+
+	let suite = try stream.cipherSuite() otherwise (error) 'unnegotiated'
+		return "suite: {describe(error)}"
+	end 'unnegotiated'
+
+	let summary = "reply={reply.trim()} protocol={protocol.name} suite={suiteName(suite)}"
 
 	if drops 'dropped'
 		return "{summary} dropped"
@@ -483,6 +492,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -749,7 +759,15 @@ function talk(server OpensslServer, options TlsClientOptions, drops bool) return
 		return "recv: {describe(error)}"
 	end 'unheard'
 
-	let summary = "reply={reply.trim()} protocol={stream.protocol().name} suite={suiteName(stream.cipherSuite())}"
+	let protocol = try stream.protocol() otherwise (error) 'unestablished'
+		return "protocol: {describe(error)}"
+	end 'unestablished'
+
+	let suite = try stream.cipherSuite() otherwise (error) 'unnegotiated'
+		return "suite: {describe(error)}"
+	end 'unnegotiated'
+
+	let summary = "reply={reply.trim()} protocol={protocol.name} suite={suiteName(suite)}"
 
 	if drops 'dropped'
 		return "{summary} dropped"
@@ -874,6 +892,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -1140,7 +1159,15 @@ function talk(server OpensslServer, options TlsClientOptions, drops bool) return
 		return "recv: {describe(error)}"
 	end 'unheard'
 
-	let summary = "reply={reply.trim()} protocol={stream.protocol().name} suite={suiteName(stream.cipherSuite())}"
+	let protocol = try stream.protocol() otherwise (error) 'unestablished'
+		return "protocol: {describe(error)}"
+	end 'unestablished'
+
+	let suite = try stream.cipherSuite() otherwise (error) 'unnegotiated'
+		return "suite: {describe(error)}"
+	end 'unnegotiated'
+
+	let summary = "reply={reply.trim()} protocol={protocol.name} suite={suiteName(suite)}"
 
 	if drops 'dropped'
 		return "{summary} dropped"
@@ -1250,6 +1277,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -1516,7 +1544,15 @@ function talk(server OpensslServer, options TlsClientOptions, drops bool) return
 		return "recv: {describe(error)}"
 	end 'unheard'
 
-	let summary = "reply={reply.trim()} protocol={stream.protocol().name} suite={suiteName(stream.cipherSuite())}"
+	let protocol = try stream.protocol() otherwise (error) 'unestablished'
+		return "protocol: {describe(error)}"
+	end 'unestablished'
+
+	let suite = try stream.cipherSuite() otherwise (error) 'unnegotiated'
+		return "suite: {describe(error)}"
+	end 'unnegotiated'
+
+	let summary = "reply={reply.trim()} protocol={protocol.name} suite={suiteName(suite)}"
 
 	if drops 'dropped'
 		return "{summary} dropped"
@@ -1637,6 +1673,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -1789,7 +1826,19 @@ function serveOnce(listener TlsListener) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let summary = "heard={line.trim()} protocol={stream.protocol().name} suite={suiteName(stream.cipherSuite())} peers={stream.peerCertificates().count()}"
+	let protocol = try stream.protocol() otherwise (error) 'unestablished'
+		return "protocol: {describe(error)}"
+	end 'unestablished'
+
+	let suite = try stream.cipherSuite() otherwise (error) 'unnegotiated'
+		return "suite: {describe(error)}"
+	end 'unnegotiated'
+
+	let chain = try stream.peerCertificates() otherwise (error) 'unpresented'
+		return "peers: {describe(error)}"
+	end 'unpresented'
+
+	let summary = "heard={line.trim()} protocol={protocol.name} suite={suiteName(suite)} peers={chain.count()}"
 
 	try stream.shutdownWrite() otherwise (error) 'unshut'
 		return "{summary} shutdownWrite: {describe(error)}"
@@ -1948,6 +1997,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -2100,7 +2150,19 @@ function serveOnce(listener TlsListener) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let summary = "heard={line.trim()} protocol={stream.protocol().name} suite={suiteName(stream.cipherSuite())} peers={stream.peerCertificates().count()}"
+	let protocol = try stream.protocol() otherwise (error) 'unestablished'
+		return "protocol: {describe(error)}"
+	end 'unestablished'
+
+	let suite = try stream.cipherSuite() otherwise (error) 'unnegotiated'
+		return "suite: {describe(error)}"
+	end 'unnegotiated'
+
+	let chain = try stream.peerCertificates() otherwise (error) 'unpresented'
+		return "peers: {describe(error)}"
+	end 'unpresented'
+
+	let summary = "heard={line.trim()} protocol={protocol.name} suite={suiteName(suite)} peers={chain.count()}"
 
 	try stream.shutdownWrite() otherwise (error) 'unshut'
 		return "{summary} shutdownWrite: {describe(error)}"
@@ -2274,6 +2336,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -2426,7 +2489,19 @@ function serveOnce(listener TlsListener) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let summary = "heard={line.trim()} protocol={stream.protocol().name} suite={suiteName(stream.cipherSuite())} peers={stream.peerCertificates().count()}"
+	let protocol = try stream.protocol() otherwise (error) 'unestablished'
+		return "protocol: {describe(error)}"
+	end 'unestablished'
+
+	let suite = try stream.cipherSuite() otherwise (error) 'unnegotiated'
+		return "suite: {describe(error)}"
+	end 'unnegotiated'
+
+	let chain = try stream.peerCertificates() otherwise (error) 'unpresented'
+		return "peers: {describe(error)}"
+	end 'unpresented'
+
+	let summary = "heard={line.trim()} protocol={protocol.name} suite={suiteName(suite)} peers={chain.count()}"
 
 	try stream.shutdownWrite() otherwise (error) 'unshut'
 		return "{summary} shutdownWrite: {describe(error)}"
@@ -2594,6 +2669,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -2992,6 +3068,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or

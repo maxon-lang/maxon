@@ -10,10 +10,12 @@ category: network
 ## Documentation
 
 `TlsClient.connect(host, port:)` opens a `TcpClient` connection and runs the TLS client handshake over it;
-`TlsListener.bind(host, port:, options:)` and `accept()` do the same on the server side. Both hand back a `TlsStream`
+`TlsListener.bind(host, port:, options:)` and `accept()` do the same on the server side, except that `accept()` returns
+once the TCP connection is accepted and the stream runs its handshake on its first `send`, `recv` or `shutdownWrite`,
+or on `handshake()`, so a client that stalls holds only its own stream. Both hand back a `TlsStream`
 whose `send`, `recv` and deadlines follow `TcpClient`, whose `close` sends close_notify, and which reports what the
-handshake negotiated: `protocol()`, `cipherSuite()`, `applicationProtocol()` and the peer's chain as
-`peerCertificates()`. They drive the sans-IO handshake machines of `specs/tls-handshake.md`,
+handshake negotiated once it has completed: `protocol()`, `cipherSuite()`, `applicationProtocol()` and the peer's chain as
+`peerCertificates()`, each throwing `handshakePending` before then. They drive the sans-IO handshake machines of `specs/tls-handshake.md`,
 `specs/tls-handshake-server.md`, `specs/tls12-handshake.md` and `specs/tls12-handshake-server.md`: the stream reads
 the 5-byte record header off the socket, bounds the length it declares, reads the body and feeds the whole record to the
 machine, and writes what the machine queues.
@@ -90,6 +92,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -150,8 +153,8 @@ function serveEcho(listener TlsListener) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let peers = stream.peerCertificates().count()
-	let version = stream.protocol().name
+	let peers = (try stream.peerCertificates() otherwise return "peerCertificates: unavailable").count()
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 
 	stream.close()
 
@@ -171,9 +174,9 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "recv: {describe(error)}"
 	end 'unheard'
 
-	let version = stream.protocol().name
-	let suite = suiteName(stream.cipherSuite())
-	let alpn = alpnName(stream.applicationProtocol())
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
+	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
+	let alpn = alpnName(try stream.applicationProtocol() otherwise return "applicationProtocol: unavailable")
 
 	stream.close()
 
@@ -292,6 +295,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -352,8 +356,8 @@ function serveEcho(listener TlsListener) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let peers = stream.peerCertificates().count()
-	let version = stream.protocol().name
+	let peers = (try stream.peerCertificates() otherwise return "peerCertificates: unavailable").count()
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 
 	stream.close()
 
@@ -373,9 +377,9 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "recv: {describe(error)}"
 	end 'unheard'
 
-	let version = stream.protocol().name
-	let suite = suiteName(stream.cipherSuite())
-	let alpn = alpnName(stream.applicationProtocol())
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
+	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
+	let alpn = alpnName(try stream.applicationProtocol() otherwise return "applicationProtocol: unavailable")
 
 	stream.close()
 
@@ -497,6 +501,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -557,8 +562,8 @@ function serveEcho(listener TlsListener) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let peers = stream.peerCertificates().count()
-	let version = stream.protocol().name
+	let peers = (try stream.peerCertificates() otherwise return "peerCertificates: unavailable").count()
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 
 	stream.close()
 
@@ -578,9 +583,9 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "recv: {describe(error)}"
 	end 'unheard'
 
-	let version = stream.protocol().name
-	let suite = suiteName(stream.cipherSuite())
-	let alpn = alpnName(stream.applicationProtocol())
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
+	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
+	let alpn = alpnName(try stream.applicationProtocol() otherwise return "applicationProtocol: unavailable")
 
 	stream.close()
 
@@ -701,6 +706,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -765,8 +771,8 @@ function serveEcho(listener TlsListener) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let peers = stream.peerCertificates().count()
-	let version = stream.protocol().name
+	let peers = (try stream.peerCertificates() otherwise return "peerCertificates: unavailable").count()
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 
 	stream.close()
 
@@ -786,9 +792,9 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "recv: {describe(error)}"
 	end 'unheard'
 
-	let version = stream.protocol().name
-	let suite = suiteName(stream.cipherSuite())
-	let alpn = alpnName(stream.applicationProtocol())
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
+	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
+	let alpn = alpnName(try stream.applicationProtocol() otherwise return "applicationProtocol: unavailable")
 
 	stream.close()
 
@@ -923,6 +929,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -986,8 +993,8 @@ function serveEcho(listener TlsListener) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let peers = stream.peerCertificates().count()
-	let version = stream.protocol().name
+	let peers = (try stream.peerCertificates() otherwise return "peerCertificates: unavailable").count()
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 
 	stream.close()
 
@@ -1007,9 +1014,9 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "recv: {describe(error)}"
 	end 'unheard'
 
-	let version = stream.protocol().name
-	let suite = suiteName(stream.cipherSuite())
-	let alpn = alpnName(stream.applicationProtocol())
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
+	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
+	let alpn = alpnName(try stream.applicationProtocol() otherwise return "applicationProtocol: unavailable")
 
 	stream.close()
 
@@ -1140,6 +1147,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -1203,8 +1211,8 @@ function serveEcho(listener TlsListener) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let peers = stream.peerCertificates().count()
-	let version = stream.protocol().name
+	let peers = (try stream.peerCertificates() otherwise return "peerCertificates: unavailable").count()
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 
 	stream.close()
 
@@ -1224,9 +1232,9 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "recv: {describe(error)}"
 	end 'unheard'
 
-	let version = stream.protocol().name
-	let suite = suiteName(stream.cipherSuite())
-	let alpn = alpnName(stream.applicationProtocol())
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
+	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
+	let alpn = alpnName(try stream.applicationProtocol() otherwise return "applicationProtocol: unavailable")
 
 	stream.close()
 
@@ -1363,6 +1371,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -1426,8 +1435,8 @@ function serveEcho(listener TlsListener) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let peers = stream.peerCertificates().count()
-	let version = stream.protocol().name
+	let peers = (try stream.peerCertificates() otherwise return "peerCertificates: unavailable").count()
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 
 	stream.close()
 
@@ -1447,9 +1456,9 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "recv: {describe(error)}"
 	end 'unheard'
 
-	let version = stream.protocol().name
-	let suite = suiteName(stream.cipherSuite())
-	let alpn = alpnName(stream.applicationProtocol())
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
+	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
+	let alpn = alpnName(try stream.applicationProtocol() otherwise return "applicationProtocol: unavailable")
 
 	stream.close()
 
@@ -1521,8 +1530,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-tls13: client[recv: peerAlert(certificateRequired)] server[accept: protocolError(certificateRequired)]
-tls12: client[connect: peerAlert(handshakeFailure)] server[accept: protocolError(handshakeFailure)]
+tls13: client[recv: peerAlert(certificateRequired)] server[recv: protocolError(certificateRequired)]
+tls12: client[connect: peerAlert(handshakeFailure)] server[recv: protocolError(handshakeFailure)]
 ```
 ```exitcode
 0
@@ -1585,6 +1594,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -1648,8 +1658,8 @@ function serveEcho(listener TlsListener) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let peers = stream.peerCertificates().count()
-	let version = stream.protocol().name
+	let peers = (try stream.peerCertificates() otherwise return "peerCertificates: unavailable").count()
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 
 	stream.close()
 
@@ -1669,9 +1679,9 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "recv: {describe(error)}"
 	end 'unheard'
 
-	let version = stream.protocol().name
-	let suite = suiteName(stream.cipherSuite())
-	let alpn = alpnName(stream.applicationProtocol())
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
+	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
+	let alpn = alpnName(try stream.applicationProtocol() otherwise return "applicationProtocol: unavailable")
 
 	stream.close()
 
@@ -1745,8 +1755,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-tls13: client[recv: peerAlert(unknownCa)] server[accept: certificateRejected(unknownAuthority)]
-tls12: client[connect: peerAlert(unknownCa)] server[accept: certificateRejected(unknownAuthority)]
+tls13: client[recv: peerAlert(unknownCa)] server[recv: certificateRejected(unknownAuthority)]
+tls12: client[connect: peerAlert(unknownCa)] server[recv: certificateRejected(unknownAuthority)]
 ```
 ```exitcode
 0
@@ -1809,6 +1819,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -1869,8 +1880,8 @@ function serveEcho(listener TlsListener) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let peers = stream.peerCertificates().count()
-	let version = stream.protocol().name
+	let peers = (try stream.peerCertificates() otherwise return "peerCertificates: unavailable").count()
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 
 	stream.close()
 
@@ -1890,9 +1901,9 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "recv: {describe(error)}"
 	end 'unheard'
 
-	let version = stream.protocol().name
-	let suite = suiteName(stream.cipherSuite())
-	let alpn = alpnName(stream.applicationProtocol())
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
+	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
+	let alpn = alpnName(try stream.applicationProtocol() otherwise return "applicationProtocol: unavailable")
 
 	stream.close()
 
@@ -1962,9 +1973,9 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-tls13 other.example: client[connect: certificateRejected(hostnameMismatch)] server[accept: peerAlert(badCertificate)]
-tls12 other.example: client[connect: certificateRejected(hostnameMismatch)] server[accept: peerAlert(badCertificate)]
-dialled 127.0.0.1: client[connect: certificateRejected(hostnameMismatch)] server[accept: peerAlert(badCertificate)]
+tls13 other.example: client[connect: certificateRejected(hostnameMismatch)] server[recv: peerAlert(badCertificate)]
+tls12 other.example: client[connect: certificateRejected(hostnameMismatch)] server[recv: peerAlert(badCertificate)]
+dialled 127.0.0.1: client[connect: certificateRejected(hostnameMismatch)] server[recv: peerAlert(badCertificate)]
 ```
 ```exitcode
 0
@@ -2027,6 +2038,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -2089,8 +2101,8 @@ function serveEcho(listener TlsListener) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let peers = stream.peerCertificates().count()
-	let version = stream.protocol().name
+	let peers = (try stream.peerCertificates() otherwise return "peerCertificates: unavailable").count()
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 
 	stream.close()
 
@@ -2110,9 +2122,9 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "recv: {describe(error)}"
 	end 'unheard'
 
-	let version = stream.protocol().name
-	let suite = suiteName(stream.cipherSuite())
-	let alpn = alpnName(stream.applicationProtocol())
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
+	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
+	let alpn = alpnName(try stream.applicationProtocol() otherwise return "applicationProtocol: unavailable")
 
 	stream.close()
 
@@ -2180,10 +2192,10 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-tls13 other root: client[connect: certificateRejected(unknownAuthority)] server[accept: peerAlert(unknownCa)]
-tls13 expired: client[connect: certificateRejected(expired)] server[accept: peerAlert(certificateExpired)]
-tls12 other root: client[connect: certificateRejected(unknownAuthority)] server[accept: peerAlert(unknownCa)]
-tls12 expired: client[connect: certificateRejected(expired)] server[accept: peerAlert(certificateExpired)]
+tls13 other root: client[connect: certificateRejected(unknownAuthority)] server[recv: peerAlert(unknownCa)]
+tls13 expired: client[connect: certificateRejected(expired)] server[recv: peerAlert(certificateExpired)]
+tls12 other root: client[connect: certificateRejected(unknownAuthority)] server[recv: peerAlert(unknownCa)]
+tls12 expired: client[connect: certificateRejected(expired)] server[recv: peerAlert(certificateExpired)]
 ```
 ```exitcode
 0
@@ -2246,6 +2258,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -2309,8 +2322,8 @@ function serveEcho(listener TlsListener) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let peers = stream.peerCertificates().count()
-	let version = stream.protocol().name
+	let peers = (try stream.peerCertificates() otherwise return "peerCertificates: unavailable").count()
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 
 	stream.close()
 
@@ -2330,9 +2343,9 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "recv: {describe(error)}"
 	end 'unheard'
 
-	let version = stream.protocol().name
-	let suite = suiteName(stream.cipherSuite())
-	let alpn = alpnName(stream.applicationProtocol())
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
+	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
+	let alpn = alpnName(try stream.applicationProtocol() otherwise return "applicationProtocol: unavailable")
 
 	stream.close()
 
@@ -2384,7 +2397,13 @@ function serveOnce(listener TlsListener) returns String
 		return "accept: {describe(error)}"
 	end 'refused'
 
-	let chain = stream.peerCertificates()
+	try stream.handshake() otherwise (error) 'unshaken'
+		return "handshake: {describe(error)}"
+	end 'unshaken'
+
+	let chain = try stream.peerCertificates() otherwise (error) 'unpresented'
+		return "peers: {describe(error)}"
+	end 'unpresented'
 
 	stream.close()
 
@@ -2410,8 +2429,8 @@ function main() returns ExitCode
 	clientOptions.setIdentity(identityOf(clientLeafHex, keyHex: clientKeyHex))
 
 	var stream = try TlsClient.connect("127.0.0.1", port: listener.port(), options: clientOptions) otherwise return 3
-	let chain = stream.peerCertificates()
-	let first = try chain.first() otherwise return 4
+	let chain = try stream.peerCertificates() otherwise return 4
+	let first = try chain.first() otherwise return 6
 
 	print("client saw {chain.count()} server certificate(s), first is the server leaf: {first.equals(fromHex(leafP256Hex))}\n")
 	print("{await peer}\n")
@@ -2495,6 +2514,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -2675,6 +2695,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -2834,6 +2855,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -2894,8 +2916,8 @@ function serveEcho(listener TlsListener) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let peers = stream.peerCertificates().count()
-	let version = stream.protocol().name
+	let peers = (try stream.peerCertificates() otherwise return "peerCertificates: unavailable").count()
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 
 	stream.close()
 
@@ -2915,9 +2937,9 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "recv: {describe(error)}"
 	end 'unheard'
 
-	let version = stream.protocol().name
-	let suite = suiteName(stream.cipherSuite())
-	let alpn = alpnName(stream.applicationProtocol())
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
+	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
+	let alpn = alpnName(try stream.applicationProtocol() otherwise return "applicationProtocol: unavailable")
 
 	stream.close()
 
@@ -2989,7 +3011,7 @@ server order wins: client[echo:ping tls13 tls13/chaCha20Poly1305Sha256 alpn=h2] 
 single match: client[echo:ping tls13 tls13/chaCha20Poly1305Sha256 alpn=http/1.1] server[served ping tls13 peers=0]
 server offers none: client[echo:ping tls13 tls13/chaCha20Poly1305Sha256 alpn=none] server[served ping tls13 peers=0]
 client offers none: client[echo:ping tls13 tls13/chaCha20Poly1305Sha256 alpn=none] server[served ping tls13 peers=0]
-no overlap: client[connect: peerAlert(noApplicationProtocol)] server[accept: protocolError(noApplicationProtocol)]
+no overlap: client[connect: peerAlert(noApplicationProtocol)] server[recv: protocolError(noApplicationProtocol)]
 ```
 ```exitcode
 0
@@ -3052,6 +3074,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -3112,8 +3135,8 @@ function serveEcho(listener TlsListener) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let peers = stream.peerCertificates().count()
-	let version = stream.protocol().name
+	let peers = (try stream.peerCertificates() otherwise return "peerCertificates: unavailable").count()
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 
 	stream.close()
 
@@ -3133,9 +3156,9 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "recv: {describe(error)}"
 	end 'unheard'
 
-	let version = stream.protocol().name
-	let suite = suiteName(stream.cipherSuite())
-	let alpn = alpnName(stream.applicationProtocol())
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
+	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
+	let alpn = alpnName(try stream.applicationProtocol() otherwise return "applicationProtocol: unavailable")
 
 	stream.close()
 
@@ -3259,6 +3282,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -3319,8 +3343,8 @@ function serveEcho(listener TlsListener) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let peers = stream.peerCertificates().count()
-	let version = stream.protocol().name
+	let peers = (try stream.peerCertificates() otherwise return "peerCertificates: unavailable").count()
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 
 	stream.close()
 
@@ -3340,9 +3364,9 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "recv: {describe(error)}"
 	end 'unheard'
 
-	let version = stream.protocol().name
-	let suite = suiteName(stream.cipherSuite())
-	let alpn = alpnName(stream.applicationProtocol())
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
+	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
+	let alpn = alpnName(try stream.applicationProtocol() otherwise return "applicationProtocol: unavailable")
 
 	stream.close()
 
@@ -3410,8 +3434,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-tls12 server, tls13 client: client[connect: peerAlert(protocolVersion)] server[accept: protocolError(protocolVersion)]
-tls13 server, tls12 client: client[connect: peerAlert(protocolVersion)] server[accept: protocolError(protocolVersion)]
+tls12 server, tls13 client: client[connect: peerAlert(protocolVersion)] server[recv: protocolError(protocolVersion)]
+tls13 server, tls12 client: client[connect: peerAlert(protocolVersion)] server[recv: protocolError(protocolVersion)]
 ```
 ```exitcode
 0
@@ -3474,6 +3498,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -3580,9 +3605,9 @@ end 'main'
 ```
 ```stdout
 tls13 first: certificateRejected(unknownAuthority)
-tls13 server: [accept 1: peerAlert(unknownCa)][served 2: second client]
+tls13 server: [recv 1: peerAlert(unknownCa)][served 2: second client]
 tls12 first: certificateRejected(unknownAuthority)
-tls12 server: [accept 1: peerAlert(unknownCa)][served 2: second client]
+tls12 server: [recv 1: peerAlert(unknownCa)][served 2: second client]
 ```
 ```exitcode
 0
@@ -3646,6 +3671,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -3854,6 +3880,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -4040,6 +4067,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -4268,6 +4296,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -4332,8 +4361,8 @@ function serveEcho(listener TlsListener) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let peers = stream.peerCertificates().count()
-	let version = stream.protocol().name
+	let peers = (try stream.peerCertificates() otherwise return "peerCertificates: unavailable").count()
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 
 	stream.close()
 
@@ -4353,9 +4382,9 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "recv: {describe(error)}"
 	end 'unheard'
 
-	let version = stream.protocol().name
-	let suite = suiteName(stream.cipherSuite())
-	let alpn = alpnName(stream.applicationProtocol())
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
+	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
+	let alpn = alpnName(try stream.applicationProtocol() otherwise return "applicationProtocol: unavailable")
 
 	stream.close()
 
@@ -4501,6 +4530,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -4561,8 +4591,8 @@ function serveEcho(listener TlsListener) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let peers = stream.peerCertificates().count()
-	let version = stream.protocol().name
+	let peers = (try stream.peerCertificates() otherwise return "peerCertificates: unavailable").count()
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 
 	stream.close()
 
@@ -4582,9 +4612,9 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "recv: {describe(error)}"
 	end 'unheard'
 
-	let version = stream.protocol().name
-	let suite = suiteName(stream.cipherSuite())
-	let alpn = alpnName(stream.applicationProtocol())
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
+	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
+	let alpn = alpnName(try stream.applicationProtocol() otherwise return "applicationProtocol: unavailable")
 
 	stream.close()
 
@@ -4783,6 +4813,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -4843,8 +4874,8 @@ function serveEcho(listener TlsListener) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let peers = stream.peerCertificates().count()
-	let version = stream.protocol().name
+	let peers = (try stream.peerCertificates() otherwise return "peerCertificates: unavailable").count()
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 
 	stream.close()
 
@@ -4864,9 +4895,9 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "recv: {describe(error)}"
 	end 'unheard'
 
-	let version = stream.protocol().name
-	let suite = suiteName(stream.cipherSuite())
-	let alpn = alpnName(stream.applicationProtocol())
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
+	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
+	let alpn = alpnName(try stream.applicationProtocol() otherwise return "applicationProtocol: unavailable")
 
 	stream.close()
 
@@ -4932,9 +4963,13 @@ function dial(port NetworkPort, options TlsClientOptions) returns String
 end 'dial'
 
 function acceptOnce(listener TlsListener) returns String
-	_ = try listener.accept() otherwise (error) 'refused'
+	var stream = try listener.accept() otherwise (error) 'refused'
 		return "accept: {describe(error)}"
 	end 'refused'
+
+	_ = try stream.recv(1024) otherwise (error) 'stalled'
+		return "recv: {describe(error)}"
+	end 'stalled'
 
 	return "accepted"
 end 'acceptOnce'
@@ -4966,7 +5001,7 @@ end 'main'
 ```
 ```stdout
 client: handshakeTimedOut; peer: hello true, then connectionClosed
-server: accept: handshakeTimedOut
+server: recv: handshakeTimedOut
 ```
 ```exitcode
 0
@@ -5029,6 +5064,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -5089,8 +5125,8 @@ function serveEcho(listener TlsListener) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let peers = stream.peerCertificates().count()
-	let version = stream.protocol().name
+	let peers = (try stream.peerCertificates() otherwise return "peerCertificates: unavailable").count()
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 
 	stream.close()
 
@@ -5110,9 +5146,9 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "recv: {describe(error)}"
 	end 'unheard'
 
-	let version = stream.protocol().name
-	let suite = suiteName(stream.cipherSuite())
-	let alpn = alpnName(stream.applicationProtocol())
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
+	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
+	let alpn = alpnName(try stream.applicationProtocol() otherwise return "applicationProtocol: unavailable")
 
 	stream.close()
 
@@ -5163,10 +5199,15 @@ function refuseThree(listener TlsListener) returns String
 	var report = ""
 
 	for attempt in 1 to 3 'eachAttempt'
-		_ = try listener.accept() otherwise (error) 'refused'
-			report.append("[{attempt}: {describe(error)}]")
+		var stream = try listener.accept() otherwise (error) 'refused'
+			report.append("[{attempt}: accept {describe(error)}]")
 			continue
 		end 'refused'
+
+		try stream.handshake() otherwise (error) 'unshaken'
+			report.append("[{attempt}: {describe(error)}]")
+			continue
+		end 'unshaken'
 
 		report.append("[{attempt}: accepted]")
 	end 'eachAttempt'
@@ -5266,6 +5307,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -5326,8 +5368,8 @@ function serveEcho(listener TlsListener) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let peers = stream.peerCertificates().count()
-	let version = stream.protocol().name
+	let peers = (try stream.peerCertificates() otherwise return "peerCertificates: unavailable").count()
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 
 	stream.close()
 
@@ -5347,9 +5389,9 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "recv: {describe(error)}"
 	end 'unheard'
 
-	let version = stream.protocol().name
-	let suite = suiteName(stream.cipherSuite())
-	let alpn = alpnName(stream.applicationProtocol())
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
+	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
+	let alpn = alpnName(try stream.applicationProtocol() otherwise return "applicationProtocol: unavailable")
 
 	stream.close()
 
@@ -5540,6 +5582,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -5600,8 +5643,8 @@ function serveEcho(listener TlsListener) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let peers = stream.peerCertificates().count()
-	let version = stream.protocol().name
+	let peers = (try stream.peerCertificates() otherwise return "peerCertificates: unavailable").count()
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 
 	stream.close()
 
@@ -5621,9 +5664,9 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "recv: {describe(error)}"
 	end 'unheard'
 
-	let version = stream.protocol().name
-	let suite = suiteName(stream.cipherSuite())
-	let alpn = alpnName(stream.applicationProtocol())
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
+	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
+	let alpn = alpnName(try stream.applicationProtocol() otherwise return "applicationProtocol: unavailable")
 
 	stream.close()
 
@@ -5674,10 +5717,15 @@ function refuseThree(listener TlsListener) returns String
 	var report = ""
 
 	for attempt in 1 to 3 'eachAttempt'
-		_ = try listener.accept() otherwise (error) 'refused'
-			report.append("[{attempt}: {describe(error)}]")
+		var stream = try listener.accept() otherwise (error) 'refused'
+			report.append("[{attempt}: accept {describe(error)}]")
 			continue
 		end 'refused'
+
+		try stream.handshake() otherwise (error) 'unshaken'
+			report.append("[{attempt}: {describe(error)}]")
+			continue
+		end 'unshaken'
 
 		report.append("[{attempt}: accepted]")
 	end 'eachAttempt'
@@ -5711,6 +5759,7 @@ function describeStall(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -5737,9 +5786,13 @@ function holdOpen(silent TcpListener) returns String
 end 'holdOpen'
 
 function acceptOnce(listener TlsListener) returns String
-	_ = try listener.accept() otherwise (error) 'refused'
+	var stream = try listener.accept() otherwise (error) 'refused'
 		return "accept: {describeStall(error)}"
 	end 'refused'
+
+	_ = try stream.recv(1024) otherwise (error) 'stalled'
+		return "recv: {describeStall(error)}"
+	end 'stalled'
 
 	return "accepted"
 end 'acceptOnce'
@@ -5788,7 +5841,7 @@ end 'dialOutcome'
 ```
 ```stdout
 nobody connects: accept: timedOut
-a client that says nothing: accept: handshakeTimedOut
+a client that says nothing: recv: handshakeTimedOut
 a client after it: echo:ping tls13 tls13/chaCha20Poly1305Sha256 alpn=none | served ping tls13 peers=0
 a client dialling a server that never answers: handshakeTimedOut then connectionClosed
 ```
@@ -5853,6 +5906,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -5913,8 +5967,8 @@ function serveEcho(listener TlsListener) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let peers = stream.peerCertificates().count()
-	let version = stream.protocol().name
+	let peers = (try stream.peerCertificates() otherwise return "peerCertificates: unavailable").count()
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 
 	stream.close()
 
@@ -5934,9 +5988,9 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "recv: {describe(error)}"
 	end 'unheard'
 
-	let version = stream.protocol().name
-	let suite = suiteName(stream.cipherSuite())
-	let alpn = alpnName(stream.applicationProtocol())
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
+	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
+	let alpn = alpnName(try stream.applicationProtocol() otherwise return "applicationProtocol: unavailable")
 
 	stream.close()
 
@@ -5987,10 +6041,15 @@ function refuseThree(listener TlsListener) returns String
 	var report = ""
 
 	for attempt in 1 to 3 'eachAttempt'
-		_ = try listener.accept() otherwise (error) 'refused'
-			report.append("[{attempt}: {describe(error)}]")
+		var stream = try listener.accept() otherwise (error) 'refused'
+			report.append("[{attempt}: accept {describe(error)}]")
 			continue
 		end 'refused'
+
+		try stream.handshake() otherwise (error) 'unshaken'
+			report.append("[{attempt}: {describe(error)}]")
+			continue
+		end 'unshaken'
 
 		report.append("[{attempt}: accepted]")
 	end 'eachAttempt'
@@ -6136,6 +6195,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -6196,8 +6256,8 @@ function serveEcho(listener TlsListener) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let peers = stream.peerCertificates().count()
-	let version = stream.protocol().name
+	let peers = (try stream.peerCertificates() otherwise return "peerCertificates: unavailable").count()
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 
 	stream.close()
 
@@ -6217,9 +6277,9 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "recv: {describe(error)}"
 	end 'unheard'
 
-	let version = stream.protocol().name
-	let suite = suiteName(stream.cipherSuite())
-	let alpn = alpnName(stream.applicationProtocol())
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
+	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
+	let alpn = alpnName(try stream.applicationProtocol() otherwise return "applicationProtocol: unavailable")
 
 	stream.close()
 
@@ -6267,7 +6327,11 @@ function silentExchange(serverOptions TlsServerOptions, clientOptions TlsClientO
 end 'silentExchange'
 
 function acceptOne(listener TlsListener) returns TlsStream throws TlsError
-	return try listener.accept()
+	var stream = try listener.accept()
+
+	try stream.handshake()
+
+	return stream
 end 'acceptOne'
 
 let ChunkBytes = 1048576
@@ -6414,6 +6478,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -6474,8 +6539,8 @@ function serveEcho(listener TlsListener) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let peers = stream.peerCertificates().count()
-	let version = stream.protocol().name
+	let peers = (try stream.peerCertificates() otherwise return "peerCertificates: unavailable").count()
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 
 	stream.close()
 
@@ -6495,9 +6560,9 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "recv: {describe(error)}"
 	end 'unheard'
 
-	let version = stream.protocol().name
-	let suite = suiteName(stream.cipherSuite())
-	let alpn = alpnName(stream.applicationProtocol())
+	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
+	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
+	let alpn = alpnName(try stream.applicationProtocol() otherwise return "applicationProtocol: unavailable")
 
 	stream.close()
 
@@ -6623,7 +6688,7 @@ send: closed
 shutdownWrite: closed
 setReadDeadline: closed
 setWriteDeadline: closed
-server: accept: protocolError(certificateRequired)
+server: recv: protocolError(certificateRequired)
 ```
 ```exitcode
 0
@@ -6678,6 +6743,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -6835,6 +6901,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -6997,6 +7064,7 @@ function describe(error TlsError) returns String
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -7071,6 +7139,163 @@ end 'main'
 first: connect: trustStoreUnavailable
 second: connect: trustStoreUnavailable
 reads: 1
+```
+```exitcode
+0
+```
+
+<!-- test: tls-stream.a-silent-client-does-not-delay-another-clients-echo -->
+`accept` returns once the TCP connection is accepted and the handshake runs on the stream's first use, so a server that accepts in a loop and serves each stream on its own green thread is not held up by a client that connects and says nothing: the second client's echo completes while the first connection is still waiting for its ClientHello, and that connection's handshake then fails on its own when the client goes away.
+```maxon
+function digit(symbol Byte) returns Byte
+	if symbol >= 0x61 'letter'
+		return symbol - 0x57
+	end 'letter'
+
+	return symbol - 0x30
+end 'digit'
+
+function fromHex(hex String) returns ByteArray
+	var bytes = ByteArray.create()
+	var high = 0 as Byte
+	var isHigh = true
+
+	for symbol in hex.bytes() 'eachSymbol'
+		if isHigh 'first'
+			high = digit(symbol)
+		end 'first' else 'second'
+			bytes.push(high * 16 + digit(symbol))
+		end 'second'
+
+		isHigh = not isHigh
+	end 'eachSymbol'
+
+	return bytes
+end 'fromHex'
+
+function describe(error TlsError) returns String
+	return match error 'error'
+		certificateRejected(reason) gives "certificateRejected({reason.name})"
+		protocolError(alert) gives "protocolError({alert.name})"
+		peerAlert(alert) gives "peerAlert({alert.name})"
+		peerAlertUnrecognised(code) gives "peerAlertUnrecognised({code})"
+		resolveFailed or
+		connectFailed or
+		bindFailed or
+		acceptFailed or
+		acceptInterrupted or
+		timedOut or
+		handshakeTimedOut or
+		sendFailed or
+		recvFailed or
+		connectionClosed or
+		truncated or
+		closed or
+		handshakePending or
+		trustStoreUnavailable or
+		entropyUnavailable or
+		invalidConfiguration or
+		invalidCertificate or
+		invalidPrivateKey or
+		invalidPem gives error.name
+	end 'error'
+end 'describe'
+
+function identityOf(chainHex String, keyHex String) returns TlsIdentity
+	return try TlsIdentity.fromDer(ByteArrays from [fromHex(chainHex)], key: fromHex(keyHex)) otherwise panic("the case's identity was refused")
+end 'identityOf'
+
+function trustedServer(identity TlsIdentity) returns TlsServerOptions
+	var options = TlsServerOptions.create(identity)
+	options.setVerificationTime(1767225600)
+
+	return options
+end 'trustedServer'
+
+let rootHex = "3082012f3081d6a003020102020101300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a300f310d300b06035504030c04526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000469fd1970f970c21034e836c954aefc78dffef4a3d72650f1ec5e70559cc0663d0722d3408f27d8be5a08ceb432c37b7049cc8758c88c3d85e4db83aa471b62b7a3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d0403020348003045022053bac2d2f62299dd459d79bce22d671aeeb6ee3ed03a2f344be8a8392fd47b3e022100d8f59bc3b1ba00dc51028c7f1b8e99d86d4bb4126e22717c32988498c07f64d7"
+let leafP256Hex = "3082015930820100a00302010202010a300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3235303630313030303030305a170d3236303630313030303030305a300f310d300b06035504030c046c6561663059301306072a8648ce3d020106082a8648ce3d030107034200040b019cfdb984d032a96907cca9a63888323695b6404a7ddaacc63b5559364f2ca48f2b5d0e1151b6c0b5d17286d9a522cee437c42f410742ebb8493775fc47e9a34d304b300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b0601050507030130160603551d11040f300d820b6578616d706c652e636f6d300a06082a8648ce3d040302034700304402203bc12c6f77062e5eed59186b72a95e9652f4398685b8845ad8112a5085bb7ab602207c9761426fa260535fb0fa49efe2624a1f34e8e04eb43d8f3c72dd072e736197"
+let keyP256Hex = "3041020100301306072a8648ce3d020106082a8648ce3d0301070427302502010104200f9999d9198528f9f986f8315fe0c7aaf7b2aef840198d77b859dc4f4a8c4a2b"
+
+function trustedClient(rootHex String) returns TlsClientOptions
+	var options = TlsClientOptions.create()
+	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
+	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
+	options.setVerificationTime(1767225600)
+
+	return options
+end 'trustedClient'
+
+let EchoBudgetMs = 1500
+
+function echoOne(stream TlsStream) returns String
+	let heard = try stream.recv(1024) otherwise (error) 'unheard'
+		return "recv: {describe(error)}"
+	end 'unheard'
+
+	_ = try stream.send("echo:{heard}") otherwise (error) 'unsent'
+		return "send: {describe(error)}"
+	end 'unsent'
+
+	stream.close()
+
+	return "echoed {heard}"
+end 'echoOne'
+
+function acceptTwo(listener TlsListener) returns String
+	var first = try listener.accept() otherwise (error) 'firstRefused'
+		return "accept 1: {describe(error)}"
+	end 'firstRefused'
+
+	let firstTask = async echoOne(first)
+
+	var second = try listener.accept() otherwise (error) 'secondRefused'
+		return "accept 2: {describe(error)}"
+	end 'secondRefused'
+
+	let secondTask = async echoOne(second)
+	let secondDone = await secondTask
+	let firstDone = await firstTask
+
+	return "[silent: {firstDone}][second: {secondDone}]"
+end 'acceptTwo'
+
+function dial(options TlsClientOptions, port NetworkPort) returns String
+	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options, deadlineMs: EchoBudgetMs) otherwise (error) 'refused'
+		return "connect: {describe(error)}"
+	end 'refused'
+
+	_ = try stream.send("hello") otherwise (error) 'unsent'
+		return "send: {describe(error)}"
+	end 'unsent'
+
+	let reply = try stream.recv(1024) otherwise (error) 'unheard'
+		return "recv: {describe(error)}"
+	end 'unheard'
+
+	stream.close()
+
+	return reply
+end 'dial'
+
+function main() returns ExitCode
+	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
+	let server = async acceptTwo(listener)
+	let silent = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 2
+
+	print("echo client: {dial(trustedClient(rootHex), port: listener.port())}\n")
+
+	silent.close()
+
+	print("server: {await server}\n")
+
+	listener.close()
+
+	return 0
+end 'main'
+```
+```stdout
+echo client: echo:hello
+server: [silent: recv: truncated][second: echoed hello]
 ```
 ```exitcode
 0

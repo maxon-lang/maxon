@@ -2437,8 +2437,8 @@ end 'main'
 
 ## TlsListener
 
-`TlsListener` accepts TLS connections: a `TcpListener` whose `accept()` also runs the server handshake and returns
-a [`TlsStream`](#tlsstream). The server presents the chain and key of a [`TlsIdentity`](#tlsidentity). It enables TLS 1.3
+`TlsListener` accepts TLS connections: a `TcpListener` whose `accept()` returns a [`TlsStream`](#tlsstream) as
+soon as the TCP connection is accepted, and the stream runs the server handshake on its first use. The server presents the chain and key of a [`TlsIdentity`](#tlsidentity). It enables TLS 1.3
 and TLS 1.2 and chooses by its own preference: ChaCha20-Poly1305 first, then AES-128-GCM, then AES-256-GCM, and for
 ALPN the first of its protocols the client lists. Same targets as `TlsClient`.
 
@@ -2446,12 +2446,13 @@ ALPN the first of its protocols the client lists. Same targets as `TlsClient`.
 |--------|---------|--------|-------------|
 | `TlsListener.bind(host String, port NetworkPort, options TlsServerOptions)` | `TlsListener` | `TlsError` | Bind and listen. Port `0` takes any free port. `bindFailed` when the address cannot be bound. |
 | `port()` | `NetworkPort` | — | The bound port. |
-| `accept()` | `TlsStream` | `TlsError` | The next connection, handshaken. A handshake that fails throws its error and leaves the listener accepting; `acceptFailed` when the listener is closed or has failed. |
+| `accept()` | `TlsStream` | `TlsError` | The next connection, before its handshake. The handshake's errors surface from the stream's first `send`, `recv` or `handshake()`, and the listener goes on accepting; `acceptFailed` when the listener is closed or has failed. |
 | `setAcceptDeadline(milliseconds SocketDeadlineMs)` | — | `TlsError` | Make an `accept()` still waiting for a connection `milliseconds` after this call throw `timedOut`; `0` clears it. |
 | `close()` | — | — | Stop listening. Idempotent. |
 
-The handshake runs inside `accept()`, so a client that connects and then stalls holds the listener until the options'
-handshake deadline passes (30 s by default).
+The handshake runs on the stream's first `send`, `recv`, `shutdownWrite` or `handshake()`, under the options'
+handshake deadline (30 s by default), so a client that connects and then stalls holds only its own stream. A server
+that accepts in a loop and serves each stream on its own green thread answers other clients meanwhile.
 
 ### TlsServerOptions
 
@@ -2462,7 +2463,7 @@ handshake deadline passes (30 s by default).
 | `setApplicationProtocols(names StringArray)` | `TlsError` | The ALPN protocols, in order of preference. A client that offers ALPN and none of them is refused with `no_application_protocol`; a client that offers none is accepted without one. |
 | `requestClientCertificates(roots RootCertificates)` | `TlsError` | Ask clients for a certificate. One that is presented must chain to `roots` for the client authentication purpose, or the handshake ends; a client that presents none is accepted. |
 | `requireClientCertificates(roots RootCertificates)` | `TlsError` | The same, and a client that presents none is refused with `certificate_required` (TLS 1.3) or `handshake_failure` (TLS 1.2). No roots is `invalidConfiguration`. |
-| `setHandshakeDeadline(milliseconds SocketDeadlineMs)` | — | How long `accept()` gives one connection's handshake before it throws `handshakeTimedOut`; `0` waits with no deadline. |
+| `setHandshakeDeadline(milliseconds SocketDeadlineMs)` | — | How long a connection's handshake may take, from its first `send`, `recv` or `handshake()`, before that call throws `handshakeTimedOut`; `0` waits with no deadline. |
 | `setVerificationTime(seconds UnixSeconds)` | — | The Unix time client certificates are checked at, in place of the clock. |
 
 With client certificates asked for, the CertificateRequest names the subjects of `roots`.
@@ -2490,21 +2491,23 @@ end 'main'
 
 ## TlsStream
 
-`TlsStream` is an established TLS connection, the one `TlsClient.connect` and `TlsListener.accept()` return. It is
-used from one green thread at a time, through a `var`. `send`, `recv` and the deadlines follow `TcpClient`; the
+`TlsStream` is a TLS connection, the one `TlsClient.connect` and `TlsListener.accept()` return. `connect` returns an
+established stream; a stream from `accept()` runs its handshake on its first `send`, `recv` or `shutdownWrite`, or on
+`handshake()`. It is used from one green thread at a time, through a `var`. `send`, `recv` and the deadlines follow `TcpClient`; the
 bytes are the application data, and a write is split into records of at most 16 KiB.
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
 | `send(data String)`, `send(data ByteArray)` | `BytePos` | `TlsError` | Send every byte; returns the count. `closed` after `close` or `shutdownWrite`. A send that fails part-way, at its write deadline or on a transport error, fails the write side for good: this call throws the failure and every later `send` and `shutdownWrite` throws the same one, because the peer may hold part of a record. |
+| `handshake()` | — | `TlsError` | Run the handshake if it has not run; a stream whose handshake has completed returns at once. `send`, `recv` and `shutdownWrite` run it first. A failure is thrown here, closes the connection, and every later call throws `closed`. |
 | `recv(bufferSize RecvCapacity)` | `String` | `TlsError` | Between one and `bufferSize` bytes of application data. |
 | `recvBytes(bufferSize RecvCapacity)` | `ByteArray` | `TlsError` | The same bytes, unconverted. After the peer's close_notify and the data before it, `connectionClosed`; a TCP connection that ends without one, `truncated`. |
-| `protocol()` | `TlsProtocol` | — | `tls13` or `tls12`, whichever was negotiated. |
-| `cipherSuite()` | `TlsCipherSuite` | — | `tls13(suite)` with a `Tls13CipherSuite`, or `tls12(suite)` with a `Tls12CipherSuite`. |
-| `applicationProtocol()` | `TlsApplicationProtocol` | — | `negotiated(name)` or `unnegotiated`. |
-| `peerCertificates()` | `ByteArrays` | — | The chain the peer presented, DER, in the order sent: the server's for a client, the client's (none when it presented none) for a server. |
-| `setReadDeadline(milliseconds SocketDeadlineMs)` | — | `TlsError` | A read that waits longer than this throws `timedOut`; the stream stays usable. Measured from this call; `0` clears it. `closed` once the stream is closed. |
-| `setWriteDeadline(milliseconds SocketDeadlineMs)` | — | `TlsError` | A write that cannot finish within this many milliseconds of this call throws `timedOut` and fails the write side (see `send`). Measured from this call; `0` clears it. `closed` once the stream is closed. |
+| `protocol()` | `TlsProtocol` | `TlsError` | `tls13` or `tls12`, whichever was negotiated. `handshakePending` until the handshake has completed. |
+| `cipherSuite()` | `TlsCipherSuite` | `TlsError` | `tls13(suite)` with a `Tls13CipherSuite`, or `tls12(suite)` with a `Tls12CipherSuite`. `handshakePending` until the handshake has completed. |
+| `applicationProtocol()` | `TlsApplicationProtocol` | `TlsError` | `negotiated(name)` or `unnegotiated`. `handshakePending` until the handshake has completed. |
+| `peerCertificates()` | `ByteArrays` | `TlsError` | The chain the peer presented, DER, in the order sent: the server's for a client, the client's (none when it presented none) for a server. `handshakePending` until the handshake has completed. |
+| `setReadDeadline(milliseconds SocketDeadlineMs)` | — | `TlsError` | A read that waits longer than this throws `timedOut`; the stream stays usable. Measured from this call; `0` clears it. Set before the handshake has completed, it applies from the moment the handshake completes. `closed` once the stream is closed. |
+| `setWriteDeadline(milliseconds SocketDeadlineMs)` | — | `TlsError` | A write that cannot finish within this many milliseconds of this call throws `timedOut` and fails the write side (see `send`). Measured from this call; `0` clears it. Set before the handshake has completed, it applies from the moment the handshake completes. `closed` once the stream is closed. |
 | `shutdownWrite()` | — | `TlsError` | Send close_notify and stop sending: the peer reads the end of the stream while this side can still `recv`. The close_notify is written under a write deadline of 5 seconds, which replaces the one set; a peer that has stopped reading ends it with `timedOut`. |
 | `close()` | — | — | Send close_notify, under a write deadline of 5 seconds, and close the connection; a stream whose write side has failed sends none. Idempotent. |
 
@@ -2516,12 +2519,14 @@ or found by this side, ends the stream: the error is thrown once and every later
 ```maxon
 function main() returns ExitCode
 	var stream = try TlsClient.connect("example.com", port: 443) otherwise return 1
-	let suite = match stream.cipherSuite() 'suite'
+	let negotiated = try stream.cipherSuite() otherwise return 2
+	let protocol = try stream.protocol() otherwise return 3
+	let suite = match negotiated 'suite'
 		tls13(chosen) gives chosen.name
 		tls12(chosen) gives chosen.name
 	end 'suite'
 
-	print("{stream.protocol().name} {suite}\n")
+	print("{protocol.name} {suite}\n")
 	stream.close()
 
 	return 0
@@ -2558,6 +2563,7 @@ union TlsError implements Error
 	connectionClosed
 	truncated
 	closed
+	handshakePending
 	trustStoreUnavailable
 	entropyUnavailable
 	invalidConfiguration
@@ -2574,10 +2580,11 @@ end 'TlsError'
 | Case | Meaning |
 |------|---------|
 | `resolveFailed`, `connectFailed`, `bindFailed`, `acceptFailed`, `acceptInterrupted`, `timedOut`, `sendFailed`, `recvFailed` | The `NetworkError` case of the same name. `timedOut` is a connect, accept, read or write deadline that passed. |
-| `handshakeTimedOut` | A connection was made and its handshake did not finish within its deadline. A listener's `accept()` throws this for the connection that stalled and `timedOut` when no connection arrived, so a caller can tell the two apart. |
+| `handshakeTimedOut` | A connection was made and its handshake did not finish within its deadline. A stream from a listener throws this from the call that runs its handshake, and `accept()` throws `timedOut` when no connection arrived, so a caller can tell the two apart. |
 | `connectionClosed` | The peer ended the stream with close_notify, and every byte before it was read; or the transport refused a write because the peer had gone. |
 | `truncated` | The TCP connection ended without a close_notify, so the data may be incomplete. |
 | `closed` | The stream was closed, or ended in an error that was already thrown. |
+| `handshakePending` | `protocol()`, `cipherSuite()`, `applicationProtocol()` or `peerCertificates()` was called on a stream whose handshake has not completed. |
 | `trustStoreUnavailable` | The system roots cannot be read. |
 | `entropyUnavailable` | The operating system refused the random bytes the handshake needs, before anything was sent: no alert goes out. |
 | `invalidConfiguration` | An option no handshake could use. |
@@ -2824,11 +2831,19 @@ connection closes. Keep-alive, chunked transfer and `Expect: 100-continue` are o
 | `setLimits(caps HttpServerLimits)` | — | — | Replace the caps later requests are parsed under. |
 | `setAcceptDeadline(milliseconds SocketDeadlineMs)` | — | `HttpServerError` | Make an `accept()` still waiting `milliseconds` after this call throw `acceptTimedOut`; `0` clears it. Throws `listenerClosed` once the server is closed. |
 | `accept()` | `HttpExchange` | `HttpServerError` | Take the next connection and the one request on it. An `OPTIONS *` is answered here, and the next connection taken. |
-| `serve(handler HttpHandler)` | `HttpServeEnd` | — | Accept and answer until `close()`, a listener failure or the accept deadline. |
+| `serve(handler HttpHandler)` | `HttpServeEnd` | — | Accept and answer until `close()`, a listener failure or the accept deadline, serving each connection on its own green thread. |
 | `close()` | — | — | Stop listening: a parked or later `accept()` throws `listenerClosed`, which ends `serve`. |
 
 `close()` writes the server, so the server it is called on is held in a `var`; through a `let` it is
 [E3159](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3159).
+
+`serve` reads each connection's request, and runs its handler, on a green thread of its own, so a client that stalls
+delays only itself and handlers of different connections overlap whenever one waits. `handler` is shared by the
+connections in flight, so `serve` keeps it: pass a fresh handler, a `var` handler that is not read afterwards, or
+`handler.clone()`; a `let` handler, or a `var` handler read again, passed as it is, is
+[E3078](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3078). Connections in flight are bounded by the operating system's socket
+limits, each in time by [`HttpServerLimits`](#httpserverlimits) and, for TLS, by the options' handshake deadline. `serve`
+returns once the listener has ended and every connection it took has finished.
 
 `serve` hands each exchange to `handler.handle`. A handler that throws, or returns without answering, has
 its exchange answered `500` with an empty body, and `handler.faulted` is told. A request `accept()` refuses
@@ -2851,9 +2866,10 @@ to the next connection. When the OS refuses one connection (`acceptInterrupted`)
 [`TlsListener`](#tlslistener): the identity it presents, the TLS versions, and whether clients are asked for a
 certificate (`requestClientCertificates`) or must present one (`requireClientCertificates`). The server offers
 the ALPN protocol `http/1.1` whatever `options` lists, so a client that offers only other protocols (`h2`) is
-refused by the handshake, and a client that offers none is served. `accept` and `serve` run the handshake of each
-connection after taking it and before reading its request; the handshake is bounded by the options'
-`setHandshakeDeadline` (30 s by default), and a client that stalls holds the accept loop until it passes, as `tlsFailed(handshakeTimedOut)`. The accept deadline of `setAcceptDeadline` is a different outcome: no connection arrived, `acceptTimedOut`, which ends `serve`.
+refused by the handshake, and a client that offers none is served. The handshake of each connection runs when its
+request is first read, before any of the request, bounded by the options' `setHandshakeDeadline` (30 s by default);
+a client that stalls holds only its own connection, which ends as `tlsFailed(handshakeTimedOut)`. `accept` takes one
+connection at a time, so a stalled client delays it for that long, and `serve` serves connections concurrently. The accept deadline of `setAcceptDeadline` is a different outcome: no connection arrived, `acceptTimedOut`, which ends `serve`.
 
 A connection whose handshake fails is `HttpServerError.tlsFailed(error)` from `accept`, carrying the
 [`TlsError`](#tlserror) (`certificateRejected` for a client chain the server refused, `protocolError` for the
@@ -2979,7 +2995,7 @@ and `writeDeadlineMs` 10000 each. All four are public fields.
 | `HttpServerLimits.create()` | `HttpServerLimits` | The defaults above. |
 | `maxHeaderBytes` | `HttpByteCap` | How much of a header block is read before `headersTooLarge`. |
 | `maxBodyBytes` | `HttpByteCap` | The largest `Content-Length` accepted. |
-| `readDeadlineMs` | `SocketDeadlineMs` | How long a request may take to arrive whole, from the moment its connection is taken, before `readTimedOut`. |
+| `readDeadlineMs` | `SocketDeadlineMs` | How long a request may take to arrive whole, from the moment its connection is taken (a TLS connection: from the moment its handshake completes), before `readTimedOut`. |
 | `writeDeadlineMs` | `SocketDeadlineMs` | How long each answer may take to send before the send fails. |
 
 `HttpByteCap` is `int(0 to 1099511627776)`, 1 TiB.

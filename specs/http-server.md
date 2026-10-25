@@ -486,7 +486,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 	try server.setAcceptDeadline(300) otherwise return 2
 
 	let start = Clock.nowMs()
-	let idle = server.serve(handler)
+	let idle = server.serve(handler.clone())
 	let tookMs = Clock.elapsedMs(start)
 
 	try server.setAcceptDeadline(0) otherwise return 3
@@ -2474,6 +2474,75 @@ end 'main'
 ```
 ```stdout
 accept=served /first answered=true
+```
+```exitcode
+0
+```
+
+<!-- test: http-server.a-silent-client-does-not-delay-another-request -->
+<!-- procs: 1 -->
+`serve` reads each connection's request on its own green thread, so a client that connects and sends nothing holds only its own connection until the read deadline answers it 408: a request made beside it is answered within the client's budget, well inside that deadline.
+```maxon
+let ClientBudgetMs = 1500
+let SilentReadDeadlineMs = 5000
+
+type AnswerHandler implements HttpHandler
+	static function create() returns AnswerHandler
+		return AnswerHandler{}
+	end 'create'
+
+	function handle(exchange HttpExchange) throws HttpServerError
+		try exchange.respondWith(StatusCode.ok, body: "answered", contentType: "text/plain")
+	end 'handle'
+
+	function faulted(fault HttpHandlerFault)
+		print("faulted {fault.describe()}\n")
+	end 'faulted'
+end 'AnswerHandler'
+
+function serveAnswers(server HttpServer) returns HttpServeEnd
+	return server.serve(AnswerHandler.create())
+end 'serveAnswers'
+
+function main() returns ExitCode
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var limits = HttpServerLimits.create()
+
+	limits.readDeadlineMs = SilentReadDeadlineMs
+	server.setLimits(limits)
+
+	let port = server.port()
+	let peer = async serveAnswers(server)
+	let silent = try TcpClient.connect("127.0.0.1", port: port) otherwise return 2
+	let request = try HttpRequest.create(HttpMethod.get, url: "http://127.0.0.1:{port}/after") otherwise return 3
+	var clientLimits = HttpClientLimits.create()
+
+	clientLimits.timeoutMs = ClientBudgetMs
+
+	let response = try HttpClient.send(request, limits: clientLimits) otherwise (error) 'failed'
+		print("a request beside a silent client: error {error.name}\n")
+
+		silent.close()
+		server.close()
+
+		print("ended: {(await peer).name}\n")
+
+		return 0
+	end 'failed'
+
+	print("a request beside a silent client: {response.statusCode().number()} [{response.body()}]\n")
+
+	silent.close()
+	server.close()
+
+	print("ended: {(await peer).name}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+a request beside a silent client: 200 [answered]
+ended: closed
 ```
 ```exitcode
 0

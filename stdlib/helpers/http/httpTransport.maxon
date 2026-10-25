@@ -60,10 +60,10 @@ public union HttpTransport
 		end 'transport'
 	end 'closeAfterDraining'
 
-	public function security() returns HttpConnectionSecurity
+	public function security() returns HttpConnectionSecurity throws TlsError
 		match self 'transport'
 			plain then return HttpConnectionSecurity.plaintext
-			secure(stream) then return HttpConnectionSecurity.tls(stream.protocol(), cipherSuite: stream.cipherSuite(), applicationProtocol: stream.applicationProtocol(), peerCertificates: stream.peerCertificates())
+			secure(stream) then return HttpConnectionSecurity.tls(try stream.protocol(), cipherSuite: try stream.cipherSuite(), applicationProtocol: try stream.applicationProtocol(), peerCertificates: try stream.peerCertificates())
 		end 'transport'
 	end 'security'
 end 'HttpTransport'
@@ -96,6 +96,7 @@ function httpSecureFault(error TlsError) returns HttpTransportFault
 		handshakeTimedOut or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or

@@ -161,6 +161,21 @@ release's version as its heading when the release is cut.
   bodies could read the program's. A second file's extension naming a member the first file leaves without a
   visibility modifier is E3008.
   Fix: write the extension bodies for the member the program declares, or rename it to keep the library's.
+- `TlsListener.accept()` returns once the TCP connection is accepted, and the stream runs its handshake on its
+  first `send`, `recv` or `shutdownWrite`, or on the new `handshake()`, as Go's `Conn.Handshake` does. A failed
+  handshake is thrown from that call, not from `accept()`, and the options' handshake deadline bounds the
+  handshake from that call. A read or write deadline set on the stream before then applies once the handshake
+  completes.
+  Fix: handle handshake errors where the stream is first used, or call `handshake()` right after `accept()`.
+- `TlsStream.protocol()`, `cipherSuite()`, `applicationProtocol()` and `peerCertificates()` throw `TlsError`,
+  `handshakePending` until the handshake has completed, and `TlsError` has that case, so a `match` over it that
+  lists every case is no longer exhaustive. `HttpTransport.security()` throws `TlsError` the same way.
+  Fix: call the four with `try`, after `handshake()` on a stream from `accept()`; add an arm for
+  `handshakePending`.
+- `HttpServer.serve` serves each connection on its own green thread, so handlers of different connections
+  overlap whenever one waits, and it keeps `handler` for them: a `let` handler, or a `var` handler read again
+  after the call, passed as it is is E3078. `serve` returns once every connection it took has finished.
+  Fix: pass a fresh handler, a `var` handler that is not read afterwards, or `handler.clone()`.
 
 ## 0.5.0 — 2026-10-08
 

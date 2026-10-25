@@ -73,6 +73,8 @@ let NoAcceptRetryMs = 0 as HttpAcceptRetryMs
 let FirstAcceptRetryMs = 5
 let LastAcceptRetryMs = 1000
 let AcceptRetryGrowth = 2
+let ConnectionReapFloor = 64 as Count
+let ConnectionReapGrowth = 2
 
 /// The caps one server parses under.
 public type HttpServerLimits
@@ -135,7 +137,7 @@ public type HttpExchange
 
 	/// Whether the request arrived over TLS, and what the handshake settled.
 	public function security() returns HttpConnectionSecurity
-		return self.connection.security()
+		return try self.connection.security() otherwise panic("HttpExchange.security: the request arrived over a connection whose handshake completed")
 	end 'security'
 
 	function stage() returns ResponseStage
@@ -283,34 +285,39 @@ public type HttpServer
 	/// fails is thrown as `tlsFailed`.
 	public function accept() returns HttpExchange throws HttpServerError
 		while true 'nextConnection'
-			if self.closing.asked 'alreadyClosed'
-				throw HttpServerError.listenerClosed
-			end 'alreadyClosed'
-
-			var transport = try self.listener.accept(self.closing)
-
-			var arrival = try self.arrivalOn(transport) otherwise (fault) 'protocolFault'
-				answerProtocolFault(transport, fault: fault, writeDeadlineMs: self.limits.writeDeadlineMs)
-
-				throw fault
-			end 'protocolFault'
+			var connection = try self.nextConnection()
+			var arrival = try connection.arrival()
 
 			match arrival 'arrival'
 				forResource(exchange) then return exchange
-				forTheServer(leftoverArrived) then answerServerWideOptions(transport, leftoverArrived: leftoverArrived, writeDeadlineMs: self.limits.writeDeadlineMs)
+				forTheServer(leftoverArrived) then connection.answerServerWideOptions(leftoverArrived)
 			end 'arrival'
 		end 'nextConnection'
 	end 'accept'
 
+	function nextConnection() returns ServerConnection throws HttpServerError
+		if self.closing.asked 'alreadyClosed'
+			throw HttpServerError.listenerClosed
+		end 'alreadyClosed'
+
+		let transport = try self.listener.accept(self.closing)
+
+		return ServerConnection.over(transport, limits: self.limits.clone(), scheme: self.listener.scheme())
+	end 'nextConnection'
+
 	/// Hand each accepted exchange to `handler` until `close()`, a listener failure or the accept
-	/// deadline; the answer says which. A refused request is skipped, and an interrupted accept is
-	/// retried after a wait that doubles from 5 ms to 1 s.
+	/// deadline; the answer says which. Each connection is read, and its handler run, on its own green
+	/// thread, so a client that stalls delays only itself; `handler` is shared by the connections in
+	/// flight, and `serve` returns once every connection it took has finished. A refused request is
+	/// skipped, and an interrupted accept is retried after a wait that doubles from 5 ms to 1 s.
 	public function serve(handler HttpHandler) returns HttpServeEnd
 		var progress = ServeProgress.serving
 		var retryMs = NoAcceptRetryMs
+		var inFlight = ConnectionPromises.create()
+		var reapAt = ConnectionReapFloor
 
 		while stillServing(progress) 'acceptLoop'
-			var exchange = try self.accept() otherwise (fault) 'refused'
+			var connection = try self.nextConnection() otherwise (fault) 'refused'
 				progress = progressAfter(fault)
 				retryMs = acceptRetryAfter(fault, previous: retryMs)
 
@@ -323,8 +330,15 @@ public type HttpServer
 			end 'refused'
 
 			retryMs = NoAcceptRetryMs
-			dispatchExchange(exchange, handler: handler)
+			inFlight.push(async serveConnection(ConnectionJob.create(connection, handler: handler)))
+
+			if inFlight.count() >= reapAt 'reap'
+				reapFinished(inFlight)
+				reapAt = reapThresholdAfter(inFlight.count())
+			end 'reap'
 		end 'acceptLoop'
+
+		awaitAll(inFlight)
 
 		return servedUntil(progress)
 	end 'serve'
@@ -336,12 +350,30 @@ public type HttpServer
 		self.closing.asked = true
 		self.listener.close()
 	end 'close'
+end 'HttpServer'
 
-	function arrivalOn(connection HttpTransport) returns RequestArrival throws HttpServerError
-		try connection.setReadDeadline(self.limits.readDeadlineMs) otherwise throw HttpServerError.connectionClosed
+type ServerConnection
+	var transport as HttpTransport
+	var limits as HttpServerLimits
+	var scheme as HttpUrlScheme
 
-		var inbound = HttpInbound.over(connection)
-		let head = try httpParseRequestHead(try readRequestHead(inbound, cap: self.limits.maxHeaderBytes as BytePos), scheme: self.listener.scheme())
+	static function over(transport HttpTransport, limits HttpServerLimits, scheme HttpUrlScheme) returns ServerConnection
+		return ServerConnection{transport: transport, limits: limits, scheme: scheme}
+	end 'over'
+
+	function arrival() returns RequestArrival throws HttpServerError
+		return try self.arrivalOn() otherwise (fault) 'protocolFault'
+			answerProtocolFault(self.transport, fault: fault, writeDeadlineMs: self.limits.writeDeadlineMs)
+
+			throw fault
+		end 'protocolFault'
+	end 'arrival'
+
+	function arrivalOn() returns RequestArrival throws HttpServerError
+		try self.transport.setReadDeadline(self.limits.readDeadlineMs) otherwise throw HttpServerError.connectionClosed
+
+		var inbound = HttpInbound.over(self.transport)
+		let head = try httpParseRequestHead(try readRequestHead(inbound, cap: self.limits.maxHeaderBytes as BytePos), scheme: self.scheme)
 
 		match head 'target'
 			wholeServer(headers) then return RequestArrival.forTheServer((try self.bodyAfter(headers, inbound: inbound)).leftoverArrived)
@@ -366,7 +398,87 @@ public type HttpServer
 
 		return ArrivedBody.create(body, leftoverArrived: inbound.unreadBytes() > 0)
 	end 'bodyAfter'
-end 'HttpServer'
+
+	function answerServerWideOptions(leftoverArrived bool)
+		var allowed = StringBuilder.create()
+
+		for (iter, method) in HttpMethod.allCases.withIterator() 'eachMethod'
+			if iter.index() > 0 'separated'
+				allowed.append(AllowedMethodSeparator)
+			end 'separated'
+
+			allowed.append(httpMethodToString(method))
+		end 'eachMethod'
+
+		var headers = HttpHeaders.create()
+		headers.set(AllowHeaderName, value: allowed.build())
+
+		let answer = HttpResponse.create(StatusCode.ok, reasonPhrase: reasonPhraseOf(StatusCode.ok), responseHeaders: headers, responseBody: "")
+		let head = try httpBuildResponseHead(answer) otherwise panic("answerServerWideOptions: the answer the server builds itself is always sendable")
+		try sendAndClose(self.transport, wire: head, writeDeadlineMs: self.limits.writeDeadlineMs, lingering: leftoverArrived) otherwise ignore
+	end 'answerServerWideOptions'
+end 'ServerConnection'
+
+enum ConnectionEnd
+	refused
+	served
+end 'ConnectionEnd'
+
+typealias ConnectionPromise = Promise with ConnectionEnd
+typealias ConnectionPromises = Array with ConnectionPromise
+
+type ConnectionJob
+	export var connection as ServerConnection
+	export var handler as HttpHandler
+
+	static function create(connection ServerConnection, handler HttpHandler) returns ConnectionJob
+		return ConnectionJob{connection: connection, handler: handler}
+	end 'create'
+end 'ConnectionJob'
+
+function serveConnection(job ConnectionJob) returns ConnectionEnd
+	var arrival = try job.connection.arrival() otherwise return ConnectionEnd.refused
+
+	match arrival 'arrival'
+		forResource(exchange) then dispatchExchange(exchange, handler: job.handler)
+		forTheServer(leftoverArrived) then job.connection.answerServerWideOptions(leftoverArrived)
+	end 'arrival'
+
+	return ConnectionEnd.served
+end 'serveConnection'
+
+function reapFinished(inFlight ConnectionPromises)
+	var index = 0 as ElementIndex
+
+	while index < inFlight.count() 'eachConnection'
+		let finished = (try inFlight.get(index) otherwise panic("reapFinished: the index is inside the array")).isComplete()
+
+		if finished 'collect'
+			let promise = try inFlight.remove(index) otherwise panic("reapFinished: the index is inside the array")
+
+			_ = await promise
+		end 'collect' else 'running'
+			index = index + 1
+		end 'running'
+	end 'eachConnection'
+end 'reapFinished'
+
+// A reap scans every promise, so the next one waits for the in-flight count to double.
+function reapThresholdAfter(remaining Count) returns Count
+	if remaining < ConnectionReapFloor 'fewRemain'
+		return ConnectionReapFloor
+	end 'fewRemain'
+
+	return remaining * ConnectionReapGrowth
+end 'reapThresholdAfter'
+
+// A promise dropped before its coroutine finishes cancels it, so `serve` keeps each one until its
+// connection is done.
+function awaitAll(inFlight ConnectionPromises)
+	for promise in inFlight 'eachConnection'
+		_ = await promise
+	end 'eachConnection'
+end 'awaitAll'
 
 function readRequestHead(inbound HttpInbound, cap BytePos) returns String throws HttpServerError
 	let read = try httpReadDelimited(inbound, delimiter: HttpDelimiter.head, cap: cap) otherwise (cause) 'readFailed'
@@ -404,6 +516,7 @@ function progressAfter(fault HttpServerError) returns ServeProgress
 		acceptFailed gives ServeProgress.ended(HttpServeEnd.listenerFailed)
 		acceptTimedOut gives ServeProgress.ended(HttpServeEnd.acceptDeadlinePassed)
 		acceptInterrupted or
+		tlsFailed gives ServeProgress.serving
 		malformedRequest or
 		headersTooLarge or
 		bodyTooLarge or
@@ -412,10 +525,9 @@ function progressAfter(fault HttpServerError) returns ServeProgress
 		unsupportedVersion or
 		readTimedOut or
 		connectionClosed or
-		tlsFailed gives ServeProgress.serving
 		sendFailed or
 		alreadyResponded or
-		invalidResponse panic("HttpServer.serve: `accept()` does not throw `{fault.name}`")
+		invalidResponse panic("HttpServer.serve: taking a connection does not throw `{fault.name}`")
 	end 'which'
 end 'progressAfter'
 
@@ -494,6 +606,7 @@ function secureListenerFault(error TlsError, closing ServerClosing) returns Http
 		connectionClosed or
 		truncated or
 		closed or
+		handshakePending or
 		trustStoreUnavailable or
 		entropyUnavailable or
 		invalidConfiguration or
@@ -588,25 +701,6 @@ function sendProtocolStatus(connection HttpTransport, code StatusCode, lingering
 	let head = try httpBuildResponseHead(answer) otherwise panic("sendProtocolStatus: a refusal the server builds itself is always sendable")
 	try sendAndClose(connection, wire: head, writeDeadlineMs: writeDeadlineMs, lingering: lingering) otherwise ignore
 end 'sendProtocolStatus'
-
-function answerServerWideOptions(connection HttpTransport, leftoverArrived bool, writeDeadlineMs SocketDeadlineMs)
-	var allowed = StringBuilder.create()
-
-	for (iter, method) in HttpMethod.allCases.withIterator() 'eachMethod'
-		if iter.index() > 0 'separated'
-			allowed.append(AllowedMethodSeparator)
-		end 'separated'
-
-		allowed.append(httpMethodToString(method))
-	end 'eachMethod'
-
-	var headers = HttpHeaders.create()
-	headers.set(AllowHeaderName, value: allowed.build())
-
-	let answer = HttpResponse.create(StatusCode.ok, reasonPhrase: reasonPhraseOf(StatusCode.ok), responseHeaders: headers, responseBody: "")
-	let head = try httpBuildResponseHead(answer) otherwise panic("answerServerWideOptions: the answer the server builds itself is always sendable")
-	try sendAndClose(connection, wire: head, writeDeadlineMs: writeDeadlineMs, lingering: leftoverArrived) otherwise ignore
-end 'answerServerWideOptions'
 
 function sendAndClose(connection HttpTransport, wire String, writeDeadlineMs SocketDeadlineMs, lingering bool) throws HttpTransportFault
 	try sendWithin(connection, wire: wire, writeDeadlineMs: writeDeadlineMs) otherwise (e) 'unsent'
