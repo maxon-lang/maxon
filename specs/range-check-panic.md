@@ -187,9 +187,10 @@ arm existed, and could not: the only frame that knows which ops moved is the one
 
 <!-- test: range-check-panic.upper-bound -->
 Above the maximum, and not foldable — so a runtime check is what fires, and the trace names `clamp`.
-⭐ The guard is `clamp`'s ENTRY guard, at the parameter's own line (5), not the one on its
-`return` (6): the value was already outside `Percent` when it crossed the boundary, and the parameter
-list is where that premise is declared.
+`one * 101` is a `Percent` by name only (arithmetic adopts its operand's alias without proving it), so it
+reaches `clamp` with no cast to refuse it at the call. ⭐ The guard is `clamp`'s ENTRY guard, at the
+parameter's own line (5), not the one on its `return` (6): the value was already outside `Percent` when
+it crossed the boundary, and the parameter list is where that premise is declared.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Percent = int(0 to 100)
@@ -198,29 +199,30 @@ function clamp(x Percent) returns Percent
   return x
 end 'clamp'
 
-function grow(n Integer) returns Integer
-  return n * 101
-end 'grow'
+function opaque(n Integer) returns Integer
+  return n
+end 'opaque'
 
 function main() returns ExitCode
-  let big = grow(1)
-  return clamp(big as Percent) as ExitCode
+  let one = opaque(1) as Percent
+  return clamp(one * 101) as ExitCode
 end 'main'
 ```
 ```exitcode
 1
 ```
 ```stderr
-panic at range-check-panic.upper-bound.test:15: Range check failed: value outside typealias 'Percent'
+panic at range-check-panic.upper-bound.test:5: Range check failed: value outside typealias 'Percent'
 Stack trace:
+  in clamp
   in main
   in mrt_start
 ```
 
 <!-- test: range-check-panic.lower-bound -->
 Below the minimum. `Natural`'s lower bound is 0, so a negative value is out of range even though it
-is a perfectly ordinary `int` — and, as above, `check`'s entry guard is what refuses it, at the
-parameter's line.
+is a perfectly ordinary `int` — and, as above, the `Natural`-named `one - 2` reaches `check` uncast, so
+`check`'s entry guard is what refuses it, at the parameter's line.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Natural = int(0 to i64.max)
@@ -229,21 +231,22 @@ function check(n Natural) returns Natural
   return n
 end 'check'
 
-function neg(n Integer) returns Integer
-  return -n
-end 'neg'
+function opaque(n Integer) returns Integer
+  return n
+end 'opaque'
 
 function main() returns ExitCode
-  let below = neg(1)
-  return check(below as Natural) as ExitCode
+  let one = opaque(1) as Natural
+  return check(one - 2) as ExitCode
 end 'main'
 ```
 ```exitcode
 1
 ```
 ```stderr
-panic at range-check-panic.lower-bound.test:15: Range check failed: value outside typealias 'Natural'
+panic at range-check-panic.lower-bound.test:5: Range check failed: value outside typealias 'Natural'
 Stack trace:
+  in check
   in main
   in mrt_start
 ```
@@ -945,7 +948,7 @@ excludes 0, so `a / by` is a bare divide with no `try` spellable -- the proof th
 the parameter's declared range, and this is the check that makes that proof true. The panic names the
 line the premise is DECLARED on (`divide`'s parameter list), not the line that wrote the argument: one
 guard stands in front of every call, including a call through a function value that has no argument
-list to blame.
+list to blame. `one - one` is a `NonZero` by name and `0` by value, and crosses into `by` with no cast.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias NonZero = int(1 to i64.max)
@@ -959,15 +962,17 @@ function divide(a Integer, by NonZero) returns Integer
 end 'divide'
 
 function main() returns ExitCode
-  return divide(10, by: opaque(0) as NonZero) as ExitCode
+  let one = opaque(1) as NonZero
+  return divide(10, by: one - one) as ExitCode
 end 'main'
 ```
 ```exitcode
 1
 ```
 ```stderr
-panic at range-check-panic.runtime-argument.test:14: Range check failed: value outside typealias 'NonZero'
+panic at range-check-panic.runtime-argument.test:9: Range check failed: value outside typealias 'NonZero'
 Stack trace:
+  in divide
   in main
   in mrt_start
 ```
@@ -1079,7 +1084,8 @@ sole consumer is a premise is exactly what a naive dead-value pass deletes. That
 the whole point of this mechanism is that the divide prover TRUSTS a `NonZero` parameter, so a pass that
 elided the guard on the grounds that nothing reads the value would silently let a zero reach the unguarded divide,
 with every existing case still green. Pinned so `pruneDeadBlockArgs` / `elimTrivialBlockArgs` /
-`foldConstOperands` — and anything later that walks uses — has a test standing in front of it.
+`foldConstOperands` — and anything later that walks uses — has a test standing in front of it. The zero
+arrives uncast, as `one - one`, so `unused`'s entry guard is the only check between it and the parameter.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias NonZero = int(1 to i64.max)
@@ -1093,15 +1099,17 @@ function unused(_ NonZero) returns Integer
 end 'unused'
 
 function main() returns ExitCode
-  return unused(opaque(0) as NonZero) as ExitCode
+  let one = opaque(1) as NonZero
+  return unused(one - one) as ExitCode
 end 'main'
 ```
 ```exitcode
 1
 ```
 ```stderr
-panic at range-check-panic.entry-guard-on-a-parameter-no-body-reads.test:14: Range check failed: value outside typealias 'NonZero'
+panic at range-check-panic.entry-guard-on-a-parameter-no-body-reads.test:9: Range check failed: value outside typealias 'NonZero'
 Stack trace:
+  in unused
   in main
   in mrt_start
 ```
@@ -1110,10 +1118,11 @@ Stack trace:
 ⭐⭐ **THE CLAIM THE CALLEE-ENTRY DESIGN RESTS ON, AND THE ONLY CASE THAT CAN TEST IT.** The reason the
 guard belongs to the callee rather than the call is that a call-site rule structurally cannot reach every
 caller: a call through a function VALUE has no callee name at the call site to look a parameter's range
-up by, so `callIndirect` / `witnessCall` would have stayed open for ever. Here the out-of-range `0`
-crosses the boundary through `fn`, and the trace shows the whole route — `main` → `apply` →
-`__fnref_divide` → `divide` — with the guard firing inside `divide`, where the range is declared. Nothing
-at any of those three call sites knows the word `NonZero`.
+up by, so `callIndirect` / `witnessCall` would have stayed open for ever. Here `apply` receives an in-range
+`1` and passes `b - b` — a `NonZero` by name, `0` by value, with no cast — through `f`, so the only
+check left between the zero and the divide is `divide`'s entry guard. The trace shows the whole route —
+`main` → `apply` → `__fnref_divide` → `divide` — with the guard firing inside `divide`, at its parameter
+line, where the range is declared.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias NonZero = int(1 to i64.max)
@@ -1127,21 +1136,23 @@ function divide(a Integer, b NonZero) returns Integer
   return ((a as NonZero) / b) as Integer
 end 'divide'
 
-function apply(f DivFn, a Integer, b Integer) returns Integer
-  return f(a, b as NonZero)
+function apply(f DivFn, a Integer, b NonZero) returns Integer
+  return f(a, b - b)
 end 'apply'
 
 function main() returns ExitCode
   let fn = divide
-  return apply(fn, a: 10, b: opaque(0)) as ExitCode
+  return apply(fn, a: 10, b: opaque(1) as NonZero) as ExitCode
 end 'main'
 ```
 ```exitcode
 1
 ```
 ```stderr
-panic at range-check-panic.argument-through-a-function-value-is-guarded.test:15: Range check failed: value outside typealias 'NonZero'
+panic at range-check-panic.argument-through-a-function-value-is-guarded.test:10: Range check failed: value outside typealias 'NonZero'
 Stack trace:
+  in divide
+  in __fnref_divide
   in apply
   in main
   in mrt_start
@@ -1263,7 +1274,8 @@ end 'main'
 ⭐ **CLAUSE 3, which is the one that cannot be broken by writing a program.** The entry guard splits the
 entry block before any body op, so it DOMINATES every `return` — including one inside a branch, whose own
 guard is elided. `99` is refused at `pick`'s parameter line before the `if` is even evaluated, which is
-what a dominating guard means: there is no path to that `return` that skips it.
+what a dominating guard means: there is no path to that `return` that skips it. `three * 33` reaches `x`
+as a `SmallInt` by name with no cast, so that entry guard is the check that refuses it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias SmallInt = int(0 to 10)
@@ -1280,15 +1292,17 @@ function pick(x SmallInt, flag Integer) returns SmallInt
 end 'pick'
 
 function main() returns ExitCode
-  return pick(opaque(99) as SmallInt, flag: 1) as ExitCode
+  let three = opaque(3) as SmallInt
+  return pick(three * 33, flag: 1) as ExitCode
 end 'main'
 ```
 ```exitcode
 1
 ```
 ```stderr
-panic at range-check-panic.entry-guard-covers-a-return-inside-a-branch.test:17: Range check failed: value outside typealias 'SmallInt'
+panic at range-check-panic.entry-guard-covers-a-return-inside-a-branch.test:9: Range check failed: value outside typealias 'SmallInt'
 Stack trace:
+  in pick
   in main
   in mrt_start
 ```
