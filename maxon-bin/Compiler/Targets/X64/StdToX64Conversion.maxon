@@ -1032,6 +1032,8 @@ export type StdToX64Lowering
 	// Created ONCE and RESET per function, unlike the three tables above — see the type's `create`.
 	var scaledIndexFolds as ScaledIndexFolds
 
+	var displacedAddressFolds as DisplacedAddressFolds
+
 	// The `load → binOp → store` steps of one word this function emits as one memory-destination
 	// instruction (`MemoryDestinationFolds`). Created once and reset per function, like the folds above,
 	// and computed after both censuses it reads.
@@ -1054,7 +1056,7 @@ export type StdToX64Lowering
 	let usesGt as bool
 
 	export static function create(target Target, abi CalleeAbiTable, usesGt bool) returns StdToX64Lowering
-		return Self{stdModule: StdModule.create(), target: target, rdata: RdataRequestLog.create(), targetModule: TargetModule.create(), compareFusion: CompareFusionCensus.create(), orderedBlockIds: OrderedBlockRoster.create(), scaledIndexFolds: ScaledIndexFolds.create(), memoryDestinationFolds: MemoryDestinationFolds.create(), valueDefs: StdValueDefs.create(), abi: abi, usesGt: usesGt, fresh: ValueMinter.create(0)}
+		return Self{stdModule: StdModule.create(), target: target, rdata: RdataRequestLog.create(), targetModule: TargetModule.create(), compareFusion: CompareFusionCensus.create(), orderedBlockIds: OrderedBlockRoster.create(), scaledIndexFolds: ScaledIndexFolds.create(), displacedAddressFolds: DisplacedAddressFolds.create(), memoryDestinationFolds: MemoryDestinationFolds.create(), valueDefs: StdValueDefs.create(), abi: abi, usesGt: usesGt, fresh: ValueMinter.create(0)}
 	end 'create'
 
 	// ⭐ **ONE UNIT THROUGH THE WHOLE CONVERSION**: the skeleton, the function's blocks, and its class
@@ -1348,11 +1350,14 @@ export type StdToX64Lowering
 		func.outgoingArgSize = bytes
 	end 'applyOutgoingArgSize'
 
-	// Phase 1 — the per-function analyses, all READS. Fresh tables each time: a `cmp`'s ValueId
+	// Phase 1 — the per-function analyses. Fresh tables each time: a `cmp`'s ValueId
 	// only means anything within its own function, and both the fused branch and the value uses
 	// that consume it are in the same function. All are computed BEFORE the op walk, because a
 	// compare is lowered long before the branch or the phi edge that decides what it must produce.
+	// The displaced-address fold rewrites the function's ops, so it runs first: every later table
+	// must see one consistent (address, offset) per access.
 	function prepareFunctionTables(funcIdx ElementIndex)
+		self.displacedAddressFolds.foldInFunction(self.stdModule, func: self.stdModule.getFunc(funcIdx), reach: DisplacementReach.anyImm32)
 		view srcFunc = self.stdModule.getFunc(funcIdx)
 		self.valueDefs.rebuild(self.stdModule, func: srcFunc)
 		self.compareFusion.computeForFunction(self.stdModule, func: srcFunc)

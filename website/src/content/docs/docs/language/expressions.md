@@ -47,8 +47,10 @@ Parentheses override precedence: `(2 + 3) * 5` is `25`. A cast applies to the ne
 Dividing by zero is not undefined behaviour and does not crash: `/` and `mod` whose divisor **might** be zero
 **throw** `DivisionByZero`, so the failure is part of the type system and behaves identically on every target.
 
-- **The divisor is provably non-zero** — a non-zero literal (`x / 4`), or a value whose ranged type excludes 0
-  — and the divide compiles as-is, with no check.
+- **The divisor is provably non-zero** — a non-zero literal (`x / 4`), a value whose ranged type excludes 0,
+  or a value whose known range excludes 0: the counter of a counted `for` loop between compile-time bounds
+  (`i` in `for i in 1 upto 10`), or a `let` computed from such values — and the divide compiles as-is, with
+  no check. A `try` on it is **E3055**.
 - **The divisor might be zero** — the divide throws, and must be written `try (a / b) otherwise …` (or
   propagated from a function that `throws`), unless a [`try` block](/docs/language/error-handling/#try-blocks) or a
   [`test` body](/docs/language/testing/#uncaught-errors-in-tests) handles it. A bare divide anywhere else is **E3057**
@@ -197,7 +199,7 @@ Both take a **type** and produce a compile-time `Count`.
   [inline packed record](/docs/language/composite-types/#inline-packed-records), which is `8` whatever its fields sum to. Inside a
   generic body, `sizeof` of any of its type parameters is the size of that parameter's argument: in
   `type Holder uses T, U`, `sizeof(T)` and `sizeof(U)` each answer for their own argument.
-- `countof(T)` is the number of elements a **fixed-size** container type holds: `countof(Vector with 3 Int)`
+- `countof(T)` is the number of elements a **fixed-size** container type holds: `countof(FixedArray with 3 Int)`
   is `3`. Inside such a container's own body, `countof(Self)` is the count of the instance a method is
   called on, or that a `static function`'s call names. A type with no fixed
   element count — a record, a primitive, a growable `Array` — is refused (**E2015**); ask an `Array` for its
@@ -205,7 +207,7 @@ Both take a **type** and produce a compile-time `Count`.
 
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
 type Pair
 	export var left as Int
@@ -221,7 +223,8 @@ end 'main'
 ## Collection Access
 
 Maxon has no subscript operator: `items[0]` is a syntax error. Elements are read and written through
-methods, and **every access is bounds-checked**:
+methods, and **every access is bounds-checked** — at run time, or at compile time for a
+[`FixedArray` index proven inside its size](#fixed-arrays-and-proven-indices):
 
 - `get(index)` returns the element, or **throws** `ArrayError.indexOutOfBounds` when the index is at or past
   `count()`. Like any throwing call it needs `try`.
@@ -263,6 +266,48 @@ function main() returns ExitCode
 	names.push("ada")
 	names.truncate(2)
 	print("{names.count()}\n")        // 2
+	return 0
+end 'main'
+```
+
+## Fixed Arrays and Proven Indices
+
+A `FixedArray with N T` holds exactly `N` elements, and `N` is part of its type: `FixedArray with 3 Int`
+and `FixedArray with 4 Int` are different types. The compiler therefore answers at each `get` or `set`
+whether the index lies inside `0 to N-1`:
+
+- **A proven index makes the access total.** The call cannot throw, is written without `try`, and a `try`
+  on it is **E3055**. An index is proven when it is a constant inside the size, a value whose ranged type
+  lies inside (`typealias Slot = int(0 to 3) implements ElementIndex` for a `FixedArray with 4`), the
+  counter of a counted `for` loop whose bounds are known at compile time and lie inside (literals,
+  `countof(T)`, folded constants), or a `let` computed from such values whose computed range lies inside.
+- **A constant index at or past the size** is **E3005** (`Value 4 is outside the range of the indices of
+  'FixedArray with 4' (int(0 to 3))`).
+- **Any other index** is checked at run time and throws `ArrayError.indexOutOfBounds`, so the call needs
+  `try`; a bare call is **E3057**, with the hint to give the index a ranged type within `int(0 to N-1)`.
+  An `ElementIndex` or `Count` parameter, a `var` stepped by a `while` loop, a call result and a
+  reassigned `var` are such indices, and so is every index inside an `extension FixedArray`, where the
+  count is known only at run time.
+
+The same known ranges prove a divisor non-zero (see [Division by Zero](#division-by-zero)).
+
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec4 = FixedArray with 4 Int
+typealias Slot = int(0 to 3) implements ElementIndex
+
+function read(v Vec4, at Slot) returns Int
+	return v.get(at)                              // proven by the parameter's type
+end 'read'
+
+function main() returns ExitCode
+	var v = Vec4.create()
+
+	for i in 0 upto countof(Vec4) 'fill'
+		v.set(i, value: (i * 10) as Int)          // proven by the loop bounds
+	end 'fill'
+
+	print("{read(v, at: 2)} {v.get(3)}\n")        // 20 30
 	return 0
 end 'main'
 ```

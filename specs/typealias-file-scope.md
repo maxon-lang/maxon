@@ -1968,20 +1968,20 @@ xy
 ```
 
 
-<!-- test: a-sized-vector-keeps-its-element-count-when-its-element-is-contested -->
-⭐ **A `Vector`'s SIZE is part of its type, and the per-file rescoping a contest causes must carry it.**
+<!-- test: a-sized-fixed-array-keeps-its-element-count-when-its-element-is-contested -->
+⭐ **A `FixedArray`'s SIZE is part of its type, and the per-file rescoping a contest causes must carry it.**
 When two files disagree about a ranged alias, every generic instance over that element is re-interned
 once per reading file (`SignatureIndex.fileScopedInstance`) so each file gets its own. That re-intern is
-keyed on `(base, args, fixedSize)`, so a `Vector with 8 W` stays a `Vector with 8`: `create()` produces
+keyed on `(base, args, fixedSize)`, so a `FixedArray with 8 W` stays a `FixedArray with 8`: `create()` produces
 eight slots, and the answer is `42 8 1779033703`.
 
-⚠ **NO `Array` CASE CAN CATCH IT**, which is why this one is a `Vector`: every base but `Vector` is
+⚠ **NO `Array` CASE CAN CATCH IT**, which is why this one is a `FixedArray`: every base but `FixedArray` is
 unsized, so `fixedSize` is already `NoFixedSize` there and dropping it is a no-op. The contest cases in
 `bytearray-element-size.md` are all `Array with Byte`.
 ```maxon
 // --- file: lib.maxon
 typealias W = int(i64.min to i64.max)
-typealias WVec = Vector with 8 W
+typealias WVec = FixedArray with 8 W
 
 export function wideCount() returns Wide
 	var v = WVec.create()
@@ -1990,8 +1990,8 @@ end 'wideCount'
 
 export function wideSlot() returns Wide
 	var v = WVec.create()
-	try v.set(7, value: 1779033703) otherwise panic("a Vector with 8 has an index 7")
-	return try v.get(7) otherwise panic("a Vector with 8 has an index 7")
+	v.set(7, value: 1779033703)
+	return v.get(7)
 end 'wideSlot'
 
 export typealias Wide = int(i64.min to i64.max)

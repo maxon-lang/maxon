@@ -2,10 +2,10 @@
 /// the field of integers modulo 2^255 - 19.
 /// @category Crypto
 typealias Curve25519Word = bits(64)
-typealias Curve25519Field = Vector with 10 Curve25519Word
-typealias Curve25519WideProduct = Vector with 19 Curve25519Word
-typealias Curve25519Scalar = Vector with 8 Curve25519Word
-typealias Curve25519WideScalar = Vector with 16 Curve25519Word
+typealias Curve25519Field = FixedArray with 10 Curve25519Word
+typealias Curve25519WideProduct = FixedArray with 19 Curve25519Word
+typealias Curve25519Scalar = FixedArray with 8 Curve25519Word
+typealias Curve25519WideScalar = FixedArray with 16 Curve25519Word
 typealias Curve25519LimbIndex = int(0 to 9) implements ElementIndex
 typealias Curve25519WideIndex = int(0 to 18) implements ElementIndex
 typealias Curve25519ScalarWordIndex = int(0 to 7) implements ElementIndex
@@ -146,11 +146,11 @@ function curve25519BitOf(bytes ByteArray, index Curve25519DigestBit) returns Cur
 end 'curve25519BitOf'
 
 function feLimb(f Curve25519Field, index Curve25519LimbIndex) returns Curve25519Word
-	return try f.get(index) otherwise panic("curve25519: limb index past the field element")
+	return f.get(index)
 end 'feLimb'
 
 function feSetLimb(f Curve25519Field, index Curve25519LimbIndex, value Curve25519Word)
-	try f.set(index, value: value) otherwise panic("curve25519: limb index past the field element")
+	f.set(index, value: value)
 end 'feSetLimb'
 
 function feLimbWidth(index Curve25519LimbIndex) returns Curve25519LimbWidth
@@ -219,12 +219,12 @@ function feMulSmall(a Curve25519Field, factor Curve25519Word) returns Curve25519
 end 'feMulSmall'
 
 function feAccumulate(wide Curve25519WideProduct, index Curve25519WideIndex, term Curve25519Word)
-	let sum = (try wide.get(index) otherwise panic("curve25519: product index past the wide product")) + term
-	try wide.set(index, value: sum) otherwise panic("curve25519: product index past the wide product")
+	let sum = wide.get(index) + term
+	wide.set(index, value: sum)
 end 'feAccumulate'
 
 function feWideLimb(wide Curve25519WideProduct, index Curve25519WideIndex) returns Curve25519Word
-	return try wide.get(index) otherwise panic("curve25519: product index past the wide product")
+	return wide.get(index)
 end 'feWideLimb'
 
 function feMul(a Curve25519Field, b Curve25519Field) returns Curve25519Field
@@ -452,11 +452,11 @@ public type X25519
 end 'X25519'
 
 function scalarWord(s Curve25519Scalar, index Curve25519ScalarWordIndex) returns Curve25519Word
-	return try s.get(index) otherwise panic("ed25519: scalar word index past the scalar")
+	return s.get(index)
 end 'scalarWord'
 
 function scalarSetWord(s Curve25519Scalar, index Curve25519ScalarWordIndex, value Curve25519Word)
-	try s.set(index, value: value) otherwise panic("ed25519: scalar word index past the scalar")
+	s.set(index, value: value)
 end 'scalarSetWord'
 
 function scalarFromBytes(bytes ByteArray, first ElementIndex) returns Curve25519Scalar
@@ -500,11 +500,11 @@ function scalarSelect(kept Curve25519Scalar, replacement Curve25519Scalar, mask 
 end 'scalarSelect'
 
 function scalarWideWord(s Curve25519WideScalar, index Curve25519WideScalarIndex) returns Curve25519Word
-	return try s.get(index) otherwise panic("ed25519: product word index past the product")
+	return s.get(index)
 end 'scalarWideWord'
 
 function scalarWideSetWord(s Curve25519WideScalar, index Curve25519WideScalarIndex, value Curve25519Word)
-	try s.set(index, value: value) otherwise panic("ed25519: product word index past the product")
+	s.set(index, value: value)
 end 'scalarWideSetWord'
 
 function scalarAppendWord(bytes ByteArray, word Curve25519Word)

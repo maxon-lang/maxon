@@ -1759,9 +1759,9 @@ modules are listed, so a user `type Set` / `type List` CONTESTS a declared type 
 synthesized record and takes the "a declaration wins" road instead of this gate — `a member access
 'add'/'append' on a 'unknown' value`.
 
-⇒ **`Vector` is the subject.** `stdlib/Vector.maxon` is loaded and every member of a `Vector` is its
+⇒ **`FixedArray` is the subject.** `stdlib/FixedArray.maxon` is loaded and every member of a `FixedArray` is its
 declaration's, but what this case turns on is not who serves the members but who owns the RECORD, and
-that is the compiler (`isBuiltinGenericBaseName`, which decides what `Vector with 3 Int` MEANS). The
+that is the compiler (`isBuiltinGenericBaseName`, which decides what `FixedArray with 3 Int` MEANS). The
 refusal's own sentence says exactly that. The `Array` write-direction twin directly above does not cover
 this direction, and `Array` would not carry the second-name half of the question at all — the
 roster's other members (`__ManagedList`, `__ManagedListNode`, `__ManagedMemoryCursor`) cannot
@@ -1770,11 +1770,11 @@ reached.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 
-type Vector uses T
+type FixedArray uses T
 	export var value as T
-end 'Vector'
+end 'FixedArray'
 
-typealias IntVec = Vector with 3 Int
+typealias IntVec = FixedArray with 3 Int
 
 function main() returns ExitCode
 	var v = IntVec.create()
@@ -1782,7 +1782,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:12:9: Unsupported: a field access on 'v': `Vector` is a BUILTIN whose runtime record the compiler SYNTHESIZES rather than compiling a declaration for, so a value of it carries that record's own words and not the fields `stdlib/Vector.maxon` declares. The field is missing from this compiler, not from the language; reach the contents through the methods
+error E2015: <fragment>:12:9: Unsupported: a field access on 'v': `FixedArray` is a BUILTIN whose runtime record the compiler SYNTHESIZES rather than compiling a declaration for, so a value of it carries that record's own words and not the fields `stdlib/FixedArray.maxon` declares. The field is missing from this compiler, not from the language; reach the contents through the methods
 ```
 
 <!-- test: error.sizeof-of-undeclared-generic-base -->
@@ -1907,7 +1907,7 @@ reaches it through the same `parseGenericArgNode` a declared generic does. Only 
 argument in a file is shown here because each alias is its own declaration — two declarations, two
 diagnostics.
 
-`Set` and `List` are the bases under the rule, and `Array` and `Vector` are the two that are not:
+`Set` and `List` are the bases under the rule, and `Array` and `FixedArray` are the two that are not:
 a buffer STRIDE is written and read at the element's own type, where a
 dictionary-passed type parameter is one opaque general-purpose slot. `Set` hashes its key and `List`
 boxes its payload, and each refuses a float in its own terms at its own door — so the refusal that
@@ -1929,18 +1929,18 @@ error E2062: <fragment>:4:33: Cannot use 'float' as a type argument: a float typ
 ### The exemption, stated as an acceptance
 The refusal above is about a dictionary-passed type-parameter slot, so it lifts exactly where there is
 no such slot. Both buffer bases take both float spellings, and this is the case that turns RED if the
-exemption is ever narrowed back to `Vector` alone.
+exemption is ever narrowed back to `FixedArray` alone.
 ```maxon
 typealias Real = float(f64.min to f64.max)
 typealias Reals = Array with Real
-typealias Vec2 = Vector with 2 Real
+typealias Vec2 = FixedArray with 2 Real
 
 function main() returns ExitCode
 	var a = Reals.create()
 	a.push(1.5)
 	var v = Vec2.create()
-	try v.set(0, value: 3.5) otherwise panic("test invariant: set OOB")
-	return trunc((try a.get(0) otherwise 0.0) + (try v.get(0) otherwise 0.0))
+	v.set(0, value: 3.5)
+	return trunc((try a.get(0) otherwise 0.0) + v.get(0))
 end 'main'
 ```
 ```exitcode

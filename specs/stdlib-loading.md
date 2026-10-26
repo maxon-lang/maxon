@@ -1087,7 +1087,7 @@ the declaration and leaves the module inert. Both are checked rather than assume
   `findKeyInNode`'s body answers `E3001` **+ `E3004`**, the control the six `helpers/sort/*` files fail.
 - **There is no synthesized twin to out-vote the declaration.** `Json` is on neither
   `TypeResolution.isCompilerOwnedTypeName` nor `builtinTypeNameTag`, it is not one of the seven
-  `*BuiltinBaseName` roots (`Set`, `Map`, `List`, `Vector` and the three `__Managed*`), and the whole
+  `*BuiltinBaseName` roots (`Set`, `Map`, `List`, `FixedArray` and the three `__Managed*`), and the whole
   compiler mentions the name only in prose. So the stdlib declaration is the only one there is.
 
 ⛔ **`Json.maxon` IS BYTE-NEUTRAL ONLY BECAUSE OF `registerProgramLiteralBlobs`' UNREACHABLE-STDLIB

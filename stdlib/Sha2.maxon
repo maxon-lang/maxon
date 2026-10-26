@@ -4,7 +4,7 @@
 // to 32 bits after every operation that can carry; a missing mask is a wrong digest, not an error.
 typealias Sha2Word = bits(64)
 typealias Sha2Words = Array with Sha2Word
-typealias Sha2State = Vector with 8 Sha2Word
+typealias Sha2State = FixedArray with 8 Sha2Word
 
 typealias Sha256RotateAmount = int(1 to 31)
 typealias Sha512RotateAmount = int(1 to 63)
@@ -164,14 +164,14 @@ function sha256Compress(state Sha2State, schedule Sha2Words, padded ByteArray, b
 
 	sha2FoldRoundConstants(schedule, roundConstants: sha256KTable, mask: sha256WordMask)
 
-	var a = try state.get(0) otherwise panic("sha256: state index unreachable")
-	var b = try state.get(1) otherwise panic("sha256: state index unreachable")
-	var c = try state.get(2) otherwise panic("sha256: state index unreachable")
-	var d = try state.get(3) otherwise panic("sha256: state index unreachable")
-	var ve = try state.get(4) otherwise panic("sha256: state index unreachable")
-	var f = try state.get(5) otherwise panic("sha256: state index unreachable")
-	var g = try state.get(6) otherwise panic("sha256: state index unreachable")
-	var hv = try state.get(7) otherwise panic("sha256: state index unreachable")
+	var a = state.get(0)
+	var b = state.get(1)
+	var c = state.get(2)
+	var d = state.get(3)
+	var ve = state.get(4)
+	var f = state.get(5)
+	var g = state.get(6)
+	var hv = state.get(7)
 
 	for wri in schedule 'rounds'
 		let t1 = (hv + sha256BigSigma1(ve) + sha2Ch(ve, b: f, c: g, mask: sha256WordMask) + wri) and sha256WordMask
@@ -230,14 +230,14 @@ function sha512Compress(state Sha2State, schedule Sha2Words, padded ByteArray, b
 
 	sha2FoldRoundConstants(schedule, roundConstants: sha512KTable, mask: sha512WordMask)
 
-	var a = try state.get(0) otherwise panic("sha512: state index unreachable")
-	var b = try state.get(1) otherwise panic("sha512: state index unreachable")
-	var c = try state.get(2) otherwise panic("sha512: state index unreachable")
-	var d = try state.get(3) otherwise panic("sha512: state index unreachable")
-	var ve = try state.get(4) otherwise panic("sha512: state index unreachable")
-	var f = try state.get(5) otherwise panic("sha512: state index unreachable")
-	var g = try state.get(6) otherwise panic("sha512: state index unreachable")
-	var hv = try state.get(7) otherwise panic("sha512: state index unreachable")
+	var a = state.get(0)
+	var b = state.get(1)
+	var c = state.get(2)
+	var d = state.get(3)
+	var ve = state.get(4)
+	var f = state.get(5)
+	var g = state.get(6)
+	var hv = state.get(7)
 
 	for wri in schedule 'rounds'
 		let t1 = hv + sha512BigSigma1(ve) + sha2Ch(ve, b: f, c: g, mask: sha512WordMask) + wri

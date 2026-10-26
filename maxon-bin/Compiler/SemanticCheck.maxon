@@ -3647,6 +3647,22 @@ function throwingRuntimeCalleeMessage(callee ByteArray) returns String
 	return throwingCallRequiresTryMessage(callee)
 end 'throwingRuntimeCalleeMessage'
 
+function fixedArrayIndexRangeText(count FixedElementCount) returns String
+	return "int(0 to {count - 1})"
+end 'fixedArrayIndexRangeText'
+
+module function provenFixedArrayTryMessage(accessor String, count FixedElementCount) returns String
+	return "try requires a throwing function: this `{accessor}` cannot fail — its index is already proven inside the fixed array's {count} elements, so there is no out-of-bounds error to catch"
+end 'provenFixedArrayTryMessage'
+
+module function fixedArrayIndexPastTheSizeMessage(value String, count FixedElementCount) returns String
+	return "Value {value} is outside the range of the indices of '{String.from(FixedArrayBuiltinBaseName)} with {count}' ({fixedArrayIndexRangeText(count)})"
+end 'fixedArrayIndexPastTheSizeMessage'
+
+function unprovenFixedArrayIndexMessage(accessor ByteArray, count FixedElementCount) returns String
+	return "{throwingCallRequiresTryMessage(accessor)} — its index is not proven inside the fixed array's {count} elements; wrap it as `try … otherwise …`, or give the index a ranged type within `{fixedArrayIndexRangeText(count)}`"
+end 'unprovenFixedArrayIndexMessage'
+
 // The E3057 sentence both division arms share, spelled once with the operator substituted — `/` and `mod` fail
 // for the identical reason and are fixed the identical two ways, so two copies would be one fact written twice.
 function divisionRequiresTryMessage(operator String) returns String
@@ -3657,6 +3673,10 @@ end 'divisionRequiresTryMessage'
 // call made without `try`). The `tryCall` path skips this: it IS the `try`.
 function validatePlainCall(project Project, func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, opIndex ElementIndex, result ValueId, callee ByteArray, mint CalleeMint, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, defaultedArgs ParamCount, throwsMap FuncThrowsMap, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, blameTargetErrorsHere bool)
 	validateCall(project, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIndex, result: result, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mutationSummary: mutationSummary, provenance: provenance, blameTargetErrorsHere: blameTargetErrorsHere)
+
+	if project.provenFixedArrayAccesses.contains(opIndex) 'cannotFail'
+		return
+	end 'cannotFail'
 
 	// A THROWING BUILTIN reaching here as a plain `call` — not a `tryCall` — was written WITHOUT a `try`, so its
 	// error flag would be silently dropped: a throwing array accessor (`__managed_get`/…) would return a dummy 0 on an
@@ -3690,9 +3710,23 @@ function validatePlainCall(project Project, func IrFunction, signatures ProgramS
 		// ⚠ The NOUN, not the callee: a bare `int.fromString(s)` is the shape an author most often writes by
 		// mistake, and quoting `'__int_fromString'` back names a callee they did not write — see
 		// `callDiagnosticNoun`.
-		reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: throwingCallRequiresTryMessage(boundCalleeSpelling(signatures, funcNames: funcNames, callee: callee, mint: mint)), line: callRange.line, column: callRange.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
+		reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: throwingCallMessage(func, signatures: signatures, funcNames: funcNames, callee: callee, mint: mint, args: args), line: callRange.line, column: callRange.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
 	end 'throwing'
 end 'validatePlainCall'
+
+function throwingCallMessage(func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, callee ByteArray, mint CalleeMint, args ValueIdArray) returns String
+	let accessor = try sizedAccessorOfCall(func, signatures: signatures, callee: callee, args: args) otherwise return throwingCallRequiresTryMessage(boundCalleeSpelling(signatures, funcNames: funcNames, callee: callee, mint: mint))
+
+	return unprovenFixedArrayIndexMessage(fixedArrayAccessorMethodName(accessor.accessor), count: accessor.count)
+end 'throwingCallMessage'
+
+function sizedAccessorOfCall(func IrFunction, signatures ProgramSignatures, callee ByteArray, args ValueIdArray) returns SizedAccessor throws AbsentError
+	let receiver = try args.get(0) otherwise throw AbsentError.absent
+	let tag = try func.valueTags.get(receiver) otherwise panic("sizedAccessorOfCall: value v{receiver} of '{String.from(func.name)}' has no recorded type — every SSA value is minted through Parser.mintValue")
+	let nameId = try func.valueNameIds.get(receiver) otherwise panic("sizedAccessorOfCall: value v{receiver} of '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
+
+	return try sizedAccessorOf(signatures, receiverTag: tag, receiverNameId: nameId, callee: callee)
+end 'sizedAccessorOfCall'
 
 function boundCalleeSpelling(signatures ProgramSignatures, funcNames FunctionNameIndex, callee ByteArray, mint CalleeMint) returns ByteArray
 	let noun = callDiagnosticNoun(callee, mint: mint)

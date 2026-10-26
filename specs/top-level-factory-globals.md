@@ -19,7 +19,7 @@ consumed and all of its declarations are in one file:
 
 **1. A generic-instance alias goes through the CONTAINER door, and that door serves a DECLARED generic
 by CALLING the `create()` static the program wrote.** `typealias IntBox = Box with Count` is claimed by
-that door whether `Box` is a builtin container (`Array` / `Set` / `List` / `Vector`) or an ordinary
+that door whether `Box` is a builtin container (`Array` / `Set` / `List` / `FixedArray`) or an ordinary
 declared generic, and the two differ in exactly one thing: a builtin's `create` is a runtime entry that
 must be handed the strides and column destructors it cannot look up, while a declared generic's builds
 its own fields from its own declaration and is handed nothing. So one description — a callee and a

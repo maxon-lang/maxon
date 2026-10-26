@@ -376,17 +376,17 @@ export enum ErrorCode
 	// a layer whose caller's leniency has nowhere to surface.
 	parserMalformedNumericLiteral = "E2068"
 
-	// A 'Vector with ...' does not state a usable element COUNT before its element type:
-	// 'Vector with Int' (no count at all), 'Vector with 0 Int' (a vector of no elements), or a
-	// count too large for the compiler to fold into a buffer allocation.
-	// A Vector's SIZE IS PART OF ITS TYPE ('Vector with 3 Int' and 'Vector with 4 Int' are
-	// different types), which is why the count is required rather than defaulted: there is no
+	// A 'FixedArray with ...' does not state a usable element COUNT before its element type:
+	// 'FixedArray with Int' (no count at all), 'FixedArray with 0 Int' (a fixed array of no elements),
+	// or a count too large for the compiler to fold into a buffer allocation.
+	// A FixedArray's SIZE IS PART OF ITS TYPE ('FixedArray with 3 Int' and 'FixedArray with 4 Int'
+	// are different types), which is why the count is required rather than defaulted: there is no
 	// size a sizeless spelling could mean, and a default would silently give two declarations
 	// one type. It is NOT E2056 GenericArityMismatch, which counts TYPE arguments -- the count
-	// is a value, is consumed before the type-argument list is read, and a 'Vector with 3'
+	// is a value, is consumed before the type-argument list is read, and a 'FixedArray with 3'
 	// missing its element type IS the E2056 that code names.
 	// It has a code of its own so the one rule has one message wherever the spelling is met.
-	vectorSizeMalformed = "E2069"
+	fixedArraySizeMalformed = "E2069"
 
 	// A '__Builtins.ucd*' load names a compiler-owned Unicode table its intrinsic does not read.
 	// Each intrinsic reads exactly ONE table, because the label and the STRIDE are one fact:
@@ -489,6 +489,8 @@ export enum ErrorCode
 	// an alias that range leaves is refused at the use (`Value 400 is outside the range of 'Small'`). A
 	// literal container whose bare integer elements need both a negative value and a value above `i64.max`
 	// (`[-1, u64.max]`) has no common integer type: cast the elements to an alias.
+	// A constant `FixedArray` index at or past the size is reported here too (`Value 3 is outside the
+	// range of the indices of 'FixedArray with 3' (int(0 to 2))`): correct the index.
 	// A brand is part of a type. Values of two brands over one instance are compared, merged or stored into
 	// one place only through a cast (`xs == ys` for an `Xs` and a `Ys`); a `Self` parameter takes the
 	// receiver's brand, while inside a generic type a parameter spelled with the bare base (`other Box`) fits
@@ -659,7 +661,10 @@ export enum ErrorCode
 	// 'main' is declared 'throws'. There is no caller left to handle the error.
 	mainCannotThrow = "E3054"
 
-	// 'try' is applied to a call that cannot throw.
+	// 'try' is applied to a call that cannot throw. A divide whose divisor is proven non-zero and a
+	// `FixedArray` `get`/`set` whose index is proven inside the size cannot throw: the proof is a
+	// constant, a ranged type whose range lies inside, a counted-loop counter between compile-time
+	// bounds, or a value computed from those. Drop the `try … otherwise`.
 	tryRequiresThrowingFunction = "E3055"
 
 	// A throwing call, a call to a throwing interface method, or an `await` of a throwing promise is
@@ -670,6 +675,8 @@ export enum ErrorCode
 	// block.
 	// Every message sent to a service is such a call, because a send fails at once with
 	// `<Service>.<message>.sendError` when the mailbox is full or the service has stopped.
+	// So is a `FixedArray` `get`/`set` whose index is not proven inside the size: write `try`, or give
+	// the index a ranged type within `int(0 to N-1)` for a `FixedArray with N`.
 	throwingFunctionRequiresTry = "E3057"
 
 	// 'otherwise' is written without a 'try'.
@@ -1147,7 +1154,7 @@ export enum ErrorCode
 	// `get(0)` throws. Refused at the call site, naming the element type.
 	// The same call is refused for an inline element whose range excludes zero (`int(1 to 100)`): the grown
 	// slots hold zero, which is not a value of the element. So are the other producers of slots nothing
-	// wrote, over such an element: `__ManagedMemory.setLength` and `Vector.create`.
+	// wrote, over such an element: `__ManagedMemory.setLength` and `FixedArray.create`.
 	// The refusal covers the WHOLE call and not only its growing half, because which half a
 	// `resize(n)` is cannot be known until it runs: `n` is compared against a length, and a
 	// compiler holds neither. The two halves therefore split by NAME. Growing supplies the element

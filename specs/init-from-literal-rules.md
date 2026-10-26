@@ -301,10 +301,10 @@ end 'main'
 30 10 20 count=3
 ```
 
-<!-- test: a-vector-alias-takes-from-an-array-literal -->
+<!-- test: a-fixed-array-alias-takes-from-an-array-literal -->
 ```maxon
 typealias Reading = int(0 to 1000)
-typealias ReadingTriple = Vector with 3 Reading
+typealias ReadingTriple = FixedArray with 3 Reading
 
 function main() returns ExitCode
 	let readings = ReadingTriple from [30, 10, 20]

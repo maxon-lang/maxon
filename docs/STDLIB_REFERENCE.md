@@ -31,7 +31,7 @@ end 'main'
 |------|----------|
 | [Core](#overview) | [Core Functions](#core-functions) |
 | [Text](#string) | String, Character, Ascii, Unicode, CharacterSet |
-| [Collections](#array) | Array, List, Map, Set, Vector, Range, Iterators, Interfaces |
+| [Collections](#array) | Array, List, Map, Set, FixedArray, Range, Iterators, Interfaces |
 | [I/O and processes](#file) | File, FilePath, Directory, Console, CommandLine, Log, TraceCapture, Process, Subprocess, SharedMemory, Debuggee, Sampler |
 | [Network](#tcpclient) | TcpClient, TcpListener, HttpClient, HttpServer, URL |
 | [Data](#json) | Json, Base64, Pem, Der, Sha2, Hmac, Hkdf, Rsa, Aead, AesGcm, ChaCha20Poly1305, Aes, ChaCha20, Poly1305, X25519, Ed25519, EcdhP256, Ecdsa, EcdsaP256, EcdsaP384, Hasher |
@@ -130,13 +130,13 @@ any other alias, or of a non-integer type, is **E3005** (see
 [Subtypes With `implements`](LANGUAGE_REFERENCE.md#subtypes-with-implements)). An `ElementIndex` goes where
 a `Count` is declared only by cast.
 
-`Array`, `List` and `Vector` `count()`, `JsonDoc.arrayLength`, `Character.byteLength()` and the `count()` of a
+`Array`, `List` and `FixedArray` `count()`, `JsonDoc.arrayLength`, `Character.byteLength()` and the `count()` of a
 string's codepoint and UTF-16 views return `Count`. `String.count()` returns a `GraphemeIndex` and a byte
 view's `count()` a `BytePos`.
 
 The inner typealiases a library type's `public` members name are `public` as well and can be written
 qualified: `Array.ElementIterator`, `Array.ElementMemory`, `Map.Entry`, `List.ListIter`, `Set.SetIter`,
-`Vector.VectorIter` and the like. The others are `Array.ElementIterable`, `Array.ArrayIter`, `Array.ElementArray`,
+`FixedArray.FixedArrayIter` and the like. The others are `Array.ElementIterable`, `Array.ArrayIter`, `Array.ElementArray`,
 `HttpHeaders.CaseInsensitiveHeaders`, `Iterable.WithIterSelf`, `List.EManagedList`,
 `Map.IterKeyArray`, `Map.IterValueArray`, `Map.IterStateArray`, `Set.IterElementArray` and `String.ByteMemory`.
 
@@ -266,7 +266,7 @@ Trigonometry, logarithms and powers are in [Math](#math).
 | Builtin | Description |
 |---------|-------------|
 | `sizeof(TypeName)` | Storage size of a type in bytes, as a constant `Count`: `int` and `float` are 8, `bool` and `byte` are 1. |
-| `countof(TypeName)` | How many elements a fixed-size container type holds, as a `Count`, such as `Vector with 3 Coord`. A type with no fixed element count is refused; ask an `Array` value for `count()`. |
+| `countof(TypeName)` | How many elements a fixed-size container type holds, as a `Count`, such as `FixedArray with 3 Coord`. A type with no fixed element count is refused; ask an `Array` value for `count()`. |
 | `__file__`, `__line__` | Legal only as a parameter's default value; each expands at the **call site**. |
 
 `__line__` parameters are declared `SourceLineNumber` and `__file__` parameters `String`. The file is the
@@ -879,47 +879,60 @@ end 'main'
 
 Output: `2 true true 1`.
 
-## Vector
+## FixedArray
 
-`Vector` is a fixed-size array whose element count is part of its type: `Vector with 3 Coord` holds exactly
-three elements, and `countof(Vec3)` is the constant `3`. It implements `Iterable`.
+`FixedArray` is a fixed-size array whose element count is part of its type: `FixedArray with 3 Coord`
+holds exactly three elements, and `countof(Vec3)` is the constant `3`. It implements `Iterable`. The
+growable array is [`Array`](#array).
 
 | Member | Returns | Description |
 |--------|---------|-------------|
-| `Vector.create()` | `Vector` | Every element zero; refused (E3106) for an element alias whose range excludes 0. |
-| `Vector from [a, b, c]` | `Vector` | A literal; the count is the literal's length. |
+| `FixedArray.create()` | `FixedArray` | Every element zero; refused (E3106) for an element alias whose range excludes 0. |
+| `FixedArray from [a, b, c]` | `FixedArray` | A literal; the count is the literal's length. |
 | `count()` | `Count` | The fixed size, answered from the type. |
-| `get(index)` | `Element` | Throws `ArrayError.indexOutOfBounds`. |
-| `set(index, value Element)` | — | Throws `ArrayError.indexOutOfBounds` at or past the fixed size. |
-| `createIterator()` | `ArrayIterator` | Throws `IterationError.exhausted` when the vector is empty. |
+| `get(index)` | `Element` | Throws `ArrayError.indexOutOfBounds` at or past the fixed size, unless the index is proven inside it. |
+| `set(index, value Element)` | — | Throws `ArrayError.indexOutOfBounds` at or past the fixed size, unless the index is proven inside it. |
+| `createIterator()` | `ArrayIterator` | Throws `IterationError.exhausted` when the fixed array is empty. |
 
-A vector never changes length: it has no `push`, `insert` or `remove`.
+A fixed array's length is the count its type states for its whole life; the members above are all it has.
+
+An index the compiler proves inside `0 to N-1` makes `get` and `set` total: the call cannot throw, is
+written without `try`, and a `try` on it is **E3055**. A proven index is a constant, a value whose ranged
+type lies inside (`typealias Slot = int(0 to 2) implements ElementIndex` for a `FixedArray with 3`), the
+counter of a counted `for` loop between compile-time bounds inside the size, or a `let` computed from
+those. A constant index at or past the size is **E3005**. Any other index is checked at run time and needs
+`try` (**E3057** without it). See
+[Fixed arrays](LANGUAGE_REFERENCE.md#fixed-arrays-and-proven-indices).
 
 ```maxon
 typealias Coord = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Coord
+typealias Vec3 = FixedArray with 3 Coord
+
+function readOr(v Vec3, index ElementIndex, fallback Coord) returns Coord
+	return try v.get(index) otherwise fallback
+end 'readOr'
 
 function main() returns ExitCode
 	var v = Vec3.create()
-	try v.set(1, value: 7) otherwise panic("inside the fixed size")
+	v.set(1, value: 7)
 
-	try v.set(3, value: 1) otherwise 'outside'
-		print("index 3 refused\n")
-	end 'outside'
+	for i in 0 upto countof(Vec3) 'fill'
+		v.set(i, value: v.get(i) + 1)
+	end 'fill'
 
-	let literal = Vector from [1, 2, 3]
+	let literal = FixedArray from [1, 2, 3]
 	var sum = 0 as Count
 
 	for x in literal 'each'
 		sum = sum + x
 	end 'each'
 
-	print("{v.count()} {countof(Vec3)} {try v.get(1) otherwise 0} {sum}\n")
+	print("{v.count()} {countof(Vec3)} {v.get(1)} {readOr(v, index: 3, fallback: -1)} {sum}\n")
 	return 0
 end 'main'
 ```
 
-Output: `index 3 refused` and `3 3 7 6`.
+Output: `3 3 8 -1 6`.
 
 ## Range
 
@@ -987,7 +1000,7 @@ leaves the position unchanged.
 
 ### ArrayIterator
 
-`ArrayIterator` (what `Array.createIterator()`, `Array.cursor()` and `Vector.createIterator()` return)
+`ArrayIterator` (what `Array.createIterator()`, `Array.cursor()` and `FixedArray.createIterator()` return)
 implements `BidirectionalIterator with Element` and adds random access:
 
 | Member | Returns | Throws | Description |

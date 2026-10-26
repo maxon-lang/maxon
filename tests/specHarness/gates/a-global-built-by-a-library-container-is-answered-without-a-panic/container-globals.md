@@ -3,7 +3,7 @@ feature: harness-gate-a-global-built-by-a-library-container-is-answered-without-
 ---
 # The a-global-built-by-a-library-container-is-answered-without-a-panic gate
 
-Three run cases each declare a module-level `var` built by a library container's `create()` (`Vector`, `Array`, `Map`), and one reads an enum case, a range bound and a static through member access, beside a plain case. The front-end question the spec runner asks before it batches runs without the library, so a container whose `create()` the library owns must be answered, never crash the worker that asked.
+Three run cases each declare a module-level `var` built by a library container's `create()` (`FixedArray`, `Array`, `Map`), and one reads an enum case, a range bound and a static through member access, beside a plain case. The front-end question the spec runner asks before it batches runs without the library, so a container whose `create()` the library owns must be answered, never crash the worker that asked.
 
 ## Tests
 
@@ -24,18 +24,18 @@ end 'main'
 plain
 ```
 
-<!-- test: container-globals.vector -->
+<!-- test: container-globals.fixed-array -->
 
 ```maxon
 typealias Count = int(0 to 1000)
-typealias Vec3 = Vector with 3 Count
+typealias Vec3 = FixedArray with 3 Count
 
 var shared = Vec3.create()
 
 function main() returns ExitCode
-	try shared.set(0, value: 20) otherwise panic("set")
-	try shared.set(2, value: 21) otherwise panic("set")
-	print("vector {shared.count()}\n")
+	shared.set(0, value: 20)
+	shared.set(2, value: 21)
+	print("fixed-array {shared.count()}\n")
 	return 0
 end 'main'
 ```
@@ -45,7 +45,7 @@ end 'main'
 ```
 
 ```stdout
-vector 3
+fixed-array 3
 ```
 
 <!-- test: container-globals.array -->

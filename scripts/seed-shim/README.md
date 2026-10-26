@@ -44,8 +44,8 @@ union case's payload (`case(let name T)`) are parse errors to a seed that predat
 withdraws the qualifier at every declaration, which leaves the container and union types the seed always held.
 A `view` binding is written `let`, which the seed reads as a read-only binding of the same value, and a capability
 qualifier — `keep` or `sole` on a parameter of a function-type alias or an interface requirement, `returns sole`,
-`returns readonly` — is withdrawn. The script withdraws those two on every run, and the older forms above only
-with `--older-seed`, for a seed that predates them.
+`returns readonly` — is withdrawn. The script withdraws those two only with
+`--withdraw-view-forms`, and the older forms above only with `--older-seed`, each for a seed that predates them.
 Only those forms and the casts go; the declarations and every table stay, so `C1` knows the forms and compiles the
 unshimmed tree. The casts are found by building with the seed for one native target at a time until it is clean,
 and again for any lane the tree changed under since its last clean build, so the code a lane's `#if` selects is
@@ -62,21 +62,24 @@ Such a patch rewrites the library BODY to calls the seed knows, and withdraws th
 produce together with the arms that name them. The restore runs before the second build, so `C1` compiles
 `C2` against the unshimmed library, and only `C1`'s own behaviour is weaker.
 
-`0001-withdraw-the-path-resolution-from-the-first-build.patch` is the standing example. The seed knows no
-`__ManagedDirectory.resolve` and no `__ManagedDirectoryError.resolveFailed`, so the patch writes
-`FilePath.resolvedPhysically` as the path itself, refusing only an empty one, and withdraws the case.
+`0001-spell-the-sized-container-as-the-seed-names-it-in-the-first-build.patch` is the library case for a renamed
+type: the seed knows the sized container only as `Vector`, so the patch spells `stdlib/FixedArray.maxon`'s type and
+every `FixedArray with N` in `stdlib/` that way. The file keeps its name, which the restore needs.
 
 ⭐ **A RULE THE TREE HAS DELETED AND THE SEED STILL ENFORCES IS THE SIXTH CASE, AND ITS REWRITES ARE
 GENERATED WITH THE FOURTH'S.** With the forms withdrawn the seed judges the tree by its older rules, and refuses
 sites the tree is right to write: a `let` that holds a collection's element across a call that mutates the
 collection (E3070), a loop it reads as still borrowing what its body mutates (E3070), a loop element assigned
 through (E2013), a `var` it sees no assignment to because the tree counts a hand-off to a mutating parameter as
-one (E3077), an immutable value bound, assigned, passed or stored where it allows only a mutable one (E3078), and
-a `var` it reads as moved by the `let` a `view` of it became (E3102). The patch writes each site the way the
+one (E3077), an immutable value bound, assigned, passed or stored where it allows only a mutable one (E3078),
+a `var` it reads as moved by the `let` a `view` of it became (E3102), and a division by a divisor, or a `get` or
+`set` of a sized container at an index, that the tree proves nonzero or inside the container from an interval
+(E3057). The patch writes each site the way the
 older rule accepts: the `let` is bound to a `.clone()` of what it held; the loop iterates a clone held in a
 local, only where the script proves the body leaves the collection unmutated; the loop becomes an index loop over
-a `var` alias of the element it reads; the `var` is a `let`; the value gets the `.clone()` the seed asks for; and
-the moved `var` is a `let` the seed aliases, where nothing reassigns it. An E3070 at a `let` that was a `view`
+a `var` alias of the element it reads; the `var` is a `let`; the value gets the `.clone()` the seed asks for; the
+moved `var` is a `let` the seed aliases, where nothing reassigns it; and the division or access is written
+`try … otherwise panic`. An E3070 at a `let` that was a `view`
 stops the script, naming the site: a clone would stop the view seeing the writes the tree lets it observe. These rewrites exist only in `C1`, which the restore removes before `C2` is built, and what
 stands behind them is the fixed point rather than an argument: `scripts/fixpoint.sh` from a compiler this
 script built must reproduce the bytes a slot-built compiler reproduces. The script finds the sites by building
@@ -138,7 +141,7 @@ and only `C1`'s own services and library send by the seed's rule. Like the eight
 the committed tree.
 
 ⭐ **A SERVICE STATE THE SEED CANNOT WALK IS THE TENTH CASE.** A seed that predates the socket's per-type walk
-refuses a `spawn` whose state holds a `TcpClient` or a `TlsStream` (E3138). `0001-withdraw-the-per-connection-green-thread-from-the-first-build.patch`
+refuses a `spawn` whose state holds a `TcpClient` or a `TlsStream` (E3138). Its patch
 makes `HttpServer.serve` serve each connection in place and withdraws the `export` its worker's `serve` needs only as a
 message (E3167), so `C1` only serves one connection at a time. The `spawn` stays in the tree, which is what lets
 `C1` build the unshimmed tree.

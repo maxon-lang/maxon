@@ -2195,11 +2195,11 @@ end 'main'
 0
 ```
 
-<!-- test: error.a-search-through-a-with-iterator-loop-over-a-vector-is-pure -->
-A pure search through `withIterator()` over a `Vector`, discarded, is refused.
+<!-- test: error.a-search-through-a-with-iterator-loop-over-a-fixed-array-is-pure -->
+A pure search through `withIterator()` over a `FixedArray`, discarded, is refused.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntVector = Vector with 3 Integer
+typealias IntVector = FixedArray with 3 Integer
 
 enum SearchError implements Error
 	absent
@@ -2222,22 +2222,22 @@ end 'hasAbove'
 
 function main() returns ExitCode
 	var values = IntVector.create()
-	try values.set(0, value: 4) otherwise ignore
-	try values.set(1, value: 5) otherwise ignore
-	try values.set(2, value: 6) otherwise ignore
+	values.set(0, value: 4)
+	values.set(1, value: 5)
+	values.set(2, value: 6)
 
 	return 0 if hasAbove(values, floor: 3) else 1
 end 'main'
 ```
 ```maxoncstderr
-error E3064: specs/discarded-results/error.a-search-through-a-with-iterator-loop-over-a-vector-is-pure.maxon:20:2: result of pure function 'firstAbove' must be used
+error E3064: specs/discarded-results/error.a-search-through-a-with-iterator-loop-over-a-fixed-array-is-pure.maxon:20:2: result of pure function 'firstAbove' must be used
 ```
 
-<!-- test: error.a-search-through-a-for-loop-over-a-vector-is-pure -->
+<!-- test: error.a-search-through-a-for-loop-over-a-fixed-array-is-pure -->
 The same search through a plain `for ... in` loop.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntVector = Vector with 3 Integer
+typealias IntVector = FixedArray with 3 Integer
 
 enum SearchError implements Error
 	absent
@@ -2260,22 +2260,22 @@ end 'hasAbove'
 
 function main() returns ExitCode
 	var values = IntVector.create()
-	try values.set(0, value: 4) otherwise ignore
-	try values.set(1, value: 5) otherwise ignore
-	try values.set(2, value: 6) otherwise ignore
+	values.set(0, value: 4)
+	values.set(1, value: 5)
+	values.set(2, value: 6)
 
 	return 0 if hasAbove(values, floor: 3) else 1
 end 'main'
 ```
 ```maxoncstderr
-error E3064: specs/discarded-results/error.a-search-through-a-for-loop-over-a-vector-is-pure.maxon:20:2: result of pure function 'firstAbove' must be used
+error E3064: specs/discarded-results/error.a-search-through-a-for-loop-over-a-fixed-array-is-pure.maxon:20:2: result of pure function 'firstAbove' must be used
 ```
 
-<!-- test: a-with-iterator-loop-over-a-vector-whose-body-prints-keeps-its-result-droppable -->
+<!-- test: a-with-iterator-loop-over-a-fixed-array-whose-body-prints-keeps-its-result-droppable -->
 A loop body that prints is an effect of the function, whatever the iterator does.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntVector = Vector with 3 Integer
+typealias IntVector = FixedArray with 3 Integer
 
 function show(values IntVector) returns Integer
 	var shown = 0 as Integer
@@ -2290,9 +2290,9 @@ end 'show'
 
 function main() returns ExitCode
 	var values = IntVector.create()
-	try values.set(0, value: 4) otherwise ignore
-	try values.set(1, value: 5) otherwise ignore
-	try values.set(2, value: 6) otherwise ignore
+	values.set(0, value: 4)
+	values.set(1, value: 5)
+	values.set(2, value: 6)
 
 	_ = show(values)
 	return 0
@@ -2307,11 +2307,11 @@ end 'main'
 6=6
 ```
 
-<!-- test: a-with-iterator-loop-over-a-vector-whose-body-writes-an-argument-keeps-its-result-droppable -->
+<!-- test: a-with-iterator-loop-over-a-fixed-array-whose-body-writes-an-argument-keeps-its-result-droppable -->
 A loop body that pushes into an array it was handed is an effect, whatever the container.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntVector = Vector with 3 Integer
+typealias IntVector = FixedArray with 3 Integer
 typealias IntArray = Array with Integer
 
 function copyInto(values IntVector, target IntArray) returns Integer
@@ -2327,9 +2327,9 @@ end 'copyInto'
 
 function main() returns ExitCode
 	var values = IntVector.create()
-	try values.set(0, value: 4) otherwise ignore
-	try values.set(1, value: 5) otherwise ignore
-	try values.set(2, value: 6) otherwise ignore
+	values.set(0, value: 4)
+	values.set(1, value: 5)
+	values.set(2, value: 6)
 	var target = IntArray.create()
 
 	_ = copyInto(values, target: target)

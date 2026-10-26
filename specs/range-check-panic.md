@@ -93,11 +93,11 @@ there in the instance's declared element type, at parse time, so it records an o
 and its guard goes at the **store**, immediately in front of the `__managed_*` call.
 
 ⚠ **A slot nothing wrote crosses no door at all**, so it is refused where it would be made: `Array.resize`,
-`__ManagedMemory.setLength` and `Vector.create` expose zero-initialized slots, and over an element whose range
+`__ManagedMemory.setLength` and `FixedArray.create` expose zero-initialized slots, and over an element whose range
 excludes zero each of them is **E3106** at compile time. `safety.md`'s
 `error.resize-cannot-expose-a-zero-to-a-non-zero-alias`, `array-slots.md`'s
 `error.set-length-cannot-publish-slots-of-an-element-that-excludes-zero` and `arrays.md`'s
-`error.a-vector-cannot-hold-an-alias-that-excludes-zero` pin the three.
+`error.a-fixed-array-cannot-hold-an-alias-that-excludes-zero` pin the three.
 
 ### ⭐ A `return` of a guarded parameter is ALREADY guarded — and the elision has to earn that
 
@@ -153,7 +153,7 @@ rule about `ExitCode`, about builtins, or about which alias is "wide":
 are written in): *a value denoting alias `A` is in `A`'s range*. Every door in this spec maintains it — a
 cast guards its result, a parameter is guarded at the callee's entry, a `return` before its `ret`, a field
 or element at its store. The producers of slots nothing wrote — `Array.resize`, `__ManagedMemory.setLength`
-and `Vector.create` — cross no door, so over an element whose range excludes zero they are refused at compile
+and `FixedArray.create` — cross no door, so over an element whose range excludes zero they are refused at compile
 time (**E3106**, see the array-element section above), and the premise holds for every value.
 
 ### ⛔⛔ A guard runs on the PATH ITS SITE IS ON — and a ternary's TRUE ARM moves after it is parsed
@@ -2128,19 +2128,17 @@ Stack trace:
 ```
 
 
-<!-- test: range-check-panic.a-counted-divisor-is-still-a-throwing-divide -->
-⛔ **THE RED-GATE CONTROL FOR ONE OF THE THREE WITHHOLDS.** `safety.md`'s escape hatch is stated in terms of
-*a ranged TYPE whose range excludes 0*, and a counted loop's interval is not one — so `100 / i` still throws
-and still needs its `try`. Fold the interval into `divisorProof` and the divide becomes a bare `binOp`, at
-which point this `try` has no call to apply to and the program stops compiling (E2015). Verified by making
-that edit and watching this case go red.
+<!-- test: range-check-panic.a-counted-divisor-is-a-bare-divide -->
+A counted loop between literal bounds gives its counter a known interval, and `1 upto 10` excludes 0, so
+`i` is a proven divisor: `100 / i` cannot throw and is written bare, exactly as a divide by a ranged type
+excluding 0 is.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
   var t = 0 as Integer
   for i in 1 upto 10 'l'
-    t = t + try (100 / i) otherwise 0
+    t = t + 100 / i
   end 'l'
   print("t={t}\n")
   return 0
@@ -2148,6 +2146,29 @@ end 'main'
 ```
 ```stdout
 t=281
+```
+
+⭐⭐ **A GUARDED CAST PROVES A DIVISOR A REASSIGNED `var` CANNOT, AND THE LINE BETWEEN THEM IS *NAMED AND GUARDED*.**
+<!-- test: range-check-panic.a-counter-cast-to-a-nonzero-alias-is-a-bare-divide -->
+`0 upto 4` admits 0, but the cast to `NonZero` guards the value into `1 to 1000`, and the narrower fact
+proves the divisor, so the divide is bare.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to 1000)
+
+function main() returns ExitCode
+  var total = 0 as Integer
+  for i in 0 upto 4 'l'
+    if i > 0 'positive'
+      let q = 100 / (i as NonZero)
+      total = total + (q as Integer)
+    end 'positive'
+  end 'l'
+  return total as ExitCode
+end 'main'
+```
+```exitcode
+183
 ```
 
 

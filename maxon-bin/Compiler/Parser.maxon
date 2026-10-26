@@ -1695,6 +1695,8 @@ export union SourceParseError implements Error
 	// the symbol keeps the emitted name out (`tryOnNonThrowingBuiltin`'s whole reason) while still
 	// answering the question actually asked.
 	tryOnTotalDivision(operator String, line LineNumber, column ColumnNumber)
+	tryOnProvenFixedArrayAccess(accessor String, count FixedElementCount, line LineNumber, column ColumnNumber)
+	fixedArrayIndexPastTheSize(value FullRangeInt, count FixedElementCount, line LineNumber, column ColumnNumber)
 
 	// A plain `await p` of a promise whose thunk THROWS — `await` lowers to `__gt_await`, which drops the
 	// error flag. Renders as **E3057** (the throwing-call-needs-`try` code SemanticCheck reports
@@ -1816,7 +1818,7 @@ export union SourceParseError implements Error
 	// runtime cannot name it and the caller cannot see it.
 	arrayResizeManagedElement(elementType String, line LineNumber, column ColumnNumber)
 	arrayResizeZeroOutsideElement(elementType String, line LineNumber, column ColumnNumber)
-	vectorCreateZeroOutsideElement(elementType String, line LineNumber, column ColumnNumber)
+	fixedArrayCreateZeroOutsideElement(elementType String, line LineNumber, column ColumnNumber)
 	bufferSetLengthZeroOutsideElement(elementType String, line LineNumber, column ColumnNumber)
 	literalsShareNoIntegerType(negativeValue FullRangeInt, unsignedPattern FullRangeInt, line LineNumber, column ColumnNumber)
 
@@ -2269,7 +2271,7 @@ union CheckedBindingNames
 end 'CheckedBindingNames'
 
 enum ZeroElementRefusal
-	vectorCreate
+	fixedArrayCreate
 	arrayResize
 	bufferSetLength
 end 'ZeroElementRefusal'
@@ -10808,6 +10810,12 @@ let EndIndexArgLabel = b"endIndex"
 // The label the two-argument mutators (`set`/`insert`) give their VALUE argument: `arr.set(0, value: 9)`.
 let ArrayValueLabel = b"value"
 
+let FixedArrayIndexLabel = b"index"
+
+let FixedArrayGetArgCount = 2
+
+let FixedArraySetArgCount = 3
+
 // ⭐ **WHICH `Array` METHODS WRITE THEIR RECEIVER** — the `Array` half of the one immutable-receiver
 // rule (`noteReceiverWrite`, E3159; a declared container states its own through `var self`, and `String`'s
 // half is the single method `append`). Every one of these rewrites the record's own slots:
@@ -10958,12 +10966,12 @@ function bufferSurfaceMemberNames() returns NameRoster
 end 'bufferSurfaceMemberNames'
 
 // ⭐⭐ **WHICH BUFFER MEMBERS WRITE THE RECORD'S `length@8`** — the sub-roster a SIZED container's
-// buffer refuses, because a vector's size is a coordinate of its TYPE and a member that moves the record's
+// buffer refuses, because a fixed array's size is a coordinate of its TYPE and a member that moves the record's
 // length leaves `count()` and `get` answering different numbers. `sizedContainersBufferRefusal` joins this
 // very list into its sentence, so **THE LIST IS THE CLAIM**: a member joins the refusal by joining this list
 // and nothing else moves.
 //
-// ⭐ **IT IS MEASURED AND THEN READ, NEVER REMEMBERED.** On a `Vector with 3 Int`'s buffer, printing
+// ⭐ **IT IS MEASURED AND THEN READ, NEVER REMEMBERED.** On a `FixedArray with 3 Int`'s buffer, printing
 // `managed.length()` after each call: `setLength` 3→5, `remove` 5→4, `clear` 4→0; `grow(64)` moves CAPACITY
 // 4→64 and leaves the length at 3, and `swap`/`shiftRight`/`shiftLeft` move elements the buffer already owns.
 // `append` could not be probed at all — it PANICKED the compiler on the base — and was settled by reading
@@ -10977,7 +10985,7 @@ end 'bufferSurfaceMemberNames'
 // OVER-REFUSAL.** That clause is `{setLength, setByte, grow, swap, shiftRight, shiftLeft, remove, clear}` —
 // the strictly wider question *"does this member write the record?"* — and four of its entries leave the
 // length exactly where it was. A shared coordinate is not a shared gate:
-// `vector.the-length-preserving-buffer-members-are-still-served` is the case that goes red the moment this
+// `fixed-array.the-length-preserving-buffer-members-are-still-served` is the case that goes red the moment this
 // list widens to it.
 //
 // ⚠ **EVERY ENTRY MUST ALSO BE ON THE BUFFER SURFACE, AND THE CHECK IS HERE RATHER THAN IN A REVIEWER'S
@@ -11338,16 +11346,16 @@ end 'stringIndexSurfaceMemberNames'
 
 // ⚠ A roster exists to hold a SYNTHESIZED surface's dispatch arms and its refusal sentence to ONE list. A
 // DECLARED type's members are its own declaration's, and an unknown one is E4006 off that declaration
-// rather than a hand-written sentence — which is why `Vector`, `Map` and `List` have no roster here.
+// rather than a hand-written sentence — which is why `FixedArray`, `Map` and `List` have no roster here.
 //
-// ⚠ A vector is BORN through a construction, never through a member call: `Vec3.create()` is a call to the
+// ⚠ A fixed array is BORN through a construction, never through a member call: `Vec3.create()` is a call to the
 // declared static, and `Self{}` inside the declaration is `Parser.emitSizedContainerRecord`.
 
 // ⭐ **WHICH BUILTIN SURFACE A ROSTER ANSWERS FOR.** Eight surfaces carry members the compiler dispatches by name, and
 // each has exactly one roster — so the surface is the memo's key, the builder's selector and the refusal's
 // subject at once.
 //
-// ⚠ **THERE IS NO `vector` ENTRY.** Every member of a `Vector` is `stdlib/Vector.maxon`'s, so there is no
+// ⚠ **THERE IS NO `fixed array` ENTRY.** Every member of a `FixedArray` is `stdlib/FixedArray.maxon`'s, so there is no
 // synthesized surface for an entry to key — the same as `map`.
 //
 // ⚠ **EVERY SURFACE HERE IS A VALUE'S.** The `String` statics, members of the TYPE, are
@@ -11485,7 +11493,7 @@ end 'twoArrayDeclarationsRefusal'
 // builder for one copy to be reworded alone, which is exactly the drift a shared template removes for the rosters one
 // surface over (`rosterRefusalSentence`). Named rather than inlined for `SurfaceMemberNoun`'s reason, three
 // paragraphs down.
-let SizedContainersCountComesFromItsType = "a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record"
+let SizedContainersCountComesFromItsType = "a fixed array's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record"
 
 // ⭐ **AND WHY THE GROWABLE RECORD IS DIFFERENT — the other half of the shared premise.** A function rather
 // than a constant because the growable record's NAME is DISCOVERED (`arrayRecordDeclaredName`, whose reason
@@ -11516,13 +11524,13 @@ end 'growableCountIsItsRecordsLength'
 // name the corpus declares its ARRAY record under is DISCOVERED (`arrayRecordDeclaredName`), so a constant
 // here would be a second, unchecked opinion of it — `twoArrayDeclarationsRefusal`'s stated reason. The sized
 // container's name is not discovered: it is the constant this whole rule is keyed on
-// (`SignatureIndex.VectorBuiltinBaseName`), and routing it through a parameter would dress one caller's
+// (`SignatureIndex.FixedArrayBuiltinBaseName`), and routing it through a parameter would dress one caller's
 // literal up as a lookup. ⚠ Both are quoted PRE-CONTEST for that refusal's other stated reason: this compile's
 // mint is a spelling `requireUnreservedName` forbids the reader from writing.
 function sizedContainersBufferRefusal(member ByteArray, lengthWriters NameRoster, growableName ByteArray) returns String
 	let spelling = String.from(member)
 	let growable = String.from(growableName)
-	return "`{String.from(ManagedMemoryTypeName)}` {SurfaceMemberNoun} '{spelling}' — this buffer is a `{String.from(VectorBuiltinBaseName)}`'s own record, and {SizedContainersCountComesFromItsType}. '{spelling}' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses {rosterList(lengthWriters)} and serves every other member of the surface; the growable `{growable}`'s buffer serves all of them, {growableCountIsItsRecordsLength(growableName)}"
+	return "`{String.from(ManagedMemoryTypeName)}` {SurfaceMemberNoun} '{spelling}' — this buffer is a `{String.from(FixedArrayBuiltinBaseName)}`'s own record, and {SizedContainersCountComesFromItsType}. '{spelling}' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses {rosterList(lengthWriters)} and serves every other member of the surface; the growable `{growable}`'s buffer serves all of them, {growableCountIsItsRecordsLength(growableName)}"
 end 'sizedContainersBufferRefusal'
 
 // The noun `requireSurfaceMember` names a surface's entries by. Named rather than spelled at each arm
@@ -16949,6 +16957,199 @@ function divisorProofOf(zero DivisorZeroVerdict, mayBeNegativeOne bool) returns 
 	end 'z'
 end 'divisorProofOf'
 
+function divisorProofOfRange(low FullRangeInt, high FullRangeInt, isFloat bool) returns DivisorProof
+	return divisorProofOf(DivisorZeroVerdict.neverZero if rangeExcludesZero(low, high: high, isFloat: isFloat) else DivisorZeroVerdict.possiblyZero, mayBeNegativeOne: not isFloat and not rangeExcludesNegativeOne(low, high: high))
+end 'divisorProofOfRange'
+
+union KnownValue
+	floatConstant(bits FullRangeInt)
+	integerConstant(value FullRangeInt)
+	integerInterval(low FullRangeInt, high FullRangeInt)
+	rangedAlias(alias RangedTypeAlias)
+	unknown
+end 'KnownValue'
+
+// An unsigned-topped bound is a raw pattern above `i64.max` that every reader's signed comparisons misread,
+// so such an interval with no declared alias to narrow it states nothing.
+function knownIntervalWithinAlias(low FullRangeInt, high FullRangeInt, denoted DeclaredAlias) returns KnownValue
+	let alias = try requireDeclaredAlias(denoted) otherwise return (KnownValue.unknown if rangeIsUnsignedTopped(low, high: high) else KnownValue.integerInterval(low, high: high))
+
+	if aliasIsFloat(alias) or rangeIsUnsignedTopped(alias.low, high: alias.high) 'theAliasStatesNoSignedInterval'
+		return KnownValue.integerInterval(low, high: high)
+	end 'theAliasStatesNoSignedInterval'
+
+	if rangeIsUnsignedTopped(low, high: high) 'theIntervalStatesNoSignedInterval'
+		return KnownValue.rangedAlias(alias)
+	end 'theIntervalStatesNoSignedInterval'
+
+	return KnownValue.integerInterval(alias.low if alias.low > low else low, high: alias.high if alias.high < high else high)
+end 'knownIntervalWithinAlias'
+
+union FixedArrayIndexVerdict
+	notProven
+	proven
+	pastTheSize(value FullRangeInt, count FixedElementCount)
+end 'FixedArrayIndexVerdict'
+
+export enum FixedArrayAccessor
+	get
+	set
+end 'FixedArrayAccessor'
+
+// @generated library-cache begin
+let CacheCasesFixedArrayAccessor = [FixedArrayAccessor.get, FixedArrayAccessor.set]
+
+function cacheReadFixedArrayAccessor(reader LibraryCacheReader) returns FixedArrayAccessor throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesFixedArrayAccessor.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadFixedArrayAccessor'
+
+function cacheTableAgreesFixedArrayAccessor() returns bool
+	let declared = FixedArrayAccessor.allCases
+
+	if CacheCasesFixedArrayAccessor.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesFixedArrayAccessor.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesFixedArrayAccessor'
+
+module function cacheEnumTablesAgreeInCompilerParser() returns bool
+	if not cacheTableAgreesFixedArrayAccessor() 'disagreesCacheTableAgreesFixedArrayAccessor'
+		return false
+	end 'disagreesCacheTableAgreesFixedArrayAccessor'
+
+	return true
+end 'cacheEnumTablesAgreeInCompilerParser'
+
+// @generated library-cache end
+
+module function fixedArrayAccessorMethodName(accessor FixedArrayAccessor) returns ByteArray
+	return match accessor 'accessor'
+		get gives GetMethod
+		set gives ArraySetMethod
+	end 'accessor'
+end 'fixedArrayAccessorMethodName'
+
+export type SizedAccessor
+	export let accessor as FixedArrayAccessor
+	export let count as FixedElementCount
+
+	static function create(accessor FixedArrayAccessor, count FixedElementCount) returns Self
+		return Self{accessor: accessor, count: count}
+	end 'create'
+
+	// @generated library-cache begin
+	module function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.accessor.ordinal as CacheUnsigned)
+		writer.unsigned(self.count as CacheUnsigned)
+	end 'cacheWrite'
+
+	module static function cacheRead(reader LibraryCacheReader) returns SizedAccessor throws LibraryCacheDamage
+		let f_accessor = try cacheReadFixedArrayAccessor(reader)
+		let f_count = (try reader.boundedUnsigned(1, high: u32.max)) as FixedElementCount
+
+		return Self{accessor: f_accessor, count: f_count}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(SizedAccessor) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'SizedAccessor'
+
+union FixedArrayAccessProof
+	notProven
+	proven(accessor SizedAccessor)
+end 'FixedArrayAccessProof'
+
+module function sizedAccessorOf(signatures ProgramSignatures, receiverTag ValueTypeTag, receiverNameId TypeNameId, callee ByteArray) returns SizedAccessor throws AbsentError
+	if not signatures.isFixedArrayInstanceAt(receiverTag, nameId: receiverNameId) 'notAFixedArray'
+		throw AbsentError.absent
+	end 'notAFixedArray'
+
+	let instance = receiverNameId as GenericInstanceId
+	let declaration = signatures.genericInstanceBaseName(instance)
+
+	if not signatures.declarationIsASizedContainerRecordNamed(declaration) 'notTheCorpusFixedArray'
+		throw AbsentError.absent
+	end 'notTheCorpusFixedArray'
+
+	let count = try signatures.genericInstanceFixedCount(instance) otherwise throw AbsentError.absent
+
+	for accessor in FixedArrayAccessor.allCases 'eachAccessor'
+		if callee.equals(qualifiedMethodName(declaration, methodName: fixedArrayAccessorMethodName(accessor))) 'theAccessorCalled'
+			return SizedAccessor.create(accessor, count: count)
+		end 'theAccessorCalled'
+	end 'eachAccessor'
+
+	throw AbsentError.absent
+end 'sizedAccessorOf'
+
+function fixedArrayIndexVerdictOf(known KnownValue, count FixedElementCount) returns FixedArrayIndexVerdict
+	return match known 'known'
+		integerConstant(value) gives fixedArrayConstantIndexVerdict(value, count: count)
+		integerInterval(low, high) gives fixedArrayRangeIndexVerdict(low, high: high, count: count)
+		rangedAlias(alias) gives FixedArrayIndexVerdict.notProven if aliasIsFloat(alias) else fixedArrayRangeIndexVerdict(alias.low, high: alias.high, count: count)
+		floatConstant or
+		unknown gives FixedArrayIndexVerdict.notProven
+	end 'known'
+end 'fixedArrayIndexVerdictOf'
+
+function fixedArrayRangeIndexVerdict(low FullRangeInt, high FullRangeInt, count FixedElementCount) returns FixedArrayIndexVerdict
+	if low >= 0 and high >= 0 and high < (count as FullRangeInt) 'insideTheSize'
+		return FixedArrayIndexVerdict.proven
+	end 'insideTheSize'
+
+	return FixedArrayIndexVerdict.notProven
+end 'fixedArrayRangeIndexVerdict'
+
+function fixedArrayConstantIndexVerdict(value FullRangeInt, count FixedElementCount) returns FixedArrayIndexVerdict
+	if value < 0 'aNegativeConstant'
+		return FixedArrayIndexVerdict.notProven
+	end 'aNegativeConstant'
+
+	if value >= (count as FullRangeInt) 'pastTheEnd'
+		return FixedArrayIndexVerdict.pastTheSize(value, count: count)
+	end 'pastTheEnd'
+
+	return FixedArrayIndexVerdict.proven
+end 'fixedArrayConstantIndexVerdict'
+
+function fixedArrayAccessorShapeIsExact(accessor FixedArrayAccessor, args ValueIdArray, argLabels NameRoster) returns bool
+	let arity = match accessor 'arity'
+		get gives FixedArrayGetArgCount
+		set gives FixedArraySetArgCount
+	end 'arity'
+
+	if args.count() != arity 'wrongArity'
+		return false
+	end 'wrongArity'
+
+	if not callArgumentLabel(argLabels, argIndex: 0).isEmpty() 'labelledReceiver'
+		return false
+	end 'labelledReceiver'
+
+	let indexLabel = callArgumentLabel(argLabels, argIndex: 1)
+
+	if not indexLabel.isEmpty() and not indexLabel.equals(FixedArrayIndexLabel) 'foreignIndexLabel'
+		return false
+	end 'foreignIndexLabel'
+
+	return accessor == FixedArrayAccessor.get or callArgumentLabel(argLabels, argIndex: 2).equals(ArrayValueLabel)
+end 'fixedArrayAccessorShapeIsExact'
+
 // The FALLIBILITY half, back out — what the whole fallible-division rule is written in terms of (E3103 / bare / throwing).
 function divisorProofZeroVerdict(proof DivisorProof) returns DivisorZeroVerdict
 	return match proof 'p'
@@ -17725,7 +17926,7 @@ end 'LiteralInitForm'
 enum FromHeadContainer
 	set
 	list
-	vector
+	fixedArray
 	array
 end 'FromHeadContainer'
 
@@ -17733,7 +17934,7 @@ function fromHeadIsTheBareBase(head ByteArray, container FromHeadContainer) retu
 	return match container 'container'
 		set gives head.equals(SetBuiltinBaseName)
 		list gives head.equals(ListBuiltinBaseName)
-		vector gives head.equals(VectorBuiltinBaseName)
+		fixedArray gives head.equals(FixedArrayBuiltinBaseName)
 		array gives false
 	end 'container'
 end 'fromHeadIsTheBareBase'
@@ -18706,7 +18907,7 @@ type FunctionBodyState
 
 	// ⭐⭐ **WHOSE RECORD IS A *SIZED* CONTAINER'S OWN** — `bufferSurfaceValues` narrowed to the one
 	// receiver on which a length-changing buffer member is a wrong answer rather than an operation. A
-	// `Vector`'s size is a coordinate of its TYPE (`count()` is `countof(Self)`, folded to a literal), while
+	// `FixedArray`'s size is a coordinate of its TYPE (`count()` is `countof(Self)`, folded to a literal), while
 	// `get` and the walk answer out of the record's `length@8`; the three agree only while the record's length
 	// is the type's count, and `setLength`/`append`/`clear`/`remove` are exactly the members that move it.
 	// Read at `dispatchArrayMethod` beside `valueIsBufferSurface`, which is already a two-carrier answer to
@@ -20385,19 +20586,19 @@ export type Parser
 		// (`noteWellKnownInstanceNeeds`), exactly as the array literal's own do. Set here, acted on after the walk.
 		var hasListFromLiteral = false
 
-		// ⭐ **THE SIZES OF THIS FILE'S `Vector from […]` CONSTRUCTIONS.** A vector's instance is keyed by its
-		// SIZE as well as its element (`SignatureIndex.VectorBuiltinBaseName`), so — unlike every other
+		// ⭐ **THE SIZES OF THIS FILE'S `FixedArray from […]` CONSTRUCTIONS.** A fixed array's instance is keyed by its
+		// SIZE as well as its element (`SignatureIndex.FixedArrayBuiltinBaseName`), so — unlike every other
 		// container's `from` — one flag cannot say which instances the file can name: the size is per SITE.
 		// The sizes are collected here off the same token counter the parser will read back
 		// (`arrayLiteralElementCountAt`) and handed whole to the note below, which is why this one need
-		// carries a PAYLOAD where the others carry a bit. A vector's element cannot be an aggregate
-		// (`requireVectorElementType`), so there is no declared-type half to walk.
-		var vectorFromSizes = FixedSizeArray.create()
+		// carries a PAYLOAD where the others carry a bit. A fixed array's element cannot be an aggregate
+		// (`requireFixedArrayElementType`), so there is no declared-type half to walk.
+		var fixedArrayFromSizes = FixedSizeArray.create()
 
-		// ⭐ **THE HEAD NAMES OF THIS FILE'S `<Name> from […]` CONSTRUCTIONS.** A `Vector` ALIAS head builds its
-		// record through an `Array` literal at the alias's element (`parseAliasedVectorLiteral`), and which alias
+		// ⭐ **THE HEAD NAMES OF THIS FILE'S `<Name> from […]` CONSTRUCTIONS.** A `FixedArray` ALIAS head builds its
+		// record through an `Array` literal at the alias's element (`parseAliasedFixedArrayLiteral`), and which alias
 		// a name denotes is known only once every file has folded — so the names are carried, and
-		// `internWellKnownContainerInstances` interns the arrays behind the ones that turn out to be vectors.
+		// `internWellKnownContainerInstances` interns the arrays behind the ones that turn out to be fixed arrays.
 		var fromHeadNames = NameRoster.create()
 
 		// A `.bytes()` — the byte view, which constructs the SAME `Array with Byte` instance a
@@ -20469,15 +20670,15 @@ export type Parser
 				hasListFromLiteral = true
 			end 'listFromToken'
 
-			// A `Vector from […]`: record the literal's element COUNT, which is half of the instance the
+			// A `FixedArray from […]`: record the literal's element COUNT, which is half of the instance the
 			// parser will look up. A construction whose literal is unterminated is skipped here rather than
 			// refused — the real parse reports it with a position (`arrayLiteralElementCountAt`), and the
 			// sweep's job is to over-intern, never to diagnose.
-			if self.atContainerFromConstruction(FromHeadContainer.vector) and self.kindAt(self.pos + 2) == TokenKind.leftBracket 'vectorFromToken'
+			if self.atContainerFromConstruction(FromHeadContainer.fixedArray) and self.kindAt(self.pos + 2) == TokenKind.leftBracket 'fixedArrayFromToken'
 				if let size = try self.arrayLiteralElementCountAt(self.pos + 2, anchor: self.current()) 'wellFormedLiteral'
-					vectorFromSizes.push(size)
+					fixedArrayFromSizes.push(size)
 				end 'wellFormedLiteral'
-			end 'vectorFromToken'
+			end 'fixedArrayFromToken'
 
 			if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.from and self.kindAt(self.pos + 2) == TokenKind.leftBracket 'fromHeadToken'
 				fromHeadNames.push(self.current().value)
@@ -20591,7 +20792,7 @@ export type Parser
 		// A `.bytes()` byte VIEW joins the byte-string literal's bit because it constructs the same
 		// `Array with Byte`, and `<Enum>.allCaseNames` joins the string literal's for the same reason; neither
 		// has a typealias of its own to intern from, which is the property this whole set shares.
-		index.noteWellKnownInstanceNeeds(hasIntArrayLiteral, byteStringLiteral: hasByteStringLiteral or hasByteViewCall, stringArrayLiteral: hasStringArrayLiteral or hasAllCaseNamesAccess, aggregateArrayLiteral: hasAggregateArrayLiteral, enumAllCasesAccess: hasAllCasesAccess, setFromConstruction: hasSetFromLiteral, listFromConstruction: hasListFromLiteral, vectorSizes: vectorFromSizes, headNames: fromHeadNames, managedFileProducer: hasManagedFileProducer, managedDirectoryProducer: hasManagedDirectoryProducer, managedSocketProducer: hasManagedSocketProducer, managedHostResourceProducer: hasManagedHostResourceProducer)
+		index.noteWellKnownInstanceNeeds(hasIntArrayLiteral, byteStringLiteral: hasByteStringLiteral or hasByteViewCall, stringArrayLiteral: hasStringArrayLiteral or hasAllCaseNamesAccess, aggregateArrayLiteral: hasAggregateArrayLiteral, enumAllCasesAccess: hasAllCasesAccess, setFromConstruction: hasSetFromLiteral, listFromConstruction: hasListFromLiteral, fixedArraySizes: fixedArrayFromSizes, headNames: fromHeadNames, managedFileProducer: hasManagedFileProducer, managedDirectoryProducer: hasManagedDirectoryProducer, managedSocketProducer: hasManagedSocketProducer, managedHostResourceProducer: hasManagedHostResourceProducer)
 	end 'foldDeclaredSignaturesInto'
 
 	// Is the cursor on a `let` or a `var` — the two keywords that introduce a top-level binding?
@@ -20810,7 +21011,7 @@ export type Parser
 	// immediately followed by `from`? `atContainerFromConstruction(FromHeadContainer.array)` asks its
 	// ALIAS half, and ONLY that half (`fromHeadIsTheBareBase` answers no for `array`): a bare `Array
 	// from […]` would state nothing the literal does not already carry, so it keeps falling through to
-	// `E2004 Undefined variable 'Array'` exactly as `List`'s and `Vector`'s alias forms do.
+	// `E2004 Undefined variable 'Array'` exactly as `List`'s and `FixedArray`'s alias forms do.
 	//
 	// ⚠ **IT IS DELIBERATELY NOT READ BY THE DECLARATION SWEEP, WHERE THE THREE PREDICATES ABOVE ARE.** Those
 	// are shared because a BARE base name (`Set from [1, 2]`) mints an instance no declaration in the program
@@ -20829,7 +21030,7 @@ export type Parser
 	// Claiming the shape for any identifier would have replaced a correct diagnostic with a bespoke
 	// one — the "no diagnostic moves" rule every arm added to `parsePrimary` is held to.
 	//
-	// ⚠ The collection heads — `Set`, `List`, `Vector` and their instance aliases, and an `Array` alias — are
+	// ⚠ The collection heads — `Set`, `List`, `FixedArray` and their instance aliases, and an `Array` alias — are
 	// asked first by `parsePrimary`, so the array form here serves only a declared `type` of the program's own.
 	function atLiteralInitConstruction(form LiteralInitForm) returns bool
 		if not (self.at(TokenKind.identifier) and self.peekKind() == TokenKind.from and self.kindAt(self.pos + 2) == literalInitOperandKind(form)) 'notTheShape'
@@ -23232,7 +23433,7 @@ export type Parser
 	// graph is the container's own call graph and is EMPTY for every other type — which is also why this costs
 	// no allocation where it says nothing.
 	function fixedElementCountEdgesFor(typeName ByteArray, scan FixedElementCountScan) returns NameRoster
-		if not self.signatures.isVectorBaseName(typeName) 'notTheSizedContainersOwnBody'
+		if not self.signatures.isFixedArrayBaseName(typeName) 'notTheSizedContainersOwnBody'
 			return NameRoster.create()
 		end 'notTheSizedContainersOwnBody'
 
@@ -23421,7 +23622,7 @@ export type Parser
 		return self.enclosingType.isType() and not hasStaticModifier
 	end 'declarationTakesReceiver'
 
-	// ⭐⭐ `Self{}` inside `type Vector uses Element` is the construction `stdlib/Vector.maxon`'s `create()`
+	// ⭐⭐ `Self{}` inside `type FixedArray uses Element` is the construction `stdlib/FixedArray.maxon`'s `create()`
 	// IS, and a fixed-size container's record is born with all of its slots published — so that literal owes
 	// a COUNT, which the declaration's own countless `Self` cannot state and every call site can.
 	//
@@ -25462,7 +25663,7 @@ export type Parser
 
 		// ⭐ **AND THE SAME POSITION IS THE FIXED-ELEMENT-COUNT FIXPOINT'S SITE** — recorded only for the
 		// SIZED CONTAINER, because a count can be read only inside its own body (`fixedElementCountEdgesFor`).
-		if self.signatures.isVectorBaseName(nameTok.value) 'aGenericType'
+		if self.signatures.isFixedArrayBaseName(nameTok.value) 'aGenericType'
 			self.growDescriptorScanSites()
 			self.descriptorScanSites.push(DescriptorScanSite.create(self.job.path, bodyStart: bodyStart, typeName: nameTok.value))
 		end 'aGenericType'
@@ -26007,7 +26208,7 @@ export type Parser
 			// ⚠ The site is recorded HERE rather than beside `openExtensionBodyScope` for exactly that reason —
 			// the verdict is what says whether these methods are this conformer's, and a site taken before it
 			// is a scan of a body that was never this type's.
-			if not extensionMethodsWithheld(verdict) and index.isVectorBaseName(conformer) 'aGenericConformerThatKeepsThem'
+			if not extensionMethodsWithheld(verdict) and index.isFixedArrayBaseName(conformer) 'aGenericConformerThatKeepsThem'
 				descriptorScanSiteOut.push(DescriptorScanSite.create(self.job.path, bodyStart: bodyStart, typeName: conformer))
 			end 'aGenericConformerThatKeepsThem'
 
@@ -28887,7 +29088,7 @@ export type Parser
 	//
 	// ⚠ **IT RE-KEYS AND RECORDS THE SCOPING — `scopedToEnclosingType`, not a rebuild through `create`.** A
 	// nested alias is a declaration a person wrote in a file, and every fact `readGenericInstanceAlias`
-	// captured about it (its declaring FILE above all, but also its visibility, its `Vector` size and its
+	// captured about it (its declaring FILE above all, but also its visibility, its `FixedArray` size and its
 	// anchors) is as true of it under the qualified name as under the bare one. Rebuilding would take `create`'s
 	// defaults for all of them and file the entry as declared by the file `""`, which
 	// `deriveInstanceDisplayNames` panics on — see `GenericAliasEntry.scopedToEnclosingType`. The ONE
@@ -29023,11 +29224,11 @@ export type Parser
 		// `genericInstance(Array with Byte)` a `ByteArray` argument resolves to. For an `Array` base argument 0
 		// is the ELEMENT, so this is the whole of what tells `Array with __ManagedMemory` from
 		// `Array with ByteArray` — one instance, two spellings. See `GenericAliasEntry.elementIsBuffer`.
-		// ⭐ **A SIZED BASE EATS ITS COUNT BEFORE THE ARGUMENT LIST** — `Vector with 3 Int`. The count is a
-		// VALUE, not a type argument (see `VectorBuiltinBaseName`), so it is consumed here and the list below
+		// ⭐ **A SIZED BASE EATS ITS COUNT BEFORE THE ARGUMENT LIST** — `FixedArray with 3 Int`. The count is a
+		// VALUE, not a type argument (see `FixedArrayBuiltinBaseName`), so it is consumed here and the list below
 		// reads the ONE type argument `builtinGenericTypeParamCount` validates against. Read in the SWEEP as
 		// well as the real parse, because the sweep is what interns the instance and the size is half of that
-		// instance's identity — a sweep that skipped it would file every `Vector with N Int` under one gid.
+		// instance's identity — a sweep that skipped it would file every `FixedArray with N Int` under one gid.
 		let shape = try self.readSizedBaseElementCount(base.written)
 		let elementIsBuffer = self.firstGenericArgSpellingDenotesBuffer()
 
@@ -29102,12 +29303,12 @@ export type Parser
 	end 'selfNamingArgToken'
 
 	// ⭐⭐ **THE ELEMENT COUNT OF A SIZED CONTAINER SPELLING, cursor just past `with`** —
-	// `InstanceShape.unsized` for every base that is not sized, which is every base but `Vector`, and
+	// `InstanceShape.unsized` for every base that is not sized, which is every base but `FixedArray`, and
 	// for those the cursor does not move.
 	//
 	// ⚠ **A MISSING OR UNUSABLE COUNT IS RECORDED, NOT THROWN** — `checkGenericInstance`'s discipline, for its
 	// reason: this is a whole-program semantic verdict about a declaration, not a token the grammar cannot
-	// consume, so it must not abort the file's parse. `Vector with Int` goes on to parse `Int` as the element
+	// consume, so it must not abort the file's parse. `FixedArray with Int` goes on to parse `Int` as the element
 	// and interns an instance nothing can reach, because a recorded diagnostic gates the build.
 	//
 	// ⚠ **AND IT IS SILENT DURING THE SWEEP, exactly as `checkGenericInstance` is.** The sweep re-reads none
@@ -29119,8 +29320,8 @@ export type Parser
 	//
 	// ⚠ **IT IS ONE HOME BECAUSE THE ANSWER IS NEEDED AT BOTH `Base with …` DOORS — the top-level alias and
 	// the NESTED argument — and a widening applied to only one is a SILENT DIVERGENCE IN A REFUSAL** (review
-	// finding 3): with the derivation spelled at each site, `Vector with 2 Real` would stop earning E2062
-	// while `Box with (Vector with 2 Real)` went on earning it, or the reverse, with nothing to say which is
+	// finding 3): with the derivation spelled at each site, `FixedArray with 2 Real` would stop earning E2062
+	// while `Box with (FixedArray with 2 Real)` went on earning it, or the reverse, with nothing to say which is
 	// the rule. `checkGenericArgType`'s header promises the exemption widens in one line; this is that line.
 	//
 	// ⚠ **IT IS A ROSTER OF THE BASES WHOSE FLOAT SLOT IS MEASURED, NOT `isBuiltinGenericBaseName`.**
@@ -29129,7 +29330,7 @@ export type Parser
 	// a DECLARATION-site diagnostic in exchange for a later one at the first method call — and for a
 	// declared-but-unused alias, for none at all.
 	function baseStoresArgumentsInline(name ByteArray) returns bool
-		return self.signatures.isVectorBaseName(name) or self.signatures.isArrayBaseName(name)
+		return self.signatures.isFixedArrayBaseName(name) or self.signatures.isArrayBaseName(name)
 	end 'baseStoresArgumentsInline'
 
 	// ⭐⭐⭐ **THE WHOLE OF `__ManagedMemory`'s FOLD, AND ITS TARGET IS *DISCOVERED*.** A written
@@ -29173,7 +29374,7 @@ export type Parser
 	end 'canonicalGenericBaseNameInThisFile'
 
 	function readSizedBaseElementCount(baseName ByteArray) returns InstanceShape throws SourceParseError
-		if not self.signatures.isVectorBaseName(baseName) 'unsizedBase'
+		if not self.signatures.isFixedArrayBaseName(baseName) 'unsizedBase'
 			return InstanceShape.unsized
 		end 'unsizedBase'
 
@@ -29196,7 +29397,7 @@ export type Parser
 	// The ONE wording of E2069, shared by the two faults that reach it (no count, and a count outside the
 	// usable range) so a reader meets one sentence about one rule however the declaration went wrong.
 	//
-	// ⚠ It takes only the token to BLAME. The base it names is `VectorBuiltinBaseName` and cannot be anything
+	// ⚠ It takes only the token to BLAME. The base it names is `FixedArrayBuiltinBaseName` and cannot be anything
 	// else — `readSizedBaseElementCount` returns before this is reachable for every other base — so passing
 	// the base token in and then interpolating both it and the constant was one name written twice, free to
 	// disagree with itself in a single sentence.
@@ -29205,7 +29406,7 @@ export type Parser
 			return
 		end 'indexStillBuilding'
 
-		self.recordArtifactDiagnostic(ErrorCode.vectorSizeMalformed, message: "`{String.from(VectorBuiltinBaseName)} with …` needs a positive element count before its element type (`{String.from(VectorBuiltinBaseName)} with 3 Int`), and {fault}. The count is part of the TYPE — a `{String.from(VectorBuiltinBaseName)} with 3 Int` is a different type from a `{String.from(VectorBuiltinBaseName)} with 4 Int` — so there is no size a sizeless spelling could mean and none is assumed. Counts run from {MinFixedElementCount} to {MaxFixedElementCount}", range: SourceRange.ofToken(spelledAt))
+		self.recordArtifactDiagnostic(ErrorCode.fixedArraySizeMalformed, message: "`{String.from(FixedArrayBuiltinBaseName)} with …` needs a positive element count before its element type (`{String.from(FixedArrayBuiltinBaseName)} with 3 Int`), and {fault}. The count is part of the TYPE — a `{String.from(FixedArrayBuiltinBaseName)} with 3 Int` is a different type from a `{String.from(FixedArrayBuiltinBaseName)} with 4 Int` — so there is no size a sizeless spelling could mean and none is assumed. Counts run from {MinFixedElementCount} to {MaxFixedElementCount}", range: SourceRange.ofToken(spelledAt))
 	end 'recordSizedBaseCountRefusal'
 
 	// Was the FIRST type argument of the `Base with …` at the cursor spelled `__ManagedMemory`? The
@@ -29250,7 +29451,7 @@ export type Parser
 	// ⭐ **`inlineElement` SAYS THE ARGUMENT NAMES AN ELEMENT STORED INLINE IN A BUFFER, WHICH IS THE ONE
 	// THING THAT DECIDES WHETHER A FLOAT MAY BE IT** — see `checkGenericArgType`'s rule 1. It is a fact about
 	// the BASE, so it is passed down from the base that was read rather than re-derived per argument, and a
-	// NESTED instance recomputes it from its own base (a `Vector with 2 (Box with FullRangeFloat)` puts
+	// NESTED instance recomputes it from its own base (a `FixedArray with 2 (Box with FullRangeFloat)` puts
 	// `FullRangeFloat` in a declared generic's slot, not in a buffer).
 	function parseGenericArgNodes(nodes GenericArgNodeArray, baseName ByteArray, inlineElement bool, bareCommaList bool, slot GenericArgSlot) returns (FieldIndex, InstanceShape) throws SourceParseError
 		var spelled = NoReadOnlyArgs
@@ -29482,10 +29683,10 @@ export type Parser
 			try self.consume(TokenKind.with)
 
 			// ⭐ **A NESTED INSTANCE READS ITS SIZE THROUGH THE SAME DOOR THE TOP-LEVEL ONE DOES (review
-			// finding 5).** Without it `typealias X = Box with (Vector with 3 Int)` died as
+			// finding 5).** Without it `typealias X = Box with (FixedArray with 3 Int)` died as
 			// `E2010 Expected 'a type' but got 'integer literal'` — the raw token complaint the top-level
-			// spelling stopped giving the moment `Vector` existed — instead of reaching E2069 or the element
-			// gate. This arm had already been taught the OTHER `Vector`-specific fact (`inlineElement` below),
+			// spelling stopped giving the moment `FixedArray` existed — instead of reaching E2069 or the element
+			// gate. This arm had already been taught the OTHER `FixedArray`-specific fact (`inlineElement` below),
 			// so the asymmetry was an omission and not a decision.
 			let subSize = try self.readSizedBaseElementCount(base.written)
 
@@ -29519,9 +29720,9 @@ export type Parser
 	// asking there is free where asking separately is a heap box per argument.
 	//
 	// ⭐⭐ **THE `inlineElement` EXEMPTION, AND WHAT IT IS AND IS NOT.** The rule's own stated reason is about a
-	// TYPE PARAMETER's opaque slot; a `Vector with 2 Real`'s element is not one — it is a stride in a buffer,
+	// TYPE PARAMETER's opaque slot; a `FixedArray with 2 Real`'s element is not one — it is a stride in a buffer,
 	// written and read as its 64 BITS (`containerElementWord` / `containerSlotValueType`), which is machinery
-	// this port had to build for `/specs/vector.md`'s float cases and which works. So the exemption is exactly
+	// this port had to build for `/specs/fixed-array.md`'s float cases and which works. So the exemption is exactly
 	// as wide as the reason is narrow.
 	//
 	// ⚠⚠ **`Array` IS IN IT TOO, BECAUSE THE COMPILER ALREADY MINTS AND RUNS THE VERY INSTANCE THE
@@ -35106,7 +35307,7 @@ export type Parser
 			// container's declaration looks like the record and is not necessarily one: `managed.slice(0, 2)`
 			// mints a fresh VIEW whose type is the SAME `__ManagedMemory with Element`, so a declaration-keyed
 			// mark cannot tell the two apart and would mark the view as well. MEASURED: passing a slice to a
-			// `Vector` helper that calls `clear()` on it was refused *"this buffer is a `Vector`'s own
+			// `FixedArray` helper that calls `clear()` on it was refused *"this buffer is a `FixedArray`'s own
 			// record"* — a legal program refused by a FALSE sentence, while the identical `s.clear()` written
 			// in place compiled and ran (exit 30). ⇒ The fact is CARRIED, never inferred: the mark lives on
 			// the value that `bufferSurfaceOfDeclaredRecord` minted.
@@ -36354,10 +36555,10 @@ export type Parser
 		// for a declaration that HAS a base box; `Array with T` is its `__ManagedMemory with T`, so a
 		// `structRef(Array)` would give `clone()`'s result a struct cascade over the buffer record.
 		// ⚠ **AND THE SIZED CONTAINER IS THE SAME FACT WITH A SECOND COORDINATE ON IT.** `Self` inside
-		// `stdlib/Vector.maxon` is the declaration's own instance for exactly the reason above — a `Vector`'s
-		// value IS the compiler's fused record — and answering `structRef(Vector)` would give `init`'s
-		// `return Self{managed: managed}` **`E3005 Cannot return 'Vector_T…' from function declared to return
-		// 'Vector'`**: the literal produced the instance, the declared return produced the base box, and the two
+		// `stdlib/FixedArray.maxon` is the declaration's own instance for exactly the reason above — a `FixedArray`'s
+		// value IS the compiler's fused record — and answering `structRef(FixedArray)` would give `init`'s
+		// `return Self{managed: managed}` **`E3005 Cannot return 'FixedArray_T…' from function declared to return
+		// 'FixedArray'`**: the literal produced the instance, the declared return produced the base box, and the two
 		// are the same type under two spellings. The countless instance it answers with is what
 		// `substitutedShape` then gives the receiver's SIZE at a call.
 		if self.signatures.declarationsValueIsTheManagedRecord(name) 'theCompilersOwnGenericRecord'
@@ -36381,7 +36582,7 @@ export type Parser
 	end 'enclosingTypeName'
 
 	function enclosedBySizedContainer() returns bool
-		return self.signatures.isVectorBaseName(try self.enclosingType.typeName() otherwise return false)
+		return self.signatures.isFixedArrayBaseName(try self.enclosingType.typeName() otherwise return false)
 	end 'enclosedBySizedContainer'
 
 	function renderScopedTypeName(t MaxonType) returns ByteArray
@@ -41873,14 +42074,15 @@ export type Parser
 	end 'countedRangeCovers'
 
 	// ⭐⭐ **IS `value` PROVABLY INSIDE `target`? — THE WHOLE OF EVERY RUNTIME GUARD'S DEATH TEST, AND THE
-	// ONE PLACE THE TWO KINDS OF PROOF ARE JOINED.** A value proves its range two ways and only two: it
+	// ONE PLACE THE TWO KINDS OF PROOF ARE JOINED FOR A GUARD.** A value proves its range two ways and only two: it
 	// DENOTES a declared alias whose range the destination covers (the induction
 	// `rangeCoversDenotedRange`'s header states), or a counted loop proved an interval for it that nothing
 	// names. Both answers mean the same thing to a guard — the compare cannot fail — so they are
-	// joined once, and no door reaches a verdict of its own.
+	// joined once, and no door reaches a verdict of its own. The proofs that decide whether a divide or a
+	// `FixedArray` accessor can fail join the same two facts in `knownValueOf`.
 	//
 	// ⚠⚠ **THE JOIN IS DELIBERATELY NOT MADE INSIDE `valueDenotedAlias`, AND THE LINE IS: A NAMELESS
-	// INTERVAL IS NOT A DECLARED TYPE.** That function has FIVE readers. Three of them ask about the type
+	// INTERVAL IS NOT A DECLARED TYPE.** Two of that function's readers ask about the type
 	// the program WROTE, not about the bounds a value happens to satisfy, and each would answer a DIFFERENT
 	// question if an interval were folded in:
 	//
@@ -41888,15 +42090,11 @@ export type Parser
 	//     fits in 'B'"* — and its own rule is that it *"fires only when BOTH ends are DECLARED ranged
 	//     typealiases"*. An interval has no name to print and no declaration to have repeated, and
 	//     firing here would REFUSE a legal program.
-	//   • **`divisorProof`** spends the range as `safety.md`'s escape hatch — *"a ranged type whose range
-	//     excludes 0 compiles to a bare divide"*. Reading an interval there would make `n / i` inside
-	//     `for i in 1 upto k` stop THROWING, so the `try` the program already wrote around it becomes
-	//     surplus: again a refusal, and this time of a program that compiles today.
 	//   • **`edgeProvesAlias`** does not spend the proof — it LIFTS a merge's withheld alias claim
 	//     (`recordMergeAliasProof`), which republishes that merge's DECLARED name to every reader including
-	//     the two above. An interval may not put a name into circulation that no edge declared.
+	//     the one above. An interval may not put a name into circulation that no edge declared.
 	//
-	// The other two readers are outside this joiner for reasons of their own, not for the line above's.
+	// The other readers are outside this joiner for reasons of their own, not for the line above's.
 	// `shiftCountIsProvenUnguarded` asks the SAME kind of question — can a runtime guard fire? — and reading
 	// the interval there is SOUND; it is left out because the win could not be told from build-to-build
 	// layout noise (its header carries all six timings). `emitPrimitiveClone` is unaffected either way: a
@@ -41904,9 +42102,8 @@ export type Parser
 	//
 	// ⛔ **EACH WITHHOLD IS PINNED BY A CASE THAT GOES RED IF IT IS UNDONE**, because a rule this file merely
 	// asserts is one nothing checks (`specs/range-check-panic.md`):
-	// `a-counted-loop-counter-proves-a-cast` stops COMPILING if E3010 reads the interval,
-	// `a-counted-divisor-is-still-a-throwing-divide` stops compiling if `divisorProof` does (its `try` becomes
-	// an E2015 over a bare `binOp`), and `a-merge-fed-by-a-counted-loop-denotes-no-alias` stops compiling if
+	// `a-counted-loop-counter-proves-a-cast` stops COMPILING if E3010 reads the interval, and
+	// `a-merge-fed-by-a-counted-loop-denotes-no-alias` stops compiling if
 	// `edgeProvesAlias` does (the merge's declared name comes back into circulation and its `as` is E3010).
 	function valueIsProvablyInRange(value ValueId, target RangedTypeAlias) returns bool
 		return rangeCoversDenotedRange(target, source: self.valueDenotedAlias(value)) or self.countedRangeCovers(value, target: target) or self.unsignedSourceFillsUnsignedQuantity(value, target: target)
@@ -44086,7 +44283,7 @@ export type Parser
 			send then return self.rewriteSendToTryChannel(opIdx)
 			notRoutable or
 			tryChannelCall then throw self.notACallTryTarget(tryTok)
-			call or
+			call then try self.requireCallCanFail(opIdx, tryTok: tryTok)
 			witness or
 			await then break
 		end 'rewrite'
@@ -44094,6 +44291,11 @@ export type Parser
 		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
 		return (self.rewriteToTryChannel(opIdx, op: op, flag: flag), flag)
 	end 'commitTryTargetRewrite'
+
+	function requireCallCanFail(opIdx ElementIndex, tryTok Token) throws SourceParseError
+		let proven = try self.artifact.provenFixedArrayAccesses.get(opIdx) otherwise return
+		throw SourceParseError.tryOnProvenFixedArrayAccess(String.from(fixedArrayAccessorMethodName(proven.accessor)), count: proven.count, line: tryTok.line, column: tryTok.column)
+	end 'requireCallCanFail'
 
 	function rewriteSendToTryChannel(opIdx ElementIndex) returns (TryTarget, ValueId)
 		let sent = recordedSendOf(self.lastSend, opIdx: opIdx)
@@ -44977,8 +45179,8 @@ export type Parser
 		// ⭐ **AND THE BUFFER-SURFACE FAMILY — THE THIRD MERGE'S SHARE OF IT.** Asked of
 		// `contEdges` for `recordMergeAliasProof`'s stated reason one line up: both edges are final here, and
 		// the err edge in particular is only settled after the ownership reconciliation above. MEASURED as the
-		// route this closes: `try managed.slice(0, 99) otherwise managed` inside an `extension Vector` cleared
-		// the vector's own record through the phi.
+		// route this closes: `try managed.slice(0, 99) otherwise managed` inside an `extension FixedArray` cleared
+		// the fixed array's own record through the phi.
 		self.propagateBufferSurfaceToPhi(phiId, gives: contEdges)
 
 		self.bodyState.currentBlock = cont
@@ -52302,9 +52504,9 @@ export type Parser
 	// `createIterator()` returns BEFORE the fork below is reached, and `for x in [10, 20, 30]` emits
 	// `Array.createIterator` / `ArrayIterator.current` / `ArrayIterator.advance`.
 	//
-	// ⚠⚠ **`stdlib/Vector.maxon` IS IN IT TOO.** The corpus declares `createIterator`, so a vector
+	// ⚠⚠ **`stdlib/FixedArray.maxon` IS IN IT TOO.** The corpus declares `createIterator`, so a fixed array
 	// source takes the rewrite exactly as an array does — a fact that turns on VISIBILITY alone, which
-	// is why a `Vector`, whose record IS an array's, is not the counter source it looks like: the loop
+	// is why a `FixedArray`, whose record IS an array's, is not the counter source it looks like: the loop
 	// runs the declaration's cursor. The trade is deliberate and not free — a counted read against a
 	// per-loop iterator struct and a call per step. It is taken for UNIFORMITY — one rule for both
 	// corpus containers, the one `Array` already follows — and because the alternative is a second
@@ -53542,7 +53744,7 @@ export type Parser
 		// half of this compiler's own allocation samples, for a traversal whose whole content is an
 		// integer the header already carries.
 		//
-		// ⚠ **IT IS THE `Array`'s ALONE AND DELIBERATELY NOT `Vector`'s, `List`'s or `Map`'s.** The claim being
+		// ⚠ **IT IS THE `Array`'s ALONE AND DELIBERATELY NOT `FixedArray`'s, `List`'s or `Map`'s.** The claim being
 		// made is that the loop's own form is EQUIVALENT to what the declared cursor would have done, and that
 		// rests on `Array with T` and `__ManagedMemory with T` being ONE `GenericInstanceId`: the array
 		// record IS the buffer the two runtime entries take, so no field is read and no value is minted. A
@@ -53617,7 +53819,7 @@ export type Parser
 	end 'opIsAnIterationThrowingCallDefining'
 
 	// ⭐ **WHAT A `for … in` MAY ITERATE.** An `Array` instance whose element read is a random-access index,
-	// which is what the counter lowering requires — plus the `Vector` whose record IS an array's, a
+	// which is what the counter lowering requires — plus the `FixedArray` whose record IS an array's, a
 	// `String`'s grapheme clusters, and any source supplying the cursor protocol,
 	// whether by DECLARING it or by REQUIRING it of what the value dispatches through. A corpus `Map` reaches
 	// here as the CURSOR its own `createIterator()` returned and is admitted by the cursor arm rather than by
@@ -53655,12 +53857,12 @@ export type Parser
 		// ⚠ A LIST needs no arm of its own. A corpus `List` declares `Iterable with (Element, ListIter)`, so it arrives
 		// as the `ListIterator` its own `createIterator()` returned and is admitted by the cursor arm below —
 		// the same route the corpus `Array` and the corpus `Map` take.
-		// A VECTOR iterates exactly as an `Array` does — its record IS an array's, its length is its fixed
+		// A FIXED ARRAY iterates exactly as an `Array` does — its record IS an array's, its length is its fixed
 		// size, and `parseForStatement`'s counted form reads both off the record and the element through the
 		// shared accessor, so the loop needed no arm of its own: only this admission.
-		if self.signatures.isVectorInstanceAt(self.tagOf(source), nameId: self.valueNameId(source)) 'vector'
+		if self.signatures.isFixedArrayInstanceAt(self.tagOf(source), nameId: self.valueNameId(source)) 'fixedArray'
 			return
-		end 'vector'
+		end 'fixedArray'
 
 		// A USER TYPE walks its own CURSOR (conditional extensions) — the one source here that supplies its
 		// own traversal instead of having one built for it, and the reason this function answers for more than
@@ -53706,7 +53908,7 @@ export type Parser
 
 		try self.requireDeclaredBaseTypeName(self.tagOf(source), nameId: self.valueNameId(source), tok: forTok)
 
-		throw SourceParseError.unsupported("`for … in` over a `{typeTagName(self.tagOf(source))}` value — the compiler iterates an `Array`, a `{String.from(VectorBuiltinBaseName)}`, a `List`, a `{String.from(MapBuiltinBaseName)}`'s `(key, value)` entries, a `String`'s grapheme clusters, the counted ranges `<lo> to <hi>` / `<lo> upto <hi>`, and any type declaring the cursor protocol `{String.from(CurrentMethodName)}()` + `{String.from(AdvanceMethodName)}() throws {String.from(IterationErrorTypeName)}`", line: forTok.line, column: forTok.column)
+		throw SourceParseError.unsupported("`for … in` over a `{typeTagName(self.tagOf(source))}` value — the compiler iterates an `Array`, a `{String.from(FixedArrayBuiltinBaseName)}`, a `List`, a `{String.from(MapBuiltinBaseName)}`'s `(key, value)` entries, a `String`'s grapheme clusters, the counted ranges `<lo> to <hi>` / `<lo> upto <hi>`, and any type declaring the cursor protocol `{String.from(CurrentMethodName)}()` + `{String.from(AdvanceMethodName)}() throws {String.from(IterationErrorTypeName)}`", line: forTok.line, column: forTok.column)
 	end 'requireIterableSource'
 
 	// ⭐ **THE SURFACE THIS SOURCE WALKS ITS OWN CURSOR THROUGH, or `none` when it is not a cursor**
@@ -57986,11 +58188,11 @@ export type Parser
 	// ⛔⛔ **WITHOUT IT THERE ARE TWO WRONG ANSWERS AT ONCE, BOTH MEASURED.** With the mark stopping here:
 	//   • a `__ManagedMemory` value through a merge came out on the **`Array` ROSTER, EXACTLY INVERTED** —
 	//     `var m = a.managed if flag else a.managed` then `m.length()` was refused as an unknown `Array`
-	//     member while `m.count()` compiled, on a growable array, with no `Vector` in sight. That is the roster inversion
+	//     member while `m.count()` compiled, on a growable array, with no `FixedArray` in sight. That is the roster inversion
 	//     at the merge position, and it is what the first two arms below repair.
-	//   • a SIZED container's record laundered its identity through the join: inside an `extension Vector`,
+	//   • a SIZED container's record laundered its identity through the join: inside an `extension FixedArray`,
 	//     `var m = managed if flag else managed` and `var m = try managed.slice(0, 99) otherwise managed`
-	//     each cleared the vector's own record and printed `len=0 count=3` — the reproducer,
+	//     each cleared the fixed array's own record and printed `len=0 count=3` — the reproducer,
 	//     reached by a ternary and by a `try` fallback with every other door already shut.
 	//
 	// ⚠ **ANY MARKED EDGE MARKS THE PHI, which is the conservative direction and the only sound one** —
@@ -64986,53 +65188,91 @@ export type Parser
 	// is refused where it is written.
 	//
 	// ⚠ **THE SLOTS NO VALUE CROSSES INTO ARE REFUSED AT THEIR PRODUCER.** `Array.resize`,
-	// `__ManagedMemory.setLength` and `Vector.create` expose zero-initialized slots with nothing for a store
+	// `__ManagedMemory.setLength` and `FixedArray.create` expose zero-initialized slots with nothing for a store
 	// guard to stand in front of, so each is E3106 for an element range that excludes zero — an
 	// `Array with NonZero` never holds a `0` this verdict did not see.
 	function divisorProof(divisor ValueId) returns DivisorProof
-		if self.floatConstIsKnown(divisor) 'floatConstant'
+		return match self.knownValueOf(divisor) 'known'
 			// A FLOAT divisor cannot reach a `mod` at all (`requireBinOpOperands` refuses it), and `divsd`
 			// cannot fault, so the overflow hazard has no float form to admit.
-			let isZero = floatOrderKey(self.floatConstBitsOf(divisor)) == 0
-			return divisorProofOf(DivisorZeroVerdict.alwaysZero if isZero else DivisorZeroVerdict.neverZero, mayBeNegativeOne: false)
-		end 'floatConstant'
+			floatConstant(bits) gives divisorProofOf(DivisorZeroVerdict.alwaysZero if floatOrderKey(bits) == 0 else DivisorZeroVerdict.neverZero, mayBeNegativeOne: false)
+			integerConstant(value) gives divisorProofOf(DivisorZeroVerdict.alwaysZero if value == 0 else DivisorZeroVerdict.neverZero, mayBeNegativeOne: value == OverflowingDivisorPattern)
 
-		if self.constIsKnown(divisor) 'intConstant'
-			let value = self.constOf(divisor)
-			return divisorProofOf(DivisorZeroVerdict.alwaysZero if value == 0 else DivisorZeroVerdict.neverZero, mayBeNegativeOne: value == OverflowingDivisorPattern)
-		end 'intConstant'
-
-		// ⚠ **`provenAliasOfValue`, NOT `declaredAliasOfValue` — A MERGE'S DECLARED ALIAS IS NOT A PROOF, AND
-		// THIS IS THE READER WHERE THAT COSTS AN UNCATCHABLE FAULT.** The list above ends *"WHAT REMAINS
-		// IS NOT A DOOR"* and names only `Array.resize`; a phi is the second such producer. MEASURED: a
-		// `NonZero` binding decremented to `0` around a loop kept the alias on its header phi, this answered
-		// `neverZero`, `100 / d` compiled to a BARE `idiv` needing no `throws DivisionByZero` at all — and the
-		// runtime `0` died `panic: integer divide by zero`, the exact uncatchable fault the
-		// PARAMETER door is closed to prevent. The withheld claim falls to `undeclared` below, which is the conservative
-		// arm this function already documents as the safe direction.
-		return match self.valueDenotedAlias(divisor) 'a'
 			// One alias, both bounds tests — and the float arm answers `mayBeNegativeOne: false` for the same
 			// reason the float CONSTANT arm does, not because a float range was examined and cleared.
-			declared(alias) gives divisorProofOf(DivisorZeroVerdict.neverZero if rangeExcludesZero(alias.low, high: alias.high, isFloat: aliasIsFloat(alias)) else DivisorZeroVerdict.possiblyZero, mayBeNegativeOne: not aliasIsFloat(alias) and not rangeExcludesNegativeOne(alias.low, high: alias.high))
+			rangedAlias(alias) gives divisorProofOfRange(alias.low, high: alias.high, isFloat: aliasIsFloat(alias))
+			integerInterval(low, high) gives divisorProofOfRange(low, high: high, isFloat: false)
 
 			// Nothing known: BOTH hazards admitted. This is the answer every gap in the proof falls to, and
 			// the second fact is exactly as conservative as the first for the same stated reason.
-			undeclared gives divisorProofOf(DivisorZeroVerdict.possiblyZero, mayBeNegativeOne: true)
-		end 'a'
+			unknown gives divisorProofOf(DivisorZeroVerdict.possiblyZero, mayBeNegativeOne: true)
+		end 'known'
 	end 'divisorProof'
 
-	// The dividend's half of the quotient overflow pair, read the way `divisorProof` reads its divisor: a
-	// folded constant, else a proven alias, else nothing known and the pair stays admitted. Asked only of an
-	// integer dividend.
-	function dividendMayBeIntMin(dividend ValueId) returns bool
-		if self.constIsKnown(dividend) 'intConstant'
-			return self.constOf(dividend) == OverflowingDividendPattern
+	// ⚠ **`valueDenotedAlias` (a recorded cast alias, else `provenAliasOfValue`), NOT `declaredAliasOfValue` —
+	// A MERGE'S DECLARED ALIAS IS NOT A PROOF, AND THIS IS THE READER WHERE THAT COSTS AN UNCATCHABLE FAULT.**
+	// MEASURED: a `NonZero` binding decremented to `0` around a loop kept the alias on its header phi, the
+	// divisor proof answered `neverZero`, `100 / d` compiled to a BARE `idiv` needing no `throws
+	// DivisionByZero` at all — and the runtime `0` died `panic: integer divide by zero`, the exact uncatchable
+	// fault the PARAMETER door is closed to prevent. The withheld claim falls to `unknown`, which is the
+	// conservative arm every proof reading this falls to.
+	function knownValueOf(value ValueId) returns KnownValue
+		if self.floatConstIsKnown(value) 'floatConstant'
+			return KnownValue.floatConstant(self.floatConstBitsOf(value))
+		end 'floatConstant'
+
+		if self.constIsKnown(value) 'intConstant'
+			return KnownValue.integerConstant(self.constOf(value))
 		end 'intConstant'
 
-		return match self.valueDenotedAlias(dividend) 'a'
-			declared(alias) gives not rangeExcludesIntMin(alias.low, high: alias.high)
-			undeclared gives true
+		let denoted = self.valueDenotedAlias(value)
+
+		if let proven = try provenIntRangeOf(self.bodyState.countedValueRanges, value: value) 'aProvenInterval'
+			return knownIntervalWithinAlias(proven.low, high: proven.high, denoted: denoted)
+		end 'aProvenInterval'
+
+		return match denoted 'a'
+			declared(alias) gives KnownValue.rangedAlias(alias)
+			undeclared gives KnownValue.unknown
 		end 'a'
+	end 'knownValueOf'
+
+	// A fixed array's size is part of its type, so an index proven inside it is a typing fact, not an
+	// optimization: it decides whether a bare call compiles and whether `try` is legal (E3055). It is made
+	// here at the call site because `stdlib/FixedArray.maxon`'s `get`/`set` are one shared body that takes
+	// `index` as a runtime parameter and cannot see the caller's proof.
+	// A ranged-alias index proves its range only because every door into the alias guards it; for a
+	// parameter that is `InsertRangeChecks.guardRangedParams`' entry guard.
+	// It returns before computing a verdict for every call that is not a sized-`FixedArray` `get`/`set`:
+	// the verdict is a boxed union and this is asked of every call in the program.
+	function fixedArrayAccessProof(callee ByteArray, args ValueIdArray, argLabels NameRoster, anchor Token) returns FixedArrayAccessProof throws SourceParseError
+		let receiver = try args.get(0) otherwise return FixedArrayAccessProof.notProven
+		let accessor = try sizedAccessorOf(self.signatures, receiverTag: self.tagOf(receiver), receiverNameId: self.valueNameId(receiver), callee: callee) otherwise return FixedArrayAccessProof.notProven
+
+		if not fixedArrayAccessorShapeIsExact(accessor.accessor, args: args, argLabels: argLabels) 'notTheDeclaredShape'
+			return FixedArrayAccessProof.notProven
+		end 'notTheDeclaredShape'
+
+		let index = try args.get(1) otherwise panic("fixedArrayAccessProof: an accessor of the exact shape carries its index")
+
+		match fixedArrayIndexVerdictOf(self.knownValueOf(index), count: accessor.count) 'verdict'
+			pastTheSize(value, count) then throw SourceParseError.fixedArrayIndexPastTheSize(value, count: count, line: anchor.line, column: anchor.column)
+			proven then return FixedArrayAccessProof.proven(accessor)
+			notProven then return FixedArrayAccessProof.notProven
+		end 'verdict'
+	end 'fixedArrayAccessProof'
+
+	// The dividend's half of the quotient overflow pair, read the way `divisorProof` reads its divisor
+	// (`knownValueOf`); nothing known leaves the pair admitted. Asked only of an integer dividend, so a
+	// float constant is nothing this question can say anything about.
+	function dividendMayBeIntMin(dividend ValueId) returns bool
+		return match self.knownValueOf(dividend) 'known'
+			integerConstant(value) gives value == OverflowingDividendPattern
+			integerInterval(low, high) gives not rangeExcludesIntMin(low, high: high)
+			rangedAlias(alias) gives not rangeExcludesIntMin(alias.low, high: alias.high)
+			floatConstant or
+			unknown gives true
+		end 'known'
 	end 'dividendMayBeIntMin'
 
 	// Append a `binOp` op combining two SSA values; return the ValueId it defines. The
@@ -66694,16 +66934,16 @@ export type Parser
 				return try self.parseListFromConstruction(func)
 			end 'listFromConstruction'
 
-			// `Vector from [10, 20, 30]` — the same shape a third container over, and its own arm for the
+			// `FixedArray from [10, 20, 30]` — the same shape a third container over, and its own arm for the
 			// `List` arm's reason: the three build different things from the same tokens.
-			if self.atContainerFromConstruction(FromHeadContainer.vector) 'vectorFromConstruction'
-				return try self.parseVectorFromConstruction(func)
-			end 'vectorFromConstruction'
+			if self.atContainerFromConstruction(FromHeadContainer.fixedArray) 'fixedArrayFromConstruction'
+				return try self.parseFixedArrayFromConstruction(func)
+			end 'fixedArrayFromConstruction'
 
 			// `ByteArray from [10, 20, 30]` — the ALIAS-headed form, whose head names an `Array` instance
 			// rather than a builtin base name. Its own arm for the reason the three above are three arms, and
 			// it cannot collide with any of them: the bases are disjoint, and a name that aliases an `Array`
-			// is not `Set`, `List` or `Vector`.
+			// is not `Set`, `List` or `FixedArray`.
 			if self.atContainerFromConstruction(FromHeadContainer.array) 'arrayFromConstruction'
 				return try self.parseArrayFromConstruction(func)
 			end 'arrayFromConstruction'
@@ -66952,12 +67192,12 @@ export type Parser
 	// one axis over: that one answers in BYTES per value, this one in ELEMENTS per instance. Two outcomes,
 	// decided by whether the operand STATES a count:
 	//
-	//   • An instance that states one (`Vector with 3 Int`, and every alias for it) is a COMPILE-TIME
+	//   • An instance that states one (`FixedArray with 3 Int`, and every alias for it) is a COMPILE-TIME
 	//     CONSTANT folded to a `literal` right here, which is where the instance registry lives. It cannot
 	//     ride the op for `parseSizeof`'s reason one door over.
 	//   • The sized container's OWN `Self` states none — `ProgramSignatures.ownRecordSelfInstance`
 	//     interns at `InstanceShape.unsized`, deliberately, so ONE shared body serves every size
-	//     (`substitutedShape`) — so inside `type Vector uses Element` there is no compile-time answer,
+	//     (`substitutedShape`) — so inside `type FixedArray uses Element` there is no compile-time answer,
 	//     and the expression IS the hidden FIXED-ELEMENT-COUNT parameter every call site fills in — so
 	//     it emits NO OP AT ALL, the way a `let` bound to a literal emits none: the value is already
 	//     defined, by the entry block's `param`.
@@ -66965,11 +67205,11 @@ export type Parser
 	// ⛔⛔ **THE COUNT TRAVELS IN ITS OWN HIDDEN PARAMETER AND NOT AS A TENTH LAYOUT-DESCRIPTOR WORD, AND THAT
 	// IS A MEASUREMENT.** See `ProgramSignatures.fixedElementCountNeeds`: a descriptor word describes the type
 	// ARGUMENT, is FORWARDED wholesale to a callee whose instance is written over the caller's parameters, and
-	// therefore cannot carry a fact about the INSTANCE — a `Vector with 4 Element` reached from inside
+	// therefore cannot carry a fact about the INSTANCE — a `FixedArray with 4 Element` reached from inside
 	// `type Holder uses Element` read Holder's count, 0, instead of 4.
 	//
 	// ⭐ Its gate is the count slot. A static fills it from
-	// the instance it returns (`Vector.create()`, the whole reason this expression exists) or the
+	// the instance it returns (`FixedArray.create()`, the whole reason this expression exists) or the
 	// instance its call names. A body the count scan did not see gets a positioned refusal rather than
 	// a compiler abort.
 	function parseCountof() returns ValueId throws SourceParseError
@@ -66982,12 +67222,12 @@ export type Parser
 		// declared struct, a type PARAMETER and an unsized container all answer nothing here — and answering 0
 		// would be a sentinel the caller has no way to tell from a real count.
 		//
-		// ⛔ Asked through `isVectorInstanceAt`, the (tag, id) PAIR door, and not through `isVectorInstance`
+		// ⛔ Asked through `isFixedArrayInstanceAt`, the (tag, id) PAIR door, and not through `isFixedArrayInstance`
 		// plus a hand-written tag test: a `TypeNameId` and a `GenericInstanceId` share one numeric space, so
 		// the id half alone can answer TRUE about an instance this operand is not. That door exists for
 		// exactly this shape and stating the pairing here again would be the same rule written twice.
-		if not self.signatures.isVectorInstanceAt(maxonTypeTag(operand), nameId: typeNameIdOf(operand)) 'noElementCount'
-			throw SourceParseError.unsupported("countof of a type that states no element count — only a fixed-size container type has one (`Vector with 3 Int`, or `Self` inside the sized container's own body). A growable `Array`'s length is a runtime field of the record, not part of its type, so ask it for its `count()`", line: countofTok.line, column: countofTok.column)
+		if not self.signatures.isFixedArrayInstanceAt(maxonTypeTag(operand), nameId: typeNameIdOf(operand)) 'noElementCount'
+			throw SourceParseError.unsupported("countof of a type that states no element count — only a fixed-size container type has one (`FixedArray with 3 Int`, or `Self` inside the sized container's own body). A growable `Array`'s length is a runtime field of the record, not part of its type, so ask it for its `count()`", line: countofTok.line, column: countofTok.column)
 		end 'noElementCount'
 
 		let count = try self.fixedElementCountValue(genericInstanceIdOf(operand), anchor: countofTok)
@@ -67001,7 +67241,7 @@ export type Parser
 
 	// The count of one sized instance, at the parse: a literal when the instance states one, this
 	// function's own hidden slot when it does not. Two askers and one answer: the `countof(T)`
-	// expression a program writes, and the `Self{}` construction `stdlib/Vector.maxon`'s `create()`
+	// expression a program writes, and the `Self{}` construction `stdlib/FixedArray.maxon`'s `create()`
 	// is. They must agree exactly — a record built with one number and read back through another is a
 	// `count()` that disagrees with `get()`, a silent wrong answer.
 	//
@@ -68854,11 +69094,11 @@ export type Parser
 		// retain on a record the default had just built. The NON-empty spelling (`Self{managed: m}`) keeps the
 		// ordinary path and reaches `emitFusedWrapperLiteral`'s identity arm, so the two forms stay the two
 		// statics they mirror — `create()` and `init(managed)`.
-		// ⭐⭐ **AND `Self{}` INSIDE `stdlib/Vector.maxon` IS THE SAME FORM ON THE SIZED CONTAINER, AND IT IS
+		// ⭐⭐ **AND `Self{}` INSIDE `stdlib/FixedArray.maxon` IS THE SAME FORM ON THE SIZED CONTAINER, AND IT IS
 		// THE WHOLE OF `Vec3.create()`.** The literal PUBLISHES its slots rather than building a countless
 		// container: `emitOwnedContainerCreate`'s sized-container arm sizes the record from
 		// `fixedElementCountValue`: a folded literal at a concrete `Vec3{}`, and the hidden count parameter
-		// inside `Vector.create`, whose `Self` states none (`ownRecordSelfInstance`) so ONE body serves every
+		// inside `FixedArray.create`, whose `Self` states none (`ownRecordSelfInstance`) so ONE body serves every
 		// size. The declaration's `return Self{}` is unchanged, which is what lets the BOOTSTRAP compile the
 		// same corpus line — it has no `countof` and needs none, because the count is the literal's.
 		if self.signatures.declarationsValueIsTheManagedRecord(layout.name) and not (try filled.get(0) otherwise panic("parseStructLiteral: filled.get OOB at 0 — `declarationIsTheManagedRecord` established a sole field and the column is sized to the layout's field count")) 'theEmptyContainer'
@@ -70178,19 +70418,19 @@ export type Parser
 			return self.coOwnAggregateAsTemp(buffer, range: range)
 		end 'theBufferRecord'
 
-		// ⭐⭐ **THE SIZED CONTAINER'S OWN RECORD IS THE SAME IDENTITY, RETYPED.** `stdlib/Vector.maxon`'s
-		// `init(managed ElementMemory)` writes `return Self{managed: managed}`, and a `Vector`'s runtime
+		// ⭐⭐ **THE SIZED CONTAINER'S OWN RECORD IS THE SAME IDENTITY, RETYPED.** `stdlib/FixedArray.maxon`'s
+		// `init(managed ElementMemory)` writes `return Self{managed: managed}`, and a `FixedArray`'s runtime
 		// representation IS an `Array`'s — the same 48-byte fused record, dropped by the same
 		// `__managed_decref` — so there is nothing to construct here either. What the array arm above cannot do
 		// is hand the value back with the RIGHT identity: the buffer is an `Array with Element` and `Self` is a
-		// `Vector`, whose gid carries the SIZE as a second coordinate. So the identity is taken and the value is
-		// retyped to the declaration's own instance, exactly as `parseVectorFromConstruction` retypes the array
+		// `FixedArray`, whose gid carries the SIZE as a second coordinate. So the identity is taken and the value is
+		// retyped to the declaration's own instance, exactly as `parseFixedArrayFromConstruction` retypes the array
 		// literal it is handed.
 		//
-		// ⚠ **STDLIB SOURCE ONLY, AND THE GATE IS PROVENANCE RATHER THAN SHAPE.** A USER `type Vector uses
+		// ⚠ **STDLIB SOURCE ONLY, AND THE GATE IS PROVENANCE RATHER THAN SHAPE.** A USER `type FixedArray uses
 		// Element implements BuiltinArrayLiteral` is shaped identically and must go on meeting
 		// `requireNameIsNotABuiltinContainerBase` below — admitting it lets a fixed-size
-		// three-element vector grow to nine through `push`/`resize`, compiling clean and printing the wrong
+		// three-element fixed array grow to nine through `push`/`resize`, compiling clean and printing the wrong
 		// answer. The corpus declaration is not a second conformer competing with the compiler's container; it
 		// is the DECLARATION OF that container, which is what listing the module means.
 		if self.job.isStdlibSource and self.signatures.declarationIsASizedContainerRecord(layout) 'theSizedContainersOwnRecord'
@@ -70230,7 +70470,7 @@ export type Parser
 	// whose fault is a FIELD. That is the same shape `firstFieldIsItsOwnBuffer`'s own header records for the
 	// `var managed as Num` case it was tightened to catch, one field type over.
 	//
-	// ⚠ The sized-container arm below does NOT ask this and must not: a `Vector`'s buffer is an
+	// ⚠ The sized-container arm below does NOT ask this and must not: a `FixedArray`'s buffer is an
 	// `Array with Element` and its `Self` carries a SIZE the array has no column for, so there the difference
 	// is the point and the value is RETYPED instead.
 	function requireBufferElementIsTheDeclarationsOwn(layout StructLayout, buffer ValueId, anchor Token) throws SourceParseError
@@ -70261,8 +70501,8 @@ export type Parser
 	// `requireArrayMarkerDeclaresTheBuffer` tells a conformer to make its first field the buffer,
 	// `requireBufferIsItsOwnRecord` tells it to drop its second field, and `requireFusedWrapperTag` says the
 	// compiler owns no record under that name. **All three are the wrong advice here.** A declaration named
-	// `Vector` or `List` may be perfectly shaped — `stdlib/Vector.maxon`'s is, to the field — and it is still
-	// not the array record, because the compiler serves a container of its own under that name and a `Vector with 3 T`
+	// `FixedArray` or `List` may be perfectly shaped — `stdlib/FixedArray.maxon`'s is, to the field — and it is still
+	// not the array record, because the compiler serves a container of its own under that name and a `FixedArray with 3 T`
 	// carries a SIZE the record has no coordinate for.
 	//
 	// ⚠ **THIS IS A NOUN, NOT A GATE, AND THE MEASUREMENT SAYS SO — READ IT BEFORE ASSUMING WHAT IT BUYS.**
@@ -70273,18 +70513,18 @@ export type Parser
 	// the three `array-declared-record.error.a-conformer-named-for-…` cases**: with the skip reverted and this
 	// refusal in place, the two constructing cases COMPILE CLEAN; with the skip in place and this refusal
 	// reverted, they are refused with `requireFusedWrapperTag`'s `String`/`Character` sentence — accurate
-	// about a `Holder` and misleading about a `Vector`, which is the whole of what this door adds. The
+	// about a `Holder` and misleading about a `FixedArray`, which is the whole of what this door adds. The
 	// conformance REQUIRES `static init(value __ManagedMemory) returns Self`, so a conformer that constructs
 	// always reaches here; one that DELEGATES never does, and rests on the skip alone (that case's table).
 	//
 	// ⛔⛔ **IT IS GATED ON THE ARRAY MARKER, AND RENDERING THE MARKER INTO THE SENTENCE IS NOT ENOUGH.** The
 	// marker's NAME interpolates correctly while the REASON below it stays hardcoded to the array surface, so
 	// a `BuiltinStringLiteral` conformer named for a container does NOT meet its own marker in the sentence.
-	// Ungated, `type Vector implements BuiltinStringLiteral` with a `managed` + `flag` pair — the
+	// Ungated, `type FixedArray implements BuiltinStringLiteral` with a `managed` + `flag` pair — the
 	// `interface-conformance.error.literal-marker-conformer-…` shape with only the name changed — is answered
 	// *"…not the `__ManagedMemory` record a `BuiltinStringLiteral` conformer's literal is an identity on.
-	// Honouring the marker would put every `Vector` on the growable array's surface — `push`, `resize`"*.
-	// Every clause of that is wrong for it: the declaration is NOT generic, so there is no `Vector with …`;
+	// Honouring the marker would put every `FixedArray` on the growable array's surface — `push`, `resize`"*.
+	// Every clause of that is wrong for it: the declaration is NOT generic, so there is no `FixedArray with …`;
 	// `noteArrayLiteralConformer` is never called for a string marker, so no array surface is at stake; and it
 	// PREEMPTS `requireFusedWrapperTag`'s sentence, which is the right one and is what the identical
 	// declaration named `Wrapped` gets. The wrong NOUN is the one failure this door exists to prevent.
@@ -70296,9 +70536,9 @@ export type Parser
 	// whose sentence is true of it.
 	// (`array-declared-record.error.a-string-marker-conformer-named-for-a-container-is-not-this-doors-subject`)
 	//
-	// ⚠ **THE REFUSAL RESTS ON THE RECORD, NOT ON A RUNTIME SURFACE.** `stdlib/Vector.maxon` serves
+	// ⚠ **THE REFUSAL RESTS ON THE RECORD, NOT ON A RUNTIME SURFACE.** `stdlib/FixedArray.maxon` serves
 	// `create`, `count`, `get` and `set`, so there is no runtime surface left to name. What the compiler
-	// SYNTHESIZES is the RECORD: a `Vector with …` is this compiler's instance whatever a declaration of that
+	// SYNTHESIZES is the RECORD: a `FixedArray with …` is this compiler's instance whatever a declaration of that
 	// name says, which is exactly why the marker's identity cannot be honoured on it.
 	function requireNameIsNotABuiltinContainerBase(layout StructLayout, anchor Token) throws SourceParseError
 		if not layout.requireBuiltinManagedWrapperInterfaceName().equals(BuiltinArrayLiteralInterfaceName) 'notTheArrayMarker'
@@ -73183,8 +73423,8 @@ export type Parser
 			// derivation `ProgramSignatures.containerCreateCall` emits off and
 			// `requireGlobalContainerIsCreatable` routes on — so a body's `Vec3.create()` and a global's
 			// cannot come to disagree about whose code builds the record. `Map`, `Set` and `List` are not in
-			// `isBuiltinGenericBaseName`, so they never reach this door; `Vector` cannot leave it, because
-			// that predicate also decides what `Vector with 3 Int` MEANS, so it leaves through the
+			// `isBuiltinGenericBaseName`, so they never reach this door; `FixedArray` cannot leave it, because
+			// that predicate also decides what `FixedArray with 3 Int` MEANS, so it leaves through the
 			// derivation instead.
 			if self.signatures.isBuiltinGenericBaseName(self.signatures.genericInstanceBaseName(aliasGiid)) and not self.signatures.instanceCreateIsDeclared(aliasGiid) 'containerStatic'
 				return CompilerOwnedStaticSurface.containerAlias(aliasGiid)
@@ -73455,7 +73695,7 @@ export type Parser
 	// `ConstructorInstance` carries why.
 	function parseDeclaredStaticCall(func IrFunction, callee ByteArray, aliasName ByteArray, typeTok Token, memberTok Token, resultUsed bool, mint CalleeMint) returns ValueId throws SourceParseError
 		let constructed = self.constructorInstanceOf(aliasName)
-		try self.requireConstructedVectorElementType(constructed, aliasTok: typeTok)
+		try self.requireConstructedFixedArrayElementType(constructed, aliasTok: typeTok)
 
 		// ⭐⭐ **A BARE GENERIC BASE NAMED FROM A NON-GENERIC SCOPE HAS NO OTHER SOURCE FOR ITS TYPE
 		// ARGUMENTS.** `constructorInstanceOf` answers from a generic ALIAS or from the enclosing type's
@@ -73505,7 +73745,7 @@ export type Parser
 			return
 		end 'nothingTheFrameCanFeed'
 
-		// An instance method named statically (`Vector.get(v, index: 1)`) takes its receiver as the first argument,
+		// An instance method named statically (`FixedArray.get(v, index: 1)`) takes its receiver as the first argument,
 		// and that value, not the written base, is the subject.
 		if let base = try inferInstanceOf.baseName() 'aFactoryOfAGenericBase'
 			if self.signatures.calleeReceiverOf(callee) != CalleeReceiver.takesReceiver 'aStaticCallOnAGenericBase'
@@ -73561,7 +73801,7 @@ export type Parser
 			none then break
 		end 'hasOneToForward'
 
-		throw SourceParseError.unsupported("calling '{String.from(unqualifiedMemberOf(callee))}' (which reads `countof` of the sized container's own `Self`) through a name that states no element count, from a function that carries no fixed-element-count parameter of its own to forward — a `static function` that does not return `Self` takes the count from the instance its call names. Name a sized instance with a typealias (`Vector with 3 Int`) and call it through that, or call it from a method of the sized container", line: anchor.line, column: anchor.column)
+		throw SourceParseError.unsupported("calling '{String.from(unqualifiedMemberOf(callee))}' (which reads `countof` of the sized container's own `Self`) through a name that states no element count, from a function that carries no fixed-element-count parameter of its own to forward — a `static function` that does not return `Self` takes the count from the instance its call names. Name a sized instance with a typealias (`FixedArray with 3 Int`) and call it through that, or call it from a method of the sized container", line: anchor.line, column: anchor.column)
 	end 'requireACountSourceForAStaticCall'
 
 	function requireBareGenericBaseIsBound(base ByteArray, callee ByteArray, pick CallPick, args ValueIdArray, argLabels NameRoster, anchor Token) throws SourceParseError
@@ -74403,7 +74643,7 @@ export type Parser
 		//
 		// ⛔⛔⛔ **PRESENTING `internSynthesizedByteInstance()` TO EVERY RECEIVER IS A LIE.** The instance is
 		// what `emitFieldLoad` stamps on the VIEW it mints, and for a `String` or a `Character` it is exactly
-		// right — their record IS a byte buffer. For an `Array` or a `Vector` it is a stride lie the very next
+		// right — their record IS a byte buffer. For an `Array` or a `FixedArray` it is a stride lie the very next
 		// header down the file already spells out (`emitFieldLoad`'s `inlineManagedIsTheReceiver` arm: *"a
 		// stride lie for an `Array with Element`, whose slots are 8 bytes wide"*) — and the members that CONSULT
 		// the instance rather than merely reading the record then answer about a `Byte` whatever the receiver's
@@ -74426,7 +74666,7 @@ export type Parser
 		// one home, so the record path and the value path cannot come to disagree about the element.
 		//
 		// ⛔ THE FAST PATH IS KEPT FOR ALL FOUR CONFORMERS, BECAUSE THE ALTERNATIVE COSTS 1.65–1.9x.
-		// Routing `Array` and `Vector` to the value door instead is correct and dearer than it looks:
+		// Routing `Array` and `FixedArray` to the value door instead is correct and dearer than it looks:
 		// `Array.hash` and `Array.equals` are NOT on `arraySurfaceMemberNames`, so unlike `count`/`get`
 		// they are corpus bodies a program actually calls, and each loops `try managed.byteAt(i)` once
 		// per byte (`stdlib/Array.maxon:665-688`) — which the re-route turns into a
@@ -74434,8 +74674,8 @@ export type Parser
 		//
 		// ⚠ **THE SIZED CONTAINER'S LENGTH-WRITER REFUSAL IS THIS DOOR'S OWN AND MUST STAY HERE** — see
 		// `refuseLengthChangeOnASizedContainersBuffer`. This door mints no value, so there is nothing to
-		// carry a mark; and the instance it hands over is spelled `Array with Element` for a vector too
-		// (that retype is load-bearing), so no `giid` test downstream can tell a vector's record from a
+		// carry a mark; and the instance it hands over is spelled `Array with Element` for a fixed array too
+		// (that retype is load-bearing), so no `giid` test downstream can tell a fixed array's record from a
 		// growable array's either. Only the ENCLOSING DECLARATION answers here, asked BY NAME because that is
 		// the form `enclosingType` holds.
 		//
@@ -74482,7 +74722,7 @@ export type Parser
 	// carries the wrong answer a divergence between them would produce. What is left here is the only part
 	// that is this door's own — resolving the ENCLOSING layout, which the field-load door is handed.
 	//
-	// ⚠ **IT ADMITS ALL FOUR CONFORMERS — `String`, `Character`, `Array` and `Vector` — AND EVERY ASKER WANTS
+	// ⚠ **IT ADMITS ALL FOUR CONFORMERS — `String`, `Character`, `Array` and `FixedArray` — AND EVERY ASKER WANTS
 	// THAT.** `receiverOwnerMask`'s E3159 column is about a write reaching the CALLER's record, which is true
 	// of all four; and the fused record door admits all four too, because the cure is to hand each of them
 	// its OWN buffer instance rather than to turn any of them away (`bufferSurfaceInstanceOf`). ⛔ Narrowing it to the
@@ -74712,7 +74952,7 @@ export type Parser
 			return try self.dispatchCursorMethod(func, cursor: recv.value, giid: recv.nameId as GenericInstanceId, resultUsed: resultUsed)
 		end 'cursorMethod'
 
-		// ⚠ **A VECTOR HAS NO ARM HERE.** `stdlib/Vector.maxon` declares `create`, `count`, `get` and
+		// ⚠ **A FIXED ARRAY HAS NO ARM HERE.** `stdlib/FixedArray.maxon` declares `create`, `count`, `get` and
 		// `set`, so `v.get(0)` and `v.set(0, value: 42)` are taken by `memberBelongsToTheCorpus` at the top of
 		// this switch and reach the ordinary declared-method path.
 
@@ -74891,7 +75131,7 @@ export type Parser
 			// USER-FACING string: it goes stale the moment a container is retired.
 			//
 			// ⚠ **DERIVING IT FROM `isBuiltinGenericBaseName` IS THE WRONG ROSTER**, not merely a costly one.
-			// That predicate answers `Array`, `List`, `Vector`, `__ManagedList`, `__ManagedListNode`,
+			// That predicate answers `Array`, `List`, `FixedArray`, `__ManagedList`, `__ManagedListNode`,
 			// `__ManagedMemoryCursor` — three reserved spellings no user program may write, and it names none of
 			// `String`/`Character`/`StringIndex`/`CharacterSet`. Generating from it would replace a stale list
 			// with a WRONG one.
@@ -76044,7 +76284,7 @@ export type Parser
 		try self.requireCloneCopiesNoGreenThread(verdict, subject: "`{String.from(layout.name)}`", memberTok: memberTok)
 		try self.refuseCloneOfAnUncloneableConformer(self.signatures.uncloneableExistentialIn(layout.name), memberTok: memberTok)
 
-		throw SourceParseError.unsupported("`clone` on `{String.from(layout.name)}`, which carries a payload this compiler cannot deep-clone: an OS handle (`__ManagedFile`/`__ManagedDirectory`/`__ManagedSocket`), which cannot be duplicated at all, or a type that owns one. String, struct, boxed-union, enum, `Array`, `Vector`, `List` and declared-generic instance payloads ARE supported.", line: memberTok.line, column: memberTok.column)
+		throw SourceParseError.unsupported("`clone` on `{String.from(layout.name)}`, which carries a payload this compiler cannot deep-clone: an OS handle (`__ManagedFile`/`__ManagedDirectory`/`__ManagedSocket`), which cannot be duplicated at all, or a type that owns one. String, struct, boxed-union, enum, `Array`, `FixedArray`, `List` and declared-generic instance payloads ARE supported.", line: memberTok.line, column: memberTok.column)
 	end 'requireUnionCloneSupported'
 
 	function requireCloneCopiesNoGreenThread(verdict SourceCloneVerdict, subject String, memberTok Token) throws SourceParseError
@@ -76091,7 +76331,7 @@ export type Parser
 		try self.requireCloneCopiesNoGreenThread(verdict, subject: "`{display}`", memberTok: memberTok)
 		try self.refuseCloneOfAnUncloneableConformer(self.signatures.uncloneableExistentialIn(typeName), memberTok: memberTok)
 
-		throw SourceParseError.unsupported("`clone` on `{display}`, which owns a field this compiler cannot deep-clone: an OS handle (`__ManagedFile`/`__ManagedDirectory`/`__ManagedSocket`), which cannot be duplicated at all, or a type that owns one, including one held INSIDE a struct field. String, struct, boxed-union, enum, `Array`, `Vector`, `List` (managed elements included), declared-generic instance (`Box with String`) and interface-typed fields ARE supported.", line: memberTok.line, column: memberTok.column)
+		throw SourceParseError.unsupported("`clone` on `{display}`, which owns a field this compiler cannot deep-clone: an OS handle (`__ManagedFile`/`__ManagedDirectory`/`__ManagedSocket`), which cannot be duplicated at all, or a type that owns one, including one held INSIDE a struct field. String, struct, boxed-union, enum, `Array`, `FixedArray`, `List` (managed elements included), declared-generic instance (`Box with String`) and interface-typed fields ARE supported.", line: memberTok.line, column: memberTok.column)
 	end 'requireStructCloneVerdict'
 
 	// The one conformer-naming refusal the four clone gates share, each asking it AHEAD of its own general
@@ -78550,10 +78790,10 @@ export type Parser
 		let receiver = try args.get(0) otherwise panic("noteLiteralColumnsCorpusCall: args.get(0) failed on a non-empty list")
 		var pair = try self.literalColumnsOf(receiver) otherwise return
 
-		if qualifiedMemberIs(callee, member: StringInitMethod) and qualifyingTypeName(callee).equals(VectorBuiltinBaseName) 'aVectorOverTheLiteral'
+		if qualifiedMemberIs(callee, member: StringInitMethod) and qualifyingTypeName(callee).equals(FixedArrayBuiltinBaseName) 'aFixedArrayOverTheLiteral'
 			self.recordLiteralColumns(result, pair: pair)
 			return
-		end 'aVectorOverTheLiteral'
+		end 'aFixedArrayOverTheLiteral'
 
 		if not self.signatures.everyBindableDeclarationIsTheCorpus(callee, argLabels: argLabels) 'aUserDeclaration'
 			return
@@ -78879,8 +79119,8 @@ export type Parser
 	// interned by the sweep (`internBuiltinIntegerInstance` / `internLiteralContainerInstances`), so this is a
 	// pure lookup. A function/other element is not a supported literal element yet (E2015).
 	//
-	// ⭐ **`bool` AND `float` ARE ADMITTED ELEMENT TYPES.** `/specs/vector.md` writes
-	// `Vector from [true, false, …]` and `Vector from [1.5, 2.5]`, and a `Vector from […]` builds its record
+	// ⭐ **`bool` AND `float` ARE ADMITTED ELEMENT TYPES.** `/specs/fixed-array.md` writes
+	// `FixedArray from [true, false, …]` and `FixedArray from [1.5, 2.5]`, and a `FixedArray from […]` builds its record
 	// through THIS literal. `bool` needs nothing but this arm (its slot is one byte by `trivialElementSlot`,
 	// and `Array with bool` built through `BArr.create()` + `push` works); `float` needs the element-word
 	// bitcast (`containerElementWord` / `containerSlotValueType`).
@@ -79821,18 +80061,18 @@ export type Parser
 		end 'array'
 
 		// ⭐⭐ **THE SIZED CONTAINER'S RECORD IS BORN WITH ITS SLOTS PUBLISHED, AND THAT IS THE WHOLE OF
-		// WHAT IS THE COMPILER'S HERE.** `Vec3.create()` is an ordinary call to `stdlib/Vector.maxon`'s
+		// WHAT IS THE COMPILER'S HERE.** `Vec3.create()` is an ordinary call to `stdlib/FixedArray.maxon`'s
 		// declared static, whose body is `return Self{}` — and this arm is what that literal MEANS. It is
-		// a fact about the TYPE, exactly as the element stride is: a `Vector with 3 Int` IS a three-slot
+		// a fact about the TYPE, exactly as the element stride is: a `FixedArray with 3 Int` IS a three-slot
 		// record, so a literal of it publishes three slots however the program spelled the construction.
 		//
 		// ⚠ **THE COUNT IS `fixedElementCountValue`'s, NOT `genericInstanceFixedCount`'s, AND THE
-		// DIFFERENCE IS THE SHARED BODY.** Inside `Vector.create` the instance is the declaration's own
+		// DIFFERENCE IS THE SHARED BODY.** Inside `FixedArray.create` the instance is the declaration's own
 		// countless `Self` (`ownRecordSelfInstance`, interned at `InstanceShape.unsized` so ONE body
 		// serves every size), so the size is a fact about the CALLER and arrives in the hidden count
 		// slot; at a concrete `Vec3{}` it folds to 3. Reading the registry directly here would publish
 		// ZERO slots in the one body that matters.
-		if self.signatures.isVectorInstance(giid) 'sizedContainer'
+		if self.signatures.isFixedArrayInstance(giid) 'sizedContainer'
 			let sized = try self.emitSizedContainerRecord(giid, anchor: aliasTok, range: range)
 			self.trackOwnedTemp(sized, exclusivity: OwnedHeapExclusivity.sole)
 			return sized
@@ -79846,20 +80086,20 @@ export type Parser
 	// ⭐ **THE EMPTY RECORD, THEN ITS SLOTS PUBLISHED** — `__managed_create` yields a record with no slots
 	// (every index out of bounds) and `__managed_resize` grows it to the count and ZEROES the new range, which
 	// together are exactly *"zero-initialized, N elements"*. `element_destroy@40` stays 0, which
-	// `requireVectorElementType` is what makes correct.
+	// `requireFixedArrayElementType` is what makes correct.
 	//
 	// ⚠ **NOT `__managed_mem_create(N, elementSize)`, WHICH PUBLISHES `N` SLOTS IN ONE CALL AND WOULD
 	// OTHERWISE BE THE OBVIOUS FIT.** That entry is THROWING (`isManagedMemoryMemberCallee` — it reports
 	// `invalidAllocation` for a size the allocator cannot use), so a `create()` built on it is
-	// **E3057 throwing function requires try: 'create'** on every one of `/specs/vector.md`'s cases, which
-	// write a bare `create()`. Measured, on the first build of the vector port. The two-call form throws
+	// **E3057 throwing function requires try: 'create'** on every one of `/specs/fixed-array.md`'s cases, which
+	// write a bare `create()`. Measured, on the first build of the fixed array port. The two-call form throws
 	// nothing: `__managed_resize` rejects only a NEGATIVE length, and an element count cannot be one.
 	//
 	// ⚠⚠ **IT REACHES `__managed_resize` WITHOUT PASSING `requireArrayResizeHasZeroElement`, WHOSE E3106 IS
 	// THE RULE THAT NORMALLY MAKES A PUBLISHED SLOT SAFE TO READ.** `resize` grows a record by ZEROING the new
 	// range, so a published slot of a MANAGED element is a null pointer every accessor will dereference. The
 	// source-level rule cannot be reused here (its diagnostic is about a `resize` call the author wrote, and
-	// a vector's author wrote `create()`), so the guarantee is carried by `requireVectorElementType` instead,
+	// a fixed array's author wrote `create()`), so the guarantee is carried by `requireFixedArrayElementType` instead,
 	// at `requireSizedContainerElementType` — the construction door, where the element is concrete. **The two
 	// are one invariant with two doors — do not relax either without the other.**
 	function emitSizedContainerRecord(giid GenericInstanceId, anchor Token, range SourceRange) returns ValueId throws SourceParseError
@@ -79873,7 +80113,7 @@ export type Parser
 	// than a name threaded into one template, because the tails are not the same sentence with a noun swapped —
 	// a node handle and a cursor are constructible by NOTHING, where a chain is `create()`-only.
 	//
-	// ⚠ `List` and `Vector` have no arm here. Each declaring module carries the type, so a bad static on
+	// ⚠ `List` and `FixedArray` have no arm here. Each declaring module carries the type, so a bad static on
 	// either is the ordinary
 	// `E3004 call to undefined function '<Base>.<method>'` every declared type answers with, and this router
 	// is never reached for one — `parseQualifiedCall`'s container interception asks `instanceCreateIsDeclared`
@@ -79912,8 +80152,8 @@ export type Parser
 	function gateAndEmitContainerCreate(giid GenericInstanceId, aliasTok Token, range SourceRange) returns ValueId throws SourceParseError
 		try self.requireContainerIsCreatable(giid, aliasTok: aliasTok)
 
-		// ⚠ **THERE IS NO `Vector` ARM, BECAUSE THE create WHOSE ANSWER IS THE SIZE — which `countof(Self)` is what
-		// lets a shared corpus body name — IS DECLARED BY `stdlib/Vector.maxon`.** `Vec3.create()` never reaches this
+		// ⚠ **THERE IS NO `FixedArray` ARM, BECAUSE THE create WHOSE ANSWER IS THE SIZE — which `countof(Self)` is what
+		// lets a shared corpus body name — IS DECLARED BY `stdlib/FixedArray.maxon`.** `Vec3.create()` never reaches this
 		// router: `instanceCreateIsDeclared` answers TRUE for it and both create doors take the declared road instead.
 		if self.signatures.isManagedListInstance(giid) 'managedList'
 			return try self.emitListCreateOp(giid, range: range)
@@ -79968,10 +80208,10 @@ export type Parser
 	end 'requireGlobalContainerIsCreatable'
 
 	// ⭐⭐ **THE SIZED CONTAINER'S ELEMENT RULE, ASKED AT A CONSTRUCTION THAT IS A CALL TO A DECLARED
-	// `create()`.** With `stdlib/Vector.maxon` owning that create the gate has no emit to ride on, and the
+	// `create()`.** With `stdlib/FixedArray.maxon` owning that create the gate has no emit to ride on, and the
 	// rule it enforces is untouched by who writes the body — **a zeroed slot is an ELEMENT only for an
 	// element that lives inline in the buffer**, and the corpus `create()` publishes N of them through
-	// `setLength`. Left unasked, the two symptoms `requireVectorElementType`'s own header measures come
+	// `setLength`. Left unasked, the two symptoms `requireFixedArrayElementType`'s own header measures come
 	// straight back: `count()` answering N while every `get` reports an empty slot, and a `for … in` read
 	// dereferencing the nulls (0xC0000005).
 	//
@@ -79980,24 +80220,24 @@ export type Parser
 	// element is a fact about the TYPE, and the construction is where a type with no admissible element
 	// stops being an abstraction. Every other constructed generic returns immediately, so a `StrMap.create()`
 	// pays one instance-registry read.
-	function requireConstructedVectorElementType(constructed ConstructorInstance, aliasTok Token) throws SourceParseError
+	function requireConstructedFixedArrayElementType(constructed ConstructorInstance, aliasTok Token) throws SourceParseError
 		match constructed 'constructed'
 			none then return
 			instance(gid) then try self.requireSizedContainerElementType(gid, aliasTok: aliasTok)
 		end 'constructed'
-	end 'requireConstructedVectorElementType'
+	end 'requireConstructedFixedArrayElementType'
 
 	// The rule itself, given a resolved instance — written once because the BODY door holds a
-	// `ConstructorInstance` and the TOP-LEVEL door holds a bare id, and a second copy of "is this a vector,
+	// `ConstructorInstance` and the TOP-LEVEL door holds a bare id, and a second copy of "is this a fixed array,
 	// and is its element admissible" is how one position would come to admit what the other refuses.
 	function requireSizedContainerElementType(giid GenericInstanceId, aliasTok Token) throws SourceParseError
-		if not self.signatures.isVectorInstance(giid) 'notTheSizedContainer'
+		if not self.signatures.isFixedArrayInstance(giid) 'notTheSizedContainer'
 			return
 		end 'notTheSizedContainer'
 
-		try self.requireVectorElementType(giid, tok: aliasTok)
+		try self.requireFixedArrayElementType(giid, tok: aliasTok)
 
-		try self.requireZeroIsAnElement(giid, tok: aliasTok, refusal: ZeroElementRefusal.vectorCreate)
+		try self.requireZeroIsAnElement(giid, tok: aliasTok, refusal: ZeroElementRefusal.fixedArrayCreate)
 	end 'requireSizedContainerElementType'
 
 	// ⭐⭐ **WHAT A DECLARED GENERIC'S `create()` MUST BE FOR `__module_init` TO CALL IT.** Three clauses, each a
@@ -80245,12 +80485,12 @@ export type Parser
 		return match container 'container'
 			set gives self.signatures.isSetShapedInstance(giid)
 			list gives self.signatures.genericInstanceBaseName(giid).equals(ListBuiltinBaseName)
-			vector gives self.signatures.isVectorInstance(giid)
+			fixedArray gives self.signatures.isFixedArrayInstance(giid)
 			array gives self.signatures.isArrayInstance(giid)
 		end 'container'
 	end 'namesContainerInstanceAlias'
 
-	// ⭐⭐ **`ByteArray from [10, 20, 30]` — AND IT EMITS NOT ONE RUNTIME OP OF ITS OWN**, `Vector from […]`'s
+	// ⭐⭐ **`ByteArray from [10, 20, 30]` — AND IT EMITS NOT ONE RUNTIME OP OF ITS OWN**, `FixedArray from […]`'s
 	// property and for the same reason: the array literal already builds exactly the record an `Array` is. It
 	// does not even need that construction's RETYPE, because the instance was known BEFORE the literal was
 	// parsed and the literal was built at it — the head's whole contribution is the `ArrayLiteralElementSource`
@@ -80259,7 +80499,7 @@ export type Parser
 	// ⭐ **WHICH IS THE POINT: THE ELEMENT TYPE IS THE ONE THING A `[…]` CANNOT STATE FOR ITSELF.** `[10, 20,
 	// 30]` is an `Array with integer` striding 8; the same three tokens under a head naming `Array with Byte`
 	// are three bytes. That is the same job `CharSet from ['x', 'y', 'z']` does for a `Set` — the alias supplies
-	// what the bracket list cannot — and it is why `List`/`Vector` have no alias form: a list's and a vector's
+	// what the bracket list cannot — and it is why `List`/`FixedArray` have no alias form: a list's and a fixed array's
 	// element are whatever the literal's elements already are.
 	//
 	// The head NAMES a type, so it is a use for the E3062 unused-type check — the hook
@@ -80775,7 +81015,7 @@ export type Parser
 	// already threads in, and `LowerMaxonToStd.appendOpaqueContainerCreate` reads it there at run time
 	// exactly as an `Array with <type parameter>` has. A chain PUBLISHES no slots — it is empty at
 	// birth and grows one node per insertion — so it needs none of the per-instantiation reasoning
-	// `requireVectorElementType` does at this same fork; the descriptor is the whole of the answer.
+	// `requireFixedArrayElementType` does at this same fork; the descriptor is the whole of the answer.
 	//
 	// ⚠ **`float` IS NOT WHAT THE LAST REFUSAL IS FOR, AND THAT WAS MEASURED RATHER THAN ASSUMED.** A float
 	// slot would arrive in the XMM file where every container entry is declared `i64`, but it never reaches
@@ -81395,23 +81635,23 @@ export type Parser
 	// third and fourth copy of the ownership rule, which is those two functions' own headers' point.
 
 	// ==========================================================================================
-	// The `Vector` builtin container — a FIXED-SIZE array (see `SignatureIndex.VectorBuiltinBaseName`).
+	// The `FixedArray` builtin container — a FIXED-SIZE array (see `SignatureIndex.FixedArrayBuiltinBaseName`).
 	// ==========================================================================================
 
-	// ⭐ **WHAT A VECTOR MAY HOLD.** Its slot is an inline word of the element's own stride, so any element the
+	// ⭐ **WHAT A FIXED ARRAY MAY HOLD.** Its slot is an inline word of the element's own stride, so any element the
 	// managed-memory runtime already strides fits — an integer of any declared range, a `bool`, a `float`. What it may
 	// NOT hold is anything MANAGED: `create()` PUBLISHES every slot (`__managed_resize`) while
 	// `element_destroy@40` stays 0, so a managed element would leak at teardown and every `set` would
 	// overwrite a live pointer. A `Character` is refused for that same reason and not a separate one.
 	//
-	// ⭐⭐ **AN OPAQUE `T` IS ADMITTED, AND WHAT IT IS JUDGED BY IS THE INSTANTIATION SET.** *"A vector
+	// ⭐⭐ **AN OPAQUE `T` IS ADMITTED, AND WHAT IT IS JUDGED BY IS THE INSTANTIATION SET.** *"A fixed array
 	// inside a generic body has no statically known element stride to size its storage with"* is **false**:
-	// a vector's storage is the same fused managed
+	// a fixed array's storage is the same fused managed
 	// record an array's is, held behind ONE 8-byte field slot, and an opaque `T`'s stride is the uniform
 	// machine word every type parameter occupies under dictionary-passing (`LAYOUT_TYPE_PARAM_SLOT_BYTES`,
 	// which `emitOpaqueArrayCreateOp` stamps for `Array with <type parameter>`).
-	// The SIZE is not the problem either — `Vector with 4 Element` states its 4 in the source, and the
-	// substitution carries it into `Vector with 4 Int` through the intern key (`substituteInstanceArgsThrough`
+	// The SIZE is not the problem either — `FixedArray with 4 Element` states its 4 in the source, and the
+	// substitution carries it into `FixedArray with 4 Int` through the intern key (`substituteInstanceArgsThrough`
 	// carries `shape` explicitly, for exactly this).
 	//
 	// ⛔ **WHAT IS GENUINELY UNSOUND IS ONE INSTANTIATION AT A TIME, AND IT IS THE `create()` THAT PUBLISHES
@@ -81427,7 +81667,7 @@ export type Parser
 	// IT — THAT IS A MEASURED SEGFAULT, NOT A THEORETICAL GAP.** `tagIsIntegral` answers
 	// TRUE for `named`, whose comment claims a `named` type is a ranged alias; it is not, in general — a
 	// boxed union, a DECLARED STRUCT and a generic-instance ALIAS NAME all carry `named` too. So such a gate
-	// admits `Vector with 2 IntArray` (`typealias IntArray = Array with Int`) and the vector publishes two
+	// admits `FixedArray with 2 IntArray` (`typealias IntArray = Array with Int`) and the fixed array publishes two
 	// NULL slots: `count()` answers **2** while `try v.get(0)` takes the empty-slot branch — two elements it
 	// does not have, exit 0, no diagnostic — and `for a in v` with a read of `a` dereferences those NULLs
 	// through `__managed_get_unchecked` and **ACCESS-VIOLATES (0xC0000005)**.
@@ -81437,14 +81677,14 @@ export type Parser
 	// relaxed, that read becomes a null deref in a function whose own text still looks correct."*
 	// ⇒ The question is asked of the ONE door that answers it (`requireListElementType` opens with the same
 	// door), and the whitelist below stays as the POSITIVE rule for everything that is not managed.
-	function requireVectorElementType(giid GenericInstanceId, tok Token) throws SourceParseError
+	function requireFixedArrayElementType(giid GenericInstanceId, tok Token) throws SourceParseError
 		if self.signatures.containerElementIsOpaque(giid) 'opaqueElement'
 			try self.requireEveryInstantiationPublishesAValue(giid, tok: tok)
 			return
 		end 'opaqueElement'
 
 		if self.signatures.containerElementIsManaged(giid) 'managedElement'
-			throw SourceParseError.unsupported(self.vectorElementRefusal(giid), line: tok.line, column: tok.column)
+			throw SourceParseError.unsupported(self.fixedArrayElementRefusal(giid), line: tok.line, column: tok.column)
 		end 'managedElement'
 
 		let tag = maxonTypeTag(self.signatures.containerElementType(giid))
@@ -81453,22 +81693,22 @@ export type Parser
 			return
 		end 'inlineScalar'
 
-		throw SourceParseError.unsupported(self.vectorElementRefusal(giid), line: tok.line, column: tok.column)
-	end 'requireVectorElementType'
+		throw SourceParseError.unsupported(self.fixedArrayElementRefusal(giid), line: tok.line, column: tok.column)
+	end 'requireFixedArrayElementType'
 
-	// ⭐⭐ **EVERY INSTANTIATION OF THE ENCLOSING GENERIC TYPE MUST MAKE THIS VECTOR'S PUBLISHED SLOTS VALUES
-	// (E2015).** A `Vector with <N> <type parameter>` is created ONCE, in a body shared by every
+	// ⭐⭐ **EVERY INSTANTIATION OF THE ENCLOSING GENERIC TYPE MUST MAKE THIS FIXED ARRAY'S PUBLISHED SLOTS VALUES
+	// (E2015).** A `FixedArray with <N> <type parameter>` is created ONCE, in a body shared by every
 	// instantiation, and `create()` publishes all N slots by zeroing them — so the slots are elements for a
 	// trivial instantiation and null pointers for a managed one. The shared body cannot branch on that, so
 	// admitting the construct means every instantiation must be trivial, and one managed instantiation
 	// refuses the body.
 	//
 	// ⛔ **MEASURED, BOTH SYMPTOMS, without this gate** — `type Holder uses Element` with
-	// `typealias Slot = Vector with 4 Element`, at `typealias StrHolder = Holder with String`: `slot.count()`
+	// `typealias Slot = FixedArray with 4 Element`, at `typealias StrHolder = Holder with String`: `slot.count()`
 	// answered **4** while `try slot.get(0)` took `emitLoadElemAndOkReturn`'s empty-slot branch and THREW
 	// (four elements it does not have, exit 0, no diagnostic), and a `for e in slot` returning `e`
 	// **SEGFAULTED (139)** — `__managed_get_unchecked` drops that empty-slot arm, on the guarantee this
-	// refusal supplies. They are `requireVectorElementType`'s own header's two symptoms for the CONCRETE
+	// refusal supplies. They are `requireFixedArrayElementType`'s own header's two symptoms for the CONCRETE
 	// managed element, re-measured one axis over.
 	//
 	// ⭐ **IT IS `requireOpaqueArrayCopyable`'s SHAPE AND FOR ITS REASON**: the refusal is contingent on the
@@ -81482,10 +81722,10 @@ export type Parser
 			instance(site) then self.blameLibraryRefusalOnInstantiation(site)
 		end 'managedInstantiation'
 
-		throw SourceParseError.unsupported("`{String.from(VectorBuiltinBaseName)} with <N> <type parameter>` — a vector PUBLISHES all N of its slots at `{String.from(CreateMethod)}` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `{String.from(CountMethod)}()` would answer N while every `{String.from(GetMethod)}` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `{String.from(self.signatures.arrayRecordDeclaredName())} with <type parameter>`, which publishes nothing and grows by `{String.from(ArrayPushMethod)}`", line: tok.line, column: tok.column)
+		throw SourceParseError.unsupported("`{String.from(FixedArrayBuiltinBaseName)} with <N> <type parameter>` — a fixed array PUBLISHES all N of its slots at `{String.from(CreateMethod)}` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `{String.from(CountMethod)}()` would answer N while every `{String.from(GetMethod)}` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `{String.from(self.signatures.arrayRecordDeclaredName())} with <type parameter>`, which publishes nothing and grows by `{String.from(ArrayPushMethod)}`", line: tok.line, column: tok.column)
 	end 'requireEveryInstantiationPublishesAValue'
 
-	// The ONE wording of "a vector cannot hold that", shared by the two gates that reach it — the managed
+	// The ONE wording of "a fixed array cannot hold that", shared by the two gates that reach it — the managed
 	// door and the tag whitelist — so a reader meets one sentence about one rule however the element was
 	// refused. It names the element as the SOURCE spells it (`arrayElementDisplayName`) — a declared alias, a
 	// struct, an instance, or the primitive's own keyword.
@@ -81494,11 +81734,11 @@ export type Parser
 	// the word `int`, so an `IntArray` element read back as *"'IntArray' (int)"* — a sentence refusing a type
 	// while calling it something it is not, in the very message explaining that the tag was the wrong thing to
 	// judge by.
-	function vectorElementRefusal(giid GenericInstanceId) returns String
-		return "`{String.from(VectorBuiltinBaseName)}` holds its elements INLINE and publishes every slot at `{String.from(CreateMethod)}`, so it has no element destructor to stamp and a '{self.signatures.arrayElementDisplayName(giid)}' element would leak its storage and be read back as a null slot — a vector's element is an integer, a bool or a float"
-	end 'vectorElementRefusal'
+	function fixedArrayElementRefusal(giid GenericInstanceId) returns String
+		return "`{String.from(FixedArrayBuiltinBaseName)}` holds its elements INLINE and publishes every slot at `{String.from(CreateMethod)}`, so it has no element destructor to stamp and a '{self.signatures.arrayElementDisplayName(giid)}' element would leak its storage and be read back as a null slot — a fixed array's element is an integer, a bool or a float"
+	end 'fixedArrayElementRefusal'
 
-	// ⚠⚠ **`stdlib/Vector.maxon`'s `create()` IS THE VECTOR CREATE.** It is the empty record (every index out of bounds)
+	// ⚠⚠ **`stdlib/FixedArray.maxon`'s `create()` IS THE FIXED ARRAY CREATE.** It is the empty record (every index out of bounds)
 	// followed by a resize to `N`, which together are *"zero-initialized, N elements"*; the corpus body spells the
 	// pair as `Self{}` + `managed.grow(countof(Self))` + `managed.setLength(countof(Self))`, which is
 	// `stdlib/Array.maxon`'s own `resize` written against the buffer. `countof(Self)` is what makes that
@@ -81508,26 +81748,26 @@ export type Parser
 	// ⚠⚠ **THE `create()` REACHES `__managed_resize` WITHOUT PASSING `requireArrayResizeHasZeroElement`,
 	// WHOSE E3106 IS THE RULE THAT NORMALLY MAKES A PUBLISHED SLOT SAFE TO READ, AND THE CORPUS BODY REACHES
 	// `setLength` the same way.** A published slot of a MANAGED element is a null pointer every accessor
-	// dereferences, so the guarantee is carried by `requireVectorElementType` instead — which is why that
-	// gate is asked at `requireConstructedVectorElementType`, the
+	// dereferences, so the guarantee is carried by `requireFixedArrayElementType` instead — which is why that
+	// gate is asked at `requireConstructedFixedArrayElementType`, the
 	// construction door a declared `create()` arrives through. **The two are one invariant with two doors —
 	// do not relax either without the other.**
 
-	// ⚠ **`Vector`'S MUTATION ANSWERS ARE THE DECLARATION'S.** `stdlib/Vector.maxon`'s `set` writes through `self`
+	// ⚠ **`FixedArray`'S MUTATION ANSWERS ARE THE DECLARATION'S.** `stdlib/FixedArray.maxon`'s `set` writes through `self`
 	// like any other declared method, so a `let` receiver is refused (E3159) off the declaration's own write
 	// mask rather than off a receiver mask this door supplies.
 
-	// Is the cursor on a `Vector from` construction — the bare `Vector` identifier or a `Vector` instance alias,
-	// immediately followed by `from`? `atContainerFromConstruction(FromHeadContainer.vector)` answers
+	// Is the cursor on a `FixedArray from` construction — the bare `FixedArray` identifier or a `FixedArray` instance alias,
+	// immediately followed by `from`? `atContainerFromConstruction(FromHeadContainer.fixedArray)` answers
 	// it, read by BOTH the declaration sweep (which pre-interns the instances a bare head can name)
 	// and `parsePrimary`'s construction arm, for that predicate's stated reason: taught to one and not
 	// the other, the parser's own instance read becomes the FIRST write to the shared registry
 	// mid-parse — an order-dependent gid no drift guard can see. The sweep answers no for every alias;
 	// an alias's instance was interned by its declaration.
 
-	// ⭐⭐ **`Vector from [a, b, c]` — AND IT EMITS NOT ONE RUNTIME OP OF ITS OWN.** The source array literal
-	// already built exactly the record a vector is (`emitArrayCreateOp` + the pushes), so the construction is
-	// the array literal RETYPED: `Vector with 3 <elem>` names the same 48 bytes `Array with <elem>` does, and
+	// ⭐⭐ **`FixedArray from [a, b, c]` — AND IT EMITS NOT ONE RUNTIME OP OF ITS OWN.** The source array literal
+	// already built exactly the record a fixed array is (`emitArrayCreateOp` + the pushes), so the construction is
+	// the array literal RETYPED: `FixedArray with 3 <elem>` names the same 48 bytes `Array with <elem>` does, and
 	// its drop callee is the same `__managed_decref` the literal's owned temp was already registered with. A
 	// `__vec_from` would have been a copy of a record into an identical record.
 	//
@@ -81537,25 +81777,25 @@ export type Parser
 	// with, so the instance the parser reads back is the instance the sweep minted).
 	//
 	// ⚠⚠ **NOTHING IS INTERNED UNTIL THE ELEMENT IS ADMITTED (review finding 6).** Minting first meant that a
-	// `Vector from […]` over an element the sweep did NOT pre-intern made the parse's own read the FIRST write
+	// `FixedArray from […]` over an element the sweep did NOT pre-intern made the parse's own read the FIRST write
 	// to the shared registry mid-parse — the order-dependent gid `atContainerFromConstruction` exists
 	// to prevent — and it did so on the way to refusing the program anyway.
 	//
 	// ⭐ **THE GATE IS ASKED OF THE SOURCE ARRAY'S INSTANCE, WHICH IS NOT A STAND-IN — IT IS THE SAME
-	// QUESTION.** `Array with T` and `Vector with N T` share their element exactly, and every door
-	// `requireVectorElementType` opens (`containerElementIsOpaque`, `containerElementIsManaged`,
-	// `containerElementType`, `arrayElementDisplayName`) reads only that element. So the vector's admissibility
-	// is fully decided by the array the literal already built, and no vector instance need exist to decide it.
-	function parseVectorFromConstruction(func IrFunction) returns ValueId throws SourceParseError
+	// QUESTION.** `Array with T` and `FixedArray with N T` share their element exactly, and every door
+	// `requireFixedArrayElementType` opens (`containerElementIsOpaque`, `containerElementIsManaged`,
+	// `containerElementType`, `arrayElementDisplayName`) reads only that element. So the fixed array's admissibility
+	// is fully decided by the array the literal already built, and no fixed array instance need exist to decide it.
+	function parseFixedArrayFromConstruction(func IrFunction) returns ValueId throws SourceParseError
 		let vecTok = try self.consumeConstructionHead()
 
 		if not self.at(TokenKind.leftBracket) 'notArrayLiteral'
 			let srcTok = self.current()
-			throw SourceParseError.unsupported("`{String.from(VectorBuiltinBaseName)} from` requires an array literal `[…]` — a vector's SIZE is part of its type, and only a literal states it in the source", line: srcTok.line, column: srcTok.column)
+			throw SourceParseError.unsupported("`{String.from(FixedArrayBuiltinBaseName)} from` requires an array literal `[…]` — a fixed array's SIZE is part of its type, and only a literal states it in the source", line: srcTok.line, column: srcTok.column)
 		end 'notArrayLiteral'
 
-		if self.namesContainerInstanceAlias(vecTok.value, container: FromHeadContainer.vector) 'statedByTheAlias'
-			return try self.parseAliasedVectorLiteral(func, vecTok: vecTok)
+		if self.namesContainerInstanceAlias(vecTok.value, container: FromHeadContainer.fixedArray) 'statedByTheAlias'
+			return try self.parseAliasedFixedArrayLiteral(func, vecTok: vecTok)
 		end 'statedByTheAlias'
 
 		// The literal is parsed FIRST so its own refusals — an empty `[]`, an element of another type, an element type
@@ -81564,41 +81804,41 @@ export type Parser
 		let openIndex = self.pos
 		let arr = try self.parseArrayLiteral(func, element: ArrayLiteralElementSource.inferred)
 		let arrGiid = self.valueNameId(arr)
-		try self.requireVectorElementType(arrGiid as GenericInstanceId, tok: vecTok)
+		try self.requireFixedArrayElementType(arrGiid as GenericInstanceId, tok: vecTok)
 
 		let size = try self.arrayLiteralElementCountAt(openIndex, anchor: vecTok)
-		let giid = self.signatures.vectorInstanceForElement(self.signatures.containerElementType(arrGiid as GenericInstanceId), size: size)
+		let giid = self.signatures.fixedArrayInstanceForElement(self.signatures.containerElementType(arrGiid as GenericInstanceId), size: size)
 
 		// The retype is the WHOLE construction: same record, same bytes, same owner. `arr` is already this
 		// statement's tracked owned temporary (`finishArrayLiteral`), and both instances drop through
 		// `__managed_decref` (`genericInstanceBoxDropCallee`), so the value's registered ownership stays true of it.
 		self.retypeValue(arr, valueType: MaxonType.genericInstance(giid))
 		return arr
-	end 'parseVectorFromConstruction'
+	end 'parseFixedArrayFromConstruction'
 
 	// ⭐ **`Vec3 from [1, 2, 3]` — THE ALIAS STATES THE ELEMENT AND THE SIZE, SO THE LITERAL IS BUILT AT THEM.**
 	// The bare form's retype, over a literal built at the alias's element rather than one the first element
-	// inferred: a `Vector with 3 Reading` element strides the alias's slot, and a record built at a bare `int`'s
+	// inferred: a `FixedArray with 3 Reading` element strides the alias's slot, and a record built at a bare `int`'s
 	// stride could not be retyped into it. The `Array` instance at that element is interned before any parse
-	// (`ProgramSignatures.internAliasedVectorLiteralArrays`), so this read mints nothing.
-	function parseAliasedVectorLiteral(func IrFunction, vecTok Token) returns ValueId throws SourceParseError
+	// (`ProgramSignatures.internAliasedFixedArrayLiteralArrays`), so this read mints nothing.
+	function parseAliasedFixedArrayLiteral(func IrFunction, vecTok Token) returns ValueId throws SourceParseError
 		let giid = self.signatures.genericAliasInstanceFrom(vecTok.value, readerFilePath: self.job.path)
-		try self.requireVectorElementType(giid, tok: vecTok)
+		try self.requireFixedArrayElementType(giid, tok: vecTok)
 
 		let arrayGiid = self.signatures.builtinInstanceForElement(self.signatures.arrayRecordBaseName(), element: self.signatures.containerElementType(giid))
 		let openIndex = self.pos
 		let arr = try self.parseArrayLiteral(func, element: ArrayLiteralElementSource.stated(arrayGiid))
 
 		let written = try self.arrayLiteralElementCountAt(openIndex, anchor: vecTok)
-		let size = try self.signatures.genericInstanceFixedCount(giid) otherwise throw SourceParseError.unsupported("`{String.from(vecTok.value)} from […]` writes {written} elements, and `{String.from(vecTok.value)}` states no size — a vector's size is part of its type", line: vecTok.line, column: vecTok.column)
+		let size = try self.signatures.genericInstanceFixedCount(giid) otherwise throw SourceParseError.unsupported("`{String.from(vecTok.value)} from […]` writes {written} elements, and `{String.from(vecTok.value)}` states no size — a fixed array's size is part of its type", line: vecTok.line, column: vecTok.column)
 
 		if written != size 'wrongElementCount'
-			throw SourceParseError.unsupported("`{String.from(vecTok.value)} from […]` writes {written} elements, and `{String.from(vecTok.value)}` holds {size} — a vector's size is part of its type", line: vecTok.line, column: vecTok.column)
+			throw SourceParseError.unsupported("`{String.from(vecTok.value)} from […]` writes {written} elements, and `{String.from(vecTok.value)}` holds {size} — a fixed array's size is part of its type", line: vecTok.line, column: vecTok.column)
 		end 'wrongElementCount'
 
 		self.retypeValue(arr, valueType: MaxonType.genericInstance(giid))
 		return arr
-	end 'parseAliasedVectorLiteral'
+	end 'parseAliasedFixedArrayLiteral'
 
 	// ⭐ **HOW MANY ELEMENTS THE ARRAY LITERAL AT `openIndex` WRITES** — the top-level commas between its
 	// brackets, plus one. Read from TOKENS because both of its callers need the answer before any expression
@@ -81611,7 +81851,7 @@ export type Parser
 	//
 	// ⚠ **AN EMPTY `[]` IS REFUSED RATHER THAN COUNTED AS ONE (review finding 6).** "Commas plus one" is only
 	// true of a literal that has an element, and `[]` has none — `parseArrayLiteral` refuses it outright. Left
-	// answering 1, this counter told the declaration SWEEP to intern three `Vector with 1 …` instances for a
+	// answering 1, this counter told the declaration SWEEP to intern three `FixedArray with 1 …` instances for a
 	// literal the very next line rejects: registry rows minted on behalf of a program that cannot compile.
 	function arrayLiteralElementCountAt(openIndex ElementIndex, anchor Token) returns FixedElementCount throws SourceParseError
 		var depth = 0 as NestingDepth
@@ -81631,7 +81871,7 @@ export type Parser
 
 				if depth == 0 'closesTheLiteral'
 					if not sawElement 'emptyLiteral'
-						throw SourceParseError.unsupported("`{String.from(VectorBuiltinBaseName)} from []` — an empty array literal states neither the vector's element type nor its size, and both are part of the type", line: anchor.line, column: anchor.column)
+						throw SourceParseError.unsupported("`{String.from(FixedArrayBuiltinBaseName)} from []` — an empty array literal states neither the fixed array's element type nor its size, and both are part of the type", line: anchor.line, column: anchor.column)
 					end 'emptyLiteral'
 
 					return (commas + 1) as FixedElementCount
@@ -81660,7 +81900,7 @@ export type Parser
 		// The literal is unterminated. `parseArrayLiteral` would report it against the token it actually stops
 		// at; this counter runs FIRST, so it says the same thing here rather than answering a count for a
 		// literal that has no closing bracket.
-		throw SourceParseError.unsupported("`{String.from(VectorBuiltinBaseName)} from […]` — the array literal has no closing `]`", line: anchor.line, column: anchor.column)
+		throw SourceParseError.unsupported("`{String.from(FixedArrayBuiltinBaseName)} from […]` — the array literal has no closing `]`", line: anchor.line, column: anchor.column)
 	end 'arrayLiteralElementCountAt'
 
 	// ⭐ **THE NAME AN E3159 WOULD BLAME FOR THIS BINDING-BACKED RECEIVER — EMPTY when it may be
@@ -82964,25 +83204,25 @@ export type Parser
 	// above's twin, placed at the same point in `dispatchArrayMethod` and for the same stated reason: it is
 	// still the question *"does this member exist ON THIS RECEIVER?"*, answered more precisely for the one
 	// receiver that can tell two answers apart. Here the two answers are the two places a container's COUNT
-	// comes from — an `Array`'s record, a `Vector`'s type — and `sizedContainersBufferRefusal` carries the
+	// comes from — an `Array`'s record, a `FixedArray`'s type — and `sizedContainersBufferRefusal` carries the
 	// argument in full.
 	//
 	// ⭐⭐ **IT IS CALLED FROM TWO SITES BECAUSE THE BARE-`managed` ROUTE REACHES NO VALUE, AND ONE OF THEM
 	// PASSES THE ANSWER OFF THE ENCLOSING DECLARATION INSTEAD OF OFF A MARK.** A bare `managed.<member>(…)`
-	// inside an `extension Vector` never reaches this dispatcher's value at all — which is true of EVERY
+	// inside an `extension FixedArray` never reaches this dispatcher's value at all — which is true of EVERY
 	// member —
 	// `dispatchMethodOnBinding`'s `inlineManagedServesTheRecord` hands over the
 	// RECEIVER's own record, minting nothing, so there is no value to mark; and the `giid` it hands over is
-	// the buffer's, which the load-bearing retype spells `Array with Element` for a vector too, so no
-	// `giid` test can tell a vector's record from a growable array's either. That site therefore asks
+	// the buffer's, which the load-bearing retype spells `Array with Element` for a fixed array too, so no
+	// `giid` test can tell a fixed array's record from a growable array's either. That site therefore asks
 	// `declarationIsASizedContainerRecordNamed` of `enclosingType` — the BY-NAME form, which exists for
 	// exactly that shape of caller — and calls THIS function, so the two routes are one refusal and one
 	// sentence rather than two spellings of it. See `sizedContainerBufferValues` for the carrier the other
 	// route reads.
 	//
 	// ⛔ **THE OBVIOUS COLLAPSE — READ THE MARK *OR* THE ENCLOSING DECLARATION — IS A MEASURED WRONG
-	// ANSWER**, not merely a wider one: inside an `extension Vector` a `try managed.slice(0, 2)` bound to a
-	// local has the vector's declared buffer type and is NOT the vector's record, so an `enclosingType`
+	// ANSWER**, not merely a wider one: inside an `extension FixedArray` a `try managed.slice(0, 2)` bound to a
+	// local has the fixed array's declared buffer type and is NOT the fixed array's record, so an `enclosingType`
 	// disjunct at the VALUE site would refuse `s.clear()` on a slice. One value, one operation, two answers
 	// — the exact defect the per-value mark exists to prevent. That is why `onASizedContainersRecord`
 	// crosses the boundary as an ANSWER rather than as the evidence each caller derived it from.
@@ -83132,12 +83372,12 @@ export type Parser
 			return self.corpusServesMemberOffRoster(MemberSurface.array, typeName: declaration)
 		end 'anArraySurface'
 
-		// ⭐⭐ **THE SIZED CONTAINER'S ARM, AND LISTING `stdlib/Vector.maxon` DOES NOT WORK WITHOUT IT.**
+		// ⭐⭐ **THE SIZED CONTAINER'S ARM, AND LISTING `stdlib/FixedArray.maxon` DOES NOT WORK WITHOUT IT.**
 		//
-		// ⛔ **MEASURED, and it is the whole difference between a filtered run and the suite: `--filter=vector`
+		// ⛔ **MEASURED, and it is the whole difference between a filtered run and the suite: `--filter=fixed-array`
 		// was 55/55 without this arm and the full suite was 5941/400.** 375 of those are one sentence —
-		// `E2015 stdlib/Interfaces.maxon:229: `Vector` member 'createIterator' — the compiler provides count/get/set` —
-		// because a listed `Vector` DECLARES `implements Iterable`, so `extension Iterable`'s `map`, `filter`
+		// `E2015 stdlib/Interfaces.maxon:229: `FixedArray` member 'createIterator' — the compiler provides count/get/set` —
+		// because a listed `FixedArray` DECLARES `implements Iterable`, so `extension Iterable`'s `map`, `filter`
 		// and `contains` specialize for it, and their `for item in self` asks the receiver for the very member
 		// the roster did not carry. The conformance is not decoration: it is what publishes those extension
 		// methods onto the type, and they are compiled.
@@ -83147,12 +83387,12 @@ export type Parser
 		// itself, and does the corpus declare it — because each of those surfaces still has members of its own.
 		// The sized container has none, so the
 		// first question is vacuous and only the declaration's answer is left.
-		if self.signatures.isVectorInstanceAt(recv.tag, nameId: recv.nameId) 'aSizedContainerSurface'
+		if self.signatures.isFixedArrayInstanceAt(recv.tag, nameId: recv.nameId) 'aSizedContainerSurface'
 			let sizedDeclaration = self.signatures.genericInstanceBaseName(recv.nameId as GenericInstanceId)
 
-			if not self.signatures.declarationIsASizedContainerRecordNamed(sizedDeclaration) 'notTheCorpusVector'
+			if not self.signatures.declarationIsASizedContainerRecordNamed(sizedDeclaration) 'notTheCorpusFixedArray'
 				return false
-			end 'notTheCorpusVector'
+			end 'notTheCorpusFixedArray'
 
 			return self.corpusDeclaresMemberAtCursor(sizedDeclaration)
 		end 'aSizedContainerSurface'
@@ -83191,12 +83431,12 @@ export type Parser
 
 	// ⭐⭐ **THE SAME DOOR FOR A TYPE WITH NO SYNTHESIZED SURFACE AT ALL.** The rostered form above
 	// asks two questions and this one asks the second alone: the sized container has no roster to lose a name
-	// to, so every member a `Vector` has is `stdlib/Vector.maxon`'s. It is a SEPARATE door rather than a call
+	// to, so every member a `FixedArray` has is `stdlib/FixedArray.maxon`'s. It is a SEPARATE door rather than a call
 	// with an empty roster because an empty roster would need a `MemberSurface` entry, and that entry is
 	// exactly what retires when a dispatcher does.
 	//
 	// ⚠ It PEEKS, and it carries the `tokenCanBeAName` guard for the rostered door's measured reason: a
-	// literal carries its CONTENT in `.value`, so `Vector."frobnicate"` would otherwise be tested against the
+	// literal carries its CONTENT in `.value`, so `FixedArray."frobnicate"` would otherwise be tested against the
 	// declaration by bytes alone.
 	function corpusDeclaresMemberAtCursor(typeName ByteArray) returns bool
 		let memberTok = self.current()
@@ -83275,10 +83515,10 @@ export type Parser
 	// the value's provenance says owned-heap. `a` and `m` would be one box with two scope-exit drops.
 	// ⭐⭐ **THE SURFACE FLIP, PLUS THE ONE RETYPE THE SIZED CONTAINER NEEDS.** For the ARRAY record the
 	// flip is the whole of it: `Array with T` and `__ManagedMemory with T` are ONE `GenericInstanceId`, so the
-	// buffer surface of an array IS the array, and only the MARK changes. A `Vector with N T`'s record is the
+	// buffer surface of an array IS the array, and only the MARK changes. A `FixedArray with N T`'s record is the
 	// same 48 bytes but a DIFFERENT id — the size is the second coordinate of its identity — so the value
-	// handed to a buffer position has to say so, or the corpus's own `VectorIter.create(managed)` is refused
-	// **`E3005 … expected 'Vector.ElementMemory', got 'Vector_T…'`**: one record, two ids, which is exactly the
+	// handed to a buffer position has to say so, or the corpus's own `FixedArrayIter.create(managed)` is refused
+	// **`E3005 … expected 'FixedArray.ElementMemory', got 'FixedArray_T…'`**: one record, two ids, which is exactly the
 	// disagreement `canonicalGenericBaseNameInThisFile`'s fold exists to prevent one genericity up.
 	//
 	// ⚠ The buffer instance is built from the RECEIVER's element rather than from the declaration's parameter,
@@ -83292,14 +83532,14 @@ export type Parser
 		end 'theBufferIsItsOwnInstance'
 
 		// ⭐⭐ **THE SIZED FACT IS WRITTEN ON THE VALUE HERE BECAUSE THE VERY NEXT LINE ERASES IT FROM THE
-		// TYPE.** The retype below is what makes `stdlib/Vector.maxon`'s `createIterator`'s `VectorIter.create(managed)`
+		// TYPE.** The retype below is what makes `stdlib/FixedArray.maxon`'s `createIterator`'s `FixedArrayIter.create(managed)`
 		// type-check, and it is load-bearing — but it leaves the value spelled `Array with Element`, so
 		// `genericInstanceBaseName(giid)` at the dispatch answers `Array` and no `giid` test downstream can
-		// tell a vector's record from a growable array's. This `if` is the last place that knows, and it
+		// tell a fixed array's record from a growable array's. This `if` is the last place that knows, and it
 		// already asked the question one line up.
 		//
 		// ⇒ It carries the answer on a per-VALUE mark instead, which reaches both spellings that mint one:
-		// the bare `managed` inside an `extension Vector` (`dispatchMethodOnBinding` → `baseBoxOf` →
+		// the bare `managed` inside an `extension FixedArray` (`dispatchMethodOnBinding` → `baseBoxOf` →
 		// `parseSelfFieldRead`) and the explicit `self.managed` (`parseExplicitSelfFieldRead`), plus every
 		// local a program binds either to — and, since the mark has to survive being re-minted, every
 		// RE-MINT (`carryValueFacts`) and every MERGE (`propagateBufferSurfaceToPhi`).
@@ -83328,8 +83568,8 @@ export type Parser
 	//   • **THE ARRAY RECORD** — the buffer of an `Array with T` IS that array: `Array with T` and
 	//     `__ManagedMemory with T` are ONE `GenericInstanceId`, so the receiver's own instance is the
 	//     answer and there is nothing to build.
-	//   • **THE SIZED CONTAINER'S RECORD** (`Vector`) — the same 48 bytes under a DIFFERENT id, because the
-	//     size is the second coordinate of a vector's identity. Its buffer must be spelled
+	//   • **THE SIZED CONTAINER'S RECORD** (`FixedArray`) — the same 48 bytes under a DIFFERENT id, because the
+	//     size is the second coordinate of a fixed array's identity. Its buffer must be spelled
 	//     `Array with T`, built from the RECEIVER's element so it is concrete wherever the receiver is
 	//     (`Vec3`'s buffer is `Array with Int`) and opaque inside the declaration's own body.
 	//
@@ -84189,7 +84429,7 @@ export type Parser
 	// ⚠ The line is the envelope collapse, not "the field is managed": `Bag.items` is an 8-byte POINTER to
 	// storage the Bag owns, where `String.managed` is the record itself, and keyed on the collapse this arm
 	// cannot see `Bag` at all, because `Bag` declares no builtin literal marker. **The four conformers are
-	// `String`, `Character`, `Array` and `Vector`.**
+	// `String`, `Character`, `Array` and `FixedArray`.**
 	//
 	// ⚠ **IT SETS THE RECEIVER COLUMN ONLY.** `receiverStorageMask` below answers for the record-write
 	// column.
@@ -84333,7 +84573,7 @@ export type Parser
 		let element = self.signatures.arrayElementDisplayName(giid)
 
 		match refusal 'refusal'
-			vectorCreate then throw SourceParseError.vectorCreateZeroOutsideElement(element, line: tok.line, column: tok.column)
+			fixedArrayCreate then throw SourceParseError.fixedArrayCreateZeroOutsideElement(element, line: tok.line, column: tok.column)
 			arrayResize then throw SourceParseError.arrayResizeZeroOutsideElement(element, line: tok.line, column: tok.column)
 			bufferSetLength then throw SourceParseError.bufferSetLengthZeroOutsideElement(element, line: tok.line, column: tok.column)
 		end 'refusal'
@@ -85251,7 +85491,7 @@ export type Parser
 			try self.requireCloneCopiesNoGreenThread(verdict, subject: "an element of this array", memberTok: methodTok)
 			try self.refuseCloneOfAnUncloneableConformer(self.signatures.uncloneableExistentialInElementOf(giid), memberTok: methodTok)
 
-			throw SourceParseError.unsupported("`{String.from(methodTok.value)}` on an array whose managed element has a nested type this compiler cannot deep-clone — an OS handle, or an ELEMENT that is itself held at an interface type. String / struct / boxed-union / declared-generic-instance / container elements, including nested String, struct, union, Array, Vector, chain, instance and interface-typed fields and a managed-element container of any depth, ARE supported.", line: methodTok.line, column: methodTok.column)
+			throw SourceParseError.unsupported("`{String.from(methodTok.value)}` on an array whose managed element has a nested type this compiler cannot deep-clone — an OS handle, or an ELEMENT that is itself held at an interface type. String / struct / boxed-union / declared-generic-instance / container elements, including nested String, struct, union, Array, FixedArray, chain, instance and interface-typed fields and a managed-element container of any depth, ARE supported.", line: methodTok.line, column: methodTok.column)
 		end 'unsupportedNested'
 	end 'requireArrayElementCopyable'
 
@@ -85542,18 +85782,6 @@ export type Parser
 		let result = self.resolvedSlotType(self.signatures.substitutedInstanceArg(gid, position: PromiseResultArgPosition))
 		return "'{self.displayTypeNameOf(maxonTypeTag(result), nameId: typeNameIdOf(result))}'"
 	end 'promiseResultDisplay'
-
-	// ⛔⛔ **THERE IS NO BOUNDS-CHECK ELISION AT THIS DOOR.** ⚖ USER RULING, 2026-08-06: *"we should be able to add an
-	// optimization to remove the bounds check when using static indexes on a vector (fixed size)"*. The
-	// proof is a fact about the CALL SITE (this index, this size); `stdlib/Vector.maxon`'s `get`/`set` are ONE
-	// shared body reached by a CALL, taking `index` as a runtime parameter, and no callee can see whether its
-	// caller wrote a literal. Every other container declines by itself (`genericInstanceFixedCount`
-	// throws for it), so a router here could only ever return its argument.
-	// `specs/vector-static-index.md` keeps all eighteen of its cases, which pin the ANSWERS.
-	//
-	// ⚠ **RECOVERING IT LATER IS AN INLINER'S JOB AND NOT THIS DOOR'S**: once `Vector.get`'s body is inlined
-	// at a constant index, the test is a comparison of two constants and the ordinary folding removes it — one
-	// mechanism instead of a second runtime entry per accessor.
 
 	// `( expr )` — a single positional array-method argument (`push(x)`, `get(i)`, `reserve(n)`).
 	function parseArrayOneArg(func IrFunction) returns ValueId throws SourceParseError
@@ -85896,10 +86124,10 @@ export type Parser
 	//
 	// ⚠ **IT RESOLVES THROUGH `containerSlotValueType`, NOT OFF THE RAW ELEMENT TYPE, AND THAT IS THE MEASURED
 	// PART.** The stored element of a RANGED FLOAT ALIAS is `named("Float")`, which answers FALSE to a bare
-	// `tagIsFloat`. With the raw type on the write side only, `Vector with 2 Float` over
+	// `tagIsFloat`. With the raw type on the write side only, `FixedArray with 2 Float` over
 	// `typealias Float = float(f64.min to f64.max)` stored its element unconverted and panicked the x64
 	// emitter — *"a register-to-register move from xmm0 to rax crosses register files"* — while the
-	// bare-float `Vector from [1.5, 2.5]`, whose element IS `float`, was already correct. Exactly the
+	// bare-float `FixedArray from [1.5, 2.5]`, whose element IS `float`, was already correct. Exactly the
 	// asymmetry one shared door makes unrepresentable.
 	function containerElementIsFloatWord(giid GenericInstanceId) returns bool
 		return tagIsFloat(maxonTypeTag(self.containerSlotValueType(self.signatures.containerElementType(giid))))
@@ -87843,7 +88071,7 @@ export type Parser
 		// layout to NAME a member, and a layout to ENUMERATE fields — exactly as that gate's own header says of
 		// its neighbour, so the admission is spent at the one door that needs it and nowhere else.
 		// ⚠ **THE SIZED CONTAINER IS ADMITTED BY THE SAME ARGUMENT AS THE ARRAY RECORD** — with
-		// `stdlib/Vector.maxon` listed, a `Vector`'s ONE declared field IS the record, so `structOf` and the
+		// `stdlib/FixedArray.maxon` listed, a `FixedArray`'s ONE declared field IS the record, so `structOf` and the
 		// value agree about it exactly as they do for `Array`. **MEASURED without this: 375 cases refused at
 		// `stdlib/Interfaces.maxon:229`'s `self.createIterator()` inside `extension Iterable`, with
 		// `missingBaseLayout`'s *"the compiler reads no stdlib"* sentence — a refusal whose every clause had stopped
@@ -87904,7 +88132,7 @@ export type Parser
 	// router is the same shape for the same reason.
 	//
 	// ⚠ **NEITHER SENTENCE CLAIMS THE COMPILER READS NO STDLIB.** `stdlib/Array.maxon` and
-	// `stdlib/Vector.maxon` are both LISTED, so it has read them. What is true is narrower and is what the
+	// `stdlib/FixedArray.maxon` are both LISTED, so it has read them. What is true is narrower and is what the
 	// reader needs: the RECORD is synthesized, so a value of the instance carries that record's words
 	// whatever any declaration of the name says.
 	function builtinRecordAccessRefusal(access BaseAccessKind, typeName ByteArray, baseName ByteArray) returns String
@@ -88122,7 +88350,7 @@ export type Parser
 		// record, so there is nothing to mint — the whole of `__str_bytes_view` is an `__mm_incref`.
 		//
 		// ⛔⛔ **THE FUSED DOOR SERVES ALL FOUR CONFORMERS, BECAUSE ROUTING A NON-BYTE-RECORD `managed` CALL THROUGH HERE HAS A PRICE.**
-		// Turning the fused record door away from `Array` and `Vector` would make a bare `managed.byteAt(i)` inside a container
+		// Turning the fused record door away from `Array` and `FixedArray` would make a bare `managed.byteAt(i)` inside a container
 		// body take `coOwnAggregateAsTemp` like any other value read. **That is not a user-code-only cost**:
 		// `Array.hash` and `Array.equals` are NOT on `arraySurfaceMemberNames`, so unlike `count`/`get` they
 		// are not served by a synthesized arm — the corpus bodies are what a program actually calls, and each
@@ -88177,10 +88405,10 @@ export type Parser
 			//     `managed.slice(0, len)`.
 			// One record with two surfaces is the whole of this wrapper, so the read is the surface flip and
 			// nothing else — which also means it allocates nothing where the String path allocates a record.
-			// ⚠ **AND THE SIZED CONTAINER TAKES THIS ARM TOO** — a `Vector`'s value IS the same fused
-			// record, so `stdlib/Vector.maxon`'s `managed` is the surface flip and not a `__str_bytes_view`.
+			// ⚠ **AND THE SIZED CONTAINER TAKES THIS ARM TOO** — a `FixedArray`'s value IS the same fused
+			// record, so `stdlib/FixedArray.maxon`'s `managed` is the surface flip and not a `__str_bytes_view`.
 			// Both silent wrongs the paragraph above enumerates apply to it word for word: the byte view's
-			// stride is 1 and a vector's slots are its element's, and the element read back as a concrete byte
+			// stride is 1 and a fixed array's slots are its element's, and the element read back as a concrete byte
 			// leaves `opaqueTypeParamPosition` with no `uses` name to answer.
 			if self.signatures.declarationsValueIsTheManagedRecord(layout.name) 'theRecordISTheBuffer'
 				return self.bufferSurfaceOfDeclaredRecord(box, layout: layout, range: range)
@@ -92789,7 +93017,7 @@ export type Parser
 	//
 	// ⭐ **EVERY BUILTIN CONTAINER, not just `Array`.** The routing lives on the instance registry
 	// (`ProgramSignatures.containerCreateCall`) rather than in `__module_init`, which knows one `create`, so
-	// a `Set` / `Map` / `List` / `Vector` global is built from the same description an `Array` global is.
+	// a `Set` / `Map` / `List` / `FixedArray` global is built from the same description an `Array` global is.
 	//
 	// ⭐⭐ **AND EVERY DECLARED GENERIC** — `var g = StrMap.create()`, `stdlib/Map.maxon` being listed and
 	// `Map` an ordinary user generic. It costs this door ONE routed gate and the emitter NOTHING: a
@@ -97452,6 +97680,7 @@ export type Parser
 	function emitCall(writtenCallee ByteArray, anchor Token, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint, inferInstanceOf FactoryInference = FactoryInference.none, serviceSite ServiceSpawnSite = sharedNotAServiceSpawn, places PlaceArgumentArray = noPlaceArguments) returns ValueId throws SourceParseError
 		let callee = try self.genericInstanceCallee(writtenCallee, anchor: anchor, args: args, argLabels: argLabels, mint: mint, supplied: constructorInstance)
 		try self.requireCalleeIsNotReservedName(callee, anchor: anchor, mint: mint)
+		let accessProof = try self.fixedArrayAccessProof(callee, args: args, argLabels: argLabels, anchor: anchor)
 
 		// ⭐⭐ **A SLICE OF A LITERAL WITH COMPILE-TIME BOUNDS BECOMES A LITERAL, AND THEN THIS IS NOT A CALL AT
 		// ALL** (`specs/constant-string-slice.md`). Asked FIRST, ahead of the mint, the default fill and
@@ -97604,7 +97833,10 @@ export type Parser
 		// an adopted managed one is already enrolled by `enrolOwnedCallTemp` above and must not be
 		// dropped on the error edge (see `routeToTryBlock`); an opaque `T` result is enrolled on the same
 		// terms.
-		self.routeBareThrowingCall(callee, opIdx: opIdx, result: result)
+		match accessProof 'accessProof'
+			notProven then self.routeBareThrowingCall(callee, opIdx: opIdx, result: result)
+			proven(accessor) then self.artifact.recordProvenFixedArrayAccess(opIdx, accessor: accessor)
+		end 'accessProof'
 
 		// ⭐⭐ **THE OPAQUE WORD IS READ BACK AS THE FLOAT THE RECEIVER'S INSTANCE SAYS IT IS** —
 		// `typeResultThroughInstance`'s answer, spent HERE because the reinterpretation is an op and an op must

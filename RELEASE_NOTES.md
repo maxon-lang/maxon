@@ -15,6 +15,18 @@ release's version as its heading when the release is cut.
 
 ### Breaking changes
 
+- `Vector` is renamed `FixedArray`, and its iterator typealias `Vector.VectorIter` is
+  `FixedArray.FixedArrayIter`; `Vector with 3 Int` is an unknown type (E2010).
+  Fix: rename `Vector` to `FixedArray` and `VectorIter` to `FixedArrayIter`.
+- A `FixedArray` `get` or `set` whose index is proven inside the size — a constant, a value whose ranged
+  type lies inside, or a counted-loop counter between compile-time bounds — cannot throw, so a `try` on it
+  is E3055.
+  Fix: drop the `try … otherwise` and write the call bare.
+- A constant `FixedArray` index at or past the size is E3005 at compile time.
+  Fix: correct the index, or pass a deliberate out-of-range index through a value computed at run time.
+- A divide or `mod` whose divisor is proven non-zero by a counted loop's bounds or a range computed from
+  them (`100 / i` in `for i in 1 upto 10`) cannot throw, so a `try` on it is E3055.
+  Fix: drop the `try … otherwise` and write the divide bare.
 - `URL.host()` answers an IP literal without its brackets (`::1` for `http://[::1]/`), where it answered
   `[::1]`; the new `URL.authorityHost()` answers the bracketed spelling. An `HttpRequest`'s URL read in a
   handler follows the same rule.

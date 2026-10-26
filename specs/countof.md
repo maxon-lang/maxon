@@ -1,7 +1,7 @@
 ---
 feature: countof
 status: experimental
-keywords: [countof, vector, fixed size, generics, dictionary passing]
+keywords: [countof, fixed array, fixed size, generics, dictionary passing]
 category: generics
 ---
 
@@ -11,16 +11,16 @@ category: generics
 
 `countof(T)` is `sizeof(T)`'s twin one axis over: `sizeof` answers in BYTES PER VALUE,
 `countof` in ELEMENTS PER INSTANCE. It is defined for exactly the types whose element count
-is part of their identity — the fixed-size container, `Vector with N Element` (see
-[vector](vector.md)). A growable `Array`'s length is a runtime field of the record rather than
+is part of their identity — the fixed-size container, `FixedArray with N Element` (see
+[fixed array](fixed-array.md)). A growable `Array`'s length is a runtime field of the record rather than
 a coordinate of its type, so `countof` of one is refused; ask the value for its `count()`.
 
 ### Two outcomes, decided by whether the operand states a count
 
-- **An instance that states one** — `Vector with 3 Int`, and every alias for it — is a
+- **An instance that states one** — `FixedArray with 3 Int`, and every alias for it — is a
   COMPILE-TIME CONSTANT, folded to a literal where the instance registry lives.
 - **The sized container's own `Self`** states none, deliberately: `Self` inside
-  `type Vector uses Element` is the declaration's own instance, interned at `NoFixedSize` so
+  `type FixedArray uses Element` is the declaration's own instance, interned at `NoFixedSize` so
   that ONE shared body serves every size. There the count is a fact about the RECEIVER, and
   the expression reads it out of a hidden parameter every call site fills in.
 
@@ -35,7 +35,7 @@ own descriptor blocks instead of minting a blob, which is sound precisely becaus
 in them describes the argument, and the run makes the argument identical on both sides.
 
 A count word in that blob would be read through the forward and answer the CALLER's count.
-`Vector with 4 Element` inside `type Holder uses Element` states 4 whatever `Element` turns
+`FixedArray with 4 Element` inside `type Holder uses Element` states 4 whatever `Element` turns
 out to be, while `Holder`'s own blob states no count at all — so the shared body would read
 0 where 4 is the answer. Nor can the forward simply be refused in favour of minting: the forward fires
 only when the instance's first type argument IS a type parameter, and minting a blob for such
@@ -45,7 +45,7 @@ itself a descriptor read.
 A parameter has none of that, because **the count is a compile-time constant at every call
 site**: the receiver's instance states it, a static's RESULT instance or the instance its call
 names states it, and a
-`Vector` method calling a sibling on `self` forwards the slot its own caller filled. It also
+`FixedArray` method calling a sibling on `self` forwards the slot its own caller filled. It also
 costs the descriptor nothing — a body that reads only `countof(Self)` reserves no descriptor
 at all, so it can be called from a frame that carries none.
 
@@ -63,7 +63,7 @@ An operand that states its own count is a compile-time constant, exactly as a co
 `sizeof` is. No descriptor, no parameter, no instance — the type alone is the answer.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
 function main() returns ExitCode
 	return countof(Vec3)
@@ -74,18 +74,18 @@ end 'main'
 ```
 
 <!-- test: one-shared-body-answers-each-instances-own-count -->
-ONE compiled body, two sizes. `capacity()` is written once over `type Vector uses Element`,
+ONE compiled body, two sizes. `capacity()` is written once over `type FixedArray uses Element`,
 whose `Self` states no count; each call site fills in the count of the instance it holds.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
-typealias Vec5 = Vector with 5 Int
+typealias Vec3 = FixedArray with 3 Int
+typealias Vec5 = FixedArray with 5 Int
 
-extension Vector
+extension FixedArray
 	function capacity() returns Int
 		return countof(Self)
 	end 'capacity'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var a = Vec3.create()
@@ -98,19 +98,19 @@ end 'main'
 ```
 
 <!-- test: the-containers-own-name-means-the-same-as-Self -->
-`Vector` written inside `Vector`'s own body denotes exactly what `Self` denotes there, so it
+`FixedArray` written inside `FixedArray`'s own body denotes exactly what `Self` denotes there, so it
 is the same operand and reads the same slot. The token pre-scan that reserves that slot
 matches BOTH spellings, because a check filed against one of them would be narrower than the
 fact it is about.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	function byName() returns Int
-		return countof(Vector)
+		return countof(FixedArray)
 	end 'byName'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -128,7 +128,7 @@ two different sizes it walks 3 trips and then 5, which is what the global counte
 count reached a receiverless body, and it was the right one both times.
 
 ⚠ **`rebuild()` DOES NOT READ AN ELEMENT.** The corpus `get` is typed `Element`, which inside
-`extension Vector` is a TYPE PARAMETER — so `try fresh.get(0) otherwise 0` has no `Element` to offer
+`extension FixedArray` is a TYPE PARAMETER — so `try fresh.get(0) otherwise 0` has no `Element` to offer
 (`E3059 … 'int' does not match expected type 'type parameter'`) and the `Int` return has none either.
 That is the shared-body thesis and not a loss: the compiler compiles ONE body for every size, so an
 element read there is opaque exactly as `sizeof(Element)` is. What the case needs of the static's RESULT
@@ -142,12 +142,12 @@ one observation that goes through the record rather than through the type — so
 record-against-type again, which is the thing being pinned.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
-typealias Vec5 = Vector with 5 Int
+typealias Vec3 = FixedArray with 3 Int
+typealias Vec5 = FixedArray with 5 Int
 
 var trips = 0 as Int
 
-extension Vector
+extension FixedArray
 	static function counted() returns Self
 		var i = 0 as Count
 		while i < countof(Self) 'each'
@@ -168,7 +168,7 @@ extension Vector
 		end 'theStaticsResultStatesTheReceiversCount'
 		panic("a `Self`-returning static builds the instance its call site holds")
 	end 'rebuild'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var a = Vec3.create()
@@ -184,10 +184,10 @@ end 'main'
 A `static function` that returns an `Int` builds no instance, so the count comes from the instance the CALL names: `Vec3.slotsOf()` states 3 and `Vec5.slotsOf()` states 5, through one compiled body. An instance method reaching the same static through `Self` forwards the count it was handed, and a static with a parameter of its own reads it the same way.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
-typealias Vec5 = Vector with 5 Int
+typealias Vec3 = FixedArray with 3 Int
+typealias Vec5 = FixedArray with 5 Int
 
-extension Vector
+extension FixedArray
 	static function slotsOf() returns Int
 		return countof(Self)
 	end 'slotsOf'
@@ -199,7 +199,7 @@ extension Vector
 	function viaSelf() returns Int
 		return Self.slotsOf()
 	end 'viaSelf'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var a = Vec3.create()
@@ -219,9 +219,9 @@ end 'main'
 Two statics of one name read `countof`, the one without a parameter declared after the one with it. Both ends of the hidden count slot decide on the overload set's one name, so each call hands the count its overload reads.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	static function slotsOf(extra Int) returns Int
 		return (countof(Self) as Int) + extra
 	end 'slotsOf'
@@ -241,7 +241,7 @@ extension Vector
 	static function makeOf() returns Self
 		return Self{}
 	end 'makeOf'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -261,9 +261,9 @@ end 'main'
 The same two statics declared the other way round.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	static function slotsOf() returns Int
 		return countof(Self)
 	end 'slotsOf'
@@ -271,7 +271,7 @@ extension Vector
 	static function slotsOf(extra Int) returns Int
 		return (countof(Self) as Int) + extra
 	end 'slotsOf'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -290,10 +290,10 @@ end 'main'
 Two instance methods of one name read `countof` of the sized receiver, in both widths.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
-typealias Vec5 = Vector with 5 Int
+typealias Vec3 = FixedArray with 3 Int
+typealias Vec5 = FixedArray with 5 Int
 
-extension Vector
+extension FixedArray
 	function slotsPlus() returns Int
 		return countof(Self)
 	end 'slotsPlus'
@@ -301,7 +301,7 @@ extension Vector
 	function slotsPlus(extra Int) returns Int
 		return (countof(Self) as Int) + extra
 	end 'slotsPlus'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var a = Vec3.create()
@@ -321,10 +321,10 @@ end 'main'
 The same two methods declared the other way round.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
-typealias Vec5 = Vector with 5 Int
+typealias Vec3 = FixedArray with 3 Int
+typealias Vec5 = FixedArray with 5 Int
 
-extension Vector
+extension FixedArray
 	function slotsPlus(extra Int) returns Int
 		return (countof(Self) as Int) + extra
 	end 'slotsPlus'
@@ -332,7 +332,7 @@ extension Vector
 	function slotsPlus() returns Int
 		return countof(Self)
 	end 'slotsPlus'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var a = Vec3.create()
@@ -349,34 +349,34 @@ end 'main'
 ```
 
 <!-- test: error.a-static-reading-the-count-through-a-bare-container-name-is-refused -->
-The count of a static that returns another type comes from the instance its call names. `Vector.slotsOf()` names no sized instance, and `main` carries no count to forward, so the call is refused with a position rather than handed a count nobody holds.
+The count of a static that returns another type comes from the instance its call names. `FixedArray.slotsOf()` names no sized instance, and `main` carries no count to forward, so the call is refused with a position rather than handed a count nobody holds.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	static function slotsOf() returns Int
 		return countof(Self)
 	end 'slotsOf'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
-	print("{Vector.slotsOf()} {v.count()}\n")
+	print("{FixedArray.slotsOf()} {v.count()}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:13:17: Unsupported: calling 'slotsOf' (which reads `countof` of the sized container's own `Self`) through a name that states no element count, from a function that carries no fixed-element-count parameter of its own to forward — a `static function` that does not return `Self` takes the count from the instance its call names. Name a sized instance with a typealias (`Vector with 3 Int`) and call it through that, or call it from a method of the sized container
+error E2015: <fragment>:13:21: Unsupported: calling 'slotsOf' (which reads `countof` of the sized container's own `Self`) through a name that states no element count, from a function that carries no fixed-element-count parameter of its own to forward — a `static function` that does not return `Self` takes the count from the instance its call names. Name a sized instance with a typealias (`FixedArray with 3 Int`) and call it through that, or call it from a method of the sized container
 ```
 
 <!-- test: sizeof-of-a-type-parameter-in-a-static-reads-the-call-sites-descriptor -->
 `sizeof` of the type parameter in a `static function` is read from the layout descriptor the call site hands the static, the way `countof` reads the count it is handed. `elementBytes` returns `Self`, so the instance it builds supplies both.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	static function elementBytes() returns Self
 		if sizeof(Element) == 0 'impossible'
 			panic("a type has a size")
@@ -391,7 +391,7 @@ extension Vector
 		end 'theStaticBuiltOne'
 		panic("a `Self`-returning static builds the instance its call site holds")
 	end 'reach'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -404,28 +404,28 @@ end 'main'
 
 <!-- test: a-sized-field-of-another-generic-answers-its-own-count -->
 ⭐⭐ **THE CASE THAT DECIDES WHERE THE COUNT TRAVELS.** `Holder`'s field is a
-`Vector with 4 Element` — a sized instance written over the ENCLOSING generic's own type
+`FixedArray with 4 Element` — a sized instance written over the ENCLOSING generic's own type
 parameter, which is the one shape whose layout descriptor is FORWARDED rather than minted. A
 count carried in that descriptor would be read out of `Holder`'s blob, which states none, and
 answer **0 where 4 is the answer.** Carried in its own parameter it is filled in from the instance
 the call site actually holds, and answers 4.
 
 ⚠ It also compiles at all, which a descriptor route could not manage here: `Holder.size()`
-carries NO layout descriptor — no edge in the descriptor-need fixpoint gives a `Vector` method
+carries NO layout descriptor — no edge in the descriptor-need fixpoint gives a `FixedArray` method
 call one — so a `capacity()` that reserved a descriptor would abort the compiler in
 `emitInstanceDescriptorAddr`. A count-only body reserves nothing to forward.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntHolder = Holder with Int
 
-extension Vector
+extension FixedArray
 	function capacity() returns Int
 		return countof(Self)
 	end 'capacity'
-end 'Vector'
+end 'FixedArray'
 
 type Holder uses Element
-	typealias Slot = Vector with 4 Element
+	typealias Slot = FixedArray with 4 Element
 
 	var slot as Slot
 
@@ -459,7 +459,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:5:9: Unsupported: countof of a type that states no element count — only a fixed-size container type has one (`Vector with 3 Int`, or `Self` inside the sized container's own body). A growable `Array`'s length is a runtime field of the record, not part of its type, so ask it for its `count()`
+error E2015: <fragment>:5:9: Unsupported: countof of a type that states no element count — only a fixed-size container type has one (`FixedArray with 3 Int`, or `Self` inside the sized container's own body). A growable `Array`'s length is a runtime field of the record, not part of its type, so ask it for its `count()`
 ```
 
 <!-- test: error.a-growable-array-has-no-count-in-its-type -->
@@ -475,7 +475,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:6:9: Unsupported: countof of a type that states no element count — only a fixed-size container type has one (`Vector with 3 Int`, or `Self` inside the sized container's own body). A growable `Array`'s length is a runtime field of the record, not part of its type, so ask it for its `count()`
+error E2015: <fragment>:6:9: Unsupported: countof of a type that states no element count — only a fixed-size container type has one (`FixedArray with 3 Int`, or `Self` inside the sized container's own body). A growable `Array`'s length is a runtime field of the record, not part of its type, so ask it for its `count()`
 ```
 
 <!-- test: error.an-ordinary-generics-own-Self-states-no-count -->
@@ -505,7 +505,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:13:10: Unsupported: countof of a type that states no element count — only a fixed-size container type has one (`Vector with 3 Int`, or `Self` inside the sized container's own body). A growable `Array`'s length is a runtime field of the record, not part of its type, so ask it for its `count()`
+error E2015: <fragment>:13:10: Unsupported: countof of a type that states no element count — only a fixed-size container type has one (`FixedArray with 3 Int`, or `Self` inside the sized container's own body). A growable `Array`'s length is a runtime field of the record, not part of its type, so ask it for its `count()`
 ```
 
 <!-- test: error.an-alias-spelling-the-pre-scan-cannot-see-is-refused -->
@@ -516,15 +516,15 @@ READ without having reached that walk — and rather than discovering the missin
 passes later with no source position, the parse refuses it here, naming the line and the cure.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
-	typealias Me = Vector with Element
+extension FixedArray
+	typealias Me = FixedArray with Element
 
 	function viaAlias() returns Int
 		return countof(Me)
 	end 'viaAlias'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -563,7 +563,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:13:10: Unsupported: countof of a type that states no element count — only a fixed-size container type has one (`Vector with 3 Int`, or `Self` inside the sized container's own body). A growable `Array`'s length is a runtime field of the record, not part of its type, so ask it for its `count()`
+error E2015: <fragment>:13:10: Unsupported: countof of a type that states no element count — only a fixed-size container type has one (`FixedArray with 3 Int`, or `Self` inside the sized container's own body). A growable `Array`'s length is a runtime field of the record, not part of its type, so ask it for its `count()`
 ```
 
 <!-- test: the-count-reaches-a-Self-typed-parameter -->
@@ -578,9 +578,9 @@ the shape for a declared generic tests for a `structRef` receiver, and a contain
 the compiler owns has a `genericInstance` `Self`, which that test walks straight past.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	function capacity() returns Int
 		return countof(Self)
 	end 'capacity'
@@ -588,7 +588,7 @@ extension Vector
 	function pairWith(other Self) returns Int
 		return other.capacity()
 	end 'pairWith'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var a = Vec3.create()
@@ -605,9 +605,9 @@ A closure carries the fixed-element count of the function it is written in, so `
 closure inside a sized container's method reads that method's count.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	function capacity() returns Int
 		return countof(Self)
 	end 'capacity'
@@ -616,7 +616,7 @@ extension Vector
 		let f = function() gives countof(Self)
 		return f()
 	end 'viaClosure'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -632,19 +632,19 @@ end 'main'
 binding to hold it, so neither of the fixpoint's precise self-call columns can see the
 `.capacity()` that chains onto it — one keys on `self`, the other on a local bound to a
 `Self{…}`. A missing edge in that fixpoint is not a wrong answer but a COMPILER ABORT:
-`caller 'Vector.chained' has no fixed-element-count parameter to forward to 'Vector.capacity'`.
+`caller 'FixedArray.chained' has no fixed-element-count parameter to forward to 'FixedArray.capacity'`.
 
 ⛔ **THE RECORDED SHAPE IS `) . <member> (`, NOT EVERY `.<member>(`, and that difference is not
-stylistic.** A receiver-blind arm would read `VectorIter.create(managed)` inside `createIterator` as a
-call to `Vector.create`, whose `Self{}` seeds a DESCRIPTOR need, and every `for … in` over a vector would
+stylistic.** A receiver-blind arm would read `FixedArrayIter.create(managed)` inside `createIterator` as a
+call to `FixedArray.create`, whose `Self{}` seeds a DESCRIPTOR need, and every `for … in` over a fixed array would
 grow a `lea` of its `__layout_*` blob. A
 receiver spelled as a NAME is already covered by a precise column; the only receiver they cannot
 see is a call's RESULT, and a call's result is what the `)` identifies.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	function dup() returns Self
 		return Self{}
 	end 'dup'
@@ -656,7 +656,7 @@ extension Vector
 	function chained() returns Int
 		return self.dup().capacity()
 	end 'chained'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -682,9 +682,9 @@ served; one it cannot is refused with a line. That difference is the whole desig
 caller because the callee genuinely needs the count, not because a spelling was whitelisted.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	function capacity() returns Int
 		return countof(Self)
 	end 'capacity'
@@ -697,7 +697,7 @@ extension Vector
 		var other = self.dup()
 		return other.capacity()
 	end 'twice'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -715,9 +715,9 @@ re-binds the value under a name nothing recorded, and the edge stops there. It i
 position, naming the reach that works.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	function capacity() returns Int
 		return countof(Self)
 	end 'capacity'
@@ -726,7 +726,7 @@ extension Vector
 		var same = other
 		return same.capacity()
 	end 'pairWith'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var a = Vec3.create()
@@ -743,9 +743,9 @@ A call inside a closure to a method that reads `countof(Self)` forwards the coun
 from the method it is written in.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	function capacity() returns Int
 		return countof(Self)
 	end 'capacity'
@@ -754,7 +754,7 @@ extension Vector
 		let f = function(v Self) gives v.capacity()
 		return f(other)
 	end 'viaClosure'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var a = Vec3.create()
@@ -770,7 +770,7 @@ end 'main'
 `countof` answers a `Count`, the alias of a number of elements, so adding it to a value of another alias is the mismatch two aliases always are.
 ```maxon
 typealias Small = int(0 to 100)
-typealias Vec3 = Vector with 3 Small
+typealias Vec3 = FixedArray with 3 Small
 
 function main() returns ExitCode
 	let base = 5 as Small
@@ -785,13 +785,13 @@ error E3005: <fragment>:8:15: operator '+' requires both operands to be the same
 <!-- test: countof-is-a-count-that-indexes -->
 `countof` is a `Count`, which is an `ElementIndex`, so the last slot of a fixed-size container is addressed with no cast.
 ```maxon
-typealias Vec3 = Vector with 3 Count
+typealias Vec3 = FixedArray with 3 Count
 
 function main() returns ExitCode
 	var v = Vec3.create()
-	try v.set(2, value: 42) otherwise ignore
+	v.set(2, value: 42)
 	let last = countof(Vec3) - 1
-	return (try v.get(last) otherwise 0) as ExitCode
+	return v.get(last) as ExitCode
 end 'main'
 ```
 ```exitcode

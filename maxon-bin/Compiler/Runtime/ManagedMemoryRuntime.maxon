@@ -7,7 +7,7 @@
 // nothing array specific in the compiler or runtime. Array is a stdlib component that wraps
 // `__ManagedMemory`"*, and when asked whether the floor should be renamed with it: *"Yes — rename to the
 // buffer it is"*). `Array` is one CONSUMER of this record — `stdlib/Array.maxon` is the type — and so are
-// `String`, `Vector` and `__ManagedMemory` itself; the record, its layout, its growth policy and its
+// `String`, `FixedArray` and `__ManagedMemory` itself; the record, its layout, its growth policy and its
 // copy-on-write are none of theirs.
 //
 // ⚠ **THE ENTRY POINTS ARE `__managed_*`, AND THEY ARE DELIBERATELY *NOT* `__mm_*`.** `__mm_` is the
@@ -390,10 +390,14 @@ export let ManagedGetName = b"__managed_get"
 // omission with nothing between them: relax that refusal and this read is a null deref, in a function
 // whose own text would still look correct. If managed `resize` ever grows, THIS FUNCTION NEEDS THE
 // NULL-SLOT ARM BACK — and `requireArrayResizeHasZeroElement` carries the pointer back here.
+// A `FixedArray` `get` at a proven index reads through here too, and its slots are never empty because
+// `Parser.requireFixedArrayElementType` refuses a managed element: relax that refusal and the same
+// null deref follows.
 // It shares `emitSlotAddr` + `emitLoadElem` with `buildManagedGet`, so the slot arithmetic and the
 // little-endian element load are still written down once.
 export let ManagedGetUncheckedName = b"__managed_get_unchecked"
 export let ManagedSetName = b"__managed_set"
+export let ManagedSetUncheckedName = b"__managed_set_unchecked"
 
 // ⭐⭐ **EMPTY A SLOT WITHOUT DESTROYING WHAT WAS IN IT — the write half of a MOVE OUT of a container**.
 // `__managed_vacate(arr, index, read)` stores a zero over slot `index`: no bounds throw, no COW
@@ -932,10 +936,9 @@ end 'isManagedMemoryRuntimeCallee'
 // ⚠ Seven METHODS, NINE CALLEES — `slice` has three entries (plain, managed-element, opaque-element), picked
 // by the element's ownership rather than by anything the author writes. The split is nothing the author
 // spells, and all three carry the SAME `throws` clause.
-// ⚠ **THERE IS NO BOUNDS-PROVEN SECOND ENTRY FOR `get`/`set`** — a `__managed_get_in_bounds` /
-// `__managed_set_in_bounds` pair picked by whether the CALL SITE proved its index in range cannot work:
-// the proof is a fact about the call site, and a vector's `get`/`set` are one shared corpus body reached
-// by a CALL.
+// ⚠ A `FixedArray` `get`/`set` whose index the parser proved inside the size is not on this list: the
+// proof is a fact about the call site, so lowering replaces that call to the shared corpus body with
+// `__managed_get_unchecked` / `__managed_set_unchecked` (`Project.provenFixedArrayAccesses`).
 export function isThrowingManagedMemoryRuntimeCallee(callee ByteArray) returns bool
 	// The `__ManagedMemory` members throw `__ManagedMemoryError` rather than `ArrayError` — a
 	// different enum, but the same "throwing vs not" answer this predicate exists to give
@@ -1218,6 +1221,7 @@ export function installManagedMemoryRuntime(module StdModule, globalData GlobalD
 	buildManagedGetUnchecked(module)
 
 	buildManagedSet(module)
+	buildManagedSetUnchecked(module)
 	buildManagedVacate(module)
 	buildManagedCount(module)
 	buildManagedCapacity(module)
@@ -2864,8 +2868,8 @@ export enum ManagedHeaderEffect
 	// `buildManagedByteAt`. None stores to the record, and `emitLoadElemAndOkReturn` writes nothing.
 	writesNothing
 
-	// An in-place element writer: `buildManagedSet`, `buildManagedMemSet`, `buildManagedSetByte`,
-	// `buildManagedFill` and `buildManagedMemSwap`. Each writes `buffer@0`, `capacity@16`, `parent@32`
+	// An in-place element writer: `buildManagedSet`, `buildManagedSetUnchecked`, `buildManagedMemSet`,
+	// `buildManagedSetByte`, `buildManagedFill` and `buildManagedMemSwap`. Each writes `buffer@0`, `capacity@16`, `parent@32`
 	// and the buffer's refcount word ONLY through `__managed_cow_detach` (`emitCowDetach`, or the
 	// detach block of `emitBufferAccessGuard`), which returns without a store exactly when
 	// `capacity@16 >= 0`, `buffer@0 != 0` and the buffer's refcount word is 0 — the three arms of
@@ -2915,7 +2919,7 @@ function managedCalleeRole(callee ByteArray) returns ManagedCalleeRole
 		return ManagedCalleeRole.boundedWriter
 	end 'theCheckedSet'
 
-	if callee.equals(ManagedMemSetName) or callee.equals(ManagedSetByteName) or callee.equals(ManagedFillName) or callee.equals(ManagedMemSwapName) 'inPlaceWriter'
+	if callee.equals(ManagedSetUncheckedName) or callee.equals(ManagedMemSetName) or callee.equals(ManagedSetByteName) or callee.equals(ManagedFillName) or callee.equals(ManagedMemSwapName) 'inPlaceWriter'
 		return ManagedCalleeRole.inPlaceWriter
 	end 'inPlaceWriter'
 
@@ -3695,10 +3699,11 @@ function emitGetLoadAndReturn(module StdModule, func IrFunction, cur IrBlock, ar
 	emitLoadElemAndOkReturn(module, func: func, cur: cur, record: arr, buffer: buffer, index: index, es: es, greenThreads: greenThreads, ids: ids)
 end 'emitGetLoadAndReturn'
 
-// `__managed_get_unchecked(arr, index) -> value` — the for-in element read. See `ManagedGetUncheckedName` for
-// why the bounds check and the empty-slot check are absent rather than missing: the loop header holds
-// both. Its ONE caller is `Parser.parseForStatement`, which supplies a counter it minted itself and
-// compared against a live `__managed_count` in the same iteration.
+// `__managed_get_unchecked(arr, index) -> value` — the for-in element read, and a `FixedArray` `get` at
+// a proven index. See `ManagedGetUncheckedName` for why the bounds check and the empty-slot check are
+// absent rather than missing. Its two callers each hold the bound: `Parser.parseForStatement` supplies a
+// counter it minted itself and compared against a live `__managed_count` in the same iteration, and
+// `LowerMaxonToStd.lowerSlottedOrProvenCall` an index the parser proved inside the fixed size.
 function buildManagedGetUnchecked(module StdModule)
 	var func = IrFunction.createFromStd(ManagedGetUncheckedName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
@@ -3796,10 +3801,33 @@ function buildManagedSet(module StdModule)
 	module.functions.push(func)
 end 'buildManagedSet'
 
+// `__managed_set_unchecked(arr, index, value)` — a `FixedArray` `set` at an index the parser proved inside
+// the fixed size, so it has no bound and cannot throw. It still detaches first: a fixed array's buffer may
+// be shared with a copy or be an immortal `.rdata` image of a constant, and a store into either without a
+// detach writes through to the other owner or faults.
+function buildManagedSetUnchecked(module StdModule)
+	var func = IrFunction.createFromStd(ManagedSetUncheckedName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 3)
+	let arr = 0
+	let index = 1
+	let value = 2
+
+	emitCowDetach(module, block: entry, arr: arr, ids: ids)
+	var afterStore = emitElementStore(module, func: func, store: entry, arr: arr, index: index, value: value, ids: ids)
+	module.setTerminator(afterStore, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildManagedSetUnchecked'
+
 // ⭐⭐ **THE WRITE ITSELF, SHARED BY THE TWO ELEMENT SETTERS.** `__managed_set` and `__managed_mem_set` differ in
 // exactly two things — the LIMIT their index is checked against and WHEN the buffer is made this record's —
 // and in nothing else, so the store is written once here. The caller has already bounds-checked `index` and
-// detached; this destroys the occupant, stores, and ok-returns.
+// detached; this destroys the occupant, stores, and ok-returns. `__managed_set_unchecked` shares the
+// destroy-and-store half (`emitElementStore`).
 //
 // ⭐ **DESTROY THE OCCUPANT A SET OVERWRITES.** A managed array's `set` moves a new owner into
 // the slot, so whatever the slot held must be destroyed first or it leaks (the parser consumes the new value
@@ -3819,15 +3847,19 @@ end 'buildManagedSet'
 // costs nothing extra, and is pinned by `managed-memory-methods.staging-a-managed-element-twice-releases-
 // the-first` (a leak there is exit 101).
 function emitElementStoreAndOkReturn(module StdModule, func IrFunction, store IrBlock, arr ValueId, index ValueId, value ValueId, ids ValueMinter)
+	var afterStore = emitElementStore(module, func: func, store: store, arr: arr, index: index, value: value, ids: ids)
+	let okVal = emitConst(module, block: afterStore, value: 0, ids: ids)
+	emitOkReturn(module, block: afterStore, value: okVal, ids: ids)
+end 'emitElementStoreAndOkReturn'
+
+function emitElementStore(module StdModule, func IrFunction, store IrBlock, arr ValueId, index ValueId, value ValueId, ids ValueMinter) returns IrBlock
 	let buffer = emitLoadField(module, block: store, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let es = emitLoadField(module, block: store, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
 	let one = emitConst(module, block: store, value: 1, ids: ids)
 	let indexPlusOne = emitBin(module, block: store, a: index, b: one, opcode: StdBinOpcode.add, ids: ids)
 	var doStore = emitDestroyRangeIfManaged(module, func: func, cur: store, record: arr, buffer: buffer, start: index, stop: indexPlusOne, elementSize: es, ids: ids)
-	var afterStore = emitStoreElemAt(module, func: func, cur: doStore, buffer: buffer, index: index, value: value, es: es, ids: ids)
-	let okVal = emitConst(module, block: afterStore, value: 0, ids: ids)
-	emitOkReturn(module, block: afterStore, value: okVal, ids: ids)
-end 'emitElementStoreAndOkReturn'
+	return emitStoreElemAt(module, func: func, cur: doStore, buffer: buffer, index: index, value: value, es: es, ids: ids)
+end 'emitElementStore'
 
 // ⭐⭐ **DESTROY AN ELEMENT THE SETTER REFUSED TO STORE — THE THROW PATH'S HALF OF THE MOVE-IN CONTRACT.**
 // `Parser.parseArraySet` MOVES the value into the call (`moveElementIntoContainer`), so

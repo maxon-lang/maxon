@@ -431,6 +431,8 @@ export type StdToArm64Lowering
 	// narrowing is the ENCODING's; `StdLoweringShared.indexedFormCarries` states it once.
 	var scaledIndexFolds as ScaledIndexFolds
 
+	var displacedAddressFolds as DisplacedAddressFolds
+
 	// The scratch `MemoryIndexScaleMatch` `arm64MulImmForm` writes its `addShifted` answer through — a
 	// field rather than a local for `ScaledIndexFolds.operands`' measured reason: a fresh heap object per
 	// constant multiply of every function the backend lowers.
@@ -447,7 +449,7 @@ export type StdToArm64Lowering
 	let usesGt as bool
 
 	export static function create(target Target, abi CalleeAbiTable, usesGt bool) returns StdToArm64Lowering
-		return Self{stdModule: StdModule.create(), target: target, rdata: RdataRequestLog.create(), targetModule: TargetModule.create(), scaledIndexFolds: ScaledIndexFolds.create(), mulScale: MemoryIndexScaleMatch.create(), compareFusion: CompareFusionCensus.create(), abi: abi, usesGt: usesGt, fresh: ValueMinter.create(0)}
+		return Self{stdModule: StdModule.create(), target: target, rdata: RdataRequestLog.create(), targetModule: TargetModule.create(), scaledIndexFolds: ScaledIndexFolds.create(), displacedAddressFolds: DisplacedAddressFolds.create(), mulScale: MemoryIndexScaleMatch.create(), compareFusion: CompareFusionCensus.create(), abi: abi, usesGt: usesGt, fresh: ValueMinter.create(0)}
 	end 'create'
 
 	// One unit through the whole conversion — x64's twin, and for its stated reasons: the Std column is
@@ -512,10 +514,12 @@ export type StdToArm64Lowering
 		self.applyOutgoingArgSize(funcIdx, bytes: outgoingArgBytes)
 	end 'lowerFunction'
 
-	// The per-function analyses, all READS, decided before the walk. Both must precede the walk
+	// The per-function analyses, decided before the walk. They must precede the walk
 	// because a compare is lowered long before the branch or the phi edge that decides what it has to
-	// produce.
+	// produce. The displaced-address fold rewrites the function's ops, so it runs first: every later
+	// table must see one consistent (address, offset) per access.
 	function prepareFunctionTables(funcIdx ElementIndex)
+		self.displacedAddressFolds.foldInFunction(self.stdModule, func: self.stdModule.getFunc(funcIdx), reach: DisplacementReach.scaledImm12)
 		view srcFunc = self.stdModule.getFunc(funcIdx)
 		self.scaledIndexFolds.computeForFunction(self.stdModule, func: srcFunc, memoryForm: IndexedMemoryForm.accessWidthScaleAtZeroOffset)
 		self.compareFusion.computeForFunction(self.stdModule, func: srcFunc)

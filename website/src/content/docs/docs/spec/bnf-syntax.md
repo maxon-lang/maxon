@@ -456,7 +456,7 @@ type_arg      = [ 'readonly' ] generic_base 'with' [ INTEGER ] type_args    (* n
 
                 (* 'readonly' only on an Array or List element and a Map value: `Map with Key, readonly Value` (E2075) *)
 
-                (* the optional INTEGER is a fixed element count: `Vector with 3 Coord` *)
+                (* the optional INTEGER is a fixed element count: `FixedArray with 3 Coord` *)
 
 tuple_type    = '(' type_ref ',' type_ref { ',' type_ref } ')'
 ```
@@ -911,7 +911,7 @@ sizeof_expr   = 'sizeof' '(' type_ref ')'                     (* compile-time si
 
 countof_expr  = 'countof' '(' type_ref ')'                    (* element count of a fixed-size container type *)
 
-from_expr     = IDENTIFIER 'from' '[' [ expression { ',' expression } ] ']'   (* Set / List / Vector / Array alias *)
+from_expr     = IDENTIFIER 'from' '[' [ expression { ',' expression } ] ']'   (* Set / List / FixedArray / Array alias *)
               | IDENTIFIER 'from' STRING                    (* a type implementing InitableFromStringLiteral *)
               | IDENTIFIER 'from' CHARACTER                 (* a type implementing InitableFromCharLiteral *)
 

@@ -31,7 +31,7 @@ Three mechanisms carry this:
 |--------|-----------------|
 | Use after free, double free | Reference counting; a read that could outlive its owner takes its own reference, including across the rest of its statement |
 | Iterator invalidation | A `for` loop or cursor holds a counted reference to its source |
-| Out-of-range collection index | `get`/`set` throw `ArrayError.indexOutOfBounds`; there is no unchecked access |
+| Out-of-range collection index | `get`/`set` throw `ArrayError.indexOutOfBounds`, or the compiler proves a `FixedArray` index inside the size |
 | Raw memory | Reachable only from the library tier (**E3185**) |
 | Forged values | No integer-to-enum or integer-to-union cast, and no interface-to-interface cast (**E3009**) |
 | Null | There is no null: every variable, field and element holds a value |

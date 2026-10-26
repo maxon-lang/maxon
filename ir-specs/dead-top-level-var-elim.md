@@ -372,8 +372,7 @@ func @main {
     x64.jmp trycont
   __im_load:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.leaRegRegImm32 rax, rax, 8
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
   trycont:
     x64.leaRegGlobal rcx, __data_probe
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
@@ -435,8 +434,7 @@ func @main {
     x64.jmp trycont
   __im_load:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.leaRegRegImm32 rax, rax, 8
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
   trycont:
     x64.leaRegGlobal rcx, __data_probe
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
@@ -493,8 +491,7 @@ func @main {
     arm64.b trycont
   __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.add x0, x0, 8
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
   trycont:
     arm64.leaGlobal x1, __data_probe
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
@@ -549,8 +546,7 @@ func @main {
     arm64.b trycont
   __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.add x0, x0, 8
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
   trycont:
     arm64.leaGlobal x1, __data_probe
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]

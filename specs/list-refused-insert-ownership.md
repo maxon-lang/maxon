@@ -10,7 +10,7 @@ category: memory
 ## Documentation
 
 `List.insert(at, value:)` is a **throwing** mutator whose value argument is **moved in at the parse**.
-`Parser.parseArraySet` — the shape parser `Vector.set`, the `__ManagedMemory` buffer's `set` and this
+`Parser.parseArraySet` — the shape parser `FixedArray.set`, the `__ManagedMemory` buffer's `set` and this
 member all share — calls `moveElementIntoContainer` *before* the call is emitted, so from that instant the
 callee owns the element and the caller's scope-exit drop is suppressed.
 

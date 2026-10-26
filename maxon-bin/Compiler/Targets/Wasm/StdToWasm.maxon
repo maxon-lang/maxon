@@ -292,8 +292,13 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 	// the module's, so the order the func indices are DERIVED from and the order they are EMITTED in are the
 	// same array rather than two that must be kept in step.
 	var inlinePositions = NameRoster.create()
+	var displacedAddressFolds = DisplacedAddressFolds.create()
 
 	for (iter, func) in funcNames.functions.withIterator() 'eachFunc'
+		// Before `WasmFuncEmitter.create`, which builds its valtype table from the ops. A memarg offset
+		// is added to the u32 base without wrap, so the fold is exact on the premise
+		// `emitLoadIndirect` states: real addresses are < 4 GiB.
+		displacedAddressFolds.foldInFunction(module, func: func, reach: DisplacementReach.anyImm32)
 		let funcIdx = (WasmImportCount + iter.index()) as Wasm32Index
 		let firstPosition = (wasmFirstInlinePosition(funcNames) + inlinePositions.count()) as Wasm32Index
 		var emitter = WasmFuncEmitter.create(module, func: func, funcIdx: funcIdx, frames: frames, firstPosition: firstPosition, globalData: globalData, dataBase: WasmDataBaseOffset, rdataBase: rdataBase, funcNames: funcNames, calleeParamTypes: calleeParamTypes, indirectCallTypeIdx: indirectCallTypeIdx)

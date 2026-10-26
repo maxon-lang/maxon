@@ -55,7 +55,7 @@ alias denotes; asked of the name, it would silently answer *no* for the aliased 
 and the loop's own drop refused at a line the user never wrote.
 
 **The corpus writes it the second way.** `stdlib/List.maxon`, `stdlib/Set.maxon`, `stdlib/Array.maxon` and
-`stdlib/Vector.maxon` all declare a `<Type>Iter` alias; `stdlib/Map.maxon` is the only conformer in the library
+`stdlib/FixedArray.maxon` all declare a `<Type>Iter` alias; `stdlib/Map.maxon` is the only conformer in the library
 that spells its cursor bare.
 
 ## Tests

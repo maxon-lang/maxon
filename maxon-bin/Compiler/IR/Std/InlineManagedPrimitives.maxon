@@ -178,6 +178,13 @@ type InlineCarve
 	end 'create'
 end 'InlineCarve'
 
+union StoreBound
+	limitedBy(limitOffset ByteOffset)
+
+	// Drops the index guard only; the ownership guards stay, for the reason `buildManagedSetUnchecked` gives.
+	proven
+end 'StoreBound'
+
 // The two blocks every GUARDED carved site has, held together because every expander wires both.
 type InlineFrame
 	export var carve as InlineCarve
@@ -513,7 +520,7 @@ type PrimitiveInliner
 		return blockRef
 	end 'expandAt'
 
-	// The two NON-throwing primitives. A `call` to anything else, `__managed_*` entries this pass does not
+	// The NON-throwing primitives. A `call` to anything else, `__managed_*` entries this pass does not
 	// expand included, leaves the scan where it was. What each expansion IS, and why, is at the expander
 	// it names.
 	//
@@ -545,6 +552,10 @@ type PrimitiveInliner
 			return self.expandUncheckedGet(blockRef, pos: pos, callee: callee, args: args, resultId: resultId)
 		end 'uncheckedGet'
 
+		if callee.equals(ManagedSetUncheckedName) 'uncheckedSet'
+			return self.expandElementStore(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: ManagedCallFlag.none, bound: StoreBound.proven)
+		end 'uncheckedSet'
+
 		return blockRef
 	end 'expandPlainCall'
 
@@ -561,11 +572,11 @@ type PrimitiveInliner
 		end 'checkedGet'
 
 		if callee.equals(ManagedSetName) 'set'
-			return self.expandElementStore(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, limitOffset: ManagedRecordLengthOffset)
+			return self.expandElementStore(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: ManagedCallFlag.flag(errorFlagId), bound: StoreBound.limitedBy(ManagedRecordLengthOffset))
 		end 'set'
 
 		if callee.equals(ManagedMemSetName) 'memSet'
-			return self.expandElementStore(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, limitOffset: ManagedRecordCapacityOffset)
+			return self.expandElementStore(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: ManagedCallFlag.flag(errorFlagId), bound: StoreBound.limitedBy(ManagedRecordCapacityOffset))
 		end 'memSet'
 
 		return blockRef
@@ -771,7 +782,7 @@ type PrimitiveInliner
 		attachEdge(self.blockAt(bounded.blockRef), targetId: loaded.id, argIds: argsOf(bounded.value))
 	end 'emitBoundedLoadArm'
 
-	// `__managed_set` / `__managed_mem_set`. ⭐⭐ **THE COW ARMS ARE `__managed_cow_detach`'s OWN THREE
+	// `__managed_set` / `__managed_mem_set` / `__managed_set_unchecked`. ⭐⭐ **THE COW ARMS ARE `__managed_cow_detach`'s OWN THREE
 	// ARMS, ASKED IN ITS OWN ORDER, AND ANSWERED BY REFUSING RATHER THAN BY DETACHING.** A detach that has
 	// nothing to do is the case a write in a loop takes every iteration; a detach that has something to do
 	// allocates and copies, and that belongs in the runtime. So this arm proves the three conditions under
@@ -789,7 +800,7 @@ type PrimitiveInliner
 	// (`emitDestroyRejectedElement`). Both are the runtime's, both are gated on this field, and a fast arm
 	// that stored over an occupant would be a leak — measured at exit 101 when that call was missing from
 	// `__managed_set` itself.
-	function expandElementStore(blockRef ElementIndex, pos ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId, limitOffset ByteOffset) returns ElementIndex
+	function expandElementStore(blockRef ElementIndex, pos ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ManagedCallFlag, bound StoreBound) returns ElementIndex
 		let arr = argAt(args, index: 0, callee: callee)
 		let index = argAt(args, index: 1, callee: callee)
 		let value = argAt(args, index: 2, callee: callee)
@@ -803,10 +814,15 @@ type PrimitiveInliner
 		let trivialElement = self.trivialElements.contains(site)
 
 		// A managed element's every `set` takes the slow arm (`emitStoreArm`), which is then the common path.
-		view frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, slowHeat: self.slowArmHeat(plan, fastArmServesEveryElement: trivialElement))
+		let slowHeat = self.slowArmHeat(plan, fastArmServesEveryElement: trivialElement)
+
+		view frame = match errorFlagId 'shape'
+			none gives self.openPlain(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, slowHeat: slowHeat)
+			flag(flagId) gives self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: flagId, slowHeat: slowHeat)
+		end 'shape'
 
 		for arm in self.openStrideArms(blockRef, arr: arr, slow: frame.slow.id, plan: plan) 'eachArm'
-			self.emitStoreArm(self.blockAt(arm.blockRef), arr: arr, index: index, value: value, limitOffset: limitOffset, stride: arm.stride, frame: frame, trivialElement: trivialElement)
+			self.emitStoreArm(self.blockAt(arm.blockRef), arr: arr, index: index, value: value, bound: bound, stride: arm.stride, frame: frame, trivialElement: trivialElement)
 		end 'eachArm'
 
 		return self.finish(frame.carve)
@@ -824,8 +840,8 @@ type PrimitiveInliner
 	// ⭐ **THE DESTRUCTOR GUARD IS ASKED AT RUN TIME ONLY WHERE THE LOWERING COULD NOT ANSWER IT.** A site
 	// whose element the lowering recorded as owing no drop emits four guards — ownership, the bound, the
 	// buffer, the sharing test; every other site emits the `element_destroy@40` test ahead of them, and
-	// the guards it keeps are the same four in the same order either way.
-	function emitStoreArm(cur IrBlock, arr ValueId, index ValueId, value ValueId, limitOffset ByteOffset, stride SingleOpStride, frame InlineFrame, trivialElement bool)
+	// the guards it keeps are the same four in the same order either way. A `proven` store omits the bound.
+	function emitStoreArm(cur IrBlock, arr ValueId, index ValueId, value ValueId, bound StoreBound, stride SingleOpStride, frame InlineFrame, trivialElement bool)
 		var at = cur
 
 		if not trivialElement 'ownershipNotKnownStatically'
@@ -843,7 +859,10 @@ type PrimitiveInliner
 		let notOwned = emitBufferNotOwned(self.module, block: at, record: arr, ids: self.valueIds())
 		at = self.guard(at, refused: notOwned, slow: frame.slow, next: InlineBoundsLabel)
 
-		at = self.guardIndexInRange(at, arr: arr, index: index, limitOffset: limitOffset, slow: frame.slow, next: InlineBufferLabel)
+		match bound 'bound'
+			limitedBy(limitOffset) then at = self.guardIndexInRange(at, arr: arr, index: index, limitOffset: limitOffset, slow: frame.slow, next: InlineBufferLabel)
+			proven then break
+		end 'bound'
 
 		let buffer = emitLoadField(self.module, block: at, record: arr, offset: ManagedRecordBufferOffset, ids: self.valueIds())
 		let unallocated = emitCompareWithConstant(self.module, block: at, value: buffer, pred: StdCmpPred.eq, against: NoBufferAllocated, ids: self.valueIds())
@@ -860,7 +879,13 @@ type PrimitiveInliner
 		// are both `NoErrorFlag` — one `const`, exactly as `emitVoidOkReturn` spells it in the runtime.
 		let noError = emitConst(self.module, block: at, value: NoErrorFlag, ids: self.valueIds())
 		self.module.setTerminator(at, op: StdOp.branch(frame.carve.cont.id))
-		attachEdge(at, targetId: frame.carve.cont.id, argIds: twoArgs(noError, second: noError))
+
+		let carried = match bound 'exit'
+			limitedBy gives twoArgs(noError, second: noError)
+			proven gives argsOf(noError)
+		end 'exit'
+
+		attachEdge(at, targetId: frame.carve.cont.id, argIds: carried)
 	end 'emitStoreArm'
 
 	// --- the shared pieces every carved expansion is built from ---
@@ -1068,7 +1093,7 @@ type PrimitiveInliner
 		//
 		// ⚠ **NOT OBSERVED, AND THAT IS RECORDED RATHER THAN ASSUMED.** A temporary probe comparing the
 		// pre- and post-carve floors ran over the compiler SELF-COMPILE and 1,423 spec cases (`array`,
-		// `managed-memory`, `list`, `for-`, `vector`, `slice`) and fired ZERO times, and no hand-built
+		// `managed-memory`, `list`, `for-`, `fixed-array`, `slice`) and fired ZERO times, and no hand-built
 		// program reached it either — every `tryCall`'s reconciliation mints ids after the call. So this is
 		// a coupling made explicit, not a defect repaired: the hazard is that NOTHING states the seeding
 		// depends on the call still being live, and the carve two lines down is what ends that.

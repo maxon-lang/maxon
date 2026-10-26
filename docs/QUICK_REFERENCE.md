@@ -116,7 +116,7 @@ Bool `and`/`or` short-circuit: `false and _` skips the right side; `true or _` s
 `==` on struct types requires the type to implement `Equatable` (error E3005 if not).
 `==`/`!=` on Equatable types — including generic collections like `Array`/`ByteArray` — compare by content (dispatch to `equals()`); two distinct arrays with equal elements are `==`.
 `is`, `is not` compare reference identity (same heap object) for struct types.
-`/` and `mod` are fallible: a divisor not provably non-zero throws `DivisionByZero` — handle with `try (a / b) otherwise ...`, or give the divisor a ranged type that excludes 0. A constant-0 divisor is a compile error (E3103). Float `/` throws too (`1.0 / 0.0` is not `inf`); there is no float `mod`.
+`/` and `mod` are fallible: a divisor not provably non-zero throws `DivisionByZero` — handle with `try (a / b) otherwise ...`, or give the divisor a ranged type that excludes 0; a divisor whose known range excludes 0 (`i` in `for i in 1 upto 10`) is a bare divide too, and a `try` on it is E3055. A constant-0 divisor is a compile error (E3103). Float `/` throws too, `1.0 / 0.0` included; `mod` takes integers only.
 `shl`, `shr` work on integers only. `shr` fills by the **left** operand's signedness — arithmetic (sign-fill) on a signed operand, logical (zero-fill) on an unsigned one (`int(0 to u64.max)`): `(0-8) shr 1` is `-4`, `u64.max shr 60` is `15`. The count is not masked and has no upper limit — `a shl 64` shifts every bit out and is `0`, legal, not an error. A **negative** count is the error (E2054 when folded, a panic at run time); the compiler saturates any count it cannot fold so the hardware's masking never shows.
 
 ## Conditional Expression
@@ -1090,7 +1090,7 @@ max(a, b)      // maximum of two values
 
 // Compile-time
 sizeof(TypeName)   // size of a type in bytes (compile-time constant)
-countof(TypeName)  // elements a fixed-size container type holds (Vector with N T)
+countof(TypeName)  // elements a fixed-size container type holds (FixedArray with N T)
 __line__           // caller's line   -- ONLY as a parameter default (E2060 elsewhere)
 __file__           // caller's file   -- ONLY as a parameter default (E2060 elsewhere)
 ```

@@ -90,7 +90,7 @@ typealias Tally = int(0 to u64.max)
   `i64.max`, or arithmetic over unsigned operands — passes its door unchecked (see
   [Range Checks](/docs/language/ranged-typealiases/#range-checks)). A value that is a pattern rather than a count is a
   [`bits(64)`](#bit-patterns--bitsn).
-- An array, set, list, vector or map-column literal whose bare elements need both a negative value and a value
+- An array, set, list, fixed-array or map-column literal whose bare elements need both a negative value and a value
   above `i64.max` (`[-1, u64.max]`) has no integer type that holds them all, and is **E3005** at the element
   that makes it so (`no common integer type for -1 and 18446744073709551615`); cast the elements to an
   alias. A `let` whose value merges a range-known value above `i64.max` with a non-negative one (`try

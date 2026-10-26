@@ -1529,6 +1529,8 @@ type MaxonToStdLowering
 	// (`project.immortalConstArraySites`). Read by `lowerConstArrayLiteral` and by nothing else.
 	var immortalConstArraySites as ImmortalConstArraySiteMap
 
+	var provenFixedArrayAccesses as ProvenFixedArrayAccessMap
+
 	// ⭐⭐ **WHERE THIS TIER WRITES DOWN WHAT IT KNOWS ABOUT AN ELEMENT STRIDE** — the container stamp
 	// of every runtime call whose first argument is a CONCRETE `Array with T`, keyed by the Std op index the
 	// call is about to occupy (`project.stdOpElementStrides`). Written by `recordStaticElementFacts` and read
@@ -1677,7 +1679,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		var signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), conventions: project.functionValueConventions, signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutCarrierClosures: LayoutNeedingFuncSet.create(), layoutParametersReserved: false, layoutCarriersSettled: false, layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotsByDeclIndex.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedFunctionRecords: FunctionRecordLabelSet.create(), functionValueTargets: FunctionValueTargets.none, emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessCounts: WitnessCountMap.create(), bitwiseKinds: ArrayBitwiseKindMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: ValueExistentialInstanceMap.create(), currentCallInstances: ValueCallInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFunction: LoweredFunction.none, currentSourceFilePath: CompilerOwnedDeclFilePath, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, descriptorTables: DescriptorTableMap.create(), hiddenSlotUses: HiddenSlotUseMap.create(), instanceParameterUses: InstanceParameterUses.create(), implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, libraryFacts: project.libraryFacts, rangeChecks: project.rangeChecks, rangeSiteFacts: project.rangeSiteFacts, rangeSites: RangeSiteWalk.create(), nextValueId: 0, holdAliases: ValueIdArray.create()}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), conventions: project.functionValueConventions, signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutCarrierClosures: LayoutNeedingFuncSet.create(), layoutParametersReserved: false, layoutCarriersSettled: false, layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotsByDeclIndex.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedFunctionRecords: FunctionRecordLabelSet.create(), functionValueTargets: FunctionValueTargets.none, emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessCounts: WitnessCountMap.create(), bitwiseKinds: ArrayBitwiseKindMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, provenFixedArrayAccesses: project.provenFixedArrayAccesses, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: ValueExistentialInstanceMap.create(), currentCallInstances: ValueCallInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFunction: LoweredFunction.none, currentSourceFilePath: CompilerOwnedDeclFilePath, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, descriptorTables: DescriptorTableMap.create(), hiddenSlotUses: HiddenSlotUseMap.create(), instanceParameterUses: InstanceParameterUses.create(), implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, libraryFacts: project.libraryFacts, rangeChecks: project.rangeChecks, rangeSiteFacts: project.rangeSiteFacts, rangeSites: RangeSiteWalk.create(), nextValueId: 0, holdAliases: ValueIdArray.create()}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -3609,7 +3611,7 @@ type MaxonToStdLowering
 	function appendInstanceAdapterDictionary(args ValueIdArray, request WitnessAdapterRequest, impl IrFunction, entry IrBlock, gid GenericInstanceId, sig FuncSignature)
 		if self.fixedElementCountParamCountFor(request.implName) != 0 'aFixedElementCount'
 			// A per-instance table is only minted for a CONCRETE instance, and a concrete instance states its
-			// own count — `Vector with 4 Element` says 4 — so unlike the value door there is no caller slot to
+			// own count — `FixedArray with 4 Element` says 4 — so unlike the value door there is no caller slot to
 			// fall back on and a silent instance is an internal break.
 			let count = try self.signatures.genericInstanceFixedCount(gid) otherwise panic("appendInstanceAdapterDictionary: '{String.from(request.implName)}' reads a fixed element count and the per-instance table for '{String.from(self.signatures.mangleGenericInstance(gid))}' states none — a table is keyed by an instance only when `instanceIsFullyConcrete` accepted it, and a concrete instance states its own count")
 			let countId = args.count() as ValueId
@@ -3673,7 +3675,7 @@ type MaxonToStdLowering
 	// descriptor, the fixed-element count and the witnesses.
 	//
 	// ⭐ **IT IS WIDTH-AGNOSTIC, WHICH IS WHY A NEW HIDDEN SLOT NEEDS NOTHING HERE.** An
-	// `extension Vector implements Sizer` whose `capacity()` reads `countof(Self)` is refused with
+	// `extension FixedArray implements Sizer` whose `capacity()` reads `countof(Self)` is refused with
 	// this diagnostic, and so is one that merely CALLS a sibling that does (the forward is a USE of
 	// the slot like any other). So a `countof`-reading body cannot be reached through a witness table
 	// at all, which is the right answer: one table serves every instantiation and there is no
@@ -4889,8 +4891,8 @@ type MaxonToStdLowering
 	// ⛔⛔ **AND IT IS CORRECT WHERE THE DESCRIPTOR IS NOT.** `emitInstanceDescriptorAddr` may FORWARD the
 	// caller's own blocks when the callee's instance is written over the caller's parameters, which is sound
 	// for every word the blob carries because every one of them is a fact about the type ARGUMENT. A COUNT is
-	// a fact about the INSTANCE: `Vector with 4 Element` states 4 whatever `Element` turns out to be, and the
-	// caller's own blob states `NoFixedSize`. **MEASURED without this parameter: a `Vector with 4 Element`
+	// a fact about the INSTANCE: `FixedArray with 4 Element` states 4 whatever `Element` turns out to be, and the
+	// caller's own blob states `NoFixedSize`. **MEASURED without this parameter: a `FixedArray with 4 Element`
 	// field reached from inside `type Holder uses Element` answers 0.** Read here off the instance the call
 	// site actually holds, the same shape answers 4 — and it does so without asking that call site for a
 	// descriptor at all, which matters because a frame holding such a field is not guaranteed to have one.
@@ -4918,8 +4920,8 @@ type MaxonToStdLowering
 	// and the caller's own slot forwarded when it does not.
 	//
 	// ⭐ **THE FORWARD ARM IS NOT AN OPTIMIZATION HERE, IT IS THE ONLY ANSWER.** `Self` inside
-	// `type Vector uses Element` is `ownRecordSelfInstance`, interned at `NoFixedSize` so that ONE shared body
-	// serves every size — so a `Vector` method calling a sibling on `self` holds an instance that states no
+	// `type FixedArray uses Element` is `ownRecordSelfInstance`, interned at `NoFixedSize` so that ONE shared body
+	// serves every size — so a `FixedArray` method calling a sibling on `self` holds an instance that states no
 	// count, and the answer it must pass on is the one its own caller handed it.
 	function emitFixedElementCountOf(instanceValue ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
 		let tag = self.valueTagOf(instanceValue)
@@ -5009,7 +5011,7 @@ type MaxonToStdLowering
 		// single `(box) -> newBox` cloner can name), a second `funcAbs64InRdata` relocation fills `copyFunc@32`
 		// with the element CLONER's `.text` VA, the value the shared opaque-copy wrappers read back and
 		// `callIndirect` per element. A TRIVIAL element records nothing (its wrapper takes the byte-blit/COW
-		// path), and a MANAGED element nothing can clone at all (an OS handle, a `Vector`, an existential)
+		// path), and a MANAGED element nothing can clone at all (an OS handle, a `FixedArray`, an existential)
 		// records nothing either — it is never copied (the front end rejects a base that copies with such an
 		// instantiation), so its 0 slot is never read.
 		for position in 0 upto paramCount 'eachTypeParam'
@@ -5099,10 +5101,25 @@ type MaxonToStdLowering
 		view sig = try self.funcSignatures.get(callee) otherwise panic("lowerCall: callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
 
 		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels) 'slot'
-			ordered(argIds) then self.lowerSlottedCall(result, callee: callee, sig: sig, argIds: argIds, dstBlock: dstBlock)
+			ordered(argIds) then self.lowerSlottedOrProvenCall(result, callee: callee, sig: sig, argIds: argIds, dstBlock: dstBlock)
 			refused then panic("lowerCall: '{String.from(callee)}' reached lowering with arguments SemanticCheck must have refused")
 		end 'slot'
 	end 'lowerCall'
+
+	function lowerSlottedOrProvenCall(result ValueId, callee ByteArray, sig FuncSignature, argIds ValueIdArray, dstBlock IrBlock)
+		let proven = try self.provenFixedArrayAccesses.get(self.currentMaxonOpIndex) otherwise 'anOrdinaryCall'
+			self.lowerSlottedCall(result, callee: callee, sig: sig, argIds: argIds, dstBlock: dstBlock)
+			return
+		end 'anOrdinaryCall'
+
+		let primitive = match proven.accessor 'accessor'
+			get gives ManagedGetUncheckedName
+			set gives ManagedSetUncheckedName
+		end 'accessor'
+
+		let wordArgs = self.crossFloatDomainArgs(argIds, paramTypes: sig.paramTypes, byReference: ByReferenceParamSource.directCallee(callee), dstBlock: dstBlock)
+		self.appendRuntimeCall(result, callee: primitive, args: wordArgs, dstBlock: dstBlock)
+	end 'lowerSlottedOrProvenCall'
 
 	function lowerSlottedCall(result ValueId, callee ByteArray, sig FuncSignature, argIds ValueIdArray, dstBlock IrBlock)
 		if let runtime = try self.bitwiseArrayRuntimeFor(callee, argIds: argIds) 'bytesAreTheContent'
@@ -5518,11 +5535,13 @@ type MaxonToStdLowering
 	// expands (`__managed_count`, `__managed_push`) is simply never read; a missing one costs a specialization,
 	// never an answer.
 	//
-	// ⚠ **`isArrayInstanceAt` IS THE GATE, TAG AND ALL, AND IT IS NOT SPELLED OUT HERE.** It is the ONE home of
-	// the two-part test — a bare `TypeNameId` shares the numeric space with a `GenericInstanceId`, so an
-	// instance-registry walk keyed on an unchecked id answers TRUE about an instance the caller never had. It
-	// also settles the `__ManagedMemory` half for free: `Array with T` and `__ManagedMemory with T` are ONE
-	// `GenericInstanceId` (`isArrayBaseName`), so `arr.memory.set(…)` records the same facts `arr.get(…)` does.
+	// ⚠ **`isManagedBufferRecordInstanceAt` IS THE GATE, TAG AND ALL, AND IT IS NOT SPELLED OUT HERE.** It is
+	// the ONE home of the two-part test — a bare `TypeNameId` shares the numeric space with a
+	// `GenericInstanceId`, so an instance-registry walk keyed on an unchecked id answers TRUE about an
+	// instance the caller never had. It also settles the `__ManagedMemory` half for free: `Array with T` and
+	// `__ManagedMemory with T` are ONE `GenericInstanceId` (`isArrayBaseName`), so `arr.memory.set(…)`
+	// records the same facts `arr.get(…)` does. A `FixedArray` is admitted because a proven `get`/`set`
+	// hands this tier the fixed array itself.
 	//
 	// ⚠⚠ **AN OPAQUE ELEMENT IS REFUSED, AND THAT IS CORRECTNESS RATHER THAN CONSERVATISM.** A shared
 	// generic body over `Array with T` is compiled ONCE for every instantiation, so it has no single stride —
@@ -5555,7 +5574,7 @@ type MaxonToStdLowering
 			return
 		end 'noNameId'
 
-		if not self.signatures.isArrayInstanceAt(tag, nameId: instance) 'notAnArrayRecord'
+		if not self.signatures.isManagedBufferRecordInstanceAt(tag, nameId: instance) 'notAnArrayRecord'
 			return
 		end 'notAnArrayRecord'
 
@@ -5675,7 +5694,7 @@ type MaxonToStdLowering
 
 	// Emit an opaque-`T` container create: load the element destructor from the enclosing instance's layout
 	// descriptor `destroyFunc@40` slot, then call the runtime entry with it as the LAST argument —
-	// `__managed_create(element_size, element_destroy)` for an array or vector, `__list_create(element_drop)`
+	// `__managed_create(element_size, element_destroy)` for an array or fixed array, `__list_create(element_drop)`
 	// for a chain, which states its whole argument list in that one word.
 	function appendOpaqueContainerCreate(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
 		self.requireImplicitLayout("appendOpaqueContainerCreate of '{String.from(callee)}'")

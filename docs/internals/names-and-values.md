@@ -68,11 +68,11 @@ that starts with it is refused with E2051.
 | `.` | a type and an interface, in a witness-table label | `__witness_<Type>.<Iface>` |
 | `#` | an overload's base name and its signature parts; a default's helper and its function and position | `lookup#Registry#bool`, `__paramDefault#f#0` |
 | `$` | a lifted closure and its enclosing function, nesting | `<enclosing>$closure_<k>` |
-| `_` | a generic and its type arguments | `Vector_Int` |
+| `_` | a generic and its type arguments | `Box_Int` |
 
 Two joins use `_`, which an identifier can hold, and each is injective for its own reason:
 
 - a primitive's static method, `__<primitive>_<method>`, draws its left side from the closed set of
   primitive names, none of which contains `_`, and must match the spelling `stdlib/Builtins.maxon` declares;
-- a generic instance name, such as `Vector_Int`, is moved behind the reserved `__` prefix whenever a
+- a generic instance name, such as `Box_Int`, is moved behind the reserved `__` prefix whenever a
   declaration already claims the bare name, so it can never collide with one.

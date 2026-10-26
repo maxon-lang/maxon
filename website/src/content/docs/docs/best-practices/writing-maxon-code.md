@@ -790,7 +790,9 @@ panic("invariant violated: {details}")
 A container type needs a typealias before use (`Array with Integer{}` at a use site is **E2004**). Every
 method that can fail THROWS — `get`, `set`, `pop`, `remove` on an Array, `Map.insert`, `List.insert`,
 `List.first` — so it needs `try` (E3057). `push`, `Array.insert`, `upsert`, `clear`, `reserve`, `resize`,
-`prepend` and `append` do not.
+`prepend` and `append` do not, and neither does a `FixedArray` `get`/`set` whose index is proven inside the
+size — a `try` there is E3055 (see
+[Fixed Arrays and Proven Indices](/docs/language/expressions/#fixed-arrays-and-proven-indices)).
 
 ### Arrays
 

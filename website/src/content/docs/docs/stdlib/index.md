@@ -36,7 +36,7 @@ end 'main'
 |------|----------|
 | [Core](#overview) | [Core Functions](#core-functions) |
 | [Text](/docs/stdlib/text/#string) | String, Character, Ascii, Unicode, CharacterSet |
-| [Collections](/docs/stdlib/collections/#array) | Array, List, Map, Set, Vector, Range, Iterators, Interfaces |
+| [Collections](/docs/stdlib/collections/#array) | Array, List, Map, Set, FixedArray, Range, Iterators, Interfaces |
 | [I/O and processes](/docs/stdlib/io/#file) | File, FilePath, Directory, Console, CommandLine, Log, TraceCapture, Process, Subprocess, SharedMemory, Debuggee, Sampler |
 | [Network](/docs/stdlib/network/#tcpclient) | TcpClient, TcpListener, HttpClient, HttpServer, URL |
 | [Data](/docs/stdlib/data/#json) | Json, Base64, Pem, Der, Sha2, Hmac, Hkdf, Rsa, Aead, AesGcm, ChaCha20Poly1305, Aes, ChaCha20, Poly1305, X25519, Ed25519, EcdhP256, Ecdsa, EcdsaP256, EcdsaP384, Hasher |
@@ -135,13 +135,13 @@ any other alias, or of a non-integer type, is **E3005** (see
 [Subtypes With `implements`](/docs/language/ranged-typealiases/#subtypes-with-implements)). An `ElementIndex` goes where
 a `Count` is declared only by cast.
 
-`Array`, `List` and `Vector` `count()`, `JsonDoc.arrayLength`, `Character.byteLength()` and the `count()` of a
+`Array`, `List` and `FixedArray` `count()`, `JsonDoc.arrayLength`, `Character.byteLength()` and the `count()` of a
 string's codepoint and UTF-16 views return `Count`. `String.count()` returns a `GraphemeIndex` and a byte
 view's `count()` a `BytePos`.
 
 The inner typealiases a library type's `public` members name are `public` as well and can be written
 qualified: `Array.ElementIterator`, `Array.ElementMemory`, `Map.Entry`, `List.ListIter`, `Set.SetIter`,
-`Vector.VectorIter` and the like. The others are `Array.ElementIterable`, `Array.ArrayIter`, `Array.ElementArray`,
+`FixedArray.FixedArrayIter` and the like. The others are `Array.ElementIterable`, `Array.ArrayIter`, `Array.ElementArray`,
 `HttpHeaders.CaseInsensitiveHeaders`, `Iterable.WithIterSelf`, `List.EManagedList`,
 `Map.IterKeyArray`, `Map.IterValueArray`, `Map.IterStateArray`, `Set.IterElementArray` and `String.ByteMemory`.
 
@@ -271,7 +271,7 @@ Trigonometry, logarithms and powers are in [Math](/docs/stdlib/runtime/#math).
 | Builtin | Description |
 |---------|-------------|
 | `sizeof(TypeName)` | Storage size of a type in bytes, as a constant `Count`: `int` and `float` are 8, `bool` and `byte` are 1. |
-| `countof(TypeName)` | How many elements a fixed-size container type holds, as a `Count`, such as `Vector with 3 Coord`. A type with no fixed element count is refused; ask an `Array` value for `count()`. |
+| `countof(TypeName)` | How many elements a fixed-size container type holds, as a `Count`, such as `FixedArray with 3 Coord`. A type with no fixed element count is refused; ask an `Array` value for `count()`. |
 | `__file__`, `__line__` | Legal only as a parameter's default value; each expands at the **call site**. |
 
 `__line__` parameters are declared `SourceLineNumber` and `__file__` parameters `String`. The file is the

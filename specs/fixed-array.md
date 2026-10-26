@@ -1,93 +1,112 @@
 ---
-feature: vector
+feature: fixed-array
 status: experimental
-keywords: [vector, fixed size, stack, collection, generic]
+keywords: [fixed array, fixed size, stack, collection, generic]
 category: stdlib
 ---
 
-# Vector
+# FixedArray
 
 ## Documentation
 
 ### Overview
 
-`Vector` is a generic fixed-size collection. A `Vector with N bool` is bit-packed
+`FixedArray` is a generic fixed-size collection. A `FixedArray with N bool` is bit-packed
 (8 elements per byte, `element_size = -1`) exactly like `Array with bool` — a
-`Vector with 16 bool` allocates a 2-byte buffer, not 16 — and the packing is
+`FixedArray with 16 bool` allocates a 2-byte buffer, not 16 — and the packing is
 transparent to the `get`/`set`/iterate API. See [bool-bit-packing](bool-bit-packing.md).
 
-### Creating Vectors
+### Creating Fixed Arrays
 
-Create a concrete vector type using `typealias` with element type and size:
+Create a concrete fixed array type using `typealias` with element type and size:
 
 ```text
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 var v = Vec3.create()  // zero-initialized, 3 elements on the stack
 ```
 
-The size is part of the type. A `Vector with 3 Int` is a different type from `Vector with 4 Int`.
+The size is part of the type. A `FixedArray with 3 Int` is a different type from `FixedArray with 4 Int`.
 
 ### Creating from Array Literals
 
-Vectors implement `BuiltinArrayLiteral`, so you can initialize them from an array literal using `from`. The element type and size are inferred from the literal:
+Fixed arrays implement `BuiltinArrayLiteral`, so you can initialize them from an array literal using `from`. The element type and size are inferred from the literal:
 
 ```text
-var v = Vector from [10, 20, 30]  // inferred as Vector with 3 Int
+var v = FixedArray from [10, 20, 30]  // inferred as FixedArray with 3 Int
 ```
 
-The inferred type is compatible with a typealias of the same element type and size, so a `Vector from [...]` can be passed to a function expecting the typealias:
+The inferred type is compatible with a typealias of the same element type and size, so a `FixedArray from [...]` can be passed to a function expecting the typealias:
 
 ```text
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
 function process(v Vec3) returns Int
-  return try v.get(0) otherwise 0
+  return v.get(0)
 end 'process'
 
-var v = Vector from [10, 20, 30]
+var v = FixedArray from [10, 20, 30]
 process(v)  // works — inferred type matches Vec3
 ```
 
 ### Element Access
 
-Access elements with `.get()`:
+Access elements with `.get()` and modify them with `.set()`. An index the compiler can prove inside
+the fixed array makes the access total: it cannot fail, so it is written bare, and a `try` on it is
+refused (E3055).
 
 ```text
-var value = try v.get(0) otherwise 0
+var value = v.get(0)
+v.set(0, value: 42)
 ```
 
-Modify elements with `.set()`:
+An index is proven when it is a known constant inside `0 to N-1` (a literal, a `let` bound to one, or
+a folded expression such as `countof(Vec3) - 1`), or when its declared ranged type lies inside
+`0 to N-1`:
 
 ```text
-v.set(0, value: 42)
+typealias Slot = int(0 to 2) implements ElementIndex
+
+function middle(v Vec3, at Slot) returns Int
+  return v.get(at)
+end 'middle'
+```
+
+A constant index at or past the size is refused at compile time (E3005). Any other index — an
+`ElementIndex` or `Count` parameter, a loop variable, a call result, an index inside a generic body over
+`Self` — may be out of range at run time, so the access throws `ArrayError.indexOutOfBounds` and needs
+`try` (E3057 without it):
+
+```text
+var value = try v.get(i) otherwise 0
+try v.set(i, value: 42) otherwise ignore
 ```
 
 ### Size and Count
 
-The `.count()` method always returns the fixed size of the vector:
+The `.count()` method always returns the fixed size of the fixed array:
 
 ```text
 typealias Int = int(i64.min to i64.max)
-typealias Vec4 = Vector with 4 Int
+typealias Vec4 = FixedArray with 4 Int
 var v = Vec4.create()
 var n = v.count()  // always 4
 ```
 
 ### Stack vs Heap
 
-Vectors are designed for small, fixed-size data. The compiler places the storage on the stack when the total byte size (element size x count) is 8192 bytes or less. Larger vectors are automatically heap-allocated.
+Fixed arrays are designed for small, fixed-size data. The compiler places the storage on the stack when the total byte size (element size x count) is 8192 bytes or less. Larger fixed arrays are automatically heap-allocated.
 
 ```text
 typealias Int = int(i64.min to i64.max)
-typealias SmallVec = Vector with 100 Int    // 800 bytes → stack
-typealias LargeVec = Vector with 2000 Int   // 16000 bytes → heap
+typealias SmallVec = FixedArray with 100 Int    // 800 bytes → stack
+typealias LargeVec = FixedArray with 2000 Int   // 16000 bytes → heap
 ```
 
 ### Use Cases
 
-Vectors are ideal for:
+Fixed arrays are ideal for:
 - Small fixed-size collections (coordinates, colors, matrices)
 - Performance-sensitive code where heap allocation is undesirable
 - Types with a known compile-time size
@@ -95,18 +114,18 @@ Vectors are ideal for:
 ```text
 typealias Float = float(f64.min to f64.max)
 typealias Byte = int(0 to u8.max)
-typealias Point3D = Vector with 3 Float
-typealias Color = Vector with 4 Byte      // RGBA
-typealias Mat2x2 = Vector with 4 Float    // 2x2 matrix stored flat
+typealias Point3D = FixedArray with 3 Float
+typealias Color = FixedArray with 4 Byte      // RGBA
+typealias Mat2x2 = FixedArray with 4 Float    // 2x2 matrix stored flat
 ```
 
 ### Iteration
 
-Vectors support `for-in` loops:
+Fixed arrays support `for-in` loops:
 
 ```text
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 var v = Vec3.create()
 v.set(0, value: 10)
 v.set(1, value: 20)
@@ -122,11 +141,11 @@ end 'loop'
 <!-- test: create-zero-initialized -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
 function main() returns ExitCode
 	let v = Vec3.create()
-	return try v.get(0) otherwise -1
+	return v.get(0)
 end 'main'
 ```
 ```exitcode
@@ -135,7 +154,7 @@ end 'main'
 <!-- test: count -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec4 = Vector with 4 Int
+typealias Vec4 = FixedArray with 4 Int
 
 function main() returns ExitCode
 	var v = Vec4.create()
@@ -149,12 +168,12 @@ end 'main'
 <!-- test: set-and-get -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
 function main() returns ExitCode
 	var v = Vec3.create()
-	try v.set(0, value: 42) otherwise panic("test invariant: set OOB")
-	return try v.get(0) otherwise 0
+	v.set(0, value: 42)
+	return v.get(0)
 end 'main'
 ```
 ```exitcode
@@ -163,16 +182,16 @@ end 'main'
 <!-- test: set-all-elements -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
 function main() returns ExitCode
 	var v = Vec3.create()
-	try v.set(0, value: 10) otherwise panic("test invariant: set OOB")
-	try v.set(1, value: 20) otherwise panic("test invariant: set OOB")
-	try v.set(2, value: 30) otherwise panic("test invariant: set OOB")
-	let a = try v.get(0) otherwise 0
-	let b = try v.get(1) otherwise 0
-	let c = try v.get(2) otherwise 0
+	v.set(0, value: 10)
+	v.set(1, value: 20)
+	v.set(2, value: 30)
+	let a = v.get(0)
+	let b = v.get(1)
+	let c = v.get(2)
 	return a + b + c
 end 'main'
 ```
@@ -181,15 +200,19 @@ end 'main'
 ```
 
 <!-- test: get-out-of-bounds -->
-Accessing an index beyond the fixed size throws ArrayError.
+Reading at an index beyond the fixed size that is only known at run time throws ArrayError.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec2 = Vector with 2 Int
+typealias Vec2 = FixedArray with 2 Int
+
+function runtimeIndex(i ElementIndex) returns ElementIndex
+	return i
+end 'runtimeIndex'
 
 function main() returns ExitCode
 	var v = Vec2.create()
-	try v.set(0, value: 10) otherwise panic("test invariant: set OOB")
-	let result = try v.get(5) otherwise -1
+	v.set(0, value: 10)
+	let result = try v.get(runtimeIndex(5)) otherwise -1
 	print("{result}\n")
 	return 0
 end 'main'
@@ -198,44 +221,81 @@ end 'main'
 -1
 ```
 
-<!-- test: set-out-of-bounds-throws -->
-Setting an out-of-bounds index throws ArrayError.indexOutOfBounds.
+<!-- test: error.get-at-a-constant-index-past-the-size-is-refused -->
+A constant index beyond the fixed size is refused at compile time.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec2 = Vector with 2 Int
+typealias Vec2 = FixedArray with 2 Int
 
 function main() returns ExitCode
 	var v = Vec2.create()
-	try v.set(0, value: 10) otherwise panic("test invariant: set OOB")
-	try v.set(5, value: 99) otherwise 'oob'
+	let result = try v.get(5) otherwise -1
+	print("{result}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:7:21: Value 5 is outside the range of the indices of 'FixedArray with 2' (int(0 to 1))
+```
+
+<!-- test: set-out-of-bounds-throws -->
+Writing at an index beyond the fixed size that is only known at run time throws ArrayError.indexOutOfBounds.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec2 = FixedArray with 2 Int
+
+function runtimeIndex(i ElementIndex) returns ElementIndex
+	return i
+end 'runtimeIndex'
+
+function main() returns ExitCode
+	var v = Vec2.create()
+	v.set(0, value: 10)
+	try v.set(runtimeIndex(5), value: 99) otherwise 'oob'
 		return 7
 	end 'oob'
-	return try v.get(0) otherwise 0
+	return v.get(0)
 end 'main'
 ```
 ```exitcode
 7
 ```
 
+<!-- test: error.set-at-a-constant-index-past-the-size-is-refused -->
+A constant index beyond the fixed size is refused at compile time for a write too.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec2 = FixedArray with 2 Int
+
+function main() returns ExitCode
+	var v = Vec2.create()
+	try v.set(5, value: 99) otherwise ignore
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:7:8: Value 5 is outside the range of the indices of 'FixedArray with 2' (int(0 to 1))
+```
+
 <!-- test: single-element -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec1 = Vector with 1 Int
+typealias Vec1 = FixedArray with 1 Int
 
 function main() returns ExitCode
 	var v = Vec1.create()
-	try v.set(0, value: 77) otherwise panic("test invariant: set OOB")
-	return try v.get(0) otherwise 0
+	v.set(0, value: 77)
+	return v.get(0)
 end 'main'
 ```
 ```exitcode
 77
 ```
 
-<!-- test: larger-vector -->
+<!-- test: larger-fixed-array -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec10 = Vector with 10 Int
+typealias Vec10 = FixedArray with 10 Int
 
 function main() returns ExitCode
 	var v = Vec10.create()
@@ -244,8 +304,8 @@ function main() returns ExitCode
 		try v.set(i as ElementIndex, value: i * 10) otherwise panic("test invariant: set OOB")
 		i = i + 1
 	end 'fill'
-	let first = try v.get(0) otherwise -1
-	let last = try v.get(9) otherwise -1
+	let first = v.get(0)
+	let last = v.get(9)
 	return first + last
 end 'main'
 ```
@@ -256,7 +316,7 @@ end 'main'
 <!-- test: count-single -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec1 = Vector with 1 Int
+typealias Vec1 = FixedArray with 1 Int
 
 function main() returns ExitCode
 	var v = Vec1.create()
@@ -270,30 +330,30 @@ end 'main'
 <!-- test: overwrite-element -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
 function main() returns ExitCode
 	var v = Vec3.create()
-	try v.set(1, value: 10) otherwise panic("test invariant: set OOB")
-	try v.set(1, value: 42) otherwise panic("test invariant: set OOB")
-	return try v.get(1) otherwise 0
+	v.set(1, value: 10)
+	v.set(1, value: 42)
+	return v.get(1)
 end 'main'
 ```
 ```exitcode
 42
 ```
 
-<!-- test: float-vector -->
+<!-- test: float-fixed-array -->
 ```maxon
 typealias Float = float(f64.min to f64.max)
-typealias Vec2F = Vector with 2 Float
+typealias Vec2F = FixedArray with 2 Float
 
 function main() returns ExitCode
 	var v = Vec2F.create()
-	try v.set(0, value: 2.5) otherwise panic("test invariant: set OOB")
-	try v.set(1, value: 3.5) otherwise panic("test invariant: set OOB")
-	let a = try v.get(0) otherwise 0.0
-	let b = try v.get(1) otherwise 0.0
+	v.set(0, value: 2.5)
+	v.set(1, value: 3.5)
+	let a = v.get(0)
+	let b = v.get(1)
 	return trunc(a + b)
 end 'main'
 ```
@@ -301,20 +361,20 @@ end 'main'
 6
 ```
 
-<!-- test: byte-vector -->
+<!-- test: byte-fixed-array -->
 ```maxon
 
 typealias Byte = int(0 to u8.max)
-typealias ByteVec4 = Vector with 4 Byte
+typealias ByteVec4 = FixedArray with 4 Byte
 
 function main() returns ExitCode
 	var v = ByteVec4.create()
-	try v.set(0, value: 10) otherwise panic("test invariant: set OOB")
-	try v.set(1, value: 20) otherwise panic("test invariant: set OOB")
-	try v.set(2, value: 30) otherwise panic("test invariant: set OOB")
-	try v.set(3, value: 40) otherwise panic("test invariant: set OOB")
-	let a = try v.get(0) otherwise 0
-	let b = try v.get(3) otherwise 0
+	v.set(0, value: 10)
+	v.set(1, value: 20)
+	v.set(2, value: 30)
+	v.set(3, value: 40)
+	let a = v.get(0)
+	let b = v.get(3)
 	return a + b
 end 'main'
 ```
@@ -327,20 +387,20 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-typealias Vec3 = Vector with 3 Integer
+typealias Vec3 = FixedArray with 3 Integer
 
 function sum(v Vec3) returns Integer
-	let a = try v.get(0) otherwise 0
-	let b = try v.get(1) otherwise 0
-	let c = try v.get(2) otherwise 0
+	let a = v.get(0)
+	let b = v.get(1)
+	let c = v.get(2)
 	return a + b + c
 end 'sum'
 
 function main() returns ExitCode
 	var v = Vec3.create()
-	try v.set(0, value: 10) otherwise panic("test invariant: set OOB")
-	try v.set(1, value: 20) otherwise panic("test invariant: set OOB")
-	try v.set(2, value: 12) otherwise panic("test invariant: set OOB")
+	v.set(0, value: 10)
+	v.set(1, value: 20)
+	v.set(2, value: 12)
 	return sum(v)
 end 'main'
 ```
@@ -353,19 +413,19 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-typealias Vec2 = Vector with 2 Integer
+typealias Vec2 = FixedArray with 2 Integer
 
 function makeVec(a Integer, b Integer) returns Vec2
 	var v = Vec2.create()
-	try v.set(0, value: a) otherwise panic("test invariant: set OOB")
-	try v.set(1, value: b) otherwise panic("test invariant: set OOB")
+	v.set(0, value: a)
+	v.set(1, value: b)
 	return v
 end 'makeVec'
 
 function main() returns ExitCode
 	let v = makeVec(30, b: 12)
-	let a = try v.get(0) otherwise 0
-	let b = try v.get(1) otherwise 0
+	let a = v.get(0)
+	let b = v.get(1)
 	return a + b
 end 'main'
 ```
@@ -376,14 +436,14 @@ end 'main'
 <!-- test: iterate -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec4 = Vector with 4 Int
+typealias Vec4 = FixedArray with 4 Int
 
 function main() returns ExitCode
 	var v = Vec4.create()
-	try v.set(0, value: 1) otherwise panic("test invariant: set OOB")
-	try v.set(1, value: 2) otherwise panic("test invariant: set OOB")
-	try v.set(2, value: 3) otherwise panic("test invariant: set OOB")
-	try v.set(3, value: 4) otherwise panic("test invariant: set OOB")
+	v.set(0, value: 1)
+	v.set(1, value: 2)
+	v.set(2, value: 3)
+	v.set(3, value: 4)
 	var sum = 0 as Int
 	for elem in v 'loop'
 		sum = sum + elem
@@ -395,24 +455,24 @@ end 'main'
 10
 ```
 
-<!-- test: let-vector-read -->
+<!-- test: let-fixed-array-read -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
 function makeVec() returns Vec3
 	var v = Vec3.create()
-	try v.set(0, value: 10) otherwise panic("test invariant: set OOB")
-	try v.set(1, value: 20) otherwise panic("test invariant: set OOB")
-	try v.set(2, value: 12) otherwise panic("test invariant: set OOB")
+	v.set(0, value: 10)
+	v.set(1, value: 20)
+	v.set(2, value: 12)
 	return v
 end 'makeVec'
 
 function main() returns ExitCode
 	let v = makeVec()
-	let a = try v.get(0) otherwise 0
-	let b = try v.get(1) otherwise 0
-	let c = try v.get(2) otherwise 0
+	let a = v.get(0)
+	let b = v.get(1)
+	let c = v.get(2)
 	return a + b + c
 end 'main'
 ```
@@ -423,8 +483,8 @@ end 'main'
 <!-- test: from-array-literal -->
 ```maxon
 function main() returns ExitCode
-	let v = Vector from [10, 20, 30]
-	return try v.get(0) otherwise 0
+	let v = FixedArray from [10, 20, 30]
+	return v.get(0)
 end 'main'
 ```
 ```exitcode
@@ -434,10 +494,10 @@ end 'main'
 <!-- test: from-array-literal-sum -->
 ```maxon
 function main() returns ExitCode
-	let v = Vector from [10, 20, 30]
-	let a = try v.get(0) otherwise 0
-	let b = try v.get(1) otherwise 0
-	let c = try v.get(2) otherwise 0
+	let v = FixedArray from [10, 20, 30]
+	let a = v.get(0)
+	let b = v.get(1)
+	let c = v.get(2)
 	return a + b + c
 end 'main'
 ```
@@ -448,9 +508,9 @@ end 'main'
 <!-- test: from-array-literal-float -->
 ```maxon
 function main() returns ExitCode
-	let v = Vector from [1.5, 2.5]
-	let a = try v.get(0) otherwise 0.0
-	let b = try v.get(1) otherwise 0.0
+	let v = FixedArray from [1.5, 2.5]
+	let a = v.get(0)
+	let b = v.get(1)
 	return trunc(a + b)
 end 'main'
 ```
@@ -461,7 +521,7 @@ end 'main'
 <!-- test: from-array-literal-iterate -->
 ```maxon
 function main() returns ExitCode
-	let v = Vector from [1, 2, 3, 4]
+	let v = FixedArray from [1, 2, 3, 4]
 	var sum = 0 as FullRangeInt
 	for elem in v 'loop'
 		sum = sum + elem
@@ -476,8 +536,8 @@ end 'main'
 <!-- test: from-array-literal-single -->
 ```maxon
 function main() returns ExitCode
-	let v = Vector from [99]
-	return try v.get(0) otherwise 0
+	let v = FixedArray from [99]
+	return v.get(0)
 end 'main'
 ```
 ```exitcode
@@ -490,20 +550,20 @@ The inferred type from a literal is compatible with a typealias of the same elem
 
 typealias Integer = int(i64.min to i64.max)
 
-typealias Vec3 = Vector with 3 Integer
+typealias Vec3 = FixedArray with 3 Integer
 
 function sum(v Vec3) returns Integer
-	let a = try v.get(0) otherwise 0
-	let b = try v.get(1) otherwise 0
-	let c = try v.get(2) otherwise 0
+	let a = v.get(0)
+	let b = v.get(1)
+	let c = v.get(2)
 	return a + b + c
 end 'sum'
 
 function main() returns ExitCode
 	var v = Vec3.create()
-	try v.set(0, value: 10) otherwise panic("test invariant: set OOB")
-	try v.set(1, value: 20) otherwise panic("test invariant: set OOB")
-	try v.set(2, value: 12) otherwise panic("test invariant: set OOB")
+	v.set(0, value: 10)
+	v.set(1, value: 20)
+	v.set(2, value: 12)
 	return sum(v)
 end 'main'
 ```
@@ -514,15 +574,15 @@ end 'main'
 <!-- test: accumulate-sum -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec5 = Vector with 5 Int
+typealias Vec5 = FixedArray with 5 Int
 
 function main() returns ExitCode
 	var v = Vec5.create()
-	try v.set(0, value: 1) otherwise panic("test invariant: set OOB")
-	try v.set(1, value: 2) otherwise panic("test invariant: set OOB")
-	try v.set(2, value: 3) otherwise panic("test invariant: set OOB")
-	try v.set(3, value: 4) otherwise panic("test invariant: set OOB")
-	try v.set(4, value: 5) otherwise panic("test invariant: set OOB")
+	v.set(0, value: 1)
+	v.set(1, value: 2)
+	v.set(2, value: 3)
+	v.set(3, value: 4)
+	v.set(4, value: 5)
 	var sum = 0 as Int
 	var i = 0 as Count
 	while i < v.count() 'loop'
@@ -536,16 +596,16 @@ end 'main'
 15
 ```
 
-<!-- test: bool-vector-cross-byte -->
+<!-- test: bool-fixed-array-cross-byte -->
 ```maxon
-typealias Bits16 = Vector with 16 bool
+typealias Bits16 = FixedArray with 16 bool
 
 function main() returns ExitCode
 	var v = Bits16.create()
-	try v.set(0, value: true) otherwise panic("test invariant: set OOB")
-	try v.set(3, value: true) otherwise panic("test invariant: set OOB")
-	try v.set(8, value: true) otherwise panic("test invariant: set OOB")
-	try v.set(15, value: true) otherwise panic("test invariant: set OOB")
+	v.set(0, value: true)
+	v.set(3, value: true)
+	v.set(8, value: true)
+	v.set(15, value: true)
 	var count = 0 as FullRangeInt
 	var i = 0 as Count
 	while i < v.count() 'scan'
@@ -562,17 +622,17 @@ end 'main'
 4
 ```
 
-<!-- test: bool-vector-overwrite-clear -->
+<!-- test: bool-fixed-array-overwrite-clear -->
 ```maxon
-typealias Bits8 = Vector with 8 bool
+typealias Bits8 = FixedArray with 8 bool
 
 function main() returns ExitCode
 	var v = Bits8.create()
-	try v.set(2, value: true) otherwise panic("test invariant: set OOB")
-	try v.set(5, value: true) otherwise panic("test invariant: set OOB")
-	try v.set(2, value: false) otherwise panic("test invariant: set OOB")
-	let a = try v.get(2) otherwise true
-	let b = try v.get(5) otherwise false
+	v.set(2, value: true)
+	v.set(5, value: true)
+	v.set(2, value: false)
+	let a = v.get(2)
+	let b = v.get(5)
 	var r = 0 as FullRangeInt
 	if not a 'cleared'
 		r = r + 1
@@ -587,10 +647,10 @@ end 'main'
 11
 ```
 
-<!-- test: bool-vector-from-literal -->
+<!-- test: bool-fixed-array-from-literal -->
 ```maxon
 function main() returns ExitCode
-	let v = Vector from [true, false, true, true, false, true, false, false, true]
+	let v = FixedArray from [true, false, true, true, false, true, false, false, true]
 	var count = 0 as FullRangeInt
 	for bit in v 'each'
 		if bit 'isSet'
@@ -606,18 +666,18 @@ end 'main'
 
 ## The Size Is Part of the Type
 
-A `Vector with 3 Int` and a `Vector with 4 Int` are two types, wherever they are reached from: a
+A `FixedArray with 3 Int` and a `FixedArray with 4 Int` are two types, wherever they are reached from: a
 declared alias, a field of a generic type, or a synthesized instance nothing has named.
 
 <!-- test: capacity-is-part-of-instance-identity -->
 The size is part of the type, so a generic type's capacity-4 field must keep that capacity
-rather than adopting a declared `Vector with 3` alias that happens to share its element type.
+rather than adopting a declared `FixedArray with 3` alias that happens to share its element type.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
 type Holder uses Element
-	typealias Slot = Vector with 4 Element
+	typealias Slot = FixedArray with 4 Element
 
 	var slot as Slot
 
@@ -649,7 +709,7 @@ even when nothing in the project declares a name for either.
 typealias Int = int(i64.min to i64.max)
 
 type Holder4 uses Element
-	typealias Slot4 = Vector with 4 Element
+	typealias Slot4 = FixedArray with 4 Element
 
 	var quad as Slot4
 
@@ -663,7 +723,7 @@ type Holder4 uses Element
 end 'Holder4'
 
 type Holder7 uses Element
-	typealias Slot7 = Vector with 7 Element
+	typealias Slot7 = FixedArray with 7 Element
 
 	var septet as Slot7
 
@@ -689,13 +749,13 @@ end 'main'
 47
 ```
 
-<!-- test: error.wrong-size-vector-argument -->
-The size is part of the type, so a differently-sized vector is not a widening — it is a different
+<!-- test: error.wrong-size-fixed-array-argument -->
+The size is part of the type, so a differently-sized fixed array is not a widening — it is a different
 type, and passing one where the other is declared is refused rather than silently accepted.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
-typealias Vec4 = Vector with 4 Int
+typealias Vec3 = FixedArray with 3 Int
+typealias Vec4 = FixedArray with 4 Int
 
 function wants4(v Vec4) returns Int
 	return v.count()
@@ -715,16 +775,16 @@ Two names for one size are one INSTANCE under two brands, and the brand is the t
 not reach a `Vec3` parameter unasked (`nominal-generic-alias.md`).
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
-typealias Triple = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
+typealias Triple = FixedArray with 3 Int
 
 function first(v Vec3) returns Int
-	return try v.get(0) otherwise 0
+	return v.get(0)
 end 'first'
 
 function main() returns ExitCode
 	var t = Triple.create()
-	try t.set(0, value: 21) otherwise panic("test invariant: set OOB")
+	t.set(0, value: 21)
 	let f = first(t)
 	print("{f} {t.count()}")
 	return 0
@@ -739,16 +799,16 @@ The legal twin: `t as Vec3` re-brands the same three slots, and separating the s
 two spellings of one size.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
-typealias Triple = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
+typealias Triple = FixedArray with 3 Int
 
 function first(v Vec3) returns Int
-	return try v.get(0) otherwise 0
+	return v.get(0)
 end 'first'
 
 function main() returns ExitCode
 	var t = Triple.create()
-	try t.set(0, value: 21) otherwise panic("test invariant: set OOB")
+	t.set(0, value: 21)
 	return (first(t as Vec3) + (t.count() as Int)) as ExitCode
 end 'main'
 ```
@@ -759,21 +819,21 @@ end 'main'
 ## Every Member Is The Declaration's, And A Member It Does Not Have Is Refused Off It
 
 ⭐⭐⭐ **THERE IS NO SYNTHESIZED ROSTER.** `create`, `count`, `get` and `set` are
-`stdlib/Vector.maxon`'s, so there is no synthesized surface to render a sentence from, and a member a
-`Vector` does not have is a METHOD MISS off the declaration (`E4006`), exactly as it is for a `List`
+`stdlib/FixedArray.maxon`'s, so there is no synthesized surface to render a sentence from, and a member a
+`FixedArray` does not have is a METHOD MISS off the declaration (`E4006`), exactly as it is for a `List`
 or a `Map`.
 
-⛔⛔ **THE FIVE CASES BELOW PROBE A LANDMINE**: a vector with no dispatch arm of its own could fall
+⛔⛔ **THE FIVE CASES BELOW PROBE A LANDMINE**: a fixed array with no dispatch arm of its own could fall
 through to `dispatchArrayMethod` and be served the GROWABLE surface — *"a fixed-size container grown
 through its own type, a WRONG ANSWER rather than a refusal"*. It is defused, and by construction rather
 than by luck: `dispatchMethodOnReceiver`'s array arm tests `isArrayInstanceAt`, which reads the base NAME,
-and a `Vector`'s base is not an `Array`'s. All five growth spellings are pinned.
+and a `FixedArray`'s base is not an `Array`'s. All five growth spellings are pinned.
 
 <!-- test: error.push-is-refused-off-the-declaration -->
 The spelling `W86` named first, and the one a hijacked receiver would have ANSWERED rather than refused.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -782,7 +842,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4006: <fragment>:7:4: Type 'Vector' has no method named 'push'
+error E4006: <fragment>:7:4: Type 'FixedArray' has no method named 'push'
 ```
 
 <!-- test: error.resize-is-refused-off-the-declaration -->
@@ -790,7 +850,7 @@ The growth spelling that, served, would let `resize(9)` then `count()` answer **
 type grown to nine with no diagnostic.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -799,14 +859,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4006: <fragment>:7:4: Type 'Vector' has no method named 'resize'
+error E4006: <fragment>:7:4: Type 'FixedArray' has no method named 'resize'
 ```
 
 <!-- test: error.clear-is-refused-off-the-declaration -->
 `clear` empties the record. A fixed-size container whose `count()` could reach 0 is not fixed.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -815,7 +875,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4006: <fragment>:7:4: Type 'Vector' has no method named 'clear'
+error E4006: <fragment>:7:4: Type 'FixedArray' has no method named 'clear'
 ```
 
 <!-- test: error.insert-is-refused-off-the-declaration -->
@@ -823,7 +883,7 @@ error E4006: <fragment>:7:4: Type 'Vector' has no method named 'clear'
 is served — no typed-out list of refused members exists to drift.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -832,14 +892,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4006: <fragment>:7:8: Type 'Vector' has no method named 'insert'
+error E4006: <fragment>:7:8: Type 'FixedArray' has no method named 'insert'
 ```
 
 <!-- test: error.remove-is-refused-off-the-declaration -->
 The second of that pair, and the one that SHRINKS.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -847,7 +907,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4006: <fragment>:7:15: Type 'Vector' has no method named 'remove'
+error E4006: <fragment>:7:15: Type 'FixedArray' has no method named 'remove'
 ```
 
 <!-- test: error.a-bare-growth-call-inside-an-extension-body-is-refused -->
@@ -856,18 +916,18 @@ FROM THE FIVE ABOVE.** `implicitSelfTakesTheArrayRoster` gives a BARE call insid
 the ARRAY roster, which is what makes `stdlib/Array.maxon`'s own `contains(sequence)` reach `get`. Its gate
 is `declarationIsTheManagedRecord` — the GROWABLE record's declaration and not
 `declarationsValueIsTheManagedRecord`, which is the `or` that also admits the sized one — so an
-`extension Vector` body does not take that roster and a bare `push` resolves as an ordinary sibling call to
+`extension FixedArray` body does not take that roster and a bare `push` resolves as an ordinary sibling call to
 a method nothing declares.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	function grow() returns Int
 		push(4)
 		return 0
 	end 'grow'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -878,22 +938,22 @@ end 'main'
 error E3004: <fragment>:7:3: call to undefined function 'push'
 ```
 
-<!-- test: error.the-buffer-under-a-vector-is-still-the-buffer -->
+<!-- test: error.the-buffer-under-a-fixed-array-is-still-the-buffer -->
 <!-- tier: stdlib -->
 ⛔ **THE THIRD ENTRANCE.** `bufferSurfaceOfDeclaredRecord` deliberately RETYPES a sized container's
-`managed` read to `Array with Element`, so that `stdlib/Vector.maxon`'s own `VectorIter.create(managed)`
+`managed` read to `Array with Element`, so that `stdlib/FixedArray.maxon`'s own `FixedArrayIter.create(managed)`
 type-checks — one record, two ids. The retype is a TYPE and not a surface: the value is still marked the
 BUFFER's, so what it serves is `bufferSurfaceMemberNames` and the growable array's members are not on it.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	function grow() returns Int
 		managed.push(4)
 		return 0
 	end 'grow'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -912,25 +972,46 @@ control impossible to write: both roads answer 42. What separates them is not th
 thing that produced it. A dispatch arm is reachable through
 one syntax and nothing else; a declared method is a function of the program, and Maxon lets an instance
 method be named statically with its receiver as the first argument (`Adder.bump(a)`, which
-`parseQualifiedCall`'s header settles as legal). **`Vector.get(v, index: 1)` therefore cannot compile while
+`parseQualifiedCall`'s header settles as legal). **`FixedArray.get(v, index: 1)` therefore cannot compile while
 `get` is a dispatch arm — there is no such function to call — and it is a RUNTIME ANSWER rather than a
 message text.**
 
-⚠ It also exercises the corpus body end to end: sabotaging `stdlib/Vector.maxon`'s `get` to `throw
+⚠ It also exercises the corpus body end to end: sabotaging `stdlib/FixedArray.maxon`'s `get` to `throw
 ArrayError.indexOutOfBounds` turns this case red where the intact declaration answers 42, which is the
 control `stdlib-loading.md` runs for a stdlib module.
 
 <!-- test: the-members-are-functions-and-answer-to-their-static-spelling -->
 Both declared accessors, named statically, with the receiver passed as the first argument and the
-declaration's own `index:`/`value:` labels on the rest.
+declaration's own `index:`/`value:` labels on the rest. The index is not proven, so both calls reach the
+declared bodies.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
+
+function runtimeIndex(i ElementIndex) returns ElementIndex
+	return i
+end 'runtimeIndex'
 
 function main() returns ExitCode
 	var v = Vec3.create()
-	try Vector.set(v, index: 1, value: 41) otherwise panic("set")
-	return (try Vector.get(v, index: 1) otherwise 0) + 1
+	try FixedArray.set(v, index: runtimeIndex(1), value: 41) otherwise panic("set")
+	return (try FixedArray.get(v, index: runtimeIndex(1)) otherwise 0) + 1
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: the-static-spelling-at-a-proven-index-needs-no-try -->
+The static spelling is the same call, so a proven index makes it total as well.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = FixedArray with 3 Int
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	FixedArray.set(v, index: 1, value: 41)
+	return FixedArray.get(v, index: 1) + 1
 end 'main'
 ```
 ```exitcode
@@ -939,47 +1020,47 @@ end 'main'
 
 <!-- test: the-count-is-a-function-too -->
 The same for `count`, which had no arguments at all to tell the two roads apart by — so the static spelling
-is the whole of the difference. Under the dispatch arm it folded to a literal at the CALL and `Vector.count`
+is the whole of the difference. Under the dispatch arm it folded to a literal at the CALL and `FixedArray.count`
 named nothing.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec5 = Vector with 5 Int
+typealias Vec5 = FixedArray with 5 Int
 
 function main() returns ExitCode
 	var v = Vec5.create()
-	return Vector.count(v) as ExitCode
+	return FixedArray.count(v) as ExitCode
 end 'main'
 ```
 ```exitcode
 5
 ```
 
-## A `let` Vector Still Refuses The Write, By The Declaration's Own Rule
+## A `let` Fixed Array Still Refuses The Write, By The Declaration's Own Rule
 
-⚖ **A `let` VECTOR IS REFUSED THE WRITE BY THE ORDINARY PARAMETER-MUTATION RULE, NOT BY A ROSTER.**
-`stdlib/Vector.maxon`'s `set` writes through its receiver (`managed.set`), so the refusal (E3159) comes from the
+⚖ **A `let` FIXED ARRAY IS REFUSED THE WRITE BY THE ORDINARY PARAMETER-MUTATION RULE, NOT BY A ROSTER.**
+`stdlib/FixedArray.maxon`'s `set` writes through its receiver (`managed.set`), so the refusal (E3159) comes from the
 declaration, as it does for `Set`'s and `Map`'s own mutators.
 
 ⚠ **THE SENTENCE NAMES THE PARAMETER**, and that is the whole of what this case pins: it names the
 PARAMETER the callee declares, not a surface. A case that asserted only "refused" would not see the
 difference.
 
-<!-- test: error.a-write-through-a-let-vector-is-refused-off-the-declaration -->
+<!-- test: error.a-write-through-a-let-fixed-array-is-refused-off-the-declaration -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
 function main() returns ExitCode
 	let v = Vec3.create()
-	try v.set(0, value: 7) otherwise panic("set")
-	return try v.get(0) otherwise 0
+	v.set(0, value: 7)
+	return v.get(0)
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:7:8: cannot pass 'v', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+error E3159: <fragment>:7:4: cannot pass 'v', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
 ```
 
-## A Vector Global Takes The Declared Generic's Road
+## A Fixed Array Global Takes The Declared Generic's Road
 
 ⭐⭐ **THE DECLARED GENERIC'S ROAD, NOT THE BUILTIN ARM.** With `create` declared,
 `instanceCreateIsDeclared` routes a top-level `var g = Vec3.create()` through
@@ -988,26 +1069,26 @@ error E3159: <fragment>:7:8: cannot pass 'v', which is read-only (a `let` bindin
 record). Its three premises are the ones
 [top-level-factory-globals](top-level-factory-globals.md) pins for every declared generic: the `create()`
 must EXIST, be NAMEABLE from its declaring file, and return `Self`. `__module_init` then emits a bare
-`call Vector.create` with no stamps at all, and the record it hands back is already published.
+`call FixedArray.create` with no stamps at all, and the record it hands back is already published.
 
-<!-- test: a-vector-global-is-built-by-the-declarations-own-static -->
+<!-- test: a-fixed-array-global-is-built-by-the-declarations-own-static -->
 The global is filled from one function and read from another, so what is under test is the slot
 `__module_init` wrote before `main` and not a local the same statement built.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
 var shared = Vec3.create()
 
 function fill() returns Int
-	try shared.set(0, value: 20) otherwise panic("set")
-	try shared.set(2, value: 21) otherwise panic("set")
+	shared.set(0, value: 20)
+	shared.set(2, value: 21)
 	return 0
 end 'fill'
 
 function main() returns ExitCode
 	_ = fill()
-	return ((try shared.get(0) otherwise 0) + (try shared.get(2) otherwise 0) + (shared.count() as Int)) as ExitCode
+	return (shared.get(0) + shared.get(2) + (shared.count() as Int)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -1016,29 +1097,29 @@ end 'main'
 
 ## The Fixed Size Is The Bound, And The Buffer Under It Is Not
 
-⛔⛔ **IT PINS A WRONG ANSWER A FORWARDING `set` WOULD GIVE.** `stdlib/Vector.maxon`'s `set` forwards to `managed.set`, and the BUFFER surface's setter is
+⛔⛔ **IT PINS A WRONG ANSWER A FORWARDING `set` WOULD GIVE.** `stdlib/FixedArray.maxon`'s `set` forwards to `managed.set`, and the BUFFER surface's setter is
 bounded by CAPACITY where the array surface's is bounded by LENGTH (recorded at
 `ManagedMemoryRuntime.ManagedMemSetName`: the wider bound is what makes the stage-then-`setLength` idiom
-spellable). A vector's capacity is NOT its count — `Vec3.create()` grows through
-`stdlib/Array.maxon`'s policy, whose `MinimumCapacity` is **4**, so a three-element vector's record has a
+spellable). A fixed array's capacity is NOT its count — `Vec3.create()` grows through
+`stdlib/Array.maxon`'s policy, whose `MinimumCapacity` is **4**, so a three-element fixed array's record has a
 fourth slot the type does not have.
 
 **With `set` forwarding straight to the buffer**, `made.set(3, value: 99)` on a `Vec3.create()`
 SUCCEEDS — a write to the fourth slot of a three-slot type, no diagnostic, `count()` unmoved at 3. So the
-guard here is not belt-and-braces, it is THE WHOLE OF THE VECTOR'S BOUND — `stdlib/Array.maxon`'s `set`
+guard here is not belt-and-braces, it is THE WHOLE OF THE FIXED ARRAY'S BOUND — `stdlib/Array.maxon`'s `set`
 carries the identical guard for the identical reason, and its header says so.
 
-⚠ The two spellings below are the two ways a vector comes into being, and they have DIFFERENT capacities
+⚠ The two spellings below are the two ways a fixed array comes into being, and they have DIFFERENT capacities
 (a literal's is the array literal's, a `create()`'s is the growth policy's) — so a case over only one of
 them would pass on the other's arithmetic.
 
-<!-- test: a-write-past-the-fixed-size-is-refused-however-the-vector-was-built -->
-Both vectors hold three elements and both refuse index 3. The index is laundered through a call so no
+<!-- test: a-write-past-the-fixed-size-is-refused-however-the-fixed-array-was-built -->
+Both fixed arrays hold three elements and both refuse index 3. The index is laundered through a call so no
 constant is in the compiler's hands at the write — what is under test is the RUNTIME bound, and a folded
 index would be answering a different question.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
 function runtimeIndex(n Int) returns Int
 	return n
@@ -1046,7 +1127,7 @@ end 'runtimeIndex'
 
 function main() returns ExitCode
 	var made = Vec3.create()
-	var lit = Vector from [1, 2, 3]
+	var lit = FixedArray from [1, 2, 3]
 	var refused = 0 as Int
 	try made.set(runtimeIndex(3) as ElementIndex, value: 99) otherwise 'madePastEnd'
 		refused = refused + 1
@@ -1069,7 +1150,7 @@ refused=2 madeRead=-1 madeCount=3 litCount=3
 ## A Published Slot Must Be A Value At Every Instantiation
 
 ⚠ This is the other half of the shared-body mechanism. A
-`Vector with <N> <type parameter>` is created ONCE, in a body every instantiation shares, and `create()`
+`FixedArray with <N> <type parameter>` is created ONCE, in a body every instantiation shares, and `create()`
 publishes all N slots by zeroing them. A zeroed slot is an element for a trivial instantiation and a NULL
 for a managed one, and the shared body cannot branch on which. Ungated, the program below with a
 `for … in` read added has `count()` answer 4 while every `get` reports an empty slot (exit 0, no
@@ -1077,8 +1158,8 @@ diagnostic), and the loop read **SEGFAULTS**. It is the concrete managed element
 (`error.a-concrete-managed-element-is-refused`, just below) asked of the thing that is knowable inside a
 shared body — the instantiation set — rather than of an element type there is none of.
 
-<!-- test: a-vector-field-in-a-generic-body-round-trips-its-elements -->
-The CAPABILITY itself, which the two cases above do not reach. Both of them only call `count()`, and a vector's count folds to a literal off the instance's
+<!-- test: a-fixed-array-field-in-a-generic-body-round-trips-its-elements -->
+The CAPABILITY itself, which the two cases above do not reach. Both of them only call `count()`, and a fixed array's count folds to a literal off the instance's
 own size, so **they would both still pass if every slot read and wrote the wrong address.** This one
 drives `set` and `get` through the shared generic body: a written slot reads back, an UNWRITTEN slot
 reads back the published zero (which is the whole reason the managed instantiation is refused), and the
@@ -1087,7 +1168,7 @@ count is unchanged by the writes: `a=10 b=7 zero=0 count=4`, exit 17.
 typealias Int = int(i64.min to i64.max)
 
 type Holder uses Element
-	typealias Slot = Vector with 4 Element
+	typealias Slot = FixedArray with 4 Element
 
 	var slot as Slot
 
@@ -1125,16 +1206,16 @@ end 'main'
 a=10 b=7 zero=0 count=4
 ```
 
-<!-- test: error.a-managed-instantiation-of-a-vector-field-is-refused -->
-A type parameter can be instantiated at a managed type, so a fixed-size vector over one is refused at
+<!-- test: error.a-managed-instantiation-of-a-fixed-array-field-is-refused -->
+A type parameter can be instantiated at a managed type, so a fixed array over one is refused at
 the `create()` that would publish its slots — not at the instantiation, and not at run time.
 
-⚠ **THE REFUSAL IS A STATED POSITION RATHER THAN AN OVERSIGHT.** Ungated, this exact source compiles and **runs to exit 4**: `count()` answers 4 because four slots were published, and nothing here ever READS one. It is the read that is unsound — a zeroed slot is a value for a trivial element and a NULL for a managed one — so exit 4 is the hazard not yet triggered, not evidence that the hazard does not exist. The compiler refuses at compile time what would otherwise break at run time; the same shape with a `for … in` read **SEGFAULTS (139)** on an ungated the compiler. ⇒ this extends the position the compiler already holds for a CONCRETE managed element (see `error.a-concrete-managed-element-is-refused` below) to the instantiated case, so the two arms of one rule agree. **The corpus `stdlib/Vector.maxon` is generic over its element where the compiler's synthesized vector is scalar-only**; that gap is owned by the `Vector` retirement chain, not by this case.
+⚠ **THE REFUSAL IS A STATED POSITION RATHER THAN AN OVERSIGHT.** Ungated, this exact source compiles and **runs to exit 4**: `count()` answers 4 because four slots were published, and nothing here ever READS one. It is the read that is unsound — a zeroed slot is a value for a trivial element and a NULL for a managed one — so exit 4 is the hazard not yet triggered, not evidence that the hazard does not exist. The compiler refuses at compile time what would otherwise break at run time; the same shape with a `for … in` read **SEGFAULTS (139)** on an ungated the compiler. ⇒ this extends the position the compiler already holds for a CONCRETE managed element (see `error.a-concrete-managed-element-is-refused` below) to the instantiated case, so the two arms of one rule agree. **The corpus `stdlib/FixedArray.maxon` is generic over its element where the compiler's synthesized fixed array is scalar-only**; that gap is owned by the `FixedArray` retirement chain, not by this case.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 
 type Holder uses Element
-	typealias Slot = Vector with 4 Element
+	typealias Slot = FixedArray with 4 Element
 
 	var slot as Slot
 
@@ -1155,7 +1236,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:21: Unsupported: `Vector with <N> <type parameter>` — a vector PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
+error E2015: <fragment>:10:21: Unsupported: `FixedArray with <N> <type parameter>` — a fixed array PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
 ```
 
 <!-- test: error.one-managed-instantiation-refuses-the-shared-body -->
@@ -1165,7 +1246,7 @@ instantiation refuses it, and a trivial instantiation standing beside it does no
 typealias Int = int(i64.min to i64.max)
 
 type Holder uses Element
-	typealias Slot = Vector with 4 Element
+	typealias Slot = FixedArray with 4 Element
 
 	var slot as Slot
 
@@ -1188,7 +1269,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:21: Unsupported: `Vector with <N> <type parameter>` — a vector PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
+error E2015: <fragment>:10:21: Unsupported: `FixedArray with <N> <type parameter>` — a fixed array PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
 ```
 
 <!-- test: error.a-managed-instantiation-another-file-reaches-refuses-the-shared-body-holder-first -->
@@ -1201,7 +1282,7 @@ parsed before the body.
 export typealias Int = int(i64.min to i64.max)
 
 export type Holder uses T
-	typealias Slot = Vector with 4 T
+	typealias Slot = FixedArray with 4 T
 
 	var slot as Slot
 
@@ -1235,7 +1316,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:11:21: Unsupported: `Vector with <N> <type parameter>` — a vector PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
+error E2015: <fragment>:11:21: Unsupported: `FixedArray with <N> <type parameter>` — a fixed array PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
 ```
 
 <!-- test: error.a-managed-instantiation-another-file-reaches-refuses-the-shared-body-use-first -->
@@ -1252,7 +1333,7 @@ end 'main'
 export typealias Int = int(i64.min to i64.max)
 
 export type Holder uses T
-	typealias Slot = Vector with 4 T
+	typealias Slot = FixedArray with 4 T
 
 	var slot as Slot
 
@@ -1278,10 +1359,10 @@ export type Outer uses T
 end 'Outer'
 ```
 ```maxoncstderr
-error E2015: <fragment>:19:21: Unsupported: `Vector with <N> <type parameter>` — a vector PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
+error E2015: <fragment>:19:21: Unsupported: `FixedArray with <N> <type parameter>` — a fixed array PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
 ```
 
-<!-- test: a-vector-in-an-extension-body-over-an-associated-type -->
+<!-- test: a-fixed-array-in-an-extension-body-over-an-associated-type -->
 The construct reached from its third position, which sources its layout
 descriptor differently from the other two: an `extension` body has no `uses` clause of its own and is
 scanned in its target's scope, so the descriptor a `Slot.create()` reads there is reserved through the
@@ -1292,7 +1373,7 @@ above do not stand in.
 typealias Int = int(i64.min to i64.max)
 
 interface Sized uses Element
-	typealias Slot = Vector with 4 Element
+	typealias Slot = FixedArray with 4 Element
 	function tally() returns Int
 end 'Sized'
 
@@ -1304,7 +1385,7 @@ extension Sized
 end 'Sized'
 
 type Bag uses Element implements Sized with Element
-	typealias Slot = Vector with 4 Element
+	typealias Slot = FixedArray with 4 Element
 	var n as Int
 
 	static function create() returns Self
@@ -1328,13 +1409,13 @@ end 'main'
 ```
 
 <!-- test: error.a-concrete-managed-element-is-refused -->
-The CONCRETE half of the same invariant. `Parser.requireVectorElementType`'s two arms are one rule about
-one hazard, and without this case the door that refuses a written `Vector with 2 String` could be deleted
-with the whole suite staying green. ⚠ `stdlib/Vector.maxon` is generic over its element, where the
-compiler's synthesized vector is scalar-only; what this case pins is that the compiler's position is a
+The CONCRETE half of the same invariant. `Parser.requireFixedArrayElementType`'s two arms are one rule about
+one hazard, and without this case the door that refuses a written `FixedArray with 2 String` could be deleted
+with the whole suite staying green. ⚠ `stdlib/FixedArray.maxon` is generic over its element, where the
+compiler's synthesized fixed array is scalar-only; what this case pins is that the compiler's position is a
 stated refusal rather than an accident.
 ```maxon
-typealias Vec2 = Vector with 2 String
+typealias Vec2 = FixedArray with 2 String
 
 function main() returns ExitCode
 	var v = Vec2.create()
@@ -1342,46 +1423,46 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:5:10: Unsupported: `Vector` holds its elements INLINE and publishes every slot at `create`, so it has no element destructor to stamp and a 'String' element would leak its storage and be read back as a null slot — a vector's element is an integer, a bool or a float
+error E2015: <fragment>:5:10: Unsupported: `FixedArray` holds its elements INLINE and publishes every slot at `create`, so it has no element destructor to stamp and a 'String' element would leak its storage and be read back as a null slot — a fixed array's element is an integer, a bool or a float
 ```
 
 ## A Sized Container's Buffer May Not Change Its Own Length
 
 ⛔⛔ **`count()` ANSWERS FROM THE TYPE WHILE `get` AND THE WALK ANSWER FROM THE RECORD, AND THIS REFUSAL
-DEFENDS THE INVARIANT BETWEEN THEM.** `stdlib/Vector.maxon`'s `count()` is `countof(Self)` —
+DEFENDS THE INVARIANT BETWEEN THEM.** `stdlib/FixedArray.maxon`'s `count()` is `countof(Self)` —
 folded to a literal, no load — while `get` forwards to `managed.get` (LENGTH-bounded) and
 `createIterator` hands the raw buffer to a cursor that walks the same length. All three agree only
 while `managed.length() == countof(Self)`, which every route into the record establishes at
 construction. What needs defending is the record being reached PAST the surface: `managed` is visible
-to an `extension Vector`, and a buffer surface serving the length-changing members would let it drift
+to an `extension FixedArray`, and a buffer surface serving the length-changing members would let it drift
 (`before=3 w0=3 after=3 walked=0 g0=-1`).
 
 ⭐ **THE REFUSED SET IS THE MEMBERS THAT WRITE THE RECORD'S LENGTH WORD, AND NO OTHERS.** On a
-`Vector with 3 Int`'s buffer, printing `managed.length()` after each call:
+`FixedArray with 3 Int`'s buffer, printing `managed.length()` after each call:
 `setLength` 3 to 5, `remove` 5 to 4, `clear` 4 to 0 all move it; `grow(64)` moves CAPACITY 4 to 64 and
 leaves the length at 3; `swap`, `shiftRight` and `shiftLeft` move elements the buffer already owns and
-leave it alone. **`grow` is deliberately SERVED**: a vector whose buffer has room to spare still has
+leave it alone. **`grow` is deliberately SERVED**: a fixed array whose buffer has room to spare still has
 the size its type states, and refusing it would be over-refusal — which is a wrong answer too.
 
 ⚠ **NOT A MEMORY-SAFETY HOLE, WHICH IS WHY THE CURE IS HERE AND NOT ON `get`.** `setLength` is
 capacity-refused, so every slot the walk reaches is a slot the buffer really owns. A guard on `get`
-would cost a compare on every vector read in every program to defend a state the type's own surface
+would cost a compare on every fixed array read in every program to defend a state the type's own surface
 cannot produce; this refusal costs nothing at runtime and closes the seam one level up, the way
 `push` is already refused on this surface.
 
 <!-- test: error.a-sized-containers-buffer-may-not-be-cleared -->
 <!-- tier: stdlib -->
-**ENTRANCE A — the bare `managed` read inside an `extension Vector`**, the primary shape. `managed` is
+**ENTRANCE A — the bare `managed` read inside an `extension FixedArray`**, the primary shape. `managed` is
 not exported, so this is the shortest spelling that reaches the record.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	function bust()
 		managed.clear()
 	end 'bust'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -1390,7 +1471,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:7:11: Unsupported: `__ManagedMemory` member 'clear' — this buffer is a `Vector`'s own record, and a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'clear' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length
+error E2015: <fragment>:7:11: Unsupported: `__ManagedMemory` member 'clear' — this buffer is a `FixedArray`'s own record, and a fixed array's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'clear' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length
 ```
 
 <!-- test: error.a-sized-containers-buffer-may-not-be-relengthened -->
@@ -1399,13 +1480,13 @@ error E2015: <fragment>:7:11: Unsupported: `__ManagedMemory` member 'clear' — 
 `setLength(64)` read `count=3 walked=64 g40=0`.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	function stretch()
 		try managed.setLength(2) otherwise ignore
 	end 'stretch'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -1414,7 +1495,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:7:15: Unsupported: `__ManagedMemory` member 'setLength' — this buffer is a `Vector`'s own record, and a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'setLength' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length
+error E2015: <fragment>:7:15: Unsupported: `__ManagedMemory` member 'setLength' — this buffer is a `FixedArray`'s own record, and a fixed array's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'setLength' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length
 ```
 
 <!-- test: error.a-sized-containers-buffer-may-not-lose-an-element -->
@@ -1422,13 +1503,13 @@ error E2015: <fragment>:7:15: Unsupported: `__ManagedMemory` member 'setLength' 
 `remove` shrinks by one and slides the tail — 5 to 4.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	function drop()
 		try managed.remove(0) otherwise ignore
 	end 'drop'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -1437,7 +1518,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:7:15: Unsupported: `__ManagedMemory` member 'remove' — this buffer is a `Vector`'s own record, and a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'remove' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length
+error E2015: <fragment>:7:15: Unsupported: `__ManagedMemory` member 'remove' — this buffer is a `FixedArray`'s own record, and a fixed array's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'remove' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length
 ```
 
 <!-- test: error.a-sized-containers-buffer-may-not-be-appended-to -->
@@ -1454,20 +1535,20 @@ door hands the receiver its OWN buffer instance rather than a synthesized BYTE o
 ⚠ **THE BARE SPELLING HERE REACHES THE FUSED DOOR, MINTS NO VALUE, AND IS REFUSED THERE OFF THE ENCLOSING
 DECLARATION** — `declarationIsASizedContainerRecordNamed(enclosingType)`, the by-name form that exists for
 exactly a caller with no value to mark. It could not be otherwise: the instance the door hands over is
-spelled `Array with Element` for a vector too (a load-bearing retype), so a `giid` test cannot tell a
-vector's record from a growable array's. Four reachable `Vector` spellings — `try managed.append(…)`, the
+spelled `Array with Element` for a fixed array too (a load-bearing retype), so a `giid` test cannot tell a
+fixed array's record from a growable array's. Four reachable `FixedArray` spellings — `try managed.append(…)`, the
 bare statement form, `self.managed.append(…)`, and the buffer bound to a local first — each answer the
 same `E2015` at their own line:column. (A fifth, `v.managed.append(…)` from outside the declaration, is
 `E3014`: `managed` is not exported.)
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	function double()
 		try managed.append(managed) otherwise ignore
 	end 'double'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -1476,7 +1557,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:7:15: Unsupported: `__ManagedMemory` member 'append' — this buffer is a `Vector`'s own record, and a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'append' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length
+error E2015: <fragment>:7:15: Unsupported: `__ManagedMemory` member 'append' — this buffer is a `FixedArray`'s own record, and a fixed array's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'append' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length
 ```
 
 <!-- test: error.the-chained-self-managed-reaches-the-same-refusal -->
@@ -1486,13 +1567,13 @@ instead (`viaManagedField`). It is a different carrier from entrance A and is cl
 it drifts to `count=3 len=0`, identically to A.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	function bust()
 		self.managed.clear()
 	end 'bust'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -1501,7 +1582,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:7:16: Unsupported: `__ManagedMemory` member 'clear' — this buffer is a `Vector`'s own record, and a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'clear' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length
+error E2015: <fragment>:7:16: Unsupported: `__ManagedMemory` member 'clear' — this buffer is a `FixedArray`'s own record, and a fixed array's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'clear' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length
 ```
 
 <!-- test: error.a-local-bound-to-the-buffer-reaches-the-same-refusal -->
@@ -1512,14 +1593,14 @@ of the binding rule rather than a thing this refusal arranges, and a change to i
 reopen the seam here.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	function bust()
 		var m = managed
 		m.clear()
 	end 'bust'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -1528,23 +1609,23 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:5: Unsupported: `__ManagedMemory` member 'clear' — this buffer is a `Vector`'s own record, and a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'clear' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length
+error E2015: <fragment>:8:5: Unsupported: `__ManagedMemory` member 'clear' — this buffer is a `FixedArray`'s own record, and a fixed array's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'clear' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length
 ```
 
-<!-- test: error.a-user-extension-cannot-read-a-vectors-buffer-to-return-it -->
+<!-- test: error.a-user-extension-cannot-read-a-fixed-arrays-buffer-to-return-it -->
 ⛔⛔ **ENTRANCE D — THE RECORD LEAVING BY `return`, FROM A USER FILE.** A user extension cannot reach a
-vector's record at all, so it cannot hand it out either. The first raw door in this program is the
+fixed array's record at all, so it cannot hand it out either. The first raw door in this program is the
 signature: `returns ElementMemory` names the raw buffer type (`ElementMemory` is `__ManagedMemory with
 Element`), and it is refused there, ahead of the `return managed` and the caller's `got.clear()`.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	function buf() returns ElementMemory
 		return managed
 	end 'buf'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -1566,9 +1647,9 @@ the two shifts move elements the buffer already owns. Delete the length-writer l
 refusal blanket, and THIS case is what goes red.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	function survey() returns Int
 		try managed.grow(64) otherwise ignore
 		try managed.swap(0, 1) otherwise ignore
@@ -1578,7 +1659,7 @@ extension Vector
 		try managed.set(1, e) otherwise ignore
 		return (managed.length() as Int) + (managed.capacity() as Int)
 	end 'survey'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -1616,16 +1697,16 @@ end 'main'
 10
 ```
 
-<!-- test: error.a-user-extension-cannot-read-a-vectors-buffer-to-pass-it-to-a-helper -->
-⛔⛔ **ENTRANCE E — THE ARGUMENT DIRECTION OF D.** An `extension Vector` whose `bust()` is `wipe(managed)`
+<!-- test: error.a-user-extension-cannot-read-a-fixed-arrays-buffer-to-pass-it-to-a-helper -->
+⛔⛔ **ENTRANCE E — THE ARGUMENT DIRECTION OF D.** An `extension FixedArray` whose `bust()` is `wipe(managed)`
 and whose `wipe(m ElementMemory)` is `m.clear()` would leave the type saying 3 while the walk finds nothing
 (`count=3 walked=0`). From a user file it never gets that far: the bare `managed` in `bust()` is the first
 raw door, and it is refused at the read, before the helper's `ElementMemory` parameter is reached.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	function bust()
 		wipe(managed)
 	end 'bust'
@@ -1633,7 +1714,7 @@ extension Vector
 	function wipe(m ElementMemory)
 		m.clear()
 	end 'wipe'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -1647,16 +1728,16 @@ error E3185: <fragment>:7:8: '.managed' read from outside the library tiers: a v
 
 <!-- test: the-slice-a-member-hands-to-a-helper-is-served -->
 <!-- tier: stdlib -->
-⭐ **A SLICE IS A VIEW WITH A LENGTH OF ITS OWN.** `managed.slice(0, 2)` is not the vector's record —
+⭐ **A SLICE IS A VIEW WITH A LENGTH OF ITS OWN.** `managed.slice(0, 2)` is not the fixed array's record —
 `__managed_slice` mints a fresh view whose `length@8` is its own — so a helper that takes it as an
-`ElementMemory` and clears it cannot move the vector's length, and no answer can disagree with the type.
-The exit code proves both halves: the slice really was cleared (0) and the vector's own record was
+`ElementMemory` and clears it cannot move the fixed array's length, and no answer can disagree with the type.
+The exit code proves both halves: the slice really was cleared (0) and the fixed array's own record was
 untouched (3).
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	function sliceThenClear() returns Int
 		var s = try managed.slice(0, 2) otherwise panic("slice")
 		return wipe(s) + (10 * (managed.length() as Int))
@@ -1666,7 +1747,7 @@ extension Vector
 		m.clear()
 		return m.length() as Int
 	end 'wipe'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -1680,16 +1761,16 @@ end 'main'
 <!-- test: the-slice-a-member-returns-is-served -->
 <!-- tier: stdlib -->
 ⭐ **… AND A MEMBER MAY RETURN A SLICE, WHICH ITS CALLER MAY CHANGE FREELY.** The caller clears the view
-it was handed (0); the vector's own record keeps its three elements (3).
+it was handed (0); the fixed array's own record keeps its three elements (3).
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	function part() returns ElementMemory
 		return try managed.slice(0, 2) otherwise panic("slice")
 	end 'part'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -1704,23 +1785,23 @@ end 'main'
 
 ## And The Record May Not LEAVE By Any Of The Other Three Doors Either
 
-⛔⛔ **EACH OF THESE ROUTES WOULD PRINT `len=0 count=3` ON A `Vector with 3 Int`.** They share one cause:
-`bufferSurfaceOfDeclaredRecord` RETYPES the record to `Array with Element` so `VectorIter.create(managed)`
+⛔⛔ **EACH OF THESE ROUTES WOULD PRINT `len=0 count=3` ON A `FixedArray with 3 Int`.** They share one cause:
+`bufferSurfaceOfDeclaredRecord` RETYPES the record to `Array with Element` so `FixedArrayIter.create(managed)`
 type-checks, and that retype makes the value indistinguishable from a growable array to everything except
 the per-value MARK — so any route that carries the record somewhere a `ValueId` mark cannot follow hands
-back a fully working `Array` over the vector's storage. ⇒ The record is reachable only from the library
+back a fully working `Array` over the fixed array's storage. ⇒ The record is reachable only from the library
 tiers. A user extension cannot read `managed` or name the raw buffer type, so each route below is refused
 at its first raw door by **E3185**, before any value of the record exists to carry.
 
-<!-- test: error.a-user-extension-cannot-read-a-vectors-buffer-to-push-it-into-a-container -->
+<!-- test: error.a-user-extension-cannot-read-a-fixed-arrays-buffer-to-push-it-into-a-container -->
 **ROUTE F — THE RECORD AS A CONTAINER'S ELEMENT.** `Array with ElementMemory` would hold the record, and
 `get` would hand it back with no mark. The first raw door is the element type in the extension's
 `typealias`.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	typealias Bufs = Array with ElementMemory
 
 	function bust() returns Int
@@ -1730,7 +1811,7 @@ extension Vector
 		got.clear()
 		return managed.length() as Int
 	end 'bust'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -1741,21 +1822,21 @@ end 'main'
 error E3185: <fragment>:6:30: 'ElementMemory' named outside the library tiers: the raw buffer type is nameable only from a source file under stdlib/ or runtime/ — use 'Array'
 ```
 
-<!-- test: error.a-user-extension-cannot-read-a-vectors-buffer-to-put-it-in-a-tuple -->
+<!-- test: error.a-user-extension-cannot-read-a-fixed-arrays-buffer-to-put-it-in-a-tuple -->
 **ROUTE G — THE RECORD AS A TUPLE SLOT**, which needs no container type spelled anywhere: two tokens of
 punctuation would launder the mark. The only raw door is the bare `managed` inside the tuple, and it is
 refused there.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	function bust() returns Int
 		let t = (managed, 1)
 		t.0.clear()
 		return (managed.length() as Int) + t.1
 	end 'bust'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -1766,15 +1847,15 @@ end 'main'
 error E3185: <fragment>:7:12: '.managed' read from outside the library tiers: a value's raw '__ManagedMemory' buffer is reachable only from a source file under stdlib/ or runtime/ — use the 'Array' methods
 ```
 
-<!-- test: error.a-user-extension-cannot-read-a-vectors-buffer-to-store-it-in-a-field -->
+<!-- test: error.a-user-extension-cannot-read-a-fixed-arrays-buffer-to-store-it-in-a-field -->
 **ROUTE H — THE RECORD ASSIGNED INTO A GROWABLE `Array`'s OWN `managed` FIELD.** The growable record's
 buffer carries no sized mark, so every length writer would be served on it. The first raw door is the
 `.managed` on the assignment's target, `a.managed`, ahead of the bare `managed` it would be assigned.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	typealias Arr = Array with Element
 
 	function bust() returns Int
@@ -1783,7 +1864,7 @@ extension Vector
 		a.managed.clear()
 		return managed.length() as Int
 	end 'bust'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -1794,13 +1875,13 @@ end 'main'
 error E3185: <fragment>:10:5: '.managed' read from outside the library tiers: a value's raw '__ManagedMemory' buffer is reachable only from a source file under stdlib/ or runtime/ — use the 'Array' methods
 ```
 
-<!-- test: error.a-user-extension-cannot-read-a-vectors-buffer-to-hand-it-to-a-generic -->
+<!-- test: error.a-user-extension-cannot-read-a-fixed-arrays-buffer-to-hand-it-to-a-generic -->
 ⛔⛔ **ROUTE I — THE RECORD THROUGH A USER'S OWN GENERIC.** A nine-line `Box uses T` would take the record
 in and hand it straight back out with no mark on it. From a user file the extension cannot spell the
 instantiation: `Box with ElementMemory` names the raw buffer type, and that is the first raw door.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
 type Box uses T
 	var held as T
@@ -1814,7 +1895,7 @@ type Box uses T
 	end 'get'
 end 'Box'
 
-extension Vector
+extension FixedArray
 	typealias BufBox = Box with ElementMemory
 
 	function bust() returns Int
@@ -1823,7 +1904,7 @@ extension Vector
 		got.clear()
 		return managed.length() as Int
 	end 'bust'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -1837,12 +1918,12 @@ error E3185: <fragment>:18:30: 'ElementMemory' named outside the library tiers: 
 <!-- test: a-slice-may-be-stored-passed-and-returned-freely -->
 <!-- tier: stdlib -->
 ⭐ **EVERY ROUTE ABOVE IS LEGAL ON A `slice`, IN THE LIBRARY TIER.** A view's `length@8` is its own, so no
-answer about it can contradict the vector's type. The slice here is stored into a container, put in a
-tuple, passed to a foreign generic and cleared through each — and the vector's own record is untouched at
+answer about it can contradict the fixed array's type. The slice here is stored into a container, put in a
+tuple, passed to a foreign generic and cleared through each — and the fixed array's own record is untouched at
 the end.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
 type Box uses T
 	var held as T
@@ -1856,7 +1937,7 @@ type Box uses T
 	end 'get'
 end 'Box'
 
-extension Vector
+extension FixedArray
 	typealias Bufs = Array with ElementMemory
 	typealias BufBox = Box with ElementMemory
 
@@ -1875,7 +1956,7 @@ extension Vector
 
 		return (fromContainer.length() as Int) + (fromBox.length() as Int) + (10 * (managed.length() as Int))
 	end 'survey'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -1894,11 +1975,11 @@ ACROSS — AND THE BUFFER-SURFACE FAMILY IS CARRIED.** The parser has three valu
 short-circuit's, whose phi is a bool and cannot be a buffer). Uncarried, the first two would launder two
 facts:
 
-* the SIZED mark — so an `extension Vector` could clear the vector's own record by routing the value
+* the SIZED mark — so an `extension FixedArray` could clear the fixed array's own record by routing the value
   through a join, with every other door shut (`len=0 count=3`);
 * the BUFFER mark itself — a **roster inversion**: on a plain growable array,
   `var m = a.managed if flag else a.managed` then `m.length()` would be refused as an unknown `Array`
-  member while `m.count()` compiles. Nothing to do with `Vector`; the same carry covers it, and the
+  member while `m.count()` compiles. Nothing to do with `FixedArray`; the same carry covers it, and the
   third case here pins it.
 
 <!-- test: error.a-buffer-through-a-ternary-reaches-the-same-refusal -->
@@ -1907,15 +1988,15 @@ facts:
 expression, so nothing about the program needs two answers — only the phi's fresh `ValueId` could give one.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	function bust(flag bool) returns Int
 		var m = managed if flag else managed
 		m.clear()
 		return managed.length() as Int
 	end 'bust'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -1923,7 +2004,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:5: Unsupported: `__ManagedMemory` member 'clear' — this buffer is a `Vector`'s own record, and a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'clear' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length
+error E2015: <fragment>:8:5: Unsupported: `__ManagedMemory` member 'clear' — this buffer is a `FixedArray`'s own record, and a fixed array's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'clear' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length
 ```
 
 <!-- test: error.a-buffer-through-a-try-fallback-reaches-the-same-refusal -->
@@ -1933,15 +2014,15 @@ edge is a legal `slice` and only the FALLBACK is the record, so a rule that look
 would have to be right about both.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	function bust() returns Int
 		var m = try managed.slice(0, 99) otherwise managed
 		m.clear()
 		return managed.length() as Int
 	end 'bust'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -1949,7 +2030,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:5: Unsupported: `__ManagedMemory` member 'clear' — this buffer is a `Vector`'s own record, and a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'clear' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length
+error E2015: <fragment>:8:5: Unsupported: `__ManagedMemory` member 'clear' — this buffer is a `FixedArray`'s own record, and a fixed array's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'clear' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length
 ```
 
 <!-- test: a-growable-buffer-keeps-its-own-roster-through-a-merge -->
@@ -1977,16 +2058,16 @@ end 'main'
 11
 ```
 
-<!-- test: an-extension-still-walks-its-own-vector -->
+<!-- test: an-extension-still-walks-its-own-fixed-array -->
 <!-- tier: stdlib -->
-⭐ **AN EXTENSION WALKS ITS OWN VECTOR BOTH WAYS:** `for e in self`, which goes through the declaration's
+⭐ **AN EXTENSION WALKS ITS OWN FIXED ARRAY BOTH WAYS:** `for e in self`, which goes through the declaration's
 own `createIterator`, and a `for` over a `slice` of its record. The exit code is the two walks side by
 side.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
-extension Vector
+extension FixedArray
 	function walkedTwoWays() returns Int
 		var viaSelf = 0 as Int
 		for e in self 'eachOwn'
@@ -2000,7 +2081,7 @@ extension Vector
 
 		return (viaSelf * 10) + viaSlice
 	end 'walkedTwoWays'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -2011,11 +2092,11 @@ end 'main'
 33
 ```
 
-<!-- test: vector.an-array-element-may-hold-a-union-carrying-a-vector -->
-A record whose field is a union with a `Vector` payload is an ordinary array element: pushing it and
+<!-- test: fixed-array.an-array-element-may-hold-a-union-carrying-a-fixed-array -->
+A record whose field is a union with a `FixedArray` payload is an ordinary array element: pushing it and
 reading it back copies nothing a `slice` would, so an array of such records is legal.
 ```maxon
-typealias Flags = Vector with 4 bool
+typealias Flags = FixedArray with 4 bool
 typealias CellArray = Array with Cell
 
 union Content
@@ -2033,14 +2114,14 @@ type Cell
 	function firstFlag() returns bool
 		return match self.content 'kind'
 			empty gives false
-			marked(flags) gives try flags.get(0) otherwise false
+			marked(flags) gives flags.get(0)
 		end 'kind'
 	end 'firstFlag'
 end 'Cell'
 
 function main() returns ExitCode
 	var flags = Flags.create()
-	try flags.set(0, value: true) otherwise panic("index 0 is inside a 4-element vector")
+	flags.set(0, value: true)
 
 	var cells = CellArray.create()
 	cells.push(Cell.create(Content.marked(flags)))
@@ -2056,11 +2137,11 @@ end 'main'
 true
 ```
 
-<!-- test: vector.a-slice-deep-copies-a-vector-held-in-a-field-and-in-a-union-payload -->
-A `Vector`'s record is an `Array`'s, so `slice` copies it like one: writing the original cells after the
-slice — replacing the union and setting a flag in the vector field — leaves the copies as they were.
+<!-- test: fixed-array.a-slice-deep-copies-a-fixed-array-held-in-a-field-and-in-a-union-payload -->
+A `FixedArray`'s record is an `Array`'s, so `slice` copies it like one: writing the original cells after the
+slice — replacing the union and setting a flag in the fixed array field — leaves the copies as they were.
 ```maxon
-typealias Flags = Vector with 4 bool
+typealias Flags = FixedArray with 4 bool
 typealias CellArray = Array with Cell
 
 union Content
@@ -2079,23 +2160,23 @@ type Cell
 	function firstFlag() returns bool
 		return match self.content 'kind'
 			empty gives false
-			marked(flags) gives try flags.get(0) otherwise false
+			marked(flags) gives flags.get(0)
 		end 'kind'
 	end 'firstFlag'
 
 	function secondMaskBit() returns bool
-		return try self.mask.get(1) otherwise false
+		return self.mask.get(1)
 	end 'secondMaskBit'
 
 	function overwrite()
 		self.content = Content.empty
-		try self.mask.set(1, value: true) otherwise panic("index 1 is inside a 4-element vector")
+		self.mask.set(1, value: true)
 	end 'overwrite'
 end 'Cell'
 
 function main() returns ExitCode
 	var flags = Flags.create()
-	try flags.set(0, value: true) otherwise panic("index 0 is inside a 4-element vector")
+	flags.set(0, value: true)
 
 	var cells = CellArray.create()
 	cells.push(Cell.create(Content.marked(flags)))
@@ -2125,11 +2206,11 @@ copy true false
 copy true false
 ```
 
-<!-- test: vector.a-record-holding-vectors-crosses-to-a-service-and-back -->
-A service boundary walks a `Vector` as it walks an `Array`: a record holding one in a field and one in a union
+<!-- test: fixed-array.a-record-holding-fixed-arrays-crosses-to-a-service-and-back -->
+A service boundary walks a `FixedArray` as it walks an `Array`: a record holding one in a field and one in a union
 payload crosses at the `spawn` and as a call argument, and a record the handler builds comes back as the reply.
 ```maxon
-typealias Flags = Vector with 4 bool
+typealias Flags = FixedArray with 4 bool
 
 union Content
 	empty
@@ -2147,10 +2228,10 @@ type Cell
 	function describe() returns String
 		let first = match self.content 'kind'
 			empty gives false
-			marked(flags) gives try flags.get(0) otherwise false
+			marked(flags) gives flags.get(0)
 		end 'kind'
 
-		let second = try self.mask.get(1) otherwise false
+		let second = self.mask.get(1)
 		return "{first} {second}"
 	end 'describe'
 end 'Cell'
@@ -2171,8 +2252,8 @@ end 'Svc'
 
 function flagsOf(first bool, second bool) returns Flags
 	var flags = Flags.create()
-	try flags.set(0, value: first) otherwise panic("index 0 is inside a 4-element vector")
-	try flags.set(1, value: second) otherwise panic("index 1 is inside a 4-element vector")
+	flags.set(0, value: first)
+	flags.set(1, value: second)
 	return flags
 end 'flagsOf'
 
@@ -2192,12 +2273,12 @@ reply false true
 0
 ```
 
-<!-- test: error.a-vector-from-head-another-file-keeps-private-is-refused -->
-A `Vector` instance alias at the head of `from […]` is a type name, and another file's file-private one is
+<!-- test: error.a-fixed-array-from-head-another-file-keeps-private-is-refused -->
+A `FixedArray` instance alias at the head of `from […]` is a type name, and another file's file-private one is
 refused.
 ```maxon
 // --- file: probe.maxon
-typealias Pair = Vector with 2 ExitCode
+typealias Pair = FixedArray with 2 ExitCode
 
 export function probePair() returns ExitCode
 	let v = Pair from [1, 2]
@@ -2216,8 +2297,8 @@ end 'main'
 error E3008: <fragment>:13:10: typealias 'Pair' is not exported
 ```
 
-<!-- test: a-let-vector-read-is-range-known -->
-A `Vector from […]` bound by `let` is a constant, so a value read from it carries the range of the elements written.
+<!-- test: a-let-fixed-array-read-is-range-known -->
+A `FixedArray from […]` bound by `let` is a constant, so a value read from it carries the range of the elements written.
 ```maxon
 typealias Small = int(0 to 100)
 
@@ -2226,8 +2307,8 @@ function take(v Small) returns Small
 end 'take'
 
 function main() returns ExitCode
-	let v = Vector from [10, 20, 30]
-	let a = try v.get(1) otherwise 0
+	let v = FixedArray from [10, 20, 30]
+	let a = v.get(1)
 	print("{take(a)}\n")
 	return 0
 end 'main'
@@ -2239,8 +2320,8 @@ end 'main'
 20
 ```
 
-<!-- test: error.a-let-vector-read-outside-a-narrower-alias -->
-The range a `let` vector's elements carry is checked at the use, and the reachable extreme is named.
+<!-- test: error.a-let-fixed-array-read-outside-a-narrower-alias -->
+The range a `let` fixed array's elements carry is checked at the use, and the reachable extreme is named.
 ```maxon
 typealias Small = int(0 to 100)
 
@@ -2249,8 +2330,8 @@ function take(v Small) returns Small
 end 'take'
 
 function main() returns ExitCode
-	let v = Vector from [10, 2000]
-	let a = try v.get(0) otherwise 0
+	let v = FixedArray from [10, 2000]
+	let a = v.get(0)
 	let b = take(a)
 	return b as ExitCode
 end 'main'
@@ -2259,15 +2340,31 @@ end 'main'
 error E3005: <fragment>:11:10: Value 2000 is outside the range of 'Small' (int(0 to 100))
 ```
 
-<!-- test: error.a-let-vector-mutation-is-refused -->
-A `let` vector literal is immutable, so a write through it is refused as a `let` array's is.
+<!-- test: error.a-let-fixed-array-mutation-is-refused -->
+A `let` fixed array literal is immutable, so a write through it is refused as a `let` array's is.
 ```maxon
 function main() returns ExitCode
-	let v = Vector from [10, 20, 30]
-	try v.set(0, value: 99) otherwise ignore
+	let v = FixedArray from [10, 20, 30]
+	v.set(0, value: 99)
 	return v.count() as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:4:8: cannot pass 'v', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+error E3159: <fragment>:4:4: cannot pass 'v', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+```
+
+<!-- test: error.the-name-vector-is-not-a-builtin -->
+The fixed-size type is `FixedArray`. `Vector` names no builtin, so `Vector with 3 Int` does not parse as
+a sized instance: the size `3` stands where a type argument is expected.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias V = Vector with 3 Int
+
+function main() returns ExitCode
+	var v = V.create()
+	return v.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:3:27: Expected 'a type' but got '3'
 ```

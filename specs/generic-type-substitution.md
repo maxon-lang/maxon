@@ -750,13 +750,13 @@ error E3162: <fragment>:15:26: 'Box' is named without type arguments inside 'typ
 
 <!-- test: error.a-bare-generic-base-may-not-take-a-layout-needing-call -->
 ### A base the scope does not bind may not take a layout-needing call
-`Holder.create` sizes a `Vector with 4 Element`, so it is handed a layout descriptor. The bare `Holder` has
+`Holder.create` sizes a `FixedArray with 4 Element`, so it is handed a layout descriptor. The bare `Holder` has
 none, and the enclosing frame's describes `Outer`'s parameters rather than `Holder`'s.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 
 type Holder uses Element
-	typealias Slot = Vector with 4 Element
+	typealias Slot = FixedArray with 4 Element
 
 	var slot as Slot
 
@@ -884,7 +884,7 @@ error E3162: <fragment>:24:14: 'Tag' is named without type arguments inside 'typ
 typealias Int = int(i64.min to i64.max)
 
 type Holder uses Element
-	typealias Slot = Vector with 4 Element
+	typealias Slot = FixedArray with 4 Element
 
 	var slot as Slot
 
@@ -1023,7 +1023,7 @@ beta
 typealias Int = int(i64.min to i64.max)
 
 type Holder uses Element
-	typealias Slot = Vector with 4 Element
+	typealias Slot = FixedArray with 4 Element
 
 	var slot as Slot
 
@@ -1065,17 +1065,17 @@ end 'main'
 
 ```
 
-<!-- test: error.a-managed-instantiation-a-later-body-mints-refuses-the-vector-body-first -->
-### …and at a MANAGED argument the vector is refused, though the instance is minted below the body that asks
+<!-- test: error.a-managed-instantiation-a-later-body-mints-refuses-the-fixed-array-body-first -->
+### …and at a MANAGED argument the fixed array is refused, though the instance is minted below the body that asks
 `Holder with String` is written nowhere: `Outer`'s body mints it, below `Holder`'s. A parse asks whether some
-instantiation makes the vector's element managed while it emits `Slot.create()`, and the answer it acts on must
+instantiation makes the fixed array's element managed while it emits `Slot.create()`, and the answer it acts on must
 be the whole program's rather than the rows the file had minted by then — admitted, this program compiles and a
 `for … in` read of a published slot dereferences a null.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 
 type Holder uses Element
-	typealias Slot = Vector with 4 Element
+	typealias Slot = FixedArray with 4 Element
 
 	var slot as Slot
 
@@ -1110,11 +1110,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:21: Unsupported: `Vector with <N> <type parameter>` — a vector PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
+error E2015: <fragment>:10:21: Unsupported: `FixedArray with <N> <type parameter>` — a fixed array PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
 ```
 
-<!-- test: error.a-managed-instantiation-a-later-body-mints-refuses-the-vector-use-first -->
-The same program with the minting body ABOVE the vector's, which the file's own rows answered all along.
+<!-- test: error.a-managed-instantiation-a-later-body-mints-refuses-the-fixed-array-use-first -->
+The same program with the minting body ABOVE the fixed array's, which the file's own rows answered all along.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 
@@ -1140,7 +1140,7 @@ function main() returns ExitCode
 end 'main'
 
 type Holder uses Element
-	typealias Slot = Vector with 4 Element
+	typealias Slot = FixedArray with 4 Element
 
 	var slot as Slot
 
@@ -1154,7 +1154,7 @@ type Holder uses Element
 end 'Holder'
 ```
 ```maxoncstderr
-error E2015: <fragment>:31:21: Unsupported: `Vector with <N> <type parameter>` — a vector PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
+error E2015: <fragment>:31:21: Unsupported: `FixedArray with <N> <type parameter>` — a fixed array PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
 ```
 
 <!-- test: own-name-in-a-generic-body-is-still-Self -->

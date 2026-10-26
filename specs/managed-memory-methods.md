@@ -4630,7 +4630,7 @@ opaque type parameter. `trivialElementSlot` → `primitiveTypeByteSize(typeParam
 ⭐⭐ **THE FAST PATH TELLS THE TRUTH ABOUT THE RECEIVER, AND TURNS NO ONE AWAY.** The
 door hands each wrapper its OWN buffer-surface instance — the compiler's synthesized byte buffer for a
 `String` or a `Character`, the array's own instance for an `Array`, and `Array with T` built from the
-receiver's element for a `Vector` — which is the same answer the value door retypes its minted surface to,
+receiver's element for a `FixedArray` — which is the same answer the value door retypes its minted surface to,
 so the two spellings of one field genuinely *"answer to one element rule"* instead of merely claiming to.
 ⛔ ROUTING every non-byte record to the value door instead would also be correct, and costs
 **1.65–1.9x on `Array.hash`**: that body is not compiler-served, it loops `byteAt` once per byte, and
@@ -4639,7 +4639,7 @@ every iteration would pay a refcount pair.
 ⭐⭐ **A SAFETY ARGUMENT ABOUT ONE RECORD DOES NOT COVER ANOTHER, AND THAT IS THIS PROJECT'S SIGNATURE BUG.**
 *"Reads both records' `@24` and ABORTS on a mismatch, **which two String records pass (1 == 1)**"* is an
 argument about a **byte record**. But the gate that selects the fast path is
-`conformsToBuiltinManagedWrapper`, which admits `Array` and `Vector` too — whose `@24` is 8, not 1, and
+`conformsToBuiltinManagedWrapper`, which admits `Array` and `FixedArray` too — whose `@24` is 8, not 1, and
 whose element may be a type parameter. **A member admitted on an argument about the RECORD is only as safe
 as the record it is actually handed.**
 

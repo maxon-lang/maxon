@@ -253,7 +253,7 @@ function main() returns ExitCode
 	let list = List from [10, 20]
 	let map = [1: 10, 2: 20, 3: 30]
 	let set = Set from [5, 6, 7, 8]
-	let vec = Vector from [1, 2, 3, 4, 5]
+	let vec = FixedArray from [1, 2, 3, 4, 5]
 	let text = "a😀b"
 	print("{takesCount(arr.count())} {takesCount(list.count())} {takesCount(map.count())} {takesCount(set.count())} {takesCount(vec.count())} {takesCount(text.codepoints().count())} {takesCount(text.utf16().count())}\n")
 	return 0

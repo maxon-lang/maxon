@@ -82,7 +82,7 @@ const SOURCES = [
       { page: 'stdlib/text.md', sections: ['String', 'Character', 'Ascii', 'Unicode', 'CharacterSet'] },
       {
         page: 'stdlib/collections.md',
-        sections: ['Array', 'List', 'Map', 'Set', 'Vector', 'Range', 'Iterators', 'Interfaces'],
+        sections: ['Array', 'List', 'Map', 'Set', 'FixedArray', 'Range', 'Iterators', 'Interfaces'],
       },
       {
         page: 'stdlib/io.md',

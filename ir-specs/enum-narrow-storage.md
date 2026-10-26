@@ -88,8 +88,7 @@ func @main {
     x64.jcc belowEqual, __im_slow
   __im_load#11:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.leaRegRegImm32 rax, rax, 16
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.jmp tryok
   __im_stride:
     x64.cmpRegImm32 rax, 1
@@ -100,8 +99,7 @@ func @main {
     x64.jcc belowEqual, __im_slow
   __im_load#12:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.leaRegRegImm32 rax, rax, 2
-    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.loadRegBaseDisp.byte rax, [rax + 2]
     x64.jmp tryok
   __im_slow:
     x64.movRegReg rcx, rbx
@@ -166,8 +164,7 @@ func @main {
     x64.jcc belowEqual, __im_slow
   __im_load#11:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.leaRegRegImm32 rax, rax, 16
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.jmp tryok
   __im_stride:
     x64.cmpRegImm32 rax, 1
@@ -178,8 +175,7 @@ func @main {
     x64.jcc belowEqual, __im_slow
   __im_load#12:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.leaRegRegImm32 rax, rax, 2
-    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.loadRegBaseDisp.byte rax, [rax + 2]
     x64.jmp tryok
   __im_slow:
     x64.movRegReg rcx, rbx
@@ -240,8 +236,7 @@ func @main {
     arm64.b.ls __im_slow
   __im_load#11:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.add x0, x0, 16
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
     arm64.b tryok
   __im_stride:
     arm64.cmp x0, 1
@@ -252,8 +247,7 @@ func @main {
     arm64.b.ls __im_slow
   __im_load#12:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.add x0, x0, 2
-    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.loadRegBaseDisp.byte x0, [x0 + 2]
     arm64.b tryok
   __im_slow:
     arm64.movRegReg x0, x19
@@ -314,8 +308,7 @@ func @main {
     arm64.b.ls __im_slow
   __im_load#11:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.add x0, x0, 16
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
     arm64.b tryok
   __im_stride:
     arm64.cmp x0, 1
@@ -326,8 +319,7 @@ func @main {
     arm64.b.ls __im_slow
   __im_load#12:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.add x0, x0, 2
-    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.loadRegBaseDisp.byte x0, [x0 + 2]
     arm64.b tryok
   __im_slow:
     arm64.movRegReg x0, x19

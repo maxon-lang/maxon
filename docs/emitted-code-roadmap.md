@@ -777,7 +777,7 @@ co-ownership. **The threshold is unreachable by any correct change** and was not
 ⭐⭐ **BUT THE ROW'S OWN EXHIBIT WAS ALIVE, EXACTLY AS WRITTEN — `Array.clear` REALLY IS
 `__mm_retain → __managed_clear → __managed_decref`** — and the cause is a different door:
 `Parser.fusedManagedMemberTakesTheRecord`, a **six-name whitelist** deciding whether a bare
-`managed.<member>(…)` inside a fused wrapper's own body (`String`, `Character`, `Array`, `Vector`) hands the
+`managed.<member>(…)` inside a fused wrapper's own body (`String`, `Character`, `Array`, `FixedArray`) hands the
 member's runtime entry the RECEIVER'S OWN RECORD, or goes through the `managed`-as-a-VALUE door, which since
 W157 pays an `__mm_retain`/`__managed_decref` pair around the call. It listed `length`, `byteAt`, `setByte`,
 `append`, `toCString`, `makeCharFromBytes`. The **eleven** others a container body spells — `set`, `get`,

@@ -1,0 +1,272 @@
+export enum DisplacementReach
+	anyImm32
+	scaledImm12
+end 'DisplacementReach'
+
+// Rewrites a plain load or store whose address is `binOpImm(add, base, K)` to address `[base + K]`.
+// An address folds only when every reader folds: the base then takes over the address's live range,
+// whereas a partial fold keeps both alive and raises register pressure.
+export type DisplacedAddressFolds
+	var addresses as StdValueUseSet
+	var parentColumn as ValueIdArray
+	var baseColumn as ValueIdArray
+	var deltaColumn as ByteOffsetArray
+	var escaped as StdValueUseSet
+	var resolved as StdValueUseSet
+	var folded as StdValueUseSet
+	var unresolvedChain as ValueIdArray
+	var operands as StdArithOperands
+	var access as StdAccessOperands
+
+	export static function create() returns DisplacedAddressFolds
+		return Self{addresses: StdValueUseSet.createRecordingIds(), parentColumn: ValueIdArray.create(), baseColumn: ValueIdArray.create(), deltaColumn: ByteOffsetArray.create(), escaped: StdValueUseSet.create(), resolved: StdValueUseSet.create(), folded: StdValueUseSet.create(), unresolvedChain: ValueIdArray.create(), operands: StdArithOperands.create(), access: StdAccessOperands.create()}
+	end 'create'
+
+	export function foldInFunction(module StdModule, func IrFunction, reach DisplacementReach)
+		self.reset()
+		self.recordAddressesAndEscapes(module, func: func)
+
+		if self.addresses.isEmpty() 'noDisplacedAddress'
+			return
+		end 'noDisplacedAddress'
+
+		self.resolveChains()
+		self.censusAccesses(module, func: func, reach: reach)
+		self.keepTheParentsOfKeptAddresses()
+		self.rewriteAccesses(module, func: func)
+		self.collectFoldedAddresses()
+		removeOpsDefining(module, func: func, doomed: self.folded)
+	end 'foldInFunction'
+
+	function reset()
+		self.addresses.clear()
+		self.parentColumn.clear()
+		self.baseColumn.clear()
+		self.deltaColumn.clear()
+		self.escaped.clear()
+		self.resolved.clear()
+		self.folded.clear()
+		self.unresolvedChain.clear()
+	end 'reset'
+
+	function recordAddressesAndEscapes(module StdModule, func IrFunction)
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("DisplacedAddressFolds.recordAddressesAndEscapes: blockRef from func.blockRefs not in module.blocks")
+
+			for opIdx in block.bodyOps() 'eachOp'
+				self.recordOp(try module.ops.get(opIdx) otherwise panic("DisplacedAddressFolds.recordAddressesAndEscapes: opIdx {opIdx} not in module.ops"))
+			end 'eachOp'
+
+			collectBlockExitUses(module, block: block, referenced: self.escaped)
+		end 'eachBlock'
+	end 'recordAddressesAndEscapes'
+
+	function recordOp(op StdOp)
+		classifyArithOperands(op, operands: self.operands)
+
+		if self.operandsAreAConstantDisplacement() 'displacement'
+			self.recordAddress()
+			return
+		end 'displacement'
+
+		classifyAccessOperands(op, access: self.access)
+
+		if self.access.isPlainLoad() 'plainLoad'
+			return
+		end 'plainLoad'
+
+		if self.access.isPlainStore() 'plainStore'
+			self.escaped.insert(self.access.valueId)
+			return
+		end 'plainStore'
+
+		collectStdOpUses(op, referenced: self.escaped)
+	end 'recordOp'
+
+	// A negative K never folds: `ByteOffset` is unsigned, and the dereferenceability witness LICM
+	// makes from a load's `coverage` relies on that.
+	function operandsAreAConstantDisplacement() returns bool
+		return self.operands.isBinaryArithImm() and self.operands.opcode == StdBinOpcode.add and self.operands.operandType == StdType.i64 and self.operands.imm >= 0
+	end 'operandsAreAConstantDisplacement'
+
+	// The add's read of its base is not an escape: the chain is composed onto its root, so a removed
+	// link has no reader left.
+	function recordAddress()
+		let addressId = self.operands.resultId
+		let columnCount = (addressId + 1) as ElementIndex
+		self.parentColumn.growFilled(columnCount, value: 0)
+		self.baseColumn.growFilled(columnCount, value: 0)
+		self.deltaColumn.growFilled(columnCount, value: 0)
+
+		try self.parentColumn.set(addressId, value: self.operands.lhs) otherwise panic("DisplacedAddressFolds.recordAddress: parentColumn.set OOB at {addressId}")
+		self.setBase(addressId, base: self.operands.lhs, delta: self.operands.imm as ByteOffset)
+		self.addresses.insert(addressId)
+	end 'recordAddress'
+
+	function setBase(addressId ValueId, base ValueId, delta ByteOffset)
+		try self.baseColumn.set(addressId, value: base) otherwise panic("DisplacedAddressFolds.setBase: baseColumn.set OOB at {addressId}")
+		try self.deltaColumn.set(addressId, value: delta) otherwise panic("DisplacedAddressFolds.setBase: deltaColumn.set OOB at {addressId}")
+	end 'setBase'
+
+	function parentOf(addressId ValueId) returns ValueId
+		return try self.parentColumn.get(addressId) otherwise panic("DisplacedAddressFolds.parentOf: parentColumn.get OOB at {addressId} — every recorded address sized the column to itself")
+	end 'parentOf'
+
+	function baseOf(addressId ValueId) returns ValueId
+		return try self.baseColumn.get(addressId) otherwise panic("DisplacedAddressFolds.baseOf: baseColumn.get OOB at {addressId} — every recorded address sized the column to itself")
+	end 'baseOf'
+
+	function deltaOf(addressId ValueId) returns ByteOffset
+		return try self.deltaColumn.get(addressId) otherwise panic("DisplacedAddressFolds.deltaOf: deltaColumn.get OOB at {addressId} — every recorded address sized the column to itself")
+	end 'deltaOf'
+
+	function foldsInto(addressId ValueId) returns bool
+		return self.addresses.contains(addressId) and not self.escaped.contains(addressId)
+	end 'foldsInto'
+
+	function resolveChains()
+		for position in 0 upto self.addresses.insertedIdCount() 'eachAddress'
+			self.resolveChainEndingAt(self.addresses.insertedIdAt(position))
+		end 'eachAddress'
+	end 'resolveChains'
+
+	function resolveChainEndingAt(addressId ValueId)
+		var link = addressId
+
+		while self.addresses.contains(link) and not self.resolved.contains(link) 'eachUnresolvedLink'
+			if self.unresolvedChain.count() >= self.addresses.insertedIdCount() 'cycle'
+				panic("DisplacedAddressFolds.resolveChainEndingAt: the displacement chain ending at value {addressId} is longer than the function's {self.addresses.insertedIdCount()} displaced addresses — an add reaches itself through its own base, which no SSA function holds")
+			end 'cycle'
+
+			self.unresolvedChain.push(link)
+			link = self.parentOf(link)
+		end 'eachUnresolvedLink'
+
+		while not self.unresolvedChain.isEmpty() 'eachLinkFromTheRoot'
+			let next = try self.unresolvedChain.pop() otherwise panic("DisplacedAddressFolds.resolveChainEndingAt: pop of a non-empty chain failed")
+			self.composeOntoParent(next)
+			self.resolved.insert(next)
+		end 'eachLinkFromTheRoot'
+	end 'resolveChainEndingAt'
+
+	function composeOntoParent(addressId ValueId)
+		let parent = self.parentOf(addressId)
+
+		// An escaped parent is kept anyway, and composing through it would only lengthen the root's
+		// live range.
+		if not self.addresses.contains(parent) or self.escaped.contains(parent) 'parentStays'
+			return
+		end 'parentStays'
+
+		let composed = self.deltaOf(parent) + self.deltaOf(addressId)
+
+		if composed > i32.max 'pastImm32'
+			self.escaped.insert(parent)
+			return
+		end 'pastImm32'
+
+		self.setBase(addressId, base: self.baseOf(parent), delta: composed)
+	end 'composeOntoParent'
+
+	function censusAccesses(module StdModule, func IrFunction, reach DisplacementReach)
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("DisplacedAddressFolds.censusAccesses: blockRef from func.blockRefs not in module.blocks")
+
+			for opIdx in block.bodyOps() 'eachOp'
+				classifyAccessOperands(try module.ops.get(opIdx) otherwise panic("DisplacedAddressFolds.censusAccesses: opIdx {opIdx} not in module.ops"), access: self.access)
+
+				if (self.access.isPlainLoad() or self.access.isPlainStore()) and self.addresses.contains(self.access.addrId) 'displacedAccess'
+					self.censusAddressRead(self.access.addrId, offset: self.access.offset, valueType: self.access.valueType, reach: reach)
+				end 'displacedAccess'
+			end 'eachOp'
+		end 'eachBlock'
+	end 'censusAccesses'
+
+	function censusAddressRead(addressId ValueId, offset ByteOffset, valueType StdType, reach DisplacementReach)
+		if not displacedAccessIsReachable(reach, offset: offset, delta: self.deltaOf(addressId), valueType: valueType) 'unreachable'
+			self.escaped.insert(addressId)
+		end 'unreachable'
+	end 'censusAddressRead'
+
+	// A kept address keeps its whole ancestor chain and is never rewritten, so the removed set is
+	// closed downward and no removed add is read by a kept one; that is what lets one pass, with no
+	// rounds, decide it. Rewriting a kept add to root + delta collapses plain integer chains and moves
+	// register pressure.
+	function keepTheParentsOfKeptAddresses()
+		self.resolved.clear()
+
+		for position in 0 upto self.addresses.insertedIdCount() 'eachAddress'
+			let addressId = self.addresses.insertedIdAt(position)
+
+			if self.escaped.contains(addressId) 'kept'
+				self.keepAncestorsOf(addressId)
+			end 'kept'
+		end 'eachAddress'
+	end 'keepTheParentsOfKeptAddresses'
+
+	function keepAncestorsOf(addressId ValueId)
+		var link = addressId
+
+		while self.addresses.contains(link) and not self.resolved.contains(link) 'eachAncestor'
+			self.resolved.insert(link)
+			self.escaped.insert(link)
+			link = self.parentOf(link)
+		end 'eachAncestor'
+	end 'keepAncestorsOf'
+
+	function rewriteAccesses(module StdModule, func IrFunction)
+		for blockRef in func.blockRefs 'eachBlock'
+			view block = try module.blocks.get(blockRef) otherwise panic("DisplacedAddressFolds.rewriteAccesses: blockRef from func.blockRefs not in module.blocks")
+
+			for opIdx in block.bodyOps() 'eachOp'
+				self.rewriteAccess(module, opIdx: opIdx, op: try module.ops.get(opIdx) otherwise panic("DisplacedAddressFolds.rewriteAccesses: opIdx {opIdx} not in module.ops"))
+			end 'eachOp'
+		end 'eachBlock'
+	end 'rewriteAccesses'
+
+	function rewriteAccess(module StdModule, opIdx ElementIndex, op StdOp)
+		classifyAccessOperands(op, access: self.access)
+
+		if self.access.isPlainLoad() and self.foldsInto(self.access.addrId) 'foldedLoad'
+			replaceStdOp(module, opIdx: opIdx, op: StdOp.loadIndirect(self.access.resultId, addrId: self.baseOf(self.access.addrId), offset: self.foldedOffset(), valueType: self.access.valueType))
+		end 'foldedLoad' else if self.access.isPlainStore() and self.foldsInto(self.access.addrId) 'foldedStore'
+			replaceStdOp(module, opIdx: opIdx, op: StdOp.storeIndirect(self.baseOf(self.access.addrId), offset: self.foldedOffset(), valueId: self.access.valueId, valueType: self.access.valueType))
+		end 'foldedStore'
+	end 'rewriteAccess'
+
+	function foldedOffset() returns ByteOffset
+		return self.access.offset + self.deltaOf(self.access.addrId)
+	end 'foldedOffset'
+
+	function collectFoldedAddresses()
+		for position in 0 upto self.addresses.insertedIdCount() 'eachAddress'
+			let addressId = self.addresses.insertedIdAt(position)
+
+			if not self.escaped.contains(addressId) 'unread'
+				self.folded.insert(addressId)
+			end 'unread'
+		end 'eachAddress'
+	end 'collectFoldedAddresses'
+end 'DisplacedAddressFolds'
+
+function displacedAccessIsReachable(reach DisplacementReach, offset ByteOffset, delta ByteOffset, valueType StdType) returns bool
+	if offset > i32.max 'pastImm32'
+		return false
+	end 'pastImm32'
+
+	let total = offset + delta
+
+	if total > i32.max 'sumPastImm32'
+		return false
+	end 'sumPastImm32'
+
+	// `scaledImm12`: the arm64 data load/store encoder has no unscaled (LDUR/STUR) form.
+	return match reach 'r'
+		anyImm32 gives true
+		scaledImm12 gives arm64DispHasScaledForm(memoryDisplacement(total), width: accessWidthFor(valueType))
+	end 'r'
+end 'displacedAccessIsReachable'
+
+function replaceStdOp(module StdModule, opIdx ElementIndex, op StdOp)
+	try module.ops.set(opIdx, value: op) otherwise panic("DisplacedAddressFolds.replaceStdOp: ops.set OOB at {opIdx}")
+end 'replaceStdOp'

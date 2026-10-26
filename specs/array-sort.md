@@ -500,10 +500,9 @@ function nthPerm4(k Integer) returns IntArray
 	let divs = [6, 2, 1, 1]
 	for i in 0 upto 4 'pick'
 		let d = try divs.get(i) otherwise panic("divs OOB")
-		// Every `divs` entry is >= 1, so these divides never throw; the `otherwise` arms are
-		// unreachable (matching the `panic` used for this function's other impossible failures).
-		let idx = trunc(try (remaining / d) otherwise panic("nthPerm4: divs entry was 0"))
-		remaining = try (remaining mod d) otherwise panic("nthPerm4: divs entry was 0")
+		// Every `divs` entry is >= 1, so `d` is a proven divisor and these divides cannot throw.
+		let idx = trunc(remaining / d)
+		remaining = remaining mod d
 		let v = try pool.get(idx as ElementIndex) otherwise panic("pool OOB")
 		result.push(v)
 		try pool.remove(idx as ElementIndex) otherwise panic("pool.remove OOB")

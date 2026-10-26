@@ -2793,7 +2793,6 @@ func @__ms_send_from {
     x64.storeBaseDispReg.word64 [r12 + 8], rbx
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r12 + 16], rax
-    x64.leaRegRegImm32 rax, r12, 16
     x64.movRegImm32 rdx, 1
     x64.movRegReg rcx, r15
     x64.movRegReg rax, r14

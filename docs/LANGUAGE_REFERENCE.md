@@ -366,7 +366,7 @@ The element type comes from the first element (or pair), and every later element
 way an argument is to its parameter: `[1.5, 1]` holds `1.0`, and `["a", 1]` is **E3005**. A `let` bound to a literal of bare numbers is a
 constant: its elements fit any element alias that admits them at each use, and it is immutable — a method
 that writes it is **E3159**. A `var` of such a literal is **E2004**: cast the numbers, or name the alias of an
-`Array`, `Set`, `List` or `Vector` (`AgeArray from [...]`). See
+`Array`, `Set`, `List` or `FixedArray` (`AgeArray from [...]`). See
 [Initializing From Literals](#initializing-from-literals) for literals of other collection types.
 
 ---
@@ -458,7 +458,7 @@ typealias Tally = int(0 to u64.max)
   `i64.max`, or arithmetic over unsigned operands — passes its door unchecked (see
   [Range Checks](#range-checks)). A value that is a pattern rather than a count is a
   [`bits(64)`](#bit-patterns--bitsn).
-- An array, set, list, vector or map-column literal whose bare elements need both a negative value and a value
+- An array, set, list, fixed-array or map-column literal whose bare elements need both a negative value and a value
   above `i64.max` (`[-1, u64.max]`) has no integer type that holds them all, and is **E3005** at the element
   that makes it so (`no common integer type for -1 and 18446744073709551615`); cast the elements to an
   alias. A `let` whose value merges a range-known value above `i64.max` with a non-negative one (`try
@@ -1586,8 +1586,8 @@ end 'main'
 **E3005** (`Type 'Wrapper' does not conform to InitableFromStringLiteral`).
 
 The standard collections accept bracketed literals: a plain `[1, 2, 3]` is an `Array`, `["a": 1]` is a
-`Map`, and `Array`, `Set`, `List` and `Vector` aliases take `Alias from [ ... ]`, for example
-`CharSet from ['a', 'e']`; the alias states the element type, and a `Vector` alias's literal must write
+`Map`, and `Array`, `Set`, `List` and `FixedArray` aliases take `Alias from [ ... ]`, for example
+`CharSet from ['a', 'e']`; the alias states the element type, and a `FixedArray` alias's literal must write
 exactly as many elements as the alias holds. When that element is itself an array alias, each element is a
 value of it: another `Alias from [ ... ]`, a bare `[ ... ]` that takes its element type from the alias, or
 a local of the inner alias — `Rows from [Ints from [1, 2], [3], row]` over `typealias Rows = Array with
@@ -1670,8 +1670,8 @@ end 'main'
 - Wrong argument count is **E2056**; a bare `int` argument is **E2061**; a type argument to a non-generic
   type is **E2055**.
 - A `float` type argument, bare or through a ranged float alias such as `FullRangeFloat`, is **E2062**
-  (`Box with FullRangeFloat`). The element of an `Array` or a `Vector` is the exception, because it is stored
-  inline in a buffer: `Array with FullRangeFloat` and `Vector with 2 FullRangeFloat` compile, and there a bare `float` is
+  (`Box with FullRangeFloat`). The element of an `Array` or a `FixedArray` is the exception, because it is stored
+  inline in a buffer: `Array with FullRangeFloat` and `FixedArray with 2 FullRangeFloat` compile, and there a bare `float` is
   **E2061**.
 
 Inside `type Outer uses T`, another generic type written without `with` arguments binds by parameter NAME:
@@ -3474,8 +3474,10 @@ Parentheses override precedence: `(2 + 3) * 5` is `25`. A cast applies to the ne
 Dividing by zero is not undefined behaviour and does not crash: `/` and `mod` whose divisor **might** be zero
 **throw** `DivisionByZero`, so the failure is part of the type system and behaves identically on every target.
 
-- **The divisor is provably non-zero** — a non-zero literal (`x / 4`), or a value whose ranged type excludes 0
-  — and the divide compiles as-is, with no check.
+- **The divisor is provably non-zero** — a non-zero literal (`x / 4`), a value whose ranged type excludes 0,
+  or a value whose known range excludes 0: the counter of a counted `for` loop between compile-time bounds
+  (`i` in `for i in 1 upto 10`), or a `let` computed from such values — and the divide compiles as-is, with
+  no check. A `try` on it is **E3055**.
 - **The divisor might be zero** — the divide throws, and must be written `try (a / b) otherwise …` (or
   propagated from a function that `throws`), unless a [`try` block](#try-blocks) or a
   [`test` body](#uncaught-errors-in-tests) handles it. A bare divide anywhere else is **E3057**
@@ -3624,7 +3626,7 @@ Both take a **type** and produce a compile-time `Count`.
   [inline packed record](#inline-packed-records), which is `8` whatever its fields sum to. Inside a
   generic body, `sizeof` of any of its type parameters is the size of that parameter's argument: in
   `type Holder uses T, U`, `sizeof(T)` and `sizeof(U)` each answer for their own argument.
-- `countof(T)` is the number of elements a **fixed-size** container type holds: `countof(Vector with 3 Int)`
+- `countof(T)` is the number of elements a **fixed-size** container type holds: `countof(FixedArray with 3 Int)`
   is `3`. Inside such a container's own body, `countof(Self)` is the count of the instance a method is
   called on, or that a `static function`'s call names. A type with no fixed
   element count — a record, a primitive, a growable `Array` — is refused (**E2015**); ask an `Array` for its
@@ -3632,7 +3634,7 @@ Both take a **type** and produce a compile-time `Count`.
 
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec3 = FixedArray with 3 Int
 
 type Pair
 	export var left as Int
@@ -3648,7 +3650,8 @@ end 'main'
 ### Collection Access
 
 Maxon has no subscript operator: `items[0]` is a syntax error. Elements are read and written through
-methods, and **every access is bounds-checked**:
+methods, and **every access is bounds-checked** — at run time, or at compile time for a
+[`FixedArray` index proven inside its size](#fixed-arrays-and-proven-indices):
 
 - `get(index)` returns the element, or **throws** `ArrayError.indexOutOfBounds` when the index is at or past
   `count()`. Like any throwing call it needs `try`.
@@ -3690,6 +3693,48 @@ function main() returns ExitCode
 	names.push("ada")
 	names.truncate(2)
 	print("{names.count()}\n")        // 2
+	return 0
+end 'main'
+```
+
+### Fixed Arrays and Proven Indices
+
+A `FixedArray with N T` holds exactly `N` elements, and `N` is part of its type: `FixedArray with 3 Int`
+and `FixedArray with 4 Int` are different types. The compiler therefore answers at each `get` or `set`
+whether the index lies inside `0 to N-1`:
+
+- **A proven index makes the access total.** The call cannot throw, is written without `try`, and a `try`
+  on it is **E3055**. An index is proven when it is a constant inside the size, a value whose ranged type
+  lies inside (`typealias Slot = int(0 to 3) implements ElementIndex` for a `FixedArray with 4`), the
+  counter of a counted `for` loop whose bounds are known at compile time and lie inside (literals,
+  `countof(T)`, folded constants), or a `let` computed from such values whose computed range lies inside.
+- **A constant index at or past the size** is **E3005** (`Value 4 is outside the range of the indices of
+  'FixedArray with 4' (int(0 to 3))`).
+- **Any other index** is checked at run time and throws `ArrayError.indexOutOfBounds`, so the call needs
+  `try`; a bare call is **E3057**, with the hint to give the index a ranged type within `int(0 to N-1)`.
+  An `ElementIndex` or `Count` parameter, a `var` stepped by a `while` loop, a call result and a
+  reassigned `var` are such indices, and so is every index inside an `extension FixedArray`, where the
+  count is known only at run time.
+
+The same known ranges prove a divisor non-zero (see [Division by Zero](#division-by-zero)).
+
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec4 = FixedArray with 4 Int
+typealias Slot = int(0 to 3) implements ElementIndex
+
+function read(v Vec4, at Slot) returns Int
+	return v.get(at)                              // proven by the parameter's type
+end 'read'
+
+function main() returns ExitCode
+	var v = Vec4.create()
+
+	for i in 0 upto countof(Vec4) 'fill'
+		v.set(i, value: (i * 10) as Int)          // proven by the loop bounds
+	end 'fill'
+
+	print("{read(v, at: 2)} {v.get(3)}\n")        // 20 30
 	return 0
 end 'main'
 ```
@@ -3801,7 +3846,7 @@ for num in numbers 'loop'
 end 'loop'
 ```
 
-The element of a `let` array, map, tuple or `Vector` literal keeps the range its literal elements span, so
+The element of a `let` array, map, tuple or `FixedArray` literal keeps the range its literal elements span, so
 it fits any alias that admits all of them.
 
 **Ranges.** `a to b` is inclusive and `a upto b` excludes `b`. Integer and `Character` ranges are both
@@ -5788,7 +5833,7 @@ Three mechanisms carry this:
 |--------|-----------------|
 | Use after free, double free | Reference counting; a read that could outlive its owner takes its own reference, including across the rest of its statement |
 | Iterator invalidation | A `for` loop or cursor holds a counted reference to its source |
-| Out-of-range collection index | `get`/`set` throw `ArrayError.indexOutOfBounds`; there is no unchecked access |
+| Out-of-range collection index | `get`/`set` throw `ArrayError.indexOutOfBounds`, or the compiler proves a `FixedArray` index inside the size |
 | Raw memory | Reachable only from the library tier (**E3185**) |
 | Forged values | No integer-to-enum or integer-to-union cast, and no interface-to-interface cast (**E3009**) |
 | Null | There is no null: every variable, field and element holds a value |

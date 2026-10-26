@@ -2,7 +2,7 @@
 """generate-seed-language-shim.py - write the seed shim that withdraws every language form the seed
 cannot parse, and rewrites every site the seed's older rules refuse.
 
-Two forms are withdrawn on every run. A `view` binding (`view x = e`, `view (a, b) = e`, `if view x = e`, a
+With --withdraw-view-forms, two forms are withdrawn for a seed that predates them. A `view` binding (`view x = e`, `view (a, b) = e`, `if view x = e`, a
 `view` target of a tuple assignment) is written `let`, which the seed reads as a read-only binding of the same
 value. A capability qualifier is withdrawn: `keep` and `sole` on a parameter of a function-type alias or an
 interface requirement, and `sole` or `readonly` after `returns`.
@@ -46,11 +46,14 @@ are answered at each site the seed refuses by the rewrite its older rule asks fo
          the element it reads.
   E3077  a `var` the seed reads as never reassigned, because it only sees assignments where the tree
          counts a hand-off to a mutating parameter, is written `let`.
+  E3057  a division whose divisor the tree proves nonzero, and a `get` or `set` of the sized container
+         (`Vector` to the seed) at an index the tree proves inside it, are written `try … otherwise
+         panic`, which the seed demands of a throwing division and a throwing call.
 The difference is the patch.
 
 Usage:
   python scripts/seed-shim/generate-seed-language-shim.py [--tree DIR] [--seed PATH] [--work DIR]
-      [--output PATH] [--resume] [--older-seed]
+      [--output PATH] [--resume] [--older-seed] [--withdraw-view-forms]
 
 --work must be empty, and defaults to a fresh system temp directory; with --resume it is the
 directory a previous run left, and the build loop continues there. Keep it outside the checkout,
@@ -108,19 +111,22 @@ STRING_LITERAL = re.compile(r'^b?"(?:[^"\\]|\\.)*"$')
 SCOPE_OPENERS = ("if let ", "if var ", "while let ", "while var ", "for ")
 PLAIN_BINDERS = ("let ", "var ")
 
-HEADER = """# The seed cannot parse a `view` binding, so each is written `let`, which the seed reads as a read-only binding of
+HEADER = """# A form is withdrawn only against a seed that predates it: `--withdraw-view-forms` for the first two paragraphs,
+# `--older-seed` for the next five.
+# The seed cannot parse a `view` binding, so each is written `let`, which the seed reads as a read-only binding of
 # the same value; a `var` the seed then reads as moved by that `let` is written `let` too where nothing reassigns it.
 # The seed cannot parse a capability qualifier (`keep` or `sole` on a parameter of a function-type alias or an
 # interface requirement, `returns sole`, `returns readonly`), so each is withdrawn.
-# Against a seed older than the forms below (`--older-seed`), each of them is withdrawn as well.
 # The seed cannot parse a `readonly` qualifier on a container's element type (`Array with readonly T`,
 # `Map with (K, readonly V)`) or a `let` on a union case's payload (`case(let name T)`), so each is withdrawn. Without
 # the qualifier two instances of a container are one type to the seed, which is what it always held.
 # The seed cannot parse a generic function, so each is withdrawn whole; the compiler calls none of them.
 # The seed cannot parse a `typealias X = int(range) implements Parent` clause either, and it enforces every ranged
 # typealias nominally at every crossing. Each clause is withdrawn, and every place the tree widens a subtype
-# to its parent without a cast gets the cast the seed names. A divisor cast to a parent that admits 0 makes the
-# division throwing to the seed, so it is written `try (…) otherwise panic`; the tree proved it nonzero.
+# to its parent without a cast gets the cast the seed names. A divisor the tree proves nonzero, by a cast to a parent
+# that admits 0 or by an interval, makes the division throwing to the seed, so it is written `try (…) otherwise panic`.
+# A `get` or `set` of the sized container at an index the tree proves inside it is throwing to the seed, so it is
+# written `try … otherwise panic` as well.
 # The seed cannot infer a field's type from its initializer, so each type-body `var x = e as T`, `var x = Type.member(...)`
 # and `var x = "text"` is written `var x as T = e`.
 # The seed cannot lex a decimal integer literal above i64.max, so each is written in hex, and a typealias range bound is
@@ -215,7 +221,7 @@ SELF = "self"
 MEMBER_CHAIN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
 ASSIGNMENT = re.compile(r"\s*[-+*/%]?=(?!=)")
 STDLIB_DIR = "stdlib"
-COLLECTION_TYPES = {"Array", "List", "Map", "Set", "Vector"}
+COLLECTION_TYPE_FILES = {"Array": "Array", "List": "List", "Map": "Map", "Set": "Set", "Vector": "FixedArray"}
 READ_ONLY_COLLECTION_METHODS = {"capacity", "clone", "contains", "count", "equals", "first", "get", "getCapacity", "hash", "isEmpty", "last", "slice"}
 SOURCE_DECLARATION = re.compile(r"^(?P<indent>\t*)(?P<modifiers>(?:[a-z]+ )*)(?P<keyword>type|extension|interface|enum|union|function|typealias|let|var) (?P<name>[A-Za-z_][A-Za-z0-9_]*)")
 
@@ -243,7 +249,10 @@ OTHERWISE_KEYWORD = " otherwise "
 NUMBER_LITERAL = re.compile(r"-?[0-9][0-9_]*(?:\.[0-9][0-9_]*)?")
 CAST_SUFFIX = re.compile(r"\s+as\s+[A-Za-z_][A-Za-z0-9_.]*")
 MULTIPLICATIVE_OPERATORS = ["*", "/", "%", " mod"]
-DIVISOR_NEVER_ZERO = "the tree's divisor type excludes 0; only the cast to its parent admits it"
+DIVISOR_NEVER_ZERO = "the tree proves this divisor is never 0"
+THROWING_ACCESS = re.compile(r"^throwing function requires try: 'stdlib\.Vector\.(?P<method>get|set)'$")
+INDEX_IN_BOUNDS = "the tree proves this index is inside the fixed size"
+BINDING_HEAD = re.compile(r"^[ \t]*(?:(?:let|var)[ \t]+[A-Za-z_][A-Za-z0-9_]*(?:[ \t]+as[ \t]+[A-Za-z_][A-Za-z0-9_.]*)?[ \t]*=|return|[A-Za-z_][A-Za-z0-9_.]*[ \t]*=)[ \t]*$")
 
 
 class Unhandled(Exception):
@@ -1361,6 +1370,10 @@ def cast_match_arms(lines, line_number, message, parents):
 		lines[j] = arm
 
 
+def try_otherwise_panic(expression, reason):
+	return f"try {expression} otherwise panic(\"{reason}\")"
+
+
 def fix_line(line, column, code, message, parents, ranges):
 	at = column - 1
 	m = BINARY.match(message)
@@ -1492,7 +1505,26 @@ def fix_line(line, column, code, message, parents, ranges):
 		if any(preceding.endswith(p) for p in MULTIPLICATIVE_OPERATORS) or preceding.endswith("-"):
 			raise Unhandled(f"the dividend is the right operand of a tighter or equal-binding operator, so `{op}` does not head its own expression")
 
-		return line[:start] + f"(try ({line[start:end]}) otherwise panic(\"{DIVISOR_NEVER_ZERO}\"))" + line[end:]
+		return line[:start] + f"({try_otherwise_panic('(' + line[start:end] + ')', DIVISOR_NEVER_ZERO)})" + line[end:]
+
+	m = THROWING_ACCESS.match(message) if code == "E3057" else None
+
+	if m:
+		method = m.group("method")
+		open_at = at + len(method)
+
+		if at == 0 or line[at - 1] != "." or not line.startswith(method + "(", at):
+			raise Unhandled(f"no `.{method}(` call at the reported column")
+
+		start, _ = atom_before(line, at - 1)
+		end = match_forward(line, open_at) + 1
+		wrapped = try_otherwise_panic(line[start:end], INDEX_IN_BOUNDS)
+		head = line[:start]
+
+		if not line[end:].strip() and (not head.strip() or BINDING_HEAD.match(head)):
+			return head + wrapped + line[end:]
+
+		return head + f"({wrapped})" + line[end:]
 
 	if code == "E3010" and UNNEEDED_CAST.match(message):
 		cast_at = CAST_SUFFIX.match(line, at - 1)
@@ -1584,7 +1616,7 @@ def is_collection_member(rel, enclosing):
 		return False
 
 	keyword, name = enclosing
-	return keyword in ("type", "extension") and name in COLLECTION_TYPES and rel == f"{STDLIB_DIR}/{name}.maxon"
+	return keyword in ("type", "extension") and name in COLLECTION_TYPE_FILES and rel == f"{STDLIB_DIR}/{COLLECTION_TYPE_FILES[name]}.maxon"
 
 
 def require_read_only_via(borrow, iterated, members):
@@ -1598,7 +1630,7 @@ def require_read_only_via(borrow, iterated, members):
 	else:
 		where = f"`{owner}`, which this script cannot place on the iterated `{iterated}`"
 
-	raise Unhandled(f"the refused mutation reaches {where}, via `{via}`, which is not a read-only {'/'.join(sorted(COLLECTION_TYPES))} method of {STDLIB_DIR}/, so this script cannot prove it leaves the iterated collection unmutated and iterating a clone of it could change what the loop sees")
+	raise Unhandled(f"the refused mutation reaches {where}, via `{via}`, which is not a read-only {'/'.join(sorted(COLLECTION_TYPE_FILES))} method of {STDLIB_DIR}/, so this script cannot prove it leaves the iterated collection unmutated and iterating a clone of it could change what the loop sees")
 
 
 def enclosing_loop_of(lines, index, element):
@@ -2794,6 +2826,7 @@ def main():
 	parser.add_argument("--output")
 	parser.add_argument("--resume", action="store_true")
 	parser.add_argument("--older-seed", action="store_true")
+	parser.add_argument("--withdraw-view-forms", action="store_true")
 	args = parser.parse_args()
 
 	tree = os.path.abspath(args.tree)
@@ -2816,11 +2849,15 @@ def main():
 		if args.older_seed and withdraw_older_seed_forms(work) != 0:
 			return 1
 
-		views, bare, view_names, view_sources = strip_view_bindings(work)
+		if args.withdraw_view_forms:
+			views, bare, view_names, view_sources = strip_view_bindings(work)
+			print(f"wrote {views} `view` binding keywords as `let`, {bare} of them over a bare local name", flush=True)
+			qualifiers = strip_capability_qualifiers(work)
+			print(f"withdrew {qualifiers} `keep`/`sole`/`readonly` parameter and result qualifiers", flush=True)
+		else:
+			view_names, view_sources = {}, {}
+
 		save_view_registry(work, view_names, view_sources)
-		print(f"wrote {views} `view` binding keywords as `let`, {bare} of them over a bare local name", flush=True)
-		qualifiers = strip_capability_qualifiers(work)
-		print(f"withdrew {qualifiers} `keep`/`sole`/`readonly` parameter and result qualifiers", flush=True)
 
 	view_names, view_sources = load_view_registry(work)
 	rewriter = Rewriter(work, parents, ranges, view_names, view_sources)

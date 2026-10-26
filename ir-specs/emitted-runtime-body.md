@@ -4597,8 +4597,7 @@ func @main {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   __im_store:
-    x64.leaRegRegImm32 rax, rax, 8
-    x64.storeBaseDispReg.word64 [rax + 0], r8
+    x64.storeBaseDispReg.word64 [rax + 8], r8
   tryok:
     x64.movRegImm32 rbx, 0
     x64.movRegReg rcx, r12
@@ -4839,8 +4838,7 @@ func @main {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   __im_store:
-    x64.leaRegRegImm32 rax, rax, 8
-    x64.storeBaseDispReg.word64 [rax + 0], r8
+    x64.storeBaseDispReg.word64 [rax + 8], r8
   tryok:
     x64.movRegImm32 rbx, 0
     x64.movRegReg rcx, r12
@@ -5077,8 +5075,7 @@ func @main {
     arm64.b.ne tryerr
     arm64.b tryok
   __im_store:
-    arm64.add x0, x0, 8
-    arm64.storeBaseDispReg.word64 [x0 + 0], x2
+    arm64.storeBaseDispReg.word64 [x0 + 8], x2
   tryok:
     arm64.movImm x19, 0
     arm64.movRegReg x0, x20
@@ -5306,8 +5303,7 @@ func @main {
     arm64.b.ne tryerr
     arm64.b tryok
   __im_store:
-    arm64.add x0, x0, 8
-    arm64.storeBaseDispReg.word64 [x0 + 0], x2
+    arm64.storeBaseDispReg.word64 [x0 + 8], x2
   tryok:
     arm64.movImm x19, 0
     arm64.movRegReg x0, x20

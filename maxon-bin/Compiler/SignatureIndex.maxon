@@ -3987,14 +3987,14 @@ enum TypeArgInstantiationKind
 
 	// A HEAP AGGREGATE (`typeIsManaged`): a String, a struct, a boxed union, a nested container — anything
 	// whose slot is a POINTER rather than the value. The front-end reject for the one container that
-	// PUBLISHES its slots at birth (`Vector with N <type parameter>`): `create()` zeroes every slot, and
+	// PUBLISHES its slots at birth (`FixedArray with N <type parameter>`): `create()` zeroes every slot, and
 	// a zeroed pointer is an ABSENCE, not a value.
 	//
 	// ⛔ **IT IS NOT `consumeMoved`, AND THE TWO ARE ONE WORD APART IN ENGLISH AND A WHOLE CLASS APART IN
 	// FACT.** That one is the CONSUME boundary (`typeArgIsOwned` — does the box take the caller's value
-	// away), and it answers FALSE for an all-scalar struct, which is BORROWED at the call site. A `Vector`
+	// away), and it answers FALSE for an all-scalar struct, which is BORROWED at the call site. A `FixedArray`
 	// slot standing for one is still a null pointer with a live `destroyFunc@40` behind it, so the boundary
-	// this kind needs is the one `containerElementIsManaged` — the CONCRETE vector's own element gate —
+	// this kind needs is the one `containerElementIsManaged` — the CONCRETE fixed array's own element gate —
 	// already reads. The two gates then agree on what "managed" means, which is what a shared body's refusal
 	// and a concrete instance's refusal must do.
 	managedElement
@@ -9481,7 +9481,7 @@ module let ReservedTypeNamePrefix = b"__"
 //
 // ⛔ **THE SEED ITSELF IS NOT RETIRABLE.** With no listed module declaring the record, `Array` is a
 // SYNTHESIZED builtin container in exactly the sense `SetBuiltinBaseName`, `ListBuiltinBaseName`,
-// `MapBuiltinBaseName` and `VectorBuiltinBaseName` are — the compiler owns the record, so the
+// `MapBuiltinBaseName` and `FixedArrayBuiltinBaseName` are — the compiler owns the record, so the
 // compiler owns the name, and there is nothing left to discover it FROM. A reserved spelling
 // (`__ManagedMemory`) would rename every emitted per-type symbol of a compile no corpus program
 // performs.
@@ -9572,7 +9572,7 @@ export let ListBuiltinBaseName = b"List"
 // `List` as a USER type whose sole field is `var chain as __ManagedList with Element`, so the two are one
 // structure in the canonical language too — and in the compiler they are literally one: the same
 // `ListRecordBytes` header, the same 24-byte nodes, the same `__list_*` entries, the same `__list_decref`.
-// This is `Vector`'s relationship to `Array` (see `VectorBuiltinBaseName`) at a second pair: two TYPES whose
+// This is `FixedArray`'s relationship to `Array` (see `FixedArrayBuiltinBaseName`) at a second pair: two TYPES whose
 // layouts coincide, kept as separate base names because what may be DONE to them differs — a `List` is
 // indexed and iterated, a `__ManagedList` hands out NODE HANDLES.
 //
@@ -9646,48 +9646,48 @@ export let ManagedMemoryCursorBuiltinBaseName = b"__ManagedMemoryCursor"
 // how `current()` is emitted through the SAME element accessor an `Array`'s `get` is.
 let ManagedMemoryCursorTypeParamCount = 1
 
-// ⭐⭐ **THE FIFTH COMPILER-OWNED CONTAINER: `Vector with <N> <Element>`, A FIXED-SIZE ARRAY.** The
-// compiler owns its record; `stdlib/Vector.maxon` declares the type and supplies every member body.
+// ⭐⭐ **THE FIFTH COMPILER-OWNED CONTAINER: `FixedArray with <N> <Element>`, A FIXED-SIZE ARRAY.** The
+// compiler owns its record; `stdlib/FixedArray.maxon` declares the type and supplies every member body.
 //
-// ⭐ **ONE CORPUS BODY SERVES EVERY SIZE.** `Self` inside `type Vector uses Element` is the
-// declaration's own instance over its own parameters (`ownRecordSelfInstance`) — a vector with NO
+// ⭐ **ONE CORPUS BODY SERVES EVERY SIZE.** `Self` inside `type FixedArray uses Element` is the
+// declaration's own instance over its own parameters (`ownRecordSelfInstance`) — a fixed array with NO
 // count — while every value a program holds states one, because the count is part of the intern KEY
 // (`fixedSizes`, below). `substitutedShape` gives a declaration's own countless `Self` the SIZE of
 // the receiver it is viewed through, so a sized receiver matches a corpus method's `self`. The rule
-// is confined to a declaration's own `Self`, which is why `/specs/vector.md`'s
-// `error.wrong-size-vector-argument` stays refused.
+// is confined to a declaration's own `Self`, which is why `/specs/fixed-array.md`'s
+// `error.wrong-size-fixed-array-argument` stays refused.
 //
 // ⭐ **`create()` NEEDS THE COUNT AND ITS BODY CANNOT NAME IT.** `return Self{}` means *"N
 // zero-initialized elements"*, so the count travels in a hidden parameter of its own
 // (`fixedElementCountNeeds`, which says why the layout descriptor is the wrong carrier), and
 // `Parser.emitSizedContainerRecord` publishes the slots for the corpus's `return Self{}`.
 //
-// ⚠ **`for … in` OVER A VECTOR RUNS THE CORPUS `createIterator`**, on the module's VISIBILITY
+// ⚠ **`for … in` OVER A FIXED ARRAY RUNS THE CORPUS `createIterator`**, on the module's VISIBILITY
 // alone; `Parser.parseForStatement`'s header states the trade.
 //
 // ⭐ **ITS RUNTIME REPRESENTATION IS AN `Array`'s, EXACTLY — the 48-byte `ManagedRecordBytes` fused record, the
 // `__managed_*` helpers, `__managed_decref`.** A fixed-size buffer and a growable one differ in what may be DONE to
 // them, not in how the bytes sit, so a second record would have been the same six slots under a second
-// name: `genericInstanceBoxSize` and `genericInstanceBoxDropCallee` answer a Vector with the `Array` row.
+// name: `genericInstanceBoxSize` and `genericInstanceBoxDropCallee` answer a FixedArray with the `Array` row.
 //
-// ⛔ **HOW A VECTOR'S RECORD IS BUILT IS `Parser.emitSizedContainerRecord`'s TO STATE**, and it is
+// ⛔ **HOW A FIXED ARRAY'S RECORD IS BUILT IS `Parser.emitSizedContainerRecord`'s TO STATE**, and it is
 // stated only there.
 //
-// ⭐⭐ **WHAT IS `Vector`'s ALONE IS THE SIZE, AND IT LIVES IN THE INSTANCE'S IDENTITY** —
-// `GenericInstanceRegistry.fixedSizes`, part of the intern KEY, so `Vector with 3 Int` and
-// `Vector with 4 Int` are different gids by construction (`/specs/vector.md`: *"The size is part of the
+// ⭐⭐ **WHAT IS `FixedArray`'s ALONE IS THE SIZE, AND IT LIVES IN THE INSTANCE'S IDENTITY** —
+// `GenericInstanceRegistry.fixedSizes`, part of the intern KEY, so `FixedArray with 3 Int` and
+// `FixedArray with 4 Int` are different gids by construction (`/specs/fixed-array.md`: *"The size is part of the
 // type"*). ⚠ **AND IT IS A COLUMN RATHER THAN A `MaxonType` ARM.** A `MaxonType` is read through a DENSE
 // PER-VALUE COLUMN (`ValueTypeTag` + `TypeNameId`, see MaxonDialect), so a `constInt` arm — a VALUE
 // wearing a type's clothes — would owe an answer to every rule
 // that reads a tag — `typeClassOf`, `tagIsIntegral`, `valueTagToStdType`, `notOperatorFor` — about "the type
 // that is the number 3", and there is no honest one. A number is not a type; it is a second coordinate of
 // the instance, and it is stored as one.
-export let VectorBuiltinBaseName = b"Vector"
+export let FixedArrayBuiltinBaseName = b"FixedArray"
 
-// The single TYPE parameter `Vector` declares. Its SIZE is not a type argument (see above), so a
-// `Vector with 3 Int` has arity ONE here exactly as `Array with Int` does, and every one-argument container
+// The single TYPE parameter `FixedArray` declares. Its SIZE is not a type argument (see above), so a
+// `FixedArray with 3 Int` has arity ONE here exactly as `Array with Int` does, and every one-argument container
 // door (`containerElementType`, `arrayElementSize`, `containerElementIsManaged`) serves it unchanged.
-let VectorTypeParamCount = 1 as FieldIndex
+let FixedArrayTypeParamCount = 1 as FieldIndex
 
 // ⚠ **NO `MapError` CONSTANT STANDS HERE, AND THE COMPILER NAMES THAT ENUM NOWHERE.** `stdlib/Map.maxon:6-9`
 // declares it; nothing transcribes its ordinals (`__map_get`/`__map_insert` went with the synthesized hash
@@ -10133,10 +10133,10 @@ export let ManagedMemoryTypeName = b"__ManagedMemory"
 // ⭐⭐ **`__ManagedMemory with T` IS `Array with T`, WRITTEN OUT** — the generic-BASE spelling of the
 // binding the bare name already has. The two describe ONE record and for the compiler they
 // ARE one `GenericInstanceId`. Registering the ARITY-ZERO alias alone leaves the base spelling —
-// which `stdlib/Map.maxon`, `Array.maxon`, `Vector.maxon`, `Character.maxon` and `String.maxon` all write —
+// which `stdlib/Map.maxon`, `Array.maxon`, `FixedArray.maxon`, `Character.maxon` and `String.maxon` all write —
 // answering `E2055 "Type '__ManagedMemory' has no associated types"`. With the base spelling registered the
-// annotation compiles and `stdlib/Vector.maxon` probes `E3001` and nothing else; why `Vector` is
-// synthesized rather than read is a different fact entirely and is stated at `VectorBuiltinBaseName`.
+// annotation compiles and `stdlib/FixedArray.maxon` probes `E3001` and nothing else; why `FixedArray` is
+// synthesized rather than read is a different fact entirely and is stated at `FixedArrayBuiltinBaseName`.
 //
 // ⭐ **CANONICALIZING AT THE READ IS WHAT KEEPS IT ONE INSTANCE.** Every downstream door — the arity check,
 // the intern key, `genericInstanceBoxSize`, the drop callee, the element accessors — asks about a base NAME,
@@ -10273,7 +10273,7 @@ export let SurfaceBitElementIsBuffer = 2 as DeclaredSurfaceNode
 // ⚠ **THE BIT IS ABOUT AN ARGUMENT POSITION AND ITS NAME IS ABOUT AN ELEMENT, AND THE TWO COINCIDE ONLY
 // BECAUSE OF WHO READS IT.** `Map with (__ManagedMemory, Int)` sets it for a KEY, since the recorder reads
 // argument 0 whatever the base is. That is harmless and must stay so: every reader of the mark today is
-// `Parser.emitContainerElementAccessor`, whose callers are `Array`, `List`, `Vector` and the array cursor —
+// `Parser.emitContainerElementAccessor`, whose callers are `Array`, `List`, `FixedArray` and the array cursor —
 // containers whose argument 0 IS their element. A derivation that narrowed itself to `Array` would make the
 // derived answer disagree with the RECORDED one for the same declaration, which is worse than the overreach.
 let BufferSurfaceArgPosition = 0
@@ -13392,7 +13392,7 @@ end 'cacheReadTopLevelBindingSiteMap'
 
 // @generated library-cache end
 
-// ⭐ **HOW MANY ELEMENTS A SIZED CONTAINER INSTANCE HOLDS** — `Vector with 3 Int`'s 3. It is a COUNT of
+// ⭐ **HOW MANY ELEMENTS A SIZED CONTAINER INSTANCE HOLDS** — `FixedArray with 3 Int`'s 3. It is a COUNT of
 // elements the compiler must be able to fold into a `__managed_mem_create` argument and into a `count()`
 // constant, so it is bounded by what a buffer of machine words can address rather than by `u64.max`.
 export typealias FixedElementCount = int(1 to u32.max)
@@ -13607,9 +13607,9 @@ end 'cacheReadInstanceShapeReadOnlyArgs'
 
 // @generated library-cache end
 
-// ⭐ **HOW A SIZE APPEARS IN AN INSTANCE'S NAME** — `Vector with 3 Int` is `Vector_N3_Int`. The letter keeps
-// the count from reading as a type argument's mangling, and `/specs/vector.md`'s RequiredIR blocks pin
-// the resulting symbol (`__layout_Vector_N3_Int`) byte for byte.
+// ⭐ **HOW A SIZE APPEARS IN AN INSTANCE'S NAME** — `FixedArray with 3 Int` is `FixedArray_N3_Int`. The letter keeps
+// the count from reading as a type argument's mangling, and `/specs/fixed-array.md`'s RequiredIR blocks pin
+// the resulting symbol (`__layout_FixedArray_N3_Int`) byte for byte.
 let FixedSizeNameTag = "N"
 
 // ⭐ **THE GENERIC-INSTANCE INTERNER** — `Box with Integer` ⇒ a `GenericInstanceId`, with the
@@ -13625,9 +13625,9 @@ export type GenericInstanceRegistry
 	var baseIds as TypeNameIdArray
 	var argLists as MaxonTypeArrayArray
 
-	// ⭐ **THE SIZED CONTAINER'S SECOND IDENTITY COORDINATE** — `Vector with 3 Int`'s 3, and
-	// absent for every instance whose base is not sized (see `VectorBuiltinBaseName` for why a
-	// size is a column here and not a `MaxonType` arm). It rides `instanceKey`, so two vectors of
+	// ⭐ **THE SIZED CONTAINER'S SECOND IDENTITY COORDINATE** — `FixedArray with 3 Int`'s 3, and
+	// absent for every instance whose base is not sized (see `FixedArrayBuiltinBaseName` for why a
+	// size is a column here and not a `MaxonType` arm). It rides `instanceKey`, so two fixed arrays of
 	// different length can never share a gid.
 	var fixedSizes as FixedElementCountColumn
 
@@ -13881,7 +13881,7 @@ export type GenericInstanceRegistry
 	end 'instanceKey'
 
 	// Intern `(baseId, args, shape)`, returning an existing id for a structural repeat. O(1)
-	// amortized via `index`. `shape` defaults to `unsized` — every instance that is neither a sized `Vector`
+	// amortized via `index`. `shape` defaults to `unsized` — every instance that is neither a sized `FixedArray`
 	// nor spells a `readonly` argument — so the default is what the call sites that MINT such an instance
 	// mean, and none of them spells it.
 	//
@@ -14080,7 +14080,7 @@ export union GenericArgNode
 	leaf(argType MaxonType)
 
 	// ⭐ `shape` is the nested instance's own element COUNT or `readonly` mask — `unsized` for an instance
-	// that is neither a sized `Vector` nor spells a `readonly` argument. It rides the NODE because the node
+	// that is neither a sized `FixedArray` nor spells a `readonly` argument. It rides the NODE because the node
 	// is all `resolveArgNode` has when it interns the instance, and the shape is part of that instance's
 	// identity (`GenericInstanceRegistry.instanceKey`).
 	instanceHeader(let baseName ByteArray, argCount FieldIndex, shape InstanceShape)
@@ -14288,10 +14288,10 @@ export type GenericAliasEntry
 	export let sweptInstance as GenericInstanceId
 	export let sweptInstanceRecorded as bool
 
-	// ⭐ **THE SIZE A SIZED DECLARATION WROTE** — `typealias Vec3 = Vector with 3 Int`'s 3, read off the
+	// ⭐ **THE SIZE A SIZED DECLARATION WROTE** — `typealias Vec3 = FixedArray with 3 Int`'s 3, read off the
 	// literal by `Parser.readSizedBaseElementCount` and carried here because `recordGenericAlias` is where the
 	// instance is interned and the size is half of that instance's identity. `unsized` for every other
-	// declaration, which is every declaration whose base is not `Vector`.
+	// declaration, which is every declaration whose base is not `FixedArray`.
 	export var shape as InstanceShape
 
 	// ⭐⭐ **WAS THIS ALIAS DECLARED INSIDE A `type`** — `type Character`'s `typealias ByteMemory =
@@ -17428,12 +17428,12 @@ export type SettledDeclarations
 	// that point. A name it does not hold is collected on demand.
 	module var typeNameClaimIndex as TypeNameClaimIndex
 
-	// The one need with a PAYLOAD rather than a bit: a vector's instance is keyed by its SIZE as well as its
+	// The one need with a PAYLOAD rather than a bit: a fixed array's instance is keyed by its SIZE as well as its
 	// element, so the set of sizes the program constructs is what has to be carried (see
-	// `Parser.foldDeclaredSignaturesInto`'s `vectorFromSizes`). Accumulated across files with duplicates left
+	// `Parser.foldDeclaredSignaturesInto`'s `fixedArrayFromSizes`). Accumulated across files with duplicates left
 	// in — interning is idempotent, and a `Set` here would trade a handful of repeated interns for a hash of
 	// every size in the program.
-	module var vectorFromSizes as FixedSizeArray
+	module var fixedArrayFromSizes as FixedSizeArray
 
 	// The names written as the head of a `<Name> from […]` construction, in any file
 	// (`Parser.foldDeclaredSignaturesInto`'s `fromHeadNames`). Read once every file has folded, when a name can
@@ -17678,7 +17678,7 @@ export type SettledDeclarations
 	// PREFERENCE.** A count is a fact about the INSTANCE; every word the layout descriptor carries is a fact
 	// about the type ARGUMENT, and that difference is exactly what `MaxonToStdLowering.emitInstanceDescriptorAddr`
 	// relies on when it FORWARDS the caller's own blocks to a callee whose instance is written over the
-	// caller's parameters. Put the count in that blob and a `Vector with 4 Element` reached from inside
+	// caller's parameters. Put the count in that blob and a `FixedArray with 4 Element` reached from inside
 	// `type Holder uses Element` reads HOLDER's count — none — instead of 4: **MEASURED, exit 64
 	// where the answer is 68.** And the obvious repair (refuse the forward, mint instead) is unreachable in
 	// exactly the case the forward fires: the forward arm requires argument 0 to be a type PARAMETER, and
@@ -17686,7 +17686,7 @@ export type SettledDeclarations
 	// `genericInstanceArgLogicalSize` — a type parameter's size is itself a descriptor read.
 	//
 	// ⭐ **A PARAMETER HAS NONE OF THAT, BECAUSE THE COUNT IS A COMPILE-TIME CONSTANT AT EVERY CALL SITE.**
-	// The receiver's instance states it (`Vector with 4 Element` states 4 even though its ARGUMENT is a
+	// The receiver's instance states it (`FixedArray with 4 Element` states 4 even though its ARGUMENT is a
 	// parameter), a static's RESULT instance states it, and a self-call inside the sized container's own body
 	// forwards the caller's own slot. It also costs the descriptor nothing: a `countof`-reading method that
 	// needs no OTHER dictionary word reserves no descriptor at all, so it can be called from a frame that has
@@ -18311,7 +18311,7 @@ export type SettledDeclarations
 	export static function create(os Os) returns SettledDeclarations
 		let interfaces = IrInterfaceMap.create()
 
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionAliasRegistry.create(), nestedFunctionAliasMembers: NestedFunctionAliasNameSet.create(), pendingImplementsClauses: AliasImplementsClauseArray.create(), implementsParents: AliasImplementsParentMap.create(), implementsVerdicts: AliasImplementsVerdictMap.create(), structLayouts: StructLayoutArray.create(), structNamesInDeclOrder: NameRoster.create(), enumTypes: createEnumRegistry(interfaces), genericAliasDecls: GenericAliasEntryArray.create(), genericAliasDeclIndexByName: GenericAliasDeclIndexMap.create(), genericAliasDeclsIndexedThrough: 0, instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), typeParamOwners: TypeParamOwnerMap.create(), crossKindContests: noCrossKindContests, typeNameClaimIndex: TypeNameClaimIndex.unsettled, vectorFromSizes: FixedSizeArray.create(), fromHeadNames: FromHeadNameSet.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: noGenericAliasContests, multiplyDeclaredGenericAliases: noDisagreeingAliasNames, sharedInstanceGenericAliases: DisagreeingAliasNameSet.create(), genericAliasMints: GenericAliasMintTable.create(), runtimeFilePaths: LibraryFilePathSet.create(), scriptlibFilePaths: LibraryFilePathSet.create(), genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), extensionInnerAliasKeepers: ExtensionInnerAliasSiteMap.create(), typeBodyInnerAliasMembers: ExtensionInnerAliasNameSet.create(), libraryExtensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), authorExtensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), authorShadowedInnerAliases: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: interfaces, interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), interfaceDeclSiteNames: InterfaceNameSet.create(), interfaceDeclSiteIndexByName: InterfaceDeclSiteIndexMap.create(), interfaceDeclSitesIndexedThrough: 0, extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), fixedElementCountNeeds: DescriptorNeedNameSet.create(), conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, conformerIndex: DeclaredConformerIndex.unbuilt(), extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), declParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), byRefSitesOfKey: DeclarationSitesByKeyMap.create(), byRefForwardingLive: ByRefForwardingMap.create(), byRefBareNames: ByRefBareNameSet.create(), opaqueByRefBareNames: ByRefBareNameSet.create(), calleeBareNames: BareNameSet.create(), genericInstanceNameMarker: genericInstanceNameMarker(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcConstructingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsReceiverField: DeclaredBodyFactNameSet.create(), funcReceiverFieldReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsParameter: DeclaredBodyFactNameSet.create(), funcParameterReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcFieldMoveOutForwards: FreshReturnForwardMap.create(), interfaceRequirementNames: MethodNameSet.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), interfaceExtensionMembers: InterfaceExtensionMemberMap.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), authorDeclaredNames: HashDigestSet.create(), libraryMeantNames: HashDigestSet.create(), managedTopLevelNames: ManagedTopLevelNameSet.create(), corpusSlotInitCallees: SlotInitCalleeMap.create(), constInitializerTypeNames: ConstInitializerTypeNameSet.create(), constInitializerTypeSites: NameInFileArray.create(), userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: NameRoster.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceSpawnCandidateKeys: ServiceSpawnCandidateKeySet.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), corpusArrayRecordName: ArrayRecordName.of(SynthesizedArrayRecordSeed), shadowRoster: ShadowSpellingRoster.none(), qualifiedTypeClaims: TypeNameClaimLog.create(), typeHeadClaims: TypeNameClaimLog.create(), topLevelBindingSites: TopLevelBindingSiteMap.create(), writtenTypeClaims: TypeNameClaimLog.create(), aliasFamiliesBesideNominals: DeclaredTypeNameSet.create(), headerTypeNameDecls: TypeNameDeclArray.create(), nominalNameCollisions: TypeNameCollisionArray.create(), fileModuleDirectories: ModuleDirectoryByFile.create(), namespaceQualifiers: DeclaredTypeNameSet.create(), libraryFilePaths: LibraryFilePathSet.create(), declTokenStreams: DeclTokenStreamMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionAliasRegistry.create(), nestedFunctionAliasMembers: NestedFunctionAliasNameSet.create(), pendingImplementsClauses: AliasImplementsClauseArray.create(), implementsParents: AliasImplementsParentMap.create(), implementsVerdicts: AliasImplementsVerdictMap.create(), structLayouts: StructLayoutArray.create(), structNamesInDeclOrder: NameRoster.create(), enumTypes: createEnumRegistry(interfaces), genericAliasDecls: GenericAliasEntryArray.create(), genericAliasDeclIndexByName: GenericAliasDeclIndexMap.create(), genericAliasDeclsIndexedThrough: 0, instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), typeParamOwners: TypeParamOwnerMap.create(), crossKindContests: noCrossKindContests, typeNameClaimIndex: TypeNameClaimIndex.unsettled, fixedArrayFromSizes: FixedSizeArray.create(), fromHeadNames: FromHeadNameSet.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: noGenericAliasContests, multiplyDeclaredGenericAliases: noDisagreeingAliasNames, sharedInstanceGenericAliases: DisagreeingAliasNameSet.create(), genericAliasMints: GenericAliasMintTable.create(), runtimeFilePaths: LibraryFilePathSet.create(), scriptlibFilePaths: LibraryFilePathSet.create(), genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), extensionInnerAliasKeepers: ExtensionInnerAliasSiteMap.create(), typeBodyInnerAliasMembers: ExtensionInnerAliasNameSet.create(), libraryExtensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), authorExtensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), authorShadowedInnerAliases: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: interfaces, interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), interfaceDeclSiteNames: InterfaceNameSet.create(), interfaceDeclSiteIndexByName: InterfaceDeclSiteIndexMap.create(), interfaceDeclSitesIndexedThrough: 0, extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), fixedElementCountNeeds: DescriptorNeedNameSet.create(), conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, conformerIndex: DeclaredConformerIndex.unbuilt(), extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), declParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), byRefSitesOfKey: DeclarationSitesByKeyMap.create(), byRefForwardingLive: ByRefForwardingMap.create(), byRefBareNames: ByRefBareNameSet.create(), opaqueByRefBareNames: ByRefBareNameSet.create(), calleeBareNames: BareNameSet.create(), genericInstanceNameMarker: genericInstanceNameMarker(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcConstructingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsReceiverField: DeclaredBodyFactNameSet.create(), funcReceiverFieldReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsParameter: DeclaredBodyFactNameSet.create(), funcParameterReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcFieldMoveOutForwards: FreshReturnForwardMap.create(), interfaceRequirementNames: MethodNameSet.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), interfaceExtensionMembers: InterfaceExtensionMemberMap.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), authorDeclaredNames: HashDigestSet.create(), libraryMeantNames: HashDigestSet.create(), managedTopLevelNames: ManagedTopLevelNameSet.create(), corpusSlotInitCallees: SlotInitCalleeMap.create(), constInitializerTypeNames: ConstInitializerTypeNameSet.create(), constInitializerTypeSites: NameInFileArray.create(), userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: NameRoster.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceSpawnCandidateKeys: ServiceSpawnCandidateKeySet.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), corpusArrayRecordName: ArrayRecordName.of(SynthesizedArrayRecordSeed), shadowRoster: ShadowSpellingRoster.none(), qualifiedTypeClaims: TypeNameClaimLog.create(), typeHeadClaims: TypeNameClaimLog.create(), topLevelBindingSites: TopLevelBindingSiteMap.create(), writtenTypeClaims: TypeNameClaimLog.create(), aliasFamiliesBesideNominals: DeclaredTypeNameSet.create(), headerTypeNameDecls: TypeNameDeclArray.create(), nominalNameCollisions: TypeNameCollisionArray.create(), fileModuleDirectories: ModuleDirectoryByFile.create(), namespaceQualifiers: DeclaredTypeNameSet.create(), libraryFilePaths: LibraryFilePathSet.create(), declTokenStreams: DeclTokenStreamMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create()}
 	end 'create'
 
 	static function unused() returns SettledDeclarations
@@ -18339,7 +18339,7 @@ export type SettledDeclarations
 		cacheWriteTypeParamOwnerMap(writer, value: self.typeParamOwners)
 		cacheWriteCrossKindContestTable(writer, value: self.crossKindContests)
 		cacheWriteTypeNameClaimIndex(writer, value: self.typeNameClaimIndex)
-		cacheWriteFixedSizeArray(writer, value: self.vectorFromSizes)
+		cacheWriteFixedSizeArray(writer, value: self.fixedArrayFromSizes)
 		cacheWriteFromHeadNameSet(writer, value: self.fromHeadNames)
 		cacheWriteGenericAliasMap(writer, value: self.genericAliases)
 		cacheWriteGenericAliasMap(writer, value: self.interfaceAliases)
@@ -18498,7 +18498,7 @@ export type SettledDeclarations
 		let f_typeParamOwners = try cacheReadTypeParamOwnerMap(reader)
 		let f_crossKindContests = try cacheReadCrossKindContestTable(reader)
 		let f_typeNameClaimIndex = try cacheReadTypeNameClaimIndex(reader)
-		let f_vectorFromSizes = try cacheReadFixedSizeArray(reader)
+		let f_fixedArrayFromSizes = try cacheReadFixedSizeArray(reader)
 		let f_fromHeadNames = try cacheReadFromHeadNameSet(reader)
 		let f_genericAliases = try cacheReadGenericAliasMap(reader)
 		let f_interfaceAliases = try cacheReadGenericAliasMap(reader)
@@ -18636,7 +18636,7 @@ export type SettledDeclarations
 		let f_genericInstancesByName = try cacheReadGenericFunctionInstanceMap(reader)
 		let f_initializerCallSites = try cacheReadInitializerCallSiteArray(reader)
 
-		return Self{misclosedBlocks: f_misclosedBlocks, returnTypes: f_returnTypes, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, nestedFunctionAliasMembers: f_nestedFunctionAliasMembers, pendingImplementsClauses: f_pendingImplementsClauses, implementsParents: f_implementsParents, implementsVerdicts: f_implementsVerdicts, structLayouts: f_structLayouts, structNamesInDeclOrder: f_structNamesInDeclOrder, enumTypes: f_enumTypes, genericAliasDecls: f_genericAliasDecls, genericAliasDeclIndexByName: f_genericAliasDeclIndexByName, genericAliasDeclsIndexedThrough: f_genericAliasDeclsIndexedThrough, instanceDisplayNames: f_instanceDisplayNames, funcReturnAliasNames: f_funcReturnAliasNames, typeParamOwners: f_typeParamOwners, crossKindContests: f_crossKindContests, typeNameClaimIndex: f_typeNameClaimIndex, vectorFromSizes: f_vectorFromSizes, fromHeadNames: f_fromHeadNames, genericAliases: f_genericAliases, interfaceAliases: f_interfaceAliases, interfaceAliasOwners: f_interfaceAliasOwners, contestedGenericAliases: f_contestedGenericAliases, multiplyDeclaredGenericAliases: f_multiplyDeclaredGenericAliases, sharedInstanceGenericAliases: f_sharedInstanceGenericAliases, genericAliasMints: f_genericAliasMints, runtimeFilePaths: f_runtimeFilePaths, scriptlibFilePaths: f_scriptlibFilePaths, genericAliasSites: f_genericAliasSites, constLiteralSites: f_constLiteralSites, innerAliases: f_innerAliases, extensionInnerAliasMembers: f_extensionInnerAliasMembers, extensionInnerAliasKeepers: f_extensionInnerAliasKeepers, typeBodyInnerAliasMembers: f_typeBodyInnerAliasMembers, libraryExtensionInnerAliasMembers: f_libraryExtensionInnerAliasMembers, authorExtensionInnerAliasMembers: f_authorExtensionInnerAliasMembers, authorShadowedInnerAliases: f_authorShadowedInnerAliases, droppedSignatures: f_droppedSignatures, methodInnerAliasParams: f_methodInnerAliasParams, interfaces: f_interfaces, interfaceNamesInDeclOrder: f_interfaceNamesInDeclOrder, interfaceDeclIndexByName: f_interfaceDeclIndexByName, interfaceDeclSites: f_interfaceDeclSites, interfaceDeclSiteNames: f_interfaceDeclSiteNames, interfaceDeclSiteIndexByName: f_interfaceDeclSiteIndexByName, interfaceDeclSitesIndexedThrough: f_interfaceDeclSitesIndexedThrough, extensionDeclSites: f_extensionDeclSites, conformanceClauseSites: f_conformanceClauseSites, descriptorScanSites: f_descriptorScanSites, fixedElementCountNeeds: f_fixedElementCountNeeds, conditionalExtensionSkips: f_conditionalExtensionSkips, associatedTypeHoldings: f_associatedTypeHoldings, sweptConformances: f_sweptConformances, sweptConformancesBuilt: f_sweptConformancesBuilt, conformerIndex: f_conformerIndex, extensionDeclaredConformances: f_extensionDeclaredConformances, extensionMethodConstraints: f_extensionMethodConstraints, unconstrainedExtensionMethods: f_unconstrainedExtensionMethods, decls: f_decls, declIndex: f_declIndex, funcParamConsumes: f_funcParamConsumes, declParamConsumes: f_declParamConsumes, funcParamReassigns: f_funcParamReassigns, byRefSitesOfKey: f_byRefSitesOfKey, byRefForwardingLive: f_byRefForwardingLive, funcGlobalAliasReturns: f_funcGlobalAliasReturns, globalAliasReturnKeys: f_globalAliasReturnKeys, byRefBareNames: f_byRefBareNames, opaqueByRefBareNames: f_opaqueByRefBareNames, calleeBareNames: f_calleeBareNames, genericInstanceNameMarker: genericInstanceNameMarker(), funcThrows: f_funcThrows, disagreeingThrows: f_disagreeingThrows, funcThrowingDeclarationCounts: f_funcThrowingDeclarationCounts, funcDiverges: f_funcDiverges, funcDivergingDeclarationCounts: f_funcDivergingDeclarationCounts, funcAlwaysThrows: f_funcAlwaysThrows, funcAlwaysThrowingDeclarationCounts: f_funcAlwaysThrowingDeclarationCounts, funcReturnsFreshRecord: f_funcReturnsFreshRecord, funcFreshReturnForwards: f_funcFreshReturnForwards, funcFreshReturningDeclarationCounts: f_funcFreshReturningDeclarationCounts, funcConstructsFromParams: f_funcConstructsFromParams, funcConstructingDeclarationCounts: f_funcConstructingDeclarationCounts, funcReturnsReceiverField: f_funcReturnsReceiverField, funcReceiverFieldReturningDeclarationCounts: f_funcReceiverFieldReturningDeclarationCounts, funcReturnsParameter: f_funcReturnsParameter, funcParameterReturningDeclarationCounts: f_funcParameterReturningDeclarationCounts, funcFieldMoveOutForwards: f_funcFieldMoveOutForwards, interfaceRequirementNames: f_interfaceRequirementNames, funcParamDefaults: f_funcParamDefaults, funcOpaqueParams: f_funcOpaqueParams, contestedOpaqueParams: f_contestedOpaqueParams, disagreeingParamDefaults: f_disagreeingParamDefaults, funcDeclarationCounts: f_funcDeclarationCounts, funcDefaultingDeclarationCounts: f_funcDefaultingDeclarationCounts, declaredReturnSurfaces: f_declaredReturnSurfaces, funcReturnDeclFiles: f_funcReturnDeclFiles, funcDeclSites: f_funcDeclSites, overloadedDecls: f_overloadedDecls, bufferElementAliases: f_bufferElementAliases, bufferSurfaceAliases: f_bufferSurfaceAliases, extensionPublishedMethods: f_extensionPublishedMethods, extensionShadowedMethods: f_extensionShadowedMethods, extensionMethodDeclFiles: f_extensionMethodDeclFiles, contestedExtensionMethods: f_contestedExtensionMethods, interfaceExtensionMembers: f_interfaceExtensionMembers, stdlibPublishedExtensionMethods: f_stdlibPublishedExtensionMethods, stdlibExtensionMethodsBeatenByUser: f_stdlibExtensionMethodsBeatenByUser, staticInstanceContests: f_staticInstanceContests, authorDeclaredNames: f_authorDeclaredNames, libraryMeantNames: f_libraryMeantNames, managedTopLevelNames: f_managedTopLevelNames, corpusSlotInitCallees: f_corpusSlotInitCallees, inlineRecordByTypeNameId: f_inlineRecordByTypeNameId, defineProblems: f_defineProblems, constInitializerTypeNames: f_constInitializerTypeNames, constInitializerTypeSites: f_constInitializerTypeSites, userDeclaredTypeNames: f_userDeclaredTypeNames, stdlibDeclaredTypeNames: f_stdlibDeclaredTypeNames, arrayLiteralConformers: f_arrayLiteralConformers, serviceSpawnCandidateList: f_serviceSpawnCandidateList, serviceSpawnCandidateKeys: f_serviceSpawnCandidateKeys, serviceHandleOwners: f_serviceHandleOwners, defaultDeclarationList: f_defaultDeclarationList, serviceMessages: f_serviceMessages, interfaceHandleOwners: f_interfaceHandleOwners, interfaceHandleRepresentatives: f_interfaceHandleRepresentatives, interfaceHandleOrder: f_interfaceHandleOrder, serviceSendErrorNames: f_serviceSendErrorNames, corpusArrayRecordName: f_corpusArrayRecordName, shadowRoster: f_shadowRoster, qualifiedTypeClaims: f_qualifiedTypeClaims, typeHeadClaims: f_typeHeadClaims, topLevelBindingSites: f_topLevelBindingSites, writtenTypeClaims: f_writtenTypeClaims, claimedTypeClaims: f_claimedTypeClaims, aliasFamiliesBesideNominals: f_aliasFamiliesBesideNominals, headerTypeNameDecls: f_headerTypeNameDecls, nominalNameCollisions: f_nominalNameCollisions, fileModuleDirectories: f_fileModuleDirectories, namespaceQualifiers: f_namespaceQualifiers, libraryFilePaths: f_libraryFilePaths, declTokenStreams: DeclTokenStreamMap.create(), declaredTests: f_declaredTests, namespaceQualifiedFunctions: f_namespaceQualifiedFunctions, freeFunctionDirectories: f_freeFunctionDirectories, contestedFreeFunctions: f_contestedFreeFunctions, contestedRegistrationNames: f_contestedRegistrationNames, contestedKeysAnotherDeclarationHolds: f_contestedKeysAnotherDeclarationHolds, freeFunctionDeclFiles: f_freeFunctionDeclFiles, crossFileOverloadedFreeFunctions: f_crossFileOverloadedFreeFunctions, instantiatedByAParse: f_instantiatedByAParse, genericTemplates: f_genericTemplates, genericInstancesBySite: f_genericInstancesBySite, genericInstancesByName: f_genericInstancesByName, initializerCallSites: f_initializerCallSites}
+		return Self{misclosedBlocks: f_misclosedBlocks, returnTypes: f_returnTypes, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, nestedFunctionAliasMembers: f_nestedFunctionAliasMembers, pendingImplementsClauses: f_pendingImplementsClauses, implementsParents: f_implementsParents, implementsVerdicts: f_implementsVerdicts, structLayouts: f_structLayouts, structNamesInDeclOrder: f_structNamesInDeclOrder, enumTypes: f_enumTypes, genericAliasDecls: f_genericAliasDecls, genericAliasDeclIndexByName: f_genericAliasDeclIndexByName, genericAliasDeclsIndexedThrough: f_genericAliasDeclsIndexedThrough, instanceDisplayNames: f_instanceDisplayNames, funcReturnAliasNames: f_funcReturnAliasNames, typeParamOwners: f_typeParamOwners, crossKindContests: f_crossKindContests, typeNameClaimIndex: f_typeNameClaimIndex, fixedArrayFromSizes: f_fixedArrayFromSizes, fromHeadNames: f_fromHeadNames, genericAliases: f_genericAliases, interfaceAliases: f_interfaceAliases, interfaceAliasOwners: f_interfaceAliasOwners, contestedGenericAliases: f_contestedGenericAliases, multiplyDeclaredGenericAliases: f_multiplyDeclaredGenericAliases, sharedInstanceGenericAliases: f_sharedInstanceGenericAliases, genericAliasMints: f_genericAliasMints, runtimeFilePaths: f_runtimeFilePaths, scriptlibFilePaths: f_scriptlibFilePaths, genericAliasSites: f_genericAliasSites, constLiteralSites: f_constLiteralSites, innerAliases: f_innerAliases, extensionInnerAliasMembers: f_extensionInnerAliasMembers, extensionInnerAliasKeepers: f_extensionInnerAliasKeepers, typeBodyInnerAliasMembers: f_typeBodyInnerAliasMembers, libraryExtensionInnerAliasMembers: f_libraryExtensionInnerAliasMembers, authorExtensionInnerAliasMembers: f_authorExtensionInnerAliasMembers, authorShadowedInnerAliases: f_authorShadowedInnerAliases, droppedSignatures: f_droppedSignatures, methodInnerAliasParams: f_methodInnerAliasParams, interfaces: f_interfaces, interfaceNamesInDeclOrder: f_interfaceNamesInDeclOrder, interfaceDeclIndexByName: f_interfaceDeclIndexByName, interfaceDeclSites: f_interfaceDeclSites, interfaceDeclSiteNames: f_interfaceDeclSiteNames, interfaceDeclSiteIndexByName: f_interfaceDeclSiteIndexByName, interfaceDeclSitesIndexedThrough: f_interfaceDeclSitesIndexedThrough, extensionDeclSites: f_extensionDeclSites, conformanceClauseSites: f_conformanceClauseSites, descriptorScanSites: f_descriptorScanSites, fixedElementCountNeeds: f_fixedElementCountNeeds, conditionalExtensionSkips: f_conditionalExtensionSkips, associatedTypeHoldings: f_associatedTypeHoldings, sweptConformances: f_sweptConformances, sweptConformancesBuilt: f_sweptConformancesBuilt, conformerIndex: f_conformerIndex, extensionDeclaredConformances: f_extensionDeclaredConformances, extensionMethodConstraints: f_extensionMethodConstraints, unconstrainedExtensionMethods: f_unconstrainedExtensionMethods, decls: f_decls, declIndex: f_declIndex, funcParamConsumes: f_funcParamConsumes, declParamConsumes: f_declParamConsumes, funcParamReassigns: f_funcParamReassigns, byRefSitesOfKey: f_byRefSitesOfKey, byRefForwardingLive: f_byRefForwardingLive, funcGlobalAliasReturns: f_funcGlobalAliasReturns, globalAliasReturnKeys: f_globalAliasReturnKeys, byRefBareNames: f_byRefBareNames, opaqueByRefBareNames: f_opaqueByRefBareNames, calleeBareNames: f_calleeBareNames, genericInstanceNameMarker: genericInstanceNameMarker(), funcThrows: f_funcThrows, disagreeingThrows: f_disagreeingThrows, funcThrowingDeclarationCounts: f_funcThrowingDeclarationCounts, funcDiverges: f_funcDiverges, funcDivergingDeclarationCounts: f_funcDivergingDeclarationCounts, funcAlwaysThrows: f_funcAlwaysThrows, funcAlwaysThrowingDeclarationCounts: f_funcAlwaysThrowingDeclarationCounts, funcReturnsFreshRecord: f_funcReturnsFreshRecord, funcFreshReturnForwards: f_funcFreshReturnForwards, funcFreshReturningDeclarationCounts: f_funcFreshReturningDeclarationCounts, funcConstructsFromParams: f_funcConstructsFromParams, funcConstructingDeclarationCounts: f_funcConstructingDeclarationCounts, funcReturnsReceiverField: f_funcReturnsReceiverField, funcReceiverFieldReturningDeclarationCounts: f_funcReceiverFieldReturningDeclarationCounts, funcReturnsParameter: f_funcReturnsParameter, funcParameterReturningDeclarationCounts: f_funcParameterReturningDeclarationCounts, funcFieldMoveOutForwards: f_funcFieldMoveOutForwards, interfaceRequirementNames: f_interfaceRequirementNames, funcParamDefaults: f_funcParamDefaults, funcOpaqueParams: f_funcOpaqueParams, contestedOpaqueParams: f_contestedOpaqueParams, disagreeingParamDefaults: f_disagreeingParamDefaults, funcDeclarationCounts: f_funcDeclarationCounts, funcDefaultingDeclarationCounts: f_funcDefaultingDeclarationCounts, declaredReturnSurfaces: f_declaredReturnSurfaces, funcReturnDeclFiles: f_funcReturnDeclFiles, funcDeclSites: f_funcDeclSites, overloadedDecls: f_overloadedDecls, bufferElementAliases: f_bufferElementAliases, bufferSurfaceAliases: f_bufferSurfaceAliases, extensionPublishedMethods: f_extensionPublishedMethods, extensionShadowedMethods: f_extensionShadowedMethods, extensionMethodDeclFiles: f_extensionMethodDeclFiles, contestedExtensionMethods: f_contestedExtensionMethods, interfaceExtensionMembers: f_interfaceExtensionMembers, stdlibPublishedExtensionMethods: f_stdlibPublishedExtensionMethods, stdlibExtensionMethodsBeatenByUser: f_stdlibExtensionMethodsBeatenByUser, staticInstanceContests: f_staticInstanceContests, authorDeclaredNames: f_authorDeclaredNames, libraryMeantNames: f_libraryMeantNames, managedTopLevelNames: f_managedTopLevelNames, corpusSlotInitCallees: f_corpusSlotInitCallees, inlineRecordByTypeNameId: f_inlineRecordByTypeNameId, defineProblems: f_defineProblems, constInitializerTypeNames: f_constInitializerTypeNames, constInitializerTypeSites: f_constInitializerTypeSites, userDeclaredTypeNames: f_userDeclaredTypeNames, stdlibDeclaredTypeNames: f_stdlibDeclaredTypeNames, arrayLiteralConformers: f_arrayLiteralConformers, serviceSpawnCandidateList: f_serviceSpawnCandidateList, serviceSpawnCandidateKeys: f_serviceSpawnCandidateKeys, serviceHandleOwners: f_serviceHandleOwners, defaultDeclarationList: f_defaultDeclarationList, serviceMessages: f_serviceMessages, interfaceHandleOwners: f_interfaceHandleOwners, interfaceHandleRepresentatives: f_interfaceHandleRepresentatives, interfaceHandleOrder: f_interfaceHandleOrder, serviceSendErrorNames: f_serviceSendErrorNames, corpusArrayRecordName: f_corpusArrayRecordName, shadowRoster: f_shadowRoster, qualifiedTypeClaims: f_qualifiedTypeClaims, typeHeadClaims: f_typeHeadClaims, topLevelBindingSites: f_topLevelBindingSites, writtenTypeClaims: f_writtenTypeClaims, claimedTypeClaims: f_claimedTypeClaims, aliasFamiliesBesideNominals: f_aliasFamiliesBesideNominals, headerTypeNameDecls: f_headerTypeNameDecls, nominalNameCollisions: f_nominalNameCollisions, fileModuleDirectories: f_fileModuleDirectories, namespaceQualifiers: f_namespaceQualifiers, libraryFilePaths: f_libraryFilePaths, declTokenStreams: DeclTokenStreamMap.create(), declaredTests: f_declaredTests, namespaceQualifiedFunctions: f_namespaceQualifiedFunctions, freeFunctionDirectories: f_freeFunctionDirectories, contestedFreeFunctions: f_contestedFreeFunctions, contestedRegistrationNames: f_contestedRegistrationNames, contestedKeysAnotherDeclarationHolds: f_contestedKeysAnotherDeclarationHolds, freeFunctionDeclFiles: f_freeFunctionDeclFiles, crossFileOverloadedFreeFunctions: f_crossFileOverloadedFreeFunctions, instantiatedByAParse: f_instantiatedByAParse, genericTemplates: f_genericTemplates, genericInstancesBySite: f_genericInstancesBySite, genericInstancesByName: f_genericInstancesByName, initializerCallSites: f_initializerCallSites}
 	end 'cacheRead'
 
 	static function cacheLayoutBytes() returns CacheSize1264
@@ -18839,7 +18839,7 @@ export type ProgramSignatures
 	// ⭐⭐ **THE OTHER EIGHT BITS OF THE SAME KIND — AND THEY BECAME WHOLE-PROGRAM FOR A CORRECTNESS REASON,
 	// NOT THE THREE ABOVE'S MEASURED ONE.** Each names a construct whose instance the compiler MINTS,
 	// because the source writes no type for it to be read from: a `[…]`, a `b"…"`, a `.bytes()`, a
-	// `Set`/`List`/`Vector from […]`, or a producer of one of the three compiler-owned types. The mint's base
+	// `Set`/`List`/`FixedArray from […]`, or a producer of one of the three compiler-owned types. The mint's base
 	// is the corpus's array record (`arrayRecordBaseName`), whose spelling the STDLIB/USER CONTEST may move —
 	// and the contest is decided BETWEEN the two halves of the sweep, so a per-file mint in a USER file asked
 	// before the answer existed and filed the program-wide memo under the pre-contest bare name. In a program
@@ -19721,28 +19721,28 @@ export type ProgramSignatures
 	// that role — a `ByteArray` handed back by `String.toByteArray()` is the corpus's record, and folding
 	// `__ManagedMemory` in a user file onto `Bag` would give one record two ids at every crossing.
 	//
-	// ⛔⛔ **MORE THAN ONE STDLIB DECLARATION CARRIES THE MARKER.** `stdlib/Vector.maxon` does too, and
-	// it is walked after `Array`: taking the last would make `corpusArrayRecordName` `Vector`, turn
+	// ⛔⛔ **MORE THAN ONE STDLIB DECLARATION CARRIES THE MARKER.** `stdlib/FixedArray.maxon` does too, and
+	// it is walked after `Array`: taking the last would make `corpusArrayRecordName` `FixedArray`, turn
 	// `isArrayBaseName(b"Array")` FALSE and refuse `stdlib/Array.maxon`'s own `Self{managed: managed}`
 	// as E2015 — every program in the tree failing to compile. A single-valued fact derived from a
 	// marker two declarations carry is decided by walk order unless something breaks the tie.
 	//
 	// ⭐⭐ **THE TIEBREAK IS THE SKIP BELOW**, and it serves a USER file too: a user program declaring
-	// `type Vector uses Element implements BuiltinArrayLiteral` reaches `noteArrayLiteralConformer`
+	// `type FixedArray uses Element implements BuiltinArrayLiteral` reaches `noteArrayLiteralConformer`
 	// with no stdlib module at all, and without the skip `Vec3.create()` would lose the size that is
 	// part of its type, with no diagnostic. See `isBuiltinGenericBaseNameBesidesTheRecord` for the
 	// `List` twin; the two `array-declared-record.error.a-conformer-named-for-…` cases pin both.
 	//
 	// The rule the skip states: a name the compiler already serves a container under is not made an ARRAY declaration
-	// by the marker. A `Vector`'s size is the second coordinate of its instance identity
-	// (`GenericInstanceRegistry.fixedSizes`, see `VectorBuiltinBaseName`), so `Vector with 3 Int` is not the
+	// by the marker. A `FixedArray`'s size is the second coordinate of its instance identity
+	// (`GenericInstanceRegistry.fixedSizes`, see `FixedArrayBuiltinBaseName`), so `FixedArray with 3 Int` is not the
 	// record a `__ManagedMemory with Int` folds onto and never can be — one instance would have to be two —
-	// and its literal already has its own door (`Parser.parseVectorFromConstruction`, a RETYPE of the array
+	// and its literal already has its own door (`Parser.parseFixedArrayFromConstruction`, a RETYPE of the array
 	// literal rather than an identity). A `List`'s record is a chain of nodes and shares nothing but the word.
 	//
 	// ⇒ **ONE SKIP CLOSES BOTH HALVES, WHICH IS WHY IT IS HERE AND NOT AT EITHER SYMPTOM.** The loud half is
 	// the stdlib one: a second STDLIB conformer takes `corpusArrayRecordName` outright, so listing
-	// `stdlib/Vector.maxon` made `isArrayBaseName(b"Array")` FALSE and refused `stdlib/Array.maxon:111`'s own
+	// `stdlib/FixedArray.maxon` made `isArrayBaseName(b"Array")` FALSE and refused `stdlib/Array.maxon:111`'s own
 	// identity — every program in the tree, `return 7` included. The quiet half is the user one above, where
 	// `isArrayBaseName` goes TRUE through the `hasNonCorpusArrayConformer` widening and
 	// `Parser.dispatchMethodOnReceiver` — which asks the array arm FIRST — serves `push`/`resize` on a
@@ -21577,7 +21577,7 @@ export type ProgramSignatures
 	// ⚠ **The ORACLE prints `[-1]` too** (measured, same program), so this is not the compiler catching up — it is
 	// the compiler's own deliberate divergence, and it lives in the renderer the corpus cannot reach.
 	//
-	// ⭐ **IT IS THE `Vector` SIZE STORY ONE AXIS OVER, WHICH IS WHY BOTH RETIREMENTS FILE A RESIDUE.** There,
+	// ⭐ **IT IS THE `FixedArray` SIZE STORY ONE AXIS OVER, WHICH IS WHY BOTH RETIREMENTS FILE A RESIDUE.** There,
 	// a declaration's own `Self` states no COUNT while every value has one; here, a declaration's own `self`
 	// states no RANGE while every receiver has one. A member whose answer needs the coordinate cannot retire
 	// until the coordinate travels.
@@ -23746,7 +23746,7 @@ export type ProgramSignatures
 		// any of them changes what a `IntBox.create(…)` in another file resolves and type-checks against, and
 		// the spelling is the one `mixType` cannot carry (both arguments fold to one `genericInstance`).
 		// ⭐ The SIZE rides for the element spelling's exact reason: it is half of the instance's identity and
-		// `mixType` cannot carry it (`Vector with 3 Int` and `Vector with 4 Int` fold to the same base name and
+		// `mixType` cannot carry it (`FixedArray with 3 Int` and `FixedArray with 4 Int` fold to the same base name and
 		// the same one argument), so an edit from 3 to 4 would change what every `Vec3.create()` in another
 		// file compiles to while this declaration's hashed bytes never moved.
 		// ⭐ The BASE SPELLING rides in the SAME word, for the element spelling's exact reason: it decides
@@ -34221,7 +34221,7 @@ export type ProgramSignatures
 	// bind `Inner`'s sole `T` to whatever the enclosing type happens to declare first, which for
 	// `type MyMap uses Key, Value` naming a one-parameter helper is a silently wrong type.
 	//
-	// ⚠ No `shape`: a sized base (`Vector`) is a BUILTIN with no `StructLayout`, so it never reaches the
+	// ⚠ No `shape`: a sized base (`FixedArray`) is a BUILTIN with no `StructLayout`, so it never reaches the
 	// mint — the gate is `structTypeParamsOf`, which answers the shared empty for every name no `type`
 	// declares.
 	//
@@ -34371,14 +34371,14 @@ export type ProgramSignatures
 	// the element the declaration promised. Separating it needs the alias's ARGUMENT, which is recorded on
 	// `GenericAliasEntry` and has no by-name reader today.
 	// ⭐⭐ **IS THIS DECLARATION THE RECORD OF A SIZED CONTAINER THE COMPILER SERVES — i.e. is it
-	// `stdlib/Vector.maxon`'s own?** The predicate above answers for the ARRAY record, whose name is the
+	// `stdlib/FixedArray.maxon`'s own?** The predicate above answers for the ARRAY record, whose name is the
 	// fold target of `__ManagedMemory`; this one answers for the container whose record IS an array's and whose
 	// identity carries a second coordinate the array has no column for — the SIZE
-	// (`GenericInstanceRegistry.fixedSizes`, see `VectorBuiltinBaseName`).
+	// (`GenericInstanceRegistry.fixedSizes`, see `FixedArrayBuiltinBaseName`).
 	//
 	// ⚠ **IT IS THE SAME SHAPE TEST AND A DIFFERENT NAME TEST, WHICH IS WHY IT IS NOT A WIDENING OF ITS
 	// SIBLING.** `firstFieldIsItsOwnBuffer` gates the identity that hands the buffer back AS the array, and
-	// widening it would make `isArrayBaseName` answer for `Vector` — which is exactly the wrong answer
+	// widening it would make `isArrayBaseName` answer for `FixedArray` — which is exactly the wrong answer
 	// `ProgramSignatures.noteArrayLiteralConformer`'s skip and `Parser.requireNameIsNotABuiltinContainerBase`
 	// exist to prevent: a fixed-size container on the growable surface (`push`, `resize`) under its own name.
 	// The value this admits is RETYPED to the declaration's own `Self` by its caller, so it never leaves that
@@ -34387,12 +34387,12 @@ export type ProgramSignatures
 	// value-side door asks, and it is NOT `declarationIsTheManagedRecord`, which bundles a second one.
 	//
 	// That predicate answers *"is this the declaration `__ManagedMemory` FOLDS ONTO"* as well as *"is a value
-	// of it the record"*, and for `stdlib/Vector.maxon` those two come apart: a `Vector`'s value IS the fused
+	// of it the record"*, and for `stdlib/FixedArray.maxon` those two come apart: a `FixedArray`'s value IS the fused
 	// 48-byte record — same bytes, same `__managed_decref` — while the fold target stays `Array`, because a
-	// `__ManagedMemory with T` written anywhere is an array and not a vector (a vector's identity carries a
+	// `__ManagedMemory with T` written anywhere is an array and not a fixed array (a fixed array's identity carries a
 	// SIZE the buffer has no column for). Four doors want the FIRST question, and answering them with the
-	// bundled one is what made `stdlib/Vector.maxon:48`'s `managed` read take the `String` path and come back
-	// as a synthesized BYTE buffer: **`E3005 … expected 'Vector.ElementMemory', got 'Array___ManagedByte'`**,
+	// bundled one is what made `stdlib/FixedArray.maxon:48`'s `managed` read take the `String` path and come back
+	// as a synthesized BYTE buffer: **`E3005 … expected 'FixedArray.ElementMemory', got 'Array___ManagedByte'`**,
 	// which is `emitFieldLoad`'s own header's two silent wrongs (the element and the type parameter) arriving
 	// as a diagnostic only by luck.
 	export function declarationsValueIsTheManagedRecord(name ByteArray) returns bool
@@ -34411,25 +34411,25 @@ export type ProgramSignatures
 	end 'declarationIsASizedContainerRecordNamed'
 
 	// ⛔⛔ **IT IS THE CORPUS'S DECLARATION AND NOT ANY DECLARATION OF THAT NAME, WHICH IS THE WHOLE
-	// DIFFERENCE BETWEEN THIS AND `isVectorBaseName`.** That predicate is deliberately WIDE — it
+	// DIFFERENCE BETWEEN THIS AND `isFixedArrayBaseName`.** That predicate is deliberately WIDE — it
 	// answers for the container's own name AND for this compile's mint of it — because it decides what
-	// a `Vector with N T` MEANS. This one decides who owns the RECORD, and a user's
-	// `type Vector uses Element implements BuiltinArrayLiteral` is shaped identically to the corpus's
+	// a `FixedArray with N T` MEANS. This one decides who owns the RECORD, and a user's
+	// `type FixedArray uses Element implements BuiltinArrayLiteral` is shaped identically to the corpus's
 	// to the field: same sole `managed`, same `__ManagedMemory with Element`. Admitting it is the
-	// wrong answer `Parser.requireNameIsNotABuiltinContainerBase` exists to refuse — a user vector
+	// wrong answer `Parser.requireNameIsNotABuiltinContainerBase` exists to refuse — a user fixed array
 	// grown from three elements to nine through `push`/`resize`, compiling clean.
 	//
-	// ⚠ **MEASURED when this read `isVectorBaseName`**: the delegating user conformer in
+	// ⚠ **MEASURED when this read `isFixedArrayBaseName`**: the delegating user conformer in
 	// `array-declared-record.error.a-conformer-named-for-a-container-that-constructs-nothing-…` had its
-	// `returns Self` answered with the RECORD instance, so its own `return Vector.init(managed)` was refused
-	// **`E3005 Cannot return 'Vector' from function declared to return 'Vector_T…'`** — a sentence about the
+	// `returns Self` answered with the RECORD instance, so its own `return FixedArray.init(managed)` was refused
+	// **`E3005 Cannot return 'FixedArray' from function declared to return 'FixedArray_T…'`** — a sentence about the
 	// user's own two lines, where the case pins the roster refusal three lines further down.
 	//
 	// ⭐ **THE CORPUS'S SPELLING IS `IrInterfaceMap.libraryNameOf`'s ANSWER, WHICH IS THE CONTEST WRITTEN
-	// DOWN ONCE**: bare `Vector` when nothing contests it, and this compile's `__Vector` mint when a user program declares
+	// DOWN ONCE**: bare `FixedArray` when nothing contests it, and this compile's `__FixedArray` mint when a user program declares
 	// the name — at which point the bare name is the USER's type and must not reach here.
 	export function declarationIsASizedContainerRecord(layout StructLayout) returns bool
-		if not layout.name.equals(self.settledDeclarations().interfaces.libraryNameOf(VectorBuiltinBaseName)) or self.structTypeParamsOf(layout.name).count() != VectorTypeParamCount 'notTheSizedContainersDeclaration'
+		if not layout.name.equals(self.settledDeclarations().interfaces.libraryNameOf(FixedArrayBuiltinBaseName)) or self.structTypeParamsOf(layout.name).count() != FixedArrayTypeParamCount 'notTheSizedContainersDeclaration'
 			return false
 		end 'notTheSizedContainersDeclaration'
 
@@ -35090,30 +35090,30 @@ export type ProgramSignatures
 		return self.builtinInstanceForElement(ManagedMemoryCursorBuiltinBaseName, element: self.containerElementType(sourceGiid))
 	end 'managedMemoryCursorInstanceFor'
 
-	// --- The `Vector` builtin generic ---
+	// --- The `FixedArray` builtin generic ---
 	//
-	// The FIXED-SIZE array (see `VectorBuiltinBaseName`). Its element is read through the shared
+	// The FIXED-SIZE array (see `FixedArrayBuiltinBaseName`). Its element is read through the shared
 	// `containerElementType`, its stride through the shared `arrayElementSize`, its box and its drop through
-	// the `Array` rows of the two routers — so the only `Vector`-specific type-level facts are these three
+	// the `Array` rows of the two routers — so the only `FixedArray`-specific type-level facts are these three
 	// predicates and the SIZE below.
 
-	// Is `name` the builtin `Vector` type — the base of every vector instance.
-	// ⚠⚠ **IT ANSWERS FOR THE CONTEST'S MINT TOO, BECAUSE `stdlib/Vector.maxon` IS LISTED.** A listed
+	// Is `name` the builtin `FixedArray` type — the base of every fixed array instance.
+	// ⚠⚠ **IT ANSWERS FOR THE CONTEST'S MINT TOO, BECAUSE `stdlib/FixedArray.maxon` IS LISTED.** A listed
 	// module's declaration is renamed into the reserved space when a USER program
 	// declares the same type name (`contestStdlibTypeName`), and `Parser.shadowRenamedTokens` rewrites the
 	// stdlib file's own identifier tokens with it — so inside `stdlib/Sha2.maxon` the base of
-	// `typealias Sha2State = Vector with 8 Sha2Word` becomes `__Vector`. Read by the pre-contest spelling
+	// `typealias Sha2State = FixedArray with 8 Sha2Word` becomes `__FixedArray`. Read by the pre-contest spelling
 	// alone, `Parser.readSizedBaseElementCount` declines to read the COUNT and the `8` is parsed as a
 	// type: **E2010 `Expected 'a type' but got '8'` on that library line**, in any program whose only
-	// offence is declaring a `type Vector` of its own — a library line no user wrote, refused because of
+	// offence is declaring a `type FixedArray` of its own — a library line no user wrote, refused because of
 	// one.
 	//
 	// ⭐ It is `isArrayBaseName`'s shape, minus that predicate's discovered-conformer clause: the sized
 	// container has no second declaration to find, only the corpus's and this compile's mint of it. The
 	// reserved-prefix test comes first for the same measured reason — no ordinary name can reach the mint, so
 	// the shape rules the map lookup out before it is made.
-	export function isVectorBaseName(name ByteArray) returns bool
-		if name.equals(VectorBuiltinBaseName) 'theContainersOwnName'
+	export function isFixedArrayBaseName(name ByteArray) returns bool
+		if name.equals(FixedArrayBuiltinBaseName) 'theContainersOwnName'
 			return true
 		end 'theContainersOwnName'
 
@@ -35121,32 +35121,36 @@ export type ProgramSignatures
 			return false
 		end 'notAMintedName'
 
-		return name.equals(self.settledDeclarations().interfaces.libraryNameOf(VectorBuiltinBaseName))
-	end 'isVectorBaseName'
+		return name.equals(self.settledDeclarations().interfaces.libraryNameOf(FixedArrayBuiltinBaseName))
+	end 'isFixedArrayBaseName'
 
-	// Is generic instance `id` a `Vector with N T`? (Reads the base NAME, which needs no base struct.)
-	export function isVectorInstance(id GenericInstanceId) returns bool
-		return self.isVectorBaseName(self.genericInstanceBaseName(id))
-	end 'isVectorInstance'
+	// Is generic instance `id` a `FixedArray with N T`? (Reads the base NAME, which needs no base struct.)
+	export function isFixedArrayInstance(id GenericInstanceId) returns bool
+		return self.isFixedArrayBaseName(self.genericInstanceBaseName(id))
+	end 'isFixedArrayInstance'
 
-	// Is instance `id`'s value the fused managed buffer record, born through `__managed_create`? A `Vector`'s
+	// Is instance `id`'s value the fused managed buffer record, born through `__managed_create`? A `FixedArray`'s
 	// record is an `Array`'s — the two differ in what may be done to them, not in how the bytes sit — so its
 	// create, size, drop, clone and transfer walks are the same entries for both.
 	export function isManagedBufferRecordInstance(id GenericInstanceId) returns bool
-		return self.isArrayInstance(id) or self.isVectorInstance(id)
+		return self.isArrayInstance(id) or self.isFixedArrayInstance(id)
 	end 'isManagedBufferRecordInstance'
 
-	// ⭐ **DOES THIS (tag, id) PAIR DENOTE A `Vector with N T`?** — `isArrayInstanceAt`'s twin, and it exists
+	export function isManagedBufferRecordInstanceAt(tag ValueTypeTag, nameId TypeNameId) returns bool
+		return tag == ValueTypeTag.genericInstance and self.isManagedBufferRecordInstance(nameId as GenericInstanceId)
+	end 'isManagedBufferRecordInstanceAt'
+
+	// ⭐ **DOES THIS (tag, id) PAIR DENOTE A `FixedArray with N T`?** — `isArrayInstanceAt`'s twin, and it exists
 	// for that function's MEASURED reason and not for symmetry: a `TypeNameId` and a `GenericInstanceId` share
-	// one numeric space, so `isVectorInstance` handed a plain `named` id can answer TRUE about an instance the
+	// one numeric space, so `isFixedArrayInstance` handed a plain `named` id can answer TRUE about an instance the
 	// caller never had. Both callers (the receiver dispatch and the `for … in` source test) hold a value's
 	// (tag, nameId) pair, which is exactly the shape that hazard bites.
-	export function isVectorInstanceAt(tag ValueTypeTag, nameId TypeNameId) returns bool
-		return tag == ValueTypeTag.genericInstance and self.isVectorInstance(nameId as GenericInstanceId)
-	end 'isVectorInstanceAt'
+	export function isFixedArrayInstanceAt(tag ValueTypeTag, nameId TypeNameId) returns bool
+		return tag == ValueTypeTag.genericInstance and self.isFixedArrayInstance(nameId as GenericInstanceId)
+	end 'isFixedArrayInstanceAt'
 
 	// ⭐ **HOW MANY ELEMENTS INSTANCE `id` HOLDS** — the second coordinate of a sized instance's
-	// identity; an unsized one throws `unsized`. Read by `Vector.create()` (the `__managed_mem_create`
+	// identity; an unsized one throws `unsized`. Read by `FixedArray.create()` (the `__managed_mem_create`
 	// count) and by `count()`, which folds to this constant rather than reading `length@8`: a fixed
 	// size is a fact about the TYPE, so the value it publishes may not depend on the record.
 	export function genericInstanceFixedCount(id GenericInstanceId) returns FixedElementCount throws InstanceSizeLookup
@@ -35164,7 +35168,7 @@ export type ProgramSignatures
 	// call through to `forwardCallerFixedElementCount`'s abort, which is the defect the refusal exists to
 	// replace.
 	//
-	// ⛔ Asked as the (tag, id) PAIR for `isVectorInstanceAt`'s measured reason — a `TypeNameId` and a
+	// ⛔ Asked as the (tag, id) PAIR for `isFixedArrayInstanceAt`'s measured reason — a `TypeNameId` and a
 	// `GenericInstanceId` share one numeric space, so the id half alone can answer about an instance the
 	// caller never had.
 	export function valueStatesItsOwnElementCount(tag ValueTypeTag, nameId TypeNameId) returns bool
@@ -35180,15 +35184,15 @@ export type ProgramSignatures
 		return try self.genericInstanceFixedCount(nameId as GenericInstanceId)
 	end 'elementCountStatedBy'
 
-	// The `Vector with <size> <element>` instance — the SIZED twin of `builtinInstanceForElement`, and the one
+	// The `FixedArray with <size> <element>` instance — the SIZED twin of `builtinInstanceForElement`, and the one
 	// door that mints one. Its two callers are the alias fold (`recordGenericAlias`, off a declaration) and the
-	// declaration sweep's `Vector from […]` pre-intern, which must agree on the instance or the parser's own
+	// declaration sweep's `FixedArray from […]` pre-intern, which must agree on the instance or the parser's own
 	// read would be the first write to the shared registry mid-parse (`Parser.atContainerFromConstruction`'s rule).
-	export function vectorInstanceForElement(element MaxonType, size FixedElementCount) returns GenericInstanceId
+	export function fixedArrayInstanceForElement(element MaxonType, size FixedElementCount) returns GenericInstanceId
 		var args = MaxonTypeArray.create()
 		args.push(element)
-		return self.genericInstances.intern(self.typeNames.intern(VectorBuiltinBaseName), args: args, shape: InstanceShape.sized(size))
-	end 'vectorInstanceForElement'
+		return self.genericInstances.intern(self.typeNames.intern(FixedArrayBuiltinBaseName), args: args, shape: InstanceShape.sized(size))
+	end 'fixedArrayInstanceForElement'
 
 	// ⚠ There is deliberately no `mapKeyIsManaged` / `mapValueIsManaged` / `setKeyIsManaged` beside these two
 	// selectors. A map carries TWO independently stamped destructors (`keyDrop@40`, `valueDrop@56`) — a
@@ -36455,12 +36459,12 @@ export type ProgramSignatures
 	// promoted or demoted moves both answers at once.
 	//
 	// ⭐⭐ **THE SIZED CONTAINER IS THE ONE NAME THE COMPLEMENT CANNOT ANSWER FOR.**
-	// `stdlib/Vector.maxon` declares `create()` and `Parser` emits none,
-	// so the PROGRAM builds a vector's record — yet `Vector` is on `isBuiltinGenericBaseName`, because
-	// that predicate also decides what `Vector with 3 Int` MEANS (`baseStoresArgumentsInline`,
+	// `stdlib/FixedArray.maxon` declares `create()` and `Parser` emits none,
+	// so the PROGRAM builds a fixed array's record — yet `FixedArray` is on `isBuiltinGenericBaseName`, because
+	// that predicate also decides what `FixedArray with 3 Int` MEANS (`baseStoresArgumentsInline`,
 	// `readSizedBaseElementCount`, and the record the compiler synthesizes). The two facts are separate here;
 	// taking the name off the roster outright would let this arm evaporate and the complement below answer
-	// `Vector` correctly on its own.
+	// `FixedArray` correctly on its own.
 	//
 	// ⛔ **IT MUST NOT BE WIDENED TO "THE CORPUS DECLARES `<base>.create`", WHICH IS THE OBVIOUS SPELLING AND
 	// IS WRONG.** `stdlib/Array.maxon` is LISTED and declares `Array.create` too, so that reading would route
@@ -36469,10 +36473,10 @@ export type ProgramSignatures
 	// growable record's retirement (the `ARR` chain) and not this one. The question is whose CODE builds the
 	// record, and for `Array` that is still the compiler's.
 	//
-	// ⛔⛔ **AND THE ARM IS `declarationIsASizedContainerRecordNamed`, NOT `isVectorInstance`, WHICH WAS
-	// MEASURED WRONG.** `isVectorBaseName` is deliberately WIDE — it answers for the container's name AND for
-	// this compile's mint of it, because it decides what `Vector with 3 Int` MEANS — so under a USER
-	// `type Vector` it admits the user's declaration, whose base declares no `create` at all. **MEASURED, two
+	// ⛔⛔ **AND THE ARM IS `declarationIsASizedContainerRecordNamed`, NOT `isFixedArrayInstance`, WHICH WAS
+	// MEASURED WRONG.** `isFixedArrayBaseName` is deliberately WIDE — it answers for the container's name AND for
+	// this compile's mint of it, because it decides what `FixedArray with 3 Int` MEANS — so under a USER
+	// `type FixedArray` it admits the user's declaration, whose base declares no `create` at all. **MEASURED, two
 	// suite cases, both a value of type `unknown` rather than a diagnostic**:
 	// `array-declared-record.error.a-conformer-named-for-a-container-that-constructs-nothing-…` read
 	// *"a member access 'push' on a 'unknown' value"* where it pins the roster refusal, and
@@ -36792,7 +36796,7 @@ export type ProgramSignatures
 			panic("ProgramSignatures.containerCreateCall: generic instance {id} is not a builtin container with a `create` — a DECLARED generic returned one arm above, and every builtin reaching here was admitted through `Parser.requireContainerIsCreatable`, which refuses everything this router has no arm for")
 		end 'notACreatableContainer'
 
-		// ⚠ **NO `Vector` ARM.** A vector's `create` is `stdlib/Vector.maxon`'s, so it returns through
+		// ⚠ **NO `FixedArray` ARM.** A fixed array's `create` is `stdlib/FixedArray.maxon`'s, so it returns through
 		// the `declaredGeneric` arm above and the record it hands back is already published; only the
 		// growable record reaches here.
 		stamps.push(ContainerCreateStamp.inline(self.arrayElementSize(id) as FullRangeInt))
@@ -36847,7 +36851,7 @@ export type ProgramSignatures
 	end 'containerElementCascadeStrategy'
 
 	// ⭐ **IS THIS INSTANCE AN ELEMENT-BEARING RECORD THIS COMPILER OWNS** — the managed buffer (an `Array` or a
-	// `Vector`) or the chain, whose copy and drop are a runtime WALK rather than a field cascade, and which
+	// `FixedArray`) or the chain, whose copy and drop are a runtime WALK rather than a field cascade, and which
 	// therefore have no base layout for the declared-instance walks to read. The negation is load-bearing:
 	// `instanceGraphSupportsDeepClone` routes everything ELSE to the field walk, which refuses a layout-less
 	// instance.
@@ -37010,11 +37014,11 @@ export type ProgramSignatures
 	// INCLUDING THE `shape`.** `intern`'s key is `(baseId, args, shape)`; this is the ONLY
 	// call site that rebuilds one from an instance it already holds rather than from a declaration, so it is
 	// the only one that can lose a component by simply not mentioning it — and `shape` DEFAULTS to
-	// `unsized`, which is silent: a `Vector with 8 W` whose `W` two files disagree about would come back
-	// SIZELESS, and `create()` would build a zero-length vector. `specs/typealias-file-scope.md`'s
-	// `a-sized-vector-keeps-its-element-count-when-its-element-is-contested` is the case.
+	// `unsized`, which is silent: a `FixedArray with 8 W` whose `W` two files disagree about would come back
+	// SIZELESS, and `create()` would build a zero-length fixed array. `specs/typealias-file-scope.md`'s
+	// `a-sized-fixed-array-keeps-its-element-count-when-its-element-is-contested` is the case.
 	// ⚠ An `Array` case catches it only when it spells a `readonly` argument; on any other instance of a base
-	// but `Vector` the omission is exactly a no-op.
+	// but `FixedArray` the omission is exactly a no-op.
 	export function fileScopedInstance(id GenericInstanceId, filePath FilePath) returns GenericInstanceId
 		if not self.argsMayNeedScoping(self.genericInstances.instanceArgs(id)) 'nothingToScope'
 			return id
@@ -38710,7 +38714,7 @@ export type ProgramSignatures
 	end 'internLiteralContainerInstances'
 
 	// ⭐⭐⭐ **THE INSTANCES THE COMPILER MINTS BECAUSE THE SOURCE NAMED NO TYPE FOR THEM — ONCE PER PROGRAM,
-	// AFTER THE STDLIB/USER CONTEST.** A `[…]`, a `b"…"`, a `.bytes()`, a `Set`/`List`/`Vector from […]`
+	// AFTER THE STDLIB/USER CONTEST.** A `[…]`, a `b"…"`, a `.bytes()`, a `Set`/`List`/`FixedArray from […]`
 	// and the three compiler-owned types all produce a value whose type no declaration in the program spells,
 	// so the sweep interns it and the parser reads the giid back — the sweep-WRITES / parser-READS discipline
 	// `internBuiltinIntegerInstance` states.
@@ -38766,16 +38770,16 @@ export type ProgramSignatures
 			_ = self.builtinInstanceForElement(ListBuiltinBaseName, element: MaxonType.string)
 		end 'listFromConstruction'
 
-		// PER SIZE, because a vector's size is half of its instance's identity, and over the three element
-		// types a literal can give one (`Parser.requireVectorElementType` refuses every managed element, so
+		// PER SIZE, because a fixed array's size is half of its instance's identity, and over the three element
+		// types a literal can give one (`Parser.requireFixedArrayElementType` refuses every managed element, so
 		// there is no String or aggregate half to intern).
-		for size in self.settledDeclarations().vectorFromSizes 'eachVectorSize'
-			_ = self.vectorInstanceForElement(MaxonType.integer, size: size)
-			_ = self.vectorInstanceForElement(MaxonType.float, size: size)
-			_ = self.vectorInstanceForElement(MaxonType.boolean, size: size)
-		end 'eachVectorSize'
+		for size in self.settledDeclarations().fixedArrayFromSizes 'eachFixedArraySize'
+			_ = self.fixedArrayInstanceForElement(MaxonType.integer, size: size)
+			_ = self.fixedArrayInstanceForElement(MaxonType.float, size: size)
+			_ = self.fixedArrayInstanceForElement(MaxonType.boolean, size: size)
+		end 'eachFixedArraySize'
 
-		self.internAliasedVectorLiteralArrays()
+		self.internAliasedFixedArrayLiteralArrays()
 
 		// The three compiler-owned TYPES ride the same call, and for this function's own reason:
 		// `registerManagedFileType`, `registerManagedDirectoryType` and `registerManagedSocketType` intern the
@@ -38839,25 +38843,25 @@ export type ProgramSignatures
 		end 'eachEnum'
 	end 'internEnumElementInstances'
 
-	// ⭐ **THE `Array` INSTANCE BEHIND EACH `Vector` ALIAS A `from` HEAD NAMES.** `Vec3 from [1, 2, 3]` builds
-	// its record as an array literal at the alias's element and retypes it (`Parser.parseAliasedVectorLiteral`),
+	// ⭐ **THE `Array` INSTANCE BEHIND EACH `FixedArray` ALIAS A `from` HEAD NAMES.** `Vec3 from [1, 2, 3]` builds
+	// its record as an array literal at the alias's element and retypes it (`Parser.parseAliasedFixedArrayLiteral`),
 	// and no declaration names that array — so it is interned here, before any parse reads it back.
 	// SPECULATIVE because a head name is matched against every alias declaration of that name in any file; the
 	// parse's own read confirms the one it uses.
-	function internAliasedVectorLiteralArrays()
+	function internAliasedFixedArrayLiteralArrays()
 		if self.settledDeclarations().fromHeadNames.count() == 0 'noFromHeads'
 			return
 		end 'noFromHeads'
 
 		for i in 0 upto self.settledDeclarations().genericAliasDecls.count() 'eachAliasDecl'
-			view decl = try self.settledDeclarations().genericAliasDecls.get(i) otherwise panic("internAliasedVectorLiteralArrays: genericAliasDecls.get({i}) failed inside its own upto bound")
+			view decl = try self.settledDeclarations().genericAliasDecls.get(i) otherwise panic("internAliasedFixedArrayLiteralArrays: genericAliasDecls.get({i}) failed inside its own upto bound")
 			let giid = decl.internedInstance()
 
-			if self.settledDeclarations().fromHeadNames.contains(decl.aliasName) and self.isVectorInstance(giid) 'aVectorAliasHead'
+			if self.settledDeclarations().fromHeadNames.contains(decl.aliasName) and self.isFixedArrayInstance(giid) 'aFixedArrayAliasHead'
 				_ = self.builtinInstanceForElement(self.arrayRecordBaseName(), element: self.containerElementType(giid), asSpeculative: true)
-			end 'aVectorAliasHead'
+			end 'aFixedArrayAliasHead'
 		end 'eachAliasDecl'
-	end 'internAliasedVectorLiteralArrays'
+	end 'internAliasedFixedArrayLiteralArrays'
 
 	// ⭐⭐ **WHAT ONE FILE'S TOKENS SAY THE PROGRAM WILL MATERIALIZE — recorded, never acted on.** THE
 	// one door the sweep files a well-known instance need through, so no arm can be half-moved back into the
@@ -38868,7 +38872,7 @@ export type ProgramSignatures
 	// ⚠ **TEN PARAMETERS AND NOT TEN FUNCTIONS**: ten one-line setters is ten chances to add an
 	// eleventh need and wire it at nine of the ten call sites. There is exactly one call site, so a need that
 	// is not passed does not compile.
-	export function noteWellKnownInstanceNeeds(intArrayLiteral bool, byteStringLiteral bool, stringArrayLiteral bool, aggregateArrayLiteral bool, enumAllCasesAccess bool, setFromConstruction bool, listFromConstruction bool, vectorSizes FixedSizeArray, headNames NameRoster, managedFileProducer bool, managedDirectoryProducer bool, managedSocketProducer bool, managedHostResourceProducer bool)
+	export function noteWellKnownInstanceNeeds(intArrayLiteral bool, byteStringLiteral bool, stringArrayLiteral bool, aggregateArrayLiteral bool, enumAllCasesAccess bool, setFromConstruction bool, listFromConstruction bool, fixedArraySizes FixedSizeArray, headNames NameRoster, managedFileProducer bool, managedDirectoryProducer bool, managedSocketProducer bool, managedHostResourceProducer bool)
 		self.sawIntArrayLiteral = self.sawIntArrayLiteral or intArrayLiteral
 		self.sawByteStringLiteral = self.sawByteStringLiteral or byteStringLiteral
 		self.sawStringArrayLiteral = self.sawStringArrayLiteral or stringArrayLiteral
@@ -38881,9 +38885,9 @@ export type ProgramSignatures
 		self.sawManagedSocketProducer = self.sawManagedSocketProducer or managedSocketProducer
 		self.sawManagedHostResourceProducer = self.sawManagedHostResourceProducer or managedHostResourceProducer
 
-		for size in vectorSizes 'eachVectorSize'
-			self.mainThreadSettled().vectorFromSizes.push(size)
-		end 'eachVectorSize'
+		for size in fixedArraySizes 'eachFixedArraySize'
+			self.mainThreadSettled().fixedArrayFromSizes.push(size)
+		end 'eachFixedArraySize'
 
 		for name in headNames 'eachFromHead'
 			self.mainThreadSettled().fromHeadNames.insert(name)
@@ -39358,11 +39362,11 @@ export type ProgramSignatures
 	// name) differ only in how they render an ARGUMENT, so the head is written once and neither can come to
 	// disagree with the other about whether a size is part of a type's name.
 	//
-	// ⚠ **WITHOUT THE COUNT, TWO LEGAL TYPES SHARE ONE NAME, AND IT IS NOT A COSMETIC CLASH.** `Vector with 3
-	// Int` and `Vector with 4 Int` are different types by construction (the size is half of the instance
-	// key), and both mangled to `Vector_Int` — MEASURED: a program declaring both is refused outright with
-	// **E3006 duplicate definition of 'Vector_Int' — the generic instantiations `Vector with Int` and
-	// `Vector with Int` compile to that same name**, a message naming one type twice. `ParseStaging`'s symbol
+	// ⚠ **WITHOUT THE COUNT, TWO LEGAL TYPES SHARE ONE NAME, AND IT IS NOT A COSMETIC CLASH.** `FixedArray with 3
+	// Int` and `FixedArray with 4 Int` are different types by construction (the size is half of the instance
+	// key), and both mangled to `FixedArray_Int` — MEASURED: a program declaring both is refused outright with
+	// **E3006 duplicate definition of 'FixedArray_Int' — the generic instantiations `FixedArray with Int` and
+	// `FixedArray with Int` compile to that same name**, a message naming one type twice. `ParseStaging`'s symbol
 	// check is what caught it, which is exactly what that check is for.
 	function instanceNameStem(id GenericInstanceId) returns String
 		var out = String.from(self.genericInstanceBaseName(id))
@@ -40102,7 +40106,7 @@ export type ProgramSignatures
 	// CONFLATING THEM IS WHAT CRASHED THE COMPILER.** A generic instance's base has no `StructLayout` for
 	// exactly two reasons, and they are not the same reason:
 	//
-	//   • **SYNTHESIZED** — a base `isBuiltinGenericBaseName` accepts (`Array`, `Vector`, the
+	//   • **SYNTHESIZED** — a base `isBuiltinGenericBaseName` accepts (`Array`, `FixedArray`, the
 	//     `__ManagedList` chain). The compiler emits their runtime records itself, so no declared
 	//     layout is read for them — `stdlib/Array.maxon` declares `Array`, but its record IS its
 	//     buffer. The type is LEGAL and the program is fine; it simply has no fields.
@@ -40141,21 +40145,21 @@ export type ProgramSignatures
 	// non-corpus widening admits ANY name a program declares `BuiltinArrayLiteral` on, which is right for a
 	// user's own `Bag` and wrong for a name this compiler already serves a container under. **MEASURED on
 	// `main` with no compiler edit at all**, from a user file declaring
-	// `type Vector uses Element implements BuiltinArrayLiteral` beside an ordinary
-	// `typealias Vec3 = Vector with 3 Num`: `Parser.dispatchMethodOnReceiver` asks the ARRAY arm before the
-	// vector one, so `Vec3.create()` reported **count 0**, four `push`es took it to **4** and `resize(9)` to
+	// `type FixedArray uses Element implements BuiltinArrayLiteral` beside an ordinary
+	// `typealias Vec3 = FixedArray with 3 Num`: `Parser.dispatchMethodOnReceiver` asks the ARRAY arm before the
+	// fixed array one, so `Vec3.create()` reported **count 0**, four `push`es took it to **4** and `resize(9)` to
 	// **9** — a fixed-size container grown through its own type's name, no diagnostic. The `List` twin is the
 	// same program with the name changed: `resize(9)`, a member the list roster does not carry, answered 9.
 	//
 	// ⚠ **AND THE OTHER HALF OF THE SAME FACT IS A TREE-WIDE REFUSAL, WHICH IS WHY ONE PREDICATE SERVES
 	// BOTH.** A SECOND STDLIB conformer takes `corpusArrayRecordName` outright (last-stdlib-wins, see
-	// `noteArrayLiteralConformer`), so listing `stdlib/Vector.maxon` made `isArrayBaseName(b"Array")` answer
+	// `noteArrayLiteralConformer`), so listing `stdlib/FixedArray.maxon` made `isArrayBaseName(b"Array")` answer
 	// FALSE and refused `stdlib/Array.maxon:111`'s own identity — `function main() returns ExitCode /
 	// return 7` failed to compile. Loud where the user route is silent; one cause.
 	//
 	// ⚠ The `__`-prefixed three cannot be reached from a USER file (`Parser.requireUnreservedName`), and they
 	// are here anyway because the set is the CLASS: `stdlib/Builtins.maxon` is the one module allowed those
-	// names, so a corpus edit is exactly the route the `Vector` half of the measurement above came in by.
+	// names, so a corpus edit is exactly the route the `FixedArray` half of the measurement above came in by.
 	//
 	// ⛔⛔ **THIS IS NOT A FREE-STANDING ROSTER — `isBuiltinGenericBaseName` DERIVES FROM IT, SO A NAME ADDED
 	// HERE JOINS THE SYNTHESIZED SET TOO, AND THAT SET'S CONSUMERS PANIC.** The membership rule for the wide
@@ -40188,7 +40192,7 @@ export type ProgramSignatures
 	// `/specs/internal-types.md` puts their representation in the compiler, and no corpus file declares
 	// either. The chain runtime they are served by is the same one — see `ListRuntime.maxon`.
 	export function isBuiltinGenericBaseNameBesidesTheRecord(name ByteArray) returns bool
-		return self.isVectorBaseName(name) or self.isManagedListBaseName(name) or self.isManagedListNodeBaseName(name) or self.isManagedMemoryCursorBaseName(name)
+		return self.isFixedArrayBaseName(name) or self.isManagedListBaseName(name) or self.isManagedListNodeBaseName(name) or self.isManagedMemoryCursorBaseName(name)
 	end 'isBuiltinGenericBaseNameBesidesTheRecord'
 
 	// ⭐ **HOW MANY TYPE ARGUMENTS THE SYNTHESIZED GENERIC `name` TAKES** — the arity `Parser.checkGenericInstance`
@@ -40204,12 +40208,12 @@ export type ProgramSignatures
 			return ArrayTypeParamCount
 		end 'array'
 
-		// ⚠ **A `Vector`'s SIZE IS NOT COUNTED HERE, and that is what makes this arm a 1 rather than a 2.**
-		// `Vector with 3 Int` supplies one TYPE argument; the 3 is consumed by `readSizedBaseElementCount` before
+		// ⚠ **A `FixedArray`'s SIZE IS NOT COUNTED HERE, and that is what makes this arm a 1 rather than a 2.**
+		// `FixedArray with 3 Int` supplies one TYPE argument; the 3 is consumed by `readSizedBaseElementCount` before
 		// the argument list is parsed at all, so the `argCount` this is compared against never saw it.
-		if self.isVectorBaseName(name) 'vector'
-			return VectorTypeParamCount
-		end 'vector'
+		if self.isFixedArrayBaseName(name) 'fixedArray'
+			return FixedArrayTypeParamCount
+		end 'fixedArray'
 
 		if self.isManagedListBaseName(name) 'managedList'
 			return ManagedListTypeParamCount
@@ -40413,21 +40417,21 @@ export type ProgramSignatures
 	// The index's OWN interner is the right table here and needs no caller to supply one: `instanceArgs` answers
 	// in this index's space, which is the same space `substituteTupleThroughInstance` interns its result into.
 	// ⭐⭐ **A DECLARATION'S OWN `Self` IS SIZE-POLYMORPHIC — IT ADOPTS THE RECEIVER'S COUNT.**
-	// A `Vector`'s identity has a SECOND coordinate the args do not carry (`GenericInstanceRegistry.fixedSizes`,
-	// see `VectorBuiltinBaseName`), and `Self` inside `type Vector uses Element` states none: it is
+	// A `FixedArray`'s identity has a SECOND coordinate the args do not carry (`GenericInstanceRegistry.fixedSizes`,
+	// see `FixedArrayBuiltinBaseName`), and `Self` inside `type FixedArray uses Element` states none: it is
 	// `ownRecordSelfInstance`, interned `unsized`. So substituting `Self` through a receiver mints
-	// `Vector_Int` while every value a program holds is a `Vec3` — different keys, different ids, and a corpus
+	// `FixedArray_Int` while every value a program holds is a `Vec3` — different keys, different ids, and a corpus
 	// method's `self` parameter that can never match its own receiver
-	// (**`E3005 argument type mismatch for 'self': expected 'Vector_Int', got 'Vec3'`**). ⇒ **the countless
+	// (**`E3005 argument type mismatch for 'self': expected 'FixedArray_Int', got 'Vec3'`**). ⇒ **the countless
 	// instance takes the count of the receiver it is being viewed through.** One body serves every size,
-	// which is cure (1) of the two `VectorBuiltinBaseName` names; cure (2) — monomorphizing the body per
+	// which is cure (1) of the two `FixedArrayBuiltinBaseName` names; cure (2) — monomorphizing the body per
 	// size — costs one copy of every member per distinct count in the program.
 	//
 	// ⚠ **IT IS NOT SIZE ERASURE, AND THE THREE CLAUSES ARE WHAT KEEP IT FROM BEING.** The count is adopted
-	// only when the viewed instance STATES NO COUNT (so a `Vector with 4 Element` field keeps its 4, which is
-	// `vector.capacity-is-part-of-instance-identity`), only when it shares the receiver's BASE (so a `Vector`'s
+	// only when the viewed instance STATES NO COUNT (so a `FixedArray with 4 Element` field keeps its 4, which is
+	// `fixed-array.capacity-is-part-of-instance-identity`), only when it shares the receiver's BASE (so a `FixedArray`'s
 	// own `Array with Element` buffer is untouched), and only from a receiver that HAS one. Two SIZED
-	// instances are never compared through here, so `vector.error.wrong-size-vector-argument` goes on being
+	// instances are never compared through here, so `fixed-array.error.wrong-size-fixed-array-argument` goes on being
 	// refused: passing a `Vec3` where a `Vec4` is declared is still two types.
 	function substitutedShape(nested GenericInstanceId, through GenericInstanceId) returns InstanceShape
 		let own = self.genericInstances.instanceShape(nested)
@@ -40484,7 +40488,7 @@ export type ProgramSignatures
 		// `substitutedShape`'s answer rather than the nested instance's own.
 		let size = self.substitutedShape(nested, through: through)
 
-		// ⚠ **THE EARLY RETURN TESTS BOTH COORDINATES, NOT ONLY THE ARGS.** A `Vector`'s identity is
+		// ⚠ **THE EARLY RETURN TESTS BOTH COORDINATES, NOT ONLY THE ARGS.** A `FixedArray`'s identity is
 		// (base, args, SIZE), so a substitution that moves no argument can still move the instance — the
 		// declaration's own `Self` over its own parameter, reached through a receiver of that same parameter
 		// at a stated count. Testing `moved` alone returned the countless instance for exactly that case.
@@ -41634,7 +41638,7 @@ export type ProgramSignatures
 	end 'typeArgIsCoOwnedTrivial'
 
 	// ⭐⭐ **IS `t` A HEAP AGGREGATE — the boundary a PUBLISHED SLOT is judged by.** A container that
-	// zeroes its slots at birth (`Vector.create()`'s `__managed_resize`) publishes a VALUE for a trivial
+	// zeroes its slots at birth (`FixedArray.create()`'s `__managed_resize`) publishes a VALUE for a trivial
 	// argument and an ABSENCE for a managed one, so this asks the one question `containerElementIsManaged`
 	// asks of a concrete element — `typeIsManaged` — of an instantiation's argument instead. Nothing is
 	// composed out of the two neighbouring kinds: `consumeMoved or coOwnedTrivial` would spell the same
@@ -41744,8 +41748,8 @@ export type ProgramSignatures
 	end 'genericTypeFieldGreenThreadInstantiation'
 
 	// ⭐⭐ **DOES ANY INTERNED INSTANCE OF THE TYPE THAT DECLARES `param` MAKE THAT PUBLISHED SLOT A NULL
-	// POINTER?** The front-end gate for `Vector with <N> <type parameter>` inside a generic body.
-	// A vector's record PUBLISHES all N slots by zeroing them (`Parser.emitSizedContainerRecord`'s
+	// POINTER?** The front-end gate for `FixedArray with <N> <type parameter>` inside a generic body.
+	// A fixed array's record PUBLISHES all N slots by zeroing them (`Parser.emitSizedContainerRecord`'s
 	// `__managed_resize`), and every one of the N is then a readable element by the type's own contract —
 	// which is true of a trivial argument, whose zero IS a value, and false of a MANAGED one, whose zero is a
 	// null pointer. The shared body compiles ONCE and serves every instantiation, so it is admissible only if
@@ -41753,13 +41757,13 @@ export type ProgramSignatures
 	// `create()`, blamed back at the instantiation the user wrote.
 	//
 	// ⛔ **AND THE HAZARD IT SHUTS OUT IS MEASURED, ON BOTH ITS HALVES.** With the gate absent,
-	// `type Holder uses Element` + `typealias Slot = Vector with 4 Element` at `Holder with String`:
+	// `type Holder uses Element` + `typealias Slot = FixedArray with 4 Element` at `Holder with String`:
 	// `count()` answers **4** while `try slot.get(0)` takes `emitLoadElemAndOkReturn`'s empty-slot branch and
 	// THROWS — four elements it does not have, exit 0, no diagnostic — and a `for e in slot` reading `e`
 	// SEGFAULTED (139), because `__managed_get_unchecked` dropped that empty-slot arm on the guarantee this
 	// refusal is what supplies. It is the CONCRETE managed refusal's exact twin one axis over
-	// (`Parser.requireVectorElementType`'s managed arm, whose own header records the same two symptoms for
-	// `Vector with 2 IntArray`), and the two must not be relaxed apart.
+	// (`Parser.requireFixedArrayElementType`'s managed arm, whose own header records the same two symptoms for
+	// `FixedArray with 2 IntArray`), and the two must not be relaxed apart.
 	//
 	// HOW the instances are found is `instanceWithTypeArgKind`'s business and is described there once; what
 	// this gate adds is the KIND. It hands back a match for `genericTypeFieldUncopyableInstantiation`'s reason.
@@ -42035,7 +42039,7 @@ export type ProgramSignatures
 			return GtPromiseDropName
 		end 'promise'
 
-		// The managed buffer record (an `Array` or a `Vector`) drops through `__managed_decref`, which frees its
+		// The managed buffer record (an `Array` or a `FixedArray`) drops through `__managed_decref`, which frees its
 		// external element buffer — the one thing a generic `__mm_decref` cannot reach — and then the record.
 		if self.isManagedBufferRecordInstance(id) 'managedBuffer'
 			return ManagedDecrefName
@@ -45154,9 +45158,9 @@ export type ProgramSignatures
 	// a per-instance cloner for it and `instanceCascadeStrategy` answers `unsupported` at the same tier — a name
 	// the gate and the strategy disagreed about would admit a clone nobody can emit.
 	//
-	// ⚠ **THE ELEMENT-BEARING RECORDS NEVER REACH HERE.** The managed buffer (`Array`, `Vector`) and the chain
+	// ⚠ **THE ELEMENT-BEARING RECORDS NEVER REACH HERE.** The managed buffer (`Array`, `FixedArray`) and the chain
 	// have no base layout and need none: their copy is a runtime WALK, not a field cascade, and the caller's own
-	// arm takes them (`isElementBearingRecordInstance`). Read as "refused" here, a `Vector` field or payload
+	// arm takes them (`isElementBearingRecordInstance`). Read as "refused" here, a `FixedArray` field or payload
 	// would make its whole enclosing type uncopyable for want of a field list its record does not have.
 	//
 	// The cycle break is `cloneWalkMayDescendInto`'s, keyed by the MANGLED INSTANCE NAME in the same `visited`
@@ -47041,7 +47045,7 @@ export type ProgramSignatures
 		fingerprint.noteFlag("sawManagedDirectoryProducer", flag: self.sawManagedDirectoryProducer)
 		fingerprint.noteFlag("sawManagedSocketProducer", flag: self.sawManagedSocketProducer)
 		fingerprint.noteFlag("sawManagedHostResourceProducer", flag: self.sawManagedHostResourceProducer)
-		fingerprint.note("vectorFromSizes", value: declarations.vectorFromSizes.count() as EntryCount)
+		fingerprint.note("fixedArrayFromSizes", value: declarations.fixedArrayFromSizes.count() as EntryCount)
 		fingerprint.note("genericAliases", value: declarations.genericAliases.count())
 		fingerprint.note("interfaceAliases", value: declarations.interfaceAliases.count())
 		fingerprint.note("interfaceAliasOwners", value: declarations.interfaceAliasOwners.count())

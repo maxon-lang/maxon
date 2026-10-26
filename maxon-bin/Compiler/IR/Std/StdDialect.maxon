@@ -4098,6 +4098,14 @@ export type StdAccessOperands
 		self.addrId = address
 		self.offset = 0
 	end 'recordAtomic'
+
+	export function isPlainLoad() returns bool
+		return self.shape == StdAccessShape.load and self.ordering == StdAccessOrdering.plain
+	end 'isPlainLoad'
+
+	export function isPlainStore() returns bool
+		return self.shape == StdAccessShape.store and self.ordering == StdAccessOrdering.plain
+	end 'isPlainStore'
 end 'StdAccessOperands'
 
 // Fill `access` with the memory operands `op` carries, or with the shape that says it touches none.
@@ -4301,7 +4309,7 @@ export typealias LoadCoverage = int(0 to u64.max)
 export function classifyLoadOperands(op StdOp, load StdLoadOperands)
 	classifyAccessOperands(op, access: load.access)
 
-	if load.access.shape == StdAccessShape.load and load.access.ordering == StdAccessOrdering.plain 'aPlainLoad'
+	if load.access.isPlainLoad() 'aPlainLoad'
 		load.recordLoad(load.access.resultId, address: load.access.addrId, displacement: load.access.offset, readType: load.access.valueType)
 		return
 	end 'aPlainLoad'
@@ -4352,7 +4360,7 @@ end 'StdStoreOperands'
 module function classifyStoreOperands(op StdOp, store StdStoreOperands)
 	classifyAccessOperands(op, access: store.access)
 
-	if store.access.shape == StdAccessShape.store and store.access.ordering == StdAccessOrdering.plain 'aPlainStore'
+	if store.access.isPlainStore() 'aPlainStore'
 		store.recordStore(store.access.addrId, displacement: store.access.offset, written: store.access.valueId, writeType: store.access.valueType)
 		return
 	end 'aPlainStore'
@@ -4904,17 +4912,21 @@ export function collectFunctionValueUses(module StdModule, func IrFunction, refe
 			collectStdOpUses(try module.ops.get(opIdx) otherwise panic("collectFunctionValueUses: opIdx {opIdx} not in module.ops"), referenced: referenced)
 		end 'eachOp'
 
-		if block.hasTerminatorOp() 'hasTerm'
-			collectStdOpUses(try module.ops.get(block.terminatorIndex()) otherwise panic("collectFunctionValueUses: terminatorIndex not in module.ops"), referenced: referenced)
-		end 'hasTerm'
-
-		for edge in block.branchEdges 'eachEdge'
-			for argId in edge.argIds 'eachArg'
-				referenced.insert(argId)
-			end 'eachArg'
-		end 'eachEdge'
+		collectBlockExitUses(module, block: block, referenced: referenced)
 	end 'eachBlock'
 end 'collectFunctionValueUses'
+
+export function collectBlockExitUses(module StdModule, block IrBlock, referenced StdValueUseSet)
+	if block.hasTerminatorOp() 'hasTerm'
+		collectStdOpUses(try module.ops.get(block.terminatorIndex()) otherwise panic("collectBlockExitUses: terminatorIndex not in module.ops"), referenced: referenced)
+	end 'hasTerm'
+
+	for edge in block.branchEdges 'eachEdge'
+		for argId in edge.argIds 'eachArg'
+			referenced.insert(argId)
+		end 'eachArg'
+	end 'eachEdge'
+end 'collectBlockExitUses'
 
 // Add the value ids `op` reads to `referenced` — its defs are not uses, and neither are the
 // branch-edge args (those live on the predecessor's `IrBlock`, not on the op).

@@ -38,7 +38,7 @@ whose calls need nothing pays nothing. Seeded instead, `Holder.create(cell Cell)
 
 ### What is deliberately NOT covered
 
-The containers this compiler serves itself — `Array`, `Vector` and every declared array-literal conformer —
+The containers this compiler serves itself — `Array`, `FixedArray` and every declared array-literal conformer —
 keep the receiver-blind edge tuned to them (`Parser.corpusServesArrayMember`), which withholds statics.
 This edge is for a DECLARED generic.
 

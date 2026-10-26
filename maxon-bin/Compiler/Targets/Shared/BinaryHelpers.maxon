@@ -382,8 +382,7 @@ export function patchArm64PageOff(code ByteArray, codeOffset CodeOffset, targetA
 		panic("patchArm64PageOff: instruction at codeOffset {codeOffset} is neither ADD-imm (0x91) nor LDR/STR Xn (0xF9) — opcode top byte 0x{topByte} — emitter/reloc mismatch")
 	end 'badOpcode'
 
-	// `scale` is 1 or 8, never zero; `otherwise panic` is the project's form for a `try` that must not fail.
-	let imm12 = (try (pageOffset / scale) otherwise panic("patchArm64PageOff: scale was 0 past its own two-valued choice")) and 0xFFF
+	let imm12 = (pageOffset / scale) and 0xFFF
 	let patched = (origInsn and 0xFFC003FF) or (imm12 shl 10)
 	patchDword(code, offset: codeOffset as ByteOffset, value: patched)
 end 'patchArm64PageOff'

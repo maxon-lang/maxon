@@ -608,6 +608,8 @@ export type FileParseArtifact
 	// `debugStreamNameSites` is. See `Project.immortalConstArraySites`.
 	export var immortalConstArraySites as ImmortalConstArraySiteMap
 
+	export var provenFixedArrayAccesses as ProvenFixedArrayAccessMap
+
 	// (funcIndex, ValueId) -> the Maxon op index of every value an op DEFINES in this file
 	// (see ValueOrigin). Recorded inside the emit choke points below in the same
 	// op/value lockstep `opRanges` uses, and folded into `project.valueOrigins` by
@@ -802,6 +804,7 @@ export type FileParseArtifact
 			allocTagSites: AllocTagSiteMap.create(),
 			debugStreamNameSites: DebugStreamNameSiteMap.create(),
 			immortalConstArraySites: ImmortalConstArraySiteMap.create(),
+			provenFixedArrayAccesses: ProvenFixedArrayAccessMap.create(),
 			valueOrigins: ValueOriginTable.create(),
 			deferredChains: DeferredChainTable.create(),
 			funcSignatures: FuncSignatureEntryArray.create(),
@@ -944,6 +947,10 @@ export type FileParseArtifact
 	export function recordImmortalConstArraySite(kind ImmortalRecordKind)
 		self.immortalConstArraySites.upsert(self.module.opCount(), value: kind)
 	end 'recordImmortalConstArraySite'
+
+	export function recordProvenFixedArrayAccess(opIndex ElementIndex, accessor SizedAccessor)
+		self.provenFixedArrayAccesses.upsert(opIndex, value: accessor)
+	end 'recordProvenFixedArrayAccess'
 
 	// THE emit choke point for a Maxon block terminator. Same op/span lockstep as
 	// `emitOp`; separate only because a terminator is stored on the block rather
@@ -1160,6 +1167,7 @@ export type FileParseArtifact
 		cacheWriteAllocTagSiteMap(writer, value: self.allocTagSites)
 		cacheWriteDebugStreamNameSiteMap(writer, value: self.debugStreamNameSites)
 		cacheWriteImmortalConstArraySiteMap(writer, value: self.immortalConstArraySites)
+		cacheWriteProvenFixedArrayAccessMap(writer, value: self.provenFixedArrayAccesses)
 		self.valueOrigins.cacheWrite(writer)
 		self.deferredChains.cacheWrite(writer)
 		cacheWriteFuncSignatureEntryArray(writer, value: self.funcSignatures)
@@ -1207,6 +1215,7 @@ export type FileParseArtifact
 		let f_allocTagSites = try cacheReadAllocTagSiteMap(reader)
 		let f_debugStreamNameSites = try cacheReadDebugStreamNameSiteMap(reader)
 		let f_immortalConstArraySites = try cacheReadImmortalConstArraySiteMap(reader)
+		let f_provenFixedArrayAccesses = try cacheReadProvenFixedArrayAccessMap(reader)
 		let f_valueOrigins = try ValueOriginTable.cacheRead(reader)
 		let f_deferredChains = try DeferredChainTable.cacheRead(reader)
 		let f_funcSignatures = try cacheReadFuncSignatureEntryArray(reader)
@@ -1239,11 +1248,11 @@ export type FileParseArtifact
 		let f_parseMints = try cacheReadParseMints(reader)
 		let f_instanceIdsInUse = try cacheReadGenericInstanceIdArray(reader)
 
-		return Self{filePath: f_filePath, livesUnderStdlibDirectory: f_livesUnderStdlibDirectory, typeIdsAreProjectGlobal: f_typeIdsAreProjectGlobal, module: f_module, opRanges: f_opRanges, covPoints: f_covPoints, asyncSpawnSites: f_asyncSpawnSites, overloadAnswers: f_overloadAnswers, serviceAwaitSites: f_serviceAwaitSites, registryUseSites: f_registryUseSites, allocTagSites: f_allocTagSites, debugStreamNameSites: f_debugStreamNameSites, immortalConstArraySites: f_immortalConstArraySites, valueOrigins: f_valueOrigins, deferredChains: f_deferredChains, funcSignatures: f_funcSignatures, overloadSets: f_overloadSets, pendingFnMergeChecks: f_pendingFnMergeChecks, pendingFunctionTypeDoors: f_pendingFunctionTypeDoors, pendingBrandRecords: f_pendingBrandRecords, pendingDiscardedResults: f_pendingDiscardedResults, rangeChecks: f_rangeChecks, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, structTypes: f_structTypes, writtenTupleTypes: f_writtenTupleTypes, enumTypes: f_enumTypes, interfaces: f_interfaces, typeNameDecls: f_typeNameDecls, genericInstanceRequests: f_genericInstanceRequests, usedTypeNames: f_usedTypeNames, memberAccessedTypeNames: f_memberAccessedTypeNames, unbuiltBodies: f_unbuiltBodies, conformances: f_conformances, literalInitSites: f_literalInitSites, inferredInstantiationSites: f_inferredInstantiationSites, typeNames: f_typeNames, currentFuncIndex: f_currentFuncIndex, diagnostics: f_diagnostics, unusedTypeAliases: f_unusedTypeAliases, hiddenTypeNames: f_hiddenTypeNames, bindingHygieneDiagnostics: f_bindingHygieneDiagnostics, parseMints: f_parseMints, instanceIdsInUse: f_instanceIdsInUse}
+		return Self{filePath: f_filePath, livesUnderStdlibDirectory: f_livesUnderStdlibDirectory, typeIdsAreProjectGlobal: f_typeIdsAreProjectGlobal, module: f_module, opRanges: f_opRanges, covPoints: f_covPoints, asyncSpawnSites: f_asyncSpawnSites, overloadAnswers: f_overloadAnswers, serviceAwaitSites: f_serviceAwaitSites, registryUseSites: f_registryUseSites, allocTagSites: f_allocTagSites, debugStreamNameSites: f_debugStreamNameSites, immortalConstArraySites: f_immortalConstArraySites, provenFixedArrayAccesses: f_provenFixedArrayAccesses, valueOrigins: f_valueOrigins, deferredChains: f_deferredChains, funcSignatures: f_funcSignatures, overloadSets: f_overloadSets, pendingFnMergeChecks: f_pendingFnMergeChecks, pendingFunctionTypeDoors: f_pendingFunctionTypeDoors, pendingBrandRecords: f_pendingBrandRecords, pendingDiscardedResults: f_pendingDiscardedResults, rangeChecks: f_rangeChecks, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, structTypes: f_structTypes, writtenTupleTypes: f_writtenTupleTypes, enumTypes: f_enumTypes, interfaces: f_interfaces, typeNameDecls: f_typeNameDecls, genericInstanceRequests: f_genericInstanceRequests, usedTypeNames: f_usedTypeNames, memberAccessedTypeNames: f_memberAccessedTypeNames, unbuiltBodies: f_unbuiltBodies, conformances: f_conformances, literalInitSites: f_literalInitSites, inferredInstantiationSites: f_inferredInstantiationSites, typeNames: f_typeNames, currentFuncIndex: f_currentFuncIndex, diagnostics: f_diagnostics, unusedTypeAliases: f_unusedTypeAliases, hiddenTypeNames: f_hiddenTypeNames, bindingHygieneDiagnostics: f_bindingHygieneDiagnostics, parseMints: f_parseMints, instanceIdsInUse: f_instanceIdsInUse}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize352
-		return sizeof(FileParseArtifact) as CacheSize352
+	static function cacheLayoutBytes() returns CacheSize360
+		return sizeof(FileParseArtifact) as CacheSize360
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -1408,6 +1417,7 @@ module enum OpKeyedTable
 	allocTagSites
 	debugStreamNameSites
 	immortalConstArraySites
+	provenFixedArrayAccesses
 	valueOrigins
 	deferredChains
 	refusedOverloadCalls
@@ -1428,6 +1438,7 @@ module function heldBy(table OpKeyedTable, project Project) returns ElementIndex
 		allocTagSites gives project.allocTagSites.count()
 		debugStreamNameSites gives project.debugStreamNameSites.count()
 		immortalConstArraySites gives project.immortalConstArraySites.count()
+		provenFixedArrayAccesses gives project.provenFixedArrayAccesses.count()
 		valueOrigins gives project.valueOrigins.count()
 		deferredChains gives project.deferredChains.count()
 		refusedOverloadCalls gives project.refusedOverloadCalls.count()
@@ -2536,6 +2547,7 @@ function commitOpKeyedSites(project Project, artifact FileParseArtifact, opOffse
 	project.allocTagSites.upsertRelocated(artifact.allocTagSites, offset: opOffset)
 	project.debugStreamNameSites.upsertRelocated(artifact.debugStreamNameSites, offset: opOffset)
 	project.immortalConstArraySites.upsertRelocated(artifact.immortalConstArraySites, offset: opOffset)
+	project.provenFixedArrayAccesses.upsertRelocated(artifact.provenFixedArrayAccesses, offset: opOffset)
 end 'commitOpKeyedSites'
 
 extension Map

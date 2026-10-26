@@ -198,7 +198,7 @@ end 'main'
 Reading the pointee is not the same as not reading anything, and writing through it is a door like any other:
 `bump` doubles the `Small` it was handed by reference, and the sum of two in-range values is refused where it is
 written, on the line of the write. Every door into a `Small` `var` checks what it stores, and a slot nothing wrote
-cannot be made over a `Small`: `resize`, `setLength` and `Vector.create` over an element whose range excludes zero
+cannot be made over a `Small`: `resize`, `setLength` and `FixedArray.create` over an element whose range excludes zero
 are **E3106**. So no out-of-range value can arrive at the parameter itself.
 ```maxon
 typealias Small = int(1 to 100)

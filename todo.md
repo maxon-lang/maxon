@@ -156,7 +156,7 @@ Since you're building the compiler itself, you can provide the AI with a "Mental
 - `maxon build stdlib/URL.maxon` (and `stdlib/Clock.maxon`) panics at `SemanticCheck.maxon` `hiddenSymbolDiagnostic`
   via `Parser.recordHiddenTypeName` — a compiler panic on a stdlib file built as a program; reproduces with the
   previous compiler too. `maxon build stdlib` refuses with E3005 (`String.maxon:112`, `managed` holding `ByteMemory`)
-  and E2015 (`Vector.maxon:12`).
+  and E2015 (`FixedArray.maxon:12`).
 - x64-windows `ir-specs` pin `a-getter-result-kept-across-a-store-to-its-field-is-counted`
   (ir-specs/borrowed-field-getters.md) does not match what the compiler renders at HEAD; minting it on the lane fixes
   it once the render is confirmed right.

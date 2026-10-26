@@ -1636,6 +1636,33 @@ end 'cacheReadRegistryUseSiteTableEntries'
 
 export let noRegistryUseSites = RegistryUseSiteTable.unwritten
 
+export typealias ProvenFixedArrayAccessMap = Map with (ElementIndex, SizedAccessor)
+
+// @generated library-cache begin
+module function cacheWriteProvenFixedArrayAccessMap(writer LibraryCacheWriter, value ProvenFixedArrayAccessMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.unsigned(key as CacheUnsigned)
+		entry.cacheWrite(writer)
+	end 'eachEntry'
+end 'cacheWriteProvenFixedArrayAccessMap'
+
+module function cacheReadProvenFixedArrayAccessMap(reader LibraryCacheReader) returns ProvenFixedArrayAccessMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ProvenFixedArrayAccessMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = (try reader.unsigned()) as ElementIndex
+		let entry = try SizedAccessor.cacheRead(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadProvenFixedArrayAccessMap'
+
+// @generated library-cache end
+
 // ⭐ `__mm_alloc` call op index ⇒ the mm-trace TAG that box carries. See `Project.allocTagSites`.
 export typealias AllocTagSiteMap = Map with (ElementIndex, MmTag)
 
@@ -5363,11 +5390,13 @@ end 'cacheReadRangeCheckReturnSiteArray'
 // ⚠ **IT IS DELIBERATELY NOT A `RangedTypeAlias` WITH AN EMPTY NAME.** Half of what a
 // `RangedTypeAlias` carries is a DECLARATION — the name, the declaring file, the position E3061
 // anchors on, the visibility `scopedAliasTier` ranks by — and every one of those would be a lie
-// here. The two rules stated in terms of the type the program WROTE therefore cannot see this:
-// E3010 (*"unneeded cast: 'A' already fits in 'B'"*, which quotes both names) and `safety.md`'s *"a
-// ranged type whose range excludes 0 compiles to a bare divide"*. What CAN see it is every rule
-// about whether a runtime GUARD can fail, because that is a question about the value's bounds and
-// not about its spelling.
+// here. E3010 (*"unneeded cast: 'A' already fits in 'B'"*, which quotes both names) is stated in terms
+// of the type the program WROTE and therefore cannot see this. What CAN see it is every rule about the
+// value's bounds rather than its spelling: whether a runtime GUARD can fail, and whether a divide or a
+// `FixedArray` access can fail at all (`Parser.knownValueOf`).
+//
+// ⚠ Every writer records a fact true wherever the value is live, never one true only on some path: a
+// divide or a `FixedArray` access this proves compiles with no runtime check behind it.
 //
 // `low`/`high` are INCLUSIVE and stored as the raw 64-bit patterns `FullRangeInt` holds, exactly as
 // `RangedTypeAlias`' bounds are, so one containment (`TypeRules.rangeCoversIntBounds`) answers for both.
@@ -12583,6 +12612,11 @@ export type Project
 	// flag would serve one build's artifact to another. It costs one entry per read of an imaged binding.
 	export var immortalConstArraySites as ImmortalConstArraySiteMap
 
+	// Call op index ⇒ the `FixedArray` `get`/`set` whose index the parser proved inside the size: SemanticCheck
+	// accepts it bare and lowering calls the unchecked runtime entry. A typing fact, so it is kept off
+	// `CalleeMint`, which records only how the callee was spelled.
+	export var provenFixedArrayAccesses as ProvenFixedArrayAccessMap
+
 	// ⭐⭐ **THE COMPILE-TIME `element_size@24` STAMP OF A MANAGED-PRIMITIVE CALL'S CONTAINER** —
 	// what lets `inlineManagedPrimitives` emit ONE of `emitStrideDispatch`'s arms instead of forking on a
 	// stride the compiler already knows. `Array with Integer` is 8 at compile time and the pass was emitting a
@@ -12799,6 +12833,7 @@ export type Project
 			allocTagSites: AllocTagSiteMap.create(),
 			debugStreamNameSites: DebugStreamNameSiteMap.create(),
 			immortalConstArraySites: ImmortalConstArraySiteMap.create(),
+			provenFixedArrayAccesses: ProvenFixedArrayAccessMap.create(),
 			stdOpElementStrides: StdOpElementStrideMap.create(),
 			stdOpTrivialElementSites: StdOpTrivialElementSiteSet.create(),
 			valueOrigins: ValueOriginTable.create(),

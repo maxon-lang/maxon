@@ -1610,14 +1610,14 @@ end 'main'
 error E3131: <fragment>:14:12: Cannot cast to 'NarrowCol': a container's elements have a storage layout of their own, so 'WideCol' cannot be retagged as one — build the container with the element type you need, or convert it element by element
 ```
 
-<!-- test: error.a-cast-between-vectors-of-two-sizes-is-not-a-rebrand -->
-Two files of one directory each declare a file-private `Limit` over one range. `Wide` is a `Vector with 8`
-of `pkg/lib.maxon`'s and `Quad` a `Vector with 4` of `pkg/main.maxon`'s: the elements share a layout but the containers do not, and the cast is
+<!-- test: error.a-cast-between-fixed-arrays-of-two-sizes-is-not-a-rebrand -->
+Two files of one directory each declare a file-private `Limit` over one range. `Wide` is a `FixedArray with 8`
+of `pkg/lib.maxon`'s and `Quad` a `FixedArray with 4` of `pkg/main.maxon`'s: the elements share a layout but the containers do not, and the cast is
 refused.
 ```maxon
 // --- file: pkg/lib.maxon
 typealias Limit = int(0 to 9)
-typealias Wide = Vector with 8 Limit
+typealias Wide = FixedArray with 8 Limit
 
 export type Holder
 	export var slots as Wide
@@ -1629,7 +1629,7 @@ end 'Holder'
 
 // --- file: pkg/main.maxon
 typealias Limit = int(0 to 9)
-typealias Quad = Vector with 4 Limit
+typealias Quad = FixedArray with 4 Limit
 
 function main() returns ExitCode
 	let q = Holder.make().slots as Quad

@@ -1586,14 +1586,14 @@ error E2015: <fragment>:18:15: Unsupported: `Array` member 'nosuchmember' — th
 <!-- test: error.a-conformer-named-for-a-container-the-compiler-serves-is-refused -->
 <!-- tier: stdlib -->
 ⛔⛔ **THE MARKER IS OPEN TO ANY NAME EXCEPT ONE THE COMPILER ALREADY SERVES A CONTAINER UNDER, AND
-WITHOUT THAT EXCEPTION A FIXED-SIZE `Vector with 3 Num` GROWS.** `Bag` above is admitted because the
-compiler owns no `Bag`; `Vector` is different in kind, because the compiler synthesizes that container itself and
-a `Vector with N T` states its SIZE as a second coordinate of its instance identity
+WITHOUT THAT EXCEPTION A FIXED-SIZE `FixedArray with 3 Num` GROWS.** `Bag` above is admitted because the
+compiler owns no `Bag`; `FixedArray` is different in kind, because the compiler synthesizes that container itself and
+a `FixedArray with N T` states its SIZE as a second coordinate of its instance identity
 (`GenericInstanceRegistry.fixedSizes`) where a `__ManagedMemory with T` states none.
 
 **Without it, the declaration below added to an ordinary program** is filed as a conformer by
-`noteArrayLiteralConformer`, `isArrayBaseName("Vector")` goes TRUE through the non-corpus widening, and
-`Parser.dispatchMethodOnReceiver` — which asks the ARRAY arm before the vector one — serves the growable
+`noteArrayLiteralConformer`, `isArrayBaseName("FixedArray")` goes TRUE through the non-corpus widening, and
+`Parser.dispatchMethodOnReceiver` — which asks the ARRAY arm before the fixed-array one — serves the growable
 surface on a fixed-size receiver. `Vec3.create()` reports **count 0**, four `push`es take it to **4**,
 and `resize(9)` to **9**. Not a refusal and not a diagnostic: the size that is part of the type is
 simply gone.
@@ -1605,7 +1605,7 @@ with the container's own reason rather than the `String`/`Character` sentence a 
 ```maxon
 typealias Num = int(0 to 100)
 
-type Vector uses Element implements BuiltinArrayLiteral
+type FixedArray uses Element implements BuiltinArrayLiteral
 	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
@@ -1613,9 +1613,9 @@ type Vector uses Element implements BuiltinArrayLiteral
 	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
-end 'Vector'
+end 'FixedArray'
 
-typealias Vec3 = Vector with 3 Num
+typealias Vec3 = FixedArray with 3 Num
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -1624,7 +1624,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:10: Unsupported: `Vector` is a generic container the compiler SYNTHESIZES the record for, so a `Vector with …` is already this compiler's own instance and not the `__ManagedMemory` record a `BuiltinArrayLiteral` conformer's literal is an identity on. Honouring the marker would put every `Vector` on the growable array's surface — `push`, `resize` — under the container's own name, which is a wrong answer rather than a refusal. Rename the declaration, or drop the marker
+error E2015: <fragment>:10:10: Unsupported: `FixedArray` is a generic container the compiler SYNTHESIZES the record for, so a `FixedArray with …` is already this compiler's own instance and not the `__ManagedMemory` record a `BuiltinArrayLiteral` conformer's literal is an identity on. Honouring the marker would put every `FixedArray` on the growable array's surface — `push`, `resize` — under the container's own name, which is a wrong answer rather than a refusal. Rename the declaration, or drop the marker
 ```
 
 <!-- test: a-conformer-named-for-the-list-is-admitted-because-the-list-left-the-class -->
@@ -1640,10 +1640,10 @@ would put the growable surface under the container's own name. Nothing of the co
 name, so the 9 is the declaration's own answer.
 ⇒ **Re-add `List` to that roster and this case goes red**, which is the whole of why it is kept.
 
-⛔ **THE CLASS ABOVE HAS ONE USER-WRITABLE MEMBER.** The roster is `Vector`, `__ManagedList`, `__ManagedListNode`, `__ManagedMemoryCursor`, and the three
+⛔ **THE CLASS ABOVE HAS ONE USER-WRITABLE MEMBER.** The roster is `FixedArray`, `__ManagedList`, `__ManagedListNode`, `__ManagedMemoryCursor`, and the three
 `__` names are refused earlier by `E2051` (*"declarations starting with `__` are reserved"*), so no second
 name can demonstrate that the rule is about the CLASS until the compiler synthesizes another container under a
-writable name. The refusal itself is pinned by the `Vector` case directly above.
+writable name. The refusal itself is pinned by the `FixedArray` case directly above.
 ```maxon
 typealias Num = int(0 to 100)
 
@@ -1673,12 +1673,12 @@ end 'main'
 <!-- tier: stdlib -->
 ⭐⭐ **THE HALF THE TWO CASES ABOVE CANNOT SEE: A CONFORMER THAT CONSTRUCTS NOTHING.** Its `init` satisfies
 the conformance by DELEGATING, so it never reaches a fused-wrapper literal and the declaration stands. What
-must still hold is that the marker did not make `Vector` an ARRAY declaration, and the only thing holding
+must still hold is that the marker did not make `FixedArray` an ARRAY declaration, and the only thing holding
 that is `ProgramSignatures.noteArrayLiteralConformer`'s skip.
 
-⚠ **THE ASSERTION IS THE RECORD, NOT A ROSTER.** Every member of a `Vector` is `stdlib/Vector.maxon`'s,
+⚠ **THE ASSERTION IS THE RECORD, NOT A ROSTER.** Every member of a `FixedArray` is `stdlib/FixedArray.maxon`'s,
 so there is no synthesized surface for a sentence to recite — and what the refusal names is the fact the
-case is about: the RECORD is this compiler's, so a `type Vector` declared here is not the container the
+case is about: the RECORD is this compiler's, so a `type FixedArray` declared here is not the container the
 instance denotes. A hijacked receiver would be served `push` and answer 4, which is what this case fails
 on — or, without the skip, not be refused at all.
 
@@ -1687,28 +1687,28 @@ declaration; disabling each in turn shows which rests on which:
 
 | sabotage | this case | the two above |
 |---|---|---|
-| **skip off**, refusal on | `E3005 … Cannot return 'Vector' from function declared to return 'Vector.ElementMemory'` | **compilation SUCCEEDS** — no refusal at all |
+| **skip off**, refusal on | `E3005 … Cannot return 'FixedArray' from function declared to return 'FixedArray.ElementMemory'` | **compilation SUCCEEDS** — no refusal at all |
 | skip on, **refusal off** | **PASS** | `requireFusedWrapperTag`'s `String`/`Character` sentence |
 
 ⇒ **The skip is the load-bearing rule and it is what makes the refusal REACHABLE.** Without it
 `isArrayBaseName` answers TRUE for the name, `firstFieldIsItsOwnBuffer` follows, and
 `Parser.emitFusedWrapperLiteral` returns down its IDENTITY arm before any of the three sentences is asked —
-which is precisely how a fixed-size vector would be served `push`. The refusal is not a second half; it is
+which is precisely how a fixed array would be served `push`. The refusal is not a second half; it is
 the NOUN the declaration gets once the skip has taken it off the array surface.
 ```maxon
 typealias Num = int(0 to 100)
 
-type Vector uses Element implements BuiltinArrayLiteral
+type FixedArray uses Element implements BuiltinArrayLiteral
 	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
 
 	static function init(managed ElementMemory) returns Self
-		return Vector.init(managed)
+		return FixedArray.init(managed)
 	end 'init'
-end 'Vector'
+end 'FixedArray'
 
-typealias Vec3 = Vector with 3 Num
+typealias Vec3 = FixedArray with 3 Num
 
 function main() returns ExitCode
 	var v = Vec3.create()
@@ -1717,7 +1717,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:18:2: Unsupported: a member access on 'v': `Vector` is a BUILTIN whose runtime record the compiler SYNTHESIZES rather than compiling a declaration for, so a `Vector with …` is this compiler's own instance and its members are the container's — not the ones a `type Vector` declared here carries. Rename the declaration to reach its own members
+error E2015: <fragment>:18:2: Unsupported: a member access on 'v': `FixedArray` is a BUILTIN whose runtime record the compiler SYNTHESIZES rather than compiling a declaration for, so a `FixedArray with …` is this compiler's own instance and its members are the container's — not the ones a `type FixedArray` declared here carries. Rename the declaration to reach its own members
 ```
 
 <!-- test: error.a-string-marker-conformer-named-for-a-container-is-not-this-doors-subject -->
@@ -1729,38 +1729,38 @@ Ungated, it would answer the declaration below — `interface-conformance.error.
 with only the type's name changed — with:
 
 > ``…not the `__ManagedMemory` record a `BuiltinStringLiteral` conformer's literal is an identity on.
-> Honouring the marker would put every `Vector` on the growable array's surface — `push`, `resize`…``
+> Honouring the marker would put every `FixedArray` on the growable array's surface — `push`, `resize`…``
 
-Three clauses, none of them true of it: the declaration is **not generic**, so the `Vector with …` the
+Three clauses, none of them true of it: the declaration is **not generic**, so the `FixedArray with …` the
 sentence quotes does not exist; `ProgramSignatures.noteArrayLiteralConformer` is called for the ARRAY marker
 alone, so no array surface is at stake and nothing is skipped; and it would **preempt**
 `requireFusedWrapperTag`, whose sentence is the right one here and is what the byte-for-byte identical
 declaration named `Wrapped` gets.
 
 ⇒ **The door is gated on the array marker, the same opening clause its sibling
-`requireArrayMarkerDeclaresTheBuffer` has.** The assertion below is that the name `Vector` buys this
+`requireArrayMarkerDeclaresTheBuffer` has.** The assertion below is that the name `FixedArray` buys this
 declaration NOTHING — it meets the byte-record sentence a `Wrapped` meets, because the byte record is what
 its marker is about. A container name is disqualifying for the ARRAY marker specifically, and that is the
 whole of the rule.
 ```maxon
-type Vector implements BuiltinStringLiteral
+type FixedArray implements BuiltinStringLiteral
 	var managed as __ManagedMemory
 	var flag as bool
 
 	static function init(value __ManagedMemory) returns Self
 		return Self{managed: value, flag: false}
 	end 'init'
-end 'Vector'
+end 'FixedArray'
 
 function main() returns ExitCode
 	let mm = try __ManagedMemory.create(64, elementSize: 1) otherwise return 1
 	try mm.setLength(40) otherwise return 2
-	let w = Vector.init(mm)
+	let w = FixedArray.init(mm)
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:7:10: Unsupported: `Vector` implements `BuiltinStringLiteral`, one of `stdlib/Builtins.maxon`'s literal markers, so its record would be the compiler's own fused byte record rather than the fields it declares. The compiler mints that record only for the two names it owns the record FOR — `String` and `Character` — because a conformer of any other name gets a VALUE whose bytes are a byte record's and whose IDENTITY is a struct's: every declared field the fused record has no slot for is discarded at construction, and the struct cascade that later drops or clones it reads past the record's end
+error E2015: <fragment>:7:10: Unsupported: `FixedArray` implements `BuiltinStringLiteral`, one of `stdlib/Builtins.maxon`'s literal markers, so its record would be the compiler's own fused byte record rather than the fields it declares. The compiler mints that record only for the two names it owns the record FOR — `String` and `Character` — because a conformer of any other name gets a VALUE whose bytes are a byte record's and whose IDENTITY is a struct's: every declared field the fused record has no slot for is discarded at construction, and the struct cascade that later drops or clones it reads past the record's end
 ```
 
 <!-- test: a-declared-roster-member-keyed-by-another-type-is-served-from-the-declaration -->

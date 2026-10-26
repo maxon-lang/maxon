@@ -3597,17 +3597,17 @@ end 'main'
 error E3159: <fragment>:11:3: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'a' (in main); pass a clone()
 ```
 
-<!-- test: error.a-let-vector-handed-to-a-function-value-that-writes-it-is-refused -->
-The same for a `Vector from` literal.
+<!-- test: error.a-let-fixed-array-handed-to-a-function-value-that-writes-it-is-refused -->
+The same for a `FixedArray from` literal.
 ```maxon
-typealias CountVector = Vector with 3 Count
+typealias CountVector = FixedArray with 3 Count
 
 function poke(v CountVector)
-	try v.set(0, value: 9) otherwise ignore
+	v.set(0, value: 9)
 end 'poke'
 
 function main() returns ExitCode
-	let v = Vector from [1 as Count, 2 as Count, 3 as Count]
+	let v = FixedArray from [1 as Count, 2 as Count, 3 as Count]
 	let f = poke
 	f(v)
 	return v.count() as ExitCode
@@ -3787,11 +3787,11 @@ end 'main'
 7
 ```
 
-<!-- test: error.a-vector-cannot-hold-an-alias-that-excludes-zero -->
-A `Vector` publishes every slot as zero at `create()`, so an element alias that excludes zero is refused.
+<!-- test: error.a-fixed-array-cannot-hold-an-alias-that-excludes-zero -->
+A `FixedArray` publishes every slot as zero at `create()`, so an element alias that excludes zero is refused.
 ```maxon
 typealias Percent = int(1 to 100)
-typealias PercentVector = Vector with 3 Percent
+typealias PercentVector = FixedArray with 3 Percent
 
 function main() returns ExitCode
 	let v = PercentVector.create()
@@ -3799,7 +3799,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3106: <fragment>:6:10: 'Vector.create' cannot publish slots of 'Percent': every slot is zero and zero is not a value of 'Percent'
+error E3106: <fragment>:6:10: 'FixedArray.create' cannot publish slots of 'Percent': every slot is zero and zero is not a value of 'Percent'
 ```
 
 <!-- test: error.a-closure-handing-a-captured-let-array-to-a-function-value-is-refused -->
@@ -3823,18 +3823,18 @@ end 'main'
 error E3159: <fragment>:12:28: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'a' (in main$closure_0); pass a clone()
 ```
 
-<!-- test: error.a-closure-handing-a-captured-let-vector-to-a-function-value-is-refused -->
-The same for a captured `Vector from` literal.
+<!-- test: error.a-closure-handing-a-captured-let-fixed-array-to-a-function-value-is-refused -->
+The same for a captured `FixedArray from` literal.
 ```maxon
-typealias CountVector = Vector with 3 Count
+typealias CountVector = FixedArray with 3 Count
 
 function poke(v CountVector) returns Count
-	try v.set(0, value: 9) otherwise ignore
+	v.set(0, value: 9)
 	return v.count()
 end 'poke'
 
 function main() returns ExitCode
-	let v = Vector from [1 as Count, 2 as Count, 3 as Count]
+	let v = FixedArray from [1 as Count, 2 as Count, 3 as Count]
 	let f = poke
 	let g = function() gives f(v)
 	return g() as ExitCode
@@ -4048,16 +4048,16 @@ end 'main'
 error E3005: <fragment>:3:24: no common integer type for -1 and 18446744073709551615: cast the elements to an alias
 ```
 
-<!-- test: error.a-vector-from-a-mixed-sign-literal-is-refused -->
-And for a `Vector from` literal.
+<!-- test: error.a-fixed-array-from-a-mixed-sign-literal-is-refused -->
+And for a `FixedArray from` literal.
 ```maxon
 function main() returns ExitCode
-	let v = Vector from [-1, u64.max]
+	let v = FixedArray from [-1, u64.max]
 	return v.count() as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:3:27: no common integer type for -1 and 18446744073709551615: cast the elements to an alias
+error E3005: <fragment>:3:31: no common integer type for -1 and 18446744073709551615: cast the elements to an alias
 ```
 
 <!-- test: a-closure-capturing-an-unsigned-column-read-prints-it-unsigned -->
@@ -4083,14 +4083,14 @@ end 'main'
 18446744073709551615 true
 ```
 
-<!-- test: a-vector-from-a-literal-over-an-alias-that-excludes-zero-is-accepted -->
-`Vector from` supplies every slot, so the zero-excluding element is only refused at `create`, which publishes zeroed slots.
+<!-- test: a-fixed-array-from-a-literal-over-an-alias-that-excludes-zero-is-accepted -->
+`FixedArray from` supplies every slot, so the zero-excluding element is only refused at `create`, which publishes zeroed slots.
 ```maxon
 typealias Percent = int(1 to 100)
 
 function main() returns ExitCode
-	let v = Vector from [10 as Percent, 20 as Percent, 30 as Percent]
-	return (try v.get(2) otherwise 1) as ExitCode
+	let v = FixedArray from [10 as Percent, 20 as Percent, 30 as Percent]
+	return v.get(2) as ExitCode
 end 'main'
 ```
 ```exitcode

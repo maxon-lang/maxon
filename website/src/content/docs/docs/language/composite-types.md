@@ -466,8 +466,8 @@ end 'main'
 **E3005** (`Type 'Wrapper' does not conform to InitableFromStringLiteral`).
 
 The standard collections accept bracketed literals: a plain `[1, 2, 3]` is an `Array`, `["a": 1]` is a
-`Map`, and `Array`, `Set`, `List` and `Vector` aliases take `Alias from [ ... ]`, for example
-`CharSet from ['a', 'e']`; the alias states the element type, and a `Vector` alias's literal must write
+`Map`, and `Array`, `Set`, `List` and `FixedArray` aliases take `Alias from [ ... ]`, for example
+`CharSet from ['a', 'e']`; the alias states the element type, and a `FixedArray` alias's literal must write
 exactly as many elements as the alias holds. When that element is itself an array alias, each element is a
 value of it: another `Alias from [ ... ]`, a bare `[ ... ]` that takes its element type from the alias, or
 a local of the inner alias — `Rows from [Ints from [1, 2], [3], row]` over `typealias Rows = Array with
@@ -550,8 +550,8 @@ end 'main'
 - Wrong argument count is **E2056**; a bare `int` argument is **E2061**; a type argument to a non-generic
   type is **E2055**.
 - A `float` type argument, bare or through a ranged float alias such as `FullRangeFloat`, is **E2062**
-  (`Box with FullRangeFloat`). The element of an `Array` or a `Vector` is the exception, because it is stored
-  inline in a buffer: `Array with FullRangeFloat` and `Vector with 2 FullRangeFloat` compile, and there a bare `float` is
+  (`Box with FullRangeFloat`). The element of an `Array` or a `FixedArray` is the exception, because it is stored
+  inline in a buffer: `Array with FullRangeFloat` and `FixedArray with 2 FullRangeFloat` compile, and there a bare `float` is
   **E2061**.
 
 Inside `type Outer uses T`, another generic type written without `with` arguments binds by parameter NAME:

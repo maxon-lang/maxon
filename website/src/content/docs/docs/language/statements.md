@@ -106,7 +106,7 @@ for num in numbers 'loop'
 end 'loop'
 ```
 
-The element of a `let` array, map, tuple or `Vector` literal keeps the range its literal elements span, so
+The element of a `let` array, map, tuple or `FixedArray` literal keeps the range its literal elements span, so
 it fits any alias that admits all of them.
 
 **Ranges.** `a to b` is inclusive and `a upto b` excludes `b`. Integer and `Character` ranges are both
