@@ -1596,7 +1596,9 @@ The standard collections accept bracketed literals: a plain `[1, 2, 3]` is an `A
 exactly as many elements as the alias holds. When that element is itself an array alias, each element is a
 value of it: another `Alias from [ ... ]`, a bare `[ ... ]` that takes its element type from the alias, or
 a local of the inner alias — `Rows from [Ints from [1, 2], [3], row]` over `typealias Rows = Array with
-Ints`. A type that declares `implements InitableFromArrayLiteral with
+Ints`. `Set` and `List` also take any `Array` value, under the bare name or an alias: `Set from names` builds
+a set of `names`' elements, and an alias head takes an `Array` of exactly its element; any other source is **E3005**.
+An `Array` or `FixedArray` alias head takes an array literal. A type that declares `implements InitableFromArrayLiteral with
 Element` takes `Type from [ ... ]`, which is `Type.init(value ElementArray)` over the literal:
 
 ```maxon

@@ -126,7 +126,7 @@ there was never filled.
 ## List
 
 `List` is a doubly linked list: O(1) insertion and removal at both ends, O(n) access by index. It implements
-`Iterable`, `Cloneable` and array-literal construction (`List from [1, 2, 3]`).
+`Iterable`, `Cloneable` and array construction: `List from [1, 2, 3]`, or `List from values` over any `Array`.
 
 | Member | Returns | Complexity | Description |
 |--------|---------|-----------|-------------|
@@ -234,8 +234,8 @@ Output: `ann is already present`, `32 true true 1`, `ann: 32`.
 
 ## Set
 
-`Set` is a hash set. The element type must be `Hashable` and `Equatable`. Build one with `create()` or
-`Set from [1, 2, 3]`. Iteration order is unspecified.
+`Set` is a hash set. The element type must be `Hashable` and `Equatable`. Build one with `create()`,
+`Set from [1, 2, 3]`, or `Set from values` over any `Array`. Iteration order is unspecified.
 
 | Member | Returns | Description |
 |--------|---------|-------------|

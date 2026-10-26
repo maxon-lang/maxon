@@ -1385,15 +1385,17 @@ export enum CalleeMint
 	paramDefaultHelper
 
 	// ⭐ `FilePath from "C:\x.txt"` → `FilePath.init(…)`, minted by
-	// `Parser.parseLiteralInitConstruction`.
+	// `Parser.parseLiteralInitConstruction`, and `Set from names` → `Set.init(names)` (`List`
+	// likewise), minted by `Parser.parseContainerFromArray`.
 	//
-	// It exists because the author writes NO MEMBER NAME in this form — the `init` is the
-	// `InitableFromStringLiteral` requirement the compiler dispatches to — so cross-file VISIBILITY has
-	// nothing to refuse. `stdlib/FilePath.maxon` declares `static function init` WITHOUT `export` (the
-	// interface it satisfies is what user code is meant to reach it through), so `FilePath from "…"` is
-	// accepted from user code where a written-out `FilePath.init("…")` is refused. The mint is what tells
-	// those two spellings apart — they build the identical callee, so no name-keyed rule can.
-	stringLiteralInit
+	// It exists because the author writes NO MEMBER NAME in this form — the `init` is the `Initable*`
+	// requirement the compiler dispatches to — so cross-file VISIBILITY has nothing to refuse.
+	// `stdlib/FilePath.maxon`, `stdlib/Set.maxon` and `stdlib/List.maxon` declare `static function
+	// init` WITHOUT `export` (the interface it satisfies is what user code is meant to reach it
+	// through), so `FilePath from "…"` is accepted from user code where a written-out
+	// `FilePath.init("…")` is refused. The mint is what tells those two spellings apart — they build
+	// the identical callee, so no name-keyed rule can.
+	fromConstructionInit
 
 	// ⭐ `Bag.create()`'s `Self{}` → `Self{items: __fieldDefault#Bag#items()}`, minted by
 	// `Parser.fillFieldDefaultFromHelper`. It is `paramDefaultHelper` one door over and carries that arm's
@@ -1434,7 +1436,7 @@ export enum CalleeMint
 end 'CalleeMint'
 
 // @generated library-cache begin
-let CacheCasesCalleeMint = [CalleeMint.notMinted, CalleeMint.primitiveStatic, CalleeMint.paramDefaultHelper, CalleeMint.stringLiteralInit, CalleeMint.fieldDefaultHelper, CalleeMint.resolvedTypeQualifier, CalleeMint.rangeOperator]
+let CacheCasesCalleeMint = [CalleeMint.notMinted, CalleeMint.primitiveStatic, CalleeMint.paramDefaultHelper, CalleeMint.fromConstructionInit, CalleeMint.fieldDefaultHelper, CalleeMint.resolvedTypeQualifier, CalleeMint.rangeOperator]
 
 export function cacheReadCalleeMint(reader LibraryCacheReader) returns CalleeMint throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()

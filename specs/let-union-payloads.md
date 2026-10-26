@@ -749,3 +749,39 @@ end 'names'
 ```exitcode
 0
 ```
+
+<!-- test: error.a-var-read-again-after-a-wrapper-that-stores-it-into-a-let-payload-of-an-alias-over-an-alias -->
+The payload's type `Grid` is an array of `Row`, which is itself an alias of an instance, so the payload's kind is spelled through both aliases; a `var` stored into it by a wrapper and read again is refused the same way.
+
+```maxon
+typealias Row = Array with Byte
+typealias Grid = Array with Row
+
+union Op
+	call(let grid Grid)
+	nop
+end 'Op'
+
+function makeOp(grid Grid) returns Op
+	return Op.call(grid)
+end 'makeOp'
+
+function wrapOp(grid Grid) returns Op
+	return makeOp(grid)
+end 'wrapOp'
+
+function main() returns ExitCode
+	var scratch = Grid.create()
+	scratch.push(Row.create())
+	let op = wrapOp(scratch)
+	scratch.push(Row.create())
+
+	return match op 'shape'
+		call(grid) gives grid.count() as ExitCode
+		nop gives 0
+	end 'shape'
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:21:11: cannot pass the `var` 'scratch', which is read again, to parameter 'grid' of 'wrapOp', which stores it into a `let` payload: a `let` payload has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```

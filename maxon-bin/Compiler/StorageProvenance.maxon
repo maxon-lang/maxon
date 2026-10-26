@@ -1274,7 +1274,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	var hasLoadOrigin as BoolArray
 	var tracked as BoolArray
 	var namedTypeHoldsARecord as NamedTypeRecordMemo
-	var namedTypeIsUnwritable as NamedTypeRecordMemo
+	var kindWritability as RecordKindWritability
 	var rootValues as ValueIdArray
 
 	// The `let` bindings' names, by rank: an immutable-binding trace ranks them first, so a rank is a binding's
@@ -1540,7 +1540,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 	static function create(project Project, module MaxonModule, signatures ProgramSignatures, calls CallSiteCursor, funcCount ElementIndex) returns ProvenanceTracer
 		var noSites = ProvenanceSites.create(ProvenanceColumns.create())
-		return Self{project: project, module: module, signatures: signatures, calls: calls, stagedEdges: StagedParamEdges.create(funcCount), summary: ProvenanceSummary.create(funcCount), sets: RootSets.create(), columnCount: ProvenanceColumn.allCases.count(), setsPerColumn: 0, storeSlots: StoreSlotTable.create(), deepSlots: StoreSlotTable.create(), loadOrigins: StoreSlotKeyArray.create(), hasLoadOrigin: BoolArray.create(), tracked: BoolArray.create(), namedTypeHoldsARecord: NamedTypeRecordMemo.create(), namedTypeIsUnwritable: NamedTypeRecordMemo.create(), rootValues: ValueIdArray.create(), rootNames: NameRoster.create(), rootRecordKinds: HeldRecordKindsArray.create(), recordKindsByAggregate: AggregateRecordKindsMemo.create(), recordKindsByInstance: InstanceRecordKindsMemo.create(), noRecordKinds: HeldRecordKinds.create(), anyRecordKinds: anyHeldRecordKinds(), rootRankOfValue: OptionalElementIndexColumn.create(), tracingImmutableBindings: false, writableRank: ParameterTraceWritableRank, isWritableValue: BoolArray.create(), isImmutableBindingValue: BoolArray.create(), rootIsModuleLet: BoolArray.create(), rootAliasLastUse: TokenIndexArray.create(), rootAliased: BoolArray.create(), rootInfos: VarInfoArray.create(), rootDeclTokens: TokenIndexArray.create(), rootLiveUntil: TokenIndexArray.create(), rootSoleBase: BoolArray.create(), rootMovedAt: TokenIndexArray.create(), rootCaptured: BoolArray.create(), writableRankOfValue: OptionalElementIndexColumn.create(), firstWritableValueRank: 0, mutablePlaceWords: ParamPositionMaskArray.create(), callWrittenPlaceWords: ParamPositionMaskArray.create(), parameterRankWords: ParamPositionMaskArray.create(), doorToken: NoDoorToken, immutableGlobalLabels: signatures.immutableGlobalDataLabels(), moduleLetRecordKinds: moduleLetKindsOf(project, signatures: signatures), escapedSet: 0, operands: ValueIdArray.create(), refusals: PendingRefusalArray.create(), argIdentityReach: ParamPositionMaskArray.create(), argWithinReach: ParamPositionMaskArray.create(), changed: false, returnedShares: NoParamPositions, returnedIdentity: NoParamPositions, returnedHolds: NoParamPositions, returnedInside: NoParamPositions, returnedHoldsWithin: NoParamPositions, returnedPlacedWithin: NoParamPositions, returnedEscapes: NoParamPositions, returnedBinds: NoParamPositions, returnedLetKeeps: NoParamPositions, returnedPayloadKeeps: NoParamPositions, returnedElementKeeps: NoParamPositions, returnedKeeps: NoParamPositions, returnedOtherKeeps: NoParamPositions, returnedRecordKeeps: NoParamPositions, writtenMasks: ParamPositionMaskArray.create(), recordWrittenMasks: ParamPositionMaskArray.create(), letRefused: BoolArray.create(), keptRefusedValues: ValueIdArray.create(), keptRefusedAt: PositionKeyArray.create(), keptSiteHeads: KeptSiteHeadsByCall.create(), keptSiteNext: OptionalElementIndexColumn.create(), keptSitesValid: false, keptSitesIndex: 0, landingKeeps: LandingKeeps.fromBodies, callStartIndex: StartByPosition.create(), letCheckedValid: false, letCheckedIndex: 0, opaqueBoundBodies: BoolArray.create(), returnedModuleLets: NoParamPositions, moduleLetStorageReached: false, handedAModuleLetsRecord: BoolArray.create(), storedRow: ParamPositionMaskArray.create(), storedDeepRow: ParamPositionMaskArray.create(), capturedPositions: CapturedLoadMap.create(), rankCount: 0, enteredIndex: 0, bindingsTraceValid: false, bindingsTraceIndex: 0, bindingsRootCount: 0, receiverWrites: ProvenanceReceiverWrites.create(funcCount), writtenArgFuncs: FuncIndexArray.create(), writtenArgValues: ValueIdArray.create(), writtenArgCalls: SourceRangeArray.create(), writtenArgParams: ArgumentParameterArray.create(), writtenArgJudged: BoolArray.create(), writtenArgsHere: EntryIndexArray.create(), landingNotedPositions: ParamCountArray.create(), landingNotedRows: EntryIndexArray.create(), keptArgFuncs: FuncIndexArray.create(), keptArgValues: ValueIdArray.create(), keptArgCalls: SourceRangeArray.create(), keptArgParams: ArgumentParameterArray.create(), keptArgCallees: NameRoster.create(), keptArgCursor: 0, refusedDoorRanks: 0, refusedBodies: BoolArray.create(), pendingKeeps: PendingKeepArray.create(), returnedValues: ValueIdArray.create(), keptEscapes: BoolArray.create(), keptReturned: BoolArray.create(), functionHoldings: FunctionHoldingAnswers.create(), keptEverythingEscapes: false, varMovedAt: TokenIndexArray.create(), varDeadFrom: TokenIndexArray.create(), keptRefusedRanks: 0, rootReadStarts: EntryIndexArray.create(), rootReads: TokenIndexArray.create(), tracedSites: noSites, noSites: noSites, refusedDoorValues: BoolArray.create(), indexedDefinitionsOf: IndexedFunctionBody.none, definingOps: OptionalElementIndexColumn.create(), mergingBlocks: MergingBlockColumn.create(), hopKinds: AccessHopKindArray.create(), hopBases: ValueIdArray.create(), hopSteps: AccessStepColumn.create(), soleIncomings: ValueIdArray.create(), soleIncomingSeen: BoolArray.create(), incomingStart: EntryIndexArray.create(), incomingLength: EntryIndexArray.create(), incomingComplete: BoolArray.create(), incomingValues: ValueIdArray.create(), pairMerge: ValueIdArray.create(), pairIncoming: ValueIdArray.create(), pairHanded: BoolArray.create(), blockPairStart: EntryIndexArray.create(), useCounts: EntryIndexArray.create(), pathSteps: PathStepArray.create(), rootReadFill: EntryIndexArray.create(), reachWorklist: BlockIdArray.create(), reachVisited: BoolArray.create(), writtenArgCursor: 0, writtenRanks: 0, writtenWithinRanks: 0, hygieneIndexed: false, hygieneFirstAtPosition: HygieneIndexByPosition.create(), hygieneNextAtPosition: OptionalElementIndexColumn.create(), hygieneWithdrawn: BoolArray.create(), summaryRow: TracedSummaryRow.create(), blockIndex: BlockIndexById.create(), indexedCalls: CallTokenColumns.create(), callTokenIndex: TokenByPosition.create(), freshReturns: BoolArray.create(), freshMember: BoolArray.create(), freshRequired: BoolArray.create(), freshChecked: BoolArray.create(), freshChanged: false, freshNeeds: FuncIndexArray.create(), letFieldSlots: LetFieldSlotMemo.create(), letPayloadKinds: LetPayloadKindsMemo.create(), keptArgKinds: ArgumentKeepArray.create(), viewSinks: ViewSinkMap.create(), permanentReturns: BoolArray.create(), permanentOrFreshReturns: BoolArray.create(), permanentNeeds: FuncIndexArray.create(), permanentSettling: PermanenceSettling.none, permanentGivenReturns: BoolArray.create(), permanentOrFreshGivenReturns: BoolArray.create(), permanentGivenParams: ParamPositionMaskArray.create(), permanentOrFreshGivenParams: ParamPositionMaskArray.create(), permanentParamsNeeded: NoParamPositions, permanentUsedGiven: false, inertGlobalLabels: inertGlobalLabelsOf(project), slotExclusivity: SlotExclusivityMemo.create(), slotAccessHeads: SlotAccessHeadMap.create(), slotAccessPacked: StoreSlotKeyArray.create(), slotAccessNext: StoreSlotKeyArray.create(), slotAccessesIndexed: false, slotAccessedThroughAnUnkeyedAddress: false, moduleVarKinds: signatures.recordKindsOfTypes(moduleGlobalTypesOf(project.managedGlobals, vars: true)), swapOperands: ValueIdArray.create(), aliasesGrew: false, swappedOutReturns: SwappedOutReturnMemo.create(), valueHandedOut: BoolArray.create(), handedOutComputed: false, readOnlyKeptBases: ValueIdArray.create(), readOnlyKeptAt: PositionKeyArray.create(), doorAcceptsParameters: false}
+		return Self{project: project, module: module, signatures: signatures, calls: calls, stagedEdges: StagedParamEdges.create(funcCount), summary: ProvenanceSummary.create(funcCount), sets: RootSets.create(), columnCount: ProvenanceColumn.allCases.count(), setsPerColumn: 0, storeSlots: StoreSlotTable.create(), deepSlots: StoreSlotTable.create(), loadOrigins: StoreSlotKeyArray.create(), hasLoadOrigin: BoolArray.create(), tracked: BoolArray.create(), namedTypeHoldsARecord: NamedTypeRecordMemo.create(), kindWritability: RecordKindWritability.of(signatures), rootValues: ValueIdArray.create(), rootNames: NameRoster.create(), rootRecordKinds: HeldRecordKindsArray.create(), recordKindsByAggregate: AggregateRecordKindsMemo.create(), recordKindsByInstance: InstanceRecordKindsMemo.create(), noRecordKinds: HeldRecordKinds.create(), anyRecordKinds: anyHeldRecordKinds(), rootRankOfValue: OptionalElementIndexColumn.create(), tracingImmutableBindings: false, writableRank: ParameterTraceWritableRank, isWritableValue: BoolArray.create(), isImmutableBindingValue: BoolArray.create(), rootIsModuleLet: BoolArray.create(), rootAliasLastUse: TokenIndexArray.create(), rootAliased: BoolArray.create(), rootInfos: VarInfoArray.create(), rootDeclTokens: TokenIndexArray.create(), rootLiveUntil: TokenIndexArray.create(), rootSoleBase: BoolArray.create(), rootMovedAt: TokenIndexArray.create(), rootCaptured: BoolArray.create(), writableRankOfValue: OptionalElementIndexColumn.create(), firstWritableValueRank: 0, mutablePlaceWords: ParamPositionMaskArray.create(), callWrittenPlaceWords: ParamPositionMaskArray.create(), parameterRankWords: ParamPositionMaskArray.create(), doorToken: NoDoorToken, immutableGlobalLabels: signatures.immutableGlobalDataLabels(), moduleLetRecordKinds: moduleLetKindsOf(project, signatures: signatures), escapedSet: 0, operands: ValueIdArray.create(), refusals: PendingRefusalArray.create(), argIdentityReach: ParamPositionMaskArray.create(), argWithinReach: ParamPositionMaskArray.create(), changed: false, returnedShares: NoParamPositions, returnedIdentity: NoParamPositions, returnedHolds: NoParamPositions, returnedInside: NoParamPositions, returnedHoldsWithin: NoParamPositions, returnedPlacedWithin: NoParamPositions, returnedEscapes: NoParamPositions, returnedBinds: NoParamPositions, returnedLetKeeps: NoParamPositions, returnedPayloadKeeps: NoParamPositions, returnedElementKeeps: NoParamPositions, returnedKeeps: NoParamPositions, returnedOtherKeeps: NoParamPositions, returnedRecordKeeps: NoParamPositions, writtenMasks: ParamPositionMaskArray.create(), recordWrittenMasks: ParamPositionMaskArray.create(), letRefused: BoolArray.create(), keptRefusedValues: ValueIdArray.create(), keptRefusedAt: PositionKeyArray.create(), keptSiteHeads: KeptSiteHeadsByCall.create(), keptSiteNext: OptionalElementIndexColumn.create(), keptSitesValid: false, keptSitesIndex: 0, landingKeeps: LandingKeeps.fromBodies, callStartIndex: StartByPosition.create(), letCheckedValid: false, letCheckedIndex: 0, opaqueBoundBodies: BoolArray.create(), returnedModuleLets: NoParamPositions, moduleLetStorageReached: false, handedAModuleLetsRecord: BoolArray.create(), storedRow: ParamPositionMaskArray.create(), storedDeepRow: ParamPositionMaskArray.create(), capturedPositions: CapturedLoadMap.create(), rankCount: 0, enteredIndex: 0, bindingsTraceValid: false, bindingsTraceIndex: 0, bindingsRootCount: 0, receiverWrites: ProvenanceReceiverWrites.create(funcCount), writtenArgFuncs: FuncIndexArray.create(), writtenArgValues: ValueIdArray.create(), writtenArgCalls: SourceRangeArray.create(), writtenArgParams: ArgumentParameterArray.create(), writtenArgJudged: BoolArray.create(), writtenArgsHere: EntryIndexArray.create(), landingNotedPositions: ParamCountArray.create(), landingNotedRows: EntryIndexArray.create(), keptArgFuncs: FuncIndexArray.create(), keptArgValues: ValueIdArray.create(), keptArgCalls: SourceRangeArray.create(), keptArgParams: ArgumentParameterArray.create(), keptArgCallees: NameRoster.create(), keptArgCursor: 0, refusedDoorRanks: 0, refusedBodies: BoolArray.create(), pendingKeeps: PendingKeepArray.create(), returnedValues: ValueIdArray.create(), keptEscapes: BoolArray.create(), keptReturned: BoolArray.create(), functionHoldings: FunctionHoldingAnswers.create(), keptEverythingEscapes: false, varMovedAt: TokenIndexArray.create(), varDeadFrom: TokenIndexArray.create(), keptRefusedRanks: 0, rootReadStarts: EntryIndexArray.create(), rootReads: TokenIndexArray.create(), tracedSites: noSites, noSites: noSites, refusedDoorValues: BoolArray.create(), indexedDefinitionsOf: IndexedFunctionBody.none, definingOps: OptionalElementIndexColumn.create(), mergingBlocks: MergingBlockColumn.create(), hopKinds: AccessHopKindArray.create(), hopBases: ValueIdArray.create(), hopSteps: AccessStepColumn.create(), soleIncomings: ValueIdArray.create(), soleIncomingSeen: BoolArray.create(), incomingStart: EntryIndexArray.create(), incomingLength: EntryIndexArray.create(), incomingComplete: BoolArray.create(), incomingValues: ValueIdArray.create(), pairMerge: ValueIdArray.create(), pairIncoming: ValueIdArray.create(), pairHanded: BoolArray.create(), blockPairStart: EntryIndexArray.create(), useCounts: EntryIndexArray.create(), pathSteps: PathStepArray.create(), rootReadFill: EntryIndexArray.create(), reachWorklist: BlockIdArray.create(), reachVisited: BoolArray.create(), writtenArgCursor: 0, writtenRanks: 0, writtenWithinRanks: 0, hygieneIndexed: false, hygieneFirstAtPosition: HygieneIndexByPosition.create(), hygieneNextAtPosition: OptionalElementIndexColumn.create(), hygieneWithdrawn: BoolArray.create(), summaryRow: TracedSummaryRow.create(), blockIndex: BlockIndexById.create(), indexedCalls: CallTokenColumns.create(), callTokenIndex: TokenByPosition.create(), freshReturns: BoolArray.create(), freshMember: BoolArray.create(), freshRequired: BoolArray.create(), freshChecked: BoolArray.create(), freshChanged: false, freshNeeds: FuncIndexArray.create(), letFieldSlots: LetFieldSlotMemo.create(), letPayloadKinds: LetPayloadKindsMemo.create(), keptArgKinds: ArgumentKeepArray.create(), viewSinks: ViewSinkMap.create(), permanentReturns: BoolArray.create(), permanentOrFreshReturns: BoolArray.create(), permanentNeeds: FuncIndexArray.create(), permanentSettling: PermanenceSettling.none, permanentGivenReturns: BoolArray.create(), permanentOrFreshGivenReturns: BoolArray.create(), permanentGivenParams: ParamPositionMaskArray.create(), permanentOrFreshGivenParams: ParamPositionMaskArray.create(), permanentParamsNeeded: NoParamPositions, permanentUsedGiven: false, inertGlobalLabels: inertGlobalLabelsOf(project), slotExclusivity: SlotExclusivityMemo.create(), slotAccessHeads: SlotAccessHeadMap.create(), slotAccessPacked: StoreSlotKeyArray.create(), slotAccessNext: StoreSlotKeyArray.create(), slotAccessesIndexed: false, slotAccessedThroughAnUnkeyedAddress: false, moduleVarKinds: signatures.recordKindsOfTypes(moduleGlobalTypesOf(project.managedGlobals, vars: true)), swapOperands: ValueIdArray.create(), aliasesGrew: false, swappedOutReturns: SwappedOutReturnMemo.create(), valueHandedOut: BoolArray.create(), handedOutComputed: false, readOnlyKeptBases: ValueIdArray.create(), readOnlyKeptAt: PositionKeyArray.create(), doorAcceptsParameters: false}
 	end 'create'
 
 	function tracesFirst(index ElementIndex) returns bool
@@ -3250,11 +3250,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return true
 		end 'anyRecord'
 
-		if tagIsByteRecord(tag) 'bytes'
-			return self.moduleLetRecordKinds.mayHold(HeldByteRecordKind)
-		end 'bytes'
-
-		return self.moduleLetRecordKinds.mayHold(try self.heldRecordKindOf(func, value: value) otherwise return true)
+		return self.moduleLetRecordKinds.mayHold(try self.heldKindOfValue(func, value: value) otherwise return true)
 	end 'valueMayBeAModuleLetsRecord'
 
 	function traceIndirectCall(func IrFunction, op MaxonOp, opIdx ElementIndex)
@@ -3546,11 +3542,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return true
 		end 'anOpaqueLetPayload'
 
-		if tagIsByteRecord(valueTagOf(func, value: held)) 'aByteRecord'
-			return kinds.mayHold(HeldByteRecordKind)
-		end 'aByteRecord'
-
-		return kinds.mayHold(try self.heldRecordKindOf(func, value: held) otherwise return true)
+		return kinds.mayHold(try self.heldKindOfValue(func, value: held) otherwise return true)
 	end 'slotIsALetPayload'
 
 	function letPayloadKindsAt(func IrFunction, box ValueId, offset ByteOffset) returns HeldRecordKinds
@@ -4599,19 +4591,16 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return typed
 	end 'parametersReachedBy'
 
+	// Placement, so a byte record counts: a String field is storage of its holder, and a by-reference
+	// write or append of it reaches the holder. Asking `kindsMayHoldWritableValue` here would let a
+	// callee append to a `let`'s String field unrefused.
 	function kindsMayHoldValue(func IrFunction, kinds HeldRecordKinds, value ValueId) returns bool
-		let tag = valueTagOf(func, value: value)
-
-		if tagIsByteRecord(tag) 'bytes'
-			return kinds.mayHold(HeldByteRecordKind)
-		end 'bytes'
-
-		if tag != ValueTypeTag.genericInstance and not self.signatures.tagMayNameAggregate(tag) 'anyOtherKind'
-			return true
-		end 'anyOtherKind'
-
-		return kinds.mayHold(try self.heldRecordKindOf(func, value: value) otherwise return true)
+		return kinds.mayHold(try self.heldKindOfValue(func, value: value) otherwise return true)
 	end 'kindsMayHoldValue'
+
+	function kindsMayHoldWritableValue(func IrFunction, kinds HeldRecordKinds, value ValueId) returns bool
+		return kinds.mayHoldWritableRecord(try self.heldKindOfValue(func, value: value) otherwise return true, writability: self.kindWritability)
+	end 'kindsMayHoldWritableValue'
 
 	function addParameterRecordEdgesAt(func IrFunction, op MaxonOp, callerIndex ElementIndex)
 		match op 'op'
@@ -4742,7 +4731,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	// reaches into is not sent (E3138), published (E3174) or handed to a `sole` parameter (E3078) —
 	// `refuseViewedHandOff`, `judgeConsumedArgument` — and a value that is or lies within a `view`'s
 	// record is not returned (E3078, `decideReturnedValue`). A value that is an immutable record
-	// (`ProgramSignatures.aggregateTypeIsImmutable`) is written by nothing, and meets no door.
+	// (`RecordKindWritability.namesAnImmutableAggregate`) is written by nothing, and meets no door.
 	module function beginStorageDoors()
 		self.opaqueBoundBodies.refill(self.module.functions.count(), value: false)
 		self.refusedBodies.refill(self.module.functions.count(), value: false)
@@ -5934,20 +5923,20 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	function writableRankAdmits(func IrFunction, column ProvenanceColumn, value ValueId, kinds HeldRecordKinds, candidate ElementIndex) returns bool
 		if candidate == self.writableRank 'moduleVarStorage'
 			if columnNamesWhatItHolds(column) 'whatTheValueHolds'
-				return kinds.overlaps(self.moduleVarKinds)
+				return kinds.overlaps(self.moduleVarKinds, writability: self.kindWritability)
 			end 'whatTheValueHolds'
 
-			return self.moduleVarKinds.mayHold(try self.heldRecordKindOf(func, value: value) otherwise return true)
+			return self.kindsMayHoldWritableValue(func, kinds: self.moduleVarKinds, value: value)
 		end 'moduleVarStorage'
 
 		return match column 'column'
 			identity gives self.valuesMayBeOneRecord(func, value: value, other: self.rootValueAt(candidate))
 			inside or
-			placedWithin gives self.kindsMayHoldValue(func, kinds: try self.rootRecordKinds.get(candidate) otherwise panic("ProvenanceTracer.writableRankAdmits: rootRecordKinds.get OOB at {candidate}"), value: value)
+			placedWithin gives self.kindsMayHoldWritableValue(func, kinds: try self.rootRecordKinds.get(candidate) otherwise panic("ProvenanceTracer.writableRankAdmits: rootRecordKinds.get OOB at {candidate}"), value: value)
 			holds or
 			storedHolds or
-			deepHolds gives self.kindsMayHoldValue(func, kinds: kinds, value: self.rootValueAt(candidate))
-			holdsWithin gives kinds.overlaps(try self.rootRecordKinds.get(candidate) otherwise panic("ProvenanceTracer.writableRankAdmits: rootRecordKinds.get OOB at {candidate}"))
+			deepHolds gives self.kindsMayHoldWritableValue(func, kinds: kinds, value: self.rootValueAt(candidate))
+			holdsWithin gives kinds.overlaps(try self.rootRecordKinds.get(candidate) otherwise panic("ProvenanceTracer.writableRankAdmits: rootRecordKinds.get OOB at {candidate}"), writability: self.kindWritability)
 			shares or
 			storedDeep panic("ProvenanceTracer.writableRankAdmits: the '{column.name}' set says nothing about what a record holds or lies within")
 		end 'column'
@@ -7674,8 +7663,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return self.nameIdOf(func, value: value) == self.nameIdOf(func, value: other)
 		end 'oneRepresentation'
 
-		view kind = try self.heldRecordKindOf(func, value: value) otherwise return true
-		return kind.equals(try self.heldRecordKindOf(func, value: other) otherwise return true)
+		view kind = try self.heldKindOfValue(func, value: value) otherwise return true
+		return kind.equals(try self.heldKindOfValue(func, value: other) otherwise return true)
 	end 'valuesMayBeOneRecord'
 
 	function opaqueElementIsWithin(func IrFunction, element ValueId, container ValueId) returns bool
@@ -7688,13 +7677,9 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 	// The kind `value`'s record is, as `HeldRecordKinds` names kinds. A name that denotes no record a value can
 	// have throws.
-	function heldRecordKindOf(func IrFunction, value ValueId) returns ByteArray throws MapError
-		if valueTagOf(func, value: value) == ValueTypeTag.genericInstance 'anInstance'
-			return self.signatures.canonicalInstanceName(self.instanceIdOf(func, value: value))
-		end 'anInstance'
-
-		return try self.signatures.heldRecordKindOfDeclaredName(try self.project.typeNames.nameOf(self.nameIdOf(func, value: value)) otherwise throw MapError.keyNotFound)
-	end 'heldRecordKindOf'
+	function heldKindOfValue(func IrFunction, value ValueId) returns ByteArray throws MapError
+		return try self.signatures.heldRecordKindOfTag(valueTagOf(func, value: value), nameId: self.nameIdOf(func, value: value), from: self.project.typeNames)
+	end 'heldKindOfValue'
 
 	// The kinds of record that may lie within `value`'s record, by its type: none within a byte record, any within
 	// one of an opaque type. `ProgramSignatures` answers once per type per compile.
@@ -7776,35 +7761,25 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return tagCarriesProvenance(tag)
 	end 'typeCarriesProvenance'
 
-	// A record nothing writes (`ProgramSignatures.aggregateTypeIsImmutable`).
+	function valueKindIsWritableState(func IrFunction, value ValueId) returns bool
+		return self.kindWritability.isWritableState(try self.heldKindOfValue(func, value: value) otherwise return true)
+	end 'valueKindIsWritableState'
+
 	function valueIsAnImmutableAggregate(func IrFunction, value ValueId) returns bool
-		if valueTagOf(func, value: value) == ValueTypeTag.genericInstance 'anInstance'
-			return self.signatures.genericInstanceIsImmutable(self.instanceIdOf(func, value: value))
-		end 'anInstance'
-
-		if not self.signatures.tagMayNameAggregate(valueTagOf(func, value: value)) 'namesNoAggregate'
-			return false
-		end 'namesNoAggregate'
-
-		let nameId = self.nameIdOf(func, value: value)
-
-		if let known = try self.namedTypeIsUnwritable.get(nameId) 'asked'
-			return known
-		end 'asked'
-
-		let verdict = self.signatures.aggregateTypeIsImmutable(try self.project.typeNames.nameOf(nameId) otherwise return false)
-		self.namedTypeIsUnwritable.upsert(nameId, value: verdict)
-		return verdict
+		return self.kindWritability.namesAnImmutableAggregate(valueTagOf(func, value: value), nameId: self.nameIdOf(func, value: value), from: self.project.typeNames)
 	end 'valueIsAnImmutableAggregate'
 
 	module function valueGivesAStoreNoWriter(func IrFunction, value ValueId) returns bool
-		return self.valueHoldsNoRecord(func, value: value) or self.valueIsAnImmutableAggregate(func, value: value)
+		return self.valueIsNoRecordAtAll(func, value: value) or not self.valueKindIsWritableState(func, value: value)
 	end 'valueGivesAStoreNoWriter'
 
 	function valueHoldsNoRecord(func IrFunction, value ValueId) returns bool
-		let tag = valueTagOf(func, value: value)
-		return tagIsAScalarWhateverIsDeclared(tag) or tagIsByteRecord(tag) or not self.valueTagCarriesProvenance(func, value: value)
+		return tagIsByteRecord(valueTagOf(func, value: value)) or self.valueIsNoRecordAtAll(func, value: value)
 	end 'valueHoldsNoRecord'
+
+	function valueIsNoRecordAtAll(func IrFunction, value ValueId) returns bool
+		return tagIsAScalarWhateverIsDeclared(valueTagOf(func, value: value)) or not self.valueTagCarriesProvenance(func, value: value)
+	end 'valueIsNoRecordAtAll'
 
 	module function valueTagCarriesProvenance(func IrFunction, value ValueId) returns bool
 		let tag = valueTagOf(func, value: value)
@@ -8571,7 +8546,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		view ir = self.module
 		self.indexDefinitions(func, ir: ir)
 		let ownerBase = self.sameRecordBase(func, ir: ir, value: addr)
-		view ownerKind = try self.heldRecordKindOf(func, value: ownerBase) otherwise return false
+		view ownerKind = try self.heldKindOfValue(func, value: ownerBase) otherwise return false
 		var aliases = BoolArray.create()
 		aliases.refill(func.valueTags.count(), value: false)
 		self.addAlias(aliases, value: result)
@@ -8719,7 +8694,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 				return WindowStep.touches
 			end 'namesTheRecordOrItsOwner'
 
-			view kind = try self.heldRecordKindOf(func, value: operand) otherwise return WindowStep.touches
+			view kind = try self.heldKindOfValue(func, value: operand) otherwise return WindowStep.touches
 
 			if kind.equals(ownerKind) or self.recordKindsWithinValue(func, value: operand).mayHold(ownerKind) 'mayReachTheOwner'
 				return WindowStep.touches
@@ -10368,7 +10343,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'anyRecord'
 
 		for kind in within.kinds 'eachKind'
-			if not kind.equals(HeldByteRecordKind) and not self.signatures.aggregateTypeIsImmutable(kind) 'writable'
+			if self.kindWritability.isWritableState(kind) 'writable'
 				return OpaqueBoundClass.writable
 			end 'writable'
 		end 'eachKind'

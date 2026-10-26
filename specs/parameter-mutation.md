@@ -1835,3 +1835,61 @@ end 'main'
 ```maxoncstderr
 error E3159: <fragment>:11:2: cannot pass 'g', which is read-only (a `let` binding), to a function that writes parameter 'dest' (in main); pass a clone()
 ```
+
+<!-- test: let-to-callee-appending-to-a-string-field-error -->
+`nudge` appends to a `String` field of its parameter, which writes the parameter's record, so a `let` handed to it is refused. A `String` is a value, but the field that holds it is storage of the record.
+
+```maxon
+type Holder
+	export var name as String
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+end 'Holder'
+
+function nudge(t Holder)
+	t.name.append("XY")
+end 'nudge'
+
+function main() returns ExitCode
+	let h = Holder.create("ab")
+	nudge(h)
+	print("{h.name}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:16:2: cannot pass 'h', which is read-only (a `let` binding), to a function that writes parameter 't' (in main); pass a clone()
+```
+
+<!-- test: let-to-callee-passing-a-string-field-to-an-appending-param-error -->
+`nudge` hands a `String` field of its parameter to `grow`, which appends to its parameter, so the field is passed by reference and `nudge` writes `t`; a `let` handed to it is refused.
+
+```maxon
+type Holder
+	export var name as String
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+end 'Holder'
+
+function grow(s String)
+	s.append("XY")
+end 'grow'
+
+function nudge(t Holder)
+	grow(t.name)
+end 'nudge'
+
+function main() returns ExitCode
+	let h = Holder.create("ab")
+	nudge(h)
+	print("{h.name}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:20:2: cannot pass 'h', which is read-only (a `let` binding), to a function that writes parameter 't' (in main); pass a clone()
+```

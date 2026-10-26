@@ -2205,3 +2205,143 @@ end 'main'
 ```maxoncstderr
 error E3188: <fragment>:38:6: cannot bind `let` 'holder' to a value reached through 'box', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
 ```
+
+<!-- test: let-binding-capabilities.a-let-of-a-string-field-of-a-var-keeps-its-value-when-the-field-is-appended-to -->
+A `String` is a value: a `let` bound to a `String` field of a `var` holds that string as it was, so appending to the field afterwards changes the field and not the `let`.
+
+```maxon
+type Holder
+	export var name as String
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let k = 3
+	var v = Holder.create("ab{k}")
+	let n = v.name
+	v.name.append("XY")
+	print("{n} {v.name}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+ab3 ab3XY
+```
+
+<!-- test: let-binding-capabilities.a-let-string-stored-into-a-var-holder-is-unchanged-when-a-callee-appends-to-the-field -->
+A `let` string stored into a `var` holder's field is a value the field holds: a callee appending to the field writes the holder, and the `let` reads the string it was bound to.
+
+```maxon
+type Holder
+	export var name as String
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+end 'Holder'
+
+function nudge(t Holder)
+	t.name.append("XY")
+end 'nudge'
+
+function main() returns ExitCode
+	let k = 3
+	let s = "ab{k}"
+	var v = Holder.create(s)
+	nudge(v)
+	print("{s} {v.name}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+ab3 ab3XY
+```
+
+<!-- test: let-binding-capabilities.a-module-let-string-stored-into-a-var-holder-is-unchanged-when-the-field-is-appended-to -->
+A module-level `let` string stored into a `var` holder's field is a value the field holds: appending to the field leaves the `let` as it was.
+
+```maxon
+type Holder
+	export var name as String
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+end 'Holder'
+
+let Greeting = "hi"
+
+function main() returns ExitCode
+	var v = Holder.create(Greeting)
+	v.name.append("!")
+	print("{Greeting} {v.name}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hi hi!
+```
+
+<!-- test: let-binding-capabilities.a-let-of-a-fresh-record-holding-an-all-let-record-a-module-var-also-holds-is-accepted -->
+`register` stores `box` in the module `var` `shelf`, but `Box` has only `let` fields, so no write through `shelf` changes the `Box` the `holder` takes: a write reaches `shelf`'s array, never a `Box`.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias BoxArray = Array with Box
+
+type Box
+	let n as Count
+
+	function read() returns Count
+		return self.n
+	end 'read'
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+var shelf = BoxArray.create()
+
+function register(b Box)
+	shelf.push(b)
+end 'register'
+
+type Holder
+	var box as Box
+
+	function peek() returns Count
+		return self.box.read()
+	end 'peek'
+
+	static function wrap(box Box) returns Self
+		return Self{box: box}
+	end 'wrap'
+end 'Holder'
+
+function keep() returns Count
+	let box = Box.create(1)
+	register(box)
+	let holder = Holder.wrap(box)
+	return holder.peek()
+end 'keep'
+
+function main() returns ExitCode
+	return keep() as ExitCode
+end 'main'
+```
+```exitcode
+1
+```

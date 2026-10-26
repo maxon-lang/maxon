@@ -606,3 +606,47 @@ end 'main'
 ```maxoncstderr
 error E3159: specs/immutable-method-call/let-record-alias-of-a-parameter-passed-through-a-call.maxon:12:2: cannot pass 'q', which is read-only (a `let` binding), to a function that writes parameter 's' (in tagIt); pass a clone()
 ```
+
+<!-- test: error.append-to-a-string-field-off-a-local-let -->
+A `String` field of a `let` holder is storage of the `let`'s record, so appending to it is refused.
+```maxon
+type Holder
+	export var name as String
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create("ab")
+	h.name.append("XY")
+	print("{h.name}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:12:9: cannot pass 'h', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+```
+
+<!-- test: error.append-to-a-string-field-off-a-module-let -->
+```maxon
+type Holder
+	export var name as String
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+end 'Holder'
+
+let Shared = Holder.create("ab")
+
+function main() returns ExitCode
+	Shared.name.append("XY")
+	print("{Shared.name}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:13:14: cannot pass 'Shared', which is read-only (a module-level `let`), to a function that writes parameter 'self' (in main); pass a clone()
+```

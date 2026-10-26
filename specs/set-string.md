@@ -340,3 +340,82 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: from-a-string-array-variable-leaves-the-source-intact -->
+`Set from <array>` copies each `String` key out of an array the program still holds; the array keeps its strings and both are dropped once.
+```maxon
+typealias Names = Array with String
+typealias NameSet = Set with String
+
+function main() returns ExitCode
+	var names = Names.create()
+	names.push("alice")
+	names.push("bob")
+	names.push("alice")
+	let s = NameSet from names
+	print("{s.count()} {names.count()} {s.contains("bob")}\n")
+
+	for name in names 'each'
+		print("{name}\n")
+	end 'each'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 3 true
+alice
+bob
+alice
+```
+
+<!-- test: bare-from-a-string-array-call-result -->
+A bare `Set` head over a call's `String` array owns the keys and drops the temporary array.
+```maxon
+typealias Names = Array with String
+
+function makeNames() returns Names
+	var names = Names.create()
+	names.push("x{1}")
+	names.push("y")
+	names.push("x{1}")
+	return names
+end 'makeNames'
+
+function main() returns ExitCode
+	let s = Set from makeNames()
+	print("{s.count()} {s.contains("x1")}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 true
+```
+
+<!-- test: the-source-array-is-still-writable-after-a-let-set-from-it -->
+A `let` bound to `Set from <array>` holds keys of its own, so the source array may still be written while the set lives.
+```maxon
+typealias Names = Array with String
+typealias NameSet = Set with String
+
+function main() returns ExitCode
+	var names = Names.create()
+	names.push("alice")
+	let s = NameSet from names
+	names.push("bob")
+	print("{s.count()} {names.count()} {s.contains("bob")}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 2 false
+```

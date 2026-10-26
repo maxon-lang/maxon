@@ -4362,11 +4362,12 @@ module union DeclaredTypeName
 	undeclared
 end 'DeclaredTypeName'
 
-// ⭐ **THE KINDS OF RECORD THAT MAY LIE WITHIN A RECORD** (`ProgramSignatures.recordKindsWithinAggregate`). A kind
-// is a declared struct's or union's name, a generic instance's canonical name (`canonicalInstanceName`, which no
-// declaration shares), `HeldTupleKind` for every tuple, or `HeldByteRecordKind` for a `String` or a `Character`;
-// `anything` says an opaque slot — a type parameter, an existential, a function value's environment, a
-// compiler-owned aggregate — may hold any record.
+// ⭐ **THE KINDS OF RECORD THAT MAY LIE WITHIN A RECORD**
+// (`ProgramSignatures.recordKindsWithinAggregate`). A kind is a declared struct's or union's name,
+// a generic instance's canonical name (`canonicalInstanceName`, which a declaration may also spell,
+// and one kind then stands for both), `HeldTupleKind` for every tuple, or `HeldByteRecordKind` for
+// a `String` or a `Character`; `anything` says an opaque slot — a type parameter, an existential, a
+// function value's environment, a compiler-owned aggregate — may hold any record.
 export type HeldRecordKinds
 	export var kinds as HeldRecordKindSet
 	export var anything as bool
@@ -4383,19 +4384,37 @@ export type HeldRecordKinds
 		return not self.anything and self.kinds.count() == 0
 	end 'holdsNothing'
 
-	module function overlaps(other HeldRecordKinds) returns bool
-		if self.holdsNothing() or other.holdsNothing() 'oneHoldsNothing'
+	module function mayHoldWritableRecord(kind ByteArray, writability RecordKindWritability) returns bool
+		return self.mayHold(kind) and writability.isWritableState(kind)
+	end 'mayHoldWritableRecord'
+
+	module function holdsNoWritableRecord(writability RecordKindWritability) returns bool
+		if self.anything 'anOpaqueSlot'
 			return false
-		end 'oneHoldsNothing'
+		end 'anOpaqueSlot'
+
+		for kind in self.kinds 'eachKind'
+			if writability.isWritableState(kind) 'aWritableKind'
+				return false
+			end 'aWritableKind'
+		end 'eachKind'
+
+		return true
+	end 'holdsNoWritableRecord'
+
+	module function overlaps(other HeldRecordKinds, writability RecordKindWritability) returns bool
+		if self.holdsNoWritableRecord(writability) or other.holdsNoWritableRecord(writability) 'oneHoldsNothingWritable'
+			return false
+		end 'oneHoldsNothingWritable'
 
 		if self.anything or other.anything 'anOpaqueSlot'
 			return true
 		end 'anOpaqueSlot'
 
 		for kind in self.kinds 'eachKind'
-			if other.kinds.contains(kind) 'sharedKind'
+			if other.mayHoldWritableRecord(kind, writability: writability) 'sharedWritableKind'
 				return true
-			end 'sharedKind'
+			end 'sharedWritableKind'
 		end 'eachKind'
 
 		return false
@@ -4404,9 +4423,42 @@ end 'HeldRecordKinds'
 
 module typealias HeldRecordKindSet = Set with ByteArray
 
+typealias RecordKindVerdicts = Map with (ByteArray, bool)
+
+// A memo of `ProgramSignatures.recordKindIsWritableState`, sound only while the kinds it has
+// answered cannot change. The provenance tracer keeps one for its life; the Parser makes one per
+// question, because canonical instance names are journaled during a parse and can roll back in the
+// middle of it.
+module type RecordKindWritability
+	var signatures as ProgramSignatures
+	var verdicts as RecordKindVerdicts
+
+	module static function of(signatures ProgramSignatures) returns RecordKindWritability
+		return Self{signatures: signatures, verdicts: RecordKindVerdicts.create()}
+	end 'of'
+
+	module function isWritableState(kind ByteArray) returns bool
+		if let known = try self.verdicts.get(kind) 'asked'
+			return known
+		end 'asked'
+
+		let verdict = self.signatures.recordKindIsWritableState(kind)
+		self.verdicts.upsert(kind, value: verdict)
+		return verdict
+	end 'isWritableState'
+
+	module function namesAnImmutableAggregate(tag ValueTypeTag, nameId TypeNameId, from TypeNameInterner) returns bool
+		if tag != ValueTypeTag.genericInstance and not self.signatures.tagMayNameAggregate(tag) 'namesNoAggregate'
+			return false
+		end 'namesNoAggregate'
+
+		return not self.isWritableState(try self.signatures.heldRecordKindOfTag(tag, nameId: nameId, from: from) otherwise return false)
+	end 'namesAnImmutableAggregate'
+end 'RecordKindWritability'
+
 // The sweep and the canonical pass spell one tuple differently, so every tuple is one kind.
 let HeldTupleKind = b"(tuple)"
-module let HeldByteRecordKind = b"(bytes)"
+let HeldByteRecordKind = b"(bytes)"
 
 // ⭐ **HOW A UNION PAYLOAD FIELD IS STORED AND DROPPED.** The ONE classifier the
 // construct (move-in), the match extract (move-out), the drop routing, and the synthesized
@@ -10811,9 +10863,10 @@ module let ManagedMemoryInvalidByteRangeCaseName = b"invalidByteRange"
 
 module let ManagedMemoryInvalidAllocationCaseName = b"invalidAllocation"
 
+export let InitMethod = b"init"
+
 // `String.init(managed ByteMemory)` — `stdlib/String.maxon:114`, the corpus's way back from a
 // `__ManagedMemory` to a `String`.
-export let StringInitMethod = b"init"
 export let StringInitManagedParamName = b"managed"
 
 // ⭐ **`c.asciiValue()` — `stdlib/Character.maxon:154-166`, the one THROWING member left with a SYNTHESIZED
@@ -44060,28 +44113,37 @@ export type ProgramSignatures
 			return
 		end 'opaque'
 
-		if tagIsByteRecord(tag) 'bytes'
-			within.kinds.insert(HeldByteRecordKind)
-			return
-		end 'bytes'
-
-		if tag == ValueTypeTag.genericInstance 'instance'
-			within.kinds.insert(self.mangleGenericInstance(genericInstanceIdOf(type)))
-			return
-		end 'instance'
-
-		if not tagMayNameAggregate(tag) or not self.typeIsManaged(type, from: self.typeNames) 'noRecordOfItsOwn'
+		if not tagIsByteRecord(tag) and tag != ValueTypeTag.genericInstance and (not tagMayNameAggregate(tag) or not self.typeIsManaged(type, from: self.typeNames)) 'noRecordOfItsOwn'
 			return
 		end 'noRecordOfItsOwn'
 
-		let name = try self.typeNames.nameOf(typeNameIdOf(type)) otherwise panic("ProgramSignatures.addOwnRecordKindOfType: type name {typeNameIdOf(type)} is not interned in this index's own table")
-		view kind = try self.heldRecordKindOfDeclaredName(name) otherwise 'superseded'
+		view kind = try self.heldRecordKindOfTag(tag, nameId: typeNameIdOf(type), from: self.typeNames) otherwise 'superseded'
 			within.anything = true
 			return
 		end 'superseded'
 
 		within.kinds.insert(kind)
 	end 'addOwnRecordKindOfType'
+
+	// An instance's kind is its `canonicalInstanceName`, the spelling every kind comparison uses.
+	// `mangleGenericInstance` differs when a type argument is an alias of an instance, and a kind
+	// spelled that way matches no `HeldRecordKinds` entry, so a `let` payload of that instance goes
+	// unseen.
+	export function heldRecordKindOfTag(tag ValueTypeTag, nameId TypeNameId, from TypeNameInterner) returns ByteArray throws MapError
+		if tagIsByteRecord(tag) 'aByteRecord'
+			return HeldByteRecordKind
+		end 'aByteRecord'
+
+		if tag == ValueTypeTag.genericInstance 'anInstance'
+			return self.canonicalInstanceName(nameId as GenericInstanceId)
+		end 'anInstance'
+
+		if not tagMayNameAggregate(tag) 'namesNoAggregate'
+			throw MapError.keyNotFound
+		end 'namesNoAggregate'
+
+		return try self.heldRecordKindOfDeclaredName(try from.nameOf(nameId) otherwise throw MapError.keyNotFound)
+	end 'heldRecordKindOfTag'
 
 	export function aggregateTypeIsImmutable(name ByteArray) returns bool
 		if self.containsEnumInAnyFile(name) 'aUnion'
@@ -44094,6 +44156,23 @@ export type ProgramSignatures
 
 		return self.declaredLayoutIsImmutable(name, layout: self.structLayoutOf(name))
 	end 'aggregateTypeIsImmutable'
+
+	// The one answer to whether a write through a root can change a record of `kind`. A byte record is
+	// a value and never writable state. A name a declaration and an instance both spell is one kind,
+	// so it is answered writable. Placement and identity ask without it, because a by-reference write
+	// of a String reaches its holder: see `ProvenanceTracer.kindsMayHoldValue` and
+	// `valuesMayBeOneRecord`.
+	module function recordKindIsWritableState(kind ByteArray) returns bool
+		if kind.equals(HeldByteRecordKind) 'aByteRecord'
+			return false
+		end 'aByteRecord'
+
+		if self.isCanonicalInstanceName(kind) 'anInstance'
+			return not self.genericInstanceIsImmutable(try self.renderedInstanceOfUnclaimedName(kind) otherwise return true)
+		end 'anInstance'
+
+		return not self.aggregateTypeIsImmutable(kind)
+	end 'recordKindIsWritableState'
 
 	// `Promise` and `SharedValue` declare only `let` fields, but each names run-time state (a green
 	// thread, a shared cell) written underneath it, so its all-`let` layout must not make it shared

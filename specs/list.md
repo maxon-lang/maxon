@@ -14,7 +14,7 @@ Internally, List is backed by a `__ManagedList` — a doubly linked list of node
 
 ### Creating a List
 
-Use the `List from` syntax with an array literal:
+Use the `List from` syntax with an array literal or any `Array` value (`List from values`):
 
 ```maxon
 var list = List from [1, 2, 3]
@@ -918,4 +918,211 @@ end 'main'
 ```
 ```maxoncstderr
 error E3008: <fragment>:13:10: typealias 'Readings' is not exported
+```
+
+<!-- test: from-an-array-variable-keeps-order-and-duplicates -->
+An alias head takes any array of its element type as the source of `from`; the list keeps the array's order and its repeats.
+```maxon
+typealias Code = int(0 to 100)
+typealias Codes = Array with Code
+typealias CodeList = List with Code
+
+function main() returns ExitCode
+	var codes = Codes.create()
+	codes.push(30)
+	codes.push(10)
+	codes.push(30)
+	let list = CodeList from codes
+	print("{list.count()}\n")
+	for item in list 'loop'
+		print("{item}\n")
+	end 'loop'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
+30
+10
+30
+```
+
+<!-- test: from-a-call-result-infers-the-element -->
+A bare `List` head takes its element type from the array a call returns.
+```maxon
+typealias Code = int(0 to 100)
+typealias Codes = Array with Code
+
+function makeCodes() returns Codes
+	var codes = Codes.create()
+	codes.push(8)
+	codes.push(4)
+	return codes
+end 'makeCodes'
+
+function main() returns ExitCode
+	let list = List from makeCodes()
+	for item in list 'loop'
+		print("{item}\n")
+	end 'loop'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8
+4
+```
+
+<!-- test: error.from-a-source-that-is-not-an-array-is-a-type-mismatch -->
+A bare `List` head needs an array to take its element type from; any other value is a type mismatch.
+```maxon
+typealias Code = int(0 to 100)
+
+function main() returns ExitCode
+	let n = 3 as Code
+	let list = List from n
+	return list.count()
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:6:23: argument type mismatch for 'source': expected 'Array', got 'Code'
+```
+
+<!-- test: from-a-string-array-variable-leaves-the-source-intact -->
+`List from <array>` copies each `String` out of an array the program still holds.
+```maxon
+typealias Names = Array with String
+typealias NameList = List with String
+
+function main() returns ExitCode
+	var names = Names.create()
+	names.push("a{2}")
+	names.push("b")
+	let list = NameList from names
+	names.push("c")
+
+	for name in list 'each'
+		print("{name}\n")
+	end 'each'
+
+	print("{names.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a2
+b
+3
+```
+
+<!-- test: from-a-function-declared-later -->
+A bare `List` head over a call to a function declared further down the file.
+```maxon
+typealias Names = Array with String
+
+function main() returns ExitCode
+	let list = List from laterNames()
+
+	for name in list 'each'
+		print("{name}\n")
+	end 'each'
+
+	return 0
+end 'main'
+
+function laterNames() returns Names
+	var names = Names.create()
+	names.push("p")
+	names.push("q")
+	return names
+end 'laterNames'
+```
+```exitcode
+0
+```
+```stdout
+p
+q
+```
+
+<!-- test: a-let-list-from-a-string-array-variable -->
+A `let` may bind `List from` over a `String` array the program holds in a `var`.
+```maxon
+typealias Names = Array with String
+typealias NameList = List with String
+
+function main() returns ExitCode
+	var names = Names.create()
+	names.push("a")
+	names.push("b")
+	let list = NameList from names
+	print("{list.count()} {names.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 2
+```
+
+<!-- test: error.a-let-list-from-an-array-of-buffers-a-var-still-writes -->
+A `let` may not bind `List from` over an array whose elements are byte buffers a `var` still writes: the list holds those same buffers.
+```maxon
+typealias Octet = int(0 to 255)
+typealias Buffer = Array with Octet
+typealias Buffers = Array with Buffer
+typealias BufferList = List with Buffer
+
+function main() returns ExitCode
+	var buffer = Buffer.create()
+	buffer.push(1)
+	var buffers = Buffers.create()
+	buffers.push(buffer)
+	let list = BufferList from buffers
+	buffer.push(2)
+	return list.count()
+end 'main'
+```
+```maxoncstderr
+error E3188: <fragment>:12:6: cannot bind `let` 'list' to a value reached through 'buffer', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```
+
+<!-- test: a-let-list-from-strings-a-var-string-appends-to-afterwards -->
+A `String` is a value: appending to the `var` a list's member was copied from extends that `var` alone, so the `let` list holds nothing that is still written.
+```maxon
+typealias Names = Array with String
+typealias NameList = List with String
+
+function main() returns ExitCode
+	var name = "a{1}"
+	var names = Names.create()
+	names.push(name)
+	let list = NameList from names
+	name.append("z")
+
+	for item in list 'each'
+		print("{item}\n")
+	end 'each'
+
+	print("{name} {names.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a1
+a1z 1
 ```

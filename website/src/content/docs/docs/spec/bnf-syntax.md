@@ -912,6 +912,7 @@ sizeof_expr   = 'sizeof' '(' type_ref ')'                     (* compile-time si
 countof_expr  = 'countof' '(' type_ref ')'                    (* element count of a fixed-size container type *)
 
 from_expr     = IDENTIFIER 'from' '[' [ expression { ',' expression } ] ']'   (* Set / List / FixedArray / Array alias *)
+              | IDENTIFIER 'from' expression                (* Set / List: any Array value of the element *)
               | IDENTIFIER 'from' STRING                    (* a type implementing InitableFromStringLiteral *)
               | IDENTIFIER 'from' CHARACTER                 (* a type implementing InitableFromCharLiteral *)
 

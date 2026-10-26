@@ -1,0 +1,28 @@
+diff --git a/stdlib/helpers/tls/TlsExtensionScan.maxon b/stdlib/helpers/tls/TlsExtensionScan.maxon
+index 086be8359..a25910469 100644
+--- a/stdlib/helpers/tls/TlsExtensionScan.maxon
++++ b/stdlib/helpers/tls/TlsExtensionScan.maxon
+@@ -41,7 +41,7 @@ module type TlsExtensionScan
+ 			match item 'form'
+ 				supportedVersions(versions) then offeredVersions = versions.clone()
+ 				selectedVersion(version) then chosenVersions.push(version)
+-				supportedGroups(groups) then offeredGroups = TlsGroupCodeSet from groups
++				supportedGroups(groups) then offeredGroups = TlsExtensionScan.groupSet(groups)
+ 				signatureAlgorithms(schemes) then offeredSchemes = schemes.clone()
+ 				applicationProtocols(protocols) then offeredProtocols = protocols.clone()
+ 				clientKeyShares(shares) then offeredShares = shares.clone()
+@@ -59,4 +59,14 @@ module type TlsExtensionScan
+ 
+ 		return Self{types: typeTally, supportedVersions: offeredVersions, selectedVersions: chosenVersions, supportedGroups: offeredGroups, signatureSchemes: offeredSchemes, applicationProtocols: offeredProtocols, clientShares: offeredShares, serverShares: chosenShares, selectedGroups: chosenGroups, cookies: cookieList, pointFormats: offeredFormats, renegotiated: offeredRenegotiation}
+ 	end 'ofExtensions'
++
++	static function groupSet(groups TlsGroupCodeArray) returns TlsGroupCodeSet
++		var offered = TlsGroupCodeSet.create()
++
++		for group in groups 'eachGroup'
++			offered.insert(group)
++		end 'eachGroup'
++
++		return offered
++	end 'groupSet'
+ end 'TlsExtensionScan'

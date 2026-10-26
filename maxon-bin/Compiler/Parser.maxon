@@ -7706,7 +7706,7 @@ function builtinArrayStaticKind(member ByteArray) returns ArrayStaticKind
 		return ArrayStaticKind.builtinCreate
 	end 'create'
 
-	if member.equals(StringInitMethod) 'init'
+	if member.equals(InitMethod) 'init'
 		return ArrayStaticKind.builtinInit
 	end 'init'
 
@@ -9829,7 +9829,7 @@ function mintHeadIsTheCompilers(mint CalleeMint) returns bool
 		notMinted or
 		primitiveStatic or
 		paramDefaultHelper or
-		stringLiteralInit or
+		fromConstructionInit or
 		fieldDefaultHelper gives false
 		resolvedTypeQualifier or
 		rangeOperator gives true
@@ -10825,6 +10825,8 @@ let EndIndexArgLabel = b"endIndex"
 
 // The label the two-argument mutators (`set`/`insert`) give their VALUE argument: `arr.set(0, value: 9)`.
 let ArrayValueLabel = b"value"
+let FromSourceParamName = b"source"
+let FromSourceArrayNoun = "Array"
 
 let FixedArrayIndexLabel = b"index"
 
@@ -17948,12 +17950,21 @@ end 'FromHeadContainer'
 
 function fromHeadIsTheBareBase(head ByteArray, container FromHeadContainer) returns bool
 	return match container 'container'
-		set gives head.equals(SetBuiltinBaseName)
-		list gives head.equals(ListBuiltinBaseName)
-		fixedArray gives head.equals(FixedArrayBuiltinBaseName)
+		set or
+		list or
+		fixedArray gives head.equals(fromHeadBaseName(container))
 		array gives false
 	end 'container'
 end 'fromHeadIsTheBareBase'
+
+function fromHeadBaseName(container FromHeadContainer) returns ByteArray
+	return match container 'container'
+		set gives SetBuiltinBaseName
+		list gives ListBuiltinBaseName
+		fixedArray gives FixedArrayBuiltinBaseName
+		array panic("fromHeadBaseName: an `Array` head is always an alias and has no bare base name")
+	end 'container'
+end 'fromHeadBaseName'
 
 // The token a form's operand opens with.
 function literalInitOperandKind(form LiteralInitForm) returns TokenKind
@@ -20975,14 +20986,10 @@ export type Parser
 		return declarationBeginsStatementIn(self.tokens, index: index) and self.kindAt(index + 1) == TokenKind.identifier
 	end 'enumDeclarationAt'
 
-	// Is the cursor on a `Set from` construction — a bare `Set` identifier immediately followed by `from`?
-	//
-	// ONE predicate, read by BOTH the declaration sweep (which PRE-INTERNS `Set with integer` AND `Set with String`
-	// so the parser's own read is never the first to mutate the shared registry) and `parsePrimary`'s construction
-	// arm (which BUILDS the member list), for the reason `atTopLevelBindingKeyword` is one predicate. Taught to one
-	// and not the other — a broadened `from`-construction trigger the parser builds but the sweep does not recognize
-	// — a `Set from` would go un-pre-interned, and the parser's instance read would become the FIRST write to the
-	// shared registry mid-parse: an order-dependent gid no drift guard can see. Teaching this one predicate teaches both.
+	// ONE predicate, read by BOTH the declaration sweep (which notes the construction so its
+	// well-known instances are over-interned) and `parsePrimary`'s construction arm, for the reason
+	// `atTopLevelBindingKeyword` is one predicate. A function body's parse mints any other instance in
+	// its band (`ProgramSignatures.openParseBand`), which the merge renumbers.
 	function atContainerFromConstruction(container FromHeadContainer) returns bool
 		if not (self.at(TokenKind.identifier) and self.peekKind() == TokenKind.from) 'notAFromConstruction'
 			return false
@@ -21017,29 +21024,16 @@ export type Parser
 		end 'form'
 	end 'qualifiedTypeHeadAt'
 
-	// Is the cursor on a `List from` construction — a bare `List` identifier immediately followed by `from`?
-	// The `Set` predicate's twin, read by BOTH the declaration sweep (which NOTES the construction so the
-	// possible `List with <T>` instances are over-interned whole-program) and `parsePrimary`'s construction
-	// arm, for that predicate's stated reason: teaching one and not the other would leave the parser's
-	// instance read as the first write to the shared registry mid-parse.
-	//
-	// The head is the bare base name or a `List` INSTANCE ALIAS (`Readings from [30, 10]`), whose element type
-	// the alias states. The sweep answers no for every alias, which is sound: the alias's own declaration
-	// interned the instance it names.
-
 	// Is the cursor on an `<alias> from` ARRAY construction — a name that aliases an `Array` INSTANCE,
 	// immediately followed by `from`? `atContainerFromConstruction(FromHeadContainer.array)` asks its
 	// ALIAS half, and ONLY that half (`fromHeadIsTheBareBase` answers no for `array`): a bare `Array
 	// from […]` would state nothing the literal does not already carry, so it keeps falling through to
 	// `E2004 Undefined variable 'Array'` exactly as `List`'s and `FixedArray`'s alias forms do.
 	//
-	// ⚠ **IT IS DELIBERATELY NOT READ BY THE DECLARATION SWEEP, WHERE THE THREE PREDICATES ABOVE ARE.** Those
-	// are shared because a BARE base name (`Set from [1, 2]`) mints an instance no declaration in the program
-	// spells, so the sweep has to pre-intern it off the token shape or the parser's own read becomes the first
-	// write to the shared registry. An alias head cannot be in that position: the instance it names was
-	// interned by its own `typealias ByteArray = Array with Byte`, which the ordinary declaration fold
-	// registers whole-program before any function body is parsed. There is nothing here for a sweep to
-	// pre-intern.
+	// ⚠ **IT IS DELIBERATELY NOT READ BY THE DECLARATION SWEEP, WHERE THE THREE OTHER CONTAINERS
+	// ARE.** The instance an alias head names was interned by its own `typealias ByteArray = Array
+	// with Byte`, which the ordinary declaration fold registers whole-program before any function body
+	// is parsed. There is nothing here for a sweep to pre-intern.
 
 	// ⭐ **IS THE CURSOR ON A `<Type> from <literal>` CONSTRUCTION OF THIS FORM?** — the `Initable*Literal`
 	// sugar, which is how `/specs` spells nearly every `FilePath` in the corpus (128 occurrences, and 31 of
@@ -21079,10 +21073,8 @@ export type Parser
 	// `CharacterSet` probe answer `false` for every file: **8 red, every one of them a file that SPELLS `CharSet`**
 	// (`error E2015: a field access on 'cs', which is declared 'unknown'` — `CharSet.create()` with no alias
 	// to resolve), and nothing else. So what an unregistered file cost was **the alias and the gid, not a
-	// crash**, and what the probe bought was the pre-interning discipline
-	// `atContainerFromConstruction` states: an instance is interned by the SWEEP so the parser's own
-	// read is never the first write to the shared registry mid-parse, which would make its gid depend
-	// on parse order.
+	// crash**, and what the probe bought was the alias's instance interned by the sweep rather than by
+	// the parse.
 	// ⇒ The corpus declares the type and the alias, so both arrive through the ordinary
 	// declaration fold and there is no per-file question left.
 	//
@@ -37842,17 +37834,19 @@ export type Parser
 		return not self.valueMayNameARecord(value) or self.valueIsAMintedStringLiteral(value) or typeIsPromiseStorage(self.signatures, t: self.typeOf(value))
 	end 'valueIsNoRecordAWriteReaches'
 
-	function valueHoldsNoRecordWithin(value ValueId) returns bool
+	function valueHoldsNoWritableRecordWithin(value ValueId) returns bool
+		var writability = RecordKindWritability.of(self.signatures)
+
 		if self.tagOf(value) == ValueTypeTag.genericInstance 'anInstance'
-			return self.signatures.recordKindsWithinInstance(self.valueInstanceId(value)).holdsNothing()
+			return self.signatures.recordKindsWithinInstance(self.valueInstanceId(value)).holdsNoWritableRecord(writability)
 		end 'anInstance'
 
 		if not self.signatures.tagMayNameAggregate(self.tagOf(value)) 'anyOtherKind'
 			return false
 		end 'anyOtherKind'
 
-		return self.signatures.recordKindsWithinAggregate(self.valueTypeName(value)).holdsNothing()
-	end 'valueHoldsNoRecordWithin'
+		return self.signatures.recordKindsWithinAggregate(self.valueTypeName(value)).holdsNoWritableRecord(writability)
+	end 'valueHoldsNoWritableRecordWithin'
 
 	function valueMayNameARecord(value ValueId) returns bool
 		return self.valueIsManagedHeap(value) or self.tagOf(value) == ValueTypeTag.typeParameter
@@ -37865,11 +37859,8 @@ export type Parser
 	end 'recordNeverMeetsADoor'
 
 	function valueIsAnImmutableAggregate(value ValueId) returns bool
-		if self.tagOf(value) == ValueTypeTag.genericInstance 'anInstance'
-			return self.signatures.genericInstanceIsImmutable(self.valueInstanceId(value))
-		end 'anInstance'
-
-		return self.signatures.tagMayNameAggregate(self.tagOf(value)) and self.signatures.aggregateTypeIsImmutable(self.valueTypeName(value))
+		var writability = RecordKindWritability.of(self.signatures)
+		return writability.namesAnImmutableAggregate(self.tagOf(value), nameId: self.valueNameId(value), from: self.artifact.typeNames)
 	end 'valueIsAnImmutableAggregate'
 
 	function bindingHoldsAStorageRead(value ValueId, boundValue ValueId, sourceReadsAField bool, sourceName SourceBinding) returns bool
@@ -50494,7 +50485,7 @@ export type Parser
 	// Which record a sink is handed is not a compile-time fact — it may be a merge phi — so the fork has to be
 	// the run-time one.
 	function coOwnConcreteRecordForSink(value ValueId, range SourceRange) returns ValueId
-		if self.signatures.isArrayInstanceAt(self.tagOf(value), nameId: self.valueNameId(value)) 'bufferRecord'
+		if self.valueIsAnArray(value) 'bufferRecord'
 			return self.emitRetainCall(value, range: range)
 		end 'bufferRecord'
 
@@ -53791,7 +53782,7 @@ export type Parser
 		// `ArrayIterator.current()` hands back a `+1` (`coOwnBorrowedOpaque` on its opaque return); the counter
 		// form reads the accessor's in-place element and holds it (`holdLoopElement`). Either way a write to the
 		// source inside the body leaves the element readable (`specs/borrow-liveness.md`).
-		if self.signatures.isArrayInstanceAt(self.tagOf(source), nameId: self.valueNameId(source)) 'theLoopBuildsItsOwn'
+		if self.valueIsAnArray(source) 'theLoopBuildsItsOwn'
 			return IterableIterationSource.notIterable
 		end 'theLoopBuildsItsOwn'
 
@@ -53877,7 +53868,7 @@ export type Parser
 		// its buffer), which is exactly what lets `count`/`get` be read straight off the value.
 		// MEASURED: both spellings emit `__managed_count` / `__managed_get_unchecked` and neither emits
 		// `Array.createIterator` / `ArrayIterator.current`.
-		if self.signatures.isArrayInstanceAt(self.tagOf(source), nameId: self.valueNameId(source)) 'array'
+		if self.valueIsAnArray(source) 'array'
 			return
 		end 'array'
 
@@ -66963,10 +66954,10 @@ export type Parser
 		// See `keywordIsANameInOperandPosition` for why the ORDER of the arms above is the whole safety
 		// argument.
 		if self.at(TokenKind.identifier) or try self.keywordIsANameInOperandPosition() 'namedPrimary'
-			// `Set from [1, 2, 3]` — a builtin `Set` CONSTRUCTED from an array literal. The bare
-			// `Set` identifier followed by `from` is a construction, NOT a variable reference (`Set` names no
-			// binding, so the plain path below reports E2004 `Undefined variable 'Set'`). Its element type is
-			// inferred from the literal.
+			// `Set from [1, 2, 3]` — a builtin `Set` CONSTRUCTED from an array literal or an `Array` value.
+			// The bare `Set` identifier followed by `from` is a construction, NOT a variable reference
+			// (`Set` names no binding, so the plain path below reports E2004 `Undefined variable 'Set'`).
+			// Its element type is inferred from the source.
 			try self.settleTypeNameVerdict(try self.enterQualifiedTypeHead(TypeNameHeadForm.construction))
 
 			if self.atContainerFromConstruction(FromHeadContainer.set) 'setFromConstruction'
@@ -69663,7 +69654,7 @@ export type Parser
 		end 'readOnly'
 
 		if self.valueIsSolelyOwnedHere(value) 'freshAtTheTop'
-			if not self.valueHoldsNoRecordWithin(value) 'contentsToJudge'
+			if not self.valueHoldsNoWritableRecordWithin(value) 'contentsToJudge'
 				self.noteLetFieldValueSite(value, destination: place, into: into, anchor: anchor, freshAtTheTop: true)
 			end 'contentsToJudge'
 
@@ -74233,9 +74224,8 @@ export type Parser
 		// `ConformanceCheck.checkWhereConstraints` walks the lists a provenance is recorded on — a declared
 		// alias, a bracketed literal, a file-scope constant — and an instantiation on none of them is checked
 		// by nobody: E3017 goes unraised and the program reaches `witnessSlotImpl` with no conformance
-		// selected. That door's header records the same hole closing twice already, each time because a NEW
-		// way to mint an instance did not record one.
-		self.artifact.inferredInstantiationSites.push(GenericInstantiationSite.create(gid, nameLine: anchor.line, nameColumn: anchor.column, filePath: self.job.path))
+		// selected.
+		self.recordInferredInstantiation(gid, at: anchor)
 		return ConstructorInstance.instance(gid)
 	end 'instanceOfFactoryTypeArguments'
 
@@ -78856,7 +78846,7 @@ export type Parser
 		let receiver = try args.get(0) otherwise panic("noteLiteralColumnsCorpusCall: args.get(0) failed on a non-empty list")
 		var pair = try self.literalColumnsOf(receiver) otherwise return
 
-		if qualifiedMemberIs(callee, member: StringInitMethod) and qualifyingTypeName(callee).equals(FixedArrayBuiltinBaseName) 'aFixedArrayOverTheLiteral'
+		if qualifiedMemberIs(callee, member: InitMethod) and qualifyingTypeName(callee).equals(FixedArrayBuiltinBaseName) 'aFixedArrayOverTheLiteral'
 			self.recordLiteralColumns(result, pair: pair)
 			return
 		end 'aFixedArrayOverTheLiteral'
@@ -80028,6 +80018,10 @@ export type Parser
 		return self.valueNameId(value) as GenericInstanceId
 	end 'valueInstanceId'
 
+	function valueIsAnArray(value ValueId) returns bool
+		return self.signatures.isArrayInstanceAt(self.tagOf(value), nameId: self.valueNameId(value))
+	end 'valueIsAnArray'
+
 	// The token a `typeParameter`-tagged value is typed as — the same column, read on that tag.
 	function valueTypeParamId(value ValueId) returns TypeParamId
 		return self.valueNameId(value) as TypeParamId
@@ -80382,23 +80376,17 @@ export type Parser
 	// ⭐⭐ **THE EMPTY CONTAINER EVERY MEMBER-BY-MEMBER DOOR STARTS FROM — the corpus type's own `create()`.**
 	// Its callers are the `CharacterSet` member set (a preset's seed and a `CharSet from […]`), the corpus arm
 	// of `Set from […]`, a `[k: v]` map literal, and `List from […]`.
-	//
+	function emitContainerLiteralCreate(baseName ByteArray, giid GenericInstanceId, anchor Token, range SourceRange) returns ValueId throws SourceParseError
+		return try self.emitContainerConstructorCall(baseName, method: CreateMethod, giid: giid, args: ValueIdArray.create(), mint: CalleeMint.notMinted, anchor: anchor, range: range)
+	end 'emitContainerLiteralCreate'
+
 	// ⭐⭐ **THE RESULT IS ALREADY ENROLLED AS AN OWNED TEMPORARY, SO NO CALLER MAY TRACK IT.** `emitCall`
 	// classifies its result +1 owned by the call machinery itself (`enrolOwnedCallTemp`); a caller that
 	// tracked it as well would enrol ONE record twice and drop it twice.
-	//
-	// ⚠ **THE ENROLMENT IS UNCONDITIONAL AND IT LIVES HERE.** A caller that adds its own `trackOwnedTemp`
-	// enrols ONE record twice and double-drops every literal used as a temporary — see the note at
-	// `parseMapLiteralBody`'s closing brace, where that was measured.
-	// apart from `SetBuiltinBaseName` / `MapBuiltinBaseName` / `ListBuiltinBaseName`, each header calling the
-	// others its "twin" — a fact written three times, where the RETYPE below is the step a fourth copy is free
-	// to omit and the omission is not a compile error but a lowering panic. Every container the retirement
-	// chain lists arrives at this door, so the door takes the name.
-	function emitContainerLiteralCreate(baseName ByteArray, giid GenericInstanceId, anchor Token, range SourceRange) returns ValueId throws SourceParseError
-		var args = ValueIdArray.create()
+	function emitContainerConstructorCall(baseName ByteArray, method ByteArray, giid GenericInstanceId, args ValueIdArray, mint CalleeMint, anchor Token, range SourceRange) returns ValueId throws SourceParseError
 		var argLabels = emptyArgLabels(args)
 		var argRanges = uniformArgRanges(args, range: range)
-		let container = try self.emitCall(qualifiedMethodName(baseName, methodName: CreateMethod), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: true, constructorInstance: ConstructorInstance.instance(giid), mint: CalleeMint.notMinted)
+		let container = try self.emitCall(qualifiedMethodName(baseName, methodName: method), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: true, constructorInstance: ConstructorInstance.instance(giid), mint: mint, places: self.placesOfArguments(args, anchor: anchor))
 
 		// ⭐ **THE RESULT IS THE INSTANCE, AND SAYING SO IS THE CALLER'S JOB — `emitCall` does not do it.**
 		// `constructorInstance` is read by the CONSUME side alone; the type half is this separate step, exactly
@@ -80408,7 +80396,7 @@ export type Parser
 		// which is what the empty name means here.
 		self.retypeGenericAliasConstructorResult(container, gid: giid, aliasName: EmptySourceText)
 		return container
-	end 'emitContainerLiteralCreate'
+	end 'emitContainerConstructorCall'
 
 	// ⭐ **ONE MEMBER INTO A MEMBER-BY-MEMBER CONTAINER LITERAL — `emitContainerLiteralCreate`'s twin.** The
 	// call is a VOID mutator; the container OWNS the value from here, and the declared parameter
@@ -80426,6 +80414,58 @@ export type Parser
 		var argRanges = uniformArgRanges(args, range: range)
 		_ = try self.emitCall(qualifiedMethodName(baseName, methodName: method), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: false, constructorInstance: self.receiverConstructorInstance(container), mint: CalleeMint.notMinted, places: self.placesOfArguments(args, anchor: anchor))
 	end 'emitContainerLiteralElement'
+
+	function parseContainerFromArray(func IrFunction, headTok Token, container FromHeadContainer) returns ValueId throws SourceParseError
+		let sourceTok = self.current()
+		let source = try self.parseExpression(func, block: self.bodyState.currentBlock)
+
+		if self.valueIsDeferred(source) 'aDeferredSource'
+			return self.mintDeferredValue()
+		end 'aDeferredSource'
+
+		let giid = try self.containerInstanceFromArray(source, headTok: headTok, sourceTok: sourceTok, container: container)
+
+		return try self.emitContainerConstructorCall(fromHeadBaseName(container), method: InitMethod, giid: giid, args: singletonArgs(source), mint: CalleeMint.fromConstructionInit, anchor: headTok, range: SourceRange.ofToken(sourceTok))
+	end 'parseContainerFromArray'
+
+	// The alias's element is checked here rather than by `init`'s argument check, so the E3005 names
+	// `source`, not `init`'s own `arr`; `specs/set.md` and `specs/list.md` pin that wording.
+	function containerInstanceFromArray(source ValueId, headTok Token, sourceTok Token, container FromHeadContainer) returns GenericInstanceId throws SourceParseError
+		if self.namesContainerInstanceAlias(headTok.value, container: container) 'statedByAlias'
+			let giid = self.signatures.genericAliasInstanceFrom(headTok.value, readerFilePath: self.job.path)
+			let headElement = self.signatures.containerElementType(giid)
+			let expected = "{FromSourceArrayNoun} with {self.signatures.typeDisplayName(headElement)}"
+			let sourceElement = try self.arraySourceElement(source, expected: expected, sourceTok: sourceTok)
+
+			if not maxonTypesDenoteSame(headElement, b: sourceElement) 'anotherElement'
+				throw self.fromSourceMismatch(source, expected: expected, sourceTok: sourceTok)
+			end 'anotherElement'
+
+			return giid
+		end 'statedByAlias'
+
+		// The array's exact element, never a normalized one: an `Array with Code` strides 1, and
+		// `Set with integer`'s `init` would read it as a stride-8 array.
+		return self.inferredContainerInstance(container, element: try self.arraySourceElement(source, expected: FromSourceArrayNoun, sourceTok: sourceTok), head: headTok)
+	end 'containerInstanceFromArray'
+
+	function inferredContainerInstance(container FromHeadContainer, element MaxonType, head Token) returns GenericInstanceId
+		let giid = self.signatures.builtinInstanceForElement(fromHeadBaseName(container), element: element)
+		self.recordInferredInstantiation(giid, at: head)
+		return giid
+	end 'inferredContainerInstance'
+
+	function arraySourceElement(source ValueId, expected String, sourceTok Token) returns MaxonType throws SourceParseError
+		if not self.valueIsAnArray(source) 'notAnArray'
+			throw self.fromSourceMismatch(source, expected: expected, sourceTok: sourceTok)
+		end 'notAnArray'
+
+		return self.signatures.containerElementType(self.valueInstanceId(source))
+	end 'arraySourceElement'
+
+	function fromSourceMismatch(source ValueId, expected String, sourceTok Token) returns SourceParseError
+		return SourceParseError.builtinArgumentType(String.from(FromSourceParamName), expected: expected, got: self.valueDisplayTypeName(source), line: sourceTok.line, column: sourceTok.column)
+	end 'fromSourceMismatch'
 
 	// ⚠⚠ **A SET MEMBER IS NEVER MOVED AT THE PARSE, AND NO `__set_create(elemDrop)` IS EMITTED.** The corpus
 	// `Set.insert` declares its parameter, so the ORDINARY call machinery decides the move — and doing BOTH is
@@ -80574,8 +80614,7 @@ export type Parser
 	function parseArrayFromConstruction(func IrFunction) returns ValueId throws SourceParseError
 		let headTok = try self.consumeConstructionHead()
 
-		// The source must be an array literal `[…]`, exactly as it must for the other three `from` heads —
-		// `<alias> from <expr>` is not a construction the compiler parses.
+		// The source must be an array literal `[…]`, as it must for a `FixedArray` head.
 		if not self.at(TokenKind.leftBracket) 'notArrayLiteral'
 			let srcTok = self.current()
 			throw SourceParseError.unsupported("`{String.from(headTok.value)} from` requires an array literal `[…]` — `{String.from(headTok.value)} from <expr>` for another source is not a construction", line: srcTok.line, column: srcTok.column)
@@ -80584,18 +80623,17 @@ export type Parser
 		return try self.parseArrayLiteral(func, element: ArrayLiteralElementSource.stated(self.signatures.genericAliasInstanceFrom(headTok.value, readerFilePath: self.job.path)))
 	end 'parseArrayFromConstruction'
 
-	// ⭐ **`Set from [1, 2, 3]` — CONSTRUCT A SET FROM A BRACKETED MEMBER LIST.** The cursor sits on the head
-	// identifier. The two forks below split on what the members ARE: a `Set with Character` reads them as
-	// character literals (`parseCharacterMemberSetLiteral`), and every other key type reads them as ordinary
-	// expressions whose first fixes the instance (`parseSetMemberList`). Both desugar to `Set.create()` plus
-	// one `Set.insert` per member.
+	// ⭐ **`Set from [1, 2, 3]` OR `Set from <array>`.** The cursor sits on the head identifier. A
+	// source that is not a bracketed list is a call of `Set.init` (`parseContainerFromArray`). A
+	// bracketed list forks on what the members ARE: a `Set with Character` reads them as character
+	// literals (`parseCharacterMemberSetLiteral`), and every other key type reads them as ordinary
+	// expressions (`parseSetMemberList`). Both literal forks desugar to `Set.create()` plus one
+	// `Set.insert` per member.
 	function parseSetFromConstruction(func IrFunction) returns ValueId throws SourceParseError
 		let setTok = try self.consumeConstructionHead()
 
-		// The source must be an array literal `[…]`; `Set from <other-expr>` is not a construction the compiler parses.
 		if not self.at(TokenKind.leftBracket) 'notArrayLiteral'
-			let srcTok = self.current()
-			throw SourceParseError.unsupported("`Set from` requires an array literal `[…]` as its source", line: srcTok.line, column: srcTok.column)
+			return try self.parseContainerFromArray(func, headTok: setTok, container: FromHeadContainer.set)
 		end 'notArrayLiteral'
 
 		// ⭐ **A CHARACTER-KEYED SET IS BUILT MEMBER BY MEMBER, NOT THROUGH AN ARRAY.** Every
@@ -80608,19 +80646,18 @@ export type Parser
 			return try self.parseCharacterMemberSetLiteral(func, anchor: setTok, range: SourceRange.ofToken(setTok))
 		end 'characterKeyed'
 
-		// ⭐⭐ **A `Set` IS BUILT MEMBER BY MEMBER AND NEVER THROUGH AN ARRAY.** The corpus type's own
-		// `InitableFromArrayLiteral` `init` is not exported, so a user file naming it is
-		// **`E3008: function 'Set.init' is not exported`**. `Map` takes the same route one container over —
-		// `Map.create()` plus one `upsert` per pair — and it spares the intermediate `Array` record a `from`
-		// spelling would allocate.
+		// A literal is built member by member, which spares the intermediate `Array` record `Set.init`
+		// would take; `Map` takes the same route one container over.
 		return try self.parseSetMemberList(func, setTok: setTok)
 	end 'parseSetFromConstruction'
 
-	// ⭐⭐ **`Set from [m0, m1, …]` ONTO A DECLARED `Set` — `Set.create()` plus one `Set.insert` per member.**
-	// The cursor sits on the `[`. The FIRST member fixes the element type and therefore the
-	// instance, exactly as `parseMapLiteralBody`'s first pair fixes both of its columns, and every later
-	// member is held to that type through the SHARED hash-table column door — so a mixed literal is refused
-	// with the sentence a written `s.insert(x)` of the wrong type already gets.
+	// ⭐⭐ **`Set from [m0, m1, …]` ONTO A DECLARED `Set` — `Set.create()` plus one `Set.insert` per
+	// member.** The cursor sits on the `[`. Under an alias head the alias fixes the instance and
+	// `Set.insert` types every member. Under the bare base name the FIRST member fixes the element
+	// type and therefore the instance, exactly as `parseMapLiteralBody`'s first pair fixes both of its
+	// columns, and every later member is held to that type through the SHARED hash-table column door —
+	// so a mixed literal is refused with the sentence a written `s.insert(x)` of the wrong type
+	// already gets.
 	//
 	// ⚠ **NO MEMBER IS MOVED AT THE PARSE.** The corpus `Set.insert` declares its
 	// parameter, so the ORDINARY call machinery decides the move — see the note below `emitContainerLiteralCreate` for the leak
@@ -80651,26 +80688,20 @@ export type Parser
 			return try self.deferredLiteralRest(func, entry: LiteralEntryShape.element)
 		end 'aDeferredFirstMember'
 
-		let keyType = try self.literalColumnTypeFor(first, literalKind: SetLiteralSubject, columnNoun: HashTableKeyColumnNoun, valueTok: firstTok)
-		let giid = try self.setInstanceForLiteralKey(keyType, setTok: setTok)
-
-		// ⭐ **THE LITERAL RECORDS ITS OWN INSTANTIATION**, because it is the one door a set is born through
-		// with no `with <Key>` to anchor an E3017 on — `gateMapLiteralColumns`' arm, for its reason. The
-		// verdict is `Set`'s own `where Element is Hashable and Equatable`, taken whole-program by
-		// `checkWhereConstraints` where the conformance store is complete.
-		self.artifact.inferredInstantiationSites.push(GenericInstantiationSite.create(giid, nameLine: setTok.line, nameColumn: setTok.column, filePath: self.job.path))
+		let statedByAlias = self.namesContainerInstanceAlias(setTok.value, container: FromHeadContainer.set)
+		let giid = try self.memberListInstance(setTok, container: FromHeadContainer.set, statedByAlias: statedByAlias, first: first, firstTok: firstTok, literalKind: SetLiteralSubject, columnNoun: HashTableKeyColumnNoun)
 
 		let set = try self.emitContainerLiteralCreate(SetBuiltinBaseName, giid: giid, anchor: setTok, range: range)
 		try self.emitContainerLiteralElement(SetBuiltinBaseName, method: InsertMethod, container: set, value: first, anchor: setTok, range: range)
 		var signs = try self.foldColumnSign(ColumnSigns.unseen, value: first, anchor: firstTok)
 
-		let declaredType = self.resolvedSlotType(keyType)
+		let declaredType = self.resolvedSlotType(self.signatures.containerElementType(giid))
 		let declared = maxonTypeTag(declaredType)
 		view identity = self.declaredColumnIdentity(declaredType)
 
 		while try self.atAnotherLiteralEntry() 'moreMembers'
 			let memberTok = self.current()
-			let member = try self.parseHashTableColumnArg(func, declaredType: declaredType, columnSubject: "`{String.from(SetBuiltinBaseName)} with {columnTypeName(declared, identity: identity)}` requires {articledColumnTypeName(declared, identity: identity)} {HashTableKeyColumnNoun}")
+			let member = try self.parseSetLiteralMember(func, statedByAlias: statedByAlias, declaredType: declaredType, columnSubject: "`{String.from(SetBuiltinBaseName)} with {columnTypeName(declared, identity: identity)}` requires {articledColumnTypeName(declared, identity: identity)} {HashTableKeyColumnNoun}")
 
 			if self.valueIsDeferred(member) 'aDeferredMember'
 				return try self.deferredLiteralRest(func, entry: LiteralEntryShape.element)
@@ -80685,29 +80716,13 @@ export type Parser
 		return set
 	end 'parseSetMemberList'
 
-	// ⭐ **THE `Set with <key>` INSTANCE A CORPUS `Set from […]` BUILDS — bounded by what the SWEEP PRE-INTERNED
-	// and by nothing else.** `internWellKnownContainerInstances` over-interns exactly `Set with integer`
-	// and `Set with String` for a file whose tokens hold a `Set from`, and
-	// `atContainerFromConstruction`'s discipline is that the parser may only READ back what the sweep
-	// wrote: a first intern here would make the gid depend on parse order, which no drift guard can
-	// see.
-	//
-	// ⚠⚠ **SO THIS IS AN INTERNING BOUND, NOT A CONFORMANCE VERDICT.** Create-plus-insert reads no buffer,
-	// so no element STRIDE applies and no builtin key roster does either; whether the key can be hashed is
-	// `Set`'s own `where` clause, checked whole-program against the site the
-	// caller records. What is left is the one thing this door can still state: the program's own
-	// `typealias <X> = Set with <Key>` is how any other key type reaches a set, and it is what the refusal names.
-	function setInstanceForLiteralKey(keyType MaxonType, setTok Token) returns GenericInstanceId throws SourceParseError
-		if tagIsPlainInteger(maxonTypeTag(keyType)) 'intKey'
-			return self.signatures.internBuiltinIntegerInstance(SetBuiltinBaseName)
-		end 'intKey'
+	function parseSetLiteralMember(func IrFunction, statedByAlias bool, declaredType MaxonType, columnSubject String) returns ValueId throws SourceParseError
+		if statedByAlias 'typedByTheInsert'
+			return try self.parseExpression(func, block: self.bodyState.currentBlock)
+		end 'typedByTheInsert'
 
-		if tagIsText(maxonTypeTag(keyType)) 'stringKey'
-			return self.signatures.builtinInstanceForElement(SetBuiltinBaseName, element: MaxonType.string)
-		end 'stringKey'
-
-		throw SourceParseError.unsupported("`{String.from(SetBuiltinBaseName)} from […]` infers its {HashTableKeyColumnNoun} type from the members, and only `{String.from(IntConformerName)}` and `{String.from(StringConformerName)}` members are inferred — declare `{String.from(SetBuiltinBaseName)} with <{HashTableKeyColumnNoun}>` and build it with `{String.from(CreateMethod)}` and `{String.from(InsertMethod)}` instead", line: setTok.line, column: setTok.column)
-	end 'setInstanceForLiteralKey'
+		return try self.parseHashTableColumnArg(func, declaredType: declaredType, columnSubject: columnSubject)
+	end 'parseSetLiteralMember'
 
 	// ⭐⭐ **`FilePath from "C:\\x.txt"` — THE `InitableFromStringLiteral` CONSTRUCTION, WHICH IS SUGAR
 	// AND NOTHING MORE.** It is exactly `<Type>.init(<the literal as a String>)`, which is what the
@@ -80733,7 +80748,7 @@ export type Parser
 	function parseLiteralInitConstruction(func IrFunction, form LiteralInitForm) returns ValueId throws SourceParseError
 		let typeTok = try self.consumeConstructionHead()
 
-		let callee = qualifiedMethodName(typeTok.value, methodName: StringInitMethod)
+		let callee = qualifiedMethodName(typeTok.value, methodName: InitMethod)
 		let literalTok = self.current()
 		let literalStart = self.pos
 		let value = try self.parseLiteralInitOperand(func, form: form, callee: callee)
@@ -80756,10 +80771,10 @@ export type Parser
 		// `rparenTok` is the LITERAL — this form writes no parenthesis, and that token is what a diagnostic
 		// about the call's tail must point at. `resultUsed: true` because a construction is an expression:
 		// `parsePrimary` only reaches here in operand position.
-		// `stringLiteralInit`, not `notMinted`: the author wrote `FilePath from "…"` and never named `init`, and
+		// `fromConstructionInit`, not `notMinted`: the author wrote `FilePath from "…"` and never named `init`, and
 		// that is the only fact distinguishing this call from a written-out `FilePath.init("…")` — they build
-		// the identical callee. See `CalleeMint.stringLiteralInit`.
-		return try self.emitCall(callee, anchor: typeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: literalTok, resultUsed: true, constructorInstance: self.constructorInstanceOf(typeTok.value), mint: CalleeMint.stringLiteralInit, places: self.placesOfArguments(args, anchor: literalTok))
+		// the identical callee. See `CalleeMint.fromConstructionInit`.
+		return try self.emitCall(callee, anchor: typeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: literalTok, resultUsed: true, constructorInstance: self.constructorInstanceOf(typeTok.value), mint: CalleeMint.fromConstructionInit, places: self.placesOfArguments(args, anchor: literalTok))
 	end 'parseLiteralInitConstruction'
 
 	// The operand each form takes. A String literal goes through `parseStringLiteral` so an INTERPOLATED
@@ -80838,28 +80853,21 @@ export type Parser
 
 	// --- The `Map` builtin generic: `create` / `upsert` / `contains` / `get` / `count` ---
 
-	// ⭐⭐ **A LITERAL'S COLUMNS ARE HELD TO WHOEVER SERVES THE MAP.** A corpus `Map` is governed by its own
-	// declared `where` clause and not by a builtin key roster, so this door does not route through
-	// `requireContainerColumnTypes`: that function is a TOTAL router over the BUILTIN containers and meets its
-	// named panic on anything else, which is exactly what a corpus `Map` is. A user `Hashable`/`Equatable`
-	// type is therefore a valid key in a `[k: v]`, as it is through `PointMap.create()` + `upsert`
-	// (`map.md`'s `a-user-type-can-be-a-map-key`).
-	//
-	// ⛔⛔ **A LITERAL IS THE ONE DOOR A MAP IS BORN THROUGH WITH NO
-	// `with (K, V)` TO ANCHOR AN E3017 ON.** `ProgramSignatures.instantiationSites` is built by the token
-	// sweep out of `typealias` declarations, so nothing in it names an instance a literal inferred, and a key
-	// implementing NEITHER interface would be admitted in silence — a witness dispatch through a table nothing
-	// stamped. So the literal RECORDS its instantiation, at its first key, and the ordinary whole-program
-	// check reports `Map`'s own `where Key is Hashable and Equatable` against it: the same code, sentence and
-	// anchor a written alias gets, from one rule rather than two.
+	// ⛔⛔ **AN INFERRED INSTANCE HAS NO `with` CLAUSE TO ANCHOR AN E3017 ON.**
+	// `ProgramSignatures.instantiationSites` is built by the token sweep out of `typealias`
+	// declarations, so nothing in it names an instance a construction inferred, and an argument
+	// implementing NEITHER interface would be admitted in silence — a witness dispatch through a table
+	// nothing stamped. So the construction RECORDS its instantiation, and the ordinary whole-program
+	// check reports the container's own `where` clause against it: the same code, sentence and anchor
+	// a written alias gets, from one rule rather than two.
 	//
 	// ⚠ **THE VERDICT CANNOT BE TAKEN HERE, and that is structural rather than tidiness.** A type's
 	// `implements` clause is recorded when its OWN file is parsed and the compiler orders files only by source path,
 	// so the answer at this cursor depends on which file came first — `checkLiteralInitConformance`'s reason,
 	// one door over, for the identical deferral.
-	function gateMapLiteralColumns(giid GenericInstanceId, tok Token)
-		self.artifact.inferredInstantiationSites.push(GenericInstantiationSite.create(giid, nameLine: tok.line, nameColumn: tok.column, filePath: self.job.path))
-	end 'gateMapLiteralColumns'
+	function recordInferredInstantiation(giid GenericInstanceId, at Token)
+		self.artifact.inferredInstantiationSites.push(GenericInstantiationSite.create(giid, nameLine: at.line, nameColumn: at.column, filePath: self.job.path))
+	end 'recordInferredInstantiation'
 
 	// ⚠⚠ **A MAP LITERAL'S COLUMN VALUES ARE NOT MOVED AT THE PARSE.** The corpus `Map.upsert` declares its
 	// parameters, so `applyCallerConsume` reads their signature and the ORDINARY call machinery decides: it
@@ -80904,6 +80912,13 @@ export type Parser
 	// ⚠ No half of a pair moves in at the parse: the desugared `Map.upsert` declares both parameters,
 	// so the ordinary call machinery decides each column's ownership, and a second, parse-time move
 	// would drain the value from the statement's pending drops and leak.
+	//
+	// ⭐⭐ **A LITERAL'S COLUMNS ARE HELD TO WHOEVER SERVES THE MAP.** A corpus `Map` is governed by its own
+	// declared `where` clause and not by a builtin key roster, so this door does not route through
+	// `requireContainerColumnTypes`: that function is a TOTAL router over the BUILTIN containers and meets its
+	// named panic on anything else, which is exactly what a corpus `Map` is. A user `Hashable`/`Equatable`
+	// type is therefore a valid key in a `[k: v]`, as it is through `PointMap.create()` + `upsert`
+	// (`map.md`'s `a-user-type-can-be-a-map-key`).
 	function parseMapLiteralBody(func IrFunction, firstKey ValueId, firstKeyTok Token, range SourceRange) returns ValueId throws SourceParseError
 		if self.valueIsDeferred(firstKey) 'aDeferredFirstKey'
 			return try self.deferredMapLiteralFromKey(func)
@@ -80926,7 +80941,7 @@ export type Parser
 
 		// The literal is the one door a map can be born through without a `with (K, V)` annotation, so it owes
 		// the same column gate the annotated door owes — asked BEFORE the create, so a refused literal emits no op.
-		self.gateMapLiteralColumns(giid, tok: firstKeyTok)
+		self.recordInferredInstantiation(giid, at: firstKeyTok)
 
 		// ⭐⭐ **THE LITERAL CALLS THE CORPUS TYPE'S OWN METHODS.** The desugar is an empty map plus one
 		// insert-or-replace per pair, so a literal-built map and a hand-built one are one representation and one
@@ -81604,15 +81619,14 @@ export type Parser
 		panic("{drift}")
 	end 'dispatchCursorMethod'
 
-	// ⭐⭐ **`List from [a, b, c]` — `List.create()` PLUS ONE `List.append` PER MEMBER.** The cursor sits
-	// on the `List` identifier. It is `parseSetMemberList`'s shape one container over, and it is that shape for
-	// that function's reason: `stdlib/List.maxon`'s `InitableFromArrayLiteral` `init` is not exported, so a
-	// desugar naming it would be `E3008: function 'List.init' is not exported` — the identical wall `Map` and `Set` meet
-	// answered the identical way.
+	// ⭐⭐ **`List from [a, b, c]` — `List.create()` PLUS ONE `List.append` PER MEMBER.** The cursor
+	// sits on the `List` identifier. It is `parseSetMemberList`'s shape one container over. A source
+	// that is not a bracketed list is a call of `List.init` (`parseContainerFromArray`).
 	//
-	// ⚠ **IT BUILDS NO INTERMEDIATE `Array`.** Reading the members straight needs no runtime entry that
-	// CONSUMES a source buffer one machine word per slot, so it needs neither the packed-element refusal such an
-	// entry requires (a `Byte` array strides 1, not 8) nor the intermediate record.
+	// ⚠ **A LITERAL BUILDS NO INTERMEDIATE `Array`.** Reading the members straight needs no runtime
+	// entry that CONSUMES a source buffer one machine word per slot, so it needs neither the
+	// packed-element refusal such an entry requires (a `Byte` array strides 1, not 8) nor the
+	// intermediate record.
 	//
 	// ⭐ **THE FIRST MEMBER FIXES THE ELEMENT TYPE AND THEREFORE THE INSTANCE**, exactly as the first element of
 	// a `[…]` fixes an array's — through `literalColumnTypeFor`, which is the SAME door
@@ -81623,10 +81637,8 @@ export type Parser
 	function parseListFromConstruction(func IrFunction) returns ValueId throws SourceParseError
 		let listTok = try self.consumeConstructionHead()
 
-		// The source must be an array literal `[…]`; `List from <other-expr>` is not a construction the compiler parses.
 		if not self.at(TokenKind.leftBracket) 'notArrayLiteral'
-			let srcTok = self.current()
-			throw SourceParseError.unsupported("`List from` requires an array literal `[…]` as its source", line: srcTok.line, column: srcTok.column)
+			return try self.parseContainerFromArray(func, headTok: listTok, container: FromHeadContainer.list)
 		end 'notArrayLiteral'
 
 		return try self.parseListMemberList(func, listTok: listTok)
@@ -81658,7 +81670,7 @@ export type Parser
 			return try self.deferredLiteralRest(func, entry: LiteralEntryShape.element)
 		end 'aDeferredFirstMember'
 
-		let giid = try self.listFromInstance(listTok, statedByAlias: statedByAlias, first: first, firstTok: firstTok)
+		let giid = try self.memberListInstance(listTok, container: FromHeadContainer.list, statedByAlias: statedByAlias, first: first, firstTok: firstTok, literalKind: ListLiteralSubject, columnNoun: ContainerElementColumnNoun)
 		let list = try self.emitContainerLiteralCreate(ListBuiltinBaseName, giid: giid, anchor: listTok, range: range)
 		try self.emitContainerLiteralElement(ListBuiltinBaseName, method: AppendMethod, container: list, value: first, anchor: listTok, range: range)
 		var signs = try self.foldColumnSign(ColumnSigns.unseen, value: first, anchor: firstTok)
@@ -81680,21 +81692,16 @@ export type Parser
 		return list
 	end 'parseListMemberList'
 
-	// The instance a `List from […]` builds: the one its alias head names, or — under the bare base name — the
-	// one its FIRST member fixes, through `literalColumnTypeFor`, the door `arrayLiteralInstanceFor` asks.
-	function listFromInstance(listTok Token, statedByAlias bool, first ValueId, firstTok Token) returns GenericInstanceId throws SourceParseError
+	// The instance a `Set` or `List from […]` literal builds: the one its alias head names, or — under
+	// the bare base name — the one its FIRST member fixes, through `literalColumnTypeFor`, the door
+	// `arrayLiteralInstanceFor` asks.
+	function memberListInstance(headTok Token, container FromHeadContainer, statedByAlias bool, first ValueId, firstTok Token, literalKind String, columnNoun String) returns GenericInstanceId throws SourceParseError
 		if statedByAlias 'statedByTheAlias'
-			return self.signatures.genericAliasInstanceFrom(listTok.value, readerFilePath: self.job.path)
+			return self.signatures.genericAliasInstanceFrom(headTok.value, readerFilePath: self.job.path)
 		end 'statedByTheAlias'
 
-		let giid = self.signatures.builtinInstanceForElement(ListBuiltinBaseName, element: try self.literalColumnTypeFor(first, literalKind: ListLiteralSubject, columnNoun: ContainerElementColumnNoun, valueTok: firstTok))
-
-		// ⭐ **THE LITERAL RECORDS ITS OWN INSTANTIATION**, because it is the one door a `List` is born through
-		// with no `with <Element>` to anchor a diagnostic on — `parseSetMemberList`'s arm, for its reason. An alias
-		// head's instantiation is its declaration's site.
-		self.artifact.inferredInstantiationSites.push(GenericInstantiationSite.create(giid, nameLine: listTok.line, nameColumn: listTok.column, filePath: self.job.path))
-		return giid
-	end 'listFromInstance'
+		return self.inferredContainerInstance(container, element: try self.literalColumnTypeFor(first, literalKind: literalKind, columnNoun: columnNoun, valueTok: firstTok), head: headTok)
+	end 'memberListInstance'
 
 	// ⚠ **A CONTAINER JOINS THE MEMBER-BY-MEMBER DOOR BY NAMING ITS BASE** — `List` is
 	// `emitContainerLiteralCreate` and `emitContainerLiteralElement` with `ListBuiltinBaseName` — not by growing a
@@ -81823,13 +81830,12 @@ export type Parser
 	// like any other declared method, so a `let` receiver is refused (E3159) off the declaration's own write
 	// mask rather than off a receiver mask this door supplies.
 
-	// Is the cursor on a `FixedArray from` construction — the bare `FixedArray` identifier or a `FixedArray` instance alias,
-	// immediately followed by `from`? `atContainerFromConstruction(FromHeadContainer.fixedArray)` answers
-	// it, read by BOTH the declaration sweep (which pre-interns the instances a bare head can name)
-	// and `parsePrimary`'s construction arm, for that predicate's stated reason: taught to one and not
-	// the other, the parser's own instance read becomes the FIRST write to the shared registry
-	// mid-parse — an order-dependent gid no drift guard can see. The sweep answers no for every alias;
-	// an alias's instance was interned by its declaration.
+	// Is the cursor on a `FixedArray from` construction — the bare `FixedArray` identifier or a
+	// `FixedArray` instance alias, immediately followed by `from`?
+	// `atContainerFromConstruction(FromHeadContainer.fixedArray)` answers it, read by BOTH the
+	// declaration sweep (which pre-interns the instances a bare head can name) and `parsePrimary`'s
+	// construction arm. The sweep answers no for every alias; an alias's instance was interned by its
+	// declaration.
 
 	// ⭐⭐ **`FixedArray from [a, b, c]` — AND IT EMITS NOT ONE RUNTIME OP OF ITS OWN.** The source array literal
 	// already built exactly the record a fixed array is (`emitArrayCreateOp` + the pushes), so the construction is
@@ -81841,11 +81847,6 @@ export type Parser
 	// at parse time — `length@8` is a runtime fact — and the literal's element COUNT is exactly what the
 	// source wrote between its brackets (`arrayLiteralElementCountAt`, the same counter the sweep pre-interns
 	// with, so the instance the parser reads back is the instance the sweep minted).
-	//
-	// ⚠⚠ **NOTHING IS INTERNED UNTIL THE ELEMENT IS ADMITTED (review finding 6).** Minting first meant that a
-	// `FixedArray from […]` over an element the sweep did NOT pre-intern made the parse's own read the FIRST write
-	// to the shared registry mid-parse — the order-dependent gid `atContainerFromConstruction` exists
-	// to prevent — and it did so on the way to refusing the program anyway.
 	//
 	// ⭐ **THE GATE IS ASKED OF THE SOURCE ARRAY'S INSTANCE, WHICH IS NOT A STAND-IN — IT IS THE SAME
 	// QUESTION.** `Array with T` and `FixedArray with N T` share their element exactly, and every door
@@ -91966,7 +91967,7 @@ export type Parser
 
 	// ⭐⭐ **`FilePath from ""` AS AN INITIALIZER — recorded as the CALL it already is.** The body form is a
 	// call to the type's own `init` static (`parseLiteralInitConstruction`, whose callee is
-	// `qualifiedMethodName(<Type>, methodName: StringInitMethod)`), so nothing new is evaluated here: this
+	// `qualifiedMethodName(<Type>, methodName: InitMethod)`), so nothing new is evaluated here: this
 	// walk states WHICH function to call and WHAT to pass it, and `__module_init` builds the record before
 	// `main` exactly as it does for `Database.create(…)`.
 	//
@@ -92004,12 +92005,12 @@ export type Parser
 			throw ConstEvalError.defective(SourceParseError.literalInitDoesNotConform(String.from(typeTok.value), interfaceName: String.from(literalInitInterfaceName(form)), line: typeTok.line, column: typeTok.column))
 		end 'doesNotConform'
 
-		let callee = qualifiedMethodName(typeTok.value, methodName: StringInitMethod)
+		let callee = qualifiedMethodName(typeTok.value, methodName: InitMethod)
 
 		var args = ConstFactoryArgumentArray.create()
 		args.push(ConstFactoryArgument.create(EmptySourceText, value: try self.constLiteralInitOperand(form, typeTok: typeTok, callee: callee, calls: calls, stack: stack)))
 
-		return self.pushConstNode(calls, node: ConstFactoryCall.call(callee, args: args, mint: CalleeMint.stringLiteralInit))
+		return self.pushConstNode(calls, node: ConstFactoryCall.call(callee, args: args, mint: CalleeMint.fromConstructionInit))
 	end 'evalConstLiteralInitInto'
 
 	// The argument each form hands its `init`. The scalar forms DECODE the literal here rather than carrying the
@@ -92518,7 +92519,7 @@ export type Parser
 
 		let giid = self.signatures.builtinInstanceForColumns(MapBuiltinBaseName, key: keyType, value: valueType)
 
-		// ⭐ **THE LITERAL RECORDS ITS OWN INSTANTIATION** — `gateMapLiteralColumns`' rule for the body's
+		// ⭐ **THE LITERAL RECORDS ITS OWN INSTANTIATION** — `recordInferredInstantiation`' rule for the body's
 		// literal, and it binds here for the identical reason: this is the one door a map is born through with
 		// no `with (K, V)` to anchor an E3017 on, so a key implementing NEITHER of `Map`'s constraints would
 		// otherwise be admitted in silence. What differs is only WHERE the site is filed — on the INDEX, not on
@@ -99068,7 +99069,7 @@ export type Parser
 	// receiver (`List.clone`); its declared return is the bare base, so the element is read off the
 	// receiver's instance. `Array`'s copies are refused at `admitArrayCopy`.
 	function calleeCopiesItsNonArrayReceiver(callee ByteArray, receiver ValueId) returns bool
-		if self.signatures.isArrayInstanceAt(self.tagOf(receiver), nameId: self.valueNameId(receiver)) 'anArray'
+		if self.valueIsAnArray(receiver) 'anArray'
 			return false
 		end 'anArray'
 
